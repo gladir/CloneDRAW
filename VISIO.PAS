@@ -14,7 +14,7 @@
   3. [FAIT] Ajouter le menu Edit avec Undo, Redo, Cut, Copy, Paste, Delete, Select All, Find, Replace
   4. [FAIT] Ajouter le menu View avec Zoom In, Zoom Out, Fit Page, Grid, Rulers, Guides, Snap to Grid
   5. [FAIT] Ajouter le menu Insert avec Shape, Text Box, Image, Connector, Page, Layer
-  6. Ajouter le menu Format avec Fill, Line, Text, Alignment, Arrange, Group, Ungroup
+  6. [FAIT] Ajouter le menu Format avec Fill, Line, Text, Alignment, Arrange, Group, Ungroup
   7. Ajouter le menu Shape avec Rotate, Flip, Align, Distribute, Size, Position, Operations (Union, Intersect, Subtract)
   8. Implementer la barre d'outils avec boutons pour les actions frequentes (Selection, Rectangle, Ellipse, Ligne, Connecteur, Texte)
 
@@ -493,6 +493,104 @@ End;
 { === FIN DES PROCEDURES DU MENU INSERT === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === PROCEDURES DU MENU FORMAT === }
+{ ============================================================================ }
+
+Const
+ DEFAULT_FILL_COLOR = White;
+ DEFAULT_LINE_COLOR = Black;
+ DEFAULT_LINE_WIDTH = 1;
+ DEFAULT_TEXT_SIZE = 10;
+
+Type
+ TAlignmentType = (atLeft, atCenter, atRight, atTop, atMiddle, atBottom);
+ TArrangeType = (arBringToFront, arSendToBack, arBringForward, arSendBackward);
+
+Var
+ CurrentFillColor: Integer;
+ CurrentLineColor: Integer;
+ CurrentLineWidth: Integer;
+ CurrentTextSize: Integer;
+ CurrentAlignment: TAlignmentType;
+ ObjectsGrouped: Boolean;
+
+{ Procédure FormatFill - Modifier la couleur de remplissage }
+Procedure FormatFill;
+Begin
+ { TODO: Afficher une boîte de dialogue pour choisir la couleur de remplissage }
+ { TODO: Appliquer la couleur de remplissage aux objets sélectionnés }
+ If HasSelection Then Begin
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure FormatLine - Modifier les propriétés de ligne }
+Procedure FormatLine;
+Begin
+ { TODO: Afficher une boîte de dialogue pour choisir la couleur, épaisseur et style de ligne }
+ { TODO: Appliquer les propriétés de ligne aux objets sélectionnés }
+ If HasSelection Then Begin
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure FormatText - Modifier les propriétés de texte }
+Procedure FormatText;
+Begin
+ { TODO: Afficher une boîte de dialogue pour choisir la police, taille et style de texte }
+ { TODO: Appliquer les propriétés de texte aux objets texte sélectionnés }
+ If HasSelection Then Begin
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure FormatAlignment - Modifier l'alignement des objets }
+Procedure FormatAlignment;
+Begin
+ { TODO: Afficher un sous-menu ou dialogue pour choisir le type d'alignement }
+ { TODO: Aligner les objets sélectionnés selon le type choisi }
+ If HasSelection Then Begin
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure FormatArrange - Modifier l'ordre des objets }
+Procedure FormatArrange;
+Begin
+ { TODO: Afficher un sous-menu pour choisir Bring to Front, Send to Back, etc. }
+ { TODO: Modifier l'ordre Z des objets sélectionnés }
+ If HasSelection Then Begin
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure FormatGroup - Grouper les objets sélectionnés }
+Procedure FormatGroup;
+Begin
+ If HasSelection Then Begin
+  { TODO: Créer un groupe avec les objets sélectionnés }
+  { TODO: Le groupe devient un seul objet sélectionnable }
+  ObjectsGrouped := True;
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure FormatUngroup - Dégrouper les objets }
+Procedure FormatUngroup;
+Begin
+ If HasSelection And ObjectsGrouped Then Begin
+  { TODO: Séparer le groupe en objets individuels }
+  { TODO: Tous les objets du groupe deviennent sélectionnés }
+  ObjectsGrouped := False;
+  DocumentModified := True;
+ End;
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DU MENU FORMAT === }
+{ ============================================================================ }
+
 { Procédure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
@@ -708,6 +806,13 @@ Begin
  CurrentLayer := 1;
  LayerCount := DEFAULT_LAYER_COUNT;
  InsertMode := 0;
+ { Initialisation des variables du menu Format }
+ CurrentFillColor := DEFAULT_FILL_COLOR;
+ CurrentLineColor := DEFAULT_LINE_COLOR;
+ CurrentLineWidth := DEFAULT_LINE_WIDTH;
+ CurrentTextSize := DEFAULT_TEXT_SIZE;
+ CurrentAlignment := atLeft;
+ ObjectsGrouped := False;
 End;
 
 { Fonction pour exécuter une action du menu File }
@@ -775,6 +880,20 @@ Begin
   4: InsertConnector;  { Connector }
   5: InsertPage;       { Page }
   6: InsertLayer;      { Layer }
+ End;
+End;
+
+{ Procédure pour exécuter une action du menu Format }
+Procedure ExecuteFormatMenuAction(ItemIndex: Integer);
+Begin
+ Case ItemIndex of
+  1: FormatFill;       { Fill... }
+  2: FormatLine;       { Line... }
+  3: FormatText;       { Text... }
+  { 4 est un séparateur }
+  5: FormatAlignment;  { Alignment }
+  6: FormatGroup;      { Group }
+  7: FormatUngroup;    { Ungroup }
  End;
 End;
 

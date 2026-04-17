@@ -9,11 +9,11 @@
 { TODO: Liste des 25 points pour un clone complet d'AutoCAD
 
   === INTERFACE UTILISATEUR ET MENUS ===
-  1. Implémenter le menu principal avec File, Edit, View, Insert, Format, Tools, Draw, Dimension, Modify, Window, Help
-  2. Créer le menu Draw avec toutes les options : Line, Ray, Construction Line, Polyline, Polygon, Rectangle, Arc, Circle, Spline, Ellipse, Point, Hatch, Region, Text, Surface, Solid
-  3. Créer le menu Modify avec : Erase, Copy, Mirror, Offset, Array, Move, Rotate, Scale, Stretch, Trim, Extend, Break, Chamfer, Fillet, Explode
-  4. Créer le menu Format avec : Layer, Color, Linetype, Text Style, Dimension Style, Point Style, Units, Drawing Limits
-  5. Créer les barres d'outils flottantes et ancrables pour un accès rapide aux commandes
+  1. [DONE] Implémenter le menu principal avec File, Edit, View, Insert, Format, Tools, Draw, Dimension, Modify, Window, Help
+  2. [DONE] Créer le menu Draw avec toutes les options : Line, Ray, Construction Line, Polyline, Polygon, Rectangle, Arc, Circle, Spline, Ellipse, Point, Hatch, Region, Text, Surface, Solid
+  3. [DONE] Créer le menu Modify avec : Erase, Copy, Mirror, Offset, Array, Move, Rotate, Scale, Stretch, Trim, Extend, Break, Chamfer, Fillet, Explode
+  4. [DONE] Créer le menu Format avec : Layer, Color, Linetype, Text Style, Dimension Style, Point Style, Units, Drawing Limits
+  5. [DONE] Créer les barres d'outils flottantes et ancrables pour un accès rapide aux commandes
 
   === SUPPORT DE LA SOURIS ===
   6. Implémenter la gestion complète de la souris avec clic gauche, clic droit, molette et déplacement
@@ -84,6 +84,19 @@ Const
  MAX_MENUS = 11;
  MAX_MENU_ITEMS = 20;
 
+ { Constantes pour les barres d'outils - TODO 5 }
+ MAX_TOOLBARS = 5;
+ MAX_TOOLBAR_BUTTONS = 15;
+ TOOLBAR_BUTTON_SIZE = 24;
+ TOOLBAR_SPACING = 2;
+
+ { Identifiants des barres d'outils }
+ TOOLBAR_STANDARD = 0;
+ TOOLBAR_DRAW = 1;
+ TOOLBAR_MODIFY = 2;
+ TOOLBAR_LAYERS = 3;
+ TOOLBAR_PROPERTIES = 4;
+
 Type
  { Structure pour les éléments de menu }
  TMenuItem = Record
@@ -101,6 +114,26 @@ Type
   X, Width: Integer;
  End;
 
+ { Structure pour les boutons de barre d'outils - TODO 5 }
+ TToolbarButton = Record
+  Caption: String[20];      { Nom du bouton pour tooltip }
+  Symbol: Char;             { Caractère symbole à afficher }
+  Command: String[20];      { Commande associée }
+  Enabled: Boolean;
+  Separator: Boolean;       { Séparateur visuel }
+ End;
+
+ { Structure pour les barres d'outils - TODO 5 }
+ TToolbar = Record
+  Title: String[20];        { Nom de la barre d'outils }
+  Buttons: Array[0..MAX_TOOLBAR_BUTTONS-1] of TToolbarButton;
+  ButtonCount: Byte;
+  X, Y: Integer;            { Position (pour barres flottantes) }
+  Docked: Boolean;          { True si ancrée, False si flottante }
+  DockPosition: Byte;       { 0=top, 1=left, 2=right, 3=bottom }
+  Visible: Boolean;
+ End;
+
 Var
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
@@ -115,6 +148,11 @@ Var
  MenuActive: Boolean;
  ActiveMenu: Integer;
  ActiveMenuItem: Integer;
+
+ { Variables pour les barres d'outils - TODO 5 }
+ Toolbars: Array[0..MAX_TOOLBARS-1] of TToolbar;
+ HoveredToolbar: Integer;
+ HoveredButton: Integer;
 
 Procedure InitializeGraphics;
 Var
@@ -649,6 +687,290 @@ Begin
  ActiveMenuItem := -1;
 End;
 
+{ ============================================================================ }
+{ Procédure d'initialisation des barres d'outils - TODO 5                      }
+{ Créer les barres d'outils flottantes et ancrables pour un accès rapide       }
+{ aux commandes                                                                 }
+{ ============================================================================ }
+
+Procedure InitToolbars;
+Var
+ I: Integer;
+Begin
+ { Initialiser toutes les barres d'outils à vide }
+ For I := 0 to MAX_TOOLBARS - 1 do Begin
+  Toolbars[I].ButtonCount := 0;
+  Toolbars[I].Visible := False;
+  Toolbars[I].Docked := True;
+  Toolbars[I].DockPosition := 0;
+ End;
+
+ { ========== BARRE D'OUTILS STANDARD ========== }
+ Toolbars[TOOLBAR_STANDARD].Title := 'Standard';
+ Toolbars[TOOLBAR_STANDARD].Docked := True;
+ Toolbars[TOOLBAR_STANDARD].DockPosition := 0;
+ Toolbars[TOOLBAR_STANDARD].X := 5;
+ Toolbars[TOOLBAR_STANDARD].Y := MENUBAR_HEIGHT + 2;
+ Toolbars[TOOLBAR_STANDARD].Visible := True;
+ Toolbars[TOOLBAR_STANDARD].ButtonCount := 10;
+ 
+ { New }
+ Toolbars[TOOLBAR_STANDARD].Buttons[0].Caption := 'New';
+ Toolbars[TOOLBAR_STANDARD].Buttons[0].Symbol := 'N';
+ Toolbars[TOOLBAR_STANDARD].Buttons[0].Command := 'NEW';
+ Toolbars[TOOLBAR_STANDARD].Buttons[0].Enabled := True;
+ 
+ { Open }
+ Toolbars[TOOLBAR_STANDARD].Buttons[1].Caption := 'Open';
+ Toolbars[TOOLBAR_STANDARD].Buttons[1].Symbol := 'O';
+ Toolbars[TOOLBAR_STANDARD].Buttons[1].Command := 'OPEN';
+ Toolbars[TOOLBAR_STANDARD].Buttons[1].Enabled := True;
+ 
+ { Save }
+ Toolbars[TOOLBAR_STANDARD].Buttons[2].Caption := 'Save';
+ Toolbars[TOOLBAR_STANDARD].Buttons[2].Symbol := 'S';
+ Toolbars[TOOLBAR_STANDARD].Buttons[2].Command := 'SAVE';
+ Toolbars[TOOLBAR_STANDARD].Buttons[2].Enabled := True;
+ 
+ { Séparateur }
+ Toolbars[TOOLBAR_STANDARD].Buttons[3].Separator := True;
+ 
+ { Print }
+ Toolbars[TOOLBAR_STANDARD].Buttons[4].Caption := 'Print';
+ Toolbars[TOOLBAR_STANDARD].Buttons[4].Symbol := 'P';
+ Toolbars[TOOLBAR_STANDARD].Buttons[4].Command := 'PRINT';
+ Toolbars[TOOLBAR_STANDARD].Buttons[4].Enabled := True;
+ 
+ { Séparateur }
+ Toolbars[TOOLBAR_STANDARD].Buttons[5].Separator := True;
+ 
+ { Undo }
+ Toolbars[TOOLBAR_STANDARD].Buttons[6].Caption := 'Undo';
+ Toolbars[TOOLBAR_STANDARD].Buttons[6].Symbol := 'U';
+ Toolbars[TOOLBAR_STANDARD].Buttons[6].Command := 'UNDO';
+ Toolbars[TOOLBAR_STANDARD].Buttons[6].Enabled := True;
+ 
+ { Redo }
+ Toolbars[TOOLBAR_STANDARD].Buttons[7].Caption := 'Redo';
+ Toolbars[TOOLBAR_STANDARD].Buttons[7].Symbol := 'R';
+ Toolbars[TOOLBAR_STANDARD].Buttons[7].Command := 'REDO';
+ Toolbars[TOOLBAR_STANDARD].Buttons[7].Enabled := True;
+ 
+ { Séparateur }
+ Toolbars[TOOLBAR_STANDARD].Buttons[8].Separator := True;
+ 
+ { Zoom }
+ Toolbars[TOOLBAR_STANDARD].Buttons[9].Caption := 'Zoom';
+ Toolbars[TOOLBAR_STANDARD].Buttons[9].Symbol := 'Z';
+ Toolbars[TOOLBAR_STANDARD].Buttons[9].Command := 'ZOOM';
+ Toolbars[TOOLBAR_STANDARD].Buttons[9].Enabled := True;
+
+ { ========== BARRE D'OUTILS DRAW ========== }
+ Toolbars[TOOLBAR_DRAW].Title := 'Draw';
+ Toolbars[TOOLBAR_DRAW].Docked := True;
+ Toolbars[TOOLBAR_DRAW].DockPosition := 0;
+ Toolbars[TOOLBAR_DRAW].X := 280;
+ Toolbars[TOOLBAR_DRAW].Y := MENUBAR_HEIGHT + 2;
+ Toolbars[TOOLBAR_DRAW].Visible := True;
+ Toolbars[TOOLBAR_DRAW].ButtonCount := 12;
+ 
+ { Line }
+ Toolbars[TOOLBAR_DRAW].Buttons[0].Caption := 'Line';
+ Toolbars[TOOLBAR_DRAW].Buttons[0].Symbol := '/';
+ Toolbars[TOOLBAR_DRAW].Buttons[0].Command := 'LINE';
+ Toolbars[TOOLBAR_DRAW].Buttons[0].Enabled := True;
+ 
+ { Polyline }
+ Toolbars[TOOLBAR_DRAW].Buttons[1].Caption := 'Polyline';
+ Toolbars[TOOLBAR_DRAW].Buttons[1].Symbol := 'W';
+ Toolbars[TOOLBAR_DRAW].Buttons[1].Command := 'PLINE';
+ Toolbars[TOOLBAR_DRAW].Buttons[1].Enabled := True;
+ 
+ { Rectangle }
+ Toolbars[TOOLBAR_DRAW].Buttons[2].Caption := 'Rectangle';
+ Toolbars[TOOLBAR_DRAW].Buttons[2].Symbol := '#';
+ Toolbars[TOOLBAR_DRAW].Buttons[2].Command := 'RECTANG';
+ Toolbars[TOOLBAR_DRAW].Buttons[2].Enabled := True;
+ 
+ { Polygon }
+ Toolbars[TOOLBAR_DRAW].Buttons[3].Caption := 'Polygon';
+ Toolbars[TOOLBAR_DRAW].Buttons[3].Symbol := '%';
+ Toolbars[TOOLBAR_DRAW].Buttons[3].Command := 'POLYGON';
+ Toolbars[TOOLBAR_DRAW].Buttons[3].Enabled := True;
+ 
+ { Séparateur }
+ Toolbars[TOOLBAR_DRAW].Buttons[4].Separator := True;
+ 
+ { Circle }
+ Toolbars[TOOLBAR_DRAW].Buttons[5].Caption := 'Circle';
+ Toolbars[TOOLBAR_DRAW].Buttons[5].Symbol := 'o';
+ Toolbars[TOOLBAR_DRAW].Buttons[5].Command := 'CIRCLE';
+ Toolbars[TOOLBAR_DRAW].Buttons[5].Enabled := True;
+ 
+ { Arc }
+ Toolbars[TOOLBAR_DRAW].Buttons[6].Caption := 'Arc';
+ Toolbars[TOOLBAR_DRAW].Buttons[6].Symbol := '(';
+ Toolbars[TOOLBAR_DRAW].Buttons[6].Command := 'ARC';
+ Toolbars[TOOLBAR_DRAW].Buttons[6].Enabled := True;
+ 
+ { Ellipse }
+ Toolbars[TOOLBAR_DRAW].Buttons[7].Caption := 'Ellipse';
+ Toolbars[TOOLBAR_DRAW].Buttons[7].Symbol := '0';
+ Toolbars[TOOLBAR_DRAW].Buttons[7].Command := 'ELLIPSE';
+ Toolbars[TOOLBAR_DRAW].Buttons[7].Enabled := True;
+ 
+ { Séparateur }
+ Toolbars[TOOLBAR_DRAW].Buttons[8].Separator := True;
+ 
+ { Text }
+ Toolbars[TOOLBAR_DRAW].Buttons[9].Caption := 'Text';
+ Toolbars[TOOLBAR_DRAW].Buttons[9].Symbol := 'A';
+ Toolbars[TOOLBAR_DRAW].Buttons[9].Command := 'TEXT';
+ Toolbars[TOOLBAR_DRAW].Buttons[9].Enabled := True;
+ 
+ { Hatch }
+ Toolbars[TOOLBAR_DRAW].Buttons[10].Caption := 'Hatch';
+ Toolbars[TOOLBAR_DRAW].Buttons[10].Symbol := 'H';
+ Toolbars[TOOLBAR_DRAW].Buttons[10].Command := 'HATCH';
+ Toolbars[TOOLBAR_DRAW].Buttons[10].Enabled := True;
+ 
+ { Point }
+ Toolbars[TOOLBAR_DRAW].Buttons[11].Caption := 'Point';
+ Toolbars[TOOLBAR_DRAW].Buttons[11].Symbol := '.';
+ Toolbars[TOOLBAR_DRAW].Buttons[11].Command := 'POINT';
+ Toolbars[TOOLBAR_DRAW].Buttons[11].Enabled := True;
+
+ { ========== BARRE D'OUTILS MODIFY ========== }
+ Toolbars[TOOLBAR_MODIFY].Title := 'Modify';
+ Toolbars[TOOLBAR_MODIFY].Docked := True;
+ Toolbars[TOOLBAR_MODIFY].DockPosition := 0;
+ Toolbars[TOOLBAR_MODIFY].X := 600;
+ Toolbars[TOOLBAR_MODIFY].Y := MENUBAR_HEIGHT + 2;
+ Toolbars[TOOLBAR_MODIFY].Visible := True;
+ Toolbars[TOOLBAR_MODIFY].ButtonCount := 12;
+ 
+ { Erase }
+ Toolbars[TOOLBAR_MODIFY].Buttons[0].Caption := 'Erase';
+ Toolbars[TOOLBAR_MODIFY].Buttons[0].Symbol := 'X';
+ Toolbars[TOOLBAR_MODIFY].Buttons[0].Command := 'ERASE';
+ Toolbars[TOOLBAR_MODIFY].Buttons[0].Enabled := True;
+ 
+ { Copy }
+ Toolbars[TOOLBAR_MODIFY].Buttons[1].Caption := 'Copy';
+ Toolbars[TOOLBAR_MODIFY].Buttons[1].Symbol := 'C';
+ Toolbars[TOOLBAR_MODIFY].Buttons[1].Command := 'COPY';
+ Toolbars[TOOLBAR_MODIFY].Buttons[1].Enabled := True;
+ 
+ { Move }
+ Toolbars[TOOLBAR_MODIFY].Buttons[2].Caption := 'Move';
+ Toolbars[TOOLBAR_MODIFY].Buttons[2].Symbol := 'M';
+ Toolbars[TOOLBAR_MODIFY].Buttons[2].Command := 'MOVE';
+ Toolbars[TOOLBAR_MODIFY].Buttons[2].Enabled := True;
+ 
+ { Mirror }
+ Toolbars[TOOLBAR_MODIFY].Buttons[3].Caption := 'Mirror';
+ Toolbars[TOOLBAR_MODIFY].Buttons[3].Symbol := '|';
+ Toolbars[TOOLBAR_MODIFY].Buttons[3].Command := 'MIRROR';
+ Toolbars[TOOLBAR_MODIFY].Buttons[3].Enabled := True;
+ 
+ { Séparateur }
+ Toolbars[TOOLBAR_MODIFY].Buttons[4].Separator := True;
+ 
+ { Rotate }
+ Toolbars[TOOLBAR_MODIFY].Buttons[5].Caption := 'Rotate';
+ Toolbars[TOOLBAR_MODIFY].Buttons[5].Symbol := '@';
+ Toolbars[TOOLBAR_MODIFY].Buttons[5].Command := 'ROTATE';
+ Toolbars[TOOLBAR_MODIFY].Buttons[5].Enabled := True;
+ 
+ { Scale }
+ Toolbars[TOOLBAR_MODIFY].Buttons[6].Caption := 'Scale';
+ Toolbars[TOOLBAR_MODIFY].Buttons[6].Symbol := '*';
+ Toolbars[TOOLBAR_MODIFY].Buttons[6].Command := 'SCALE';
+ Toolbars[TOOLBAR_MODIFY].Buttons[6].Enabled := True;
+ 
+ { Offset }
+ Toolbars[TOOLBAR_MODIFY].Buttons[7].Caption := 'Offset';
+ Toolbars[TOOLBAR_MODIFY].Buttons[7].Symbol := '=';
+ Toolbars[TOOLBAR_MODIFY].Buttons[7].Command := 'OFFSET';
+ Toolbars[TOOLBAR_MODIFY].Buttons[7].Enabled := True;
+ 
+ { Séparateur }
+ Toolbars[TOOLBAR_MODIFY].Buttons[8].Separator := True;
+ 
+ { Trim }
+ Toolbars[TOOLBAR_MODIFY].Buttons[9].Caption := 'Trim';
+ Toolbars[TOOLBAR_MODIFY].Buttons[9].Symbol := 'T';
+ Toolbars[TOOLBAR_MODIFY].Buttons[9].Command := 'TRIM';
+ Toolbars[TOOLBAR_MODIFY].Buttons[9].Enabled := True;
+ 
+ { Extend }
+ Toolbars[TOOLBAR_MODIFY].Buttons[10].Caption := 'Extend';
+ Toolbars[TOOLBAR_MODIFY].Buttons[10].Symbol := 'E';
+ Toolbars[TOOLBAR_MODIFY].Buttons[10].Command := 'EXTEND';
+ Toolbars[TOOLBAR_MODIFY].Buttons[10].Enabled := True;
+ 
+ { Fillet }
+ Toolbars[TOOLBAR_MODIFY].Buttons[11].Caption := 'Fillet';
+ Toolbars[TOOLBAR_MODIFY].Buttons[11].Symbol := 'F';
+ Toolbars[TOOLBAR_MODIFY].Buttons[11].Command := 'FILLET';
+ Toolbars[TOOLBAR_MODIFY].Buttons[11].Enabled := True;
+
+ { ========== BARRE D'OUTILS LAYERS (flottante) ========== }
+ Toolbars[TOOLBAR_LAYERS].Title := 'Layers';
+ Toolbars[TOOLBAR_LAYERS].Docked := False;  { Barre flottante }
+ Toolbars[TOOLBAR_LAYERS].X := 50;
+ Toolbars[TOOLBAR_LAYERS].Y := 100;
+ Toolbars[TOOLBAR_LAYERS].Visible := False;  { Cachée par défaut }
+ Toolbars[TOOLBAR_LAYERS].ButtonCount := 4;
+ 
+ Toolbars[TOOLBAR_LAYERS].Buttons[0].Caption := 'Layer Properties';
+ Toolbars[TOOLBAR_LAYERS].Buttons[0].Symbol := 'L';
+ Toolbars[TOOLBAR_LAYERS].Buttons[0].Command := 'LAYER';
+ Toolbars[TOOLBAR_LAYERS].Buttons[0].Enabled := True;
+ 
+ Toolbars[TOOLBAR_LAYERS].Buttons[1].Caption := 'Make Layer Current';
+ Toolbars[TOOLBAR_LAYERS].Buttons[1].Symbol := '+';
+ Toolbars[TOOLBAR_LAYERS].Buttons[1].Command := 'LAYMCUR';
+ Toolbars[TOOLBAR_LAYERS].Buttons[1].Enabled := True;
+ 
+ Toolbars[TOOLBAR_LAYERS].Buttons[2].Caption := 'Layer Off';
+ Toolbars[TOOLBAR_LAYERS].Buttons[2].Symbol := '-';
+ Toolbars[TOOLBAR_LAYERS].Buttons[2].Command := 'LAYOFF';
+ Toolbars[TOOLBAR_LAYERS].Buttons[2].Enabled := True;
+ 
+ Toolbars[TOOLBAR_LAYERS].Buttons[3].Caption := 'Layer Freeze';
+ Toolbars[TOOLBAR_LAYERS].Buttons[3].Symbol := '~';
+ Toolbars[TOOLBAR_LAYERS].Buttons[3].Command := 'LAYFRZ';
+ Toolbars[TOOLBAR_LAYERS].Buttons[3].Enabled := True;
+
+ { ========== BARRE D'OUTILS PROPERTIES (flottante) ========== }
+ Toolbars[TOOLBAR_PROPERTIES].Title := 'Properties';
+ Toolbars[TOOLBAR_PROPERTIES].Docked := False;  { Barre flottante }
+ Toolbars[TOOLBAR_PROPERTIES].X := 50;
+ Toolbars[TOOLBAR_PROPERTIES].Y := 200;
+ Toolbars[TOOLBAR_PROPERTIES].Visible := False;  { Cachée par défaut }
+ Toolbars[TOOLBAR_PROPERTIES].ButtonCount := 3;
+ 
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[0].Caption := 'Properties';
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[0].Symbol := 'I';
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[0].Command := 'PROPERTIES';
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[0].Enabled := True;
+ 
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[1].Caption := 'Match Properties';
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[1].Symbol := '&';
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[1].Command := 'MATCHPROP';
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[1].Enabled := True;
+ 
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[2].Caption := 'List';
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[2].Symbol := '?';
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[2].Command := 'LIST';
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[2].Enabled := True;
+
+ { Initialiser les variables de survol }
+ HoveredToolbar := -1;
+ HoveredButton := -1;
+End;
+
 { Dessiner la barre de menu }
 Procedure DrawMenuBar;
 Var
@@ -742,6 +1064,166 @@ Begin
  End;
 End;
 
+{ ============================================================================ }
+{ Procédures de dessin des barres d'outils - TODO 5                            }
+{ ============================================================================ }
+
+{ Dessiner un bouton de barre d'outils }
+Procedure DrawToolbarButton(X, Y: Integer; Var Button: TToolbarButton;
+                           IsHovered: Boolean);
+Var
+ BtnSize: Integer;
+Begin
+ BtnSize := TOOLBAR_BUTTON_SIZE;
+ 
+ If Button.Separator Then Begin
+  { Dessiner un séparateur }
+  SetColor(DarkGray);
+  Line(X + BtnSize div 2, Y + 2, X + BtnSize div 2, Y + BtnSize - 2);
+  SetColor(White);
+  Line(X + BtnSize div 2 + 1, Y + 2, X + BtnSize div 2 + 1, Y + BtnSize - 2);
+ End Else Begin
+  { Dessiner le fond du bouton }
+  If IsHovered Then Begin
+   { Bouton survolé - effet 3D enfoncé }
+   SetFillStyle(SolidFill, LightGray);
+   Bar(X, Y, X + BtnSize - 1, Y + BtnSize - 1);
+   SetColor(DarkGray);
+   Line(X, Y, X + BtnSize - 1, Y);
+   Line(X, Y, X, Y + BtnSize - 1);
+   SetColor(White);
+   Line(X + BtnSize - 1, Y, X + BtnSize - 1, Y + BtnSize - 1);
+   Line(X, Y + BtnSize - 1, X + BtnSize - 1, Y + BtnSize - 1);
+  End Else Begin
+   { Bouton normal - effet 3D relevé }
+   SetFillStyle(SolidFill, LightGray);
+   Bar(X, Y, X + BtnSize - 1, Y + BtnSize - 1);
+   SetColor(White);
+   Line(X, Y, X + BtnSize - 1, Y);
+   Line(X, Y, X, Y + BtnSize - 1);
+   SetColor(DarkGray);
+   Line(X + BtnSize - 1, Y, X + BtnSize - 1, Y + BtnSize - 1);
+   Line(X, Y + BtnSize - 1, X + BtnSize - 1, Y + BtnSize - 1);
+  End;
+  
+  { Dessiner le symbole centré }
+  If Button.Enabled Then
+   SetColor(Black)
+  Else
+   SetColor(DarkGray);
+  OutTextXY(X + (BtnSize - TextWidth(Button.Symbol)) div 2,
+            Y + (BtnSize - 10) div 2, Button.Symbol);
+ End;
+End;
+
+{ Dessiner une barre d'outils complète }
+Procedure DrawToolbar(ToolbarIndex: Integer);
+Var
+ I: Integer;
+ X, Y: Integer;
+ BtnX: Integer;
+ TitleHeight: Integer;
+ ToolbarWidth: Integer;
+ IsHovered: Boolean;
+Begin
+ If (ToolbarIndex < 0) or (ToolbarIndex >= MAX_TOOLBARS) Then Exit;
+ If Not Toolbars[ToolbarIndex].Visible Then Exit;
+ 
+ X := Toolbars[ToolbarIndex].X;
+ Y := Toolbars[ToolbarIndex].Y;
+ TitleHeight := 0;
+ 
+ { Calculer la largeur de la barre d'outils }
+ ToolbarWidth := Toolbars[ToolbarIndex].ButtonCount * (TOOLBAR_BUTTON_SIZE + TOOLBAR_SPACING) + 4;
+ 
+ If Not Toolbars[ToolbarIndex].Docked Then Begin
+  { Barre flottante - dessiner la barre de titre }
+  TitleHeight := 16;
+  
+  { Barre de titre }
+  SetFillStyle(SolidFill, Blue);
+  Bar(X, Y, X + ToolbarWidth, Y + TitleHeight);
+  SetColor(White);
+  OutTextXY(X + 3, Y + 3, Toolbars[ToolbarIndex].Title);
+  
+  { Bordure de la fenêtre flottante }
+  SetColor(DarkGray);
+  Rectangle(X, Y, X + ToolbarWidth, Y + TitleHeight + TOOLBAR_BUTTON_SIZE + 6);
+ End;
+ 
+ { Fond de la barre d'outils }
+ SetFillStyle(SolidFill, LightGray);
+ Bar(X, Y + TitleHeight, X + ToolbarWidth, Y + TitleHeight + TOOLBAR_BUTTON_SIZE + 4);
+ 
+ { Dessiner les boutons }
+ BtnX := X + 2;
+ For I := 0 to Toolbars[ToolbarIndex].ButtonCount - 1 do Begin
+  IsHovered := (HoveredToolbar = ToolbarIndex) and (HoveredButton = I);
+  DrawToolbarButton(BtnX, Y + TitleHeight + 2, Toolbars[ToolbarIndex].Buttons[I], IsHovered);
+  BtnX := BtnX + TOOLBAR_BUTTON_SIZE + TOOLBAR_SPACING;
+ End;
+End;
+
+{ Dessiner toutes les barres d'outils }
+Procedure DrawAllToolbars;
+Var
+ I: Integer;
+Begin
+ { Zone de fond pour les barres d'outils ancrées en haut }
+ SetFillStyle(SolidFill, LightGray);
+ Bar(0, MENUBAR_HEIGHT, ScreenWidth - 1, MENUBAR_HEIGHT + TOOLBAR_HEIGHT - 1);
+ SetColor(DarkGray);
+ Line(0, MENUBAR_HEIGHT + TOOLBAR_HEIGHT - 1, ScreenWidth - 1, MENUBAR_HEIGHT + TOOLBAR_HEIGHT - 1);
+ 
+ { Dessiner chaque barre d'outils visible }
+ For I := 0 to MAX_TOOLBARS - 1 do Begin
+  DrawToolbar(I);
+ End;
+End;
+
+{ Vérifier si un clic est dans une barre d'outils }
+Function IsInToolbar(X, Y: Integer): Boolean;
+Begin
+ IsInToolbar := (Y >= MENUBAR_HEIGHT) and (Y < MENUBAR_HEIGHT + TOOLBAR_HEIGHT);
+End;
+
+{ Trouver le bouton de barre d'outils sous le curseur }
+Procedure GetToolbarButtonAtPosition(X, Y: Integer; Var TbIndex, BtnIndex: Integer);
+Var
+ I, J: Integer;
+ TbX, TbY: Integer;
+ BtnX: Integer;
+ TitleHeight: Integer;
+Begin
+ TbIndex := -1;
+ BtnIndex := -1;
+ 
+ For I := 0 to MAX_TOOLBARS - 1 do Begin
+  If Not Toolbars[I].Visible Then Continue;
+  
+  TbX := Toolbars[I].X;
+  TbY := Toolbars[I].Y;
+  TitleHeight := 0;
+  
+  If Not Toolbars[I].Docked Then
+   TitleHeight := 16;
+  
+  { Vérifier si on est dans la zone de cette barre d'outils }
+  BtnX := TbX + 2;
+  For J := 0 to Toolbars[I].ButtonCount - 1 do Begin
+   If (X >= BtnX) and (X < BtnX + TOOLBAR_BUTTON_SIZE) and
+      (Y >= TbY + TitleHeight + 2) and (Y < TbY + TitleHeight + 2 + TOOLBAR_BUTTON_SIZE) Then Begin
+    If Not Toolbars[I].Buttons[J].Separator Then Begin
+     TbIndex := I;
+     BtnIndex := J;
+     Exit;
+    End;
+   End;
+   BtnX := BtnX + TOOLBAR_BUTTON_SIZE + TOOLBAR_SPACING;
+  End;
+ End;
+End;
+
 { Dessiner la zone de dessin principale }
 Procedure DrawCanvas;
 Begin
@@ -793,6 +1275,7 @@ Begin
 
  { Dessiner les éléments de l'interface }
  DrawMenuBar;
+ DrawAllToolbars;  { TODO 5: Barres d'outils }
  DrawCanvas;
  DrawCommandLine;
  DrawStatusBar;
@@ -981,6 +1464,9 @@ BEGIN
 
  { Initialiser les menus }
  InitMenus;
+
+ { Initialiser les barres d'outils - TODO 5 }
+ InitToolbars;
 
  { Dessiner l'interface initiale }
  DrawInterface;

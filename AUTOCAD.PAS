@@ -26,7 +26,7 @@
   11. [DONE] Créer un analyseur lexical (tokenizer) pour le langage AutoLISP
   12. [DONE] Implémenter un parseur pour construire l'arbre syntaxique des expressions LISP
   13. [DONE] Développer l'évaluateur d'expressions avec support des fonctions mathématiques (+, -, *, /, sin, cos, sqrt, etc.)
-  14. Implémenter les fonctions de dessin AutoLISP : command, entmake, entmod, entget, entsel, ssget, ssadd
+  14. [DONE] Implémenter les fonctions de dessin AutoLISP : command, entmake, entmod, entget, entsel, ssget, ssadd
   15. Ajouter les fonctions de manipulation de chaînes, listes et variables : setq, defun, if, cond, while, foreach, mapcar
 
   === MODIFICATION DES OBJETS ET PROPRIÉTÉS ===
@@ -247,6 +247,27 @@ Const
  LISP_VAL_LIST = 5;            { Valeur liste (pointeur vers noeud) }
  LISP_VAL_SYMBOL = 6;          { Symbole non évalué }
  LISP_VAL_ERROR = 7;           { Erreur d'évaluation }
+ LISP_VAL_ENAME = 8;           { Nom d'entité (handle) - TODO 14 }
+ LISP_VAL_SELSET = 9;          { Jeu de sélection - TODO 14 }
+
+ { Codes DXF pour les entités AutoLISP - TODO 14 }
+ DXF_ENTITY_TYPE = 0;          { Type d'entité (LINE, CIRCLE, etc.) }
+ DXF_LAYER = 8;                { Nom du calque }
+ DXF_COLOR = 62;               { Couleur de l'entité }
+ DXF_LINETYPE = 6;             { Type de ligne }
+ DXF_X1 = 10;                  { Coordonnée X du premier point / centre }
+ DXF_Y1 = 20;                  { Coordonnée Y du premier point / centre }
+ DXF_Z1 = 30;                  { Coordonnée Z du premier point / centre }
+ DXF_X2 = 11;                  { Coordonnée X du deuxième point }
+ DXF_Y2 = 21;                  { Coordonnée Y du deuxième point }
+ DXF_Z2 = 31;                  { Coordonnée Z du deuxième point }
+ DXF_RADIUS = 40;              { Rayon (cercle, arc) }
+ DXF_START_ANGLE = 50;         { Angle de départ (arc) }
+ DXF_END_ANGLE = 51;           { Angle de fin (arc) }
+ DXF_ENAME = -1;               { Nom d'entité (entity name/handle) }
+ 
+ { Nombre maximum de jeux de sélection AutoLISP }
+ MAX_LISP_SELSETS = 10;
 
 Type
  { Structure pour les éléments de menu }
@@ -400,6 +421,13 @@ Type
   HasError: Boolean;                       { True si erreur d'évaluation }
  End;
 
+ { Structure pour un jeu de sélection AutoLISP - TODO 14 }
+ TLispSelectionSet = Record
+  Entities: Array[0..MAX_SELECTED-1] of Integer;  { Indices des entités }
+  Count: Integer;                                  { Nombre d'entités }
+  IsActive: Boolean;                               { True si jeu de sélection actif }
+ End;
+
 Var
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
@@ -474,6 +502,12 @@ Var
  { Variables pour l'évaluateur AutoLISP - TODO 13 }
  LispEvaluator: TLispEvaluator;                        { L'évaluateur global }
  LispEvalDebugMode: Boolean;                           { Mode debug pour afficher les évaluations }
+
+ { Variables pour les fonctions de dessin AutoLISP - TODO 14 }
+ LispSelectionSets: Array[0..MAX_LISP_SELSETS-1] of TLispSelectionSet;  { Jeux de sélection }
+ LispSelSetCount: Integer;                             { Nombre de jeux de sélection utilisés }
+ LispLastEntity: Integer;                              { Dernière entité créée/sélectionnée }
+ LispEntselActive: Boolean;                            { Mode de sélection d'entité actif }
 
 { Forward declarations - TODO 6 }
 Procedure DrawContextMenu; Forward;
@@ -591,6 +625,26 @@ Function LispEvalList(Node: PLispNode): TLispValue; Forward;
 Function LispEval(Node: PLispNode): TLispValue; Forward;
 Function LispEvaluate(Const S: String): TLispValue; Forward;
 Procedure LispPrintValue(Const V: TLispValue); Forward;
+
+{ Forward declarations - TODO 14 - Fonctions de dessin AutoLISP }
+Procedure InitLispDrawFunctions; Forward;
+Function LispMakeEname(EntityIndex: Integer): TLispValue; Forward;
+Function LispMakeSelSet(SelSetIndex: Integer): TLispValue; Forward;
+Function LispEntityToList(EntityIndex: Integer): TLispValue; Forward;
+Function LispListToEntityType(Node: PLispNode): Integer; Forward;
+Function LispFindDXFValue(Node: PLispNode; DXFCode: Integer): PLispNode; Forward;
+Function LispCreateEntityFromList(Node: PLispNode): Integer; Forward;
+Function LispModifyEntityFromList(EntityIndex: Integer; Node: PLispNode): Boolean; Forward;
+Function LispEvalEntmake(Node: PLispNode): TLispValue; Forward;
+Function LispEvalEntget(Node: PLispNode): TLispValue; Forward;
+Function LispEvalEntmod(Node: PLispNode): TLispValue; Forward;
+Function LispEvalEntsel(Node: PLispNode): TLispValue; Forward;
+Function LispEvalSsget(Node: PLispNode): TLispValue; Forward;
+Function LispEvalSsadd(Node: PLispNode): TLispValue; Forward;
+Function LispEvalSslength(Node: PLispNode): TLispValue; Forward;
+Function LispEvalSsname(Node: PLispNode): TLispValue; Forward;
+Function LispEvalCommand(Node: PLispNode): TLispValue; Forward;
+Function LispEvalDrawOp(Const FuncName: String; Node: PLispNode): TLispValue; Forward;
 
 Procedure InitializeGraphics;
 Var
@@ -4949,6 +5003,14 @@ Begin
   Exit;
  End;
  
+ { Fonctions de dessin AutoLISP - TODO 14 }
+ If (FuncName = 'ENTMAKE') or (FuncName = 'ENTGET') or (FuncName = 'ENTMOD') or
+    (FuncName = 'ENTSEL') or (FuncName = 'SSGET') or (FuncName = 'SSADD') or
+    (FuncName = 'SSLENGTH') or (FuncName = 'SSNAME') or (FuncName = 'COMMAND') Then Begin
+  LispEvalList := LispEvalDrawOp(FuncName, Node);
+  Exit;
+ End;
+ 
  { Fonction inconnue }
  LispEvalList := LispMakeError('Fonction inconnue: ' + FuncName);
 End;
@@ -5037,6 +5099,1051 @@ End;
 Procedure LispPrintValue(Const V: TLispValue);
 Begin
  WriteLn(LispValueToString(V));
+End;
+
+{ ============================================================================ }
+{ Fonctions de dessin AutoLISP - TODO 14                                       }
+{ Implémente command, entmake, entmod, entget, entsel, ssget, ssadd            }
+{ ============================================================================ }
+
+{ Initialiser les fonctions de dessin AutoLISP }
+Procedure InitLispDrawFunctions;
+Var
+ I, J: Integer;
+Begin
+ { Initialiser les jeux de sélection }
+ LispSelSetCount := 0;
+ For I := 0 to MAX_LISP_SELSETS - 1 do Begin
+  LispSelectionSets[I].Count := 0;
+  LispSelectionSets[I].IsActive := False;
+  For J := 0 to MAX_SELECTED - 1 do
+   LispSelectionSets[I].Entities[J] := -1;
+ End;
+ LispLastEntity := -1;
+ LispEntselActive := False;
+End;
+
+{ Créer une valeur nom d'entité }
+Function LispMakeEname(EntityIndex: Integer): TLispValue;
+Begin
+ LispMakeEname.ValueType := LISP_VAL_ENAME;
+ LispMakeEname.IntValue := EntityIndex;
+ LispMakeEname.RealValue := EntityIndex;
+ LispMakeEname.StrValue := '';
+ LispMakeEname.ListNode := Nil;
+End;
+
+{ Créer une valeur jeu de sélection }
+Function LispMakeSelSet(SelSetIndex: Integer): TLispValue;
+Begin
+ LispMakeSelSet.ValueType := LISP_VAL_SELSET;
+ LispMakeSelSet.IntValue := SelSetIndex;
+ LispMakeSelSet.RealValue := SelSetIndex;
+ LispMakeSelSet.StrValue := '';
+ LispMakeSelSet.ListNode := Nil;
+End;
+
+{ Convertir un type d'objet en chaîne }
+Function ObjTypeToString(ObjType: Byte): String;
+Begin
+ Case ObjType of
+  OBJ_LINE:      ObjTypeToString := 'LINE';
+  OBJ_CIRCLE:    ObjTypeToString := 'CIRCLE';
+  OBJ_ARC:       ObjTypeToString := 'ARC';
+  OBJ_RECTANGLE: ObjTypeToString := 'LWPOLYLINE';  { Rectangle = Polyline légère }
+  OBJ_POLYLINE:  ObjTypeToString := 'LWPOLYLINE';
+  OBJ_POINT:     ObjTypeToString := 'POINT';
+  OBJ_TEXT:      ObjTypeToString := 'TEXT';
+  OBJ_ELLIPSE:   ObjTypeToString := 'ELLIPSE';
+  Else           ObjTypeToString := 'UNKNOWN';
+ End;
+End;
+
+{ Convertir une chaîne en type d'objet }
+Function StringToObjType(Const S: String): Integer;
+Var
+ Upper: String;
+ I: Integer;
+Begin
+ Upper := S;
+ For I := 1 to Length(Upper) do
+  If (Upper[I] >= 'a') and (Upper[I] <= 'z') Then
+   Upper[I] := Chr(Ord(Upper[I]) - 32);
+ 
+ If Upper = 'LINE' Then
+  StringToObjType := OBJ_LINE
+ Else If Upper = 'CIRCLE' Then
+  StringToObjType := OBJ_CIRCLE
+ Else If Upper = 'ARC' Then
+  StringToObjType := OBJ_ARC
+ Else If (Upper = 'LWPOLYLINE') or (Upper = 'POLYLINE') Then
+  StringToObjType := OBJ_POLYLINE
+ Else If Upper = 'POINT' Then
+  StringToObjType := OBJ_POINT
+ Else If Upper = 'TEXT' Then
+  StringToObjType := OBJ_TEXT
+ Else If Upper = 'ELLIPSE' Then
+  StringToObjType := OBJ_ELLIPSE
+ Else
+  StringToObjType := OBJ_NONE;
+End;
+
+{ Convertir une entité en liste de paires pointées (format DXF) }
+Function LispEntityToList(EntityIndex: Integer): TLispValue;
+Var
+ Node, PairNode, ValueNode: PLispNode;
+ TypeStr: String;
+Begin
+ If (EntityIndex < 0) or (EntityIndex >= MAX_OBJECTS) Then Begin
+  LispEntityToList := LispMakeNil;
+  Exit;
+ End;
+ 
+ If DrawObjects[EntityIndex].ObjType = OBJ_NONE Then Begin
+  LispEntityToList := LispMakeNil;
+  Exit;
+ End;
+ 
+ { Créer la liste principale }
+ Node := LispAllocNode;
+ If Node = Nil Then Begin
+  LispEntityToList := LispMakeNil;
+  Exit;
+ End;
+ Node^.NodeType := LISP_NODE_LIST;
+ Node^.ChildCount := 0;
+ 
+ { Ajouter la paire (-1 . ename) - Nom d'entité }
+ PairNode := LispAllocNode;
+ If PairNode <> Nil Then Begin
+  PairNode^.NodeType := LISP_NODE_DOTPAIR;
+  PairNode^.ChildCount := 2;
+  
+  { Code DXF -1 }
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_INTEGER;
+   ValueNode^.IntValue := DXF_ENAME;
+   PairNode^.Children[0] := ValueNode;
+  End;
+  
+  { Valeur = index de l'entité }
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_INTEGER;
+   ValueNode^.IntValue := EntityIndex;
+   PairNode^.Children[1] := ValueNode;
+  End;
+  
+  Node^.Children[Node^.ChildCount] := PairNode;
+  Inc(Node^.ChildCount);
+ End;
+ 
+ { Ajouter la paire (0 . type) - Type d'entité }
+ PairNode := LispAllocNode;
+ If PairNode <> Nil Then Begin
+  PairNode^.NodeType := LISP_NODE_DOTPAIR;
+  PairNode^.ChildCount := 2;
+  
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_INTEGER;
+   ValueNode^.IntValue := DXF_ENTITY_TYPE;
+   PairNode^.Children[0] := ValueNode;
+  End;
+  
+  TypeStr := ObjTypeToString(DrawObjects[EntityIndex].ObjType);
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_STRING;
+   ValueNode^.StrValue := TypeStr;
+   PairNode^.Children[1] := ValueNode;
+  End;
+  
+  Node^.Children[Node^.ChildCount] := PairNode;
+  Inc(Node^.ChildCount);
+ End;
+ 
+ { Ajouter la paire (62 . color) - Couleur }
+ PairNode := LispAllocNode;
+ If PairNode <> Nil Then Begin
+  PairNode^.NodeType := LISP_NODE_DOTPAIR;
+  PairNode^.ChildCount := 2;
+  
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_INTEGER;
+   ValueNode^.IntValue := DXF_COLOR;
+   PairNode^.Children[0] := ValueNode;
+  End;
+  
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_INTEGER;
+   ValueNode^.IntValue := DrawObjects[EntityIndex].Color;
+   PairNode^.Children[1] := ValueNode;
+  End;
+  
+  Node^.Children[Node^.ChildCount] := PairNode;
+  Inc(Node^.ChildCount);
+ End;
+ 
+ { Ajouter les coordonnées (10 . x1) (20 . y1) }
+ { Point 1 / Centre }
+ PairNode := LispAllocNode;
+ If PairNode <> Nil Then Begin
+  PairNode^.NodeType := LISP_NODE_DOTPAIR;
+  PairNode^.ChildCount := 2;
+  
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_INTEGER;
+   ValueNode^.IntValue := DXF_X1;
+   PairNode^.Children[0] := ValueNode;
+  End;
+  
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_REAL;
+   ValueNode^.RealValue := DrawObjects[EntityIndex].X1;
+   PairNode^.Children[1] := ValueNode;
+  End;
+  
+  Node^.Children[Node^.ChildCount] := PairNode;
+  Inc(Node^.ChildCount);
+ End;
+ 
+ PairNode := LispAllocNode;
+ If PairNode <> Nil Then Begin
+  PairNode^.NodeType := LISP_NODE_DOTPAIR;
+  PairNode^.ChildCount := 2;
+  
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_INTEGER;
+   ValueNode^.IntValue := DXF_Y1;
+   PairNode^.Children[0] := ValueNode;
+  End;
+  
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_REAL;
+   ValueNode^.RealValue := DrawObjects[EntityIndex].Y1;
+   PairNode^.Children[1] := ValueNode;
+  End;
+  
+  Node^.Children[Node^.ChildCount] := PairNode;
+  Inc(Node^.ChildCount);
+ End;
+ 
+ { Pour les lignes et rectangles, ajouter le point 2 (11 . x2) (21 . y2) }
+ If (DrawObjects[EntityIndex].ObjType = OBJ_LINE) or 
+    (DrawObjects[EntityIndex].ObjType = OBJ_RECTANGLE) Then Begin
+  PairNode := LispAllocNode;
+  If PairNode <> Nil Then Begin
+   PairNode^.NodeType := LISP_NODE_DOTPAIR;
+   PairNode^.ChildCount := 2;
+   
+   ValueNode := LispAllocNode;
+   If ValueNode <> Nil Then Begin
+    ValueNode^.NodeType := LISP_NODE_INTEGER;
+    ValueNode^.IntValue := DXF_X2;
+    PairNode^.Children[0] := ValueNode;
+   End;
+   
+   ValueNode := LispAllocNode;
+   If ValueNode <> Nil Then Begin
+    ValueNode^.NodeType := LISP_NODE_REAL;
+    ValueNode^.RealValue := DrawObjects[EntityIndex].X2;
+    PairNode^.Children[1] := ValueNode;
+   End;
+   
+   Node^.Children[Node^.ChildCount] := PairNode;
+   Inc(Node^.ChildCount);
+  End;
+  
+  PairNode := LispAllocNode;
+  If PairNode <> Nil Then Begin
+   PairNode^.NodeType := LISP_NODE_DOTPAIR;
+   PairNode^.ChildCount := 2;
+   
+   ValueNode := LispAllocNode;
+   If ValueNode <> Nil Then Begin
+    ValueNode^.NodeType := LISP_NODE_INTEGER;
+    ValueNode^.IntValue := DXF_Y2;
+    PairNode^.Children[0] := ValueNode;
+   End;
+   
+   ValueNode := LispAllocNode;
+   If ValueNode <> Nil Then Begin
+    ValueNode^.NodeType := LISP_NODE_REAL;
+    ValueNode^.RealValue := DrawObjects[EntityIndex].Y2;
+    PairNode^.Children[1] := ValueNode;
+   End;
+   
+   Node^.Children[Node^.ChildCount] := PairNode;
+   Inc(Node^.ChildCount);
+  End;
+ End;
+ 
+ { Pour les cercles et arcs, ajouter le rayon (40 . radius) }
+ If (DrawObjects[EntityIndex].ObjType = OBJ_CIRCLE) or 
+    (DrawObjects[EntityIndex].ObjType = OBJ_ARC) Then Begin
+  PairNode := LispAllocNode;
+  If PairNode <> Nil Then Begin
+   PairNode^.NodeType := LISP_NODE_DOTPAIR;
+   PairNode^.ChildCount := 2;
+   
+   ValueNode := LispAllocNode;
+   If ValueNode <> Nil Then Begin
+    ValueNode^.NodeType := LISP_NODE_INTEGER;
+    ValueNode^.IntValue := DXF_RADIUS;
+    PairNode^.Children[0] := ValueNode;
+   End;
+   
+   ValueNode := LispAllocNode;
+   If ValueNode <> Nil Then Begin
+    ValueNode^.NodeType := LISP_NODE_REAL;
+    ValueNode^.RealValue := DrawObjects[EntityIndex].Radius;
+    PairNode^.Children[1] := ValueNode;
+   End;
+   
+   Node^.Children[Node^.ChildCount] := PairNode;
+   Inc(Node^.ChildCount);
+  End;
+ End;
+ 
+ LispEntityToList.ValueType := LISP_VAL_LIST;
+ LispEntityToList.IntValue := 0;
+ LispEntityToList.RealValue := 0;
+ LispEntityToList.StrValue := '';
+ LispEntityToList.ListNode := Node;
+End;
+
+{ Trouver une valeur DXF dans une liste }
+Function LispFindDXFValue(Node: PLispNode; DXFCode: Integer): PLispNode;
+Var
+ I: Integer;
+ PairNode, CodeNode: PLispNode;
+Begin
+ LispFindDXFValue := Nil;
+ 
+ If (Node = Nil) or (Node^.NodeType <> LISP_NODE_LIST) Then Exit;
+ 
+ For I := 0 to Node^.ChildCount - 1 do Begin
+  PairNode := Node^.Children[I];
+  If PairNode = Nil Then Continue;
+  
+  { Vérifier si c'est une paire pointée ou une liste de 2 éléments }
+  If (PairNode^.NodeType = LISP_NODE_DOTPAIR) or 
+     ((PairNode^.NodeType = LISP_NODE_LIST) and (PairNode^.ChildCount = 2)) Then Begin
+   CodeNode := PairNode^.Children[0];
+   If CodeNode = Nil Then Continue;
+   
+   If (CodeNode^.NodeType = LISP_NODE_INTEGER) and (CodeNode^.IntValue = DXFCode) Then Begin
+    LispFindDXFValue := PairNode^.Children[1];
+    Exit;
+   End;
+  End;
+ End;
+End;
+
+{ Déterminer le type d'entité à partir d'une liste }
+Function LispListToEntityType(Node: PLispNode): Integer;
+Var
+ TypeNode: PLispNode;
+Begin
+ LispListToEntityType := OBJ_NONE;
+ 
+ TypeNode := LispFindDXFValue(Node, DXF_ENTITY_TYPE);
+ If TypeNode = Nil Then Exit;
+ 
+ If TypeNode^.NodeType = LISP_NODE_STRING Then
+  LispListToEntityType := StringToObjType(TypeNode^.StrValue)
+ Else If TypeNode^.NodeType = LISP_NODE_SYMBOL Then
+  LispListToEntityType := StringToObjType(TypeNode^.StrValue);
+End;
+
+{ Créer une entité à partir d'une liste DXF }
+Function LispCreateEntityFromList(Node: PLispNode): Integer;
+Var
+ I: Integer;
+ ObjType: Integer;
+ X1Node, Y1Node, X2Node, Y2Node, RadiusNode, ColorNode: PLispNode;
+Begin
+ LispCreateEntityFromList := -1;
+ 
+ If Node = Nil Then Exit;
+ 
+ { Déterminer le type d'entité }
+ ObjType := LispListToEntityType(Node);
+ If ObjType = OBJ_NONE Then Exit;
+ 
+ { Trouver un emplacement libre }
+ For I := 0 to MAX_OBJECTS - 1 do Begin
+  If DrawObjects[I].ObjType = OBJ_NONE Then Begin
+   { Initialiser l'objet }
+   DrawObjects[I].ObjType := ObjType;
+   DrawObjects[I].Selected := False;
+   DrawObjects[I].Visible := True;
+   DrawObjects[I].Color := White;  { Couleur par défaut }
+   DrawObjects[I].LineType := 0;
+   DrawObjects[I].LayerIndex := 0;
+   DrawObjects[I].X1 := 0;
+   DrawObjects[I].Y1 := 0;
+   DrawObjects[I].X2 := 0;
+   DrawObjects[I].Y2 := 0;
+   DrawObjects[I].Radius := 0;
+   
+   { Lire les coordonnées du premier point }
+   X1Node := LispFindDXFValue(Node, DXF_X1);
+   Y1Node := LispFindDXFValue(Node, DXF_Y1);
+   If X1Node <> Nil Then Begin
+    If X1Node^.NodeType = LISP_NODE_REAL Then
+     DrawObjects[I].X1 := X1Node^.RealValue
+    Else If X1Node^.NodeType = LISP_NODE_INTEGER Then
+     DrawObjects[I].X1 := X1Node^.IntValue;
+   End;
+   If Y1Node <> Nil Then Begin
+    If Y1Node^.NodeType = LISP_NODE_REAL Then
+     DrawObjects[I].Y1 := Y1Node^.RealValue
+    Else If Y1Node^.NodeType = LISP_NODE_INTEGER Then
+     DrawObjects[I].Y1 := Y1Node^.IntValue;
+   End;
+   
+   { Lire les coordonnées du deuxième point (pour lignes, rectangles) }
+   X2Node := LispFindDXFValue(Node, DXF_X2);
+   Y2Node := LispFindDXFValue(Node, DXF_Y2);
+   If X2Node <> Nil Then Begin
+    If X2Node^.NodeType = LISP_NODE_REAL Then
+     DrawObjects[I].X2 := X2Node^.RealValue
+    Else If X2Node^.NodeType = LISP_NODE_INTEGER Then
+     DrawObjects[I].X2 := X2Node^.IntValue;
+   End;
+   If Y2Node <> Nil Then Begin
+    If Y2Node^.NodeType = LISP_NODE_REAL Then
+     DrawObjects[I].Y2 := Y2Node^.RealValue
+    Else If Y2Node^.NodeType = LISP_NODE_INTEGER Then
+     DrawObjects[I].Y2 := Y2Node^.IntValue;
+   End;
+   
+   { Lire le rayon (pour cercles, arcs) }
+   RadiusNode := LispFindDXFValue(Node, DXF_RADIUS);
+   If RadiusNode <> Nil Then Begin
+    If RadiusNode^.NodeType = LISP_NODE_REAL Then
+     DrawObjects[I].Radius := RadiusNode^.RealValue
+    Else If RadiusNode^.NodeType = LISP_NODE_INTEGER Then
+     DrawObjects[I].Radius := RadiusNode^.IntValue;
+   End;
+   
+   { Lire la couleur }
+   ColorNode := LispFindDXFValue(Node, DXF_COLOR);
+   If ColorNode <> Nil Then Begin
+    If ColorNode^.NodeType = LISP_NODE_INTEGER Then
+     DrawObjects[I].Color := ColorNode^.IntValue;
+   End;
+   
+   LispLastEntity := I;
+   LispCreateEntityFromList := I;
+   Exit;
+  End;
+ End;
+End;
+
+{ Modifier une entité existante à partir d'une liste DXF }
+Function LispModifyEntityFromList(EntityIndex: Integer; Node: PLispNode): Boolean;
+Var
+ X1Node, Y1Node, X2Node, Y2Node, RadiusNode, ColorNode: PLispNode;
+Begin
+ LispModifyEntityFromList := False;
+ 
+ If (EntityIndex < 0) or (EntityIndex >= MAX_OBJECTS) Then Exit;
+ If DrawObjects[EntityIndex].ObjType = OBJ_NONE Then Exit;
+ If Node = Nil Then Exit;
+ 
+ { Modifier les coordonnées si présentes }
+ X1Node := LispFindDXFValue(Node, DXF_X1);
+ Y1Node := LispFindDXFValue(Node, DXF_Y1);
+ If X1Node <> Nil Then Begin
+  If X1Node^.NodeType = LISP_NODE_REAL Then
+   DrawObjects[EntityIndex].X1 := X1Node^.RealValue
+  Else If X1Node^.NodeType = LISP_NODE_INTEGER Then
+   DrawObjects[EntityIndex].X1 := X1Node^.IntValue;
+ End;
+ If Y1Node <> Nil Then Begin
+  If Y1Node^.NodeType = LISP_NODE_REAL Then
+   DrawObjects[EntityIndex].Y1 := Y1Node^.RealValue
+  Else If Y1Node^.NodeType = LISP_NODE_INTEGER Then
+   DrawObjects[EntityIndex].Y1 := Y1Node^.IntValue;
+ End;
+ 
+ X2Node := LispFindDXFValue(Node, DXF_X2);
+ Y2Node := LispFindDXFValue(Node, DXF_Y2);
+ If X2Node <> Nil Then Begin
+  If X2Node^.NodeType = LISP_NODE_REAL Then
+   DrawObjects[EntityIndex].X2 := X2Node^.RealValue
+  Else If X2Node^.NodeType = LISP_NODE_INTEGER Then
+   DrawObjects[EntityIndex].X2 := X2Node^.IntValue;
+ End;
+ If Y2Node <> Nil Then Begin
+  If Y2Node^.NodeType = LISP_NODE_REAL Then
+   DrawObjects[EntityIndex].Y2 := Y2Node^.RealValue
+  Else If Y2Node^.NodeType = LISP_NODE_INTEGER Then
+   DrawObjects[EntityIndex].Y2 := Y2Node^.IntValue;
+ End;
+ 
+ RadiusNode := LispFindDXFValue(Node, DXF_RADIUS);
+ If RadiusNode <> Nil Then Begin
+  If RadiusNode^.NodeType = LISP_NODE_REAL Then
+   DrawObjects[EntityIndex].Radius := RadiusNode^.RealValue
+  Else If RadiusNode^.NodeType = LISP_NODE_INTEGER Then
+   DrawObjects[EntityIndex].Radius := RadiusNode^.IntValue;
+ End;
+ 
+ ColorNode := LispFindDXFValue(Node, DXF_COLOR);
+ If ColorNode <> Nil Then Begin
+  If ColorNode^.NodeType = LISP_NODE_INTEGER Then
+   DrawObjects[EntityIndex].Color := ColorNode^.IntValue;
+ End;
+ 
+ LispModifyEntityFromList := True;
+End;
+
+{ Fonction entmake - Créer une entité à partir d'une liste }
+Function LispEvalEntmake(Node: PLispNode): TLispValue;
+Var
+ ArgVal: TLispValue;
+ EntityIndex: Integer;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalEntmake := LispMakeError('entmake requiert une liste d''entité');
+  Exit;
+ End;
+ 
+ ArgVal := LispEval(Node^.Children[1]);
+ If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalEntmake := ArgVal;
+  Exit;
+ End;
+ 
+ If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
+  LispEvalEntmake := LispMakeError('entmake requiert une liste');
+  Exit;
+ End;
+ 
+ EntityIndex := LispCreateEntityFromList(ArgVal.ListNode);
+ If EntityIndex < 0 Then
+  LispEvalEntmake := LispMakeNil
+ Else
+  LispEvalEntmake := LispEntityToList(EntityIndex);
+End;
+
+{ Fonction entget - Obtenir les données d'une entité }
+Function LispEvalEntget(Node: PLispNode): TLispValue;
+Var
+ ArgVal: TLispValue;
+ EntityIndex: Integer;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalEntget := LispMakeError('entget requiert un nom d''entité');
+  Exit;
+ End;
+ 
+ ArgVal := LispEval(Node^.Children[1]);
+ If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalEntget := ArgVal;
+  Exit;
+ End;
+ 
+ If ArgVal.ValueType = LISP_VAL_ENAME Then
+  EntityIndex := ArgVal.IntValue
+ Else If ArgVal.ValueType = LISP_VAL_INTEGER Then
+  EntityIndex := ArgVal.IntValue
+ Else Begin
+  LispEvalEntget := LispMakeError('entget requiert un nom d''entité valide');
+  Exit;
+ End;
+ 
+ LispEvalEntget := LispEntityToList(EntityIndex);
+End;
+
+{ Fonction entmod - Modifier une entité }
+Function LispEvalEntmod(Node: PLispNode): TLispValue;
+Var
+ ArgVal: TLispValue;
+ EntityIndex: Integer;
+ EnameNode: PLispNode;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalEntmod := LispMakeError('entmod requiert une liste d''entité');
+  Exit;
+ End;
+ 
+ ArgVal := LispEval(Node^.Children[1]);
+ If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalEntmod := ArgVal;
+  Exit;
+ End;
+ 
+ If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
+  LispEvalEntmod := LispMakeError('entmod requiert une liste');
+  Exit;
+ End;
+ 
+ { Trouver le nom d'entité dans la liste }
+ EnameNode := LispFindDXFValue(ArgVal.ListNode, DXF_ENAME);
+ If EnameNode = Nil Then Begin
+  LispEvalEntmod := LispMakeError('Liste d''entité sans nom d''entité (-1)');
+  Exit;
+ End;
+ 
+ If EnameNode^.NodeType = LISP_NODE_INTEGER Then
+  EntityIndex := EnameNode^.IntValue
+ Else Begin
+  LispEvalEntmod := LispMakeError('Nom d''entité invalide');
+  Exit;
+ End;
+ 
+ If LispModifyEntityFromList(EntityIndex, ArgVal.ListNode) Then
+  LispEvalEntmod := LispEntityToList(EntityIndex)
+ Else
+  LispEvalEntmod := LispMakeNil;
+End;
+
+{ Fonction entsel - Sélectionner une entité interactivement }
+Function LispEvalEntsel(Node: PLispNode): TLispValue;
+Var
+ ResultNode, PairNode, PointNode, ValueNode: PLispNode;
+Begin
+ { Note: Dans une vraie implémentation, cela attendrait un clic de l'utilisateur }
+ { Ici, nous retournons simplement la dernière entité sélectionnée si elle existe }
+ 
+ If SelectionSet.Count > 0 Then Begin
+  LispLastEntity := SelectionSet.Objects[0];
+  
+  { Créer une liste (ename point) }
+  ResultNode := LispAllocNode;
+  If ResultNode = Nil Then Begin
+   LispEvalEntsel := LispMakeNil;
+   Exit;
+  End;
+  ResultNode^.NodeType := LISP_NODE_LIST;
+  ResultNode^.ChildCount := 2;
+  
+  { Ajouter le nom d'entité }
+  ValueNode := LispAllocNode;
+  If ValueNode <> Nil Then Begin
+   ValueNode^.NodeType := LISP_NODE_INTEGER;
+   ValueNode^.IntValue := LispLastEntity;
+   ResultNode^.Children[0] := ValueNode;
+  End;
+  
+  { Ajouter le point de sélection (coordonnées du centre de l'objet) }
+  PointNode := LispAllocNode;
+  If PointNode <> Nil Then Begin
+   PointNode^.NodeType := LISP_NODE_LIST;
+   PointNode^.ChildCount := 2;
+   
+   ValueNode := LispAllocNode;
+   If ValueNode <> Nil Then Begin
+    ValueNode^.NodeType := LISP_NODE_REAL;
+    ValueNode^.RealValue := DrawObjects[LispLastEntity].X1;
+    PointNode^.Children[0] := ValueNode;
+   End;
+   
+   ValueNode := LispAllocNode;
+   If ValueNode <> Nil Then Begin
+    ValueNode^.NodeType := LISP_NODE_REAL;
+    ValueNode^.RealValue := DrawObjects[LispLastEntity].Y1;
+    PointNode^.Children[1] := ValueNode;
+   End;
+   
+   ResultNode^.Children[1] := PointNode;
+  End;
+  
+  LispEvalEntsel.ValueType := LISP_VAL_LIST;
+  LispEvalEntsel.ListNode := ResultNode;
+  LispEvalEntsel.IntValue := 0;
+  LispEvalEntsel.RealValue := 0;
+  LispEvalEntsel.StrValue := '';
+ End Else
+  LispEvalEntsel := LispMakeNil;
+End;
+
+{ Fonction ssget - Créer un jeu de sélection }
+Function LispEvalSsget(Node: PLispNode): TLispValue;
+Var
+ I, J, SelSetIdx: Integer;
+ ModeVal: TLispValue;
+ ModeStr: String;
+Begin
+ { Trouver un emplacement libre pour le jeu de sélection }
+ SelSetIdx := -1;
+ For I := 0 to MAX_LISP_SELSETS - 1 do Begin
+  If Not LispSelectionSets[I].IsActive Then Begin
+   SelSetIdx := I;
+   Break;
+  End;
+ End;
+ 
+ If SelSetIdx < 0 Then Begin
+  LispEvalSsget := LispMakeError('Trop de jeux de sélection');
+  Exit;
+ End;
+ 
+ { Initialiser le jeu de sélection }
+ LispSelectionSets[SelSetIdx].Count := 0;
+ LispSelectionSets[SelSetIdx].IsActive := True;
+ For J := 0 to MAX_SELECTED - 1 do
+  LispSelectionSets[SelSetIdx].Entities[J] := -1;
+ 
+ { Vérifier le mode de sélection }
+ If Node^.ChildCount >= 2 Then Begin
+  ModeVal := LispEval(Node^.Children[1]);
+  If ModeVal.ValueType = LISP_VAL_STRING Then
+   ModeStr := ModeVal.StrValue
+  Else
+   ModeStr := '';
+  
+  { Mode "X" - Sélectionner tous les objets }
+  If (ModeStr = 'X') or (ModeStr = 'x') Then Begin
+   For I := 0 to MAX_OBJECTS - 1 do Begin
+    If (DrawObjects[I].ObjType <> OBJ_NONE) and DrawObjects[I].Visible Then Begin
+     If LispSelectionSets[SelSetIdx].Count < MAX_SELECTED Then Begin
+      LispSelectionSets[SelSetIdx].Entities[LispSelectionSets[SelSetIdx].Count] := I;
+      Inc(LispSelectionSets[SelSetIdx].Count);
+     End;
+    End;
+   End;
+  End;
+ End Else Begin
+  { Sans argument, utiliser la sélection actuelle }
+  For I := 0 to SelectionSet.Count - 1 do Begin
+   If LispSelectionSets[SelSetIdx].Count < MAX_SELECTED Then Begin
+    LispSelectionSets[SelSetIdx].Entities[LispSelectionSets[SelSetIdx].Count] := SelectionSet.Objects[I];
+    Inc(LispSelectionSets[SelSetIdx].Count);
+   End;
+  End;
+ End;
+ 
+ If LispSelectionSets[SelSetIdx].Count = 0 Then Begin
+  LispSelectionSets[SelSetIdx].IsActive := False;
+  LispEvalSsget := LispMakeNil;
+ End Else Begin
+  Inc(LispSelSetCount);
+  LispEvalSsget := LispMakeSelSet(SelSetIdx);
+ End;
+End;
+
+{ Fonction ssadd - Ajouter une entité à un jeu de sélection }
+Function LispEvalSsadd(Node: PLispNode): TLispValue;
+Var
+ I, J, SelSetIdx, EntityIdx: Integer;
+ EnameVal, SelSetVal: TLispValue;
+Begin
+ { ssadd peut créer un nouveau jeu de sélection ou ajouter à un existant }
+ 
+ If Node^.ChildCount < 2 Then Begin
+  { Créer un nouveau jeu de sélection vide }
+  For I := 0 to MAX_LISP_SELSETS - 1 do Begin
+   If Not LispSelectionSets[I].IsActive Then Begin
+    LispSelectionSets[I].Count := 0;
+    LispSelectionSets[I].IsActive := True;
+    For J := 0 to MAX_SELECTED - 1 do
+     LispSelectionSets[I].Entities[J] := -1;
+    Inc(LispSelSetCount);
+    LispEvalSsadd := LispMakeSelSet(I);
+    Exit;
+   End;
+  End;
+  LispEvalSsadd := LispMakeError('Trop de jeux de sélection');
+  Exit;
+ End;
+ 
+ EnameVal := LispEval(Node^.Children[1]);
+ If EnameVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalSsadd := EnameVal;
+  Exit;
+ End;
+ 
+ If (EnameVal.ValueType = LISP_VAL_ENAME) or (EnameVal.ValueType = LISP_VAL_INTEGER) Then
+  EntityIdx := EnameVal.IntValue
+ Else Begin
+  LispEvalSsadd := LispMakeError('ssadd requiert un nom d''entité valide');
+  Exit;
+ End;
+ 
+ If Node^.ChildCount >= 3 Then Begin
+  { Ajouter à un jeu de sélection existant }
+  SelSetVal := LispEval(Node^.Children[2]);
+  If SelSetVal.ValueType <> LISP_VAL_SELSET Then Begin
+   LispEvalSsadd := LispMakeError('ssadd requiert un jeu de sélection');
+   Exit;
+  End;
+  SelSetIdx := SelSetVal.IntValue;
+ End Else Begin
+  { Créer un nouveau jeu de sélection avec cette entité }
+  For I := 0 to MAX_LISP_SELSETS - 1 do Begin
+   If Not LispSelectionSets[I].IsActive Then Begin
+    SelSetIdx := I;
+    LispSelectionSets[I].Count := 0;
+    LispSelectionSets[I].IsActive := True;
+    For J := 0 to MAX_SELECTED - 1 do
+     LispSelectionSets[I].Entities[J] := -1;
+    Inc(LispSelSetCount);
+    Break;
+   End;
+  End;
+ End;
+ 
+ { Ajouter l'entité au jeu de sélection }
+ If (SelSetIdx >= 0) and (SelSetIdx < MAX_LISP_SELSETS) and 
+    LispSelectionSets[SelSetIdx].IsActive Then Begin
+  If LispSelectionSets[SelSetIdx].Count < MAX_SELECTED Then Begin
+   LispSelectionSets[SelSetIdx].Entities[LispSelectionSets[SelSetIdx].Count] := EntityIdx;
+   Inc(LispSelectionSets[SelSetIdx].Count);
+   LispEvalSsadd := LispMakeSelSet(SelSetIdx);
+  End Else
+   LispEvalSsadd := LispMakeError('Jeu de sélection plein');
+ End Else
+  LispEvalSsadd := LispMakeError('Jeu de sélection invalide');
+End;
+
+{ Fonction sslength - Obtenir la longueur d'un jeu de sélection }
+Function LispEvalSslength(Node: PLispNode): TLispValue;
+Var
+ SelSetVal: TLispValue;
+ SelSetIdx: Integer;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalSslength := LispMakeError('sslength requiert un jeu de sélection');
+  Exit;
+ End;
+ 
+ SelSetVal := LispEval(Node^.Children[1]);
+ If SelSetVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalSslength := SelSetVal;
+  Exit;
+ End;
+ 
+ If SelSetVal.ValueType <> LISP_VAL_SELSET Then Begin
+  LispEvalSslength := LispMakeError('sslength requiert un jeu de sélection');
+  Exit;
+ End;
+ 
+ SelSetIdx := SelSetVal.IntValue;
+ If (SelSetIdx >= 0) and (SelSetIdx < MAX_LISP_SELSETS) and 
+    LispSelectionSets[SelSetIdx].IsActive Then
+  LispEvalSslength := LispMakeInt(LispSelectionSets[SelSetIdx].Count)
+ Else
+  LispEvalSslength := LispMakeNil;
+End;
+
+{ Fonction ssname - Obtenir le nom d'une entité dans un jeu de sélection }
+Function LispEvalSsname(Node: PLispNode): TLispValue;
+Var
+ SelSetVal, IndexVal: TLispValue;
+ SelSetIdx, Index: Integer;
+Begin
+ If Node^.ChildCount < 3 Then Begin
+  LispEvalSsname := LispMakeError('ssname requiert un jeu de sélection et un index');
+  Exit;
+ End;
+ 
+ SelSetVal := LispEval(Node^.Children[1]);
+ If SelSetVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalSsname := SelSetVal;
+  Exit;
+ End;
+ 
+ If SelSetVal.ValueType <> LISP_VAL_SELSET Then Begin
+  LispEvalSsname := LispMakeError('ssname requiert un jeu de sélection');
+  Exit;
+ End;
+ 
+ IndexVal := LispEval(Node^.Children[2]);
+ If IndexVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalSsname := IndexVal;
+  Exit;
+ End;
+ 
+ Index := Round(LispValueToReal(IndexVal));
+ SelSetIdx := SelSetVal.IntValue;
+ 
+ If (SelSetIdx >= 0) and (SelSetIdx < MAX_LISP_SELSETS) and 
+    LispSelectionSets[SelSetIdx].IsActive Then Begin
+  If (Index >= 0) and (Index < LispSelectionSets[SelSetIdx].Count) Then
+   LispEvalSsname := LispMakeEname(LispSelectionSets[SelSetIdx].Entities[Index])
+  Else
+   LispEvalSsname := LispMakeNil;
+ End Else
+  LispEvalSsname := LispMakeNil;
+End;
+
+{ Fonction command - Exécuter une commande AutoCAD }
+Function LispEvalCommand(Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ CmdVal: TLispValue;
+ CmdName: String;
+ X1, Y1, X2, Y2, R: Real;
+ EntityIdx: Integer;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalCommand := LispMakeNil;
+  Exit;
+ End;
+ 
+ { Obtenir le nom de la commande }
+ CmdVal := LispEval(Node^.Children[1]);
+ If CmdVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalCommand := CmdVal;
+  Exit;
+ End;
+ 
+ CmdName := '';
+ If CmdVal.ValueType = LISP_VAL_STRING Then
+  CmdName := CmdVal.StrValue
+ Else If CmdVal.ValueType = LISP_VAL_SYMBOL Then
+  CmdName := CmdVal.StrValue;
+ 
+ { Convertir en majuscules }
+ For I := 1 to Length(CmdName) do
+  If (CmdName[I] >= 'a') and (CmdName[I] <= 'z') Then
+   CmdName[I] := Chr(Ord(CmdName[I]) - 32);
+ 
+ { Commande LINE }
+ If CmdName = 'LINE' Then Begin
+  If Node^.ChildCount >= 4 Then Begin
+   { Obtenir les deux points }
+   CmdVal := LispEval(Node^.Children[2]);
+   If (CmdVal.ValueType = LISP_VAL_LIST) and (CmdVal.ListNode <> Nil) Then Begin
+    If CmdVal.ListNode^.ChildCount >= 2 Then Begin
+     If CmdVal.ListNode^.Children[0]^.NodeType = LISP_NODE_REAL Then
+      X1 := CmdVal.ListNode^.Children[0]^.RealValue
+     Else
+      X1 := CmdVal.ListNode^.Children[0]^.IntValue;
+     If CmdVal.ListNode^.Children[1]^.NodeType = LISP_NODE_REAL Then
+      Y1 := CmdVal.ListNode^.Children[1]^.RealValue
+     Else
+      Y1 := CmdVal.ListNode^.Children[1]^.IntValue;
+    End;
+   End;
+   
+   CmdVal := LispEval(Node^.Children[3]);
+   If (CmdVal.ValueType = LISP_VAL_LIST) and (CmdVal.ListNode <> Nil) Then Begin
+    If CmdVal.ListNode^.ChildCount >= 2 Then Begin
+     If CmdVal.ListNode^.Children[0]^.NodeType = LISP_NODE_REAL Then
+      X2 := CmdVal.ListNode^.Children[0]^.RealValue
+     Else
+      X2 := CmdVal.ListNode^.Children[0]^.IntValue;
+     If CmdVal.ListNode^.Children[1]^.NodeType = LISP_NODE_REAL Then
+      Y2 := CmdVal.ListNode^.Children[1]^.RealValue
+     Else
+      Y2 := CmdVal.ListNode^.Children[1]^.IntValue;
+    End;
+   End;
+   
+   { Créer la ligne }
+   For I := 0 to MAX_OBJECTS - 1 do Begin
+    If DrawObjects[I].ObjType = OBJ_NONE Then Begin
+     DrawObjects[I].ObjType := OBJ_LINE;
+     DrawObjects[I].X1 := X1;
+     DrawObjects[I].Y1 := Y1;
+     DrawObjects[I].X2 := X2;
+     DrawObjects[I].Y2 := Y2;
+     DrawObjects[I].Color := White;
+     DrawObjects[I].Selected := False;
+     DrawObjects[I].Visible := True;
+     LispLastEntity := I;
+     Break;
+    End;
+   End;
+  End;
+  LispEvalCommand := LispMakeNil;
+  Exit;
+ End;
+ 
+ { Commande CIRCLE }
+ If CmdName = 'CIRCLE' Then Begin
+  If Node^.ChildCount >= 4 Then Begin
+   { Obtenir le centre et le rayon }
+   CmdVal := LispEval(Node^.Children[2]);
+   If (CmdVal.ValueType = LISP_VAL_LIST) and (CmdVal.ListNode <> Nil) Then Begin
+    If CmdVal.ListNode^.ChildCount >= 2 Then Begin
+     If CmdVal.ListNode^.Children[0]^.NodeType = LISP_NODE_REAL Then
+      X1 := CmdVal.ListNode^.Children[0]^.RealValue
+     Else
+      X1 := CmdVal.ListNode^.Children[0]^.IntValue;
+     If CmdVal.ListNode^.Children[1]^.NodeType = LISP_NODE_REAL Then
+      Y1 := CmdVal.ListNode^.Children[1]^.RealValue
+     Else
+      Y1 := CmdVal.ListNode^.Children[1]^.IntValue;
+    End;
+   End;
+   
+   CmdVal := LispEval(Node^.Children[3]);
+   R := LispValueToReal(CmdVal);
+   
+   { Créer le cercle }
+   For I := 0 to MAX_OBJECTS - 1 do Begin
+    If DrawObjects[I].ObjType = OBJ_NONE Then Begin
+     DrawObjects[I].ObjType := OBJ_CIRCLE;
+     DrawObjects[I].X1 := X1;
+     DrawObjects[I].Y1 := Y1;
+     DrawObjects[I].Radius := R;
+     DrawObjects[I].Color := White;
+     DrawObjects[I].Selected := False;
+     DrawObjects[I].Visible := True;
+     LispLastEntity := I;
+     Break;
+    End;
+   End;
+  End;
+  LispEvalCommand := LispMakeNil;
+  Exit;
+ End;
+ 
+ { Commande ERASE }
+ If CmdName = 'ERASE' Then Begin
+  { Effacer les objets sélectionnés }
+  For I := 0 to SelectionSet.Count - 1 do Begin
+   EntityIdx := SelectionSet.Objects[I];
+   If (EntityIdx >= 0) and (EntityIdx < MAX_OBJECTS) Then
+    DrawObjects[EntityIdx].ObjType := OBJ_NONE;
+  End;
+  ClearSelection;
+  LispEvalCommand := LispMakeNil;
+  Exit;
+ End;
+ 
+ { Commande inconnue }
+ LispEvalCommand := LispMakeNil;
+End;
+
+{ Dispatcher pour les fonctions de dessin AutoLISP }
+Function LispEvalDrawOp(Const FuncName: String; Node: PLispNode): TLispValue;
+Begin
+ If FuncName = 'ENTMAKE' Then
+  LispEvalDrawOp := LispEvalEntmake(Node)
+ Else If FuncName = 'ENTGET' Then
+  LispEvalDrawOp := LispEvalEntget(Node)
+ Else If FuncName = 'ENTMOD' Then
+  LispEvalDrawOp := LispEvalEntmod(Node)
+ Else If FuncName = 'ENTSEL' Then
+  LispEvalDrawOp := LispEvalEntsel(Node)
+ Else If FuncName = 'SSGET' Then
+  LispEvalDrawOp := LispEvalSsget(Node)
+ Else If FuncName = 'SSADD' Then
+  LispEvalDrawOp := LispEvalSsadd(Node)
+ Else If FuncName = 'SSLENGTH' Then
+  LispEvalDrawOp := LispEvalSslength(Node)
+ Else If FuncName = 'SSNAME' Then
+  LispEvalDrawOp := LispEvalSsname(Node)
+ Else If FuncName = 'COMMAND' Then
+  LispEvalDrawOp := LispEvalCommand(Node)
+ Else
+  LispEvalDrawOp := LispMakeError('Fonction de dessin inconnue: ' + FuncName);
 End;
 
 { Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair, TODO 9: Sélection, TODO 10: Grips }
@@ -5520,6 +6627,7 @@ Begin
  InitLispTokenizer;      { TODO 11: Initialiser le tokenizer AutoLISP }
  InitLispParser;         { TODO 12: Initialiser le parseur AutoLISP }
  InitLispEvaluator;      { TODO 13: Initialiser l'évaluateur AutoLISP }
+ InitLispDrawFunctions;  { TODO 14: Initialiser les fonctions de dessin AutoLISP }
 End;
 
 { Dessiner le menu contextuel }

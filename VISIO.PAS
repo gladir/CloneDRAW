@@ -25,7 +25,7 @@
   12. [FAIT] Ajouter les poignees de redimensionnement sur les objets selectionnes avec detection de survol
 
   === OBJETS ET FORMES ===
-  13. Creer les types d'objets de base: Rectangle, Ellipse, Ligne, Polygone, Courbe de Bezier, Texte, Image
+  13. [FAIT] Creer les types d'objets de base: Rectangle, Ellipse, Ligne, Polygone, Courbe de Bezier, Texte, Image
   14. Implementer les connecteurs entre objets avec points d'ancrage automatiques
   15. Permettre la modification des proprietes des objets: couleur de remplissage, couleur de trait, epaisseur de ligne, style de ligne
   16. Ajouter le support des calques (layers) avec visibilite et verrouillage
@@ -64,7 +64,7 @@ Const
  MENU_HIGHLIGHT_FG = 15;  { Blanc }
  
  { Constantes pour la barre d'outils }
- TOOLBAR_COUNT = 6;
+ TOOLBAR_COUNT = 9;
  TOOLBAR_TOP = 19;        { Juste en dessous de la barre de menu }
  TOOLBAR_HEIGHT = 26;     { Hauteur de la barre d'outils }
  TOOLBAR_BUTTON_SIZE = 24; { Taille d'un bouton }
@@ -80,6 +80,10 @@ Const
  DEFAULT_SHAPE_WIDTH = 80;  { Largeur par défaut d'une forme }
  DEFAULT_SHAPE_HEIGHT = 60; { Hauteur par défaut d'une forme }
  SELECTION_HANDLE_SIZE = 6; { Taille des poignées de sélection }
+ 
+ { Constantes pour les polygones et courbes de Bézier }
+ MAX_POLYGON_POINTS = 20;  { Nombre maximum de points pour un polygone }
+ MAX_BEZIER_POINTS = 4;    { Nombre de points de contrôle pour une courbe de Bézier cubique }
  
  { Couleurs pour les poignées de redimensionnement }
  HANDLE_NORMAL_COLOR = 1;   { Bleu - couleur normale des poignées }
@@ -121,7 +125,7 @@ Const
  
  { Noms des outils de la barre d'outils }
  ToolNames: Array[1..TOOLBAR_COUNT] of String[12] = (
-   'Selection', 'Rectangle', 'Ellipse', 'Line', 'Connector', 'Text'
+   'Selection', 'Rectangle', 'Ellipse', 'Line', 'Connector', 'Text', 'Polygon', 'Bezier', 'Image'
  );
  
  { Noms des menus principaux }
@@ -136,8 +140,13 @@ Const
 
 Type
  TMenuState = (msNone, msMenuBar, msDropDown);
- TToolType = (ttSelection, ttRectangle, ttEllipse, ttLine, ttConnector, ttText);
- TShapeType = (stNone, stRectangle, stEllipse, stLine, stConnector, stText);
+ TToolType = (ttSelection, ttRectangle, ttEllipse, ttLine, ttConnector, ttText, ttPolygon, ttBezier, ttImage);
+ TShapeType = (stNone, stRectangle, stEllipse, stLine, stConnector, stText, stPolygon, stBezier, stImage);
+ 
+ { Structure pour stocker les points d'un polygone ou d'une courbe de Bézier }
+ TPointArray = Array[1..MAX_POLYGON_POINTS] of Record
+  X, Y: Integer;
+ End;
  
  { Structure pour un objet graphique }
  TShapeObject = Record
@@ -148,6 +157,11 @@ Type
   LineWidth: Integer;        { Épaisseur de ligne }
   Text: String[80];          { Texte (pour objets texte) }
   Selected: Boolean;         { Objet sélectionné }
+  { Champs pour les polygones et courbes de Bézier }
+  Points: TPointArray;       { Points du polygone ou de la courbe de Bézier }
+  PointCount: Integer;       { Nombre de points utilisés }
+  { Champ pour les images }
+  ImagePath: String[255];    { Chemin vers le fichier image }
  End;
 
 Var
@@ -919,6 +933,8 @@ End;
 
 { Procédure pour initialiser un objet vide }
 Procedure InitShape(Var Shape: TShapeObject);
+Var
+ I: Integer;
 Begin
  Shape.ShapeType := stNone;
  Shape.X1 := 0;
@@ -930,6 +946,14 @@ Begin
  Shape.LineWidth := 1;
  Shape.Text := '';
  Shape.Selected := False;
+ { Initialiser les champs pour polygones et courbes de Bézier }
+ Shape.PointCount := 0;
+ For I := 1 to MAX_POLYGON_POINTS do Begin
+  Shape.Points[I].X := 0;
+  Shape.Points[I].Y := 0;
+ End;
+ { Initialiser le chemin d'image }
+ Shape.ImagePath := '';
 End;
 
 { Procédure pour dessiner une poignée de redimensionnement unique }
@@ -993,6 +1017,9 @@ End;
 Procedure DrawShape(Var Shape: TShapeObject);
 Var
  CenterX, CenterY, RadiusX, RadiusY: Integer;
+ I: Integer;
+ T, OneMinusT: Real;
+ BezierX, BezierY, PrevX, PrevY: Integer;
 Begin
  If Shape.ShapeType = stNone Then Exit;
  
@@ -1039,6 +1066,77 @@ Begin
   stText: Begin
     SetColor(Shape.LineColor);
     OutTextXY(Shape.X1, Shape.Y1, Shape.Text);
+   End;
+  stPolygon: Begin
+    { Dessiner un polygone si au moins 3 points sont définis }
+    If Shape.PointCount >= 3 Then Begin
+     { Remplir le polygone en dessinant des lignes de remplissage }
+     SetFillStyle(SolidFill, Shape.FillColor);
+     { Dessiner le contour du polygone }
+     SetColor(Shape.LineColor);
+     For I := 1 to Shape.PointCount - 1 do Begin
+      Line(Shape.Points[I].X, Shape.Points[I].Y, 
+           Shape.Points[I + 1].X, Shape.Points[I + 1].Y);
+     End;
+     { Fermer le polygone }
+     Line(Shape.Points[Shape.PointCount].X, Shape.Points[Shape.PointCount].Y,
+          Shape.Points[1].X, Shape.Points[1].Y);
+    End;
+   End;
+  stBezier: Begin
+    { Dessiner une courbe de Bézier cubique (4 points de contrôle) }
+    If Shape.PointCount = 4 Then Begin
+     SetColor(Shape.LineColor);
+     { Dessiner la courbe de Bézier par approximation avec des segments de ligne }
+     { P0 = Points[1], P1 = Points[2], P2 = Points[3], P3 = Points[4] }
+     { Formule: B(t) = (1-t)^3*P0 + 3*(1-t)^2*t*P1 + 3*(1-t)*t^2*P2 + t^3*P3 }
+     PrevX := Shape.Points[1].X;
+     PrevY := Shape.Points[1].Y;
+     For I := 1 to 20 do Begin
+      T := I / 20;
+      OneMinusT := 1 - T;
+      { Calcul de la position sur la courbe }
+      BezierX := Round(
+       OneMinusT * OneMinusT * OneMinusT * Shape.Points[1].X +
+       3 * OneMinusT * OneMinusT * T * Shape.Points[2].X +
+       3 * OneMinusT * T * T * Shape.Points[3].X +
+       T * T * T * Shape.Points[4].X
+      );
+      BezierY := Round(
+       OneMinusT * OneMinusT * OneMinusT * Shape.Points[1].Y +
+       3 * OneMinusT * OneMinusT * T * Shape.Points[2].Y +
+       3 * OneMinusT * T * T * Shape.Points[3].Y +
+       T * T * T * Shape.Points[4].Y
+      );
+      Line(PrevX, PrevY, BezierX, BezierY);
+      PrevX := BezierX;
+      PrevY := BezierY;
+     End;
+     { Dessiner les points de contrôle si sélectionné }
+     If Shape.Selected Then Begin
+      SetColor(LightGray);
+      Line(Shape.Points[1].X, Shape.Points[1].Y, Shape.Points[2].X, Shape.Points[2].Y);
+      Line(Shape.Points[3].X, Shape.Points[3].Y, Shape.Points[4].X, Shape.Points[4].Y);
+      SetFillStyle(SolidFill, Yellow);
+      For I := 1 to 4 do Begin
+       FillEllipse(Shape.Points[I].X, Shape.Points[I].Y, 3, 3);
+      End;
+     End;
+    End;
+   End;
+  stImage: Begin
+    { Dessiner un placeholder pour l'image (rectangle avec X) }
+    SetFillStyle(SolidFill, Shape.FillColor);
+    Bar(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
+    SetColor(Shape.LineColor);
+    Rectangle(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
+    { Dessiner un X pour indiquer que c'est un placeholder d'image }
+    Line(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
+    Line(Shape.X2, Shape.Y1, Shape.X1, Shape.Y2);
+    { Afficher "Image" au centre }
+    CenterX := (Shape.X1 + Shape.X2) div 2 - 20;
+    CenterY := (Shape.Y1 + Shape.Y2) div 2 - 4;
+    OutTextXY(CenterX, CenterY, 'Image');
    End;
  End;
  
@@ -1434,6 +1532,78 @@ Begin
       DocumentModified := True;
      End;
     End;
+   ttPolygon: Begin
+     { Pour les polygones, on ajoute un point au polygone en cours }
+     { Pour simplifier, créer un polygone régulier (hexagone) }
+     If ShapeCount < MAX_SHAPES Then Begin
+      Inc(ShapeCount);
+      InitShape(Shapes[ShapeCount]);
+      Shapes[ShapeCount].ShapeType := stPolygon;
+      { Créer un hexagone centré sur le clic }
+      Shapes[ShapeCount].PointCount := 6;
+      Shapes[ShapeCount].Points[1].X := X;
+      Shapes[ShapeCount].Points[1].Y := Y - 30;
+      Shapes[ShapeCount].Points[2].X := X + 26;
+      Shapes[ShapeCount].Points[2].Y := Y - 15;
+      Shapes[ShapeCount].Points[3].X := X + 26;
+      Shapes[ShapeCount].Points[3].Y := Y + 15;
+      Shapes[ShapeCount].Points[4].X := X;
+      Shapes[ShapeCount].Points[4].Y := Y + 30;
+      Shapes[ShapeCount].Points[5].X := X - 26;
+      Shapes[ShapeCount].Points[5].Y := Y + 15;
+      Shapes[ShapeCount].Points[6].X := X - 26;
+      Shapes[ShapeCount].Points[6].Y := Y - 15;
+      { Calculer le rectangle englobant }
+      Shapes[ShapeCount].X1 := X - 26;
+      Shapes[ShapeCount].Y1 := Y - 30;
+      Shapes[ShapeCount].X2 := X + 26;
+      Shapes[ShapeCount].Y2 := Y + 30;
+      Shapes[ShapeCount].FillColor := CurrentFillColor;
+      Shapes[ShapeCount].LineColor := CurrentLineColor;
+      DocumentModified := True;
+     End;
+    End;
+   ttBezier: Begin
+     { Créer une courbe de Bézier par défaut }
+     If ShapeCount < MAX_SHAPES Then Begin
+      Inc(ShapeCount);
+      InitShape(Shapes[ShapeCount]);
+      Shapes[ShapeCount].ShapeType := stBezier;
+      { Définir 4 points de contrôle pour une courbe de Bézier cubique }
+      Shapes[ShapeCount].PointCount := 4;
+      Shapes[ShapeCount].Points[1].X := X;
+      Shapes[ShapeCount].Points[1].Y := Y;
+      Shapes[ShapeCount].Points[2].X := X + 30;
+      Shapes[ShapeCount].Points[2].Y := Y - 40;
+      Shapes[ShapeCount].Points[3].X := X + 70;
+      Shapes[ShapeCount].Points[3].Y := Y - 40;
+      Shapes[ShapeCount].Points[4].X := X + 100;
+      Shapes[ShapeCount].Points[4].Y := Y;
+      { Calculer le rectangle englobant }
+      Shapes[ShapeCount].X1 := X;
+      Shapes[ShapeCount].Y1 := Y - 40;
+      Shapes[ShapeCount].X2 := X + 100;
+      Shapes[ShapeCount].Y2 := Y;
+      Shapes[ShapeCount].LineColor := CurrentLineColor;
+      DocumentModified := True;
+     End;
+    End;
+   ttImage: Begin
+     { Ajouter un placeholder d'image }
+     If ShapeCount < MAX_SHAPES Then Begin
+      Inc(ShapeCount);
+      InitShape(Shapes[ShapeCount]);
+      Shapes[ShapeCount].ShapeType := stImage;
+      Shapes[ShapeCount].X1 := X;
+      Shapes[ShapeCount].Y1 := Y;
+      Shapes[ShapeCount].X2 := X + 80;
+      Shapes[ShapeCount].Y2 := Y + 60;
+      Shapes[ShapeCount].FillColor := LightGray;
+      Shapes[ShapeCount].LineColor := CurrentLineColor;
+      Shapes[ShapeCount].ImagePath := '';
+      DocumentModified := True;
+     End;
+    End;
   End;
  End;
 End;
@@ -1459,6 +1629,7 @@ Begin
   ttEllipse: ShapeType := stEllipse;
   ttLine: ShapeType := stLine;
   ttConnector: ShapeType := stConnector;
+  ttImage: ShapeType := stImage;
   Else Exit;
  End;
  

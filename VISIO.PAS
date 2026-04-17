@@ -21,7 +21,7 @@
   === SUPPORT SOURIS ===
   9. [FAIT] Gerer les evenements de clic gauche pour selection et dessin d'objets
   10. [FAIT] Gerer le clic droit pour afficher un menu contextuel avec options (Cut, Copy, Paste, Delete, Properties)
-  11. Implementer le glisser-deposer (drag and drop) pour deplacer et redimensionner les objets
+  11. [FAIT] Implementer le glisser-deposer (drag and drop) pour deplacer et redimensionner les objets
   12. Ajouter les poignees de redimensionnement sur les objets selectionnes avec detection de survol
 
   === OBJETS ET FORMES ===
@@ -92,6 +92,23 @@ Const
  CONTEXT_MENU_HIGHLIGHT_FG = 15;  { Blanc - texte surbrillance }
  CONTEXT_MENU_DISABLED_COLOR = 8; { Gris - texte désactivé }
  
+ { Constantes pour le glisser-déposer (drag and drop) }
+ DRAG_MODE_NONE = 0;      { Pas de glissement en cours }
+ DRAG_MODE_MOVE = 1;      { Déplacement d'un objet }
+ DRAG_MODE_RESIZE = 2;    { Redimensionnement d'un objet }
+ 
+ { Constantes pour les poignées de redimensionnement }
+ RESIZE_HANDLE_SIZE = 6;   { Taille des poignées en pixels }
+ RESIZE_HANDLE_NONE = 0;   { Aucune poignée }
+ RESIZE_HANDLE_NW = 1;     { Coin nord-ouest (haut-gauche) }
+ RESIZE_HANDLE_N = 2;      { Milieu nord (haut) }
+ RESIZE_HANDLE_NE = 3;     { Coin nord-est (haut-droite) }
+ RESIZE_HANDLE_E = 4;      { Milieu est (droite) }
+ RESIZE_HANDLE_SE = 5;     { Coin sud-est (bas-droite) }
+ RESIZE_HANDLE_S = 6;      { Milieu sud (bas) }
+ RESIZE_HANDLE_SW = 7;     { Coin sud-ouest (bas-gauche) }
+ RESIZE_HANDLE_W = 8;      { Milieu ouest (gauche) }
+ 
  { Noms des éléments du menu contextuel }
  ContextMenuNames: Array[1..CONTEXT_MENU_ITEM_COUNT] of String[12] = (
    'Cut', 'Copy', 'Paste', 'Delete', 'Properties'
@@ -146,6 +163,13 @@ Var
  ContextMenuVisible: Boolean;
  ContextMenuX, ContextMenuY: Integer;
  ContextMenuHighlight: Integer;
+ { Variables pour le glisser-déposer (drag and drop) }
+ DragMode: Integer;           { Mode de glissement actuel (DRAG_MODE_*) }
+ DragStartX, DragStartY: Integer;  { Position de départ du glissement }
+ DragOffsetX, DragOffsetY: Integer; { Décalage entre clic et coin de l'objet }
+ DragResizeHandle: Integer;   { Poignée de redimensionnement en cours }
+ DragOrigX1, DragOrigY1: Integer;  { Coordonnées originales de l'objet }
+ DragOrigX2, DragOrigY2: Integer;
 
 Procedure InitializeGraphics;
 Var
@@ -1057,6 +1081,212 @@ Begin
  End;
 End;
 
+{ ============================================================================ }
+{ === PROCEDURES POUR LE GLISSER-DEPOSER (DRAG AND DROP) === }
+{ ============================================================================ }
+
+{ Fonction pour détecter quelle poignée de redimensionnement est sous le curseur }
+Function GetResizeHandle(X, Y: Integer; ShapeIndex: Integer): Integer;
+Var
+ X1, Y1, X2, Y2: Integer;
+ CenterX, CenterY: Integer;
+ HalfSize: Integer;
+Begin
+ GetResizeHandle := RESIZE_HANDLE_NONE;
+ 
+ If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
+ If Not Shapes[ShapeIndex].Selected Then Exit;
+ 
+ X1 := Shapes[ShapeIndex].X1;
+ Y1 := Shapes[ShapeIndex].Y1;
+ X2 := Shapes[ShapeIndex].X2;
+ Y2 := Shapes[ShapeIndex].Y2;
+ CenterX := (X1 + X2) div 2;
+ CenterY := (Y1 + Y2) div 2;
+ HalfSize := RESIZE_HANDLE_SIZE div 2;
+ 
+ { Vérifier chaque poignée }
+ { Coin nord-ouest (haut-gauche) }
+ If (Abs(X - X1) <= HalfSize) and (Abs(Y - Y1) <= HalfSize) Then Begin
+  GetResizeHandle := RESIZE_HANDLE_NW;
+  Exit;
+ End;
+ 
+ { Milieu nord (haut) }
+ If (Abs(X - CenterX) <= HalfSize) and (Abs(Y - Y1) <= HalfSize) Then Begin
+  GetResizeHandle := RESIZE_HANDLE_N;
+  Exit;
+ End;
+ 
+ { Coin nord-est (haut-droite) }
+ If (Abs(X - X2) <= HalfSize) and (Abs(Y - Y1) <= HalfSize) Then Begin
+  GetResizeHandle := RESIZE_HANDLE_NE;
+  Exit;
+ End;
+ 
+ { Milieu est (droite) }
+ If (Abs(X - X2) <= HalfSize) and (Abs(Y - CenterY) <= HalfSize) Then Begin
+  GetResizeHandle := RESIZE_HANDLE_E;
+  Exit;
+ End;
+ 
+ { Coin sud-est (bas-droite) }
+ If (Abs(X - X2) <= HalfSize) and (Abs(Y - Y2) <= HalfSize) Then Begin
+  GetResizeHandle := RESIZE_HANDLE_SE;
+  Exit;
+ End;
+ 
+ { Milieu sud (bas) }
+ If (Abs(X - CenterX) <= HalfSize) and (Abs(Y - Y2) <= HalfSize) Then Begin
+  GetResizeHandle := RESIZE_HANDLE_S;
+  Exit;
+ End;
+ 
+ { Coin sud-ouest (bas-gauche) }
+ If (Abs(X - X1) <= HalfSize) and (Abs(Y - Y2) <= HalfSize) Then Begin
+  GetResizeHandle := RESIZE_HANDLE_SW;
+  Exit;
+ End;
+ 
+ { Milieu ouest (gauche) }
+ If (Abs(X - X1) <= HalfSize) and (Abs(Y - CenterY) <= HalfSize) Then Begin
+  GetResizeHandle := RESIZE_HANDLE_W;
+  Exit;
+ End;
+End;
+
+{ Procédure pour déplacer un objet }
+Procedure MoveShape(ShapeIndex: Integer; DeltaX, DeltaY: Integer);
+Begin
+ If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
+ 
+ Shapes[ShapeIndex].X1 := Shapes[ShapeIndex].X1 + DeltaX;
+ Shapes[ShapeIndex].Y1 := Shapes[ShapeIndex].Y1 + DeltaY;
+ Shapes[ShapeIndex].X2 := Shapes[ShapeIndex].X2 + DeltaX;
+ Shapes[ShapeIndex].Y2 := Shapes[ShapeIndex].Y2 + DeltaY;
+ 
+ DocumentModified := True;
+End;
+
+{ Procédure pour redimensionner un objet selon la poignée }
+Procedure ResizeShape(ShapeIndex: Integer; Handle: Integer; NewX, NewY: Integer);
+Begin
+ If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
+ 
+ Case Handle of
+  RESIZE_HANDLE_NW: Begin
+   Shapes[ShapeIndex].X1 := NewX;
+   Shapes[ShapeIndex].Y1 := NewY;
+  End;
+  RESIZE_HANDLE_N: Begin
+   Shapes[ShapeIndex].Y1 := NewY;
+  End;
+  RESIZE_HANDLE_NE: Begin
+   Shapes[ShapeIndex].X2 := NewX;
+   Shapes[ShapeIndex].Y1 := NewY;
+  End;
+  RESIZE_HANDLE_E: Begin
+   Shapes[ShapeIndex].X2 := NewX;
+  End;
+  RESIZE_HANDLE_SE: Begin
+   Shapes[ShapeIndex].X2 := NewX;
+   Shapes[ShapeIndex].Y2 := NewY;
+  End;
+  RESIZE_HANDLE_S: Begin
+   Shapes[ShapeIndex].Y2 := NewY;
+  End;
+  RESIZE_HANDLE_SW: Begin
+   Shapes[ShapeIndex].X1 := NewX;
+   Shapes[ShapeIndex].Y2 := NewY;
+  End;
+  RESIZE_HANDLE_W: Begin
+   Shapes[ShapeIndex].X1 := NewX;
+  End;
+ End;
+ 
+ DocumentModified := True;
+End;
+
+{ Procédure pour démarrer le glissement }
+Procedure StartDrag(ShapeIndex: Integer; X, Y: Integer; Handle: Integer);
+Begin
+ If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
+ 
+ DragStartX := X;
+ DragStartY := Y;
+ DragOrigX1 := Shapes[ShapeIndex].X1;
+ DragOrigY1 := Shapes[ShapeIndex].Y1;
+ DragOrigX2 := Shapes[ShapeIndex].X2;
+ DragOrigY2 := Shapes[ShapeIndex].Y2;
+ 
+ If Handle <> RESIZE_HANDLE_NONE Then Begin
+  { Démarrer le redimensionnement }
+  DragMode := DRAG_MODE_RESIZE;
+  DragResizeHandle := Handle;
+ End
+ Else Begin
+  { Démarrer le déplacement }
+  DragMode := DRAG_MODE_MOVE;
+  DragOffsetX := X - Shapes[ShapeIndex].X1;
+  DragOffsetY := Y - Shapes[ShapeIndex].Y1;
+  DragResizeHandle := RESIZE_HANDLE_NONE;
+ End;
+End;
+
+{ Procédure pour traiter le mouvement de la souris pendant le drag }
+Procedure HandleMouseMove(X, Y: Integer);
+Var
+ DeltaX, DeltaY: Integer;
+Begin
+ If DragMode = DRAG_MODE_NONE Then Exit;
+ If SelectedShape < 1 Then Exit;
+ 
+ If DragMode = DRAG_MODE_MOVE Then Begin
+  { Déplacer l'objet }
+  DeltaX := X - DragStartX;
+  DeltaY := Y - DragStartY;
+  
+  { Restaurer position originale puis appliquer le déplacement }
+  Shapes[SelectedShape].X1 := DragOrigX1 + DeltaX;
+  Shapes[SelectedShape].Y1 := DragOrigY1 + DeltaY;
+  Shapes[SelectedShape].X2 := DragOrigX2 + DeltaX;
+  Shapes[SelectedShape].Y2 := DragOrigY2 + DeltaY;
+ End
+ Else If DragMode = DRAG_MODE_RESIZE Then Begin
+  { Redimensionner l'objet }
+  ResizeShape(SelectedShape, DragResizeHandle, X, Y);
+ End;
+End;
+
+{ Procédure pour terminer le glissement }
+Procedure EndDrag;
+Begin
+ If DragMode <> DRAG_MODE_NONE Then Begin
+  DocumentModified := True;
+ End;
+ DragMode := DRAG_MODE_NONE;
+ DragResizeHandle := RESIZE_HANDLE_NONE;
+End;
+
+{ Procédure pour initialiser le glisser-déposer }
+Procedure InitDragDrop;
+Begin
+ DragMode := DRAG_MODE_NONE;
+ DragStartX := 0;
+ DragStartY := 0;
+ DragOffsetX := 0;
+ DragOffsetY := 0;
+ DragResizeHandle := RESIZE_HANDLE_NONE;
+ DragOrigX1 := 0;
+ DragOrigY1 := 0;
+ DragOrigX2 := 0;
+ DragOrigY2 := 0;
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DE GLISSER-DEPOSER === }
+{ ============================================================================ }
+
 { Procédure pour ajouter un nouvel objet }
 Procedure AddShape(ShapeType: TShapeType; X1, Y1, X2, Y2: Integer);
 Var
@@ -1096,6 +1326,7 @@ Procedure HandleLeftClick(X, Y: Integer);
 Var
  ShapeIndex: Integer;
  ToolIndex: Integer;
+ ResizeHandle: Integer;
 Begin
  { Vérifier si le clic est dans la barre de menu }
  If Y <= MENU_HEIGHT Then Begin
@@ -1117,13 +1348,26 @@ Begin
  If Y > WORK_AREA_TOP Then Begin
   Case CurrentTool of
    ttSelection: Begin
-     { Mode sélection: chercher un objet sous le curseur }
+     { Mode sélection: vérifier d'abord si on clique sur une poignée de redimensionnement }
+     If SelectedShape > 0 Then Begin
+      ResizeHandle := GetResizeHandle(X, Y, SelectedShape);
+      If ResizeHandle <> RESIZE_HANDLE_NONE Then Begin
+       { Démarrer le redimensionnement }
+       StartDrag(SelectedShape, X, Y, ResizeHandle);
+       Exit;
+      End;
+     End;
+     
+     { Chercher un objet sous le curseur }
      ShapeIndex := GetShapeAtPosition(X, Y);
      If ShapeIndex > 0 Then Begin
       SelectShape(ShapeIndex);
+      { Démarrer le glissement pour déplacer l'objet }
+      StartDrag(ShapeIndex, X, Y, RESIZE_HANDLE_NONE);
      End
      Else Begin
       DeselectAllShapes;
+      EndDrag;
      End;
     End;
    ttRectangle, ttEllipse, ttLine, ttConnector: Begin
@@ -1156,6 +1400,12 @@ Procedure HandleLeftRelease(X, Y: Integer);
 Var
  ShapeType: TShapeType;
 Begin
+ { Terminer le glissement s'il y en a un en cours }
+ If DragMode <> DRAG_MODE_NONE Then Begin
+  EndDrag;
+  Exit;
+ End;
+ 
  If Not IsDrawing Then Exit;
  
  IsDrawing := False;
@@ -1188,6 +1438,8 @@ Begin
  LastMouseX := 0;
  LastMouseY := 0;
  LastMouseButton := 0;
+ { Initialiser le glisser-déposer }
+ InitDragDrop;
  For I := 1 to MAX_SHAPES do Begin
   InitShape(Shapes[I]);
  End;
@@ -1819,13 +2071,20 @@ BEGIN
     End;
     RefreshScreen;
     ShowMouse;
-    { Attendre que le bouton soit relâché }
+    { Suivre le mouvement de la souris pendant que le bouton est enfoncé (drag) }
     Repeat
      {$IFDEF FPC}
       GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
      {$ELSE}
       GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
      {$ENDIF}
+     { Si on est en mode glissement, mettre à jour la position }
+     If DragMode <> DRAG_MODE_NONE Then Begin
+      HideMouse;
+      HandleMouseMove(LastMouseX, LastMouseY);
+      RefreshScreen;
+      ShowMouse;
+     End;
     Until (LastMouseButton and 1) = 0;
     { Gérer le relâchement du bouton }
     HideMouse;

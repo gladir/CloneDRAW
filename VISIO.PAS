@@ -10,7 +10,7 @@
 
   === MENUS ET INTERFACE ===
   1. [FAIT] Implementer le menu principal avec File, Edit, View, Insert, Format, Shape, Tools, Window, Help
-  2. Ajouter le menu File avec New, Open, Close, Save, Save As, Export, Print, Print Preview, Exit
+  2. [FAIT] Ajouter le menu File avec New, Open, Close, Save, Save As, Export, Print, Print Preview, Exit
   3. Ajouter le menu Edit avec Undo, Redo, Cut, Copy, Paste, Delete, Select All, Find, Replace
   4. Ajouter le menu View avec Zoom In, Zoom Out, Fit Page, Grid, Rulers, Guides, Snap to Grid
   5. Ajouter le menu Insert avec Shape, Text Box, Image, Connector, Page, Layer
@@ -159,6 +159,89 @@ End;
  End;
 {$ENDIF}
 
+{ ============================================================================ }
+{ === PROCEDURES DU MENU FILE === }
+{ ============================================================================ }
+
+Var
+ CurrentFileName: String;
+ DocumentModified: Boolean;
+
+{ Procédure New - Créer un nouveau document }
+Procedure FileNew;
+Begin
+ CurrentFileName := '';
+ DocumentModified := False;
+ { TODO: Réinitialiser le canevas et les objets }
+End;
+
+{ Procédure Open - Ouvrir un fichier }
+Procedure FileOpen;
+Begin
+ { TODO: Afficher une boîte de dialogue pour sélectionner un fichier }
+ { TODO: Charger le fichier Visio }
+End;
+
+{ Procédure Close - Fermer le document actuel }
+Procedure FileClose;
+Begin
+ { TODO: Vérifier si le document a été modifié et proposer de sauvegarder }
+ CurrentFileName := '';
+ DocumentModified := False;
+End;
+
+{ Procédure Save - Sauvegarder le document }
+Procedure FileSave;
+Begin
+ If CurrentFileName = '' Then Begin
+  { Si pas de nom de fichier, appeler Save As }
+  { FileSaveAs; }
+ End
+ Else Begin
+  { TODO: Sauvegarder le fichier }
+  DocumentModified := False;
+ End;
+End;
+
+{ Procédure Save As - Sauvegarder sous un nouveau nom }
+Procedure FileSaveAs;
+Begin
+ { TODO: Afficher une boîte de dialogue pour choisir le nom du fichier }
+ { TODO: Sauvegarder le fichier }
+ DocumentModified := False;
+End;
+
+{ Procédure Export - Exporter dans un autre format }
+Procedure FileExport;
+Begin
+ { TODO: Afficher une boîte de dialogue pour choisir le format d'export }
+ { TODO: Exporter le document (BMP, SVG, etc.) }
+End;
+
+{ Procédure Print - Imprimer le document }
+Procedure FilePrint;
+Begin
+ { TODO: Afficher la boîte de dialogue d'impression }
+ { TODO: Envoyer le document à l'imprimante }
+End;
+
+{ Procédure Print Preview - Aperçu avant impression }
+Procedure FilePrintPreview;
+Begin
+ { TODO: Afficher un aperçu du document tel qu'il sera imprimé }
+End;
+
+{ Procédure Exit - Quitter l'application }
+Function FileExit: Boolean;
+Begin
+ FileExit := True;
+ { TODO: Vérifier si le document a été modifié et proposer de sauvegarder }
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DU MENU FILE === }
+{ ============================================================================ }
+
 { Procédure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
@@ -205,7 +288,7 @@ Begin
  { Définir les éléments selon le menu sélectionné }
  Case MenuIndex of
   1: Begin { File }
-      ItemCount := 9;
+      ItemCount := 11;
       Items[1] := 'New';
       Items[2] := 'Open...';
       Items[3] := 'Close';
@@ -213,8 +296,10 @@ Begin
       Items[5] := 'Save As...';
       Items[6] := '-';
       Items[7] := 'Export...';
-      Items[8] := 'Print...';
-      Items[9] := 'Exit';
+      Items[8] := '-';
+      Items[9] := 'Print...';
+      Items[10] := 'Print Preview';
+      Items[11] := 'Exit';
      End;
   2: Begin { Edit }
       ItemCount := 9;
@@ -347,6 +432,69 @@ Begin
  MenuState := msNone;
  ScreenWidth := GetMaxX;
  ScreenHeight := GetMaxY;
+ CurrentFileName := '';
+ DocumentModified := False;
+End;
+
+{ Fonction pour exécuter une action du menu File }
+{ Retourne True si l'application doit quitter }
+Function ExecuteFileMenuAction(ItemIndex: Integer): Boolean;
+Begin
+ ExecuteFileMenuAction := False;
+ Case ItemIndex of
+  1: FileNew;           { New }
+  2: FileOpen;          { Open... }
+  3: FileClose;         { Close }
+  4: FileSave;          { Save }
+  5: FileSaveAs;        { Save As... }
+  { 6 est un séparateur }
+  7: FileExport;        { Export... }
+  { 8 est un séparateur }
+  9: FilePrint;         { Print... }
+  10: FilePrintPreview; { Print Preview }
+  11: ExecuteFileMenuAction := FileExit; { Exit }
+ End;
+End;
+
+{ Fonction pour déterminer quel élément de menu est sous la souris }
+Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer;
+Const
+ ItemHeight = 16;
+ MenuWidth = 150;
+Var
+ X, Y, ItemCount, I: Integer;
+Begin
+ GetDropDownItemAtPosition := 0;
+ 
+ { Déterminer le nombre d'éléments selon le menu }
+ Case MenuIndex of
+  1: ItemCount := 11; { File }
+  2: ItemCount := 9;  { Edit }
+  3: ItemCount := 7;  { View }
+  4: ItemCount := 6;  { Insert }
+  5: ItemCount := 7;  { Format }
+  6: ItemCount := 8;  { Shape }
+  7: ItemCount := 4;  { Tools }
+  8: ItemCount := 4;  { Window }
+  9: ItemCount := 3;  { Help }
+  Else ItemCount := 0;
+ End;
+ 
+ If ItemCount = 0 Then Exit;
+ 
+ { Calculer la position du menu déroulant }
+ X := MenuPositions[MenuIndex] - 4;
+ Y := MENU_HEIGHT + 1;
+ 
+ { Vérifier si la souris est dans la zone du menu déroulant }
+ If (MouseX >= X) and (MouseX <= X + MenuWidth) and
+    (MouseY >= Y) and (MouseY <= Y + ItemCount * ItemHeight + 4) Then Begin
+  { Calculer l'élément sous la souris }
+  I := (MouseY - Y) div ItemHeight + 1;
+  If (I >= 1) and (I <= ItemCount) Then Begin
+   GetDropDownItemAtPosition := I;
+  End;
+ End;
 End;
 
 { Procédure pour rafraîchir l'affichage complet }

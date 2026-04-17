@@ -20,7 +20,7 @@
 
   === SUPPORT SOURIS ===
   9. [FAIT] Gerer les evenements de clic gauche pour selection et dessin d'objets
-  10. Gerer le clic droit pour afficher un menu contextuel avec options (Cut, Copy, Paste, Delete, Properties)
+  10. [FAIT] Gerer le clic droit pour afficher un menu contextuel avec options (Cut, Copy, Paste, Delete, Properties)
   11. Implementer le glisser-deposer (drag and drop) pour deplacer et redimensionner les objets
   12. Ajouter les poignees de redimensionnement sur les objets selectionnes avec detection de survol
 
@@ -81,6 +81,22 @@ Const
  DEFAULT_SHAPE_HEIGHT = 60; { Hauteur par défaut d'une forme }
  SELECTION_HANDLE_SIZE = 6; { Taille des poignées de sélection }
  
+ { Constantes pour le menu contextuel (clic droit) }
+ CONTEXT_MENU_ITEM_COUNT = 5;     { Nombre d'éléments : Cut, Copy, Paste, Delete, Properties }
+ CONTEXT_MENU_WIDTH = 100;        { Largeur du menu contextuel }
+ CONTEXT_MENU_ITEM_HEIGHT = 18;   { Hauteur d'un élément }
+ CONTEXT_MENU_BG_COLOR = 15;      { Blanc - fond du menu }
+ CONTEXT_MENU_BORDER_COLOR = 8;   { Gris foncé - bordure }
+ CONTEXT_MENU_TEXT_COLOR = 0;     { Noir - texte }
+ CONTEXT_MENU_HIGHLIGHT_BG = 1;   { Bleu - surbrillance }
+ CONTEXT_MENU_HIGHLIGHT_FG = 15;  { Blanc - texte surbrillance }
+ CONTEXT_MENU_DISABLED_COLOR = 8; { Gris - texte désactivé }
+ 
+ { Noms des éléments du menu contextuel }
+ ContextMenuNames: Array[1..CONTEXT_MENU_ITEM_COUNT] of String[12] = (
+   'Cut', 'Copy', 'Paste', 'Delete', 'Properties'
+ )
+ 
  { Noms des outils de la barre d'outils }
  ToolNames: Array[1..TOOLBAR_COUNT] of String[12] = (
    'Selection', 'Rectangle', 'Ellipse', 'Line', 'Connector', 'Text'
@@ -126,6 +142,10 @@ Var
  DrawStartX, DrawStartY: Integer;
  LastMouseX, LastMouseY: Integer;
  LastMouseButton: LongInt;
+ { Variables pour le menu contextuel (clic droit) }
+ ContextMenuVisible: Boolean;
+ ContextMenuX, ContextMenuY: Integer;
+ ContextMenuHighlight: Integer;
 
 Procedure InitializeGraphics;
 Var
@@ -1177,6 +1197,184 @@ End;
 { === FIN DES PROCEDURES DE GESTION DES OBJETS === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === PROCEDURES DU MENU CONTEXTUEL (CLIC DROIT) === }
+{ ============================================================================ }
+
+{ Procédure pour masquer le menu contextuel }
+Procedure HideContextMenu;
+Begin
+ ContextMenuVisible := False;
+ ContextMenuHighlight := 0;
+End;
+
+{ Procédure pour dessiner le menu contextuel }
+Procedure DrawContextMenu;
+Var
+ I: Integer;
+ MenuHeight: Integer;
+ ItemY: Integer;
+ ItemEnabled: Boolean;
+Begin
+ If Not ContextMenuVisible Then Exit;
+ 
+ MenuHeight := CONTEXT_MENU_ITEM_COUNT * CONTEXT_MENU_ITEM_HEIGHT + 4;
+ 
+ { Dessiner le fond du menu }
+ SetFillStyle(SolidFill, CONTEXT_MENU_BG_COLOR);
+ Bar(ContextMenuX, ContextMenuY, ContextMenuX + CONTEXT_MENU_WIDTH, ContextMenuY + MenuHeight);
+ 
+ { Dessiner la bordure du menu }
+ SetColor(CONTEXT_MENU_BORDER_COLOR);
+ Rectangle(ContextMenuX, ContextMenuY, ContextMenuX + CONTEXT_MENU_WIDTH, ContextMenuY + MenuHeight);
+ 
+ { Dessiner chaque élément du menu }
+ For I := 1 to CONTEXT_MENU_ITEM_COUNT do Begin
+  ItemY := ContextMenuY + 2 + (I - 1) * CONTEXT_MENU_ITEM_HEIGHT;
+  
+  { Déterminer si l'élément est activé }
+  { Cut, Copy, Delete nécessitent une sélection }
+  { Paste nécessite que le presse-papiers ne soit pas vide }
+  { Properties nécessite une sélection }
+  Case I of
+   1: ItemEnabled := (SelectedShape > 0); { Cut }
+   2: ItemEnabled := (SelectedShape > 0); { Copy }
+   3: ItemEnabled := Not ClipboardEmpty;  { Paste }
+   4: ItemEnabled := (SelectedShape > 0); { Delete }
+   5: ItemEnabled := (SelectedShape > 0); { Properties }
+   Else ItemEnabled := True;
+  End;
+  
+  { Dessiner le fond de l'élément si surbrillance }
+  If (I = ContextMenuHighlight) and ItemEnabled Then Begin
+   SetFillStyle(SolidFill, CONTEXT_MENU_HIGHLIGHT_BG);
+   Bar(ContextMenuX + 1, ItemY, ContextMenuX + CONTEXT_MENU_WIDTH - 1, ItemY + CONTEXT_MENU_ITEM_HEIGHT);
+   SetColor(CONTEXT_MENU_HIGHLIGHT_FG);
+  End
+  Else If ItemEnabled Then Begin
+   SetColor(CONTEXT_MENU_TEXT_COLOR);
+  End
+  Else Begin
+   SetColor(CONTEXT_MENU_DISABLED_COLOR);
+  End;
+  
+  { Afficher le texte de l'élément }
+  OutTextXY(ContextMenuX + 8, ItemY + 4, ContextMenuNames[I]);
+ End;
+End;
+
+{ Fonction pour obtenir l'élément du menu contextuel à une position }
+Function GetContextMenuItemAtPosition(X, Y: Integer): Integer;
+Var
+ MenuHeight: Integer;
+ RelY: Integer;
+ Item: Integer;
+Begin
+ GetContextMenuItemAtPosition := 0;
+ 
+ If Not ContextMenuVisible Then Exit;
+ 
+ MenuHeight := CONTEXT_MENU_ITEM_COUNT * CONTEXT_MENU_ITEM_HEIGHT + 4;
+ 
+ { Vérifier si le point est dans le menu }
+ If (X >= ContextMenuX) and (X <= ContextMenuX + CONTEXT_MENU_WIDTH) and
+    (Y >= ContextMenuY) and (Y <= ContextMenuY + MenuHeight) Then Begin
+  RelY := Y - ContextMenuY - 2;
+  Item := (RelY div CONTEXT_MENU_ITEM_HEIGHT) + 1;
+  If (Item >= 1) and (Item <= CONTEXT_MENU_ITEM_COUNT) Then Begin
+   GetContextMenuItemAtPosition := Item;
+  End;
+ End;
+End;
+
+{ Procédure pour exécuter une action du menu contextuel }
+Procedure ExecuteContextMenuAction(ItemIndex: Integer);
+Var
+ ItemEnabled: Boolean;
+Begin
+ { Vérifier si l'élément est activé }
+ Case ItemIndex of
+  1: ItemEnabled := (SelectedShape > 0); { Cut }
+  2: ItemEnabled := (SelectedShape > 0); { Copy }
+  3: ItemEnabled := Not ClipboardEmpty;  { Paste }
+  4: ItemEnabled := (SelectedShape > 0); { Delete }
+  5: ItemEnabled := (SelectedShape > 0); { Properties }
+  Else ItemEnabled := False;
+ End;
+ 
+ If Not ItemEnabled Then Exit;
+ 
+ Case ItemIndex of
+  1: EditCut;        { Cut }
+  2: EditCopy;       { Copy }
+  3: EditPaste;      { Paste }
+  4: EditDelete;     { Delete }
+  5: Begin           { Properties }
+      { TODO: Afficher la boîte de dialogue des propriétés }
+     End;
+ End;
+ 
+ HideContextMenu;
+End;
+
+{ Procédure pour afficher le menu contextuel }
+Procedure ShowContextMenu(X, Y: Integer);
+Begin
+ { Ajuster la position pour que le menu reste visible }
+ ContextMenuX := X;
+ ContextMenuY := Y;
+ 
+ { S'assurer que le menu ne dépasse pas de l'écran }
+ If ContextMenuX + CONTEXT_MENU_WIDTH > ScreenWidth Then Begin
+  ContextMenuX := ScreenWidth - CONTEXT_MENU_WIDTH - 2;
+ End;
+ If ContextMenuY + (CONTEXT_MENU_ITEM_COUNT * CONTEXT_MENU_ITEM_HEIGHT + 4) > ScreenHeight Then Begin
+  ContextMenuY := ScreenHeight - (CONTEXT_MENU_ITEM_COUNT * CONTEXT_MENU_ITEM_HEIGHT + 4) - 2;
+ End;
+ 
+ ContextMenuVisible := True;
+ ContextMenuHighlight := 0;
+End;
+
+{ Procédure pour gérer le clic droit de la souris }
+Procedure HandleRightClick(X, Y: Integer);
+Var
+ ShapeIndex: Integer;
+Begin
+ { Masquer le menu contextuel s'il est déjà visible }
+ If ContextMenuVisible Then Begin
+  HideContextMenu;
+  Exit;
+ End;
+ 
+ { Vérifier si le clic est dans la zone de travail }
+ If Y > WORK_AREA_TOP Then Begin
+  { Chercher s'il y a un objet sous le curseur }
+  ShapeIndex := GetShapeAtPosition(X, Y);
+  
+  { Si un objet est trouvé, le sélectionner }
+  If ShapeIndex > 0 Then Begin
+   SelectShape(ShapeIndex);
+  End;
+  
+  { Afficher le menu contextuel }
+  ShowContextMenu(X, Y);
+ End;
+End;
+
+{ Procédure pour initialiser le menu contextuel }
+Procedure InitContextMenu;
+Begin
+ ContextMenuVisible := False;
+ ContextMenuX := 0;
+ ContextMenuY := 0;
+ ContextMenuHighlight := 0;
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DU MENU CONTEXTUEL === }
+{ ============================================================================ }
+
 { Procédure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
@@ -1571,12 +1769,18 @@ Begin
  If (MenuState = msDropDown) and (CurrentMenu > 0) Then Begin
   DrawDropDownMenu(CurrentMenu);
  End;
+ 
+ { Dessiner le menu contextuel s'il est visible }
+ If ContextMenuVisible Then Begin
+  DrawContextMenu;
+ End;
 End;
 
 BEGIN
  InitializeGraphics;
  InitMenuSystem;
  InitShapes;
+ InitContextMenu;
  
  { Afficher l'écran initial avec le menu }
  RefreshScreen;
@@ -1599,7 +1803,20 @@ BEGIN
    { Détecter un clic gauche (bouton 1) }
    If (LastMouseButton and 1) = 1 Then Begin
     HideMouse;
-    HandleLeftClick(LastMouseX, LastMouseY);
+    { Si le menu contextuel est visible, vérifier si on clique dedans }
+    If ContextMenuVisible Then Begin
+     ContextMenuHighlight := GetContextMenuItemAtPosition(LastMouseX, LastMouseY);
+     If ContextMenuHighlight > 0 Then Begin
+      ExecuteContextMenuAction(ContextMenuHighlight);
+     End
+     Else Begin
+      { Clic en dehors du menu contextuel, le fermer }
+      HideContextMenu;
+     End;
+    End
+    Else Begin
+     HandleLeftClick(LastMouseX, LastMouseY);
+    End;
     RefreshScreen;
     ShowMouse;
     { Attendre que le bouton soit relâché }
@@ -1616,12 +1833,37 @@ BEGIN
     RefreshScreen;
     ShowMouse;
    End;
+   
+   { Détecter un clic droit (bouton 2) }
+   If (LastMouseButton and 2) = 2 Then Begin
+    HideMouse;
+    HandleRightClick(LastMouseX, LastMouseY);
+    RefreshScreen;
+    ShowMouse;
+    { Attendre que le bouton soit relâché }
+    Repeat
+     {$IFDEF FPC}
+      GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
+     {$ELSE}
+      GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
+     {$ENDIF}
+    Until (LastMouseButton and 2) = 0;
+   End;
   End;
  
   { Attendre une entrée clavier }
   If KeyPressed Then Begin
    Case ReadKey of
-    #27: Break; { Escape pour quitter }
+    #27: Begin
+          { Si le menu contextuel est visible, le fermer }
+          If ContextMenuVisible Then Begin
+           HideContextMenu;
+           RefreshScreen;
+          End
+          Else Begin
+           Break; { Escape pour quitter }
+          End;
+         End;
     #0: Begin { Touches de fonction }
          Case ReadKey of
           #59: Begin { F1 - Aide }

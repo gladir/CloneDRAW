@@ -37,7 +37,7 @@
   20. [DONE] Implémenter les blocs et références externes (XREFs) avec insertion et édition
 
   === FORMATS DE FICHIERS ===
-  21. Implémenter la lecture et écriture du format DWG (Drawing) d'AutoCAD
+  21. [DONE] Implémenter la lecture et écriture du format DWG (Drawing) d'AutoCAD
   22. Ajouter le support du format DXF (Drawing Exchange Format) pour l'interopérabilité
   23. Créer l'importation et exportation du format Visio (VSD/VSDX)
   24. Implémenter l'exportation SVG (Scalable Vector Graphics) pour le web
@@ -170,7 +170,48 @@ Const
  XREF_UNLOADED = 1;          { XREF déchargée (non affichée) }
  XREF_NOT_FOUND = 2;         { Fichier XREF non trouvé }
  XREF_NEEDS_RELOAD = 3;      { XREF modifiée, doit être rechargée }
+
+ { Constantes pour le format DWG - TODO 21 }
+ DWG_MAGIC = 'AC1015';       { Signature AutoCAD 2000 (format le plus compatible) }
+ DWG_VERSION_R14 = 'AC1014'; { AutoCAD R14 }
+ DWG_VERSION_2000 = 'AC1015'; { AutoCAD 2000 }
+ DWG_VERSION_2004 = 'AC1018'; { AutoCAD 2004 }
+ DWG_VERSION_2007 = 'AC1021'; { AutoCAD 2007 }
+ DWG_VERSION_2010 = 'AC1024'; { AutoCAD 2010 }
+ DWG_VERSION_2013 = 'AC1027'; { AutoCAD 2013 }
+ DWG_VERSION_2018 = 'AC1032'; { AutoCAD 2018 }
  
+ { Codes de section DWG }
+ DWG_SECTION_HEADER = 0;      { Section en-tête du dessin }
+ DWG_SECTION_CLASSES = 1;     { Section des classes d'objets }
+ DWG_SECTION_HANDLES = 2;     { Section des handles (identifiants) }
+ DWG_SECTION_OBJECTS = 3;     { Section des objets (entités) }
+ DWG_SECTION_OBJFREE = 4;     { Section des objets libres }
+ DWG_SECTION_TEMPLATE = 5;    { Section des templates }
+ DWG_SECTION_AUXHEADER = 6;   { Section en-tête auxiliaire }
+ 
+ { Codes d'entités DWG }
+ DWG_ENTITY_LINE = 1;         { Entité ligne }
+ DWG_ENTITY_POINT = 2;        { Entité point }
+ DWG_ENTITY_CIRCLE = 3;       { Entité cercle }
+ DWG_ENTITY_ARC = 4;          { Entité arc }
+ DWG_ENTITY_TEXT = 5;         { Entité texte }
+ DWG_ENTITY_SOLID = 6;        { Entité solide }
+ DWG_ENTITY_BLOCK = 7;        { Référence de bloc }
+ DWG_ENTITY_INSERT = 8;       { Insertion de bloc }
+ DWG_ENTITY_ATTDEF = 9;       { Définition d'attribut }
+ DWG_ENTITY_ATTRIB = 10;      { Attribut }
+ DWG_ENTITY_POLYLINE = 11;    { Polyligne }
+ DWG_ENTITY_VERTEX = 12;      { Sommet de polyligne }
+ DWG_ENTITY_SEQEND = 13;      { Fin de séquence }
+ DWG_ENTITY_ELLIPSE = 14;     { Ellipse }
+ DWG_ENTITY_SPLINE = 15;      { Spline }
+ DWG_ENTITY_DIMENSION = 16;   { Cotation }
+ DWG_ENTITY_LWPOLYLINE = 17;  { Polyligne légère }
+ DWG_ENTITY_HATCH = 18;       { Hachures }
+ DWG_ENTITY_MTEXT = 19;       { Texte multiligne }
+ DWG_ENTITY_LEADER = 20;      { Ligne de repère }
+
  { Types de cotations - TODO 19 }
  DIM_LINEAR = 0;       { Cotation linéaire (horizontale ou verticale) }
  DIM_ALIGNED = 1;      { Cotation alignée (parallèle à la ligne) }
@@ -837,6 +878,30 @@ Procedure BindXRef(XRefIdx: Integer); Forward;
 Procedure DrawXRef(XRefIdx: Integer); Forward;
 Function GetXRefStatus(XRefIdx: Integer): String; Forward;
 Procedure TransformPoint(Var X, Y: Real; InsX, InsY, ScaleX, ScaleY, Rotation: Real); Forward;
+
+{ Forward declarations - TODO 21 - Format DWG }
+Function WriteDWGFile(Const FileName: String): Boolean; Forward;
+Function ReadDWGFile(Const FileName: String): Boolean; Forward;
+Procedure WriteDWGHeader(Var F: File); Forward;
+Procedure WriteDWGEntity(Var F: File; Const Entity: TDrawObject); Forward;
+Procedure WriteDWGLayers(Var F: File); Forward;
+Procedure WriteDWGBlocks(Var F: File); Forward;
+Function ReadDWGHeader(Var F: File): Boolean; Forward;
+Function ReadDWGEntity(Var F: File; Var Entity: TDrawObject): Boolean; Forward;
+Function ReadDWGLayers(Var F: File): Boolean; Forward;
+Function ReadDWGBlocks(Var F: File): Boolean; Forward;
+Procedure WriteDWGByte(Var F: File; B: Byte); Forward;
+Procedure WriteDWGWord(Var F: File; W: Word); Forward;
+Procedure WriteDWGLongInt(Var F: File; L: LongInt); Forward;
+Procedure WriteDWGReal(Var F: File; R: Real); Forward;
+Procedure WriteDWGString(Var F: File; Const S: String); Forward;
+Function ReadDWGByte(Var F: File): Byte; Forward;
+Function ReadDWGWord(Var F: File): Word; Forward;
+Function ReadDWGLongInt(Var F: File): LongInt; Forward;
+Function ReadDWGReal(Var F: File): Real; Forward;
+Function ReadDWGString(Var F: File): String; Forward;
+Function GetDWGEntityCode(ObjType: Byte): Byte; Forward;
+Function GetObjTypeFromDWG(DWGCode: Byte): Byte; Forward;
 
 { Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
 Procedure InitLispTokenizer; Forward;
@@ -9400,6 +9465,505 @@ Begin
  Else
   GetXRefStatus := 'Unknown';
  End;
+End;
+
+{ ============================================================================ }
+{ Fonctions pour le format DWG (AutoCAD Drawing) - TODO 21                      }
+{ ============================================================================ }
+
+{ Écrire un octet dans le fichier DWG }
+Procedure WriteDWGByte(Var F: File; B: Byte);
+Begin
+ BlockWrite(F, B, 1);
+End;
+
+{ Écrire un mot (2 octets) dans le fichier DWG }
+Procedure WriteDWGWord(Var F: File; W: Word);
+Begin
+ BlockWrite(F, W, 2);
+End;
+
+{ Écrire un entier long (4 octets) dans le fichier DWG }
+Procedure WriteDWGLongInt(Var F: File; L: LongInt);
+Begin
+ BlockWrite(F, L, 4);
+End;
+
+{ Écrire un réel (6 octets en TP, 8 octets format standard) }
+Procedure WriteDWGReal(Var F: File; R: Real);
+Var
+ D: Double;
+Begin
+ D := R;
+ BlockWrite(F, D, 8);
+End;
+
+{ Écrire une chaîne avec sa longueur }
+Procedure WriteDWGString(Var F: File; Const S: String);
+Var
+ Len: Byte;
+Begin
+ Len := Length(S);
+ WriteDWGByte(F, Len);
+ If Len > 0 Then
+  BlockWrite(F, S[1], Len);
+End;
+
+{ Lire un octet du fichier DWG }
+Function ReadDWGByte(Var F: File): Byte;
+Var
+ B: Byte;
+Begin
+ BlockRead(F, B, 1);
+ ReadDWGByte := B;
+End;
+
+{ Lire un mot (2 octets) du fichier DWG }
+Function ReadDWGWord(Var F: File): Word;
+Var
+ W: Word;
+Begin
+ BlockRead(F, W, 2);
+ ReadDWGWord := W;
+End;
+
+{ Lire un entier long (4 octets) du fichier DWG }
+Function ReadDWGLongInt(Var F: File): LongInt;
+Var
+ L: LongInt;
+Begin
+ BlockRead(F, L, 4);
+ ReadDWGLongInt := L;
+End;
+
+{ Lire un réel (8 octets format standard) }
+Function ReadDWGReal(Var F: File): Real;
+Var
+ D: Double;
+Begin
+ BlockRead(F, D, 8);
+ ReadDWGReal := D;
+End;
+
+{ Lire une chaîne avec sa longueur }
+Function ReadDWGString(Var F: File): String;
+Var
+ Len: Byte;
+ S: String;
+Begin
+ Len := ReadDWGByte(F);
+ If Len > 0 Then Begin
+  BlockRead(F, S[1], Len);
+  S[0] := Chr(Len);
+ End
+ Else
+  S := '';
+ ReadDWGString := S;
+End;
+
+{ Convertir le type d'objet interne en code DWG }
+Function GetDWGEntityCode(ObjType: Byte): Byte;
+Begin
+ Case ObjType of
+  OBJ_LINE:      GetDWGEntityCode := DWG_ENTITY_LINE;
+  OBJ_POINT:     GetDWGEntityCode := DWG_ENTITY_POINT;
+  OBJ_CIRCLE:    GetDWGEntityCode := DWG_ENTITY_CIRCLE;
+  OBJ_ARC:       GetDWGEntityCode := DWG_ENTITY_ARC;
+  OBJ_TEXT:      GetDWGEntityCode := DWG_ENTITY_TEXT;
+  OBJ_POLYLINE:  GetDWGEntityCode := DWG_ENTITY_POLYLINE;
+  OBJ_RECTANGLE: GetDWGEntityCode := DWG_ENTITY_LWPOLYLINE;
+  OBJ_ELLIPSE:   GetDWGEntityCode := DWG_ENTITY_ELLIPSE;
+  OBJ_DIMENSION: GetDWGEntityCode := DWG_ENTITY_DIMENSION;
+  OBJ_BLOCK_REF: GetDWGEntityCode := DWG_ENTITY_INSERT;
+ Else
+  GetDWGEntityCode := 0;
+ End;
+End;
+
+{ Convertir le code DWG en type d'objet interne }
+Function GetObjTypeFromDWG(DWGCode: Byte): Byte;
+Begin
+ Case DWGCode of
+  DWG_ENTITY_LINE:      GetObjTypeFromDWG := OBJ_LINE;
+  DWG_ENTITY_POINT:     GetObjTypeFromDWG := OBJ_POINT;
+  DWG_ENTITY_CIRCLE:    GetObjTypeFromDWG := OBJ_CIRCLE;
+  DWG_ENTITY_ARC:       GetObjTypeFromDWG := OBJ_ARC;
+  DWG_ENTITY_TEXT:      GetObjTypeFromDWG := OBJ_TEXT;
+  DWG_ENTITY_POLYLINE:  GetObjTypeFromDWG := OBJ_POLYLINE;
+  DWG_ENTITY_LWPOLYLINE: GetObjTypeFromDWG := OBJ_RECTANGLE;
+  DWG_ENTITY_ELLIPSE:   GetObjTypeFromDWG := OBJ_ELLIPSE;
+  DWG_ENTITY_DIMENSION: GetObjTypeFromDWG := OBJ_DIMENSION;
+  DWG_ENTITY_INSERT:    GetObjTypeFromDWG := OBJ_BLOCK_REF;
+ Else
+  GetObjTypeFromDWG := OBJ_NONE;
+ End;
+End;
+
+{ Écrire l'en-tête du fichier DWG }
+Procedure WriteDWGHeader(Var F: File);
+Var
+ I: Integer;
+ MagicStr: String[6];
+Begin
+ { Écrire la signature du format (6 caractères) }
+ MagicStr := DWG_MAGIC;
+ BlockWrite(F, MagicStr[1], 6);
+ 
+ { Écrire les métadonnées du dessin }
+ WriteDWGWord(F, ScreenWidth);       { Largeur du dessin }
+ WriteDWGWord(F, ScreenHeight);      { Hauteur du dessin }
+ WriteDWGLongInt(F, ObjectCount);    { Nombre d'entités }
+ WriteDWGWord(F, LayerCount);        { Nombre de calques }
+ WriteDWGWord(F, BlockDefCount);     { Nombre de définitions de blocs }
+ WriteDWGWord(F, BlockRefCount);     { Nombre de références de blocs }
+ 
+ { Écrire les paramètres de vue }
+ WriteDWGReal(F, ViewOffsetX);
+ WriteDWGReal(F, ViewOffsetY);
+ WriteDWGReal(F, ZoomLevel);
+ 
+ { Écrire l'état courant }
+ WriteDWGByte(F, CurrentLayer);
+ WriteDWGWord(F, CurrentColor);
+ WriteDWGByte(F, CurrentLineType);
+ WriteDWGWord(F, CurrentLineWeight);
+ 
+ { Réserver de l'espace pour des extensions futures (32 octets) }
+ For I := 1 to 32 do
+  WriteDWGByte(F, 0);
+End;
+
+{ Écrire une entité dans le fichier DWG }
+Procedure WriteDWGEntity(Var F: File; Const Entity: TDrawObject);
+Begin
+ { Écrire le type d'entité DWG }
+ WriteDWGByte(F, GetDWGEntityCode(Entity.ObjType));
+ 
+ { Écrire les propriétés communes }
+ WriteDWGByte(F, Entity.ObjType);
+ WriteDWGReal(F, Entity.X1);
+ WriteDWGReal(F, Entity.Y1);
+ WriteDWGReal(F, Entity.X2);
+ WriteDWGReal(F, Entity.Y2);
+ WriteDWGReal(F, Entity.Radius);
+ WriteDWGReal(F, Entity.StartAngle);
+ WriteDWGReal(F, Entity.EndAngle);
+ WriteDWGWord(F, Entity.Color);
+ WriteDWGByte(F, Entity.LineType);
+ WriteDWGByte(F, Entity.LayerIndex);
+ 
+ { Écrire les données de cotation si nécessaire }
+ If Entity.ObjType = OBJ_DIMENSION Then Begin
+  WriteDWGByte(F, Entity.DimType);
+  WriteDWGReal(F, Entity.DimX3);
+  WriteDWGReal(F, Entity.DimY3);
+  WriteDWGReal(F, Entity.DimX4);
+  WriteDWGReal(F, Entity.DimY4);
+  WriteDWGString(F, Entity.DimText);
+  WriteDWGReal(F, Entity.DimValue);
+  WriteDWGReal(F, Entity.DimTextX);
+  WriteDWGReal(F, Entity.DimTextY);
+ End;
+End;
+
+{ Écrire les calques dans le fichier DWG }
+Procedure WriteDWGLayers(Var F: File);
+Var
+ I: Integer;
+Begin
+ For I := 0 to LayerCount - 1 do Begin
+  WriteDWGString(F, Layers[I].Name);
+  WriteDWGWord(F, Layers[I].Color);
+  WriteDWGByte(F, Layers[I].LineType);
+  WriteDWGWord(F, Layers[I].LineWeight);
+  WriteDWGByte(F, Ord(Layers[I].Visible));
+  WriteDWGByte(F, Ord(Layers[I].Locked));
+  WriteDWGByte(F, Ord(Layers[I].Frozen));
+  WriteDWGByte(F, Ord(Layers[I].OnFlag));
+ End;
+End;
+
+{ Écrire les blocs dans le fichier DWG }
+Procedure WriteDWGBlocks(Var F: File);
+Var
+ I, J: Integer;
+ StartIdx: Integer;
+Begin
+ { Écrire les définitions de blocs }
+ For I := 0 to BlockDefCount - 1 do Begin
+  WriteDWGString(F, BlockDefs[I].Name);
+  WriteDWGString(F, BlockDefs[I].Description);
+  WriteDWGReal(F, BlockDefs[I].BaseX);
+  WriteDWGReal(F, BlockDefs[I].BaseY);
+  WriteDWGWord(F, BlockDefs[I].EntityCount);
+  WriteDWGByte(F, Ord(BlockDefs[I].IsXRef));
+  WriteDWGByte(F, Ord(BlockDefs[I].IsDefined));
+  
+  { Écrire les entités du bloc }
+  StartIdx := BlockDefs[I].FirstEntityIdx;
+  For J := 0 to BlockDefs[I].EntityCount - 1 do
+   WriteDWGEntity(F, BlockEntities[StartIdx + J]);
+ End;
+ 
+ { Écrire les références de blocs }
+ For I := 0 to BlockRefCount - 1 do Begin
+  WriteDWGWord(F, BlockRefs[I].BlockIndex);
+  WriteDWGReal(F, BlockRefs[I].InsertX);
+  WriteDWGReal(F, BlockRefs[I].InsertY);
+  WriteDWGReal(F, BlockRefs[I].ScaleX);
+  WriteDWGReal(F, BlockRefs[I].ScaleY);
+  WriteDWGReal(F, BlockRefs[I].Rotation);
+  WriteDWGWord(F, BlockRefs[I].Color);
+  WriteDWGByte(F, BlockRefs[I].LayerIndex);
+  WriteDWGByte(F, Ord(BlockRefs[I].Visible));
+ End;
+End;
+
+{ Écrire le dessin dans un fichier DWG }
+Function WriteDWGFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ I: Integer;
+Begin
+ WriteDWGFile := False;
+ 
+ {$I-}
+ Assign(F, FileName);
+ Rewrite(F, 1);
+ {$I+}
+ 
+ If IOResult <> 0 Then Exit;
+ 
+ { Écrire l'en-tête }
+ WriteDWGHeader(F);
+ 
+ { Écrire les calques }
+ WriteDWGLayers(F);
+ 
+ { Écrire les blocs }
+ WriteDWGBlocks(F);
+ 
+ { Écrire les entités du dessin }
+ For I := 0 to ObjectCount - 1 do Begin
+  If DrawObjects[I].ObjType <> OBJ_NONE Then
+   WriteDWGEntity(F, DrawObjects[I]);
+ End;
+ 
+ Close(F);
+ WriteDWGFile := True;
+End;
+
+{ Lire l'en-tête du fichier DWG }
+Function ReadDWGHeader(Var F: File): Boolean;
+Var
+ I: Integer;
+ MagicStr: String[6];
+ Dummy: Byte;
+Begin
+ ReadDWGHeader := False;
+ 
+ { Lire et vérifier la signature }
+ BlockRead(F, MagicStr[1], 6);
+ MagicStr[0] := #6;
+ 
+ { Vérifier que c'est un format supporté }
+ If (MagicStr <> DWG_VERSION_R14) and
+    (MagicStr <> DWG_VERSION_2000) and
+    (MagicStr <> DWG_VERSION_2004) and
+    (MagicStr <> DWG_VERSION_2007) and
+    (MagicStr <> DWG_VERSION_2010) and
+    (MagicStr <> DWG_VERSION_2013) and
+    (MagicStr <> DWG_VERSION_2018) Then Exit;
+ 
+ { Lire les métadonnées du dessin }
+ ScreenWidth := ReadDWGWord(F);
+ ScreenHeight := ReadDWGWord(F);
+ ObjectCount := ReadDWGLongInt(F);
+ LayerCount := ReadDWGWord(F);
+ BlockDefCount := ReadDWGWord(F);
+ BlockRefCount := ReadDWGWord(F);
+ 
+ { Lire les paramètres de vue }
+ ViewOffsetX := ReadDWGReal(F);
+ ViewOffsetY := ReadDWGReal(F);
+ ZoomLevel := ReadDWGReal(F);
+ 
+ { Lire l'état courant }
+ CurrentLayer := ReadDWGByte(F);
+ CurrentColor := ReadDWGWord(F);
+ CurrentLineType := ReadDWGByte(F);
+ CurrentLineWeight := ReadDWGWord(F);
+ 
+ { Ignorer l'espace réservé (32 octets) }
+ For I := 1 to 32 do
+  Dummy := ReadDWGByte(F);
+ 
+ ReadDWGHeader := True;
+End;
+
+{ Lire une entité du fichier DWG }
+Function ReadDWGEntity(Var F: File; Var Entity: TDrawObject): Boolean;
+Var
+ DWGCode: Byte;
+Begin
+ ReadDWGEntity := False;
+ 
+ { Lire le type d'entité DWG }
+ DWGCode := ReadDWGByte(F);
+ 
+ { Lire les propriétés communes }
+ Entity.ObjType := ReadDWGByte(F);
+ Entity.X1 := ReadDWGReal(F);
+ Entity.Y1 := ReadDWGReal(F);
+ Entity.X2 := ReadDWGReal(F);
+ Entity.Y2 := ReadDWGReal(F);
+ Entity.Radius := ReadDWGReal(F);
+ Entity.StartAngle := ReadDWGReal(F);
+ Entity.EndAngle := ReadDWGReal(F);
+ Entity.Color := ReadDWGWord(F);
+ Entity.LineType := ReadDWGByte(F);
+ Entity.LayerIndex := ReadDWGByte(F);
+ Entity.Selected := False;
+ Entity.Visible := True;
+ 
+ { Lire les données de cotation si nécessaire }
+ If Entity.ObjType = OBJ_DIMENSION Then Begin
+  Entity.DimType := ReadDWGByte(F);
+  Entity.DimX3 := ReadDWGReal(F);
+  Entity.DimY3 := ReadDWGReal(F);
+  Entity.DimX4 := ReadDWGReal(F);
+  Entity.DimY4 := ReadDWGReal(F);
+  Entity.DimText := ReadDWGString(F);
+  Entity.DimValue := ReadDWGReal(F);
+  Entity.DimTextX := ReadDWGReal(F);
+  Entity.DimTextY := ReadDWGReal(F);
+ End;
+ 
+ ReadDWGEntity := True;
+End;
+
+{ Lire les calques du fichier DWG }
+Function ReadDWGLayers(Var F: File): Boolean;
+Var
+ I: Integer;
+Begin
+ ReadDWGLayers := False;
+ 
+ For I := 0 to LayerCount - 1 do Begin
+  Layers[I].Name := ReadDWGString(F);
+  Layers[I].Color := ReadDWGWord(F);
+  Layers[I].LineType := ReadDWGByte(F);
+  Layers[I].LineWeight := ReadDWGWord(F);
+  Layers[I].Visible := ReadDWGByte(F) <> 0;
+  Layers[I].Locked := ReadDWGByte(F) <> 0;
+  Layers[I].Frozen := ReadDWGByte(F) <> 0;
+  Layers[I].OnFlag := ReadDWGByte(F) <> 0;
+ End;
+ 
+ ReadDWGLayers := True;
+End;
+
+{ Lire les blocs du fichier DWG }
+Function ReadDWGBlocks(Var F: File): Boolean;
+Var
+ I, J: Integer;
+ EntCount: Integer;
+Begin
+ ReadDWGBlocks := False;
+ 
+ BlockEntityCount := 0;
+ 
+ { Lire les définitions de blocs }
+ For I := 0 to BlockDefCount - 1 do Begin
+  BlockDefs[I].Name := ReadDWGString(F);
+  BlockDefs[I].Description := ReadDWGString(F);
+  BlockDefs[I].BaseX := ReadDWGReal(F);
+  BlockDefs[I].BaseY := ReadDWGReal(F);
+  EntCount := ReadDWGWord(F);
+  BlockDefs[I].EntityCount := EntCount;
+  BlockDefs[I].FirstEntityIdx := BlockEntityCount;
+  BlockDefs[I].IsXRef := ReadDWGByte(F) <> 0;
+  BlockDefs[I].IsDefined := ReadDWGByte(F) <> 0;
+  
+  { Lire les entités du bloc }
+  For J := 0 to EntCount - 1 do Begin
+   ReadDWGEntity(F, BlockEntities[BlockEntityCount]);
+   Inc(BlockEntityCount);
+  End;
+ End;
+ 
+ { Lire les références de blocs }
+ For I := 0 to BlockRefCount - 1 do Begin
+  BlockRefs[I].BlockIndex := ReadDWGWord(F);
+  BlockRefs[I].InsertX := ReadDWGReal(F);
+  BlockRefs[I].InsertY := ReadDWGReal(F);
+  BlockRefs[I].ScaleX := ReadDWGReal(F);
+  BlockRefs[I].ScaleY := ReadDWGReal(F);
+  BlockRefs[I].Rotation := ReadDWGReal(F);
+  BlockRefs[I].Color := ReadDWGWord(F);
+  BlockRefs[I].LayerIndex := ReadDWGByte(F);
+  BlockRefs[I].Visible := ReadDWGByte(F) <> 0;
+  BlockRefs[I].Selected := False;
+ End;
+ 
+ ReadDWGBlocks := True;
+End;
+
+{ Lire un dessin depuis un fichier DWG }
+Function ReadDWGFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ I: Integer;
+ TempCount: LongInt;
+Begin
+ ReadDWGFile := False;
+ 
+ {$I-}
+ Assign(F, FileName);
+ Reset(F, 1);
+ {$I+}
+ 
+ If IOResult <> 0 Then Exit;
+ 
+ { Sauvegarder le nombre d'objets avant lecture }
+ TempCount := ObjectCount;
+ 
+ { Lire l'en-tête }
+ If Not ReadDWGHeader(F) Then Begin
+  Close(F);
+  ObjectCount := TempCount;
+  Exit;
+ End;
+ 
+ { Lire les calques }
+ If Not ReadDWGLayers(F) Then Begin
+  Close(F);
+  ObjectCount := TempCount;
+  Exit;
+ End;
+ 
+ { Lire les blocs }
+ If Not ReadDWGBlocks(F) Then Begin
+  Close(F);
+  ObjectCount := TempCount;
+  Exit;
+ End;
+ 
+ { Lire les entités du dessin }
+ For I := 0 to ObjectCount - 1 do Begin
+  If Not ReadDWGEntity(F, DrawObjects[I]) Then Begin
+   Close(F);
+   Exit;
+  End;
+ End;
+ 
+ Close(F);
+ 
+ { Effacer la sélection }
+ ClearSelection;
+ ClearGrips;
+ 
+ ReadDWGFile := True;
 End;
 
 { Initialiser le panneau de propriétés }

@@ -438,16 +438,18 @@ Begin
  Menus[MENU_TOOLS].Items[13].Shortcut := 'OP';
  Menus[MENU_TOOLS].Items[13].Enabled := True;
 
- { Menu Draw }
+ { Menu Draw - TODO 2                                                         }
+ { Contient: Line, Ray, Construction Line, Polyline, Polygon, Rectangle,     }
+ { Arc, Circle, Spline, Ellipse, Point, Hatch, Region, Text, Surface, Solid  }
  Menus[MENU_DRAW].Title := 'Draw';
  Menus[MENU_DRAW].X := 235;
  Menus[MENU_DRAW].Width := 160;
- Menus[MENU_DRAW].ItemCount := 18;
+ Menus[MENU_DRAW].ItemCount := 20;
  Menus[MENU_DRAW].Items[0].Caption := 'Line';
  Menus[MENU_DRAW].Items[0].Shortcut := 'L';
  Menus[MENU_DRAW].Items[0].Enabled := True;
  Menus[MENU_DRAW].Items[1].Caption := 'Ray';
- Menus[MENU_DRAW].Items[1].Shortcut := '';
+ Menus[MENU_DRAW].Items[1].Shortcut := 'RAY';
  Menus[MENU_DRAW].Items[1].Enabled := True;
  Menus[MENU_DRAW].Items[2].Caption := 'Construction Line';
  Menus[MENU_DRAW].Items[2].Shortcut := 'XL';
@@ -489,6 +491,12 @@ Begin
  Menus[MENU_DRAW].Items[17].Caption := 'Text';
  Menus[MENU_DRAW].Items[17].Shortcut := 'T';
  Menus[MENU_DRAW].Items[17].Enabled := True;
+ Menus[MENU_DRAW].Items[18].Caption := 'Surface';
+ Menus[MENU_DRAW].Items[18].Shortcut := 'SUR';
+ Menus[MENU_DRAW].Items[18].Enabled := True;
+ Menus[MENU_DRAW].Items[19].Caption := 'Solid';
+ Menus[MENU_DRAW].Items[19].Shortcut := 'SO';
+ Menus[MENU_DRAW].Items[19].Enabled := True;
 
  { Menu Dimension }
  Menus[MENU_DIMENSION].Title := 'Dimension';

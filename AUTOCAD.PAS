@@ -18,7 +18,7 @@
   === SUPPORT DE LA SOURIS ===
   6. [DONE] Implémenter la gestion complète de la souris avec clic gauche, clic droit, molette et déplacement
   7. [DONE] Ajouter le zoom par molette de souris et le pan par clic milieu
-  8. Créer le curseur de précision (crosshair) avec affichage des coordonnées en temps réel
+  8. [DONE] Créer le curseur de précision (crosshair) avec affichage des coordonnées en temps réel
   9. Implémenter le système de sélection d'objets par clic, fenêtre et fenêtre croisée
   10. Ajouter les poignées de manipulation (grips) pour éditer les objets sélectionnés
 
@@ -122,6 +122,18 @@ Const
  MOUSE_MODE_SELECT = 3;
  MOUSE_MODE_DRAW = 4;
 
+ { Constantes pour le curseur crosshair - TODO 8 }
+ CROSSHAIR_SIZE_SMALL = 20;      { Petite taille }
+ CROSSHAIR_SIZE_MEDIUM = 50;     { Taille moyenne }
+ CROSSHAIR_SIZE_LARGE = 100;     { Grande taille }
+ CROSSHAIR_SIZE_FULLSCREEN = 0;  { Plein écran (0 = infini) }
+ 
+ { Style de coordonnées affichées }
+ COORD_DISPLAY_NONE = 0;         { Pas d'affichage }
+ COORD_DISPLAY_TOOLTIP = 1;      { Tooltip près du curseur }
+ COORD_DISPLAY_STATUSBAR = 2;    { Barre d'état seulement }
+ COORD_DISPLAY_BOTH = 3;         { Les deux }
+
 Type
  { Structure pour les éléments de menu }
  TMenuItem = Record
@@ -191,6 +203,13 @@ Var
  ViewOffsetX, ViewOffsetY: Real; { Décalage de la vue (pan) }
  ZoomLevel: Real;               { Niveau de zoom actuel }
 
+ { Variables pour le curseur crosshair - TODO 8 }
+ CrosshairSize: Integer;        { Taille du crosshair (0 = plein écran) }
+ CrosshairColor: Integer;       { Couleur du crosshair }
+ CoordDisplayMode: Integer;     { Mode d'affichage des coordonnées }
+ ShowPickBox: Boolean;          { Afficher la boîte de sélection au centre }
+ PickBoxSize: Integer;          { Taille de la boîte de sélection }
+
  { Variables pour les menus }
  Menus: Array[0..MAX_MENUS-1] of TMenu;
  MenuActive: Boolean;
@@ -215,6 +234,11 @@ Procedure HandleMiddleClick(X, Y: Integer); Forward;
 Procedure HandleMouseWheel(Delta: Integer); Forward;
 Function ScreenToWorldX(SX: Integer): Real; Forward;
 Function ScreenToWorldY(SY: Integer): Real; Forward;
+
+{ Forward declarations - TODO 8 }
+Procedure DrawCrosshairCursor(X, Y: Integer); Forward;
+Procedure DrawCoordinateTooltip(X, Y: Integer); Forward;
+Procedure InitCrosshairSettings; Forward;
 
 Procedure InitializeGraphics;
 Var
@@ -1412,11 +1436,146 @@ Begin
   Line(CanvasLeft, SY, CanvasRight, SY);
 End;
 
-{ Dessiner la zone de dessin principale - TODO 7: Support zoom et pan }
+{ ============================================================================ }
+{ Procédures pour le curseur de précision (crosshair) - TODO 8                  }
+{ Créer le curseur de précision avec affichage des coordonnées en temps réel   }
+{ ============================================================================ }
+
+{ Initialiser les paramètres du crosshair }
+Procedure InitCrosshairSettings;
+Begin
+ CrosshairSize := CROSSHAIR_SIZE_FULLSCREEN;  { Plein écran par défaut comme AutoCAD }
+ CrosshairColor := White;
+ CoordDisplayMode := COORD_DISPLAY_BOTH;      { Tooltip + barre d'état }
+ ShowPickBox := True;                         { Afficher la boîte de sélection }
+ PickBoxSize := 5;                            { Taille de la boîte de sélection }
+End;
+
+{ Dessiner le curseur crosshair de précision }
+Procedure DrawCrosshairCursor(X, Y: Integer);
+Var
+ CanvasTop, CanvasBottom, CanvasLeft, CanvasRight: Integer;
+ HalfSize: Integer;
+ StartX, EndX, StartY, EndY: Integer;
+Begin
+ CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ CanvasLeft := 0;
+ CanvasRight := ScreenWidth - 1;
+ 
+ { Vérifier que le curseur est dans la zone de dessin }
+ If (X < CanvasLeft) or (X > CanvasRight) or
+    (Y < CanvasTop) or (Y > CanvasBottom) Then Exit;
+ 
+ { Définir la couleur du crosshair }
+ SetColor(CrosshairColor);
+ SetWriteMode(XORPut);  { Mode XOR pour effacer/redessiner facilement }
+ 
+ If CrosshairSize = CROSSHAIR_SIZE_FULLSCREEN Then Begin
+  { Crosshair plein écran - lignes traversant tout le canvas }
+  { Ligne horizontale }
+  Line(CanvasLeft, Y, X - 3, Y);      { Gauche du curseur }
+  Line(X + 3, Y, CanvasRight, Y);     { Droite du curseur }
+  
+  { Ligne verticale }
+  Line(X, CanvasTop, X, Y - 3);       { Haut du curseur }
+  Line(X, Y + 3, X, CanvasBottom);    { Bas du curseur }
+ End Else Begin
+  { Crosshair de taille limitée }
+  HalfSize := CrosshairSize div 2;
+  
+  { Calculer les limites en respectant les bords du canvas }
+  StartX := X - HalfSize;
+  If StartX < CanvasLeft Then StartX := CanvasLeft;
+  EndX := X + HalfSize;
+  If EndX > CanvasRight Then EndX := CanvasRight;
+  
+  StartY := Y - HalfSize;
+  If StartY < CanvasTop Then StartY := CanvasTop;
+  EndY := Y + HalfSize;
+  If EndY > CanvasBottom Then EndY := CanvasBottom;
+  
+  { Ligne horizontale avec gap au centre }
+  If X - 3 >= StartX Then
+   Line(StartX, Y, X - 3, Y);
+  If X + 3 <= EndX Then
+   Line(X + 3, Y, EndX, Y);
+  
+  { Ligne verticale avec gap au centre }
+  If Y - 3 >= StartY Then
+   Line(X, StartY, X, Y - 3);
+  If Y + 3 <= EndY Then
+   Line(X, Y + 3, X, EndY);
+ End;
+ 
+ { Dessiner la boîte de sélection (pickbox) au centre }
+ If ShowPickBox Then Begin
+  SetColor(CrosshairColor);
+  Rectangle(X - PickBoxSize, Y - PickBoxSize, X + PickBoxSize, Y + PickBoxSize);
+ End;
+ 
+ SetWriteMode(NormalPut);  { Restaurer le mode normal }
+End;
+
+{ Dessiner le tooltip des coordonnées près du curseur }
+Procedure DrawCoordinateTooltip(X, Y: Integer);
+Var
+ WorldX, WorldY: Real;
+ CoordStr: String;
+ StrX, StrY: String;
+ TooltipX, TooltipY: Integer;
+ TooltipWidth, TooltipHeight: Integer;
+ CanvasTop, CanvasBottom: Integer;
+Begin
+ { Vérifier le mode d'affichage }
+ If (CoordDisplayMode = COORD_DISPLAY_NONE) or 
+    (CoordDisplayMode = COORD_DISPLAY_STATUSBAR) Then Exit;
+ 
+ CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ 
+ { Vérifier que le curseur est dans la zone de dessin }
+ If (Y < CanvasTop) or (Y > CanvasBottom) Then Exit;
+ 
+ { Calculer les coordonnées monde }
+ WorldX := ScreenToWorldX(X);
+ WorldY := ScreenToWorldY(Y);
+ 
+ { Formater la chaîne de coordonnées }
+ Str(WorldX:0:2, StrX);
+ Str(WorldY:0:2, StrY);
+ CoordStr := StrX + ', ' + StrY;
+ 
+ { Calculer la position du tooltip (en bas à droite du curseur) }
+ TooltipX := X + 15;
+ TooltipY := Y + 15;
+ TooltipWidth := TextWidth(CoordStr) + 6;
+ TooltipHeight := 14;
+ 
+ { Ajuster si dépasse l'écran }
+ If TooltipX + TooltipWidth > ScreenWidth - 5 Then
+  TooltipX := X - TooltipWidth - 5;
+ If TooltipY + TooltipHeight > CanvasBottom - 5 Then
+  TooltipY := Y - TooltipHeight - 5;
+ 
+ { Dessiner le fond du tooltip }
+ SetFillStyle(SolidFill, Black);
+ Bar(TooltipX, TooltipY, TooltipX + TooltipWidth, TooltipY + TooltipHeight);
+ 
+ { Dessiner la bordure }
+ SetColor(Yellow);
+ Rectangle(TooltipX, TooltipY, TooltipX + TooltipWidth, TooltipY + TooltipHeight);
+ 
+ { Dessiner le texte des coordonnées }
+ SetColor(Yellow);
+ OutTextXY(TooltipX + 3, TooltipY + 2, CoordStr);
+End;
+
+{ Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair }
 Procedure DrawCanvas;
 Var
  CanvasTop, CanvasBottom: Integer;
- CrosshairX, CrosshairY: Integer;
+ OriginX, OriginY: Integer;
 Begin
  CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
@@ -1428,23 +1587,33 @@ Begin
  { Dessiner la grille }
  DrawGrid;
  
- { Curseur crosshair au centre de la vue (point 0,0 transformé par zoom/pan) }
- CrosshairX := WorldToScreenX(0);
- CrosshairY := WorldToScreenY(0);
+ { Dessiner un petit repère à l'origine (0,0) - UCS Icon }
+ OriginX := WorldToScreenX(0);
+ OriginY := WorldToScreenY(0);
  
- { Ne dessiner que si visible dans le canvas }
- If (CrosshairX >= 0) and (CrosshairX < ScreenWidth) and
-    (CrosshairY >= CanvasTop) and (CrosshairY < CanvasBottom) Then Begin
+ If (OriginX >= 0) and (OriginX < ScreenWidth) and
+    (OriginY >= CanvasTop) and (OriginY < CanvasBottom) Then Begin
+  { Axe X (rouge) }
+  SetColor(Red);
+  Line(OriginX, OriginY, OriginX + 20, OriginY);
+  OutTextXY(OriginX + 22, OriginY - 4, 'X');
+  
+  { Axe Y (vert) }
+  SetColor(Green);
+  Line(OriginX, OriginY, OriginX, OriginY - 20);
+  OutTextXY(OriginX - 4, OriginY - 30, 'Y');
+  
+  { Carré à l'origine }
   SetColor(White);
-  If CrosshairX >= 20 Then
-   Line(CrosshairX - 20, CrosshairY, CrosshairX + 20, CrosshairY)
-  Else
-   Line(0, CrosshairY, CrosshairX + 20, CrosshairY);
-  If CrosshairY >= CanvasTop + 20 Then
-   Line(CrosshairX, CrosshairY - 20, CrosshairX, CrosshairY + 20)
-  Else
-   Line(CrosshairX, CanvasTop, CrosshairX, CrosshairY + 20);
+  Rectangle(OriginX - 2, OriginY - 2, OriginX + 2, OriginY + 2);
  End;
+ 
+ { Dessiner le curseur crosshair qui suit la souris - TODO 8 }
+ DrawCrosshairCursor(MouseX, MouseY);
+ 
+ { Dessiner le tooltip des coordonnées - TODO 8 }
+ If (CoordDisplayMode = COORD_DISPLAY_TOOLTIP) or (CoordDisplayMode = COORD_DISPLAY_BOTH) Then
+  DrawCoordinateTooltip(MouseX, MouseY);
  
  { Indicateur de mode pan si actif - TODO 7 }
  If MouseMode = MOUSE_MODE_PAN Then Begin
@@ -1777,6 +1946,7 @@ Begin
  ViewOffsetY := 0.0;
  ZoomLevel := 1.0;
  InitContextMenu;
+ InitCrosshairSettings;  { TODO 8: Initialiser le crosshair }
 End;
 
 { Dessiner le menu contextuel }
@@ -2081,6 +2251,8 @@ Begin
    HandleMouseMove(MouseX, MouseY);
    OldMouseX := MouseX;
    OldMouseY := MouseY;
+   { TODO 8: Redessiner le canvas pour mettre à jour le crosshair }
+   DrawCanvas;
    { Mettre à jour la barre d'état avec les nouvelles coordonnées }
    DrawStatusBar;
   End;
@@ -2113,6 +2285,36 @@ Begin
     End;
     '-', '_': Begin
      HandleMouseWheel(-1); { Zoom arrière }
+    End;
+    { TODO 8: Raccourcis pour la taille du crosshair }
+    'c', 'C': Begin
+     { Cycle entre les tailles de crosshair }
+     If CrosshairSize = CROSSHAIR_SIZE_FULLSCREEN Then
+      CrosshairSize := CROSSHAIR_SIZE_SMALL
+     Else If CrosshairSize = CROSSHAIR_SIZE_SMALL Then
+      CrosshairSize := CROSSHAIR_SIZE_MEDIUM
+     Else If CrosshairSize = CROSSHAIR_SIZE_MEDIUM Then
+      CrosshairSize := CROSSHAIR_SIZE_LARGE
+     Else
+      CrosshairSize := CROSSHAIR_SIZE_FULLSCREEN;
+     DrawInterface;
+    End;
+    't', 'T': Begin
+     { Toggle tooltip des coordonnées }
+     If CoordDisplayMode = COORD_DISPLAY_BOTH Then
+      CoordDisplayMode := COORD_DISPLAY_STATUSBAR
+     Else If CoordDisplayMode = COORD_DISPLAY_STATUSBAR Then
+      CoordDisplayMode := COORD_DISPLAY_TOOLTIP
+     Else If CoordDisplayMode = COORD_DISPLAY_TOOLTIP Then
+      CoordDisplayMode := COORD_DISPLAY_NONE
+     Else
+      CoordDisplayMode := COORD_DISPLAY_BOTH;
+     DrawInterface;
+    End;
+    'p', 'P': Begin
+     { Toggle pickbox }
+     ShowPickBox := Not ShowPickBox;
+     DrawInterface;
     End;
     { TODO 7: Touche spéciale (flèches) pour le pan }
     #0: Begin

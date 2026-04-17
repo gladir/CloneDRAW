@@ -20,7 +20,7 @@
   7. [DONE] Ajouter le zoom par molette de souris et le pan par clic milieu
   8. [DONE] Créer le curseur de précision (crosshair) avec affichage des coordonnées en temps réel
   9. [DONE] Implémenter le système de sélection d'objets par clic, fenêtre et fenêtre croisée
-  10. Ajouter les poignées de manipulation (grips) pour éditer les objets sélectionnés
+  10. [DONE] Ajouter les poignées de manipulation (grips) pour éditer les objets sélectionnés
 
   === INTERPRÉTEUR AUTOLISP ===
   11. Créer un analyseur lexical (tokenizer) pour le langage AutoLISP
@@ -158,6 +158,34 @@ Const
  { Tolérance de sélection (en pixels) }
  PICK_TOLERANCE = 5;
 
+ { Constantes pour les poignées de manipulation (grips) - TODO 10 }
+ MAX_GRIPS = 20;               { Nombre maximum de grips par objet }
+ GRIP_SIZE = 6;                { Taille d'un grip en pixels }
+ GRIP_HOT_SIZE = 8;            { Taille d'un grip survolé }
+ 
+ { Types de grips }
+ GRIP_NONE = 0;                { Pas de grip }
+ GRIP_ENDPOINT = 1;            { Point d'extrémité (ligne, polyline) }
+ GRIP_MIDPOINT = 2;            { Point milieu }
+ GRIP_CENTER = 3;              { Centre (cercle, arc, ellipse) }
+ GRIP_QUADRANT = 4;            { Quadrant (cercle, ellipse) }
+ GRIP_RADIUS = 5;              { Rayon (cercle, arc) }
+ GRIP_CORNER = 6;              { Coin (rectangle) }
+ GRIP_EDGE = 7;                { Milieu d'arête }
+ 
+ { Couleurs des grips }
+ GRIP_COLOR_COLD = Blue;       { Grip non sélectionné }
+ GRIP_COLOR_HOT = Red;         { Grip survolé }
+ GRIP_COLOR_SELECTED = Green;  { Grip en cours d'édition }
+ 
+ { Modes d'édition de grip }
+ GRIP_EDIT_NONE = 0;           { Pas d'édition en cours }
+ GRIP_EDIT_STRETCH = 1;        { Étirement (déplacement d'un point) }
+ GRIP_EDIT_MOVE = 2;           { Déplacement de l'objet entier }
+ GRIP_EDIT_ROTATE = 3;         { Rotation autour du grip }
+ GRIP_EDIT_SCALE = 4;          { Mise à l'échelle depuis le grip }
+ GRIP_EDIT_MIRROR = 5;         { Miroir par rapport au grip }
+
 Type
  { Structure pour les éléments de menu }
  TMenuItem = Record
@@ -222,6 +250,21 @@ Type
   Count: Integer;                                { Nombre d'objets sélectionnés }
  End;
 
+ { Structure pour une poignée de manipulation - TODO 10 }
+ TGrip = Record
+  X, Y: Real;           { Position en coordonnées monde }
+  GripType: Byte;       { Type de grip (GRIP_ENDPOINT, GRIP_CENTER, etc.) }
+  ObjIndex: Integer;    { Index de l'objet auquel appartient ce grip }
+  PointIndex: Byte;     { Index du point dans l'objet (0=P1, 1=P2, etc.) }
+  IsHot: Boolean;       { True si le curseur survole ce grip }
+ End;
+
+ { Structure pour le système de grips d'un objet - TODO 10 }
+ TGripSet = Record
+  Grips: Array[0..MAX_GRIPS-1] of TGrip;  { Liste des grips }
+  Count: Integer;                          { Nombre de grips }
+ End;
+
 Var
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
@@ -274,6 +317,16 @@ Var
  SelectEndX, SelectEndY: Integer;                      { Point de fin de la fenêtre de sélection }
  SelectionActive: Boolean;                             { True si en train de faire une sélection par fenêtre }
 
+ { Variables pour le système de grips - TODO 10 }
+ CurrentGrips: TGripSet;                               { Grips des objets sélectionnés }
+ HotGripIndex: Integer;                                { Index du grip survolé (-1 si aucun) }
+ ActiveGripIndex: Integer;                             { Index du grip en cours d'édition (-1 si aucun) }
+ GripEditMode: Integer;                                { Mode d'édition (GRIP_EDIT_STRETCH, etc.) }
+ GripEditActive: Boolean;                              { True si on est en train d'éditer via un grip }
+ GripOriginalX, GripOriginalY: Real;                   { Position originale du grip avant édition }
+ GripCurrentX, GripCurrentY: Real;                     { Position courante pendant l'édition }
+ GripSnapEnabled: Boolean;                             { Activer l'accrochage pendant l'édition }
+
 { Forward declarations - TODO 6 }
 Procedure DrawContextMenu; Forward;
 Procedure HandleContextMenuHover(X, Y: Integer); Forward;
@@ -310,6 +363,24 @@ Function PointNearCircle(PX, PY, CX, CY, Radius: Real; Tolerance: Real): Boolean
 Function ObjectIntersectsRect(ObjIndex: Integer; RX1, RY1, RX2, RY2: Real): Boolean; Forward;
 Function ObjectInsideRect(ObjIndex: Integer; RX1, RY1, RX2, RY2: Real): Boolean; Forward;
 Procedure DrawSelectedObjects; Forward;
+
+{ Forward declarations - TODO 10 - Système de grips }
+Procedure InitGripSystem; Forward;
+Procedure UpdateGripsForSelection; Forward;
+Procedure ClearGrips; Forward;
+Procedure AddGrip(X, Y: Real; GType: Byte; ObjIdx, PtIdx: Integer); Forward;
+Function GetGripAtPoint(SX, SY: Integer): Integer; Forward;
+Procedure SetHotGrip(GripIdx: Integer); Forward;
+Procedure StartGripEdit(GripIdx: Integer); Forward;
+Procedure UpdateGripEdit(SX, SY: Integer); Forward;
+Procedure FinishGripEdit; Forward;
+Procedure CancelGripEdit; Forward;
+Procedure ApplyGripStretch(GripIdx: Integer; NewX, NewY: Real); Forward;
+Procedure DrawGrips; Forward;
+Procedure DrawSingleGrip(GripIdx: Integer); Forward;
+Procedure GetGripsForLine(ObjIdx: Integer); Forward;
+Procedure GetGripsForCircle(ObjIdx: Integer); Forward;
+Procedure GetGripsForRectangle(ObjIdx: Integer); Forward;
 
 Procedure InitializeGraphics;
 Var
@@ -2230,7 +2301,383 @@ Begin
                          SelectMode = SELECT_MODE_CROSSING);
 End;
 
-{ Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair, TODO 9: Sélection }
+{ ============================================================================ }
+{ Procédures pour le système de grips (poignées de manipulation) - TODO 10     }
+{ Permettent d'éditer les objets sélectionnés en déplaçant leurs points        }
+{ ============================================================================ }
+
+{ Initialiser le système de grips }
+Procedure InitGripSystem;
+Begin
+ CurrentGrips.Count := 0;
+ HotGripIndex := -1;
+ ActiveGripIndex := -1;
+ GripEditMode := GRIP_EDIT_NONE;
+ GripEditActive := False;
+ GripSnapEnabled := True;
+End;
+
+{ Effacer tous les grips }
+Procedure ClearGrips;
+Var
+ I: Integer;
+Begin
+ For I := 0 to CurrentGrips.Count - 1 do Begin
+  CurrentGrips.Grips[I].GripType := GRIP_NONE;
+  CurrentGrips.Grips[I].IsHot := False;
+ End;
+ CurrentGrips.Count := 0;
+ HotGripIndex := -1;
+End;
+
+{ Ajouter un grip à la liste }
+Procedure AddGrip(X, Y: Real; GType: Byte; ObjIdx, PtIdx: Integer);
+Begin
+ If CurrentGrips.Count >= MAX_GRIPS Then Exit;
+ 
+ With CurrentGrips.Grips[CurrentGrips.Count] do Begin
+  CurrentGrips.Grips[CurrentGrips.Count].X := X;
+  CurrentGrips.Grips[CurrentGrips.Count].Y := Y;
+  GripType := GType;
+  ObjIndex := ObjIdx;
+  PointIndex := PtIdx;
+  IsHot := False;
+ End;
+ Inc(CurrentGrips.Count);
+End;
+
+{ Obtenir les grips pour une ligne }
+Procedure GetGripsForLine(ObjIdx: Integer);
+Var
+ MidX, MidY: Real;
+Begin
+ { Point de départ (P1) }
+ AddGrip(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].Y1, 
+         GRIP_ENDPOINT, ObjIdx, 0);
+ 
+ { Point d'arrivée (P2) }
+ AddGrip(DrawObjects[ObjIdx].X2, DrawObjects[ObjIdx].Y2, 
+         GRIP_ENDPOINT, ObjIdx, 1);
+ 
+ { Point milieu }
+ MidX := (DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].X2) / 2;
+ MidY := (DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Y2) / 2;
+ AddGrip(MidX, MidY, GRIP_MIDPOINT, ObjIdx, 2);
+End;
+
+{ Obtenir les grips pour un cercle }
+Procedure GetGripsForCircle(ObjIdx: Integer);
+Var
+ CX, CY, R: Real;
+Begin
+ CX := DrawObjects[ObjIdx].X1;
+ CY := DrawObjects[ObjIdx].Y1;
+ R := DrawObjects[ObjIdx].Radius;
+ 
+ { Centre }
+ AddGrip(CX, CY, GRIP_CENTER, ObjIdx, 0);
+ 
+ { Quadrants (pour modifier le rayon) }
+ AddGrip(CX, CY - R, GRIP_QUADRANT, ObjIdx, 1);  { Haut }
+ AddGrip(CX, CY + R, GRIP_QUADRANT, ObjIdx, 2);  { Bas }
+ AddGrip(CX - R, CY, GRIP_QUADRANT, ObjIdx, 3);  { Gauche }
+ AddGrip(CX + R, CY, GRIP_QUADRANT, ObjIdx, 4);  { Droite }
+End;
+
+{ Obtenir les grips pour un rectangle }
+Procedure GetGripsForRectangle(ObjIdx: Integer);
+Var
+ X1, Y1, X2, Y2, MidX, MidY: Real;
+Begin
+ X1 := DrawObjects[ObjIdx].X1;
+ Y1 := DrawObjects[ObjIdx].Y1;
+ X2 := DrawObjects[ObjIdx].X2;
+ Y2 := DrawObjects[ObjIdx].Y2;
+ 
+ { Les 4 coins }
+ AddGrip(X1, Y1, GRIP_CORNER, ObjIdx, 0);  { Coin bas-gauche }
+ AddGrip(X2, Y1, GRIP_CORNER, ObjIdx, 1);  { Coin bas-droit }
+ AddGrip(X2, Y2, GRIP_CORNER, ObjIdx, 2);  { Coin haut-droit }
+ AddGrip(X1, Y2, GRIP_CORNER, ObjIdx, 3);  { Coin haut-gauche }
+ 
+ { Milieux des arêtes }
+ MidX := (X1 + X2) / 2;
+ MidY := (Y1 + Y2) / 2;
+ AddGrip(MidX, Y1, GRIP_EDGE, ObjIdx, 4);  { Milieu bas }
+ AddGrip(X2, MidY, GRIP_EDGE, ObjIdx, 5);  { Milieu droit }
+ AddGrip(MidX, Y2, GRIP_EDGE, ObjIdx, 6);  { Milieu haut }
+ AddGrip(X1, MidY, GRIP_EDGE, ObjIdx, 7);  { Milieu gauche }
+End;
+
+{ Mettre à jour les grips pour les objets sélectionnés }
+Procedure UpdateGripsForSelection;
+Var
+ I, ObjIdx: Integer;
+Begin
+ ClearGrips;
+ 
+ For I := 0 to SelectionSet.Count - 1 do Begin
+  ObjIdx := SelectionSet.Objects[I];
+  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Continue;
+  If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Continue;
+  
+  Case DrawObjects[ObjIdx].ObjType of
+   OBJ_LINE: GetGripsForLine(ObjIdx);
+   OBJ_CIRCLE: GetGripsForCircle(ObjIdx);
+   OBJ_RECTANGLE: GetGripsForRectangle(ObjIdx);
+  End;
+ End;
+End;
+
+{ Trouver le grip à une position écran donnée }
+Function GetGripAtPoint(SX, SY: Integer): Integer;
+Var
+ I: Integer;
+ GX, GY: Integer;
+ Dist: Real;
+Begin
+ GetGripAtPoint := -1;
+ 
+ For I := 0 to CurrentGrips.Count - 1 do Begin
+  GX := WorldToScreenX(CurrentGrips.Grips[I].X);
+  GY := WorldToScreenY(CurrentGrips.Grips[I].Y);
+  
+  { Vérifier si le point est dans la zone du grip }
+  Dist := Sqrt(Sqr(SX - GX) + Sqr(SY - GY));
+  If Dist <= GRIP_SIZE Then Begin
+   GetGripAtPoint := I;
+   Exit;
+  End;
+ End;
+End;
+
+{ Définir le grip survolé (hot) }
+Procedure SetHotGrip(GripIdx: Integer);
+Var
+ I: Integer;
+Begin
+ { Réinitialiser tous les grips }
+ For I := 0 to CurrentGrips.Count - 1 do
+  CurrentGrips.Grips[I].IsHot := False;
+ 
+ { Définir le nouveau hot grip }
+ HotGripIndex := GripIdx;
+ If (GripIdx >= 0) and (GripIdx < CurrentGrips.Count) Then
+  CurrentGrips.Grips[GripIdx].IsHot := True;
+End;
+
+{ Commencer l'édition via un grip }
+Procedure StartGripEdit(GripIdx: Integer);
+Begin
+ If (GripIdx < 0) or (GripIdx >= CurrentGrips.Count) Then Exit;
+ 
+ ActiveGripIndex := GripIdx;
+ GripEditActive := True;
+ GripEditMode := GRIP_EDIT_STRETCH;  { Mode par défaut: étirement }
+ 
+ { Sauvegarder la position originale }
+ GripOriginalX := CurrentGrips.Grips[GripIdx].X;
+ GripOriginalY := CurrentGrips.Grips[GripIdx].Y;
+ GripCurrentX := GripOriginalX;
+ GripCurrentY := GripOriginalY;
+End;
+
+{ Mettre à jour l'édition via grip pendant le déplacement }
+Procedure UpdateGripEdit(SX, SY: Integer);
+Begin
+ If Not GripEditActive Then Exit;
+ If ActiveGripIndex < 0 Then Exit;
+ 
+ { Convertir les coordonnées écran en coordonnées monde }
+ GripCurrentX := ScreenToWorldX(SX);
+ GripCurrentY := ScreenToWorldY(SY);
+ 
+ { Appliquer l'étirement en temps réel }
+ ApplyGripStretch(ActiveGripIndex, GripCurrentX, GripCurrentY);
+ 
+ { Mettre à jour les grips pour refléter les changements }
+ UpdateGripsForSelection;
+End;
+
+{ Appliquer l'étirement d'un grip à l'objet }
+Procedure ApplyGripStretch(GripIdx: Integer; NewX, NewY: Real);
+Var
+ ObjIdx, PtIdx: Integer;
+ DX, DY: Real;
+ OldCX, OldCY, OldR, NewR: Real;
+Begin
+ If (GripIdx < 0) or (GripIdx >= CurrentGrips.Count) Then Exit;
+ 
+ ObjIdx := CurrentGrips.Grips[GripIdx].ObjIndex;
+ PtIdx := CurrentGrips.Grips[GripIdx].PointIndex;
+ 
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ 
+ Case DrawObjects[ObjIdx].ObjType of
+  OBJ_LINE: Begin
+   Case PtIdx of
+    0: Begin { Point de départ }
+     DrawObjects[ObjIdx].X1 := NewX;
+     DrawObjects[ObjIdx].Y1 := NewY;
+    End;
+    1: Begin { Point d'arrivée }
+     DrawObjects[ObjIdx].X2 := NewX;
+     DrawObjects[ObjIdx].Y2 := NewY;
+    End;
+    2: Begin { Point milieu - déplace toute la ligne }
+     DX := NewX - (DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].X2) / 2;
+     DY := NewY - (DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Y2) / 2;
+     DrawObjects[ObjIdx].X1 := DrawObjects[ObjIdx].X1 + DX;
+     DrawObjects[ObjIdx].Y1 := DrawObjects[ObjIdx].Y1 + DY;
+     DrawObjects[ObjIdx].X2 := DrawObjects[ObjIdx].X2 + DX;
+     DrawObjects[ObjIdx].Y2 := DrawObjects[ObjIdx].Y2 + DY;
+    End;
+   End;
+  End;
+  
+  OBJ_CIRCLE: Begin
+   OldCX := DrawObjects[ObjIdx].X1;
+   OldCY := DrawObjects[ObjIdx].Y1;
+   OldR := DrawObjects[ObjIdx].Radius;
+   
+   Case PtIdx of
+    0: Begin { Centre - déplace le cercle }
+     DrawObjects[ObjIdx].X1 := NewX;
+     DrawObjects[ObjIdx].Y1 := NewY;
+    End;
+    1, 2, 3, 4: Begin { Quadrants - modifie le rayon }
+     NewR := Sqrt(Sqr(NewX - OldCX) + Sqr(NewY - OldCY));
+     If NewR > 1 Then  { Rayon minimum }
+      DrawObjects[ObjIdx].Radius := NewR;
+    End;
+   End;
+  End;
+  
+  OBJ_RECTANGLE: Begin
+   Case PtIdx of
+    0: Begin { Coin bas-gauche }
+     DrawObjects[ObjIdx].X1 := NewX;
+     DrawObjects[ObjIdx].Y1 := NewY;
+    End;
+    1: Begin { Coin bas-droit }
+     DrawObjects[ObjIdx].X2 := NewX;
+     DrawObjects[ObjIdx].Y1 := NewY;
+    End;
+    2: Begin { Coin haut-droit }
+     DrawObjects[ObjIdx].X2 := NewX;
+     DrawObjects[ObjIdx].Y2 := NewY;
+    End;
+    3: Begin { Coin haut-gauche }
+     DrawObjects[ObjIdx].X1 := NewX;
+     DrawObjects[ObjIdx].Y2 := NewY;
+    End;
+    4: Begin { Milieu bas - modifie Y1 seulement }
+     DrawObjects[ObjIdx].Y1 := NewY;
+    End;
+    5: Begin { Milieu droit - modifie X2 seulement }
+     DrawObjects[ObjIdx].X2 := NewX;
+    End;
+    6: Begin { Milieu haut - modifie Y2 seulement }
+     DrawObjects[ObjIdx].Y2 := NewY;
+    End;
+    7: Begin { Milieu gauche - modifie X1 seulement }
+     DrawObjects[ObjIdx].X1 := NewX;
+    End;
+   End;
+  End;
+ End;
+End;
+
+{ Terminer l'édition via grip (valider les changements) }
+Procedure FinishGripEdit;
+Begin
+ If Not GripEditActive Then Exit;
+ 
+ { Les changements ont déjà été appliqués via ApplyGripStretch }
+ { On réinitialise simplement l'état d'édition }
+ 
+ GripEditActive := False;
+ ActiveGripIndex := -1;
+ GripEditMode := GRIP_EDIT_NONE;
+ 
+ { Mettre à jour les grips }
+ UpdateGripsForSelection;
+End;
+
+{ Annuler l'édition via grip (restaurer les valeurs originales) }
+Procedure CancelGripEdit;
+Begin
+ If Not GripEditActive Then Exit;
+ If ActiveGripIndex < 0 Then Exit;
+ 
+ { Restaurer la position originale }
+ ApplyGripStretch(ActiveGripIndex, GripOriginalX, GripOriginalY);
+ 
+ { Réinitialiser l'état }
+ GripEditActive := False;
+ ActiveGripIndex := -1;
+ GripEditMode := GRIP_EDIT_NONE;
+ 
+ { Mettre à jour les grips }
+ UpdateGripsForSelection;
+End;
+
+{ Dessiner un grip individuel }
+Procedure DrawSingleGrip(GripIdx: Integer);
+Var
+ GX, GY: Integer;
+ GSize: Integer;
+ GColor: Integer;
+Begin
+ If (GripIdx < 0) or (GripIdx >= CurrentGrips.Count) Then Exit;
+ 
+ GX := WorldToScreenX(CurrentGrips.Grips[GripIdx].X);
+ GY := WorldToScreenY(CurrentGrips.Grips[GripIdx].Y);
+ 
+ { Déterminer la taille et la couleur }
+ If GripIdx = ActiveGripIndex Then Begin
+  GSize := GRIP_HOT_SIZE;
+  GColor := GRIP_COLOR_SELECTED;
+ End Else If CurrentGrips.Grips[GripIdx].IsHot Then Begin
+  GSize := GRIP_HOT_SIZE;
+  GColor := GRIP_COLOR_HOT;
+ End Else Begin
+  GSize := GRIP_SIZE;
+  GColor := GRIP_COLOR_COLD;
+ End;
+ 
+ { Dessiner le grip (carré plein avec bordure) }
+ SetFillStyle(SolidFill, GColor);
+ Bar(GX - GSize div 2, GY - GSize div 2, 
+     GX + GSize div 2, GY + GSize div 2);
+ 
+ { Bordure blanche pour la visibilité }
+ SetColor(White);
+ Rectangle(GX - GSize div 2, GY - GSize div 2,
+           GX + GSize div 2, GY + GSize div 2);
+End;
+
+{ Dessiner tous les grips }
+Procedure DrawGrips;
+Var
+ I: Integer;
+Begin
+ If CurrentGrips.Count = 0 Then Exit;
+ 
+ For I := 0 to CurrentGrips.Count - 1 do
+  DrawSingleGrip(I);
+ 
+ { Si en mode édition, dessiner une ligne de prévisualisation }
+ If GripEditActive and (ActiveGripIndex >= 0) Then Begin
+  SetColor(Yellow);
+  SetLineStyle(DashedLn, 0, NormWidth);
+  Line(WorldToScreenX(GripOriginalX), WorldToScreenY(GripOriginalY),
+       WorldToScreenX(GripCurrentX), WorldToScreenY(GripCurrentY));
+  SetLineStyle(SolidLn, 0, NormWidth);
+ End;
+End;
+
+{ Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair, TODO 9: Sélection, TODO 10: Grips }
 Procedure DrawCanvas;
 Var
  CanvasTop, CanvasBottom: Integer;
@@ -2248,6 +2695,9 @@ Begin
  
  { TODO 9: Dessiner tous les objets du dessin }
  DrawSelectedObjects;
+ 
+ { TODO 10: Dessiner les grips des objets sélectionnés }
+ DrawGrips;
  
  { Dessiner un petit repère à l'origine (0,0) - UCS Icon }
  OriginX := WorldToScreenX(0);
@@ -2296,6 +2746,12 @@ Begin
    OutTextXY(ScreenWidth div 2 - 40, CanvasTop + 5, '** CROSSING **')
   Else
    OutTextXY(ScreenWidth div 2 - 35, CanvasTop + 5, '** WINDOW **');
+ End;
+ 
+ { TODO 10: Indicateur de mode édition grip si actif }
+ If GripEditActive Then Begin
+  SetColor(Green);
+  OutTextXY(ScreenWidth div 2 - 45, CanvasTop + 5, '** GRIP EDIT **');
  End;
 End;
 
@@ -2431,6 +2887,7 @@ Var
  ContextItem: Integer;
  SelectedObj: Integer;
  CanvasTop, CanvasBottom: Integer;
+ ClickedGrip: Integer;
 Begin
  CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
@@ -2461,6 +2918,20 @@ Begin
 
  Case Button of
   MOUSE_BUTTON_LEFT: Begin { Clic gauche }
+   { TODO 10: Vérifier d'abord si on clique sur un grip }
+   If (Y >= CanvasTop) and (Y <= CanvasBottom) and (CurrentGrips.Count > 0) Then Begin
+    ClickedGrip := GetGripAtPoint(X, Y);
+    If ClickedGrip >= 0 Then Begin
+     { On a cliqué sur un grip - démarrer l'édition }
+     StartGripEdit(ClickedGrip);
+     MouseDragging := True;
+     DragStartX := X;
+     DragStartY := Y;
+     DrawInterface;
+     Exit;
+    End;
+   End;
+   
    { Démarrer un drag si nécessaire }
    If MouseMode <> MOUSE_MODE_NORMAL Then Begin
     MouseDragging := True;
@@ -2511,15 +2982,20 @@ Begin
      If IsSelected(SelectedObj) Then Begin
       { Désélectionner si déjà sélectionné }
       RemoveFromSelection(SelectedObj);
+      { TODO 10: Mettre à jour les grips après désélection }
+      UpdateGripsForSelection;
      End Else Begin
       { Effacer la sélection précédente et sélectionner le nouvel objet }
       ClearSelection;
       AddToSelection(SelectedObj);
+      { TODO 10: Mettre à jour les grips après sélection }
+      UpdateGripsForSelection;
      End;
      DrawInterface;
     End Else Begin
      { Aucun objet sous le curseur - démarrer une sélection par fenêtre }
      ClearSelection;
+     ClearGrips;  { TODO 10: Effacer les grips }
      MouseMode := MOUSE_MODE_SELECT;
      MouseDragging := True;
      StartWindowSelection(X, Y);
@@ -2530,6 +3006,13 @@ Begin
   End;
   
   MOUSE_BUTTON_RIGHT: Begin { Clic droit - TODO 6 }
+   { TODO 10: Annuler l'édition grip si active }
+   If GripEditActive Then Begin
+    CancelGripEdit;
+    MouseDragging := False;
+    DrawInterface;
+    Exit;
+   End;
    HandleRightClick(X, Y);
   End;
   
@@ -2544,7 +3027,12 @@ Procedure HandleMouseMove(X, Y: Integer);
 Var
  NewItem: Integer;
  NewMenu: Integer;
+ CanvasTop, CanvasBottom: Integer;
+ HoverGrip: Integer;
 Begin
+ CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ 
  { Gérer le menu contextuel en premier - TODO 6 }
  If ContextMenuActive Then Begin
   HandleContextMenuHover(X, Y);
@@ -2577,6 +3065,16 @@ Begin
     ActiveMenuItem := NewItem;
     DrawInterface;
    End;
+  End;
+ End;
+ 
+ { TODO 10: Vérifier le survol des grips dans la zone de dessin }
+ If (Y >= CanvasTop) and (Y <= CanvasBottom) and 
+    (CurrentGrips.Count > 0) and (Not GripEditActive) Then Begin
+  HoverGrip := GetGripAtPoint(X, Y);
+  If HoverGrip <> HotGripIndex Then Begin
+   SetHotGrip(HoverGrip);
+   DrawInterface;
   End;
  End;
  
@@ -2656,6 +3154,7 @@ Begin
  InitContextMenu;
  InitCrosshairSettings;  { TODO 8: Initialiser le crosshair }
  InitSelectionSystem;    { TODO 9: Initialiser le système de sélection }
+ InitGripSystem;         { TODO 10: Initialiser le système de grips }
 End;
 
 { Dessiner le menu contextuel }
@@ -2795,6 +3294,13 @@ Begin
  DeltaX := X - LastMouseX;
  DeltaY := Y - LastMouseY;
  
+ { TODO 10: Gérer l'édition via grip en premier }
+ If GripEditActive Then Begin
+  UpdateGripEdit(X, Y);
+  DrawInterface;
+  Exit;
+ End;
+ 
  Case MouseMode of
   MOUSE_MODE_PAN: Begin
    { Déplacer la vue }
@@ -2925,9 +3431,16 @@ Begin
    { Clic gauche relâché - fin du drag }
    If ((MouseButtons and MOUSE_BUTTON_LEFT) = 0) and
       ((OldButtons and MOUSE_BUTTON_LEFT) = MOUSE_BUTTON_LEFT) Then Begin
+    { TODO 10: Terminer l'édition via grip si active }
+    If GripEditActive Then Begin
+     FinishGripEdit;
+     DrawInterface;
+    End;
     { TODO 9: Terminer la sélection par fenêtre si active }
     If MouseMode = MOUSE_MODE_SELECT Then Begin
      FinishWindowSelection;
+     { TODO 10: Mettre à jour les grips après sélection }
+     UpdateGripsForSelection;
      MouseMode := MOUSE_MODE_NORMAL;
      DrawInterface;
     End;
@@ -2982,6 +3495,11 @@ Begin
       ContextMenuActive := False;
       ActiveContextItem := -1;
       DrawInterface;
+     End Else If GripEditActive Then Begin
+      { TODO 10: Annuler l'édition via grip }
+      CancelGripEdit;
+      MouseDragging := False;
+      DrawInterface;
      End Else If MenuActive Then Begin
       MenuActive := False;
       ActiveMenu := -1;
@@ -2999,6 +3517,7 @@ Begin
      End Else If SelectionSet.Count > 0 Then Begin
       { TODO 9: Effacer la sélection existante }
       ClearSelection;
+      ClearGrips;  { TODO 10: Effacer les grips }
       DrawInterface;
      End Else Begin
       Running := False;

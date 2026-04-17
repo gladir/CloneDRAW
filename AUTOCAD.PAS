@@ -25,7 +25,7 @@
   === INTERPRÉTEUR AUTOLISP ===
   11. [DONE] Créer un analyseur lexical (tokenizer) pour le langage AutoLISP
   12. [DONE] Implémenter un parseur pour construire l'arbre syntaxique des expressions LISP
-  13. Développer l'évaluateur d'expressions avec support des fonctions mathématiques (+, -, *, /, sin, cos, sqrt, etc.)
+  13. [DONE] Développer l'évaluateur d'expressions avec support des fonctions mathématiques (+, -, *, /, sin, cos, sqrt, etc.)
   14. Implémenter les fonctions de dessin AutoLISP : command, entmake, entmod, entget, entsel, ssget, ssadd
   15. Ajouter les fonctions de manipulation de chaînes, listes et variables : setq, defun, if, cond, while, foreach, mapcar
 
@@ -233,6 +233,21 @@ Const
  LISP_NODE_QUOTE = 8;          { Expression quotée 'expr }
  LISP_NODE_DOTPAIR = 9;        { Paire pointée (a . b) }
 
+ { Constantes pour l'évaluateur AutoLISP - TODO 13 }
+ MAX_LISP_VARIABLES = 200;     { Nombre maximum de variables }
+ MAX_LISP_STACK = 100;         { Profondeur maximale de la pile d'évaluation }
+ LISP_VAR_NAME_LEN = 32;       { Longueur maximale d'un nom de variable }
+ 
+ { Types de valeurs LISP pour l'évaluateur }
+ LISP_VAL_NIL = 0;             { Valeur nil }
+ LISP_VAL_T = 1;               { Valeur t (vrai) }
+ LISP_VAL_INTEGER = 2;         { Valeur entière }
+ LISP_VAL_REAL = 3;            { Valeur réelle }
+ LISP_VAL_STRING = 4;          { Valeur chaîne }
+ LISP_VAL_LIST = 5;            { Valeur liste (pointeur vers noeud) }
+ LISP_VAL_SYMBOL = 6;          { Symbole non évalué }
+ LISP_VAL_ERROR = 7;           { Erreur d'évaluation }
+
 Type
  { Structure pour les éléments de menu }
  TMenuItem = Record
@@ -359,6 +374,32 @@ Type
   HasError: Boolean;                       { True si erreur de parsing }
  End;
 
+ { Structure pour une valeur LISP évaluée - TODO 13 }
+ TLispValue = Record
+  ValueType: Byte;                         { Type de la valeur (LISP_VAL_xxx) }
+  IntValue: LongInt;                       { Valeur si entier }
+  RealValue: Real;                         { Valeur si réel }
+  StrValue: String[MAX_LISP_STRING];       { Valeur si chaîne ou symbole }
+  ListNode: PLispNode;                     { Pointeur si liste }
+ End;
+
+ { Structure pour une variable LISP - TODO 13 }
+ TLispVariable = Record
+  Name: String[LISP_VAR_NAME_LEN];         { Nom de la variable }
+  Value: TLispValue;                       { Valeur de la variable }
+  IsDefined: Boolean;                      { True si variable définie }
+ End;
+
+ { Structure pour l'évaluateur AutoLISP - TODO 13 }
+ TLispEvaluator = Record
+  Variables: Array[0..MAX_LISP_VARIABLES-1] of TLispVariable;  { Table des variables }
+  VarCount: Integer;                       { Nombre de variables définies }
+  StackDepth: Integer;                     { Profondeur actuelle de la pile }
+  LastResult: TLispValue;                  { Dernier résultat d'évaluation }
+  ErrorMessage: String[80];                { Message d'erreur si erreur }
+  HasError: Boolean;                       { True si erreur d'évaluation }
+ End;
+
 Var
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
@@ -429,6 +470,10 @@ Var
  { Variables pour le parseur AutoLISP - TODO 12 }
  LispParser: TLispParser;                              { Le parseur global }
  LispParseDebugMode: Boolean;                          { Mode debug pour afficher l'AST }
+
+ { Variables pour l'évaluateur AutoLISP - TODO 13 }
+ LispEvaluator: TLispEvaluator;                        { L'évaluateur global }
+ LispEvalDebugMode: Boolean;                           { Mode debug pour afficher les évaluations }
 
 { Forward declarations - TODO 6 }
 Procedure DrawContextMenu; Forward;
@@ -524,6 +569,28 @@ Function LispIsList(Node: PLispNode): Boolean; Forward;
 Function LispIsAtomNode(Node: PLispNode): Boolean; Forward;
 Function LispListLength(Node: PLispNode): Integer; Forward;
 Function LispListGet(Node: PLispNode; Index: Integer): PLispNode; Forward;
+
+{ Forward declarations - TODO 13 - Évaluateur AutoLISP }
+Procedure InitLispEvaluator; Forward;
+Function LispMakeNil: TLispValue; Forward;
+Function LispMakeT: TLispValue; Forward;
+Function LispMakeInt(V: LongInt): TLispValue; Forward;
+Function LispMakeReal(V: Real): TLispValue; Forward;
+Function LispMakeString(Const S: String): TLispValue; Forward;
+Function LispMakeError(Const Msg: String): TLispValue; Forward;
+Function LispValueIsTrue(Const V: TLispValue): Boolean; Forward;
+Function LispValueToReal(Const V: TLispValue): Real; Forward;
+Function LispValueToString(Const V: TLispValue): String; Forward;
+Function LispGetVariable(Const Name: String): TLispValue; Forward;
+Procedure LispSetVariable(Const Name: String; Const Value: TLispValue); Forward;
+Function LispEvalAtom(Node: PLispNode): TLispValue; Forward;
+Function LispEvalMathOp(Const FuncName: String; Node: PLispNode): TLispValue; Forward;
+Function LispEvalTrigOp(Const FuncName: String; Node: PLispNode): TLispValue; Forward;
+Function LispEvalCompareOp(Const FuncName: String; Node: PLispNode): TLispValue; Forward;
+Function LispEvalList(Node: PLispNode): TLispValue; Forward;
+Function LispEval(Node: PLispNode): TLispValue; Forward;
+Function LispEvaluate(Const S: String): TLispValue; Forward;
+Procedure LispPrintValue(Const V: TLispValue); Forward;
 
 Procedure InitializeGraphics;
 Var
@@ -3933,6 +4000,1045 @@ Begin
   LispListGet := Node^.Children[Index];
 End;
 
+{ ============================================================================ }
+{ Procédures pour l'évaluateur AutoLISP - TODO 13                              }
+{ Évalue les expressions LISP avec support des fonctions mathématiques         }
+{ ============================================================================ }
+
+{ Initialiser l'évaluateur AutoLISP }
+Procedure InitLispEvaluator;
+Var
+ I: Integer;
+Begin
+ LispEvaluator.VarCount := 0;
+ LispEvaluator.StackDepth := 0;
+ LispEvaluator.ErrorMessage := '';
+ LispEvaluator.HasError := False;
+ LispEvalDebugMode := False;
+ 
+ { Initialiser la dernière valeur à nil }
+ LispEvaluator.LastResult.ValueType := LISP_VAL_NIL;
+ LispEvaluator.LastResult.IntValue := 0;
+ LispEvaluator.LastResult.RealValue := 0.0;
+ LispEvaluator.LastResult.StrValue := '';
+ LispEvaluator.LastResult.ListNode := Nil;
+ 
+ { Initialiser toutes les variables }
+ For I := 0 to MAX_LISP_VARIABLES - 1 do Begin
+  LispEvaluator.Variables[I].Name := '';
+  LispEvaluator.Variables[I].IsDefined := False;
+  LispEvaluator.Variables[I].Value.ValueType := LISP_VAL_NIL;
+ End;
+ 
+ { Définir la constante PI }
+ LispSetVariable('PI', LispMakeReal(3.14159265358979));
+End;
+
+{ Créer une valeur nil }
+Function LispMakeNil: TLispValue;
+Begin
+ LispMakeNil.ValueType := LISP_VAL_NIL;
+ LispMakeNil.IntValue := 0;
+ LispMakeNil.RealValue := 0.0;
+ LispMakeNil.StrValue := '';
+ LispMakeNil.ListNode := Nil;
+End;
+
+{ Créer une valeur t (vrai) }
+Function LispMakeT: TLispValue;
+Begin
+ LispMakeT.ValueType := LISP_VAL_T;
+ LispMakeT.IntValue := 1;
+ LispMakeT.RealValue := 1.0;
+ LispMakeT.StrValue := 't';
+ LispMakeT.ListNode := Nil;
+End;
+
+{ Créer une valeur entière }
+Function LispMakeInt(V: LongInt): TLispValue;
+Begin
+ LispMakeInt.ValueType := LISP_VAL_INTEGER;
+ LispMakeInt.IntValue := V;
+ LispMakeInt.RealValue := V;
+ LispMakeInt.StrValue := '';
+ LispMakeInt.ListNode := Nil;
+End;
+
+{ Créer une valeur réelle }
+Function LispMakeReal(V: Real): TLispValue;
+Begin
+ LispMakeReal.ValueType := LISP_VAL_REAL;
+ LispMakeReal.IntValue := Round(V);
+ LispMakeReal.RealValue := V;
+ LispMakeReal.StrValue := '';
+ LispMakeReal.ListNode := Nil;
+End;
+
+{ Créer une valeur chaîne }
+Function LispMakeString(Const S: String): TLispValue;
+Begin
+ LispMakeString.ValueType := LISP_VAL_STRING;
+ LispMakeString.IntValue := 0;
+ LispMakeString.RealValue := 0.0;
+ LispMakeString.StrValue := S;
+ LispMakeString.ListNode := Nil;
+End;
+
+{ Créer une valeur d'erreur }
+Function LispMakeError(Const Msg: String): TLispValue;
+Begin
+ LispMakeError.ValueType := LISP_VAL_ERROR;
+ LispMakeError.IntValue := 0;
+ LispMakeError.RealValue := 0.0;
+ LispMakeError.StrValue := Msg;
+ LispMakeError.ListNode := Nil;
+ LispEvaluator.HasError := True;
+ LispEvaluator.ErrorMessage := Msg;
+End;
+
+{ Vérifier si une valeur est vraie (non-nil) }
+Function LispValueIsTrue(Const V: TLispValue): Boolean;
+Begin
+ LispValueIsTrue := V.ValueType <> LISP_VAL_NIL;
+End;
+
+{ Convertir une valeur en réel }
+Function LispValueToReal(Const V: TLispValue): Real;
+Begin
+ Case V.ValueType of
+  LISP_VAL_INTEGER: LispValueToReal := V.IntValue;
+  LISP_VAL_REAL:    LispValueToReal := V.RealValue;
+  LISP_VAL_T:       LispValueToReal := 1.0;
+  Else              LispValueToReal := 0.0;
+ End;
+End;
+
+{ Convertir une valeur en chaîne }
+Function LispValueToString(Const V: TLispValue): String;
+Var
+ S: String;
+Begin
+ Case V.ValueType of
+  LISP_VAL_NIL: LispValueToString := 'nil';
+  LISP_VAL_T: LispValueToString := 't';
+  LISP_VAL_INTEGER: Begin
+   Str(V.IntValue, S);
+   LispValueToString := S;
+  End;
+  LISP_VAL_REAL: Begin
+   Str(V.RealValue:0:6, S);
+   { Enlever les zéros trailing }
+   While (Length(S) > 1) and (S[Length(S)] = '0') and (S[Length(S)-1] <> '.') do
+    Delete(S, Length(S), 1);
+   LispValueToString := S;
+  End;
+  LISP_VAL_STRING: LispValueToString := '"' + V.StrValue + '"';
+  LISP_VAL_SYMBOL: LispValueToString := V.StrValue;
+  LISP_VAL_LIST: Begin
+   If V.ListNode <> Nil Then
+    LispValueToString := LispNodeToString(V.ListNode)
+   Else
+    LispValueToString := 'nil';
+  End;
+  LISP_VAL_ERROR: LispValueToString := 'ERREUR: ' + V.StrValue;
+  Else LispValueToString := '???';
+ End;
+End;
+
+{ Chercher une variable par nom }
+Function LispGetVariable(Const Name: String): TLispValue;
+Var
+ I: Integer;
+ UpperName: String;
+Begin
+ UpperName := Name;
+ For I := 1 to Length(UpperName) do
+  If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
+   UpperName[I] := Chr(Ord(UpperName[I]) - 32);
+ 
+ For I := 0 to LispEvaluator.VarCount - 1 do Begin
+  If LispEvaluator.Variables[I].IsDefined and 
+     (LispEvaluator.Variables[I].Name = UpperName) Then Begin
+   LispGetVariable := LispEvaluator.Variables[I].Value;
+   Exit;
+  End;
+ End;
+ 
+ { Variable non trouvée, retourner nil }
+ LispGetVariable := LispMakeNil;
+End;
+
+{ Définir ou modifier une variable }
+Procedure LispSetVariable(Const Name: String; Const Value: TLispValue);
+Var
+ I: Integer;
+ UpperName: String;
+Begin
+ UpperName := Name;
+ For I := 1 to Length(UpperName) do
+  If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
+   UpperName[I] := Chr(Ord(UpperName[I]) - 32);
+ 
+ { Chercher si la variable existe déjà }
+ For I := 0 to LispEvaluator.VarCount - 1 do Begin
+  If LispEvaluator.Variables[I].IsDefined and 
+     (LispEvaluator.Variables[I].Name = UpperName) Then Begin
+   LispEvaluator.Variables[I].Value := Value;
+   Exit;
+  End;
+ End;
+ 
+ { Créer une nouvelle variable }
+ If LispEvaluator.VarCount < MAX_LISP_VARIABLES Then Begin
+  LispEvaluator.Variables[LispEvaluator.VarCount].Name := UpperName;
+  LispEvaluator.Variables[LispEvaluator.VarCount].Value := Value;
+  LispEvaluator.Variables[LispEvaluator.VarCount].IsDefined := True;
+  Inc(LispEvaluator.VarCount);
+ End;
+End;
+
+{ Évaluer un atome (nombre, chaîne, symbole, nil, t) }
+Function LispEvalAtom(Node: PLispNode): TLispValue;
+Begin
+ If Node = Nil Then Begin
+  LispEvalAtom := LispMakeNil;
+  Exit;
+ End;
+ 
+ Case Node^.NodeType of
+  LISP_NODE_INTEGER: Begin
+   LispEvalAtom := LispMakeInt(Node^.IntValue);
+  End;
+  
+  LISP_NODE_REAL: Begin
+   LispEvalAtom := LispMakeReal(Node^.RealValue);
+  End;
+  
+  LISP_NODE_STRING: Begin
+   LispEvalAtom := LispMakeString(Node^.StrValue);
+  End;
+  
+  LISP_NODE_SYMBOL: Begin
+   { Chercher la valeur de la variable }
+   LispEvalAtom := LispGetVariable(Node^.StrValue);
+  End;
+  
+  LISP_NODE_NIL: Begin
+   LispEvalAtom := LispMakeNil;
+  End;
+  
+  LISP_NODE_T: Begin
+   LispEvalAtom := LispMakeT;
+  End;
+  
+  Else Begin
+   LispEvalAtom := LispMakeError('Type d''atome inattendu');
+  End;
+ End;
+End;
+
+{ Évaluer une opération mathématique (+, -, *, /, abs, mod, min, max, 1+, 1-) }
+Function LispEvalMathOp(Const FuncName: String; Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ Result, ArgVal: TLispValue;
+ Total, ArgNum: Real;
+ IsReal: Boolean;
+ IntTotal: LongInt;
+Begin
+ If Node^.ChildCount < 1 Then Begin
+  LispEvalMathOp := LispMakeError('Fonction ' + FuncName + ' requiert au moins un argument');
+  Exit;
+ End;
+ 
+ IsReal := False;
+ Total := 0;
+ IntTotal := 0;
+ 
+ { Addition }
+ If FuncName = '+' Then Begin
+  Total := 0;
+  For I := 1 to Node^.ChildCount - 1 do Begin
+   ArgVal := LispEval(Node^.Children[I]);
+   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalMathOp := ArgVal;
+    Exit;
+   End;
+   If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
+   Total := Total + LispValueToReal(ArgVal);
+  End;
+  If IsReal Then
+   LispEvalMathOp := LispMakeReal(Total)
+  Else
+   LispEvalMathOp := LispMakeInt(Round(Total));
+  Exit;
+ End;
+ 
+ { Soustraction }
+ If FuncName = '-' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   { Un seul argument: négation }
+   ArgVal := LispEval(Node^.Children[1]);
+   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalMathOp := ArgVal;
+    Exit;
+   End;
+   If ArgVal.ValueType = LISP_VAL_REAL Then
+    LispEvalMathOp := LispMakeReal(-ArgVal.RealValue)
+   Else
+    LispEvalMathOp := LispMakeInt(-ArgVal.IntValue);
+   Exit;
+  End;
+  
+  { Premier argument }
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalMathOp := ArgVal;
+   Exit;
+  End;
+  If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
+  Total := LispValueToReal(ArgVal);
+  
+  { Soustraire les autres arguments }
+  For I := 2 to Node^.ChildCount - 1 do Begin
+   ArgVal := LispEval(Node^.Children[I]);
+   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalMathOp := ArgVal;
+    Exit;
+   End;
+   If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
+   Total := Total - LispValueToReal(ArgVal);
+  End;
+  If IsReal Then
+   LispEvalMathOp := LispMakeReal(Total)
+  Else
+   LispEvalMathOp := LispMakeInt(Round(Total));
+  Exit;
+ End;
+ 
+ { Multiplication }
+ If FuncName = '*' Then Begin
+  Total := 1;
+  For I := 1 to Node^.ChildCount - 1 do Begin
+   ArgVal := LispEval(Node^.Children[I]);
+   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalMathOp := ArgVal;
+    Exit;
+   End;
+   If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
+   Total := Total * LispValueToReal(ArgVal);
+  End;
+  If IsReal Then
+   LispEvalMathOp := LispMakeReal(Total)
+  Else
+   LispEvalMathOp := LispMakeInt(Round(Total));
+  Exit;
+ End;
+ 
+ { Division }
+ If FuncName = '/' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalMathOp := LispMakeError('/ requiert au moins 2 arguments');
+   Exit;
+  End;
+  
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalMathOp := ArgVal;
+   Exit;
+  End;
+  Total := LispValueToReal(ArgVal);
+  
+  For I := 2 to Node^.ChildCount - 1 do Begin
+   ArgVal := LispEval(Node^.Children[I]);
+   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalMathOp := ArgVal;
+    Exit;
+   End;
+   ArgNum := LispValueToReal(ArgVal);
+   If ArgNum = 0 Then Begin
+    LispEvalMathOp := LispMakeError('Division par zéro');
+    Exit;
+   End;
+   Total := Total / ArgNum;
+  End;
+  LispEvalMathOp := LispMakeReal(Total);
+  Exit;
+ End;
+ 
+ { Valeur absolue }
+ If FuncName = 'ABS' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalMathOp := LispMakeError('abs requiert un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalMathOp := ArgVal;
+   Exit;
+  End;
+  Total := LispValueToReal(ArgVal);
+  If Total < 0 Then Total := -Total;
+  If ArgVal.ValueType = LISP_VAL_REAL Then
+   LispEvalMathOp := LispMakeReal(Total)
+  Else
+   LispEvalMathOp := LispMakeInt(Round(Total));
+  Exit;
+ End;
+ 
+ { Modulo (rem) }
+ If (FuncName = 'REM') or (FuncName = 'MOD') Then Begin
+  If Node^.ChildCount < 3 Then Begin
+   LispEvalMathOp := LispMakeError('rem requiert 2 arguments');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalMathOp := ArgVal;
+   Exit;
+  End;
+  IntTotal := Round(LispValueToReal(ArgVal));
+  
+  ArgVal := LispEval(Node^.Children[2]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalMathOp := ArgVal;
+   Exit;
+  End;
+  ArgNum := Round(LispValueToReal(ArgVal));
+  If ArgNum = 0 Then Begin
+   LispEvalMathOp := LispMakeError('Division par zéro (modulo)');
+   Exit;
+  End;
+  LispEvalMathOp := LispMakeInt(IntTotal mod Round(ArgNum));
+  Exit;
+ End;
+ 
+ { Minimum }
+ If FuncName = 'MIN' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalMathOp := LispMakeError('min requiert au moins un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalMathOp := ArgVal;
+   Exit;
+  End;
+  If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
+  Total := LispValueToReal(ArgVal);
+  
+  For I := 2 to Node^.ChildCount - 1 do Begin
+   ArgVal := LispEval(Node^.Children[I]);
+   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalMathOp := ArgVal;
+    Exit;
+   End;
+   If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
+   ArgNum := LispValueToReal(ArgVal);
+   If ArgNum < Total Then Total := ArgNum;
+  End;
+  If IsReal Then
+   LispEvalMathOp := LispMakeReal(Total)
+  Else
+   LispEvalMathOp := LispMakeInt(Round(Total));
+  Exit;
+ End;
+ 
+ { Maximum }
+ If FuncName = 'MAX' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalMathOp := LispMakeError('max requiert au moins un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalMathOp := ArgVal;
+   Exit;
+  End;
+  If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
+  Total := LispValueToReal(ArgVal);
+  
+  For I := 2 to Node^.ChildCount - 1 do Begin
+   ArgVal := LispEval(Node^.Children[I]);
+   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalMathOp := ArgVal;
+    Exit;
+   End;
+   If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
+   ArgNum := LispValueToReal(ArgVal);
+   If ArgNum > Total Then Total := ArgNum;
+  End;
+  If IsReal Then
+   LispEvalMathOp := LispMakeReal(Total)
+  Else
+   LispEvalMathOp := LispMakeInt(Round(Total));
+  Exit;
+ End;
+ 
+ { Incrément de 1 }
+ If FuncName = '1+' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalMathOp := LispMakeError('1+ requiert un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalMathOp := ArgVal;
+   Exit;
+  End;
+  If ArgVal.ValueType = LISP_VAL_REAL Then
+   LispEvalMathOp := LispMakeReal(ArgVal.RealValue + 1)
+  Else
+   LispEvalMathOp := LispMakeInt(ArgVal.IntValue + 1);
+  Exit;
+ End;
+ 
+ { Décrément de 1 }
+ If FuncName = '1-' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalMathOp := LispMakeError('1- requiert un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalMathOp := ArgVal;
+   Exit;
+  End;
+  If ArgVal.ValueType = LISP_VAL_REAL Then
+   LispEvalMathOp := LispMakeReal(ArgVal.RealValue - 1)
+  Else
+   LispEvalMathOp := LispMakeInt(ArgVal.IntValue - 1);
+  Exit;
+ End;
+ 
+ LispEvalMathOp := LispMakeError('Fonction mathématique inconnue: ' + FuncName);
+End;
+
+{ Évaluer une fonction trigonométrique (sin, cos, tan, atan, asin, acos, sqrt, expt, exp, log) }
+Function LispEvalTrigOp(Const FuncName: String; Node: PLispNode): TLispValue;
+Var
+ ArgVal, ArgVal2: TLispValue;
+ Num, Num2: Real;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalTrigOp := LispMakeError(FuncName + ' requiert au moins un argument');
+  Exit;
+ End;
+ 
+ ArgVal := LispEval(Node^.Children[1]);
+ If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalTrigOp := ArgVal;
+  Exit;
+ End;
+ Num := LispValueToReal(ArgVal);
+ 
+ { Sinus }
+ If FuncName = 'SIN' Then Begin
+  LispEvalTrigOp := LispMakeReal(Sin(Num));
+  Exit;
+ End;
+ 
+ { Cosinus }
+ If FuncName = 'COS' Then Begin
+  LispEvalTrigOp := LispMakeReal(Cos(Num));
+  Exit;
+ End;
+ 
+ { Tangente }
+ If FuncName = 'TAN' Then Begin
+  If Cos(Num) = 0 Then Begin
+   LispEvalTrigOp := LispMakeError('Tangente non définie');
+   Exit;
+  End;
+  LispEvalTrigOp := LispMakeReal(Sin(Num) / Cos(Num));
+  Exit;
+ End;
+ 
+ { Arc tangente }
+ If FuncName = 'ATAN' Then Begin
+  If Node^.ChildCount >= 3 Then Begin
+   { atan2 avec deux arguments }
+   ArgVal2 := LispEval(Node^.Children[2]);
+   If ArgVal2.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalTrigOp := ArgVal2;
+    Exit;
+   End;
+   Num2 := LispValueToReal(ArgVal2);
+   If Num2 = 0 Then Begin
+    If Num > 0 Then
+     LispEvalTrigOp := LispMakeReal(3.14159265358979 / 2)
+    Else If Num < 0 Then
+     LispEvalTrigOp := LispMakeReal(-3.14159265358979 / 2)
+    Else
+     LispEvalTrigOp := LispMakeReal(0);
+   End Else
+    LispEvalTrigOp := LispMakeReal(ArcTan(Num / Num2));
+  End Else
+   LispEvalTrigOp := LispMakeReal(ArcTan(Num));
+  Exit;
+ End;
+ 
+ { Racine carrée }
+ If FuncName = 'SQRT' Then Begin
+  If Num < 0 Then Begin
+   LispEvalTrigOp := LispMakeError('Racine carrée d''un nombre négatif');
+   Exit;
+  End;
+  LispEvalTrigOp := LispMakeReal(Sqrt(Num));
+  Exit;
+ End;
+ 
+ { Puissance }
+ If FuncName = 'EXPT' Then Begin
+  If Node^.ChildCount < 3 Then Begin
+   LispEvalTrigOp := LispMakeError('expt requiert 2 arguments');
+   Exit;
+  End;
+  ArgVal2 := LispEval(Node^.Children[2]);
+  If ArgVal2.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalTrigOp := ArgVal2;
+   Exit;
+  End;
+  Num2 := LispValueToReal(ArgVal2);
+  If (Num = 0) and (Num2 < 0) Then Begin
+   LispEvalTrigOp := LispMakeError('Division par zéro dans expt');
+   Exit;
+  End;
+  If (Num < 0) and (Frac(Num2) <> 0) Then Begin
+   LispEvalTrigOp := LispMakeError('Puissance fractionnaire d''un nombre négatif');
+   Exit;
+  End;
+  LispEvalTrigOp := LispMakeReal(Exp(Num2 * Ln(Abs(Num))));
+  If (Num < 0) and (Round(Num2) mod 2 = 1) Then
+   LispEvalTrigOp.RealValue := -LispEvalTrigOp.RealValue;
+  Exit;
+ End;
+ 
+ { Exponentielle (e^x) }
+ If FuncName = 'EXP' Then Begin
+  LispEvalTrigOp := LispMakeReal(Exp(Num));
+  Exit;
+ End;
+ 
+ { Logarithme naturel }
+ If (FuncName = 'LOG') or (FuncName = 'LN') Then Begin
+  If Num <= 0 Then Begin
+   LispEvalTrigOp := LispMakeError('Logarithme d''un nombre non-positif');
+   Exit;
+  End;
+  LispEvalTrigOp := LispMakeReal(Ln(Num));
+  Exit;
+ End;
+ 
+ { Logarithme base 10 }
+ If FuncName = 'LOG10' Then Begin
+  If Num <= 0 Then Begin
+   LispEvalTrigOp := LispMakeError('Logarithme d''un nombre non-positif');
+   Exit;
+  End;
+  LispEvalTrigOp := LispMakeReal(Ln(Num) / Ln(10));
+  Exit;
+ End;
+ 
+ { Conversion degrés -> radians }
+ If (FuncName = 'DTR') or (FuncName = 'DTOR') Then Begin
+  LispEvalTrigOp := LispMakeReal(Num * 3.14159265358979 / 180);
+  Exit;
+ End;
+ 
+ { Conversion radians -> degrés }
+ If (FuncName = 'RTD') or (FuncName = 'RTOD') Then Begin
+  LispEvalTrigOp := LispMakeReal(Num * 180 / 3.14159265358979);
+  Exit;
+ End;
+ 
+ { Arrondi }
+ If FuncName = 'FIX' Then Begin
+  LispEvalTrigOp := LispMakeInt(Trunc(Num));
+  Exit;
+ End;
+ 
+ { Partie décimale * partie entière pour obtenir un entier }
+ If FuncName = 'FLOAT' Then Begin
+  LispEvalTrigOp := LispMakeReal(Num);
+  Exit;
+ End;
+ 
+ LispEvalTrigOp := LispMakeError('Fonction trigonométrique inconnue: ' + FuncName);
+End;
+
+{ Évaluer une opération de comparaison (<, >, <=, >=, =, /=, eq, equal) }
+Function LispEvalCompareOp(Const FuncName: String; Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ ArgVal1, ArgVal2: TLispValue;
+ Num1, Num2: Real;
+ AllTrue: Boolean;
+Begin
+ If Node^.ChildCount < 3 Then Begin
+  LispEvalCompareOp := LispMakeError(FuncName + ' requiert au moins 2 arguments');
+  Exit;
+ End;
+ 
+ ArgVal1 := LispEval(Node^.Children[1]);
+ If ArgVal1.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalCompareOp := ArgVal1;
+  Exit;
+ End;
+ 
+ AllTrue := True;
+ 
+ For I := 2 to Node^.ChildCount - 1 do Begin
+  ArgVal2 := LispEval(Node^.Children[I]);
+  If ArgVal2.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalCompareOp := ArgVal2;
+   Exit;
+  End;
+  
+  Num1 := LispValueToReal(ArgVal1);
+  Num2 := LispValueToReal(ArgVal2);
+  
+  { Inférieur }
+  If FuncName = '<' Then Begin
+   If Not (Num1 < Num2) Then AllTrue := False;
+  End
+  { Supérieur }
+  Else If FuncName = '>' Then Begin
+   If Not (Num1 > Num2) Then AllTrue := False;
+  End
+  { Inférieur ou égal }
+  Else If FuncName = '<=' Then Begin
+   If Not (Num1 <= Num2) Then AllTrue := False;
+  End
+  { Supérieur ou égal }
+  Else If FuncName = '>=' Then Begin
+   If Not (Num1 >= Num2) Then AllTrue := False;
+  End
+  { Égalité numérique }
+  Else If FuncName = '=' Then Begin
+   If Not (Num1 = Num2) Then AllTrue := False;
+  End
+  { Non-égalité }
+  Else If FuncName = '/=' Then Begin
+   If Not (Num1 <> Num2) Then AllTrue := False;
+  End
+  { Égalité de référence (eq) - simplifiée pour les nombres }
+  Else If FuncName = 'EQ' Then Begin
+   If (ArgVal1.ValueType <> ArgVal2.ValueType) or (Num1 <> Num2) Then
+    AllTrue := False;
+  End
+  { Égalité structurelle (equal) - simplifiée }
+  Else If FuncName = 'EQUAL' Then Begin
+   If (ArgVal1.ValueType <> ArgVal2.ValueType) Then
+    AllTrue := False
+   Else If (ArgVal1.ValueType = LISP_VAL_STRING) and 
+           (ArgVal1.StrValue <> ArgVal2.StrValue) Then
+    AllTrue := False
+   Else If Num1 <> Num2 Then
+    AllTrue := False;
+  End
+  Else Begin
+   LispEvalCompareOp := LispMakeError('Opérateur de comparaison inconnu: ' + FuncName);
+   Exit;
+  End;
+  
+  { Préparer pour la prochaine comparaison }
+  ArgVal1 := ArgVal2;
+ End;
+ 
+ If AllTrue Then
+  LispEvalCompareOp := LispMakeT
+ Else
+  LispEvalCompareOp := LispMakeNil;
+End;
+
+{ Évaluer une liste (appel de fonction) }
+Function LispEvalList(Node: PLispNode): TLispValue;
+Var
+ FuncNode: PLispNode;
+ FuncName: String;
+ I: Integer;
+ ArgVal: TLispValue;
+Begin
+ If (Node = Nil) or (Node^.ChildCount = 0) Then Begin
+  LispEvalList := LispMakeNil;
+  Exit;
+ End;
+ 
+ { Obtenir le nom de la fonction }
+ FuncNode := Node^.Children[0];
+ If FuncNode = Nil Then Begin
+  LispEvalList := LispMakeError('Nom de fonction manquant');
+  Exit;
+ End;
+ 
+ If FuncNode^.NodeType <> LISP_NODE_SYMBOL Then Begin
+  LispEvalList := LispMakeError('Le premier élément doit être un symbole');
+  Exit;
+ End;
+ 
+ FuncName := FuncNode^.StrValue;
+ { Convertir en majuscules }
+ For I := 1 to Length(FuncName) do
+  If (FuncName[I] >= 'a') and (FuncName[I] <= 'z') Then
+   FuncName[I] := Chr(Ord(FuncName[I]) - 32);
+ 
+ { Opérations mathématiques de base }
+ If (FuncName = '+') or (FuncName = '-') or (FuncName = '*') or (FuncName = '/') or
+    (FuncName = 'ABS') or (FuncName = 'REM') or (FuncName = 'MOD') or
+    (FuncName = 'MIN') or (FuncName = 'MAX') or (FuncName = '1+') or (FuncName = '1-') Then Begin
+  LispEvalList := LispEvalMathOp(FuncName, Node);
+  Exit;
+ End;
+ 
+ { Fonctions trigonométriques et mathématiques avancées }
+ If (FuncName = 'SIN') or (FuncName = 'COS') or (FuncName = 'TAN') or
+    (FuncName = 'ATAN') or (FuncName = 'SQRT') or (FuncName = 'EXPT') or
+    (FuncName = 'EXP') or (FuncName = 'LOG') or (FuncName = 'LN') or
+    (FuncName = 'LOG10') or (FuncName = 'DTR') or (FuncName = 'DTOR') or
+    (FuncName = 'RTD') or (FuncName = 'RTOD') or (FuncName = 'FIX') or
+    (FuncName = 'FLOAT') Then Begin
+  LispEvalList := LispEvalTrigOp(FuncName, Node);
+  Exit;
+ End;
+ 
+ { Opérations de comparaison }
+ If (FuncName = '<') or (FuncName = '>') or (FuncName = '<=') or (FuncName = '>=') or
+    (FuncName = '=') or (FuncName = '/=') or (FuncName = 'EQ') or (FuncName = 'EQUAL') Then Begin
+  LispEvalList := LispEvalCompareOp(FuncName, Node);
+  Exit;
+ End;
+ 
+ { Opérations logiques }
+ If FuncName = 'NOT' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalList := LispMakeError('not requiert un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalList := ArgVal;
+   Exit;
+  End;
+  If LispValueIsTrue(ArgVal) Then
+   LispEvalList := LispMakeNil
+  Else
+   LispEvalList := LispMakeT;
+  Exit;
+ End;
+ 
+ If FuncName = 'AND' Then Begin
+  For I := 1 to Node^.ChildCount - 1 do Begin
+   ArgVal := LispEval(Node^.Children[I]);
+   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalList := ArgVal;
+    Exit;
+   End;
+   If Not LispValueIsTrue(ArgVal) Then Begin
+    LispEvalList := LispMakeNil;
+    Exit;
+   End;
+  End;
+  LispEvalList := ArgVal;  { Retourner la dernière valeur si toutes vraies }
+  Exit;
+ End;
+ 
+ If FuncName = 'OR' Then Begin
+  For I := 1 to Node^.ChildCount - 1 do Begin
+   ArgVal := LispEval(Node^.Children[I]);
+   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+    LispEvalList := ArgVal;
+    Exit;
+   End;
+   If LispValueIsTrue(ArgVal) Then Begin
+    LispEvalList := ArgVal;  { Retourner la première valeur vraie }
+    Exit;
+   End;
+  End;
+  LispEvalList := LispMakeNil;
+  Exit;
+ End;
+ 
+ { NULL - test si nil }
+ If FuncName = 'NULL' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalList := LispMakeError('null requiert un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalList := ArgVal;
+   Exit;
+  End;
+  If ArgVal.ValueType = LISP_VAL_NIL Then
+   LispEvalList := LispMakeT
+  Else
+   LispEvalList := LispMakeNil;
+  Exit;
+ End;
+ 
+ { ATOM - test si atome (non-liste) }
+ If FuncName = 'ATOM' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalList := LispMakeError('atom requiert un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalList := ArgVal;
+   Exit;
+  End;
+  If ArgVal.ValueType <> LISP_VAL_LIST Then
+   LispEvalList := LispMakeT
+  Else
+   LispEvalList := LispMakeNil;
+  Exit;
+ End;
+ 
+ { NUMBERP - test si nombre }
+ If FuncName = 'NUMBERP' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalList := LispMakeError('numberp requiert un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalList := ArgVal;
+   Exit;
+  End;
+  If (ArgVal.ValueType = LISP_VAL_INTEGER) or (ArgVal.ValueType = LISP_VAL_REAL) Then
+   LispEvalList := LispMakeT
+  Else
+   LispEvalList := LispMakeNil;
+  Exit;
+ End;
+ 
+ { ZEROP - test si zéro }
+ If FuncName = 'ZEROP' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalList := LispMakeError('zerop requiert un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalList := ArgVal;
+   Exit;
+  End;
+  If LispValueToReal(ArgVal) = 0 Then
+   LispEvalList := LispMakeT
+  Else
+   LispEvalList := LispMakeNil;
+  Exit;
+ End;
+ 
+ { MINUSP - test si négatif }
+ If FuncName = 'MINUSP' Then Begin
+  If Node^.ChildCount < 2 Then Begin
+   LispEvalList := LispMakeError('minusp requiert un argument');
+   Exit;
+  End;
+  ArgVal := LispEval(Node^.Children[1]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalList := ArgVal;
+   Exit;
+  End;
+  If LispValueToReal(ArgVal) < 0 Then
+   LispEvalList := LispMakeT
+  Else
+   LispEvalList := LispMakeNil;
+  Exit;
+ End;
+ 
+ { Fonction inconnue }
+ LispEvalList := LispMakeError('Fonction inconnue: ' + FuncName);
+End;
+
+{ Évaluer une expression LISP }
+Function LispEval(Node: PLispNode): TLispValue;
+Begin
+ { Vérifier la profondeur de pile }
+ Inc(LispEvaluator.StackDepth);
+ If LispEvaluator.StackDepth > MAX_LISP_STACK Then Begin
+  LispEval := LispMakeError('Débordement de pile');
+  Dec(LispEvaluator.StackDepth);
+  Exit;
+ End;
+ 
+ If Node = Nil Then Begin
+  LispEval := LispMakeNil;
+  Dec(LispEvaluator.StackDepth);
+  Exit;
+ End;
+ 
+ Case Node^.NodeType of
+  LISP_NODE_INTEGER,
+  LISP_NODE_REAL,
+  LISP_NODE_STRING,
+  LISP_NODE_SYMBOL,
+  LISP_NODE_NIL,
+  LISP_NODE_T: Begin
+   LispEval := LispEvalAtom(Node);
+  End;
+  
+  LISP_NODE_LIST: Begin
+   LispEval := LispEvalList(Node);
+  End;
+  
+  LISP_NODE_QUOTE: Begin
+   { Une expression quotée n'est pas évaluée }
+   LispEval.ValueType := LISP_VAL_LIST;
+   LispEval.IntValue := 0;
+   LispEval.RealValue := 0.0;
+   LispEval.StrValue := '';
+   If Node^.ChildCount > 0 Then
+    LispEval.ListNode := Node^.Children[0]
+   Else
+    LispEval.ListNode := Nil;
+  End;
+  
+  Else Begin
+   LispEval := LispMakeError('Type de noeud inconnu');
+  End;
+ End;
+ 
+ Dec(LispEvaluator.StackDepth);
+End;
+
+{ Parser et évaluer une expression LISP complète }
+Function LispEvaluate(Const S: String): TLispValue;
+Var
+ Node: PLispNode;
+Begin
+ { Réinitialiser l'état d'erreur }
+ LispEvaluator.HasError := False;
+ LispEvaluator.ErrorMessage := '';
+ LispEvaluator.StackDepth := 0;
+ 
+ { Parser l'expression }
+ Node := LispParse(S);
+ 
+ { Vérifier les erreurs de parsing }
+ If LispParser.HasError Then Begin
+  LispEvaluate := LispMakeError(LispParser.ErrorMessage);
+  Exit;
+ End;
+ 
+ If Node = Nil Then Begin
+  LispEvaluate := LispMakeNil;
+  Exit;
+ End;
+ 
+ { Évaluer l'expression }
+ LispEvaluator.LastResult := LispEval(Node);
+ LispEvaluate := LispEvaluator.LastResult;
+End;
+
+{ Afficher une valeur LISP }
+Procedure LispPrintValue(Const V: TLispValue);
+Begin
+ WriteLn(LispValueToString(V));
+End;
+
 { Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair, TODO 9: Sélection, TODO 10: Grips }
 Procedure DrawCanvas;
 Var
@@ -4413,6 +5519,7 @@ Begin
  InitGripSystem;         { TODO 10: Initialiser le système de grips }
  InitLispTokenizer;      { TODO 11: Initialiser le tokenizer AutoLISP }
  InitLispParser;         { TODO 12: Initialiser le parseur AutoLISP }
+ InitLispEvaluator;      { TODO 13: Initialiser l'évaluateur AutoLISP }
 End;
 
 { Dessiner le menu contextuel }

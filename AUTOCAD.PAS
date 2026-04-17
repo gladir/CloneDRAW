@@ -32,7 +32,7 @@
   === MODIFICATION DES OBJETS ET PROPRIÉTÉS ===
   16. [DONE] Créer le panneau de propriétés pour modifier couleur, calque, type de ligne, épaisseur
   17. [DONE] Implémenter la modification géométrique des objets (déplacer sommets, changer rayon, etc.)
-  18. Ajouter le système de calques (layers) avec visibilité, verrouillage, couleur et type de ligne
+  18. [DONE] Ajouter le système de calques (layers) avec visibilité, verrouillage, couleur et type de ligne
   19. Créer les outils de cotation : linéaire, alignée, angulaire, radiale, diamètre, ordonnée
   20. Implémenter les blocs et références externes (XREFs) avec insertion et édition
 
@@ -698,6 +698,25 @@ Function ColorName(Color: Integer): String; Forward;
 Function LineTypeName(LT: Byte): String; Forward;
 Function ObjTypeName(OT: Byte): String; Forward;
 Procedure TogglePropertiesPanel; Forward;
+
+{ Forward declarations - TODO 18 - Système de calques }
+Function AddLayer(Const LayerName: String): Integer; Forward;
+Function DeleteLayer(LayerIdx: Integer): Boolean; Forward;
+Function FindLayerByName(Const LayerName: String): Integer; Forward;
+Procedure SetLayerColor(LayerIdx: Integer; NewColor: Integer); Forward;
+Procedure SetLayerLineType(LayerIdx: Integer; NewLineType: Byte); Forward;
+Procedure SetLayerLineWeight(LayerIdx: Integer; NewLineWeight: Integer); Forward;
+Procedure ToggleLayerVisibility(LayerIdx: Integer); Forward;
+Procedure ToggleLayerLocked(LayerIdx: Integer); Forward;
+Procedure ToggleLayerFrozen(LayerIdx: Integer); Forward;
+Procedure ToggleLayerOn(LayerIdx: Integer); Forward;
+Function IsObjectOnVisibleLayer(ObjIdx: Integer): Boolean; Forward;
+Function IsObjectOnLockedLayer(ObjIdx: Integer): Boolean; Forward;
+Procedure SetCurrentLayer(LayerIdx: Integer); Forward;
+Procedure MoveObjectToLayer(ObjIdx: Integer; LayerIdx: Integer); Forward;
+Procedure MoveSelectedObjectsToLayer(LayerIdx: Integer); Forward;
+Function GetObjectEffectiveColor(ObjIdx: Integer): Integer; Forward;
+Function GetObjectEffectiveLineType(ObjIdx: Integer): Byte; Forward;
 
 { Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
 Procedure InitLispTokenizer; Forward;
@@ -2477,6 +2496,10 @@ Begin
  For I := ObjectCount - 1 downto 0 do Begin
   If Not DrawObjects[I].Visible Then Continue;
   If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  { TODO 18: Vérifier la visibilité du calque }
+  If Not IsObjectOnVisibleLayer(I) Then Continue;
+  { TODO 18: Ne pas sélectionner les objets sur calques verrouillés }
+  If IsObjectOnLockedLayer(I) Then Continue;
   
   Case DrawObjects[I].ObjType of
    OBJ_LINE: Begin
@@ -2543,6 +2566,10 @@ Begin
  For I := 0 to ObjectCount - 1 do Begin
   If Not DrawObjects[I].Visible Then Continue;
   If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  { TODO 18: Vérifier la visibilité du calque }
+  If Not IsObjectOnVisibleLayer(I) Then Continue;
+  { TODO 18: Ne pas sélectionner les objets sur calques verrouillés }
+  If IsObjectOnLockedLayer(I) Then Continue;
   
   If Crossing Then Begin
    { Fenêtre croisée: sélectionner les objets qui touchent le rectangle }
@@ -2656,12 +2683,14 @@ Begin
  For I := 0 to ObjectCount - 1 do Begin
   If Not DrawObjects[I].Visible Then Continue;
   If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  { TODO 18: Vérifier la visibilité du calque }
+  If Not IsObjectOnVisibleLayer(I) Then Continue;
   
-  { Déterminer la couleur }
+  { Déterminer la couleur (TODO 18: support ByLayer) }
   If DrawObjects[I].Selected Then
    ObjColor := White  { Couleur de surbrillance }
   Else
-   ObjColor := DrawObjects[I].Color;
+   ObjColor := GetObjectEffectiveColor(I);
   
   SetColor(ObjColor);
   
@@ -7813,6 +7842,264 @@ Begin
  CurrentColor := 256;  { ByLayer }
  CurrentLineType := LINETYPE_CONTINUOUS;
  CurrentLineWeight := LINEWEIGHT_DEFAULT;
+End;
+
+{ ============================================================================ }
+{ Fonctions de gestion des calques - TODO 18                                   }
+{ ============================================================================ }
+
+{ Trouver un calque par son nom }
+Function FindLayerByName(Const LayerName: String): Integer;
+Var
+ I: Integer;
+ UpperName: String;
+Begin
+ FindLayerByName := -1;
+ UpperName := LayerName;
+ For I := 1 to Length(UpperName) do
+  If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
+   UpperName[I] := Chr(Ord(UpperName[I]) - 32);
+ 
+ For I := 0 to LayerCount - 1 do Begin
+  If Layers[I].Name = LayerName Then Begin
+   FindLayerByName := I;
+   Exit;
+  End;
+ End;
+End;
+
+{ Ajouter un nouveau calque }
+Function AddLayer(Const LayerName: String): Integer;
+Var
+ I: Integer;
+Begin
+ AddLayer := -1;
+ 
+ { Vérifier si le calque existe déjà }
+ If FindLayerByName(LayerName) >= 0 Then Exit;
+ 
+ { Vérifier s'il y a de la place }
+ If LayerCount >= MAX_LAYERS Then Exit;
+ 
+ { Ajouter le nouveau calque }
+ I := LayerCount;
+ Inc(LayerCount);
+ 
+ Layers[I].Name := LayerName;
+ Layers[I].Color := White;
+ Layers[I].LineType := LINETYPE_CONTINUOUS;
+ Layers[I].LineWeight := LINEWEIGHT_DEFAULT;
+ Layers[I].Visible := True;
+ Layers[I].Locked := False;
+ Layers[I].Frozen := False;
+ Layers[I].OnFlag := True;
+ 
+ AddLayer := I;
+End;
+
+{ Supprimer un calque (ne peut pas supprimer le calque 0) }
+Function DeleteLayer(LayerIdx: Integer): Boolean;
+Var
+ I, J: Integer;
+ HasObjects: Boolean;
+Begin
+ DeleteLayer := False;
+ 
+ { Impossible de supprimer le calque 0 }
+ If LayerIdx = 0 Then Exit;
+ 
+ { Vérifier les limites }
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ 
+ { Vérifier si des objets utilisent ce calque }
+ HasObjects := False;
+ For I := 0 to ObjectCount - 1 do Begin
+  If DrawObjects[I].LayerIndex = LayerIdx Then Begin
+   HasObjects := True;
+   Break;
+  End;
+ End;
+ 
+ { Ne pas supprimer si des objets sont sur ce calque }
+ If HasObjects Then Exit;
+ 
+ { Décaler tous les calques suivants }
+ For I := LayerIdx to LayerCount - 2 do
+  Layers[I] := Layers[I + 1];
+ 
+ Dec(LayerCount);
+ 
+ { Mettre à jour les références des objets }
+ For I := 0 to ObjectCount - 1 do Begin
+  If DrawObjects[I].LayerIndex > LayerIdx Then
+   Dec(DrawObjects[I].LayerIndex);
+ End;
+ 
+ { Ajuster le calque courant si nécessaire }
+ If CurrentLayer >= LayerCount Then
+  CurrentLayer := LayerCount - 1;
+ If CurrentLayer > LayerIdx Then
+  Dec(CurrentLayer);
+ 
+ DeleteLayer := True;
+End;
+
+{ Définir la couleur d'un calque }
+Procedure SetLayerColor(LayerIdx: Integer; NewColor: Integer);
+Begin
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ Layers[LayerIdx].Color := NewColor;
+End;
+
+{ Définir le type de ligne d'un calque }
+Procedure SetLayerLineType(LayerIdx: Integer; NewLineType: Byte);
+Begin
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ Layers[LayerIdx].LineType := NewLineType;
+End;
+
+{ Définir l'épaisseur de ligne d'un calque }
+Procedure SetLayerLineWeight(LayerIdx: Integer; NewLineWeight: Integer);
+Begin
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ Layers[LayerIdx].LineWeight := NewLineWeight;
+End;
+
+{ Activer/Désactiver la visibilité d'un calque }
+Procedure ToggleLayerVisibility(LayerIdx: Integer);
+Begin
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ Layers[LayerIdx].Visible := Not Layers[LayerIdx].Visible;
+End;
+
+{ Activer/Désactiver le verrouillage d'un calque }
+Procedure ToggleLayerLocked(LayerIdx: Integer);
+Begin
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ Layers[LayerIdx].Locked := Not Layers[LayerIdx].Locked;
+End;
+
+{ Activer/Désactiver le gel d'un calque }
+Procedure ToggleLayerFrozen(LayerIdx: Integer);
+Begin
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ { Impossible de geler le calque courant }
+ If LayerIdx = CurrentLayer Then Exit;
+ Layers[LayerIdx].Frozen := Not Layers[LayerIdx].Frozen;
+End;
+
+{ Allumer/Éteindre un calque }
+Procedure ToggleLayerOn(LayerIdx: Integer);
+Begin
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ Layers[LayerIdx].OnFlag := Not Layers[LayerIdx].OnFlag;
+End;
+
+{ Vérifier si un objet est sur un calque visible }
+Function IsObjectOnVisibleLayer(ObjIdx: Integer): Boolean;
+Var
+ LayerIdx: Integer;
+Begin
+ IsObjectOnVisibleLayer := True;
+ 
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ 
+ LayerIdx := DrawObjects[ObjIdx].LayerIndex;
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ 
+ { Un calque n'est pas visible si: pas visible OU éteint OU gelé }
+ IsObjectOnVisibleLayer := Layers[LayerIdx].Visible and
+                           Layers[LayerIdx].OnFlag and
+                           (Not Layers[LayerIdx].Frozen);
+End;
+
+{ Vérifier si un objet est sur un calque verrouillé }
+Function IsObjectOnLockedLayer(ObjIdx: Integer): Boolean;
+Var
+ LayerIdx: Integer;
+Begin
+ IsObjectOnLockedLayer := False;
+ 
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ 
+ LayerIdx := DrawObjects[ObjIdx].LayerIndex;
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ 
+ IsObjectOnLockedLayer := Layers[LayerIdx].Locked;
+End;
+
+{ Définir le calque courant }
+Procedure SetCurrentLayer(LayerIdx: Integer);
+Begin
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ { Impossible de définir un calque gelé comme courant }
+ If Layers[LayerIdx].Frozen Then Exit;
+ CurrentLayer := LayerIdx;
+End;
+
+{ Déplacer un objet vers un autre calque }
+Procedure MoveObjectToLayer(ObjIdx: Integer; LayerIdx: Integer);
+Begin
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ { Vérifier si l'objet n'est pas sur un calque verrouillé }
+ If IsObjectOnLockedLayer(ObjIdx) Then Exit;
+ DrawObjects[ObjIdx].LayerIndex := LayerIdx;
+End;
+
+{ Déplacer tous les objets sélectionnés vers un calque }
+Procedure MoveSelectedObjectsToLayer(LayerIdx: Integer);
+Var
+ I: Integer;
+Begin
+ If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
+ 
+ For I := 0 to SelectionSet.Count - 1 do Begin
+  If Not IsObjectOnLockedLayer(SelectionSet.Objects[I]) Then
+   DrawObjects[SelectionSet.Objects[I]].LayerIndex := LayerIdx;
+ End;
+End;
+
+{ Obtenir la couleur effective d'un objet (ByLayer ou couleur propre) }
+Function GetObjectEffectiveColor(ObjIdx: Integer): Integer;
+Var
+ LayerIdx: Integer;
+Begin
+ GetObjectEffectiveColor := White;
+ 
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ 
+ { Si la couleur est 256 (ByLayer), utiliser la couleur du calque }
+ If DrawObjects[ObjIdx].Color = 256 Then Begin
+  LayerIdx := DrawObjects[ObjIdx].LayerIndex;
+  If (LayerIdx >= 0) and (LayerIdx < LayerCount) Then
+   GetObjectEffectiveColor := Layers[LayerIdx].Color
+  Else
+   GetObjectEffectiveColor := White;
+ End
+ Else
+  GetObjectEffectiveColor := DrawObjects[ObjIdx].Color;
+End;
+
+{ Obtenir le type de ligne effectif d'un objet (ByLayer ou type propre) }
+Function GetObjectEffectiveLineType(ObjIdx: Integer): Byte;
+Var
+ LayerIdx: Integer;
+Begin
+ GetObjectEffectiveLineType := LINETYPE_CONTINUOUS;
+ 
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ 
+ { Si le type de ligne est ByLayer (256), utiliser celui du calque }
+ If DrawObjects[ObjIdx].LineType = 255 Then Begin
+  LayerIdx := DrawObjects[ObjIdx].LayerIndex;
+  If (LayerIdx >= 0) and (LayerIdx < LayerCount) Then
+   GetObjectEffectiveLineType := Layers[LayerIdx].LineType
+  Else
+   GetObjectEffectiveLineType := LINETYPE_CONTINUOUS;
+ End
+ Else
+  GetObjectEffectiveLineType := DrawObjects[ObjIdx].LineType;
 End;
 
 { Initialiser le panneau de propriétés }

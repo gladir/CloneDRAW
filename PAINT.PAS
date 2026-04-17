@@ -3,6 +3,34 @@
   @website(https://www.gladir.com/clonedraw)
   @abstract(Target: Turbo Pascal 7, Free Pascal 3.2)
   @description(Clone complet de Microsoft Paint en Turbo Pascal/Free Pascal)
+
+  TODO Liste des 25 points à implémenter:
+  ----------------------------------------
+  TODO 1: Créer la structure du programme avec directives {$IFDEF FPC} pour Turbo Pascal et Free Pascal
+  TODO 2: Implémenter l'initialisation du mode graphique (VGA 640x480)
+  TODO 3: Dessiner la barre de menu (Fichier, Edition, Affichage, Image, Couleurs, Aide)
+  TODO 4: Dessiner la barre d'outils à gauche avec les 16 icônes d'outils
+  TODO 5: Dessiner la palette de couleurs en bas de l'écran
+  TODO 6: Implémenter la zone de dessin principale (canvas)
+  TODO 7: Implémenter la gestion de la souris (clic, déplacement, relâchement)
+  TODO 8: Implémenter l'outil Crayon (TOOL_PENCIL) - dessin pixel par pixel
+  TODO 9: Implémenter l'outil Pinceau (TOOL_BRUSH) - dessin avec différentes formes
+  TODO 10: Implémenter l'outil Gomme (TOOL_ERASER) - effacement avec couleur de fond
+  TODO 11: Implémenter l'outil Ligne (TOOL_LINE) - tracé de lignes droites
+  TODO 12: Implémenter l'outil Rectangle (TOOL_RECT) - rectangles pleins ou vides
+  TODO 13: Implémenter l'outil Ellipse (TOOL_ELLIPSE) - cercles et ellipses
+  TODO 14: Implémenter l'outil Rectangle arrondi (TOOL_ROUNDRECT)
+  TODO 15: Implémenter l'outil Polygone (TOOL_POLYGON) - formes à plusieurs côtés
+  TODO 16: Implémenter l'outil Remplissage (TOOL_FILL) - algorithme flood fill
+  TODO 17: Implémenter l'outil Pipette (TOOL_PICKER) - sélection de couleur
+  TODO 18: Implémenter l'outil Texte (TOOL_TEXT) - insertion de texte
+  TODO 19: Implémenter l'outil Aérographe (TOOL_AIRBRUSH) - spray de points
+  TODO 20: Implémenter l'outil Courbe (TOOL_CURVE) - courbes de Bézier
+  TODO 21: Implémenter l'outil Loupe (TOOL_MAGNIFY) - zoom sur l'image
+  TODO 22: Implémenter l'outil Sélection (TOOL_SELECT) - sélection rectangulaire
+  TODO 23: Implémenter sauvegarde/chargement fichiers BMP
+  TODO 24: Implémenter le menu Fichier (Nouveau, Ouvrir, Enregistrer, Quitter)
+  TODO 25: Implémenter Annuler/Rétablir (Undo/Redo) avec buffer mémoire
 }
 
 Program Paint;

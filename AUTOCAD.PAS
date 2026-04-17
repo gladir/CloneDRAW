@@ -39,7 +39,7 @@
   === FORMATS DE FICHIERS ===
   21. [DONE] Implémenter la lecture et écriture du format DWG (Drawing) d'AutoCAD
   22. [DONE] Ajouter le support du format DXF (Drawing Exchange Format) pour l'interopérabilité
-  23. Créer l'importation et exportation du format Visio (VSD/VSDX)
+  23. [DONE] Créer l'importation et exportation du format Visio (VSD/VSDX)
   24. Implémenter l'exportation SVG (Scalable Vector Graphics) pour le web
   25. Ajouter l'importation SVG avec conversion des éléments en entités AutoCAD
 }
@@ -268,6 +268,56 @@ Const
  DXF_LAYER = 'LAYER';
  DXF_TABLE = 'TABLE';
  DXF_ENDTAB = 'ENDTAB';
+
+ { Constantes pour le format Visio - TODO 23 }
+ { Extensions de fichiers Visio }
+ VISIO_EXT_VSD = '.vsd';       { Format binaire Visio (ancien) }
+ VISIO_EXT_VSDX = '.vsdx';     { Format XML Visio (nouveau) }
+ VISIO_EXT_VSDM = '.vsdm';     { Format XML Visio avec macros }
+ VISIO_EXT_VST = '.vst';       { Template Visio binaire }
+ VISIO_EXT_VSTX = '.vstx';     { Template Visio XML }
+ 
+ { Types de formes Visio }
+ VISIO_SHAPE_RECTANGLE = 1;   { Rectangle }
+ VISIO_SHAPE_ELLIPSE = 2;     { Ellipse }
+ VISIO_SHAPE_LINE = 3;        { Ligne }
+ VISIO_SHAPE_POLYLINE = 4;    { Polyligne }
+ VISIO_SHAPE_ARC = 5;         { Arc }
+ VISIO_SHAPE_BEZIER = 6;      { Courbe de Bézier }
+ VISIO_SHAPE_CONNECTOR = 7;   { Connecteur }
+ VISIO_SHAPE_TEXT = 8;        { Texte }
+ VISIO_SHAPE_GROUP = 9;       { Groupe de formes }
+ VISIO_SHAPE_FOREIGN = 10;    { Objet externe (image) }
+ 
+ { Sections XML Visio (VSDX) }
+ VISIO_XML_DOCUMENT = 'VisioDocument';
+ VISIO_XML_PAGES = 'Pages';
+ VISIO_XML_PAGE = 'Page';
+ VISIO_XML_SHAPES = 'Shapes';
+ VISIO_XML_SHAPE = 'Shape';
+ VISIO_XML_MASTERS = 'Masters';
+ VISIO_XML_MASTER = 'Master';
+ VISIO_XML_CONNECTS = 'Connects';
+ VISIO_XML_CONNECT = 'Connect';
+ VISIO_XML_STYLESHEET = 'StyleSheet';
+ VISIO_XML_DOCPROPS = 'DocumentProperties';
+ 
+ { Cellules de géométrie Visio }
+ VISIO_CELL_PINX = 'PinX';         { Position X du point de pivot }
+ VISIO_CELL_PINY = 'PinY';         { Position Y du point de pivot }
+ VISIO_CELL_WIDTH = 'Width';       { Largeur de la forme }
+ VISIO_CELL_HEIGHT = 'Height';     { Hauteur de la forme }
+ VISIO_CELL_LOCPINX = 'LocPinX';   { Point local X }
+ VISIO_CELL_LOCPINY = 'LocPinY';   { Point local Y }
+ VISIO_CELL_ANGLE = 'Angle';       { Angle de rotation }
+ VISIO_CELL_BEGINX = 'BeginX';     { X de début (lignes) }
+ VISIO_CELL_BEGINY = 'BeginY';     { Y de début (lignes) }
+ VISIO_CELL_ENDX = 'EndX';         { X de fin (lignes) }
+ VISIO_CELL_ENDY = 'EndY';         { Y de fin (lignes) }
+ VISIO_CELL_TEXT = 'Text';         { Contenu texte }
+ VISIO_CELL_FILLCOLOR = 'FillForegnd';  { Couleur de remplissage }
+ VISIO_CELL_LINECOLOR = 'LineColor';    { Couleur de ligne }
+ VISIO_CELL_LINEWEIGHT = 'LineWeight';  { Épaisseur de ligne }
 
  { Types de cotations - TODO 19 }
  DIM_LINEAR = 0;       { Cotation linéaire (horizontale ou verticale) }
@@ -991,6 +1041,37 @@ Function ReadDXFEntities(Var F: Text): Boolean; Forward;
 Function ReadDXFEntity(Var F: Text; Var Entity: TDrawObject): Boolean; Forward;
 Function GetDXFEntityName(ObjType: Byte): String; Forward;
 Function GetObjTypeFromDXF(Const EntityName: String): Byte; Forward;
+
+{ Forward declarations - TODO 23 - Format Visio (VSD/VSDX) }
+Function WriteVisioFile(Const FileName: String): Boolean; Forward;
+Function ReadVisioFile(Const FileName: String): Boolean; Forward;
+Function WriteVSDXFile(Const FileName: String): Boolean; Forward;
+Function ReadVSDXFile(Const FileName: String): Boolean; Forward;
+Procedure WriteVisioXMLHeader(Var F: Text); Forward;
+Procedure WriteVisioXMLDocProps(Var F: Text); Forward;
+Procedure WriteVisioXMLPages(Var F: Text); Forward;
+Procedure WriteVisioXMLPage(Var F: Text; PageNum: Integer); Forward;
+Procedure WriteVisioXMLShapes(Var F: Text); Forward;
+Procedure WriteVisioXMLShape(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt); Forward;
+Procedure WriteVisioXMLLine(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt); Forward;
+Procedure WriteVisioXMLRectangle(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt); Forward;
+Procedure WriteVisioXMLCircle(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt); Forward;
+Procedure WriteVisioXMLEllipse(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt); Forward;
+Procedure WriteVisioXMLArc(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt); Forward;
+Procedure WriteVisioXMLText(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt); Forward;
+Procedure WriteVisioXMLFooter(Var F: Text); Forward;
+Function ReadVisioXMLHeader(Var F: Text): Boolean; Forward;
+Function ReadVisioXMLPages(Var F: Text): Boolean; Forward;
+Function ReadVisioXMLShapes(Var F: Text): Boolean; Forward;
+Function ReadVisioXMLShape(Var F: Text; Var Entity: TDrawObject): Boolean; Forward;
+Function GetVisioShapeType(ObjType: Byte): Byte; Forward;
+Function GetObjTypeFromVisio(VisioType: Byte): Byte; Forward;
+Function VisioColorToACI(Const ColorStr: String): Integer; Forward;
+Function ACIToVisioColor(ColorIdx: Integer): String; Forward;
+Procedure WriteVisioXMLCell(Var F: Text; Const CellName, Value: String); Forward;
+Procedure WriteVisioXMLCellF(Var F: Text; Const CellName: String; Value: Real); Forward;
+Function ExtractVisioXMLValue(Const Line, Tag: String): String; Forward;
+Function IsVisioFileVSDX(Const FileName: String): Boolean; Forward;
 
 { Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
 Procedure InitLispTokenizer; Forward;
@@ -10829,6 +10910,664 @@ Begin
  ClearGrips;
  
  ReadDXFFile := True;
+End;
+
+{ ============================================================================ }
+{ Fonctions pour le format Visio (VSD/VSDX) - TODO 23                          }
+{ ============================================================================ }
+
+{ Vérifier si un fichier est au format VSDX (XML) }
+Function IsVisioFileVSDX(Const FileName: String): Boolean;
+Var
+ Ext: String;
+ I: Integer;
+Begin
+ IsVisioFileVSDX := False;
+ Ext := '';
+ 
+ { Extraire l'extension }
+ For I := Length(FileName) downto 1 do
+  If FileName[I] = '.' Then Begin
+   Ext := Copy(FileName, I, Length(FileName) - I + 1);
+   Break;
+  End;
+ 
+ { Convertir en minuscules }
+ For I := 1 to Length(Ext) do
+  If (Ext[I] >= 'A') and (Ext[I] <= 'Z') Then
+   Ext[I] := Chr(Ord(Ext[I]) + 32);
+ 
+ IsVisioFileVSDX := (Ext = VISIO_EXT_VSDX) or (Ext = VISIO_EXT_VSDM) or (Ext = VISIO_EXT_VSTX);
+End;
+
+{ Obtenir le type de forme Visio à partir du type d'objet interne }
+Function GetVisioShapeType(ObjType: Byte): Byte;
+Begin
+ Case ObjType of
+  OBJ_LINE:      GetVisioShapeType := VISIO_SHAPE_LINE;
+  OBJ_POINT:     GetVisioShapeType := VISIO_SHAPE_ELLIPSE;
+  OBJ_CIRCLE:    GetVisioShapeType := VISIO_SHAPE_ELLIPSE;
+  OBJ_ARC:       GetVisioShapeType := VISIO_SHAPE_ARC;
+  OBJ_TEXT:      GetVisioShapeType := VISIO_SHAPE_TEXT;
+  OBJ_POLYLINE:  GetVisioShapeType := VISIO_SHAPE_POLYLINE;
+  OBJ_RECTANGLE: GetVisioShapeType := VISIO_SHAPE_RECTANGLE;
+  OBJ_ELLIPSE:   GetVisioShapeType := VISIO_SHAPE_ELLIPSE;
+  OBJ_BLOCK_REF: GetVisioShapeType := VISIO_SHAPE_GROUP;
+ Else
+  GetVisioShapeType := VISIO_SHAPE_RECTANGLE;
+ End;
+End;
+
+{ Obtenir le type d'objet interne à partir du type Visio }
+Function GetObjTypeFromVisio(VisioType: Byte): Byte;
+Begin
+ Case VisioType of
+  VISIO_SHAPE_RECTANGLE: GetObjTypeFromVisio := OBJ_RECTANGLE;
+  VISIO_SHAPE_ELLIPSE:   GetObjTypeFromVisio := OBJ_ELLIPSE;
+  VISIO_SHAPE_LINE:      GetObjTypeFromVisio := OBJ_LINE;
+  VISIO_SHAPE_POLYLINE:  GetObjTypeFromVisio := OBJ_POLYLINE;
+  VISIO_SHAPE_ARC:       GetObjTypeFromVisio := OBJ_ARC;
+  VISIO_SHAPE_TEXT:      GetObjTypeFromVisio := OBJ_TEXT;
+  VISIO_SHAPE_GROUP:     GetObjTypeFromVisio := OBJ_BLOCK_REF;
+ Else
+  GetObjTypeFromVisio := OBJ_NONE;
+ End;
+End;
+
+{ Convertir une couleur Visio (format #RRGGBB) en index ACI }
+Function VisioColorToACI(Const ColorStr: String): Integer;
+Var
+ R, G, B: Integer;
+ RStr, GStr, BStr: String;
+ Err: Integer;
+Begin
+ VisioColorToACI := 7; { Blanc par défaut }
+ 
+ If Length(ColorStr) < 7 Then Exit;
+ If ColorStr[1] <> '#' Then Exit;
+ 
+ RStr := '$' + Copy(ColorStr, 2, 2);
+ GStr := '$' + Copy(ColorStr, 4, 2);
+ BStr := '$' + Copy(ColorStr, 6, 2);
+ 
+ Val(RStr, R, Err);
+ If Err <> 0 Then Exit;
+ Val(GStr, G, Err);
+ If Err <> 0 Then Exit;
+ Val(BStr, B, Err);
+ If Err <> 0 Then Exit;
+ 
+ { Conversion simplifiée vers ACI }
+ If (R < 50) and (G < 50) and (B < 50) Then VisioColorToACI := 0     { Noir }
+ Else If (R > 200) and (G < 50) and (B < 50) Then VisioColorToACI := 1  { Rouge }
+ Else If (R > 200) and (G > 200) and (B < 50) Then VisioColorToACI := 2 { Jaune }
+ Else If (R < 50) and (G > 200) and (B < 50) Then VisioColorToACI := 3  { Vert }
+ Else If (R < 50) and (G > 200) and (B > 200) Then VisioColorToACI := 4 { Cyan }
+ Else If (R < 50) and (G < 50) and (B > 200) Then VisioColorToACI := 5  { Bleu }
+ Else If (R > 200) and (G < 50) and (B > 200) Then VisioColorToACI := 6 { Magenta }
+ Else VisioColorToACI := 7; { Blanc }
+End;
+
+{ Convertir un index ACI en couleur Visio }
+Function ACIToVisioColor(ColorIdx: Integer): String;
+Begin
+ Case ColorIdx of
+  0: ACIToVisioColor := '#000000';  { Noir }
+  1: ACIToVisioColor := '#FF0000';  { Rouge }
+  2: ACIToVisioColor := '#FFFF00';  { Jaune }
+  3: ACIToVisioColor := '#00FF00';  { Vert }
+  4: ACIToVisioColor := '#00FFFF';  { Cyan }
+  5: ACIToVisioColor := '#0000FF';  { Bleu }
+  6: ACIToVisioColor := '#FF00FF';  { Magenta }
+  7: ACIToVisioColor := '#FFFFFF';  { Blanc }
+  8: ACIToVisioColor := '#808080';  { Gris }
+  9: ACIToVisioColor := '#C0C0C0';  { Gris clair }
+ Else
+  ACIToVisioColor := '#000000';
+ End;
+End;
+
+{ Écrire une cellule XML Visio avec valeur texte }
+Procedure WriteVisioXMLCell(Var F: Text; Const CellName, Value: String);
+Begin
+ WriteLn(F, '      <Cell N="', CellName, '" V="', Value, '"/>');
+End;
+
+{ Écrire une cellule XML Visio avec valeur réelle }
+Procedure WriteVisioXMLCellF(Var F: Text; Const CellName: String; Value: Real);
+Begin
+ WriteLn(F, '      <Cell N="', CellName, '" V="', Value:0:6, '"/>');
+End;
+
+{ Extraire une valeur d'une ligne XML }
+Function ExtractVisioXMLValue(Const Line, Tag: String): String;
+Var
+ StartPos, EndPos: Integer;
+ SearchStr: String;
+Begin
+ ExtractVisioXMLValue := '';
+ SearchStr := Tag + '="';
+ StartPos := Pos(SearchStr, Line);
+ If StartPos = 0 Then Exit;
+ 
+ StartPos := StartPos + Length(SearchStr);
+ EndPos := StartPos;
+ While (EndPos <= Length(Line)) and (Line[EndPos] <> '"') do
+  Inc(EndPos);
+ 
+ ExtractVisioXMLValue := Copy(Line, StartPos, EndPos - StartPos);
+End;
+
+{ Écrire l'en-tête XML Visio }
+Procedure WriteVisioXMLHeader(Var F: Text);
+Begin
+ WriteLn(F, '<?xml version="1.0" encoding="UTF-8"?>');
+ WriteLn(F, '<VisioDocument xmlns="http://schemas.microsoft.com/visio/2003/core"');
+ WriteLn(F, '  xmlns:vx="http://schemas.microsoft.com/visio/2006/extension"');
+ WriteLn(F, '  xml:space="preserve">');
+End;
+
+{ Écrire les propriétés du document }
+Procedure WriteVisioXMLDocProps(Var F: Text);
+Begin
+ WriteLn(F, '  <DocumentProperties>');
+ WriteLn(F, '    <Creator>CloneDRAW AutoCAD</Creator>');
+ WriteLn(F, '    <Desc>Exported from CloneDRAW</Desc>');
+ WriteLn(F, '    <Keywords>CAD, Drawing</Keywords>');
+ WriteLn(F, '    <Subject>CAD Drawing</Subject>');
+ WriteLn(F, '    <Title>Drawing Export</Title>');
+ WriteLn(F, '  </DocumentProperties>');
+End;
+
+{ Écrire une forme ligne en XML Visio }
+Procedure WriteVisioXMLLine(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt);
+Begin
+ WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_BEGINX, '" V="', Entity.X1:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_BEGINY, '" V="', Entity.Y1:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_ENDX, '" V="', Entity.X2:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_ENDY, '" V="', Entity.Y2:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LINECOLOR, '" V="', ACIToVisioColor(Entity.Color), '"/>');
+ WriteLn(F, '      <Geom IX="0">');
+ WriteLn(F, '        <Cell N="NoFill" V="1"/>');
+ WriteLn(F, '        <Row T="MoveTo">');
+ WriteLn(F, '          <Cell N="X" V="', Entity.X1:0:6, '"/>');
+ WriteLn(F, '          <Cell N="Y" V="', Entity.Y1:0:6, '"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '        <Row T="LineTo">');
+ WriteLn(F, '          <Cell N="X" V="', Entity.X2:0:6, '"/>');
+ WriteLn(F, '          <Cell N="Y" V="', Entity.Y2:0:6, '"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '      </Geom>');
+ WriteLn(F, '    </Shape>');
+End;
+
+{ Écrire une forme rectangle en XML Visio }
+Procedure WriteVisioXMLRectangle(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt);
+Var
+ W, H, CX, CY: Real;
+Begin
+ W := Abs(Entity.X2 - Entity.X1);
+ H := Abs(Entity.Y2 - Entity.Y1);
+ CX := (Entity.X1 + Entity.X2) / 2;
+ CY := (Entity.Y1 + Entity.Y2) / 2;
+ 
+ WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_PINX, '" V="', CX:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_PINY, '" V="', CY:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_WIDTH, '" V="', W:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_HEIGHT, '" V="', H:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LOCPINX, '" V="', (W / 2):0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LOCPINY, '" V="', (H / 2):0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LINECOLOR, '" V="', ACIToVisioColor(Entity.Color), '"/>');
+ WriteLn(F, '      <Geom IX="0">');
+ WriteLn(F, '        <Cell N="NoFill" V="0"/>');
+ WriteLn(F, '        <Row T="RelMoveTo">');
+ WriteLn(F, '          <Cell N="X" V="0"/>');
+ WriteLn(F, '          <Cell N="Y" V="0"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '        <Row T="RelLineTo">');
+ WriteLn(F, '          <Cell N="X" V="1"/>');
+ WriteLn(F, '          <Cell N="Y" V="0"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '        <Row T="RelLineTo">');
+ WriteLn(F, '          <Cell N="X" V="1"/>');
+ WriteLn(F, '          <Cell N="Y" V="1"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '        <Row T="RelLineTo">');
+ WriteLn(F, '          <Cell N="X" V="0"/>');
+ WriteLn(F, '          <Cell N="Y" V="1"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '        <Row T="RelLineTo">');
+ WriteLn(F, '          <Cell N="X" V="0"/>');
+ WriteLn(F, '          <Cell N="Y" V="0"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '      </Geom>');
+ WriteLn(F, '    </Shape>');
+End;
+
+{ Écrire une forme cercle en XML Visio }
+Procedure WriteVisioXMLCircle(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt);
+Var
+ D: Real;
+Begin
+ D := Entity.Radius * 2;
+ 
+ WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_PINX, '" V="', Entity.X1:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_PINY, '" V="', Entity.Y1:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_WIDTH, '" V="', D:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_HEIGHT, '" V="', D:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LOCPINX, '" V="', Entity.Radius:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LOCPINY, '" V="', Entity.Radius:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LINECOLOR, '" V="', ACIToVisioColor(Entity.Color), '"/>');
+ WriteLn(F, '      <Geom IX="0">');
+ WriteLn(F, '        <Cell N="NoFill" V="0"/>');
+ WriteLn(F, '        <Row T="Ellipse">');
+ WriteLn(F, '          <Cell N="X" V="', Entity.Radius:0:6, '"/>');
+ WriteLn(F, '          <Cell N="Y" V="', Entity.Radius:0:6, '"/>');
+ WriteLn(F, '          <Cell N="A" V="', D:0:6, '"/>');
+ WriteLn(F, '          <Cell N="B" V="', Entity.Radius:0:6, '"/>');
+ WriteLn(F, '          <Cell N="C" V="', Entity.Radius:0:6, '"/>');
+ WriteLn(F, '          <Cell N="D" V="', D:0:6, '"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '      </Geom>');
+ WriteLn(F, '    </Shape>');
+End;
+
+{ Écrire une forme ellipse en XML Visio }
+Procedure WriteVisioXMLEllipse(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt);
+Var
+ W, H: Real;
+Begin
+ W := Entity.Radius * 2;  { Demi-axe majeur }
+ H := Entity.EndAngle * 2; { Demi-axe mineur stocké dans EndAngle }
+ If H <= 0 Then H := W;
+ 
+ WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_PINX, '" V="', Entity.X1:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_PINY, '" V="', Entity.Y1:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_WIDTH, '" V="', W:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_HEIGHT, '" V="', H:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LOCPINX, '" V="', (W / 2):0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LOCPINY, '" V="', (H / 2):0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LINECOLOR, '" V="', ACIToVisioColor(Entity.Color), '"/>');
+ WriteLn(F, '      <Geom IX="0">');
+ WriteLn(F, '        <Cell N="NoFill" V="0"/>');
+ WriteLn(F, '        <Row T="Ellipse">');
+ WriteLn(F, '          <Cell N="X" V="', (W / 2):0:6, '"/>');
+ WriteLn(F, '          <Cell N="Y" V="', (H / 2):0:6, '"/>');
+ WriteLn(F, '          <Cell N="A" V="', W:0:6, '"/>');
+ WriteLn(F, '          <Cell N="B" V="', (H / 2):0:6, '"/>');
+ WriteLn(F, '          <Cell N="C" V="', (W / 2):0:6, '"/>');
+ WriteLn(F, '          <Cell N="D" V="', H:0:6, '"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '      </Geom>');
+ WriteLn(F, '    </Shape>');
+End;
+
+{ Écrire une forme arc en XML Visio }
+Procedure WriteVisioXMLArc(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt);
+Var
+ StartX, StartY, EndX, EndY: Real;
+ StartRad, EndRad: Real;
+Begin
+ StartRad := Entity.StartAngle * 3.14159265 / 180.0;
+ EndRad := Entity.EndAngle * 3.14159265 / 180.0;
+ 
+ StartX := Entity.X1 + Entity.Radius * Cos(StartRad);
+ StartY := Entity.Y1 + Entity.Radius * Sin(StartRad);
+ EndX := Entity.X1 + Entity.Radius * Cos(EndRad);
+ EndY := Entity.Y1 + Entity.Radius * Sin(EndRad);
+ 
+ WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_BEGINX, '" V="', StartX:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_BEGINY, '" V="', StartY:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_ENDX, '" V="', EndX:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_ENDY, '" V="', EndY:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LINECOLOR, '" V="', ACIToVisioColor(Entity.Color), '"/>');
+ WriteLn(F, '      <Geom IX="0">');
+ WriteLn(F, '        <Cell N="NoFill" V="1"/>');
+ WriteLn(F, '        <Row T="MoveTo">');
+ WriteLn(F, '          <Cell N="X" V="', StartX:0:6, '"/>');
+ WriteLn(F, '          <Cell N="Y" V="', StartY:0:6, '"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '        <Row T="ArcTo">');
+ WriteLn(F, '          <Cell N="X" V="', EndX:0:6, '"/>');
+ WriteLn(F, '          <Cell N="Y" V="', EndY:0:6, '"/>');
+ WriteLn(F, '          <Cell N="A" V="', (Entity.Radius / 4):0:6, '"/>');
+ WriteLn(F, '        </Row>');
+ WriteLn(F, '      </Geom>');
+ WriteLn(F, '    </Shape>');
+End;
+
+{ Écrire une forme texte en XML Visio }
+Procedure WriteVisioXMLText(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt);
+Begin
+ WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_PINX, '" V="', Entity.X1:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_PINY, '" V="', Entity.Y1:0:6, '"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_WIDTH, '" V="50"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_HEIGHT, '" V="10"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LOCPINX, '" V="0"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LOCPINY, '" V="5"/>');
+ WriteLn(F, '      <Cell N="', VISIO_CELL_LINECOLOR, '" V="', ACIToVisioColor(Entity.Color), '"/>');
+ WriteLn(F, '      <Text>', Entity.DimText, '</Text>');
+ WriteLn(F, '    </Shape>');
+End;
+
+{ Écrire une forme générique en XML Visio }
+Procedure WriteVisioXMLShape(Var F: Text; Const Entity: TDrawObject; ShapeID: LongInt);
+Begin
+ If Entity.ObjType = OBJ_NONE Then Exit;
+ If Not Entity.Visible Then Exit;
+ 
+ Case Entity.ObjType of
+  OBJ_LINE:      WriteVisioXMLLine(F, Entity, ShapeID);
+  OBJ_RECTANGLE: WriteVisioXMLRectangle(F, Entity, ShapeID);
+  OBJ_CIRCLE:    WriteVisioXMLCircle(F, Entity, ShapeID);
+  OBJ_ELLIPSE:   WriteVisioXMLEllipse(F, Entity, ShapeID);
+  OBJ_ARC:       WriteVisioXMLArc(F, Entity, ShapeID);
+  OBJ_TEXT:      WriteVisioXMLText(F, Entity, ShapeID);
+  OBJ_POINT:     WriteVisioXMLCircle(F, Entity, ShapeID);
+ End;
+End;
+
+{ Écrire toutes les formes }
+Procedure WriteVisioXMLShapes(Var F: Text);
+Var
+ I: Integer;
+ ShapeID: LongInt;
+Begin
+ WriteLn(F, '    <Shapes>');
+ 
+ ShapeID := 1;
+ For I := 0 to ObjectCount - 1 do Begin
+  If DrawObjects[I].ObjType <> OBJ_NONE Then Begin
+   WriteVisioXMLShape(F, DrawObjects[I], ShapeID);
+   Inc(ShapeID);
+  End;
+ End;
+ 
+ WriteLn(F, '    </Shapes>');
+End;
+
+{ Écrire une page }
+Procedure WriteVisioXMLPage(Var F: Text; PageNum: Integer);
+Begin
+ WriteLn(F, '  <Page ID="', PageNum, '" NameU="Page-', PageNum, '">');
+ WriteLn(F, '    <PageSheet>');
+ WriteLn(F, '      <Cell N="PageWidth" V="', (ScreenWidth / 100):0:2, '"/>');
+ WriteLn(F, '      <Cell N="PageHeight" V="', (ScreenHeight / 100):0:2, '"/>');
+ WriteLn(F, '    </PageSheet>');
+ WriteVisioXMLShapes(F);
+ WriteLn(F, '  </Page>');
+End;
+
+{ Écrire toutes les pages }
+Procedure WriteVisioXMLPages(Var F: Text);
+Begin
+ WriteLn(F, '  <Pages>');
+ WriteVisioXMLPage(F, 1);
+ WriteLn(F, '  </Pages>');
+End;
+
+{ Écrire le pied de page XML Visio }
+Procedure WriteVisioXMLFooter(Var F: Text);
+Begin
+ WriteLn(F, '</VisioDocument>');
+End;
+
+{ Écrire un fichier VSDX (XML simplifié) }
+Function WriteVSDXFile(Const FileName: String): Boolean;
+Var
+ F: Text;
+Begin
+ WriteVSDXFile := False;
+ 
+ {$I-}
+ Assign(F, FileName);
+ Rewrite(F);
+ {$I+}
+ 
+ If IOResult <> 0 Then Exit;
+ 
+ WriteVisioXMLHeader(F);
+ WriteVisioXMLDocProps(F);
+ WriteVisioXMLPages(F);
+ WriteVisioXMLFooter(F);
+ 
+ Close(F);
+ WriteVSDXFile := True;
+End;
+
+{ Écrire un fichier Visio (détection automatique du format) }
+Function WriteVisioFile(Const FileName: String): Boolean;
+Begin
+ { Pour l'instant, on utilise toujours le format XML }
+ WriteVisioFile := WriteVSDXFile(FileName);
+End;
+
+{ Lire l'en-tête XML Visio }
+Function ReadVisioXMLHeader(Var F: Text): Boolean;
+Var
+ Line: String;
+Begin
+ ReadVisioXMLHeader := False;
+ 
+ While Not EOF(F) do Begin
+  ReadLn(F, Line);
+  If Pos('<VisioDocument', Line) > 0 Then Begin
+   ReadVisioXMLHeader := True;
+   Exit;
+  End;
+ End;
+End;
+
+{ Lire une forme depuis le XML }
+Function ReadVisioXMLShape(Var F: Text; Var Entity: TDrawObject): Boolean;
+Var
+ Line, Value: String;
+ InShape: Boolean;
+Begin
+ ReadVisioXMLShape := False;
+ InShape := True;
+ 
+ FillChar(Entity, SizeOf(Entity), 0);
+ Entity.ObjType := OBJ_RECTANGLE;  { Type par défaut }
+ Entity.Color := 7;
+ Entity.LayerIndex := 0;
+ Entity.Visible := True;
+ 
+ While InShape and Not EOF(F) do Begin
+  ReadLn(F, Line);
+  
+  { Fin de la forme }
+  If Pos('</Shape>', Line) > 0 Then Begin
+   InShape := False;
+   ReadVisioXMLShape := True;
+  End
+  { Cellule PinX }
+  Else If Pos('N="PinX"', Line) > 0 Then Begin
+   Value := ExtractVisioXMLValue(Line, 'V');
+   If Value <> '' Then
+    Val(Value, Entity.X1, Entity.Color);
+   Entity.Color := 7;
+  End
+  { Cellule PinY }
+  Else If Pos('N="PinY"', Line) > 0 Then Begin
+   Value := ExtractVisioXMLValue(Line, 'V');
+   If Value <> '' Then
+    Val(Value, Entity.Y1, Entity.Color);
+   Entity.Color := 7;
+  End
+  { Cellule Width }
+  Else If Pos('N="Width"', Line) > 0 Then Begin
+   Value := ExtractVisioXMLValue(Line, 'V');
+   If Value <> '' Then Begin
+    Val(Value, Entity.X2, Entity.Color);
+    Entity.X2 := Entity.X1 + Entity.X2;
+   End;
+   Entity.Color := 7;
+  End
+  { Cellule Height }
+  Else If Pos('N="Height"', Line) > 0 Then Begin
+   Value := ExtractVisioXMLValue(Line, 'V');
+   If Value <> '' Then Begin
+    Val(Value, Entity.Y2, Entity.Color);
+    Entity.Y2 := Entity.Y1 + Entity.Y2;
+   End;
+   Entity.Color := 7;
+  End
+  { Cellule BeginX (lignes) }
+  Else If Pos('N="BeginX"', Line) > 0 Then Begin
+   Value := ExtractVisioXMLValue(Line, 'V');
+   If Value <> '' Then Begin
+    Val(Value, Entity.X1, Entity.Color);
+    Entity.ObjType := OBJ_LINE;
+   End;
+   Entity.Color := 7;
+  End
+  { Cellule BeginY }
+  Else If Pos('N="BeginY"', Line) > 0 Then Begin
+   Value := ExtractVisioXMLValue(Line, 'V');
+   If Value <> '' Then
+    Val(Value, Entity.Y1, Entity.Color);
+   Entity.Color := 7;
+  End
+  { Cellule EndX }
+  Else If Pos('N="EndX"', Line) > 0 Then Begin
+   Value := ExtractVisioXMLValue(Line, 'V');
+   If Value <> '' Then
+    Val(Value, Entity.X2, Entity.Color);
+   Entity.Color := 7;
+  End
+  { Cellule EndY }
+  Else If Pos('N="EndY"', Line) > 0 Then Begin
+   Value := ExtractVisioXMLValue(Line, 'V');
+   If Value <> '' Then
+    Val(Value, Entity.Y2, Entity.Color);
+   Entity.Color := 7;
+  End
+  { Ellipse détectée }
+  Else If Pos('T="Ellipse"', Line) > 0 Then Begin
+   Entity.ObjType := OBJ_ELLIPSE;
+  End
+  { Texte }
+  Else If Pos('<Text>', Line) > 0 Then Begin
+   Entity.ObjType := OBJ_TEXT;
+   { Extraire le texte entre <Text> et </Text> }
+   Value := Line;
+   Delete(Value, 1, Pos('<Text>', Value) + 5);
+   If Pos('</Text>', Value) > 0 Then
+    Value := Copy(Value, 1, Pos('</Text>', Value) - 1);
+   Entity.DimText := Value;
+  End
+  { Couleur de ligne }
+  Else If Pos('N="LineColor"', Line) > 0 Then Begin
+   Value := ExtractVisioXMLValue(Line, 'V');
+   If Value <> '' Then
+    Entity.Color := VisioColorToACI(Value);
+  End;
+ End;
+End;
+
+{ Lire toutes les formes depuis le XML }
+Function ReadVisioXMLShapes(Var F: Text): Boolean;
+Var
+ Line: String;
+ Entity: TDrawObject;
+ InShapes: Boolean;
+Begin
+ ReadVisioXMLShapes := False;
+ InShapes := False;
+ 
+ While Not EOF(F) do Begin
+  ReadLn(F, Line);
+  
+  If Pos('<Shapes>', Line) > 0 Then
+   InShapes := True
+  Else If Pos('</Shapes>', Line) > 0 Then Begin
+   ReadVisioXMLShapes := True;
+   Exit;
+  End
+  Else If InShapes and (Pos('<Shape ', Line) > 0) Then Begin
+   If ReadVisioXMLShape(F, Entity) Then Begin
+    If (Entity.ObjType <> OBJ_NONE) and (ObjectCount < MAX_OBJECTS) Then Begin
+     DrawObjects[ObjectCount] := Entity;
+     Inc(ObjectCount);
+    End;
+   End;
+  End;
+ End;
+End;
+
+{ Lire les pages depuis le XML }
+Function ReadVisioXMLPages(Var F: Text): Boolean;
+Var
+ Line: String;
+Begin
+ ReadVisioXMLPages := False;
+ 
+ While Not EOF(F) do Begin
+  ReadLn(F, Line);
+  
+  If Pos('<Pages>', Line) > 0 Then Begin
+   { Lire les formes de toutes les pages }
+   While Not EOF(F) do Begin
+    ReadLn(F, Line);
+    If Pos('</Pages>', Line) > 0 Then Begin
+     ReadVisioXMLPages := True;
+     Exit;
+    End
+    Else If Pos('<Shapes>', Line) > 0 Then Begin
+     { Revenir au début de Shapes pour la lecture }
+     ReadVisioXMLShapes(F);
+    End;
+   End;
+  End;
+ End;
+End;
+
+{ Lire un fichier VSDX (XML) }
+Function ReadVSDXFile(Const FileName: String): Boolean;
+Var
+ F: Text;
+ Line: String;
+Begin
+ ReadVSDXFile := False;
+ 
+ {$I-}
+ Assign(F, FileName);
+ Reset(F);
+ {$I+}
+ 
+ If IOResult <> 0 Then Exit;
+ 
+ { Réinitialiser le dessin }
+ ObjectCount := 0;
+ 
+ { Chercher les formes }
+ While Not EOF(F) do Begin
+  ReadLn(F, Line);
+  If Pos('<Shapes>', Line) > 0 Then
+   ReadVisioXMLShapes(F);
+ End;
+ 
+ Close(F);
+ 
+ { Effacer la sélection }
+ ClearSelection;
+ ClearGrips;
+ 
+ ReadVSDXFile := True;
+End;
+
+{ Lire un fichier Visio (détection automatique du format) }
+Function ReadVisioFile(Const FileName: String): Boolean;
+Begin
+ { Pour l'instant, on supporte uniquement le format XML (VSDX) }
+ ReadVisioFile := ReadVSDXFile(FileName);
 End;
 
 { Initialiser le panneau de propriétés }

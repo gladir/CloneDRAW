@@ -38,7 +38,7 @@
 
   === FORMATS DE FICHIERS ===
   21. [DONE] Implémenter la lecture et écriture du format DWG (Drawing) d'AutoCAD
-  22. Ajouter le support du format DXF (Drawing Exchange Format) pour l'interopérabilité
+  22. [DONE] Ajouter le support du format DXF (Drawing Exchange Format) pour l'interopérabilité
   23. Créer l'importation et exportation du format Visio (VSD/VSDX)
   24. Implémenter l'exportation SVG (Scalable Vector Graphics) pour le web
   25. Ajouter l'importation SVG avec conversion des éléments en entités AutoCAD
@@ -211,6 +211,63 @@ Const
  DWG_ENTITY_HATCH = 18;       { Hachures }
  DWG_ENTITY_MTEXT = 19;       { Texte multiligne }
  DWG_ENTITY_LEADER = 20;      { Ligne de repère }
+
+ { Constantes pour le format DXF - TODO 22 }
+ { Codes de groupe DXF principaux }
+ DXF_GROUP_STRING = 0;         { Code de groupe pour chaînes/noms }
+ DXF_GROUP_NAME = 2;           { Nom d'entité }
+ DXF_GROUP_HANDLE = 5;         { Handle de l'entité }
+ DXF_GROUP_LINETYPE = 6;       { Nom du type de ligne }
+ DXF_GROUP_LAYER = 8;          { Nom du calque }
+ DXF_GROUP_X1 = 10;            { Coordonnée X primaire }
+ DXF_GROUP_Y1 = 20;            { Coordonnée Y primaire }
+ DXF_GROUP_Z1 = 30;            { Coordonnée Z primaire }
+ DXF_GROUP_X2 = 11;            { Coordonnée X secondaire }
+ DXF_GROUP_Y2 = 21;            { Coordonnée Y secondaire }
+ DXF_GROUP_Z2 = 31;            { Coordonnée Z secondaire }
+ DXF_GROUP_X3 = 12;            { Coordonnée X tertiaire }
+ DXF_GROUP_Y3 = 22;            { Coordonnée Y tertiaire }
+ DXF_GROUP_RADIUS = 40;        { Rayon }
+ DXF_GROUP_RATIO = 41;         { Ratio (ellipse) }
+ DXF_GROUP_START_ANGLE = 50;   { Angle de départ }
+ DXF_GROUP_END_ANGLE = 51;     { Angle de fin }
+ DXF_GROUP_COLOR = 62;         { Numéro de couleur ACI }
+ DXF_GROUP_LINEWEIGHT = 370;   { Épaisseur de ligne }
+ DXF_GROUP_TEXT = 1;           { Valeur texte }
+ DXF_GROUP_TEXT_HEIGHT = 40;   { Hauteur du texte }
+ DXF_GROUP_TEXT_ROTATION = 50; { Rotation du texte }
+ DXF_GROUP_FLAGS = 70;         { Drapeaux }
+ DXF_GROUP_DIMTYPE = 70;       { Type de cotation }
+ 
+ { Noms des sections DXF }
+ DXF_SECTION = 'SECTION';
+ DXF_ENDSEC = 'ENDSEC';
+ DXF_EOF = 'EOF';
+ DXF_HEADER = 'HEADER';
+ DXF_TABLES = 'TABLES';
+ DXF_BLOCKS = 'BLOCKS';
+ DXF_ENTITIES = 'ENTITIES';
+ DXF_OBJECTS = 'OBJECTS';
+ 
+ { Noms des entités DXF }
+ DXF_LINE = 'LINE';
+ DXF_POINT = 'POINT';
+ DXF_CIRCLE = 'CIRCLE';
+ DXF_ARC = 'ARC';
+ DXF_TEXT = 'TEXT';
+ DXF_MTEXT = 'MTEXT';
+ DXF_POLYLINE = 'POLYLINE';
+ DXF_LWPOLYLINE = 'LWPOLYLINE';
+ DXF_ELLIPSE = 'ELLIPSE';
+ DXF_INSERT = 'INSERT';
+ DXF_DIMENSION = 'DIMENSION';
+ DXF_VERTEX = 'VERTEX';
+ DXF_SEQEND = 'SEQEND';
+ DXF_BLOCK = 'BLOCK';
+ DXF_ENDBLK = 'ENDBLK';
+ DXF_LAYER = 'LAYER';
+ DXF_TABLE = 'TABLE';
+ DXF_ENDTAB = 'ENDTAB';
 
  { Types de cotations - TODO 19 }
  DIM_LINEAR = 0;       { Cotation linéaire (horizontale ou verticale) }
@@ -902,6 +959,38 @@ Function ReadDWGReal(Var F: File): Real; Forward;
 Function ReadDWGString(Var F: File): String; Forward;
 Function GetDWGEntityCode(ObjType: Byte): Byte; Forward;
 Function GetObjTypeFromDWG(DWGCode: Byte): Byte; Forward;
+
+{ Forward declarations - TODO 22 - Format DXF }
+Function WriteDXFFile(Const FileName: String): Boolean; Forward;
+Function ReadDXFFile(Const FileName: String): Boolean; Forward;
+Procedure WriteDXFGroupCode(Var F: Text; Code: Integer); Forward;
+Procedure WriteDXFString(Var F: Text; Code: Integer; Const S: String); Forward;
+Procedure WriteDXFInteger(Var F: Text; Code: Integer; Value: LongInt); Forward;
+Procedure WriteDXFReal(Var F: Text; Code: Integer; Value: Real); Forward;
+Procedure WriteDXFHeader(Var F: Text); Forward;
+Procedure WriteDXFTables(Var F: Text); Forward;
+Procedure WriteDXFLayers(Var F: Text); Forward;
+Procedure WriteDXFBlocks(Var F: Text); Forward;
+Procedure WriteDXFEntities(Var F: Text); Forward;
+Procedure WriteDXFEntity(Var F: Text; Const Entity: TDrawObject; Handle: LongInt); Forward;
+Procedure WriteDXFLine(Var F: Text; Const Entity: TDrawObject; Handle: LongInt); Forward;
+Procedure WriteDXFCircle(Var F: Text; Const Entity: TDrawObject; Handle: LongInt); Forward;
+Procedure WriteDXFArc(Var F: Text; Const Entity: TDrawObject; Handle: LongInt); Forward;
+Procedure WriteDXFPoint(Var F: Text; Const Entity: TDrawObject; Handle: LongInt); Forward;
+Procedure WriteDXFText(Var F: Text; Const Entity: TDrawObject; Handle: LongInt); Forward;
+Procedure WriteDXFEllipse(Var F: Text; Const Entity: TDrawObject; Handle: LongInt); Forward;
+Procedure WriteDXFDimension(Var F: Text; Const Entity: TDrawObject; Handle: LongInt); Forward;
+Function ReadDXFGroupCode(Var F: Text): Integer; Forward;
+Function ReadDXFString(Var F: Text): String; Forward;
+Function ReadDXFInteger(Var F: Text): LongInt; Forward;
+Function ReadDXFReal(Var F: Text): Real; Forward;
+Function ReadDXFHeader(Var F: Text): Boolean; Forward;
+Function ReadDXFTables(Var F: Text): Boolean; Forward;
+Function ReadDXFBlocks(Var F: Text): Boolean; Forward;
+Function ReadDXFEntities(Var F: Text): Boolean; Forward;
+Function ReadDXFEntity(Var F: Text; Var Entity: TDrawObject): Boolean; Forward;
+Function GetDXFEntityName(ObjType: Byte): String; Forward;
+Function GetObjTypeFromDXF(Const EntityName: String): Byte; Forward;
 
 { Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
 Procedure InitLispTokenizer; Forward;
@@ -9964,6 +10053,782 @@ Begin
  ClearGrips;
  
  ReadDWGFile := True;
+End;
+
+{ ============================================================================ }
+{ Fonctions pour le format DXF (Drawing Exchange Format) - TODO 22             }
+{ ============================================================================ }
+
+{ Écrire un code de groupe dans le fichier DXF }
+Procedure WriteDXFGroupCode(Var F: Text; Code: Integer);
+Begin
+ WriteLn(F, Code:3);
+End;
+
+{ Écrire une chaîne avec son code de groupe }
+Procedure WriteDXFString(Var F: Text; Code: Integer; Const S: String);
+Begin
+ WriteLn(F, Code:3);
+ WriteLn(F, S);
+End;
+
+{ Écrire un entier avec son code de groupe }
+Procedure WriteDXFInteger(Var F: Text; Code: Integer; Value: LongInt);
+Begin
+ WriteLn(F, Code:3);
+ WriteLn(F, Value);
+End;
+
+{ Écrire un réel avec son code de groupe }
+Procedure WriteDXFReal(Var F: Text; Code: Integer; Value: Real);
+Begin
+ WriteLn(F, Code:3);
+ WriteLn(F, Value:0:6);
+End;
+
+{ Obtenir le nom d'entité DXF à partir du type d'objet interne }
+Function GetDXFEntityName(ObjType: Byte): String;
+Begin
+ Case ObjType of
+  OBJ_LINE:      GetDXFEntityName := DXF_LINE;
+  OBJ_POINT:     GetDXFEntityName := DXF_POINT;
+  OBJ_CIRCLE:    GetDXFEntityName := DXF_CIRCLE;
+  OBJ_ARC:       GetDXFEntityName := DXF_ARC;
+  OBJ_TEXT:      GetDXFEntityName := DXF_TEXT;
+  OBJ_POLYLINE:  GetDXFEntityName := DXF_POLYLINE;
+  OBJ_RECTANGLE: GetDXFEntityName := DXF_LWPOLYLINE;
+  OBJ_ELLIPSE:   GetDXFEntityName := DXF_ELLIPSE;
+  OBJ_DIMENSION: GetDXFEntityName := DXF_DIMENSION;
+  OBJ_BLOCK_REF: GetDXFEntityName := DXF_INSERT;
+ Else
+  GetDXFEntityName := '';
+ End;
+End;
+
+{ Obtenir le type d'objet interne à partir du nom d'entité DXF }
+Function GetObjTypeFromDXF(Const EntityName: String): Byte;
+Var
+ UpperName: String;
+ I: Integer;
+Begin
+ UpperName := EntityName;
+ For I := 1 to Length(UpperName) do
+  If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
+   UpperName[I] := Chr(Ord(UpperName[I]) - 32);
+ 
+ If UpperName = DXF_LINE Then GetObjTypeFromDXF := OBJ_LINE
+ Else If UpperName = DXF_POINT Then GetObjTypeFromDXF := OBJ_POINT
+ Else If UpperName = DXF_CIRCLE Then GetObjTypeFromDXF := OBJ_CIRCLE
+ Else If UpperName = DXF_ARC Then GetObjTypeFromDXF := OBJ_ARC
+ Else If UpperName = DXF_TEXT Then GetObjTypeFromDXF := OBJ_TEXT
+ Else If UpperName = DXF_MTEXT Then GetObjTypeFromDXF := OBJ_TEXT
+ Else If UpperName = DXF_POLYLINE Then GetObjTypeFromDXF := OBJ_POLYLINE
+ Else If UpperName = DXF_LWPOLYLINE Then GetObjTypeFromDXF := OBJ_RECTANGLE
+ Else If UpperName = DXF_ELLIPSE Then GetObjTypeFromDXF := OBJ_ELLIPSE
+ Else If UpperName = DXF_DIMENSION Then GetObjTypeFromDXF := OBJ_DIMENSION
+ Else If UpperName = DXF_INSERT Then GetObjTypeFromDXF := OBJ_BLOCK_REF
+ Else GetObjTypeFromDXF := OBJ_NONE;
+End;
+
+{ Écrire l'en-tête DXF }
+Procedure WriteDXFHeader(Var F: Text);
+Begin
+ { Section HEADER }
+ WriteDXFString(F, 0, DXF_SECTION);
+ WriteDXFString(F, 2, DXF_HEADER);
+ 
+ { Variable $ACADVER - version AutoCAD }
+ WriteDXFString(F, 9, '$ACADVER');
+ WriteDXFString(F, 1, 'AC1015');
+ 
+ { Variable $INSBASE - point d'insertion de base }
+ WriteDXFString(F, 9, '$INSBASE');
+ WriteDXFReal(F, 10, 0.0);
+ WriteDXFReal(F, 20, 0.0);
+ WriteDXFReal(F, 30, 0.0);
+ 
+ { Variable $EXTMIN - coin inférieur gauche des limites }
+ WriteDXFString(F, 9, '$EXTMIN');
+ WriteDXFReal(F, 10, 0.0);
+ WriteDXFReal(F, 20, 0.0);
+ WriteDXFReal(F, 30, 0.0);
+ 
+ { Variable $EXTMAX - coin supérieur droit des limites }
+ WriteDXFString(F, 9, '$EXTMAX');
+ WriteDXFReal(F, 10, ScreenWidth);
+ WriteDXFReal(F, 20, ScreenHeight);
+ WriteDXFReal(F, 30, 0.0);
+ 
+ { Variable $LIMMIN - limites du dessin min }
+ WriteDXFString(F, 9, '$LIMMIN');
+ WriteDXFReal(F, 10, 0.0);
+ WriteDXFReal(F, 20, 0.0);
+ 
+ { Variable $LIMMAX - limites du dessin max }
+ WriteDXFString(F, 9, '$LIMMAX');
+ WriteDXFReal(F, 10, ScreenWidth);
+ WriteDXFReal(F, 20, ScreenHeight);
+ 
+ { Variable $CLAYER - calque courant }
+ WriteDXFString(F, 9, '$CLAYER');
+ WriteDXFString(F, 8, Layers[CurrentLayer].Name);
+ 
+ { Variable $CECOLOR - couleur courante }
+ WriteDXFString(F, 9, '$CECOLOR');
+ WriteDXFInteger(F, 62, CurrentColor);
+ 
+ WriteDXFString(F, 0, DXF_ENDSEC);
+End;
+
+{ Écrire la table des calques }
+Procedure WriteDXFLayers(Var F: Text);
+Var
+ I: Integer;
+ Flags: Integer;
+Begin
+ WriteDXFString(F, 0, DXF_TABLE);
+ WriteDXFString(F, 2, DXF_LAYER);
+ WriteDXFInteger(F, 70, LayerCount);
+ 
+ For I := 0 to LayerCount - 1 do Begin
+  WriteDXFString(F, 0, DXF_LAYER);
+  WriteDXFString(F, 2, Layers[I].Name);
+  
+  { Calculer les flags }
+  Flags := 0;
+  If Layers[I].Frozen Then Flags := Flags or 1;
+  If Layers[I].Locked Then Flags := Flags or 4;
+  WriteDXFInteger(F, 70, Flags);
+  
+  { Couleur (négative si calque éteint) }
+  If Layers[I].OnFlag Then
+   WriteDXFInteger(F, 62, Layers[I].Color)
+  Else
+   WriteDXFInteger(F, 62, -Layers[I].Color);
+  
+  { Type de ligne }
+  WriteDXFString(F, 6, 'CONTINUOUS');
+ End;
+ 
+ WriteDXFString(F, 0, DXF_ENDTAB);
+End;
+
+{ Écrire les tables DXF }
+Procedure WriteDXFTables(Var F: Text);
+Begin
+ WriteDXFString(F, 0, DXF_SECTION);
+ WriteDXFString(F, 2, DXF_TABLES);
+ 
+ { Table des calques }
+ WriteDXFLayers(F);
+ 
+ WriteDXFString(F, 0, DXF_ENDSEC);
+End;
+
+{ Écrire les blocs DXF }
+Procedure WriteDXFBlocks(Var F: Text);
+Var
+ I, J: Integer;
+ StartIdx: Integer;
+Begin
+ WriteDXFString(F, 0, DXF_SECTION);
+ WriteDXFString(F, 2, DXF_BLOCKS);
+ 
+ For I := 0 to BlockDefCount - 1 do Begin
+  { Début du bloc }
+  WriteDXFString(F, 0, DXF_BLOCK);
+  WriteDXFString(F, 8, '0');
+  WriteDXFString(F, 2, BlockDefs[I].Name);
+  WriteDXFInteger(F, 70, 0);
+  WriteDXFReal(F, 10, BlockDefs[I].BaseX);
+  WriteDXFReal(F, 20, BlockDefs[I].BaseY);
+  WriteDXFReal(F, 30, 0.0);
+  
+  { Entités du bloc }
+  StartIdx := BlockDefs[I].FirstEntityIdx;
+  For J := 0 to BlockDefs[I].EntityCount - 1 do
+   WriteDXFEntity(F, BlockEntities[StartIdx + J], 1000 + I * 100 + J);
+  
+  { Fin du bloc }
+  WriteDXFString(F, 0, DXF_ENDBLK);
+  WriteDXFString(F, 8, '0');
+ End;
+ 
+ WriteDXFString(F, 0, DXF_ENDSEC);
+End;
+
+{ Écrire une entité ligne en DXF }
+Procedure WriteDXFLine(Var F: Text; Const Entity: TDrawObject; Handle: LongInt);
+Begin
+ WriteDXFString(F, 0, DXF_LINE);
+ WriteDXFInteger(F, 5, Handle);
+ WriteDXFString(F, 8, Layers[Entity.LayerIndex].Name);
+ WriteDXFInteger(F, 62, Entity.Color);
+ WriteDXFReal(F, 10, Entity.X1);
+ WriteDXFReal(F, 20, Entity.Y1);
+ WriteDXFReal(F, 30, 0.0);
+ WriteDXFReal(F, 11, Entity.X2);
+ WriteDXFReal(F, 21, Entity.Y2);
+ WriteDXFReal(F, 31, 0.0);
+End;
+
+{ Écrire une entité cercle en DXF }
+Procedure WriteDXFCircle(Var F: Text; Const Entity: TDrawObject; Handle: LongInt);
+Begin
+ WriteDXFString(F, 0, DXF_CIRCLE);
+ WriteDXFInteger(F, 5, Handle);
+ WriteDXFString(F, 8, Layers[Entity.LayerIndex].Name);
+ WriteDXFInteger(F, 62, Entity.Color);
+ WriteDXFReal(F, 10, Entity.X1);
+ WriteDXFReal(F, 20, Entity.Y1);
+ WriteDXFReal(F, 30, 0.0);
+ WriteDXFReal(F, 40, Entity.Radius);
+End;
+
+{ Écrire une entité arc en DXF }
+Procedure WriteDXFArc(Var F: Text; Const Entity: TDrawObject; Handle: LongInt);
+Begin
+ WriteDXFString(F, 0, DXF_ARC);
+ WriteDXFInteger(F, 5, Handle);
+ WriteDXFString(F, 8, Layers[Entity.LayerIndex].Name);
+ WriteDXFInteger(F, 62, Entity.Color);
+ WriteDXFReal(F, 10, Entity.X1);
+ WriteDXFReal(F, 20, Entity.Y1);
+ WriteDXFReal(F, 30, 0.0);
+ WriteDXFReal(F, 40, Entity.Radius);
+ WriteDXFReal(F, 50, Entity.StartAngle);
+ WriteDXFReal(F, 51, Entity.EndAngle);
+End;
+
+{ Écrire une entité point en DXF }
+Procedure WriteDXFPoint(Var F: Text; Const Entity: TDrawObject; Handle: LongInt);
+Begin
+ WriteDXFString(F, 0, DXF_POINT);
+ WriteDXFInteger(F, 5, Handle);
+ WriteDXFString(F, 8, Layers[Entity.LayerIndex].Name);
+ WriteDXFInteger(F, 62, Entity.Color);
+ WriteDXFReal(F, 10, Entity.X1);
+ WriteDXFReal(F, 20, Entity.Y1);
+ WriteDXFReal(F, 30, 0.0);
+End;
+
+{ Écrire une entité texte en DXF }
+Procedure WriteDXFText(Var F: Text; Const Entity: TDrawObject; Handle: LongInt);
+Begin
+ WriteDXFString(F, 0, DXF_TEXT);
+ WriteDXFInteger(F, 5, Handle);
+ WriteDXFString(F, 8, Layers[Entity.LayerIndex].Name);
+ WriteDXFInteger(F, 62, Entity.Color);
+ WriteDXFReal(F, 10, Entity.X1);
+ WriteDXFReal(F, 20, Entity.Y1);
+ WriteDXFReal(F, 30, 0.0);
+ WriteDXFReal(F, 40, 2.5);  { Hauteur texte par défaut }
+ WriteDXFString(F, 1, Entity.DimText);  { Utiliser DimText comme contenu }
+End;
+
+{ Écrire une entité ellipse en DXF }
+Procedure WriteDXFEllipse(Var F: Text; Const Entity: TDrawObject; Handle: LongInt);
+Var
+ MajorX, MajorY: Real;
+Begin
+ WriteDXFString(F, 0, DXF_ELLIPSE);
+ WriteDXFInteger(F, 5, Handle);
+ WriteDXFString(F, 8, Layers[Entity.LayerIndex].Name);
+ WriteDXFInteger(F, 62, Entity.Color);
+ 
+ { Centre }
+ WriteDXFReal(F, 10, Entity.X1);
+ WriteDXFReal(F, 20, Entity.Y1);
+ WriteDXFReal(F, 30, 0.0);
+ 
+ { Vecteur de l'axe majeur (du centre au point de fin) }
+ MajorX := Entity.Radius;  { Rayon = demi-axe majeur }
+ MajorY := 0.0;
+ WriteDXFReal(F, 11, MajorX);
+ WriteDXFReal(F, 21, MajorY);
+ WriteDXFReal(F, 31, 0.0);
+ 
+ { Ratio (demi-axe mineur / demi-axe majeur) }
+ If Entity.Radius > 0 Then
+  WriteDXFReal(F, 40, Entity.EndAngle / Entity.Radius)
+ Else
+  WriteDXFReal(F, 40, 1.0);
+ 
+ { Angles (en radians pour DXF) }
+ WriteDXFReal(F, 41, Entity.StartAngle * 3.14159265 / 180.0);
+ WriteDXFReal(F, 42, 6.28318530);  { 360 degrés = cercle complet }
+End;
+
+{ Écrire une entité cotation en DXF }
+Procedure WriteDXFDimension(Var F: Text; Const Entity: TDrawObject; Handle: LongInt);
+Begin
+ WriteDXFString(F, 0, DXF_DIMENSION);
+ WriteDXFInteger(F, 5, Handle);
+ WriteDXFString(F, 8, Layers[Entity.LayerIndex].Name);
+ WriteDXFInteger(F, 62, Entity.Color);
+ 
+ { Type de cotation }
+ WriteDXFInteger(F, 70, Entity.DimType);
+ 
+ { Point de définition }
+ WriteDXFReal(F, 10, Entity.DimX3);
+ WriteDXFReal(F, 20, Entity.DimY3);
+ WriteDXFReal(F, 30, 0.0);
+ 
+ { Point milieu du texte }
+ WriteDXFReal(F, 11, Entity.DimTextX);
+ WriteDXFReal(F, 21, Entity.DimTextY);
+ WriteDXFReal(F, 31, 0.0);
+ 
+ { Points d'extension }
+ WriteDXFReal(F, 13, Entity.X1);
+ WriteDXFReal(F, 23, Entity.Y1);
+ WriteDXFReal(F, 33, 0.0);
+ 
+ WriteDXFReal(F, 14, Entity.X2);
+ WriteDXFReal(F, 24, Entity.Y2);
+ WriteDXFReal(F, 34, 0.0);
+ 
+ { Texte de cotation }
+ If Entity.DimText <> '' Then
+  WriteDXFString(F, 1, Entity.DimText);
+End;
+
+{ Écrire une entité générique en DXF }
+Procedure WriteDXFEntity(Var F: Text; Const Entity: TDrawObject; Handle: LongInt);
+Begin
+ If Entity.ObjType = OBJ_NONE Then Exit;
+ If Not Entity.Visible Then Exit;
+ 
+ Case Entity.ObjType of
+  OBJ_LINE:      WriteDXFLine(F, Entity, Handle);
+  OBJ_CIRCLE:    WriteDXFCircle(F, Entity, Handle);
+  OBJ_ARC:       WriteDXFArc(F, Entity, Handle);
+  OBJ_POINT:     WriteDXFPoint(F, Entity, Handle);
+  OBJ_TEXT:      WriteDXFText(F, Entity, Handle);
+  OBJ_ELLIPSE:   WriteDXFEllipse(F, Entity, Handle);
+  OBJ_DIMENSION: WriteDXFDimension(F, Entity, Handle);
+  OBJ_RECTANGLE: Begin
+   { Rectangle = 4 lignes }
+   WriteDXFLine(F, Entity, Handle);
+  End;
+ End;
+End;
+
+{ Écrire la section ENTITIES }
+Procedure WriteDXFEntities(Var F: Text);
+Var
+ I: Integer;
+ Handle: LongInt;
+Begin
+ WriteDXFString(F, 0, DXF_SECTION);
+ WriteDXFString(F, 2, DXF_ENTITIES);
+ 
+ Handle := 100;
+ For I := 0 to ObjectCount - 1 do Begin
+  If DrawObjects[I].ObjType <> OBJ_NONE Then Begin
+   WriteDXFEntity(F, DrawObjects[I], Handle);
+   Inc(Handle);
+  End;
+ End;
+ 
+ WriteDXFString(F, 0, DXF_ENDSEC);
+End;
+
+{ Écrire le dessin dans un fichier DXF }
+Function WriteDXFFile(Const FileName: String): Boolean;
+Var
+ F: Text;
+Begin
+ WriteDXFFile := False;
+ 
+ {$I-}
+ Assign(F, FileName);
+ Rewrite(F);
+ {$I+}
+ 
+ If IOResult <> 0 Then Exit;
+ 
+ { Écrire les sections }
+ WriteDXFHeader(F);
+ WriteDXFTables(F);
+ WriteDXFBlocks(F);
+ WriteDXFEntities(F);
+ 
+ { Fin du fichier }
+ WriteDXFString(F, 0, DXF_EOF);
+ 
+ Close(F);
+ WriteDXFFile := True;
+End;
+
+{ Lire un code de groupe DXF }
+Function ReadDXFGroupCode(Var F: Text): Integer;
+Var
+ S: String;
+ Code, Err: Integer;
+Begin
+ ReadDXFGroupCode := -1;
+ If EOF(F) Then Exit;
+ 
+ ReadLn(F, S);
+ { Supprimer les espaces }
+ While (Length(S) > 0) and (S[1] = ' ') do
+  Delete(S, 1, 1);
+ While (Length(S) > 0) and (S[Length(S)] = ' ') do
+  Delete(S, Length(S), 1);
+ 
+ Val(S, Code, Err);
+ If Err = 0 Then
+  ReadDXFGroupCode := Code;
+End;
+
+{ Lire une chaîne DXF }
+Function ReadDXFString(Var F: Text): String;
+Var
+ S: String;
+Begin
+ ReadDXFString := '';
+ If EOF(F) Then Exit;
+ 
+ ReadLn(F, S);
+ { Supprimer les espaces de début et fin }
+ While (Length(S) > 0) and (S[1] = ' ') do
+  Delete(S, 1, 1);
+ While (Length(S) > 0) and (S[Length(S)] = ' ') do
+  Delete(S, Length(S), 1);
+ 
+ ReadDXFString := S;
+End;
+
+{ Lire un entier DXF }
+Function ReadDXFInteger(Var F: Text): LongInt;
+Var
+ S: String;
+ Value: LongInt;
+ Err: Integer;
+Begin
+ ReadDXFInteger := 0;
+ S := ReadDXFString(F);
+ Val(S, Value, Err);
+ If Err = 0 Then
+  ReadDXFInteger := Value;
+End;
+
+{ Lire un réel DXF }
+Function ReadDXFReal(Var F: Text): Real;
+Var
+ S: String;
+ Value: Real;
+ Err: Integer;
+Begin
+ ReadDXFReal := 0.0;
+ S := ReadDXFString(F);
+ Val(S, Value, Err);
+ If Err = 0 Then
+  ReadDXFReal := Value;
+End;
+
+{ Lire l'en-tête DXF }
+Function ReadDXFHeader(Var F: Text): Boolean;
+Var
+ Code: Integer;
+ S: String;
+Begin
+ ReadDXFHeader := False;
+ 
+ { Lire jusqu'à la fin de la section HEADER }
+ Repeat
+  Code := ReadDXFGroupCode(F);
+  If Code < 0 Then Exit;
+  S := ReadDXFString(F);
+  
+  { Variables d'en-tête à traiter }
+  If (Code = 9) and (S = '$CLAYER') Then Begin
+   Code := ReadDXFGroupCode(F);
+   S := ReadDXFString(F);
+   { Trouver le calque correspondant }
+  End
+  Else If (Code = 9) and (S = '$CECOLOR') Then Begin
+   Code := ReadDXFGroupCode(F);
+   CurrentColor := ReadDXFInteger(F);
+  End;
+ Until (Code = 0) and (S = DXF_ENDSEC);
+ 
+ ReadDXFHeader := True;
+End;
+
+{ Lire les tables DXF (incluant les calques) }
+Function ReadDXFTables(Var F: Text): Boolean;
+Var
+ Code: Integer;
+ S, LayerName: String;
+ LayerColor: Integer;
+ LayerFlags: Integer;
+ InLayer: Boolean;
+Begin
+ ReadDXFTables := False;
+ InLayer := False;
+ LayerName := '';
+ LayerColor := 7;
+ LayerFlags := 0;
+ 
+ Repeat
+  Code := ReadDXFGroupCode(F);
+  If Code < 0 Then Exit;
+  S := ReadDXFString(F);
+  
+  If (Code = 0) Then Begin
+   { Sauvegarder le calque précédent si on en lisait un }
+   If InLayer and (LayerName <> '') and (LayerCount < MAX_LAYERS) Then Begin
+    Layers[LayerCount].Name := LayerName;
+    Layers[LayerCount].Color := Abs(LayerColor);
+    Layers[LayerCount].OnFlag := LayerColor > 0;
+    Layers[LayerCount].Frozen := (LayerFlags and 1) <> 0;
+    Layers[LayerCount].Locked := (LayerFlags and 4) <> 0;
+    Layers[LayerCount].Visible := True;
+    Layers[LayerCount].LineType := 0;
+    Layers[LayerCount].LineWeight := 0;
+    Inc(LayerCount);
+   End;
+   
+   InLayer := (S = DXF_LAYER);
+   LayerName := '';
+   LayerColor := 7;
+   LayerFlags := 0;
+  End
+  Else If InLayer Then Begin
+   Case Code of
+    2: LayerName := S;
+    62: Val(S, LayerColor, Code);
+    70: Val(S, LayerFlags, Code);
+   End;
+  End;
+ Until (Code = 0) and (S = DXF_ENDSEC);
+ 
+ ReadDXFTables := True;
+End;
+
+{ Lire les blocs DXF }
+Function ReadDXFBlocks(Var F: Text): Boolean;
+Var
+ Code: Integer;
+ S: String;
+Begin
+ ReadDXFBlocks := False;
+ 
+ { Sauter la section BLOCKS pour l'instant }
+ Repeat
+  Code := ReadDXFGroupCode(F);
+  If Code < 0 Then Exit;
+  S := ReadDXFString(F);
+ Until (Code = 0) and (S = DXF_ENDSEC);
+ 
+ ReadDXFBlocks := True;
+End;
+
+{ Lire une entité DXF }
+Function ReadDXFEntity(Var F: Text; Var Entity: TDrawObject): Boolean;
+Var
+ Code: Integer;
+ S: String;
+ EntityType: String;
+Begin
+ ReadDXFEntity := False;
+ 
+ { Initialiser l'entité }
+ FillChar(Entity, SizeOf(Entity), 0);
+ Entity.ObjType := OBJ_NONE;
+ Entity.Color := 7;
+ Entity.LayerIndex := 0;
+ Entity.Visible := True;
+ 
+ { Lire le type d'entité (déjà lu par l'appelant) }
+ EntityType := '';
+ 
+ Repeat
+  Code := ReadDXFGroupCode(F);
+  If Code < 0 Then Exit;
+  
+  If Code = 0 Then Begin
+   { Nouveau type d'entité ou fin de section }
+   S := ReadDXFString(F);
+   
+   If EntityType <> '' Then Begin
+    { On a fini de lire cette entité }
+    Entity.ObjType := GetObjTypeFromDXF(EntityType);
+    ReadDXFEntity := Entity.ObjType <> OBJ_NONE;
+   End;
+   
+   { Passer au prochain type }
+   If (S = DXF_ENDSEC) or (S = DXF_EOF) Then Exit;
+   EntityType := S;
+  End
+  Else Begin
+   S := ReadDXFString(F);
+   
+   Case Code of
+    8: Begin
+     { Trouver l'index du calque }
+     Entity.LayerIndex := 0;
+    End;
+    10: Val(S, Entity.X1, Code);
+    20: Val(S, Entity.Y1, Code);
+    11: Val(S, Entity.X2, Code);
+    21: Val(S, Entity.Y2, Code);
+    40: Val(S, Entity.Radius, Code);
+    50: Val(S, Entity.StartAngle, Code);
+    51: Val(S, Entity.EndAngle, Code);
+    62: Val(S, Entity.Color, Code);
+    70: Val(S, Entity.DimType, Code);
+    1: Entity.DimText := S;
+   End;
+  End;
+ Until False;
+End;
+
+{ Lire la section ENTITIES }
+Function ReadDXFEntities(Var F: Text): Boolean;
+Var
+ Code: Integer;
+ S: String;
+ Entity: TDrawObject;
+Begin
+ ReadDXFEntities := False;
+ 
+ Repeat
+  Code := ReadDXFGroupCode(F);
+  If Code < 0 Then Exit;
+  S := ReadDXFString(F);
+  
+  If Code = 0 Then Begin
+   If S = DXF_ENDSEC Then Begin
+    ReadDXFEntities := True;
+    Exit;
+   End
+   Else If S = DXF_EOF Then Begin
+    ReadDXFEntities := True;
+    Exit;
+   End
+   Else Begin
+    { Lire l'entité }
+    FillChar(Entity, SizeOf(Entity), 0);
+    Entity.ObjType := GetObjTypeFromDXF(S);
+    Entity.Color := 7;
+    Entity.LayerIndex := 0;
+    Entity.Visible := True;
+    
+    { Lire les attributs de l'entité }
+    Repeat
+     Code := ReadDXFGroupCode(F);
+     If Code < 0 Then Exit;
+     If Code = 0 Then Break;
+     
+     S := ReadDXFString(F);
+     Case Code of
+      8: Entity.LayerIndex := 0;  { TODO: trouver l'index }
+      10: Val(S, Entity.X1, Code);
+      20: Val(S, Entity.Y1, Code);
+      11: Val(S, Entity.X2, Code);
+      21: Val(S, Entity.Y2, Code);
+      40: Val(S, Entity.Radius, Code);
+      50: Val(S, Entity.StartAngle, Code);
+      51: Val(S, Entity.EndAngle, Code);
+      62: Val(S, Entity.Color, Code);
+      70: Val(S, Entity.DimType, Code);
+      1: Entity.DimText := S;
+     End;
+    Until False;
+    
+    { Ajouter l'entité si valide }
+    If (Entity.ObjType <> OBJ_NONE) and (ObjectCount < MAX_OBJECTS) Then Begin
+     DrawObjects[ObjectCount] := Entity;
+     Inc(ObjectCount);
+    End;
+    
+    { S contient maintenant le prochain type d'entité }
+    S := ReadDXFString(F);
+   End;
+  End;
+ Until False;
+End;
+
+{ Lire un dessin depuis un fichier DXF }
+Function ReadDXFFile(Const FileName: String): Boolean;
+Var
+ F: Text;
+ Code: Integer;
+ S: String;
+Begin
+ ReadDXFFile := False;
+ 
+ {$I-}
+ Assign(F, FileName);
+ Reset(F);
+ {$I+}
+ 
+ If IOResult <> 0 Then Exit;
+ 
+ { Réinitialiser le dessin }
+ ObjectCount := 0;
+ LayerCount := 0;
+ 
+ { Créer le calque 0 par défaut }
+ Layers[0].Name := '0';
+ Layers[0].Color := 7;
+ Layers[0].LineType := 0;
+ Layers[0].LineWeight := 0;
+ Layers[0].Visible := True;
+ Layers[0].Locked := False;
+ Layers[0].Frozen := False;
+ Layers[0].OnFlag := True;
+ LayerCount := 1;
+ 
+ { Lire le fichier section par section }
+ Repeat
+  Code := ReadDXFGroupCode(F);
+  If Code < 0 Then Break;
+  S := ReadDXFString(F);
+  
+  If (Code = 0) and (S = DXF_SECTION) Then Begin
+   { Lire le nom de la section }
+   Code := ReadDXFGroupCode(F);
+   S := ReadDXFString(F);
+   
+   If S = DXF_HEADER Then Begin
+    If Not ReadDXFHeader(F) Then Break;
+   End
+   Else If S = DXF_TABLES Then Begin
+    If Not ReadDXFTables(F) Then Break;
+   End
+   Else If S = DXF_BLOCKS Then Begin
+    If Not ReadDXFBlocks(F) Then Break;
+   End
+   Else If S = DXF_ENTITIES Then Begin
+    If Not ReadDXFEntities(F) Then Break;
+   End
+   Else Begin
+    { Sauter la section inconnue }
+    Repeat
+     Code := ReadDXFGroupCode(F);
+     If Code < 0 Then Break;
+     S := ReadDXFString(F);
+    Until (Code = 0) and (S = DXF_ENDSEC);
+   End;
+  End
+  Else If (Code = 0) and (S = DXF_EOF) Then Begin
+   ReadDXFFile := True;
+   Break;
+  End;
+ Until EOF(F);
+ 
+ Close(F);
+ 
+ { Effacer la sélection }
+ ClearSelection;
+ ClearGrips;
+ 
+ ReadDXFFile := True;
 End;
 
 { Initialiser le panneau de propriétés }

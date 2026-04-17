@@ -15,7 +15,7 @@
   4. [FAIT] Ajouter le menu View avec Zoom In, Zoom Out, Fit Page, Grid, Rulers, Guides, Snap to Grid
   5. [FAIT] Ajouter le menu Insert avec Shape, Text Box, Image, Connector, Page, Layer
   6. [FAIT] Ajouter le menu Format avec Fill, Line, Text, Alignment, Arrange, Group, Ungroup
-  7. Ajouter le menu Shape avec Rotate, Flip, Align, Distribute, Size, Position, Operations (Union, Intersect, Subtract)
+  7. [FAIT] Ajouter le menu Shape avec Rotate, Flip, Align, Distribute, Size, Position, Operations (Union, Intersect, Subtract)
   8. Implementer la barre d'outils avec boutons pour les actions frequentes (Selection, Rectangle, Ellipse, Ligne, Connecteur, Texte)
 
   === SUPPORT SOURIS ===
@@ -591,6 +591,103 @@ End;
 { === FIN DES PROCEDURES DU MENU FORMAT === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === PROCEDURES DU MENU SHAPE === }
+{ ============================================================================ }
+
+Type
+ TRotationType = (rtRotate90CW, rtRotate90CCW, rtRotate180, rtFreeRotate);
+ TFlipType = (ftHorizontal, ftVertical);
+ TAlignShapeType = (asLeft, asCenter, asRight, asTop, asMiddle, asBottom);
+ TDistributeType = (dtHorizontal, dtVertical);
+ TOperationType = (otUnion, otIntersect, otSubtract);
+
+Var
+ CurrentRotation: Integer;  { Angle de rotation actuel en degrés }
+ ShapeWidth: Integer;       { Largeur de la forme sélectionnée }
+ ShapeHeight: Integer;      { Hauteur de la forme sélectionnée }
+ ShapeX: Integer;           { Position X de la forme sélectionnée }
+ ShapeY: Integer;           { Position Y de la forme sélectionnée }
+
+{ Procédure ShapeRotate - Rotation de la forme sélectionnée }
+Procedure ShapeRotate;
+Begin
+ If HasSelection Then Begin
+  { TODO: Afficher un sous-menu pour choisir l'angle de rotation }
+  { TODO: Options: 90° horaire, 90° anti-horaire, 180°, rotation libre }
+  CurrentRotation := (CurrentRotation + 90) Mod 360;
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure ShapeFlip - Retourner la forme horizontalement ou verticalement }
+Procedure ShapeFlip;
+Begin
+ If HasSelection Then Begin
+  { TODO: Afficher un sous-menu pour choisir le type de retournement }
+  { TODO: Options: Horizontal, Vertical }
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure ShapeAlign - Aligner les formes sélectionnées }
+Procedure ShapeAlign;
+Begin
+ If HasSelection Then Begin
+  { TODO: Afficher un sous-menu pour choisir le type d'alignement }
+  { TODO: Options: Left, Center, Right, Top, Middle, Bottom }
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure ShapeDistribute - Distribuer les formes uniformément }
+Procedure ShapeDistribute;
+Begin
+ If HasSelection Then Begin
+  { TODO: Afficher un sous-menu pour choisir la distribution }
+  { TODO: Options: Horizontal, Vertical }
+  { TODO: Espacer les formes uniformément entre la première et la dernière }
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure ShapeSize - Modifier la taille de la forme }
+Procedure ShapeSize;
+Begin
+ If HasSelection Then Begin
+  { TODO: Afficher une boîte de dialogue pour entrer la nouvelle taille }
+  { TODO: Permettre de spécifier largeur et hauteur en pixels ou pourcentage }
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure ShapePosition - Modifier la position de la forme }
+Procedure ShapePosition;
+Begin
+ If HasSelection Then Begin
+  { TODO: Afficher une boîte de dialogue pour entrer la nouvelle position }
+  { TODO: Permettre de spécifier les coordonnées X et Y }
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure ShapeOperations - Opérations booléennes sur les formes }
+Procedure ShapeOperations;
+Begin
+ If HasSelection Then Begin
+  { TODO: Afficher un sous-menu pour choisir l'opération }
+  { TODO: Options: Union, Intersect, Subtract }
+  { TODO: Union: Combiner plusieurs formes en une seule }
+  { TODO: Intersect: Garder seulement la partie commune des formes }
+  { TODO: Subtract: Soustraire une forme d'une autre }
+  DocumentModified := True;
+ End;
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DU MENU SHAPE === }
+{ ============================================================================ }
+
 { Procédure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
@@ -697,7 +794,7 @@ Begin
       Items[7] := 'Ungroup';
      End;
   6: Begin { Shape }
-      ItemCount := 8;
+      ItemCount := 10;
       Items[1] := 'Rotate';
       Items[2] := 'Flip';
       Items[3] := '-';
@@ -706,6 +803,8 @@ Begin
       Items[6] := '-';
       Items[7] := 'Size';
       Items[8] := 'Position';
+      Items[9] := '-';
+      Items[10] := 'Operations';
      End;
   7: Begin { Tools }
       ItemCount := 4;
@@ -813,6 +912,12 @@ Begin
  CurrentTextSize := DEFAULT_TEXT_SIZE;
  CurrentAlignment := atLeft;
  ObjectsGrouped := False;
+ { Initialisation des variables du menu Shape }
+ CurrentRotation := 0;
+ ShapeWidth := 100;
+ ShapeHeight := 100;
+ ShapeX := 0;
+ ShapeY := 0;
 End;
 
 { Fonction pour exécuter une action du menu File }
@@ -897,6 +1002,23 @@ Begin
  End;
 End;
 
+{ Procédure pour exécuter une action du menu Shape }
+Procedure ExecuteShapeMenuAction(ItemIndex: Integer);
+Begin
+ Case ItemIndex of
+  1: ShapeRotate;      { Rotate }
+  2: ShapeFlip;        { Flip }
+  { 3 est un séparateur }
+  4: ShapeAlign;       { Align }
+  5: ShapeDistribute;  { Distribute }
+  { 6 est un séparateur }
+  7: ShapeSize;        { Size }
+  8: ShapePosition;    { Position }
+  { 9 est un séparateur }
+  10: ShapeOperations; { Operations }
+ End;
+End;
+
 { Fonction pour déterminer quel élément de menu est sous la souris }
 Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer;
 Const
@@ -914,7 +1036,7 @@ Begin
   3: ItemCount := 9;  { View }
   4: ItemCount := 6;  { Insert }
   5: ItemCount := 7;  { Format }
-  6: ItemCount := 8;  { Shape }
+  6: ItemCount := 10; { Shape }
   7: ItemCount := 4;  { Tools }
   8: ItemCount := 4;  { Window }
   9: ItemCount := 3;  { Help }

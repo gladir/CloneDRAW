@@ -9,7 +9,7 @@
 { TODO: Liste de 25 points pour un clone complet de Visio
 
   === MENUS ET INTERFACE ===
-  1. Implementer le menu principal avec File, Edit, View, Insert, Format, Shape, Tools, Window, Help
+  1. [FAIT] Implementer le menu principal avec File, Edit, View, Insert, Format, Shape, Tools, Window, Help
   2. Ajouter le menu File avec New, Open, Close, Save, Save As, Export, Print, Print Preview, Exit
   3. Ajouter le menu Edit avec Undo, Redo, Cut, Copy, Paste, Delete, Select All, Find, Replace
   4. Ajouter le menu View avec Zoom In, Zoom Out, Fit Page, Grid, Rulers, Guides, Snap to Grid
@@ -53,6 +53,33 @@ Uses {$IFDEF FPC}
      {$ELSE}
       Crt,Graph
      {$ENDIF};
+
+Const
+ { Constantes pour le menu principal }
+ MENU_COUNT = 9;
+ MENU_HEIGHT = 18;
+ MENU_BAR_COLOR = 7;      { Gris clair }
+ MENU_TEXT_COLOR = 0;     { Noir }
+ MENU_HIGHLIGHT_BG = 1;   { Bleu }
+ MENU_HIGHLIGHT_FG = 15;  { Blanc }
+ 
+ { Noms des menus principaux }
+ MenuNames: Array[1..MENU_COUNT] of String[10] = (
+   'File', 'Edit', 'View', 'Insert', 'Format', 'Shape', 'Tools', 'Window', 'Help'
+ );
+ 
+ { Positions X des menus }
+ MenuPositions: Array[1..MENU_COUNT] of Integer = (
+   5, 50, 95, 140, 195, 260, 320, 375, 440
+ );
+
+Type
+ TMenuState = (msNone, msMenuBar, msDropDown);
+
+Var
+ CurrentMenu: Integer;
+ MenuState: TMenuState;
+ ScreenWidth, ScreenHeight: Integer;
 
 Procedure InitializeGraphics;
 Var
@@ -132,6 +159,246 @@ End;
  End;
 {$ENDIF}
 
+{ Procédure pour dessiner la barre de menu principale }
+Procedure DrawMenuBar;
+Var
+ I: Integer;
+ TextX: Integer;
+Begin
+ { Dessiner le fond de la barre de menu }
+ SetFillStyle(SolidFill, MENU_BAR_COLOR);
+ Bar(0, 0, ScreenWidth, MENU_HEIGHT);
+ 
+ { Dessiner une ligne de séparation }
+ SetColor(DarkGray);
+ Line(0, MENU_HEIGHT, ScreenWidth, MENU_HEIGHT);
+ 
+ { Dessiner chaque élément du menu }
+ For I := 1 to MENU_COUNT do Begin
+  TextX := MenuPositions[I];
+  
+  { Si ce menu est sélectionné, dessiner le fond en surbrillance }
+  If (I = CurrentMenu) and (MenuState <> msNone) Then Begin
+   SetFillStyle(SolidFill, MENU_HIGHLIGHT_BG);
+   Bar(TextX - 4, 1, TextX + Length(MenuNames[I]) * 8 + 4, MENU_HEIGHT - 1);
+   SetColor(MENU_HIGHLIGHT_FG);
+  End
+  Else Begin
+   SetColor(MENU_TEXT_COLOR);
+  End;
+  
+  { Dessiner le texte du menu }
+  OutTextXY(TextX, 4, MenuNames[I]);
+ End;
+End;
+
+{ Procédure pour dessiner un sous-menu déroulant }
+Procedure DrawDropDownMenu(MenuIndex: Integer);
+Const
+ MaxItems = 12;
+ ItemHeight = 16;
+ MenuWidth = 150;
+Var
+ X, Y, I, ItemCount: Integer;
+ Items: Array[1..MaxItems] of String[20];
+Begin
+ { Définir les éléments selon le menu sélectionné }
+ Case MenuIndex of
+  1: Begin { File }
+      ItemCount := 9;
+      Items[1] := 'New';
+      Items[2] := 'Open...';
+      Items[3] := 'Close';
+      Items[4] := 'Save';
+      Items[5] := 'Save As...';
+      Items[6] := '-';
+      Items[7] := 'Export...';
+      Items[8] := 'Print...';
+      Items[9] := 'Exit';
+     End;
+  2: Begin { Edit }
+      ItemCount := 9;
+      Items[1] := 'Undo';
+      Items[2] := 'Redo';
+      Items[3] := '-';
+      Items[4] := 'Cut';
+      Items[5] := 'Copy';
+      Items[6] := 'Paste';
+      Items[7] := 'Delete';
+      Items[8] := '-';
+      Items[9] := 'Select All';
+     End;
+  3: Begin { View }
+      ItemCount := 7;
+      Items[1] := 'Zoom In';
+      Items[2] := 'Zoom Out';
+      Items[3] := 'Fit Page';
+      Items[4] := '-';
+      Items[5] := 'Grid';
+      Items[6] := 'Rulers';
+      Items[7] := 'Guides';
+     End;
+  4: Begin { Insert }
+      ItemCount := 6;
+      Items[1] := 'Shape';
+      Items[2] := 'Text Box';
+      Items[3] := 'Image...';
+      Items[4] := 'Connector';
+      Items[5] := 'Page';
+      Items[6] := 'Layer';
+     End;
+  5: Begin { Format }
+      ItemCount := 7;
+      Items[1] := 'Fill...';
+      Items[2] := 'Line...';
+      Items[3] := 'Text...';
+      Items[4] := '-';
+      Items[5] := 'Alignment';
+      Items[6] := 'Group';
+      Items[7] := 'Ungroup';
+     End;
+  6: Begin { Shape }
+      ItemCount := 8;
+      Items[1] := 'Rotate';
+      Items[2] := 'Flip';
+      Items[3] := '-';
+      Items[4] := 'Align';
+      Items[5] := 'Distribute';
+      Items[6] := '-';
+      Items[7] := 'Size';
+      Items[8] := 'Position';
+     End;
+  7: Begin { Tools }
+      ItemCount := 4;
+      Items[1] := 'Snap to Grid';
+      Items[2] := 'Snap to Guides';
+      Items[3] := '-';
+      Items[4] := 'Options...';
+     End;
+  8: Begin { Window }
+      ItemCount := 4;
+      Items[1] := 'New Window';
+      Items[2] := 'Cascade';
+      Items[3] := 'Tile';
+      Items[4] := 'Close All';
+     End;
+  9: Begin { Help }
+      ItemCount := 3;
+      Items[1] := 'Help Topics';
+      Items[2] := '-';
+      Items[3] := 'About Visio';
+     End;
+  Else
+   ItemCount := 0;
+ End;
+ 
+ If ItemCount = 0 Then Exit;
+ 
+ { Calculer la position du menu déroulant }
+ X := MenuPositions[MenuIndex] - 4;
+ Y := MENU_HEIGHT + 1;
+ 
+ { Dessiner le fond du menu déroulant }
+ SetFillStyle(SolidFill, MENU_BAR_COLOR);
+ Bar(X, Y, X + MenuWidth, Y + ItemCount * ItemHeight + 4);
+ 
+ { Dessiner la bordure }
+ SetColor(DarkGray);
+ Rectangle(X, Y, X + MenuWidth, Y + ItemCount * ItemHeight + 4);
+ 
+ { Dessiner les éléments du menu }
+ SetColor(MENU_TEXT_COLOR);
+ For I := 1 to ItemCount do Begin
+  If Items[I] = '-' Then Begin
+   { Dessiner un séparateur }
+   SetColor(DarkGray);
+   Line(X + 5, Y + I * ItemHeight - 6, X + MenuWidth - 5, Y + I * ItemHeight - 6);
+   SetColor(MENU_TEXT_COLOR);
+  End
+  Else Begin
+   OutTextXY(X + 10, Y + (I - 1) * ItemHeight + 4, Items[I]);
+  End;
+ End;
+End;
+
+{ Fonction pour déterminer quel menu est sous la souris }
+Function GetMenuAtPosition(MouseX, MouseY: Integer): Integer;
+Var
+ I: Integer;
+Begin
+ GetMenuAtPosition := 0;
+ 
+ { Vérifier si on est dans la barre de menu }
+ If (MouseY >= 0) and (MouseY <= MENU_HEIGHT) Then Begin
+  For I := 1 to MENU_COUNT do Begin
+   If (MouseX >= MenuPositions[I] - 4) and 
+      (MouseX <= MenuPositions[I] + Length(MenuNames[I]) * 8 + 4) Then Begin
+    GetMenuAtPosition := I;
+    Exit;
+   End;
+  End;
+ End;
+End;
+
+{ Procédure pour initialiser le système de menus }
+Procedure InitMenuSystem;
+Begin
+ CurrentMenu := 0;
+ MenuState := msNone;
+ ScreenWidth := GetMaxX;
+ ScreenHeight := GetMaxY;
+End;
+
+{ Procédure pour rafraîchir l'affichage complet }
+Procedure RefreshScreen;
+Begin
+ { Effacer l'écran avec fond blanc }
+ SetFillStyle(SolidFill, White);
+ Bar(0, MENU_HEIGHT + 1, ScreenWidth, ScreenHeight);
+ 
+ { Dessiner la barre de menu }
+ DrawMenuBar;
+ 
+ { Si un menu est ouvert, le dessiner }
+ If (MenuState = msDropDown) and (CurrentMenu > 0) Then Begin
+  DrawDropDownMenu(CurrentMenu);
+ End;
+End;
+
 BEGIN
  InitializeGraphics;
+ InitMenuSystem;
+ 
+ { Afficher l'écran initial avec le menu }
+ RefreshScreen;
+ 
+ { Boucle principale - en attente d'une touche pour quitter }
+ If MouseDriverFound Then Begin
+  ShowMouse;
+ End;
+ 
+ { Boucle principale du programme }
+ Repeat
+  { Attendre une entrée clavier }
+  If KeyPressed Then Begin
+   Case ReadKey of
+    #27: Break; { Escape pour quitter }
+    #0: Begin { Touches de fonction }
+         Case ReadKey of
+          #59: Begin { F1 - Aide }
+                CurrentMenu := 9;
+                MenuState := msDropDown;
+                RefreshScreen;
+               End;
+         End;
+        End;
+   End;
+  End;
+ Until False;
+ 
+ If MouseDriverFound Then Begin
+  HideMouse;
+ End;
+ 
+ CloseGraph;
 END.

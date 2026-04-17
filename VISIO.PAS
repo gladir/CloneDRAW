@@ -12,7 +12,7 @@
   1. [FAIT] Implementer le menu principal avec File, Edit, View, Insert, Format, Shape, Tools, Window, Help
   2. [FAIT] Ajouter le menu File avec New, Open, Close, Save, Save As, Export, Print, Print Preview, Exit
   3. [FAIT] Ajouter le menu Edit avec Undo, Redo, Cut, Copy, Paste, Delete, Select All, Find, Replace
-  4. Ajouter le menu View avec Zoom In, Zoom Out, Fit Page, Grid, Rulers, Guides, Snap to Grid
+  4. [FAIT] Ajouter le menu View avec Zoom In, Zoom Out, Fit Page, Grid, Rulers, Guides, Snap to Grid
   5. Ajouter le menu Insert avec Shape, Text Box, Image, Connector, Page, Layer
   6. Ajouter le menu Format avec Fill, Line, Text, Alignment, Arrange, Group, Ungroup
   7. Ajouter le menu Shape avec Rotate, Flip, Align, Distribute, Size, Position, Operations (Union, Intersect, Subtract)
@@ -337,6 +337,85 @@ End;
 { === FIN DES PROCEDURES DU MENU EDIT === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === PROCEDURES DU MENU VIEW === }
+{ ============================================================================ }
+
+Const
+ MIN_ZOOM_LEVEL = 10;   { 10% }
+ MAX_ZOOM_LEVEL = 400;  { 400% }
+ DEFAULT_ZOOM = 100;    { 100% }
+ ZOOM_STEP = 25;        { Pas de zoom de 25% }
+
+Var
+ ZoomLevel: Integer;
+ ShowGrid: Boolean;
+ ShowRulers: Boolean;
+ ShowGuides: Boolean;
+ SnapToGridEnabled: Boolean;
+
+{ Procédure Zoom In - Augmenter le zoom }
+Procedure ViewZoomIn;
+Begin
+ If ZoomLevel < MAX_ZOOM_LEVEL Then Begin
+  ZoomLevel := ZoomLevel + ZOOM_STEP;
+  If ZoomLevel > MAX_ZOOM_LEVEL Then
+   ZoomLevel := MAX_ZOOM_LEVEL;
+  { TODO: Redessiner le canevas avec le nouveau niveau de zoom }
+ End;
+End;
+
+{ Procédure Zoom Out - Diminuer le zoom }
+Procedure ViewZoomOut;
+Begin
+ If ZoomLevel > MIN_ZOOM_LEVEL Then Begin
+  ZoomLevel := ZoomLevel - ZOOM_STEP;
+  If ZoomLevel < MIN_ZOOM_LEVEL Then
+   ZoomLevel := MIN_ZOOM_LEVEL;
+  { TODO: Redessiner le canevas avec le nouveau niveau de zoom }
+ End;
+End;
+
+{ Procédure Fit Page - Ajuster le zoom pour afficher la page entière }
+Procedure ViewFitPage;
+Begin
+ { TODO: Calculer le zoom optimal pour afficher la page entière dans la vue }
+ { TODO: Appliquer ce zoom et centrer la vue sur la page }
+ ZoomLevel := DEFAULT_ZOOM;
+End;
+
+{ Procédure Grid - Activer/désactiver l'affichage de la grille }
+Procedure ViewGrid;
+Begin
+ ShowGrid := Not ShowGrid;
+ { TODO: Redessiner le canevas avec ou sans grille }
+End;
+
+{ Procédure Rulers - Activer/désactiver l'affichage des règles }
+Procedure ViewRulers;
+Begin
+ ShowRulers := Not ShowRulers;
+ { TODO: Redessiner l'interface avec ou sans règles }
+End;
+
+{ Procédure Guides - Activer/désactiver l'affichage des guides }
+Procedure ViewGuides;
+Begin
+ ShowGuides := Not ShowGuides;
+ { TODO: Redessiner le canevas avec ou sans guides }
+End;
+
+{ Procédure Snap to Grid - Activer/désactiver l'accrochage à la grille }
+Procedure ViewSnapToGrid;
+Begin
+ SnapToGridEnabled := Not SnapToGridEnabled;
+ { L'accrochage sera appliqué lors du déplacement des objets }
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DU MENU VIEW === }
+{ ============================================================================ }
+
 { Procédure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
@@ -412,7 +491,7 @@ Begin
       Items[12] := 'Replace...';
      End;
   3: Begin { View }
-      ItemCount := 7;
+      ItemCount := 9;
       Items[1] := 'Zoom In';
       Items[2] := 'Zoom Out';
       Items[3] := 'Fit Page';
@@ -420,6 +499,8 @@ Begin
       Items[5] := 'Grid';
       Items[6] := 'Rulers';
       Items[7] := 'Guides';
+      Items[8] := '-';
+      Items[9] := 'Snap to Grid';
      End;
   4: Begin { Insert }
       ItemCount := 6;
@@ -538,6 +619,12 @@ Begin
  CanRedo := False;
  ClipboardEmpty := True;
  HasSelection := False;
+ { Initialisation des variables du menu View }
+ ZoomLevel := DEFAULT_ZOOM;
+ ShowGrid := False;
+ ShowRulers := True;
+ ShowGuides := True;
+ SnapToGridEnabled := True;
 End;
 
 { Fonction pour exécuter une action du menu File }
@@ -579,6 +666,22 @@ Begin
  End;
 End;
 
+{ Procédure pour exécuter une action du menu View }
+Procedure ExecuteViewMenuAction(ItemIndex: Integer);
+Begin
+ Case ItemIndex of
+  1: ViewZoomIn;       { Zoom In }
+  2: ViewZoomOut;      { Zoom Out }
+  3: ViewFitPage;      { Fit Page }
+  { 4 est un séparateur }
+  5: ViewGrid;         { Grid }
+  6: ViewRulers;       { Rulers }
+  7: ViewGuides;       { Guides }
+  { 8 est un séparateur }
+  9: ViewSnapToGrid;   { Snap to Grid }
+ End;
+End;
+
 { Fonction pour déterminer quel élément de menu est sous la souris }
 Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer;
 Const
@@ -593,7 +696,7 @@ Begin
  Case MenuIndex of
   1: ItemCount := 11; { File }
   2: ItemCount := 12; { Edit }
-  3: ItemCount := 7;  { View }
+  3: ItemCount := 9;  { View }
   4: ItemCount := 6;  { Insert }
   5: ItemCount := 7;  { Format }
   6: ItemCount := 8;  { Shape }

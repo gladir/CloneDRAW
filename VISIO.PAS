@@ -19,7 +19,7 @@
   8. [FAIT] Implementer la barre d'outils avec boutons pour les actions frequentes (Selection, Rectangle, Ellipse, Ligne, Connecteur, Texte)
 
   === SUPPORT SOURIS ===
-  9. Gerer les evenements de clic gauche pour selection et dessin d'objets
+  9. [FAIT] Gerer les evenements de clic gauche pour selection et dessin d'objets
   10. Gerer le clic droit pour afficher un menu contextuel avec options (Cut, Copy, Paste, Delete, Properties)
   11. Implementer le glisser-deposer (drag and drop) pour deplacer et redimensionner les objets
   12. Ajouter les poignees de redimensionnement sur les objets selectionnes avec detection de survol
@@ -74,6 +74,13 @@ Const
  TOOLBAR_BTN_BORDER = 8;  { Gris foncé - bordure des boutons }
  TOOLBAR_BTN_SELECTED = 1; { Bleu - bouton sélectionné }
  
+ { Constantes pour la zone de travail et les objets }
+ WORK_AREA_TOP = 46;      { Début de la zone de travail (sous barre d'outils) }
+ MAX_SHAPES = 100;        { Nombre maximum d'objets }
+ DEFAULT_SHAPE_WIDTH = 80;  { Largeur par défaut d'une forme }
+ DEFAULT_SHAPE_HEIGHT = 60; { Hauteur par défaut d'une forme }
+ SELECTION_HANDLE_SIZE = 6; { Taille des poignées de sélection }
+ 
  { Noms des outils de la barre d'outils }
  ToolNames: Array[1..TOOLBAR_COUNT] of String[12] = (
    'Selection', 'Rectangle', 'Ellipse', 'Line', 'Connector', 'Text'
@@ -92,12 +99,33 @@ Const
 Type
  TMenuState = (msNone, msMenuBar, msDropDown);
  TToolType = (ttSelection, ttRectangle, ttEllipse, ttLine, ttConnector, ttText);
+ TShapeType = (stNone, stRectangle, stEllipse, stLine, stConnector, stText);
+ 
+ { Structure pour un objet graphique }
+ TShapeObject = Record
+  ShapeType: TShapeType;
+  X1, Y1, X2, Y2: Integer;  { Coordonnées du rectangle englobant }
+  FillColor: Integer;        { Couleur de remplissage }
+  LineColor: Integer;        { Couleur de contour }
+  LineWidth: Integer;        { Épaisseur de ligne }
+  Text: String[80];          { Texte (pour objets texte) }
+  Selected: Boolean;         { Objet sélectionné }
+ End;
 
 Var
  CurrentMenu: Integer;
  MenuState: TMenuState;
  ScreenWidth, ScreenHeight: Integer;
  CurrentTool: TToolType;
+ { Variables pour les objets graphiques }
+ Shapes: Array[1..MAX_SHAPES] of TShapeObject;
+ ShapeCount: Integer;
+ SelectedShape: Integer;
+ { Variables pour le dessin à la souris }
+ IsDrawing: Boolean;
+ DrawStartX, DrawStartY: Integer;
+ LastMouseX, LastMouseY: Integer;
+ LastMouseButton: LongInt;
 
 Procedure InitializeGraphics;
 Var
@@ -833,6 +861,322 @@ End;
 { === FIN DES PROCEDURES DE LA BARRE D'OUTILS === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === PROCEDURES DE GESTION DES OBJETS ET CLIC SOURIS === }
+{ ============================================================================ }
+
+{ Procédure pour initialiser un objet vide }
+Procedure InitShape(Var Shape: TShapeObject);
+Begin
+ Shape.ShapeType := stNone;
+ Shape.X1 := 0;
+ Shape.Y1 := 0;
+ Shape.X2 := 0;
+ Shape.Y2 := 0;
+ Shape.FillColor := White;
+ Shape.LineColor := Black;
+ Shape.LineWidth := 1;
+ Shape.Text := '';
+ Shape.Selected := False;
+End;
+
+{ Procédure pour dessiner un objet unique }
+Procedure DrawShape(Var Shape: TShapeObject);
+Var
+ CenterX, CenterY, RadiusX, RadiusY: Integer;
+Begin
+ If Shape.ShapeType = stNone Then Exit;
+ 
+ { Définir la couleur de contour }
+ SetColor(Shape.LineColor);
+ SetLineStyle(SolidLn, 0, Shape.LineWidth);
+ 
+ Case Shape.ShapeType of
+  stRectangle: Begin
+    { Remplir le rectangle }
+    SetFillStyle(SolidFill, Shape.FillColor);
+    Bar(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
+    { Dessiner le contour }
+    SetColor(Shape.LineColor);
+    Rectangle(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
+   End;
+  stEllipse: Begin
+    CenterX := (Shape.X1 + Shape.X2) div 2;
+    CenterY := (Shape.Y1 + Shape.Y2) div 2;
+    RadiusX := Abs(Shape.X2 - Shape.X1) div 2;
+    RadiusY := Abs(Shape.Y2 - Shape.Y1) div 2;
+    { Remplir l'ellipse }
+    SetFillStyle(SolidFill, Shape.FillColor);
+    FillEllipse(CenterX, CenterY, RadiusX, RadiusY);
+    { Dessiner le contour }
+    SetColor(Shape.LineColor);
+    Ellipse(CenterX, CenterY, 0, 360, RadiusX, RadiusY);
+   End;
+  stLine: Begin
+    SetColor(Shape.LineColor);
+    Line(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
+   End;
+  stConnector: Begin
+    { Dessiner une ligne avec des cercles aux extrémités }
+    SetColor(Shape.LineColor);
+    Line(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
+    SetFillStyle(SolidFill, Shape.FillColor);
+    FillEllipse(Shape.X1, Shape.Y1, 4, 4);
+    FillEllipse(Shape.X2, Shape.Y2, 4, 4);
+    SetColor(Shape.LineColor);
+    Circle(Shape.X1, Shape.Y1, 4);
+    Circle(Shape.X2, Shape.Y2, 4);
+   End;
+  stText: Begin
+    SetColor(Shape.LineColor);
+    OutTextXY(Shape.X1, Shape.Y1, Shape.Text);
+   End;
+ End;
+ 
+ { Dessiner les poignées de sélection si l'objet est sélectionné }
+ If Shape.Selected Then Begin
+  SetFillStyle(SolidFill, Blue);
+  SetColor(White);
+  { Coin supérieur gauche }
+  Bar(Shape.X1 - SELECTION_HANDLE_SIZE div 2, Shape.Y1 - SELECTION_HANDLE_SIZE div 2,
+      Shape.X1 + SELECTION_HANDLE_SIZE div 2, Shape.Y1 + SELECTION_HANDLE_SIZE div 2);
+  Rectangle(Shape.X1 - SELECTION_HANDLE_SIZE div 2, Shape.Y1 - SELECTION_HANDLE_SIZE div 2,
+            Shape.X1 + SELECTION_HANDLE_SIZE div 2, Shape.Y1 + SELECTION_HANDLE_SIZE div 2);
+  { Coin supérieur droit }
+  Bar(Shape.X2 - SELECTION_HANDLE_SIZE div 2, Shape.Y1 - SELECTION_HANDLE_SIZE div 2,
+      Shape.X2 + SELECTION_HANDLE_SIZE div 2, Shape.Y1 + SELECTION_HANDLE_SIZE div 2);
+  Rectangle(Shape.X2 - SELECTION_HANDLE_SIZE div 2, Shape.Y1 - SELECTION_HANDLE_SIZE div 2,
+            Shape.X2 + SELECTION_HANDLE_SIZE div 2, Shape.Y1 + SELECTION_HANDLE_SIZE div 2);
+  { Coin inférieur gauche }
+  Bar(Shape.X1 - SELECTION_HANDLE_SIZE div 2, Shape.Y2 - SELECTION_HANDLE_SIZE div 2,
+      Shape.X1 + SELECTION_HANDLE_SIZE div 2, Shape.Y2 + SELECTION_HANDLE_SIZE div 2);
+  Rectangle(Shape.X1 - SELECTION_HANDLE_SIZE div 2, Shape.Y2 - SELECTION_HANDLE_SIZE div 2,
+            Shape.X1 + SELECTION_HANDLE_SIZE div 2, Shape.Y2 + SELECTION_HANDLE_SIZE div 2);
+  { Coin inférieur droit }
+  Bar(Shape.X2 - SELECTION_HANDLE_SIZE div 2, Shape.Y2 - SELECTION_HANDLE_SIZE div 2,
+      Shape.X2 + SELECTION_HANDLE_SIZE div 2, Shape.Y2 + SELECTION_HANDLE_SIZE div 2);
+  Rectangle(Shape.X2 - SELECTION_HANDLE_SIZE div 2, Shape.Y2 - SELECTION_HANDLE_SIZE div 2,
+            Shape.X2 + SELECTION_HANDLE_SIZE div 2, Shape.Y2 + SELECTION_HANDLE_SIZE div 2);
+ End;
+End;
+
+{ Procédure pour dessiner tous les objets }
+Procedure DrawAllShapes;
+Var
+ I: Integer;
+Begin
+ For I := 1 to ShapeCount do Begin
+  DrawShape(Shapes[I]);
+ End;
+End;
+
+{ Fonction pour vérifier si un point est dans un objet }
+Function PointInShape(X, Y: Integer; Var Shape: TShapeObject): Boolean;
+Var
+ MinX, MinY, MaxX, MaxY: Integer;
+Begin
+ PointInShape := False;
+ If Shape.ShapeType = stNone Then Exit;
+ 
+ { Normaliser les coordonnées }
+ If Shape.X1 < Shape.X2 Then Begin
+  MinX := Shape.X1;
+  MaxX := Shape.X2;
+ End
+ Else Begin
+  MinX := Shape.X2;
+  MaxX := Shape.X1;
+ End;
+ 
+ If Shape.Y1 < Shape.Y2 Then Begin
+  MinY := Shape.Y1;
+  MaxY := Shape.Y2;
+ End
+ Else Begin
+  MinY := Shape.Y2;
+  MaxY := Shape.Y1;
+ End;
+ 
+ { Vérifier si le point est dans le rectangle englobant }
+ PointInShape := (X >= MinX) and (X <= MaxX) and (Y >= MinY) and (Y <= MaxY);
+End;
+
+{ Fonction pour trouver l'objet à une position donnée }
+Function GetShapeAtPosition(X, Y: Integer): Integer;
+Var
+ I: Integer;
+Begin
+ GetShapeAtPosition := 0;
+ { Parcourir les objets du dernier au premier (priorité aux objets dessus) }
+ For I := ShapeCount downto 1 do Begin
+  If PointInShape(X, Y, Shapes[I]) Then Begin
+   GetShapeAtPosition := I;
+   Exit;
+  End;
+ End;
+End;
+
+{ Procédure pour désélectionner tous les objets }
+Procedure DeselectAllShapes;
+Var
+ I: Integer;
+Begin
+ For I := 1 to ShapeCount do Begin
+  Shapes[I].Selected := False;
+ End;
+ SelectedShape := 0;
+End;
+
+{ Procédure pour sélectionner un objet }
+Procedure SelectShape(Index: Integer);
+Begin
+ DeselectAllShapes;
+ If (Index >= 1) and (Index <= ShapeCount) Then Begin
+  Shapes[Index].Selected := True;
+  SelectedShape := Index;
+ End;
+End;
+
+{ Procédure pour ajouter un nouvel objet }
+Procedure AddShape(ShapeType: TShapeType; X1, Y1, X2, Y2: Integer);
+Var
+ Temp: Integer;
+Begin
+ If ShapeCount >= MAX_SHAPES Then Exit;
+ 
+ Inc(ShapeCount);
+ InitShape(Shapes[ShapeCount]);
+ Shapes[ShapeCount].ShapeType := ShapeType;
+ 
+ { Normaliser les coordonnées (X1,Y1 = coin supérieur gauche) }
+ If X1 > X2 Then Begin
+  Temp := X1;
+  X1 := X2;
+  X2 := Temp;
+ End;
+ If Y1 > Y2 Then Begin
+  Temp := Y1;
+  Y1 := Y2;
+  Y2 := Temp;
+ End;
+ 
+ Shapes[ShapeCount].X1 := X1;
+ Shapes[ShapeCount].Y1 := Y1;
+ Shapes[ShapeCount].X2 := X2;
+ Shapes[ShapeCount].Y2 := Y2;
+ Shapes[ShapeCount].FillColor := CurrentFillColor;
+ Shapes[ShapeCount].LineColor := CurrentLineColor;
+ Shapes[ShapeCount].LineWidth := CurrentLineWidth;
+ 
+ DocumentModified := True;
+End;
+
+{ Procédure pour gérer le clic gauche de la souris }
+Procedure HandleLeftClick(X, Y: Integer);
+Var
+ ShapeIndex: Integer;
+ ToolIndex: Integer;
+Begin
+ { Vérifier si le clic est dans la barre de menu }
+ If Y <= MENU_HEIGHT Then Begin
+  { Gérer le clic sur le menu }
+  Exit;
+ End;
+ 
+ { Vérifier si le clic est dans la barre d'outils }
+ If (Y > MENU_HEIGHT) and (Y <= TOOLBAR_TOP + TOOLBAR_HEIGHT) Then Begin
+  ToolIndex := GetToolAtPosition(X, Y);
+  If ToolIndex > 0 Then Begin
+   SelectTool(ToolIndex);
+   DrawToolbar;
+  End;
+  Exit;
+ End;
+ 
+ { Le clic est dans la zone de travail }
+ If Y > WORK_AREA_TOP Then Begin
+  Case CurrentTool of
+   ttSelection: Begin
+     { Mode sélection: chercher un objet sous le curseur }
+     ShapeIndex := GetShapeAtPosition(X, Y);
+     If ShapeIndex > 0 Then Begin
+      SelectShape(ShapeIndex);
+     End
+     Else Begin
+      DeselectAllShapes;
+     End;
+    End;
+   ttRectangle, ttEllipse, ttLine, ttConnector: Begin
+     { Démarrer le dessin d'une forme }
+     IsDrawing := True;
+     DrawStartX := X;
+     DrawStartY := Y;
+    End;
+   ttText: Begin
+     { Ajouter un objet texte à la position du clic }
+     If ShapeCount < MAX_SHAPES Then Begin
+      Inc(ShapeCount);
+      InitShape(Shapes[ShapeCount]);
+      Shapes[ShapeCount].ShapeType := stText;
+      Shapes[ShapeCount].X1 := X;
+      Shapes[ShapeCount].Y1 := Y;
+      Shapes[ShapeCount].X2 := X + 50;
+      Shapes[ShapeCount].Y2 := Y + 12;
+      Shapes[ShapeCount].Text := 'Text';
+      Shapes[ShapeCount].LineColor := CurrentLineColor;
+      DocumentModified := True;
+     End;
+    End;
+  End;
+ End;
+End;
+
+{ Procédure pour gérer le relâchement du bouton gauche }
+Procedure HandleLeftRelease(X, Y: Integer);
+Var
+ ShapeType: TShapeType;
+Begin
+ If Not IsDrawing Then Exit;
+ 
+ IsDrawing := False;
+ 
+ { Créer la forme selon l'outil actuel }
+ Case CurrentTool of
+  ttRectangle: ShapeType := stRectangle;
+  ttEllipse: ShapeType := stEllipse;
+  ttLine: ShapeType := stLine;
+  ttConnector: ShapeType := stConnector;
+  Else Exit;
+ End;
+ 
+ { Ajouter la forme si elle a une taille minimale }
+ If (Abs(X - DrawStartX) > 5) or (Abs(Y - DrawStartY) > 5) Then Begin
+  AddShape(ShapeType, DrawStartX, DrawStartY, X, Y);
+ End;
+End;
+
+{ Procédure pour initialiser les objets }
+Procedure InitShapes;
+Var
+ I: Integer;
+Begin
+ ShapeCount := 0;
+ SelectedShape := 0;
+ IsDrawing := False;
+ DrawStartX := 0;
+ DrawStartY := 0;
+ LastMouseX := 0;
+ LastMouseY := 0;
+ LastMouseButton := 0;
+ For I := 1 to MAX_SHAPES do Begin
+  InitShape(Shapes[I]);
+ End;
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DE GESTION DES OBJETS === }
+{ ============================================================================ }
+
 { Procédure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
@@ -1214,6 +1558,9 @@ Begin
  SetFillStyle(SolidFill, White);
  Bar(0, TOOLBAR_TOP + TOOLBAR_HEIGHT + 1, ScreenWidth, ScreenHeight);
  
+ { Dessiner tous les objets graphiques }
+ DrawAllShapes;
+ 
  { Dessiner la barre de menu }
  DrawMenuBar;
  
@@ -1229,6 +1576,7 @@ End;
 BEGIN
  InitializeGraphics;
  InitMenuSystem;
+ InitShapes;
  
  { Afficher l'écran initial avec le menu }
  RefreshScreen;
@@ -1240,6 +1588,36 @@ BEGIN
  
  { Boucle principale du programme }
  Repeat
+  { Gérer les événements de la souris }
+  If MouseDriverFound Then Begin
+   {$IFDEF FPC}
+    GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
+   {$ELSE}
+    GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
+   {$ENDIF}
+   
+   { Détecter un clic gauche (bouton 1) }
+   If (LastMouseButton and 1) = 1 Then Begin
+    HideMouse;
+    HandleLeftClick(LastMouseX, LastMouseY);
+    RefreshScreen;
+    ShowMouse;
+    { Attendre que le bouton soit relâché }
+    Repeat
+     {$IFDEF FPC}
+      GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
+     {$ELSE}
+      GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
+     {$ENDIF}
+    Until (LastMouseButton and 1) = 0;
+    { Gérer le relâchement du bouton }
+    HideMouse;
+    HandleLeftRelease(LastMouseX, LastMouseY);
+    RefreshScreen;
+    ShowMouse;
+   End;
+  End;
+ 
   { Attendre une entrée clavier }
   If KeyPressed Then Begin
    Case ReadKey of

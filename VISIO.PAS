@@ -26,7 +26,7 @@
 
   === OBJETS ET FORMES ===
   13. [FAIT] Creer les types d'objets de base: Rectangle, Ellipse, Ligne, Polygone, Courbe de Bezier, Texte, Image
-  14. Implementer les connecteurs entre objets avec points d'ancrage automatiques
+  14. [FAIT] Implementer les connecteurs entre objets avec points d'ancrage automatiques
   15. Permettre la modification des proprietes des objets: couleur de remplissage, couleur de trait, epaisseur de ligne, style de ligne
   16. Ajouter le support des calques (layers) avec visibilite et verrouillage
   17. Implementer la gestion des groupes d'objets (grouper, degrouper, entrer dans le groupe)
@@ -108,6 +108,17 @@ Const
  
  { Constantes pour les poignées de redimensionnement }
  RESIZE_HANDLE_SIZE = 6;   { Taille des poignées en pixels }
+ 
+ { Constantes pour les points d'ancrage des connecteurs }
+ ANCHOR_NONE = 0;         { Pas d'ancrage }
+ ANCHOR_TOP = 1;          { Point d'ancrage en haut (centre) }
+ ANCHOR_BOTTOM = 2;       { Point d'ancrage en bas (centre) }
+ ANCHOR_LEFT = 3;         { Point d'ancrage à gauche (centre) }
+ ANCHOR_RIGHT = 4;        { Point d'ancrage à droite (centre) }
+ ANCHOR_CENTER = 5;       { Point d'ancrage au centre }
+ ANCHOR_COUNT = 4;        { Nombre de points d'ancrage par forme (haut, bas, gauche, droite) }
+ ANCHOR_POINT_SIZE = 5;   { Taille des points d'ancrage en pixels }
+ ANCHOR_SNAP_DISTANCE = 15; { Distance max pour accrocher à un point d'ancrage }
  RESIZE_HANDLE_NONE = 0;   { Aucune poignée }
  RESIZE_HANDLE_NW = 1;     { Coin nord-ouest (haut-gauche) }
  RESIZE_HANDLE_N = 2;      { Milieu nord (haut) }
@@ -162,6 +173,11 @@ Type
   PointCount: Integer;       { Nombre de points utilisés }
   { Champ pour les images }
   ImagePath: String[255];    { Chemin vers le fichier image }
+  { Champs pour les connecteurs avec points d'ancrage automatiques }
+  ConnectStartShape: Integer;  { Index de la forme source (0 = pas connecté) }
+  ConnectEndShape: Integer;    { Index de la forme cible (0 = pas connecté) }
+  ConnectStartAnchor: Integer; { Point d'ancrage source (ANCHOR_*) }
+  ConnectEndAnchor: Integer;   { Point d'ancrage cible (ANCHOR_*) }
  End;
 
 Var
@@ -192,6 +208,9 @@ Var
  { Variable pour le survol des poignées }
  HoveredHandle: Integer;      { Poignée actuellement survolée (RESIZE_HANDLE_*) }
  OldHoveredHandle: Integer;   { Ancienne poignée survolée (pour détection de changement) }
+ { Variables pour les connecteurs et points d'ancrage }
+ HoveredShapeForAnchor: Integer;  { Forme survolée pour afficher les points d'ancrage }
+ NearestAnchorPoint: Integer;     { Point d'ancrage le plus proche de la souris }
 
 Procedure InitializeGraphics;
 Var
@@ -954,6 +973,161 @@ Begin
  End;
  { Initialiser le chemin d'image }
  Shape.ImagePath := '';
+ { Initialiser les champs de connexion pour les connecteurs }
+ Shape.ConnectStartShape := 0;
+ Shape.ConnectEndShape := 0;
+ Shape.ConnectStartAnchor := ANCHOR_NONE;
+ Shape.ConnectEndAnchor := ANCHOR_NONE;
+End;
+
+{ *** FONCTIONS POUR LES CONNECTEURS ET POINTS D'ANCRAGE *** }
+
+{ Fonction pour calculer les coordonnées d'un point d'ancrage sur une forme }
+Procedure GetAnchorPoint(ShapeIndex: Integer; AnchorType: Integer; Var AX, AY: Integer);
+Var
+ CenterX, CenterY: Integer;
+Begin
+ If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Begin
+  AX := 0;
+  AY := 0;
+  Exit;
+ End;
+ 
+ With Shapes[ShapeIndex] do Begin
+  CenterX := (X1 + X2) div 2;
+  CenterY := (Y1 + Y2) div 2;
+  
+  Case AnchorType of
+   ANCHOR_TOP: Begin
+    AX := CenterX;
+    AY := Y1;
+   End;
+   ANCHOR_BOTTOM: Begin
+    AX := CenterX;
+    AY := Y2;
+   End;
+   ANCHOR_LEFT: Begin
+    AX := X1;
+    AY := CenterY;
+   End;
+   ANCHOR_RIGHT: Begin
+    AX := X2;
+    AY := CenterY;
+   End;
+   ANCHOR_CENTER: Begin
+    AX := CenterX;
+    AY := CenterY;
+   End;
+   Else Begin
+    AX := CenterX;
+    AY := CenterY;
+   End;
+  End;
+ End;
+End;
+
+{ Fonction pour trouver la forme et le point d'ancrage le plus proche d'une position }
+Function FindNearestAnchor(X, Y: Integer; Var FoundShape: Integer; Var FoundAnchor: Integer): Boolean;
+Var
+ I, AnchorType: Integer;
+ AX, AY: Integer;
+ Dist, MinDist: Real;
+ IsConnectable: Boolean;
+Begin
+ FindNearestAnchor := False;
+ FoundShape := 0;
+ FoundAnchor := ANCHOR_NONE;
+ MinDist := ANCHOR_SNAP_DISTANCE + 1;
+ 
+ For I := 1 to ShapeCount do Begin
+  { Ne pas se connecter à soi-même ou à d'autres connecteurs }
+  IsConnectable := (Shapes[I].ShapeType <> stConnector) and
+                   (Shapes[I].ShapeType <> stLine) and
+                   (Shapes[I].ShapeType <> stText) and
+                   (Shapes[I].ShapeType <> stNone);
+  
+  If IsConnectable Then Begin
+   For AnchorType := ANCHOR_TOP to ANCHOR_RIGHT do Begin
+    GetAnchorPoint(I, AnchorType, AX, AY);
+    Dist := Sqrt(Sqr(X - AX) + Sqr(Y - AY));
+    If Dist < MinDist Then Begin
+     MinDist := Dist;
+     FoundShape := I;
+     FoundAnchor := AnchorType;
+     FindNearestAnchor := True;
+    End;
+   End;
+  End;
+ End;
+End;
+
+{ Procédure pour mettre à jour les extrémités d'un connecteur selon ses connexions }
+Procedure UpdateConnectorEndpoints(ConnectorIndex: Integer);
+Var
+ AX, AY: Integer;
+Begin
+ If (ConnectorIndex < 1) or (ConnectorIndex > ShapeCount) Then Exit;
+ If Shapes[ConnectorIndex].ShapeType <> stConnector Then Exit;
+ 
+ With Shapes[ConnectorIndex] do Begin
+  { Mettre à jour le point de départ si connecté }
+  If ConnectStartShape > 0 Then Begin
+   GetAnchorPoint(ConnectStartShape, ConnectStartAnchor, AX, AY);
+   X1 := AX;
+   Y1 := AY;
+  End;
+  
+  { Mettre à jour le point d'arrivée si connecté }
+  If ConnectEndShape > 0 Then Begin
+   GetAnchorPoint(ConnectEndShape, ConnectEndAnchor, AX, AY);
+   X2 := AX;
+   Y2 := AY;
+  End;
+ End;
+End;
+
+{ Procédure pour mettre à jour tous les connecteurs (après déplacement d'une forme) }
+Procedure UpdateAllConnectors;
+Var
+ I: Integer;
+Begin
+ For I := 1 to ShapeCount do Begin
+  If Shapes[I].ShapeType = stConnector Then Begin
+   UpdateConnectorEndpoints(I);
+  End;
+ End;
+End;
+
+{ Procédure pour dessiner les points d'ancrage sur une forme }
+Procedure DrawAnchorPoints(ShapeIndex: Integer; HighlightAnchor: Integer);
+Var
+ AnchorType: Integer;
+ AX, AY: Integer;
+ HalfSize: Integer;
+ AnchorColor: Integer;
+Begin
+ If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
+ 
+ { Ne pas dessiner les ancres sur les connecteurs, lignes ou textes }
+ If Shapes[ShapeIndex].ShapeType in [stConnector, stLine, stText, stNone] Then Exit;
+ 
+ HalfSize := ANCHOR_POINT_SIZE div 2;
+ 
+ For AnchorType := ANCHOR_TOP to ANCHOR_RIGHT do Begin
+  GetAnchorPoint(ShapeIndex, AnchorType, AX, AY);
+  
+  { Choisir la couleur selon si le point est survolé }
+  If AnchorType = HighlightAnchor Then
+   AnchorColor := Green  { Vert pour le point survolé }
+  Else
+   AnchorColor := Cyan;  { Cyan pour les autres points }
+  
+  { Dessiner un petit carré pour le point d'ancrage }
+  SetFillStyle(SolidFill, AnchorColor);
+  SetColor(Black);
+  Bar(AX - HalfSize, AY - HalfSize, AX + HalfSize, AY + HalfSize);
+  Rectangle(AX - HalfSize, AY - HalfSize, AX + HalfSize, AY + HalfSize);
+ End;
 End;
 
 { Procédure pour dessiner une poignée de redimensionnement unique }
@@ -1056,12 +1230,38 @@ Begin
     { Dessiner une ligne avec des cercles aux extrémités }
     SetColor(Shape.LineColor);
     Line(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
-    SetFillStyle(SolidFill, Shape.FillColor);
-    FillEllipse(Shape.X1, Shape.Y1, 4, 4);
-    FillEllipse(Shape.X2, Shape.Y2, 4, 4);
-    SetColor(Shape.LineColor);
-    Circle(Shape.X1, Shape.Y1, 4);
-    Circle(Shape.X2, Shape.Y2, 4);
+    
+    { Dessiner le point de départ }
+    If Shape.ConnectStartShape > 0 Then Begin
+     { Connecté - dessiner un carré plein }
+     SetFillStyle(SolidFill, Green);
+     Bar(Shape.X1 - 4, Shape.Y1 - 4, Shape.X1 + 4, Shape.Y1 + 4);
+     SetColor(Shape.LineColor);
+     Rectangle(Shape.X1 - 4, Shape.Y1 - 4, Shape.X1 + 4, Shape.Y1 + 4);
+    End
+    Else Begin
+     { Non connecté - dessiner un cercle }
+     SetFillStyle(SolidFill, Shape.FillColor);
+     FillEllipse(Shape.X1, Shape.Y1, 4, 4);
+     SetColor(Shape.LineColor);
+     Circle(Shape.X1, Shape.Y1, 4);
+    End;
+    
+    { Dessiner le point d'arrivée }
+    If Shape.ConnectEndShape > 0 Then Begin
+     { Connecté - dessiner un carré plein }
+     SetFillStyle(SolidFill, Green);
+     Bar(Shape.X2 - 4, Shape.Y2 - 4, Shape.X2 + 4, Shape.Y2 + 4);
+     SetColor(Shape.LineColor);
+     Rectangle(Shape.X2 - 4, Shape.Y2 - 4, Shape.X2 + 4, Shape.Y2 + 4);
+    End
+    Else Begin
+     { Non connecté - dessiner un cercle }
+     SetFillStyle(SolidFill, Shape.FillColor);
+     FillEllipse(Shape.X2, Shape.Y2, 4, 4);
+     SetColor(Shape.LineColor);
+     Circle(Shape.X2, Shape.Y2, 4);
+    End;
    End;
   stText: Begin
     SetColor(Shape.LineColor);
@@ -1151,6 +1351,11 @@ Var
 Begin
  For I := 1 to ShapeCount do Begin
   DrawShape(Shapes[I]);
+ End;
+ 
+ { Dessiner les points d'ancrage sur la forme survolée si on utilise l'outil connecteur }
+ If (CurrentTool = ttConnector) and (HoveredShapeForAnchor > 0) Then Begin
+  DrawAnchorPoints(HoveredShapeForAnchor, NearestAnchorPoint);
  End;
 End;
 
@@ -1612,10 +1817,14 @@ End;
 Procedure HandleLeftRelease(X, Y: Integer);
 Var
  ShapeType: TShapeType;
+ StartShape, StartAnchor: Integer;
+ EndShape, EndAnchor: Integer;
 Begin
  { Terminer le glissement s'il y en a un en cours }
  If DragMode <> DRAG_MODE_NONE Then Begin
   EndDrag;
+  { Mettre à jour tous les connecteurs après déplacement }
+  UpdateAllConnectors;
   Exit;
  End;
  
@@ -1623,12 +1832,49 @@ Begin
  
  IsDrawing := False;
  
+ { Traitement spécial pour les connecteurs }
+ If CurrentTool = ttConnector Then Begin
+  { Vérifier si on doit créer un connecteur }
+  If (Abs(X - DrawStartX) > 5) or (Abs(Y - DrawStartY) > 5) Then Begin
+   { Chercher les points d'ancrage proches pour le début et la fin }
+   FindNearestAnchor(DrawStartX, DrawStartY, StartShape, StartAnchor);
+   FindNearestAnchor(X, Y, EndShape, EndAnchor);
+   
+   { Créer le connecteur }
+   If ShapeCount < MAX_SHAPES Then Begin
+    Inc(ShapeCount);
+    InitShape(Shapes[ShapeCount]);
+    Shapes[ShapeCount].ShapeType := stConnector;
+    
+    { Définir les connexions }
+    Shapes[ShapeCount].ConnectStartShape := StartShape;
+    Shapes[ShapeCount].ConnectStartAnchor := StartAnchor;
+    Shapes[ShapeCount].ConnectEndShape := EndShape;
+    Shapes[ShapeCount].ConnectEndAnchor := EndAnchor;
+    
+    { Définir les coordonnées initiales }
+    Shapes[ShapeCount].X1 := DrawStartX;
+    Shapes[ShapeCount].Y1 := DrawStartY;
+    Shapes[ShapeCount].X2 := X;
+    Shapes[ShapeCount].Y2 := Y;
+    
+    { Mettre à jour les extrémités si connecté à des formes }
+    UpdateConnectorEndpoints(ShapeCount);
+    
+    Shapes[ShapeCount].FillColor := CurrentFillColor;
+    Shapes[ShapeCount].LineColor := CurrentLineColor;
+    Shapes[ShapeCount].LineWidth := CurrentLineWidth;
+    DocumentModified := True;
+   End;
+  End;
+  Exit;
+ End;
+ 
  { Créer la forme selon l'outil actuel }
  Case CurrentTool of
   ttRectangle: ShapeType := stRectangle;
   ttEllipse: ShapeType := stEllipse;
   ttLine: ShapeType := stLine;
-  ttConnector: ShapeType := stConnector;
   ttImage: ShapeType := stImage;
   Else Exit;
  End;
@@ -1654,6 +1900,9 @@ Begin
  LastMouseButton := 0;
  { Initialiser le glisser-déposer }
  InitDragDrop;
+ { Initialiser les variables pour les points d'ancrage }
+ HoveredShapeForAnchor := 0;
+ NearestAnchorPoint := ANCHOR_NONE;
  For I := 1 to MAX_SHAPES do Begin
   InitShape(Shapes[I]);
  End;
@@ -2279,6 +2528,24 @@ BEGIN
    End
    Else Begin
     HoveredHandle := RESIZE_HANDLE_NONE;
+   End;
+   
+   { Détecter le survol des formes pour afficher les points d'ancrage (outil connecteur) }
+   If (CurrentTool = ttConnector) and (DragMode = DRAG_MODE_NONE) Then Begin
+    { Trouver la forme sous la souris }
+    HoveredShapeForAnchor := GetShapeAtPosition(LastMouseX, LastMouseY);
+    { Trouver le point d'ancrage le plus proche si on survole une forme }
+    If HoveredShapeForAnchor > 0 Then Begin
+     If Not FindNearestAnchor(LastMouseX, LastMouseY, HoveredShapeForAnchor, NearestAnchorPoint) Then
+      NearestAnchorPoint := ANCHOR_NONE;
+    End
+    Else Begin
+     NearestAnchorPoint := ANCHOR_NONE;
+    End;
+   End
+   Else Begin
+    HoveredShapeForAnchor := 0;
+    NearestAnchorPoint := ANCHOR_NONE;
    End;
    
    { Détecter un clic gauche (bouton 1) }

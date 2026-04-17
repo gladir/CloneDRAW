@@ -17,7 +17,7 @@
 
   === SUPPORT DE LA SOURIS ===
   6. [DONE] Implémenter la gestion complète de la souris avec clic gauche, clic droit, molette et déplacement
-  7. Ajouter le zoom par molette de souris et le pan par clic milieu
+  7. [DONE] Ajouter le zoom par molette de souris et le pan par clic milieu
   8. Créer le curseur de précision (crosshair) avec affichage des coordonnées en temps réel
   9. Implémenter le système de sélection d'objets par clic, fenêtre et fenêtre croisée
   10. Ajouter les poignées de manipulation (grips) pour éditer les objets sélectionnés
@@ -211,6 +211,11 @@ Procedure ExecuteContextAction(Action: Integer); Forward;
 Procedure HandleRightClick(X, Y: Integer); Forward;
 Procedure HandleMiddleClick(X, Y: Integer); Forward;
 
+{ Forward declarations - TODO 7 }
+Procedure HandleMouseWheel(Delta: Integer); Forward;
+Function ScreenToWorldX(SX: Integer): Real; Forward;
+Function ScreenToWorldY(SY: Integer): Real; Forward;
+
 Procedure InitializeGraphics;
 Var
  Driver, Mode: Integer;
@@ -297,7 +302,24 @@ End;
   Y := LY;
   Button := LB;
  End;
+
+ { Obtenir le delta de la molette de souris - TODO 7 }
+ Function GetMouseWheelDelta: Integer;
+ Begin
+  { PtcMouse: la molette est gérée via les événements de souris }
+  { Pour simplifier, on utilise les touches clavier + et - comme alternative }
+  GetMouseWheelDelta := 0;
+ End;
 {$ENDIF}
+
+{ Procédures pour obtenir le delta de la molette via clavier - TODO 7 }
+Procedure ProcessMouseWheelFromKeyboard(Key: Char);
+Begin
+ Case Key of
+  '+', '=': HandleMouseWheel(1);  { Zoom avant }
+  '-', '_': HandleMouseWheel(-1); { Zoom arrière }
+ End;
+End;
 
 { ============================================================================ }
 { Procédure d'initialisation des menus - TODO 1                                }
@@ -1281,18 +1303,160 @@ Begin
  End;
 End;
 
-{ Dessiner la zone de dessin principale }
-Procedure DrawCanvas;
+{ Convertir les coordonnées écran en coordonnées monde - TODO 7 }
+Function ScreenToWorldX(SX: Integer): Real;
+Var
+ CanvasLeft, CanvasWidth: Integer;
+ CanvasCenterX: Real;
 Begin
+ CanvasLeft := 0;
+ CanvasWidth := ScreenWidth;
+ CanvasCenterX := CanvasWidth / 2.0;
+ ScreenToWorldX := ((SX - CanvasLeft - CanvasCenterX) / ZoomLevel) - ViewOffsetX;
+End;
+
+Function ScreenToWorldY(SY: Integer): Real;
+Var
+ CanvasTop, CanvasHeight: Integer;
+ CanvasCenterY: Real;
+Begin
+ CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ CanvasHeight := ScreenHeight - CanvasTop - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ CanvasCenterY := CanvasTop + CanvasHeight / 2.0;
+ ScreenToWorldY := -((SY - CanvasCenterY) / ZoomLevel) - ViewOffsetY;
+End;
+
+{ Convertir les coordonnées monde en coordonnées écran - TODO 7 }
+Function WorldToScreenX(WX: Real): Integer;
+Var
+ CanvasLeft, CanvasWidth: Integer;
+ CanvasCenterX: Real;
+Begin
+ CanvasLeft := 0;
+ CanvasWidth := ScreenWidth;
+ CanvasCenterX := CanvasWidth / 2.0;
+ WorldToScreenX := Round((WX + ViewOffsetX) * ZoomLevel + CanvasCenterX);
+End;
+
+Function WorldToScreenY(WY: Real): Integer;
+Var
+ CanvasTop, CanvasHeight: Integer;
+ CanvasCenterY: Real;
+Begin
+ CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ CanvasHeight := ScreenHeight - CanvasTop - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ CanvasCenterY := CanvasTop + CanvasHeight / 2.0;
+ WorldToScreenY := Round(-(WY + ViewOffsetY) * ZoomLevel + CanvasCenterY);
+End;
+
+{ Dessiner la grille de fond - TODO 7 }
+Procedure DrawGrid;
+Var
+ CanvasTop, CanvasBottom, CanvasLeft, CanvasRight: Integer;
+ GridSpacing: Real;
+ X, Y: Real;
+ SX, SY: Integer;
+ StartX, StartY, EndX, EndY: Real;
+Begin
+ CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ CanvasLeft := 0;
+ CanvasRight := ScreenWidth - 1;
+ 
+ { Calculer l'espacement de la grille en fonction du zoom }
+ GridSpacing := 50.0;  { Espacement de base }
+ If ZoomLevel < 0.5 Then GridSpacing := 100.0;
+ If ZoomLevel < 0.25 Then GridSpacing := 200.0;
+ If ZoomLevel > 2.0 Then GridSpacing := 25.0;
+ If ZoomLevel > 4.0 Then GridSpacing := 10.0;
+ 
+ { Calculer les limites visibles en coordonnées monde }
+ StartX := ScreenToWorldX(CanvasLeft);
+ EndX := ScreenToWorldX(CanvasRight);
+ StartY := ScreenToWorldY(CanvasBottom);
+ EndY := ScreenToWorldY(CanvasTop);
+ 
+ { Arrondir au multiple de GridSpacing }
+ StartX := Int(StartX / GridSpacing) * GridSpacing - GridSpacing;
+ StartY := Int(StartY / GridSpacing) * GridSpacing - GridSpacing;
+ 
+ SetColor(DarkGray);
+ 
+ { Dessiner les lignes verticales }
+ X := StartX;
+ While X <= EndX do Begin
+  SX := WorldToScreenX(X);
+  If (SX >= CanvasLeft) and (SX <= CanvasRight) Then
+   Line(SX, CanvasTop, SX, CanvasBottom);
+  X := X + GridSpacing;
+ End;
+ 
+ { Dessiner les lignes horizontales }
+ Y := StartY;
+ While Y <= EndY do Begin
+  SY := WorldToScreenY(Y);
+  If (SY >= CanvasTop) and (SY <= CanvasBottom) Then
+   Line(CanvasLeft, SY, CanvasRight, SY);
+  Y := Y + GridSpacing;
+ End;
+ 
+ { Dessiner les axes principaux }
+ SetColor(Red);
+ SX := WorldToScreenX(0);
+ If (SX >= CanvasLeft) and (SX <= CanvasRight) Then
+  Line(SX, CanvasTop, SX, CanvasBottom);
+ 
+ SetColor(Green);
+ SY := WorldToScreenY(0);
+ If (SY >= CanvasTop) and (SY <= CanvasBottom) Then
+  Line(CanvasLeft, SY, CanvasRight, SY);
+End;
+
+{ Dessiner la zone de dessin principale - TODO 7: Support zoom et pan }
+Procedure DrawCanvas;
+Var
+ CanvasTop, CanvasBottom: Integer;
+ CrosshairX, CrosshairY: Integer;
+Begin
+ CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ 
  { Zone de dessin noire - style AutoCAD }
  SetFillStyle(SolidFill, Black);
- Bar(0, MENUBAR_HEIGHT + TOOLBAR_HEIGHT,
-     ScreenWidth - 1, ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT);
+ Bar(0, CanvasTop, ScreenWidth - 1, CanvasBottom);
 
- { Curseur crosshair au centre }
- SetColor(White);
- Line(ScreenWidth div 2 - 20, ScreenHeight div 2, ScreenWidth div 2 + 20, ScreenHeight div 2);
- Line(ScreenWidth div 2, ScreenHeight div 2 - 20, ScreenWidth div 2, ScreenHeight div 2 + 20);
+ { Dessiner la grille }
+ DrawGrid;
+ 
+ { Curseur crosshair au centre de la vue (point 0,0 transformé par zoom/pan) }
+ CrosshairX := WorldToScreenX(0);
+ CrosshairY := WorldToScreenY(0);
+ 
+ { Ne dessiner que si visible dans le canvas }
+ If (CrosshairX >= 0) and (CrosshairX < ScreenWidth) and
+    (CrosshairY >= CanvasTop) and (CrosshairY < CanvasBottom) Then Begin
+  SetColor(White);
+  If CrosshairX >= 20 Then
+   Line(CrosshairX - 20, CrosshairY, CrosshairX + 20, CrosshairY)
+  Else
+   Line(0, CrosshairY, CrosshairX + 20, CrosshairY);
+  If CrosshairY >= CanvasTop + 20 Then
+   Line(CrosshairX, CrosshairY - 20, CrosshairX, CrosshairY + 20)
+  Else
+   Line(CrosshairX, CanvasTop, CrosshairX, CrosshairY + 20);
+ End;
+ 
+ { Indicateur de mode pan si actif - TODO 7 }
+ If MouseMode = MOUSE_MODE_PAN Then Begin
+  SetColor(Yellow);
+  OutTextXY(ScreenWidth div 2 - 20, CanvasTop + 5, '** PAN **');
+ End;
+ 
+ { Indicateur de mode zoom si actif }
+ If MouseMode = MOUSE_MODE_ZOOM Then Begin
+  SetColor(Yellow);
+  OutTextXY(ScreenWidth div 2 - 20, CanvasTop + 5, '** ZOOM **');
+ End;
 End;
 
 { Dessiner la ligne de commande }
@@ -1309,6 +1473,9 @@ End;
 
 { Dessiner la barre d'état }
 Procedure DrawStatusBar;
+Var
+ CoordStr, ZoomStr: String;
+ WorldX, WorldY: Real;
 Begin
  { Fond de la barre d'état }
  SetFillStyle(SolidFill, LightGray);
@@ -1317,11 +1484,22 @@ Begin
  SetColor(Black);
  Line(0, ScreenHeight - STATUSBAR_HEIGHT, ScreenWidth - 1, ScreenHeight - STATUSBAR_HEIGHT);
 
- { Coordonnées }
- OutTextXY(5, ScreenHeight - STATUSBAR_HEIGHT + 5, '0.0000, 0.0000, 0.0000');
+ { Coordonnées du curseur en coordonnées monde - TODO 7 }
+ WorldX := ScreenToWorldX(MouseX);
+ WorldY := ScreenToWorldY(MouseY);
+ Str(WorldX:8:2, CoordStr);
+ CoordStr := CoordStr + ', ';
+ Str(WorldY:8:2, ZoomStr);
+ CoordStr := CoordStr + ZoomStr + ', 0.00';
+ OutTextXY(5, ScreenHeight - STATUSBAR_HEIGHT + 5, CoordStr);
+
+ { Niveau de zoom - TODO 7 }
+ Str(ZoomLevel * 100:5:0, ZoomStr);
+ ZoomStr := 'Zoom: ' + ZoomStr + '%';
+ OutTextXY(200, ScreenHeight - STATUSBAR_HEIGHT + 5, ZoomStr);
 
  { Modes SNAP, GRID, ORTHO, etc. }
- OutTextXY(200, ScreenHeight - STATUSBAR_HEIGHT + 5, 'SNAP GRID ORTHO POLAR OSNAP OTRACK LWT MODEL');
+ OutTextXY(320, ScreenHeight - STATUSBAR_HEIGHT + 5, 'SNAP GRID ORTHO POLAR OSNAP LWT MODEL');
 End;
 
 { Dessiner l'interface complète }
@@ -1841,6 +2019,7 @@ Var
  OldMouseX, OldMouseY, OldButtons: Integer;
  LX, LY, LB: LongInt;
  Key: Char;
+ PanStep: Real;
 Begin
  Running := True;
  OldMouseX := -1;
@@ -1874,17 +2053,23 @@ Begin
       ((OldButtons and MOUSE_BUTTON_RIGHT) = 0) Then
     HandleMouseClick(MouseX, MouseY, MOUSE_BUTTON_RIGHT);
    
-   { Clic milieu enfoncé }
+   { Clic milieu enfoncé - TODO 7: Activer le pan }
    If ((MouseButtons and MOUSE_BUTTON_MIDDLE) = MOUSE_BUTTON_MIDDLE) and
-      ((OldButtons and MOUSE_BUTTON_MIDDLE) = 0) Then
+      ((OldButtons and MOUSE_BUTTON_MIDDLE) = 0) Then Begin
     HandleMouseClick(MouseX, MouseY, MOUSE_BUTTON_MIDDLE);
+    MouseMode := MOUSE_MODE_PAN;
+    MouseDragging := True;
+    DragStartX := MouseX;
+    DragStartY := MouseY;
+   End;
    
-   { Clic milieu relâché - fin du pan }
+   { Clic milieu relâché - fin du pan - TODO 7 }
    If ((MouseButtons and MOUSE_BUTTON_MIDDLE) = 0) and
       ((OldButtons and MOUSE_BUTTON_MIDDLE) = MOUSE_BUTTON_MIDDLE) Then Begin
     If MouseMode = MOUSE_MODE_PAN Then Begin
      MouseMode := MOUSE_MODE_NORMAL;
      MouseDragging := False;
+     DrawInterface;
     End;
    End;
    
@@ -1896,6 +2081,8 @@ Begin
    HandleMouseMove(MouseX, MouseY);
    OldMouseX := MouseX;
    OldMouseY := MouseY;
+   { Mettre à jour la barre d'état avec les nouvelles coordonnées }
+   DrawStatusBar;
   End;
 
   { Vérifier les touches clavier }
@@ -1915,8 +2102,51 @@ Begin
      End Else If MouseMode <> MOUSE_MODE_NORMAL Then Begin
       MouseMode := MOUSE_MODE_NORMAL;
       MouseDragging := False;
+      DrawInterface;
      End Else Begin
       Running := False;
+     End;
+    End;
+    { TODO 7: Raccourcis clavier pour zoom }
+    '+', '=': Begin
+     HandleMouseWheel(1);  { Zoom avant }
+    End;
+    '-', '_': Begin
+     HandleMouseWheel(-1); { Zoom arrière }
+    End;
+    { TODO 7: Touche spéciale (flèches) pour le pan }
+    #0: Begin
+     Key := ReadKey; { Lire le code étendu }
+     PanStep := 50.0 / ZoomLevel;
+     Case Key of
+      #72: Begin { Flèche haut - pan vers le haut }
+       ViewOffsetY := ViewOffsetY + PanStep;
+       DrawInterface;
+      End;
+      #80: Begin { Flèche bas - pan vers le bas }
+       ViewOffsetY := ViewOffsetY - PanStep;
+       DrawInterface;
+      End;
+      #75: Begin { Flèche gauche - pan vers la gauche }
+       ViewOffsetX := ViewOffsetX + PanStep;
+       DrawInterface;
+      End;
+      #77: Begin { Flèche droite - pan vers la droite }
+       ViewOffsetX := ViewOffsetX - PanStep;
+       DrawInterface;
+      End;
+      #73: Begin { Page Up - zoom avant }
+       HandleMouseWheel(1);
+      End;
+      #81: Begin { Page Down - zoom arrière }
+       HandleMouseWheel(-1);
+      End;
+      #71: Begin { Home - reset zoom et pan }
+       ViewOffsetX := 0.0;
+       ViewOffsetY := 0.0;
+       ZoomLevel := 1.0;
+       DrawInterface;
+      End;
      End;
     End;
    End;

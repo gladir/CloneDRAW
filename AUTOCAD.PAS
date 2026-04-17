@@ -19,7 +19,7 @@
   6. [DONE] Implémenter la gestion complète de la souris avec clic gauche, clic droit, molette et déplacement
   7. [DONE] Ajouter le zoom par molette de souris et le pan par clic milieu
   8. [DONE] Créer le curseur de précision (crosshair) avec affichage des coordonnées en temps réel
-  9. Implémenter le système de sélection d'objets par clic, fenêtre et fenêtre croisée
+  9. [DONE] Implémenter le système de sélection d'objets par clic, fenêtre et fenêtre croisée
   10. Ajouter les poignées de manipulation (grips) pour éditer les objets sélectionnés
 
   === INTERPRÉTEUR AUTOLISP ===
@@ -134,6 +134,30 @@ Const
  COORD_DISPLAY_STATUSBAR = 2;    { Barre d'état seulement }
  COORD_DISPLAY_BOTH = 3;         { Les deux }
 
+ { Constantes pour la sélection d'objets - TODO 9 }
+ MAX_OBJECTS = 1000;             { Nombre maximum d'objets dans le dessin }
+ MAX_SELECTED = 100;             { Nombre maximum d'objets sélectionnés }
+ 
+ { Modes de sélection }
+ SELECT_MODE_NONE = 0;           { Pas de sélection en cours }
+ SELECT_MODE_POINT = 1;          { Sélection par point (clic) }
+ SELECT_MODE_WINDOW = 2;         { Fenêtre de sélection (gauche à droite) }
+ SELECT_MODE_CROSSING = 3;       { Fenêtre croisée (droite à gauche) }
+ 
+ { Types d'objets géométriques }
+ OBJ_NONE = 0;
+ OBJ_LINE = 1;
+ OBJ_CIRCLE = 2;
+ OBJ_ARC = 3;
+ OBJ_RECTANGLE = 4;
+ OBJ_POLYLINE = 5;
+ OBJ_POINT = 6;
+ OBJ_TEXT = 7;
+ OBJ_ELLIPSE = 8;
+ 
+ { Tolérance de sélection (en pixels) }
+ PICK_TOLERANCE = 5;
+
 Type
  { Structure pour les éléments de menu }
  TMenuItem = Record
@@ -176,6 +200,26 @@ Type
   Caption: String[25];
   Enabled: Boolean;
   Separator: Boolean;
+ End;
+
+ { Structure pour un objet géométrique - TODO 9 }
+ TDrawObject = Record
+  ObjType: Byte;              { Type d'objet (OBJ_LINE, OBJ_CIRCLE, etc.) }
+  X1, Y1: Real;               { Point 1 / Centre }
+  X2, Y2: Real;               { Point 2 / (non utilisé pour cercle) }
+  Radius: Real;               { Rayon (pour cercle, arc) }
+  StartAngle, EndAngle: Real; { Angles (pour arc, ellipse) }
+  Color: Integer;             { Couleur de l'objet }
+  LineType: Byte;             { Type de ligne (continu, pointillé, etc.) }
+  LayerIndex: Byte;           { Index du calque }
+  Selected: Boolean;          { True si l'objet est sélectionné }
+  Visible: Boolean;           { True si l'objet est visible }
+ End;
+
+ { Structure pour le jeu de sélection - TODO 9 }
+ TSelectionSet = Record
+  Objects: Array[0..MAX_SELECTED-1] of Integer;  { Indices des objets sélectionnés }
+  Count: Integer;                                { Nombre d'objets sélectionnés }
  End;
 
 Var
@@ -221,6 +265,15 @@ Var
  HoveredToolbar: Integer;
  HoveredButton: Integer;
 
+ { Variables pour le système de sélection - TODO 9 }
+ DrawObjects: Array[0..MAX_OBJECTS-1] of TDrawObject;  { Tous les objets du dessin }
+ ObjectCount: Integer;                                 { Nombre total d'objets }
+ SelectionSet: TSelectionSet;                          { Jeu de sélection actuel }
+ SelectMode: Integer;                                  { Mode de sélection en cours }
+ SelectStartX, SelectStartY: Integer;                  { Point de départ de la fenêtre de sélection }
+ SelectEndX, SelectEndY: Integer;                      { Point de fin de la fenêtre de sélection }
+ SelectionActive: Boolean;                             { True si en train de faire une sélection par fenêtre }
+
 { Forward declarations - TODO 6 }
 Procedure DrawContextMenu; Forward;
 Procedure HandleContextMenuHover(X, Y: Integer); Forward;
@@ -239,6 +292,24 @@ Function ScreenToWorldY(SY: Integer): Real; Forward;
 Procedure DrawCrosshairCursor(X, Y: Integer); Forward;
 Procedure DrawCoordinateTooltip(X, Y: Integer); Forward;
 Procedure InitCrosshairSettings; Forward;
+
+{ Forward declarations - TODO 9 - Système de sélection }
+Procedure InitSelectionSystem; Forward;
+Procedure ClearSelection; Forward;
+Procedure AddToSelection(ObjIndex: Integer); Forward;
+Procedure RemoveFromSelection(ObjIndex: Integer); Forward;
+Function IsSelected(ObjIndex: Integer): Boolean; Forward;
+Function SelectObjectAtPoint(X, Y: Integer): Integer; Forward;
+Procedure SelectObjectsInWindow(X1, Y1, X2, Y2: Integer; Crossing: Boolean); Forward;
+Procedure DrawSelectionRectangle(X1, Y1, X2, Y2: Integer; IsCrossing: Boolean); Forward;
+Procedure StartWindowSelection(X, Y: Integer); Forward;
+Procedure UpdateWindowSelection(X, Y: Integer); Forward;
+Procedure FinishWindowSelection; Forward;
+Function PointNearLine(PX, PY, X1, Y1, X2, Y2: Real; Tolerance: Real): Boolean; Forward;
+Function PointNearCircle(PX, PY, CX, CY, Radius: Real; Tolerance: Real): Boolean; Forward;
+Function ObjectIntersectsRect(ObjIndex: Integer; RX1, RY1, RX2, RY2: Real): Boolean; Forward;
+Function ObjectInsideRect(ObjIndex: Integer; RX1, RY1, RX2, RY2: Real): Boolean; Forward;
+Procedure DrawSelectedObjects; Forward;
 
 Procedure InitializeGraphics;
 Var
@@ -1571,7 +1642,595 @@ Begin
  OutTextXY(TooltipX + 3, TooltipY + 2, CoordStr);
 End;
 
-{ Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair }
+{ ============================================================================ }
+{ Procédures pour le système de sélection d'objets - TODO 9                    }
+{ Implémenter la sélection par clic, fenêtre et fenêtre croisée                }
+{ ============================================================================ }
+
+{ Initialiser le système de sélection }
+Procedure InitSelectionSystem;
+Var
+ I: Integer;
+Begin
+ { Initialiser le compteur d'objets }
+ ObjectCount := 0;
+ 
+ { Effacer tous les objets }
+ For I := 0 to MAX_OBJECTS - 1 do Begin
+  DrawObjects[I].ObjType := OBJ_NONE;
+  DrawObjects[I].Selected := False;
+  DrawObjects[I].Visible := True;
+ End;
+ 
+ { Initialiser le jeu de sélection }
+ SelectionSet.Count := 0;
+ For I := 0 to MAX_SELECTED - 1 do
+  SelectionSet.Objects[I] := -1;
+ 
+ { Initialiser les variables de sélection }
+ SelectMode := SELECT_MODE_NONE;
+ SelectionActive := False;
+ SelectStartX := 0;
+ SelectStartY := 0;
+ SelectEndX := 0;
+ SelectEndY := 0;
+ 
+ { Créer quelques objets de démonstration }
+ { Ligne horizontale }
+ DrawObjects[0].ObjType := OBJ_LINE;
+ DrawObjects[0].X1 := -100;
+ DrawObjects[0].Y1 := 50;
+ DrawObjects[0].X2 := 100;
+ DrawObjects[0].Y2 := 50;
+ DrawObjects[0].Color := Yellow;
+ DrawObjects[0].Selected := False;
+ DrawObjects[0].Visible := True;
+ 
+ { Ligne verticale }
+ DrawObjects[1].ObjType := OBJ_LINE;
+ DrawObjects[1].X1 := 0;
+ DrawObjects[1].Y1 := -80;
+ DrawObjects[1].X2 := 0;
+ DrawObjects[1].Y2 := 120;
+ DrawObjects[1].Color := Cyan;
+ DrawObjects[1].Selected := False;
+ DrawObjects[1].Visible := True;
+ 
+ { Cercle }
+ DrawObjects[2].ObjType := OBJ_CIRCLE;
+ DrawObjects[2].X1 := -50;  { Centre X }
+ DrawObjects[2].Y1 := -30;  { Centre Y }
+ DrawObjects[2].Radius := 40;
+ DrawObjects[2].Color := Green;
+ DrawObjects[2].Selected := False;
+ DrawObjects[2].Visible := True;
+ 
+ { Rectangle (représenté par 4 lignes conceptuellement, mais comme un objet) }
+ DrawObjects[3].ObjType := OBJ_RECTANGLE;
+ DrawObjects[3].X1 := 60;   { Coin inférieur gauche X }
+ DrawObjects[3].Y1 := -60;  { Coin inférieur gauche Y }
+ DrawObjects[3].X2 := 140;  { Coin supérieur droit X }
+ DrawObjects[3].Y2 := 20;   { Coin supérieur droit Y }
+ DrawObjects[3].Color := Magenta;
+ DrawObjects[3].Selected := False;
+ DrawObjects[3].Visible := True;
+ 
+ { Ligne diagonale }
+ DrawObjects[4].ObjType := OBJ_LINE;
+ DrawObjects[4].X1 := -120;
+ DrawObjects[4].Y1 := -100;
+ DrawObjects[4].X2 := -60;
+ DrawObjects[4].Y2 := -40;
+ DrawObjects[4].Color := LightRed;
+ DrawObjects[4].Selected := False;
+ DrawObjects[4].Visible := True;
+ 
+ ObjectCount := 5;
+End;
+
+{ Effacer la sélection }
+Procedure ClearSelection;
+Var
+ I: Integer;
+Begin
+ { Désélectionner tous les objets }
+ For I := 0 to ObjectCount - 1 do
+  DrawObjects[I].Selected := False;
+ 
+ { Effacer le jeu de sélection }
+ SelectionSet.Count := 0;
+ For I := 0 to MAX_SELECTED - 1 do
+  SelectionSet.Objects[I] := -1;
+End;
+
+{ Vérifier si un objet est sélectionné }
+Function IsSelected(ObjIndex: Integer): Boolean;
+Var
+ I: Integer;
+Begin
+ IsSelected := False;
+ If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
+ 
+ For I := 0 to SelectionSet.Count - 1 do Begin
+  If SelectionSet.Objects[I] = ObjIndex Then Begin
+   IsSelected := True;
+   Exit;
+  End;
+ End;
+End;
+
+{ Ajouter un objet à la sélection }
+Procedure AddToSelection(ObjIndex: Integer);
+Begin
+ If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
+ If SelectionSet.Count >= MAX_SELECTED Then Exit;
+ If IsSelected(ObjIndex) Then Exit;  { Déjà sélectionné }
+ 
+ SelectionSet.Objects[SelectionSet.Count] := ObjIndex;
+ SelectionSet.Count := SelectionSet.Count + 1;
+ DrawObjects[ObjIndex].Selected := True;
+End;
+
+{ Retirer un objet de la sélection }
+Procedure RemoveFromSelection(ObjIndex: Integer);
+Var
+ I, J: Integer;
+Begin
+ If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
+ 
+ For I := 0 to SelectionSet.Count - 1 do Begin
+  If SelectionSet.Objects[I] = ObjIndex Then Begin
+   { Décaler les éléments suivants }
+   For J := I to SelectionSet.Count - 2 do
+    SelectionSet.Objects[J] := SelectionSet.Objects[J + 1];
+   SelectionSet.Count := SelectionSet.Count - 1;
+   SelectionSet.Objects[SelectionSet.Count] := -1;
+   DrawObjects[ObjIndex].Selected := False;
+   Exit;
+  End;
+ End;
+End;
+
+{ Vérifier si un point est proche d'une ligne }
+Function PointNearLine(PX, PY, X1, Y1, X2, Y2: Real; Tolerance: Real): Boolean;
+Var
+ DX, DY, T: Real;
+ NearX, NearY: Real;
+ Dist: Real;
+Begin
+ PointNearLine := False;
+ 
+ DX := X2 - X1;
+ DY := Y2 - Y1;
+ 
+ { Calculer le paramètre t pour le point le plus proche sur la ligne }
+ If (DX = 0) and (DY = 0) Then Begin
+  { Ligne dégénérée (point) }
+  Dist := Sqrt(Sqr(PX - X1) + Sqr(PY - Y1));
+  PointNearLine := Dist <= Tolerance;
+  Exit;
+ End;
+ 
+ T := ((PX - X1) * DX + (PY - Y1) * DY) / (Sqr(DX) + Sqr(DY));
+ 
+ { Limiter t entre 0 et 1 pour rester sur le segment }
+ If T < 0 Then T := 0;
+ If T > 1 Then T := 1;
+ 
+ { Calculer le point le plus proche sur le segment }
+ NearX := X1 + T * DX;
+ NearY := Y1 + T * DY;
+ 
+ { Calculer la distance }
+ Dist := Sqrt(Sqr(PX - NearX) + Sqr(PY - NearY));
+ PointNearLine := Dist <= Tolerance;
+End;
+
+{ Vérifier si un point est proche d'un cercle }
+Function PointNearCircle(PX, PY, CX, CY, Radius: Real; Tolerance: Real): Boolean;
+Var
+ Dist: Real;
+Begin
+ Dist := Abs(Sqrt(Sqr(PX - CX) + Sqr(PY - CY)) - Radius);
+ PointNearCircle := Dist <= Tolerance;
+End;
+
+{ Vérifier si un objet intersecte un rectangle (pour fenêtre croisée) }
+Function ObjectIntersectsRect(ObjIndex: Integer; RX1, RY1, RX2, RY2: Real): Boolean;
+Var
+ MinX, MinY, MaxX, MaxY: Real;
+ CX, CY, R: Real;
+ OX1, OY1, OX2, OY2: Real;
+Begin
+ ObjectIntersectsRect := False;
+ If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
+ 
+ { Normaliser le rectangle }
+ If RX1 < RX2 Then Begin MinX := RX1; MaxX := RX2; End
+ Else Begin MinX := RX2; MaxX := RX1; End;
+ If RY1 < RY2 Then Begin MinY := RY1; MaxY := RY2; End
+ Else Begin MinY := RY2; MaxY := RY1; End;
+ 
+ Case DrawObjects[ObjIndex].ObjType of
+  OBJ_LINE: Begin
+   OX1 := DrawObjects[ObjIndex].X1;
+   OY1 := DrawObjects[ObjIndex].Y1;
+   OX2 := DrawObjects[ObjIndex].X2;
+   OY2 := DrawObjects[ObjIndex].Y2;
+   
+   { Vérifier si au moins un point est dans le rectangle }
+   If (OX1 >= MinX) and (OX1 <= MaxX) and (OY1 >= MinY) and (OY1 <= MaxY) Then Begin
+    ObjectIntersectsRect := True;
+    Exit;
+   End;
+   If (OX2 >= MinX) and (OX2 <= MaxX) and (OY2 >= MinY) and (OY2 <= MaxY) Then Begin
+    ObjectIntersectsRect := True;
+    Exit;
+   End;
+   
+   { Vérifier l'intersection avec les bords du rectangle }
+   { Simplification: vérifier si la ligne croise le rectangle }
+   If ((OX1 < MinX) and (OX2 > MaxX)) or ((OX1 > MaxX) and (OX2 < MinX)) Then Begin
+    { La ligne traverse horizontalement }
+    If (OY1 >= MinY) and (OY1 <= MaxY) or (OY2 >= MinY) and (OY2 <= MaxY) Then Begin
+     ObjectIntersectsRect := True;
+     Exit;
+    End;
+   End;
+   If ((OY1 < MinY) and (OY2 > MaxY)) or ((OY1 > MaxY) and (OY2 < MinY)) Then Begin
+    { La ligne traverse verticalement }
+    If (OX1 >= MinX) and (OX1 <= MaxX) or (OX2 >= MinX) and (OX2 <= MaxX) Then Begin
+     ObjectIntersectsRect := True;
+     Exit;
+    End;
+   End;
+  End;
+  
+  OBJ_CIRCLE: Begin
+   CX := DrawObjects[ObjIndex].X1;
+   CY := DrawObjects[ObjIndex].Y1;
+   R := DrawObjects[ObjIndex].Radius;
+   
+   { Vérifier si le cercle intersecte le rectangle }
+   { Le cercle intersecte si le centre est assez proche du rectangle }
+   If (CX >= MinX - R) and (CX <= MaxX + R) and
+      (CY >= MinY - R) and (CY <= MaxY + R) Then Begin
+    ObjectIntersectsRect := True;
+    Exit;
+   End;
+  End;
+  
+  OBJ_RECTANGLE: Begin
+   OX1 := DrawObjects[ObjIndex].X1;
+   OY1 := DrawObjects[ObjIndex].Y1;
+   OX2 := DrawObjects[ObjIndex].X2;
+   OY2 := DrawObjects[ObjIndex].Y2;
+   
+   { Les rectangles s'intersectent si aucun n'est complètement à l'extérieur }
+   If Not ((OX2 < MinX) or (OX1 > MaxX) or (OY2 < MinY) or (OY1 > MaxY)) Then Begin
+    ObjectIntersectsRect := True;
+    Exit;
+   End;
+  End;
+ End;
+End;
+
+{ Vérifier si un objet est complètement dans un rectangle (pour fenêtre normale) }
+Function ObjectInsideRect(ObjIndex: Integer; RX1, RY1, RX2, RY2: Real): Boolean;
+Var
+ MinX, MinY, MaxX, MaxY: Real;
+ CX, CY, R: Real;
+ OX1, OY1, OX2, OY2: Real;
+Begin
+ ObjectInsideRect := False;
+ If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
+ 
+ { Normaliser le rectangle }
+ If RX1 < RX2 Then Begin MinX := RX1; MaxX := RX2; End
+ Else Begin MinX := RX2; MaxX := RX1; End;
+ If RY1 < RY2 Then Begin MinY := RY1; MaxY := RY2; End
+ Else Begin MinY := RY2; MaxY := RY1; End;
+ 
+ Case DrawObjects[ObjIndex].ObjType of
+  OBJ_LINE: Begin
+   OX1 := DrawObjects[ObjIndex].X1;
+   OY1 := DrawObjects[ObjIndex].Y1;
+   OX2 := DrawObjects[ObjIndex].X2;
+   OY2 := DrawObjects[ObjIndex].Y2;
+   
+   { Les deux points doivent être dans le rectangle }
+   ObjectInsideRect := (OX1 >= MinX) and (OX1 <= MaxX) and (OY1 >= MinY) and (OY1 <= MaxY) and
+                       (OX2 >= MinX) and (OX2 <= MaxX) and (OY2 >= MinY) and (OY2 <= MaxY);
+  End;
+  
+  OBJ_CIRCLE: Begin
+   CX := DrawObjects[ObjIndex].X1;
+   CY := DrawObjects[ObjIndex].Y1;
+   R := DrawObjects[ObjIndex].Radius;
+   
+   { Le cercle entier doit être dans le rectangle }
+   ObjectInsideRect := (CX - R >= MinX) and (CX + R <= MaxX) and
+                       (CY - R >= MinY) and (CY + R <= MaxY);
+  End;
+  
+  OBJ_RECTANGLE: Begin
+   OX1 := DrawObjects[ObjIndex].X1;
+   OY1 := DrawObjects[ObjIndex].Y1;
+   OX2 := DrawObjects[ObjIndex].X2;
+   OY2 := DrawObjects[ObjIndex].Y2;
+   
+   { Le rectangle objet doit être complètement dans le rectangle de sélection }
+   ObjectInsideRect := (OX1 >= MinX) and (OX2 <= MaxX) and
+                       (OY1 >= MinY) and (OY2 <= MaxY);
+  End;
+ End;
+End;
+
+{ Sélectionner un objet à un point (par clic) }
+Function SelectObjectAtPoint(X, Y: Integer): Integer;
+Var
+ I: Integer;
+ WorldX, WorldY: Real;
+ Tolerance: Real;
+ CX, CY, R: Real;
+Begin
+ SelectObjectAtPoint := -1;
+ 
+ WorldX := ScreenToWorldX(X);
+ WorldY := ScreenToWorldY(Y);
+ Tolerance := PICK_TOLERANCE / ZoomLevel;
+ 
+ { Parcourir tous les objets (en ordre inverse pour sélectionner les plus récents d'abord) }
+ For I := ObjectCount - 1 downto 0 do Begin
+  If Not DrawObjects[I].Visible Then Continue;
+  If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  
+  Case DrawObjects[I].ObjType of
+   OBJ_LINE: Begin
+    If PointNearLine(WorldX, WorldY, 
+                     DrawObjects[I].X1, DrawObjects[I].Y1,
+                     DrawObjects[I].X2, DrawObjects[I].Y2,
+                     Tolerance) Then Begin
+     SelectObjectAtPoint := I;
+     Exit;
+    End;
+   End;
+   
+   OBJ_CIRCLE: Begin
+    If PointNearCircle(WorldX, WorldY,
+                       DrawObjects[I].X1, DrawObjects[I].Y1,
+                       DrawObjects[I].Radius, Tolerance) Then Begin
+     SelectObjectAtPoint := I;
+     Exit;
+    End;
+   End;
+   
+   OBJ_RECTANGLE: Begin
+    { Vérifier les 4 côtés du rectangle }
+    CX := DrawObjects[I].X1;
+    CY := DrawObjects[I].Y1;
+    R := DrawObjects[I].X2;  { X2 = coin droit }
+    
+    { Côté bas }
+    If PointNearLine(WorldX, WorldY, CX, CY, R, CY, Tolerance) Then Begin
+     SelectObjectAtPoint := I;
+     Exit;
+    End;
+    { Côté haut }
+    If PointNearLine(WorldX, WorldY, CX, DrawObjects[I].Y2, R, DrawObjects[I].Y2, Tolerance) Then Begin
+     SelectObjectAtPoint := I;
+     Exit;
+    End;
+    { Côté gauche }
+    If PointNearLine(WorldX, WorldY, CX, CY, CX, DrawObjects[I].Y2, Tolerance) Then Begin
+     SelectObjectAtPoint := I;
+     Exit;
+    End;
+    { Côté droit }
+    If PointNearLine(WorldX, WorldY, R, CY, R, DrawObjects[I].Y2, Tolerance) Then Begin
+     SelectObjectAtPoint := I;
+     Exit;
+    End;
+   End;
+  End;
+ End;
+End;
+
+{ Sélectionner les objets dans une fenêtre }
+Procedure SelectObjectsInWindow(X1, Y1, X2, Y2: Integer; Crossing: Boolean);
+Var
+ I: Integer;
+ WorldX1, WorldY1, WorldX2, WorldY2: Real;
+Begin
+ WorldX1 := ScreenToWorldX(X1);
+ WorldY1 := ScreenToWorldY(Y1);
+ WorldX2 := ScreenToWorldX(X2);
+ WorldY2 := ScreenToWorldY(Y2);
+ 
+ For I := 0 to ObjectCount - 1 do Begin
+  If Not DrawObjects[I].Visible Then Continue;
+  If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  
+  If Crossing Then Begin
+   { Fenêtre croisée: sélectionner les objets qui touchent le rectangle }
+   If ObjectIntersectsRect(I, WorldX1, WorldY1, WorldX2, WorldY2) Then
+    AddToSelection(I);
+  End Else Begin
+   { Fenêtre normale: sélectionner uniquement les objets complètement à l'intérieur }
+   If ObjectInsideRect(I, WorldX1, WorldY1, WorldX2, WorldY2) Then
+    AddToSelection(I);
+  End;
+ End;
+End;
+
+{ Dessiner le rectangle de sélection }
+Procedure DrawSelectionRectangle(X1, Y1, X2, Y2: Integer; IsCrossing: Boolean);
+Var
+ CanvasTop, CanvasBottom: Integer;
+Begin
+ If Not SelectionActive Then Exit;
+ 
+ CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ 
+ { Limiter aux bornes du canvas }
+ If Y1 < CanvasTop Then Y1 := CanvasTop;
+ If Y2 < CanvasTop Then Y2 := CanvasTop;
+ If Y1 > CanvasBottom Then Y1 := CanvasBottom;
+ If Y2 > CanvasBottom Then Y2 := CanvasBottom;
+ 
+ SetWriteMode(XORPut);
+ 
+ If IsCrossing Then Begin
+  { Fenêtre croisée: rectangle vert en pointillé }
+  SetColor(LightGreen);
+  SetLineStyle(DashedLn, 0, NormWidth);
+ End Else Begin
+  { Fenêtre normale: rectangle bleu en continu }
+  SetColor(LightBlue);
+  SetLineStyle(SolidLn, 0, NormWidth);
+ End;
+ 
+ Rectangle(X1, Y1, X2, Y2);
+ 
+ { Restaurer les paramètres par défaut }
+ SetWriteMode(NormalPut);
+ SetLineStyle(SolidLn, 0, NormWidth);
+End;
+
+{ Démarrer une sélection par fenêtre }
+Procedure StartWindowSelection(X, Y: Integer);
+Begin
+ SelectionActive := True;
+ SelectStartX := X;
+ SelectStartY := Y;
+ SelectEndX := X;
+ SelectEndY := Y;
+ 
+ { Déterminer le mode en fonction de la direction }
+ { Ce sera mis à jour pendant le drag }
+ SelectMode := SELECT_MODE_WINDOW;
+End;
+
+{ Mettre à jour la sélection par fenêtre pendant le drag }
+Procedure UpdateWindowSelection(X, Y: Integer);
+Begin
+ If Not SelectionActive Then Exit;
+ 
+ { Effacer l'ancien rectangle }
+ DrawSelectionRectangle(SelectStartX, SelectStartY, SelectEndX, SelectEndY, 
+                        SelectMode = SELECT_MODE_CROSSING);
+ 
+ SelectEndX := X;
+ SelectEndY := Y;
+ 
+ { Déterminer le mode: fenêtre croisée si on va de droite à gauche }
+ If SelectEndX < SelectStartX Then
+  SelectMode := SELECT_MODE_CROSSING
+ Else
+  SelectMode := SELECT_MODE_WINDOW;
+ 
+ { Dessiner le nouveau rectangle }
+ DrawSelectionRectangle(SelectStartX, SelectStartY, SelectEndX, SelectEndY,
+                        SelectMode = SELECT_MODE_CROSSING);
+End;
+
+{ Terminer la sélection par fenêtre }
+Procedure FinishWindowSelection;
+Begin
+ If Not SelectionActive Then Exit;
+ 
+ { Effacer le rectangle }
+ DrawSelectionRectangle(SelectStartX, SelectStartY, SelectEndX, SelectEndY,
+                        SelectMode = SELECT_MODE_CROSSING);
+ 
+ { Sélectionner les objets }
+ SelectObjectsInWindow(SelectStartX, SelectStartY, SelectEndX, SelectEndY,
+                       SelectMode = SELECT_MODE_CROSSING);
+ 
+ SelectionActive := False;
+ SelectMode := SELECT_MODE_NONE;
+End;
+
+{ Dessiner tous les objets (avec mise en surbrillance des sélectionnés) }
+Procedure DrawSelectedObjects;
+Var
+ I: Integer;
+ SX1, SY1, SX2, SY2: Integer;
+ SCX, SCY, SR: Integer;
+ ObjColor: Integer;
+Begin
+ For I := 0 to ObjectCount - 1 do Begin
+  If Not DrawObjects[I].Visible Then Continue;
+  If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  
+  { Déterminer la couleur }
+  If DrawObjects[I].Selected Then
+   ObjColor := White  { Couleur de surbrillance }
+  Else
+   ObjColor := DrawObjects[I].Color;
+  
+  SetColor(ObjColor);
+  
+  Case DrawObjects[I].ObjType of
+   OBJ_LINE: Begin
+    SX1 := WorldToScreenX(DrawObjects[I].X1);
+    SY1 := WorldToScreenY(DrawObjects[I].Y1);
+    SX2 := WorldToScreenX(DrawObjects[I].X2);
+    SY2 := WorldToScreenY(DrawObjects[I].Y2);
+    Line(SX1, SY1, SX2, SY2);
+    
+    { Si sélectionné, dessiner des poignées aux extrémités }
+    If DrawObjects[I].Selected Then Begin
+     SetFillStyle(SolidFill, Blue);
+     Bar(SX1 - 3, SY1 - 3, SX1 + 3, SY1 + 3);
+     Bar(SX2 - 3, SY2 - 3, SX2 + 3, SY2 + 3);
+    End;
+   End;
+   
+   OBJ_CIRCLE: Begin
+    SCX := WorldToScreenX(DrawObjects[I].X1);
+    SCY := WorldToScreenY(DrawObjects[I].Y1);
+    SR := Round(DrawObjects[I].Radius * ZoomLevel);
+    Circle(SCX, SCY, SR);
+    
+    { Si sélectionné, dessiner des poignées }
+    If DrawObjects[I].Selected Then Begin
+     SetFillStyle(SolidFill, Blue);
+     Bar(SCX - 3, SCY - SR - 3, SCX + 3, SCY - SR + 3);  { Haut }
+     Bar(SCX - 3, SCY + SR - 3, SCX + 3, SCY + SR + 3);  { Bas }
+     Bar(SCX - SR - 3, SCY - 3, SCX - SR + 3, SCY + 3);  { Gauche }
+     Bar(SCX + SR - 3, SCY - 3, SCX + SR + 3, SCY + 3);  { Droite }
+     Bar(SCX - 3, SCY - 3, SCX + 3, SCY + 3);  { Centre }
+    End;
+   End;
+   
+   OBJ_RECTANGLE: Begin
+    SX1 := WorldToScreenX(DrawObjects[I].X1);
+    SY1 := WorldToScreenY(DrawObjects[I].Y1);
+    SX2 := WorldToScreenX(DrawObjects[I].X2);
+    SY2 := WorldToScreenY(DrawObjects[I].Y2);
+    Rectangle(SX1, SY1, SX2, SY2);
+    
+    { Si sélectionné, dessiner des poignées aux coins }
+    If DrawObjects[I].Selected Then Begin
+     SetFillStyle(SolidFill, Blue);
+     Bar(SX1 - 3, SY1 - 3, SX1 + 3, SY1 + 3);  { Coin 1 }
+     Bar(SX2 - 3, SY1 - 3, SX2 + 3, SY1 + 3);  { Coin 2 }
+     Bar(SX1 - 3, SY2 - 3, SX1 + 3, SY2 + 3);  { Coin 3 }
+     Bar(SX2 - 3, SY2 - 3, SX2 + 3, SY2 + 3);  { Coin 4 }
+    End;
+   End;
+  End;
+ End;
+ 
+ { Dessiner le rectangle de sélection si actif }
+ If SelectionActive Then
+  DrawSelectionRectangle(SelectStartX, SelectStartY, SelectEndX, SelectEndY,
+                         SelectMode = SELECT_MODE_CROSSING);
+End;
+
+{ Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair, TODO 9: Sélection }
 Procedure DrawCanvas;
 Var
  CanvasTop, CanvasBottom: Integer;
@@ -1586,6 +2245,9 @@ Begin
 
  { Dessiner la grille }
  DrawGrid;
+ 
+ { TODO 9: Dessiner tous les objets du dessin }
+ DrawSelectedObjects;
  
  { Dessiner un petit repère à l'origine (0,0) - UCS Icon }
  OriginX := WorldToScreenX(0);
@@ -1626,6 +2288,15 @@ Begin
   SetColor(Yellow);
   OutTextXY(ScreenWidth div 2 - 20, CanvasTop + 5, '** ZOOM **');
  End;
+ 
+ { TODO 9: Indicateur de mode sélection si actif }
+ If MouseMode = MOUSE_MODE_SELECT Then Begin
+  SetColor(Cyan);
+  If SelectMode = SELECT_MODE_CROSSING Then
+   OutTextXY(ScreenWidth div 2 - 40, CanvasTop + 5, '** CROSSING **')
+  Else
+   OutTextXY(ScreenWidth div 2 - 35, CanvasTop + 5, '** WINDOW **');
+ End;
 End;
 
 { Dessiner la ligne de commande }
@@ -1643,7 +2314,7 @@ End;
 { Dessiner la barre d'état }
 Procedure DrawStatusBar;
 Var
- CoordStr, ZoomStr: String;
+ CoordStr, ZoomStr, SelStr: String;
  WorldX, WorldY: Real;
 Begin
  { Fond de la barre d'état }
@@ -1667,8 +2338,17 @@ Begin
  ZoomStr := 'Zoom: ' + ZoomStr + '%';
  OutTextXY(200, ScreenHeight - STATUSBAR_HEIGHT + 5, ZoomStr);
 
+ { TODO 9: Nombre d'objets sélectionnés }
+ If SelectionSet.Count > 0 Then Begin
+  Str(SelectionSet.Count, SelStr);
+  SelStr := 'Sel: ' + SelStr + ' obj';
+  SetColor(Blue);
+  OutTextXY(280, ScreenHeight - STATUSBAR_HEIGHT + 5, SelStr);
+  SetColor(Black);
+ End;
+
  { Modes SNAP, GRID, ORTHO, etc. }
- OutTextXY(320, ScreenHeight - STATUSBAR_HEIGHT + 5, 'SNAP GRID ORTHO POLAR OSNAP LWT MODEL');
+ OutTextXY(360, ScreenHeight - STATUSBAR_HEIGHT + 5, 'SNAP GRID ORTHO OSNAP MODEL');
 End;
 
 { Dessiner l'interface complète }
@@ -1749,7 +2429,12 @@ Var
  NewMenu: Integer;
  NewItem: Integer;
  ContextItem: Integer;
+ SelectedObj: Integer;
+ CanvasTop, CanvasBottom: Integer;
 Begin
+ CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ 
  { Gérer le menu contextuel en premier }
  If ContextMenuActive Then Begin
   If Button = MOUSE_BUTTON_LEFT Then Begin
@@ -1817,6 +2502,29 @@ Begin
      ActiveMenu := -1;
      ActiveMenuItem := -1;
      DrawInterface;
+    End;
+   End Else If (Y >= CanvasTop) and (Y <= CanvasBottom) Then Begin
+    { TODO 9: Clic dans la zone de dessin - sélection d'objet }
+    SelectedObj := SelectObjectAtPoint(X, Y);
+    If SelectedObj >= 0 Then Begin
+     { Un objet a été trouvé sous le curseur }
+     If IsSelected(SelectedObj) Then Begin
+      { Désélectionner si déjà sélectionné }
+      RemoveFromSelection(SelectedObj);
+     End Else Begin
+      { Effacer la sélection précédente et sélectionner le nouvel objet }
+      ClearSelection;
+      AddToSelection(SelectedObj);
+     End;
+     DrawInterface;
+    End Else Begin
+     { Aucun objet sous le curseur - démarrer une sélection par fenêtre }
+     ClearSelection;
+     MouseMode := MOUSE_MODE_SELECT;
+     MouseDragging := True;
+     StartWindowSelection(X, Y);
+     DragStartX := X;
+     DragStartY := Y;
     End;
    End;
   End;
@@ -1947,6 +2655,7 @@ Begin
  ZoomLevel := 1.0;
  InitContextMenu;
  InitCrosshairSettings;  { TODO 8: Initialiser le crosshair }
+ InitSelectionSystem;    { TODO 9: Initialiser le système de sélection }
 End;
 
 { Dessiner le menu contextuel }
@@ -2094,8 +2803,8 @@ Begin
    DrawInterface;
   End;
   MOUSE_MODE_SELECT: Begin
-   { Dessiner le rectangle de sélection }
-   { (Sera implémenté dans TODO 9) }
+   { TODO 9: Mettre à jour le rectangle de sélection }
+   UpdateWindowSelection(X, Y);
   End;
  End;
 End;
@@ -2190,6 +2899,7 @@ Var
  LX, LY, LB: LongInt;
  Key: Char;
  PanStep: Real;
+ I: Integer;  { TODO 9: Variable pour la sélection }
 Begin
  Running := True;
  OldMouseX := -1;
@@ -2215,6 +2925,12 @@ Begin
    { Clic gauche relâché - fin du drag }
    If ((MouseButtons and MOUSE_BUTTON_LEFT) = 0) and
       ((OldButtons and MOUSE_BUTTON_LEFT) = MOUSE_BUTTON_LEFT) Then Begin
+    { TODO 9: Terminer la sélection par fenêtre si active }
+    If MouseMode = MOUSE_MODE_SELECT Then Begin
+     FinishWindowSelection;
+     MouseMode := MOUSE_MODE_NORMAL;
+     DrawInterface;
+    End;
     MouseDragging := False;
    End;
    
@@ -2272,8 +2988,17 @@ Begin
       ActiveMenuItem := -1;
       DrawInterface;
      End Else If MouseMode <> MOUSE_MODE_NORMAL Then Begin
+      { TODO 9: Annuler la sélection en cours }
+      If SelectionActive Then Begin
+       SelectionActive := False;
+       SelectMode := SELECT_MODE_NONE;
+      End;
       MouseMode := MOUSE_MODE_NORMAL;
       MouseDragging := False;
+      DrawInterface;
+     End Else If SelectionSet.Count > 0 Then Begin
+      { TODO 9: Effacer la sélection existante }
+      ClearSelection;
       DrawInterface;
      End Else Begin
       Running := False;
@@ -2314,6 +3039,16 @@ Begin
     'p', 'P': Begin
      { Toggle pickbox }
      ShowPickBox := Not ShowPickBox;
+     DrawInterface;
+    End;
+    { TODO 9: Raccourci pour sélectionner tous les objets }
+    'a', 'A': Begin
+     ClearSelection;
+     { Sélectionner tous les objets visibles }
+     For I := 0 to ObjectCount - 1 do Begin
+      If DrawObjects[I].Visible and (DrawObjects[I].ObjType <> OBJ_NONE) Then
+       AddToSelection(I);
+     End;
      DrawInterface;
     End;
     { TODO 7: Touche spéciale (flèches) pour le pan }

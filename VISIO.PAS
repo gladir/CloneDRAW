@@ -11,7 +11,7 @@
   === MENUS ET INTERFACE ===
   1. [FAIT] Implementer le menu principal avec File, Edit, View, Insert, Format, Shape, Tools, Window, Help
   2. [FAIT] Ajouter le menu File avec New, Open, Close, Save, Save As, Export, Print, Print Preview, Exit
-  3. Ajouter le menu Edit avec Undo, Redo, Cut, Copy, Paste, Delete, Select All, Find, Replace
+  3. [FAIT] Ajouter le menu Edit avec Undo, Redo, Cut, Copy, Paste, Delete, Select All, Find, Replace
   4. Ajouter le menu View avec Zoom In, Zoom Out, Fit Page, Grid, Rulers, Guides, Snap to Grid
   5. Ajouter le menu Insert avec Shape, Text Box, Image, Connector, Page, Layer
   6. Ajouter le menu Format avec Fill, Line, Text, Alignment, Arrange, Group, Ungroup
@@ -242,6 +242,101 @@ End;
 { === FIN DES PROCEDURES DU MENU FILE === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === PROCEDURES DU MENU EDIT === }
+{ ============================================================================ }
+
+Const
+ MAX_UNDO_LEVELS = 50;
+
+Var
+ UndoStackIndex: Integer;
+ CanUndo, CanRedo: Boolean;
+ ClipboardEmpty: Boolean;
+ HasSelection: Boolean;
+
+{ Procédure Undo - Annuler la dernière action }
+Procedure EditUndo;
+Begin
+ If CanUndo Then Begin
+  { TODO: Restaurer l'état précédent depuis la pile d'annulation }
+  { UndoStackIndex := UndoStackIndex - 1; }
+  CanRedo := True;
+ End;
+End;
+
+{ Procédure Redo - Rétablir l'action annulée }
+Procedure EditRedo;
+Begin
+ If CanRedo Then Begin
+  { TODO: Restaurer l'état suivant depuis la pile de rétablissement }
+  { UndoStackIndex := UndoStackIndex + 1; }
+ End;
+End;
+
+{ Procédure Cut - Couper la sélection }
+Procedure EditCut;
+Begin
+ If HasSelection Then Begin
+  { TODO: Copier la sélection dans le presse-papiers }
+  { TODO: Supprimer la sélection du document }
+  ClipboardEmpty := False;
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure Copy - Copier la sélection }
+Procedure EditCopy;
+Begin
+ If HasSelection Then Begin
+  { TODO: Copier la sélection dans le presse-papiers }
+  ClipboardEmpty := False;
+ End;
+End;
+
+{ Procédure Paste - Coller depuis le presse-papiers }
+Procedure EditPaste;
+Begin
+ If Not ClipboardEmpty Then Begin
+  { TODO: Coller le contenu du presse-papiers dans le document }
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure Delete - Supprimer la sélection }
+Procedure EditDelete;
+Begin
+ If HasSelection Then Begin
+  { TODO: Supprimer la sélection du document }
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure Select All - Sélectionner tous les objets }
+Procedure EditSelectAll;
+Begin
+ { TODO: Sélectionner tous les objets du calque actif }
+ HasSelection := True;
+End;
+
+{ Procédure Find - Rechercher du texte }
+Procedure EditFind;
+Begin
+ { TODO: Afficher une boîte de dialogue de recherche }
+ { TODO: Rechercher le texte dans les objets texte du document }
+End;
+
+{ Procédure Replace - Rechercher et remplacer du texte }
+Procedure EditReplace;
+Begin
+ { TODO: Afficher une boîte de dialogue de recherche et remplacement }
+ { TODO: Rechercher et remplacer le texte dans les objets texte }
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DU MENU EDIT === }
+{ ============================================================================ }
+
 { Procédure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
@@ -302,7 +397,7 @@ Begin
       Items[11] := 'Exit';
      End;
   2: Begin { Edit }
-      ItemCount := 9;
+      ItemCount := 12;
       Items[1] := 'Undo';
       Items[2] := 'Redo';
       Items[3] := '-';
@@ -312,6 +407,9 @@ Begin
       Items[7] := 'Delete';
       Items[8] := '-';
       Items[9] := 'Select All';
+      Items[10] := '-';
+      Items[11] := 'Find...';
+      Items[12] := 'Replace...';
      End;
   3: Begin { View }
       ItemCount := 7;
@@ -434,6 +532,12 @@ Begin
  ScreenHeight := GetMaxY;
  CurrentFileName := '';
  DocumentModified := False;
+ { Initialisation des variables du menu Edit }
+ UndoStackIndex := 0;
+ CanUndo := False;
+ CanRedo := False;
+ ClipboardEmpty := True;
+ HasSelection := False;
 End;
 
 { Fonction pour exécuter une action du menu File }
@@ -456,6 +560,25 @@ Begin
  End;
 End;
 
+{ Procédure pour exécuter une action du menu Edit }
+Procedure ExecuteEditMenuAction(ItemIndex: Integer);
+Begin
+ Case ItemIndex of
+  1: EditUndo;         { Undo }
+  2: EditRedo;         { Redo }
+  { 3 est un séparateur }
+  4: EditCut;          { Cut }
+  5: EditCopy;         { Copy }
+  6: EditPaste;        { Paste }
+  7: EditDelete;       { Delete }
+  { 8 est un séparateur }
+  9: EditSelectAll;    { Select All }
+  { 10 est un séparateur }
+  11: EditFind;        { Find... }
+  12: EditReplace;     { Replace... }
+ End;
+End;
+
 { Fonction pour déterminer quel élément de menu est sous la souris }
 Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer;
 Const
@@ -469,7 +592,7 @@ Begin
  { Déterminer le nombre d'éléments selon le menu }
  Case MenuIndex of
   1: ItemCount := 11; { File }
-  2: ItemCount := 9;  { Edit }
+  2: ItemCount := 12; { Edit }
   3: ItemCount := 7;  { View }
   4: ItemCount := 6;  { Insert }
   5: ItemCount := 7;  { Format }

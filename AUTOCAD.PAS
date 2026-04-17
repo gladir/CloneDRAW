@@ -41,7 +41,7 @@
   22. [DONE] Ajouter le support du format DXF (Drawing Exchange Format) pour l'interopérabilité
   23. [DONE] Créer l'importation et exportation du format Visio (VSD/VSDX)
   24. [DONE] Implémenter l'exportation SVG (Scalable Vector Graphics) pour le web
-  25. Ajouter l'importation SVG avec conversion des éléments en entités AutoCAD
+  25. [DONE] Ajouter l'importation SVG avec conversion des éléments en entités AutoCAD
 }
 
 Program AUTOCAD;
@@ -1148,6 +1148,24 @@ Procedure WriteSVGDimension(Var F: Text; Const Entity: TDrawObject); Forward;
 Function ACIToSVGColor(ColorIdx: Integer): String; Forward;
 Function GetSVGStrokeWidth(LineWeight: Integer): Real; Forward;
 Procedure WriteSVGStyle(Var F: Text; Color: Integer; LineWeight: Integer; Filled: Boolean); Forward;
+
+{ Forward declarations - TODO 25 - Importation SVG }
+Function ReadSVGFile(Const FileName: String): Boolean; Forward;
+Function ExtractSVGAttr(Const Line, AttrName: String): String; Forward;
+Function ExtractSVGAttrReal(Const Line, AttrName: String): Real; Forward;
+Function SVGColorToACI(Const ColorStr: String): Integer; Forward;
+Function HexToInt(Const HexStr: String): Integer; Forward;
+Function ReadSVGLine(Const Line: String; Var Entity: TDrawObject): Boolean; Forward;
+Function ReadSVGRect(Const Line: String; Var Entity: TDrawObject): Boolean; Forward;
+Function ReadSVGCircle(Const Line: String; Var Entity: TDrawObject): Boolean; Forward;
+Function ReadSVGEllipse(Const Line: String; Var Entity: TDrawObject): Boolean; Forward;
+Function ReadSVGText(Const Line: String; TextContent: String; Var Entity: TDrawObject): Boolean; Forward;
+Function ReadSVGPolyline(Const Line: String; Var Entity: TDrawObject): Boolean; Forward;
+Function ReadSVGPolygon(Const Line: String; Var Entity: TDrawObject): Boolean; Forward;
+Function ReadSVGPath(Const Line: String; Var Entity: TDrawObject): Boolean; Forward;
+Function ParseSVGPoints(Const PointsStr: String; Var Entity: TDrawObject): Boolean; Forward;
+Function GetSVGElementType(Const Line: String): String; Forward;
+Function ExtractTextContent(Const Line: String): String; Forward;
 
 { Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
 Procedure InitLispTokenizer; Forward;
@@ -12037,6 +12055,712 @@ Begin
  
  Close(F);
  WriteSVGFile := True;
+End;
+
+{ ============================================================================ }
+{ Fonctions pour l'importation SVG - TODO 25                                   }
+{ ============================================================================ }
+
+{ Convertir une chaîne hexadécimale en entier }
+Function HexToInt(Const HexStr: String): Integer;
+Var
+ I, Digit: Integer;
+ C: Char;
+Begin
+ HexToInt := 0;
+ For I := 1 to Length(HexStr) do Begin
+  C := UpCase(HexStr[I]);
+  If (C >= '0') and (C <= '9') Then
+   Digit := Ord(C) - Ord('0')
+  Else If (C >= 'A') and (C <= 'F') Then
+   Digit := Ord(C) - Ord('A') + 10
+  Else
+   Exit;
+  HexToInt := HexToInt * 16 + Digit;
+ End;
+End;
+
+{ Convertir une couleur SVG en index ACI }
+Function SVGColorToACI(Const ColorStr: String): Integer;
+Var
+ R, G, B: Integer;
+ S: String;
+Begin
+ SVGColorToACI := 7; { Blanc par défaut }
+ 
+ S := ColorStr;
+ If Length(S) = 0 Then Exit;
+ 
+ { Format #RRGGBB ou #RGB }
+ If S[1] = '#' Then Begin
+  Delete(S, 1, 1);
+  If Length(S) = 6 Then Begin
+   R := HexToInt(Copy(S, 1, 2));
+   G := HexToInt(Copy(S, 3, 2));
+   B := HexToInt(Copy(S, 5, 2));
+  End
+  Else If Length(S) = 3 Then Begin
+   R := HexToInt(S[1] + S[1]);
+   G := HexToInt(S[2] + S[2]);
+   B := HexToInt(S[3] + S[3]);
+  End
+  Else Exit;
+  
+  { Convertir RGB vers ACI approximatif }
+  If (R > 200) and (G < 50) and (B < 50) Then SVGColorToACI := 1      { Rouge }
+  Else If (R > 200) and (G > 200) and (B < 50) Then SVGColorToACI := 2 { Jaune }
+  Else If (R < 50) and (G > 200) and (B < 50) Then SVGColorToACI := 3  { Vert }
+  Else If (R < 50) and (G > 200) and (B > 200) Then SVGColorToACI := 4 { Cyan }
+  Else If (R < 50) and (G < 50) and (B > 200) Then SVGColorToACI := 5  { Bleu }
+  Else If (R > 200) and (G < 50) and (B > 200) Then SVGColorToACI := 6 { Magenta }
+  Else If (R > 200) and (G > 200) and (B > 200) Then SVGColorToACI := 7 { Blanc }
+  Else If (R < 50) and (G < 50) and (B < 50) Then SVGColorToACI := 0    { Noir }
+  Else If (R > 100) and (R < 180) and (G > 100) and (G < 180) Then SVGColorToACI := 8 { Gris }
+  Else SVGColorToACI := 7;
+ End
+ { Noms de couleurs }
+ Else Begin
+  S := LowerCase(S);
+  If S = 'red' Then SVGColorToACI := 1
+  Else If S = 'yellow' Then SVGColorToACI := 2
+  Else If S = 'green' Then SVGColorToACI := 3
+  Else If S = 'lime' Then SVGColorToACI := 3
+  Else If S = 'cyan' Then SVGColorToACI := 4
+  Else If S = 'aqua' Then SVGColorToACI := 4
+  Else If S = 'blue' Then SVGColorToACI := 5
+  Else If S = 'magenta' Then SVGColorToACI := 6
+  Else If S = 'fuchsia' Then SVGColorToACI := 6
+  Else If S = 'white' Then SVGColorToACI := 7
+  Else If S = 'black' Then SVGColorToACI := 0
+  Else If S = 'gray' Then SVGColorToACI := 8
+  Else If S = 'grey' Then SVGColorToACI := 8
+  Else If S = 'silver' Then SVGColorToACI := 9
+  Else If S = 'orange' Then SVGColorToACI := 30
+  Else If S = 'purple' Then SVGColorToACI := 200
+  Else If S = 'brown' Then SVGColorToACI := 24
+  Else If S = 'none' Then SVGColorToACI := 7;
+ End;
+End;
+
+{ Extraire un attribut SVG d'une ligne }
+Function ExtractSVGAttr(Const Line, AttrName: String): String;
+Var
+ Pos1, Pos2: Integer;
+ SearchStr: String;
+Begin
+ ExtractSVGAttr := '';
+ SearchStr := AttrName + '="';
+ Pos1 := Pos(SearchStr, Line);
+ If Pos1 = 0 Then Begin
+  { Essayer avec des apostrophes }
+  SearchStr := AttrName + '=''';
+  Pos1 := Pos(SearchStr, Line);
+ End;
+ 
+ If Pos1 > 0 Then Begin
+  Pos1 := Pos1 + Length(SearchStr);
+  Pos2 := Pos1;
+  While (Pos2 <= Length(Line)) and (Line[Pos2] <> '"') and (Line[Pos2] <> '''') do
+   Inc(Pos2);
+  ExtractSVGAttr := Copy(Line, Pos1, Pos2 - Pos1);
+ End;
+End;
+
+{ Extraire un attribut SVG comme nombre réel }
+Function ExtractSVGAttrReal(Const Line, AttrName: String): Real;
+Var
+ S: String;
+ V: Real;
+ Code: Integer;
+Begin
+ ExtractSVGAttrReal := 0.0;
+ S := ExtractSVGAttr(Line, AttrName);
+ If Length(S) > 0 Then Begin
+  { Supprimer les unités éventuelles (px, pt, etc.) }
+  While (Length(S) > 0) and Not ((S[Length(S)] >= '0') and (S[Length(S)] <= '9')) and (S[Length(S)] <> '.') do
+   Delete(S, Length(S), 1);
+  Val(S, V, Code);
+  If Code = 0 Then ExtractSVGAttrReal := V;
+ End;
+End;
+
+{ Déterminer le type d'élément SVG dans une ligne }
+Function GetSVGElementType(Const Line: String): String;
+Var
+ I: Integer;
+ S: String;
+Begin
+ GetSVGElementType := '';
+ I := Pos('<', Line);
+ If I > 0 Then Begin
+  Inc(I);
+  { Ignorer les commentaires et déclarations }
+  If (I <= Length(Line)) and ((Line[I] = '!') or (Line[I] = '?')) Then Exit;
+  S := '';
+  While (I <= Length(Line)) and (Line[I] <> ' ') and (Line[I] <> '>') and (Line[I] <> '/') do Begin
+   S := S + Line[I];
+   Inc(I);
+  End;
+  GetSVGElementType := LowerCase(S);
+ End;
+End;
+
+{ Extraire le contenu texte d'un élément }
+Function ExtractTextContent(Const Line: String): String;
+Var
+ Pos1, Pos2: Integer;
+Begin
+ ExtractTextContent := '';
+ Pos1 := Pos('>', Line);
+ If Pos1 > 0 Then Begin
+  Inc(Pos1);
+  Pos2 := Pos('</', Line);
+  If Pos2 > Pos1 Then
+   ExtractTextContent := Copy(Line, Pos1, Pos2 - Pos1);
+ End;
+End;
+
+{ Parser les points d'une polyline/polygon }
+Function ParseSVGPoints(Const PointsStr: String; Var Entity: TDrawObject): Boolean;
+Var
+ I, Start: Integer;
+ S, NumStr: String;
+ IsX: Boolean;
+ X, Y, V: Real;
+ Code: Integer;
+Begin
+ ParseSVGPoints := False;
+ Entity.VertexCount := 0;
+ 
+ S := PointsStr;
+ If Length(S) = 0 Then Exit;
+ 
+ { Remplacer les virgules par des espaces }
+ For I := 1 to Length(S) do
+  If S[I] = ',' Then S[I] := ' ';
+ 
+ IsX := True;
+ X := 0; Y := 0;
+ Start := 1;
+ I := 1;
+ 
+ While I <= Length(S) + 1 do Begin
+  If (I > Length(S)) or (S[I] = ' ') Then Begin
+   NumStr := Copy(S, Start, I - Start);
+   If Length(NumStr) > 0 Then Begin
+    Val(NumStr, V, Code);
+    If Code = 0 Then Begin
+     If IsX Then Begin
+      X := V;
+      IsX := False;
+     End
+     Else Begin
+      Y := V;
+      IsX := True;
+      If Entity.VertexCount < MAX_VERTICES Then Begin
+       Entity.Vertices[Entity.VertexCount].X := X;
+       Entity.Vertices[Entity.VertexCount].Y := Y;
+       Entity.Vertices[Entity.VertexCount].Bulge := 0;
+       Inc(Entity.VertexCount);
+      End;
+     End;
+    End;
+   End;
+   Start := I + 1;
+  End;
+  Inc(I);
+ End;
+ 
+ ParseSVGPoints := Entity.VertexCount >= 2;
+End;
+
+{ Lire un élément ligne SVG }
+Function ReadSVGLine(Const Line: String; Var Entity: TDrawObject): Boolean;
+Var
+ StrokeColor: String;
+Begin
+ ReadSVGLine := False;
+ 
+ Entity.ObjType := OBJ_LINE;
+ Entity.X1 := ExtractSVGAttrReal(Line, 'x1');
+ Entity.Y1 := ExtractSVGAttrReal(Line, 'y1');
+ Entity.X2 := ExtractSVGAttrReal(Line, 'x2');
+ Entity.Y2 := ExtractSVGAttrReal(Line, 'y2');
+ 
+ StrokeColor := ExtractSVGAttr(Line, 'stroke');
+ If Length(StrokeColor) > 0 Then
+  Entity.Color := SVGColorToACI(StrokeColor)
+ Else
+  Entity.Color := CurrentColor;
+ 
+ Entity.Layer := CurrentLayer;
+ Entity.Visible := True;
+ Entity.Selected := False;
+ 
+ ReadSVGLine := True;
+End;
+
+{ Lire un élément rectangle SVG }
+Function ReadSVGRect(Const Line: String; Var Entity: TDrawObject): Boolean;
+Var
+ X, Y, W, H: Real;
+ StrokeColor: String;
+Begin
+ ReadSVGRect := False;
+ 
+ X := ExtractSVGAttrReal(Line, 'x');
+ Y := ExtractSVGAttrReal(Line, 'y');
+ W := ExtractSVGAttrReal(Line, 'width');
+ H := ExtractSVGAttrReal(Line, 'height');
+ 
+ Entity.ObjType := OBJ_RECTANGLE;
+ Entity.X1 := X;
+ Entity.Y1 := Y;
+ Entity.X2 := X + W;
+ Entity.Y2 := Y + H;
+ 
+ StrokeColor := ExtractSVGAttr(Line, 'stroke');
+ If Length(StrokeColor) > 0 Then
+  Entity.Color := SVGColorToACI(StrokeColor)
+ Else
+  Entity.Color := CurrentColor;
+ 
+ Entity.Layer := CurrentLayer;
+ Entity.Visible := True;
+ Entity.Selected := False;
+ 
+ ReadSVGRect := True;
+End;
+
+{ Lire un élément cercle SVG }
+Function ReadSVGCircle(Const Line: String; Var Entity: TDrawObject): Boolean;
+Var
+ StrokeColor: String;
+Begin
+ ReadSVGCircle := False;
+ 
+ Entity.ObjType := OBJ_CIRCLE;
+ Entity.X1 := ExtractSVGAttrReal(Line, 'cx');
+ Entity.Y1 := ExtractSVGAttrReal(Line, 'cy');
+ Entity.Radius := ExtractSVGAttrReal(Line, 'r');
+ 
+ If Entity.Radius <= 0 Then Exit;
+ 
+ StrokeColor := ExtractSVGAttr(Line, 'stroke');
+ If Length(StrokeColor) > 0 Then
+  Entity.Color := SVGColorToACI(StrokeColor)
+ Else
+  Entity.Color := CurrentColor;
+ 
+ Entity.Layer := CurrentLayer;
+ Entity.Visible := True;
+ Entity.Selected := False;
+ 
+ ReadSVGCircle := True;
+End;
+
+{ Lire un élément ellipse SVG }
+Function ReadSVGEllipse(Const Line: String; Var Entity: TDrawObject): Boolean;
+Var
+ StrokeColor: String;
+Begin
+ ReadSVGEllipse := False;
+ 
+ Entity.ObjType := OBJ_ELLIPSE;
+ Entity.X1 := ExtractSVGAttrReal(Line, 'cx');
+ Entity.Y1 := ExtractSVGAttrReal(Line, 'cy');
+ Entity.Radius := ExtractSVGAttrReal(Line, 'rx');    { Demi-axe majeur }
+ Entity.EndAngle := ExtractSVGAttrReal(Line, 'ry');  { Demi-axe mineur }
+ 
+ If (Entity.Radius <= 0) or (Entity.EndAngle <= 0) Then Exit;
+ 
+ StrokeColor := ExtractSVGAttr(Line, 'stroke');
+ If Length(StrokeColor) > 0 Then
+  Entity.Color := SVGColorToACI(StrokeColor)
+ Else
+  Entity.Color := CurrentColor;
+ 
+ Entity.Layer := CurrentLayer;
+ Entity.Visible := True;
+ Entity.Selected := False;
+ 
+ ReadSVGEllipse := True;
+End;
+
+{ Lire un élément texte SVG }
+Function ReadSVGText(Const Line: String; TextContent: String; Var Entity: TDrawObject): Boolean;
+Var
+ FillColor: String;
+ FontSize: Real;
+Begin
+ ReadSVGText := False;
+ 
+ If Length(TextContent) = 0 Then Exit;
+ 
+ Entity.ObjType := OBJ_TEXT;
+ Entity.X1 := ExtractSVGAttrReal(Line, 'x');
+ Entity.Y1 := ExtractSVGAttrReal(Line, 'y');
+ Entity.DimText := TextContent;
+ 
+ FontSize := ExtractSVGAttrReal(Line, 'font-size');
+ If FontSize > 0 Then
+  Entity.Radius := FontSize
+ Else
+  Entity.Radius := SVG_DEFAULT_FONT_SIZE;
+ 
+ FillColor := ExtractSVGAttr(Line, 'fill');
+ If Length(FillColor) > 0 Then
+  Entity.Color := SVGColorToACI(FillColor)
+ Else
+  Entity.Color := CurrentColor;
+ 
+ Entity.Layer := CurrentLayer;
+ Entity.Visible := True;
+ Entity.Selected := False;
+ 
+ ReadSVGText := True;
+End;
+
+{ Lire un élément polyline SVG }
+Function ReadSVGPolyline(Const Line: String; Var Entity: TDrawObject): Boolean;
+Var
+ PointsStr, StrokeColor: String;
+Begin
+ ReadSVGPolyline := False;
+ 
+ PointsStr := ExtractSVGAttr(Line, 'points');
+ If Length(PointsStr) = 0 Then Exit;
+ 
+ Entity.ObjType := OBJ_POLYLINE;
+ 
+ If Not ParseSVGPoints(PointsStr, Entity) Then Exit;
+ 
+ StrokeColor := ExtractSVGAttr(Line, 'stroke');
+ If Length(StrokeColor) > 0 Then
+  Entity.Color := SVGColorToACI(StrokeColor)
+ Else
+  Entity.Color := CurrentColor;
+ 
+ Entity.Layer := CurrentLayer;
+ Entity.Visible := True;
+ Entity.Selected := False;
+ Entity.Closed := False;
+ 
+ ReadSVGPolyline := True;
+End;
+
+{ Lire un élément polygon SVG }
+Function ReadSVGPolygon(Const Line: String; Var Entity: TDrawObject): Boolean;
+Var
+ PointsStr, StrokeColor: String;
+Begin
+ ReadSVGPolygon := False;
+ 
+ PointsStr := ExtractSVGAttr(Line, 'points');
+ If Length(PointsStr) = 0 Then Exit;
+ 
+ Entity.ObjType := OBJ_POLYLINE;
+ 
+ If Not ParseSVGPoints(PointsStr, Entity) Then Exit;
+ 
+ StrokeColor := ExtractSVGAttr(Line, 'stroke');
+ If Length(StrokeColor) > 0 Then
+  Entity.Color := SVGColorToACI(StrokeColor)
+ Else
+  Entity.Color := CurrentColor;
+ 
+ Entity.Layer := CurrentLayer;
+ Entity.Visible := True;
+ Entity.Selected := False;
+ Entity.Closed := True; { Polygon est fermé }
+ 
+ ReadSVGPolygon := True;
+End;
+
+{ Lire un élément path SVG (simplifié - lignes uniquement) }
+Function ReadSVGPath(Const Line: String; Var Entity: TDrawObject): Boolean;
+Var
+ D, StrokeColor: String;
+ I, Start: Integer;
+ Cmd: Char;
+ X1, Y1, X2, Y2, V: Real;
+ Code: Integer;
+ NumStr: String;
+ HasMove, HasLine: Boolean;
+ IsRelative: Boolean;
+ CurrentX, CurrentY: Real;
+Begin
+ ReadSVGPath := False;
+ 
+ D := ExtractSVGAttr(Line, 'd');
+ If Length(D) = 0 Then Exit;
+ 
+ { Parser simplifié pour les paths basiques M/L/H/V/Z }
+ HasMove := False;
+ HasLine := False;
+ X1 := 0; Y1 := 0; X2 := 0; Y2 := 0;
+ CurrentX := 0; CurrentY := 0;
+ I := 1;
+ 
+ While I <= Length(D) do Begin
+  { Sauter les espaces et virgules }
+  While (I <= Length(D)) and ((D[I] = ' ') or (D[I] = ',')) do Inc(I);
+  If I > Length(D) Then Break;
+  
+  Cmd := D[I];
+  IsRelative := (Cmd >= 'a') and (Cmd <= 'z');
+  Cmd := UpCase(Cmd);
+  Inc(I);
+  
+  { Sauter les espaces après la commande }
+  While (I <= Length(D)) and ((D[I] = ' ') or (D[I] = ',')) do Inc(I);
+  
+  Case Cmd of
+   'M': Begin { Move To }
+    { Lire X }
+    Start := I;
+    While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
+    NumStr := Copy(D, Start, I - Start);
+    Val(NumStr, V, Code);
+    If Code = 0 Then Begin
+     If IsRelative Then X1 := CurrentX + V Else X1 := V;
+    End;
+    
+    { Sauter séparateurs }
+    While (I <= Length(D)) and ((D[I] = ' ') or (D[I] = ',')) do Inc(I);
+    
+    { Lire Y }
+    Start := I;
+    While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
+    NumStr := Copy(D, Start, I - Start);
+    Val(NumStr, V, Code);
+    If Code = 0 Then Begin
+     If IsRelative Then Y1 := CurrentY + V Else Y1 := V;
+    End;
+    
+    CurrentX := X1;
+    CurrentY := Y1;
+    HasMove := True;
+   End;
+   
+   'L': Begin { Line To }
+    { Lire X }
+    Start := I;
+    While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
+    NumStr := Copy(D, Start, I - Start);
+    Val(NumStr, V, Code);
+    If Code = 0 Then Begin
+     If IsRelative Then X2 := CurrentX + V Else X2 := V;
+    End;
+    
+    { Sauter séparateurs }
+    While (I <= Length(D)) and ((D[I] = ' ') or (D[I] = ',')) do Inc(I);
+    
+    { Lire Y }
+    Start := I;
+    While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
+    NumStr := Copy(D, Start, I - Start);
+    Val(NumStr, V, Code);
+    If Code = 0 Then Begin
+     If IsRelative Then Y2 := CurrentY + V Else Y2 := V;
+    End;
+    
+    CurrentX := X2;
+    CurrentY := Y2;
+    HasLine := True;
+   End;
+   
+   'H': Begin { Horizontal Line To }
+    Start := I;
+    While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
+    NumStr := Copy(D, Start, I - Start);
+    Val(NumStr, V, Code);
+    If Code = 0 Then Begin
+     If IsRelative Then X2 := CurrentX + V Else X2 := V;
+     Y2 := CurrentY;
+     CurrentX := X2;
+     HasLine := True;
+    End;
+   End;
+   
+   'V': Begin { Vertical Line To }
+    Start := I;
+    While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
+    NumStr := Copy(D, Start, I - Start);
+    Val(NumStr, V, Code);
+    If Code = 0 Then Begin
+     If IsRelative Then Y2 := CurrentY + V Else Y2 := V;
+     X2 := CurrentX;
+     CurrentY := Y2;
+     HasLine := True;
+    End;
+   End;
+   
+   'Z': Begin { Close Path }
+    { On ignore la fermeture pour l'instant }
+   End;
+  Else
+   { Commande non supportée, avancer }
+   Inc(I);
+  End;
+ End;
+ 
+ { Créer une ligne simple si on a un mouvement et une ligne }
+ If HasMove and HasLine Then Begin
+  Entity.ObjType := OBJ_LINE;
+  Entity.X1 := X1;
+  Entity.Y1 := Y1;
+  Entity.X2 := X2;
+  Entity.Y2 := Y2;
+  
+  StrokeColor := ExtractSVGAttr(Line, 'stroke');
+  If Length(StrokeColor) > 0 Then
+   Entity.Color := SVGColorToACI(StrokeColor)
+  Else
+   Entity.Color := CurrentColor;
+  
+  Entity.Layer := CurrentLayer;
+  Entity.Visible := True;
+  Entity.Selected := False;
+  
+  ReadSVGPath := True;
+ End;
+End;
+
+{ Lire un fichier SVG }
+Function ReadSVGFile(Const FileName: String): Boolean;
+Var
+ F: Text;
+ Line, ElementType, TextContent: String;
+ Entity: TDrawObject;
+ InText: Boolean;
+ TextLine: String;
+Begin
+ ReadSVGFile := False;
+ 
+ {$I-}
+ Assign(F, FileName);
+ Reset(F);
+ {$I+}
+ 
+ If IOResult <> 0 Then Exit;
+ 
+ InText := False;
+ TextLine := '';
+ 
+ While Not Eof(F) do Begin
+  ReadLn(F, Line);
+  
+  { Gérer le texte multi-ligne }
+  If InText Then Begin
+   If Pos('</text>', Line) > 0 Then Begin
+    TextLine := TextLine + Line;
+    ElementType := 'text';
+    TextContent := ExtractTextContent(TextLine);
+    
+    FillChar(Entity, SizeOf(Entity), 0);
+    If ReadSVGText(TextLine, TextContent, Entity) Then Begin
+     If ObjectCount < MAX_OBJECTS Then Begin
+      DrawObjects[ObjectCount] := Entity;
+      Inc(ObjectCount);
+     End;
+    End;
+    
+    InText := False;
+    TextLine := '';
+   End
+   Else
+    TextLine := TextLine + Line;
+   Continue;
+  End;
+  
+  ElementType := GetSVGElementType(Line);
+  
+  If ElementType = 'text' Then Begin
+   If Pos('</text>', Line) > 0 Then Begin
+    { Texte sur une seule ligne }
+    TextContent := ExtractTextContent(Line);
+    FillChar(Entity, SizeOf(Entity), 0);
+    If ReadSVGText(Line, TextContent, Entity) Then Begin
+     If ObjectCount < MAX_OBJECTS Then Begin
+      DrawObjects[ObjectCount] := Entity;
+      Inc(ObjectCount);
+     End;
+    End;
+   End
+   Else Begin
+    { Texte multi-ligne }
+    InText := True;
+    TextLine := Line;
+   End;
+  End
+  Else If ElementType = 'line' Then Begin
+   FillChar(Entity, SizeOf(Entity), 0);
+   If ReadSVGLine(Line, Entity) Then Begin
+    If ObjectCount < MAX_OBJECTS Then Begin
+     DrawObjects[ObjectCount] := Entity;
+     Inc(ObjectCount);
+    End;
+   End;
+  End
+  Else If ElementType = 'rect' Then Begin
+   FillChar(Entity, SizeOf(Entity), 0);
+   If ReadSVGRect(Line, Entity) Then Begin
+    If ObjectCount < MAX_OBJECTS Then Begin
+     DrawObjects[ObjectCount] := Entity;
+     Inc(ObjectCount);
+    End;
+   End;
+  End
+  Else If ElementType = 'circle' Then Begin
+   FillChar(Entity, SizeOf(Entity), 0);
+   If ReadSVGCircle(Line, Entity) Then Begin
+    If ObjectCount < MAX_OBJECTS Then Begin
+     DrawObjects[ObjectCount] := Entity;
+     Inc(ObjectCount);
+    End;
+   End;
+  End
+  Else If ElementType = 'ellipse' Then Begin
+   FillChar(Entity, SizeOf(Entity), 0);
+   If ReadSVGEllipse(Line, Entity) Then Begin
+    If ObjectCount < MAX_OBJECTS Then Begin
+     DrawObjects[ObjectCount] := Entity;
+     Inc(ObjectCount);
+    End;
+   End;
+  End
+  Else If ElementType = 'polyline' Then Begin
+   FillChar(Entity, SizeOf(Entity), 0);
+   If ReadSVGPolyline(Line, Entity) Then Begin
+    If ObjectCount < MAX_OBJECTS Then Begin
+     DrawObjects[ObjectCount] := Entity;
+     Inc(ObjectCount);
+    End;
+   End;
+  End
+  Else If ElementType = 'polygon' Then Begin
+   FillChar(Entity, SizeOf(Entity), 0);
+   If ReadSVGPolygon(Line, Entity) Then Begin
+    If ObjectCount < MAX_OBJECTS Then Begin
+     DrawObjects[ObjectCount] := Entity;
+     Inc(ObjectCount);
+    End;
+   End;
+  End
+  Else If ElementType = 'path' Then Begin
+   FillChar(Entity, SizeOf(Entity), 0);
+   If ReadSVGPath(Line, Entity) Then Begin
+    If ObjectCount < MAX_OBJECTS Then Begin
+     DrawObjects[ObjectCount] := Entity;
+     Inc(ObjectCount);
+    End;
+   End;
+  End;
+ End;
+ 
+ Close(F);
+ ReadSVGFile := True;
 End;
 
 { Initialiser le panneau de propriétés }

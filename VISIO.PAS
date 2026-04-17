@@ -22,7 +22,7 @@
   9. [FAIT] Gerer les evenements de clic gauche pour selection et dessin d'objets
   10. [FAIT] Gerer le clic droit pour afficher un menu contextuel avec options (Cut, Copy, Paste, Delete, Properties)
   11. [FAIT] Implementer le glisser-deposer (drag and drop) pour deplacer et redimensionner les objets
-  12. Ajouter les poignees de redimensionnement sur les objets selectionnes avec detection de survol
+  12. [FAIT] Ajouter les poignees de redimensionnement sur les objets selectionnes avec detection de survol
 
   === OBJETS ET FORMES ===
   13. Creer les types d'objets de base: Rectangle, Ellipse, Ligne, Polygone, Courbe de Bezier, Texte, Image
@@ -80,6 +80,11 @@ Const
  DEFAULT_SHAPE_WIDTH = 80;  { Largeur par défaut d'une forme }
  DEFAULT_SHAPE_HEIGHT = 60; { Hauteur par défaut d'une forme }
  SELECTION_HANDLE_SIZE = 6; { Taille des poignées de sélection }
+ 
+ { Couleurs pour les poignées de redimensionnement }
+ HANDLE_NORMAL_COLOR = 1;   { Bleu - couleur normale des poignées }
+ HANDLE_HOVER_COLOR = 4;    { Rouge - couleur des poignées survolées }
+ HANDLE_BORDER_COLOR = 15;  { Blanc - bordure des poignées }
  
  { Constantes pour le menu contextuel (clic droit) }
  CONTEXT_MENU_ITEM_COUNT = 5;     { Nombre d'éléments : Cut, Copy, Paste, Delete, Properties }
@@ -170,6 +175,9 @@ Var
  DragResizeHandle: Integer;   { Poignée de redimensionnement en cours }
  DragOrigX1, DragOrigY1: Integer;  { Coordonnées originales de l'objet }
  DragOrigX2, DragOrigY2: Integer;
+ { Variable pour le survol des poignées }
+ HoveredHandle: Integer;      { Poignée actuellement survolée (RESIZE_HANDLE_*) }
+ OldHoveredHandle: Integer;   { Ancienne poignée survolée (pour détection de changement) }
 
 Procedure InitializeGraphics;
 Var
@@ -924,6 +932,63 @@ Begin
  Shape.Selected := False;
 End;
 
+{ Procédure pour dessiner une poignée de redimensionnement unique }
+Procedure DrawSingleHandle(X, Y: Integer; HandleNum: Integer);
+Var
+ HalfSize: Integer;
+ HandleColor: Integer;
+Begin
+ HalfSize := SELECTION_HANDLE_SIZE div 2;
+ 
+ { Choisir la couleur selon si la poignée est survolée }
+ If HandleNum = HoveredHandle Then
+  HandleColor := HANDLE_HOVER_COLOR
+ Else
+  HandleColor := HANDLE_NORMAL_COLOR;
+ 
+ { Dessiner la poignée }
+ SetFillStyle(SolidFill, HandleColor);
+ SetColor(HANDLE_BORDER_COLOR);
+ Bar(X - HalfSize, Y - HalfSize, X + HalfSize, Y + HalfSize);
+ Rectangle(X - HalfSize, Y - HalfSize, X + HalfSize, Y + HalfSize);
+End;
+
+{ Procédure pour dessiner les 8 poignées de redimensionnement sur un objet sélectionné }
+Procedure DrawResizeHandles(Var Shape: TShapeObject);
+Var
+ CenterX, CenterY: Integer;
+Begin
+ If Not Shape.Selected Then Exit;
+ 
+ CenterX := (Shape.X1 + Shape.X2) div 2;
+ CenterY := (Shape.Y1 + Shape.Y2) div 2;
+ 
+ { Dessiner les 8 poignées de redimensionnement }
+ { Coin nord-ouest (haut-gauche) }
+ DrawSingleHandle(Shape.X1, Shape.Y1, RESIZE_HANDLE_NW);
+ 
+ { Milieu nord (haut) }
+ DrawSingleHandle(CenterX, Shape.Y1, RESIZE_HANDLE_N);
+ 
+ { Coin nord-est (haut-droite) }
+ DrawSingleHandle(Shape.X2, Shape.Y1, RESIZE_HANDLE_NE);
+ 
+ { Milieu est (droite) }
+ DrawSingleHandle(Shape.X2, CenterY, RESIZE_HANDLE_E);
+ 
+ { Coin sud-est (bas-droite) }
+ DrawSingleHandle(Shape.X2, Shape.Y2, RESIZE_HANDLE_SE);
+ 
+ { Milieu sud (bas) }
+ DrawSingleHandle(CenterX, Shape.Y2, RESIZE_HANDLE_S);
+ 
+ { Coin sud-ouest (bas-gauche) }
+ DrawSingleHandle(Shape.X1, Shape.Y2, RESIZE_HANDLE_SW);
+ 
+ { Milieu ouest (gauche) }
+ DrawSingleHandle(Shape.X1, CenterY, RESIZE_HANDLE_W);
+End;
+
 { Procédure pour dessiner un objet unique }
 Procedure DrawShape(Var Shape: TShapeObject);
 Var
@@ -977,31 +1042,8 @@ Begin
    End;
  End;
  
- { Dessiner les poignées de sélection si l'objet est sélectionné }
- If Shape.Selected Then Begin
-  SetFillStyle(SolidFill, Blue);
-  SetColor(White);
-  { Coin supérieur gauche }
-  Bar(Shape.X1 - SELECTION_HANDLE_SIZE div 2, Shape.Y1 - SELECTION_HANDLE_SIZE div 2,
-      Shape.X1 + SELECTION_HANDLE_SIZE div 2, Shape.Y1 + SELECTION_HANDLE_SIZE div 2);
-  Rectangle(Shape.X1 - SELECTION_HANDLE_SIZE div 2, Shape.Y1 - SELECTION_HANDLE_SIZE div 2,
-            Shape.X1 + SELECTION_HANDLE_SIZE div 2, Shape.Y1 + SELECTION_HANDLE_SIZE div 2);
-  { Coin supérieur droit }
-  Bar(Shape.X2 - SELECTION_HANDLE_SIZE div 2, Shape.Y1 - SELECTION_HANDLE_SIZE div 2,
-      Shape.X2 + SELECTION_HANDLE_SIZE div 2, Shape.Y1 + SELECTION_HANDLE_SIZE div 2);
-  Rectangle(Shape.X2 - SELECTION_HANDLE_SIZE div 2, Shape.Y1 - SELECTION_HANDLE_SIZE div 2,
-            Shape.X2 + SELECTION_HANDLE_SIZE div 2, Shape.Y1 + SELECTION_HANDLE_SIZE div 2);
-  { Coin inférieur gauche }
-  Bar(Shape.X1 - SELECTION_HANDLE_SIZE div 2, Shape.Y2 - SELECTION_HANDLE_SIZE div 2,
-      Shape.X1 + SELECTION_HANDLE_SIZE div 2, Shape.Y2 + SELECTION_HANDLE_SIZE div 2);
-  Rectangle(Shape.X1 - SELECTION_HANDLE_SIZE div 2, Shape.Y2 - SELECTION_HANDLE_SIZE div 2,
-            Shape.X1 + SELECTION_HANDLE_SIZE div 2, Shape.Y2 + SELECTION_HANDLE_SIZE div 2);
-  { Coin inférieur droit }
-  Bar(Shape.X2 - SELECTION_HANDLE_SIZE div 2, Shape.Y2 - SELECTION_HANDLE_SIZE div 2,
-      Shape.X2 + SELECTION_HANDLE_SIZE div 2, Shape.Y2 + SELECTION_HANDLE_SIZE div 2);
-  Rectangle(Shape.X2 - SELECTION_HANDLE_SIZE div 2, Shape.Y2 - SELECTION_HANDLE_SIZE div 2,
-            Shape.X2 + SELECTION_HANDLE_SIZE div 2, Shape.Y2 + SELECTION_HANDLE_SIZE div 2);
- End;
+ { Dessiner les 8 poignées de redimensionnement si l'objet est sélectionné }
+ DrawResizeHandles(Shape);
 End;
 
 { Procédure pour dessiner tous les objets }
@@ -1281,6 +1323,7 @@ Begin
  DragOrigY1 := 0;
  DragOrigX2 := 0;
  DragOrigY2 := 0;
+ HoveredHandle := RESIZE_HANDLE_NONE;
 End;
 
 { ============================================================================ }
@@ -2051,6 +2094,21 @@ BEGIN
    {$ELSE}
     GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
    {$ENDIF}
+   
+   { Détecter le survol des poignées de redimensionnement }
+   If (SelectedShape > 0) and (DragMode = DRAG_MODE_NONE) Then Begin
+    OldHoveredHandle := HoveredHandle;
+    HoveredHandle := GetResizeHandle(LastMouseX, LastMouseY, SelectedShape);
+    { Si le survol a changé, rafraîchir l'écran }
+    If HoveredHandle <> OldHoveredHandle Then Begin
+     HideMouse;
+     RefreshScreen;
+     ShowMouse;
+    End;
+   End
+   Else Begin
+    HoveredHandle := RESIZE_HANDLE_NONE;
+   End;
    
    { Détecter un clic gauche (bouton 1) }
    If (LastMouseButton and 1) = 1 Then Begin

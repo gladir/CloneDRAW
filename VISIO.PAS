@@ -16,7 +16,7 @@
   5. [FAIT] Ajouter le menu Insert avec Shape, Text Box, Image, Connector, Page, Layer
   6. [FAIT] Ajouter le menu Format avec Fill, Line, Text, Alignment, Arrange, Group, Ungroup
   7. [FAIT] Ajouter le menu Shape avec Rotate, Flip, Align, Distribute, Size, Position, Operations (Union, Intersect, Subtract)
-  8. Implementer la barre d'outils avec boutons pour les actions frequentes (Selection, Rectangle, Ellipse, Ligne, Connecteur, Texte)
+  8. [FAIT] Implementer la barre d'outils avec boutons pour les actions frequentes (Selection, Rectangle, Ellipse, Ligne, Connecteur, Texte)
 
   === SUPPORT SOURIS ===
   9. Gerer les evenements de clic gauche pour selection et dessin d'objets
@@ -63,6 +63,22 @@ Const
  MENU_HIGHLIGHT_BG = 1;   { Bleu }
  MENU_HIGHLIGHT_FG = 15;  { Blanc }
  
+ { Constantes pour la barre d'outils }
+ TOOLBAR_COUNT = 6;
+ TOOLBAR_TOP = 19;        { Juste en dessous de la barre de menu }
+ TOOLBAR_HEIGHT = 26;     { Hauteur de la barre d'outils }
+ TOOLBAR_BUTTON_SIZE = 24; { Taille d'un bouton }
+ TOOLBAR_PADDING = 2;     { Espacement entre les boutons }
+ TOOLBAR_COLOR = 7;       { Gris clair - même couleur que la barre de menu }
+ TOOLBAR_BTN_COLOR = 15;  { Blanc - fond des boutons }
+ TOOLBAR_BTN_BORDER = 8;  { Gris foncé - bordure des boutons }
+ TOOLBAR_BTN_SELECTED = 1; { Bleu - bouton sélectionné }
+ 
+ { Noms des outils de la barre d'outils }
+ ToolNames: Array[1..TOOLBAR_COUNT] of String[12] = (
+   'Selection', 'Rectangle', 'Ellipse', 'Line', 'Connector', 'Text'
+ );
+ 
  { Noms des menus principaux }
  MenuNames: Array[1..MENU_COUNT] of String[10] = (
    'File', 'Edit', 'View', 'Insert', 'Format', 'Shape', 'Tools', 'Window', 'Help'
@@ -75,11 +91,13 @@ Const
 
 Type
  TMenuState = (msNone, msMenuBar, msDropDown);
+ TToolType = (ttSelection, ttRectangle, ttEllipse, ttLine, ttConnector, ttText);
 
 Var
  CurrentMenu: Integer;
  MenuState: TMenuState;
  ScreenWidth, ScreenHeight: Integer;
+ CurrentTool: TToolType;
 
 Procedure InitializeGraphics;
 Var
@@ -688,6 +706,133 @@ End;
 { === FIN DES PROCEDURES DU MENU SHAPE === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === PROCEDURES DE LA BARRE D'OUTILS === }
+{ ============================================================================ }
+
+{ Procédure pour dessiner l'icône d'un outil }
+Procedure DrawToolIcon(X, Y: Integer; ToolIndex: Integer);
+Var
+ CenterX, CenterY: Integer;
+Begin
+ CenterX := X + TOOLBAR_BUTTON_SIZE div 2;
+ CenterY := Y + TOOLBAR_BUTTON_SIZE div 2;
+ 
+ SetColor(Black);
+ Case ToolIndex of
+  1: Begin { Selection - flèche }
+      Line(CenterX - 6, CenterY - 6, CenterX - 6, CenterY + 6);
+      Line(CenterX - 6, CenterY - 6, CenterX + 4, CenterY);
+      Line(CenterX - 6, CenterY + 6, CenterX + 4, CenterY);
+      Line(CenterX - 6, CenterY + 6, CenterX - 6, CenterY - 6);
+     End;
+  2: Begin { Rectangle }
+      Rectangle(CenterX - 7, CenterY - 5, CenterX + 7, CenterY + 5);
+     End;
+  3: Begin { Ellipse }
+      Ellipse(CenterX, CenterY, 0, 360, 7, 5);
+     End;
+  4: Begin { Line - ligne diagonale }
+      Line(CenterX - 6, CenterY + 6, CenterX + 6, CenterY - 6);
+     End;
+  5: Begin { Connector - deux points avec ligne }
+      Circle(CenterX - 6, CenterY, 2);
+      Circle(CenterX + 6, CenterY, 2);
+      Line(CenterX - 4, CenterY, CenterX + 4, CenterY);
+     End;
+  6: Begin { Text - lettre A }
+      OutTextXY(CenterX - 4, CenterY - 4, 'A');
+     End;
+ End;
+End;
+
+{ Procédure pour dessiner un bouton de la barre d'outils }
+Procedure DrawToolButton(Index: Integer; IsSelected: Boolean);
+Var
+ X, Y: Integer;
+Begin
+ { Calculer la position du bouton }
+ X := TOOLBAR_PADDING + (Index - 1) * (TOOLBAR_BUTTON_SIZE + TOOLBAR_PADDING);
+ Y := TOOLBAR_TOP + 1;
+ 
+ { Dessiner le fond du bouton }
+ If IsSelected Then Begin
+  SetFillStyle(SolidFill, TOOLBAR_BTN_SELECTED);
+ End
+ Else Begin
+  SetFillStyle(SolidFill, TOOLBAR_BTN_COLOR);
+ End;
+ Bar(X, Y, X + TOOLBAR_BUTTON_SIZE, Y + TOOLBAR_BUTTON_SIZE);
+ 
+ { Dessiner la bordure du bouton }
+ If IsSelected Then Begin
+  SetColor(White);
+ End
+ Else Begin
+  SetColor(TOOLBAR_BTN_BORDER);
+ End;
+ Rectangle(X, Y, X + TOOLBAR_BUTTON_SIZE, Y + TOOLBAR_BUTTON_SIZE);
+ 
+ { Dessiner l'icône de l'outil }
+ DrawToolIcon(X, Y, Index);
+End;
+
+{ Procédure pour dessiner la barre d'outils complète }
+Procedure DrawToolbar;
+Var
+ I: Integer;
+ ToolIndex: Integer;
+Begin
+ { Dessiner le fond de la barre d'outils }
+ SetFillStyle(SolidFill, TOOLBAR_COLOR);
+ Bar(0, TOOLBAR_TOP, ScreenWidth, TOOLBAR_TOP + TOOLBAR_HEIGHT);
+ 
+ { Dessiner une ligne de séparation en bas }
+ SetColor(DarkGray);
+ Line(0, TOOLBAR_TOP + TOOLBAR_HEIGHT, ScreenWidth, TOOLBAR_TOP + TOOLBAR_HEIGHT);
+ 
+ { Dessiner chaque bouton d'outil }
+ For I := 1 to TOOLBAR_COUNT do Begin
+  ToolIndex := Ord(CurrentTool) + 1;
+  DrawToolButton(I, I = ToolIndex);
+ End;
+End;
+
+{ Fonction pour obtenir l'outil à une position donnée }
+Function GetToolAtPosition(MouseX, MouseY: Integer): Integer;
+Var
+ I, X, Y: Integer;
+Begin
+ GetToolAtPosition := 0;
+ 
+ { Vérifier si la souris est dans la zone de la barre d'outils }
+ If (MouseY < TOOLBAR_TOP) or (MouseY > TOOLBAR_TOP + TOOLBAR_HEIGHT) Then Exit;
+ 
+ { Parcourir chaque bouton pour voir si la souris est dessus }
+ For I := 1 to TOOLBAR_COUNT do Begin
+  X := TOOLBAR_PADDING + (I - 1) * (TOOLBAR_BUTTON_SIZE + TOOLBAR_PADDING);
+  Y := TOOLBAR_TOP + 1;
+  
+  If (MouseX >= X) and (MouseX <= X + TOOLBAR_BUTTON_SIZE) and
+     (MouseY >= Y) and (MouseY <= Y + TOOLBAR_BUTTON_SIZE) Then Begin
+   GetToolAtPosition := I;
+   Exit;
+  End;
+ End;
+End;
+
+{ Procédure pour sélectionner un outil }
+Procedure SelectTool(ToolIndex: Integer);
+Begin
+ If (ToolIndex >= 1) and (ToolIndex <= TOOLBAR_COUNT) Then Begin
+  CurrentTool := TToolType(ToolIndex - 1);
+ End;
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DE LA BARRE D'OUTILS === }
+{ ============================================================================ }
+
 { Procédure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
@@ -918,6 +1063,8 @@ Begin
  ShapeHeight := 100;
  ShapeX := 0;
  ShapeY := 0;
+ { Initialisation de la barre d'outils }
+ CurrentTool := ttSelection;
 End;
 
 { Fonction pour exécuter une action du menu File }
@@ -1063,12 +1210,15 @@ End;
 { Procédure pour rafraîchir l'affichage complet }
 Procedure RefreshScreen;
 Begin
- { Effacer l'écran avec fond blanc }
+ { Effacer l'écran avec fond blanc (zone de travail sous la barre d'outils) }
  SetFillStyle(SolidFill, White);
- Bar(0, MENU_HEIGHT + 1, ScreenWidth, ScreenHeight);
+ Bar(0, TOOLBAR_TOP + TOOLBAR_HEIGHT + 1, ScreenWidth, ScreenHeight);
  
  { Dessiner la barre de menu }
  DrawMenuBar;
+ 
+ { Dessiner la barre d'outils }
+ DrawToolbar;
  
  { Si un menu est ouvert, le dessiner }
  If (MenuState = msDropDown) and (CurrentMenu > 0) Then Begin

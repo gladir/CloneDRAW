@@ -13,7 +13,7 @@
   2. [FAIT] Ajouter le menu File avec New, Open, Close, Save, Save As, Export, Print, Print Preview, Exit
   3. [FAIT] Ajouter le menu Edit avec Undo, Redo, Cut, Copy, Paste, Delete, Select All, Find, Replace
   4. [FAIT] Ajouter le menu View avec Zoom In, Zoom Out, Fit Page, Grid, Rulers, Guides, Snap to Grid
-  5. Ajouter le menu Insert avec Shape, Text Box, Image, Connector, Page, Layer
+  5. [FAIT] Ajouter le menu Insert avec Shape, Text Box, Image, Connector, Page, Layer
   6. Ajouter le menu Format avec Fill, Line, Text, Alignment, Arrange, Group, Ungroup
   7. Ajouter le menu Shape avec Rotate, Flip, Align, Distribute, Size, Position, Operations (Union, Intersect, Subtract)
   8. Implementer la barre d'outils avec boutons pour les actions frequentes (Selection, Rectangle, Ellipse, Ligne, Connecteur, Texte)
@@ -416,6 +416,83 @@ End;
 { === FIN DES PROCEDURES DU MENU VIEW === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === PROCEDURES DU MENU INSERT === }
+{ ============================================================================ }
+
+Const
+ MAX_PAGES = 100;
+ MAX_LAYERS = 50;
+ DEFAULT_PAGE_COUNT = 1;
+ DEFAULT_LAYER_COUNT = 1;
+
+Var
+ CurrentPage: Integer;
+ PageCount: Integer;
+ CurrentLayer: Integer;
+ LayerCount: Integer;
+ InsertMode: Integer;  { 0=None, 1=Shape, 2=TextBox, 3=Image, 4=Connector }
+
+{ Procédure InsertShape - Insérer une forme }
+Procedure InsertShape;
+Begin
+ { TODO: Afficher un dialogue pour choisir le type de forme }
+ { TODO: Passer en mode dessin de forme }
+ InsertMode := 1;
+End;
+
+{ Procédure InsertTextBox - Insérer une zone de texte }
+Procedure InsertTextBox;
+Begin
+ { TODO: Passer en mode dessin de zone de texte }
+ { TODO: Permettre de dessiner un rectangle pour la zone de texte }
+ InsertMode := 2;
+End;
+
+{ Procédure InsertImage - Insérer une image }
+Procedure InsertImage;
+Begin
+ { TODO: Afficher une boîte de dialogue pour sélectionner un fichier image }
+ { TODO: Charger l'image et l'insérer dans le document }
+ InsertMode := 3;
+End;
+
+{ Procédure InsertConnector - Insérer un connecteur }
+Procedure InsertConnector;
+Begin
+ { TODO: Passer en mode dessin de connecteur }
+ { TODO: Permettre de connecter deux formes avec des points d'ancrage }
+ InsertMode := 4;
+End;
+
+{ Procédure InsertPage - Insérer une nouvelle page }
+Procedure InsertPage;
+Begin
+ If PageCount < MAX_PAGES Then Begin
+  PageCount := PageCount + 1;
+  CurrentPage := PageCount;
+  { TODO: Créer une nouvelle page vide dans le document }
+  { TODO: Actualiser l'affichage pour montrer la nouvelle page }
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure InsertLayer - Insérer un nouveau calque }
+Procedure InsertLayer;
+Begin
+ If LayerCount < MAX_LAYERS Then Begin
+  LayerCount := LayerCount + 1;
+  CurrentLayer := LayerCount;
+  { TODO: Créer un nouveau calque dans la page courante }
+  { TODO: Actualiser l'affichage pour montrer le nouveau calque }
+  DocumentModified := True;
+ End;
+End;
+
+{ ============================================================================ }
+{ === FIN DES PROCEDURES DU MENU INSERT === }
+{ ============================================================================ }
+
 { Procédure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
@@ -625,6 +702,12 @@ Begin
  ShowRulers := True;
  ShowGuides := True;
  SnapToGridEnabled := True;
+ { Initialisation des variables du menu Insert }
+ CurrentPage := 1;
+ PageCount := DEFAULT_PAGE_COUNT;
+ CurrentLayer := 1;
+ LayerCount := DEFAULT_LAYER_COUNT;
+ InsertMode := 0;
 End;
 
 { Fonction pour exécuter une action du menu File }
@@ -679,6 +762,19 @@ Begin
   7: ViewGuides;       { Guides }
   { 8 est un séparateur }
   9: ViewSnapToGrid;   { Snap to Grid }
+ End;
+End;
+
+{ Procédure pour exécuter une action du menu Insert }
+Procedure ExecuteInsertMenuAction(ItemIndex: Integer);
+Begin
+ Case ItemIndex of
+  1: InsertShape;      { Shape }
+  2: InsertTextBox;    { Text Box }
+  3: InsertImage;      { Image... }
+  4: InsertConnector;  { Connector }
+  5: InsertPage;       { Page }
+  6: InsertLayer;      { Layer }
  End;
 End;
 

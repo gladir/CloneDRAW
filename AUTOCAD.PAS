@@ -33,7 +33,7 @@
   16. [DONE] Créer le panneau de propriétés pour modifier couleur, calque, type de ligne, épaisseur
   17. [DONE] Implémenter la modification géométrique des objets (déplacer sommets, changer rayon, etc.)
   18. [DONE] Ajouter le système de calques (layers) avec visibilité, verrouillage, couleur et type de ligne
-  19. Créer les outils de cotation : linéaire, alignée, angulaire, radiale, diamètre, ordonnée
+  19. [DONE] Créer les outils de cotation : linéaire, alignée, angulaire, radiale, diamètre, ordonnée
   20. Implémenter les blocs et références externes (XREFs) avec insertion et édition
 
   === FORMATS DE FICHIERS ===
@@ -154,6 +154,22 @@ Const
  OBJ_POINT = 6;
  OBJ_TEXT = 7;
  OBJ_ELLIPSE = 8;
+ OBJ_DIMENSION = 9;  { TODO 19: Objet cotation }
+ 
+ { Types de cotations - TODO 19 }
+ DIM_LINEAR = 0;       { Cotation linéaire (horizontale ou verticale) }
+ DIM_ALIGNED = 1;      { Cotation alignée (parallèle à la ligne) }
+ DIM_ANGULAR = 2;      { Cotation angulaire (angle entre 2 lignes) }
+ DIM_RADIAL = 3;       { Cotation radiale (rayon d'un cercle/arc) }
+ DIM_DIAMETER = 4;     { Cotation diamètre (diamètre d'un cercle) }
+ DIM_ORDINATE = 5;     { Cotation ordonnée (X ou Y depuis origine) }
+ 
+ { Constantes de style de cotation - TODO 19 }
+ DIM_ARROW_SIZE = 3.0;         { Taille des flèches en unités }
+ DIM_TEXT_HEIGHT = 2.5;        { Hauteur du texte de cotation }
+ DIM_TEXT_GAP = 0.625;         { Espace entre ligne et texte }
+ DIM_EXTENSION_OFFSET = 0.625; { Décalage des lignes d'extension }
+ DIM_EXTENSION_EXTEND = 1.25;  { Extension au-delà de la ligne de cote }
  
  { Tolérance de sélection (en pixels) }
  PICK_TOLERANCE = 5;
@@ -384,6 +400,13 @@ Type
   LayerIndex: Byte;           { Index du calque }
   Selected: Boolean;          { True si l'objet est sélectionné }
   Visible: Boolean;           { True si l'objet est visible }
+  { Champs pour cotations - TODO 19 }
+  DimType: Byte;              { Type de cotation (DIM_LINEAR, etc.) }
+  DimX3, DimY3: Real;         { 3ème point (position ligne de cote) }
+  DimX4, DimY4: Real;         { 4ème point (pour angular: 2ème ligne) }
+  DimText: String[20];        { Texte de cotation (vide = auto) }
+  DimValue: Real;             { Valeur mesurée }
+  DimTextX, DimTextY: Real;   { Position du texte de cotation }
  End;
 
  { Structure pour le jeu de sélection - TODO 9 }
@@ -717,6 +740,20 @@ Procedure MoveObjectToLayer(ObjIdx: Integer; LayerIdx: Integer); Forward;
 Procedure MoveSelectedObjectsToLayer(LayerIdx: Integer); Forward;
 Function GetObjectEffectiveColor(ObjIdx: Integer): Integer; Forward;
 Function GetObjectEffectiveLineType(ObjIdx: Integer): Byte; Forward;
+
+{ Forward declarations - TODO 19 - Outils de cotation }
+Function CreateLinearDimension(X1, Y1, X2, Y2, DimLineY: Real; IsHorizontal: Boolean): Integer; Forward;
+Function CreateAlignedDimension(X1, Y1, X2, Y2, Offset: Real): Integer; Forward;
+Function CreateAngularDimension(CX, CY, X1, Y1, X2, Y2, ArcRadius: Real): Integer; Forward;
+Function CreateRadialDimension(CX, CY, Radius, Angle: Real): Integer; Forward;
+Function CreateDiameterDimension(CX, CY, Radius, Angle: Real): Integer; Forward;
+Function CreateOrdinateDimension(X, Y, LeaderEndX, LeaderEndY: Real; IsXOrdinate: Boolean): Integer; Forward;
+Procedure DrawDimension(ObjIdx: Integer); Forward;
+Procedure DrawDimensionArrow(X, Y, Angle: Real; Size: Real); Forward;
+Function FormatDimensionValue(Value: Real): String; Forward;
+Function CalculateLinearDistance(X1, Y1, X2, Y2: Real): Real; Forward;
+Function CalculateAngle(X1, Y1, X2, Y2: Real): Real; Forward;
+Procedure GetDimensionGrips(ObjIdx: Integer); Forward;
 
 { Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
 Procedure InitLispTokenizer; Forward;
@@ -2743,6 +2780,11 @@ Begin
      Bar(SX2 - 3, SY2 - 3, SX2 + 3, SY2 + 3);  { Coin 4 }
     End;
    End;
+   
+   OBJ_DIMENSION: Begin
+    { TODO 19: Dessiner les cotations }
+    DrawDimension(I);
+   End;
   End;
  End;
  
@@ -2947,6 +2989,7 @@ Begin
    OBJ_ARC: GetGripsForArc(ObjIdx);
    OBJ_ELLIPSE: GetGripsForEllipse(ObjIdx);
    OBJ_POINT: GetGripsForPoint(ObjIdx);
+   OBJ_DIMENSION: GetDimensionGrips(ObjIdx);  { TODO 19 }
   End;
  End;
 End;
@@ -8100,6 +8143,579 @@ Begin
  End
  Else
   GetObjectEffectiveLineType := DrawObjects[ObjIdx].LineType;
+End;
+
+{ ============================================================================ }
+{ Fonctions de cotation - TODO 19                                               }
+{ ============================================================================ }
+
+{ Calculer la distance linéaire entre deux points }
+Function CalculateLinearDistance(X1, Y1, X2, Y2: Real): Real;
+Begin
+ CalculateLinearDistance := Sqrt(Sqr(X2 - X1) + Sqr(Y2 - Y1));
+End;
+
+{ Calculer l'angle (en radians) entre deux points }
+Function CalculateAngle(X1, Y1, X2, Y2: Real): Real;
+Var
+ DX, DY: Real;
+Begin
+ DX := X2 - X1;
+ DY := Y2 - Y1;
+ If DX = 0 Then Begin
+  If DY >= 0 Then
+   CalculateAngle := Pi / 2
+  Else
+   CalculateAngle := -Pi / 2;
+ End
+ Else
+  CalculateAngle := ArcTan(DY / DX);
+ If DX < 0 Then
+  CalculateAngle := CalculateAngle + Pi;
+End;
+
+{ Formater une valeur de cotation }
+Function FormatDimensionValue(Value: Real): String;
+Var
+ S: String;
+ DecPos: Integer;
+Begin
+ Str(Value:0:4, S);
+ { Supprimer les zéros de fin }
+ While (Length(S) > 1) and (S[Length(S)] = '0') and (S[Length(S) - 1] <> '.') do
+  Delete(S, Length(S), 1);
+ { Supprimer le point si pas de décimales }
+ If S[Length(S)] = '.' Then
+  Delete(S, Length(S), 1);
+ FormatDimensionValue := S;
+End;
+
+{ Dessiner une flèche de cotation }
+Procedure DrawDimensionArrow(X, Y, Angle: Real; Size: Real);
+Var
+ SX, SY: Integer;
+ X1, Y1, X2, Y2, X3, Y3: Integer;
+ ArrowAngle: Real;
+ ArrowLen: Real;
+Begin
+ SX := WorldToScreenX(X);
+ SY := WorldToScreenY(Y);
+ 
+ ArrowLen := Size * ZoomLevel;
+ ArrowAngle := Pi / 8;  { 22.5 degrés }
+ 
+ { Pointe de la flèche }
+ X1 := SX;
+ Y1 := SY;
+ 
+ { Côté gauche de la flèche }
+ X2 := Round(SX - ArrowLen * Cos(Angle - ArrowAngle));
+ Y2 := Round(SY + ArrowLen * Sin(Angle - ArrowAngle));
+ 
+ { Côté droit de la flèche }
+ X3 := Round(SX - ArrowLen * Cos(Angle + ArrowAngle));
+ Y3 := Round(SY + ArrowLen * Sin(Angle + ArrowAngle));
+ 
+ { Dessiner la flèche }
+ Line(X1, Y1, X2, Y2);
+ Line(X1, Y1, X3, Y3);
+ Line(X2, Y2, X3, Y3);
+End;
+
+{ Dessiner une cotation }
+Procedure DrawDimension(ObjIdx: Integer);
+Var
+ SX1, SY1, SX2, SY2: Integer;
+ SX3, SY3, SX4, SY4: Integer;
+ STX, STY: Integer;
+ DimText: String;
+ Angle, OffsetX, OffsetY: Real;
+ TextWidth: Integer;
+ MidX, MidY: Real;
+Begin
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ If DrawObjects[ObjIdx].ObjType <> OBJ_DIMENSION Then Exit;
+ 
+ SetColor(GetObjectEffectiveColor(ObjIdx));
+ 
+ Case DrawObjects[ObjIdx].DimType of
+  DIM_LINEAR, DIM_ALIGNED: Begin
+   { Points de définition }
+   SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
+   SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
+   SX2 := WorldToScreenX(DrawObjects[ObjIdx].X2);
+   SY2 := WorldToScreenY(DrawObjects[ObjIdx].Y2);
+   
+   { Ligne de cote (position Y3 pour linéaire horizontal) }
+   SX3 := WorldToScreenX(DrawObjects[ObjIdx].X1);
+   SY3 := WorldToScreenY(DrawObjects[ObjIdx].DimY3);
+   SX4 := WorldToScreenX(DrawObjects[ObjIdx].X2);
+   SY4 := WorldToScreenY(DrawObjects[ObjIdx].DimY3);
+   
+   { Lignes d'extension }
+   Line(SX1, SY1, SX3, SY3);
+   Line(SX2, SY2, SX4, SY4);
+   
+   { Ligne de cote }
+   Line(SX3, SY3, SX4, SY4);
+   
+   { Flèches }
+   If SX4 > SX3 Then Begin
+    DrawDimensionArrow(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].DimY3, 0, DIM_ARROW_SIZE);
+    DrawDimensionArrow(DrawObjects[ObjIdx].X2, DrawObjects[ObjIdx].DimY3, Pi, DIM_ARROW_SIZE);
+   End Else Begin
+    DrawDimensionArrow(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].DimY3, Pi, DIM_ARROW_SIZE);
+    DrawDimensionArrow(DrawObjects[ObjIdx].X2, DrawObjects[ObjIdx].DimY3, 0, DIM_ARROW_SIZE);
+   End;
+   
+   { Texte de cotation }
+   If DrawObjects[ObjIdx].DimText <> '' Then
+    DimText := DrawObjects[ObjIdx].DimText
+   Else
+    DimText := FormatDimensionValue(DrawObjects[ObjIdx].DimValue);
+   
+   STX := WorldToScreenX(DrawObjects[ObjIdx].DimTextX);
+   STY := WorldToScreenY(DrawObjects[ObjIdx].DimTextY);
+   TextWidth := TextWidth_(DimText);
+   OutTextXY(STX - TextWidth div 2, STY - 4, DimText);
+  End;
+  
+  DIM_RADIAL: Begin
+   { Centre du cercle }
+   SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
+   SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
+   
+   { Point sur le cercle }
+   Angle := DrawObjects[ObjIdx].StartAngle;
+   SX2 := WorldToScreenX(DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].Radius * Cos(Angle));
+   SY2 := WorldToScreenY(DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Radius * Sin(Angle));
+   
+   { Ligne de rayon }
+   Line(SX1, SY1, SX2, SY2);
+   
+   { Flèche au point de cercle }
+   DrawDimensionArrow(DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].Radius * Cos(Angle),
+                      DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Radius * Sin(Angle),
+                      Angle + Pi, DIM_ARROW_SIZE);
+   
+   { Texte R + valeur }
+   If DrawObjects[ObjIdx].DimText <> '' Then
+    DimText := DrawObjects[ObjIdx].DimText
+   Else
+    DimText := 'R' + FormatDimensionValue(DrawObjects[ObjIdx].DimValue);
+   
+   STX := WorldToScreenX(DrawObjects[ObjIdx].DimTextX);
+   STY := WorldToScreenY(DrawObjects[ObjIdx].DimTextY);
+   OutTextXY(STX, STY, DimText);
+  End;
+  
+  DIM_DIAMETER: Begin
+   { Centre du cercle }
+   SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
+   SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
+   
+   { Points opposés sur le cercle }
+   Angle := DrawObjects[ObjIdx].StartAngle;
+   SX2 := WorldToScreenX(DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].Radius * Cos(Angle));
+   SY2 := WorldToScreenY(DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Radius * Sin(Angle));
+   SX3 := WorldToScreenX(DrawObjects[ObjIdx].X1 - DrawObjects[ObjIdx].Radius * Cos(Angle));
+   SY3 := WorldToScreenY(DrawObjects[ObjIdx].Y1 - DrawObjects[ObjIdx].Radius * Sin(Angle));
+   
+   { Ligne de diamètre }
+   Line(SX2, SY2, SX3, SY3);
+   
+   { Flèches aux deux extrémités }
+   DrawDimensionArrow(DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].Radius * Cos(Angle),
+                      DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Radius * Sin(Angle),
+                      Angle + Pi, DIM_ARROW_SIZE);
+   DrawDimensionArrow(DrawObjects[ObjIdx].X1 - DrawObjects[ObjIdx].Radius * Cos(Angle),
+                      DrawObjects[ObjIdx].Y1 - DrawObjects[ObjIdx].Radius * Sin(Angle),
+                      Angle, DIM_ARROW_SIZE);
+   
+   { Texte Ø + valeur }
+   If DrawObjects[ObjIdx].DimText <> '' Then
+    DimText := DrawObjects[ObjIdx].DimText
+   Else
+    DimText := 'O' + FormatDimensionValue(DrawObjects[ObjIdx].DimValue);  { Note: Ø non disponible, utilisons O }
+   
+   STX := WorldToScreenX(DrawObjects[ObjIdx].DimTextX);
+   STY := WorldToScreenY(DrawObjects[ObjIdx].DimTextY);
+   OutTextXY(STX, STY, DimText);
+  End;
+  
+  DIM_ANGULAR: Begin
+   { Centre de l'angle }
+   SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
+   SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
+   
+   { Arc de cotation }
+   Arc(SX1, SY1, 
+       Round(DrawObjects[ObjIdx].StartAngle * 180 / Pi),
+       Round(DrawObjects[ObjIdx].EndAngle * 180 / Pi),
+       Round(DrawObjects[ObjIdx].Radius * ZoomLevel));
+   
+   { Texte de l'angle }
+   If DrawObjects[ObjIdx].DimText <> '' Then
+    DimText := DrawObjects[ObjIdx].DimText
+   Else
+    DimText := FormatDimensionValue(DrawObjects[ObjIdx].DimValue) + '°';
+   
+   STX := WorldToScreenX(DrawObjects[ObjIdx].DimTextX);
+   STY := WorldToScreenY(DrawObjects[ObjIdx].DimTextY);
+   TextWidth := TextWidth_(DimText);
+   OutTextXY(STX - TextWidth div 2, STY - 4, DimText);
+  End;
+  
+  DIM_ORDINATE: Begin
+   { Point de référence }
+   SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
+   SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
+   
+   { Fin de la ligne de repère }
+   SX2 := WorldToScreenX(DrawObjects[ObjIdx].X2);
+   SY2 := WorldToScreenY(DrawObjects[ObjIdx].Y2);
+   
+   { Lignes de repère (pliée) }
+   If DrawObjects[ObjIdx].DimX3 <> 0 Then Begin
+    { Cotation X }
+    SX3 := SX1;
+    SY3 := SY2;
+    Line(SX1, SY1, SX3, SY3);
+    Line(SX3, SY3, SX2, SY2);
+   End Else Begin
+    { Cotation Y }
+    SX3 := SX2;
+    SY3 := SY1;
+    Line(SX1, SY1, SX3, SY3);
+    Line(SX3, SY3, SX2, SY2);
+   End;
+   
+   { Texte de la valeur }
+   If DrawObjects[ObjIdx].DimText <> '' Then
+    DimText := DrawObjects[ObjIdx].DimText
+   Else
+    DimText := FormatDimensionValue(DrawObjects[ObjIdx].DimValue);
+   
+   OutTextXY(SX2, SY2 - 4, DimText);
+  End;
+ End;
+ 
+ { Si sélectionné, dessiner les grips }
+ If DrawObjects[ObjIdx].Selected Then Begin
+  SetFillStyle(SolidFill, Blue);
+  SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
+  SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
+  Bar(SX1 - 3, SY1 - 3, SX1 + 3, SY1 + 3);
+  SX2 := WorldToScreenX(DrawObjects[ObjIdx].X2);
+  SY2 := WorldToScreenY(DrawObjects[ObjIdx].Y2);
+  Bar(SX2 - 3, SY2 - 3, SX2 + 3, SY2 + 3);
+ End;
+End;
+
+{ Créer une cotation linéaire }
+Function CreateLinearDimension(X1, Y1, X2, Y2, DimLineY: Real; IsHorizontal: Boolean): Integer;
+Var
+ Idx: Integer;
+ Distance: Real;
+Begin
+ CreateLinearDimension := -1;
+ 
+ If ObjectCount >= MAX_OBJECTS Then Exit;
+ 
+ Idx := ObjectCount;
+ Inc(ObjectCount);
+ 
+ DrawObjects[Idx].ObjType := OBJ_DIMENSION;
+ DrawObjects[Idx].DimType := DIM_LINEAR;
+ DrawObjects[Idx].X1 := X1;
+ DrawObjects[Idx].Y1 := Y1;
+ DrawObjects[Idx].X2 := X2;
+ DrawObjects[Idx].Y2 := Y2;
+ DrawObjects[Idx].DimY3 := DimLineY;  { Position Y de la ligne de cote }
+ DrawObjects[Idx].DimX3 := 0;
+ 
+ { Calculer la distance }
+ If IsHorizontal Then
+  Distance := Abs(X2 - X1)
+ Else
+  Distance := Abs(Y2 - Y1);
+ DrawObjects[Idx].DimValue := Distance;
+ DrawObjects[Idx].DimText := '';
+ 
+ { Position du texte au milieu de la ligne de cote }
+ DrawObjects[Idx].DimTextX := (X1 + X2) / 2;
+ DrawObjects[Idx].DimTextY := DimLineY + DIM_TEXT_GAP;
+ 
+ { Propriétés par défaut }
+ DrawObjects[Idx].Color := CurrentColor;
+ DrawObjects[Idx].LineType := CurrentLineType;
+ DrawObjects[Idx].LayerIndex := CurrentLayer;
+ DrawObjects[Idx].Selected := False;
+ DrawObjects[Idx].Visible := True;
+ 
+ CreateLinearDimension := Idx;
+End;
+
+{ Créer une cotation alignée }
+Function CreateAlignedDimension(X1, Y1, X2, Y2, Offset: Real): Integer;
+Var
+ Idx: Integer;
+ Distance, Angle: Real;
+ OffsetX, OffsetY: Real;
+Begin
+ CreateAlignedDimension := -1;
+ 
+ If ObjectCount >= MAX_OBJECTS Then Exit;
+ 
+ Idx := ObjectCount;
+ Inc(ObjectCount);
+ 
+ { Calculer l'angle perpendiculaire }
+ Angle := CalculateAngle(X1, Y1, X2, Y2);
+ OffsetX := Offset * Cos(Angle + Pi/2);
+ OffsetY := Offset * Sin(Angle + Pi/2);
+ 
+ DrawObjects[Idx].ObjType := OBJ_DIMENSION;
+ DrawObjects[Idx].DimType := DIM_ALIGNED;
+ DrawObjects[Idx].X1 := X1;
+ DrawObjects[Idx].Y1 := Y1;
+ DrawObjects[Idx].X2 := X2;
+ DrawObjects[Idx].Y2 := Y2;
+ DrawObjects[Idx].DimX3 := X1 + OffsetX;
+ DrawObjects[Idx].DimY3 := Y1 + OffsetY;
+ DrawObjects[Idx].DimX4 := X2 + OffsetX;
+ DrawObjects[Idx].DimY4 := Y2 + OffsetY;
+ 
+ { Calculer la distance }
+ Distance := CalculateLinearDistance(X1, Y1, X2, Y2);
+ DrawObjects[Idx].DimValue := Distance;
+ DrawObjects[Idx].DimText := '';
+ 
+ { Position du texte au milieu }
+ DrawObjects[Idx].DimTextX := (X1 + X2) / 2 + OffsetX;
+ DrawObjects[Idx].DimTextY := (Y1 + Y2) / 2 + OffsetY + DIM_TEXT_GAP;
+ 
+ { Propriétés par défaut }
+ DrawObjects[Idx].Color := CurrentColor;
+ DrawObjects[Idx].LineType := CurrentLineType;
+ DrawObjects[Idx].LayerIndex := CurrentLayer;
+ DrawObjects[Idx].Selected := False;
+ DrawObjects[Idx].Visible := True;
+ 
+ CreateAlignedDimension := Idx;
+End;
+
+{ Créer une cotation angulaire }
+Function CreateAngularDimension(CX, CY, X1, Y1, X2, Y2, ArcRadius: Real): Integer;
+Var
+ Idx: Integer;
+ Angle1, Angle2, DiffAngle, MidAngle: Real;
+Begin
+ CreateAngularDimension := -1;
+ 
+ If ObjectCount >= MAX_OBJECTS Then Exit;
+ 
+ Idx := ObjectCount;
+ Inc(ObjectCount);
+ 
+ { Calculer les angles }
+ Angle1 := CalculateAngle(CX, CY, X1, Y1);
+ Angle2 := CalculateAngle(CX, CY, X2, Y2);
+ 
+ { Angle entre les deux lignes (en degrés) }
+ DiffAngle := Abs(Angle2 - Angle1);
+ If DiffAngle > Pi Then
+  DiffAngle := 2 * Pi - DiffAngle;
+ 
+ DrawObjects[Idx].ObjType := OBJ_DIMENSION;
+ DrawObjects[Idx].DimType := DIM_ANGULAR;
+ DrawObjects[Idx].X1 := CX;
+ DrawObjects[Idx].Y1 := CY;
+ DrawObjects[Idx].X2 := X1;
+ DrawObjects[Idx].Y2 := Y1;
+ DrawObjects[Idx].DimX3 := X2;
+ DrawObjects[Idx].DimY3 := Y2;
+ DrawObjects[Idx].Radius := ArcRadius;
+ DrawObjects[Idx].StartAngle := Angle1;
+ DrawObjects[Idx].EndAngle := Angle2;
+ 
+ { Valeur en degrés }
+ DrawObjects[Idx].DimValue := DiffAngle * 180 / Pi;
+ DrawObjects[Idx].DimText := '';
+ 
+ { Position du texte au milieu de l'arc }
+ MidAngle := (Angle1 + Angle2) / 2;
+ DrawObjects[Idx].DimTextX := CX + (ArcRadius + DIM_TEXT_GAP) * Cos(MidAngle);
+ DrawObjects[Idx].DimTextY := CY + (ArcRadius + DIM_TEXT_GAP) * Sin(MidAngle);
+ 
+ { Propriétés par défaut }
+ DrawObjects[Idx].Color := CurrentColor;
+ DrawObjects[Idx].LineType := CurrentLineType;
+ DrawObjects[Idx].LayerIndex := CurrentLayer;
+ DrawObjects[Idx].Selected := False;
+ DrawObjects[Idx].Visible := True;
+ 
+ CreateAngularDimension := Idx;
+End;
+
+{ Créer une cotation radiale }
+Function CreateRadialDimension(CX, CY, Radius, Angle: Real): Integer;
+Var
+ Idx: Integer;
+Begin
+ CreateRadialDimension := -1;
+ 
+ If ObjectCount >= MAX_OBJECTS Then Exit;
+ 
+ Idx := ObjectCount;
+ Inc(ObjectCount);
+ 
+ DrawObjects[Idx].ObjType := OBJ_DIMENSION;
+ DrawObjects[Idx].DimType := DIM_RADIAL;
+ DrawObjects[Idx].X1 := CX;
+ DrawObjects[Idx].Y1 := CY;
+ DrawObjects[Idx].Radius := Radius;
+ DrawObjects[Idx].StartAngle := Angle;  { Direction de la ligne de cotation }
+ 
+ { Valeur = rayon }
+ DrawObjects[Idx].DimValue := Radius;
+ DrawObjects[Idx].DimText := '';
+ 
+ { Position du texte sur la ligne de rayon }
+ DrawObjects[Idx].DimTextX := CX + (Radius / 2) * Cos(Angle);
+ DrawObjects[Idx].DimTextY := CY + (Radius / 2) * Sin(Angle) + DIM_TEXT_GAP;
+ 
+ { Propriétés par défaut }
+ DrawObjects[Idx].Color := CurrentColor;
+ DrawObjects[Idx].LineType := CurrentLineType;
+ DrawObjects[Idx].LayerIndex := CurrentLayer;
+ DrawObjects[Idx].Selected := False;
+ DrawObjects[Idx].Visible := True;
+ 
+ CreateRadialDimension := Idx;
+End;
+
+{ Créer une cotation diamètre }
+Function CreateDiameterDimension(CX, CY, Radius, Angle: Real): Integer;
+Var
+ Idx: Integer;
+Begin
+ CreateDiameterDimension := -1;
+ 
+ If ObjectCount >= MAX_OBJECTS Then Exit;
+ 
+ Idx := ObjectCount;
+ Inc(ObjectCount);
+ 
+ DrawObjects[Idx].ObjType := OBJ_DIMENSION;
+ DrawObjects[Idx].DimType := DIM_DIAMETER;
+ DrawObjects[Idx].X1 := CX;
+ DrawObjects[Idx].Y1 := CY;
+ DrawObjects[Idx].Radius := Radius;
+ DrawObjects[Idx].StartAngle := Angle;  { Direction de la ligne de cotation }
+ 
+ { Valeur = diamètre }
+ DrawObjects[Idx].DimValue := 2 * Radius;
+ DrawObjects[Idx].DimText := '';
+ 
+ { Position du texte au centre }
+ DrawObjects[Idx].DimTextX := CX + DIM_TEXT_GAP * Cos(Angle + Pi/2);
+ DrawObjects[Idx].DimTextY := CY + DIM_TEXT_GAP * Sin(Angle + Pi/2);
+ 
+ { Propriétés par défaut }
+ DrawObjects[Idx].Color := CurrentColor;
+ DrawObjects[Idx].LineType := CurrentLineType;
+ DrawObjects[Idx].LayerIndex := CurrentLayer;
+ DrawObjects[Idx].Selected := False;
+ DrawObjects[Idx].Visible := True;
+ 
+ CreateDiameterDimension := Idx;
+End;
+
+{ Créer une cotation ordonnée }
+Function CreateOrdinateDimension(X, Y, LeaderEndX, LeaderEndY: Real; IsXOrdinate: Boolean): Integer;
+Var
+ Idx: Integer;
+Begin
+ CreateOrdinateDimension := -1;
+ 
+ If ObjectCount >= MAX_OBJECTS Then Exit;
+ 
+ Idx := ObjectCount;
+ Inc(ObjectCount);
+ 
+ DrawObjects[Idx].ObjType := OBJ_DIMENSION;
+ DrawObjects[Idx].DimType := DIM_ORDINATE;
+ DrawObjects[Idx].X1 := X;
+ DrawObjects[Idx].Y1 := Y;
+ DrawObjects[Idx].X2 := LeaderEndX;
+ DrawObjects[Idx].Y2 := LeaderEndY;
+ 
+ { Flag pour indiquer X ou Y ordonnée (dans DimX3) }
+ If IsXOrdinate Then
+  DrawObjects[Idx].DimX3 := 1
+ Else
+  DrawObjects[Idx].DimX3 := 0;
+ 
+ { Valeur = coordonnée X ou Y }
+ If IsXOrdinate Then
+  DrawObjects[Idx].DimValue := X
+ Else
+  DrawObjects[Idx].DimValue := Y;
+ DrawObjects[Idx].DimText := '';
+ 
+ { Position du texte à la fin du repère }
+ DrawObjects[Idx].DimTextX := LeaderEndX;
+ DrawObjects[Idx].DimTextY := LeaderEndY;
+ 
+ { Propriétés par défaut }
+ DrawObjects[Idx].Color := CurrentColor;
+ DrawObjects[Idx].LineType := CurrentLineType;
+ DrawObjects[Idx].LayerIndex := CurrentLayer;
+ DrawObjects[Idx].Selected := False;
+ DrawObjects[Idx].Visible := True;
+ 
+ CreateOrdinateDimension := Idx;
+End;
+
+{ Obtenir les grips pour une cotation }
+Procedure GetDimensionGrips(ObjIdx: Integer);
+Begin
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ If DrawObjects[ObjIdx].ObjType <> OBJ_DIMENSION Then Exit;
+ 
+ { Grip au premier point }
+ If GripSet.Count < MAX_GRIPS Then Begin
+  GripSet.Grips[GripSet.Count].X := DrawObjects[ObjIdx].X1;
+  GripSet.Grips[GripSet.Count].Y := DrawObjects[ObjIdx].Y1;
+  GripSet.Grips[GripSet.Count].GripType := GRIP_ENDPOINT;
+  GripSet.Grips[GripSet.Count].ObjIndex := ObjIdx;
+  GripSet.Grips[GripSet.Count].PointIndex := 0;
+  GripSet.Grips[GripSet.Count].IsHot := False;
+  Inc(GripSet.Count);
+ End;
+ 
+ { Grip au deuxième point }
+ If GripSet.Count < MAX_GRIPS Then Begin
+  GripSet.Grips[GripSet.Count].X := DrawObjects[ObjIdx].X2;
+  GripSet.Grips[GripSet.Count].Y := DrawObjects[ObjIdx].Y2;
+  GripSet.Grips[GripSet.Count].GripType := GRIP_ENDPOINT;
+  GripSet.Grips[GripSet.Count].ObjIndex := ObjIdx;
+  GripSet.Grips[GripSet.Count].PointIndex := 1;
+  GripSet.Grips[GripSet.Count].IsHot := False;
+  Inc(GripSet.Count);
+ End;
+ 
+ { Grip à la position du texte }
+ If GripSet.Count < MAX_GRIPS Then Begin
+  GripSet.Grips[GripSet.Count].X := DrawObjects[ObjIdx].DimTextX;
+  GripSet.Grips[GripSet.Count].Y := DrawObjects[ObjIdx].DimTextY;
+  GripSet.Grips[GripSet.Count].GripType := GRIP_MIDPOINT;
+  GripSet.Grips[GripSet.Count].ObjIndex := ObjIdx;
+  GripSet.Grips[GripSet.Count].PointIndex := 2;
+  GripSet.Grips[GripSet.Count].IsHot := False;
+  Inc(GripSet.Count);
+ End;
 End;
 
 { Initialiser le panneau de propriétés }

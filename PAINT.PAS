@@ -6,7 +6,7 @@
 
   TODO Liste des 25 points à implémenter:
   ----------------------------------------
-  TODO 1: Créer la structure du programme avec directives {$IFDEF FPC} pour Turbo Pascal et Free Pascal
+  TODO 1: Créer la structure du programme avec directives pour Turbo Pascal et Free Pascal
   TODO 2: Implémenter l'initialisation du mode graphique (VGA 640x480)
   TODO 3: Dessiner la barre de menu (Fichier, Edition, Affichage, Image, Couleurs, Aide)
   TODO 4: Dessiner la barre d'outils à gauche avec les 16 icônes d'outils
@@ -37,6 +37,8 @@ Program Paint;
 
 {$IFDEF FPC}
  {$MODE TP}
+ {$Q-}
+ {$OVERFLOWCHECKS OFF}
 {$ENDIF}
 
 Uses
@@ -1448,12 +1450,14 @@ Var
  Var
   B: Array[0..3] of Byte absolute L;
   R: Array[0..3] of Byte;
+  Resultat:LongInt;
  Begin
   R[0] := B[3];
   R[1] := B[2];
   R[2] := B[1];
   R[3] := B[0];
-  Move(R, SwapLong, 4);
+  Move(R, Resultat, 4);
+  SwapLong:=Resultat;
  End;
 
 Begin
@@ -1515,7 +1519,7 @@ Begin
    ImageBuffer.Width := IHDRData.Width;
    ImageBuffer.Height := IHDRData.Height;
    ImageBuffer.BitDepth := IHDRData.BitDepth;
-   
+
    { Vérifier le type de couleur pour la transparence }
    If (IHDRData.ColorType and 4) <> 0 Then
     ImageBuffer.HasTransparency := True
@@ -1547,11 +1551,11 @@ Begin
   Else If ChunkType = 'IDAT' Then Begin
    { Données compressées de l'image }
    { Note: PNG utilise DEFLATE/zlib, implémentation simplifiée ici }
-   
+
    { Effacer la zone de dessin }
    SetFillStyle(SolidFill, White);
    Bar(CanvasX, CanvasY, CanvasX + CanvasWidth - 1, CanvasY + CanvasHeight - 1);
-   
+
    { Lecture simplifiée: afficher un placeholder }
    Y := 0;
    X := 0;
@@ -1560,7 +1564,7 @@ Begin
      BlockRead(F, DataBuffer, 4096, BytesRead)
     Else
      BlockRead(F, DataBuffer, ChunkLength, BytesRead);
-    
+
     { Simulation: utiliser les données compressées comme pixels }
     For I := 0 to BytesRead - 1 do Begin
      If (X < ImageBuffer.Width) and (Y < ImageBuffer.Height) Then Begin
@@ -1568,10 +1572,10 @@ Begin
        PixelColor := DataBuffer[I] mod PaletteSize
       Else
        PixelColor := DataBuffer[I] mod 16;
-       
+
       If (X < CanvasWidth) and (Y < CanvasHeight) Then
        PutPixel(CanvasX + X, CanvasY + Y, PixelColor);
-       
+
       Inc(X);
       If X >= ImageBuffer.Width Then Begin
        X := 0;
@@ -1579,7 +1583,7 @@ Begin
       End;
      End;
     End;
-    
+
     Dec(ChunkLength, BytesRead);
    End;
 
@@ -1792,11 +1796,11 @@ Begin
 
  { Préparer l'en-tête du fichier }
  FileHeader.bfType := BMP_SIGNATURE;
- FileHeader.bfSize := SizeOf(TBMPFileHeader) + SizeOf(TBMPInfoHeader) + 
+ FileHeader.bfSize := SizeOf(TBMPFileHeader) + SizeOf(TBMPInfoHeader) +
                       PaletteEntries * 4 + ImageSize;
  FileHeader.bfReserved1 := 0;
  FileHeader.bfReserved2 := 0;
- FileHeader.bfOffBits := SizeOf(TBMPFileHeader) + SizeOf(TBMPInfoHeader) + 
+ FileHeader.bfOffBits := SizeOf(TBMPFileHeader) + SizeOf(TBMPInfoHeader) +
                          PaletteEntries * 4;
 
  { Préparer l'en-tête d'information }
@@ -2067,12 +2071,14 @@ Var
  Var
   B: Array[0..3] of Byte absolute L;
   R: Array[0..3] of Byte;
+  Resultat:LongInt;
  Begin
   R[0] := B[3];
   R[1] := B[2];
   R[2] := B[1];
   R[3] := B[0];
-  Move(R, SwapLong, 4);
+  Move(R, Resultat, 4);
+  SwapLong:=Resultat;
  End;
 
  Function CalculateCRC32(Data: Pointer; Len: Integer): LongInt;
@@ -2082,7 +2088,7 @@ Var
   CRC: LongInt;
   B: PByte;
  Begin
-  CRC := $FFFFFFFF;
+  CRC := LongInt($FFFFFFFF);
   B := Data;
   For I := 0 to Len - 1 do Begin
    CRC := CRC xor B^;
@@ -2219,7 +2225,7 @@ Begin
  ChunkType := 'IEND';
  BlockWrite(F, ChunkLength, 4, BytesWritten);
  BlockWrite(F, ChunkType, 4, BytesWritten);
- ChunkCRC := SwapLong($AE426082); { CRC fixe pour IEND vide }
+ ChunkCRC := SwapLong(LongInt($AE426082)); { CRC fixe pour IEND vide }
  BlockWrite(F, ChunkCRC, 4, BytesWritten);
 
  Close(F);
@@ -2354,22 +2360,22 @@ Var
  Offset: LongInt;
 Begin
  SaveCanvasRegion := Nil;
- 
+
  { Normaliser les coordonnées }
  If X1 > X2 Then Begin Width := X1; X1 := X2; X2 := Width; End;
  If Y1 > Y2 Then Begin Height := Y1; Y1 := Y2; Y2 := Height; End;
- 
+
  { Limiter aux bornes du canevas }
  If X1 < CanvasX Then X1 := CanvasX;
  If Y1 < CanvasY Then Y1 := CanvasY;
  If X2 >= CanvasX + CanvasWidth Then X2 := CanvasX + CanvasWidth - 1;
  If Y2 >= CanvasY + CanvasHeight Then Y2 := CanvasY + CanvasHeight - 1;
- 
+
  Width := X2 - X1 + 1;
  Height := Y2 - Y1 + 1;
- 
+
  If (Width <= 0) or (Height <= 0) Then Exit;
- 
+
  { Allouer la structure de données }
  New(Data);
  Data^.X1 := X1;
@@ -2377,11 +2383,11 @@ Begin
  Data^.X2 := X2;
  Data^.Y2 := Y2;
  Data^.DataSize := LongInt(Width) * LongInt(Height);
- 
+
  { Allouer le buffer pour les pixels }
  GetMem(Data^.PixelData, Data^.DataSize);
  PixelBuffer := Data^.PixelData;
- 
+
  { Sauvegarder les pixels }
  Offset := 0;
  For Y := Y1 to Y2 do Begin
@@ -2390,7 +2396,7 @@ Begin
    Inc(PixelBuffer);
   End;
  End;
- 
+
  SaveCanvasRegion := Data;
 End;
 
@@ -2401,9 +2407,9 @@ Var
 Begin
  If Data = Nil Then Exit;
  If Data^.PixelData = Nil Then Exit;
- 
+
  PixelBuffer := Data^.PixelData;
- 
+
  { Restaurer les pixels }
  For Y := Data^.Y1 to Data^.Y2 do Begin
   For X := Data^.X1 to Data^.X2 do Begin
@@ -2429,12 +2435,12 @@ Var
  Count: Integer;
 Begin
  { Sauvegarder l'état actuel de tout le canevas }
- Data := SaveCanvasRegion(CanvasX, CanvasY, 
+ Data := SaveCanvasRegion(CanvasX, CanvasY,
                           CanvasX + CanvasWidth - 1,
                           CanvasY + CanvasHeight - 1);
- 
+
  If Data = Nil Then Exit;
- 
+
  New(NewItem);
  NewItem^.Action := Action;
  NewItem^.Data := Data;
@@ -2457,7 +2463,7 @@ Begin
    OldItem := OldItem^.Next;
    Inc(Count);
   End;
-  
+
   { Supprimer les éléments au-delà de la limite }
   While OldItem^.Next <> Nil do Begin
    NewItem := OldItem^.Next;
@@ -2486,9 +2492,9 @@ Var
 Begin
  { Sauvegarder seulement la région affectée }
  Data := SaveCanvasRegion(X1, Y1, X2, Y2);
- 
+
  If Data = Nil Then Exit;
- 
+
  New(NewItem);
  NewItem^.Action := Action;
  NewItem^.Data := Data;
@@ -2510,7 +2516,7 @@ Begin
    OldItem := OldItem^.Next;
    Inc(Count);
   End;
-  
+
   While OldItem^.Next <> Nil do Begin
    NewItem := OldItem^.Next;
    OldItem^.Next := NewItem^.Next;
@@ -2539,32 +2545,32 @@ Begin
 
  Item := UndoList;
  OldData := PHistoryData(Item^.Data);
- 
+
  If OldData = Nil Then Begin
   { Pas de données, juste déplacer l'item }
   UndoList := UndoList^.Next;
   If UndoList <> Nil Then
    UndoList^.Prev := Nil;
   Dec(UndoCount);
-  
+
   Item^.Next := RedoList;
   Item^.Prev := Nil;
   If RedoList <> Nil Then
    RedoList^.Prev := Item;
   RedoList := Item;
   Inc(RedoCount);
-  
+
   RedrawInterface;
   Exit;
  End;
- 
+
  { Sauvegarder l'état actuel pour le redo }
- CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1, 
+ CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1,
                                   OldData^.X2, OldData^.Y2);
- 
+
  { Restaurer l'ancien état }
  RestoreCanvasRegion(OldData);
- 
+
  { Déplacer l'item de Undo vers Redo }
  UndoList := UndoList^.Next;
  If UndoList <> Nil Then
@@ -2599,32 +2605,32 @@ Begin
 
  Item := RedoList;
  OldData := PHistoryData(Item^.Data);
- 
+
  If OldData = Nil Then Begin
   { Pas de données, juste déplacer l'item }
   RedoList := RedoList^.Next;
   If RedoList <> Nil Then
    RedoList^.Prev := Nil;
   Dec(RedoCount);
-  
+
   Item^.Next := UndoList;
   Item^.Prev := Nil;
   If UndoList <> Nil Then
    UndoList^.Prev := Item;
   UndoList := Item;
   Inc(UndoCount);
-  
+
   RedrawInterface;
   Exit;
  End;
- 
+
  { Sauvegarder l'état actuel pour le undo }
- CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1, 
+ CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1,
                                   OldData^.X2, OldData^.Y2);
- 
+
  { Restaurer l'état du redo }
  RestoreCanvasRegion(OldData);
- 
+
  { Déplacer l'item de Redo vers Undo }
  RedoList := RedoList^.Next;
  If RedoList <> Nil Then

@@ -24,7 +24,7 @@
 
   === INTERPRÉTEUR AUTOLISP ===
   11. [DONE] Créer un analyseur lexical (tokenizer) pour le langage AutoLISP
-  12. Implémenter un parseur pour construire l'arbre syntaxique des expressions LISP
+  12. [DONE] Implémenter un parseur pour construire l'arbre syntaxique des expressions LISP
   13. Développer l'évaluateur d'expressions avec support des fonctions mathématiques (+, -, *, /, sin, cos, sqrt, etc.)
   14. Implémenter les fonctions de dessin AutoLISP : command, entmake, entmod, entget, entsel, ssget, ssadd
   15. Ajouter les fonctions de manipulation de chaînes, listes et variables : setq, defun, if, cond, while, foreach, mapcar
@@ -216,6 +216,23 @@ Const
  LISP_CHAR_DOT = '.';
  LISP_CHAR_BACKSLASH = '\';    { Caractère d'échappement }
 
+ { Constantes pour le parseur AutoLISP et l'arbre syntaxique - TODO 12 }
+ MAX_LISP_NODES = 1000;        { Nombre maximum de noeuds dans l'arbre }
+ MAX_LISP_CHILDREN = 50;       { Nombre maximum d'enfants par noeud (liste) }
+ MAX_LISP_DEPTH = 100;         { Profondeur maximale de récursion }
+ 
+ { Types de noeuds AST AutoLISP }
+ LISP_NODE_NONE = 0;           { Noeud invalide }
+ LISP_NODE_INTEGER = 1;        { Nombre entier }
+ LISP_NODE_REAL = 2;           { Nombre réel }
+ LISP_NODE_STRING = 3;         { Chaîne de caractères }
+ LISP_NODE_SYMBOL = 4;         { Symbole (variable ou fonction) }
+ LISP_NODE_NIL = 5;            { nil }
+ LISP_NODE_T = 6;              { t (vrai) }
+ LISP_NODE_LIST = 7;           { Liste (expression entre parenthèses) }
+ LISP_NODE_QUOTE = 8;          { Expression quotée 'expr }
+ LISP_NODE_DOTPAIR = 9;        { Paire pointée (a . b) }
+
 Type
  { Structure pour les éléments de menu }
  TMenuItem = Record
@@ -319,6 +336,29 @@ Type
   HasError: Boolean;                       { True si erreur de tokenisation }
  End;
 
+ { Structure pour un noeud de l'arbre syntaxique AutoLISP - TODO 12 }
+ PLispNode = ^TLispNode;                    { Pointeur vers un noeud LISP }
+ TLispNode = Record
+  NodeType: Byte;                          { Type du noeud (LISP_NODE_xxx) }
+  IntValue: LongInt;                       { Valeur si entier }
+  RealValue: Real;                         { Valeur si réel }
+  StrValue: String[MAX_LISP_STRING];       { Valeur si chaîne ou symbole }
+  Children: Array[0..MAX_LISP_CHILDREN-1] of PLispNode;  { Enfants pour les listes }
+  ChildCount: Integer;                     { Nombre d'enfants }
+  Line: Integer;                           { Numéro de ligne source }
+  Column: Integer;                         { Position dans la ligne source }
+ End;
+
+ { Structure pour le parseur AutoLISP - TODO 12 }
+ TLispParser = Record
+  Nodes: Array[0..MAX_LISP_NODES-1] of TLispNode;  { Pool de noeuds }
+  NodeCount: Integer;                      { Nombre de noeuds utilisés }
+  Root: PLispNode;                         { Racine de l'arbre syntaxique }
+  Depth: Integer;                          { Profondeur actuelle de récursion }
+  ErrorMessage: String[80];                { Message d'erreur si erreur }
+  HasError: Boolean;                       { True si erreur de parsing }
+ End;
+
 Var
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
@@ -385,6 +425,10 @@ Var
  LispTokenizer: TLispTokenizer;                        { L'analyseur lexical global }
  LispLastResult: String[80];                           { Dernier résultat d'évaluation }
  LispDebugMode: Boolean;                               { Mode debug pour afficher les tokens }
+
+ { Variables pour le parseur AutoLISP - TODO 12 }
+ LispParser: TLispParser;                              { Le parseur global }
+ LispParseDebugMode: Boolean;                          { Mode debug pour afficher l'AST }
 
 { Forward declarations - TODO 6 }
 Procedure DrawContextMenu; Forward;
@@ -460,6 +504,26 @@ Function LispIsAtEnd: Boolean; Forward;
 Function LispCurrentTokenType: Byte; Forward;
 Function LispAdvanceToken: TLispToken; Forward;
 Function LispPeekToken: TLispToken; Forward;
+
+{ Forward declarations - TODO 12 - Parseur AutoLISP }
+Procedure InitLispParser; Forward;
+Function LispAllocNode: PLispNode; Forward;
+Procedure LispFreeNode(Node: PLispNode); Forward;
+Procedure LispClearParser; Forward;
+Function LispParseAtom: PLispNode; Forward;
+Function LispParseList: PLispNode; Forward;
+Function LispParseQuote: PLispNode; Forward;
+Function LispParseExpr: PLispNode; Forward;
+Function LispParse(Const S: String): PLispNode; Forward;
+Function LispNodeTypeName(NodeType: Byte): String; Forward;
+Procedure LispPrintNode(Node: PLispNode; Indent: Integer); Forward;
+Procedure LispPrintAST; Forward;
+Function LispNodeToString(Node: PLispNode): String; Forward;
+Function LispIsNil(Node: PLispNode): Boolean; Forward;
+Function LispIsList(Node: PLispNode): Boolean; Forward;
+Function LispIsAtomNode(Node: PLispNode): Boolean; Forward;
+Function LispListLength(Node: PLispNode): Integer; Forward;
+Function LispListGet(Node: PLispNode; Index: Integer): PLispNode; Forward;
 
 Procedure InitializeGraphics;
 Var
@@ -3284,6 +3348,591 @@ Begin
  End;
 End;
 
+{ ============================================================================ }
+{ Procédures pour le parseur AutoLISP (AST) - TODO 12                          }
+{ Construit un arbre syntaxique à partir des tokens                            }
+{ ============================================================================ }
+
+{ Initialiser le parseur AutoLISP }
+Procedure InitLispParser;
+Var
+ I: Integer;
+Begin
+ LispParser.NodeCount := 0;
+ LispParser.Root := Nil;
+ LispParser.Depth := 0;
+ LispParser.ErrorMessage := '';
+ LispParser.HasError := False;
+ LispParseDebugMode := False;
+ 
+ { Initialiser tous les noeuds }
+ For I := 0 to MAX_LISP_NODES - 1 do Begin
+  LispParser.Nodes[I].NodeType := LISP_NODE_NONE;
+  LispParser.Nodes[I].ChildCount := 0;
+ End;
+End;
+
+{ Allouer un nouveau noeud dans le pool }
+Function LispAllocNode: PLispNode;
+Var
+ I: Integer;
+Begin
+ If LispParser.NodeCount >= MAX_LISP_NODES Then Begin
+  LispParser.HasError := True;
+  LispParser.ErrorMessage := 'Trop de noeuds dans l''arbre syntaxique';
+  LispAllocNode := Nil;
+  Exit;
+ End;
+ 
+ LispAllocNode := @LispParser.Nodes[LispParser.NodeCount];
+ 
+ { Initialiser le noeud }
+ With LispParser.Nodes[LispParser.NodeCount] do Begin
+  NodeType := LISP_NODE_NONE;
+  IntValue := 0;
+  RealValue := 0.0;
+  StrValue := '';
+  ChildCount := 0;
+  Line := 0;
+  Column := 0;
+  For I := 0 to MAX_LISP_CHILDREN - 1 do
+   Children[I] := Nil;
+ End;
+ 
+ Inc(LispParser.NodeCount);
+End;
+
+{ Libérer un noeud (pas vraiment nécessaire avec le pool, mais pour l'API) }
+Procedure LispFreeNode(Node: PLispNode);
+Begin
+ If Node = Nil Then Exit;
+ { Avec le système de pool, on ne fait rien ici }
+ { La mémoire est libérée lors du prochain LispClearParser }
+End;
+
+{ Effacer le parseur pour une nouvelle expression }
+Procedure LispClearParser;
+Var
+ I, J: Integer;
+Begin
+ LispParser.NodeCount := 0;
+ LispParser.Root := Nil;
+ LispParser.Depth := 0;
+ LispParser.ErrorMessage := '';
+ LispParser.HasError := False;
+ 
+ For I := 0 to MAX_LISP_NODES - 1 do Begin
+  LispParser.Nodes[I].NodeType := LISP_NODE_NONE;
+  LispParser.Nodes[I].ChildCount := 0;
+  For J := 0 to MAX_LISP_CHILDREN - 1 do
+   LispParser.Nodes[I].Children[J] := Nil;
+ End;
+End;
+
+{ Parser un atome (nombre, chaîne, symbole, nil, t) }
+Function LispParseAtom: PLispNode;
+Var
+ Node: PLispNode;
+ Token: TLispToken;
+Begin
+ Token := LispPeekToken;
+ 
+ Node := LispAllocNode;
+ If Node = Nil Then Begin
+  LispParseAtom := Nil;
+  Exit;
+ End;
+ 
+ Node^.Line := Token.Line;
+ Node^.Column := Token.Column;
+ 
+ Case Token.TokenType of
+  LISP_TOKEN_INTEGER: Begin
+   Node^.NodeType := LISP_NODE_INTEGER;
+   Node^.IntValue := Token.IntValue;
+   Node^.StrValue := Token.StrValue;
+   Token := LispAdvanceToken;
+  End;
+  
+  LISP_TOKEN_REAL: Begin
+   Node^.NodeType := LISP_NODE_REAL;
+   Node^.RealValue := Token.RealValue;
+   Node^.StrValue := Token.StrValue;
+   Token := LispAdvanceToken;
+  End;
+  
+  LISP_TOKEN_STRING: Begin
+   Node^.NodeType := LISP_NODE_STRING;
+   Node^.StrValue := Token.StrValue;
+   Token := LispAdvanceToken;
+  End;
+  
+  LISP_TOKEN_SYMBOL: Begin
+   Node^.NodeType := LISP_NODE_SYMBOL;
+   Node^.StrValue := Token.StrValue;
+   Token := LispAdvanceToken;
+  End;
+  
+  LISP_TOKEN_NIL: Begin
+   Node^.NodeType := LISP_NODE_NIL;
+   Node^.StrValue := 'nil';
+   Token := LispAdvanceToken;
+  End;
+  
+  LISP_TOKEN_T: Begin
+   Node^.NodeType := LISP_NODE_T;
+   Node^.StrValue := 't';
+   Token := LispAdvanceToken;
+  End;
+  
+  Else Begin
+   { Token inattendu }
+   LispParser.HasError := True;
+   LispParser.ErrorMessage := 'Token inattendu: ' + LispTokenTypeName(Token.TokenType);
+   LispParseAtom := Nil;
+   Exit;
+  End;
+ End;
+ 
+ LispParseAtom := Node;
+End;
+
+{ Parser une expression quotée 'expr }
+Function LispParseQuote: PLispNode;
+Var
+ Node, Child: PLispNode;
+ Token: TLispToken;
+Begin
+ Token := LispAdvanceToken;  { Consommer le quote }
+ 
+ Node := LispAllocNode;
+ If Node = Nil Then Begin
+  LispParseQuote := Nil;
+  Exit;
+ End;
+ 
+ Node^.NodeType := LISP_NODE_QUOTE;
+ Node^.Line := Token.Line;
+ Node^.Column := Token.Column;
+ Node^.StrValue := 'quote';
+ 
+ { Parser l'expression quotée }
+ Child := LispParseExpr;
+ If Child = Nil Then Begin
+  If Not LispParser.HasError Then Begin
+   LispParser.HasError := True;
+   LispParser.ErrorMessage := 'Expression attendue après quote';
+  End;
+  LispParseQuote := Nil;
+  Exit;
+ End;
+ 
+ Node^.Children[0] := Child;
+ Node^.ChildCount := 1;
+ 
+ LispParseQuote := Node;
+End;
+
+{ Parser une liste (expression entre parenthèses) }
+Function LispParseList: PLispNode;
+Var
+ Node, Child: PLispNode;
+ Token: TLispToken;
+ HasDot: Boolean;
+Begin
+ Token := LispAdvanceToken;  { Consommer la parenthèse ouvrante }
+ 
+ { Vérifier la profondeur de récursion }
+ Inc(LispParser.Depth);
+ If LispParser.Depth > MAX_LISP_DEPTH Then Begin
+  LispParser.HasError := True;
+  LispParser.ErrorMessage := 'Imbrication trop profonde';
+  LispParseList := Nil;
+  Exit;
+ End;
+ 
+ Node := LispAllocNode;
+ If Node = Nil Then Begin
+  Dec(LispParser.Depth);
+  LispParseList := Nil;
+  Exit;
+ End;
+ 
+ Node^.NodeType := LISP_NODE_LIST;
+ Node^.Line := Token.Line;
+ Node^.Column := Token.Column;
+ Node^.ChildCount := 0;
+ HasDot := False;
+ 
+ { Parser les éléments de la liste }
+ While True do Begin
+  Token := LispPeekToken;
+  
+  { Fin de la liste }
+  If Token.TokenType = LISP_TOKEN_RPAREN Then Begin
+   Token := LispAdvanceToken;  { Consommer la parenthèse fermante }
+   Break;
+  End;
+  
+  { Fin de fichier inattendue }
+  If Token.TokenType = LISP_TOKEN_EOF Then Begin
+   LispParser.HasError := True;
+   LispParser.ErrorMessage := 'Parenthèse fermante attendue';
+   Dec(LispParser.Depth);
+   LispParseList := Nil;
+   Exit;
+  End;
+  
+  { Erreur de tokenisation }
+  If Token.TokenType = LISP_TOKEN_ERROR Then Begin
+   LispParser.HasError := True;
+   LispParser.ErrorMessage := 'Erreur de tokenisation: ' + Token.StrValue;
+   Dec(LispParser.Depth);
+   LispParseList := Nil;
+   Exit;
+  End;
+  
+  { Point pour paire pointée }
+  If Token.TokenType = LISP_TOKEN_DOT Then Begin
+   HasDot := True;
+   Node^.NodeType := LISP_NODE_DOTPAIR;
+   Token := LispAdvanceToken;  { Consommer le point }
+   Continue;
+  End;
+  
+  { Vérifier le nombre d'enfants }
+  If Node^.ChildCount >= MAX_LISP_CHILDREN Then Begin
+   LispParser.HasError := True;
+   LispParser.ErrorMessage := 'Trop d''éléments dans la liste';
+   Dec(LispParser.Depth);
+   LispParseList := Nil;
+   Exit;
+  End;
+  
+  { Parser l'élément suivant }
+  Child := LispParseExpr;
+  If Child = Nil Then Begin
+   Dec(LispParser.Depth);
+   LispParseList := Nil;
+   Exit;
+  End;
+  
+  Node^.Children[Node^.ChildCount] := Child;
+  Inc(Node^.ChildCount);
+ End;
+ 
+ Dec(LispParser.Depth);
+ LispParseList := Node;
+End;
+
+{ Parser une expression (dispatch principal) }
+Function LispParseExpr: PLispNode;
+Var
+ Token: TLispToken;
+Begin
+ Token := LispPeekToken;
+ 
+ { Vérifier les erreurs }
+ If LispParser.HasError Then Begin
+  LispParseExpr := Nil;
+  Exit;
+ End;
+ 
+ Case Token.TokenType of
+  LISP_TOKEN_LPAREN: Begin
+   LispParseExpr := LispParseList;
+  End;
+  
+  LISP_TOKEN_QUOTE: Begin
+   LispParseExpr := LispParseQuote;
+  End;
+  
+  LISP_TOKEN_INTEGER,
+  LISP_TOKEN_REAL,
+  LISP_TOKEN_STRING,
+  LISP_TOKEN_SYMBOL,
+  LISP_TOKEN_NIL,
+  LISP_TOKEN_T: Begin
+   LispParseExpr := LispParseAtom;
+  End;
+  
+  LISP_TOKEN_RPAREN: Begin
+   LispParser.HasError := True;
+   LispParser.ErrorMessage := 'Parenthèse fermante inattendue';
+   LispParseExpr := Nil;
+  End;
+  
+  LISP_TOKEN_EOF: Begin
+   LispParseExpr := Nil;  { Fin normale }
+  End;
+  
+  LISP_TOKEN_ERROR: Begin
+   LispParser.HasError := True;
+   LispParser.ErrorMessage := 'Erreur de tokenisation: ' + Token.StrValue;
+   LispParseExpr := Nil;
+  End;
+  
+  Else Begin
+   LispParser.HasError := True;
+   LispParser.ErrorMessage := 'Token inattendu: ' + LispTokenTypeName(Token.TokenType);
+   LispParseExpr := Nil;
+  End;
+ End;
+End;
+
+{ Parser une chaîne complète et retourner l'AST }
+Function LispParse(Const S: String): PLispNode;
+Begin
+ { D'abord tokeniser }
+ LispTokenize(S);
+ 
+ { Vérifier les erreurs de tokenisation }
+ If LispTokenizer.HasError Then Begin
+  LispParser.HasError := True;
+  LispParser.ErrorMessage := 'Erreur de tokenisation: ' + LispTokenizer.ErrorMessage;
+  LispParse := Nil;
+  Exit;
+ End;
+ 
+ { Réinitialiser le parseur }
+ LispClearParser;
+ 
+ { Parser l'expression }
+ LispParser.Root := LispParseExpr;
+ 
+ LispParse := LispParser.Root;
+End;
+
+{ Obtenir le nom d'un type de noeud }
+Function LispNodeTypeName(NodeType: Byte): String;
+Begin
+ Case NodeType of
+  LISP_NODE_NONE:    LispNodeTypeName := 'NONE';
+  LISP_NODE_INTEGER: LispNodeTypeName := 'INTEGER';
+  LISP_NODE_REAL:    LispNodeTypeName := 'REAL';
+  LISP_NODE_STRING:  LispNodeTypeName := 'STRING';
+  LISP_NODE_SYMBOL:  LispNodeTypeName := 'SYMBOL';
+  LISP_NODE_NIL:     LispNodeTypeName := 'NIL';
+  LISP_NODE_T:       LispNodeTypeName := 'T';
+  LISP_NODE_LIST:    LispNodeTypeName := 'LIST';
+  LISP_NODE_QUOTE:   LispNodeTypeName := 'QUOTE';
+  LISP_NODE_DOTPAIR: LispNodeTypeName := 'DOTPAIR';
+  Else               LispNodeTypeName := 'UNKNOWN';
+ End;
+End;
+
+{ Afficher un noeud avec indentation (pour debug) }
+Procedure LispPrintNode(Node: PLispNode; Indent: Integer);
+Var
+ I: Integer;
+ Prefix: String;
+ S: String;
+Begin
+ If Node = Nil Then Begin
+  WriteLn('(nil)');
+  Exit;
+ End;
+ 
+ { Créer l'indentation }
+ Prefix := '';
+ For I := 1 to Indent do
+  Prefix := Prefix + '  ';
+ 
+ { Afficher selon le type }
+ Case Node^.NodeType of
+  LISP_NODE_INTEGER: Begin
+   Str(Node^.IntValue, S);
+   WriteLn(Prefix, 'INTEGER: ', S);
+  End;
+  
+  LISP_NODE_REAL: Begin
+   Str(Node^.RealValue:0:6, S);
+   WriteLn(Prefix, 'REAL: ', S);
+  End;
+  
+  LISP_NODE_STRING: Begin
+   WriteLn(Prefix, 'STRING: "', Node^.StrValue, '"');
+  End;
+  
+  LISP_NODE_SYMBOL: Begin
+   WriteLn(Prefix, 'SYMBOL: ', Node^.StrValue);
+  End;
+  
+  LISP_NODE_NIL: Begin
+   WriteLn(Prefix, 'NIL');
+  End;
+  
+  LISP_NODE_T: Begin
+   WriteLn(Prefix, 'T');
+  End;
+  
+  LISP_NODE_LIST: Begin
+   WriteLn(Prefix, 'LIST (', Node^.ChildCount, ' elements):');
+   For I := 0 to Node^.ChildCount - 1 do
+    LispPrintNode(Node^.Children[I], Indent + 1);
+  End;
+  
+  LISP_NODE_QUOTE: Begin
+   WriteLn(Prefix, 'QUOTE:');
+   If Node^.ChildCount > 0 Then
+    LispPrintNode(Node^.Children[0], Indent + 1);
+  End;
+  
+  LISP_NODE_DOTPAIR: Begin
+   WriteLn(Prefix, 'DOTPAIR:');
+   For I := 0 to Node^.ChildCount - 1 do
+    LispPrintNode(Node^.Children[I], Indent + 1);
+  End;
+  
+  Else Begin
+   WriteLn(Prefix, 'UNKNOWN');
+  End;
+ End;
+End;
+
+{ Afficher l'arbre syntaxique complet }
+Procedure LispPrintAST;
+Begin
+ WriteLn('=== AST ===');
+ If LispParser.Root <> Nil Then
+  LispPrintNode(LispParser.Root, 0)
+ Else
+  WriteLn('(vide)');
+ If LispParser.HasError Then
+  WriteLn('ERREUR: ', LispParser.ErrorMessage);
+End;
+
+{ Convertir un noeud en chaîne LISP lisible }
+Function LispNodeToString(Node: PLispNode): String;
+Var
+ I: Integer;
+ S, Tmp: String;
+Begin
+ If Node = Nil Then Begin
+  LispNodeToString := 'nil';
+  Exit;
+ End;
+ 
+ Case Node^.NodeType of
+  LISP_NODE_INTEGER: Begin
+   Str(Node^.IntValue, S);
+   LispNodeToString := S;
+  End;
+  
+  LISP_NODE_REAL: Begin
+   Str(Node^.RealValue:0:6, S);
+   { Enlever les zéros trailing }
+   While (Length(S) > 1) and (S[Length(S)] = '0') and (S[Length(S)-1] <> '.') do
+    Delete(S, Length(S), 1);
+   LispNodeToString := S;
+  End;
+  
+  LISP_NODE_STRING: Begin
+   LispNodeToString := '"' + Node^.StrValue + '"';
+  End;
+  
+  LISP_NODE_SYMBOL: Begin
+   LispNodeToString := Node^.StrValue;
+  End;
+  
+  LISP_NODE_NIL: Begin
+   LispNodeToString := 'nil';
+  End;
+  
+  LISP_NODE_T: Begin
+   LispNodeToString := 't';
+  End;
+  
+  LISP_NODE_LIST: Begin
+   S := '(';
+   For I := 0 to Node^.ChildCount - 1 do Begin
+    If I > 0 Then S := S + ' ';
+    S := S + LispNodeToString(Node^.Children[I]);
+   End;
+   S := S + ')';
+   LispNodeToString := S;
+  End;
+  
+  LISP_NODE_QUOTE: Begin
+   If Node^.ChildCount > 0 Then
+    LispNodeToString := '''' + LispNodeToString(Node^.Children[0])
+   Else
+    LispNodeToString := '''nil';
+  End;
+  
+  LISP_NODE_DOTPAIR: Begin
+   If Node^.ChildCount >= 2 Then
+    LispNodeToString := '(' + LispNodeToString(Node^.Children[0]) + ' . ' + 
+                        LispNodeToString(Node^.Children[1]) + ')'
+   Else If Node^.ChildCount = 1 Then
+    LispNodeToString := '(' + LispNodeToString(Node^.Children[0]) + ' . nil)'
+   Else
+    LispNodeToString := '(nil . nil)';
+  End;
+  
+  Else Begin
+   LispNodeToString := '???';
+  End;
+ End;
+End;
+
+{ Vérifier si un noeud est nil }
+Function LispIsNil(Node: PLispNode): Boolean;
+Begin
+ If Node = Nil Then
+  LispIsNil := True
+ Else
+  LispIsNil := (Node^.NodeType = LISP_NODE_NIL) or
+               ((Node^.NodeType = LISP_NODE_LIST) and (Node^.ChildCount = 0));
+End;
+
+{ Vérifier si un noeud est une liste }
+Function LispIsList(Node: PLispNode): Boolean;
+Begin
+ If Node = Nil Then
+  LispIsList := False
+ Else
+  LispIsList := (Node^.NodeType = LISP_NODE_LIST) or
+                (Node^.NodeType = LISP_NODE_DOTPAIR) or
+                (Node^.NodeType = LISP_NODE_NIL);
+End;
+
+{ Vérifier si un noeud est un atome (pas une liste) }
+Function LispIsAtomNode(Node: PLispNode): Boolean;
+Begin
+ If Node = Nil Then
+  LispIsAtomNode := True
+ Else
+  LispIsAtomNode := (Node^.NodeType <> LISP_NODE_LIST) and
+                    (Node^.NodeType <> LISP_NODE_DOTPAIR);
+End;
+
+{ Obtenir la longueur d'une liste }
+Function LispListLength(Node: PLispNode): Integer;
+Begin
+ If Node = Nil Then
+  LispListLength := 0
+ Else If Node^.NodeType = LISP_NODE_LIST Then
+  LispListLength := Node^.ChildCount
+ Else If Node^.NodeType = LISP_NODE_NIL Then
+  LispListLength := 0
+ Else
+  LispListLength := -1;  { Pas une liste }
+End;
+
+{ Obtenir un élément d'une liste par index }
+Function LispListGet(Node: PLispNode; Index: Integer): PLispNode;
+Begin
+ If Node = Nil Then
+  LispListGet := Nil
+ Else If Node^.NodeType <> LISP_NODE_LIST Then
+  LispListGet := Nil
+ Else If (Index < 0) or (Index >= Node^.ChildCount) Then
+  LispListGet := Nil
+ Else
+  LispListGet := Node^.Children[Index];
+End;
+
 { Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair, TODO 9: Sélection, TODO 10: Grips }
 Procedure DrawCanvas;
 Var
@@ -3763,6 +4412,7 @@ Begin
  InitSelectionSystem;    { TODO 9: Initialiser le système de sélection }
  InitGripSystem;         { TODO 10: Initialiser le système de grips }
  InitLispTokenizer;      { TODO 11: Initialiser le tokenizer AutoLISP }
+ InitLispParser;         { TODO 12: Initialiser le parseur AutoLISP }
 End;
 
 { Dessiner le menu contextuel }

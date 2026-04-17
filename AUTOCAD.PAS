@@ -16,7 +16,7 @@
   5. [DONE] Créer les barres d'outils flottantes et ancrables pour un accès rapide aux commandes
 
   === SUPPORT DE LA SOURIS ===
-  6. Implémenter la gestion complète de la souris avec clic gauche, clic droit, molette et déplacement
+  6. [DONE] Implémenter la gestion complète de la souris avec clic gauche, clic droit, molette et déplacement
   7. Ajouter le zoom par molette de souris et le pan par clic milieu
   8. Créer le curseur de précision (crosshair) avec affichage des coordonnées en temps réel
   9. Implémenter le système de sélection d'objets par clic, fenêtre et fenêtre croisée
@@ -97,6 +97,31 @@ Const
  TOOLBAR_LAYERS = 3;
  TOOLBAR_PROPERTIES = 4;
 
+ { Constantes pour la gestion de la souris - TODO 6 }
+ MOUSE_BUTTON_LEFT = 1;
+ MOUSE_BUTTON_RIGHT = 2;
+ MOUSE_BUTTON_MIDDLE = 4;
+ 
+ { Éléments du menu contextuel }
+ MAX_CONTEXT_ITEMS = 10;
+ CONTEXT_REPEAT = 0;
+ CONTEXT_RECENT_INPUT = 1;
+ CONTEXT_CUT = 2;
+ CONTEXT_COPY = 3;
+ CONTEXT_PASTE = 4;
+ CONTEXT_ERASE = 5;
+ CONTEXT_PAN = 6;
+ CONTEXT_ZOOM = 7;
+ CONTEXT_PROPERTIES = 8;
+ CONTEXT_OPTIONS = 9;
+
+ { Modes de souris }
+ MOUSE_MODE_NORMAL = 0;
+ MOUSE_MODE_PAN = 1;
+ MOUSE_MODE_ZOOM = 2;
+ MOUSE_MODE_SELECT = 3;
+ MOUSE_MODE_DRAW = 4;
+
 Type
  { Structure pour les éléments de menu }
  TMenuItem = Record
@@ -134,6 +159,13 @@ Type
   Visible: Boolean;
  End;
 
+ { Structure pour le menu contextuel - TODO 6 }
+ TContextMenuItem = Record
+  Caption: String[25];
+  Enabled: Boolean;
+  Separator: Boolean;
+ End;
+
 Var
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
@@ -142,6 +174,22 @@ Var
  { Variables de la souris }
  MouseX, MouseY: Integer;
  MouseButtons: Integer;
+
+ { Variables avancées de la souris - TODO 6 }
+ MouseMode: Integer;            { Mode actuel de la souris }
+ MouseDragging: Boolean;        { True si en train de faire un drag }
+ DragStartX, DragStartY: Integer; { Point de départ du drag }
+ LastMouseX, LastMouseY: Integer; { Dernière position connue }
+ MouseWheelDelta: Integer;      { Valeur de la molette }
+ ContextMenuActive: Boolean;    { Menu contextuel visible }
+ ContextMenuX, ContextMenuY: Integer; { Position du menu contextuel }
+ ContextMenuItems: Array[0..MAX_CONTEXT_ITEMS-1] of TContextMenuItem;
+ ContextMenuItemCount: Integer;
+ ActiveContextItem: Integer;    { Élément survolé dans le menu contextuel }
+
+ { Variables pour le pan et zoom }
+ ViewOffsetX, ViewOffsetY: Real; { Décalage de la vue (pan) }
+ ZoomLevel: Real;               { Niveau de zoom actuel }
 
  { Variables pour les menus }
  Menus: Array[0..MAX_MENUS-1] of TMenu;
@@ -153,6 +201,15 @@ Var
  Toolbars: Array[0..MAX_TOOLBARS-1] of TToolbar;
  HoveredToolbar: Integer;
  HoveredButton: Integer;
+
+{ Forward declarations - TODO 6 }
+Procedure DrawContextMenu; Forward;
+Procedure HandleContextMenuHover(X, Y: Integer); Forward;
+Procedure HandleMouseDrag(X, Y: Integer); Forward;
+Function GetContextMenuItemAt(X, Y: Integer): Integer; Forward;
+Procedure ExecuteContextAction(Action: Integer); Forward;
+Procedure HandleRightClick(X, Y: Integer); Forward;
+Procedure HandleMiddleClick(X, Y: Integer); Forward;
 
 Procedure InitializeGraphics;
 Var
@@ -1283,6 +1340,10 @@ Begin
  { Si un menu est actif, le dessiner }
  If MenuActive and (ActiveMenu >= 0) Then
   DrawDropdownMenu(ActiveMenu);
+ 
+ { Si le menu contextuel est actif, le dessiner - TODO 6 }
+ If ContextMenuActive Then
+  DrawContextMenu;
 End;
 
 { Vérifier si un clic est dans la barre de menu }
@@ -1340,43 +1401,85 @@ Procedure HandleMouseClick(X, Y, Button: Integer);
 Var
  NewMenu: Integer;
  NewItem: Integer;
+ ContextItem: Integer;
 Begin
- If Button = 1 Then Begin { Clic gauche }
-  If IsInMenuBar(X, Y) Then Begin
-   NewMenu := GetMenuAtPosition(X);
-   If NewMenu >= 0 Then Begin
-    If MenuActive and (ActiveMenu = NewMenu) Then Begin
-     { Fermer le menu si on clique sur le même }
+ { Gérer le menu contextuel en premier }
+ If ContextMenuActive Then Begin
+  If Button = MOUSE_BUTTON_LEFT Then Begin
+   ContextItem := GetContextMenuItemAt(X, Y);
+   If ContextItem >= 0 Then Begin
+    ExecuteContextAction(ContextItem);
+   End Else Begin
+    { Clic en dehors - fermer le menu contextuel }
+    ContextMenuActive := False;
+    ActiveContextItem := -1;
+    DrawInterface;
+   End;
+   Exit;
+  End Else If Button = MOUSE_BUTTON_RIGHT Then Begin
+   { Nouveau clic droit - repositionner le menu }
+   ContextMenuX := X;
+   ContextMenuY := Y;
+   ActiveContextItem := -1;
+   DrawInterface;
+   DrawContextMenu;
+   Exit;
+  End;
+ End;
+
+ Case Button of
+  MOUSE_BUTTON_LEFT: Begin { Clic gauche }
+   { Démarrer un drag si nécessaire }
+   If MouseMode <> MOUSE_MODE_NORMAL Then Begin
+    MouseDragging := True;
+    DragStartX := X;
+    DragStartY := Y;
+   End;
+   
+   If IsInMenuBar(X, Y) Then Begin
+    NewMenu := GetMenuAtPosition(X);
+    If NewMenu >= 0 Then Begin
+     If MenuActive and (ActiveMenu = NewMenu) Then Begin
+      { Fermer le menu si on clique sur le même }
+      MenuActive := False;
+      ActiveMenu := -1;
+     End Else Begin
+      { Ouvrir le nouveau menu }
+      MenuActive := True;
+      ActiveMenu := NewMenu;
+      ActiveMenuItem := -1;
+     End;
+     DrawInterface;
+    End;
+   End Else If MenuActive Then Begin
+    { Vérifier si on clique sur un élément de menu }
+    NewItem := GetMenuItemAtPosition(ActiveMenu, X, Y);
+    If NewItem >= 0 Then Begin
+     { Exécuter l'action du menu }
+     If (ActiveMenu = MENU_FILE) and (NewItem = 13) Then Begin
+      { Exit }
+      Running := False;
+     End;
      MenuActive := False;
      ActiveMenu := -1;
-    End Else Begin
-     { Ouvrir le nouveau menu }
-     MenuActive := True;
-     ActiveMenu := NewMenu;
      ActiveMenuItem := -1;
+     DrawInterface;
+    End Else Begin
+     { Clic en dehors du menu - fermer }
+     MenuActive := False;
+     ActiveMenu := -1;
+     ActiveMenuItem := -1;
+     DrawInterface;
     End;
-    DrawInterface;
    End;
-  End Else If MenuActive Then Begin
-   { Vérifier si on clique sur un élément de menu }
-   NewItem := GetMenuItemAtPosition(ActiveMenu, X, Y);
-   If NewItem >= 0 Then Begin
-    { Exécuter l'action du menu }
-    If (ActiveMenu = MENU_FILE) and (NewItem = 13) Then Begin
-     { Exit }
-     Running := False;
-    End;
-    MenuActive := False;
-    ActiveMenu := -1;
-    ActiveMenuItem := -1;
-    DrawInterface;
-   End Else Begin
-    { Clic en dehors du menu - fermer }
-    MenuActive := False;
-    ActiveMenu := -1;
-    ActiveMenuItem := -1;
-    DrawInterface;
-   End;
+  End;
+  
+  MOUSE_BUTTON_RIGHT: Begin { Clic droit - TODO 6 }
+   HandleRightClick(X, Y);
+  End;
+  
+  MOUSE_BUTTON_MIDDLE: Begin { Clic milieu - TODO 6 }
+   HandleMiddleClick(X, Y);
   End;
  End;
 End;
@@ -1387,6 +1490,22 @@ Var
  NewItem: Integer;
  NewMenu: Integer;
 Begin
+ { Gérer le menu contextuel en premier - TODO 6 }
+ If ContextMenuActive Then Begin
+  HandleContextMenuHover(X, Y);
+  LastMouseX := X;
+  LastMouseY := Y;
+  Exit;
+ End;
+ 
+ { Gérer le drag - TODO 6 }
+ If MouseDragging Then Begin
+  HandleMouseDrag(X, Y);
+  LastMouseX := X;
+  LastMouseY := Y;
+  Exit;
+ End;
+
  If MenuActive Then Begin
   { Vérifier si on survole un autre menu }
   If IsInMenuBar(X, Y) Then Begin
@@ -1404,6 +1523,315 @@ Begin
     DrawInterface;
    End;
   End;
+ End;
+ 
+ { Mettre à jour la dernière position }
+ LastMouseX := X;
+ LastMouseY := Y;
+End;
+
+{ ============================================================================ }
+{ Procédures de gestion avancée de la souris - TODO 6                          }
+{ Implémenter la gestion complète de la souris avec clic gauche, clic droit,   }
+{ molette et déplacement                                                        }
+{ ============================================================================ }
+
+{ Initialiser le menu contextuel }
+Procedure InitContextMenu;
+Begin
+ ContextMenuItemCount := 10;
+ 
+ ContextMenuItems[CONTEXT_REPEAT].Caption := 'Repeat Last Command';
+ ContextMenuItems[CONTEXT_REPEAT].Enabled := True;
+ ContextMenuItems[CONTEXT_REPEAT].Separator := False;
+ 
+ ContextMenuItems[CONTEXT_RECENT_INPUT].Caption := 'Recent Input';
+ ContextMenuItems[CONTEXT_RECENT_INPUT].Enabled := True;
+ ContextMenuItems[CONTEXT_RECENT_INPUT].Separator := True;
+ 
+ ContextMenuItems[CONTEXT_CUT].Caption := 'Cut';
+ ContextMenuItems[CONTEXT_CUT].Enabled := True;
+ ContextMenuItems[CONTEXT_CUT].Separator := False;
+ 
+ ContextMenuItems[CONTEXT_COPY].Caption := 'Copy';
+ ContextMenuItems[CONTEXT_COPY].Enabled := True;
+ ContextMenuItems[CONTEXT_COPY].Separator := False;
+ 
+ ContextMenuItems[CONTEXT_PASTE].Caption := 'Paste';
+ ContextMenuItems[CONTEXT_PASTE].Enabled := True;
+ ContextMenuItems[CONTEXT_PASTE].Separator := True;
+ 
+ ContextMenuItems[CONTEXT_ERASE].Caption := 'Erase';
+ ContextMenuItems[CONTEXT_ERASE].Enabled := True;
+ ContextMenuItems[CONTEXT_ERASE].Separator := True;
+ 
+ ContextMenuItems[CONTEXT_PAN].Caption := 'Pan';
+ ContextMenuItems[CONTEXT_PAN].Enabled := True;
+ ContextMenuItems[CONTEXT_PAN].Separator := False;
+ 
+ ContextMenuItems[CONTEXT_ZOOM].Caption := 'Zoom';
+ ContextMenuItems[CONTEXT_ZOOM].Enabled := True;
+ ContextMenuItems[CONTEXT_ZOOM].Separator := True;
+ 
+ ContextMenuItems[CONTEXT_PROPERTIES].Caption := 'Properties';
+ ContextMenuItems[CONTEXT_PROPERTIES].Enabled := True;
+ ContextMenuItems[CONTEXT_PROPERTIES].Separator := False;
+ 
+ ContextMenuItems[CONTEXT_OPTIONS].Caption := 'Options...';
+ ContextMenuItems[CONTEXT_OPTIONS].Enabled := True;
+ ContextMenuItems[CONTEXT_OPTIONS].Separator := False;
+ 
+ ContextMenuActive := False;
+ ActiveContextItem := -1;
+End;
+
+{ Initialiser les variables de souris }
+Procedure InitMouseState;
+Begin
+ MouseMode := MOUSE_MODE_NORMAL;
+ MouseDragging := False;
+ DragStartX := 0;
+ DragStartY := 0;
+ LastMouseX := 0;
+ LastMouseY := 0;
+ MouseWheelDelta := 0;
+ ViewOffsetX := 0.0;
+ ViewOffsetY := 0.0;
+ ZoomLevel := 1.0;
+ InitContextMenu;
+End;
+
+{ Dessiner le menu contextuel }
+Procedure DrawContextMenu;
+Var
+ I: Integer;
+ MenuWidth, MenuHeight: Integer;
+ ItemHeight: Integer;
+ X, Y: Integer;
+Begin
+ If Not ContextMenuActive Then Exit;
+ 
+ ItemHeight := 18;
+ MenuWidth := 160;
+ MenuHeight := ContextMenuItemCount * ItemHeight + 4;
+ X := ContextMenuX;
+ Y := ContextMenuY;
+ 
+ { Ajuster la position si le menu dépasse l'écran }
+ If X + MenuWidth > ScreenWidth Then
+  X := ScreenWidth - MenuWidth - 2;
+ If Y + MenuHeight > ScreenHeight Then
+  Y := ScreenHeight - MenuHeight - 2;
+ 
+ { Fond du menu contextuel }
+ SetFillStyle(SolidFill, LightGray);
+ Bar(X, Y, X + MenuWidth, Y + MenuHeight);
+ 
+ { Bordure 3D }
+ SetColor(White);
+ Line(X, Y, X + MenuWidth, Y);
+ Line(X, Y, X, Y + MenuHeight);
+ SetColor(DarkGray);
+ Line(X + MenuWidth, Y, X + MenuWidth, Y + MenuHeight);
+ Line(X, Y + MenuHeight, X + MenuWidth, Y + MenuHeight);
+ 
+ { Dessiner les éléments }
+ For I := 0 to ContextMenuItemCount - 1 do Begin
+  If ContextMenuItems[I].Separator and (I > 0) Then Begin
+   { Ligne de séparation au-dessus de cet élément }
+   SetColor(DarkGray);
+   Line(X + 2, Y + I * ItemHeight, X + MenuWidth - 2, Y + I * ItemHeight);
+   SetColor(White);
+   Line(X + 2, Y + I * ItemHeight + 1, X + MenuWidth - 2, Y + I * ItemHeight + 1);
+  End;
+  
+  { Fond survolé }
+  If I = ActiveContextItem Then Begin
+   SetFillStyle(SolidFill, Blue);
+   Bar(X + 2, Y + I * ItemHeight + 2, X + MenuWidth - 2, Y + (I + 1) * ItemHeight + 1);
+   SetColor(White);
+  End Else Begin
+   If ContextMenuItems[I].Enabled Then
+    SetColor(Black)
+   Else
+    SetColor(DarkGray);
+  End;
+  
+  OutTextXY(X + 8, Y + I * ItemHeight + 5, ContextMenuItems[I].Caption);
+ End;
+End;
+
+{ Obtenir l'élément de menu contextuel à la position }
+Function GetContextMenuItemAt(X, Y: Integer): Integer;
+Var
+ ItemHeight: Integer;
+ MenuWidth, MenuHeight: Integer;
+ Index: Integer;
+ MX, MY: Integer;
+Begin
+ GetContextMenuItemAt := -1;
+ If Not ContextMenuActive Then Exit;
+ 
+ ItemHeight := 18;
+ MenuWidth := 160;
+ MenuHeight := ContextMenuItemCount * ItemHeight + 4;
+ MX := ContextMenuX;
+ MY := ContextMenuY;
+ 
+ { Ajuster la position si le menu dépasse l'écran }
+ If MX + MenuWidth > ScreenWidth Then
+  MX := ScreenWidth - MenuWidth - 2;
+ If MY + MenuHeight > ScreenHeight Then
+  MY := ScreenHeight - MenuHeight - 2;
+ 
+ If (X >= MX) and (X <= MX + MenuWidth) and
+    (Y >= MY) and (Y <= MY + MenuHeight) Then Begin
+  Index := (Y - MY - 2) div ItemHeight;
+  If (Index >= 0) and (Index < ContextMenuItemCount) Then
+   GetContextMenuItemAt := Index;
+ End;
+End;
+
+{ Gérer le clic droit de la souris }
+Procedure HandleRightClick(X, Y: Integer);
+Begin
+ { Fermer le menu principal s'il est ouvert }
+ If MenuActive Then Begin
+  MenuActive := False;
+  ActiveMenu := -1;
+  ActiveMenuItem := -1;
+ End;
+ 
+ { Ouvrir le menu contextuel à la position du clic }
+ ContextMenuActive := True;
+ ContextMenuX := X;
+ ContextMenuY := Y;
+ ActiveContextItem := -1;
+ DrawInterface;
+ DrawContextMenu;
+End;
+
+{ Gérer le clic milieu de la souris (pan) }
+Procedure HandleMiddleClick(X, Y: Integer);
+Begin
+ { Activer le mode pan }
+ If MouseMode = MOUSE_MODE_PAN Then Begin
+  { Désactiver le pan }
+  MouseMode := MOUSE_MODE_NORMAL;
+  MouseDragging := False;
+ End Else Begin
+  { Activer le pan }
+  MouseMode := MOUSE_MODE_PAN;
+  DragStartX := X;
+  DragStartY := Y;
+  MouseDragging := True;
+ End;
+End;
+
+{ Gérer le drag de la souris (déplacement avec bouton enfoncé) }
+Procedure HandleMouseDrag(X, Y: Integer);
+Var
+ DeltaX, DeltaY: Integer;
+Begin
+ If Not MouseDragging Then Exit;
+ 
+ DeltaX := X - LastMouseX;
+ DeltaY := Y - LastMouseY;
+ 
+ Case MouseMode of
+  MOUSE_MODE_PAN: Begin
+   { Déplacer la vue }
+   ViewOffsetX := ViewOffsetX + DeltaX / ZoomLevel;
+   ViewOffsetY := ViewOffsetY + DeltaY / ZoomLevel;
+   DrawInterface;
+  End;
+  MOUSE_MODE_SELECT: Begin
+   { Dessiner le rectangle de sélection }
+   { (Sera implémenté dans TODO 9) }
+  End;
+ End;
+End;
+
+{ Gérer la molette de la souris }
+Procedure HandleMouseWheel(Delta: Integer);
+Var
+ ZoomFactor: Real;
+ OldZoom: Real;
+Begin
+ OldZoom := ZoomLevel;
+ 
+ If Delta > 0 Then Begin
+  { Zoom avant }
+  ZoomFactor := 1.1;
+ End Else Begin
+  { Zoom arrière }
+  ZoomFactor := 0.9;
+ End;
+ 
+ ZoomLevel := ZoomLevel * ZoomFactor;
+ 
+ { Limiter le zoom }
+ If ZoomLevel < 0.1 Then ZoomLevel := 0.1;
+ If ZoomLevel > 20.0 Then ZoomLevel := 20.0;
+ 
+ { Redessiner si le zoom a changé }
+ If ZoomLevel <> OldZoom Then
+  DrawInterface;
+End;
+
+{ Exécuter une action du menu contextuel }
+Procedure ExecuteContextAction(Action: Integer);
+Begin
+ Case Action of
+  CONTEXT_REPEAT: Begin
+   { Répéter la dernière commande }
+  End;
+  CONTEXT_CUT: Begin
+   { Couper }
+  End;
+  CONTEXT_COPY: Begin
+   { Copier }
+  End;
+  CONTEXT_PASTE: Begin
+   { Coller }
+  End;
+  CONTEXT_ERASE: Begin
+   { Effacer }
+  End;
+  CONTEXT_PAN: Begin
+   { Activer le mode pan }
+   MouseMode := MOUSE_MODE_PAN;
+  End;
+  CONTEXT_ZOOM: Begin
+   { Activer le mode zoom }
+   MouseMode := MOUSE_MODE_ZOOM;
+  End;
+  CONTEXT_PROPERTIES: Begin
+   { Ouvrir les propriétés }
+  End;
+  CONTEXT_OPTIONS: Begin
+   { Ouvrir les options }
+  End;
+ End;
+ 
+ { Fermer le menu contextuel }
+ ContextMenuActive := False;
+ ActiveContextItem := -1;
+ DrawInterface;
+End;
+
+{ Gérer le survol du menu contextuel }
+Procedure HandleContextMenuHover(X, Y: Integer);
+Var
+ NewItem: Integer;
+Begin
+ If Not ContextMenuActive Then Exit;
+ 
+ NewItem := GetContextMenuItemAt(X, Y);
+ If NewItem <> ActiveContextItem Then Begin
+  ActiveContextItem := NewItem;
+  DrawInterface;
+  DrawContextMenu;
  End;
 End;
 
@@ -1428,10 +1856,38 @@ Begin
   MouseY := LY;
   MouseButtons := LB;
 
-  { Détecter les clics }
+  { Détecter les clics - TODO 6: gestion complète des boutons }
   If (MouseButtons <> OldButtons) Then Begin
-   If (MouseButtons and 1) = 1 Then
-    HandleMouseClick(MouseX, MouseY, 1);
+   { Clic gauche enfoncé }
+   If ((MouseButtons and MOUSE_BUTTON_LEFT) = MOUSE_BUTTON_LEFT) and
+      ((OldButtons and MOUSE_BUTTON_LEFT) = 0) Then
+    HandleMouseClick(MouseX, MouseY, MOUSE_BUTTON_LEFT);
+   
+   { Clic gauche relâché - fin du drag }
+   If ((MouseButtons and MOUSE_BUTTON_LEFT) = 0) and
+      ((OldButtons and MOUSE_BUTTON_LEFT) = MOUSE_BUTTON_LEFT) Then Begin
+    MouseDragging := False;
+   End;
+   
+   { Clic droit enfoncé }
+   If ((MouseButtons and MOUSE_BUTTON_RIGHT) = MOUSE_BUTTON_RIGHT) and
+      ((OldButtons and MOUSE_BUTTON_RIGHT) = 0) Then
+    HandleMouseClick(MouseX, MouseY, MOUSE_BUTTON_RIGHT);
+   
+   { Clic milieu enfoncé }
+   If ((MouseButtons and MOUSE_BUTTON_MIDDLE) = MOUSE_BUTTON_MIDDLE) and
+      ((OldButtons and MOUSE_BUTTON_MIDDLE) = 0) Then
+    HandleMouseClick(MouseX, MouseY, MOUSE_BUTTON_MIDDLE);
+   
+   { Clic milieu relâché - fin du pan }
+   If ((MouseButtons and MOUSE_BUTTON_MIDDLE) = 0) and
+      ((OldButtons and MOUSE_BUTTON_MIDDLE) = MOUSE_BUTTON_MIDDLE) Then Begin
+    If MouseMode = MOUSE_MODE_PAN Then Begin
+     MouseMode := MOUSE_MODE_NORMAL;
+     MouseDragging := False;
+    End;
+   End;
+   
    OldButtons := MouseButtons;
   End;
 
@@ -1446,7 +1902,23 @@ Begin
   If KeyPressed Then Begin
    Key := ReadKey;
    Case Key of
-    #27: Running := False; { Escape pour quitter }
+    #27: Begin { Escape pour quitter ou fermer les menus }
+     If ContextMenuActive Then Begin
+      ContextMenuActive := False;
+      ActiveContextItem := -1;
+      DrawInterface;
+     End Else If MenuActive Then Begin
+      MenuActive := False;
+      ActiveMenu := -1;
+      ActiveMenuItem := -1;
+      DrawInterface;
+     End Else If MouseMode <> MOUSE_MODE_NORMAL Then Begin
+      MouseMode := MOUSE_MODE_NORMAL;
+      MouseDragging := False;
+     End Else Begin
+      Running := False;
+     End;
+    End;
    End;
   End;
 
@@ -1467,6 +1939,9 @@ BEGIN
 
  { Initialiser les barres d'outils - TODO 5 }
  InitToolbars;
+
+ { Initialiser la gestion de la souris - TODO 6 }
+ InitMouseState;
 
  { Dessiner l'interface initiale }
  DrawInterface;

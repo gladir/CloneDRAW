@@ -2336,14 +2336,109 @@ End;
 
 { Procédures d'historique (Undo/Redo) }
 
+{ Structure pour stocker les données de l'historique }
+Type
+ PHistoryData = ^THistoryData;
+ THistoryData = Record
+  X1, Y1, X2, Y2: Integer;  { Zone affectée }
+  PixelData: Pointer;        { Données de pixels sauvegardées }
+  DataSize: LongInt;
+ End;
+
+Function SaveCanvasRegion(X1, Y1, X2, Y2: Integer): PHistoryData;
+Var
+ Data: PHistoryData;
+ Width, Height: Integer;
+ PixelBuffer: PByte;
+ X, Y: Integer;
+ Offset: LongInt;
+Begin
+ SaveCanvasRegion := Nil;
+ 
+ { Normaliser les coordonnées }
+ If X1 > X2 Then Begin Width := X1; X1 := X2; X2 := Width; End;
+ If Y1 > Y2 Then Begin Height := Y1; Y1 := Y2; Y2 := Height; End;
+ 
+ { Limiter aux bornes du canevas }
+ If X1 < CanvasX Then X1 := CanvasX;
+ If Y1 < CanvasY Then Y1 := CanvasY;
+ If X2 >= CanvasX + CanvasWidth Then X2 := CanvasX + CanvasWidth - 1;
+ If Y2 >= CanvasY + CanvasHeight Then Y2 := CanvasY + CanvasHeight - 1;
+ 
+ Width := X2 - X1 + 1;
+ Height := Y2 - Y1 + 1;
+ 
+ If (Width <= 0) or (Height <= 0) Then Exit;
+ 
+ { Allouer la structure de données }
+ New(Data);
+ Data^.X1 := X1;
+ Data^.Y1 := Y1;
+ Data^.X2 := X2;
+ Data^.Y2 := Y2;
+ Data^.DataSize := LongInt(Width) * LongInt(Height);
+ 
+ { Allouer le buffer pour les pixels }
+ GetMem(Data^.PixelData, Data^.DataSize);
+ PixelBuffer := Data^.PixelData;
+ 
+ { Sauvegarder les pixels }
+ Offset := 0;
+ For Y := Y1 to Y2 do Begin
+  For X := X1 to X2 do Begin
+   PixelBuffer^ := GetPixel(X, Y);
+   Inc(PixelBuffer);
+  End;
+ End;
+ 
+ SaveCanvasRegion := Data;
+End;
+
+Procedure RestoreCanvasRegion(Data: PHistoryData);
+Var
+ PixelBuffer: PByte;
+ X, Y: Integer;
+Begin
+ If Data = Nil Then Exit;
+ If Data^.PixelData = Nil Then Exit;
+ 
+ PixelBuffer := Data^.PixelData;
+ 
+ { Restaurer les pixels }
+ For Y := Data^.Y1 to Data^.Y2 do Begin
+  For X := Data^.X1 to Data^.X2 do Begin
+   PutPixel(X, Y, PixelBuffer^);
+   Inc(PixelBuffer);
+  End;
+ End;
+End;
+
+Procedure FreeHistoryData(Data: PHistoryData);
+Begin
+ If Data <> Nil Then Begin
+  If Data^.PixelData <> Nil Then
+   FreeMem(Data^.PixelData, Data^.DataSize);
+  Dispose(Data);
+ End;
+End;
+
 Procedure AddToHistory(Action: Byte);
 Var
- NewItem: PHistoryItem;
+ NewItem, OldItem: PHistoryItem;
+ Data: PHistoryData;
+ Count: Integer;
 Begin
+ { Sauvegarder l'état actuel de tout le canevas }
+ Data := SaveCanvasRegion(CanvasX, CanvasY, 
+                          CanvasX + CanvasWidth - 1,
+                          CanvasY + CanvasHeight - 1);
+ 
+ If Data = Nil Then Exit;
+ 
  New(NewItem);
  NewItem^.Action := Action;
- NewItem^.Data := Nil;
- NewItem^.DataSize := 0;
+ NewItem^.Data := Data;
+ NewItem^.DataSize := Data^.DataSize;
  NewItem^.Next := UndoList;
  NewItem^.Prev := Nil;
 
@@ -2355,13 +2450,81 @@ Begin
 
  { Limiter le nombre d'éléments dans l'historique }
  If UndoCount > MaxUndoLevels Then Begin
-  { Supprimer le plus ancien }
+  { Trouver le dernier élément }
+  OldItem := UndoList;
+  Count := 1;
+  While (OldItem^.Next <> Nil) and (Count < MaxUndoLevels) do Begin
+   OldItem := OldItem^.Next;
+   Inc(Count);
+  End;
+  
+  { Supprimer les éléments au-delà de la limite }
+  While OldItem^.Next <> Nil do Begin
+   NewItem := OldItem^.Next;
+   OldItem^.Next := NewItem^.Next;
+   FreeHistoryData(PHistoryData(NewItem^.Data));
+   Dispose(NewItem);
+   Dec(UndoCount);
+  End;
  End;
 
  { Vider la liste Redo }
  While RedoList <> Nil do Begin
   NewItem := RedoList;
   RedoList := RedoList^.Next;
+  FreeHistoryData(PHistoryData(NewItem^.Data));
+  Dispose(NewItem);
+ End;
+ RedoCount := 0;
+End;
+
+Procedure AddToHistoryRegion(Action: Byte; X1, Y1, X2, Y2: Integer);
+Var
+ NewItem, OldItem: PHistoryItem;
+ Data: PHistoryData;
+ Count: Integer;
+Begin
+ { Sauvegarder seulement la région affectée }
+ Data := SaveCanvasRegion(X1, Y1, X2, Y2);
+ 
+ If Data = Nil Then Exit;
+ 
+ New(NewItem);
+ NewItem^.Action := Action;
+ NewItem^.Data := Data;
+ NewItem^.DataSize := Data^.DataSize;
+ NewItem^.Next := UndoList;
+ NewItem^.Prev := Nil;
+
+ If UndoList <> Nil Then
+  UndoList^.Prev := NewItem;
+
+ UndoList := NewItem;
+ Inc(UndoCount);
+
+ { Limiter le nombre d'éléments dans l'historique }
+ If UndoCount > MaxUndoLevels Then Begin
+  OldItem := UndoList;
+  Count := 1;
+  While (OldItem^.Next <> Nil) and (Count < MaxUndoLevels) do Begin
+   OldItem := OldItem^.Next;
+   Inc(Count);
+  End;
+  
+  While OldItem^.Next <> Nil do Begin
+   NewItem := OldItem^.Next;
+   OldItem^.Next := NewItem^.Next;
+   FreeHistoryData(PHistoryData(NewItem^.Data));
+   Dispose(NewItem);
+   Dec(UndoCount);
+  End;
+ End;
+
+ { Vider la liste Redo }
+ While RedoList <> Nil do Begin
+  NewItem := RedoList;
+  RedoList := RedoList^.Next;
+  FreeHistoryData(PHistoryData(NewItem^.Data));
   Dispose(NewItem);
  End;
  RedoCount := 0;
@@ -2370,14 +2533,51 @@ End;
 Procedure Undo;
 Var
  Item: PHistoryItem;
+ CurrentData, OldData: PHistoryData;
 Begin
  If UndoList = Nil Then Exit;
 
  Item := UndoList;
+ OldData := PHistoryData(Item^.Data);
+ 
+ If OldData = Nil Then Begin
+  { Pas de données, juste déplacer l'item }
+  UndoList := UndoList^.Next;
+  If UndoList <> Nil Then
+   UndoList^.Prev := Nil;
+  Dec(UndoCount);
+  
+  Item^.Next := RedoList;
+  Item^.Prev := Nil;
+  If RedoList <> Nil Then
+   RedoList^.Prev := Item;
+  RedoList := Item;
+  Inc(RedoCount);
+  
+  RedrawInterface;
+  Exit;
+ End;
+ 
+ { Sauvegarder l'état actuel pour le redo }
+ CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1, 
+                                  OldData^.X2, OldData^.Y2);
+ 
+ { Restaurer l'ancien état }
+ RestoreCanvasRegion(OldData);
+ 
+ { Déplacer l'item de Undo vers Redo }
  UndoList := UndoList^.Next;
  If UndoList <> Nil Then
   UndoList^.Prev := Nil;
  Dec(UndoCount);
+
+ { Remplacer les données par l'état actuel pour le redo }
+ FreeHistoryData(OldData);
+ Item^.Data := CurrentData;
+ If CurrentData <> Nil Then
+  Item^.DataSize := CurrentData^.DataSize
+ Else
+  Item^.DataSize := 0;
 
  { Ajouter à la liste Redo }
  Item^.Next := RedoList;
@@ -2387,23 +2587,57 @@ Begin
  RedoList := Item;
  Inc(RedoCount);
 
- { Restaurer l'état }
- { ... }
-
  RedrawInterface;
 End;
 
 Procedure Redo;
 Var
  Item: PHistoryItem;
+ CurrentData, OldData: PHistoryData;
 Begin
  If RedoList = Nil Then Exit;
 
  Item := RedoList;
+ OldData := PHistoryData(Item^.Data);
+ 
+ If OldData = Nil Then Begin
+  { Pas de données, juste déplacer l'item }
+  RedoList := RedoList^.Next;
+  If RedoList <> Nil Then
+   RedoList^.Prev := Nil;
+  Dec(RedoCount);
+  
+  Item^.Next := UndoList;
+  Item^.Prev := Nil;
+  If UndoList <> Nil Then
+   UndoList^.Prev := Item;
+  UndoList := Item;
+  Inc(UndoCount);
+  
+  RedrawInterface;
+  Exit;
+ End;
+ 
+ { Sauvegarder l'état actuel pour le undo }
+ CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1, 
+                                  OldData^.X2, OldData^.Y2);
+ 
+ { Restaurer l'état du redo }
+ RestoreCanvasRegion(OldData);
+ 
+ { Déplacer l'item de Redo vers Undo }
  RedoList := RedoList^.Next;
  If RedoList <> Nil Then
   RedoList^.Prev := Nil;
  Dec(RedoCount);
+
+ { Remplacer les données par l'état actuel pour le undo }
+ FreeHistoryData(OldData);
+ Item^.Data := CurrentData;
+ If CurrentData <> Nil Then
+  Item^.DataSize := CurrentData^.DataSize
+ Else
+  Item^.DataSize := 0;
 
  { Ajouter à la liste Undo }
  Item^.Next := UndoList;
@@ -2412,9 +2646,6 @@ Begin
   UndoList^.Prev := Item;
  UndoList := Item;
  Inc(UndoCount);
-
- { Réappliquer l'action }
- { ... }
 
  RedrawInterface;
 End;
@@ -3045,16 +3276,18 @@ Begin
  HideMouse;
  {$ENDIF}
 
- { Libérer l'historique }
+ { Libérer l'historique avec les données }
  While UndoList <> Nil do Begin
   RedoList := UndoList;
   UndoList := UndoList^.Next;
+  FreeHistoryData(PHistoryData(RedoList^.Data));
   Dispose(RedoList);
  End;
 
  While RedoList <> Nil do Begin
   UndoList := RedoList;
   RedoList := RedoList^.Next;
+  FreeHistoryData(PHistoryData(UndoList^.Data));
   Dispose(UndoList);
  End;
 

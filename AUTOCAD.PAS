@@ -40,7 +40,7 @@
   21. [DONE] Implémenter la lecture et écriture du format DWG (Drawing) d'AutoCAD
   22. [DONE] Ajouter le support du format DXF (Drawing Exchange Format) pour l'interopérabilité
   23. [DONE] Créer l'importation et exportation du format Visio (VSD/VSDX)
-  24. Implémenter l'exportation SVG (Scalable Vector Graphics) pour le web
+  24. [DONE] Implémenter l'exportation SVG (Scalable Vector Graphics) pour le web
   25. Ajouter l'importation SVG avec conversion des éléments en entités AutoCAD
 }
 
@@ -318,6 +318,62 @@ Const
  VISIO_CELL_FILLCOLOR = 'FillForegnd';  { Couleur de remplissage }
  VISIO_CELL_LINECOLOR = 'LineColor';    { Couleur de ligne }
  VISIO_CELL_LINEWEIGHT = 'LineWeight';  { Épaisseur de ligne }
+
+ { Constantes pour le format SVG - TODO 24 }
+ { Extension de fichier SVG }
+ SVG_EXT = '.svg';             { Format SVG }
+ 
+ { Éléments SVG principaux }
+ SVG_ELEMENT_SVG = 'svg';
+ SVG_ELEMENT_G = 'g';
+ SVG_ELEMENT_LINE = 'line';
+ SVG_ELEMENT_RECT = 'rect';
+ SVG_ELEMENT_CIRCLE = 'circle';
+ SVG_ELEMENT_ELLIPSE = 'ellipse';
+ SVG_ELEMENT_PATH = 'path';
+ SVG_ELEMENT_POLYLINE = 'polyline';
+ SVG_ELEMENT_POLYGON = 'polygon';
+ SVG_ELEMENT_TEXT = 'text';
+ SVG_ELEMENT_DEFS = 'defs';
+ SVG_ELEMENT_MARKER = 'marker';
+ 
+ { Attributs SVG }
+ SVG_ATTR_XMLNS = 'xmlns';
+ SVG_ATTR_VERSION = 'version';
+ SVG_ATTR_WIDTH = 'width';
+ SVG_ATTR_HEIGHT = 'height';
+ SVG_ATTR_VIEWBOX = 'viewBox';
+ SVG_ATTR_FILL = 'fill';
+ SVG_ATTR_STROKE = 'stroke';
+ SVG_ATTR_STROKE_WIDTH = 'stroke-width';
+ SVG_ATTR_STROKE_LINECAP = 'stroke-linecap';
+ SVG_ATTR_STROKE_LINEJOIN = 'stroke-linejoin';
+ SVG_ATTR_X = 'x';
+ SVG_ATTR_Y = 'y';
+ SVG_ATTR_X1 = 'x1';
+ SVG_ATTR_Y1 = 'y1';
+ SVG_ATTR_X2 = 'x2';
+ SVG_ATTR_Y2 = 'y2';
+ SVG_ATTR_CX = 'cx';
+ SVG_ATTR_CY = 'cy';
+ SVG_ATTR_R = 'r';
+ SVG_ATTR_RX = 'rx';
+ SVG_ATTR_RY = 'ry';
+ SVG_ATTR_D = 'd';
+ SVG_ATTR_POINTS = 'points';
+ SVG_ATTR_FONT_SIZE = 'font-size';
+ SVG_ATTR_FONT_FAMILY = 'font-family';
+ SVG_ATTR_TEXT_ANCHOR = 'text-anchor';
+ SVG_ATTR_TRANSFORM = 'transform';
+ 
+ { Namespace SVG }
+ SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+ SVG_VERSION = '1.1';
+ 
+ { Valeurs par défaut SVG }
+ SVG_DEFAULT_STROKE_WIDTH = 1;
+ SVG_DEFAULT_FONT_SIZE = 12;
+ SVG_DEFAULT_FONT_FAMILY = 'Arial, sans-serif';
 
  { Types de cotations - TODO 19 }
  DIM_LINEAR = 0;       { Cotation linéaire (horizontale ou verticale) }
@@ -1072,6 +1128,26 @@ Procedure WriteVisioXMLCell(Var F: Text; Const CellName, Value: String); Forward
 Procedure WriteVisioXMLCellF(Var F: Text; Const CellName: String; Value: Real); Forward;
 Function ExtractVisioXMLValue(Const Line, Tag: String): String; Forward;
 Function IsVisioFileVSDX(Const FileName: String): Boolean; Forward;
+
+{ Forward declarations - TODO 24 - Format SVG (Scalable Vector Graphics) }
+Function WriteSVGFile(Const FileName: String): Boolean; Forward;
+Procedure WriteSVGHeader(Var F: Text; Width, Height: Real); Forward;
+Procedure WriteSVGFooter(Var F: Text); Forward;
+Procedure WriteSVGDefs(Var F: Text); Forward;
+Procedure WriteSVGEntities(Var F: Text); Forward;
+Procedure WriteSVGEntity(Var F: Text; Const Entity: TDrawObject); Forward;
+Procedure WriteSVGLine(Var F: Text; Const Entity: TDrawObject); Forward;
+Procedure WriteSVGRectangle(Var F: Text; Const Entity: TDrawObject); Forward;
+Procedure WriteSVGCircle(Var F: Text; Const Entity: TDrawObject); Forward;
+Procedure WriteSVGEllipse(Var F: Text; Const Entity: TDrawObject); Forward;
+Procedure WriteSVGArc(Var F: Text; Const Entity: TDrawObject); Forward;
+Procedure WriteSVGText(Var F: Text; Const Entity: TDrawObject); Forward;
+Procedure WriteSVGPolyline(Var F: Text; Const Entity: TDrawObject); Forward;
+Procedure WriteSVGPoint(Var F: Text; Const Entity: TDrawObject); Forward;
+Procedure WriteSVGDimension(Var F: Text; Const Entity: TDrawObject); Forward;
+Function ACIToSVGColor(ColorIdx: Integer): String; Forward;
+Function GetSVGStrokeWidth(LineWeight: Integer): Real; Forward;
+Procedure WriteSVGStyle(Var F: Text; Color: Integer; LineWeight: Integer; Filled: Boolean); Forward;
 
 { Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
 Procedure InitLispTokenizer; Forward;
@@ -11568,6 +11644,399 @@ Function ReadVisioFile(Const FileName: String): Boolean;
 Begin
  { Pour l'instant, on supporte uniquement le format XML (VSDX) }
  ReadVisioFile := ReadVSDXFile(FileName);
+End;
+
+{ ============================================================================ }
+{ Fonctions pour le format SVG (Scalable Vector Graphics) - TODO 24           }
+{ ============================================================================ }
+
+{ Convertir un index ACI en couleur SVG hexadécimale }
+Function ACIToSVGColor(ColorIdx: Integer): String;
+Begin
+ Case ColorIdx of
+  0: ACIToSVGColor := '#000000';    { Noir }
+  1: ACIToSVGColor := '#FF0000';    { Rouge }
+  2: ACIToSVGColor := '#FFFF00';    { Jaune }
+  3: ACIToSVGColor := '#00FF00';    { Vert }
+  4: ACIToSVGColor := '#00FFFF';    { Cyan }
+  5: ACIToSVGColor := '#0000FF';    { Bleu }
+  6: ACIToSVGColor := '#FF00FF';    { Magenta }
+  7: ACIToSVGColor := '#FFFFFF';    { Blanc }
+  8: ACIToSVGColor := '#808080';    { Gris foncé }
+  9: ACIToSVGColor := '#C0C0C0';    { Gris clair }
+  10: ACIToSVGColor := '#FF0000';   { Rouge }
+  11: ACIToSVGColor := '#FF7F7F';   { Rouge clair }
+  12: ACIToSVGColor := '#CC0000';   { Rouge foncé }
+  20: ACIToSVGColor := '#FF7F00';   { Orange }
+  30: ACIToSVGColor := '#FFFF00';   { Jaune }
+  40: ACIToSVGColor := '#7FFF00';   { Jaune-vert }
+  50: ACIToSVGColor := '#00FF00';   { Vert }
+  60: ACIToSVGColor := '#00FF7F';   { Vert-cyan }
+  70: ACIToSVGColor := '#00FFFF';   { Cyan }
+  80: ACIToSVGColor := '#007FFF';   { Cyan-bleu }
+  90: ACIToSVGColor := '#0000FF';   { Bleu }
+  100: ACIToSVGColor := '#7F00FF';  { Bleu-violet }
+  110: ACIToSVGColor := '#FF00FF';  { Magenta }
+  120: ACIToSVGColor := '#FF007F';  { Magenta-rouge }
+  250: ACIToSVGColor := '#333333';  { Gris très foncé }
+  251: ACIToSVGColor := '#505050';  { Gris foncé }
+  252: ACIToSVGColor := '#696969';  { Gris moyen foncé }
+  253: ACIToSVGColor := '#808080';  { Gris moyen }
+  254: ACIToSVGColor := '#BEBEBE';  { Gris clair }
+  255: ACIToSVGColor := '#FFFFFF';  { Blanc (ByBlock) }
+ Else
+  { Couleurs intermédiaires - approximation }
+  If ColorIdx < 10 Then ACIToSVGColor := '#FF0000'
+  Else If ColorIdx < 20 Then ACIToSVGColor := '#FF7F00'
+  Else If ColorIdx < 30 Then ACIToSVGColor := '#FFFF00'
+  Else If ColorIdx < 50 Then ACIToSVGColor := '#00FF00'
+  Else If ColorIdx < 70 Then ACIToSVGColor := '#00FFFF'
+  Else If ColorIdx < 90 Then ACIToSVGColor := '#0000FF'
+  Else If ColorIdx < 110 Then ACIToSVGColor := '#FF00FF'
+  Else ACIToSVGColor := '#000000';
+ End;
+End;
+
+{ Obtenir l'épaisseur de trait SVG à partir du poids de ligne }
+Function GetSVGStrokeWidth(LineWeight: Integer): Real;
+Begin
+ If LineWeight <= 0 Then
+  GetSVGStrokeWidth := SVG_DEFAULT_STROKE_WIDTH
+ Else If LineWeight < 10 Then
+  GetSVGStrokeWidth := 0.5
+ Else If LineWeight < 25 Then
+  GetSVGStrokeWidth := 1.0
+ Else If LineWeight < 50 Then
+  GetSVGStrokeWidth := 1.5
+ Else If LineWeight < 100 Then
+  GetSVGStrokeWidth := 2.0
+ Else
+  GetSVGStrokeWidth := LineWeight / 50.0;
+End;
+
+{ Écrire les attributs de style SVG }
+Procedure WriteSVGStyle(Var F: Text; Color: Integer; LineWeight: Integer; Filled: Boolean);
+Var
+ StrokeWidth: Real;
+Begin
+ StrokeWidth := GetSVGStrokeWidth(LineWeight);
+ 
+ If Filled Then
+  Write(F, ' fill="', ACIToSVGColor(Color), '"')
+ Else
+  Write(F, ' fill="none"');
+ 
+ Write(F, ' stroke="', ACIToSVGColor(Color), '"');
+ Write(F, ' stroke-width="', StrokeWidth:0:2, '"');
+End;
+
+{ Écrire l'en-tête SVG }
+Procedure WriteSVGHeader(Var F: Text; Width, Height: Real);
+Begin
+ WriteLn(F, '<?xml version="1.0" encoding="UTF-8"?>');
+ WriteLn(F, '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">');
+ WriteLn(F, '<svg xmlns="', SVG_NAMESPACE, '" version="', SVG_VERSION, '"');
+ WriteLn(F, '  width="', Width:0:2, '" height="', Height:0:2, '"');
+ WriteLn(F, '  viewBox="0 0 ', Width:0:2, ' ', Height:0:2, '">');
+ WriteLn(F, '  <!-- Generated by CloneDRAW AutoCAD Clone -->');
+ WriteLn(F, '  <!-- TODO 24: SVG Export -->');
+End;
+
+{ Écrire les définitions SVG (marqueurs, patterns, etc.) }
+Procedure WriteSVGDefs(Var F: Text);
+Begin
+ WriteLn(F, '  <defs>');
+ { Marqueur de flèche pour les cotations }
+ WriteLn(F, '    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">');
+ WriteLn(F, '      <path d="M0,0 L0,6 L9,3 z" fill="#000000"/>');
+ WriteLn(F, '    </marker>');
+ { Marqueur de point }
+ WriteLn(F, '    <marker id="dot" markerWidth="4" markerHeight="4" refX="2" refY="2">');
+ WriteLn(F, '      <circle cx="2" cy="2" r="2" fill="#000000"/>');
+ WriteLn(F, '    </marker>');
+ WriteLn(F, '  </defs>');
+End;
+
+{ Écrire le pied de page SVG }
+Procedure WriteSVGFooter(Var F: Text);
+Begin
+ WriteLn(F, '</svg>');
+End;
+
+{ Écrire une ligne SVG }
+Procedure WriteSVGLine(Var F: Text; Const Entity: TDrawObject);
+Begin
+ Write(F, '  <line');
+ Write(F, ' x1="', Entity.X1:0:4, '"');
+ Write(F, ' y1="', Entity.Y1:0:4, '"');
+ Write(F, ' x2="', Entity.X2:0:4, '"');
+ Write(F, ' y2="', Entity.Y2:0:4, '"');
+ WriteSVGStyle(F, Entity.Color, Entity.LineWeight, False);
+ WriteLn(F, '/>');
+End;
+
+{ Écrire un rectangle SVG }
+Procedure WriteSVGRectangle(Var F: Text; Const Entity: TDrawObject);
+Var
+ X, Y, W, H: Real;
+Begin
+ { Calculer le coin supérieur gauche et les dimensions }
+ If Entity.X1 < Entity.X2 Then Begin
+  X := Entity.X1;
+  W := Entity.X2 - Entity.X1;
+ End
+ Else Begin
+  X := Entity.X2;
+  W := Entity.X1 - Entity.X2;
+ End;
+ 
+ If Entity.Y1 < Entity.Y2 Then Begin
+  Y := Entity.Y1;
+  H := Entity.Y2 - Entity.Y1;
+ End
+ Else Begin
+  Y := Entity.Y2;
+  H := Entity.Y1 - Entity.Y2;
+ End;
+ 
+ Write(F, '  <rect');
+ Write(F, ' x="', X:0:4, '"');
+ Write(F, ' y="', Y:0:4, '"');
+ Write(F, ' width="', W:0:4, '"');
+ Write(F, ' height="', H:0:4, '"');
+ WriteSVGStyle(F, Entity.Color, Entity.LineWeight, False);
+ WriteLn(F, '/>');
+End;
+
+{ Écrire un cercle SVG }
+Procedure WriteSVGCircle(Var F: Text; Const Entity: TDrawObject);
+Begin
+ Write(F, '  <circle');
+ Write(F, ' cx="', Entity.X1:0:4, '"');
+ Write(F, ' cy="', Entity.Y1:0:4, '"');
+ Write(F, ' r="', Entity.Radius:0:4, '"');
+ WriteSVGStyle(F, Entity.Color, Entity.LineWeight, False);
+ WriteLn(F, '/>');
+End;
+
+{ Écrire une ellipse SVG }
+Procedure WriteSVGEllipse(Var F: Text; Const Entity: TDrawObject);
+Var
+ RX, RY: Real;
+Begin
+ RX := Entity.Radius;  { Demi-axe majeur }
+ RY := Entity.EndAngle; { Demi-axe mineur (stocké dans EndAngle) }
+ If RY <= 0 Then RY := RX;
+ 
+ Write(F, '  <ellipse');
+ Write(F, ' cx="', Entity.X1:0:4, '"');
+ Write(F, ' cy="', Entity.Y1:0:4, '"');
+ Write(F, ' rx="', RX:0:4, '"');
+ Write(F, ' ry="', RY:0:4, '"');
+ WriteSVGStyle(F, Entity.Color, Entity.LineWeight, False);
+ WriteLn(F, '/>');
+End;
+
+{ Écrire un arc SVG (utilise path avec arc elliptique) }
+Procedure WriteSVGArc(Var F: Text; Const Entity: TDrawObject);
+Var
+ StartX, StartY, EndX, EndY: Real;
+ StartRad, EndRad: Real;
+ LargeArc, Sweep: Integer;
+ AngleDiff: Real;
+Begin
+ { Convertir les angles en radians }
+ StartRad := Entity.StartAngle * 3.14159265 / 180.0;
+ EndRad := Entity.EndAngle * 3.14159265 / 180.0;
+ 
+ { Calculer les points de début et de fin }
+ StartX := Entity.X1 + Entity.Radius * Cos(StartRad);
+ StartY := Entity.Y1 - Entity.Radius * Sin(StartRad); { Y inversé pour SVG }
+ EndX := Entity.X1 + Entity.Radius * Cos(EndRad);
+ EndY := Entity.Y1 - Entity.Radius * Sin(EndRad);
+ 
+ { Déterminer si c'est un grand arc }
+ AngleDiff := Entity.EndAngle - Entity.StartAngle;
+ If AngleDiff < 0 Then AngleDiff := AngleDiff + 360;
+ If AngleDiff > 180 Then LargeArc := 1 Else LargeArc := 0;
+ 
+ { Direction de l'arc (sens anti-horaire = 0 en SVG car Y est inversé) }
+ Sweep := 0;
+ 
+ Write(F, '  <path d="M ', StartX:0:4, ' ', StartY:0:4);
+ Write(F, ' A ', Entity.Radius:0:4, ' ', Entity.Radius:0:4);
+ Write(F, ' 0 ', LargeArc, ' ', Sweep);
+ Write(F, ' ', EndX:0:4, ' ', EndY:0:4, '"');
+ WriteSVGStyle(F, Entity.Color, Entity.LineWeight, False);
+ WriteLn(F, '/>');
+End;
+
+{ Écrire un texte SVG }
+Procedure WriteSVGText(Var F: Text; Const Entity: TDrawObject);
+Var
+ FontSize: Real;
+Begin
+ FontSize := SVG_DEFAULT_FONT_SIZE;
+ If Entity.Radius > 0 Then FontSize := Entity.Radius; { Hauteur de texte stockée dans Radius }
+ 
+ Write(F, '  <text');
+ Write(F, ' x="', Entity.X1:0:4, '"');
+ Write(F, ' y="', Entity.Y1:0:4, '"');
+ Write(F, ' font-family="', SVG_DEFAULT_FONT_FAMILY, '"');
+ Write(F, ' font-size="', FontSize:0:2, '"');
+ Write(F, ' fill="', ACIToSVGColor(Entity.Color), '"');
+ Write(F, '>');
+ Write(F, Entity.DimText);
+ WriteLn(F, '</text>');
+End;
+
+{ Écrire une polyligne SVG }
+Procedure WriteSVGPolyline(Var F: Text; Const Entity: TDrawObject);
+Var
+ I: Integer;
+Begin
+ If Entity.VertexCount < 2 Then Exit;
+ 
+ Write(F, '  <polyline points="');
+ For I := 0 to Entity.VertexCount - 1 do Begin
+  Write(F, Entity.Vertices[I].X:0:4, ',', Entity.Vertices[I].Y:0:4);
+  If I < Entity.VertexCount - 1 Then Write(F, ' ');
+ End;
+ Write(F, '"');
+ WriteSVGStyle(F, Entity.Color, Entity.LineWeight, False);
+ WriteLn(F, '/>');
+End;
+
+{ Écrire un point SVG (petit cercle) }
+Procedure WriteSVGPoint(Var F: Text; Const Entity: TDrawObject);
+Begin
+ Write(F, '  <circle');
+ Write(F, ' cx="', Entity.X1:0:4, '"');
+ Write(F, ' cy="', Entity.Y1:0:4, '"');
+ Write(F, ' r="2"'); { Petit rayon fixe pour les points }
+ Write(F, ' fill="', ACIToSVGColor(Entity.Color), '"');
+ WriteLn(F, '/>');
+End;
+
+{ Écrire une cotation SVG }
+Procedure WriteSVGDimension(Var F: Text; Const Entity: TDrawObject);
+Var
+ MidX, MidY: Real;
+ TextOffset: Real;
+Begin
+ TextOffset := 5;
+ 
+ { Ligne de cotation }
+ Write(F, '  <line');
+ Write(F, ' x1="', Entity.X1:0:4, '"');
+ Write(F, ' y1="', Entity.Y1:0:4, '"');
+ Write(F, ' x2="', Entity.X2:0:4, '"');
+ Write(F, ' y2="', Entity.Y2:0:4, '"');
+ Write(F, ' stroke="', ACIToSVGColor(Entity.Color), '"');
+ Write(F, ' stroke-width="1"');
+ Write(F, ' marker-end="url(#arrow)"');
+ Write(F, ' marker-start="url(#arrow)"');
+ WriteLn(F, '/>');
+ 
+ { Texte de cotation au milieu }
+ MidX := (Entity.X1 + Entity.X2) / 2;
+ MidY := (Entity.Y1 + Entity.Y2) / 2 - TextOffset;
+ 
+ Write(F, '  <text');
+ Write(F, ' x="', MidX:0:4, '"');
+ Write(F, ' y="', MidY:0:4, '"');
+ Write(F, ' font-family="', SVG_DEFAULT_FONT_FAMILY, '"');
+ Write(F, ' font-size="', SVG_DEFAULT_FONT_SIZE:0:2, '"');
+ Write(F, ' text-anchor="middle"');
+ Write(F, ' fill="', ACIToSVGColor(Entity.Color), '"');
+ Write(F, '>');
+ Write(F, Entity.DimText);
+ WriteLn(F, '</text>');
+End;
+
+{ Écrire une entité SVG }
+Procedure WriteSVGEntity(Var F: Text; Const Entity: TDrawObject);
+Begin
+ If Entity.ObjType = OBJ_NONE Then Exit;
+ If Not Entity.Visible Then Exit;
+ 
+ Case Entity.ObjType of
+  OBJ_LINE:      WriteSVGLine(F, Entity);
+  OBJ_RECTANGLE: WriteSVGRectangle(F, Entity);
+  OBJ_CIRCLE:    WriteSVGCircle(F, Entity);
+  OBJ_ELLIPSE:   WriteSVGEllipse(F, Entity);
+  OBJ_ARC:       WriteSVGArc(F, Entity);
+  OBJ_TEXT:      WriteSVGText(F, Entity);
+  OBJ_POLYLINE:  WriteSVGPolyline(F, Entity);
+  OBJ_POINT:     WriteSVGPoint(F, Entity);
+  OBJ_DIMENSION: WriteSVGDimension(F, Entity);
+ End;
+End;
+
+{ Écrire toutes les entités }
+Procedure WriteSVGEntities(Var F: Text);
+Var
+ I: Integer;
+Begin
+ WriteLn(F, '  <g id="entities">');
+ 
+ For I := 0 to ObjectCount - 1 do Begin
+  If DrawObjects[I].ObjType <> OBJ_NONE Then
+   WriteSVGEntity(F, DrawObjects[I]);
+ End;
+ 
+ WriteLn(F, '  </g>');
+End;
+
+{ Écrire un fichier SVG }
+Function WriteSVGFile(Const FileName: String): Boolean;
+Var
+ F: Text;
+ MinX, MinY, MaxX, MaxY: Real;
+ Width, Height: Real;
+ I: Integer;
+Begin
+ WriteSVGFile := False;
+ 
+ { Calculer les limites du dessin }
+ MinX := 0; MinY := 0;
+ MaxX := ScreenWidth;
+ MaxY := ScreenHeight;
+ 
+ { Trouver les vraies limites des objets }
+ For I := 0 to ObjectCount - 1 do Begin
+  If DrawObjects[I].ObjType <> OBJ_NONE Then Begin
+   If DrawObjects[I].X1 < MinX Then MinX := DrawObjects[I].X1;
+   If DrawObjects[I].Y1 < MinY Then MinY := DrawObjects[I].Y1;
+   If DrawObjects[I].X2 > MaxX Then MaxX := DrawObjects[I].X2;
+   If DrawObjects[I].Y2 > MaxY Then MaxY := DrawObjects[I].Y2;
+   If DrawObjects[I].X1 > MaxX Then MaxX := DrawObjects[I].X1;
+   If DrawObjects[I].Y1 > MaxY Then MaxY := DrawObjects[I].Y1;
+   If DrawObjects[I].X2 < MinX Then MinX := DrawObjects[I].X2;
+   If DrawObjects[I].Y2 < MinY Then MinY := DrawObjects[I].Y2;
+  End;
+ End;
+ 
+ { Ajouter une marge }
+ Width := MaxX - MinX + 20;
+ Height := MaxY - MinY + 20;
+ If Width < 100 Then Width := 100;
+ If Height < 100 Then Height := 100;
+ 
+ {$I-}
+ Assign(F, FileName);
+ Rewrite(F);
+ {$I+}
+ 
+ If IOResult <> 0 Then Exit;
+ 
+ WriteSVGHeader(F, Width, Height);
+ WriteSVGDefs(F);
+ WriteSVGEntities(F);
+ WriteSVGFooter(F);
+ 
+ Close(F);
+ WriteSVGFile := True;
 End;
 
 { Initialiser le panneau de propriétés }

@@ -23,7 +23,7 @@
   10. [DONE] Ajouter les poignées de manipulation (grips) pour éditer les objets sélectionnés
 
   === INTERPRÉTEUR AUTOLISP ===
-  11. Créer un analyseur lexical (tokenizer) pour le langage AutoLISP
+  11. [DONE] Créer un analyseur lexical (tokenizer) pour le langage AutoLISP
   12. Implémenter un parseur pour construire l'arbre syntaxique des expressions LISP
   13. Développer l'évaluateur d'expressions avec support des fonctions mathématiques (+, -, *, /, sin, cos, sqrt, etc.)
   14. Implémenter les fonctions de dessin AutoLISP : command, entmake, entmod, entget, entsel, ssget, ssadd
@@ -186,6 +186,36 @@ Const
  GRIP_EDIT_SCALE = 4;          { Mise à l'échelle depuis le grip }
  GRIP_EDIT_MIRROR = 5;         { Miroir par rapport au grip }
 
+ { Constantes pour l'analyseur lexical AutoLISP - TODO 11 }
+ MAX_LISP_TOKENS = 500;        { Nombre maximum de tokens dans une expression }
+ MAX_LISP_INPUT = 4096;        { Taille maximum d'une entrée LISP }
+ MAX_LISP_SYMBOL = 64;         { Taille maximum d'un symbole }
+ MAX_LISP_STRING = 256;        { Taille maximum d'une chaîne }
+ 
+ { Types de tokens AutoLISP }
+ LISP_TOKEN_NONE = 0;          { Token invalide ou fin }
+ LISP_TOKEN_LPAREN = 1;        { Parenthèse ouvrante ( }
+ LISP_TOKEN_RPAREN = 2;        { Parenthèse fermante ) }
+ LISP_TOKEN_QUOTE = 3;         { Quote ' }
+ LISP_TOKEN_DOT = 4;           { Point . (pour les paires pointées) }
+ LISP_TOKEN_INTEGER = 5;       { Nombre entier }
+ LISP_TOKEN_REAL = 6;          { Nombre réel }
+ LISP_TOKEN_STRING = 7;        { Chaîne de caractères "..." }
+ LISP_TOKEN_SYMBOL = 8;        { Symbole (nom de variable ou fonction) }
+ LISP_TOKEN_NIL = 9;           { nil }
+ LISP_TOKEN_T = 10;            { t (vrai) }
+ LISP_TOKEN_EOF = 11;          { Fin de l'entrée }
+ LISP_TOKEN_ERROR = 12;        { Erreur de tokenisation }
+ 
+ { Caractères spéciaux AutoLISP }
+ LISP_CHAR_LPAREN = '(';
+ LISP_CHAR_RPAREN = ')';
+ LISP_CHAR_QUOTE = '''';
+ LISP_CHAR_DQUOTE = '"';
+ LISP_CHAR_SEMICOLON = ';';    { Début de commentaire }
+ LISP_CHAR_DOT = '.';
+ LISP_CHAR_BACKSLASH = '\';    { Caractère d'échappement }
+
 Type
  { Structure pour les éléments de menu }
  TMenuItem = Record
@@ -265,6 +295,30 @@ Type
   Count: Integer;                          { Nombre de grips }
  End;
 
+ { Structure pour un token AutoLISP - TODO 11 }
+ TLispToken = Record
+  TokenType: Byte;                         { Type du token (LISP_TOKEN_xxx) }
+  IntValue: LongInt;                       { Valeur si entier }
+  RealValue: Real;                         { Valeur si réel }
+  StrValue: String[MAX_LISP_STRING];       { Valeur si chaîne ou symbole }
+  Line: Integer;                           { Numéro de ligne }
+  Column: Integer;                         { Position dans la ligne }
+ End;
+
+ { Structure pour l'analyseur lexical AutoLISP - TODO 11 }
+ TLispTokenizer = Record
+  Input: String;                           { Chaîne d'entrée à analyser }
+  Position: Integer;                       { Position courante dans l'entrée }
+  Length: Integer;                         { Longueur de l'entrée }
+  Line: Integer;                           { Numéro de ligne courant }
+  Column: Integer;                         { Position dans la ligne courante }
+  Tokens: Array[0..MAX_LISP_TOKENS-1] of TLispToken;  { Liste des tokens }
+  TokenCount: Integer;                     { Nombre de tokens }
+  CurrentToken: Integer;                   { Index du token courant }
+  ErrorMessage: String[80];                { Message d'erreur si erreur }
+  HasError: Boolean;                       { True si erreur de tokenisation }
+ End;
+
 Var
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
@@ -327,6 +381,11 @@ Var
  GripCurrentX, GripCurrentY: Real;                     { Position courante pendant l'édition }
  GripSnapEnabled: Boolean;                             { Activer l'accrochage pendant l'édition }
 
+ { Variables pour l'analyseur lexical AutoLISP - TODO 11 }
+ LispTokenizer: TLispTokenizer;                        { L'analyseur lexical global }
+ LispLastResult: String[80];                           { Dernier résultat d'évaluation }
+ LispDebugMode: Boolean;                               { Mode debug pour afficher les tokens }
+
 { Forward declarations - TODO 6 }
 Procedure DrawContextMenu; Forward;
 Procedure HandleContextMenuHover(X, Y: Integer); Forward;
@@ -381,6 +440,26 @@ Procedure DrawSingleGrip(GripIdx: Integer); Forward;
 Procedure GetGripsForLine(ObjIdx: Integer); Forward;
 Procedure GetGripsForCircle(ObjIdx: Integer); Forward;
 Procedure GetGripsForRectangle(ObjIdx: Integer); Forward;
+
+{ Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
+Procedure InitLispTokenizer; Forward;
+Procedure LispTokenizerSetInput(Const S: String); Forward;
+Function LispNextChar: Char; Forward;
+Function LispPeekChar: Char; Forward;
+Procedure LispSkipWhitespace; Forward;
+Procedure LispSkipComment; Forward;
+Function LispReadNumber: TLispToken; Forward;
+Function LispReadString: TLispToken; Forward;
+Function LispReadSymbol: TLispToken; Forward;
+Function LispGetNextToken: TLispToken; Forward;
+Procedure LispTokenize(Const S: String); Forward;
+Function LispTokenTypeName(TokenType: Byte): String; Forward;
+Procedure LispPrintToken(Const Token: TLispToken); Forward;
+Procedure LispPrintAllTokens; Forward;
+Function LispIsAtEnd: Boolean; Forward;
+Function LispCurrentTokenType: Byte; Forward;
+Function LispAdvanceToken: TLispToken; Forward;
+Function LispPeekToken: TLispToken; Forward;
 
 Procedure InitializeGraphics;
 Var
@@ -2677,6 +2756,534 @@ Begin
  End;
 End;
 
+{ ============================================================================ }
+{ Procédures pour l'analyseur lexical AutoLISP (Tokenizer) - TODO 11           }
+{ Analyse et découpe une expression AutoLISP en tokens                          }
+{ ============================================================================ }
+
+{ Initialiser le tokenizer AutoLISP }
+Procedure InitLispTokenizer;
+Begin
+ LispTokenizer.Input := '';
+ LispTokenizer.Position := 1;
+ LispTokenizer.Length := 0;
+ LispTokenizer.Line := 1;
+ LispTokenizer.Column := 1;
+ LispTokenizer.TokenCount := 0;
+ LispTokenizer.CurrentToken := 0;
+ LispTokenizer.ErrorMessage := '';
+ LispTokenizer.HasError := False;
+ LispLastResult := '';
+ LispDebugMode := False;
+End;
+
+{ Définir l'entrée à analyser }
+Procedure LispTokenizerSetInput(Const S: String);
+Begin
+ LispTokenizer.Input := S;
+ LispTokenizer.Position := 1;
+ LispTokenizer.Length := Length(S);
+ LispTokenizer.Line := 1;
+ LispTokenizer.Column := 1;
+ LispTokenizer.TokenCount := 0;
+ LispTokenizer.CurrentToken := 0;
+ LispTokenizer.ErrorMessage := '';
+ LispTokenizer.HasError := False;
+End;
+
+{ Lire et avancer au caractère suivant }
+Function LispNextChar: Char;
+Begin
+ If LispTokenizer.Position <= LispTokenizer.Length Then Begin
+  LispNextChar := LispTokenizer.Input[LispTokenizer.Position];
+  Inc(LispTokenizer.Position);
+  Inc(LispTokenizer.Column);
+  { Gérer les retours à la ligne }
+  If LispNextChar = #10 Then Begin
+   Inc(LispTokenizer.Line);
+   LispTokenizer.Column := 1;
+  End;
+ End Else
+  LispNextChar := #0;  { Fin de l'entrée }
+End;
+
+{ Regarder le caractère suivant sans avancer }
+Function LispPeekChar: Char;
+Begin
+ If LispTokenizer.Position <= LispTokenizer.Length Then
+  LispPeekChar := LispTokenizer.Input[LispTokenizer.Position]
+ Else
+  LispPeekChar := #0;  { Fin de l'entrée }
+End;
+
+{ Vérifier si on est à la fin de l'entrée }
+Function LispIsAtEnd: Boolean;
+Begin
+ LispIsAtEnd := LispTokenizer.Position > LispTokenizer.Length;
+End;
+
+{ Sauter les espaces blancs }
+Procedure LispSkipWhitespace;
+Var
+ C: Char;
+Begin
+ While Not LispIsAtEnd do Begin
+  C := LispPeekChar;
+  If (C = ' ') or (C = #9) or (C = #10) or (C = #13) Then
+   C := LispNextChar  { Consommer le caractère }
+  Else
+   Break;
+ End;
+End;
+
+{ Sauter un commentaire (de ; jusqu'à la fin de ligne) }
+Procedure LispSkipComment;
+Var
+ C: Char;
+Begin
+ If LispPeekChar = LISP_CHAR_SEMICOLON Then Begin
+  While Not LispIsAtEnd do Begin
+   C := LispNextChar;
+   If (C = #10) or (C = #13) Then Break;
+  End;
+ End;
+End;
+
+{ Vérifier si un caractère est un chiffre }
+Function LispIsDigit(C: Char): Boolean;
+Begin
+ LispIsDigit := (C >= '0') and (C <= '9');
+End;
+
+{ Vérifier si un caractère peut démarrer un symbole }
+Function LispIsSymbolStart(C: Char): Boolean;
+Begin
+ LispIsSymbolStart := ((C >= 'a') and (C <= 'z')) or
+                      ((C >= 'A') and (C <= 'Z')) or
+                      (C = '_') or (C = '+') or (C = '-') or
+                      (C = '*') or (C = '/') or (C = '=') or
+                      (C = '<') or (C = '>') or (C = '!') or
+                      (C = '?') or (C = ':') or (C = '$') or
+                      (C = '%') or (C = '&') or (C = '~');
+End;
+
+{ Vérifier si un caractère peut continuer un symbole }
+Function LispIsSymbolChar(C: Char): Boolean;
+Begin
+ LispIsSymbolChar := LispIsSymbolStart(C) or LispIsDigit(C);
+End;
+
+{ Convertir une chaîne en majuscules }
+Function LispUpperCase(Const S: String): String;
+Var
+ I: Integer;
+ Result: String;
+Begin
+ Result := S;
+ For I := 1 to Length(Result) do
+  If (Result[I] >= 'a') and (Result[I] <= 'z') Then
+   Result[I] := Chr(Ord(Result[I]) - 32);
+ LispUpperCase := Result;
+End;
+
+{ Lire un nombre (entier ou réel) }
+Function LispReadNumber: TLispToken;
+Var
+ Token: TLispToken;
+ NumStr: String;
+ C: Char;
+ HasDot: Boolean;
+ Code: Integer;
+Begin
+ Token.TokenType := LISP_TOKEN_INTEGER;
+ Token.Line := LispTokenizer.Line;
+ Token.Column := LispTokenizer.Column;
+ Token.IntValue := 0;
+ Token.RealValue := 0.0;
+ Token.StrValue := '';
+ 
+ NumStr := '';
+ HasDot := False;
+ 
+ { Signe optionnel }
+ C := LispPeekChar;
+ If (C = '+') or (C = '-') Then Begin
+  NumStr := NumStr + LispNextChar;
+  C := LispPeekChar;
+ End;
+ 
+ { Partie entière }
+ While LispIsDigit(LispPeekChar) do
+  NumStr := NumStr + LispNextChar;
+ 
+ { Point décimal et partie fractionnaire }
+ If LispPeekChar = '.' Then Begin
+  C := LispNextChar;  { Consommer le point }
+  If LispIsDigit(LispPeekChar) Then Begin
+   HasDot := True;
+   NumStr := NumStr + '.';
+   While LispIsDigit(LispPeekChar) do
+    NumStr := NumStr + LispNextChar;
+  End Else Begin
+   { C'était juste un point, remettre la position }
+   Dec(LispTokenizer.Position);
+   Dec(LispTokenizer.Column);
+  End;
+ End;
+ 
+ { Notation scientifique }
+ C := LispPeekChar;
+ If (C = 'e') or (C = 'E') Then Begin
+  HasDot := True;  { Force le type réel }
+  NumStr := NumStr + LispNextChar;
+  C := LispPeekChar;
+  If (C = '+') or (C = '-') Then
+   NumStr := NumStr + LispNextChar;
+  While LispIsDigit(LispPeekChar) do
+   NumStr := NumStr + LispNextChar;
+ End;
+ 
+ Token.StrValue := NumStr;
+ 
+ If HasDot Then Begin
+  Token.TokenType := LISP_TOKEN_REAL;
+  Val(NumStr, Token.RealValue, Code);
+  If Code <> 0 Then Begin
+   Token.TokenType := LISP_TOKEN_ERROR;
+   LispTokenizer.HasError := True;
+   LispTokenizer.ErrorMessage := 'Nombre réel invalide: ' + NumStr;
+  End;
+ End Else Begin
+  Token.TokenType := LISP_TOKEN_INTEGER;
+  Val(NumStr, Token.IntValue, Code);
+  If Code <> 0 Then Begin
+   Token.TokenType := LISP_TOKEN_ERROR;
+   LispTokenizer.HasError := True;
+   LispTokenizer.ErrorMessage := 'Nombre entier invalide: ' + NumStr;
+  End;
+ End;
+ 
+ LispReadNumber := Token;
+End;
+
+{ Lire une chaîne de caractères entre guillemets }
+Function LispReadString: TLispToken;
+Var
+ Token: TLispToken;
+ C: Char;
+Begin
+ Token.TokenType := LISP_TOKEN_STRING;
+ Token.Line := LispTokenizer.Line;
+ Token.Column := LispTokenizer.Column;
+ Token.IntValue := 0;
+ Token.RealValue := 0.0;
+ Token.StrValue := '';
+ 
+ { Consommer le guillemet ouvrant }
+ C := LispNextChar;  { " }
+ 
+ While Not LispIsAtEnd do Begin
+  C := LispNextChar;
+  
+  If C = LISP_CHAR_DQUOTE Then
+   Break  { Fin de la chaîne }
+  Else If C = LISP_CHAR_BACKSLASH Then Begin
+   { Séquence d'échappement }
+   If Not LispIsAtEnd Then Begin
+    C := LispNextChar;
+    Case C of
+     'n': Token.StrValue := Token.StrValue + #10;  { Nouvelle ligne }
+     'r': Token.StrValue := Token.StrValue + #13;  { Retour chariot }
+     't': Token.StrValue := Token.StrValue + #9;   { Tabulation }
+     '\': Token.StrValue := Token.StrValue + '\';  { Backslash }
+     '"': Token.StrValue := Token.StrValue + '"';  { Guillemet }
+     Else Token.StrValue := Token.StrValue + C;    { Autre caractère }
+    End;
+   End;
+  End Else
+   Token.StrValue := Token.StrValue + C;
+ End;
+ 
+ { Vérifier si la chaîne est correctement fermée }
+ If (C <> LISP_CHAR_DQUOTE) and LispIsAtEnd Then Begin
+  Token.TokenType := LISP_TOKEN_ERROR;
+  LispTokenizer.HasError := True;
+  LispTokenizer.ErrorMessage := 'Chaîne non terminée';
+ End;
+ 
+ LispReadString := Token;
+End;
+
+{ Lire un symbole (identifiant ou mot-clé) }
+Function LispReadSymbol: TLispToken;
+Var
+ Token: TLispToken;
+ SymStr: String;
+ UpperStr: String;
+Begin
+ Token.TokenType := LISP_TOKEN_SYMBOL;
+ Token.Line := LispTokenizer.Line;
+ Token.Column := LispTokenizer.Column;
+ Token.IntValue := 0;
+ Token.RealValue := 0.0;
+ Token.StrValue := '';
+ 
+ SymStr := '';
+ 
+ { Lire le symbole }
+ While (Not LispIsAtEnd) and LispIsSymbolChar(LispPeekChar) do
+  SymStr := SymStr + LispNextChar;
+ 
+ Token.StrValue := SymStr;
+ 
+ { Vérifier les mots-clés spéciaux }
+ UpperStr := LispUpperCase(SymStr);
+ If UpperStr = 'NIL' Then
+  Token.TokenType := LISP_TOKEN_NIL
+ Else If UpperStr = 'T' Then
+  Token.TokenType := LISP_TOKEN_T;
+ 
+ LispReadSymbol := Token;
+End;
+
+{ Obtenir le prochain token }
+Function LispGetNextToken: TLispToken;
+Var
+ Token: TLispToken;
+ C: Char;
+Begin
+ { Initialiser le token par défaut }
+ Token.TokenType := LISP_TOKEN_NONE;
+ Token.Line := LispTokenizer.Line;
+ Token.Column := LispTokenizer.Column;
+ Token.IntValue := 0;
+ Token.RealValue := 0.0;
+ Token.StrValue := '';
+ 
+ { Sauter les espaces et commentaires }
+ Repeat
+  LispSkipWhitespace;
+  If LispPeekChar = LISP_CHAR_SEMICOLON Then
+   LispSkipComment
+  Else
+   Break;
+ Until LispIsAtEnd;
+ 
+ { Vérifier la fin de l'entrée }
+ If LispIsAtEnd Then Begin
+  Token.TokenType := LISP_TOKEN_EOF;
+  LispGetNextToken := Token;
+  Exit;
+ End;
+ 
+ Token.Line := LispTokenizer.Line;
+ Token.Column := LispTokenizer.Column;
+ 
+ C := LispPeekChar;
+ 
+ Case C of
+  LISP_CHAR_LPAREN: Begin
+   Token.TokenType := LISP_TOKEN_LPAREN;
+   Token.StrValue := '(';
+   C := LispNextChar;
+  End;
+  
+  LISP_CHAR_RPAREN: Begin
+   Token.TokenType := LISP_TOKEN_RPAREN;
+   Token.StrValue := ')';
+   C := LispNextChar;
+  End;
+  
+  LISP_CHAR_QUOTE: Begin
+   Token.TokenType := LISP_TOKEN_QUOTE;
+   Token.StrValue := '''';
+   C := LispNextChar;
+  End;
+  
+  LISP_CHAR_DOT: Begin
+   { Vérifier si c'est un nombre ou juste un point }
+   C := LispNextChar;  { Consommer le point }
+   If LispIsDigit(LispPeekChar) Then Begin
+    { C'est un nombre commençant par un point }
+    Dec(LispTokenizer.Position);
+    Dec(LispTokenizer.Column);
+    Token := LispReadNumber;
+   End Else Begin
+    Token.TokenType := LISP_TOKEN_DOT;
+    Token.StrValue := '.';
+   End;
+  End;
+  
+  LISP_CHAR_DQUOTE: Begin
+   Token := LispReadString;
+  End;
+  
+  '0'..'9': Begin
+   Token := LispReadNumber;
+  End;
+  
+  '+', '-': Begin
+   { Vérifier si c'est un nombre ou un symbole }
+   C := LispNextChar;  { Consommer le signe }
+   If LispIsDigit(LispPeekChar) Then Begin
+    { C'est un nombre avec signe }
+    Dec(LispTokenizer.Position);
+    Dec(LispTokenizer.Column);
+    Token := LispReadNumber;
+   End Else Begin
+    { C'est un symbole (+, -, etc.) }
+    Dec(LispTokenizer.Position);
+    Dec(LispTokenizer.Column);
+    Token := LispReadSymbol;
+   End;
+  End;
+  
+  Else Begin
+   If LispIsSymbolStart(C) Then
+    Token := LispReadSymbol
+   Else Begin
+    { Caractère non reconnu }
+    Token.TokenType := LISP_TOKEN_ERROR;
+    Token.StrValue := C;
+    LispTokenizer.HasError := True;
+    LispTokenizer.ErrorMessage := 'Caractère inattendu: ' + C;
+    C := LispNextChar;  { Consommer le caractère }
+   End;
+  End;
+ End;
+ 
+ LispGetNextToken := Token;
+End;
+
+{ Tokeniser une expression complète }
+Procedure LispTokenize(Const S: String);
+Var
+ Token: TLispToken;
+Begin
+ LispTokenizerSetInput(S);
+ LispTokenizer.TokenCount := 0;
+ 
+ Repeat
+  Token := LispGetNextToken;
+  
+  If LispTokenizer.TokenCount < MAX_LISP_TOKENS Then Begin
+   LispTokenizer.Tokens[LispTokenizer.TokenCount] := Token;
+   Inc(LispTokenizer.TokenCount);
+  End Else Begin
+   LispTokenizer.HasError := True;
+   LispTokenizer.ErrorMessage := 'Trop de tokens (maximum ' + 
+     Chr(48 + (MAX_LISP_TOKENS div 100) mod 10) +
+     Chr(48 + (MAX_LISP_TOKENS div 10) mod 10) +
+     Chr(48 + MAX_LISP_TOKENS mod 10) + ')';
+   Break;
+  End;
+  
+ Until (Token.TokenType = LISP_TOKEN_EOF) or 
+       (Token.TokenType = LISP_TOKEN_ERROR) or
+       LispTokenizer.HasError;
+ 
+ LispTokenizer.CurrentToken := 0;
+End;
+
+{ Obtenir le nom d'un type de token }
+Function LispTokenTypeName(TokenType: Byte): String;
+Begin
+ Case TokenType of
+  LISP_TOKEN_NONE:    LispTokenTypeName := 'NONE';
+  LISP_TOKEN_LPAREN:  LispTokenTypeName := 'LPAREN';
+  LISP_TOKEN_RPAREN:  LispTokenTypeName := 'RPAREN';
+  LISP_TOKEN_QUOTE:   LispTokenTypeName := 'QUOTE';
+  LISP_TOKEN_DOT:     LispTokenTypeName := 'DOT';
+  LISP_TOKEN_INTEGER: LispTokenTypeName := 'INTEGER';
+  LISP_TOKEN_REAL:    LispTokenTypeName := 'REAL';
+  LISP_TOKEN_STRING:  LispTokenTypeName := 'STRING';
+  LISP_TOKEN_SYMBOL:  LispTokenTypeName := 'SYMBOL';
+  LISP_TOKEN_NIL:     LispTokenTypeName := 'NIL';
+  LISP_TOKEN_T:       LispTokenTypeName := 'T';
+  LISP_TOKEN_EOF:     LispTokenTypeName := 'EOF';
+  LISP_TOKEN_ERROR:   LispTokenTypeName := 'ERROR';
+  Else                LispTokenTypeName := 'UNKNOWN';
+ End;
+End;
+
+{ Afficher un token (pour debug) }
+Procedure LispPrintToken(Const Token: TLispToken);
+Var
+ S: String;
+Begin
+ S := '[' + LispTokenTypeName(Token.TokenType);
+ Case Token.TokenType of
+  LISP_TOKEN_INTEGER: Begin
+   Str(Token.IntValue, S);
+   S := '[INTEGER: ' + S;
+  End;
+  LISP_TOKEN_REAL: Begin
+   Str(Token.RealValue:0:6, S);
+   S := '[REAL: ' + S;
+  End;
+  LISP_TOKEN_STRING: S := '[STRING: "' + Token.StrValue + '"';
+  LISP_TOKEN_SYMBOL: S := '[SYMBOL: ' + Token.StrValue;
+  LISP_TOKEN_NIL:    S := '[NIL';
+  LISP_TOKEN_T:      S := '[T';
+  LISP_TOKEN_ERROR:  S := '[ERROR: ' + Token.StrValue;
+ End;
+ S := S + ' @' + Chr(48 + Token.Line mod 10) + ':' + 
+          Chr(48 + Token.Column mod 10) + ']';
+ WriteLn(S);
+End;
+
+{ Afficher tous les tokens (pour debug) }
+Procedure LispPrintAllTokens;
+Var
+ I: Integer;
+Begin
+ WriteLn('=== Tokens (', LispTokenizer.TokenCount, ') ===');
+ For I := 0 to LispTokenizer.TokenCount - 1 do
+  LispPrintToken(LispTokenizer.Tokens[I]);
+ If LispTokenizer.HasError Then
+  WriteLn('ERREUR: ', LispTokenizer.ErrorMessage);
+End;
+
+{ Obtenir le type du token courant }
+Function LispCurrentTokenType: Byte;
+Begin
+ If LispTokenizer.CurrentToken < LispTokenizer.TokenCount Then
+  LispCurrentTokenType := LispTokenizer.Tokens[LispTokenizer.CurrentToken].TokenType
+ Else
+  LispCurrentTokenType := LISP_TOKEN_EOF;
+End;
+
+{ Avancer au prochain token et retourner le token courant }
+Function LispAdvanceToken: TLispToken;
+Begin
+ If LispTokenizer.CurrentToken < LispTokenizer.TokenCount Then Begin
+  LispAdvanceToken := LispTokenizer.Tokens[LispTokenizer.CurrentToken];
+  Inc(LispTokenizer.CurrentToken);
+ End Else Begin
+  LispAdvanceToken.TokenType := LISP_TOKEN_EOF;
+  LispAdvanceToken.IntValue := 0;
+  LispAdvanceToken.RealValue := 0.0;
+  LispAdvanceToken.StrValue := '';
+  LispAdvanceToken.Line := LispTokenizer.Line;
+  LispAdvanceToken.Column := LispTokenizer.Column;
+ End;
+End;
+
+{ Regarder le token courant sans avancer }
+Function LispPeekToken: TLispToken;
+Begin
+ If LispTokenizer.CurrentToken < LispTokenizer.TokenCount Then
+  LispPeekToken := LispTokenizer.Tokens[LispTokenizer.CurrentToken]
+ Else Begin
+  LispPeekToken.TokenType := LISP_TOKEN_EOF;
+  LispPeekToken.IntValue := 0;
+  LispPeekToken.RealValue := 0.0;
+  LispPeekToken.StrValue := '';
+  LispPeekToken.Line := LispTokenizer.Line;
+  LispPeekToken.Column := LispTokenizer.Column;
+ End;
+End;
+
 { Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair, TODO 9: Sélection, TODO 10: Grips }
 Procedure DrawCanvas;
 Var
@@ -3155,6 +3762,7 @@ Begin
  InitCrosshairSettings;  { TODO 8: Initialiser le crosshair }
  InitSelectionSystem;    { TODO 9: Initialiser le système de sélection }
  InitGripSystem;         { TODO 10: Initialiser le système de grips }
+ InitLispTokenizer;      { TODO 11: Initialiser le tokenizer AutoLISP }
 End;
 
 { Dessiner le menu contextuel }

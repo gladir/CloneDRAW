@@ -31,7 +31,7 @@
 
   === MODIFICATION DES OBJETS ET PROPRIÉTÉS ===
   16. [DONE] Créer le panneau de propriétés pour modifier couleur, calque, type de ligne, épaisseur
-  17. Implémenter la modification géométrique des objets (déplacer sommets, changer rayon, etc.)
+  17. [DONE] Implémenter la modification géométrique des objets (déplacer sommets, changer rayon, etc.)
   18. Ajouter le système de calques (layers) avec visibilité, verrouillage, couleur et type de ligne
   19. Créer les outils de cotation : linéaire, alignée, angulaire, radiale, diamètre, ordonnée
   20. Implémenter les blocs et références externes (XREFs) avec insertion et édition
@@ -668,6 +668,19 @@ Procedure DrawSingleGrip(GripIdx: Integer); Forward;
 Procedure GetGripsForLine(ObjIdx: Integer); Forward;
 Procedure GetGripsForCircle(ObjIdx: Integer); Forward;
 Procedure GetGripsForRectangle(ObjIdx: Integer); Forward;
+Procedure GetGripsForArc(ObjIdx: Integer); Forward;
+Procedure GetGripsForEllipse(ObjIdx: Integer); Forward;
+Procedure GetGripsForPoint(ObjIdx: Integer); Forward;
+
+{ Forward declarations - TODO 17 - Modification géométrique des objets }
+Procedure MoveObject(ObjIdx: Integer; DX, DY: Real); Forward;
+Procedure RotateObject(ObjIdx: Integer; CX, CY, Angle: Real); Forward;
+Procedure ScaleObject(ObjIdx: Integer; CX, CY, Factor: Real); Forward;
+Procedure MirrorObject(ObjIdx: Integer; X1, Y1, X2, Y2: Real); Forward;
+Procedure MoveSelectedObjects(DX, DY: Real); Forward;
+Procedure RotateSelectedObjects(CX, CY, Angle: Real); Forward;
+Procedure ScaleSelectedObjects(CX, CY, Factor: Real); Forward;
+Procedure MirrorSelectedObjects(X1, Y1, X2, Y2: Real); Forward;
 
 { Forward declarations - TODO 16 - Panneau de propriétés }
 Procedure InitPropertiesPanel; Forward;
@@ -2818,6 +2831,74 @@ Begin
  AddGrip(X1, MidY, GRIP_EDGE, ObjIdx, 7);  { Milieu gauche }
 End;
 
+{ Obtenir les grips pour un arc - TODO 17 }
+Procedure GetGripsForArc(ObjIdx: Integer);
+Var
+ CX, CY, R: Real;
+ StartAngle, EndAngle, MidAngle: Real;
+ StartX, StartY, EndX, EndY, MidX, MidY: Real;
+Begin
+ CX := DrawObjects[ObjIdx].X1;
+ CY := DrawObjects[ObjIdx].Y1;
+ R := DrawObjects[ObjIdx].Radius;
+ StartAngle := DrawObjects[ObjIdx].StartAngle;
+ EndAngle := DrawObjects[ObjIdx].EndAngle;
+ 
+ { Centre }
+ AddGrip(CX, CY, GRIP_CENTER, ObjIdx, 0);
+ 
+ { Point de départ de l'arc }
+ StartX := CX + R * Cos(StartAngle * Pi / 180);
+ StartY := CY + R * Sin(StartAngle * Pi / 180);
+ AddGrip(StartX, StartY, GRIP_ENDPOINT, ObjIdx, 1);
+ 
+ { Point de fin de l'arc }
+ EndX := CX + R * Cos(EndAngle * Pi / 180);
+ EndY := CY + R * Sin(EndAngle * Pi / 180);
+ AddGrip(EndX, EndY, GRIP_ENDPOINT, ObjIdx, 2);
+ 
+ { Point milieu de l'arc (pour modifier le rayon) }
+ MidAngle := (StartAngle + EndAngle) / 2;
+ If EndAngle < StartAngle Then
+  MidAngle := MidAngle + 180;
+ MidX := CX + R * Cos(MidAngle * Pi / 180);
+ MidY := CY + R * Sin(MidAngle * Pi / 180);
+ AddGrip(MidX, MidY, GRIP_RADIUS, ObjIdx, 3);
+End;
+
+{ Obtenir les grips pour une ellipse - TODO 17 }
+Procedure GetGripsForEllipse(ObjIdx: Integer);
+Var
+ CX, CY: Real;
+ RadiusX, RadiusY: Real;
+Begin
+ CX := DrawObjects[ObjIdx].X1;
+ CY := DrawObjects[ObjIdx].Y1;
+ { Pour une ellipse, Radius contient le demi-axe majeur }
+ { X2, Y2 contiennent le point sur le demi-axe mineur }
+ RadiusX := Abs(DrawObjects[ObjIdx].X2 - CX);
+ RadiusY := Abs(DrawObjects[ObjIdx].Y2 - CY);
+ If RadiusX < 1 Then RadiusX := DrawObjects[ObjIdx].Radius;
+ If RadiusY < 1 Then RadiusY := DrawObjects[ObjIdx].Radius / 2;
+ 
+ { Centre }
+ AddGrip(CX, CY, GRIP_CENTER, ObjIdx, 0);
+ 
+ { Quadrants sur les axes principaux }
+ AddGrip(CX + RadiusX, CY, GRIP_QUADRANT, ObjIdx, 1);  { Droite }
+ AddGrip(CX - RadiusX, CY, GRIP_QUADRANT, ObjIdx, 2);  { Gauche }
+ AddGrip(CX, CY + RadiusY, GRIP_QUADRANT, ObjIdx, 3);  { Haut }
+ AddGrip(CX, CY - RadiusY, GRIP_QUADRANT, ObjIdx, 4);  { Bas }
+End;
+
+{ Obtenir les grips pour un point - TODO 17 }
+Procedure GetGripsForPoint(ObjIdx: Integer);
+Begin
+ { Un point n'a qu'un seul grip: sa position }
+ AddGrip(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].Y1, 
+         GRIP_ENDPOINT, ObjIdx, 0);
+End;
+
 { Mettre à jour les grips pour les objets sélectionnés }
 Procedure UpdateGripsForSelection;
 Var
@@ -2834,6 +2915,9 @@ Begin
    OBJ_LINE: GetGripsForLine(ObjIdx);
    OBJ_CIRCLE: GetGripsForCircle(ObjIdx);
    OBJ_RECTANGLE: GetGripsForRectangle(ObjIdx);
+   OBJ_ARC: GetGripsForArc(ObjIdx);
+   OBJ_ELLIPSE: GetGripsForEllipse(ObjIdx);
+   OBJ_POINT: GetGripsForPoint(ObjIdx);
   End;
  End;
 End;
@@ -2994,6 +3078,75 @@ Begin
     End;
    End;
   End;
+  
+  OBJ_ARC: Begin { TODO 17 }
+   OldCX := DrawObjects[ObjIdx].X1;
+   OldCY := DrawObjects[ObjIdx].Y1;
+   OldR := DrawObjects[ObjIdx].Radius;
+   
+   Case PtIdx of
+    0: Begin { Centre - déplace l'arc }
+     DrawObjects[ObjIdx].X1 := NewX;
+     DrawObjects[ObjIdx].Y1 := NewY;
+    End;
+    1: Begin { Point de départ - modifie l'angle de départ et le rayon }
+     NewR := Sqrt(Sqr(NewX - OldCX) + Sqr(NewY - OldCY));
+     If NewR > 1 Then Begin
+      DrawObjects[ObjIdx].Radius := NewR;
+      DrawObjects[ObjIdx].StartAngle := ArcTan2(NewY - OldCY, NewX - OldCX) * 180 / Pi;
+     End;
+    End;
+    2: Begin { Point de fin - modifie l'angle de fin et le rayon }
+     NewR := Sqrt(Sqr(NewX - OldCX) + Sqr(NewY - OldCY));
+     If NewR > 1 Then Begin
+      DrawObjects[ObjIdx].Radius := NewR;
+      DrawObjects[ObjIdx].EndAngle := ArcTan2(NewY - OldCY, NewX - OldCX) * 180 / Pi;
+     End;
+    End;
+    3: Begin { Point milieu - modifie le rayon seulement }
+     NewR := Sqrt(Sqr(NewX - OldCX) + Sqr(NewY - OldCY));
+     If NewR > 1 Then
+      DrawObjects[ObjIdx].Radius := NewR;
+    End;
+   End;
+  End;
+  
+  OBJ_ELLIPSE: Begin { TODO 17 }
+   OldCX := DrawObjects[ObjIdx].X1;
+   OldCY := DrawObjects[ObjIdx].Y1;
+   
+   Case PtIdx of
+    0: Begin { Centre - déplace l'ellipse }
+     DX := NewX - OldCX;
+     DY := NewY - OldCY;
+     DrawObjects[ObjIdx].X1 := NewX;
+     DrawObjects[ObjIdx].Y1 := NewY;
+     DrawObjects[ObjIdx].X2 := DrawObjects[ObjIdx].X2 + DX;
+     DrawObjects[ObjIdx].Y2 := DrawObjects[ObjIdx].Y2 + DY;
+    End;
+    1, 2: Begin { Quadrants horizontaux - modifie le rayon X }
+     NewR := Abs(NewX - OldCX);
+     If NewR > 1 Then Begin
+      DrawObjects[ObjIdx].Radius := NewR;
+      DrawObjects[ObjIdx].X2 := OldCX + NewR;
+     End;
+    End;
+    3, 4: Begin { Quadrants verticaux - modifie le rayon Y }
+     NewR := Abs(NewY - OldCY);
+     If NewR > 1 Then
+      DrawObjects[ObjIdx].Y2 := OldCY + NewR;
+    End;
+   End;
+  End;
+  
+  OBJ_POINT: Begin { TODO 17 }
+   Case PtIdx of
+    0: Begin { Position du point }
+     DrawObjects[ObjIdx].X1 := NewX;
+     DrawObjects[ObjIdx].Y1 := NewY;
+    End;
+   End;
+  End;
  End;
 End;
 
@@ -3028,6 +3181,293 @@ Begin
  GripEditMode := GRIP_EDIT_NONE;
  
  { Mettre à jour les grips }
+ UpdateGripsForSelection;
+End;
+
+{ ============================================================================ }
+{ Fonctions de modification géométrique des objets - TODO 17                   }
+{ ============================================================================ }
+
+{ Déplacer un objet de DX, DY }
+Procedure MoveObject(ObjIdx: Integer; DX, DY: Real);
+Begin
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Exit;
+ 
+ Case DrawObjects[ObjIdx].ObjType of
+  OBJ_LINE, OBJ_RECTANGLE: Begin
+   DrawObjects[ObjIdx].X1 := DrawObjects[ObjIdx].X1 + DX;
+   DrawObjects[ObjIdx].Y1 := DrawObjects[ObjIdx].Y1 + DY;
+   DrawObjects[ObjIdx].X2 := DrawObjects[ObjIdx].X2 + DX;
+   DrawObjects[ObjIdx].Y2 := DrawObjects[ObjIdx].Y2 + DY;
+  End;
+  OBJ_CIRCLE, OBJ_ARC, OBJ_POINT: Begin
+   DrawObjects[ObjIdx].X1 := DrawObjects[ObjIdx].X1 + DX;
+   DrawObjects[ObjIdx].Y1 := DrawObjects[ObjIdx].Y1 + DY;
+  End;
+  OBJ_ELLIPSE: Begin
+   DrawObjects[ObjIdx].X1 := DrawObjects[ObjIdx].X1 + DX;
+   DrawObjects[ObjIdx].Y1 := DrawObjects[ObjIdx].Y1 + DY;
+   DrawObjects[ObjIdx].X2 := DrawObjects[ObjIdx].X2 + DX;
+   DrawObjects[ObjIdx].Y2 := DrawObjects[ObjIdx].Y2 + DY;
+  End;
+ End;
+End;
+
+{ Faire pivoter un objet autour d'un point central (CX, CY) d'un angle en degrés }
+Procedure RotateObject(ObjIdx: Integer; CX, CY, Angle: Real);
+Var
+ AngleRad, CosA, SinA: Real;
+ OldX1, OldY1, OldX2, OldY2: Real;
+ NewX, NewY: Real;
+Begin
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Exit;
+ 
+ AngleRad := Angle * Pi / 180;
+ CosA := Cos(AngleRad);
+ SinA := Sin(AngleRad);
+ 
+ Case DrawObjects[ObjIdx].ObjType of
+  OBJ_LINE, OBJ_RECTANGLE: Begin
+   { Rotation de P1 }
+   OldX1 := DrawObjects[ObjIdx].X1 - CX;
+   OldY1 := DrawObjects[ObjIdx].Y1 - CY;
+   NewX := OldX1 * CosA - OldY1 * SinA;
+   NewY := OldX1 * SinA + OldY1 * CosA;
+   DrawObjects[ObjIdx].X1 := NewX + CX;
+   DrawObjects[ObjIdx].Y1 := NewY + CY;
+   
+   { Rotation de P2 }
+   OldX2 := DrawObjects[ObjIdx].X2 - CX;
+   OldY2 := DrawObjects[ObjIdx].Y2 - CY;
+   NewX := OldX2 * CosA - OldY2 * SinA;
+   NewY := OldX2 * SinA + OldY2 * CosA;
+   DrawObjects[ObjIdx].X2 := NewX + CX;
+   DrawObjects[ObjIdx].Y2 := NewY + CY;
+  End;
+  
+  OBJ_CIRCLE, OBJ_POINT: Begin
+   { Rotation du centre }
+   OldX1 := DrawObjects[ObjIdx].X1 - CX;
+   OldY1 := DrawObjects[ObjIdx].Y1 - CY;
+   NewX := OldX1 * CosA - OldY1 * SinA;
+   NewY := OldX1 * SinA + OldY1 * CosA;
+   DrawObjects[ObjIdx].X1 := NewX + CX;
+   DrawObjects[ObjIdx].Y1 := NewY + CY;
+  End;
+  
+  OBJ_ARC: Begin
+   { Rotation du centre }
+   OldX1 := DrawObjects[ObjIdx].X1 - CX;
+   OldY1 := DrawObjects[ObjIdx].Y1 - CY;
+   NewX := OldX1 * CosA - OldY1 * SinA;
+   NewY := OldX1 * SinA + OldY1 * CosA;
+   DrawObjects[ObjIdx].X1 := NewX + CX;
+   DrawObjects[ObjIdx].Y1 := NewY + CY;
+   { Ajuster les angles de l'arc }
+   DrawObjects[ObjIdx].StartAngle := DrawObjects[ObjIdx].StartAngle + Angle;
+   DrawObjects[ObjIdx].EndAngle := DrawObjects[ObjIdx].EndAngle + Angle;
+  End;
+  
+  OBJ_ELLIPSE: Begin
+   { Rotation du centre }
+   OldX1 := DrawObjects[ObjIdx].X1 - CX;
+   OldY1 := DrawObjects[ObjIdx].Y1 - CY;
+   NewX := OldX1 * CosA - OldY1 * SinA;
+   NewY := OldX1 * SinA + OldY1 * CosA;
+   DrawObjects[ObjIdx].X1 := NewX + CX;
+   DrawObjects[ObjIdx].Y1 := NewY + CY;
+   
+   { Rotation du point définissant l'axe }
+   OldX2 := DrawObjects[ObjIdx].X2 - CX;
+   OldY2 := DrawObjects[ObjIdx].Y2 - CY;
+   NewX := OldX2 * CosA - OldY2 * SinA;
+   NewY := OldX2 * SinA + OldY2 * CosA;
+   DrawObjects[ObjIdx].X2 := NewX + CX;
+   DrawObjects[ObjIdx].Y2 := NewY + CY;
+  End;
+ End;
+End;
+
+{ Mettre à l'échelle un objet par rapport à un point de base (CX, CY) }
+Procedure ScaleObject(ObjIdx: Integer; CX, CY, Factor: Real);
+Var
+ DX1, DY1, DX2, DY2: Real;
+Begin
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Exit;
+ If Factor <= 0 Then Exit;
+ 
+ Case DrawObjects[ObjIdx].ObjType of
+  OBJ_LINE, OBJ_RECTANGLE: Begin
+   DX1 := DrawObjects[ObjIdx].X1 - CX;
+   DY1 := DrawObjects[ObjIdx].Y1 - CY;
+   DX2 := DrawObjects[ObjIdx].X2 - CX;
+   DY2 := DrawObjects[ObjIdx].Y2 - CY;
+   DrawObjects[ObjIdx].X1 := CX + DX1 * Factor;
+   DrawObjects[ObjIdx].Y1 := CY + DY1 * Factor;
+   DrawObjects[ObjIdx].X2 := CX + DX2 * Factor;
+   DrawObjects[ObjIdx].Y2 := CY + DY2 * Factor;
+  End;
+  
+  OBJ_CIRCLE, OBJ_ARC: Begin
+   DX1 := DrawObjects[ObjIdx].X1 - CX;
+   DY1 := DrawObjects[ObjIdx].Y1 - CY;
+   DrawObjects[ObjIdx].X1 := CX + DX1 * Factor;
+   DrawObjects[ObjIdx].Y1 := CY + DY1 * Factor;
+   DrawObjects[ObjIdx].Radius := DrawObjects[ObjIdx].Radius * Factor;
+  End;
+  
+  OBJ_POINT: Begin
+   DX1 := DrawObjects[ObjIdx].X1 - CX;
+   DY1 := DrawObjects[ObjIdx].Y1 - CY;
+   DrawObjects[ObjIdx].X1 := CX + DX1 * Factor;
+   DrawObjects[ObjIdx].Y1 := CY + DY1 * Factor;
+  End;
+  
+  OBJ_ELLIPSE: Begin
+   DX1 := DrawObjects[ObjIdx].X1 - CX;
+   DY1 := DrawObjects[ObjIdx].Y1 - CY;
+   DX2 := DrawObjects[ObjIdx].X2 - CX;
+   DY2 := DrawObjects[ObjIdx].Y2 - CY;
+   DrawObjects[ObjIdx].X1 := CX + DX1 * Factor;
+   DrawObjects[ObjIdx].Y1 := CY + DY1 * Factor;
+   DrawObjects[ObjIdx].X2 := CX + DX2 * Factor;
+   DrawObjects[ObjIdx].Y2 := CY + DY2 * Factor;
+   DrawObjects[ObjIdx].Radius := DrawObjects[ObjIdx].Radius * Factor;
+  End;
+ End;
+End;
+
+{ Créer un miroir d'un objet par rapport à une ligne définie par (X1,Y1)-(X2,Y2) }
+Procedure MirrorObject(ObjIdx: Integer; X1, Y1, X2, Y2: Real);
+Var
+ DX, DY, D, A, B, C: Real;
+ OldPX, OldPY, NewPX, NewPY: Real;
+ T: Real;
+Begin
+ If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
+ If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Exit;
+ 
+ { Calculer les coefficients de la ligne de miroir Ax + By + C = 0 }
+ DX := X2 - X1;
+ DY := Y2 - Y1;
+ D := Sqrt(DX * DX + DY * DY);
+ If D < 0.0001 Then Exit;  { Ligne trop courte }
+ 
+ A := -DY / D;
+ B := DX / D;
+ C := -(A * X1 + B * Y1);
+ 
+ { Fonction de réflexion d'un point }
+ { Pour chaque point (OldPX, OldPY), calculer son reflet (NewPX, NewPY) }
+ 
+ Case DrawObjects[ObjIdx].ObjType of
+  OBJ_LINE, OBJ_RECTANGLE: Begin
+   { Refléter P1 }
+   OldPX := DrawObjects[ObjIdx].X1;
+   OldPY := DrawObjects[ObjIdx].Y1;
+   T := 2 * (A * OldPX + B * OldPY + C);
+   NewPX := OldPX - T * A;
+   NewPY := OldPY - T * B;
+   DrawObjects[ObjIdx].X1 := NewPX;
+   DrawObjects[ObjIdx].Y1 := NewPY;
+   
+   { Refléter P2 }
+   OldPX := DrawObjects[ObjIdx].X2;
+   OldPY := DrawObjects[ObjIdx].Y2;
+   T := 2 * (A * OldPX + B * OldPY + C);
+   NewPX := OldPX - T * A;
+   NewPY := OldPY - T * B;
+   DrawObjects[ObjIdx].X2 := NewPX;
+   DrawObjects[ObjIdx].Y2 := NewPY;
+  End;
+  
+  OBJ_CIRCLE, OBJ_POINT: Begin
+   OldPX := DrawObjects[ObjIdx].X1;
+   OldPY := DrawObjects[ObjIdx].Y1;
+   T := 2 * (A * OldPX + B * OldPY + C);
+   NewPX := OldPX - T * A;
+   NewPY := OldPY - T * B;
+   DrawObjects[ObjIdx].X1 := NewPX;
+   DrawObjects[ObjIdx].Y1 := NewPY;
+  End;
+  
+  OBJ_ARC: Begin
+   { Refléter le centre }
+   OldPX := DrawObjects[ObjIdx].X1;
+   OldPY := DrawObjects[ObjIdx].Y1;
+   T := 2 * (A * OldPX + B * OldPY + C);
+   NewPX := OldPX - T * A;
+   NewPY := OldPY - T * B;
+   DrawObjects[ObjIdx].X1 := NewPX;
+   DrawObjects[ObjIdx].Y1 := NewPY;
+   { Inverser les angles et les échanger }
+   T := DrawObjects[ObjIdx].StartAngle;
+   DrawObjects[ObjIdx].StartAngle := 180 - DrawObjects[ObjIdx].EndAngle;
+   DrawObjects[ObjIdx].EndAngle := 180 - T;
+  End;
+  
+  OBJ_ELLIPSE: Begin
+   { Refléter le centre }
+   OldPX := DrawObjects[ObjIdx].X1;
+   OldPY := DrawObjects[ObjIdx].Y1;
+   T := 2 * (A * OldPX + B * OldPY + C);
+   NewPX := OldPX - T * A;
+   NewPY := OldPY - T * B;
+   DrawObjects[ObjIdx].X1 := NewPX;
+   DrawObjects[ObjIdx].Y1 := NewPY;
+   
+   { Refléter le point définissant l'axe }
+   OldPX := DrawObjects[ObjIdx].X2;
+   OldPY := DrawObjects[ObjIdx].Y2;
+   T := 2 * (A * OldPX + B * OldPY + C);
+   NewPX := OldPX - T * A;
+   NewPY := OldPY - T * B;
+   DrawObjects[ObjIdx].X2 := NewPX;
+   DrawObjects[ObjIdx].Y2 := NewPY;
+  End;
+ End;
+End;
+
+{ Déplacer tous les objets sélectionnés }
+Procedure MoveSelectedObjects(DX, DY: Real);
+Var
+ I: Integer;
+Begin
+ For I := 0 to SelectionSet.Count - 1 do
+  MoveObject(SelectionSet.Objects[I], DX, DY);
+ UpdateGripsForSelection;
+End;
+
+{ Faire pivoter tous les objets sélectionnés }
+Procedure RotateSelectedObjects(CX, CY, Angle: Real);
+Var
+ I: Integer;
+Begin
+ For I := 0 to SelectionSet.Count - 1 do
+  RotateObject(SelectionSet.Objects[I], CX, CY, Angle);
+ UpdateGripsForSelection;
+End;
+
+{ Mettre à l'échelle tous les objets sélectionnés }
+Procedure ScaleSelectedObjects(CX, CY, Factor: Real);
+Var
+ I: Integer;
+Begin
+ For I := 0 to SelectionSet.Count - 1 do
+  ScaleObject(SelectionSet.Objects[I], CX, CY, Factor);
+ UpdateGripsForSelection;
+End;
+
+{ Créer un miroir de tous les objets sélectionnés }
+Procedure MirrorSelectedObjects(X1, Y1, X2, Y2: Real);
+Var
+ I: Integer;
+Begin
+ For I := 0 to SelectionSet.Count - 1 do
+  MirrorObject(SelectionSet.Objects[I], X1, Y1, X2, Y2);
  UpdateGripsForSelection;
 End;
 
@@ -7608,6 +8048,111 @@ Begin
      Str(DrawObjects[ObjIdx].Y1:0:2, S);
      Rows[RowCount].Value := S;
      Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+    End;
+    
+    OBJ_ARC: Begin { TODO 17 }
+     { Centre X }
+     Rows[RowCount].PropType := PROP_TYPE_X1;
+     Rows[RowCount].Label_ := 'Centre X';
+     Str(DrawObjects[ObjIdx].X1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Centre Y }
+     Rows[RowCount].PropType := PROP_TYPE_Y1;
+     Rows[RowCount].Label_ := 'Centre Y';
+     Str(DrawObjects[ObjIdx].Y1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Rayon }
+     Rows[RowCount].PropType := PROP_TYPE_RADIUS;
+     Rows[RowCount].Label_ := 'Rayon';
+     Str(DrawObjects[ObjIdx].Radius:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Angle de départ }
+     Rows[RowCount].PropType := PROP_TYPE_X2;  { Réutilisé pour StartAngle }
+     Rows[RowCount].Label_ := 'Angle dép.';
+     Str(DrawObjects[ObjIdx].StartAngle:0:1, S);
+     Rows[RowCount].Value := S + '°';
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Angle de fin }
+     Rows[RowCount].PropType := PROP_TYPE_Y2;  { Réutilisé pour EndAngle }
+     Rows[RowCount].Label_ := 'Angle fin';
+     Str(DrawObjects[ObjIdx].EndAngle:0:1, S);
+     Rows[RowCount].Value := S + '°';
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Longueur d'arc (lecture seule) }
+     Rows[RowCount].PropType := PROP_TYPE_LENGTH;
+     Rows[RowCount].Label_ := 'Long. arc';
+     Str(Abs(DrawObjects[ObjIdx].EndAngle - DrawObjects[ObjIdx].StartAngle) 
+         * Pi / 180 * DrawObjects[ObjIdx].Radius:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := False;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+    End;
+    
+    OBJ_ELLIPSE: Begin { TODO 17 }
+     { Centre X }
+     Rows[RowCount].PropType := PROP_TYPE_X1;
+     Rows[RowCount].Label_ := 'Centre X';
+     Str(DrawObjects[ObjIdx].X1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Centre Y }
+     Rows[RowCount].PropType := PROP_TYPE_Y1;
+     Rows[RowCount].Label_ := 'Centre Y';
+     Str(DrawObjects[ObjIdx].Y1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Rayon majeur }
+     Rows[RowCount].PropType := PROP_TYPE_RADIUS;
+     Rows[RowCount].Label_ := 'Rayon maj.';
+     Str(DrawObjects[ObjIdx].Radius:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Rayon mineur (calculé depuis X2, Y2) }
+     Rows[RowCount].PropType := PROP_TYPE_X2;  { Réutilisé }
+     Rows[RowCount].Label_ := 'Rayon min.';
+     Str(Abs(DrawObjects[ObjIdx].Y2 - DrawObjects[ObjIdx].Y1):0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Surface approx (lecture seule) }
+     Rows[RowCount].PropType := PROP_TYPE_AREA;
+     Rows[RowCount].Label_ := 'Surface';
+     Str(Pi * DrawObjects[ObjIdx].Radius * 
+         Abs(DrawObjects[ObjIdx].Y2 - DrawObjects[ObjIdx].Y1):0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := False;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
     End;

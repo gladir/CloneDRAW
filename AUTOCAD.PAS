@@ -34,7 +34,7 @@
   17. [DONE] Implémenter la modification géométrique des objets (déplacer sommets, changer rayon, etc.)
   18. [DONE] Ajouter le système de calques (layers) avec visibilité, verrouillage, couleur et type de ligne
   19. [DONE] Créer les outils de cotation : linéaire, alignée, angulaire, radiale, diamètre, ordonnée
-  20. Implémenter les blocs et références externes (XREFs) avec insertion et édition
+  20. [DONE] Implémenter les blocs et références externes (XREFs) avec insertion et édition
 
   === FORMATS DE FICHIERS ===
   21. Implémenter la lecture et écriture du format DWG (Drawing) d'AutoCAD
@@ -155,6 +155,21 @@ Const
  OBJ_TEXT = 7;
  OBJ_ELLIPSE = 8;
  OBJ_DIMENSION = 9;  { TODO 19: Objet cotation }
+ OBJ_BLOCK_REF = 10; { TODO 20: Référence de bloc }
+ OBJ_XREF = 11;      { TODO 20: Référence externe }
+ 
+ { Constantes pour les blocs et XREFs - TODO 20 }
+ MAX_BLOCKS = 100;           { Nombre maximum de définitions de blocs }
+ MAX_BLOCK_ENTITIES = 50;    { Nombre maximum d'entités par bloc }
+ MAX_BLOCK_REFS = 500;       { Nombre maximum d'insertions de blocs }
+ MAX_XREFS = 20;             { Nombre maximum de références externes }
+ XREF_PATH_LENGTH = 255;     { Longueur maximum du chemin XREF }
+ 
+ { États des XREFs }
+ XREF_LOADED = 0;            { XREF chargée normalement }
+ XREF_UNLOADED = 1;          { XREF déchargée (non affichée) }
+ XREF_NOT_FOUND = 2;         { Fichier XREF non trouvé }
+ XREF_NEEDS_RELOAD = 3;      { XREF modifiée, doit être rechargée }
  
  { Types de cotations - TODO 19 }
  DIM_LINEAR = 0;       { Cotation linéaire (horizontale ou verticale) }
@@ -467,6 +482,45 @@ Type
   Title: String[30];             { Titre du panneau }
  End;
 
+ { Structure pour une définition de bloc - TODO 20 }
+ TBlockDef = Record
+  Name: String[30];              { Nom du bloc }
+  Description: String[80];       { Description du bloc }
+  BaseX, BaseY: Real;            { Point de base (insertion) }
+  EntityCount: Integer;          { Nombre d'entités }
+  FirstEntityIdx: Integer;       { Index de la première entité dans le tableau }
+  IsXRef: Boolean;               { True si c'est une définition XREF }
+  XRefPath: String[255];         { Chemin du fichier XREF }
+  IsDefined: Boolean;            { True si le bloc est défini }
+ End;
+
+ { Structure pour une référence de bloc (insertion) - TODO 20 }
+ TBlockRef = Record
+  BlockIndex: Integer;           { Index de la définition de bloc }
+  InsertX, InsertY: Real;        { Point d'insertion }
+  ScaleX, ScaleY: Real;          { Facteurs d'échelle }
+  Rotation: Real;                { Angle de rotation (radians) }
+  Color: Integer;                { Couleur (0 = ByBlock) }
+  LayerIndex: Byte;              { Index du calque }
+  Selected: Boolean;             { True si sélectionné }
+  Visible: Boolean;              { True si visible }
+ End;
+
+ { Structure pour une référence externe (XREF) - TODO 20 }
+ TXRef = Record
+  Name: String[30];              { Nom de la XREF }
+  FilePath: String[255];         { Chemin complet du fichier }
+  InsertX, InsertY: Real;        { Point d'insertion }
+  ScaleX, ScaleY: Real;          { Facteurs d'échelle }
+  Rotation: Real;                { Angle de rotation }
+  Status: Byte;                  { État (XREF_LOADED, etc.) }
+  BlockIndex: Integer;           { Index du bloc associé (-1 si non chargé) }
+  LayerPrefix: String[10];       { Préfixe pour les calques }
+  Overlay: Boolean;              { True = overlay, False = attach }
+  Selected: Boolean;             { True si sélectionné }
+  Visible: Boolean;              { True si visible }
+ End;
+
  { Structure pour un token AutoLISP - TODO 11 }
  TLispToken = Record
   TokenType: Byte;                         { Type du token (LISP_TOKEN_xxx) }
@@ -636,6 +690,16 @@ Var
  CurrentColor: Integer;                                { Couleur courante (256 = ByLayer) }
  CurrentLineType: Byte;                                { Type de ligne courant }
  CurrentLineWeight: Integer;                           { Épaisseur de ligne courante }
+ 
+ { Variables pour les blocs et XREFs - TODO 20 }
+ BlockDefs: Array[0..MAX_BLOCKS-1] of TBlockDef;       { Définitions de blocs }
+ BlockDefCount: Integer;                               { Nombre de définitions de blocs }
+ BlockRefs: Array[0..MAX_BLOCK_REFS-1] of TBlockRef;   { Références de blocs (insertions) }
+ BlockRefCount: Integer;                               { Nombre de références de blocs }
+ XRefs: Array[0..MAX_XREFS-1] of TXRef;                { Références externes }
+ XRefCount: Integer;                                   { Nombre de XREFs }
+ BlockEntities: Array[0..MAX_BLOCKS*MAX_BLOCK_ENTITIES-1] of TDrawObject;  { Entités des blocs }
+ BlockEntityCount: Integer;                            { Nombre total d'entités dans les blocs }
 
 { Forward declarations - TODO 6 }
 Procedure DrawContextMenu; Forward;
@@ -754,6 +818,25 @@ Function FormatDimensionValue(Value: Real): String; Forward;
 Function CalculateLinearDistance(X1, Y1, X2, Y2: Real): Real; Forward;
 Function CalculateAngle(X1, Y1, X2, Y2: Real): Real; Forward;
 Procedure GetDimensionGrips(ObjIdx: Integer); Forward;
+
+{ Forward declarations - TODO 20 - Blocs et XREFs }
+Procedure InitBlockSystem; Forward;
+Function CreateBlock(Const Name: String; BaseX, BaseY: Real): Integer; Forward;
+Function AddEntityToBlock(BlockIdx: Integer; Const Entity: TDrawObject): Integer; Forward;
+Function InsertBlock(BlockIdx: Integer; InsX, InsY, ScaleX, ScaleY, Rotation: Real): Integer; Forward;
+Procedure ExplodeBlockRef(RefIdx: Integer); Forward;
+Procedure DeleteBlock(BlockIdx: Integer); Forward;
+Function FindBlockByName(Const Name: String): Integer; Forward;
+Procedure DrawBlockRef(RefIdx: Integer); Forward;
+Procedure GetBlockRefGrips(RefIdx: Integer); Forward;
+Function AttachXRef(Const FilePath: String; InsX, InsY, ScaleX, ScaleY, Rotation: Real; IsOverlay: Boolean): Integer; Forward;
+Procedure DetachXRef(XRefIdx: Integer); Forward;
+Procedure ReloadXRef(XRefIdx: Integer); Forward;
+Procedure UnloadXRef(XRefIdx: Integer); Forward;
+Procedure BindXRef(XRefIdx: Integer); Forward;
+Procedure DrawXRef(XRefIdx: Integer); Forward;
+Function GetXRefStatus(XRefIdx: Integer): String; Forward;
+Procedure TransformPoint(Var X, Y: Real; InsX, InsY, ScaleX, ScaleY, Rotation: Real); Forward;
 
 { Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
 Procedure InitLispTokenizer; Forward;
@@ -2786,6 +2869,18 @@ Begin
     DrawDimension(I);
    End;
   End;
+ End;
+ 
+ { Dessiner les références de blocs - TODO 20 }
+ For I := 0 to BlockRefCount - 1 do Begin
+  If BlockRefs[I].Visible and (BlockRefs[I].BlockIndex >= 0) Then
+   DrawBlockRef(I);
+ End;
+ 
+ { Dessiner les XREFs - TODO 20 }
+ For I := 0 to XRefCount - 1 do Begin
+  If XRefs[I].Visible and (XRefs[I].Name <> '') Then
+   DrawXRef(I);
  End;
  
  { Dessiner le rectangle de sélection si actif }
@@ -8718,6 +8813,595 @@ Begin
  End;
 End;
 
+{ ============================================================================ }
+{ Fonctions pour les blocs et références externes (XREFs) - TODO 20           }
+{ ============================================================================ }
+
+{ Initialiser le système de blocs }
+Procedure InitBlockSystem;
+Var
+ I: Integer;
+Begin
+ BlockDefCount := 0;
+ BlockRefCount := 0;
+ XRefCount := 0;
+ BlockEntityCount := 0;
+ 
+ { Initialiser toutes les définitions de blocs }
+ For I := 0 to MAX_BLOCKS - 1 do Begin
+  BlockDefs[I].Name := '';
+  BlockDefs[I].Description := '';
+  BlockDefs[I].BaseX := 0;
+  BlockDefs[I].BaseY := 0;
+  BlockDefs[I].EntityCount := 0;
+  BlockDefs[I].FirstEntityIdx := -1;
+  BlockDefs[I].IsXRef := False;
+  BlockDefs[I].XRefPath := '';
+  BlockDefs[I].IsDefined := False;
+ End;
+ 
+ { Initialiser toutes les références de blocs }
+ For I := 0 to MAX_BLOCK_REFS - 1 do Begin
+  BlockRefs[I].BlockIndex := -1;
+  BlockRefs[I].InsertX := 0;
+  BlockRefs[I].InsertY := 0;
+  BlockRefs[I].ScaleX := 1.0;
+  BlockRefs[I].ScaleY := 1.0;
+  BlockRefs[I].Rotation := 0;
+  BlockRefs[I].Color := 0;  { ByBlock }
+  BlockRefs[I].LayerIndex := 0;
+  BlockRefs[I].Selected := False;
+  BlockRefs[I].Visible := True;
+ End;
+ 
+ { Initialiser toutes les XREFs }
+ For I := 0 to MAX_XREFS - 1 do Begin
+  XRefs[I].Name := '';
+  XRefs[I].FilePath := '';
+  XRefs[I].InsertX := 0;
+  XRefs[I].InsertY := 0;
+  XRefs[I].ScaleX := 1.0;
+  XRefs[I].ScaleY := 1.0;
+  XRefs[I].Rotation := 0;
+  XRefs[I].Status := XREF_UNLOADED;
+  XRefs[I].BlockIndex := -1;
+  XRefs[I].LayerPrefix := '';
+  XRefs[I].Overlay := False;
+  XRefs[I].Selected := False;
+  XRefs[I].Visible := True;
+ End;
+End;
+
+{ Transformer un point selon les paramètres d'insertion }
+Procedure TransformPoint(Var X, Y: Real; InsX, InsY, ScaleX, ScaleY, Rotation: Real);
+Var
+ TempX, TempY: Real;
+ CosR, SinR: Real;
+Begin
+ { Appliquer l'échelle }
+ TempX := X * ScaleX;
+ TempY := Y * ScaleY;
+ 
+ { Appliquer la rotation }
+ CosR := Cos(Rotation);
+ SinR := Sin(Rotation);
+ X := TempX * CosR - TempY * SinR;
+ Y := TempX * SinR + TempY * CosR;
+ 
+ { Appliquer la translation }
+ X := X + InsX;
+ Y := Y + InsY;
+End;
+
+{ Créer une nouvelle définition de bloc }
+Function CreateBlock(Const Name: String; BaseX, BaseY: Real): Integer;
+Var
+ I: Integer;
+Begin
+ CreateBlock := -1;
+ 
+ { Vérifier si un bloc avec ce nom existe déjà }
+ If FindBlockByName(Name) >= 0 Then Exit;
+ 
+ { Trouver un emplacement libre }
+ If BlockDefCount >= MAX_BLOCKS Then Exit;
+ 
+ I := BlockDefCount;
+ Inc(BlockDefCount);
+ 
+ BlockDefs[I].Name := Name;
+ BlockDefs[I].Description := '';
+ BlockDefs[I].BaseX := BaseX;
+ BlockDefs[I].BaseY := BaseY;
+ BlockDefs[I].EntityCount := 0;
+ BlockDefs[I].FirstEntityIdx := BlockEntityCount;
+ BlockDefs[I].IsXRef := False;
+ BlockDefs[I].XRefPath := '';
+ BlockDefs[I].IsDefined := True;
+ 
+ CreateBlock := I;
+End;
+
+{ Trouver un bloc par son nom }
+Function FindBlockByName(Const Name: String): Integer;
+Var
+ I: Integer;
+ UpperName, UpperBlockName: String;
+Begin
+ FindBlockByName := -1;
+ 
+ UpperName := Name;
+ For I := 1 to Length(UpperName) do
+  If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
+   UpperName[I] := Chr(Ord(UpperName[I]) - 32);
+ 
+ For I := 0 to BlockDefCount - 1 do Begin
+  If BlockDefs[I].IsDefined Then Begin
+   UpperBlockName := BlockDefs[I].Name;
+   { Convertir en majuscules pour comparaison insensible à la casse }
+   { Cette comparaison simple fonctionne pour ASCII }
+   If UpperName = UpperBlockName Then Begin
+    FindBlockByName := I;
+    Exit;
+   End;
+  End;
+ End;
+End;
+
+{ Ajouter une entité à un bloc }
+Function AddEntityToBlock(BlockIdx: Integer; Const Entity: TDrawObject): Integer;
+Var
+ EntityIdx: Integer;
+Begin
+ AddEntityToBlock := -1;
+ 
+ If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
+ If Not BlockDefs[BlockIdx].IsDefined Then Exit;
+ If BlockDefs[BlockIdx].EntityCount >= MAX_BLOCK_ENTITIES Then Exit;
+ If BlockEntityCount >= MAX_BLOCKS * MAX_BLOCK_ENTITIES Then Exit;
+ 
+ EntityIdx := BlockEntityCount;
+ Inc(BlockEntityCount);
+ 
+ { Copier l'entité en ajustant les coordonnées par rapport au point de base }
+ BlockEntities[EntityIdx] := Entity;
+ BlockEntities[EntityIdx].X1 := Entity.X1 - BlockDefs[BlockIdx].BaseX;
+ BlockEntities[EntityIdx].Y1 := Entity.Y1 - BlockDefs[BlockIdx].BaseY;
+ If Entity.ObjType in [OBJ_LINE, OBJ_RECTANGLE] Then Begin
+  BlockEntities[EntityIdx].X2 := Entity.X2 - BlockDefs[BlockIdx].BaseX;
+  BlockEntities[EntityIdx].Y2 := Entity.Y2 - BlockDefs[BlockIdx].BaseY;
+ End;
+ 
+ Inc(BlockDefs[BlockIdx].EntityCount);
+ 
+ AddEntityToBlock := EntityIdx;
+End;
+
+{ Insérer un bloc (créer une référence de bloc) }
+Function InsertBlock(BlockIdx: Integer; InsX, InsY, ScaleX, ScaleY, Rotation: Real): Integer;
+Var
+ RefIdx: Integer;
+Begin
+ InsertBlock := -1;
+ 
+ If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
+ If Not BlockDefs[BlockIdx].IsDefined Then Exit;
+ If BlockRefCount >= MAX_BLOCK_REFS Then Exit;
+ 
+ RefIdx := BlockRefCount;
+ Inc(BlockRefCount);
+ 
+ BlockRefs[RefIdx].BlockIndex := BlockIdx;
+ BlockRefs[RefIdx].InsertX := InsX;
+ BlockRefs[RefIdx].InsertY := InsY;
+ BlockRefs[RefIdx].ScaleX := ScaleX;
+ BlockRefs[RefIdx].ScaleY := ScaleY;
+ BlockRefs[RefIdx].Rotation := Rotation;
+ BlockRefs[RefIdx].Color := CurrentColor;
+ BlockRefs[RefIdx].LayerIndex := CurrentLayer;
+ BlockRefs[RefIdx].Selected := False;
+ BlockRefs[RefIdx].Visible := True;
+ 
+ InsertBlock := RefIdx;
+End;
+
+{ Exploser une référence de bloc (convertir en entités individuelles) }
+Procedure ExplodeBlockRef(RefIdx: Integer);
+Var
+ BlockIdx: Integer;
+ I, StartIdx: Integer;
+ X, Y, X2, Y2: Real;
+ NewObjIdx: Integer;
+Begin
+ If (RefIdx < 0) or (RefIdx >= BlockRefCount) Then Exit;
+ 
+ BlockIdx := BlockRefs[RefIdx].BlockIndex;
+ If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
+ If Not BlockDefs[BlockIdx].IsDefined Then Exit;
+ 
+ StartIdx := BlockDefs[BlockIdx].FirstEntityIdx;
+ 
+ { Créer des copies transformées de chaque entité du bloc }
+ For I := 0 to BlockDefs[BlockIdx].EntityCount - 1 do Begin
+  If ObjectCount >= MAX_OBJECTS Then Break;
+  
+  NewObjIdx := ObjectCount;
+  Inc(ObjectCount);
+  
+  { Copier l'entité }
+  DrawObjects[NewObjIdx] := BlockEntities[StartIdx + I];
+  
+  { Transformer le premier point }
+  X := BlockEntities[StartIdx + I].X1;
+  Y := BlockEntities[StartIdx + I].Y1;
+  TransformPoint(X, Y, BlockRefs[RefIdx].InsertX, BlockRefs[RefIdx].InsertY,
+                 BlockRefs[RefIdx].ScaleX, BlockRefs[RefIdx].ScaleY,
+                 BlockRefs[RefIdx].Rotation);
+  DrawObjects[NewObjIdx].X1 := X;
+  DrawObjects[NewObjIdx].Y1 := Y;
+  
+  { Transformer le deuxième point si nécessaire }
+  If DrawObjects[NewObjIdx].ObjType in [OBJ_LINE, OBJ_RECTANGLE] Then Begin
+   X2 := BlockEntities[StartIdx + I].X2;
+   Y2 := BlockEntities[StartIdx + I].Y2;
+   TransformPoint(X2, Y2, BlockRefs[RefIdx].InsertX, BlockRefs[RefIdx].InsertY,
+                  BlockRefs[RefIdx].ScaleX, BlockRefs[RefIdx].ScaleY,
+                  BlockRefs[RefIdx].Rotation);
+   DrawObjects[NewObjIdx].X2 := X2;
+   DrawObjects[NewObjIdx].Y2 := Y2;
+  End;
+  
+  { Appliquer l'échelle au rayon si c'est un cercle ou arc }
+  If DrawObjects[NewObjIdx].ObjType in [OBJ_CIRCLE, OBJ_ARC] Then Begin
+   DrawObjects[NewObjIdx].Radius := DrawObjects[NewObjIdx].Radius * 
+                                    (Abs(BlockRefs[RefIdx].ScaleX) + Abs(BlockRefs[RefIdx].ScaleY)) / 2;
+  End;
+  
+  { Utiliser le calque de la référence de bloc }
+  DrawObjects[NewObjIdx].LayerIndex := BlockRefs[RefIdx].LayerIndex;
+  
+  { Si couleur ByBlock (0), utiliser la couleur de la référence }
+  If DrawObjects[NewObjIdx].Color = 0 Then
+   DrawObjects[NewObjIdx].Color := BlockRefs[RefIdx].Color;
+  
+  DrawObjects[NewObjIdx].Selected := False;
+  DrawObjects[NewObjIdx].Visible := True;
+ End;
+ 
+ { Supprimer la référence de bloc en la marquant comme invalide }
+ BlockRefs[RefIdx].BlockIndex := -1;
+ BlockRefs[RefIdx].Visible := False;
+End;
+
+{ Supprimer une définition de bloc }
+Procedure DeleteBlock(BlockIdx: Integer);
+Var
+ I: Integer;
+Begin
+ If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
+ 
+ { Vérifier si des références utilisent ce bloc }
+ For I := 0 to BlockRefCount - 1 do Begin
+  If BlockRefs[I].BlockIndex = BlockIdx Then Begin
+   { Marquer la référence comme invalide }
+   BlockRefs[I].BlockIndex := -1;
+   BlockRefs[I].Visible := False;
+  End;
+ End;
+ 
+ { Marquer le bloc comme non défini }
+ BlockDefs[BlockIdx].IsDefined := False;
+ BlockDefs[BlockIdx].Name := '';
+End;
+
+{ Dessiner une référence de bloc }
+Procedure DrawBlockRef(RefIdx: Integer);
+Var
+ BlockIdx: Integer;
+ I, StartIdx: Integer;
+ X, Y, X2, Y2: Real;
+ SX1, SY1, SX2, SY2, SR: Integer;
+ ObjColor: Integer;
+Begin
+ If (RefIdx < 0) or (RefIdx >= BlockRefCount) Then Exit;
+ If Not BlockRefs[RefIdx].Visible Then Exit;
+ 
+ BlockIdx := BlockRefs[RefIdx].BlockIndex;
+ If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
+ If Not BlockDefs[BlockIdx].IsDefined Then Exit;
+ 
+ StartIdx := BlockDefs[BlockIdx].FirstEntityIdx;
+ 
+ { Dessiner chaque entité du bloc avec transformation }
+ For I := 0 to BlockDefs[BlockIdx].EntityCount - 1 do Begin
+  { Déterminer la couleur }
+  ObjColor := BlockEntities[StartIdx + I].Color;
+  If ObjColor = 0 Then  { ByBlock }
+   ObjColor := BlockRefs[RefIdx].Color;
+  If ObjColor = 256 Then  { ByLayer }
+   ObjColor := Layers[BlockRefs[RefIdx].LayerIndex].Color;
+  SetColor(ObjColor);
+  
+  Case BlockEntities[StartIdx + I].ObjType of
+   OBJ_LINE: Begin
+    X := BlockEntities[StartIdx + I].X1;
+    Y := BlockEntities[StartIdx + I].Y1;
+    TransformPoint(X, Y, BlockRefs[RefIdx].InsertX, BlockRefs[RefIdx].InsertY,
+                   BlockRefs[RefIdx].ScaleX, BlockRefs[RefIdx].ScaleY,
+                   BlockRefs[RefIdx].Rotation);
+    SX1 := WorldToScreenX(X);
+    SY1 := WorldToScreenY(Y);
+    
+    X2 := BlockEntities[StartIdx + I].X2;
+    Y2 := BlockEntities[StartIdx + I].Y2;
+    TransformPoint(X2, Y2, BlockRefs[RefIdx].InsertX, BlockRefs[RefIdx].InsertY,
+                   BlockRefs[RefIdx].ScaleX, BlockRefs[RefIdx].ScaleY,
+                   BlockRefs[RefIdx].Rotation);
+    SX2 := WorldToScreenX(X2);
+    SY2 := WorldToScreenY(Y2);
+    
+    Line(SX1, SY1, SX2, SY2);
+   End;
+   
+   OBJ_CIRCLE: Begin
+    X := BlockEntities[StartIdx + I].X1;
+    Y := BlockEntities[StartIdx + I].Y1;
+    TransformPoint(X, Y, BlockRefs[RefIdx].InsertX, BlockRefs[RefIdx].InsertY,
+                   BlockRefs[RefIdx].ScaleX, BlockRefs[RefIdx].ScaleY,
+                   BlockRefs[RefIdx].Rotation);
+    SX1 := WorldToScreenX(X);
+    SY1 := WorldToScreenY(Y);
+    SR := Round(BlockEntities[StartIdx + I].Radius * 
+               (Abs(BlockRefs[RefIdx].ScaleX) + Abs(BlockRefs[RefIdx].ScaleY)) / 2 * ZoomLevel);
+    
+    Circle(SX1, SY1, SR);
+   End;
+   
+   OBJ_RECTANGLE: Begin
+    X := BlockEntities[StartIdx + I].X1;
+    Y := BlockEntities[StartIdx + I].Y1;
+    TransformPoint(X, Y, BlockRefs[RefIdx].InsertX, BlockRefs[RefIdx].InsertY,
+                   BlockRefs[RefIdx].ScaleX, BlockRefs[RefIdx].ScaleY,
+                   BlockRefs[RefIdx].Rotation);
+    SX1 := WorldToScreenX(X);
+    SY1 := WorldToScreenY(Y);
+    
+    X2 := BlockEntities[StartIdx + I].X2;
+    Y2 := BlockEntities[StartIdx + I].Y2;
+    TransformPoint(X2, Y2, BlockRefs[RefIdx].InsertX, BlockRefs[RefIdx].InsertY,
+                   BlockRefs[RefIdx].ScaleX, BlockRefs[RefIdx].ScaleY,
+                   BlockRefs[RefIdx].Rotation);
+    SX2 := WorldToScreenX(X2);
+    SY2 := WorldToScreenY(Y2);
+    
+    Rectangle(SX1, SY1, SX2, SY2);
+   End;
+  End;
+ End;
+ 
+ { Si sélectionné, dessiner un indicateur }
+ If BlockRefs[RefIdx].Selected Then Begin
+  SetFillStyle(SolidFill, Green);
+  SX1 := WorldToScreenX(BlockRefs[RefIdx].InsertX);
+  SY1 := WorldToScreenY(BlockRefs[RefIdx].InsertY);
+  Bar(SX1 - 4, SY1 - 4, SX1 + 4, SY1 + 4);
+ End;
+End;
+
+{ Obtenir les grips d'une référence de bloc }
+Procedure GetBlockRefGrips(RefIdx: Integer);
+Begin
+ If (RefIdx < 0) or (RefIdx >= BlockRefCount) Then Exit;
+ If BlockRefs[RefIdx].BlockIndex < 0 Then Exit;
+ 
+ { Grip au point d'insertion }
+ If GripSet.Count < MAX_GRIPS Then Begin
+  GripSet.Grips[GripSet.Count].X := BlockRefs[RefIdx].InsertX;
+  GripSet.Grips[GripSet.Count].Y := BlockRefs[RefIdx].InsertY;
+  GripSet.Grips[GripSet.Count].GripType := GRIP_CENTER;
+  GripSet.Grips[GripSet.Count].ObjIndex := RefIdx + 10000;  { Offset pour différencier des objets }
+  GripSet.Grips[GripSet.Count].PointIndex := 0;
+  GripSet.Grips[GripSet.Count].IsHot := False;
+  Inc(GripSet.Count);
+ End;
+End;
+
+{ Attacher une référence externe (XREF) }
+Function AttachXRef(Const FilePath: String; InsX, InsY, ScaleX, ScaleY, Rotation: Real; IsOverlay: Boolean): Integer;
+Var
+ XRefIdx: Integer;
+ I, LastSlash: Integer;
+ FileName: String;
+Begin
+ AttachXRef := -1;
+ 
+ If XRefCount >= MAX_XREFS Then Exit;
+ 
+ XRefIdx := XRefCount;
+ Inc(XRefCount);
+ 
+ { Extraire le nom de fichier du chemin }
+ LastSlash := 0;
+ For I := 1 to Length(FilePath) do
+  If (FilePath[I] = '\') or (FilePath[I] = '/') Then
+   LastSlash := I;
+ If LastSlash > 0 Then
+  FileName := Copy(FilePath, LastSlash + 1, Length(FilePath) - LastSlash)
+ Else
+  FileName := FilePath;
+ 
+ { Retirer l'extension pour le nom }
+ For I := Length(FileName) downto 1 do
+  If FileName[I] = '.' Then Begin
+   FileName := Copy(FileName, 1, I - 1);
+   Break;
+  End;
+ 
+ XRefs[XRefIdx].Name := FileName;
+ XRefs[XRefIdx].FilePath := FilePath;
+ XRefs[XRefIdx].InsertX := InsX;
+ XRefs[XRefIdx].InsertY := InsY;
+ XRefs[XRefIdx].ScaleX := ScaleX;
+ XRefs[XRefIdx].ScaleY := ScaleY;
+ XRefs[XRefIdx].Rotation := Rotation;
+ XRefs[XRefIdx].Status := XREF_NOT_FOUND;  { À charger }
+ XRefs[XRefIdx].BlockIndex := -1;
+ XRefs[XRefIdx].LayerPrefix := Copy(FileName, 1, 10);
+ XRefs[XRefIdx].Overlay := IsOverlay;
+ XRefs[XRefIdx].Selected := False;
+ XRefs[XRefIdx].Visible := True;
+ 
+ { Tenter de charger le fichier XREF }
+ ReloadXRef(XRefIdx);
+ 
+ AttachXRef := XRefIdx;
+End;
+
+{ Détacher une XREF }
+Procedure DetachXRef(XRefIdx: Integer);
+Begin
+ If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
+ 
+ { Si un bloc est associé, le supprimer }
+ If XRefs[XRefIdx].BlockIndex >= 0 Then
+  DeleteBlock(XRefs[XRefIdx].BlockIndex);
+ 
+ { Marquer comme détachée }
+ XRefs[XRefIdx].Name := '';
+ XRefs[XRefIdx].FilePath := '';
+ XRefs[XRefIdx].Status := XREF_UNLOADED;
+ XRefs[XRefIdx].BlockIndex := -1;
+ XRefs[XRefIdx].Visible := False;
+End;
+
+{ Recharger une XREF depuis le fichier }
+Procedure ReloadXRef(XRefIdx: Integer);
+Var
+ F: Text;
+ BlockIdx: Integer;
+Begin
+ If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
+ 
+ { Vérifier si le fichier existe }
+ {$I-}
+ Assign(F, XRefs[XRefIdx].FilePath);
+ Reset(F);
+ {$I+}
+ 
+ If IOResult <> 0 Then Begin
+  XRefs[XRefIdx].Status := XREF_NOT_FOUND;
+  XRefs[XRefIdx].BlockIndex := -1;
+  Exit;
+ End;
+ Close(F);
+ 
+ { Créer un bloc pour la XREF si nécessaire }
+ If XRefs[XRefIdx].BlockIndex < 0 Then Begin
+  BlockIdx := CreateBlock(XRefs[XRefIdx].Name + '_XREF', 0, 0);
+  If BlockIdx >= 0 Then Begin
+   BlockDefs[BlockIdx].IsXRef := True;
+   BlockDefs[BlockIdx].XRefPath := XRefs[XRefIdx].FilePath;
+   XRefs[XRefIdx].BlockIndex := BlockIdx;
+  End;
+ End;
+ 
+ { TODO: Charger le contenu du fichier DWG/DXF dans le bloc }
+ { Pour l'instant, on marque simplement comme chargée }
+ XRefs[XRefIdx].Status := XREF_LOADED;
+End;
+
+{ Décharger une XREF (ne pas afficher mais garder la référence) }
+Procedure UnloadXRef(XRefIdx: Integer);
+Begin
+ If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
+ 
+ XRefs[XRefIdx].Status := XREF_UNLOADED;
+ XRefs[XRefIdx].Visible := False;
+End;
+
+{ Lier une XREF (convertir en bloc local) }
+Procedure BindXRef(XRefIdx: Integer);
+Var
+ BlockIdx: Integer;
+Begin
+ If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
+ If XRefs[XRefIdx].BlockIndex < 0 Then Exit;
+ 
+ BlockIdx := XRefs[XRefIdx].BlockIndex;
+ 
+ { Convertir le bloc XREF en bloc normal }
+ BlockDefs[BlockIdx].IsXRef := False;
+ BlockDefs[BlockIdx].XRefPath := '';
+ 
+ { Supprimer la XREF }
+ XRefs[XRefIdx].Name := '';
+ XRefs[XRefIdx].FilePath := '';
+ XRefs[XRefIdx].Status := XREF_UNLOADED;
+ XRefs[XRefIdx].BlockIndex := -1;
+End;
+
+{ Dessiner une XREF }
+Procedure DrawXRef(XRefIdx: Integer);
+Var
+ SX, SY: Integer;
+ StatusText: String;
+Begin
+ If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
+ If Not XRefs[XRefIdx].Visible Then Exit;
+ If XRefs[XRefIdx].Name = '' Then Exit;
+ 
+ { Si le bloc est chargé, le dessiner }
+ If (XRefs[XRefIdx].Status = XREF_LOADED) and (XRefs[XRefIdx].BlockIndex >= 0) Then Begin
+  { Utiliser DrawBlockRef si une référence de bloc existe }
+  { Pour l'instant, dessiner un placeholder }
+  SetColor(Cyan);
+  SX := WorldToScreenX(XRefs[XRefIdx].InsertX);
+  SY := WorldToScreenY(XRefs[XRefIdx].InsertY);
+  
+  { Dessiner un symbole XREF }
+  Rectangle(SX - 20, SY - 20, SX + 20, SY + 20);
+  Line(SX - 20, SY - 20, SX + 20, SY + 20);
+  Line(SX - 20, SY + 20, SX + 20, SY - 20);
+  OutTextXY(SX - 10, SY + 25, XRefs[XRefIdx].Name);
+ End
+ Else Begin
+  { Dessiner un indicateur de XREF non chargée }
+  SetColor(Red);
+  SX := WorldToScreenX(XRefs[XRefIdx].InsertX);
+  SY := WorldToScreenY(XRefs[XRefIdx].InsertY);
+  
+  Rectangle(SX - 15, SY - 15, SX + 15, SY + 15);
+  OutTextXY(SX - 10, SY - 5, '?');
+  OutTextXY(SX - 30, SY + 20, GetXRefStatus(XRefIdx));
+ End;
+ 
+ { Si sélectionnée, dessiner un indicateur }
+ If XRefs[XRefIdx].Selected Then Begin
+  SetFillStyle(SolidFill, Magenta);
+  SX := WorldToScreenX(XRefs[XRefIdx].InsertX);
+  SY := WorldToScreenY(XRefs[XRefIdx].InsertY);
+  Bar(SX - 4, SY - 4, SX + 4, SY + 4);
+ End;
+End;
+
+{ Obtenir le statut d'une XREF sous forme de texte }
+Function GetXRefStatus(XRefIdx: Integer): String;
+Begin
+ If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Begin
+  GetXRefStatus := 'Invalid';
+  Exit;
+ End;
+ 
+ Case XRefs[XRefIdx].Status of
+  XREF_LOADED:       GetXRefStatus := 'Loaded';
+  XREF_UNLOADED:     GetXRefStatus := 'Unloaded';
+  XREF_NOT_FOUND:    GetXRefStatus := 'Not Found';
+  XREF_NEEDS_RELOAD: GetXRefStatus := 'Reload';
+ Else
+  GetXRefStatus := 'Unknown';
+ End;
+End;
+
 { Initialiser le panneau de propriétés }
 Procedure InitPropertiesPanel;
 Var
@@ -9957,6 +10641,7 @@ Begin
  InitCrosshairSettings;  { TODO 8: Initialiser le crosshair }
  InitSelectionSystem;    { TODO 9: Initialiser le système de sélection }
  InitGripSystem;         { TODO 10: Initialiser le système de grips }
+ InitBlockSystem;        { TODO 20: Initialiser le système de blocs et XREFs }
  InitLispTokenizer;      { TODO 11: Initialiser le tokenizer AutoLISP }
  InitLispParser;         { TODO 12: Initialiser le parseur AutoLISP }
  InitLispEvaluator;      { TODO 13: Initialiser l'évaluateur AutoLISP }

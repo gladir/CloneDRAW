@@ -30,7 +30,7 @@
   15. [DONE] Ajouter les fonctions de manipulation de chaînes, listes et variables : setq, defun, if, cond, while, foreach, mapcar
 
   === MODIFICATION DES OBJETS ET PROPRIÉTÉS ===
-  16. Créer le panneau de propriétés pour modifier couleur, calque, type de ligne, épaisseur
+  16. [DONE] Créer le panneau de propriétés pour modifier couleur, calque, type de ligne, épaisseur
   17. Implémenter la modification géométrique des objets (déplacer sommets, changer rayon, etc.)
   18. Ajouter le système de calques (layers) avec visibilité, verrouillage, couleur et type de ligne
   19. Créer les outils de cotation : linéaire, alignée, angulaire, radiale, diamètre, ordonnée
@@ -185,6 +185,65 @@ Const
  GRIP_EDIT_ROTATE = 3;         { Rotation autour du grip }
  GRIP_EDIT_SCALE = 4;          { Mise à l'échelle depuis le grip }
  GRIP_EDIT_MIRROR = 5;         { Miroir par rapport au grip }
+
+ { Constantes pour le panneau de propriétés - TODO 16 }
+ PROP_PANEL_WIDTH = 200;       { Largeur du panneau de propriétés }
+ PROP_PANEL_HEIGHT = 300;      { Hauteur du panneau de propriétés }
+ PROP_PANEL_MARGIN = 5;        { Marge interne }
+ PROP_ROW_HEIGHT = 20;         { Hauteur d'une ligne de propriété }
+ PROP_LABEL_WIDTH = 80;        { Largeur de la colonne des labels }
+ MAX_PROP_ROWS = 12;           { Nombre maximum de propriétés affichées }
+ 
+ { Types de propriétés }
+ PROP_TYPE_COLOR = 0;          { Propriété couleur }
+ PROP_TYPE_LAYER = 1;          { Propriété calque }
+ PROP_TYPE_LINETYPE = 2;       { Propriété type de ligne }
+ PROP_TYPE_LINEWEIGHT = 3;     { Propriété épaisseur de ligne }
+ PROP_TYPE_OBJTYPE = 4;        { Type d'objet (lecture seule) }
+ PROP_TYPE_X1 = 5;             { Coordonnée X1 }
+ PROP_TYPE_Y1 = 6;             { Coordonnée Y1 }
+ PROP_TYPE_X2 = 7;             { Coordonnée X2 }
+ PROP_TYPE_Y2 = 8;             { Coordonnée Y2 }
+ PROP_TYPE_RADIUS = 9;         { Rayon }
+ PROP_TYPE_AREA = 10;          { Surface (lecture seule) }
+ PROP_TYPE_LENGTH = 11;        { Longueur (lecture seule) }
+ 
+ { Types de lignes standard }
+ LINETYPE_CONTINUOUS = 0;      { Ligne continue }
+ LINETYPE_DASHED = 1;          { Ligne tiretée }
+ LINETYPE_DOTTED = 2;          { Ligne pointillée }
+ LINETYPE_DASHDOT = 3;         { Tiret-point }
+ LINETYPE_DASHDOTDOT = 4;      { Tiret-point-point }
+ LINETYPE_CENTER = 5;          { Axe }
+ 
+ { Épaisseurs de ligne (en centièmes de mm) }
+ LINEWEIGHT_DEFAULT = 0;       { Par défaut }
+ LINEWEIGHT_005 = 5;           { 0.05 mm }
+ LINEWEIGHT_009 = 9;           { 0.09 mm }
+ LINEWEIGHT_013 = 13;          { 0.13 mm }
+ LINEWEIGHT_015 = 15;          { 0.15 mm }
+ LINEWEIGHT_018 = 18;          { 0.18 mm }
+ LINEWEIGHT_020 = 20;          { 0.20 mm }
+ LINEWEIGHT_025 = 25;          { 0.25 mm }
+ LINEWEIGHT_030 = 30;          { 0.30 mm }
+ LINEWEIGHT_035 = 35;          { 0.35 mm }
+ LINEWEIGHT_040 = 40;          { 0.40 mm }
+ LINEWEIGHT_050 = 50;          { 0.50 mm }
+ LINEWEIGHT_053 = 53;          { 0.53 mm }
+ LINEWEIGHT_060 = 60;          { 0.60 mm }
+ LINEWEIGHT_070 = 70;          { 0.70 mm }
+ LINEWEIGHT_080 = 80;          { 0.80 mm }
+ LINEWEIGHT_090 = 90;          { 0.90 mm }
+ LINEWEIGHT_100 = 100;         { 1.00 mm }
+ LINEWEIGHT_106 = 106;         { 1.06 mm }
+ LINEWEIGHT_120 = 120;         { 1.20 mm }
+ LINEWEIGHT_140 = 140;         { 1.40 mm }
+ LINEWEIGHT_158 = 158;         { 1.58 mm }
+ LINEWEIGHT_200 = 200;         { 2.00 mm }
+ LINEWEIGHT_211 = 211;         { 2.11 mm }
+ 
+ { Nombre de calques maximum }
+ MAX_LAYERS = 50;
 
  { Constantes pour l'analyseur lexical AutoLISP - TODO 11 }
  MAX_LISP_TOKENS = 500;        { Nombre maximum de tokens dans une expression }
@@ -348,6 +407,43 @@ Type
   Count: Integer;                          { Nombre de grips }
  End;
 
+ { Structure pour un calque - TODO 16 }
+ TLayer = Record
+  Name: String[30];              { Nom du calque }
+  Color: Integer;                { Couleur par défaut du calque }
+  LineType: Byte;                { Type de ligne par défaut }
+  LineWeight: Integer;           { Épaisseur de ligne par défaut }
+  Visible: Boolean;              { Calque visible }
+  Locked: Boolean;               { Calque verrouillé (non éditable) }
+  Frozen: Boolean;               { Calque gelé (non régénéré) }
+  OnFlag: Boolean;               { Calque allumé }
+ End;
+
+ { Structure pour une ligne de propriété - TODO 16 }
+ TPropertyRow = Record
+  PropType: Byte;                { Type de propriété (PROP_TYPE_xxx) }
+  Label_: String[20];            { Étiquette affichée }
+  Value: String[30];             { Valeur affichée }
+  Editable: Boolean;             { True si éditable }
+  Highlighted: Boolean;          { True si survolé }
+ End;
+
+ { Structure pour le panneau de propriétés - TODO 16 }
+ TPropertiesPanel = Record
+  X, Y: Integer;                 { Position du panneau }
+  Width, Height: Integer;        { Dimensions }
+  Visible: Boolean;              { Panneau visible }
+  Dragging: Boolean;             { En cours de déplacement }
+  DragOffsetX, DragOffsetY: Integer;  { Offset pour le drag }
+  Rows: Array[0..MAX_PROP_ROWS-1] of TPropertyRow;  { Lignes de propriétés }
+  RowCount: Integer;             { Nombre de lignes }
+  HoveredRow: Integer;           { Ligne survolée (-1 si aucune) }
+  SelectedRow: Integer;          { Ligne sélectionnée pour édition (-1 si aucune) }
+  EditMode: Boolean;             { Mode édition actif }
+  EditBuffer: String[30];        { Tampon d'édition }
+  Title: String[30];             { Titre du panneau }
+ End;
+
  { Structure pour un token AutoLISP - TODO 11 }
  TLispToken = Record
   TokenType: Byte;                         { Type du token (LISP_TOKEN_xxx) }
@@ -509,6 +605,15 @@ Var
  LispLastEntity: Integer;                              { Dernière entité créée/sélectionnée }
  LispEntselActive: Boolean;                            { Mode de sélection d'entité actif }
 
+ { Variables pour le panneau de propriétés - TODO 16 }
+ PropertiesPanel: TPropertiesPanel;                    { Le panneau de propriétés }
+ Layers: Array[0..MAX_LAYERS-1] of TLayer;             { Liste des calques }
+ LayerCount: Integer;                                  { Nombre de calques }
+ CurrentLayer: Integer;                                { Index du calque courant }
+ CurrentColor: Integer;                                { Couleur courante (256 = ByLayer) }
+ CurrentLineType: Byte;                                { Type de ligne courant }
+ CurrentLineWeight: Integer;                           { Épaisseur de ligne courante }
+
 { Forward declarations - TODO 6 }
 Procedure DrawContextMenu; Forward;
 Procedure HandleContextMenuHover(X, Y: Integer); Forward;
@@ -563,6 +668,23 @@ Procedure DrawSingleGrip(GripIdx: Integer); Forward;
 Procedure GetGripsForLine(ObjIdx: Integer); Forward;
 Procedure GetGripsForCircle(ObjIdx: Integer); Forward;
 Procedure GetGripsForRectangle(ObjIdx: Integer); Forward;
+
+{ Forward declarations - TODO 16 - Panneau de propriétés }
+Procedure InitPropertiesPanel; Forward;
+Procedure InitLayers; Forward;
+Procedure DrawPropertiesPanel; Forward;
+Procedure UpdatePropertiesPanel; Forward;
+Function GetPropertyValueString(PropType: Byte; ObjIndex: Integer): String; Forward;
+Procedure SetPropertyValue(PropType: Byte; ObjIndex: Integer; Value: String); Forward;
+Function HandlePropertiesPanelClick(X, Y: Integer): Boolean; Forward;
+Procedure HandlePropertiesPanelHover(X, Y: Integer); Forward;
+Procedure StartPropertyEdit(RowIndex: Integer); Forward;
+Procedure FinishPropertyEdit; Forward;
+Procedure CancelPropertyEdit; Forward;
+Function ColorName(Color: Integer): String; Forward;
+Function LineTypeName(LT: Byte): String; Forward;
+Function ObjTypeName(OT: Byte): String; Forward;
+Procedure TogglePropertiesPanel; Forward;
 
 { Forward declarations - TODO 11 - Analyseur lexical AutoLISP }
 Procedure InitLispTokenizer; Forward;
@@ -7159,6 +7281,752 @@ Begin
   LispEvalControlOp := LispMakeError('Fonction de contrôle inconnue: ' + FuncName);
 End;
 
+{ ============================================================================ }
+{ Panneau de propriétés - TODO 16                                              }
+{ Permet de modifier couleur, calque, type de ligne, épaisseur des objets      }
+{ ============================================================================ }
+
+{ Obtenir le nom d'une couleur }
+Function ColorName(Color: Integer): String;
+Begin
+ Case Color of
+  0: ColorName := 'ByBlock';
+  1: ColorName := 'Rouge';
+  2: ColorName := 'Jaune';
+  3: ColorName := 'Vert';
+  4: ColorName := 'Cyan';
+  5: ColorName := 'Bleu';
+  6: ColorName := 'Magenta';
+  7: ColorName := 'Blanc';
+  8: ColorName := 'Gris Foncé';
+  9: ColorName := 'Gris Clair';
+  256: ColorName := 'ByLayer';
+  Else Begin
+   Str(Color, ColorName);
+   ColorName := 'Couleur ' + ColorName;
+  End;
+ End;
+End;
+
+{ Obtenir le nom d'un type de ligne }
+Function LineTypeName(LT: Byte): String;
+Begin
+ Case LT of
+  LINETYPE_CONTINUOUS: LineTypeName := 'Continu';
+  LINETYPE_DASHED: LineTypeName := 'Tirets';
+  LINETYPE_DOTTED: LineTypeName := 'Points';
+  LINETYPE_DASHDOT: LineTypeName := 'Tiret-Point';
+  LINETYPE_DASHDOTDOT: LineTypeName := 'Tiret-Pt-Pt';
+  LINETYPE_CENTER: LineTypeName := 'Axe';
+  Else LineTypeName := 'Inconnu';
+ End;
+End;
+
+{ Obtenir le nom d'un type d'objet }
+Function ObjTypeName(OT: Byte): String;
+Begin
+ Case OT of
+  OBJ_NONE: ObjTypeName := 'Aucun';
+  OBJ_LINE: ObjTypeName := 'Ligne';
+  OBJ_CIRCLE: ObjTypeName := 'Cercle';
+  OBJ_ARC: ObjTypeName := 'Arc';
+  OBJ_RECTANGLE: ObjTypeName := 'Rectangle';
+  OBJ_POLYLINE: ObjTypeName := 'Polyligne';
+  OBJ_POINT: ObjTypeName := 'Point';
+  OBJ_TEXT: ObjTypeName := 'Texte';
+  OBJ_ELLIPSE: ObjTypeName := 'Ellipse';
+  Else ObjTypeName := 'Objet';
+ End;
+End;
+
+{ Initialiser les calques par défaut }
+Procedure InitLayers;
+Var
+ I: Integer;
+Begin
+ LayerCount := 1;
+ CurrentLayer := 0;
+ 
+ { Calque 0 - calque par défaut }
+ Layers[0].Name := '0';
+ Layers[0].Color := White;
+ Layers[0].LineType := LINETYPE_CONTINUOUS;
+ Layers[0].LineWeight := LINEWEIGHT_DEFAULT;
+ Layers[0].Visible := True;
+ Layers[0].Locked := False;
+ Layers[0].Frozen := False;
+ Layers[0].OnFlag := True;
+ 
+ { Initialiser les autres calques }
+ For I := 1 to MAX_LAYERS - 1 do Begin
+  Layers[I].Name := '';
+  Layers[I].Color := White;
+  Layers[I].LineType := LINETYPE_CONTINUOUS;
+  Layers[I].LineWeight := LINEWEIGHT_DEFAULT;
+  Layers[I].Visible := True;
+  Layers[I].Locked := False;
+  Layers[I].Frozen := False;
+  Layers[I].OnFlag := True;
+ End;
+ 
+ { Valeurs par défaut de dessin }
+ CurrentColor := 256;  { ByLayer }
+ CurrentLineType := LINETYPE_CONTINUOUS;
+ CurrentLineWeight := LINEWEIGHT_DEFAULT;
+End;
+
+{ Initialiser le panneau de propriétés }
+Procedure InitPropertiesPanel;
+Var
+ I: Integer;
+Begin
+ With PropertiesPanel do Begin
+  X := ScreenWidth - PROP_PANEL_WIDTH - 10;
+  Y := MENUBAR_HEIGHT + TOOLBAR_HEIGHT + 10;
+  Width := PROP_PANEL_WIDTH;
+  Height := PROP_PANEL_HEIGHT;
+  Visible := False;
+  Dragging := False;
+  DragOffsetX := 0;
+  DragOffsetY := 0;
+  RowCount := 0;
+  HoveredRow := -1;
+  SelectedRow := -1;
+  EditMode := False;
+  EditBuffer := '';
+  Title := 'Propriétés';
+  
+  { Initialiser les lignes }
+  For I := 0 to MAX_PROP_ROWS - 1 do Begin
+   Rows[I].PropType := 0;
+   Rows[I].Label_ := '';
+   Rows[I].Value := '';
+   Rows[I].Editable := False;
+   Rows[I].Highlighted := False;
+  End;
+ End;
+ 
+ { Initialiser les calques }
+ InitLayers;
+End;
+
+{ Mettre à jour le panneau avec les propriétés de l'objet sélectionné }
+Procedure UpdatePropertiesPanel;
+Var
+ ObjIdx: Integer;
+ RowIdx: Integer;
+ S: String;
+Begin
+ With PropertiesPanel do Begin
+  RowCount := 0;
+  HoveredRow := -1;
+  
+  If SelectionSet.Count = 0 Then Begin
+   { Pas d'objet sélectionné - afficher les propriétés par défaut }
+   Title := 'Propriétés';
+   
+   { Couleur courante }
+   Rows[RowCount].PropType := PROP_TYPE_COLOR;
+   Rows[RowCount].Label_ := 'Couleur';
+   Rows[RowCount].Value := ColorName(CurrentColor);
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+   
+   { Calque courant }
+   Rows[RowCount].PropType := PROP_TYPE_LAYER;
+   Rows[RowCount].Label_ := 'Calque';
+   Rows[RowCount].Value := Layers[CurrentLayer].Name;
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+   
+   { Type de ligne courant }
+   Rows[RowCount].PropType := PROP_TYPE_LINETYPE;
+   Rows[RowCount].Label_ := 'Type ligne';
+   Rows[RowCount].Value := LineTypeName(CurrentLineType);
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+   
+   { Épaisseur courante }
+   Rows[RowCount].PropType := PROP_TYPE_LINEWEIGHT;
+   Rows[RowCount].Label_ := 'Épaisseur';
+   If CurrentLineWeight = LINEWEIGHT_DEFAULT Then
+    Rows[RowCount].Value := 'Par défaut'
+   Else Begin
+    Str(CurrentLineWeight / 100.0:0:2, S);
+    Rows[RowCount].Value := S + ' mm';
+   End;
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+  End
+  Else If SelectionSet.Count = 1 Then Begin
+   { Un seul objet sélectionné - afficher ses propriétés }
+   ObjIdx := SelectionSet.Objects[0];
+   Title := 'Propriétés - ' + ObjTypeName(DrawObjects[ObjIdx].ObjType);
+   
+   { Type d'objet }
+   Rows[RowCount].PropType := PROP_TYPE_OBJTYPE;
+   Rows[RowCount].Label_ := 'Type';
+   Rows[RowCount].Value := ObjTypeName(DrawObjects[ObjIdx].ObjType);
+   Rows[RowCount].Editable := False;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+   
+   { Couleur }
+   Rows[RowCount].PropType := PROP_TYPE_COLOR;
+   Rows[RowCount].Label_ := 'Couleur';
+   Rows[RowCount].Value := ColorName(DrawObjects[ObjIdx].Color);
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+   
+   { Calque }
+   Rows[RowCount].PropType := PROP_TYPE_LAYER;
+   Rows[RowCount].Label_ := 'Calque';
+   If DrawObjects[ObjIdx].LayerIndex < LayerCount Then
+    Rows[RowCount].Value := Layers[DrawObjects[ObjIdx].LayerIndex].Name
+   Else
+    Rows[RowCount].Value := '0';
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+   
+   { Type de ligne }
+   Rows[RowCount].PropType := PROP_TYPE_LINETYPE;
+   Rows[RowCount].Label_ := 'Type ligne';
+   Rows[RowCount].Value := LineTypeName(DrawObjects[ObjIdx].LineType);
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+   
+   { Coordonnées selon le type d'objet }
+   Case DrawObjects[ObjIdx].ObjType of
+    OBJ_LINE, OBJ_RECTANGLE: Begin
+     { X1 }
+     Rows[RowCount].PropType := PROP_TYPE_X1;
+     Rows[RowCount].Label_ := 'X1';
+     Str(DrawObjects[ObjIdx].X1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Y1 }
+     Rows[RowCount].PropType := PROP_TYPE_Y1;
+     Rows[RowCount].Label_ := 'Y1';
+     Str(DrawObjects[ObjIdx].Y1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { X2 }
+     Rows[RowCount].PropType := PROP_TYPE_X2;
+     Rows[RowCount].Label_ := 'X2';
+     Str(DrawObjects[ObjIdx].X2:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Y2 }
+     Rows[RowCount].PropType := PROP_TYPE_Y2;
+     Rows[RowCount].Label_ := 'Y2';
+     Str(DrawObjects[ObjIdx].Y2:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Longueur (lecture seule) }
+     If DrawObjects[ObjIdx].ObjType = OBJ_LINE Then Begin
+      Rows[RowCount].PropType := PROP_TYPE_LENGTH;
+      Rows[RowCount].Label_ := 'Longueur';
+      Str(Sqrt(Sqr(DrawObjects[ObjIdx].X2 - DrawObjects[ObjIdx].X1) +
+               Sqr(DrawObjects[ObjIdx].Y2 - DrawObjects[ObjIdx].Y1)):0:2, S);
+      Rows[RowCount].Value := S;
+      Rows[RowCount].Editable := False;
+      Rows[RowCount].Highlighted := False;
+      Inc(RowCount);
+     End;
+    End;
+    
+    OBJ_CIRCLE: Begin
+     { Centre X }
+     Rows[RowCount].PropType := PROP_TYPE_X1;
+     Rows[RowCount].Label_ := 'Centre X';
+     Str(DrawObjects[ObjIdx].X1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Centre Y }
+     Rows[RowCount].PropType := PROP_TYPE_Y1;
+     Rows[RowCount].Label_ := 'Centre Y';
+     Str(DrawObjects[ObjIdx].Y1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Rayon }
+     Rows[RowCount].PropType := PROP_TYPE_RADIUS;
+     Rows[RowCount].Label_ := 'Rayon';
+     Str(DrawObjects[ObjIdx].Radius:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Surface (lecture seule) }
+     Rows[RowCount].PropType := PROP_TYPE_AREA;
+     Rows[RowCount].Label_ := 'Surface';
+     Str(Pi * Sqr(DrawObjects[ObjIdx].Radius):0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := False;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+    End;
+    
+    OBJ_POINT: Begin
+     { X }
+     Rows[RowCount].PropType := PROP_TYPE_X1;
+     Rows[RowCount].Label_ := 'X';
+     Str(DrawObjects[ObjIdx].X1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+     
+     { Y }
+     Rows[RowCount].PropType := PROP_TYPE_Y1;
+     Rows[RowCount].Label_ := 'Y';
+     Str(DrawObjects[ObjIdx].Y1:0:2, S);
+     Rows[RowCount].Value := S;
+     Rows[RowCount].Editable := True;
+     Rows[RowCount].Highlighted := False;
+     Inc(RowCount);
+    End;
+   End;
+  End
+  Else Begin
+   { Plusieurs objets sélectionnés }
+   Str(SelectionSet.Count, S);
+   Title := S + ' objets sélectionnés';
+   
+   { Propriétés communes }
+   Rows[RowCount].PropType := PROP_TYPE_COLOR;
+   Rows[RowCount].Label_ := 'Couleur';
+   Rows[RowCount].Value := '*VARIES*';
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+   
+   Rows[RowCount].PropType := PROP_TYPE_LAYER;
+   Rows[RowCount].Label_ := 'Calque';
+   Rows[RowCount].Value := '*VARIES*';
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+   
+   Rows[RowCount].PropType := PROP_TYPE_LINETYPE;
+   Rows[RowCount].Label_ := 'Type ligne';
+   Rows[RowCount].Value := '*VARIES*';
+   Rows[RowCount].Editable := True;
+   Rows[RowCount].Highlighted := False;
+   Inc(RowCount);
+  End;
+ End;
+End;
+
+{ Dessiner le panneau de propriétés }
+Procedure DrawPropertiesPanel;
+Var
+ I: Integer;
+ RowY: Integer;
+ TitleHeight: Integer;
+ BgColor, TextColor, BorderColor: Integer;
+Begin
+ If Not PropertiesPanel.Visible Then Exit;
+ 
+ TitleHeight := 20;
+ 
+ With PropertiesPanel do Begin
+  { Fond du panneau }
+  BgColor := DarkGray;
+  BorderColor := White;
+  TextColor := White;
+  
+  { Cadre principal }
+  SetFillStyle(SolidFill, BgColor);
+  Bar(X, Y, X + Width, Y + Height);
+  
+  { Bordure }
+  SetColor(BorderColor);
+  Rectangle(X, Y, X + Width, Y + Height);
+  
+  { Barre de titre }
+  SetFillStyle(SolidFill, Blue);
+  Bar(X + 1, Y + 1, X + Width - 1, Y + TitleHeight);
+  
+  { Titre }
+  SetColor(White);
+  SetTextStyle(DefaultFont, HorizDir, 1);
+  OutTextXY(X + PROP_PANEL_MARGIN, Y + 5, Title);
+  
+  { Bouton fermer [X] }
+  SetColor(White);
+  OutTextXY(X + Width - 15, Y + 5, 'X');
+  
+  { Ligne sous le titre }
+  SetColor(BorderColor);
+  Line(X, Y + TitleHeight, X + Width, Y + TitleHeight);
+  
+  { Dessiner les lignes de propriétés }
+  RowY := Y + TitleHeight + PROP_PANEL_MARGIN;
+  
+  For I := 0 to RowCount - 1 do Begin
+   If RowY + PROP_ROW_HEIGHT > Y + Height - PROP_PANEL_MARGIN Then Break;
+   
+   { Fond de la ligne si survolée }
+   If Rows[I].Highlighted Then Begin
+    SetFillStyle(SolidFill, LightGray);
+    Bar(X + 1, RowY, X + Width - 1, RowY + PROP_ROW_HEIGHT - 1);
+   End;
+   
+   { Label }
+   If Rows[I].Editable Then
+    SetColor(White)
+   Else
+    SetColor(LightGray);
+   OutTextXY(X + PROP_PANEL_MARGIN, RowY + 4, Rows[I].Label_);
+   
+   { Séparateur vertical }
+   SetColor(BorderColor);
+   Line(X + PROP_LABEL_WIDTH, RowY, X + PROP_LABEL_WIDTH, RowY + PROP_ROW_HEIGHT - 1);
+   
+   { Valeur }
+   If Rows[I].Editable Then
+    SetColor(Cyan)
+   Else
+    SetColor(LightGray);
+   
+   { Afficher un indicateur de couleur si c'est une propriété couleur }
+   If Rows[I].PropType = PROP_TYPE_COLOR Then Begin
+    If SelectionSet.Count = 1 Then Begin
+     SetFillStyle(SolidFill, DrawObjects[SelectionSet.Objects[0]].Color);
+     Bar(X + PROP_LABEL_WIDTH + 5, RowY + 3, X + PROP_LABEL_WIDTH + 20, RowY + PROP_ROW_HEIGHT - 4);
+     OutTextXY(X + PROP_LABEL_WIDTH + 25, RowY + 4, Rows[I].Value);
+    End Else Begin
+     SetFillStyle(SolidFill, CurrentColor);
+     Bar(X + PROP_LABEL_WIDTH + 5, RowY + 3, X + PROP_LABEL_WIDTH + 20, RowY + PROP_ROW_HEIGHT - 4);
+     OutTextXY(X + PROP_LABEL_WIDTH + 25, RowY + 4, Rows[I].Value);
+    End;
+   End Else
+    OutTextXY(X + PROP_LABEL_WIDTH + 5, RowY + 4, Rows[I].Value);
+   
+   { Ligne de séparation horizontale }
+   SetColor(DarkGray);
+   Line(X + 1, RowY + PROP_ROW_HEIGHT - 1, X + Width - 1, RowY + PROP_ROW_HEIGHT - 1);
+   
+   RowY := RowY + PROP_ROW_HEIGHT;
+  End;
+ End;
+End;
+
+{ Obtenir la valeur d'une propriété en chaîne }
+Function GetPropertyValueString(PropType: Byte; ObjIndex: Integer): String;
+Var
+ S: String;
+Begin
+ If ObjIndex < 0 Then Begin
+  GetPropertyValueString := '';
+  Exit;
+ End;
+ 
+ Case PropType of
+  PROP_TYPE_COLOR: GetPropertyValueString := ColorName(DrawObjects[ObjIndex].Color);
+  PROP_TYPE_LAYER: Begin
+   If DrawObjects[ObjIndex].LayerIndex < LayerCount Then
+    GetPropertyValueString := Layers[DrawObjects[ObjIndex].LayerIndex].Name
+   Else
+    GetPropertyValueString := '0';
+  End;
+  PROP_TYPE_LINETYPE: GetPropertyValueString := LineTypeName(DrawObjects[ObjIndex].LineType);
+  PROP_TYPE_OBJTYPE: GetPropertyValueString := ObjTypeName(DrawObjects[ObjIndex].ObjType);
+  PROP_TYPE_X1: Begin
+   Str(DrawObjects[ObjIndex].X1:0:2, S);
+   GetPropertyValueString := S;
+  End;
+  PROP_TYPE_Y1: Begin
+   Str(DrawObjects[ObjIndex].Y1:0:2, S);
+   GetPropertyValueString := S;
+  End;
+  PROP_TYPE_X2: Begin
+   Str(DrawObjects[ObjIndex].X2:0:2, S);
+   GetPropertyValueString := S;
+  End;
+  PROP_TYPE_Y2: Begin
+   Str(DrawObjects[ObjIndex].Y2:0:2, S);
+   GetPropertyValueString := S;
+  End;
+  PROP_TYPE_RADIUS: Begin
+   Str(DrawObjects[ObjIndex].Radius:0:2, S);
+   GetPropertyValueString := S;
+  End;
+  Else GetPropertyValueString := '';
+ End;
+End;
+
+{ Définir la valeur d'une propriété }
+Procedure SetPropertyValue(PropType: Byte; ObjIndex: Integer; Value: String);
+Var
+ Code: Integer;
+ RealVal: Real;
+ IntVal: Integer;
+ I: Integer;
+Begin
+ If ObjIndex < 0 Then Exit;
+ 
+ Case PropType of
+  PROP_TYPE_COLOR: Begin
+   { Chercher la couleur par nom ou valeur numérique }
+   Val(Value, IntVal, Code);
+   If Code = 0 Then
+    DrawObjects[ObjIndex].Color := IntVal
+   Else Begin
+    { Chercher par nom }
+    If Value = 'Rouge' Then DrawObjects[ObjIndex].Color := Red
+    Else If Value = 'Jaune' Then DrawObjects[ObjIndex].Color := Yellow
+    Else If Value = 'Vert' Then DrawObjects[ObjIndex].Color := Green
+    Else If Value = 'Cyan' Then DrawObjects[ObjIndex].Color := Cyan
+    Else If Value = 'Bleu' Then DrawObjects[ObjIndex].Color := Blue
+    Else If Value = 'Magenta' Then DrawObjects[ObjIndex].Color := Magenta
+    Else If Value = 'Blanc' Then DrawObjects[ObjIndex].Color := White
+    Else If Value = 'ByLayer' Then DrawObjects[ObjIndex].Color := 256
+    Else If Value = 'ByBlock' Then DrawObjects[ObjIndex].Color := 0;
+   End;
+  End;
+  
+  PROP_TYPE_LAYER: Begin
+   { Chercher le calque par nom }
+   For I := 0 to LayerCount - 1 do Begin
+    If Layers[I].Name = Value Then Begin
+     DrawObjects[ObjIndex].LayerIndex := I;
+     Break;
+    End;
+   End;
+  End;
+  
+  PROP_TYPE_LINETYPE: Begin
+   If Value = 'Continu' Then DrawObjects[ObjIndex].LineType := LINETYPE_CONTINUOUS
+   Else If Value = 'Tirets' Then DrawObjects[ObjIndex].LineType := LINETYPE_DASHED
+   Else If Value = 'Points' Then DrawObjects[ObjIndex].LineType := LINETYPE_DOTTED
+   Else If Value = 'Tiret-Point' Then DrawObjects[ObjIndex].LineType := LINETYPE_DASHDOT
+   Else If Value = 'Tiret-Pt-Pt' Then DrawObjects[ObjIndex].LineType := LINETYPE_DASHDOTDOT
+   Else If Value = 'Axe' Then DrawObjects[ObjIndex].LineType := LINETYPE_CENTER;
+  End;
+  
+  PROP_TYPE_X1: Begin
+   Val(Value, RealVal, Code);
+   If Code = 0 Then DrawObjects[ObjIndex].X1 := RealVal;
+  End;
+  
+  PROP_TYPE_Y1: Begin
+   Val(Value, RealVal, Code);
+   If Code = 0 Then DrawObjects[ObjIndex].Y1 := RealVal;
+  End;
+  
+  PROP_TYPE_X2: Begin
+   Val(Value, RealVal, Code);
+   If Code = 0 Then DrawObjects[ObjIndex].X2 := RealVal;
+  End;
+  
+  PROP_TYPE_Y2: Begin
+   Val(Value, RealVal, Code);
+   If Code = 0 Then DrawObjects[ObjIndex].Y2 := RealVal;
+  End;
+  
+  PROP_TYPE_RADIUS: Begin
+   Val(Value, RealVal, Code);
+   If Code = 0 Then DrawObjects[ObjIndex].Radius := Abs(RealVal);
+  End;
+ End;
+ 
+ { Mettre à jour les grips après modification }
+ UpdateGripsForSelection;
+End;
+
+{ Gérer le survol du panneau de propriétés }
+Procedure HandlePropertiesPanelHover(X, Y: Integer);
+Var
+ I: Integer;
+ RowY: Integer;
+ TitleHeight: Integer;
+ OldHovered: Integer;
+Begin
+ If Not PropertiesPanel.Visible Then Exit;
+ 
+ TitleHeight := 20;
+ OldHovered := PropertiesPanel.HoveredRow;
+ PropertiesPanel.HoveredRow := -1;
+ 
+ { Vérifier si le curseur est dans le panneau }
+ With PropertiesPanel do Begin
+  If (X >= Self.X) and (X <= Self.X + Width) and
+     (Y >= Self.Y + TitleHeight) and (Y <= Self.Y + Height) Then Begin
+   
+   RowY := Self.Y + TitleHeight + PROP_PANEL_MARGIN;
+   
+   For I := 0 to RowCount - 1 do Begin
+    If (Y >= RowY) and (Y < RowY + PROP_ROW_HEIGHT) Then Begin
+     HoveredRow := I;
+     Rows[I].Highlighted := True;
+     Break;
+    End;
+    RowY := RowY + PROP_ROW_HEIGHT;
+   End;
+  End;
+  
+  { Désactiver le highlight des autres lignes }
+  For I := 0 to RowCount - 1 do
+   If I <> HoveredRow Then Rows[I].Highlighted := False;
+ End;
+End;
+
+{ Commencer l'édition d'une propriété }
+Procedure StartPropertyEdit(RowIndex: Integer);
+Begin
+ If (RowIndex < 0) or (RowIndex >= PropertiesPanel.RowCount) Then Exit;
+ If Not PropertiesPanel.Rows[RowIndex].Editable Then Exit;
+ 
+ PropertiesPanel.SelectedRow := RowIndex;
+ PropertiesPanel.EditMode := True;
+ PropertiesPanel.EditBuffer := PropertiesPanel.Rows[RowIndex].Value;
+End;
+
+{ Terminer l'édition d'une propriété }
+Procedure FinishPropertyEdit;
+Var
+ I: Integer;
+ PropType: Byte;
+Begin
+ If Not PropertiesPanel.EditMode Then Exit;
+ If PropertiesPanel.SelectedRow < 0 Then Exit;
+ 
+ PropType := PropertiesPanel.Rows[PropertiesPanel.SelectedRow].PropType;
+ 
+ { Appliquer la modification à tous les objets sélectionnés }
+ For I := 0 to SelectionSet.Count - 1 do
+  SetPropertyValue(PropType, SelectionSet.Objects[I], PropertiesPanel.EditBuffer);
+ 
+ PropertiesPanel.EditMode := False;
+ PropertiesPanel.SelectedRow := -1;
+ PropertiesPanel.EditBuffer := '';
+ 
+ { Mettre à jour l'affichage }
+ UpdatePropertiesPanel;
+End;
+
+{ Annuler l'édition d'une propriété }
+Procedure CancelPropertyEdit;
+Begin
+ PropertiesPanel.EditMode := False;
+ PropertiesPanel.SelectedRow := -1;
+ PropertiesPanel.EditBuffer := '';
+End;
+
+{ Gérer le clic dans le panneau de propriétés }
+Function HandlePropertiesPanelClick(X, Y: Integer): Boolean;
+Var
+ TitleHeight: Integer;
+ I: Integer;
+ ObjIdx: Integer;
+ NewColor: Integer;
+ NewLineType: Byte;
+Begin
+ HandlePropertiesPanelClick := False;
+ If Not PropertiesPanel.Visible Then Exit;
+ 
+ TitleHeight := 20;
+ 
+ With PropertiesPanel do Begin
+  { Vérifier si le clic est dans le panneau }
+  If (X < Self.X) or (X > Self.X + Width) or
+     (Y < Self.Y) or (Y > Self.Y + Height) Then Exit;
+  
+  HandlePropertiesPanelClick := True;
+  
+  { Clic sur le bouton fermer }
+  If (X >= Self.X + Width - 20) and (Y >= Self.Y) and (Y <= Self.Y + TitleHeight) Then Begin
+   Visible := False;
+   Exit;
+  End;
+  
+  { Clic sur la barre de titre (drag) }
+  If (Y >= Self.Y) and (Y <= Self.Y + TitleHeight) Then Begin
+   Dragging := True;
+   DragOffsetX := X - Self.X;
+   DragOffsetY := Y - Self.Y;
+   Exit;
+  End;
+  
+  { Clic sur une ligne de propriété }
+  If HoveredRow >= 0 Then Begin
+   If Rows[HoveredRow].Editable Then Begin
+    { Gérer selon le type de propriété }
+    Case Rows[HoveredRow].PropType of
+     PROP_TYPE_COLOR: Begin
+      { Cycle des couleurs de base }
+      If SelectionSet.Count = 0 Then Begin
+       { Modifier la couleur courante }
+       CurrentColor := (CurrentColor + 1) Mod 8;
+       If CurrentColor = 0 Then CurrentColor := 1;
+      End Else Begin
+       { Modifier la couleur des objets sélectionnés }
+       For I := 0 to SelectionSet.Count - 1 do Begin
+        ObjIdx := SelectionSet.Objects[I];
+        NewColor := (DrawObjects[ObjIdx].Color + 1) Mod 8;
+        If NewColor = 0 Then NewColor := 1;
+        DrawObjects[ObjIdx].Color := NewColor;
+       End;
+      End;
+      UpdatePropertiesPanel;
+     End;
+     
+     PROP_TYPE_LINETYPE: Begin
+      { Cycle des types de ligne }
+      If SelectionSet.Count = 0 Then Begin
+       CurrentLineType := (CurrentLineType + 1) Mod 6;
+      End Else Begin
+       For I := 0 to SelectionSet.Count - 1 do Begin
+        ObjIdx := SelectionSet.Objects[I];
+        NewLineType := (DrawObjects[ObjIdx].LineType + 1) Mod 6;
+        DrawObjects[ObjIdx].LineType := NewLineType;
+       End;
+      End;
+      UpdatePropertiesPanel;
+     End;
+     
+     { Pour les autres propriétés, on pourrait activer un mode d'édition }
+    End;
+   End;
+  End;
+ End;
+End;
+
+{ Afficher/masquer le panneau de propriétés }
+Procedure TogglePropertiesPanel;
+Begin
+ PropertiesPanel.Visible := Not PropertiesPanel.Visible;
+ If PropertiesPanel.Visible Then
+  UpdatePropertiesPanel;
+End;
+
 { Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair, TODO 9: Sélection, TODO 10: Grips }
 Procedure DrawCanvas;
 Var
@@ -7309,6 +8177,10 @@ Begin
  { Si le menu contextuel est actif, le dessiner - TODO 6 }
  If ContextMenuActive Then
   DrawContextMenu;
+ 
+ { Panneau de propriétés - TODO 16 }
+ If PropertiesPanel.Visible Then
+  DrawPropertiesPanel;
 End;
 
 { Vérifier si un clic est dans la barre de menu }
@@ -7856,7 +8728,8 @@ Begin
    MouseMode := MOUSE_MODE_ZOOM;
   End;
   CONTEXT_PROPERTIES: Begin
-   { Ouvrir les propriétés }
+   { Ouvrir le panneau de propriétés - TODO 16 }
+   TogglePropertiesPanel;
   End;
   CONTEXT_OPTIONS: Begin
    { Ouvrir les options }
@@ -8114,6 +8987,9 @@ BEGIN
 
  { Initialiser la gestion de la souris - TODO 6 }
  InitMouseState;
+
+ { Initialiser le panneau de propriétés - TODO 16 }
+ InitPropertiesPanel;
 
  { Dessiner l'interface initiale }
  DrawInterface;

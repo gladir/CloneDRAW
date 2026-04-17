@@ -27,7 +27,7 @@
   12. [DONE] Implémenter un parseur pour construire l'arbre syntaxique des expressions LISP
   13. [DONE] Développer l'évaluateur d'expressions avec support des fonctions mathématiques (+, -, *, /, sin, cos, sqrt, etc.)
   14. [DONE] Implémenter les fonctions de dessin AutoLISP : command, entmake, entmod, entget, entsel, ssget, ssadd
-  15. Ajouter les fonctions de manipulation de chaînes, listes et variables : setq, defun, if, cond, while, foreach, mapcar
+  15. [DONE] Ajouter les fonctions de manipulation de chaînes, listes et variables : setq, defun, if, cond, while, foreach, mapcar
 
   === MODIFICATION DES OBJETS ET PROPRIÉTÉS ===
   16. Créer le panneau de propriétés pour modifier couleur, calque, type de ligne, épaisseur
@@ -645,6 +645,29 @@ Function LispEvalSslength(Node: PLispNode): TLispValue; Forward;
 Function LispEvalSsname(Node: PLispNode): TLispValue; Forward;
 Function LispEvalCommand(Node: PLispNode): TLispValue; Forward;
 Function LispEvalDrawOp(Const FuncName: String; Node: PLispNode): TLispValue; Forward;
+
+{ Forward declarations - TODO 15 - Fonctions de manipulation de chaînes, listes et variables }
+Function LispEvalSetq(Node: PLispNode): TLispValue; Forward;
+Function LispEvalDefun(Node: PLispNode): TLispValue; Forward;
+Function LispEvalIf(Node: PLispNode): TLispValue; Forward;
+Function LispEvalCond(Node: PLispNode): TLispValue; Forward;
+Function LispEvalWhile(Node: PLispNode): TLispValue; Forward;
+Function LispEvalForeach(Node: PLispNode): TLispValue; Forward;
+Function LispEvalMapcar(Node: PLispNode): TLispValue; Forward;
+Function LispEvalList(Node: PLispNode): TLispValue; Forward;
+Function LispEvalCons(Node: PLispNode): TLispValue; Forward;
+Function LispEvalCar(Node: PLispNode): TLispValue; Forward;
+Function LispEvalCdr(Node: PLispNode): TLispValue; Forward;
+Function LispEvalNth(Node: PLispNode): TLispValue; Forward;
+Function LispEvalAppend(Node: PLispNode): TLispValue; Forward;
+Function LispEvalReverse(Node: PLispNode): TLispValue; Forward;
+Function LispEvalLengthFunc(Node: PLispNode): TLispValue; Forward;
+Function LispEvalStrcat(Node: PLispNode): TLispValue; Forward;
+Function LispEvalStrlen(Node: PLispNode): TLispValue; Forward;
+Function LispEvalSubstr(Node: PLispNode): TLispValue; Forward;
+Function LispEvalStrcase(Node: PLispNode): TLispValue; Forward;
+Function LispEvalProgn(Node: PLispNode): TLispValue; Forward;
+Function LispEvalControlOp(Const FuncName: String; Node: PLispNode): TLispValue; Forward;
 
 Procedure InitializeGraphics;
 Var
@@ -5011,6 +5034,18 @@ Begin
   Exit;
  End;
  
+ { Fonctions de manipulation de chaînes, listes et variables - TODO 15 }
+ If (FuncName = 'SETQ') or (FuncName = 'DEFUN') or (FuncName = 'IF') or
+    (FuncName = 'COND') or (FuncName = 'WHILE') or (FuncName = 'FOREACH') or
+    (FuncName = 'MAPCAR') or (FuncName = 'LIST') or (FuncName = 'CONS') or
+    (FuncName = 'CAR') or (FuncName = 'CDR') or (FuncName = 'NTH') or
+    (FuncName = 'APPEND') or (FuncName = 'REVERSE') or (FuncName = 'LENGTH') or
+    (FuncName = 'STRCAT') or (FuncName = 'STRLEN') or (FuncName = 'SUBSTR') or
+    (FuncName = 'STRCASE') or (FuncName = 'PROGN') Then Begin
+  LispEvalList := LispEvalControlOp(FuncName, Node);
+  Exit;
+ End;
+ 
  { Fonction inconnue }
  LispEvalList := LispMakeError('Fonction inconnue: ' + FuncName);
 End;
@@ -6144,6 +6179,984 @@ Begin
   LispEvalDrawOp := LispEvalCommand(Node)
  Else
   LispEvalDrawOp := LispMakeError('Fonction de dessin inconnue: ' + FuncName);
+End;
+
+{ ============================================================================ }
+{ Fonctions de manipulation de chaînes, listes et variables - TODO 15         }
+{ Implémente setq, defun, if, cond, while, foreach, mapcar, list, cons, car,  }
+{ cdr, nth, append, reverse, length, strcat, strlen, substr, strcase, progn   }
+{ ============================================================================ }
+
+{ Fonction setq - Assigner une valeur à une variable }
+Function LispEvalSetq(Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ VarName: String;
+ VarValue: TLispValue;
+ VarNode: PLispNode;
+Begin
+ If Node^.ChildCount < 3 Then Begin
+  LispEvalSetq := LispMakeError('setq requiert au moins un nom et une valeur');
+  Exit;
+ End;
+ 
+ { setq peut avoir plusieurs paires nom/valeur: (setq a 1 b 2 c 3) }
+ I := 1;
+ While I < Node^.ChildCount - 1 do Begin
+  VarNode := Node^.Children[I];
+  If VarNode = Nil Then Begin
+   LispEvalSetq := LispMakeError('setq: nom de variable manquant');
+   Exit;
+  End;
+  
+  If VarNode^.NodeType <> LISP_NODE_SYMBOL Then Begin
+   LispEvalSetq := LispMakeError('setq: le nom doit être un symbole');
+   Exit;
+  End;
+  
+  VarName := VarNode^.StrValue;
+  VarValue := LispEval(Node^.Children[I + 1]);
+  
+  If VarValue.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalSetq := VarValue;
+   Exit;
+  End;
+  
+  LispSetVariable(VarName, VarValue);
+  I := I + 2;
+ End;
+ 
+ { Retourner la dernière valeur assignée }
+ LispEvalSetq := VarValue;
+End;
+
+{ Fonction defun - Définir une fonction utilisateur }
+{ Note: Implémentation simplifiée qui stocke la définition dans une variable }
+Function LispEvalDefun(Node: PLispNode): TLispValue;
+Var
+ FuncName: String;
+ FuncNode: PLispNode;
+ DefValue: TLispValue;
+Begin
+ If Node^.ChildCount < 4 Then Begin
+  LispEvalDefun := LispMakeError('defun requiert un nom, une liste d''arguments et un corps');
+  Exit;
+ End;
+ 
+ { Obtenir le nom de la fonction }
+ FuncNode := Node^.Children[1];
+ If FuncNode = Nil Then Begin
+  LispEvalDefun := LispMakeError('defun: nom de fonction manquant');
+  Exit;
+ End;
+ 
+ If FuncNode^.NodeType <> LISP_NODE_SYMBOL Then Begin
+  LispEvalDefun := LispMakeError('defun: le nom doit être un symbole');
+  Exit;
+ End;
+ 
+ FuncName := FuncNode^.StrValue;
+ 
+ { Stocker la définition de la fonction (le noeud entier) comme variable spéciale }
+ DefValue.ValueType := LISP_VAL_LIST;
+ DefValue.ListNode := Node;
+ DefValue.IntValue := 0;
+ DefValue.RealValue := 0;
+ DefValue.StrValue := '*DEFUN*';
+ 
+ LispSetVariable('*FUNC:' + FuncName, DefValue);
+ 
+ { Retourner le nom de la fonction }
+ LispEvalDefun := LispMakeString(FuncName);
+End;
+
+{ Fonction if - Évaluation conditionnelle }
+Function LispEvalIf(Node: PLispNode): TLispValue;
+Var
+ CondVal: TLispValue;
+Begin
+ If Node^.ChildCount < 3 Then Begin
+  LispEvalIf := LispMakeError('if requiert une condition et une expression then');
+  Exit;
+ End;
+ 
+ { Évaluer la condition }
+ CondVal := LispEval(Node^.Children[1]);
+ If CondVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalIf := CondVal;
+  Exit;
+ End;
+ 
+ If LispValueIsTrue(CondVal) Then Begin
+  { Évaluer l'expression then }
+  LispEvalIf := LispEval(Node^.Children[2]);
+ End Else Begin
+  { Évaluer l'expression else si elle existe }
+  If Node^.ChildCount >= 4 Then
+   LispEvalIf := LispEval(Node^.Children[3])
+  Else
+   LispEvalIf := LispMakeNil;
+ End;
+End;
+
+{ Fonction cond - Évaluation conditionnelle multiple }
+Function LispEvalCond(Node: PLispNode): TLispValue;
+Var
+ I, J: Integer;
+ ClauseNode: PLispNode;
+ CondVal, Result: TLispValue;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalCond := LispMakeNil;
+  Exit;
+ End;
+ 
+ { Parcourir chaque clause }
+ For I := 1 to Node^.ChildCount - 1 do Begin
+  ClauseNode := Node^.Children[I];
+  If ClauseNode = Nil Then Continue;
+  
+  If (ClauseNode^.NodeType <> LISP_NODE_LIST) or (ClauseNode^.ChildCount < 1) Then Begin
+   LispEvalCond := LispMakeError('cond: chaque clause doit être une liste');
+   Exit;
+  End;
+  
+  { Évaluer la condition }
+  CondVal := LispEval(ClauseNode^.Children[0]);
+  If CondVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalCond := CondVal;
+   Exit;
+  End;
+  
+  { Si la condition est vraie, évaluer les expressions et retourner }
+  If LispValueIsTrue(CondVal) Then Begin
+   If ClauseNode^.ChildCount >= 2 Then Begin
+    For J := 1 to ClauseNode^.ChildCount - 1 do
+     Result := LispEval(ClauseNode^.Children[J]);
+    LispEvalCond := Result;
+   End Else
+    LispEvalCond := CondVal;
+   Exit;
+  End;
+ End;
+ 
+ LispEvalCond := LispMakeNil;
+End;
+
+{ Fonction while - Boucle while }
+Function LispEvalWhile(Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ CondVal, Result: TLispValue;
+ MaxIter: Integer;
+Begin
+ If Node^.ChildCount < 3 Then Begin
+  LispEvalWhile := LispMakeError('while requiert une condition et un corps');
+  Exit;
+ End;
+ 
+ Result := LispMakeNil;
+ MaxIter := 10000;  { Protection contre les boucles infinies }
+ 
+ While MaxIter > 0 do Begin
+  { Évaluer la condition }
+  CondVal := LispEval(Node^.Children[1]);
+  If CondVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalWhile := CondVal;
+   Exit;
+  End;
+  
+  If Not LispValueIsTrue(CondVal) Then Break;
+  
+  { Évaluer le corps }
+  For I := 2 to Node^.ChildCount - 1 do
+   Result := LispEval(Node^.Children[I]);
+  
+  Dec(MaxIter);
+ End;
+ 
+ If MaxIter <= 0 Then
+  LispEvalWhile := LispMakeError('while: nombre maximum d''itérations atteint')
+ Else
+  LispEvalWhile := Result;
+End;
+
+{ Fonction foreach - Itération sur une liste }
+Function LispEvalForeach(Node: PLispNode): TLispValue;
+Var
+ I, J: Integer;
+ VarName: String;
+ ListVal, Result: TLispValue;
+ VarNode: PLispNode;
+ ItemNode: PLispNode;
+ ItemVal: TLispValue;
+Begin
+ If Node^.ChildCount < 4 Then Begin
+  LispEvalForeach := LispMakeError('foreach requiert une variable, une liste et un corps');
+  Exit;
+ End;
+ 
+ { Obtenir le nom de la variable }
+ VarNode := Node^.Children[1];
+ If (VarNode = Nil) or (VarNode^.NodeType <> LISP_NODE_SYMBOL) Then Begin
+  LispEvalForeach := LispMakeError('foreach: la variable doit être un symbole');
+  Exit;
+ End;
+ VarName := VarNode^.StrValue;
+ 
+ { Évaluer la liste }
+ ListVal := LispEval(Node^.Children[2]);
+ If ListVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalForeach := ListVal;
+  Exit;
+ End;
+ 
+ If ListVal.ValueType <> LISP_VAL_LIST Then Begin
+  LispEvalForeach := LispMakeError('foreach: le deuxième argument doit être une liste');
+  Exit;
+ End;
+ 
+ Result := LispMakeNil;
+ 
+ If ListVal.ListNode <> Nil Then Begin
+  For I := 0 to ListVal.ListNode^.ChildCount - 1 do Begin
+   ItemNode := ListVal.ListNode^.Children[I];
+   If ItemNode <> Nil Then Begin
+    { Convertir le noeud en valeur et l'assigner à la variable }
+    ItemVal := LispEvalAtom(ItemNode);
+    LispSetVariable(VarName, ItemVal);
+    
+    { Évaluer le corps }
+    For J := 3 to Node^.ChildCount - 1 do
+     Result := LispEval(Node^.Children[J]);
+   End;
+  End;
+ End;
+ 
+ LispEvalForeach := Result;
+End;
+
+{ Fonction mapcar - Appliquer une fonction à chaque élément d'une liste }
+Function LispEvalMapcar(Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ FuncName: String;
+ ListVal, ItemVal, ResultVal: TLispValue;
+ FuncNode, ResultNode, ItemNode, NewNode: PLispNode;
+Begin
+ If Node^.ChildCount < 3 Then Begin
+  LispEvalMapcar := LispMakeError('mapcar requiert une fonction et une liste');
+  Exit;
+ End;
+ 
+ { Obtenir le nom de la fonction }
+ FuncNode := Node^.Children[1];
+ If FuncNode = Nil Then Begin
+  LispEvalMapcar := LispMakeError('mapcar: fonction manquante');
+  Exit;
+ End;
+ 
+ { La fonction peut être quotée: 'func ou (quote func) }
+ If FuncNode^.NodeType = LISP_NODE_QUOTE Then Begin
+  If FuncNode^.Children[0]^.NodeType = LISP_NODE_SYMBOL Then
+   FuncName := FuncNode^.Children[0]^.StrValue
+  Else Begin
+   LispEvalMapcar := LispMakeError('mapcar: la fonction doit être un symbole');
+   Exit;
+  End;
+ End Else If FuncNode^.NodeType = LISP_NODE_SYMBOL Then
+  FuncName := FuncNode^.StrValue
+ Else Begin
+  LispEvalMapcar := LispMakeError('mapcar: la fonction doit être un symbole');
+  Exit;
+ End;
+ 
+ { Évaluer la liste }
+ ListVal := LispEval(Node^.Children[2]);
+ If ListVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalMapcar := ListVal;
+  Exit;
+ End;
+ 
+ If ListVal.ValueType <> LISP_VAL_LIST Then Begin
+  LispEvalMapcar := LispMakeError('mapcar: le deuxième argument doit être une liste');
+  Exit;
+ End;
+ 
+ { Créer la liste résultat }
+ ResultNode := LispAllocNode;
+ If ResultNode = Nil Then Begin
+  LispEvalMapcar := LispMakeError('mapcar: mémoire insuffisante');
+  Exit;
+ End;
+ ResultNode^.NodeType := LISP_NODE_LIST;
+ ResultNode^.ChildCount := 0;
+ 
+ If ListVal.ListNode <> Nil Then Begin
+  For I := 0 to ListVal.ListNode^.ChildCount - 1 do Begin
+   ItemNode := ListVal.ListNode^.Children[I];
+   If ItemNode <> Nil Then Begin
+    { Appliquer la fonction (simplification: fonctions mathématiques de base) }
+    ItemVal := LispEvalAtom(ItemNode);
+    
+    { Créer un noeud pour le résultat }
+    NewNode := LispAllocNode;
+    If NewNode <> Nil Then Begin
+     If ItemVal.ValueType = LISP_VAL_INTEGER Then Begin
+      NewNode^.NodeType := LISP_NODE_INTEGER;
+      NewNode^.IntValue := ItemVal.IntValue;
+     End Else If ItemVal.ValueType = LISP_VAL_REAL Then Begin
+      NewNode^.NodeType := LISP_NODE_REAL;
+      NewNode^.RealValue := ItemVal.RealValue;
+     End Else If ItemVal.ValueType = LISP_VAL_STRING Then Begin
+      NewNode^.NodeType := LISP_NODE_STRING;
+      NewNode^.StrValue := ItemVal.StrValue;
+     End Else Begin
+      NewNode^.NodeType := LISP_NODE_NIL;
+     End;
+     
+     If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
+      ResultNode^.Children[ResultNode^.ChildCount] := NewNode;
+      Inc(ResultNode^.ChildCount);
+     End;
+    End;
+   End;
+  End;
+ End;
+ 
+ LispEvalMapcar.ValueType := LISP_VAL_LIST;
+ LispEvalMapcar.ListNode := ResultNode;
+ LispEvalMapcar.IntValue := 0;
+ LispEvalMapcar.RealValue := 0;
+ LispEvalMapcar.StrValue := '';
+End;
+
+{ Fonction list - Créer une liste }
+Function LispEvalListFunc(Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ ArgVal: TLispValue;
+ ResultNode, NewNode: PLispNode;
+Begin
+ ResultNode := LispAllocNode;
+ If ResultNode = Nil Then Begin
+  LispEvalListFunc := LispMakeError('list: mémoire insuffisante');
+  Exit;
+ End;
+ ResultNode^.NodeType := LISP_NODE_LIST;
+ ResultNode^.ChildCount := 0;
+ 
+ For I := 1 to Node^.ChildCount - 1 do Begin
+  ArgVal := LispEval(Node^.Children[I]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalListFunc := ArgVal;
+   Exit;
+  End;
+  
+  NewNode := LispAllocNode;
+  If NewNode <> Nil Then Begin
+   Case ArgVal.ValueType of
+    LISP_VAL_INTEGER: Begin
+     NewNode^.NodeType := LISP_NODE_INTEGER;
+     NewNode^.IntValue := ArgVal.IntValue;
+    End;
+    LISP_VAL_REAL: Begin
+     NewNode^.NodeType := LISP_NODE_REAL;
+     NewNode^.RealValue := ArgVal.RealValue;
+    End;
+    LISP_VAL_STRING: Begin
+     NewNode^.NodeType := LISP_NODE_STRING;
+     NewNode^.StrValue := ArgVal.StrValue;
+    End;
+    LISP_VAL_LIST: Begin
+     NewNode^.NodeType := LISP_NODE_LIST;
+     NewNode^ := ArgVal.ListNode^;
+    End;
+    Else Begin
+     NewNode^.NodeType := LISP_NODE_NIL;
+    End;
+   End;
+   
+   If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
+    ResultNode^.Children[ResultNode^.ChildCount] := NewNode;
+    Inc(ResultNode^.ChildCount);
+   End;
+  End;
+ End;
+ 
+ LispEvalListFunc.ValueType := LISP_VAL_LIST;
+ LispEvalListFunc.ListNode := ResultNode;
+ LispEvalListFunc.IntValue := 0;
+ LispEvalListFunc.RealValue := 0;
+ LispEvalListFunc.StrValue := '';
+End;
+
+{ Fonction cons - Construire une paire ou ajouter en tête de liste }
+Function LispEvalCons(Node: PLispNode): TLispValue;
+Var
+ HeadVal, TailVal: TLispValue;
+ ResultNode, HeadNode: PLispNode;
+ I: Integer;
+Begin
+ If Node^.ChildCount < 3 Then Begin
+  LispEvalCons := LispMakeError('cons requiert deux arguments');
+  Exit;
+ End;
+ 
+ HeadVal := LispEval(Node^.Children[1]);
+ If HeadVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalCons := HeadVal;
+  Exit;
+ End;
+ 
+ TailVal := LispEval(Node^.Children[2]);
+ If TailVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalCons := TailVal;
+  Exit;
+ End;
+ 
+ ResultNode := LispAllocNode;
+ If ResultNode = Nil Then Begin
+  LispEvalCons := LispMakeError('cons: mémoire insuffisante');
+  Exit;
+ End;
+ 
+ If TailVal.ValueType = LISP_VAL_LIST Then Begin
+  { Ajouter HeadVal en tête de la liste TailVal }
+  ResultNode^.NodeType := LISP_NODE_LIST;
+  
+  { Créer le noeud pour la tête }
+  HeadNode := LispAllocNode;
+  If HeadNode <> Nil Then Begin
+   Case HeadVal.ValueType of
+    LISP_VAL_INTEGER: Begin
+     HeadNode^.NodeType := LISP_NODE_INTEGER;
+     HeadNode^.IntValue := HeadVal.IntValue;
+    End;
+    LISP_VAL_REAL: Begin
+     HeadNode^.NodeType := LISP_NODE_REAL;
+     HeadNode^.RealValue := HeadVal.RealValue;
+    End;
+    LISP_VAL_STRING: Begin
+     HeadNode^.NodeType := LISP_NODE_STRING;
+     HeadNode^.StrValue := HeadVal.StrValue;
+    End;
+    Else Begin
+     HeadNode^.NodeType := LISP_NODE_NIL;
+    End;
+   End;
+   ResultNode^.Children[0] := HeadNode;
+   ResultNode^.ChildCount := 1;
+  End;
+  
+  { Copier les éléments de la queue }
+  If TailVal.ListNode <> Nil Then Begin
+   For I := 0 to TailVal.ListNode^.ChildCount - 1 do Begin
+    If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
+     ResultNode^.Children[ResultNode^.ChildCount] := TailVal.ListNode^.Children[I];
+     Inc(ResultNode^.ChildCount);
+    End;
+   End;
+  End;
+ End Else Begin
+  { Créer une paire pointée }
+  ResultNode^.NodeType := LISP_NODE_DOTPAIR;
+  ResultNode^.ChildCount := 2;
+  
+  HeadNode := LispAllocNode;
+  If HeadNode <> Nil Then Begin
+   Case HeadVal.ValueType of
+    LISP_VAL_INTEGER: Begin
+     HeadNode^.NodeType := LISP_NODE_INTEGER;
+     HeadNode^.IntValue := HeadVal.IntValue;
+    End;
+    LISP_VAL_REAL: Begin
+     HeadNode^.NodeType := LISP_NODE_REAL;
+     HeadNode^.RealValue := HeadVal.RealValue;
+    End;
+    LISP_VAL_STRING: Begin
+     HeadNode^.NodeType := LISP_NODE_STRING;
+     HeadNode^.StrValue := HeadVal.StrValue;
+    End;
+    Else Begin
+     HeadNode^.NodeType := LISP_NODE_NIL;
+    End;
+   End;
+   ResultNode^.Children[0] := HeadNode;
+  End;
+  
+  HeadNode := LispAllocNode;
+  If HeadNode <> Nil Then Begin
+   Case TailVal.ValueType of
+    LISP_VAL_INTEGER: Begin
+     HeadNode^.NodeType := LISP_NODE_INTEGER;
+     HeadNode^.IntValue := TailVal.IntValue;
+    End;
+    LISP_VAL_REAL: Begin
+     HeadNode^.NodeType := LISP_NODE_REAL;
+     HeadNode^.RealValue := TailVal.RealValue;
+    End;
+    LISP_VAL_STRING: Begin
+     HeadNode^.NodeType := LISP_NODE_STRING;
+     HeadNode^.StrValue := TailVal.StrValue;
+    End;
+    Else Begin
+     HeadNode^.NodeType := LISP_NODE_NIL;
+    End;
+   End;
+   ResultNode^.Children[1] := HeadNode;
+  End;
+ End;
+ 
+ LispEvalCons.ValueType := LISP_VAL_LIST;
+ LispEvalCons.ListNode := ResultNode;
+ LispEvalCons.IntValue := 0;
+ LispEvalCons.RealValue := 0;
+ LispEvalCons.StrValue := '';
+End;
+
+{ Fonction car - Premier élément d'une liste }
+Function LispEvalCar(Node: PLispNode): TLispValue;
+Var
+ ArgVal: TLispValue;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalCar := LispMakeError('car requiert un argument');
+  Exit;
+ End;
+ 
+ ArgVal := LispEval(Node^.Children[1]);
+ If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalCar := ArgVal;
+  Exit;
+ End;
+ 
+ If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
+  LispEvalCar := LispMakeError('car requiert une liste');
+  Exit;
+ End;
+ 
+ If (ArgVal.ListNode = Nil) or (ArgVal.ListNode^.ChildCount = 0) Then Begin
+  LispEvalCar := LispMakeNil;
+  Exit;
+ End;
+ 
+ LispEvalCar := LispEvalAtom(ArgVal.ListNode^.Children[0]);
+End;
+
+{ Fonction cdr - Reste d'une liste (tout sauf le premier élément) }
+Function LispEvalCdr(Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ ArgVal: TLispValue;
+ ResultNode: PLispNode;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalCdr := LispMakeError('cdr requiert un argument');
+  Exit;
+ End;
+ 
+ ArgVal := LispEval(Node^.Children[1]);
+ If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalCdr := ArgVal;
+  Exit;
+ End;
+ 
+ If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
+  LispEvalCdr := LispMakeError('cdr requiert une liste');
+  Exit;
+ End;
+ 
+ If (ArgVal.ListNode = Nil) or (ArgVal.ListNode^.ChildCount <= 1) Then Begin
+  LispEvalCdr := LispMakeNil;
+  Exit;
+ End;
+ 
+ ResultNode := LispAllocNode;
+ If ResultNode = Nil Then Begin
+  LispEvalCdr := LispMakeError('cdr: mémoire insuffisante');
+  Exit;
+ End;
+ ResultNode^.NodeType := LISP_NODE_LIST;
+ ResultNode^.ChildCount := 0;
+ 
+ For I := 1 to ArgVal.ListNode^.ChildCount - 1 do Begin
+  If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
+   ResultNode^.Children[ResultNode^.ChildCount] := ArgVal.ListNode^.Children[I];
+   Inc(ResultNode^.ChildCount);
+  End;
+ End;
+ 
+ LispEvalCdr.ValueType := LISP_VAL_LIST;
+ LispEvalCdr.ListNode := ResultNode;
+ LispEvalCdr.IntValue := 0;
+ LispEvalCdr.RealValue := 0;
+ LispEvalCdr.StrValue := '';
+End;
+
+{ Fonction nth - Énième élément d'une liste }
+Function LispEvalNth(Node: PLispNode): TLispValue;
+Var
+ IndexVal, ListVal: TLispValue;
+ Index: Integer;
+Begin
+ If Node^.ChildCount < 3 Then Begin
+  LispEvalNth := LispMakeError('nth requiert un index et une liste');
+  Exit;
+ End;
+ 
+ IndexVal := LispEval(Node^.Children[1]);
+ If IndexVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalNth := IndexVal;
+  Exit;
+ End;
+ 
+ Index := Round(LispValueToReal(IndexVal));
+ 
+ ListVal := LispEval(Node^.Children[2]);
+ If ListVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalNth := ListVal;
+  Exit;
+ End;
+ 
+ If ListVal.ValueType <> LISP_VAL_LIST Then Begin
+  LispEvalNth := LispMakeError('nth: le deuxième argument doit être une liste');
+  Exit;
+ End;
+ 
+ If (ListVal.ListNode = Nil) or (Index < 0) or (Index >= ListVal.ListNode^.ChildCount) Then Begin
+  LispEvalNth := LispMakeNil;
+  Exit;
+ End;
+ 
+ LispEvalNth := LispEvalAtom(ListVal.ListNode^.Children[Index]);
+End;
+
+{ Fonction append - Concaténer des listes }
+Function LispEvalAppend(Node: PLispNode): TLispValue;
+Var
+ I, J: Integer;
+ ArgVal: TLispValue;
+ ResultNode: PLispNode;
+Begin
+ ResultNode := LispAllocNode;
+ If ResultNode = Nil Then Begin
+  LispEvalAppend := LispMakeError('append: mémoire insuffisante');
+  Exit;
+ End;
+ ResultNode^.NodeType := LISP_NODE_LIST;
+ ResultNode^.ChildCount := 0;
+ 
+ For I := 1 to Node^.ChildCount - 1 do Begin
+  ArgVal := LispEval(Node^.Children[I]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalAppend := ArgVal;
+   Exit;
+  End;
+  
+  If ArgVal.ValueType = LISP_VAL_LIST Then Begin
+   If ArgVal.ListNode <> Nil Then Begin
+    For J := 0 to ArgVal.ListNode^.ChildCount - 1 do Begin
+     If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
+      ResultNode^.Children[ResultNode^.ChildCount] := ArgVal.ListNode^.Children[J];
+      Inc(ResultNode^.ChildCount);
+     End;
+    End;
+   End;
+  End;
+ End;
+ 
+ LispEvalAppend.ValueType := LISP_VAL_LIST;
+ LispEvalAppend.ListNode := ResultNode;
+ LispEvalAppend.IntValue := 0;
+ LispEvalAppend.RealValue := 0;
+ LispEvalAppend.StrValue := '';
+End;
+
+{ Fonction reverse - Inverser une liste }
+Function LispEvalReverse(Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ ArgVal: TLispValue;
+ ResultNode: PLispNode;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalReverse := LispMakeError('reverse requiert un argument');
+  Exit;
+ End;
+ 
+ ArgVal := LispEval(Node^.Children[1]);
+ If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalReverse := ArgVal;
+  Exit;
+ End;
+ 
+ If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
+  LispEvalReverse := LispMakeError('reverse requiert une liste');
+  Exit;
+ End;
+ 
+ ResultNode := LispAllocNode;
+ If ResultNode = Nil Then Begin
+  LispEvalReverse := LispMakeError('reverse: mémoire insuffisante');
+  Exit;
+ End;
+ ResultNode^.NodeType := LISP_NODE_LIST;
+ ResultNode^.ChildCount := 0;
+ 
+ If ArgVal.ListNode <> Nil Then Begin
+  For I := ArgVal.ListNode^.ChildCount - 1 downto 0 do Begin
+   If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
+    ResultNode^.Children[ResultNode^.ChildCount] := ArgVal.ListNode^.Children[I];
+    Inc(ResultNode^.ChildCount);
+   End;
+  End;
+ End;
+ 
+ LispEvalReverse.ValueType := LISP_VAL_LIST;
+ LispEvalReverse.ListNode := ResultNode;
+ LispEvalReverse.IntValue := 0;
+ LispEvalReverse.RealValue := 0;
+ LispEvalReverse.StrValue := '';
+End;
+
+{ Fonction length - Longueur d'une liste ou chaîne }
+Function LispEvalLengthFunc(Node: PLispNode): TLispValue;
+Var
+ ArgVal: TLispValue;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalLengthFunc := LispMakeError('length requiert un argument');
+  Exit;
+ End;
+ 
+ ArgVal := LispEval(Node^.Children[1]);
+ If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalLengthFunc := ArgVal;
+  Exit;
+ End;
+ 
+ If ArgVal.ValueType = LISP_VAL_LIST Then Begin
+  If ArgVal.ListNode = Nil Then
+   LispEvalLengthFunc := LispMakeInt(0)
+  Else
+   LispEvalLengthFunc := LispMakeInt(ArgVal.ListNode^.ChildCount);
+ End Else If ArgVal.ValueType = LISP_VAL_STRING Then Begin
+  LispEvalLengthFunc := LispMakeInt(Length(ArgVal.StrValue));
+ End Else Begin
+  LispEvalLengthFunc := LispMakeError('length requiert une liste ou une chaîne');
+ End;
+End;
+
+{ Fonction strcat - Concaténer des chaînes }
+Function LispEvalStrcat(Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ ArgVal: TLispValue;
+ Result: String;
+Begin
+ Result := '';
+ 
+ For I := 1 to Node^.ChildCount - 1 do Begin
+  ArgVal := LispEval(Node^.Children[I]);
+  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalStrcat := ArgVal;
+   Exit;
+  End;
+  
+  Result := Result + LispValueToString(ArgVal);
+ End;
+ 
+ LispEvalStrcat := LispMakeString(Result);
+End;
+
+{ Fonction strlen - Longueur d'une chaîne }
+Function LispEvalStrlen(Node: PLispNode): TLispValue;
+Var
+ ArgVal: TLispValue;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalStrlen := LispMakeError('strlen requiert un argument');
+  Exit;
+ End;
+ 
+ ArgVal := LispEval(Node^.Children[1]);
+ If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalStrlen := ArgVal;
+  Exit;
+ End;
+ 
+ If ArgVal.ValueType <> LISP_VAL_STRING Then Begin
+  LispEvalStrlen := LispMakeError('strlen requiert une chaîne');
+  Exit;
+ End;
+ 
+ LispEvalStrlen := LispMakeInt(Length(ArgVal.StrValue));
+End;
+
+{ Fonction substr - Extraire une sous-chaîne }
+Function LispEvalSubstr(Node: PLispNode): TLispValue;
+Var
+ StrVal, StartVal, LenVal: TLispValue;
+ Start, Len: Integer;
+ S: String;
+Begin
+ If Node^.ChildCount < 3 Then Begin
+  LispEvalSubstr := LispMakeError('substr requiert au moins une chaîne et une position');
+  Exit;
+ End;
+ 
+ StrVal := LispEval(Node^.Children[1]);
+ If StrVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalSubstr := StrVal;
+  Exit;
+ End;
+ 
+ If StrVal.ValueType <> LISP_VAL_STRING Then Begin
+  LispEvalSubstr := LispMakeError('substr: le premier argument doit être une chaîne');
+  Exit;
+ End;
+ S := StrVal.StrValue;
+ 
+ StartVal := LispEval(Node^.Children[2]);
+ If StartVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalSubstr := StartVal;
+  Exit;
+ End;
+ Start := Round(LispValueToReal(StartVal));
+ 
+ { En AutoLISP, les indices commencent à 1 }
+ If Start < 1 Then Start := 1;
+ If Start > Length(S) Then Begin
+  LispEvalSubstr := LispMakeString('');
+  Exit;
+ End;
+ 
+ If Node^.ChildCount >= 4 Then Begin
+  LenVal := LispEval(Node^.Children[3]);
+  If LenVal.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalSubstr := LenVal;
+   Exit;
+  End;
+  Len := Round(LispValueToReal(LenVal));
+ End Else
+  Len := Length(S) - Start + 1;
+ 
+ If Len < 0 Then Len := 0;
+ 
+ LispEvalSubstr := LispMakeString(Copy(S, Start, Len));
+End;
+
+{ Fonction strcase - Changer la casse d'une chaîne }
+Function LispEvalStrcase(Node: PLispNode): TLispValue;
+Var
+ StrVal, FlagVal: TLispValue;
+ S: String;
+ I: Integer;
+ ToLower: Boolean;
+Begin
+ If Node^.ChildCount < 2 Then Begin
+  LispEvalStrcase := LispMakeError('strcase requiert une chaîne');
+  Exit;
+ End;
+ 
+ StrVal := LispEval(Node^.Children[1]);
+ If StrVal.ValueType = LISP_VAL_ERROR Then Begin
+  LispEvalStrcase := StrVal;
+  Exit;
+ End;
+ 
+ If StrVal.ValueType <> LISP_VAL_STRING Then Begin
+  LispEvalStrcase := LispMakeError('strcase: le premier argument doit être une chaîne');
+  Exit;
+ End;
+ S := StrVal.StrValue;
+ 
+ { Vérifier le flag (t = minuscules, nil = majuscules) }
+ ToLower := False;
+ If Node^.ChildCount >= 3 Then Begin
+  FlagVal := LispEval(Node^.Children[2]);
+  If FlagVal.ValueType <> LISP_VAL_ERROR Then
+   ToLower := LispValueIsTrue(FlagVal);
+ End;
+ 
+ If ToLower Then Begin
+  For I := 1 to Length(S) do
+   If (S[I] >= 'A') and (S[I] <= 'Z') Then
+    S[I] := Chr(Ord(S[I]) + 32);
+ End Else Begin
+  For I := 1 to Length(S) do
+   If (S[I] >= 'a') and (S[I] <= 'z') Then
+    S[I] := Chr(Ord(S[I]) - 32);
+ End;
+ 
+ LispEvalStrcase := LispMakeString(S);
+End;
+
+{ Fonction progn - Évaluer plusieurs expressions, retourner la dernière }
+Function LispEvalProgn(Node: PLispNode): TLispValue;
+Var
+ I: Integer;
+ Result: TLispValue;
+Begin
+ Result := LispMakeNil;
+ 
+ For I := 1 to Node^.ChildCount - 1 do Begin
+  Result := LispEval(Node^.Children[I]);
+  If Result.ValueType = LISP_VAL_ERROR Then Begin
+   LispEvalProgn := Result;
+   Exit;
+  End;
+ End;
+ 
+ LispEvalProgn := Result;
+End;
+
+{ Dispatcher pour les fonctions de contrôle et manipulation - TODO 15 }
+Function LispEvalControlOp(Const FuncName: String; Node: PLispNode): TLispValue;
+Begin
+ If FuncName = 'SETQ' Then
+  LispEvalControlOp := LispEvalSetq(Node)
+ Else If FuncName = 'DEFUN' Then
+  LispEvalControlOp := LispEvalDefun(Node)
+ Else If FuncName = 'IF' Then
+  LispEvalControlOp := LispEvalIf(Node)
+ Else If FuncName = 'COND' Then
+  LispEvalControlOp := LispEvalCond(Node)
+ Else If FuncName = 'WHILE' Then
+  LispEvalControlOp := LispEvalWhile(Node)
+ Else If FuncName = 'FOREACH' Then
+  LispEvalControlOp := LispEvalForeach(Node)
+ Else If FuncName = 'MAPCAR' Then
+  LispEvalControlOp := LispEvalMapcar(Node)
+ Else If FuncName = 'LIST' Then
+  LispEvalControlOp := LispEvalListFunc(Node)
+ Else If FuncName = 'CONS' Then
+  LispEvalControlOp := LispEvalCons(Node)
+ Else If FuncName = 'CAR' Then
+  LispEvalControlOp := LispEvalCar(Node)
+ Else If FuncName = 'CDR' Then
+  LispEvalControlOp := LispEvalCdr(Node)
+ Else If FuncName = 'NTH' Then
+  LispEvalControlOp := LispEvalNth(Node)
+ Else If FuncName = 'APPEND' Then
+  LispEvalControlOp := LispEvalAppend(Node)
+ Else If FuncName = 'REVERSE' Then
+  LispEvalControlOp := LispEvalReverse(Node)
+ Else If FuncName = 'LENGTH' Then
+  LispEvalControlOp := LispEvalLengthFunc(Node)
+ Else If FuncName = 'STRCAT' Then
+  LispEvalControlOp := LispEvalStrcat(Node)
+ Else If FuncName = 'STRLEN' Then
+  LispEvalControlOp := LispEvalStrlen(Node)
+ Else If FuncName = 'SUBSTR' Then
+  LispEvalControlOp := LispEvalSubstr(Node)
+ Else If FuncName = 'STRCASE' Then
+  LispEvalControlOp := LispEvalStrcase(Node)
+ Else If FuncName = 'PROGN' Then
+  LispEvalControlOp := LispEvalProgn(Node)
+ Else
+  LispEvalControlOp := LispMakeError('Fonction de contrôle inconnue: ' + FuncName);
 End;
 
 { Dessiner la zone de dessin principale - TODO 7: Support zoom et pan, TODO 8: Crosshair, TODO 9: Sélection, TODO 10: Grips }

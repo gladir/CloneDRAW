@@ -540,11 +540,13 @@ Begin
  Menus[MENU_DIMENSION].Items[13].Shortcut := 'LE';
  Menus[MENU_DIMENSION].Items[13].Enabled := True;
 
- { Menu Modify }
+ { Menu Modify - TODO 3                                                       }
+ { Contient: Erase, Copy, Mirror, Offset, Array, Move, Rotate, Scale,         }
+ { Stretch, Trim, Extend, Break, Chamfer, Fillet, Explode                      }
  Menus[MENU_MODIFY].Title := 'Modify';
  Menus[MENU_MODIFY].X := 350;
  Menus[MENU_MODIFY].Width := 150;
- Menus[MENU_MODIFY].ItemCount := 18;
+ Menus[MENU_MODIFY].ItemCount := 19;
  Menus[MENU_MODIFY].Items[0].Caption := 'Properties';
  Menus[MENU_MODIFY].Items[0].Shortcut := 'PR';
  Menus[MENU_MODIFY].Items[0].Enabled := True;
@@ -595,6 +597,9 @@ Begin
  Menus[MENU_MODIFY].Items[17].Caption := 'Fillet';
  Menus[MENU_MODIFY].Items[17].Shortcut := 'F';
  Menus[MENU_MODIFY].Items[17].Enabled := True;
+ Menus[MENU_MODIFY].Items[18].Caption := 'Explode';
+ Menus[MENU_MODIFY].Items[18].Shortcut := 'X';
+ Menus[MENU_MODIFY].Items[18].Enabled := True;
 
  { Menu Window }
  Menus[MENU_WINDOW].Title := 'Window';

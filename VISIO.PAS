@@ -29,7 +29,7 @@
   14. [FAIT] Implementer les connecteurs entre objets avec points d'ancrage automatiques
   15. [FAIT] Permettre la modification des proprietes des objets: couleur de remplissage, couleur de trait, epaisseur de ligne, style de ligne
   16. [FAIT] Ajouter le support des calques (layers) avec visibilite et verrouillage
-  17. Implementer la gestion des groupes d'objets (grouper, degrouper, entrer dans le groupe)
+  17. [FAIT] Implementer la gestion des groupes d'objets (grouper, degrouper, entrer dans le groupe)
 
   === FORMAT DE FICHIER VISIO ===
   18. Parser et lire les fichiers Visio VSD/VSDX (format binaire OLE et format XML compresse)
@@ -200,6 +200,7 @@ Type
   LineWidth: Integer;        { Épaisseur de ligne }
   LineStyle: Integer;        { Style de ligne (LINESTYLE_*) }
   LayerIndex: Integer;       { Index du calque auquel appartient l'objet }
+  GroupID: Integer;          { ID du groupe (0 = pas dans un groupe) }
   Text: String[80];          { Texte (pour objets texte) }
   Selected: Boolean;         { Objet sélectionné }
   { Champs pour les polygones et courbes de Bézier }
@@ -758,6 +759,9 @@ Var
  CurrentTextSize: Integer;
  CurrentAlignment: TAlignmentType;
  ObjectsGrouped: Boolean;
+ { Variables pour la gestion des groupes }
+ NextGroupID: Integer;        { Prochain ID de groupe à attribuer }
+ EditingGroupID: Integer;     { ID du groupe en cours d'édition (0 = aucun) }
  { Variables pour la boîte de dialogue des propriétés }
  PropertiesDialogVisible: Boolean;
  PropDialogX, PropDialogY: Integer;
@@ -1417,12 +1421,36 @@ Begin
  End;
 End;
 
+{ Fonction pour compter le nombre d'objets sélectionnés }
+Function CountSelectedShapes: Integer;
+Var
+ I, Count: Integer;
+Begin
+ Count := 0;
+ For I := 1 to ShapeCount do Begin
+  If Shapes[I].Selected Then
+   Count := Count + 1;
+ End;
+ CountSelectedShapes := Count;
+End;
+
 { Procédure FormatGroup - Grouper les objets sélectionnés }
 Procedure FormatGroup;
+Var
+ I: Integer;
+ SelectedCount: Integer;
 Begin
- If HasSelection Then Begin
-  { TODO: Créer un groupe avec les objets sélectionnés }
-  { TODO: Le groupe devient un seul objet sélectionnable }
+ SelectedCount := CountSelectedShapes;
+ { On a besoin d'au moins 2 objets pour créer un groupe }
+ If SelectedCount >= 2 Then Begin
+  { Incrémenter le compteur de groupe pour obtenir un nouvel ID }
+  NextGroupID := NextGroupID + 1;
+  { Assigner le même GroupID à tous les objets sélectionnés }
+  For I := 1 to ShapeCount do Begin
+   If Shapes[I].Selected Then Begin
+    Shapes[I].GroupID := NextGroupID;
+   End;
+  End;
   ObjectsGrouped := True;
   DocumentModified := True;
  End;
@@ -1430,12 +1458,113 @@ End;
 
 { Procédure FormatUngroup - Dégrouper les objets }
 Procedure FormatUngroup;
+Var
+ I: Integer;
+ GroupToUngroup: Integer;
 Begin
- If HasSelection And ObjectsGrouped Then Begin
-  { TODO: Séparer le groupe en objets individuels }
-  { TODO: Tous les objets du groupe deviennent sélectionnés }
-  ObjectsGrouped := False;
-  DocumentModified := True;
+ If HasSelection Then Begin
+  { Trouver le GroupID du premier objet sélectionné }
+  GroupToUngroup := 0;
+  For I := 1 to ShapeCount do Begin
+   If Shapes[I].Selected And (Shapes[I].GroupID > 0) Then Begin
+    GroupToUngroup := Shapes[I].GroupID;
+    Break;
+   End;
+  End;
+  { Si on a trouvé un groupe, dégrouper tous les objets de ce groupe }
+  If GroupToUngroup > 0 Then Begin
+   For I := 1 to ShapeCount do Begin
+    If Shapes[I].GroupID = GroupToUngroup Then Begin
+     Shapes[I].GroupID := 0;
+     Shapes[I].Selected := True;  { Sélectionner tous les objets du groupe }
+    End;
+   End;
+   ObjectsGrouped := False;
+   DocumentModified := True;
+  End;
+ End;
+End;
+
+{ Procédure EnterGroup - Entrer dans un groupe pour éditer ses objets }
+Procedure EnterGroup;
+Var
+ I: Integer;
+Begin
+ If HasSelection Then Begin
+  { Trouver le GroupID du premier objet sélectionné }
+  For I := 1 to ShapeCount do Begin
+   If Shapes[I].Selected And (Shapes[I].GroupID > 0) Then Begin
+    EditingGroupID := Shapes[I].GroupID;
+    { Désélectionner tout }
+    For I := 1 to ShapeCount do
+     Shapes[I].Selected := False;
+    Exit;
+   End;
+  End;
+ End;
+End;
+
+{ Procédure ExitGroup - Sortir du mode édition de groupe }
+Procedure ExitGroup;
+Var
+ I: Integer;
+Begin
+ If EditingGroupID > 0 Then Begin
+  { Sélectionner le groupe comme un tout }
+  For I := 1 to ShapeCount do Begin
+   If Shapes[I].GroupID = EditingGroupID Then Begin
+    Shapes[I].Selected := True;
+   End;
+  End;
+  EditingGroupID := 0;
+ End;
+End;
+
+{ Fonction pour vérifier si une forme fait partie du groupe en cours d'édition }
+Function IsShapeInEditingGroup(ShapeIndex: Integer): Boolean;
+Begin
+ If EditingGroupID = 0 Then
+  IsShapeInEditingGroup := True  { Pas en mode édition de groupe, tout est accessible }
+ Else
+  IsShapeInEditingGroup := Shapes[ShapeIndex].GroupID = EditingGroupID;
+End;
+
+{ Fonction pour sélectionner tout le groupe quand on clique sur un membre }
+Procedure SelectGroup(GroupID: Integer);
+Var
+ I: Integer;
+Begin
+ For I := 1 to ShapeCount do Begin
+  If Shapes[I].GroupID = GroupID Then Begin
+   Shapes[I].Selected := True;
+  End;
+ End;
+End;
+
+{ Fonction pour calculer le rectangle englobant d'un groupe }
+Procedure GetGroupBounds(GroupID: Integer; Var MinX, MinY, MaxX, MaxY: Integer);
+Var
+ I: Integer;
+ First: Boolean;
+Begin
+ First := True;
+ MinX := 0; MinY := 0; MaxX := 0; MaxY := 0;
+ For I := 1 to ShapeCount do Begin
+  If Shapes[I].GroupID = GroupID Then Begin
+   If First Then Begin
+    MinX := Shapes[I].X1;
+    MinY := Shapes[I].Y1;
+    MaxX := Shapes[I].X2;
+    MaxY := Shapes[I].Y2;
+    First := False;
+   End
+   Else Begin
+    If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
+    If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
+    If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
+    If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
+   End;
+  End;
  End;
 End;
 
@@ -1686,6 +1815,7 @@ Begin
  Shape.LineWidth := 1;
  Shape.LineStyle := LINESTYLE_SOLID;
  Shape.LayerIndex := CurrentLayer;  { Assigner au calque actif }
+ Shape.GroupID := 0;                { Pas dans un groupe par défaut }
  Shape.Text := '';
  Shape.Selected := False;
  { Initialiser les champs pour polygones et courbes de Bézier }
@@ -2137,9 +2267,12 @@ Begin
   { Ne sélectionner que les formes des calques visibles et non verrouillés }
   If IsLayerVisible(Shapes[I].LayerIndex) and 
      (Not IsLayerLocked(Shapes[I].LayerIndex)) Then Begin
-   If PointInShape(X, Y, Shapes[I]) Then Begin
-    GetShapeAtPosition := I;
-    Exit;
+   { Si on est en mode édition de groupe, ne sélectionner que les objets du groupe }
+   If IsShapeInEditingGroup(I) Then Begin
+    If PointInShape(X, Y, Shapes[I]) Then Begin
+     GetShapeAtPosition := I;
+     Exit;
+    End;
    End;
   End;
  End;
@@ -2161,8 +2294,15 @@ Procedure SelectShape(Index: Integer);
 Begin
  DeselectAllShapes;
  If (Index >= 1) and (Index <= ShapeCount) Then Begin
-  Shapes[Index].Selected := True;
-  SelectedShape := Index;
+  { Si pas en mode édition de groupe et que l'objet fait partie d'un groupe, sélectionner tout le groupe }
+  If (EditingGroupID = 0) and (Shapes[Index].GroupID > 0) Then Begin
+   SelectGroup(Shapes[Index].GroupID);
+   SelectedShape := Index;
+  End
+  Else Begin
+   Shapes[Index].Selected := True;
+   SelectedShape := Index;
+  End;
  End;
 End;
 
@@ -3062,6 +3202,9 @@ Begin
  CurrentTextSize := DEFAULT_TEXT_SIZE;
  CurrentAlignment := atLeft;
  ObjectsGrouped := False;
+ { Initialisation des variables de gestion des groupes }
+ NextGroupID := 0;
+ EditingGroupID := 0;
  { Initialisation des variables de la boîte de dialogue des propriétés }
  PropertiesDialogVisible := False;
  PropDialogX := 0;

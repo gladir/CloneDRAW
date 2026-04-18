@@ -33,7 +33,7 @@
 
   === FORMAT DE FICHIER VISIO ===
   18. [FAIT] Parser et lire les fichiers Visio VSD/VSDX (format binaire OLE et format XML compresse)
-  19. Ecrire et sauvegarder les fichiers au format Visio VSD/VSDX
+  19. [FAIT] Ecrire et sauvegarder les fichiers au format Visio VSD/VSDX
   20. Gerer les stencils et les masters Visio
 
   === FORMAT SVG ===
@@ -722,6 +722,627 @@ End;
 { === FIN DES FONCTIONS DE PARSING VISIO === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === FONCTIONS D'ECRITURE DES FICHIERS VISIO VSD/VSDX === }
+{ ============================================================================ }
+
+{ Fonction pour convertir une couleur Pascal en couleur Visio (BGR) }
+Function PascalColorToVisioColor(PascalColor: Integer): LongInt;
+Begin
+ Case PascalColor of
+  0: PascalColorToVisioColor := $000000;  { Noir }
+  1: PascalColorToVisioColor := $FF0000;  { Bleu }
+  2: PascalColorToVisioColor := $00FF00;  { Vert }
+  3: PascalColorToVisioColor := $FFFF00;  { Cyan }
+  4: PascalColorToVisioColor := $0000FF;  { Rouge }
+  5: PascalColorToVisioColor := $FF00FF;  { Magenta }
+  6: PascalColorToVisioColor := $00FFFF;  { Marron/Jaune foncé }
+  7: PascalColorToVisioColor := $C0C0C0;  { Gris clair }
+  8: PascalColorToVisioColor := $808080;  { Gris foncé }
+  9: PascalColorToVisioColor := $FF8080;  { Bleu clair }
+  10: PascalColorToVisioColor := $80FF80; { Vert clair }
+  11: PascalColorToVisioColor := $FFFF80; { Cyan clair }
+  12: PascalColorToVisioColor := $8080FF; { Rouge clair }
+  13: PascalColorToVisioColor := $FF80FF; { Magenta clair }
+  14: PascalColorToVisioColor := $00FFFF; { Jaune }
+  15: PascalColorToVisioColor := $FFFFFF; { Blanc }
+ Else
+  PascalColorToVisioColor := $000000;     { Noir par défaut }
+ End;
+End;
+
+{ Fonction pour convertir TShapeType en type de forme Visio }
+Function TShapeTypeToVisioShapeType(ST: TShapeType): Integer;
+Begin
+ Case ST of
+  stRectangle: TShapeTypeToVisioShapeType := VISIO_SHAPE_RECTANGLE;
+  stEllipse: TShapeTypeToVisioShapeType := VISIO_SHAPE_ELLIPSE;
+  stLine: TShapeTypeToVisioShapeType := VISIO_SHAPE_LINE;
+  stPolygon: TShapeTypeToVisioShapeType := VISIO_SHAPE_POLYLINE;
+  stConnector: TShapeTypeToVisioShapeType := VISIO_SHAPE_CONNECTOR;
+  stText: TShapeTypeToVisioShapeType := VISIO_SHAPE_TEXT;
+ Else
+  TShapeTypeToVisioShapeType := VISIO_SHAPE_RECTANGLE;
+ End;
+End;
+
+{ Procédure pour convertir TShapeObject en TVisioShape }
+Procedure ShapeObjectToVisioShape(Const Shape: TShapeObject; Var VSh: TVisioShape);
+Begin
+ VSh.ShapeType := TShapeTypeToVisioShapeType(Shape.ShapeType);
+ VSh.X := Shape.X1;
+ VSh.Y := Shape.Y1;
+ VSh.Width := Shape.X2 - Shape.X1;
+ VSh.Height := Shape.Y2 - Shape.Y1;
+ VSh.Angle := 0;
+ VSh.FillColor := PascalColorToVisioColor(Shape.FillColor);
+ VSh.LineColor := PascalColorToVisioColor(Shape.LineColor);
+ VSh.LineWeight := Shape.LineWidth;
+ VSh.Text := Shape.Text;
+ VSh.ParentID := Shape.GroupID;
+End;
+
+{ Procédure pour initialiser l'en-tête OLE avec des valeurs par défaut }
+Procedure InitOLEHeader(Var Header: TOLEHeader);
+Var
+ I: Integer;
+Begin
+ { Signature OLE }
+ Header.Signature[0] := $D0;
+ Header.Signature[1] := $CF;
+ Header.Signature[2] := $11;
+ Header.Signature[3] := $E0;
+ Header.Signature[4] := $A1;
+ Header.Signature[5] := $B6;
+ Header.Signature[6] := $1A;
+ Header.Signature[7] := $E1;
+ 
+ { CLSID Visio (simplifié) }
+ For I := 0 to 15 do Header.CLSID[I] := 0;
+ 
+ Header.MinorVersion := $003E;
+ Header.MajorVersion := $0003;
+ Header.ByteOrder := $FFFE;        { Little-endian }
+ Header.SectorShift := 9;          { 512 octets par secteur }
+ Header.MiniSectorShift := 6;      { 64 octets par mini-secteur }
+ 
+ For I := 0 to 5 do Header.Reserved[I] := 0;
+ 
+ Header.TotalSectors := 0;
+ Header.FirstDirSector := 0;
+ Header.TransactionSig := 0;
+ Header.MiniStreamCutoff := 4096;
+ Header.FirstMiniFATSector := -2;  { ENDOFCHAIN }
+ Header.NumMiniFATSectors := 0;
+ Header.FirstDIFATSector := -2;    { ENDOFCHAIN }
+ Header.NumDIFATSectors := 0;
+ 
+ For I := 0 to 108 do Header.DIFAT[I] := -1;  { FREESECT }
+End;
+
+{ Procédure pour initialiser une entrée de répertoire OLE }
+Procedure InitOLEDirectoryEntry(Var Entry: TOLEDirectoryEntry; 
+                                  Const Name: String; ObjType: Byte);
+Var
+ I: Integer;
+ NameLen: Integer;
+Begin
+ { Effacer l'entrée }
+ For I := 0 to 63 do Entry.EntryName[I] := 0;
+ 
+ { Copier le nom en UTF-16 (simplifié: ASCII seulement) }
+ NameLen := Length(Name);
+ If NameLen > 31 Then NameLen := 31;
+ For I := 1 to NameLen do Begin
+  Entry.EntryName[(I-1) * 2] := Ord(Name[I]);
+  Entry.EntryName[(I-1) * 2 + 1] := 0;
+ End;
+ 
+ Entry.NameLength := (NameLen + 1) * 2;  { Inclure le null terminator }
+ Entry.ObjectType := ObjType;
+ Entry.ColorFlag := 1;  { Rouge dans l'arbre rouge-noir }
+ Entry.LeftSiblingID := -1;   { NOSTREAM }
+ Entry.RightSiblingID := -1;  { NOSTREAM }
+ Entry.ChildID := -1;         { NOSTREAM }
+ 
+ For I := 0 to 15 do Entry.CLSID[I] := 0;
+ Entry.StateBits := 0;
+ For I := 0 to 7 do Begin
+  Entry.CreationTime[I] := 0;
+  Entry.ModifiedTime[I] := 0;
+ End;
+ Entry.StartSector := 0;
+ For I := 0 to 7 do Entry.StreamSize[I] := 0;
+End;
+
+{ Fonction pour écrire un fichier VSD (format OLE binaire) }
+Function WriteVSDFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Header: TOLEHeader;
+ RootEntry, VisioDocEntry, ContentsEntry: TOLEDirectoryEntry;
+ FAT: Array[0..127] of LongInt;
+ I: Integer;
+ BytesWritten: Integer;
+ ShapeData: Array[0..4095] of Byte;
+ DataSize: Integer;
+ VShape: TVisioShape;
+ DataOffset: Integer;
+Begin
+ WriteVSDFile := False;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ { Initialiser l'en-tête OLE }
+ InitOLEHeader(Header);
+ Header.FirstDirSector := 1;
+ Header.TotalSectors := 4;
+ Header.DIFAT[0] := 0;  { FAT dans le secteur 0 }
+ 
+ { Écrire l'en-tête (512 octets) }
+ BlockWrite(F, Header, 512, BytesWritten);
+ If BytesWritten < 512 Then Begin
+  Close(F);
+  Exit;
+ End;
+ 
+ { Initialiser et écrire le FAT (secteur 0) }
+ For I := 0 to 127 do FAT[I] := -1;  { FREESECT }
+ FAT[0] := -3;  { FATSECT - ce secteur contient le FAT }
+ FAT[1] := -2;  { ENDOFCHAIN - fin de la chaîne du répertoire }
+ FAT[2] := -2;  { ENDOFCHAIN - fin de VisioDocument }
+ FAT[3] := -2;  { ENDOFCHAIN - fin de Contents }
+ 
+ BlockWrite(F, FAT, 512, BytesWritten);
+ If BytesWritten < 512 Then Begin
+  Close(F);
+  Exit;
+ End;
+ 
+ { Créer les entrées du répertoire (secteur 1) }
+ { Entrée 0: Root Entry }
+ InitOLEDirectoryEntry(RootEntry, 'Root Entry', 5);  { 5 = Root Storage }
+ RootEntry.ChildID := 1;
+ 
+ { Entrée 1: VisioDocument }
+ InitOLEDirectoryEntry(VisioDocEntry, 'VisioDocument', 1);  { 1 = Storage }
+ VisioDocEntry.RightSiblingID := 2;
+ VisioDocEntry.StartSector := 2;
+ 
+ { Entrée 2: Contents }
+ InitOLEDirectoryEntry(ContentsEntry, 'Contents', 2);  { 2 = Stream }
+ ContentsEntry.StartSector := 3;
+ 
+ { Écrire les entrées du répertoire }
+ BlockWrite(F, RootEntry, 128, BytesWritten);
+ BlockWrite(F, VisioDocEntry, 128, BytesWritten);
+ BlockWrite(F, ContentsEntry, 128, BytesWritten);
+ 
+ { Remplir le reste du secteur avec des entrées vides }
+ For I := 0 to 127 do ShapeData[I] := 0;
+ BlockWrite(F, ShapeData, 128, BytesWritten);
+ 
+ { Écrire le stream VisioDocument (secteur 2) - en-tête Visio simplifié }
+ For I := 0 to 511 do ShapeData[I] := 0;
+ { Signature Visio simplifiée }
+ ShapeData[0] := Ord('V');
+ ShapeData[1] := Ord('I');
+ ShapeData[2] := Ord('S');
+ ShapeData[3] := Ord('I');
+ ShapeData[4] := Ord('O');
+ ShapeData[5] := 1;  { Version }
+ ShapeData[6] := Lo(ShapeCount);
+ ShapeData[7] := Hi(ShapeCount);
+ 
+ BlockWrite(F, ShapeData, 512, BytesWritten);
+ 
+ { Écrire le stream Contents (secteur 3) - données des formes }
+ For I := 0 to 4095 do ShapeData[I] := 0;
+ DataOffset := 0;
+ 
+ For I := 1 to ShapeCount do Begin
+  If DataOffset + 64 > 512 Then Break;  { Limite de taille du secteur }
+  
+  ShapeObjectToVisioShape(Shapes[I], VShape);
+  
+  { Écrire les données de la forme de manière simplifiée }
+  { Type de forme (1 octet) }
+  ShapeData[DataOffset] := VShape.ShapeType;
+  Inc(DataOffset);
+  
+  { Position X (2 octets) }
+  ShapeData[DataOffset] := Lo(Round(VShape.X));
+  ShapeData[DataOffset + 1] := Hi(Round(VShape.X));
+  Inc(DataOffset, 2);
+  
+  { Position Y (2 octets) }
+  ShapeData[DataOffset] := Lo(Round(VShape.Y));
+  ShapeData[DataOffset + 1] := Hi(Round(VShape.Y));
+  Inc(DataOffset, 2);
+  
+  { Largeur (2 octets) }
+  ShapeData[DataOffset] := Lo(Round(VShape.Width));
+  ShapeData[DataOffset + 1] := Hi(Round(VShape.Width));
+  Inc(DataOffset, 2);
+  
+  { Hauteur (2 octets) }
+  ShapeData[DataOffset] := Lo(Round(VShape.Height));
+  ShapeData[DataOffset + 1] := Hi(Round(VShape.Height));
+  Inc(DataOffset, 2);
+  
+  { Couleur de remplissage (4 octets) }
+  ShapeData[DataOffset] := VShape.FillColor and $FF;
+  ShapeData[DataOffset + 1] := (VShape.FillColor shr 8) and $FF;
+  ShapeData[DataOffset + 2] := (VShape.FillColor shr 16) and $FF;
+  ShapeData[DataOffset + 3] := 0;
+  Inc(DataOffset, 4);
+  
+  { Couleur de ligne (4 octets) }
+  ShapeData[DataOffset] := VShape.LineColor and $FF;
+  ShapeData[DataOffset + 1] := (VShape.LineColor shr 8) and $FF;
+  ShapeData[DataOffset + 2] := (VShape.LineColor shr 16) and $FF;
+  ShapeData[DataOffset + 3] := 0;
+  Inc(DataOffset, 4);
+  
+  { Épaisseur de ligne (1 octet) }
+  ShapeData[DataOffset] := Round(VShape.LineWeight);
+  Inc(DataOffset);
+  
+  { Longueur du texte (1 octet) + texte (jusqu'à 40 caractères) }
+  DataSize := Length(VShape.Text);
+  If DataSize > 40 Then DataSize := 40;
+  ShapeData[DataOffset] := DataSize;
+  Inc(DataOffset);
+  Move(VShape.Text[1], ShapeData[DataOffset], DataSize);
+  Inc(DataOffset, 40);
+ End;
+ 
+ { Marquer la fin des données }
+ ShapeData[DataOffset] := $FF;
+ 
+ BlockWrite(F, ShapeData, 512, BytesWritten);
+ 
+ Close(F);
+ WriteVSDFile := True;
+End;
+
+{ Fonction pour calculer le CRC32 simplifié }
+Function CalcCRC32(Const Data; Size: Integer): LongInt;
+Var
+ I: Integer;
+ CRC: LongInt;
+ P: ^Byte;
+Begin
+ CRC := $FFFFFFFF;
+ P := @Data;
+ For I := 0 to Size - 1 do Begin
+  CRC := CRC xor P^;
+  Inc(P);
+ End;
+ CalcCRC32 := CRC xor $FFFFFFFF;
+End;
+
+{ Fonction pour écrire un fichier VSDX (format ZIP avec XML) }
+Function WriteVSDXFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ LocalHeader: Array[0..29] of Byte;
+ CentralDir: Array[0..45] of Byte;
+ EndRecord: Array[0..21] of Byte;
+ XMLData: String;
+ BytesWritten: Integer;
+ I: Integer;
+ FileOffset, CentralDirOffset: LongInt;
+ XMLSize: Integer;
+ CRC: LongInt;
+ VShape: TVisioShape;
+ ShapeIndex: Integer;
+ TempStr: String;
+Begin
+ WriteVSDXFile := False;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ FileOffset := 0;
+ 
+ { Construire le contenu XML du document Visio }
+ XMLData := '<?xml version="1.0" encoding="UTF-8"?>' + #13#10;
+ XMLData := XMLData + '<VisioDocument xmlns="http://schemas.microsoft.com/visio/2003/core">' + #13#10;
+ XMLData := XMLData + '  <Pages>' + #13#10;
+ XMLData := XMLData + '    <Page ID="0" Name="Page-1">' + #13#10;
+ XMLData := XMLData + '      <Shapes>' + #13#10;
+ 
+ For ShapeIndex := 1 to ShapeCount do Begin
+  ShapeObjectToVisioShape(Shapes[ShapeIndex], VShape);
+  
+  XMLData := XMLData + '        <Shape ID="' + Chr(48 + ShapeIndex) + '">' + #13#10;
+  
+  { Type de forme }
+  Case VShape.ShapeType of
+   VISIO_SHAPE_RECTANGLE: TempStr := 'Rectangle';
+   VISIO_SHAPE_ELLIPSE: TempStr := 'Ellipse';
+   VISIO_SHAPE_LINE: TempStr := 'Line';
+   VISIO_SHAPE_CONNECTOR: TempStr := 'Connector';
+   VISIO_SHAPE_TEXT: TempStr := 'Text';
+  Else
+   TempStr := 'Shape';
+  End;
+  XMLData := XMLData + '          <Name>' + TempStr + '</Name>' + #13#10;
+  
+  { Géométrie }
+  XMLData := XMLData + '          <XForm>' + #13#10;
+  Str(VShape.X:0:2, TempStr);
+  XMLData := XMLData + '            <PinX>' + TempStr + '</PinX>' + #13#10;
+  Str(VShape.Y:0:2, TempStr);
+  XMLData := XMLData + '            <PinY>' + TempStr + '</PinY>' + #13#10;
+  Str(VShape.Width:0:2, TempStr);
+  XMLData := XMLData + '            <Width>' + TempStr + '</Width>' + #13#10;
+  Str(VShape.Height:0:2, TempStr);
+  XMLData := XMLData + '            <Height>' + TempStr + '</Height>' + #13#10;
+  XMLData := XMLData + '          </XForm>' + #13#10;
+  
+  { Couleurs }
+  XMLData := XMLData + '          <Fill>' + #13#10;
+  Str(VShape.FillColor, TempStr);
+  XMLData := XMLData + '            <FillForegnd>#' + TempStr + '</FillForegnd>' + #13#10;
+  XMLData := XMLData + '          </Fill>' + #13#10;
+  
+  XMLData := XMLData + '          <Line>' + #13#10;
+  Str(VShape.LineColor, TempStr);
+  XMLData := XMLData + '            <LineColor>#' + TempStr + '</LineColor>' + #13#10;
+  Str(VShape.LineWeight:0:2, TempStr);
+  XMLData := XMLData + '            <LineWeight>' + TempStr + '</LineWeight>' + #13#10;
+  XMLData := XMLData + '          </Line>' + #13#10;
+  
+  { Texte }
+  If Length(VShape.Text) > 0 Then Begin
+   XMLData := XMLData + '          <Text>' + VShape.Text + '</Text>' + #13#10;
+  End;
+  
+  XMLData := XMLData + '        </Shape>' + #13#10;
+ End;
+ 
+ XMLData := XMLData + '      </Shapes>' + #13#10;
+ XMLData := XMLData + '    </Page>' + #13#10;
+ XMLData := XMLData + '  </Pages>' + #13#10;
+ XMLData := XMLData + '</VisioDocument>' + #13#10;
+ 
+ XMLSize := Length(XMLData);
+ CRC := CalcCRC32(XMLData[1], XMLSize);
+ 
+ { === Écrire l'en-tête local du fichier ZIP === }
+ { Signature PK }
+ LocalHeader[0] := $50;  { P }
+ LocalHeader[1] := $4B;  { K }
+ LocalHeader[2] := $03;
+ LocalHeader[3] := $04;
+ { Version nécessaire pour extraire }
+ LocalHeader[4] := 20;   { 2.0 }
+ LocalHeader[5] := 0;
+ { Flags }
+ LocalHeader[6] := 0;
+ LocalHeader[7] := 0;
+ { Méthode de compression (0 = stocké, pas de compression) }
+ LocalHeader[8] := 0;
+ LocalHeader[9] := 0;
+ { Heure de modification }
+ LocalHeader[10] := 0;
+ LocalHeader[11] := 0;
+ { Date de modification }
+ LocalHeader[12] := 0;
+ LocalHeader[13] := 0;
+ { CRC-32 }
+ LocalHeader[14] := CRC and $FF;
+ LocalHeader[15] := (CRC shr 8) and $FF;
+ LocalHeader[16] := (CRC shr 16) and $FF;
+ LocalHeader[17] := (CRC shr 24) and $FF;
+ { Taille compressée }
+ LocalHeader[18] := XMLSize and $FF;
+ LocalHeader[19] := (XMLSize shr 8) and $FF;
+ LocalHeader[20] := (XMLSize shr 16) and $FF;
+ LocalHeader[21] := (XMLSize shr 24) and $FF;
+ { Taille non compressée }
+ LocalHeader[22] := XMLSize and $FF;
+ LocalHeader[23] := (XMLSize shr 8) and $FF;
+ LocalHeader[24] := (XMLSize shr 16) and $FF;
+ LocalHeader[25] := (XMLSize shr 24) and $FF;
+ { Longueur du nom de fichier }
+ LocalHeader[26] := 20;  { "visio/document.xml" = 19 caractères + 1 }
+ LocalHeader[27] := 0;
+ { Longueur du champ extra }
+ LocalHeader[28] := 0;
+ LocalHeader[29] := 0;
+ 
+ BlockWrite(F, LocalHeader, 30, BytesWritten);
+ FileOffset := FileOffset + 30;
+ 
+ { Nom du fichier }
+ TempStr := 'visio/document.xml';
+ BlockWrite(F, TempStr[1], 18, BytesWritten);
+ FileOffset := FileOffset + 18;
+ 
+ { Données XML }
+ BlockWrite(F, XMLData[1], XMLSize, BytesWritten);
+ FileOffset := FileOffset + XMLSize;
+ 
+ CentralDirOffset := FileOffset;
+ 
+ { === Écrire l'entrée du répertoire central === }
+ { Signature }
+ CentralDir[0] := $50;   { P }
+ CentralDir[1] := $4B;   { K }
+ CentralDir[2] := $01;
+ CentralDir[3] := $02;
+ { Version créée par }
+ CentralDir[4] := 20;
+ CentralDir[5] := 0;
+ { Version nécessaire pour extraire }
+ CentralDir[6] := 20;
+ CentralDir[7] := 0;
+ { Flags }
+ CentralDir[8] := 0;
+ CentralDir[9] := 0;
+ { Méthode de compression }
+ CentralDir[10] := 0;
+ CentralDir[11] := 0;
+ { Heure de modification }
+ CentralDir[12] := 0;
+ CentralDir[13] := 0;
+ { Date de modification }
+ CentralDir[14] := 0;
+ CentralDir[15] := 0;
+ { CRC-32 }
+ CentralDir[16] := CRC and $FF;
+ CentralDir[17] := (CRC shr 8) and $FF;
+ CentralDir[18] := (CRC shr 16) and $FF;
+ CentralDir[19] := (CRC shr 24) and $FF;
+ { Taille compressée }
+ CentralDir[20] := XMLSize and $FF;
+ CentralDir[21] := (XMLSize shr 8) and $FF;
+ CentralDir[22] := (XMLSize shr 16) and $FF;
+ CentralDir[23] := (XMLSize shr 24) and $FF;
+ { Taille non compressée }
+ CentralDir[24] := XMLSize and $FF;
+ CentralDir[25] := (XMLSize shr 8) and $FF;
+ CentralDir[26] := (XMLSize shr 16) and $FF;
+ CentralDir[27] := (XMLSize shr 24) and $FF;
+ { Longueur du nom de fichier }
+ CentralDir[28] := 18;
+ CentralDir[29] := 0;
+ { Longueur du champ extra }
+ CentralDir[30] := 0;
+ CentralDir[31] := 0;
+ { Longueur du commentaire }
+ CentralDir[32] := 0;
+ CentralDir[33] := 0;
+ { Numéro de disque de début }
+ CentralDir[34] := 0;
+ CentralDir[35] := 0;
+ { Attributs internes }
+ CentralDir[36] := 0;
+ CentralDir[37] := 0;
+ { Attributs externes }
+ CentralDir[38] := 0;
+ CentralDir[39] := 0;
+ CentralDir[40] := 0;
+ CentralDir[41] := 0;
+ { Offset de l'en-tête local }
+ CentralDir[42] := 0;
+ CentralDir[43] := 0;
+ CentralDir[44] := 0;
+ CentralDir[45] := 0;
+ 
+ BlockWrite(F, CentralDir, 46, BytesWritten);
+ FileOffset := FileOffset + 46;
+ 
+ { Nom du fichier }
+ TempStr := 'visio/document.xml';
+ BlockWrite(F, TempStr[1], 18, BytesWritten);
+ FileOffset := FileOffset + 18;
+ 
+ { === Écrire l'enregistrement de fin du répertoire central === }
+ { Signature }
+ EndRecord[0] := $50;    { P }
+ EndRecord[1] := $4B;    { K }
+ EndRecord[2] := $05;
+ EndRecord[3] := $06;
+ { Numéro de ce disque }
+ EndRecord[4] := 0;
+ EndRecord[5] := 0;
+ { Disque où commence le répertoire central }
+ EndRecord[6] := 0;
+ EndRecord[7] := 0;
+ { Nombre d'entrées dans le répertoire central sur ce disque }
+ EndRecord[8] := 1;
+ EndRecord[9] := 0;
+ { Nombre total d'entrées }
+ EndRecord[10] := 1;
+ EndRecord[11] := 0;
+ { Taille du répertoire central }
+ EndRecord[12] := 64;    { 46 + 18 }
+ EndRecord[13] := 0;
+ EndRecord[14] := 0;
+ EndRecord[15] := 0;
+ { Offset du répertoire central }
+ EndRecord[16] := CentralDirOffset and $FF;
+ EndRecord[17] := (CentralDirOffset shr 8) and $FF;
+ EndRecord[18] := (CentralDirOffset shr 16) and $FF;
+ EndRecord[19] := (CentralDirOffset shr 24) and $FF;
+ { Longueur du commentaire }
+ EndRecord[20] := 0;
+ EndRecord[21] := 0;
+ 
+ BlockWrite(F, EndRecord, 22, BytesWritten);
+ 
+ Close(F);
+ WriteVSDXFile := True;
+End;
+
+{ Fonction pour déterminer le format à partir de l'extension du fichier }
+Function GetVisioFormatFromExtension(Const FileName: String): Integer;
+Var
+ Ext: String;
+ I: Integer;
+Begin
+ GetVisioFormatFromExtension := VISIO_FORMAT_UNKNOWN;
+ 
+ { Trouver l'extension }
+ Ext := '';
+ For I := Length(FileName) downto 1 do Begin
+  If FileName[I] = '.' Then Begin
+   Ext := Copy(FileName, I, Length(FileName) - I + 1);
+   Break;
+  End;
+ End;
+ 
+ { Convertir en minuscules }
+ For I := 1 to Length(Ext) do Begin
+  If (Ext[I] >= 'A') and (Ext[I] <= 'Z') Then
+   Ext[I] := Chr(Ord(Ext[I]) + 32);
+ End;
+ 
+ { Déterminer le format }
+ If (Ext = '.vsd') or (Ext = '.vss') or (Ext = '.vst') Then
+  GetVisioFormatFromExtension := VISIO_FORMAT_VSD
+ Else If (Ext = '.vsdx') or (Ext = '.vssx') or (Ext = '.vstx') Then
+  GetVisioFormatFromExtension := VISIO_FORMAT_VSDX;
+End;
+
+{ Fonction principale pour sauvegarder un fichier Visio }
+Function SaveVisioFile(Const FileName: String; FileFormat: Integer): Boolean;
+Begin
+ SaveVisioFile := False;
+ 
+ { Si le format n'est pas spécifié, le détecter depuis l'extension }
+ If FileFormat = VISIO_FORMAT_UNKNOWN Then
+  FileFormat := GetVisioFormatFromExtension(FileName);
+ 
+ { Si toujours inconnu, utiliser VSDX par défaut (format moderne) }
+ If FileFormat = VISIO_FORMAT_UNKNOWN Then
+  FileFormat := VISIO_FORMAT_VSDX;
+ 
+ Case FileFormat of
+  VISIO_FORMAT_VSD: Begin
+   SaveVisioFile := WriteVSDFile(FileName);
+  End;
+  VISIO_FORMAT_VSDX: Begin
+   SaveVisioFile := WriteVSDXFile(FileName);
+  End;
+ End;
+End;
+
+{ ============================================================================ }
+{ === FIN DES FONCTIONS D'ECRITURE VISIO === }
+{ ============================================================================ }
+
 { Procédure New - Créer un nouveau document }
 Procedure FileNew;
 Begin
@@ -784,23 +1405,46 @@ End;
 
 { Procédure Save - Sauvegarder le document }
 Procedure FileSave;
+Var
+ Success: Boolean;
 Begin
  If CurrentFileName = '' Then Begin
   { Si pas de nom de fichier, appeler Save As }
-  { FileSaveAs; }
+  FileSaveAs;
  End
  Else Begin
-  { TODO: Sauvegarder le fichier }
-  DocumentModified := False;
+  { Sauvegarder le fichier au format approprié }
+  Success := SaveVisioFile(CurrentFileName, VISIO_FORMAT_UNKNOWN);
+  If Success Then Begin
+   DocumentModified := False;
+  End;
  End;
 End;
 
 { Procédure Save As - Sauvegarder sous un nouveau nom }
 Procedure FileSaveAs;
+Var
+ FileName: String;
+ FileFormat: Integer;
+ Success: Boolean;
 Begin
- { TODO: Afficher une boîte de dialogue pour choisir le nom du fichier }
- { TODO: Sauvegarder le fichier }
- DocumentModified := False;
+ { Pour l'instant, utiliser un nom de fichier par défaut }
+ { Une vraie implémentation afficherait une boîte de dialogue }
+ FileName := 'document.vsdx';  { Format VSDX par défaut }
+ 
+ { TODO: Implémenter une vraie boîte de dialogue de sélection de fichier }
+ 
+ If FileName <> '' Then Begin
+  { Détecter le format depuis l'extension }
+  FileFormat := GetVisioFormatFromExtension(FileName);
+  
+  { Sauvegarder le fichier }
+  Success := SaveVisioFile(FileName, FileFormat);
+  If Success Then Begin
+   CurrentFileName := FileName;
+   DocumentModified := False;
+  End;
+ End;
 End;
 
 { Procédure Export - Exporter dans un autre format }

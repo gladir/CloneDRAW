@@ -42,7 +42,7 @@
 
   === EXPORT IMAGES ===
   23. [FAIT] Exporter en format BMP avec support 1-bit, 4-bit, 8-bit, 24-bit
-  24. Exporter en format GIF avec palette de 256 couleurs et transparence
+  24. [FAIT] Exporter en format GIF avec palette de 256 couleurs et transparence
   25. Exporter en format JPEG avec compression reglable et en format PNG avec canal alpha pour transparence
 }
 
@@ -4045,6 +4045,393 @@ End;
 
 { ============================================================================ }
 { === FIN DES FONCTIONS D'EXPORT BMP === }
+{ ============================================================================ }
+
+{ ============================================================================ }
+{ === FONCTIONS D'EXPORT GIF === }
+{ ============================================================================ }
+
+{ Constantes pour le format GIF }
+Const
+ GIF_SIGNATURE = 'GIF';
+ GIF_VERSION = '89a';
+ GIF_TRAILER = $3B;         { Terminateur GIF ';' }
+ GIF_IMAGE_SEPARATOR = $2C; { Séparateur d'image ',' }
+ GIF_EXTENSION = $21;       { Extension '!' }
+ GIF_GCE_LABEL = $F9;       { Label Graphics Control Extension }
+ GIF_MAX_CODE_SIZE = 12;    { Taille maximale du code LZW }
+
+{ Types pour l'encodage LZW }
+Type
+ TLZWCode = Integer;
+ TLZWTable = Array[0..4095] of Record
+  Prefix: Integer;
+  Suffix: Byte;
+ End;
+
+Var
+ LZWTable: TLZWTable;
+ LZWCodeSize: Integer;
+ LZWNextCode: Integer;
+ LZWClearCode: Integer;
+ LZWEOICode: Integer;
+ LZWBitBuffer: LongInt;
+ LZWBitsInBuffer: Integer;
+ LZWByteBuffer: Array[0..254] of Byte;
+ LZWByteCount: Integer;
+
+{ Procédure pour initialiser la table LZW }
+Procedure InitLZWTable(ColorBits: Integer);
+Var
+ I: Integer;
+Begin
+ LZWCodeSize := ColorBits + 1;
+ LZWClearCode := 1 Shl ColorBits;
+ LZWEOICode := LZWClearCode + 1;
+ LZWNextCode := LZWEOICode + 1;
+ LZWBitBuffer := 0;
+ LZWBitsInBuffer := 0;
+ LZWByteCount := 0;
+ 
+ { Initialiser les codes de base (0 à 255) }
+ For I := 0 to LZWClearCode - 1 do Begin
+  LZWTable[I].Prefix := -1;
+  LZWTable[I].Suffix := I;
+ End;
+End;
+
+{ Procédure pour réinitialiser la table LZW }
+Procedure ResetLZWTable(ColorBits: Integer);
+Begin
+ LZWCodeSize := ColorBits + 1;
+ LZWNextCode := LZWEOICode + 1;
+End;
+
+{ Procédure pour écrire un sous-bloc de données }
+Procedure FlushLZWByteBuffer(Var F: File);
+Begin
+ If LZWByteCount > 0 Then Begin
+  WriteByte(F, LZWByteCount);
+  BlockWrite(F, LZWByteBuffer, LZWByteCount);
+  LZWByteCount := 0;
+ End;
+End;
+
+{ Procédure pour écrire un code LZW }
+Procedure WriteLZWCode(Var F: File; Code: Integer);
+Begin
+ LZWBitBuffer := LZWBitBuffer Or (LongInt(Code) Shl LZWBitsInBuffer);
+ LZWBitsInBuffer := LZWBitsInBuffer + LZWCodeSize;
+ 
+ While LZWBitsInBuffer >= 8 do Begin
+  LZWByteBuffer[LZWByteCount] := LZWBitBuffer And $FF;
+  Inc(LZWByteCount);
+  LZWBitBuffer := LZWBitBuffer Shr 8;
+  LZWBitsInBuffer := LZWBitsInBuffer - 8;
+  
+  If LZWByteCount >= 254 Then
+   FlushLZWByteBuffer(F);
+ End;
+End;
+
+{ Procédure pour terminer l'écriture LZW }
+Procedure FinishLZWOutput(Var F: File);
+Begin
+ { Écrire les bits restants }
+ If LZWBitsInBuffer > 0 Then Begin
+  LZWByteBuffer[LZWByteCount] := LZWBitBuffer And $FF;
+  Inc(LZWByteCount);
+ End;
+ 
+ FlushLZWByteBuffer(F);
+ 
+ { Écrire le bloc terminateur (taille 0) }
+ WriteByte(F, 0);
+End;
+
+{ Fonction pour chercher un code dans la table LZW }
+Function FindLZWCode(Prefix: Integer; Suffix: Byte): Integer;
+Var
+ I: Integer;
+Begin
+ FindLZWCode := -1;
+ For I := LZWEOICode + 1 to LZWNextCode - 1 do Begin
+  If (LZWTable[I].Prefix = Prefix) And (LZWTable[I].Suffix = Suffix) Then Begin
+   FindLZWCode := I;
+   Exit;
+  End;
+ End;
+End;
+
+{ Fonction pour ajouter un code à la table LZW }
+Function AddLZWCode(Prefix: Integer; Suffix: Byte): Integer;
+Begin
+ If LZWNextCode < 4096 Then Begin
+  LZWTable[LZWNextCode].Prefix := Prefix;
+  LZWTable[LZWNextCode].Suffix := Suffix;
+  AddLZWCode := LZWNextCode;
+  Inc(LZWNextCode);
+  
+  { Augmenter la taille du code si nécessaire }
+  If (LZWNextCode > (1 Shl LZWCodeSize)) And (LZWCodeSize < GIF_MAX_CODE_SIZE) Then
+   Inc(LZWCodeSize);
+ End
+ Else
+  AddLZWCode := -1;
+End;
+
+{ Procédure pour écrire l'en-tête GIF }
+Procedure WriteGIFHeader(Var F: File; Width, Height: Integer; ColorBits: Integer);
+Var
+ PackedByte: Byte;
+Begin
+ { Signature et version "GIF89a" }
+ BlockWrite(F, GIF_SIGNATURE[1], 3);
+ BlockWrite(F, GIF_VERSION[1], 3);
+ 
+ { Logical Screen Descriptor }
+ WriteWord(F, Width);         { Largeur }
+ WriteWord(F, Height);        { Hauteur }
+ 
+ { Packed byte: Global Color Table Flag (1), Color Resolution (3), Sort Flag (1), Size of Global Color Table (3) }
+ PackedByte := $80;                          { Global Color Table présente }
+ PackedByte := PackedByte Or ((ColorBits - 1) Shl 4);  { Color Resolution }
+ PackedByte := PackedByte Or (ColorBits - 1);          { Size of Global Color Table }
+ WriteByte(F, PackedByte);
+ 
+ WriteByte(F, 0);             { Background Color Index }
+ WriteByte(F, 0);             { Pixel Aspect Ratio }
+End;
+
+{ Procédure pour écrire la palette GIF (Global Color Table) }
+Procedure WriteGIFPalette(Var F: File; TransparentIndex: Integer);
+Var
+ I: Integer;
+ R, G, B: Byte;
+Begin
+ { Écrire les 256 couleurs }
+ For I := 0 to 255 do Begin
+  If I < 16 Then Begin
+   PaletteToRGB(I, R, G, B);
+  End
+  Else Begin
+   { Niveaux de gris pour les couleurs 16-255 }
+   R := (I - 16) + (I - 16) Div 15;
+   G := R;
+   B := R;
+  End;
+  
+  WriteByte(F, R);
+  WriteByte(F, G);
+  WriteByte(F, B);
+ End;
+End;
+
+{ Procédure pour écrire l'extension de contrôle graphique (transparence) }
+Procedure WriteGIFGCE(Var F: File; TransparentIndex: Integer; HasTransparency: Boolean);
+Var
+ PackedByte: Byte;
+Begin
+ WriteByte(F, GIF_EXTENSION);    { Extension Introducer }
+ WriteByte(F, GIF_GCE_LABEL);    { Graphics Control Label }
+ WriteByte(F, 4);                { Block Size (toujours 4) }
+ 
+ { Packed byte: Reserved (3), Disposal Method (3), User Input (1), Transparent Color Flag (1) }
+ If HasTransparency Then
+  PackedByte := $01  { Transparent Color Flag = 1 }
+ Else
+  PackedByte := $00;
+ WriteByte(F, PackedByte);
+ 
+ WriteWord(F, 0);                { Delay Time (pas d'animation) }
+ 
+ If HasTransparency Then
+  WriteByte(F, TransparentIndex) { Transparent Color Index }
+ Else
+  WriteByte(F, 0);
+ 
+ WriteByte(F, 0);                { Block Terminator }
+End;
+
+{ Procédure pour écrire le descripteur d'image }
+Procedure WriteGIFImageDescriptor(Var F: File; Width, Height: Integer);
+Begin
+ WriteByte(F, GIF_IMAGE_SEPARATOR);  { Image Separator ',' }
+ WriteWord(F, 0);                     { Left Position }
+ WriteWord(F, 0);                     { Top Position }
+ WriteWord(F, Width);                 { Image Width }
+ WriteWord(F, Height);                { Image Height }
+ WriteByte(F, 0);                     { Packed byte: pas de Local Color Table }
+End;
+
+{ Procédure pour écrire les données d'image compressées LZW }
+Procedure WriteGIFImageData(Var F: File; Width, Height: Integer; ColorBits: Integer);
+Var
+ X, Y: Integer;
+ Pixel: Byte;
+ CurrentCode: Integer;
+ NewCode: Integer;
+Begin
+ { LZW Minimum Code Size }
+ WriteByte(F, ColorBits);
+ 
+ { Initialiser la table LZW }
+ InitLZWTable(ColorBits);
+ 
+ { Écrire le code Clear }
+ WriteLZWCode(F, LZWClearCode);
+ 
+ { Encoder les pixels }
+ CurrentCode := -1;
+ 
+ For Y := 0 to Height - 1 do Begin
+  For X := 0 to Width - 1 do Begin
+   Pixel := PixelBuffer^[Y, X];
+   
+   If CurrentCode = -1 Then
+    CurrentCode := Pixel
+   Else Begin
+    NewCode := FindLZWCode(CurrentCode, Pixel);
+    
+    If NewCode >= 0 Then
+     CurrentCode := NewCode
+    Else Begin
+     { Écrire le code actuel }
+     WriteLZWCode(F, CurrentCode);
+     
+     { Ajouter le nouveau code à la table }
+     If LZWNextCode < 4096 Then
+      AddLZWCode(CurrentCode, Pixel)
+     Else Begin
+      { Table pleine, émettre un code Clear et réinitialiser }
+      WriteLZWCode(F, LZWClearCode);
+      ResetLZWTable(ColorBits);
+     End;
+     
+     CurrentCode := Pixel;
+    End;
+   End;
+  End;
+ End;
+ 
+ { Écrire le dernier code }
+ If CurrentCode >= 0 Then
+  WriteLZWCode(F, CurrentCode);
+ 
+ { Écrire le code End of Information }
+ WriteLZWCode(F, LZWEOICode);
+ 
+ { Terminer la sortie LZW }
+ FinishLZWOutput(F);
+End;
+
+{ Fonction principale pour sauvegarder un fichier GIF }
+{ TransparentIndex: index de la couleur transparente (-1 = pas de transparence) }
+Function SaveGIFFile(Const FileName: String; TransparentIndex: Integer): Boolean;
+Var
+ F: File;
+ MinX, MinY, MaxX, MaxY: Integer;
+ Width, Height: Integer;
+ I: Integer;
+ HasTransparency: Boolean;
+ ColorBits: Integer;
+Begin
+ SaveGIFFile := False;
+ ColorBits := 8;  { 256 couleurs }
+ HasTransparency := (TransparentIndex >= 0) And (TransparentIndex <= 255);
+ 
+ { Calculer les dimensions du dessin }
+ MinX := 32767; MinY := 32767;
+ MaxX := 0; MaxY := 0;
+ 
+ For I := 1 to ShapeCount do Begin
+  If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
+  If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
+  If Shapes[I].X2 < MinX Then MinX := Shapes[I].X2;
+  If Shapes[I].Y2 < MinY Then MinY := Shapes[I].Y2;
+  If Shapes[I].X1 > MaxX Then MaxX := Shapes[I].X1;
+  If Shapes[I].Y1 > MaxY Then MaxY := Shapes[I].Y1;
+  If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
+  If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
+ End;
+ 
+ If ShapeCount = 0 Then Begin
+  Width := 640;
+  Height := 480;
+  MinX := 0;
+  MinY := 0;
+ End
+ Else Begin
+  Width := MaxX - MinX + 20;
+  Height := MaxY - MinY + 20;
+  If Width < 100 Then Width := 100;
+  If Height < 100 Then Height := 100;
+ End;
+ 
+ { Limiter les dimensions }
+ If Width > 2048 Then Width := 2048;
+ If Height > 2048 Then Height := 2048;
+ 
+ { Initialiser le buffer et rendre les formes }
+ InitPixelBuffer(Width, Height);
+ 
+ { Si transparence, initialiser avec la couleur transparente }
+ If HasTransparency Then
+  FillChar(PixelBuffer^, SizeOf(TPixelBuffer), TransparentIndex);
+ 
+ { Décaler les formes pour qu'elles commencent à (10, 10) }
+ For I := 1 to ShapeCount do Begin
+  Shapes[I].X1 := Shapes[I].X1 - MinX + 10;
+  Shapes[I].Y1 := Shapes[I].Y1 - MinY + 10;
+  Shapes[I].X2 := Shapes[I].X2 - MinX + 10;
+  Shapes[I].Y2 := Shapes[I].Y2 - MinY + 10;
+ End;
+ 
+ RenderShapesToBuffer;
+ 
+ { Restaurer les positions originales }
+ For I := 1 to ShapeCount do Begin
+  Shapes[I].X1 := Shapes[I].X1 + MinX - 10;
+  Shapes[I].Y1 := Shapes[I].Y1 + MinY - 10;
+  Shapes[I].X2 := Shapes[I].X2 + MinX - 10;
+  Shapes[I].Y2 := Shapes[I].Y2 + MinY - 10;
+ End;
+ 
+ { Ouvrir le fichier }
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Begin
+  FreePixelBuffer;
+  Exit;
+ End;
+ 
+ { Écrire l'en-tête GIF }
+ WriteGIFHeader(F, Width, Height, ColorBits);
+ 
+ { Écrire la palette globale }
+ WriteGIFPalette(F, TransparentIndex);
+ 
+ { Écrire l'extension de contrôle graphique (pour transparence) }
+ WriteGIFGCE(F, TransparentIndex, HasTransparency);
+ 
+ { Écrire le descripteur d'image }
+ WriteGIFImageDescriptor(F, Width, Height);
+ 
+ { Écrire les données d'image compressées }
+ WriteGIFImageData(F, Width, Height, ColorBits);
+ 
+ { Écrire le terminateur GIF }
+ WriteByte(F, GIF_TRAILER);
+ 
+ Close(F);
+ FreePixelBuffer;
+ SaveGIFFile := True;
+End;
+
+{ ============================================================================ }
+{ === FIN DES FONCTIONS D'EXPORT GIF === }
 { ============================================================================ }
 
 { Procédure New - Créer un nouveau document }

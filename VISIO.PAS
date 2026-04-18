@@ -37,7 +37,7 @@
   20. [FAIT] Gerer les stencils et les masters Visio
 
   === FORMAT SVG ===
-  21. Parser et importer les fichiers SVG avec support des elements path, rect, circle, ellipse, line, polygon, text
+  21. [FAIT] Parser et importer les fichiers SVG avec support des elements path, rect, circle, ellipse, line, polygon, text
   22. Exporter les dessins au format SVG avec attributs de style CSS
 
   === EXPORT IMAGES ===
@@ -2166,6 +2166,944 @@ End;
 
 { ============================================================================ }
 { === FIN DES FONCTIONS DE GESTION DES STENCILS ET MASTERS === }
+{ ============================================================================ }
+
+{ ============================================================================ }
+{ === FONCTIONS D'IMPORT SVG === }
+{ ============================================================================ }
+
+{ Constantes pour le parsing SVG }
+Const
+ SVG_MAX_ATTR_LENGTH = 255;      { Longueur max d'un attribut }
+ SVG_MAX_PATH_POINTS = 100;      { Nombre max de points dans un path }
+ SVG_SCALE_FACTOR = 1.0;         { Facteur d'échelle pour la conversion }
+
+Type
+ { Structure pour un attribut SVG }
+ TSVGAttribute = Record
+  Name: String[50];
+  Value: String[SVG_MAX_ATTR_LENGTH];
+ End;
+ 
+ { Structure pour les données de parsing }
+ TSVGParseState = Record
+  CurrentX, CurrentY: Real;      { Position courante pour les paths }
+  StartX, StartY: Real;          { Point de départ du sous-chemin }
+  FillColor: LongInt;            { Couleur de remplissage }
+  StrokeColor: LongInt;          { Couleur de trait }
+  StrokeWidth: Real;             { Épaisseur du trait }
+  TransformX, TransformY: Real;  { Translation }
+  ScaleX, ScaleY: Real;          { Échelle }
+ End;
+
+Var
+ SVGParseState: TSVGParseState;
+
+{ Fonction pour sauter les espaces dans une chaîne }
+Function SVGSkipWhitespace(Const S: String; StartPos: Integer): Integer;
+Begin
+ While (StartPos <= Length(S)) and 
+       ((S[StartPos] = ' ') or (S[StartPos] = #9) or 
+        (S[StartPos] = #10) or (S[StartPos] = #13) or
+        (S[StartPos] = ',')) do
+  Inc(StartPos);
+ SVGSkipWhitespace := StartPos;
+End;
+
+{ Fonction pour parser un nombre réel dans une chaîne }
+Function SVGParseNumber(Const S: String; Var Pos: Integer): Real;
+Var
+ NumStr: String;
+ Value: Real;
+ Code: Integer;
+ Negative: Boolean;
+Begin
+ SVGParseNumber := 0;
+ Pos := SVGSkipWhitespace(S, Pos);
+ If Pos > Length(S) Then Exit;
+ 
+ NumStr := '';
+ Negative := False;
+ 
+ { Gérer le signe }
+ If S[Pos] = '-' Then Begin
+  Negative := True;
+  Inc(Pos);
+ End
+ Else If S[Pos] = '+' Then
+  Inc(Pos);
+ 
+ { Parser les chiffres et le point décimal }
+ While (Pos <= Length(S)) and 
+       (((S[Pos] >= '0') and (S[Pos] <= '9')) or (S[Pos] = '.')) do Begin
+  NumStr := NumStr + S[Pos];
+  Inc(Pos);
+ End;
+ 
+ { Gérer l'exposant (notation scientifique) }
+ If (Pos <= Length(S)) and ((S[Pos] = 'e') or (S[Pos] = 'E')) Then Begin
+  NumStr := NumStr + S[Pos];
+  Inc(Pos);
+  If (Pos <= Length(S)) and ((S[Pos] = '+') or (S[Pos] = '-')) Then Begin
+   NumStr := NumStr + S[Pos];
+   Inc(Pos);
+  End;
+  While (Pos <= Length(S)) and (S[Pos] >= '0') and (S[Pos] <= '9') do Begin
+   NumStr := NumStr + S[Pos];
+   Inc(Pos);
+  End;
+ End;
+ 
+ If NumStr <> '' Then Begin
+  Val(NumStr, Value, Code);
+  If Code = 0 Then Begin
+   If Negative Then Value := -Value;
+   SVGParseNumber := Value;
+  End;
+ End;
+End;
+
+{ Fonction pour convertir une valeur hexadécimale en entier }
+Function HexToInt(Const HexStr: String): LongInt;
+Var
+ I: Integer;
+ C: Char;
+ Value: LongInt;
+Begin
+ Value := 0;
+ For I := 1 to Length(HexStr) do Begin
+  C := HexStr[I];
+  Value := Value * 16;
+  If (C >= '0') and (C <= '9') Then
+   Value := Value + (Ord(C) - Ord('0'))
+  Else If (C >= 'a') and (C <= 'f') Then
+   Value := Value + (Ord(C) - Ord('a') + 10)
+  Else If (C >= 'A') and (C <= 'F') Then
+   Value := Value + (Ord(C) - Ord('A') + 10);
+ End;
+ HexToInt := Value;
+End;
+
+{ Fonction pour parser une couleur SVG et retourner une couleur Pascal }
+Function SVGParseColor(Const ColorStr: String): Integer;
+Var
+ S: String;
+ R, G, B: Integer;
+ I: Integer;
+Begin
+ SVGParseColor := 0;  { Noir par défaut }
+ S := ColorStr;
+ 
+ { Supprimer les espaces }
+ While (Length(S) > 0) and (S[1] = ' ') do Delete(S, 1, 1);
+ While (Length(S) > 0) and (S[Length(S)] = ' ') do Delete(S, Length(S), 1);
+ 
+ { Convertir en minuscules }
+ For I := 1 to Length(S) do
+  If (S[I] >= 'A') and (S[I] <= 'Z') Then
+   S[I] := Chr(Ord(S[I]) + 32);
+ 
+ { Couleur hexadécimale #RRGGBB ou #RGB }
+ If (Length(S) > 0) and (S[1] = '#') Then Begin
+  Delete(S, 1, 1);
+  If Length(S) = 6 Then Begin
+   R := HexToInt(Copy(S, 1, 2));
+   G := HexToInt(Copy(S, 3, 2));
+   B := HexToInt(Copy(S, 5, 2));
+  End
+  Else If Length(S) = 3 Then Begin
+   R := HexToInt(S[1] + S[1]);
+   G := HexToInt(S[2] + S[2]);
+   B := HexToInt(S[3] + S[3]);
+  End
+  Else Begin
+   R := 0; G := 0; B := 0;
+  End;
+  
+  { Convertir RGB en couleur Pascal (palette 16 couleurs) }
+  { Approximation vers la couleur la plus proche }
+  If (R < 64) and (G < 64) and (B < 64) Then SVGParseColor := 0   { Noir }
+  Else If (R > 192) and (G > 192) and (B > 192) Then SVGParseColor := 15 { Blanc }
+  Else If (R > 192) and (G < 64) and (B < 64) Then SVGParseColor := 4  { Rouge }
+  Else If (R < 64) and (G > 192) and (B < 64) Then SVGParseColor := 2  { Vert }
+  Else If (R < 64) and (G < 64) and (B > 192) Then SVGParseColor := 1  { Bleu }
+  Else If (R > 192) and (G > 192) and (B < 64) Then SVGParseColor := 14 { Jaune }
+  Else If (R > 192) and (G < 64) and (B > 192) Then SVGParseColor := 5  { Magenta }
+  Else If (R < 64) and (G > 192) and (B > 192) Then SVGParseColor := 3  { Cyan }
+  Else If (R > 128) and (G > 128) and (B > 128) Then SVGParseColor := 7 { Gris clair }
+  Else SVGParseColor := 8;  { Gris foncé }
+  Exit;
+ End;
+ 
+ { Couleurs nommées }
+ If S = 'black' Then SVGParseColor := 0
+ Else If S = 'blue' Then SVGParseColor := 1
+ Else If S = 'green' Then SVGParseColor := 2
+ Else If S = 'cyan' Then SVGParseColor := 3
+ Else If S = 'red' Then SVGParseColor := 4
+ Else If S = 'magenta' Then SVGParseColor := 5
+ Else If S = 'brown' Then SVGParseColor := 6
+ Else If (S = 'lightgray') or (S = 'lightgrey') or (S = 'silver') Then SVGParseColor := 7
+ Else If (S = 'darkgray') or (S = 'darkgrey') or (S = 'gray') or (S = 'grey') Then SVGParseColor := 8
+ Else If S = 'lightblue' Then SVGParseColor := 9
+ Else If (S = 'lightgreen') or (S = 'lime') Then SVGParseColor := 10
+ Else If S = 'lightcyan' Then SVGParseColor := 11
+ Else If (S = 'lightred') or (S = 'salmon') Then SVGParseColor := 12
+ Else If (S = 'lightmagenta') or (S = 'pink') Then SVGParseColor := 13
+ Else If S = 'yellow' Then SVGParseColor := 14
+ Else If S = 'white' Then SVGParseColor := 15
+ Else If S = 'orange' Then SVGParseColor := 6
+ Else If S = 'none' Then SVGParseColor := -1;  { Pas de couleur }
+End;
+
+{ Fonction pour extraire la valeur d'un attribut dans une balise XML }
+Function SVGGetAttribute(Const Tag, AttrName: String): String;
+Var
+ Pos, EndPos: Integer;
+ AttrSearch: String;
+ QuoteChar: Char;
+Begin
+ SVGGetAttribute := '';
+ AttrSearch := AttrName + '="';
+ Pos := 1;
+ 
+ { Chercher l'attribut avec guillemets doubles }
+ While Pos <= Length(Tag) - Length(AttrSearch) do Begin
+  If Copy(Tag, Pos, Length(AttrSearch)) = AttrSearch Then Begin
+   Pos := Pos + Length(AttrSearch);
+   EndPos := Pos;
+   While (EndPos <= Length(Tag)) and (Tag[EndPos] <> '"') do
+    Inc(EndPos);
+   SVGGetAttribute := Copy(Tag, Pos, EndPos - Pos);
+   Exit;
+  End;
+  Inc(Pos);
+ End;
+ 
+ { Essayer avec guillemets simples }
+ AttrSearch := AttrName + '=''';
+ Pos := 1;
+ While Pos <= Length(Tag) - Length(AttrSearch) do Begin
+  If Copy(Tag, Pos, Length(AttrSearch)) = AttrSearch Then Begin
+   Pos := Pos + Length(AttrSearch);
+   EndPos := Pos;
+   While (EndPos <= Length(Tag)) and (Tag[EndPos] <> '''') do
+    Inc(EndPos);
+   SVGGetAttribute := Copy(Tag, Pos, EndPos - Pos);
+   Exit;
+  End;
+  Inc(Pos);
+ End;
+End;
+
+{ Fonction pour initialiser l'état de parsing SVG }
+Procedure InitSVGParseState;
+Begin
+ SVGParseState.CurrentX := 0;
+ SVGParseState.CurrentY := 0;
+ SVGParseState.StartX := 0;
+ SVGParseState.StartY := 0;
+ SVGParseState.FillColor := $FFFFFF;
+ SVGParseState.StrokeColor := $000000;
+ SVGParseState.StrokeWidth := 1;
+ SVGParseState.TransformX := 0;
+ SVGParseState.TransformY := 0;
+ SVGParseState.ScaleX := 1;
+ SVGParseState.ScaleY := 1;
+End;
+
+{ Fonction pour parser un élément SVG rect }
+Function ParseSVGRect(Const Tag: String; Var Shape: TShapeObject): Boolean;
+Var
+ X, Y, W, H, RX, RY: Real;
+ TempStr: String;
+ Pos: Integer;
+Begin
+ ParseSVGRect := False;
+ 
+ { Parser les attributs }
+ TempStr := SVGGetAttribute(Tag, 'x');
+ If TempStr = '' Then X := 0 Else Begin Pos := 1; X := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'y');
+ If TempStr = '' Then Y := 0 Else Begin Pos := 1; Y := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'width');
+ If TempStr = '' Then Exit;
+ Pos := 1;
+ W := SVGParseNumber(TempStr, Pos);
+ 
+ TempStr := SVGGetAttribute(Tag, 'height');
+ If TempStr = '' Then Exit;
+ Pos := 1;
+ H := SVGParseNumber(TempStr, Pos);
+ 
+ { Créer la forme }
+ Shape.ShapeType := stRectangle;
+ Shape.X1 := Round(X * SVG_SCALE_FACTOR);
+ Shape.Y1 := Round(Y * SVG_SCALE_FACTOR);
+ Shape.X2 := Round((X + W) * SVG_SCALE_FACTOR);
+ Shape.Y2 := Round((Y + H) * SVG_SCALE_FACTOR);
+ 
+ { Parser les couleurs }
+ TempStr := SVGGetAttribute(Tag, 'fill');
+ If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
+ Else Shape.FillColor := 15;  { Blanc par défaut }
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke');
+ If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
+ Else Shape.LineColor := 0;  { Noir par défaut }
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke-width');
+ If TempStr <> '' Then Begin
+  Pos := 1;
+  Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
+ End
+ Else Shape.LineWidth := 1;
+ 
+ Shape.LineStyle := 0;
+ Shape.Selected := False;
+ Shape.LayerIndex := 1;
+ Shape.GroupID := 0;
+ Shape.PointCount := 0;
+ 
+ ParseSVGRect := True;
+End;
+
+{ Fonction pour parser un élément SVG circle }
+Function ParseSVGCircle(Const Tag: String; Var Shape: TShapeObject): Boolean;
+Var
+ CX, CY, R: Real;
+ TempStr: String;
+ Pos: Integer;
+Begin
+ ParseSVGCircle := False;
+ 
+ { Parser les attributs }
+ TempStr := SVGGetAttribute(Tag, 'cx');
+ If TempStr = '' Then CX := 0 Else Begin Pos := 1; CX := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'cy');
+ If TempStr = '' Then CY := 0 Else Begin Pos := 1; CY := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'r');
+ If TempStr = '' Then Exit;
+ Pos := 1;
+ R := SVGParseNumber(TempStr, Pos);
+ 
+ { Créer la forme (ellipse avec même rayon X et Y) }
+ Shape.ShapeType := stEllipse;
+ Shape.X1 := Round((CX - R) * SVG_SCALE_FACTOR);
+ Shape.Y1 := Round((CY - R) * SVG_SCALE_FACTOR);
+ Shape.X2 := Round((CX + R) * SVG_SCALE_FACTOR);
+ Shape.Y2 := Round((CY + R) * SVG_SCALE_FACTOR);
+ 
+ { Parser les couleurs }
+ TempStr := SVGGetAttribute(Tag, 'fill');
+ If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
+ Else Shape.FillColor := 15;
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke');
+ If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
+ Else Shape.LineColor := 0;
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke-width');
+ If TempStr <> '' Then Begin
+  Pos := 1;
+  Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
+ End
+ Else Shape.LineWidth := 1;
+ 
+ Shape.LineStyle := 0;
+ Shape.Selected := False;
+ Shape.LayerIndex := 1;
+ Shape.GroupID := 0;
+ Shape.PointCount := 0;
+ 
+ ParseSVGCircle := True;
+End;
+
+{ Fonction pour parser un élément SVG ellipse }
+Function ParseSVGEllipse(Const Tag: String; Var Shape: TShapeObject): Boolean;
+Var
+ CX, CY, RX, RY: Real;
+ TempStr: String;
+ Pos: Integer;
+Begin
+ ParseSVGEllipse := False;
+ 
+ { Parser les attributs }
+ TempStr := SVGGetAttribute(Tag, 'cx');
+ If TempStr = '' Then CX := 0 Else Begin Pos := 1; CX := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'cy');
+ If TempStr = '' Then CY := 0 Else Begin Pos := 1; CY := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'rx');
+ If TempStr = '' Then Exit;
+ Pos := 1;
+ RX := SVGParseNumber(TempStr, Pos);
+ 
+ TempStr := SVGGetAttribute(Tag, 'ry');
+ If TempStr = '' Then Exit;
+ Pos := 1;
+ RY := SVGParseNumber(TempStr, Pos);
+ 
+ { Créer la forme }
+ Shape.ShapeType := stEllipse;
+ Shape.X1 := Round((CX - RX) * SVG_SCALE_FACTOR);
+ Shape.Y1 := Round((CY - RY) * SVG_SCALE_FACTOR);
+ Shape.X2 := Round((CX + RX) * SVG_SCALE_FACTOR);
+ Shape.Y2 := Round((CY + RY) * SVG_SCALE_FACTOR);
+ 
+ { Parser les couleurs }
+ TempStr := SVGGetAttribute(Tag, 'fill');
+ If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
+ Else Shape.FillColor := 15;
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke');
+ If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
+ Else Shape.LineColor := 0;
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke-width');
+ If TempStr <> '' Then Begin
+  Pos := 1;
+  Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
+ End
+ Else Shape.LineWidth := 1;
+ 
+ Shape.LineStyle := 0;
+ Shape.Selected := False;
+ Shape.LayerIndex := 1;
+ Shape.GroupID := 0;
+ Shape.PointCount := 0;
+ 
+ ParseSVGEllipse := True;
+End;
+
+{ Fonction pour parser un élément SVG line }
+Function ParseSVGLine(Const Tag: String; Var Shape: TShapeObject): Boolean;
+Var
+ X1, Y1, X2, Y2: Real;
+ TempStr: String;
+ Pos: Integer;
+Begin
+ ParseSVGLine := False;
+ 
+ { Parser les attributs }
+ TempStr := SVGGetAttribute(Tag, 'x1');
+ If TempStr = '' Then X1 := 0 Else Begin Pos := 1; X1 := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'y1');
+ If TempStr = '' Then Y1 := 0 Else Begin Pos := 1; Y1 := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'x2');
+ If TempStr = '' Then X2 := 0 Else Begin Pos := 1; X2 := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'y2');
+ If TempStr = '' Then Y2 := 0 Else Begin Pos := 1; Y2 := SVGParseNumber(TempStr, Pos); End;
+ 
+ { Créer la forme }
+ Shape.ShapeType := stLine;
+ Shape.X1 := Round(X1 * SVG_SCALE_FACTOR);
+ Shape.Y1 := Round(Y1 * SVG_SCALE_FACTOR);
+ Shape.X2 := Round(X2 * SVG_SCALE_FACTOR);
+ Shape.Y2 := Round(Y2 * SVG_SCALE_FACTOR);
+ 
+ { Parser les couleurs (les lignes n'ont pas de remplissage) }
+ Shape.FillColor := -1;  { Pas de remplissage }
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke');
+ If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
+ Else Shape.LineColor := 0;
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke-width');
+ If TempStr <> '' Then Begin
+  Pos := 1;
+  Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
+ End
+ Else Shape.LineWidth := 1;
+ 
+ Shape.LineStyle := 0;
+ Shape.Selected := False;
+ Shape.LayerIndex := 1;
+ Shape.GroupID := 0;
+ Shape.PointCount := 0;
+ 
+ ParseSVGLine := True;
+End;
+
+{ Fonction pour parser un élément SVG polygon ou polyline }
+Function ParseSVGPolygon(Const Tag: String; Var Shape: TShapeObject; IsPolyline: Boolean): Boolean;
+Var
+ PointsStr, TempStr: String;
+ Pos, I: Integer;
+ X, Y: Real;
+ MinX, MinY, MaxX, MaxY: Real;
+Begin
+ ParseSVGPolygon := False;
+ 
+ PointsStr := SVGGetAttribute(Tag, 'points');
+ If PointsStr = '' Then Exit;
+ 
+ { Parser les points }
+ Shape.PointCount := 0;
+ Pos := 1;
+ MinX := 32767; MinY := 32767;
+ MaxX := -32767; MaxY := -32767;
+ 
+ While (Pos <= Length(PointsStr)) and (Shape.PointCount < MAX_POLYGON_POINTS) do Begin
+  Pos := SVGSkipWhitespace(PointsStr, Pos);
+  If Pos > Length(PointsStr) Then Break;
+  
+  X := SVGParseNumber(PointsStr, Pos);
+  Pos := SVGSkipWhitespace(PointsStr, Pos);
+  Y := SVGParseNumber(PointsStr, Pos);
+  
+  Inc(Shape.PointCount);
+  Shape.Points[Shape.PointCount].X := Round(X * SVG_SCALE_FACTOR);
+  Shape.Points[Shape.PointCount].Y := Round(Y * SVG_SCALE_FACTOR);
+  
+  If X < MinX Then MinX := X;
+  If Y < MinY Then MinY := Y;
+  If X > MaxX Then MaxX := X;
+  If Y > MaxY Then MaxY := Y;
+ End;
+ 
+ If Shape.PointCount < 2 Then Exit;
+ 
+ { Créer la forme }
+ Shape.ShapeType := stPolygon;
+ Shape.X1 := Round(MinX * SVG_SCALE_FACTOR);
+ Shape.Y1 := Round(MinY * SVG_SCALE_FACTOR);
+ Shape.X2 := Round(MaxX * SVG_SCALE_FACTOR);
+ Shape.Y2 := Round(MaxY * SVG_SCALE_FACTOR);
+ 
+ { Parser les couleurs }
+ TempStr := SVGGetAttribute(Tag, 'fill');
+ If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
+ Else If IsPolyline Then Shape.FillColor := -1
+ Else Shape.FillColor := 15;
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke');
+ If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
+ Else Shape.LineColor := 0;
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke-width');
+ If TempStr <> '' Then Begin
+  Pos := 1;
+  Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
+ End
+ Else Shape.LineWidth := 1;
+ 
+ Shape.LineStyle := 0;
+ Shape.Selected := False;
+ Shape.LayerIndex := 1;
+ Shape.GroupID := 0;
+ 
+ ParseSVGPolygon := True;
+End;
+
+{ Fonction pour parser un élément SVG path (support basique M, L, H, V, Z, C, Q) }
+Function ParseSVGPath(Const Tag: String; Var Shape: TShapeObject): Boolean;
+Var
+ PathData, TempStr: String;
+ Pos, I: Integer;
+ Cmd: Char;
+ X, Y, X1, Y1, X2, Y2: Real;
+ CurX, CurY, StartX, StartY: Real;
+ MinX, MinY, MaxX, MaxY: Real;
+ IsRelative: Boolean;
+Begin
+ ParseSVGPath := False;
+ 
+ PathData := SVGGetAttribute(Tag, 'd');
+ If PathData = '' Then Exit;
+ 
+ { Parser le path }
+ Shape.PointCount := 0;
+ Pos := 1;
+ CurX := 0; CurY := 0;
+ StartX := 0; StartY := 0;
+ MinX := 32767; MinY := 32767;
+ MaxX := -32767; MaxY := -32767;
+ 
+ While (Pos <= Length(PathData)) and (Shape.PointCount < MAX_POLYGON_POINTS) do Begin
+  Pos := SVGSkipWhitespace(PathData, Pos);
+  If Pos > Length(PathData) Then Break;
+  
+  Cmd := PathData[Pos];
+  
+  { Vérifier si c'est une commande }
+  If ((Cmd >= 'A') and (Cmd <= 'Z')) or ((Cmd >= 'a') and (Cmd <= 'z')) Then Begin
+   Inc(Pos);
+   IsRelative := (Cmd >= 'a') and (Cmd <= 'z');
+   If IsRelative Then Cmd := Chr(Ord(Cmd) - 32);  { Convertir en majuscule }
+  End;
+  
+  Pos := SVGSkipWhitespace(PathData, Pos);
+  
+  Case Cmd of
+   'M': Begin { MoveTo }
+    X := SVGParseNumber(PathData, Pos);
+    Y := SVGParseNumber(PathData, Pos);
+    If IsRelative Then Begin X := CurX + X; Y := CurY + Y; End;
+    CurX := X; CurY := Y;
+    StartX := X; StartY := Y;
+    If Shape.PointCount < MAX_POLYGON_POINTS Then Begin
+     Inc(Shape.PointCount);
+     Shape.Points[Shape.PointCount].X := Round(X * SVG_SCALE_FACTOR);
+     Shape.Points[Shape.PointCount].Y := Round(Y * SVG_SCALE_FACTOR);
+    End;
+    If X < MinX Then MinX := X;
+    If Y < MinY Then MinY := Y;
+    If X > MaxX Then MaxX := X;
+    If Y > MaxY Then MaxY := Y;
+   End;
+   
+   'L': Begin { LineTo }
+    X := SVGParseNumber(PathData, Pos);
+    Y := SVGParseNumber(PathData, Pos);
+    If IsRelative Then Begin X := CurX + X; Y := CurY + Y; End;
+    CurX := X; CurY := Y;
+    If Shape.PointCount < MAX_POLYGON_POINTS Then Begin
+     Inc(Shape.PointCount);
+     Shape.Points[Shape.PointCount].X := Round(X * SVG_SCALE_FACTOR);
+     Shape.Points[Shape.PointCount].Y := Round(Y * SVG_SCALE_FACTOR);
+    End;
+    If X < MinX Then MinX := X;
+    If Y < MinY Then MinY := Y;
+    If X > MaxX Then MaxX := X;
+    If Y > MaxY Then MaxY := Y;
+   End;
+   
+   'H': Begin { Horizontal LineTo }
+    X := SVGParseNumber(PathData, Pos);
+    If IsRelative Then X := CurX + X;
+    CurX := X;
+    If Shape.PointCount < MAX_POLYGON_POINTS Then Begin
+     Inc(Shape.PointCount);
+     Shape.Points[Shape.PointCount].X := Round(X * SVG_SCALE_FACTOR);
+     Shape.Points[Shape.PointCount].Y := Round(CurY * SVG_SCALE_FACTOR);
+    End;
+    If X < MinX Then MinX := X;
+    If X > MaxX Then MaxX := X;
+   End;
+   
+   'V': Begin { Vertical LineTo }
+    Y := SVGParseNumber(PathData, Pos);
+    If IsRelative Then Y := CurY + Y;
+    CurY := Y;
+    If Shape.PointCount < MAX_POLYGON_POINTS Then Begin
+     Inc(Shape.PointCount);
+     Shape.Points[Shape.PointCount].X := Round(CurX * SVG_SCALE_FACTOR);
+     Shape.Points[Shape.PointCount].Y := Round(Y * SVG_SCALE_FACTOR);
+    End;
+    If Y < MinY Then MinY := Y;
+    If Y > MaxY Then MaxY := Y;
+   End;
+   
+   'Z': Begin { ClosePath }
+    CurX := StartX;
+    CurY := StartY;
+    { Fermer le chemin en revenant au point de départ }
+   End;
+   
+   'C': Begin { Cubic Bezier - on simplifie en prenant le point final }
+    X1 := SVGParseNumber(PathData, Pos);
+    Y1 := SVGParseNumber(PathData, Pos);
+    X2 := SVGParseNumber(PathData, Pos);
+    Y2 := SVGParseNumber(PathData, Pos);
+    X := SVGParseNumber(PathData, Pos);
+    Y := SVGParseNumber(PathData, Pos);
+    If IsRelative Then Begin X := CurX + X; Y := CurY + Y; End;
+    CurX := X; CurY := Y;
+    If Shape.PointCount < MAX_POLYGON_POINTS Then Begin
+     Inc(Shape.PointCount);
+     Shape.Points[Shape.PointCount].X := Round(X * SVG_SCALE_FACTOR);
+     Shape.Points[Shape.PointCount].Y := Round(Y * SVG_SCALE_FACTOR);
+    End;
+    If X < MinX Then MinX := X;
+    If Y < MinY Then MinY := Y;
+    If X > MaxX Then MaxX := X;
+    If Y > MaxY Then MaxY := Y;
+   End;
+   
+   'Q': Begin { Quadratic Bezier - on simplifie en prenant le point final }
+    X1 := SVGParseNumber(PathData, Pos);
+    Y1 := SVGParseNumber(PathData, Pos);
+    X := SVGParseNumber(PathData, Pos);
+    Y := SVGParseNumber(PathData, Pos);
+    If IsRelative Then Begin X := CurX + X; Y := CurY + Y; End;
+    CurX := X; CurY := Y;
+    If Shape.PointCount < MAX_POLYGON_POINTS Then Begin
+     Inc(Shape.PointCount);
+     Shape.Points[Shape.PointCount].X := Round(X * SVG_SCALE_FACTOR);
+     Shape.Points[Shape.PointCount].Y := Round(Y * SVG_SCALE_FACTOR);
+    End;
+    If X < MinX Then MinX := X;
+    If Y < MinY Then MinY := Y;
+    If X > MaxX Then MaxX := X;
+    If Y > MaxY Then MaxY := Y;
+   End;
+   
+  Else
+   { Commande inconnue, avancer }
+   Inc(Pos);
+  End;
+ End;
+ 
+ If Shape.PointCount < 2 Then Exit;
+ 
+ { Créer la forme }
+ Shape.ShapeType := stPolygon;
+ Shape.X1 := Round(MinX * SVG_SCALE_FACTOR);
+ Shape.Y1 := Round(MinY * SVG_SCALE_FACTOR);
+ Shape.X2 := Round(MaxX * SVG_SCALE_FACTOR);
+ Shape.Y2 := Round(MaxY * SVG_SCALE_FACTOR);
+ 
+ { Parser les couleurs }
+ TempStr := SVGGetAttribute(Tag, 'fill');
+ If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
+ Else Shape.FillColor := 15;
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke');
+ If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
+ Else Shape.LineColor := 0;
+ 
+ TempStr := SVGGetAttribute(Tag, 'stroke-width');
+ If TempStr <> '' Then Begin
+  Pos := 1;
+  Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
+ End
+ Else Shape.LineWidth := 1;
+ 
+ Shape.LineStyle := 0;
+ Shape.Selected := False;
+ Shape.LayerIndex := 1;
+ Shape.GroupID := 0;
+ 
+ ParseSVGPath := True;
+End;
+
+{ Fonction pour parser un élément SVG text }
+Function ParseSVGText(Const Tag, TextContent: String; Var Shape: TShapeObject): Boolean;
+Var
+ X, Y: Real;
+ TempStr: String;
+ Pos: Integer;
+Begin
+ ParseSVGText := False;
+ 
+ { Parser les attributs }
+ TempStr := SVGGetAttribute(Tag, 'x');
+ If TempStr = '' Then X := 0 Else Begin Pos := 1; X := SVGParseNumber(TempStr, Pos); End;
+ 
+ TempStr := SVGGetAttribute(Tag, 'y');
+ If TempStr = '' Then Y := 0 Else Begin Pos := 1; Y := SVGParseNumber(TempStr, Pos); End;
+ 
+ { Créer la forme }
+ Shape.ShapeType := stText;
+ Shape.X1 := Round(X * SVG_SCALE_FACTOR);
+ Shape.Y1 := Round(Y * SVG_SCALE_FACTOR) - 15;  { Ajuster pour la baseline }
+ Shape.X2 := Shape.X1 + Length(TextContent) * 8;  { Estimation de la largeur }
+ Shape.Y2 := Shape.Y1 + 20;  { Hauteur estimée }
+ 
+ { Texte }
+ If Length(TextContent) > 80 Then
+  Shape.Text := Copy(TextContent, 1, 80)
+ Else
+  Shape.Text := TextContent;
+ 
+ { Parser les couleurs }
+ TempStr := SVGGetAttribute(Tag, 'fill');
+ If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
+ Else Shape.FillColor := 0;  { Noir par défaut pour le texte }
+ 
+ Shape.LineColor := Shape.FillColor;
+ Shape.LineWidth := 1;
+ Shape.LineStyle := 0;
+ Shape.Selected := False;
+ Shape.LayerIndex := 1;
+ Shape.GroupID := 0;
+ Shape.PointCount := 0;
+ 
+ ParseSVGText := True;
+End;
+
+{ Fonction principale pour charger un fichier SVG }
+Function LoadSVGFile(Const FileName: String): Boolean;
+Var
+ F: Text;
+ Line, Tag, TagName, TextContent: String;
+ TotalContent: String;
+ I, TagStart, TagEnd, ContentStart: Integer;
+ Shape: TShapeObject;
+ InTag: Boolean;
+ C: Char;
+Begin
+ LoadSVGFile := False;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Reset(F);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ InitSVGParseState;
+ TotalContent := '';
+ 
+ { Lire tout le fichier }
+ While Not Eof(F) do Begin
+  ReadLn(F, Line);
+  TotalContent := TotalContent + Line + ' ';
+ End;
+ Close(F);
+ 
+ { Parser les balises }
+ I := 1;
+ While I <= Length(TotalContent) do Begin
+  { Chercher le début d'une balise }
+  While (I <= Length(TotalContent)) and (TotalContent[I] <> '<') do
+   Inc(I);
+  
+  If I > Length(TotalContent) Then Break;
+  TagStart := I;
+  
+  { Trouver la fin de la balise }
+  While (I <= Length(TotalContent)) and (TotalContent[I] <> '>') do
+   Inc(I);
+  
+  If I > Length(TotalContent) Then Break;
+  TagEnd := I;
+  
+  Tag := Copy(TotalContent, TagStart + 1, TagEnd - TagStart - 1);
+  Inc(I);
+  
+  { Extraire le nom de la balise }
+  TagName := '';
+  ContentStart := 1;
+  While (ContentStart <= Length(Tag)) and (Tag[ContentStart] <> ' ') and 
+        (Tag[ContentStart] <> '/') and (Tag[ContentStart] <> '>') do Begin
+   TagName := TagName + Tag[ContentStart];
+   Inc(ContentStart);
+  End;
+  
+  { Convertir en minuscules }
+  For ContentStart := 1 to Length(TagName) do
+   If (TagName[ContentStart] >= 'A') and (TagName[ContentStart] <= 'Z') Then
+    TagName[ContentStart] := Chr(Ord(TagName[ContentStart]) + 32);
+  
+  { Traiter les différents types de balises }
+  If TagName = 'rect' Then Begin
+   If ParseSVGRect(Tag, Shape) Then Begin
+    If ShapeCount < MAX_SHAPES Then Begin
+     Inc(ShapeCount);
+     Shapes[ShapeCount] := Shape;
+    End;
+   End;
+  End
+  Else If TagName = 'circle' Then Begin
+   If ParseSVGCircle(Tag, Shape) Then Begin
+    If ShapeCount < MAX_SHAPES Then Begin
+     Inc(ShapeCount);
+     Shapes[ShapeCount] := Shape;
+    End;
+   End;
+  End
+  Else If TagName = 'ellipse' Then Begin
+   If ParseSVGEllipse(Tag, Shape) Then Begin
+    If ShapeCount < MAX_SHAPES Then Begin
+     Inc(ShapeCount);
+     Shapes[ShapeCount] := Shape;
+    End;
+   End;
+  End
+  Else If TagName = 'line' Then Begin
+   If ParseSVGLine(Tag, Shape) Then Begin
+    If ShapeCount < MAX_SHAPES Then Begin
+     Inc(ShapeCount);
+     Shapes[ShapeCount] := Shape;
+    End;
+   End;
+  End
+  Else If TagName = 'polygon' Then Begin
+   If ParseSVGPolygon(Tag, Shape, False) Then Begin
+    If ShapeCount < MAX_SHAPES Then Begin
+     Inc(ShapeCount);
+     Shapes[ShapeCount] := Shape;
+    End;
+   End;
+  End
+  Else If TagName = 'polyline' Then Begin
+   If ParseSVGPolygon(Tag, Shape, True) Then Begin
+    If ShapeCount < MAX_SHAPES Then Begin
+     Inc(ShapeCount);
+     Shapes[ShapeCount] := Shape;
+    End;
+   End;
+  End
+  Else If TagName = 'path' Then Begin
+   If ParseSVGPath(Tag, Shape) Then Begin
+    If ShapeCount < MAX_SHAPES Then Begin
+     Inc(ShapeCount);
+     Shapes[ShapeCount] := Shape;
+    End;
+   End;
+  End
+  Else If TagName = 'text' Then Begin
+   { Extraire le contenu texte }
+   TextContent := '';
+   While (I <= Length(TotalContent)) and (TotalContent[I] <> '<') do Begin
+    If (TotalContent[I] <> #10) and (TotalContent[I] <> #13) Then
+     TextContent := TextContent + TotalContent[I];
+    Inc(I);
+   End;
+   { Supprimer les espaces au début et à la fin }
+   While (Length(TextContent) > 0) and (TextContent[1] = ' ') do
+    Delete(TextContent, 1, 1);
+   While (Length(TextContent) > 0) and (TextContent[Length(TextContent)] = ' ') do
+    Delete(TextContent, Length(TextContent), 1);
+   
+   If ParseSVGText(Tag, TextContent, Shape) Then Begin
+    If ShapeCount < MAX_SHAPES Then Begin
+     Inc(ShapeCount);
+     Shapes[ShapeCount] := Shape;
+    End;
+   End;
+  End;
+ End;
+ 
+ LoadSVGFile := True;
+End;
+
+{ Fonction pour détecter si un fichier est un fichier SVG }
+Function IsSVGFile(Const FileName: String): Boolean;
+Var
+ Ext: String;
+ I: Integer;
+Begin
+ IsSVGFile := False;
+ Ext := '';
+ 
+ { Extraire l'extension }
+ For I := Length(FileName) downto 1 do Begin
+  If FileName[I] = '.' Then Begin
+   Ext := Copy(FileName, I, Length(FileName) - I + 1);
+   Break;
+  End;
+ End;
+ 
+ { Convertir en minuscules }
+ For I := 1 to Length(Ext) do
+  If (Ext[I] >= 'A') and (Ext[I] <= 'Z') Then
+   Ext[I] := Chr(Ord(Ext[I]) + 32);
+ 
+ IsSVGFile := (Ext = '.svg');
+End;
+
+{ ============================================================================ }
+{ === FIN DES FONCTIONS D'IMPORT SVG === }
 { ============================================================================ }
 
 { Procédure New - Créer un nouveau document }

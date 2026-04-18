@@ -38,7 +38,7 @@
 
   === FORMAT SVG ===
   21. [FAIT] Parser et importer les fichiers SVG avec support des elements path, rect, circle, ellipse, line, polygon, text
-  22. Exporter les dessins au format SVG avec attributs de style CSS
+  22. [FAIT] Exporter les dessins au format SVG avec attributs de style CSS
 
   === EXPORT IMAGES ===
   23. Exporter en format BMP avec support 1-bit, 4-bit, 8-bit, 24-bit
@@ -3104,6 +3104,310 @@ End;
 
 { ============================================================================ }
 { === FIN DES FONCTIONS D'IMPORT SVG === }
+{ ============================================================================ }
+
+{ ============================================================================ }
+{ === FONCTIONS D'EXPORT SVG === }
+{ ============================================================================ }
+
+{ Fonction pour convertir une couleur Pascal (palette 16 couleurs) en code hexadécimal SVG }
+Function ColorToSVGHex(Color: Integer): String;
+Begin
+ Case Color of
+  0:  ColorToSVGHex := '#000000';  { Noir }
+  1:  ColorToSVGHex := '#0000AA';  { Bleu }
+  2:  ColorToSVGHex := '#00AA00';  { Vert }
+  3:  ColorToSVGHex := '#00AAAA';  { Cyan }
+  4:  ColorToSVGHex := '#AA0000';  { Rouge }
+  5:  ColorToSVGHex := '#AA00AA';  { Magenta }
+  6:  ColorToSVGHex := '#AA5500';  { Marron }
+  7:  ColorToSVGHex := '#AAAAAA';  { Gris clair }
+  8:  ColorToSVGHex := '#555555';  { Gris foncé }
+  9:  ColorToSVGHex := '#5555FF';  { Bleu clair }
+  10: ColorToSVGHex := '#55FF55';  { Vert clair }
+  11: ColorToSVGHex := '#55FFFF';  { Cyan clair }
+  12: ColorToSVGHex := '#FF5555';  { Rouge clair }
+  13: ColorToSVGHex := '#FF55FF';  { Magenta clair }
+  14: ColorToSVGHex := '#FFFF55';  { Jaune }
+  15: ColorToSVGHex := '#FFFFFF';  { Blanc }
+ Else
+  ColorToSVGHex := '#000000';  { Noir par défaut }
+ End;
+End;
+
+{ Fonction pour convertir le style de ligne en stroke-dasharray SVG }
+Function LineStyleToSVGDash(LineStyle: Integer): String;
+Begin
+ Case LineStyle of
+  0: LineStyleToSVGDash := '';                    { Solide }
+  1: LineStyleToSVGDash := 'stroke-dasharray="5,5"';  { Pointillé }
+  2: LineStyleToSVGDash := 'stroke-dasharray="10,5"'; { Tirets }
+  3: LineStyleToSVGDash := 'stroke-dasharray="10,5,2,5"'; { Tiret-point }
+ Else
+  LineStyleToSVGDash := '';
+ End;
+End;
+
+{ Fonction pour générer les attributs de style CSS pour une forme }
+Function ShapeToSVGStyle(Const Shape: TShapeObject): String;
+Var
+ Style: String;
+Begin
+ Style := 'style="';
+ 
+ { Couleur de remplissage }
+ If Shape.FillColor >= 0 Then
+  Style := Style + 'fill:' + ColorToSVGHex(Shape.FillColor) + ';'
+ Else
+  Style := Style + 'fill:none;';
+ 
+ { Couleur de contour }
+ If Shape.LineColor >= 0 Then
+  Style := Style + 'stroke:' + ColorToSVGHex(Shape.LineColor) + ';'
+ Else
+  Style := Style + 'stroke:none;';
+ 
+ { Épaisseur de ligne }
+ If Shape.LineWidth > 0 Then Begin
+  Style := Style + 'stroke-width:';
+  { Convertir Integer en String manuellement }
+  If Shape.LineWidth < 10 Then
+   Style := Style + Chr(Ord('0') + Shape.LineWidth)
+  Else Begin
+   Style := Style + Chr(Ord('0') + (Shape.LineWidth Div 10));
+   Style := Style + Chr(Ord('0') + (Shape.LineWidth Mod 10));
+  End;
+  Style := Style + ';';
+ End;
+ 
+ Style := Style + '"';
+ 
+ { Ajouter le style de ligne si nécessaire }
+ If Shape.LineStyle > 0 Then
+  Style := Style + ' ' + LineStyleToSVGDash(Shape.LineStyle);
+ 
+ ShapeToSVGStyle := Style;
+End;
+
+{ Fonction pour convertir un entier en chaîne }
+Function IntToStrSVG(N: Integer): String;
+Var
+ S: String;
+ Neg: Boolean;
+Begin
+ If N = 0 Then Begin
+  IntToStrSVG := '0';
+  Exit;
+ End;
+ 
+ Neg := N < 0;
+ If Neg Then N := -N;
+ 
+ S := '';
+ While N > 0 do Begin
+  S := Chr(Ord('0') + (N Mod 10)) + S;
+  N := N Div 10;
+ End;
+ 
+ If Neg Then S := '-' + S;
+ IntToStrSVG := S;
+End;
+
+{ Procédure pour écrire un rectangle en SVG }
+Procedure WriteSVGRect(Var F: Text; Const Shape: TShapeObject);
+Var
+ X, Y, W, H: Integer;
+Begin
+ X := Shape.X1;
+ Y := Shape.Y1;
+ W := Shape.X2 - Shape.X1;
+ H := Shape.Y2 - Shape.Y1;
+ 
+ If W < 0 Then Begin X := Shape.X2; W := -W; End;
+ If H < 0 Then Begin Y := Shape.Y2; H := -H; End;
+ 
+ WriteLn(F, '  <rect x="' + IntToStrSVG(X) + '" y="' + IntToStrSVG(Y) + 
+            '" width="' + IntToStrSVG(W) + '" height="' + IntToStrSVG(H) + 
+            '" ' + ShapeToSVGStyle(Shape) + ' />');
+End;
+
+{ Procédure pour écrire une ellipse en SVG }
+Procedure WriteSVGEllipse(Var F: Text; Const Shape: TShapeObject);
+Var
+ CX, CY, RX, RY: Integer;
+Begin
+ CX := (Shape.X1 + Shape.X2) Div 2;
+ CY := (Shape.Y1 + Shape.Y2) Div 2;
+ RX := Abs(Shape.X2 - Shape.X1) Div 2;
+ RY := Abs(Shape.Y2 - Shape.Y1) Div 2;
+ 
+ { Si RX = RY, écrire un cercle }
+ If RX = RY Then
+  WriteLn(F, '  <circle cx="' + IntToStrSVG(CX) + '" cy="' + IntToStrSVG(CY) + 
+             '" r="' + IntToStrSVG(RX) + '" ' + ShapeToSVGStyle(Shape) + ' />')
+ Else
+  WriteLn(F, '  <ellipse cx="' + IntToStrSVG(CX) + '" cy="' + IntToStrSVG(CY) + 
+             '" rx="' + IntToStrSVG(RX) + '" ry="' + IntToStrSVG(RY) + 
+             '" ' + ShapeToSVGStyle(Shape) + ' />');
+End;
+
+{ Procédure pour écrire une ligne en SVG }
+Procedure WriteSVGLine(Var F: Text; Const Shape: TShapeObject);
+Begin
+ WriteLn(F, '  <line x1="' + IntToStrSVG(Shape.X1) + '" y1="' + IntToStrSVG(Shape.Y1) + 
+            '" x2="' + IntToStrSVG(Shape.X2) + '" y2="' + IntToStrSVG(Shape.Y2) + 
+            '" ' + ShapeToSVGStyle(Shape) + ' />');
+End;
+
+{ Procédure pour écrire un polygone en SVG }
+Procedure WriteSVGPolygon(Var F: Text; Const Shape: TShapeObject);
+Var
+ Points: String;
+ I: Integer;
+Begin
+ If Shape.PointCount < 2 Then Exit;
+ 
+ Points := '';
+ For I := 1 to Shape.PointCount do Begin
+  If I > 1 Then Points := Points + ' ';
+  Points := Points + IntToStrSVG(Shape.Points[I].X) + ',' + IntToStrSVG(Shape.Points[I].Y);
+ End;
+ 
+ WriteLn(F, '  <polygon points="' + Points + '" ' + ShapeToSVGStyle(Shape) + ' />');
+End;
+
+{ Procédure pour écrire un texte en SVG }
+Procedure WriteSVGText(Var F: Text; Const Shape: TShapeObject);
+Var
+ Style: String;
+Begin
+ Style := 'style="';
+ 
+ { Couleur du texte }
+ If Shape.FillColor >= 0 Then
+  Style := Style + 'fill:' + ColorToSVGHex(Shape.FillColor) + ';'
+ Else
+  Style := Style + 'fill:#000000;';
+ 
+ { Taille de police estimée }
+ Style := Style + 'font-size:14px;font-family:sans-serif;"';
+ 
+ WriteLn(F, '  <text x="' + IntToStrSVG(Shape.X1) + '" y="' + IntToStrSVG(Shape.Y2) + 
+            '" ' + Style + '>' + Shape.Text + '</text>');
+End;
+
+{ Procédure pour écrire un connecteur en SVG (comme une ligne avec des marqueurs) }
+Procedure WriteSVGConnector(Var F: Text; Const Shape: TShapeObject);
+Begin
+ { Les connecteurs sont exportés comme des lignes simples }
+ WriteLn(F, '  <line x1="' + IntToStrSVG(Shape.X1) + '" y1="' + IntToStrSVG(Shape.Y1) + 
+            '" x2="' + IntToStrSVG(Shape.X2) + '" y2="' + IntToStrSVG(Shape.Y2) + 
+            '" ' + ShapeToSVGStyle(Shape) + ' marker-end="url(#arrowhead)" />');
+End;
+
+{ Procédure pour écrire une courbe de Bézier en SVG }
+Procedure WriteSVGBezier(Var F: Text; Const Shape: TShapeObject);
+Var
+ PathData: String;
+ I: Integer;
+Begin
+ If Shape.PointCount < 2 Then Exit;
+ 
+ { Créer un chemin avec des segments de ligne pour simplifier }
+ PathData := 'M' + IntToStrSVG(Shape.Points[1].X) + ',' + IntToStrSVG(Shape.Points[1].Y);
+ 
+ For I := 2 to Shape.PointCount do
+  PathData := PathData + ' L' + IntToStrSVG(Shape.Points[I].X) + ',' + IntToStrSVG(Shape.Points[I].Y);
+ 
+ WriteLn(F, '  <path d="' + PathData + '" ' + ShapeToSVGStyle(Shape) + ' />');
+End;
+
+{ Fonction principale pour sauvegarder un fichier SVG }
+Function SaveSVGFile(Const FileName: String): Boolean;
+Var
+ F: Text;
+ I: Integer;
+ MinX, MinY, MaxX, MaxY: Integer;
+ Width, Height: Integer;
+Begin
+ SaveSVGFile := False;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ { Calculer les dimensions du dessin }
+ MinX := 32767; MinY := 32767;
+ MaxX := 0; MaxY := 0;
+ 
+ For I := 1 to ShapeCount do Begin
+  If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
+  If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
+  If Shapes[I].X2 < MinX Then MinX := Shapes[I].X2;
+  If Shapes[I].Y2 < MinY Then MinY := Shapes[I].Y2;
+  If Shapes[I].X1 > MaxX Then MaxX := Shapes[I].X1;
+  If Shapes[I].Y1 > MaxY Then MaxY := Shapes[I].Y1;
+  If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
+  If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
+ End;
+ 
+ If ShapeCount = 0 Then Begin
+  Width := 800;
+  Height := 600;
+ End
+ Else Begin
+  Width := MaxX - MinX + 20;
+  Height := MaxY - MinY + 20;
+  If Width < 100 Then Width := 100;
+  If Height < 100 Then Height := 100;
+ End;
+ 
+ { Écrire l'en-tête XML et SVG }
+ WriteLn(F, '<?xml version="1.0" encoding="UTF-8"?>');
+ WriteLn(F, '<svg xmlns="http://www.w3.org/2000/svg" version="1.1"');
+ WriteLn(F, '     width="' + IntToStrSVG(Width) + '" height="' + IntToStrSVG(Height) + '"');
+ WriteLn(F, '     viewBox="' + IntToStrSVG(MinX - 10) + ' ' + IntToStrSVG(MinY - 10) + 
+            ' ' + IntToStrSVG(Width) + ' ' + IntToStrSVG(Height) + '">');
+ WriteLn(F, '');
+ 
+ { Définir les marqueurs pour les connecteurs }
+ WriteLn(F, '  <defs>');
+ WriteLn(F, '    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">');
+ WriteLn(F, '      <polygon points="0 0, 10 3.5, 0 7" fill="#000000" />');
+ WriteLn(F, '    </marker>');
+ WriteLn(F, '  </defs>');
+ WriteLn(F, '');
+ 
+ { Ajouter un commentaire avec les informations du document }
+ WriteLn(F, '  <!-- Generated by CloneDRAW VISIO -->');
+ WriteLn(F, '');
+ 
+ { Écrire chaque forme }
+ For I := 1 to ShapeCount do Begin
+  Case Shapes[I].ShapeType of
+   stRectangle: WriteSVGRect(F, Shapes[I]);
+   stEllipse: WriteSVGEllipse(F, Shapes[I]);
+   stLine: WriteSVGLine(F, Shapes[I]);
+   stConnector: WriteSVGConnector(F, Shapes[I]);
+   stText: WriteSVGText(F, Shapes[I]);
+   stPolygon: WriteSVGPolygon(F, Shapes[I]);
+   stBezier: WriteSVGBezier(F, Shapes[I]);
+   { stImage n'est pas exporté directement car nécessite l'inclusion de l'image }
+  End;
+ End;
+ 
+ { Fermer le document SVG }
+ WriteLn(F, '');
+ WriteLn(F, '</svg>');
+ 
+ Close(F);
+ SaveSVGFile := True;
+End;
+
+{ ============================================================================ }
+{ === FIN DES FONCTIONS D'EXPORT SVG === }
 { ============================================================================ }
 
 { Procédure New - Créer un nouveau document }

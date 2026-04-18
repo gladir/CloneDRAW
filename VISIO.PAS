@@ -41,7 +41,7 @@
   22. [FAIT] Exporter les dessins au format SVG avec attributs de style CSS
 
   === EXPORT IMAGES ===
-  23. Exporter en format BMP avec support 1-bit, 4-bit, 8-bit, 24-bit
+  23. [FAIT] Exporter en format BMP avec support 1-bit, 4-bit, 8-bit, 24-bit
   24. Exporter en format GIF avec palette de 256 couleurs et transparence
   25. Exporter en format JPEG avec compression reglable et en format PNG avec canal alpha pour transparence
 }
@@ -3408,6 +3408,643 @@ End;
 
 { ============================================================================ }
 { === FIN DES FONCTIONS D'EXPORT SVG === }
+{ ============================================================================ }
+
+{ ============================================================================ }
+{ === FONCTIONS D'EXPORT BMP === }
+{ ============================================================================ }
+
+{ Constantes pour le format BMP }
+Const
+ BMP_SIGNATURE = $4D42;  { 'BM' en little-endian }
+ BI_RGB = 0;             { Pas de compression }
+
+{ Fonction pour calculer la taille d'une ligne BMP avec padding (multiple de 4 octets) }
+Function GetBMPRowSize(Width, BitsPerPixel: Integer): LongInt;
+Var
+ RowBits: LongInt;
+Begin
+ RowBits := LongInt(Width) * LongInt(BitsPerPixel);
+ GetBMPRowSize := ((RowBits + 31) Div 32) * 4;
+End;
+
+{ Procédure pour écrire un Word (2 octets) en little-endian }
+Procedure WriteWord(Var F: File; W: Word);
+Var
+ B: Array[0..1] of Byte;
+Begin
+ B[0] := Lo(W);
+ B[1] := Hi(W);
+ BlockWrite(F, B, 2);
+End;
+
+{ Procédure pour écrire un LongInt (4 octets) en little-endian }
+Procedure WriteDWord(Var F: File; D: LongInt);
+Var
+ B: Array[0..3] of Byte;
+Begin
+ B[0] := D And $FF;
+ B[1] := (D Shr 8) And $FF;
+ B[2] := (D Shr 16) And $FF;
+ B[3] := (D Shr 24) And $FF;
+ BlockWrite(F, B, 4);
+End;
+
+{ Procédure pour écrire un octet }
+Procedure WriteByte(Var F: File; B: Byte);
+Begin
+ BlockWrite(F, B, 1);
+End;
+
+{ Fonction pour convertir une couleur palette en RGB (R, G, B) }
+Procedure PaletteToRGB(Color: Integer; Var R, G, B: Byte);
+Begin
+ Case Color of
+  0:  Begin R := 0;   G := 0;   B := 0;   End;  { Noir }
+  1:  Begin R := 0;   G := 0;   B := 170; End;  { Bleu }
+  2:  Begin R := 0;   G := 170; B := 0;   End;  { Vert }
+  3:  Begin R := 0;   G := 170; B := 170; End;  { Cyan }
+  4:  Begin R := 170; G := 0;   B := 0;   End;  { Rouge }
+  5:  Begin R := 170; G := 0;   B := 170; End;  { Magenta }
+  6:  Begin R := 170; G := 85;  B := 0;   End;  { Marron }
+  7:  Begin R := 170; G := 170; B := 170; End;  { Gris clair }
+  8:  Begin R := 85;  G := 85;  B := 85;  End;  { Gris foncé }
+  9:  Begin R := 85;  G := 85;  B := 255; End;  { Bleu clair }
+  10: Begin R := 85;  G := 255; B := 85;  End;  { Vert clair }
+  11: Begin R := 85;  G := 255; B := 255; End;  { Cyan clair }
+  12: Begin R := 255; G := 85;  B := 85;  End;  { Rouge clair }
+  13: Begin R := 255; G := 85;  B := 255; End;  { Magenta clair }
+  14: Begin R := 255; G := 255; B := 85;  End;  { Jaune }
+  15: Begin R := 255; G := 255; B := 255; End;  { Blanc }
+ Else
+  Begin R := 0; G := 0; B := 0; End;  { Noir par défaut }
+ End;
+End;
+
+{ Procédure pour écrire l'en-tête BMP (BITMAPFILEHEADER + BITMAPINFOHEADER) }
+Procedure WriteBMPHeader(Var F: File; Width, Height: Integer; BitsPerPixel: Integer; 
+                         PaletteSize: Integer);
+Var
+ RowSize: LongInt;
+ ImageSize: LongInt;
+ FileSize: LongInt;
+ OffsetBits: LongInt;
+ HeaderSize: LongInt;
+Begin
+ RowSize := GetBMPRowSize(Width, BitsPerPixel);
+ ImageSize := RowSize * LongInt(Height);
+ HeaderSize := 14 + 40;  { BITMAPFILEHEADER + BITMAPINFOHEADER }
+ OffsetBits := HeaderSize + (LongInt(PaletteSize) * 4);
+ FileSize := OffsetBits + ImageSize;
+ 
+ { BITMAPFILEHEADER (14 octets) }
+ WriteWord(F, BMP_SIGNATURE);   { bfType: 'BM' }
+ WriteDWord(F, FileSize);       { bfSize: taille totale du fichier }
+ WriteWord(F, 0);               { bfReserved1 }
+ WriteWord(F, 0);               { bfReserved2 }
+ WriteDWord(F, OffsetBits);     { bfOffBits: offset vers les données }
+ 
+ { BITMAPINFOHEADER (40 octets) }
+ WriteDWord(F, 40);             { biSize: taille de l'en-tête }
+ WriteDWord(F, Width);          { biWidth }
+ WriteDWord(F, Height);         { biHeight (positif = bottom-up) }
+ WriteWord(F, 1);               { biPlanes }
+ WriteWord(F, BitsPerPixel);    { biBitCount }
+ WriteDWord(F, BI_RGB);         { biCompression }
+ WriteDWord(F, ImageSize);      { biSizeImage }
+ WriteDWord(F, 2835);           { biXPelsPerMeter (72 DPI) }
+ WriteDWord(F, 2835);           { biYPelsPerMeter (72 DPI) }
+ WriteDWord(F, PaletteSize);    { biClrUsed }
+ WriteDWord(F, 0);              { biClrImportant }
+End;
+
+{ Procédure pour écrire la palette 16 couleurs standard }
+Procedure WritePalette16(Var F: File);
+Var
+ I: Integer;
+ R, G, B: Byte;
+Begin
+ For I := 0 to 15 do Begin
+  PaletteToRGB(I, R, G, B);
+  WriteByte(F, B);  { Bleu }
+  WriteByte(F, G);  { Vert }
+  WriteByte(F, R);  { Rouge }
+  WriteByte(F, 0);  { Réservé }
+ End;
+End;
+
+{ Procédure pour écrire la palette 256 couleurs (16 + niveaux de gris) }
+Procedure WritePalette256(Var F: File);
+Var
+ I: Integer;
+ R, G, B: Byte;
+ Gray: Byte;
+Begin
+ { Les 16 premières couleurs sont la palette standard }
+ For I := 0 to 15 do Begin
+  PaletteToRGB(I, R, G, B);
+  WriteByte(F, B);
+  WriteByte(F, G);
+  WriteByte(F, R);
+  WriteByte(F, 0);
+ End;
+ 
+ { Les couleurs 16-255 sont des niveaux de gris }
+ For I := 16 to 255 do Begin
+  Gray := (I - 16) + (I - 16) Div 15;  { Distribution des niveaux de gris }
+  WriteByte(F, Gray);
+  WriteByte(F, Gray);
+  WriteByte(F, Gray);
+  WriteByte(F, 0);
+ End;
+End;
+
+{ Procédure pour écrire la palette monochrome (noir et blanc) }
+Procedure WritePalette2(Var F: File);
+Begin
+ { Couleur 0: Noir }
+ WriteByte(F, 0);
+ WriteByte(F, 0);
+ WriteByte(F, 0);
+ WriteByte(F, 0);
+ 
+ { Couleur 1: Blanc }
+ WriteByte(F, 255);
+ WriteByte(F, 255);
+ WriteByte(F, 255);
+ WriteByte(F, 0);
+End;
+
+{ Type pour un buffer de pixels }
+Type
+ TPixelBuffer = Array[0..2047, 0..2047] of Byte;
+ PPixelBuffer = ^TPixelBuffer;
+
+Var
+ PixelBuffer: PPixelBuffer;
+ BufferWidth, BufferHeight: Integer;
+
+{ Initialiser le buffer de pixels }
+Procedure InitPixelBuffer(Width, Height: Integer);
+Begin
+ BufferWidth := Width;
+ BufferHeight := Height;
+ If BufferWidth > 2048 Then BufferWidth := 2048;
+ If BufferHeight > 2048 Then BufferHeight := 2048;
+ New(PixelBuffer);
+ FillChar(PixelBuffer^, SizeOf(TPixelBuffer), 15);  { Remplir de blanc }
+End;
+
+{ Libérer le buffer de pixels }
+Procedure FreePixelBuffer;
+Begin
+ If PixelBuffer <> Nil Then Begin
+  Dispose(PixelBuffer);
+  PixelBuffer := Nil;
+ End;
+End;
+
+{ Définir un pixel dans le buffer }
+Procedure SetBufferPixel(X, Y: Integer; Color: Byte);
+Begin
+ If (X >= 0) And (X < BufferWidth) And (Y >= 0) And (Y < BufferHeight) Then
+  PixelBuffer^[Y, X] := Color;
+End;
+
+{ Dessiner une ligne dans le buffer (algorithme de Bresenham) }
+Procedure DrawBufferLine(X1, Y1, X2, Y2: Integer; Color: Byte);
+Var
+ DX, DY, SX, SY, Err, E2: Integer;
+Begin
+ DX := Abs(X2 - X1);
+ DY := Abs(Y2 - Y1);
+ If X1 < X2 Then SX := 1 Else SX := -1;
+ If Y1 < Y2 Then SY := 1 Else SY := -1;
+ Err := DX - DY;
+ 
+ While True do Begin
+  SetBufferPixel(X1, Y1, Color);
+  If (X1 = X2) And (Y1 = Y2) Then Break;
+  E2 := 2 * Err;
+  If E2 > -DY Then Begin
+   Err := Err - DY;
+   X1 := X1 + SX;
+  End;
+  If E2 < DX Then Begin
+   Err := Err + DX;
+   Y1 := Y1 + SY;
+  End;
+ End;
+End;
+
+{ Dessiner un rectangle plein dans le buffer }
+Procedure DrawBufferRect(X1, Y1, X2, Y2: Integer; FillColor, LineColor: Byte);
+Var
+ X, Y, Temp: Integer;
+Begin
+ { S'assurer que X1 <= X2 et Y1 <= Y2 }
+ If X1 > X2 Then Begin Temp := X1; X1 := X2; X2 := Temp; End;
+ If Y1 > Y2 Then Begin Temp := Y1; Y1 := Y2; Y2 := Temp; End;
+ 
+ { Remplissage }
+ If FillColor < 255 Then
+  For Y := Y1 to Y2 do
+   For X := X1 to X2 do
+    SetBufferPixel(X, Y, FillColor);
+ 
+ { Contour }
+ If LineColor < 255 Then Begin
+  For X := X1 to X2 do Begin
+   SetBufferPixel(X, Y1, LineColor);
+   SetBufferPixel(X, Y2, LineColor);
+  End;
+  For Y := Y1 to Y2 do Begin
+   SetBufferPixel(X1, Y, LineColor);
+   SetBufferPixel(X2, Y, LineColor);
+  End;
+ End;
+End;
+
+{ Dessiner une ellipse dans le buffer (algorithme de Bresenham) }
+Procedure DrawBufferEllipse(CX, CY, RX, RY: Integer; FillColor, LineColor: Byte);
+Var
+ X, Y: Integer;
+ RX2, RY2: LongInt;
+ FX, FY: LongInt;
+ P: LongInt;
+ PX, PY: Integer;
+Begin
+ If (RX <= 0) Or (RY <= 0) Then Exit;
+ 
+ RX2 := LongInt(RX) * LongInt(RX);
+ RY2 := LongInt(RY) * LongInt(RY);
+ 
+ { Remplissage simple avec des lignes horizontales }
+ If FillColor < 255 Then Begin
+  For Y := -RY to RY do Begin
+   FX := Round(Sqrt((1 - (LongInt(Y) * LongInt(Y)) / RY2) * RX2));
+   For X := CX - FX to CX + FX do
+    SetBufferPixel(X, CY + Y, FillColor);
+  End;
+ End;
+ 
+ { Contour - Algorithme de Bresenham pour ellipse }
+ If LineColor < 255 Then Begin
+  X := 0;
+  Y := RY;
+  P := RY2 - RX2 * RY + RX2 Div 4;
+  
+  While 2 * RY2 * X <= 2 * RX2 * Y do Begin
+   SetBufferPixel(CX + X, CY + Y, LineColor);
+   SetBufferPixel(CX - X, CY + Y, LineColor);
+   SetBufferPixel(CX + X, CY - Y, LineColor);
+   SetBufferPixel(CX - X, CY - Y, LineColor);
+   
+   If P < 0 Then Begin
+    X := X + 1;
+    P := P + 2 * RY2 * X + RY2;
+   End
+   Else Begin
+    X := X + 1;
+    Y := Y - 1;
+    P := P + 2 * RY2 * X - 2 * RX2 * Y + RY2;
+   End;
+  End;
+  
+  P := RY2 * (X * X + X) + RX2 * (Y - 1) * (Y - 1) - RX2 * RY2;
+  While Y >= 0 do Begin
+   SetBufferPixel(CX + X, CY + Y, LineColor);
+   SetBufferPixel(CX - X, CY + Y, LineColor);
+   SetBufferPixel(CX + X, CY - Y, LineColor);
+   SetBufferPixel(CX - X, CY - Y, LineColor);
+   
+   If P > 0 Then Begin
+    Y := Y - 1;
+    P := P - 2 * RX2 * Y + RX2;
+   End
+   Else Begin
+    X := X + 1;
+    Y := Y - 1;
+    P := P + 2 * RY2 * X - 2 * RX2 * Y + RX2;
+   End;
+  End;
+ End;
+End;
+
+{ Dessiner un polygone dans le buffer }
+Procedure DrawBufferPolygon(Const Points: TPointArray; PointCount: Integer; 
+                            FillColor, LineColor: Byte);
+Var
+ I: Integer;
+Begin
+ If PointCount < 2 Then Exit;
+ 
+ { Dessiner les lignes du contour }
+ If LineColor < 255 Then Begin
+  For I := 1 to PointCount - 1 do
+   DrawBufferLine(Points[I].X, Points[I].Y, Points[I+1].X, Points[I+1].Y, LineColor);
+  { Fermer le polygone }
+  DrawBufferLine(Points[PointCount].X, Points[PointCount].Y, 
+                 Points[1].X, Points[1].Y, LineColor);
+ End;
+End;
+
+{ Rendre les formes dans le buffer de pixels }
+Procedure RenderShapesToBuffer;
+Var
+ I: Integer;
+ CX, CY, RX, RY: Integer;
+ FC, LC: Byte;
+Begin
+ For I := 1 to ShapeCount do Begin
+  { Convertir les couleurs (utiliser 15/blanc si négatif) }
+  If Shapes[I].FillColor >= 0 Then FC := Shapes[I].FillColor Else FC := 255;
+  If Shapes[I].LineColor >= 0 Then LC := Shapes[I].LineColor Else LC := 0;
+  
+  Case Shapes[I].ShapeType of
+   stRectangle:
+    DrawBufferRect(Shapes[I].X1, Shapes[I].Y1, Shapes[I].X2, Shapes[I].Y2, FC, LC);
+   
+   stEllipse: Begin
+    CX := (Shapes[I].X1 + Shapes[I].X2) Div 2;
+    CY := (Shapes[I].Y1 + Shapes[I].Y2) Div 2;
+    RX := Abs(Shapes[I].X2 - Shapes[I].X1) Div 2;
+    RY := Abs(Shapes[I].Y2 - Shapes[I].Y1) Div 2;
+    DrawBufferEllipse(CX, CY, RX, RY, FC, LC);
+   End;
+   
+   stLine, stConnector:
+    DrawBufferLine(Shapes[I].X1, Shapes[I].Y1, Shapes[I].X2, Shapes[I].Y2, LC);
+   
+   stPolygon, stBezier:
+    DrawBufferPolygon(Shapes[I].Points, Shapes[I].PointCount, FC, LC);
+  End;
+ End;
+End;
+
+{ Exporter en BMP 24-bit (True Color) }
+Function SaveBMP24Bit(Const FileName: String; Width, Height: Integer): Boolean;
+Var
+ F: File;
+ X, Y: Integer;
+ R, G, B: Byte;
+ RowSize: LongInt;
+ Padding: Integer;
+ PadByte: Byte;
+Begin
+ SaveBMP24Bit := False;
+ PadByte := 0;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ RowSize := GetBMPRowSize(Width, 24);
+ Padding := RowSize - (Width * 3);
+ 
+ WriteBMPHeader(F, Width, Height, 24, 0);
+ 
+ { Écrire les pixels (bottom-up) }
+ For Y := Height - 1 downto 0 do Begin
+  For X := 0 to Width - 1 do Begin
+   PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
+   WriteByte(F, B);
+   WriteByte(F, G);
+   WriteByte(F, R);
+  End;
+  { Padding }
+  For X := 1 to Padding do
+   WriteByte(F, PadByte);
+ End;
+ 
+ Close(F);
+ SaveBMP24Bit := True;
+End;
+
+{ Exporter en BMP 8-bit (256 couleurs) }
+Function SaveBMP8Bit(Const FileName: String; Width, Height: Integer): Boolean;
+Var
+ F: File;
+ X, Y: Integer;
+ RowSize: LongInt;
+ Padding: Integer;
+ PadByte: Byte;
+Begin
+ SaveBMP8Bit := False;
+ PadByte := 0;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ RowSize := GetBMPRowSize(Width, 8);
+ Padding := RowSize - Width;
+ 
+ WriteBMPHeader(F, Width, Height, 8, 256);
+ WritePalette256(F);
+ 
+ { Écrire les pixels (bottom-up) }
+ For Y := Height - 1 downto 0 do Begin
+  For X := 0 to Width - 1 do
+   WriteByte(F, PixelBuffer^[Y, X]);
+  { Padding }
+  For X := 1 to Padding do
+   WriteByte(F, PadByte);
+ End;
+ 
+ Close(F);
+ SaveBMP8Bit := True;
+End;
+
+{ Exporter en BMP 4-bit (16 couleurs) }
+Function SaveBMP4Bit(Const FileName: String; Width, Height: Integer): Boolean;
+Var
+ F: File;
+ X, Y: Integer;
+ RowSize: LongInt;
+ BytesPerRow: Integer;
+ Padding: Integer;
+ PadByte: Byte;
+ PixelPair: Byte;
+Begin
+ SaveBMP4Bit := False;
+ PadByte := 0;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ RowSize := GetBMPRowSize(Width, 4);
+ BytesPerRow := (Width + 1) Div 2;
+ Padding := RowSize - BytesPerRow;
+ 
+ WriteBMPHeader(F, Width, Height, 4, 16);
+ WritePalette16(F);
+ 
+ { Écrire les pixels (bottom-up, 2 pixels par octet) }
+ For Y := Height - 1 downto 0 do Begin
+  X := 0;
+  While X < Width do Begin
+   { Premier pixel (4 bits de poids fort) }
+   PixelPair := (PixelBuffer^[Y, X] And $0F) Shl 4;
+   { Deuxième pixel (4 bits de poids faible) }
+   If X + 1 < Width Then
+    PixelPair := PixelPair Or (PixelBuffer^[Y, X + 1] And $0F);
+   WriteByte(F, PixelPair);
+   X := X + 2;
+  End;
+  { Padding }
+  For X := 1 to Padding do
+   WriteByte(F, PadByte);
+ End;
+ 
+ Close(F);
+ SaveBMP4Bit := True;
+End;
+
+{ Exporter en BMP 1-bit (monochrome) }
+Function SaveBMP1Bit(Const FileName: String; Width, Height: Integer): Boolean;
+Var
+ F: File;
+ X, Y: Integer;
+ RowSize: LongInt;
+ BytesPerRow: Integer;
+ Padding: Integer;
+ PadByte: Byte;
+ ByteVal: Byte;
+ BitPos: Integer;
+Begin
+ SaveBMP1Bit := False;
+ PadByte := 0;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ RowSize := GetBMPRowSize(Width, 1);
+ BytesPerRow := (Width + 7) Div 8;
+ Padding := RowSize - BytesPerRow;
+ 
+ WriteBMPHeader(F, Width, Height, 1, 2);
+ WritePalette2(F);
+ 
+ { Écrire les pixels (bottom-up, 8 pixels par octet) }
+ For Y := Height - 1 downto 0 do Begin
+  ByteVal := 0;
+  BitPos := 7;
+  
+  For X := 0 to Width - 1 do Begin
+   { Convertir en noir (0) ou blanc (1) basé sur la luminosité }
+   If PixelBuffer^[Y, X] >= 8 Then  { Couleurs 8-15 sont "claires" }
+    ByteVal := ByteVal Or (1 Shl BitPos);
+   
+   Dec(BitPos);
+   If BitPos < 0 Then Begin
+    WriteByte(F, ByteVal);
+    ByteVal := 0;
+    BitPos := 7;
+   End;
+  End;
+  
+  { Écrire le dernier octet partiel si nécessaire }
+  If BitPos < 7 Then
+   WriteByte(F, ByteVal);
+  
+  { Padding }
+  For X := 1 to Padding do
+   WriteByte(F, PadByte);
+ End;
+ 
+ Close(F);
+ SaveBMP1Bit := True;
+End;
+
+{ Fonction principale pour sauvegarder un fichier BMP }
+{ BitsPerPixel peut être 1, 4, 8, ou 24 }
+Function SaveBMPFile(Const FileName: String; BitsPerPixel: Integer): Boolean;
+Var
+ MinX, MinY, MaxX, MaxY: Integer;
+ Width, Height: Integer;
+ I: Integer;
+Begin
+ SaveBMPFile := False;
+ 
+ { Calculer les dimensions du dessin }
+ MinX := 32767; MinY := 32767;
+ MaxX := 0; MaxY := 0;
+ 
+ For I := 1 to ShapeCount do Begin
+  If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
+  If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
+  If Shapes[I].X2 < MinX Then MinX := Shapes[I].X2;
+  If Shapes[I].Y2 < MinY Then MinY := Shapes[I].Y2;
+  If Shapes[I].X1 > MaxX Then MaxX := Shapes[I].X1;
+  If Shapes[I].Y1 > MaxY Then MaxY := Shapes[I].Y1;
+  If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
+  If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
+ End;
+ 
+ If ShapeCount = 0 Then Begin
+  Width := 640;
+  Height := 480;
+  MinX := 0;
+  MinY := 0;
+ End
+ Else Begin
+  Width := MaxX - MinX + 20;
+  Height := MaxY - MinY + 20;
+  If Width < 100 Then Width := 100;
+  If Height < 100 Then Height := 100;
+ End;
+ 
+ { Limiter les dimensions }
+ If Width > 2048 Then Width := 2048;
+ If Height > 2048 Then Height := 2048;
+ 
+ { Initialiser le buffer et rendre les formes }
+ InitPixelBuffer(Width, Height);
+ 
+ { Décaler les formes pour qu'elles commencent à (10, 10) }
+ For I := 1 to ShapeCount do Begin
+  Shapes[I].X1 := Shapes[I].X1 - MinX + 10;
+  Shapes[I].Y1 := Shapes[I].Y1 - MinY + 10;
+  Shapes[I].X2 := Shapes[I].X2 - MinX + 10;
+  Shapes[I].Y2 := Shapes[I].Y2 - MinY + 10;
+ End;
+ 
+ RenderShapesToBuffer;
+ 
+ { Restaurer les positions originales }
+ For I := 1 to ShapeCount do Begin
+  Shapes[I].X1 := Shapes[I].X1 + MinX - 10;
+  Shapes[I].Y1 := Shapes[I].Y1 + MinY - 10;
+  Shapes[I].X2 := Shapes[I].X2 + MinX - 10;
+  Shapes[I].Y2 := Shapes[I].Y2 + MinY - 10;
+ End;
+ 
+ { Exporter selon le nombre de bits }
+ Case BitsPerPixel of
+  1:  SaveBMPFile := SaveBMP1Bit(FileName, Width, Height);
+  4:  SaveBMPFile := SaveBMP4Bit(FileName, Width, Height);
+  8:  SaveBMPFile := SaveBMP8Bit(FileName, Width, Height);
+  24: SaveBMPFile := SaveBMP24Bit(FileName, Width, Height);
+ Else
+  SaveBMPFile := SaveBMP24Bit(FileName, Width, Height);  { Par défaut: 24-bit }
+ End;
+ 
+ FreePixelBuffer;
+End;
+
+{ ============================================================================ }
+{ === FIN DES FONCTIONS D'EXPORT BMP === }
 { ============================================================================ }
 
 { Procédure New - Créer un nouveau document }

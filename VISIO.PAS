@@ -27,7 +27,7 @@
   === OBJETS ET FORMES ===
   13. [FAIT] Creer les types d'objets de base: Rectangle, Ellipse, Ligne, Polygone, Courbe de Bezier, Texte, Image
   14. [FAIT] Implementer les connecteurs entre objets avec points d'ancrage automatiques
-  15. Permettre la modification des proprietes des objets: couleur de remplissage, couleur de trait, epaisseur de ligne, style de ligne
+  15. [FAIT] Permettre la modification des proprietes des objets: couleur de remplissage, couleur de trait, epaisseur de ligne, style de ligne
   16. Ajouter le support des calques (layers) avec visibilite et verrouillage
   17. Implementer la gestion des groupes d'objets (grouper, degrouper, entrer dans le groupe)
 
@@ -129,6 +129,24 @@ Const
  RESIZE_HANDLE_SW = 7;     { Coin sud-ouest (bas-gauche) }
  RESIZE_HANDLE_W = 8;      { Milieu ouest (gauche) }
  
+ { Constantes pour les styles de ligne }
+ LINESTYLE_SOLID = 0;      { Ligne continue }
+ LINESTYLE_DASHED = 1;     { Ligne tiretée }
+ LINESTYLE_DOTTED = 2;     { Ligne pointillée }
+ LINESTYLE_DASHDOT = 3;    { Ligne tiret-point }
+ LINESTYLE_COUNT = 4;      { Nombre de styles de ligne }
+ 
+ { Constantes pour la boîte de dialogue des propriétés }
+ PROP_DIALOG_WIDTH = 250;   { Largeur de la boîte de dialogue }
+ PROP_DIALOG_HEIGHT = 200;  { Hauteur de la boîte de dialogue }
+ PROP_DIALOG_BG = 7;        { Gris clair - fond }
+ PROP_DIALOG_BORDER = 8;    { Gris foncé - bordure }
+ PROP_DIALOG_TEXT = 0;      { Noir - texte }
+ PROP_DIALOG_BTN_BG = 15;   { Blanc - fond des boutons }
+ PROP_DIALOG_BTN_HL = 1;    { Bleu - bouton surligné }
+ PROP_COLOR_BOX_SIZE = 16;  { Taille des cases de couleur }
+ PROP_MAX_COLORS = 16;      { Nombre de couleurs dans la palette }
+ 
  { Noms des éléments du menu contextuel }
  ContextMenuNames: Array[1..CONTEXT_MENU_ITEM_COUNT] of String[12] = (
    'Cut', 'Copy', 'Paste', 'Delete', 'Properties'
@@ -166,6 +184,7 @@ Type
   FillColor: Integer;        { Couleur de remplissage }
   LineColor: Integer;        { Couleur de contour }
   LineWidth: Integer;        { Épaisseur de ligne }
+  LineStyle: Integer;        { Style de ligne (LINESTYLE_*) }
   Text: String[80];          { Texte (pour objets texte) }
   Selected: Boolean;         { Objet sélectionné }
   { Champs pour les polygones et courbes de Bézier }
@@ -632,6 +651,7 @@ Const
  DEFAULT_FILL_COLOR = White;
  DEFAULT_LINE_COLOR = Black;
  DEFAULT_LINE_WIDTH = 1;
+ DEFAULT_LINE_STYLE = LINESTYLE_SOLID;
  DEFAULT_TEXT_SIZE = 10;
 
 Type
@@ -642,27 +662,384 @@ Var
  CurrentFillColor: Integer;
  CurrentLineColor: Integer;
  CurrentLineWidth: Integer;
+ CurrentLineStyle: Integer;
  CurrentTextSize: Integer;
  CurrentAlignment: TAlignmentType;
  ObjectsGrouped: Boolean;
+ { Variables pour la boîte de dialogue des propriétés }
+ PropertiesDialogVisible: Boolean;
+ PropDialogX, PropDialogY: Integer;
+ PropSelectedColor: Integer;
+ PropSelectedLineWidth: Integer;
+ PropSelectedLineStyle: Integer;
+ PropHighlightedButton: Integer;
+
+{ *** BOÎTE DE DIALOGUE DES PROPRIÉTÉS *** }
+
+{ Procédure pour dessiner la palette de couleurs }
+Procedure DrawColorPalette(X, Y: Integer; SelectedColor: Integer);
+Var
+ I, Row, Col: Integer;
+ BoxX, BoxY: Integer;
+Begin
+ For I := 0 to PROP_MAX_COLORS - 1 do Begin
+  Row := I div 8;
+  Col := I mod 8;
+  BoxX := X + Col * (PROP_COLOR_BOX_SIZE + 2);
+  BoxY := Y + Row * (PROP_COLOR_BOX_SIZE + 2);
+  
+  { Dessiner la case de couleur }
+  SetFillStyle(SolidFill, I);
+  Bar(BoxX, BoxY, BoxX + PROP_COLOR_BOX_SIZE, BoxY + PROP_COLOR_BOX_SIZE);
+  
+  { Dessiner la bordure (plus épaisse si sélectionné) }
+  If I = SelectedColor Then Begin
+   SetColor(Black);
+   Rectangle(BoxX - 1, BoxY - 1, BoxX + PROP_COLOR_BOX_SIZE + 1, BoxY + PROP_COLOR_BOX_SIZE + 1);
+   Rectangle(BoxX - 2, BoxY - 2, BoxX + PROP_COLOR_BOX_SIZE + 2, BoxY + PROP_COLOR_BOX_SIZE + 2);
+  End
+  Else Begin
+   SetColor(PROP_DIALOG_BORDER);
+   Rectangle(BoxX, BoxY, BoxX + PROP_COLOR_BOX_SIZE, BoxY + PROP_COLOR_BOX_SIZE);
+  End;
+ End;
+End;
+
+{ Procédure pour dessiner les options de style de ligne }
+Procedure DrawLineStyleOptions(X, Y: Integer; SelectedStyle: Integer);
+Var
+ I: Integer;
+ LineY: Integer;
+ StyleNames: Array[0..3] of String[12];
+Begin
+ StyleNames[0] := 'Solid';
+ StyleNames[1] := 'Dashed';
+ StyleNames[2] := 'Dotted';
+ StyleNames[3] := 'Dash-Dot';
+ 
+ For I := 0 to LINESTYLE_COUNT - 1 do Begin
+  LineY := Y + I * 20;
+  
+  { Fond si sélectionné }
+  If I = SelectedStyle Then Begin
+   SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL);
+   Bar(X - 2, LineY - 2, X + 120, LineY + 14);
+   SetColor(White);
+  End
+  Else Begin
+   SetColor(PROP_DIALOG_TEXT);
+  End;
+  
+  { Dessiner le nom du style }
+  OutTextXY(X, LineY, StyleNames[I]);
+  
+  { Dessiner un échantillon de la ligne }
+  Case I of
+   LINESTYLE_SOLID: SetLineStyle(SolidLn, 0, 1);
+   LINESTYLE_DASHED: SetLineStyle(DashedLn, 0, 1);
+   LINESTYLE_DOTTED: SetLineStyle(DottedLn, 0, 1);
+   LINESTYLE_DASHDOT: SetLineStyle(CenterLn, 0, 1);
+  End;
+  If I = SelectedStyle Then
+   SetColor(White)
+  Else
+   SetColor(PROP_DIALOG_TEXT);
+  Line(X + 80, LineY + 6, X + 115, LineY + 6);
+  SetLineStyle(SolidLn, 0, 1);
+ End;
+End;
+
+{ Procédure pour dessiner les options d'épaisseur de ligne }
+Procedure DrawLineWidthOptions(X, Y: Integer; SelectedWidth: Integer);
+Var
+ I: Integer;
+ LineY: Integer;
+ WidthStr: String[5];
+Begin
+ For I := 1 to 5 do Begin
+  LineY := Y + (I - 1) * 18;
+  
+  { Fond si sélectionné }
+  If I = SelectedWidth Then Begin
+   SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL);
+   Bar(X - 2, LineY - 2, X + 100, LineY + 14);
+   SetColor(White);
+  End
+  Else Begin
+   SetColor(PROP_DIALOG_TEXT);
+  End;
+  
+  { Afficher l'épaisseur }
+  Str(I, WidthStr);
+  OutTextXY(X, LineY, WidthStr + ' px');
+  
+  { Dessiner un échantillon de la ligne }
+  SetLineStyle(SolidLn, 0, I);
+  If I = SelectedWidth Then
+   SetColor(White)
+  Else
+   SetColor(PROP_DIALOG_TEXT);
+  Line(X + 40, LineY + 6, X + 95, LineY + 6);
+  SetLineStyle(SolidLn, 0, 1);
+ End;
+End;
+
+{ Procédure pour dessiner la boîte de dialogue des propriétés }
+Procedure DrawPropertiesDialog;
+Var
+ DialogX, DialogY: Integer;
+ SectionY: Integer;
+Begin
+ { Calculer la position centrée }
+ DialogX := (ScreenWidth - PROP_DIALOG_WIDTH) div 2;
+ DialogY := (ScreenHeight - PROP_DIALOG_HEIGHT) div 2;
+ PropDialogX := DialogX;
+ PropDialogY := DialogY;
+ 
+ { Dessiner le fond de la boîte de dialogue }
+ SetFillStyle(SolidFill, PROP_DIALOG_BG);
+ Bar(DialogX, DialogY, DialogX + PROP_DIALOG_WIDTH, DialogY + PROP_DIALOG_HEIGHT);
+ 
+ { Dessiner la bordure }
+ SetColor(PROP_DIALOG_BORDER);
+ Rectangle(DialogX, DialogY, DialogX + PROP_DIALOG_WIDTH, DialogY + PROP_DIALOG_HEIGHT);
+ Rectangle(DialogX + 1, DialogY + 1, DialogX + PROP_DIALOG_WIDTH - 1, DialogY + PROP_DIALOG_HEIGHT - 1);
+ 
+ { Dessiner la barre de titre }
+ SetFillStyle(SolidFill, Blue);
+ Bar(DialogX + 2, DialogY + 2, DialogX + PROP_DIALOG_WIDTH - 2, DialogY + 20);
+ SetColor(White);
+ OutTextXY(DialogX + 10, DialogY + 6, 'Properties');
+ 
+ { Section: Couleur de remplissage }
+ SectionY := DialogY + 28;
+ SetColor(PROP_DIALOG_TEXT);
+ OutTextXY(DialogX + 10, SectionY, 'Fill Color:');
+ DrawColorPalette(DialogX + 10, SectionY + 14, PropSelectedColor);
+ 
+ { Section: Couleur de trait }
+ SectionY := SectionY + 52;
+ SetColor(PROP_DIALOG_TEXT);
+ OutTextXY(DialogX + 10, SectionY, 'Line Color:');
+ { Utiliser même palette pour couleur de trait }
+ 
+ { Section: Style de ligne (à droite) }
+ SetColor(PROP_DIALOG_TEXT);
+ OutTextXY(DialogX + 130, DialogY + 28, 'Line Style:');
+ DrawLineStyleOptions(DialogX + 130, DialogY + 42, PropSelectedLineStyle);
+ 
+ { Section: Épaisseur de ligne }
+ OutTextXY(DialogX + 130, DialogY + 130, 'Width:');
+ DrawLineWidthOptions(DialogX + 130, DialogY + 144, PropSelectedLineWidth);
+ 
+ { Boutons OK et Cancel }
+ { Bouton OK }
+ If PropHighlightedButton = 1 Then
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
+ Else
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
+ Bar(DialogX + PROP_DIALOG_WIDTH - 120, DialogY + PROP_DIALOG_HEIGHT - 28, 
+     DialogX + PROP_DIALOG_WIDTH - 65, DialogY + PROP_DIALOG_HEIGHT - 8);
+ SetColor(PROP_DIALOG_BORDER);
+ Rectangle(DialogX + PROP_DIALOG_WIDTH - 120, DialogY + PROP_DIALOG_HEIGHT - 28, 
+           DialogX + PROP_DIALOG_WIDTH - 65, DialogY + PROP_DIALOG_HEIGHT - 8);
+ If PropHighlightedButton = 1 Then
+  SetColor(White)
+ Else
+  SetColor(PROP_DIALOG_TEXT);
+ OutTextXY(DialogX + PROP_DIALOG_WIDTH - 105, DialogY + PROP_DIALOG_HEIGHT - 24, 'OK');
+ 
+ { Bouton Cancel }
+ If PropHighlightedButton = 2 Then
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
+ Else
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
+ Bar(DialogX + PROP_DIALOG_WIDTH - 60, DialogY + PROP_DIALOG_HEIGHT - 28, 
+     DialogX + PROP_DIALOG_WIDTH - 5, DialogY + PROP_DIALOG_HEIGHT - 8);
+ SetColor(PROP_DIALOG_BORDER);
+ Rectangle(DialogX + PROP_DIALOG_WIDTH - 60, DialogY + PROP_DIALOG_HEIGHT - 28, 
+           DialogX + PROP_DIALOG_WIDTH - 5, DialogY + PROP_DIALOG_HEIGHT - 8);
+ If PropHighlightedButton = 2 Then
+  SetColor(White)
+ Else
+  SetColor(PROP_DIALOG_TEXT);
+ OutTextXY(DialogX + PROP_DIALOG_WIDTH - 50, DialogY + PROP_DIALOG_HEIGHT - 24, 'Cancel');
+End;
+
+{ Procédure pour afficher la boîte de dialogue des propriétés }
+Procedure ShowPropertiesDialog;
+Begin
+ If SelectedShape < 1 Then Exit;
+ 
+ { Initialiser avec les propriétés de l'objet sélectionné }
+ PropSelectedColor := Shapes[SelectedShape].FillColor;
+ PropSelectedLineWidth := Shapes[SelectedShape].LineWidth;
+ PropSelectedLineStyle := Shapes[SelectedShape].LineStyle;
+ PropHighlightedButton := 0;
+ 
+ PropertiesDialogVisible := True;
+End;
+
+{ Procédure pour masquer la boîte de dialogue des propriétés }
+Procedure HidePropertiesDialog;
+Begin
+ PropertiesDialogVisible := False;
+End;
+
+{ Fonction pour vérifier si un clic est sur la palette de couleurs et retourner l'index }
+Function GetColorAtPosition(X, Y, PaletteX, PaletteY: Integer): Integer;
+Var
+ Col, Row, ColorIndex: Integer;
+Begin
+ GetColorAtPosition := -1;
+ 
+ { Vérifier si dans la zone de la palette }
+ If (X >= PaletteX) and (X < PaletteX + 8 * (PROP_COLOR_BOX_SIZE + 2)) and
+    (Y >= PaletteY) and (Y < PaletteY + 2 * (PROP_COLOR_BOX_SIZE + 2)) Then Begin
+  Col := (X - PaletteX) div (PROP_COLOR_BOX_SIZE + 2);
+  Row := (Y - PaletteY) div (PROP_COLOR_BOX_SIZE + 2);
+  ColorIndex := Row * 8 + Col;
+  If (ColorIndex >= 0) and (ColorIndex < PROP_MAX_COLORS) Then
+   GetColorAtPosition := ColorIndex;
+ End;
+End;
+
+{ Fonction pour vérifier si un clic est sur les styles de ligne et retourner l'index }
+Function GetLineStyleAtPosition(X, Y, OptionsX, OptionsY: Integer): Integer;
+Var
+ StyleIndex: Integer;
+Begin
+ GetLineStyleAtPosition := -1;
+ 
+ { Vérifier si dans la zone des options de style }
+ If (X >= OptionsX - 2) and (X < OptionsX + 120) and
+    (Y >= OptionsY - 2) and (Y < OptionsY + LINESTYLE_COUNT * 20) Then Begin
+  StyleIndex := (Y - OptionsY + 2) div 20;
+  If (StyleIndex >= 0) and (StyleIndex < LINESTYLE_COUNT) Then
+   GetLineStyleAtPosition := StyleIndex;
+ End;
+End;
+
+{ Fonction pour vérifier si un clic est sur les épaisseurs de ligne et retourner la valeur }
+Function GetLineWidthAtPosition(X, Y, OptionsX, OptionsY: Integer): Integer;
+Var
+ WidthIndex: Integer;
+Begin
+ GetLineWidthAtPosition := -1;
+ 
+ { Vérifier si dans la zone des options d'épaisseur }
+ If (X >= OptionsX - 2) and (X < OptionsX + 100) and
+    (Y >= OptionsY - 2) and (Y < OptionsY + 5 * 18) Then Begin
+  WidthIndex := (Y - OptionsY + 2) div 18;
+  If (WidthIndex >= 0) and (WidthIndex < 5) Then
+   GetLineWidthAtPosition := WidthIndex + 1;
+ End;
+End;
+
+{ Procédure pour gérer un clic dans la boîte de dialogue des propriétés }
+Procedure HandlePropertiesDialogClick(X, Y: Integer);
+Var
+ ColorIndex, StyleIndex, WidthIndex: Integer;
+ DialogX, DialogY: Integer;
+Begin
+ If Not PropertiesDialogVisible Then Exit;
+ 
+ DialogX := PropDialogX;
+ DialogY := PropDialogY;
+ 
+ { Vérifier clic sur la palette de couleurs de remplissage }
+ ColorIndex := GetColorAtPosition(X, Y, DialogX + 10, DialogY + 42);
+ If ColorIndex >= 0 Then Begin
+  PropSelectedColor := ColorIndex;
+  Exit;
+ End;
+ 
+ { Vérifier clic sur les styles de ligne }
+ StyleIndex := GetLineStyleAtPosition(X, Y, DialogX + 130, DialogY + 42);
+ If StyleIndex >= 0 Then Begin
+  PropSelectedLineStyle := StyleIndex;
+  Exit;
+ End;
+ 
+ { Vérifier clic sur les épaisseurs de ligne }
+ WidthIndex := GetLineWidthAtPosition(X, Y, DialogX + 130, DialogY + 144);
+ If WidthIndex >= 0 Then Begin
+  PropSelectedLineWidth := WidthIndex;
+  Exit;
+ End;
+ 
+ { Vérifier clic sur le bouton OK }
+ If (X >= DialogX + PROP_DIALOG_WIDTH - 120) and 
+    (X <= DialogX + PROP_DIALOG_WIDTH - 65) and
+    (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and 
+    (Y <= DialogY + PROP_DIALOG_HEIGHT - 8) Then Begin
+  { Appliquer les propriétés à l'objet sélectionné }
+  If SelectedShape > 0 Then Begin
+   Shapes[SelectedShape].FillColor := PropSelectedColor;
+   Shapes[SelectedShape].LineWidth := PropSelectedLineWidth;
+   Shapes[SelectedShape].LineStyle := PropSelectedLineStyle;
+   DocumentModified := True;
+  End;
+  HidePropertiesDialog;
+  Exit;
+ End;
+ 
+ { Vérifier clic sur le bouton Cancel }
+ If (X >= DialogX + PROP_DIALOG_WIDTH - 60) and 
+    (X <= DialogX + PROP_DIALOG_WIDTH - 5) and
+    (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and 
+    (Y <= DialogY + PROP_DIALOG_HEIGHT - 8) Then Begin
+  HidePropertiesDialog;
+  Exit;
+ End;
+End;
+
+{ Procédure pour gérer le survol dans la boîte de dialogue }
+Procedure HandlePropertiesDialogHover(X, Y: Integer);
+Var
+ DialogX, DialogY: Integer;
+ OldHighlight: Integer;
+Begin
+ If Not PropertiesDialogVisible Then Exit;
+ 
+ DialogX := PropDialogX;
+ DialogY := PropDialogY;
+ OldHighlight := PropHighlightedButton;
+ PropHighlightedButton := 0;
+ 
+ { Vérifier survol du bouton OK }
+ If (X >= DialogX + PROP_DIALOG_WIDTH - 120) and 
+    (X <= DialogX + PROP_DIALOG_WIDTH - 65) and
+    (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and 
+    (Y <= DialogY + PROP_DIALOG_HEIGHT - 8) Then Begin
+  PropHighlightedButton := 1;
+ End
+ { Vérifier survol du bouton Cancel }
+ Else If (X >= DialogX + PROP_DIALOG_WIDTH - 60) and 
+         (X <= DialogX + PROP_DIALOG_WIDTH - 5) and
+         (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and 
+         (Y <= DialogY + PROP_DIALOG_HEIGHT - 8) Then Begin
+  PropHighlightedButton := 2;
+ End;
+End;
+
+{ *** FIN BOÎTE DE DIALOGUE DES PROPRIÉTÉS *** }
 
 { Procédure FormatFill - Modifier la couleur de remplissage }
 Procedure FormatFill;
 Begin
- { TODO: Afficher une boîte de dialogue pour choisir la couleur de remplissage }
- { TODO: Appliquer la couleur de remplissage aux objets sélectionnés }
+ { Afficher la boîte de dialogue des propriétés pour modifier la couleur de remplissage }
  If HasSelection Then Begin
-  DocumentModified := True;
+  ShowPropertiesDialog;
  End;
 End;
 
 { Procédure FormatLine - Modifier les propriétés de ligne }
 Procedure FormatLine;
 Begin
- { TODO: Afficher une boîte de dialogue pour choisir la couleur, épaisseur et style de ligne }
- { TODO: Appliquer les propriétés de ligne aux objets sélectionnés }
+ { Afficher la boîte de dialogue des propriétés pour modifier les propriétés de ligne }
  If HasSelection Then Begin
-  DocumentModified := True;
+  ShowPropertiesDialog;
  End;
 End;
 
@@ -963,6 +1340,7 @@ Begin
  Shape.FillColor := White;
  Shape.LineColor := Black;
  Shape.LineWidth := 1;
+ Shape.LineStyle := LINESTYLE_SOLID;
  Shape.Text := '';
  Shape.Selected := False;
  { Initialiser les champs pour polygones et courbes de Bézier }
@@ -1194,12 +1572,22 @@ Var
  I: Integer;
  T, OneMinusT: Real;
  BezierX, BezierY, PrevX, PrevY: Integer;
+ GraphLineStyle: Integer;
 Begin
  If Shape.ShapeType = stNone Then Exit;
  
- { Définir la couleur de contour }
+ { Convertir le style de ligne en constante Graph }
+ Case Shape.LineStyle of
+  LINESTYLE_SOLID: GraphLineStyle := SolidLn;
+  LINESTYLE_DASHED: GraphLineStyle := DashedLn;
+  LINESTYLE_DOTTED: GraphLineStyle := DottedLn;
+  LINESTYLE_DASHDOT: GraphLineStyle := CenterLn;
+  Else GraphLineStyle := SolidLn;
+ End;
+ 
+ { Définir la couleur de contour et le style de ligne }
  SetColor(Shape.LineColor);
- SetLineStyle(SolidLn, 0, Shape.LineWidth);
+ SetLineStyle(GraphLineStyle, 0, Shape.LineWidth);
  
  Case Shape.ShapeType of
   stRectangle: Begin
@@ -1663,6 +2051,7 @@ Begin
  Shapes[ShapeCount].FillColor := CurrentFillColor;
  Shapes[ShapeCount].LineColor := CurrentLineColor;
  Shapes[ShapeCount].LineWidth := CurrentLineWidth;
+ Shapes[ShapeCount].LineStyle := CurrentLineStyle;
  
  DocumentModified := True;
 End;
@@ -2024,9 +2413,7 @@ Begin
   2: EditCopy;       { Copy }
   3: EditPaste;      { Paste }
   4: EditDelete;     { Delete }
-  5: Begin           { Properties }
-      { TODO: Afficher la boîte de dialogue des propriétés }
-     End;
+  5: ShowPropertiesDialog; { Properties - Afficher la boîte de dialogue des propriétés }
  End;
  
  HideContextMenu;
@@ -2311,9 +2698,18 @@ Begin
  CurrentFillColor := DEFAULT_FILL_COLOR;
  CurrentLineColor := DEFAULT_LINE_COLOR;
  CurrentLineWidth := DEFAULT_LINE_WIDTH;
+ CurrentLineStyle := DEFAULT_LINE_STYLE;
  CurrentTextSize := DEFAULT_TEXT_SIZE;
  CurrentAlignment := atLeft;
  ObjectsGrouped := False;
+ { Initialisation des variables de la boîte de dialogue des propriétés }
+ PropertiesDialogVisible := False;
+ PropDialogX := 0;
+ PropDialogY := 0;
+ PropSelectedColor := 0;
+ PropSelectedLineWidth := 1;
+ PropSelectedLineStyle := LINESTYLE_SOLID;
+ PropHighlightedButton := 0;
  { Initialisation des variables du menu Shape }
  CurrentRotation := 0;
  ShapeWidth := 100;
@@ -2489,6 +2885,11 @@ Begin
  If ContextMenuVisible Then Begin
   DrawContextMenu;
  End;
+ 
+ { Dessiner la boîte de dialogue des propriétés si elle est visible }
+ If PropertiesDialogVisible Then Begin
+  DrawPropertiesDialog;
+ End;
 End;
 
 BEGIN
@@ -2551,8 +2952,12 @@ BEGIN
    { Détecter un clic gauche (bouton 1) }
    If (LastMouseButton and 1) = 1 Then Begin
     HideMouse;
+    { Si la boîte de dialogue des propriétés est visible, gérer le clic }
+    If PropertiesDialogVisible Then Begin
+     HandlePropertiesDialogClick(LastMouseX, LastMouseY);
+    End
     { Si le menu contextuel est visible, vérifier si on clique dedans }
-    If ContextMenuVisible Then Begin
+    Else If ContextMenuVisible Then Begin
      ContextMenuHighlight := GetContextMenuItemAtPosition(LastMouseX, LastMouseY);
      If ContextMenuHighlight > 0 Then Begin
       ExecuteContextMenuAction(ContextMenuHighlight);

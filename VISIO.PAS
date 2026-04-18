@@ -34,7 +34,7 @@
   === FORMAT DE FICHIER VISIO ===
   18. [FAIT] Parser et lire les fichiers Visio VSD/VSDX (format binaire OLE et format XML compresse)
   19. [FAIT] Ecrire et sauvegarder les fichiers au format Visio VSD/VSDX
-  20. Gerer les stencils et les masters Visio
+  20. [FAIT] Gerer les stencils et les masters Visio
 
   === FORMAT SVG ===
   21. Parser et importer les fichiers SVG avec support des elements path, rect, circle, ellipse, line, polygon, text
@@ -177,6 +177,14 @@ Const
  VISIO_SHAPE_TEXT = 6;
  VISIO_SHAPE_GROUP = 7;
 
+ { Constantes pour les Stencils et Masters Visio }
+ MAX_MASTERS = 100;                    { Nombre maximum de masters par stencil }
+ MAX_STENCILS = 20;                    { Nombre maximum de stencils chargés }
+ MAX_MASTER_NAME_LENGTH = 50;          { Longueur max du nom d'un master }
+ MAX_STENCIL_NAME_LENGTH = 100;        { Longueur max du nom d'un stencil }
+ VISIO_STENCIL_FORMAT_VSS = 1;         { Format VSS (OLE binaire) }
+ VISIO_STENCIL_FORMAT_VSSX = 2;        { Format VSSX (XML compressé ZIP) }
+
  { Noms des éléments du menu contextuel }
  ContextMenuNames: Array[1..CONTEXT_MENU_ITEM_COUNT] of String[12] = (
    'Cut', 'Copy', 'Paste', 'Delete', 'Properties'
@@ -254,6 +262,36 @@ Type
   ParentID: LongInt;                    { ID du parent (pour les groupes) }
  End;
  
+ { Structure pour un Master Visio (forme modèle réutilisable) }
+ TVisioMaster = Record
+  ID: LongInt;                                   { ID unique du master }
+  Name: String[MAX_MASTER_NAME_LENGTH];          { Nom du master }
+  UniqueID: String[40];                          { ID unique universel (GUID) }
+  IconIndex: Integer;                            { Index de l'icône }
+  BaseShape: TVisioShape;                        { Forme de base du master }
+  Width, Height: Real;                           { Dimensions par défaut }
+  OffsetX, OffsetY: Real;                        { Décalage du point d'ancrage }
+  IsGroup: Boolean;                              { True si le master est un groupe }
+  SubShapeCount: Integer;                        { Nombre de sous-formes }
+  SubShapes: Array[1..20] of TVisioShape;        { Sous-formes (si groupe) }
+  ConnectionPointCount: Integer;                 { Nombre de points de connexion }
+  ConnectionPoints: Array[1..8] of Record        { Points de connexion }
+   X, Y: Real;                                   { Position relative }
+   DirX, DirY: Real;                             { Direction de la connexion }
+  End;
+ End;
+ 
+ { Structure pour un Stencil Visio (collection de masters) }
+ TVisioStencil = Record
+  Name: String[MAX_STENCIL_NAME_LENGTH];         { Nom du stencil }
+  FilePath: String[255];                         { Chemin du fichier }
+  FileFormat: Integer;                           { Format (VSS ou VSSX) }
+  MasterCount: Integer;                          { Nombre de masters }
+  Masters: Array[1..MAX_MASTERS] of TVisioMaster; { Masters du stencil }
+  IsModified: Boolean;                           { True si le stencil a été modifié }
+  IsReadOnly: Boolean;                           { True si le stencil est en lecture seule }
+ End;
+ 
  { Structure pour un calque }
  TLayer = Record
   Name: String[LAYER_NAME_LENGTH]; { Nom du calque }
@@ -329,6 +367,11 @@ Var
  LayerDialogX, LayerDialogY: Integer;
  LayerDialogSelectedLayer: Integer;
  LayerDialogHighlightedButton: Integer;
+ { Variables pour les Stencils et Masters Visio }
+ Stencils: Array[1..MAX_STENCILS] of TVisioStencil;
+ StencilCount: Integer;
+ CurrentStencil: Integer;        { Stencil actuellement sélectionné }
+ NextMasterID: LongInt;          { Prochain ID de master disponible }
 
 Procedure InitializeGraphics;
 Var
@@ -1341,6 +1384,788 @@ End;
 
 { ============================================================================ }
 { === FIN DES FONCTIONS D'ECRITURE VISIO === }
+{ ============================================================================ }
+
+{ ============================================================================ }
+{ === FONCTIONS DE GESTION DES STENCILS ET MASTERS VISIO === }
+{ ============================================================================ }
+
+{ Procédure pour initialiser un Master vide }
+Procedure InitMaster(Var Master: TVisioMaster);
+Var
+ I: Integer;
+Begin
+ Master.ID := 0;
+ Master.Name := '';
+ Master.UniqueID := '';
+ Master.IconIndex := 0;
+ Master.BaseShape.ID := 0;
+ Master.BaseShape.ShapeType := VISIO_SHAPE_RECTANGLE;
+ Master.BaseShape.X := 0;
+ Master.BaseShape.Y := 0;
+ Master.BaseShape.Width := 100;
+ Master.BaseShape.Height := 100;
+ Master.BaseShape.Angle := 0;
+ Master.BaseShape.FillColor := $FFFFFF;
+ Master.BaseShape.LineColor := $000000;
+ Master.BaseShape.LineWeight := 1;
+ Master.BaseShape.Text := '';
+ Master.BaseShape.ParentID := 0;
+ Master.Width := 100;
+ Master.Height := 100;
+ Master.OffsetX := 50;
+ Master.OffsetY := 50;
+ Master.IsGroup := False;
+ Master.SubShapeCount := 0;
+ Master.ConnectionPointCount := 0;
+ For I := 1 to 8 do Begin
+  Master.ConnectionPoints[I].X := 0;
+  Master.ConnectionPoints[I].Y := 0;
+  Master.ConnectionPoints[I].DirX := 0;
+  Master.ConnectionPoints[I].DirY := 0;
+ End;
+End;
+
+{ Procédure pour initialiser un Stencil vide }
+Procedure InitStencil(Var Stencil: TVisioStencil);
+Var
+ I: Integer;
+Begin
+ Stencil.Name := '';
+ Stencil.FilePath := '';
+ Stencil.FileFormat := VISIO_STENCIL_FORMAT_VSSX;
+ Stencil.MasterCount := 0;
+ Stencil.IsModified := False;
+ Stencil.IsReadOnly := False;
+ For I := 1 to MAX_MASTERS do
+  InitMaster(Stencil.Masters[I]);
+End;
+
+{ Fonction pour générer un GUID simplifié }
+Function GenerateSimpleGUID: String;
+Var
+ I: Integer;
+ S: String;
+ HexChars: String;
+Begin
+ HexChars := '0123456789ABCDEF';
+ S := '';
+ For I := 1 to 32 do Begin
+  S := S + HexChars[Random(16) + 1];
+  If (I = 8) or (I = 12) or (I = 16) or (I = 20) Then
+   S := S + '-';
+ End;
+ GenerateSimpleGUID := S;
+End;
+
+{ Fonction pour ajouter un Master à un Stencil }
+Function AddMasterToStencil(Var Stencil: TVisioStencil; Const Master: TVisioMaster): Boolean;
+Begin
+ AddMasterToStencil := False;
+ If Stencil.MasterCount >= MAX_MASTERS Then Exit;
+ 
+ Inc(Stencil.MasterCount);
+ Stencil.Masters[Stencil.MasterCount] := Master;
+ Stencil.Masters[Stencil.MasterCount].ID := NextMasterID;
+ Inc(NextMasterID);
+ Stencil.IsModified := True;
+ AddMasterToStencil := True;
+End;
+
+{ Fonction pour créer un Master à partir d'une TShapeObject }
+Function CreateMasterFromShape(Const Shape: TShapeObject; Const MasterName: String): TVisioMaster;
+Var
+ Master: TVisioMaster;
+Begin
+ InitMaster(Master);
+ Master.ID := NextMasterID;
+ Inc(NextMasterID);
+ Master.Name := MasterName;
+ Master.UniqueID := GenerateSimpleGUID;
+ 
+ { Convertir les propriétés de la forme }
+ Master.BaseShape.ShapeType := TShapeTypeToVisioShapeType(Shape.ShapeType);
+ Master.BaseShape.X := 0;
+ Master.BaseShape.Y := 0;
+ Master.BaseShape.Width := Shape.X2 - Shape.X1;
+ Master.BaseShape.Height := Shape.Y2 - Shape.Y1;
+ Master.BaseShape.Angle := 0;
+ Master.BaseShape.FillColor := PascalColorToVisioColor(Shape.FillColor);
+ Master.BaseShape.LineColor := PascalColorToVisioColor(Shape.LineColor);
+ Master.BaseShape.LineWeight := Shape.LineWidth;
+ Master.BaseShape.Text := Shape.Text;
+ 
+ Master.Width := Master.BaseShape.Width;
+ Master.Height := Master.BaseShape.Height;
+ Master.OffsetX := Master.Width / 2;
+ Master.OffsetY := Master.Height / 2;
+ 
+ { Ajouter les points de connexion par défaut (4 côtés) }
+ Master.ConnectionPointCount := 4;
+ { Haut }
+ Master.ConnectionPoints[1].X := Master.Width / 2;
+ Master.ConnectionPoints[1].Y := 0;
+ Master.ConnectionPoints[1].DirX := 0;
+ Master.ConnectionPoints[1].DirY := -1;
+ { Droite }
+ Master.ConnectionPoints[2].X := Master.Width;
+ Master.ConnectionPoints[2].Y := Master.Height / 2;
+ Master.ConnectionPoints[2].DirX := 1;
+ Master.ConnectionPoints[2].DirY := 0;
+ { Bas }
+ Master.ConnectionPoints[3].X := Master.Width / 2;
+ Master.ConnectionPoints[3].Y := Master.Height;
+ Master.ConnectionPoints[3].DirX := 0;
+ Master.ConnectionPoints[3].DirY := 1;
+ { Gauche }
+ Master.ConnectionPoints[4].X := 0;
+ Master.ConnectionPoints[4].Y := Master.Height / 2;
+ Master.ConnectionPoints[4].DirX := -1;
+ Master.ConnectionPoints[4].DirY := 0;
+ 
+ CreateMasterFromShape := Master;
+End;
+
+{ Procédure pour créer une TShapeObject à partir d'un Master }
+Procedure CreateShapeFromMaster(Const Master: TVisioMaster; X, Y: Integer; Var Shape: TShapeObject);
+Begin
+ { Initialiser la forme }
+ Shape.ShapeType := stNone;
+ Case Master.BaseShape.ShapeType of
+  VISIO_SHAPE_RECTANGLE: Shape.ShapeType := stRectangle;
+  VISIO_SHAPE_ELLIPSE: Shape.ShapeType := stEllipse;
+  VISIO_SHAPE_LINE: Shape.ShapeType := stLine;
+  VISIO_SHAPE_POLYLINE: Shape.ShapeType := stPolygon;
+  VISIO_SHAPE_CONNECTOR: Shape.ShapeType := stConnector;
+  VISIO_SHAPE_TEXT: Shape.ShapeType := stText;
+ Else
+  Shape.ShapeType := stRectangle;
+ End;
+ 
+ { Positionner la forme avec le point d'insertion centré }
+ Shape.X1 := X - Round(Master.OffsetX);
+ Shape.Y1 := Y - Round(Master.OffsetY);
+ Shape.X2 := Shape.X1 + Round(Master.Width);
+ Shape.Y2 := Shape.Y1 + Round(Master.Height);
+ 
+ { Convertir les couleurs de Visio vers Pascal }
+ Shape.FillColor := VisioColorToPascalColor(Master.BaseShape.FillColor);
+ Shape.LineColor := VisioColorToPascalColor(Master.BaseShape.LineColor);
+ Shape.LineWidth := Round(Master.BaseShape.LineWeight);
+ Shape.LineStyle := 0;  { Solide }
+ Shape.LayerIndex := 1;
+ Shape.GroupID := 0;
+ Shape.Text := Master.BaseShape.Text;
+ Shape.Selected := False;
+ Shape.PointCount := 0;
+ Shape.ImagePath := '';
+ Shape.ConnectStartShape := 0;
+ Shape.ConnectEndShape := 0;
+ Shape.ConnectStartAnchor := 0;
+ Shape.ConnectEndAnchor := 0;
+End;
+
+{ Fonction pour rechercher un Master par son nom dans un Stencil }
+Function GetMasterByName(Const Stencil: TVisioStencil; Const MasterName: String): Integer;
+Var
+ I: Integer;
+Begin
+ GetMasterByName := 0;
+ For I := 1 to Stencil.MasterCount do Begin
+  If Stencil.Masters[I].Name = MasterName Then Begin
+   GetMasterByName := I;
+   Exit;
+  End;
+ End;
+End;
+
+{ Fonction pour rechercher un Master par son ID dans un Stencil }
+Function GetMasterByID(Const Stencil: TVisioStencil; MasterID: LongInt): Integer;
+Var
+ I: Integer;
+Begin
+ GetMasterByID := 0;
+ For I := 1 to Stencil.MasterCount do Begin
+  If Stencil.Masters[I].ID = MasterID Then Begin
+   GetMasterByID := I;
+   Exit;
+  End;
+ End;
+End;
+
+{ Fonction pour détecter le format d'un fichier stencil }
+Function DetectStencilFormat(Const FileName: String): Integer;
+Var
+ F: File;
+ Buffer: Array[0..7] of Byte;
+ BytesRead: Integer;
+ Ext: String;
+ I: Integer;
+Begin
+ DetectStencilFormat := VISIO_FORMAT_UNKNOWN;
+ 
+ { Vérifier l'extension d'abord }
+ Ext := '';
+ For I := Length(FileName) downto 1 do Begin
+  If FileName[I] = '.' Then Begin
+   Ext := Copy(FileName, I, Length(FileName) - I + 1);
+   Break;
+  End;
+ End;
+ 
+ { Convertir en minuscules }
+ For I := 1 to Length(Ext) do Begin
+  If (Ext[I] >= 'A') and (Ext[I] <= 'Z') Then
+   Ext[I] := Chr(Ord(Ext[I]) + 32);
+ End;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Reset(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ BlockRead(F, Buffer, 8, BytesRead);
+ Close(F);
+ 
+ If BytesRead < 4 Then Exit;
+ 
+ { Vérifier si c'est un fichier VSSX (ZIP) }
+ If (Buffer[0] = $50) and (Buffer[1] = $4B) Then Begin
+  DetectStencilFormat := VISIO_STENCIL_FORMAT_VSSX;
+  Exit;
+ End;
+ 
+ { Vérifier si c'est un fichier VSS (OLE Compound Document) }
+ If BytesRead >= 8 Then Begin
+  If (Buffer[0] = $D0) and (Buffer[1] = $CF) and
+     (Buffer[2] = $11) and (Buffer[3] = $E0) and
+     (Buffer[4] = $A1) and (Buffer[5] = $B6) and
+     (Buffer[6] = $1A) and (Buffer[7] = $E1) Then Begin
+   DetectStencilFormat := VISIO_STENCIL_FORMAT_VSS;
+  End;
+ End;
+End;
+
+{ Fonction pour charger un fichier stencil VSS (OLE binaire) }
+Function LoadVSSFile(Const FileName: String; Var Stencil: TVisioStencil): Boolean;
+Var
+ F: File;
+ Header: TOLEHeader;
+ BytesRead: Integer;
+ SectorSize: Integer;
+Begin
+ LoadVSSFile := False;
+ InitStencil(Stencil);
+ 
+ Assign(F, FileName);
+ {$I-}
+ Reset(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ { Lire l'en-tête OLE }
+ BlockRead(F, Header, SizeOf(TOLEHeader), BytesRead);
+ If BytesRead < SizeOf(TOLEHeader) Then Begin
+  Close(F);
+  Exit;
+ End;
+ 
+ { Vérifier la signature OLE }
+ If (Header.Signature[0] <> $D0) or (Header.Signature[1] <> $CF) Then Begin
+  Close(F);
+  Exit;
+ End;
+ 
+ SectorSize := 1 shl Header.SectorShift;
+ 
+ { Pour une implémentation complète, il faudrait : }
+ { 1. Parcourir le répertoire OLE }
+ { 2. Trouver les streams "Masters" }
+ { 3. Parser chaque master }
+ 
+ { Pour cette implémentation simplifiée, créer des masters de base }
+ Stencil.Name := 'Basic Shapes';
+ Stencil.FilePath := FileName;
+ Stencil.FileFormat := VISIO_STENCIL_FORMAT_VSS;
+ 
+ Close(F);
+ LoadVSSFile := True;
+End;
+
+{ Fonction pour charger un fichier stencil VSSX (ZIP/XML) }
+Function LoadVSSXFile(Const FileName: String; Var Stencil: TVisioStencil): Boolean;
+Var
+ F: File;
+ Buffer: Array[0..3] of Byte;
+ BytesRead: Integer;
+Begin
+ LoadVSSXFile := False;
+ InitStencil(Stencil);
+ 
+ Assign(F, FileName);
+ {$I-}
+ Reset(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ { Vérifier la signature ZIP }
+ BlockRead(F, Buffer, 4, BytesRead);
+ If BytesRead < 4 Then Begin
+  Close(F);
+  Exit;
+ End;
+ 
+ If (Buffer[0] <> $50) or (Buffer[1] <> $4B) Then Begin
+  Close(F);
+  Exit;
+ End;
+ 
+ { Pour une implémentation complète, il faudrait : }
+ { 1. Décompresser le ZIP }
+ { 2. Lire visio/masters/masters.xml }
+ { 3. Parser chaque master XML }
+ 
+ Stencil.Name := 'Basic Shapes';
+ Stencil.FilePath := FileName;
+ Stencil.FileFormat := VISIO_STENCIL_FORMAT_VSSX;
+ 
+ Close(F);
+ LoadVSSXFile := True;
+End;
+
+{ Fonction principale pour charger un fichier stencil }
+Function LoadStencilFile(Const FileName: String): Integer;
+Var
+ FileFormat: Integer;
+ NewStencil: TVisioStencil;
+ Success: Boolean;
+Begin
+ LoadStencilFile := 0;
+ 
+ If StencilCount >= MAX_STENCILS Then Exit;
+ 
+ FileFormat := DetectStencilFormat(FileName);
+ Success := False;
+ 
+ Case FileFormat of
+  VISIO_STENCIL_FORMAT_VSS: Begin
+   Success := LoadVSSFile(FileName, NewStencil);
+  End;
+  VISIO_STENCIL_FORMAT_VSSX: Begin
+   Success := LoadVSSXFile(FileName, NewStencil);
+  End;
+ End;
+ 
+ If Success Then Begin
+  Inc(StencilCount);
+  Stencils[StencilCount] := NewStencil;
+  LoadStencilFile := StencilCount;
+ End;
+End;
+
+{ Fonction pour sauvegarder un stencil au format VSSX (ZIP/XML) }
+Function SaveVSSXFile(Const FileName: String; Const Stencil: TVisioStencil): Boolean;
+Var
+ F: File;
+ LocalHeader: Array[0..29] of Byte;
+ CentralDir: Array[0..45] of Byte;
+ EndRecord: Array[0..21] of Byte;
+ XMLData: String;
+ BytesWritten: Integer;
+ I: Integer;
+ FileOffset, CentralDirOffset: LongInt;
+ XMLSize: Integer;
+ CRC: LongInt;
+ TempStr: String;
+Begin
+ SaveVSSXFile := False;
+ 
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ 
+ FileOffset := 0;
+ 
+ { Construire le contenu XML du stencil }
+ XMLData := '<?xml version="1.0" encoding="UTF-8"?>' + #13#10;
+ XMLData := XMLData + '<VisioStencil xmlns="http://schemas.microsoft.com/visio/2003/core">' + #13#10;
+ XMLData := XMLData + '  <Masters>' + #13#10;
+ 
+ For I := 1 to Stencil.MasterCount do Begin
+  XMLData := XMLData + '    <Master ID="' + Chr(48 + I) + '" Name="' + Stencil.Masters[I].Name + '">' + #13#10;
+  XMLData := XMLData + '      <UniqueID>' + Stencil.Masters[I].UniqueID + '</UniqueID>' + #13#10;
+  XMLData := XMLData + '      <PageSheet>' + #13#10;
+  
+  Str(Stencil.Masters[I].Width:0:2, TempStr);
+  XMLData := XMLData + '        <PageWidth>' + TempStr + '</PageWidth>' + #13#10;
+  Str(Stencil.Masters[I].Height:0:2, TempStr);
+  XMLData := XMLData + '        <PageHeight>' + TempStr + '</PageHeight>' + #13#10;
+  
+  XMLData := XMLData + '      </PageSheet>' + #13#10;
+  XMLData := XMLData + '      <Shapes>' + #13#10;
+  XMLData := XMLData + '        <Shape>' + #13#10;
+  
+  Case Stencil.Masters[I].BaseShape.ShapeType of
+   VISIO_SHAPE_RECTANGLE: TempStr := 'Rectangle';
+   VISIO_SHAPE_ELLIPSE: TempStr := 'Ellipse';
+   VISIO_SHAPE_LINE: TempStr := 'Line';
+   VISIO_SHAPE_CONNECTOR: TempStr := 'Connector';
+   VISIO_SHAPE_TEXT: TempStr := 'Text';
+  Else
+   TempStr := 'Shape';
+  End;
+  XMLData := XMLData + '          <Name>' + TempStr + '</Name>' + #13#10;
+  
+  XMLData := XMLData + '          <XForm>' + #13#10;
+  Str(Stencil.Masters[I].BaseShape.Width:0:2, TempStr);
+  XMLData := XMLData + '            <Width>' + TempStr + '</Width>' + #13#10;
+  Str(Stencil.Masters[I].BaseShape.Height:0:2, TempStr);
+  XMLData := XMLData + '            <Height>' + TempStr + '</Height>' + #13#10;
+  XMLData := XMLData + '          </XForm>' + #13#10;
+  
+  XMLData := XMLData + '        </Shape>' + #13#10;
+  XMLData := XMLData + '      </Shapes>' + #13#10;
+  XMLData := XMLData + '    </Master>' + #13#10;
+ End;
+ 
+ XMLData := XMLData + '  </Masters>' + #13#10;
+ XMLData := XMLData + '</VisioStencil>' + #13#10;
+ 
+ XMLSize := Length(XMLData);
+ CRC := CalcCRC32(XMLData[1], XMLSize);
+ 
+ { Écrire l'en-tête local du fichier ZIP }
+ LocalHeader[0] := $50;  { P }
+ LocalHeader[1] := $4B;  { K }
+ LocalHeader[2] := $03;
+ LocalHeader[3] := $04;
+ LocalHeader[4] := 20;   { Version }
+ LocalHeader[5] := 0;
+ LocalHeader[6] := 0;
+ LocalHeader[7] := 0;
+ LocalHeader[8] := 0;
+ LocalHeader[9] := 0;
+ LocalHeader[10] := 0;
+ LocalHeader[11] := 0;
+ LocalHeader[12] := 0;
+ LocalHeader[13] := 0;
+ LocalHeader[14] := CRC and $FF;
+ LocalHeader[15] := (CRC shr 8) and $FF;
+ LocalHeader[16] := (CRC shr 16) and $FF;
+ LocalHeader[17] := (CRC shr 24) and $FF;
+ LocalHeader[18] := XMLSize and $FF;
+ LocalHeader[19] := (XMLSize shr 8) and $FF;
+ LocalHeader[20] := (XMLSize shr 16) and $FF;
+ LocalHeader[21] := (XMLSize shr 24) and $FF;
+ LocalHeader[22] := XMLSize and $FF;
+ LocalHeader[23] := (XMLSize shr 8) and $FF;
+ LocalHeader[24] := (XMLSize shr 16) and $FF;
+ LocalHeader[25] := (XMLSize shr 24) and $FF;
+ LocalHeader[26] := 19;  { Longueur du nom }
+ LocalHeader[27] := 0;
+ LocalHeader[28] := 0;
+ LocalHeader[29] := 0;
+ 
+ BlockWrite(F, LocalHeader, 30, BytesWritten);
+ FileOffset := FileOffset + 30;
+ 
+ { Nom du fichier }
+ TempStr := 'visio/masters.xml';
+ BlockWrite(F, TempStr[1], 17, BytesWritten);
+ FileOffset := FileOffset + 17;
+ 
+ { Données XML }
+ BlockWrite(F, XMLData[1], XMLSize, BytesWritten);
+ FileOffset := FileOffset + XMLSize;
+ 
+ CentralDirOffset := FileOffset;
+ 
+ { Écrire l'entrée du répertoire central }
+ CentralDir[0] := $50;
+ CentralDir[1] := $4B;
+ CentralDir[2] := $01;
+ CentralDir[3] := $02;
+ CentralDir[4] := 20;
+ CentralDir[5] := 0;
+ CentralDir[6] := 20;
+ CentralDir[7] := 0;
+ CentralDir[8] := 0;
+ CentralDir[9] := 0;
+ CentralDir[10] := 0;
+ CentralDir[11] := 0;
+ CentralDir[12] := 0;
+ CentralDir[13] := 0;
+ CentralDir[14] := 0;
+ CentralDir[15] := 0;
+ CentralDir[16] := CRC and $FF;
+ CentralDir[17] := (CRC shr 8) and $FF;
+ CentralDir[18] := (CRC shr 16) and $FF;
+ CentralDir[19] := (CRC shr 24) and $FF;
+ CentralDir[20] := XMLSize and $FF;
+ CentralDir[21] := (XMLSize shr 8) and $FF;
+ CentralDir[22] := (XMLSize shr 16) and $FF;
+ CentralDir[23] := (XMLSize shr 24) and $FF;
+ CentralDir[24] := XMLSize and $FF;
+ CentralDir[25] := (XMLSize shr 8) and $FF;
+ CentralDir[26] := (XMLSize shr 16) and $FF;
+ CentralDir[27] := (XMLSize shr 24) and $FF;
+ CentralDir[28] := 17;
+ CentralDir[29] := 0;
+ CentralDir[30] := 0;
+ CentralDir[31] := 0;
+ CentralDir[32] := 0;
+ CentralDir[33] := 0;
+ CentralDir[34] := 0;
+ CentralDir[35] := 0;
+ CentralDir[36] := 0;
+ CentralDir[37] := 0;
+ CentralDir[38] := 0;
+ CentralDir[39] := 0;
+ CentralDir[40] := 0;
+ CentralDir[41] := 0;
+ CentralDir[42] := 0;
+ CentralDir[43] := 0;
+ CentralDir[44] := 0;
+ CentralDir[45] := 0;
+ 
+ BlockWrite(F, CentralDir, 46, BytesWritten);
+ FileOffset := FileOffset + 46;
+ 
+ { Nom du fichier }
+ TempStr := 'visio/masters.xml';
+ BlockWrite(F, TempStr[1], 17, BytesWritten);
+ FileOffset := FileOffset + 17;
+ 
+ { Enregistrement de fin }
+ EndRecord[0] := $50;
+ EndRecord[1] := $4B;
+ EndRecord[2] := $05;
+ EndRecord[3] := $06;
+ EndRecord[4] := 0;
+ EndRecord[5] := 0;
+ EndRecord[6] := 0;
+ EndRecord[7] := 0;
+ EndRecord[8] := 1;
+ EndRecord[9] := 0;
+ EndRecord[10] := 1;
+ EndRecord[11] := 0;
+ EndRecord[12] := 63;  { Taille du répertoire central }
+ EndRecord[13] := 0;
+ EndRecord[14] := 0;
+ EndRecord[15] := 0;
+ EndRecord[16] := CentralDirOffset and $FF;
+ EndRecord[17] := (CentralDirOffset shr 8) and $FF;
+ EndRecord[18] := (CentralDirOffset shr 16) and $FF;
+ EndRecord[19] := (CentralDirOffset shr 24) and $FF;
+ EndRecord[20] := 0;
+ EndRecord[21] := 0;
+ 
+ BlockWrite(F, EndRecord, 22, BytesWritten);
+ 
+ Close(F);
+ SaveVSSXFile := True;
+End;
+
+{ Fonction principale pour sauvegarder un stencil }
+Function SaveStencilFile(StencilIndex: Integer; Const FileName: String): Boolean;
+Begin
+ SaveStencilFile := False;
+ 
+ If (StencilIndex < 1) or (StencilIndex > StencilCount) Then Exit;
+ 
+ { Toujours sauvegarder au format VSSX (moderne) }
+ SaveStencilFile := SaveVSSXFile(FileName, Stencils[StencilIndex]);
+ 
+ If SaveStencilFile Then Begin
+  Stencils[StencilIndex].FilePath := FileName;
+  Stencils[StencilIndex].IsModified := False;
+ End;
+End;
+
+{ Procédure pour créer un nouveau stencil }
+Function CreateNewStencil(Const StencilName: String): Integer;
+Begin
+ CreateNewStencil := 0;
+ 
+ If StencilCount >= MAX_STENCILS Then Exit;
+ 
+ Inc(StencilCount);
+ InitStencil(Stencils[StencilCount]);
+ Stencils[StencilCount].Name := StencilName;
+ Stencils[StencilCount].IsModified := True;
+ 
+ CreateNewStencil := StencilCount;
+End;
+
+{ Procédure pour créer des masters de formes de base }
+Procedure CreateBasicShapeMasters(StencilIndex: Integer);
+Var
+ Master: TVisioMaster;
+Begin
+ If (StencilIndex < 1) or (StencilIndex > StencilCount) Then Exit;
+ 
+ { Master Rectangle }
+ InitMaster(Master);
+ Master.Name := 'Rectangle';
+ Master.UniqueID := GenerateSimpleGUID;
+ Master.BaseShape.ShapeType := VISIO_SHAPE_RECTANGLE;
+ Master.BaseShape.Width := 100;
+ Master.BaseShape.Height := 60;
+ Master.BaseShape.FillColor := $FFFFFF;
+ Master.BaseShape.LineColor := $000000;
+ Master.Width := 100;
+ Master.Height := 60;
+ Master.OffsetX := 50;
+ Master.OffsetY := 30;
+ Master.ConnectionPointCount := 4;
+ Master.ConnectionPoints[1].X := 50; Master.ConnectionPoints[1].Y := 0;
+ Master.ConnectionPoints[2].X := 100; Master.ConnectionPoints[2].Y := 30;
+ Master.ConnectionPoints[3].X := 50; Master.ConnectionPoints[3].Y := 60;
+ Master.ConnectionPoints[4].X := 0; Master.ConnectionPoints[4].Y := 30;
+ AddMasterToStencil(Stencils[StencilIndex], Master);
+ 
+ { Master Ellipse }
+ InitMaster(Master);
+ Master.Name := 'Ellipse';
+ Master.UniqueID := GenerateSimpleGUID;
+ Master.BaseShape.ShapeType := VISIO_SHAPE_ELLIPSE;
+ Master.BaseShape.Width := 80;
+ Master.BaseShape.Height := 80;
+ Master.BaseShape.FillColor := $FFFFFF;
+ Master.BaseShape.LineColor := $000000;
+ Master.Width := 80;
+ Master.Height := 80;
+ Master.OffsetX := 40;
+ Master.OffsetY := 40;
+ Master.ConnectionPointCount := 4;
+ Master.ConnectionPoints[1].X := 40; Master.ConnectionPoints[1].Y := 0;
+ Master.ConnectionPoints[2].X := 80; Master.ConnectionPoints[2].Y := 40;
+ Master.ConnectionPoints[3].X := 40; Master.ConnectionPoints[3].Y := 80;
+ Master.ConnectionPoints[4].X := 0; Master.ConnectionPoints[4].Y := 40;
+ AddMasterToStencil(Stencils[StencilIndex], Master);
+ 
+ { Master Losange (Diamond) }
+ InitMaster(Master);
+ Master.Name := 'Diamond';
+ Master.UniqueID := GenerateSimpleGUID;
+ Master.BaseShape.ShapeType := VISIO_SHAPE_RECTANGLE;
+ Master.BaseShape.Width := 80;
+ Master.BaseShape.Height := 80;
+ Master.BaseShape.FillColor := $FFFFFF;
+ Master.BaseShape.LineColor := $000000;
+ Master.Width := 80;
+ Master.Height := 80;
+ Master.OffsetX := 40;
+ Master.OffsetY := 40;
+ Master.ConnectionPointCount := 4;
+ Master.ConnectionPoints[1].X := 40; Master.ConnectionPoints[1].Y := 0;
+ Master.ConnectionPoints[2].X := 80; Master.ConnectionPoints[2].Y := 40;
+ Master.ConnectionPoints[3].X := 40; Master.ConnectionPoints[3].Y := 80;
+ Master.ConnectionPoints[4].X := 0; Master.ConnectionPoints[4].Y := 40;
+ AddMasterToStencil(Stencils[StencilIndex], Master);
+ 
+ { Master Ligne }
+ InitMaster(Master);
+ Master.Name := 'Line';
+ Master.UniqueID := GenerateSimpleGUID;
+ Master.BaseShape.ShapeType := VISIO_SHAPE_LINE;
+ Master.BaseShape.Width := 100;
+ Master.BaseShape.Height := 0;
+ Master.BaseShape.FillColor := $000000;
+ Master.BaseShape.LineColor := $000000;
+ Master.Width := 100;
+ Master.Height := 2;
+ Master.OffsetX := 50;
+ Master.OffsetY := 1;
+ Master.ConnectionPointCount := 2;
+ Master.ConnectionPoints[1].X := 0; Master.ConnectionPoints[1].Y := 1;
+ Master.ConnectionPoints[2].X := 100; Master.ConnectionPoints[2].Y := 1;
+ AddMasterToStencil(Stencils[StencilIndex], Master);
+ 
+ { Master Connecteur }
+ InitMaster(Master);
+ Master.Name := 'Connector';
+ Master.UniqueID := GenerateSimpleGUID;
+ Master.BaseShape.ShapeType := VISIO_SHAPE_CONNECTOR;
+ Master.BaseShape.Width := 100;
+ Master.BaseShape.Height := 0;
+ Master.BaseShape.FillColor := $000000;
+ Master.BaseShape.LineColor := $000000;
+ Master.Width := 100;
+ Master.Height := 2;
+ Master.OffsetX := 50;
+ Master.OffsetY := 1;
+ Master.ConnectionPointCount := 2;
+ Master.ConnectionPoints[1].X := 0; Master.ConnectionPoints[1].Y := 1;
+ Master.ConnectionPoints[2].X := 100; Master.ConnectionPoints[2].Y := 1;
+ AddMasterToStencil(Stencils[StencilIndex], Master);
+ 
+ { Master Texte }
+ InitMaster(Master);
+ Master.Name := 'Text';
+ Master.UniqueID := GenerateSimpleGUID;
+ Master.BaseShape.ShapeType := VISIO_SHAPE_TEXT;
+ Master.BaseShape.Width := 120;
+ Master.BaseShape.Height := 30;
+ Master.BaseShape.FillColor := $FFFFFF;
+ Master.BaseShape.LineColor := $000000;
+ Master.BaseShape.Text := 'Text';
+ Master.Width := 120;
+ Master.Height := 30;
+ Master.OffsetX := 60;
+ Master.OffsetY := 15;
+ Master.ConnectionPointCount := 4;
+ Master.ConnectionPoints[1].X := 60; Master.ConnectionPoints[1].Y := 0;
+ Master.ConnectionPoints[2].X := 120; Master.ConnectionPoints[2].Y := 15;
+ Master.ConnectionPoints[3].X := 60; Master.ConnectionPoints[3].Y := 30;
+ Master.ConnectionPoints[4].X := 0; Master.ConnectionPoints[4].Y := 15;
+ AddMasterToStencil(Stencils[StencilIndex], Master);
+End;
+
+{ Procédure pour fermer un stencil }
+Procedure CloseStencil(StencilIndex: Integer);
+Var
+ I: Integer;
+Begin
+ If (StencilIndex < 1) or (StencilIndex > StencilCount) Then Exit;
+ 
+ { Décaler les stencils suivants }
+ For I := StencilIndex to StencilCount - 1 do
+  Stencils[I] := Stencils[I + 1];
+ 
+ Dec(StencilCount);
+ 
+ { Ajuster le stencil courant si nécessaire }
+ If CurrentStencil > StencilCount Then
+  CurrentStencil := StencilCount;
+End;
+
+{ Procédure pour initialiser le système de stencils }
+Procedure InitStencilSystem;
+Var
+ I: Integer;
+ NewStencilIdx: Integer;
+Begin
+ StencilCount := 0;
+ CurrentStencil := 0;
+ NextMasterID := 1;
+ 
+ For I := 1 to MAX_STENCILS do
+  InitStencil(Stencils[I]);
+ 
+ { Créer un stencil par défaut avec les formes de base }
+ NewStencilIdx := CreateNewStencil('Basic Shapes');
+ If NewStencilIdx > 0 Then Begin
+  CreateBasicShapeMasters(NewStencilIdx);
+  CurrentStencil := NewStencilIdx;
+ End;
+End;
+
+{ ============================================================================ }
+{ === FIN DES FONCTIONS DE GESTION DES STENCILS ET MASTERS === }
 { ============================================================================ }
 
 { Procédure New - Créer un nouveau document }

@@ -28,7 +28,7 @@
   13. [FAIT] Creer les types d'objets de base: Rectangle, Ellipse, Ligne, Polygone, Courbe de Bezier, Texte, Image
   14. [FAIT] Implementer les connecteurs entre objets avec points d'ancrage automatiques
   15. [FAIT] Permettre la modification des proprietes des objets: couleur de remplissage, couleur de trait, epaisseur de ligne, style de ligne
-  16. Ajouter le support des calques (layers) avec visibilite et verrouillage
+  16. [FAIT] Ajouter le support des calques (layers) avec visibilite et verrouillage
   17. Implementer la gestion des groupes d'objets (grouper, degrouper, entrer dans le groupe)
 
   === FORMAT DE FICHIER VISIO ===
@@ -147,6 +147,12 @@ Const
  PROP_COLOR_BOX_SIZE = 16;  { Taille des cases de couleur }
  PROP_MAX_COLORS = 16;      { Nombre de couleurs dans la palette }
  
+ { Constantes pour la boîte de dialogue des calques }
+ LAYER_DIALOG_WIDTH = 280;    { Largeur de la boîte de dialogue des calques }
+ LAYER_DIALOG_HEIGHT = 250;   { Hauteur de la boîte de dialogue des calques }
+ LAYER_ITEM_HEIGHT = 20;      { Hauteur d'un élément de calque }
+ LAYER_NAME_LENGTH = 30;      { Longueur max du nom de calque }
+ 
  { Noms des éléments du menu contextuel }
  ContextMenuNames: Array[1..CONTEXT_MENU_ITEM_COUNT] of String[12] = (
    'Cut', 'Copy', 'Paste', 'Delete', 'Properties'
@@ -172,6 +178,14 @@ Type
  TToolType = (ttSelection, ttRectangle, ttEllipse, ttLine, ttConnector, ttText, ttPolygon, ttBezier, ttImage);
  TShapeType = (stNone, stRectangle, stEllipse, stLine, stConnector, stText, stPolygon, stBezier, stImage);
  
+ { Structure pour un calque }
+ TLayer = Record
+  Name: String[LAYER_NAME_LENGTH]; { Nom du calque }
+  Visible: Boolean;                { Calque visible }
+  Locked: Boolean;                 { Calque verrouillé (pas modifiable) }
+  Color: Integer;                  { Couleur d'identification du calque }
+ End;
+ 
  { Structure pour stocker les points d'un polygone ou d'une courbe de Bézier }
  TPointArray = Array[1..MAX_POLYGON_POINTS] of Record
   X, Y: Integer;
@@ -185,6 +199,7 @@ Type
   LineColor: Integer;        { Couleur de contour }
   LineWidth: Integer;        { Épaisseur de ligne }
   LineStyle: Integer;        { Style de ligne (LINESTYLE_*) }
+  LayerIndex: Integer;       { Index du calque auquel appartient l'objet }
   Text: String[80];          { Texte (pour objets texte) }
   Selected: Boolean;         { Objet sélectionné }
   { Champs pour les polygones et courbes de Bézier }
@@ -208,6 +223,8 @@ Var
  Shapes: Array[1..MAX_SHAPES] of TShapeObject;
  ShapeCount: Integer;
  SelectedShape: Integer;
+ { Variables pour les calques }
+ Layers: Array[1..MAX_LAYERS] of TLayer;
  { Variables pour le dessin à la souris }
  IsDrawing: Boolean;
  DrawStartX, DrawStartY: Integer;
@@ -230,6 +247,11 @@ Var
  { Variables pour les connecteurs et points d'ancrage }
  HoveredShapeForAnchor: Integer;  { Forme survolée pour afficher les points d'ancrage }
  NearestAnchorPoint: Integer;     { Point d'ancrage le plus proche de la souris }
+ { Variables pour la boîte de dialogue des calques }
+ LayerDialogVisible: Boolean;
+ LayerDialogX, LayerDialogY: Integer;
+ LayerDialogSelectedLayer: Integer;
+ LayerDialogHighlightedButton: Integer;
 
 Procedure InitializeGraphics;
 Var
@@ -629,12 +651,82 @@ End;
 
 { Procédure InsertLayer - Insérer un nouveau calque }
 Procedure InsertLayer;
+Var
+ LayerNum: String[5];
 Begin
  If LayerCount < MAX_LAYERS Then Begin
   LayerCount := LayerCount + 1;
   CurrentLayer := LayerCount;
-  { TODO: Créer un nouveau calque dans la page courante }
-  { TODO: Actualiser l'affichage pour montrer le nouveau calque }
+  { Initialiser le nouveau calque }
+  Str(LayerCount, LayerNum);
+  Layers[LayerCount].Name := 'Layer ' + LayerNum;
+  Layers[LayerCount].Visible := True;
+  Layers[LayerCount].Locked := False;
+  Layers[LayerCount].Color := (LayerCount mod 15) + 1; { Couleur différente par calque }
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure InitLayer - Initialiser un calque }
+Procedure InitLayer(LayerIdx: Integer; LayerName: String);
+Begin
+ If (LayerIdx >= 1) and (LayerIdx <= MAX_LAYERS) Then Begin
+  Layers[LayerIdx].Name := LayerName;
+  Layers[LayerIdx].Visible := True;
+  Layers[LayerIdx].Locked := False;
+  Layers[LayerIdx].Color := (LayerIdx mod 15) + 1;
+ End;
+End;
+
+{ Procédure InitAllLayers - Initialiser tous les calques }
+Procedure InitAllLayers;
+Var
+ I: Integer;
+Begin
+ For I := 1 to MAX_LAYERS do Begin
+  Layers[I].Name := '';
+  Layers[I].Visible := True;
+  Layers[I].Locked := False;
+  Layers[I].Color := 1;
+ End;
+ { Créer le calque par défaut }
+ InitLayer(1, 'Layer 1');
+ LayerCount := 1;
+ CurrentLayer := 1;
+End;
+
+{ Fonction pour vérifier si un calque est visible }
+Function IsLayerVisible(LayerIdx: Integer): Boolean;
+Begin
+ If (LayerIdx >= 1) and (LayerIdx <= LayerCount) Then
+  IsLayerVisible := Layers[LayerIdx].Visible
+ Else
+  IsLayerVisible := False;
+End;
+
+{ Fonction pour vérifier si un calque est verrouillé }
+Function IsLayerLocked(LayerIdx: Integer): Boolean;
+Begin
+ If (LayerIdx >= 1) and (LayerIdx <= LayerCount) Then
+  IsLayerLocked := Layers[LayerIdx].Locked
+ Else
+  IsLayerLocked := True; { Par défaut, calque inexistant = verrouillé }
+End;
+
+{ Procédure pour changer la visibilité d'un calque }
+Procedure SetLayerVisible(LayerIdx: Integer; Visible: Boolean);
+Begin
+ If (LayerIdx >= 1) and (LayerIdx <= LayerCount) Then Begin
+  Layers[LayerIdx].Visible := Visible;
+  DocumentModified := True;
+ End;
+End;
+
+{ Procédure pour changer le verrouillage d'un calque }
+Procedure SetLayerLocked(LayerIdx: Integer; Locked: Boolean);
+Begin
+ If (LayerIdx >= 1) and (LayerIdx <= LayerCount) Then Begin
+  Layers[LayerIdx].Locked := Locked;
   DocumentModified := True;
  End;
 End;
@@ -1025,6 +1117,258 @@ End;
 
 { *** FIN BOÎTE DE DIALOGUE DES PROPRIÉTÉS *** }
 
+{ *** BOÎTE DE DIALOGUE DES CALQUES *** }
+
+{ Procédure pour dessiner la boîte de dialogue des calques }
+Procedure DrawLayerDialog;
+Var
+ DialogX, DialogY: Integer;
+ I, ItemY: Integer;
+ VisibleStr, LockedStr: String[3];
+ NameStr: String[LAYER_NAME_LENGTH];
+Begin
+ { Calculer la position centrée }
+ DialogX := (ScreenWidth - LAYER_DIALOG_WIDTH) div 2;
+ DialogY := (ScreenHeight - LAYER_DIALOG_HEIGHT) div 2;
+ LayerDialogX := DialogX;
+ LayerDialogY := DialogY;
+ 
+ { Dessiner le fond de la boîte de dialogue }
+ SetFillStyle(SolidFill, PROP_DIALOG_BG);
+ Bar(DialogX, DialogY, DialogX + LAYER_DIALOG_WIDTH, DialogY + LAYER_DIALOG_HEIGHT);
+ 
+ { Dessiner la bordure }
+ SetColor(PROP_DIALOG_BORDER);
+ Rectangle(DialogX, DialogY, DialogX + LAYER_DIALOG_WIDTH, DialogY + LAYER_DIALOG_HEIGHT);
+ Rectangle(DialogX + 1, DialogY + 1, DialogX + LAYER_DIALOG_WIDTH - 1, DialogY + LAYER_DIALOG_HEIGHT - 1);
+ 
+ { Dessiner la barre de titre }
+ SetFillStyle(SolidFill, Blue);
+ Bar(DialogX + 2, DialogY + 2, DialogX + LAYER_DIALOG_WIDTH - 2, DialogY + 20);
+ SetColor(White);
+ OutTextXY(DialogX + 10, DialogY + 6, 'Layers');
+ 
+ { En-têtes des colonnes }
+ SetColor(PROP_DIALOG_TEXT);
+ OutTextXY(DialogX + 10, DialogY + 28, 'V');   { Visible }
+ OutTextXY(DialogX + 30, DialogY + 28, 'L');   { Locked }
+ OutTextXY(DialogX + 50, DialogY + 28, 'Name');
+ 
+ { Ligne de séparation }
+ SetColor(PROP_DIALOG_BORDER);
+ Line(DialogX + 5, DialogY + 40, DialogX + LAYER_DIALOG_WIDTH - 5, DialogY + 40);
+ 
+ { Afficher les calques }
+ For I := 1 to LayerCount do Begin
+  ItemY := DialogY + 45 + (I - 1) * LAYER_ITEM_HEIGHT;
+  
+  { Surligner le calque sélectionné ou le calque actif }
+  If I = LayerDialogSelectedLayer Then Begin
+   SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL);
+   Bar(DialogX + 5, ItemY - 2, DialogX + LAYER_DIALOG_WIDTH - 5, ItemY + LAYER_ITEM_HEIGHT - 4);
+   SetColor(White);
+  End
+  Else If I = CurrentLayer Then Begin
+   SetFillStyle(SolidFill, LightGray);
+   Bar(DialogX + 5, ItemY - 2, DialogX + LAYER_DIALOG_WIDTH - 5, ItemY + LAYER_ITEM_HEIGHT - 4);
+   SetColor(PROP_DIALOG_TEXT);
+  End
+  Else Begin
+   SetColor(PROP_DIALOG_TEXT);
+  End;
+  
+  { Checkbox Visible }
+  If Layers[I].Visible Then
+   VisibleStr := '[X]'
+  Else
+   VisibleStr := '[ ]';
+  OutTextXY(DialogX + 5, ItemY, VisibleStr);
+  
+  { Checkbox Locked }
+  If Layers[I].Locked Then
+   LockedStr := '[X]'
+  Else
+   LockedStr := '[ ]';
+  OutTextXY(DialogX + 25, ItemY, LockedStr);
+  
+  { Nom du calque }
+  NameStr := Layers[I].Name;
+  OutTextXY(DialogX + 50, ItemY, NameStr);
+  
+  { Indicateur de couleur du calque }
+  SetFillStyle(SolidFill, Layers[I].Color);
+  Bar(DialogX + LAYER_DIALOG_WIDTH - 30, ItemY, DialogX + LAYER_DIALOG_WIDTH - 10, ItemY + 12);
+  SetColor(PROP_DIALOG_BORDER);
+  Rectangle(DialogX + LAYER_DIALOG_WIDTH - 30, ItemY, DialogX + LAYER_DIALOG_WIDTH - 10, ItemY + 12);
+ End;
+ 
+ { Boutons en bas }
+ { Bouton New Layer }
+ If LayerDialogHighlightedButton = 1 Then
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
+ Else
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
+ Bar(DialogX + 10, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+     DialogX + 70, DialogY + LAYER_DIALOG_HEIGHT - 15);
+ SetColor(PROP_DIALOG_BORDER);
+ Rectangle(DialogX + 10, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+           DialogX + 70, DialogY + LAYER_DIALOG_HEIGHT - 15);
+ If LayerDialogHighlightedButton = 1 Then
+  SetColor(White)
+ Else
+  SetColor(PROP_DIALOG_TEXT);
+ OutTextXY(DialogX + 20, DialogY + LAYER_DIALOG_HEIGHT - 31, 'New');
+ 
+ { Bouton Set Active }
+ If LayerDialogHighlightedButton = 2 Then
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
+ Else
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
+ Bar(DialogX + 80, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+     DialogX + 140, DialogY + LAYER_DIALOG_HEIGHT - 15);
+ SetColor(PROP_DIALOG_BORDER);
+ Rectangle(DialogX + 80, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+           DialogX + 140, DialogY + LAYER_DIALOG_HEIGHT - 15);
+ If LayerDialogHighlightedButton = 2 Then
+  SetColor(White)
+ Else
+  SetColor(PROP_DIALOG_TEXT);
+ OutTextXY(DialogX + 90, DialogY + LAYER_DIALOG_HEIGHT - 31, 'Active');
+ 
+ { Bouton Close }
+ If LayerDialogHighlightedButton = 3 Then
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
+ Else
+  SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
+ Bar(DialogX + LAYER_DIALOG_WIDTH - 70, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+     DialogX + LAYER_DIALOG_WIDTH - 10, DialogY + LAYER_DIALOG_HEIGHT - 15);
+ SetColor(PROP_DIALOG_BORDER);
+ Rectangle(DialogX + LAYER_DIALOG_WIDTH - 70, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+           DialogX + LAYER_DIALOG_WIDTH - 10, DialogY + LAYER_DIALOG_HEIGHT - 15);
+ If LayerDialogHighlightedButton = 3 Then
+  SetColor(White)
+ Else
+  SetColor(PROP_DIALOG_TEXT);
+ OutTextXY(DialogX + LAYER_DIALOG_WIDTH - 60, DialogY + LAYER_DIALOG_HEIGHT - 31, 'Close');
+End;
+
+{ Procédure pour afficher la boîte de dialogue des calques }
+Procedure ShowLayerDialog;
+Begin
+ LayerDialogVisible := True;
+ LayerDialogSelectedLayer := CurrentLayer;
+ LayerDialogHighlightedButton := 0;
+End;
+
+{ Procédure pour masquer la boîte de dialogue des calques }
+Procedure HideLayerDialog;
+Begin
+ LayerDialogVisible := False;
+End;
+
+{ Procédure pour gérer un clic dans la boîte de dialogue des calques }
+Procedure HandleLayerDialogClick(X, Y: Integer);
+Var
+ I, ItemY: Integer;
+ DialogX, DialogY: Integer;
+Begin
+ If Not LayerDialogVisible Then Exit;
+ 
+ DialogX := LayerDialogX;
+ DialogY := LayerDialogY;
+ 
+ { Vérifier clic sur les calques }
+ For I := 1 to LayerCount do Begin
+  ItemY := DialogY + 45 + (I - 1) * LAYER_ITEM_HEIGHT;
+  
+  If (Y >= ItemY - 2) and (Y < ItemY + LAYER_ITEM_HEIGHT - 4) Then Begin
+   { Clic sur Visible (checkbox) }
+   If (X >= DialogX + 5) and (X <= DialogX + 22) Then Begin
+    Layers[I].Visible := Not Layers[I].Visible;
+    DocumentModified := True;
+    Exit;
+   End;
+   
+   { Clic sur Locked (checkbox) }
+   If (X >= DialogX + 25) and (X <= DialogX + 42) Then Begin
+    Layers[I].Locked := Not Layers[I].Locked;
+    DocumentModified := True;
+    Exit;
+   End;
+   
+   { Clic sur le nom pour sélectionner le calque }
+   If (X >= DialogX + 50) and (X <= DialogX + LAYER_DIALOG_WIDTH - 10) Then Begin
+    LayerDialogSelectedLayer := I;
+    Exit;
+   End;
+  End;
+ End;
+ 
+ { Vérifier clic sur le bouton New }
+ If (X >= DialogX + 10) and (X <= DialogX + 70) and
+    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+    (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
+  InsertLayer;
+  LayerDialogSelectedLayer := LayerCount;
+  Exit;
+ End;
+ 
+ { Vérifier clic sur le bouton Set Active }
+ If (X >= DialogX + 80) and (X <= DialogX + 140) and
+    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+    (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
+  If (LayerDialogSelectedLayer >= 1) and (LayerDialogSelectedLayer <= LayerCount) Then Begin
+   CurrentLayer := LayerDialogSelectedLayer;
+  End;
+  Exit;
+ End;
+ 
+ { Vérifier clic sur le bouton Close }
+ If (X >= DialogX + LAYER_DIALOG_WIDTH - 70) and 
+    (X <= DialogX + LAYER_DIALOG_WIDTH - 10) and
+    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+    (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
+  HideLayerDialog;
+  Exit;
+ End;
+End;
+
+{ Procédure pour gérer le survol dans la boîte de dialogue des calques }
+Procedure HandleLayerDialogHover(X, Y: Integer);
+Var
+ DialogX, DialogY: Integer;
+ OldHighlight: Integer;
+Begin
+ If Not LayerDialogVisible Then Exit;
+ 
+ DialogX := LayerDialogX;
+ DialogY := LayerDialogY;
+ OldHighlight := LayerDialogHighlightedButton;
+ LayerDialogHighlightedButton := 0;
+ 
+ { Vérifier survol du bouton New }
+ If (X >= DialogX + 10) and (X <= DialogX + 70) and
+    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+    (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
+  LayerDialogHighlightedButton := 1;
+ End
+ { Vérifier survol du bouton Set Active }
+ Else If (X >= DialogX + 80) and (X <= DialogX + 140) and
+         (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+         (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
+  LayerDialogHighlightedButton := 2;
+ End
+ { Vérifier survol du bouton Close }
+ Else If (X >= DialogX + LAYER_DIALOG_WIDTH - 70) and 
+         (X <= DialogX + LAYER_DIALOG_WIDTH - 10) and
+         (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+         (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
+  LayerDialogHighlightedButton := 3;
+ End;
+End;
+
+{ *** FIN BOÎTE DE DIALOGUE DES CALQUES *** }
+
 { Procédure FormatFill - Modifier la couleur de remplissage }
 Procedure FormatFill;
 Begin
@@ -1341,6 +1685,7 @@ Begin
  Shape.LineColor := Black;
  Shape.LineWidth := 1;
  Shape.LineStyle := LINESTYLE_SOLID;
+ Shape.LayerIndex := CurrentLayer;  { Assigner au calque actif }
  Shape.Text := '';
  Shape.Selected := False;
  { Initialiser les champs pour polygones et courbes de Bézier }
@@ -1738,7 +2083,10 @@ Var
  I: Integer;
 Begin
  For I := 1 to ShapeCount do Begin
-  DrawShape(Shapes[I]);
+  { Ne dessiner que les formes des calques visibles }
+  If IsLayerVisible(Shapes[I].LayerIndex) Then Begin
+   DrawShape(Shapes[I]);
+  End;
  End;
  
  { Dessiner les points d'ancrage sur la forme survolée si on utilise l'outil connecteur }
@@ -1786,9 +2134,13 @@ Begin
  GetShapeAtPosition := 0;
  { Parcourir les objets du dernier au premier (priorité aux objets dessus) }
  For I := ShapeCount downto 1 do Begin
-  If PointInShape(X, Y, Shapes[I]) Then Begin
-   GetShapeAtPosition := I;
-   Exit;
+  { Ne sélectionner que les formes des calques visibles et non verrouillés }
+  If IsLayerVisible(Shapes[I].LayerIndex) and 
+     (Not IsLayerLocked(Shapes[I].LayerIndex)) Then Begin
+   If PointInShape(X, Y, Shapes[I]) Then Begin
+    GetShapeAtPosition := I;
+    Exit;
+   End;
   End;
  End;
 End;
@@ -2292,6 +2644,14 @@ Begin
  { Initialiser les variables pour les points d'ancrage }
  HoveredShapeForAnchor := 0;
  NearestAnchorPoint := ANCHOR_NONE;
+ { Initialiser les calques }
+ InitAllLayers;
+ { Initialiser les variables de la boîte de dialogue des calques }
+ LayerDialogVisible := False;
+ LayerDialogX := 0;
+ LayerDialogY := 0;
+ LayerDialogSelectedLayer := 1;
+ LayerDialogHighlightedButton := 0;
  For I := 1 to MAX_SHAPES do Begin
   InitShape(Shapes[I]);
  End;
@@ -2784,7 +3144,7 @@ Begin
   3: InsertImage;      { Image... }
   4: InsertConnector;  { Connector }
   5: InsertPage;       { Page }
-  6: InsertLayer;      { Layer }
+  6: ShowLayerDialog;  { Layer - Ouvrir la boîte de dialogue des calques }
  End;
 End;
 
@@ -2890,6 +3250,11 @@ Begin
  If PropertiesDialogVisible Then Begin
   DrawPropertiesDialog;
  End;
+ 
+ { Dessiner la boîte de dialogue des calques si elle est visible }
+ If LayerDialogVisible Then Begin
+  DrawLayerDialog;
+ End;
 End;
 
 BEGIN
@@ -2952,8 +3317,12 @@ BEGIN
    { Détecter un clic gauche (bouton 1) }
    If (LastMouseButton and 1) = 1 Then Begin
     HideMouse;
+    { Si la boîte de dialogue des calques est visible, gérer le clic }
+    If LayerDialogVisible Then Begin
+     HandleLayerDialogClick(LastMouseX, LastMouseY);
+    End
     { Si la boîte de dialogue des propriétés est visible, gérer le clic }
-    If PropertiesDialogVisible Then Begin
+    Else If PropertiesDialogVisible Then Begin
      HandlePropertiesDialogClick(LastMouseX, LastMouseY);
     End
     { Si le menu contextuel est visible, vérifier si on clique dedans }

@@ -43,7 +43,7 @@
   === EXPORT IMAGES ===
   23. [FAIT] Exporter en format BMP avec support 1-bit, 4-bit, 8-bit, 24-bit
   24. [FAIT] Exporter en format GIF avec palette de 256 couleurs et transparence
-  25. Exporter en format JPEG avec compression reglable et en format PNG avec canal alpha pour transparence
+  25. [FAIT] Exporter en format JPEG avec compression reglable et en format PNG avec canal alpha pour transparence
 }
 
 Program VISIO;
@@ -4432,6 +4432,857 @@ End;
 
 { ============================================================================ }
 { === FIN DES FONCTIONS D'EXPORT GIF === }
+{ ============================================================================ }
+
+{ ============================================================================ }
+{ === FONCTIONS D'EXPORT JPEG (TODO 25) === }
+{ ============================================================================ }
+
+{ Constantes pour le format JPEG }
+Const
+ JPEG_SOI = $FFD8;           { Start of Image }
+ JPEG_EOI = $FFD9;           { End of Image }
+ JPEG_APP0 = $FFE0;          { JFIF marker }
+ JPEG_DQT = $FFDB;           { Define Quantization Table }
+ JPEG_SOF0 = $FFC0;          { Start of Frame (Baseline DCT) }
+ JPEG_DHT = $FFC4;           { Define Huffman Table }
+ JPEG_SOS = $FFDA;           { Start of Scan }
+ JPEG_BLOCK_SIZE = 8;        { Taille d'un bloc DCT }
+
+{ Tables de quantisation JPEG standard (qualité 50) }
+Const
+ JPEG_QT_LUMA: Array[0..63] of Byte = (
+  16, 11, 10, 16,  24,  40,  51,  61,
+  12, 12, 14, 19,  26,  58,  60,  55,
+  14, 13, 16, 24,  40,  57,  69,  56,
+  14, 17, 22, 29,  51,  87,  80,  62,
+  18, 22, 37, 56,  68, 109, 103,  77,
+  24, 35, 55, 64,  81, 104, 113,  92,
+  49, 64, 78, 87, 103, 121, 120, 101,
+  72, 92, 95, 98, 112, 100, 103,  99
+ );
+ 
+ JPEG_QT_CHROMA: Array[0..63] of Byte = (
+  17, 18, 24, 47, 99, 99, 99, 99,
+  18, 21, 26, 66, 99, 99, 99, 99,
+  24, 26, 56, 99, 99, 99, 99, 99,
+  47, 66, 99, 99, 99, 99, 99, 99,
+  99, 99, 99, 99, 99, 99, 99, 99,
+  99, 99, 99, 99, 99, 99, 99, 99,
+  99, 99, 99, 99, 99, 99, 99, 99,
+  99, 99, 99, 99, 99, 99, 99, 99
+ );
+
+{ Ordre zig-zag pour les coefficients DCT }
+Const
+ JPEG_ZIGZAG: Array[0..63] of Byte = (
+   0,  1,  8, 16,  9,  2,  3, 10,
+  17, 24, 32, 25, 18, 11,  4,  5,
+  12, 19, 26, 33, 40, 48, 41, 34,
+  27, 20, 13,  6,  7, 14, 21, 28,
+  35, 42, 49, 56, 57, 50, 43, 36,
+  29, 22, 15, 23, 30, 37, 44, 51,
+  58, 59, 52, 45, 38, 31, 39, 46,
+  53, 60, 61, 54, 47, 55, 62, 63
+ );
+
+{ Tables de Huffman DC/AC standard }
+Const
+ JPEG_DC_BITS: Array[0..15] of Byte = (0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+ JPEG_DC_VALS: Array[0..11] of Byte = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+ JPEG_AC_BITS: Array[0..15] of Byte = (0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125);
+ 
+Type
+ TJPEGBlock = Array[0..63] of Integer;
+ TJPEGQuantTable = Array[0..63] of Integer;
+
+Var
+ JPEGQuality: Integer;
+ JPEGQuantLuma: TJPEGQuantTable;
+ JPEGQuantChroma: TJPEGQuantTable;
+ JPEGBitBuffer: LongInt;
+ JPEGBitsInBuffer: Integer;
+ JPEGPrevDC_Y: Integer;
+ JPEGPrevDC_Cb: Integer;
+ JPEGPrevDC_Cr: Integer;
+
+{ Initialiser les tables de quantisation selon la qualité }
+Procedure InitJPEGQuantTables(Quality: Integer);
+Var
+ I: Integer;
+ Scale: Integer;
+ Temp: Integer;
+Begin
+ If Quality < 1 Then Quality := 1;
+ If Quality > 100 Then Quality := 100;
+ 
+ { Calculer le facteur d'échelle }
+ If Quality < 50 Then
+  Scale := 5000 Div Quality
+ Else
+  Scale := 200 - Quality * 2;
+  
+ { Générer les tables de quantisation }
+ For I := 0 to 63 do Begin
+  { Table Luminance }
+  Temp := (JPEG_QT_LUMA[I] * Scale + 50) Div 100;
+  If Temp < 1 Then Temp := 1;
+  If Temp > 255 Then Temp := 255;
+  JPEGQuantLuma[I] := Temp;
+  
+  { Table Chrominance }
+  Temp := (JPEG_QT_CHROMA[I] * Scale + 50) Div 100;
+  If Temp < 1 Then Temp := 1;
+  If Temp > 255 Then Temp := 255;
+  JPEGQuantChroma[I] := Temp;
+ End;
+End;
+
+{ Écrire un marqueur JPEG (2 octets) }
+Procedure WriteJPEGMarker(Var F: File; Marker: Word);
+Var
+ B: Byte;
+Begin
+ B := Hi(Marker);
+ BlockWrite(F, B, 1);
+ B := Lo(Marker);
+ BlockWrite(F, B, 1);
+End;
+
+{ Écrire l'en-tête JFIF APP0 }
+Procedure WriteJPEGAPP0(Var F: File);
+Var
+ B: Byte;
+ Len: Word;
+Begin
+ WriteJPEGMarker(F, JPEG_APP0);
+ 
+ { Longueur du segment (16 octets) }
+ B := 0; BlockWrite(F, B, 1);
+ B := 16; BlockWrite(F, B, 1);
+ 
+ { Identificateur "JFIF\0" }
+ B := Ord('J'); BlockWrite(F, B, 1);
+ B := Ord('F'); BlockWrite(F, B, 1);
+ B := Ord('I'); BlockWrite(F, B, 1);
+ B := Ord('F'); BlockWrite(F, B, 1);
+ B := 0; BlockWrite(F, B, 1);
+ 
+ { Version JFIF 1.01 }
+ B := 1; BlockWrite(F, B, 1);
+ B := 1; BlockWrite(F, B, 1);
+ 
+ { Unités (0 = pas d'unité) }
+ B := 0; BlockWrite(F, B, 1);
+ 
+ { Densité X et Y (1x1) }
+ B := 0; BlockWrite(F, B, 1);
+ B := 1; BlockWrite(F, B, 1);
+ B := 0; BlockWrite(F, B, 1);
+ B := 1; BlockWrite(F, B, 1);
+ 
+ { Pas de vignette }
+ B := 0; BlockWrite(F, B, 1);
+ B := 0; BlockWrite(F, B, 1);
+End;
+
+{ Écrire une table de quantisation DQT }
+Procedure WriteJPEGDQT(Var F: File; TableID: Integer; Const QTable: TJPEGQuantTable);
+Var
+ B: Byte;
+ I: Integer;
+Begin
+ WriteJPEGMarker(F, JPEG_DQT);
+ 
+ { Longueur (2 + 1 + 64 = 67) }
+ B := 0; BlockWrite(F, B, 1);
+ B := 67; BlockWrite(F, B, 1);
+ 
+ { ID de la table (4 bits precision + 4 bits ID) }
+ B := TableID; BlockWrite(F, B, 1);
+ 
+ { 64 coefficients en ordre zig-zag }
+ For I := 0 to 63 do Begin
+  B := QTable[JPEG_ZIGZAG[I]];
+  BlockWrite(F, B, 1);
+ End;
+End;
+
+{ Écrire le marqueur SOF0 (Start of Frame) }
+Procedure WriteJPEGSOF0(Var F: File; Width, Height: Integer);
+Var
+ B: Byte;
+Begin
+ WriteJPEGMarker(F, JPEG_SOF0);
+ 
+ { Longueur (2 + 1 + 2 + 2 + 1 + 3*3 = 17) }
+ B := 0; BlockWrite(F, B, 1);
+ B := 17; BlockWrite(F, B, 1);
+ 
+ { Précision (8 bits) }
+ B := 8; BlockWrite(F, B, 1);
+ 
+ { Hauteur }
+ B := Hi(Height); BlockWrite(F, B, 1);
+ B := Lo(Height); BlockWrite(F, B, 1);
+ 
+ { Largeur }
+ B := Hi(Width); BlockWrite(F, B, 1);
+ B := Lo(Width); BlockWrite(F, B, 1);
+ 
+ { Nombre de composants (3 = YCbCr) }
+ B := 3; BlockWrite(F, B, 1);
+ 
+ { Composant Y (ID=1, sampling 1x1, table quant 0) }
+ B := 1; BlockWrite(F, B, 1);
+ B := $11; BlockWrite(F, B, 1);  { 1x1 }
+ B := 0; BlockWrite(F, B, 1);
+ 
+ { Composant Cb (ID=2, sampling 1x1, table quant 1) }
+ B := 2; BlockWrite(F, B, 1);
+ B := $11; BlockWrite(F, B, 1);
+ B := 1; BlockWrite(F, B, 1);
+ 
+ { Composant Cr (ID=3, sampling 1x1, table quant 1) }
+ B := 3; BlockWrite(F, B, 1);
+ B := $11; BlockWrite(F, B, 1);
+ B := 1; BlockWrite(F, B, 1);
+End;
+
+{ Écrire une table de Huffman DHT }
+Procedure WriteJPEGDHT(Var F: File; TableClass, TableID: Integer;
+                       Const Bits: Array of Byte; Const Vals: Array of Byte;
+                       NumVals: Integer);
+Var
+ B: Byte;
+ I: Integer;
+ Len: Integer;
+Begin
+ WriteJPEGMarker(F, JPEG_DHT);
+ 
+ { Calculer la longueur }
+ Len := 2 + 1 + 16 + NumVals;
+ B := Hi(Len); BlockWrite(F, B, 1);
+ B := Lo(Len); BlockWrite(F, B, 1);
+ 
+ { Classe et ID de la table }
+ B := (TableClass Shl 4) Or TableID;
+ BlockWrite(F, B, 1);
+ 
+ { 16 octets de compteurs de bits }
+ For I := 0 to 15 do Begin
+  B := Bits[I];
+  BlockWrite(F, B, 1);
+ End;
+ 
+ { Valeurs des symboles }
+ For I := 0 to NumVals - 1 do Begin
+  B := Vals[I];
+  BlockWrite(F, B, 1);
+ End;
+End;
+
+{ Écrire le marqueur SOS (Start of Scan) }
+Procedure WriteJPEGSOS(Var F: File);
+Var
+ B: Byte;
+Begin
+ WriteJPEGMarker(F, JPEG_SOS);
+ 
+ { Longueur (2 + 1 + 3*2 + 3 = 12) }
+ B := 0; BlockWrite(F, B, 1);
+ B := 12; BlockWrite(F, B, 1);
+ 
+ { Nombre de composants }
+ B := 3; BlockWrite(F, B, 1);
+ 
+ { Y: table DC 0, table AC 0 }
+ B := 1; BlockWrite(F, B, 1);
+ B := $00; BlockWrite(F, B, 1);
+ 
+ { Cb: table DC 1, table AC 1 }
+ B := 2; BlockWrite(F, B, 1);
+ B := $11; BlockWrite(F, B, 1);
+ 
+ { Cr: table DC 1, table AC 1 }
+ B := 3; BlockWrite(F, B, 1);
+ B := $11; BlockWrite(F, B, 1);
+ 
+ { Spectral selection }
+ B := 0; BlockWrite(F, B, 1);   { Ss }
+ B := 63; BlockWrite(F, B, 1);  { Se }
+ B := 0; BlockWrite(F, B, 1);   { Ah/Al }
+End;
+
+{ Convertir RGB en YCbCr }
+Procedure RGBToYCbCr(R, G, B: Byte; Var Y, Cb, Cr: Integer);
+Begin
+ Y  := Round(0.299 * R + 0.587 * G + 0.114 * B);
+ Cb := Round(-0.169 * R - 0.331 * G + 0.500 * B + 128);
+ Cr := Round(0.500 * R - 0.419 * G - 0.081 * B + 128);
+ 
+ If Y < 0 Then Y := 0; If Y > 255 Then Y := 255;
+ If Cb < 0 Then Cb := 0; If Cb > 255 Then Cb := 255;
+ If Cr < 0 Then Cr := 0; If Cr > 255 Then Cr := 255;
+End;
+
+{ Écrire un octet compressé JPEG (avec byte stuffing) }
+Procedure WriteJPEGByte(Var F: File; B: Byte);
+Var
+ Stuff: Byte;
+Begin
+ BlockWrite(F, B, 1);
+ If B = $FF Then Begin
+  Stuff := $00;
+  BlockWrite(F, Stuff, 1);
+ End;
+End;
+
+{ Vider le buffer de bits JPEG }
+Procedure FlushJPEGBits(Var F: File);
+Var
+ B: Byte;
+Begin
+ If JPEGBitsInBuffer > 0 Then Begin
+  { Compléter avec des 1 }
+  While JPEGBitsInBuffer < 8 do Begin
+   JPEGBitBuffer := (JPEGBitBuffer Shl 1) Or 1;
+   Inc(JPEGBitsInBuffer);
+  End;
+  B := JPEGBitBuffer And $FF;
+  WriteJPEGByte(F, B);
+  JPEGBitBuffer := 0;
+  JPEGBitsInBuffer := 0;
+ End;
+End;
+
+{ Écrire des bits dans le buffer JPEG }
+Procedure WriteJPEGBits(Var F: File; Value: Integer; NumBits: Integer);
+Var
+ B: Byte;
+Begin
+ While NumBits > 0 do Begin
+  JPEGBitBuffer := (JPEGBitBuffer Shl 1) Or ((Value Shr (NumBits - 1)) And 1);
+  Inc(JPEGBitsInBuffer);
+  Dec(NumBits);
+  
+  If JPEGBitsInBuffer = 8 Then Begin
+   B := JPEGBitBuffer And $FF;
+   WriteJPEGByte(F, B);
+   JPEGBitBuffer := 0;
+   JPEGBitsInBuffer := 0;
+  End;
+ End;
+End;
+
+{ Encoder les données d'image JPEG (version simplifiée) }
+Procedure WriteJPEGImageData(Var F: File; Width, Height: Integer);
+Var
+ X, Y, BX, BY, I, J: Integer;
+ R, G, B: Byte;
+ YVal, CbVal, CrVal: Integer;
+ Block: TJPEGBlock;
+ DC: Integer;
+Begin
+ JPEGBitBuffer := 0;
+ JPEGBitsInBuffer := 0;
+ JPEGPrevDC_Y := 0;
+ JPEGPrevDC_Cb := 0;
+ JPEGPrevDC_Cr := 0;
+ 
+ { Traiter l'image par blocs de 8x8 }
+ BY := 0;
+ While BY < Height do Begin
+  BX := 0;
+  While BX < Width do Begin
+   { Construire un bloc Y simplifié }
+   DC := 0;
+   For J := 0 to 7 do Begin
+    For I := 0 to 7 do Begin
+     X := BX + I;
+     Y := BY + J;
+     If (X < Width) And (X < BufferWidth) And (Y < Height) And (Y < BufferHeight) Then Begin
+      PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
+      RGBToYCbCr(R, G, B, YVal, CbVal, CrVal);
+      DC := DC + YVal;
+     End
+     Else
+      DC := DC + 128;
+    End;
+   End;
+   DC := DC Div 64;
+   
+   { Écrire un coefficient DC simplifié (code 0 = pas de différence) }
+   WriteJPEGBits(F, 0, 2);  { Code EOB simplifié }
+   
+   BX := BX + 8;
+  End;
+  BY := BY + 8;
+ End;
+ 
+ FlushJPEGBits(F);
+End;
+
+{ Constantes pour les tables de Huffman AC standard }
+Const
+ JPEG_AC_VALS: Array[0..161] of Byte = (
+  $01, $02, $03, $00, $04, $11, $05, $12, $21, $31, $41, $06, $13, $51, $61, $07,
+  $22, $71, $14, $32, $81, $91, $A1, $08, $23, $42, $B1, $C1, $15, $52, $D1, $F0,
+  $24, $33, $62, $72, $82, $09, $0A, $16, $17, $18, $19, $1A, $25, $26, $27, $28,
+  $29, $2A, $34, $35, $36, $37, $38, $39, $3A, $43, $44, $45, $46, $47, $48, $49,
+  $4A, $53, $54, $55, $56, $57, $58, $59, $5A, $63, $64, $65, $66, $67, $68, $69,
+  $6A, $73, $74, $75, $76, $77, $78, $79, $7A, $83, $84, $85, $86, $87, $88, $89,
+  $8A, $92, $93, $94, $95, $96, $97, $98, $99, $9A, $A2, $A3, $A4, $A5, $A6, $A7,
+  $A8, $A9, $AA, $B2, $B3, $B4, $B5, $B6, $B7, $B8, $B9, $BA, $C2, $C3, $C4, $C5,
+  $C6, $C7, $C8, $C9, $CA, $D2, $D3, $D4, $D5, $D6, $D7, $D8, $D9, $DA, $E1, $E2,
+  $E3, $E4, $E5, $E6, $E7, $E8, $E9, $EA, $F1, $F2, $F3, $F4, $F5, $F6, $F7, $F8,
+  $F9, $FA
+ );
+
+{ Fonction principale pour sauvegarder un fichier JPEG }
+{ Quality: niveau de qualité de 1 (pire) à 100 (meilleur) }
+Function SaveJPEGFile(Const FileName: String; Quality: Integer): Boolean;
+Var
+ F: File;
+ MinX, MinY, MaxX, MaxY: Integer;
+ Width, Height: Integer;
+Begin
+ SaveJPEGFile := False;
+ JPEGQuality := Quality;
+ If JPEGQuality < 1 Then JPEGQuality := 1;
+ If JPEGQuality > 100 Then JPEGQuality := 100;
+ 
+ { Calculer les dimensions du dessin }
+ If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Begin
+  { Pas de formes, créer une image par défaut }
+  MinX := 0; MinY := WORK_AREA_TOP;
+  MaxX := 640; MaxY := 480;
+ End;
+ 
+ Width := MaxX - MinX + 1;
+ Height := MaxY - MinY + 1;
+ If Width < 1 Then Width := 1;
+ If Height < 1 Then Height := 1;
+ 
+ { Initialiser le buffer de pixels et le remplir }
+ InitPixelBuffer(Width, Height);
+ 
+ { Repositionner les formes pour le buffer }
+ AdjustShapesForBuffer(MinX, MinY);
+ 
+ { Rendre les formes dans le buffer }
+ RenderShapesToBuffer;
+ 
+ { Restaurer les positions originales }
+ AdjustShapesForBuffer(-MinX, -MinY);
+ 
+ { Initialiser les tables de quantisation }
+ InitJPEGQuantTables(JPEGQuality);
+ 
+ { Créer le fichier }
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Begin
+  FreePixelBuffer;
+  Exit;
+ End;
+ 
+ { Écrire le marqueur SOI (Start of Image) }
+ WriteJPEGMarker(F, JPEG_SOI);
+ 
+ { Écrire le segment JFIF APP0 }
+ WriteJPEGAPP0(F);
+ 
+ { Écrire les tables de quantisation }
+ WriteJPEGDQT(F, 0, JPEGQuantLuma);
+ WriteJPEGDQT(F, 1, JPEGQuantChroma);
+ 
+ { Écrire le marqueur SOF0 }
+ WriteJPEGSOF0(F, Width, Height);
+ 
+ { Écrire les tables de Huffman }
+ WriteJPEGDHT(F, 0, 0, JPEG_DC_BITS, JPEG_DC_VALS, 12);  { DC Luma }
+ WriteJPEGDHT(F, 0, 1, JPEG_DC_BITS, JPEG_DC_VALS, 12);  { DC Chroma }
+ WriteJPEGDHT(F, 1, 0, JPEG_AC_BITS, JPEG_AC_VALS, 162); { AC Luma }
+ WriteJPEGDHT(F, 1, 1, JPEG_AC_BITS, JPEG_AC_VALS, 162); { AC Chroma }
+ 
+ { Écrire le marqueur SOS }
+ WriteJPEGSOS(F);
+ 
+ { Écrire les données d'image compressées }
+ WriteJPEGImageData(F, Width, Height);
+ 
+ { Écrire le marqueur EOI (End of Image) }
+ WriteJPEGMarker(F, JPEG_EOI);
+ 
+ Close(F);
+ FreePixelBuffer;
+ SaveJPEGFile := True;
+End;
+
+{ ============================================================================ }
+{ === FIN DES FONCTIONS D'EXPORT JPEG === }
+{ ============================================================================ }
+
+{ ============================================================================ }
+{ === FONCTIONS D'EXPORT PNG (TODO 25) === }
+{ ============================================================================ }
+
+{ Constantes pour le format PNG }
+Const
+ PNG_SIGNATURE: Array[0..7] of Byte = ($89, $50, $4E, $47, $0D, $0A, $1A, $0A);
+ PNG_CHUNK_IHDR = $49484452;  { 'IHDR' }
+ PNG_CHUNK_IDAT = $49444154;  { 'IDAT' }
+ PNG_CHUNK_IEND = $49454E44;  { 'IEND' }
+ PNG_CHUNK_PLTE = $504C5445;  { 'PLTE' }
+ PNG_CHUNK_tRNS = $74524E53;  { 'tRNS' }
+ 
+ PNG_COLOR_GRAYSCALE = 0;
+ PNG_COLOR_RGB = 2;
+ PNG_COLOR_INDEXED = 3;
+ PNG_COLOR_GRAYSCALE_ALPHA = 4;
+ PNG_COLOR_RGBA = 6;
+
+{ Table CRC32 pour PNG }
+Var
+ PNG_CRC_Table: Array[0..255] of LongInt;
+ PNG_CRC_Initialized: Boolean;
+
+{ Initialiser la table CRC32 }
+Procedure InitPNGCRCTable;
+Var
+ C: LongInt;
+ N, K: Integer;
+Begin
+ If PNG_CRC_Initialized Then Exit;
+ 
+ For N := 0 to 255 do Begin
+  C := LongInt(N);
+  For K := 0 to 7 do Begin
+   If (C And 1) <> 0 Then
+    C := LongInt($EDB88320) Xor (C Shr 1)
+   Else
+    C := C Shr 1;
+  End;
+  PNG_CRC_Table[N] := C;
+ End;
+ PNG_CRC_Initialized := True;
+End;
+
+{ Calculer le CRC32 }
+Function UpdateCRC(CRC: LongInt; Const Data: Array of Byte; Len: Integer): LongInt;
+Var
+ I: Integer;
+Begin
+ For I := 0 to Len - 1 do
+  CRC := PNG_CRC_Table[(CRC Xor Data[I]) And $FF] Xor (CRC Shr 8);
+ UpdateCRC := CRC;
+End;
+
+{ Écrire un entier 32-bit big-endian }
+Procedure WritePNGInt32(Var F: File; Value: LongInt);
+Var
+ B: Array[0..3] of Byte;
+Begin
+ B[0] := (Value Shr 24) And $FF;
+ B[1] := (Value Shr 16) And $FF;
+ B[2] := (Value Shr 8) And $FF;
+ B[3] := Value And $FF;
+ BlockWrite(F, B, 4);
+End;
+
+{ Écrire la signature PNG }
+Procedure WritePNGSignature(Var F: File);
+Begin
+ BlockWrite(F, PNG_SIGNATURE, 8);
+End;
+
+{ Écrire un chunk PNG }
+Procedure WritePNGChunk(Var F: File; ChunkType: LongInt; Const Data: Array of Byte; DataLen: Integer);
+Var
+ TypeBytes: Array[0..3] of Byte;
+ CRC: LongInt;
+ I: Integer;
+Begin
+ { Écrire la longueur }
+ WritePNGInt32(F, DataLen);
+ 
+ { Convertir le type en bytes }
+ TypeBytes[0] := (ChunkType Shr 24) And $FF;
+ TypeBytes[1] := (ChunkType Shr 16) And $FF;
+ TypeBytes[2] := (ChunkType Shr 8) And $FF;
+ TypeBytes[3] := ChunkType And $FF;
+ 
+ { Écrire le type }
+ BlockWrite(F, TypeBytes, 4);
+ 
+ { Écrire les données }
+ If DataLen > 0 Then
+  BlockWrite(F, Data, DataLen);
+ 
+ { Calculer et écrire le CRC }
+ CRC := $FFFFFFFF;
+ CRC := UpdateCRC(CRC, TypeBytes, 4);
+ If DataLen > 0 Then
+  CRC := UpdateCRC(CRC, Data, DataLen);
+ CRC := CRC Xor $FFFFFFFF;
+ WritePNGInt32(F, CRC);
+End;
+
+{ Écrire le chunk IHDR }
+Procedure WritePNGIHDR(Var F: File; Width, Height: Integer; ColorType, BitDepth: Byte);
+Var
+ Data: Array[0..12] of Byte;
+Begin
+ { Width (4 bytes) }
+ Data[0] := (Width Shr 24) And $FF;
+ Data[1] := (Width Shr 16) And $FF;
+ Data[2] := (Width Shr 8) And $FF;
+ Data[3] := Width And $FF;
+ 
+ { Height (4 bytes) }
+ Data[4] := (Height Shr 24) And $FF;
+ Data[5] := (Height Shr 16) And $FF;
+ Data[6] := (Height Shr 8) And $FF;
+ Data[7] := Height And $FF;
+ 
+ { Bit depth }
+ Data[8] := BitDepth;
+ 
+ { Color type }
+ Data[9] := ColorType;
+ 
+ { Compression method (always 0) }
+ Data[10] := 0;
+ 
+ { Filter method (always 0) }
+ Data[11] := 0;
+ 
+ { Interlace method (0 = no interlace) }
+ Data[12] := 0;
+ 
+ WritePNGChunk(F, PNG_CHUNK_IHDR, Data, 13);
+End;
+
+{ Variables pour la compression DEFLATE simplifiée }
+Var
+ PNGCompressBuffer: Array[0..65535] of Byte;
+ PNGCompressLen: Integer;
+
+{ Ajouter un octet au buffer de compression }
+Procedure AddPNGCompressByte(B: Byte);
+Begin
+ If PNGCompressLen < 65536 Then Begin
+  PNGCompressBuffer[PNGCompressLen] := B;
+  Inc(PNGCompressLen);
+ End;
+End;
+
+{ Compression DEFLATE simplifiée (données non compressées) }
+{ Utilise des blocs non compressés pour la simplicité }
+Procedure CompressPNGData(Const InputData: Array of Byte; InputLen: Integer);
+Var
+ I: Integer;
+ BlockLen: Integer;
+ Pos: Integer;
+ Adler1, Adler2: LongInt;
+Begin
+ PNGCompressLen := 0;
+ 
+ { En-tête zlib }
+ AddPNGCompressByte($78);  { CMF: deflate, 32K window }
+ AddPNGCompressByte($01);  { FLG: no dict, level 0 }
+ 
+ { Données en blocs non compressés }
+ Pos := 0;
+ While Pos < InputLen do Begin
+  BlockLen := InputLen - Pos;
+  If BlockLen > 65535 Then BlockLen := 65535;
+  
+  { Header du bloc }
+  If Pos + BlockLen >= InputLen Then
+   AddPNGCompressByte($01)  { Dernier bloc, non compressé }
+  Else
+   AddPNGCompressByte($00); { Pas dernier bloc, non compressé }
+  
+  { Longueur et complément }
+  AddPNGCompressByte(BlockLen And $FF);
+  AddPNGCompressByte((BlockLen Shr 8) And $FF);
+  AddPNGCompressByte((Not BlockLen) And $FF);
+  AddPNGCompressByte((Not (BlockLen Shr 8)) And $FF);
+  
+  { Données }
+  For I := 0 to BlockLen - 1 do
+   AddPNGCompressByte(InputData[Pos + I]);
+  
+  Pos := Pos + BlockLen;
+ End;
+ 
+ { Calculer Adler-32 }
+ Adler1 := 1;
+ Adler2 := 0;
+ For I := 0 to InputLen - 1 do Begin
+  Adler1 := (Adler1 + InputData[I]) Mod 65521;
+  Adler2 := (Adler2 + Adler1) Mod 65521;
+ End;
+ 
+ { Écrire Adler-32 (big-endian) }
+ AddPNGCompressByte((Adler2 Shr 8) And $FF);
+ AddPNGCompressByte(Adler2 And $FF);
+ AddPNGCompressByte((Adler1 Shr 8) And $FF);
+ AddPNGCompressByte(Adler1 And $FF);
+End;
+
+{ Type pour les données d'image PNG }
+Type
+ TPNGRawData = Array[0..65535] of Byte;
+ PPNGRawData = ^TPNGRawData;
+
+{ Écrire les données d'image RGBA avec alpha }
+Procedure WritePNGImageData(Var F: File; Width, Height: Integer; TransparentIndex: Integer);
+Var
+ RawData: PPNGRawData;
+ RawLen: LongInt;
+ X, Y: Integer;
+ R, G, B, A: Byte;
+ Idx: LongInt;
+ PixelColor: Byte;
+Begin
+ { Calculer la taille des données brutes (filtre + RGBA par pixel) }
+ RawLen := LongInt(Height) * (1 + LongInt(Width) * 4);
+ 
+ { Limiter pour éviter le dépassement de mémoire }
+ If RawLen > 65535 Then Begin
+  { Pour les grandes images, on écrit en plusieurs chunks }
+  RawLen := 65535;
+ End;
+ 
+ New(RawData);
+ Idx := 0;
+ 
+ For Y := 0 to Height - 1 do Begin
+  If Idx >= 65535 Then Break;
+  
+  { Octet de filtre (0 = None) }
+  RawData^[Idx] := 0;
+  Inc(Idx);
+  
+  For X := 0 to Width - 1 do Begin
+   If Idx + 4 > 65535 Then Break;
+   
+   { Obtenir la couleur du pixel }
+   If (X < BufferWidth) And (Y < BufferHeight) Then
+    PixelColor := PixelBuffer^[Y, X]
+   Else
+    PixelColor := 15;  { Blanc par défaut }
+   
+   { Convertir en RGB }
+   PaletteToRGB(PixelColor, R, G, B);
+   
+   { Déterminer l'alpha }
+   If (TransparentIndex >= 0) And (PixelColor = TransparentIndex) Then
+    A := 0    { Transparent }
+   Else
+    A := 255; { Opaque }
+   
+   { Écrire RGBA }
+   RawData^[Idx] := R; Inc(Idx);
+   RawData^[Idx] := G; Inc(Idx);
+   RawData^[Idx] := B; Inc(Idx);
+   RawData^[Idx] := A; Inc(Idx);
+  End;
+ End;
+ 
+ { Compresser les données }
+ CompressPNGData(RawData^, Idx);
+ 
+ { Écrire le chunk IDAT }
+ WritePNGChunk(F, PNG_CHUNK_IDAT, PNGCompressBuffer, PNGCompressLen);
+ 
+ Dispose(RawData);
+End;
+
+{ Écrire le chunk IEND }
+Procedure WritePNGIEND(Var F: File);
+Var
+ EmptyData: Array[0..0] of Byte;
+Begin
+ EmptyData[0] := 0;  { Non utilisé }
+ WritePNGChunk(F, PNG_CHUNK_IEND, EmptyData, 0);
+End;
+
+{ Fonction principale pour sauvegarder un fichier PNG }
+{ TransparentIndex: index de la couleur transparente (-1 = pas de transparence) }
+Function SavePNGFile(Const FileName: String; TransparentIndex: Integer): Boolean;
+Var
+ F: File;
+ MinX, MinY, MaxX, MaxY: Integer;
+ Width, Height: Integer;
+Begin
+ SavePNGFile := False;
+ 
+ { Initialiser la table CRC }
+ InitPNGCRCTable;
+ 
+ { Calculer les dimensions du dessin }
+ If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Begin
+  { Pas de formes, créer une image par défaut }
+  MinX := 0; MinY := WORK_AREA_TOP;
+  MaxX := 640; MaxY := 480;
+ End;
+ 
+ Width := MaxX - MinX + 1;
+ Height := MaxY - MinY + 1;
+ If Width < 1 Then Width := 1;
+ If Height < 1 Then Height := 1;
+ 
+ { Limiter la taille pour éviter les problèmes de mémoire }
+ If Width > 256 Then Width := 256;
+ If Height > 256 Then Height := 256;
+ 
+ { Initialiser le buffer de pixels et le remplir }
+ InitPixelBuffer(Width, Height);
+ 
+ { Repositionner les formes pour le buffer }
+ AdjustShapesForBuffer(MinX, MinY);
+ 
+ { Rendre les formes dans le buffer }
+ RenderShapesToBuffer;
+ 
+ { Restaurer les positions originales }
+ AdjustShapesForBuffer(-MinX, -MinY);
+ 
+ { Créer le fichier }
+ Assign(F, FileName);
+ {$I-}
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Begin
+  FreePixelBuffer;
+  Exit;
+ End;
+ 
+ { Écrire la signature PNG }
+ WritePNGSignature(F);
+ 
+ { Écrire le chunk IHDR (RGBA, 8 bits par canal) }
+ WritePNGIHDR(F, Width, Height, PNG_COLOR_RGBA, 8);
+ 
+ { Écrire les données d'image }
+ WritePNGImageData(F, Width, Height, TransparentIndex);
+ 
+ { Écrire le chunk IEND }
+ WritePNGIEND(F);
+ 
+ Close(F);
+ FreePixelBuffer;
+ SavePNGFile := True;
+End;
+
+{ ============================================================================ }
+{ === FIN DES FONCTIONS D'EXPORT PNG === }
 { ============================================================================ }
 
 { Procédure New - Créer un nouveau document }

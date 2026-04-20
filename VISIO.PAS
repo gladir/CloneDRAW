@@ -5023,6 +5023,7 @@ Begin
   BlockWrite(F, Data, DataLen);
  
  { Calculer et écrire le CRC }
+ { Note: CRC32 per PNG spec - initialized to $FFFFFFFF, then XOR'd at the end }
  CRC := $FFFFFFFF;
  CRC := UpdateCRC(CRC, TypeBytes, 4);
  If DataLen > 0 Then

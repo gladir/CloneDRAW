@@ -709,7 +709,7 @@ BEGIN
   Halt(2);
  End;
  If BIH.biCompression<>bi_RGB Then Begin
-  WriteLn('Compression RLE4 ou RL8 non support�');
+  WriteLn('Compression RLE4 ou RLE8 non support�');
   Halt(3);
  End;
  If(BIH.biWidth<=0)or(BIH.biHeight<=0)Then Begin

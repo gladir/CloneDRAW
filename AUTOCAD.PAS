@@ -13482,32 +13482,32 @@ Begin
 
  TitleHeight := 20;
 
- With PropertiesPanel do Begin
+ Begin
   { Vérifier si le clic est dans le panneau }
-  If (X < Self.X) or (X > Self.X + Width) or
-     (Y < Self.Y) or (Y > Self.Y + Height) Then Exit;
+  If (X < PropertiesPanel.X) or (X > PropertiesPanel.X + PropertiesPanel.Width) or
+     (Y < PropertiesPanel.Y) or (Y > PropertiesPanel.Y + PropertiesPanel.Height) Then Exit;
 
   HandlePropertiesPanelClick := True;
 
   { Clic sur le bouton fermer }
-  If (X >= Self.X + Width - 20) and (Y >= Self.Y) and (Y <= Self.Y + TitleHeight) Then Begin
-   Visible := False;
+  If (X >= PropertiesPanel.X + PropertiesPanel.Width - 20) and (Y >= PropertiesPanel.Y) and (Y <= PropertiesPanel.Y + TitleHeight) Then Begin
+   PropertiesPanel.Visible := False;
    Exit;
   End;
 
   { Clic sur la barre de titre (drag) }
-  If (Y >= Self.Y) and (Y <= Self.Y + TitleHeight) Then Begin
-   Dragging := True;
-   DragOffsetX := X - Self.X;
-   DragOffsetY := Y - Self.Y;
+  If (Y >= PropertiesPanel.Y) and (Y <= PropertiesPanel.Y + TitleHeight) Then Begin
+   PropertiesPanel.Dragging := True;
+   PropertiesPanel.DragOffsetX := X - PropertiesPanel.X;
+   PropertiesPanel.DragOffsetY := Y - PropertiesPanel.Y;
    Exit;
   End;
 
   { Clic sur une ligne de propriété }
-  If HoveredRow >= 0 Then Begin
-   If Rows[HoveredRow].Editable Then Begin
+  If PropertiesPanel.HoveredRow >= 0 Then Begin
+   If PropertiesPanel.Rows[PropertiesPanel.HoveredRow].Editable Then Begin
     { Gérer selon le type de propriété }
-    Case Rows[HoveredRow].PropType of
+    Case PropertiesPanel.Rows[PropertiesPanel.HoveredRow].PropType of
      PROP_TYPE_COLOR: Begin
       { Cycle des couleurs de base }
       If SelectionSet.Count = 0 Then Begin

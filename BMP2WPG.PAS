@@ -257,7 +257,7 @@ BEGIN
  {$I-}Assign(DestWPG,OutputName);
  Rewrite(DestWPG,1);{$I+}
  If IOResult<>0 Then Begin
-  WriteLn('Impossible de crï¿½er le fichier ',OutputName);
+  WriteLn('Impossible de cr‚er le fichier ',OutputName);
   Close(SourceBMP);
   Halt;
  End;
@@ -307,6 +307,7 @@ BEGIN
      lignes. Les 10 octets restants sont l'entï¿½te du bitmap.}
  WriteByte(WPGRecBitmap1);
  Begin
-  Var_Block:Begin end;            { (juste pour la cohï¿½rence visuelle) }
+  {Var_Block:}Begin end;            { (juste pour la cohï¿½rence visuelle) }
  End;
+ CLose(DestWPG);
 END.

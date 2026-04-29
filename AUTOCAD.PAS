@@ -2,7 +2,7 @@
   @created: 2026
   @version: 1.00
   @website(https://www.gladir.com/clonedraw)
-  @abstract(Target: Turbo Pascal 7, Free Pascal
+  @abstract(Target: Free Pascal 3.2
   @description: Clone de l'application AutoCAD
 }
 

@@ -84,6 +84,8 @@ Const
  MAX_MENUS = 11;
  MAX_MENU_ITEMS = 20;
 
+ MAX_VERTICES=255;
+
  { Constantes pour les barres d'outils - TODO 5 }
  MAX_TOOLBARS = 5;
  MAX_TOOLBAR_BUTTONS = 15;
@@ -101,7 +103,7 @@ Const
  MOUSE_BUTTON_LEFT = 1;
  MOUSE_BUTTON_RIGHT = 2;
  MOUSE_BUTTON_MIDDLE = 4;
- 
+
  { Éléments du menu contextuel }
  MAX_CONTEXT_ITEMS = 10;
  CONTEXT_REPEAT = 0;
@@ -127,7 +129,7 @@ Const
  CROSSHAIR_SIZE_MEDIUM = 50;     { Taille moyenne }
  CROSSHAIR_SIZE_LARGE = 100;     { Grande taille }
  CROSSHAIR_SIZE_FULLSCREEN = 0;  { Plein écran (0 = infini) }
- 
+
  { Style de coordonnées affichées }
  COORD_DISPLAY_NONE = 0;         { Pas d'affichage }
  COORD_DISPLAY_TOOLTIP = 1;      { Tooltip près du curseur }
@@ -137,13 +139,13 @@ Const
  { Constantes pour la sélection d'objets - TODO 9 }
  MAX_OBJECTS = 1000;             { Nombre maximum d'objets dans le dessin }
  MAX_SELECTED = 100;             { Nombre maximum d'objets sélectionnés }
- 
+
  { Modes de sélection }
  SELECT_MODE_NONE = 0;           { Pas de sélection en cours }
  SELECT_MODE_POINT = 1;          { Sélection par point (clic) }
  SELECT_MODE_WINDOW = 2;         { Fenêtre de sélection (gauche à droite) }
  SELECT_MODE_CROSSING = 3;       { Fenêtre croisée (droite à gauche) }
- 
+
  { Types d'objets géométriques }
  OBJ_NONE = 0;
  OBJ_LINE = 1;
@@ -157,14 +159,14 @@ Const
  OBJ_DIMENSION = 9;  { TODO 19: Objet cotation }
  OBJ_BLOCK_REF = 10; { TODO 20: Référence de bloc }
  OBJ_XREF = 11;      { TODO 20: Référence externe }
- 
+
  { Constantes pour les blocs et XREFs - TODO 20 }
  MAX_BLOCKS = 100;           { Nombre maximum de définitions de blocs }
  MAX_BLOCK_ENTITIES = 50;    { Nombre maximum d'entités par bloc }
  MAX_BLOCK_REFS = 500;       { Nombre maximum d'insertions de blocs }
  MAX_XREFS = 20;             { Nombre maximum de références externes }
  XREF_PATH_LENGTH = 255;     { Longueur maximum du chemin XREF }
- 
+
  { États des XREFs }
  XREF_LOADED = 0;            { XREF chargée normalement }
  XREF_UNLOADED = 1;          { XREF déchargée (non affichée) }
@@ -180,7 +182,7 @@ Const
  DWG_VERSION_2010 = 'AC1024'; { AutoCAD 2010 }
  DWG_VERSION_2013 = 'AC1027'; { AutoCAD 2013 }
  DWG_VERSION_2018 = 'AC1032'; { AutoCAD 2018 }
- 
+
  { Codes de section DWG }
  DWG_SECTION_HEADER = 0;      { Section en-tête du dessin }
  DWG_SECTION_CLASSES = 1;     { Section des classes d'objets }
@@ -189,7 +191,7 @@ Const
  DWG_SECTION_OBJFREE = 4;     { Section des objets libres }
  DWG_SECTION_TEMPLATE = 5;    { Section des templates }
  DWG_SECTION_AUXHEADER = 6;   { Section en-tête auxiliaire }
- 
+
  { Codes d'entités DWG }
  DWG_ENTITY_LINE = 1;         { Entité ligne }
  DWG_ENTITY_POINT = 2;        { Entité point }
@@ -238,7 +240,7 @@ Const
  DXF_GROUP_TEXT_ROTATION = 50; { Rotation du texte }
  DXF_GROUP_FLAGS = 70;         { Drapeaux }
  DXF_GROUP_DIMTYPE = 70;       { Type de cotation }
- 
+
  { Noms des sections DXF }
  DXF_SECTION = 'SECTION';
  DXF_ENDSEC = 'ENDSEC';
@@ -248,7 +250,7 @@ Const
  DXF_BLOCKS = 'BLOCKS';
  DXF_ENTITIES = 'ENTITIES';
  DXF_OBJECTS = 'OBJECTS';
- 
+
  { Noms des entités DXF }
  DXF_LINE = 'LINE';
  DXF_POINT = 'POINT';
@@ -276,7 +278,7 @@ Const
  VISIO_EXT_VSDM = '.vsdm';     { Format XML Visio avec macros }
  VISIO_EXT_VST = '.vst';       { Template Visio binaire }
  VISIO_EXT_VSTX = '.vstx';     { Template Visio XML }
- 
+
  { Types de formes Visio }
  VISIO_SHAPE_RECTANGLE = 1;   { Rectangle }
  VISIO_SHAPE_ELLIPSE = 2;     { Ellipse }
@@ -288,7 +290,7 @@ Const
  VISIO_SHAPE_TEXT = 8;        { Texte }
  VISIO_SHAPE_GROUP = 9;       { Groupe de formes }
  VISIO_SHAPE_FOREIGN = 10;    { Objet externe (image) }
- 
+
  { Sections XML Visio (VSDX) }
  VISIO_XML_DOCUMENT = 'VisioDocument';
  VISIO_XML_PAGES = 'Pages';
@@ -301,7 +303,7 @@ Const
  VISIO_XML_CONNECT = 'Connect';
  VISIO_XML_STYLESHEET = 'StyleSheet';
  VISIO_XML_DOCPROPS = 'DocumentProperties';
- 
+
  { Cellules de géométrie Visio }
  VISIO_CELL_PINX = 'PinX';         { Position X du point de pivot }
  VISIO_CELL_PINY = 'PinY';         { Position Y du point de pivot }
@@ -322,7 +324,7 @@ Const
  { Constantes pour le format SVG - TODO 24 }
  { Extension de fichier SVG }
  SVG_EXT = '.svg';             { Format SVG }
- 
+
  { Éléments SVG principaux }
  SVG_ELEMENT_SVG = 'svg';
  SVG_ELEMENT_G = 'g';
@@ -336,7 +338,7 @@ Const
  SVG_ELEMENT_TEXT = 'text';
  SVG_ELEMENT_DEFS = 'defs';
  SVG_ELEMENT_MARKER = 'marker';
- 
+
  { Attributs SVG }
  SVG_ATTR_XMLNS = 'xmlns';
  SVG_ATTR_VERSION = 'version';
@@ -365,14 +367,14 @@ Const
  SVG_ATTR_FONT_FAMILY = 'font-family';
  SVG_ATTR_TEXT_ANCHOR = 'text-anchor';
  SVG_ATTR_TRANSFORM = 'transform';
- 
+
  { Namespace SVG }
  SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
  SVG_VERSION = '1.1';
- 
+
  { Valeurs par défaut SVG }
  SVG_DEFAULT_STROKE_WIDTH = 1;
- SVG_DEFAULT_FONT_SIZE = 12;
+ SVG_DEFAULT_FONT_SIZE = 12.0;
  SVG_DEFAULT_FONT_FAMILY = 'Arial, sans-serif';
 
  { Types de cotations - TODO 19 }
@@ -382,14 +384,14 @@ Const
  DIM_RADIAL = 3;       { Cotation radiale (rayon d'un cercle/arc) }
  DIM_DIAMETER = 4;     { Cotation diamètre (diamètre d'un cercle) }
  DIM_ORDINATE = 5;     { Cotation ordonnée (X ou Y depuis origine) }
- 
+
  { Constantes de style de cotation - TODO 19 }
  DIM_ARROW_SIZE = 3.0;         { Taille des flèches en unités }
  DIM_TEXT_HEIGHT = 2.5;        { Hauteur du texte de cotation }
  DIM_TEXT_GAP = 0.625;         { Espace entre ligne et texte }
  DIM_EXTENSION_OFFSET = 0.625; { Décalage des lignes d'extension }
  DIM_EXTENSION_EXTEND = 1.25;  { Extension au-delà de la ligne de cote }
- 
+
  { Tolérance de sélection (en pixels) }
  PICK_TOLERANCE = 5;
 
@@ -397,7 +399,7 @@ Const
  MAX_GRIPS = 20;               { Nombre maximum de grips par objet }
  GRIP_SIZE = 6;                { Taille d'un grip en pixels }
  GRIP_HOT_SIZE = 8;            { Taille d'un grip survolé }
- 
+
  { Types de grips }
  GRIP_NONE = 0;                { Pas de grip }
  GRIP_ENDPOINT = 1;            { Point d'extrémité (ligne, polyline) }
@@ -407,12 +409,12 @@ Const
  GRIP_RADIUS = 5;              { Rayon (cercle, arc) }
  GRIP_CORNER = 6;              { Coin (rectangle) }
  GRIP_EDGE = 7;                { Milieu d'arête }
- 
+
  { Couleurs des grips }
  GRIP_COLOR_COLD = Blue;       { Grip non sélectionné }
  GRIP_COLOR_HOT = Red;         { Grip survolé }
  GRIP_COLOR_SELECTED = Green;  { Grip en cours d'édition }
- 
+
  { Modes d'édition de grip }
  GRIP_EDIT_NONE = 0;           { Pas d'édition en cours }
  GRIP_EDIT_STRETCH = 1;        { Étirement (déplacement d'un point) }
@@ -428,7 +430,7 @@ Const
  PROP_ROW_HEIGHT = 20;         { Hauteur d'une ligne de propriété }
  PROP_LABEL_WIDTH = 80;        { Largeur de la colonne des labels }
  MAX_PROP_ROWS = 12;           { Nombre maximum de propriétés affichées }
- 
+
  { Types de propriétés }
  PROP_TYPE_COLOR = 0;          { Propriété couleur }
  PROP_TYPE_LAYER = 1;          { Propriété calque }
@@ -442,7 +444,7 @@ Const
  PROP_TYPE_RADIUS = 9;         { Rayon }
  PROP_TYPE_AREA = 10;          { Surface (lecture seule) }
  PROP_TYPE_LENGTH = 11;        { Longueur (lecture seule) }
- 
+
  { Types de lignes standard }
  LINETYPE_CONTINUOUS = 0;      { Ligne continue }
  LINETYPE_DASHED = 1;          { Ligne tiretée }
@@ -450,7 +452,7 @@ Const
  LINETYPE_DASHDOT = 3;         { Tiret-point }
  LINETYPE_DASHDOTDOT = 4;      { Tiret-point-point }
  LINETYPE_CENTER = 5;          { Axe }
- 
+
  { Épaisseurs de ligne (en centièmes de mm) }
  LINEWEIGHT_DEFAULT = 0;       { Par défaut }
  LINEWEIGHT_005 = 5;           { 0.05 mm }
@@ -476,7 +478,7 @@ Const
  LINEWEIGHT_158 = 158;         { 1.58 mm }
  LINEWEIGHT_200 = 200;         { 2.00 mm }
  LINEWEIGHT_211 = 211;         { 2.11 mm }
- 
+
  { Nombre de calques maximum }
  MAX_LAYERS = 50;
 
@@ -485,7 +487,7 @@ Const
  MAX_LISP_INPUT = 4096;        { Taille maximum d'une entrée LISP }
  MAX_LISP_SYMBOL = 64;         { Taille maximum d'un symbole }
  MAX_LISP_STRING = 256;        { Taille maximum d'une chaîne }
- 
+
  { Types de tokens AutoLISP }
  LISP_TOKEN_NONE = 0;          { Token invalide ou fin }
  LISP_TOKEN_LPAREN = 1;        { Parenthèse ouvrante ( }
@@ -500,7 +502,7 @@ Const
  LISP_TOKEN_T = 10;            { t (vrai) }
  LISP_TOKEN_EOF = 11;          { Fin de l'entrée }
  LISP_TOKEN_ERROR = 12;        { Erreur de tokenisation }
- 
+
  { Caractères spéciaux AutoLISP }
  LISP_CHAR_LPAREN = '(';
  LISP_CHAR_RPAREN = ')';
@@ -514,7 +516,7 @@ Const
  MAX_LISP_NODES = 1000;        { Nombre maximum de noeuds dans l'arbre }
  MAX_LISP_CHILDREN = 50;       { Nombre maximum d'enfants par noeud (liste) }
  MAX_LISP_DEPTH = 100;         { Profondeur maximale de récursion }
- 
+
  { Types de noeuds AST AutoLISP }
  LISP_NODE_NONE = 0;           { Noeud invalide }
  LISP_NODE_INTEGER = 1;        { Nombre entier }
@@ -531,7 +533,7 @@ Const
  MAX_LISP_VARIABLES = 200;     { Nombre maximum de variables }
  MAX_LISP_STACK = 100;         { Profondeur maximale de la pile d'évaluation }
  LISP_VAR_NAME_LEN = 32;       { Longueur maximale d'un nom de variable }
- 
+
  { Types de valeurs LISP pour l'évaluateur }
  LISP_VAL_NIL = 0;             { Valeur nil }
  LISP_VAL_T = 1;               { Valeur t (vrai) }
@@ -546,7 +548,7 @@ Const
 
  { Codes DXF pour les entités AutoLISP - TODO 14 }
  DXF_ENTITY_TYPE = 0;          { Type d'entité (LINE, CIRCLE, etc.) }
- DXF_LAYER = 8;                { Nom du calque }
+ DXF_LAYER_LEN = 8;            { Nom du calque }
  DXF_COLOR = 62;               { Couleur de l'entité }
  DXF_LINETYPE = 6;             { Type de ligne }
  DXF_X1 = 10;                  { Coordonnée X du premier point / centre }
@@ -559,7 +561,7 @@ Const
  DXF_START_ANGLE = 50;         { Angle de départ (arc) }
  DXF_END_ANGLE = 51;           { Angle de fin (arc) }
  DXF_ENAME = -1;               { Nom d'entité (entity name/handle) }
- 
+
  { Nombre maximum de jeux de sélection AutoLISP }
  MAX_LISP_SELSETS = 10;
 
@@ -616,9 +618,11 @@ Type
   StartAngle, EndAngle: Real; { Angles (pour arc, ellipse) }
   Color: Integer;             { Couleur de l'objet }
   LineType: Byte;             { Type de ligne (continu, pointillé, etc.) }
+  LineWeight:Word;            { Epaisseur de la ligne }
   LayerIndex: Byte;           { Index du calque }
   Selected: Boolean;          { True si l'objet est sélectionné }
   Visible: Boolean;           { True si l'objet est visible }
+  Closed:Boolean;
   { Champs pour cotations - TODO 19 }
   DimType: Byte;              { Type de cotation (DIM_LINEAR, etc.) }
   DimX3, DimY3: Real;         { 3ème point (position ligne de cote) }
@@ -626,6 +630,11 @@ Type
   DimText: String[20];        { Texte de cotation (vide = auto) }
   DimValue: Real;             { Valeur mesurée }
   DimTextX, DimTextY: Real;   { Position du texte de cotation }
+  VertexCount:Word;
+  Vertices:Array[0..MAX_VERTICES]of Record
+   X,Y:Real;
+   Bulge:Word;
+  End;
  End;
 
  { Structure pour le jeu de sélection - TODO 9 }
@@ -730,7 +739,7 @@ Type
   TokenType: Byte;                         { Type du token (LISP_TOKEN_xxx) }
   IntValue: LongInt;                       { Valeur si entier }
   RealValue: Real;                         { Valeur si réel }
-  StrValue: String[MAX_LISP_STRING];       { Valeur si chaîne ou symbole }
+  StrValue: String[MAX_LISP_STRING-1];       { Valeur si chaîne ou symbole }
   Line: Integer;                           { Numéro de ligne }
   Column: Integer;                         { Position dans la ligne }
  End;
@@ -755,7 +764,7 @@ Type
   NodeType: Byte;                          { Type du noeud (LISP_NODE_xxx) }
   IntValue: LongInt;                       { Valeur si entier }
   RealValue: Real;                         { Valeur si réel }
-  StrValue: String[MAX_LISP_STRING];       { Valeur si chaîne ou symbole }
+  StrValue: String[MAX_LISP_STRING-1];     { Valeur si chaîne ou symbole }
   Children: Array[0..MAX_LISP_CHILDREN-1] of PLispNode;  { Enfants pour les listes }
   ChildCount: Integer;                     { Nombre d'enfants }
   Line: Integer;                           { Numéro de ligne source }
@@ -777,7 +786,7 @@ Type
   ValueType: Byte;                         { Type de la valeur (LISP_VAL_xxx) }
   IntValue: LongInt;                       { Valeur si entier }
   RealValue: Real;                         { Valeur si réel }
-  StrValue: String[MAX_LISP_STRING];       { Valeur si chaîne ou symbole }
+  StrValue: String[MAX_LISP_STRING-1];     { Valeur si chaîne ou symbole }
   ListNode: PLispNode;                     { Pointeur si liste }
  End;
 
@@ -894,7 +903,7 @@ Var
  CurrentColor: Integer;                                { Couleur courante (256 = ByLayer) }
  CurrentLineType: Byte;                                { Type de ligne courant }
  CurrentLineWeight: Integer;                           { Épaisseur de ligne courante }
- 
+
  { Variables pour les blocs et XREFs - TODO 20 }
  BlockDefs: Array[0..MAX_BLOCKS-1] of TBlockDef;       { Définitions de blocs }
  BlockDefCount: Integer;                               { Nombre de définitions de blocs }
@@ -1257,7 +1266,7 @@ Function LispEvalCond(Node: PLispNode): TLispValue; Forward;
 Function LispEvalWhile(Node: PLispNode): TLispValue; Forward;
 Function LispEvalForeach(Node: PLispNode): TLispValue; Forward;
 Function LispEvalMapcar(Node: PLispNode): TLispValue; Forward;
-Function LispEvalList(Node: PLispNode): TLispValue; Forward;
+{Function LispEvalList(Node: PLispNode): TLispValue; Forward;}
 Function LispEvalCons(Node: PLispNode): TLispValue; Forward;
 Function LispEvalCar(Node: PLispNode): TLispValue; Forward;
 Function LispEvalCdr(Node: PLispNode): TLispValue; Forward;
@@ -1271,6 +1280,24 @@ Function LispEvalSubstr(Node: PLispNode): TLispValue; Forward;
 Function LispEvalStrcase(Node: PLispNode): TLispValue; Forward;
 Function LispEvalProgn(Node: PLispNode): TLispValue; Forward;
 Function LispEvalControlOp(Const FuncName: String; Node: PLispNode): TLispValue; Forward;
+
+Function ArcTan2(y,x:Real):Real;
+Const
+  Pi = 3.141592653589793;
+Begin
+ If x > 0 Then ArcTan2 := ArcTan(y / x) else
+ If x < 0 Then Begin
+  If y >= 0 Then ArcTan2 := ArcTan(y / x) + Pi
+            Else ArcTan2 := ArcTan(y / x) - Pi;
+ End
+  Else { x = 0 }
+ Begin
+  If y > 0 Then ArcTan2 := Pi / 2 Else
+  If y < 0 Then ArcTan2 := -Pi / 2
+   Else
+  ArcTan2 := 0; { ind�fini, mais on retourne 0 }
+ End;
+End;
 
 Procedure InitializeGraphics;
 Var
@@ -1848,52 +1875,52 @@ Begin
  Toolbars[TOOLBAR_STANDARD].Y := MENUBAR_HEIGHT + 2;
  Toolbars[TOOLBAR_STANDARD].Visible := True;
  Toolbars[TOOLBAR_STANDARD].ButtonCount := 10;
- 
+
  { New }
  Toolbars[TOOLBAR_STANDARD].Buttons[0].Caption := 'New';
  Toolbars[TOOLBAR_STANDARD].Buttons[0].Symbol := 'N';
  Toolbars[TOOLBAR_STANDARD].Buttons[0].Command := 'NEW';
  Toolbars[TOOLBAR_STANDARD].Buttons[0].Enabled := True;
- 
+
  { Open }
  Toolbars[TOOLBAR_STANDARD].Buttons[1].Caption := 'Open';
  Toolbars[TOOLBAR_STANDARD].Buttons[1].Symbol := 'O';
  Toolbars[TOOLBAR_STANDARD].Buttons[1].Command := 'OPEN';
  Toolbars[TOOLBAR_STANDARD].Buttons[1].Enabled := True;
- 
+
  { Save }
  Toolbars[TOOLBAR_STANDARD].Buttons[2].Caption := 'Save';
  Toolbars[TOOLBAR_STANDARD].Buttons[2].Symbol := 'S';
  Toolbars[TOOLBAR_STANDARD].Buttons[2].Command := 'SAVE';
  Toolbars[TOOLBAR_STANDARD].Buttons[2].Enabled := True;
- 
+
  { Séparateur }
  Toolbars[TOOLBAR_STANDARD].Buttons[3].Separator := True;
- 
+
  { Print }
  Toolbars[TOOLBAR_STANDARD].Buttons[4].Caption := 'Print';
  Toolbars[TOOLBAR_STANDARD].Buttons[4].Symbol := 'P';
  Toolbars[TOOLBAR_STANDARD].Buttons[4].Command := 'PRINT';
  Toolbars[TOOLBAR_STANDARD].Buttons[4].Enabled := True;
- 
+
  { Séparateur }
  Toolbars[TOOLBAR_STANDARD].Buttons[5].Separator := True;
- 
+
  { Undo }
  Toolbars[TOOLBAR_STANDARD].Buttons[6].Caption := 'Undo';
  Toolbars[TOOLBAR_STANDARD].Buttons[6].Symbol := 'U';
  Toolbars[TOOLBAR_STANDARD].Buttons[6].Command := 'UNDO';
  Toolbars[TOOLBAR_STANDARD].Buttons[6].Enabled := True;
- 
+
  { Redo }
  Toolbars[TOOLBAR_STANDARD].Buttons[7].Caption := 'Redo';
  Toolbars[TOOLBAR_STANDARD].Buttons[7].Symbol := 'R';
  Toolbars[TOOLBAR_STANDARD].Buttons[7].Command := 'REDO';
  Toolbars[TOOLBAR_STANDARD].Buttons[7].Enabled := True;
- 
+
  { Séparateur }
  Toolbars[TOOLBAR_STANDARD].Buttons[8].Separator := True;
- 
+
  { Zoom }
  Toolbars[TOOLBAR_STANDARD].Buttons[9].Caption := 'Zoom';
  Toolbars[TOOLBAR_STANDARD].Buttons[9].Symbol := 'Z';
@@ -1908,67 +1935,67 @@ Begin
  Toolbars[TOOLBAR_DRAW].Y := MENUBAR_HEIGHT + 2;
  Toolbars[TOOLBAR_DRAW].Visible := True;
  Toolbars[TOOLBAR_DRAW].ButtonCount := 12;
- 
+
  { Line }
  Toolbars[TOOLBAR_DRAW].Buttons[0].Caption := 'Line';
  Toolbars[TOOLBAR_DRAW].Buttons[0].Symbol := '/';
  Toolbars[TOOLBAR_DRAW].Buttons[0].Command := 'LINE';
  Toolbars[TOOLBAR_DRAW].Buttons[0].Enabled := True;
- 
+
  { Polyline }
  Toolbars[TOOLBAR_DRAW].Buttons[1].Caption := 'Polyline';
  Toolbars[TOOLBAR_DRAW].Buttons[1].Symbol := 'W';
  Toolbars[TOOLBAR_DRAW].Buttons[1].Command := 'PLINE';
  Toolbars[TOOLBAR_DRAW].Buttons[1].Enabled := True;
- 
+
  { Rectangle }
  Toolbars[TOOLBAR_DRAW].Buttons[2].Caption := 'Rectangle';
  Toolbars[TOOLBAR_DRAW].Buttons[2].Symbol := '#';
  Toolbars[TOOLBAR_DRAW].Buttons[2].Command := 'RECTANG';
  Toolbars[TOOLBAR_DRAW].Buttons[2].Enabled := True;
- 
+
  { Polygon }
  Toolbars[TOOLBAR_DRAW].Buttons[3].Caption := 'Polygon';
  Toolbars[TOOLBAR_DRAW].Buttons[3].Symbol := '%';
  Toolbars[TOOLBAR_DRAW].Buttons[3].Command := 'POLYGON';
  Toolbars[TOOLBAR_DRAW].Buttons[3].Enabled := True;
- 
+
  { Séparateur }
  Toolbars[TOOLBAR_DRAW].Buttons[4].Separator := True;
- 
+
  { Circle }
  Toolbars[TOOLBAR_DRAW].Buttons[5].Caption := 'Circle';
  Toolbars[TOOLBAR_DRAW].Buttons[5].Symbol := 'o';
  Toolbars[TOOLBAR_DRAW].Buttons[5].Command := 'CIRCLE';
  Toolbars[TOOLBAR_DRAW].Buttons[5].Enabled := True;
- 
+
  { Arc }
  Toolbars[TOOLBAR_DRAW].Buttons[6].Caption := 'Arc';
  Toolbars[TOOLBAR_DRAW].Buttons[6].Symbol := '(';
  Toolbars[TOOLBAR_DRAW].Buttons[6].Command := 'ARC';
  Toolbars[TOOLBAR_DRAW].Buttons[6].Enabled := True;
- 
+
  { Ellipse }
  Toolbars[TOOLBAR_DRAW].Buttons[7].Caption := 'Ellipse';
  Toolbars[TOOLBAR_DRAW].Buttons[7].Symbol := '0';
  Toolbars[TOOLBAR_DRAW].Buttons[7].Command := 'ELLIPSE';
  Toolbars[TOOLBAR_DRAW].Buttons[7].Enabled := True;
- 
+
  { Séparateur }
  Toolbars[TOOLBAR_DRAW].Buttons[8].Separator := True;
- 
+
  { Text }
  Toolbars[TOOLBAR_DRAW].Buttons[9].Caption := 'Text';
  Toolbars[TOOLBAR_DRAW].Buttons[9].Symbol := 'A';
  Toolbars[TOOLBAR_DRAW].Buttons[9].Command := 'TEXT';
  Toolbars[TOOLBAR_DRAW].Buttons[9].Enabled := True;
- 
+
  { Hatch }
  Toolbars[TOOLBAR_DRAW].Buttons[10].Caption := 'Hatch';
  Toolbars[TOOLBAR_DRAW].Buttons[10].Symbol := 'H';
  Toolbars[TOOLBAR_DRAW].Buttons[10].Command := 'HATCH';
  Toolbars[TOOLBAR_DRAW].Buttons[10].Enabled := True;
- 
+
  { Point }
  Toolbars[TOOLBAR_DRAW].Buttons[11].Caption := 'Point';
  Toolbars[TOOLBAR_DRAW].Buttons[11].Symbol := '.';
@@ -1983,67 +2010,67 @@ Begin
  Toolbars[TOOLBAR_MODIFY].Y := MENUBAR_HEIGHT + 2;
  Toolbars[TOOLBAR_MODIFY].Visible := True;
  Toolbars[TOOLBAR_MODIFY].ButtonCount := 12;
- 
+
  { Erase }
  Toolbars[TOOLBAR_MODIFY].Buttons[0].Caption := 'Erase';
  Toolbars[TOOLBAR_MODIFY].Buttons[0].Symbol := 'X';
  Toolbars[TOOLBAR_MODIFY].Buttons[0].Command := 'ERASE';
  Toolbars[TOOLBAR_MODIFY].Buttons[0].Enabled := True;
- 
+
  { Copy }
  Toolbars[TOOLBAR_MODIFY].Buttons[1].Caption := 'Copy';
  Toolbars[TOOLBAR_MODIFY].Buttons[1].Symbol := 'C';
  Toolbars[TOOLBAR_MODIFY].Buttons[1].Command := 'COPY';
  Toolbars[TOOLBAR_MODIFY].Buttons[1].Enabled := True;
- 
+
  { Move }
  Toolbars[TOOLBAR_MODIFY].Buttons[2].Caption := 'Move';
  Toolbars[TOOLBAR_MODIFY].Buttons[2].Symbol := 'M';
  Toolbars[TOOLBAR_MODIFY].Buttons[2].Command := 'MOVE';
  Toolbars[TOOLBAR_MODIFY].Buttons[2].Enabled := True;
- 
+
  { Mirror }
  Toolbars[TOOLBAR_MODIFY].Buttons[3].Caption := 'Mirror';
  Toolbars[TOOLBAR_MODIFY].Buttons[3].Symbol := '|';
  Toolbars[TOOLBAR_MODIFY].Buttons[3].Command := 'MIRROR';
  Toolbars[TOOLBAR_MODIFY].Buttons[3].Enabled := True;
- 
+
  { Séparateur }
  Toolbars[TOOLBAR_MODIFY].Buttons[4].Separator := True;
- 
+
  { Rotate }
  Toolbars[TOOLBAR_MODIFY].Buttons[5].Caption := 'Rotate';
  Toolbars[TOOLBAR_MODIFY].Buttons[5].Symbol := '@';
  Toolbars[TOOLBAR_MODIFY].Buttons[5].Command := 'ROTATE';
  Toolbars[TOOLBAR_MODIFY].Buttons[5].Enabled := True;
- 
+
  { Scale }
  Toolbars[TOOLBAR_MODIFY].Buttons[6].Caption := 'Scale';
  Toolbars[TOOLBAR_MODIFY].Buttons[6].Symbol := '*';
  Toolbars[TOOLBAR_MODIFY].Buttons[6].Command := 'SCALE';
  Toolbars[TOOLBAR_MODIFY].Buttons[6].Enabled := True;
- 
+
  { Offset }
  Toolbars[TOOLBAR_MODIFY].Buttons[7].Caption := 'Offset';
  Toolbars[TOOLBAR_MODIFY].Buttons[7].Symbol := '=';
  Toolbars[TOOLBAR_MODIFY].Buttons[7].Command := 'OFFSET';
  Toolbars[TOOLBAR_MODIFY].Buttons[7].Enabled := True;
- 
+
  { Séparateur }
  Toolbars[TOOLBAR_MODIFY].Buttons[8].Separator := True;
- 
+
  { Trim }
  Toolbars[TOOLBAR_MODIFY].Buttons[9].Caption := 'Trim';
  Toolbars[TOOLBAR_MODIFY].Buttons[9].Symbol := 'T';
  Toolbars[TOOLBAR_MODIFY].Buttons[9].Command := 'TRIM';
  Toolbars[TOOLBAR_MODIFY].Buttons[9].Enabled := True;
- 
+
  { Extend }
  Toolbars[TOOLBAR_MODIFY].Buttons[10].Caption := 'Extend';
  Toolbars[TOOLBAR_MODIFY].Buttons[10].Symbol := 'E';
  Toolbars[TOOLBAR_MODIFY].Buttons[10].Command := 'EXTEND';
  Toolbars[TOOLBAR_MODIFY].Buttons[10].Enabled := True;
- 
+
  { Fillet }
  Toolbars[TOOLBAR_MODIFY].Buttons[11].Caption := 'Fillet';
  Toolbars[TOOLBAR_MODIFY].Buttons[11].Symbol := 'F';
@@ -2057,22 +2084,22 @@ Begin
  Toolbars[TOOLBAR_LAYERS].Y := 100;
  Toolbars[TOOLBAR_LAYERS].Visible := False;  { Cachée par défaut }
  Toolbars[TOOLBAR_LAYERS].ButtonCount := 4;
- 
+
  Toolbars[TOOLBAR_LAYERS].Buttons[0].Caption := 'Layer Properties';
  Toolbars[TOOLBAR_LAYERS].Buttons[0].Symbol := 'L';
  Toolbars[TOOLBAR_LAYERS].Buttons[0].Command := 'LAYER';
  Toolbars[TOOLBAR_LAYERS].Buttons[0].Enabled := True;
- 
+
  Toolbars[TOOLBAR_LAYERS].Buttons[1].Caption := 'Make Layer Current';
  Toolbars[TOOLBAR_LAYERS].Buttons[1].Symbol := '+';
  Toolbars[TOOLBAR_LAYERS].Buttons[1].Command := 'LAYMCUR';
  Toolbars[TOOLBAR_LAYERS].Buttons[1].Enabled := True;
- 
+
  Toolbars[TOOLBAR_LAYERS].Buttons[2].Caption := 'Layer Off';
  Toolbars[TOOLBAR_LAYERS].Buttons[2].Symbol := '-';
  Toolbars[TOOLBAR_LAYERS].Buttons[2].Command := 'LAYOFF';
  Toolbars[TOOLBAR_LAYERS].Buttons[2].Enabled := True;
- 
+
  Toolbars[TOOLBAR_LAYERS].Buttons[3].Caption := 'Layer Freeze';
  Toolbars[TOOLBAR_LAYERS].Buttons[3].Symbol := '~';
  Toolbars[TOOLBAR_LAYERS].Buttons[3].Command := 'LAYFRZ';
@@ -2085,17 +2112,17 @@ Begin
  Toolbars[TOOLBAR_PROPERTIES].Y := 200;
  Toolbars[TOOLBAR_PROPERTIES].Visible := False;  { Cachée par défaut }
  Toolbars[TOOLBAR_PROPERTIES].ButtonCount := 3;
- 
+
  Toolbars[TOOLBAR_PROPERTIES].Buttons[0].Caption := 'Properties';
  Toolbars[TOOLBAR_PROPERTIES].Buttons[0].Symbol := 'I';
  Toolbars[TOOLBAR_PROPERTIES].Buttons[0].Command := 'PROPERTIES';
  Toolbars[TOOLBAR_PROPERTIES].Buttons[0].Enabled := True;
- 
+
  Toolbars[TOOLBAR_PROPERTIES].Buttons[1].Caption := 'Match Properties';
  Toolbars[TOOLBAR_PROPERTIES].Buttons[1].Symbol := '&';
  Toolbars[TOOLBAR_PROPERTIES].Buttons[1].Command := 'MATCHPROP';
  Toolbars[TOOLBAR_PROPERTIES].Buttons[1].Enabled := True;
- 
+
  Toolbars[TOOLBAR_PROPERTIES].Buttons[2].Caption := 'List';
  Toolbars[TOOLBAR_PROPERTIES].Buttons[2].Symbol := '?';
  Toolbars[TOOLBAR_PROPERTIES].Buttons[2].Command := 'LIST';
@@ -2210,7 +2237,7 @@ Var
  BtnSize: Integer;
 Begin
  BtnSize := TOOLBAR_BUTTON_SIZE;
- 
+
  If Button.Separator Then Begin
   { Dessiner un séparateur }
   SetColor(DarkGray);
@@ -2240,7 +2267,7 @@ Begin
    Line(X + BtnSize - 1, Y, X + BtnSize - 1, Y + BtnSize - 1);
    Line(X, Y + BtnSize - 1, X + BtnSize - 1, Y + BtnSize - 1);
   End;
-  
+
   { Dessiner le symbole centré }
   If Button.Enabled Then
    SetColor(Black)
@@ -2263,33 +2290,33 @@ Var
 Begin
  If (ToolbarIndex < 0) or (ToolbarIndex >= MAX_TOOLBARS) Then Exit;
  If Not Toolbars[ToolbarIndex].Visible Then Exit;
- 
+
  X := Toolbars[ToolbarIndex].X;
  Y := Toolbars[ToolbarIndex].Y;
  TitleHeight := 0;
- 
+
  { Calculer la largeur de la barre d'outils }
  ToolbarWidth := Toolbars[ToolbarIndex].ButtonCount * (TOOLBAR_BUTTON_SIZE + TOOLBAR_SPACING) + 4;
- 
+
  If Not Toolbars[ToolbarIndex].Docked Then Begin
   { Barre flottante - dessiner la barre de titre }
   TitleHeight := 16;
-  
+
   { Barre de titre }
   SetFillStyle(SolidFill, Blue);
   Bar(X, Y, X + ToolbarWidth, Y + TitleHeight);
   SetColor(White);
   OutTextXY(X + 3, Y + 3, Toolbars[ToolbarIndex].Title);
-  
+
   { Bordure de la fenêtre flottante }
   SetColor(DarkGray);
   Rectangle(X, Y, X + ToolbarWidth, Y + TitleHeight + TOOLBAR_BUTTON_SIZE + 6);
  End;
- 
+
  { Fond de la barre d'outils }
  SetFillStyle(SolidFill, LightGray);
  Bar(X, Y + TitleHeight, X + ToolbarWidth, Y + TitleHeight + TOOLBAR_BUTTON_SIZE + 4);
- 
+
  { Dessiner les boutons }
  BtnX := X + 2;
  For I := 0 to Toolbars[ToolbarIndex].ButtonCount - 1 do Begin
@@ -2309,7 +2336,7 @@ Begin
  Bar(0, MENUBAR_HEIGHT, ScreenWidth - 1, MENUBAR_HEIGHT + TOOLBAR_HEIGHT - 1);
  SetColor(DarkGray);
  Line(0, MENUBAR_HEIGHT + TOOLBAR_HEIGHT - 1, ScreenWidth - 1, MENUBAR_HEIGHT + TOOLBAR_HEIGHT - 1);
- 
+
  { Dessiner chaque barre d'outils visible }
  For I := 0 to MAX_TOOLBARS - 1 do Begin
   DrawToolbar(I);
@@ -2332,17 +2359,17 @@ Var
 Begin
  TbIndex := -1;
  BtnIndex := -1;
- 
+
  For I := 0 to MAX_TOOLBARS - 1 do Begin
   If Not Toolbars[I].Visible Then Continue;
-  
+
   TbX := Toolbars[I].X;
   TbY := Toolbars[I].Y;
   TitleHeight := 0;
-  
+
   If Not Toolbars[I].Docked Then
    TitleHeight := 16;
-  
+
   { Vérifier si on est dans la zone de cette barre d'outils }
   BtnX := TbX + 2;
   For J := 0 to Toolbars[I].ButtonCount - 1 do Begin
@@ -2418,26 +2445,26 @@ Begin
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
  CanvasLeft := 0;
  CanvasRight := ScreenWidth - 1;
- 
+
  { Calculer l'espacement de la grille en fonction du zoom }
  GridSpacing := 50.0;  { Espacement de base }
  If ZoomLevel < 0.5 Then GridSpacing := 100.0;
  If ZoomLevel < 0.25 Then GridSpacing := 200.0;
  If ZoomLevel > 2.0 Then GridSpacing := 25.0;
  If ZoomLevel > 4.0 Then GridSpacing := 10.0;
- 
+
  { Calculer les limites visibles en coordonnées monde }
  StartX := ScreenToWorldX(CanvasLeft);
  EndX := ScreenToWorldX(CanvasRight);
  StartY := ScreenToWorldY(CanvasBottom);
  EndY := ScreenToWorldY(CanvasTop);
- 
+
  { Arrondir au multiple de GridSpacing }
  StartX := Int(StartX / GridSpacing) * GridSpacing - GridSpacing;
  StartY := Int(StartY / GridSpacing) * GridSpacing - GridSpacing;
- 
+
  SetColor(DarkGray);
- 
+
  { Dessiner les lignes verticales }
  X := StartX;
  While X <= EndX do Begin
@@ -2446,7 +2473,7 @@ Begin
    Line(SX, CanvasTop, SX, CanvasBottom);
   X := X + GridSpacing;
  End;
- 
+
  { Dessiner les lignes horizontales }
  Y := StartY;
  While Y <= EndY do Begin
@@ -2455,13 +2482,13 @@ Begin
    Line(CanvasLeft, SY, CanvasRight, SY);
   Y := Y + GridSpacing;
  End;
- 
+
  { Dessiner les axes principaux }
  SetColor(Red);
  SX := WorldToScreenX(0);
  If (SX >= CanvasLeft) and (SX <= CanvasRight) Then
   Line(SX, CanvasTop, SX, CanvasBottom);
- 
+
  SetColor(Green);
  SY := WorldToScreenY(0);
  If (SY >= CanvasTop) and (SY <= CanvasBottom) Then
@@ -2494,58 +2521,58 @@ Begin
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
  CanvasLeft := 0;
  CanvasRight := ScreenWidth - 1;
- 
+
  { Vérifier que le curseur est dans la zone de dessin }
  If (X < CanvasLeft) or (X > CanvasRight) or
     (Y < CanvasTop) or (Y > CanvasBottom) Then Exit;
- 
+
  { Définir la couleur du crosshair }
  SetColor(CrosshairColor);
  SetWriteMode(XORPut);  { Mode XOR pour effacer/redessiner facilement }
- 
+
  If CrosshairSize = CROSSHAIR_SIZE_FULLSCREEN Then Begin
   { Crosshair plein écran - lignes traversant tout le canvas }
   { Ligne horizontale }
   Line(CanvasLeft, Y, X - 3, Y);      { Gauche du curseur }
   Line(X + 3, Y, CanvasRight, Y);     { Droite du curseur }
-  
+
   { Ligne verticale }
   Line(X, CanvasTop, X, Y - 3);       { Haut du curseur }
   Line(X, Y + 3, X, CanvasBottom);    { Bas du curseur }
  End Else Begin
   { Crosshair de taille limitée }
   HalfSize := CrosshairSize div 2;
-  
+
   { Calculer les limites en respectant les bords du canvas }
   StartX := X - HalfSize;
   If StartX < CanvasLeft Then StartX := CanvasLeft;
   EndX := X + HalfSize;
   If EndX > CanvasRight Then EndX := CanvasRight;
-  
+
   StartY := Y - HalfSize;
   If StartY < CanvasTop Then StartY := CanvasTop;
   EndY := Y + HalfSize;
   If EndY > CanvasBottom Then EndY := CanvasBottom;
-  
+
   { Ligne horizontale avec gap au centre }
   If X - 3 >= StartX Then
    Line(StartX, Y, X - 3, Y);
   If X + 3 <= EndX Then
    Line(X + 3, Y, EndX, Y);
-  
+
   { Ligne verticale avec gap au centre }
   If Y - 3 >= StartY Then
    Line(X, StartY, X, Y - 3);
   If Y + 3 <= EndY Then
    Line(X, Y + 3, X, EndY);
  End;
- 
+
  { Dessiner la boîte de sélection (pickbox) au centre }
  If ShowPickBox Then Begin
   SetColor(CrosshairColor);
   Rectangle(X - PickBoxSize, Y - PickBoxSize, X + PickBoxSize, Y + PickBoxSize);
  End;
- 
+
  SetWriteMode(NormalPut);  { Restaurer le mode normal }
 End;
 
@@ -2560,44 +2587,44 @@ Var
  CanvasTop, CanvasBottom: Integer;
 Begin
  { Vérifier le mode d'affichage }
- If (CoordDisplayMode = COORD_DISPLAY_NONE) or 
+ If (CoordDisplayMode = COORD_DISPLAY_NONE) or
     (CoordDisplayMode = COORD_DISPLAY_STATUSBAR) Then Exit;
- 
+
  CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
- 
+
  { Vérifier que le curseur est dans la zone de dessin }
  If (Y < CanvasTop) or (Y > CanvasBottom) Then Exit;
- 
+
  { Calculer les coordonnées monde }
  WorldX := ScreenToWorldX(X);
  WorldY := ScreenToWorldY(Y);
- 
+
  { Formater la chaîne de coordonnées }
  Str(WorldX:0:2, StrX);
  Str(WorldY:0:2, StrY);
  CoordStr := StrX + ', ' + StrY;
- 
+
  { Calculer la position du tooltip (en bas à droite du curseur) }
  TooltipX := X + 15;
  TooltipY := Y + 15;
  TooltipWidth := TextWidth(CoordStr) + 6;
  TooltipHeight := 14;
- 
+
  { Ajuster si dépasse l'écran }
  If TooltipX + TooltipWidth > ScreenWidth - 5 Then
   TooltipX := X - TooltipWidth - 5;
  If TooltipY + TooltipHeight > CanvasBottom - 5 Then
   TooltipY := Y - TooltipHeight - 5;
- 
+
  { Dessiner le fond du tooltip }
  SetFillStyle(SolidFill, Black);
  Bar(TooltipX, TooltipY, TooltipX + TooltipWidth, TooltipY + TooltipHeight);
- 
+
  { Dessiner la bordure }
  SetColor(Yellow);
  Rectangle(TooltipX, TooltipY, TooltipX + TooltipWidth, TooltipY + TooltipHeight);
- 
+
  { Dessiner le texte des coordonnées }
  SetColor(Yellow);
  OutTextXY(TooltipX + 3, TooltipY + 2, CoordStr);
@@ -2615,19 +2642,19 @@ Var
 Begin
  { Initialiser le compteur d'objets }
  ObjectCount := 0;
- 
+
  { Effacer tous les objets }
  For I := 0 to MAX_OBJECTS - 1 do Begin
   DrawObjects[I].ObjType := OBJ_NONE;
   DrawObjects[I].Selected := False;
   DrawObjects[I].Visible := True;
  End;
- 
+
  { Initialiser le jeu de sélection }
  SelectionSet.Count := 0;
  For I := 0 to MAX_SELECTED - 1 do
   SelectionSet.Objects[I] := -1;
- 
+
  { Initialiser les variables de sélection }
  SelectMode := SELECT_MODE_NONE;
  SelectionActive := False;
@@ -2635,7 +2662,7 @@ Begin
  SelectStartY := 0;
  SelectEndX := 0;
  SelectEndY := 0;
- 
+
  { Créer quelques objets de démonstration }
  { Ligne horizontale }
  DrawObjects[0].ObjType := OBJ_LINE;
@@ -2646,7 +2673,7 @@ Begin
  DrawObjects[0].Color := Yellow;
  DrawObjects[0].Selected := False;
  DrawObjects[0].Visible := True;
- 
+
  { Ligne verticale }
  DrawObjects[1].ObjType := OBJ_LINE;
  DrawObjects[1].X1 := 0;
@@ -2656,7 +2683,7 @@ Begin
  DrawObjects[1].Color := Cyan;
  DrawObjects[1].Selected := False;
  DrawObjects[1].Visible := True;
- 
+
  { Cercle }
  DrawObjects[2].ObjType := OBJ_CIRCLE;
  DrawObjects[2].X1 := -50;  { Centre X }
@@ -2665,7 +2692,7 @@ Begin
  DrawObjects[2].Color := Green;
  DrawObjects[2].Selected := False;
  DrawObjects[2].Visible := True;
- 
+
  { Rectangle (représenté par 4 lignes conceptuellement, mais comme un objet) }
  DrawObjects[3].ObjType := OBJ_RECTANGLE;
  DrawObjects[3].X1 := 60;   { Coin inférieur gauche X }
@@ -2675,7 +2702,7 @@ Begin
  DrawObjects[3].Color := Magenta;
  DrawObjects[3].Selected := False;
  DrawObjects[3].Visible := True;
- 
+
  { Ligne diagonale }
  DrawObjects[4].ObjType := OBJ_LINE;
  DrawObjects[4].X1 := -120;
@@ -2685,7 +2712,7 @@ Begin
  DrawObjects[4].Color := LightRed;
  DrawObjects[4].Selected := False;
  DrawObjects[4].Visible := True;
- 
+
  ObjectCount := 5;
 End;
 
@@ -2697,7 +2724,7 @@ Begin
  { Désélectionner tous les objets }
  For I := 0 to ObjectCount - 1 do
   DrawObjects[I].Selected := False;
- 
+
  { Effacer le jeu de sélection }
  SelectionSet.Count := 0;
  For I := 0 to MAX_SELECTED - 1 do
@@ -2711,7 +2738,7 @@ Var
 Begin
  IsSelected := False;
  If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
- 
+
  For I := 0 to SelectionSet.Count - 1 do Begin
   If SelectionSet.Objects[I] = ObjIndex Then Begin
    IsSelected := True;
@@ -2726,7 +2753,7 @@ Begin
  If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
  If SelectionSet.Count >= MAX_SELECTED Then Exit;
  If IsSelected(ObjIndex) Then Exit;  { Déjà sélectionné }
- 
+
  SelectionSet.Objects[SelectionSet.Count] := ObjIndex;
  SelectionSet.Count := SelectionSet.Count + 1;
  DrawObjects[ObjIndex].Selected := True;
@@ -2738,7 +2765,7 @@ Var
  I, J: Integer;
 Begin
  If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
- 
+
  For I := 0 to SelectionSet.Count - 1 do Begin
   If SelectionSet.Objects[I] = ObjIndex Then Begin
    { Décaler les éléments suivants }
@@ -2760,10 +2787,10 @@ Var
  Dist: Real;
 Begin
  PointNearLine := False;
- 
+
  DX := X2 - X1;
  DY := Y2 - Y1;
- 
+
  { Calculer le paramètre t pour le point le plus proche sur la ligne }
  If (DX = 0) and (DY = 0) Then Begin
   { Ligne dégénérée (point) }
@@ -2771,17 +2798,17 @@ Begin
   PointNearLine := Dist <= Tolerance;
   Exit;
  End;
- 
+
  T := ((PX - X1) * DX + (PY - Y1) * DY) / (Sqr(DX) + Sqr(DY));
- 
+
  { Limiter t entre 0 et 1 pour rester sur le segment }
  If T < 0 Then T := 0;
  If T > 1 Then T := 1;
- 
+
  { Calculer le point le plus proche sur le segment }
  NearX := X1 + T * DX;
  NearY := Y1 + T * DY;
- 
+
  { Calculer la distance }
  Dist := Sqrt(Sqr(PX - NearX) + Sqr(PY - NearY));
  PointNearLine := Dist <= Tolerance;
@@ -2805,20 +2832,20 @@ Var
 Begin
  ObjectIntersectsRect := False;
  If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
- 
+
  { Normaliser le rectangle }
  If RX1 < RX2 Then Begin MinX := RX1; MaxX := RX2; End
  Else Begin MinX := RX2; MaxX := RX1; End;
  If RY1 < RY2 Then Begin MinY := RY1; MaxY := RY2; End
  Else Begin MinY := RY2; MaxY := RY1; End;
- 
+
  Case DrawObjects[ObjIndex].ObjType of
   OBJ_LINE: Begin
    OX1 := DrawObjects[ObjIndex].X1;
    OY1 := DrawObjects[ObjIndex].Y1;
    OX2 := DrawObjects[ObjIndex].X2;
    OY2 := DrawObjects[ObjIndex].Y2;
-   
+
    { Vérifier si au moins un point est dans le rectangle }
    If (OX1 >= MinX) and (OX1 <= MaxX) and (OY1 >= MinY) and (OY1 <= MaxY) Then Begin
     ObjectIntersectsRect := True;
@@ -2828,7 +2855,7 @@ Begin
     ObjectIntersectsRect := True;
     Exit;
    End;
-   
+
    { Vérifier l'intersection avec les bords du rectangle }
    { Simplification: vérifier si la ligne croise le rectangle }
    If ((OX1 < MinX) and (OX2 > MaxX)) or ((OX1 > MaxX) and (OX2 < MinX)) Then Begin
@@ -2846,12 +2873,12 @@ Begin
     End;
    End;
   End;
-  
+
   OBJ_CIRCLE: Begin
    CX := DrawObjects[ObjIndex].X1;
    CY := DrawObjects[ObjIndex].Y1;
    R := DrawObjects[ObjIndex].Radius;
-   
+
    { Vérifier si le cercle intersecte le rectangle }
    { Le cercle intersecte si le centre est assez proche du rectangle }
    If (CX >= MinX - R) and (CX <= MaxX + R) and
@@ -2860,13 +2887,13 @@ Begin
     Exit;
    End;
   End;
-  
+
   OBJ_RECTANGLE: Begin
    OX1 := DrawObjects[ObjIndex].X1;
    OY1 := DrawObjects[ObjIndex].Y1;
    OX2 := DrawObjects[ObjIndex].X2;
    OY2 := DrawObjects[ObjIndex].Y2;
-   
+
    { Les rectangles s'intersectent si aucun n'est complètement à l'extérieur }
    If Not ((OX2 < MinX) or (OX1 > MaxX) or (OY2 < MinY) or (OY1 > MaxY)) Then Begin
     ObjectIntersectsRect := True;
@@ -2885,41 +2912,41 @@ Var
 Begin
  ObjectInsideRect := False;
  If (ObjIndex < 0) or (ObjIndex >= ObjectCount) Then Exit;
- 
+
  { Normaliser le rectangle }
  If RX1 < RX2 Then Begin MinX := RX1; MaxX := RX2; End
  Else Begin MinX := RX2; MaxX := RX1; End;
  If RY1 < RY2 Then Begin MinY := RY1; MaxY := RY2; End
  Else Begin MinY := RY2; MaxY := RY1; End;
- 
+
  Case DrawObjects[ObjIndex].ObjType of
   OBJ_LINE: Begin
    OX1 := DrawObjects[ObjIndex].X1;
    OY1 := DrawObjects[ObjIndex].Y1;
    OX2 := DrawObjects[ObjIndex].X2;
    OY2 := DrawObjects[ObjIndex].Y2;
-   
+
    { Les deux points doivent être dans le rectangle }
    ObjectInsideRect := (OX1 >= MinX) and (OX1 <= MaxX) and (OY1 >= MinY) and (OY1 <= MaxY) and
                        (OX2 >= MinX) and (OX2 <= MaxX) and (OY2 >= MinY) and (OY2 <= MaxY);
   End;
-  
+
   OBJ_CIRCLE: Begin
    CX := DrawObjects[ObjIndex].X1;
    CY := DrawObjects[ObjIndex].Y1;
    R := DrawObjects[ObjIndex].Radius;
-   
+
    { Le cercle entier doit être dans le rectangle }
    ObjectInsideRect := (CX - R >= MinX) and (CX + R <= MaxX) and
                        (CY - R >= MinY) and (CY + R <= MaxY);
   End;
-  
+
   OBJ_RECTANGLE: Begin
    OX1 := DrawObjects[ObjIndex].X1;
    OY1 := DrawObjects[ObjIndex].Y1;
    OX2 := DrawObjects[ObjIndex].X2;
    OY2 := DrawObjects[ObjIndex].Y2;
-   
+
    { Le rectangle objet doit être complètement dans le rectangle de sélection }
    ObjectInsideRect := (OX1 >= MinX) and (OX2 <= MaxX) and
                        (OY1 >= MinY) and (OY2 <= MaxY);
@@ -2936,11 +2963,11 @@ Var
  CX, CY, R: Real;
 Begin
  SelectObjectAtPoint := -1;
- 
+
  WorldX := ScreenToWorldX(X);
  WorldY := ScreenToWorldY(Y);
  Tolerance := PICK_TOLERANCE / ZoomLevel;
- 
+
  { Parcourir tous les objets (en ordre inverse pour sélectionner les plus récents d'abord) }
  For I := ObjectCount - 1 downto 0 do Begin
   If Not DrawObjects[I].Visible Then Continue;
@@ -2949,10 +2976,10 @@ Begin
   If Not IsObjectOnVisibleLayer(I) Then Continue;
   { TODO 18: Ne pas sélectionner les objets sur calques verrouillés }
   If IsObjectOnLockedLayer(I) Then Continue;
-  
+
   Case DrawObjects[I].ObjType of
    OBJ_LINE: Begin
-    If PointNearLine(WorldX, WorldY, 
+    If PointNearLine(WorldX, WorldY,
                      DrawObjects[I].X1, DrawObjects[I].Y1,
                      DrawObjects[I].X2, DrawObjects[I].Y2,
                      Tolerance) Then Begin
@@ -2960,7 +2987,7 @@ Begin
      Exit;
     End;
    End;
-   
+
    OBJ_CIRCLE: Begin
     If PointNearCircle(WorldX, WorldY,
                        DrawObjects[I].X1, DrawObjects[I].Y1,
@@ -2969,13 +2996,13 @@ Begin
      Exit;
     End;
    End;
-   
+
    OBJ_RECTANGLE: Begin
     { Vérifier les 4 côtés du rectangle }
     CX := DrawObjects[I].X1;
     CY := DrawObjects[I].Y1;
     R := DrawObjects[I].X2;  { X2 = coin droit }
-    
+
     { Côté bas }
     If PointNearLine(WorldX, WorldY, CX, CY, R, CY, Tolerance) Then Begin
      SelectObjectAtPoint := I;
@@ -3011,7 +3038,7 @@ Begin
  WorldY1 := ScreenToWorldY(Y1);
  WorldX2 := ScreenToWorldX(X2);
  WorldY2 := ScreenToWorldY(Y2);
- 
+
  For I := 0 to ObjectCount - 1 do Begin
   If Not DrawObjects[I].Visible Then Continue;
   If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
@@ -3019,7 +3046,7 @@ Begin
   If Not IsObjectOnVisibleLayer(I) Then Continue;
   { TODO 18: Ne pas sélectionner les objets sur calques verrouillés }
   If IsObjectOnLockedLayer(I) Then Continue;
-  
+
   If Crossing Then Begin
    { Fenêtre croisée: sélectionner les objets qui touchent le rectangle }
    If ObjectIntersectsRect(I, WorldX1, WorldY1, WorldX2, WorldY2) Then
@@ -3038,18 +3065,18 @@ Var
  CanvasTop, CanvasBottom: Integer;
 Begin
  If Not SelectionActive Then Exit;
- 
+
  CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
- 
+
  { Limiter aux bornes du canvas }
  If Y1 < CanvasTop Then Y1 := CanvasTop;
  If Y2 < CanvasTop Then Y2 := CanvasTop;
  If Y1 > CanvasBottom Then Y1 := CanvasBottom;
  If Y2 > CanvasBottom Then Y2 := CanvasBottom;
- 
+
  SetWriteMode(XORPut);
- 
+
  If IsCrossing Then Begin
   { Fenêtre croisée: rectangle vert en pointillé }
   SetColor(LightGreen);
@@ -3059,9 +3086,9 @@ Begin
   SetColor(LightBlue);
   SetLineStyle(SolidLn, 0, NormWidth);
  End;
- 
+
  Rectangle(X1, Y1, X2, Y2);
- 
+
  { Restaurer les paramètres par défaut }
  SetWriteMode(NormalPut);
  SetLineStyle(SolidLn, 0, NormWidth);
@@ -3075,7 +3102,7 @@ Begin
  SelectStartY := Y;
  SelectEndX := X;
  SelectEndY := Y;
- 
+
  { Déterminer le mode en fonction de la direction }
  { Ce sera mis à jour pendant le drag }
  SelectMode := SELECT_MODE_WINDOW;
@@ -3085,20 +3112,20 @@ End;
 Procedure UpdateWindowSelection(X, Y: Integer);
 Begin
  If Not SelectionActive Then Exit;
- 
+
  { Effacer l'ancien rectangle }
- DrawSelectionRectangle(SelectStartX, SelectStartY, SelectEndX, SelectEndY, 
+ DrawSelectionRectangle(SelectStartX, SelectStartY, SelectEndX, SelectEndY,
                         SelectMode = SELECT_MODE_CROSSING);
- 
+
  SelectEndX := X;
  SelectEndY := Y;
- 
+
  { Déterminer le mode: fenêtre croisée si on va de droite à gauche }
  If SelectEndX < SelectStartX Then
   SelectMode := SELECT_MODE_CROSSING
  Else
   SelectMode := SELECT_MODE_WINDOW;
- 
+
  { Dessiner le nouveau rectangle }
  DrawSelectionRectangle(SelectStartX, SelectStartY, SelectEndX, SelectEndY,
                         SelectMode = SELECT_MODE_CROSSING);
@@ -3108,15 +3135,15 @@ End;
 Procedure FinishWindowSelection;
 Begin
  If Not SelectionActive Then Exit;
- 
+
  { Effacer le rectangle }
  DrawSelectionRectangle(SelectStartX, SelectStartY, SelectEndX, SelectEndY,
                         SelectMode = SELECT_MODE_CROSSING);
- 
+
  { Sélectionner les objets }
  SelectObjectsInWindow(SelectStartX, SelectStartY, SelectEndX, SelectEndY,
                        SelectMode = SELECT_MODE_CROSSING);
- 
+
  SelectionActive := False;
  SelectMode := SELECT_MODE_NONE;
 End;
@@ -3134,15 +3161,15 @@ Begin
   If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
   { TODO 18: Vérifier la visibilité du calque }
   If Not IsObjectOnVisibleLayer(I) Then Continue;
-  
+
   { Déterminer la couleur (TODO 18: support ByLayer) }
   If DrawObjects[I].Selected Then
    ObjColor := White  { Couleur de surbrillance }
   Else
    ObjColor := GetObjectEffectiveColor(I);
-  
+
   SetColor(ObjColor);
-  
+
   Case DrawObjects[I].ObjType of
    OBJ_LINE: Begin
     SX1 := WorldToScreenX(DrawObjects[I].X1);
@@ -3150,7 +3177,7 @@ Begin
     SX2 := WorldToScreenX(DrawObjects[I].X2);
     SY2 := WorldToScreenY(DrawObjects[I].Y2);
     Line(SX1, SY1, SX2, SY2);
-    
+
     { Si sélectionné, dessiner des poignées aux extrémités }
     If DrawObjects[I].Selected Then Begin
      SetFillStyle(SolidFill, Blue);
@@ -3158,13 +3185,13 @@ Begin
      Bar(SX2 - 3, SY2 - 3, SX2 + 3, SY2 + 3);
     End;
    End;
-   
+
    OBJ_CIRCLE: Begin
     SCX := WorldToScreenX(DrawObjects[I].X1);
     SCY := WorldToScreenY(DrawObjects[I].Y1);
     SR := Round(DrawObjects[I].Radius * ZoomLevel);
     Circle(SCX, SCY, SR);
-    
+
     { Si sélectionné, dessiner des poignées }
     If DrawObjects[I].Selected Then Begin
      SetFillStyle(SolidFill, Blue);
@@ -3175,14 +3202,14 @@ Begin
      Bar(SCX - 3, SCY - 3, SCX + 3, SCY + 3);  { Centre }
     End;
    End;
-   
+
    OBJ_RECTANGLE: Begin
     SX1 := WorldToScreenX(DrawObjects[I].X1);
     SY1 := WorldToScreenY(DrawObjects[I].Y1);
     SX2 := WorldToScreenX(DrawObjects[I].X2);
     SY2 := WorldToScreenY(DrawObjects[I].Y2);
     Rectangle(SX1, SY1, SX2, SY2);
-    
+
     { Si sélectionné, dessiner des poignées aux coins }
     If DrawObjects[I].Selected Then Begin
      SetFillStyle(SolidFill, Blue);
@@ -3192,26 +3219,26 @@ Begin
      Bar(SX2 - 3, SY2 - 3, SX2 + 3, SY2 + 3);  { Coin 4 }
     End;
    End;
-   
+
    OBJ_DIMENSION: Begin
     { TODO 19: Dessiner les cotations }
     DrawDimension(I);
    End;
   End;
  End;
- 
+
  { Dessiner les références de blocs - TODO 20 }
  For I := 0 to BlockRefCount - 1 do Begin
   If BlockRefs[I].Visible and (BlockRefs[I].BlockIndex >= 0) Then
    DrawBlockRef(I);
  End;
- 
+
  { Dessiner les XREFs - TODO 20 }
  For I := 0 to XRefCount - 1 do Begin
   If XRefs[I].Visible and (XRefs[I].Name <> '') Then
    DrawXRef(I);
  End;
- 
+
  { Dessiner le rectangle de sélection si actif }
  If SelectionActive Then
   DrawSelectionRectangle(SelectStartX, SelectStartY, SelectEndX, SelectEndY,
@@ -3251,7 +3278,7 @@ End;
 Procedure AddGrip(X, Y: Real; GType: Byte; ObjIdx, PtIdx: Integer);
 Begin
  If CurrentGrips.Count >= MAX_GRIPS Then Exit;
- 
+
  With CurrentGrips.Grips[CurrentGrips.Count] do Begin
   CurrentGrips.Grips[CurrentGrips.Count].X := X;
   CurrentGrips.Grips[CurrentGrips.Count].Y := Y;
@@ -3269,13 +3296,13 @@ Var
  MidX, MidY: Real;
 Begin
  { Point de départ (P1) }
- AddGrip(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].Y1, 
+ AddGrip(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].Y1,
          GRIP_ENDPOINT, ObjIdx, 0);
- 
+
  { Point d'arrivée (P2) }
- AddGrip(DrawObjects[ObjIdx].X2, DrawObjects[ObjIdx].Y2, 
+ AddGrip(DrawObjects[ObjIdx].X2, DrawObjects[ObjIdx].Y2,
          GRIP_ENDPOINT, ObjIdx, 1);
- 
+
  { Point milieu }
  MidX := (DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].X2) / 2;
  MidY := (DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Y2) / 2;
@@ -3290,10 +3317,10 @@ Begin
  CX := DrawObjects[ObjIdx].X1;
  CY := DrawObjects[ObjIdx].Y1;
  R := DrawObjects[ObjIdx].Radius;
- 
+
  { Centre }
  AddGrip(CX, CY, GRIP_CENTER, ObjIdx, 0);
- 
+
  { Quadrants (pour modifier le rayon) }
  AddGrip(CX, CY - R, GRIP_QUADRANT, ObjIdx, 1);  { Haut }
  AddGrip(CX, CY + R, GRIP_QUADRANT, ObjIdx, 2);  { Bas }
@@ -3310,13 +3337,13 @@ Begin
  Y1 := DrawObjects[ObjIdx].Y1;
  X2 := DrawObjects[ObjIdx].X2;
  Y2 := DrawObjects[ObjIdx].Y2;
- 
+
  { Les 4 coins }
  AddGrip(X1, Y1, GRIP_CORNER, ObjIdx, 0);  { Coin bas-gauche }
  AddGrip(X2, Y1, GRIP_CORNER, ObjIdx, 1);  { Coin bas-droit }
  AddGrip(X2, Y2, GRIP_CORNER, ObjIdx, 2);  { Coin haut-droit }
  AddGrip(X1, Y2, GRIP_CORNER, ObjIdx, 3);  { Coin haut-gauche }
- 
+
  { Milieux des arêtes }
  MidX := (X1 + X2) / 2;
  MidY := (Y1 + Y2) / 2;
@@ -3338,20 +3365,20 @@ Begin
  R := DrawObjects[ObjIdx].Radius;
  StartAngle := DrawObjects[ObjIdx].StartAngle;
  EndAngle := DrawObjects[ObjIdx].EndAngle;
- 
+
  { Centre }
  AddGrip(CX, CY, GRIP_CENTER, ObjIdx, 0);
- 
+
  { Point de départ de l'arc }
  StartX := CX + R * Cos(StartAngle * Pi / 180);
  StartY := CY + R * Sin(StartAngle * Pi / 180);
  AddGrip(StartX, StartY, GRIP_ENDPOINT, ObjIdx, 1);
- 
+
  { Point de fin de l'arc }
  EndX := CX + R * Cos(EndAngle * Pi / 180);
  EndY := CY + R * Sin(EndAngle * Pi / 180);
  AddGrip(EndX, EndY, GRIP_ENDPOINT, ObjIdx, 2);
- 
+
  { Point milieu de l'arc (pour modifier le rayon) }
  MidAngle := (StartAngle + EndAngle) / 2;
  If EndAngle < StartAngle Then
@@ -3375,10 +3402,10 @@ Begin
  RadiusY := Abs(DrawObjects[ObjIdx].Y2 - CY);
  If RadiusX < 1 Then RadiusX := DrawObjects[ObjIdx].Radius;
  If RadiusY < 1 Then RadiusY := DrawObjects[ObjIdx].Radius / 2;
- 
+
  { Centre }
  AddGrip(CX, CY, GRIP_CENTER, ObjIdx, 0);
- 
+
  { Quadrants sur les axes principaux }
  AddGrip(CX + RadiusX, CY, GRIP_QUADRANT, ObjIdx, 1);  { Droite }
  AddGrip(CX - RadiusX, CY, GRIP_QUADRANT, ObjIdx, 2);  { Gauche }
@@ -3390,7 +3417,7 @@ End;
 Procedure GetGripsForPoint(ObjIdx: Integer);
 Begin
  { Un point n'a qu'un seul grip: sa position }
- AddGrip(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].Y1, 
+ AddGrip(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].Y1,
          GRIP_ENDPOINT, ObjIdx, 0);
 End;
 
@@ -3400,12 +3427,12 @@ Var
  I, ObjIdx: Integer;
 Begin
  ClearGrips;
- 
+
  For I := 0 to SelectionSet.Count - 1 do Begin
   ObjIdx := SelectionSet.Objects[I];
   If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Continue;
   If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Continue;
-  
+
   Case DrawObjects[ObjIdx].ObjType of
    OBJ_LINE: GetGripsForLine(ObjIdx);
    OBJ_CIRCLE: GetGripsForCircle(ObjIdx);
@@ -3426,11 +3453,11 @@ Var
  Dist: Real;
 Begin
  GetGripAtPoint := -1;
- 
+
  For I := 0 to CurrentGrips.Count - 1 do Begin
   GX := WorldToScreenX(CurrentGrips.Grips[I].X);
   GY := WorldToScreenY(CurrentGrips.Grips[I].Y);
-  
+
   { Vérifier si le point est dans la zone du grip }
   Dist := Sqrt(Sqr(SX - GX) + Sqr(SY - GY));
   If Dist <= GRIP_SIZE Then Begin
@@ -3448,7 +3475,7 @@ Begin
  { Réinitialiser tous les grips }
  For I := 0 to CurrentGrips.Count - 1 do
   CurrentGrips.Grips[I].IsHot := False;
- 
+
  { Définir le nouveau hot grip }
  HotGripIndex := GripIdx;
  If (GripIdx >= 0) and (GripIdx < CurrentGrips.Count) Then
@@ -3459,11 +3486,11 @@ End;
 Procedure StartGripEdit(GripIdx: Integer);
 Begin
  If (GripIdx < 0) or (GripIdx >= CurrentGrips.Count) Then Exit;
- 
+
  ActiveGripIndex := GripIdx;
  GripEditActive := True;
  GripEditMode := GRIP_EDIT_STRETCH;  { Mode par défaut: étirement }
- 
+
  { Sauvegarder la position originale }
  GripOriginalX := CurrentGrips.Grips[GripIdx].X;
  GripOriginalY := CurrentGrips.Grips[GripIdx].Y;
@@ -3476,14 +3503,14 @@ Procedure UpdateGripEdit(SX, SY: Integer);
 Begin
  If Not GripEditActive Then Exit;
  If ActiveGripIndex < 0 Then Exit;
- 
+
  { Convertir les coordonnées écran en coordonnées monde }
  GripCurrentX := ScreenToWorldX(SX);
  GripCurrentY := ScreenToWorldY(SY);
- 
+
  { Appliquer l'étirement en temps réel }
  ApplyGripStretch(ActiveGripIndex, GripCurrentX, GripCurrentY);
- 
+
  { Mettre à jour les grips pour refléter les changements }
  UpdateGripsForSelection;
 End;
@@ -3496,12 +3523,12 @@ Var
  OldCX, OldCY, OldR, NewR: Real;
 Begin
  If (GripIdx < 0) or (GripIdx >= CurrentGrips.Count) Then Exit;
- 
+
  ObjIdx := CurrentGrips.Grips[GripIdx].ObjIndex;
  PtIdx := CurrentGrips.Grips[GripIdx].PointIndex;
- 
+
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
- 
+
  Case DrawObjects[ObjIdx].ObjType of
   OBJ_LINE: Begin
    Case PtIdx of
@@ -3523,12 +3550,12 @@ Begin
     End;
    End;
   End;
-  
+
   OBJ_CIRCLE: Begin
    OldCX := DrawObjects[ObjIdx].X1;
    OldCY := DrawObjects[ObjIdx].Y1;
    OldR := DrawObjects[ObjIdx].Radius;
-   
+
    Case PtIdx of
     0: Begin { Centre - déplace le cercle }
      DrawObjects[ObjIdx].X1 := NewX;
@@ -3541,7 +3568,7 @@ Begin
     End;
    End;
   End;
-  
+
   OBJ_RECTANGLE: Begin
    Case PtIdx of
     0: Begin { Coin bas-gauche }
@@ -3574,12 +3601,12 @@ Begin
     End;
    End;
   End;
-  
+
   OBJ_ARC: Begin { TODO 17 }
    OldCX := DrawObjects[ObjIdx].X1;
    OldCY := DrawObjects[ObjIdx].Y1;
    OldR := DrawObjects[ObjIdx].Radius;
-   
+
    Case PtIdx of
     0: Begin { Centre - déplace l'arc }
      DrawObjects[ObjIdx].X1 := NewX;
@@ -3606,11 +3633,11 @@ Begin
     End;
    End;
   End;
-  
+
   OBJ_ELLIPSE: Begin { TODO 17 }
    OldCX := DrawObjects[ObjIdx].X1;
    OldCY := DrawObjects[ObjIdx].Y1;
-   
+
    Case PtIdx of
     0: Begin { Centre - déplace l'ellipse }
      DX := NewX - OldCX;
@@ -3634,7 +3661,7 @@ Begin
     End;
    End;
   End;
-  
+
   OBJ_POINT: Begin { TODO 17 }
    Case PtIdx of
     0: Begin { Position du point }
@@ -3650,14 +3677,14 @@ End;
 Procedure FinishGripEdit;
 Begin
  If Not GripEditActive Then Exit;
- 
+
  { Les changements ont déjà été appliqués via ApplyGripStretch }
  { On réinitialise simplement l'état d'édition }
- 
+
  GripEditActive := False;
  ActiveGripIndex := -1;
  GripEditMode := GRIP_EDIT_NONE;
- 
+
  { Mettre à jour les grips }
  UpdateGripsForSelection;
 End;
@@ -3667,15 +3694,15 @@ Procedure CancelGripEdit;
 Begin
  If Not GripEditActive Then Exit;
  If ActiveGripIndex < 0 Then Exit;
- 
+
  { Restaurer la position originale }
  ApplyGripStretch(ActiveGripIndex, GripOriginalX, GripOriginalY);
- 
+
  { Réinitialiser l'état }
  GripEditActive := False;
  ActiveGripIndex := -1;
  GripEditMode := GRIP_EDIT_NONE;
- 
+
  { Mettre à jour les grips }
  UpdateGripsForSelection;
 End;
@@ -3689,7 +3716,7 @@ Procedure MoveObject(ObjIdx: Integer; DX, DY: Real);
 Begin
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
  If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Exit;
- 
+
  Case DrawObjects[ObjIdx].ObjType of
   OBJ_LINE, OBJ_RECTANGLE: Begin
    DrawObjects[ObjIdx].X1 := DrawObjects[ObjIdx].X1 + DX;
@@ -3719,11 +3746,11 @@ Var
 Begin
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
  If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Exit;
- 
+
  AngleRad := Angle * Pi / 180;
  CosA := Cos(AngleRad);
  SinA := Sin(AngleRad);
- 
+
  Case DrawObjects[ObjIdx].ObjType of
   OBJ_LINE, OBJ_RECTANGLE: Begin
    { Rotation de P1 }
@@ -3733,7 +3760,7 @@ Begin
    NewY := OldX1 * SinA + OldY1 * CosA;
    DrawObjects[ObjIdx].X1 := NewX + CX;
    DrawObjects[ObjIdx].Y1 := NewY + CY;
-   
+
    { Rotation de P2 }
    OldX2 := DrawObjects[ObjIdx].X2 - CX;
    OldY2 := DrawObjects[ObjIdx].Y2 - CY;
@@ -3742,7 +3769,7 @@ Begin
    DrawObjects[ObjIdx].X2 := NewX + CX;
    DrawObjects[ObjIdx].Y2 := NewY + CY;
   End;
-  
+
   OBJ_CIRCLE, OBJ_POINT: Begin
    { Rotation du centre }
    OldX1 := DrawObjects[ObjIdx].X1 - CX;
@@ -3752,7 +3779,7 @@ Begin
    DrawObjects[ObjIdx].X1 := NewX + CX;
    DrawObjects[ObjIdx].Y1 := NewY + CY;
   End;
-  
+
   OBJ_ARC: Begin
    { Rotation du centre }
    OldX1 := DrawObjects[ObjIdx].X1 - CX;
@@ -3765,7 +3792,7 @@ Begin
    DrawObjects[ObjIdx].StartAngle := DrawObjects[ObjIdx].StartAngle + Angle;
    DrawObjects[ObjIdx].EndAngle := DrawObjects[ObjIdx].EndAngle + Angle;
   End;
-  
+
   OBJ_ELLIPSE: Begin
    { Rotation du centre }
    OldX1 := DrawObjects[ObjIdx].X1 - CX;
@@ -3774,7 +3801,7 @@ Begin
    NewY := OldX1 * SinA + OldY1 * CosA;
    DrawObjects[ObjIdx].X1 := NewX + CX;
    DrawObjects[ObjIdx].Y1 := NewY + CY;
-   
+
    { Rotation du point définissant l'axe }
    OldX2 := DrawObjects[ObjIdx].X2 - CX;
    OldY2 := DrawObjects[ObjIdx].Y2 - CY;
@@ -3794,7 +3821,7 @@ Begin
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
  If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Exit;
  If Factor <= 0 Then Exit;
- 
+
  Case DrawObjects[ObjIdx].ObjType of
   OBJ_LINE, OBJ_RECTANGLE: Begin
    DX1 := DrawObjects[ObjIdx].X1 - CX;
@@ -3806,7 +3833,7 @@ Begin
    DrawObjects[ObjIdx].X2 := CX + DX2 * Factor;
    DrawObjects[ObjIdx].Y2 := CY + DY2 * Factor;
   End;
-  
+
   OBJ_CIRCLE, OBJ_ARC: Begin
    DX1 := DrawObjects[ObjIdx].X1 - CX;
    DY1 := DrawObjects[ObjIdx].Y1 - CY;
@@ -3814,14 +3841,14 @@ Begin
    DrawObjects[ObjIdx].Y1 := CY + DY1 * Factor;
    DrawObjects[ObjIdx].Radius := DrawObjects[ObjIdx].Radius * Factor;
   End;
-  
+
   OBJ_POINT: Begin
    DX1 := DrawObjects[ObjIdx].X1 - CX;
    DY1 := DrawObjects[ObjIdx].Y1 - CY;
    DrawObjects[ObjIdx].X1 := CX + DX1 * Factor;
    DrawObjects[ObjIdx].Y1 := CY + DY1 * Factor;
   End;
-  
+
   OBJ_ELLIPSE: Begin
    DX1 := DrawObjects[ObjIdx].X1 - CX;
    DY1 := DrawObjects[ObjIdx].Y1 - CY;
@@ -3845,20 +3872,20 @@ Var
 Begin
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
  If DrawObjects[ObjIdx].ObjType = OBJ_NONE Then Exit;
- 
+
  { Calculer les coefficients de la ligne de miroir Ax + By + C = 0 }
  DX := X2 - X1;
  DY := Y2 - Y1;
  D := Sqrt(DX * DX + DY * DY);
  If D < 0.0001 Then Exit;  { Ligne trop courte }
- 
+
  A := -DY / D;
  B := DX / D;
  C := -(A * X1 + B * Y1);
- 
+
  { Fonction de réflexion d'un point }
  { Pour chaque point (OldPX, OldPY), calculer son reflet (NewPX, NewPY) }
- 
+
  Case DrawObjects[ObjIdx].ObjType of
   OBJ_LINE, OBJ_RECTANGLE: Begin
    { Refléter P1 }
@@ -3869,7 +3896,7 @@ Begin
    NewPY := OldPY - T * B;
    DrawObjects[ObjIdx].X1 := NewPX;
    DrawObjects[ObjIdx].Y1 := NewPY;
-   
+
    { Refléter P2 }
    OldPX := DrawObjects[ObjIdx].X2;
    OldPY := DrawObjects[ObjIdx].Y2;
@@ -3879,7 +3906,7 @@ Begin
    DrawObjects[ObjIdx].X2 := NewPX;
    DrawObjects[ObjIdx].Y2 := NewPY;
   End;
-  
+
   OBJ_CIRCLE, OBJ_POINT: Begin
    OldPX := DrawObjects[ObjIdx].X1;
    OldPY := DrawObjects[ObjIdx].Y1;
@@ -3889,7 +3916,7 @@ Begin
    DrawObjects[ObjIdx].X1 := NewPX;
    DrawObjects[ObjIdx].Y1 := NewPY;
   End;
-  
+
   OBJ_ARC: Begin
    { Refléter le centre }
    OldPX := DrawObjects[ObjIdx].X1;
@@ -3904,7 +3931,7 @@ Begin
    DrawObjects[ObjIdx].StartAngle := 180 - DrawObjects[ObjIdx].EndAngle;
    DrawObjects[ObjIdx].EndAngle := 180 - T;
   End;
-  
+
   OBJ_ELLIPSE: Begin
    { Refléter le centre }
    OldPX := DrawObjects[ObjIdx].X1;
@@ -3914,7 +3941,7 @@ Begin
    NewPY := OldPY - T * B;
    DrawObjects[ObjIdx].X1 := NewPX;
    DrawObjects[ObjIdx].Y1 := NewPY;
-   
+
    { Refléter le point définissant l'axe }
    OldPX := DrawObjects[ObjIdx].X2;
    OldPY := DrawObjects[ObjIdx].Y2;
@@ -3975,10 +4002,10 @@ Var
  GColor: Integer;
 Begin
  If (GripIdx < 0) or (GripIdx >= CurrentGrips.Count) Then Exit;
- 
+
  GX := WorldToScreenX(CurrentGrips.Grips[GripIdx].X);
  GY := WorldToScreenY(CurrentGrips.Grips[GripIdx].Y);
- 
+
  { Déterminer la taille et la couleur }
  If GripIdx = ActiveGripIndex Then Begin
   GSize := GRIP_HOT_SIZE;
@@ -3990,12 +4017,12 @@ Begin
   GSize := GRIP_SIZE;
   GColor := GRIP_COLOR_COLD;
  End;
- 
+
  { Dessiner le grip (carré plein avec bordure) }
  SetFillStyle(SolidFill, GColor);
- Bar(GX - GSize div 2, GY - GSize div 2, 
+ Bar(GX - GSize div 2, GY - GSize div 2,
      GX + GSize div 2, GY + GSize div 2);
- 
+
  { Bordure blanche pour la visibilité }
  SetColor(White);
  Rectangle(GX - GSize div 2, GY - GSize div 2,
@@ -4008,10 +4035,10 @@ Var
  I: Integer;
 Begin
  If CurrentGrips.Count = 0 Then Exit;
- 
+
  For I := 0 to CurrentGrips.Count - 1 do
   DrawSingleGrip(I);
- 
+
  { Si en mode édition, dessiner une ligne de prévisualisation }
  If GripEditActive and (ActiveGripIndex >= 0) Then Begin
   SetColor(Yellow);
@@ -4167,21 +4194,21 @@ Begin
  Token.IntValue := 0;
  Token.RealValue := 0.0;
  Token.StrValue := '';
- 
+
  NumStr := '';
  HasDot := False;
- 
+
  { Signe optionnel }
  C := LispPeekChar;
  If (C = '+') or (C = '-') Then Begin
   NumStr := NumStr + LispNextChar;
   C := LispPeekChar;
  End;
- 
+
  { Partie entière }
  While LispIsDigit(LispPeekChar) do
   NumStr := NumStr + LispNextChar;
- 
+
  { Point décimal et partie fractionnaire }
  If LispPeekChar = '.' Then Begin
   C := LispNextChar;  { Consommer le point }
@@ -4196,7 +4223,7 @@ Begin
    Dec(LispTokenizer.Column);
   End;
  End;
- 
+
  { Notation scientifique }
  C := LispPeekChar;
  If (C = 'e') or (C = 'E') Then Begin
@@ -4208,9 +4235,9 @@ Begin
   While LispIsDigit(LispPeekChar) do
    NumStr := NumStr + LispNextChar;
  End;
- 
+
  Token.StrValue := NumStr;
- 
+
  If HasDot Then Begin
   Token.TokenType := LISP_TOKEN_REAL;
   Val(NumStr, Token.RealValue, Code);
@@ -4228,7 +4255,7 @@ Begin
    LispTokenizer.ErrorMessage := 'Nombre entier invalide: ' + NumStr;
   End;
  End;
- 
+
  LispReadNumber := Token;
 End;
 
@@ -4244,13 +4271,13 @@ Begin
  Token.IntValue := 0;
  Token.RealValue := 0.0;
  Token.StrValue := '';
- 
+
  { Consommer le guillemet ouvrant }
  C := LispNextChar;  { " }
- 
+
  While Not LispIsAtEnd do Begin
   C := LispNextChar;
-  
+
   If C = LISP_CHAR_DQUOTE Then
    Break  { Fin de la chaîne }
   Else If C = LISP_CHAR_BACKSLASH Then Begin
@@ -4269,14 +4296,14 @@ Begin
   End Else
    Token.StrValue := Token.StrValue + C;
  End;
- 
+
  { Vérifier si la chaîne est correctement fermée }
  If (C <> LISP_CHAR_DQUOTE) and LispIsAtEnd Then Begin
   Token.TokenType := LISP_TOKEN_ERROR;
   LispTokenizer.HasError := True;
   LispTokenizer.ErrorMessage := 'Chaîne non terminée';
  End;
- 
+
  LispReadString := Token;
 End;
 
@@ -4293,22 +4320,22 @@ Begin
  Token.IntValue := 0;
  Token.RealValue := 0.0;
  Token.StrValue := '';
- 
+
  SymStr := '';
- 
+
  { Lire le symbole }
  While (Not LispIsAtEnd) and LispIsSymbolChar(LispPeekChar) do
   SymStr := SymStr + LispNextChar;
- 
+
  Token.StrValue := SymStr;
- 
+
  { Vérifier les mots-clés spéciaux }
  UpperStr := LispUpperCase(SymStr);
  If UpperStr = 'NIL' Then
   Token.TokenType := LISP_TOKEN_NIL
  Else If UpperStr = 'T' Then
   Token.TokenType := LISP_TOKEN_T;
- 
+
  LispReadSymbol := Token;
 End;
 
@@ -4325,7 +4352,7 @@ Begin
  Token.IntValue := 0;
  Token.RealValue := 0.0;
  Token.StrValue := '';
- 
+
  { Sauter les espaces et commentaires }
  Repeat
   LispSkipWhitespace;
@@ -4334,38 +4361,38 @@ Begin
   Else
    Break;
  Until LispIsAtEnd;
- 
+
  { Vérifier la fin de l'entrée }
  If LispIsAtEnd Then Begin
   Token.TokenType := LISP_TOKEN_EOF;
   LispGetNextToken := Token;
   Exit;
  End;
- 
+
  Token.Line := LispTokenizer.Line;
  Token.Column := LispTokenizer.Column;
- 
+
  C := LispPeekChar;
- 
+
  Case C of
   LISP_CHAR_LPAREN: Begin
    Token.TokenType := LISP_TOKEN_LPAREN;
    Token.StrValue := '(';
    C := LispNextChar;
   End;
-  
+
   LISP_CHAR_RPAREN: Begin
    Token.TokenType := LISP_TOKEN_RPAREN;
    Token.StrValue := ')';
    C := LispNextChar;
   End;
-  
+
   LISP_CHAR_QUOTE: Begin
    Token.TokenType := LISP_TOKEN_QUOTE;
    Token.StrValue := '''';
    C := LispNextChar;
   End;
-  
+
   LISP_CHAR_DOT: Begin
    { Vérifier si c'est un nombre ou juste un point }
    C := LispNextChar;  { Consommer le point }
@@ -4379,15 +4406,15 @@ Begin
     Token.StrValue := '.';
    End;
   End;
-  
+
   LISP_CHAR_DQUOTE: Begin
    Token := LispReadString;
   End;
-  
+
   '0'..'9': Begin
    Token := LispReadNumber;
   End;
-  
+
   '+', '-': Begin
    { Vérifier si c'est un nombre ou un symbole }
    C := LispNextChar;  { Consommer le signe }
@@ -4403,7 +4430,7 @@ Begin
     Token := LispReadSymbol;
    End;
   End;
-  
+
   Else Begin
    If LispIsSymbolStart(C) Then
     Token := LispReadSymbol
@@ -4417,7 +4444,7 @@ Begin
    End;
   End;
  End;
- 
+
  LispGetNextToken := Token;
 End;
 
@@ -4428,26 +4455,26 @@ Var
 Begin
  LispTokenizerSetInput(S);
  LispTokenizer.TokenCount := 0;
- 
+
  Repeat
   Token := LispGetNextToken;
-  
+
   If LispTokenizer.TokenCount < MAX_LISP_TOKENS Then Begin
    LispTokenizer.Tokens[LispTokenizer.TokenCount] := Token;
    Inc(LispTokenizer.TokenCount);
   End Else Begin
    LispTokenizer.HasError := True;
-   LispTokenizer.ErrorMessage := 'Trop de tokens (maximum ' + 
+   LispTokenizer.ErrorMessage := 'Trop de tokens (maximum ' +
      Chr(48 + (MAX_LISP_TOKENS div 100) mod 10) +
      Chr(48 + (MAX_LISP_TOKENS div 10) mod 10) +
      Chr(48 + MAX_LISP_TOKENS mod 10) + ')';
    Break;
   End;
-  
- Until (Token.TokenType = LISP_TOKEN_EOF) or 
+
+ Until (Token.TokenType = LISP_TOKEN_EOF) or
        (Token.TokenType = LISP_TOKEN_ERROR) or
        LispTokenizer.HasError;
- 
+
  LispTokenizer.CurrentToken := 0;
 End;
 
@@ -4493,7 +4520,7 @@ Begin
   LISP_TOKEN_T:      S := '[T';
   LISP_TOKEN_ERROR:  S := '[ERROR: ' + Token.StrValue;
  End;
- S := S + ' @' + Chr(48 + Token.Line mod 10) + ':' + 
+ S := S + ' @' + Chr(48 + Token.Line mod 10) + ':' +
           Chr(48 + Token.Column mod 10) + ']';
  WriteLn(S);
 End;
@@ -4566,7 +4593,7 @@ Begin
  LispParser.ErrorMessage := '';
  LispParser.HasError := False;
  LispParseDebugMode := False;
- 
+
  { Initialiser tous les noeuds }
  For I := 0 to MAX_LISP_NODES - 1 do Begin
   LispParser.Nodes[I].NodeType := LISP_NODE_NONE;
@@ -4585,9 +4612,9 @@ Begin
   LispAllocNode := Nil;
   Exit;
  End;
- 
+
  LispAllocNode := @LispParser.Nodes[LispParser.NodeCount];
- 
+
  { Initialiser le noeud }
  With LispParser.Nodes[LispParser.NodeCount] do Begin
   NodeType := LISP_NODE_NONE;
@@ -4600,7 +4627,7 @@ Begin
   For I := 0 to MAX_LISP_CHILDREN - 1 do
    Children[I] := Nil;
  End;
- 
+
  Inc(LispParser.NodeCount);
 End;
 
@@ -4622,7 +4649,7 @@ Begin
  LispParser.Depth := 0;
  LispParser.ErrorMessage := '';
  LispParser.HasError := False;
- 
+
  For I := 0 to MAX_LISP_NODES - 1 do Begin
   LispParser.Nodes[I].NodeType := LISP_NODE_NONE;
   LispParser.Nodes[I].ChildCount := 0;
@@ -4638,16 +4665,16 @@ Var
  Token: TLispToken;
 Begin
  Token := LispPeekToken;
- 
+
  Node := LispAllocNode;
  If Node = Nil Then Begin
   LispParseAtom := Nil;
   Exit;
  End;
- 
+
  Node^.Line := Token.Line;
  Node^.Column := Token.Column;
- 
+
  Case Token.TokenType of
   LISP_TOKEN_INTEGER: Begin
    Node^.NodeType := LISP_NODE_INTEGER;
@@ -4655,38 +4682,38 @@ Begin
    Node^.StrValue := Token.StrValue;
    Token := LispAdvanceToken;
   End;
-  
+
   LISP_TOKEN_REAL: Begin
    Node^.NodeType := LISP_NODE_REAL;
    Node^.RealValue := Token.RealValue;
    Node^.StrValue := Token.StrValue;
    Token := LispAdvanceToken;
   End;
-  
+
   LISP_TOKEN_STRING: Begin
    Node^.NodeType := LISP_NODE_STRING;
    Node^.StrValue := Token.StrValue;
    Token := LispAdvanceToken;
   End;
-  
+
   LISP_TOKEN_SYMBOL: Begin
    Node^.NodeType := LISP_NODE_SYMBOL;
    Node^.StrValue := Token.StrValue;
    Token := LispAdvanceToken;
   End;
-  
+
   LISP_TOKEN_NIL: Begin
    Node^.NodeType := LISP_NODE_NIL;
    Node^.StrValue := 'nil';
    Token := LispAdvanceToken;
   End;
-  
+
   LISP_TOKEN_T: Begin
    Node^.NodeType := LISP_NODE_T;
    Node^.StrValue := 't';
    Token := LispAdvanceToken;
   End;
-  
+
   Else Begin
    { Token inattendu }
    LispParser.HasError := True;
@@ -4695,7 +4722,7 @@ Begin
    Exit;
   End;
  End;
- 
+
  LispParseAtom := Node;
 End;
 
@@ -4706,18 +4733,18 @@ Var
  Token: TLispToken;
 Begin
  Token := LispAdvanceToken;  { Consommer le quote }
- 
+
  Node := LispAllocNode;
  If Node = Nil Then Begin
   LispParseQuote := Nil;
   Exit;
  End;
- 
+
  Node^.NodeType := LISP_NODE_QUOTE;
  Node^.Line := Token.Line;
  Node^.Column := Token.Column;
  Node^.StrValue := 'quote';
- 
+
  { Parser l'expression quotée }
  Child := LispParseExpr;
  If Child = Nil Then Begin
@@ -4728,10 +4755,10 @@ Begin
   LispParseQuote := Nil;
   Exit;
  End;
- 
+
  Node^.Children[0] := Child;
  Node^.ChildCount := 1;
- 
+
  LispParseQuote := Node;
 End;
 
@@ -4743,7 +4770,7 @@ Var
  HasDot: Boolean;
 Begin
  Token := LispAdvanceToken;  { Consommer la parenthèse ouvrante }
- 
+
  { Vérifier la profondeur de récursion }
  Inc(LispParser.Depth);
  If LispParser.Depth > MAX_LISP_DEPTH Then Begin
@@ -4752,30 +4779,30 @@ Begin
   LispParseList := Nil;
   Exit;
  End;
- 
+
  Node := LispAllocNode;
  If Node = Nil Then Begin
   Dec(LispParser.Depth);
   LispParseList := Nil;
   Exit;
  End;
- 
+
  Node^.NodeType := LISP_NODE_LIST;
  Node^.Line := Token.Line;
  Node^.Column := Token.Column;
  Node^.ChildCount := 0;
  HasDot := False;
- 
+
  { Parser les éléments de la liste }
  While True do Begin
   Token := LispPeekToken;
-  
+
   { Fin de la liste }
   If Token.TokenType = LISP_TOKEN_RPAREN Then Begin
    Token := LispAdvanceToken;  { Consommer la parenthèse fermante }
    Break;
   End;
-  
+
   { Fin de fichier inattendue }
   If Token.TokenType = LISP_TOKEN_EOF Then Begin
    LispParser.HasError := True;
@@ -4784,7 +4811,7 @@ Begin
    LispParseList := Nil;
    Exit;
   End;
-  
+
   { Erreur de tokenisation }
   If Token.TokenType = LISP_TOKEN_ERROR Then Begin
    LispParser.HasError := True;
@@ -4793,7 +4820,7 @@ Begin
    LispParseList := Nil;
    Exit;
   End;
-  
+
   { Point pour paire pointée }
   If Token.TokenType = LISP_TOKEN_DOT Then Begin
    HasDot := True;
@@ -4801,7 +4828,7 @@ Begin
    Token := LispAdvanceToken;  { Consommer le point }
    Continue;
   End;
-  
+
   { Vérifier le nombre d'enfants }
   If Node^.ChildCount >= MAX_LISP_CHILDREN Then Begin
    LispParser.HasError := True;
@@ -4810,7 +4837,7 @@ Begin
    LispParseList := Nil;
    Exit;
   End;
-  
+
   { Parser l'élément suivant }
   Child := LispParseExpr;
   If Child = Nil Then Begin
@@ -4818,11 +4845,11 @@ Begin
    LispParseList := Nil;
    Exit;
   End;
-  
+
   Node^.Children[Node^.ChildCount] := Child;
   Inc(Node^.ChildCount);
  End;
- 
+
  Dec(LispParser.Depth);
  LispParseList := Node;
 End;
@@ -4833,22 +4860,22 @@ Var
  Token: TLispToken;
 Begin
  Token := LispPeekToken;
- 
+
  { Vérifier les erreurs }
  If LispParser.HasError Then Begin
   LispParseExpr := Nil;
   Exit;
  End;
- 
+
  Case Token.TokenType of
   LISP_TOKEN_LPAREN: Begin
    LispParseExpr := LispParseList;
   End;
-  
+
   LISP_TOKEN_QUOTE: Begin
    LispParseExpr := LispParseQuote;
   End;
-  
+
   LISP_TOKEN_INTEGER,
   LISP_TOKEN_REAL,
   LISP_TOKEN_STRING,
@@ -4857,23 +4884,23 @@ Begin
   LISP_TOKEN_T: Begin
    LispParseExpr := LispParseAtom;
   End;
-  
+
   LISP_TOKEN_RPAREN: Begin
    LispParser.HasError := True;
    LispParser.ErrorMessage := 'Parenthèse fermante inattendue';
    LispParseExpr := Nil;
   End;
-  
+
   LISP_TOKEN_EOF: Begin
    LispParseExpr := Nil;  { Fin normale }
   End;
-  
+
   LISP_TOKEN_ERROR: Begin
    LispParser.HasError := True;
    LispParser.ErrorMessage := 'Erreur de tokenisation: ' + Token.StrValue;
    LispParseExpr := Nil;
   End;
-  
+
   Else Begin
    LispParser.HasError := True;
    LispParser.ErrorMessage := 'Token inattendu: ' + LispTokenTypeName(Token.TokenType);
@@ -4887,7 +4914,7 @@ Function LispParse(Const S: String): PLispNode;
 Begin
  { D'abord tokeniser }
  LispTokenize(S);
- 
+
  { Vérifier les erreurs de tokenisation }
  If LispTokenizer.HasError Then Begin
   LispParser.HasError := True;
@@ -4895,13 +4922,13 @@ Begin
   LispParse := Nil;
   Exit;
  End;
- 
+
  { Réinitialiser le parseur }
  LispClearParser;
- 
+
  { Parser l'expression }
  LispParser.Root := LispParseExpr;
- 
+
  LispParse := LispParser.Root;
 End;
 
@@ -4934,58 +4961,58 @@ Begin
   WriteLn('(nil)');
   Exit;
  End;
- 
+
  { Créer l'indentation }
  Prefix := '';
  For I := 1 to Indent do
   Prefix := Prefix + '  ';
- 
+
  { Afficher selon le type }
  Case Node^.NodeType of
   LISP_NODE_INTEGER: Begin
    Str(Node^.IntValue, S);
    WriteLn(Prefix, 'INTEGER: ', S);
   End;
-  
+
   LISP_NODE_REAL: Begin
    Str(Node^.RealValue:0:6, S);
    WriteLn(Prefix, 'REAL: ', S);
   End;
-  
+
   LISP_NODE_STRING: Begin
    WriteLn(Prefix, 'STRING: "', Node^.StrValue, '"');
   End;
-  
+
   LISP_NODE_SYMBOL: Begin
    WriteLn(Prefix, 'SYMBOL: ', Node^.StrValue);
   End;
-  
+
   LISP_NODE_NIL: Begin
    WriteLn(Prefix, 'NIL');
   End;
-  
+
   LISP_NODE_T: Begin
    WriteLn(Prefix, 'T');
   End;
-  
+
   LISP_NODE_LIST: Begin
    WriteLn(Prefix, 'LIST (', Node^.ChildCount, ' elements):');
    For I := 0 to Node^.ChildCount - 1 do
     LispPrintNode(Node^.Children[I], Indent + 1);
   End;
-  
+
   LISP_NODE_QUOTE: Begin
    WriteLn(Prefix, 'QUOTE:');
    If Node^.ChildCount > 0 Then
     LispPrintNode(Node^.Children[0], Indent + 1);
   End;
-  
+
   LISP_NODE_DOTPAIR: Begin
    WriteLn(Prefix, 'DOTPAIR:');
    For I := 0 to Node^.ChildCount - 1 do
     LispPrintNode(Node^.Children[I], Indent + 1);
   End;
-  
+
   Else Begin
    WriteLn(Prefix, 'UNKNOWN');
   End;
@@ -5014,13 +5041,13 @@ Begin
   LispNodeToString := 'nil';
   Exit;
  End;
- 
+
  Case Node^.NodeType of
   LISP_NODE_INTEGER: Begin
    Str(Node^.IntValue, S);
    LispNodeToString := S;
   End;
-  
+
   LISP_NODE_REAL: Begin
    Str(Node^.RealValue:0:6, S);
    { Enlever les zéros trailing }
@@ -5028,23 +5055,23 @@ Begin
     Delete(S, Length(S), 1);
    LispNodeToString := S;
   End;
-  
+
   LISP_NODE_STRING: Begin
    LispNodeToString := '"' + Node^.StrValue + '"';
   End;
-  
+
   LISP_NODE_SYMBOL: Begin
    LispNodeToString := Node^.StrValue;
   End;
-  
+
   LISP_NODE_NIL: Begin
    LispNodeToString := 'nil';
   End;
-  
+
   LISP_NODE_T: Begin
    LispNodeToString := 't';
   End;
-  
+
   LISP_NODE_LIST: Begin
    S := '(';
    For I := 0 to Node^.ChildCount - 1 do Begin
@@ -5054,24 +5081,24 @@ Begin
    S := S + ')';
    LispNodeToString := S;
   End;
-  
+
   LISP_NODE_QUOTE: Begin
    If Node^.ChildCount > 0 Then
     LispNodeToString := '''' + LispNodeToString(Node^.Children[0])
    Else
     LispNodeToString := '''nil';
   End;
-  
+
   LISP_NODE_DOTPAIR: Begin
    If Node^.ChildCount >= 2 Then
-    LispNodeToString := '(' + LispNodeToString(Node^.Children[0]) + ' . ' + 
+    LispNodeToString := '(' + LispNodeToString(Node^.Children[0]) + ' . ' +
                         LispNodeToString(Node^.Children[1]) + ')'
    Else If Node^.ChildCount = 1 Then
     LispNodeToString := '(' + LispNodeToString(Node^.Children[0]) + ' . nil)'
    Else
     LispNodeToString := '(nil . nil)';
   End;
-  
+
   Else Begin
    LispNodeToString := '???';
   End;
@@ -5150,21 +5177,21 @@ Begin
  LispEvaluator.ErrorMessage := '';
  LispEvaluator.HasError := False;
  LispEvalDebugMode := False;
- 
+
  { Initialiser la dernière valeur à nil }
  LispEvaluator.LastResult.ValueType := LISP_VAL_NIL;
  LispEvaluator.LastResult.IntValue := 0;
  LispEvaluator.LastResult.RealValue := 0.0;
  LispEvaluator.LastResult.StrValue := '';
  LispEvaluator.LastResult.ListNode := Nil;
- 
+
  { Initialiser toutes les variables }
  For I := 0 to MAX_LISP_VARIABLES - 1 do Begin
   LispEvaluator.Variables[I].Name := '';
   LispEvaluator.Variables[I].IsDefined := False;
   LispEvaluator.Variables[I].Value.ValueType := LISP_VAL_NIL;
  End;
- 
+
  { Définir la constante PI }
  LispSetVariable('PI', LispMakeReal(3.14159265358979));
 End;
@@ -5290,15 +5317,15 @@ Begin
  For I := 1 to Length(UpperName) do
   If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
    UpperName[I] := Chr(Ord(UpperName[I]) - 32);
- 
+
  For I := 0 to LispEvaluator.VarCount - 1 do Begin
-  If LispEvaluator.Variables[I].IsDefined and 
+  If LispEvaluator.Variables[I].IsDefined and
      (LispEvaluator.Variables[I].Name = UpperName) Then Begin
    LispGetVariable := LispEvaluator.Variables[I].Value;
    Exit;
   End;
  End;
- 
+
  { Variable non trouvée, retourner nil }
  LispGetVariable := LispMakeNil;
 End;
@@ -5313,16 +5340,16 @@ Begin
  For I := 1 to Length(UpperName) do
   If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
    UpperName[I] := Chr(Ord(UpperName[I]) - 32);
- 
+
  { Chercher si la variable existe déjà }
  For I := 0 to LispEvaluator.VarCount - 1 do Begin
-  If LispEvaluator.Variables[I].IsDefined and 
+  If LispEvaluator.Variables[I].IsDefined and
      (LispEvaluator.Variables[I].Name = UpperName) Then Begin
    LispEvaluator.Variables[I].Value := Value;
    Exit;
   End;
  End;
- 
+
  { Créer une nouvelle variable }
  If LispEvaluator.VarCount < MAX_LISP_VARIABLES Then Begin
   LispEvaluator.Variables[LispEvaluator.VarCount].Name := UpperName;
@@ -5339,33 +5366,33 @@ Begin
   LispEvalAtom := LispMakeNil;
   Exit;
  End;
- 
+
  Case Node^.NodeType of
   LISP_NODE_INTEGER: Begin
    LispEvalAtom := LispMakeInt(Node^.IntValue);
   End;
-  
+
   LISP_NODE_REAL: Begin
    LispEvalAtom := LispMakeReal(Node^.RealValue);
   End;
-  
+
   LISP_NODE_STRING: Begin
    LispEvalAtom := LispMakeString(Node^.StrValue);
   End;
-  
+
   LISP_NODE_SYMBOL: Begin
    { Chercher la valeur de la variable }
    LispEvalAtom := LispGetVariable(Node^.StrValue);
   End;
-  
+
   LISP_NODE_NIL: Begin
    LispEvalAtom := LispMakeNil;
   End;
-  
+
   LISP_NODE_T: Begin
    LispEvalAtom := LispMakeT;
   End;
-  
+
   Else Begin
    LispEvalAtom := LispMakeError('Type d''atome inattendu');
   End;
@@ -5385,11 +5412,11 @@ Begin
   LispEvalMathOp := LispMakeError('Fonction ' + FuncName + ' requiert au moins un argument');
   Exit;
  End;
- 
+
  IsReal := False;
  Total := 0;
  IntTotal := 0;
- 
+
  { Addition }
  If FuncName = '+' Then Begin
   Total := 0;
@@ -5408,7 +5435,7 @@ Begin
    LispEvalMathOp := LispMakeInt(Round(Total));
   Exit;
  End;
- 
+
  { Soustraction }
  If FuncName = '-' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -5424,7 +5451,7 @@ Begin
     LispEvalMathOp := LispMakeInt(-ArgVal.IntValue);
    Exit;
   End;
-  
+
   { Premier argument }
   ArgVal := LispEval(Node^.Children[1]);
   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
@@ -5433,7 +5460,7 @@ Begin
   End;
   If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
   Total := LispValueToReal(ArgVal);
-  
+
   { Soustraire les autres arguments }
   For I := 2 to Node^.ChildCount - 1 do Begin
    ArgVal := LispEval(Node^.Children[I]);
@@ -5450,7 +5477,7 @@ Begin
    LispEvalMathOp := LispMakeInt(Round(Total));
   Exit;
  End;
- 
+
  { Multiplication }
  If FuncName = '*' Then Begin
   Total := 1;
@@ -5469,21 +5496,21 @@ Begin
    LispEvalMathOp := LispMakeInt(Round(Total));
   Exit;
  End;
- 
+
  { Division }
  If FuncName = '/' Then Begin
   If Node^.ChildCount < 2 Then Begin
    LispEvalMathOp := LispMakeError('/ requiert au moins 2 arguments');
    Exit;
   End;
-  
+
   ArgVal := LispEval(Node^.Children[1]);
   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
    LispEvalMathOp := ArgVal;
    Exit;
   End;
   Total := LispValueToReal(ArgVal);
-  
+
   For I := 2 to Node^.ChildCount - 1 do Begin
    ArgVal := LispEval(Node^.Children[I]);
    If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
@@ -5500,7 +5527,7 @@ Begin
   LispEvalMathOp := LispMakeReal(Total);
   Exit;
  End;
- 
+
  { Valeur absolue }
  If FuncName = 'ABS' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -5520,7 +5547,7 @@ Begin
    LispEvalMathOp := LispMakeInt(Round(Total));
   Exit;
  End;
- 
+
  { Modulo (rem) }
  If (FuncName = 'REM') or (FuncName = 'MOD') Then Begin
   If Node^.ChildCount < 3 Then Begin
@@ -5533,7 +5560,7 @@ Begin
    Exit;
   End;
   IntTotal := Round(LispValueToReal(ArgVal));
-  
+
   ArgVal := LispEval(Node^.Children[2]);
   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
    LispEvalMathOp := ArgVal;
@@ -5547,7 +5574,7 @@ Begin
   LispEvalMathOp := LispMakeInt(IntTotal mod Round(ArgNum));
   Exit;
  End;
- 
+
  { Minimum }
  If FuncName = 'MIN' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -5561,7 +5588,7 @@ Begin
   End;
   If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
   Total := LispValueToReal(ArgVal);
-  
+
   For I := 2 to Node^.ChildCount - 1 do Begin
    ArgVal := LispEval(Node^.Children[I]);
    If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
@@ -5578,7 +5605,7 @@ Begin
    LispEvalMathOp := LispMakeInt(Round(Total));
   Exit;
  End;
- 
+
  { Maximum }
  If FuncName = 'MAX' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -5592,7 +5619,7 @@ Begin
   End;
   If ArgVal.ValueType = LISP_VAL_REAL Then IsReal := True;
   Total := LispValueToReal(ArgVal);
-  
+
   For I := 2 to Node^.ChildCount - 1 do Begin
    ArgVal := LispEval(Node^.Children[I]);
    If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
@@ -5609,7 +5636,7 @@ Begin
    LispEvalMathOp := LispMakeInt(Round(Total));
   Exit;
  End;
- 
+
  { Incrément de 1 }
  If FuncName = '1+' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -5627,7 +5654,7 @@ Begin
    LispEvalMathOp := LispMakeInt(ArgVal.IntValue + 1);
   Exit;
  End;
- 
+
  { Décrément de 1 }
  If FuncName = '1-' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -5645,13 +5672,14 @@ Begin
    LispEvalMathOp := LispMakeInt(ArgVal.IntValue - 1);
   Exit;
  End;
- 
+
  LispEvalMathOp := LispMakeError('Fonction mathématique inconnue: ' + FuncName);
 End;
 
 { Évaluer une fonction trigonométrique (sin, cos, tan, atan, asin, acos, sqrt, expt, exp, log) }
 Function LispEvalTrigOp(Const FuncName: String; Node: PLispNode): TLispValue;
 Var
+ Result:TLispValue;
  ArgVal, ArgVal2: TLispValue;
  Num, Num2: Real;
 Begin
@@ -5659,26 +5687,26 @@ Begin
   LispEvalTrigOp := LispMakeError(FuncName + ' requiert au moins un argument');
   Exit;
  End;
- 
+
  ArgVal := LispEval(Node^.Children[1]);
  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalTrigOp := ArgVal;
   Exit;
  End;
  Num := LispValueToReal(ArgVal);
- 
+
  { Sinus }
  If FuncName = 'SIN' Then Begin
   LispEvalTrigOp := LispMakeReal(Sin(Num));
   Exit;
  End;
- 
+
  { Cosinus }
  If FuncName = 'COS' Then Begin
   LispEvalTrigOp := LispMakeReal(Cos(Num));
   Exit;
  End;
- 
+
  { Tangente }
  If FuncName = 'TAN' Then Begin
   If Cos(Num) = 0 Then Begin
@@ -5688,7 +5716,7 @@ Begin
   LispEvalTrigOp := LispMakeReal(Sin(Num) / Cos(Num));
   Exit;
  End;
- 
+
  { Arc tangente }
  If FuncName = 'ATAN' Then Begin
   If Node^.ChildCount >= 3 Then Begin
@@ -5712,7 +5740,7 @@ Begin
    LispEvalTrigOp := LispMakeReal(ArcTan(Num));
   Exit;
  End;
- 
+
  { Racine carrée }
  If FuncName = 'SQRT' Then Begin
   If Num < 0 Then Begin
@@ -5722,7 +5750,7 @@ Begin
   LispEvalTrigOp := LispMakeReal(Sqrt(Num));
   Exit;
  End;
- 
+
  { Puissance }
  If FuncName = 'EXPT' Then Begin
   If Node^.ChildCount < 3 Then Begin
@@ -5743,18 +5771,19 @@ Begin
    LispEvalTrigOp := LispMakeError('Puissance fractionnaire d''un nombre négatif');
    Exit;
   End;
-  LispEvalTrigOp := LispMakeReal(Exp(Num2 * Ln(Abs(Num))));
+  Result := LispMakeReal(Exp(Num2 * Ln(Abs(Num))));
   If (Num < 0) and (Round(Num2) mod 2 = 1) Then
-   LispEvalTrigOp.RealValue := -LispEvalTrigOp.RealValue;
+   Result.RealValue := -Result.RealValue;
+  LispEvalTrigOp := Result;
   Exit;
  End;
- 
+
  { Exponentielle (e^x) }
  If FuncName = 'EXP' Then Begin
   LispEvalTrigOp := LispMakeReal(Exp(Num));
   Exit;
  End;
- 
+
  { Logarithme naturel }
  If (FuncName = 'LOG') or (FuncName = 'LN') Then Begin
   If Num <= 0 Then Begin
@@ -5764,7 +5793,7 @@ Begin
   LispEvalTrigOp := LispMakeReal(Ln(Num));
   Exit;
  End;
- 
+
  { Logarithme base 10 }
  If FuncName = 'LOG10' Then Begin
   If Num <= 0 Then Begin
@@ -5774,31 +5803,31 @@ Begin
   LispEvalTrigOp := LispMakeReal(Ln(Num) / Ln(10));
   Exit;
  End;
- 
+
  { Conversion degrés -> radians }
  If (FuncName = 'DTR') or (FuncName = 'DTOR') Then Begin
   LispEvalTrigOp := LispMakeReal(Num * 3.14159265358979 / 180);
   Exit;
  End;
- 
+
  { Conversion radians -> degrés }
  If (FuncName = 'RTD') or (FuncName = 'RTOD') Then Begin
   LispEvalTrigOp := LispMakeReal(Num * 180 / 3.14159265358979);
   Exit;
  End;
- 
+
  { Arrondi }
  If FuncName = 'FIX' Then Begin
   LispEvalTrigOp := LispMakeInt(Trunc(Num));
   Exit;
  End;
- 
+
  { Partie décimale * partie entière pour obtenir un entier }
  If FuncName = 'FLOAT' Then Begin
   LispEvalTrigOp := LispMakeReal(Num);
   Exit;
  End;
- 
+
  LispEvalTrigOp := LispMakeError('Fonction trigonométrique inconnue: ' + FuncName);
 End;
 
@@ -5814,25 +5843,25 @@ Begin
   LispEvalCompareOp := LispMakeError(FuncName + ' requiert au moins 2 arguments');
   Exit;
  End;
- 
+
  ArgVal1 := LispEval(Node^.Children[1]);
  If ArgVal1.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalCompareOp := ArgVal1;
   Exit;
  End;
- 
+
  AllTrue := True;
- 
+
  For I := 2 to Node^.ChildCount - 1 do Begin
   ArgVal2 := LispEval(Node^.Children[I]);
   If ArgVal2.ValueType = LISP_VAL_ERROR Then Begin
    LispEvalCompareOp := ArgVal2;
    Exit;
   End;
-  
+
   Num1 := LispValueToReal(ArgVal1);
   Num2 := LispValueToReal(ArgVal2);
-  
+
   { Inférieur }
   If FuncName = '<' Then Begin
    If Not (Num1 < Num2) Then AllTrue := False;
@@ -5866,7 +5895,7 @@ Begin
   Else If FuncName = 'EQUAL' Then Begin
    If (ArgVal1.ValueType <> ArgVal2.ValueType) Then
     AllTrue := False
-   Else If (ArgVal1.ValueType = LISP_VAL_STRING) and 
+   Else If (ArgVal1.ValueType = LISP_VAL_STRING) and
            (ArgVal1.StrValue <> ArgVal2.StrValue) Then
     AllTrue := False
    Else If Num1 <> Num2 Then
@@ -5876,11 +5905,11 @@ Begin
    LispEvalCompareOp := LispMakeError('Opérateur de comparaison inconnu: ' + FuncName);
    Exit;
   End;
-  
+
   { Préparer pour la prochaine comparaison }
   ArgVal1 := ArgVal2;
  End;
- 
+
  If AllTrue Then
   LispEvalCompareOp := LispMakeT
  Else
@@ -5899,25 +5928,25 @@ Begin
   LispEvalList := LispMakeNil;
   Exit;
  End;
- 
+
  { Obtenir le nom de la fonction }
  FuncNode := Node^.Children[0];
  If FuncNode = Nil Then Begin
   LispEvalList := LispMakeError('Nom de fonction manquant');
   Exit;
  End;
- 
+
  If FuncNode^.NodeType <> LISP_NODE_SYMBOL Then Begin
   LispEvalList := LispMakeError('Le premier élément doit être un symbole');
   Exit;
  End;
- 
+
  FuncName := FuncNode^.StrValue;
  { Convertir en majuscules }
  For I := 1 to Length(FuncName) do
   If (FuncName[I] >= 'a') and (FuncName[I] <= 'z') Then
    FuncName[I] := Chr(Ord(FuncName[I]) - 32);
- 
+
  { Opérations mathématiques de base }
  If (FuncName = '+') or (FuncName = '-') or (FuncName = '*') or (FuncName = '/') or
     (FuncName = 'ABS') or (FuncName = 'REM') or (FuncName = 'MOD') or
@@ -5925,7 +5954,7 @@ Begin
   LispEvalList := LispEvalMathOp(FuncName, Node);
   Exit;
  End;
- 
+
  { Fonctions trigonométriques et mathématiques avancées }
  If (FuncName = 'SIN') or (FuncName = 'COS') or (FuncName = 'TAN') or
     (FuncName = 'ATAN') or (FuncName = 'SQRT') or (FuncName = 'EXPT') or
@@ -5936,14 +5965,14 @@ Begin
   LispEvalList := LispEvalTrigOp(FuncName, Node);
   Exit;
  End;
- 
+
  { Opérations de comparaison }
  If (FuncName = '<') or (FuncName = '>') or (FuncName = '<=') or (FuncName = '>=') or
     (FuncName = '=') or (FuncName = '/=') or (FuncName = 'EQ') or (FuncName = 'EQUAL') Then Begin
   LispEvalList := LispEvalCompareOp(FuncName, Node);
   Exit;
  End;
- 
+
  { Opérations logiques }
  If FuncName = 'NOT' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -5961,7 +5990,7 @@ Begin
    LispEvalList := LispMakeT;
   Exit;
  End;
- 
+
  If FuncName = 'AND' Then Begin
   For I := 1 to Node^.ChildCount - 1 do Begin
    ArgVal := LispEval(Node^.Children[I]);
@@ -5977,7 +6006,7 @@ Begin
   LispEvalList := ArgVal;  { Retourner la dernière valeur si toutes vraies }
   Exit;
  End;
- 
+
  If FuncName = 'OR' Then Begin
   For I := 1 to Node^.ChildCount - 1 do Begin
    ArgVal := LispEval(Node^.Children[I]);
@@ -5993,7 +6022,7 @@ Begin
   LispEvalList := LispMakeNil;
   Exit;
  End;
- 
+
  { NULL - test si nil }
  If FuncName = 'NULL' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -6011,7 +6040,7 @@ Begin
    LispEvalList := LispMakeNil;
   Exit;
  End;
- 
+
  { ATOM - test si atome (non-liste) }
  If FuncName = 'ATOM' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -6029,7 +6058,7 @@ Begin
    LispEvalList := LispMakeNil;
   Exit;
  End;
- 
+
  { NUMBERP - test si nombre }
  If FuncName = 'NUMBERP' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -6047,7 +6076,7 @@ Begin
    LispEvalList := LispMakeNil;
   Exit;
  End;
- 
+
  { ZEROP - test si zéro }
  If FuncName = 'ZEROP' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -6065,7 +6094,7 @@ Begin
    LispEvalList := LispMakeNil;
   Exit;
  End;
- 
+
  { MINUSP - test si négatif }
  If FuncName = 'MINUSP' Then Begin
   If Node^.ChildCount < 2 Then Begin
@@ -6083,7 +6112,7 @@ Begin
    LispEvalList := LispMakeNil;
   Exit;
  End;
- 
+
  { Fonctions de dessin AutoLISP - TODO 14 }
  If (FuncName = 'ENTMAKE') or (FuncName = 'ENTGET') or (FuncName = 'ENTMOD') or
     (FuncName = 'ENTSEL') or (FuncName = 'SSGET') or (FuncName = 'SSADD') or
@@ -6091,7 +6120,7 @@ Begin
   LispEvalList := LispEvalDrawOp(FuncName, Node);
   Exit;
  End;
- 
+
  { Fonctions de manipulation de chaînes, listes et variables - TODO 15 }
  If (FuncName = 'SETQ') or (FuncName = 'DEFUN') or (FuncName = 'IF') or
     (FuncName = 'COND') or (FuncName = 'WHILE') or (FuncName = 'FOREACH') or
@@ -6103,7 +6132,7 @@ Begin
   LispEvalList := LispEvalControlOp(FuncName, Node);
   Exit;
  End;
- 
+
  { Fonction inconnue }
  LispEvalList := LispMakeError('Fonction inconnue: ' + FuncName);
 End;
@@ -6118,13 +6147,13 @@ Begin
   Dec(LispEvaluator.StackDepth);
   Exit;
  End;
- 
+
  If Node = Nil Then Begin
   LispEval := LispMakeNil;
   Dec(LispEvaluator.StackDepth);
   Exit;
  End;
- 
+
  Case Node^.NodeType of
   LISP_NODE_INTEGER,
   LISP_NODE_REAL,
@@ -6134,11 +6163,11 @@ Begin
   LISP_NODE_T: Begin
    LispEval := LispEvalAtom(Node);
   End;
-  
+
   LISP_NODE_LIST: Begin
    LispEval := LispEvalList(Node);
   End;
-  
+
   LISP_NODE_QUOTE: Begin
    { Une expression quotée n'est pas évaluée }
    LispEval.ValueType := LISP_VAL_LIST;
@@ -6150,12 +6179,12 @@ Begin
    Else
     LispEval.ListNode := Nil;
   End;
-  
+
   Else Begin
    LispEval := LispMakeError('Type de noeud inconnu');
   End;
  End;
- 
+
  Dec(LispEvaluator.StackDepth);
 End;
 
@@ -6168,21 +6197,21 @@ Begin
  LispEvaluator.HasError := False;
  LispEvaluator.ErrorMessage := '';
  LispEvaluator.StackDepth := 0;
- 
+
  { Parser l'expression }
  Node := LispParse(S);
- 
+
  { Vérifier les erreurs de parsing }
  If LispParser.HasError Then Begin
   LispEvaluate := LispMakeError(LispParser.ErrorMessage);
   Exit;
  End;
- 
+
  If Node = Nil Then Begin
   LispEvaluate := LispMakeNil;
   Exit;
  End;
- 
+
  { Évaluer l'expression }
  LispEvaluator.LastResult := LispEval(Node);
  LispEvaluate := LispEvaluator.LastResult;
@@ -6262,7 +6291,7 @@ Begin
  For I := 1 to Length(Upper) do
   If (Upper[I] >= 'a') and (Upper[I] <= 'z') Then
    Upper[I] := Chr(Ord(Upper[I]) - 32);
- 
+
  If Upper = 'LINE' Then
   StringToObjType := OBJ_LINE
  Else If Upper = 'CIRCLE' Then
@@ -6291,12 +6320,12 @@ Begin
   LispEntityToList := LispMakeNil;
   Exit;
  End;
- 
+
  If DrawObjects[EntityIndex].ObjType = OBJ_NONE Then Begin
   LispEntityToList := LispMakeNil;
   Exit;
  End;
- 
+
  { Créer la liste principale }
  Node := LispAllocNode;
  If Node = Nil Then Begin
@@ -6305,13 +6334,13 @@ Begin
  End;
  Node^.NodeType := LISP_NODE_LIST;
  Node^.ChildCount := 0;
- 
+
  { Ajouter la paire (-1 . ename) - Nom d'entité }
  PairNode := LispAllocNode;
  If PairNode <> Nil Then Begin
   PairNode^.NodeType := LISP_NODE_DOTPAIR;
   PairNode^.ChildCount := 2;
-  
+
   { Code DXF -1 }
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
@@ -6319,7 +6348,7 @@ Begin
    ValueNode^.IntValue := DXF_ENAME;
    PairNode^.Children[0] := ValueNode;
   End;
-  
+
   { Valeur = index de l'entité }
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
@@ -6327,24 +6356,24 @@ Begin
    ValueNode^.IntValue := EntityIndex;
    PairNode^.Children[1] := ValueNode;
   End;
-  
+
   Node^.Children[Node^.ChildCount] := PairNode;
   Inc(Node^.ChildCount);
  End;
- 
+
  { Ajouter la paire (0 . type) - Type d'entité }
  PairNode := LispAllocNode;
  If PairNode <> Nil Then Begin
   PairNode^.NodeType := LISP_NODE_DOTPAIR;
   PairNode^.ChildCount := 2;
-  
+
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
    ValueNode^.NodeType := LISP_NODE_INTEGER;
    ValueNode^.IntValue := DXF_ENTITY_TYPE;
    PairNode^.Children[0] := ValueNode;
   End;
-  
+
   TypeStr := ObjTypeToString(DrawObjects[EntityIndex].ObjType);
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
@@ -6352,160 +6381,160 @@ Begin
    ValueNode^.StrValue := TypeStr;
    PairNode^.Children[1] := ValueNode;
   End;
-  
+
   Node^.Children[Node^.ChildCount] := PairNode;
   Inc(Node^.ChildCount);
  End;
- 
+
  { Ajouter la paire (62 . color) - Couleur }
  PairNode := LispAllocNode;
  If PairNode <> Nil Then Begin
   PairNode^.NodeType := LISP_NODE_DOTPAIR;
   PairNode^.ChildCount := 2;
-  
+
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
    ValueNode^.NodeType := LISP_NODE_INTEGER;
    ValueNode^.IntValue := DXF_COLOR;
    PairNode^.Children[0] := ValueNode;
   End;
-  
+
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
    ValueNode^.NodeType := LISP_NODE_INTEGER;
    ValueNode^.IntValue := DrawObjects[EntityIndex].Color;
    PairNode^.Children[1] := ValueNode;
   End;
-  
+
   Node^.Children[Node^.ChildCount] := PairNode;
   Inc(Node^.ChildCount);
  End;
- 
+
  { Ajouter les coordonnées (10 . x1) (20 . y1) }
  { Point 1 / Centre }
  PairNode := LispAllocNode;
  If PairNode <> Nil Then Begin
   PairNode^.NodeType := LISP_NODE_DOTPAIR;
   PairNode^.ChildCount := 2;
-  
+
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
    ValueNode^.NodeType := LISP_NODE_INTEGER;
    ValueNode^.IntValue := DXF_X1;
    PairNode^.Children[0] := ValueNode;
   End;
-  
+
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
    ValueNode^.NodeType := LISP_NODE_REAL;
    ValueNode^.RealValue := DrawObjects[EntityIndex].X1;
    PairNode^.Children[1] := ValueNode;
   End;
-  
+
   Node^.Children[Node^.ChildCount] := PairNode;
   Inc(Node^.ChildCount);
  End;
- 
+
  PairNode := LispAllocNode;
  If PairNode <> Nil Then Begin
   PairNode^.NodeType := LISP_NODE_DOTPAIR;
   PairNode^.ChildCount := 2;
-  
+
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
    ValueNode^.NodeType := LISP_NODE_INTEGER;
    ValueNode^.IntValue := DXF_Y1;
    PairNode^.Children[0] := ValueNode;
   End;
-  
+
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
    ValueNode^.NodeType := LISP_NODE_REAL;
    ValueNode^.RealValue := DrawObjects[EntityIndex].Y1;
    PairNode^.Children[1] := ValueNode;
   End;
-  
+
   Node^.Children[Node^.ChildCount] := PairNode;
   Inc(Node^.ChildCount);
  End;
- 
+
  { Pour les lignes et rectangles, ajouter le point 2 (11 . x2) (21 . y2) }
- If (DrawObjects[EntityIndex].ObjType = OBJ_LINE) or 
+ If (DrawObjects[EntityIndex].ObjType = OBJ_LINE) or
     (DrawObjects[EntityIndex].ObjType = OBJ_RECTANGLE) Then Begin
   PairNode := LispAllocNode;
   If PairNode <> Nil Then Begin
    PairNode^.NodeType := LISP_NODE_DOTPAIR;
    PairNode^.ChildCount := 2;
-   
+
    ValueNode := LispAllocNode;
    If ValueNode <> Nil Then Begin
     ValueNode^.NodeType := LISP_NODE_INTEGER;
     ValueNode^.IntValue := DXF_X2;
     PairNode^.Children[0] := ValueNode;
    End;
-   
+
    ValueNode := LispAllocNode;
    If ValueNode <> Nil Then Begin
     ValueNode^.NodeType := LISP_NODE_REAL;
     ValueNode^.RealValue := DrawObjects[EntityIndex].X2;
     PairNode^.Children[1] := ValueNode;
    End;
-   
+
    Node^.Children[Node^.ChildCount] := PairNode;
    Inc(Node^.ChildCount);
   End;
-  
+
   PairNode := LispAllocNode;
   If PairNode <> Nil Then Begin
    PairNode^.NodeType := LISP_NODE_DOTPAIR;
    PairNode^.ChildCount := 2;
-   
+
    ValueNode := LispAllocNode;
    If ValueNode <> Nil Then Begin
     ValueNode^.NodeType := LISP_NODE_INTEGER;
     ValueNode^.IntValue := DXF_Y2;
     PairNode^.Children[0] := ValueNode;
    End;
-   
+
    ValueNode := LispAllocNode;
    If ValueNode <> Nil Then Begin
     ValueNode^.NodeType := LISP_NODE_REAL;
     ValueNode^.RealValue := DrawObjects[EntityIndex].Y2;
     PairNode^.Children[1] := ValueNode;
    End;
-   
+
    Node^.Children[Node^.ChildCount] := PairNode;
    Inc(Node^.ChildCount);
   End;
  End;
- 
+
  { Pour les cercles et arcs, ajouter le rayon (40 . radius) }
- If (DrawObjects[EntityIndex].ObjType = OBJ_CIRCLE) or 
+ If (DrawObjects[EntityIndex].ObjType = OBJ_CIRCLE) or
     (DrawObjects[EntityIndex].ObjType = OBJ_ARC) Then Begin
   PairNode := LispAllocNode;
   If PairNode <> Nil Then Begin
    PairNode^.NodeType := LISP_NODE_DOTPAIR;
    PairNode^.ChildCount := 2;
-   
+
    ValueNode := LispAllocNode;
    If ValueNode <> Nil Then Begin
     ValueNode^.NodeType := LISP_NODE_INTEGER;
     ValueNode^.IntValue := DXF_RADIUS;
     PairNode^.Children[0] := ValueNode;
    End;
-   
+
    ValueNode := LispAllocNode;
    If ValueNode <> Nil Then Begin
     ValueNode^.NodeType := LISP_NODE_REAL;
     ValueNode^.RealValue := DrawObjects[EntityIndex].Radius;
     PairNode^.Children[1] := ValueNode;
    End;
-   
+
    Node^.Children[Node^.ChildCount] := PairNode;
    Inc(Node^.ChildCount);
   End;
  End;
- 
+
  LispEntityToList.ValueType := LISP_VAL_LIST;
  LispEntityToList.IntValue := 0;
  LispEntityToList.RealValue := 0;
@@ -6520,19 +6549,19 @@ Var
  PairNode, CodeNode: PLispNode;
 Begin
  LispFindDXFValue := Nil;
- 
+
  If (Node = Nil) or (Node^.NodeType <> LISP_NODE_LIST) Then Exit;
- 
+
  For I := 0 to Node^.ChildCount - 1 do Begin
   PairNode := Node^.Children[I];
   If PairNode = Nil Then Continue;
-  
+
   { Vérifier si c'est une paire pointée ou une liste de 2 éléments }
-  If (PairNode^.NodeType = LISP_NODE_DOTPAIR) or 
+  If (PairNode^.NodeType = LISP_NODE_DOTPAIR) or
      ((PairNode^.NodeType = LISP_NODE_LIST) and (PairNode^.ChildCount = 2)) Then Begin
    CodeNode := PairNode^.Children[0];
    If CodeNode = Nil Then Continue;
-   
+
    If (CodeNode^.NodeType = LISP_NODE_INTEGER) and (CodeNode^.IntValue = DXFCode) Then Begin
     LispFindDXFValue := PairNode^.Children[1];
     Exit;
@@ -6547,10 +6576,10 @@ Var
  TypeNode: PLispNode;
 Begin
  LispListToEntityType := OBJ_NONE;
- 
+
  TypeNode := LispFindDXFValue(Node, DXF_ENTITY_TYPE);
  If TypeNode = Nil Then Exit;
- 
+
  If TypeNode^.NodeType = LISP_NODE_STRING Then
   LispListToEntityType := StringToObjType(TypeNode^.StrValue)
  Else If TypeNode^.NodeType = LISP_NODE_SYMBOL Then
@@ -6565,13 +6594,13 @@ Var
  X1Node, Y1Node, X2Node, Y2Node, RadiusNode, ColorNode: PLispNode;
 Begin
  LispCreateEntityFromList := -1;
- 
+
  If Node = Nil Then Exit;
- 
+
  { Déterminer le type d'entité }
  ObjType := LispListToEntityType(Node);
  If ObjType = OBJ_NONE Then Exit;
- 
+
  { Trouver un emplacement libre }
  For I := 0 to MAX_OBJECTS - 1 do Begin
   If DrawObjects[I].ObjType = OBJ_NONE Then Begin
@@ -6587,7 +6616,7 @@ Begin
    DrawObjects[I].X2 := 0;
    DrawObjects[I].Y2 := 0;
    DrawObjects[I].Radius := 0;
-   
+
    { Lire les coordonnées du premier point }
    X1Node := LispFindDXFValue(Node, DXF_X1);
    Y1Node := LispFindDXFValue(Node, DXF_Y1);
@@ -6603,7 +6632,7 @@ Begin
     Else If Y1Node^.NodeType = LISP_NODE_INTEGER Then
      DrawObjects[I].Y1 := Y1Node^.IntValue;
    End;
-   
+
    { Lire les coordonnées du deuxième point (pour lignes, rectangles) }
    X2Node := LispFindDXFValue(Node, DXF_X2);
    Y2Node := LispFindDXFValue(Node, DXF_Y2);
@@ -6619,7 +6648,7 @@ Begin
     Else If Y2Node^.NodeType = LISP_NODE_INTEGER Then
      DrawObjects[I].Y2 := Y2Node^.IntValue;
    End;
-   
+
    { Lire le rayon (pour cercles, arcs) }
    RadiusNode := LispFindDXFValue(Node, DXF_RADIUS);
    If RadiusNode <> Nil Then Begin
@@ -6628,14 +6657,14 @@ Begin
     Else If RadiusNode^.NodeType = LISP_NODE_INTEGER Then
      DrawObjects[I].Radius := RadiusNode^.IntValue;
    End;
-   
+
    { Lire la couleur }
    ColorNode := LispFindDXFValue(Node, DXF_COLOR);
    If ColorNode <> Nil Then Begin
     If ColorNode^.NodeType = LISP_NODE_INTEGER Then
      DrawObjects[I].Color := ColorNode^.IntValue;
    End;
-   
+
    LispLastEntity := I;
    LispCreateEntityFromList := I;
    Exit;
@@ -6649,11 +6678,11 @@ Var
  X1Node, Y1Node, X2Node, Y2Node, RadiusNode, ColorNode: PLispNode;
 Begin
  LispModifyEntityFromList := False;
- 
+
  If (EntityIndex < 0) or (EntityIndex >= MAX_OBJECTS) Then Exit;
  If DrawObjects[EntityIndex].ObjType = OBJ_NONE Then Exit;
  If Node = Nil Then Exit;
- 
+
  { Modifier les coordonnées si présentes }
  X1Node := LispFindDXFValue(Node, DXF_X1);
  Y1Node := LispFindDXFValue(Node, DXF_Y1);
@@ -6669,7 +6698,7 @@ Begin
   Else If Y1Node^.NodeType = LISP_NODE_INTEGER Then
    DrawObjects[EntityIndex].Y1 := Y1Node^.IntValue;
  End;
- 
+
  X2Node := LispFindDXFValue(Node, DXF_X2);
  Y2Node := LispFindDXFValue(Node, DXF_Y2);
  If X2Node <> Nil Then Begin
@@ -6684,7 +6713,7 @@ Begin
   Else If Y2Node^.NodeType = LISP_NODE_INTEGER Then
    DrawObjects[EntityIndex].Y2 := Y2Node^.IntValue;
  End;
- 
+
  RadiusNode := LispFindDXFValue(Node, DXF_RADIUS);
  If RadiusNode <> Nil Then Begin
   If RadiusNode^.NodeType = LISP_NODE_REAL Then
@@ -6692,13 +6721,13 @@ Begin
   Else If RadiusNode^.NodeType = LISP_NODE_INTEGER Then
    DrawObjects[EntityIndex].Radius := RadiusNode^.IntValue;
  End;
- 
+
  ColorNode := LispFindDXFValue(Node, DXF_COLOR);
  If ColorNode <> Nil Then Begin
   If ColorNode^.NodeType = LISP_NODE_INTEGER Then
    DrawObjects[EntityIndex].Color := ColorNode^.IntValue;
  End;
- 
+
  LispModifyEntityFromList := True;
 End;
 
@@ -6712,18 +6741,18 @@ Begin
   LispEvalEntmake := LispMakeError('entmake requiert une liste d''entité');
   Exit;
  End;
- 
+
  ArgVal := LispEval(Node^.Children[1]);
  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalEntmake := ArgVal;
   Exit;
  End;
- 
+
  If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
   LispEvalEntmake := LispMakeError('entmake requiert une liste');
   Exit;
  End;
- 
+
  EntityIndex := LispCreateEntityFromList(ArgVal.ListNode);
  If EntityIndex < 0 Then
   LispEvalEntmake := LispMakeNil
@@ -6741,13 +6770,13 @@ Begin
   LispEvalEntget := LispMakeError('entget requiert un nom d''entité');
   Exit;
  End;
- 
+
  ArgVal := LispEval(Node^.Children[1]);
  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalEntget := ArgVal;
   Exit;
  End;
- 
+
  If ArgVal.ValueType = LISP_VAL_ENAME Then
   EntityIndex := ArgVal.IntValue
  Else If ArgVal.ValueType = LISP_VAL_INTEGER Then
@@ -6756,7 +6785,7 @@ Begin
   LispEvalEntget := LispMakeError('entget requiert un nom d''entité valide');
   Exit;
  End;
- 
+
  LispEvalEntget := LispEntityToList(EntityIndex);
 End;
 
@@ -6771,32 +6800,32 @@ Begin
   LispEvalEntmod := LispMakeError('entmod requiert une liste d''entité');
   Exit;
  End;
- 
+
  ArgVal := LispEval(Node^.Children[1]);
  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalEntmod := ArgVal;
   Exit;
  End;
- 
+
  If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
   LispEvalEntmod := LispMakeError('entmod requiert une liste');
   Exit;
  End;
- 
+
  { Trouver le nom d'entité dans la liste }
  EnameNode := LispFindDXFValue(ArgVal.ListNode, DXF_ENAME);
  If EnameNode = Nil Then Begin
   LispEvalEntmod := LispMakeError('Liste d''entité sans nom d''entité (-1)');
   Exit;
  End;
- 
+
  If EnameNode^.NodeType = LISP_NODE_INTEGER Then
   EntityIndex := EnameNode^.IntValue
  Else Begin
   LispEvalEntmod := LispMakeError('Nom d''entité invalide');
   Exit;
  End;
- 
+
  If LispModifyEntityFromList(EntityIndex, ArgVal.ListNode) Then
   LispEvalEntmod := LispEntityToList(EntityIndex)
  Else
@@ -6810,10 +6839,10 @@ Var
 Begin
  { Note: Dans une vraie implémentation, cela attendrait un clic de l'utilisateur }
  { Ici, nous retournons simplement la dernière entité sélectionnée si elle existe }
- 
+
  If SelectionSet.Count > 0 Then Begin
   LispLastEntity := SelectionSet.Objects[0];
-  
+
   { Créer une liste (ename point) }
   ResultNode := LispAllocNode;
   If ResultNode = Nil Then Begin
@@ -6822,7 +6851,7 @@ Begin
   End;
   ResultNode^.NodeType := LISP_NODE_LIST;
   ResultNode^.ChildCount := 2;
-  
+
   { Ajouter le nom d'entité }
   ValueNode := LispAllocNode;
   If ValueNode <> Nil Then Begin
@@ -6830,30 +6859,30 @@ Begin
    ValueNode^.IntValue := LispLastEntity;
    ResultNode^.Children[0] := ValueNode;
   End;
-  
+
   { Ajouter le point de sélection (coordonnées du centre de l'objet) }
   PointNode := LispAllocNode;
   If PointNode <> Nil Then Begin
    PointNode^.NodeType := LISP_NODE_LIST;
    PointNode^.ChildCount := 2;
-   
+
    ValueNode := LispAllocNode;
    If ValueNode <> Nil Then Begin
     ValueNode^.NodeType := LISP_NODE_REAL;
     ValueNode^.RealValue := DrawObjects[LispLastEntity].X1;
     PointNode^.Children[0] := ValueNode;
    End;
-   
+
    ValueNode := LispAllocNode;
    If ValueNode <> Nil Then Begin
     ValueNode^.NodeType := LISP_NODE_REAL;
     ValueNode^.RealValue := DrawObjects[LispLastEntity].Y1;
     PointNode^.Children[1] := ValueNode;
    End;
-   
+
    ResultNode^.Children[1] := PointNode;
   End;
-  
+
   LispEvalEntsel.ValueType := LISP_VAL_LIST;
   LispEvalEntsel.ListNode := ResultNode;
   LispEvalEntsel.IntValue := 0;
@@ -6878,18 +6907,18 @@ Begin
    Break;
   End;
  End;
- 
+
  If SelSetIdx < 0 Then Begin
   LispEvalSsget := LispMakeError('Trop de jeux de sélection');
   Exit;
  End;
- 
+
  { Initialiser le jeu de sélection }
  LispSelectionSets[SelSetIdx].Count := 0;
  LispSelectionSets[SelSetIdx].IsActive := True;
  For J := 0 to MAX_SELECTED - 1 do
   LispSelectionSets[SelSetIdx].Entities[J] := -1;
- 
+
  { Vérifier le mode de sélection }
  If Node^.ChildCount >= 2 Then Begin
   ModeVal := LispEval(Node^.Children[1]);
@@ -6897,7 +6926,7 @@ Begin
    ModeStr := ModeVal.StrValue
   Else
    ModeStr := '';
-  
+
   { Mode "X" - Sélectionner tous les objets }
   If (ModeStr = 'X') or (ModeStr = 'x') Then Begin
    For I := 0 to MAX_OBJECTS - 1 do Begin
@@ -6918,7 +6947,7 @@ Begin
    End;
   End;
  End;
- 
+
  If LispSelectionSets[SelSetIdx].Count = 0 Then Begin
   LispSelectionSets[SelSetIdx].IsActive := False;
   LispEvalSsget := LispMakeNil;
@@ -6935,7 +6964,7 @@ Var
  EnameVal, SelSetVal: TLispValue;
 Begin
  { ssadd peut créer un nouveau jeu de sélection ou ajouter à un existant }
- 
+
  If Node^.ChildCount < 2 Then Begin
   { Créer un nouveau jeu de sélection vide }
   For I := 0 to MAX_LISP_SELSETS - 1 do Begin
@@ -6952,20 +6981,20 @@ Begin
   LispEvalSsadd := LispMakeError('Trop de jeux de sélection');
   Exit;
  End;
- 
+
  EnameVal := LispEval(Node^.Children[1]);
  If EnameVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalSsadd := EnameVal;
   Exit;
  End;
- 
+
  If (EnameVal.ValueType = LISP_VAL_ENAME) or (EnameVal.ValueType = LISP_VAL_INTEGER) Then
   EntityIdx := EnameVal.IntValue
  Else Begin
   LispEvalSsadd := LispMakeError('ssadd requiert un nom d''entité valide');
   Exit;
  End;
- 
+
  If Node^.ChildCount >= 3 Then Begin
   { Ajouter à un jeu de sélection existant }
   SelSetVal := LispEval(Node^.Children[2]);
@@ -6988,9 +7017,9 @@ Begin
    End;
   End;
  End;
- 
+
  { Ajouter l'entité au jeu de sélection }
- If (SelSetIdx >= 0) and (SelSetIdx < MAX_LISP_SELSETS) and 
+ If (SelSetIdx >= 0) and (SelSetIdx < MAX_LISP_SELSETS) and
     LispSelectionSets[SelSetIdx].IsActive Then Begin
   If LispSelectionSets[SelSetIdx].Count < MAX_SELECTED Then Begin
    LispSelectionSets[SelSetIdx].Entities[LispSelectionSets[SelSetIdx].Count] := EntityIdx;
@@ -7012,20 +7041,20 @@ Begin
   LispEvalSslength := LispMakeError('sslength requiert un jeu de sélection');
   Exit;
  End;
- 
+
  SelSetVal := LispEval(Node^.Children[1]);
  If SelSetVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalSslength := SelSetVal;
   Exit;
  End;
- 
+
  If SelSetVal.ValueType <> LISP_VAL_SELSET Then Begin
   LispEvalSslength := LispMakeError('sslength requiert un jeu de sélection');
   Exit;
  End;
- 
+
  SelSetIdx := SelSetVal.IntValue;
- If (SelSetIdx >= 0) and (SelSetIdx < MAX_LISP_SELSETS) and 
+ If (SelSetIdx >= 0) and (SelSetIdx < MAX_LISP_SELSETS) and
     LispSelectionSets[SelSetIdx].IsActive Then
   LispEvalSslength := LispMakeInt(LispSelectionSets[SelSetIdx].Count)
  Else
@@ -7042,28 +7071,28 @@ Begin
   LispEvalSsname := LispMakeError('ssname requiert un jeu de sélection et un index');
   Exit;
  End;
- 
+
  SelSetVal := LispEval(Node^.Children[1]);
  If SelSetVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalSsname := SelSetVal;
   Exit;
  End;
- 
+
  If SelSetVal.ValueType <> LISP_VAL_SELSET Then Begin
   LispEvalSsname := LispMakeError('ssname requiert un jeu de sélection');
   Exit;
  End;
- 
+
  IndexVal := LispEval(Node^.Children[2]);
  If IndexVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalSsname := IndexVal;
   Exit;
  End;
- 
+
  Index := Round(LispValueToReal(IndexVal));
  SelSetIdx := SelSetVal.IntValue;
- 
- If (SelSetIdx >= 0) and (SelSetIdx < MAX_LISP_SELSETS) and 
+
+ If (SelSetIdx >= 0) and (SelSetIdx < MAX_LISP_SELSETS) and
     LispSelectionSets[SelSetIdx].IsActive Then Begin
   If (Index >= 0) and (Index < LispSelectionSets[SelSetIdx].Count) Then
    LispEvalSsname := LispMakeEname(LispSelectionSets[SelSetIdx].Entities[Index])
@@ -7086,25 +7115,25 @@ Begin
   LispEvalCommand := LispMakeNil;
   Exit;
  End;
- 
+
  { Obtenir le nom de la commande }
  CmdVal := LispEval(Node^.Children[1]);
  If CmdVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalCommand := CmdVal;
   Exit;
  End;
- 
+
  CmdName := '';
  If CmdVal.ValueType = LISP_VAL_STRING Then
   CmdName := CmdVal.StrValue
  Else If CmdVal.ValueType = LISP_VAL_SYMBOL Then
   CmdName := CmdVal.StrValue;
- 
+
  { Convertir en majuscules }
  For I := 1 to Length(CmdName) do
   If (CmdName[I] >= 'a') and (CmdName[I] <= 'z') Then
    CmdName[I] := Chr(Ord(CmdName[I]) - 32);
- 
+
  { Commande LINE }
  If CmdName = 'LINE' Then Begin
   If Node^.ChildCount >= 4 Then Begin
@@ -7122,7 +7151,7 @@ Begin
       Y1 := CmdVal.ListNode^.Children[1]^.IntValue;
     End;
    End;
-   
+
    CmdVal := LispEval(Node^.Children[3]);
    If (CmdVal.ValueType = LISP_VAL_LIST) and (CmdVal.ListNode <> Nil) Then Begin
     If CmdVal.ListNode^.ChildCount >= 2 Then Begin
@@ -7136,7 +7165,7 @@ Begin
       Y2 := CmdVal.ListNode^.Children[1]^.IntValue;
     End;
    End;
-   
+
    { Créer la ligne }
    For I := 0 to MAX_OBJECTS - 1 do Begin
     If DrawObjects[I].ObjType = OBJ_NONE Then Begin
@@ -7156,7 +7185,7 @@ Begin
   LispEvalCommand := LispMakeNil;
   Exit;
  End;
- 
+
  { Commande CIRCLE }
  If CmdName = 'CIRCLE' Then Begin
   If Node^.ChildCount >= 4 Then Begin
@@ -7174,10 +7203,10 @@ Begin
       Y1 := CmdVal.ListNode^.Children[1]^.IntValue;
     End;
    End;
-   
+
    CmdVal := LispEval(Node^.Children[3]);
    R := LispValueToReal(CmdVal);
-   
+
    { Créer le cercle }
    For I := 0 to MAX_OBJECTS - 1 do Begin
     If DrawObjects[I].ObjType = OBJ_NONE Then Begin
@@ -7196,7 +7225,7 @@ Begin
   LispEvalCommand := LispMakeNil;
   Exit;
  End;
- 
+
  { Commande ERASE }
  If CmdName = 'ERASE' Then Begin
   { Effacer les objets sélectionnés }
@@ -7209,7 +7238,7 @@ Begin
   LispEvalCommand := LispMakeNil;
   Exit;
  End;
- 
+
  { Commande inconnue }
  LispEvalCommand := LispMakeNil;
 End;
@@ -7257,7 +7286,7 @@ Begin
   LispEvalSetq := LispMakeError('setq requiert au moins un nom et une valeur');
   Exit;
  End;
- 
+
  { setq peut avoir plusieurs paires nom/valeur: (setq a 1 b 2 c 3) }
  I := 1;
  While I < Node^.ChildCount - 1 do Begin
@@ -7266,24 +7295,24 @@ Begin
    LispEvalSetq := LispMakeError('setq: nom de variable manquant');
    Exit;
   End;
-  
+
   If VarNode^.NodeType <> LISP_NODE_SYMBOL Then Begin
    LispEvalSetq := LispMakeError('setq: le nom doit être un symbole');
    Exit;
   End;
-  
+
   VarName := VarNode^.StrValue;
   VarValue := LispEval(Node^.Children[I + 1]);
-  
+
   If VarValue.ValueType = LISP_VAL_ERROR Then Begin
    LispEvalSetq := VarValue;
    Exit;
   End;
-  
+
   LispSetVariable(VarName, VarValue);
   I := I + 2;
  End;
- 
+
  { Retourner la dernière valeur assignée }
  LispEvalSetq := VarValue;
 End;
@@ -7300,30 +7329,30 @@ Begin
   LispEvalDefun := LispMakeError('defun requiert un nom, une liste d''arguments et un corps');
   Exit;
  End;
- 
+
  { Obtenir le nom de la fonction }
  FuncNode := Node^.Children[1];
  If FuncNode = Nil Then Begin
   LispEvalDefun := LispMakeError('defun: nom de fonction manquant');
   Exit;
  End;
- 
+
  If FuncNode^.NodeType <> LISP_NODE_SYMBOL Then Begin
   LispEvalDefun := LispMakeError('defun: le nom doit être un symbole');
   Exit;
  End;
- 
+
  FuncName := FuncNode^.StrValue;
- 
+
  { Stocker la définition de la fonction (le noeud entier) comme variable spéciale }
  DefValue.ValueType := LISP_VAL_LIST;
  DefValue.ListNode := Node;
  DefValue.IntValue := 0;
  DefValue.RealValue := 0;
  DefValue.StrValue := '*DEFUN*';
- 
+
  LispSetVariable('*FUNC:' + FuncName, DefValue);
- 
+
  { Retourner le nom de la fonction }
  LispEvalDefun := LispMakeString(FuncName);
 End;
@@ -7337,14 +7366,14 @@ Begin
   LispEvalIf := LispMakeError('if requiert une condition et une expression then');
   Exit;
  End;
- 
+
  { Évaluer la condition }
  CondVal := LispEval(Node^.Children[1]);
  If CondVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalIf := CondVal;
   Exit;
  End;
- 
+
  If LispValueIsTrue(CondVal) Then Begin
   { Évaluer l'expression then }
   LispEvalIf := LispEval(Node^.Children[2]);
@@ -7368,24 +7397,24 @@ Begin
   LispEvalCond := LispMakeNil;
   Exit;
  End;
- 
+
  { Parcourir chaque clause }
  For I := 1 to Node^.ChildCount - 1 do Begin
   ClauseNode := Node^.Children[I];
   If ClauseNode = Nil Then Continue;
-  
+
   If (ClauseNode^.NodeType <> LISP_NODE_LIST) or (ClauseNode^.ChildCount < 1) Then Begin
    LispEvalCond := LispMakeError('cond: chaque clause doit être une liste');
    Exit;
   End;
-  
+
   { Évaluer la condition }
   CondVal := LispEval(ClauseNode^.Children[0]);
   If CondVal.ValueType = LISP_VAL_ERROR Then Begin
    LispEvalCond := CondVal;
    Exit;
   End;
-  
+
   { Si la condition est vraie, évaluer les expressions et retourner }
   If LispValueIsTrue(CondVal) Then Begin
    If ClauseNode^.ChildCount >= 2 Then Begin
@@ -7397,7 +7426,7 @@ Begin
    Exit;
   End;
  End;
- 
+
  LispEvalCond := LispMakeNil;
 End;
 
@@ -7412,10 +7441,10 @@ Begin
   LispEvalWhile := LispMakeError('while requiert une condition et un corps');
   Exit;
  End;
- 
+
  Result := LispMakeNil;
  MaxIter := 10000;  { Protection contre les boucles infinies }
- 
+
  While MaxIter > 0 do Begin
   { Évaluer la condition }
   CondVal := LispEval(Node^.Children[1]);
@@ -7423,16 +7452,16 @@ Begin
    LispEvalWhile := CondVal;
    Exit;
   End;
-  
+
   If Not LispValueIsTrue(CondVal) Then Break;
-  
+
   { Évaluer le corps }
   For I := 2 to Node^.ChildCount - 1 do
    Result := LispEval(Node^.Children[I]);
-  
+
   Dec(MaxIter);
  End;
- 
+
  If MaxIter <= 0 Then
   LispEvalWhile := LispMakeError('while: nombre maximum d''itérations atteint')
  Else
@@ -7453,7 +7482,7 @@ Begin
   LispEvalForeach := LispMakeError('foreach requiert une variable, une liste et un corps');
   Exit;
  End;
- 
+
  { Obtenir le nom de la variable }
  VarNode := Node^.Children[1];
  If (VarNode = Nil) or (VarNode^.NodeType <> LISP_NODE_SYMBOL) Then Begin
@@ -7461,21 +7490,21 @@ Begin
   Exit;
  End;
  VarName := VarNode^.StrValue;
- 
+
  { Évaluer la liste }
  ListVal := LispEval(Node^.Children[2]);
  If ListVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalForeach := ListVal;
   Exit;
  End;
- 
+
  If ListVal.ValueType <> LISP_VAL_LIST Then Begin
   LispEvalForeach := LispMakeError('foreach: le deuxième argument doit être une liste');
   Exit;
  End;
- 
+
  Result := LispMakeNil;
- 
+
  If ListVal.ListNode <> Nil Then Begin
   For I := 0 to ListVal.ListNode^.ChildCount - 1 do Begin
    ItemNode := ListVal.ListNode^.Children[I];
@@ -7483,14 +7512,14 @@ Begin
     { Convertir le noeud en valeur et l'assigner à la variable }
     ItemVal := LispEvalAtom(ItemNode);
     LispSetVariable(VarName, ItemVal);
-    
+
     { Évaluer le corps }
     For J := 3 to Node^.ChildCount - 1 do
      Result := LispEval(Node^.Children[J]);
    End;
   End;
  End;
- 
+
  LispEvalForeach := Result;
 End;
 
@@ -7506,14 +7535,14 @@ Begin
   LispEvalMapcar := LispMakeError('mapcar requiert une fonction et une liste');
   Exit;
  End;
- 
+
  { Obtenir le nom de la fonction }
  FuncNode := Node^.Children[1];
  If FuncNode = Nil Then Begin
   LispEvalMapcar := LispMakeError('mapcar: fonction manquante');
   Exit;
  End;
- 
+
  { La fonction peut être quotée: 'func ou (quote func) }
  If FuncNode^.NodeType = LISP_NODE_QUOTE Then Begin
   If FuncNode^.Children[0]^.NodeType = LISP_NODE_SYMBOL Then
@@ -7528,19 +7557,19 @@ Begin
   LispEvalMapcar := LispMakeError('mapcar: la fonction doit être un symbole');
   Exit;
  End;
- 
+
  { Évaluer la liste }
  ListVal := LispEval(Node^.Children[2]);
  If ListVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalMapcar := ListVal;
   Exit;
  End;
- 
+
  If ListVal.ValueType <> LISP_VAL_LIST Then Begin
   LispEvalMapcar := LispMakeError('mapcar: le deuxième argument doit être une liste');
   Exit;
  End;
- 
+
  { Créer la liste résultat }
  ResultNode := LispAllocNode;
  If ResultNode = Nil Then Begin
@@ -7549,14 +7578,14 @@ Begin
  End;
  ResultNode^.NodeType := LISP_NODE_LIST;
  ResultNode^.ChildCount := 0;
- 
+
  If ListVal.ListNode <> Nil Then Begin
   For I := 0 to ListVal.ListNode^.ChildCount - 1 do Begin
    ItemNode := ListVal.ListNode^.Children[I];
    If ItemNode <> Nil Then Begin
     { Appliquer la fonction (simplification: fonctions mathématiques de base) }
     ItemVal := LispEvalAtom(ItemNode);
-    
+
     { Créer un noeud pour le résultat }
     NewNode := LispAllocNode;
     If NewNode <> Nil Then Begin
@@ -7572,7 +7601,7 @@ Begin
      End Else Begin
       NewNode^.NodeType := LISP_NODE_NIL;
      End;
-     
+
      If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
       ResultNode^.Children[ResultNode^.ChildCount] := NewNode;
       Inc(ResultNode^.ChildCount);
@@ -7581,7 +7610,7 @@ Begin
    End;
   End;
  End;
- 
+
  LispEvalMapcar.ValueType := LISP_VAL_LIST;
  LispEvalMapcar.ListNode := ResultNode;
  LispEvalMapcar.IntValue := 0;
@@ -7603,14 +7632,14 @@ Begin
  End;
  ResultNode^.NodeType := LISP_NODE_LIST;
  ResultNode^.ChildCount := 0;
- 
+
  For I := 1 to Node^.ChildCount - 1 do Begin
   ArgVal := LispEval(Node^.Children[I]);
   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
    LispEvalListFunc := ArgVal;
    Exit;
   End;
-  
+
   NewNode := LispAllocNode;
   If NewNode <> Nil Then Begin
    Case ArgVal.ValueType of
@@ -7634,14 +7663,14 @@ Begin
      NewNode^.NodeType := LISP_NODE_NIL;
     End;
    End;
-   
+
    If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
     ResultNode^.Children[ResultNode^.ChildCount] := NewNode;
     Inc(ResultNode^.ChildCount);
    End;
   End;
  End;
- 
+
  LispEvalListFunc.ValueType := LISP_VAL_LIST;
  LispEvalListFunc.ListNode := ResultNode;
  LispEvalListFunc.IntValue := 0;
@@ -7660,29 +7689,29 @@ Begin
   LispEvalCons := LispMakeError('cons requiert deux arguments');
   Exit;
  End;
- 
+
  HeadVal := LispEval(Node^.Children[1]);
  If HeadVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalCons := HeadVal;
   Exit;
  End;
- 
+
  TailVal := LispEval(Node^.Children[2]);
  If TailVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalCons := TailVal;
   Exit;
  End;
- 
+
  ResultNode := LispAllocNode;
  If ResultNode = Nil Then Begin
   LispEvalCons := LispMakeError('cons: mémoire insuffisante');
   Exit;
  End;
- 
+
  If TailVal.ValueType = LISP_VAL_LIST Then Begin
   { Ajouter HeadVal en tête de la liste TailVal }
   ResultNode^.NodeType := LISP_NODE_LIST;
-  
+
   { Créer le noeud pour la tête }
   HeadNode := LispAllocNode;
   If HeadNode <> Nil Then Begin
@@ -7706,7 +7735,7 @@ Begin
    ResultNode^.Children[0] := HeadNode;
    ResultNode^.ChildCount := 1;
   End;
-  
+
   { Copier les éléments de la queue }
   If TailVal.ListNode <> Nil Then Begin
    For I := 0 to TailVal.ListNode^.ChildCount - 1 do Begin
@@ -7720,7 +7749,7 @@ Begin
   { Créer une paire pointée }
   ResultNode^.NodeType := LISP_NODE_DOTPAIR;
   ResultNode^.ChildCount := 2;
-  
+
   HeadNode := LispAllocNode;
   If HeadNode <> Nil Then Begin
    Case HeadVal.ValueType of
@@ -7742,7 +7771,7 @@ Begin
    End;
    ResultNode^.Children[0] := HeadNode;
   End;
-  
+
   HeadNode := LispAllocNode;
   If HeadNode <> Nil Then Begin
    Case TailVal.ValueType of
@@ -7765,7 +7794,7 @@ Begin
    ResultNode^.Children[1] := HeadNode;
   End;
  End;
- 
+
  LispEvalCons.ValueType := LISP_VAL_LIST;
  LispEvalCons.ListNode := ResultNode;
  LispEvalCons.IntValue := 0;
@@ -7782,23 +7811,23 @@ Begin
   LispEvalCar := LispMakeError('car requiert un argument');
   Exit;
  End;
- 
+
  ArgVal := LispEval(Node^.Children[1]);
  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalCar := ArgVal;
   Exit;
  End;
- 
+
  If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
   LispEvalCar := LispMakeError('car requiert une liste');
   Exit;
  End;
- 
+
  If (ArgVal.ListNode = Nil) or (ArgVal.ListNode^.ChildCount = 0) Then Begin
   LispEvalCar := LispMakeNil;
   Exit;
  End;
- 
+
  LispEvalCar := LispEvalAtom(ArgVal.ListNode^.Children[0]);
 End;
 
@@ -7813,23 +7842,23 @@ Begin
   LispEvalCdr := LispMakeError('cdr requiert un argument');
   Exit;
  End;
- 
+
  ArgVal := LispEval(Node^.Children[1]);
  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalCdr := ArgVal;
   Exit;
  End;
- 
+
  If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
   LispEvalCdr := LispMakeError('cdr requiert une liste');
   Exit;
  End;
- 
+
  If (ArgVal.ListNode = Nil) or (ArgVal.ListNode^.ChildCount <= 1) Then Begin
   LispEvalCdr := LispMakeNil;
   Exit;
  End;
- 
+
  ResultNode := LispAllocNode;
  If ResultNode = Nil Then Begin
   LispEvalCdr := LispMakeError('cdr: mémoire insuffisante');
@@ -7837,14 +7866,14 @@ Begin
  End;
  ResultNode^.NodeType := LISP_NODE_LIST;
  ResultNode^.ChildCount := 0;
- 
+
  For I := 1 to ArgVal.ListNode^.ChildCount - 1 do Begin
   If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
    ResultNode^.Children[ResultNode^.ChildCount] := ArgVal.ListNode^.Children[I];
    Inc(ResultNode^.ChildCount);
   End;
  End;
- 
+
  LispEvalCdr.ValueType := LISP_VAL_LIST;
  LispEvalCdr.ListNode := ResultNode;
  LispEvalCdr.IntValue := 0;
@@ -7862,31 +7891,31 @@ Begin
   LispEvalNth := LispMakeError('nth requiert un index et une liste');
   Exit;
  End;
- 
+
  IndexVal := LispEval(Node^.Children[1]);
  If IndexVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalNth := IndexVal;
   Exit;
  End;
- 
+
  Index := Round(LispValueToReal(IndexVal));
- 
+
  ListVal := LispEval(Node^.Children[2]);
  If ListVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalNth := ListVal;
   Exit;
  End;
- 
+
  If ListVal.ValueType <> LISP_VAL_LIST Then Begin
   LispEvalNth := LispMakeError('nth: le deuxième argument doit être une liste');
   Exit;
  End;
- 
+
  If (ListVal.ListNode = Nil) or (Index < 0) or (Index >= ListVal.ListNode^.ChildCount) Then Begin
   LispEvalNth := LispMakeNil;
   Exit;
  End;
- 
+
  LispEvalNth := LispEvalAtom(ListVal.ListNode^.Children[Index]);
 End;
 
@@ -7904,14 +7933,14 @@ Begin
  End;
  ResultNode^.NodeType := LISP_NODE_LIST;
  ResultNode^.ChildCount := 0;
- 
+
  For I := 1 to Node^.ChildCount - 1 do Begin
   ArgVal := LispEval(Node^.Children[I]);
   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
    LispEvalAppend := ArgVal;
    Exit;
   End;
-  
+
   If ArgVal.ValueType = LISP_VAL_LIST Then Begin
    If ArgVal.ListNode <> Nil Then Begin
     For J := 0 to ArgVal.ListNode^.ChildCount - 1 do Begin
@@ -7923,7 +7952,7 @@ Begin
    End;
   End;
  End;
- 
+
  LispEvalAppend.ValueType := LISP_VAL_LIST;
  LispEvalAppend.ListNode := ResultNode;
  LispEvalAppend.IntValue := 0;
@@ -7942,18 +7971,18 @@ Begin
   LispEvalReverse := LispMakeError('reverse requiert un argument');
   Exit;
  End;
- 
+
  ArgVal := LispEval(Node^.Children[1]);
  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalReverse := ArgVal;
   Exit;
  End;
- 
+
  If ArgVal.ValueType <> LISP_VAL_LIST Then Begin
   LispEvalReverse := LispMakeError('reverse requiert une liste');
   Exit;
  End;
- 
+
  ResultNode := LispAllocNode;
  If ResultNode = Nil Then Begin
   LispEvalReverse := LispMakeError('reverse: mémoire insuffisante');
@@ -7961,7 +7990,7 @@ Begin
  End;
  ResultNode^.NodeType := LISP_NODE_LIST;
  ResultNode^.ChildCount := 0;
- 
+
  If ArgVal.ListNode <> Nil Then Begin
   For I := ArgVal.ListNode^.ChildCount - 1 downto 0 do Begin
    If ResultNode^.ChildCount < MAX_LISP_CHILDREN Then Begin
@@ -7970,7 +7999,7 @@ Begin
    End;
   End;
  End;
- 
+
  LispEvalReverse.ValueType := LISP_VAL_LIST;
  LispEvalReverse.ListNode := ResultNode;
  LispEvalReverse.IntValue := 0;
@@ -7987,13 +8016,13 @@ Begin
   LispEvalLengthFunc := LispMakeError('length requiert un argument');
   Exit;
  End;
- 
+
  ArgVal := LispEval(Node^.Children[1]);
  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalLengthFunc := ArgVal;
   Exit;
  End;
- 
+
  If ArgVal.ValueType = LISP_VAL_LIST Then Begin
   If ArgVal.ListNode = Nil Then
    LispEvalLengthFunc := LispMakeInt(0)
@@ -8014,17 +8043,17 @@ Var
  Result: String;
 Begin
  Result := '';
- 
+
  For I := 1 to Node^.ChildCount - 1 do Begin
   ArgVal := LispEval(Node^.Children[I]);
   If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
    LispEvalStrcat := ArgVal;
    Exit;
   End;
-  
+
   Result := Result + LispValueToString(ArgVal);
  End;
- 
+
  LispEvalStrcat := LispMakeString(Result);
 End;
 
@@ -8037,18 +8066,18 @@ Begin
   LispEvalStrlen := LispMakeError('strlen requiert un argument');
   Exit;
  End;
- 
+
  ArgVal := LispEval(Node^.Children[1]);
  If ArgVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalStrlen := ArgVal;
   Exit;
  End;
- 
+
  If ArgVal.ValueType <> LISP_VAL_STRING Then Begin
   LispEvalStrlen := LispMakeError('strlen requiert une chaîne');
   Exit;
  End;
- 
+
  LispEvalStrlen := LispMakeInt(Length(ArgVal.StrValue));
 End;
 
@@ -8063,33 +8092,33 @@ Begin
   LispEvalSubstr := LispMakeError('substr requiert au moins une chaîne et une position');
   Exit;
  End;
- 
+
  StrVal := LispEval(Node^.Children[1]);
  If StrVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalSubstr := StrVal;
   Exit;
  End;
- 
+
  If StrVal.ValueType <> LISP_VAL_STRING Then Begin
   LispEvalSubstr := LispMakeError('substr: le premier argument doit être une chaîne');
   Exit;
  End;
  S := StrVal.StrValue;
- 
+
  StartVal := LispEval(Node^.Children[2]);
  If StartVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalSubstr := StartVal;
   Exit;
  End;
  Start := Round(LispValueToReal(StartVal));
- 
+
  { En AutoLISP, les indices commencent à 1 }
  If Start < 1 Then Start := 1;
  If Start > Length(S) Then Begin
   LispEvalSubstr := LispMakeString('');
   Exit;
  End;
- 
+
  If Node^.ChildCount >= 4 Then Begin
   LenVal := LispEval(Node^.Children[3]);
   If LenVal.ValueType = LISP_VAL_ERROR Then Begin
@@ -8099,9 +8128,9 @@ Begin
   Len := Round(LispValueToReal(LenVal));
  End Else
   Len := Length(S) - Start + 1;
- 
+
  If Len < 0 Then Len := 0;
- 
+
  LispEvalSubstr := LispMakeString(Copy(S, Start, Len));
 End;
 
@@ -8117,19 +8146,19 @@ Begin
   LispEvalStrcase := LispMakeError('strcase requiert une chaîne');
   Exit;
  End;
- 
+
  StrVal := LispEval(Node^.Children[1]);
  If StrVal.ValueType = LISP_VAL_ERROR Then Begin
   LispEvalStrcase := StrVal;
   Exit;
  End;
- 
+
  If StrVal.ValueType <> LISP_VAL_STRING Then Begin
   LispEvalStrcase := LispMakeError('strcase: le premier argument doit être une chaîne');
   Exit;
  End;
  S := StrVal.StrValue;
- 
+
  { Vérifier le flag (t = minuscules, nil = majuscules) }
  ToLower := False;
  If Node^.ChildCount >= 3 Then Begin
@@ -8137,7 +8166,7 @@ Begin
   If FlagVal.ValueType <> LISP_VAL_ERROR Then
    ToLower := LispValueIsTrue(FlagVal);
  End;
- 
+
  If ToLower Then Begin
   For I := 1 to Length(S) do
    If (S[I] >= 'A') and (S[I] <= 'Z') Then
@@ -8147,7 +8176,7 @@ Begin
    If (S[I] >= 'a') and (S[I] <= 'z') Then
     S[I] := Chr(Ord(S[I]) - 32);
  End;
- 
+
  LispEvalStrcase := LispMakeString(S);
 End;
 
@@ -8158,7 +8187,7 @@ Var
  Result: TLispValue;
 Begin
  Result := LispMakeNil;
- 
+
  For I := 1 to Node^.ChildCount - 1 do Begin
   Result := LispEval(Node^.Children[I]);
   If Result.ValueType = LISP_VAL_ERROR Then Begin
@@ -8166,7 +8195,7 @@ Begin
    Exit;
   End;
  End;
- 
+
  LispEvalProgn := Result;
 End;
 
@@ -8224,6 +8253,8 @@ End;
 
 { Obtenir le nom d'une couleur }
 Function ColorName(Color: Integer): String;
+Var
+ Result:String;
 Begin
  Case Color of
   0: ColorName := 'ByBlock';
@@ -8238,8 +8269,8 @@ Begin
   9: ColorName := 'Gris Clair';
   256: ColorName := 'ByLayer';
   Else Begin
-   Str(Color, ColorName);
-   ColorName := 'Couleur ' + ColorName;
+   Str(Color, Result);
+   ColorName := 'Couleur ' + Result;
   End;
  End;
 End;
@@ -8282,7 +8313,7 @@ Var
 Begin
  LayerCount := 1;
  CurrentLayer := 0;
- 
+
  { Calque 0 - calque par défaut }
  Layers[0].Name := '0';
  Layers[0].Color := White;
@@ -8292,7 +8323,7 @@ Begin
  Layers[0].Locked := False;
  Layers[0].Frozen := False;
  Layers[0].OnFlag := True;
- 
+
  { Initialiser les autres calques }
  For I := 1 to MAX_LAYERS - 1 do Begin
   Layers[I].Name := '';
@@ -8304,7 +8335,7 @@ Begin
   Layers[I].Frozen := False;
   Layers[I].OnFlag := True;
  End;
- 
+
  { Valeurs par défaut de dessin }
  CurrentColor := 256;  { ByLayer }
  CurrentLineType := LINETYPE_CONTINUOUS;
@@ -8326,7 +8357,7 @@ Begin
  For I := 1 to Length(UpperName) do
   If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
    UpperName[I] := Chr(Ord(UpperName[I]) - 32);
- 
+
  For I := 0 to LayerCount - 1 do Begin
   If Layers[I].Name = LayerName Then Begin
    FindLayerByName := I;
@@ -8341,17 +8372,17 @@ Var
  I: Integer;
 Begin
  AddLayer := -1;
- 
+
  { Vérifier si le calque existe déjà }
  If FindLayerByName(LayerName) >= 0 Then Exit;
- 
+
  { Vérifier s'il y a de la place }
  If LayerCount >= MAX_LAYERS Then Exit;
- 
+
  { Ajouter le nouveau calque }
  I := LayerCount;
  Inc(LayerCount);
- 
+
  Layers[I].Name := LayerName;
  Layers[I].Color := White;
  Layers[I].LineType := LINETYPE_CONTINUOUS;
@@ -8360,7 +8391,7 @@ Begin
  Layers[I].Locked := False;
  Layers[I].Frozen := False;
  Layers[I].OnFlag := True;
- 
+
  AddLayer := I;
 End;
 
@@ -8371,13 +8402,13 @@ Var
  HasObjects: Boolean;
 Begin
  DeleteLayer := False;
- 
+
  { Impossible de supprimer le calque 0 }
  If LayerIdx = 0 Then Exit;
- 
+
  { Vérifier les limites }
  If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
- 
+
  { Vérifier si des objets utilisent ce calque }
  HasObjects := False;
  For I := 0 to ObjectCount - 1 do Begin
@@ -8386,28 +8417,28 @@ Begin
    Break;
   End;
  End;
- 
+
  { Ne pas supprimer si des objets sont sur ce calque }
  If HasObjects Then Exit;
- 
+
  { Décaler tous les calques suivants }
  For I := LayerIdx to LayerCount - 2 do
   Layers[I] := Layers[I + 1];
- 
+
  Dec(LayerCount);
- 
+
  { Mettre à jour les références des objets }
  For I := 0 to ObjectCount - 1 do Begin
   If DrawObjects[I].LayerIndex > LayerIdx Then
    Dec(DrawObjects[I].LayerIndex);
  End;
- 
+
  { Ajuster le calque courant si nécessaire }
  If CurrentLayer >= LayerCount Then
   CurrentLayer := LayerCount - 1;
  If CurrentLayer > LayerIdx Then
   Dec(CurrentLayer);
- 
+
  DeleteLayer := True;
 End;
 
@@ -8468,12 +8499,12 @@ Var
  LayerIdx: Integer;
 Begin
  IsObjectOnVisibleLayer := True;
- 
+
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
- 
+
  LayerIdx := DrawObjects[ObjIdx].LayerIndex;
  If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
- 
+
  { Un calque n'est pas visible si: pas visible OU éteint OU gelé }
  IsObjectOnVisibleLayer := Layers[LayerIdx].Visible and
                            Layers[LayerIdx].OnFlag and
@@ -8486,12 +8517,12 @@ Var
  LayerIdx: Integer;
 Begin
  IsObjectOnLockedLayer := False;
- 
+
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
- 
+
  LayerIdx := DrawObjects[ObjIdx].LayerIndex;
  If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
- 
+
  IsObjectOnLockedLayer := Layers[LayerIdx].Locked;
 End;
 
@@ -8520,7 +8551,7 @@ Var
  I: Integer;
 Begin
  If (LayerIdx < 0) or (LayerIdx >= LayerCount) Then Exit;
- 
+
  For I := 0 to SelectionSet.Count - 1 do Begin
   If Not IsObjectOnLockedLayer(SelectionSet.Objects[I]) Then
    DrawObjects[SelectionSet.Objects[I]].LayerIndex := LayerIdx;
@@ -8533,9 +8564,9 @@ Var
  LayerIdx: Integer;
 Begin
  GetObjectEffectiveColor := White;
- 
+
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
- 
+
  { Si la couleur est 256 (ByLayer), utiliser la couleur du calque }
  If DrawObjects[ObjIdx].Color = 256 Then Begin
   LayerIdx := DrawObjects[ObjIdx].LayerIndex;
@@ -8554,9 +8585,9 @@ Var
  LayerIdx: Integer;
 Begin
  GetObjectEffectiveLineType := LINETYPE_CONTINUOUS;
- 
+
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
- 
+
  { Si le type de ligne est ByLayer (256), utiliser celui du calque }
  If DrawObjects[ObjIdx].LineType = 255 Then Begin
   LayerIdx := DrawObjects[ObjIdx].LayerIndex;
@@ -8583,19 +8614,21 @@ End;
 Function CalculateAngle(X1, Y1, X2, Y2: Real): Real;
 Var
  DX, DY: Real;
+ Result:Real;
 Begin
  DX := X2 - X1;
  DY := Y2 - Y1;
  If DX = 0 Then Begin
   If DY >= 0 Then
-   CalculateAngle := Pi / 2
+   Result := Pi / 2
   Else
-   CalculateAngle := -Pi / 2;
+   Result := -Pi / 2;
  End
  Else
-  CalculateAngle := ArcTan(DY / DX);
+  Result := ArcTan(DY / DX);
  If DX < 0 Then
-  CalculateAngle := CalculateAngle + Pi;
+  Result := Result + Pi;
+ CalculateAngle:=Result;
 End;
 
 { Formater une valeur de cotation }
@@ -8624,22 +8657,22 @@ Var
 Begin
  SX := WorldToScreenX(X);
  SY := WorldToScreenY(Y);
- 
+
  ArrowLen := Size * ZoomLevel;
  ArrowAngle := Pi / 8;  { 22.5 degrés }
- 
+
  { Pointe de la flèche }
  X1 := SX;
  Y1 := SY;
- 
+
  { Côté gauche de la flèche }
  X2 := Round(SX - ArrowLen * Cos(Angle - ArrowAngle));
  Y2 := Round(SY + ArrowLen * Sin(Angle - ArrowAngle));
- 
+
  { Côté droit de la flèche }
  X3 := Round(SX - ArrowLen * Cos(Angle + ArrowAngle));
  Y3 := Round(SY + ArrowLen * Sin(Angle + ArrowAngle));
- 
+
  { Dessiner la flèche }
  Line(X1, Y1, X2, Y2);
  Line(X1, Y1, X3, Y3);
@@ -8654,14 +8687,14 @@ Var
  STX, STY: Integer;
  DimText: String;
  Angle, OffsetX, OffsetY: Real;
- TextWidth: Integer;
+ TextWidth_: Integer;
  MidX, MidY: Real;
 Begin
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
  If DrawObjects[ObjIdx].ObjType <> OBJ_DIMENSION Then Exit;
- 
+
  SetColor(GetObjectEffectiveColor(ObjIdx));
- 
+
  Case DrawObjects[ObjIdx].DimType of
   DIM_LINEAR, DIM_ALIGNED: Begin
    { Points de définition }
@@ -8669,20 +8702,20 @@ Begin
    SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
    SX2 := WorldToScreenX(DrawObjects[ObjIdx].X2);
    SY2 := WorldToScreenY(DrawObjects[ObjIdx].Y2);
-   
+
    { Ligne de cote (position Y3 pour linéaire horizontal) }
    SX3 := WorldToScreenX(DrawObjects[ObjIdx].X1);
    SY3 := WorldToScreenY(DrawObjects[ObjIdx].DimY3);
    SX4 := WorldToScreenX(DrawObjects[ObjIdx].X2);
    SY4 := WorldToScreenY(DrawObjects[ObjIdx].DimY3);
-   
+
    { Lignes d'extension }
    Line(SX1, SY1, SX3, SY3);
    Line(SX2, SY2, SX4, SY4);
-   
+
    { Ligne de cote }
    Line(SX3, SY3, SX4, SY4);
-   
+
    { Flèches }
    If SX4 > SX3 Then Begin
     DrawDimensionArrow(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].DimY3, 0, DIM_ARROW_SIZE);
@@ -8691,63 +8724,63 @@ Begin
     DrawDimensionArrow(DrawObjects[ObjIdx].X1, DrawObjects[ObjIdx].DimY3, Pi, DIM_ARROW_SIZE);
     DrawDimensionArrow(DrawObjects[ObjIdx].X2, DrawObjects[ObjIdx].DimY3, 0, DIM_ARROW_SIZE);
    End;
-   
+
    { Texte de cotation }
    If DrawObjects[ObjIdx].DimText <> '' Then
     DimText := DrawObjects[ObjIdx].DimText
    Else
     DimText := FormatDimensionValue(DrawObjects[ObjIdx].DimValue);
-   
+
    STX := WorldToScreenX(DrawObjects[ObjIdx].DimTextX);
    STY := WorldToScreenY(DrawObjects[ObjIdx].DimTextY);
-   TextWidth := TextWidth_(DimText);
-   OutTextXY(STX - TextWidth div 2, STY - 4, DimText);
+   TextWidth_ := TextWidth(DimText);
+   OutTextXY(STX - TextWidth_ div 2, STY - 4, DimText);
   End;
-  
+
   DIM_RADIAL: Begin
    { Centre du cercle }
    SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
    SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
-   
+
    { Point sur le cercle }
    Angle := DrawObjects[ObjIdx].StartAngle;
    SX2 := WorldToScreenX(DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].Radius * Cos(Angle));
    SY2 := WorldToScreenY(DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Radius * Sin(Angle));
-   
+
    { Ligne de rayon }
    Line(SX1, SY1, SX2, SY2);
-   
+
    { Flèche au point de cercle }
    DrawDimensionArrow(DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].Radius * Cos(Angle),
                       DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Radius * Sin(Angle),
                       Angle + Pi, DIM_ARROW_SIZE);
-   
+
    { Texte R + valeur }
    If DrawObjects[ObjIdx].DimText <> '' Then
     DimText := DrawObjects[ObjIdx].DimText
    Else
     DimText := 'R' + FormatDimensionValue(DrawObjects[ObjIdx].DimValue);
-   
+
    STX := WorldToScreenX(DrawObjects[ObjIdx].DimTextX);
    STY := WorldToScreenY(DrawObjects[ObjIdx].DimTextY);
    OutTextXY(STX, STY, DimText);
   End;
-  
+
   DIM_DIAMETER: Begin
    { Centre du cercle }
    SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
    SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
-   
+
    { Points opposés sur le cercle }
    Angle := DrawObjects[ObjIdx].StartAngle;
    SX2 := WorldToScreenX(DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].Radius * Cos(Angle));
    SY2 := WorldToScreenY(DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Radius * Sin(Angle));
    SX3 := WorldToScreenX(DrawObjects[ObjIdx].X1 - DrawObjects[ObjIdx].Radius * Cos(Angle));
    SY3 := WorldToScreenY(DrawObjects[ObjIdx].Y1 - DrawObjects[ObjIdx].Radius * Sin(Angle));
-   
+
    { Ligne de diamètre }
    Line(SX2, SY2, SX3, SY3);
-   
+
    { Flèches aux deux extrémités }
    DrawDimensionArrow(DrawObjects[ObjIdx].X1 + DrawObjects[ObjIdx].Radius * Cos(Angle),
                       DrawObjects[ObjIdx].Y1 + DrawObjects[ObjIdx].Radius * Sin(Angle),
@@ -8755,50 +8788,50 @@ Begin
    DrawDimensionArrow(DrawObjects[ObjIdx].X1 - DrawObjects[ObjIdx].Radius * Cos(Angle),
                       DrawObjects[ObjIdx].Y1 - DrawObjects[ObjIdx].Radius * Sin(Angle),
                       Angle, DIM_ARROW_SIZE);
-   
+
    { Texte Ø + valeur }
    If DrawObjects[ObjIdx].DimText <> '' Then
     DimText := DrawObjects[ObjIdx].DimText
    Else
     DimText := 'O' + FormatDimensionValue(DrawObjects[ObjIdx].DimValue);  { Note: Ø non disponible, utilisons O }
-   
+
    STX := WorldToScreenX(DrawObjects[ObjIdx].DimTextX);
    STY := WorldToScreenY(DrawObjects[ObjIdx].DimTextY);
    OutTextXY(STX, STY, DimText);
   End;
-  
+
   DIM_ANGULAR: Begin
    { Centre de l'angle }
    SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
    SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
-   
+
    { Arc de cotation }
-   Arc(SX1, SY1, 
+   Arc(SX1, SY1,
        Round(DrawObjects[ObjIdx].StartAngle * 180 / Pi),
        Round(DrawObjects[ObjIdx].EndAngle * 180 / Pi),
        Round(DrawObjects[ObjIdx].Radius * ZoomLevel));
-   
+
    { Texte de l'angle }
    If DrawObjects[ObjIdx].DimText <> '' Then
     DimText := DrawObjects[ObjIdx].DimText
    Else
     DimText := FormatDimensionValue(DrawObjects[ObjIdx].DimValue) + '°';
-   
+
    STX := WorldToScreenX(DrawObjects[ObjIdx].DimTextX);
    STY := WorldToScreenY(DrawObjects[ObjIdx].DimTextY);
-   TextWidth := TextWidth_(DimText);
-   OutTextXY(STX - TextWidth div 2, STY - 4, DimText);
+   TextWidth_ := TextWidth(DimText);
+   OutTextXY(STX - TextWidth_ div 2, STY - 4, DimText);
   End;
-  
+
   DIM_ORDINATE: Begin
    { Point de référence }
    SX1 := WorldToScreenX(DrawObjects[ObjIdx].X1);
    SY1 := WorldToScreenY(DrawObjects[ObjIdx].Y1);
-   
+
    { Fin de la ligne de repère }
    SX2 := WorldToScreenX(DrawObjects[ObjIdx].X2);
    SY2 := WorldToScreenY(DrawObjects[ObjIdx].Y2);
-   
+
    { Lignes de repère (pliée) }
    If DrawObjects[ObjIdx].DimX3 <> 0 Then Begin
     { Cotation X }
@@ -8813,17 +8846,17 @@ Begin
     Line(SX1, SY1, SX3, SY3);
     Line(SX3, SY3, SX2, SY2);
    End;
-   
+
    { Texte de la valeur }
    If DrawObjects[ObjIdx].DimText <> '' Then
     DimText := DrawObjects[ObjIdx].DimText
    Else
     DimText := FormatDimensionValue(DrawObjects[ObjIdx].DimValue);
-   
+
    OutTextXY(SX2, SY2 - 4, DimText);
   End;
  End;
- 
+
  { Si sélectionné, dessiner les grips }
  If DrawObjects[ObjIdx].Selected Then Begin
   SetFillStyle(SolidFill, Blue);
@@ -8843,12 +8876,12 @@ Var
  Distance: Real;
 Begin
  CreateLinearDimension := -1;
- 
+
  If ObjectCount >= MAX_OBJECTS Then Exit;
- 
+
  Idx := ObjectCount;
  Inc(ObjectCount);
- 
+
  DrawObjects[Idx].ObjType := OBJ_DIMENSION;
  DrawObjects[Idx].DimType := DIM_LINEAR;
  DrawObjects[Idx].X1 := X1;
@@ -8857,7 +8890,7 @@ Begin
  DrawObjects[Idx].Y2 := Y2;
  DrawObjects[Idx].DimY3 := DimLineY;  { Position Y de la ligne de cote }
  DrawObjects[Idx].DimX3 := 0;
- 
+
  { Calculer la distance }
  If IsHorizontal Then
   Distance := Abs(X2 - X1)
@@ -8865,18 +8898,18 @@ Begin
   Distance := Abs(Y2 - Y1);
  DrawObjects[Idx].DimValue := Distance;
  DrawObjects[Idx].DimText := '';
- 
+
  { Position du texte au milieu de la ligne de cote }
  DrawObjects[Idx].DimTextX := (X1 + X2) / 2;
  DrawObjects[Idx].DimTextY := DimLineY + DIM_TEXT_GAP;
- 
+
  { Propriétés par défaut }
  DrawObjects[Idx].Color := CurrentColor;
  DrawObjects[Idx].LineType := CurrentLineType;
  DrawObjects[Idx].LayerIndex := CurrentLayer;
  DrawObjects[Idx].Selected := False;
  DrawObjects[Idx].Visible := True;
- 
+
  CreateLinearDimension := Idx;
 End;
 
@@ -8888,17 +8921,17 @@ Var
  OffsetX, OffsetY: Real;
 Begin
  CreateAlignedDimension := -1;
- 
+
  If ObjectCount >= MAX_OBJECTS Then Exit;
- 
+
  Idx := ObjectCount;
  Inc(ObjectCount);
- 
+
  { Calculer l'angle perpendiculaire }
  Angle := CalculateAngle(X1, Y1, X2, Y2);
  OffsetX := Offset * Cos(Angle + Pi/2);
  OffsetY := Offset * Sin(Angle + Pi/2);
- 
+
  DrawObjects[Idx].ObjType := OBJ_DIMENSION;
  DrawObjects[Idx].DimType := DIM_ALIGNED;
  DrawObjects[Idx].X1 := X1;
@@ -8909,23 +8942,23 @@ Begin
  DrawObjects[Idx].DimY3 := Y1 + OffsetY;
  DrawObjects[Idx].DimX4 := X2 + OffsetX;
  DrawObjects[Idx].DimY4 := Y2 + OffsetY;
- 
+
  { Calculer la distance }
  Distance := CalculateLinearDistance(X1, Y1, X2, Y2);
  DrawObjects[Idx].DimValue := Distance;
  DrawObjects[Idx].DimText := '';
- 
+
  { Position du texte au milieu }
  DrawObjects[Idx].DimTextX := (X1 + X2) / 2 + OffsetX;
  DrawObjects[Idx].DimTextY := (Y1 + Y2) / 2 + OffsetY + DIM_TEXT_GAP;
- 
+
  { Propriétés par défaut }
  DrawObjects[Idx].Color := CurrentColor;
  DrawObjects[Idx].LineType := CurrentLineType;
  DrawObjects[Idx].LayerIndex := CurrentLayer;
  DrawObjects[Idx].Selected := False;
  DrawObjects[Idx].Visible := True;
- 
+
  CreateAlignedDimension := Idx;
 End;
 
@@ -8936,21 +8969,21 @@ Var
  Angle1, Angle2, DiffAngle, MidAngle: Real;
 Begin
  CreateAngularDimension := -1;
- 
+
  If ObjectCount >= MAX_OBJECTS Then Exit;
- 
+
  Idx := ObjectCount;
  Inc(ObjectCount);
- 
+
  { Calculer les angles }
  Angle1 := CalculateAngle(CX, CY, X1, Y1);
  Angle2 := CalculateAngle(CX, CY, X2, Y2);
- 
+
  { Angle entre les deux lignes (en degrés) }
  DiffAngle := Abs(Angle2 - Angle1);
  If DiffAngle > Pi Then
   DiffAngle := 2 * Pi - DiffAngle;
- 
+
  DrawObjects[Idx].ObjType := OBJ_DIMENSION;
  DrawObjects[Idx].DimType := DIM_ANGULAR;
  DrawObjects[Idx].X1 := CX;
@@ -8962,23 +8995,23 @@ Begin
  DrawObjects[Idx].Radius := ArcRadius;
  DrawObjects[Idx].StartAngle := Angle1;
  DrawObjects[Idx].EndAngle := Angle2;
- 
+
  { Valeur en degrés }
  DrawObjects[Idx].DimValue := DiffAngle * 180 / Pi;
  DrawObjects[Idx].DimText := '';
- 
+
  { Position du texte au milieu de l'arc }
  MidAngle := (Angle1 + Angle2) / 2;
  DrawObjects[Idx].DimTextX := CX + (ArcRadius + DIM_TEXT_GAP) * Cos(MidAngle);
  DrawObjects[Idx].DimTextY := CY + (ArcRadius + DIM_TEXT_GAP) * Sin(MidAngle);
- 
+
  { Propriétés par défaut }
  DrawObjects[Idx].Color := CurrentColor;
  DrawObjects[Idx].LineType := CurrentLineType;
  DrawObjects[Idx].LayerIndex := CurrentLayer;
  DrawObjects[Idx].Selected := False;
  DrawObjects[Idx].Visible := True;
- 
+
  CreateAngularDimension := Idx;
 End;
 
@@ -8988,34 +9021,34 @@ Var
  Idx: Integer;
 Begin
  CreateRadialDimension := -1;
- 
+
  If ObjectCount >= MAX_OBJECTS Then Exit;
- 
+
  Idx := ObjectCount;
  Inc(ObjectCount);
- 
+
  DrawObjects[Idx].ObjType := OBJ_DIMENSION;
  DrawObjects[Idx].DimType := DIM_RADIAL;
  DrawObjects[Idx].X1 := CX;
  DrawObjects[Idx].Y1 := CY;
  DrawObjects[Idx].Radius := Radius;
  DrawObjects[Idx].StartAngle := Angle;  { Direction de la ligne de cotation }
- 
+
  { Valeur = rayon }
  DrawObjects[Idx].DimValue := Radius;
  DrawObjects[Idx].DimText := '';
- 
+
  { Position du texte sur la ligne de rayon }
  DrawObjects[Idx].DimTextX := CX + (Radius / 2) * Cos(Angle);
  DrawObjects[Idx].DimTextY := CY + (Radius / 2) * Sin(Angle) + DIM_TEXT_GAP;
- 
+
  { Propriétés par défaut }
  DrawObjects[Idx].Color := CurrentColor;
  DrawObjects[Idx].LineType := CurrentLineType;
  DrawObjects[Idx].LayerIndex := CurrentLayer;
  DrawObjects[Idx].Selected := False;
  DrawObjects[Idx].Visible := True;
- 
+
  CreateRadialDimension := Idx;
 End;
 
@@ -9025,34 +9058,34 @@ Var
  Idx: Integer;
 Begin
  CreateDiameterDimension := -1;
- 
+
  If ObjectCount >= MAX_OBJECTS Then Exit;
- 
+
  Idx := ObjectCount;
  Inc(ObjectCount);
- 
+
  DrawObjects[Idx].ObjType := OBJ_DIMENSION;
  DrawObjects[Idx].DimType := DIM_DIAMETER;
  DrawObjects[Idx].X1 := CX;
  DrawObjects[Idx].Y1 := CY;
  DrawObjects[Idx].Radius := Radius;
  DrawObjects[Idx].StartAngle := Angle;  { Direction de la ligne de cotation }
- 
+
  { Valeur = diamètre }
  DrawObjects[Idx].DimValue := 2 * Radius;
  DrawObjects[Idx].DimText := '';
- 
+
  { Position du texte au centre }
  DrawObjects[Idx].DimTextX := CX + DIM_TEXT_GAP * Cos(Angle + Pi/2);
  DrawObjects[Idx].DimTextY := CY + DIM_TEXT_GAP * Sin(Angle + Pi/2);
- 
+
  { Propriétés par défaut }
  DrawObjects[Idx].Color := CurrentColor;
  DrawObjects[Idx].LineType := CurrentLineType;
  DrawObjects[Idx].LayerIndex := CurrentLayer;
  DrawObjects[Idx].Selected := False;
  DrawObjects[Idx].Visible := True;
- 
+
  CreateDiameterDimension := Idx;
 End;
 
@@ -9062,43 +9095,43 @@ Var
  Idx: Integer;
 Begin
  CreateOrdinateDimension := -1;
- 
+
  If ObjectCount >= MAX_OBJECTS Then Exit;
- 
+
  Idx := ObjectCount;
  Inc(ObjectCount);
- 
+
  DrawObjects[Idx].ObjType := OBJ_DIMENSION;
  DrawObjects[Idx].DimType := DIM_ORDINATE;
  DrawObjects[Idx].X1 := X;
  DrawObjects[Idx].Y1 := Y;
  DrawObjects[Idx].X2 := LeaderEndX;
  DrawObjects[Idx].Y2 := LeaderEndY;
- 
+
  { Flag pour indiquer X ou Y ordonnée (dans DimX3) }
  If IsXOrdinate Then
   DrawObjects[Idx].DimX3 := 1
  Else
   DrawObjects[Idx].DimX3 := 0;
- 
+
  { Valeur = coordonnée X ou Y }
  If IsXOrdinate Then
   DrawObjects[Idx].DimValue := X
  Else
   DrawObjects[Idx].DimValue := Y;
  DrawObjects[Idx].DimText := '';
- 
+
  { Position du texte à la fin du repère }
  DrawObjects[Idx].DimTextX := LeaderEndX;
  DrawObjects[Idx].DimTextY := LeaderEndY;
- 
+
  { Propriétés par défaut }
  DrawObjects[Idx].Color := CurrentColor;
  DrawObjects[Idx].LineType := CurrentLineType;
  DrawObjects[Idx].LayerIndex := CurrentLayer;
  DrawObjects[Idx].Selected := False;
  DrawObjects[Idx].Visible := True;
- 
+
  CreateOrdinateDimension := Idx;
 End;
 
@@ -9107,38 +9140,38 @@ Procedure GetDimensionGrips(ObjIdx: Integer);
 Begin
  If (ObjIdx < 0) or (ObjIdx >= ObjectCount) Then Exit;
  If DrawObjects[ObjIdx].ObjType <> OBJ_DIMENSION Then Exit;
- 
+
  { Grip au premier point }
- If GripSet.Count < MAX_GRIPS Then Begin
-  GripSet.Grips[GripSet.Count].X := DrawObjects[ObjIdx].X1;
-  GripSet.Grips[GripSet.Count].Y := DrawObjects[ObjIdx].Y1;
-  GripSet.Grips[GripSet.Count].GripType := GRIP_ENDPOINT;
-  GripSet.Grips[GripSet.Count].ObjIndex := ObjIdx;
-  GripSet.Grips[GripSet.Count].PointIndex := 0;
-  GripSet.Grips[GripSet.Count].IsHot := False;
-  Inc(GripSet.Count);
+ If CurrentGrips.Count < MAX_GRIPS Then Begin
+  CurrentGrips.Grips[CurrentGrips.Count].X := DrawObjects[ObjIdx].X1;
+  CurrentGrips.Grips[CurrentGrips.Count].Y := DrawObjects[ObjIdx].Y1;
+  CurrentGrips.Grips[CurrentGrips.Count].GripType := GRIP_ENDPOINT;
+  CurrentGrips.Grips[CurrentGrips.Count].ObjIndex := ObjIdx;
+  CurrentGrips.Grips[CurrentGrips.Count].PointIndex := 0;
+  CurrentGrips.Grips[CurrentGrips.Count].IsHot := False;
+  Inc(CurrentGrips.Count);
  End;
- 
+
  { Grip au deuxième point }
- If GripSet.Count < MAX_GRIPS Then Begin
-  GripSet.Grips[GripSet.Count].X := DrawObjects[ObjIdx].X2;
-  GripSet.Grips[GripSet.Count].Y := DrawObjects[ObjIdx].Y2;
-  GripSet.Grips[GripSet.Count].GripType := GRIP_ENDPOINT;
-  GripSet.Grips[GripSet.Count].ObjIndex := ObjIdx;
-  GripSet.Grips[GripSet.Count].PointIndex := 1;
-  GripSet.Grips[GripSet.Count].IsHot := False;
-  Inc(GripSet.Count);
+ If CurrentGrips.Count < MAX_GRIPS Then Begin
+  CurrentGrips.Grips[CurrentGrips.Count].X := DrawObjects[ObjIdx].X2;
+  CurrentGrips.Grips[CurrentGrips.Count].Y := DrawObjects[ObjIdx].Y2;
+  CurrentGrips.Grips[CurrentGrips.Count].GripType := GRIP_ENDPOINT;
+  CurrentGrips.Grips[CurrentGrips.Count].ObjIndex := ObjIdx;
+  CurrentGrips.Grips[CurrentGrips.Count].PointIndex := 1;
+  CurrentGrips.Grips[CurrentGrips.Count].IsHot := False;
+  Inc(CurrentGrips.Count);
  End;
- 
+
  { Grip à la position du texte }
- If GripSet.Count < MAX_GRIPS Then Begin
-  GripSet.Grips[GripSet.Count].X := DrawObjects[ObjIdx].DimTextX;
-  GripSet.Grips[GripSet.Count].Y := DrawObjects[ObjIdx].DimTextY;
-  GripSet.Grips[GripSet.Count].GripType := GRIP_MIDPOINT;
-  GripSet.Grips[GripSet.Count].ObjIndex := ObjIdx;
-  GripSet.Grips[GripSet.Count].PointIndex := 2;
-  GripSet.Grips[GripSet.Count].IsHot := False;
-  Inc(GripSet.Count);
+ If CurrentGrips.Count < MAX_GRIPS Then Begin
+  CurrentGrips.Grips[CurrentGrips.Count].X := DrawObjects[ObjIdx].DimTextX;
+  CurrentGrips.Grips[CurrentGrips.Count].Y := DrawObjects[ObjIdx].DimTextY;
+  CurrentGrips.Grips[CurrentGrips.Count].GripType := GRIP_MIDPOINT;
+  CurrentGrips.Grips[CurrentGrips.Count].ObjIndex := ObjIdx;
+  CurrentGrips.Grips[CurrentGrips.Count].PointIndex := 2;
+  CurrentGrips.Grips[CurrentGrips.Count].IsHot := False;
+  Inc(CurrentGrips.Count);
  End;
 End;
 
@@ -9155,7 +9188,7 @@ Begin
  BlockRefCount := 0;
  XRefCount := 0;
  BlockEntityCount := 0;
- 
+
  { Initialiser toutes les définitions de blocs }
  For I := 0 to MAX_BLOCKS - 1 do Begin
   BlockDefs[I].Name := '';
@@ -9168,7 +9201,7 @@ Begin
   BlockDefs[I].XRefPath := '';
   BlockDefs[I].IsDefined := False;
  End;
- 
+
  { Initialiser toutes les références de blocs }
  For I := 0 to MAX_BLOCK_REFS - 1 do Begin
   BlockRefs[I].BlockIndex := -1;
@@ -9182,7 +9215,7 @@ Begin
   BlockRefs[I].Selected := False;
   BlockRefs[I].Visible := True;
  End;
- 
+
  { Initialiser toutes les XREFs }
  For I := 0 to MAX_XREFS - 1 do Begin
   XRefs[I].Name := '';
@@ -9210,13 +9243,13 @@ Begin
  { Appliquer l'échelle }
  TempX := X * ScaleX;
  TempY := Y * ScaleY;
- 
+
  { Appliquer la rotation }
  CosR := Cos(Rotation);
  SinR := Sin(Rotation);
  X := TempX * CosR - TempY * SinR;
  Y := TempX * SinR + TempY * CosR;
- 
+
  { Appliquer la translation }
  X := X + InsX;
  Y := Y + InsY;
@@ -9228,16 +9261,16 @@ Var
  I: Integer;
 Begin
  CreateBlock := -1;
- 
+
  { Vérifier si un bloc avec ce nom existe déjà }
  If FindBlockByName(Name) >= 0 Then Exit;
- 
+
  { Trouver un emplacement libre }
  If BlockDefCount >= MAX_BLOCKS Then Exit;
- 
+
  I := BlockDefCount;
  Inc(BlockDefCount);
- 
+
  BlockDefs[I].Name := Name;
  BlockDefs[I].Description := '';
  BlockDefs[I].BaseX := BaseX;
@@ -9247,7 +9280,7 @@ Begin
  BlockDefs[I].IsXRef := False;
  BlockDefs[I].XRefPath := '';
  BlockDefs[I].IsDefined := True;
- 
+
  CreateBlock := I;
 End;
 
@@ -9258,12 +9291,12 @@ Var
  UpperName, UpperBlockName: String;
 Begin
  FindBlockByName := -1;
- 
+
  UpperName := Name;
  For I := 1 to Length(UpperName) do
   If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
    UpperName[I] := Chr(Ord(UpperName[I]) - 32);
- 
+
  For I := 0 to BlockDefCount - 1 do Begin
   If BlockDefs[I].IsDefined Then Begin
    UpperBlockName := BlockDefs[I].Name;
@@ -9283,15 +9316,15 @@ Var
  EntityIdx: Integer;
 Begin
  AddEntityToBlock := -1;
- 
+
  If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
  If Not BlockDefs[BlockIdx].IsDefined Then Exit;
  If BlockDefs[BlockIdx].EntityCount >= MAX_BLOCK_ENTITIES Then Exit;
  If BlockEntityCount >= MAX_BLOCKS * MAX_BLOCK_ENTITIES Then Exit;
- 
+
  EntityIdx := BlockEntityCount;
  Inc(BlockEntityCount);
- 
+
  { Copier l'entité en ajustant les coordonnées par rapport au point de base }
  BlockEntities[EntityIdx] := Entity;
  BlockEntities[EntityIdx].X1 := Entity.X1 - BlockDefs[BlockIdx].BaseX;
@@ -9300,9 +9333,9 @@ Begin
   BlockEntities[EntityIdx].X2 := Entity.X2 - BlockDefs[BlockIdx].BaseX;
   BlockEntities[EntityIdx].Y2 := Entity.Y2 - BlockDefs[BlockIdx].BaseY;
  End;
- 
+
  Inc(BlockDefs[BlockIdx].EntityCount);
- 
+
  AddEntityToBlock := EntityIdx;
 End;
 
@@ -9312,14 +9345,14 @@ Var
  RefIdx: Integer;
 Begin
  InsertBlock := -1;
- 
+
  If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
  If Not BlockDefs[BlockIdx].IsDefined Then Exit;
  If BlockRefCount >= MAX_BLOCK_REFS Then Exit;
- 
+
  RefIdx := BlockRefCount;
  Inc(BlockRefCount);
- 
+
  BlockRefs[RefIdx].BlockIndex := BlockIdx;
  BlockRefs[RefIdx].InsertX := InsX;
  BlockRefs[RefIdx].InsertY := InsY;
@@ -9330,7 +9363,7 @@ Begin
  BlockRefs[RefIdx].LayerIndex := CurrentLayer;
  BlockRefs[RefIdx].Selected := False;
  BlockRefs[RefIdx].Visible := True;
- 
+
  InsertBlock := RefIdx;
 End;
 
@@ -9343,23 +9376,23 @@ Var
  NewObjIdx: Integer;
 Begin
  If (RefIdx < 0) or (RefIdx >= BlockRefCount) Then Exit;
- 
+
  BlockIdx := BlockRefs[RefIdx].BlockIndex;
  If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
  If Not BlockDefs[BlockIdx].IsDefined Then Exit;
- 
+
  StartIdx := BlockDefs[BlockIdx].FirstEntityIdx;
- 
+
  { Créer des copies transformées de chaque entité du bloc }
  For I := 0 to BlockDefs[BlockIdx].EntityCount - 1 do Begin
   If ObjectCount >= MAX_OBJECTS Then Break;
-  
+
   NewObjIdx := ObjectCount;
   Inc(ObjectCount);
-  
+
   { Copier l'entité }
   DrawObjects[NewObjIdx] := BlockEntities[StartIdx + I];
-  
+
   { Transformer le premier point }
   X := BlockEntities[StartIdx + I].X1;
   Y := BlockEntities[StartIdx + I].Y1;
@@ -9368,7 +9401,7 @@ Begin
                  BlockRefs[RefIdx].Rotation);
   DrawObjects[NewObjIdx].X1 := X;
   DrawObjects[NewObjIdx].Y1 := Y;
-  
+
   { Transformer le deuxième point si nécessaire }
   If DrawObjects[NewObjIdx].ObjType in [OBJ_LINE, OBJ_RECTANGLE] Then Begin
    X2 := BlockEntities[StartIdx + I].X2;
@@ -9379,24 +9412,24 @@ Begin
    DrawObjects[NewObjIdx].X2 := X2;
    DrawObjects[NewObjIdx].Y2 := Y2;
   End;
-  
+
   { Appliquer l'échelle au rayon si c'est un cercle ou arc }
   If DrawObjects[NewObjIdx].ObjType in [OBJ_CIRCLE, OBJ_ARC] Then Begin
-   DrawObjects[NewObjIdx].Radius := DrawObjects[NewObjIdx].Radius * 
+   DrawObjects[NewObjIdx].Radius := DrawObjects[NewObjIdx].Radius *
                                     (Abs(BlockRefs[RefIdx].ScaleX) + Abs(BlockRefs[RefIdx].ScaleY)) / 2;
   End;
-  
+
   { Utiliser le calque de la référence de bloc }
   DrawObjects[NewObjIdx].LayerIndex := BlockRefs[RefIdx].LayerIndex;
-  
+
   { Si couleur ByBlock (0), utiliser la couleur de la référence }
   If DrawObjects[NewObjIdx].Color = 0 Then
    DrawObjects[NewObjIdx].Color := BlockRefs[RefIdx].Color;
-  
+
   DrawObjects[NewObjIdx].Selected := False;
   DrawObjects[NewObjIdx].Visible := True;
  End;
- 
+
  { Supprimer la référence de bloc en la marquant comme invalide }
  BlockRefs[RefIdx].BlockIndex := -1;
  BlockRefs[RefIdx].Visible := False;
@@ -9408,7 +9441,7 @@ Var
  I: Integer;
 Begin
  If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
- 
+
  { Vérifier si des références utilisent ce bloc }
  For I := 0 to BlockRefCount - 1 do Begin
   If BlockRefs[I].BlockIndex = BlockIdx Then Begin
@@ -9417,7 +9450,7 @@ Begin
    BlockRefs[I].Visible := False;
   End;
  End;
- 
+
  { Marquer le bloc comme non défini }
  BlockDefs[BlockIdx].IsDefined := False;
  BlockDefs[BlockIdx].Name := '';
@@ -9434,13 +9467,13 @@ Var
 Begin
  If (RefIdx < 0) or (RefIdx >= BlockRefCount) Then Exit;
  If Not BlockRefs[RefIdx].Visible Then Exit;
- 
+
  BlockIdx := BlockRefs[RefIdx].BlockIndex;
  If (BlockIdx < 0) or (BlockIdx >= BlockDefCount) Then Exit;
  If Not BlockDefs[BlockIdx].IsDefined Then Exit;
- 
+
  StartIdx := BlockDefs[BlockIdx].FirstEntityIdx;
- 
+
  { Dessiner chaque entité du bloc avec transformation }
  For I := 0 to BlockDefs[BlockIdx].EntityCount - 1 do Begin
   { Déterminer la couleur }
@@ -9450,7 +9483,7 @@ Begin
   If ObjColor = 256 Then  { ByLayer }
    ObjColor := Layers[BlockRefs[RefIdx].LayerIndex].Color;
   SetColor(ObjColor);
-  
+
   Case BlockEntities[StartIdx + I].ObjType of
    OBJ_LINE: Begin
     X := BlockEntities[StartIdx + I].X1;
@@ -9460,7 +9493,7 @@ Begin
                    BlockRefs[RefIdx].Rotation);
     SX1 := WorldToScreenX(X);
     SY1 := WorldToScreenY(Y);
-    
+
     X2 := BlockEntities[StartIdx + I].X2;
     Y2 := BlockEntities[StartIdx + I].Y2;
     TransformPoint(X2, Y2, BlockRefs[RefIdx].InsertX, BlockRefs[RefIdx].InsertY,
@@ -9468,10 +9501,10 @@ Begin
                    BlockRefs[RefIdx].Rotation);
     SX2 := WorldToScreenX(X2);
     SY2 := WorldToScreenY(Y2);
-    
+
     Line(SX1, SY1, SX2, SY2);
    End;
-   
+
    OBJ_CIRCLE: Begin
     X := BlockEntities[StartIdx + I].X1;
     Y := BlockEntities[StartIdx + I].Y1;
@@ -9480,12 +9513,12 @@ Begin
                    BlockRefs[RefIdx].Rotation);
     SX1 := WorldToScreenX(X);
     SY1 := WorldToScreenY(Y);
-    SR := Round(BlockEntities[StartIdx + I].Radius * 
+    SR := Round(BlockEntities[StartIdx + I].Radius *
                (Abs(BlockRefs[RefIdx].ScaleX) + Abs(BlockRefs[RefIdx].ScaleY)) / 2 * ZoomLevel);
-    
+
     Circle(SX1, SY1, SR);
    End;
-   
+
    OBJ_RECTANGLE: Begin
     X := BlockEntities[StartIdx + I].X1;
     Y := BlockEntities[StartIdx + I].Y1;
@@ -9494,7 +9527,7 @@ Begin
                    BlockRefs[RefIdx].Rotation);
     SX1 := WorldToScreenX(X);
     SY1 := WorldToScreenY(Y);
-    
+
     X2 := BlockEntities[StartIdx + I].X2;
     Y2 := BlockEntities[StartIdx + I].Y2;
     TransformPoint(X2, Y2, BlockRefs[RefIdx].InsertX, BlockRefs[RefIdx].InsertY,
@@ -9502,12 +9535,12 @@ Begin
                    BlockRefs[RefIdx].Rotation);
     SX2 := WorldToScreenX(X2);
     SY2 := WorldToScreenY(Y2);
-    
+
     Rectangle(SX1, SY1, SX2, SY2);
    End;
   End;
  End;
- 
+
  { Si sélectionné, dessiner un indicateur }
  If BlockRefs[RefIdx].Selected Then Begin
   SetFillStyle(SolidFill, Green);
@@ -9522,16 +9555,16 @@ Procedure GetBlockRefGrips(RefIdx: Integer);
 Begin
  If (RefIdx < 0) or (RefIdx >= BlockRefCount) Then Exit;
  If BlockRefs[RefIdx].BlockIndex < 0 Then Exit;
- 
+
  { Grip au point d'insertion }
- If GripSet.Count < MAX_GRIPS Then Begin
-  GripSet.Grips[GripSet.Count].X := BlockRefs[RefIdx].InsertX;
-  GripSet.Grips[GripSet.Count].Y := BlockRefs[RefIdx].InsertY;
-  GripSet.Grips[GripSet.Count].GripType := GRIP_CENTER;
-  GripSet.Grips[GripSet.Count].ObjIndex := RefIdx + 10000;  { Offset pour différencier des objets }
-  GripSet.Grips[GripSet.Count].PointIndex := 0;
-  GripSet.Grips[GripSet.Count].IsHot := False;
-  Inc(GripSet.Count);
+ If CurrentGrips.Count < MAX_GRIPS Then Begin
+  CurrentGrips.Grips[CurrentGrips.Count].X := BlockRefs[RefIdx].InsertX;
+  CurrentGrips.Grips[CurrentGrips.Count].Y := BlockRefs[RefIdx].InsertY;
+  CurrentGrips.Grips[CurrentGrips.Count].GripType := GRIP_CENTER;
+  CurrentGrips.Grips[CurrentGrips.Count].ObjIndex := RefIdx + 10000;  { Offset pour différencier des objets }
+  CurrentGrips.Grips[CurrentGrips.Count].PointIndex := 0;
+  CurrentGrips.Grips[CurrentGrips.Count].IsHot := False;
+  Inc(CurrentGrips.Count);
  End;
 End;
 
@@ -9543,12 +9576,12 @@ Var
  FileName: String;
 Begin
  AttachXRef := -1;
- 
+
  If XRefCount >= MAX_XREFS Then Exit;
- 
+
  XRefIdx := XRefCount;
  Inc(XRefCount);
- 
+
  { Extraire le nom de fichier du chemin }
  LastSlash := 0;
  For I := 1 to Length(FilePath) do
@@ -9558,14 +9591,14 @@ Begin
   FileName := Copy(FilePath, LastSlash + 1, Length(FilePath) - LastSlash)
  Else
   FileName := FilePath;
- 
+
  { Retirer l'extension pour le nom }
  For I := Length(FileName) downto 1 do
   If FileName[I] = '.' Then Begin
    FileName := Copy(FileName, 1, I - 1);
    Break;
   End;
- 
+
  XRefs[XRefIdx].Name := FileName;
  XRefs[XRefIdx].FilePath := FilePath;
  XRefs[XRefIdx].InsertX := InsX;
@@ -9579,10 +9612,10 @@ Begin
  XRefs[XRefIdx].Overlay := IsOverlay;
  XRefs[XRefIdx].Selected := False;
  XRefs[XRefIdx].Visible := True;
- 
+
  { Tenter de charger le fichier XREF }
  ReloadXRef(XRefIdx);
- 
+
  AttachXRef := XRefIdx;
 End;
 
@@ -9590,11 +9623,11 @@ End;
 Procedure DetachXRef(XRefIdx: Integer);
 Begin
  If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
- 
+
  { Si un bloc est associé, le supprimer }
  If XRefs[XRefIdx].BlockIndex >= 0 Then
   DeleteBlock(XRefs[XRefIdx].BlockIndex);
- 
+
  { Marquer comme détachée }
  XRefs[XRefIdx].Name := '';
  XRefs[XRefIdx].FilePath := '';
@@ -9610,20 +9643,20 @@ Var
  BlockIdx: Integer;
 Begin
  If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
- 
+
  { Vérifier si le fichier existe }
  {$I-}
  Assign(F, XRefs[XRefIdx].FilePath);
  Reset(F);
  {$I+}
- 
+
  If IOResult <> 0 Then Begin
   XRefs[XRefIdx].Status := XREF_NOT_FOUND;
   XRefs[XRefIdx].BlockIndex := -1;
   Exit;
  End;
  Close(F);
- 
+
  { Créer un bloc pour la XREF si nécessaire }
  If XRefs[XRefIdx].BlockIndex < 0 Then Begin
   BlockIdx := CreateBlock(XRefs[XRefIdx].Name + '_XREF', 0, 0);
@@ -9633,7 +9666,7 @@ Begin
    XRefs[XRefIdx].BlockIndex := BlockIdx;
   End;
  End;
- 
+
  { TODO: Charger le contenu du fichier DWG/DXF dans le bloc }
  { Pour l'instant, on marque simplement comme chargée }
  XRefs[XRefIdx].Status := XREF_LOADED;
@@ -9643,7 +9676,7 @@ End;
 Procedure UnloadXRef(XRefIdx: Integer);
 Begin
  If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
- 
+
  XRefs[XRefIdx].Status := XREF_UNLOADED;
  XRefs[XRefIdx].Visible := False;
 End;
@@ -9655,13 +9688,13 @@ Var
 Begin
  If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
  If XRefs[XRefIdx].BlockIndex < 0 Then Exit;
- 
+
  BlockIdx := XRefs[XRefIdx].BlockIndex;
- 
+
  { Convertir le bloc XREF en bloc normal }
  BlockDefs[BlockIdx].IsXRef := False;
  BlockDefs[BlockIdx].XRefPath := '';
- 
+
  { Supprimer la XREF }
  XRefs[XRefIdx].Name := '';
  XRefs[XRefIdx].FilePath := '';
@@ -9678,7 +9711,7 @@ Begin
  If (XRefIdx < 0) or (XRefIdx >= XRefCount) Then Exit;
  If Not XRefs[XRefIdx].Visible Then Exit;
  If XRefs[XRefIdx].Name = '' Then Exit;
- 
+
  { Si le bloc est chargé, le dessiner }
  If (XRefs[XRefIdx].Status = XREF_LOADED) and (XRefs[XRefIdx].BlockIndex >= 0) Then Begin
   { Utiliser DrawBlockRef si une référence de bloc existe }
@@ -9686,7 +9719,7 @@ Begin
   SetColor(Cyan);
   SX := WorldToScreenX(XRefs[XRefIdx].InsertX);
   SY := WorldToScreenY(XRefs[XRefIdx].InsertY);
-  
+
   { Dessiner un symbole XREF }
   Rectangle(SX - 20, SY - 20, SX + 20, SY + 20);
   Line(SX - 20, SY - 20, SX + 20, SY + 20);
@@ -9698,12 +9731,12 @@ Begin
   SetColor(Red);
   SX := WorldToScreenX(XRefs[XRefIdx].InsertX);
   SY := WorldToScreenY(XRefs[XRefIdx].InsertY);
-  
+
   Rectangle(SX - 15, SY - 15, SX + 15, SY + 15);
   OutTextXY(SX - 10, SY - 5, '?');
   OutTextXY(SX - 30, SY + 20, GetXRefStatus(XRefIdx));
  End;
- 
+
  { Si sélectionnée, dessiner un indicateur }
  If XRefs[XRefIdx].Selected Then Begin
   SetFillStyle(SolidFill, Magenta);
@@ -9720,7 +9753,7 @@ Begin
   GetXRefStatus := 'Invalid';
   Exit;
  End;
- 
+
  Case XRefs[XRefIdx].Status of
   XREF_LOADED:       GetXRefStatus := 'Loaded';
   XREF_UNLOADED:     GetXRefStatus := 'Unloaded';
@@ -9872,7 +9905,7 @@ Begin
  { Écrire la signature du format (6 caractères) }
  MagicStr := DWG_MAGIC;
  BlockWrite(F, MagicStr[1], 6);
- 
+
  { Écrire les métadonnées du dessin }
  WriteDWGWord(F, ScreenWidth);       { Largeur du dessin }
  WriteDWGWord(F, ScreenHeight);      { Hauteur du dessin }
@@ -9880,18 +9913,18 @@ Begin
  WriteDWGWord(F, LayerCount);        { Nombre de calques }
  WriteDWGWord(F, BlockDefCount);     { Nombre de définitions de blocs }
  WriteDWGWord(F, BlockRefCount);     { Nombre de références de blocs }
- 
+
  { Écrire les paramètres de vue }
  WriteDWGReal(F, ViewOffsetX);
  WriteDWGReal(F, ViewOffsetY);
  WriteDWGReal(F, ZoomLevel);
- 
+
  { Écrire l'état courant }
  WriteDWGByte(F, CurrentLayer);
  WriteDWGWord(F, CurrentColor);
  WriteDWGByte(F, CurrentLineType);
  WriteDWGWord(F, CurrentLineWeight);
- 
+
  { Réserver de l'espace pour des extensions futures (32 octets) }
  For I := 1 to 32 do
   WriteDWGByte(F, 0);
@@ -9902,7 +9935,7 @@ Procedure WriteDWGEntity(Var F: File; Const Entity: TDrawObject);
 Begin
  { Écrire le type d'entité DWG }
  WriteDWGByte(F, GetDWGEntityCode(Entity.ObjType));
- 
+
  { Écrire les propriétés communes }
  WriteDWGByte(F, Entity.ObjType);
  WriteDWGReal(F, Entity.X1);
@@ -9915,7 +9948,7 @@ Begin
  WriteDWGWord(F, Entity.Color);
  WriteDWGByte(F, Entity.LineType);
  WriteDWGByte(F, Entity.LayerIndex);
- 
+
  { Écrire les données de cotation si nécessaire }
  If Entity.ObjType = OBJ_DIMENSION Then Begin
   WriteDWGByte(F, Entity.DimType);
@@ -9962,13 +9995,13 @@ Begin
   WriteDWGWord(F, BlockDefs[I].EntityCount);
   WriteDWGByte(F, Ord(BlockDefs[I].IsXRef));
   WriteDWGByte(F, Ord(BlockDefs[I].IsDefined));
-  
+
   { Écrire les entités du bloc }
   StartIdx := BlockDefs[I].FirstEntityIdx;
   For J := 0 to BlockDefs[I].EntityCount - 1 do
    WriteDWGEntity(F, BlockEntities[StartIdx + J]);
  End;
- 
+
  { Écrire les références de blocs }
  For I := 0 to BlockRefCount - 1 do Begin
   WriteDWGWord(F, BlockRefs[I].BlockIndex);
@@ -9990,29 +10023,29 @@ Var
  I: Integer;
 Begin
  WriteDWGFile := False;
- 
+
  {$I-}
  Assign(F, FileName);
  Rewrite(F, 1);
  {$I+}
- 
+
  If IOResult <> 0 Then Exit;
- 
+
  { Écrire l'en-tête }
  WriteDWGHeader(F);
- 
+
  { Écrire les calques }
  WriteDWGLayers(F);
- 
+
  { Écrire les blocs }
  WriteDWGBlocks(F);
- 
+
  { Écrire les entités du dessin }
  For I := 0 to ObjectCount - 1 do Begin
   If DrawObjects[I].ObjType <> OBJ_NONE Then
    WriteDWGEntity(F, DrawObjects[I]);
  End;
- 
+
  Close(F);
  WriteDWGFile := True;
 End;
@@ -10025,11 +10058,11 @@ Var
  Dummy: Byte;
 Begin
  ReadDWGHeader := False;
- 
+
  { Lire et vérifier la signature }
  BlockRead(F, MagicStr[1], 6);
  MagicStr[0] := #6;
- 
+
  { Vérifier que c'est un format supporté }
  If (MagicStr <> DWG_VERSION_R14) and
     (MagicStr <> DWG_VERSION_2000) and
@@ -10038,7 +10071,7 @@ Begin
     (MagicStr <> DWG_VERSION_2010) and
     (MagicStr <> DWG_VERSION_2013) and
     (MagicStr <> DWG_VERSION_2018) Then Exit;
- 
+
  { Lire les métadonnées du dessin }
  ScreenWidth := ReadDWGWord(F);
  ScreenHeight := ReadDWGWord(F);
@@ -10046,22 +10079,22 @@ Begin
  LayerCount := ReadDWGWord(F);
  BlockDefCount := ReadDWGWord(F);
  BlockRefCount := ReadDWGWord(F);
- 
+
  { Lire les paramètres de vue }
  ViewOffsetX := ReadDWGReal(F);
  ViewOffsetY := ReadDWGReal(F);
  ZoomLevel := ReadDWGReal(F);
- 
+
  { Lire l'état courant }
  CurrentLayer := ReadDWGByte(F);
  CurrentColor := ReadDWGWord(F);
  CurrentLineType := ReadDWGByte(F);
  CurrentLineWeight := ReadDWGWord(F);
- 
+
  { Ignorer l'espace réservé (32 octets) }
  For I := 1 to 32 do
   Dummy := ReadDWGByte(F);
- 
+
  ReadDWGHeader := True;
 End;
 
@@ -10071,10 +10104,10 @@ Var
  DWGCode: Byte;
 Begin
  ReadDWGEntity := False;
- 
+
  { Lire le type d'entité DWG }
  DWGCode := ReadDWGByte(F);
- 
+
  { Lire les propriétés communes }
  Entity.ObjType := ReadDWGByte(F);
  Entity.X1 := ReadDWGReal(F);
@@ -10089,7 +10122,7 @@ Begin
  Entity.LayerIndex := ReadDWGByte(F);
  Entity.Selected := False;
  Entity.Visible := True;
- 
+
  { Lire les données de cotation si nécessaire }
  If Entity.ObjType = OBJ_DIMENSION Then Begin
   Entity.DimType := ReadDWGByte(F);
@@ -10102,7 +10135,7 @@ Begin
   Entity.DimTextX := ReadDWGReal(F);
   Entity.DimTextY := ReadDWGReal(F);
  End;
- 
+
  ReadDWGEntity := True;
 End;
 
@@ -10112,7 +10145,7 @@ Var
  I: Integer;
 Begin
  ReadDWGLayers := False;
- 
+
  For I := 0 to LayerCount - 1 do Begin
   Layers[I].Name := ReadDWGString(F);
   Layers[I].Color := ReadDWGWord(F);
@@ -10123,7 +10156,7 @@ Begin
   Layers[I].Frozen := ReadDWGByte(F) <> 0;
   Layers[I].OnFlag := ReadDWGByte(F) <> 0;
  End;
- 
+
  ReadDWGLayers := True;
 End;
 
@@ -10134,9 +10167,9 @@ Var
  EntCount: Integer;
 Begin
  ReadDWGBlocks := False;
- 
+
  BlockEntityCount := 0;
- 
+
  { Lire les définitions de blocs }
  For I := 0 to BlockDefCount - 1 do Begin
   BlockDefs[I].Name := ReadDWGString(F);
@@ -10148,14 +10181,14 @@ Begin
   BlockDefs[I].FirstEntityIdx := BlockEntityCount;
   BlockDefs[I].IsXRef := ReadDWGByte(F) <> 0;
   BlockDefs[I].IsDefined := ReadDWGByte(F) <> 0;
-  
+
   { Lire les entités du bloc }
   For J := 0 to EntCount - 1 do Begin
    ReadDWGEntity(F, BlockEntities[BlockEntityCount]);
    Inc(BlockEntityCount);
   End;
  End;
- 
+
  { Lire les références de blocs }
  For I := 0 to BlockRefCount - 1 do Begin
   BlockRefs[I].BlockIndex := ReadDWGWord(F);
@@ -10169,7 +10202,7 @@ Begin
   BlockRefs[I].Visible := ReadDWGByte(F) <> 0;
   BlockRefs[I].Selected := False;
  End;
- 
+
  ReadDWGBlocks := True;
 End;
 
@@ -10181,38 +10214,38 @@ Var
  TempCount: LongInt;
 Begin
  ReadDWGFile := False;
- 
+
  {$I-}
  Assign(F, FileName);
  Reset(F, 1);
  {$I+}
- 
+
  If IOResult <> 0 Then Exit;
- 
+
  { Sauvegarder le nombre d'objets avant lecture }
  TempCount := ObjectCount;
- 
+
  { Lire l'en-tête }
  If Not ReadDWGHeader(F) Then Begin
   Close(F);
   ObjectCount := TempCount;
   Exit;
  End;
- 
+
  { Lire les calques }
  If Not ReadDWGLayers(F) Then Begin
   Close(F);
   ObjectCount := TempCount;
   Exit;
  End;
- 
+
  { Lire les blocs }
  If Not ReadDWGBlocks(F) Then Begin
   Close(F);
   ObjectCount := TempCount;
   Exit;
  End;
- 
+
  { Lire les entités du dessin }
  For I := 0 to ObjectCount - 1 do Begin
   If Not ReadDWGEntity(F, DrawObjects[I]) Then Begin
@@ -10220,13 +10253,13 @@ Begin
    Exit;
   End;
  End;
- 
+
  Close(F);
- 
+
  { Effacer la sélection }
  ClearSelection;
  ClearGrips;
- 
+
  ReadDWGFile := True;
 End;
 
@@ -10290,7 +10323,7 @@ Begin
  For I := 1 to Length(UpperName) do
   If (UpperName[I] >= 'a') and (UpperName[I] <= 'z') Then
    UpperName[I] := Chr(Ord(UpperName[I]) - 32);
- 
+
  If UpperName = DXF_LINE Then GetObjTypeFromDXF := OBJ_LINE
  Else If UpperName = DXF_POINT Then GetObjTypeFromDXF := OBJ_POINT
  Else If UpperName = DXF_CIRCLE Then GetObjTypeFromDXF := OBJ_CIRCLE
@@ -10311,47 +10344,47 @@ Begin
  { Section HEADER }
  WriteDXFString(F, 0, DXF_SECTION);
  WriteDXFString(F, 2, DXF_HEADER);
- 
+
  { Variable $ACADVER - version AutoCAD }
  WriteDXFString(F, 9, '$ACADVER');
  WriteDXFString(F, 1, 'AC1015');
- 
+
  { Variable $INSBASE - point d'insertion de base }
  WriteDXFString(F, 9, '$INSBASE');
  WriteDXFReal(F, 10, 0.0);
  WriteDXFReal(F, 20, 0.0);
  WriteDXFReal(F, 30, 0.0);
- 
+
  { Variable $EXTMIN - coin inférieur gauche des limites }
  WriteDXFString(F, 9, '$EXTMIN');
  WriteDXFReal(F, 10, 0.0);
  WriteDXFReal(F, 20, 0.0);
  WriteDXFReal(F, 30, 0.0);
- 
+
  { Variable $EXTMAX - coin supérieur droit des limites }
  WriteDXFString(F, 9, '$EXTMAX');
  WriteDXFReal(F, 10, ScreenWidth);
  WriteDXFReal(F, 20, ScreenHeight);
  WriteDXFReal(F, 30, 0.0);
- 
+
  { Variable $LIMMIN - limites du dessin min }
  WriteDXFString(F, 9, '$LIMMIN');
  WriteDXFReal(F, 10, 0.0);
  WriteDXFReal(F, 20, 0.0);
- 
+
  { Variable $LIMMAX - limites du dessin max }
  WriteDXFString(F, 9, '$LIMMAX');
  WriteDXFReal(F, 10, ScreenWidth);
  WriteDXFReal(F, 20, ScreenHeight);
- 
+
  { Variable $CLAYER - calque courant }
  WriteDXFString(F, 9, '$CLAYER');
  WriteDXFString(F, 8, Layers[CurrentLayer].Name);
- 
+
  { Variable $CECOLOR - couleur courante }
  WriteDXFString(F, 9, '$CECOLOR');
  WriteDXFInteger(F, 62, CurrentColor);
- 
+
  WriteDXFString(F, 0, DXF_ENDSEC);
 End;
 
@@ -10364,27 +10397,27 @@ Begin
  WriteDXFString(F, 0, DXF_TABLE);
  WriteDXFString(F, 2, DXF_LAYER);
  WriteDXFInteger(F, 70, LayerCount);
- 
+
  For I := 0 to LayerCount - 1 do Begin
   WriteDXFString(F, 0, DXF_LAYER);
   WriteDXFString(F, 2, Layers[I].Name);
-  
+
   { Calculer les flags }
   Flags := 0;
   If Layers[I].Frozen Then Flags := Flags or 1;
   If Layers[I].Locked Then Flags := Flags or 4;
   WriteDXFInteger(F, 70, Flags);
-  
+
   { Couleur (négative si calque éteint) }
   If Layers[I].OnFlag Then
    WriteDXFInteger(F, 62, Layers[I].Color)
   Else
    WriteDXFInteger(F, 62, -Layers[I].Color);
-  
+
   { Type de ligne }
   WriteDXFString(F, 6, 'CONTINUOUS');
  End;
- 
+
  WriteDXFString(F, 0, DXF_ENDTAB);
 End;
 
@@ -10393,10 +10426,10 @@ Procedure WriteDXFTables(Var F: Text);
 Begin
  WriteDXFString(F, 0, DXF_SECTION);
  WriteDXFString(F, 2, DXF_TABLES);
- 
+
  { Table des calques }
  WriteDXFLayers(F);
- 
+
  WriteDXFString(F, 0, DXF_ENDSEC);
 End;
 
@@ -10408,7 +10441,7 @@ Var
 Begin
  WriteDXFString(F, 0, DXF_SECTION);
  WriteDXFString(F, 2, DXF_BLOCKS);
- 
+
  For I := 0 to BlockDefCount - 1 do Begin
   { Début du bloc }
   WriteDXFString(F, 0, DXF_BLOCK);
@@ -10418,17 +10451,17 @@ Begin
   WriteDXFReal(F, 10, BlockDefs[I].BaseX);
   WriteDXFReal(F, 20, BlockDefs[I].BaseY);
   WriteDXFReal(F, 30, 0.0);
-  
+
   { Entités du bloc }
   StartIdx := BlockDefs[I].FirstEntityIdx;
   For J := 0 to BlockDefs[I].EntityCount - 1 do
    WriteDXFEntity(F, BlockEntities[StartIdx + J], 1000 + I * 100 + J);
-  
+
   { Fin du bloc }
   WriteDXFString(F, 0, DXF_ENDBLK);
   WriteDXFString(F, 8, '0');
  End;
- 
+
  WriteDXFString(F, 0, DXF_ENDSEC);
 End;
 
@@ -10510,25 +10543,25 @@ Begin
  WriteDXFInteger(F, 5, Handle);
  WriteDXFString(F, 8, Layers[Entity.LayerIndex].Name);
  WriteDXFInteger(F, 62, Entity.Color);
- 
+
  { Centre }
  WriteDXFReal(F, 10, Entity.X1);
  WriteDXFReal(F, 20, Entity.Y1);
  WriteDXFReal(F, 30, 0.0);
- 
+
  { Vecteur de l'axe majeur (du centre au point de fin) }
  MajorX := Entity.Radius;  { Rayon = demi-axe majeur }
  MajorY := 0.0;
  WriteDXFReal(F, 11, MajorX);
  WriteDXFReal(F, 21, MajorY);
  WriteDXFReal(F, 31, 0.0);
- 
+
  { Ratio (demi-axe mineur / demi-axe majeur) }
  If Entity.Radius > 0 Then
   WriteDXFReal(F, 40, Entity.EndAngle / Entity.Radius)
  Else
   WriteDXFReal(F, 40, 1.0);
- 
+
  { Angles (en radians pour DXF) }
  WriteDXFReal(F, 41, Entity.StartAngle * 3.14159265 / 180.0);
  WriteDXFReal(F, 42, 6.28318530);  { 360 degrés = cercle complet }
@@ -10541,29 +10574,29 @@ Begin
  WriteDXFInteger(F, 5, Handle);
  WriteDXFString(F, 8, Layers[Entity.LayerIndex].Name);
  WriteDXFInteger(F, 62, Entity.Color);
- 
+
  { Type de cotation }
  WriteDXFInteger(F, 70, Entity.DimType);
- 
+
  { Point de définition }
  WriteDXFReal(F, 10, Entity.DimX3);
  WriteDXFReal(F, 20, Entity.DimY3);
  WriteDXFReal(F, 30, 0.0);
- 
+
  { Point milieu du texte }
  WriteDXFReal(F, 11, Entity.DimTextX);
  WriteDXFReal(F, 21, Entity.DimTextY);
  WriteDXFReal(F, 31, 0.0);
- 
+
  { Points d'extension }
  WriteDXFReal(F, 13, Entity.X1);
  WriteDXFReal(F, 23, Entity.Y1);
  WriteDXFReal(F, 33, 0.0);
- 
+
  WriteDXFReal(F, 14, Entity.X2);
  WriteDXFReal(F, 24, Entity.Y2);
  WriteDXFReal(F, 34, 0.0);
- 
+
  { Texte de cotation }
  If Entity.DimText <> '' Then
   WriteDXFString(F, 1, Entity.DimText);
@@ -10574,7 +10607,7 @@ Procedure WriteDXFEntity(Var F: Text; Const Entity: TDrawObject; Handle: LongInt
 Begin
  If Entity.ObjType = OBJ_NONE Then Exit;
  If Not Entity.Visible Then Exit;
- 
+
  Case Entity.ObjType of
   OBJ_LINE:      WriteDXFLine(F, Entity, Handle);
   OBJ_CIRCLE:    WriteDXFCircle(F, Entity, Handle);
@@ -10598,7 +10631,7 @@ Var
 Begin
  WriteDXFString(F, 0, DXF_SECTION);
  WriteDXFString(F, 2, DXF_ENTITIES);
- 
+
  Handle := 100;
  For I := 0 to ObjectCount - 1 do Begin
   If DrawObjects[I].ObjType <> OBJ_NONE Then Begin
@@ -10606,7 +10639,7 @@ Begin
    Inc(Handle);
   End;
  End;
- 
+
  WriteDXFString(F, 0, DXF_ENDSEC);
 End;
 
@@ -10616,23 +10649,23 @@ Var
  F: Text;
 Begin
  WriteDXFFile := False;
- 
+
  {$I-}
  Assign(F, FileName);
  Rewrite(F);
  {$I+}
- 
+
  If IOResult <> 0 Then Exit;
- 
+
  { Écrire les sections }
  WriteDXFHeader(F);
  WriteDXFTables(F);
  WriteDXFBlocks(F);
  WriteDXFEntities(F);
- 
+
  { Fin du fichier }
  WriteDXFString(F, 0, DXF_EOF);
- 
+
  Close(F);
  WriteDXFFile := True;
 End;
@@ -10645,14 +10678,14 @@ Var
 Begin
  ReadDXFGroupCode := -1;
  If EOF(F) Then Exit;
- 
+
  ReadLn(F, S);
  { Supprimer les espaces }
  While (Length(S) > 0) and (S[1] = ' ') do
   Delete(S, 1, 1);
  While (Length(S) > 0) and (S[Length(S)] = ' ') do
   Delete(S, Length(S), 1);
- 
+
  Val(S, Code, Err);
  If Err = 0 Then
   ReadDXFGroupCode := Code;
@@ -10665,14 +10698,14 @@ Var
 Begin
  ReadDXFString := '';
  If EOF(F) Then Exit;
- 
+
  ReadLn(F, S);
  { Supprimer les espaces de début et fin }
  While (Length(S) > 0) and (S[1] = ' ') do
   Delete(S, 1, 1);
  While (Length(S) > 0) and (S[Length(S)] = ' ') do
   Delete(S, Length(S), 1);
- 
+
  ReadDXFString := S;
 End;
 
@@ -10711,13 +10744,13 @@ Var
  S: String;
 Begin
  ReadDXFHeader := False;
- 
+
  { Lire jusqu'à la fin de la section HEADER }
  Repeat
   Code := ReadDXFGroupCode(F);
   If Code < 0 Then Exit;
   S := ReadDXFString(F);
-  
+
   { Variables d'en-tête à traiter }
   If (Code = 9) and (S = '$CLAYER') Then Begin
    Code := ReadDXFGroupCode(F);
@@ -10729,7 +10762,7 @@ Begin
    CurrentColor := ReadDXFInteger(F);
   End;
  Until (Code = 0) and (S = DXF_ENDSEC);
- 
+
  ReadDXFHeader := True;
 End;
 
@@ -10747,12 +10780,12 @@ Begin
  LayerName := '';
  LayerColor := 7;
  LayerFlags := 0;
- 
+
  Repeat
   Code := ReadDXFGroupCode(F);
   If Code < 0 Then Exit;
   S := ReadDXFString(F);
-  
+
   If (Code = 0) Then Begin
    { Sauvegarder le calque précédent si on en lisait un }
    If InLayer and (LayerName <> '') and (LayerCount < MAX_LAYERS) Then Begin
@@ -10766,7 +10799,7 @@ Begin
     Layers[LayerCount].LineWeight := 0;
     Inc(LayerCount);
    End;
-   
+
    InLayer := (S = DXF_LAYER);
    LayerName := '';
    LayerColor := 7;
@@ -10780,7 +10813,7 @@ Begin
    End;
   End;
  Until (Code = 0) and (S = DXF_ENDSEC);
- 
+
  ReadDXFTables := True;
 End;
 
@@ -10791,14 +10824,14 @@ Var
  S: String;
 Begin
  ReadDXFBlocks := False;
- 
+
  { Sauter la section BLOCKS pour l'instant }
  Repeat
   Code := ReadDXFGroupCode(F);
   If Code < 0 Then Exit;
   S := ReadDXFString(F);
  Until (Code = 0) and (S = DXF_ENDSEC);
- 
+
  ReadDXFBlocks := True;
 End;
 
@@ -10810,38 +10843,38 @@ Var
  EntityType: String;
 Begin
  ReadDXFEntity := False;
- 
+
  { Initialiser l'entité }
  FillChar(Entity, SizeOf(Entity), 0);
  Entity.ObjType := OBJ_NONE;
  Entity.Color := 7;
  Entity.LayerIndex := 0;
  Entity.Visible := True;
- 
+
  { Lire le type d'entité (déjà lu par l'appelant) }
  EntityType := '';
- 
+
  Repeat
   Code := ReadDXFGroupCode(F);
   If Code < 0 Then Exit;
-  
+
   If Code = 0 Then Begin
    { Nouveau type d'entité ou fin de section }
    S := ReadDXFString(F);
-   
+
    If EntityType <> '' Then Begin
     { On a fini de lire cette entité }
     Entity.ObjType := GetObjTypeFromDXF(EntityType);
     ReadDXFEntity := Entity.ObjType <> OBJ_NONE;
    End;
-   
+
    { Passer au prochain type }
    If (S = DXF_ENDSEC) or (S = DXF_EOF) Then Exit;
    EntityType := S;
   End
   Else Begin
    S := ReadDXFString(F);
-   
+
    Case Code of
     8: Begin
      { Trouver l'index du calque }
@@ -10870,12 +10903,12 @@ Var
  Entity: TDrawObject;
 Begin
  ReadDXFEntities := False;
- 
+
  Repeat
   Code := ReadDXFGroupCode(F);
   If Code < 0 Then Exit;
   S := ReadDXFString(F);
-  
+
   If Code = 0 Then Begin
    If S = DXF_ENDSEC Then Begin
     ReadDXFEntities := True;
@@ -10892,13 +10925,13 @@ Begin
     Entity.Color := 7;
     Entity.LayerIndex := 0;
     Entity.Visible := True;
-    
+
     { Lire les attributs de l'entité }
     Repeat
      Code := ReadDXFGroupCode(F);
      If Code < 0 Then Exit;
      If Code = 0 Then Break;
-     
+
      S := ReadDXFString(F);
      Case Code of
       8: Entity.LayerIndex := 0;  { TODO: trouver l'index }
@@ -10914,13 +10947,13 @@ Begin
       1: Entity.DimText := S;
      End;
     Until False;
-    
+
     { Ajouter l'entité si valide }
     If (Entity.ObjType <> OBJ_NONE) and (ObjectCount < MAX_OBJECTS) Then Begin
      DrawObjects[ObjectCount] := Entity;
      Inc(ObjectCount);
     End;
-    
+
     { S contient maintenant le prochain type d'entité }
     S := ReadDXFString(F);
    End;
@@ -10936,18 +10969,18 @@ Var
  S: String;
 Begin
  ReadDXFFile := False;
- 
+
  {$I-}
  Assign(F, FileName);
  Reset(F);
  {$I+}
- 
+
  If IOResult <> 0 Then Exit;
- 
+
  { Réinitialiser le dessin }
  ObjectCount := 0;
  LayerCount := 0;
- 
+
  { Créer le calque 0 par défaut }
  Layers[0].Name := '0';
  Layers[0].Color := 7;
@@ -10958,18 +10991,18 @@ Begin
  Layers[0].Frozen := False;
  Layers[0].OnFlag := True;
  LayerCount := 1;
- 
+
  { Lire le fichier section par section }
  Repeat
   Code := ReadDXFGroupCode(F);
   If Code < 0 Then Break;
   S := ReadDXFString(F);
-  
+
   If (Code = 0) and (S = DXF_SECTION) Then Begin
    { Lire le nom de la section }
    Code := ReadDXFGroupCode(F);
    S := ReadDXFString(F);
-   
+
    If S = DXF_HEADER Then Begin
     If Not ReadDXFHeader(F) Then Break;
    End
@@ -10996,13 +11029,13 @@ Begin
    Break;
   End;
  Until EOF(F);
- 
+
  Close(F);
- 
+
  { Effacer la sélection }
  ClearSelection;
  ClearGrips;
- 
+
  ReadDXFFile := True;
 End;
 
@@ -11018,19 +11051,19 @@ Var
 Begin
  IsVisioFileVSDX := False;
  Ext := '';
- 
+
  { Extraire l'extension }
  For I := Length(FileName) downto 1 do
   If FileName[I] = '.' Then Begin
    Ext := Copy(FileName, I, Length(FileName) - I + 1);
    Break;
   End;
- 
+
  { Convertir en minuscules }
  For I := 1 to Length(Ext) do
   If (Ext[I] >= 'A') and (Ext[I] <= 'Z') Then
    Ext[I] := Chr(Ord(Ext[I]) + 32);
- 
+
  IsVisioFileVSDX := (Ext = VISIO_EXT_VSDX) or (Ext = VISIO_EXT_VSDM) or (Ext = VISIO_EXT_VSTX);
 End;
 
@@ -11076,21 +11109,21 @@ Var
  Err: Integer;
 Begin
  VisioColorToACI := 7; { Blanc par défaut }
- 
+
  If Length(ColorStr) < 7 Then Exit;
  If ColorStr[1] <> '#' Then Exit;
- 
+
  RStr := '$' + Copy(ColorStr, 2, 2);
  GStr := '$' + Copy(ColorStr, 4, 2);
  BStr := '$' + Copy(ColorStr, 6, 2);
- 
+
  Val(RStr, R, Err);
  If Err <> 0 Then Exit;
  Val(GStr, G, Err);
  If Err <> 0 Then Exit;
  Val(BStr, B, Err);
  If Err <> 0 Then Exit;
- 
+
  { Conversion simplifiée vers ACI }
  If (R < 50) and (G < 50) and (B < 50) Then VisioColorToACI := 0     { Noir }
  Else If (R > 200) and (G < 50) and (B < 50) Then VisioColorToACI := 1  { Rouge }
@@ -11143,12 +11176,12 @@ Begin
  SearchStr := Tag + '="';
  StartPos := Pos(SearchStr, Line);
  If StartPos = 0 Then Exit;
- 
+
  StartPos := StartPos + Length(SearchStr);
  EndPos := StartPos;
  While (EndPos <= Length(Line)) and (Line[EndPos] <> '"') do
   Inc(EndPos);
- 
+
  ExtractVisioXMLValue := Copy(Line, StartPos, EndPos - StartPos);
 End;
 
@@ -11205,7 +11238,7 @@ Begin
  H := Abs(Entity.Y2 - Entity.Y1);
  CX := (Entity.X1 + Entity.X2) / 2;
  CY := (Entity.Y1 + Entity.Y2) / 2;
- 
+
  WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
  WriteLn(F, '      <Cell N="', VISIO_CELL_PINX, '" V="', CX:0:6, '"/>');
  WriteLn(F, '      <Cell N="', VISIO_CELL_PINY, '" V="', CY:0:6, '"/>');
@@ -11246,7 +11279,7 @@ Var
  D: Real;
 Begin
  D := Entity.Radius * 2;
- 
+
  WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
  WriteLn(F, '      <Cell N="', VISIO_CELL_PINX, '" V="', Entity.X1:0:6, '"/>');
  WriteLn(F, '      <Cell N="', VISIO_CELL_PINY, '" V="', Entity.Y1:0:6, '"/>');
@@ -11277,7 +11310,7 @@ Begin
  W := Entity.Radius * 2;  { Demi-axe majeur }
  H := Entity.EndAngle * 2; { Demi-axe mineur stocké dans EndAngle }
  If H <= 0 Then H := W;
- 
+
  WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
  WriteLn(F, '      <Cell N="', VISIO_CELL_PINX, '" V="', Entity.X1:0:6, '"/>');
  WriteLn(F, '      <Cell N="', VISIO_CELL_PINY, '" V="', Entity.Y1:0:6, '"/>');
@@ -11308,12 +11341,12 @@ Var
 Begin
  StartRad := Entity.StartAngle * 3.14159265 / 180.0;
  EndRad := Entity.EndAngle * 3.14159265 / 180.0;
- 
+
  StartX := Entity.X1 + Entity.Radius * Cos(StartRad);
  StartY := Entity.Y1 + Entity.Radius * Sin(StartRad);
  EndX := Entity.X1 + Entity.Radius * Cos(EndRad);
  EndY := Entity.Y1 + Entity.Radius * Sin(EndRad);
- 
+
  WriteLn(F, '    <Shape ID="', ShapeID, '" Type="Shape" LineStyle="3" FillStyle="3" TextStyle="3">');
  WriteLn(F, '      <Cell N="', VISIO_CELL_BEGINX, '" V="', StartX:0:6, '"/>');
  WriteLn(F, '      <Cell N="', VISIO_CELL_BEGINY, '" V="', StartY:0:6, '"/>');
@@ -11355,7 +11388,7 @@ Procedure WriteVisioXMLShape(Var F: Text; Const Entity: TDrawObject; ShapeID: Lo
 Begin
  If Entity.ObjType = OBJ_NONE Then Exit;
  If Not Entity.Visible Then Exit;
- 
+
  Case Entity.ObjType of
   OBJ_LINE:      WriteVisioXMLLine(F, Entity, ShapeID);
   OBJ_RECTANGLE: WriteVisioXMLRectangle(F, Entity, ShapeID);
@@ -11374,7 +11407,7 @@ Var
  ShapeID: LongInt;
 Begin
  WriteLn(F, '    <Shapes>');
- 
+
  ShapeID := 1;
  For I := 0 to ObjectCount - 1 do Begin
   If DrawObjects[I].ObjType <> OBJ_NONE Then Begin
@@ -11382,7 +11415,7 @@ Begin
    Inc(ShapeID);
   End;
  End;
- 
+
  WriteLn(F, '    </Shapes>');
 End;
 
@@ -11418,19 +11451,19 @@ Var
  F: Text;
 Begin
  WriteVSDXFile := False;
- 
+
  {$I-}
  Assign(F, FileName);
  Rewrite(F);
  {$I+}
- 
+
  If IOResult <> 0 Then Exit;
- 
+
  WriteVisioXMLHeader(F);
  WriteVisioXMLDocProps(F);
  WriteVisioXMLPages(F);
  WriteVisioXMLFooter(F);
- 
+
  Close(F);
  WriteVSDXFile := True;
 End;
@@ -11448,7 +11481,7 @@ Var
  Line: String;
 Begin
  ReadVisioXMLHeader := False;
- 
+
  While Not EOF(F) do Begin
   ReadLn(F, Line);
   If Pos('<VisioDocument', Line) > 0 Then Begin
@@ -11466,16 +11499,16 @@ Var
 Begin
  ReadVisioXMLShape := False;
  InShape := True;
- 
+
  FillChar(Entity, SizeOf(Entity), 0);
  Entity.ObjType := OBJ_RECTANGLE;  { Type par défaut }
  Entity.Color := 7;
  Entity.LayerIndex := 0;
  Entity.Visible := True;
- 
+
  While InShape and Not EOF(F) do Begin
   ReadLn(F, Line);
-  
+
   { Fin de la forme }
   If Pos('</Shape>', Line) > 0 Then Begin
    InShape := False;
@@ -11575,10 +11608,10 @@ Var
 Begin
  ReadVisioXMLShapes := False;
  InShapes := False;
- 
+
  While Not EOF(F) do Begin
   ReadLn(F, Line);
-  
+
   If Pos('<Shapes>', Line) > 0 Then
    InShapes := True
   Else If Pos('</Shapes>', Line) > 0 Then Begin
@@ -11602,10 +11635,10 @@ Var
  Line: String;
 Begin
  ReadVisioXMLPages := False;
- 
+
  While Not EOF(F) do Begin
   ReadLn(F, Line);
-  
+
   If Pos('<Pages>', Line) > 0 Then Begin
    { Lire les formes de toutes les pages }
    While Not EOF(F) do Begin
@@ -11630,30 +11663,30 @@ Var
  Line: String;
 Begin
  ReadVSDXFile := False;
- 
+
  {$I-}
  Assign(F, FileName);
  Reset(F);
  {$I+}
- 
+
  If IOResult <> 0 Then Exit;
- 
+
  { Réinitialiser le dessin }
  ObjectCount := 0;
- 
+
  { Chercher les formes }
  While Not EOF(F) do Begin
   ReadLn(F, Line);
   If Pos('<Shapes>', Line) > 0 Then
    ReadVisioXMLShapes(F);
  End;
- 
+
  Close(F);
- 
+
  { Effacer la sélection }
  ClearSelection;
  ClearGrips;
- 
+
  ReadVSDXFile := True;
 End;
 
@@ -11738,12 +11771,12 @@ Var
  StrokeWidth: Real;
 Begin
  StrokeWidth := GetSVGStrokeWidth(LineWeight);
- 
+
  If Filled Then
   Write(F, ' fill="', ACIToSVGColor(Color), '"')
  Else
   Write(F, ' fill="none"');
- 
+
  Write(F, ' stroke="', ACIToSVGColor(Color), '"');
  Write(F, ' stroke-width="', StrokeWidth:0:2, '"');
 End;
@@ -11807,7 +11840,7 @@ Begin
   X := Entity.X2;
   W := Entity.X1 - Entity.X2;
  End;
- 
+
  If Entity.Y1 < Entity.Y2 Then Begin
   Y := Entity.Y1;
   H := Entity.Y2 - Entity.Y1;
@@ -11816,7 +11849,7 @@ Begin
   Y := Entity.Y2;
   H := Entity.Y1 - Entity.Y2;
  End;
- 
+
  Write(F, '  <rect');
  Write(F, ' x="', X:0:4, '"');
  Write(F, ' y="', Y:0:4, '"');
@@ -11845,7 +11878,7 @@ Begin
  RX := Entity.Radius;  { Demi-axe majeur }
  RY := Entity.EndAngle; { Demi-axe mineur (stocké dans EndAngle) }
  If RY <= 0 Then RY := RX;
- 
+
  Write(F, '  <ellipse');
  Write(F, ' cx="', Entity.X1:0:4, '"');
  Write(F, ' cy="', Entity.Y1:0:4, '"');
@@ -11866,21 +11899,21 @@ Begin
  { Convertir les angles en radians }
  StartRad := Entity.StartAngle * 3.14159265 / 180.0;
  EndRad := Entity.EndAngle * 3.14159265 / 180.0;
- 
+
  { Calculer les points de début et de fin }
  StartX := Entity.X1 + Entity.Radius * Cos(StartRad);
  StartY := Entity.Y1 - Entity.Radius * Sin(StartRad); { Y inversé pour SVG }
  EndX := Entity.X1 + Entity.Radius * Cos(EndRad);
  EndY := Entity.Y1 - Entity.Radius * Sin(EndRad);
- 
+
  { Déterminer si c'est un grand arc }
  AngleDiff := Entity.EndAngle - Entity.StartAngle;
  If AngleDiff < 0 Then AngleDiff := AngleDiff + 360;
  If AngleDiff > 180 Then LargeArc := 1 Else LargeArc := 0;
- 
+
  { Direction de l'arc (sens anti-horaire = 0 en SVG car Y est inversé) }
  Sweep := 0;
- 
+
  Write(F, '  <path d="M ', StartX:0:4, ' ', StartY:0:4);
  Write(F, ' A ', Entity.Radius:0:4, ' ', Entity.Radius:0:4);
  Write(F, ' 0 ', LargeArc, ' ', Sweep);
@@ -11896,7 +11929,7 @@ Var
 Begin
  FontSize := SVG_DEFAULT_FONT_SIZE;
  If Entity.Radius > 0 Then FontSize := Entity.Radius; { Hauteur de texte stockée dans Radius }
- 
+
  Write(F, '  <text');
  Write(F, ' x="', Entity.X1:0:4, '"');
  Write(F, ' y="', Entity.Y1:0:4, '"');
@@ -11914,7 +11947,7 @@ Var
  I: Integer;
 Begin
  If Entity.VertexCount < 2 Then Exit;
- 
+
  Write(F, '  <polyline points="');
  For I := 0 to Entity.VertexCount - 1 do Begin
   Write(F, Entity.Vertices[I].X:0:4, ',', Entity.Vertices[I].Y:0:4);
@@ -11943,7 +11976,7 @@ Var
  TextOffset: Real;
 Begin
  TextOffset := 5;
- 
+
  { Ligne de cotation }
  Write(F, '  <line');
  Write(F, ' x1="', Entity.X1:0:4, '"');
@@ -11955,11 +11988,11 @@ Begin
  Write(F, ' marker-end="url(#arrow)"');
  Write(F, ' marker-start="url(#arrow)"');
  WriteLn(F, '/>');
- 
+
  { Texte de cotation au milieu }
  MidX := (Entity.X1 + Entity.X2) / 2;
  MidY := (Entity.Y1 + Entity.Y2) / 2 - TextOffset;
- 
+
  Write(F, '  <text');
  Write(F, ' x="', MidX:0:4, '"');
  Write(F, ' y="', MidY:0:4, '"');
@@ -11977,7 +12010,7 @@ Procedure WriteSVGEntity(Var F: Text; Const Entity: TDrawObject);
 Begin
  If Entity.ObjType = OBJ_NONE Then Exit;
  If Not Entity.Visible Then Exit;
- 
+
  Case Entity.ObjType of
   OBJ_LINE:      WriteSVGLine(F, Entity);
   OBJ_RECTANGLE: WriteSVGRectangle(F, Entity);
@@ -11997,12 +12030,12 @@ Var
  I: Integer;
 Begin
  WriteLn(F, '  <g id="entities">');
- 
+
  For I := 0 to ObjectCount - 1 do Begin
   If DrawObjects[I].ObjType <> OBJ_NONE Then
    WriteSVGEntity(F, DrawObjects[I]);
  End;
- 
+
  WriteLn(F, '  </g>');
 End;
 
@@ -12015,12 +12048,12 @@ Var
  I: Integer;
 Begin
  WriteSVGFile := False;
- 
+
  { Calculer les limites du dessin }
  MinX := 0; MinY := 0;
  MaxX := ScreenWidth;
  MaxY := ScreenHeight;
- 
+
  { Trouver les vraies limites des objets }
  For I := 0 to ObjectCount - 1 do Begin
   If DrawObjects[I].ObjType <> OBJ_NONE Then Begin
@@ -12034,25 +12067,25 @@ Begin
    If DrawObjects[I].Y2 < MinY Then MinY := DrawObjects[I].Y2;
   End;
  End;
- 
+
  { Ajouter une marge }
  Width := MaxX - MinX + 20;
  Height := MaxY - MinY + 20;
  If Width < 100 Then Width := 100;
  If Height < 100 Then Height := 100;
- 
+
  {$I-}
  Assign(F, FileName);
  Rewrite(F);
  {$I+}
- 
+
  If IOResult <> 0 Then Exit;
- 
+
  WriteSVGHeader(F, Width, Height);
  WriteSVGDefs(F);
  WriteSVGEntities(F);
  WriteSVGFooter(F);
- 
+
  Close(F);
  WriteSVGFile := True;
 End;
@@ -12066,8 +12099,9 @@ Function HexToInt(Const HexStr: String): Integer;
 Var
  I, Digit: Integer;
  C: Char;
+ Result:Integer;
 Begin
- HexToInt := 0;
+ Result := 0;
  For I := 1 to Length(HexStr) do Begin
   C := UpCase(HexStr[I]);
   If (C >= '0') and (C <= '9') Then
@@ -12076,8 +12110,9 @@ Begin
    Digit := Ord(C) - Ord('A') + 10
   Else
    Exit;
-  HexToInt := HexToInt * 16 + Digit;
+  Result := Result * 16 + Digit;
  End;
+ HexToInt:=Result;
 End;
 
 { Convertir une couleur SVG en index ACI }
@@ -12087,10 +12122,10 @@ Var
  S: String;
 Begin
  SVGColorToACI := 7; { Blanc par défaut }
- 
+
  S := ColorStr;
  If Length(S) = 0 Then Exit;
- 
+
  { Format #RRGGBB ou #RGB }
  If S[1] = '#' Then Begin
   Delete(S, 1, 1);
@@ -12105,7 +12140,7 @@ Begin
    B := HexToInt(S[3] + S[3]);
   End
   Else Exit;
-  
+
   { Convertir RGB vers ACI approximatif }
   If (R > 200) and (G < 50) and (B < 50) Then SVGColorToACI := 1      { Rouge }
   Else If (R > 200) and (G > 200) and (B < 50) Then SVGColorToACI := 2 { Jaune }
@@ -12156,7 +12191,7 @@ Begin
   SearchStr := AttrName + '=''';
   Pos1 := Pos(SearchStr, Line);
  End;
- 
+
  If Pos1 > 0 Then Begin
   Pos1 := Pos1 + Length(SearchStr);
   Pos2 := Pos1;
@@ -12231,19 +12266,19 @@ Var
 Begin
  ParseSVGPoints := False;
  Entity.VertexCount := 0;
- 
+
  S := PointsStr;
  If Length(S) = 0 Then Exit;
- 
+
  { Remplacer les virgules par des espaces }
  For I := 1 to Length(S) do
   If S[I] = ',' Then S[I] := ' ';
- 
+
  IsX := True;
  X := 0; Y := 0;
  Start := 1;
  I := 1;
- 
+
  While I <= Length(S) + 1 do Begin
   If (I > Length(S)) or (S[I] = ' ') Then Begin
    NumStr := Copy(S, Start, I - Start);
@@ -12270,7 +12305,7 @@ Begin
   End;
   Inc(I);
  End;
- 
+
  ParseSVGPoints := Entity.VertexCount >= 2;
 End;
 
@@ -12280,23 +12315,23 @@ Var
  StrokeColor: String;
 Begin
  ReadSVGLine := False;
- 
+
  Entity.ObjType := OBJ_LINE;
  Entity.X1 := ExtractSVGAttrReal(Line, 'x1');
  Entity.Y1 := ExtractSVGAttrReal(Line, 'y1');
  Entity.X2 := ExtractSVGAttrReal(Line, 'x2');
  Entity.Y2 := ExtractSVGAttrReal(Line, 'y2');
- 
+
  StrokeColor := ExtractSVGAttr(Line, 'stroke');
  If Length(StrokeColor) > 0 Then
   Entity.Color := SVGColorToACI(StrokeColor)
  Else
   Entity.Color := CurrentColor;
- 
- Entity.Layer := CurrentLayer;
+
+ Entity.LayerIndex := CurrentLayer;
  Entity.Visible := True;
  Entity.Selected := False;
- 
+
  ReadSVGLine := True;
 End;
 
@@ -12307,28 +12342,28 @@ Var
  StrokeColor: String;
 Begin
  ReadSVGRect := False;
- 
+
  X := ExtractSVGAttrReal(Line, 'x');
  Y := ExtractSVGAttrReal(Line, 'y');
  W := ExtractSVGAttrReal(Line, 'width');
  H := ExtractSVGAttrReal(Line, 'height');
- 
+
  Entity.ObjType := OBJ_RECTANGLE;
  Entity.X1 := X;
  Entity.Y1 := Y;
  Entity.X2 := X + W;
  Entity.Y2 := Y + H;
- 
+
  StrokeColor := ExtractSVGAttr(Line, 'stroke');
  If Length(StrokeColor) > 0 Then
   Entity.Color := SVGColorToACI(StrokeColor)
  Else
   Entity.Color := CurrentColor;
- 
- Entity.Layer := CurrentLayer;
+
+ Entity.LayerIndex := CurrentLayer;
  Entity.Visible := True;
  Entity.Selected := False;
- 
+
  ReadSVGRect := True;
 End;
 
@@ -12338,24 +12373,24 @@ Var
  StrokeColor: String;
 Begin
  ReadSVGCircle := False;
- 
+
  Entity.ObjType := OBJ_CIRCLE;
  Entity.X1 := ExtractSVGAttrReal(Line, 'cx');
  Entity.Y1 := ExtractSVGAttrReal(Line, 'cy');
  Entity.Radius := ExtractSVGAttrReal(Line, 'r');
- 
+
  If Entity.Radius <= 0 Then Exit;
- 
+
  StrokeColor := ExtractSVGAttr(Line, 'stroke');
  If Length(StrokeColor) > 0 Then
   Entity.Color := SVGColorToACI(StrokeColor)
  Else
   Entity.Color := CurrentColor;
- 
- Entity.Layer := CurrentLayer;
+
+ Entity.LayerIndex := CurrentLayer;
  Entity.Visible := True;
  Entity.Selected := False;
- 
+
  ReadSVGCircle := True;
 End;
 
@@ -12365,25 +12400,25 @@ Var
  StrokeColor: String;
 Begin
  ReadSVGEllipse := False;
- 
+
  Entity.ObjType := OBJ_ELLIPSE;
  Entity.X1 := ExtractSVGAttrReal(Line, 'cx');
  Entity.Y1 := ExtractSVGAttrReal(Line, 'cy');
  Entity.Radius := ExtractSVGAttrReal(Line, 'rx');    { Demi-axe majeur }
  Entity.EndAngle := ExtractSVGAttrReal(Line, 'ry');  { Demi-axe mineur }
- 
+
  If (Entity.Radius <= 0) or (Entity.EndAngle <= 0) Then Exit;
- 
+
  StrokeColor := ExtractSVGAttr(Line, 'stroke');
  If Length(StrokeColor) > 0 Then
   Entity.Color := SVGColorToACI(StrokeColor)
  Else
   Entity.Color := CurrentColor;
- 
- Entity.Layer := CurrentLayer;
+
+ Entity.LayerIndex := CurrentLayer;
  Entity.Visible := True;
  Entity.Selected := False;
- 
+
  ReadSVGEllipse := True;
 End;
 
@@ -12394,30 +12429,30 @@ Var
  FontSize: Real;
 Begin
  ReadSVGText := False;
- 
+
  If Length(TextContent) = 0 Then Exit;
- 
+
  Entity.ObjType := OBJ_TEXT;
  Entity.X1 := ExtractSVGAttrReal(Line, 'x');
  Entity.Y1 := ExtractSVGAttrReal(Line, 'y');
  Entity.DimText := TextContent;
- 
+
  FontSize := ExtractSVGAttrReal(Line, 'font-size');
  If FontSize > 0 Then
   Entity.Radius := FontSize
  Else
   Entity.Radius := SVG_DEFAULT_FONT_SIZE;
- 
+
  FillColor := ExtractSVGAttr(Line, 'fill');
  If Length(FillColor) > 0 Then
   Entity.Color := SVGColorToACI(FillColor)
  Else
   Entity.Color := CurrentColor;
- 
- Entity.Layer := CurrentLayer;
+
+ Entity.LayerIndex := CurrentLayer;
  Entity.Visible := True;
  Entity.Selected := False;
- 
+
  ReadSVGText := True;
 End;
 
@@ -12427,25 +12462,25 @@ Var
  PointsStr, StrokeColor: String;
 Begin
  ReadSVGPolyline := False;
- 
+
  PointsStr := ExtractSVGAttr(Line, 'points');
  If Length(PointsStr) = 0 Then Exit;
- 
+
  Entity.ObjType := OBJ_POLYLINE;
- 
+
  If Not ParseSVGPoints(PointsStr, Entity) Then Exit;
- 
+
  StrokeColor := ExtractSVGAttr(Line, 'stroke');
  If Length(StrokeColor) > 0 Then
   Entity.Color := SVGColorToACI(StrokeColor)
  Else
   Entity.Color := CurrentColor;
- 
- Entity.Layer := CurrentLayer;
+
+ Entity.LayerIndex := CurrentLayer;
  Entity.Visible := True;
  Entity.Selected := False;
  Entity.Closed := False;
- 
+
  ReadSVGPolyline := True;
 End;
 
@@ -12455,25 +12490,25 @@ Var
  PointsStr, StrokeColor: String;
 Begin
  ReadSVGPolygon := False;
- 
+
  PointsStr := ExtractSVGAttr(Line, 'points');
  If Length(PointsStr) = 0 Then Exit;
- 
+
  Entity.ObjType := OBJ_POLYLINE;
- 
+
  If Not ParseSVGPoints(PointsStr, Entity) Then Exit;
- 
+
  StrokeColor := ExtractSVGAttr(Line, 'stroke');
  If Length(StrokeColor) > 0 Then
   Entity.Color := SVGColorToACI(StrokeColor)
  Else
   Entity.Color := CurrentColor;
- 
- Entity.Layer := CurrentLayer;
+
+ Entity.LayerIndex := CurrentLayer;
  Entity.Visible := True;
  Entity.Selected := False;
  Entity.Closed := True; { Polygon est fermé }
- 
+
  ReadSVGPolygon := True;
 End;
 
@@ -12491,30 +12526,30 @@ Var
  CurrentX, CurrentY: Real;
 Begin
  ReadSVGPath := False;
- 
+
  D := ExtractSVGAttr(Line, 'd');
  If Length(D) = 0 Then Exit;
- 
+
  { Parser simplifié pour les paths basiques M/L/H/V/Z }
  HasMove := False;
  HasLine := False;
  X1 := 0; Y1 := 0; X2 := 0; Y2 := 0;
  CurrentX := 0; CurrentY := 0;
  I := 1;
- 
+
  While I <= Length(D) do Begin
   { Sauter les espaces et virgules }
   While (I <= Length(D)) and ((D[I] = ' ') or (D[I] = ',')) do Inc(I);
   If I > Length(D) Then Break;
-  
+
   Cmd := D[I];
   IsRelative := (Cmd >= 'a') and (Cmd <= 'z');
   Cmd := UpCase(Cmd);
   Inc(I);
-  
+
   { Sauter les espaces après la commande }
   While (I <= Length(D)) and ((D[I] = ' ') or (D[I] = ',')) do Inc(I);
-  
+
   Case Cmd of
    'M': Begin { Move To }
     { Lire X }
@@ -12525,10 +12560,10 @@ Begin
     If Code = 0 Then Begin
      If IsRelative Then X1 := CurrentX + V Else X1 := V;
     End;
-    
+
     { Sauter séparateurs }
     While (I <= Length(D)) and ((D[I] = ' ') or (D[I] = ',')) do Inc(I);
-    
+
     { Lire Y }
     Start := I;
     While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
@@ -12537,12 +12572,12 @@ Begin
     If Code = 0 Then Begin
      If IsRelative Then Y1 := CurrentY + V Else Y1 := V;
     End;
-    
+
     CurrentX := X1;
     CurrentY := Y1;
     HasMove := True;
    End;
-   
+
    'L': Begin { Line To }
     { Lire X }
     Start := I;
@@ -12552,10 +12587,10 @@ Begin
     If Code = 0 Then Begin
      If IsRelative Then X2 := CurrentX + V Else X2 := V;
     End;
-    
+
     { Sauter séparateurs }
     While (I <= Length(D)) and ((D[I] = ' ') or (D[I] = ',')) do Inc(I);
-    
+
     { Lire Y }
     Start := I;
     While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
@@ -12564,12 +12599,12 @@ Begin
     If Code = 0 Then Begin
      If IsRelative Then Y2 := CurrentY + V Else Y2 := V;
     End;
-    
+
     CurrentX := X2;
     CurrentY := Y2;
     HasLine := True;
    End;
-   
+
    'H': Begin { Horizontal Line To }
     Start := I;
     While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
@@ -12582,7 +12617,7 @@ Begin
      HasLine := True;
     End;
    End;
-   
+
    'V': Begin { Vertical Line To }
     Start := I;
     While (I <= Length(D)) and (((D[I] >= '0') and (D[I] <= '9')) or (D[I] = '.') or (D[I] = '-') or (D[I] = '+')) do Inc(I);
@@ -12595,7 +12630,7 @@ Begin
      HasLine := True;
     End;
    End;
-   
+
    'Z': Begin { Close Path }
     { On ignore la fermeture pour l'instant }
    End;
@@ -12604,7 +12639,7 @@ Begin
    Inc(I);
   End;
  End;
- 
+
  { Créer une ligne simple si on a un mouvement et une ligne }
  If HasMove and HasLine Then Begin
   Entity.ObjType := OBJ_LINE;
@@ -12612,17 +12647,17 @@ Begin
   Entity.Y1 := Y1;
   Entity.X2 := X2;
   Entity.Y2 := Y2;
-  
+
   StrokeColor := ExtractSVGAttr(Line, 'stroke');
   If Length(StrokeColor) > 0 Then
    Entity.Color := SVGColorToACI(StrokeColor)
   Else
    Entity.Color := CurrentColor;
-  
-  Entity.Layer := CurrentLayer;
+
+  Entity.LayerIndex := CurrentLayer;
   Entity.Visible := True;
   Entity.Selected := False;
-  
+
   ReadSVGPath := True;
  End;
 End;
@@ -12637,27 +12672,27 @@ Var
  TextLine: String;
 Begin
  ReadSVGFile := False;
- 
+
  {$I-}
  Assign(F, FileName);
  Reset(F);
  {$I+}
- 
+
  If IOResult <> 0 Then Exit;
- 
+
  InText := False;
  TextLine := '';
- 
+
  While Not Eof(F) do Begin
   ReadLn(F, Line);
-  
+
   { Gérer le texte multi-ligne }
   If InText Then Begin
    If Pos('</text>', Line) > 0 Then Begin
     TextLine := TextLine + Line;
     ElementType := 'text';
     TextContent := ExtractTextContent(TextLine);
-    
+
     FillChar(Entity, SizeOf(Entity), 0);
     If ReadSVGText(TextLine, TextContent, Entity) Then Begin
      If ObjectCount < MAX_OBJECTS Then Begin
@@ -12665,7 +12700,7 @@ Begin
       Inc(ObjectCount);
      End;
     End;
-    
+
     InText := False;
     TextLine := '';
    End
@@ -12673,9 +12708,9 @@ Begin
     TextLine := TextLine + Line;
    Continue;
   End;
-  
+
   ElementType := GetSVGElementType(Line);
-  
+
   If ElementType = 'text' Then Begin
    If Pos('</text>', Line) > 0 Then Begin
     { Texte sur une seule ligne }
@@ -12758,7 +12793,7 @@ Begin
    End;
   End;
  End;
- 
+
  Close(F);
  ReadSVGFile := True;
 End;
@@ -12783,7 +12818,7 @@ Begin
   EditMode := False;
   EditBuffer := '';
   Title := 'Propriétés';
-  
+
   { Initialiser les lignes }
   For I := 0 to MAX_PROP_ROWS - 1 do Begin
    Rows[I].PropType := 0;
@@ -12793,7 +12828,7 @@ Begin
    Rows[I].Highlighted := False;
   End;
  End;
- 
+
  { Initialiser les calques }
  InitLayers;
 End;
@@ -12808,11 +12843,11 @@ Begin
  With PropertiesPanel do Begin
   RowCount := 0;
   HoveredRow := -1;
-  
+
   If SelectionSet.Count = 0 Then Begin
    { Pas d'objet sélectionné - afficher les propriétés par défaut }
    Title := 'Propriétés';
-   
+
    { Couleur courante }
    Rows[RowCount].PropType := PROP_TYPE_COLOR;
    Rows[RowCount].Label_ := 'Couleur';
@@ -12820,7 +12855,7 @@ Begin
    Rows[RowCount].Editable := True;
    Rows[RowCount].Highlighted := False;
    Inc(RowCount);
-   
+
    { Calque courant }
    Rows[RowCount].PropType := PROP_TYPE_LAYER;
    Rows[RowCount].Label_ := 'Calque';
@@ -12828,7 +12863,7 @@ Begin
    Rows[RowCount].Editable := True;
    Rows[RowCount].Highlighted := False;
    Inc(RowCount);
-   
+
    { Type de ligne courant }
    Rows[RowCount].PropType := PROP_TYPE_LINETYPE;
    Rows[RowCount].Label_ := 'Type ligne';
@@ -12836,7 +12871,7 @@ Begin
    Rows[RowCount].Editable := True;
    Rows[RowCount].Highlighted := False;
    Inc(RowCount);
-   
+
    { Épaisseur courante }
    Rows[RowCount].PropType := PROP_TYPE_LINEWEIGHT;
    Rows[RowCount].Label_ := 'Épaisseur';
@@ -12854,7 +12889,7 @@ Begin
    { Un seul objet sélectionné - afficher ses propriétés }
    ObjIdx := SelectionSet.Objects[0];
    Title := 'Propriétés - ' + ObjTypeName(DrawObjects[ObjIdx].ObjType);
-   
+
    { Type d'objet }
    Rows[RowCount].PropType := PROP_TYPE_OBJTYPE;
    Rows[RowCount].Label_ := 'Type';
@@ -12862,7 +12897,7 @@ Begin
    Rows[RowCount].Editable := False;
    Rows[RowCount].Highlighted := False;
    Inc(RowCount);
-   
+
    { Couleur }
    Rows[RowCount].PropType := PROP_TYPE_COLOR;
    Rows[RowCount].Label_ := 'Couleur';
@@ -12870,7 +12905,7 @@ Begin
    Rows[RowCount].Editable := True;
    Rows[RowCount].Highlighted := False;
    Inc(RowCount);
-   
+
    { Calque }
    Rows[RowCount].PropType := PROP_TYPE_LAYER;
    Rows[RowCount].Label_ := 'Calque';
@@ -12881,7 +12916,7 @@ Begin
    Rows[RowCount].Editable := True;
    Rows[RowCount].Highlighted := False;
    Inc(RowCount);
-   
+
    { Type de ligne }
    Rows[RowCount].PropType := PROP_TYPE_LINETYPE;
    Rows[RowCount].Label_ := 'Type ligne';
@@ -12889,7 +12924,7 @@ Begin
    Rows[RowCount].Editable := True;
    Rows[RowCount].Highlighted := False;
    Inc(RowCount);
-   
+
    { Coordonnées selon le type d'objet }
    Case DrawObjects[ObjIdx].ObjType of
     OBJ_LINE, OBJ_RECTANGLE: Begin
@@ -12901,7 +12936,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Y1 }
      Rows[RowCount].PropType := PROP_TYPE_Y1;
      Rows[RowCount].Label_ := 'Y1';
@@ -12910,7 +12945,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { X2 }
      Rows[RowCount].PropType := PROP_TYPE_X2;
      Rows[RowCount].Label_ := 'X2';
@@ -12919,7 +12954,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Y2 }
      Rows[RowCount].PropType := PROP_TYPE_Y2;
      Rows[RowCount].Label_ := 'Y2';
@@ -12928,7 +12963,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Longueur (lecture seule) }
      If DrawObjects[ObjIdx].ObjType = OBJ_LINE Then Begin
       Rows[RowCount].PropType := PROP_TYPE_LENGTH;
@@ -12941,7 +12976,7 @@ Begin
       Inc(RowCount);
      End;
     End;
-    
+
     OBJ_CIRCLE: Begin
      { Centre X }
      Rows[RowCount].PropType := PROP_TYPE_X1;
@@ -12951,7 +12986,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Centre Y }
      Rows[RowCount].PropType := PROP_TYPE_Y1;
      Rows[RowCount].Label_ := 'Centre Y';
@@ -12960,7 +12995,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Rayon }
      Rows[RowCount].PropType := PROP_TYPE_RADIUS;
      Rows[RowCount].Label_ := 'Rayon';
@@ -12969,7 +13004,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Surface (lecture seule) }
      Rows[RowCount].PropType := PROP_TYPE_AREA;
      Rows[RowCount].Label_ := 'Surface';
@@ -12979,7 +13014,7 @@ Begin
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
     End;
-    
+
     OBJ_POINT: Begin
      { X }
      Rows[RowCount].PropType := PROP_TYPE_X1;
@@ -12989,7 +13024,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Y }
      Rows[RowCount].PropType := PROP_TYPE_Y1;
      Rows[RowCount].Label_ := 'Y';
@@ -12999,7 +13034,7 @@ Begin
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
     End;
-    
+
     OBJ_ARC: Begin { TODO 17 }
      { Centre X }
      Rows[RowCount].PropType := PROP_TYPE_X1;
@@ -13009,7 +13044,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Centre Y }
      Rows[RowCount].PropType := PROP_TYPE_Y1;
      Rows[RowCount].Label_ := 'Centre Y';
@@ -13018,7 +13053,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Rayon }
      Rows[RowCount].PropType := PROP_TYPE_RADIUS;
      Rows[RowCount].Label_ := 'Rayon';
@@ -13027,7 +13062,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Angle de départ }
      Rows[RowCount].PropType := PROP_TYPE_X2;  { Réutilisé pour StartAngle }
      Rows[RowCount].Label_ := 'Angle dép.';
@@ -13036,7 +13071,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Angle de fin }
      Rows[RowCount].PropType := PROP_TYPE_Y2;  { Réutilisé pour EndAngle }
      Rows[RowCount].Label_ := 'Angle fin';
@@ -13045,18 +13080,18 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Longueur d'arc (lecture seule) }
      Rows[RowCount].PropType := PROP_TYPE_LENGTH;
      Rows[RowCount].Label_ := 'Long. arc';
-     Str(Abs(DrawObjects[ObjIdx].EndAngle - DrawObjects[ObjIdx].StartAngle) 
+     Str(Abs(DrawObjects[ObjIdx].EndAngle - DrawObjects[ObjIdx].StartAngle)
          * Pi / 180 * DrawObjects[ObjIdx].Radius:0:2, S);
      Rows[RowCount].Value := S;
      Rows[RowCount].Editable := False;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
     End;
-    
+
     OBJ_ELLIPSE: Begin { TODO 17 }
      { Centre X }
      Rows[RowCount].PropType := PROP_TYPE_X1;
@@ -13066,7 +13101,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Centre Y }
      Rows[RowCount].PropType := PROP_TYPE_Y1;
      Rows[RowCount].Label_ := 'Centre Y';
@@ -13075,7 +13110,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Rayon majeur }
      Rows[RowCount].PropType := PROP_TYPE_RADIUS;
      Rows[RowCount].Label_ := 'Rayon maj.';
@@ -13084,7 +13119,7 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Rayon mineur (calculé depuis X2, Y2) }
      Rows[RowCount].PropType := PROP_TYPE_X2;  { Réutilisé }
      Rows[RowCount].Label_ := 'Rayon min.';
@@ -13093,11 +13128,11 @@ Begin
      Rows[RowCount].Editable := True;
      Rows[RowCount].Highlighted := False;
      Inc(RowCount);
-     
+
      { Surface approx (lecture seule) }
      Rows[RowCount].PropType := PROP_TYPE_AREA;
      Rows[RowCount].Label_ := 'Surface';
-     Str(Pi * DrawObjects[ObjIdx].Radius * 
+     Str(Pi * DrawObjects[ObjIdx].Radius *
          Abs(DrawObjects[ObjIdx].Y2 - DrawObjects[ObjIdx].Y1):0:2, S);
      Rows[RowCount].Value := S;
      Rows[RowCount].Editable := False;
@@ -13110,7 +13145,7 @@ Begin
    { Plusieurs objets sélectionnés }
    Str(SelectionSet.Count, S);
    Title := S + ' objets sélectionnés';
-   
+
    { Propriétés communes }
    Rows[RowCount].PropType := PROP_TYPE_COLOR;
    Rows[RowCount].Label_ := 'Couleur';
@@ -13118,14 +13153,14 @@ Begin
    Rows[RowCount].Editable := True;
    Rows[RowCount].Highlighted := False;
    Inc(RowCount);
-   
+
    Rows[RowCount].PropType := PROP_TYPE_LAYER;
    Rows[RowCount].Label_ := 'Calque';
    Rows[RowCount].Value := '*VARIES*';
    Rows[RowCount].Editable := True;
    Rows[RowCount].Highlighted := False;
    Inc(RowCount);
-   
+
    Rows[RowCount].PropType := PROP_TYPE_LINETYPE;
    Rows[RowCount].Label_ := 'Type ligne';
    Rows[RowCount].Value := '*VARIES*';
@@ -13145,69 +13180,69 @@ Var
  BgColor, TextColor, BorderColor: Integer;
 Begin
  If Not PropertiesPanel.Visible Then Exit;
- 
+
  TitleHeight := 20;
- 
+
  With PropertiesPanel do Begin
   { Fond du panneau }
   BgColor := DarkGray;
   BorderColor := White;
   TextColor := White;
-  
+
   { Cadre principal }
   SetFillStyle(SolidFill, BgColor);
   Bar(X, Y, X + Width, Y + Height);
-  
+
   { Bordure }
   SetColor(BorderColor);
   Rectangle(X, Y, X + Width, Y + Height);
-  
+
   { Barre de titre }
   SetFillStyle(SolidFill, Blue);
   Bar(X + 1, Y + 1, X + Width - 1, Y + TitleHeight);
-  
+
   { Titre }
   SetColor(White);
   SetTextStyle(DefaultFont, HorizDir, 1);
   OutTextXY(X + PROP_PANEL_MARGIN, Y + 5, Title);
-  
+
   { Bouton fermer [X] }
   SetColor(White);
   OutTextXY(X + Width - 15, Y + 5, 'X');
-  
+
   { Ligne sous le titre }
   SetColor(BorderColor);
   Line(X, Y + TitleHeight, X + Width, Y + TitleHeight);
-  
+
   { Dessiner les lignes de propriétés }
   RowY := Y + TitleHeight + PROP_PANEL_MARGIN;
-  
+
   For I := 0 to RowCount - 1 do Begin
    If RowY + PROP_ROW_HEIGHT > Y + Height - PROP_PANEL_MARGIN Then Break;
-   
+
    { Fond de la ligne si survolée }
    If Rows[I].Highlighted Then Begin
     SetFillStyle(SolidFill, LightGray);
     Bar(X + 1, RowY, X + Width - 1, RowY + PROP_ROW_HEIGHT - 1);
    End;
-   
+
    { Label }
    If Rows[I].Editable Then
     SetColor(White)
    Else
     SetColor(LightGray);
    OutTextXY(X + PROP_PANEL_MARGIN, RowY + 4, Rows[I].Label_);
-   
+
    { Séparateur vertical }
    SetColor(BorderColor);
    Line(X + PROP_LABEL_WIDTH, RowY, X + PROP_LABEL_WIDTH, RowY + PROP_ROW_HEIGHT - 1);
-   
+
    { Valeur }
    If Rows[I].Editable Then
     SetColor(Cyan)
    Else
     SetColor(LightGray);
-   
+
    { Afficher un indicateur de couleur si c'est une propriété couleur }
    If Rows[I].PropType = PROP_TYPE_COLOR Then Begin
     If SelectionSet.Count = 1 Then Begin
@@ -13221,11 +13256,11 @@ Begin
     End;
    End Else
     OutTextXY(X + PROP_LABEL_WIDTH + 5, RowY + 4, Rows[I].Value);
-   
+
    { Ligne de séparation horizontale }
    SetColor(DarkGray);
    Line(X + 1, RowY + PROP_ROW_HEIGHT - 1, X + Width - 1, RowY + PROP_ROW_HEIGHT - 1);
-   
+
    RowY := RowY + PROP_ROW_HEIGHT;
   End;
  End;
@@ -13240,7 +13275,7 @@ Begin
   GetPropertyValueString := '';
   Exit;
  End;
- 
+
  Case PropType of
   PROP_TYPE_COLOR: GetPropertyValueString := ColorName(DrawObjects[ObjIndex].Color);
   PROP_TYPE_LAYER: Begin
@@ -13284,7 +13319,7 @@ Var
  I: Integer;
 Begin
  If ObjIndex < 0 Then Exit;
- 
+
  Case PropType of
   PROP_TYPE_COLOR: Begin
    { Chercher la couleur par nom ou valeur numérique }
@@ -13304,7 +13339,7 @@ Begin
     Else If Value = 'ByBlock' Then DrawObjects[ObjIndex].Color := 0;
    End;
   End;
-  
+
   PROP_TYPE_LAYER: Begin
    { Chercher le calque par nom }
    For I := 0 to LayerCount - 1 do Begin
@@ -13314,7 +13349,7 @@ Begin
     End;
    End;
   End;
-  
+
   PROP_TYPE_LINETYPE: Begin
    If Value = 'Continu' Then DrawObjects[ObjIndex].LineType := LINETYPE_CONTINUOUS
    Else If Value = 'Tirets' Then DrawObjects[ObjIndex].LineType := LINETYPE_DASHED
@@ -13323,33 +13358,33 @@ Begin
    Else If Value = 'Tiret-Pt-Pt' Then DrawObjects[ObjIndex].LineType := LINETYPE_DASHDOTDOT
    Else If Value = 'Axe' Then DrawObjects[ObjIndex].LineType := LINETYPE_CENTER;
   End;
-  
+
   PROP_TYPE_X1: Begin
    Val(Value, RealVal, Code);
    If Code = 0 Then DrawObjects[ObjIndex].X1 := RealVal;
   End;
-  
+
   PROP_TYPE_Y1: Begin
    Val(Value, RealVal, Code);
    If Code = 0 Then DrawObjects[ObjIndex].Y1 := RealVal;
   End;
-  
+
   PROP_TYPE_X2: Begin
    Val(Value, RealVal, Code);
    If Code = 0 Then DrawObjects[ObjIndex].X2 := RealVal;
   End;
-  
+
   PROP_TYPE_Y2: Begin
    Val(Value, RealVal, Code);
    If Code = 0 Then DrawObjects[ObjIndex].Y2 := RealVal;
   End;
-  
+
   PROP_TYPE_RADIUS: Begin
    Val(Value, RealVal, Code);
    If Code = 0 Then DrawObjects[ObjIndex].Radius := Abs(RealVal);
   End;
  End;
- 
+
  { Mettre à jour les grips après modification }
  UpdateGripsForSelection;
 End;
@@ -13363,31 +13398,31 @@ Var
  OldHovered: Integer;
 Begin
  If Not PropertiesPanel.Visible Then Exit;
- 
+
  TitleHeight := 20;
  OldHovered := PropertiesPanel.HoveredRow;
  PropertiesPanel.HoveredRow := -1;
- 
+
  { Vérifier si le curseur est dans le panneau }
- With PropertiesPanel do Begin
-  If (X >= Self.X) and (X <= Self.X + Width) and
-     (Y >= Self.Y + TitleHeight) and (Y <= Self.Y + Height) Then Begin
-   
-   RowY := Self.Y + TitleHeight + PROP_PANEL_MARGIN;
-   
-   For I := 0 to RowCount - 1 do Begin
+ Begin
+  If (X >= PropertiesPanel.X) and (X <= PropertiesPanel.X + PropertiesPanel.Width) and
+     (Y >= PropertiesPanel.Y + TitleHeight) and (Y <= PropertiesPanel.Y + PropertiesPanel.Height) Then Begin
+
+   RowY := PropertiesPanel.Y + TitleHeight + PROP_PANEL_MARGIN;
+
+   For I := 0 to PropertiesPanel.RowCount - 1 do Begin
     If (Y >= RowY) and (Y < RowY + PROP_ROW_HEIGHT) Then Begin
-     HoveredRow := I;
-     Rows[I].Highlighted := True;
+     PropertiesPanel.HoveredRow := I;
+     PropertiesPanel.Rows[I].Highlighted := True;
      Break;
     End;
     RowY := RowY + PROP_ROW_HEIGHT;
    End;
   End;
-  
+
   { Désactiver le highlight des autres lignes }
-  For I := 0 to RowCount - 1 do
-   If I <> HoveredRow Then Rows[I].Highlighted := False;
+  For I := 0 to PropertiesPanel.RowCount - 1 do
+   If I <> PropertiesPanel.HoveredRow Then PropertiesPanel.Rows[I].Highlighted := False;
  End;
 End;
 
@@ -13396,7 +13431,7 @@ Procedure StartPropertyEdit(RowIndex: Integer);
 Begin
  If (RowIndex < 0) or (RowIndex >= PropertiesPanel.RowCount) Then Exit;
  If Not PropertiesPanel.Rows[RowIndex].Editable Then Exit;
- 
+
  PropertiesPanel.SelectedRow := RowIndex;
  PropertiesPanel.EditMode := True;
  PropertiesPanel.EditBuffer := PropertiesPanel.Rows[RowIndex].Value;
@@ -13410,17 +13445,17 @@ Var
 Begin
  If Not PropertiesPanel.EditMode Then Exit;
  If PropertiesPanel.SelectedRow < 0 Then Exit;
- 
+
  PropType := PropertiesPanel.Rows[PropertiesPanel.SelectedRow].PropType;
- 
+
  { Appliquer la modification à tous les objets sélectionnés }
  For I := 0 to SelectionSet.Count - 1 do
   SetPropertyValue(PropType, SelectionSet.Objects[I], PropertiesPanel.EditBuffer);
- 
+
  PropertiesPanel.EditMode := False;
  PropertiesPanel.SelectedRow := -1;
  PropertiesPanel.EditBuffer := '';
- 
+
  { Mettre à jour l'affichage }
  UpdatePropertiesPanel;
 End;
@@ -13444,22 +13479,22 @@ Var
 Begin
  HandlePropertiesPanelClick := False;
  If Not PropertiesPanel.Visible Then Exit;
- 
+
  TitleHeight := 20;
- 
+
  With PropertiesPanel do Begin
   { Vérifier si le clic est dans le panneau }
   If (X < Self.X) or (X > Self.X + Width) or
      (Y < Self.Y) or (Y > Self.Y + Height) Then Exit;
-  
+
   HandlePropertiesPanelClick := True;
-  
+
   { Clic sur le bouton fermer }
   If (X >= Self.X + Width - 20) and (Y >= Self.Y) and (Y <= Self.Y + TitleHeight) Then Begin
    Visible := False;
    Exit;
   End;
-  
+
   { Clic sur la barre de titre (drag) }
   If (Y >= Self.Y) and (Y <= Self.Y + TitleHeight) Then Begin
    Dragging := True;
@@ -13467,7 +13502,7 @@ Begin
    DragOffsetY := Y - Self.Y;
    Exit;
   End;
-  
+
   { Clic sur une ligne de propriété }
   If HoveredRow >= 0 Then Begin
    If Rows[HoveredRow].Editable Then Begin
@@ -13490,7 +13525,7 @@ Begin
       End;
       UpdatePropertiesPanel;
      End;
-     
+
      PROP_TYPE_LINETYPE: Begin
       { Cycle des types de ligne }
       If SelectionSet.Count = 0 Then Begin
@@ -13504,7 +13539,7 @@ Begin
       End;
       UpdatePropertiesPanel;
      End;
-     
+
      { Pour les autres propriétés, on pourrait activer un mode d'édition }
     End;
    End;
@@ -13528,60 +13563,60 @@ Var
 Begin
  CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
- 
+
  { Zone de dessin noire - style AutoCAD }
  SetFillStyle(SolidFill, Black);
  Bar(0, CanvasTop, ScreenWidth - 1, CanvasBottom);
 
  { Dessiner la grille }
  DrawGrid;
- 
+
  { TODO 9: Dessiner tous les objets du dessin }
  DrawSelectedObjects;
- 
+
  { TODO 10: Dessiner les grips des objets sélectionnés }
  DrawGrips;
- 
+
  { Dessiner un petit repère à l'origine (0,0) - UCS Icon }
  OriginX := WorldToScreenX(0);
  OriginY := WorldToScreenY(0);
- 
+
  If (OriginX >= 0) and (OriginX < ScreenWidth) and
     (OriginY >= CanvasTop) and (OriginY < CanvasBottom) Then Begin
   { Axe X (rouge) }
   SetColor(Red);
   Line(OriginX, OriginY, OriginX + 20, OriginY);
   OutTextXY(OriginX + 22, OriginY - 4, 'X');
-  
+
   { Axe Y (vert) }
   SetColor(Green);
   Line(OriginX, OriginY, OriginX, OriginY - 20);
   OutTextXY(OriginX - 4, OriginY - 30, 'Y');
-  
+
   { Carré à l'origine }
   SetColor(White);
   Rectangle(OriginX - 2, OriginY - 2, OriginX + 2, OriginY + 2);
  End;
- 
+
  { Dessiner le curseur crosshair qui suit la souris - TODO 8 }
  DrawCrosshairCursor(MouseX, MouseY);
- 
+
  { Dessiner le tooltip des coordonnées - TODO 8 }
  If (CoordDisplayMode = COORD_DISPLAY_TOOLTIP) or (CoordDisplayMode = COORD_DISPLAY_BOTH) Then
   DrawCoordinateTooltip(MouseX, MouseY);
- 
+
  { Indicateur de mode pan si actif - TODO 7 }
  If MouseMode = MOUSE_MODE_PAN Then Begin
   SetColor(Yellow);
   OutTextXY(ScreenWidth div 2 - 20, CanvasTop + 5, '** PAN **');
  End;
- 
+
  { Indicateur de mode zoom si actif }
  If MouseMode = MOUSE_MODE_ZOOM Then Begin
   SetColor(Yellow);
   OutTextXY(ScreenWidth div 2 - 20, CanvasTop + 5, '** ZOOM **');
  End;
- 
+
  { TODO 9: Indicateur de mode sélection si actif }
  If MouseMode = MOUSE_MODE_SELECT Then Begin
   SetColor(Cyan);
@@ -13590,7 +13625,7 @@ Begin
   Else
    OutTextXY(ScreenWidth div 2 - 35, CanvasTop + 5, '** WINDOW **');
  End;
- 
+
  { TODO 10: Indicateur de mode édition grip si actif }
  If GripEditActive Then Begin
   SetColor(Green);
@@ -13666,11 +13701,11 @@ Begin
  { Si un menu est actif, le dessiner }
  If MenuActive and (ActiveMenu >= 0) Then
   DrawDropdownMenu(ActiveMenu);
- 
+
  { Si le menu contextuel est actif, le dessiner - TODO 6 }
  If ContextMenuActive Then
   DrawContextMenu;
- 
+
  { Panneau de propriétés - TODO 16 }
  If PropertiesPanel.Visible Then
   DrawPropertiesPanel;
@@ -13738,7 +13773,7 @@ Var
 Begin
  CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
- 
+
  { Gérer le menu contextuel en premier }
  If ContextMenuActive Then Begin
   If Button = MOUSE_BUTTON_LEFT Then Begin
@@ -13778,14 +13813,14 @@ Begin
      Exit;
     End;
    End;
-   
+
    { Démarrer un drag si nécessaire }
    If MouseMode <> MOUSE_MODE_NORMAL Then Begin
     MouseDragging := True;
     DragStartX := X;
     DragStartY := Y;
    End;
-   
+
    If IsInMenuBar(X, Y) Then Begin
     NewMenu := GetMenuAtPosition(X);
     If NewMenu >= 0 Then Begin
@@ -13851,7 +13886,7 @@ Begin
     End;
    End;
   End;
-  
+
   MOUSE_BUTTON_RIGHT: Begin { Clic droit - TODO 6 }
    { TODO 10: Annuler l'édition grip si active }
    If GripEditActive Then Begin
@@ -13862,7 +13897,7 @@ Begin
    End;
    HandleRightClick(X, Y);
   End;
-  
+
   MOUSE_BUTTON_MIDDLE: Begin { Clic milieu - TODO 6 }
    HandleMiddleClick(X, Y);
   End;
@@ -13879,7 +13914,7 @@ Var
 Begin
  CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
- 
+
  { Gérer le menu contextuel en premier - TODO 6 }
  If ContextMenuActive Then Begin
   HandleContextMenuHover(X, Y);
@@ -13887,7 +13922,7 @@ Begin
   LastMouseY := Y;
   Exit;
  End;
- 
+
  { Gérer le drag - TODO 6 }
  If MouseDragging Then Begin
   HandleMouseDrag(X, Y);
@@ -13914,9 +13949,9 @@ Begin
    End;
   End;
  End;
- 
+
  { TODO 10: Vérifier le survol des grips dans la zone de dessin }
- If (Y >= CanvasTop) and (Y <= CanvasBottom) and 
+ If (Y >= CanvasTop) and (Y <= CanvasBottom) and
     (CurrentGrips.Count > 0) and (Not GripEditActive) Then Begin
   HoverGrip := GetGripAtPoint(X, Y);
   If HoverGrip <> HotGripIndex Then Begin
@@ -13924,7 +13959,7 @@ Begin
    DrawInterface;
   End;
  End;
- 
+
  { Mettre à jour la dernière position }
  LastMouseX := X;
  LastMouseY := Y;
@@ -13940,47 +13975,47 @@ End;
 Procedure InitContextMenu;
 Begin
  ContextMenuItemCount := 10;
- 
+
  ContextMenuItems[CONTEXT_REPEAT].Caption := 'Repeat Last Command';
  ContextMenuItems[CONTEXT_REPEAT].Enabled := True;
  ContextMenuItems[CONTEXT_REPEAT].Separator := False;
- 
+
  ContextMenuItems[CONTEXT_RECENT_INPUT].Caption := 'Recent Input';
  ContextMenuItems[CONTEXT_RECENT_INPUT].Enabled := True;
  ContextMenuItems[CONTEXT_RECENT_INPUT].Separator := True;
- 
+
  ContextMenuItems[CONTEXT_CUT].Caption := 'Cut';
  ContextMenuItems[CONTEXT_CUT].Enabled := True;
  ContextMenuItems[CONTEXT_CUT].Separator := False;
- 
+
  ContextMenuItems[CONTEXT_COPY].Caption := 'Copy';
  ContextMenuItems[CONTEXT_COPY].Enabled := True;
  ContextMenuItems[CONTEXT_COPY].Separator := False;
- 
+
  ContextMenuItems[CONTEXT_PASTE].Caption := 'Paste';
  ContextMenuItems[CONTEXT_PASTE].Enabled := True;
  ContextMenuItems[CONTEXT_PASTE].Separator := True;
- 
+
  ContextMenuItems[CONTEXT_ERASE].Caption := 'Erase';
  ContextMenuItems[CONTEXT_ERASE].Enabled := True;
  ContextMenuItems[CONTEXT_ERASE].Separator := True;
- 
+
  ContextMenuItems[CONTEXT_PAN].Caption := 'Pan';
  ContextMenuItems[CONTEXT_PAN].Enabled := True;
  ContextMenuItems[CONTEXT_PAN].Separator := False;
- 
+
  ContextMenuItems[CONTEXT_ZOOM].Caption := 'Zoom';
  ContextMenuItems[CONTEXT_ZOOM].Enabled := True;
  ContextMenuItems[CONTEXT_ZOOM].Separator := True;
- 
+
  ContextMenuItems[CONTEXT_PROPERTIES].Caption := 'Properties';
  ContextMenuItems[CONTEXT_PROPERTIES].Enabled := True;
  ContextMenuItems[CONTEXT_PROPERTIES].Separator := False;
- 
+
  ContextMenuItems[CONTEXT_OPTIONS].Caption := 'Options...';
  ContextMenuItems[CONTEXT_OPTIONS].Enabled := True;
  ContextMenuItems[CONTEXT_OPTIONS].Separator := False;
- 
+
  ContextMenuActive := False;
  ActiveContextItem := -1;
 End;
@@ -14018,23 +14053,23 @@ Var
  X, Y: Integer;
 Begin
  If Not ContextMenuActive Then Exit;
- 
+
  ItemHeight := 18;
  MenuWidth := 160;
  MenuHeight := ContextMenuItemCount * ItemHeight + 4;
  X := ContextMenuX;
  Y := ContextMenuY;
- 
+
  { Ajuster la position si le menu dépasse l'écran }
  If X + MenuWidth > ScreenWidth Then
   X := ScreenWidth - MenuWidth - 2;
  If Y + MenuHeight > ScreenHeight Then
   Y := ScreenHeight - MenuHeight - 2;
- 
+
  { Fond du menu contextuel }
  SetFillStyle(SolidFill, LightGray);
  Bar(X, Y, X + MenuWidth, Y + MenuHeight);
- 
+
  { Bordure 3D }
  SetColor(White);
  Line(X, Y, X + MenuWidth, Y);
@@ -14042,7 +14077,7 @@ Begin
  SetColor(DarkGray);
  Line(X + MenuWidth, Y, X + MenuWidth, Y + MenuHeight);
  Line(X, Y + MenuHeight, X + MenuWidth, Y + MenuHeight);
- 
+
  { Dessiner les éléments }
  For I := 0 to ContextMenuItemCount - 1 do Begin
   If ContextMenuItems[I].Separator and (I > 0) Then Begin
@@ -14052,7 +14087,7 @@ Begin
    SetColor(White);
    Line(X + 2, Y + I * ItemHeight + 1, X + MenuWidth - 2, Y + I * ItemHeight + 1);
   End;
-  
+
   { Fond survolé }
   If I = ActiveContextItem Then Begin
    SetFillStyle(SolidFill, Blue);
@@ -14064,7 +14099,7 @@ Begin
    Else
     SetColor(DarkGray);
   End;
-  
+
   OutTextXY(X + 8, Y + I * ItemHeight + 5, ContextMenuItems[I].Caption);
  End;
 End;
@@ -14079,19 +14114,19 @@ Var
 Begin
  GetContextMenuItemAt := -1;
  If Not ContextMenuActive Then Exit;
- 
+
  ItemHeight := 18;
  MenuWidth := 160;
  MenuHeight := ContextMenuItemCount * ItemHeight + 4;
  MX := ContextMenuX;
  MY := ContextMenuY;
- 
+
  { Ajuster la position si le menu dépasse l'écran }
  If MX + MenuWidth > ScreenWidth Then
   MX := ScreenWidth - MenuWidth - 2;
  If MY + MenuHeight > ScreenHeight Then
   MY := ScreenHeight - MenuHeight - 2;
- 
+
  If (X >= MX) and (X <= MX + MenuWidth) and
     (Y >= MY) and (Y <= MY + MenuHeight) Then Begin
   Index := (Y - MY - 2) div ItemHeight;
@@ -14109,7 +14144,7 @@ Begin
   ActiveMenu := -1;
   ActiveMenuItem := -1;
  End;
- 
+
  { Ouvrir le menu contextuel à la position du clic }
  ContextMenuActive := True;
  ContextMenuX := X;
@@ -14142,17 +14177,17 @@ Var
  DeltaX, DeltaY: Integer;
 Begin
  If Not MouseDragging Then Exit;
- 
+
  DeltaX := X - LastMouseX;
  DeltaY := Y - LastMouseY;
- 
+
  { TODO 10: Gérer l'édition via grip en premier }
  If GripEditActive Then Begin
   UpdateGripEdit(X, Y);
   DrawInterface;
   Exit;
  End;
- 
+
  Case MouseMode of
   MOUSE_MODE_PAN: Begin
    { Déplacer la vue }
@@ -14174,7 +14209,7 @@ Var
  OldZoom: Real;
 Begin
  OldZoom := ZoomLevel;
- 
+
  If Delta > 0 Then Begin
   { Zoom avant }
   ZoomFactor := 1.1;
@@ -14182,13 +14217,13 @@ Begin
   { Zoom arrière }
   ZoomFactor := 0.9;
  End;
- 
+
  ZoomLevel := ZoomLevel * ZoomFactor;
- 
+
  { Limiter le zoom }
  If ZoomLevel < 0.1 Then ZoomLevel := 0.1;
  If ZoomLevel > 20.0 Then ZoomLevel := 20.0;
- 
+
  { Redessiner si le zoom a changé }
  If ZoomLevel <> OldZoom Then
   DrawInterface;
@@ -14229,7 +14264,7 @@ Begin
    { Ouvrir les options }
   End;
  End;
- 
+
  { Fermer le menu contextuel }
  ContextMenuActive := False;
  ActiveContextItem := -1;
@@ -14242,7 +14277,7 @@ Var
  NewItem: Integer;
 Begin
  If Not ContextMenuActive Then Exit;
- 
+
  NewItem := GetContextMenuItemAt(X, Y);
  If NewItem <> ActiveContextItem Then Begin
   ActiveContextItem := NewItem;
@@ -14280,7 +14315,7 @@ Begin
    If ((MouseButtons and MOUSE_BUTTON_LEFT) = MOUSE_BUTTON_LEFT) and
       ((OldButtons and MOUSE_BUTTON_LEFT) = 0) Then
     HandleMouseClick(MouseX, MouseY, MOUSE_BUTTON_LEFT);
-   
+
    { Clic gauche relâché - fin du drag }
    If ((MouseButtons and MOUSE_BUTTON_LEFT) = 0) and
       ((OldButtons and MOUSE_BUTTON_LEFT) = MOUSE_BUTTON_LEFT) Then Begin
@@ -14299,12 +14334,12 @@ Begin
     End;
     MouseDragging := False;
    End;
-   
+
    { Clic droit enfoncé }
    If ((MouseButtons and MOUSE_BUTTON_RIGHT) = MOUSE_BUTTON_RIGHT) and
       ((OldButtons and MOUSE_BUTTON_RIGHT) = 0) Then
     HandleMouseClick(MouseX, MouseY, MOUSE_BUTTON_RIGHT);
-   
+
    { Clic milieu enfoncé - TODO 7: Activer le pan }
    If ((MouseButtons and MOUSE_BUTTON_MIDDLE) = MOUSE_BUTTON_MIDDLE) and
       ((OldButtons and MOUSE_BUTTON_MIDDLE) = 0) Then Begin
@@ -14314,7 +14349,7 @@ Begin
     DragStartX := MouseX;
     DragStartY := MouseY;
    End;
-   
+
    { Clic milieu relâché - fin du pan - TODO 7 }
    If ((MouseButtons and MOUSE_BUTTON_MIDDLE) = 0) and
       ((OldButtons and MOUSE_BUTTON_MIDDLE) = MOUSE_BUTTON_MIDDLE) Then Begin
@@ -14324,7 +14359,7 @@ Begin
      DrawInterface;
     End;
    End;
-   
+
    OldButtons := MouseButtons;
   End;
 

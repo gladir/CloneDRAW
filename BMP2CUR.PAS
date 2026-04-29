@@ -97,7 +97,7 @@ Var
  HotspotX,HotspotY:Word;
  Y:LongInt;
  Argi:Integer;
- Arg:String;
+ Arg,ArgUp:String;
  InputName:String;
  ParamVal:LongInt;
  Code:Integer;
@@ -154,8 +154,9 @@ BEGIN
  HotspotY:=0;
  For Argi:=1 to ParamCount Do Begin
   Arg:=ParamStr(Argi);
+  ArgUp:=UpStr(Arg);
   If(Arg='/?')or(Arg='--help')or(Arg='-h')Then ShowHelp
-  Else If(Length(Arg)>=4)and((Copy(Arg,1,4)='/HX:')or(Copy(Arg,1,4)='/hx:'))Then Begin
+  Else If(Length(ArgUp)>=4)and(Copy(ArgUp,1,4)='/HX:')Then Begin
    Val(Copy(Arg,5,Length(Arg)-4),ParamVal,Code);
    If(Code<>0)or(ParamVal<0)or(ParamVal>65535)Then Begin
     WriteLn('Valeur /HX invalide !');
@@ -163,7 +164,7 @@ BEGIN
    End;
    HotspotX:=Word(ParamVal);
   End
-  Else If(Length(Arg)>=4)and((Copy(Arg,1,4)='/HY:')or(Copy(Arg,1,4)='/hy:'))Then Begin
+  Else If(Length(ArgUp)>=4)and(Copy(ArgUp,1,4)='/HY:')Then Begin
    Val(Copy(Arg,5,Length(Arg)-4),ParamVal,Code);
    If(Code<>0)or(ParamVal<0)or(ParamVal>65535)Then Begin
     WriteLn('Valeur /HY invalide !');

@@ -16,29 +16,27 @@ Const
  bi_RLE8=1;
  bi_RLE4=2;
 
-  {Largeur maximale supportï¿½e (en pixels).}
+  {Largeur maximale supportee (en pixels).}
  MaxWidth=4096;
 
   {Constantes du format WPG (WordPerfect Graphics, version 1).
-   Toutes les valeurs numï¿½riques multi-octets sont stockï¿½es en
-   "little-endian" (ordre Intel) puisque WPG est issu du monde MS-DOS.}
- WPGMagic0=$FF;          { Octets de signature : FF 57 50 43 ('ï¿½WPC') }
+   Les valeurs multi-octets du flux WPG sont en big-endian.}
+ WPGMagic0=$FF;
  WPGMagic1=$57;
  WPGMagic2=$50;
  WPGMagic3=$43;
- WPGProductType=1;       { 1 = WordPerfect }
- WPGFileType=22;         { 22 = fichier graphique WPG }
+ WPGProductType=1;
+ WPGFileType=$16;
  WPGVersionMajor=1;
  WPGVersionMinor=0;
 
-  {Types d'enregistrement utilisï¿½s.}
- WPGRecStart=$0F;        { Dï¿½but d'image }
- WPGRecEnd=$10;          { Fin d'image }
- WPGRecColorMap=$0E;     { Palette de couleurs }
- WPGRecBitmap1=$0B;      { Bitmap type 1 (sans positionnement) }
+  {Types d'enregistrement utilises.}
+ WPGRecStart=$0F;
+ WPGRecEnd=$10;
+ WPGRecColorMap=$0E;
+ WPGRecBitmap1=$0B;
 
-  {Maximum d'octets dans une "course littï¿½rale" RLE WPG : le compteur
-   est codï¿½ sur 7 bits (le bit haut indique une rï¿½pï¿½tition).}
+  {Maximum d'octets dans une course litterale RLE WPG.}
  MaxRunLen=127;
 
 Type
@@ -56,18 +54,17 @@ Type
  End;
 
  BitmapInfoHeader=Record
-  biSize:LongInt;         { Spï¿½cifie le nombre d'octets requis pour la structure }
-  biWidth:LongInt;        { Spï¿½cifie la largeur du BitMap en pixels }
-  biHeight:LongInt;       { Spï¿½cifie la hauteur du BitMap en pixels }
-  biPlanes:Word;          { Spï¿½cifie le nombre de plane pour la destination }
-  biBitCount:Word;        { Spï¿½cifie le nombre de bits par pixel (1, 4, 8, 24)}
-  biCompression:LongInt;  { Spï¿½cifie le style de compression: BI_RGB, BI_RLE8, BI_RLE4 }
-  biSizeImage:LongInt;    { Spï¿½cifie la taille en octets pour l'image }
-  biXPelsPerMeter:LongInt;{ Spï¿½cifie le nombre horizontal de pixels par mStre }
-  biYPelsPerMeter:LongInt;{ Spï¿½cifie le nombre vertical de pixels par mStre }
-  biClrUsed:LongInt;      { Spï¿½cifie le nombre de couleurs indexï¿½s dans la table}
-  biClrImportant:LongInt; { Spï¿½cifie le nombre de couleurs indexï¿½s dans la table
-                            en comptant ceux ï¿½tant vraiment indispensable ï¿½ l'affichage}
+  biSize:LongInt;
+  biWidth:LongInt;
+  biHeight:LongInt;
+  biPlanes:Word;
+  biBitCount:Word;
+  biCompression:LongInt;
+  biSizeImage:LongInt;
+  biXPelsPerMeter:LongInt;
+  biYPelsPerMeter:LongInt;
+  biClrUsed:LongInt;
+  biClrImportant:LongInt;
  End;
 
 Var
@@ -97,26 +94,23 @@ Begin
  Path2NameExt:=D+N+'.WPG';
 End;
 
-  {ï¿½criture d'un mot 16 bits en little-endian (ordre Intel) dans le
-   fichier de destination.}
-Procedure WriteWordLE(W:Word);
+Procedure WriteWordBE(W:Word);
 Var
  Buf:Array[0..1]of Byte;
 Begin
- Buf[0]:=Byte(W and $FF);
- Buf[1]:=Byte((W shr 8)and $FF);
+ Buf[0]:=Byte((W shr 8)and $FF);
+ Buf[1]:=Byte(W and $FF);
  BlockWrite(DestWPG,Buf,2,ByteWritten);
 End;
 
-  {ï¿½criture d'un long 32 bits en little-endian.}
-Procedure WriteLongLE(L:LongInt);
+Procedure WriteLongBE(L:LongInt);
 Var
  Buf:Array[0..3]of Byte;
 Begin
- Buf[0]:=Byte(L and $FF);
- Buf[1]:=Byte((L shr 8)and $FF);
- Buf[2]:=Byte((L shr 16)and $FF);
- Buf[3]:=Byte((L shr 24)and $FF);
+ Buf[0]:=Byte((L shr 24)and $FF);
+ Buf[1]:=Byte((L shr 16)and $FF);
+ Buf[2]:=Byte((L shr 8)and $FF);
+ Buf[3]:=Byte(L and $FF);
  BlockWrite(DestWPG,Buf,4,ByteWritten);
 End;
 
@@ -125,31 +119,25 @@ Begin
  BlockWrite(DestWPG,B,1,ByteWritten);
 End;
 
-  {ï¿½criture de la longueur variable d'un enregistrement WPG :
-    - si Len < $FF : un seul octet contient la longueur ;
-    - sinon : octet $FF suivi d'un mot 16 bits little-endian.
-   Cette forme variable est indispensable pour les enregistrements
-   bitmap qui dï¿½passent gï¿½nï¿½ralement 254 octets.}
 Procedure WriteRecLength(Len:LongInt);
 Begin
  If Len<$FF Then WriteByte(Byte(Len))
-            Else Begin
-             WriteByte($FF);
-             WriteWordLE(Word(Len));
-            End;
+ Else Begin
+  WriteByte($FF);
+  If Len<=$7FFF Then WriteWordBE(Word(Len))
+  Else Begin
+   WriteWordBE(Word($8000 or ((Len shr 16)and $7FFF)));
+   WriteWordBE(Word(Len and $FFFF));
+  End;
+ End;
 End;
 
-  {Lit la ligne brute du BMP (index RowIndex, 0 = haut) dans BMPLine.}
 Procedure ReadBmpRow(RowIndex:LongInt);
 Begin
  Seek(SourceBMP,StartPos+RowIndex*LongInt(BMPBytesPerLine));
  BlockRead(SourceBMP,BMPLine,BMPBytesPerLine,ByteReaded);
 End;
 
-  {ï¿½crit une scanline dï¿½jï¿½ compactï¿½e (sans bourrage) en RLE WPG.
-   On n'utilise que des "courses littï¿½rales" de 1 ï¿½ 127 octets : c'est
-   parfaitement conforme ï¿½ la spï¿½cification (un compteur sans bit haut
-   suivi de 'count' octets bruts) et lisible par tous les dï¿½codeurs WPG.}
 Procedure WriteScanlineRLE(Var Line; LineLen:Word);
 Var
  P:^Byte;
@@ -162,7 +150,7 @@ Begin
  While Remaining>0 Do Begin
   If Remaining>MaxRunLen Then Chunk:=MaxRunLen
                          Else Chunk:=Remaining;
-  Buf:=Byte(Chunk);                  { 1..127, bit 7 ï¿½ 0 = course littï¿½rale }
+  Buf:=Byte(Chunk);
   BlockWrite(DestWPG,Buf,1,ByteWritten);
   BlockWrite(DestWPG,P^,Chunk,ByteWritten);
   Inc(P,Chunk);
@@ -177,15 +165,14 @@ BEGIN
   WriteLn;
   WriteLn('Syntaxe : BMP2WPG nomdufichier.BMP');
   WriteLn;
-  WriteLn(' nomdufichier   Nom du fichier ".BMP" ï¿½ convertir.');
+  WriteLn(' nomdufichier   Nom du fichier ".BMP" a convertir.');
   WriteLn;
-  WriteLn('Le fichier rï¿½sultant porte le mï¿½me nom avec l''extension .WPG.');
-  WriteLn('Seuls les BitMaps 1, 4 ou 8 bits par pixel non compressï¿½s sont supportï¿½s ',
-          '(le format WPG version 1 ne gï¿½re pas les images en couleurs vraies).');
+  WriteLn('Le fichier resultant porte le meme nom avec l''extension .WPG.');
+  WriteLn('Seuls les BitMaps 1, 4 ou 8 bits par pixel non compresses sont supportes.');
   Halt;
  End;
  If ParamCount<1 Then Begin
-  WriteLn('Paramï¿½tre requis !');
+  WriteLn('Parametre requis !');
   Halt;
  End;
  {$I-}Assign(SourceBMP,ParamStr(1));
@@ -196,25 +183,23 @@ BEGIN
  End;
  BlockRead(SourceBMP,Header,SizeOf(Header),ByteReaded);
  If Header.Sign<>'BM'Then Begin
-  WriteLn('Signature d''entï¿½te Bitmap introuvable !');
+  WriteLn('Signature d''entete Bitmap introuvable !');
   Close(SourceBMP);
   Halt;
  End;
  Seek(SourceBMP,14);
  BlockRead(SourceBMP,BIH,SizeOf(BIH),ByteReaded);
-  {WPG1 ne supporte que les images indexï¿½es 1, 2, 4 ou 8 bits par pixel.
-   Le format BMP n'expose que 1, 4, 8 et 24 ; on rejette donc 24 bpp.}
  If(BIH.biBitCount<>1)and(BIH.biBitCount<>4)and(BIH.biBitCount<>8)Then Begin
-  WriteLn('Seuls les BitMaps 1, 4 ou 8 bits par pixel sont supportï¿½s pour la conversion en WPG !');
+  WriteLn('Seuls les BitMaps 1, 4 ou 8 bits par pixel sont supportes pour la conversion en WPG !');
   Close(SourceBMP);
   Halt(2);
  End;
  If BIH.biCompression<>bi_RGB Then Begin
-  WriteLn('Compression RLE4 ou RLE8 non supportï¿½');
+  WriteLn('Compression RLE4 ou RLE8 non supportee');
   Close(SourceBMP);
   Halt(3);
  End;
- If(BIH.biWidth<=0)or(BIH.biHeight<=0)Then Begin
+ If(BIH.biWidth<=0)or(BIH.biHeight=0)Then Begin
   WriteLn('Dimensions invalides !');
   Close(SourceBMP);
   Halt;
@@ -225,12 +210,10 @@ BEGIN
   Halt;
  End;
 
-  {Calcul du nombre d'octets par scanline cï¿½tï¿½ BMP (avec bourrage sur
-   4 octets) et cï¿½tï¿½ WPG (sans bourrage : juste les bits utiles).}
  If BIH.biSizeImage=0 Then
   BMPBPL:=((LongInt(BIH.biWidth)*LongInt(BIH.biBitCount)+31)div 32)*4
-  Else
-  BMPBPL:=LongInt(BIH.biSizeImage)div LongInt(BIH.biHeight);
+ Else
+  BMPBPL:=LongInt(BIH.biSizeImage)div Abs(LongInt(BIH.biHeight));
  If(BMPBPL<=0)or(BMPBPL>SizeOf(BMPLine))Then Begin
   WriteLn('Largeur de l''image trop grande !');
   Close(SourceBMP);
@@ -238,76 +221,89 @@ BEGIN
  End;
  BMPBytesPerLine:=Word(BMPBPL);
  ImageWidth:=Word(BIH.biWidth);
- ImageHeight:=Word(BIH.biHeight);
+ ImageHeight:=Word(Abs(LongInt(BIH.biHeight)));
  WPGBytesPerLine:=Word((LongInt(ImageWidth)*LongInt(BIH.biBitCount)+7)div 8);
 
-  {Lecture de la palette du BMP.}
- Case BIH.biBitCount of
-  1:NumPal:=2;
-  4:NumPal:=16;
-  8:NumPal:=256;
- End;
+ If(BIH.biClrUsed>0)and(BIH.biClrUsed<=(LongInt(1)shl BIH.biBitCount))Then
+  NumPal:=Word(BIH.biClrUsed)
+ Else
+  Case BIH.biBitCount of
+   1:NumPal:=2;
+   4:NumPal:=16;
+   8:NumPal:=256;
+  End;
  Seek(SourceBMP,14+SizeOf(BitmapInfoHeader));
  BlockRead(SourceBMP,Palette,LongInt(NumPal)*4,ByteReaded);
-
- StartPos:=Header.OffBits;
-
-  {Crï¿½ation du fichier de destination.}
- OutputName:=Path2NameExt(ParamStr(1));
- {$I-}Assign(DestWPG,OutputName);
- Rewrite(DestWPG,1);{$I+}
- If IOResult<>0 Then Begin
-  WriteLn('Impossible de cr‚er le fichier ',OutputName);
+ If ByteReaded<>LongInt(NumPal)*4 Then Begin
+  WriteLn('Palette BMP incomplete !');
   Close(SourceBMP);
   Halt;
  End;
 
-  {1) Entï¿½te de fichier WPG (16 octets).}
+ StartPos:=Header.OffBits;
+
+ OutputName:=Path2NameExt(ParamStr(1));
+ {$I-}Assign(DestWPG,OutputName);
+ Rewrite(DestWPG,1);{$I+}
+ If IOResult<>0 Then Begin
+  WriteLn('Impossible de creer le fichier ',OutputName);
+  Close(SourceBMP);
+  Halt;
+ End;
+
  WriteByte(WPGMagic0);
  WriteByte(WPGMagic1);
  WriteByte(WPGMagic2);
  WriteByte(WPGMagic3);
- WriteLongLE(16);                  { Offset du premier enregistrement }
- WriteByte(WPGProductType);        { 1 = WordPerfect }
- WriteByte(WPGFileType);           { 22 = fichier WPG }
- WriteByte(WPGVersionMajor);       { Version 1.0 }
+ WriteLongBE(16);
+ WriteByte(WPGProductType);
+ WriteByte(WPGFileType);
+ WriteByte(WPGVersionMajor);
  WriteByte(WPGVersionMinor);
- WriteWordLE(0);                   { Clï¿½ de chiffrement (aucune) }
- WriteWordLE(0);                   { Rï¿½servï¿½ }
+ WriteWordBE(0);
+ WriteWordBE(0);
 
-  {2) Enregistrement "Start WPG" (type $0F, 6 octets de donnï¿½es).
-     Les dimensions sont exprimï¿½es en 1/1200 de pouce. On choisit un
-     facteur de 8 unitï¿½s WPG par pixel (= 150 dpi) ce qui garantit
-     l'absence de dï¿½bordement mï¿½me ï¿½ la largeur maximale supportï¿½e.}
  WriteByte(WPGRecStart);
  WriteRecLength(6);
- WriteByte(1);                     { Version interne du dï¿½but de figure }
- WriteByte(0);                     { Drapeaux }
- WriteWordLE(Word(LongInt(ImageWidth)*8));
- WriteWordLE(Word(LongInt(ImageHeight)*8));
+ WriteByte(1);
+ WriteByte(0);
+ WriteWordBE(Word(LongInt(ImageWidth)*8));
+ WriteWordBE(Word(LongInt(ImageHeight)*8));
 
-  {3) Enregistrement de palette (type $0E).
-     Donnï¿½es : index de dï¿½part (2) + nombre de couleurs (2) + RGB par
-     couleur (3 octets chacun, dans l'ordre R, G, B).}
  WriteByte(WPGRecColorMap);
  WriteRecLength(LongInt(4)+LongInt(NumPal)*3);
- WriteWordLE(0);                   { Premier index modifiï¿½ }
- WriteWordLE(NumPal);              { Nombre de couleurs }
+ WriteWordBE(0);
+ WriteWordBE(NumPal);
  For I:=0 to NumPal-1 Do Begin
   WriteByte(Palette[I].R);
   WriteByte(Palette[I].G);
   WriteByte(Palette[I].B);
  End;
 
-  {4) Enregistrement bitmap type 1 (type $0B).
-     Pour pouvoir ï¿½crire la longueur AVANT les donnï¿½es, on calcule ï¿½ la
-     volï¿½e la taille des donnï¿½es RLE : courses littï¿½rales de 1..127
-     octets, soit ceil(WPGBytesPerLine / 127) compteurs par ligne, plus
-     les octets bruts eux-mï¿½mes, le tout multipliï¿½ par le nombre de
-     lignes. Les 10 octets restants sont l'entï¿½te du bitmap.}
  WriteByte(WPGRecBitmap1);
- Begin
-  {Var_Block:}Begin end;            { (juste pour la cohï¿½rence visuelle) }
+ WriteRecLength(LongInt(10)+
+                (LongInt(WPGBytesPerLine)+
+                 ((LongInt(WPGBytesPerLine)+MaxRunLen-1)div MaxRunLen))*
+                LongInt(ImageHeight));
+ WriteWordBE(ImageWidth);
+ WriteWordBE(ImageHeight);
+ WriteWordBE(BIH.biBitCount);
+ WriteWordBE(150);
+ WriteWordBE(150);
+ For Y:=0 to ImageHeight-1 Do Begin
+  If BIH.biHeight>0 Then
+   ReadBmpRow(LongInt(ImageHeight)-1-Y)
+  Else
+   ReadBmpRow(Y);
+  FillChar(OutLine,SizeOf(OutLine),0);
+  For I:=0 to WPGBytesPerLine-1 Do OutLine[I]:=BMPLine[I];
+  WriteScanlineRLE(OutLine,WPGBytesPerLine);
  End;
- CLose(DestWPG);
+
+ WriteByte(WPGRecEnd);
+ WriteRecLength(0);
+
+ Close(SourceBMP);
+ Close(DestWPG);
+ WriteLn('Fichier WPG cree : ',OutputName);
 END.

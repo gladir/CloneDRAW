@@ -1,7 +1,7 @@
 { @author: Sylvain Maltais (support@gladir.com)
   @created: 2026
   @website(https://www.gladir.com/clonedraw)
-  @abstract(Target: Turbo Pascal 7, Free Pascal 3.2)
+  @abstract(Target: Free Pascal 3.2)
 }
 
 Program BMP2APNG;
@@ -17,6 +17,7 @@ Const
  MaxWidth=4096;
  PNGSignature:Array[0..7]of Byte=(137,80,78,71,13,10,26,10);
  MaxStoredBlock=65535;
+ RawBufSize=(MaxWidth*3+1)*64-1;
 
 Type
  RGB32=Record
@@ -67,7 +68,7 @@ Var
  Adler_A,Adler_B:LongInt;
  TargetOpened:Boolean;
 
- RawBuf:Array[0..(MaxWidth*3+1)*64-1]of Byte;
+ RawBuf:Array[0..RawBufSize]of Byte;
  RawLen:LongInt;
  IDATBuf:Array[0..((MaxWidth*3+1)*64)+1024]of Byte;
  IDATLen:LongInt;

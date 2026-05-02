@@ -26,6 +26,11 @@ Const
  WPGRecEnd=$10;
  WPGRecColorMap=$0E;
  WPGRecBitmap1=$0B;
+ WPGRecFillAttr=$01;
+ WPGRecLineAttr=$02;
+ WPGRecPolyline=$06;
+ WPGRecRectangle=$07;
+ WPGRecPolygon=$08;
 
 Type
  RGB=Record
@@ -41,6 +46,10 @@ Var
  NumPal:Word;
  ImageWidth,ImageHeight,BitsPerPixel:Word;
  WPGBytesPerLine:Word;
+ PictureWidth,PictureHeight:Word;
+ CurrentLineColor:Integer;
+ UseLittleEndian:Boolean;
+ ScreenReady:Boolean;
  X:Word;
  B:Byte;
  RecType:Byte;
@@ -87,6 +96,14 @@ Begin
  End;
 End;
 
+Procedure EnsureScr;
+Begin
+ If Not ScreenReady Then Begin
+  InitScr;
+  ScreenReady:=True;
+ End;
+End;
+
 Procedure ReadByte(Var Value:Byte);
 Begin
  BlockRead(SourceWPG,Value,1,ByteReaded);
@@ -106,6 +123,21 @@ Begin
  ReadWordBE:=Word(B0)*256+Word(B1);
 End;
 
+Function ReadWordLE:Word;
+Var
+ B0,B1:Byte;
+Begin
+ ReadByte(B0);
+ ReadByte(B1);
+ ReadWordLE:=Word(B0)+Word(B1)*256;
+End;
+
+Function ReadWordWPG:Word;
+Begin
+ If UseLittleEndian Then ReadWordWPG:=ReadWordLE
+                    Else ReadWordWPG:=ReadWordBE;
+End;
+
 Function ReadLongBE:LongInt;
 Var
  B0,B1,B2,B3:Byte;
@@ -118,6 +150,18 @@ Begin
              (LongInt(B2)shl 8)or LongInt(B3);
 End;
 
+Function ReadLongLE:LongInt;
+Var
+ B0,B1,B2,B3:Byte;
+Begin
+ ReadByte(B0);
+ ReadByte(B1);
+ ReadByte(B2);
+ ReadByte(B3);
+ ReadLongLE:=LongInt(B0)or(LongInt(B1)shl 8)or
+             (LongInt(B2)shl 16)or(LongInt(B3)shl 24);
+End;
+
 Function ReadRecLength:LongInt;
 Var
  B:Byte;
@@ -126,9 +170,9 @@ Begin
  ReadByte(B);
  If B<$FF Then ReadRecLength:=B
  Else Begin
-  W:=ReadWordBE;
+  W:=ReadWordWPG;
   If(W and $8000)<>0 Then
-   ReadRecLength:=(LongInt(W and $7FFF)shl 16)+LongInt(ReadWordBE)
+   ReadRecLength:=(LongInt(W and $7FFF)shl 16)+LongInt(ReadWordWPG)
   Else
    ReadRecLength:=W;
  End;
@@ -227,8 +271,8 @@ Begin
   Close(SourceWPG);
   Halt;
  End;
- FirstEntry:=ReadWordBE;
- Count:=ReadWordBE;
+ FirstEntry:=ReadWordWPG;
+ Count:=ReadWordWPG;
  NumPal:=0;
  For I:=0 to Count-1 Do Begin
   If FirstEntry+I<=255 Then Begin
@@ -256,11 +300,11 @@ Begin
   Close(SourceWPG);
   Halt;
  End;
- ImageWidth:=ReadWordBE;
- ImageHeight:=ReadWordBE;
- BitsPerPixel:=ReadWordBE;
- XRes:=ReadWordBE;
- YRes:=ReadWordBE;
+ ImageWidth:=ReadWordWPG;
+ ImageHeight:=ReadWordWPG;
+ BitsPerPixel:=ReadWordWPG;
+ XRes:=ReadWordWPG;
+ YRes:=ReadWordWPG;
  If(XRes=0)or(YRes=0)Then Begin
  End;
 
@@ -281,11 +325,132 @@ Begin
   Halt;
  End;
 
- InitScr;
+ EnsureScr;
  For LineY:=0 to ImageHeight-1 Do Begin
   DecodeWPGLine(WPGBytesPerLine);
   DrawLine(LineY);
  End;
+End;
+
+Function ScaleX(Value:Word):Integer;
+Begin
+ EnsureScr;
+ If PictureWidth=0 Then PictureWidth:=ImageWidth;
+ If PictureWidth=0 Then PictureWidth:=1;
+ ScaleX:=Integer((LongInt(Value)*LongInt(GetMaxX))div LongInt(PictureWidth));
+End;
+
+Function ScaleY(Value:Word):Integer;
+Begin
+ EnsureScr;
+ If PictureHeight=0 Then PictureHeight:=ImageHeight;
+ If PictureHeight=0 Then PictureHeight:=1;
+ ScaleY:=Integer((LongInt(Value)*LongInt(GetMaxY))div LongInt(PictureHeight));
+End;
+
+Procedure ReadStartRecord(Len:LongInt);
+Var
+ Version,Flags:Byte;
+Begin
+ If Len>=6 Then Begin
+  ReadByte(Version);
+  ReadByte(Flags);
+  PictureWidth:=ReadWordWPG;
+  PictureHeight:=ReadWordWPG;
+  If Version=0 Then Begin
+  End;
+  If Flags=0 Then Begin
+  End;
+ End;
+End;
+
+Procedure ReadFillAttr(Len:LongInt);
+Var
+ Style,ColorIndex:Byte;
+Begin
+ If Len>=2 Then Begin
+  ReadByte(Style);
+  ReadByte(ColorIndex);
+  CurrentLineColor:=PalColor(ColorIndex);
+  If Style=0 Then Begin
+  End;
+ End;
+End;
+
+Procedure ReadLineAttr(Len:LongInt);
+Var
+ Style,ColorIndex:Byte;
+ W:Word;
+Begin
+ If Len>=2 Then Begin
+  ReadByte(Style);
+  ReadByte(ColorIndex);
+  CurrentLineColor:=PalColor(ColorIndex);
+  If Len>=4 Then W:=ReadWordWPG Else W:=0;
+  If(Style=0)or(W=0)Then Begin
+  End;
+ End;
+End;
+
+Procedure ReadPointList(Len:LongInt;CloseShape:Boolean);
+Var
+ Count:Word;
+ I:Word;
+ PX,PY:Word;
+ FirstX,FirstY:Word;
+ PrevX,PrevY:Word;
+ SX,SY:Integer;
+ PrevSX,PrevSY:Integer;
+ FirstSX,FirstSY:Integer;
+Begin
+ If Len<2 Then Exit;
+ Count:=ReadWordWPG;
+ If(LongInt(Count)*4+2)>Len Then Exit;
+ If Count=0 Then Exit;
+ EnsureScr;
+ SetColor(CurrentLineColor);
+ ReadByte(B); Seek(SourceWPG,FilePos(SourceWPG)-1);
+ For I:=0 to Count-1 Do Begin
+  PX:=ReadWordWPG;
+  PY:=ReadWordWPG;
+  SX:=ScaleX(PX);
+  SY:=ScaleY(PY);
+  If I=0 Then Begin
+   FirstX:=PX;
+   FirstY:=PY;
+   PrevX:=PX;
+   PrevY:=PY;
+   FirstSX:=SX;
+   FirstSY:=SY;
+   PrevSX:=SX;
+   PrevSY:=SY;
+  End
+   Else
+  Begin
+   Line(PrevSX,PrevSY,SX,SY);
+   PrevX:=PX;
+   PrevY:=PY;
+   PrevSX:=SX;
+   PrevSY:=SY;
+  End;
+ End;
+ If CloseShape and(Count>1)Then Line(PrevSX,PrevSY,FirstSX,FirstSY);
+ If(FirstX=PrevX)and(FirstY=PrevY)Then Begin
+ End;
+End;
+
+Procedure ReadRectangleRecord(Len:LongInt);
+Var
+ X1,Y1,X2,Y2:Word;
+Begin
+ If Len<8 Then Exit;
+ X1:=ReadWordWPG;
+ Y1:=ReadWordWPG;
+ X2:=ReadWordWPG;
+ Y2:=ReadWordWPG;
+ EnsureScr;
+ SetColor(CurrentLineColor);
+ Rectangle(ScaleX(X1),ScaleY(Y1),ScaleX(X2),ScaleY(Y2));
 End;
 
 Procedure CheckHeader;
@@ -308,6 +473,13 @@ Begin
   Halt;
  End;
  DataOffset:=ReadLongBE;
+ If(DataOffset<16)or(DataOffset>FileSize(SourceWPG))Then Begin
+  Seek(SourceWPG,4);
+  UseLittleEndian:=True;
+  DataOffset:=ReadLongLE;
+ End
+  Else
+ UseLittleEndian:=False;
  ReadByte(ProductType);
  ReadByte(FileType);
  ReadByte(Major);
@@ -348,6 +520,10 @@ BEGIN
 
  FillChar(Palette,SizeOf(Palette),0);
  NumPal:=0;
+ PictureWidth:=0;
+ PictureHeight:=0;
+ CurrentLineColor:=White;
+ ScreenReady:=False;
  CheckHeader;
  Done:=False;
  While(Not EOF(SourceWPG))and(Not Done)Do Begin
@@ -355,8 +531,14 @@ BEGIN
   RecLen:=ReadRecLength;
   RecStartPos:=FilePos(SourceWPG);
   Case RecType of
+   WPGRecStart:ReadStartRecord(RecLen);
    WPGRecColorMap:ReadColorMap(RecLen);
    WPGRecBitmap1:ReadBitmap1(RecLen);
+   WPGRecFillAttr:ReadFillAttr(RecLen);
+   WPGRecLineAttr:ReadLineAttr(RecLen);
+   WPGRecPolyline:ReadPointList(RecLen,False);
+   WPGRecPolygon:ReadPointList(RecLen,True);
+   WPGRecRectangle:ReadRectangleRecord(RecLen);
    WPGRecEnd:Done:=True;
    Else Begin
    End;

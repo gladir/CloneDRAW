@@ -145,6 +145,26 @@ End;
 
   {�crit un "chunk" PNG complet : longueur (BE32), type (4 octets ASCII),
    donn�es, CRC-32 calcul� sur le type concat�n� aux donn�es.}
+Procedure WriteData(Const Data;Len:LongInt);
+Var
+ P:^Byte;
+ Chunk:Word;
+Begin
+ P:=@Data;
+ While Len>0 Do Begin
+  If Len>32768 Then Chunk:=32768 Else Chunk:=Word(Len);
+  BlockWrite(DestPNG,P^,Chunk,ByteWritten);
+  If ByteWritten<>Chunk Then Begin
+   WriteLn('Erreur d''ecriture du fichier PNG !');
+   Close(DestPNG);
+   Close(SourceBMP);
+   Halt;
+  End;
+  Inc(P,Chunk);
+  Dec(Len,Chunk);
+ End;
+End;
+
 Procedure WriteChunk(Const ChunkType:Array of Char;Const Data;Len:LongInt);
 Var
  TypeBuf:Array[0..3]of Byte;
@@ -156,7 +176,7 @@ Begin
  TypeBuf[3]:=Byte(ChunkType[3]);
  WriteBE32(Len);
  BlockWrite(DestPNG,TypeBuf,4,ByteWritten);
- If Len>0 Then BlockWrite(DestPNG,Data,Len,ByteWritten);
+ If Len>0 Then WriteData(Data,Len);
  CRC:=StartCRC;
  CRC:=UpdateCRC(CRC,TypeBuf,4);
  If Len>0 Then CRC:=UpdateCRC(CRC,Data,Len);

@@ -633,7 +633,118 @@
       - Critere de fin de l'etape : un inspecteur AVIF voit l'item primaire avec
         ispe, pixi, av1C et colr correctement associes.
   24. Ecrire mdat et relier correctement les offsets/tailles dans iloc.
+      - Centraliser l'ecriture des donnees AV1 dans une routine
+        WriteAVIFMdat(AV1Data, AV1Size, Var DataOffset, Var DataLength) qui
+        retourne l'offset absolu du premier octet utile dans mdat, pas l'offset
+        du debut de la box.
+      - Calculer DataOffset comme position_fichier_de_mdat + taille_entete_mdat;
+        pour une box mdat classique, l'entete vaut 8 octets, mais prevoir le
+        cas future d'une large size a 16 octets si le fichier depasse 4 Gio.
+      - Ecrire d'abord une box mdat avec taille connue lorsque AV1Size tient
+        dans un LongInt positif : size=8+AV1Size, type='mdat', puis le flux OBU
+        complet produit par les etapes 19 a 21.
+      - Refuser proprement AV1Size=0, car iloc ne doit jamais pointer vers une
+        etendue vide pour l'image primaire.
+      - Garder iloc en version 0 ou 1 avec offset_size=4 et length_size=4 tant
+        que les offsets et longueurs tiennent sur 32 bits; basculer vers une
+        variante 64 bits seulement si necessaire sous Free Pascal.
+      - Dans iloc, declarer item_ID=1, construction_method=0, data_reference_index=0,
+        extent_count=1, extent_offset=DataOffset et extent_length=DataLength.
+      - Corriger les offsets iloc apres ecriture finale de meta/mdat lorsque
+        la taille de meta a change a cause de iprp/ipco/ipma ou d'autres boxes
+        ajoutees par la TODO 23.
+      - Prevoir deux strategies compatibles Turbo Pascal : soit construire le
+        fichier en deux passes avec les tailles deja connues, soit reserver les
+        champs extent_offset/extent_length puis revenir les patcher par Seek.
+      - Ajouter des positions de patch explicites dans une structure
+        TAVIFIlocPatchInfo : OffsetFieldPos, LengthFieldPos, OffsetSize,
+        LengthSize, MdatDataOffset et MdatDataLength.
+      - Verifier avant patch que OffsetFieldPos et LengthFieldPos pointent bien
+        dans la box iloc, afin d'eviter de modifier une autre box si la
+        structure meta evolue.
+      - Ecrire les entiers ISO-BMFF en big-endian, y compris les champs iloc,
+        meme si le programme tourne sur une machine little-endian.
+      - S'assurer que l'offset ecrit dans iloc est absolu depuis le debut du
+        fichier, pas relatif a meta ni a mdat.
+      - Apres patch, relire optionnellement les champs iloc en mode debug pour
+        afficher item_ID, extent_offset, extent_length et verifier que
+        extent_offset+extent_length ne depasse pas la taille finale du fichier.
+      - Ajouter une verification croisee : la longueur iloc doit etre exactement
+        la taille du flux AV1/OBU insere dans mdat, sans inclure les 8 octets
+        de l'entete mdat.
+      - Verifier que mdat peut etre place apres meta dans la premiere version;
+        si mdat est deplace avant meta plus tard, recalculer iloc et documenter
+        l'ordre choisi.
+      - Eviter d'ajouter des octets de padding non declares entre l'entete mdat
+        et le flux AV1; si un padding devient necessaire, il doit etre inclus
+        dans une box separee ou pris en compte explicitement dans iloc.
+      - Critere de fin de l'etape : un inspecteur ISO-BMFF lit iloc item 1 avec
+        un extent_offset pointant sur le premier octet OBU dans mdat, une
+        extent_length egale a la taille du bitstream AV1, et aucun depassement
+        par rapport a la taille reelle du fichier.
   25. Valider avec plusieurs decodeurs AVIF et ajouter des tests de non-regression.
+      - Constituer un petit jeu de BMP de reference couvrant les cas limites :
+        1x1, 2x2, largeur impaire, hauteur impaire, 64x64, 65x65, image avec
+        palette, 24 bits, 32 bits, degrade gris, aplats RGB et motif alternant.
+      - Pour chaque image de reference, produire un AVIF et verifier que le
+        programme termine avec code de sortie 0, cree un fichier non vide et
+        n'ecrit aucune erreur inattendue.
+      - Valider chaque fichier avec au moins deux decodeurs independants, par
+        exemple libavif/avifdec et FFmpeg, afin de detecter les interpretations
+        trop tolerantes d'un seul outil.
+      - Ajouter une validation structurelle ISO-BMFF : lister ftyp, meta, hdlr,
+        pitm, iloc, iinf, iprp, ipco, ipma et mdat, puis verifier que les tailles
+        et offsets ne depassent jamais la taille reelle du fichier.
+      - Ajouter une validation AVIF : confirmer que l'item primaire est bien
+        l'item 1, que son type est av01, que ispe correspond aux dimensions BMP,
+        que pixi, av1C et colr sont presents et associes par ipma.
+      - Ajouter une validation AV1 : verifier que le flux mdat commence par un
+        OBU Sequence Header valide, contient les OBU attendus dans l'ordre, et
+        que les tailles LEB128 correspondent aux payloads reels.
+      - Comparer les dimensions decodees avec les dimensions BMP d'origine pour
+        detecter les erreurs de padding, de recadrage ou d'utilisation des
+        dimensions paddees dans le conteneur.
+      - Pour les images grises et les aplats neutres, verifier que les canaux
+        U/V restent neutres apres decodage afin de detecter les inversions U/V,
+        les erreurs de range ou les mauvais coefficients de matrice.
+      - Pour les images couleur simples, calculer une tolerance d'erreur par
+        canal adaptee a l'encodage avec pertes; documenter la tolerance initiale
+        et la resserrer lorsque l'encodeur devient plus stable.
+      - Ajouter un mode de test reproductible avec quantification fixe, CDF
+        desactivees ou initialisees deterministement, et aucun parametre dependant
+        de l'heure ou de l'environnement.
+      - Ajouter un dump de debug optionnel listant le checksum BMP source, la
+        taille du bitstream AV1, les offsets iloc, les proprietes iprp et les
+        tailles de boxes principales.
+      - Conserver des checksums ou empreintes des AVIF produits seulement pour
+        les modes strictement deterministes; sinon comparer les sorties decodees
+        plutot que les octets du fichier.
+      - Tester les chemins d'erreur : BMP compresse, dimensions invalides,
+        largeur trop grande pour le tampon, palette incomplete, bit depth non
+        supporte et echec d'ecriture du fichier cible.
+      - Ajouter des tests specifiques aux bords : dimensions impaires en YUV420,
+        image juste au-dessus d'un superbloc, derniere ligne BMP top-down et
+        bottom-up, et duplication de pixels lors du padding.
+      - Verifier la compatibilite Turbo Pascal 7 et Free Pascal 3.2 : pas de
+        dependance a des types 64 bits dans le chemin TP7 obligatoire, sauf dans
+        des sections protegees par directives de compilation.
+      - Documenter dans les commentaires ou dans un fichier de test les versions
+        des decodeurs utilises, car les decodeurs AVIF evoluent et certains
+        diagnostics changent avec le temps.
+      - Ajouter une cible ou un script de regression simple lorsque le depot en
+        possede deja le style : compiler BMP2AVIF, generer les fichiers de test,
+        lancer les validateurs disponibles et resumer les echecs.
+      - Faire echouer la regression si un fichier AVIF devient indecodable, si
+        une box obligatoire disparait, si iloc pointe ailleurs que dans mdat, ou
+        si les dimensions visibles changent.
+      - Garder quelques fichiers AVIF minimaux produits par des encodeurs de
+        reference comme cas de comparaison structurelle, sans les melanger avec
+        les fichiers generes par BMP2AVIF.
+      - Critere de fin de l'etape : les AVIF generes par le programme sont
+        acceptes par plusieurs decodeurs, leurs boxes ISO-BMFF et proprietes
+        AVIF sont coherentes, les images decodees correspondent aux BMP sources
+        dans la tolerance documentee, et les regressions peuvent etre relancees
+        automatiquement apres chaque modification de l'encodeur.
 }
 
 Program BMP2AVIF;
@@ -645,8 +756,44 @@ Uses DOS;
 Const
  bi_RGB=0;
  MaxLineBytes=16384;
+ AVIFInitialBitDepth=8;
+ AVIFInitialSeqProfile=0;
+ AVIFInitialItemID=1;
+ AVIFInitialChromaSubX=1;
+ AVIFInitialChromaSubY=1;
+ AVIFInitialColorPrimaries=1;      {BT.709}
+ AVIFInitialTransfer=13;           {sRGB}
+ AVIFInitialMatrixCoefficients=1;  {BT.709}
 
 Type
+ TAVIFInputFormat=(aifBMP);
+ TAVIFImageKind=(aikStillImage);
+ TAVIFProfile=(apMain);
+ TAVIFChromaFormat=(acfYUV420);
+ TAVIFRangeMode=(armFullRange);
+ TAVIFContainerKind=(ackISOBaseMediaFileFormat);
+
+ TAVIFEncoderOptions=Record
+  InputFormat:TAVIFInputFormat;
+  ImageKind:TAVIFImageKind;
+  Profile:TAVIFProfile;
+  ChromaFormat:TAVIFChromaFormat;
+  RangeMode:TAVIFRangeMode;
+  ContainerKind:TAVIFContainerKind;
+  BitDepth:Byte;
+  HasAlpha:Boolean;
+  HasHDR:Boolean;
+  HasAnimation:Boolean;
+  HasEXIF:Boolean;
+  HasXMP:Boolean;
+  HasICC:Boolean;
+  StillPicture:Boolean;
+  IntraOnly:Boolean;
+  SingleImageItem:Boolean;
+  SingleTile:Boolean;
+  FilmGrain:Boolean;
+ End;
+
  RGB32=Record
   B,G,R,FreeByte:Byte;
  End;
@@ -685,10 +832,61 @@ Var
  Palette:Array[0..255]of RGB32;
  Buffer:Array[0..MaxLineBytes-1]of Byte;
  SourceFileName,TargetFileName:String;
+ AVIFOptions:TAVIFEncoderOptions;
  BMPBytesPerLine,ByteReaded:Word;
  ImageWidth,ImageHeight,NumPal:Word;
  StartPos,BMPBPL:LongInt;
  Y:LongInt;
+
+Procedure InitAVIFEncoderOptions(Var Options:TAVIFEncoderOptions);
+Begin
+ Options.InputFormat:=aifBMP;
+ Options.ImageKind:=aikStillImage;
+ Options.Profile:=apMain;
+ Options.ChromaFormat:=acfYUV420;
+ Options.RangeMode:=armFullRange;
+ Options.ContainerKind:=ackISOBaseMediaFileFormat;
+ Options.BitDepth:=AVIFInitialBitDepth;
+ Options.HasAlpha:=False;
+ Options.HasHDR:=False;
+ Options.HasAnimation:=False;
+ Options.HasEXIF:=False;
+ Options.HasXMP:=False;
+ Options.HasICC:=False;
+ Options.StillPicture:=True;
+ Options.IntraOnly:=True;
+ Options.SingleImageItem:=True;
+ Options.SingleTile:=True;
+ Options.FilmGrain:=False;
+End;
+
+Procedure WriteAVIFInitialScope(Const Options:TAVIFEncoderOptions);
+Begin
+ WriteLn('Perimetre AVIF initial : image fixe SDR ',Options.BitDepth,' bits, sans alpha.');
+ WriteLn('Profil AV1 cible      : Main profile, intra-only, still picture.');
+ WriteLn('Couleur interne cible : YUV 4:2:0 8 bits, BT.709, full range.');
+ WriteLn('Conteneur cible       : ISO-BMFF AVIF, un item primaire av01.');
+ WriteLn('Exclusions initiales  : HDR, animation, ICC, EXIF/XMP, film grain.');
+ If Options.SingleTile Then
+  WriteLn('Tuiles AV1 cible      : une seule tuile pour la premiere version.');
+End;
+
+Function AVIFInitialScopeIsSupported(Const Options:TAVIFEncoderOptions):Boolean;
+Begin
+ AVIFInitialScopeIsSupported:=
+  (Options.InputFormat=aifBMP)and
+  (Options.ImageKind=aikStillImage)and
+  (Options.Profile=apMain)and
+  (Options.ChromaFormat=acfYUV420)and
+  (Options.RangeMode=armFullRange)and
+  (Options.ContainerKind=ackISOBaseMediaFileFormat)and
+  (Options.BitDepth=AVIFInitialBitDepth)and
+  Options.StillPicture and Options.IntraOnly and
+  Options.SingleImageItem and Options.SingleTile and
+  (not Options.HasAlpha)and(not Options.HasHDR)and
+  (not Options.HasAnimation)and(not Options.HasEXIF)and
+  (not Options.HasXMP)and(not Options.HasICC)and(not Options.FilmGrain);
+End;
 
 Function Path2NameExt(Const Path,Ext:String):String;
 Var
@@ -783,8 +981,13 @@ Var
  Pixel:RGB;
  Checksum:LongInt;
 Begin
- {Le decodage BMP est integre ici. L'etape manquante est l'encodage AV1
-  intra + conteneur ISO-BMFF/AVIF, qui est un codec complet.}
+ {TODO 1 implemente : le perimetre de l'encodeur initial est maintenant
+  explicite et verifie avant les futures etapes YUV/AV1.}
+ If not AVIFInitialScopeIsSupported(AVIFOptions)Then Begin
+  WriteLn('Configuration AVIF initiale non supportee.');
+  EncodeAVIFBuiltIn:=False;
+  Exit;
+ End;
  Checksum:=0;
  For Y:=0 to ImageHeight-1 Do Begin
   If BIH.biHeight>0 Then Row:=LongInt(ImageHeight)-1-Y
@@ -801,6 +1004,7 @@ Begin
 End;
 
 BEGIN
+ InitAVIFEncoderOptions(AVIFOptions);
  If(ParamStr(1)='/?')or(ParamStr(1)='--help')or(ParamStr(1)='-h')Then Begin
   WriteLn('BMP2AVIF : Cette commande devrait convertir une image BitMap (.BMP) ',
                     'en format AVIF (AV1 Image File Format).');
@@ -810,8 +1014,10 @@ BEGIN
   WriteLn(' source.BMP       Ce parametre permet d''indiquer le nom du fichier ".BMP".');
   WriteLn(' destination.AVIF Ce parametre permet d''indiquer le nom du fichier ".AVIF".');
   WriteLn;
+  WriteAVIFInitialScope(AVIFOptions);
+  WriteLn;
   WriteLn('Cette version ne fait aucun appel externe. L''encodage AV1/AVIF integre');
-  WriteLn('n''est pas disponible dans cette petite commande Pascal autonome.');
+  WriteLn('est cadre, mais les etapes YUV, AV1 et ISO-BMFF restent a implementer.');
   Halt;
  End;
  If ParamCount<1 Then Begin
@@ -866,9 +1072,10 @@ BEGIN
   WriteLn('Fichier AVIF cree : ',TargetFileName)
  Else
  Begin
-  WriteLn('Impossible de creer ',TargetFileName);
-  WriteLn('AVIF exige un flux AV1 valide dans un conteneur ISO-BMFF.');
-  WriteLn('Un encodeur AV1 complet integre en Turbo Pascal/Free Pascal n''est pas implemente.');
+ WriteLn('Impossible de creer ',TargetFileName);
+ WriteLn('AVIF exige un flux AV1 valide dans un conteneur ISO-BMFF.');
+ WriteAVIFInitialScope(AVIFOptions);
+ WriteLn('Les structures YUV et l''encodage AV1 seront ajoutes aux etapes suivantes.');
   Close(SourceBMP);
   Halt(4);
  End;

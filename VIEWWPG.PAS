@@ -441,16 +441,23 @@ End;
 
 Procedure ReadRectangleRecord(Len:LongInt);
 Var
- X1,Y1,X2,Y2:Word;
+ X1,Y1,W,H:Word;
+ SX1,SY1,SX2,SY2,T:Integer;
 Begin
  If Len<8 Then Exit;
  X1:=ReadWordWPG;
  Y1:=ReadWordWPG;
- X2:=ReadWordWPG;
- Y2:=ReadWordWPG;
+ W:=ReadWordWPG;
+ H:=ReadWordWPG;
  EnsureScr;
  SetColor(CurrentLineColor);
- Rectangle(ScaleX(X1),ScaleY(Y1),ScaleX(X2),ScaleY(Y2));
+ SX1:=ScaleX(X1);
+ SY1:=ScaleY(Y1);
+ SX2:=ScaleX(Word(LongInt(X1)+LongInt(W)));
+ SY2:=ScaleY(Word(LongInt(Y1)+LongInt(H)));
+ If SX1>SX2 Then Begin T:=SX1; SX1:=SX2; SX2:=T; End;
+ If SY1>SY2 Then Begin T:=SY1; SY1:=SY2; SY2:=T; End;
+ Rectangle(SX1,SY1,SX2,SY2);
 End;
 
 Procedure CheckHeader;

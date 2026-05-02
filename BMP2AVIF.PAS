@@ -761,24 +761,30 @@ Const
  AVIFInitialItemID=1;
  AVIFInitialChromaSubX=1;
  AVIFInitialChromaSubY=1;
+ AVIFInitialChromaSamplePosition=0; {Moyenne 2x2 centree, a propager en AV1/AVIF.}
  AVIFInitialColorPrimaries=1;      {BT.709}
  AVIFInitialTransfer=13;           {sRGB}
  AVIFInitialMatrixCoefficients=1;  {BT.709}
+ AVIFMaxPlaneBytes=65000;
 
 Type
  TAVIFInputFormat=(aifBMP);
  TAVIFImageKind=(aikStillImage);
  TAVIFProfile=(apMain);
- TAVIFChromaFormat=(acfYUV420);
- TAVIFRangeMode=(armFullRange);
+ TAVIFChromaFormat=(acfYUV420,acfYUV444);
+ TColorMatrixMode=(cmBT601,cmBT709);
+ TRangeMode=(rmFullRange,rmLimitedRange);
  TAVIFContainerKind=(ackISOBaseMediaFileFormat);
+ TAVIFByteArray=Array[0..AVIFMaxPlaneBytes-1]of Byte;
+ PAVIFByteArray=^TAVIFByteArray;
 
  TAVIFEncoderOptions=Record
   InputFormat:TAVIFInputFormat;
   ImageKind:TAVIFImageKind;
   Profile:TAVIFProfile;
   ChromaFormat:TAVIFChromaFormat;
-  RangeMode:TAVIFRangeMode;
+  RangeMode:TRangeMode;
+  MatrixMode:TColorMatrixMode;
   ContainerKind:TAVIFContainerKind;
   BitDepth:Byte;
   HasAlpha:Boolean;
@@ -792,6 +798,27 @@ Type
   SingleImageItem:Boolean;
   SingleTile:Boolean;
   FilmGrain:Boolean;
+ End;
+
+ TAVIFPlane=Record
+  Width,Height,Stride:Word;
+  Size:LongInt;
+  Data:PAVIFByteArray;
+ End;
+
+ TAVIFImage=Record
+  Width,Height:Word;
+  BitDepth:Byte;
+  ChromaFormat:TAVIFChromaFormat;
+  RangeMode:TRangeMode;
+  MatrixMode:TColorMatrixMode;
+  ChromaSubsamplingX:Byte;
+  ChromaSubsamplingY:Byte;
+  ChromaSamplePosition:Byte;
+  ColorPrimaries:Word;
+  TransferCharacteristics:Word;
+  MatrixCoefficients:Word;
+  PlaneY,PlaneU,PlaneV:TAVIFPlane;
  End;
 
  RGB32=Record
@@ -844,7 +871,8 @@ Begin
  Options.ImageKind:=aikStillImage;
  Options.Profile:=apMain;
  Options.ChromaFormat:=acfYUV420;
- Options.RangeMode:=armFullRange;
+ Options.RangeMode:=rmFullRange;
+ Options.MatrixMode:=cmBT709;
  Options.ContainerKind:=ackISOBaseMediaFileFormat;
  Options.BitDepth:=AVIFInitialBitDepth;
  Options.HasAlpha:=False;
@@ -878,7 +906,8 @@ Begin
   (Options.ImageKind=aikStillImage)and
   (Options.Profile=apMain)and
   (Options.ChromaFormat=acfYUV420)and
-  (Options.RangeMode=armFullRange)and
+  (Options.RangeMode=rmFullRange)and
+  (Options.MatrixMode=cmBT709)and
   (Options.ContainerKind=ackISOBaseMediaFileFormat)and
   (Options.BitDepth=AVIFInitialBitDepth)and
   Options.StillPicture and Options.IntraOnly and
@@ -886,6 +915,338 @@ Begin
   (not Options.HasAlpha)and(not Options.HasHDR)and
   (not Options.HasAnimation)and(not Options.HasEXIF)and
   (not Options.HasXMP)and(not Options.HasICC)and(not Options.FilmGrain);
+End;
+
+Procedure InitAVIFPlane(Var Plane:TAVIFPlane);
+Begin
+ Plane.Width:=0;
+ Plane.Height:=0;
+ Plane.Stride:=0;
+ Plane.Size:=0;
+ Plane.Data:=Nil;
+End;
+
+Procedure InitAVIFImageRecord(Var Image:TAVIFImage);
+Begin
+ Image.Width:=0;
+ Image.Height:=0;
+ Image.BitDepth:=AVIFInitialBitDepth;
+ Image.ChromaFormat:=acfYUV420;
+ Image.RangeMode:=rmFullRange;
+ Image.MatrixMode:=cmBT709;
+ Image.ChromaSubsamplingX:=AVIFInitialChromaSubX;
+ Image.ChromaSubsamplingY:=AVIFInitialChromaSubY;
+ Image.ChromaSamplePosition:=AVIFInitialChromaSamplePosition;
+ Image.ColorPrimaries:=AVIFInitialColorPrimaries;
+ Image.TransferCharacteristics:=AVIFInitialTransfer;
+ Image.MatrixCoefficients:=AVIFInitialMatrixCoefficients;
+ InitAVIFPlane(Image.PlaneY);
+ InitAVIFPlane(Image.PlaneU);
+ InitAVIFPlane(Image.PlaneV);
+End;
+
+Function AVIFPlaneByteSize(Width,Height:Word):LongInt;
+Begin
+ AVIFPlaneByteSize:=LongInt(Width)*LongInt(Height);
+End;
+
+Function AllocateAVIFPlane(Var Plane:TAVIFPlane; Width,Height:Word):Boolean;
+Var
+ Size:LongInt;
+Begin
+ AllocateAVIFPlane:=False;
+ InitAVIFPlane(Plane);
+ Size:=AVIFPlaneByteSize(Width,Height);
+ If(Width=0)or(Height=0)or(Size<=0)or(Size>AVIFMaxPlaneBytes)Then Exit;
+ Plane.Width:=Width;
+ Plane.Height:=Height;
+ Plane.Stride:=Width;
+ Plane.Size:=Size;
+ GetMem(Plane.Data,Word(Size));
+ If Plane.Data=Nil Then Begin
+  InitAVIFPlane(Plane);
+  Exit;
+ End;
+ AllocateAVIFPlane:=True;
+End;
+
+Procedure FreeAVIFPlane(Var Plane:TAVIFPlane);
+Begin
+ If Plane.Data<>Nil Then
+  FreeMem(Plane.Data,Word(Plane.Size));
+ InitAVIFPlane(Plane);
+End;
+
+Function AVIFImageFitsMemory(Width,Height:Word;ChromaFormat:TAVIFChromaFormat):Boolean;
+Var
+ ChromaWidth,ChromaHeight:Word;
+ LumaSize,ChromaSize:LongInt;
+Begin
+ AVIFImageFitsMemory:=False;
+ If(Width=0)or(Height=0)Then Exit;
+ LumaSize:=AVIFPlaneByteSize(Width,Height);
+ If(LumaSize<=0)or(LumaSize>AVIFMaxPlaneBytes)Then Exit;
+ If ChromaFormat=acfYUV420 Then Begin
+  ChromaWidth:=(Width+1)div 2;
+  ChromaHeight:=(Height+1)div 2;
+ End
+  Else
+ Begin
+  ChromaWidth:=Width;
+  ChromaHeight:=Height;
+ End;
+ ChromaSize:=AVIFPlaneByteSize(ChromaWidth,ChromaHeight);
+ If(ChromaSize<=0)or(ChromaSize>AVIFMaxPlaneBytes)Then Exit;
+ AVIFImageFitsMemory:=True;
+End;
+
+Function AllocateAVIFImage(Var Image:TAVIFImage;Width,Height:Word;
+ ChromaFormat:TAVIFChromaFormat;RangeMode:TRangeMode;
+ MatrixMode:TColorMatrixMode):Boolean;
+Var
+ ChromaWidth,ChromaHeight:Word;
+Begin
+ AllocateAVIFImage:=False;
+ InitAVIFImageRecord(Image);
+ If not AVIFImageFitsMemory(Width,Height,ChromaFormat)Then Exit;
+ If ChromaFormat=acfYUV420 Then Begin
+  ChromaWidth:=(Width+1)div 2;
+  ChromaHeight:=(Height+1)div 2;
+ End
+  Else
+ Begin
+  ChromaWidth:=Width;
+  ChromaHeight:=Height;
+ End;
+ Image.Width:=Width;
+ Image.Height:=Height;
+ Image.BitDepth:=AVIFInitialBitDepth;
+ Image.ChromaFormat:=ChromaFormat;
+ Image.RangeMode:=RangeMode;
+ Image.MatrixMode:=MatrixMode;
+ If ChromaFormat=acfYUV420 Then Begin
+  Image.ChromaSubsamplingX:=1;
+  Image.ChromaSubsamplingY:=1;
+  Image.ChromaSamplePosition:=AVIFInitialChromaSamplePosition;
+ End
+  Else
+ Begin
+  Image.ChromaSubsamplingX:=0;
+  Image.ChromaSubsamplingY:=0;
+  Image.ChromaSamplePosition:=0;
+ End;
+ Image.ColorPrimaries:=AVIFInitialColorPrimaries;
+ Image.TransferCharacteristics:=AVIFInitialTransfer;
+ Image.MatrixCoefficients:=AVIFInitialMatrixCoefficients;
+ If not AllocateAVIFPlane(Image.PlaneY,Width,Height)Then Begin
+  FreeAVIFPlane(Image.PlaneY);
+  Exit;
+ End;
+ If not AllocateAVIFPlane(Image.PlaneU,ChromaWidth,ChromaHeight)Then Begin
+  FreeAVIFPlane(Image.PlaneY);
+  FreeAVIFPlane(Image.PlaneU);
+  Exit;
+ End;
+ If not AllocateAVIFPlane(Image.PlaneV,ChromaWidth,ChromaHeight)Then Begin
+  FreeAVIFPlane(Image.PlaneY);
+  FreeAVIFPlane(Image.PlaneU);
+  FreeAVIFPlane(Image.PlaneV);
+  Exit;
+ End;
+ AllocateAVIFImage:=True;
+End;
+
+Procedure FreeAVIFImage(Var Image:TAVIFImage);
+Begin
+ FreeAVIFPlane(Image.PlaneY);
+ FreeAVIFPlane(Image.PlaneU);
+ FreeAVIFPlane(Image.PlaneV);
+ InitAVIFImageRecord(Image);
+End;
+
+Procedure ClearAVIFPlane(Var Plane:TAVIFPlane;Value:Byte);
+Begin
+ If(Plane.Data<>Nil)and(Plane.Size>0)Then
+  FillChar(Plane.Data^[0],Word(Plane.Size),Value);
+End;
+
+Procedure ClearAVIFImage(Var Image:TAVIFImage);
+Begin
+ ClearAVIFPlane(Image.PlaneY,0);
+ ClearAVIFPlane(Image.PlaneU,128);
+ ClearAVIFPlane(Image.PlaneV,128);
+End;
+
+Procedure GetRGBPixel(X:Word;Var Pixel:RGB);Forward;
+
+Function ClampByte(Value:LongInt):Byte;
+Begin
+ If Value<0 Then ClampByte:=0
+  Else If Value>255 Then ClampByte:=255
+                  Else ClampByte:=Byte(Value);
+End;
+
+Function DivRoundSigned(Value,Divisor:LongInt):LongInt;
+Begin
+ If Value>=0 Then DivRoundSigned:=(Value+(Divisor div 2))div Divisor
+             Else DivRoundSigned:=-(((-Value)+(Divisor div 2))div Divisor);
+End;
+
+Procedure RGBToYUVPixel(R,G,B:Byte;Var Y,U,V:Byte;
+ Matrix:TColorMatrixMode;Range:TRangeMode);
+Var
+ Rv,Gv,Bv:LongInt;
+ YFull,UFull,VFull:LongInt;
+ URaw,VRaw:LongInt;
+Begin
+ {Tests rapides full range :
+  BT.709 noir -> Y=0,U=128,V=128; blanc -> Y=255,U=128,V=128.
+  BT.601 rouge approche Y=76,U=85,V=255; vert Y=150,U=44,V=21;
+  bleu Y=29,U=255,V=107.}
+ Rv:=R;
+ Gv:=G;
+ Bv:=B;
+ Case Matrix of
+  cmBT601:Begin
+   YFull:=(4899*Rv+9617*Gv+1868*Bv+8192)shr 14;
+   UFull:=DivRoundSigned(-2765*Rv-5427*Gv+8192*Bv,16384)+128;
+   VFull:=DivRoundSigned(8192*Rv-6859*Gv-1333*Bv,16384)+128;
+  End;
+  Else Begin {cmBT709}
+   YFull:=(3483*Rv+11718*Gv+1183*Bv+8192)shr 14;
+   UFull:=DivRoundSigned(-1877*Rv-6315*Gv+8192*Bv,16384)+128;
+   VFull:=DivRoundSigned(8192*Rv-7441*Gv-751*Bv,16384)+128;
+  End;
+ End;
+ If Range=rmLimitedRange Then Begin
+  URaw:=UFull-128;
+  VRaw:=VFull-128;
+  YFull:=16+((ClampByte(YFull)*219+127)div 255);
+  UFull:=128+DivRoundSigned(URaw*224,255);
+  VFull:=128+DivRoundSigned(VRaw*224,255);
+ End;
+ Y:=ClampByte(YFull);
+ U:=ClampByte(UFull);
+ V:=ClampByte(VFull);
+End;
+
+Function AVIFPlaneOffset(Const Plane:TAVIFPlane;X,Y:Word):LongInt;
+Begin
+ AVIFPlaneOffset:=LongInt(Y)*LongInt(Plane.Stride)+LongInt(X);
+End;
+
+Procedure SetAVIFPlaneByte(Var Plane:TAVIFPlane;X,Y:Word;Value:Byte);
+Var
+ Offset:LongInt;
+Begin
+ If Plane.Data=Nil Then Exit;
+ Offset:=AVIFPlaneOffset(Plane,X,Y);
+ If(Offset>=0)and(Offset<Plane.Size)Then
+  Plane.Data^[Word(Offset)]:=Value;
+End;
+
+Function GetAVIFPlaneByte(Const Plane:TAVIFPlane;X,Y:Word):Byte;
+Var
+ Offset:LongInt;
+Begin
+ GetAVIFPlaneByte:=0;
+ If Plane.Data=Nil Then Exit;
+ Offset:=AVIFPlaneOffset(Plane,X,Y);
+ If(Offset>=0)and(Offset<Plane.Size)Then
+  GetAVIFPlaneByte:=Plane.Data^[Word(Offset)];
+End;
+
+Procedure ConvertRGBLineToYUV444(Var Image:TAVIFImage;LineY:Word);
+Var
+ X:Word;
+ Pixel:RGB;
+ YSample,USample,VSample:Byte;
+Begin
+ If(Image.ChromaFormat<>acfYUV444)or(LineY>=Image.Height)Then Exit;
+ For X:=0 to Image.Width-1 Do Begin
+  GetRGBPixel(X,Pixel);
+  RGBToYUVPixel(Pixel.R,Pixel.G,Pixel.B,YSample,USample,VSample,
+   Image.MatrixMode,Image.RangeMode);
+  SetAVIFPlaneByte(Image.PlaneY,X,LineY,YSample);
+  SetAVIFPlaneByte(Image.PlaneU,X,LineY,USample);
+  SetAVIFPlaneByte(Image.PlaneV,X,LineY,VSample);
+ End;
+End;
+
+Function CopyYUV444ToYUV444(Const Source:TAVIFImage;Var Dest:TAVIFImage):Boolean;
+Var
+ X,YPos:Word;
+Begin
+ CopyYUV444ToYUV444:=False;
+ If(Source.ChromaFormat<>acfYUV444)or(Dest.ChromaFormat<>acfYUV444)Then Exit;
+ If(Source.Width<>Dest.Width)or(Source.Height<>Dest.Height)Then Exit;
+ For YPos:=0 to Source.Height-1 Do
+  For X:=0 to Source.Width-1 Do Begin
+   SetAVIFPlaneByte(Dest.PlaneY,X,YPos,GetAVIFPlaneByte(Source.PlaneY,X,YPos));
+   SetAVIFPlaneByte(Dest.PlaneU,X,YPos,GetAVIFPlaneByte(Source.PlaneU,X,YPos));
+   SetAVIFPlaneByte(Dest.PlaneV,X,YPos,GetAVIFPlaneByte(Source.PlaneV,X,YPos));
+  End;
+ CopyYUV444ToYUV444:=True;
+End;
+
+Function ConvertYUV444ToYUV420(Const Source:TAVIFImage;Var Dest:TAVIFImage):Boolean;
+Var
+ X,YPos,CX,CY:Word;
+ SX,SY:Word;
+ SumU,SumV,Count:LongInt;
+Begin
+ ConvertYUV444ToYUV420:=False;
+ If(Source.ChromaFormat<>acfYUV444)or(Dest.ChromaFormat<>acfYUV420)Then Exit;
+ If(Source.Width<>Dest.Width)or(Source.Height<>Dest.Height)Then Exit;
+ For YPos:=0 to Source.Height-1 Do
+  For X:=0 to Source.Width-1 Do
+   SetAVIFPlaneByte(Dest.PlaneY,X,YPos,GetAVIFPlaneByte(Source.PlaneY,X,YPos));
+ For CY:=0 to Dest.PlaneU.Height-1 Do
+  For CX:=0 to Dest.PlaneU.Width-1 Do Begin
+   SumU:=0;
+   SumV:=0;
+   Count:=0;
+   For SY:=CY*2 to CY*2+1 Do
+    If SY<Source.Height Then
+     For SX:=CX*2 to CX*2+1 Do
+      If SX<Source.Width Then Begin
+       SumU:=SumU+GetAVIFPlaneByte(Source.PlaneU,SX,SY);
+       SumV:=SumV+GetAVIFPlaneByte(Source.PlaneV,SX,SY);
+       Inc(Count);
+      End;
+   If Count>0 Then Begin
+    SetAVIFPlaneByte(Dest.PlaneU,CX,CY,Byte((SumU+(Count div 2))div Count));
+    SetAVIFPlaneByte(Dest.PlaneV,CX,CY,Byte((SumV+(Count div 2))div Count));
+   End;
+  End;
+ ConvertYUV444ToYUV420:=True;
+End;
+
+Function ConvertYUV444ToPreferredChroma(Const Source:TAVIFImage;
+ Var Dest:TAVIFImage):Boolean;
+Begin
+ If Dest.ChromaFormat=acfYUV420 Then
+  ConvertYUV444ToPreferredChroma:=ConvertYUV444ToYUV420(Source,Dest)
+ Else
+  ConvertYUV444ToPreferredChroma:=CopyYUV444ToYUV444(Source,Dest);
+End;
+
+Function ChecksumAVIFImage(Const Image:TAVIFImage):LongInt;
+Var
+ X,YPos:Word;
+ Sum:LongInt;
+Begin
+ Sum:=0;
+ For YPos:=0 to Image.PlaneY.Height-1 Do
+  For X:=0 to Image.PlaneY.Width-1 Do
+   Sum:=(Sum+GetAVIFPlaneByte(Image.PlaneY,X,YPos))and $7FFFFFFF;
+ For YPos:=0 to Image.PlaneU.Height-1 Do
+  For X:=0 to Image.PlaneU.Width-1 Do
+   Sum:=(Sum+GetAVIFPlaneByte(Image.PlaneU,X,YPos))and $7FFFFFFF;
+ For YPos:=0 to Image.PlaneV.Height-1 Do
+  For X:=0 to Image.PlaneV.Width-1 Do
+   Sum:=(Sum+GetAVIFPlaneByte(Image.PlaneV,X,YPos))and $7FFFFFFF;
+ ChecksumAVIFImage:=Sum;
 End;
 
 Function Path2NameExt(Const Path,Ext:String):String;
@@ -976,30 +1337,52 @@ End;
 
 Function EncodeAVIFBuiltIn:Boolean;
 Var
- X:Word;
  Row:LongInt;
- Pixel:RGB;
+ YUV444Image,EncodedImage:TAVIFImage;
  Checksum:LongInt;
 Begin
- {TODO 1 implemente : le perimetre de l'encodeur initial est maintenant
-  explicite et verifie avant les futures etapes YUV/AV1.}
+ {TODO 1 a 4 implementees : le perimetre est explicite, l'image source YUV444
+  est separee de la cible encodeur et le sous-echantillonnage 4:2:0 existe.}
  If not AVIFInitialScopeIsSupported(AVIFOptions)Then Begin
   WriteLn('Configuration AVIF initiale non supportee.');
   EncodeAVIFBuiltIn:=False;
   Exit;
  End;
- Checksum:=0;
+ InitAVIFImageRecord(YUV444Image);
+ InitAVIFImageRecord(EncodedImage);
+ If not AllocateAVIFImage(YUV444Image,ImageWidth,ImageHeight,
+  acfYUV444,AVIFOptions.RangeMode,AVIFOptions.MatrixMode)Then Begin
+  WriteLn('Impossible d''allouer l''image YUV interne AVIF.');
+  EncodeAVIFBuiltIn:=False;
+  Exit;
+ End;
+ If not AllocateAVIFImage(EncodedImage,ImageWidth,ImageHeight,
+  AVIFOptions.ChromaFormat,AVIFOptions.RangeMode,AVIFOptions.MatrixMode)Then Begin
+  WriteLn('Impossible d''allouer l''image YUV encodeur AVIF.');
+  FreeAVIFImage(YUV444Image);
+  EncodeAVIFBuiltIn:=False;
+  Exit;
+ End;
+ ClearAVIFImage(YUV444Image);
+ ClearAVIFImage(EncodedImage);
  For Y:=0 to ImageHeight-1 Do Begin
   If BIH.biHeight>0 Then Row:=LongInt(ImageHeight)-1-Y
                     Else Row:=Y;
   ReadBmpRow(Row);
-  For X:=0 to ImageWidth-1 Do Begin
-   GetRGBPixel(X,Pixel);
-   Checksum:=(Checksum+LongInt(Pixel.R)+LongInt(Pixel.G)+LongInt(Pixel.B))and $7FFFFFFF;
-  End;
+  ConvertRGBLineToYUV444(YUV444Image,Word(Y));
  End;
+ If not ConvertYUV444ToPreferredChroma(YUV444Image,EncodedImage)Then Begin
+  WriteLn('Conversion chroma AVIF impossible.');
+  FreeAVIFImage(YUV444Image);
+  FreeAVIFImage(EncodedImage);
+  EncodeAVIFBuiltIn:=False;
+  Exit;
+ End;
+ Checksum:=ChecksumAVIFImage(EncodedImage);
  If Checksum=0 Then Begin
  End;
+ FreeAVIFImage(YUV444Image);
+ FreeAVIFImage(EncodedImage);
  EncodeAVIFBuiltIn:=False;
 End;
 
@@ -1017,7 +1400,7 @@ BEGIN
   WriteAVIFInitialScope(AVIFOptions);
   WriteLn;
   WriteLn('Cette version ne fait aucun appel externe. L''encodage AV1/AVIF integre');
-  WriteLn('est cadre, mais les etapes YUV, AV1 et ISO-BMFF restent a implementer.');
+  WriteLn('est cadre, la conversion YUV420/YUV444 existe, et l''encodage AV1 reste a implementer.');
   Halt;
  End;
  If ParamCount<1 Then Begin
@@ -1050,6 +1433,8 @@ BEGIN
 
  ImageWidth:=Word(BIH.biWidth);
  ImageHeight:=Word(AbsLong(BIH.biHeight));
+ If not AVIFImageFitsMemory(ImageWidth,ImageHeight,AVIFOptions.ChromaFormat)Then
+  StopWithError('Dimensions trop grandes pour les plans YUV AVIF internes !');
  BMPBPL:=((LongInt(ImageWidth)*LongInt(BIH.biBitCount)+31)div 32)*4;
  If(BMPBPL<=0)or(BMPBPL>SizeOf(Buffer))Then StopWithError('Largeur de l''image trop grande !');
  BMPBytesPerLine:=Word(BMPBPL);
@@ -1075,7 +1460,7 @@ BEGIN
  WriteLn('Impossible de creer ',TargetFileName);
  WriteLn('AVIF exige un flux AV1 valide dans un conteneur ISO-BMFF.');
  WriteAVIFInitialScope(AVIFOptions);
- WriteLn('Les structures YUV et l''encodage AV1 seront ajoutes aux etapes suivantes.');
+ WriteLn('La conversion YUV420/YUV444 existe; l''encodage AV1 sera ajoute aux etapes suivantes.');
   Close(SourceBMP);
   Halt(4);
  End;

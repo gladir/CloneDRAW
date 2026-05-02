@@ -345,7 +345,7 @@ Begin
  EnsureScr;
  If PictureHeight=0 Then PictureHeight:=ImageHeight;
  If PictureHeight=0 Then PictureHeight:=1;
- ScaleY:=Integer((LongInt(Value)*LongInt(GetMaxY))div LongInt(PictureHeight));
+ ScaleY:=GetMaxY-Integer((LongInt(Value)*LongInt(GetMaxY))div LongInt(PictureHeight));
 End;
 
 Procedure ReadStartRecord(Len:LongInt);

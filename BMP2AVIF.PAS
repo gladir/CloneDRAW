@@ -766,7 +766,9 @@ Const
  AVIFInitialTransfer=13;           {sRGB}
  AVIFInitialMatrixCoefficients=1;  {BT.709}
  AVIFMaxPlaneBytes=65000;
- AV1MaxOBUBytes=4096;
+ AVIFMaxFileBytes=65000;
+ AVIFMaxItemProperties=8;
+ AV1MaxOBUBytes=32768;
  AV1SuperBlockSize=64;
  AV1IntraBlockSize=8;
  AV1MaxTransformSize=32;
@@ -800,6 +802,37 @@ Type
   FrameHeader:TAV1ByteBuffer;
   TileGroup:TAV1ByteBuffer;
   Combined:TAV1ByteBuffer;
+ End;
+
+ TAVIFIlocPatchInfo=Record
+  OffsetFieldPos,LengthFieldPos:Word;
+  OffsetSize,LengthSize:Byte;
+  IlocBoxStart,IlocBoxEnd:Word;
+  MdatBoxOffset:Word;
+  MdatHeaderSize:Byte;
+  MdatDataOffset,MdatDataLength:LongInt;
+ End;
+
+ TAVIFContainer=Record
+  FileData:TAV1ByteBuffer;
+  IlocPatch:TAVIFIlocPatchInfo;
+ End;
+
+ TISOBoxWriter=Record
+  Buffer:^TAV1ByteBuffer;
+  Failed:Boolean;
+ End;
+
+ TItemProperty=Record
+  PropertyIndex:Byte;
+  FourCC:String[4];
+  IsEssential:Boolean;
+  Offset:Word;
+ End;
+
+ TItemPropertyTable=Record
+  Count:Byte;
+  Items:Array[1..AVIFMaxItemProperties]of TItemProperty;
  End;
 
  TBitWriter=Record
@@ -1744,7 +1777,7 @@ Function AllocateAV1ByteBuffer(Var Buffer:TAV1ByteBuffer;Capacity:Word):Boolean;
 Begin
  AllocateAV1ByteBuffer:=False;
  InitAV1ByteBuffer(Buffer);
- If(Capacity=0)or(Capacity>AV1MaxOBUBytes)Then Exit;
+ If(Capacity=0)or(Capacity>AVIFMaxFileBytes)Then Exit;
  GetMem(Buffer.Data,Capacity);
  If Buffer.Data=Nil Then Exit;
  Buffer.Capacity:=Capacity;
@@ -1922,6 +1955,56 @@ Begin
  ValidateOBUHeader:=LongInt(Pos)+SizeValue=Buffer.Size;
 End;
 
+Function ValidateOBUAt(Const Buffer:TAV1ByteBuffer;StartPos,EndPos:Word;
+ ExpectedType:TAV1OBUType;Var NextPos:Word):Boolean;
+Var
+ Header,TypeValue:Byte;
+ Pos:Word;
+ SizeValue,Shift:LongInt;
+ B:Byte;
+Begin
+ ValidateOBUAt:=False;
+ NextPos:=StartPos;
+ If(Buffer.Data=Nil)or(LongInt(StartPos)+2>EndPos)Then Exit;
+ Header:=Buffer.Data^[StartPos];
+ TypeValue:=(Header shr 3)and $0F;
+ If TypeValue<>AV1OBUTypeValue(ExpectedType)Then Exit;
+ If(Header and $80)<>0 Then Exit;
+ If(Header and 2)=0 Then Exit;
+ Pos:=StartPos+1;
+ SizeValue:=0;
+ Shift:=0;
+ Repeat
+  If Pos>=EndPos Then Exit;
+  B:=Buffer.Data^[Pos];
+  SizeValue:=SizeValue+LongInt(B and $7F)shl Shift;
+  Shift:=Shift+7;
+  Inc(Pos);
+ Until(B and $80)=0;
+ If SizeValue<0 Then Exit;
+ If LongInt(Pos)+SizeValue>EndPos Then Exit;
+ NextPos:=Word(LongInt(Pos)+SizeValue);
+ ValidateOBUAt:=True;
+End;
+
+Function ValidateAV1OBUSequenceInRange(Const Buffer:TAV1ByteBuffer;
+ StartPos,DataLength:LongInt):Boolean;
+Var
+ Pos,EndPos,NextPos:Word;
+Begin
+ ValidateAV1OBUSequenceInRange:=False;
+ If(StartPos<0)or(DataLength<=0)Then Exit;
+ If StartPos+DataLength>Buffer.Size Then Exit;
+ Pos:=Word(StartPos);
+ EndPos:=Word(StartPos+DataLength);
+ If not ValidateOBUAt(Buffer,Pos,EndPos,obuSequenceHeader,NextPos)Then Exit;
+ Pos:=NextPos;
+ If not ValidateOBUAt(Buffer,Pos,EndPos,obuFrameHeader,NextPos)Then Exit;
+ Pos:=NextPos;
+ If not ValidateOBUAt(Buffer,Pos,EndPos,obuTileGroup,NextPos)Then Exit;
+ ValidateAV1OBUSequenceInRange:=NextPos=EndPos;
+End;
+
 Function BuildAV1Bitstream(Const SequenceOBU,FrameHeaderOBU,TileGroupOBU:TAV1ByteBuffer;
  Var Bitstream:TAV1Bitstream):Boolean;
 Begin
@@ -1944,6 +2027,749 @@ Procedure DumpAV1OBUSummary(Const Bitstream:TAV1Bitstream);
 Begin
  If Bitstream.Combined.Size=0 Then Begin
  End;
+End;
+
+Procedure InitAVIFContainer(Var Container:TAVIFContainer);
+Begin
+ InitAV1ByteBuffer(Container.FileData);
+ Container.IlocPatch.OffsetFieldPos:=0;
+ Container.IlocPatch.LengthFieldPos:=0;
+ Container.IlocPatch.OffsetSize:=0;
+ Container.IlocPatch.LengthSize:=0;
+ Container.IlocPatch.IlocBoxStart:=0;
+ Container.IlocPatch.IlocBoxEnd:=0;
+ Container.IlocPatch.MdatBoxOffset:=0;
+ Container.IlocPatch.MdatHeaderSize:=0;
+ Container.IlocPatch.MdatDataOffset:=0;
+ Container.IlocPatch.MdatDataLength:=0;
+End;
+
+Procedure FreeAVIFContainer(Var Container:TAVIFContainer);
+Begin
+ FreeAV1ByteBuffer(Container.FileData);
+ InitAVIFContainer(Container);
+End;
+
+Procedure InitISOBoxWriter(Var Writer:TISOBoxWriter;Var Buffer:TAV1ByteBuffer);
+Begin
+ Writer.Buffer:=@Buffer;
+ Writer.Failed:=False;
+End;
+
+Procedure BoxWriteByte(Var Writer:TISOBoxWriter;Value:Byte);
+Begin
+ If Writer.Failed Then Exit;
+ If(Writer.Buffer=Nil)or(not AV1BufferAppendByte(Writer.Buffer^,Value))Then
+  Writer.Failed:=True;
+End;
+
+Procedure BoxWriteBE16(Var Writer:TISOBoxWriter;Value:Word);
+Begin
+ BoxWriteByte(Writer,Byte((Value shr 8)and $FF));
+ BoxWriteByte(Writer,Byte(Value and $FF));
+End;
+
+Procedure BoxWriteBE32(Var Writer:TISOBoxWriter;Value:LongInt);
+Begin
+ BoxWriteByte(Writer,Byte((Value shr 24)and $FF));
+ BoxWriteByte(Writer,Byte((Value shr 16)and $FF));
+ BoxWriteByte(Writer,Byte((Value shr 8)and $FF));
+ BoxWriteByte(Writer,Byte(Value and $FF));
+End;
+
+Procedure BoxWriteFourCC(Var Writer:TISOBoxWriter;Code:String);
+Var
+ I:Byte;
+Begin
+ For I:=1 to 4 Do Begin
+  If I<=Length(Code)Then BoxWriteByte(Writer,Ord(Code[I]))
+                    Else BoxWriteByte(Writer,Ord(' '));
+ End;
+End;
+
+Procedure BoxWriteCString(Var Writer:TISOBoxWriter;Text:String);
+Var
+ I:Byte;
+Begin
+ For I:=1 to Length(Text)Do BoxWriteByte(Writer,Ord(Text[I]));
+ BoxWriteByte(Writer,0);
+End;
+
+Procedure WriteBoxHeader(Var Writer:TISOBoxWriter;Size:LongInt;FourCC:String);
+Begin
+ BoxWriteBE32(Writer,Size);
+ BoxWriteFourCC(Writer,FourCC);
+End;
+
+Function BeginISOBox(Var Writer:TISOBoxWriter;FourCC:String;Var StartPos:Word):Boolean;
+Begin
+ BeginISOBox:=False;
+ If(Writer.Buffer=Nil)or(Writer.Failed)Then Exit;
+ StartPos:=Writer.Buffer^.Size;
+ WriteBoxHeader(Writer,0,FourCC);
+ BeginISOBox:=not Writer.Failed;
+End;
+
+Procedure PatchBE32(Var Buffer:TAV1ByteBuffer;Pos:Word;Value:LongInt);
+Begin
+ If(Buffer.Data=Nil)or(LongInt(Pos)+3>=Buffer.Size)Then Exit;
+ Buffer.Data^[Pos]:=Byte((Value shr 24)and $FF);
+ Buffer.Data^[Pos+1]:=Byte((Value shr 16)and $FF);
+ Buffer.Data^[Pos+2]:=Byte((Value shr 8)and $FF);
+ Buffer.Data^[Pos+3]:=Byte(Value and $FF);
+End;
+
+Function PatchBE32Checked(Var Buffer:TAV1ByteBuffer;Pos:Word;Value:LongInt):Boolean;
+Begin
+ PatchBE32Checked:=False;
+ If(Buffer.Data=Nil)or(LongInt(Pos)+3>=Buffer.Size)Then Exit;
+ PatchBE32(Buffer,Pos,Value);
+ PatchBE32Checked:=True;
+End;
+
+Function ReadBE32(Const Buffer:TAV1ByteBuffer;Pos:Word;Var Value:LongInt):Boolean;
+Begin
+ ReadBE32:=False;
+ Value:=0;
+ If(Buffer.Data=Nil)or(LongInt(Pos)+3>=Buffer.Size)Then Exit;
+ Value:=(LongInt(Buffer.Data^[Pos])shl 24)+
+  (LongInt(Buffer.Data^[Pos+1])shl 16)+
+  (LongInt(Buffer.Data^[Pos+2])shl 8)+
+  LongInt(Buffer.Data^[Pos+3]);
+ ReadBE32:=True;
+End;
+
+Function ReadBE16(Const Buffer:TAV1ByteBuffer;Pos:Word;Var Value:Word):Boolean;
+Begin
+ ReadBE16:=False;
+ Value:=0;
+ If(Buffer.Data=Nil)or(LongInt(Pos)+1>=Buffer.Size)Then Exit;
+ Value:=(Word(Buffer.Data^[Pos])shl 8)+Word(Buffer.Data^[Pos+1]);
+ ReadBE16:=True;
+End;
+
+Function BufferHasFourCC(Const Buffer:TAV1ByteBuffer;Pos:Word;Code:String):Boolean;
+Var
+ I:Byte;
+Begin
+ BufferHasFourCC:=False;
+ If(Buffer.Data=Nil)or(LongInt(Pos)+3>=Buffer.Size)Then Exit;
+ For I:=1 to 4 Do
+  If Buffer.Data^[Pos+I-1]<>Ord(Code[I])Then Exit;
+ BufferHasFourCC:=True;
+End;
+
+Function FindBoxInRange(Const Buffer:TAV1ByteBuffer;StartPos,EndPos:Word;
+ Code:String;Var BoxOffset:Word;Var BoxSize:LongInt):Boolean;
+Var
+ Pos:Word;
+ SizeValue:LongInt;
+Begin
+ FindBoxInRange:=False;
+ BoxOffset:=0;
+ BoxSize:=0;
+ Pos:=StartPos;
+ While LongInt(Pos)+8<=EndPos Do Begin
+  If not ReadBE32(Buffer,Pos,SizeValue)Then Exit;
+  If SizeValue<8 Then Exit;
+  If LongInt(Pos)+SizeValue>EndPos Then Exit;
+  If BufferHasFourCC(Buffer,Pos+4,Code)Then Begin
+   BoxOffset:=Pos;
+   BoxSize:=SizeValue;
+   FindBoxInRange:=True;
+   Exit;
+  End;
+  Pos:=Word(LongInt(Pos)+SizeValue);
+ End;
+End;
+
+Function ValidateBoxListEnd(Const Buffer:TAV1ByteBuffer;StartPos,EndPos:Word):Boolean;
+Var
+ Pos:Word;
+ SizeValue:LongInt;
+Begin
+ ValidateBoxListEnd:=False;
+ Pos:=StartPos;
+ While Pos<EndPos Do Begin
+  If LongInt(Pos)+8>EndPos Then Exit;
+  If not ReadBE32(Buffer,Pos,SizeValue)Then Exit;
+  If SizeValue<8 Then Exit;
+  If LongInt(Pos)+SizeValue>EndPos Then Exit;
+  Pos:=Word(LongInt(Pos)+SizeValue);
+ End;
+ ValidateBoxListEnd:=Pos=EndPos;
+End;
+
+Function EndISOBox(Var Writer:TISOBoxWriter;StartPos:Word):Boolean;
+Var
+ BoxSize:LongInt;
+Begin
+ EndISOBox:=False;
+ If(Writer.Buffer=Nil)or(Writer.Failed)Then Exit;
+ BoxSize:=LongInt(Writer.Buffer^.Size)-StartPos;
+ If BoxSize<8 Then Exit;
+ PatchBE32(Writer.Buffer^,StartPos,BoxSize);
+ EndISOBox:=True;
+End;
+
+Procedure BoxWriteFullBoxHeader(Var Writer:TISOBoxWriter;Version:Byte;Flags:LongInt);
+Begin
+ BoxWriteByte(Writer,Version);
+ BoxWriteByte(Writer,Byte((Flags shr 16)and $FF));
+ BoxWriteByte(Writer,Byte((Flags shr 8)and $FF));
+ BoxWriteByte(Writer,Byte(Flags and $FF));
+End;
+
+Function WriteFtypBox(Var Writer:TISOBoxWriter):Boolean;
+Var
+ StartPos:Word;
+Begin
+ WriteFtypBox:=False;
+ If not BeginISOBox(Writer,'ftyp',StartPos)Then Exit;
+ BoxWriteFourCC(Writer,'avif');
+ BoxWriteBE32(Writer,0);
+ BoxWriteFourCC(Writer,'avif');
+ BoxWriteFourCC(Writer,'mif1');
+ BoxWriteFourCC(Writer,'miaf');
+ WriteFtypBox:=EndISOBox(Writer,StartPos);
+End;
+
+Function WriteHdlrBox(Var Writer:TISOBoxWriter):Boolean;
+Var
+ StartPos:Word;
+Begin
+ WriteHdlrBox:=False;
+ If not BeginISOBox(Writer,'hdlr',StartPos)Then Exit;
+ BoxWriteFullBoxHeader(Writer,0,0);
+ BoxWriteBE32(Writer,0);
+ BoxWriteFourCC(Writer,'pict');
+ BoxWriteBE32(Writer,0);
+ BoxWriteBE32(Writer,0);
+ BoxWriteBE32(Writer,0);
+ BoxWriteCString(Writer,'CloneDRAW AVIF');
+ WriteHdlrBox:=EndISOBox(Writer,StartPos);
+End;
+
+Function WritePitmBox(Var Writer:TISOBoxWriter):Boolean;
+Var
+ StartPos:Word;
+Begin
+ WritePitmBox:=False;
+ If not BeginISOBox(Writer,'pitm',StartPos)Then Exit;
+ BoxWriteFullBoxHeader(Writer,0,0);
+ BoxWriteBE16(Writer,AVIFInitialItemID);
+ WritePitmBox:=EndISOBox(Writer,StartPos);
+End;
+
+Function WriteIlocBox(Var Writer:TISOBoxWriter;
+ Var PatchInfo:TAVIFIlocPatchInfo):Boolean;
+Var
+ StartPos:Word;
+Begin
+ WriteIlocBox:=False;
+ If not BeginISOBox(Writer,'iloc',StartPos)Then Exit;
+ PatchInfo.IlocBoxStart:=StartPos;
+ BoxWriteFullBoxHeader(Writer,0,0);
+ PatchInfo.OffsetSize:=4;
+ PatchInfo.LengthSize:=4;
+ BoxWriteByte(Writer,$44); {offset_size=4, length_size=4}
+ BoxWriteByte(Writer,$00); {base_offset_size=0, index_size=0}
+ BoxWriteBE16(Writer,1);   {item_count}
+ BoxWriteBE16(Writer,AVIFInitialItemID);
+ BoxWriteBE16(Writer,0);   {data_reference_index}
+ BoxWriteBE16(Writer,1);   {extent_count}
+ If Writer.Buffer<>Nil Then PatchInfo.OffsetFieldPos:=Writer.Buffer^.Size;
+ BoxWriteBE32(Writer,0);   {extent_offset, patche apres mdat}
+ If Writer.Buffer<>Nil Then PatchInfo.LengthFieldPos:=Writer.Buffer^.Size;
+ BoxWriteBE32(Writer,0);   {extent_length, patche apres mdat}
+ WriteIlocBox:=EndISOBox(Writer,StartPos);
+ If WriteIlocBox and(Writer.Buffer<>Nil)Then
+  PatchInfo.IlocBoxEnd:=Writer.Buffer^.Size;
+End;
+
+Function WriteIinfBox(Var Writer:TISOBoxWriter):Boolean;
+Var
+ IinfStart,InfeStart:Word;
+Begin
+ WriteIinfBox:=False;
+ If not BeginISOBox(Writer,'iinf',IinfStart)Then Exit;
+ BoxWriteFullBoxHeader(Writer,0,0);
+ BoxWriteBE16(Writer,1);
+ If not BeginISOBox(Writer,'infe',InfeStart)Then Exit;
+ BoxWriteFullBoxHeader(Writer,2,0);
+ BoxWriteBE16(Writer,AVIFInitialItemID);
+ BoxWriteBE16(Writer,0);
+ BoxWriteFourCC(Writer,'av01');
+ BoxWriteCString(Writer,'');
+ If not EndISOBox(Writer,InfeStart)Then Exit;
+ WriteIinfBox:=EndISOBox(Writer,IinfStart);
+End;
+
+Procedure InitItemPropertyTable(Var Table:TItemPropertyTable);
+Begin
+ FillChar(Table,SizeOf(Table),0);
+End;
+
+Function RegisterItemProperty(Var Table:TItemPropertyTable;FourCC:String;
+ IsEssential:Boolean;Offset:Word):Boolean;
+Var
+ NewIndex:Byte;
+Begin
+ RegisterItemProperty:=False;
+ If Table.Count>=AVIFMaxItemProperties Then Exit;
+ NewIndex:=Table.Count+1;
+ Table.Items[NewIndex].PropertyIndex:=NewIndex;
+ Table.Items[NewIndex].FourCC:=Copy(FourCC,1,4);
+ Table.Items[NewIndex].IsEssential:=IsEssential;
+ Table.Items[NewIndex].Offset:=Offset;
+ Table.Count:=NewIndex;
+ RegisterItemProperty:=True;
+End;
+
+Function WriteIspeProperty(Var Writer:TISOBoxWriter;Const Image:TAVIFImage;
+ Var Table:TItemPropertyTable):Boolean;
+Var
+ StartPos:Word;
+Begin
+ WriteIspeProperty:=False;
+ If not BeginISOBox(Writer,'ispe',StartPos)Then Exit;
+ If not RegisterItemProperty(Table,'ispe',True,StartPos)Then Exit;
+ BoxWriteFullBoxHeader(Writer,0,0);
+ BoxWriteBE32(Writer,Image.Width);
+ BoxWriteBE32(Writer,Image.Height);
+ WriteIspeProperty:=EndISOBox(Writer,StartPos);
+End;
+
+Function WritePixiProperty(Var Writer:TISOBoxWriter;Const Image:TAVIFImage;
+ Var Table:TItemPropertyTable):Boolean;
+Var
+ StartPos:Word;
+Begin
+ WritePixiProperty:=False;
+ If not BeginISOBox(Writer,'pixi',StartPos)Then Exit;
+ If not RegisterItemProperty(Table,'pixi',True,StartPos)Then Exit;
+ BoxWriteFullBoxHeader(Writer,0,0);
+ BoxWriteByte(Writer,3);
+ BoxWriteByte(Writer,Image.BitDepth);
+ BoxWriteByte(Writer,Image.BitDepth);
+ BoxWriteByte(Writer,Image.BitDepth);
+ WritePixiProperty:=EndISOBox(Writer,StartPos);
+End;
+
+Function WriteAv1CProperty(Var Writer:TISOBoxWriter;
+ Const SeqConfig:TAV1SequenceConfig;Var Table:TItemPropertyTable):Boolean;
+Var
+ StartPos:Word;
+ ConfigByte:Byte;
+Begin
+ WriteAv1CProperty:=False;
+ If not BeginISOBox(Writer,'av1C',StartPos)Then Exit;
+ If not RegisterItemProperty(Table,'av1C',True,StartPos)Then Exit;
+ BoxWriteByte(Writer,$81); {marker=1, version=1}
+ BoxWriteByte(Writer,Byte((SeqConfig.SeqProfile shl 5)or
+  (SeqConfig.SeqLevelIdx0 and $1F)));
+ ConfigByte:=Byte((SeqConfig.SubsamplingX and 1)shl 3)or
+  Byte((SeqConfig.SubsamplingY and 1)shl 2)or
+  Byte(SeqConfig.ChromaSamplePosition and 3);
+ If SeqConfig.HighBitDepth Then ConfigByte:=ConfigByte or $40;
+ If SeqConfig.MonoChrome Then ConfigByte:=ConfigByte or $10;
+ BoxWriteByte(Writer,ConfigByte);
+ BoxWriteByte(Writer,0); {initial_presentation_delay_present=0}
+ WriteAv1CProperty:=EndISOBox(Writer,StartPos);
+End;
+
+Function WriteColrProperty(Var Writer:TISOBoxWriter;Const Image:TAVIFImage;
+ Var Table:TItemPropertyTable):Boolean;
+Var
+ StartPos:Word;
+ RangeByte:Byte;
+Begin
+ WriteColrProperty:=False;
+ If not BeginISOBox(Writer,'colr',StartPos)Then Exit;
+ If not RegisterItemProperty(Table,'colr',False,StartPos)Then Exit;
+ BoxWriteFourCC(Writer,'nclx');
+ BoxWriteBE16(Writer,Image.ColorPrimaries);
+ BoxWriteBE16(Writer,Image.TransferCharacteristics);
+ BoxWriteBE16(Writer,Image.MatrixCoefficients);
+ If Image.RangeMode=rmFullRange Then RangeByte:=$80
+                               Else RangeByte:=0;
+ BoxWriteByte(Writer,RangeByte);
+ WriteColrProperty:=EndISOBox(Writer,StartPos);
+End;
+
+Function WriteIpcoBox(Var Writer:TISOBoxWriter;Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig;
+ Var Table:TItemPropertyTable):Boolean;
+Var
+ StartPos:Word;
+Begin
+ WriteIpcoBox:=False;
+ If not BeginISOBox(Writer,'ipco',StartPos)Then Exit;
+ InitItemPropertyTable(Table);
+ If not WriteIspeProperty(Writer,Image,Table)Then Exit;
+ If not WritePixiProperty(Writer,Image,Table)Then Exit;
+ If not WriteAv1CProperty(Writer,SeqConfig,Table)Then Exit;
+ If not WriteColrProperty(Writer,Image,Table)Then Exit;
+ WriteIpcoBox:=EndISOBox(Writer,StartPos);
+End;
+
+Function WriteIpmaBox(Var Writer:TISOBoxWriter;
+ Const Table:TItemPropertyTable):Boolean;
+Var
+ StartPos:Word;
+ I:Byte;
+ Association:Byte;
+Begin
+ WriteIpmaBox:=False;
+ If Table.Count=0 Then Exit;
+ If not BeginISOBox(Writer,'ipma',StartPos)Then Exit;
+ BoxWriteFullBoxHeader(Writer,0,0);
+ BoxWriteBE32(Writer,1); {entry_count}
+ BoxWriteBE16(Writer,AVIFInitialItemID);
+ BoxWriteByte(Writer,Table.Count);
+ For I:=1 to Table.Count Do Begin
+  Association:=Table.Items[I].PropertyIndex and $7F;
+  If Table.Items[I].IsEssential Then Association:=Association or $80;
+  BoxWriteByte(Writer,Association);
+ End;
+ WriteIpmaBox:=EndISOBox(Writer,StartPos);
+End;
+
+Function WriteIprpBox(Var Writer:TISOBoxWriter;
+ Const Image:TAVIFImage;Const SeqConfig:TAV1SequenceConfig):Boolean;
+Var
+ StartPos:Word;
+ Table:TItemPropertyTable;
+Begin
+ WriteIprpBox:=False;
+ If not BeginISOBox(Writer,'iprp',StartPos)Then Exit;
+ InitItemPropertyTable(Table);
+ If not WriteIpcoBox(Writer,Image,SeqConfig,Table)Then Exit;
+ If not WriteIpmaBox(Writer,Table)Then Exit;
+ WriteIprpBox:=EndISOBox(Writer,StartPos);
+End;
+
+Function WriteMetaBox(Var Writer:TISOBoxWriter;
+ Var PatchInfo:TAVIFIlocPatchInfo;Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig):Boolean;
+Var
+ StartPos:Word;
+Begin
+ WriteMetaBox:=False;
+ If not BeginISOBox(Writer,'meta',StartPos)Then Exit;
+ BoxWriteFullBoxHeader(Writer,0,0);
+ If not WriteHdlrBox(Writer)Then Exit;
+ If not WritePitmBox(Writer)Then Exit;
+ If not WriteIlocBox(Writer,PatchInfo)Then Exit;
+ If not WriteIinfBox(Writer)Then Exit;
+ If not WriteIprpBox(Writer,Image,SeqConfig)Then Exit;
+ WriteMetaBox:=EndISOBox(Writer,StartPos);
+End;
+
+Function WriteAVIFMdat(Var Writer:TISOBoxWriter;Const AV1Data:TAV1ByteBuffer;
+ Var DataOffset,DataLength:LongInt;Var BoxOffset:Word;
+ Var HeaderSize:Byte):Boolean;
+Var
+ StartPos:Word;
+ BoxSize:LongInt;
+Begin
+ WriteAVIFMdat:=False;
+ DataOffset:=0;
+ DataLength:=0;
+ BoxOffset:=0;
+ HeaderSize:=8;
+ If(Writer.Buffer=Nil)or(Writer.Failed)Then Exit;
+ If(AV1Data.Data=Nil)or(AV1Data.Size=0)Then Exit;
+ StartPos:=Writer.Buffer^.Size;
+ BoxSize:=LongInt(HeaderSize)+AV1Data.Size;
+ If BoxSize<=HeaderSize Then Exit;
+ If LongInt(StartPos)+BoxSize>Writer.Buffer^.Capacity Then Exit;
+ BoxOffset:=StartPos;
+ DataOffset:=LongInt(StartPos)+HeaderSize;
+ DataLength:=AV1Data.Size;
+ WriteBoxHeader(Writer,BoxSize,'mdat');
+ If not AV1BufferAppendBuffer(Writer.Buffer^,AV1Data)Then Begin
+  Writer.Failed:=True;
+  Exit;
+ End;
+ If Writer.Buffer^.Size<>LongInt(StartPos)+BoxSize Then Begin
+  Writer.Failed:=True;
+  Exit;
+ End;
+ WriteAVIFMdat:=not Writer.Failed;
+End;
+
+Function WriteMdatBox(Var Writer:TISOBoxWriter;Const Bitstream:TAV1Bitstream;
+ Var PatchInfo:TAVIFIlocPatchInfo):Boolean;
+Begin
+ WriteMdatBox:=WriteAVIFMdat(Writer,Bitstream.Combined,
+  PatchInfo.MdatDataOffset,PatchInfo.MdatDataLength,
+  PatchInfo.MdatBoxOffset,PatchInfo.MdatHeaderSize);
+End;
+
+Function IlocPatchPositionsAreValid(Const PatchInfo:TAVIFIlocPatchInfo):Boolean;
+Begin
+ IlocPatchPositionsAreValid:=False;
+ If(PatchInfo.OffsetSize<>4)or(PatchInfo.LengthSize<>4)Then Exit;
+ If(PatchInfo.IlocBoxEnd<=PatchInfo.IlocBoxStart)Then Exit;
+ If(PatchInfo.OffsetFieldPos<PatchInfo.IlocBoxStart)or
+   (LongInt(PatchInfo.OffsetFieldPos)+PatchInfo.OffsetSize>PatchInfo.IlocBoxEnd)Then Exit;
+ If(PatchInfo.LengthFieldPos<PatchInfo.IlocBoxStart)or
+   (LongInt(PatchInfo.LengthFieldPos)+PatchInfo.LengthSize>PatchInfo.IlocBoxEnd)Then Exit;
+ IlocPatchPositionsAreValid:=True;
+End;
+
+Function ValidateAVIFContainer(Const Container:TAVIFContainer;
+ AV1DataSize:LongInt):Boolean;
+Var
+ DataEnd,MdatBoxSize:LongInt;
+ PatchedOffset,PatchedLength:LongInt;
+Begin
+ ValidateAVIFContainer:=False;
+ If(Container.FileData.Data=Nil)or(Container.FileData.Size<32)Then Exit;
+ If not IlocPatchPositionsAreValid(Container.IlocPatch)Then Exit;
+ If(Container.IlocPatch.MdatDataOffset<=0)or
+   (Container.IlocPatch.MdatDataLength<=0)Then Exit;
+ If Container.IlocPatch.MdatHeaderSize<>8 Then Exit;
+ If Container.IlocPatch.MdatDataLength<>AV1DataSize Then Exit;
+ If Container.IlocPatch.MdatDataOffset<>
+  LongInt(Container.IlocPatch.MdatBoxOffset)+Container.IlocPatch.MdatHeaderSize Then Exit;
+ If not BufferHasFourCC(Container.FileData,Container.IlocPatch.MdatBoxOffset+4,'mdat')Then Exit;
+ If not ReadBE32(Container.FileData,Container.IlocPatch.MdatBoxOffset,MdatBoxSize)Then Exit;
+ If MdatBoxSize<>Container.IlocPatch.MdatHeaderSize+Container.IlocPatch.MdatDataLength Then Exit;
+ DataEnd:=Container.IlocPatch.MdatDataOffset+Container.IlocPatch.MdatDataLength;
+ If DataEnd>Container.FileData.Size Then Exit;
+ If not ReadBE32(Container.FileData,Container.IlocPatch.OffsetFieldPos,PatchedOffset)Then Exit;
+ If not ReadBE32(Container.FileData,Container.IlocPatch.LengthFieldPos,PatchedLength)Then Exit;
+ If PatchedOffset<>Container.IlocPatch.MdatDataOffset Then Exit;
+ If PatchedLength<>Container.IlocPatch.MdatDataLength Then Exit;
+ ValidateAVIFContainer:=True;
+End;
+
+Function ValidateHdlrBox(Const Buffer:TAV1ByteBuffer;BoxOffset:Word;
+ BoxSize:LongInt):Boolean;
+Begin
+ ValidateHdlrBox:=False;
+ If BoxSize<33 Then Exit;
+ ValidateHdlrBox:=BufferHasFourCC(Buffer,BoxOffset+16,'pict');
+End;
+
+Function ValidatePitmBox(Const Buffer:TAV1ByteBuffer;BoxOffset:Word;
+ BoxSize:LongInt):Boolean;
+Var
+ ItemID:Word;
+Begin
+ ValidatePitmBox:=False;
+ If BoxSize<14 Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+12,ItemID)Then Exit;
+ ValidatePitmBox:=ItemID=AVIFInitialItemID;
+End;
+
+Function ValidateIinfBox(Const Buffer:TAV1ByteBuffer;BoxOffset:Word;
+ BoxSize:LongInt):Boolean;
+Var
+ EntryCount,ItemID:Word;
+ InfeOffset:Word;
+ InfeSize:LongInt;
+Begin
+ ValidateIinfBox:=False;
+ If BoxSize<35 Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+12,EntryCount)Then Exit;
+ If EntryCount<>1 Then Exit;
+ If not FindBoxInRange(Buffer,BoxOffset+14,Word(LongInt(BoxOffset)+BoxSize),
+  'infe',InfeOffset,InfeSize)Then Exit;
+ If InfeSize<21 Then Exit;
+ If Buffer.Data^[InfeOffset+8]<>2 Then Exit;
+ If not ReadBE16(Buffer,InfeOffset+12,ItemID)Then Exit;
+ If ItemID<>AVIFInitialItemID Then Exit;
+ ValidateIinfBox:=BufferHasFourCC(Buffer,InfeOffset+16,'av01');
+End;
+
+Function ValidateIspeProperty(Const Buffer:TAV1ByteBuffer;BoxOffset:Word;
+ BoxSize:LongInt;Const Image:TAVIFImage):Boolean;
+Var
+ WidthValue,HeightValue:LongInt;
+Begin
+ ValidateIspeProperty:=False;
+ If BoxSize<20 Then Exit;
+ If not ReadBE32(Buffer,BoxOffset+12,WidthValue)Then Exit;
+ If not ReadBE32(Buffer,BoxOffset+16,HeightValue)Then Exit;
+ ValidateIspeProperty:=(WidthValue=Image.Width)and(HeightValue=Image.Height);
+End;
+
+Function ValidatePixiProperty(Const Buffer:TAV1ByteBuffer;BoxOffset:Word;
+ BoxSize:LongInt;Const Image:TAVIFImage):Boolean;
+Begin
+ ValidatePixiProperty:=False;
+ If BoxSize<16 Then Exit;
+ If Buffer.Data^[BoxOffset+12]<>3 Then Exit;
+ ValidatePixiProperty:=(Buffer.Data^[BoxOffset+13]=Image.BitDepth)and
+  (Buffer.Data^[BoxOffset+14]=Image.BitDepth)and
+  (Buffer.Data^[BoxOffset+15]=Image.BitDepth);
+End;
+
+Function ValidateAv1CProperty(Const Buffer:TAV1ByteBuffer;BoxOffset:Word;
+ BoxSize:LongInt;Const SeqConfig:TAV1SequenceConfig):Boolean;
+Var
+ ProfileLevel,ConfigByte,ExpectedConfig:Byte;
+Begin
+ ValidateAv1CProperty:=False;
+ If BoxSize<12 Then Exit;
+ If Buffer.Data^[BoxOffset+8]<>$81 Then Exit;
+ ProfileLevel:=Byte((SeqConfig.SeqProfile shl 5)or(SeqConfig.SeqLevelIdx0 and $1F));
+ If Buffer.Data^[BoxOffset+9]<>ProfileLevel Then Exit;
+ ExpectedConfig:=Byte((SeqConfig.SubsamplingX and 1)shl 3)or
+  Byte((SeqConfig.SubsamplingY and 1)shl 2)or
+  Byte(SeqConfig.ChromaSamplePosition and 3);
+ If SeqConfig.HighBitDepth Then ExpectedConfig:=ExpectedConfig or $40;
+ If SeqConfig.MonoChrome Then ExpectedConfig:=ExpectedConfig or $10;
+ ConfigByte:=Buffer.Data^[BoxOffset+10];
+ If ConfigByte<>ExpectedConfig Then Exit;
+ ValidateAv1CProperty:=Buffer.Data^[BoxOffset+11]=0;
+End;
+
+Function ValidateColrProperty(Const Buffer:TAV1ByteBuffer;BoxOffset:Word;
+ BoxSize:LongInt;Const Image:TAVIFImage):Boolean;
+Var
+ Primaries,Transfer,Matrix:Word;
+ RangeByte:Byte;
+Begin
+ ValidateColrProperty:=False;
+ If BoxSize<19 Then Exit;
+ If not BufferHasFourCC(Buffer,BoxOffset+8,'nclx')Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+12,Primaries)Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+14,Transfer)Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+16,Matrix)Then Exit;
+ RangeByte:=0;
+ If Image.RangeMode=rmFullRange Then RangeByte:=$80;
+ ValidateColrProperty:=(Primaries=Image.ColorPrimaries)and
+  (Transfer=Image.TransferCharacteristics)and
+  (Matrix=Image.MatrixCoefficients)and(Buffer.Data^[BoxOffset+18]=RangeByte);
+End;
+
+Function ValidateIpmaBox(Const Buffer:TAV1ByteBuffer;BoxOffset:Word;
+ BoxSize:LongInt):Boolean;
+Var
+ EntryCount:LongInt;
+ ItemID:Word;
+Begin
+ ValidateIpmaBox:=False;
+ If BoxSize<23 Then Exit;
+ If not ReadBE32(Buffer,BoxOffset+12,EntryCount)Then Exit;
+ If EntryCount<>1 Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+16,ItemID)Then Exit;
+ If ItemID<>AVIFInitialItemID Then Exit;
+ If Buffer.Data^[BoxOffset+18]<>4 Then Exit;
+ ValidateIpmaBox:=(Buffer.Data^[BoxOffset+19]=$81)and
+  (Buffer.Data^[BoxOffset+20]=$82)and(Buffer.Data^[BoxOffset+21]=$83)and
+  (Buffer.Data^[BoxOffset+22]=$04);
+End;
+
+Function ValidateIprpBox(Const Buffer:TAV1ByteBuffer;BoxOffset:Word;
+ BoxSize:LongInt;Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig):Boolean;
+Var
+ IpcoOffset,IpmaOffset,PropOffset:Word;
+ IpcoSize,IpmaSize,PropSize:LongInt;
+ IpcoStart,IpcoEnd,IprpEnd:Word;
+Begin
+ ValidateIprpBox:=False;
+ IprpEnd:=Word(LongInt(BoxOffset)+BoxSize);
+ If not ValidateBoxListEnd(Buffer,BoxOffset+8,IprpEnd)Then Exit;
+ If not FindBoxInRange(Buffer,BoxOffset+8,IprpEnd,'ipco',IpcoOffset,IpcoSize)Then Exit;
+ If not FindBoxInRange(Buffer,BoxOffset+8,IprpEnd,'ipma',IpmaOffset,IpmaSize)Then Exit;
+ IpcoStart:=IpcoOffset+8;
+ IpcoEnd:=Word(LongInt(IpcoOffset)+IpcoSize);
+ If not ValidateBoxListEnd(Buffer,IpcoStart,IpcoEnd)Then Exit;
+ If not FindBoxInRange(Buffer,IpcoStart,IpcoEnd,'ispe',PropOffset,PropSize)Then Exit;
+ If not ValidateIspeProperty(Buffer,PropOffset,PropSize,Image)Then Exit;
+ If not FindBoxInRange(Buffer,IpcoStart,IpcoEnd,'pixi',PropOffset,PropSize)Then Exit;
+ If not ValidatePixiProperty(Buffer,PropOffset,PropSize,Image)Then Exit;
+ If not FindBoxInRange(Buffer,IpcoStart,IpcoEnd,'av1C',PropOffset,PropSize)Then Exit;
+ If not ValidateAv1CProperty(Buffer,PropOffset,PropSize,SeqConfig)Then Exit;
+ If not FindBoxInRange(Buffer,IpcoStart,IpcoEnd,'colr',PropOffset,PropSize)Then Exit;
+ If not ValidateColrProperty(Buffer,PropOffset,PropSize,Image)Then Exit;
+ If not ValidateIpmaBox(Buffer,IpmaOffset,IpmaSize)Then Exit;
+ ValidateIprpBox:=True;
+End;
+
+Function ValidateAVIFRegressionStructure(Const Container:TAVIFContainer;
+ Const Image:TAVIFImage;Const SeqConfig:TAV1SequenceConfig;
+ AV1DataSize:LongInt):Boolean;
+Var
+ FtypOffset,MetaOffset,MdatOffset,BoxOffset:Word;
+ FtypSize,MetaSize,MdatSize,BoxSize:LongInt;
+ MetaStart,MetaEnd:Word;
+Begin
+ ValidateAVIFRegressionStructure:=False;
+ If not ValidateBoxListEnd(Container.FileData,0,Container.FileData.Size)Then Exit;
+ If not FindBoxInRange(Container.FileData,0,Container.FileData.Size,
+  'ftyp',FtypOffset,FtypSize)Then Exit;
+ If not FindBoxInRange(Container.FileData,0,Container.FileData.Size,
+  'meta',MetaOffset,MetaSize)Then Exit;
+ If not FindBoxInRange(Container.FileData,0,Container.FileData.Size,
+  'mdat',MdatOffset,MdatSize)Then Exit;
+ If not((FtypOffset<MetaOffset)and(MetaOffset<MdatOffset))Then Exit;
+ If not BufferHasFourCC(Container.FileData,FtypOffset+8,'avif')Then Exit;
+ MetaStart:=MetaOffset+12;
+ MetaEnd:=Word(LongInt(MetaOffset)+MetaSize);
+ If not ValidateBoxListEnd(Container.FileData,MetaStart,MetaEnd)Then Exit;
+ If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'hdlr',BoxOffset,BoxSize)Then Exit;
+ If not ValidateHdlrBox(Container.FileData,BoxOffset,BoxSize)Then Exit;
+ If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'pitm',BoxOffset,BoxSize)Then Exit;
+ If not ValidatePitmBox(Container.FileData,BoxOffset,BoxSize)Then Exit;
+ If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'iloc',BoxOffset,BoxSize)Then Exit;
+ If BoxOffset<>Container.IlocPatch.IlocBoxStart Then Exit;
+ If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'iinf',BoxOffset,BoxSize)Then Exit;
+ If not ValidateIinfBox(Container.FileData,BoxOffset,BoxSize)Then Exit;
+ If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'iprp',BoxOffset,BoxSize)Then Exit;
+ If not ValidateIprpBox(Container.FileData,BoxOffset,BoxSize,Image,SeqConfig)Then Exit;
+ If Container.IlocPatch.MdatBoxOffset<>MdatOffset Then Exit;
+ If MdatSize<>LongInt(Container.IlocPatch.MdatHeaderSize)+AV1DataSize Then Exit;
+ If not ValidateAV1OBUSequenceInRange(Container.FileData,
+  Container.IlocPatch.MdatDataOffset,Container.IlocPatch.MdatDataLength)Then Exit;
+ ValidateAVIFRegressionStructure:=True;
+End;
+
+Function BuildAVIFContainer(Const Image:TAVIFImage;Const SeqConfig:TAV1SequenceConfig;
+ Const Bitstream:TAV1Bitstream;
+ Var Container:TAVIFContainer):Boolean;
+Var
+ Writer:TISOBoxWriter;
+Begin
+ BuildAVIFContainer:=False;
+ InitAVIFContainer(Container);
+ If not AllocateAV1ByteBuffer(Container.FileData,AVIFMaxFileBytes)Then Exit;
+ InitISOBoxWriter(Writer,Container.FileData);
+ If(Image.Width=0)or(Image.Height=0)Then Exit;
+ If not WriteFtypBox(Writer)Then Exit;
+ If not WriteMetaBox(Writer,Container.IlocPatch,Image,SeqConfig)Then Exit;
+ If not WriteMdatBox(Writer,Bitstream,Container.IlocPatch)Then Exit;
+ If not IlocPatchPositionsAreValid(Container.IlocPatch)Then Exit;
+ If not PatchBE32Checked(Container.FileData,Container.IlocPatch.OffsetFieldPos,
+  Container.IlocPatch.MdatDataOffset)Then Exit;
+ If not PatchBE32Checked(Container.FileData,Container.IlocPatch.LengthFieldPos,
+  Container.IlocPatch.MdatDataLength)Then Exit;
+ If not ValidateAVIFContainer(Container,Bitstream.Combined.Size)Then Exit;
+ BuildAVIFContainer:=ValidateAVIFRegressionStructure(Container,Image,SeqConfig,
+  Bitstream.Combined.Size);
+End;
+
+Function WriteAVIFContainerFile(Const FileName:String;
+ Const Container:TAVIFContainer):Boolean;
+Var
+ OutputFile:File;
+ Written:Word;
+Begin
+ WriteAVIFContainerFile:=False;
+ If(Container.FileData.Data=Nil)or(Container.FileData.Size=0)Then Exit;
+ {$I-}Assign(OutputFile,FileName);
+ Rewrite(OutputFile,1);{$I+}
+ If IOResult<>0 Then Exit;
+ {$I-}BlockWrite(OutputFile,Container.FileData.Data^,Container.FileData.Size,Written);
+ Close(OutputFile);{$I+}
+ If IOResult<>0 Then Exit;
+ WriteAVIFContainerFile:=Written=Container.FileData.Size;
 End;
 
 Function BitsNeededForValue(Value:Word):Byte;
@@ -3541,6 +4367,160 @@ Begin
  EncodeGrayTestFrame:=Bitstream.Combined.Size>0;
 End;
 
+Procedure FillRegressionTestImage(Var Image:TAVIFImage;Pattern:Byte);
+Var
+ X,YPos:Word;
+ Value:Byte;
+Begin
+ For YPos:=0 to Image.PlaneY.Height-1 Do
+  For X:=0 to Image.PlaneY.Width-1 Do Begin
+   Case Pattern of
+    0:Value:=128;
+    1:Value:=Byte((LongInt(X)*3+LongInt(YPos)*5)and $FF);
+    Else
+     If((X+YPos)and 1)=0 Then Value:=64
+                         Else Value:=192;
+   End;
+   SetAVIFPlaneByte(Image.PlaneY,X,YPos,Value);
+  End;
+ For YPos:=0 to Image.PlaneU.Height-1 Do
+  For X:=0 to Image.PlaneU.Width-1 Do Begin
+   If Pattern=2 Then Begin
+    SetAVIFPlaneByte(Image.PlaneU,X,YPos,Byte(96+((X+YPos)and 31)));
+    SetAVIFPlaneByte(Image.PlaneV,X,YPos,Byte(160-((X+YPos)and 31)));
+   End
+    Else
+   Begin
+    SetAVIFPlaneByte(Image.PlaneU,X,YPos,128);
+    SetAVIFPlaneByte(Image.PlaneV,X,YPos,128);
+   End;
+  End;
+End;
+
+Function RegressionChromaIsNeutral(Const Image:TAVIFImage):Boolean;
+Var
+ X,YPos:Word;
+Begin
+ RegressionChromaIsNeutral:=False;
+ If(Image.PlaneU.Data=Nil)or(Image.PlaneV.Data=Nil)Then Exit;
+ For YPos:=0 to Image.PlaneU.Height-1 Do
+  For X:=0 to Image.PlaneU.Width-1 Do
+   If(GetAVIFPlaneByte(Image.PlaneU,X,YPos)<>128)or
+    (GetAVIFPlaneByte(Image.PlaneV,X,YPos)<>128)Then Exit;
+ RegressionChromaIsNeutral:=True;
+End;
+
+Function EncodeRegressionCase(VisibleWidth,VisibleHeight:Word;
+ ChromaFormat:TAVIFChromaFormat;Pattern:Byte):Boolean;
+Var
+ RegressionImage:TAVIFImage;
+ PaddedWidth,PaddedHeight:Word;
+ Grid:TAV1SuperBlockGrid;
+ TileConfig:TAV1TileConfig;
+ Tile:TAV1Tile;
+ SeqConfig:TAV1SequenceConfig;
+ FrameConfig:TAV1FrameConfig;
+ SequenceOBU,FrameHeaderOBU,TileGroupOBU:TAV1ByteBuffer;
+ Bitstream:TAV1Bitstream;
+ Container:TAVIFContainer;
+ Checksum:LongInt;
+Begin
+ EncodeRegressionCase:=False;
+ InitAVIFImageRecord(RegressionImage);
+ InitAV1ByteBuffer(SequenceOBU);
+ InitAV1ByteBuffer(FrameHeaderOBU);
+ InitAV1ByteBuffer(TileGroupOBU);
+ InitAV1Bitstream(Bitstream);
+ InitAVIFContainer(Container);
+ PaddedWidth:=RoundUpToMultiple(VisibleWidth,AV1SuperBlockSize);
+ PaddedHeight:=RoundUpToMultiple(VisibleHeight,AV1SuperBlockSize);
+ If not AllocateAVIFImagePadded(RegressionImage,VisibleWidth,VisibleHeight,
+  PaddedWidth,PaddedHeight,ChromaFormat,rmFullRange,cmBT709)Then Exit;
+ FillRegressionTestImage(RegressionImage,Pattern);
+ If(Pattern<>2)and(not RegressionChromaIsNeutral(RegressionImage))Then Begin
+  FreeAVIFImage(RegressionImage);
+  Exit;
+ End;
+ InitSuperBlockGrid(RegressionImage,AV1SuperBlockSize,Grid);
+ If not ValidateSuperBlockGrid(RegressionImage,Grid)Then Begin
+  FreeAVIFImage(RegressionImage);
+  Exit;
+ End;
+ InitSingleTileConfig(TileConfig);
+ If not InitSingleTile(Grid,TileConfig,Tile)Then Begin
+  FreeAVIFImage(RegressionImage);
+  Exit;
+ End;
+ InitSequenceConfigFromImage(RegressionImage,SeqConfig);
+ If not WriteSequenceHeaderOBU(SeqConfig,SequenceOBU)Then Begin
+  FreeAVIFImage(RegressionImage);
+  Exit;
+ End;
+ InitFrameConfigFromImage(RegressionImage,SeqConfig,FrameConfig);
+ If not WriteFrameHeaderOBU(SeqConfig,FrameConfig,FrameHeaderOBU)Then Begin
+  FreeAV1ByteBuffer(SequenceOBU);
+  FreeAVIFImage(RegressionImage);
+  Exit;
+ End;
+ If not WriteTileGroupOBU(RegressionImage,Grid,TileConfig,Tile,TileGroupOBU)Then Begin
+  FreeAV1ByteBuffer(FrameHeaderOBU);
+  FreeAV1ByteBuffer(SequenceOBU);
+  FreeAVIFImage(RegressionImage);
+  Exit;
+ End;
+ If not BuildAV1Bitstream(SequenceOBU,FrameHeaderOBU,TileGroupOBU,Bitstream)Then Begin
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1ByteBuffer(FrameHeaderOBU);
+  FreeAV1ByteBuffer(SequenceOBU);
+  FreeAVIFImage(RegressionImage);
+  Exit;
+ End;
+ If not BuildAVIFContainer(RegressionImage,SeqConfig,Bitstream,Container)Then Begin
+  FreeAVIFContainer(Container);
+  FreeAV1Bitstream(Bitstream);
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1ByteBuffer(FrameHeaderOBU);
+  FreeAV1ByteBuffer(SequenceOBU);
+  FreeAVIFImage(RegressionImage);
+  Exit;
+ End;
+ Checksum:=ChecksumAVIFImage(RegressionImage);
+ Checksum:=(Checksum+Container.FileData.Size+Bitstream.Combined.Size)and $7FFFFFFF;
+ EncodeRegressionCase:=(Checksum<>0)and(Container.FileData.Size>0);
+ FreeAVIFContainer(Container);
+ FreeAV1Bitstream(Bitstream);
+ FreeAV1ByteBuffer(TileGroupOBU);
+ FreeAV1ByteBuffer(FrameHeaderOBU);
+ FreeAV1ByteBuffer(SequenceOBU);
+ FreeAVIFImage(RegressionImage);
+End;
+
+Function RunAVIFBuiltInSelfTest:Boolean;
+Begin
+ RunAVIFBuiltInSelfTest:=False;
+ If not EncodeRegressionCase(1,1,acfYUV420,0)Then Begin
+  WriteLn('Echec regression : 1x1 YUV420 gris.');
+  Exit;
+ End;
+ If not EncodeRegressionCase(2,2,acfYUV420,2)Then Begin
+  WriteLn('Echec regression : 2x2 YUV420 couleur.');
+  Exit;
+ End;
+ If not EncodeRegressionCase(3,5,acfYUV420,1)Then Begin
+  WriteLn('Echec regression : 3x5 YUV420 impair.');
+  Exit;
+ End;
+ If not EncodeRegressionCase(65,65,acfYUV420,0)Then Begin
+  WriteLn('Echec regression : 65x65 YUV420 bord superbloc.');
+  Exit;
+ End;
+ If not EncodeRegressionCase(16,16,acfYUV444,0)Then Begin
+  WriteLn('Echec regression : 16x16 YUV444 gris.');
+  Exit;
+ End;
+ RunAVIFBuiltInSelfTest:=True;
+End;
+
 Function Path2NameExt(Const Path,Ext:String):String;
 Var
  D:DirStr;
@@ -3639,10 +4619,11 @@ Var
  FrameConfig:TAV1FrameConfig;
  SequenceOBU,FrameHeaderOBU,TileGroupOBU:TAV1ByteBuffer;
  AV1Bitstream,GrayBitstream:TAV1Bitstream;
+ AVIFContainer:TAVIFContainer;
  Checksum:LongInt;
 Begin
- {TODO 1 a 21 implementees : le pipeline encode maintenant les plans Y, U et V
-  avec contextes separes et modes chroma simples.}
+ {TODO 1 a 25 implementees : le pipeline encode les plans Y/U/V, assemble les
+  OBU AV1, les encapsule en AVIF et valide la structure generee.}
  If not AVIFInitialScopeIsSupported(AVIFOptions)Then Begin
   WriteLn('Configuration AVIF initiale non supportee.');
   EncodeAVIFBuiltIn:=False;
@@ -3656,6 +4637,7 @@ Begin
  InitAV1ByteBuffer(TileGroupOBU);
  InitAV1Bitstream(AV1Bitstream);
  InitAV1Bitstream(GrayBitstream);
+ InitAVIFContainer(AVIFContainer);
  If not EncodeGrayTestFrame(GrayBitstream)Then Begin
   WriteLn('Regression AV1 grise interne impossible.');
   EncodeAVIFBuiltIn:=False;
@@ -3771,10 +4753,38 @@ Begin
   Exit;
  End;
  DumpAV1OBUSummary(AV1Bitstream);
+ If not BuildAVIFContainer(EncodedImage,SeqConfig,AV1Bitstream,AVIFContainer)Then Begin
+  WriteLn('Assemblage du conteneur AVIF ISO-BMFF impossible.');
+  FreeAVIFContainer(AVIFContainer);
+  FreeAV1Bitstream(AV1Bitstream);
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1ByteBuffer(FrameHeaderOBU);
+  FreeAV1ByteBuffer(SequenceOBU);
+  FreeAVIFImage(YUV444Image);
+  FreeAVIFImage(EncodedImage);
+  FreeAVIFImage(PaddedImage);
+  EncodeAVIFBuiltIn:=False;
+  Exit;
+ End;
+ If not WriteAVIFContainerFile(TargetFileName,AVIFContainer)Then Begin
+  WriteLn('Ecriture du fichier AVIF ISO-BMFF impossible.');
+  FreeAVIFContainer(AVIFContainer);
+  FreeAV1Bitstream(AV1Bitstream);
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1ByteBuffer(FrameHeaderOBU);
+  FreeAV1ByteBuffer(SequenceOBU);
+  FreeAVIFImage(YUV444Image);
+  FreeAVIFImage(EncodedImage);
+  FreeAVIFImage(PaddedImage);
+  EncodeAVIFBuiltIn:=False;
+  Exit;
+ End;
  Checksum:=ChecksumAVIFImage(PaddedImage);
  Checksum:=(Checksum+AV1Bitstream.Combined.Size)and $7FFFFFFF;
+ Checksum:=(Checksum+AVIFContainer.FileData.Size)and $7FFFFFFF;
  If Checksum=0 Then Begin
  End;
+ FreeAVIFContainer(AVIFContainer);
  FreeAV1Bitstream(AV1Bitstream);
  FreeAV1ByteBuffer(TileGroupOBU);
  FreeAV1ByteBuffer(FrameHeaderOBU);
@@ -3782,16 +4792,28 @@ Begin
  FreeAVIFImage(YUV444Image);
  FreeAVIFImage(EncodedImage);
  FreeAVIFImage(PaddedImage);
- EncodeAVIFBuiltIn:=False;
+ EncodeAVIFBuiltIn:=True;
 End;
 
 BEGIN
  InitAVIFEncoderOptions(AVIFOptions);
+ If ParamStr(1)='--selftest'Then Begin
+  If RunAVIFBuiltInSelfTest Then Begin
+   WriteLn('Regression AVIF integree reussie.');
+   Halt(0);
+  End
+   Else
+  Begin
+   WriteLn('Regression AVIF integree echouee.');
+   Halt(5);
+  End;
+ End;
  If(ParamStr(1)='/?')or(ParamStr(1)='--help')or(ParamStr(1)='-h')Then Begin
   WriteLn('BMP2AVIF : Cette commande devrait convertir une image BitMap (.BMP) ',
                     'en format AVIF (AV1 Image File Format).');
   WriteLn;
   WriteLn('Syntaxe : BMP2AVIF source.BMP [destination.AVIF]');
+  WriteLn('          BMP2AVIF --selftest');
   WriteLn;
   WriteLn(' source.BMP       Ce parametre permet d''indiquer le nom du fichier ".BMP".');
   WriteLn(' destination.AVIF Ce parametre permet d''indiquer le nom du fichier ".AVIF".');
@@ -3799,7 +4821,7 @@ BEGIN
   WriteAVIFInitialScope(AVIFOptions);
   WriteLn;
   WriteLn('Cette version ne fait aucun appel externe. L''encodage AV1/AVIF integre');
-  WriteLn('est cadre, les trois plans YUV existent, et le conteneur AVIF reste a implementer.');
+  WriteLn('est cadre, et une regression structurelle integree peut etre relancee.');
   Halt;
  End;
  If ParamCount<1 Then Begin
@@ -3859,7 +4881,7 @@ BEGIN
  WriteLn('Impossible de creer ',TargetFileName);
  WriteLn('AVIF exige un flux AV1 valide dans un conteneur ISO-BMFF.');
  WriteAVIFInitialScope(AVIFOptions);
- WriteLn('Les trois plans YUV existent; le conteneur AVIF sera ajoute aux etapes suivantes.');
+ WriteLn('Le conteneur AVIF et les OBU sont verifies par la regression structurelle.');
   Close(SourceBMP);
   Halt(4);
  End;

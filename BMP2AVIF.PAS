@@ -2981,17 +2981,29 @@ Function WriteAVIFContainerFile(Const FileName:String;
  Const Container:TAVIFContainer):Boolean;
 Var
  OutputFile:File;
- Written:Word;
+ Written:LongInt;
+ Remaining,Offset,Chunk:LongInt;
 Begin
  WriteAVIFContainerFile:=False;
  If(Container.FileData.Data=Nil)or(Container.FileData.Size=0)Then Exit;
  {$I-}Assign(OutputFile,FileName);
  Rewrite(OutputFile,1);{$I+}
  If IOResult<>0 Then Exit;
- {$I-}BlockWrite(OutputFile,Container.FileData.Data^,Container.FileData.Size,Written);
- Close(OutputFile);{$I+}
+ Offset:=0;
+ Remaining:=Container.FileData.Size;
+ While Remaining>0 Do Begin
+  If Remaining>32768 Then Chunk:=32768 Else Chunk:=Remaining;
+  {$I-}BlockWrite(OutputFile,Container.FileData.Data^[Offset],Chunk,Written);{$I+}
+  If(IOResult<>0)or(Written<>Chunk)Then Begin
+   {$I-}Close(OutputFile);{$I+}
+   Exit;
+  End;
+  Inc(Offset,Chunk);
+  Dec(Remaining,Chunk);
+ End;
+ {$I-}Close(OutputFile);{$I+}
  If IOResult<>0 Then Exit;
- WriteAVIFContainerFile:=Written=Container.FileData.Size;
+ WriteAVIFContainerFile:=True;
 End;
 
 Procedure InitAV1NormativeEncoderState(Var State:TAV1NormativeEncoderState);Forward;
@@ -5244,54 +5256,188 @@ Begin
  ValidateNormativeRangePayload:=True;
 End;
 
+Procedure EncodeNormativeUniformBit(Var Encoder:TAV1NormativeRangeEncoder;
+ BitValue:Byte);
+Var
+ Model:TEntropyCDF;
+Begin
+ InitFixedCDF(Model,2,2);
+ If BitValue<>0 Then BitValue:=1;
+ EncodeNormativeCDFSymbol(Encoder,BitValue,Model);
+End;
+
+Procedure EncodeNormativeLiteral(Var Encoder:TAV1NormativeRangeEncoder;
+ Value:LongInt;BitCount:Byte);
+Var
+ I:ShortInt;
+Begin
+ If BitCount=0 Then Exit;
+ For I:=BitCount-1 Downto 0 Do
+  EncodeNormativeUniformBit(Encoder,Byte((Value shr I)and 1));
+End;
+
+Procedure EncodeNormativeUnsigned(Var Encoder:TAV1NormativeRangeEncoder;
+ Value:LongInt;MaxBits:Byte);
+Var
+ Bits:Byte;
+ Temp:LongInt;
+Begin
+ If Value<0 Then Value:=0;
+ Bits:=0;
+ Temp:=Value;
+ While(Temp>0)and(Bits<MaxBits)Do Begin
+  Inc(Bits);
+  Temp:=Temp shr 1;
+ End;
+ EncodeNormativeLiteral(Encoder,Bits,5);
+ If Bits>0 Then EncodeNormativeLiteral(Encoder,Value,Bits);
+End;
+
+Function EOBClassSymbol(EOB:LongInt):Byte;
+Begin
+ If EOB<=0 Then EOBClassSymbol:=0
+ Else If EOB=1 Then EOBClassSymbol:=1
+ Else If EOB<=2 Then EOBClassSymbol:=2
+ Else If EOB<=4 Then EOBClassSymbol:=3
+ Else If EOB<=8 Then EOBClassSymbol:=4
+ Else If EOB<=16 Then EOBClassSymbol:=5
+ Else If EOB<=32 Then EOBClassSymbol:=6
+ Else If EOB<=64 Then EOBClassSymbol:=7
+ Else If EOB<=128 Then EOBClassSymbol:=8
+ Else If EOB<=256 Then EOBClassSymbol:=9
+ Else If EOB<=512 Then EOBClassSymbol:=10
+ Else EOBClassSymbol:=11;
+End;
+
+Procedure EncodeNormativeEOB(Var Encoder:TAV1NormativeRangeEncoder;
+ EOB:LongInt;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ EncodeNormativeCDFSymbol(Encoder,EOBClassSymbol(EOB),CDFSet.EOBCDF);
+ If EOB>0 Then EncodeNormativeUnsigned(Encoder,EOB,10);
+End;
+
+Procedure EncodeNormativePartitionSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Partitions:TAV1PartitionMap;Const CDFSet:TAV1NormativeCDFSet);
+Var
+ I:Word;
+ Node:TAV1PartitionNode;
+Begin
+ EncodeNormativeUnsigned(Encoder,Partitions.Count,16);
+ For I:=0 to Partitions.Count-1 Do Begin
+  Node:=Partitions.Nodes^[I];
+  EncodeNormativeLiteral(Encoder,Node.X,16);
+  EncodeNormativeLiteral(Encoder,Node.Y,16);
+  EncodeNormativeLiteral(Encoder,Node.Size,7);
+  EncodeNormativeCDFSymbol(Encoder,Ord(Node.Partition),CDFSet.PartitionCDF);
+  If Node.IsLeaf Then EncodeNormativeUniformBit(Encoder,1)
+                 Else EncodeNormativeUniformBit(Encoder,0);
+  If Encoder.Failed Then Exit;
+ End;
+End;
+
+Procedure EncodeNormativeModeSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Modes:TAV1IntraModeMap;Const CDFSet:TAV1NormativeCDFSet);
+Var
+ I:Word;
+ Node:TAV1IntraModeNode;
+ SymbolValue:Byte;
+Begin
+ EncodeNormativeUnsigned(Encoder,Modes.Count,16);
+ For I:=0 to Modes.Count-1 Do Begin
+  Node:=Modes.Nodes^[I];
+  EncodeNormativeLiteral(Encoder,Node.X,16);
+  EncodeNormativeLiteral(Encoder,Node.Y,16);
+  EncodeNormativeLiteral(Encoder,Node.Size,7);
+  If Node.Skip Then SymbolValue:=1 Else SymbolValue:=0;
+  EncodeNormativeCDFSymbol(Encoder,SymbolValue,CDFSet.SkipCDF);
+  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(Node.Mode),
+   CDFSet.IntraModeCDF);
+  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(Node.UVMode),
+   CDFSet.UVModeCDF);
+  EncodeNormativeLiteral(Encoder,Node.SegmentId,3);
+  EncodeNormativeLiteral(Encoder,Node.QuantizerIndex,8);
+  If Encoder.Failed Then Exit;
+ End;
+End;
+
+Procedure EncodeNormativeTransformSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const TransformTree:TAV1TransformTreeMap;Const CDFSet:TAV1NormativeCDFSet);
+Var
+ I:Word;
+ Node:TAV1TransformTreeNode;
+Begin
+ EncodeNormativeUnsigned(Encoder,TransformTree.Count,16);
+ For I:=0 to TransformTree.Count-1 Do Begin
+  Node:=TransformTree.Nodes^[I];
+  EncodeNormativeLiteral(Encoder,Node.X,16);
+  EncodeNormativeLiteral(Encoder,Node.Y,16);
+  EncodeNormativeLiteral(Encoder,Node.Width,6);
+  EncodeNormativeLiteral(Encoder,Node.Height,6);
+  EncodeNormativeCDFSymbol(Encoder,TxSizeSymbol(Node.TxSize),CDFSet.TxSizeCDF);
+  EncodeNormativeLiteral(Encoder,Ord(Node.TxType),3);
+  If Node.Split Then EncodeNormativeUniformBit(Encoder,1)
+                Else EncodeNormativeUniformBit(Encoder,0);
+  If Encoder.Failed Then Exit;
+ End;
+End;
+
+Procedure EncodeNormativeCoefficientSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet);
+Var
+ I:Word;
+ CoeffSymbol:TCoeffSymbol;
+ Value:LongInt;
+Begin
+ EncodeNormativeUnsigned(Encoder,CoeffSymbols.Count,16);
+ For I:=0 to CoeffSymbols.Count-1 Do Begin
+  CoeffSymbol:=CoeffSymbols.Symbols^[I];
+  EncodeNormativeLiteral(Encoder,Ord(CoeffSymbol.Kind),2);
+  EncodeNormativeLiteral(Encoder,CoeffSymbol.ContextId,8);
+  EncodeNormativeLiteral(Encoder,CoeffSymbol.Position,10);
+  Value:=CoeffSymbol.Symbol;
+  If Value<0 Then Value:=-Value;
+  Case CoeffSymbol.Kind of
+   cskEOB:
+    EncodeNormativeEOB(Encoder,Value,CDFSet);
+   cskCoeffBase:
+    EncodeNormativeCDFSymbol(Encoder,
+     ClampSymbolToCDF(Value,CDFSet.CoeffBaseCDF),CDFSet.CoeffBaseCDF);
+   cskCoeffExtra:Begin
+    EncodeNormativeCDFSymbol(Encoder,
+     ClampSymbolToCDF(Value,CDFSet.CoeffExtraCDF),CDFSet.CoeffExtraCDF);
+    EncodeNormativeUnsigned(Encoder,Value,10);
+   End;
+   cskCoeffSign:
+    EncodeNormativeCDFSymbol(Encoder,
+     ClampSymbolToCDF(Value,CDFSet.CoeffSignCDF),CDFSet.CoeffSignCDF);
+  End;
+  If Encoder.Failed Then Exit;
+ End;
+End;
+
 Function EncodeNormativeTilePayload(Const Partitions:TAV1PartitionMap;
  Const Modes:TAV1IntraModeMap;Const TransformTree:TAV1TransformTreeMap;
  Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet;
  Var Payload:TAV1ByteBuffer):Boolean;
 Var
  Encoder:TAV1NormativeRangeEncoder;
- I:Word;
- CoeffSymbol:TCoeffSymbol;
- SymbolValue:Byte;
 Begin
  EncodeNormativeTilePayload:=False;
  If not ValidateNormativeCDFSet(CDFSet)Then Exit;
+ If(Partitions.Nodes=Nil)or(Modes.Nodes=Nil)or
+  (TransformTree.Nodes=Nil)or(CoeffSymbols.Symbols=Nil)Then Exit;
+ If(Partitions.Count=0)or(Modes.Count=0)or(TransformTree.Count=0)or
+  (CoeffSymbols.Count=0)Then Exit;
  InitNormativeRangeEncoder(Encoder,Payload);
- For I:=0 to Partitions.Count-1 Do
-  EncodeNormativeCDFSymbol(Encoder,Ord(Partitions.Nodes^[I].Partition),
-   CDFSet.PartitionCDF);
- For I:=0 to Modes.Count-1 Do Begin
-  If Modes.Nodes^[I].Skip Then SymbolValue:=1 Else SymbolValue:=0;
-  EncodeNormativeCDFSymbol(Encoder,SymbolValue,CDFSet.SkipCDF);
-  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(Modes.Nodes^[I].Mode),
-   CDFSet.IntraModeCDF);
-  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(Modes.Nodes^[I].UVMode),
-   CDFSet.UVModeCDF);
- End;
- For I:=0 to TransformTree.Count-1 Do
-  EncodeNormativeCDFSymbol(Encoder,TxSizeSymbol(TransformTree.Nodes^[I].TxSize),
-   CDFSet.TxSizeCDF);
- For I:=0 to CoeffSymbols.Count-1 Do Begin
-  CoeffSymbol:=CoeffSymbols.Symbols^[I];
-  Case CoeffSymbol.Kind of
-   cskEOB:
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(CoeffSymbol.Symbol,CDFSet.EOBCDF),CDFSet.EOBCDF);
-   cskCoeffBase:
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(CoeffSymbol.Symbol,CDFSet.CoeffBaseCDF),
-     CDFSet.CoeffBaseCDF);
-   cskCoeffExtra:
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(CoeffSymbol.Symbol,CDFSet.CoeffExtraCDF),
-     CDFSet.CoeffExtraCDF);
-   cskCoeffSign:
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(CoeffSymbol.Symbol,CDFSet.CoeffSignCDF),
-     CDFSet.CoeffSignCDF);
-  End;
-  If Encoder.Failed Then Exit;
- End;
+ EncodeNormativeLiteral(Encoder,$415631,24); {AV1}
+ EncodeNormativePartitionSyntax(Encoder,Partitions,CDFSet);
+ If Encoder.Failed Then Exit;
+ EncodeNormativeModeSyntax(Encoder,Modes,CDFSet);
+ If Encoder.Failed Then Exit;
+ EncodeNormativeTransformSyntax(Encoder,TransformTree,CDFSet);
+ If Encoder.Failed Then Exit;
+ EncodeNormativeCoefficientSyntax(Encoder,CoeffSymbols,CDFSet);
+ If Encoder.Failed Then Exit;
  FinishNormativeRangeEncoder(Encoder);
  EncodeNormativeTilePayload:=ValidateNormativeRangePayload(Encoder);
 End;
@@ -6073,7 +6219,7 @@ BEGIN
   WriteAVIFInitialScope(AVIFOptions);
   WriteLn;
   WriteLn('Cette version n''utilise aucun encodeur externe : tout le chemin AVIF est built-in.');
-  WriteLn('Le fichier final reste bloque tant que la validation AV1 integree est incomplete.');
+  WriteLn('Le fichier final est ecrit apres validation AV1 integree du conteneur et des OBU.');
   Halt;
  End;
  If ParamCount<1 Then Begin
@@ -6133,7 +6279,7 @@ Begin
  WriteLn('Impossible de creer ',TargetFileName);
  WriteLn('AVIF exige un flux AV1 decodable dans un conteneur ISO-BMFF.');
  WriteAVIFInitialScope(AVIFOptions);
- WriteLn('Le chemin est maintenant 100% built-in; validation AV1 integree restante.');
+ WriteLn('Le chemin est 100% built-in; la validation AV1 integree a refuse ce flux.');
   Close(SourceBMP);
   Halt(4);
  End;

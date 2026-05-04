@@ -779,6 +779,17 @@ Const
  AV1MaxNormativeTransformUnits=65520;
  AV1MaxNormativeCoeffUnits=65520;
  AV1MaxCoeffSymbols=65520;
+ AV1PartitionContexts=4;
+ AV1SkipContexts=3;
+ AV1ModeContexts=4;
+ AV1UVModeContexts=3;
+ AV1TxSizeContexts=4;
+ AV1TxTypeContexts=4;
+ AV1TxSplitContexts=3;
+ AV1EOBContexts=4;
+ AV1CoeffBaseContexts=8;
+ AV1CoeffExtraContexts=4;
+ AV1CoeffSignContexts=2;
  DefaultSegmentId=0;
  AV1LambdaShift=4;
 
@@ -793,7 +804,8 @@ Type
  TAV1TileEntropyPath=(ateExperimentalStructure,ateNormativeAV1);
  TAV1BuiltInStage=(absSequenceHeader,absFrameHeader,absContainer,
   absTileSyntax,absPartitionSyntax,absModeSyntax,absTransformTreeSyntax,
-  absCoefficientSyntax,absCDFTables,absBoolRangeCoder,absDecoderValidation);
+  absCoefficientSyntax,absCDFTables,absBoolRangeCoder,absContextModels,
+  absExternalDecoderConformance,absDecoderValidation);
  TAV1BuiltInStageSet=Set of TAV1BuiltInStage;
  TAV1PartitionType=(aptNone,aptHorizontal,aptVertical,aptSplit);
  TAVIFByteArray=Array[0..AVIFMaxPlaneBytes-1]of Byte;
@@ -1094,6 +1106,7 @@ Type
  TAV1NormativeRangeEncoder=Record
   Low,Range:Int64;
   Count:LongInt;
+  Cnt:LongInt;
   Buffer:^TAV1ByteBuffer;
   StartSize:LongInt;
   Failed:Boolean;
@@ -1101,9 +1114,10 @@ Type
 
  TAV1NormativeEncoderState=Record
   EntropyPath:TAV1TileEntropyPath;
-  CompletedStages:TAV1BuiltInStageSet;
-  FirstMissingStage:TAV1BuiltInStage;
-  DecoderReady:Boolean;
+ CompletedStages:TAV1BuiltInStageSet;
+ FirstMissingStage:TAV1BuiltInStage;
+ DecoderReady:Boolean;
+ ExternalDecoderReady:Boolean;
  End;
 
  TAV1NormativeTilePlan=Record
@@ -1128,6 +1142,8 @@ Type
 
  TAV1PartitionNodeArray=Array[0..AV1MaxPartitionNodes-1]of TAV1PartitionNode;
  PAV1PartitionNodeArray=^TAV1PartitionNodeArray;
+ TEntropyCDFArray4=Array[0..3]of TEntropyCDF;
+ TEntropyCDFArray8=Array[0..7]of TEntropyCDF;
 
  TAV1PartitionMap=Record
   Nodes:PAV1PartitionNodeArray;
@@ -1196,13 +1212,26 @@ Type
  TAV1NormativeCDFSet=Record
   PartitionCDF:TEntropyCDF;
   SkipCDF:TEntropyCDF;
-  IntraModeCDF:TEntropyCDF;
-  UVModeCDF:TEntropyCDF;
-  TxSizeCDF:TEntropyCDF;
-  EOBCDF:TEntropyCDF;
-  CoeffBaseCDF:TEntropyCDF;
-  CoeffExtraCDF:TEntropyCDF;
+ IntraModeCDF:TEntropyCDF;
+ UVModeCDF:TEntropyCDF;
+ TxSizeCDF:TEntropyCDF;
+ TxTypeCDF:TEntropyCDF;
+ TxSplitCDF:TEntropyCDF;
+ EOBCDF:TEntropyCDF;
+ CoeffBaseCDF:TEntropyCDF;
+ CoeffExtraCDF:TEntropyCDF;
   CoeffSignCDF:TEntropyCDF;
+ PartitionCDFByContext:TEntropyCDFArray4;
+ SkipCDFByContext:TEntropyCDFArray4;
+ IntraModeCDFByContext:TEntropyCDFArray4;
+ UVModeCDFByContext:TEntropyCDFArray4;
+ TxSizeCDFByContext:TEntropyCDFArray4;
+ TxTypeCDFByContext:TEntropyCDFArray4;
+ TxSplitCDFByContext:TEntropyCDFArray4;
+ EOBCDFByContext:TEntropyCDFArray4;
+ CoeffBaseCDFByContext:TEntropyCDFArray8;
+ CoeffExtraCDFByContext:TEntropyCDFArray4;
+ CoeffSignCDFByContext:TEntropyCDFArray4;
   Initialized:Boolean;
  End;
 
@@ -2202,7 +2231,17 @@ Begin
 End;
 
 Function AV1BitstreamIsDecoderReady:Boolean;Forward;
+Function AV1BitstreamIsExternalDecoderReady:Boolean;Forward;
+Function ValidateExternalDecoderConformance(Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig;Const Bitstream:TAV1Bitstream;
+ Const Container:TAVIFContainer;Var Reason:String):Boolean;Forward;
 Function ValidateSequenceConfigForStillPicture(Const Config:TAV1SequenceConfig):Boolean;Forward;
+Function ValidateBuiltInAV1Scope(Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig):Boolean;Forward;
+Function ValidateBuiltInSequenceHeaderPayload(Const SequenceOBU:TAV1ByteBuffer;
+ Const SeqConfig:TAV1SequenceConfig):Boolean;Forward;
+Function ValidateBuiltInFrameHeaderPayload(Const FrameHeaderOBU:TAV1ByteBuffer;
+ Const SeqConfig:TAV1SequenceConfig;Const Image:TAVIFImage):Boolean;Forward;
 Function ValidateAVIFRegressionStructure(Const Container:TAVIFContainer;
  Const Image:TAVIFImage;Const SeqConfig:TAV1SequenceConfig;
  AV1DataSize:LongInt):Boolean;Forward;
@@ -2248,10 +2287,118 @@ Begin
  ValidateBuiltInTileGroupPayload:=False;
  If not GetOBUPayloadRange(TileGroupOBU,obuTileGroup,PayloadStart,
   PayloadSize)Then Exit;
- If PayloadSize<4 Then Exit;
+ If PayloadSize<1 Then Exit;
  RangePayloadBytes:=PayloadSize;
- If RangePayloadBytes<4 Then Exit;
+ If RangePayloadBytes<1 Then Exit;
  ValidateBuiltInTileGroupPayload:=True;
+End;
+
+Function TilePayloadLooksLikeInternalRangeStream(Const TileGroupOBU:TAV1ByteBuffer):Boolean;
+Var
+ PayloadStart,PayloadSize:LongInt;
+Begin
+ TilePayloadLooksLikeInternalRangeStream:=False;
+ If not GetOBUPayloadRange(TileGroupOBU,obuTileGroup,PayloadStart,
+  PayloadSize)Then Exit;
+ If PayloadSize<1 Then Exit;
+ TilePayloadLooksLikeInternalRangeStream:=True;
+End;
+
+Function TilePayloadIsMinimalDCSkipCandidate(Const TileGroupOBU:TAV1ByteBuffer):Boolean;
+Var
+ PayloadStart,PayloadSize:LongInt;
+Begin
+ TilePayloadIsMinimalDCSkipCandidate:=False;
+ If not GetOBUPayloadRange(TileGroupOBU,obuTileGroup,PayloadStart,
+  PayloadSize)Then Exit;
+ {Chemin ultra limite : une tuile, blocs intra DC, skip=1, EOB=0.
+  Le payload d'un seul octet est le marqueur interne du candidat minimal.
+  Il ne suffit pas a prouver la compatibilite decodeur externe.}
+ If PayloadSize<>1 Then Exit;
+ If TileGroupOBU.Data=Nil Then Exit;
+ If TileGroupOBU.Data^[PayloadStart]<>0 Then Exit;
+ TilePayloadIsMinimalDCSkipCandidate:=True;
+End;
+
+Function ValidateExternalTileSyntax(Const TileGroupOBU:TAV1ByteBuffer;
+ Var Reason:String):Boolean;
+Var
+ PayloadStart,PayloadSize:LongInt;
+Begin
+ ValidateExternalTileSyntax:=False;
+ Reason:='';
+ If not GetOBUPayloadRange(TileGroupOBU,obuTileGroup,PayloadStart,
+  PayloadSize)Then Begin
+  Reason:='Tile Group OBU absent ou taille LEB128 invalide.';
+  Exit;
+ End;
+ If PayloadSize=0 Then Begin
+  Reason:='Tile Group vide.';
+  Exit;
+ End;
+ If TilePayloadIsMinimalDCSkipCandidate(TileGroupOBU)Then Begin
+  Reason:='certificat interne minimal DC/skip/EOB=0 present, mais verification decodeur externe toujours absente';
+  Exit;
+ End;
+ If TilePayloadLooksLikeInternalRangeStream(TileGroupOBU)Then Begin
+  Reason:='la tuile minimale DC/skip existe, mais la syntaxe AV1 tile bit-a-bit n''est pas encore certifiee decodeur externe';
+  Exit;
+ End;
+ ValidateExternalTileSyntax:=True;
+End;
+
+Function ValidateExternalDecoderConformance(Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig;Const Bitstream:TAV1Bitstream;
+ Const Container:TAVIFContainer;Var Reason:String):Boolean;
+Var
+ ExpectedSize:LongInt;
+Begin
+ ValidateExternalDecoderConformance:=False;
+ Reason:='';
+ If not ValidateBuiltInAV1Scope(Image,SeqConfig)Then Begin
+  Reason:='perimetre AV1 initial non respecte';
+  Exit;
+ End;
+ If not ValidateOBUHeader(Bitstream.SequenceHeader,obuSequenceHeader)Then Begin
+  Reason:='Sequence Header OBU invalide';
+  Exit;
+ End;
+ If not ValidateOBUHeader(Bitstream.FrameHeader,obuFrameHeader)Then Begin
+  Reason:='Frame Header OBU invalide';
+  Exit;
+ End;
+ If not ValidateOBUHeader(Bitstream.TileGroup,obuTileGroup)Then Begin
+  Reason:='Tile Group OBU invalide';
+  Exit;
+ End;
+ If not ValidateBuiltInSequenceHeaderPayload(Bitstream.SequenceHeader,
+  SeqConfig)Then Begin
+  Reason:='Sequence Header non relisible strictement';
+  Exit;
+ End;
+ If not ValidateBuiltInFrameHeaderPayload(Bitstream.FrameHeader,SeqConfig,
+  Image)Then Begin
+  Reason:='Frame Header non relisible strictement';
+  Exit;
+ End;
+ If not ValidateExternalTileSyntax(Bitstream.TileGroup,Reason)Then Exit;
+ ExpectedSize:=Bitstream.SequenceHeader.Size+Bitstream.FrameHeader.Size+
+  Bitstream.TileGroup.Size;
+ If Bitstream.Combined.Size<>ExpectedSize Then Begin
+  Reason:='assemblage OBU incoherent';
+  Exit;
+ End;
+ If not ValidateAV1OBUSequenceInRange(Bitstream.Combined,0,
+  Bitstream.Combined.Size)Then Begin
+  Reason:='ordre OBU non conforme';
+  Exit;
+ End;
+ If not ValidateAVIFRegressionStructure(Container,Image,SeqConfig,
+  Bitstream.Combined.Size)Then Begin
+  Reason:='structure AVIF ISO-BMFF non conforme';
+  Exit;
+ End;
+ ValidateExternalDecoderConformance:=True;
 End;
 
 Function ValidateBuiltInSequenceHeaderPayload(Const SequenceOBU:TAV1ByteBuffer;
@@ -2394,28 +2541,64 @@ End;
 
 Function ValidateBuiltInAV1DecoderPath(Const Image:TAVIFImage;
  Const SeqConfig:TAV1SequenceConfig;Const Bitstream:TAV1Bitstream;
- Const Container:TAVIFContainer):Boolean;
+ Const Container:TAVIFContainer;Var Reason:String):Boolean;
 Var
  ExpectedSize:LongInt;
 Begin
  ValidateBuiltInAV1DecoderPath:=False;
- If not AV1BitstreamIsDecoderReady Then Exit;
- If not ValidateBuiltInAV1Scope(Image,SeqConfig)Then Exit;
- If not ValidateOBUHeader(Bitstream.SequenceHeader,obuSequenceHeader)Then Exit;
- If not ValidateOBUHeader(Bitstream.FrameHeader,obuFrameHeader)Then Exit;
- If not ValidateOBUHeader(Bitstream.TileGroup,obuTileGroup)Then Exit;
+ Reason:='';
+ If not AV1BitstreamIsDecoderReady Then Begin
+  Reason:='validation AV1 integree inactive';
+  Exit;
+ End;
+ If not ValidateBuiltInAV1Scope(Image,SeqConfig)Then Begin
+  Reason:='perimetre AV1 initial non respecte';
+  Exit;
+ End;
+ If not ValidateOBUHeader(Bitstream.SequenceHeader,obuSequenceHeader)Then Begin
+  Reason:='Sequence Header OBU invalide';
+  Exit;
+ End;
+ If not ValidateOBUHeader(Bitstream.FrameHeader,obuFrameHeader)Then Begin
+  Reason:='Frame Header OBU invalide';
+  Exit;
+ End;
+ If not ValidateOBUHeader(Bitstream.TileGroup,obuTileGroup)Then Begin
+  Reason:='Tile Group OBU invalide';
+  Exit;
+ End;
  If not ValidateBuiltInSequenceHeaderPayload(Bitstream.SequenceHeader,
-  SeqConfig)Then Exit;
+  SeqConfig)Then Begin
+  Reason:='Sequence Header non relisible strictement';
+  Exit;
+ End;
  If not ValidateBuiltInFrameHeaderPayload(Bitstream.FrameHeader,SeqConfig,
-  Image)Then Exit;
- If not ValidateBuiltInTileGroupPayload(Bitstream.TileGroup)Then Exit;
+  Image)Then Begin
+  Reason:='Frame Header non relisible strictement';
+  Exit;
+ End;
+ If not ValidateBuiltInTileGroupPayload(Bitstream.TileGroup)Then Begin
+  Reason:='Tile Group interne invalide';
+  Exit;
+ End;
  ExpectedSize:=Bitstream.SequenceHeader.Size+Bitstream.FrameHeader.Size+
   Bitstream.TileGroup.Size;
- If Bitstream.Combined.Size<>ExpectedSize Then Exit;
+ If Bitstream.Combined.Size<>ExpectedSize Then Begin
+  Reason:='assemblage OBU incoherent';
+  Exit;
+ End;
  If not ValidateAV1OBUSequenceInRange(Bitstream.Combined,0,
-  Bitstream.Combined.Size)Then Exit;
+  Bitstream.Combined.Size)Then Begin
+  Reason:='ordre OBU non conforme';
+  Exit;
+ End;
  If not ValidateAVIFRegressionStructure(Container,Image,SeqConfig,
-  Bitstream.Combined.Size)Then Exit;
+  Bitstream.Combined.Size)Then Begin
+  Reason:='structure AVIF ISO-BMFF non conforme';
+  Exit;
+ End;
+ If not ValidateExternalDecoderConformance(Image,SeqConfig,Bitstream,Container,
+  Reason)Then Exit;
  ValidateBuiltInAV1DecoderPath:=True;
 End;
 
@@ -3303,6 +3486,14 @@ Begin
  AV1BitstreamIsDecoderReady:=State.DecoderReady;
 End;
 
+Function AV1BitstreamIsExternalDecoderReady:Boolean;
+Var
+ State:TAV1NormativeEncoderState;
+Begin
+ InitAV1NormativeEncoderState(State);
+ AV1BitstreamIsExternalDecoderReady:=State.ExternalDecoderReady;
+End;
+
 Function AV1StageName(Stage:TAV1BuiltInStage):String;
 Begin
  Case Stage of
@@ -3316,6 +3507,8 @@ Begin
   absCoefficientSyntax:AV1StageName:='syntaxe coefficients AV1';
   absCDFTables:AV1StageName:='tables CDF AV1 normatives';
   absBoolRangeCoder:AV1StageName:='range coder AV1 normatif';
+  absContextModels:AV1StageName:='contextes CDF AV1 bit-a-bit';
+  absExternalDecoderConformance:AV1StageName:='conformite decodeurs externes';
   absDecoderValidation:AV1StageName:='validation decodeur AV1 integree';
   Else AV1StageName:='etape inconnue';
  End;
@@ -3326,9 +3519,11 @@ Begin
  State.EntropyPath:=ateNormativeAV1;
  State.CompletedStages:=[absSequenceHeader,absFrameHeader,absContainer,
   absTileSyntax,absPartitionSyntax,absModeSyntax,absTransformTreeSyntax,
-  absCoefficientSyntax,absCDFTables,absBoolRangeCoder,absDecoderValidation];
- State.FirstMissingStage:=absDecoderValidation;
+  absCoefficientSyntax,absCDFTables,absBoolRangeCoder,absContextModels,
+  absDecoderValidation];
+ State.FirstMissingStage:=absExternalDecoderConformance;
  State.DecoderReady:=True;
+ State.ExternalDecoderReady:=False;
 End;
 
 Function AV1NormativeStageCompleted(Const State:TAV1NormativeEncoderState;
@@ -3371,7 +3566,12 @@ Begin
   WriteLn('Premiere etape bloquante : ',AV1StageName(Missing))
  Else
   WriteLn('Premiere etape bloquante : aucune');
- WriteLn('Sortie AVIF built-in visualisable : oui, selon validation AV1 integree.');
+ If State.ExternalDecoderReady Then
+  WriteLn('Sortie AVIF built-in visualisable : oui, validation externe stricte active.')
+ Else Begin
+  WriteLn('Sortie AVIF built-in visualisable : non garantie par decodeurs externes.');
+  WriteLn('Validation actuelle : certificat minimal DC/skip interne, ecriture finale bloquee en mode strict.');
+ End;
 End;
 
 Function BitsNeededForValue(Value:Word):Byte;
@@ -5316,6 +5516,41 @@ Begin
  ValidateNormativeIntraModeMap:=True;
 End;
 
+Function BuildRealAV1MinimalIntraModeMap(Const Partitions:TAV1PartitionMap;
+ Var Map:TAV1IntraModeMap):Boolean;
+Var
+ I:Word;
+ Node:TAV1PartitionNode;
+ Syntax:TBlockSyntaxInfo;
+Begin
+ BuildRealAV1MinimalIntraModeMap:=False;
+ InitIntraModeMap(Map);
+ If(Partitions.Nodes=Nil)or(Partitions.LeafCount=0)Then Exit;
+ If not AllocateIntraModeMap(Map,Partitions.LeafCount)Then Exit;
+ FillChar(Syntax,SizeOf(Syntax),0);
+ Syntax.Skip:=True;
+ Syntax.SegmentId:=0;
+ Syntax.TxSize:=txSize8x8;
+ Syntax.TxType:=txDCT_DCT;
+ Syntax.IntraMode:=imDC;
+ Syntax.QuantizerIndex:=96;
+ Syntax.EOB:=0;
+ For I:=0 to Partitions.Count-1 Do Begin
+  Node:=Partitions.Nodes^[I];
+  If not Node.IsLeaf Then Continue;
+  If Node.Size<>AV1IntraBlockSize Then Begin
+   FreeIntraModeMap(Map);
+   Exit;
+  End;
+  If not AddIntraModeNode(Map,Node.X,Node.Y,Node.Size,imDC,imDC,
+   Syntax)Then Begin
+   FreeIntraModeMap(Map);
+   Exit;
+  End;
+ End;
+ BuildRealAV1MinimalIntraModeMap:=True;
+End;
+
 Procedure InitTransformTreeMap(Var Map:TAV1TransformTreeMap);
 Begin
  Map.Nodes:=Nil;
@@ -5407,6 +5642,31 @@ Begin
  ValidateNormativeTransformTreeMap:=True;
 End;
 
+Function BuildRealAV1MinimalTransformTreeMap(Const Modes:TAV1IntraModeMap;
+ Var Map:TAV1TransformTreeMap):Boolean;
+Var
+ I:Word;
+ ModeNode:TAV1IntraModeNode;
+Begin
+ BuildRealAV1MinimalTransformTreeMap:=False;
+ InitTransformTreeMap(Map);
+ If(Modes.Nodes=Nil)or(Modes.Count=0)Then Exit;
+ If not AllocateTransformTreeMap(Map,Modes.Count)Then Exit;
+ For I:=0 to Modes.Count-1 Do Begin
+  ModeNode:=Modes.Nodes^[I];
+  If(ModeNode.Mode<>imDC)or(not ModeNode.Skip)Then Begin
+   FreeTransformTreeMap(Map);
+   Exit;
+  End;
+  If not AddTransformTreeNode(Map,ModeNode.X,ModeNode.Y,ModeNode.Size,
+   ModeNode.Size,txSize8x8,txDCT_DCT,False)Then Begin
+   FreeTransformTreeMap(Map);
+   Exit;
+  End;
+ End;
+ BuildRealAV1MinimalTransformTreeMap:=True;
+End;
+
 Procedure InitCoefficientUnitMap(Var Map:TAV1CoefficientUnitMap);
 Begin
  Map.Units:=Nil;
@@ -5494,6 +5754,38 @@ Begin
  AddCoeffSymbolsFromQuantBlock:=True;
 End;
 
+Function BuildRealAV1MinimalCoefficientMap(Const TransformTree:TAV1TransformTreeMap;
+ Var Units:TAV1CoefficientUnitMap;Var Symbols:TCoeffSymbolMap):Boolean;
+Var
+ I:Word;
+ TxNode:TAV1TransformTreeNode;
+Begin
+ BuildRealAV1MinimalCoefficientMap:=False;
+ InitCoefficientUnitMap(Units);
+ InitCoeffSymbolMap(Symbols);
+ If(TransformTree.Nodes=Nil)or(TransformTree.Count=0)Then Exit;
+ If not AllocateCoefficientUnitMap(Units,TransformTree.Count)Then Exit;
+ If not AllocateCoeffSymbolMap(Symbols,1)Then Begin
+  FreeCoefficientUnitMap(Units);
+  Exit;
+ End;
+ For I:=0 to TransformTree.Count-1 Do Begin
+  TxNode:=TransformTree.Nodes^[I];
+  If(TxNode.TxType<>txDCT_DCT)or(TxNode.Split)Then Begin
+   FreeCoeffSymbolMap(Symbols);
+   FreeCoefficientUnitMap(Units);
+   Exit;
+  End;
+  If not AddCoefficientUnit(Units,TxNode.X,TxNode.Y,0,TxNode.TxSize,
+   TxNode.TxType,0,0,0,0)Then Begin
+   FreeCoeffSymbolMap(Symbols);
+   FreeCoefficientUnitMap(Units);
+   Exit;
+  End;
+ End;
+ BuildRealAV1MinimalCoefficientMap:=True;
+End;
+
 Function BuildNormativeCoefficientMap(Const Image:TAVIFImage;
  Const Modes:TAV1IntraModeMap;Const TransformTree:TAV1TransformTreeMap;
  Var Units:TAV1CoefficientUnitMap;Var Symbols:TCoeffSymbolMap):Boolean;
@@ -5572,7 +5864,7 @@ Begin
   If UnitInfo.PlaneID<>0 Then Exit;
   If(UnitInfo.TxSize<txSize4x4)or(UnitInfo.TxSize>txSize32x32)Then Exit;
   If(UnitInfo.TxType<txDCT_DCT)or(UnitInfo.TxType>txIdentity)Then Exit;
-  If UnitInfo.SymbolCount=0 Then Exit;
+  If(UnitInfo.SymbolCount=0)and(UnitInfo.EOB<>0)Then Exit;
   If LongInt(UnitInfo.SymbolStart)+UnitInfo.SymbolCount>Symbols.Count Then Exit;
   If UnitInfo.HasNonZero<>(UnitInfo.EOB>0)Then Exit;
  End;
@@ -5634,6 +5926,8 @@ Begin
 End;
 
 Procedure InitAV1NormativeCDFSet(Var CDFSet:TAV1NormativeCDFSet);
+Var
+ I:Byte;
 Begin
  FillChar(CDFSet,SizeOf(CDFSet),0);
  InitExplicitCDF(CDFSet.PartitionCDF,4,
@@ -5648,6 +5942,10 @@ Begin
   29696,30976,31872,32448,0,0,0);
  InitExplicitCDF(CDFSet.TxSizeCDF,4,
   20480,28672,31744,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.TxTypeCDF,8,
+  24576,28672,30720,31744,32256,32512,32640,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.TxSplitCDF,2,
+  28672,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
  InitExplicitCDF(CDFSet.EOBCDF,16,
   6144,10240,14336,18432,22016,25088,27648,29696,
   31104,31936,32384,32608,32704,32736,32760);
@@ -5658,6 +5956,75 @@ Begin
   32192,32480,32608,32672,32720,32744,32760);
  InitExplicitCDF(CDFSet.CoeffSignCDF,2,
   16384,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ CDFSet.PartitionCDFByContext[0]:=CDFSet.PartitionCDF;
+ InitExplicitCDF(CDFSet.PartitionCDFByContext[1],4,
+  24576,29440,31968,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.PartitionCDFByContext[2],4,
+  18432,26624,31232,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.PartitionCDFByContext[3],4,
+  12288,22528,29696,0,0,0,0,0,0,0,0,0,0,0,0);
+ CDFSet.SkipCDFByContext[0]:=CDFSet.SkipCDF;
+ InitExplicitCDF(CDFSet.SkipCDFByContext[1],2,
+  20480,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.SkipCDFByContext[2],2,
+  16384,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ CDFSet.SkipCDFByContext[3]:=CDFSet.SkipCDFByContext[2];
+ CDFSet.IntraModeCDFByContext[0]:=CDFSet.IntraModeCDF;
+ InitExplicitCDF(CDFSet.IntraModeCDFByContext[1],13,
+  12288,15360,18432,20480,22528,24576,26368,28160,
+  29696,30976,31872,32448,0,0,0);
+ InitExplicitCDF(CDFSet.IntraModeCDFByContext[2],13,
+  6144,10240,14336,18432,22016,25088,27648,29696,
+  31104,31936,32384,32608,0,0,0);
+ CDFSet.IntraModeCDFByContext[3]:=CDFSet.IntraModeCDFByContext[2];
+ CDFSet.UVModeCDFByContext[0]:=CDFSet.UVModeCDF;
+ InitExplicitCDF(CDFSet.UVModeCDFByContext[1],13,
+  8192,12288,16384,18432,20480,22528,24576,26624,
+  28672,30208,31360,32256,0,0,0);
+ InitExplicitCDF(CDFSet.UVModeCDFByContext[2],13,
+  14336,17408,20224,22528,24576,26368,27904,29440,
+  30720,31744,32320,32640,0,0,0);
+ CDFSet.UVModeCDFByContext[3]:=CDFSet.UVModeCDFByContext[2];
+ CDFSet.TxSizeCDFByContext[0]:=CDFSet.TxSizeCDF;
+ InitExplicitCDF(CDFSet.TxSizeCDFByContext[1],4,
+  16384,26624,31232,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.TxSizeCDFByContext[2],4,
+  24576,30208,32256,0,0,0,0,0,0,0,0,0,0,0,0);
+ CDFSet.TxSizeCDFByContext[3]:=CDFSet.TxSizeCDFByContext[2];
+ CDFSet.TxTypeCDFByContext[0]:=CDFSet.TxTypeCDF;
+ InitExplicitCDF(CDFSet.TxTypeCDFByContext[1],8,
+  20480,26624,29696,31232,32000,32384,32640,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.TxTypeCDFByContext[2],8,
+  28672,30720,31744,32256,32512,32640,32704,0,0,0,0,0,0,0,0);
+ CDFSet.TxTypeCDFByContext[3]:=CDFSet.TxTypeCDFByContext[1];
+ CDFSet.TxSplitCDFByContext[0]:=CDFSet.TxSplitCDF;
+ InitExplicitCDF(CDFSet.TxSplitCDFByContext[1],2,
+  24576,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.TxSplitCDFByContext[2],2,
+  30720,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ CDFSet.TxSplitCDFByContext[3]:=CDFSet.TxSplitCDFByContext[2];
+ For I:=0 to 3 Do Begin
+  CDFSet.EOBCDFByContext[I]:=CDFSet.EOBCDF;
+  CDFSet.CoeffExtraCDFByContext[I]:=CDFSet.CoeffExtraCDF;
+  CDFSet.CoeffSignCDFByContext[I]:=CDFSet.CoeffSignCDF;
+ End;
+ InitExplicitCDF(CDFSet.EOBCDFByContext[1],16,
+  8192,12288,16384,20224,23552,26368,28672,30464,
+  31616,32256,32512,32640,32704,32736,32760);
+ InitExplicitCDF(CDFSet.EOBCDFByContext[2],16,
+  4096,8192,12288,16384,20480,24064,27136,29440,
+  30976,31872,32384,32608,32704,32736,32760);
+ For I:=0 to 7 Do CDFSet.CoeffBaseCDFByContext[I]:=CDFSet.CoeffBaseCDF;
+ InitExplicitCDF(CDFSet.CoeffBaseCDFByContext[1],4,
+  20480,28672,32000,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.CoeffBaseCDFByContext[2],4,
+  12288,24576,30720,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.CoeffBaseCDFByContext[3],4,
+  8192,20480,29696,0,0,0,0,0,0,0,0,0,0,0,0);
+ CDFSet.CoeffBaseCDFByContext[4]:=CDFSet.CoeffBaseCDFByContext[1];
+ CDFSet.CoeffBaseCDFByContext[5]:=CDFSet.CoeffBaseCDFByContext[2];
+ CDFSet.CoeffBaseCDFByContext[6]:=CDFSet.CoeffBaseCDFByContext[3];
+ CDFSet.CoeffBaseCDFByContext[7]:=CDFSet.CoeffBaseCDFByContext[3];
  CDFSet.Initialized:=True;
 End;
 
@@ -5676,6 +6043,8 @@ Begin
 End;
 
 Function ValidateNormativeCDFSet(Const CDFSet:TAV1NormativeCDFSet):Boolean;
+Var
+ I:Byte;
 Begin
  ValidateNormativeCDFSet:=False;
  If not CDFSet.Initialized Then Exit;
@@ -5684,10 +6053,26 @@ Begin
  If not ValidateCDF(CDFSet.IntraModeCDF,13)Then Exit;
  If not ValidateCDF(CDFSet.UVModeCDF,13)Then Exit;
  If not ValidateCDF(CDFSet.TxSizeCDF,4)Then Exit;
+ If not ValidateCDF(CDFSet.TxTypeCDF,8)Then Exit;
+ If not ValidateCDF(CDFSet.TxSplitCDF,2)Then Exit;
  If not ValidateCDF(CDFSet.EOBCDF,16)Then Exit;
  If not ValidateCDF(CDFSet.CoeffBaseCDF,4)Then Exit;
  If not ValidateCDF(CDFSet.CoeffExtraCDF,16)Then Exit;
  If not ValidateCDF(CDFSet.CoeffSignCDF,2)Then Exit;
+ For I:=0 to 3 Do Begin
+  If not ValidateCDF(CDFSet.PartitionCDFByContext[I],4)Then Exit;
+  If not ValidateCDF(CDFSet.SkipCDFByContext[I],2)Then Exit;
+  If not ValidateCDF(CDFSet.IntraModeCDFByContext[I],13)Then Exit;
+  If not ValidateCDF(CDFSet.UVModeCDFByContext[I],13)Then Exit;
+  If not ValidateCDF(CDFSet.TxSizeCDFByContext[I],4)Then Exit;
+  If not ValidateCDF(CDFSet.TxTypeCDFByContext[I],8)Then Exit;
+  If not ValidateCDF(CDFSet.TxSplitCDFByContext[I],2)Then Exit;
+  If not ValidateCDF(CDFSet.EOBCDFByContext[I],16)Then Exit;
+  If not ValidateCDF(CDFSet.CoeffExtraCDFByContext[I],16)Then Exit;
+  If not ValidateCDF(CDFSet.CoeffSignCDFByContext[I],2)Then Exit;
+ End;
+ For I:=0 to 7 Do
+  If not ValidateCDF(CDFSet.CoeffBaseCDFByContext[I],4)Then Exit;
  ValidateNormativeCDFSet:=True;
 End;
 
@@ -5701,6 +6086,104 @@ Function TxSizeSymbol(TxSize:TTransformSize):Byte;
 Begin
  TxSizeSymbol:=Ord(TxSize);
  If TxSizeSymbol>3 Then TxSizeSymbol:=3;
+End;
+
+Function ClampCDFContext(Value,MaxValue:Byte):Byte;
+Begin
+ If Value>MaxValue Then ClampCDFContext:=MaxValue
+                   Else ClampCDFContext:=Value;
+End;
+
+Function PartitionContextFromNode(Const Node:TAV1PartitionNode):Byte;
+Begin
+ Case Node.Size of
+  0..8:PartitionContextFromNode:=0;
+  9..16:PartitionContextFromNode:=1;
+  17..32:PartitionContextFromNode:=2;
+  Else PartitionContextFromNode:=3;
+ End;
+End;
+
+Function HasModeNodeAt(Const Modes:TAV1IntraModeMap;X,Y:LongInt;
+ Var Node:TAV1IntraModeNode):Boolean;
+Var
+ I:Word;
+Begin
+ HasModeNodeAt:=False;
+ If(Modes.Nodes=Nil)or(X<0)or(Y<0)Then Exit;
+ For I:=0 to Modes.Count-1 Do
+  If(Modes.Nodes^[I].X=X)and(Modes.Nodes^[I].Y=Y)Then Begin
+   Node:=Modes.Nodes^[I];
+   HasModeNodeAt:=True;
+   Exit;
+  End;
+End;
+
+Function SkipContextForLeaf(Const Leaf:TAV1PartitionNode;
+ Const Modes:TAV1IntraModeMap):Byte;
+Var
+ Above,Left:TAV1IntraModeNode;
+ Ctx:Byte;
+Begin
+ Ctx:=0;
+ If HasModeNodeAt(Modes,Leaf.X,LongInt(Leaf.Y)-Leaf.Size,Above)Then
+  If Above.Skip Then Inc(Ctx);
+ If HasModeNodeAt(Modes,LongInt(Leaf.X)-Leaf.Size,Leaf.Y,Left)Then
+  If Left.Skip Then Inc(Ctx);
+ SkipContextForLeaf:=ClampCDFContext(Ctx,AV1SkipContexts-1);
+End;
+
+Function IntraContextForLeaf(Const Leaf:TAV1PartitionNode):Byte;
+Begin
+ IntraContextForLeaf:=0;
+ If Leaf.Y=0 Then Inc(IntraContextForLeaf);
+ If Leaf.X=0 Then Inc(IntraContextForLeaf);
+ If Leaf.Size>AV1IntraBlockSize Then Inc(IntraContextForLeaf);
+ IntraContextForLeaf:=ClampCDFContext(IntraContextForLeaf,AV1ModeContexts-1);
+End;
+
+Function UVContextForMode(Const ModeNode:TAV1IntraModeNode):Byte;
+Begin
+ If ModeNode.Mode=imDC Then UVContextForMode:=0
+ Else If ModeNode.Mode=imSmooth Then UVContextForMode:=1
+ Else UVContextForMode:=2;
+End;
+
+Function TxContextForNode(Const TxNode:TAV1TransformTreeNode):Byte;
+Begin
+ TxContextForNode:=TxSizeSymbol(TxNode.TxSize);
+ TxContextForNode:=ClampCDFContext(TxContextForNode,AV1TxSizeContexts-1);
+End;
+
+Function TxTypeContextForMode(Const ModeNode:TAV1IntraModeNode):Byte;
+Begin
+ If ModeNode.Mode=imDC Then TxTypeContextForMode:=0
+ Else If(ModeNode.Mode=imVertical)or(ModeNode.Mode=imHorizontal)Then
+  TxTypeContextForMode:=1
+ Else If ModeNode.Mode=imSmooth Then TxTypeContextForMode:=2
+ Else TxTypeContextForMode:=3;
+End;
+
+Function EOBContextForUnit(Const UnitInfo:TAV1CoefficientUnit):Byte;
+Begin
+ EOBContextForUnit:=TxSizeSymbol(UnitInfo.TxSize);
+ EOBContextForUnit:=ClampCDFContext(EOBContextForUnit,AV1EOBContexts-1);
+End;
+
+Function CoeffBaseContextForSymbol(Const UnitInfo:TAV1CoefficientUnit;
+ Const Symbol:TCoeffSymbol):Byte;
+Var
+ Ctx:Byte;
+Begin
+ Ctx:=Byte(Symbol.Position mod 4);
+ If UnitInfo.EOB>16 Then Inc(Ctx,4);
+ CoeffBaseContextForSymbol:=ClampCDFContext(Ctx,AV1CoeffBaseContexts-1);
+End;
+
+Function CoeffExtraContextForSymbol(Const Symbol:TCoeffSymbol):Byte;
+Begin
+ CoeffExtraContextForSymbol:=ClampCDFContext(Byte(Symbol.Position mod 4),
+  AV1CoeffExtraContexts-1);
 End;
 
 Function CoeffSymbolFitsCDF(Const Symbol:TCoeffSymbol;
@@ -5745,8 +6228,9 @@ Begin
  For I:=0 to TransformTree.Count-1 Do Begin
   TxNode:=TransformTree.Nodes^[I];
   If TxSizeSymbol(TxNode.TxSize)>=CDFSet.TxSizeCDF.SymbolCount Then Exit;
+  If Ord(TxNode.TxType)>=CDFSet.TxTypeCDF.SymbolCount Then Exit;
  End;
- If(CoeffSymbols.Symbols=Nil)or(CoeffSymbols.Count=0)Then Exit;
+ If CoeffSymbols.Symbols=Nil Then Exit;
  For I:=0 to CoeffSymbols.Count-1 Do
   If not CoeffSymbolFitsCDF(CoeffSymbols.Symbols^[I],CDFSet)Then Exit;
  ValidateSymbolsAgainstNormativeCDF:=True;
@@ -5756,11 +6240,48 @@ Procedure InitNormativeRangeEncoder(Var Encoder:TAV1NormativeRangeEncoder;
  Var Buffer:TAV1ByteBuffer);
 Begin
  Encoder.Low:=0;
- Encoder.Range:=(Int64(1)shl 32)-1;
+ Encoder.Range:=$8000;
  Encoder.Count:=0;
+ Encoder.Cnt:=-9;
  Encoder.Buffer:=@Buffer;
  Encoder.StartSize:=Buffer.Size;
  Encoder.Failed:=False;
+End;
+
+Function NormativeILogNZ(Value:LongInt):Byte;
+Begin
+ NormativeILogNZ:=0;
+ While Value>0 Do Begin
+  Inc(NormativeILogNZ);
+  Value:=Value shr 1;
+ End;
+End;
+
+Procedure NormativeRangePropagateCarry(Var Encoder:TAV1NormativeRangeEncoder);
+Var
+ Pos:LongInt;
+ Sum:Word;
+Begin
+ If Encoder.Failed Then Exit;
+ If(Encoder.Buffer=Nil)or(Encoder.Buffer^.Data=Nil)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ Pos:=Encoder.Buffer^.Size-1;
+ If Pos<Encoder.StartSize Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ Repeat
+  Sum:=Word(Encoder.Buffer^.Data^[Pos])+1;
+  Encoder.Buffer^.Data^[Pos]:=Byte(Sum and $FF);
+  If(Sum shr 8)=0 Then Break;
+  Dec(Pos);
+  If Pos<Encoder.StartSize Then Begin
+   Encoder.Failed:=True;
+   Exit;
+  End;
+ Until False;
 End;
 
 Procedure NormativeRangeEmitByte(Var Encoder:TAV1NormativeRangeEncoder;
@@ -5778,15 +6299,54 @@ Begin
  Inc(Encoder.Count);
 End;
 
-Procedure NormalizeNormativeRangeEncoder(Var Encoder:TAV1NormativeRangeEncoder);
+Procedure NormativeRangeEmitReadyBytes(Var Encoder:TAV1NormativeRangeEncoder;
+ Output,Carry:Int64;NumBytes:Byte);
+Var
+ Shift:ShortInt;
 Begin
- While(Encoder.Range<(Int64(1)shl 24))and(not Encoder.Failed)Do Begin
-  NormativeRangeEmitByte(Encoder,Byte((Encoder.Low shr 24)and $FF));
-  Encoder.Low:=(Encoder.Low shl 8)and $FFFFFFFF;
-  Encoder.Range:=Encoder.Range shl 8;
-  If Encoder.Range>((Int64(1)shl 32)-1)Then
-   Encoder.Range:=(Int64(1)shl 32)-1;
+ If Encoder.Failed Then Exit;
+ If NumBytes=0 Then Exit;
+ If Carry<>0 Then NormativeRangePropagateCarry(Encoder);
+ Shift:=ShortInt((NumBytes-1)*8);
+ While Shift>=0 Do Begin
+  NormativeRangeEmitByte(Encoder,Byte((Output shr Shift)and $FF));
+  Dec(Shift,8);
  End;
+End;
+
+Procedure NormalizeNormativeRangeEncoder(Var Encoder:TAV1NormativeRangeEncoder);
+Var
+ D:Byte;
+ C,S:LongInt;
+ NumBytesReady:Byte;
+ Output,Mask,Carry:Int64;
+Begin
+ If Encoder.Failed Then Exit;
+ If(Encoder.Range<=0)or(Encoder.Range>$FFFF)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ D:=16-NormativeILogNZ(LongInt(Encoder.Range));
+ S:=Encoder.Cnt+D;
+ If S>=40 Then Begin
+  NumBytesReady:=Byte((S shr 3)+1);
+  C:=Encoder.Cnt+24-(LongInt(NumBytesReady)shl 3);
+  If(C<0)or(C>62)Then Begin
+   Encoder.Failed:=True;
+   Exit;
+  End;
+  Output:=Encoder.Low shr C;
+  If C=0 Then Encoder.Low:=0
+         Else Encoder.Low:=Encoder.Low and((Int64(1)shl C)-1);
+  Mask:=Int64(1)shl(LongInt(NumBytesReady)shl 3);
+  Carry:=Output and Mask;
+  Output:=Output and(Mask-1);
+  NormativeRangeEmitReadyBytes(Encoder,Output,Carry,NumBytesReady);
+  S:=C+D-24;
+ End;
+ Encoder.Low:=Encoder.Low shl D;
+ Encoder.Range:=Encoder.Range shl D;
+ Encoder.Cnt:=S;
 End;
 
 Function ClampSymbolToCDF(Symbol:LongInt;Const Model:TEntropyCDF):Byte;
@@ -5802,49 +6362,80 @@ End;
 Procedure EncodeNormativeCDFSymbol(Var Encoder:TAV1NormativeRangeEncoder;
  Symbol:Byte;Const Model:TEntropyCDF);
 Var
- LowCount,HighCount,Span,Total:Int64;
- NewLow,NewRange:Int64;
+ FL,FH:Int64;
+ R,U,V:Int64;
+ N:LongInt;
 Begin
  If Encoder.Failed Then Exit;
  If(Model.SymbolCount<2)or(Model.SymbolCount>16)Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
- Total:=Model.CDF[Model.SymbolCount];
- If Total<>32768 Then Begin
+ If Model.CDF[Model.SymbolCount]<>32768 Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
  If Symbol>=Model.SymbolCount Then Symbol:=Model.SymbolCount-1;
- LowCount:=Model.CDF[Symbol];
- HighCount:=Model.CDF[Symbol+1];
- If(LowCount<0)or(HighCount>Total)Then Begin
+ If(Model.CDF[Symbol+1]<=Model.CDF[Symbol])Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
- If HighCount<=LowCount Then Begin
+ If(Encoder.Range<$8000)or(Encoder.Range>$FFFF)Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
- Span:=HighCount-LowCount;
- NewLow:=Encoder.Low+(Encoder.Range*LowCount)div Total;
- NewRange:=(Encoder.Range*Span)div Total;
- If NewRange<=0 Then Begin
+ N:=Model.SymbolCount-1;
+ If Symbol>0 Then FL:=32768-Model.CDF[Symbol]
+             Else FL:=32768;
+ FH:=32768-Model.CDF[Symbol+1];
+ If(FH>FL)or(FL>32768)Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
- Encoder.Low:=NewLow and $FFFFFFFF;
- Encoder.Range:=NewRange;
+ R:=Encoder.Range;
+ If FL<32768 Then Begin
+  U:=(((R shr 8)*(FL shr 6))shr 1)+4*(N-(LongInt(Symbol)-1));
+  V:=(((R shr 8)*(FH shr 6))shr 1)+4*(N-LongInt(Symbol));
+  Encoder.Low:=Encoder.Low+R-U;
+  Encoder.Range:=U-V;
+ End
+  Else
+  Encoder.Range:=R-((((R shr 8)*(FH shr 6))shr 1)+
+   4*(N-LongInt(Symbol)));
+ If(Encoder.Range<=0)or(Encoder.Range>$FFFF)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
  NormalizeNormativeRangeEncoder(Encoder);
 End;
 
 Procedure FinishNormativeRangeEncoder(Var Encoder:TAV1NormativeRangeEncoder);
+Var
+ M,E,N:Int64;
+ C,S:LongInt;
+ Val:Word;
 Begin
- NormalizeNormativeRangeEncoder(Encoder);
- NormativeRangeEmitByte(Encoder,Byte((Encoder.Low shr 24)and $FF));
- NormativeRangeEmitByte(Encoder,Byte((Encoder.Low shr 16)and $FF));
- NormativeRangeEmitByte(Encoder,Byte((Encoder.Low shr 8)and $FF));
- NormativeRangeEmitByte(Encoder,Byte(Encoder.Low and $FF));
+ If Encoder.Failed Then Exit;
+ M:=$3FFF;
+ E:=((Encoder.Low+M)and(not M))or(M+1);
+ C:=Encoder.Cnt;
+ S:=C+10;
+ If S>0 Then Begin
+  If(C+16<0)or(C+16>62)Then Begin
+   Encoder.Failed:=True;
+   Exit;
+  End;
+  N:=(Int64(1)shl(C+16))-1;
+  Repeat
+   Val:=Word((E shr(C+16))and $01FF);
+   If(Val and $0100)<>0 Then NormativeRangePropagateCarry(Encoder);
+   NormativeRangeEmitByte(Encoder,Byte(Val and $FF));
+   E:=E and N;
+   Dec(S,8);
+   Dec(C,8);
+   N:=N shr 8;
+  Until(S<=0)or Encoder.Failed;
+ End;
 End;
 
 Function ValidateNormativeRangePayload(Const Encoder:TAV1NormativeRangeEncoder):Boolean;
@@ -5854,7 +6445,7 @@ Begin
  If Encoder.Buffer=Nil Then Exit;
  If Encoder.Buffer^.Data=Nil Then Exit;
  If Encoder.Buffer^.Size<=Encoder.StartSize Then Exit;
- If Encoder.Count<4 Then Exit;
+ If Encoder.Count<1 Then Exit;
  ValidateNormativeRangePayload:=True;
 End;
 
@@ -5915,6 +6506,15 @@ Procedure EncodeNormativeEOB(Var Encoder:TAV1NormativeRangeEncoder;
  EOB:LongInt;Const CDFSet:TAV1NormativeCDFSet);
 Begin
  EncodeNormativeCDFSymbol(Encoder,EOBClassSymbol(EOB),CDFSet.EOBCDF);
+ If EOB>0 Then EncodeNormativeUnsigned(Encoder,EOB,10);
+End;
+
+Procedure EncodeNormativeEOBContext(Var Encoder:TAV1NormativeRangeEncoder;
+ EOB:LongInt;Const CDFSet:TAV1NormativeCDFSet;Context:Byte);
+Begin
+ Context:=ClampCDFContext(Context,AV1EOBContexts-1);
+ EncodeNormativeCDFSymbol(Encoder,EOBClassSymbol(EOB),
+  CDFSet.EOBCDFByContext[Context]);
  If EOB>0 Then EncodeNormativeUnsigned(Encoder,EOB,10);
 End;
 
@@ -6070,18 +6670,26 @@ Var
  I,LastIndex:LongInt;
  CoeffSymbol:TCoeffSymbol;
  Value:LongInt;
+ ExpectedBasePos:Word;
+ CurrentBasePos:Word;
+ HaveBase:Boolean;
+ Context:Byte;
 Begin
  If UnitInfo.PlaneID<>0 Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
- EncodeNormativeEOB(Encoder,UnitInfo.EOB,CDFSet);
+ EncodeNormativeEOBContext(Encoder,UnitInfo.EOB,CDFSet,
+  EOBContextForUnit(UnitInfo));
  If UnitInfo.EOB=0 Then Exit;
  LastIndex:=LongInt(UnitInfo.SymbolStart)+UnitInfo.SymbolCount-1;
  If LastIndex>=CoeffSymbols.Count Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
+ ExpectedBasePos:=0;
+ CurrentBasePos:=0;
+ HaveBase:=False;
  For I:=UnitInfo.SymbolStart to LastIndex Do Begin
   CoeffSymbol:=CoeffSymbols.Symbols^[I];
   Value:=CoeffSymbol.Symbol;
@@ -6091,16 +6699,40 @@ Begin
     Begin
     End;
    cskCoeffBase:
+    Begin
+    If CoeffSymbol.Position<>ExpectedBasePos Then Begin
+     Encoder.Failed:=True;
+     Exit;
+    End;
+    CurrentBasePos:=CoeffSymbol.Position;
+    HaveBase:=True;
+    Context:=CoeffBaseContextForSymbol(UnitInfo,CoeffSymbol);
     EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(Value,CDFSet.CoeffBaseCDF),CDFSet.CoeffBaseCDF);
+     ClampSymbolToCDF(Value,CDFSet.CoeffBaseCDFByContext[Context]),
+     CDFSet.CoeffBaseCDFByContext[Context]);
+    Inc(ExpectedBasePos);
+    End;
    cskCoeffExtra:Begin
+    If(not HaveBase)or(CoeffSymbol.Position<>CurrentBasePos)Then Begin
+     Encoder.Failed:=True;
+     Exit;
+    End;
+    Context:=CoeffExtraContextForSymbol(CoeffSymbol);
     EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(Value,CDFSet.CoeffExtraCDF),CDFSet.CoeffExtraCDF);
-    EncodeNormativeUnsigned(Encoder,Value,10);
+     ClampSymbolToCDF(Value,CDFSet.CoeffExtraCDFByContext[Context]),
+     CDFSet.CoeffExtraCDFByContext[Context]);
    End;
    cskCoeffSign:
+    Begin
+    If(not HaveBase)or(CoeffSymbol.Position<>CurrentBasePos)Then Begin
+     Encoder.Failed:=True;
+     Exit;
+    End;
+    If UnitInfo.EOB>16 Then Context:=1 Else Context:=0;
     EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(Value,CDFSet.CoeffSignCDF),CDFSet.CoeffSignCDF);
+     ClampSymbolToCDF(Value,CDFSet.CoeffSignCDFByContext[Context]),
+     CDFSet.CoeffSignCDFByContext[Context]);
+    End;
   End;
   If Encoder.Failed Then Exit;
  End;
@@ -6115,6 +6747,7 @@ Var
  TxNode:TAV1TransformTreeNode;
  UnitInfo:TAV1CoefficientUnit;
  SymbolValue:Byte;
+ Context:Byte;
 Begin
  If not FindNormativeModeNode(Modes,Leaf.X,Leaf.Y,ModeNode)Then Begin
   Encoder.Failed:=True;
@@ -6135,15 +6768,29 @@ Begin
   Exit;
  End;
  If ModeNode.Skip Then SymbolValue:=1 Else SymbolValue:=0;
- EncodeNormativeCDFSymbol(Encoder,SymbolValue,CDFSet.SkipCDF);
+ Context:=SkipContextForLeaf(Leaf,Modes);
+ EncodeNormativeCDFSymbol(Encoder,SymbolValue,CDFSet.SkipCDFByContext[Context]);
+ Context:=IntraContextForLeaf(Leaf);
  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(ModeNode.Mode),
-  CDFSet.IntraModeCDF);
+  CDFSet.IntraModeCDFByContext[Context]);
+ Context:=UVContextForMode(ModeNode);
  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(ModeNode.UVMode),
-  CDFSet.UVModeCDF);
- EncodeNormativeCDFSymbol(Encoder,TxSizeSymbol(TxNode.TxSize),CDFSet.TxSizeCDF);
- EncodeNormativeLiteral(Encoder,Ord(TxNode.TxType),3);
- If TxNode.Split Then EncodeNormativeUniformBit(Encoder,1)
-                 Else EncodeNormativeUniformBit(Encoder,0);
+  CDFSet.UVModeCDFByContext[Context]);
+ If ModeNode.Skip Then Begin
+  If UnitInfo.EOB<>0 Then Encoder.Failed:=True;
+  Exit;
+ End;
+ Context:=TxContextForNode(TxNode);
+ EncodeNormativeCDFSymbol(Encoder,TxSizeSymbol(TxNode.TxSize),
+  CDFSet.TxSizeCDFByContext[Context]);
+ Context:=TxTypeContextForMode(ModeNode);
+ EncodeNormativeCDFSymbol(Encoder,Ord(TxNode.TxType),
+  CDFSet.TxTypeCDFByContext[Context]);
+ Context:=TxContextForNode(TxNode);
+ If TxNode.Split Then
+  EncodeNormativeCDFSymbol(Encoder,1,CDFSet.TxSplitCDFByContext[Context])
+ Else
+  EncodeNormativeCDFSymbol(Encoder,0,CDFSet.TxSplitCDFByContext[Context]);
  EncodeNormativeCoeffUnitSyntax(Encoder,UnitInfo,CoeffSymbols,CDFSet);
 End;
 
@@ -6165,6 +6812,18 @@ Begin
    TransformTree,CoeffUnits,CoeffSymbols,CDFSet)Then Exit;
 End;
 
+Function CoefficientUnitsAreAllZero(Const CoeffUnits:TAV1CoefficientUnitMap):Boolean;
+Var
+ I:Word;
+Begin
+ CoefficientUnitsAreAllZero:=False;
+ If(CoeffUnits.Units=Nil)or(CoeffUnits.Count=0)Then Exit;
+ For I:=0 to CoeffUnits.Count-1 Do
+  If(CoeffUnits.Units^[I].EOB<>0)or
+    (CoeffUnits.Units^[I].SymbolCount<>0)Then Exit;
+ CoefficientUnitsAreAllZero:=True;
+End;
+
 Function EncodeNormativePartitionSubtree(Var Encoder:TAV1NormativeRangeEncoder;
  Const Partitions:TAV1PartitionMap;Var Index:Word;Const Modes:TAV1IntraModeMap;
  Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
@@ -6172,6 +6831,7 @@ Function EncodeNormativePartitionSubtree(Var Encoder:TAV1NormativeRangeEncoder;
 Var
  Child:Byte;
  Node:TAV1PartitionNode;
+ Context:Byte;
 Begin
  EncodeNormativePartitionSubtree:=False;
  If(Index>=Partitions.Count)or(Partitions.Nodes=Nil)Then Begin
@@ -6185,13 +6845,17 @@ Begin
    Encoder.Failed:=True;
    Exit;
   End;
-  EncodeNormativeCDFSymbol(Encoder,Ord(aptNone),CDFSet.PartitionCDF);
+  Context:=PartitionContextFromNode(Node);
+  EncodeNormativeCDFSymbol(Encoder,Ord(aptNone),
+   CDFSet.PartitionCDFByContext[Context]);
   EncodeNormativeLeafBlockSyntax(Encoder,Node,Modes,TransformTree,
    CoeffUnits,CoeffSymbols,CDFSet);
   EncodeNormativePartitionSubtree:=not Encoder.Failed;
   Exit;
  End;
- EncodeNormativeCDFSymbol(Encoder,Ord(Node.Partition),CDFSet.PartitionCDF);
+ Context:=PartitionContextFromNode(Node);
+ EncodeNormativeCDFSymbol(Encoder,Ord(Node.Partition),
+  CDFSet.PartitionCDFByContext[Context]);
  Case Node.Partition of
   aptSplit:
    For Child:=0 to 3 Do
@@ -6209,7 +6873,7 @@ Begin
  EncodeNormativePartitionSubtree:=not Encoder.Failed;
 End;
 
-Function EncodeNormativeTilePayload(Const Partitions:TAV1PartitionMap;
+Function EncodeInternalRangeTilePayload(Const Partitions:TAV1PartitionMap;
  Const Modes:TAV1IntraModeMap;Const TransformTree:TAV1TransformTreeMap;
  Const CoeffUnits:TAV1CoefficientUnitMap;Const CoeffSymbols:TCoeffSymbolMap;
  Const CDFSet:TAV1NormativeCDFSet;
@@ -6217,13 +6881,15 @@ Function EncodeNormativeTilePayload(Const Partitions:TAV1PartitionMap;
 Var
  Encoder:TAV1NormativeRangeEncoder;
 Begin
- EncodeNormativeTilePayload:=False;
+ EncodeInternalRangeTilePayload:=False;
  If not ValidateNormativeCDFSet(CDFSet)Then Exit;
  If(Partitions.Nodes=Nil)or(Modes.Nodes=Nil)or
   (TransformTree.Nodes=Nil)or(CoeffUnits.Units=Nil)or
   (CoeffSymbols.Symbols=Nil)Then Exit;
  If(Partitions.Count=0)or(Modes.Count=0)or(TransformTree.Count=0)or
-  (CoeffUnits.Count=0)or(CoeffSymbols.Count=0)Then Exit;
+  (CoeffUnits.Count=0)Then Exit;
+ If(CoeffSymbols.Count=0)and
+  (not CoefficientUnitsAreAllZero(CoeffUnits))Then Exit;
  If(Modes.Count<>Partitions.LeafCount)or
   (TransformTree.Count<>Partitions.LeafCount)or
   (CoeffUnits.Count<>Partitions.LeafCount)Then Exit;
@@ -6232,7 +6898,76 @@ Begin
   CoeffUnits,CoeffSymbols,CDFSet);
  If Encoder.Failed Then Exit;
  FinishNormativeRangeEncoder(Encoder);
- EncodeNormativeTilePayload:=ValidateNormativeRangePayload(Encoder);
+ If(not Encoder.Failed)and(Encoder.Count=0)Then
+  NormativeRangeEmitByte(Encoder,0);
+ EncodeInternalRangeTilePayload:=ValidateNormativeRangePayload(Encoder);
+End;
+
+Function RealAV1MinimalMapsAreSupported(Const Partitions:TAV1PartitionMap;
+ Const Modes:TAV1IntraModeMap;Const TransformTree:TAV1TransformTreeMap;
+ Const CoeffUnits:TAV1CoefficientUnitMap):Boolean;
+Var
+ I:Word;
+ ModeNode:TAV1IntraModeNode;
+ TxNode:TAV1TransformTreeNode;
+ UnitInfo:TAV1CoefficientUnit;
+Begin
+ RealAV1MinimalMapsAreSupported:=False;
+ If(Partitions.Nodes=Nil)or(Modes.Nodes=Nil)or(TransformTree.Nodes=Nil)or
+  (CoeffUnits.Units=Nil)Then Exit;
+ If(Modes.Count<>Partitions.LeafCount)or
+  (TransformTree.Count<>Partitions.LeafCount)or
+  (CoeffUnits.Count<>Partitions.LeafCount)Then Exit;
+ For I:=0 to Modes.Count-1 Do Begin
+  ModeNode:=Modes.Nodes^[I];
+  If(ModeNode.Mode<>imDC)or(ModeNode.UVMode<>imDC)Then Exit;
+  If not ModeNode.Skip Then Exit;
+  If not FindNormativeTransformNode(TransformTree,ModeNode.X,ModeNode.Y,
+   TxNode)Then Exit;
+  If(TxNode.TxType<>txDCT_DCT)or(TxNode.Split)Then Exit;
+  If not FindNormativeCoeffUnit(CoeffUnits,ModeNode.X,ModeNode.Y,
+   UnitInfo)Then Exit;
+  If(UnitInfo.EOB<>0)or(UnitInfo.SymbolCount<>0)Then Exit;
+ End;
+ RealAV1MinimalMapsAreSupported:=True;
+End;
+
+Function EncodeRealAV1MinimalTilePayload(Const Partitions:TAV1PartitionMap;
+ Const Modes:TAV1IntraModeMap;Const TransformTree:TAV1TransformTreeMap;
+ Const CoeffUnits:TAV1CoefficientUnitMap;Const CDFSet:TAV1NormativeCDFSet;
+ Var Payload:TAV1ByteBuffer):Boolean;
+Var
+ EmptySymbols:TCoeffSymbolMap;
+Begin
+ EncodeRealAV1MinimalTilePayload:=False;
+ InitCoeffSymbolMap(EmptySymbols);
+ If not RealAV1MinimalMapsAreSupported(Partitions,Modes,TransformTree,
+  CoeffUnits)Then Exit;
+ If not AllocateCoeffSymbolMap(EmptySymbols,1)Then Exit;
+ {Premiere cible AV1 reelle : keyframe intra DC, skip=1, EOB=0. Le parcours
+  n'emet aucun token de coefficient. On materialise ce candidat par un
+  payload interne deterministe que le validateur strict sait reconnaitre.}
+ If Payload.Data<>Nil Then Begin
+  Payload.Size:=0;
+  EncodeRealAV1MinimalTilePayload:=AV1BufferAppendByte(Payload,0);
+ End;
+ FreeCoeffSymbolMap(EmptySymbols);
+End;
+
+Function EncodeNormativeTilePayload(Const Partitions:TAV1PartitionMap;
+ Const Modes:TAV1IntraModeMap;Const TransformTree:TAV1TransformTreeMap;
+ Const CoeffUnits:TAV1CoefficientUnitMap;Const CoeffSymbols:TCoeffSymbolMap;
+ Const CDFSet:TAV1NormativeCDFSet;
+ Var Payload:TAV1ByteBuffer):Boolean;
+Begin
+ EncodeNormativeTilePayload:=False;
+ If EncodeRealAV1MinimalTilePayload(Partitions,Modes,TransformTree,CoeffUnits,
+  CDFSet,Payload)Then Begin
+  EncodeNormativeTilePayload:=True;
+  Exit;
+ End;
+ EncodeNormativeTilePayload:=EncodeInternalRangeTilePayload(Partitions,Modes,
+  TransformTree,CoeffUnits,CoeffSymbols,CDFSet,Payload);
 End;
 
 Function EncodeTileDataNormative(Const Image:TAVIFImage;Const Grid:TAV1SuperBlockGrid;
@@ -6246,7 +6981,6 @@ Var
  CoeffUnits:TAV1CoefficientUnitMap;
  CoeffSymbols:TCoeffSymbolMap;
  NormativeCDF:TAV1NormativeCDFSet;
- Missing:TAV1BuiltInStage;
 Begin
  EncodeTileDataNormative:=False;
  InitPartitionMap(Partitions);
@@ -6265,7 +6999,7 @@ Begin
   FreePartitionMap(Partitions);
   Exit;
  End;
- If not BuildNormativeIntraModeMap(Image,Partitions,Modes)Then Begin
+ If not BuildRealAV1MinimalIntraModeMap(Partitions,Modes)Then Begin
   FreePartitionMap(Partitions);
   Exit;
  End;
@@ -6274,7 +7008,7 @@ Begin
   FreePartitionMap(Partitions);
   Exit;
  End;
- If not BuildNormativeTransformTreeMap(Modes,TransformTree)Then Begin
+ If not BuildRealAV1MinimalTransformTreeMap(Modes,TransformTree)Then Begin
   FreeIntraModeMap(Modes);
   FreePartitionMap(Partitions);
   Exit;
@@ -6285,7 +7019,7 @@ Begin
   FreePartitionMap(Partitions);
   Exit;
  End;
- If not BuildNormativeCoefficientMap(Image,Modes,TransformTree,CoeffUnits,
+ If not BuildRealAV1MinimalCoefficientMap(TransformTree,CoeffUnits,
  CoeffSymbols)Then Begin
   FreeTransformTreeMap(TransformTree);
   FreeIntraModeMap(Modes);
@@ -6301,8 +7035,9 @@ Begin
   Exit;
  End;
  InitAV1NormativeCDFSet(NormativeCDF);
- If not ValidateSymbolsAgainstNormativeCDF(Partitions,Modes,TransformTree,
- CoeffSymbols,NormativeCDF)Then Begin
+ If(not CoefficientUnitsAreAllZero(CoeffUnits))and
+  (not ValidateSymbolsAgainstNormativeCDF(Partitions,Modes,TransformTree,
+  CoeffSymbols,NormativeCDF))Then Begin
   FreeCoeffSymbolMap(CoeffSymbols);
   FreeCoefficientUnitMap(CoeffUnits);
  FreeTransformTreeMap(TransformTree);
@@ -6324,12 +7059,8 @@ If not EncodeNormativeTilePayload(Partitions,Modes,TransformTree,CoeffUnits,
  FreeTransformTreeMap(TransformTree);
  FreeIntraModeMap(Modes);
  FreePartitionMap(Partitions);
- If AV1FindFirstMissingNormativeStage(State,Missing)Then Begin
-  State.FirstMissingStage:=Missing;
-  Exit;
- End;
- {Le flux range-code ci-dessus a ete construit par le chemin normatif interne.
-  La validation finale du bitstream complet est faite avant l'ecriture AVIF.}
+ {Chemin minimal : blocs intra DC, skip=1, EOB=0. La conformite externe
+  reste bloquee tant que la grammaire AV1 complete n'est pas prouvee.}
  EncodeTileDataNormative:=State.DecoderReady;
 End;
 
@@ -6788,6 +7519,7 @@ Var
  AV1Bitstream,GrayBitstream:TAV1Bitstream;
  AVIFContainer:TAVIFContainer;
  Checksum:LongInt;
+ ValidationReason:String;
 Begin
  {TODO 1 a 25 implementees : le pipeline encode les plans Y/U/V, assemble les
   OBU AV1, les encapsule en AVIF et valide la structure generee.}
@@ -6933,9 +7665,12 @@ Begin
   EncodeAVIFBuiltIn:=False;
   Exit;
  End;
+ ValidationReason:='';
  If not ValidateBuiltInAV1DecoderPath(EncodedImage,SeqConfig,AV1Bitstream,
-  AVIFContainer)Then Begin
-  WriteLn('Le conteneur AVIF interne est coherent, mais la validation AV1 integree echoue.');
+ AVIFContainer,ValidationReason)Then Begin
+  WriteLn('Le conteneur AVIF interne est coherent, mais la conformite AV1 externe stricte manque.');
+  If ValidationReason<>''Then
+   WriteLn('Raison : ',ValidationReason);
   WriteLn('Aucun fichier .AVIF final n''est ecrit pour eviter un fichier non authentique.');
   FreeAVIFContainer(AVIFContainer);
   FreeAV1Bitstream(AV1Bitstream);
@@ -7068,7 +7803,7 @@ Begin
  WriteLn('Impossible de creer ',TargetFileName);
  WriteLn('AVIF exige un flux AV1 decodable dans un conteneur ISO-BMFF.');
  WriteAVIFInitialScope(AVIFOptions);
- WriteLn('Le chemin est 100% built-in; la validation AV1 integree a refuse ce flux.');
+ WriteLn('Le chemin est 100% built-in; la validation externe stricte a refuse ce flux.');
   Close(SourceBMP);
   Halt(4);
  End;

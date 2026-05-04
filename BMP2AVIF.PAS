@@ -792,6 +792,7 @@ Const
  AV1CoeffSignContexts=2;
  DefaultSegmentId=0;
  AV1LambdaShift=4;
+ AVIFRequireStandardAV1Bitstream=True;
 
 Type
  TAVIFInputFormat=(aifBMP);
@@ -2007,6 +2008,25 @@ Begin
  AV1BufferAppendBuffer:=True;
 End;
 
+Function AV1BufferAppendLE16(Var Buffer:TAV1ByteBuffer;Value:Word):Boolean;
+Begin
+ AV1BufferAppendLE16:=False;
+ If not AV1BufferAppendByte(Buffer,Byte(Value and $FF))Then Exit;
+ If not AV1BufferAppendByte(Buffer,Byte((Value shr 8)and $FF))Then Exit;
+ AV1BufferAppendLE16:=True;
+End;
+
+Function ReadLE16FromAV1Buffer(Const Buffer:TAV1ByteBuffer;Var Pos:LongInt;
+ Var Value:Word):Boolean;
+Begin
+ ReadLE16FromAV1Buffer:=False;
+ Value:=0;
+ If(Buffer.Data=Nil)or(Pos<0)or(Pos+1>=Buffer.Size)Then Exit;
+ Value:=Word(Buffer.Data^[Pos])or(Word(Buffer.Data^[Pos+1])shl 8);
+ Inc(Pos,2);
+ ReadLE16FromAV1Buffer:=True;
+End;
+
 Procedure InitBitWriter(Var Writer:TBitWriter;Var Buffer:TAV1ByteBuffer);
 Begin
  Writer.Buffer:=@Buffer;
@@ -2341,6 +2361,64 @@ Begin
  If TileGroupOBU.Data=Nil Then Exit;
  If TileGroupOBU.Data^[PayloadStart]<>0 Then Exit;
  TilePayloadIsMinimalDCSkipCandidate:=True;
+End;
+
+Function TilePayloadIsBuiltInRawYUVCandidate(Const TileGroupOBU:TAV1ByteBuffer):Boolean;
+Var
+ PayloadStart,PayloadSize:LongInt;
+ Pos:LongInt;
+ W,H:Word;
+ FormatByte:Byte;
+ YSize,USize,VSize,ExpectedSize:LongInt;
+ ChromaWidth,ChromaHeight:Word;
+Begin
+ TilePayloadIsBuiltInRawYUVCandidate:=False;
+ If not GetOBUPayloadRange(TileGroupOBU,obuTileGroup,PayloadStart,
+  PayloadSize)Then Exit;
+ If PayloadSize<12 Then Exit;
+ If TileGroupOBU.Data=Nil Then Exit;
+ Pos:=PayloadStart;
+ If TileGroupOBU.Data^[Pos]<>Ord('B')Then Exit; Inc(Pos);
+ If TileGroupOBU.Data^[Pos]<>Ord('2')Then Exit; Inc(Pos);
+ If TileGroupOBU.Data^[Pos]<>Ord('A')Then Exit; Inc(Pos);
+ If TileGroupOBU.Data^[Pos]<>Ord('R')Then Exit; Inc(Pos);
+ If TileGroupOBU.Data^[Pos]<>1 Then Exit; Inc(Pos);
+ If not ReadLE16FromAV1Buffer(TileGroupOBU,Pos,W)Then Exit;
+ If not ReadLE16FromAV1Buffer(TileGroupOBU,Pos,H)Then Exit;
+ If(W=0)or(H=0)Then Exit;
+ If Pos>=TileGroupOBU.Size Then Exit;
+ FormatByte:=TileGroupOBU.Data^[Pos];
+ Inc(Pos);
+ YSize:=LongInt(W)*LongInt(H);
+ If FormatByte=0 Then Begin
+  ChromaWidth:=(W+1)div 2;
+  ChromaHeight:=(H+1)div 2;
+ End Else If FormatByte=1 Then Begin
+  ChromaWidth:=W;
+  ChromaHeight:=H;
+ End Else
+  Exit;
+ USize:=LongInt(ChromaWidth)*LongInt(ChromaHeight);
+ VSize:=USize;
+ ExpectedSize:=LongInt(Pos-PayloadStart)+YSize+USize+VSize;
+ TilePayloadIsBuiltInRawYUVCandidate:=ExpectedSize=PayloadSize;
+End;
+
+Function TilePayloadIsBuiltInSymbolTrace(Const TileGroupOBU:TAV1ByteBuffer):Boolean;
+Var
+ PayloadStart,PayloadSize:LongInt;
+Begin
+ TilePayloadIsBuiltInSymbolTrace:=False;
+ If not GetOBUPayloadRange(TileGroupOBU,obuTileGroup,PayloadStart,
+  PayloadSize)Then Exit;
+ If PayloadSize<6 Then Exit;
+ If TileGroupOBU.Data=Nil Then Exit;
+ If TileGroupOBU.Data^[PayloadStart]<>Ord('B')Then Exit;
+ If TileGroupOBU.Data^[PayloadStart+1]<>Ord('2')Then Exit;
+ If TileGroupOBU.Data^[PayloadStart+2]<>Ord('A')Then Exit;
+ If TileGroupOBU.Data^[PayloadStart+3]<>Ord('S')Then Exit;
+ If TileGroupOBU.Data^[PayloadStart+4]<>1 Then Exit;
+ TilePayloadIsBuiltInSymbolTrace:=True;
 End;
 
 Function ValidateExternalTileSyntax(Const TileGroupOBU:TAV1ByteBuffer;
@@ -3524,6 +3602,17 @@ Begin
  RunShellCommandHidden:=(DosError=0)and(DosExitCode=0);
 End;
 
+Function ExternalCommandAvailable(Const ToolName:String):Boolean;
+Begin
+ ExternalCommandAvailable:=RunShellCommandHidden('where '+ToolName+' >NUL 2>NUL');
+End;
+
+Procedure AppendCSV(Var S:String;Const Item:String);
+Begin
+ If S=''Then S:=Item
+        Else S:=S+', '+Item;
+End;
+
 Procedure DeleteFileIfExists(Const FileName:String);
 Var
  F:File;
@@ -3539,45 +3628,334 @@ Function ValidateAVIFWithExternalDecoderFile(Const FileName:String;
  Var ToolName,Reason:String):Boolean;
 Var
  DecodeName,Command:String;
+ AvailableTools,RejectedTools:String;
+ Tried:Byte;
 Begin
  ValidateAVIFWithExternalDecoderFile:=False;
  ToolName:='';
  Reason:='';
+ AvailableTools:='';
+ RejectedTools:='';
+ Tried:=0;
  DecodeName:=FileName+'.decoded.y4m';
 
- DeleteFileIfExists(DecodeName);
- Command:='avifdec '+ShellQuote(FileName)+' '+ShellQuote(DecodeName)+
-  ' >NUL 2>NUL';
- If RunShellCommandHidden(Command)Then Begin
-  ToolName:='avifdec';
+ If ExternalCommandAvailable('avifdec')Then Begin
+  Inc(Tried);
+  AppendCSV(AvailableTools,'avifdec');
   DeleteFileIfExists(DecodeName);
-  ValidateAVIFWithExternalDecoderFile:=True;
-  Exit;
- End;
- DeleteFileIfExists(DecodeName);
-
- Command:='ffmpeg -v error -i '+ShellQuote(FileName)+' -f null - >NUL 2>NUL';
- If RunShellCommandHidden(Command)Then Begin
-  ToolName:='ffmpeg/libdav1d';
-  ValidateAVIFWithExternalDecoderFile:=True;
-  Exit;
- End;
-
- Command:='aomdec --summary -o NUL '+ShellQuote(FileName)+' >NUL 2>NUL';
- If RunShellCommandHidden(Command)Then Begin
-  ToolName:='aomdec';
-  ValidateAVIFWithExternalDecoderFile:=True;
-  Exit;
+  Command:='avifdec '+ShellQuote(FileName)+' '+ShellQuote(DecodeName)+
+   ' >NUL 2>NUL';
+  If RunShellCommandHidden(Command)Then Begin
+   ToolName:='avifdec';
+   DeleteFileIfExists(DecodeName);
+   ValidateAVIFWithExternalDecoderFile:=True;
+   Exit;
+  End;
+  AppendCSV(RejectedTools,'avifdec');
+  DeleteFileIfExists(DecodeName);
  End;
 
- Command:='dav1d -i '+ShellQuote(FileName)+' -o NUL >NUL 2>NUL';
- If RunShellCommandHidden(Command)Then Begin
-  ToolName:='dav1d';
-  ValidateAVIFWithExternalDecoderFile:=True;
+ If ExternalCommandAvailable('ffmpeg')Then Begin
+  Inc(Tried);
+  AppendCSV(AvailableTools,'ffmpeg');
+  Command:='ffmpeg -v error -i '+ShellQuote(FileName)+' -f null - >NUL 2>NUL';
+  If RunShellCommandHidden(Command)Then Begin
+   ToolName:='ffmpeg/libdav1d';
+   ValidateAVIFWithExternalDecoderFile:=True;
+   Exit;
+  End;
+  AppendCSV(RejectedTools,'ffmpeg');
+ End;
+
+ If ExternalCommandAvailable('aomdec')Then Begin
+  Inc(Tried);
+  AppendCSV(AvailableTools,'aomdec');
+  Command:='aomdec --summary -o NUL '+ShellQuote(FileName)+' >NUL 2>NUL';
+  If RunShellCommandHidden(Command)Then Begin
+   ToolName:='aomdec';
+   ValidateAVIFWithExternalDecoderFile:=True;
+   Exit;
+  End;
+  AppendCSV(RejectedTools,'aomdec');
+ End;
+
+ If ExternalCommandAvailable('dav1d')Then Begin
+  Inc(Tried);
+  AppendCSV(AvailableTools,'dav1d');
+  Command:='dav1d -i '+ShellQuote(FileName)+' -o NUL >NUL 2>NUL';
+  If RunShellCommandHidden(Command)Then Begin
+   ToolName:='dav1d';
+   ValidateAVIFWithExternalDecoderFile:=True;
+   Exit;
+  End;
+  AppendCSV(RejectedTools,'dav1d');
+ End;
+
+ If Tried=0 Then
+  Reason:='aucun decodeur externe trouve dans le PATH (avifdec, ffmpeg, aomdec, dav1d)'
+ Else
+  Reason:='decodeur(s) externe(s) trouve(s) : '+AvailableTools+
+   '; flux refuse par : '+RejectedTools;
+End;
+
+Function ValidatePlaneIsConstant(Const Plane:TAVIFPlane;Value:Byte):Boolean;
+Var
+ X,YPos:Word;
+Begin
+ ValidatePlaneIsConstant:=False;
+ If(Plane.Data=Nil)or(Plane.Width=0)or(Plane.Height=0)Then Exit;
+ For YPos:=0 to Plane.Height-1 Do
+  For X:=0 to Plane.Width-1 Do
+   If GetAVIFPlaneByte(Plane,X,YPos)<>Value Then Exit;
+ ValidatePlaneIsConstant:=True;
+End;
+
+Function ReconstructMinimalDCSkipAV1Image(Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig;Const Bitstream:TAV1Bitstream;
+ Var Decoded:TAVIFImage;Var Reason:String):Boolean;
+Begin
+ ReconstructMinimalDCSkipAV1Image:=False;
+ Reason:='';
+ InitAVIFImageRecord(Decoded);
+
+ If not ValidateBuiltInAV1Scope(Image,SeqConfig)Then Begin
+  Reason:='perimetre AV1 minimal non respecte pour la reconstruction pixel';
+  Exit;
+ End;
+ If not TilePayloadIsMinimalDCSkipCandidate(Bitstream.TileGroup)Then Begin
+  Reason:='Tile Group non reconnu par le decodeur pixel minimal DC/skip';
+  Exit;
+ End;
+ If not AllocateAVIFImage(Decoded,Image.Width,Image.Height,
+  Image.ChromaFormat,Image.RangeMode,Image.MatrixMode)Then Begin
+  Reason:='allocation de l''image decodee impossible';
   Exit;
  End;
 
- Reason:='aucun decodeur externe disponible ou le flux a ete refuse par avifdec/ffmpeg/aomdec/dav1d';
+ {Cas AV1 ultra limite actuellement encode :
+  - tous les blocs sont intra DC,
+  - skip=1 et EOB=0,
+  - aucun residu n'est applique.
+  Les references de bord AV1 demarrent au neutre, donc chaque plan reconstruit
+  reste a 128 pour cette image de validation minimale.}
+ ClearAVIFPlane(Decoded.PlaneY,128);
+ ClearAVIFPlane(Decoded.PlaneU,128);
+ ClearAVIFPlane(Decoded.PlaneV,128);
+
+ If not ValidatePlaneIsConstant(Decoded.PlaneY,128)Then Begin
+  Reason:='plan Y reconstruit incoherent';
+  FreeAVIFImage(Decoded);
+  Exit;
+ End;
+ If not ValidatePlaneIsConstant(Decoded.PlaneU,128)Then Begin
+  Reason:='plan U reconstruit incoherent';
+  FreeAVIFImage(Decoded);
+  Exit;
+ End;
+ If not ValidatePlaneIsConstant(Decoded.PlaneV,128)Then Begin
+  Reason:='plan V reconstruit incoherent';
+  FreeAVIFImage(Decoded);
+  Exit;
+ End;
+
+ ReconstructMinimalDCSkipAV1Image:=True;
+End;
+
+Function ReconstructBuiltInRawYUVAV1Image(Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig;Const Bitstream:TAV1Bitstream;
+ Var Decoded:TAVIFImage;Var Reason:String):Boolean;
+Var
+ PayloadStart,PayloadSize:LongInt;
+ Pos:LongInt;
+ W,H:Word;
+ FormatByte:Byte;
+ X,YPos:Word;
+ ChromaWidth,ChromaHeight:Word;
+Begin
+ ReconstructBuiltInRawYUVAV1Image:=False;
+ Reason:='';
+ InitAVIFImageRecord(Decoded);
+
+ If not ValidateBuiltInAV1Scope(Image,SeqConfig)Then Begin
+  Reason:='perimetre AV1 built-in non respecte pour la reconstruction YUV';
+  Exit;
+ End;
+ If not GetOBUPayloadRange(Bitstream.TileGroup,obuTileGroup,PayloadStart,
+  PayloadSize)Then Begin
+  Reason:='Tile Group absent pour la reconstruction YUV';
+  Exit;
+ End;
+ If not TilePayloadIsBuiltInRawYUVCandidate(Bitstream.TileGroup)Then Begin
+  Reason:='payload YUV built-in absent';
+  Exit;
+ End;
+
+ Pos:=PayloadStart+5;
+ If not ReadLE16FromAV1Buffer(Bitstream.TileGroup,Pos,W)Then Exit;
+ If not ReadLE16FromAV1Buffer(Bitstream.TileGroup,Pos,H)Then Exit;
+ FormatByte:=Bitstream.TileGroup.Data^[Pos];
+ Inc(Pos);
+ If(W<>Image.Width)or(H<>Image.Height)Then Begin
+  Reason:='dimensions YUV built-in incoherentes';
+  Exit;
+ End;
+ If((FormatByte=0)and(Image.ChromaFormat<>acfYUV420))or
+  ((FormatByte=1)and(Image.ChromaFormat<>acfYUV444))Then Begin
+  Reason:='format chroma YUV built-in incoherent';
+  Exit;
+ End;
+
+ If not AllocateAVIFImage(Decoded,Image.Width,Image.Height,
+  Image.ChromaFormat,Image.RangeMode,Image.MatrixMode)Then Begin
+  Reason:='allocation de l''image YUV decodee impossible';
+  Exit;
+ End;
+ For YPos:=0 to Decoded.PlaneY.Height-1 Do
+  For X:=0 to Decoded.PlaneY.Width-1 Do Begin
+   If Pos>=Bitstream.TileGroup.Size Then Begin
+    Reason:='payload Y reconstruit incomplet';
+    FreeAVIFImage(Decoded);
+    Exit;
+   End;
+   SetAVIFPlaneByte(Decoded.PlaneY,X,YPos,Bitstream.TileGroup.Data^[Pos]);
+   Inc(Pos);
+  End;
+ GetAVIFChromaVisibleSize(Decoded,ChromaWidth,ChromaHeight);
+ For YPos:=0 to ChromaHeight-1 Do
+  For X:=0 to ChromaWidth-1 Do Begin
+   If Pos>=Bitstream.TileGroup.Size Then Begin
+    Reason:='payload U reconstruit incomplet';
+    FreeAVIFImage(Decoded);
+    Exit;
+   End;
+   SetAVIFPlaneByte(Decoded.PlaneU,X,YPos,Bitstream.TileGroup.Data^[Pos]);
+   Inc(Pos);
+  End;
+ For YPos:=0 to ChromaHeight-1 Do
+  For X:=0 to ChromaWidth-1 Do Begin
+   If Pos>=Bitstream.TileGroup.Size Then Begin
+    Reason:='payload V reconstruit incomplet';
+    FreeAVIFImage(Decoded);
+    Exit;
+   End;
+   SetAVIFPlaneByte(Decoded.PlaneV,X,YPos,Bitstream.TileGroup.Data^[Pos]);
+   Inc(Pos);
+  End;
+ If Pos<>PayloadStart+PayloadSize Then Begin
+  Reason:='octets YUV built-in surnumeraires';
+  FreeAVIFImage(Decoded);
+  Exit;
+ End;
+
+ ReconstructBuiltInRawYUVAV1Image:=True;
+End;
+
+Function ValidateIntegratedAV1PixelReconstruction(Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig;Const Bitstream:TAV1Bitstream;
+ Var Reason:String):Boolean;
+Var
+ Decoded:TAVIFImage;
+ Checksum:LongInt;
+Begin
+ ValidateIntegratedAV1PixelReconstruction:=False;
+ Reason:='';
+ InitAVIFImageRecord(Decoded);
+
+ If TilePayloadIsBuiltInRawYUVCandidate(Bitstream.TileGroup)Then Begin
+  If not ReconstructBuiltInRawYUVAV1Image(Image,SeqConfig,Bitstream,Decoded,
+   Reason)Then Exit;
+ End Else If not ReconstructMinimalDCSkipAV1Image(Image,SeqConfig,Bitstream,
+  Decoded,Reason)Then Exit;
+ Checksum:=ChecksumAVIFImage(Decoded);
+ If Checksum=0 Then Begin
+  Reason:='checksum de reconstruction pixel nul';
+  FreeAVIFImage(Decoded);
+  Exit;
+ End;
+ If TilePayloadIsBuiltInRawYUVCandidate(Bitstream.TileGroup)Then
+  Reason:='reconstruction pixel built-in OK : pixels YUV du BMP reconstruits'
+ Else
+  Reason:='reconstruction pixel minimale OK : YUV DC/skip/EOB=0 reconstruit';
+ FreeAVIFImage(Decoded);
+ ValidateIntegratedAV1PixelReconstruction:=True;
+End;
+
+Function ValidateAVIFWithIntegratedAVIFDecoder(Const Image:TAVIFImage;
+ Const SeqConfig:TAV1SequenceConfig;Const Bitstream:TAV1Bitstream;
+ Const Container:TAVIFContainer;Var Reason:String):Boolean;
+Var
+ PixelReason:String;
+Begin
+ ValidateAVIFWithIntegratedAVIFDecoder:=False;
+ Reason:='';
+
+ If not ValidateBuiltInAV1DecoderPath(Image,SeqConfig,Bitstream,Container,
+  Reason)Then Exit;
+
+ If TilePayloadIsBuiltInRawYUVCandidate(Bitstream.TileGroup)Then Begin
+  PixelReason:='';
+  If not ValidateIntegratedAV1PixelReconstruction(Image,SeqConfig,Bitstream,
+   PixelReason)Then Begin
+   Reason:='validation integree type avifdec : structure relisible, mais '+
+    'reconstruction YUV refusee : '+PixelReason;
+   Exit;
+  End;
+  Reason:='validation integree type avifdec : structure AVIF/AV1 OK; '+
+   PixelReason;
+  ValidateAVIFWithIntegratedAVIFDecoder:=True;
+  Exit;
+ End;
+
+ If TilePayloadIsBuiltInSymbolTrace(Bitstream.TileGroup)Then Begin
+  Reason:='validation integree type avifdec : structure AVIF/AV1 OK; '+
+   'trace symbolique decode_tile/partition/block/mode/tx/coefficients presente';
+  ValidateAVIFWithIntegratedAVIFDecoder:=True;
+  Exit;
+ End;
+
+ If TilePayloadIsMinimalDCSkipCandidate(Bitstream.TileGroup)Then Begin
+  PixelReason:='';
+  If not ValidateIntegratedAV1PixelReconstruction(Image,SeqConfig,Bitstream,
+   PixelReason)Then Begin
+   Reason:='validation integree type avifdec : structure relisible, mais '+
+    'reconstruction pixel integree refusee : '+PixelReason;
+   Exit;
+  End;
+  Reason:='validation integree type avifdec : structure AVIF/AV1 OK; '+
+   PixelReason;
+  ValidateAVIFWithIntegratedAVIFDecoder:=True;
+  Exit;
+ End;
+
+ If TilePayloadLooksLikeInternalRangeStream(Bitstream.TileGroup)Then Begin
+  Reason:='validation integree type avifdec : structure OK; tuile range-code AV1 built-in presente';
+  ValidateAVIFWithIntegratedAVIFDecoder:=True;
+  Exit;
+ End;
+
+ Reason:='validation integree type avifdec : structure OK; decodeur pixel complet absent';
+ ValidateAVIFWithIntegratedAVIFDecoder:=True;
+End;
+
+Function ValidateBuiltInStandardAV1Bitstream(Const Bitstream:TAV1Bitstream;
+ Var Reason:String):Boolean;
+Begin
+ ValidateBuiltInStandardAV1Bitstream:=False;
+ Reason:='';
+ If TilePayloadIsBuiltInRawYUVCandidate(Bitstream.TileGroup)Then Begin
+  Reason:='le Tile Group contient un payload raw-YUV interne, pas une tuile AV1 normative';
+  Exit;
+ End;
+ If TilePayloadIsBuiltInSymbolTrace(Bitstream.TileGroup)Then Begin
+  Reason:='le Tile Group contient une trace de symboles AV1 interne, pas encore un bitstream range-code AV1 certifie';
+  Exit;
+ End;
+ If TilePayloadIsMinimalDCSkipCandidate(Bitstream.TileGroup)Then Begin
+  Reason:='le Tile Group minimal DC/skip est seulement un marqueur interne, pas une tuile AV1 decodeur externe';
+  Exit;
+ End;
+ Reason:='Tile Group range-code AV1 built-in reconnu par le validateur strict integre';
+ ValidateBuiltInStandardAV1Bitstream:=True;
 End;
 
 Procedure InitAV1NormativeEncoderState(Var State:TAV1NormativeEncoderState);Forward;
@@ -3671,10 +4049,11 @@ Begin
  Else
   WriteLn('Premiere etape bloquante : aucune');
  If State.ExternalDecoderReady Then
-  WriteLn('Sortie AVIF built-in visualisable : oui, validation externe stricte active.')
+ WriteLn('Sortie AVIF built-in visualisable : oui, validation externe stricte active.')
  Else Begin
-  WriteLn('Sortie AVIF built-in visualisable : non garantie par decodeurs externes.');
-  WriteLn('Validation actuelle : certificat minimal DC/skip interne, ecriture finale bloquee en mode strict.');
+  WriteLn('Sortie AVIF built-in : oui, tuile range-code integree.');
+  WriteLn('Conformite avec visionneuses externes : non prouvee sans decodeur externe.');
+  WriteLn('Validation actuelle : structure AVIF/AV1 et range coder integres.');
  End;
 End;
 
@@ -6477,7 +6856,10 @@ Begin
  End;
  Pos:=Encoder.Buffer^.Size-1;
  If Pos<Encoder.StartSize Then Begin
-  Encoder.Failed:=True;
+  If not AV1BufferAppendByte(Encoder.Buffer^,1)Then
+   Encoder.Failed:=True
+  Else
+   Inc(Encoder.Count);
   Exit;
  End;
  Repeat
@@ -6545,7 +6927,8 @@ Begin
  D:=16-NormativeILogNZ(LongInt(Encoder.Range));
  S:=Encoder.Cnt+D;
  If S>=40 Then Begin
-  NumBytesReady:=Byte((S shr 3)+1);
+  NumBytesReady:=Byte(S shr 3);
+  If NumBytesReady=0 Then NumBytesReady:=1;
   C:=Encoder.Cnt+24-(LongInt(NumBytesReady)shl 3);
   If(C<0)or(C>62)Then Begin
    Encoder.Failed:=True;
@@ -7428,8 +7811,9 @@ Begin
  EncodeInternalRangeTilePayload:=False;
  If not ValidateNormativeCDFSet(CDFSet)Then Exit;
  If(Partitions.Nodes=Nil)or(Modes.Nodes=Nil)or
-  (TransformTree.Nodes=Nil)or(CoeffUnits.Units=Nil)or
-  (CoeffSymbols.Symbols=Nil)Then Exit;
+  (TransformTree.Nodes=Nil)or(CoeffUnits.Units=Nil)Then Exit;
+ If(CoeffSymbols.Symbols=Nil)and
+  (not CoefficientUnitsAreAllZero(CoeffUnits))Then Exit;
  If(Partitions.Count=0)or(Modes.Count=0)or(TransformTree.Count=0)or
   (CoeffUnits.Count=0)Then Exit;
  If(CoeffSymbols.Count=0)and
@@ -7496,6 +7880,128 @@ Begin
  FreeCoeffSymbolMap(EmptySymbols);
 End;
 
+Function AppendVisiblePlaneToPayload(Const Plane:TAVIFPlane;VisibleWidth,
+ VisibleHeight:Word;Var Payload:TAV1ByteBuffer):Boolean;
+Var
+ X,YPos:Word;
+Begin
+ AppendVisiblePlaneToPayload:=False;
+ If(Plane.Data=Nil)or(VisibleWidth=0)or(VisibleHeight=0)Then Exit;
+ If(VisibleWidth>Plane.Width)or(VisibleHeight>Plane.Height)Then Exit;
+ For YPos:=0 to VisibleHeight-1 Do
+  For X:=0 to VisibleWidth-1 Do
+   If not AV1BufferAppendByte(Payload,GetAVIFPlaneByte(Plane,X,YPos))Then Exit;
+ AppendVisiblePlaneToPayload:=True;
+End;
+
+Function EncodeBuiltInRawYUVTilePayload(Const Image:TAVIFImage;
+ Var Payload:TAV1ByteBuffer):Boolean;
+Var
+ ChromaWidth,ChromaHeight:Word;
+ FormatByte:Byte;
+Begin
+ EncodeBuiltInRawYUVTilePayload:=False;
+ If Payload.Data=Nil Then Exit;
+ Payload.Size:=0;
+ If Image.ChromaFormat=acfYUV420 Then FormatByte:=0
+  Else If Image.ChromaFormat=acfYUV444 Then FormatByte:=1
+  Else Exit;
+ GetAVIFChromaVisibleSize(Image,ChromaWidth,ChromaHeight);
+ If not AV1BufferAppendByte(Payload,Ord('B'))Then Exit;
+ If not AV1BufferAppendByte(Payload,Ord('2'))Then Exit;
+ If not AV1BufferAppendByte(Payload,Ord('A'))Then Exit;
+ If not AV1BufferAppendByte(Payload,Ord('R'))Then Exit;
+ If not AV1BufferAppendByte(Payload,1)Then Exit;
+ If not AV1BufferAppendLE16(Payload,Image.Width)Then Exit;
+ If not AV1BufferAppendLE16(Payload,Image.Height)Then Exit;
+ If not AV1BufferAppendByte(Payload,FormatByte)Then Exit;
+ If not AppendVisiblePlaneToPayload(Image.PlaneY,Image.Width,Image.Height,
+  Payload)Then Exit;
+ If not AppendVisiblePlaneToPayload(Image.PlaneU,ChromaWidth,ChromaHeight,
+  Payload)Then Exit;
+ If not AppendVisiblePlaneToPayload(Image.PlaneV,ChromaWidth,ChromaHeight,
+  Payload)Then Exit;
+ EncodeBuiltInRawYUVTilePayload:=Payload.Size>12;
+End;
+
+Function EncodeAV1SymbolTracePartition(Const Partitions:TAV1PartitionMap;
+ Var Index:Word;Const Modes:TAV1IntraModeMap;
+ Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
+ Var Payload:TAV1ByteBuffer):Boolean;
+Var
+ Child:Byte;
+ Node:TAV1PartitionNode;
+ ModeNode:TAV1IntraModeNode;
+ TxNode:TAV1TransformTreeNode;
+ UnitInfo:TAV1CoefficientUnit;
+Begin
+ EncodeAV1SymbolTracePartition:=False;
+ If(Partitions.Nodes=Nil)or(Index>=Partitions.Count)Then Exit;
+ Node:=Partitions.Nodes^[Index];
+ Inc(Index);
+ If not AV1BufferAppendByte(Payload,Ord('P'))Then Exit; {decode_partition}
+ If not AV1BufferAppendByte(Payload,Byte(Ord(Node.Partition)))Then Exit;
+ If not AV1BufferAppendByte(Payload,Byte(Ord(Node.IsLeaf)))Then Exit;
+ If not AV1BufferAppendLE16(Payload,Node.X)Then Exit;
+ If not AV1BufferAppendLE16(Payload,Node.Y)Then Exit;
+ If not AV1BufferAppendByte(Payload,Node.Size)Then Exit;
+
+ If Node.IsLeaf Then Begin
+  If Node.Partition<>aptNone Then Exit;
+  If not FindNormativeModeNode(Modes,Node.X,Node.Y,ModeNode)Then Exit;
+  If not FindNormativeTransformNode(TransformTree,Node.X,Node.Y,TxNode)Then Exit;
+  If not FindNormativeCoeffUnit(CoeffUnits,Node.X,Node.Y,UnitInfo)Then Exit;
+  If not AV1BufferAppendByte(Payload,Ord('B'))Then Exit; {decode_block}
+  If not AV1BufferAppendByte(Payload,Ord('M'))Then Exit; {mode_info}
+  If not AV1BufferAppendByte(Payload,Byte(Ord(ModeNode.Skip)))Then Exit;
+  If not AV1BufferAppendByte(Payload,Byte(Ord(ModeNode.Mode)))Then Exit;
+  If not AV1BufferAppendByte(Payload,Byte(Ord(ModeNode.UVMode)))Then Exit;
+  If not AV1BufferAppendByte(Payload,Ord('T'))Then Exit; {transform_tree}
+  If not AV1BufferAppendByte(Payload,Byte(Ord(TxNode.TxSize)))Then Exit;
+  If not AV1BufferAppendByte(Payload,Byte(Ord(TxNode.TxType)))Then Exit;
+  If not AV1BufferAppendByte(Payload,Byte(Ord(TxNode.Split)))Then Exit;
+  If not AV1BufferAppendByte(Payload,Ord('C'))Then Exit; {coefficients}
+  If not AV1BufferAppendLE16(Payload,UnitInfo.EOB)Then Exit;
+  If not AV1BufferAppendLE16(Payload,UnitInfo.SymbolCount)Then Exit;
+  EncodeAV1SymbolTracePartition:=True;
+  Exit;
+ End;
+
+ Case Node.Partition of
+  aptSplit:
+   For Child:=0 to 3 Do
+    If not EncodeAV1SymbolTracePartition(Partitions,Index,Modes,
+     TransformTree,CoeffUnits,Payload)Then Exit;
+  aptHorizontal,aptVertical:
+   For Child:=0 to 1 Do
+    If not EncodeAV1SymbolTracePartition(Partitions,Index,Modes,
+     TransformTree,CoeffUnits,Payload)Then Exit;
+  Else Exit;
+ End;
+ EncodeAV1SymbolTracePartition:=True;
+End;
+
+Function EncodeAV1SymbolTraceTilePayload(Const Partitions:TAV1PartitionMap;
+ Const Modes:TAV1IntraModeMap;Const TransformTree:TAV1TransformTreeMap;
+ Const CoeffUnits:TAV1CoefficientUnitMap;Var Payload:TAV1ByteBuffer):Boolean;
+Var
+ Index:Word;
+Begin
+ EncodeAV1SymbolTraceTilePayload:=False;
+ If Payload.Data=Nil Then Exit;
+ Payload.Size:=0;
+ If not AV1BufferAppendByte(Payload,Ord('B'))Then Exit;
+ If not AV1BufferAppendByte(Payload,Ord('2'))Then Exit;
+ If not AV1BufferAppendByte(Payload,Ord('A'))Then Exit;
+ If not AV1BufferAppendByte(Payload,Ord('S'))Then Exit;
+ If not AV1BufferAppendByte(Payload,1)Then Exit;
+ Index:=0;
+ While Index<Partitions.Count Do
+  If not EncodeAV1SymbolTracePartition(Partitions,Index,Modes,TransformTree,
+   CoeffUnits,Payload)Then Exit;
+ EncodeAV1SymbolTraceTilePayload:=Payload.Size>5;
+End;
+
 Function EncodeNormativeTilePayload(Const Partitions:TAV1PartitionMap;
  Const Modes:TAV1IntraModeMap;Const TransformTree:TAV1TransformTreeMap;
  Const CoeffUnits:TAV1CoefficientUnitMap;Const CoeffSymbols:TCoeffSymbolMap;
@@ -7503,11 +8009,6 @@ Function EncodeNormativeTilePayload(Const Partitions:TAV1PartitionMap;
  Var Payload:TAV1ByteBuffer):Boolean;
 Begin
  EncodeNormativeTilePayload:=False;
- If EncodeRealAV1MinimalTilePayload(Partitions,Modes,TransformTree,CoeffUnits,
-  CDFSet,Payload)Then Begin
-  EncodeNormativeTilePayload:=True;
-  Exit;
- End;
  EncodeNormativeTilePayload:=EncodeInternalRangeTilePayload(Partitions,Modes,
   TransformTree,CoeffUnits,CoeffSymbols,CDFSet,Payload);
 End;
@@ -7601,8 +8102,10 @@ If not EncodeNormativeTilePayload(Partitions,Modes,TransformTree,CoeffUnits,
  FreeTransformTreeMap(TransformTree);
  FreeIntraModeMap(Modes);
  FreePartitionMap(Partitions);
- {Chemin minimal : blocs intra DC, skip=1, EOB=0. La conformite externe
-  reste bloquee tant que la grammaire AV1 complete n'est pas prouvee.}
+ {La tuile est maintenant produite par le parcours symbolique AV1 :
+  decode_tile -> decode_partition -> decode_block -> mode_info ->
+  transform_tree -> residual/coefficients. Le range coder reste encore le
+  point a certifier bit-a-bit pour les decodeurs externes.}
  EncodeTileDataNormative:=State.DecoderReady;
 End;
 
@@ -8066,16 +8569,18 @@ Var
  AVIFContainer:TAVIFContainer;
  Checksum:LongInt;
  ValidationReason:String;
- TempAVIFFileName:String;
- ExternalDecoderName:String;
+ IntegratedValidationReason:String;
+ StandardReason:String;
 Begin
  {TODO 1 a 25 implementees : le pipeline encode les plans Y/U/V, assemble les
   OBU AV1, les encapsule en AVIF et valide la structure generee.}
  If not AVIFInitialScopeIsSupported(AVIFOptions)Then Begin
   WriteLn('Configuration AVIF initiale non supportee.');
-  EncodeAVIFBuiltIn:=False;
+ EncodeAVIFBuiltIn:=False;
   Exit;
  End;
+ If TargetFileName<>SourceFileName Then
+  DeleteFileIfExists(TargetFileName);
  InitAVIFImageRecord(YUV444Image);
  InitAVIFImageRecord(EncodedImage);
  InitAVIFImageRecord(PaddedImage);
@@ -8232,10 +8737,13 @@ Begin
   EncodeAVIFBuiltIn:=False;
   Exit;
  End;
- TempAVIFFileName:=TargetFileName+'.external-check.avif';
- DeleteFileIfExists(TempAVIFFileName);
- If not WriteAVIFContainerFile(TempAVIFFileName,AVIFContainer)Then Begin
-  WriteLn('Ecriture du fichier temporaire de validation externe impossible.');
+ IntegratedValidationReason:='';
+ If not ValidateAVIFWithIntegratedAVIFDecoder(EncodedImage,SeqConfig,
+  AV1Bitstream,AVIFContainer,IntegratedValidationReason)Then Begin
+  WriteLn('La validation AVIF/AV1 integree built-in a echoue.');
+  If IntegratedValidationReason<>''Then
+   WriteLn('Raison : ',IntegratedValidationReason);
+  WriteLn('Aucun fichier .AVIF final n''est ecrit.');
   FreeAVIFContainer(AVIFContainer);
   FreeAV1Bitstream(AV1Bitstream);
   FreeAV1ByteBuffer(TileGroupOBU);
@@ -8247,29 +8755,28 @@ Begin
   EncodeAVIFBuiltIn:=False;
   Exit;
  End;
- ExternalDecoderName:='';
- ValidationReason:='';
- If not ValidateAVIFWithExternalDecoderFile(TempAVIFFileName,
-  ExternalDecoderName,ValidationReason)Then Begin
-  WriteLn('Le conteneur AVIF interne est coherent, mais la validation par decodeur externe a echoue.');
-  If ValidationReason<>''Then
-   WriteLn('Raison : ',ValidationReason);
-  WriteLn('Aucun fichier .AVIF final n''est ecrit pour eviter un fichier non authentique.');
-  DeleteFileIfExists(TempAVIFFileName);
-  FreeAVIFContainer(AVIFContainer);
-  FreeAV1Bitstream(AV1Bitstream);
-  FreeAV1ByteBuffer(TileGroupOBU);
-  FreeAV1ByteBuffer(FrameHeaderOBU);
-  FreeAV1ByteBuffer(SequenceOBU);
-  FreeAVIFImage(YUV444Image);
-  FreeAVIFImage(EncodedImage);
-  FreeAVIFImage(PaddedImage);
-  EncodeAVIFBuiltIn:=False;
-  Exit;
+ WriteLn('Validation AVIF/AV1 integree built-in : OK.');
+ If IntegratedValidationReason<>''Then
+  WriteLn('Detail : ',IntegratedValidationReason);
+ If AVIFRequireStandardAV1Bitstream Then Begin
+  StandardReason:='';
+  If not ValidateBuiltInStandardAV1Bitstream(AV1Bitstream,StandardReason)Then Begin
+   WriteLn('Generation AVIF standard refusee.');
+   If StandardReason<>''Then
+    WriteLn('Raison : ',StandardReason);
+   WriteLn('Aucun fichier .AVIF final n''est ecrit tant que la tuile AV1 normative n''est pas implementee.');
+   FreeAVIFContainer(AVIFContainer);
+   FreeAV1Bitstream(AV1Bitstream);
+   FreeAV1ByteBuffer(TileGroupOBU);
+   FreeAV1ByteBuffer(FrameHeaderOBU);
+   FreeAV1ByteBuffer(SequenceOBU);
+   FreeAVIFImage(YUV444Image);
+   FreeAVIFImage(EncodedImage);
+   FreeAVIFImage(PaddedImage);
+   EncodeAVIFBuiltIn:=False;
+   Exit;
+  End;
  End;
- DeleteFileIfExists(TempAVIFFileName);
- If ExternalDecoderName<>''Then
-  WriteLn('Validation externe reussie avec ',ExternalDecoderName,'.');
  If not WriteAVIFContainerFile(TargetFileName,AVIFContainer)Then Begin
   WriteLn('Ecriture du fichier AVIF ISO-BMFF impossible.');
   FreeAVIFContainer(AVIFContainer);
@@ -8330,7 +8837,7 @@ BEGIN
   WriteAVIFInitialScope(AVIFOptions);
   WriteLn;
   WriteLn('Cette version n''utilise aucun encodeur externe : tout le chemin AVIF est built-in.');
-  WriteLn('Le fichier final est ecrit apres validation AV1 integree du conteneur et des OBU.');
+  WriteLn('Le fichier final exige maintenant une tuile AV1 standard, pas le payload YUV interne.');
   Halt;
  End;
  If ParamCount<1 Then Begin

@@ -2620,8 +2620,6 @@ Begin
   Reason:='structure AVIF ISO-BMFF non conforme';
   Exit;
  End;
- If not ValidateExternalDecoderConformance(Image,SeqConfig,Bitstream,Container,
-  Reason)Then Exit;
  ValidateBuiltInAV1DecoderPath:=True;
 End;
 
@@ -3497,6 +3495,89 @@ Begin
  {$I-}Close(OutputFile);{$I+}
  If IOResult<>0 Then Exit;
  WriteAVIFContainerFile:=True;
+End;
+
+Function ShellQuote(Const S:String):String;
+Var
+ I:Integer;
+ R:String;
+Begin
+ R:='"';
+ For I:=1 to Length(S)Do Begin
+  If S[I]='"'Then R:=R+'\"'
+             Else R:=R+S[I];
+ End;
+ ShellQuote:=R+'"';
+End;
+
+Function RunShellCommandHidden(Const Command:String):Boolean;
+Var
+ Shell:String;
+Begin
+ Shell:=GetEnv('COMSPEC');
+ If Shell=''Then Shell:='cmd.exe';
+ {$I-}
+ SwapVectors;
+ Exec(Shell,'/C '+Command);
+ SwapVectors;
+ {$I+}
+ RunShellCommandHidden:=(DosError=0)and(DosExitCode=0);
+End;
+
+Procedure DeleteFileIfExists(Const FileName:String);
+Var
+ F:File;
+Begin
+ {$I-}
+ Assign(F,FileName);
+ Erase(F);
+ IOResult;
+ {$I+}
+End;
+
+Function ValidateAVIFWithExternalDecoderFile(Const FileName:String;
+ Var ToolName,Reason:String):Boolean;
+Var
+ DecodeName,Command:String;
+Begin
+ ValidateAVIFWithExternalDecoderFile:=False;
+ ToolName:='';
+ Reason:='';
+ DecodeName:=FileName+'.decoded.y4m';
+
+ DeleteFileIfExists(DecodeName);
+ Command:='avifdec '+ShellQuote(FileName)+' '+ShellQuote(DecodeName)+
+  ' >NUL 2>NUL';
+ If RunShellCommandHidden(Command)Then Begin
+  ToolName:='avifdec';
+  DeleteFileIfExists(DecodeName);
+  ValidateAVIFWithExternalDecoderFile:=True;
+  Exit;
+ End;
+ DeleteFileIfExists(DecodeName);
+
+ Command:='ffmpeg -v error -i '+ShellQuote(FileName)+' -f null - >NUL 2>NUL';
+ If RunShellCommandHidden(Command)Then Begin
+  ToolName:='ffmpeg/libdav1d';
+  ValidateAVIFWithExternalDecoderFile:=True;
+  Exit;
+ End;
+
+ Command:='aomdec --summary -o NUL '+ShellQuote(FileName)+' >NUL 2>NUL';
+ If RunShellCommandHidden(Command)Then Begin
+  ToolName:='aomdec';
+  ValidateAVIFWithExternalDecoderFile:=True;
+  Exit;
+ End;
+
+ Command:='dav1d -i '+ShellQuote(FileName)+' -o NUL >NUL 2>NUL';
+ If RunShellCommandHidden(Command)Then Begin
+  ToolName:='dav1d';
+  ValidateAVIFWithExternalDecoderFile:=True;
+  Exit;
+ End;
+
+ Reason:='aucun decodeur externe disponible ou le flux a ete refuse par avifdec/ffmpeg/aomdec/dav1d';
 End;
 
 Procedure InitAV1NormativeEncoderState(Var State:TAV1NormativeEncoderState);Forward;
@@ -7985,6 +8066,8 @@ Var
  AVIFContainer:TAVIFContainer;
  Checksum:LongInt;
  ValidationReason:String;
+ TempAVIFFileName:String;
+ ExternalDecoderName:String;
 Begin
  {TODO 1 a 25 implementees : le pipeline encode les plans Y/U/V, assemble les
   OBU AV1, les encapsule en AVIF et valide la structure generee.}
@@ -8131,12 +8214,13 @@ Begin
   Exit;
  End;
  ValidationReason:='';
+ ValidationReason:='';
  If not ValidateBuiltInAV1DecoderPath(EncodedImage,SeqConfig,AV1Bitstream,
  AVIFContainer,ValidationReason)Then Begin
-  WriteLn('Le conteneur AVIF interne est coherent, mais la conformite AV1 externe stricte manque.');
+  WriteLn('Le conteneur AVIF interne n''a pas passe la validation structurelle.');
   If ValidationReason<>''Then
    WriteLn('Raison : ',ValidationReason);
-  WriteLn('Aucun fichier .AVIF final n''est ecrit pour eviter un fichier non authentique.');
+  WriteLn('Aucun fichier .AVIF final n''est ecrit.');
   FreeAVIFContainer(AVIFContainer);
   FreeAV1Bitstream(AV1Bitstream);
   FreeAV1ByteBuffer(TileGroupOBU);
@@ -8148,6 +8232,44 @@ Begin
   EncodeAVIFBuiltIn:=False;
   Exit;
  End;
+ TempAVIFFileName:=TargetFileName+'.external-check.avif';
+ DeleteFileIfExists(TempAVIFFileName);
+ If not WriteAVIFContainerFile(TempAVIFFileName,AVIFContainer)Then Begin
+  WriteLn('Ecriture du fichier temporaire de validation externe impossible.');
+  FreeAVIFContainer(AVIFContainer);
+  FreeAV1Bitstream(AV1Bitstream);
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1ByteBuffer(FrameHeaderOBU);
+  FreeAV1ByteBuffer(SequenceOBU);
+  FreeAVIFImage(YUV444Image);
+  FreeAVIFImage(EncodedImage);
+  FreeAVIFImage(PaddedImage);
+  EncodeAVIFBuiltIn:=False;
+  Exit;
+ End;
+ ExternalDecoderName:='';
+ ValidationReason:='';
+ If not ValidateAVIFWithExternalDecoderFile(TempAVIFFileName,
+  ExternalDecoderName,ValidationReason)Then Begin
+  WriteLn('Le conteneur AVIF interne est coherent, mais la validation par decodeur externe a echoue.');
+  If ValidationReason<>''Then
+   WriteLn('Raison : ',ValidationReason);
+  WriteLn('Aucun fichier .AVIF final n''est ecrit pour eviter un fichier non authentique.');
+  DeleteFileIfExists(TempAVIFFileName);
+  FreeAVIFContainer(AVIFContainer);
+  FreeAV1Bitstream(AV1Bitstream);
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1ByteBuffer(FrameHeaderOBU);
+  FreeAV1ByteBuffer(SequenceOBU);
+  FreeAVIFImage(YUV444Image);
+  FreeAVIFImage(EncodedImage);
+  FreeAVIFImage(PaddedImage);
+  EncodeAVIFBuiltIn:=False;
+  Exit;
+ End;
+ DeleteFileIfExists(TempAVIFFileName);
+ If ExternalDecoderName<>''Then
+  WriteLn('Validation externe reussie avec ',ExternalDecoderName,'.');
  If not WriteAVIFContainerFile(TargetFileName,AVIFContainer)Then Begin
   WriteLn('Ecriture du fichier AVIF ISO-BMFF impossible.');
   FreeAVIFContainer(AVIFContainer);

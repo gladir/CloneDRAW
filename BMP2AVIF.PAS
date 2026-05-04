@@ -1107,8 +1107,10 @@ Type
   Low,Range:Int64;
   Count:LongInt;
   Cnt:LongInt;
+  SymbolCount:LongInt;
   Buffer:^TAV1ByteBuffer;
   StartSize:LongInt;
+  Finalized:Boolean;
   Failed:Boolean;
  End;
 
@@ -1159,8 +1161,29 @@ Type
   SegmentId:Byte;
   Skip:Boolean;
   TxSize:TTransformSize;
+ TxType:TTransformType;
+ QuantizerIndex:Byte;
+ End;
+
+ TAV1SyntaxContext=Record
+  AboveAvailable,LeftAvailable:Boolean;
+  AboveSkip,LeftSkip:Boolean;
+  AboveNonZero,LeftNonZero:Boolean;
+  BlockSize:Byte;
+  PlaneID:Byte;
+  TxSize:TTransformSize;
   TxType:TTransformType;
-  QuantizerIndex:Byte;
+  PartitionContext:Byte;
+  SkipContext:Byte;
+  YModeContext:Byte;
+  UVModeContext:Byte;
+  TxSizeContext:Byte;
+  TxTypeContext:Byte;
+  TxSplitContext:Byte;
+  EOBContext:Byte;
+  CoeffBaseContext:Byte;
+  CoeffExtraContext:Byte;
+  CoeffSignContext:Byte;
  End;
 
  TAV1IntraModeNodeArray=Array[0..AV1MaxNormativeModeBlocks-1]of TAV1IntraModeNode;
@@ -6186,6 +6209,83 @@ Begin
   AV1CoeffExtraContexts-1);
 End;
 
+Function HasNonZeroCoeffUnitAt(Const Units:TAV1CoefficientUnitMap;X,Y:LongInt;
+ PlaneID:Byte):Boolean;
+Var
+ I:Word;
+Begin
+ HasNonZeroCoeffUnitAt:=False;
+ If(Units.Units=Nil)or(X<0)or(Y<0)Then Exit;
+ For I:=0 to Units.Count-1 Do
+  If(Units.Units^[I].X=X)and(Units.Units^[I].Y=Y)and
+    (Units.Units^[I].PlaneID=PlaneID)Then Begin
+   HasNonZeroCoeffUnitAt:=Units.Units^[I].HasNonZero;
+   Exit;
+  End;
+End;
+
+Function AV1ModeFamily(Mode:TIntraMode):Byte;
+Begin
+ If Mode=imDC Then AV1ModeFamily:=0
+ Else If(Mode=imVertical)or(Mode=imHorizontal)Then AV1ModeFamily:=1
+ Else If(Mode=imSmooth)or(Mode=imSmoothV)or(Mode=imSmoothH)Then AV1ModeFamily:=2
+ Else AV1ModeFamily:=3;
+End;
+
+Function AV1BuildSyntaxContext(Const Leaf:TAV1PartitionNode;
+ Const ModeNode:TAV1IntraModeNode;Const TxNode:TAV1TransformTreeNode;
+ Const UnitInfo:TAV1CoefficientUnit;Const Modes:TAV1IntraModeMap;
+ Const CoeffUnits:TAV1CoefficientUnitMap):TAV1SyntaxContext;
+Var
+ Above,Left:TAV1IntraModeNode;
+ Ctx:TAV1SyntaxContext;
+ NeighborBias:Byte;
+Begin
+ FillChar(Ctx,SizeOf(Ctx),0);
+ Ctx.BlockSize:=Leaf.Size;
+ Ctx.PlaneID:=UnitInfo.PlaneID;
+ Ctx.TxSize:=TxNode.TxSize;
+ Ctx.TxType:=TxNode.TxType;
+ Ctx.AboveAvailable:=HasModeNodeAt(Modes,Leaf.X,LongInt(Leaf.Y)-Leaf.Size,Above);
+ Ctx.LeftAvailable:=HasModeNodeAt(Modes,LongInt(Leaf.X)-Leaf.Size,Leaf.Y,Left);
+ If Ctx.AboveAvailable Then Ctx.AboveSkip:=Above.Skip;
+ If Ctx.LeftAvailable Then Ctx.LeftSkip:=Left.Skip;
+ Ctx.AboveNonZero:=HasNonZeroCoeffUnitAt(CoeffUnits,Leaf.X,
+  LongInt(Leaf.Y)-Leaf.Size,UnitInfo.PlaneID);
+ Ctx.LeftNonZero:=HasNonZeroCoeffUnitAt(CoeffUnits,
+  LongInt(Leaf.X)-Leaf.Size,Leaf.Y,UnitInfo.PlaneID);
+ Ctx.PartitionContext:=PartitionContextFromNode(Leaf);
+ Ctx.SkipContext:=0;
+ If Ctx.AboveAvailable and Ctx.AboveSkip Then Inc(Ctx.SkipContext);
+ If Ctx.LeftAvailable and Ctx.LeftSkip Then Inc(Ctx.SkipContext);
+ If(Leaf.Size>AV1IntraBlockSize)and(UnitInfo.EOB=0)Then Inc(Ctx.SkipContext);
+ Ctx.SkipContext:=ClampCDFContext(Ctx.SkipContext,AV1SkipContexts-1);
+ NeighborBias:=0;
+ If not Ctx.AboveAvailable Then Inc(NeighborBias);
+ If not Ctx.LeftAvailable Then Inc(NeighborBias);
+ If Ctx.AboveAvailable Then Inc(NeighborBias,AV1ModeFamily(Above.Mode)and 1);
+ If Ctx.LeftAvailable Then Inc(NeighborBias,AV1ModeFamily(Left.Mode)and 1);
+ Ctx.YModeContext:=ClampCDFContext(NeighborBias,AV1ModeContexts-1);
+ Ctx.UVModeContext:=ClampCDFContext(AV1ModeFamily(ModeNode.Mode),
+  AV1UVModeContexts-1);
+ Ctx.TxSizeContext:=ClampCDFContext(TxSizeSymbol(TxNode.TxSize)+
+  Ord(Ctx.AboveNonZero or Ctx.LeftNonZero),AV1TxSizeContexts-1);
+ Ctx.TxTypeContext:=ClampCDFContext(AV1ModeFamily(ModeNode.Mode)+
+  Ord(Ctx.AboveNonZero and Ctx.LeftNonZero),AV1TxTypeContexts-1);
+ Ctx.TxSplitContext:=ClampCDFContext(TxSizeSymbol(TxNode.TxSize)+
+  Ord(Leaf.Size>AV1IntraBlockSize),AV1TxSplitContexts-1);
+ Ctx.EOBContext:=ClampCDFContext(TxSizeSymbol(UnitInfo.TxSize)+
+  Ord(Ctx.AboveNonZero)+Ord(Ctx.LeftNonZero),AV1EOBContexts-1);
+ Ctx.CoeffBaseContext:=ClampCDFContext((TxSizeSymbol(UnitInfo.TxSize)*2)+
+  Ord(UnitInfo.EOB>16)+Ord(Ctx.AboveNonZero or Ctx.LeftNonZero),
+  AV1CoeffBaseContexts-1);
+ Ctx.CoeffExtraContext:=ClampCDFContext(TxSizeSymbol(UnitInfo.TxSize)+
+  Ord(UnitInfo.EOB>8),AV1CoeffExtraContexts-1);
+ Ctx.CoeffSignContext:=ClampCDFContext(Ord(Ctx.AboveNonZero xor Ctx.LeftNonZero),
+  AV1CoeffSignContexts-1);
+ AV1BuildSyntaxContext:=Ctx;
+End;
+
 Function CoeffSymbolFitsCDF(Const Symbol:TCoeffSymbol;
  Const CDFSet:TAV1NormativeCDFSet):Boolean;
 Var
@@ -6243,9 +6343,36 @@ Begin
  Encoder.Range:=$8000;
  Encoder.Count:=0;
  Encoder.Cnt:=-9;
+ Encoder.SymbolCount:=0;
  Encoder.Buffer:=@Buffer;
  Encoder.StartSize:=Buffer.Size;
+ Encoder.Finalized:=False;
  Encoder.Failed:=False;
+End;
+
+Function ValidateRangeEncoderCDF(Const Model:TEntropyCDF):Boolean;
+Var
+ I:Byte;
+Begin
+ ValidateRangeEncoderCDF:=False;
+ If(Model.SymbolCount<2)or(Model.SymbolCount>16)Then Exit;
+ If Model.CDF[0]<>0 Then Exit;
+ If Model.CDF[Model.SymbolCount]<>32768 Then Exit;
+ For I:=1 to Model.SymbolCount Do
+  If Model.CDF[I]<=Model.CDF[I-1]Then Exit;
+ ValidateRangeEncoderCDF:=True;
+End;
+
+Function NormativeRangeStateIsValid(Const Encoder:TAV1NormativeRangeEncoder):Boolean;
+Begin
+ NormativeRangeStateIsValid:=False;
+ If Encoder.Failed Then Exit;
+ If Encoder.Buffer=Nil Then Exit;
+ If Encoder.Buffer^.Data=Nil Then Exit;
+ If(Encoder.Range<$8000)or(Encoder.Range>$FFFF)Then Exit;
+ If(Encoder.Cnt<-24)or(Encoder.Cnt>39)Then Exit;
+ If Encoder.Low<0 Then Exit;
+ NormativeRangeStateIsValid:=True;
 End;
 
 Function NormativeILogNZ(Value:LongInt):Byte;
@@ -6288,6 +6415,10 @@ Procedure NormativeRangeEmitByte(Var Encoder:TAV1NormativeRangeEncoder;
  Value:Byte);
 Begin
  If Encoder.Failed Then Exit;
+ If Encoder.Finalized Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
  If Encoder.Buffer=Nil Then Begin
   Encoder.Failed:=True;
   Exit;
@@ -6322,6 +6453,10 @@ Var
  Output,Mask,Carry:Int64;
 Begin
  If Encoder.Failed Then Exit;
+ If Encoder.Finalized Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
  If(Encoder.Range<=0)or(Encoder.Range>$FFFF)Then Begin
   Encoder.Failed:=True;
   Exit;
@@ -6347,6 +6482,7 @@ Begin
  Encoder.Low:=Encoder.Low shl D;
  Encoder.Range:=Encoder.Range shl D;
  Encoder.Cnt:=S;
+ If not NormativeRangeStateIsValid(Encoder)Then Encoder.Failed:=True;
 End;
 
 Function ClampSymbolToCDF(Symbol:LongInt;Const Model:TEntropyCDF):Byte;
@@ -6367,20 +6503,19 @@ Var
  N:LongInt;
 Begin
  If Encoder.Failed Then Exit;
- If(Model.SymbolCount<2)or(Model.SymbolCount>16)Then Begin
+ If Encoder.Finalized Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
- If Model.CDF[Model.SymbolCount]<>32768 Then Begin
+ If not ValidateRangeEncoderCDF(Model)Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
- If Symbol>=Model.SymbolCount Then Symbol:=Model.SymbolCount-1;
- If(Model.CDF[Symbol+1]<=Model.CDF[Symbol])Then Begin
+ If Symbol>=Model.SymbolCount Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
- If(Encoder.Range<$8000)or(Encoder.Range>$FFFF)Then Begin
+ If not NormativeRangeStateIsValid(Encoder)Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
@@ -6406,6 +6541,7 @@ Begin
   Encoder.Failed:=True;
   Exit;
  End;
+ Inc(Encoder.SymbolCount);
  NormalizeNormativeRangeEncoder(Encoder);
 End;
 
@@ -6416,6 +6552,14 @@ Var
  Val:Word;
 Begin
  If Encoder.Failed Then Exit;
+ If Encoder.Finalized Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ If not NormativeRangeStateIsValid(Encoder)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
  M:=$3FFF;
  E:=((Encoder.Low+M)and(not M))or(M+1);
  C:=Encoder.Cnt;
@@ -6436,17 +6580,77 @@ Begin
    N:=N shr 8;
   Until(S<=0)or Encoder.Failed;
  End;
+ If not Encoder.Failed Then Encoder.Finalized:=True;
 End;
 
 Function ValidateNormativeRangePayload(Const Encoder:TAV1NormativeRangeEncoder):Boolean;
 Begin
  ValidateNormativeRangePayload:=False;
  If Encoder.Failed Then Exit;
+ If not Encoder.Finalized Then Exit;
  If Encoder.Buffer=Nil Then Exit;
  If Encoder.Buffer^.Data=Nil Then Exit;
  If Encoder.Buffer^.Size<=Encoder.StartSize Then Exit;
  If Encoder.Count<1 Then Exit;
+ If Encoder.SymbolCount<1 Then Exit;
  ValidateNormativeRangePayload:=True;
+End;
+
+Function EncodeNormativeRangeTestVector(Var Output:TAV1ByteBuffer):Boolean;
+Var
+ Encoder:TAV1NormativeRangeEncoder;
+ Model:TEntropyCDF;
+Begin
+ EncodeNormativeRangeTestVector:=False;
+ InitAV1ByteBuffer(Output);
+ If not AllocateAV1ByteBuffer(Output,AV1MaxOBUBytes)Then Exit;
+ InitExplicitCDF(Model,4,8192,16384,24576,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitNormativeRangeEncoder(Encoder,Output);
+ EncodeNormativeCDFSymbol(Encoder,0,Model);
+ EncodeNormativeCDFSymbol(Encoder,3,Model);
+ EncodeNormativeCDFSymbol(Encoder,1,Model);
+ EncodeNormativeCDFSymbol(Encoder,2,Model);
+ FinishNormativeRangeEncoder(Encoder);
+ EncodeNormativeRangeTestVector:=ValidateNormativeRangePayload(Encoder);
+End;
+
+Function ValidateNormativeRangeCoderStrictSelfTest:Boolean;
+Var
+ A,B:TAV1ByteBuffer;
+ Encoder:TAV1NormativeRangeEncoder;
+ Model:TEntropyCDF;
+ I:LongInt;
+Begin
+ ValidateNormativeRangeCoderStrictSelfTest:=False;
+ InitAV1ByteBuffer(A);
+ InitAV1ByteBuffer(B);
+ If not EncodeNormativeRangeTestVector(A)Then Exit;
+ If not EncodeNormativeRangeTestVector(B)Then Begin
+  FreeAV1ByteBuffer(A);
+  Exit;
+ End;
+ If(A.Size<>B.Size)or(A.Size=0)Then Begin
+  FreeAV1ByteBuffer(A);
+  FreeAV1ByteBuffer(B);
+  Exit;
+ End;
+ For I:=0 to A.Size-1 Do
+  If A.Data^[I]<>B.Data^[I]Then Begin
+   FreeAV1ByteBuffer(A);
+   FreeAV1ByteBuffer(B);
+   Exit;
+  End;
+ InitExplicitCDF(Model,2,16384,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitNormativeRangeEncoder(Encoder,A);
+ EncodeNormativeCDFSymbol(Encoder,2,Model);
+ If not Encoder.Failed Then Begin
+  FreeAV1ByteBuffer(A);
+  FreeAV1ByteBuffer(B);
+  Exit;
+ End;
+ FreeAV1ByteBuffer(A);
+ FreeAV1ByteBuffer(B);
+ ValidateNormativeRangeCoderStrictSelfTest:=True;
 End;
 
 Procedure EncodeNormativeUniformBit(Var Encoder:TAV1NormativeRangeEncoder;
@@ -6518,6 +6722,96 @@ Begin
  If EOB>0 Then EncodeNormativeUnsigned(Encoder,EOB,10);
 End;
 
+Procedure AV1WritePartitionSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ Partition:TAV1PartitionType;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1PartitionContexts-1);
+ EncodeNormativeCDFSymbol(Encoder,Ord(Partition),
+  CDFSet.PartitionCDFByContext[Context]);
+End;
+
+Procedure AV1WriteSkipSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ Skip:Boolean;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1SkipContexts-1);
+ If Skip Then EncodeNormativeCDFSymbol(Encoder,1,CDFSet.SkipCDFByContext[Context])
+         Else EncodeNormativeCDFSymbol(Encoder,0,CDFSet.SkipCDFByContext[Context]);
+End;
+
+Procedure AV1WriteYModeSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ Mode:TIntraMode;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1ModeContexts-1);
+ EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(Mode),
+  CDFSet.IntraModeCDFByContext[Context]);
+End;
+
+Procedure AV1WriteUVModeSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ Mode:TIntraMode;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1UVModeContexts-1);
+ EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(Mode),
+  CDFSet.UVModeCDFByContext[Context]);
+End;
+
+Procedure AV1WriteTxSizeSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ TxSize:TTransformSize;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1TxSizeContexts-1);
+ EncodeNormativeCDFSymbol(Encoder,TxSizeSymbol(TxSize),
+  CDFSet.TxSizeCDFByContext[Context]);
+End;
+
+Procedure AV1WriteTxTypeSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ TxType:TTransformType;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1TxTypeContexts-1);
+ EncodeNormativeCDFSymbol(Encoder,Ord(TxType),
+  CDFSet.TxTypeCDFByContext[Context]);
+End;
+
+Procedure AV1WriteTxSplitSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ Split:Boolean;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1TxSplitContexts-1);
+ If Split Then EncodeNormativeCDFSymbol(Encoder,1,CDFSet.TxSplitCDFByContext[Context])
+          Else EncodeNormativeCDFSymbol(Encoder,0,CDFSet.TxSplitCDFByContext[Context]);
+End;
+
+Procedure AV1WriteEOBSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ EOB:LongInt;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ EncodeNormativeEOBContext(Encoder,EOB,CDFSet,Context);
+End;
+
+Procedure AV1WriteCoeffBaseSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ Value:LongInt;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1CoeffBaseContexts-1);
+ EncodeNormativeCDFSymbol(Encoder,
+  ClampSymbolToCDF(Value,CDFSet.CoeffBaseCDFByContext[Context]),
+  CDFSet.CoeffBaseCDFByContext[Context]);
+End;
+
+Procedure AV1WriteCoeffBRSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ Value:LongInt;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1CoeffExtraContexts-1);
+ EncodeNormativeCDFSymbol(Encoder,
+  ClampSymbolToCDF(Value,CDFSet.CoeffExtraCDFByContext[Context]),
+  CDFSet.CoeffExtraCDFByContext[Context]);
+End;
+
+Procedure AV1WriteCoeffSignSymbol(Var Encoder:TAV1NormativeRangeEncoder;
+ Negative:Boolean;Context:Byte;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ Context:=ClampCDFContext(Context,AV1CoeffSignContexts-1);
+ If Negative Then EncodeNormativeCDFSymbol(Encoder,1,
+  CDFSet.CoeffSignCDFByContext[Context])
+ Else EncodeNormativeCDFSymbol(Encoder,0,
+  CDFSet.CoeffSignCDFByContext[Context]);
+End;
+
 Procedure EncodeNormativePartitionSyntax(Var Encoder:TAV1NormativeRangeEncoder;
  Const Partitions:TAV1PartitionMap;Const CDFSet:TAV1NormativeCDFSet);
 Var
@@ -6530,7 +6824,8 @@ Begin
   EncodeNormativeLiteral(Encoder,Node.X,16);
   EncodeNormativeLiteral(Encoder,Node.Y,16);
   EncodeNormativeLiteral(Encoder,Node.Size,7);
-  EncodeNormativeCDFSymbol(Encoder,Ord(Node.Partition),CDFSet.PartitionCDF);
+  AV1WritePartitionSymbol(Encoder,Node.Partition,PartitionContextFromNode(Node),
+   CDFSet);
   If Node.IsLeaf Then EncodeNormativeUniformBit(Encoder,1)
                  Else EncodeNormativeUniformBit(Encoder,0);
   If Encoder.Failed Then Exit;
@@ -6551,11 +6846,9 @@ Begin
   EncodeNormativeLiteral(Encoder,Node.Y,16);
   EncodeNormativeLiteral(Encoder,Node.Size,7);
   If Node.Skip Then SymbolValue:=1 Else SymbolValue:=0;
-  EncodeNormativeCDFSymbol(Encoder,SymbolValue,CDFSet.SkipCDF);
-  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(Node.Mode),
-   CDFSet.IntraModeCDF);
-  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(Node.UVMode),
-   CDFSet.UVModeCDF);
+  AV1WriteSkipSymbol(Encoder,SymbolValue<>0,0,CDFSet);
+  AV1WriteYModeSymbol(Encoder,Node.Mode,0,CDFSet);
+  AV1WriteUVModeSymbol(Encoder,Node.UVMode,0,CDFSet);
   EncodeNormativeLiteral(Encoder,Node.SegmentId,3);
   EncodeNormativeLiteral(Encoder,Node.QuantizerIndex,8);
   If Encoder.Failed Then Exit;
@@ -6575,10 +6868,9 @@ Begin
   EncodeNormativeLiteral(Encoder,Node.Y,16);
   EncodeNormativeLiteral(Encoder,Node.Width,6);
   EncodeNormativeLiteral(Encoder,Node.Height,6);
-  EncodeNormativeCDFSymbol(Encoder,TxSizeSymbol(Node.TxSize),CDFSet.TxSizeCDF);
+  AV1WriteTxSizeSymbol(Encoder,Node.TxSize,TxSizeSymbol(Node.TxSize),CDFSet);
   EncodeNormativeLiteral(Encoder,Ord(Node.TxType),3);
-  If Node.Split Then EncodeNormativeUniformBit(Encoder,1)
-                Else EncodeNormativeUniformBit(Encoder,0);
+  AV1WriteTxSplitSymbol(Encoder,Node.Split,TxSizeSymbol(Node.TxSize),CDFSet);
   If Encoder.Failed Then Exit;
  End;
 End;
@@ -6600,18 +6892,15 @@ Begin
   If Value<0 Then Value:=-Value;
   Case CoeffSymbol.Kind of
    cskEOB:
-    EncodeNormativeEOB(Encoder,Value,CDFSet);
+   EncodeNormativeEOB(Encoder,Value,CDFSet);
    cskCoeffBase:
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(Value,CDFSet.CoeffBaseCDF),CDFSet.CoeffBaseCDF);
+    AV1WriteCoeffBaseSymbol(Encoder,Value,0,CDFSet);
    cskCoeffExtra:Begin
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(Value,CDFSet.CoeffExtraCDF),CDFSet.CoeffExtraCDF);
+    AV1WriteCoeffBRSymbol(Encoder,Value,0,CDFSet);
     EncodeNormativeUnsigned(Encoder,Value,10);
    End;
    cskCoeffSign:
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(Value,CDFSet.CoeffSignCDF),CDFSet.CoeffSignCDF);
+    AV1WriteCoeffSignSymbol(Encoder,Value<>0,0,CDFSet);
   End;
   If Encoder.Failed Then Exit;
  End;
@@ -6679,8 +6968,7 @@ Begin
   Encoder.Failed:=True;
   Exit;
  End;
- EncodeNormativeEOBContext(Encoder,UnitInfo.EOB,CDFSet,
-  EOBContextForUnit(UnitInfo));
+ AV1WriteEOBSymbol(Encoder,UnitInfo.EOB,EOBContextForUnit(UnitInfo),CDFSet);
  If UnitInfo.EOB=0 Then Exit;
  LastIndex:=LongInt(UnitInfo.SymbolStart)+UnitInfo.SymbolCount-1;
  If LastIndex>=CoeffSymbols.Count Then Begin
@@ -6707,9 +6995,7 @@ Begin
     CurrentBasePos:=CoeffSymbol.Position;
     HaveBase:=True;
     Context:=CoeffBaseContextForSymbol(UnitInfo,CoeffSymbol);
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(Value,CDFSet.CoeffBaseCDFByContext[Context]),
-     CDFSet.CoeffBaseCDFByContext[Context]);
+    AV1WriteCoeffBaseSymbol(Encoder,Value,Context,CDFSet);
     Inc(ExpectedBasePos);
     End;
    cskCoeffExtra:Begin
@@ -6718,9 +7004,7 @@ Begin
      Exit;
     End;
     Context:=CoeffExtraContextForSymbol(CoeffSymbol);
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(Value,CDFSet.CoeffExtraCDFByContext[Context]),
-     CDFSet.CoeffExtraCDFByContext[Context]);
+    AV1WriteCoeffBRSymbol(Encoder,Value,Context,CDFSet);
    End;
    cskCoeffSign:
     Begin
@@ -6729,9 +7013,7 @@ Begin
      Exit;
     End;
     If UnitInfo.EOB>16 Then Context:=1 Else Context:=0;
-    EncodeNormativeCDFSymbol(Encoder,
-     ClampSymbolToCDF(Value,CDFSet.CoeffSignCDFByContext[Context]),
-     CDFSet.CoeffSignCDFByContext[Context]);
+    AV1WriteCoeffSignSymbol(Encoder,Value<>0,Context,CDFSet);
     End;
   End;
   If Encoder.Failed Then Exit;
@@ -6769,28 +7051,21 @@ Begin
  End;
  If ModeNode.Skip Then SymbolValue:=1 Else SymbolValue:=0;
  Context:=SkipContextForLeaf(Leaf,Modes);
- EncodeNormativeCDFSymbol(Encoder,SymbolValue,CDFSet.SkipCDFByContext[Context]);
+ AV1WriteSkipSymbol(Encoder,SymbolValue<>0,Context,CDFSet);
  Context:=IntraContextForLeaf(Leaf);
- EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(ModeNode.Mode),
-  CDFSet.IntraModeCDFByContext[Context]);
+ AV1WriteYModeSymbol(Encoder,ModeNode.Mode,Context,CDFSet);
  Context:=UVContextForMode(ModeNode);
- EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(ModeNode.UVMode),
-  CDFSet.UVModeCDFByContext[Context]);
+ AV1WriteUVModeSymbol(Encoder,ModeNode.UVMode,Context,CDFSet);
  If ModeNode.Skip Then Begin
   If UnitInfo.EOB<>0 Then Encoder.Failed:=True;
   Exit;
  End;
  Context:=TxContextForNode(TxNode);
- EncodeNormativeCDFSymbol(Encoder,TxSizeSymbol(TxNode.TxSize),
-  CDFSet.TxSizeCDFByContext[Context]);
+ AV1WriteTxSizeSymbol(Encoder,TxNode.TxSize,Context,CDFSet);
  Context:=TxTypeContextForMode(ModeNode);
- EncodeNormativeCDFSymbol(Encoder,Ord(TxNode.TxType),
-  CDFSet.TxTypeCDFByContext[Context]);
+ AV1WriteTxTypeSymbol(Encoder,TxNode.TxType,Context,CDFSet);
  Context:=TxContextForNode(TxNode);
- If TxNode.Split Then
-  EncodeNormativeCDFSymbol(Encoder,1,CDFSet.TxSplitCDFByContext[Context])
- Else
-  EncodeNormativeCDFSymbol(Encoder,0,CDFSet.TxSplitCDFByContext[Context]);
+ AV1WriteTxSplitSymbol(Encoder,TxNode.Split,Context,CDFSet);
  EncodeNormativeCoeffUnitSyntax(Encoder,UnitInfo,CoeffSymbols,CDFSet);
 End;
 
@@ -6846,16 +7121,14 @@ Begin
    Exit;
   End;
   Context:=PartitionContextFromNode(Node);
-  EncodeNormativeCDFSymbol(Encoder,Ord(aptNone),
-   CDFSet.PartitionCDFByContext[Context]);
+  AV1WritePartitionSymbol(Encoder,aptNone,Context,CDFSet);
   EncodeNormativeLeafBlockSyntax(Encoder,Node,Modes,TransformTree,
    CoeffUnits,CoeffSymbols,CDFSet);
   EncodeNormativePartitionSubtree:=not Encoder.Failed;
   Exit;
  End;
  Context:=PartitionContextFromNode(Node);
- EncodeNormativeCDFSymbol(Encoder,Ord(Node.Partition),
-  CDFSet.PartitionCDFByContext[Context]);
+ AV1WritePartitionSymbol(Encoder,Node.Partition,Context,CDFSet);
  Case Node.Partition of
   aptSplit:
    For Child:=0 to 3 Do
@@ -6871,6 +7144,196 @@ Begin
   End;
  End;
  EncodeNormativePartitionSubtree:=not Encoder.Failed;
+End;
+
+Procedure EncodeAV1ResidualSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const UnitInfo:TAV1CoefficientUnit;Const CoeffSymbols:TCoeffSymbolMap;
+ Const SyntaxCtx:TAV1SyntaxContext;Const CDFSet:TAV1NormativeCDFSet);
+Var
+ I,LastIndex:LongInt;
+ CoeffSymbol:TCoeffSymbol;
+ Value:LongInt;
+ ExpectedBasePos:Word;
+ CurrentBasePos:Word;
+ HaveBase:Boolean;
+ Context:Byte;
+Begin
+ If UnitInfo.PlaneID<>SyntaxCtx.PlaneID Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ AV1WriteEOBSymbol(Encoder,UnitInfo.EOB,SyntaxCtx.EOBContext,CDFSet);
+ If UnitInfo.EOB=0 Then Exit;
+ LastIndex:=LongInt(UnitInfo.SymbolStart)+UnitInfo.SymbolCount-1;
+ If LastIndex>=CoeffSymbols.Count Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ ExpectedBasePos:=0;
+ CurrentBasePos:=0;
+ HaveBase:=False;
+ For I:=UnitInfo.SymbolStart to LastIndex Do Begin
+  CoeffSymbol:=CoeffSymbols.Symbols^[I];
+  Value:=CoeffSymbol.Symbol;
+  If Value<0 Then Value:=-Value;
+  Case CoeffSymbol.Kind of
+   cskEOB:Begin End;
+   cskCoeffBase:Begin
+    If CoeffSymbol.Position<>ExpectedBasePos Then Begin
+     Encoder.Failed:=True;
+     Exit;
+    End;
+    CurrentBasePos:=CoeffSymbol.Position;
+    HaveBase:=True;
+    Context:=ClampCDFContext(SyntaxCtx.CoeffBaseContext+
+     Byte(CoeffSymbol.Position mod 4),AV1CoeffBaseContexts-1);
+    AV1WriteCoeffBaseSymbol(Encoder,Value,Context,CDFSet);
+    Inc(ExpectedBasePos);
+   End;
+   cskCoeffExtra:Begin
+    If(not HaveBase)or(CoeffSymbol.Position<>CurrentBasePos)Then Begin
+     Encoder.Failed:=True;
+     Exit;
+    End;
+    Context:=ClampCDFContext(SyntaxCtx.CoeffExtraContext+
+     Byte(CoeffSymbol.Position mod 2),AV1CoeffExtraContexts-1);
+    AV1WriteCoeffBRSymbol(Encoder,Value,Context,CDFSet);
+   End;
+   cskCoeffSign:Begin
+    If(not HaveBase)or(CoeffSymbol.Position<>CurrentBasePos)Then Begin
+     Encoder.Failed:=True;
+     Exit;
+    End;
+    AV1WriteCoeffSignSymbol(Encoder,Value<>0,SyntaxCtx.CoeffSignContext,
+     CDFSet);
+   End;
+  End;
+  If Encoder.Failed Then Exit;
+ End;
+End;
+
+Procedure EncodeAV1TransformTreeSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const ModeNode:TAV1IntraModeNode;Const TxNode:TAV1TransformTreeNode;
+ Const UnitInfo:TAV1CoefficientUnit;Const CoeffSymbols:TCoeffSymbolMap;
+ Const SyntaxCtx:TAV1SyntaxContext;Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ AV1WriteTxSizeSymbol(Encoder,TxNode.TxSize,SyntaxCtx.TxSizeContext,CDFSet);
+ AV1WriteTxTypeSymbol(Encoder,TxNode.TxType,SyntaxCtx.TxTypeContext,CDFSet);
+ AV1WriteTxSplitSymbol(Encoder,TxNode.Split,SyntaxCtx.TxSplitContext,CDFSet);
+ EncodeAV1ResidualSyntax(Encoder,UnitInfo,CoeffSymbols,SyntaxCtx,CDFSet);
+End;
+
+Procedure EncodeAV1ModeInfoSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Leaf:TAV1PartitionNode;Const ModeNode:TAV1IntraModeNode;
+ Const Modes:TAV1IntraModeMap;Const SyntaxCtx:TAV1SyntaxContext;
+ Const CDFSet:TAV1NormativeCDFSet);
+Begin
+ AV1WriteSkipSymbol(Encoder,ModeNode.Skip,SyntaxCtx.SkipContext,CDFSet);
+ AV1WriteYModeSymbol(Encoder,ModeNode.Mode,SyntaxCtx.YModeContext,CDFSet);
+ AV1WriteUVModeSymbol(Encoder,ModeNode.UVMode,SyntaxCtx.UVModeContext,CDFSet);
+End;
+
+Procedure EncodeAV1DecodeBlockSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Leaf:TAV1PartitionNode;Const Modes:TAV1IntraModeMap;
+ Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
+ Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet);
+Var
+ ModeNode:TAV1IntraModeNode;
+ TxNode:TAV1TransformTreeNode;
+ UnitInfo:TAV1CoefficientUnit;
+ SyntaxCtx:TAV1SyntaxContext;
+Begin
+ If not FindNormativeModeNode(Modes,Leaf.X,Leaf.Y,ModeNode)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ If not FindNormativeTransformNode(TransformTree,Leaf.X,Leaf.Y,TxNode)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ If not FindNormativeCoeffUnit(CoeffUnits,Leaf.X,Leaf.Y,UnitInfo)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ If(ModeNode.Size<>Leaf.Size)or(TxNode.Width<>Leaf.Size)or
+  (TxNode.Height<>Leaf.Size)or(UnitInfo.TxSize<>TxNode.TxSize)or
+  (UnitInfo.TxType<>TxNode.TxType)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ SyntaxCtx:=AV1BuildSyntaxContext(Leaf,ModeNode,TxNode,UnitInfo,Modes,
+  CoeffUnits);
+ EncodeAV1ModeInfoSyntax(Encoder,Leaf,ModeNode,Modes,SyntaxCtx,CDFSet);
+ If ModeNode.Skip Then Begin
+  If UnitInfo.EOB<>0 Then Encoder.Failed:=True;
+  Exit;
+ End;
+ EncodeAV1TransformTreeSyntax(Encoder,ModeNode,TxNode,UnitInfo,CoeffSymbols,
+  SyntaxCtx,CDFSet);
+End;
+
+Function EncodeAV1DecodePartitionSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Partitions:TAV1PartitionMap;Var Index:Word;Const Modes:TAV1IntraModeMap;
+ Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
+ Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet):Boolean;Forward;
+
+Procedure EncodeAV1DecodeTileSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Partitions:TAV1PartitionMap;Const Modes:TAV1IntraModeMap;
+ Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
+ Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet);
+Var
+ Index:Word;
+Begin
+ Index:=0;
+ While Index<Partitions.Count Do
+  If not EncodeAV1DecodePartitionSyntax(Encoder,Partitions,Index,Modes,
+   TransformTree,CoeffUnits,CoeffSymbols,CDFSet)Then Exit;
+End;
+
+Function EncodeAV1DecodePartitionSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Partitions:TAV1PartitionMap;Var Index:Word;Const Modes:TAV1IntraModeMap;
+ Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
+ Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet):Boolean;
+Var
+ Child:Byte;
+ Node:TAV1PartitionNode;
+ Context:Byte;
+Begin
+ EncodeAV1DecodePartitionSyntax:=False;
+ If(Index>=Partitions.Count)or(Partitions.Nodes=Nil)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ Node:=Partitions.Nodes^[Index];
+ Inc(Index);
+ Context:=PartitionContextFromNode(Node);
+ If Node.IsLeaf Then Begin
+  If Node.Partition<>aptNone Then Begin
+   Encoder.Failed:=True;
+   Exit;
+  End;
+  AV1WritePartitionSymbol(Encoder,aptNone,Context,CDFSet);
+  EncodeAV1DecodeBlockSyntax(Encoder,Node,Modes,TransformTree,CoeffUnits,
+   CoeffSymbols,CDFSet);
+  EncodeAV1DecodePartitionSyntax:=not Encoder.Failed;
+  Exit;
+ End;
+ AV1WritePartitionSymbol(Encoder,Node.Partition,Context,CDFSet);
+ Case Node.Partition of
+  aptSplit:
+   For Child:=0 to 3 Do
+    If not EncodeAV1DecodePartitionSyntax(Encoder,Partitions,Index,Modes,
+     TransformTree,CoeffUnits,CoeffSymbols,CDFSet)Then Exit;
+  aptHorizontal,aptVertical:
+   For Child:=0 to 1 Do
+    If not EncodeAV1DecodePartitionSyntax(Encoder,Partitions,Index,Modes,
+     TransformTree,CoeffUnits,CoeffSymbols,CDFSet)Then Exit;
+  Else Begin
+   Encoder.Failed:=True;
+   Exit;
+  End;
+ End;
+ EncodeAV1DecodePartitionSyntax:=not Encoder.Failed;
 End;
 
 Function EncodeInternalRangeTilePayload(Const Partitions:TAV1PartitionMap;
@@ -6894,12 +7357,10 @@ Begin
   (TransformTree.Count<>Partitions.LeafCount)or
   (CoeffUnits.Count<>Partitions.LeafCount)Then Exit;
  InitNormativeRangeEncoder(Encoder,Payload);
- EncodeNormativePartitionTree(Encoder,Partitions,Modes,TransformTree,
-  CoeffUnits,CoeffSymbols,CDFSet);
+ EncodeAV1DecodeTileSyntax(Encoder,Partitions,Modes,TransformTree,CoeffUnits,
+  CoeffSymbols,CDFSet);
  If Encoder.Failed Then Exit;
  FinishNormativeRangeEncoder(Encoder);
- If(not Encoder.Failed)and(Encoder.Count=0)Then
-  NormativeRangeEmitByte(Encoder,0);
  EncodeInternalRangeTilePayload:=ValidateNormativeRangePayload(Encoder);
 End;
 
@@ -7396,6 +7857,10 @@ End;
 Function RunAVIFBuiltInSelfTest:Boolean;
 Begin
  RunAVIFBuiltInSelfTest:=False;
+ If not ValidateNormativeRangeCoderStrictSelfTest Then Begin
+  WriteLn('Echec regression : range coder AV1 strict.');
+  Exit;
+ End;
  If not EncodeRegressionCase(1,1,acfYUV420,0)Then Begin
   WriteLn('Echec regression : 1x1 YUV420 gris.');
   Exit;

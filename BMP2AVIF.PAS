@@ -2202,6 +2202,7 @@ Begin
 End;
 
 Function AV1BitstreamIsDecoderReady:Boolean;Forward;
+Function ValidateSequenceConfigForStillPicture(Const Config:TAV1SequenceConfig):Boolean;Forward;
 Function ValidateAVIFRegressionStructure(Const Container:TAVIFContainer;
  Const Image:TAVIFImage;Const SeqConfig:TAV1SequenceConfig;
  AV1DataSize:LongInt):Boolean;Forward;
@@ -2242,19 +2243,14 @@ End;
 Function ValidateBuiltInTileGroupPayload(Const TileGroupOBU:TAV1ByteBuffer):Boolean;
 Var
  PayloadStart,PayloadSize:LongInt;
- HeaderByte:Byte;
  RangePayloadBytes:LongInt;
 Begin
  ValidateBuiltInTileGroupPayload:=False;
  If not GetOBUPayloadRange(TileGroupOBU,obuTileGroup,PayloadStart,
   PayloadSize)Then Exit;
  If PayloadSize<4 Then Exit;
- HeaderByte:=TileGroupOBU.Data^[PayloadStart];
- {Tuile unique : tile_start_and_end_present_flag=0 suivi du trailing bit.}
- If(HeaderByte and $80)<>0 Then Exit;
- If(HeaderByte and $40)=0 Then Exit;
- RangePayloadBytes:=PayloadSize-1;
- If RangePayloadBytes<3 Then Exit;
+ RangePayloadBytes:=PayloadSize;
+ If RangePayloadBytes<4 Then Exit;
  ValidateBuiltInTileGroupPayload:=True;
 End;
 
@@ -2266,6 +2262,7 @@ Var
  Value:LongInt;
 Begin
  ValidateBuiltInSequenceHeaderPayload:=False;
+ If not ValidateSequenceConfigForStillPicture(SeqConfig)Then Exit;
  If not GetOBUPayloadRange(SequenceOBU,obuSequenceHeader,PayloadStart,
   PayloadSize)Then Exit;
  InitBitReader(Reader,SequenceOBU,PayloadStart,PayloadSize);
@@ -3391,6 +3388,33 @@ Begin
  BitsNeededForValue:=Bits;
 End;
 
+Function ValidateSequenceConfigForStillPicture(Const Config:TAV1SequenceConfig):Boolean;
+Begin
+ ValidateSequenceConfigForStillPicture:=False;
+ If Config.SeqProfile>2 Then Exit;
+ If not Config.StillPicture Then Exit;
+ If not Config.ReducedStillPictureHeader Then Exit;
+ If Config.SeqLevelIdx0>31 Then Exit;
+ If(Config.FrameWidthBits=0)or(Config.FrameWidthBits>16)Then Exit;
+ If(Config.FrameHeightBits=0)or(Config.FrameHeightBits>16)Then Exit;
+ If(Config.MaxFrameWidth=0)or(Config.MaxFrameHeight=0)Then Exit;
+ If LongInt(Config.MaxFrameWidth)-1>=(LongInt(1)shl Config.FrameWidthBits)Then Exit;
+ If LongInt(Config.MaxFrameHeight)-1>=(LongInt(1)shl Config.FrameHeightBits)Then Exit;
+ If Config.HighBitDepth Then Exit;
+ If Config.MonoChrome Then Exit;
+ If not Config.ColorDescriptionPresent Then Exit;
+ If Config.ColorPrimaries=0 Then Exit;
+ If Config.TransferCharacteristics=0 Then Exit;
+ If Config.MatrixCoefficients=0 Then Exit;
+ If Config.ColorRange>1 Then Exit;
+ If Config.SubsamplingX>1 Then Exit;
+ If Config.SubsamplingY>1 Then Exit;
+ If Config.ChromaSamplePosition>3 Then Exit;
+ If Config.SeparateUVDeltAQ Then Exit;
+ If Config.FilmGrainParamsPresent Then Exit;
+ ValidateSequenceConfigForStillPicture:=True;
+End;
+
 Procedure InitSequenceConfigFromImage(Const Image:TAVIFImage;
  Var Config:TAV1SequenceConfig);
 Begin
@@ -3427,11 +3451,13 @@ Var
  Writer:TBitWriter;
 Begin
  WriteSequenceHeaderPayload:=False;
+ If not ValidateSequenceConfigForStillPicture(Config)Then Exit;
  If not AllocateAV1ByteBuffer(Payload,AV1MaxOBUBytes)Then Exit;
  InitBitWriter(Writer,Payload);
  WriteBits(Writer,Config.SeqProfile,3);
  If Config.StillPicture Then WriteBit(Writer,1)Else WriteBit(Writer,0);
  If Config.ReducedStillPictureHeader Then WriteBit(Writer,1)Else WriteBit(Writer,0);
+ {reduced_still_picture_header : un operating point unique, decoder model absent.}
  WriteBits(Writer,Config.SeqLevelIdx0,5);
  WriteBits(Writer,Config.FrameWidthBits-1,4);
  WriteBits(Writer,Config.FrameHeightBits-1,4);
@@ -3450,10 +3476,13 @@ Begin
  End
   Else WriteBit(Writer,0);
  WriteBit(Writer,Config.ColorRange);
- {En profil Main 8 bits, le YUV420 est implique par seq_profile=0; les champs
-  restent dans Config pour av1C, mais le bitstream n'ecrit que la position.}
- If(Config.SeqProfile=0)and(not Config.MonoChrome)Then
-  WriteBits(Writer,Config.ChromaSamplePosition,2)
+ If(Config.SeqProfile=0)and(not Config.MonoChrome)Then Begin
+  If(Config.SubsamplingX<>1)or(Config.SubsamplingY<>1)Then Begin
+   Writer.Failed:=True;
+  End
+   Else
+   WriteBits(Writer,Config.ChromaSamplePosition,2);
+ End
  Else Begin
   WriteBit(Writer,Config.SubsamplingX);
   WriteBit(Writer,Config.SubsamplingY);
@@ -3491,6 +3520,44 @@ End;
 Function AV1FrameTypeValue(FrameType:TAV1FrameType):Byte;
 Begin
  AV1FrameTypeValue:=Ord(FrameType);
+End;
+
+Function ValidateFrameConfigForStillPicture(Const SeqConfig:TAV1SequenceConfig;
+ Const Config:TAV1FrameConfig):Boolean;
+Begin
+ ValidateFrameConfigForStillPicture:=False;
+ If not ValidateSequenceConfigForStillPicture(SeqConfig)Then Exit;
+ If Config.FrameType<>aftKeyFrame Then Exit;
+ If Config.ShowExistingFrame Then Exit;
+ If not Config.ShowFrame Then Exit;
+ If Config.ShowableFrame Then Exit;
+ If not Config.ErrorResilientMode Then Exit;
+ If not Config.DisableCDFUpdate Then Exit;
+ If Config.AllowScreenContentTools Then Exit;
+ If not Config.ForceIntegerMV Then Exit;
+ If(Config.FrameWidth=0)or(Config.FrameHeight=0)Then Exit;
+ If(Config.RenderWidth=0)or(Config.RenderHeight=0)Then Exit;
+ If(Config.FrameWidth>SeqConfig.MaxFrameWidth)or
+  (Config.FrameHeight>SeqConfig.MaxFrameHeight)Then Exit;
+ If(Config.RenderWidth>SeqConfig.MaxFrameWidth)or
+  (Config.RenderHeight>SeqConfig.MaxFrameHeight)Then Exit;
+ If Config.RefreshFrameFlags<>$FF Then Exit;
+ If Config.BaseQIndex<>96 Then Exit;
+ If Config.UsingQMatrix Then Exit;
+ If Config.DeltaQPresent Then Exit;
+ If Config.DeltaQResLog2>3 Then Exit;
+ If(Config.DeltaQYDC<>0)or(Config.DeltaQUDC<>0)or
+  (Config.DeltaQUAC<>0)or(Config.DeltaQVDC<>0)or
+  (Config.DeltaQVAC<>0)Then Exit;
+ If Config.CDEFEnabled Then Exit;
+ If Config.LoopRestorationEnabled Then Exit;
+ If Config.AllowIntrABC Then Exit;
+ If Config.LoopFilterLevel<>0 Then Exit;
+ If Config.LoopFilterSharpness<>0 Then Exit;
+ If Config.SegmentationEnabled Then Exit;
+ If(Config.TileCols<>1)or(Config.TileRows<>1)Then Exit;
+ If not Config.UniformTileSpacing Then Exit;
+ ValidateFrameConfigForStillPicture:=True;
 End;
 
 Procedure InitFrameConfigFromImage(Const Image:TAVIFImage;
@@ -3648,12 +3715,7 @@ Var
  Writer:TBitWriter;
 Begin
  WriteFrameHeaderPayload:=False;
- If(Config.FrameWidth=0)or(Config.FrameHeight=0)Then Exit;
- If(Config.RenderWidth=0)or(Config.RenderHeight=0)Then Exit;
- If(Config.FrameWidth>SeqConfig.MaxFrameWidth)or
-  (Config.FrameHeight>SeqConfig.MaxFrameHeight)Then Exit;
- If(Config.RenderWidth>SeqConfig.MaxFrameWidth)or
-  (Config.RenderHeight>SeqConfig.MaxFrameHeight)Then Exit;
+ If not ValidateFrameConfigForStillPicture(SeqConfig,Config)Then Exit;
  If not AllocateAV1ByteBuffer(Payload,AV1MaxOBUBytes)Then Exit;
  InitBitWriter(Writer,Payload);
  If not SeqConfig.ReducedStillPictureHeader Then Begin
@@ -4937,18 +4999,21 @@ Begin
  EncodeTileGroupHeader:=False;
  If not ValidateTileGroupConfig(TileConfig,Tile)Then Exit;
  If not AllocateAV1ByteBuffer(Payload,AV1MaxOBUBytes)Then Exit;
- InitBitWriter(Writer,Payload);
+ If(TileConfig.TileCols=1)and(TileConfig.TileRows=1)and
+  (Tile.TileIndex=0)Then Begin
+  EncodeTileGroupHeader:=True;
+  Exit;
+ End;
  StartAndEndPresent:=(TileConfig.TileCols<>1)or(TileConfig.TileRows<>1)or
   (Tile.TileIndex<>0);
- If not StartAndEndPresent Then
-  WriteBit(Writer,0)
- Else Begin
-  WriteBit(Writer,1);
-  Bits:=TileCountBits(TileConfig);
-  If Bits=0 Then Bits:=1;
+ InitBitWriter(Writer,Payload);
+ If StartAndEndPresent Then WriteBit(Writer,1)
+                       Else WriteBit(Writer,0);
+ Bits:=TileCountBits(TileConfig);
+ If Bits=0 Then Bits:=1;
+ If StartAndEndPresent Then Begin
   WriteBits(Writer,Tile.TileIndex,Bits);
   WriteBits(Writer,Tile.TileIndex,Bits);
-  WriteBits(Writer,TileConfig.TileSizeBytesMinus1,2);
  End;
  AddTrailingBits(Writer);
  If Writer.Failed Then Begin
@@ -6006,9 +6071,12 @@ Var
  CoeffSymbol:TCoeffSymbol;
  Value:LongInt;
 Begin
- EncodeNormativeLiteral(Encoder,UnitInfo.PlaneID,2);
+ If UnitInfo.PlaneID<>0 Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
  EncodeNormativeEOB(Encoder,UnitInfo.EOB,CDFSet);
- EncodeNormativeUnsigned(Encoder,UnitInfo.SymbolCount,16);
+ If UnitInfo.EOB=0 Then Exit;
  LastIndex:=LongInt(UnitInfo.SymbolStart)+UnitInfo.SymbolCount-1;
  If LastIndex>=CoeffSymbols.Count Then Begin
   Encoder.Failed:=True;
@@ -6016,14 +6084,12 @@ Begin
  End;
  For I:=UnitInfo.SymbolStart to LastIndex Do Begin
   CoeffSymbol:=CoeffSymbols.Symbols^[I];
-  EncodeNormativeLiteral(Encoder,Ord(CoeffSymbol.Kind),2);
-  EncodeNormativeLiteral(Encoder,CoeffSymbol.ContextId,8);
-  EncodeNormativeLiteral(Encoder,CoeffSymbol.Position,10);
   Value:=CoeffSymbol.Symbol;
   If Value<0 Then Value:=-Value;
   Case CoeffSymbol.Kind of
    cskEOB:
-    EncodeNormativeEOB(Encoder,Value,CDFSet);
+    Begin
+    End;
    cskCoeffBase:
     EncodeNormativeCDFSymbol(Encoder,
      ClampSymbolToCDF(Value,CDFSet.CoeffBaseCDF),CDFSet.CoeffBaseCDF);
@@ -6062,19 +6128,18 @@ Begin
   Encoder.Failed:=True;
   Exit;
  End;
- EncodeNormativeLiteral(Encoder,Leaf.X,16);
- EncodeNormativeLiteral(Encoder,Leaf.Y,16);
- EncodeNormativeLiteral(Encoder,Leaf.Size,7);
+ If(ModeNode.Size<>Leaf.Size)or(TxNode.Width<>Leaf.Size)or
+  (TxNode.Height<>Leaf.Size)or(UnitInfo.TxSize<>TxNode.TxSize)or
+  (UnitInfo.TxType<>TxNode.TxType)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
  If ModeNode.Skip Then SymbolValue:=1 Else SymbolValue:=0;
  EncodeNormativeCDFSymbol(Encoder,SymbolValue,CDFSet.SkipCDF);
  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(ModeNode.Mode),
   CDFSet.IntraModeCDF);
  EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(ModeNode.UVMode),
   CDFSet.UVModeCDF);
- EncodeNormativeLiteral(Encoder,ModeNode.SegmentId,3);
- EncodeNormativeLiteral(Encoder,ModeNode.QuantizerIndex,8);
- EncodeNormativeLiteral(Encoder,TxNode.Width,6);
- EncodeNormativeLiteral(Encoder,TxNode.Height,6);
  EncodeNormativeCDFSymbol(Encoder,TxSizeSymbol(TxNode.TxSize),CDFSet.TxSizeCDF);
  EncodeNormativeLiteral(Encoder,Ord(TxNode.TxType),3);
  If TxNode.Split Then EncodeNormativeUniformBit(Encoder,1)
@@ -6082,27 +6147,66 @@ Begin
  EncodeNormativeCoeffUnitSyntax(Encoder,UnitInfo,CoeffSymbols,CDFSet);
 End;
 
+Function EncodeNormativePartitionSubtree(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Partitions:TAV1PartitionMap;Var Index:Word;Const Modes:TAV1IntraModeMap;
+ Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
+ Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet):Boolean;Forward;
+
 Procedure EncodeNormativePartitionTree(Var Encoder:TAV1NormativeRangeEncoder;
  Const Partitions:TAV1PartitionMap;Const Modes:TAV1IntraModeMap;
  Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
  Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet);
 Var
- I:Word;
+ Index:Word;
+Begin
+ Index:=0;
+ While Index<Partitions.Count Do
+  If not EncodeNormativePartitionSubtree(Encoder,Partitions,Index,Modes,
+   TransformTree,CoeffUnits,CoeffSymbols,CDFSet)Then Exit;
+End;
+
+Function EncodeNormativePartitionSubtree(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Partitions:TAV1PartitionMap;Var Index:Word;Const Modes:TAV1IntraModeMap;
+ Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
+ Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet):Boolean;
+Var
+ Child:Byte;
  Node:TAV1PartitionNode;
 Begin
- EncodeNormativeUnsigned(Encoder,Partitions.Count,16);
- For I:=0 to Partitions.Count-1 Do Begin
-  Node:=Partitions.Nodes^[I];
-  EncodeNormativeCDFSymbol(Encoder,Ord(Node.Partition),CDFSet.PartitionCDF);
-  If Node.IsLeaf Then Begin
-   EncodeNormativeUniformBit(Encoder,1);
-   EncodeNormativeLeafBlockSyntax(Encoder,Node,Modes,TransformTree,
-    CoeffUnits,CoeffSymbols,CDFSet);
-  End
-   Else
-   EncodeNormativeUniformBit(Encoder,0);
-  If Encoder.Failed Then Exit;
+ EncodeNormativePartitionSubtree:=False;
+ If(Index>=Partitions.Count)or(Partitions.Nodes=Nil)Then Begin
+  Encoder.Failed:=True;
+  Exit;
  End;
+ Node:=Partitions.Nodes^[Index];
+ Inc(Index);
+ If Node.IsLeaf Then Begin
+  If Node.Partition<>aptNone Then Begin
+   Encoder.Failed:=True;
+   Exit;
+  End;
+  EncodeNormativeCDFSymbol(Encoder,Ord(aptNone),CDFSet.PartitionCDF);
+  EncodeNormativeLeafBlockSyntax(Encoder,Node,Modes,TransformTree,
+   CoeffUnits,CoeffSymbols,CDFSet);
+  EncodeNormativePartitionSubtree:=not Encoder.Failed;
+  Exit;
+ End;
+ EncodeNormativeCDFSymbol(Encoder,Ord(Node.Partition),CDFSet.PartitionCDF);
+ Case Node.Partition of
+  aptSplit:
+   For Child:=0 to 3 Do
+    If not EncodeNormativePartitionSubtree(Encoder,Partitions,Index,Modes,
+     TransformTree,CoeffUnits,CoeffSymbols,CDFSet)Then Exit;
+  aptHorizontal,aptVertical:
+   For Child:=0 to 1 Do
+    If not EncodeNormativePartitionSubtree(Encoder,Partitions,Index,Modes,
+     TransformTree,CoeffUnits,CoeffSymbols,CDFSet)Then Exit;
+  Else Begin
+   Encoder.Failed:=True;
+   Exit;
+  End;
+ End;
+ EncodeNormativePartitionSubtree:=not Encoder.Failed;
 End;
 
 Function EncodeNormativeTilePayload(Const Partitions:TAV1PartitionMap;
@@ -6124,7 +6228,6 @@ Begin
   (TransformTree.Count<>Partitions.LeafCount)or
   (CoeffUnits.Count<>Partitions.LeafCount)Then Exit;
  InitNormativeRangeEncoder(Encoder,Payload);
- EncodeNormativeLiteral(Encoder,$415631,24); {AV1}
  EncodeNormativePartitionTree(Encoder,Partitions,Modes,TransformTree,
   CoeffUnits,CoeffSymbols,CDFSet);
  If Encoder.Failed Then Exit;
@@ -6387,7 +6490,7 @@ Begin
  InitAV1ByteBuffer(TileGroupOBU);
  InitAV1Bitstream(Bitstream);
  If not AllocateAVIFImagePadded(GrayImage,16,16,AV1SuperBlockSize,
-  AV1SuperBlockSize,acfYUV444,rmFullRange,cmBT709)Then Exit;
+  AV1SuperBlockSize,acfYUV420,rmFullRange,cmBT709)Then Exit;
  FillGrayTestImage(GrayImage);
  InitSuperBlockGrid(GrayImage,AV1SuperBlockSize,Grid);
  If not ValidateSuperBlockGrid(GrayImage,Grid)Then Begin
@@ -6400,10 +6503,6 @@ Begin
   Exit;
  End;
  InitSequenceConfigFromImage(GrayImage,SeqConfig);
- SeqConfig.MonoChrome:=True;
- SeqConfig.SubsamplingX:=0;
- SeqConfig.SubsamplingY:=0;
- SeqConfig.ChromaSamplePosition:=0;
  If not WriteSequenceHeaderOBU(SeqConfig,SequenceOBU)Then Begin
   FreeAVIFImage(GrayImage);
   Exit;
@@ -6582,8 +6681,8 @@ Begin
   WriteLn('Echec regression : 65x65 YUV420 bord superbloc.');
   Exit;
  End;
- If not EncodeRegressionCase(16,16,acfYUV444,0)Then Begin
-  WriteLn('Echec regression : 16x16 YUV444 gris.');
+ If not EncodeRegressionCase(16,16,acfYUV420,0)Then Begin
+  WriteLn('Echec regression : 16x16 YUV420 gris.');
   Exit;
  End;
  RunAVIFBuiltInSelfTest:=True;

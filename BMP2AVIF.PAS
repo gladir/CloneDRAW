@@ -852,6 +852,13 @@ Type
   Failed:Boolean;
  End;
 
+ TBitReader=Record
+  Buffer:^TAV1ByteBuffer;
+  Pos,EndPos:LongInt;
+  BitOffset:Byte;
+  Failed:Boolean;
+ End;
+
  TAVIFEncoderOptions=Record
   InputFormat:TAVIFInputFormat;
   ImageKind:TAVIFImageKind;
@@ -1217,11 +1224,18 @@ Type
   ForceIntegerMV:Boolean;
   FrameWidth,FrameHeight:Word;
   RenderWidth,RenderHeight:Word;
-  RefreshFrameFlags:Byte;
-  BaseQIndex:Byte;
-  LoopFilterLevel:Byte;
-  LoopFilterSharpness:Byte;
-  SegmentationEnabled:Boolean;
+ RefreshFrameFlags:Byte;
+ BaseQIndex:Byte;
+ DeltaQYDC,DeltaQUDC,DeltaQUAC,DeltaQVDC,DeltaQVAC:ShortInt;
+ UsingQMatrix:Boolean;
+ DeltaQPresent:Boolean;
+ DeltaQResLog2:Byte;
+ CDEFEnabled:Boolean;
+ LoopRestorationEnabled:Boolean;
+ AllowIntrABC:Boolean;
+ LoopFilterLevel:Byte;
+ LoopFilterSharpness:Byte;
+ SegmentationEnabled:Boolean;
   TileCols,TileRows:Word;
   UniformTileSpacing:Boolean;
  End;
@@ -1988,6 +2002,59 @@ Begin
   WriteBit(Writer,0);
 End;
 
+Procedure InitBitReader(Var Reader:TBitReader;Const Buffer:TAV1ByteBuffer;
+ StartPos,Size:LongInt);
+Begin
+ Reader.Buffer:=@Buffer;
+ Reader.Pos:=StartPos;
+ Reader.EndPos:=StartPos+Size;
+ Reader.BitOffset:=0;
+ Reader.Failed:=False;
+ If(Buffer.Data=Nil)or(StartPos<0)or(Size<0)or(Reader.EndPos>Buffer.Size)Then
+  Reader.Failed:=True;
+End;
+
+Function ReadBitFromReader(Var Reader:TBitReader):Byte;
+Var
+ Value:Byte;
+Begin
+ ReadBitFromReader:=0;
+ If Reader.Failed Then Exit;
+ If(Reader.Buffer=Nil)or(Reader.Pos>=Reader.EndPos)Then Begin
+  Reader.Failed:=True;
+  Exit;
+ End;
+ Value:=Reader.Buffer^.Data^[Reader.Pos];
+ ReadBitFromReader:=(Value shr(7-Reader.BitOffset))and 1;
+ Inc(Reader.BitOffset);
+ If Reader.BitOffset=8 Then Begin
+  Reader.BitOffset:=0;
+  Inc(Reader.Pos);
+ End;
+End;
+
+Function ReadBitsFromReader(Var Reader:TBitReader;BitCount:Byte):LongInt;
+Var
+ I:Byte;
+ Value:LongInt;
+Begin
+ Value:=0;
+ For I:=1 to BitCount Do
+  Value:=(Value shl 1)+ReadBitFromReader(Reader);
+ ReadBitsFromReader:=Value;
+End;
+
+Function ValidateTrailingBits(Var Reader:TBitReader):Boolean;
+Begin
+ ValidateTrailingBits:=False;
+ If Reader.Failed Then Exit;
+ If ReadBitFromReader(Reader)<>1 Then Exit;
+ While(Reader.BitOffset<>0)and(not Reader.Failed)Do
+  If ReadBitFromReader(Reader)<>0 Then Exit;
+ If Reader.Failed Then Exit;
+ ValidateTrailingBits:=Reader.Pos=Reader.EndPos;
+End;
+
 Function WriteLEB128(Var Buffer:TAV1ByteBuffer;Value:LongInt):Boolean;
 Var
  B:Byte;
@@ -2191,6 +2258,125 @@ Begin
  ValidateBuiltInTileGroupPayload:=True;
 End;
 
+Function ValidateBuiltInSequenceHeaderPayload(Const SequenceOBU:TAV1ByteBuffer;
+ Const SeqConfig:TAV1SequenceConfig):Boolean;
+Var
+ PayloadStart,PayloadSize:LongInt;
+ Reader:TBitReader;
+ Value:LongInt;
+Begin
+ ValidateBuiltInSequenceHeaderPayload:=False;
+ If not GetOBUPayloadRange(SequenceOBU,obuSequenceHeader,PayloadStart,
+  PayloadSize)Then Exit;
+ InitBitReader(Reader,SequenceOBU,PayloadStart,PayloadSize);
+ If ReadBitsFromReader(Reader,3)<>SeqConfig.SeqProfile Then Exit;
+ If ReadBitFromReader(Reader)<>Ord(SeqConfig.StillPicture)Then Exit;
+ If ReadBitFromReader(Reader)<>Ord(SeqConfig.ReducedStillPictureHeader)Then Exit;
+ If ReadBitsFromReader(Reader,5)<>SeqConfig.SeqLevelIdx0 Then Exit;
+ If ReadBitsFromReader(Reader,4)<>SeqConfig.FrameWidthBits-1 Then Exit;
+ If ReadBitsFromReader(Reader,4)<>SeqConfig.FrameHeightBits-1 Then Exit;
+ If ReadBitsFromReader(Reader,SeqConfig.FrameWidthBits)<>
+  LongInt(SeqConfig.MaxFrameWidth)-1 Then Exit;
+ If ReadBitsFromReader(Reader,SeqConfig.FrameHeightBits)<>
+  LongInt(SeqConfig.MaxFrameHeight)-1 Then Exit;
+ If ReadBitFromReader(Reader)<>Ord(SeqConfig.Use128x128SuperBlock)Then Exit;
+ If ReadBitFromReader(Reader)<>Ord(SeqConfig.EnableFilterIntra)Then Exit;
+ If ReadBitFromReader(Reader)<>Ord(SeqConfig.EnableIntraEdgeFilter)Then Exit;
+ If ReadBitFromReader(Reader)<>Ord(SeqConfig.HighBitDepth)Then Exit;
+ If ReadBitFromReader(Reader)<>Ord(SeqConfig.MonoChrome)Then Exit;
+ If ReadBitFromReader(Reader)<>Ord(SeqConfig.ColorDescriptionPresent)Then Exit;
+ If SeqConfig.ColorDescriptionPresent Then Begin
+  If ReadBitsFromReader(Reader,8)<>SeqConfig.ColorPrimaries Then Exit;
+  If ReadBitsFromReader(Reader,8)<>SeqConfig.TransferCharacteristics Then Exit;
+  If ReadBitsFromReader(Reader,8)<>SeqConfig.MatrixCoefficients Then Exit;
+ End;
+ If ReadBitFromReader(Reader)<>SeqConfig.ColorRange Then Exit;
+ If(SeqConfig.SeqProfile=0)and(not SeqConfig.MonoChrome)Then Begin
+  If ReadBitsFromReader(Reader,2)<>SeqConfig.ChromaSamplePosition Then Exit;
+ End
+  Else Begin
+  If ReadBitFromReader(Reader)<>SeqConfig.SubsamplingX Then Exit;
+  If ReadBitFromReader(Reader)<>SeqConfig.SubsamplingY Then Exit;
+  If(SeqConfig.SubsamplingX<>0)and(SeqConfig.SubsamplingY<>0)Then
+   If ReadBitsFromReader(Reader,2)<>SeqConfig.ChromaSamplePosition Then Exit;
+ End;
+ Value:=ReadBitFromReader(Reader);
+ If Value<>Ord(SeqConfig.SeparateUVDeltAQ)Then Exit;
+ Value:=ReadBitFromReader(Reader);
+ If Value<>Ord(SeqConfig.FilmGrainParamsPresent)Then Exit;
+ ValidateBuiltInSequenceHeaderPayload:=ValidateTrailingBits(Reader);
+End;
+
+Function ReadDeltaQFromReader(Var Reader:TBitReader):ShortInt;
+Var
+ Present:Boolean;
+ Value:LongInt;
+ SignBit:Byte;
+Begin
+ ReadDeltaQFromReader:=0;
+ Present:=ReadBitFromReader(Reader)<>0;
+ If not Present Then Exit;
+ Value:=ReadBitsFromReader(Reader,6);
+ SignBit:=ReadBitFromReader(Reader);
+ If SignBit<>0 Then ReadDeltaQFromReader:=-Value
+               Else ReadDeltaQFromReader:=Value;
+End;
+
+Function ValidateBuiltInFrameHeaderPayload(Const FrameHeaderOBU:TAV1ByteBuffer;
+ Const SeqConfig:TAV1SequenceConfig;Const Image:TAVIFImage):Boolean;
+Var
+ PayloadStart,PayloadSize:LongInt;
+ Reader:TBitReader;
+ FrameWidth,FrameHeight,RenderWidth,RenderHeight:LongInt;
+ RenderDifferent:Byte;
+Begin
+ ValidateBuiltInFrameHeaderPayload:=False;
+ If not GetOBUPayloadRange(FrameHeaderOBU,obuFrameHeader,PayloadStart,
+  PayloadSize)Then Exit;
+ InitBitReader(Reader,FrameHeaderOBU,PayloadStart,PayloadSize);
+ If not SeqConfig.ReducedStillPictureHeader Then Exit;
+ If ReadBitFromReader(Reader)<>1 Then Exit; {disable_cdf_update}
+ If ReadBitFromReader(Reader)<>0 Then Exit; {allow_screen_content_tools}
+ If ReadBitFromReader(Reader)<>0 Then Exit; {frame_size_override_flag}
+ FrameWidth:=ReadBitsFromReader(Reader,SeqConfig.FrameWidthBits)+1;
+ FrameHeight:=ReadBitsFromReader(Reader,SeqConfig.FrameHeightBits)+1;
+ If(FrameWidth<>Image.Width)or(FrameHeight<>Image.Height)Then Exit;
+ RenderDifferent:=ReadBitFromReader(Reader);
+ If RenderDifferent<>0 Then Begin
+  RenderWidth:=ReadBitsFromReader(Reader,SeqConfig.FrameWidthBits)+1;
+  RenderHeight:=ReadBitsFromReader(Reader,SeqConfig.FrameHeightBits)+1;
+ End
+  Else Begin
+  RenderWidth:=FrameWidth;
+  RenderHeight:=FrameHeight;
+ End;
+ If(RenderWidth<>Image.Width)or(RenderHeight<>Image.Height)Then Exit;
+ If ReadBitFromReader(Reader)<>0 Then Exit; {allow_intrabc}
+ If ReadBitsFromReader(Reader,6)<>0 Then Exit;
+ If ReadBitsFromReader(Reader,6)<>0 Then Exit;
+ If ReadBitsFromReader(Reader,6)<>0 Then Exit;
+ If ReadBitsFromReader(Reader,6)<>0 Then Exit;
+ If ReadBitsFromReader(Reader,3)<>0 Then Exit;
+ If ReadBitFromReader(Reader)<>0 Then Exit; {loop_filter_delta_enabled}
+ If ReadBitsFromReader(Reader,8)<>96 Then Exit;
+ If ReadDeltaQFromReader(Reader)<>0 Then Exit;
+ If ReadDeltaQFromReader(Reader)<>0 Then Exit;
+ If ReadDeltaQFromReader(Reader)<>0 Then Exit;
+ If ReadDeltaQFromReader(Reader)<>0 Then Exit;
+ If ReadDeltaQFromReader(Reader)<>0 Then Exit;
+ If ReadBitFromReader(Reader)<>0 Then Exit; {using_qmatrix}
+ If ReadBitFromReader(Reader)<>0 Then Exit; {segmentation_enabled}
+ If ReadBitFromReader(Reader)<>0 Then Exit; {delta_q_present}
+ If ReadBitsFromReader(Reader,2)<>0 Then Exit; {cdef_bits}
+ If ReadBitsFromReader(Reader,2)<>0 Then Exit; {lr y}
+ If ReadBitsFromReader(Reader,2)<>0 Then Exit; {lr u}
+ If ReadBitsFromReader(Reader,2)<>0 Then Exit; {lr v}
+ If ReadBitFromReader(Reader)<>1 Then Exit; {uniform_tile_spacing}
+ If ReadBitFromReader(Reader)<>0 Then Exit; {cols log2 stop}
+ If ReadBitFromReader(Reader)<>0 Then Exit; {rows log2 stop}
+ ValidateBuiltInFrameHeaderPayload:=ValidateTrailingBits(Reader);
+End;
+
 Function ValidateBuiltInAV1Scope(Const Image:TAVIFImage;
  Const SeqConfig:TAV1SequenceConfig):Boolean;
 Begin
@@ -2212,6 +2398,8 @@ End;
 Function ValidateBuiltInAV1DecoderPath(Const Image:TAVIFImage;
  Const SeqConfig:TAV1SequenceConfig;Const Bitstream:TAV1Bitstream;
  Const Container:TAVIFContainer):Boolean;
+Var
+ ExpectedSize:LongInt;
 Begin
  ValidateBuiltInAV1DecoderPath:=False;
  If not AV1BitstreamIsDecoderReady Then Exit;
@@ -2219,7 +2407,14 @@ Begin
  If not ValidateOBUHeader(Bitstream.SequenceHeader,obuSequenceHeader)Then Exit;
  If not ValidateOBUHeader(Bitstream.FrameHeader,obuFrameHeader)Then Exit;
  If not ValidateOBUHeader(Bitstream.TileGroup,obuTileGroup)Then Exit;
+ If not ValidateBuiltInSequenceHeaderPayload(Bitstream.SequenceHeader,
+  SeqConfig)Then Exit;
+ If not ValidateBuiltInFrameHeaderPayload(Bitstream.FrameHeader,SeqConfig,
+  Image)Then Exit;
  If not ValidateBuiltInTileGroupPayload(Bitstream.TileGroup)Then Exit;
+ ExpectedSize:=Bitstream.SequenceHeader.Size+Bitstream.FrameHeader.Size+
+  Bitstream.TileGroup.Size;
+ If Bitstream.Combined.Size<>ExpectedSize Then Exit;
  If not ValidateAV1OBUSequenceInRange(Bitstream.Combined,0,
   Bitstream.Combined.Size)Then Exit;
  If not ValidateAVIFRegressionStructure(Container,Image,SeqConfig,
@@ -2420,6 +2615,39 @@ Begin
   Pos:=Pos+SizeValue;
  End;
  ValidateBoxListEnd:=Pos=EndPos;
+End;
+
+Function CountBoxInRange(Const Buffer:TAV1ByteBuffer;StartPos,EndPos:LongInt;
+ Code:String;Var Count:Byte):Boolean;
+Var
+ Pos:LongInt;
+ SizeValue:LongInt;
+Begin
+ CountBoxInRange:=False;
+ Count:=0;
+ Pos:=StartPos;
+ While Pos<EndPos Do Begin
+  If LongInt(Pos)+8>EndPos Then Exit;
+  If not ReadBE32(Buffer,Pos,SizeValue)Then Exit;
+  If SizeValue<8 Then Exit;
+  If LongInt(Pos)+SizeValue>EndPos Then Exit;
+  If BufferHasFourCC(Buffer,Pos+4,Code)Then
+   If Count<255 Then Inc(Count)Else Exit;
+  Pos:=Pos+SizeValue;
+ End;
+ CountBoxInRange:=Pos=EndPos;
+End;
+
+Function RequireSingleBoxInRange(Const Buffer:TAV1ByteBuffer;StartPos,EndPos:LongInt;
+ Code:String;Var BoxOffset,BoxSize:LongInt):Boolean;
+Var
+ Count:Byte;
+Begin
+ RequireSingleBoxInRange:=False;
+ If not CountBoxInRange(Buffer,StartPos,EndPos,Code,Count)Then Exit;
+ If Count<>1 Then Exit;
+ RequireSingleBoxInRange:=FindBoxInRange(Buffer,StartPos,EndPos,Code,
+  BoxOffset,BoxSize);
 End;
 
 Function EndISOBox(Var Writer:TISOBoxWriter;StartPos:LongInt):Boolean;
@@ -2768,6 +2996,17 @@ Begin
  ValidateAVIFContainer:=True;
 End;
 
+Function ValidateFtypBox(Const Buffer:TAV1ByteBuffer;BoxOffset:LongInt;
+ BoxSize:LongInt):Boolean;
+Begin
+ ValidateFtypBox:=False;
+ If BoxSize<24 Then Exit;
+ If not BufferHasFourCC(Buffer,BoxOffset+8,'avif')Then Exit;
+ If not BufferHasFourCC(Buffer,BoxOffset+16,'avif')Then Exit;
+ If not BufferHasFourCC(Buffer,BoxOffset+20,'mif1')Then Exit;
+ ValidateFtypBox:=True;
+End;
+
 Function ValidateHdlrBox(Const Buffer:TAV1ByteBuffer;BoxOffset:LongInt;
  BoxSize:LongInt):Boolean;
 Begin
@@ -2805,6 +3044,41 @@ Begin
  If not ReadBE16(Buffer,InfeOffset+12,ItemID)Then Exit;
  If ItemID<>AVIFInitialItemID Then Exit;
  ValidateIinfBox:=BufferHasFourCC(Buffer,InfeOffset+16,'av01');
+End;
+
+Function ValidateIlocBox(Const Buffer:TAV1ByteBuffer;BoxOffset:LongInt;
+ BoxSize:LongInt;Const PatchInfo:TAVIFIlocPatchInfo):Boolean;
+Var
+ ItemCount,ItemID,DataReferenceIndex,ExtentCount:Word;
+ OffsetSizeLengthSize,BaseAndIndexSize:Byte;
+ OffsetValue,LengthValue:LongInt;
+Begin
+ ValidateIlocBox:=False;
+ If BoxSize<30 Then Exit;
+ If(BoxOffset<>PatchInfo.IlocBoxStart)or
+  (BoxOffset+BoxSize<>PatchInfo.IlocBoxEnd)Then Exit;
+ If Buffer.Data^[BoxOffset+8]<>0 Then Exit; {version}
+ If(Buffer.Data^[BoxOffset+9]<>0)or(Buffer.Data^[BoxOffset+10]<>0)or
+  (Buffer.Data^[BoxOffset+11]<>0)Then Exit;
+ OffsetSizeLengthSize:=Buffer.Data^[BoxOffset+12];
+ BaseAndIndexSize:=Buffer.Data^[BoxOffset+13];
+ If OffsetSizeLengthSize<>$44 Then Exit;
+ If BaseAndIndexSize<>$00 Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+14,ItemCount)Then Exit;
+ If ItemCount<>1 Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+16,ItemID)Then Exit;
+ If ItemID<>AVIFInitialItemID Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+18,DataReferenceIndex)Then Exit;
+ If DataReferenceIndex<>0 Then Exit;
+ If not ReadBE16(Buffer,BoxOffset+20,ExtentCount)Then Exit;
+ If ExtentCount<>1 Then Exit;
+ If PatchInfo.OffsetFieldPos<>BoxOffset+22 Then Exit;
+ If PatchInfo.LengthFieldPos<>BoxOffset+26 Then Exit;
+ If not ReadBE32(Buffer,PatchInfo.OffsetFieldPos,OffsetValue)Then Exit;
+ If not ReadBE32(Buffer,PatchInfo.LengthFieldPos,LengthValue)Then Exit;
+ If OffsetValue<>PatchInfo.MdatDataOffset Then Exit;
+ If LengthValue<>PatchInfo.MdatDataLength Then Exit;
+ ValidateIlocBox:=True;
 End;
 
 Function ValidateIspeProperty(Const Buffer:TAV1ByteBuffer;BoxOffset:LongInt;
@@ -2922,34 +3196,50 @@ Var
  FtypOffset,MetaOffset,MdatOffset,BoxOffset:LongInt;
  FtypSize,MetaSize,MdatSize,BoxSize:LongInt;
  MetaStart,MetaEnd:LongInt;
+ I:LongInt;
 Begin
  ValidateAVIFRegressionStructure:=False;
  If not ValidateBoxListEnd(Container.FileData,0,Container.FileData.Size)Then Exit;
- If not FindBoxInRange(Container.FileData,0,Container.FileData.Size,
+ If not RequireSingleBoxInRange(Container.FileData,0,Container.FileData.Size,
   'ftyp',FtypOffset,FtypSize)Then Exit;
- If not FindBoxInRange(Container.FileData,0,Container.FileData.Size,
+ If not RequireSingleBoxInRange(Container.FileData,0,Container.FileData.Size,
   'meta',MetaOffset,MetaSize)Then Exit;
- If not FindBoxInRange(Container.FileData,0,Container.FileData.Size,
+ If not RequireSingleBoxInRange(Container.FileData,0,Container.FileData.Size,
   'mdat',MdatOffset,MdatSize)Then Exit;
  If not((FtypOffset<MetaOffset)and(MetaOffset<MdatOffset))Then Exit;
- If not BufferHasFourCC(Container.FileData,FtypOffset+8,'avif')Then Exit;
+ If FtypOffset<>0 Then Exit;
+ If MdatOffset+MdatSize<>Container.FileData.Size Then Exit;
+ If not ValidateFtypBox(Container.FileData,FtypOffset,FtypSize)Then Exit;
+ If MetaSize<12 Then Exit;
+ If(Container.FileData.Data^[MetaOffset+8]<>0)or
+  (Container.FileData.Data^[MetaOffset+9]<>0)or
+  (Container.FileData.Data^[MetaOffset+10]<>0)or
+  (Container.FileData.Data^[MetaOffset+11]<>0)Then Exit;
  MetaStart:=MetaOffset+12;
  MetaEnd:=MetaOffset+MetaSize;
  If not ValidateBoxListEnd(Container.FileData,MetaStart,MetaEnd)Then Exit;
- If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'hdlr',BoxOffset,BoxSize)Then Exit;
+ If not RequireSingleBoxInRange(Container.FileData,MetaStart,MetaEnd,'hdlr',BoxOffset,BoxSize)Then Exit;
  If not ValidateHdlrBox(Container.FileData,BoxOffset,BoxSize)Then Exit;
- If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'pitm',BoxOffset,BoxSize)Then Exit;
+ If not RequireSingleBoxInRange(Container.FileData,MetaStart,MetaEnd,'pitm',BoxOffset,BoxSize)Then Exit;
  If not ValidatePitmBox(Container.FileData,BoxOffset,BoxSize)Then Exit;
- If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'iloc',BoxOffset,BoxSize)Then Exit;
- If BoxOffset<>Container.IlocPatch.IlocBoxStart Then Exit;
- If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'iinf',BoxOffset,BoxSize)Then Exit;
+ If not RequireSingleBoxInRange(Container.FileData,MetaStart,MetaEnd,'iloc',BoxOffset,BoxSize)Then Exit;
+ If not ValidateIlocBox(Container.FileData,BoxOffset,BoxSize,
+  Container.IlocPatch)Then Exit;
+ If not RequireSingleBoxInRange(Container.FileData,MetaStart,MetaEnd,'iinf',BoxOffset,BoxSize)Then Exit;
  If not ValidateIinfBox(Container.FileData,BoxOffset,BoxSize)Then Exit;
- If not FindBoxInRange(Container.FileData,MetaStart,MetaEnd,'iprp',BoxOffset,BoxSize)Then Exit;
+ If not RequireSingleBoxInRange(Container.FileData,MetaStart,MetaEnd,'iprp',BoxOffset,BoxSize)Then Exit;
  If not ValidateIprpBox(Container.FileData,BoxOffset,BoxSize,Image,SeqConfig)Then Exit;
  If Container.IlocPatch.MdatBoxOffset<>MdatOffset Then Exit;
  If MdatSize<>LongInt(Container.IlocPatch.MdatHeaderSize)+AV1DataSize Then Exit;
+ If Container.IlocPatch.MdatDataLength<>AV1DataSize Then Exit;
+ If Container.IlocPatch.MdatDataOffset<>MdatOffset+Container.IlocPatch.MdatHeaderSize Then Exit;
+ If Container.IlocPatch.MdatDataOffset+Container.IlocPatch.MdatDataLength<>
+  MdatOffset+MdatSize Then Exit;
  If not ValidateAV1OBUSequenceInRange(Container.FileData,
   Container.IlocPatch.MdatDataOffset,Container.IlocPatch.MdatDataLength)Then Exit;
+ For I:=Container.IlocPatch.MdatDataOffset to
+  Container.IlocPatch.MdatDataOffset+Container.IlocPatch.MdatDataLength-1 Do
+  If I>=Container.FileData.Size Then Exit;
  ValidateAVIFRegressionStructure:=True;
 End;
 
@@ -3221,6 +3511,17 @@ Begin
  Config.RenderHeight:=Image.Height;
  Config.RefreshFrameFlags:=$FF;
  Config.BaseQIndex:=96;
+ Config.DeltaQYDC:=0;
+ Config.DeltaQUDC:=0;
+ Config.DeltaQUAC:=0;
+ Config.DeltaQVDC:=0;
+ Config.DeltaQVAC:=0;
+ Config.UsingQMatrix:=False;
+ Config.DeltaQPresent:=False;
+ Config.DeltaQResLog2:=0;
+ Config.CDEFEnabled:=False;
+ Config.LoopRestorationEnabled:=False;
+ Config.AllowIntrABC:=False;
  Config.LoopFilterLevel:=0;
  Config.LoopFilterSharpness:=0;
  Config.SegmentationEnabled:=False;
@@ -3265,18 +3566,55 @@ End;
 Procedure WriteQuantizationParams(Var Writer:TBitWriter;Const Config:TAV1FrameConfig);
 Begin
  WriteBits(Writer,Config.BaseQIndex,8);
- WriteDeltaQ(Writer,0); {delta_q_y_dc}
- WriteDeltaQ(Writer,0); {delta_q_u_dc}
- WriteDeltaQ(Writer,0); {delta_q_u_ac}
- WriteDeltaQ(Writer,0); {delta_q_v_dc}
- WriteDeltaQ(Writer,0); {delta_q_v_ac}
- WriteBit(Writer,0);    {using_qmatrix}
+ WriteDeltaQ(Writer,Config.DeltaQYDC);
+ WriteDeltaQ(Writer,Config.DeltaQUDC);
+ WriteDeltaQ(Writer,Config.DeltaQUAC);
+ WriteDeltaQ(Writer,Config.DeltaQVDC);
+ WriteDeltaQ(Writer,Config.DeltaQVAC);
+ If Config.UsingQMatrix Then WriteBit(Writer,1)
+                        Else WriteBit(Writer,0);
 End;
 
 Procedure WriteSegmentationParams(Var Writer:TBitWriter;Const Config:TAV1FrameConfig);
 Begin
  If Config.SegmentationEnabled Then WriteBit(Writer,1)
                                Else WriteBit(Writer,0);
+End;
+
+Procedure WriteDeltaQParams(Var Writer:TBitWriter;Const Config:TAV1FrameConfig);
+Begin
+ If Config.DeltaQPresent Then Begin
+  WriteBit(Writer,1);
+  WriteBits(Writer,Config.DeltaQResLog2,2);
+ End
+  Else WriteBit(Writer,0);
+End;
+
+Procedure WriteCDEFParams(Var Writer:TBitWriter;Const Config:TAV1FrameConfig);
+Begin
+ If Config.CDEFEnabled Then Begin
+  WriteBits(Writer,0,2); {cdef_damping_minus_3}
+  WriteBits(Writer,0,2); {cdef_bits}
+  WriteBits(Writer,0,4); {cdef_y_pri_strength[0]}
+  WriteBits(Writer,0,2); {cdef_y_sec_strength[0]}
+  WriteBits(Writer,0,4); {cdef_uv_pri_strength[0]}
+  WriteBits(Writer,0,2); {cdef_uv_sec_strength[0]}
+ End
+  Else WriteBits(Writer,0,2); {cdef_bits=0, no strengths}
+End;
+
+Procedure WriteLoopRestorationParams(Var Writer:TBitWriter;Const Config:TAV1FrameConfig);
+Begin
+ If Config.LoopRestorationEnabled Then Begin
+  WriteBits(Writer,0,2);
+  WriteBits(Writer,0,2);
+  WriteBits(Writer,0,2);
+ End
+  Else Begin
+  WriteBits(Writer,0,2);
+  WriteBits(Writer,0,2);
+  WriteBits(Writer,0,2);
+ End;
 End;
 
 Procedure WriteTileInfoMinimal(Var Writer:TBitWriter;Const Config:TAV1FrameConfig);
@@ -3289,12 +3627,33 @@ Begin
  WriteBit(Writer,0); {increment_tile_rows_log2 termine a 0}
 End;
 
+Procedure WriteFrameSizeFields(Var Writer:TBitWriter;Const SeqConfig:TAV1SequenceConfig;
+ Const Config:TAV1FrameConfig);
+Begin
+ WriteBit(Writer,0); {frame_size_override_flag}
+ WriteBits(Writer,LongInt(Config.FrameWidth)-1,SeqConfig.FrameWidthBits);
+ WriteBits(Writer,LongInt(Config.FrameHeight)-1,SeqConfig.FrameHeightBits);
+ If(Config.RenderWidth<>Config.FrameWidth)or
+  (Config.RenderHeight<>Config.FrameHeight)Then Begin
+  WriteBit(Writer,1);
+  WriteBits(Writer,LongInt(Config.RenderWidth)-1,SeqConfig.FrameWidthBits);
+  WriteBits(Writer,LongInt(Config.RenderHeight)-1,SeqConfig.FrameHeightBits);
+ End
+  Else WriteBit(Writer,0);
+End;
+
 Function WriteFrameHeaderPayload(Const SeqConfig:TAV1SequenceConfig;
  Const Config:TAV1FrameConfig;Var Payload:TAV1ByteBuffer):Boolean;
 Var
  Writer:TBitWriter;
 Begin
  WriteFrameHeaderPayload:=False;
+ If(Config.FrameWidth=0)or(Config.FrameHeight=0)Then Exit;
+ If(Config.RenderWidth=0)or(Config.RenderHeight=0)Then Exit;
+ If(Config.FrameWidth>SeqConfig.MaxFrameWidth)or
+  (Config.FrameHeight>SeqConfig.MaxFrameHeight)Then Exit;
+ If(Config.RenderWidth>SeqConfig.MaxFrameWidth)or
+  (Config.RenderHeight>SeqConfig.MaxFrameHeight)Then Exit;
  If not AllocateAV1ByteBuffer(Payload,AV1MaxOBUBytes)Then Exit;
  InitBitWriter(Writer,Payload);
  If not SeqConfig.ReducedStillPictureHeader Then Begin
@@ -3310,15 +3669,15 @@ Begin
  {Reduced still picture header implique key_frame + show_frame; on ecrit les
   champs intra minimaux que les etapes suivantes completeront avec les tuiles.}
  If Config.DisableCDFUpdate Then WriteBit(Writer,1)Else WriteBit(Writer,0);
- WriteBit(Writer,0); {allow_screen_content_tools}
- WriteBit(Writer,0); {frame_size_override_flag}
- WriteBits(Writer,LongInt(Config.FrameWidth)-1,SeqConfig.FrameWidthBits);
- WriteBits(Writer,LongInt(Config.FrameHeight)-1,SeqConfig.FrameHeightBits);
- WriteBit(Writer,0); {render_and_frame_size_different}
- WriteBit(Writer,0); {allow_intrabc}
+ If Config.AllowScreenContentTools Then WriteBit(Writer,1)Else WriteBit(Writer,0);
+ WriteFrameSizeFields(Writer,SeqConfig,Config);
+ If Config.AllowIntrABC Then WriteBit(Writer,1)Else WriteBit(Writer,0);
  WriteLoopFilterParams(Writer,Config);
  WriteQuantizationParams(Writer,Config);
  WriteSegmentationParams(Writer,Config);
+ WriteDeltaQParams(Writer,Config);
+ WriteCDEFParams(Writer,Config);
+ WriteLoopRestorationParams(Writer,Config);
  WriteTileInfoMinimal(Writer,Config);
  AddTrailingBits(Writer);
  If Writer.Failed Then Begin
@@ -3652,35 +4011,80 @@ End;
 Procedure Forward1D(Const InVec:TTransformBlock;Var OutVec:TTransformBlock;
  Row:Byte;Size:Byte;Horizontal:Boolean;Kind:TTransformType);
 Var
- I,J:Byte;
- Sample:LongInt;
+ Temp:Array[0..AV1MaxTransformSize-1]of LongInt;
+ Step,Half,I,J,Pair:Byte;
+ A,B:LongInt;
 Begin
  For I:=0 to Size-1 Do Begin
-  If Horizontal Then OutVec[I,Row]:=0
-                Else OutVec[Row,I]:=0;
-  For J:=0 to Size-1 Do Begin
-   If Horizontal Then Sample:=InVec[J,Row]
-                 Else Sample:=InVec[Row,J];
-   Case Kind of
-    txIdentity:
-     If I=J Then
-      If Horizontal Then OutVec[I,Row]:=OutVec[I,Row]+Sample
-                    Else OutVec[Row,I]:=OutVec[Row,I]+Sample;
-    txADST_DCT,txADST_ADST:
-     If Horizontal Then OutVec[I,Row]:=OutVec[I,Row]+Sample*LongInt((I+1)*(J+1))
-                   Else OutVec[Row,I]:=OutVec[Row,I]+Sample*LongInt((I+1)*(J+1));
-    Else
-     If I=0 Then
-      If Horizontal Then OutVec[I,Row]:=OutVec[I,Row]+Sample
-                    Else OutVec[Row,I]:=OutVec[Row,I]+Sample
-     Else
-      If Horizontal Then OutVec[I,Row]:=OutVec[I,Row]+Sample*LongInt((I+1)*(Size-J))
-                    Else OutVec[Row,I]:=OutVec[Row,I]+Sample*LongInt((I+1)*(Size-J));
+  If Horizontal Then Temp[I]:=InVec[I,Row]
+                Else Temp[I]:=InVec[Row,I];
+ End;
+ If(Kind=txADST_DCT)or(Kind=txADST_ADST)Then
+  For I:=0 to (Size div 2)-1 Do Begin
+   A:=Temp[I];
+   Temp[I]:=Temp[Size-1-I];
+   Temp[Size-1-I]:=A;
+  End;
+ If Kind<>txIdentity Then Begin
+  Step:=1;
+  While Step<Size Do Begin
+   Half:=Step;
+   Step:=Step shl 1;
+   Pair:=0;
+   While Pair<Size Do Begin
+    For J:=0 to Half-1 Do Begin
+     A:=Temp[Pair+J];
+     B:=Temp[Pair+J+Half];
+     Temp[Pair+J]:=A+B;
+     Temp[Pair+J+Half]:=A-B;
+    End;
+    Pair:=Pair+Step;
    End;
   End;
-  If Kind<>txIdentity Then
-   If Horizontal Then OutVec[I,Row]:=OutVec[I,Row] div Size
-                 Else OutVec[Row,I]:=OutVec[Row,I] div Size;
+ End;
+ For I:=0 to Size-1 Do Begin
+  If Horizontal Then OutVec[I,Row]:=Temp[I]
+                Else OutVec[Row,I]:=Temp[I];
+ End;
+End;
+
+Procedure Inverse1D(Const InVec:TTransformBlock;Var OutVec:TTransformBlock;
+ Row:Byte;Size:Byte;Horizontal:Boolean;Kind:TTransformType);
+Var
+ Temp:Array[0..AV1MaxTransformSize-1]of LongInt;
+ Step,Half,I,J,Pair:Byte;
+ A,B:LongInt;
+Begin
+ For I:=0 to Size-1 Do Begin
+  If Horizontal Then Temp[I]:=InVec[I,Row]
+                Else Temp[I]:=InVec[Row,I];
+ End;
+ If Kind<>txIdentity Then Begin
+  Step:=1;
+  While Step<Size Do Begin
+   Half:=Step;
+   Step:=Step shl 1;
+   Pair:=0;
+   While Pair<Size Do Begin
+    For J:=0 to Half-1 Do Begin
+     A:=Temp[Pair+J];
+     B:=Temp[Pair+J+Half];
+     Temp[Pair+J]:=(A+B)div 2;
+     Temp[Pair+J+Half]:=(A-B)div 2;
+    End;
+    Pair:=Pair+Step;
+   End;
+  End;
+  If(Kind=txADST_DCT)or(Kind=txADST_ADST)Then
+   For I:=0 to (Size div 2)-1 Do Begin
+    A:=Temp[I];
+    Temp[I]:=Temp[Size-1-I];
+    Temp[Size-1-I]:=A;
+   End;
+ End;
+ For I:=0 to Size-1 Do Begin
+  If Horizontal Then OutVec[I,Row]:=Temp[I]
+                Else OutVec[Row,I]:=Temp[I];
  End;
 End;
 
@@ -3721,18 +4125,35 @@ End;
 Procedure InverseTransform(Const Coeffs:TTransformBlock;TxType:TTransformType;
  TxSize:TTransformSize;Var ReconResidual:TAV1ResidualBlock);
 Var
+ Temp,Output:TTransformBlock;
  X,YPos,Size:Byte;
- Value:LongInt;
+ HorizontalKind,VerticalKind:TTransformType;
 Begin
  FillChar(ReconResidual,SizeOf(ReconResidual),0);
+ FillChar(Temp,SizeOf(Temp),0);
+ FillChar(Output,SizeOf(Output),0);
  Size:=GetTransformSizePixels(TxSize);
- For YPos:=0 to Size-1 Do
-  For X:=0 to Size-1 Do Begin
-   If TxType=txIdentity Then Value:=Coeffs[X,YPos]
-   Else If(X=0)and(YPos=0)Then Value:=Coeffs[0,0] div Size
-   Else Value:=Coeffs[X,YPos] div (Size*Size);
-   ReconResidual[X,YPos]:=ClipTransformValue(Value);
+ HorizontalKind:=txDCT_DCT;
+ VerticalKind:=txDCT_DCT;
+ Case TxType of
+  txADST_DCT:HorizontalKind:=txADST_DCT;
+  txDCT_ADST:VerticalKind:=txADST_DCT;
+  txADST_ADST:Begin
+   HorizontalKind:=txADST_ADST;
+   VerticalKind:=txADST_ADST;
   End;
+  txIdentity:Begin
+   HorizontalKind:=txIdentity;
+   VerticalKind:=txIdentity;
+  End;
+ End;
+ For X:=0 to Size-1 Do
+  Inverse1D(Coeffs,Temp,X,Size,False,VerticalKind);
+ For YPos:=0 to Size-1 Do
+  Inverse1D(Temp,Output,YPos,Size,True,HorizontalKind);
+ For YPos:=0 to Size-1 Do
+  For X:=0 to Size-1 Do
+   ReconResidual[X,YPos]:=ClipTransformValue(Output[X,YPos]);
 End;
 
 Function TransformEnergy(Const Coeffs:TTransformBlock;TxSize:TTransformSize):LongInt;
@@ -3794,6 +4215,17 @@ Begin
    If IsDC Then GetPlaneQuantStep:=GetQuantStep(Config.BaseQIndex,Config.DeltaQVDC)
            Else GetPlaneQuantStep:=GetQuantStep(Config.BaseQIndex,Config.DeltaQVAC);
   End;
+End;
+
+Function GetCoeffQuantStep(PlaneID:Byte;X,YPos:Byte;
+ Const Config:TQuantConfig):LongInt;
+Var
+ Step,Weight:LongInt;
+Begin
+ Step:=GetPlaneQuantStep(PlaneID,(X=0)and(YPos=0),Config);
+ Weight:=16+LongInt(X)+LongInt(YPos);
+ GetCoeffQuantStep:=(Step*Weight+8)div 16;
+ If GetCoeffQuantStep<1 Then GetCoeffQuantStep:=1;
 End;
 
 Function ClampQCoeff(Value:LongInt):SmallInt;
@@ -3864,7 +4296,7 @@ Begin
  EOB:=0;
  For YPos:=0 to Size-1 Do
   For X:=0 to Size-1 Do Begin
-   QStep:=GetPlaneQuantStep(PlaneID,(X=0)and(YPos=0),Config);
+   QStep:=GetCoeffQuantStep(PlaneID,X,YPos,Config);
    QCoeffs[X,YPos]:=QuantizeCoeff(Coeffs[X,YPos],QStep);
   End;
  Total:=Word(Size)*Word(Size);
@@ -3885,7 +4317,7 @@ Begin
  Size:=GetTransformSizePixels(TxSize);
  For YPos:=0 to Size-1 Do
   For X:=0 to Size-1 Do Begin
-   QStep:=GetPlaneQuantStep(PlaneID,(X=0)and(YPos=0),Config);
+   QStep:=GetCoeffQuantStep(PlaneID,X,YPos,Config);
    DequantCoeffs[X,YPos]:=DequantizeCoeff(QCoeffs[X,YPos],QStep);
   End;
 End;
@@ -4458,22 +4890,65 @@ Begin
  ValidateNeutralGrayChroma:=True;
 End;
 
+Function TileCountBits(Const TileConfig:TAV1TileConfig):Byte;
+Var
+ Count:LongInt;
+ Bits:Byte;
+Begin
+ Count:=LongInt(TileConfig.TileCols)*LongInt(TileConfig.TileRows);
+ Bits:=0;
+ If Count<=1 Then Begin
+  TileCountBits:=0;
+  Exit;
+ End;
+ Dec(Count);
+ While Count>0 Do Begin
+  Inc(Bits);
+  Count:=Count shr 1;
+ End;
+ TileCountBits:=Bits;
+End;
+
+Function ValidateTileGroupConfig(Const TileConfig:TAV1TileConfig;
+ Const Tile:TAV1Tile):Boolean;
+Var
+ TileCount:LongInt;
+Begin
+ ValidateTileGroupConfig:=False;
+ If(TileConfig.TileCols=0)or(TileConfig.TileRows=0)Then Exit;
+ TileCount:=LongInt(TileConfig.TileCols)*LongInt(TileConfig.TileRows);
+ If(TileCount<=0)or(TileCount>65535)Then Exit;
+ If Tile.TileIndex>=TileCount Then Exit;
+ If Tile.StartSBX>=Tile.EndSBX Then Exit;
+ If Tile.StartSBY>=Tile.EndSBY Then Exit;
+ If(Tile.Width=0)or(Tile.Height=0)Then Exit;
+ If(TileConfig.TileSizeBytesMinus1>3)Then Exit;
+ If TileConfig.ContextUpdateTileId>=TileCount Then Exit;
+ ValidateTileGroupConfig:=True;
+End;
+
 Function EncodeTileGroupHeader(Const TileConfig:TAV1TileConfig;
  Const Tile:TAV1Tile;Var Payload:TAV1ByteBuffer):Boolean;
 Var
  Writer:TBitWriter;
+ StartAndEndPresent:Boolean;
+ Bits:Byte;
 Begin
  EncodeTileGroupHeader:=False;
+ If not ValidateTileGroupConfig(TileConfig,Tile)Then Exit;
  If not AllocateAV1ByteBuffer(Payload,AV1MaxOBUBytes)Then Exit;
  InitBitWriter(Writer,Payload);
- {Pour une seule tuile, tile_start_and_end_present_flag reste a 0 : le groupe
-  couvre implicitement la tuile 0 et aucune taille de tuile n'est patchee.}
- If(TileConfig.TileCols=1)and(TileConfig.TileRows=1)and(Tile.TileIndex=0)Then
+ StartAndEndPresent:=(TileConfig.TileCols<>1)or(TileConfig.TileRows<>1)or
+  (Tile.TileIndex<>0);
+ If not StartAndEndPresent Then
   WriteBit(Writer,0)
  Else Begin
   WriteBit(Writer,1);
-  WriteBits(Writer,Tile.TileIndex,16);
-  WriteBits(Writer,Tile.TileIndex,16);
+  Bits:=TileCountBits(TileConfig);
+  If Bits=0 Then Bits:=1;
+  WriteBits(Writer,Tile.TileIndex,Bits);
+  WriteBits(Writer,Tile.TileIndex,Bits);
+  WriteBits(Writer,TileConfig.TileSizeBytesMinus1,2);
  End;
  AddTrailingBits(Writer);
  If Writer.Failed Then Begin
@@ -4915,15 +5390,18 @@ Begin
  AddCoefficientUnit:=True;
 End;
 
+Function EOBClassSymbol(EOB:LongInt):Byte;Forward;
+
 Function AddCoeffSymbolsFromQuantBlock(Const QCoeffs:TQuantBlock;
  Const Context:TCoeffCodingContext;Var Symbols:TCoeffSymbolMap):Boolean;
 Var
  Pos:Word;
  X,YPos:Byte;
- Level,BaseSymbol,ExtraSymbol:Word;
+ Level,BaseSymbol,ExtraValue,ExtraSymbol:Word;
 Begin
  AddCoeffSymbolsFromQuantBlock:=False;
- If not AddCoeffSymbol(Symbols,cskEOB,GetEOBContext(Context),0,Context.EOB)Then Exit;
+ If not AddCoeffSymbol(Symbols,cskEOB,GetEOBContext(Context),0,
+  EOBClassSymbol(Context.EOB))Then Exit;
  If Context.EOB=0 Then Begin
   AddCoeffSymbolsFromQuantBlock:=True;
   Exit;
@@ -4931,17 +5409,20 @@ Begin
  For Pos:=0 to Context.EOB-1 Do Begin
   If not ScanIndexToXY(Pos,Context.TxSize,X,YPos)Then Exit;
   Level:=AbsSmallInt(QCoeffs[X,YPos]);
-  If Level>3 Then BaseSymbol:=3 Else BaseSymbol:=Level;
+  If Level>2 Then BaseSymbol:=3 Else BaseSymbol:=Level;
   If not AddCoeffSymbol(Symbols,cskCoeffBase,GetCoeffBaseContext(Context,Pos),
    Pos,SmallInt(BaseSymbol))Then Exit;
   If Level>0 Then Begin
    If not AddCoeffSymbol(Symbols,cskCoeffSign,0,Pos,
     SmallInt(Ord(QCoeffs[X,YPos]<0)))Then Exit;
-   If Level>3 Then Begin
-    ExtraSymbol:=Level-3;
-    If ExtraSymbol>15 Then ExtraSymbol:=15;
-    If not AddCoeffSymbol(Symbols,cskCoeffExtra,
-     GetCoeffBrContext(Context,Pos,Level),Pos,SmallInt(ExtraSymbol))Then Exit;
+   If Level>2 Then Begin
+    ExtraValue:=Level-3;
+    Repeat
+     If ExtraValue>15 Then ExtraSymbol:=15 Else ExtraSymbol:=ExtraValue;
+     If not AddCoeffSymbol(Symbols,cskCoeffExtra,
+      GetCoeffBrContext(Context,Pos,Level),Pos,SmallInt(ExtraSymbol))Then Exit;
+     If ExtraValue>15 Then Dec(ExtraValue,15)Else ExtraValue:=0;
+    Until ExtraValue=0;
    End;
   End;
  End;
@@ -5059,18 +5540,59 @@ Begin
  Model.CDF[SymbolCount]:=32768;
 End;
 
+Procedure InitExplicitCDF(Var Model:TEntropyCDF;SymbolCount:Byte;
+ V1,V2,V3,V4,V5,V6,V7,V8,V9,V10,V11,V12,V13,V14,V15:Word);
+Var
+ Values:Array[1..15]of Word;
+ I:Byte;
+ Last:Word;
+Begin
+ FillChar(Model,SizeOf(Model),0);
+ If SymbolCount<2 Then SymbolCount:=2;
+ If SymbolCount>16 Then SymbolCount:=16;
+ Values[1]:=V1; Values[2]:=V2; Values[3]:=V3; Values[4]:=V4;
+ Values[5]:=V5; Values[6]:=V6; Values[7]:=V7; Values[8]:=V8;
+ Values[9]:=V9; Values[10]:=V10; Values[11]:=V11; Values[12]:=V12;
+ Values[13]:=V13; Values[14]:=V14; Values[15]:=V15;
+ Model.SymbolCount:=SymbolCount;
+ Model.CDF[0]:=0;
+ Last:=0;
+ For I:=1 to SymbolCount-1 Do Begin
+  If Values[I]<=Last Then
+   Values[I]:=Last+1;
+  If Values[I]>=32768 Then
+   Values[I]:=32767;
+  Model.CDF[I]:=Values[I];
+  Last:=Model.CDF[I];
+ End;
+ Model.CDF[SymbolCount]:=32768;
+End;
+
 Procedure InitAV1NormativeCDFSet(Var CDFSet:TAV1NormativeCDFSet);
 Begin
  FillChar(CDFSet,SizeOf(CDFSet),0);
- InitFixedCDF(CDFSet.PartitionCDF,4,2);
- InitFixedCDF(CDFSet.SkipCDF,2,1);
- InitFixedCDF(CDFSet.IntraModeCDF,13,2);
- InitFixedCDF(CDFSet.UVModeCDF,13,1);
- InitFixedCDF(CDFSet.TxSizeCDF,4,1);
- InitFixedCDF(CDFSet.EOBCDF,16,2);
- InitFixedCDF(CDFSet.CoeffBaseCDF,4,3);
- InitFixedCDF(CDFSet.CoeffExtraCDF,16,2);
- InitFixedCDF(CDFSet.CoeffSignCDF,2,2);
+ InitExplicitCDF(CDFSet.PartitionCDF,4,
+  22528,28672,31744,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.SkipCDF,2,
+  24576,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.IntraModeCDF,13,
+  8192,12288,16384,18432,20480,22528,24576,26624,
+  28672,30208,31360,32256,0,0,0);
+ InitExplicitCDF(CDFSet.UVModeCDF,13,
+  12288,15360,18432,20480,22528,24576,26368,28160,
+  29696,30976,31872,32448,0,0,0);
+ InitExplicitCDF(CDFSet.TxSizeCDF,4,
+  20480,28672,31744,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.EOBCDF,16,
+  6144,10240,14336,18432,22016,25088,27648,29696,
+  31104,31936,32384,32608,32704,32736,32760);
+ InitExplicitCDF(CDFSet.CoeffBaseCDF,4,
+  16384,26624,31520,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(CDFSet.CoeffExtraCDF,16,
+  8192,14336,19456,23552,26624,28928,30592,31616,
+  32192,32480,32608,32672,32720,32744,32760);
+ InitExplicitCDF(CDFSet.CoeffSignCDF,2,
+  16384,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
  CDFSet.Initialized:=True;
 End;
 
@@ -5169,7 +5691,7 @@ Procedure InitNormativeRangeEncoder(Var Encoder:TAV1NormativeRangeEncoder;
  Var Buffer:TAV1ByteBuffer);
 Begin
  Encoder.Low:=0;
- Encoder.Range:=$1000000;
+ Encoder.Range:=(Int64(1)shl 32)-1;
  Encoder.Count:=0;
  Encoder.Buffer:=@Buffer;
  Encoder.StartSize:=Buffer.Size;
@@ -5193,10 +5715,12 @@ End;
 
 Procedure NormalizeNormativeRangeEncoder(Var Encoder:TAV1NormativeRangeEncoder);
 Begin
- While(Encoder.Range<$10000)and(not Encoder.Failed)Do Begin
-  NormativeRangeEmitByte(Encoder,Byte((Encoder.Low shr 16)and $FF));
-  Encoder.Low:=(Encoder.Low shl 8)and $FFFFFF;
+ While(Encoder.Range<(Int64(1)shl 24))and(not Encoder.Failed)Do Begin
+  NormativeRangeEmitByte(Encoder,Byte((Encoder.Low shr 24)and $FF));
+  Encoder.Low:=(Encoder.Low shl 8)and $FFFFFFFF;
   Encoder.Range:=Encoder.Range shl 8;
+  If Encoder.Range>((Int64(1)shl 32)-1)Then
+   Encoder.Range:=(Int64(1)shl 32)-1;
  End;
 End;
 
@@ -5213,33 +5737,46 @@ End;
 Procedure EncodeNormativeCDFSymbol(Var Encoder:TAV1NormativeRangeEncoder;
  Symbol:Byte;Const Model:TEntropyCDF);
 Var
- LowCount,HighCount,Span:Int64;
+ LowCount,HighCount,Span,Total:Int64;
+ NewLow,NewRange:Int64;
 Begin
  If Encoder.Failed Then Exit;
- If(Model.SymbolCount<2)or(Model.CDF[Model.SymbolCount]<>32768)Then Begin
+ If(Model.SymbolCount<2)or(Model.SymbolCount>16)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ Total:=Model.CDF[Model.SymbolCount];
+ If Total<>32768 Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
  If Symbol>=Model.SymbolCount Then Symbol:=Model.SymbolCount-1;
  LowCount:=Model.CDF[Symbol];
  HighCount:=Model.CDF[Symbol+1];
+ If(LowCount<0)or(HighCount>Total)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
  If HighCount<=LowCount Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
- Encoder.Low:=Encoder.Low+(Encoder.Range*LowCount)div 32768;
  Span:=HighCount-LowCount;
- Encoder.Range:=(Encoder.Range*Span)div 32768;
- If Encoder.Range<=0 Then Begin
+ NewLow:=Encoder.Low+(Encoder.Range*LowCount)div Total;
+ NewRange:=(Encoder.Range*Span)div Total;
+ If NewRange<=0 Then Begin
   Encoder.Failed:=True;
   Exit;
  End;
+ Encoder.Low:=NewLow and $FFFFFFFF;
+ Encoder.Range:=NewRange;
  NormalizeNormativeRangeEncoder(Encoder);
 End;
 
 Procedure FinishNormativeRangeEncoder(Var Encoder:TAV1NormativeRangeEncoder);
 Begin
  NormalizeNormativeRangeEncoder(Encoder);
+ NormativeRangeEmitByte(Encoder,Byte((Encoder.Low shr 24)and $FF));
  NormativeRangeEmitByte(Encoder,Byte((Encoder.Low shr 16)and $FF));
  NormativeRangeEmitByte(Encoder,Byte((Encoder.Low shr 8)and $FF));
  NormativeRangeEmitByte(Encoder,Byte(Encoder.Low and $FF));
@@ -5252,7 +5789,7 @@ Begin
  If Encoder.Buffer=Nil Then Exit;
  If Encoder.Buffer^.Data=Nil Then Exit;
  If Encoder.Buffer^.Size<=Encoder.StartSize Then Exit;
- If Encoder.Count<3 Then Exit;
+ If Encoder.Count<4 Then Exit;
  ValidateNormativeRangePayload:=True;
 End;
 
@@ -5415,9 +5952,163 @@ Begin
  End;
 End;
 
+Function FindNormativeModeNode(Const Modes:TAV1IntraModeMap;X,Y:Word;
+ Var Node:TAV1IntraModeNode):Boolean;
+Var
+ I:Word;
+Begin
+ FindNormativeModeNode:=False;
+ If Modes.Nodes=Nil Then Exit;
+ For I:=0 to Modes.Count-1 Do
+  If(Modes.Nodes^[I].X=X)and(Modes.Nodes^[I].Y=Y)Then Begin
+   Node:=Modes.Nodes^[I];
+   FindNormativeModeNode:=True;
+   Exit;
+  End;
+End;
+
+Function FindNormativeTransformNode(Const TransformTree:TAV1TransformTreeMap;
+ X,Y:Word;Var Node:TAV1TransformTreeNode):Boolean;
+Var
+ I:Word;
+Begin
+ FindNormativeTransformNode:=False;
+ If TransformTree.Nodes=Nil Then Exit;
+ For I:=0 to TransformTree.Count-1 Do
+  If(TransformTree.Nodes^[I].X=X)and(TransformTree.Nodes^[I].Y=Y)Then Begin
+   Node:=TransformTree.Nodes^[I];
+   FindNormativeTransformNode:=True;
+   Exit;
+  End;
+End;
+
+Function FindNormativeCoeffUnit(Const Units:TAV1CoefficientUnitMap;X,Y:Word;
+ Var UnitInfo:TAV1CoefficientUnit):Boolean;
+Var
+ I:Word;
+Begin
+ FindNormativeCoeffUnit:=False;
+ If Units.Units=Nil Then Exit;
+ For I:=0 to Units.Count-1 Do
+  If(Units.Units^[I].X=X)and(Units.Units^[I].Y=Y)and
+   (Units.Units^[I].PlaneID=0)Then Begin
+   UnitInfo:=Units.Units^[I];
+   FindNormativeCoeffUnit:=True;
+   Exit;
+  End;
+End;
+
+Procedure EncodeNormativeCoeffUnitSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const UnitInfo:TAV1CoefficientUnit;Const CoeffSymbols:TCoeffSymbolMap;
+ Const CDFSet:TAV1NormativeCDFSet);
+Var
+ I,LastIndex:LongInt;
+ CoeffSymbol:TCoeffSymbol;
+ Value:LongInt;
+Begin
+ EncodeNormativeLiteral(Encoder,UnitInfo.PlaneID,2);
+ EncodeNormativeEOB(Encoder,UnitInfo.EOB,CDFSet);
+ EncodeNormativeUnsigned(Encoder,UnitInfo.SymbolCount,16);
+ LastIndex:=LongInt(UnitInfo.SymbolStart)+UnitInfo.SymbolCount-1;
+ If LastIndex>=CoeffSymbols.Count Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ For I:=UnitInfo.SymbolStart to LastIndex Do Begin
+  CoeffSymbol:=CoeffSymbols.Symbols^[I];
+  EncodeNormativeLiteral(Encoder,Ord(CoeffSymbol.Kind),2);
+  EncodeNormativeLiteral(Encoder,CoeffSymbol.ContextId,8);
+  EncodeNormativeLiteral(Encoder,CoeffSymbol.Position,10);
+  Value:=CoeffSymbol.Symbol;
+  If Value<0 Then Value:=-Value;
+  Case CoeffSymbol.Kind of
+   cskEOB:
+    EncodeNormativeEOB(Encoder,Value,CDFSet);
+   cskCoeffBase:
+    EncodeNormativeCDFSymbol(Encoder,
+     ClampSymbolToCDF(Value,CDFSet.CoeffBaseCDF),CDFSet.CoeffBaseCDF);
+   cskCoeffExtra:Begin
+    EncodeNormativeCDFSymbol(Encoder,
+     ClampSymbolToCDF(Value,CDFSet.CoeffExtraCDF),CDFSet.CoeffExtraCDF);
+    EncodeNormativeUnsigned(Encoder,Value,10);
+   End;
+   cskCoeffSign:
+    EncodeNormativeCDFSymbol(Encoder,
+     ClampSymbolToCDF(Value,CDFSet.CoeffSignCDF),CDFSet.CoeffSignCDF);
+  End;
+  If Encoder.Failed Then Exit;
+ End;
+End;
+
+Procedure EncodeNormativeLeafBlockSyntax(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Leaf:TAV1PartitionNode;Const Modes:TAV1IntraModeMap;
+ Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
+ Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet);
+Var
+ ModeNode:TAV1IntraModeNode;
+ TxNode:TAV1TransformTreeNode;
+ UnitInfo:TAV1CoefficientUnit;
+ SymbolValue:Byte;
+Begin
+ If not FindNormativeModeNode(Modes,Leaf.X,Leaf.Y,ModeNode)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ If not FindNormativeTransformNode(TransformTree,Leaf.X,Leaf.Y,TxNode)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ If not FindNormativeCoeffUnit(CoeffUnits,Leaf.X,Leaf.Y,UnitInfo)Then Begin
+  Encoder.Failed:=True;
+  Exit;
+ End;
+ EncodeNormativeLiteral(Encoder,Leaf.X,16);
+ EncodeNormativeLiteral(Encoder,Leaf.Y,16);
+ EncodeNormativeLiteral(Encoder,Leaf.Size,7);
+ If ModeNode.Skip Then SymbolValue:=1 Else SymbolValue:=0;
+ EncodeNormativeCDFSymbol(Encoder,SymbolValue,CDFSet.SkipCDF);
+ EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(ModeNode.Mode),
+  CDFSet.IntraModeCDF);
+ EncodeNormativeCDFSymbol(Encoder,IntraModeSymbol(ModeNode.UVMode),
+  CDFSet.UVModeCDF);
+ EncodeNormativeLiteral(Encoder,ModeNode.SegmentId,3);
+ EncodeNormativeLiteral(Encoder,ModeNode.QuantizerIndex,8);
+ EncodeNormativeLiteral(Encoder,TxNode.Width,6);
+ EncodeNormativeLiteral(Encoder,TxNode.Height,6);
+ EncodeNormativeCDFSymbol(Encoder,TxSizeSymbol(TxNode.TxSize),CDFSet.TxSizeCDF);
+ EncodeNormativeLiteral(Encoder,Ord(TxNode.TxType),3);
+ If TxNode.Split Then EncodeNormativeUniformBit(Encoder,1)
+                 Else EncodeNormativeUniformBit(Encoder,0);
+ EncodeNormativeCoeffUnitSyntax(Encoder,UnitInfo,CoeffSymbols,CDFSet);
+End;
+
+Procedure EncodeNormativePartitionTree(Var Encoder:TAV1NormativeRangeEncoder;
+ Const Partitions:TAV1PartitionMap;Const Modes:TAV1IntraModeMap;
+ Const TransformTree:TAV1TransformTreeMap;Const CoeffUnits:TAV1CoefficientUnitMap;
+ Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet);
+Var
+ I:Word;
+ Node:TAV1PartitionNode;
+Begin
+ EncodeNormativeUnsigned(Encoder,Partitions.Count,16);
+ For I:=0 to Partitions.Count-1 Do Begin
+  Node:=Partitions.Nodes^[I];
+  EncodeNormativeCDFSymbol(Encoder,Ord(Node.Partition),CDFSet.PartitionCDF);
+  If Node.IsLeaf Then Begin
+   EncodeNormativeUniformBit(Encoder,1);
+   EncodeNormativeLeafBlockSyntax(Encoder,Node,Modes,TransformTree,
+    CoeffUnits,CoeffSymbols,CDFSet);
+  End
+   Else
+   EncodeNormativeUniformBit(Encoder,0);
+  If Encoder.Failed Then Exit;
+ End;
+End;
+
 Function EncodeNormativeTilePayload(Const Partitions:TAV1PartitionMap;
  Const Modes:TAV1IntraModeMap;Const TransformTree:TAV1TransformTreeMap;
- Const CoeffSymbols:TCoeffSymbolMap;Const CDFSet:TAV1NormativeCDFSet;
+ Const CoeffUnits:TAV1CoefficientUnitMap;Const CoeffSymbols:TCoeffSymbolMap;
+ Const CDFSet:TAV1NormativeCDFSet;
  Var Payload:TAV1ByteBuffer):Boolean;
 Var
  Encoder:TAV1NormativeRangeEncoder;
@@ -5425,18 +6116,17 @@ Begin
  EncodeNormativeTilePayload:=False;
  If not ValidateNormativeCDFSet(CDFSet)Then Exit;
  If(Partitions.Nodes=Nil)or(Modes.Nodes=Nil)or
-  (TransformTree.Nodes=Nil)or(CoeffSymbols.Symbols=Nil)Then Exit;
+  (TransformTree.Nodes=Nil)or(CoeffUnits.Units=Nil)or
+  (CoeffSymbols.Symbols=Nil)Then Exit;
  If(Partitions.Count=0)or(Modes.Count=0)or(TransformTree.Count=0)or
-  (CoeffSymbols.Count=0)Then Exit;
+  (CoeffUnits.Count=0)or(CoeffSymbols.Count=0)Then Exit;
+ If(Modes.Count<>Partitions.LeafCount)or
+  (TransformTree.Count<>Partitions.LeafCount)or
+  (CoeffUnits.Count<>Partitions.LeafCount)Then Exit;
  InitNormativeRangeEncoder(Encoder,Payload);
  EncodeNormativeLiteral(Encoder,$415631,24); {AV1}
- EncodeNormativePartitionSyntax(Encoder,Partitions,CDFSet);
- If Encoder.Failed Then Exit;
- EncodeNormativeModeSyntax(Encoder,Modes,CDFSet);
- If Encoder.Failed Then Exit;
- EncodeNormativeTransformSyntax(Encoder,TransformTree,CDFSet);
- If Encoder.Failed Then Exit;
- EncodeNormativeCoefficientSyntax(Encoder,CoeffSymbols,CDFSet);
+ EncodeNormativePartitionTree(Encoder,Partitions,Modes,TransformTree,
+  CoeffUnits,CoeffSymbols,CDFSet);
  If Encoder.Failed Then Exit;
  FinishNormativeRangeEncoder(Encoder);
  EncodeNormativeTilePayload:=ValidateNormativeRangePayload(Encoder);
@@ -5517,8 +6207,8 @@ Begin
  FreePartitionMap(Partitions);
  Exit;
  End;
-If not EncodeNormativeTilePayload(Partitions,Modes,TransformTree,CoeffSymbols,
-  NormativeCDF,Payload)Then Begin
+If not EncodeNormativeTilePayload(Partitions,Modes,TransformTree,CoeffUnits,
+  CoeffSymbols,NormativeCDF,Payload)Then Begin
   FreeCoeffSymbolMap(CoeffSymbols);
   FreeCoefficientUnitMap(CoeffUnits);
   FreeTransformTreeMap(TransformTree);

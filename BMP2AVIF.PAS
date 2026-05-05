@@ -8042,7 +8042,7 @@ Begin
   FreePartitionMap(Partitions);
   Exit;
  End;
- If not BuildRealAV1MinimalIntraModeMap(Partitions,Modes)Then Begin
+ If not BuildNormativeIntraModeMap(Image,Partitions,Modes)Then Begin
   FreePartitionMap(Partitions);
   Exit;
  End;
@@ -8051,7 +8051,7 @@ Begin
   FreePartitionMap(Partitions);
   Exit;
  End;
- If not BuildRealAV1MinimalTransformTreeMap(Modes,TransformTree)Then Begin
+ If not BuildNormativeTransformTreeMap(Modes,TransformTree)Then Begin
   FreeIntraModeMap(Modes);
   FreePartitionMap(Partitions);
   Exit;
@@ -8062,7 +8062,7 @@ Begin
   FreePartitionMap(Partitions);
   Exit;
  End;
- If not BuildRealAV1MinimalCoefficientMap(TransformTree,CoeffUnits,
+ If not BuildNormativeCoefficientMap(Image,Modes,TransformTree,CoeffUnits,
  CoeffSymbols)Then Begin
   FreeTransformTreeMap(TransformTree);
   FreeIntraModeMap(Modes);

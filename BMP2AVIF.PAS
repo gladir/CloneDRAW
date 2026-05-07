@@ -7279,12 +7279,12 @@ End;
   utilisables ici (pas besoin de conversion ICDF->CDF).
 
   ETAT actuel des transcriptions :
-   - skip            : VALEURS REELLES libaom 3.x (entropymode.c)
-   - intra Y mode    : PLACEHOLDER uniforme (TODO transcrire 25*12 valeurs)
-   - partition 4-way : PLACEHOLDER uniforme (TODO transcrire 4 contextes)
-  Les placeholders sont valides pour le range coder (passent
-  ValidateRangeEncoderCDF) mais ne donneront pas une compression
-  conforme spec. A remplacer avant validation libavif. }
+   - skip            : VALEURS REELLES libaom (entropymode.c)
+   - intra Y mode KF : VALEURS REELLES libaom (25 contextes x 13 modes)
+   - partition 4-way : VALEURS REELLES libaom (4 contextes 8x8)
+                       Les 12 contextes 8-way (16/32/64) et 4 contextes
+                       6-way (128) sont a ajouter pour blocs > 8x8.
+  Toutes les CDFs passent ValidateRangeEncoderCDF. }
 
 Const
  AV1IntraModes          = 13;
@@ -7312,30 +7312,79 @@ Begin
 End;
 
 Procedure InitDefaultAV1KFYModeCDFs(Var T:TAV1DefaultCDFs);
-Var
- I,J:Byte;
 Begin
- { TODO session future : transcrire les 25 tables exactes de
-   default_kf_y_mode_cdf[KF_MODE_CONTEXTS=5][KF_MODE_CONTEXTS=5][CDF_SIZE(13)]
-   de libaom av1/common/entropymode.c. Pour l'instant, CDF uniforme
-   biaisee legerement vers DC (mode 0), ce qui reste valide pour le
-   range coder mais ne donnera pas une compression conforme spec. }
- For I:=0 to AV1KFModeContexts-1 Do
-  For J:=0 to AV1KFModeContexts-1 Do
-   { biais DC : numerator=2 dans InitFixedCDF -> mode 0 plus probable }
-   InitFixedCDF(T.KFYMode[I,J],AV1IntraModes,2);
+ { default_kf_y_mode_cdf de libaom av1/common/entropymode.c
+   25 contextes (above_mode x left_mode dans {DC,V,H,D45,..}), 13 modes
+   intra par contexte. Format AOM_CDF13(v1..v12) -> CDF[1..12] ;
+   CDF[0]=0, CDF[13]=32768 ajoutes par InitExplicitCDF. }
+ { Contexte [0,*] : above = DC_PRED }
+ InitExplicitCDF(T.KFYMode[0,0],13,
+  15588,17027,19338,20218,20682,21110,21825,23244,24189,28165,29093,30466,0,0,0);
+ InitExplicitCDF(T.KFYMode[0,1],13,
+  12016,18066,19516,20303,20719,21444,21888,23032,24434,28658,30172,31409,0,0,0);
+ InitExplicitCDF(T.KFYMode[0,2],13,
+  10052,10771,22296,22788,23055,23239,24133,25620,26160,29336,29929,31567,0,0,0);
+ InitExplicitCDF(T.KFYMode[0,3],13,
+  14091,15406,16442,18808,19136,19546,19998,22096,24746,29585,30958,32462,0,0,0);
+ InitExplicitCDF(T.KFYMode[0,4],13,
+  12122,13265,15603,16501,18609,20033,22391,25583,26437,30261,31073,32475,0,0,0);
+ { Contexte [1,*] : above = V_PRED }
+ InitExplicitCDF(T.KFYMode[1,0],13,
+  10023,19585,20848,21440,21832,22760,23089,24023,25381,29014,30482,31436,0,0,0);
+ InitExplicitCDF(T.KFYMode[1,1],13,
+  5983,24099,24560,24886,25066,25795,25913,26423,27610,29905,31276,31794,0,0,0);
+ InitExplicitCDF(T.KFYMode[1,2],13,
+  7444,12781,20177,20728,21077,21607,22170,23405,24469,27915,29090,30492,0,0,0);
+ InitExplicitCDF(T.KFYMode[1,3],13,
+  8537,14689,15432,17087,17408,18172,18408,19825,24649,29153,31096,32210,0,0,0);
+ InitExplicitCDF(T.KFYMode[1,4],13,
+  7543,14231,15496,16195,17905,20717,21984,24516,26001,29675,30981,31994,0,0,0);
+ { Contexte [2,*] : above = H_PRED }
+ InitExplicitCDF(T.KFYMode[2,0],13,
+  12613,13591,21383,22004,22312,22577,23401,25055,25729,29538,30305,32077,0,0,0);
+ InitExplicitCDF(T.KFYMode[2,1],13,
+  9687,13470,18506,19230,19604,20147,20695,22062,23219,27743,29211,30907,0,0,0);
+ InitExplicitCDF(T.KFYMode[2,2],13,
+  6183,6505,26024,26252,26366,26434,27082,28354,28555,30467,30794,32086,0,0,0);
+ InitExplicitCDF(T.KFYMode[2,3],13,
+  10718,11734,14954,17224,17565,17924,18561,21523,23878,28975,30287,32252,0,0,0);
+ InitExplicitCDF(T.KFYMode[2,4],13,
+  9194,9858,16501,17263,18424,19171,21563,25961,26561,30072,30737,32463,0,0,0);
+ { Contexte [3,*] : above = D45_PRED (categorie diagonale) }
+ InitExplicitCDF(T.KFYMode[3,0],13,
+  12602,14399,15488,18381,18778,19315,19724,21419,25060,29696,30917,32409,0,0,0);
+ InitExplicitCDF(T.KFYMode[3,1],13,
+  8203,13821,14524,17105,17439,18131,18404,19468,25225,29485,31158,32342,0,0,0);
+ InitExplicitCDF(T.KFYMode[3,2],13,
+  8451,9731,15004,17643,18012,18425,19070,21538,24605,29118,30078,32018,0,0,0);
+ InitExplicitCDF(T.KFYMode[3,3],13,
+  7714,9048,9516,16667,16817,16994,17153,18767,26743,30389,31536,32528,0,0,0);
+ InitExplicitCDF(T.KFYMode[3,4],13,
+  8843,10280,11496,15317,16652,17943,19108,22718,25769,29953,30983,32485,0,0,0);
+ { Contexte [4,*] : above = PAETH (autre categorie) }
+ InitExplicitCDF(T.KFYMode[4,0],13,
+  12578,13671,15979,16834,19075,20913,22989,25449,26219,30214,31150,32477,0,0,0);
+ InitExplicitCDF(T.KFYMode[4,1],13,
+  9563,13626,15080,15892,17756,20863,22207,24236,25380,29653,31143,32277,0,0,0);
+ InitExplicitCDF(T.KFYMode[4,2],13,
+  8356,8901,17616,18256,19350,20106,22598,25947,26466,29900,30523,32261,0,0,0);
+ InitExplicitCDF(T.KFYMode[4,3],13,
+  10835,11815,13124,16042,17018,18039,18947,22753,24615,29489,30883,32482,0,0,0);
+ InitExplicitCDF(T.KFYMode[4,4],13,
+  7618,8288,9859,10509,15386,18657,22903,28776,29180,31355,31802,32593,0,0,0);
 End;
 
 Procedure InitDefaultAV1Partition4WayCDFs(Var T:TAV1DefaultCDFs);
-Var
- I:Byte;
 Begin
- { TODO session future : transcrire default_partition_cdf depth 0
-   (4 contextes (above_split, left_split) x 4 symboles
-   PARTITION_NONE, HORZ, VERT, SPLIT). Pour l'instant, CDF uniforme
-   biaisee vers PARTITION_NONE (symbole 0). }
- For I:=0 to AV1Partition4WayCtx-1 Do
-  InitFixedCDF(T.Partition4[I],AV1Partition4WayTypes,3);
+ { default_partition_cdf de libaom : les 4 PREMIERES lignes (4-way,
+   block 8x8) de PARTITION_CONTEXTS=16. Format AOM_CDF4(v1,v2,v3) ->
+   4 symboles PARTITION_NONE, HORZ, VERT, SPLIT. Les 12 lignes
+   suivantes sont CDF10 (8-way, blocs 16x16/32x32/64x64) -- a
+   transcrire dans une session future si besoin. }
+ InitExplicitCDF(T.Partition4[0],4,19132,25510,30392,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.Partition4[1],4,13928,19855,28540,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.Partition4[2],4,12522,23679,28629,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.Partition4[3],4, 9896,18783,25853,0,0,0,0,0,0,0,0,0,0,0,0);
 End;
 
 Procedure InitDefaultAV1CDFs(Var T:TAV1DefaultCDFs);

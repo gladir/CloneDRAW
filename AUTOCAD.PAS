@@ -852,6 +852,12 @@ Var
  ActiveMenu: Integer;
  ActiveMenuItem: Integer;
 
+ { Ligne de commande }
+ CommandBuffer: String;          { Texte tapé par l'utilisateur }
+ CommandPrompt: String;          { Préfixe affiché ('Command:' ou autre) }
+ CommandCursorBlink: Boolean;    { État courant du curseur clignotant }
+ CommandLastLine: String;        { Dernière ligne exécutée (historique simple) }
+
  { Variables pour les barres d'outils - TODO 5 }
  Toolbars: Array[0..MAX_TOOLBARS-1] of TToolbar;
  HoveredToolbar: Integer;
@@ -13635,14 +13641,43 @@ End;
 
 { Dessiner la ligne de commande }
 Procedure DrawCommandLine;
+Var
+ BaseY, TextY, PromptW, BufW, CursorX: Integer;
+ Prompt, CmdStr: String;
 Begin
+ BaseY := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ TextY := BaseY + 5;
+
  { Fond de la ligne de commande }
  SetFillStyle(SolidFill, DarkGray);
- Bar(0, ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT,
-     ScreenWidth - 1, ScreenHeight - STATUSBAR_HEIGHT - 1);
+ Bar(0, BaseY, ScreenWidth - 1, ScreenHeight - STATUSBAR_HEIGHT - 1);
+
+ SetColor(LightGray);
+ { Ligne supérieure : dernière commande exécutée (historique) }
+ If CommandLastLine <> '' Then
+  OutTextXY(5, TextY, CommandLastLine);
 
  SetColor(White);
- OutTextXY(5, ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT + 5, 'Command:');
+ If CommandPrompt = '' Then
+  Prompt := 'Command:'
+ Else
+  Prompt := CommandPrompt;
+
+ { Ligne courante : prompt + texte tapé }
+ CmdStr := Prompt + ' ' + CommandBuffer;
+ OutTextXY(5, TextY + 14, CmdStr);
+
+ { Curseur clignotant après le texte }
+ PromptW := TextWidth(Prompt + ' ');
+ BufW := TextWidth(CommandBuffer);
+ CursorX := 5 + PromptW + BufW;
+ If CommandCursorBlink Then Begin
+  SetColor(White);
+  Line(CursorX, TextY + 14,
+       CursorX, TextY + 14 + TextHeight('M') - 1);
+  Line(CursorX + 1, TextY + 14,
+       CursorX + 1, TextY + 14 + TextHeight('M') - 1);
+ End;
 End;
 
 { Dessiner la barre d'état }
@@ -14294,11 +14329,13 @@ Var
  Key: Char;
  PanStep: Real;
  I: Integer;  { TODO 9: Variable pour la sélection }
+ BlinkTick: Integer;
 Begin
  Running := True;
  OldMouseX := -1;
  OldMouseY := -1;
  OldButtons := 0;
+ BlinkTick := 0;
 
  ShowMouse;
 
@@ -14397,6 +14434,11 @@ Begin
       ActiveMenu := -1;
       ActiveMenuItem := -1;
       DrawInterface;
+     End Else If CommandBuffer <> '' Then Begin
+      { Effacer la commande en cours de saisie }
+      CommandBuffer := '';
+      CommandLastLine := '*Cancel*';
+      DrawCommandLine;
      End Else If MouseMode <> MOUSE_MODE_NORMAL Then Begin
       { TODO 9: Annuler la sélection en cours }
       If SelectionActive Then Begin
@@ -14415,52 +14457,22 @@ Begin
       Running := False;
      End;
     End;
-    { TODO 7: Raccourcis clavier pour zoom }
-    '+', '=': Begin
-     HandleMouseWheel(1);  { Zoom avant }
-    End;
-    '-', '_': Begin
-     HandleMouseWheel(-1); { Zoom arrière }
-    End;
-    { TODO 8: Raccourcis pour la taille du crosshair }
-    'c', 'C': Begin
-     { Cycle entre les tailles de crosshair }
-     If CrosshairSize = CROSSHAIR_SIZE_FULLSCREEN Then
-      CrosshairSize := CROSSHAIR_SIZE_SMALL
-     Else If CrosshairSize = CROSSHAIR_SIZE_SMALL Then
-      CrosshairSize := CROSSHAIR_SIZE_MEDIUM
-     Else If CrosshairSize = CROSSHAIR_SIZE_MEDIUM Then
-      CrosshairSize := CROSSHAIR_SIZE_LARGE
-     Else
-      CrosshairSize := CROSSHAIR_SIZE_FULLSCREEN;
-     DrawInterface;
-    End;
-    't', 'T': Begin
-     { Toggle tooltip des coordonnées }
-     If CoordDisplayMode = COORD_DISPLAY_BOTH Then
-      CoordDisplayMode := COORD_DISPLAY_STATUSBAR
-     Else If CoordDisplayMode = COORD_DISPLAY_STATUSBAR Then
-      CoordDisplayMode := COORD_DISPLAY_TOOLTIP
-     Else If CoordDisplayMode = COORD_DISPLAY_TOOLTIP Then
-      CoordDisplayMode := COORD_DISPLAY_NONE
-     Else
-      CoordDisplayMode := COORD_DISPLAY_BOTH;
-     DrawInterface;
-    End;
-    'p', 'P': Begin
-     { Toggle pickbox }
-     ShowPickBox := Not ShowPickBox;
-     DrawInterface;
-    End;
-    { TODO 9: Raccourci pour sélectionner tous les objets }
-    'a', 'A': Begin
-     ClearSelection;
-     { Sélectionner tous les objets visibles }
-     For I := 0 to ObjectCount - 1 do Begin
-      If DrawObjects[I].Visible and (DrawObjects[I].ObjType <> OBJ_NONE) Then
-       AddToSelection(I);
+    #8: Begin { Backspace : effacer un caractère }
+     If Length(CommandBuffer) > 0 Then Begin
+      CommandBuffer := Copy(CommandBuffer, 1, Length(CommandBuffer) - 1);
+      CommandCursorBlink := True;
+      DrawCommandLine;
      End;
-     DrawInterface;
+    End;
+    #13: Begin { Enter : exécuter la commande }
+     If CommandBuffer <> '' Then Begin
+      CommandLastLine := 'Command: ' + CommandBuffer;
+      CommandBuffer := '';
+     End Else If CommandLastLine <> '' Then Begin
+      { Enter sur ligne vide : répéter la dernière commande (placeholder) }
+     End;
+     CommandCursorBlink := True;
+     DrawCommandLine;
     End;
     { TODO 7: Touche spéciale (flèches) pour le pan }
     #0: Begin
@@ -14497,7 +14509,24 @@ Begin
       End;
      End;
     End;
+    Else Begin
+     { Caractère imprimable : ajouter au tampon de la ligne de commande }
+     If (Ord(Key) >= 32) and (Ord(Key) <= 126) and
+        (Length(CommandBuffer) < 200) Then Begin
+      CommandBuffer := CommandBuffer + Key;
+      CommandCursorBlink := True;
+      DrawCommandLine;
+     End;
+    End;
    End;
+  End;
+
+  { Faire clignoter le curseur de la ligne de commande (~500 ms) }
+  Inc(BlinkTick);
+  If BlinkTick >= 50 Then Begin
+   BlinkTick := 0;
+   CommandCursorBlink := Not CommandCursorBlink;
+   DrawCommandLine;
   End;
 
   Delay(10);
@@ -14523,6 +14552,12 @@ BEGIN
 
  { Initialiser le panneau de propriétés - TODO 16 }
  InitPropertiesPanel;
+
+ { Initialiser la ligne de commande }
+ CommandBuffer := '';
+ CommandPrompt := 'Command:';
+ CommandLastLine := '';
+ CommandCursorBlink := True;
 
  { Dessiner l'interface initiale }
  DrawInterface;

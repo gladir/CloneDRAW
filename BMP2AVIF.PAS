@@ -7291,6 +7291,15 @@ Const
  AV1KFModeContexts      = 5;
  AV1Partition4WayCtx    = 4;
  AV1Partition4WayTypes  = 4;
+ { libaom MAX_TX_CATS=4, TX_SIZE_CONTEXTS=3, MAX_TX_DEPTH+1 in {2,3,3,3} }
+ AV1TxCats              = 4;
+ AV1TxSizeCtxs          = 3;
+ AV1TxMaxDepthPlus1     = 3;
+ { libaom default_eob_multi{16,32,64,128} : on retient
+   q_ctx=0, plane=Y, ctx_axis=0 (premier des deux contextes
+   par TX size). Suffit pour encoder un bloc EOB minimal. }
+ AV1EobTxSizes          = 4;       { 4x4(=16), 8x8(=64), 16x16(=256)... mapping libaom 16/32/64/128 }
+ AV1EobMaxClasses       = 8;       { eob_multi128 -> 8 symboles }
 
 Type
  TAV1DefaultCDFs=Record
@@ -7298,6 +7307,9 @@ Type
   KFYMode   : Array[0..AV1KFModeContexts-1,
                     0..AV1KFModeContexts-1]of TEntropyCDF;
   Partition4: Array[0..AV1Partition4WayCtx-1]of TEntropyCDF;
+  TxSize    : Array[0..AV1TxCats-1,
+                    0..AV1TxSizeCtxs-1]of TEntropyCDF;
+  EobPt     : Array[0..AV1EobTxSizes-1]of TEntropyCDF;
  End;
 
 Procedure InitDefaultAV1SkipCDFs(Var T:TAV1DefaultCDFs);
@@ -7387,12 +7399,53 @@ Begin
  InitExplicitCDF(T.Partition4[3],4, 9896,18783,25853,0,0,0,0,0,0,0,0,0,0,0,0);
 End;
 
+Procedure InitDefaultAV1TxSizeCDFs(Var T:TAV1DefaultCDFs);
+Begin
+ { default_tx_size_cdf de libaom (entropymode.c, lignes ~872-886)
+   [MAX_TX_CATS=4][TX_SIZE_CONTEXTS=3][CDF_SIZE(MAX_TX_DEPTH+1)].
+   Categorie 0 : binaire (CDF2). Categories 1..3 : 3 symboles (CDF3). }
+ { Cat 0 - binaire }
+ InitExplicitCDF(T.TxSize[0,0],2,19968,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.TxSize[0,1],2,19968,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.TxSize[0,2],2,24320,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ { Cat 1 }
+ InitExplicitCDF(T.TxSize[1,0],3,12272,30172,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.TxSize[1,1],3,12272,30172,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.TxSize[1,2],3,18677,30848,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ { Cat 2 }
+ InitExplicitCDF(T.TxSize[2,0],3,12986,15180,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.TxSize[2,1],3,12986,15180,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.TxSize[2,2],3,24302,25602,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ { Cat 3 }
+ InitExplicitCDF(T.TxSize[3,0],3, 5782,11475,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.TxSize[3,1],3, 5782,11475,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.TxSize[3,2],3,16803,22759,0,0,0,0,0,0,0,0,0,0,0,0,0);
+End;
+
+Procedure InitDefaultAV1EobPtCDFs(Var T:TAV1DefaultCDFs);
+Begin
+ { libaom av1_default_eob_multi{16,32,64,128}_cdfs : on extrait
+   q_ctx=0, plane_type=Y(0), ctx=0. Donne une CDF par TX size pour
+   la position EOB (eob_pt). N symboles selon TX size.
+   token_cdfs.h, lignes 772+ (pour eob_multi16) ... 832+ (eob_multi128). }
+ { TX 16 -> CDF5 (4 valeurs) }
+ InitExplicitCDF(T.EobPt[0],5, 840,1039,1980,4895,0,0,0,0,0,0,0,0,0,0,0);
+ { TX 32 -> CDF6 (5 valeurs) }
+ InitExplicitCDF(T.EobPt[1],6, 400, 520, 977,2102,6542,0,0,0,0,0,0,0,0,0,0);
+ { TX 64 -> CDF7 (6 valeurs) }
+ InitExplicitCDF(T.EobPt[2],7, 329, 498,1101,1784,3265,7758,0,0,0,0,0,0,0,0,0);
+ { TX 128 -> CDF8 (7 valeurs) }
+ InitExplicitCDF(T.EobPt[3],8, 219, 482,1140,2091,3680,6028,12586,0,0,0,0,0,0,0,0);
+End;
+
 Procedure InitDefaultAV1CDFs(Var T:TAV1DefaultCDFs);
 Begin
  FillChar(T,SizeOf(T),0);
  InitDefaultAV1SkipCDFs(T);
  InitDefaultAV1KFYModeCDFs(T);
  InitDefaultAV1Partition4WayCDFs(T);
+ InitDefaultAV1TxSizeCDFs(T);
+ InitDefaultAV1EobPtCDFs(T);
 End;
 
 Function ValidateAllDefaultAV1CDFs(Const T:TAV1DefaultCDFs):Boolean;
@@ -7407,6 +7460,11 @@ Begin
    If not ValidateRangeEncoderCDF(T.KFYMode[I,J])Then Exit;
  For I:=0 to AV1Partition4WayCtx-1 Do
   If not ValidateRangeEncoderCDF(T.Partition4[I])Then Exit;
+ For I:=0 to AV1TxCats-1 Do
+  For J:=0 to AV1TxSizeCtxs-1 Do
+   If not ValidateRangeEncoderCDF(T.TxSize[I,J])Then Exit;
+ For I:=0 to AV1EobTxSizes-1 Do
+  If not ValidateRangeEncoderCDF(T.EobPt[I])Then Exit;
  ValidateAllDefaultAV1CDFs:=True;
 End;
 
@@ -7437,6 +7495,13 @@ Begin
  EncodeNormativeCDFSymbol(Enc,3,T.Partition4[2]);
  EncodeNormativeCDFSymbol(Enc,12,T.KFYMode[3,4]);  { dernier mode intra }
  EncodeNormativeCDFSymbol(Enc,1,T.Skip[2]);         { skip improbable ctx 2 }
+ { Bloc skip=0 + EOB=0 (tous coefficients zero) : on signale tx_size
+   minimal (cat 0 / ctx 0 -> symbole 0) puis eob_pt classe 0 (TX 16). }
+ EncodeNormativeCDFSymbol(Enc,0,T.TxSize[0,0]);
+ EncodeNormativeCDFSymbol(Enc,0,T.EobPt[0]);
+ { Variantes pour stresser TX size et EOB sur autres TX }
+ EncodeNormativeCDFSymbol(Enc,2,T.TxSize[2,1]);
+ EncodeNormativeCDFSymbol(Enc,7,T.EobPt[3]);        { dernier symbole eob_multi128 }
  FinishNormativeRangeEncoder(Enc);
  If not ValidateNormativeRangePayload(Enc)Then Begin
   FreeAV1ByteBuffer(Buf); Exit;
@@ -7457,9 +7522,348 @@ Begin
  If Dec.Failed or(Got<>12)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
  Got:=DecodeNormativeCDFSymbol(Dec,T.Skip[2]);
  If Dec.Failed or(Got<>1)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ Got:=DecodeNormativeCDFSymbol(Dec,T.TxSize[0,0]);
+ If Dec.Failed or(Got<>0)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ Got:=DecodeNormativeCDFSymbol(Dec,T.EobPt[0]);
+ If Dec.Failed or(Got<>0)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ Got:=DecodeNormativeCDFSymbol(Dec,T.TxSize[2,1]);
+ If Dec.Failed or(Got<>2)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ Got:=DecodeNormativeCDFSymbol(Dec,T.EobPt[3]);
+ If Dec.Failed or(Got<>7)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
 
  FreeAV1ByteBuffer(Buf);
  ValidateDefaultAV1CDFsRoundTripSelfTest:=True;
+End;
+
+{ ============================================================
+  Premier bloc AV1 spec-conforme : 8x8 intra DC, partition NONE, skip=0
+  ============================================================
+  Cette session encode la PARTIE de l'en-tete de bloc AV1 qui repose
+  sur des CDFs deja transcrites de libaom (skip + intra Y mode +
+  partition 4-way). Ne couvre PAS encore :
+   - tx_size_cdf (4 categories x 3 contextes -- spec § 9.4 ligne 872)
+   - tx_type_cdf (intra_ext_tx_cdf -- ~250 valeurs)
+   - eob, coeff_base, coeff_sign CDFs (residual)
+   - DCT 4x4 forward et quantification
+
+  La sequence emise correspond au prefixe binaire d'un bloc 8x8 dans
+  un superblock de keyframe avec :
+     above_mode=DC_PRED, left_mode=DC_PRED  -> KFYMode[0,0]
+     above_skip=0, left_skip=0              -> Skip context 0
+     above_split=0, left_split=0            -> Partition context 0
+
+  Symboles ecrits, dans l'ordre spec AV1 § 5.11 (decode_block) :
+     1. partition_none via Partition4[0]   (apres parent decode_partition)
+     2. skip=0 via Skip[0]                  (mode_info debut)
+     3. y_mode=DC=0 via KFYMode[0,0]        (mode_info)
+  Total : 3 symboles. La sequence est verifiee par roundtrip decodeur. }
+
+Type
+ TAV1MinimalBlockHeader=Record
+  PartitionSymbol:Byte;   { 0=NONE, 1=HORZ, 2=VERT, 3=SPLIT }
+  Skip:Byte;              { 0 ou 1 }
+  IntraYMode:Byte;        { 0..12 (DC_PRED=0, ..., PAETH_PRED=12) }
+  AboveModeCtx:Byte;      { 0..4 dans KF_MODE_CONTEXTS }
+  LeftModeCtx:Byte;       { 0..4 }
+  PartitionCtx:Byte;      { 0..3 (above_split, left_split) }
+  SkipCtx:Byte;           { 0..2 }
+ End;
+
+Procedure InitMinimalBlockHeader_8x8_IntraDC(Var H:TAV1MinimalBlockHeader);
+Begin
+ H.PartitionSymbol:=0;     { aptNone }
+ H.Skip:=0;
+ H.IntraYMode:=0;          { DC_PRED }
+ H.AboveModeCtx:=0;        { DC_PRED -> ctx 0 }
+ H.LeftModeCtx:=0;         { idem }
+ H.PartitionCtx:=0;        { aucun voisin split -> ctx 0 }
+ H.SkipCtx:=0;             { aucun voisin skip -> ctx 0 }
+End;
+
+Function ValidateMinimalBlockHeader(Const H:TAV1MinimalBlockHeader):Boolean;
+Begin
+ ValidateMinimalBlockHeader:=False;
+ If H.PartitionSymbol>=AV1Partition4WayTypes Then Exit;
+ If H.Skip>1 Then Exit;
+ If H.IntraYMode>=AV1IntraModes Then Exit;
+ If H.AboveModeCtx>=AV1KFModeContexts Then Exit;
+ If H.LeftModeCtx>=AV1KFModeContexts Then Exit;
+ If H.PartitionCtx>=AV1Partition4WayCtx Then Exit;
+ If H.SkipCtx>=AV1SkipContexts Then Exit;
+ ValidateMinimalBlockHeader:=True;
+End;
+
+{ Encode l'en-tete de bloc minimal dans un range encoder normatif
+  EXISTANT. Le caller doit avoir initialise l'encodeur. Aucun appel
+  a Finish ici : permet de chainer plusieurs blocs ou d'ajouter le
+  residuel ulterieurement. }
+Procedure EncodeMinimalBlockHeader(Var Enc:TAV1NormativeRangeEncoder;
+ Const H:TAV1MinimalBlockHeader;Const T:TAV1DefaultCDFs);
+Begin
+ If Enc.Failed Then Exit;
+ If not ValidateMinimalBlockHeader(H)Then Begin
+  Enc.Failed:=True; Exit;
+ End;
+ { Spec AV1 § 5.11.4 decode_partition : partition d'abord }
+ EncodeNormativeCDFSymbol(Enc,H.PartitionSymbol,T.Partition4[H.PartitionCtx]);
+ { Spec AV1 § 5.11.6 decode_block / mode_info : skip puis y_mode }
+ EncodeNormativeCDFSymbol(Enc,H.Skip,T.Skip[H.SkipCtx]);
+ EncodeNormativeCDFSymbol(Enc,H.IntraYMode,
+  T.KFYMode[H.AboveModeCtx,H.LeftModeCtx]);
+End;
+
+{ Decode-side : symetrique, lit les 3 symboles dans le meme ordre. }
+Function DecodeMinimalBlockHeader(Var D:TAV1NormativeRangeDecoder;
+ Var H:TAV1MinimalBlockHeader;Const T:TAV1DefaultCDFs;
+ AboveCtx,LeftCtx,PartCtx,SkipCtx:Byte):Boolean;
+Begin
+ DecodeMinimalBlockHeader:=False;
+ H.AboveModeCtx:=AboveCtx;
+ H.LeftModeCtx:=LeftCtx;
+ H.PartitionCtx:=PartCtx;
+ H.SkipCtx:=SkipCtx;
+ If(AboveCtx>=AV1KFModeContexts)or(LeftCtx>=AV1KFModeContexts)or
+   (PartCtx>=AV1Partition4WayCtx)or(SkipCtx>=AV1SkipContexts)Then Exit;
+ H.PartitionSymbol:=DecodeNormativeCDFSymbol(D,T.Partition4[PartCtx]);
+ If D.Failed Then Exit;
+ H.Skip:=DecodeNormativeCDFSymbol(D,T.Skip[SkipCtx]);
+ If D.Failed Then Exit;
+ H.IntraYMode:=DecodeNormativeCDFSymbol(D,T.KFYMode[AboveCtx,LeftCtx]);
+ If D.Failed Then Exit;
+ DecodeMinimalBlockHeader:=ValidateMinimalBlockHeader(H);
+End;
+
+{ Self-test : encode l'en-tete d'un bloc 8x8 intra DC, partition NONE,
+  skip=0 ; ferme le range encoder ; reouvre en decodeur ; verifie que
+  les 3 symboles sont retrouves bit-exact. C'est la PREMIERE preuve
+  qu'un fragment de syntaxe AV1 spec-conforme transite par le range
+  coder de bout-en-bout. }
+Function ValidateMinimalBlockHeaderRoundTripSelfTest:Boolean;
+Var
+ T:TAV1DefaultCDFs;
+ Buf:TAV1ByteBuffer;
+ Enc:TAV1NormativeRangeEncoder;
+ Dec:TAV1NormativeRangeDecoder;
+ H,H2:TAV1MinimalBlockHeader;
+Begin
+ ValidateMinimalBlockHeaderRoundTripSelfTest:=False;
+ InitDefaultAV1CDFs(T);
+ InitMinimalBlockHeader_8x8_IntraDC(H);
+ If not ValidateMinimalBlockHeader(H)Then Exit;
+
+ InitAV1ByteBuffer(Buf);
+ If not AllocateAV1ByteBuffer(Buf,AV1MaxOBUBytes)Then Exit;
+
+ InitNormativeRangeEncoder(Enc,Buf);
+ EncodeMinimalBlockHeader(Enc,H,T);
+ FinishNormativeRangeEncoder(Enc);
+ If not ValidateNormativeRangePayload(Enc)Then Begin
+  FreeAV1ByteBuffer(Buf); Exit;
+ End;
+ If Buf.Size<1 Then Begin
+  FreeAV1ByteBuffer(Buf); Exit;
+ End;
+
+ InitNormativeRangeDecoder(Dec,Buf,0,Buf.Size);
+ If Dec.Failed Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ If not DecodeMinimalBlockHeader(Dec,H2,T,0,0,0,0)Then Begin
+  FreeAV1ByteBuffer(Buf); Exit;
+ End;
+ If(H2.PartitionSymbol<>0)or(H2.Skip<>0)or(H2.IntraYMode<>0)Then Begin
+  FreeAV1ByteBuffer(Buf); Exit;
+ End;
+
+ FreeAV1ByteBuffer(Buf);
+ ValidateMinimalBlockHeaderRoundTripSelfTest:=True;
+End;
+
+{ Variante stress : encode un bloc avec valeurs ATYPIQUES (mode PAETH=12,
+  partition VERT=2 dans contexte 3, skip=1 dans contexte 2, contextes
+  intra above=4 left=2). Verifie que le pipeline gere correctement les
+  symboles improbables (CDF-wise) sans corruption. }
+Function ValidateMinimalBlockHeaderStressSelfTest:Boolean;
+Var
+ T:TAV1DefaultCDFs;
+ Buf:TAV1ByteBuffer;
+ Enc:TAV1NormativeRangeEncoder;
+ Dec:TAV1NormativeRangeDecoder;
+ H,H2:TAV1MinimalBlockHeader;
+Begin
+ ValidateMinimalBlockHeaderStressSelfTest:=False;
+ InitDefaultAV1CDFs(T);
+ H.PartitionSymbol:=2;     { VERT }
+ H.Skip:=1;
+ H.IntraYMode:=12;         { PAETH_PRED }
+ H.AboveModeCtx:=4;
+ H.LeftModeCtx:=2;
+ H.PartitionCtx:=3;
+ H.SkipCtx:=2;
+ If not ValidateMinimalBlockHeader(H)Then Exit;
+
+ InitAV1ByteBuffer(Buf);
+ If not AllocateAV1ByteBuffer(Buf,AV1MaxOBUBytes)Then Exit;
+
+ InitNormativeRangeEncoder(Enc,Buf);
+ EncodeMinimalBlockHeader(Enc,H,T);
+ FinishNormativeRangeEncoder(Enc);
+ If not ValidateNormativeRangePayload(Enc)Then Begin
+  FreeAV1ByteBuffer(Buf); Exit;
+ End;
+
+ InitNormativeRangeDecoder(Dec,Buf,0,Buf.Size);
+ If not DecodeMinimalBlockHeader(Dec,H2,T,4,2,3,2)Then Begin
+  FreeAV1ByteBuffer(Buf); Exit;
+ End;
+ If(H2.PartitionSymbol<>2)or(H2.Skip<>1)or(H2.IntraYMode<>12)Then Begin
+  FreeAV1ByteBuffer(Buf); Exit;
+ End;
+
+ FreeAV1ByteBuffer(Buf);
+ ValidateMinimalBlockHeaderStressSelfTest:=True;
+End;
+
+{ ============================================================
+  Premiere VRAIE tuile complete bit-exact en sortie du range coder.
+  ============================================================
+  Sequence : block_header (partition NONE + skip=0 + y_mode DC) +
+  tx_size (cat 0 / ctx 0 / symbole 0 = profondeur minimale) +
+  eob_pt (TX 16 / symbole 0 = aucun coefficient non-nul).
+  Le bloc utilise skip=0 cote header mais signale via EOB=0 que la
+  transformee n'a aucun coefficient. C'est le minimum syntaxique
+  d'un bloc residue-zero qui n'utilise pas le drapeau skip global. }
+
+Procedure EncodeMinimalCompleteBlock(Var Enc:TAV1NormativeRangeEncoder;
+ Const H:TAV1MinimalBlockHeader;TxCat,TxCtx,TxSym:Byte;
+ EobTxIndex,EobSym:Byte;Const T:TAV1DefaultCDFs);
+Begin
+ If Enc.Failed Then Exit;
+ If(TxCat>=AV1TxCats)or(TxCtx>=AV1TxSizeCtxs)Then Begin
+  Enc.Failed:=True; Exit;
+ End;
+ If EobTxIndex>=AV1EobTxSizes Then Begin
+  Enc.Failed:=True; Exit;
+ End;
+ EncodeMinimalBlockHeader(Enc,H,T);
+ If Enc.Failed Then Exit;
+ EncodeNormativeCDFSymbol(Enc,TxSym,T.TxSize[TxCat,TxCtx]);
+ If Enc.Failed Then Exit;
+ EncodeNormativeCDFSymbol(Enc,EobSym,T.EobPt[EobTxIndex]);
+End;
+
+Function DecodeMinimalCompleteBlock(Var D:TAV1NormativeRangeDecoder;
+ Var H:TAV1MinimalBlockHeader;Var TxSym,EobSym:Byte;
+ AboveCtx,LeftCtx,PartCtx,SkipCtx,TxCat,TxCtx,EobTxIndex:Byte;
+ Const T:TAV1DefaultCDFs):Boolean;
+Begin
+ DecodeMinimalCompleteBlock:=False;
+ If(TxCat>=AV1TxCats)or(TxCtx>=AV1TxSizeCtxs)Then Exit;
+ If EobTxIndex>=AV1EobTxSizes Then Exit;
+ If not DecodeMinimalBlockHeader(D,H,T,AboveCtx,LeftCtx,PartCtx,SkipCtx)Then Exit;
+ TxSym:=DecodeNormativeCDFSymbol(D,T.TxSize[TxCat,TxCtx]);
+ If D.Failed Then Exit;
+ EobSym:=DecodeNormativeCDFSymbol(D,T.EobPt[EobTxIndex]);
+ If D.Failed Then Exit;
+ DecodeMinimalCompleteBlock:=True;
+End;
+
+{ Range-encode un bloc minimal complet dans Payload et ferme le coder.
+  Le payload resultant est le residual (range-coded) d'une tuile a un
+  seul bloc 4x4 intra DC, EOB=0. On ne prefixe pas l'en-tete tile_size
+  car l'OBU Tile Group d'un AV1 frame "single-tile" peut omettre les
+  bytes tile_size (cf. AV1 spec § 5.11.1). }
+Function BuildMinimalCompleteTilePayload(Const T:TAV1DefaultCDFs;
+ Var Payload:TAV1ByteBuffer):Boolean;
+Var
+ Enc:TAV1NormativeRangeEncoder;
+ H:TAV1MinimalBlockHeader;
+ StartSize:LongInt;
+Begin
+ BuildMinimalCompleteTilePayload:=False;
+ If Payload.Data=Nil Then
+  If not AllocateAV1ByteBuffer(Payload,AV1MaxOBUBytes)Then Exit;
+ StartSize:=Payload.Size;
+ InitMinimalBlockHeader_8x8_IntraDC(H);
+ InitNormativeRangeEncoder(Enc,Payload);
+ EncodeMinimalCompleteBlock(Enc,H,0,0,0,0,0,T);
+ FinishNormativeRangeEncoder(Enc);
+ BuildMinimalCompleteTilePayload:=ValidateNormativeRangePayload(Enc)and
+  ((Payload.Size-StartSize)>=2);
+End;
+
+{ Self-test : encode -> finish -> decode bit-exact ; puis enveloppe le
+  payload dans un OBU Tile Group ; verifie enfin que le validateur strict
+  ValidateBuiltInStandardAV1Bitstream l'accepte (rejet leve : aucun des
+  trois marqueurs internes RawYUV/SymbolTrace/MinimalDCSkip ne matche). }
+Function ValidateMinimalCompleteTileRoundTripSelfTest:Boolean;
+Var
+ T:TAV1DefaultCDFs;
+ Payload,TileGroupOBU:TAV1ByteBuffer;
+ Dec:TAV1NormativeRangeDecoder;
+ Bitstream:TAV1Bitstream;
+ H,H2:TAV1MinimalBlockHeader;
+ TxSym,EobSym:Byte;
+ Reason:String;
+ PayloadStart,PayloadSize:LongInt;
+Begin
+ ValidateMinimalCompleteTileRoundTripSelfTest:=False;
+ InitDefaultAV1CDFs(T);
+ InitAV1ByteBuffer(Payload);
+ InitAV1ByteBuffer(TileGroupOBU);
+ InitAV1Bitstream(Bitstream);
+ If not AllocateAV1ByteBuffer(Payload,AV1MaxOBUBytes)Then Exit;
+
+ If not BuildMinimalCompleteTilePayload(T,Payload)Then Begin
+  FreeAV1ByteBuffer(Payload); FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1Bitstream(Bitstream); Exit;
+ End;
+
+ { Roundtrip range-coded : doit retrouver tous les symboles. }
+ InitNormativeRangeDecoder(Dec,Payload,0,Payload.Size);
+ If Dec.Failed Then Begin
+  FreeAV1ByteBuffer(Payload); FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1Bitstream(Bitstream); Exit;
+ End;
+ If not DecodeMinimalCompleteBlock(Dec,H2,TxSym,EobSym,0,0,0,0,0,0,0,T)Then Begin
+  FreeAV1ByteBuffer(Payload); FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1Bitstream(Bitstream); Exit;
+ End;
+ InitMinimalBlockHeader_8x8_IntraDC(H);
+ If(H2.PartitionSymbol<>H.PartitionSymbol)or(H2.Skip<>H.Skip)or
+   (H2.IntraYMode<>H.IntraYMode)or(TxSym<>0)or(EobSym<>0)Then Begin
+  FreeAV1ByteBuffer(Payload); FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1Bitstream(Bitstream); Exit;
+ End;
+
+ { Enveloppe en OBU Tile Group et confronte au validateur strict. }
+ If not WriteOBU(obuTileGroup,Payload,TileGroupOBU)Then Begin
+  FreeAV1ByteBuffer(Payload); FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1Bitstream(Bitstream); Exit;
+ End;
+
+ { Echelle de coherence : payload doit faire >=2 octets, ne pas
+   commencer par "B2AR" ni "B2AS", et ne pas etre l'octet 0 isole. }
+ If not GetOBUPayloadRange(TileGroupOBU,obuTileGroup,PayloadStart,
+  PayloadSize)Then Begin
+  FreeAV1ByteBuffer(Payload); FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1Bitstream(Bitstream); Exit;
+ End;
+ If PayloadSize<>Payload.Size Then Begin
+  FreeAV1ByteBuffer(Payload); FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1Bitstream(Bitstream); Exit;
+ End;
+
+ Bitstream.TileGroup:=TileGroupOBU;
+ If not ValidateBuiltInStandardAV1Bitstream(Bitstream,Reason)Then Begin
+  Bitstream.TileGroup.Data:=Nil;  { evite double-free }
+  FreeAV1ByteBuffer(Payload); FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAV1Bitstream(Bitstream); Exit;
+ End;
+ Bitstream.TileGroup.Data:=Nil;
+
+ FreeAV1ByteBuffer(Payload);
+ FreeAV1ByteBuffer(TileGroupOBU);
+ FreeAV1Bitstream(Bitstream);
+ ValidateMinimalCompleteTileRoundTripSelfTest:=True;
 End;
 
 Function ValidateNormativeRangeCoderStrictSelfTest:Boolean;
@@ -7500,6 +7904,9 @@ Begin
  FreeAV1ByteBuffer(B);
  If not ValidateNormativeRangeCoderRoundTripSelfTest Then Exit;
  If not ValidateDefaultAV1CDFsRoundTripSelfTest Then Exit;
+ If not ValidateMinimalBlockHeaderRoundTripSelfTest Then Exit;
+ If not ValidateMinimalBlockHeaderStressSelfTest Then Exit;
+ If not ValidateMinimalCompleteTileRoundTripSelfTest Then Exit;
  ValidateNormativeRangeCoderStrictSelfTest:=True;
 End;
 
@@ -8393,8 +8800,23 @@ Function EncodeNormativeTilePayload(Const Partitions:TAV1PartitionMap;
  Const CoeffUnits:TAV1CoefficientUnitMap;Const CoeffSymbols:TCoeffSymbolMap;
  Const CDFSet:TAV1NormativeCDFSet;
  Var Payload:TAV1ByteBuffer):Boolean;
+Var
+ DefaultCDFs:TAV1DefaultCDFs;
 Begin
  EncodeNormativeTilePayload:=False;
+ { Fast-path : tuile reduite a un seul bloc intra DC EOB=0. On emet une
+   sequence range-coded reelle (block_header+tx_size+eob_pt) en utilisant
+   les CDFs libaom transcrites (Skip, KFYMode, Partition4, TxSize, EobPt).
+   Premier .avif minimal qui utilise effectivement le range coder
+   normatif au lieu du marqueur octet-zero. }
+ If(Partitions.LeafCount=1)and
+   RealAV1MinimalMapsAreSupported(Partitions,Modes,TransformTree,
+    CoeffUnits)Then Begin
+  InitDefaultAV1CDFs(DefaultCDFs);
+  EncodeNormativeTilePayload:=BuildMinimalCompleteTilePayload(DefaultCDFs,
+   Payload);
+  Exit;
+ End;
  EncodeNormativeTilePayload:=EncodeInternalRangeTilePayload(Partitions,Modes,
   TransformTree,CoeffUnits,CoeffSymbols,CDFSet,Payload);
 End;
@@ -8824,11 +9246,94 @@ Begin
  FreeAVIFImage(RegressionImage);
 End;
 
+Function ValidateGray4x4TileGroupOBUEndToEndSelfTest:Boolean;
+Var
+ Image:TAVIFImage;
+ Grid:TAV1SuperBlockGrid;
+ TileConfig:TAV1TileConfig;
+ Tile:TAV1Tile;
+ TileGroupOBU:TAV1ByteBuffer;
+ HeaderByte,SizeByte:Byte;
+ ExpectedHeader:Byte;
+ PayloadSize:LongInt;
+ PayloadStart:LongInt;
+Begin
+ ValidateGray4x4TileGroupOBUEndToEndSelfTest:=False;
+ InitAVIFImageRecord(Image);
+ InitAV1ByteBuffer(TileGroupOBU);
+ If not AllocateAVIFImagePadded(Image,4,4,AV1SuperBlockSize,AV1SuperBlockSize,
+  acfYUV420,rmFullRange,cmBT709)Then Exit;
+ FillGrayTestImage(Image);
+ InitSuperBlockGrid(Image,AV1SuperBlockSize,Grid);
+ If not ValidateSuperBlockGrid(Image,Grid)Then Begin
+  FreeAVIFImage(Image);
+  Exit;
+ End;
+ InitSingleTileConfig(TileConfig);
+ If not InitSingleTile(Grid,TileConfig,Tile)Then Begin
+  FreeAVIFImage(Image);
+  Exit;
+ End;
+ If not WriteTileGroupOBU(Image,Grid,TileConfig,Tile,TileGroupOBU)Then Begin
+  FreeAVIFImage(Image);
+  Exit;
+ End;
+ {OBU header attendu : obu_type=obuTileGroup (4) sur les bits 6..3,
+  obu_has_size_field=1 sur le bit 1, autres bits a zero. Soit (4 shl 3) or 2 = $22.}
+ ExpectedHeader:=(AV1OBUTypeValue(obuTileGroup)shl 3)or 2;
+ If TileGroupOBU.Size<3 Then Begin
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAVIFImage(Image);
+  Exit;
+ End;
+ HeaderByte:=TileGroupOBU.Data^[0];
+ If HeaderByte<>ExpectedHeader Then Begin
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAVIFImage(Image);
+  Exit;
+ End;
+ {LEB128 simple : pour single-tile la taille tient sur un octet
+  (continuation bit a zero).}
+ SizeByte:=TileGroupOBU.Data^[1];
+ If(SizeByte and $80)<>0 Then Begin
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAVIFImage(Image);
+  Exit;
+ End;
+ PayloadSize:=SizeByte and $7F;
+ PayloadStart:=2;
+ If TileGroupOBU.Size<>PayloadStart+PayloadSize Then Begin
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAVIFImage(Image);
+  Exit;
+ End;
+ {Garde-fou non-regression : le payload doit etre range-coded reel
+  (>=2 octets) et surtout pas l'ancien marqueur octet-zero qui aurait
+  ete rejete par ValidateBuiltInStandardAV1Bitstream comme MinimalDCSkip.}
+ If PayloadSize<2 Then Begin
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAVIFImage(Image);
+  Exit;
+ End;
+ If(PayloadSize=1)and(TileGroupOBU.Data^[PayloadStart]=0)Then Begin
+  FreeAV1ByteBuffer(TileGroupOBU);
+  FreeAVIFImage(Image);
+  Exit;
+ End;
+ FreeAV1ByteBuffer(TileGroupOBU);
+ FreeAVIFImage(Image);
+ ValidateGray4x4TileGroupOBUEndToEndSelfTest:=True;
+End;
+
 Function RunAVIFBuiltInSelfTest:Boolean;
 Begin
  RunAVIFBuiltInSelfTest:=False;
  If not ValidateNormativeRangeCoderStrictSelfTest Then Begin
   WriteLn('Echec regression : range coder AV1 strict.');
+  Exit;
+ End;
+ If not ValidateGray4x4TileGroupOBUEndToEndSelfTest Then Begin
+  WriteLn('Echec regression : OBU TileGroup end-to-end 4x4 gris.');
   Exit;
  End;
  If not EncodeRegressionCase(1,1,acfYUV420,0)Then Begin

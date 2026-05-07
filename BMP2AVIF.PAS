@@ -1115,6 +1115,21 @@ Type
   Failed:Boolean;
  End;
 
+ { Decodeur AV1 normatif (compagnon de TAV1NormativeRangeEncoder).
+   Reproduit od_ec_dec.c de libaom : fenetre 32 bits, cnt initial=-15,
+   raffraichissement par octets a partir d'un buffer existant.
+   Sert au self-test roundtrip et au futur decodage de tuile. }
+ TAV1NormativeRangeDecoder=Record
+  Dif:Int64;          { fenetre 32 bits stockee en Int64 pour eviter les pieges de signe }
+  Range:LongInt;      { 0x8000..0xFFFF }
+  Cnt:LongInt;        { -15..23, indique combien de bits utiles restent dans Dif }
+  Buffer:^TAV1ByteBuffer;
+  ReadPos:LongInt;    { prochaine position de lecture (octet) }
+  EndPos:LongInt;     { fin exclusive }
+  SymbolCount:LongInt;{ nombre de symboles deja decodes }
+  Failed:Boolean;
+ End;
+
  TAV1NormativeEncoderState=Record
   EntropyPath:TAV1TileEntropyPath;
  CompletedStages:TAV1BuiltInStageSet;
@@ -7078,6 +7093,326 @@ Begin
  EncodeNormativeRangeTestVector:=ValidateNormativeRangePayload(Encoder);
 End;
 
+{ ----- Decodeur AV1 normatif (od_ec_dec.c equivalent) -----
+  Permet le self-test roundtrip : encoder N symboles puis verifier que
+  le decodeur retrouve la meme sequence bit-a-bit. C'est la garantie
+  minimale pour pouvoir construire ensuite la syntaxe de tuile AV1
+  reelle (partition tree, modes intra, transformees, coefficients). }
+
+Procedure NormativeRangeDecRefill(Var D:TAV1NormativeRangeDecoder);
+Var
+ S:LongInt;
+ B:Byte;
+Begin
+ If D.Failed Then Exit;
+ If D.Buffer=Nil Then Begin D.Failed:=True; Exit; End;
+ If D.Buffer^.Data=Nil Then Begin D.Failed:=True; Exit; End;
+ S:=8-D.Cnt;                          { 32 - 9 - (cnt+15) ; libaom convention }
+ While(S>=0)and(D.ReadPos<D.EndPos)Do Begin
+  B:=D.Buffer^.Data^[D.ReadPos];
+  D.Dif:=D.Dif xor(Int64(B)shl S);
+  Inc(D.ReadPos);
+  Inc(D.Cnt,8);
+  Dec(S,8);
+ End;
+ { Si le buffer est epuise, on laisse Cnt tel quel ; le decodeur lira
+   des "zeros" implicites en haut de Dif jusqu'a ce que le caller arrete. }
+End;
+
+Procedure InitNormativeRangeDecoder(Var D:TAV1NormativeRangeDecoder;
+ Var Buffer:TAV1ByteBuffer;StartOffs,ByteCount:LongInt);
+Begin
+ D.Dif:=$7FFFFFFF;            { (1 shl 31) - 1 ; valeur initiale libaom }
+ D.Range:=$8000;
+ D.Cnt:=-15;
+ D.Buffer:=@Buffer;
+ D.ReadPos:=StartOffs;
+ D.EndPos:=StartOffs+ByteCount;
+ D.SymbolCount:=0;
+ D.Failed:=(Buffer.Data=Nil)or(StartOffs<0)or(ByteCount<0)
+           or(StartOffs+ByteCount>Buffer.Size);
+ If not D.Failed Then NormativeRangeDecRefill(D);
+End;
+
+Function NormativeRangeDecStateIsValid(Const D:TAV1NormativeRangeDecoder):Boolean;
+Begin
+ NormativeRangeDecStateIsValid:=False;
+ If D.Failed Then Exit;
+ If D.Buffer=Nil Then Exit;
+ If(D.Range<$8000)or(D.Range>$FFFF)Then Exit;
+ If D.Dif<0 Then Exit;
+ NormativeRangeDecStateIsValid:=True;
+End;
+
+Function DecodeNormativeCDFSymbol(Var D:TAV1NormativeRangeDecoder;
+ Const Model:TEntropyCDF):Byte;
+Var
+ C,U,V:LongInt;
+ Ret,N:LongInt;
+ ICDF:LongInt;
+ NewRange:LongInt;
+ ShiftAmount:LongInt;
+Begin
+ DecodeNormativeCDFSymbol:=0;
+ If D.Failed Then Exit;
+ If not ValidateRangeEncoderCDF(Model)Then Begin
+  D.Failed:=True; Exit;
+ End;
+ If not NormativeRangeDecStateIsValid(D)Then Begin
+  D.Failed:=True; Exit;
+ End;
+ N:=Model.SymbolCount-1;
+ C:=LongInt((D.Dif shr 16)and $FFFF);
+ V:=D.Range;
+ Ret:=-1;
+ Repeat
+  U:=V;
+  Inc(Ret);
+  If Ret>N Then Begin
+   { ne devrait jamais arriver : pour Ret=N on a V=0 et la boucle sort }
+   D.Failed:=True; Exit;
+  End;
+  ICDF:=32768-LongInt(Model.CDF[Ret+1]);   { = icdf libaom au cran Ret }
+  V:=((D.Range shr 8)*(ICDF shr 6)shr 1)+4*(N-Ret);
+ Until C>=V;
+ NewRange:=U-V;
+ D.Dif:=D.Dif-(Int64(V)shl 16);
+ If(NewRange<=0)or(NewRange>$FFFF)Then Begin
+  D.Failed:=True; Exit;
+ End;
+ ShiftAmount:=16-LongInt(NormativeILogNZ(NewRange));
+ Dec(D.Cnt,ShiftAmount);
+ If ShiftAmount>0 Then
+  D.Dif:=((D.Dif+1)shl ShiftAmount)-1;
+ D.Range:=NewRange shl ShiftAmount;
+ If D.Cnt<0 Then NormativeRangeDecRefill(D);
+ Inc(D.SymbolCount);
+ DecodeNormativeCDFSymbol:=Byte(Ret);
+End;
+
+{ Test roundtrip : encode une sequence connue, puis decode-la et compare.
+  Couvre plusieurs CDFs (uniforme 4-aire, binaire 50/50, binaire 16384,
+  ternaire asymetrique) sur des sequences variees. Si une difference est
+  detectee a n'importe quel point, le test echoue. C'est la PREMIERE
+  preuve que le coder produit un flux exploitable et pas seulement
+  deterministe. }
+Function ValidateNormativeRangeCoderRoundTripSelfTest:Boolean;
+Const
+ SeqLen=12;
+Var
+ Buf:TAV1ByteBuffer;
+ Enc:TAV1NormativeRangeEncoder;
+ Dec:TAV1NormativeRangeDecoder;
+ Model4,Model2,Model2Skew,Model3:TEntropyCDF;
+ Seq:Array[0..SeqLen-1]of Byte;
+ ModelIdx:Array[0..SeqLen-1]of Byte;
+ I:LongInt;
+ Got:Byte;
+Begin
+ ValidateNormativeRangeCoderRoundTripSelfTest:=False;
+ InitAV1ByteBuffer(Buf);
+ If not AllocateAV1ByteBuffer(Buf,AV1MaxOBUBytes)Then Exit;
+
+ InitExplicitCDF(Model4,4,8192,16384,24576,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitFixedCDF(Model2,2,2);
+ InitExplicitCDF(Model2Skew,2,28000,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(Model3,3,4096,28672,0,0,0,0,0,0,0,0,0,0,0,0,0);
+
+ { Sequence couvrant : Model4 sur valeurs extremes et milieu,
+   Model2 alternance, Model2Skew avec valeur improbable, Model3 mixte }
+ Seq[ 0]:=0; ModelIdx[ 0]:=0;
+ Seq[ 1]:=3; ModelIdx[ 1]:=0;
+ Seq[ 2]:=1; ModelIdx[ 2]:=0;
+ Seq[ 3]:=2; ModelIdx[ 3]:=0;
+ Seq[ 4]:=0; ModelIdx[ 4]:=1;
+ Seq[ 5]:=1; ModelIdx[ 5]:=1;
+ Seq[ 6]:=0; ModelIdx[ 6]:=1;
+ Seq[ 7]:=1; ModelIdx[ 7]:=2;     { valeur improbable de Model2Skew }
+ Seq[ 8]:=0; ModelIdx[ 8]:=2;
+ Seq[ 9]:=2; ModelIdx[ 9]:=3;
+ Seq[10]:=0; ModelIdx[10]:=3;
+ Seq[11]:=1; ModelIdx[11]:=3;
+
+ InitNormativeRangeEncoder(Enc,Buf);
+ For I:=0 to SeqLen-1 Do
+  Case ModelIdx[I]of
+   0:EncodeNormativeCDFSymbol(Enc,Seq[I],Model4);
+   1:EncodeNormativeCDFSymbol(Enc,Seq[I],Model2);
+   2:EncodeNormativeCDFSymbol(Enc,Seq[I],Model2Skew);
+   3:EncodeNormativeCDFSymbol(Enc,Seq[I],Model3);
+  End;
+ FinishNormativeRangeEncoder(Enc);
+ If not ValidateNormativeRangePayload(Enc)Then Begin
+  FreeAV1ByteBuffer(Buf); Exit;
+ End;
+
+ InitNormativeRangeDecoder(Dec,Buf,0,Buf.Size);
+ If Dec.Failed Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ For I:=0 to SeqLen-1 Do Begin
+  Case ModelIdx[I]of
+   0:Got:=DecodeNormativeCDFSymbol(Dec,Model4);
+   1:Got:=DecodeNormativeCDFSymbol(Dec,Model2);
+   2:Got:=DecodeNormativeCDFSymbol(Dec,Model2Skew);
+   3:Got:=DecodeNormativeCDFSymbol(Dec,Model3);
+  Else Got:=255;
+  End;
+  If Dec.Failed Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+  If Got<>Seq[I]Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ End;
+
+ FreeAV1ByteBuffer(Buf);
+ ValidateNormativeRangeCoderRoundTripSelfTest:=True;
+End;
+
+{ ============================================================
+  Tables CDF par defaut AV1 spec section 9.4
+  ============================================================
+  Cette section pose la fondation des tables CDF utilisees par
+  l'encodeur AV1. Pour la PREMIERE tuile, on a besoin au minimum :
+   - skip CDF (3 contextes, 2 symboles)        : section 9.4.1
+   - intra Y mode CDF (5x5 contextes, 13 modes) : section 9.4.2
+   - partition CDF (4 contextes, 4 symboles 4-way) : section 9.4.3
+
+  Convention de stockage interne (TEntropyCDF) :
+    CDF[0]=0, CDF[N]=32768, croissant strict, 0 < CDF[k] < 32768.
+  Les valeurs spec libaom sont aussi des CDF cumulatives directement
+  utilisables ici (pas besoin de conversion ICDF->CDF).
+
+  ETAT actuel des transcriptions :
+   - skip            : VALEURS REELLES libaom 3.x (entropymode.c)
+   - intra Y mode    : PLACEHOLDER uniforme (TODO transcrire 25*12 valeurs)
+   - partition 4-way : PLACEHOLDER uniforme (TODO transcrire 4 contextes)
+  Les placeholders sont valides pour le range coder (passent
+  ValidateRangeEncoderCDF) mais ne donneront pas une compression
+  conforme spec. A remplacer avant validation libavif. }
+
+Const
+ AV1IntraModes          = 13;
+ AV1KFModeContexts      = 5;
+ AV1Partition4WayCtx    = 4;
+ AV1Partition4WayTypes  = 4;
+
+Type
+ TAV1DefaultCDFs=Record
+  Skip      : Array[0..AV1SkipContexts-1]of TEntropyCDF;
+  KFYMode   : Array[0..AV1KFModeContexts-1,
+                    0..AV1KFModeContexts-1]of TEntropyCDF;
+  Partition4: Array[0..AV1Partition4WayCtx-1]of TEntropyCDF;
+ End;
+
+Procedure InitDefaultAV1SkipCDFs(Var T:TAV1DefaultCDFs);
+Begin
+ { libaom : default_skip_cdfs[SKIP_CONTEXTS][CDF_SIZE(2)]
+     ctx 0 : AOM_CDF2(31671)  -> mostly NOT skip (block coded)
+     ctx 1 : AOM_CDF2(16515)  -> equiprobable
+     ctx 2 : AOM_CDF2(4576)   -> mostly skip }
+ InitExplicitCDF(T.Skip[0],2,31671,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.Skip[1],2,16515,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+ InitExplicitCDF(T.Skip[2],2, 4576,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+End;
+
+Procedure InitDefaultAV1KFYModeCDFs(Var T:TAV1DefaultCDFs);
+Var
+ I,J:Byte;
+Begin
+ { TODO session future : transcrire les 25 tables exactes de
+   default_kf_y_mode_cdf[KF_MODE_CONTEXTS=5][KF_MODE_CONTEXTS=5][CDF_SIZE(13)]
+   de libaom av1/common/entropymode.c. Pour l'instant, CDF uniforme
+   biaisee legerement vers DC (mode 0), ce qui reste valide pour le
+   range coder mais ne donnera pas une compression conforme spec. }
+ For I:=0 to AV1KFModeContexts-1 Do
+  For J:=0 to AV1KFModeContexts-1 Do
+   { biais DC : numerator=2 dans InitFixedCDF -> mode 0 plus probable }
+   InitFixedCDF(T.KFYMode[I,J],AV1IntraModes,2);
+End;
+
+Procedure InitDefaultAV1Partition4WayCDFs(Var T:TAV1DefaultCDFs);
+Var
+ I:Byte;
+Begin
+ { TODO session future : transcrire default_partition_cdf depth 0
+   (4 contextes (above_split, left_split) x 4 symboles
+   PARTITION_NONE, HORZ, VERT, SPLIT). Pour l'instant, CDF uniforme
+   biaisee vers PARTITION_NONE (symbole 0). }
+ For I:=0 to AV1Partition4WayCtx-1 Do
+  InitFixedCDF(T.Partition4[I],AV1Partition4WayTypes,3);
+End;
+
+Procedure InitDefaultAV1CDFs(Var T:TAV1DefaultCDFs);
+Begin
+ FillChar(T,SizeOf(T),0);
+ InitDefaultAV1SkipCDFs(T);
+ InitDefaultAV1KFYModeCDFs(T);
+ InitDefaultAV1Partition4WayCDFs(T);
+End;
+
+Function ValidateAllDefaultAV1CDFs(Const T:TAV1DefaultCDFs):Boolean;
+Var
+ I,J:Byte;
+Begin
+ ValidateAllDefaultAV1CDFs:=False;
+ For I:=0 to AV1SkipContexts-1 Do
+  If not ValidateRangeEncoderCDF(T.Skip[I])Then Exit;
+ For I:=0 to AV1KFModeContexts-1 Do
+  For J:=0 to AV1KFModeContexts-1 Do
+   If not ValidateRangeEncoderCDF(T.KFYMode[I,J])Then Exit;
+ For I:=0 to AV1Partition4WayCtx-1 Do
+  If not ValidateRangeEncoderCDF(T.Partition4[I])Then Exit;
+ ValidateAllDefaultAV1CDFs:=True;
+End;
+
+{ Self-test : initialise les defaults, valide leur structure, puis
+  encode et decode un message court qui exerce chaque famille de CDF.
+  Sequence simulee : "intra DC, pas de split, skip=0" sur 4 contextes. }
+Function ValidateDefaultAV1CDFsRoundTripSelfTest:Boolean;
+Var
+ T:TAV1DefaultCDFs;
+ Buf:TAV1ByteBuffer;
+ Enc:TAV1NormativeRangeEncoder;
+ Dec:TAV1NormativeRangeDecoder;
+ Got:Byte;
+Begin
+ ValidateDefaultAV1CDFsRoundTripSelfTest:=False;
+ InitDefaultAV1CDFs(T);
+ If not ValidateAllDefaultAV1CDFs(T)Then Exit;
+
+ InitAV1ByteBuffer(Buf);
+ If not AllocateAV1ByteBuffer(Buf,AV1MaxOBUBytes)Then Exit;
+
+ InitNormativeRangeEncoder(Enc,Buf);
+ { Sequence : partition NONE (ctx 0), intra DC mode (ctx [0,0]), skip=0 (ctx 0) }
+ EncodeNormativeCDFSymbol(Enc,0,T.Partition4[0]);
+ EncodeNormativeCDFSymbol(Enc,0,T.KFYMode[0,0]);
+ EncodeNormativeCDFSymbol(Enc,0,T.Skip[0]);
+ { Variante avec valeurs non-triviales pour stresser les CDFs }
+ EncodeNormativeCDFSymbol(Enc,3,T.Partition4[2]);
+ EncodeNormativeCDFSymbol(Enc,12,T.KFYMode[3,4]);  { dernier mode intra }
+ EncodeNormativeCDFSymbol(Enc,1,T.Skip[2]);         { skip improbable ctx 2 }
+ FinishNormativeRangeEncoder(Enc);
+ If not ValidateNormativeRangePayload(Enc)Then Begin
+  FreeAV1ByteBuffer(Buf); Exit;
+ End;
+
+ InitNormativeRangeDecoder(Dec,Buf,0,Buf.Size);
+ If Dec.Failed Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+
+ Got:=DecodeNormativeCDFSymbol(Dec,T.Partition4[0]);
+ If Dec.Failed or(Got<>0)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ Got:=DecodeNormativeCDFSymbol(Dec,T.KFYMode[0,0]);
+ If Dec.Failed or(Got<>0)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ Got:=DecodeNormativeCDFSymbol(Dec,T.Skip[0]);
+ If Dec.Failed or(Got<>0)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ Got:=DecodeNormativeCDFSymbol(Dec,T.Partition4[2]);
+ If Dec.Failed or(Got<>3)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ Got:=DecodeNormativeCDFSymbol(Dec,T.KFYMode[3,4]);
+ If Dec.Failed or(Got<>12)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+ Got:=DecodeNormativeCDFSymbol(Dec,T.Skip[2]);
+ If Dec.Failed or(Got<>1)Then Begin FreeAV1ByteBuffer(Buf); Exit; End;
+
+ FreeAV1ByteBuffer(Buf);
+ ValidateDefaultAV1CDFsRoundTripSelfTest:=True;
+End;
+
 Function ValidateNormativeRangeCoderStrictSelfTest:Boolean;
 Var
  A,B:TAV1ByteBuffer;
@@ -7114,6 +7449,8 @@ Begin
  End;
  FreeAV1ByteBuffer(A);
  FreeAV1ByteBuffer(B);
+ If not ValidateNormativeRangeCoderRoundTripSelfTest Then Exit;
+ If not ValidateDefaultAV1CDFsRoundTripSelfTest Then Exit;
  ValidateNormativeRangeCoderStrictSelfTest:=True;
 End;
 

@@ -1295,7 +1295,7 @@ Begin
   If y > 0 Then ArcTan2 := Pi / 2 Else
   If y < 0 Then ArcTan2 := -Pi / 2
    Else
-  ArcTan2 := 0; { ind�fini, mais on retourne 0 }
+  ArcTan2 := 0; { ind�fini, mais on retourne 0 }
  End;
 End;
 
@@ -14368,10 +14368,14 @@ Begin
    HandleMouseMove(MouseX, MouseY);
    OldMouseX := MouseX;
    OldMouseY := MouseY;
-   { TODO 8: Redessiner le canvas pour mettre à jour le crosshair }
-   DrawCanvas;
-   { Mettre à jour la barre d'état avec les nouvelles coordonnées }
-   DrawStatusBar;
+   { TODO 8: Redessiner le canvas pour mettre à jour le crosshair.
+     Ne pas redessiner si un menu déroulant ou contextuel est ouvert,
+     sinon le dessin recouvrirait le menu et empêcherait sa sélection. }
+   If (Not MenuActive) and (Not ContextMenuActive) Then Begin
+    DrawCanvas;
+    { Mettre à jour la barre d'état avec les nouvelles coordonnées }
+    DrawStatusBar;
+   End;
   End;
 
   { Vérifier les touches clavier }

@@ -7116,6 +7116,43 @@ Var
  CmdName: String;
  X1, Y1, X2, Y2, R: Real;
  EntityIdx: Integer;
+
+ { Extraire un point (x,y) depuis une valeur LISP : liste (x y) ou string "x,y" }
+ Procedure ExtractPoint(Const V: TLispValue; Var PX, PY: Real);
+ Var
+  S: String;
+  CommaPos, Code: Integer;
+  XStr, YStr: String;
+ Begin
+  PX := 0.0; PY := 0.0;
+  If (V.ValueType = LISP_VAL_LIST) and (V.ListNode <> Nil) Then Begin
+   If V.ListNode^.ChildCount >= 2 Then Begin
+    If V.ListNode^.Children[0]^.NodeType = LISP_NODE_REAL Then
+     PX := V.ListNode^.Children[0]^.RealValue
+    Else
+     PX := V.ListNode^.Children[0]^.IntValue;
+    If V.ListNode^.Children[1]^.NodeType = LISP_NODE_REAL Then
+     PY := V.ListNode^.Children[1]^.RealValue
+    Else
+     PY := V.ListNode^.Children[1]^.IntValue;
+   End;
+  End Else If V.ValueType = LISP_VAL_STRING Then Begin
+   S := V.StrValue;
+   CommaPos := Pos(',', S);
+   If CommaPos > 0 Then Begin
+    XStr := Copy(S, 1, CommaPos - 1);
+    YStr := Copy(S, CommaPos + 1, Length(S) - CommaPos);
+    Val(XStr, PX, Code);
+    If Code <> 0 Then PX := 0.0;
+    Val(YStr, PY, Code);
+    If Code <> 0 Then PY := 0.0;
+   End;
+  End Else If V.ValueType = LISP_VAL_REAL Then
+   PX := V.RealValue
+  Else If V.ValueType = LISP_VAL_INTEGER Then
+   PX := V.IntValue;
+ End;
+
 Begin
  If Node^.ChildCount < 2 Then Begin
   LispEvalCommand := LispMakeNil;
@@ -7143,34 +7180,12 @@ Begin
  { Commande LINE }
  If CmdName = 'LINE' Then Begin
   If Node^.ChildCount >= 4 Then Begin
-   { Obtenir les deux points }
+   { Obtenir les deux points (liste ou chaîne "x,y") }
    CmdVal := LispEval(Node^.Children[2]);
-   If (CmdVal.ValueType = LISP_VAL_LIST) and (CmdVal.ListNode <> Nil) Then Begin
-    If CmdVal.ListNode^.ChildCount >= 2 Then Begin
-     If CmdVal.ListNode^.Children[0]^.NodeType = LISP_NODE_REAL Then
-      X1 := CmdVal.ListNode^.Children[0]^.RealValue
-     Else
-      X1 := CmdVal.ListNode^.Children[0]^.IntValue;
-     If CmdVal.ListNode^.Children[1]^.NodeType = LISP_NODE_REAL Then
-      Y1 := CmdVal.ListNode^.Children[1]^.RealValue
-     Else
-      Y1 := CmdVal.ListNode^.Children[1]^.IntValue;
-    End;
-   End;
+   ExtractPoint(CmdVal, X1, Y1);
 
    CmdVal := LispEval(Node^.Children[3]);
-   If (CmdVal.ValueType = LISP_VAL_LIST) and (CmdVal.ListNode <> Nil) Then Begin
-    If CmdVal.ListNode^.ChildCount >= 2 Then Begin
-     If CmdVal.ListNode^.Children[0]^.NodeType = LISP_NODE_REAL Then
-      X2 := CmdVal.ListNode^.Children[0]^.RealValue
-     Else
-      X2 := CmdVal.ListNode^.Children[0]^.IntValue;
-     If CmdVal.ListNode^.Children[1]^.NodeType = LISP_NODE_REAL Then
-      Y2 := CmdVal.ListNode^.Children[1]^.RealValue
-     Else
-      Y2 := CmdVal.ListNode^.Children[1]^.IntValue;
-    End;
-   End;
+   ExtractPoint(CmdVal, X2, Y2);
 
    { Créer la ligne }
    For I := 0 to MAX_OBJECTS - 1 do Begin
@@ -7184,6 +7199,7 @@ Begin
      DrawObjects[I].Selected := False;
      DrawObjects[I].Visible := True;
      LispLastEntity := I;
+     If I >= ObjectCount Then ObjectCount := I + 1;
      Break;
     End;
    End;
@@ -7197,18 +7213,7 @@ Begin
   If Node^.ChildCount >= 4 Then Begin
    { Obtenir le centre et le rayon }
    CmdVal := LispEval(Node^.Children[2]);
-   If (CmdVal.ValueType = LISP_VAL_LIST) and (CmdVal.ListNode <> Nil) Then Begin
-    If CmdVal.ListNode^.ChildCount >= 2 Then Begin
-     If CmdVal.ListNode^.Children[0]^.NodeType = LISP_NODE_REAL Then
-      X1 := CmdVal.ListNode^.Children[0]^.RealValue
-     Else
-      X1 := CmdVal.ListNode^.Children[0]^.IntValue;
-     If CmdVal.ListNode^.Children[1]^.NodeType = LISP_NODE_REAL Then
-      Y1 := CmdVal.ListNode^.Children[1]^.RealValue
-     Else
-      Y1 := CmdVal.ListNode^.Children[1]^.IntValue;
-    End;
-   End;
+   ExtractPoint(CmdVal, X1, Y1);
 
    CmdVal := LispEval(Node^.Children[3]);
    R := LispValueToReal(CmdVal);
@@ -7224,6 +7229,7 @@ Begin
      DrawObjects[I].Selected := False;
      DrawObjects[I].Visible := True;
      LispLastEntity := I;
+     If I >= ObjectCount Then ObjectCount := I + 1;
      Break;
     End;
    End;
@@ -14467,12 +14473,19 @@ Begin
     #13: Begin { Enter : exécuter la commande }
      If CommandBuffer <> '' Then Begin
       CommandLastLine := 'Command: ' + CommandBuffer;
+      { Si la ligne ressemble à du LISP (commence par '('), évaluer }
+      If (Length(CommandBuffer) > 0) and (CommandBuffer[1] = '(') Then Begin
+       LispEvaluator.LastResult := LispEvaluate(CommandBuffer);
+       If LispEvaluator.LastResult.ValueType = LISP_VAL_ERROR Then
+        CommandLastLine := 'Error: ' + LispEvaluator.LastResult.StrValue;
+      End;
       CommandBuffer := '';
-     End Else If CommandLastLine <> '' Then Begin
-      { Enter sur ligne vide : répéter la dernière commande (placeholder) }
+      CommandCursorBlink := True;
+      DrawInterface;  { Rafraîchir tout (les nouveaux objets apparaissent) }
+     End Else Begin
+      CommandCursorBlink := True;
+      DrawCommandLine;
      End;
-     CommandCursorBlink := True;
-     DrawCommandLine;
     End;
     { TODO 7: Touche spéciale (flèches) pour le pan }
     #0: Begin

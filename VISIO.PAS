@@ -7605,20 +7605,72 @@ Begin
  DocumentModified := True;
 End;
 
+{ Forward decls : les dispatchers sont définis plus bas dans le fichier }
+Function ExecuteFileMenuAction(ItemIndex: Integer): Boolean; Forward;
+Procedure ExecuteEditMenuAction(ItemIndex: Integer); Forward;
+Procedure ExecuteViewMenuAction(ItemIndex: Integer); Forward;
+Procedure ExecuteInsertMenuAction(ItemIndex: Integer); Forward;
+Procedure ExecuteFormatMenuAction(ItemIndex: Integer); Forward;
+Procedure ExecuteShapeMenuAction(ItemIndex: Integer); Forward;
+Function GetMenuAtPosition(MouseX, MouseY: Integer): Integer; Forward;
+Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer; Forward;
+
 { ProcÃ©dure pour gÃ©rer le clic gauche de la souris }
 Procedure HandleLeftClick(X, Y: Integer);
 Var
  ShapeIndex: Integer;
  ToolIndex: Integer;
  ResizeHandle: Integer;
+ MenuIdx, ItemIdx: Integer;
+ ShouldExit: Boolean;
 Begin
- { VÃ©rifier si le clic est dans la barre de menu }
+ { Si un menu déroulant est ouvert, traiter d'abord la sélection d'un item }
+ If (MenuState = msDropDown) and (CurrentMenu > 0) Then Begin
+  ItemIdx := GetDropDownItemAtPosition(CurrentMenu, X, Y);
+  If ItemIdx > 0 Then Begin
+   { Dispatcher selon le menu actif }
+   Case CurrentMenu of
+    1: Begin
+        ShouldExit := ExecuteFileMenuAction(ItemIdx);
+        If ShouldExit Then Halt;
+       End;
+    2: ExecuteEditMenuAction(ItemIdx);
+    3: ExecuteViewMenuAction(ItemIdx);
+    4: ExecuteInsertMenuAction(ItemIdx);
+    5: ExecuteFormatMenuAction(ItemIdx);
+    6: ExecuteShapeMenuAction(ItemIdx);
+    { Tools/Window/Help : pas de dispatcher implémenté }
+   End;
+   { Fermer le menu après l'action }
+   MenuState := msNone;
+   CurrentMenu := 0;
+   Exit;
+  End Else Begin
+   { Clic en dehors de la liste : si on a cliqué sur un autre titre de
+     menu dans la barre, basculer vers ce menu, sinon fermer. }
+   MenuIdx := GetMenuAtPosition(X, Y);
+   If MenuIdx > 0 Then Begin
+    CurrentMenu := MenuIdx;
+    MenuState := msDropDown;
+    Exit;
+   End;
+   MenuState := msNone;
+   CurrentMenu := 0;
+   Exit;
+  End;
+ End;
+
+ { Vérifier si le clic est dans la barre de menu : ouvrir le déroulant }
  If Y <= MENU_HEIGHT Then Begin
-  { GÃ©rer le clic sur le menu }
+  MenuIdx := GetMenuAtPosition(X, Y);
+  If MenuIdx > 0 Then Begin
+   CurrentMenu := MenuIdx;
+   MenuState := msDropDown;
+  End;
   Exit;
  End;
 
- { VÃ©rifier si le clic est dans la barre d'outils }
+ { Vérifier si le clic est dans la barre d'outils }
  If (Y > MENU_HEIGHT) and (Y <= TOOLBAR_TOP + TOOLBAR_HEIGHT) Then Begin
   ToolIndex := GetToolAtPosition(X, Y);
   If ToolIndex > 0 Then Begin

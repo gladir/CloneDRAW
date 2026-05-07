@@ -48,6 +48,10 @@
 
 Program VISIO;
 
+{$IFDEF FPC}
+ {$R-}
+{$ENDIF}
+
 Uses {$IFDEF FPC}
       Crt,PtcGraph,PtcCrt,PtcMouse
      {$ELSE}
@@ -62,64 +66,64 @@ Const
  MENU_TEXT_COLOR = 0;     { Noir }
  MENU_HIGHLIGHT_BG = 1;   { Bleu }
  MENU_HIGHLIGHT_FG = 15;  { Blanc }
- 
+
  { Constantes pour la barre d'outils }
  TOOLBAR_COUNT = 9;
  TOOLBAR_TOP = 19;        { Juste en dessous de la barre de menu }
  TOOLBAR_HEIGHT = 26;     { Hauteur de la barre d'outils }
  TOOLBAR_BUTTON_SIZE = 24; { Taille d'un bouton }
  TOOLBAR_PADDING = 2;     { Espacement entre les boutons }
- TOOLBAR_COLOR = 7;       { Gris clair - même couleur que la barre de menu }
+ TOOLBAR_COLOR = 7;       { Gris clair - mÃªme couleur que la barre de menu }
  TOOLBAR_BTN_COLOR = 15;  { Blanc - fond des boutons }
- TOOLBAR_BTN_BORDER = 8;  { Gris foncé - bordure des boutons }
- TOOLBAR_BTN_SELECTED = 1; { Bleu - bouton sélectionné }
- 
+ TOOLBAR_BTN_BORDER = 8;  { Gris foncÃ© - bordure des boutons }
+ TOOLBAR_BTN_SELECTED = 1; { Bleu - bouton sÃ©lectionnÃ© }
+
  { Constantes pour la zone de travail et les objets }
- WORK_AREA_TOP = 46;      { Début de la zone de travail (sous barre d'outils) }
+ WORK_AREA_TOP = 46;      { DÃ©but de la zone de travail (sous barre d'outils) }
  MAX_SHAPES = 100;        { Nombre maximum d'objets }
- DEFAULT_SHAPE_WIDTH = 80;  { Largeur par défaut d'une forme }
- DEFAULT_SHAPE_HEIGHT = 60; { Hauteur par défaut d'une forme }
- SELECTION_HANDLE_SIZE = 6; { Taille des poignées de sélection }
- 
- { Constantes pour les polygones et courbes de Bézier }
+ DEFAULT_SHAPE_WIDTH = 80;  { Largeur par dÃ©faut d'une forme }
+ DEFAULT_SHAPE_HEIGHT = 60; { Hauteur par dÃ©faut d'une forme }
+ SELECTION_HANDLE_SIZE = 6; { Taille des poignÃ©es de sÃ©lection }
+
+ { Constantes pour les polygones et courbes de BÃ©zier }
  MAX_POLYGON_POINTS = 20;  { Nombre maximum de points pour un polygone }
- MAX_BEZIER_POINTS = 4;    { Nombre de points de contrôle pour une courbe de Bézier cubique }
- 
- { Couleurs pour les poignées de redimensionnement }
- HANDLE_NORMAL_COLOR = 1;   { Bleu - couleur normale des poignées }
- HANDLE_HOVER_COLOR = 4;    { Rouge - couleur des poignées survolées }
- HANDLE_BORDER_COLOR = 15;  { Blanc - bordure des poignées }
- 
+ MAX_BEZIER_POINTS = 4;    { Nombre de points de contrÃ´le pour une courbe de BÃ©zier cubique }
+
+ { Couleurs pour les poignÃ©es de redimensionnement }
+ HANDLE_NORMAL_COLOR = 1;   { Bleu - couleur normale des poignÃ©es }
+ HANDLE_HOVER_COLOR = 4;    { Rouge - couleur des poignÃ©es survolÃ©es }
+ HANDLE_BORDER_COLOR = 15;  { Blanc - bordure des poignÃ©es }
+
  { Constantes pour le menu contextuel (clic droit) }
- CONTEXT_MENU_ITEM_COUNT = 5;     { Nombre d'éléments : Cut, Copy, Paste, Delete, Properties }
+ CONTEXT_MENU_ITEM_COUNT = 5;     { Nombre d'Ã©lÃ©ments : Cut, Copy, Paste, Delete, Properties }
  CONTEXT_MENU_WIDTH = 100;        { Largeur du menu contextuel }
- CONTEXT_MENU_ITEM_HEIGHT = 18;   { Hauteur d'un élément }
+ CONTEXT_MENU_ITEM_HEIGHT = 18;   { Hauteur d'un Ã©lÃ©ment }
  CONTEXT_MENU_BG_COLOR = 15;      { Blanc - fond du menu }
- CONTEXT_MENU_BORDER_COLOR = 8;   { Gris foncé - bordure }
+ CONTEXT_MENU_BORDER_COLOR = 8;   { Gris foncÃ© - bordure }
  CONTEXT_MENU_TEXT_COLOR = 0;     { Noir - texte }
  CONTEXT_MENU_HIGHLIGHT_BG = 1;   { Bleu - surbrillance }
  CONTEXT_MENU_HIGHLIGHT_FG = 15;  { Blanc - texte surbrillance }
- CONTEXT_MENU_DISABLED_COLOR = 8; { Gris - texte désactivé }
- 
- { Constantes pour le glisser-déposer (drag and drop) }
+ CONTEXT_MENU_DISABLED_COLOR = 8; { Gris - texte dÃ©sactivÃ© }
+
+ { Constantes pour le glisser-dÃ©poser (drag and drop) }
  DRAG_MODE_NONE = 0;      { Pas de glissement en cours }
- DRAG_MODE_MOVE = 1;      { Déplacement d'un objet }
+ DRAG_MODE_MOVE = 1;      { DÃ©placement d'un objet }
  DRAG_MODE_RESIZE = 2;    { Redimensionnement d'un objet }
- 
- { Constantes pour les poignées de redimensionnement }
- RESIZE_HANDLE_SIZE = 6;   { Taille des poignées en pixels }
- 
+
+ { Constantes pour les poignÃ©es de redimensionnement }
+ RESIZE_HANDLE_SIZE = 6;   { Taille des poignÃ©es en pixels }
+
  { Constantes pour les points d'ancrage des connecteurs }
  ANCHOR_NONE = 0;         { Pas d'ancrage }
  ANCHOR_TOP = 1;          { Point d'ancrage en haut (centre) }
  ANCHOR_BOTTOM = 2;       { Point d'ancrage en bas (centre) }
- ANCHOR_LEFT = 3;         { Point d'ancrage à gauche (centre) }
- ANCHOR_RIGHT = 4;        { Point d'ancrage à droite (centre) }
+ ANCHOR_LEFT = 3;         { Point d'ancrage Ã  gauche (centre) }
+ ANCHOR_RIGHT = 4;        { Point d'ancrage Ã  droite (centre) }
  ANCHOR_CENTER = 5;       { Point d'ancrage au centre }
  ANCHOR_COUNT = 4;        { Nombre de points d'ancrage par forme (haut, bas, gauche, droite) }
  ANCHOR_POINT_SIZE = 5;   { Taille des points d'ancrage en pixels }
- ANCHOR_SNAP_DISTANCE = 15; { Distance max pour accrocher à un point d'ancrage }
- RESIZE_HANDLE_NONE = 0;   { Aucune poignée }
+ ANCHOR_SNAP_DISTANCE = 15; { Distance max pour accrocher Ã  un point d'ancrage }
+ RESIZE_HANDLE_NONE = 0;   { Aucune poignÃ©e }
  RESIZE_HANDLE_NW = 1;     { Coin nord-ouest (haut-gauche) }
  RESIZE_HANDLE_N = 2;      { Milieu nord (haut) }
  RESIZE_HANDLE_NE = 3;     { Coin nord-est (haut-droite) }
@@ -128,46 +132,46 @@ Const
  RESIZE_HANDLE_S = 6;      { Milieu sud (bas) }
  RESIZE_HANDLE_SW = 7;     { Coin sud-ouest (bas-gauche) }
  RESIZE_HANDLE_W = 8;      { Milieu ouest (gauche) }
- 
+
  { Constantes pour les styles de ligne }
  LINESTYLE_SOLID = 0;      { Ligne continue }
- LINESTYLE_DASHED = 1;     { Ligne tiretée }
- LINESTYLE_DOTTED = 2;     { Ligne pointillée }
+ LINESTYLE_DASHED = 1;     { Ligne tiretÃ©e }
+ LINESTYLE_DOTTED = 2;     { Ligne pointillÃ©e }
  LINESTYLE_DASHDOT = 3;    { Ligne tiret-point }
  LINESTYLE_COUNT = 4;      { Nombre de styles de ligne }
- 
- { Constantes pour la boîte de dialogue des propriétés }
- PROP_DIALOG_WIDTH = 250;   { Largeur de la boîte de dialogue }
- PROP_DIALOG_HEIGHT = 200;  { Hauteur de la boîte de dialogue }
+
+ { Constantes pour la boÃ®te de dialogue des propriÃ©tÃ©s }
+ PROP_DIALOG_WIDTH = 250;   { Largeur de la boÃ®te de dialogue }
+ PROP_DIALOG_HEIGHT = 200;  { Hauteur de la boÃ®te de dialogue }
  PROP_DIALOG_BG = 7;        { Gris clair - fond }
- PROP_DIALOG_BORDER = 8;    { Gris foncé - bordure }
+ PROP_DIALOG_BORDER = 8;    { Gris foncÃ© - bordure }
  PROP_DIALOG_TEXT = 0;      { Noir - texte }
  PROP_DIALOG_BTN_BG = 15;   { Blanc - fond des boutons }
- PROP_DIALOG_BTN_HL = 1;    { Bleu - bouton surligné }
+ PROP_DIALOG_BTN_HL = 1;    { Bleu - bouton surlignÃ© }
  PROP_COLOR_BOX_SIZE = 16;  { Taille des cases de couleur }
  PROP_MAX_COLORS = 16;      { Nombre de couleurs dans la palette }
- 
- { Constantes pour la boîte de dialogue des calques }
- LAYER_DIALOG_WIDTH = 280;    { Largeur de la boîte de dialogue des calques }
- LAYER_DIALOG_HEIGHT = 250;   { Hauteur de la boîte de dialogue des calques }
- LAYER_ITEM_HEIGHT = 20;      { Hauteur d'un élément de calque }
+
+ { Constantes pour la boÃ®te de dialogue des calques }
+ LAYER_DIALOG_WIDTH = 280;    { Largeur de la boÃ®te de dialogue des calques }
+ LAYER_DIALOG_HEIGHT = 250;   { Hauteur de la boÃ®te de dialogue des calques }
+ LAYER_ITEM_HEIGHT = 20;      { Hauteur d'un Ã©lÃ©ment de calque }
  LAYER_NAME_LENGTH = 30;      { Longueur max du nom de calque }
- 
+
  { Constantes pour le parsing des fichiers Visio VSD/VSDX }
  VISIO_FORMAT_UNKNOWN = 0;    { Format inconnu }
  VISIO_FORMAT_VSD = 1;        { Format VSD (OLE binaire) }
- VISIO_FORMAT_VSDX = 2;       { Format VSDX (XML compressé ZIP) }
- 
+ VISIO_FORMAT_VSDX = 2;       { Format VSDX (XML compressÃ© ZIP) }
+
  { Taille des signatures de fichier }
  VSD_SIG_SIZE = 8;
  VSDX_SIG_SIZE = 4;
- 
+
  { Constantes pour les structures OLE }
  OLE_SECTOR_SIZE = 512;       { Taille d'un secteur OLE }
  OLE_MINI_SECTOR_SIZE = 64;   { Taille d'un mini-secteur }
- OLE_ENDOFCHAIN = $FFFFFFFE;  { Marqueur de fin de chaîne }
+ OLE_ENDOFCHAIN = $FFFFFFFE;  { Marqueur de fin de chaÃ®ne }
  OLE_FREESECT = $FFFFFFFF;    { Secteur libre }
- 
+
  { Types de formes Visio }
  VISIO_SHAPE_RECTANGLE = 1;
  VISIO_SHAPE_ELLIPSE = 2;
@@ -179,27 +183,33 @@ Const
 
  { Constantes pour les Stencils et Masters Visio }
  MAX_MASTERS = 100;                    { Nombre maximum de masters par stencil }
- MAX_STENCILS = 20;                    { Nombre maximum de stencils chargés }
+ MAX_STENCILS = 20;                    { Nombre maximum de stencils chargÃ©s }
  MAX_MASTER_NAME_LENGTH = 50;          { Longueur max du nom d'un master }
  MAX_STENCIL_NAME_LENGTH = 100;        { Longueur max du nom d'un stencil }
  VISIO_STENCIL_FORMAT_VSS = 1;         { Format VSS (OLE binaire) }
- VISIO_STENCIL_FORMAT_VSSX = 2;        { Format VSSX (XML compressé ZIP) }
+ VISIO_STENCIL_FORMAT_VSSX = 2;        { Format VSSX (XML compressÃ© ZIP) }
 
- { Noms des éléments du menu contextuel }
+ { Constantes pour les calques (utilisÃ©es dans la dÃ©claration de Layers) }
+ MAX_LAYERS = 50;
+ MAX_PAGES = 100;
+ DEFAULT_PAGE_COUNT = 1;
+ DEFAULT_LAYER_COUNT = 1;
+
+ { Noms des Ã©lÃ©ments du menu contextuel }
  ContextMenuNames: Array[1..CONTEXT_MENU_ITEM_COUNT] of String[12] = (
    'Cut', 'Copy', 'Paste', 'Delete', 'Properties'
- )
- 
+ );
+
  { Noms des outils de la barre d'outils }
  ToolNames: Array[1..TOOLBAR_COUNT] of String[12] = (
    'Selection', 'Rectangle', 'Ellipse', 'Line', 'Connector', 'Text', 'Polygon', 'Bezier', 'Image'
  );
- 
+
  { Noms des menus principaux }
  MenuNames: Array[1..MENU_COUNT] of String[10] = (
    'File', 'Edit', 'View', 'Insert', 'Format', 'Shape', 'Tools', 'Window', 'Help'
  );
- 
+
  { Positions X des menus }
  MenuPositions: Array[1..MENU_COUNT] of Integer = (
    5, 50, 95, 140, 195, 260, 320, 375, 440
@@ -209,8 +219,8 @@ Type
  TMenuState = (msNone, msMenuBar, msDropDown);
  TToolType = (ttSelection, ttRectangle, ttEllipse, ttLine, ttConnector, ttText, ttPolygon, ttBezier, ttImage);
  TShapeType = (stNone, stRectangle, stEllipse, stLine, stConnector, stText, stPolygon, stBezier, stImage);
- 
- { Structure pour l'en-tête OLE Compound Document (format VSD) }
+
+ { Structure pour l'en-tÃªte OLE Compound Document (format VSD) }
  TOLEHeader = Record
   Signature: Array[0..7] of Byte;      { Signature du fichier OLE }
   CLSID: Array[0..15] of Byte;         { CLSID }
@@ -219,9 +229,9 @@ Type
   ByteOrder: Word;                      { Ordre des octets (0xFFFE = little-endian) }
   SectorShift: Word;                    { Puissance de 2 pour la taille du secteur }
   MiniSectorShift: Word;                { Puissance de 2 pour la taille du mini-secteur }
-  Reserved: Array[0..5] of Byte;        { Réservé }
+  Reserved: Array[0..5] of Byte;        { RÃ©servÃ© }
   TotalSectors: LongInt;                { Nombre total de secteurs }
-  FirstDirSector: LongInt;              { Premier secteur du répertoire }
+  FirstDirSector: LongInt;              { Premier secteur du rÃ©pertoire }
   TransactionSig: LongInt;              { Signature de transaction }
   MiniStreamCutoff: LongInt;            { Taille limite pour mini-stream (4096) }
   FirstMiniFATSector: LongInt;          { Premier secteur du mini-FAT }
@@ -230,25 +240,25 @@ Type
   NumDIFATSectors: LongInt;             { Nombre de secteurs DIFAT }
   DIFAT: Array[0..108] of LongInt;      { Table DIFAT initiale }
  End;
- 
- { Structure pour une entrée du répertoire OLE }
+
+ { Structure pour une entrÃ©e du rÃ©pertoire OLE }
  TOLEDirectoryEntry = Record
-  EntryName: Array[0..63] of Byte;     { Nom de l'entrée (UTF-16) }
+  EntryName: Array[0..63] of Byte;     { Nom de l'entrÃ©e (UTF-16) }
   NameLength: Word;                     { Longueur du nom en octets }
   ObjectType: Byte;                     { Type: 0=inconnu, 1=storage, 2=stream, 5=root }
   ColorFlag: Byte;                      { Couleur dans l'arbre rouge-noir }
-  LeftSiblingID: LongInt;               { ID du frère gauche }
-  RightSiblingID: LongInt;              { ID du frère droit }
+  LeftSiblingID: LongInt;               { ID du frÃ¨re gauche }
+  RightSiblingID: LongInt;              { ID du frÃ¨re droit }
   ChildID: LongInt;                     { ID de l'enfant }
   CLSID: Array[0..15] of Byte;          { CLSID }
-  StateBits: LongInt;                   { Bits d'état }
-  CreationTime: Array[0..7] of Byte;    { Date de création }
+  StateBits: LongInt;                   { Bits d'Ã©tat }
+  CreationTime: Array[0..7] of Byte;    { Date de crÃ©ation }
   ModifiedTime: Array[0..7] of Byte;    { Date de modification }
   StartSector: LongInt;                 { Premier secteur du stream }
   StreamSize: Array[0..7] of Byte;      { Taille du stream }
  End;
- 
- { Structure pour une forme Visio importée }
+
+ { Structure pour une forme Visio importÃ©e }
  TVisioShape = Record
   ID: LongInt;                          { ID unique de la forme }
   ShapeType: Integer;                   { Type de forme Visio }
@@ -257,20 +267,20 @@ Type
   Angle: Real;                          { Angle de rotation }
   FillColor: LongInt;                   { Couleur de remplissage }
   LineColor: LongInt;                   { Couleur de ligne }
-  LineWeight: Real;                     { Épaisseur de ligne }
+  LineWeight: Real;                     { Ã‰paisseur de ligne }
   Text: String[255];                    { Texte de la forme }
   ParentID: LongInt;                    { ID du parent (pour les groupes) }
  End;
- 
- { Structure pour un Master Visio (forme modèle réutilisable) }
+
+ { Structure pour un Master Visio (forme modÃ¨le rÃ©utilisable) }
  TVisioMaster = Record
   ID: LongInt;                                   { ID unique du master }
   Name: String[MAX_MASTER_NAME_LENGTH];          { Nom du master }
   UniqueID: String[40];                          { ID unique universel (GUID) }
-  IconIndex: Integer;                            { Index de l'icône }
+  IconIndex: Integer;                            { Index de l'icÃ´ne }
   BaseShape: TVisioShape;                        { Forme de base du master }
-  Width, Height: Real;                           { Dimensions par défaut }
-  OffsetX, OffsetY: Real;                        { Décalage du point d'ancrage }
+  Width, Height: Real;                           { Dimensions par dÃ©faut }
+  OffsetX, OffsetY: Real;                        { DÃ©calage du point d'ancrage }
   IsGroup: Boolean;                              { True si le master est un groupe }
   SubShapeCount: Integer;                        { Nombre de sous-formes }
   SubShapes: Array[1..20] of TVisioShape;        { Sous-formes (si groupe) }
@@ -280,7 +290,7 @@ Type
    DirX, DirY: Real;                             { Direction de la connexion }
   End;
  End;
- 
+
  { Structure pour un Stencil Visio (collection de masters) }
  TVisioStencil = Record
   Name: String[MAX_STENCIL_NAME_LENGTH];         { Nom du stencil }
@@ -288,43 +298,43 @@ Type
   FileFormat: Integer;                           { Format (VSS ou VSSX) }
   MasterCount: Integer;                          { Nombre de masters }
   Masters: Array[1..MAX_MASTERS] of TVisioMaster; { Masters du stencil }
-  IsModified: Boolean;                           { True si le stencil a été modifié }
+  IsModified: Boolean;                           { True si le stencil a Ã©tÃ© modifiÃ© }
   IsReadOnly: Boolean;                           { True si le stencil est en lecture seule }
  End;
- 
+
  { Structure pour un calque }
  TLayer = Record
   Name: String[LAYER_NAME_LENGTH]; { Nom du calque }
   Visible: Boolean;                { Calque visible }
-  Locked: Boolean;                 { Calque verrouillé (pas modifiable) }
+  Locked: Boolean;                 { Calque verrouillÃ© (pas modifiable) }
   Color: Integer;                  { Couleur d'identification du calque }
  End;
- 
- { Structure pour stocker les points d'un polygone ou d'une courbe de Bézier }
+
+ { Structure pour stocker les points d'un polygone ou d'une courbe de BÃ©zier }
  TPointArray = Array[1..MAX_POLYGON_POINTS] of Record
   X, Y: Integer;
  End;
- 
+
  { Structure pour un objet graphique }
  TShapeObject = Record
   ShapeType: TShapeType;
-  X1, Y1, X2, Y2: Integer;  { Coordonnées du rectangle englobant }
+  X1, Y1, X2, Y2: Integer;  { CoordonnÃ©es du rectangle englobant }
   FillColor: Integer;        { Couleur de remplissage }
   LineColor: Integer;        { Couleur de contour }
-  LineWidth: Integer;        { Épaisseur de ligne }
+  LineWidth: Integer;        { Ã‰paisseur de ligne }
   LineStyle: Integer;        { Style de ligne (LINESTYLE_*) }
   LayerIndex: Integer;       { Index du calque auquel appartient l'objet }
   GroupID: Integer;          { ID du groupe (0 = pas dans un groupe) }
   Text: String[80];          { Texte (pour objets texte) }
-  Selected: Boolean;         { Objet sélectionné }
-  { Champs pour les polygones et courbes de Bézier }
-  Points: TPointArray;       { Points du polygone ou de la courbe de Bézier }
-  PointCount: Integer;       { Nombre de points utilisés }
+  Selected: Boolean;         { Objet sÃ©lectionnÃ© }
+  { Champs pour les polygones et courbes de BÃ©zier }
+  Points: TPointArray;       { Points du polygone ou de la courbe de BÃ©zier }
+  PointCount: Integer;       { Nombre de points utilisÃ©s }
   { Champ pour les images }
   ImagePath: String[255];    { Chemin vers le fichier image }
   { Champs pour les connecteurs avec points d'ancrage automatiques }
-  ConnectStartShape: Integer;  { Index de la forme source (0 = pas connecté) }
-  ConnectEndShape: Integer;    { Index de la forme cible (0 = pas connecté) }
+  ConnectStartShape: Integer;  { Index de la forme source (0 = pas connectÃ©) }
+  ConnectEndShape: Integer;    { Index de la forme cible (0 = pas connectÃ©) }
   ConnectStartAnchor: Integer; { Point d'ancrage source (ANCHOR_*) }
   ConnectEndAnchor: Integer;   { Point d'ancrage cible (ANCHOR_*) }
  End;
@@ -340,7 +350,7 @@ Var
  SelectedShape: Integer;
  { Variables pour les calques }
  Layers: Array[1..MAX_LAYERS] of TLayer;
- { Variables pour le dessin à la souris }
+ { Variables pour le dessin Ã  la souris }
  IsDrawing: Boolean;
  DrawStartX, DrawStartY: Integer;
  LastMouseX, LastMouseY: Integer;
@@ -349,20 +359,20 @@ Var
  ContextMenuVisible: Boolean;
  ContextMenuX, ContextMenuY: Integer;
  ContextMenuHighlight: Integer;
- { Variables pour le glisser-déposer (drag and drop) }
+ { Variables pour le glisser-dÃ©poser (drag and drop) }
  DragMode: Integer;           { Mode de glissement actuel (DRAG_MODE_*) }
- DragStartX, DragStartY: Integer;  { Position de départ du glissement }
- DragOffsetX, DragOffsetY: Integer; { Décalage entre clic et coin de l'objet }
- DragResizeHandle: Integer;   { Poignée de redimensionnement en cours }
- DragOrigX1, DragOrigY1: Integer;  { Coordonnées originales de l'objet }
+ DragStartX, DragStartY: Integer;  { Position de dÃ©part du glissement }
+ DragOffsetX, DragOffsetY: Integer; { DÃ©calage entre clic et coin de l'objet }
+ DragResizeHandle: Integer;   { PoignÃ©e de redimensionnement en cours }
+ DragOrigX1, DragOrigY1: Integer;  { CoordonnÃ©es originales de l'objet }
  DragOrigX2, DragOrigY2: Integer;
- { Variable pour le survol des poignées }
- HoveredHandle: Integer;      { Poignée actuellement survolée (RESIZE_HANDLE_*) }
- OldHoveredHandle: Integer;   { Ancienne poignée survolée (pour détection de changement) }
+ { Variable pour le survol des poignÃ©es }
+ HoveredHandle: Integer;      { PoignÃ©e actuellement survolÃ©e (RESIZE_HANDLE_*) }
+ OldHoveredHandle: Integer;   { Ancienne poignÃ©e survolÃ©e (pour dÃ©tection de changement) }
  { Variables pour les connecteurs et points d'ancrage }
- HoveredShapeForAnchor: Integer;  { Forme survolée pour afficher les points d'ancrage }
+ HoveredShapeForAnchor: Integer;  { Forme survolÃ©e pour afficher les points d'ancrage }
  NearestAnchorPoint: Integer;     { Point d'ancrage le plus proche de la souris }
- { Variables pour la boîte de dialogue des calques }
+ { Variables pour la boÃ®te de dialogue des calques }
  LayerDialogVisible: Boolean;
  LayerDialogX, LayerDialogY: Integer;
  LayerDialogSelectedLayer: Integer;
@@ -370,7 +380,7 @@ Var
  { Variables pour les Stencils et Masters Visio }
  Stencils: Array[1..MAX_STENCILS] of TVisioStencil;
  StencilCount: Integer;
- CurrentStencil: Integer;        { Stencil actuellement sélectionné }
+ CurrentStencil: Integer;        { Stencil actuellement sÃ©lectionnÃ© }
  NextMasterID: LongInt;          { Prochain ID de master disponible }
 
 Procedure InitializeGraphics;
@@ -442,12 +452,12 @@ End;
 
  Procedure ShowMouse;
  Begin
-  { Pas d'implémentation pour Free Pascal }
+  { Pas d'implÃ©mentation pour Free Pascal }
  End;
 
  Procedure HideMouse;
  Begin
-  { Pas d'implémentation pour Free Pascal }
+  { Pas d'implÃ©mentation pour Free Pascal }
  End;
 {$ENDIF}
 
@@ -463,7 +473,7 @@ Var
 { === FONCTIONS DE PARSING DES FICHIERS VISIO VSD/VSDX === }
 { ============================================================================ }
 
-{ Fonction pour détecter le format d'un fichier Visio }
+{ Fonction pour dÃ©tecter le format d'un fichier Visio }
 Function DetectVisioFormat(Const FileName: String): Integer;
 Var
  F: File;
@@ -471,27 +481,27 @@ Var
  BytesRead: Integer;
 Begin
  DetectVisioFormat := VISIO_FORMAT_UNKNOWN;
- 
+
  Assign(F, FileName);
  {$I-}
  Reset(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  { Lire les premiers octets pour identifier le format }
  BlockRead(F, Buffer, 8, BytesRead);
  Close(F);
- 
+
  If BytesRead < 4 Then Exit;
- 
- { Vérifier si c'est un fichier VSDX (ZIP) }
- If (Buffer[0] = $50) and (Buffer[1] = $4B) and 
+
+ { VÃ©rifier si c'est un fichier VSDX (ZIP) }
+ If (Buffer[0] = $50) and (Buffer[1] = $4B) and
     (Buffer[2] = $03) and (Buffer[3] = $04) Then Begin
   DetectVisioFormat := VISIO_FORMAT_VSDX;
   Exit;
  End;
- 
- { Vérifier si c'est un fichier VSD (OLE Compound Document) }
+
+ { VÃ©rifier si c'est un fichier VSD (OLE Compound Document) }
  If BytesRead >= 8 Then Begin
   If (Buffer[0] = $D0) and (Buffer[1] = $CF) and
      (Buffer[2] = $11) and (Buffer[3] = $E0) and
@@ -503,29 +513,29 @@ Begin
  End;
 End;
 
-{ Fonction pour lire l'en-tête OLE d'un fichier VSD }
+{ Fonction pour lire l'en-tÃªte OLE d'un fichier VSD }
 Function ReadOLEHeader(Var F: File; Var Header: TOLEHeader): Boolean;
 Var
  BytesRead: Integer;
 Begin
  ReadOLEHeader := False;
- 
- { Positionner au début du fichier }
+
+ { Positionner au dÃ©but du fichier }
  Seek(F, 0);
- 
- { Lire l'en-tête complet (512 octets) }
+
+ { Lire l'en-tÃªte complet (512 octets) }
  BlockRead(F, Header, SizeOf(TOLEHeader), BytesRead);
- 
+
  If BytesRead < SizeOf(TOLEHeader) Then Exit;
- 
- { Vérifier la signature OLE }
+
+ { VÃ©rifier la signature OLE }
  If (Header.Signature[0] <> $D0) or (Header.Signature[1] <> $CF) or
     (Header.Signature[2] <> $11) or (Header.Signature[3] <> $E0) Then Exit;
-    
+
  ReadOLEHeader := True;
 End;
 
-{ Fonction pour lire une entrée du répertoire OLE }
+{ Fonction pour lire une entrÃ©e du rÃ©pertoire OLE }
 Function ReadOLEDirectoryEntry(Var F: File; SectorNum: LongInt; EntryIndex: Integer;
                                 SectorSize: Integer; Var Entry: TOLEDirectoryEntry): Boolean;
 Var
@@ -533,24 +543,24 @@ Var
  BytesRead: Integer;
 Begin
  ReadOLEDirectoryEntry := False;
- 
+
  { Calculer l'offset dans le fichier }
- { Les secteurs commencent après l'en-tête (512 octets) }
+ { Les secteurs commencent aprÃ¨s l'en-tÃªte (512 octets) }
  Offset := (SectorNum + 1) * SectorSize + (EntryIndex * 128);
- 
- { Positionner et lire l'entrée }
+
+ { Positionner et lire l'entrÃ©e }
  {$I-}
  Seek(F, Offset);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  BlockRead(F, Entry, SizeOf(TOLEDirectoryEntry), BytesRead);
- 
+
  If BytesRead >= 128 Then
   ReadOLEDirectoryEntry := True;
 End;
 
-{ Fonction pour extraire le nom d'une entrée OLE (UTF-16 vers ASCII) }
+{ Fonction pour extraire le nom d'une entrÃ©e OLE (UTF-16 vers ASCII) }
 Function GetOLEEntryName(Const Entry: TOLEDirectoryEntry): String;
 Var
  I: Integer;
@@ -561,13 +571,13 @@ Begin
  NameLen := Entry.NameLength div 2 - 1; { UTF-16, moins le null terminator }
  If NameLen > 31 Then NameLen := 31;
  If NameLen < 0 Then NameLen := 0;
- 
+
  For I := 0 to NameLen - 1 do Begin
-  { Prendre le premier octet de chaque caractère UTF-16 (ASCII seulement) }
+  { Prendre le premier octet de chaque caractÃ¨re UTF-16 (ASCII seulement) }
   If Entry.EntryName[I * 2] > 0 Then
    S := S + Chr(Entry.EntryName[I * 2]);
  End;
- 
+
  GetOLEEntryName := S;
 End;
 
@@ -580,7 +590,7 @@ Begin
  B := (VisioColor shr 16) and $FF;
  G := (VisioColor shr 8) and $FF;
  R := VisioColor and $FF;
- 
+
  { Mapper vers les 16 couleurs de base }
  If (R < 64) and (G < 64) and (B < 64) Then
   VisioColorToPascalColor := 0  { Noir }
@@ -613,7 +623,7 @@ Begin
   VISIO_SHAPE_CONNECTOR: VisioShapeTypeToTShapeType := stConnector;
   VISIO_SHAPE_TEXT: VisioShapeTypeToTShapeType := stText;
  Else
-  VisioShapeTypeToTShapeType := stRectangle; { Par défaut }
+  VisioShapeTypeToTShapeType := stRectangle; { Par dÃ©faut }
  End;
 End;
 
@@ -644,7 +654,7 @@ Begin
  Shape.ConnectEndAnchor := ANCHOR_NONE;
 End;
 
-{ Procédure pour parser un fichier VSD (format OLE binaire) }
+{ ProcÃ©dure pour parser un fichier VSD (format OLE binaire) }
 Function ParseVSDFile(Const FileName: String): Boolean;
 Var
  F: File;
@@ -657,49 +667,49 @@ Var
 Begin
  ParseVSDFile := False;
  FoundVisioContent := False;
- 
+
  Assign(F, FileName);
  {$I-}
  Reset(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
- { Lire l'en-tête OLE }
+
+ { Lire l'en-tÃªte OLE }
  If Not ReadOLEHeader(F, Header) Then Begin
   Close(F);
   Exit;
  End;
- 
+
  { Calculer la taille des secteurs }
  SectorSize := 1 shl Header.SectorShift;
- 
- { Parcourir le répertoire pour trouver les streams Visio }
+
+ { Parcourir le rÃ©pertoire pour trouver les streams Visio }
  EntryIndex := 0;
- While EntryIndex < 32 do Begin { Limiter à 32 entrées pour la sécurité }
+ While EntryIndex < 32 do Begin { Limiter Ã  32 entrÃ©es pour la sÃ©curitÃ© }
   If ReadOLEDirectoryEntry(F, Header.FirstDirSector, EntryIndex, SectorSize, Entry) Then Begin
    EntryName := GetOLEEntryName(Entry);
-   
+
    { Chercher les streams Visio connus }
    If (Pos('VisioDocument', EntryName) > 0) or
       (Pos('Contents', EntryName) > 0) or
       (Pos('Page', EntryName) > 0) Then Begin
     FoundVisioContent := True;
-    { Note: L'implémentation complète du parsing des données Visio }
-    { nécessiterait de lire et interpréter le format binaire Visio }
-    { qui est très complexe. Cette implémentation détecte le fichier. }
+    { Note: L'implÃ©mentation complÃ¨te du parsing des donnÃ©es Visio }
+    { nÃ©cessiterait de lire et interprÃ©ter le format binaire Visio }
+    { qui est trÃ¨s complexe. Cette implÃ©mentation dÃ©tecte le fichier. }
    End;
   End;
   Inc(EntryIndex);
  End;
- 
+
  Close(F);
- 
- { Pour l'instant, on retourne True si on a trouvé du contenu Visio }
- { L'implémentation complète nécessiterait le parsing du format binaire Visio }
+
+ { Pour l'instant, on retourne True si on a trouvÃ© du contenu Visio }
+ { L'implÃ©mentation complÃ¨te nÃ©cessiterait le parsing du format binaire Visio }
  ParseVSDFile := FoundVisioContent;
 End;
 
-{ Procédure pour parser un fichier VSDX (format XML compressé ZIP) }
+{ ProcÃ©dure pour parser un fichier VSDX (format XML compressÃ© ZIP) }
 Function ParseVSDXFile(Const FileName: String): Boolean;
 Var
  F: File;
@@ -708,36 +718,36 @@ Var
  LocalHeaderSig: LongInt;
 Begin
  ParseVSDXFile := False;
- 
+
  Assign(F, FileName);
  {$I-}
  Reset(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
- { Lire l'en-tête local du ZIP }
+
+ { Lire l'en-tÃªte local du ZIP }
  BlockRead(F, Buffer, 30, BytesRead);
  Close(F);
- 
+
  If BytesRead < 30 Then Exit;
- 
- { Vérifier la signature ZIP (0x04034B50) }
+
+ { VÃ©rifier la signature ZIP (0x04034B50) }
  LocalHeaderSig := Buffer[0] + (Buffer[1] shl 8) + (Buffer[2] shl 16) + (Buffer[3] shl 24);
  If LocalHeaderSig <> $04034B50 Then Exit;
- 
+
  { Le fichier VSDX est un ZIP valide contenant des fichiers XML }
  { Les fichiers importants sont: }
  { - [Content_Types].xml : Types de contenu }
  { - visio/document.xml : Document principal }
  { - visio/pages/page1.xml, page2.xml... : Pages individuelles }
- { - visio/masters/master1.xml... : Formes maîtres }
- 
- { Note: L'implémentation complète nécessiterait: }
- { 1. Décompresser le ZIP }
+ { - visio/masters/master1.xml... : Formes maÃ®tres }
+
+ { Note: L'implÃ©mentation complÃ¨te nÃ©cessiterait: }
+ { 1. DÃ©compresser le ZIP }
  { 2. Parser les fichiers XML avec namespace Office }
- { 3. Extraire les formes et propriétés }
- 
- { Pour cette implémentation, on valide que c'est un fichier VSDX valide }
+ { 3. Extraire les formes et propriÃ©tÃ©s }
+
+ { Pour cette implÃ©mentation, on valide que c'est un fichier VSDX valide }
  ParseVSDXFile := True;
 End;
 
@@ -747,10 +757,10 @@ Var
  FileFormat: Integer;
 Begin
  LoadVisioFile := False;
- 
- { Détecter le format du fichier }
+
+ { DÃ©tecter le format du fichier }
  FileFormat := DetectVisioFormat(FileName);
- 
+
  Case FileFormat of
   VISIO_FORMAT_VSD: Begin
    LoadVisioFile := ParseVSDFile(FileName);
@@ -779,9 +789,9 @@ Begin
   3: PascalColorToVisioColor := $FFFF00;  { Cyan }
   4: PascalColorToVisioColor := $0000FF;  { Rouge }
   5: PascalColorToVisioColor := $FF00FF;  { Magenta }
-  6: PascalColorToVisioColor := $00FFFF;  { Marron/Jaune foncé }
+  6: PascalColorToVisioColor := $00FFFF;  { Marron/Jaune foncÃ© }
   7: PascalColorToVisioColor := $C0C0C0;  { Gris clair }
-  8: PascalColorToVisioColor := $808080;  { Gris foncé }
+  8: PascalColorToVisioColor := $808080;  { Gris foncÃ© }
   9: PascalColorToVisioColor := $FF8080;  { Bleu clair }
   10: PascalColorToVisioColor := $80FF80; { Vert clair }
   11: PascalColorToVisioColor := $FFFF80; { Cyan clair }
@@ -790,7 +800,7 @@ Begin
   14: PascalColorToVisioColor := $00FFFF; { Jaune }
   15: PascalColorToVisioColor := $FFFFFF; { Blanc }
  Else
-  PascalColorToVisioColor := $000000;     { Noir par défaut }
+  PascalColorToVisioColor := $000000;     { Noir par dÃ©faut }
  End;
 End;
 
@@ -809,7 +819,7 @@ Begin
  End;
 End;
 
-{ Procédure pour convertir TShapeObject en TVisioShape }
+{ ProcÃ©dure pour convertir TShapeObject en TVisioShape }
 Procedure ShapeObjectToVisioShape(Const Shape: TShapeObject; Var VSh: TVisioShape);
 Begin
  VSh.ShapeType := TShapeTypeToVisioShapeType(Shape.ShapeType);
@@ -825,7 +835,7 @@ Begin
  VSh.ParentID := Shape.GroupID;
 End;
 
-{ Procédure pour initialiser l'en-tête OLE avec des valeurs par défaut }
+{ ProcÃ©dure pour initialiser l'en-tÃªte OLE avec des valeurs par dÃ©faut }
 Procedure InitOLEHeader(Var Header: TOLEHeader);
 Var
  I: Integer;
@@ -839,18 +849,18 @@ Begin
  Header.Signature[5] := $B6;
  Header.Signature[6] := $1A;
  Header.Signature[7] := $E1;
- 
- { CLSID Visio (simplifié) }
+
+ { CLSID Visio (simplifiÃ©) }
  For I := 0 to 15 do Header.CLSID[I] := 0;
- 
+
  Header.MinorVersion := $003E;
  Header.MajorVersion := $0003;
  Header.ByteOrder := $FFFE;        { Little-endian }
  Header.SectorShift := 9;          { 512 octets par secteur }
  Header.MiniSectorShift := 6;      { 64 octets par mini-secteur }
- 
+
  For I := 0 to 5 do Header.Reserved[I] := 0;
- 
+
  Header.TotalSectors := 0;
  Header.FirstDirSector := 0;
  Header.TransactionSig := 0;
@@ -859,35 +869,35 @@ Begin
  Header.NumMiniFATSectors := 0;
  Header.FirstDIFATSector := -2;    { ENDOFCHAIN }
  Header.NumDIFATSectors := 0;
- 
+
  For I := 0 to 108 do Header.DIFAT[I] := -1;  { FREESECT }
 End;
 
-{ Procédure pour initialiser une entrée de répertoire OLE }
-Procedure InitOLEDirectoryEntry(Var Entry: TOLEDirectoryEntry; 
+{ ProcÃ©dure pour initialiser une entrÃ©e de rÃ©pertoire OLE }
+Procedure InitOLEDirectoryEntry(Var Entry: TOLEDirectoryEntry;
                                   Const Name: String; ObjType: Byte);
 Var
  I: Integer;
  NameLen: Integer;
 Begin
- { Effacer l'entrée }
+ { Effacer l'entrÃ©e }
  For I := 0 to 63 do Entry.EntryName[I] := 0;
- 
- { Copier le nom en UTF-16 (simplifié: ASCII seulement) }
+
+ { Copier le nom en UTF-16 (simplifiÃ©: ASCII seulement) }
  NameLen := Length(Name);
  If NameLen > 31 Then NameLen := 31;
  For I := 1 to NameLen do Begin
   Entry.EntryName[(I-1) * 2] := Ord(Name[I]);
   Entry.EntryName[(I-1) * 2 + 1] := 0;
  End;
- 
+
  Entry.NameLength := (NameLen + 1) * 2;  { Inclure le null terminator }
  Entry.ObjectType := ObjType;
  Entry.ColorFlag := 1;  { Rouge dans l'arbre rouge-noir }
  Entry.LeftSiblingID := -1;   { NOSTREAM }
  Entry.RightSiblingID := -1;  { NOSTREAM }
  Entry.ChildID := -1;         { NOSTREAM }
- 
+
  For I := 0 to 15 do Entry.CLSID[I] := 0;
  Entry.StateBits := 0;
  For I := 0 to 7 do Begin
@@ -898,7 +908,7 @@ Begin
  For I := 0 to 7 do Entry.StreamSize[I] := 0;
 End;
 
-{ Fonction pour écrire un fichier VSD (format OLE binaire) }
+{ Fonction pour Ã©crire un fichier VSD (format OLE binaire) }
 Function WriteVSDFile(Const FileName: String): Boolean;
 Var
  F: File;
@@ -913,65 +923,65 @@ Var
  DataOffset: Integer;
 Begin
  WriteVSDFile := False;
- 
+
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
- { Initialiser l'en-tête OLE }
+
+ { Initialiser l'en-tÃªte OLE }
  InitOLEHeader(Header);
  Header.FirstDirSector := 1;
  Header.TotalSectors := 4;
  Header.DIFAT[0] := 0;  { FAT dans le secteur 0 }
- 
- { Écrire l'en-tête (512 octets) }
+
+ { Ã‰crire l'en-tÃªte (512 octets) }
  BlockWrite(F, Header, 512, BytesWritten);
  If BytesWritten < 512 Then Begin
   Close(F);
   Exit;
  End;
- 
- { Initialiser et écrire le FAT (secteur 0) }
+
+ { Initialiser et Ã©crire le FAT (secteur 0) }
  For I := 0 to 127 do FAT[I] := -1;  { FREESECT }
  FAT[0] := -3;  { FATSECT - ce secteur contient le FAT }
- FAT[1] := -2;  { ENDOFCHAIN - fin de la chaîne du répertoire }
+ FAT[1] := -2;  { ENDOFCHAIN - fin de la chaÃ®ne du rÃ©pertoire }
  FAT[2] := -2;  { ENDOFCHAIN - fin de VisioDocument }
  FAT[3] := -2;  { ENDOFCHAIN - fin de Contents }
- 
+
  BlockWrite(F, FAT, 512, BytesWritten);
  If BytesWritten < 512 Then Begin
   Close(F);
   Exit;
  End;
- 
- { Créer les entrées du répertoire (secteur 1) }
- { Entrée 0: Root Entry }
+
+ { CrÃ©er les entrÃ©es du rÃ©pertoire (secteur 1) }
+ { EntrÃ©e 0: Root Entry }
  InitOLEDirectoryEntry(RootEntry, 'Root Entry', 5);  { 5 = Root Storage }
  RootEntry.ChildID := 1;
- 
- { Entrée 1: VisioDocument }
+
+ { EntrÃ©e 1: VisioDocument }
  InitOLEDirectoryEntry(VisioDocEntry, 'VisioDocument', 1);  { 1 = Storage }
  VisioDocEntry.RightSiblingID := 2;
  VisioDocEntry.StartSector := 2;
- 
- { Entrée 2: Contents }
+
+ { EntrÃ©e 2: Contents }
  InitOLEDirectoryEntry(ContentsEntry, 'Contents', 2);  { 2 = Stream }
  ContentsEntry.StartSector := 3;
- 
- { Écrire les entrées du répertoire }
+
+ { Ã‰crire les entrÃ©es du rÃ©pertoire }
  BlockWrite(F, RootEntry, 128, BytesWritten);
  BlockWrite(F, VisioDocEntry, 128, BytesWritten);
  BlockWrite(F, ContentsEntry, 128, BytesWritten);
- 
- { Remplir le reste du secteur avec des entrées vides }
+
+ { Remplir le reste du secteur avec des entrÃ©es vides }
  For I := 0 to 127 do ShapeData[I] := 0;
  BlockWrite(F, ShapeData, 128, BytesWritten);
- 
- { Écrire le stream VisioDocument (secteur 2) - en-tête Visio simplifié }
+
+ { Ã‰crire le stream VisioDocument (secteur 2) - en-tÃªte Visio simplifiÃ© }
  For I := 0 to 511 do ShapeData[I] := 0;
- { Signature Visio simplifiée }
+ { Signature Visio simplifiÃ©e }
  ShapeData[0] := Ord('V');
  ShapeData[1] := Ord('I');
  ShapeData[2] := Ord('S');
@@ -980,62 +990,62 @@ Begin
  ShapeData[5] := 1;  { Version }
  ShapeData[6] := Lo(ShapeCount);
  ShapeData[7] := Hi(ShapeCount);
- 
+
  BlockWrite(F, ShapeData, 512, BytesWritten);
- 
- { Écrire le stream Contents (secteur 3) - données des formes }
+
+ { Ã‰crire le stream Contents (secteur 3) - donnÃ©es des formes }
  For I := 0 to 4095 do ShapeData[I] := 0;
  DataOffset := 0;
- 
+
  For I := 1 to ShapeCount do Begin
   If DataOffset + 64 > 512 Then Break;  { Limite de taille du secteur }
-  
+
   ShapeObjectToVisioShape(Shapes[I], VShape);
-  
-  { Écrire les données de la forme de manière simplifiée }
+
+  { Ã‰crire les donnÃ©es de la forme de maniÃ¨re simplifiÃ©e }
   { Type de forme (1 octet) }
   ShapeData[DataOffset] := VShape.ShapeType;
   Inc(DataOffset);
-  
+
   { Position X (2 octets) }
   ShapeData[DataOffset] := Lo(Round(VShape.X));
   ShapeData[DataOffset + 1] := Hi(Round(VShape.X));
   Inc(DataOffset, 2);
-  
+
   { Position Y (2 octets) }
   ShapeData[DataOffset] := Lo(Round(VShape.Y));
   ShapeData[DataOffset + 1] := Hi(Round(VShape.Y));
   Inc(DataOffset, 2);
-  
+
   { Largeur (2 octets) }
   ShapeData[DataOffset] := Lo(Round(VShape.Width));
   ShapeData[DataOffset + 1] := Hi(Round(VShape.Width));
   Inc(DataOffset, 2);
-  
+
   { Hauteur (2 octets) }
   ShapeData[DataOffset] := Lo(Round(VShape.Height));
   ShapeData[DataOffset + 1] := Hi(Round(VShape.Height));
   Inc(DataOffset, 2);
-  
+
   { Couleur de remplissage (4 octets) }
   ShapeData[DataOffset] := VShape.FillColor and $FF;
   ShapeData[DataOffset + 1] := (VShape.FillColor shr 8) and $FF;
   ShapeData[DataOffset + 2] := (VShape.FillColor shr 16) and $FF;
   ShapeData[DataOffset + 3] := 0;
   Inc(DataOffset, 4);
-  
+
   { Couleur de ligne (4 octets) }
   ShapeData[DataOffset] := VShape.LineColor and $FF;
   ShapeData[DataOffset + 1] := (VShape.LineColor shr 8) and $FF;
   ShapeData[DataOffset + 2] := (VShape.LineColor shr 16) and $FF;
   ShapeData[DataOffset + 3] := 0;
   Inc(DataOffset, 4);
-  
-  { Épaisseur de ligne (1 octet) }
+
+  { Ã‰paisseur de ligne (1 octet) }
   ShapeData[DataOffset] := Round(VShape.LineWeight);
   Inc(DataOffset);
-  
-  { Longueur du texte (1 octet) + texte (jusqu'à 40 caractères) }
+
+  { Longueur du texte (1 octet) + texte (jusqu'Ã  40 caractÃ¨res) }
   DataSize := Length(VShape.Text);
   If DataSize > 40 Then DataSize := 40;
   ShapeData[DataOffset] := DataSize;
@@ -1043,17 +1053,17 @@ Begin
   Move(VShape.Text[1], ShapeData[DataOffset], DataSize);
   Inc(DataOffset, 40);
  End;
- 
- { Marquer la fin des données }
+
+ { Marquer la fin des donnÃ©es }
  ShapeData[DataOffset] := $FF;
- 
+
  BlockWrite(F, ShapeData, 512, BytesWritten);
- 
+
  Close(F);
  WriteVSDFile := True;
 End;
 
-{ Fonction pour calculer le CRC32 simplifié }
+{ Fonction pour calculer le CRC32 simplifiÃ© }
 Function CalcCRC32(Const Data; Size: Integer): LongInt;
 Var
  I: Integer;
@@ -1069,7 +1079,7 @@ Begin
  CalcCRC32 := CRC xor $FFFFFFFF;
 End;
 
-{ Fonction pour écrire un fichier VSDX (format ZIP avec XML) }
+{ Fonction pour Ã©crire un fichier VSDX (format ZIP avec XML) }
 Function WriteVSDXFile(Const FileName: String): Boolean;
 Var
  F: File;
@@ -1087,27 +1097,27 @@ Var
  TempStr: String;
 Begin
  WriteVSDXFile := False;
- 
+
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  FileOffset := 0;
- 
+
  { Construire le contenu XML du document Visio }
  XMLData := '<?xml version="1.0" encoding="UTF-8"?>' + #13#10;
  XMLData := XMLData + '<VisioDocument xmlns="http://schemas.microsoft.com/visio/2003/core">' + #13#10;
  XMLData := XMLData + '  <Pages>' + #13#10;
  XMLData := XMLData + '    <Page ID="0" Name="Page-1">' + #13#10;
  XMLData := XMLData + '      <Shapes>' + #13#10;
- 
+
  For ShapeIndex := 1 to ShapeCount do Begin
   ShapeObjectToVisioShape(Shapes[ShapeIndex], VShape);
-  
+
   XMLData := XMLData + '        <Shape ID="' + Chr(48 + ShapeIndex) + '">' + #13#10;
-  
+
   { Type de forme }
   Case VShape.ShapeType of
    VISIO_SHAPE_RECTANGLE: TempStr := 'Rectangle';
@@ -1119,8 +1129,8 @@ Begin
    TempStr := 'Shape';
   End;
   XMLData := XMLData + '          <Name>' + TempStr + '</Name>' + #13#10;
-  
-  { Géométrie }
+
+  { GÃ©omÃ©trie }
   XMLData := XMLData + '          <XForm>' + #13#10;
   Str(VShape.X:0:2, TempStr);
   XMLData := XMLData + '            <PinX>' + TempStr + '</PinX>' + #13#10;
@@ -1131,49 +1141,49 @@ Begin
   Str(VShape.Height:0:2, TempStr);
   XMLData := XMLData + '            <Height>' + TempStr + '</Height>' + #13#10;
   XMLData := XMLData + '          </XForm>' + #13#10;
-  
+
   { Couleurs }
   XMLData := XMLData + '          <Fill>' + #13#10;
   Str(VShape.FillColor, TempStr);
   XMLData := XMLData + '            <FillForegnd>#' + TempStr + '</FillForegnd>' + #13#10;
   XMLData := XMLData + '          </Fill>' + #13#10;
-  
+
   XMLData := XMLData + '          <Line>' + #13#10;
   Str(VShape.LineColor, TempStr);
   XMLData := XMLData + '            <LineColor>#' + TempStr + '</LineColor>' + #13#10;
   Str(VShape.LineWeight:0:2, TempStr);
   XMLData := XMLData + '            <LineWeight>' + TempStr + '</LineWeight>' + #13#10;
   XMLData := XMLData + '          </Line>' + #13#10;
-  
+
   { Texte }
   If Length(VShape.Text) > 0 Then Begin
    XMLData := XMLData + '          <Text>' + VShape.Text + '</Text>' + #13#10;
   End;
-  
+
   XMLData := XMLData + '        </Shape>' + #13#10;
  End;
- 
+
  XMLData := XMLData + '      </Shapes>' + #13#10;
  XMLData := XMLData + '    </Page>' + #13#10;
  XMLData := XMLData + '  </Pages>' + #13#10;
  XMLData := XMLData + '</VisioDocument>' + #13#10;
- 
+
  XMLSize := Length(XMLData);
  CRC := CalcCRC32(XMLData[1], XMLSize);
- 
- { === Écrire l'en-tête local du fichier ZIP === }
+
+ { === Ã‰crire l'en-tÃªte local du fichier ZIP === }
  { Signature PK }
  LocalHeader[0] := $50;  { P }
  LocalHeader[1] := $4B;  { K }
  LocalHeader[2] := $03;
  LocalHeader[3] := $04;
- { Version nécessaire pour extraire }
+ { Version nÃ©cessaire pour extraire }
  LocalHeader[4] := 20;   { 2.0 }
  LocalHeader[5] := 0;
  { Flags }
  LocalHeader[6] := 0;
  LocalHeader[7] := 0;
- { Méthode de compression (0 = stocké, pas de compression) }
+ { MÃ©thode de compression (0 = stockÃ©, pas de compression) }
  LocalHeader[8] := 0;
  LocalHeader[9] := 0;
  { Heure de modification }
@@ -1187,53 +1197,53 @@ Begin
  LocalHeader[15] := (CRC shr 8) and $FF;
  LocalHeader[16] := (CRC shr 16) and $FF;
  LocalHeader[17] := (CRC shr 24) and $FF;
- { Taille compressée }
+ { Taille compressÃ©e }
  LocalHeader[18] := XMLSize and $FF;
  LocalHeader[19] := (XMLSize shr 8) and $FF;
  LocalHeader[20] := (XMLSize shr 16) and $FF;
  LocalHeader[21] := (XMLSize shr 24) and $FF;
- { Taille non compressée }
+ { Taille non compressÃ©e }
  LocalHeader[22] := XMLSize and $FF;
  LocalHeader[23] := (XMLSize shr 8) and $FF;
  LocalHeader[24] := (XMLSize shr 16) and $FF;
  LocalHeader[25] := (XMLSize shr 24) and $FF;
  { Longueur du nom de fichier }
- LocalHeader[26] := 20;  { "visio/document.xml" = 19 caractères + 1 }
+ LocalHeader[26] := 20;  { "visio/document.xml" = 19 caractÃ¨res + 1 }
  LocalHeader[27] := 0;
  { Longueur du champ extra }
  LocalHeader[28] := 0;
  LocalHeader[29] := 0;
- 
+
  BlockWrite(F, LocalHeader, 30, BytesWritten);
  FileOffset := FileOffset + 30;
- 
+
  { Nom du fichier }
  TempStr := 'visio/document.xml';
  BlockWrite(F, TempStr[1], 18, BytesWritten);
  FileOffset := FileOffset + 18;
- 
- { Données XML }
+
+ { DonnÃ©es XML }
  BlockWrite(F, XMLData[1], XMLSize, BytesWritten);
  FileOffset := FileOffset + XMLSize;
- 
+
  CentralDirOffset := FileOffset;
- 
- { === Écrire l'entrée du répertoire central === }
+
+ { === Ã‰crire l'entrÃ©e du rÃ©pertoire central === }
  { Signature }
  CentralDir[0] := $50;   { P }
  CentralDir[1] := $4B;   { K }
  CentralDir[2] := $01;
  CentralDir[3] := $02;
- { Version créée par }
+ { Version crÃ©Ã©e par }
  CentralDir[4] := 20;
  CentralDir[5] := 0;
- { Version nécessaire pour extraire }
+ { Version nÃ©cessaire pour extraire }
  CentralDir[6] := 20;
  CentralDir[7] := 0;
  { Flags }
  CentralDir[8] := 0;
  CentralDir[9] := 0;
- { Méthode de compression }
+ { MÃ©thode de compression }
  CentralDir[10] := 0;
  CentralDir[11] := 0;
  { Heure de modification }
@@ -1247,12 +1257,12 @@ Begin
  CentralDir[17] := (CRC shr 8) and $FF;
  CentralDir[18] := (CRC shr 16) and $FF;
  CentralDir[19] := (CRC shr 24) and $FF;
- { Taille compressée }
+ { Taille compressÃ©e }
  CentralDir[20] := XMLSize and $FF;
  CentralDir[21] := (XMLSize shr 8) and $FF;
  CentralDir[22] := (XMLSize shr 16) and $FF;
  CentralDir[23] := (XMLSize shr 24) and $FF;
- { Taille non compressée }
+ { Taille non compressÃ©e }
  CentralDir[24] := XMLSize and $FF;
  CentralDir[25] := (XMLSize shr 8) and $FF;
  CentralDir[26] := (XMLSize shr 16) and $FF;
@@ -1266,7 +1276,7 @@ Begin
  { Longueur du commentaire }
  CentralDir[32] := 0;
  CentralDir[33] := 0;
- { Numéro de disque de début }
+ { NumÃ©ro de disque de dÃ©but }
  CentralDir[34] := 0;
  CentralDir[35] := 0;
  { Attributs internes }
@@ -1277,44 +1287,44 @@ Begin
  CentralDir[39] := 0;
  CentralDir[40] := 0;
  CentralDir[41] := 0;
- { Offset de l'en-tête local }
+ { Offset de l'en-tÃªte local }
  CentralDir[42] := 0;
  CentralDir[43] := 0;
  CentralDir[44] := 0;
  CentralDir[45] := 0;
- 
+
  BlockWrite(F, CentralDir, 46, BytesWritten);
  FileOffset := FileOffset + 46;
- 
+
  { Nom du fichier }
  TempStr := 'visio/document.xml';
  BlockWrite(F, TempStr[1], 18, BytesWritten);
  FileOffset := FileOffset + 18;
- 
- { === Écrire l'enregistrement de fin du répertoire central === }
+
+ { === Ã‰crire l'enregistrement de fin du rÃ©pertoire central === }
  { Signature }
  EndRecord[0] := $50;    { P }
  EndRecord[1] := $4B;    { K }
  EndRecord[2] := $05;
  EndRecord[3] := $06;
- { Numéro de ce disque }
+ { NumÃ©ro de ce disque }
  EndRecord[4] := 0;
  EndRecord[5] := 0;
- { Disque où commence le répertoire central }
+ { Disque oÃ¹ commence le rÃ©pertoire central }
  EndRecord[6] := 0;
  EndRecord[7] := 0;
- { Nombre d'entrées dans le répertoire central sur ce disque }
+ { Nombre d'entrÃ©es dans le rÃ©pertoire central sur ce disque }
  EndRecord[8] := 1;
  EndRecord[9] := 0;
- { Nombre total d'entrées }
+ { Nombre total d'entrÃ©es }
  EndRecord[10] := 1;
  EndRecord[11] := 0;
- { Taille du répertoire central }
+ { Taille du rÃ©pertoire central }
  EndRecord[12] := 64;    { 46 + 18 }
  EndRecord[13] := 0;
  EndRecord[14] := 0;
  EndRecord[15] := 0;
- { Offset du répertoire central }
+ { Offset du rÃ©pertoire central }
  EndRecord[16] := CentralDirOffset and $FF;
  EndRecord[17] := (CentralDirOffset shr 8) and $FF;
  EndRecord[18] := (CentralDirOffset shr 16) and $FF;
@@ -1322,21 +1332,21 @@ Begin
  { Longueur du commentaire }
  EndRecord[20] := 0;
  EndRecord[21] := 0;
- 
+
  BlockWrite(F, EndRecord, 22, BytesWritten);
- 
+
  Close(F);
  WriteVSDXFile := True;
 End;
 
-{ Fonction pour déterminer le format à partir de l'extension du fichier }
+{ Fonction pour dÃ©terminer le format Ã  partir de l'extension du fichier }
 Function GetVisioFormatFromExtension(Const FileName: String): Integer;
 Var
  Ext: String;
  I: Integer;
 Begin
  GetVisioFormatFromExtension := VISIO_FORMAT_UNKNOWN;
- 
+
  { Trouver l'extension }
  Ext := '';
  For I := Length(FileName) downto 1 do Begin
@@ -1345,14 +1355,14 @@ Begin
    Break;
   End;
  End;
- 
+
  { Convertir en minuscules }
  For I := 1 to Length(Ext) do Begin
   If (Ext[I] >= 'A') and (Ext[I] <= 'Z') Then
    Ext[I] := Chr(Ord(Ext[I]) + 32);
  End;
- 
- { Déterminer le format }
+
+ { DÃ©terminer le format }
  If (Ext = '.vsd') or (Ext = '.vss') or (Ext = '.vst') Then
   GetVisioFormatFromExtension := VISIO_FORMAT_VSD
  Else If (Ext = '.vsdx') or (Ext = '.vssx') or (Ext = '.vstx') Then
@@ -1363,15 +1373,15 @@ End;
 Function SaveVisioFile(Const FileName: String; FileFormat: Integer): Boolean;
 Begin
  SaveVisioFile := False;
- 
- { Si le format n'est pas spécifié, le détecter depuis l'extension }
+
+ { Si le format n'est pas spÃ©cifiÃ©, le dÃ©tecter depuis l'extension }
  If FileFormat = VISIO_FORMAT_UNKNOWN Then
   FileFormat := GetVisioFormatFromExtension(FileName);
- 
- { Si toujours inconnu, utiliser VSDX par défaut (format moderne) }
+
+ { Si toujours inconnu, utiliser VSDX par dÃ©faut (format moderne) }
  If FileFormat = VISIO_FORMAT_UNKNOWN Then
   FileFormat := VISIO_FORMAT_VSDX;
- 
+
  Case FileFormat of
   VISIO_FORMAT_VSD: Begin
    SaveVisioFile := WriteVSDFile(FileName);
@@ -1390,7 +1400,7 @@ End;
 { === FONCTIONS DE GESTION DES STENCILS ET MASTERS VISIO === }
 { ============================================================================ }
 
-{ Procédure pour initialiser un Master vide }
+{ ProcÃ©dure pour initialiser un Master vide }
 Procedure InitMaster(Var Master: TVisioMaster);
 Var
  I: Integer;
@@ -1426,7 +1436,7 @@ Begin
  End;
 End;
 
-{ Procédure pour initialiser un Stencil vide }
+{ ProcÃ©dure pour initialiser un Stencil vide }
 Procedure InitStencil(Var Stencil: TVisioStencil);
 Var
  I: Integer;
@@ -1441,7 +1451,7 @@ Begin
   InitMaster(Stencil.Masters[I]);
 End;
 
-{ Fonction pour générer un GUID simplifié }
+{ Fonction pour gÃ©nÃ©rer un GUID simplifiÃ© }
 Function GenerateSimpleGUID: String;
 Var
  I: Integer;
@@ -1458,12 +1468,12 @@ Begin
  GenerateSimpleGUID := S;
 End;
 
-{ Fonction pour ajouter un Master à un Stencil }
+{ Fonction pour ajouter un Master Ã  un Stencil }
 Function AddMasterToStencil(Var Stencil: TVisioStencil; Const Master: TVisioMaster): Boolean;
 Begin
  AddMasterToStencil := False;
  If Stencil.MasterCount >= MAX_MASTERS Then Exit;
- 
+
  Inc(Stencil.MasterCount);
  Stencil.Masters[Stencil.MasterCount] := Master;
  Stencil.Masters[Stencil.MasterCount].ID := NextMasterID;
@@ -1472,7 +1482,7 @@ Begin
  AddMasterToStencil := True;
 End;
 
-{ Fonction pour créer un Master à partir d'une TShapeObject }
+{ Fonction pour crÃ©er un Master Ã  partir d'une TShapeObject }
 Function CreateMasterFromShape(Const Shape: TShapeObject; Const MasterName: String): TVisioMaster;
 Var
  Master: TVisioMaster;
@@ -1482,8 +1492,8 @@ Begin
  Inc(NextMasterID);
  Master.Name := MasterName;
  Master.UniqueID := GenerateSimpleGUID;
- 
- { Convertir les propriétés de la forme }
+
+ { Convertir les propriÃ©tÃ©s de la forme }
  Master.BaseShape.ShapeType := TShapeTypeToVisioShapeType(Shape.ShapeType);
  Master.BaseShape.X := 0;
  Master.BaseShape.Y := 0;
@@ -1494,13 +1504,13 @@ Begin
  Master.BaseShape.LineColor := PascalColorToVisioColor(Shape.LineColor);
  Master.BaseShape.LineWeight := Shape.LineWidth;
  Master.BaseShape.Text := Shape.Text;
- 
+
  Master.Width := Master.BaseShape.Width;
  Master.Height := Master.BaseShape.Height;
  Master.OffsetX := Master.Width / 2;
  Master.OffsetY := Master.Height / 2;
- 
- { Ajouter les points de connexion par défaut (4 côtés) }
+
+ { Ajouter les points de connexion par dÃ©faut (4 cÃ´tÃ©s) }
  Master.ConnectionPointCount := 4;
  { Haut }
  Master.ConnectionPoints[1].X := Master.Width / 2;
@@ -1522,11 +1532,11 @@ Begin
  Master.ConnectionPoints[4].Y := Master.Height / 2;
  Master.ConnectionPoints[4].DirX := -1;
  Master.ConnectionPoints[4].DirY := 0;
- 
+
  CreateMasterFromShape := Master;
 End;
 
-{ Procédure pour créer une TShapeObject à partir d'un Master }
+{ ProcÃ©dure pour crÃ©er une TShapeObject Ã  partir d'un Master }
 Procedure CreateShapeFromMaster(Const Master: TVisioMaster; X, Y: Integer; Var Shape: TShapeObject);
 Begin
  { Initialiser la forme }
@@ -1541,13 +1551,13 @@ Begin
  Else
   Shape.ShapeType := stRectangle;
  End;
- 
- { Positionner la forme avec le point d'insertion centré }
+
+ { Positionner la forme avec le point d'insertion centrÃ© }
  Shape.X1 := X - Round(Master.OffsetX);
  Shape.Y1 := Y - Round(Master.OffsetY);
  Shape.X2 := Shape.X1 + Round(Master.Width);
  Shape.Y2 := Shape.Y1 + Round(Master.Height);
- 
+
  { Convertir les couleurs de Visio vers Pascal }
  Shape.FillColor := VisioColorToPascalColor(Master.BaseShape.FillColor);
  Shape.LineColor := VisioColorToPascalColor(Master.BaseShape.LineColor);
@@ -1593,7 +1603,7 @@ Begin
  End;
 End;
 
-{ Fonction pour détecter le format d'un fichier stencil }
+{ Fonction pour dÃ©tecter le format d'un fichier stencil }
 Function DetectStencilFormat(Const FileName: String): Integer;
 Var
  F: File;
@@ -1603,8 +1613,8 @@ Var
  I: Integer;
 Begin
  DetectStencilFormat := VISIO_FORMAT_UNKNOWN;
- 
- { Vérifier l'extension d'abord }
+
+ { VÃ©rifier l'extension d'abord }
  Ext := '';
  For I := Length(FileName) downto 1 do Begin
   If FileName[I] = '.' Then Begin
@@ -1612,31 +1622,31 @@ Begin
    Break;
   End;
  End;
- 
+
  { Convertir en minuscules }
  For I := 1 to Length(Ext) do Begin
   If (Ext[I] >= 'A') and (Ext[I] <= 'Z') Then
    Ext[I] := Chr(Ord(Ext[I]) + 32);
  End;
- 
+
  Assign(F, FileName);
  {$I-}
  Reset(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  BlockRead(F, Buffer, 8, BytesRead);
  Close(F);
- 
+
  If BytesRead < 4 Then Exit;
- 
- { Vérifier si c'est un fichier VSSX (ZIP) }
+
+ { VÃ©rifier si c'est un fichier VSSX (ZIP) }
  If (Buffer[0] = $50) and (Buffer[1] = $4B) Then Begin
   DetectStencilFormat := VISIO_STENCIL_FORMAT_VSSX;
   Exit;
  End;
- 
- { Vérifier si c'est un fichier VSS (OLE Compound Document) }
+
+ { VÃ©rifier si c'est un fichier VSS (OLE Compound Document) }
  If BytesRead >= 8 Then Begin
   If (Buffer[0] = $D0) and (Buffer[1] = $CF) and
      (Buffer[2] = $11) and (Buffer[3] = $E0) and
@@ -1657,38 +1667,38 @@ Var
 Begin
  LoadVSSFile := False;
  InitStencil(Stencil);
- 
+
  Assign(F, FileName);
  {$I-}
  Reset(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
- { Lire l'en-tête OLE }
+
+ { Lire l'en-tÃªte OLE }
  BlockRead(F, Header, SizeOf(TOLEHeader), BytesRead);
  If BytesRead < SizeOf(TOLEHeader) Then Begin
   Close(F);
   Exit;
  End;
- 
- { Vérifier la signature OLE }
+
+ { VÃ©rifier la signature OLE }
  If (Header.Signature[0] <> $D0) or (Header.Signature[1] <> $CF) Then Begin
   Close(F);
   Exit;
  End;
- 
+
  SectorSize := 1 shl Header.SectorShift;
- 
- { Pour une implémentation complète, il faudrait : }
- { 1. Parcourir le répertoire OLE }
+
+ { Pour une implÃ©mentation complÃ¨te, il faudrait : }
+ { 1. Parcourir le rÃ©pertoire OLE }
  { 2. Trouver les streams "Masters" }
  { 3. Parser chaque master }
- 
- { Pour cette implémentation simplifiée, créer des masters de base }
+
+ { Pour cette implÃ©mentation simplifiÃ©e, crÃ©er des masters de base }
  Stencil.Name := 'Basic Shapes';
  Stencil.FilePath := FileName;
  Stencil.FileFormat := VISIO_STENCIL_FORMAT_VSS;
- 
+
  Close(F);
  LoadVSSFile := True;
 End;
@@ -1702,34 +1712,34 @@ Var
 Begin
  LoadVSSXFile := False;
  InitStencil(Stencil);
- 
+
  Assign(F, FileName);
  {$I-}
  Reset(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
- { Vérifier la signature ZIP }
+
+ { VÃ©rifier la signature ZIP }
  BlockRead(F, Buffer, 4, BytesRead);
  If BytesRead < 4 Then Begin
   Close(F);
   Exit;
  End;
- 
+
  If (Buffer[0] <> $50) or (Buffer[1] <> $4B) Then Begin
   Close(F);
   Exit;
  End;
- 
- { Pour une implémentation complète, il faudrait : }
- { 1. Décompresser le ZIP }
+
+ { Pour une implÃ©mentation complÃ¨te, il faudrait : }
+ { 1. DÃ©compresser le ZIP }
  { 2. Lire visio/masters/masters.xml }
  { 3. Parser chaque master XML }
- 
+
  Stencil.Name := 'Basic Shapes';
  Stencil.FilePath := FileName;
  Stencil.FileFormat := VISIO_STENCIL_FORMAT_VSSX;
- 
+
  Close(F);
  LoadVSSXFile := True;
 End;
@@ -1742,12 +1752,12 @@ Var
  Success: Boolean;
 Begin
  LoadStencilFile := 0;
- 
+
  If StencilCount >= MAX_STENCILS Then Exit;
- 
+
  FileFormat := DetectStencilFormat(FileName);
  Success := False;
- 
+
  Case FileFormat of
   VISIO_STENCIL_FORMAT_VSS: Begin
    Success := LoadVSSFile(FileName, NewStencil);
@@ -1756,7 +1766,7 @@ Begin
    Success := LoadVSSXFile(FileName, NewStencil);
   End;
  End;
- 
+
  If Success Then Begin
   Inc(StencilCount);
   Stencils[StencilCount] := NewStencil;
@@ -1780,34 +1790,34 @@ Var
  TempStr: String;
 Begin
  SaveVSSXFile := False;
- 
+
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  FileOffset := 0;
- 
+
  { Construire le contenu XML du stencil }
  XMLData := '<?xml version="1.0" encoding="UTF-8"?>' + #13#10;
  XMLData := XMLData + '<VisioStencil xmlns="http://schemas.microsoft.com/visio/2003/core">' + #13#10;
  XMLData := XMLData + '  <Masters>' + #13#10;
- 
+
  For I := 1 to Stencil.MasterCount do Begin
   XMLData := XMLData + '    <Master ID="' + Chr(48 + I) + '" Name="' + Stencil.Masters[I].Name + '">' + #13#10;
   XMLData := XMLData + '      <UniqueID>' + Stencil.Masters[I].UniqueID + '</UniqueID>' + #13#10;
   XMLData := XMLData + '      <PageSheet>' + #13#10;
-  
+
   Str(Stencil.Masters[I].Width:0:2, TempStr);
   XMLData := XMLData + '        <PageWidth>' + TempStr + '</PageWidth>' + #13#10;
   Str(Stencil.Masters[I].Height:0:2, TempStr);
   XMLData := XMLData + '        <PageHeight>' + TempStr + '</PageHeight>' + #13#10;
-  
+
   XMLData := XMLData + '      </PageSheet>' + #13#10;
   XMLData := XMLData + '      <Shapes>' + #13#10;
   XMLData := XMLData + '        <Shape>' + #13#10;
-  
+
   Case Stencil.Masters[I].BaseShape.ShapeType of
    VISIO_SHAPE_RECTANGLE: TempStr := 'Rectangle';
    VISIO_SHAPE_ELLIPSE: TempStr := 'Ellipse';
@@ -1818,26 +1828,26 @@ Begin
    TempStr := 'Shape';
   End;
   XMLData := XMLData + '          <Name>' + TempStr + '</Name>' + #13#10;
-  
+
   XMLData := XMLData + '          <XForm>' + #13#10;
   Str(Stencil.Masters[I].BaseShape.Width:0:2, TempStr);
   XMLData := XMLData + '            <Width>' + TempStr + '</Width>' + #13#10;
   Str(Stencil.Masters[I].BaseShape.Height:0:2, TempStr);
   XMLData := XMLData + '            <Height>' + TempStr + '</Height>' + #13#10;
   XMLData := XMLData + '          </XForm>' + #13#10;
-  
+
   XMLData := XMLData + '        </Shape>' + #13#10;
   XMLData := XMLData + '      </Shapes>' + #13#10;
   XMLData := XMLData + '    </Master>' + #13#10;
  End;
- 
+
  XMLData := XMLData + '  </Masters>' + #13#10;
  XMLData := XMLData + '</VisioStencil>' + #13#10;
- 
+
  XMLSize := Length(XMLData);
  CRC := CalcCRC32(XMLData[1], XMLSize);
- 
- { Écrire l'en-tête local du fichier ZIP }
+
+ { Ã‰crire l'en-tÃªte local du fichier ZIP }
  LocalHeader[0] := $50;  { P }
  LocalHeader[1] := $4B;  { K }
  LocalHeader[2] := $03;
@@ -1868,22 +1878,22 @@ Begin
  LocalHeader[27] := 0;
  LocalHeader[28] := 0;
  LocalHeader[29] := 0;
- 
+
  BlockWrite(F, LocalHeader, 30, BytesWritten);
  FileOffset := FileOffset + 30;
- 
+
  { Nom du fichier }
  TempStr := 'visio/masters.xml';
  BlockWrite(F, TempStr[1], 17, BytesWritten);
  FileOffset := FileOffset + 17;
- 
- { Données XML }
+
+ { DonnÃ©es XML }
  BlockWrite(F, XMLData[1], XMLSize, BytesWritten);
  FileOffset := FileOffset + XMLSize;
- 
+
  CentralDirOffset := FileOffset;
- 
- { Écrire l'entrée du répertoire central }
+
+ { Ã‰crire l'entrÃ©e du rÃ©pertoire central }
  CentralDir[0] := $50;
  CentralDir[1] := $4B;
  CentralDir[2] := $01;
@@ -1930,15 +1940,15 @@ Begin
  CentralDir[43] := 0;
  CentralDir[44] := 0;
  CentralDir[45] := 0;
- 
+
  BlockWrite(F, CentralDir, 46, BytesWritten);
  FileOffset := FileOffset + 46;
- 
+
  { Nom du fichier }
  TempStr := 'visio/masters.xml';
  BlockWrite(F, TempStr[1], 17, BytesWritten);
  FileOffset := FileOffset + 17;
- 
+
  { Enregistrement de fin }
  EndRecord[0] := $50;
  EndRecord[1] := $4B;
@@ -1952,7 +1962,7 @@ Begin
  EndRecord[9] := 0;
  EndRecord[10] := 1;
  EndRecord[11] := 0;
- EndRecord[12] := 63;  { Taille du répertoire central }
+ EndRecord[12] := 63;  { Taille du rÃ©pertoire central }
  EndRecord[13] := 0;
  EndRecord[14] := 0;
  EndRecord[15] := 0;
@@ -1962,51 +1972,55 @@ Begin
  EndRecord[19] := (CentralDirOffset shr 24) and $FF;
  EndRecord[20] := 0;
  EndRecord[21] := 0;
- 
+
  BlockWrite(F, EndRecord, 22, BytesWritten);
- 
+
  Close(F);
  SaveVSSXFile := True;
 End;
 
 { Fonction principale pour sauvegarder un stencil }
 Function SaveStencilFile(StencilIndex: Integer; Const FileName: String): Boolean;
+Var
+ OK: Boolean;
 Begin
+ OK := False;
  SaveStencilFile := False;
- 
+
  If (StencilIndex < 1) or (StencilIndex > StencilCount) Then Exit;
- 
+
  { Toujours sauvegarder au format VSSX (moderne) }
- SaveStencilFile := SaveVSSXFile(FileName, Stencils[StencilIndex]);
- 
- If SaveStencilFile Then Begin
+ OK := SaveVSSXFile(FileName, Stencils[StencilIndex]);
+
+ If OK Then Begin
   Stencils[StencilIndex].FilePath := FileName;
   Stencils[StencilIndex].IsModified := False;
  End;
+ SaveStencilFile := OK;
 End;
 
-{ Procédure pour créer un nouveau stencil }
+{ ProcÃ©dure pour crÃ©er un nouveau stencil }
 Function CreateNewStencil(Const StencilName: String): Integer;
 Begin
  CreateNewStencil := 0;
- 
+
  If StencilCount >= MAX_STENCILS Then Exit;
- 
+
  Inc(StencilCount);
  InitStencil(Stencils[StencilCount]);
  Stencils[StencilCount].Name := StencilName;
  Stencils[StencilCount].IsModified := True;
- 
+
  CreateNewStencil := StencilCount;
 End;
 
-{ Procédure pour créer des masters de formes de base }
+{ ProcÃ©dure pour crÃ©er des masters de formes de base }
 Procedure CreateBasicShapeMasters(StencilIndex: Integer);
 Var
  Master: TVisioMaster;
 Begin
  If (StencilIndex < 1) or (StencilIndex > StencilCount) Then Exit;
- 
+
  { Master Rectangle }
  InitMaster(Master);
  Master.Name := 'Rectangle';
@@ -2026,7 +2040,7 @@ Begin
  Master.ConnectionPoints[3].X := 50; Master.ConnectionPoints[3].Y := 60;
  Master.ConnectionPoints[4].X := 0; Master.ConnectionPoints[4].Y := 30;
  AddMasterToStencil(Stencils[StencilIndex], Master);
- 
+
  { Master Ellipse }
  InitMaster(Master);
  Master.Name := 'Ellipse';
@@ -2046,7 +2060,7 @@ Begin
  Master.ConnectionPoints[3].X := 40; Master.ConnectionPoints[3].Y := 80;
  Master.ConnectionPoints[4].X := 0; Master.ConnectionPoints[4].Y := 40;
  AddMasterToStencil(Stencils[StencilIndex], Master);
- 
+
  { Master Losange (Diamond) }
  InitMaster(Master);
  Master.Name := 'Diamond';
@@ -2066,7 +2080,7 @@ Begin
  Master.ConnectionPoints[3].X := 40; Master.ConnectionPoints[3].Y := 80;
  Master.ConnectionPoints[4].X := 0; Master.ConnectionPoints[4].Y := 40;
  AddMasterToStencil(Stencils[StencilIndex], Master);
- 
+
  { Master Ligne }
  InitMaster(Master);
  Master.Name := 'Line';
@@ -2084,7 +2098,7 @@ Begin
  Master.ConnectionPoints[1].X := 0; Master.ConnectionPoints[1].Y := 1;
  Master.ConnectionPoints[2].X := 100; Master.ConnectionPoints[2].Y := 1;
  AddMasterToStencil(Stencils[StencilIndex], Master);
- 
+
  { Master Connecteur }
  InitMaster(Master);
  Master.Name := 'Connector';
@@ -2102,7 +2116,7 @@ Begin
  Master.ConnectionPoints[1].X := 0; Master.ConnectionPoints[1].Y := 1;
  Master.ConnectionPoints[2].X := 100; Master.ConnectionPoints[2].Y := 1;
  AddMasterToStencil(Stencils[StencilIndex], Master);
- 
+
  { Master Texte }
  InitMaster(Master);
  Master.Name := 'Text';
@@ -2125,25 +2139,25 @@ Begin
  AddMasterToStencil(Stencils[StencilIndex], Master);
 End;
 
-{ Procédure pour fermer un stencil }
+{ ProcÃ©dure pour fermer un stencil }
 Procedure CloseStencil(StencilIndex: Integer);
 Var
  I: Integer;
 Begin
  If (StencilIndex < 1) or (StencilIndex > StencilCount) Then Exit;
- 
- { Décaler les stencils suivants }
+
+ { DÃ©caler les stencils suivants }
  For I := StencilIndex to StencilCount - 1 do
   Stencils[I] := Stencils[I + 1];
- 
+
  Dec(StencilCount);
- 
- { Ajuster le stencil courant si nécessaire }
+
+ { Ajuster le stencil courant si nÃ©cessaire }
  If CurrentStencil > StencilCount Then
   CurrentStencil := StencilCount;
 End;
 
-{ Procédure pour initialiser le système de stencils }
+{ ProcÃ©dure pour initialiser le systÃ¨me de stencils }
 Procedure InitStencilSystem;
 Var
  I: Integer;
@@ -2152,11 +2166,11 @@ Begin
  StencilCount := 0;
  CurrentStencil := 0;
  NextMasterID := 1;
- 
+
  For I := 1 to MAX_STENCILS do
   InitStencil(Stencils[I]);
- 
- { Créer un stencil par défaut avec les formes de base }
+
+ { CrÃ©er un stencil par dÃ©faut avec les formes de base }
  NewStencilIdx := CreateNewStencil('Basic Shapes');
  If NewStencilIdx > 0 Then Begin
   CreateBasicShapeMasters(NewStencilIdx);
@@ -2176,7 +2190,7 @@ End;
 Const
  SVG_MAX_ATTR_LENGTH = 255;      { Longueur max d'un attribut }
  SVG_MAX_PATH_POINTS = 100;      { Nombre max de points dans un path }
- SVG_SCALE_FACTOR = 1.0;         { Facteur d'échelle pour la conversion }
+ SVG_SCALE_FACTOR = 1.0;         { Facteur d'Ã©chelle pour la conversion }
 
 Type
  { Structure pour un attribut SVG }
@@ -2184,33 +2198,33 @@ Type
   Name: String[50];
   Value: String[SVG_MAX_ATTR_LENGTH];
  End;
- 
- { Structure pour les données de parsing }
+
+ { Structure pour les donnÃ©es de parsing }
  TSVGParseState = Record
   CurrentX, CurrentY: Real;      { Position courante pour les paths }
-  StartX, StartY: Real;          { Point de départ du sous-chemin }
+  StartX, StartY: Real;          { Point de dÃ©part du sous-chemin }
   FillColor: LongInt;            { Couleur de remplissage }
   StrokeColor: LongInt;          { Couleur de trait }
-  StrokeWidth: Real;             { Épaisseur du trait }
+  StrokeWidth: Real;             { Ã‰paisseur du trait }
   TransformX, TransformY: Real;  { Translation }
-  ScaleX, ScaleY: Real;          { Échelle }
+  ScaleX, ScaleY: Real;          { Ã‰chelle }
  End;
 
 Var
  SVGParseState: TSVGParseState;
 
-{ Fonction pour sauter les espaces dans une chaîne }
+{ Fonction pour sauter les espaces dans une chaÃ®ne }
 Function SVGSkipWhitespace(Const S: String; StartPos: Integer): Integer;
 Begin
- While (StartPos <= Length(S)) and 
-       ((S[StartPos] = ' ') or (S[StartPos] = #9) or 
+ While (StartPos <= Length(S)) and
+       ((S[StartPos] = ' ') or (S[StartPos] = #9) or
         (S[StartPos] = #10) or (S[StartPos] = #13) or
         (S[StartPos] = ',')) do
   Inc(StartPos);
  SVGSkipWhitespace := StartPos;
 End;
 
-{ Fonction pour parser un nombre réel dans une chaîne }
+{ Fonction pour parser un nombre rÃ©el dans une chaÃ®ne }
 Function SVGParseNumber(Const S: String; Var Pos: Integer): Real;
 Var
  NumStr: String;
@@ -2221,26 +2235,26 @@ Begin
  SVGParseNumber := 0;
  Pos := SVGSkipWhitespace(S, Pos);
  If Pos > Length(S) Then Exit;
- 
+
  NumStr := '';
  Negative := False;
- 
- { Gérer le signe }
+
+ { GÃ©rer le signe }
  If S[Pos] = '-' Then Begin
   Negative := True;
   Inc(Pos);
  End
  Else If S[Pos] = '+' Then
   Inc(Pos);
- 
- { Parser les chiffres et le point décimal }
- While (Pos <= Length(S)) and 
+
+ { Parser les chiffres et le point dÃ©cimal }
+ While (Pos <= Length(S)) and
        (((S[Pos] >= '0') and (S[Pos] <= '9')) or (S[Pos] = '.')) do Begin
   NumStr := NumStr + S[Pos];
   Inc(Pos);
  End;
- 
- { Gérer l'exposant (notation scientifique) }
+
+ { GÃ©rer l'exposant (notation scientifique) }
  If (Pos <= Length(S)) and ((S[Pos] = 'e') or (S[Pos] = 'E')) Then Begin
   NumStr := NumStr + S[Pos];
   Inc(Pos);
@@ -2253,7 +2267,7 @@ Begin
    Inc(Pos);
   End;
  End;
- 
+
  If NumStr <> '' Then Begin
   Val(NumStr, Value, Code);
   If Code = 0 Then Begin
@@ -2263,7 +2277,7 @@ Begin
  End;
 End;
 
-{ Fonction pour convertir une valeur hexadécimale en entier }
+{ Fonction pour convertir une valeur hexadÃ©cimale en entier }
 Function HexToInt(Const HexStr: String): LongInt;
 Var
  I: Integer;
@@ -2291,19 +2305,19 @@ Var
  R, G, B: Integer;
  I: Integer;
 Begin
- SVGParseColor := 0;  { Noir par défaut }
+ SVGParseColor := 0;  { Noir par dÃ©faut }
  S := ColorStr;
- 
+
  { Supprimer les espaces }
  While (Length(S) > 0) and (S[1] = ' ') do Delete(S, 1, 1);
  While (Length(S) > 0) and (S[Length(S)] = ' ') do Delete(S, Length(S), 1);
- 
+
  { Convertir en minuscules }
  For I := 1 to Length(S) do
   If (S[I] >= 'A') and (S[I] <= 'Z') Then
    S[I] := Chr(Ord(S[I]) + 32);
- 
- { Couleur hexadécimale #RRGGBB ou #RGB }
+
+ { Couleur hexadÃ©cimale #RRGGBB ou #RGB }
  If (Length(S) > 0) and (S[1] = '#') Then Begin
   Delete(S, 1, 1);
   If Length(S) = 6 Then Begin
@@ -2319,7 +2333,7 @@ Begin
   Else Begin
    R := 0; G := 0; B := 0;
   End;
-  
+
   { Convertir RGB en couleur Pascal (palette 16 couleurs) }
   { Approximation vers la couleur la plus proche }
   If (R < 64) and (G < 64) and (B < 64) Then SVGParseColor := 0   { Noir }
@@ -2331,11 +2345,11 @@ Begin
   Else If (R > 192) and (G < 64) and (B > 192) Then SVGParseColor := 5  { Magenta }
   Else If (R < 64) and (G > 192) and (B > 192) Then SVGParseColor := 3  { Cyan }
   Else If (R > 128) and (G > 128) and (B > 128) Then SVGParseColor := 7 { Gris clair }
-  Else SVGParseColor := 8;  { Gris foncé }
+  Else SVGParseColor := 8;  { Gris foncÃ© }
   Exit;
  End;
- 
- { Couleurs nommées }
+
+ { Couleurs nommÃ©es }
  If S = 'black' Then SVGParseColor := 0
  Else If S = 'blue' Then SVGParseColor := 1
  Else If S = 'green' Then SVGParseColor := 2
@@ -2366,7 +2380,7 @@ Begin
  SVGGetAttribute := '';
  AttrSearch := AttrName + '="';
  Pos := 1;
- 
+
  { Chercher l'attribut avec guillemets doubles }
  While Pos <= Length(Tag) - Length(AttrSearch) do Begin
   If Copy(Tag, Pos, Length(AttrSearch)) = AttrSearch Then Begin
@@ -2379,7 +2393,7 @@ Begin
   End;
   Inc(Pos);
  End;
- 
+
  { Essayer avec guillemets simples }
  AttrSearch := AttrName + '=''';
  Pos := 1;
@@ -2396,7 +2410,7 @@ Begin
  End;
 End;
 
-{ Fonction pour initialiser l'état de parsing SVG }
+{ Fonction pour initialiser l'Ã©tat de parsing SVG }
 Procedure InitSVGParseState;
 Begin
  SVGParseState.CurrentX := 0;
@@ -2412,7 +2426,7 @@ Begin
  SVGParseState.ScaleY := 1;
 End;
 
-{ Fonction pour parser un élément SVG rect }
+{ Fonction pour parser un Ã©lÃ©ment SVG rect }
 Function ParseSVGRect(Const Tag: String; Var Shape: TShapeObject): Boolean;
 Var
  X, Y, W, H, RX, RY: Real;
@@ -2420,57 +2434,57 @@ Var
  Pos: Integer;
 Begin
  ParseSVGRect := False;
- 
+
  { Parser les attributs }
  TempStr := SVGGetAttribute(Tag, 'x');
  If TempStr = '' Then X := 0 Else Begin Pos := 1; X := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'y');
  If TempStr = '' Then Y := 0 Else Begin Pos := 1; Y := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'width');
  If TempStr = '' Then Exit;
  Pos := 1;
  W := SVGParseNumber(TempStr, Pos);
- 
+
  TempStr := SVGGetAttribute(Tag, 'height');
  If TempStr = '' Then Exit;
  Pos := 1;
  H := SVGParseNumber(TempStr, Pos);
- 
- { Créer la forme }
+
+ { CrÃ©er la forme }
  Shape.ShapeType := stRectangle;
  Shape.X1 := Round(X * SVG_SCALE_FACTOR);
  Shape.Y1 := Round(Y * SVG_SCALE_FACTOR);
  Shape.X2 := Round((X + W) * SVG_SCALE_FACTOR);
  Shape.Y2 := Round((Y + H) * SVG_SCALE_FACTOR);
- 
+
  { Parser les couleurs }
  TempStr := SVGGetAttribute(Tag, 'fill');
  If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
- Else Shape.FillColor := 15;  { Blanc par défaut }
- 
+ Else Shape.FillColor := 15;  { Blanc par dÃ©faut }
+
  TempStr := SVGGetAttribute(Tag, 'stroke');
  If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
- Else Shape.LineColor := 0;  { Noir par défaut }
- 
+ Else Shape.LineColor := 0;  { Noir par dÃ©faut }
+
  TempStr := SVGGetAttribute(Tag, 'stroke-width');
  If TempStr <> '' Then Begin
   Pos := 1;
   Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
  End
  Else Shape.LineWidth := 1;
- 
+
  Shape.LineStyle := 0;
  Shape.Selected := False;
  Shape.LayerIndex := 1;
  Shape.GroupID := 0;
  Shape.PointCount := 0;
- 
+
  ParseSVGRect := True;
 End;
 
-{ Fonction pour parser un élément SVG circle }
+{ Fonction pour parser un Ã©lÃ©ment SVG circle }
 Function ParseSVGCircle(Const Tag: String; Var Shape: TShapeObject): Boolean;
 Var
  CX, CY, R: Real;
@@ -2478,52 +2492,52 @@ Var
  Pos: Integer;
 Begin
  ParseSVGCircle := False;
- 
+
  { Parser les attributs }
  TempStr := SVGGetAttribute(Tag, 'cx');
  If TempStr = '' Then CX := 0 Else Begin Pos := 1; CX := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'cy');
  If TempStr = '' Then CY := 0 Else Begin Pos := 1; CY := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'r');
  If TempStr = '' Then Exit;
  Pos := 1;
  R := SVGParseNumber(TempStr, Pos);
- 
- { Créer la forme (ellipse avec même rayon X et Y) }
+
+ { CrÃ©er la forme (ellipse avec mÃªme rayon X et Y) }
  Shape.ShapeType := stEllipse;
  Shape.X1 := Round((CX - R) * SVG_SCALE_FACTOR);
  Shape.Y1 := Round((CY - R) * SVG_SCALE_FACTOR);
  Shape.X2 := Round((CX + R) * SVG_SCALE_FACTOR);
  Shape.Y2 := Round((CY + R) * SVG_SCALE_FACTOR);
- 
+
  { Parser les couleurs }
  TempStr := SVGGetAttribute(Tag, 'fill');
  If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
  Else Shape.FillColor := 15;
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke');
  If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
  Else Shape.LineColor := 0;
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke-width');
  If TempStr <> '' Then Begin
   Pos := 1;
   Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
  End
  Else Shape.LineWidth := 1;
- 
+
  Shape.LineStyle := 0;
  Shape.Selected := False;
  Shape.LayerIndex := 1;
  Shape.GroupID := 0;
  Shape.PointCount := 0;
- 
+
  ParseSVGCircle := True;
 End;
 
-{ Fonction pour parser un élément SVG ellipse }
+{ Fonction pour parser un Ã©lÃ©ment SVG ellipse }
 Function ParseSVGEllipse(Const Tag: String; Var Shape: TShapeObject): Boolean;
 Var
  CX, CY, RX, RY: Real;
@@ -2531,57 +2545,57 @@ Var
  Pos: Integer;
 Begin
  ParseSVGEllipse := False;
- 
+
  { Parser les attributs }
  TempStr := SVGGetAttribute(Tag, 'cx');
  If TempStr = '' Then CX := 0 Else Begin Pos := 1; CX := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'cy');
  If TempStr = '' Then CY := 0 Else Begin Pos := 1; CY := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'rx');
  If TempStr = '' Then Exit;
  Pos := 1;
  RX := SVGParseNumber(TempStr, Pos);
- 
+
  TempStr := SVGGetAttribute(Tag, 'ry');
  If TempStr = '' Then Exit;
  Pos := 1;
  RY := SVGParseNumber(TempStr, Pos);
- 
- { Créer la forme }
+
+ { CrÃ©er la forme }
  Shape.ShapeType := stEllipse;
  Shape.X1 := Round((CX - RX) * SVG_SCALE_FACTOR);
  Shape.Y1 := Round((CY - RY) * SVG_SCALE_FACTOR);
  Shape.X2 := Round((CX + RX) * SVG_SCALE_FACTOR);
  Shape.Y2 := Round((CY + RY) * SVG_SCALE_FACTOR);
- 
+
  { Parser les couleurs }
  TempStr := SVGGetAttribute(Tag, 'fill');
  If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
  Else Shape.FillColor := 15;
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke');
  If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
  Else Shape.LineColor := 0;
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke-width');
  If TempStr <> '' Then Begin
   Pos := 1;
   Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
  End
  Else Shape.LineWidth := 1;
- 
+
  Shape.LineStyle := 0;
  Shape.Selected := False;
  Shape.LayerIndex := 1;
  Shape.GroupID := 0;
  Shape.PointCount := 0;
- 
+
  ParseSVGEllipse := True;
 End;
 
-{ Fonction pour parser un élément SVG line }
+{ Fonction pour parser un Ã©lÃ©ment SVG line }
 Function ParseSVGLine(Const Tag: String; Var Shape: TShapeObject): Boolean;
 Var
  X1, Y1, X2, Y2: Real;
@@ -2589,51 +2603,51 @@ Var
  Pos: Integer;
 Begin
  ParseSVGLine := False;
- 
+
  { Parser les attributs }
  TempStr := SVGGetAttribute(Tag, 'x1');
  If TempStr = '' Then X1 := 0 Else Begin Pos := 1; X1 := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'y1');
  If TempStr = '' Then Y1 := 0 Else Begin Pos := 1; Y1 := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'x2');
  If TempStr = '' Then X2 := 0 Else Begin Pos := 1; X2 := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'y2');
  If TempStr = '' Then Y2 := 0 Else Begin Pos := 1; Y2 := SVGParseNumber(TempStr, Pos); End;
- 
- { Créer la forme }
+
+ { CrÃ©er la forme }
  Shape.ShapeType := stLine;
  Shape.X1 := Round(X1 * SVG_SCALE_FACTOR);
  Shape.Y1 := Round(Y1 * SVG_SCALE_FACTOR);
  Shape.X2 := Round(X2 * SVG_SCALE_FACTOR);
  Shape.Y2 := Round(Y2 * SVG_SCALE_FACTOR);
- 
+
  { Parser les couleurs (les lignes n'ont pas de remplissage) }
  Shape.FillColor := -1;  { Pas de remplissage }
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke');
  If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
  Else Shape.LineColor := 0;
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke-width');
  If TempStr <> '' Then Begin
   Pos := 1;
   Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
  End
  Else Shape.LineWidth := 1;
- 
+
  Shape.LineStyle := 0;
  Shape.Selected := False;
  Shape.LayerIndex := 1;
  Shape.GroupID := 0;
  Shape.PointCount := 0;
- 
+
  ParseSVGLine := True;
 End;
 
-{ Fonction pour parser un élément SVG polygon ou polyline }
+{ Fonction pour parser un Ã©lÃ©ment SVG polygon ou polyline }
 Function ParseSVGPolygon(Const Tag: String; Var Shape: TShapeObject; IsPolyline: Boolean): Boolean;
 Var
  PointsStr, TempStr: String;
@@ -2642,69 +2656,69 @@ Var
  MinX, MinY, MaxX, MaxY: Real;
 Begin
  ParseSVGPolygon := False;
- 
+
  PointsStr := SVGGetAttribute(Tag, 'points');
  If PointsStr = '' Then Exit;
- 
+
  { Parser les points }
  Shape.PointCount := 0;
  Pos := 1;
  MinX := 32767; MinY := 32767;
  MaxX := -32767; MaxY := -32767;
- 
+
  While (Pos <= Length(PointsStr)) and (Shape.PointCount < MAX_POLYGON_POINTS) do Begin
   Pos := SVGSkipWhitespace(PointsStr, Pos);
   If Pos > Length(PointsStr) Then Break;
-  
+
   X := SVGParseNumber(PointsStr, Pos);
   Pos := SVGSkipWhitespace(PointsStr, Pos);
   Y := SVGParseNumber(PointsStr, Pos);
-  
+
   Inc(Shape.PointCount);
   Shape.Points[Shape.PointCount].X := Round(X * SVG_SCALE_FACTOR);
   Shape.Points[Shape.PointCount].Y := Round(Y * SVG_SCALE_FACTOR);
-  
+
   If X < MinX Then MinX := X;
   If Y < MinY Then MinY := Y;
   If X > MaxX Then MaxX := X;
   If Y > MaxY Then MaxY := Y;
  End;
- 
+
  If Shape.PointCount < 2 Then Exit;
- 
- { Créer la forme }
+
+ { CrÃ©er la forme }
  Shape.ShapeType := stPolygon;
  Shape.X1 := Round(MinX * SVG_SCALE_FACTOR);
  Shape.Y1 := Round(MinY * SVG_SCALE_FACTOR);
  Shape.X2 := Round(MaxX * SVG_SCALE_FACTOR);
  Shape.Y2 := Round(MaxY * SVG_SCALE_FACTOR);
- 
+
  { Parser les couleurs }
  TempStr := SVGGetAttribute(Tag, 'fill');
  If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
  Else If IsPolyline Then Shape.FillColor := -1
  Else Shape.FillColor := 15;
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke');
  If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
  Else Shape.LineColor := 0;
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke-width');
  If TempStr <> '' Then Begin
   Pos := 1;
   Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
  End
  Else Shape.LineWidth := 1;
- 
+
  Shape.LineStyle := 0;
  Shape.Selected := False;
  Shape.LayerIndex := 1;
  Shape.GroupID := 0;
- 
+
  ParseSVGPolygon := True;
 End;
 
-{ Fonction pour parser un élément SVG path (support basique M, L, H, V, Z, C, Q) }
+{ Fonction pour parser un Ã©lÃ©ment SVG path (support basique M, L, H, V, Z, C, Q) }
 Function ParseSVGPath(Const Tag: String; Var Shape: TShapeObject): Boolean;
 Var
  PathData, TempStr: String;
@@ -2716,10 +2730,10 @@ Var
  IsRelative: Boolean;
 Begin
  ParseSVGPath := False;
- 
+
  PathData := SVGGetAttribute(Tag, 'd');
  If PathData = '' Then Exit;
- 
+
  { Parser le path }
  Shape.PointCount := 0;
  Pos := 1;
@@ -2727,22 +2741,22 @@ Begin
  StartX := 0; StartY := 0;
  MinX := 32767; MinY := 32767;
  MaxX := -32767; MaxY := -32767;
- 
+
  While (Pos <= Length(PathData)) and (Shape.PointCount < MAX_POLYGON_POINTS) do Begin
   Pos := SVGSkipWhitespace(PathData, Pos);
   If Pos > Length(PathData) Then Break;
-  
+
   Cmd := PathData[Pos];
-  
-  { Vérifier si c'est une commande }
+
+  { VÃ©rifier si c'est une commande }
   If ((Cmd >= 'A') and (Cmd <= 'Z')) or ((Cmd >= 'a') and (Cmd <= 'z')) Then Begin
    Inc(Pos);
    IsRelative := (Cmd >= 'a') and (Cmd <= 'z');
    If IsRelative Then Cmd := Chr(Ord(Cmd) - 32);  { Convertir en majuscule }
   End;
-  
+
   Pos := SVGSkipWhitespace(PathData, Pos);
-  
+
   Case Cmd of
    'M': Begin { MoveTo }
     X := SVGParseNumber(PathData, Pos);
@@ -2760,7 +2774,7 @@ Begin
     If X > MaxX Then MaxX := X;
     If Y > MaxY Then MaxY := Y;
    End;
-   
+
    'L': Begin { LineTo }
     X := SVGParseNumber(PathData, Pos);
     Y := SVGParseNumber(PathData, Pos);
@@ -2776,7 +2790,7 @@ Begin
     If X > MaxX Then MaxX := X;
     If Y > MaxY Then MaxY := Y;
    End;
-   
+
    'H': Begin { Horizontal LineTo }
     X := SVGParseNumber(PathData, Pos);
     If IsRelative Then X := CurX + X;
@@ -2789,7 +2803,7 @@ Begin
     If X < MinX Then MinX := X;
     If X > MaxX Then MaxX := X;
    End;
-   
+
    'V': Begin { Vertical LineTo }
     Y := SVGParseNumber(PathData, Pos);
     If IsRelative Then Y := CurY + Y;
@@ -2802,13 +2816,13 @@ Begin
     If Y < MinY Then MinY := Y;
     If Y > MaxY Then MaxY := Y;
    End;
-   
+
    'Z': Begin { ClosePath }
     CurX := StartX;
     CurY := StartY;
-    { Fermer le chemin en revenant au point de départ }
+    { Fermer le chemin en revenant au point de dÃ©part }
    End;
-   
+
    'C': Begin { Cubic Bezier - on simplifie en prenant le point final }
     X1 := SVGParseNumber(PathData, Pos);
     Y1 := SVGParseNumber(PathData, Pos);
@@ -2828,7 +2842,7 @@ Begin
     If X > MaxX Then MaxX := X;
     If Y > MaxY Then MaxY := Y;
    End;
-   
+
    'Q': Begin { Quadratic Bezier - on simplifie en prenant le point final }
     X1 := SVGParseNumber(PathData, Pos);
     Y1 := SVGParseNumber(PathData, Pos);
@@ -2846,47 +2860,47 @@ Begin
     If X > MaxX Then MaxX := X;
     If Y > MaxY Then MaxY := Y;
    End;
-   
+
   Else
    { Commande inconnue, avancer }
    Inc(Pos);
   End;
  End;
- 
+
  If Shape.PointCount < 2 Then Exit;
- 
- { Créer la forme }
+
+ { CrÃ©er la forme }
  Shape.ShapeType := stPolygon;
  Shape.X1 := Round(MinX * SVG_SCALE_FACTOR);
  Shape.Y1 := Round(MinY * SVG_SCALE_FACTOR);
  Shape.X2 := Round(MaxX * SVG_SCALE_FACTOR);
  Shape.Y2 := Round(MaxY * SVG_SCALE_FACTOR);
- 
+
  { Parser les couleurs }
  TempStr := SVGGetAttribute(Tag, 'fill');
  If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
  Else Shape.FillColor := 15;
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke');
  If TempStr <> '' Then Shape.LineColor := SVGParseColor(TempStr)
  Else Shape.LineColor := 0;
- 
+
  TempStr := SVGGetAttribute(Tag, 'stroke-width');
  If TempStr <> '' Then Begin
   Pos := 1;
   Shape.LineWidth := Round(SVGParseNumber(TempStr, Pos));
  End
  Else Shape.LineWidth := 1;
- 
+
  Shape.LineStyle := 0;
  Shape.Selected := False;
  Shape.LayerIndex := 1;
  Shape.GroupID := 0;
- 
+
  ParseSVGPath := True;
 End;
 
-{ Fonction pour parser un élément SVG text }
+{ Fonction pour parser un Ã©lÃ©ment SVG text }
 Function ParseSVGText(Const Tag, TextContent: String; Var Shape: TShapeObject): Boolean;
 Var
  X, Y: Real;
@@ -2894,32 +2908,32 @@ Var
  Pos: Integer;
 Begin
  ParseSVGText := False;
- 
+
  { Parser les attributs }
  TempStr := SVGGetAttribute(Tag, 'x');
  If TempStr = '' Then X := 0 Else Begin Pos := 1; X := SVGParseNumber(TempStr, Pos); End;
- 
+
  TempStr := SVGGetAttribute(Tag, 'y');
  If TempStr = '' Then Y := 0 Else Begin Pos := 1; Y := SVGParseNumber(TempStr, Pos); End;
- 
- { Créer la forme }
+
+ { CrÃ©er la forme }
  Shape.ShapeType := stText;
  Shape.X1 := Round(X * SVG_SCALE_FACTOR);
  Shape.Y1 := Round(Y * SVG_SCALE_FACTOR) - 15;  { Ajuster pour la baseline }
  Shape.X2 := Shape.X1 + Length(TextContent) * 8;  { Estimation de la largeur }
- Shape.Y2 := Shape.Y1 + 20;  { Hauteur estimée }
- 
+ Shape.Y2 := Shape.Y1 + 20;  { Hauteur estimÃ©e }
+
  { Texte }
  If Length(TextContent) > 80 Then
   Shape.Text := Copy(TextContent, 1, 80)
  Else
   Shape.Text := TextContent;
- 
+
  { Parser les couleurs }
  TempStr := SVGGetAttribute(Tag, 'fill');
  If TempStr <> '' Then Shape.FillColor := SVGParseColor(TempStr)
- Else Shape.FillColor := 0;  { Noir par défaut pour le texte }
- 
+ Else Shape.FillColor := 0;  { Noir par dÃ©faut pour le texte }
+
  Shape.LineColor := Shape.FillColor;
  Shape.LineWidth := 1;
  Shape.LineStyle := 0;
@@ -2927,7 +2941,7 @@ Begin
  Shape.LayerIndex := 1;
  Shape.GroupID := 0;
  Shape.PointCount := 0;
- 
+
  ParseSVGText := True;
 End;
 
@@ -2943,58 +2957,58 @@ Var
  C: Char;
 Begin
  LoadSVGFile := False;
- 
+
  Assign(F, FileName);
  {$I-}
  Reset(F);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  InitSVGParseState;
  TotalContent := '';
- 
+
  { Lire tout le fichier }
  While Not Eof(F) do Begin
   ReadLn(F, Line);
   TotalContent := TotalContent + Line + ' ';
  End;
  Close(F);
- 
+
  { Parser les balises }
  I := 1;
  While I <= Length(TotalContent) do Begin
-  { Chercher le début d'une balise }
+  { Chercher le dÃ©but d'une balise }
   While (I <= Length(TotalContent)) and (TotalContent[I] <> '<') do
    Inc(I);
-  
+
   If I > Length(TotalContent) Then Break;
   TagStart := I;
-  
+
   { Trouver la fin de la balise }
   While (I <= Length(TotalContent)) and (TotalContent[I] <> '>') do
    Inc(I);
-  
+
   If I > Length(TotalContent) Then Break;
   TagEnd := I;
-  
+
   Tag := Copy(TotalContent, TagStart + 1, TagEnd - TagStart - 1);
   Inc(I);
-  
+
   { Extraire le nom de la balise }
   TagName := '';
   ContentStart := 1;
-  While (ContentStart <= Length(Tag)) and (Tag[ContentStart] <> ' ') and 
+  While (ContentStart <= Length(Tag)) and (Tag[ContentStart] <> ' ') and
         (Tag[ContentStart] <> '/') and (Tag[ContentStart] <> '>') do Begin
    TagName := TagName + Tag[ContentStart];
    Inc(ContentStart);
   End;
-  
+
   { Convertir en minuscules }
   For ContentStart := 1 to Length(TagName) do
    If (TagName[ContentStart] >= 'A') and (TagName[ContentStart] <= 'Z') Then
     TagName[ContentStart] := Chr(Ord(TagName[ContentStart]) + 32);
-  
-  { Traiter les différents types de balises }
+
+  { Traiter les diffÃ©rents types de balises }
   If TagName = 'rect' Then Begin
    If ParseSVGRect(Tag, Shape) Then Begin
     If ShapeCount < MAX_SHAPES Then Begin
@@ -3059,12 +3073,12 @@ Begin
      TextContent := TextContent + TotalContent[I];
     Inc(I);
    End;
-   { Supprimer les espaces au début et à la fin }
+   { Supprimer les espaces au dÃ©but et Ã  la fin }
    While (Length(TextContent) > 0) and (TextContent[1] = ' ') do
     Delete(TextContent, 1, 1);
    While (Length(TextContent) > 0) and (TextContent[Length(TextContent)] = ' ') do
     Delete(TextContent, Length(TextContent), 1);
-   
+
    If ParseSVGText(Tag, TextContent, Shape) Then Begin
     If ShapeCount < MAX_SHAPES Then Begin
      Inc(ShapeCount);
@@ -3073,11 +3087,11 @@ Begin
    End;
   End;
  End;
- 
+
  LoadSVGFile := True;
 End;
 
-{ Fonction pour détecter si un fichier est un fichier SVG }
+{ Fonction pour dÃ©tecter si un fichier est un fichier SVG }
 Function IsSVGFile(Const FileName: String): Boolean;
 Var
  Ext: String;
@@ -3085,7 +3099,7 @@ Var
 Begin
  IsSVGFile := False;
  Ext := '';
- 
+
  { Extraire l'extension }
  For I := Length(FileName) downto 1 do Begin
   If FileName[I] = '.' Then Begin
@@ -3093,12 +3107,12 @@ Begin
    Break;
   End;
  End;
- 
+
  { Convertir en minuscules }
  For I := 1 to Length(Ext) do
   If (Ext[I] >= 'A') and (Ext[I] <= 'Z') Then
    Ext[I] := Chr(Ord(Ext[I]) + 32);
- 
+
  IsSVGFile := (Ext = '.svg');
 End;
 
@@ -3110,7 +3124,7 @@ End;
 { === FONCTIONS D'EXPORT SVG === }
 { ============================================================================ }
 
-{ Fonction pour convertir une couleur Pascal (palette 16 couleurs) en code hexadécimal SVG }
+{ Fonction pour convertir une couleur Pascal (palette 16 couleurs) en code hexadÃ©cimal SVG }
 Function ColorToSVGHex(Color: Integer): String;
 Begin
  Case Color of
@@ -3122,7 +3136,7 @@ Begin
   5:  ColorToSVGHex := '#AA00AA';  { Magenta }
   6:  ColorToSVGHex := '#AA5500';  { Marron }
   7:  ColorToSVGHex := '#AAAAAA';  { Gris clair }
-  8:  ColorToSVGHex := '#555555';  { Gris foncé }
+  8:  ColorToSVGHex := '#555555';  { Gris foncÃ© }
   9:  ColorToSVGHex := '#5555FF';  { Bleu clair }
   10: ColorToSVGHex := '#55FF55';  { Vert clair }
   11: ColorToSVGHex := '#55FFFF';  { Cyan clair }
@@ -3131,7 +3145,7 @@ Begin
   14: ColorToSVGHex := '#FFFF55';  { Jaune }
   15: ColorToSVGHex := '#FFFFFF';  { Blanc }
  Else
-  ColorToSVGHex := '#000000';  { Noir par défaut }
+  ColorToSVGHex := '#000000';  { Noir par dÃ©faut }
  End;
 End;
 
@@ -3140,7 +3154,7 @@ Function LineStyleToSVGDash(LineStyle: Integer): String;
 Begin
  Case LineStyle of
   0: LineStyleToSVGDash := '';                    { Solide }
-  1: LineStyleToSVGDash := 'stroke-dasharray="5,5"';  { Pointillé }
+  1: LineStyleToSVGDash := 'stroke-dasharray="5,5"';  { PointillÃ© }
   2: LineStyleToSVGDash := 'stroke-dasharray="10,5"'; { Tirets }
   3: LineStyleToSVGDash := 'stroke-dasharray="10,5,2,5"'; { Tiret-point }
  Else
@@ -3148,26 +3162,26 @@ Begin
  End;
 End;
 
-{ Fonction pour générer les attributs de style CSS pour une forme }
+{ Fonction pour gÃ©nÃ©rer les attributs de style CSS pour une forme }
 Function ShapeToSVGStyle(Const Shape: TShapeObject): String;
 Var
  Style: String;
 Begin
  Style := 'style="';
- 
+
  { Couleur de remplissage }
  If Shape.FillColor >= 0 Then
   Style := Style + 'fill:' + ColorToSVGHex(Shape.FillColor) + ';'
  Else
   Style := Style + 'fill:none;';
- 
+
  { Couleur de contour }
  If Shape.LineColor >= 0 Then
   Style := Style + 'stroke:' + ColorToSVGHex(Shape.LineColor) + ';'
  Else
   Style := Style + 'stroke:none;';
- 
- { Épaisseur de ligne }
+
+ { Ã‰paisseur de ligne }
  If Shape.LineWidth > 0 Then Begin
   Style := Style + 'stroke-width:';
   { Convertir Integer en String manuellement }
@@ -3179,17 +3193,17 @@ Begin
   End;
   Style := Style + ';';
  End;
- 
+
  Style := Style + '"';
- 
- { Ajouter le style de ligne si nécessaire }
+
+ { Ajouter le style de ligne si nÃ©cessaire }
  If Shape.LineStyle > 0 Then
   Style := Style + ' ' + LineStyleToSVGDash(Shape.LineStyle);
- 
+
  ShapeToSVGStyle := Style;
 End;
 
-{ Fonction pour convertir un entier en chaîne }
+{ Fonction pour convertir un entier en chaÃ®ne }
 Function IntToStrSVG(N: Integer): String;
 Var
  S: String;
@@ -3199,21 +3213,21 @@ Begin
   IntToStrSVG := '0';
   Exit;
  End;
- 
+
  Neg := N < 0;
  If Neg Then N := -N;
- 
+
  S := '';
  While N > 0 do Begin
   S := Chr(Ord('0') + (N Mod 10)) + S;
   N := N Div 10;
  End;
- 
+
  If Neg Then S := '-' + S;
  IntToStrSVG := S;
 End;
 
-{ Procédure pour écrire un rectangle en SVG }
+{ ProcÃ©dure pour Ã©crire un rectangle en SVG }
 Procedure WriteSVGRect(Var F: Text; Const Shape: TShapeObject);
 Var
  X, Y, W, H: Integer;
@@ -3222,16 +3236,16 @@ Begin
  Y := Shape.Y1;
  W := Shape.X2 - Shape.X1;
  H := Shape.Y2 - Shape.Y1;
- 
+
  If W < 0 Then Begin X := Shape.X2; W := -W; End;
  If H < 0 Then Begin Y := Shape.Y2; H := -H; End;
- 
- WriteLn(F, '  <rect x="' + IntToStrSVG(X) + '" y="' + IntToStrSVG(Y) + 
-            '" width="' + IntToStrSVG(W) + '" height="' + IntToStrSVG(H) + 
+
+ WriteLn(F, '  <rect x="' + IntToStrSVG(X) + '" y="' + IntToStrSVG(Y) +
+            '" width="' + IntToStrSVG(W) + '" height="' + IntToStrSVG(H) +
             '" ' + ShapeToSVGStyle(Shape) + ' />');
 End;
 
-{ Procédure pour écrire une ellipse en SVG }
+{ ProcÃ©dure pour Ã©crire une ellipse en SVG }
 Procedure WriteSVGEllipse(Var F: Text; Const Shape: TShapeObject);
 Var
  CX, CY, RX, RY: Integer;
@@ -3240,85 +3254,85 @@ Begin
  CY := (Shape.Y1 + Shape.Y2) Div 2;
  RX := Abs(Shape.X2 - Shape.X1) Div 2;
  RY := Abs(Shape.Y2 - Shape.Y1) Div 2;
- 
- { Si RX = RY, écrire un cercle }
+
+ { Si RX = RY, Ã©crire un cercle }
  If RX = RY Then
-  WriteLn(F, '  <circle cx="' + IntToStrSVG(CX) + '" cy="' + IntToStrSVG(CY) + 
+  WriteLn(F, '  <circle cx="' + IntToStrSVG(CX) + '" cy="' + IntToStrSVG(CY) +
              '" r="' + IntToStrSVG(RX) + '" ' + ShapeToSVGStyle(Shape) + ' />')
  Else
-  WriteLn(F, '  <ellipse cx="' + IntToStrSVG(CX) + '" cy="' + IntToStrSVG(CY) + 
-             '" rx="' + IntToStrSVG(RX) + '" ry="' + IntToStrSVG(RY) + 
+  WriteLn(F, '  <ellipse cx="' + IntToStrSVG(CX) + '" cy="' + IntToStrSVG(CY) +
+             '" rx="' + IntToStrSVG(RX) + '" ry="' + IntToStrSVG(RY) +
              '" ' + ShapeToSVGStyle(Shape) + ' />');
 End;
 
-{ Procédure pour écrire une ligne en SVG }
+{ ProcÃ©dure pour Ã©crire une ligne en SVG }
 Procedure WriteSVGLine(Var F: Text; Const Shape: TShapeObject);
 Begin
- WriteLn(F, '  <line x1="' + IntToStrSVG(Shape.X1) + '" y1="' + IntToStrSVG(Shape.Y1) + 
-            '" x2="' + IntToStrSVG(Shape.X2) + '" y2="' + IntToStrSVG(Shape.Y2) + 
+ WriteLn(F, '  <line x1="' + IntToStrSVG(Shape.X1) + '" y1="' + IntToStrSVG(Shape.Y1) +
+            '" x2="' + IntToStrSVG(Shape.X2) + '" y2="' + IntToStrSVG(Shape.Y2) +
             '" ' + ShapeToSVGStyle(Shape) + ' />');
 End;
 
-{ Procédure pour écrire un polygone en SVG }
+{ ProcÃ©dure pour Ã©crire un polygone en SVG }
 Procedure WriteSVGPolygon(Var F: Text; Const Shape: TShapeObject);
 Var
  Points: String;
  I: Integer;
 Begin
  If Shape.PointCount < 2 Then Exit;
- 
+
  Points := '';
  For I := 1 to Shape.PointCount do Begin
   If I > 1 Then Points := Points + ' ';
   Points := Points + IntToStrSVG(Shape.Points[I].X) + ',' + IntToStrSVG(Shape.Points[I].Y);
  End;
- 
+
  WriteLn(F, '  <polygon points="' + Points + '" ' + ShapeToSVGStyle(Shape) + ' />');
 End;
 
-{ Procédure pour écrire un texte en SVG }
+{ ProcÃ©dure pour Ã©crire un texte en SVG }
 Procedure WriteSVGText(Var F: Text; Const Shape: TShapeObject);
 Var
  Style: String;
 Begin
  Style := 'style="';
- 
+
  { Couleur du texte }
  If Shape.FillColor >= 0 Then
   Style := Style + 'fill:' + ColorToSVGHex(Shape.FillColor) + ';'
  Else
   Style := Style + 'fill:#000000;';
- 
- { Taille de police estimée }
+
+ { Taille de police estimÃ©e }
  Style := Style + 'font-size:14px;font-family:sans-serif;"';
- 
- WriteLn(F, '  <text x="' + IntToStrSVG(Shape.X1) + '" y="' + IntToStrSVG(Shape.Y2) + 
+
+ WriteLn(F, '  <text x="' + IntToStrSVG(Shape.X1) + '" y="' + IntToStrSVG(Shape.Y2) +
             '" ' + Style + '>' + Shape.Text + '</text>');
 End;
 
-{ Procédure pour écrire un connecteur en SVG (comme une ligne avec des marqueurs) }
+{ ProcÃ©dure pour Ã©crire un connecteur en SVG (comme une ligne avec des marqueurs) }
 Procedure WriteSVGConnector(Var F: Text; Const Shape: TShapeObject);
 Begin
- { Les connecteurs sont exportés comme des lignes simples }
- WriteLn(F, '  <line x1="' + IntToStrSVG(Shape.X1) + '" y1="' + IntToStrSVG(Shape.Y1) + 
-            '" x2="' + IntToStrSVG(Shape.X2) + '" y2="' + IntToStrSVG(Shape.Y2) + 
+ { Les connecteurs sont exportÃ©s comme des lignes simples }
+ WriteLn(F, '  <line x1="' + IntToStrSVG(Shape.X1) + '" y1="' + IntToStrSVG(Shape.Y1) +
+            '" x2="' + IntToStrSVG(Shape.X2) + '" y2="' + IntToStrSVG(Shape.Y2) +
             '" ' + ShapeToSVGStyle(Shape) + ' marker-end="url(#arrowhead)" />');
 End;
 
-{ Procédure pour écrire une courbe de Bézier en SVG }
+{ ProcÃ©dure pour Ã©crire une courbe de BÃ©zier en SVG }
 Procedure WriteSVGBezier(Var F: Text; Const Shape: TShapeObject);
 Var
  PathData: String;
  I: Integer;
 Begin
  If Shape.PointCount < 2 Then Exit;
- 
- { Créer un chemin avec des segments de ligne pour simplifier }
+
+ { CrÃ©er un chemin avec des segments de ligne pour simplifier }
  PathData := 'M' + IntToStrSVG(Shape.Points[1].X) + ',' + IntToStrSVG(Shape.Points[1].Y);
- 
+
  For I := 2 to Shape.PointCount do
   PathData := PathData + ' L' + IntToStrSVG(Shape.Points[I].X) + ',' + IntToStrSVG(Shape.Points[I].Y);
- 
+
  WriteLn(F, '  <path d="' + PathData + '" ' + ShapeToSVGStyle(Shape) + ' />');
 End;
 
@@ -3331,17 +3345,17 @@ Var
  Width, Height: Integer;
 Begin
  SaveSVGFile := False;
- 
+
  Assign(F, FileName);
  {$I-}
  Rewrite(F);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  { Calculer les dimensions du dessin }
  MinX := 32767; MinY := 32767;
  MaxX := 0; MaxY := 0;
- 
+
  For I := 1 to ShapeCount do Begin
   If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
   If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
@@ -3352,7 +3366,7 @@ Begin
   If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
   If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
  End;
- 
+
  If ShapeCount = 0 Then Begin
   Width := 800;
   Height := 600;
@@ -3363,28 +3377,28 @@ Begin
   If Width < 100 Then Width := 100;
   If Height < 100 Then Height := 100;
  End;
- 
- { Écrire l'en-tête XML et SVG }
+
+ { Ã‰crire l'en-tÃªte XML et SVG }
  WriteLn(F, '<?xml version="1.0" encoding="UTF-8"?>');
  WriteLn(F, '<svg xmlns="http://www.w3.org/2000/svg" version="1.1"');
  WriteLn(F, '     width="' + IntToStrSVG(Width) + '" height="' + IntToStrSVG(Height) + '"');
- WriteLn(F, '     viewBox="' + IntToStrSVG(MinX - 10) + ' ' + IntToStrSVG(MinY - 10) + 
+ WriteLn(F, '     viewBox="' + IntToStrSVG(MinX - 10) + ' ' + IntToStrSVG(MinY - 10) +
             ' ' + IntToStrSVG(Width) + ' ' + IntToStrSVG(Height) + '">');
  WriteLn(F, '');
- 
- { Définir les marqueurs pour les connecteurs }
+
+ { DÃ©finir les marqueurs pour les connecteurs }
  WriteLn(F, '  <defs>');
  WriteLn(F, '    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">');
  WriteLn(F, '      <polygon points="0 0, 10 3.5, 0 7" fill="#000000" />');
  WriteLn(F, '    </marker>');
  WriteLn(F, '  </defs>');
  WriteLn(F, '');
- 
+
  { Ajouter un commentaire avec les informations du document }
  WriteLn(F, '  <!-- Generated by CloneDRAW VISIO -->');
  WriteLn(F, '');
- 
- { Écrire chaque forme }
+
+ { Ã‰crire chaque forme }
  For I := 1 to ShapeCount do Begin
   Case Shapes[I].ShapeType of
    stRectangle: WriteSVGRect(F, Shapes[I]);
@@ -3394,14 +3408,14 @@ Begin
    stText: WriteSVGText(F, Shapes[I]);
    stPolygon: WriteSVGPolygon(F, Shapes[I]);
    stBezier: WriteSVGBezier(F, Shapes[I]);
-   { stImage n'est pas exporté directement car nécessite l'inclusion de l'image }
+   { stImage n'est pas exportÃ© directement car nÃ©cessite l'inclusion de l'image }
   End;
  End;
- 
+
  { Fermer le document SVG }
  WriteLn(F, '');
  WriteLn(F, '</svg>');
- 
+
  Close(F);
  SaveSVGFile := True;
 End;
@@ -3428,7 +3442,7 @@ Begin
  GetBMPRowSize := ((RowBits + 31) Div 32) * 4;
 End;
 
-{ Procédure pour écrire un Word (2 octets) en little-endian }
+{ ProcÃ©dure pour Ã©crire un Word (2 octets) en little-endian }
 Procedure WriteWord(Var F: File; W: Word);
 Var
  B: Array[0..1] of Byte;
@@ -3438,7 +3452,7 @@ Begin
  BlockWrite(F, B, 2);
 End;
 
-{ Procédure pour écrire un LongInt (4 octets) en little-endian }
+{ ProcÃ©dure pour Ã©crire un LongInt (4 octets) en little-endian }
 Procedure WriteDWord(Var F: File; D: LongInt);
 Var
  B: Array[0..3] of Byte;
@@ -3450,7 +3464,7 @@ Begin
  BlockWrite(F, B, 4);
 End;
 
-{ Procédure pour écrire un octet }
+{ ProcÃ©dure pour Ã©crire un octet }
 Procedure WriteByte(Var F: File; B: Byte);
 Begin
  BlockWrite(F, B, 1);
@@ -3468,7 +3482,7 @@ Begin
   5:  Begin R := 170; G := 0;   B := 170; End;  { Magenta }
   6:  Begin R := 170; G := 85;  B := 0;   End;  { Marron }
   7:  Begin R := 170; G := 170; B := 170; End;  { Gris clair }
-  8:  Begin R := 85;  G := 85;  B := 85;  End;  { Gris foncé }
+  8:  Begin R := 85;  G := 85;  B := 85;  End;  { Gris foncÃ© }
   9:  Begin R := 85;  G := 85;  B := 255; End;  { Bleu clair }
   10: Begin R := 85;  G := 255; B := 85;  End;  { Vert clair }
   11: Begin R := 85;  G := 255; B := 255; End;  { Cyan clair }
@@ -3477,12 +3491,12 @@ Begin
   14: Begin R := 255; G := 255; B := 85;  End;  { Jaune }
   15: Begin R := 255; G := 255; B := 255; End;  { Blanc }
  Else
-  Begin R := 0; G := 0; B := 0; End;  { Noir par défaut }
+  Begin R := 0; G := 0; B := 0; End;  { Noir par dÃ©faut }
  End;
 End;
 
-{ Procédure pour écrire l'en-tête BMP (BITMAPFILEHEADER + BITMAPINFOHEADER) }
-Procedure WriteBMPHeader(Var F: File; Width, Height: Integer; BitsPerPixel: Integer; 
+{ ProcÃ©dure pour Ã©crire l'en-tÃªte BMP (BITMAPFILEHEADER + BITMAPINFOHEADER) }
+Procedure WriteBMPHeader(Var F: File; Width, Height: Integer; BitsPerPixel: Integer;
                          PaletteSize: Integer);
 Var
  RowSize: LongInt;
@@ -3496,16 +3510,16 @@ Begin
  HeaderSize := 14 + 40;  { BITMAPFILEHEADER + BITMAPINFOHEADER }
  OffsetBits := HeaderSize + (LongInt(PaletteSize) * 4);
  FileSize := OffsetBits + ImageSize;
- 
+
  { BITMAPFILEHEADER (14 octets) }
  WriteWord(F, BMP_SIGNATURE);   { bfType: 'BM' }
  WriteDWord(F, FileSize);       { bfSize: taille totale du fichier }
  WriteWord(F, 0);               { bfReserved1 }
  WriteWord(F, 0);               { bfReserved2 }
- WriteDWord(F, OffsetBits);     { bfOffBits: offset vers les données }
- 
+ WriteDWord(F, OffsetBits);     { bfOffBits: offset vers les donnÃ©es }
+
  { BITMAPINFOHEADER (40 octets) }
- WriteDWord(F, 40);             { biSize: taille de l'en-tête }
+ WriteDWord(F, 40);             { biSize: taille de l'en-tÃªte }
  WriteDWord(F, Width);          { biWidth }
  WriteDWord(F, Height);         { biHeight (positif = bottom-up) }
  WriteWord(F, 1);               { biPlanes }
@@ -3518,7 +3532,7 @@ Begin
  WriteDWord(F, 0);              { biClrImportant }
 End;
 
-{ Procédure pour écrire la palette 16 couleurs standard }
+{ ProcÃ©dure pour Ã©crire la palette 16 couleurs standard }
 Procedure WritePalette16(Var F: File);
 Var
  I: Integer;
@@ -3529,18 +3543,18 @@ Begin
   WriteByte(F, B);  { Bleu }
   WriteByte(F, G);  { Vert }
   WriteByte(F, R);  { Rouge }
-  WriteByte(F, 0);  { Réservé }
+  WriteByte(F, 0);  { RÃ©servÃ© }
  End;
 End;
 
-{ Procédure pour écrire la palette 256 couleurs (16 + niveaux de gris) }
+{ ProcÃ©dure pour Ã©crire la palette 256 couleurs (16 + niveaux de gris) }
 Procedure WritePalette256(Var F: File);
 Var
  I: Integer;
  R, G, B: Byte;
  Gray: Byte;
 Begin
- { Les 16 premières couleurs sont la palette standard }
+ { Les 16 premiÃ¨res couleurs sont la palette standard }
  For I := 0 to 15 do Begin
   PaletteToRGB(I, R, G, B);
   WriteByte(F, B);
@@ -3548,7 +3562,7 @@ Begin
   WriteByte(F, R);
   WriteByte(F, 0);
  End;
- 
+
  { Les couleurs 16-255 sont des niveaux de gris }
  For I := 16 to 255 do Begin
   Gray := (I - 16) + (I - 16) Div 15;  { Distribution des niveaux de gris }
@@ -3559,7 +3573,7 @@ Begin
  End;
 End;
 
-{ Procédure pour écrire la palette monochrome (noir et blanc) }
+{ ProcÃ©dure pour Ã©crire la palette monochrome (noir et blanc) }
 Procedure WritePalette2(Var F: File);
 Begin
  { Couleur 0: Noir }
@@ -3567,7 +3581,7 @@ Begin
  WriteByte(F, 0);
  WriteByte(F, 0);
  WriteByte(F, 0);
- 
+
  { Couleur 1: Blanc }
  WriteByte(F, 255);
  WriteByte(F, 255);
@@ -3595,7 +3609,7 @@ Begin
  FillChar(PixelBuffer^, SizeOf(TPixelBuffer), 15);  { Remplir de blanc }
 End;
 
-{ Libérer le buffer de pixels }
+{ LibÃ©rer le buffer de pixels }
 Procedure FreePixelBuffer;
 Begin
  If PixelBuffer <> Nil Then Begin
@@ -3604,7 +3618,7 @@ Begin
  End;
 End;
 
-{ Définir un pixel dans le buffer }
+{ DÃ©finir un pixel dans le buffer }
 Procedure SetBufferPixel(X, Y: Integer; Color: Byte);
 Begin
  If (X >= 0) And (X < BufferWidth) And (Y >= 0) And (Y < BufferHeight) Then
@@ -3621,7 +3635,7 @@ Begin
  If X1 < X2 Then SX := 1 Else SX := -1;
  If Y1 < Y2 Then SY := 1 Else SY := -1;
  Err := DX - DY;
- 
+
  While True do Begin
   SetBufferPixel(X1, Y1, Color);
   If (X1 = X2) And (Y1 = Y2) Then Break;
@@ -3645,13 +3659,13 @@ Begin
  { S'assurer que X1 <= X2 et Y1 <= Y2 }
  If X1 > X2 Then Begin Temp := X1; X1 := X2; X2 := Temp; End;
  If Y1 > Y2 Then Begin Temp := Y1; Y1 := Y2; Y2 := Temp; End;
- 
+
  { Remplissage }
  If FillColor < 255 Then
   For Y := Y1 to Y2 do
    For X := X1 to X2 do
     SetBufferPixel(X, Y, FillColor);
- 
+
  { Contour }
  If LineColor < 255 Then Begin
   For X := X1 to X2 do Begin
@@ -3675,10 +3689,10 @@ Var
  PX, PY: Integer;
 Begin
  If (RX <= 0) Or (RY <= 0) Then Exit;
- 
+
  RX2 := LongInt(RX) * LongInt(RX);
  RY2 := LongInt(RY) * LongInt(RY);
- 
+
  { Remplissage simple avec des lignes horizontales }
  If FillColor < 255 Then Begin
   For Y := -RY to RY do Begin
@@ -3687,19 +3701,19 @@ Begin
     SetBufferPixel(X, CY + Y, FillColor);
   End;
  End;
- 
+
  { Contour - Algorithme de Bresenham pour ellipse }
  If LineColor < 255 Then Begin
   X := 0;
   Y := RY;
   P := RY2 - RX2 * RY + RX2 Div 4;
-  
+
   While 2 * RY2 * X <= 2 * RX2 * Y do Begin
    SetBufferPixel(CX + X, CY + Y, LineColor);
    SetBufferPixel(CX - X, CY + Y, LineColor);
    SetBufferPixel(CX + X, CY - Y, LineColor);
    SetBufferPixel(CX - X, CY - Y, LineColor);
-   
+
    If P < 0 Then Begin
     X := X + 1;
     P := P + 2 * RY2 * X + RY2;
@@ -3710,14 +3724,14 @@ Begin
     P := P + 2 * RY2 * X - 2 * RX2 * Y + RY2;
    End;
   End;
-  
+
   P := RY2 * (X * X + X) + RX2 * (Y - 1) * (Y - 1) - RX2 * RY2;
   While Y >= 0 do Begin
    SetBufferPixel(CX + X, CY + Y, LineColor);
    SetBufferPixel(CX - X, CY + Y, LineColor);
    SetBufferPixel(CX + X, CY - Y, LineColor);
    SetBufferPixel(CX - X, CY - Y, LineColor);
-   
+
    If P > 0 Then Begin
     Y := Y - 1;
     P := P - 2 * RX2 * Y + RX2;
@@ -3732,19 +3746,19 @@ Begin
 End;
 
 { Dessiner un polygone dans le buffer }
-Procedure DrawBufferPolygon(Const Points: TPointArray; PointCount: Integer; 
+Procedure DrawBufferPolygon(Const Points: TPointArray; PointCount: Integer;
                             FillColor, LineColor: Byte);
 Var
  I: Integer;
 Begin
  If PointCount < 2 Then Exit;
- 
+
  { Dessiner les lignes du contour }
  If LineColor < 255 Then Begin
   For I := 1 to PointCount - 1 do
    DrawBufferLine(Points[I].X, Points[I].Y, Points[I+1].X, Points[I+1].Y, LineColor);
   { Fermer le polygone }
-  DrawBufferLine(Points[PointCount].X, Points[PointCount].Y, 
+  DrawBufferLine(Points[PointCount].X, Points[PointCount].Y,
                  Points[1].X, Points[1].Y, LineColor);
  End;
 End;
@@ -3757,14 +3771,14 @@ Var
  FC, LC: Byte;
 Begin
  For I := 1 to ShapeCount do Begin
-  { Convertir les couleurs (utiliser 15/blanc si négatif) }
+  { Convertir les couleurs (utiliser 15/blanc si nÃ©gatif) }
   If Shapes[I].FillColor >= 0 Then FC := Shapes[I].FillColor Else FC := 255;
   If Shapes[I].LineColor >= 0 Then LC := Shapes[I].LineColor Else LC := 0;
-  
+
   Case Shapes[I].ShapeType of
    stRectangle:
     DrawBufferRect(Shapes[I].X1, Shapes[I].Y1, Shapes[I].X2, Shapes[I].Y2, FC, LC);
-   
+
    stEllipse: Begin
     CX := (Shapes[I].X1 + Shapes[I].X2) Div 2;
     CY := (Shapes[I].Y1 + Shapes[I].Y2) Div 2;
@@ -3772,10 +3786,10 @@ Begin
     RY := Abs(Shapes[I].Y2 - Shapes[I].Y1) Div 2;
     DrawBufferEllipse(CX, CY, RX, RY, FC, LC);
    End;
-   
+
    stLine, stConnector:
     DrawBufferLine(Shapes[I].X1, Shapes[I].Y1, Shapes[I].X2, Shapes[I].Y2, LC);
-   
+
    stPolygon, stBezier:
     DrawBufferPolygon(Shapes[I].Points, Shapes[I].PointCount, FC, LC);
   End;
@@ -3794,19 +3808,19 @@ Var
 Begin
  SaveBMP24Bit := False;
  PadByte := 0;
- 
+
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  RowSize := GetBMPRowSize(Width, 24);
  Padding := RowSize - (Width * 3);
- 
+
  WriteBMPHeader(F, Width, Height, 24, 0);
- 
- { Écrire les pixels (bottom-up) }
+
+ { Ã‰crire les pixels (bottom-up) }
  For Y := Height - 1 downto 0 do Begin
   For X := 0 to Width - 1 do Begin
    PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
@@ -3818,7 +3832,7 @@ Begin
   For X := 1 to Padding do
    WriteByte(F, PadByte);
  End;
- 
+
  Close(F);
  SaveBMP24Bit := True;
 End;
@@ -3834,20 +3848,20 @@ Var
 Begin
  SaveBMP8Bit := False;
  PadByte := 0;
- 
+
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  RowSize := GetBMPRowSize(Width, 8);
  Padding := RowSize - Width;
- 
+
  WriteBMPHeader(F, Width, Height, 8, 256);
  WritePalette256(F);
- 
- { Écrire les pixels (bottom-up) }
+
+ { Ã‰crire les pixels (bottom-up) }
  For Y := Height - 1 downto 0 do Begin
   For X := 0 to Width - 1 do
    WriteByte(F, PixelBuffer^[Y, X]);
@@ -3855,7 +3869,7 @@ Begin
   For X := 1 to Padding do
    WriteByte(F, PadByte);
  End;
- 
+
  Close(F);
  SaveBMP8Bit := True;
 End;
@@ -3873,27 +3887,27 @@ Var
 Begin
  SaveBMP4Bit := False;
  PadByte := 0;
- 
+
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  RowSize := GetBMPRowSize(Width, 4);
  BytesPerRow := (Width + 1) Div 2;
  Padding := RowSize - BytesPerRow;
- 
+
  WriteBMPHeader(F, Width, Height, 4, 16);
  WritePalette16(F);
- 
- { Écrire les pixels (bottom-up, 2 pixels par octet) }
+
+ { Ã‰crire les pixels (bottom-up, 2 pixels par octet) }
  For Y := Height - 1 downto 0 do Begin
   X := 0;
   While X < Width do Begin
    { Premier pixel (4 bits de poids fort) }
    PixelPair := (PixelBuffer^[Y, X] And $0F) Shl 4;
-   { Deuxième pixel (4 bits de poids faible) }
+   { DeuxiÃ¨me pixel (4 bits de poids faible) }
    If X + 1 < Width Then
     PixelPair := PixelPair Or (PixelBuffer^[Y, X + 1] And $0F);
    WriteByte(F, PixelPair);
@@ -3903,7 +3917,7 @@ Begin
   For X := 1 to Padding do
    WriteByte(F, PadByte);
  End;
- 
+
  Close(F);
  SaveBMP4Bit := True;
 End;
@@ -3922,30 +3936,30 @@ Var
 Begin
  SaveBMP1Bit := False;
  PadByte := 0;
- 
+
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
  {$I+}
  If IOResult <> 0 Then Exit;
- 
+
  RowSize := GetBMPRowSize(Width, 1);
  BytesPerRow := (Width + 7) Div 8;
  Padding := RowSize - BytesPerRow;
- 
+
  WriteBMPHeader(F, Width, Height, 1, 2);
  WritePalette2(F);
- 
- { Écrire les pixels (bottom-up, 8 pixels par octet) }
+
+ { Ã‰crire les pixels (bottom-up, 8 pixels par octet) }
  For Y := Height - 1 downto 0 do Begin
   ByteVal := 0;
   BitPos := 7;
-  
+
   For X := 0 to Width - 1 do Begin
-   { Convertir en noir (0) ou blanc (1) basé sur la luminosité }
+   { Convertir en noir (0) ou blanc (1) basÃ© sur la luminositÃ© }
    If PixelBuffer^[Y, X] >= 8 Then  { Couleurs 8-15 sont "claires" }
     ByteVal := ByteVal Or (1 Shl BitPos);
-   
+
    Dec(BitPos);
    If BitPos < 0 Then Begin
     WriteByte(F, ByteVal);
@@ -3953,22 +3967,22 @@ Begin
     BitPos := 7;
    End;
   End;
-  
-  { Écrire le dernier octet partiel si nécessaire }
+
+  { Ã‰crire le dernier octet partiel si nÃ©cessaire }
   If BitPos < 7 Then
    WriteByte(F, ByteVal);
-  
+
   { Padding }
   For X := 1 to Padding do
    WriteByte(F, PadByte);
  End;
- 
+
  Close(F);
  SaveBMP1Bit := True;
 End;
 
 { Fonction principale pour sauvegarder un fichier BMP }
-{ BitsPerPixel peut être 1, 4, 8, ou 24 }
+{ BitsPerPixel peut Ãªtre 1, 4, 8, ou 24 }
 Function SaveBMPFile(Const FileName: String; BitsPerPixel: Integer): Boolean;
 Var
  MinX, MinY, MaxX, MaxY: Integer;
@@ -3976,11 +3990,11 @@ Var
  I: Integer;
 Begin
  SaveBMPFile := False;
- 
+
  { Calculer les dimensions du dessin }
  MinX := 32767; MinY := 32767;
  MaxX := 0; MaxY := 0;
- 
+
  For I := 1 to ShapeCount do Begin
   If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
   If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
@@ -3991,7 +4005,7 @@ Begin
   If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
   If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
  End;
- 
+
  If ShapeCount = 0 Then Begin
   Width := 640;
   Height := 480;
@@ -4004,24 +4018,24 @@ Begin
   If Width < 100 Then Width := 100;
   If Height < 100 Then Height := 100;
  End;
- 
+
  { Limiter les dimensions }
  If Width > 2048 Then Width := 2048;
  If Height > 2048 Then Height := 2048;
- 
+
  { Initialiser le buffer et rendre les formes }
  InitPixelBuffer(Width, Height);
- 
- { Décaler les formes pour qu'elles commencent à (10, 10) }
+
+ { DÃ©caler les formes pour qu'elles commencent Ã  (10, 10) }
  For I := 1 to ShapeCount do Begin
   Shapes[I].X1 := Shapes[I].X1 - MinX + 10;
   Shapes[I].Y1 := Shapes[I].Y1 - MinY + 10;
   Shapes[I].X2 := Shapes[I].X2 - MinX + 10;
   Shapes[I].Y2 := Shapes[I].Y2 - MinY + 10;
  End;
- 
+
  RenderShapesToBuffer;
- 
+
  { Restaurer les positions originales }
  For I := 1 to ShapeCount do Begin
   Shapes[I].X1 := Shapes[I].X1 + MinX - 10;
@@ -4029,7 +4043,7 @@ Begin
   Shapes[I].X2 := Shapes[I].X2 + MinX - 10;
   Shapes[I].Y2 := Shapes[I].Y2 + MinY - 10;
  End;
- 
+
  { Exporter selon le nombre de bits }
  Case BitsPerPixel of
   1:  SaveBMPFile := SaveBMP1Bit(FileName, Width, Height);
@@ -4037,9 +4051,9 @@ Begin
   8:  SaveBMPFile := SaveBMP8Bit(FileName, Width, Height);
   24: SaveBMPFile := SaveBMP24Bit(FileName, Width, Height);
  Else
-  SaveBMPFile := SaveBMP24Bit(FileName, Width, Height);  { Par défaut: 24-bit }
+  SaveBMPFile := SaveBMP24Bit(FileName, Width, Height);  { Par dÃ©faut: 24-bit }
  End;
- 
+
  FreePixelBuffer;
 End;
 
@@ -4056,7 +4070,7 @@ Const
  GIF_SIGNATURE = 'GIF';
  GIF_VERSION = '89a';
  GIF_TRAILER = $3B;         { Terminateur GIF ';' }
- GIF_IMAGE_SEPARATOR = $2C; { Séparateur d'image ',' }
+ GIF_IMAGE_SEPARATOR = $2C; { SÃ©parateur d'image ',' }
  GIF_EXTENSION = $21;       { Extension '!' }
  GIF_GCE_LABEL = $F9;       { Label Graphics Control Extension }
  GIF_MAX_CODE_SIZE = 12;    { Taille maximale du code LZW }
@@ -4080,7 +4094,7 @@ Var
  LZWByteBuffer: Array[0..254] of Byte;
  LZWByteCount: Integer;
 
-{ Procédure pour initialiser la table LZW }
+{ ProcÃ©dure pour initialiser la table LZW }
 Procedure InitLZWTable(ColorBits: Integer);
 Var
  I: Integer;
@@ -4092,22 +4106,22 @@ Begin
  LZWBitBuffer := 0;
  LZWBitsInBuffer := 0;
  LZWByteCount := 0;
- 
- { Initialiser les codes de base (0 à 255) }
+
+ { Initialiser les codes de base (0 Ã  255) }
  For I := 0 to LZWClearCode - 1 do Begin
   LZWTable[I].Prefix := -1;
   LZWTable[I].Suffix := I;
  End;
 End;
 
-{ Procédure pour réinitialiser la table LZW }
+{ ProcÃ©dure pour rÃ©initialiser la table LZW }
 Procedure ResetLZWTable(ColorBits: Integer);
 Begin
  LZWCodeSize := ColorBits + 1;
  LZWNextCode := LZWEOICode + 1;
 End;
 
-{ Procédure pour écrire un sous-bloc de données }
+{ ProcÃ©dure pour Ã©crire un sous-bloc de donnÃ©es }
 Procedure FlushLZWByteBuffer(Var F: File);
 Begin
  If LZWByteCount > 0 Then Begin
@@ -4117,35 +4131,35 @@ Begin
  End;
 End;
 
-{ Procédure pour écrire un code LZW }
+{ ProcÃ©dure pour Ã©crire un code LZW }
 Procedure WriteLZWCode(Var F: File; Code: Integer);
 Begin
  LZWBitBuffer := LZWBitBuffer Or (LongInt(Code) Shl LZWBitsInBuffer);
  LZWBitsInBuffer := LZWBitsInBuffer + LZWCodeSize;
- 
+
  While LZWBitsInBuffer >= 8 do Begin
   LZWByteBuffer[LZWByteCount] := LZWBitBuffer And $FF;
   Inc(LZWByteCount);
   LZWBitBuffer := LZWBitBuffer Shr 8;
   LZWBitsInBuffer := LZWBitsInBuffer - 8;
-  
+
   If LZWByteCount >= 254 Then
    FlushLZWByteBuffer(F);
  End;
 End;
 
-{ Procédure pour terminer l'écriture LZW }
+{ ProcÃ©dure pour terminer l'Ã©criture LZW }
 Procedure FinishLZWOutput(Var F: File);
 Begin
- { Écrire les bits restants }
+ { Ã‰crire les bits restants }
  If LZWBitsInBuffer > 0 Then Begin
   LZWByteBuffer[LZWByteCount] := LZWBitBuffer And $FF;
   Inc(LZWByteCount);
  End;
- 
+
  FlushLZWByteBuffer(F);
- 
- { Écrire le bloc terminateur (taille 0) }
+
+ { Ã‰crire le bloc terminateur (taille 0) }
  WriteByte(F, 0);
 End;
 
@@ -4163,7 +4177,7 @@ Begin
  End;
 End;
 
-{ Fonction pour ajouter un code à la table LZW }
+{ Fonction pour ajouter un code Ã  la table LZW }
 Function AddLZWCode(Prefix: Integer; Suffix: Byte): Integer;
 Begin
  If LZWNextCode < 4096 Then Begin
@@ -4171,8 +4185,8 @@ Begin
   LZWTable[LZWNextCode].Suffix := Suffix;
   AddLZWCode := LZWNextCode;
   Inc(LZWNextCode);
-  
-  { Augmenter la taille du code si nécessaire }
+
+  { Augmenter la taille du code si nÃ©cessaire }
   If (LZWNextCode > (1 Shl LZWCodeSize)) And (LZWCodeSize < GIF_MAX_CODE_SIZE) Then
    Inc(LZWCodeSize);
  End
@@ -4180,7 +4194,7 @@ Begin
   AddLZWCode := -1;
 End;
 
-{ Procédure pour écrire l'en-tête GIF }
+{ ProcÃ©dure pour Ã©crire l'en-tÃªte GIF }
 Procedure WriteGIFHeader(Var F: File; Width, Height: Integer; ColorBits: Integer);
 Var
  PackedByte: Byte;
@@ -4188,28 +4202,28 @@ Begin
  { Signature et version "GIF89a" }
  BlockWrite(F, GIF_SIGNATURE[1], 3);
  BlockWrite(F, GIF_VERSION[1], 3);
- 
+
  { Logical Screen Descriptor }
  WriteWord(F, Width);         { Largeur }
  WriteWord(F, Height);        { Hauteur }
- 
+
  { Packed byte: Global Color Table Flag (1), Color Resolution (3), Sort Flag (1), Size of Global Color Table (3) }
- PackedByte := $80;                          { Global Color Table présente }
+ PackedByte := $80;                          { Global Color Table prÃ©sente }
  PackedByte := PackedByte Or ((ColorBits - 1) Shl 4);  { Color Resolution }
  PackedByte := PackedByte Or (ColorBits - 1);          { Size of Global Color Table }
  WriteByte(F, PackedByte);
- 
+
  WriteByte(F, 0);             { Background Color Index }
  WriteByte(F, 0);             { Pixel Aspect Ratio }
 End;
 
-{ Procédure pour écrire la palette GIF (Global Color Table) }
+{ ProcÃ©dure pour Ã©crire la palette GIF (Global Color Table) }
 Procedure WriteGIFPalette(Var F: File; TransparentIndex: Integer);
 Var
  I: Integer;
  R, G, B: Byte;
 Begin
- { Écrire les 256 couleurs }
+ { Ã‰crire les 256 couleurs }
  For I := 0 to 255 do Begin
   If I < 16 Then Begin
    PaletteToRGB(I, R, G, B);
@@ -4220,14 +4234,14 @@ Begin
    G := R;
    B := R;
   End;
-  
+
   WriteByte(F, R);
   WriteByte(F, G);
   WriteByte(F, B);
  End;
 End;
 
-{ Procédure pour écrire l'extension de contrôle graphique (transparence) }
+{ ProcÃ©dure pour Ã©crire l'extension de contrÃ´le graphique (transparence) }
 Procedure WriteGIFGCE(Var F: File; TransparentIndex: Integer; HasTransparency: Boolean);
 Var
  PackedByte: Byte;
@@ -4235,25 +4249,25 @@ Begin
  WriteByte(F, GIF_EXTENSION);    { Extension Introducer }
  WriteByte(F, GIF_GCE_LABEL);    { Graphics Control Label }
  WriteByte(F, 4);                { Block Size (toujours 4) }
- 
+
  { Packed byte: Reserved (3), Disposal Method (3), User Input (1), Transparent Color Flag (1) }
  If HasTransparency Then
   PackedByte := $01  { Transparent Color Flag = 1 }
  Else
   PackedByte := $00;
  WriteByte(F, PackedByte);
- 
+
  WriteWord(F, 0);                { Delay Time (pas d'animation) }
- 
+
  If HasTransparency Then
   WriteByte(F, TransparentIndex) { Transparent Color Index }
  Else
   WriteByte(F, 0);
- 
+
  WriteByte(F, 0);                { Block Terminator }
 End;
 
-{ Procédure pour écrire le descripteur d'image }
+{ ProcÃ©dure pour Ã©crire le descripteur d'image }
 Procedure WriteGIFImageDescriptor(Var F: File; Width, Height: Integer);
 Begin
  WriteByte(F, GIF_IMAGE_SEPARATOR);  { Image Separator ',' }
@@ -4264,7 +4278,7 @@ Begin
  WriteByte(F, 0);                     { Packed byte: pas de Local Color Table }
 End;
 
-{ Procédure pour écrire les données d'image compressées LZW }
+{ ProcÃ©dure pour Ã©crire les donnÃ©es d'image compressÃ©es LZW }
 Procedure WriteGIFImageData(Var F: File; Width, Height: Integer; ColorBits: Integer);
 Var
  X, Y: Integer;
@@ -4274,53 +4288,53 @@ Var
 Begin
  { LZW Minimum Code Size }
  WriteByte(F, ColorBits);
- 
+
  { Initialiser la table LZW }
  InitLZWTable(ColorBits);
- 
- { Écrire le code Clear }
+
+ { Ã‰crire le code Clear }
  WriteLZWCode(F, LZWClearCode);
- 
+
  { Encoder les pixels }
  CurrentCode := -1;
- 
+
  For Y := 0 to Height - 1 do Begin
   For X := 0 to Width - 1 do Begin
    Pixel := PixelBuffer^[Y, X];
-   
+
    If CurrentCode = -1 Then
     CurrentCode := Pixel
    Else Begin
     NewCode := FindLZWCode(CurrentCode, Pixel);
-    
+
     If NewCode >= 0 Then
      CurrentCode := NewCode
     Else Begin
-     { Écrire le code actuel }
+     { Ã‰crire le code actuel }
      WriteLZWCode(F, CurrentCode);
-     
-     { Ajouter le nouveau code à la table }
+
+     { Ajouter le nouveau code Ã  la table }
      If LZWNextCode < 4096 Then
       AddLZWCode(CurrentCode, Pixel)
      Else Begin
-      { Table pleine, émettre un code Clear et réinitialiser }
+      { Table pleine, Ã©mettre un code Clear et rÃ©initialiser }
       WriteLZWCode(F, LZWClearCode);
       ResetLZWTable(ColorBits);
      End;
-     
+
      CurrentCode := Pixel;
     End;
    End;
   End;
  End;
- 
- { Écrire le dernier code }
+
+ { Ã‰crire le dernier code }
  If CurrentCode >= 0 Then
   WriteLZWCode(F, CurrentCode);
- 
- { Écrire le code End of Information }
+
+ { Ã‰crire le code End of Information }
  WriteLZWCode(F, LZWEOICode);
- 
+
  { Terminer la sortie LZW }
  FinishLZWOutput(F);
 End;
@@ -4339,11 +4353,11 @@ Begin
  SaveGIFFile := False;
  ColorBits := 8;  { 256 couleurs }
  HasTransparency := (TransparentIndex >= 0) And (TransparentIndex <= 255);
- 
+
  { Calculer les dimensions du dessin }
  MinX := 32767; MinY := 32767;
  MaxX := 0; MaxY := 0;
- 
+
  For I := 1 to ShapeCount do Begin
   If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
   If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
@@ -4354,7 +4368,7 @@ Begin
   If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
   If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
  End;
- 
+
  If ShapeCount = 0 Then Begin
   Width := 640;
   Height := 480;
@@ -4367,28 +4381,28 @@ Begin
   If Width < 100 Then Width := 100;
   If Height < 100 Then Height := 100;
  End;
- 
+
  { Limiter les dimensions }
  If Width > 2048 Then Width := 2048;
  If Height > 2048 Then Height := 2048;
- 
+
  { Initialiser le buffer et rendre les formes }
  InitPixelBuffer(Width, Height);
- 
+
  { Si transparence, initialiser avec la couleur transparente }
  If HasTransparency Then
   FillChar(PixelBuffer^, SizeOf(TPixelBuffer), TransparentIndex);
- 
- { Décaler les formes pour qu'elles commencent à (10, 10) }
+
+ { DÃ©caler les formes pour qu'elles commencent Ã  (10, 10) }
  For I := 1 to ShapeCount do Begin
   Shapes[I].X1 := Shapes[I].X1 - MinX + 10;
   Shapes[I].Y1 := Shapes[I].Y1 - MinY + 10;
   Shapes[I].X2 := Shapes[I].X2 - MinX + 10;
   Shapes[I].Y2 := Shapes[I].Y2 - MinY + 10;
  End;
- 
+
  RenderShapesToBuffer;
- 
+
  { Restaurer les positions originales }
  For I := 1 to ShapeCount do Begin
   Shapes[I].X1 := Shapes[I].X1 + MinX - 10;
@@ -4396,7 +4410,7 @@ Begin
   Shapes[I].X2 := Shapes[I].X2 + MinX - 10;
   Shapes[I].Y2 := Shapes[I].Y2 + MinY - 10;
  End;
- 
+
  { Ouvrir le fichier }
  Assign(F, FileName);
  {$I-}
@@ -4406,25 +4420,25 @@ Begin
   FreePixelBuffer;
   Exit;
  End;
- 
- { Écrire l'en-tête GIF }
+
+ { Ã‰crire l'en-tÃªte GIF }
  WriteGIFHeader(F, Width, Height, ColorBits);
- 
- { Écrire la palette globale }
+
+ { Ã‰crire la palette globale }
  WriteGIFPalette(F, TransparentIndex);
- 
- { Écrire l'extension de contrôle graphique (pour transparence) }
+
+ { Ã‰crire l'extension de contrÃ´le graphique (pour transparence) }
  WriteGIFGCE(F, TransparentIndex, HasTransparency);
- 
- { Écrire le descripteur d'image }
+
+ { Ã‰crire le descripteur d'image }
  WriteGIFImageDescriptor(F, Width, Height);
- 
- { Écrire les données d'image compressées }
+
+ { Ã‰crire les donnÃ©es d'image compressÃ©es }
  WriteGIFImageData(F, Width, Height, ColorBits);
- 
- { Écrire le terminateur GIF }
+
+ { Ã‰crire le terminateur GIF }
  WriteByte(F, GIF_TRAILER);
- 
+
  Close(F);
  FreePixelBuffer;
  SaveGIFFile := True;
@@ -4449,7 +4463,7 @@ Const
  JPEG_SOS = $FFDA;           { Start of Scan }
  JPEG_BLOCK_SIZE = 8;        { Taille d'un bloc DCT }
 
-{ Tables de quantisation JPEG standard (qualité 50) }
+{ Tables de quantisation JPEG standard (qualitÃ© 50) }
 Const
  JPEG_QT_LUMA: Array[0..63] of Byte = (
   16, 11, 10, 16,  24,  40,  51,  61,
@@ -4461,7 +4475,7 @@ Const
   49, 64, 78, 87, 103, 121, 120, 101,
   72, 92, 95, 98, 112, 100, 103,  99
  );
- 
+
  JPEG_QT_CHROMA: Array[0..63] of Byte = (
   17, 18, 24, 47, 99, 99, 99, 99,
   18, 21, 26, 66, 99, 99, 99, 99,
@@ -4491,7 +4505,7 @@ Const
  JPEG_DC_BITS: Array[0..15] of Byte = (0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
  JPEG_DC_VALS: Array[0..11] of Byte = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
  JPEG_AC_BITS: Array[0..15] of Byte = (0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125);
- 
+
 Type
  TJPEGBlock = Array[0..63] of Integer;
  TJPEGQuantTable = Array[0..63] of Integer;
@@ -4506,7 +4520,7 @@ Var
  JPEGPrevDC_Cb: Integer;
  JPEGPrevDC_Cr: Integer;
 
-{ Initialiser les tables de quantisation selon la qualité }
+{ Initialiser les tables de quantisation selon la qualitÃ© }
 Procedure InitJPEGQuantTables(Quality: Integer);
 Var
  I: Integer;
@@ -4515,21 +4529,21 @@ Var
 Begin
  If Quality < 1 Then Quality := 1;
  If Quality > 100 Then Quality := 100;
- 
- { Calculer le facteur d'échelle }
+
+ { Calculer le facteur d'Ã©chelle }
  If Quality < 50 Then
   Scale := 5000 Div Quality
  Else
   Scale := 200 - Quality * 2;
-  
- { Générer les tables de quantisation }
+
+ { GÃ©nÃ©rer les tables de quantisation }
  For I := 0 to 63 do Begin
   { Table Luminance }
   Temp := (JPEG_QT_LUMA[I] * Scale + 50) Div 100;
   If Temp < 1 Then Temp := 1;
   If Temp > 255 Then Temp := 255;
   JPEGQuantLuma[I] := Temp;
-  
+
   { Table Chrominance }
   Temp := (JPEG_QT_CHROMA[I] * Scale + 50) Div 100;
   If Temp < 1 Then Temp := 1;
@@ -4538,7 +4552,7 @@ Begin
  End;
 End;
 
-{ Écrire un marqueur JPEG (2 octets) }
+{ Ã‰crire un marqueur JPEG (2 octets) }
 Procedure WriteJPEGMarker(Var F: File; Marker: Word);
 Var
  B: Byte;
@@ -4549,58 +4563,58 @@ Begin
  BlockWrite(F, B, 1);
 End;
 
-{ Écrire l'en-tête JFIF APP0 }
+{ Ã‰crire l'en-tÃªte JFIF APP0 }
 Procedure WriteJPEGAPP0(Var F: File);
 Var
  B: Byte;
  Len: Word;
 Begin
  WriteJPEGMarker(F, JPEG_APP0);
- 
+
  { Longueur du segment (16 octets) }
  B := 0; BlockWrite(F, B, 1);
  B := 16; BlockWrite(F, B, 1);
- 
+
  { Identificateur "JFIF\0" }
  B := Ord('J'); BlockWrite(F, B, 1);
  B := Ord('F'); BlockWrite(F, B, 1);
  B := Ord('I'); BlockWrite(F, B, 1);
  B := Ord('F'); BlockWrite(F, B, 1);
  B := 0; BlockWrite(F, B, 1);
- 
+
  { Version JFIF 1.01 }
  B := 1; BlockWrite(F, B, 1);
  B := 1; BlockWrite(F, B, 1);
- 
- { Unités (0 = pas d'unité) }
+
+ { UnitÃ©s (0 = pas d'unitÃ©) }
  B := 0; BlockWrite(F, B, 1);
- 
- { Densité X et Y (1x1) }
- B := 0; BlockWrite(F, B, 1);
- B := 1; BlockWrite(F, B, 1);
+
+ { DensitÃ© X et Y (1x1) }
  B := 0; BlockWrite(F, B, 1);
  B := 1; BlockWrite(F, B, 1);
- 
+ B := 0; BlockWrite(F, B, 1);
+ B := 1; BlockWrite(F, B, 1);
+
  { Pas de vignette }
  B := 0; BlockWrite(F, B, 1);
  B := 0; BlockWrite(F, B, 1);
 End;
 
-{ Écrire une table de quantisation DQT }
+{ Ã‰crire une table de quantisation DQT }
 Procedure WriteJPEGDQT(Var F: File; TableID: Integer; Const QTable: TJPEGQuantTable);
 Var
  B: Byte;
  I: Integer;
 Begin
  WriteJPEGMarker(F, JPEG_DQT);
- 
+
  { Longueur (2 + 1 + 64 = 67) }
  B := 0; BlockWrite(F, B, 1);
  B := 67; BlockWrite(F, B, 1);
- 
+
  { ID de la table (4 bits precision + 4 bits ID) }
  B := TableID; BlockWrite(F, B, 1);
- 
+
  { 64 coefficients en ordre zig-zag }
  For I := 0 to 63 do Begin
   B := QTable[JPEG_ZIGZAG[I]];
@@ -4608,48 +4622,48 @@ Begin
  End;
 End;
 
-{ Écrire le marqueur SOF0 (Start of Frame) }
+{ Ã‰crire le marqueur SOF0 (Start of Frame) }
 Procedure WriteJPEGSOF0(Var F: File; Width, Height: Integer);
 Var
  B: Byte;
 Begin
  WriteJPEGMarker(F, JPEG_SOF0);
- 
+
  { Longueur (2 + 1 + 2 + 2 + 1 + 3*3 = 17) }
  B := 0; BlockWrite(F, B, 1);
  B := 17; BlockWrite(F, B, 1);
- 
- { Précision (8 bits) }
+
+ { PrÃ©cision (8 bits) }
  B := 8; BlockWrite(F, B, 1);
- 
+
  { Hauteur }
  B := Hi(Height); BlockWrite(F, B, 1);
  B := Lo(Height); BlockWrite(F, B, 1);
- 
+
  { Largeur }
  B := Hi(Width); BlockWrite(F, B, 1);
  B := Lo(Width); BlockWrite(F, B, 1);
- 
+
  { Nombre de composants (3 = YCbCr) }
  B := 3; BlockWrite(F, B, 1);
- 
+
  { Composant Y (ID=1, sampling 1x1, table quant 0) }
  B := 1; BlockWrite(F, B, 1);
  B := $11; BlockWrite(F, B, 1);  { 1x1 }
  B := 0; BlockWrite(F, B, 1);
- 
+
  { Composant Cb (ID=2, sampling 1x1, table quant 1) }
  B := 2; BlockWrite(F, B, 1);
  B := $11; BlockWrite(F, B, 1);
  B := 1; BlockWrite(F, B, 1);
- 
+
  { Composant Cr (ID=3, sampling 1x1, table quant 1) }
  B := 3; BlockWrite(F, B, 1);
  B := $11; BlockWrite(F, B, 1);
  B := 1; BlockWrite(F, B, 1);
 End;
 
-{ Écrire une table de Huffman DHT }
+{ Ã‰crire une table de Huffman DHT }
 Procedure WriteJPEGDHT(Var F: File; TableClass, TableID: Integer;
                        Const Bits: Array of Byte; Const Vals: Array of Byte;
                        NumVals: Integer);
@@ -4659,22 +4673,22 @@ Var
  Len: Integer;
 Begin
  WriteJPEGMarker(F, JPEG_DHT);
- 
+
  { Calculer la longueur }
  Len := 2 + 1 + 16 + NumVals;
  B := Hi(Len); BlockWrite(F, B, 1);
  B := Lo(Len); BlockWrite(F, B, 1);
- 
+
  { Classe et ID de la table }
  B := (TableClass Shl 4) Or TableID;
  BlockWrite(F, B, 1);
- 
+
  { 16 octets de compteurs de bits }
  For I := 0 to 15 do Begin
   B := Bits[I];
   BlockWrite(F, B, 1);
  End;
- 
+
  { Valeurs des symboles }
  For I := 0 to NumVals - 1 do Begin
   B := Vals[I];
@@ -4682,32 +4696,32 @@ Begin
  End;
 End;
 
-{ Écrire le marqueur SOS (Start of Scan) }
+{ Ã‰crire le marqueur SOS (Start of Scan) }
 Procedure WriteJPEGSOS(Var F: File);
 Var
  B: Byte;
 Begin
  WriteJPEGMarker(F, JPEG_SOS);
- 
+
  { Longueur (2 + 1 + 3*2 + 3 = 12) }
  B := 0; BlockWrite(F, B, 1);
  B := 12; BlockWrite(F, B, 1);
- 
+
  { Nombre de composants }
  B := 3; BlockWrite(F, B, 1);
- 
+
  { Y: table DC 0, table AC 0 }
  B := 1; BlockWrite(F, B, 1);
  B := $00; BlockWrite(F, B, 1);
- 
+
  { Cb: table DC 1, table AC 1 }
  B := 2; BlockWrite(F, B, 1);
  B := $11; BlockWrite(F, B, 1);
- 
+
  { Cr: table DC 1, table AC 1 }
  B := 3; BlockWrite(F, B, 1);
  B := $11; BlockWrite(F, B, 1);
- 
+
  { Spectral selection }
  B := 0; BlockWrite(F, B, 1);   { Ss }
  B := 63; BlockWrite(F, B, 1);  { Se }
@@ -4720,13 +4734,13 @@ Begin
  Y  := Round(0.299 * R + 0.587 * G + 0.114 * B);
  Cb := Round(-0.169 * R - 0.331 * G + 0.500 * B + 128);
  Cr := Round(0.500 * R - 0.419 * G - 0.081 * B + 128);
- 
+
  If Y < 0 Then Y := 0; If Y > 255 Then Y := 255;
  If Cb < 0 Then Cb := 0; If Cb > 255 Then Cb := 255;
  If Cr < 0 Then Cr := 0; If Cr > 255 Then Cr := 255;
 End;
 
-{ Écrire un octet compressé JPEG (avec byte stuffing) }
+{ Ã‰crire un octet compressÃ© JPEG (avec byte stuffing) }
 Procedure WriteJPEGByte(Var F: File; B: Byte);
 Var
  Stuff: Byte;
@@ -4744,7 +4758,7 @@ Var
  B: Byte;
 Begin
  If JPEGBitsInBuffer > 0 Then Begin
-  { Compléter avec des 1 }
+  { ComplÃ©ter avec des 1 }
   While JPEGBitsInBuffer < 8 do Begin
    JPEGBitBuffer := (JPEGBitBuffer Shl 1) Or 1;
    Inc(JPEGBitsInBuffer);
@@ -4756,7 +4770,7 @@ Begin
  End;
 End;
 
-{ Écrire des bits dans le buffer JPEG }
+{ Ã‰crire des bits dans le buffer JPEG }
 Procedure WriteJPEGBits(Var F: File; Value: Integer; NumBits: Integer);
 Var
  B: Byte;
@@ -4765,7 +4779,7 @@ Begin
   JPEGBitBuffer := (JPEGBitBuffer Shl 1) Or ((Value Shr (NumBits - 1)) And 1);
   Inc(JPEGBitsInBuffer);
   Dec(NumBits);
-  
+
   If JPEGBitsInBuffer = 8 Then Begin
    B := JPEGBitBuffer And $FF;
    WriteJPEGByte(F, B);
@@ -4775,7 +4789,7 @@ Begin
  End;
 End;
 
-{ Encoder les données d'image JPEG (version simplifiée) }
+{ Encoder les donnÃ©es d'image JPEG (version simplifiÃ©e) }
 Procedure WriteJPEGImageData(Var F: File; Width, Height: Integer);
 Var
  X, Y, BX, BY, I, J: Integer;
@@ -4789,13 +4803,13 @@ Begin
  JPEGPrevDC_Y := 0;
  JPEGPrevDC_Cb := 0;
  JPEGPrevDC_Cr := 0;
- 
+
  { Traiter l'image par blocs de 8x8 }
  BY := 0;
  While BY < Height do Begin
   BX := 0;
   While BX < Width do Begin
-   { Construire un bloc Y simplifié }
+   { Construire un bloc Y simplifiÃ© }
    DC := 0;
    For J := 0 to 7 do Begin
     For I := 0 to 7 do Begin
@@ -4811,15 +4825,15 @@ Begin
     End;
    End;
    DC := DC Div 64;
-   
-   { Écrire un coefficient DC simplifié (code 0 = pas de différence) }
-   WriteJPEGBits(F, 0, 2);  { Code EOB simplifié }
-   
+
+   { Ã‰crire un coefficient DC simplifiÃ© (code 0 = pas de diffÃ©rence) }
+   WriteJPEGBits(F, 0, 2);  { Code EOB simplifiÃ© }
+
    BX := BX + 8;
   End;
   BY := BY + 8;
  End;
- 
+
  FlushJPEGBits(F);
 End;
 
@@ -4840,7 +4854,47 @@ Const
  );
 
 { Fonction principale pour sauvegarder un fichier JPEG }
-{ Quality: niveau de qualité de 1 (pire) à 100 (meilleur) }
+{ Quality: niveau de qualitÃ© de 1 (pire) Ã  100 (meilleur) }
+
+{ Calculer la boÃ®te englobante de toutes les formes.
+  Retourne False si aucune forme n'est dÃ©finie. }
+Function CalculateDrawingBounds(Var MinX, MinY, MaxX, MaxY: Integer): Boolean;
+Var
+ I: Integer;
+Begin
+ CalculateDrawingBounds := False;
+ If ShapeCount <= 0 Then Exit;
+
+ MinX := 32767; MinY := 32767;
+ MaxX := -32768; MaxY := -32768;
+
+ For I := 1 to ShapeCount do Begin
+  If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
+  If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
+  If Shapes[I].X2 < MinX Then MinX := Shapes[I].X2;
+  If Shapes[I].Y2 < MinY Then MinY := Shapes[I].Y2;
+  If Shapes[I].X1 > MaxX Then MaxX := Shapes[I].X1;
+  If Shapes[I].Y1 > MaxY Then MaxY := Shapes[I].Y1;
+  If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
+  If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
+ End;
+ CalculateDrawingBounds := True;
+End;
+
+{ DÃ©caler temporairement toutes les formes (pour rendu dans un buffer
+  d'export). Appeler avec (-OffsetX, -OffsetY) pour restaurer. }
+Procedure AdjustShapesForBuffer(OffsetX, OffsetY: Integer);
+Var
+ I: Integer;
+Begin
+ For I := 1 to ShapeCount do Begin
+  Shapes[I].X1 := Shapes[I].X1 - OffsetX;
+  Shapes[I].Y1 := Shapes[I].Y1 - OffsetY;
+  Shapes[I].X2 := Shapes[I].X2 - OffsetX;
+  Shapes[I].Y2 := Shapes[I].Y2 - OffsetY;
+ End;
+End;
+
 Function SaveJPEGFile(Const FileName: String; Quality: Integer): Boolean;
 Var
  F: File;
@@ -4851,35 +4905,35 @@ Begin
  JPEGQuality := Quality;
  If JPEGQuality < 1 Then JPEGQuality := 1;
  If JPEGQuality > 100 Then JPEGQuality := 100;
- 
+
  { Calculer les dimensions du dessin }
  If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Begin
-  { Pas de formes, créer une image par défaut }
+  { Pas de formes, crÃ©er une image par dÃ©faut }
   MinX := 0; MinY := WORK_AREA_TOP;
   MaxX := 640; MaxY := 480;
  End;
- 
+
  Width := MaxX - MinX + 1;
  Height := MaxY - MinY + 1;
  If Width < 1 Then Width := 1;
  If Height < 1 Then Height := 1;
- 
+
  { Initialiser le buffer de pixels et le remplir }
  InitPixelBuffer(Width, Height);
- 
+
  { Repositionner les formes pour le buffer }
  AdjustShapesForBuffer(MinX, MinY);
- 
+
  { Rendre les formes dans le buffer }
  RenderShapesToBuffer;
- 
+
  { Restaurer les positions originales }
  AdjustShapesForBuffer(-MinX, -MinY);
- 
+
  { Initialiser les tables de quantisation }
  InitJPEGQuantTables(JPEGQuality);
- 
- { Créer le fichier }
+
+ { CrÃ©er le fichier }
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
@@ -4888,35 +4942,35 @@ Begin
   FreePixelBuffer;
   Exit;
  End;
- 
- { Écrire le marqueur SOI (Start of Image) }
+
+ { Ã‰crire le marqueur SOI (Start of Image) }
  WriteJPEGMarker(F, JPEG_SOI);
- 
- { Écrire le segment JFIF APP0 }
+
+ { Ã‰crire le segment JFIF APP0 }
  WriteJPEGAPP0(F);
- 
- { Écrire les tables de quantisation }
+
+ { Ã‰crire les tables de quantisation }
  WriteJPEGDQT(F, 0, JPEGQuantLuma);
  WriteJPEGDQT(F, 1, JPEGQuantChroma);
- 
- { Écrire le marqueur SOF0 }
+
+ { Ã‰crire le marqueur SOF0 }
  WriteJPEGSOF0(F, Width, Height);
- 
- { Écrire les tables de Huffman }
+
+ { Ã‰crire les tables de Huffman }
  WriteJPEGDHT(F, 0, 0, JPEG_DC_BITS, JPEG_DC_VALS, 12);  { DC Luma }
  WriteJPEGDHT(F, 0, 1, JPEG_DC_BITS, JPEG_DC_VALS, 12);  { DC Chroma }
  WriteJPEGDHT(F, 1, 0, JPEG_AC_BITS, JPEG_AC_VALS, 162); { AC Luma }
  WriteJPEGDHT(F, 1, 1, JPEG_AC_BITS, JPEG_AC_VALS, 162); { AC Chroma }
- 
- { Écrire le marqueur SOS }
+
+ { Ã‰crire le marqueur SOS }
  WriteJPEGSOS(F);
- 
- { Écrire les données d'image compressées }
+
+ { Ã‰crire les donnÃ©es d'image compressÃ©es }
  WriteJPEGImageData(F, Width, Height);
- 
- { Écrire le marqueur EOI (End of Image) }
+
+ { Ã‰crire le marqueur EOI (End of Image) }
  WriteJPEGMarker(F, JPEG_EOI);
- 
+
  Close(F);
  FreePixelBuffer;
  SaveJPEGFile := True;
@@ -4938,7 +4992,7 @@ Const
  PNG_CHUNK_IEND = $49454E44;  { 'IEND' }
  PNG_CHUNK_PLTE = $504C5445;  { 'PLTE' }
  PNG_CHUNK_tRNS = $74524E53;  { 'tRNS' }
- 
+
  PNG_COLOR_GRAYSCALE = 0;
  PNG_COLOR_RGB = 2;
  PNG_COLOR_INDEXED = 3;
@@ -4957,7 +5011,7 @@ Var
  N, K: Integer;
 Begin
  If PNG_CRC_Initialized Then Exit;
- 
+
  For N := 0 to 255 do Begin
   C := LongInt(N);
   For K := 0 to 7 do Begin
@@ -4981,7 +5035,7 @@ Begin
  UpdateCRC := CRC;
 End;
 
-{ Écrire un entier 32-bit big-endian }
+{ Ã‰crire un entier 32-bit big-endian }
 Procedure WritePNGInt32(Var F: File; Value: LongInt);
 Var
  B: Array[0..3] of Byte;
@@ -4993,36 +5047,36 @@ Begin
  BlockWrite(F, B, 4);
 End;
 
-{ Écrire la signature PNG }
+{ Ã‰crire la signature PNG }
 Procedure WritePNGSignature(Var F: File);
 Begin
  BlockWrite(F, PNG_SIGNATURE, 8);
 End;
 
-{ Écrire un chunk PNG }
+{ Ã‰crire un chunk PNG }
 Procedure WritePNGChunk(Var F: File; ChunkType: LongInt; Const Data: Array of Byte; DataLen: Integer);
 Var
  TypeBytes: Array[0..3] of Byte;
  CRC: LongInt;
  I: Integer;
 Begin
- { Écrire la longueur }
+ { Ã‰crire la longueur }
  WritePNGInt32(F, DataLen);
- 
+
  { Convertir le type en bytes }
  TypeBytes[0] := (ChunkType Shr 24) And $FF;
  TypeBytes[1] := (ChunkType Shr 16) And $FF;
  TypeBytes[2] := (ChunkType Shr 8) And $FF;
  TypeBytes[3] := ChunkType And $FF;
- 
- { Écrire le type }
+
+ { Ã‰crire le type }
  BlockWrite(F, TypeBytes, 4);
- 
- { Écrire les données }
+
+ { Ã‰crire les donnÃ©es }
  If DataLen > 0 Then
   BlockWrite(F, Data, DataLen);
- 
- { Calculer et écrire le CRC }
+
+ { Calculer et Ã©crire le CRC }
  { Note: CRC32 per PNG spec - initialized to $FFFFFFFF, then XOR'd at the end }
  CRC := $FFFFFFFF;
  CRC := UpdateCRC(CRC, TypeBytes, 4);
@@ -5032,7 +5086,7 @@ Begin
  WritePNGInt32(F, CRC);
 End;
 
-{ Écrire le chunk IHDR }
+{ Ã‰crire le chunk IHDR }
 Procedure WritePNGIHDR(Var F: File; Width, Height: Integer; ColorType, BitDepth: Byte);
 Var
  Data: Array[0..12] of Byte;
@@ -5042,32 +5096,32 @@ Begin
  Data[1] := (Width Shr 16) And $FF;
  Data[2] := (Width Shr 8) And $FF;
  Data[3] := Width And $FF;
- 
+
  { Height (4 bytes) }
  Data[4] := (Height Shr 24) And $FF;
  Data[5] := (Height Shr 16) And $FF;
  Data[6] := (Height Shr 8) And $FF;
  Data[7] := Height And $FF;
- 
+
  { Bit depth }
  Data[8] := BitDepth;
- 
+
  { Color type }
  Data[9] := ColorType;
- 
+
  { Compression method (always 0) }
  Data[10] := 0;
- 
+
  { Filter method (always 0) }
  Data[11] := 0;
- 
+
  { Interlace method (0 = no interlace) }
  Data[12] := 0;
- 
+
  WritePNGChunk(F, PNG_CHUNK_IHDR, Data, 13);
 End;
 
-{ Variables pour la compression DEFLATE simplifiée }
+{ Variables pour la compression DEFLATE simplifiÃ©e }
 Var
  PNGCompressBuffer: Array[0..65535] of Byte;
  PNGCompressLen: Integer;
@@ -5081,8 +5135,8 @@ Begin
  End;
 End;
 
-{ Compression DEFLATE simplifiée (données non compressées) }
-{ Utilise des blocs non compressés pour la simplicité }
+{ Compression DEFLATE simplifiÃ©e (donnÃ©es non compressÃ©es) }
+{ Utilise des blocs non compressÃ©s pour la simplicitÃ© }
 Procedure CompressPNGData(Const InputData: Array of Byte; InputLen: Integer);
 Var
  I: Integer;
@@ -5091,36 +5145,36 @@ Var
  Adler1, Adler2: LongInt;
 Begin
  PNGCompressLen := 0;
- 
- { En-tête zlib }
+
+ { En-tÃªte zlib }
  AddPNGCompressByte($78);  { CMF: deflate, 32K window }
  AddPNGCompressByte($01);  { FLG: no dict, level 0 }
- 
- { Données en blocs non compressés }
+
+ { DonnÃ©es en blocs non compressÃ©s }
  Pos := 0;
  While Pos < InputLen do Begin
   BlockLen := InputLen - Pos;
   If BlockLen > 65535 Then BlockLen := 65535;
-  
+
   { Header du bloc }
   If Pos + BlockLen >= InputLen Then
-   AddPNGCompressByte($01)  { Dernier bloc, non compressé }
+   AddPNGCompressByte($01)  { Dernier bloc, non compressÃ© }
   Else
-   AddPNGCompressByte($00); { Pas dernier bloc, non compressé }
-  
-  { Longueur et complément }
+   AddPNGCompressByte($00); { Pas dernier bloc, non compressÃ© }
+
+  { Longueur et complÃ©ment }
   AddPNGCompressByte(BlockLen And $FF);
   AddPNGCompressByte((BlockLen Shr 8) And $FF);
   AddPNGCompressByte((Not BlockLen) And $FF);
   AddPNGCompressByte((Not (BlockLen Shr 8)) And $FF);
-  
-  { Données }
+
+  { DonnÃ©es }
   For I := 0 to BlockLen - 1 do
    AddPNGCompressByte(InputData[Pos + I]);
-  
+
   Pos := Pos + BlockLen;
  End;
- 
+
  { Calculer Adler-32 }
  Adler1 := 1;
  Adler2 := 0;
@@ -5128,20 +5182,20 @@ Begin
   Adler1 := (Adler1 + InputData[I]) Mod 65521;
   Adler2 := (Adler2 + Adler1) Mod 65521;
  End;
- 
- { Écrire Adler-32 (big-endian) }
+
+ { Ã‰crire Adler-32 (big-endian) }
  AddPNGCompressByte((Adler2 Shr 8) And $FF);
  AddPNGCompressByte(Adler2 And $FF);
  AddPNGCompressByte((Adler1 Shr 8) And $FF);
  AddPNGCompressByte(Adler1 And $FF);
 End;
 
-{ Type pour les données d'image PNG }
+{ Type pour les donnÃ©es d'image PNG }
 Type
  TPNGRawData = Array[0..65535] of Byte;
  PPNGRawData = ^TPNGRawData;
 
-{ Écrire les données d'image RGBA avec alpha }
+{ Ã‰crire les donnÃ©es d'image RGBA avec alpha }
 Procedure WritePNGImageData(Var F: File; Width, Height: Integer; TransparentIndex: Integer);
 Var
  RawData: PPNGRawData;
@@ -5151,66 +5205,66 @@ Var
  Idx: LongInt;
  PixelColor: Byte;
 Begin
- { Calculer la taille des données brutes (filtre + RGBA par pixel) }
+ { Calculer la taille des donnÃ©es brutes (filtre + RGBA par pixel) }
  RawLen := LongInt(Height) * (1 + LongInt(Width) * 4);
- 
- { Limiter pour éviter le dépassement de mémoire }
+
+ { Limiter pour Ã©viter le dÃ©passement de mÃ©moire }
  If RawLen > 65535 Then Begin
-  { Pour les grandes images, on écrit en plusieurs chunks }
+  { Pour les grandes images, on Ã©crit en plusieurs chunks }
   RawLen := 65535;
  End;
- 
+
  New(RawData);
  Idx := 0;
- 
+
  For Y := 0 to Height - 1 do Begin
   If Idx >= 65535 Then Break;
-  
+
   { Octet de filtre (0 = None) }
   RawData^[Idx] := 0;
   Inc(Idx);
-  
+
   For X := 0 to Width - 1 do Begin
    If Idx + 4 > 65535 Then Break;
-   
+
    { Obtenir la couleur du pixel }
    If (X < BufferWidth) And (Y < BufferHeight) Then
     PixelColor := PixelBuffer^[Y, X]
    Else
-    PixelColor := 15;  { Blanc par défaut }
-   
+    PixelColor := 15;  { Blanc par dÃ©faut }
+
    { Convertir en RGB }
    PaletteToRGB(PixelColor, R, G, B);
-   
-   { Déterminer l'alpha }
+
+   { DÃ©terminer l'alpha }
    If (TransparentIndex >= 0) And (PixelColor = TransparentIndex) Then
     A := 0    { Transparent }
    Else
     A := 255; { Opaque }
-   
-   { Écrire RGBA }
+
+   { Ã‰crire RGBA }
    RawData^[Idx] := R; Inc(Idx);
    RawData^[Idx] := G; Inc(Idx);
    RawData^[Idx] := B; Inc(Idx);
    RawData^[Idx] := A; Inc(Idx);
   End;
  End;
- 
- { Compresser les données }
+
+ { Compresser les donnÃ©es }
  CompressPNGData(RawData^, Idx);
- 
- { Écrire le chunk IDAT }
+
+ { Ã‰crire le chunk IDAT }
  WritePNGChunk(F, PNG_CHUNK_IDAT, PNGCompressBuffer, PNGCompressLen);
- 
+
  Dispose(RawData);
 End;
 
-{ Écrire le chunk IEND }
+{ Ã‰crire le chunk IEND }
 Procedure WritePNGIEND(Var F: File);
 Var
  EmptyData: Array[0..0] of Byte;
 Begin
- EmptyData[0] := 0;  { Non utilisé }
+ EmptyData[0] := 0;  { Non utilisÃ© }
  WritePNGChunk(F, PNG_CHUNK_IEND, EmptyData, 0);
 End;
 
@@ -5223,39 +5277,39 @@ Var
  Width, Height: Integer;
 Begin
  SavePNGFile := False;
- 
+
  { Initialiser la table CRC }
  InitPNGCRCTable;
- 
+
  { Calculer les dimensions du dessin }
  If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Begin
-  { Pas de formes, créer une image par défaut }
+  { Pas de formes, crÃ©er une image par dÃ©faut }
   MinX := 0; MinY := WORK_AREA_TOP;
   MaxX := 640; MaxY := 480;
  End;
- 
+
  Width := MaxX - MinX + 1;
  Height := MaxY - MinY + 1;
  If Width < 1 Then Width := 1;
  If Height < 1 Then Height := 1;
- 
- { Limiter la taille pour éviter les problèmes de mémoire }
+
+ { Limiter la taille pour Ã©viter les problÃ¨mes de mÃ©moire }
  If Width > 256 Then Width := 256;
  If Height > 256 Then Height := 256;
- 
+
  { Initialiser le buffer de pixels et le remplir }
  InitPixelBuffer(Width, Height);
- 
+
  { Repositionner les formes pour le buffer }
  AdjustShapesForBuffer(MinX, MinY);
- 
+
  { Rendre les formes dans le buffer }
  RenderShapesToBuffer;
- 
+
  { Restaurer les positions originales }
  AdjustShapesForBuffer(-MinX, -MinY);
- 
- { Créer le fichier }
+
+ { CrÃ©er le fichier }
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
@@ -5264,19 +5318,19 @@ Begin
   FreePixelBuffer;
   Exit;
  End;
- 
- { Écrire la signature PNG }
+
+ { Ã‰crire la signature PNG }
  WritePNGSignature(F);
- 
- { Écrire le chunk IHDR (RGBA, 8 bits par canal) }
+
+ { Ã‰crire le chunk IHDR (RGBA, 8 bits par canal) }
  WritePNGIHDR(F, Width, Height, PNG_COLOR_RGBA, 8);
- 
- { Écrire les données d'image }
+
+ { Ã‰crire les donnÃ©es d'image }
  WritePNGImageData(F, Width, Height, TransparentIndex);
- 
- { Écrire le chunk IEND }
+
+ { Ã‰crire le chunk IEND }
  WritePNGIEND(F);
- 
+
  Close(F);
  FreePixelBuffer;
  SavePNGFile := True;
@@ -5286,37 +5340,37 @@ End;
 { === FIN DES FONCTIONS D'EXPORT PNG === }
 { ============================================================================ }
 
-{ Procédure New - Créer un nouveau document }
+{ ProcÃ©dure New - CrÃ©er un nouveau document }
 Procedure FileNew;
 Begin
  CurrentFileName := '';
  DocumentModified := False;
- { TODO: Réinitialiser le canevas et les objets }
+ { TODO: RÃ©initialiser le canevas et les objets }
 End;
 
-{ Procédure Open - Ouvrir un fichier }
+{ ProcÃ©dure Open - Ouvrir un fichier }
 Procedure FileOpen;
 Var
  FileName: String;
  FileFormat: Integer;
  Success: Boolean;
 Begin
- { Pour l'instant, utiliser un nom de fichier hardcodé pour les tests }
- { Une vraie implémentation afficherait une boîte de dialogue }
+ { Pour l'instant, utiliser un nom de fichier hardcodÃ© pour les tests }
+ { Une vraie implÃ©mentation afficherait une boÃ®te de dialogue }
  FileName := '';
- 
- { Demander le nom du fichier (simplifié) }
- { TODO: Implémenter une vraie boîte de dialogue de sélection de fichier }
- 
+
+ { Demander le nom du fichier (simplifiÃ©) }
+ { TODO: ImplÃ©menter une vraie boÃ®te de dialogue de sÃ©lection de fichier }
+
  If FileName = '' Then Begin
-  { Aucun fichier sélectionné, utiliser un fichier de test }
-  { En production, on afficherait une boîte de dialogue }
+  { Aucun fichier sÃ©lectionnÃ©, utiliser un fichier de test }
+  { En production, on afficherait une boÃ®te de dialogue }
   Exit;
  End;
- 
- { Détecter et charger le fichier }
+
+ { DÃ©tecter et charger le fichier }
  FileFormat := DetectVisioFormat(FileName);
- 
+
  Case FileFormat of
   VISIO_FORMAT_VSD: Begin
    Success := ParseVSDFile(FileName);
@@ -5338,15 +5392,18 @@ Begin
  End;
 End;
 
-{ Procédure Close - Fermer le document actuel }
+{ ProcÃ©dure Close - Fermer le document actuel }
 Procedure FileClose;
 Begin
- { TODO: Vérifier si le document a été modifié et proposer de sauvegarder }
+ { TODO: VÃ©rifier si le document a Ã©tÃ© modifiÃ© et proposer de sauvegarder }
  CurrentFileName := '';
  DocumentModified := False;
 End;
 
-{ Procédure Save - Sauvegarder le document }
+{ Forward pour permettre Ã  FileSave d'appeler FileSaveAs }
+Procedure FileSaveAs; Forward;
+
+{ ProcÃ©dure Save - Sauvegarder le document }
 Procedure FileSave;
 Var
  Success: Boolean;
@@ -5356,7 +5413,7 @@ Begin
   FileSaveAs;
  End
  Else Begin
-  { Sauvegarder le fichier au format approprié }
+  { Sauvegarder le fichier au format appropriÃ© }
   Success := SaveVisioFile(CurrentFileName, VISIO_FORMAT_UNKNOWN);
   If Success Then Begin
    DocumentModified := False;
@@ -5364,23 +5421,23 @@ Begin
  End;
 End;
 
-{ Procédure Save As - Sauvegarder sous un nouveau nom }
+{ ProcÃ©dure Save As - Sauvegarder sous un nouveau nom }
 Procedure FileSaveAs;
 Var
  FileName: String;
  FileFormat: Integer;
  Success: Boolean;
 Begin
- { Pour l'instant, utiliser un nom de fichier par défaut }
- { Une vraie implémentation afficherait une boîte de dialogue }
- FileName := 'document.vsdx';  { Format VSDX par défaut }
- 
- { TODO: Implémenter une vraie boîte de dialogue de sélection de fichier }
- 
+ { Pour l'instant, utiliser un nom de fichier par dÃ©faut }
+ { Une vraie implÃ©mentation afficherait une boÃ®te de dialogue }
+ FileName := 'document.vsdx';  { Format VSDX par dÃ©faut }
+
+ { TODO: ImplÃ©menter une vraie boÃ®te de dialogue de sÃ©lection de fichier }
+
  If FileName <> '' Then Begin
-  { Détecter le format depuis l'extension }
+  { DÃ©tecter le format depuis l'extension }
   FileFormat := GetVisioFormatFromExtension(FileName);
-  
+
   { Sauvegarder le fichier }
   Success := SaveVisioFile(FileName, FileFormat);
   If Success Then Begin
@@ -5390,31 +5447,31 @@ Begin
  End;
 End;
 
-{ Procédure Export - Exporter dans un autre format }
+{ ProcÃ©dure Export - Exporter dans un autre format }
 Procedure FileExport;
 Begin
- { TODO: Afficher une boîte de dialogue pour choisir le format d'export }
+ { TODO: Afficher une boÃ®te de dialogue pour choisir le format d'export }
  { TODO: Exporter le document (BMP, SVG, etc.) }
 End;
 
-{ Procédure Print - Imprimer le document }
+{ ProcÃ©dure Print - Imprimer le document }
 Procedure FilePrint;
 Begin
- { TODO: Afficher la boîte de dialogue d'impression }
- { TODO: Envoyer le document à l'imprimante }
+ { TODO: Afficher la boÃ®te de dialogue d'impression }
+ { TODO: Envoyer le document Ã  l'imprimante }
 End;
 
-{ Procédure Print Preview - Aperçu avant impression }
+{ ProcÃ©dure Print Preview - AperÃ§u avant impression }
 Procedure FilePrintPreview;
 Begin
- { TODO: Afficher un aperçu du document tel qu'il sera imprimé }
+ { TODO: Afficher un aperÃ§u du document tel qu'il sera imprimÃ© }
 End;
 
-{ Procédure Exit - Quitter l'application }
+{ ProcÃ©dure Exit - Quitter l'application }
 Function FileExit: Boolean;
 Begin
  FileExit := True;
- { TODO: Vérifier si le document a été modifié et proposer de sauvegarder }
+ { TODO: VÃ©rifier si le document a Ã©tÃ© modifiÃ© et proposer de sauvegarder }
 End;
 
 { ============================================================================ }
@@ -5434,46 +5491,46 @@ Var
  ClipboardEmpty: Boolean;
  HasSelection: Boolean;
 
-{ Procédure Undo - Annuler la dernière action }
+{ ProcÃ©dure Undo - Annuler la derniÃ¨re action }
 Procedure EditUndo;
 Begin
  If CanUndo Then Begin
-  { TODO: Restaurer l'état précédent depuis la pile d'annulation }
+  { TODO: Restaurer l'Ã©tat prÃ©cÃ©dent depuis la pile d'annulation }
   { UndoStackIndex := UndoStackIndex - 1; }
   CanRedo := True;
  End;
 End;
 
-{ Procédure Redo - Rétablir l'action annulée }
+{ ProcÃ©dure Redo - RÃ©tablir l'action annulÃ©e }
 Procedure EditRedo;
 Begin
  If CanRedo Then Begin
-  { TODO: Restaurer l'état suivant depuis la pile de rétablissement }
+  { TODO: Restaurer l'Ã©tat suivant depuis la pile de rÃ©tablissement }
   { UndoStackIndex := UndoStackIndex + 1; }
  End;
 End;
 
-{ Procédure Cut - Couper la sélection }
+{ ProcÃ©dure Cut - Couper la sÃ©lection }
 Procedure EditCut;
 Begin
  If HasSelection Then Begin
-  { TODO: Copier la sélection dans le presse-papiers }
-  { TODO: Supprimer la sélection du document }
+  { TODO: Copier la sÃ©lection dans le presse-papiers }
+  { TODO: Supprimer la sÃ©lection du document }
   ClipboardEmpty := False;
   DocumentModified := True;
  End;
 End;
 
-{ Procédure Copy - Copier la sélection }
+{ ProcÃ©dure Copy - Copier la sÃ©lection }
 Procedure EditCopy;
 Begin
  If HasSelection Then Begin
-  { TODO: Copier la sélection dans le presse-papiers }
+  { TODO: Copier la sÃ©lection dans le presse-papiers }
   ClipboardEmpty := False;
  End;
 End;
 
-{ Procédure Paste - Coller depuis le presse-papiers }
+{ ProcÃ©dure Paste - Coller depuis le presse-papiers }
 Procedure EditPaste;
 Begin
  If Not ClipboardEmpty Then Begin
@@ -5482,33 +5539,33 @@ Begin
  End;
 End;
 
-{ Procédure Delete - Supprimer la sélection }
+{ ProcÃ©dure Delete - Supprimer la sÃ©lection }
 Procedure EditDelete;
 Begin
  If HasSelection Then Begin
-  { TODO: Supprimer la sélection du document }
+  { TODO: Supprimer la sÃ©lection du document }
   DocumentModified := True;
  End;
 End;
 
-{ Procédure Select All - Sélectionner tous les objets }
+{ ProcÃ©dure Select All - SÃ©lectionner tous les objets }
 Procedure EditSelectAll;
 Begin
- { TODO: Sélectionner tous les objets du calque actif }
+ { TODO: SÃ©lectionner tous les objets du calque actif }
  HasSelection := True;
 End;
 
-{ Procédure Find - Rechercher du texte }
+{ ProcÃ©dure Find - Rechercher du texte }
 Procedure EditFind;
 Begin
- { TODO: Afficher une boîte de dialogue de recherche }
+ { TODO: Afficher une boÃ®te de dialogue de recherche }
  { TODO: Rechercher le texte dans les objets texte du document }
 End;
 
-{ Procédure Replace - Rechercher et remplacer du texte }
+{ ProcÃ©dure Replace - Rechercher et remplacer du texte }
 Procedure EditReplace;
 Begin
- { TODO: Afficher une boîte de dialogue de recherche et remplacement }
+ { TODO: Afficher une boÃ®te de dialogue de recherche et remplacement }
  { TODO: Rechercher et remplacer le texte dans les objets texte }
 End;
 
@@ -5533,7 +5590,7 @@ Var
  ShowGuides: Boolean;
  SnapToGridEnabled: Boolean;
 
-{ Procédure Zoom In - Augmenter le zoom }
+{ ProcÃ©dure Zoom In - Augmenter le zoom }
 Procedure ViewZoomIn;
 Begin
  If ZoomLevel < MAX_ZOOM_LEVEL Then Begin
@@ -5544,7 +5601,7 @@ Begin
  End;
 End;
 
-{ Procédure Zoom Out - Diminuer le zoom }
+{ ProcÃ©dure Zoom Out - Diminuer le zoom }
 Procedure ViewZoomOut;
 Begin
  If ZoomLevel > MIN_ZOOM_LEVEL Then Begin
@@ -5555,40 +5612,40 @@ Begin
  End;
 End;
 
-{ Procédure Fit Page - Ajuster le zoom pour afficher la page entière }
+{ ProcÃ©dure Fit Page - Ajuster le zoom pour afficher la page entiÃ¨re }
 Procedure ViewFitPage;
 Begin
- { TODO: Calculer le zoom optimal pour afficher la page entière dans la vue }
+ { TODO: Calculer le zoom optimal pour afficher la page entiÃ¨re dans la vue }
  { TODO: Appliquer ce zoom et centrer la vue sur la page }
  ZoomLevel := DEFAULT_ZOOM;
 End;
 
-{ Procédure Grid - Activer/désactiver l'affichage de la grille }
+{ ProcÃ©dure Grid - Activer/dÃ©sactiver l'affichage de la grille }
 Procedure ViewGrid;
 Begin
  ShowGrid := Not ShowGrid;
  { TODO: Redessiner le canevas avec ou sans grille }
 End;
 
-{ Procédure Rulers - Activer/désactiver l'affichage des règles }
+{ ProcÃ©dure Rulers - Activer/dÃ©sactiver l'affichage des rÃ¨gles }
 Procedure ViewRulers;
 Begin
  ShowRulers := Not ShowRulers;
- { TODO: Redessiner l'interface avec ou sans règles }
+ { TODO: Redessiner l'interface avec ou sans rÃ¨gles }
 End;
 
-{ Procédure Guides - Activer/désactiver l'affichage des guides }
+{ ProcÃ©dure Guides - Activer/dÃ©sactiver l'affichage des guides }
 Procedure ViewGuides;
 Begin
  ShowGuides := Not ShowGuides;
  { TODO: Redessiner le canevas avec ou sans guides }
 End;
 
-{ Procédure Snap to Grid - Activer/désactiver l'accrochage à la grille }
+{ ProcÃ©dure Snap to Grid - Activer/dÃ©sactiver l'accrochage Ã  la grille }
 Procedure ViewSnapToGrid;
 Begin
  SnapToGridEnabled := Not SnapToGridEnabled;
- { L'accrochage sera appliqué lors du déplacement des objets }
+ { L'accrochage sera appliquÃ© lors du dÃ©placement des objets }
 End;
 
 { ============================================================================ }
@@ -5599,12 +5656,6 @@ End;
 { === PROCEDURES DU MENU INSERT === }
 { ============================================================================ }
 
-Const
- MAX_PAGES = 100;
- MAX_LAYERS = 50;
- DEFAULT_PAGE_COUNT = 1;
- DEFAULT_LAYER_COUNT = 1;
-
 Var
  CurrentPage: Integer;
  PageCount: Integer;
@@ -5612,7 +5663,7 @@ Var
  LayerCount: Integer;
  InsertMode: Integer;  { 0=None, 1=Shape, 2=TextBox, 3=Image, 4=Connector }
 
-{ Procédure InsertShape - Insérer une forme }
+{ ProcÃ©dure InsertShape - InsÃ©rer une forme }
 Procedure InsertShape;
 Begin
  { TODO: Afficher un dialogue pour choisir le type de forme }
@@ -5620,7 +5671,7 @@ Begin
  InsertMode := 1;
 End;
 
-{ Procédure InsertTextBox - Insérer une zone de texte }
+{ ProcÃ©dure InsertTextBox - InsÃ©rer une zone de texte }
 Procedure InsertTextBox;
 Begin
  { TODO: Passer en mode dessin de zone de texte }
@@ -5628,15 +5679,15 @@ Begin
  InsertMode := 2;
 End;
 
-{ Procédure InsertImage - Insérer une image }
+{ ProcÃ©dure InsertImage - InsÃ©rer une image }
 Procedure InsertImage;
 Begin
- { TODO: Afficher une boîte de dialogue pour sélectionner un fichier image }
- { TODO: Charger l'image et l'insérer dans le document }
+ { TODO: Afficher une boÃ®te de dialogue pour sÃ©lectionner un fichier image }
+ { TODO: Charger l'image et l'insÃ©rer dans le document }
  InsertMode := 3;
 End;
 
-{ Procédure InsertConnector - Insérer un connecteur }
+{ ProcÃ©dure InsertConnector - InsÃ©rer un connecteur }
 Procedure InsertConnector;
 Begin
  { TODO: Passer en mode dessin de connecteur }
@@ -5644,19 +5695,19 @@ Begin
  InsertMode := 4;
 End;
 
-{ Procédure InsertPage - Insérer une nouvelle page }
+{ ProcÃ©dure InsertPage - InsÃ©rer une nouvelle page }
 Procedure InsertPage;
 Begin
  If PageCount < MAX_PAGES Then Begin
   PageCount := PageCount + 1;
   CurrentPage := PageCount;
-  { TODO: Créer une nouvelle page vide dans le document }
+  { TODO: CrÃ©er une nouvelle page vide dans le document }
   { TODO: Actualiser l'affichage pour montrer la nouvelle page }
   DocumentModified := True;
  End;
 End;
 
-{ Procédure InsertLayer - Insérer un nouveau calque }
+{ ProcÃ©dure InsertLayer - InsÃ©rer un nouveau calque }
 Procedure InsertLayer;
 Var
  LayerNum: String[5];
@@ -5669,12 +5720,12 @@ Begin
   Layers[LayerCount].Name := 'Layer ' + LayerNum;
   Layers[LayerCount].Visible := True;
   Layers[LayerCount].Locked := False;
-  Layers[LayerCount].Color := (LayerCount mod 15) + 1; { Couleur différente par calque }
+  Layers[LayerCount].Color := (LayerCount mod 15) + 1; { Couleur diffÃ©rente par calque }
   DocumentModified := True;
  End;
 End;
 
-{ Procédure InitLayer - Initialiser un calque }
+{ ProcÃ©dure InitLayer - Initialiser un calque }
 Procedure InitLayer(LayerIdx: Integer; LayerName: String);
 Begin
  If (LayerIdx >= 1) and (LayerIdx <= MAX_LAYERS) Then Begin
@@ -5685,7 +5736,7 @@ Begin
  End;
 End;
 
-{ Procédure InitAllLayers - Initialiser tous les calques }
+{ ProcÃ©dure InitAllLayers - Initialiser tous les calques }
 Procedure InitAllLayers;
 Var
  I: Integer;
@@ -5696,13 +5747,13 @@ Begin
   Layers[I].Locked := False;
   Layers[I].Color := 1;
  End;
- { Créer le calque par défaut }
+ { CrÃ©er le calque par dÃ©faut }
  InitLayer(1, 'Layer 1');
  LayerCount := 1;
  CurrentLayer := 1;
 End;
 
-{ Fonction pour vérifier si un calque est visible }
+{ Fonction pour vÃ©rifier si un calque est visible }
 Function IsLayerVisible(LayerIdx: Integer): Boolean;
 Begin
  If (LayerIdx >= 1) and (LayerIdx <= LayerCount) Then
@@ -5711,16 +5762,16 @@ Begin
   IsLayerVisible := False;
 End;
 
-{ Fonction pour vérifier si un calque est verrouillé }
+{ Fonction pour vÃ©rifier si un calque est verrouillÃ© }
 Function IsLayerLocked(LayerIdx: Integer): Boolean;
 Begin
  If (LayerIdx >= 1) and (LayerIdx <= LayerCount) Then
   IsLayerLocked := Layers[LayerIdx].Locked
  Else
-  IsLayerLocked := True; { Par défaut, calque inexistant = verrouillé }
+  IsLayerLocked := True; { Par dÃ©faut, calque inexistant = verrouillÃ© }
 End;
 
-{ Procédure pour changer la visibilité d'un calque }
+{ ProcÃ©dure pour changer la visibilitÃ© d'un calque }
 Procedure SetLayerVisible(LayerIdx: Integer; Visible: Boolean);
 Begin
  If (LayerIdx >= 1) and (LayerIdx <= LayerCount) Then Begin
@@ -5729,7 +5780,7 @@ Begin
  End;
 End;
 
-{ Procédure pour changer le verrouillage d'un calque }
+{ ProcÃ©dure pour changer le verrouillage d'un calque }
 Procedure SetLayerLocked(LayerIdx: Integer; Locked: Boolean);
 Begin
  If (LayerIdx >= 1) and (LayerIdx <= LayerCount) Then Begin
@@ -5766,9 +5817,9 @@ Var
  CurrentAlignment: TAlignmentType;
  ObjectsGrouped: Boolean;
  { Variables pour la gestion des groupes }
- NextGroupID: Integer;        { Prochain ID de groupe à attribuer }
- EditingGroupID: Integer;     { ID du groupe en cours d'édition (0 = aucun) }
- { Variables pour la boîte de dialogue des propriétés }
+ NextGroupID: Integer;        { Prochain ID de groupe Ã  attribuer }
+ EditingGroupID: Integer;     { ID du groupe en cours d'Ã©dition (0 = aucun) }
+ { Variables pour la boÃ®te de dialogue des propriÃ©tÃ©s }
  PropertiesDialogVisible: Boolean;
  PropDialogX, PropDialogY: Integer;
  PropSelectedColor: Integer;
@@ -5776,9 +5827,9 @@ Var
  PropSelectedLineStyle: Integer;
  PropHighlightedButton: Integer;
 
-{ *** BOÎTE DE DIALOGUE DES PROPRIÉTÉS *** }
+{ *** BOÃŽTE DE DIALOGUE DES PROPRIÃ‰TÃ‰S *** }
 
-{ Procédure pour dessiner la palette de couleurs }
+{ ProcÃ©dure pour dessiner la palette de couleurs }
 Procedure DrawColorPalette(X, Y: Integer; SelectedColor: Integer);
 Var
  I, Row, Col: Integer;
@@ -5789,12 +5840,12 @@ Begin
   Col := I mod 8;
   BoxX := X + Col * (PROP_COLOR_BOX_SIZE + 2);
   BoxY := Y + Row * (PROP_COLOR_BOX_SIZE + 2);
-  
+
   { Dessiner la case de couleur }
   SetFillStyle(SolidFill, I);
   Bar(BoxX, BoxY, BoxX + PROP_COLOR_BOX_SIZE, BoxY + PROP_COLOR_BOX_SIZE);
-  
-  { Dessiner la bordure (plus épaisse si sélectionné) }
+
+  { Dessiner la bordure (plus Ã©paisse si sÃ©lectionnÃ©) }
   If I = SelectedColor Then Begin
    SetColor(Black);
    Rectangle(BoxX - 1, BoxY - 1, BoxX + PROP_COLOR_BOX_SIZE + 1, BoxY + PROP_COLOR_BOX_SIZE + 1);
@@ -5807,7 +5858,7 @@ Begin
  End;
 End;
 
-{ Procédure pour dessiner les options de style de ligne }
+{ ProcÃ©dure pour dessiner les options de style de ligne }
 Procedure DrawLineStyleOptions(X, Y: Integer; SelectedStyle: Integer);
 Var
  I: Integer;
@@ -5818,11 +5869,11 @@ Begin
  StyleNames[1] := 'Dashed';
  StyleNames[2] := 'Dotted';
  StyleNames[3] := 'Dash-Dot';
- 
+
  For I := 0 to LINESTYLE_COUNT - 1 do Begin
   LineY := Y + I * 20;
-  
-  { Fond si sélectionné }
+
+  { Fond si sÃ©lectionnÃ© }
   If I = SelectedStyle Then Begin
    SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL);
    Bar(X - 2, LineY - 2, X + 120, LineY + 14);
@@ -5831,11 +5882,11 @@ Begin
   Else Begin
    SetColor(PROP_DIALOG_TEXT);
   End;
-  
+
   { Dessiner le nom du style }
   OutTextXY(X, LineY, StyleNames[I]);
-  
-  { Dessiner un échantillon de la ligne }
+
+  { Dessiner un Ã©chantillon de la ligne }
   Case I of
    LINESTYLE_SOLID: SetLineStyle(SolidLn, 0, 1);
    LINESTYLE_DASHED: SetLineStyle(DashedLn, 0, 1);
@@ -5851,7 +5902,7 @@ Begin
  End;
 End;
 
-{ Procédure pour dessiner les options d'épaisseur de ligne }
+{ ProcÃ©dure pour dessiner les options d'Ã©paisseur de ligne }
 Procedure DrawLineWidthOptions(X, Y: Integer; SelectedWidth: Integer);
 Var
  I: Integer;
@@ -5860,8 +5911,8 @@ Var
 Begin
  For I := 1 to 5 do Begin
   LineY := Y + (I - 1) * 18;
-  
-  { Fond si sélectionné }
+
+  { Fond si sÃ©lectionnÃ© }
   If I = SelectedWidth Then Begin
    SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL);
    Bar(X - 2, LineY - 2, X + 100, LineY + 14);
@@ -5870,12 +5921,12 @@ Begin
   Else Begin
    SetColor(PROP_DIALOG_TEXT);
   End;
-  
-  { Afficher l'épaisseur }
+
+  { Afficher l'Ã©paisseur }
   Str(I, WidthStr);
   OutTextXY(X, LineY, WidthStr + ' px');
-  
-  { Dessiner un échantillon de la ligne }
+
+  { Dessiner un Ã©chantillon de la ligne }
   SetLineStyle(SolidLn, 0, I);
   If I = SelectedWidth Then
    SetColor(White)
@@ -5886,80 +5937,80 @@ Begin
  End;
 End;
 
-{ Procédure pour dessiner la boîte de dialogue des propriétés }
+{ ProcÃ©dure pour dessiner la boÃ®te de dialogue des propriÃ©tÃ©s }
 Procedure DrawPropertiesDialog;
 Var
  DialogX, DialogY: Integer;
  SectionY: Integer;
 Begin
- { Calculer la position centrée }
+ { Calculer la position centrÃ©e }
  DialogX := (ScreenWidth - PROP_DIALOG_WIDTH) div 2;
  DialogY := (ScreenHeight - PROP_DIALOG_HEIGHT) div 2;
  PropDialogX := DialogX;
  PropDialogY := DialogY;
- 
- { Dessiner le fond de la boîte de dialogue }
+
+ { Dessiner le fond de la boÃ®te de dialogue }
  SetFillStyle(SolidFill, PROP_DIALOG_BG);
  Bar(DialogX, DialogY, DialogX + PROP_DIALOG_WIDTH, DialogY + PROP_DIALOG_HEIGHT);
- 
+
  { Dessiner la bordure }
  SetColor(PROP_DIALOG_BORDER);
  Rectangle(DialogX, DialogY, DialogX + PROP_DIALOG_WIDTH, DialogY + PROP_DIALOG_HEIGHT);
  Rectangle(DialogX + 1, DialogY + 1, DialogX + PROP_DIALOG_WIDTH - 1, DialogY + PROP_DIALOG_HEIGHT - 1);
- 
+
  { Dessiner la barre de titre }
  SetFillStyle(SolidFill, Blue);
  Bar(DialogX + 2, DialogY + 2, DialogX + PROP_DIALOG_WIDTH - 2, DialogY + 20);
  SetColor(White);
  OutTextXY(DialogX + 10, DialogY + 6, 'Properties');
- 
+
  { Section: Couleur de remplissage }
  SectionY := DialogY + 28;
  SetColor(PROP_DIALOG_TEXT);
  OutTextXY(DialogX + 10, SectionY, 'Fill Color:');
  DrawColorPalette(DialogX + 10, SectionY + 14, PropSelectedColor);
- 
+
  { Section: Couleur de trait }
  SectionY := SectionY + 52;
  SetColor(PROP_DIALOG_TEXT);
  OutTextXY(DialogX + 10, SectionY, 'Line Color:');
- { Utiliser même palette pour couleur de trait }
- 
- { Section: Style de ligne (à droite) }
+ { Utiliser mÃªme palette pour couleur de trait }
+
+ { Section: Style de ligne (Ã  droite) }
  SetColor(PROP_DIALOG_TEXT);
  OutTextXY(DialogX + 130, DialogY + 28, 'Line Style:');
  DrawLineStyleOptions(DialogX + 130, DialogY + 42, PropSelectedLineStyle);
- 
- { Section: Épaisseur de ligne }
+
+ { Section: Ã‰paisseur de ligne }
  OutTextXY(DialogX + 130, DialogY + 130, 'Width:');
  DrawLineWidthOptions(DialogX + 130, DialogY + 144, PropSelectedLineWidth);
- 
+
  { Boutons OK et Cancel }
  { Bouton OK }
  If PropHighlightedButton = 1 Then
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
  Else
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
- Bar(DialogX + PROP_DIALOG_WIDTH - 120, DialogY + PROP_DIALOG_HEIGHT - 28, 
+ Bar(DialogX + PROP_DIALOG_WIDTH - 120, DialogY + PROP_DIALOG_HEIGHT - 28,
      DialogX + PROP_DIALOG_WIDTH - 65, DialogY + PROP_DIALOG_HEIGHT - 8);
  SetColor(PROP_DIALOG_BORDER);
- Rectangle(DialogX + PROP_DIALOG_WIDTH - 120, DialogY + PROP_DIALOG_HEIGHT - 28, 
+ Rectangle(DialogX + PROP_DIALOG_WIDTH - 120, DialogY + PROP_DIALOG_HEIGHT - 28,
            DialogX + PROP_DIALOG_WIDTH - 65, DialogY + PROP_DIALOG_HEIGHT - 8);
  If PropHighlightedButton = 1 Then
   SetColor(White)
  Else
   SetColor(PROP_DIALOG_TEXT);
  OutTextXY(DialogX + PROP_DIALOG_WIDTH - 105, DialogY + PROP_DIALOG_HEIGHT - 24, 'OK');
- 
+
  { Bouton Cancel }
  If PropHighlightedButton = 2 Then
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
  Else
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
- Bar(DialogX + PROP_DIALOG_WIDTH - 60, DialogY + PROP_DIALOG_HEIGHT - 28, 
+ Bar(DialogX + PROP_DIALOG_WIDTH - 60, DialogY + PROP_DIALOG_HEIGHT - 28,
      DialogX + PROP_DIALOG_WIDTH - 5, DialogY + PROP_DIALOG_HEIGHT - 8);
  SetColor(PROP_DIALOG_BORDER);
- Rectangle(DialogX + PROP_DIALOG_WIDTH - 60, DialogY + PROP_DIALOG_HEIGHT - 28, 
+ Rectangle(DialogX + PROP_DIALOG_WIDTH - 60, DialogY + PROP_DIALOG_HEIGHT - 28,
            DialogX + PROP_DIALOG_WIDTH - 5, DialogY + PROP_DIALOG_HEIGHT - 8);
  If PropHighlightedButton = 2 Then
   SetColor(White)
@@ -5968,34 +6019,34 @@ Begin
  OutTextXY(DialogX + PROP_DIALOG_WIDTH - 50, DialogY + PROP_DIALOG_HEIGHT - 24, 'Cancel');
 End;
 
-{ Procédure pour afficher la boîte de dialogue des propriétés }
+{ ProcÃ©dure pour afficher la boÃ®te de dialogue des propriÃ©tÃ©s }
 Procedure ShowPropertiesDialog;
 Begin
  If SelectedShape < 1 Then Exit;
- 
- { Initialiser avec les propriétés de l'objet sélectionné }
+
+ { Initialiser avec les propriÃ©tÃ©s de l'objet sÃ©lectionnÃ© }
  PropSelectedColor := Shapes[SelectedShape].FillColor;
  PropSelectedLineWidth := Shapes[SelectedShape].LineWidth;
  PropSelectedLineStyle := Shapes[SelectedShape].LineStyle;
  PropHighlightedButton := 0;
- 
+
  PropertiesDialogVisible := True;
 End;
 
-{ Procédure pour masquer la boîte de dialogue des propriétés }
+{ ProcÃ©dure pour masquer la boÃ®te de dialogue des propriÃ©tÃ©s }
 Procedure HidePropertiesDialog;
 Begin
  PropertiesDialogVisible := False;
 End;
 
-{ Fonction pour vérifier si un clic est sur la palette de couleurs et retourner l'index }
+{ Fonction pour vÃ©rifier si un clic est sur la palette de couleurs et retourner l'index }
 Function GetColorAtPosition(X, Y, PaletteX, PaletteY: Integer): Integer;
 Var
  Col, Row, ColorIndex: Integer;
 Begin
  GetColorAtPosition := -1;
- 
- { Vérifier si dans la zone de la palette }
+
+ { VÃ©rifier si dans la zone de la palette }
  If (X >= PaletteX) and (X < PaletteX + 8 * (PROP_COLOR_BOX_SIZE + 2)) and
     (Y >= PaletteY) and (Y < PaletteY + 2 * (PROP_COLOR_BOX_SIZE + 2)) Then Begin
   Col := (X - PaletteX) div (PROP_COLOR_BOX_SIZE + 2);
@@ -6006,14 +6057,14 @@ Begin
  End;
 End;
 
-{ Fonction pour vérifier si un clic est sur les styles de ligne et retourner l'index }
+{ Fonction pour vÃ©rifier si un clic est sur les styles de ligne et retourner l'index }
 Function GetLineStyleAtPosition(X, Y, OptionsX, OptionsY: Integer): Integer;
 Var
  StyleIndex: Integer;
 Begin
  GetLineStyleAtPosition := -1;
- 
- { Vérifier si dans la zone des options de style }
+
+ { VÃ©rifier si dans la zone des options de style }
  If (X >= OptionsX - 2) and (X < OptionsX + 120) and
     (Y >= OptionsY - 2) and (Y < OptionsY + LINESTYLE_COUNT * 20) Then Begin
   StyleIndex := (Y - OptionsY + 2) div 20;
@@ -6022,14 +6073,14 @@ Begin
  End;
 End;
 
-{ Fonction pour vérifier si un clic est sur les épaisseurs de ligne et retourner la valeur }
+{ Fonction pour vÃ©rifier si un clic est sur les Ã©paisseurs de ligne et retourner la valeur }
 Function GetLineWidthAtPosition(X, Y, OptionsX, OptionsY: Integer): Integer;
 Var
  WidthIndex: Integer;
 Begin
  GetLineWidthAtPosition := -1;
- 
- { Vérifier si dans la zone des options d'épaisseur }
+
+ { VÃ©rifier si dans la zone des options d'Ã©paisseur }
  If (X >= OptionsX - 2) and (X < OptionsX + 100) and
     (Y >= OptionsY - 2) and (Y < OptionsY + 5 * 18) Then Begin
   WidthIndex := (Y - OptionsY + 2) div 18;
@@ -6038,44 +6089,44 @@ Begin
  End;
 End;
 
-{ Procédure pour gérer un clic dans la boîte de dialogue des propriétés }
+{ ProcÃ©dure pour gÃ©rer un clic dans la boÃ®te de dialogue des propriÃ©tÃ©s }
 Procedure HandlePropertiesDialogClick(X, Y: Integer);
 Var
  ColorIndex, StyleIndex, WidthIndex: Integer;
  DialogX, DialogY: Integer;
 Begin
  If Not PropertiesDialogVisible Then Exit;
- 
+
  DialogX := PropDialogX;
  DialogY := PropDialogY;
- 
- { Vérifier clic sur la palette de couleurs de remplissage }
+
+ { VÃ©rifier clic sur la palette de couleurs de remplissage }
  ColorIndex := GetColorAtPosition(X, Y, DialogX + 10, DialogY + 42);
  If ColorIndex >= 0 Then Begin
   PropSelectedColor := ColorIndex;
   Exit;
  End;
- 
- { Vérifier clic sur les styles de ligne }
+
+ { VÃ©rifier clic sur les styles de ligne }
  StyleIndex := GetLineStyleAtPosition(X, Y, DialogX + 130, DialogY + 42);
  If StyleIndex >= 0 Then Begin
   PropSelectedLineStyle := StyleIndex;
   Exit;
  End;
- 
- { Vérifier clic sur les épaisseurs de ligne }
+
+ { VÃ©rifier clic sur les Ã©paisseurs de ligne }
  WidthIndex := GetLineWidthAtPosition(X, Y, DialogX + 130, DialogY + 144);
  If WidthIndex >= 0 Then Begin
   PropSelectedLineWidth := WidthIndex;
   Exit;
  End;
- 
- { Vérifier clic sur le bouton OK }
- If (X >= DialogX + PROP_DIALOG_WIDTH - 120) and 
+
+ { VÃ©rifier clic sur le bouton OK }
+ If (X >= DialogX + PROP_DIALOG_WIDTH - 120) and
     (X <= DialogX + PROP_DIALOG_WIDTH - 65) and
-    (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and 
+    (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and
     (Y <= DialogY + PROP_DIALOG_HEIGHT - 8) Then Begin
-  { Appliquer les propriétés à l'objet sélectionné }
+  { Appliquer les propriÃ©tÃ©s Ã  l'objet sÃ©lectionnÃ© }
   If SelectedShape > 0 Then Begin
    Shapes[SelectedShape].FillColor := PropSelectedColor;
    Shapes[SelectedShape].LineWidth := PropSelectedLineWidth;
@@ -6085,51 +6136,51 @@ Begin
   HidePropertiesDialog;
   Exit;
  End;
- 
- { Vérifier clic sur le bouton Cancel }
- If (X >= DialogX + PROP_DIALOG_WIDTH - 60) and 
+
+ { VÃ©rifier clic sur le bouton Cancel }
+ If (X >= DialogX + PROP_DIALOG_WIDTH - 60) and
     (X <= DialogX + PROP_DIALOG_WIDTH - 5) and
-    (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and 
+    (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and
     (Y <= DialogY + PROP_DIALOG_HEIGHT - 8) Then Begin
   HidePropertiesDialog;
   Exit;
  End;
 End;
 
-{ Procédure pour gérer le survol dans la boîte de dialogue }
+{ ProcÃ©dure pour gÃ©rer le survol dans la boÃ®te de dialogue }
 Procedure HandlePropertiesDialogHover(X, Y: Integer);
 Var
  DialogX, DialogY: Integer;
  OldHighlight: Integer;
 Begin
  If Not PropertiesDialogVisible Then Exit;
- 
+
  DialogX := PropDialogX;
  DialogY := PropDialogY;
  OldHighlight := PropHighlightedButton;
  PropHighlightedButton := 0;
- 
- { Vérifier survol du bouton OK }
- If (X >= DialogX + PROP_DIALOG_WIDTH - 120) and 
+
+ { VÃ©rifier survol du bouton OK }
+ If (X >= DialogX + PROP_DIALOG_WIDTH - 120) and
     (X <= DialogX + PROP_DIALOG_WIDTH - 65) and
-    (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and 
+    (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and
     (Y <= DialogY + PROP_DIALOG_HEIGHT - 8) Then Begin
   PropHighlightedButton := 1;
  End
- { Vérifier survol du bouton Cancel }
- Else If (X >= DialogX + PROP_DIALOG_WIDTH - 60) and 
+ { VÃ©rifier survol du bouton Cancel }
+ Else If (X >= DialogX + PROP_DIALOG_WIDTH - 60) and
          (X <= DialogX + PROP_DIALOG_WIDTH - 5) and
-         (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and 
+         (Y >= DialogY + PROP_DIALOG_HEIGHT - 28) and
          (Y <= DialogY + PROP_DIALOG_HEIGHT - 8) Then Begin
   PropHighlightedButton := 2;
  End;
 End;
 
-{ *** FIN BOÎTE DE DIALOGUE DES PROPRIÉTÉS *** }
+{ *** FIN BOÃŽTE DE DIALOGUE DES PROPRIÃ‰TÃ‰S *** }
 
-{ *** BOÎTE DE DIALOGUE DES CALQUES *** }
+{ *** BOÃŽTE DE DIALOGUE DES CALQUES *** }
 
-{ Procédure pour dessiner la boîte de dialogue des calques }
+{ ProcÃ©dure pour dessiner la boÃ®te de dialogue des calques }
 Procedure DrawLayerDialog;
 Var
  DialogX, DialogY: Integer;
@@ -6137,42 +6188,42 @@ Var
  VisibleStr, LockedStr: String[3];
  NameStr: String[LAYER_NAME_LENGTH];
 Begin
- { Calculer la position centrée }
+ { Calculer la position centrÃ©e }
  DialogX := (ScreenWidth - LAYER_DIALOG_WIDTH) div 2;
  DialogY := (ScreenHeight - LAYER_DIALOG_HEIGHT) div 2;
  LayerDialogX := DialogX;
  LayerDialogY := DialogY;
- 
- { Dessiner le fond de la boîte de dialogue }
+
+ { Dessiner le fond de la boÃ®te de dialogue }
  SetFillStyle(SolidFill, PROP_DIALOG_BG);
  Bar(DialogX, DialogY, DialogX + LAYER_DIALOG_WIDTH, DialogY + LAYER_DIALOG_HEIGHT);
- 
+
  { Dessiner la bordure }
  SetColor(PROP_DIALOG_BORDER);
  Rectangle(DialogX, DialogY, DialogX + LAYER_DIALOG_WIDTH, DialogY + LAYER_DIALOG_HEIGHT);
  Rectangle(DialogX + 1, DialogY + 1, DialogX + LAYER_DIALOG_WIDTH - 1, DialogY + LAYER_DIALOG_HEIGHT - 1);
- 
+
  { Dessiner la barre de titre }
  SetFillStyle(SolidFill, Blue);
  Bar(DialogX + 2, DialogY + 2, DialogX + LAYER_DIALOG_WIDTH - 2, DialogY + 20);
  SetColor(White);
  OutTextXY(DialogX + 10, DialogY + 6, 'Layers');
- 
- { En-têtes des colonnes }
+
+ { En-tÃªtes des colonnes }
  SetColor(PROP_DIALOG_TEXT);
  OutTextXY(DialogX + 10, DialogY + 28, 'V');   { Visible }
  OutTextXY(DialogX + 30, DialogY + 28, 'L');   { Locked }
  OutTextXY(DialogX + 50, DialogY + 28, 'Name');
- 
- { Ligne de séparation }
+
+ { Ligne de sÃ©paration }
  SetColor(PROP_DIALOG_BORDER);
  Line(DialogX + 5, DialogY + 40, DialogX + LAYER_DIALOG_WIDTH - 5, DialogY + 40);
- 
+
  { Afficher les calques }
  For I := 1 to LayerCount do Begin
   ItemY := DialogY + 45 + (I - 1) * LAYER_ITEM_HEIGHT;
-  
-  { Surligner le calque sélectionné ou le calque actif }
+
+  { Surligner le calque sÃ©lectionnÃ© ou le calque actif }
   If I = LayerDialogSelectedLayer Then Begin
    SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL);
    Bar(DialogX + 5, ItemY - 2, DialogX + LAYER_DIALOG_WIDTH - 5, ItemY + LAYER_ITEM_HEIGHT - 4);
@@ -6186,74 +6237,74 @@ Begin
   Else Begin
    SetColor(PROP_DIALOG_TEXT);
   End;
-  
+
   { Checkbox Visible }
   If Layers[I].Visible Then
    VisibleStr := '[X]'
   Else
    VisibleStr := '[ ]';
   OutTextXY(DialogX + 5, ItemY, VisibleStr);
-  
+
   { Checkbox Locked }
   If Layers[I].Locked Then
    LockedStr := '[X]'
   Else
    LockedStr := '[ ]';
   OutTextXY(DialogX + 25, ItemY, LockedStr);
-  
+
   { Nom du calque }
   NameStr := Layers[I].Name;
   OutTextXY(DialogX + 50, ItemY, NameStr);
-  
+
   { Indicateur de couleur du calque }
   SetFillStyle(SolidFill, Layers[I].Color);
   Bar(DialogX + LAYER_DIALOG_WIDTH - 30, ItemY, DialogX + LAYER_DIALOG_WIDTH - 10, ItemY + 12);
   SetColor(PROP_DIALOG_BORDER);
   Rectangle(DialogX + LAYER_DIALOG_WIDTH - 30, ItemY, DialogX + LAYER_DIALOG_WIDTH - 10, ItemY + 12);
  End;
- 
+
  { Boutons en bas }
  { Bouton New Layer }
  If LayerDialogHighlightedButton = 1 Then
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
  Else
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
- Bar(DialogX + 10, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+ Bar(DialogX + 10, DialogY + LAYER_DIALOG_HEIGHT - 35,
      DialogX + 70, DialogY + LAYER_DIALOG_HEIGHT - 15);
  SetColor(PROP_DIALOG_BORDER);
- Rectangle(DialogX + 10, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+ Rectangle(DialogX + 10, DialogY + LAYER_DIALOG_HEIGHT - 35,
            DialogX + 70, DialogY + LAYER_DIALOG_HEIGHT - 15);
  If LayerDialogHighlightedButton = 1 Then
   SetColor(White)
  Else
   SetColor(PROP_DIALOG_TEXT);
  OutTextXY(DialogX + 20, DialogY + LAYER_DIALOG_HEIGHT - 31, 'New');
- 
+
  { Bouton Set Active }
  If LayerDialogHighlightedButton = 2 Then
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
  Else
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
- Bar(DialogX + 80, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+ Bar(DialogX + 80, DialogY + LAYER_DIALOG_HEIGHT - 35,
      DialogX + 140, DialogY + LAYER_DIALOG_HEIGHT - 15);
  SetColor(PROP_DIALOG_BORDER);
- Rectangle(DialogX + 80, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+ Rectangle(DialogX + 80, DialogY + LAYER_DIALOG_HEIGHT - 35,
            DialogX + 140, DialogY + LAYER_DIALOG_HEIGHT - 15);
  If LayerDialogHighlightedButton = 2 Then
   SetColor(White)
  Else
   SetColor(PROP_DIALOG_TEXT);
  OutTextXY(DialogX + 90, DialogY + LAYER_DIALOG_HEIGHT - 31, 'Active');
- 
+
  { Bouton Close }
  If LayerDialogHighlightedButton = 3 Then
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_HL)
  Else
   SetFillStyle(SolidFill, PROP_DIALOG_BTN_BG);
- Bar(DialogX + LAYER_DIALOG_WIDTH - 70, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+ Bar(DialogX + LAYER_DIALOG_WIDTH - 70, DialogY + LAYER_DIALOG_HEIGHT - 35,
      DialogX + LAYER_DIALOG_WIDTH - 10, DialogY + LAYER_DIALOG_HEIGHT - 15);
  SetColor(PROP_DIALOG_BORDER);
- Rectangle(DialogX + LAYER_DIALOG_WIDTH - 70, DialogY + LAYER_DIALOG_HEIGHT - 35, 
+ Rectangle(DialogX + LAYER_DIALOG_WIDTH - 70, DialogY + LAYER_DIALOG_HEIGHT - 35,
            DialogX + LAYER_DIALOG_WIDTH - 10, DialogY + LAYER_DIALOG_HEIGHT - 15);
  If LayerDialogHighlightedButton = 3 Then
   SetColor(White)
@@ -6262,7 +6313,7 @@ Begin
  OutTextXY(DialogX + LAYER_DIALOG_WIDTH - 60, DialogY + LAYER_DIALOG_HEIGHT - 31, 'Close');
 End;
 
-{ Procédure pour afficher la boîte de dialogue des calques }
+{ ProcÃ©dure pour afficher la boÃ®te de dialogue des calques }
 Procedure ShowLayerDialog;
 Begin
  LayerDialogVisible := True;
@@ -6270,27 +6321,27 @@ Begin
  LayerDialogHighlightedButton := 0;
 End;
 
-{ Procédure pour masquer la boîte de dialogue des calques }
+{ ProcÃ©dure pour masquer la boÃ®te de dialogue des calques }
 Procedure HideLayerDialog;
 Begin
  LayerDialogVisible := False;
 End;
 
-{ Procédure pour gérer un clic dans la boîte de dialogue des calques }
+{ ProcÃ©dure pour gÃ©rer un clic dans la boÃ®te de dialogue des calques }
 Procedure HandleLayerDialogClick(X, Y: Integer);
 Var
  I, ItemY: Integer;
  DialogX, DialogY: Integer;
 Begin
  If Not LayerDialogVisible Then Exit;
- 
+
  DialogX := LayerDialogX;
  DialogY := LayerDialogY;
- 
- { Vérifier clic sur les calques }
+
+ { VÃ©rifier clic sur les calques }
  For I := 1 to LayerCount do Begin
   ItemY := DialogY + 45 + (I - 1) * LAYER_ITEM_HEIGHT;
-  
+
   If (Y >= ItemY - 2) and (Y < ItemY + LAYER_ITEM_HEIGHT - 4) Then Begin
    { Clic sur Visible (checkbox) }
    If (X >= DialogX + 5) and (X <= DialogX + 22) Then Begin
@@ -6298,136 +6349,136 @@ Begin
     DocumentModified := True;
     Exit;
    End;
-   
+
    { Clic sur Locked (checkbox) }
    If (X >= DialogX + 25) and (X <= DialogX + 42) Then Begin
     Layers[I].Locked := Not Layers[I].Locked;
     DocumentModified := True;
     Exit;
    End;
-   
-   { Clic sur le nom pour sélectionner le calque }
+
+   { Clic sur le nom pour sÃ©lectionner le calque }
    If (X >= DialogX + 50) and (X <= DialogX + LAYER_DIALOG_WIDTH - 10) Then Begin
     LayerDialogSelectedLayer := I;
     Exit;
    End;
   End;
  End;
- 
- { Vérifier clic sur le bouton New }
+
+ { VÃ©rifier clic sur le bouton New }
  If (X >= DialogX + 10) and (X <= DialogX + 70) and
-    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and
     (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
   InsertLayer;
   LayerDialogSelectedLayer := LayerCount;
   Exit;
  End;
- 
- { Vérifier clic sur le bouton Set Active }
+
+ { VÃ©rifier clic sur le bouton Set Active }
  If (X >= DialogX + 80) and (X <= DialogX + 140) and
-    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and
     (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
   If (LayerDialogSelectedLayer >= 1) and (LayerDialogSelectedLayer <= LayerCount) Then Begin
    CurrentLayer := LayerDialogSelectedLayer;
   End;
   Exit;
  End;
- 
- { Vérifier clic sur le bouton Close }
- If (X >= DialogX + LAYER_DIALOG_WIDTH - 70) and 
+
+ { VÃ©rifier clic sur le bouton Close }
+ If (X >= DialogX + LAYER_DIALOG_WIDTH - 70) and
     (X <= DialogX + LAYER_DIALOG_WIDTH - 10) and
-    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and
     (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
   HideLayerDialog;
   Exit;
  End;
 End;
 
-{ Procédure pour gérer le survol dans la boîte de dialogue des calques }
+{ ProcÃ©dure pour gÃ©rer le survol dans la boÃ®te de dialogue des calques }
 Procedure HandleLayerDialogHover(X, Y: Integer);
 Var
  DialogX, DialogY: Integer;
  OldHighlight: Integer;
 Begin
  If Not LayerDialogVisible Then Exit;
- 
+
  DialogX := LayerDialogX;
  DialogY := LayerDialogY;
  OldHighlight := LayerDialogHighlightedButton;
  LayerDialogHighlightedButton := 0;
- 
- { Vérifier survol du bouton New }
+
+ { VÃ©rifier survol du bouton New }
  If (X >= DialogX + 10) and (X <= DialogX + 70) and
-    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+    (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and
     (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
   LayerDialogHighlightedButton := 1;
  End
- { Vérifier survol du bouton Set Active }
+ { VÃ©rifier survol du bouton Set Active }
  Else If (X >= DialogX + 80) and (X <= DialogX + 140) and
-         (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+         (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and
          (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
   LayerDialogHighlightedButton := 2;
  End
- { Vérifier survol du bouton Close }
- Else If (X >= DialogX + LAYER_DIALOG_WIDTH - 70) and 
+ { VÃ©rifier survol du bouton Close }
+ Else If (X >= DialogX + LAYER_DIALOG_WIDTH - 70) and
          (X <= DialogX + LAYER_DIALOG_WIDTH - 10) and
-         (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and 
+         (Y >= DialogY + LAYER_DIALOG_HEIGHT - 35) and
          (Y <= DialogY + LAYER_DIALOG_HEIGHT - 15) Then Begin
   LayerDialogHighlightedButton := 3;
  End;
 End;
 
-{ *** FIN BOÎTE DE DIALOGUE DES CALQUES *** }
+{ *** FIN BOÃŽTE DE DIALOGUE DES CALQUES *** }
 
-{ Procédure FormatFill - Modifier la couleur de remplissage }
+{ ProcÃ©dure FormatFill - Modifier la couleur de remplissage }
 Procedure FormatFill;
 Begin
- { Afficher la boîte de dialogue des propriétés pour modifier la couleur de remplissage }
+ { Afficher la boÃ®te de dialogue des propriÃ©tÃ©s pour modifier la couleur de remplissage }
  If HasSelection Then Begin
   ShowPropertiesDialog;
  End;
 End;
 
-{ Procédure FormatLine - Modifier les propriétés de ligne }
+{ ProcÃ©dure FormatLine - Modifier les propriÃ©tÃ©s de ligne }
 Procedure FormatLine;
 Begin
- { Afficher la boîte de dialogue des propriétés pour modifier les propriétés de ligne }
+ { Afficher la boÃ®te de dialogue des propriÃ©tÃ©s pour modifier les propriÃ©tÃ©s de ligne }
  If HasSelection Then Begin
   ShowPropertiesDialog;
  End;
 End;
 
-{ Procédure FormatText - Modifier les propriétés de texte }
+{ ProcÃ©dure FormatText - Modifier les propriÃ©tÃ©s de texte }
 Procedure FormatText;
 Begin
- { TODO: Afficher une boîte de dialogue pour choisir la police, taille et style de texte }
- { TODO: Appliquer les propriétés de texte aux objets texte sélectionnés }
+ { TODO: Afficher une boÃ®te de dialogue pour choisir la police, taille et style de texte }
+ { TODO: Appliquer les propriÃ©tÃ©s de texte aux objets texte sÃ©lectionnÃ©s }
  If HasSelection Then Begin
   DocumentModified := True;
  End;
 End;
 
-{ Procédure FormatAlignment - Modifier l'alignement des objets }
+{ ProcÃ©dure FormatAlignment - Modifier l'alignement des objets }
 Procedure FormatAlignment;
 Begin
  { TODO: Afficher un sous-menu ou dialogue pour choisir le type d'alignement }
- { TODO: Aligner les objets sélectionnés selon le type choisi }
+ { TODO: Aligner les objets sÃ©lectionnÃ©s selon le type choisi }
  If HasSelection Then Begin
   DocumentModified := True;
  End;
 End;
 
-{ Procédure FormatArrange - Modifier l'ordre des objets }
+{ ProcÃ©dure FormatArrange - Modifier l'ordre des objets }
 Procedure FormatArrange;
 Begin
  { TODO: Afficher un sous-menu pour choisir Bring to Front, Send to Back, etc. }
- { TODO: Modifier l'ordre Z des objets sélectionnés }
+ { TODO: Modifier l'ordre Z des objets sÃ©lectionnÃ©s }
  If HasSelection Then Begin
   DocumentModified := True;
  End;
 End;
 
-{ Fonction pour compter le nombre d'objets sélectionnés }
+{ Fonction pour compter le nombre d'objets sÃ©lectionnÃ©s }
 Function CountSelectedShapes: Integer;
 Var
  I, Count: Integer;
@@ -6440,18 +6491,18 @@ Begin
  CountSelectedShapes := Count;
 End;
 
-{ Procédure FormatGroup - Grouper les objets sélectionnés }
+{ ProcÃ©dure FormatGroup - Grouper les objets sÃ©lectionnÃ©s }
 Procedure FormatGroup;
 Var
  I: Integer;
  SelectedCount: Integer;
 Begin
  SelectedCount := CountSelectedShapes;
- { On a besoin d'au moins 2 objets pour créer un groupe }
+ { On a besoin d'au moins 2 objets pour crÃ©er un groupe }
  If SelectedCount >= 2 Then Begin
-  { Incrémenter le compteur de groupe pour obtenir un nouvel ID }
+  { IncrÃ©menter le compteur de groupe pour obtenir un nouvel ID }
   NextGroupID := NextGroupID + 1;
-  { Assigner le même GroupID à tous les objets sélectionnés }
+  { Assigner le mÃªme GroupID Ã  tous les objets sÃ©lectionnÃ©s }
   For I := 1 to ShapeCount do Begin
    If Shapes[I].Selected Then Begin
     Shapes[I].GroupID := NextGroupID;
@@ -6462,14 +6513,14 @@ Begin
  End;
 End;
 
-{ Procédure FormatUngroup - Dégrouper les objets }
+{ ProcÃ©dure FormatUngroup - DÃ©grouper les objets }
 Procedure FormatUngroup;
 Var
  I: Integer;
  GroupToUngroup: Integer;
 Begin
  If HasSelection Then Begin
-  { Trouver le GroupID du premier objet sélectionné }
+  { Trouver le GroupID du premier objet sÃ©lectionnÃ© }
   GroupToUngroup := 0;
   For I := 1 to ShapeCount do Begin
    If Shapes[I].Selected And (Shapes[I].GroupID > 0) Then Begin
@@ -6477,12 +6528,12 @@ Begin
     Break;
    End;
   End;
-  { Si on a trouvé un groupe, dégrouper tous les objets de ce groupe }
+  { Si on a trouvÃ© un groupe, dÃ©grouper tous les objets de ce groupe }
   If GroupToUngroup > 0 Then Begin
    For I := 1 to ShapeCount do Begin
     If Shapes[I].GroupID = GroupToUngroup Then Begin
      Shapes[I].GroupID := 0;
-     Shapes[I].Selected := True;  { Sélectionner tous les objets du groupe }
+     Shapes[I].Selected := True;  { SÃ©lectionner tous les objets du groupe }
     End;
    End;
    ObjectsGrouped := False;
@@ -6491,32 +6542,32 @@ Begin
  End;
 End;
 
-{ Procédure EnterGroup - Entrer dans un groupe pour éditer ses objets }
+{ ProcÃ©dure EnterGroup - Entrer dans un groupe pour Ã©diter ses objets }
 Procedure EnterGroup;
 Var
- I: Integer;
+ I, J: Integer;
 Begin
  If HasSelection Then Begin
-  { Trouver le GroupID du premier objet sélectionné }
+  { Trouver le GroupID du premier objet sÃ©lectionnÃ© }
   For I := 1 to ShapeCount do Begin
    If Shapes[I].Selected And (Shapes[I].GroupID > 0) Then Begin
     EditingGroupID := Shapes[I].GroupID;
-    { Désélectionner tout }
-    For I := 1 to ShapeCount do
-     Shapes[I].Selected := False;
+    { DÃ©sÃ©lectionner tout }
+    For J := 1 to ShapeCount do
+     Shapes[J].Selected := False;
     Exit;
    End;
   End;
  End;
 End;
 
-{ Procédure ExitGroup - Sortir du mode édition de groupe }
+{ ProcÃ©dure ExitGroup - Sortir du mode Ã©dition de groupe }
 Procedure ExitGroup;
 Var
  I: Integer;
 Begin
  If EditingGroupID > 0 Then Begin
-  { Sélectionner le groupe comme un tout }
+  { SÃ©lectionner le groupe comme un tout }
   For I := 1 to ShapeCount do Begin
    If Shapes[I].GroupID = EditingGroupID Then Begin
     Shapes[I].Selected := True;
@@ -6526,16 +6577,16 @@ Begin
  End;
 End;
 
-{ Fonction pour vérifier si une forme fait partie du groupe en cours d'édition }
+{ Fonction pour vÃ©rifier si une forme fait partie du groupe en cours d'Ã©dition }
 Function IsShapeInEditingGroup(ShapeIndex: Integer): Boolean;
 Begin
  If EditingGroupID = 0 Then
-  IsShapeInEditingGroup := True  { Pas en mode édition de groupe, tout est accessible }
+  IsShapeInEditingGroup := True  { Pas en mode Ã©dition de groupe, tout est accessible }
  Else
   IsShapeInEditingGroup := Shapes[ShapeIndex].GroupID = EditingGroupID;
 End;
 
-{ Fonction pour sélectionner tout le groupe quand on clique sur un membre }
+{ Fonction pour sÃ©lectionner tout le groupe quand on clique sur un membre }
 Procedure SelectGroup(GroupID: Integer);
 Var
  I: Integer;
@@ -6590,24 +6641,24 @@ Type
  TOperationType = (otUnion, otIntersect, otSubtract);
 
 Var
- CurrentRotation: Integer;  { Angle de rotation actuel en degrés }
- ShapeWidth: Integer;       { Largeur de la forme sélectionnée }
- ShapeHeight: Integer;      { Hauteur de la forme sélectionnée }
- ShapeX: Integer;           { Position X de la forme sélectionnée }
- ShapeY: Integer;           { Position Y de la forme sélectionnée }
+ CurrentRotation: Integer;  { Angle de rotation actuel en degrÃ©s }
+ ShapeWidth: Integer;       { Largeur de la forme sÃ©lectionnÃ©e }
+ ShapeHeight: Integer;      { Hauteur de la forme sÃ©lectionnÃ©e }
+ ShapeX: Integer;           { Position X de la forme sÃ©lectionnÃ©e }
+ ShapeY: Integer;           { Position Y de la forme sÃ©lectionnÃ©e }
 
-{ Procédure ShapeRotate - Rotation de la forme sélectionnée }
+{ ProcÃ©dure ShapeRotate - Rotation de la forme sÃ©lectionnÃ©e }
 Procedure ShapeRotate;
 Begin
  If HasSelection Then Begin
   { TODO: Afficher un sous-menu pour choisir l'angle de rotation }
-  { TODO: Options: 90° horaire, 90° anti-horaire, 180°, rotation libre }
+  { TODO: Options: 90Â° horaire, 90Â° anti-horaire, 180Â°, rotation libre }
   CurrentRotation := (CurrentRotation + 90) Mod 360;
   DocumentModified := True;
  End;
 End;
 
-{ Procédure ShapeFlip - Retourner la forme horizontalement ou verticalement }
+{ ProcÃ©dure ShapeFlip - Retourner la forme horizontalement ou verticalement }
 Procedure ShapeFlip;
 Begin
  If HasSelection Then Begin
@@ -6617,7 +6668,7 @@ Begin
  End;
 End;
 
-{ Procédure ShapeAlign - Aligner les formes sélectionnées }
+{ ProcÃ©dure ShapeAlign - Aligner les formes sÃ©lectionnÃ©es }
 Procedure ShapeAlign;
 Begin
  If HasSelection Then Begin
@@ -6627,42 +6678,42 @@ Begin
  End;
 End;
 
-{ Procédure ShapeDistribute - Distribuer les formes uniformément }
+{ ProcÃ©dure ShapeDistribute - Distribuer les formes uniformÃ©ment }
 Procedure ShapeDistribute;
 Begin
  If HasSelection Then Begin
   { TODO: Afficher un sous-menu pour choisir la distribution }
   { TODO: Options: Horizontal, Vertical }
-  { TODO: Espacer les formes uniformément entre la première et la dernière }
+  { TODO: Espacer les formes uniformÃ©ment entre la premiÃ¨re et la derniÃ¨re }
   DocumentModified := True;
  End;
 End;
 
-{ Procédure ShapeSize - Modifier la taille de la forme }
+{ ProcÃ©dure ShapeSize - Modifier la taille de la forme }
 Procedure ShapeSize;
 Begin
  If HasSelection Then Begin
-  { TODO: Afficher une boîte de dialogue pour entrer la nouvelle taille }
-  { TODO: Permettre de spécifier largeur et hauteur en pixels ou pourcentage }
+  { TODO: Afficher une boÃ®te de dialogue pour entrer la nouvelle taille }
+  { TODO: Permettre de spÃ©cifier largeur et hauteur en pixels ou pourcentage }
   DocumentModified := True;
  End;
 End;
 
-{ Procédure ShapePosition - Modifier la position de la forme }
+{ ProcÃ©dure ShapePosition - Modifier la position de la forme }
 Procedure ShapePosition;
 Begin
  If HasSelection Then Begin
-  { TODO: Afficher une boîte de dialogue pour entrer la nouvelle position }
-  { TODO: Permettre de spécifier les coordonnées X et Y }
+  { TODO: Afficher une boÃ®te de dialogue pour entrer la nouvelle position }
+  { TODO: Permettre de spÃ©cifier les coordonnÃ©es X et Y }
   DocumentModified := True;
  End;
 End;
 
-{ Procédure ShapeOperations - Opérations booléennes sur les formes }
+{ ProcÃ©dure ShapeOperations - OpÃ©rations boolÃ©ennes sur les formes }
 Procedure ShapeOperations;
 Begin
  If HasSelection Then Begin
-  { TODO: Afficher un sous-menu pour choisir l'opération }
+  { TODO: Afficher un sous-menu pour choisir l'opÃ©ration }
   { TODO: Options: Union, Intersect, Subtract }
   { TODO: Union: Combiner plusieurs formes en une seule }
   { TODO: Intersect: Garder seulement la partie commune des formes }
@@ -6679,17 +6730,17 @@ End;
 { === PROCEDURES DE LA BARRE D'OUTILS === }
 { ============================================================================ }
 
-{ Procédure pour dessiner l'icône d'un outil }
+{ ProcÃ©dure pour dessiner l'icÃ´ne d'un outil }
 Procedure DrawToolIcon(X, Y: Integer; ToolIndex: Integer);
 Var
  CenterX, CenterY: Integer;
 Begin
  CenterX := X + TOOLBAR_BUTTON_SIZE div 2;
  CenterY := Y + TOOLBAR_BUTTON_SIZE div 2;
- 
+
  SetColor(Black);
  Case ToolIndex of
-  1: Begin { Selection - flèche }
+  1: Begin { Selection - flÃ¨che }
       Line(CenterX - 6, CenterY - 6, CenterX - 6, CenterY + 6);
       Line(CenterX - 6, CenterY - 6, CenterX + 4, CenterY);
       Line(CenterX - 6, CenterY + 6, CenterX + 4, CenterY);
@@ -6715,7 +6766,7 @@ Begin
  End;
 End;
 
-{ Procédure pour dessiner un bouton de la barre d'outils }
+{ ProcÃ©dure pour dessiner un bouton de la barre d'outils }
 Procedure DrawToolButton(Index: Integer; IsSelected: Boolean);
 Var
  X, Y: Integer;
@@ -6723,7 +6774,7 @@ Begin
  { Calculer la position du bouton }
  X := TOOLBAR_PADDING + (Index - 1) * (TOOLBAR_BUTTON_SIZE + TOOLBAR_PADDING);
  Y := TOOLBAR_TOP + 1;
- 
+
  { Dessiner le fond du bouton }
  If IsSelected Then Begin
   SetFillStyle(SolidFill, TOOLBAR_BTN_SELECTED);
@@ -6732,7 +6783,7 @@ Begin
   SetFillStyle(SolidFill, TOOLBAR_BTN_COLOR);
  End;
  Bar(X, Y, X + TOOLBAR_BUTTON_SIZE, Y + TOOLBAR_BUTTON_SIZE);
- 
+
  { Dessiner la bordure du bouton }
  If IsSelected Then Begin
   SetColor(White);
@@ -6741,12 +6792,12 @@ Begin
   SetColor(TOOLBAR_BTN_BORDER);
  End;
  Rectangle(X, Y, X + TOOLBAR_BUTTON_SIZE, Y + TOOLBAR_BUTTON_SIZE);
- 
- { Dessiner l'icône de l'outil }
+
+ { Dessiner l'icÃ´ne de l'outil }
  DrawToolIcon(X, Y, Index);
 End;
 
-{ Procédure pour dessiner la barre d'outils complète }
+{ ProcÃ©dure pour dessiner la barre d'outils complÃ¨te }
 Procedure DrawToolbar;
 Var
  I: Integer;
@@ -6755,11 +6806,11 @@ Begin
  { Dessiner le fond de la barre d'outils }
  SetFillStyle(SolidFill, TOOLBAR_COLOR);
  Bar(0, TOOLBAR_TOP, ScreenWidth, TOOLBAR_TOP + TOOLBAR_HEIGHT);
- 
- { Dessiner une ligne de séparation en bas }
+
+ { Dessiner une ligne de sÃ©paration en bas }
  SetColor(DarkGray);
  Line(0, TOOLBAR_TOP + TOOLBAR_HEIGHT, ScreenWidth, TOOLBAR_TOP + TOOLBAR_HEIGHT);
- 
+
  { Dessiner chaque bouton d'outil }
  For I := 1 to TOOLBAR_COUNT do Begin
   ToolIndex := Ord(CurrentTool) + 1;
@@ -6767,21 +6818,21 @@ Begin
  End;
 End;
 
-{ Fonction pour obtenir l'outil à une position donnée }
+{ Fonction pour obtenir l'outil Ã  une position donnÃ©e }
 Function GetToolAtPosition(MouseX, MouseY: Integer): Integer;
 Var
  I, X, Y: Integer;
 Begin
  GetToolAtPosition := 0;
- 
- { Vérifier si la souris est dans la zone de la barre d'outils }
+
+ { VÃ©rifier si la souris est dans la zone de la barre d'outils }
  If (MouseY < TOOLBAR_TOP) or (MouseY > TOOLBAR_TOP + TOOLBAR_HEIGHT) Then Exit;
- 
+
  { Parcourir chaque bouton pour voir si la souris est dessus }
  For I := 1 to TOOLBAR_COUNT do Begin
   X := TOOLBAR_PADDING + (I - 1) * (TOOLBAR_BUTTON_SIZE + TOOLBAR_PADDING);
   Y := TOOLBAR_TOP + 1;
-  
+
   If (MouseX >= X) and (MouseX <= X + TOOLBAR_BUTTON_SIZE) and
      (MouseY >= Y) and (MouseY <= Y + TOOLBAR_BUTTON_SIZE) Then Begin
    GetToolAtPosition := I;
@@ -6790,7 +6841,7 @@ Begin
  End;
 End;
 
-{ Procédure pour sélectionner un outil }
+{ ProcÃ©dure pour sÃ©lectionner un outil }
 Procedure SelectTool(ToolIndex: Integer);
 Begin
  If (ToolIndex >= 1) and (ToolIndex <= TOOLBAR_COUNT) Then Begin
@@ -6806,7 +6857,7 @@ End;
 { === PROCEDURES DE GESTION DES OBJETS ET CLIC SOURIS === }
 { ============================================================================ }
 
-{ Procédure pour initialiser un objet vide }
+{ ProcÃ©dure pour initialiser un objet vide }
 Procedure InitShape(Var Shape: TShapeObject);
 Var
  I: Integer;
@@ -6821,10 +6872,10 @@ Begin
  Shape.LineWidth := 1;
  Shape.LineStyle := LINESTYLE_SOLID;
  Shape.LayerIndex := CurrentLayer;  { Assigner au calque actif }
- Shape.GroupID := 0;                { Pas dans un groupe par défaut }
+ Shape.GroupID := 0;                { Pas dans un groupe par dÃ©faut }
  Shape.Text := '';
  Shape.Selected := False;
- { Initialiser les champs pour polygones et courbes de Bézier }
+ { Initialiser les champs pour polygones et courbes de BÃ©zier }
  Shape.PointCount := 0;
  For I := 1 to MAX_POLYGON_POINTS do Begin
   Shape.Points[I].X := 0;
@@ -6841,7 +6892,7 @@ End;
 
 { *** FONCTIONS POUR LES CONNECTEURS ET POINTS D'ANCRAGE *** }
 
-{ Fonction pour calculer les coordonnées d'un point d'ancrage sur une forme }
+{ Fonction pour calculer les coordonnÃ©es d'un point d'ancrage sur une forme }
 Procedure GetAnchorPoint(ShapeIndex: Integer; AnchorType: Integer; Var AX, AY: Integer);
 Var
  CenterX, CenterY: Integer;
@@ -6851,11 +6902,11 @@ Begin
   AY := 0;
   Exit;
  End;
- 
+
  With Shapes[ShapeIndex] do Begin
   CenterX := (X1 + X2) div 2;
   CenterY := (Y1 + Y2) div 2;
-  
+
   Case AnchorType of
    ANCHOR_TOP: Begin
     AX := CenterX;
@@ -6897,14 +6948,14 @@ Begin
  FoundShape := 0;
  FoundAnchor := ANCHOR_NONE;
  MinDist := ANCHOR_SNAP_DISTANCE + 1;
- 
+
  For I := 1 to ShapeCount do Begin
-  { Ne pas se connecter à soi-même ou à d'autres connecteurs }
+  { Ne pas se connecter Ã  soi-mÃªme ou Ã  d'autres connecteurs }
   IsConnectable := (Shapes[I].ShapeType <> stConnector) and
                    (Shapes[I].ShapeType <> stLine) and
                    (Shapes[I].ShapeType <> stText) and
                    (Shapes[I].ShapeType <> stNone);
-  
+
   If IsConnectable Then Begin
    For AnchorType := ANCHOR_TOP to ANCHOR_RIGHT do Begin
     GetAnchorPoint(I, AnchorType, AX, AY);
@@ -6920,23 +6971,23 @@ Begin
  End;
 End;
 
-{ Procédure pour mettre à jour les extrémités d'un connecteur selon ses connexions }
+{ ProcÃ©dure pour mettre Ã  jour les extrÃ©mitÃ©s d'un connecteur selon ses connexions }
 Procedure UpdateConnectorEndpoints(ConnectorIndex: Integer);
 Var
  AX, AY: Integer;
 Begin
  If (ConnectorIndex < 1) or (ConnectorIndex > ShapeCount) Then Exit;
  If Shapes[ConnectorIndex].ShapeType <> stConnector Then Exit;
- 
+
  With Shapes[ConnectorIndex] do Begin
-  { Mettre à jour le point de départ si connecté }
+  { Mettre Ã  jour le point de dÃ©part si connectÃ© }
   If ConnectStartShape > 0 Then Begin
    GetAnchorPoint(ConnectStartShape, ConnectStartAnchor, AX, AY);
    X1 := AX;
    Y1 := AY;
   End;
-  
-  { Mettre à jour le point d'arrivée si connecté }
+
+  { Mettre Ã  jour le point d'arrivÃ©e si connectÃ© }
   If ConnectEndShape > 0 Then Begin
    GetAnchorPoint(ConnectEndShape, ConnectEndAnchor, AX, AY);
    X2 := AX;
@@ -6945,7 +6996,7 @@ Begin
  End;
 End;
 
-{ Procédure pour mettre à jour tous les connecteurs (après déplacement d'une forme) }
+{ ProcÃ©dure pour mettre Ã  jour tous les connecteurs (aprÃ¨s dÃ©placement d'une forme) }
 Procedure UpdateAllConnectors;
 Var
  I: Integer;
@@ -6957,7 +7008,7 @@ Begin
  End;
 End;
 
-{ Procédure pour dessiner les points d'ancrage sur une forme }
+{ ProcÃ©dure pour dessiner les points d'ancrage sur une forme }
 Procedure DrawAnchorPoints(ShapeIndex: Integer; HighlightAnchor: Integer);
 Var
  AnchorType: Integer;
@@ -6966,22 +7017,22 @@ Var
  AnchorColor: Integer;
 Begin
  If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
- 
+
  { Ne pas dessiner les ancres sur les connecteurs, lignes ou textes }
  If Shapes[ShapeIndex].ShapeType in [stConnector, stLine, stText, stNone] Then Exit;
- 
+
  HalfSize := ANCHOR_POINT_SIZE div 2;
- 
+
  For AnchorType := ANCHOR_TOP to ANCHOR_RIGHT do Begin
   GetAnchorPoint(ShapeIndex, AnchorType, AX, AY);
-  
-  { Choisir la couleur selon si le point est survolé }
+
+  { Choisir la couleur selon si le point est survolÃ© }
   If AnchorType = HighlightAnchor Then
-   AnchorColor := Green  { Vert pour le point survolé }
+   AnchorColor := Green  { Vert pour le point survolÃ© }
   Else
    AnchorColor := Cyan;  { Cyan pour les autres points }
-  
-  { Dessiner un petit carré pour le point d'ancrage }
+
+  { Dessiner un petit carrÃ© pour le point d'ancrage }
   SetFillStyle(SolidFill, AnchorColor);
   SetColor(Black);
   Bar(AX - HalfSize, AY - HalfSize, AX + HalfSize, AY + HalfSize);
@@ -6989,64 +7040,64 @@ Begin
  End;
 End;
 
-{ Procédure pour dessiner une poignée de redimensionnement unique }
+{ ProcÃ©dure pour dessiner une poignÃ©e de redimensionnement unique }
 Procedure DrawSingleHandle(X, Y: Integer; HandleNum: Integer);
 Var
  HalfSize: Integer;
  HandleColor: Integer;
 Begin
  HalfSize := SELECTION_HANDLE_SIZE div 2;
- 
- { Choisir la couleur selon si la poignée est survolée }
+
+ { Choisir la couleur selon si la poignÃ©e est survolÃ©e }
  If HandleNum = HoveredHandle Then
   HandleColor := HANDLE_HOVER_COLOR
  Else
   HandleColor := HANDLE_NORMAL_COLOR;
- 
- { Dessiner la poignée }
+
+ { Dessiner la poignÃ©e }
  SetFillStyle(SolidFill, HandleColor);
  SetColor(HANDLE_BORDER_COLOR);
  Bar(X - HalfSize, Y - HalfSize, X + HalfSize, Y + HalfSize);
  Rectangle(X - HalfSize, Y - HalfSize, X + HalfSize, Y + HalfSize);
 End;
 
-{ Procédure pour dessiner les 8 poignées de redimensionnement sur un objet sélectionné }
+{ ProcÃ©dure pour dessiner les 8 poignÃ©es de redimensionnement sur un objet sÃ©lectionnÃ© }
 Procedure DrawResizeHandles(Var Shape: TShapeObject);
 Var
  CenterX, CenterY: Integer;
 Begin
  If Not Shape.Selected Then Exit;
- 
+
  CenterX := (Shape.X1 + Shape.X2) div 2;
  CenterY := (Shape.Y1 + Shape.Y2) div 2;
- 
- { Dessiner les 8 poignées de redimensionnement }
+
+ { Dessiner les 8 poignÃ©es de redimensionnement }
  { Coin nord-ouest (haut-gauche) }
  DrawSingleHandle(Shape.X1, Shape.Y1, RESIZE_HANDLE_NW);
- 
+
  { Milieu nord (haut) }
  DrawSingleHandle(CenterX, Shape.Y1, RESIZE_HANDLE_N);
- 
+
  { Coin nord-est (haut-droite) }
  DrawSingleHandle(Shape.X2, Shape.Y1, RESIZE_HANDLE_NE);
- 
+
  { Milieu est (droite) }
  DrawSingleHandle(Shape.X2, CenterY, RESIZE_HANDLE_E);
- 
+
  { Coin sud-est (bas-droite) }
  DrawSingleHandle(Shape.X2, Shape.Y2, RESIZE_HANDLE_SE);
- 
+
  { Milieu sud (bas) }
  DrawSingleHandle(CenterX, Shape.Y2, RESIZE_HANDLE_S);
- 
+
  { Coin sud-ouest (bas-gauche) }
  DrawSingleHandle(Shape.X1, Shape.Y2, RESIZE_HANDLE_SW);
- 
+
  { Milieu ouest (gauche) }
  DrawSingleHandle(Shape.X1, CenterY, RESIZE_HANDLE_W);
 End;
 
-{ Procédure pour dessiner un objet unique }
+{ ProcÃ©dure pour dessiner un objet unique }
 Procedure DrawShape(Var Shape: TShapeObject);
 Var
  CenterX, CenterY, RadiusX, RadiusY: Integer;
@@ -7056,7 +7107,7 @@ Var
  GraphLineStyle: Integer;
 Begin
  If Shape.ShapeType = stNone Then Exit;
- 
+
  { Convertir le style de ligne en constante Graph }
  Case Shape.LineStyle of
   LINESTYLE_SOLID: GraphLineStyle := SolidLn;
@@ -7065,11 +7116,11 @@ Begin
   LINESTYLE_DASHDOT: GraphLineStyle := CenterLn;
   Else GraphLineStyle := SolidLn;
  End;
- 
- { Définir la couleur de contour et le style de ligne }
+
+ { DÃ©finir la couleur de contour et le style de ligne }
  SetColor(Shape.LineColor);
  SetLineStyle(GraphLineStyle, 0, Shape.LineWidth);
- 
+
  Case Shape.ShapeType of
   stRectangle: Begin
     { Remplir le rectangle }
@@ -7096,36 +7147,36 @@ Begin
     Line(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
    End;
   stConnector: Begin
-    { Dessiner une ligne avec des cercles aux extrémités }
+    { Dessiner une ligne avec des cercles aux extrÃ©mitÃ©s }
     SetColor(Shape.LineColor);
     Line(Shape.X1, Shape.Y1, Shape.X2, Shape.Y2);
-    
-    { Dessiner le point de départ }
+
+    { Dessiner le point de dÃ©part }
     If Shape.ConnectStartShape > 0 Then Begin
-     { Connecté - dessiner un carré plein }
+     { ConnectÃ© - dessiner un carrÃ© plein }
      SetFillStyle(SolidFill, Green);
      Bar(Shape.X1 - 4, Shape.Y1 - 4, Shape.X1 + 4, Shape.Y1 + 4);
      SetColor(Shape.LineColor);
      Rectangle(Shape.X1 - 4, Shape.Y1 - 4, Shape.X1 + 4, Shape.Y1 + 4);
     End
     Else Begin
-     { Non connecté - dessiner un cercle }
+     { Non connectÃ© - dessiner un cercle }
      SetFillStyle(SolidFill, Shape.FillColor);
      FillEllipse(Shape.X1, Shape.Y1, 4, 4);
      SetColor(Shape.LineColor);
      Circle(Shape.X1, Shape.Y1, 4);
     End;
-    
-    { Dessiner le point d'arrivée }
+
+    { Dessiner le point d'arrivÃ©e }
     If Shape.ConnectEndShape > 0 Then Begin
-     { Connecté - dessiner un carré plein }
+     { ConnectÃ© - dessiner un carrÃ© plein }
      SetFillStyle(SolidFill, Green);
      Bar(Shape.X2 - 4, Shape.Y2 - 4, Shape.X2 + 4, Shape.Y2 + 4);
      SetColor(Shape.LineColor);
      Rectangle(Shape.X2 - 4, Shape.Y2 - 4, Shape.X2 + 4, Shape.Y2 + 4);
     End
     Else Begin
-     { Non connecté - dessiner un cercle }
+     { Non connectÃ© - dessiner un cercle }
      SetFillStyle(SolidFill, Shape.FillColor);
      FillEllipse(Shape.X2, Shape.Y2, 4, 4);
      SetColor(Shape.LineColor);
@@ -7137,14 +7188,14 @@ Begin
     OutTextXY(Shape.X1, Shape.Y1, Shape.Text);
    End;
   stPolygon: Begin
-    { Dessiner un polygone si au moins 3 points sont définis }
+    { Dessiner un polygone si au moins 3 points sont dÃ©finis }
     If Shape.PointCount >= 3 Then Begin
      { Remplir le polygone en dessinant des lignes de remplissage }
      SetFillStyle(SolidFill, Shape.FillColor);
      { Dessiner le contour du polygone }
      SetColor(Shape.LineColor);
      For I := 1 to Shape.PointCount - 1 do Begin
-      Line(Shape.Points[I].X, Shape.Points[I].Y, 
+      Line(Shape.Points[I].X, Shape.Points[I].Y,
            Shape.Points[I + 1].X, Shape.Points[I + 1].Y);
      End;
      { Fermer le polygone }
@@ -7153,10 +7204,10 @@ Begin
     End;
    End;
   stBezier: Begin
-    { Dessiner une courbe de Bézier cubique (4 points de contrôle) }
+    { Dessiner une courbe de BÃ©zier cubique (4 points de contrÃ´le) }
     If Shape.PointCount = 4 Then Begin
      SetColor(Shape.LineColor);
-     { Dessiner la courbe de Bézier par approximation avec des segments de ligne }
+     { Dessiner la courbe de BÃ©zier par approximation avec des segments de ligne }
      { P0 = Points[1], P1 = Points[2], P2 = Points[3], P3 = Points[4] }
      { Formule: B(t) = (1-t)^3*P0 + 3*(1-t)^2*t*P1 + 3*(1-t)*t^2*P2 + t^3*P3 }
      PrevX := Shape.Points[1].X;
@@ -7181,7 +7232,7 @@ Begin
       PrevX := BezierX;
       PrevY := BezierY;
      End;
-     { Dessiner les points de contrôle si sélectionné }
+     { Dessiner les points de contrÃ´le si sÃ©lectionnÃ© }
      If Shape.Selected Then Begin
       SetColor(LightGray);
       Line(Shape.Points[1].X, Shape.Points[1].Y, Shape.Points[2].X, Shape.Points[2].Y);
@@ -7208,12 +7259,12 @@ Begin
     OutTextXY(CenterX, CenterY, 'Image');
    End;
  End;
- 
- { Dessiner les 8 poignées de redimensionnement si l'objet est sélectionné }
+
+ { Dessiner les 8 poignÃ©es de redimensionnement si l'objet est sÃ©lectionnÃ© }
  DrawResizeHandles(Shape);
 End;
 
-{ Procédure pour dessiner tous les objets }
+{ ProcÃ©dure pour dessiner tous les objets }
 Procedure DrawAllShapes;
 Var
  I: Integer;
@@ -7224,22 +7275,22 @@ Begin
    DrawShape(Shapes[I]);
   End;
  End;
- 
- { Dessiner les points d'ancrage sur la forme survolée si on utilise l'outil connecteur }
+
+ { Dessiner les points d'ancrage sur la forme survolÃ©e si on utilise l'outil connecteur }
  If (CurrentTool = ttConnector) and (HoveredShapeForAnchor > 0) Then Begin
   DrawAnchorPoints(HoveredShapeForAnchor, NearestAnchorPoint);
  End;
 End;
 
-{ Fonction pour vérifier si un point est dans un objet }
+{ Fonction pour vÃ©rifier si un point est dans un objet }
 Function PointInShape(X, Y: Integer; Var Shape: TShapeObject): Boolean;
 Var
  MinX, MinY, MaxX, MaxY: Integer;
 Begin
  PointInShape := False;
  If Shape.ShapeType = stNone Then Exit;
- 
- { Normaliser les coordonnées }
+
+ { Normaliser les coordonnÃ©es }
  If Shape.X1 < Shape.X2 Then Begin
   MinX := Shape.X1;
   MaxX := Shape.X2;
@@ -7248,7 +7299,7 @@ Begin
   MinX := Shape.X2;
   MaxX := Shape.X1;
  End;
- 
+
  If Shape.Y1 < Shape.Y2 Then Begin
   MinY := Shape.Y1;
   MaxY := Shape.Y2;
@@ -7257,23 +7308,23 @@ Begin
   MinY := Shape.Y2;
   MaxY := Shape.Y1;
  End;
- 
- { Vérifier si le point est dans le rectangle englobant }
+
+ { VÃ©rifier si le point est dans le rectangle englobant }
  PointInShape := (X >= MinX) and (X <= MaxX) and (Y >= MinY) and (Y <= MaxY);
 End;
 
-{ Fonction pour trouver l'objet à une position donnée }
+{ Fonction pour trouver l'objet Ã  une position donnÃ©e }
 Function GetShapeAtPosition(X, Y: Integer): Integer;
 Var
  I: Integer;
 Begin
  GetShapeAtPosition := 0;
- { Parcourir les objets du dernier au premier (priorité aux objets dessus) }
+ { Parcourir les objets du dernier au premier (prioritÃ© aux objets dessus) }
  For I := ShapeCount downto 1 do Begin
-  { Ne sélectionner que les formes des calques visibles et non verrouillés }
-  If IsLayerVisible(Shapes[I].LayerIndex) and 
+  { Ne sÃ©lectionner que les formes des calques visibles et non verrouillÃ©s }
+  If IsLayerVisible(Shapes[I].LayerIndex) and
      (Not IsLayerLocked(Shapes[I].LayerIndex)) Then Begin
-   { Si on est en mode édition de groupe, ne sélectionner que les objets du groupe }
+   { Si on est en mode Ã©dition de groupe, ne sÃ©lectionner que les objets du groupe }
    If IsShapeInEditingGroup(I) Then Begin
     If PointInShape(X, Y, Shapes[I]) Then Begin
      GetShapeAtPosition := I;
@@ -7284,7 +7335,7 @@ Begin
  End;
 End;
 
-{ Procédure pour désélectionner tous les objets }
+{ ProcÃ©dure pour dÃ©sÃ©lectionner tous les objets }
 Procedure DeselectAllShapes;
 Var
  I: Integer;
@@ -7295,12 +7346,12 @@ Begin
  SelectedShape := 0;
 End;
 
-{ Procédure pour sélectionner un objet }
+{ ProcÃ©dure pour sÃ©lectionner un objet }
 Procedure SelectShape(Index: Integer);
 Begin
  DeselectAllShapes;
  If (Index >= 1) and (Index <= ShapeCount) Then Begin
-  { Si pas en mode édition de groupe et que l'objet fait partie d'un groupe, sélectionner tout le groupe }
+  { Si pas en mode Ã©dition de groupe et que l'objet fait partie d'un groupe, sÃ©lectionner tout le groupe }
   If (EditingGroupID = 0) and (Shapes[Index].GroupID > 0) Then Begin
    SelectGroup(Shapes[Index].GroupID);
    SelectedShape := Index;
@@ -7316,7 +7367,7 @@ End;
 { === PROCEDURES POUR LE GLISSER-DEPOSER (DRAG AND DROP) === }
 { ============================================================================ }
 
-{ Fonction pour détecter quelle poignée de redimensionnement est sous le curseur }
+{ Fonction pour dÃ©tecter quelle poignÃ©e de redimensionnement est sous le curseur }
 Function GetResizeHandle(X, Y: Integer; ShapeIndex: Integer): Integer;
 Var
  X1, Y1, X2, Y2: Integer;
@@ -7324,10 +7375,10 @@ Var
  HalfSize: Integer;
 Begin
  GetResizeHandle := RESIZE_HANDLE_NONE;
- 
+
  If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
  If Not Shapes[ShapeIndex].Selected Then Exit;
- 
+
  X1 := Shapes[ShapeIndex].X1;
  Y1 := Shapes[ShapeIndex].Y1;
  X2 := Shapes[ShapeIndex].X2;
@@ -7335,50 +7386,50 @@ Begin
  CenterX := (X1 + X2) div 2;
  CenterY := (Y1 + Y2) div 2;
  HalfSize := RESIZE_HANDLE_SIZE div 2;
- 
- { Vérifier chaque poignée }
+
+ { VÃ©rifier chaque poignÃ©e }
  { Coin nord-ouest (haut-gauche) }
  If (Abs(X - X1) <= HalfSize) and (Abs(Y - Y1) <= HalfSize) Then Begin
   GetResizeHandle := RESIZE_HANDLE_NW;
   Exit;
  End;
- 
+
  { Milieu nord (haut) }
  If (Abs(X - CenterX) <= HalfSize) and (Abs(Y - Y1) <= HalfSize) Then Begin
   GetResizeHandle := RESIZE_HANDLE_N;
   Exit;
  End;
- 
+
  { Coin nord-est (haut-droite) }
  If (Abs(X - X2) <= HalfSize) and (Abs(Y - Y1) <= HalfSize) Then Begin
   GetResizeHandle := RESIZE_HANDLE_NE;
   Exit;
  End;
- 
+
  { Milieu est (droite) }
  If (Abs(X - X2) <= HalfSize) and (Abs(Y - CenterY) <= HalfSize) Then Begin
   GetResizeHandle := RESIZE_HANDLE_E;
   Exit;
  End;
- 
+
  { Coin sud-est (bas-droite) }
  If (Abs(X - X2) <= HalfSize) and (Abs(Y - Y2) <= HalfSize) Then Begin
   GetResizeHandle := RESIZE_HANDLE_SE;
   Exit;
  End;
- 
+
  { Milieu sud (bas) }
  If (Abs(X - CenterX) <= HalfSize) and (Abs(Y - Y2) <= HalfSize) Then Begin
   GetResizeHandle := RESIZE_HANDLE_S;
   Exit;
  End;
- 
+
  { Coin sud-ouest (bas-gauche) }
  If (Abs(X - X1) <= HalfSize) and (Abs(Y - Y2) <= HalfSize) Then Begin
   GetResizeHandle := RESIZE_HANDLE_SW;
   Exit;
  End;
- 
+
  { Milieu ouest (gauche) }
  If (Abs(X - X1) <= HalfSize) and (Abs(Y - CenterY) <= HalfSize) Then Begin
   GetResizeHandle := RESIZE_HANDLE_W;
@@ -7386,24 +7437,24 @@ Begin
  End;
 End;
 
-{ Procédure pour déplacer un objet }
+{ ProcÃ©dure pour dÃ©placer un objet }
 Procedure MoveShape(ShapeIndex: Integer; DeltaX, DeltaY: Integer);
 Begin
  If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
- 
+
  Shapes[ShapeIndex].X1 := Shapes[ShapeIndex].X1 + DeltaX;
  Shapes[ShapeIndex].Y1 := Shapes[ShapeIndex].Y1 + DeltaY;
  Shapes[ShapeIndex].X2 := Shapes[ShapeIndex].X2 + DeltaX;
  Shapes[ShapeIndex].Y2 := Shapes[ShapeIndex].Y2 + DeltaY;
- 
+
  DocumentModified := True;
 End;
 
-{ Procédure pour redimensionner un objet selon la poignée }
+{ ProcÃ©dure pour redimensionner un objet selon la poignÃ©e }
 Procedure ResizeShape(ShapeIndex: Integer; Handle: Integer; NewX, NewY: Integer);
 Begin
  If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
- 
+
  Case Handle of
   RESIZE_HANDLE_NW: Begin
    Shapes[ShapeIndex].X1 := NewX;
@@ -7434,29 +7485,29 @@ Begin
    Shapes[ShapeIndex].X1 := NewX;
   End;
  End;
- 
+
  DocumentModified := True;
 End;
 
-{ Procédure pour démarrer le glissement }
+{ ProcÃ©dure pour dÃ©marrer le glissement }
 Procedure StartDrag(ShapeIndex: Integer; X, Y: Integer; Handle: Integer);
 Begin
  If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
- 
+
  DragStartX := X;
  DragStartY := Y;
  DragOrigX1 := Shapes[ShapeIndex].X1;
  DragOrigY1 := Shapes[ShapeIndex].Y1;
  DragOrigX2 := Shapes[ShapeIndex].X2;
  DragOrigY2 := Shapes[ShapeIndex].Y2;
- 
+
  If Handle <> RESIZE_HANDLE_NONE Then Begin
-  { Démarrer le redimensionnement }
+  { DÃ©marrer le redimensionnement }
   DragMode := DRAG_MODE_RESIZE;
   DragResizeHandle := Handle;
  End
  Else Begin
-  { Démarrer le déplacement }
+  { DÃ©marrer le dÃ©placement }
   DragMode := DRAG_MODE_MOVE;
   DragOffsetX := X - Shapes[ShapeIndex].X1;
   DragOffsetY := Y - Shapes[ShapeIndex].Y1;
@@ -7464,20 +7515,20 @@ Begin
  End;
 End;
 
-{ Procédure pour traiter le mouvement de la souris pendant le drag }
+{ ProcÃ©dure pour traiter le mouvement de la souris pendant le drag }
 Procedure HandleMouseMove(X, Y: Integer);
 Var
  DeltaX, DeltaY: Integer;
 Begin
  If DragMode = DRAG_MODE_NONE Then Exit;
  If SelectedShape < 1 Then Exit;
- 
+
  If DragMode = DRAG_MODE_MOVE Then Begin
-  { Déplacer l'objet }
+  { DÃ©placer l'objet }
   DeltaX := X - DragStartX;
   DeltaY := Y - DragStartY;
-  
-  { Restaurer position originale puis appliquer le déplacement }
+
+  { Restaurer position originale puis appliquer le dÃ©placement }
   Shapes[SelectedShape].X1 := DragOrigX1 + DeltaX;
   Shapes[SelectedShape].Y1 := DragOrigY1 + DeltaY;
   Shapes[SelectedShape].X2 := DragOrigX2 + DeltaX;
@@ -7489,7 +7540,7 @@ Begin
  End;
 End;
 
-{ Procédure pour terminer le glissement }
+{ ProcÃ©dure pour terminer le glissement }
 Procedure EndDrag;
 Begin
  If DragMode <> DRAG_MODE_NONE Then Begin
@@ -7499,7 +7550,7 @@ Begin
  DragResizeHandle := RESIZE_HANDLE_NONE;
 End;
 
-{ Procédure pour initialiser le glisser-déposer }
+{ ProcÃ©dure pour initialiser le glisser-dÃ©poser }
 Procedure InitDragDrop;
 Begin
  DragMode := DRAG_MODE_NONE;
@@ -7519,18 +7570,18 @@ End;
 { === FIN DES PROCEDURES DE GLISSER-DEPOSER === }
 { ============================================================================ }
 
-{ Procédure pour ajouter un nouvel objet }
+{ ProcÃ©dure pour ajouter un nouvel objet }
 Procedure AddShape(ShapeType: TShapeType; X1, Y1, X2, Y2: Integer);
 Var
  Temp: Integer;
 Begin
  If ShapeCount >= MAX_SHAPES Then Exit;
- 
+
  Inc(ShapeCount);
  InitShape(Shapes[ShapeCount]);
  Shapes[ShapeCount].ShapeType := ShapeType;
- 
- { Normaliser les coordonnées (X1,Y1 = coin supérieur gauche) }
+
+ { Normaliser les coordonnÃ©es (X1,Y1 = coin supÃ©rieur gauche) }
  If X1 > X2 Then Begin
   Temp := X1;
   X1 := X2;
@@ -7541,7 +7592,7 @@ Begin
   Y1 := Y2;
   Y2 := Temp;
  End;
- 
+
  Shapes[ShapeCount].X1 := X1;
  Shapes[ShapeCount].Y1 := Y1;
  Shapes[ShapeCount].X2 := X2;
@@ -7550,24 +7601,24 @@ Begin
  Shapes[ShapeCount].LineColor := CurrentLineColor;
  Shapes[ShapeCount].LineWidth := CurrentLineWidth;
  Shapes[ShapeCount].LineStyle := CurrentLineStyle;
- 
+
  DocumentModified := True;
 End;
 
-{ Procédure pour gérer le clic gauche de la souris }
+{ ProcÃ©dure pour gÃ©rer le clic gauche de la souris }
 Procedure HandleLeftClick(X, Y: Integer);
 Var
  ShapeIndex: Integer;
  ToolIndex: Integer;
  ResizeHandle: Integer;
 Begin
- { Vérifier si le clic est dans la barre de menu }
+ { VÃ©rifier si le clic est dans la barre de menu }
  If Y <= MENU_HEIGHT Then Begin
-  { Gérer le clic sur le menu }
+  { GÃ©rer le clic sur le menu }
   Exit;
  End;
- 
- { Vérifier si le clic est dans la barre d'outils }
+
+ { VÃ©rifier si le clic est dans la barre d'outils }
  If (Y > MENU_HEIGHT) and (Y <= TOOLBAR_TOP + TOOLBAR_HEIGHT) Then Begin
   ToolIndex := GetToolAtPosition(X, Y);
   If ToolIndex > 0 Then Begin
@@ -7576,26 +7627,26 @@ Begin
   End;
   Exit;
  End;
- 
+
  { Le clic est dans la zone de travail }
  If Y > WORK_AREA_TOP Then Begin
   Case CurrentTool of
    ttSelection: Begin
-     { Mode sélection: vérifier d'abord si on clique sur une poignée de redimensionnement }
+     { Mode sÃ©lection: vÃ©rifier d'abord si on clique sur une poignÃ©e de redimensionnement }
      If SelectedShape > 0 Then Begin
       ResizeHandle := GetResizeHandle(X, Y, SelectedShape);
       If ResizeHandle <> RESIZE_HANDLE_NONE Then Begin
-       { Démarrer le redimensionnement }
+       { DÃ©marrer le redimensionnement }
        StartDrag(SelectedShape, X, Y, ResizeHandle);
        Exit;
       End;
      End;
-     
+
      { Chercher un objet sous le curseur }
      ShapeIndex := GetShapeAtPosition(X, Y);
      If ShapeIndex > 0 Then Begin
       SelectShape(ShapeIndex);
-      { Démarrer le glissement pour déplacer l'objet }
+      { DÃ©marrer le glissement pour dÃ©placer l'objet }
       StartDrag(ShapeIndex, X, Y, RESIZE_HANDLE_NONE);
      End
      Else Begin
@@ -7604,13 +7655,13 @@ Begin
      End;
     End;
    ttRectangle, ttEllipse, ttLine, ttConnector: Begin
-     { Démarrer le dessin d'une forme }
+     { DÃ©marrer le dessin d'une forme }
      IsDrawing := True;
      DrawStartX := X;
      DrawStartY := Y;
     End;
    ttText: Begin
-     { Ajouter un objet texte à la position du clic }
+     { Ajouter un objet texte Ã  la position du clic }
      If ShapeCount < MAX_SHAPES Then Begin
       Inc(ShapeCount);
       InitShape(Shapes[ShapeCount]);
@@ -7626,12 +7677,12 @@ Begin
     End;
    ttPolygon: Begin
      { Pour les polygones, on ajoute un point au polygone en cours }
-     { Pour simplifier, créer un polygone régulier (hexagone) }
+     { Pour simplifier, crÃ©er un polygone rÃ©gulier (hexagone) }
      If ShapeCount < MAX_SHAPES Then Begin
       Inc(ShapeCount);
       InitShape(Shapes[ShapeCount]);
       Shapes[ShapeCount].ShapeType := stPolygon;
-      { Créer un hexagone centré sur le clic }
+      { CrÃ©er un hexagone centrÃ© sur le clic }
       Shapes[ShapeCount].PointCount := 6;
       Shapes[ShapeCount].Points[1].X := X;
       Shapes[ShapeCount].Points[1].Y := Y - 30;
@@ -7656,12 +7707,12 @@ Begin
      End;
     End;
    ttBezier: Begin
-     { Créer une courbe de Bézier par défaut }
+     { CrÃ©er une courbe de BÃ©zier par dÃ©faut }
      If ShapeCount < MAX_SHAPES Then Begin
       Inc(ShapeCount);
       InitShape(Shapes[ShapeCount]);
       Shapes[ShapeCount].ShapeType := stBezier;
-      { Définir 4 points de contrôle pour une courbe de Bézier cubique }
+      { DÃ©finir 4 points de contrÃ´le pour une courbe de BÃ©zier cubique }
       Shapes[ShapeCount].PointCount := 4;
       Shapes[ShapeCount].Points[1].X := X;
       Shapes[ShapeCount].Points[1].Y := Y;
@@ -7700,7 +7751,7 @@ Begin
  End;
 End;
 
-{ Procédure pour gérer le relâchement du bouton gauche }
+{ ProcÃ©dure pour gÃ©rer le relÃ¢chement du bouton gauche }
 Procedure HandleLeftRelease(X, Y: Integer);
 Var
  ShapeType: TShapeType;
@@ -7710,44 +7761,44 @@ Begin
  { Terminer le glissement s'il y en a un en cours }
  If DragMode <> DRAG_MODE_NONE Then Begin
   EndDrag;
-  { Mettre à jour tous les connecteurs après déplacement }
+  { Mettre Ã  jour tous les connecteurs aprÃ¨s dÃ©placement }
   UpdateAllConnectors;
   Exit;
  End;
- 
+
  If Not IsDrawing Then Exit;
- 
+
  IsDrawing := False;
- 
- { Traitement spécial pour les connecteurs }
+
+ { Traitement spÃ©cial pour les connecteurs }
  If CurrentTool = ttConnector Then Begin
-  { Vérifier si on doit créer un connecteur }
+  { VÃ©rifier si on doit crÃ©er un connecteur }
   If (Abs(X - DrawStartX) > 5) or (Abs(Y - DrawStartY) > 5) Then Begin
-   { Chercher les points d'ancrage proches pour le début et la fin }
+   { Chercher les points d'ancrage proches pour le dÃ©but et la fin }
    FindNearestAnchor(DrawStartX, DrawStartY, StartShape, StartAnchor);
    FindNearestAnchor(X, Y, EndShape, EndAnchor);
-   
-   { Créer le connecteur }
+
+   { CrÃ©er le connecteur }
    If ShapeCount < MAX_SHAPES Then Begin
     Inc(ShapeCount);
     InitShape(Shapes[ShapeCount]);
     Shapes[ShapeCount].ShapeType := stConnector;
-    
-    { Définir les connexions }
+
+    { DÃ©finir les connexions }
     Shapes[ShapeCount].ConnectStartShape := StartShape;
     Shapes[ShapeCount].ConnectStartAnchor := StartAnchor;
     Shapes[ShapeCount].ConnectEndShape := EndShape;
     Shapes[ShapeCount].ConnectEndAnchor := EndAnchor;
-    
-    { Définir les coordonnées initiales }
+
+    { DÃ©finir les coordonnÃ©es initiales }
     Shapes[ShapeCount].X1 := DrawStartX;
     Shapes[ShapeCount].Y1 := DrawStartY;
     Shapes[ShapeCount].X2 := X;
     Shapes[ShapeCount].Y2 := Y;
-    
-    { Mettre à jour les extrémités si connecté à des formes }
+
+    { Mettre Ã  jour les extrÃ©mitÃ©s si connectÃ© Ã  des formes }
     UpdateConnectorEndpoints(ShapeCount);
-    
+
     Shapes[ShapeCount].FillColor := CurrentFillColor;
     Shapes[ShapeCount].LineColor := CurrentLineColor;
     Shapes[ShapeCount].LineWidth := CurrentLineWidth;
@@ -7756,8 +7807,8 @@ Begin
   End;
   Exit;
  End;
- 
- { Créer la forme selon l'outil actuel }
+
+ { CrÃ©er la forme selon l'outil actuel }
  Case CurrentTool of
   ttRectangle: ShapeType := stRectangle;
   ttEllipse: ShapeType := stEllipse;
@@ -7765,14 +7816,14 @@ Begin
   ttImage: ShapeType := stImage;
   Else Exit;
  End;
- 
+
  { Ajouter la forme si elle a une taille minimale }
  If (Abs(X - DrawStartX) > 5) or (Abs(Y - DrawStartY) > 5) Then Begin
   AddShape(ShapeType, DrawStartX, DrawStartY, X, Y);
  End;
 End;
 
-{ Procédure pour initialiser les objets }
+{ ProcÃ©dure pour initialiser les objets }
 Procedure InitShapes;
 Var
  I: Integer;
@@ -7785,14 +7836,14 @@ Begin
  LastMouseX := 0;
  LastMouseY := 0;
  LastMouseButton := 0;
- { Initialiser le glisser-déposer }
+ { Initialiser le glisser-dÃ©poser }
  InitDragDrop;
  { Initialiser les variables pour les points d'ancrage }
  HoveredShapeForAnchor := 0;
  NearestAnchorPoint := ANCHOR_NONE;
  { Initialiser les calques }
  InitAllLayers;
- { Initialiser les variables de la boîte de dialogue des calques }
+ { Initialiser les variables de la boÃ®te de dialogue des calques }
  LayerDialogVisible := False;
  LayerDialogX := 0;
  LayerDialogY := 0;
@@ -7811,14 +7862,14 @@ End;
 { === PROCEDURES DU MENU CONTEXTUEL (CLIC DROIT) === }
 { ============================================================================ }
 
-{ Procédure pour masquer le menu contextuel }
+{ ProcÃ©dure pour masquer le menu contextuel }
 Procedure HideContextMenu;
 Begin
  ContextMenuVisible := False;
  ContextMenuHighlight := 0;
 End;
 
-{ Procédure pour dessiner le menu contextuel }
+{ ProcÃ©dure pour dessiner le menu contextuel }
 Procedure DrawContextMenu;
 Var
  I: Integer;
@@ -7827,25 +7878,25 @@ Var
  ItemEnabled: Boolean;
 Begin
  If Not ContextMenuVisible Then Exit;
- 
+
  MenuHeight := CONTEXT_MENU_ITEM_COUNT * CONTEXT_MENU_ITEM_HEIGHT + 4;
- 
+
  { Dessiner le fond du menu }
  SetFillStyle(SolidFill, CONTEXT_MENU_BG_COLOR);
  Bar(ContextMenuX, ContextMenuY, ContextMenuX + CONTEXT_MENU_WIDTH, ContextMenuY + MenuHeight);
- 
+
  { Dessiner la bordure du menu }
  SetColor(CONTEXT_MENU_BORDER_COLOR);
  Rectangle(ContextMenuX, ContextMenuY, ContextMenuX + CONTEXT_MENU_WIDTH, ContextMenuY + MenuHeight);
- 
- { Dessiner chaque élément du menu }
+
+ { Dessiner chaque Ã©lÃ©ment du menu }
  For I := 1 to CONTEXT_MENU_ITEM_COUNT do Begin
   ItemY := ContextMenuY + 2 + (I - 1) * CONTEXT_MENU_ITEM_HEIGHT;
-  
-  { Déterminer si l'élément est activé }
-  { Cut, Copy, Delete nécessitent une sélection }
-  { Paste nécessite que le presse-papiers ne soit pas vide }
-  { Properties nécessite une sélection }
+
+  { DÃ©terminer si l'Ã©lÃ©ment est activÃ© }
+  { Cut, Copy, Delete nÃ©cessitent une sÃ©lection }
+  { Paste nÃ©cessite que le presse-papiers ne soit pas vide }
+  { Properties nÃ©cessite une sÃ©lection }
   Case I of
    1: ItemEnabled := (SelectedShape > 0); { Cut }
    2: ItemEnabled := (SelectedShape > 0); { Copy }
@@ -7854,8 +7905,8 @@ Begin
    5: ItemEnabled := (SelectedShape > 0); { Properties }
    Else ItemEnabled := True;
   End;
-  
-  { Dessiner le fond de l'élément si surbrillance }
+
+  { Dessiner le fond de l'Ã©lÃ©ment si surbrillance }
   If (I = ContextMenuHighlight) and ItemEnabled Then Begin
    SetFillStyle(SolidFill, CONTEXT_MENU_HIGHLIGHT_BG);
    Bar(ContextMenuX + 1, ItemY, ContextMenuX + CONTEXT_MENU_WIDTH - 1, ItemY + CONTEXT_MENU_ITEM_HEIGHT);
@@ -7867,13 +7918,13 @@ Begin
   Else Begin
    SetColor(CONTEXT_MENU_DISABLED_COLOR);
   End;
-  
-  { Afficher le texte de l'élément }
+
+  { Afficher le texte de l'Ã©lÃ©ment }
   OutTextXY(ContextMenuX + 8, ItemY + 4, ContextMenuNames[I]);
  End;
 End;
 
-{ Fonction pour obtenir l'élément du menu contextuel à une position }
+{ Fonction pour obtenir l'Ã©lÃ©ment du menu contextuel Ã  une position }
 Function GetContextMenuItemAtPosition(X, Y: Integer): Integer;
 Var
  MenuHeight: Integer;
@@ -7881,12 +7932,12 @@ Var
  Item: Integer;
 Begin
  GetContextMenuItemAtPosition := 0;
- 
+
  If Not ContextMenuVisible Then Exit;
- 
+
  MenuHeight := CONTEXT_MENU_ITEM_COUNT * CONTEXT_MENU_ITEM_HEIGHT + 4;
- 
- { Vérifier si le point est dans le menu }
+
+ { VÃ©rifier si le point est dans le menu }
  If (X >= ContextMenuX) and (X <= ContextMenuX + CONTEXT_MENU_WIDTH) and
     (Y >= ContextMenuY) and (Y <= ContextMenuY + MenuHeight) Then Begin
   RelY := Y - ContextMenuY - 2;
@@ -7897,12 +7948,12 @@ Begin
  End;
 End;
 
-{ Procédure pour exécuter une action du menu contextuel }
+{ ProcÃ©dure pour exÃ©cuter une action du menu contextuel }
 Procedure ExecuteContextMenuAction(ItemIndex: Integer);
 Var
  ItemEnabled: Boolean;
 Begin
- { Vérifier si l'élément est activé }
+ { VÃ©rifier si l'Ã©lÃ©ment est activÃ© }
  Case ItemIndex of
   1: ItemEnabled := (SelectedShape > 0); { Cut }
   2: ItemEnabled := (SelectedShape > 0); { Copy }
@@ -7911,66 +7962,66 @@ Begin
   5: ItemEnabled := (SelectedShape > 0); { Properties }
   Else ItemEnabled := False;
  End;
- 
+
  If Not ItemEnabled Then Exit;
- 
+
  Case ItemIndex of
   1: EditCut;        { Cut }
   2: EditCopy;       { Copy }
   3: EditPaste;      { Paste }
   4: EditDelete;     { Delete }
-  5: ShowPropertiesDialog; { Properties - Afficher la boîte de dialogue des propriétés }
+  5: ShowPropertiesDialog; { Properties - Afficher la boÃ®te de dialogue des propriÃ©tÃ©s }
  End;
- 
+
  HideContextMenu;
 End;
 
-{ Procédure pour afficher le menu contextuel }
+{ ProcÃ©dure pour afficher le menu contextuel }
 Procedure ShowContextMenu(X, Y: Integer);
 Begin
  { Ajuster la position pour que le menu reste visible }
  ContextMenuX := X;
  ContextMenuY := Y;
- 
- { S'assurer que le menu ne dépasse pas de l'écran }
+
+ { S'assurer que le menu ne dÃ©passe pas de l'Ã©cran }
  If ContextMenuX + CONTEXT_MENU_WIDTH > ScreenWidth Then Begin
   ContextMenuX := ScreenWidth - CONTEXT_MENU_WIDTH - 2;
  End;
  If ContextMenuY + (CONTEXT_MENU_ITEM_COUNT * CONTEXT_MENU_ITEM_HEIGHT + 4) > ScreenHeight Then Begin
   ContextMenuY := ScreenHeight - (CONTEXT_MENU_ITEM_COUNT * CONTEXT_MENU_ITEM_HEIGHT + 4) - 2;
  End;
- 
+
  ContextMenuVisible := True;
  ContextMenuHighlight := 0;
 End;
 
-{ Procédure pour gérer le clic droit de la souris }
+{ ProcÃ©dure pour gÃ©rer le clic droit de la souris }
 Procedure HandleRightClick(X, Y: Integer);
 Var
  ShapeIndex: Integer;
 Begin
- { Masquer le menu contextuel s'il est déjà visible }
+ { Masquer le menu contextuel s'il est dÃ©jÃ  visible }
  If ContextMenuVisible Then Begin
   HideContextMenu;
   Exit;
  End;
- 
- { Vérifier si le clic est dans la zone de travail }
+
+ { VÃ©rifier si le clic est dans la zone de travail }
  If Y > WORK_AREA_TOP Then Begin
   { Chercher s'il y a un objet sous le curseur }
   ShapeIndex := GetShapeAtPosition(X, Y);
-  
-  { Si un objet est trouvé, le sélectionner }
+
+  { Si un objet est trouvÃ©, le sÃ©lectionner }
   If ShapeIndex > 0 Then Begin
    SelectShape(ShapeIndex);
   End;
-  
+
   { Afficher le menu contextuel }
   ShowContextMenu(X, Y);
  End;
 End;
 
-{ Procédure pour initialiser le menu contextuel }
+{ ProcÃ©dure pour initialiser le menu contextuel }
 Procedure InitContextMenu;
 Begin
  ContextMenuVisible := False;
@@ -7983,7 +8034,7 @@ End;
 { === FIN DES PROCEDURES DU MENU CONTEXTUEL === }
 { ============================================================================ }
 
-{ Procédure pour dessiner la barre de menu principale }
+{ ProcÃ©dure pour dessiner la barre de menu principale }
 Procedure DrawMenuBar;
 Var
  I: Integer;
@@ -7992,16 +8043,16 @@ Begin
  { Dessiner le fond de la barre de menu }
  SetFillStyle(SolidFill, MENU_BAR_COLOR);
  Bar(0, 0, ScreenWidth, MENU_HEIGHT);
- 
- { Dessiner une ligne de séparation }
+
+ { Dessiner une ligne de sÃ©paration }
  SetColor(DarkGray);
  Line(0, MENU_HEIGHT, ScreenWidth, MENU_HEIGHT);
- 
- { Dessiner chaque élément du menu }
+
+ { Dessiner chaque Ã©lÃ©ment du menu }
  For I := 1 to MENU_COUNT do Begin
   TextX := MenuPositions[I];
-  
-  { Si ce menu est sélectionné, dessiner le fond en surbrillance }
+
+  { Si ce menu est sÃ©lectionnÃ©, dessiner le fond en surbrillance }
   If (I = CurrentMenu) and (MenuState <> msNone) Then Begin
    SetFillStyle(SolidFill, MENU_HIGHLIGHT_BG);
    Bar(TextX - 4, 1, TextX + Length(MenuNames[I]) * 8 + 4, MENU_HEIGHT - 1);
@@ -8010,13 +8061,13 @@ Begin
   Else Begin
    SetColor(MENU_TEXT_COLOR);
   End;
-  
+
   { Dessiner le texte du menu }
   OutTextXY(TextX, 4, MenuNames[I]);
  End;
 End;
 
-{ Procédure pour dessiner un sous-menu déroulant }
+{ ProcÃ©dure pour dessiner un sous-menu dÃ©roulant }
 Procedure DrawDropDownMenu(MenuIndex: Integer);
 Const
  MaxItems = 12;
@@ -8026,7 +8077,7 @@ Var
  X, Y, I, ItemCount: Integer;
  Items: Array[1..MaxItems] of String[20];
 Begin
- { Définir les éléments selon le menu sélectionné }
+ { DÃ©finir les Ã©lÃ©ments selon le menu sÃ©lectionnÃ© }
  Case MenuIndex of
   1: Begin { File }
       ItemCount := 11;
@@ -8124,26 +8175,26 @@ Begin
   Else
    ItemCount := 0;
  End;
- 
+
  If ItemCount = 0 Then Exit;
- 
- { Calculer la position du menu déroulant }
+
+ { Calculer la position du menu dÃ©roulant }
  X := MenuPositions[MenuIndex] - 4;
  Y := MENU_HEIGHT + 1;
- 
- { Dessiner le fond du menu déroulant }
+
+ { Dessiner le fond du menu dÃ©roulant }
  SetFillStyle(SolidFill, MENU_BAR_COLOR);
  Bar(X, Y, X + MenuWidth, Y + ItemCount * ItemHeight + 4);
- 
+
  { Dessiner la bordure }
  SetColor(DarkGray);
  Rectangle(X, Y, X + MenuWidth, Y + ItemCount * ItemHeight + 4);
- 
- { Dessiner les éléments du menu }
+
+ { Dessiner les Ã©lÃ©ments du menu }
  SetColor(MENU_TEXT_COLOR);
  For I := 1 to ItemCount do Begin
   If Items[I] = '-' Then Begin
-   { Dessiner un séparateur }
+   { Dessiner un sÃ©parateur }
    SetColor(DarkGray);
    Line(X + 5, Y + I * ItemHeight - 6, X + MenuWidth - 5, Y + I * ItemHeight - 6);
    SetColor(MENU_TEXT_COLOR);
@@ -8154,17 +8205,17 @@ Begin
  End;
 End;
 
-{ Fonction pour déterminer quel menu est sous la souris }
+{ Fonction pour dÃ©terminer quel menu est sous la souris }
 Function GetMenuAtPosition(MouseX, MouseY: Integer): Integer;
 Var
  I: Integer;
 Begin
  GetMenuAtPosition := 0;
- 
- { Vérifier si on est dans la barre de menu }
+
+ { VÃ©rifier si on est dans la barre de menu }
  If (MouseY >= 0) and (MouseY <= MENU_HEIGHT) Then Begin
   For I := 1 to MENU_COUNT do Begin
-   If (MouseX >= MenuPositions[I] - 4) and 
+   If (MouseX >= MenuPositions[I] - 4) and
       (MouseX <= MenuPositions[I] + Length(MenuNames[I]) * 8 + 4) Then Begin
     GetMenuAtPosition := I;
     Exit;
@@ -8173,7 +8224,7 @@ Begin
  End;
 End;
 
-{ Procédure pour initialiser le système de menus }
+{ ProcÃ©dure pour initialiser le systÃ¨me de menus }
 Procedure InitMenuSystem;
 Begin
  CurrentMenu := 0;
@@ -8211,7 +8262,7 @@ Begin
  { Initialisation des variables de gestion des groupes }
  NextGroupID := 0;
  EditingGroupID := 0;
- { Initialisation des variables de la boîte de dialogue des propriétés }
+ { Initialisation des variables de la boÃ®te de dialogue des propriÃ©tÃ©s }
  PropertiesDialogVisible := False;
  PropDialogX := 0;
  PropDialogY := 0;
@@ -8229,7 +8280,7 @@ Begin
  CurrentTool := ttSelection;
 End;
 
-{ Fonction pour exécuter une action du menu File }
+{ Fonction pour exÃ©cuter une action du menu File }
 { Retourne True si l'application doit quitter }
 Function ExecuteFileMenuAction(ItemIndex: Integer): Boolean;
 Begin
@@ -8240,51 +8291,51 @@ Begin
   3: FileClose;         { Close }
   4: FileSave;          { Save }
   5: FileSaveAs;        { Save As... }
-  { 6 est un séparateur }
+  { 6 est un sÃ©parateur }
   7: FileExport;        { Export... }
-  { 8 est un séparateur }
+  { 8 est un sÃ©parateur }
   9: FilePrint;         { Print... }
   10: FilePrintPreview; { Print Preview }
   11: ExecuteFileMenuAction := FileExit; { Exit }
  End;
 End;
 
-{ Procédure pour exécuter une action du menu Edit }
+{ ProcÃ©dure pour exÃ©cuter une action du menu Edit }
 Procedure ExecuteEditMenuAction(ItemIndex: Integer);
 Begin
  Case ItemIndex of
   1: EditUndo;         { Undo }
   2: EditRedo;         { Redo }
-  { 3 est un séparateur }
+  { 3 est un sÃ©parateur }
   4: EditCut;          { Cut }
   5: EditCopy;         { Copy }
   6: EditPaste;        { Paste }
   7: EditDelete;       { Delete }
-  { 8 est un séparateur }
+  { 8 est un sÃ©parateur }
   9: EditSelectAll;    { Select All }
-  { 10 est un séparateur }
+  { 10 est un sÃ©parateur }
   11: EditFind;        { Find... }
   12: EditReplace;     { Replace... }
  End;
 End;
 
-{ Procédure pour exécuter une action du menu View }
+{ ProcÃ©dure pour exÃ©cuter une action du menu View }
 Procedure ExecuteViewMenuAction(ItemIndex: Integer);
 Begin
  Case ItemIndex of
   1: ViewZoomIn;       { Zoom In }
   2: ViewZoomOut;      { Zoom Out }
   3: ViewFitPage;      { Fit Page }
-  { 4 est un séparateur }
+  { 4 est un sÃ©parateur }
   5: ViewGrid;         { Grid }
   6: ViewRulers;       { Rulers }
   7: ViewGuides;       { Guides }
-  { 8 est un séparateur }
+  { 8 est un sÃ©parateur }
   9: ViewSnapToGrid;   { Snap to Grid }
  End;
 End;
 
-{ Procédure pour exécuter une action du menu Insert }
+{ ProcÃ©dure pour exÃ©cuter une action du menu Insert }
 Procedure ExecuteInsertMenuAction(ItemIndex: Integer);
 Begin
  Case ItemIndex of
@@ -8293,42 +8344,42 @@ Begin
   3: InsertImage;      { Image... }
   4: InsertConnector;  { Connector }
   5: InsertPage;       { Page }
-  6: ShowLayerDialog;  { Layer - Ouvrir la boîte de dialogue des calques }
+  6: ShowLayerDialog;  { Layer - Ouvrir la boÃ®te de dialogue des calques }
  End;
 End;
 
-{ Procédure pour exécuter une action du menu Format }
+{ ProcÃ©dure pour exÃ©cuter une action du menu Format }
 Procedure ExecuteFormatMenuAction(ItemIndex: Integer);
 Begin
  Case ItemIndex of
   1: FormatFill;       { Fill... }
   2: FormatLine;       { Line... }
   3: FormatText;       { Text... }
-  { 4 est un séparateur }
+  { 4 est un sÃ©parateur }
   5: FormatAlignment;  { Alignment }
   6: FormatGroup;      { Group }
   7: FormatUngroup;    { Ungroup }
  End;
 End;
 
-{ Procédure pour exécuter une action du menu Shape }
+{ ProcÃ©dure pour exÃ©cuter une action du menu Shape }
 Procedure ExecuteShapeMenuAction(ItemIndex: Integer);
 Begin
  Case ItemIndex of
   1: ShapeRotate;      { Rotate }
   2: ShapeFlip;        { Flip }
-  { 3 est un séparateur }
+  { 3 est un sÃ©parateur }
   4: ShapeAlign;       { Align }
   5: ShapeDistribute;  { Distribute }
-  { 6 est un séparateur }
+  { 6 est un sÃ©parateur }
   7: ShapeSize;        { Size }
   8: ShapePosition;    { Position }
-  { 9 est un séparateur }
+  { 9 est un sÃ©parateur }
   10: ShapeOperations; { Operations }
  End;
 End;
 
-{ Fonction pour déterminer quel élément de menu est sous la souris }
+{ Fonction pour dÃ©terminer quel Ã©lÃ©ment de menu est sous la souris }
 Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer;
 Const
  ItemHeight = 16;
@@ -8337,8 +8388,8 @@ Var
  X, Y, ItemCount, I: Integer;
 Begin
  GetDropDownItemAtPosition := 0;
- 
- { Déterminer le nombre d'éléments selon le menu }
+
+ { DÃ©terminer le nombre d'Ã©lÃ©ments selon le menu }
  Case MenuIndex of
   1: ItemCount := 11; { File }
   2: ItemCount := 12; { Edit }
@@ -8351,17 +8402,17 @@ Begin
   9: ItemCount := 3;  { Help }
   Else ItemCount := 0;
  End;
- 
+
  If ItemCount = 0 Then Exit;
- 
- { Calculer la position du menu déroulant }
+
+ { Calculer la position du menu dÃ©roulant }
  X := MenuPositions[MenuIndex] - 4;
  Y := MENU_HEIGHT + 1;
- 
- { Vérifier si la souris est dans la zone du menu déroulant }
+
+ { VÃ©rifier si la souris est dans la zone du menu dÃ©roulant }
  If (MouseX >= X) and (MouseX <= X + MenuWidth) and
     (MouseY >= Y) and (MouseY <= Y + ItemCount * ItemHeight + 4) Then Begin
-  { Calculer l'élément sous la souris }
+  { Calculer l'Ã©lÃ©ment sous la souris }
   I := (MouseY - Y) div ItemHeight + 1;
   If (I >= 1) and (I <= ItemCount) Then Begin
    GetDropDownItemAtPosition := I;
@@ -8369,38 +8420,48 @@ Begin
  End;
 End;
 
-{ Procédure pour rafraîchir l'affichage complet }
+{ Wrapper : PtcMouse.GetMouseState exige des LongInt par var en FPC }
+Procedure GetMouseStateInt(Var MX, MY: Integer; Var MB: LongInt);
+Var
+ LX, LY: LongInt;
+Begin
+ GetMouseState(LX, LY, MB);
+ MX := LX;
+ MY := LY;
+End;
+
+{ ProcÃ©dure pour rafraÃ®chir l'affichage complet }
 Procedure RefreshScreen;
 Begin
- { Effacer l'écran avec fond blanc (zone de travail sous la barre d'outils) }
+ { Effacer l'Ã©cran avec fond blanc (zone de travail sous la barre d'outils) }
  SetFillStyle(SolidFill, White);
  Bar(0, TOOLBAR_TOP + TOOLBAR_HEIGHT + 1, ScreenWidth, ScreenHeight);
- 
+
  { Dessiner tous les objets graphiques }
  DrawAllShapes;
- 
+
  { Dessiner la barre de menu }
  DrawMenuBar;
- 
+
  { Dessiner la barre d'outils }
  DrawToolbar;
- 
+
  { Si un menu est ouvert, le dessiner }
  If (MenuState = msDropDown) and (CurrentMenu > 0) Then Begin
   DrawDropDownMenu(CurrentMenu);
  End;
- 
+
  { Dessiner le menu contextuel s'il est visible }
  If ContextMenuVisible Then Begin
   DrawContextMenu;
  End;
- 
- { Dessiner la boîte de dialogue des propriétés si elle est visible }
+
+ { Dessiner la boÃ®te de dialogue des propriÃ©tÃ©s si elle est visible }
  If PropertiesDialogVisible Then Begin
   DrawPropertiesDialog;
  End;
- 
- { Dessiner la boîte de dialogue des calques si elle est visible }
+
+ { Dessiner la boÃ®te de dialogue des calques si elle est visible }
  If LayerDialogVisible Then Begin
   DrawLayerDialog;
  End;
@@ -8411,30 +8472,30 @@ BEGIN
  InitMenuSystem;
  InitShapes;
  InitContextMenu;
- 
- { Afficher l'écran initial avec le menu }
+
+ { Afficher l'Ã©cran initial avec le menu }
  RefreshScreen;
- 
+
  { Boucle principale - en attente d'une touche pour quitter }
  If MouseDriverFound Then Begin
   ShowMouse;
  End;
- 
+
  { Boucle principale du programme }
  Repeat
-  { Gérer les événements de la souris }
+  { GÃ©rer les Ã©vÃ©nements de la souris }
   If MouseDriverFound Then Begin
    {$IFDEF FPC}
-    GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
+    GetMouseStateInt(LastMouseX, LastMouseY, LastMouseButton);
    {$ELSE}
     GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
    {$ENDIF}
-   
-   { Détecter le survol des poignées de redimensionnement }
+
+   { DÃ©tecter le survol des poignÃ©es de redimensionnement }
    If (SelectedShape > 0) and (DragMode = DRAG_MODE_NONE) Then Begin
     OldHoveredHandle := HoveredHandle;
     HoveredHandle := GetResizeHandle(LastMouseX, LastMouseY, SelectedShape);
-    { Si le survol a changé, rafraîchir l'écran }
+    { Si le survol a changÃ©, rafraÃ®chir l'Ã©cran }
     If HoveredHandle <> OldHoveredHandle Then Begin
      HideMouse;
      RefreshScreen;
@@ -8444,8 +8505,8 @@ BEGIN
    Else Begin
     HoveredHandle := RESIZE_HANDLE_NONE;
    End;
-   
-   { Détecter le survol des formes pour afficher les points d'ancrage (outil connecteur) }
+
+   { DÃ©tecter le survol des formes pour afficher les points d'ancrage (outil connecteur) }
    If (CurrentTool = ttConnector) and (DragMode = DRAG_MODE_NONE) Then Begin
     { Trouver la forme sous la souris }
     HoveredShapeForAnchor := GetShapeAtPosition(LastMouseX, LastMouseY);
@@ -8462,19 +8523,19 @@ BEGIN
     HoveredShapeForAnchor := 0;
     NearestAnchorPoint := ANCHOR_NONE;
    End;
-   
-   { Détecter un clic gauche (bouton 1) }
+
+   { DÃ©tecter un clic gauche (bouton 1) }
    If (LastMouseButton and 1) = 1 Then Begin
     HideMouse;
-    { Si la boîte de dialogue des calques est visible, gérer le clic }
+    { Si la boÃ®te de dialogue des calques est visible, gÃ©rer le clic }
     If LayerDialogVisible Then Begin
      HandleLayerDialogClick(LastMouseX, LastMouseY);
     End
-    { Si la boîte de dialogue des propriétés est visible, gérer le clic }
+    { Si la boÃ®te de dialogue des propriÃ©tÃ©s est visible, gÃ©rer le clic }
     Else If PropertiesDialogVisible Then Begin
      HandlePropertiesDialogClick(LastMouseX, LastMouseY);
     End
-    { Si le menu contextuel est visible, vérifier si on clique dedans }
+    { Si le menu contextuel est visible, vÃ©rifier si on clique dedans }
     Else If ContextMenuVisible Then Begin
      ContextMenuHighlight := GetContextMenuItemAtPosition(LastMouseX, LastMouseY);
      If ContextMenuHighlight > 0 Then Begin
@@ -8490,14 +8551,14 @@ BEGIN
     End;
     RefreshScreen;
     ShowMouse;
-    { Suivre le mouvement de la souris pendant que le bouton est enfoncé (drag) }
+    { Suivre le mouvement de la souris pendant que le bouton est enfoncÃ© (drag) }
     Repeat
      {$IFDEF FPC}
-      GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
+      GetMouseStateInt(LastMouseX, LastMouseY, LastMouseButton);
      {$ELSE}
       GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
      {$ENDIF}
-     { Si on est en mode glissement, mettre à jour la position }
+     { Si on est en mode glissement, mettre Ã  jour la position }
      If DragMode <> DRAG_MODE_NONE Then Begin
       HideMouse;
       HandleMouseMove(LastMouseX, LastMouseY);
@@ -8505,31 +8566,31 @@ BEGIN
       ShowMouse;
      End;
     Until (LastMouseButton and 1) = 0;
-    { Gérer le relâchement du bouton }
+    { GÃ©rer le relÃ¢chement du bouton }
     HideMouse;
     HandleLeftRelease(LastMouseX, LastMouseY);
     RefreshScreen;
     ShowMouse;
    End;
-   
-   { Détecter un clic droit (bouton 2) }
+
+   { DÃ©tecter un clic droit (bouton 2) }
    If (LastMouseButton and 2) = 2 Then Begin
     HideMouse;
     HandleRightClick(LastMouseX, LastMouseY);
     RefreshScreen;
     ShowMouse;
-    { Attendre que le bouton soit relâché }
+    { Attendre que le bouton soit relÃ¢chÃ© }
     Repeat
      {$IFDEF FPC}
-      GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
+      GetMouseStateInt(LastMouseX, LastMouseY, LastMouseButton);
      {$ELSE}
       GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
      {$ENDIF}
     Until (LastMouseButton and 2) = 0;
    End;
   End;
- 
-  { Attendre une entrée clavier }
+
+  { Attendre une entrÃ©e clavier }
   If KeyPressed Then Begin
    Case ReadKey of
     #27: Begin
@@ -8554,10 +8615,10 @@ BEGIN
    End;
   End;
  Until False;
- 
+
  If MouseDriverFound Then Begin
   HideMouse;
  End;
- 
+
  CloseGraph;
 END.

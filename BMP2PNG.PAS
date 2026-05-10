@@ -74,6 +74,7 @@ Var
  ByteV:Byte;
  CRCTable:Array[0..255]of LongInt;
  Adler_A,Adler_B:LongInt;
+ IDATCRC,IDATRemaining,IDATBlockRemain:LongInt;
 
 Function Path2NameExt(Const Path:String):String;
 Var
@@ -205,73 +206,100 @@ Begin
  GetAdler32:=(LongInt(Adler_B)shl 16)or LongInt(Adler_A);
 End;
 
-Var
-  {Tampon assemblant les donn�es d'image filtr�es � envelopper en flux zlib.
-   Une image RGB plein-cadre fait au plus MaxWidth*3+1 octets par ligne.}
- RawBuf:Array[0..(MaxWidth*3+1)*64-1]of Byte;
- RawLen:LongInt;
- IDATBuf:Array[0..((MaxWidth*3+1)*64)+1024]of Byte;
- IDATLen:LongInt;
-
-  {Encapsule les "RawLen" octets de RawBuf dans un flux zlib (CMF/FLG +
-   blocs deflate "stored" + Adler-32) plac� dans IDATBuf.}
-Procedure BuildIDAT;
-Var
- Pos:LongInt;
- Remain,BlockLen:LongInt;
- IsLast:Byte;
- Header:Byte;
- LenLo,LenHi,NLenLo,NLenHi:Byte;
- Adler:LongInt;
+Procedure WriteIDATData(Const Data;Len:LongInt);
 Begin
- IDATLen:=0;
-  { En-t�te zlib : CMF=$78 (deflate, fen�tre 32K), FLG=$01 (compression
-    "fastest", aucun dictionnaire, FCHECK calcul� pour que (CMF*256+FLG)
-    soit divisible par 31). }
- IDATBuf[IDATLen]:=$78; Inc(IDATLen);
- IDATBuf[IDATLen]:=$01; Inc(IDATLen);
- Pos:=0;
- Adler_A:=1;
- Adler_B:=0;
- If RawLen=0 Then Begin
-   { Bloc vide final, n�cessaire si l'image est de taille z�ro. }
-  IDATBuf[IDATLen]:=1;       Inc(IDATLen); { BFINAL=1, BTYPE=00 }
-  IDATBuf[IDATLen]:=0;       Inc(IDATLen); { LEN lo  }
-  IDATBuf[IDATLen]:=0;       Inc(IDATLen); { LEN hi  }
-  IDATBuf[IDATLen]:=$FF;     Inc(IDATLen); { NLEN lo }
-  IDATBuf[IDATLen]:=$FF;     Inc(IDATLen); { NLEN hi }
- End
-  Else
- Begin
-  While Pos<RawLen Do Begin
-   Remain:=RawLen-Pos;
-   If Remain>MaxStoredBlock Then BlockLen:=MaxStoredBlock
-                            Else BlockLen:=Remain;
-   If(Pos+BlockLen)>=RawLen Then IsLast:=1 Else IsLast:=0;
-   Header:=IsLast;          { BFINAL dans le bit 0, BTYPE=00 dans bits 1-2 }
-   IDATBuf[IDATLen]:=Header; Inc(IDATLen);
-   LenLo  := Byte( BlockLen        and $FF);
-   LenHi  := Byte((BlockLen shr 8) and $FF);
-   NLenLo := Byte((not BlockLen)        and $FF);
-   NLenHi := Byte(((not BlockLen)shr 8) and $FF);
-   IDATBuf[IDATLen]:=LenLo;  Inc(IDATLen);
-   IDATBuf[IDATLen]:=LenHi;  Inc(IDATLen);
-   IDATBuf[IDATLen]:=NLenLo; Inc(IDATLen);
-   IDATBuf[IDATLen]:=NLenHi; Inc(IDATLen);
-   Move(RawBuf[Pos],IDATBuf[IDATLen],BlockLen);
-   UpdateAdler(RawBuf[Pos],BlockLen);
-   Inc(IDATLen,BlockLen);
-   Inc(Pos,BlockLen);
-  End;
- End;
-  { Adler-32 sur les donn�es non compress�es, en gros-boutien. }
- Adler:=GetAdler32;
- IDATBuf[IDATLen]:=Byte((Adler shr 24)and $FF); Inc(IDATLen);
- IDATBuf[IDATLen]:=Byte((Adler shr 16)and $FF); Inc(IDATLen);
- IDATBuf[IDATLen]:=Byte((Adler shr  8)and $FF); Inc(IDATLen);
- IDATBuf[IDATLen]:=Byte( Adler         and $FF); Inc(IDATLen);
+ If Len<=0 Then Exit;
+ WriteData(Data,Len);
+ IDATCRC:=UpdateCRC(IDATCRC,Data,Len);
 End;
 
+Procedure WriteIDATByte(B:Byte);
+Begin
+ WriteIDATData(B,1);
+End;
+
+Procedure WriteIDATStoredHeader(BlockLen:LongInt;IsLast:Byte);
+Var
+ B:Byte;
+Begin
+ B:=IsLast;
+ WriteIDATByte(B);
+ B:=Byte(BlockLen and $FF);
+ WriteIDATByte(B);
+ B:=Byte((BlockLen shr 8)and $FF);
+ WriteIDATByte(B);
+ B:=Byte((not BlockLen)and $FF);
+ WriteIDATByte(B);
+ B:=Byte(((not BlockLen)shr 8)and $FF);
+ WriteIDATByte(B);
+End;
+
+Procedure BeginIDAT(TotalRaw:LongInt);
+Var
+ TypeBuf:Array[0..3]of Byte;
+ NumBlocks,IDATLen:LongInt;
+ B:Byte;
+Begin
+ If TotalRaw=0 Then NumBlocks:=1
+               Else NumBlocks:=(TotalRaw+MaxStoredBlock-1)div MaxStoredBlock;
+ IDATLen:=2+TotalRaw+NumBlocks*5+4;
+ WriteBE32(IDATLen);
+ TypeBuf[0]:=Ord('I');
+ TypeBuf[1]:=Ord('D');
+ TypeBuf[2]:=Ord('A');
+ TypeBuf[3]:=Ord('T');
+ BlockWrite(DestPNG,TypeBuf,4,ByteWritten);
+ IDATCRC:=StartCRC;
+ IDATCRC:=UpdateCRC(IDATCRC,TypeBuf,4);
+ B:=$78;
+ WriteIDATByte(B);
+ B:=$01;
+ WriteIDATByte(B);
+ Adler_A:=1;
+ Adler_B:=0;
+ IDATRemaining:=TotalRaw;
+ IDATBlockRemain:=0;
+ If TotalRaw=0 Then WriteIDATStoredHeader(0,1);
+End;
+
+Procedure WriteIDATRaw(Const Data;Len:LongInt);
+Var
+ P:^Byte;
+ Chunk,BlockLen:LongInt;
+ IsLast:Byte;
+Begin
+ P:=@Data;
+ While Len>0 Do Begin
+  If IDATBlockRemain=0 Then Begin
+   If IDATRemaining>MaxStoredBlock Then BlockLen:=MaxStoredBlock
+                                  Else BlockLen:=IDATRemaining;
+   If BlockLen=IDATRemaining Then IsLast:=1 Else IsLast:=0;
+   WriteIDATStoredHeader(BlockLen,IsLast);
+   IDATBlockRemain:=BlockLen;
+  End;
+  If Len>IDATBlockRemain Then Chunk:=IDATBlockRemain Else Chunk:=Len;
+  WriteIDATData(P^,Chunk);
+  UpdateAdler(P^,Chunk);
+  Inc(P,Chunk);
+  Dec(Len,Chunk);
+  Dec(IDATRemaining,Chunk);
+  Dec(IDATBlockRemain,Chunk);
+ End;
+End;
+
+Procedure EndIDAT;
+Var
+ Adler:LongInt;
+ B:Byte;
+Begin
+ Adler:=GetAdler32;
+ B:=Byte((Adler shr 24)and $FF); WriteIDATByte(B);
+ B:=Byte((Adler shr 16)and $FF); WriteIDATByte(B);
+ B:=Byte((Adler shr  8)and $FF); WriteIDATByte(B);
+ B:=Byte( Adler         and $FF); WriteIDATByte(B);
+ IDATCRC:=FinishCRC(IDATCRC);
+ WriteBE32(IDATCRC);
+End;
   {Lit la ligne brute du BMP (RowIndex=0 �tant la ligne sup�rieure du
    bitmap stock� : attention, BMP est stock� de bas en haut, l'appelant
    doit donc inverser l'index avant l'appel).}
@@ -373,12 +401,6 @@ BEGIN
  End;
  BMPBytesPerLine:=Word(BMPBPL);
 
-  {V�rification de capacit� : les lignes filtr�es (1 octet de filtre +
-   3*W octets RGB) doivent tenir dans le tampon RawBuf.}
- If(LongInt(BIH.biWidth)*3+1)*LongInt(BIH.biHeight)>SizeOf(RawBuf)Then Begin
-  WriteLn('Image trop grande pour la conversion en m�moire !');
-  Halt;
- End;
 
   {Lecture �ventuelle de la palette du BMP (pour les profondeurs 1, 4
    et 8 bits par pixel).}
@@ -423,9 +445,9 @@ BEGIN
  IHDRData[12]:=0;  { Entrelacement : aucun }
  WriteChunk('IHDR',IHDRData,13);
 
-  {Construction des lignes RGB filtr�es (filtre None=0 + 3 octets BGR
-   convertis en RGB) dans RawBuf, dans l'ordre PNG (haut vers bas).}
- RawLen:=0;
+  {Construction et ecriture des lignes RGB filtrees (filtre None=0 + 3 octets BGR
+   convertis en RGB) directement dans le flux IDAT.}
+ BeginIDAT((LongInt(ImageWidth)*3+1)*LongInt(ImageHeight));
  For Y:=0 to LongInt(ImageHeight)-1 Do Begin
   SourceRow:=LongInt(ImageHeight)-1-Y;
   ReadBmpRow(SourceRow);
@@ -447,14 +469,10 @@ BEGIN
     End;
    End;
   End;
-  Move(RowBuf,RawBuf[RawLen],LongInt(ImageWidth)*3+1);
-  Inc(RawLen,LongInt(ImageWidth)*3+1);
+  WriteIDATRaw(RowBuf,LongInt(ImageWidth)*3+1);
  End;
 
-  {Construction du flux zlib (avec blocs deflate "stored") puis �criture
-   du chunk IDAT correspondant.}
- BuildIDAT;
- WriteChunk('IDAT',IDATBuf,IDATLen);
+ EndIDAT;
 
   {Chunk IEND, vide.}
  ByteV:=0;

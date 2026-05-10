@@ -183,6 +183,7 @@ Var
  GCTSize:Word;
  PackedField:Byte;
  ZeroByte:Byte;
+ GIFHeader:String[6];
 
 BEGIN
  If(ParamStr(1)='/?')or(ParamStr(1)='--help')or(ParamStr(1)='-h')Then Begin
@@ -255,7 +256,8 @@ BEGIN
   End;
 
    {Ent�te GIF89a}
-  BlockWrite(DestGIF,'GIF89a',6,ByteWritten);
+  GIFHeader:='GIF89a';
+  BlockWrite(DestGIF,GIFHeader[1],6,ByteWritten);
 
    {Logical Screen Descriptor}
   WriteWordToFile(Width);

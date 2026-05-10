@@ -248,7 +248,7 @@ Begin
  WriteLongLE(Value);
 End;
 
-Procedure WriteElementOB(Group,Element:Word;Const Data;Len:LongInt);
+Procedure WriteElementOB(Group,Element:Word;Var Data;Len:LongInt);
 Begin
  WriteTag(Group,Element);
  WriteVR('OB');

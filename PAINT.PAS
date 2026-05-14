@@ -35,6 +35,8 @@
 
 Program Paint;
 
+{$A-}
+
 {$IFDEF FPC}
  {$MODE TP}
  {$Q-}
@@ -153,7 +155,10 @@ Type
  End;
 
  { Structure de l'en-tête BMP }
- TBMPFileHeader = Record
+ { Packed Record obligatoire : layout binaire mappé au fichier (14 octets).
+   Sans Packed, FPC -Mtp insère 2 octets de padding entre bfType (Word) et
+   bfSize (LongInt), portant SizeOf à 16 et décalant toute la lecture. }
+ TBMPFileHeader = Packed Record
   bfType: Word;
   bfSize: LongInt;
   bfReserved1: Word;
@@ -161,7 +166,7 @@ Type
   bfOffBits: LongInt;
  End;
 
- TBMPInfoHeader = Record
+ TBMPInfoHeader = Packed Record
   biSize: LongInt;
   biWidth: LongInt;
   biHeight: LongInt;
@@ -176,7 +181,7 @@ Type
  End;
 
  { Structure pour l'en-tête GIF }
- TGIFHeader = Record
+ TGIFHeader = Packed Record
   Signature: Array[0..5] of Char;
   ScreenWidth: Word;
   ScreenHeight: Word;
@@ -282,6 +287,11 @@ Var
  Drawing: Boolean;
  StartX, StartY: Integer;
  EndX, EndY: Integer;
+
+ { Sauvegarde des pixels du canvas (image chargée) pour redessin
+   après effacement par le menu/interface. }
+ CanvasImage: PByte;
+ CanvasImageW, CanvasImageH: Integer;
 
 {$IFNDEF FPC}
 { Procédures pour la gestion de la souris en Turbo Pascal via Int 33h }
@@ -1005,11 +1015,30 @@ Begin
 End;
 
 Procedure DrawCanvas;
+Var
+ CX, CY, CW, CH: Integer;
+ P: PByte;
 Begin
  { Fond du canvas (zone de dessin) }
  SetFillStyle(SolidFill, White);
  Bar(CanvasX, CanvasY, CanvasX + Min(CanvasWidth, ImageBuffer.Width) - 1,
      CanvasY + Min(CanvasHeight, ImageBuffer.Height) - 1);
+
+ { Redessiner les pixels de l'image chargée si présents }
+ If (CanvasImage <> Nil) and (CanvasImageW > 0) and (CanvasImageH > 0) Then Begin
+  CW := Min(CanvasImageW, CanvasWidth);
+  CH := Min(CanvasImageH, CanvasHeight);
+  P := CanvasImage;
+  For CY := 0 to CanvasImageH - 1 do Begin
+   If CY < CH Then
+    For CX := 0 to CanvasImageW - 1 do Begin
+     If CX < CW Then PutPixel(CanvasX + CX, CanvasY + CY, P^);
+     Inc(P);
+    End
+   Else
+    Inc(P, CanvasImageW);
+  End;
+ End;
 
  { Bordure du canvas }
  SetColor(DarkGray);
@@ -1180,6 +1209,13 @@ Begin
  ImageBuffer.Format := FMT_BMP;
  ImageBuffer.Modified := False;
 
+ { (Re)allouer le buffer de pixels du canvas pour la persistance d'affichage }
+ If CanvasImage <> Nil Then FreeMem(CanvasImage, CanvasImageW * CanvasImageH);
+ CanvasImageW := ImageBuffer.Width;
+ CanvasImageH := ImageBuffer.Height;
+ GetMem(CanvasImage, CanvasImageW * CanvasImageH);
+ FillChar(CanvasImage^, CanvasImageW * CanvasImageH, White);
+
  { Calculer la taille de la ligne avec padding (alignement 4 octets) }
  RowSize := ((InfoHeader.biWidth * InfoHeader.biBitCount + 31) div 32) * 4;
  PadBytes := RowSize - ((InfoHeader.biWidth * InfoHeader.biBitCount + 7) div 8);
@@ -1260,6 +1296,9 @@ Begin
       PixelColor := 0;
     End;
     PutPixel(CanvasX + X, CanvasY + SrcY, PixelColor);
+    { Mémoriser le pixel pour pouvoir redessiner le canvas après un menu. }
+    If (CanvasImage <> Nil) and (X < CanvasImageW) and (SrcY < CanvasImageH) Then
+     PByte(PtrUInt(CanvasImage) + PtrUInt(SrcY) * PtrUInt(CanvasImageW) + PtrUInt(X))^ := PixelColor;
    End;
   End;
  End;
@@ -3214,6 +3253,7 @@ Begin
    Case UpCase(Key) of
     '+': If ZoomLevel < 800 Then ZoomLevel := ZoomLevel * 2;
     '-': If ZoomLevel > 25 Then ZoomLevel := ZoomLevel div 2;
+    'Q': Running := False; { Quitter rapidement }
     #27: Begin { Échap }
      If MenuActive Then Begin
       MenuActive := False;
@@ -3261,6 +3301,9 @@ Begin
  SelectionActive := False;
  Drawing := False;
  TextInsertMode := False;
+ CanvasImage := Nil;
+ CanvasImageW := 0;
+ CanvasImageH := 0;
 
  { Dessiner l'interface }
  RedrawInterface;
@@ -3281,6 +3324,12 @@ Begin
  {$ELSE}
  HideMouse;
  {$ENDIF}
+
+ { Libérer le buffer de pixels du canvas }
+ If CanvasImage <> Nil Then Begin
+  FreeMem(CanvasImage, CanvasImageW * CanvasImageH);
+  CanvasImage := Nil;
+ End;
 
  { Libérer l'historique avec les données }
  While UndoList <> Nil do Begin
@@ -3343,8 +3392,11 @@ BEGIN
 
   { Charger un fichier si spécifié en ligne de commande }
   If ParamCount > 0 Then Begin
+   { L'interface est déjà dessinée par Initialize ; LoadImage trace les pixels
+     dans le canvas. Ne PAS rappeler RedrawInterface ici, sinon les pixels
+     du BMP/GIF/etc. sont effacés avant même d'être visibles. }
    If LoadImage(ParamStr(1)) Then
-    RedrawInterface;
+    DrawStatusBar;
   End;
 
   MainLoop;

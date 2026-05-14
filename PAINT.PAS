@@ -256,6 +256,10 @@ Var
  { Rubber-band XOR pour la selection en cours }
  RubberValid: Boolean;
  RubberL, RubberT, RubberR, RubberB: Integer;
+ { Apercu XOR pour les formes (ligne, rectangle, ellipse, rectarrondi) }
+ PreviewValid: Boolean;
+ PreviewTool: Byte;
+ PreviewL, PreviewT, PreviewR, PreviewB: Integer;
  { Marching ants : animation du contour de la selection }
  AntsPhase: Integer;
  AntsCounter: Integer;
@@ -1133,6 +1137,72 @@ Begin
  SetWriteMode(CopyPut);
 End;
 
+Procedure XorEllipsePreview(CX, CY, RX, RY: Integer);
+{ Trace une ellipse d'apercu en XOR + DottedLn en l'approximant par une
+  polyligne de N segments. On utilise Line() du BGI qui, contrairement a
+  Ellipse(), respecte SetWriteMode(XORPut) et SetLineStyle(DottedLn) :
+  un second appel avec les memes parametres efface exactement le precedent
+  (pas de GetPixel/PutPixel, donc pas de corruption par le curseur souris). }
+Const
+ PiOver180 = 3.14159265358979 / 180.0;
+Var
+ I, N: Integer;
+ Step: Integer;
+ X1, Y1, X2, Y2: Integer;
+ Theta: Real;
+Begin
+ If (RX <= 0) or (RY <= 0) Then Exit;
+ { Densite de segments proportionnelle au perimetre approximatif. }
+ N := (RX + RY) Div 2;
+ If N < 16 Then N := 16;
+ If N > 72 Then N := 72;
+ { S'assurer que N divise 360 sans reste pour fermer proprement. }
+ Step := 360 Div N;
+ If Step < 5 Then Step := 5;
+ X1 := CX + RX;
+ Y1 := CY;
+ I := Step;
+ While I <= 360 Do Begin
+  Theta := I * PiOver180;
+  X2 := CX + Round(RX * Cos(Theta));
+  Y2 := CY + Round(RY * Sin(Theta));
+  Line(X1, Y1, X2, Y2);
+  X1 := X2;
+  Y1 := Y2;
+  Inc(I, Step);
+ End;
+ { Fermer le contour vers le point de depart si la division n'a pas boucle. }
+ If (X1 <> CX + RX) or (Y1 <> CY) Then
+  Line(X1, Y1, CX + RX, CY);
+End;
+
+Procedure XorPreviewShape(Tool: Byte; X1, Y1, X2, Y2: Integer);
+{ Apercu XOR d'une ligne / rectangle / ellipse / rectarrondi pendant le drag.
+  Un second appel avec les memes coordonnees efface le precedent.
+  Le contour est en pointilles (DottedLn) pour un rendu "marching ants"
+  plutot qu'un trait blanc plein. }
+Var
+ CX, CY, RX, RY: Integer;
+Begin
+ SetWriteMode(XORPut);
+ SetColor(White);
+ SetLineStyle(DottedLn, 0, NormWidth);
+ Case Tool of
+  TOOL_LINE: Line(X1, Y1, X2, Y2);
+  TOOL_RECT: Rectangle(X1, Y1, X2, Y2);
+  TOOL_ROUNDRECT: Rectangle(X1, Y1, X2, Y2);
+  TOOL_ELLIPSE: Begin
+   CX := (X1 + X2) Div 2;
+   CY := (Y1 + Y2) Div 2;
+   RX := Abs(X2 - X1) Div 2;
+   RY := Abs(Y2 - Y1) Div 2;
+   XorEllipsePreview(CX, CY, RX, RY);
+  End;
+ End;
+ SetLineStyle(SolidLn, 0, NormWidth);
+ SetWriteMode(CopyPut);
+End;
+
 Procedure DrawMenu(MenuIndex: Integer);
 Var
  I: Integer;
@@ -1209,6 +1279,8 @@ Begin
  Bar(0, 0, ScreenWidth - 1, ScreenHeight - 1);
  { L'ecran est vide : les anciennes "marching ants" XOR sont effacees. }
  AntsValid := False;
+ PreviewValid := False;
+ RubberValid := False;
 
  { Dessiner les éléments de l'interface }
  DrawMenuBar;
@@ -2588,6 +2660,8 @@ Type
   X1, Y1, X2, Y2: Integer;  { Zone affectée }
   PixelData: Pointer;        { Données de pixels sauvegardées }
   DataSize: LongInt;
+  IsFullSnapshot: Boolean;   { True = snapshot complet de CanvasImage (taille variable) }
+  ImgW, ImgH: Integer;       { Dimensions du buffer image pour les snapshots }
  End;
 
 Function SaveCanvasRegion(X1, Y1, X2, Y2: Integer): PHistoryData;
@@ -2622,6 +2696,9 @@ Begin
  Data^.X2 := X2;
  Data^.Y2 := Y2;
  Data^.DataSize := LongInt(Width) * LongInt(Height);
+ Data^.IsFullSnapshot := False;
+ Data^.ImgW := 0;
+ Data^.ImgH := 0;
 
  { Allouer le buffer pour les pixels }
  GetMem(Data^.PixelData, Data^.DataSize);
@@ -2642,17 +2719,30 @@ End;
 Procedure RestoreCanvasRegion(Data: PHistoryData);
 Var
  PixelBuffer: PByte;
- X, Y: Integer;
+ X, Y, BX, BY: Integer;
+ ImgP: PByte;
 Begin
  If Data = Nil Then Exit;
  If Data^.PixelData = Nil Then Exit;
 
  PixelBuffer := Data^.PixelData;
 
- { Restaurer les pixels }
+ { Restaurer les pixels dans le buffer image ET sur l'ecran. RedrawInterface
+   re-bliter CanvasImage par dessus, donc la mise a jour du buffer est
+   indispensable pour que l'Annuler soit visible. }
  For Y := Data^.Y1 to Data^.Y2 do Begin
   For X := Data^.X1 to Data^.X2 do Begin
    PutPixel(X, Y, PixelBuffer^);
+   If (CanvasImage <> Nil) Then Begin
+    BX := X - CanvasX;
+    BY := Y - CanvasY;
+    If (BX >= 0) and (BX < CanvasImageW) and
+       (BY >= 0) and (BY < CanvasImageH) Then Begin
+     ImgP := CanvasImage;
+     Inc(ImgP, LongInt(BY) * LongInt(CanvasImageW) + BX);
+     ImgP^ := PixelBuffer^;
+    End;
+   End;
    Inc(PixelBuffer);
   End;
  End;
@@ -2665,6 +2755,103 @@ Begin
    FreeMem(Data^.PixelData, Data^.DataSize);
   Dispose(Data);
  End;
+End;
+
+Function SaveFullSnapshot: PHistoryData;
+{ Capture l'integralite de CanvasImage et ses dimensions courantes.
+  Utilise par les actions qui peuvent redimensionner ou remplacer
+  entierement l'image (Rogner, Retourner, Pivoter, Etirer, Inverser, Effacer). }
+Var
+ Data: PHistoryData;
+ Sz: LongInt;
+Begin
+ SaveFullSnapshot := Nil;
+ If (CanvasImage = Nil) or (CanvasImageW <= 0) or (CanvasImageH <= 0) Then Exit;
+ New(Data);
+ Data^.X1 := 0;
+ Data^.Y1 := 0;
+ Data^.X2 := CanvasImageW - 1;
+ Data^.Y2 := CanvasImageH - 1;
+ Data^.IsFullSnapshot := True;
+ Data^.ImgW := CanvasImageW;
+ Data^.ImgH := CanvasImageH;
+ Sz := LongInt(CanvasImageW) * LongInt(CanvasImageH);
+ Data^.DataSize := Sz;
+ GetMem(Data^.PixelData, Sz);
+ Move(CanvasImage^, Data^.PixelData^, Sz);
+ SaveFullSnapshot := Data;
+End;
+
+Procedure RestoreFullSnapshot(Data: PHistoryData);
+{ Remplace CanvasImage par le contenu du snapshot. Met a jour les dimensions
+  et ImageBuffer.Width/Height. RedrawInterface doit etre appele apres. }
+Var
+ Sz: LongInt;
+Begin
+ If Data = Nil Then Exit;
+ If Not Data^.IsFullSnapshot Then Exit;
+ If Data^.PixelData = Nil Then Exit;
+ Sz := LongInt(Data^.ImgW) * LongInt(Data^.ImgH);
+ If CanvasImage <> Nil Then
+  FreeMem(CanvasImage, LongInt(CanvasImageW) * LongInt(CanvasImageH));
+ GetMem(CanvasImage, Sz);
+ Move(Data^.PixelData^, CanvasImage^, Sz);
+ CanvasImageW := Data^.ImgW;
+ CanvasImageH := Data^.ImgH;
+ ImageBuffer.Width := Data^.ImgW;
+ ImageBuffer.Height := Data^.ImgH;
+End;
+
+Procedure AddSnapshotToHistory(Action: Byte);
+{ Pousse un snapshot complet de l'image courante dans la liste Undo.
+  A appeler AVANT de modifier CanvasImage pour les operations destructives
+  (Rogner, Retourner, Pivoter, Etirer, Inverser, Effacer). }
+Var
+ NewItem, OldItem: PHistoryItem;
+ Data: PHistoryData;
+ Count: Integer;
+Begin
+ Data := SaveFullSnapshot;
+ If Data = Nil Then Exit;
+
+ New(NewItem);
+ NewItem^.Action := Action;
+ NewItem^.Data := Data;
+ NewItem^.DataSize := Data^.DataSize;
+ NewItem^.Next := UndoList;
+ NewItem^.Prev := Nil;
+
+ If UndoList <> Nil Then
+  UndoList^.Prev := NewItem;
+
+ UndoList := NewItem;
+ Inc(UndoCount);
+
+ { Limiter le nombre d'éléments dans l'historique. }
+ If UndoCount > MaxUndoLevels Then Begin
+  OldItem := UndoList;
+  Count := 1;
+  While (OldItem^.Next <> Nil) and (Count < MaxUndoLevels) do Begin
+   OldItem := OldItem^.Next;
+   Inc(Count);
+  End;
+  While OldItem^.Next <> Nil do Begin
+   NewItem := OldItem^.Next;
+   OldItem^.Next := NewItem^.Next;
+   FreeHistoryData(PHistoryData(NewItem^.Data));
+   Dispose(NewItem);
+   Dec(UndoCount);
+  End;
+ End;
+
+ { Vider la liste Redo. }
+ While RedoList <> Nil do Begin
+  NewItem := RedoList;
+  RedoList := RedoList^.Next;
+  FreeHistoryData(PHistoryData(NewItem^.Data));
+  Dispose(NewItem);
+ End;
+ RedoCount := 0;
 End;
 
 Procedure AddToHistory(Action: Byte);
@@ -2804,11 +2991,17 @@ Begin
  End;
 
  { Sauvegarder l'état actuel pour le redo }
- CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1,
-                                  OldData^.X2, OldData^.Y2);
+ If OldData^.IsFullSnapshot Then
+  CurrentData := SaveFullSnapshot
+ Else
+  CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1,
+                                   OldData^.X2, OldData^.Y2);
 
  { Restaurer l'ancien état }
- RestoreCanvasRegion(OldData);
+ If OldData^.IsFullSnapshot Then
+  RestoreFullSnapshot(OldData)
+ Else
+  RestoreCanvasRegion(OldData);
 
  { Déplacer l'item de Undo vers Redo }
  UndoList := UndoList^.Next;
@@ -2822,9 +3015,7 @@ Begin
  If CurrentData <> Nil Then
   Item^.DataSize := CurrentData^.DataSize
  Else
-  Item^.DataSize := 0;
-
- { Ajouter à la liste Redo }
+  Item^.DataSize := 0; { Ajouter à la liste Redo }
  Item^.Next := RedoList;
  Item^.Prev := Nil;
  If RedoList <> Nil Then
@@ -2864,11 +3055,17 @@ Begin
  End;
 
  { Sauvegarder l'état actuel pour le undo }
- CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1,
-                                  OldData^.X2, OldData^.Y2);
+ If OldData^.IsFullSnapshot Then
+  CurrentData := SaveFullSnapshot
+ Else
+  CurrentData := SaveCanvasRegion(OldData^.X1, OldData^.Y1,
+                                   OldData^.X2, OldData^.Y2);
 
  { Restaurer l'état du redo }
- RestoreCanvasRegion(OldData);
+ If OldData^.IsFullSnapshot Then
+  RestoreFullSnapshot(OldData)
+ Else
+  RestoreCanvasRegion(OldData);
 
  { Déplacer l'item de Redo vers Undo }
  RedoList := RedoList^.Next;
@@ -2898,11 +3095,55 @@ End;
 { Procédures de dessin }
 
 Procedure DrawPixel(X, Y: Integer; Color: Byte);
+Var
+ BX, BY: Integer;
+ ImgP: PByte;
 Begin
  If (X >= CanvasX) and (X < CanvasX + ImageBuffer.Width) and
     (Y >= CanvasY) and (Y < CanvasY + ImageBuffer.Height) Then Begin
   PutPixel(X, Y, Color);
+  { Synchroniser le buffer image. }
+  If CanvasImage <> Nil Then Begin
+   BX := X - CanvasX;
+   BY := Y - CanvasY;
+   If (BX >= 0) and (BX < CanvasImageW) and
+      (BY >= 0) and (BY < CanvasImageH) Then Begin
+    ImgP := CanvasImage;
+    Inc(ImgP, LongInt(BY) * LongInt(CanvasImageW) + BX);
+    ImgP^ := Color;
+   End;
+  End;
   ImageBuffer.Modified := True;
+ End;
+End;
+
+Procedure SyncCanvasImage(X1, Y1, X2, Y2: Integer);
+{ Copie les pixels de l'ecran dans CanvasImage pour la zone donnee. A appeler
+  apres toute primitive de dessin pour que RedrawInterface (qui re-blitte
+  CanvasImage) ne fasse pas disparaitre le trace, et pour que Undo capture
+  l'etat reel via CanvasImage. }
+Var
+ X, Y, BX, BY, T: Integer;
+ ImgP: PByte;
+Begin
+ If CanvasImage = Nil Then Exit;
+ { Normaliser }
+ If X1 > X2 Then Begin T := X1; X1 := X2; X2 := T; End;
+ If Y1 > Y2 Then Begin T := Y1; Y1 := Y2; Y2 := T; End;
+ { Clipper au canvas a l'ecran ET a la taille du buffer image. }
+ If X1 < CanvasX Then X1 := CanvasX;
+ If Y1 < CanvasY Then Y1 := CanvasY;
+ If X2 >= CanvasX + CanvasImageW Then X2 := CanvasX + CanvasImageW - 1;
+ If Y2 >= CanvasY + CanvasImageH Then Y2 := CanvasY + CanvasImageH - 1;
+ If (X1 > X2) or (Y1 > Y2) Then Exit;
+ For Y := Y1 to Y2 do Begin
+  BY := Y - CanvasY;
+  For X := X1 to X2 do Begin
+   BX := X - CanvasX;
+   ImgP := CanvasImage;
+   Inc(ImgP, LongInt(BY) * LongInt(CanvasImageW) + BX);
+   ImgP^ := GetPixel(X, Y);
+  End;
  End;
 End;
 
@@ -2910,6 +3151,7 @@ Procedure DrawLine(X1, Y1, X2, Y2: Integer; Color: Byte);
 Begin
  SetColor(Color);
  Line(X1, Y1, X2, Y2);
+ SyncCanvasImage(X1, Y1, X2, Y2);
  ImageBuffer.Modified := True;
 End;
 
@@ -2922,6 +3164,7 @@ Begin
  End Else Begin
   Rectangle(X1, Y1, X2, Y2);
  End;
+ SyncCanvasImage(X1, Y1, X2, Y2);
  ImageBuffer.Modified := True;
 End;
 
@@ -2934,6 +3177,8 @@ Begin
  End Else Begin
   Ellipse(X, Y, 0, 360, RadiusX, RadiusY);
  End;
+ SyncCanvasImage(X - RadiusX - 1, Y - RadiusY - 1,
+                 X + RadiusX + 1, Y + RadiusY + 1);
  ImageBuffer.Modified := True;
 End;
 
@@ -2957,6 +3202,7 @@ Begin
  End Else Begin
   DrawRoundedRect(X1, Y1, X2, Y2, RadiusX, RadiusY);
  End;
+ SyncCanvasImage(X1, Y1, X2, Y2);
  ImageBuffer.Modified := True;
 End;
 
@@ -2968,6 +3214,9 @@ Begin
  {$ELSE}
  Graph.FloodFill(X, Y, BorderColor);
  {$ENDIF}
+ { Le remplissage peut toucher tout le canvas. }
+ SyncCanvasImage(CanvasX, CanvasY,
+                 CanvasX + CanvasImageW - 1, CanvasY + CanvasImageH - 1);
  ImageBuffer.Modified := True;
 End;
 
@@ -2975,6 +3224,8 @@ Procedure DrawText(X, Y: Integer; Text: String; Color: Byte);
 Begin
  SetColor(Color);
  OutTextXY(X, Y, Text);
+ { Largeur approximative: TextWidth, hauteur: TextHeight. }
+ SyncCanvasImage(X, Y, X + TextWidth(Text) + 1, Y + TextHeight(Text) + 1);
  ImageBuffer.Modified := True;
 End;
 
@@ -3136,6 +3387,7 @@ Begin
   MENU_FILE: Begin
    Case ItemIndex of
     0: Begin { Nouveau }
+     AddSnapshotToHistory(TOOL_PENCIL);
      ClearImage;
      If (CanvasImage <> Nil) and (CanvasImageW > 0) and (CanvasImageH > 0) Then
       FillChar(CanvasImage^, CanvasImageW * CanvasImageH, BackgroundColor);
@@ -3222,6 +3474,8 @@ Begin
       SetFillStyle(SolidFill, BackgroundColor);
       Bar(SelectionRect.Left, SelectionRect.Top,
           SelectionRect.Right, SelectionRect.Bottom);
+      SyncCanvasImage(SelectionRect.Left, SelectionRect.Top,
+                      SelectionRect.Right, SelectionRect.Bottom);
       SelectionActive := False;
       ImageBuffer.Modified := True;
      End;
@@ -3270,11 +3524,11 @@ Begin
                      'H=horizontal V=vertical L=90gauche R=90droite I=180',
                      NewName) and (NewName <> '') Then Begin
       Case UpCase(NewName[1]) of
-       'H': FlipHorizontal;
-       'V': FlipVertical;
-       'L': RotateImage(270);
-       'R': RotateImage(90);
-       'I': RotateImage(180);
+       'H': Begin AddSnapshotToHistory(TOOL_PENCIL); FlipHorizontal; End;
+       'V': Begin AddSnapshotToHistory(TOOL_PENCIL); FlipVertical; End;
+       'L': Begin AddSnapshotToHistory(TOOL_PENCIL); RotateImage(270); End;
+       'R': Begin AddSnapshotToHistory(TOOL_PENCIL); RotateImage(90); End;
+       'I': Begin AddSnapshotToHistory(TOOL_PENCIL); RotateImage(180); End;
       End;
      End;
     End;
@@ -3291,8 +3545,10 @@ Begin
        Val(Copy(NewName, 1, Fmt - 1), NewW, ValErr);
        If ValErr = 0 Then Val(Copy(NewName, Fmt + 1, Length(NewName) - Fmt),
                               NewH, ValErr);
-       If (ValErr = 0) and (NewW > 0) and (NewH > 0) Then
-        StretchCanvas(NewW, NewH)
+       If (ValErr = 0) and (NewW > 0) and (NewH > 0) Then Begin
+        AddSnapshotToHistory(TOOL_PENCIL);
+        StretchCanvas(NewW, NewH);
+       End
        Else
         ShowMessage('Erreur', 'Dimensions invalides.');
       End
@@ -3300,7 +3556,7 @@ Begin
        ShowMessage('Erreur', 'Format attendu : LARGEURxHAUTEUR.');
      End;
     End;
-    2: InvertColors;
+    2: Begin AddSnapshotToHistory(TOOL_PENCIL); InvertColors; End;
     4: Begin { Redimensionner }
      Str(ImageBuffer.Width, NewName);
      Str(ImageBuffer.Height, InfoMsg);
@@ -3314,16 +3570,20 @@ Begin
        Val(Copy(NewName, 1, Fmt - 1), NewW, ValErr);
        If ValErr = 0 Then Val(Copy(NewName, Fmt + 1, Length(NewName) - Fmt),
                               NewH, ValErr);
-       If (ValErr = 0) and (NewW > 0) and (NewH > 0) Then
-        StretchCanvas(NewW, NewH)
+       If (ValErr = 0) and (NewW > 0) and (NewH > 0) Then Begin
+        AddSnapshotToHistory(TOOL_PENCIL);
+        StretchCanvas(NewW, NewH);
+       End
        Else
         ShowMessage('Erreur', 'Dimensions invalides.');
       End;
      End;
     End;
     5: Begin { Rogner }
-     If SelectionActive Then
-      CropImage
+     If SelectionActive Then Begin
+      AddSnapshotToHistory(TOOL_PENCIL);
+      CropImage;
+     End
      Else
       ShowMessage('Rogner',
                   'Selectionnez d''abord une zone avec l''outil Selection.');
@@ -3335,7 +3595,7 @@ Begin
      InfoMsg := InfoMsg + '  Hauteur : ' + NewName;
      ShowMessage('Attributs', InfoMsg);
     End;
-    9: ClearImage;
+    9: Begin AddSnapshotToHistory(TOOL_PENCIL); ClearImage; End;
    End;
   End;
   MENU_COLORS: Begin
@@ -3465,6 +3725,7 @@ Begin
    StartY := Y;
    EndX := X;
    EndY := Y;
+   PreviewValid := False;
   End;
  End;
 End;
@@ -3501,8 +3762,17 @@ Begin
   End;
   TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_ROUNDRECT: Begin
    { Effacer l'aperçu précédent et dessiner le nouveau }
+   If PreviewValid Then
+    XorPreviewShape(PreviewTool, PreviewL, PreviewT, PreviewR, PreviewB);
    EndX := X;
    EndY := Y;
+   PreviewTool := CurrentTool;
+   PreviewL := StartX;
+   PreviewT := StartY;
+   PreviewR := X;
+   PreviewB := Y;
+   XorPreviewShape(PreviewTool, PreviewL, PreviewT, PreviewR, PreviewB);
+   PreviewValid := True;
   End;
  End;
 End;
@@ -3513,6 +3783,12 @@ Var
 Begin
  If Not Drawing Then Exit;
  Drawing := False;
+
+ { Effacer l'apercu XOR des formes (ligne/rect/ellipse/rectarrondi). }
+ If PreviewValid Then Begin
+  XorPreviewShape(PreviewTool, PreviewL, PreviewT, PreviewR, PreviewB);
+  PreviewValid := False;
+ End;
 
  Case CurrentTool of
   TOOL_SELECT: Begin
@@ -3815,6 +4091,13 @@ Begin
    End;
    Exit;
   End;
+  { Raccourcis Ctrl+lettre (codes ASCII 1..26) }
+  If Not TextInsertMode Then Begin
+   Case Key of
+    #26: Begin Undo; Exit; End;          { Ctrl+Z }
+    #25: Begin Redo; Exit; End;          { Ctrl+Y }
+   End;
+  End;
   { Mode saisie de texte }
   If TextInsertMode Then Begin
    If Key = #13 Then Begin { Entrée }
@@ -3888,13 +4171,19 @@ Begin
  SelectionActive := False;
  Drawing := False;
  TextInsertMode := False;
- CanvasImage := Nil;
- CanvasImageW := 0;
- CanvasImageH := 0;
+ { Allouer un buffer de canvas blanc par defaut. Sans ce buffer,
+   SyncCanvasImage est un no-op et chaque RedrawInterface (declenche
+   par AddToHistory apres un trace ligne/rect/ellipse/etc.) efface
+   le dessin de l'ecran (page blanche apparente). }
+ CanvasImageW := ImageBuffer.Width;
+ CanvasImageH := ImageBuffer.Height;
+ GetMem(CanvasImage, LongInt(CanvasImageW) * LongInt(CanvasImageH));
+ FillChar(CanvasImage^, LongInt(CanvasImageW) * LongInt(CanvasImageH), White);
  RubberValid := False;
  AntsPhase := 0;
  AntsCounter := 0;
  AntsValid := False;
+ PreviewValid := False;
 
  { Dessiner l'interface }
  RedrawInterface;
@@ -3908,6 +4197,8 @@ Begin
 End;
 
 Procedure Cleanup;
+Var
+ Tmp: PHistoryItem;
 Begin
  { Masquer la souris }
  {$IFDEF FPC}
@@ -3924,17 +4215,17 @@ Begin
 
  { Libérer l'historique avec les données }
  While UndoList <> Nil do Begin
-  RedoList := UndoList;
+  Tmp := UndoList;
   UndoList := UndoList^.Next;
-  FreeHistoryData(PHistoryData(RedoList^.Data));
-  Dispose(RedoList);
+  FreeHistoryData(PHistoryData(Tmp^.Data));
+  Dispose(Tmp);
  End;
 
  While RedoList <> Nil do Begin
-  UndoList := RedoList;
+  Tmp := RedoList;
   RedoList := RedoList^.Next;
-  FreeHistoryData(PHistoryData(UndoList^.Data));
-  Dispose(UndoList);
+  FreeHistoryData(PHistoryData(Tmp^.Data));
+  Dispose(Tmp);
  End;
 
  { Fermer le mode graphique }

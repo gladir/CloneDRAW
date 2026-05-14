@@ -2836,31 +2836,189 @@ End;
 
 { Procédures de gestion des événements }
 
+Procedure ShowMessage(Const Title, Msg: String);
+Var
+ BoxX, BoxY, BoxW, BoxH: Integer;
+ K: Char;
+Begin
+ BoxW := TextWidth(Msg) + 40;
+ If TextWidth(Title) + 40 > BoxW Then BoxW := TextWidth(Title) + 40;
+ If BoxW < 240 Then BoxW := 240;
+ BoxH := 90;
+ BoxX := (ScreenWidth - BoxW) div 2;
+ BoxY := (ScreenHeight - BoxH) div 2;
+
+ SetFillStyle(SolidFill, LightGray);
+ Bar(BoxX, BoxY, BoxX + BoxW, BoxY + BoxH);
+ SetColor(DarkGray);
+ Rectangle(BoxX, BoxY, BoxX + BoxW, BoxY + BoxH);
+ SetFillStyle(SolidFill, Blue);
+ Bar(BoxX + 1, BoxY + 1, BoxX + BoxW - 1, BoxY + 18);
+ SetColor(White);
+ OutTextXY(BoxX + 8, BoxY + 5, Title);
+ SetColor(Black);
+ OutTextXY(BoxX + 20, BoxY + 35, Msg);
+ SetFillStyle(SolidFill, DarkGray);
+ Bar(BoxX + BoxW div 2 - 30, BoxY + BoxH - 25,
+     BoxX + BoxW div 2 + 30, BoxY + BoxH - 8);
+ SetColor(White);
+ OutTextXY(BoxX + BoxW div 2 - 8, BoxY + BoxH - 22, 'OK');
+
+ { Attendre Entree/Espace/Echap }
+ Repeat
+  While Not KeyPressed Do Delay(10);
+  K := ReadKey;
+  If K = #0 Then ReadKey;
+ Until (K = #13) or (K = #27) or (K = ' ');
+ RedrawInterface;
+End;
+
+Function PromptString(Const Title, Prompt: String; Var Value: String): Boolean;
+Var
+ BoxX, BoxY, BoxW, BoxH: Integer;
+ K: Char;
+ InputX, InputY, InputW: Integer;
+
+ Procedure DrawInput;
+ Begin
+  SetFillStyle(SolidFill, White);
+  Bar(InputX, InputY, InputX + InputW, InputY + 16);
+  SetColor(DarkGray);
+  Rectangle(InputX, InputY, InputX + InputW, InputY + 16);
+  SetColor(Black);
+  OutTextXY(InputX + 4, InputY + 3, Value + '_');
+ End;
+
+Begin
+ PromptString := False;
+ BoxW := 380;
+ BoxH := 110;
+ BoxX := (ScreenWidth - BoxW) div 2;
+ BoxY := (ScreenHeight - BoxH) div 2;
+
+ SetFillStyle(SolidFill, LightGray);
+ Bar(BoxX, BoxY, BoxX + BoxW, BoxY + BoxH);
+ SetColor(DarkGray);
+ Rectangle(BoxX, BoxY, BoxX + BoxW, BoxY + BoxH);
+ SetFillStyle(SolidFill, Blue);
+ Bar(BoxX + 1, BoxY + 1, BoxX + BoxW - 1, BoxY + 18);
+ SetColor(White);
+ OutTextXY(BoxX + 8, BoxY + 5, Title);
+ SetColor(Black);
+ OutTextXY(BoxX + 10, BoxY + 30, Prompt);
+ OutTextXY(BoxX + 10, BoxY + BoxH - 18,
+           'Entree = OK   Echap = Annuler');
+
+ InputX := BoxX + 10;
+ InputY := BoxY + 50;
+ InputW := BoxW - 20;
+ DrawInput;
+
+ Repeat
+  While Not KeyPressed Do Delay(10);
+  K := ReadKey;
+  If K = #0 Then Begin
+   ReadKey; { ignorer touche etendue }
+  End
+  Else If K = #13 Then Begin
+   PromptString := True;
+   RedrawInterface;
+   Exit;
+  End
+  Else If K = #27 Then Begin
+   RedrawInterface;
+   Exit;
+  End
+  Else If K = #8 Then Begin
+   If Length(Value) > 0 Then Begin
+    Delete(Value, Length(Value), 1);
+    DrawInput;
+   End;
+  End
+  Else If (K >= ' ') and (Length(Value) < 200) Then Begin
+   Value := Value + K;
+   DrawInput;
+  End;
+ Until False;
+End;
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
+Var
+ NewName: String;
+ Fmt: Byte;
+ InfoMsg: String;
 Begin
  Case MenuIndex of
   MENU_FILE: Begin
    Case ItemIndex of
     0: Begin { Nouveau }
      ClearImage;
+     If (CanvasImage <> Nil) and (CanvasImageW > 0) and (CanvasImageH > 0) Then
+      FillChar(CanvasImage^, CanvasImageW * CanvasImageH, BackgroundColor);
      ImageBuffer.FileName := '';
      ImageBuffer.Modified := False;
+     DrawStatusBar;
     End;
     1: Begin { Ouvrir }
-     { Afficher le dialogue d'ouverture de fichier }
+     NewName := '';
+     If PromptString('Ouvrir', 'Nom du fichier :', NewName) and (NewName <> '') Then Begin
+      If LoadImage(NewName) Then Begin
+       ImageBuffer.Modified := False;
+       DrawStatusBar;
+      End
+      Else
+       ShowMessage('Erreur', 'Impossible d''ouvrir : ' + NewName);
+     End;
     End;
     2: Begin { Enregistrer }
-     If ImageBuffer.FileName <> '' Then
-      SaveImage(ImageBuffer.FileName, ImageBuffer.Format);
+     If ImageBuffer.FileName <> '' Then Begin
+      If SaveImage(ImageBuffer.FileName, ImageBuffer.Format) Then Begin
+       ImageBuffer.Modified := False;
+       ShowMessage('Enregistrer', 'Enregistre : ' + ImageBuffer.FileName);
+      End
+      Else
+       ShowMessage('Erreur', 'Echec de l''enregistrement.');
+     End
+     Else Begin
+      NewName := '';
+      If PromptString('Enregistrer sous', 'Nom du fichier :', NewName) and (NewName <> '') Then Begin
+       Fmt := GetImageFormat(NewName);
+       If SaveImage(NewName, Fmt) Then Begin
+        ImageBuffer.FileName := NewName;
+        ImageBuffer.Format := Fmt;
+        ImageBuffer.Modified := False;
+        DrawStatusBar;
+       End
+       Else
+        ShowMessage('Erreur', 'Echec de l''enregistrement.');
+      End;
+     End;
     End;
     3: Begin { Enregistrer sous }
-     { Afficher le dialogue d'enregistrement }
+     NewName := ImageBuffer.FileName;
+     If PromptString('Enregistrer sous', 'Nom du fichier :', NewName) and (NewName <> '') Then Begin
+      Fmt := GetImageFormat(NewName);
+      If SaveImage(NewName, Fmt) Then Begin
+       ImageBuffer.FileName := NewName;
+       ImageBuffer.Format := Fmt;
+       ImageBuffer.Modified := False;
+       DrawStatusBar;
+      End
+      Else
+       ShowMessage('Erreur', 'Echec de l''enregistrement.');
+     End;
     End;
     5: Begin { Imprimer }
-     { Fonction d'impression }
+     ShowMessage('Imprimer', 'Impression non disponible.');
     End;
     7: Begin { Propriétés }
-     { Afficher les propriétés de l'image }
+     Str(ImageBuffer.Width, InfoMsg);
+     InfoMsg := 'Taille : ' + InfoMsg + ' x ';
+     Str(ImageBuffer.Height, NewName);
+     InfoMsg := InfoMsg + NewName + '  -  ';
+     Str(ImageBuffer.BitDepth, NewName);
+     InfoMsg := InfoMsg + NewName + ' bpp';
+     ShowMessage('Proprietes', InfoMsg);
     End;
     9: Running := False; { Quitter }
    End;

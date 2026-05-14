@@ -252,6 +252,7 @@ Var
  MouseButtons: Integer;
  MouseVisible: Boolean;
  OldMouseX, OldMouseY: Integer;
+ OldMouseButtons: Integer;
 
  { Variables de l'image }
  ImageBuffer: TImageBuffer;
@@ -558,6 +559,8 @@ Begin
 End;
 
 Procedure InitMenus;
+Var
+ MI, II, Need: Integer;
 Begin
  { Menu Fichier }
  Menus[MENU_FILE].Title := 'Fichier';
@@ -700,6 +703,20 @@ Begin
  Menus[MENU_HELP].Items[1].Caption := 'A propos...';
  Menus[MENU_HELP].Items[1].Shortcut := '';
  Menus[MENU_HELP].Items[1].Enabled := True;
+
+ { Ajuster dynamiquement la largeur de chaque menu déroulant pour que le
+   raccourci ne chevauche pas la légende. Layout d'une ligne :
+     [coche/20px] + Caption + [16px d'espace] + Shortcut + [10px marge] }
+ For MI := 0 to 5 do Begin
+  For II := 0 to Menus[MI].ItemCount - 1 do Begin
+   If Not Menus[MI].Items[II].Separator Then Begin
+    Need := 20 + TextWidth(Menus[MI].Items[II].Caption) + 10;
+    If Menus[MI].Items[II].Shortcut <> '' Then
+     Need := Need + 16 + TextWidth(Menus[MI].Items[II].Shortcut);
+    If Need > Menus[MI].Width Then Menus[MI].Width := Need;
+   End;
+  End;
+ End;
 End;
 
 Procedure InitImage;
@@ -3123,80 +3140,157 @@ Begin
  End;
 End;
 
+{ --- Menu : hit-test et navigation (inspire de DEV-COOLS\DEVENV.PAS) --- }
+
+Function MenuBarHitTest(MX, MY: Integer): Integer;
+Var
+ I, X1, X2: Integer;
+Begin
+ MenuBarHitTest := -1;
+ If MY >= MENUBAR_HEIGHT Then Exit;
+ For I := 0 to 5 do Begin
+  X1 := Menus[I].X - 2;
+  X2 := Menus[I].X + TextWidth(Menus[I].Title) + 2;
+  If (MX >= X1) and (MX <= X2) Then Begin
+   MenuBarHitTest := I;
+   Exit;
+  End;
+ End;
+End;
+
+Function MenuItemHitTest(MX, MY, MenuIdx: Integer): Integer;
+Var
+ Idx, Top, Bot: Integer;
+Begin
+ MenuItemHitTest := -1;
+ If (MenuIdx < 0) or (MenuIdx > 5) Then Exit;
+ Top := MENUBAR_HEIGHT;
+ Bot := Top + Menus[MenuIdx].ItemCount * 18 + 4;
+ If (MX < Menus[MenuIdx].X) or
+    (MX > Menus[MenuIdx].X + Menus[MenuIdx].Width) or
+    (MY < Top) or (MY > Bot) Then Exit;
+ Idx := (MY - Top - 2) div 18;
+ If (Idx < 0) or (Idx >= Menus[MenuIdx].ItemCount) Then Exit;
+ MenuItemHitTest := Idx;
+End;
+
+Procedure MenuNextItem(Step: Integer);
+{ Step = +1 (suivant) ou -1 (precedent), saute les separateurs. }
+Var
+ N, I: Integer;
+Begin
+ If (ActiveMenu < 0) or (ActiveMenu > 5) Then Exit;
+ N := Menus[ActiveMenu].ItemCount;
+ If N <= 0 Then Exit;
+ If ActiveMenuItem < 0 Then Begin
+  If Step > 0 Then ActiveMenuItem := -1
+  Else ActiveMenuItem := N;
+ End;
+ For I := 1 to N do Begin
+  ActiveMenuItem := ActiveMenuItem + Step;
+  If ActiveMenuItem < 0 Then ActiveMenuItem := N - 1;
+  If ActiveMenuItem >= N Then ActiveMenuItem := 0;
+  If Not Menus[ActiveMenu].Items[ActiveMenuItem].Separator Then Exit;
+ End;
+End;
+
+Procedure MenuSwitch(NewMenu: Integer);
+Begin
+ If (NewMenu < 0) or (NewMenu > 5) then Exit;
+ ActiveMenu := NewMenu;
+ ActiveMenuItem := -1;
+ RedrawInterface;
+End;
+
 Procedure HandleMouseEvent;
 Var
  NewButtons: Integer;
+ ButtonPressed: Boolean;
+ BarHit, ItemHit: Integer;
 Begin
  GetMouseStateLocal(MouseX, MouseY, MouseButtons);
 
- { Vérifier les clics }
- If (MouseButtons and 1) <> 0 Then Begin
-  { Bouton gauche pressé }
+ { Detection de front montant du bouton gauche (evite la repetition
+   d'action tant que l'utilisateur maintient le bouton enfonce). }
+ ButtonPressed := ((MouseButtons and 1) <> 0) and ((OldMouseButtons and 1) = 0);
 
-  { Vérifier la zone de menu }
-  If (MouseY < MENUBAR_HEIGHT) Then Begin
-   { Clic sur la barre de menu }
-   If Not MenuActive Then Begin
+ { Survol : si un menu est ouvert, suivre la souris pour changer de menu
+   ou mettre en evidence l'element sous le pointeur. }
+ If MenuActive and ((MouseX <> OldMouseX) or (MouseY <> OldMouseY)) Then Begin
+  BarHit := MenuBarHitTest(MouseX, MouseY);
+  If (BarHit >= 0) and (BarHit <> ActiveMenu) Then Begin
+   MenuSwitch(BarHit);
+  End Else Begin
+   ItemHit := MenuItemHitTest(MouseX, MouseY, ActiveMenu);
+   If ItemHit <> ActiveMenuItem Then Begin
+    ActiveMenuItem := ItemHit;
+    DrawMenu(ActiveMenu);
+   End;
+  End;
+ End;
+
+ If ButtonPressed Then Begin
+  BarHit := MenuBarHitTest(MouseX, MouseY);
+  If BarHit >= 0 Then Begin
+   { Clic sur la barre de menu : ouvrir/basculer/fermer }
+   If MenuActive and (ActiveMenu = BarHit) Then Begin
+    MenuActive := False;
+    RedrawInterface;
+   End Else Begin
     MenuActive := True;
-    ActiveMenu := 0;
+    ActiveMenu := BarHit;
     ActiveMenuItem := -1;
-
-    { Trouver le menu cliqué }
-    If MouseX < 60 Then ActiveMenu := MENU_FILE
-    Else If MouseX < 125 Then ActiveMenu := MENU_EDIT
-    Else If MouseX < 195 Then ActiveMenu := MENU_VIEW
-    Else If MouseX < 255 Then ActiveMenu := MENU_IMAGE
-    Else If MouseX < 325 Then ActiveMenu := MENU_COLORS
-    Else ActiveMenu := MENU_HELP;
-
     RedrawInterface;
    End;
   End
-  { Vérifier le menu déroulant }
   Else If MenuActive Then Begin
-   If (MouseX >= Menus[ActiveMenu].X) and
-      (MouseX < Menus[ActiveMenu].X + Menus[ActiveMenu].Width) Then Begin
-    ActiveMenuItem := (MouseY - MENUBAR_HEIGHT - 2) div 18;
-    If (ActiveMenuItem >= 0) and (ActiveMenuItem < Menus[ActiveMenu].ItemCount) Then Begin
-     If Not Menus[ActiveMenu].Items[ActiveMenuItem].Separator Then
-      HandleMenuClick(ActiveMenu, ActiveMenuItem);
+   { Clic dans un menu deroulant ouvert }
+   ItemHit := MenuItemHitTest(MouseX, MouseY, ActiveMenu);
+   If ItemHit >= 0 Then Begin
+    If Not Menus[ActiveMenu].Items[ItemHit].Separator Then Begin
+     ActiveMenuItem := ItemHit;
+     HandleMenuClick(ActiveMenu, ItemHit);
+     MenuActive := False;
+     RedrawInterface;
     End;
    End Else Begin
+    { Clic ailleurs : fermer le menu }
     MenuActive := False;
     RedrawInterface;
    End;
   End
-  { Vérifier la barre d'outils }
   Else If (MouseX < TOOLBAR_WIDTH) and (MouseY > MENUBAR_HEIGHT) and
           (MouseY < ScreenHeight - STATUSBAR_HEIGHT - COLORBAR_HEIGHT) Then Begin
    HandleToolbarClick(MouseX, MouseY);
   End
-  { Vérifier la barre de couleurs }
   Else If (MouseY >= ScreenHeight - STATUSBAR_HEIGHT - COLORBAR_HEIGHT) and
           (MouseY < ScreenHeight - STATUSBAR_HEIGHT) Then Begin
    HandleColorClick(MouseX, MouseY);
   End
-  { Vérifier le canvas }
   Else If (MouseX >= CanvasX) and (MouseX < CanvasX + CanvasWidth) and
           (MouseY >= CanvasY) and (MouseY < CanvasY + CanvasHeight) Then Begin
-   If Not Drawing Then
-    HandleCanvasClick(MouseX, MouseY)
-   Else
-    HandleCanvasDrag(MouseX, MouseY);
+   HandleCanvasClick(MouseX, MouseY);
   End;
  End
- Else Begin
-  { Bouton relâché }
+ Else If ((MouseButtons and 1) <> 0) and Drawing Then Begin
+  { Bouton maintenu : continuer le trace sur le canvas }
+  If (MouseX >= CanvasX) and (MouseX < CanvasX + CanvasWidth) and
+     (MouseY >= CanvasY) and (MouseY < CanvasY + CanvasHeight) Then
+   HandleCanvasDrag(MouseX, MouseY);
+ End
+ Else If ((MouseButtons and 1) = 0) and ((OldMouseButtons and 1) <> 0) Then Begin
+  { Bouton relache (front descendant) }
   If Drawing Then
    HandleCanvasRelease(MouseX, MouseY);
  End;
 
- { Mise à jour de la barre d'état si la souris a bougé }
+ { Mise a jour de la barre d'etat si la souris a bouge }
  If (MouseX <> OldMouseX) or (MouseY <> OldMouseY) Then Begin
   DrawStatusBar;
   OldMouseX := MouseX;
   OldMouseY := MouseY;
  End;
+ OldMouseButtons := MouseButtons;
 End;
 
 Procedure HandleKeyboardEvent;
@@ -3211,6 +3305,29 @@ Begin
  { Touche étendue }
  If Key = #0 Then Begin
   ExtKey := ReadKey;
+  { Navigation clavier dans un menu ouvert (inspire de DEVENV.PAS) }
+  If MenuActive Then Begin
+   Case ExtKey of
+    #72: Begin { Fleche haut : item precedent }
+     MenuNextItem(-1);
+     RedrawInterface;
+     Exit;
+    End;
+    #80: Begin { Fleche bas : item suivant }
+     MenuNextItem(+1);
+     RedrawInterface;
+     Exit;
+    End;
+    #75: Begin { Fleche gauche : menu precedent }
+     MenuSwitch((ActiveMenu + 5) mod 6);
+     Exit;
+    End;
+    #77: Begin { Fleche droite : menu suivant }
+     MenuSwitch((ActiveMenu + 1) mod 6);
+     Exit;
+    End;
+   End;
+  End;
   Case ExtKey of
    #59: Begin { F1 - Aide }
    End;
@@ -3228,6 +3345,17 @@ Begin
   End;
  End
  Else Begin
+  { Validation au clavier d'un item de menu ouvert }
+  If MenuActive and (Key = #13) Then Begin
+   If (ActiveMenuItem >= 0) and
+      (ActiveMenuItem < Menus[ActiveMenu].ItemCount) and
+      (Not Menus[ActiveMenu].Items[ActiveMenuItem].Separator) Then Begin
+    HandleMenuClick(ActiveMenu, ActiveMenuItem);
+    MenuActive := False;
+    RedrawInterface;
+   End;
+   Exit;
+  End;
   { Mode saisie de texte }
   If TextInsertMode Then Begin
    If Key = #13 Then Begin { Entrée }

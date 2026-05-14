@@ -253,6 +253,13 @@ Var
  MouseVisible: Boolean;
  OldMouseX, OldMouseY: Integer;
  OldMouseButtons: Integer;
+ { Rubber-band XOR pour la selection en cours }
+ RubberValid: Boolean;
+ RubberL, RubberT, RubberR, RubberB: Integer;
+ { Marching ants : animation du contour de la selection }
+ AntsPhase: Integer;
+ AntsCounter: Integer;
+ AntsValid: Boolean;
 
  { Variables de l'image }
  ImageBuffer: TImageBuffer;
@@ -1071,14 +1078,59 @@ Begin
 End;
 
 Procedure DrawSelection;
+Const
+ AntsPatterns: Array[0..3] of Word = ($CCCC, $9999, $3333, $6666);
 Begin
- If SelectionActive Then Begin
-  SetColor(Black);
-  SetLineStyle(DottedLn, 0, NormWidth);
+ If SelectionActive And (Not AntsValid) Then Begin
+  { Trace en XOR avec un motif rotatif pour effet "marching ants". }
+  SetWriteMode(XORPut);
+  SetColor(White);
+  SetLineStyle(UserBitLn, AntsPatterns[AntsPhase and 3], NormWidth);
   Rectangle(SelectionRect.Left, SelectionRect.Top,
             SelectionRect.Right, SelectionRect.Bottom);
   SetLineStyle(SolidLn, 0, NormWidth);
+  SetWriteMode(CopyPut);
+  AntsValid := True;
  End;
+End;
+
+Procedure EraseSelection;
+Const
+ AntsPatterns: Array[0..3] of Word = ($CCCC, $9999, $3333, $6666);
+Begin
+ If SelectionActive And AntsValid Then Begin
+  { Re-applique le meme motif XOR -> efface les pixels precedents. }
+  SetWriteMode(XORPut);
+  SetColor(White);
+  SetLineStyle(UserBitLn, AntsPatterns[AntsPhase and 3], NormWidth);
+  Rectangle(SelectionRect.Left, SelectionRect.Top,
+            SelectionRect.Right, SelectionRect.Bottom);
+  SetLineStyle(SolidLn, 0, NormWidth);
+  SetWriteMode(CopyPut);
+  AntsValid := False;
+ End;
+End;
+
+Procedure ToggleAnts;
+{ Anime le contour de la selection. Efface l'ancien motif XOR (meme phase),
+  fait progresser la phase, puis redessine. }
+Begin
+ If Not SelectionActive Then Exit;
+ EraseSelection;
+ AntsPhase := (AntsPhase + 1) and 3;
+ DrawSelection;
+End;
+
+Procedure XorRubberRect(L, T, R, B: Integer);
+{ Trace un rectangle en XOR : un second appel avec les memes coordonnees
+  efface exactement le precedent. }
+Begin
+ SetWriteMode(XORPut);
+ SetColor(White);
+ SetLineStyle(DottedLn, 0, NormWidth);
+ Rectangle(L, T, R, B);
+ SetLineStyle(SolidLn, 0, NormWidth);
+ SetWriteMode(CopyPut);
 End;
 
 Procedure DrawMenu(MenuIndex: Integer);
@@ -1155,6 +1207,8 @@ Begin
  { Effacer l'écran }
  SetFillStyle(SolidFill, DarkGray);
  Bar(0, 0, ScreenWidth - 1, ScreenHeight - 1);
+ { L'ecran est vide : les anciennes "marching ants" XOR sont effacees. }
+ AntsValid := False;
 
  { Dessiner les éléments de l'interface }
  DrawMenuBar;
@@ -2316,12 +2370,46 @@ Begin
 End;
 
 Procedure CropImage;
+Var
+ L, T, R, B, NW, NH, X, Y: Integer;
+ NewBuf: PByte;
 Begin
  If Not SelectionActive Then Exit;
+ If (CanvasImage = Nil) or (CanvasImageW <= 0) or (CanvasImageH <= 0) Then Exit;
 
- { Rogner l'image selon la sélection }
- ImageBuffer.Width := SelectionRect.Right - SelectionRect.Left;
- ImageBuffer.Height := SelectionRect.Bottom - SelectionRect.Top;
+ { Convertir SelectionRect (coords ecran) en coords canvas-buffer. }
+ L := SelectionRect.Left - CanvasX;
+ T := SelectionRect.Top - CanvasY;
+ R := SelectionRect.Right - CanvasX;
+ B := SelectionRect.Bottom - CanvasY;
+ If L > R Then Begin X := L; L := R; R := X; End;
+ If T > B Then Begin X := T; T := B; B := X; End;
+ If L < 0 Then L := 0;
+ If T < 0 Then T := 0;
+ If R >= CanvasImageW Then R := CanvasImageW - 1;
+ If B >= CanvasImageH Then B := CanvasImageH - 1;
+
+ NW := R - L + 1;
+ NH := B - T + 1;
+ If (NW <= 0) or (NH <= 0) Then Begin
+  SelectionActive := False;
+  Exit;
+ End;
+
+ GetMem(NewBuf, NW * NH);
+ For Y := 0 To NH - 1 Do
+  For X := 0 To NW - 1 Do
+   PByte(PtrUInt(NewBuf) + PtrUInt(Y) * PtrUInt(NW) + PtrUInt(X))^ :=
+    PByte(PtrUInt(CanvasImage) +
+          PtrUInt(T + Y) * PtrUInt(CanvasImageW) +
+          PtrUInt(L + X))^;
+
+ FreeMem(CanvasImage, CanvasImageW * CanvasImageH);
+ CanvasImage := NewBuf;
+ CanvasImageW := NW;
+ CanvasImageH := NH;
+ ImageBuffer.Width := NW;
+ ImageBuffer.Height := NH;
  ImageBuffer.Modified := True;
 
  SelectionActive := False;
@@ -2349,31 +2437,85 @@ Begin
 End;
 
 Procedure FlipHorizontal;
+Var
+ X, Y: Integer;
+ Row: PByte;
+ T: Byte;
 Begin
- { Retourner l'image horizontalement }
+ If (CanvasImage = Nil) or (CanvasImageW <= 0) or (CanvasImageH <= 0) Then Exit;
+ For Y := 0 To CanvasImageH - 1 Do Begin
+  Row := PByte(PtrUInt(CanvasImage) + PtrUInt(Y) * PtrUInt(CanvasImageW));
+  For X := 0 To (CanvasImageW Div 2) - 1 Do Begin
+   T := PByte(PtrUInt(Row) + PtrUInt(X))^;
+   PByte(PtrUInt(Row) + PtrUInt(X))^ :=
+    PByte(PtrUInt(Row) + PtrUInt(CanvasImageW - 1 - X))^;
+   PByte(PtrUInt(Row) + PtrUInt(CanvasImageW - 1 - X))^ := T;
+  End;
+ End;
  ImageBuffer.Modified := True;
  RedrawInterface;
 End;
 
 Procedure FlipVertical;
+Var
+ X, Y: Integer;
+ R1, R2: PByte;
+ T: Byte;
 Begin
- { Retourner l'image verticalement }
+ If (CanvasImage = Nil) or (CanvasImageW <= 0) or (CanvasImageH <= 0) Then Exit;
+ For Y := 0 To (CanvasImageH Div 2) - 1 Do Begin
+  R1 := PByte(PtrUInt(CanvasImage) + PtrUInt(Y) * PtrUInt(CanvasImageW));
+  R2 := PByte(PtrUInt(CanvasImage) +
+              PtrUInt(CanvasImageH - 1 - Y) * PtrUInt(CanvasImageW));
+  For X := 0 To CanvasImageW - 1 Do Begin
+   T := PByte(PtrUInt(R1) + PtrUInt(X))^;
+   PByte(PtrUInt(R1) + PtrUInt(X))^ := PByte(PtrUInt(R2) + PtrUInt(X))^;
+   PByte(PtrUInt(R2) + PtrUInt(X))^ := T;
+  End;
+ End;
  ImageBuffer.Modified := True;
  RedrawInterface;
 End;
 
 Procedure RotateImage(Degrees: Integer);
+Var
+ NewBuf: PByte;
+ NW, NH, X, Y: Integer;
+ Src, Dst: PByte;
 Begin
- { Pivoter l'image }
+ If (CanvasImage = Nil) or (CanvasImageW <= 0) or (CanvasImageH <= 0) Then Exit;
  Case Degrees of
-  90: Begin
-   { Rotation 90 degrés }
-  End;
   180: Begin
-   { Rotation 180 degrés }
+   FlipHorizontal;
+   FlipVertical;
+   Exit;
   End;
-  270: Begin
-   { Rotation 270 degrés }
+  90, 270: Begin
+   NW := CanvasImageH;
+   NH := CanvasImageW;
+   GetMem(NewBuf, NW * NH);
+   For Y := 0 To CanvasImageH - 1 Do
+    For X := 0 To CanvasImageW - 1 Do Begin
+     Src := PByte(PtrUInt(CanvasImage) +
+                  PtrUInt(Y) * PtrUInt(CanvasImageW) + PtrUInt(X));
+     If Degrees = 90 Then
+      { Rotation horaire : new(x', y') ou x' = H-1-y, y' = x }
+      Dst := PByte(PtrUInt(NewBuf) +
+                   PtrUInt(X) * PtrUInt(NW) +
+                   PtrUInt(CanvasImageH - 1 - Y))
+     Else
+      { 270 horaire = 90 antihoraire : x' = y, y' = W-1-x }
+      Dst := PByte(PtrUInt(NewBuf) +
+                   PtrUInt(CanvasImageW - 1 - X) * PtrUInt(NW) +
+                   PtrUInt(Y));
+     Dst^ := Src^;
+    End;
+   FreeMem(CanvasImage, CanvasImageW * CanvasImageH);
+   CanvasImage := NewBuf;
+   CanvasImageW := NW;
+   CanvasImageH := NH;
+   ImageBuffer.Width := NW;
+   ImageBuffer.Height := NH;
   End;
  End;
  ImageBuffer.Modified := True;
@@ -2381,8 +2523,49 @@ Begin
 End;
 
 Procedure InvertColors;
+Var
+ I, Total: LongInt;
+ Mask: Byte;
+ P: PByte;
 Begin
- { Inverser les couleurs de l'image }
+ If (CanvasImage = Nil) or (CanvasImageW <= 0) or (CanvasImageH <= 0) Then Exit;
+ If ImageBuffer.BitDepth >= 8 Then Mask := 255
+ Else If ImageBuffer.BitDepth > 0 Then Mask := (1 shl ImageBuffer.BitDepth) - 1
+ Else Mask := 15;
+ Total := LongInt(CanvasImageW) * LongInt(CanvasImageH);
+ P := CanvasImage;
+ For I := 0 To Total - 1 Do Begin
+  P^ := P^ Xor Mask;
+  Inc(P);
+ End;
+ ImageBuffer.Modified := True;
+ RedrawInterface;
+End;
+
+Procedure StretchCanvas(NewW, NewH: Integer);
+Var
+ NewBuf: PByte;
+ X, Y, SX, SY: Integer;
+Begin
+ If (CanvasImage = Nil) or (CanvasImageW <= 0) or (CanvasImageH <= 0) Then Exit;
+ If (NewW <= 0) or (NewH <= 0) Then Exit;
+ If (NewW > MAX_IMAGE_WIDTH) or (NewH > MAX_IMAGE_HEIGHT) Then Exit;
+ GetMem(NewBuf, NewW * NewH);
+ For Y := 0 To NewH - 1 Do Begin
+  SY := (LongInt(Y) * LongInt(CanvasImageH)) Div LongInt(NewH);
+  For X := 0 To NewW - 1 Do Begin
+   SX := (LongInt(X) * LongInt(CanvasImageW)) Div LongInt(NewW);
+   PByte(PtrUInt(NewBuf) + PtrUInt(Y) * PtrUInt(NewW) + PtrUInt(X))^ :=
+    PByte(PtrUInt(CanvasImage) +
+          PtrUInt(SY) * PtrUInt(CanvasImageW) + PtrUInt(SX))^;
+  End;
+ End;
+ FreeMem(CanvasImage, CanvasImageW * CanvasImageH);
+ CanvasImage := NewBuf;
+ CanvasImageW := NewW;
+ CanvasImageH := NewH;
+ ImageBuffer.Width := NewW;
+ ImageBuffer.Height := NewH;
  ImageBuffer.Modified := True;
  RedrawInterface;
 End;
@@ -2947,6 +3130,7 @@ Var
  NewName: String;
  Fmt: Byte;
  InfoMsg: String;
+ NewW, NewH, ValErr: Integer;
 Begin
  Case MenuIndex of
   MENU_FILE: Begin
@@ -3081,17 +3265,75 @@ Begin
   MENU_IMAGE: Begin
    Case ItemIndex of
     0: Begin { Retourner/Pivoter }
-     { Afficher le dialogue }
+     NewName := '';
+     If PromptString('Retourner / Pivoter',
+                     'H=horizontal V=vertical L=90gauche R=90droite I=180',
+                     NewName) and (NewName <> '') Then Begin
+      Case UpCase(NewName[1]) of
+       'H': FlipHorizontal;
+       'V': FlipVertical;
+       'L': RotateImage(270);
+       'R': RotateImage(90);
+       'I': RotateImage(180);
+      End;
+     End;
     End;
     1: Begin { Étirer/Incliner }
+     Str(ImageBuffer.Width, NewName);
+     Str(ImageBuffer.Height, InfoMsg);
+     NewName := NewName + 'x' + InfoMsg;
+     If PromptString('Etirer',
+                     'Nouvelle taille (LARGEURxHAUTEUR) :',
+                     NewName) and (NewName <> '') Then Begin
+      Fmt := Pos('x', NewName);
+      If Fmt = 0 Then Fmt := Pos('X', NewName);
+      If Fmt > 1 Then Begin
+       Val(Copy(NewName, 1, Fmt - 1), NewW, ValErr);
+       If ValErr = 0 Then Val(Copy(NewName, Fmt + 1, Length(NewName) - Fmt),
+                              NewH, ValErr);
+       If (ValErr = 0) and (NewW > 0) and (NewH > 0) Then
+        StretchCanvas(NewW, NewH)
+       Else
+        ShowMessage('Erreur', 'Dimensions invalides.');
+      End
+      Else
+       ShowMessage('Erreur', 'Format attendu : LARGEURxHAUTEUR.');
+     End;
     End;
     2: InvertColors;
     4: Begin { Redimensionner }
-     { Afficher le dialogue }
+     Str(ImageBuffer.Width, NewName);
+     Str(ImageBuffer.Height, InfoMsg);
+     NewName := NewName + 'x' + InfoMsg;
+     If PromptString('Redimensionner',
+                     'Nouvelle taille (LARGEURxHAUTEUR) :',
+                     NewName) and (NewName <> '') Then Begin
+      Fmt := Pos('x', NewName);
+      If Fmt = 0 Then Fmt := Pos('X', NewName);
+      If Fmt > 1 Then Begin
+       Val(Copy(NewName, 1, Fmt - 1), NewW, ValErr);
+       If ValErr = 0 Then Val(Copy(NewName, Fmt + 1, Length(NewName) - Fmt),
+                              NewH, ValErr);
+       If (ValErr = 0) and (NewW > 0) and (NewH > 0) Then
+        StretchCanvas(NewW, NewH)
+       Else
+        ShowMessage('Erreur', 'Dimensions invalides.');
+      End;
+     End;
     End;
-    5: CropImage;
+    5: Begin { Rogner }
+     If SelectionActive Then
+      CropImage
+     Else
+      ShowMessage('Rogner',
+                  'Selectionnez d''abord une zone avec l''outil Selection.');
+    End;
     7: Begin { Attributs }
-     { Afficher les attributs de l'image }
+     Str(ImageBuffer.Width, InfoMsg);
+     InfoMsg := 'Largeur : ' + InfoMsg;
+     Str(ImageBuffer.Height, NewName);
+     InfoMsg := InfoMsg + '  Hauteur : ' + NewName;
+     ShowMessage('Attributs', InfoMsg);
     End;
     9: ClearImage;
    End;
@@ -3172,6 +3414,8 @@ Begin
 
  Case CurrentTool of
   TOOL_SELECT: Begin
+   { Effacer les anciennes "marching ants" si presentes. }
+   EraseSelection;
    SelectionActive := True;
    SelectionRect.Left := X;
    SelectionRect.Top := Y;
@@ -3180,6 +3424,7 @@ Begin
    Drawing := True;
    StartX := X;
    StartY := Y;
+   RubberValid := False;
   End;
   TOOL_ERASER: Begin
    Drawing := True;
@@ -3230,9 +3475,17 @@ Begin
 
  Case CurrentTool of
   TOOL_SELECT: Begin
+   { Effacer le rectangle precedent (XOR) puis dessiner le nouveau. }
+   If RubberValid Then
+    XorRubberRect(RubberL, RubberT, RubberR, RubberB);
    SelectionRect.Right := X;
    SelectionRect.Bottom := Y;
-   DrawSelection;
+   RubberL := SelectionRect.Left;
+   RubberT := SelectionRect.Top;
+   RubberR := X;
+   RubberB := Y;
+   XorRubberRect(RubberL, RubberT, RubberR, RubberB);
+   RubberValid := True;
   End;
   TOOL_ERASER: Begin
    EraseTool(X, Y);
@@ -3263,6 +3516,13 @@ Begin
 
  Case CurrentTool of
   TOOL_SELECT: Begin
+   { Effacer le dernier rectangle XOR temporaire. }
+   If RubberValid Then Begin
+    XorRubberRect(RubberL, RubberT, RubberR, RubberB);
+    RubberValid := False;
+   End;
+   SelectionRect.Right := X;
+   SelectionRect.Bottom := Y;
    { Normaliser le rectangle de sélection }
    If SelectionRect.Left > SelectionRect.Right Then Begin
     CenterX := SelectionRect.Left;
@@ -3274,6 +3534,10 @@ Begin
     SelectionRect.Top := SelectionRect.Bottom;
     SelectionRect.Bottom := CenterX;
    End;
+   AntsPhase := 0;
+   AntsCounter := 0;
+   AntsValid := False;
+   DrawSelection;
   End;
   TOOL_LINE: Begin
    DrawLine(StartX, StartY, X, Y, CurrentColor);
@@ -3492,6 +3756,43 @@ Begin
    #60: Begin { F2 }
    End;
    #68: Running := False; { F10 - Quitter }
+   #107: Running := False; { Alt+F4 - Quitter }
+   #33: Begin { Alt+F - Menu Fichier }
+    MenuActive := True;
+    ActiveMenu := MENU_FILE;
+    ActiveMenuItem := -1;
+    RedrawInterface;
+   End;
+   #50: Begin { Alt+M - Menu Modifier }
+    MenuActive := True;
+    ActiveMenu := MENU_EDIT;
+    ActiveMenuItem := -1;
+    RedrawInterface;
+   End;
+   #30: Begin { Alt+A - Menu Affichage }
+    MenuActive := True;
+    ActiveMenu := MENU_VIEW;
+    ActiveMenuItem := -1;
+    RedrawInterface;
+   End;
+   #23: Begin { Alt+I - Menu Image }
+    MenuActive := True;
+    ActiveMenu := MENU_IMAGE;
+    ActiveMenuItem := -1;
+    RedrawInterface;
+   End;
+   #46: Begin { Alt+C - Menu Couleurs }
+    MenuActive := True;
+    ActiveMenu := MENU_COLORS;
+    ActiveMenuItem := -1;
+    RedrawInterface;
+   End;
+   #53: Begin { Alt+? (touche /) - Menu Aide }
+    MenuActive := True;
+    ActiveMenu := MENU_HELP;
+    ActiveMenuItem := -1;
+    RedrawInterface;
+   End;
    #72: Begin { Flèche haut }
     If BrushSize < 50 Then Inc(BrushSize);
     DrawToolbar;
@@ -3590,6 +3891,10 @@ Begin
  CanvasImage := Nil;
  CanvasImageW := 0;
  CanvasImageH := 0;
+ RubberValid := False;
+ AntsPhase := 0;
+ AntsCounter := 0;
+ AntsValid := False;
 
  { Dessiner l'interface }
  RedrawInterface;
@@ -3641,6 +3946,14 @@ Begin
  While Running do Begin
   HandleMouseEvent;
   HandleKeyboardEvent;
+  { Animation "marching ants" : ~1 seconde par phase (Delay(10) x 100). }
+  If SelectionActive And (Not Drawing) And (Not MenuActive) Then Begin
+   Inc(AntsCounter);
+   If AntsCounter >= 100 Then Begin
+    AntsCounter := 0;
+    ToggleAnts;
+   End;
+  End;
   Delay(10);
  End;
 End;

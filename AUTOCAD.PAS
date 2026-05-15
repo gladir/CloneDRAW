@@ -998,6 +998,10 @@ Var
  SnapEnabled: Boolean;                                 { Mode snap actif }
  SnapSpacing: Real;                                    { Espacement snap }
  OrthoMode: Boolean;                                   { Mode ortho }
+ LastLinearDimX1, LastLinearDimY1: Real;               { Memoire derniere cote lineaire (Baseline/Continue) }
+ LastLinearDimX2, LastLinearDimY2: Real;
+ LastLinearDimLineY: Real;
+ LastLinearDimValid: Boolean;
 
  { Variables pour les blocs et XREFs - TODO 20 }
  BlockDefs: Array[0..MAX_BLOCKS-1] of TBlockDef;       { Définitions de blocs }
@@ -1194,6 +1198,7 @@ Procedure ExecuteDrawRegion; Forward;
 Procedure ExecuteDrawSurface; Forward;
 Procedure ExecuteDrawSolid; Forward;
 Function  AllocEntitySlot: Integer; Forward;
+Procedure ExecuteDimQuick; Forward;
 Function GetImageRefStatus(ImgIdx: Integer): String; Forward;
 Function DetectImageDimensions(Const FilePath: String; Var PW, PH: Integer): Boolean; Forward;
 
@@ -9650,6 +9655,7 @@ Begin
  SnapEnabled := False;
  SnapSpacing := 10.0;
  OrthoMode := False;
+ LastLinearDimValid := False;
 End;
 
 { ============================================================================ }
@@ -12432,6 +12438,67 @@ End;
 Procedure ExecuteDrawSolid;
 Begin
  CommandLastLine := 'Solide: primitives 3D non disponibles dans cette version 2D';
+End;
+
+{ ============================================================================ }
+{ Helpers pour le menu Cotation                                                }
+{ ============================================================================ }
+
+{ Cotation -> Quick Dimension : cotation horizontale du contour selectionne }
+Procedure ExecuteDimQuick;
+Var
+ I, Idx: Integer;
+ MinX, MinY, MaxX, MaxY: Real;
+ Found: Boolean;
+ NStr: String[16];
+ LineY: Real;
+Begin
+ Found := False;
+ MinX := 0; MinY := 0; MaxX := 0; MaxY := 0;
+ For I := 0 To ObjectCount - 1 Do
+  If DrawObjects[I].Selected and (DrawObjects[I].ObjType <> OBJ_NONE) Then Begin
+   If Not Found Then Begin
+    MinX := DrawObjects[I].X1; MaxX := DrawObjects[I].X1;
+    MinY := DrawObjects[I].Y1; MaxY := DrawObjects[I].Y1;
+    Found := True;
+   End;
+   If DrawObjects[I].X1 < MinX Then MinX := DrawObjects[I].X1;
+   If DrawObjects[I].X1 > MaxX Then MaxX := DrawObjects[I].X1;
+   If DrawObjects[I].Y1 < MinY Then MinY := DrawObjects[I].Y1;
+   If DrawObjects[I].Y1 > MaxY Then MaxY := DrawObjects[I].Y1;
+   Case DrawObjects[I].ObjType Of
+    OBJ_LINE, OBJ_RECTANGLE: Begin
+     If DrawObjects[I].X2 < MinX Then MinX := DrawObjects[I].X2;
+     If DrawObjects[I].X2 > MaxX Then MaxX := DrawObjects[I].X2;
+     If DrawObjects[I].Y2 < MinY Then MinY := DrawObjects[I].Y2;
+     If DrawObjects[I].Y2 > MaxY Then MaxY := DrawObjects[I].Y2;
+    End;
+    OBJ_CIRCLE: Begin
+     If DrawObjects[I].X1 - DrawObjects[I].Radius < MinX Then MinX := DrawObjects[I].X1 - DrawObjects[I].Radius;
+     If DrawObjects[I].X1 + DrawObjects[I].Radius > MaxX Then MaxX := DrawObjects[I].X1 + DrawObjects[I].Radius;
+     If DrawObjects[I].Y1 - DrawObjects[I].Radius < MinY Then MinY := DrawObjects[I].Y1 - DrawObjects[I].Radius;
+     If DrawObjects[I].Y1 + DrawObjects[I].Radius > MaxY Then MaxY := DrawObjects[I].Y1 + DrawObjects[I].Radius;
+    End;
+   End;
+  End;
+ If Not Found Then Begin
+  CommandLastLine := 'Cotation rapide: aucun objet selectionne';
+  Exit;
+ End;
+ LineY := MaxY + 10.0;
+ Idx := CreateLinearDimension(MinX, MinY, MaxX, MinY, LineY, True);
+ If Idx < 0 Then Begin
+  CommandLastLine := 'Cotation rapide: dessin plein';
+  Exit;
+ End;
+ LastLinearDimX1 := MinX; LastLinearDimY1 := MinY;
+ LastLinearDimX2 := MaxX; LastLinearDimY2 := MinY;
+ LastLinearDimLineY := LineY;
+ LastLinearDimValid := True;
+ Str(MaxX - MinX:0:3, NStr);
+ CommandLastLine := 'Cotation rapide: ' + NStr;
+ MarkDocumentModified;
+ DrawInterface;
 End;
 
 { ============================================================================ }
@@ -17142,6 +17209,60 @@ Begin
        18: ExecuteDrawSurface;        { Surface (3D) }
        19: ExecuteDrawSolid;          { Solid (3D) }
       End;
+     End Else If ActiveMenu = MENU_DIMENSION Then Begin
+      Case NewItem Of
+       0: ExecuteDimQuick;            { Quick Dimension }
+       2: Begin                       { Linear }
+        PendingFileAction := 61;
+        CommandPrompt := 'Cote lineaire X1 Y1 X2 Y2 DimLineY:';
+        CommandBuffer := '';
+       End;
+       3: Begin                       { Aligned }
+        PendingFileAction := 62;
+        CommandPrompt := 'Cote alignee X1 Y1 X2 Y2 Offset:';
+        CommandBuffer := '';
+       End;
+       4: Begin                       { Arc Length }
+        PendingFileAction := 63;
+        CommandPrompt := 'Longueur d''arc CX CY R AngDeb AngFin (degres):';
+        CommandBuffer := '';
+       End;
+       5: Begin                       { Ordinate }
+        PendingFileAction := 64;
+        CommandPrompt := 'Cote ordonnee X Y LeaderX LeaderY:';
+        CommandBuffer := '';
+       End;
+       7: Begin                       { Radius }
+        PendingFileAction := 65;
+        CommandPrompt := 'Cote rayon CX CY R Angle (degres):';
+        CommandBuffer := '';
+       End;
+       8: Begin                       { Diameter }
+        PendingFileAction := 66;
+        CommandPrompt := 'Cote diametre CX CY R Angle (degres):';
+        CommandBuffer := '';
+       End;
+       9: Begin                       { Angular }
+        PendingFileAction := 67;
+        CommandPrompt := 'Cote angulaire CX CY X1 Y1 X2 Y2 R:';
+        CommandBuffer := '';
+       End;
+       11: Begin                      { Baseline }
+        PendingFileAction := 68;
+        CommandPrompt := 'Baseline X Y (point suivant):';
+        CommandBuffer := '';
+       End;
+       12: Begin                      { Continue }
+        PendingFileAction := 69;
+        CommandPrompt := 'Continue X Y (point suivant):';
+        CommandBuffer := '';
+       End;
+       13: Begin                      { Leader }
+        PendingFileAction := 70;
+        CommandPrompt := 'Repere X1 Y1 X2 Y2 Texte:';
+        CommandBuffer := '';
+       End;
+      End;
      End;
      MenuActive := False;
      ActiveMenu := -1;
@@ -18981,6 +19102,196 @@ Begin
            If Length(DrawObjects[NewIdx].DimText) > 20 Then
             DrawObjects[NewIdx].DimText := Copy(DrawObjects[NewIdx].DimText, 1, 20);
            CommandLastLine := 'Texte cree: ' + DrawObjects[NewIdx].DimText;
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        61: Begin { Cotation -> Linear : X1 Y1 X2 Y2 DimLineY }
+         If Not ParseReals(CommandBuffer, Vals, 5, Nv) Then
+          CommandLastLine := 'Cote lineaire: 5 valeurs attendues'
+         Else Begin
+          NewIdx := CreateLinearDimension(Vals[0], Vals[1], Vals[2], Vals[3], Vals[4], True);
+          If NewIdx < 0 Then
+           CommandLastLine := 'Cote lineaire: dessin plein'
+          Else Begin
+           LastLinearDimX1 := Vals[0]; LastLinearDimY1 := Vals[1];
+           LastLinearDimX2 := Vals[2]; LastLinearDimY2 := Vals[3];
+           LastLinearDimLineY := Vals[4]; LastLinearDimValid := True;
+           CommandLastLine := 'Cote lineaire creee';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        62: Begin { Cotation -> Aligned : X1 Y1 X2 Y2 Offset }
+         If Not ParseReals(CommandBuffer, Vals, 5, Nv) Then
+          CommandLastLine := 'Cote alignee: 5 valeurs attendues'
+         Else Begin
+          NewIdx := CreateAlignedDimension(Vals[0], Vals[1], Vals[2], Vals[3], Vals[4]);
+          If NewIdx < 0 Then
+           CommandLastLine := 'Cote alignee: dessin plein'
+          Else Begin
+           CommandLastLine := 'Cote alignee creee';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        63: Begin { Cotation -> Arc Length : CX CY R AngDeb AngFin (degres) }
+         If Not ParseReals(CommandBuffer, Vals, 5, Nv) Then
+          CommandLastLine := 'Longueur d''arc: 5 valeurs attendues'
+         Else Begin
+          NewIdx := AllocEntitySlot;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Longueur d''arc: dessin plein'
+          Else Begin
+           DrawObjects[NewIdx].ObjType := OBJ_TEXT;
+           DrawObjects[NewIdx].X1 := Vals[0] + Vals[2] * 1.2;
+           DrawObjects[NewIdx].Y1 := Vals[1];
+           DrawObjects[NewIdx].Radius := 5.0;
+           Str(Vals[2] * Abs(Vals[4] - Vals[3]) * Pi / 180.0:0:3, CmdBufStr);
+           DrawObjects[NewIdx].DimText := 'L=' + CmdBufStr;
+           If Length(DrawObjects[NewIdx].DimText) > 20 Then
+            DrawObjects[NewIdx].DimText := Copy(DrawObjects[NewIdx].DimText, 1, 20);
+           CommandLastLine := 'Longueur d''arc: ' + DrawObjects[NewIdx].DimText;
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        64: Begin { Cotation -> Ordinate : X Y LeaderX LeaderY }
+         If Not ParseReals(CommandBuffer, Vals, 4, Nv) Then
+          CommandLastLine := 'Cote ordonnee: 4 valeurs attendues'
+         Else Begin
+          NewIdx := CreateOrdinateDimension(Vals[0], Vals[1], Vals[2], Vals[3], True);
+          If NewIdx < 0 Then
+           CommandLastLine := 'Cote ordonnee: dessin plein'
+          Else Begin
+           CommandLastLine := 'Cote ordonnee creee';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        65: Begin { Cotation -> Radius : CX CY R AngleDeg }
+         If Not ParseReals(CommandBuffer, Vals, 4, Nv) Then
+          CommandLastLine := 'Cote rayon: 4 valeurs attendues'
+         Else Begin
+          NewIdx := CreateRadialDimension(Vals[0], Vals[1], Vals[2], Vals[3] * Pi / 180.0);
+          If NewIdx < 0 Then
+           CommandLastLine := 'Cote rayon: dessin plein'
+          Else Begin
+           CommandLastLine := 'Cote rayon creee';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        66: Begin { Cotation -> Diameter : CX CY R AngleDeg }
+         If Not ParseReals(CommandBuffer, Vals, 4, Nv) Then
+          CommandLastLine := 'Cote diametre: 4 valeurs attendues'
+         Else Begin
+          NewIdx := CreateDiameterDimension(Vals[0], Vals[1], Vals[2], Vals[3] * Pi / 180.0);
+          If NewIdx < 0 Then
+           CommandLastLine := 'Cote diametre: dessin plein'
+          Else Begin
+           CommandLastLine := 'Cote diametre creee';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        67: Begin { Cotation -> Angular : CX CY X1 Y1 X2 Y2 R }
+         If Not ParseReals(CommandBuffer, Vals, 7, Nv) Then
+          CommandLastLine := 'Cote angulaire: 7 valeurs attendues'
+         Else Begin
+          NewIdx := CreateAngularDimension(Vals[0], Vals[1], Vals[2], Vals[3], Vals[4], Vals[5], Vals[6]);
+          If NewIdx < 0 Then
+           CommandLastLine := 'Cote angulaire: dessin plein'
+          Else Begin
+           CommandLastLine := 'Cote angulaire creee';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        68: Begin { Cotation -> Baseline : X Y reutilisant origine derniere cote }
+         If Not LastLinearDimValid Then
+          CommandLastLine := 'Baseline: aucune cote lineaire precedente'
+         Else If Not ParseReals(CommandBuffer, Vals, 2, Nv) Then
+          CommandLastLine := 'Baseline: X Y attendus'
+         Else Begin
+          LastLinearDimLineY := LastLinearDimLineY + 10.0;
+          NewIdx := CreateLinearDimension(LastLinearDimX1, LastLinearDimY1, Vals[0], Vals[1], LastLinearDimLineY, True);
+          If NewIdx < 0 Then
+           CommandLastLine := 'Baseline: dessin plein'
+          Else Begin
+           LastLinearDimX2 := Vals[0]; LastLinearDimY2 := Vals[1];
+           CommandLastLine := 'Baseline cote creee';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        69: Begin { Cotation -> Continue : X Y a partir de la fin precedente }
+         If Not LastLinearDimValid Then
+          CommandLastLine := 'Continue: aucune cote lineaire precedente'
+         Else If Not ParseReals(CommandBuffer, Vals, 2, Nv) Then
+          CommandLastLine := 'Continue: X Y attendus'
+         Else Begin
+          NewIdx := CreateLinearDimension(LastLinearDimX2, LastLinearDimY2, Vals[0], Vals[1], LastLinearDimLineY, True);
+          If NewIdx < 0 Then
+           CommandLastLine := 'Continue: dessin plein'
+          Else Begin
+           LastLinearDimX1 := LastLinearDimX2; LastLinearDimY1 := LastLinearDimY2;
+           LastLinearDimX2 := Vals[0]; LastLinearDimY2 := Vals[1];
+           CommandLastLine := 'Continue cote creee';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        70: Begin { Cotation -> Leader : X1 Y1 X2 Y2 Texte }
+         OkInt := 1;
+         Nv := 0;
+         CmdBufStr := '';
+         While (OkInt <= Length(CommandBuffer)) and (Nv < 4) Do Begin
+          While (OkInt <= Length(CommandBuffer)) and
+                ((CommandBuffer[OkInt] = ' ') or (CommandBuffer[OkInt] = #9)) Do
+           Inc(OkInt);
+          CmdBufStr := '';
+          While (OkInt <= Length(CommandBuffer)) and
+                (CommandBuffer[OkInt] <> ' ') and
+                (CommandBuffer[OkInt] <> #9) Do Begin
+           If Length(CmdBufStr) < 16 Then
+            CmdBufStr := CmdBufStr + CommandBuffer[OkInt];
+           Inc(OkInt);
+          End;
+          If Length(CmdBufStr) = 0 Then Break;
+          Val(CmdBufStr, Vals[Nv], J);
+          If J <> 0 Then Begin Nv := 99; Break; End;
+          Inc(Nv);
+         End;
+         While (OkInt <= Length(CommandBuffer)) and
+               ((CommandBuffer[OkInt] = ' ') or (CommandBuffer[OkInt] = #9)) Do
+          Inc(OkInt);
+         If Nv <> 4 Then
+          CommandLastLine := 'Repere: X1 Y1 X2 Y2 Texte attendus'
+         Else Begin
+          NewIdx := AllocEntitySlot;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Repere: dessin plein'
+          Else Begin
+           DrawObjects[NewIdx].ObjType := OBJ_LINE;
+           DrawObjects[NewIdx].X1 := Vals[0];
+           DrawObjects[NewIdx].Y1 := Vals[1];
+           DrawObjects[NewIdx].X2 := Vals[2];
+           DrawObjects[NewIdx].Y2 := Vals[3];
+           If OkInt <= Length(CommandBuffer) Then Begin
+            NewIdx := AllocEntitySlot;
+            If NewIdx >= 0 Then Begin
+             DrawObjects[NewIdx].ObjType := OBJ_TEXT;
+             DrawObjects[NewIdx].X1 := Vals[2];
+             DrawObjects[NewIdx].Y1 := Vals[3];
+             DrawObjects[NewIdx].Radius := 5.0;
+             DrawObjects[NewIdx].DimText :=
+              Copy(CommandBuffer, OkInt, Length(CommandBuffer) - OkInt + 1);
+             If Length(DrawObjects[NewIdx].DimText) > 20 Then
+              DrawObjects[NewIdx].DimText := Copy(DrawObjects[NewIdx].DimText, 1, 20);
+            End;
+           End;
+           CommandLastLine := 'Repere cree';
            MarkDocumentModified; DrawInterface;
           End;
          End;

@@ -884,6 +884,16 @@ Var
  SelectEndX, SelectEndY: Integer;                      { Point de fin de la fenêtre de sélection }
  SelectionActive: Boolean;                             { True si en train de faire une sélection par fenêtre }
 
+ { Tampons Undo/Redo et Presse-papiers - menu Edition }
+ UndoObjects: Array[0..MAX_OBJECTS-1] of TDrawObject;
+ UndoObjectCount: Integer;
+ UndoAvailable: Boolean;
+ RedoObjects: Array[0..MAX_OBJECTS-1] of TDrawObject;
+ RedoObjectCount: Integer;
+ RedoAvailable: Boolean;
+ ClipboardObjects: Array[0..MAX_SELECTED-1] of TDrawObject;
+ ClipboardCount: Integer;
+
  { Variables pour le système de grips - TODO 10 }
  CurrentGrips: TGripSet;                               { Grips des objets sélectionnés }
  HotGripIndex: Integer;                                { Index du grip survolé (-1 si aucun) }
@@ -971,6 +981,16 @@ Procedure DrawSelectedObjects; Forward;
 
 { Forward declaration - Apercu avant impression }
 Procedure ShowPrintPreview; Forward;
+
+{ Forward declarations - menu Edition }
+Procedure PushUndoState; Forward;
+Procedure DoUndo; Forward;
+Procedure DoRedo; Forward;
+Procedure CopySelectionToClipboard; Forward;
+Procedure DeleteSelectedObjects; Forward;
+Procedure CutSelection; Forward;
+Procedure PasteFromClipboard; Forward;
+Procedure SelectAllObjects; Forward;
 
 { Forward declarations - TODO 10 - Système de grips }
 Procedure InitGripSystem; Forward;
@@ -15155,6 +15175,18 @@ Begin
         Running := False;
        End;
       End;
+     End Else If ActiveMenu = MENU_EDIT Then Begin
+      Case NewItem Of
+       0: DoUndo;                       { Undo }
+       1: DoRedo;                       { Redo }
+       3: CutSelection;                 { Couper }
+       4: CopySelectionToClipboard;     { Copier }
+       5: CopySelectionToClipboard;     { Copier avec point de base }
+       6: PasteFromClipboard;           { Coller }
+       7: PasteFromClipboard;           { Coller comme bloc }
+       9: DeleteSelectedObjects;        { Effacer }
+       11: SelectAllObjects;            { Tout selectionner }
+      End;
      End;
      MenuActive := False;
      ActiveMenu := -1;
@@ -15595,6 +15627,195 @@ Begin
   DrawInterface;
   DrawContextMenu;
  End;
+End;
+
+{ ================ Menu Edition : Undo/Redo, Couper/Copier/Coller, Effacer, Tout selectionner ================ }
+
+{ Sauvegarder l'etat courant dans le tampon Undo (avant operation destructive) }
+Procedure PushUndoState;
+Var
+ I: Integer;
+Begin
+ For I := 0 To ObjectCount - 1 Do
+  UndoObjects[I] := DrawObjects[I];
+ UndoObjectCount := ObjectCount;
+ UndoAvailable := True;
+ RedoAvailable := False;
+End;
+
+{ Annuler la derniere operation : echange l'etat courant avec le tampon Undo }
+Procedure DoUndo;
+Var
+ I: Integer;
+ TmpCount: Integer;
+Begin
+ If Not UndoAvailable Then Begin
+  CommandLastLine := 'Undo: rien a annuler';
+  Exit;
+ End;
+ { Sauver l'etat courant dans Redo }
+ For I := 0 To ObjectCount - 1 Do
+  RedoObjects[I] := DrawObjects[I];
+ RedoObjectCount := ObjectCount;
+ RedoAvailable := True;
+ { Restaurer Undo dans courant }
+ TmpCount := UndoObjectCount;
+ For I := 0 To TmpCount - 1 Do
+  DrawObjects[I] := UndoObjects[I];
+ ObjectCount := TmpCount;
+ UndoAvailable := False;
+ ClearSelection;
+ ClearGrips;
+ CommandLastLine := 'Undo';
+End;
+
+{ Refaire la derniere operation annulee }
+Procedure DoRedo;
+Var
+ I: Integer;
+ TmpCount: Integer;
+Begin
+ If Not RedoAvailable Then Begin
+  CommandLastLine := 'Redo: rien a refaire';
+  Exit;
+ End;
+ { Sauver l'etat courant dans Undo }
+ For I := 0 To ObjectCount - 1 Do
+  UndoObjects[I] := DrawObjects[I];
+ UndoObjectCount := ObjectCount;
+ UndoAvailable := True;
+ { Restaurer Redo dans courant }
+ TmpCount := RedoObjectCount;
+ For I := 0 To TmpCount - 1 Do
+  DrawObjects[I] := RedoObjects[I];
+ ObjectCount := TmpCount;
+ RedoAvailable := False;
+ ClearSelection;
+ ClearGrips;
+ CommandLastLine := 'Redo';
+End;
+
+{ Copier la selection courante dans le presse-papiers interne }
+Procedure CopySelectionToClipboard;
+Var
+ I, Idx: Integer;
+ N: Integer;
+ NStr: String[16];
+Begin
+ If SelectionSet.Count <= 0 Then Begin
+  CommandLastLine := 'Copier: aucune selection';
+  ClipboardCount := 0;
+  Exit;
+ End;
+ N := SelectionSet.Count;
+ If N > MAX_SELECTED Then N := MAX_SELECTED;
+ For I := 0 To N - 1 Do Begin
+  Idx := SelectionSet.Objects[I];
+  If (Idx >= 0) and (Idx < ObjectCount) Then
+   ClipboardObjects[I] := DrawObjects[Idx];
+ End;
+ ClipboardCount := N;
+ Str(N, NStr);
+ CommandLastLine := 'Copie: ' + NStr + ' objet(s) dans le presse-papiers';
+End;
+
+{ Supprimer les objets selectionnes du dessin (compacte le tableau) }
+Procedure DeleteSelectedObjects;
+Var
+ Src, Dst: Integer;
+ Removed: Integer;
+ NStr: String[16];
+Begin
+ If SelectionSet.Count <= 0 Then Begin
+  CommandLastLine := 'Effacer: aucune selection';
+  Exit;
+ End;
+ PushUndoState;
+ Removed := 0;
+ Dst := 0;
+ For Src := 0 To ObjectCount - 1 Do Begin
+  If DrawObjects[Src].Selected Then Begin
+   Inc(Removed);
+  End Else Begin
+   If Dst <> Src Then DrawObjects[Dst] := DrawObjects[Src];
+   Inc(Dst);
+  End;
+ End;
+ ObjectCount := Dst;
+ ClearSelection;
+ ClearGrips;
+ Str(Removed, NStr);
+ CommandLastLine := 'Efface: ' + NStr + ' objet(s)';
+End;
+
+{ Couper = copier puis supprimer }
+Procedure CutSelection;
+Begin
+ If SelectionSet.Count <= 0 Then Begin
+  CommandLastLine := 'Couper: aucune selection';
+  Exit;
+ End;
+ CopySelectionToClipboard;
+ DeleteSelectedObjects;
+ CommandLastLine := 'Couper: selection deplacee dans le presse-papiers';
+End;
+
+{ Coller le contenu du presse-papiers a la fin du dessin (avec petit decalage) }
+Procedure PasteFromClipboard;
+Var
+ I, NewIdx: Integer;
+ OffsetX, OffsetY: Real;
+ NStr: String[16];
+ Pasted: Integer;
+Begin
+ If ClipboardCount <= 0 Then Begin
+  CommandLastLine := 'Coller: presse-papiers vide';
+  Exit;
+ End;
+ PushUndoState;
+ ClearSelection;
+ { Petit decalage visuel pour distinguer la copie }
+ If ZoomLevel > 0.0001 Then Begin
+  OffsetX := 10.0 / ZoomLevel;
+  OffsetY := 10.0 / ZoomLevel;
+ End Else Begin
+  OffsetX := 10.0;
+  OffsetY := 10.0;
+ End;
+ Pasted := 0;
+ For I := 0 To ClipboardCount - 1 Do Begin
+  If ObjectCount >= MAX_OBJECTS Then Break;
+  NewIdx := ObjectCount;
+  DrawObjects[NewIdx] := ClipboardObjects[I];
+  DrawObjects[NewIdx].X1 := DrawObjects[NewIdx].X1 + OffsetX;
+  DrawObjects[NewIdx].Y1 := DrawObjects[NewIdx].Y1 + OffsetY;
+  DrawObjects[NewIdx].X2 := DrawObjects[NewIdx].X2 + OffsetX;
+  DrawObjects[NewIdx].Y2 := DrawObjects[NewIdx].Y2 + OffsetY;
+  DrawObjects[NewIdx].Selected := False;
+  Inc(ObjectCount);
+  AddToSelection(NewIdx);
+  Inc(Pasted);
+ End;
+ Str(Pasted, NStr);
+ CommandLastLine := 'Colle: ' + NStr + ' objet(s)';
+End;
+
+{ Selectionner tous les objets visibles du dessin }
+Procedure SelectAllObjects;
+Var
+ I: Integer;
+ NStr: String[16];
+Begin
+ ClearSelection;
+ For I := 0 To ObjectCount - 1 Do Begin
+  If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  If Not DrawObjects[I].Visible Then Continue;
+  If Not IsObjectOnVisibleLayer(I) Then Continue;
+  If SelectionSet.Count >= MAX_SELECTED Then Break;
+  AddToSelection(I);
+ End;
+ Str(SelectionSet.Count, NStr);
+ CommandLastLine := 'Tout selectionner: ' + NStr + ' objet(s)';
 End;
 
 { Apercu avant impression : rendu plein ecran sur "papier" blanc, encre noire.

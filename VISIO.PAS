@@ -8366,10 +8366,11 @@ Procedure DrawDropDownMenu(MenuIndex: Integer);
 Const
  MaxItems = 12;
  ItemHeight = 16;
- MenuWidth = 150;
+ MenuWidth = 260;
 Var
  X, Y, I, ItemCount: Integer;
  Items: Array[1..MaxItems] of String[20];
+ Shortcuts: Array[1..MaxItems] of String[12];
 Begin
  { DÃ©finir les Ã©lÃ©ments selon le menu sÃ©lectionnÃ© }
  Case Language Of
@@ -8575,6 +8576,43 @@ Begin
 
  If ItemCount = 0 Then Exit;
 
+ { Raccourcis clavier (independants de la langue) }
+ For I := 1 to MaxItems do Shortcuts[I] := '';
+ Case MenuIndex of
+  1: Begin { Fichier / File }
+      Shortcuts[1] := 'Ctrl+N';
+      Shortcuts[2] := 'Ctrl+O';
+      Shortcuts[3] := 'Ctrl+W';
+      Shortcuts[4] := 'Ctrl+S';
+      Shortcuts[5] := 'Ctrl+Shift+S';
+      Shortcuts[9] := 'Ctrl+P';
+      Shortcuts[11] := 'Alt+F4';
+     End;
+  2: Begin { Edition / Edit }
+      Shortcuts[1] := 'Ctrl+Z';
+      Shortcuts[2] := 'Ctrl+Y';
+      Shortcuts[4] := 'Ctrl+X';
+      Shortcuts[5] := 'Ctrl+C';
+      Shortcuts[6] := 'Ctrl+V';
+      Shortcuts[7] := 'Del';
+      Shortcuts[9] := 'Ctrl+A';
+      Shortcuts[11] := 'Ctrl+F';
+      Shortcuts[12] := 'Ctrl+H';
+     End;
+  3: Begin { Affichage / View }
+      Shortcuts[1] := 'Ctrl++';
+      Shortcuts[2] := 'Ctrl+-';
+      Shortcuts[3] := 'Ctrl+0';
+     End;
+  5: Begin { Format }
+      Shortcuts[6] := 'Ctrl+G';
+      Shortcuts[7] := 'Ctrl+Shift+G';
+     End;
+  9: Begin { Aide / Help }
+      Shortcuts[1] := 'F1';
+     End;
+ End;
+
  { Calculer la position du menu dÃ©roulant }
  X := MenuPositions[MenuIndex] - 4;
  Y := MENU_HEIGHT + 1;
@@ -8608,6 +8646,9 @@ Begin
    If I = HoveredMenuItem Then SetColor(MENU_HIGHLIGHT_FG)
                           Else SetColor(MENU_TEXT_COLOR);
    OutTextXY(X + 10, Y + (I - 1) * ItemHeight + 4, Items[I]);
+   If Shortcuts[I] <> '' Then
+    OutTextXY(X + MenuWidth - 5 - Length(Shortcuts[I]) * 8,
+              Y + (I - 1) * ItemHeight + 4, Shortcuts[I]);
   End;
  End;
 End;

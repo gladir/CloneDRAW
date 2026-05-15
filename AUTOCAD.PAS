@@ -1168,6 +1168,7 @@ Procedure DrawOLEObject(OleIdx: Integer); Forward;
 Procedure DetachOLEObject(OleIdx: Integer); Forward;
 Function GetOLEObjectStatus(OleIdx: Integer): String; Forward;
 Function DetectOLEApplication(Const FilePath: String): String; Forward;
+Function Import3DSFile(Const FilePath: String; Var EdgeCount: Integer): Boolean; Forward;
 Function GetImageRefStatus(ImgIdx: Integer): String; Forward;
 Function DetectImageDimensions(Const FilePath: String; Var PW, PH: Integer): Boolean; Forward;
 
@@ -11548,6 +11549,277 @@ Begin
 End;
 
 { ============================================================================ }
+{ Import 3D Studio (.3DS) - projection orthographique du wireframe            }
+{ ============================================================================ }
+
+{ Format 3DS : conteneur binaire little-endian a base de chunks.
+  Chaque chunk = 2 octets ID + 4 octets longueur totale (header inclus) +
+  donnees. Chunks utilises :
+   $4D4D MAIN3DS  - racine
+   $3D3D EDIT3DS  - section edition
+   $4000 OBJECT   - bloc nomme : asciiz puis sous-chunks
+   $4100 TRIMESH  - maillage triangule
+   $4110 VERTLIST - liste de sommets (Word N puis N * 3 floats x,y,z)
+   $4120 FACELIST - liste de faces (Word N puis N * 4 Word: a,b,c,flags)
+  Les autres chunks sont sautes. }
+
+Function Import3DSFile(Const FilePath: String; Var EdgeCount: Integer): Boolean;
+Const
+ CHUNK_MAIN     = $4D4D;
+ CHUNK_EDIT     = $3D3D;
+ CHUNK_OBJECT   = $4000;
+ CHUNK_TRIMESH  = $4100;
+ CHUNK_VERTLIST = $4110;
+ CHUNK_FACELIST = $4120;
+ MAX_3DS_VERTS  = 4096;
+Type
+ TVert = Record X, Y, Z: Single; End;
+Var
+ F: File;
+ OK: Boolean;
+ FSize, EndPos, EndEdit, EndObj, EndMesh, ListEnd: LongInt;
+ ID: Word;
+ Len: LongInt;
+ N, I, J: LongInt;
+ NumV, NumF: Word;
+ A, B, C, Flags: Word;
+ V: Array[0..MAX_3DS_VERTS-1] of TVert;
+ VertCount: Integer;
+ Ch: Char;
+ MinX, MinY, MaxX, MaxY: Real;
+ SX, SY, Scale, CX2D, CY2D: Real;
+ ProjX, ProjY: Array[0..MAX_3DS_VERTS-1] of Real;
+ EdgeAddedHash: Array[0..127] of LongInt; { mini hash anti-doublons, fallback simple }
+ Hash: LongInt;
+
+ Function R8: Byte;
+ Var BB: Byte;
+ Begin
+  BlockRead(F, BB, 1);
+  R8 := BB;
+ End;
+
+ Function R16: Word;
+ Var WW: Word;
+ Begin
+  BlockRead(F, WW, 2);
+  R16 := WW;
+ End;
+
+ Function R32: LongInt;
+ Var LL: LongInt;
+ Begin
+  BlockRead(F, LL, 4);
+  R32 := LL;
+ End;
+
+ Function RFloat: Single;
+ Var SS: Single;
+ Begin
+  BlockRead(F, SS, 4);
+  RFloat := SS;
+ End;
+
+ Procedure SkipTo(P: LongInt);
+ Begin
+  If P > FSize Then P := FSize;
+  Seek(F, P);
+ End;
+
+ Procedure SkipAsciiZ;
+ Begin
+  Repeat
+   BlockRead(F, Ch, 1);
+  Until (Ch = #0) or EOF(F);
+ End;
+
+ Function AddProjectedEdge(I1, I2: LongInt): Boolean;
+ Var
+  ObjIdx, K: Integer;
+  Tmp: LongInt;
+  Found: Boolean;
+ Begin
+  AddProjectedEdge := False;
+  If I1 = I2 Then Exit;
+  If I1 > I2 Then Begin Tmp := I1; I1 := I2; I2 := Tmp; End;
+  Hash := ((I1 And $FFFF) * 31 + (I2 And $FFFF)) And 127;
+  Tmp := (I1 Shl 16) Or (I2 And $FFFF);
+  If EdgeAddedHash[Hash] = Tmp Then Exit;
+  EdgeAddedHash[Hash] := Tmp;
+
+  { Allouer un emplacement libre }
+  Found := False;
+  ObjIdx := -1;
+  For K := 0 to MAX_OBJECTS - 1 do
+   If DrawObjects[K].ObjType = OBJ_NONE Then Begin
+    ObjIdx := K;
+    Found := True;
+    Break;
+   End;
+  If Not Found Then Exit;
+
+  DrawObjects[ObjIdx].ObjType := OBJ_LINE;
+  DrawObjects[ObjIdx].X1 := ProjX[I1];
+  DrawObjects[ObjIdx].Y1 := ProjY[I1];
+  DrawObjects[ObjIdx].X2 := ProjX[I2];
+  DrawObjects[ObjIdx].Y2 := ProjY[I2];
+  DrawObjects[ObjIdx].Color := White;
+  DrawObjects[ObjIdx].LineType := 0;
+  DrawObjects[ObjIdx].LineWeight := 0;
+  DrawObjects[ObjIdx].LayerIndex := CurrentLayer;
+  DrawObjects[ObjIdx].Selected := False;
+  DrawObjects[ObjIdx].Visible := True;
+  DrawObjects[ObjIdx].Closed := False;
+  DrawObjects[ObjIdx].VertexCount := 0;
+  If ObjIdx >= ObjectCount Then ObjectCount := ObjIdx + 1;
+  AddProjectedEdge := True;
+ End;
+
+Begin
+ Import3DSFile := False;
+ EdgeCount := 0;
+ VertCount := 0;
+ For I := 0 To 127 Do EdgeAddedHash[I] := -1;
+
+ {$I-}
+ Assign(F, FilePath);
+ Reset(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+
+ FSize := FileSize(F);
+ If FSize < 6 Then Begin
+  Close(F);
+  Exit;
+ End;
+
+ { Verifier que le premier chunk est MAIN3DS }
+ ID := R16;
+ Len := R32;
+ If ID <> CHUNK_MAIN Then Begin
+  Close(F);
+  Exit;
+ End;
+
+ EndPos := Len;
+ If EndPos > FSize Then EndPos := FSize;
+
+ OK := True;
+ { Parcourir les sous-chunks de MAIN }
+ While (FilePos(F) < EndPos) and OK Do Begin
+  ID := R16;
+  Len := R32;
+  If Len < 6 Then Begin OK := False; Break; End;
+  EndEdit := FilePos(F) + Len - 6;
+  If EndEdit > FSize Then EndEdit := FSize;
+
+  If ID = CHUNK_EDIT Then Begin
+   { Sous-chunks d'edition }
+   While FilePos(F) < EndEdit Do Begin
+    ID := R16;
+    Len := R32;
+    If Len < 6 Then Begin OK := False; Break; End;
+    EndObj := FilePos(F) + Len - 6;
+    If EndObj > FSize Then EndObj := FSize;
+
+    If ID = CHUNK_OBJECT Then Begin
+     SkipAsciiZ;
+     { Sous-chunks de OBJECT }
+     While FilePos(F) < EndObj Do Begin
+      ID := R16;
+      Len := R32;
+      If Len < 6 Then Begin OK := False; Break; End;
+      EndMesh := FilePos(F) + Len - 6;
+      If EndMesh > FSize Then EndMesh := FSize;
+
+      If ID = CHUNK_TRIMESH Then Begin
+       { Sous-chunks de TRIMESH }
+       While FilePos(F) < EndMesh Do Begin
+        ID := R16;
+        Len := R32;
+        If Len < 6 Then Begin OK := False; Break; End;
+        ListEnd := FilePos(F) + Len - 6;
+        If ListEnd > FSize Then ListEnd := FSize;
+
+        If ID = CHUNK_VERTLIST Then Begin
+         NumV := R16;
+         For I := 0 To LongInt(NumV) - 1 Do Begin
+          If VertCount < MAX_3DS_VERTS Then Begin
+           V[VertCount].X := RFloat;
+           V[VertCount].Y := RFloat;
+           V[VertCount].Z := RFloat;
+           Inc(VertCount);
+          End Else Begin
+           { Sauter les sommets en surplus }
+           Seek(F, FilePos(F) + 12);
+          End;
+         End;
+        End Else If ID = CHUNK_FACELIST Then Begin
+         NumF := R16;
+         { On a besoin des sommets : ils auront ete charges avant }
+         { Calculer la projection si pas deja fait }
+         If VertCount > 0 Then Begin
+          MinX := V[0].X; MaxX := V[0].X;
+          MinY := V[0].Y; MaxY := V[0].Y;
+          For J := 1 To VertCount - 1 Do Begin
+           If V[J].X < MinX Then MinX := V[J].X;
+           If V[J].X > MaxX Then MaxX := V[J].X;
+           If V[J].Y < MinY Then MinY := V[J].Y;
+           If V[J].Y > MaxY Then MaxY := V[J].Y;
+          End;
+          { Projection orthographique simple : (X, Y) - Z ignore.
+            Mise a l'echelle pour entrer dans ~200 unites monde. }
+          SX := MaxX - MinX;
+          SY := MaxY - MinY;
+          If SX < 0.000001 Then SX := 1;
+          If SY < 0.000001 Then SY := 1;
+          If SX > SY Then Scale := 200.0 / SX
+          Else Scale := 200.0 / SY;
+          CX2D := (MinX + MaxX) * 0.5;
+          CY2D := (MinY + MaxY) * 0.5;
+          For J := 0 To VertCount - 1 Do Begin
+           ProjX[J] := (V[J].X - CX2D) * Scale - ViewOffsetX;
+           ProjY[J] := (V[J].Y - CY2D) * Scale - ViewOffsetY;
+          End;
+         End;
+
+         For I := 0 To LongInt(NumF) - 1 Do Begin
+          A := R16;
+          B := R16;
+          C := R16;
+          Flags := R16;
+          { Reference inutilisee : signale au compilateur }
+          If Flags = $FFFF Then ;
+          If (LongInt(A) < LongInt(VertCount)) and
+             (LongInt(B) < LongInt(VertCount)) and
+             (LongInt(C) < LongInt(VertCount)) Then Begin
+           If AddProjectedEdge(LongInt(A), LongInt(B)) Then Inc(EdgeCount);
+           If AddProjectedEdge(LongInt(B), LongInt(C)) Then Inc(EdgeCount);
+           If AddProjectedEdge(LongInt(C), LongInt(A)) Then Inc(EdgeCount);
+          End;
+         End;
+        End;
+
+        SkipTo(ListEnd);
+       End;
+      End;
+
+      SkipTo(EndMesh);
+     End;
+    End;
+
+    SkipTo(EndObj);
+   End;
+  End;
+
+  SkipTo(EndEdit);
+ End;
+
+ Close(F);
+ Import3DSFile := OK and (EdgeCount > 0);
+End;
+
+{ ============================================================================ }
 { Suivi des modifications et confirmation de sortie                            }
 { ============================================================================ }
 
@@ -16086,7 +16358,11 @@ Begin
         CommandBuffer := '';
        End;
        4: CommandLastLine := 'Layout: fonction non disponible dans cette version';
-       6: CommandLastLine := '3D Studio: fonction non disponible dans cette version';
+       6: Begin { 3D Studio (.3DS) }
+        PendingFileAction := 9;
+        CommandPrompt := 'Fichier 3D Studio (.3DS) a importer:';
+        CommandBuffer := '';
+       End;
        7: CommandLastLine := 'ACIS: fonction non disponible dans cette version';
        9: Begin { Objet OLE... }
         PendingFileAction := 8;
@@ -17117,6 +17393,7 @@ Var
  SavedSW, SavedSH: Integer;
  Ext: String[8];
  OkFlag: Boolean;
+ CmdBufStr: String[16];
 Begin
  Running := True;
  OldMouseX := -1;
@@ -17382,6 +17659,15 @@ Begin
           CommandLastLine := 'Objet OLE insere (fichier manquant): ' + CommandBuffer
          Else
           CommandLastLine := 'Objet OLE insere (' + OLEObjects[I].AppName + '): ' + CommandBuffer;
+        End;
+        9: Begin { Importer un fichier 3D Studio (.3DS) }
+         I := 0;
+         If Import3DSFile(CommandBuffer, I) Then Begin
+          Str(I, CmdBufStr);
+          CommandLastLine := 'Fichier 3DS importe (' + CmdBufStr + ' aretes): ' + CommandBuffer;
+          MarkDocumentModified;
+         End Else
+          CommandLastLine := 'Echec import 3DS: ' + CommandBuffer;
         End;
        End;
        PendingFileAction := 0;

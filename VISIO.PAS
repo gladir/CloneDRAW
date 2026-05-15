@@ -67,10 +67,11 @@ Const
  MENU_HIGHLIGHT_BG = 1;   { Bleu }
  MENU_HIGHLIGHT_FG = 15;  { Blanc }
 
- { Constantes pour la barre d'outils }
+ { Constantes pour la barre d'outils (verticale, a gauche) }
  TOOLBAR_COUNT = 9;
- TOOLBAR_TOP = 19;        { Juste en dessous de la barre de menu }
- TOOLBAR_HEIGHT = 26;     { Hauteur de la barre d'outils }
+ TOOLBAR_TOP = 43;        { Juste en dessous de la barre d'icones }
+ TOOLBAR_WIDTH = 28;      { Largeur de la barre d'outils verticale }
+ TOOLBAR_HEIGHT = 26;     { Conserve pour compatibilite (hauteur d'un bouton) }
  TOOLBAR_BUTTON_SIZE = 24; { Taille d'un bouton }
  TOOLBAR_PADDING = 2;     { Espacement entre les boutons }
  TOOLBAR_COLOR = 7;       { Gris clair - mÃªme couleur que la barre de menu }
@@ -78,8 +79,16 @@ Const
  TOOLBAR_BTN_BORDER = 8;  { Gris foncÃ© - bordure des boutons }
  TOOLBAR_BTN_SELECTED = 1; { Bleu - bouton sÃ©lectionnÃ© }
 
+ { Constantes pour la barre d'icones horizontale (sous le menu) }
+ ICONBAR_TOP = 19;        { Juste en dessous de la barre de menu }
+ ICONBAR_HEIGHT = 24;     { Hauteur de la barre d'icones }
+ ICONBAR_BUTTON_SIZE = 20; { Taille d'un bouton }
+ ICONBAR_PADDING = 2;
+ ICONBAR_COUNT = 8;       { 6 icones + 2 separateurs }
+ ICONBAR_COLOR = 7;       { Gris clair }
+
  { Constantes pour la zone de travail et les objets }
- WORK_AREA_TOP = 46;      { DÃ©but de la zone de travail (sous barre d'outils) }
+ WORK_AREA_TOP = 43;      { DÃ©but de la zone de travail (sous barre d'icones) }
  MAX_SHAPES = 100;        { Nombre maximum d'objets }
  DEFAULT_SHAPE_WIDTH = 80;  { Largeur par dÃ©faut d'une forme }
  DEFAULT_SHAPE_HEIGHT = 60; { Hauteur par dÃ©faut d'une forme }
@@ -6779,9 +6788,10 @@ Procedure DrawToolButton(Index: Integer; IsSelected: Boolean);
 Var
  X, Y: Integer;
 Begin
- { Calculer la position du bouton }
- X := TOOLBAR_PADDING + (Index - 1) * (TOOLBAR_BUTTON_SIZE + TOOLBAR_PADDING);
- Y := TOOLBAR_TOP + 1;
+ { Calculer la position du bouton (disposition verticale a gauche) }
+ X := TOOLBAR_PADDING;
+ Y := TOOLBAR_TOP + TOOLBAR_PADDING +
+      (Index - 1) * (TOOLBAR_BUTTON_SIZE + TOOLBAR_PADDING);
 
  { Dessiner le fond du bouton }
  If IsSelected Then Begin
@@ -6811,13 +6821,13 @@ Var
  I: Integer;
  ToolIndex: Integer;
 Begin
- { Dessiner le fond de la barre d'outils }
+ { Dessiner le fond de la barre d'outils (colonne verticale a gauche) }
  SetFillStyle(SolidFill, TOOLBAR_COLOR);
- Bar(0, TOOLBAR_TOP, ScreenWidth, TOOLBAR_TOP + TOOLBAR_HEIGHT);
+ Bar(0, TOOLBAR_TOP, TOOLBAR_WIDTH, ScreenHeight);
 
- { Dessiner une ligne de sÃ©paration en bas }
+ { Dessiner une ligne de sÃ©paration a droite }
  SetColor(DarkGray);
- Line(0, TOOLBAR_TOP + TOOLBAR_HEIGHT, ScreenWidth, TOOLBAR_TOP + TOOLBAR_HEIGHT);
+ Line(TOOLBAR_WIDTH, TOOLBAR_TOP, TOOLBAR_WIDTH, ScreenHeight);
 
  { Dessiner chaque bouton d'outil }
  For I := 1 to TOOLBAR_COUNT do Begin
@@ -6833,13 +6843,13 @@ Var
 Begin
  GetToolAtPosition := 0;
 
- { VÃ©rifier si la souris est dans la zone de la barre d'outils }
- If (MouseY < TOOLBAR_TOP) or (MouseY > TOOLBAR_TOP + TOOLBAR_HEIGHT) Then Exit;
+ If (MouseX < 0) or (MouseX > TOOLBAR_WIDTH) or (MouseY < TOOLBAR_TOP) Then Exit;
 
  { Parcourir chaque bouton pour voir si la souris est dessus }
  For I := 1 to TOOLBAR_COUNT do Begin
-  X := TOOLBAR_PADDING + (I - 1) * (TOOLBAR_BUTTON_SIZE + TOOLBAR_PADDING);
-  Y := TOOLBAR_TOP + 1;
+  X := TOOLBAR_PADDING;
+  Y := TOOLBAR_TOP + TOOLBAR_PADDING +
+       (I - 1) * (TOOLBAR_BUTTON_SIZE + TOOLBAR_PADDING);
 
   If (MouseX >= X) and (MouseX <= X + TOOLBAR_BUTTON_SIZE) and
      (MouseY >= Y) and (MouseY <= Y + TOOLBAR_BUTTON_SIZE) Then Begin
@@ -6859,6 +6869,179 @@ End;
 
 { ============================================================================ }
 { === FIN DES PROCEDURES DE LA BARRE D'OUTILS === }
+{ ============================================================================ }
+
+{ ============================================================================ }
+{ === BARRE D'ICONES HORIZONTALE (Nouveau, Ouvrir, Enregistrer, ...) === }
+{ ============================================================================ }
+
+{ Indices logiques dans la barre d'icones (1..ICONBAR_COUNT).
+  0 = aucun. Les separateurs ne sont pas cliquables. }
+{ 1: Nouveau, 2: Ouvrir, 3: Enregistrer, 4: separateur,
+  5: Imprimer, 6: separateur, 7: Annuler, 8: Retablir. }
+
+Function IsIconBarSeparator(Index: Integer): Boolean;
+Begin
+ IsIconBarSeparator := (Index = 4) or (Index = 6);
+End;
+
+Function GetIconBarButtonX(Index: Integer): Integer;
+Var
+ I, X: Integer;
+Begin
+ X := TOOLBAR_WIDTH + 1 + ICONBAR_PADDING;
+ For I := 1 to Index - 1 Do Begin
+  If IsIconBarSeparator(I) Then
+   X := X + 8
+  Else
+   X := X + ICONBAR_BUTTON_SIZE + ICONBAR_PADDING;
+ End;
+ GetIconBarButtonX := X;
+End;
+
+{ Dessiner les icones (formes simples, 16x16 centrees dans 20x20) }
+Procedure DrawIconBarIcon(X, Y, Index: Integer);
+Var
+ CX, CY: Integer;
+Begin
+ CX := X + ICONBAR_BUTTON_SIZE Div 2;
+ CY := Y + ICONBAR_BUTTON_SIZE Div 2;
+ Case Index Of
+  1: Begin { Nouveau : page blanche avec coin plie }
+      SetFillStyle(SolidFill, White);
+      Bar(X + 4, Y + 3, X + 14, Y + 16);
+      SetColor(Black);
+      Rectangle(X + 4, Y + 3, X + 14, Y + 16);
+      Line(X + 11, Y + 3, X + 14, Y + 6);
+      Line(X + 11, Y + 3, X + 11, Y + 6);
+      Line(X + 11, Y + 6, X + 14, Y + 6);
+     End;
+  2: Begin { Ouvrir : dossier }
+      SetColor(Black);
+      SetFillStyle(SolidFill, Yellow);
+      Bar(X + 3, Y + 7, X + 16, Y + 15);
+      Rectangle(X + 3, Y + 7, X + 16, Y + 15);
+      Line(X + 3, Y + 7, X + 6, Y + 5);
+      Line(X + 6, Y + 5, X + 10, Y + 5);
+      Line(X + 10, Y + 5, X + 11, Y + 7);
+     End;
+  3: Begin { Enregistrer : disquette }
+      SetColor(Black);
+      SetFillStyle(SolidFill, Blue);
+      Bar(X + 3, Y + 3, X + 16, Y + 16);
+      Rectangle(X + 3, Y + 3, X + 16, Y + 16);
+      SetFillStyle(SolidFill, White);
+      Bar(X + 5, Y + 10, X + 14, Y + 16);
+      Rectangle(X + 5, Y + 10, X + 14, Y + 16);
+      Bar(X + 6, Y + 3, X + 12, Y + 7);
+     End;
+  5: Begin { Imprimer : imprimante }
+      SetColor(Black);
+      SetFillStyle(SolidFill, LightGray);
+      Bar(X + 3, Y + 7, X + 16, Y + 13);
+      Rectangle(X + 3, Y + 7, X + 16, Y + 13);
+      SetFillStyle(SolidFill, White);
+      Bar(X + 5, Y + 3, X + 14, Y + 7);
+      Rectangle(X + 5, Y + 3, X + 14, Y + 7);
+      Bar(X + 5, Y + 12, X + 14, Y + 16);
+      Rectangle(X + 5, Y + 12, X + 14, Y + 16);
+     End;
+  7: Begin { Annuler (Undo) : fleche courbe a gauche }
+      SetColor(Blue);
+      Arc(CX, CY + 2, 30, 150, 6);
+      SetColor(Blue);
+      Line(X + 4, Y + 8, X + 7, Y + 6);
+      Line(X + 4, Y + 8, X + 7, Y + 11);
+     End;
+  8: Begin { Retablir (Redo) : fleche courbe a droite }
+      SetColor(Blue);
+      Arc(CX, CY + 2, 30, 150, 6);
+      SetColor(Blue);
+      Line(X + 16, Y + 8, X + 13, Y + 6);
+      Line(X + 16, Y + 8, X + 13, Y + 11);
+     End;
+ End;
+End;
+
+Procedure DrawIconBarButton(Index: Integer; IsHovered: Boolean);
+Var
+ X, Y: Integer;
+Begin
+ If IsIconBarSeparator(Index) Then Begin
+  X := GetIconBarButtonX(Index);
+  Y := ICONBAR_TOP + 4;
+  SetColor(DarkGray);
+  Line(X + 3, Y, X + 3, Y + ICONBAR_BUTTON_SIZE - 8);
+  SetColor(White);
+  Line(X + 4, Y, X + 4, Y + ICONBAR_BUTTON_SIZE - 8);
+  Exit;
+ End;
+
+ X := GetIconBarButtonX(Index);
+ Y := ICONBAR_TOP + 2;
+
+ { Fond du bouton }
+ SetFillStyle(SolidFill, LightGray);
+ Bar(X, Y, X + ICONBAR_BUTTON_SIZE - 1, Y + ICONBAR_BUTTON_SIZE - 1);
+
+ If IsHovered Then Begin
+  { Effet 3D enfonce }
+  SetColor(DarkGray);
+  Line(X, Y, X + ICONBAR_BUTTON_SIZE - 1, Y);
+  Line(X, Y, X, Y + ICONBAR_BUTTON_SIZE - 1);
+  SetColor(White);
+  Line(X + ICONBAR_BUTTON_SIZE - 1, Y, X + ICONBAR_BUTTON_SIZE - 1, Y + ICONBAR_BUTTON_SIZE - 1);
+  Line(X, Y + ICONBAR_BUTTON_SIZE - 1, X + ICONBAR_BUTTON_SIZE - 1, Y + ICONBAR_BUTTON_SIZE - 1);
+ End
+ Else Begin
+  { Effet 3D releve }
+  SetColor(White);
+  Line(X, Y, X + ICONBAR_BUTTON_SIZE - 1, Y);
+  Line(X, Y, X, Y + ICONBAR_BUTTON_SIZE - 1);
+  SetColor(DarkGray);
+  Line(X + ICONBAR_BUTTON_SIZE - 1, Y, X + ICONBAR_BUTTON_SIZE - 1, Y + ICONBAR_BUTTON_SIZE - 1);
+  Line(X, Y + ICONBAR_BUTTON_SIZE - 1, X + ICONBAR_BUTTON_SIZE - 1, Y + ICONBAR_BUTTON_SIZE - 1);
+ End;
+
+ DrawIconBarIcon(X, Y, Index);
+End;
+
+Procedure DrawIconBar;
+Var
+ I: Integer;
+Begin
+ { Fond }
+ SetFillStyle(SolidFill, ICONBAR_COLOR);
+ Bar(0, ICONBAR_TOP, ScreenWidth, ICONBAR_TOP + ICONBAR_HEIGHT);
+ { Ligne de separation en bas }
+ SetColor(DarkGray);
+ Line(0, ICONBAR_TOP + ICONBAR_HEIGHT, ScreenWidth, ICONBAR_TOP + ICONBAR_HEIGHT);
+
+ For I := 1 to ICONBAR_COUNT Do
+  DrawIconBarButton(I, False);
+End;
+
+Function GetIconBarButtonAtPosition(MouseX, MouseY: Integer): Integer;
+Var
+ I, X: Integer;
+Begin
+ GetIconBarButtonAtPosition := 0;
+ If (MouseY < ICONBAR_TOP + 2) or
+    (MouseY > ICONBAR_TOP + 2 + ICONBAR_BUTTON_SIZE) Then Exit;
+ For I := 1 to ICONBAR_COUNT Do Begin
+  If IsIconBarSeparator(I) Then Continue;
+  X := GetIconBarButtonX(I);
+  If (MouseX >= X) and (MouseX <= X + ICONBAR_BUTTON_SIZE) Then Begin
+   GetIconBarButtonAtPosition := I;
+   Exit;
+  End;
+ End;
+End;
+
+Procedure ExecuteIconBarAction(Index: Integer); Forward;
+
+{ ============================================================================ }
+{ === FIN DE LA BARRE D'ICONES === }
 { ============================================================================ }
 
 { ============================================================================ }
@@ -7622,6 +7805,7 @@ Procedure ExecuteFormatMenuAction(ItemIndex: Integer); Forward;
 Procedure ExecuteShapeMenuAction(ItemIndex: Integer); Forward;
 Function GetMenuAtPosition(MouseX, MouseY: Integer): Integer; Forward;
 Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer; Forward;
+Procedure RefreshScreen; Forward;
 
 { ProcÃ©dure pour gÃ©rer le clic gauche de la souris }
 Procedure HandleLeftClick(X, Y: Integer);
@@ -7678,12 +7862,27 @@ Begin
   Exit;
  End;
 
- { Vérifier si le clic est dans la barre d'outils }
- If (Y > MENU_HEIGHT) and (Y <= TOOLBAR_TOP + TOOLBAR_HEIGHT) Then Begin
+ { Vérifier si le clic est dans la barre d'outils (colonne gauche) }
+ If (Y > MENU_HEIGHT) and (Y >= TOOLBAR_TOP) and (X <= TOOLBAR_WIDTH) Then Begin
   ToolIndex := GetToolAtPosition(X, Y);
   If ToolIndex > 0 Then Begin
    SelectTool(ToolIndex);
    DrawToolbar;
+  End;
+  Exit;
+ End;
+
+ { Verifier si le clic est dans la barre d'icones horizontale }
+ If (Y > MENU_HEIGHT) and (Y <= ICONBAR_TOP + ICONBAR_HEIGHT) and
+    (X > TOOLBAR_WIDTH) Then Begin
+  ToolIndex := GetIconBarButtonAtPosition(X, Y);
+  If ToolIndex > 0 Then Begin
+   { Effet d'enfoncement visuel bref }
+   HideMouse;
+   DrawIconBarButton(ToolIndex, True);
+   ShowMouse;
+   ExecuteIconBarAction(ToolIndex);
+   RefreshScreen;
   End;
   Exit;
  End;
@@ -8406,6 +8605,19 @@ Begin
  End;
 End;
 
+{ Action declenchee par un clic sur un bouton de la barre d'icones }
+Procedure ExecuteIconBarAction(Index: Integer);
+Begin
+ Case Index of
+  1: FileNew;       { Nouveau }
+  2: FileOpen;      { Ouvrir }
+  3: FileSave;      { Enregistrer }
+  5: FilePrint;     { Imprimer }
+  7: EditUndo;      { Annuler }
+  8: EditRedo;      { Retablir }
+ End;
+End;
+
 { ProcÃ©dure pour exÃ©cuter une action du menu Edit }
 Procedure ExecuteEditMenuAction(ItemIndex: Integer);
 Begin
@@ -8541,13 +8753,16 @@ Procedure RefreshScreen;
 Begin
  { Effacer l'Ã©cran avec fond blanc (zone de travail sous la barre d'outils) }
  SetFillStyle(SolidFill, White);
- Bar(0, TOOLBAR_TOP + TOOLBAR_HEIGHT + 1, ScreenWidth, ScreenHeight);
+ Bar(TOOLBAR_WIDTH + 1, MENU_HEIGHT + 1, ScreenWidth, ScreenHeight);
 
  { Dessiner tous les objets graphiques }
  DrawAllShapes;
 
  { Dessiner la barre de menu }
  DrawMenuBar;
+
+ { Dessiner la barre d'icones horizontale }
+ DrawIconBar;
 
  { Dessiner la barre d'outils }
  DrawToolbar;

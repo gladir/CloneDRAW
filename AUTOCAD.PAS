@@ -1199,7 +1199,10 @@ Procedure ExecuteDrawSurface; Forward;
 Procedure ExecuteDrawSolid; Forward;
 Function  AllocEntitySlot: Integer; Forward;
 Procedure ExecuteDimQuick; Forward;
-Function GetImageRefStatus(ImgIdx: Integer): String; Forward;
+Procedure ExecuteModifyProperties; Forward;
+Procedure ExecuteModifyMatchProperties; Forward;
+Procedure ExecuteModifyExplode; Forward;
+Procedure CopySelectedObjects(DX, DY: Real); Forward;Function GetImageRefStatus(ImgIdx: Integer): String; Forward;
 Function DetectImageDimensions(Const FilePath: String; Var PW, PH: Integer): Boolean; Forward;
 
 { Forward declarations - Suivi des modifications et confirmation de sortie }
@@ -12502,6 +12505,165 @@ Begin
 End;
 
 { ============================================================================ }
+{ Helpers pour le menu Modifier                                                }
+{ ============================================================================ }
+
+{ Cloner les objets selectionnes avec un decalage }
+Procedure CopySelectedObjects(DX, DY: Real);
+Var
+ I, K, OldIdx, NewIdx, OrigCount: Integer;
+Begin
+ OrigCount := ObjectCount;
+ For I := 0 To OrigCount - 1 Do
+  If DrawObjects[I].Selected and (DrawObjects[I].ObjType <> OBJ_NONE) Then Begin
+   OldIdx := I;
+   NewIdx := AllocEntitySlot;
+   If NewIdx < 0 Then Exit;
+   DrawObjects[NewIdx] := DrawObjects[OldIdx];
+   DrawObjects[NewIdx].X1 := DrawObjects[NewIdx].X1 + DX;
+   DrawObjects[NewIdx].Y1 := DrawObjects[NewIdx].Y1 + DY;
+   DrawObjects[NewIdx].X2 := DrawObjects[NewIdx].X2 + DX;
+   DrawObjects[NewIdx].Y2 := DrawObjects[NewIdx].Y2 + DY;
+   DrawObjects[NewIdx].DimX3 := DrawObjects[NewIdx].DimX3 + DX;
+   DrawObjects[NewIdx].DimY3 := DrawObjects[NewIdx].DimY3 + DY;
+   DrawObjects[NewIdx].DimX4 := DrawObjects[NewIdx].DimX4 + DX;
+   DrawObjects[NewIdx].DimY4 := DrawObjects[NewIdx].DimY4 + DY;
+   DrawObjects[NewIdx].DimTextX := DrawObjects[NewIdx].DimTextX + DX;
+   DrawObjects[NewIdx].DimTextY := DrawObjects[NewIdx].DimTextY + DY;
+   For K := 0 To DrawObjects[NewIdx].VertexCount - 1 Do Begin
+    DrawObjects[NewIdx].Vertices[K].X := DrawObjects[NewIdx].Vertices[K].X + DX;
+    DrawObjects[NewIdx].Vertices[K].Y := DrawObjects[NewIdx].Vertices[K].Y + DY;
+   End;
+   DrawObjects[NewIdx].Selected := False;
+  End;
+End;
+
+{ Modifier -> Properties : afficher les proprietes du premier objet selectionne }
+Procedure ExecuteModifyProperties;
+Var
+ I: Integer;
+ TypeStr: String[16];
+ NStr: String[16];
+Begin
+ For I := 0 To ObjectCount - 1 Do
+  If DrawObjects[I].Selected and (DrawObjects[I].ObjType <> OBJ_NONE) Then Begin
+   Case DrawObjects[I].ObjType Of
+    OBJ_LINE:      TypeStr := 'Ligne';
+    OBJ_CIRCLE:    TypeStr := 'Cercle';
+    OBJ_ARC:       TypeStr := 'Arc';
+    OBJ_RECTANGLE: TypeStr := 'Rectangle';
+    OBJ_POLYLINE:  TypeStr := 'Polyligne';
+    OBJ_POINT:     TypeStr := 'Point';
+    OBJ_TEXT:      TypeStr := 'Texte';
+    OBJ_ELLIPSE:   TypeStr := 'Ellipse';
+    OBJ_DIMENSION: TypeStr := 'Cotation';
+   Else
+    TypeStr := 'Inconnu';
+   End;
+   Str(DrawObjects[I].Color, NStr);
+   CommandLastLine := TypeStr + ' Calque=' +
+    Layers[DrawObjects[I].LayerIndex].Name + ' Couleur=' + NStr;
+   Exit;
+  End;
+ CommandLastLine := 'Proprietes: aucun objet selectionne';
+End;
+
+{ Modifier -> Match Properties : copier proprietes du 1er selectionne aux autres }
+Procedure ExecuteModifyMatchProperties;
+Var
+ I, FirstIdx, N: Integer;
+ NStr: String[16];
+Begin
+ FirstIdx := -1;
+ For I := 0 To ObjectCount - 1 Do
+  If DrawObjects[I].Selected and (DrawObjects[I].ObjType <> OBJ_NONE) Then Begin
+   FirstIdx := I;
+   Break;
+  End;
+ If FirstIdx < 0 Then Begin
+  CommandLastLine := 'Copier proprietes: aucun objet selectionne';
+  Exit;
+ End;
+ N := 0;
+ For I := FirstIdx + 1 To ObjectCount - 1 Do
+  If DrawObjects[I].Selected and (DrawObjects[I].ObjType <> OBJ_NONE) Then Begin
+   DrawObjects[I].Color := DrawObjects[FirstIdx].Color;
+   DrawObjects[I].LineType := DrawObjects[FirstIdx].LineType;
+   DrawObjects[I].LineWeight := DrawObjects[FirstIdx].LineWeight;
+   DrawObjects[I].LayerIndex := DrawObjects[FirstIdx].LayerIndex;
+   Inc(N);
+  End;
+ Str(N, NStr);
+ If N = 0 Then
+  CommandLastLine := 'Copier proprietes: aucune cible selectionnee'
+ Else Begin
+  CommandLastLine := 'Proprietes copiees vers ' + NStr + ' objet(s)';
+  MarkDocumentModified;
+  DrawInterface;
+ End;
+End;
+
+{ Modifier -> Explode : decomposer rectangles et polylignes en lignes }
+Procedure ExecuteModifyExplode;
+Var
+ I, K, NewIdx, N, OrigCount: Integer;
+ NStr: String[16];
+ RX1, RY1, RX2, RY2: Real;
+Begin
+ N := 0;
+ OrigCount := ObjectCount;
+ For I := 0 To OrigCount - 1 Do
+  If DrawObjects[I].Selected and (DrawObjects[I].ObjType = OBJ_RECTANGLE) Then Begin
+   RX1 := DrawObjects[I].X1; RY1 := DrawObjects[I].Y1;
+   RX2 := DrawObjects[I].X2; RY2 := DrawObjects[I].Y2;
+   DrawObjects[I].ObjType := OBJ_LINE;
+   DrawObjects[I].X1 := RX1; DrawObjects[I].Y1 := RY1;
+   DrawObjects[I].X2 := RX2; DrawObjects[I].Y2 := RY1;
+   NewIdx := AllocEntitySlot;
+   If NewIdx >= 0 Then Begin
+    DrawObjects[NewIdx].ObjType := OBJ_LINE;
+    DrawObjects[NewIdx].X1 := RX2; DrawObjects[NewIdx].Y1 := RY1;
+    DrawObjects[NewIdx].X2 := RX2; DrawObjects[NewIdx].Y2 := RY2;
+   End;
+   NewIdx := AllocEntitySlot;
+   If NewIdx >= 0 Then Begin
+    DrawObjects[NewIdx].ObjType := OBJ_LINE;
+    DrawObjects[NewIdx].X1 := RX2; DrawObjects[NewIdx].Y1 := RY2;
+    DrawObjects[NewIdx].X2 := RX1; DrawObjects[NewIdx].Y2 := RY2;
+   End;
+   NewIdx := AllocEntitySlot;
+   If NewIdx >= 0 Then Begin
+    DrawObjects[NewIdx].ObjType := OBJ_LINE;
+    DrawObjects[NewIdx].X1 := RX1; DrawObjects[NewIdx].Y1 := RY2;
+    DrawObjects[NewIdx].X2 := RX1; DrawObjects[NewIdx].Y2 := RY1;
+   End;
+   Inc(N);
+  End Else If DrawObjects[I].Selected and (DrawObjects[I].ObjType = OBJ_POLYLINE) Then Begin
+   If DrawObjects[I].VertexCount >= 2 Then Begin
+    For K := 0 To DrawObjects[I].VertexCount - 2 Do Begin
+     NewIdx := AllocEntitySlot;
+     If NewIdx < 0 Then Break;
+     DrawObjects[NewIdx].ObjType := OBJ_LINE;
+     DrawObjects[NewIdx].X1 := DrawObjects[I].Vertices[K].X;
+     DrawObjects[NewIdx].Y1 := DrawObjects[I].Vertices[K].Y;
+     DrawObjects[NewIdx].X2 := DrawObjects[I].Vertices[K + 1].X;
+     DrawObjects[NewIdx].Y2 := DrawObjects[I].Vertices[K + 1].Y;
+    End;
+    DrawObjects[I].ObjType := OBJ_NONE;
+    Inc(N);
+   End;
+  End;
+ If N = 0 Then
+  CommandLastLine := 'Decomposer: aucun objet decomposable selectionne'
+ Else Begin
+  Str(N, NStr);
+  CommandLastLine := 'Decomposer: ' + NStr + ' objet(s) decompose(s)';
+  MarkDocumentModified;
+  DrawInterface;
+ End;
+End;
+
+{ ============================================================================ }
 { Suivi des modifications et confirmation de sortie                            }
 { ============================================================================ }
 
@@ -17263,6 +17425,73 @@ Begin
         CommandBuffer := '';
        End;
       End;
+     End Else If ActiveMenu = MENU_MODIFY Then Begin
+      Case NewItem Of
+       0: ExecuteModifyProperties;
+       1: ExecuteModifyMatchProperties;
+       3: Begin                       { Erase }
+        DeleteSelectedObjects;
+        MarkDocumentModified; DrawInterface;
+       End;
+       4: Begin                       { Copy }
+        PendingFileAction := 80;
+        CommandPrompt := 'Copier DX DY:';
+        CommandBuffer := '';
+       End;
+       5: Begin                       { Mirror }
+        PendingFileAction := 81;
+        CommandPrompt := 'Miroir X1 Y1 X2 Y2:';
+        CommandBuffer := '';
+       End;
+       6: Begin                       { Offset }
+        PendingFileAction := 82;
+        CommandPrompt := 'Decaler DX DY:';
+        CommandBuffer := '';
+       End;
+       7: Begin                       { Array }
+        PendingFileAction := 83;
+        CommandPrompt := 'Reseau Lignes Colonnes DX DY:';
+        CommandBuffer := '';
+       End;
+       8: Begin                       { Move }
+        PendingFileAction := 84;
+        CommandPrompt := 'Deplacer DX DY:';
+        CommandBuffer := '';
+       End;
+       9: Begin                       { Rotate }
+        PendingFileAction := 85;
+        CommandPrompt := 'Rotation CX CY Angle (degres):';
+        CommandBuffer := '';
+       End;
+       10: Begin                      { Scale }
+        PendingFileAction := 86;
+        CommandPrompt := 'Echelle CX CY Facteur:';
+        CommandBuffer := '';
+       End;
+       11: Begin                      { Stretch }
+        PendingFileAction := 87;
+        CommandPrompt := 'Etirer DX DY:';
+        CommandBuffer := '';
+       End;
+       13: CommandLastLine := 'Ajuster (Trim): non implemente';
+       14: CommandLastLine := 'Prolonger (Extend): non implemente';
+       15: Begin                      { Break }
+        PendingFileAction := 88;
+        CommandPrompt := 'Couper X Y (point sur ligne):';
+        CommandBuffer := '';
+       End;
+       16: Begin                      { Chamfer }
+        PendingFileAction := 89;
+        CommandPrompt := 'Chanfrein Distance:';
+        CommandBuffer := '';
+       End;
+       17: Begin                      { Fillet }
+        PendingFileAction := 90;
+        CommandPrompt := 'Raccord Rayon:';
+        CommandBuffer := '';
+       End;
+       18: ExecuteModifyExplode;
+      End;
      End;
      MenuActive := False;
      ActiveMenu := -1;
@@ -19294,6 +19523,132 @@ Begin
            CommandLastLine := 'Repere cree';
            MarkDocumentModified; DrawInterface;
           End;
+         End;
+        End;
+        80: Begin { Modifier -> Copy : DX DY }
+         If Not ParseReals(CommandBuffer, Vals, 2, Nv) Then
+          CommandLastLine := 'Copier: DX DY attendus'
+         Else Begin
+          CopySelectedObjects(Vals[0], Vals[1]);
+          CommandLastLine := 'Copie effectuee';
+          MarkDocumentModified; DrawInterface;
+         End;
+        End;
+        81: Begin { Modifier -> Mirror : X1 Y1 X2 Y2 }
+         If Not ParseReals(CommandBuffer, Vals, 4, Nv) Then
+          CommandLastLine := 'Miroir: 4 valeurs attendues'
+         Else Begin
+          MirrorSelectedObjects(Vals[0], Vals[1], Vals[2], Vals[3]);
+          CommandLastLine := 'Miroir effectue';
+          MarkDocumentModified; DrawInterface;
+         End;
+        End;
+        82: Begin { Modifier -> Offset : DX DY (clone offset) }
+         If Not ParseReals(CommandBuffer, Vals, 2, Nv) Then
+          CommandLastLine := 'Decaler: DX DY attendus'
+         Else Begin
+          CopySelectedObjects(Vals[0], Vals[1]);
+          CommandLastLine := 'Decalage effectue';
+          MarkDocumentModified; DrawInterface;
+         End;
+        End;
+        83: Begin { Modifier -> Array : Rows Cols DX DY }
+         If Not ParseReals(CommandBuffer, Vals, 4, Nv) Then
+          CommandLastLine := 'Reseau: Lignes Colonnes DX DY attendus'
+         Else Begin
+          I := Trunc(Vals[0]); J := Trunc(Vals[1]);
+          If (I < 1) or (J < 1) Then
+           CommandLastLine := 'Reseau: dimensions invalides'
+          Else Begin
+           For OkInt := 0 To I - 1 Do
+            For Nv := 0 To J - 1 Do
+             If (OkInt <> 0) or (Nv <> 0) Then
+              CopySelectedObjects(Nv * Vals[2], OkInt * Vals[3]);
+           CommandLastLine := 'Reseau cree';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        84: Begin { Modifier -> Move : DX DY }
+         If Not ParseReals(CommandBuffer, Vals, 2, Nv) Then
+          CommandLastLine := 'Deplacer: DX DY attendus'
+         Else Begin
+          MoveSelectedObjects(Vals[0], Vals[1]);
+          CommandLastLine := 'Deplacement effectue';
+          MarkDocumentModified; DrawInterface;
+         End;
+        End;
+        85: Begin { Modifier -> Rotate : CX CY AngleDeg }
+         If Not ParseReals(CommandBuffer, Vals, 3, Nv) Then
+          CommandLastLine := 'Rotation: CX CY Angle attendus'
+         Else Begin
+          RotateSelectedObjects(Vals[0], Vals[1], Vals[2]);
+          CommandLastLine := 'Rotation effectuee';
+          MarkDocumentModified; DrawInterface;
+         End;
+        End;
+        86: Begin { Modifier -> Scale : CX CY Factor }
+         If Not ParseReals(CommandBuffer, Vals, 3, Nv) Then
+          CommandLastLine := 'Echelle: CX CY Facteur attendus'
+         Else If Vals[2] = 0 Then
+          CommandLastLine := 'Echelle: facteur doit etre non nul'
+         Else Begin
+          ScaleSelectedObjects(Vals[0], Vals[1], Vals[2]);
+          CommandLastLine := 'Echelle appliquee';
+          MarkDocumentModified; DrawInterface;
+         End;
+        End;
+        87: Begin { Modifier -> Stretch : DX DY (alias Move) }
+         If Not ParseReals(CommandBuffer, Vals, 2, Nv) Then
+          CommandLastLine := 'Etirer: DX DY attendus'
+         Else Begin
+          MoveSelectedObjects(Vals[0], Vals[1]);
+          CommandLastLine := 'Etirement effectue';
+          MarkDocumentModified; DrawInterface;
+         End;
+        End;
+        88: Begin { Modifier -> Break : couper premiere ligne selectionnee au point X Y }
+         If Not ParseReals(CommandBuffer, Vals, 2, Nv) Then
+          CommandLastLine := 'Couper: X Y attendus'
+         Else Begin
+          NewIdx := -1;
+          For I := 0 To ObjectCount - 1 Do
+           If DrawObjects[I].Selected and (DrawObjects[I].ObjType = OBJ_LINE) Then Begin
+            NewIdx := I; Break;
+           End;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Couper: aucune ligne selectionnee'
+          Else Begin
+           J := AllocEntitySlot;
+           If J < 0 Then
+            CommandLastLine := 'Couper: dessin plein'
+           Else Begin
+            DrawObjects[J] := DrawObjects[NewIdx];
+            DrawObjects[J].X1 := Vals[0]; DrawObjects[J].Y1 := Vals[1];
+            DrawObjects[J].Selected := False;
+            DrawObjects[NewIdx].X2 := Vals[0]; DrawObjects[NewIdx].Y2 := Vals[1];
+            CommandLastLine := 'Ligne coupee';
+            MarkDocumentModified; DrawInterface;
+           End;
+          End;
+         End;
+        End;
+        89: Begin { Modifier -> Chamfer : distance (stub) }
+         If Not ParseReals(CommandBuffer, Vals, 1, Nv) Then
+          CommandLastLine := 'Chanfrein: distance attendue'
+         Else Begin
+          Str(Vals[0]:0:3, CmdBufStr);
+          CommandLastLine := 'Chanfrein distance=' + CmdBufStr +
+           ' (selectionner 2 lignes - non implemente)';
+         End;
+        End;
+        90: Begin { Modifier -> Fillet : radius (stub) }
+         If Not ParseReals(CommandBuffer, Vals, 1, Nv) Then
+          CommandLastLine := 'Raccord: rayon attendu'
+         Else Begin
+          Str(Vals[0]:0:3, CmdBufStr);
+          CommandLastLine := 'Raccord rayon=' + CmdBufStr +
+           ' (selectionner 2 lignes - non implemente)';
          End;
         End;
        End;

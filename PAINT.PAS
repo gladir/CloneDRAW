@@ -1,7 +1,7 @@
 { @author: Sylvain Maltais (support@gladir.com)
   @created: 2024
   @website(https://www.gladir.com/clonedraw)
-  @abstract(Target: Turbo Pascal 7, Free Pascal 3.2)
+  @abstract(Target: Free Pascal 3.2)
   @description(Clone complet de Microsoft Paint en Turbo Pascal/Free Pascal)
 
   TODO Liste des 25 points à implémenter:
@@ -45,7 +45,7 @@ Program Paint;
 
 Uses
  {$IFDEF FPC}
-  Crt, PtcGraph, PtcCrt, PtcMouse
+  Crt, PtcGraph, PtcCrt, PtcMouse, Dos
  {$ELSE}
   Crt, Graph, Dos
  {$ENDIF};
@@ -236,6 +236,8 @@ Type
  End;
 
 Var
+ Language:(_French,_English,_Germany,_Italian,_Spain,_Albanian,_Portuguese,_Swedish,_Danish,_Japanese);
+ TmpLanguage:String;
  { Variables globales de l'application }
  GraphDriver, GraphMode: Integer;
  ScreenWidth, ScreenHeight: Integer;
@@ -305,6 +307,15 @@ Var
    après effacement par le menu/interface. }
  CanvasImage: PByte;
  CanvasImageW, CanvasImageH: Integer;
+
+Function StrToUpper(Const S:String):String;
+Var I:Integer; R:String;
+Begin
+ R:=S;
+ For I:=1 To Length(R) Do
+  If(R[I]>='a')And(R[I]<='z')Then R[I]:=Chr(Ord(R[I])-32);
+ StrToUpper:=R;
+End;
 
 {$IFNDEF FPC}
 { Procédures pour la gestion de la souris en Turbo Pascal via Int 33h }
@@ -4659,15 +4670,40 @@ End;
 
 { Point d'entrée du programme }
 BEGIN
+ {$IFDEF FPC}
+  {$IFDEF WINDOWS}
+   SetUseACP(False);
+  {$ENDIF}
+ {$ENDIF}
+ { Initialiser la langue }
+ Language:=_French;
+ TmpLanguage:=GetEnv('LANGUAGE');
+ If TmpLanguage<>''Then Begin
+  If TmpLanguage[1]='"'Then TmpLanguage:=Copy(TmpLanguage,2,255);
+  If StrToUpper(Copy(TmpLanguage,1,2))='EN'Then Language:=_English Else
+  If StrToUpper(Copy(TmpLanguage,1,2))='GR'Then Language:=_Germany Else
+  If StrToUpper(Copy(TmpLanguage,1,2))='IT'Then Language:=_Italian Else
+  If StrToUpper(Copy(TmpLanguage,1,2))='SP'Then Language:=_Spain Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='SQ')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='ALB')Then Language:=_Albanian Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='PT')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='PRT')Then Language:=_Portuguese Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='SE')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='SWE')Then Language:=_Swedish Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='DK')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='DNK')Then Language:=_Danish Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='JP')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='JPN')Then Language:=_Japanese;
+ End;
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
-  WriteLn('PAINT: Clone de Microsoft Paint en Turbo Pascal/Free Pascal');
+  WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
   WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg]');
   WriteLn;
-  WriteLn('Fonctionnalités:');
-  WriteLn(' - Interface graphique complète avec menus et barre d''outils');
+  WriteLn('Fonctionnalit'+#130+'s:');
+  WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
   WriteLn(' - Support de la souris (Int 33h / PtcMouse)');
-  WriteLn(' - Outils de dessin: Crayon, Pinceau, Aérographe, Ligne, Rectangle, Ellipse...');
+  WriteLn(' - Outils de dessin: Crayon, Pinceau, A'+#130+'rographe, Ligne, Rectangle, Ellipse...');
   WriteLn(' - Support des formats: BMP, GIF, PNG, JPEG');
   WriteLn(' - Support de la transparence pour GIF et PNG');
   WriteLn(' - Redimensionnement et rognage d''image');

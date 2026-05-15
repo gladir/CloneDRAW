@@ -2,7 +2,7 @@
   @created: 2026
   @version: 1.00
   @website(https://www.gladir.com/clonedraw)
-  @abstract(Target: Turbo Pascal 7, Free Pascal
+  @abstract(Target: Free Pascal 3.2
   @description: Clone de l'application Visio de Microsoft
 }
 
@@ -17338,11 +17338,18 @@ BEGIN
   If(StrToUpper(Copy(TmpLanguage,1,2))='JP')or
     (StrToUpper(Copy(TmpLanguage,1,3))='JPN')Then Language:=_Japanese;
  End;
+ If(ParamStr(1)='/?')or(ParamStr(1)='--help')or(ParamStr(1)='-h')Then Begin
+  WriteLn('VISIO : Cette commande permet de lancer un clone de Visio.');
+  WriteLn;
+  WriteLn('Syntaxe : VISIO [image.VSDX]');
+  WriteLn;
+  WriteLn(' image.VSDX       Nom du fichier ".VSDX" a editer');
+  Halt;
+ End;
  InitializeGraphics;
  InitMenuSystem;
  InitShapes;
  InitContextMenu;
-
  { Si un nom de fichier est passe en ligne de commande, l'ouvrir }
  If ParamCount >= 1 Then Begin
   CurrentFileName := ParamStr(1);
@@ -17604,10 +17611,8 @@ BEGIN
    End;
   End;
  Until False;
-
  If MouseDriverFound Then Begin
   HideMouse;
  End;
-
  CloseGraph;
 END.

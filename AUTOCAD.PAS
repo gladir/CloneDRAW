@@ -19883,7 +19883,14 @@ BEGIN
   If(StrToUpper(Copy(TmpLanguage,1,2))='JP')or
     (StrToUpper(Copy(TmpLanguage,1,3))='JPN')Then Language:=_Japanese;
  End;
-
+ If(ParamStr(1)='/?')or(ParamStr(1)='--help')or(ParamStr(1)='-h')Then Begin
+  WriteLn('AUTOCAD : Cette commande permet de lancer un clone de AutoCAD.');
+  WriteLn;
+  WriteLn('Syntaxe : AUTOCAD [image.DWG]');
+  WriteLn;
+  WriteLn(' image.DWG       Nom du fichier ".DWG" a editer');
+  Halt;
+ End;
  { Initialisation }
  InitializeGraphics;
  ScreenWidth := GetMaxX + 1;
@@ -19930,7 +19937,6 @@ BEGIN
   { Forcer majuscules pour comparaison }
   For I := 1 To Length(ArgExt) Do
    ArgExt[I] := UpCase(ArgExt[I]);
-
   SavedSW := ScreenWidth;
   SavedSH := ScreenHeight;
   LoadOK := False;
@@ -19938,19 +19944,15 @@ BEGIN
   { Restaurer dimensions ecran (ReadDWGHeader les ecrase) }
   ScreenWidth := SavedSW;
   ScreenHeight := SavedSH;
-
   If LoadOK Then
    CommandLastLine := 'Charge: ' + CmdArg
   Else
    CommandLastLine := 'Echec chargement: ' + CmdArg;
  End;
-
  { Dessiner l'interface initiale }
  DrawInterface;
-
  { Lancer la boucle principale }
  MainLoop;
-
  { Fermer le mode graphique }
  CloseGraph;
 END.

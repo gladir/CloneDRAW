@@ -51,9 +51,9 @@ Program AUTOCAD;
 {$ENDIF}
 
 Uses {$IFDEF FPC}
-      Crt,PtcGraph,PtcCrt,PtcMouse,Dos
+      Printer,Crt,PtcGraph,PtcCrt,PtcMouse,Dos
      {$ELSE}
-      Crt,Graph,Dos
+      Printer,Crt,Graph,Dos
      {$ENDIF};
 
 Const
@@ -968,6 +968,9 @@ Function PointNearCircle(PX, PY, CX, CY, Radius: Real; Tolerance: Real): Boolean
 Function ObjectIntersectsRect(ObjIndex: Integer; RX1, RY1, RX2, RY2: Real): Boolean; Forward;
 Function ObjectInsideRect(ObjIndex: Integer; RX1, RY1, RX2, RY2: Real): Boolean; Forward;
 Procedure DrawSelectedObjects; Forward;
+
+{ Forward declaration - Apercu avant impression }
+Procedure ShowPrintPreview; Forward;
 
 { Forward declarations - TODO 10 - Système de grips }
 Procedure InitGripSystem; Forward;
@@ -3857,57 +3860,8 @@ Begin
  SelectEndX := 0;
  SelectEndY := 0;
 
- { Créer quelques objets de démonstration }
- { Ligne horizontale }
- DrawObjects[0].ObjType := OBJ_LINE;
- DrawObjects[0].X1 := -100;
- DrawObjects[0].Y1 := 50;
- DrawObjects[0].X2 := 100;
- DrawObjects[0].Y2 := 50;
- DrawObjects[0].Color := Yellow;
- DrawObjects[0].Selected := False;
- DrawObjects[0].Visible := True;
-
- { Ligne verticale }
- DrawObjects[1].ObjType := OBJ_LINE;
- DrawObjects[1].X1 := 0;
- DrawObjects[1].Y1 := -80;
- DrawObjects[1].X2 := 0;
- DrawObjects[1].Y2 := 120;
- DrawObjects[1].Color := Cyan;
- DrawObjects[1].Selected := False;
- DrawObjects[1].Visible := True;
-
- { Cercle }
- DrawObjects[2].ObjType := OBJ_CIRCLE;
- DrawObjects[2].X1 := -50;  { Centre X }
- DrawObjects[2].Y1 := -30;  { Centre Y }
- DrawObjects[2].Radius := 40;
- DrawObjects[2].Color := Green;
- DrawObjects[2].Selected := False;
- DrawObjects[2].Visible := True;
-
- { Rectangle (représenté par 4 lignes conceptuellement, mais comme un objet) }
- DrawObjects[3].ObjType := OBJ_RECTANGLE;
- DrawObjects[3].X1 := 60;   { Coin inférieur gauche X }
- DrawObjects[3].Y1 := -60;  { Coin inférieur gauche Y }
- DrawObjects[3].X2 := 140;  { Coin supérieur droit X }
- DrawObjects[3].Y2 := 20;   { Coin supérieur droit Y }
- DrawObjects[3].Color := Magenta;
- DrawObjects[3].Selected := False;
- DrawObjects[3].Visible := True;
-
- { Ligne diagonale }
- DrawObjects[4].ObjType := OBJ_LINE;
- DrawObjects[4].X1 := -120;
- DrawObjects[4].Y1 := -100;
- DrawObjects[4].X2 := -60;
- DrawObjects[4].Y2 := -40;
- DrawObjects[4].Color := LightRed;
- DrawObjects[4].Selected := False;
- DrawObjects[4].Visible := True;
-
- ObjectCount := 5;
+ { Demarrer avec un dessin vide }
+ ObjectCount := 0;
 End;
 
 { Effacer la sélection }
@@ -15027,6 +14981,7 @@ Var
  CanvasTop, CanvasBottom: Integer;
  ClickedGrip: Integer;
  TbHit, BtnHit: Integer;
+ NumStr1, NumStr2, NumStr3: String[16];
 Begin
  CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
@@ -15167,6 +15122,34 @@ Begin
         PendingFileAction := 2;
         CommandPrompt := 'Enregistrer sous:';
         CommandBuffer := '';
+       End;
+       5: Begin { Importer... (.DXF / .SVG / .DWG) }
+        PendingFileAction := 3;
+        CommandPrompt := 'Importer (.dxf/.svg/.dwg):';
+        CommandBuffer := '';
+       End;
+       6: Begin { Exporter... (.DXF / .SVG) }
+        PendingFileAction := 4;
+        CommandPrompt := 'Exporter (.dxf/.svg):';
+        CommandBuffer := '';
+       End;
+       8: Begin { Imprimer... }
+        CommandLastLine := 'Imprimer: fonction non disponible dans cette version';
+       End;
+       9: Begin { Apercu avant impression }
+        ShowPrintPreview;
+       End;
+       11: Begin { Proprietes du dessin }
+        Str(ObjectCount, NumStr1);
+        Str(LayerCount, NumStr2);
+        Str(BlockDefCount, NumStr3);
+        If CurrentFileName = '' Then
+         CommandLastLine := 'Proprietes: <sans nom>  Objets=' + NumStr1 +
+                            '  Calques=' + NumStr2 + '  Blocs=' + NumStr3
+        Else
+         CommandLastLine := 'Proprietes: ' + CurrentFileName +
+                            '  Objets=' + NumStr1 +
+                            '  Calques=' + NumStr2 + '  Blocs=' + NumStr3;
        End;
        13: Begin { Quitter }
         Running := False;
@@ -15614,6 +15597,243 @@ Begin
  End;
 End;
 
+{ Apercu avant impression : rendu plein ecran sur "papier" blanc, encre noire.
+  Sauve Zoom/Offset, ajuste pour cadrer tous les objets visibles, attend une
+  touche, puis restaure et redessine l'interface normale. }
+Procedure ShowPrintPreview;
+Var
+ I, J: Integer;
+ HasAny: Boolean;
+ Bx1, By1, Bx2, By2, R, W, H: Real;
+ SavedZoom, SavedOffX, SavedOffY: Real;
+ ZoomX, ZoomY: Real;
+ PaperTop, PaperBottom: Integer;
+ CanvasW, CanvasH: Integer;
+ SX1, SY1, SX2, SY2, SCX, SCY, SR: Integer;
+ PrevSX, PrevSY: Integer;
+ K: Char;
+ Title: String;
+Begin
+ If ObjectCount <= 0 Then Begin
+  CommandLastLine := 'Apercu: aucun objet a afficher';
+  Exit;
+ End;
+
+ { Calculer la boite englobante de tous les objets visibles }
+ HasAny := False;
+ Bx1 := 0; By1 := 0; Bx2 := 0; By2 := 0;
+ For I := 0 To ObjectCount - 1 Do Begin
+  If Not DrawObjects[I].Visible Then Continue;
+  If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  If Not IsObjectOnVisibleLayer(I) Then Continue;
+  Case DrawObjects[I].ObjType Of
+   OBJ_LINE, OBJ_RECTANGLE: Begin
+    If Not HasAny Then Begin
+     Bx1 := DrawObjects[I].X1; By1 := DrawObjects[I].Y1;
+     Bx2 := Bx1; By2 := By1;
+     HasAny := True;
+    End;
+    If DrawObjects[I].X1 < Bx1 Then Bx1 := DrawObjects[I].X1;
+    If DrawObjects[I].Y1 < By1 Then By1 := DrawObjects[I].Y1;
+    If DrawObjects[I].X1 > Bx2 Then Bx2 := DrawObjects[I].X1;
+    If DrawObjects[I].Y1 > By2 Then By2 := DrawObjects[I].Y1;
+    If DrawObjects[I].X2 < Bx1 Then Bx1 := DrawObjects[I].X2;
+    If DrawObjects[I].Y2 < By1 Then By1 := DrawObjects[I].Y2;
+    If DrawObjects[I].X2 > Bx2 Then Bx2 := DrawObjects[I].X2;
+    If DrawObjects[I].Y2 > By2 Then By2 := DrawObjects[I].Y2;
+   End;
+   OBJ_CIRCLE, OBJ_ARC, OBJ_ELLIPSE: Begin
+    R := DrawObjects[I].Radius;
+    If R < 0 Then R := -R;
+    If Not HasAny Then Begin
+     Bx1 := DrawObjects[I].X1 - R; By1 := DrawObjects[I].Y1 - R;
+     Bx2 := DrawObjects[I].X1 + R; By2 := DrawObjects[I].Y1 + R;
+     HasAny := True;
+    End Else Begin
+     If DrawObjects[I].X1 - R < Bx1 Then Bx1 := DrawObjects[I].X1 - R;
+     If DrawObjects[I].Y1 - R < By1 Then By1 := DrawObjects[I].Y1 - R;
+     If DrawObjects[I].X1 + R > Bx2 Then Bx2 := DrawObjects[I].X1 + R;
+     If DrawObjects[I].Y1 + R > By2 Then By2 := DrawObjects[I].Y1 + R;
+    End;
+   End;
+   OBJ_POINT, OBJ_TEXT: Begin
+    If Not HasAny Then Begin
+     Bx1 := DrawObjects[I].X1; By1 := DrawObjects[I].Y1;
+     Bx2 := Bx1; By2 := By1;
+     HasAny := True;
+    End Else Begin
+     If DrawObjects[I].X1 < Bx1 Then Bx1 := DrawObjects[I].X1;
+     If DrawObjects[I].Y1 < By1 Then By1 := DrawObjects[I].Y1;
+     If DrawObjects[I].X1 > Bx2 Then Bx2 := DrawObjects[I].X1;
+     If DrawObjects[I].Y1 > By2 Then By2 := DrawObjects[I].Y1;
+    End;
+   End;
+   OBJ_POLYLINE: Begin
+    For J := 0 To DrawObjects[I].VertexCount - 1 Do Begin
+     If Not HasAny Then Begin
+      Bx1 := DrawObjects[I].Vertices[J].X; By1 := DrawObjects[I].Vertices[J].Y;
+      Bx2 := Bx1; By2 := By1;
+      HasAny := True;
+     End Else Begin
+      If DrawObjects[I].Vertices[J].X < Bx1 Then Bx1 := DrawObjects[I].Vertices[J].X;
+      If DrawObjects[I].Vertices[J].Y < By1 Then By1 := DrawObjects[I].Vertices[J].Y;
+      If DrawObjects[I].Vertices[J].X > Bx2 Then Bx2 := DrawObjects[I].Vertices[J].X;
+      If DrawObjects[I].Vertices[J].Y > By2 Then By2 := DrawObjects[I].Vertices[J].Y;
+     End;
+    End;
+   End;
+  End;
+ End;
+
+ If Not HasAny Then Begin
+  CommandLastLine := 'Apercu: aucun objet visible';
+  Exit;
+ End;
+
+ W := Bx2 - Bx1;
+ H := By2 - By1;
+ If W < 0.0001 Then W := 1.0;
+ If H < 0.0001 Then H := 1.0;
+
+ { Zone "papier" = zone canvas habituelle (entre menubar/toolbar et commandline/status) }
+ PaperTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+ PaperBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ CanvasW := ScreenWidth;
+ CanvasH := PaperBottom - PaperTop;
+
+ ZoomX := (CanvasW * 0.9) / W;
+ ZoomY := (CanvasH * 0.9) / H;
+
+ SavedZoom := ZoomLevel;
+ SavedOffX := ViewOffsetX;
+ SavedOffY := ViewOffsetY;
+
+ If ZoomX < ZoomY Then ZoomLevel := ZoomX Else ZoomLevel := ZoomY;
+ ViewOffsetX := -(Bx1 + Bx2) / 2.0;
+ ViewOffsetY := -(By1 + By2) / 2.0;
+
+ { Effacer et peindre le fond }
+ ClearDevice;
+
+ { Bandeau de titre en haut }
+ SetFillStyle(SolidFill, DarkGray);
+ Bar(0, 0, ScreenWidth - 1, PaperTop - 1);
+ SetColor(Yellow);
+ Title := 'APERCU AVANT IMPRESSION';
+ OutTextXY((ScreenWidth - TextWidth(Title)) Div 2, 6, Title);
+ If CurrentFileName <> '' Then Begin
+  SetColor(White);
+  OutTextXY(10, 6, CurrentFileName);
+ End;
+
+ { Papier blanc }
+ SetFillStyle(SolidFill, White);
+ Bar(0, PaperTop, ScreenWidth - 1, PaperBottom - 1);
+
+ { Cadre du papier }
+ SetColor(Black);
+ Rectangle(2, PaperTop + 2, ScreenWidth - 3, PaperBottom - 3);
+
+ { Bandeau d'instruction en bas }
+ SetFillStyle(SolidFill, DarkGray);
+ Bar(0, PaperBottom, ScreenWidth - 1, ScreenHeight - 1);
+ SetColor(LightGray);
+ Title := 'Appuyez sur une touche pour fermer l''apercu...';
+ OutTextXY((ScreenWidth - TextWidth(Title)) Div 2,
+           PaperBottom + (ScreenHeight - PaperBottom) Div 2 - 4, Title);
+
+ { Dessiner les objets en noir sur le papier }
+ SetColor(Black);
+ For I := 0 To ObjectCount - 1 Do Begin
+  If Not DrawObjects[I].Visible Then Continue;
+  If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  If Not IsObjectOnVisibleLayer(I) Then Continue;
+
+  Case DrawObjects[I].ObjType Of
+   OBJ_LINE: Begin
+    SX1 := WorldToScreenX(DrawObjects[I].X1);
+    SY1 := WorldToScreenY(DrawObjects[I].Y1);
+    SX2 := WorldToScreenX(DrawObjects[I].X2);
+    SY2 := WorldToScreenY(DrawObjects[I].Y2);
+    Line(SX1, SY1, SX2, SY2);
+   End;
+   OBJ_RECTANGLE: Begin
+    SX1 := WorldToScreenX(DrawObjects[I].X1);
+    SY1 := WorldToScreenY(DrawObjects[I].Y1);
+    SX2 := WorldToScreenX(DrawObjects[I].X2);
+    SY2 := WorldToScreenY(DrawObjects[I].Y2);
+    Rectangle(SX1, SY1, SX2, SY2);
+   End;
+   OBJ_CIRCLE: Begin
+    SCX := WorldToScreenX(DrawObjects[I].X1);
+    SCY := WorldToScreenY(DrawObjects[I].Y1);
+    SR := Round(DrawObjects[I].Radius * ZoomLevel);
+    If SR < 1 Then SR := 1;
+    Circle(SCX, SCY, SR);
+   End;
+   OBJ_ARC: Begin
+    SCX := WorldToScreenX(DrawObjects[I].X1);
+    SCY := WorldToScreenY(DrawObjects[I].Y1);
+    SR := Round(DrawObjects[I].Radius * ZoomLevel);
+    If SR < 1 Then SR := 1;
+    Arc(SCX, SCY, Round(DrawObjects[I].StartAngle),
+        Round(DrawObjects[I].EndAngle), SR);
+   End;
+   OBJ_ELLIPSE: Begin
+    SCX := WorldToScreenX(DrawObjects[I].X1);
+    SCY := WorldToScreenY(DrawObjects[I].Y1);
+    SR := Round(DrawObjects[I].Radius * ZoomLevel);
+    If SR < 1 Then SR := 1;
+    { Approximation: utilise Ellipse avec rayon X = Radius et rayon Y deduit de Y2 }
+    SX1 := Round(Abs(DrawObjects[I].Y2 - DrawObjects[I].Y1) * ZoomLevel);
+    If SX1 < 1 Then SX1 := SR;
+    Ellipse(SCX, SCY, 0, 360, SR, SX1);
+   End;
+   OBJ_POINT: Begin
+    SX1 := WorldToScreenX(DrawObjects[I].X1);
+    SY1 := WorldToScreenY(DrawObjects[I].Y1);
+    PutPixel(SX1, SY1, Black);
+    Line(SX1 - 2, SY1, SX1 + 2, SY1);
+    Line(SX1, SY1 - 2, SX1, SY1 + 2);
+   End;
+   OBJ_TEXT: Begin
+    SX1 := WorldToScreenX(DrawObjects[I].X1);
+    SY1 := WorldToScreenY(DrawObjects[I].Y1);
+    OutTextXY(SX1, SY1, DrawObjects[I].DimText);
+   End;
+   OBJ_POLYLINE: Begin
+    If DrawObjects[I].VertexCount >= 2 Then Begin
+     PrevSX := WorldToScreenX(DrawObjects[I].Vertices[0].X);
+     PrevSY := WorldToScreenY(DrawObjects[I].Vertices[0].Y);
+     For J := 1 To DrawObjects[I].VertexCount - 1 Do Begin
+      SX2 := WorldToScreenX(DrawObjects[I].Vertices[J].X);
+      SY2 := WorldToScreenY(DrawObjects[I].Vertices[J].Y);
+      Line(PrevSX, PrevSY, SX2, SY2);
+      PrevSX := SX2;
+      PrevSY := SY2;
+     End;
+     If DrawObjects[I].Closed and (DrawObjects[I].VertexCount >= 3) Then Begin
+      SX2 := WorldToScreenX(DrawObjects[I].Vertices[0].X);
+      SY2 := WorldToScreenY(DrawObjects[I].Vertices[0].Y);
+      Line(PrevSX, PrevSY, SX2, SY2);
+     End;
+    End;
+   End;
+  End;
+ End;
+
+ { Attendre une touche }
+ K := ReadKey;
+ If K = #0 Then K := ReadKey;
+
+ { Restaurer la vue et l'interface }
+ ZoomLevel := SavedZoom;
+ ViewOffsetX := SavedOffX;
+ ViewOffsetY := SavedOffY;
+ DrawInterface;
+ CommandLastLine := 'Apercu ferme';
+End;
+
 { Boucle principale }
 Procedure MainLoop;
 Var
@@ -15624,6 +15844,8 @@ Var
  I: Integer;  { TODO 9: Variable pour la sélection }
  BlinkTick: Integer;
  SavedSW, SavedSH: Integer;
+ Ext: String[8];
+ OkFlag: Boolean;
 Begin
  Running := True;
  OldMouseX := -1;
@@ -15793,6 +16015,51 @@ Begin
          End Else
           CommandLastLine := 'Echec enregistrement: ' + CommandBuffer;
         End;
+        3: Begin { Importer - dispatch sur extension }
+         Ext := '';
+         For I := Length(CommandBuffer) DownTo 1 Do
+          If CommandBuffer[I] = '.' Then Begin
+           Ext := Copy(CommandBuffer, I + 1, Length(CommandBuffer) - I);
+           Break;
+          End;
+         For I := 1 To Length(Ext) Do Ext[I] := UpCase(Ext[I]);
+         SavedSW := ScreenWidth;
+         SavedSH := ScreenHeight;
+         OkFlag := False;
+         If Ext = 'DWG' Then OkFlag := ReadDWGFile(CommandBuffer) Else
+         If Ext = 'DXF' Then OkFlag := ReadDXFFile(CommandBuffer) Else
+         If Ext = 'SVG' Then OkFlag := ReadSVGFile(CommandBuffer) Else
+          CommandLastLine := 'Importer: extension non supportee (.dwg/.dxf/.svg)';
+         ScreenWidth := SavedSW;
+         ScreenHeight := SavedSH;
+         If (Ext = 'DWG') or (Ext = 'DXF') or (Ext = 'SVG') Then Begin
+          If OkFlag Then Begin
+           CurrentFileName := CommandBuffer;
+           CommandLastLine := 'Importe: ' + CommandBuffer;
+          End Else
+           CommandLastLine := 'Echec importation: ' + CommandBuffer;
+         End;
+        End;
+        4: Begin { Exporter - dispatch sur extension }
+         Ext := '';
+         For I := Length(CommandBuffer) DownTo 1 Do
+          If CommandBuffer[I] = '.' Then Begin
+           Ext := Copy(CommandBuffer, I + 1, Length(CommandBuffer) - I);
+           Break;
+          End;
+         For I := 1 To Length(Ext) Do Ext[I] := UpCase(Ext[I]);
+         OkFlag := False;
+         If Ext = 'DXF' Then OkFlag := WriteDXFFile(CommandBuffer) Else
+         If Ext = 'SVG' Then OkFlag := WriteSVGFile(CommandBuffer) Else
+         If Ext = 'DWG' Then OkFlag := WriteDWGFile(CommandBuffer) Else
+          CommandLastLine := 'Exporter: extension non supportee (.dxf/.svg/.dwg)';
+         If (Ext = 'DWG') or (Ext = 'DXF') or (Ext = 'SVG') Then Begin
+          If OkFlag Then
+           CommandLastLine := 'Exporte: ' + CommandBuffer
+          Else
+           CommandLastLine := 'Echec exportation: ' + CommandBuffer;
+         End;
+        End;
        End;
        PendingFileAction := 0;
        CommandPrompt := 'Command:';
@@ -15848,6 +16115,9 @@ Begin
        ViewOffsetY := 0.0;
        ZoomLevel := 1.0;
        DrawInterface;
+      End;
+      #107: Begin { Alt+F4 - Quitter }
+       Running := False;
       End;
      End;
     End;

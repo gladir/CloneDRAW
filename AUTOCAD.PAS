@@ -51,7 +51,7 @@ Program AUTOCAD;
 {$ENDIF}
 
 Uses {$IFDEF FPC}
-      Crt,PtcGraph,PtcCrt,PtcMouse
+      Crt,PtcGraph,PtcCrt,PtcMouse,Dos
      {$ELSE}
       Crt,Graph,Dos
      {$ENDIF};
@@ -815,6 +815,9 @@ Type
  End;
 
 Var
+ Language:(_French,_English,_Germany,_Italian,_Spain,_Albanian,_Portuguese,_Swedish,_Danish,_Japanese);
+ TmpLanguage:String;
+
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
  Running: Boolean;
@@ -1416,8 +1419,21 @@ End;
 { Draw, Dimension, Modify, Window, Help                                        }
 { ============================================================================ }
 
-Procedure InitMenus;
+Function StrToUpper(Const S:String):String;
+Var I:Integer; R:String;
 Begin
+ R:=S;
+ For I:=1 To Length(R) Do
+  If(R[I]>='a')And(R[I]<='z')Then R[I]:=Chr(Ord(R[I])-32);
+ StrToUpper:=R;
+End;
+
+Procedure InitMenus;
+Var
+ I, W, MaxW, ItemW: Integer;
+Begin
+ Case Language Of
+  _English: Begin
  { Menu File (Fichier) }
  Menus[MENU_FILE].Title := 'File';
  Menus[MENU_FILE].X := 5;
@@ -1848,6 +1864,456 @@ Begin
  Menus[MENU_HELP].Items[5].Caption := 'About AutoCAD';
  Menus[MENU_HELP].Items[5].Shortcut := '';
  Menus[MENU_HELP].Items[5].Enabled := True;
+  End;
+  Else Begin
+ { ====================== Menus en francais (par defaut) ====================== }
+
+ { Menu Fichier }
+ Menus[MENU_FILE].Title := 'Fichier';
+ Menus[MENU_FILE].X := 5;
+ Menus[MENU_FILE].Width := 270;
+ Menus[MENU_FILE].ItemCount := 14;
+ Menus[MENU_FILE].Items[0].Caption := 'Nouveau...';
+ Menus[MENU_FILE].Items[0].Shortcut := 'Ctrl+N';
+ Menus[MENU_FILE].Items[0].Enabled := True;
+ Menus[MENU_FILE].Items[1].Caption := 'Ouvrir...';
+ Menus[MENU_FILE].Items[1].Shortcut := 'Ctrl+O';
+ Menus[MENU_FILE].Items[1].Enabled := True;
+ Menus[MENU_FILE].Items[2].Caption := 'Enregistrer';
+ Menus[MENU_FILE].Items[2].Shortcut := 'Ctrl+S';
+ Menus[MENU_FILE].Items[2].Enabled := True;
+ Menus[MENU_FILE].Items[3].Caption := 'Enregistrer sous...';
+ Menus[MENU_FILE].Items[3].Shortcut := 'Ctrl+Shift+S';
+ Menus[MENU_FILE].Items[3].Enabled := True;
+ Menus[MENU_FILE].Items[4].Separator := True;
+ Menus[MENU_FILE].Items[5].Caption := 'Importer...';
+ Menus[MENU_FILE].Items[5].Shortcut := '';
+ Menus[MENU_FILE].Items[5].Enabled := True;
+ Menus[MENU_FILE].Items[6].Caption := 'Exporter...';
+ Menus[MENU_FILE].Items[6].Shortcut := '';
+ Menus[MENU_FILE].Items[6].Enabled := True;
+ Menus[MENU_FILE].Items[7].Separator := True;
+ Menus[MENU_FILE].Items[8].Caption := 'Imprimer...';
+ Menus[MENU_FILE].Items[8].Shortcut := 'Ctrl+P';
+ Menus[MENU_FILE].Items[8].Enabled := True;
+ Menus[MENU_FILE].Items[9].Caption := 'Apercu avant impression';
+ Menus[MENU_FILE].Items[9].Shortcut := '';
+ Menus[MENU_FILE].Items[9].Enabled := True;
+ Menus[MENU_FILE].Items[10].Separator := True;
+ Menus[MENU_FILE].Items[11].Caption := 'Proprietes du dessin';
+ Menus[MENU_FILE].Items[11].Shortcut := '';
+ Menus[MENU_FILE].Items[11].Enabled := True;
+ Menus[MENU_FILE].Items[12].Separator := True;
+ Menus[MENU_FILE].Items[13].Caption := 'Quitter';
+ Menus[MENU_FILE].Items[13].Shortcut := 'Alt+F4';
+ Menus[MENU_FILE].Items[13].Enabled := True;
+
+ { Menu Edition }
+ Menus[MENU_EDIT].Title := 'Edition';
+ Menus[MENU_EDIT].X := 35;
+ Menus[MENU_EDIT].Width := 200;
+ Menus[MENU_EDIT].ItemCount := 12;
+ Menus[MENU_EDIT].Items[0].Caption := 'Annuler';
+ Menus[MENU_EDIT].Items[0].Shortcut := 'Ctrl+Z';
+ Menus[MENU_EDIT].Items[0].Enabled := True;
+ Menus[MENU_EDIT].Items[1].Caption := 'Retablir';
+ Menus[MENU_EDIT].Items[1].Shortcut := 'Ctrl+Y';
+ Menus[MENU_EDIT].Items[1].Enabled := True;
+ Menus[MENU_EDIT].Items[2].Separator := True;
+ Menus[MENU_EDIT].Items[3].Caption := 'Couper';
+ Menus[MENU_EDIT].Items[3].Shortcut := 'Ctrl+X';
+ Menus[MENU_EDIT].Items[3].Enabled := True;
+ Menus[MENU_EDIT].Items[4].Caption := 'Copier';
+ Menus[MENU_EDIT].Items[4].Shortcut := 'Ctrl+C';
+ Menus[MENU_EDIT].Items[4].Enabled := True;
+ Menus[MENU_EDIT].Items[5].Caption := 'Copier avec point de base';
+ Menus[MENU_EDIT].Items[5].Shortcut := 'Ctrl+Shift+C';
+ Menus[MENU_EDIT].Items[5].Enabled := True;
+ Menus[MENU_EDIT].Items[6].Caption := 'Coller';
+ Menus[MENU_EDIT].Items[6].Shortcut := 'Ctrl+V';
+ Menus[MENU_EDIT].Items[6].Enabled := True;
+ Menus[MENU_EDIT].Items[7].Caption := 'Coller comme bloc';
+ Menus[MENU_EDIT].Items[7].Shortcut := 'Ctrl+Shift+V';
+ Menus[MENU_EDIT].Items[7].Enabled := True;
+ Menus[MENU_EDIT].Items[8].Separator := True;
+ Menus[MENU_EDIT].Items[9].Caption := 'Effacer';
+ Menus[MENU_EDIT].Items[9].Shortcut := 'Suppr';
+ Menus[MENU_EDIT].Items[9].Enabled := True;
+ Menus[MENU_EDIT].Items[10].Separator := True;
+ Menus[MENU_EDIT].Items[11].Caption := 'Selectionner tout';
+ Menus[MENU_EDIT].Items[11].Shortcut := 'Ctrl+A';
+ Menus[MENU_EDIT].Items[11].Enabled := True;
+
+ { Menu Affichage }
+ Menus[MENU_VIEW].Title := 'Affichage';
+ Menus[MENU_VIEW].X := 65;
+ Menus[MENU_VIEW].Width := 170;
+ Menus[MENU_VIEW].ItemCount := 14;
+ Menus[MENU_VIEW].Items[0].Caption := 'Redessiner';
+ Menus[MENU_VIEW].Items[0].Shortcut := 'R';
+ Menus[MENU_VIEW].Items[0].Enabled := True;
+ Menus[MENU_VIEW].Items[1].Caption := 'Regenerer';
+ Menus[MENU_VIEW].Items[1].Shortcut := '';
+ Menus[MENU_VIEW].Items[1].Enabled := True;
+ Menus[MENU_VIEW].Items[2].Separator := True;
+ Menus[MENU_VIEW].Items[3].Caption := 'Zoom avant';
+ Menus[MENU_VIEW].Items[3].Shortcut := 'Z+';
+ Menus[MENU_VIEW].Items[3].Enabled := True;
+ Menus[MENU_VIEW].Items[4].Caption := 'Zoom arriere';
+ Menus[MENU_VIEW].Items[4].Shortcut := 'Z-';
+ Menus[MENU_VIEW].Items[4].Enabled := True;
+ Menus[MENU_VIEW].Items[5].Caption := 'Zoom fenetre';
+ Menus[MENU_VIEW].Items[5].Shortcut := 'Z W';
+ Menus[MENU_VIEW].Items[5].Enabled := True;
+ Menus[MENU_VIEW].Items[6].Caption := 'Zoom etendue';
+ Menus[MENU_VIEW].Items[6].Shortcut := 'Z E';
+ Menus[MENU_VIEW].Items[6].Enabled := True;
+ Menus[MENU_VIEW].Items[7].Caption := 'Zoom tout';
+ Menus[MENU_VIEW].Items[7].Shortcut := 'Z A';
+ Menus[MENU_VIEW].Items[7].Enabled := True;
+ Menus[MENU_VIEW].Items[8].Separator := True;
+ Menus[MENU_VIEW].Items[9].Caption := 'Panoramique';
+ Menus[MENU_VIEW].Items[9].Shortcut := 'P';
+ Menus[MENU_VIEW].Items[9].Enabled := True;
+ Menus[MENU_VIEW].Items[10].Separator := True;
+ Menus[MENU_VIEW].Items[11].Caption := 'Vues nommees...';
+ Menus[MENU_VIEW].Items[11].Shortcut := 'V';
+ Menus[MENU_VIEW].Items[11].Enabled := True;
+ Menus[MENU_VIEW].Items[12].Caption := 'Vues 3D';
+ Menus[MENU_VIEW].Items[12].Shortcut := '';
+ Menus[MENU_VIEW].Items[12].Enabled := True;
+ Menus[MENU_VIEW].Items[13].Caption := 'Fenetres';
+ Menus[MENU_VIEW].Items[13].Shortcut := '';
+ Menus[MENU_VIEW].Items[13].Enabled := True;
+
+ { Menu Insertion }
+ Menus[MENU_INSERT].Title := 'Insertion';
+ Menus[MENU_INSERT].X := 100;
+ Menus[MENU_INSERT].Width := 180;
+ Menus[MENU_INSERT].ItemCount := 10;
+ Menus[MENU_INSERT].Items[0].Caption := 'Bloc...';
+ Menus[MENU_INSERT].Items[0].Shortcut := 'I';
+ Menus[MENU_INSERT].Items[0].Enabled := True;
+ Menus[MENU_INSERT].Items[1].Caption := 'Reference DWG...';
+ Menus[MENU_INSERT].Items[1].Shortcut := '';
+ Menus[MENU_INSERT].Items[1].Enabled := True;
+ Menus[MENU_INSERT].Items[2].Caption := 'Reference image...';
+ Menus[MENU_INSERT].Items[2].Shortcut := '';
+ Menus[MENU_INSERT].Items[2].Enabled := True;
+ Menus[MENU_INSERT].Items[3].Separator := True;
+ Menus[MENU_INSERT].Items[4].Caption := 'Presentation';
+ Menus[MENU_INSERT].Items[4].Shortcut := '';
+ Menus[MENU_INSERT].Items[4].Enabled := True;
+ Menus[MENU_INSERT].Items[5].Separator := True;
+ Menus[MENU_INSERT].Items[6].Caption := '3D Studio...';
+ Menus[MENU_INSERT].Items[6].Shortcut := '';
+ Menus[MENU_INSERT].Items[6].Enabled := True;
+ Menus[MENU_INSERT].Items[7].Caption := 'Fichier ACIS...';
+ Menus[MENU_INSERT].Items[7].Shortcut := '';
+ Menus[MENU_INSERT].Items[7].Enabled := True;
+ Menus[MENU_INSERT].Items[8].Separator := True;
+ Menus[MENU_INSERT].Items[9].Caption := 'Objet OLE...';
+ Menus[MENU_INSERT].Items[9].Shortcut := '';
+ Menus[MENU_INSERT].Items[9].Enabled := True;
+
+ { Menu Format }
+ Menus[MENU_FORMAT].Title := 'Format';
+ Menus[MENU_FORMAT].X := 145;
+ Menus[MENU_FORMAT].Width := 200;
+ Menus[MENU_FORMAT].ItemCount := 12;
+ Menus[MENU_FORMAT].Items[0].Caption := 'Calque...';
+ Menus[MENU_FORMAT].Items[0].Shortcut := 'LA';
+ Menus[MENU_FORMAT].Items[0].Enabled := True;
+ Menus[MENU_FORMAT].Items[1].Caption := 'Couleur...';
+ Menus[MENU_FORMAT].Items[1].Shortcut := 'COL';
+ Menus[MENU_FORMAT].Items[1].Enabled := True;
+ Menus[MENU_FORMAT].Items[2].Caption := 'Type de ligne...';
+ Menus[MENU_FORMAT].Items[2].Shortcut := 'LT';
+ Menus[MENU_FORMAT].Items[2].Enabled := True;
+ Menus[MENU_FORMAT].Items[3].Caption := 'Epaisseur de ligne...';
+ Menus[MENU_FORMAT].Items[3].Shortcut := 'LW';
+ Menus[MENU_FORMAT].Items[3].Enabled := True;
+ Menus[MENU_FORMAT].Items[4].Separator := True;
+ Menus[MENU_FORMAT].Items[5].Caption := 'Style de texte...';
+ Menus[MENU_FORMAT].Items[5].Shortcut := 'ST';
+ Menus[MENU_FORMAT].Items[5].Enabled := True;
+ Menus[MENU_FORMAT].Items[6].Caption := 'Style de cotation...';
+ Menus[MENU_FORMAT].Items[6].Shortcut := 'D';
+ Menus[MENU_FORMAT].Items[6].Enabled := True;
+ Menus[MENU_FORMAT].Items[7].Caption := 'Style de point...';
+ Menus[MENU_FORMAT].Items[7].Shortcut := '';
+ Menus[MENU_FORMAT].Items[7].Enabled := True;
+ Menus[MENU_FORMAT].Items[8].Separator := True;
+ Menus[MENU_FORMAT].Items[9].Caption := 'Unites...';
+ Menus[MENU_FORMAT].Items[9].Shortcut := 'UN';
+ Menus[MENU_FORMAT].Items[9].Enabled := True;
+ Menus[MENU_FORMAT].Items[10].Caption := 'Limites du dessin';
+ Menus[MENU_FORMAT].Items[10].Shortcut := '';
+ Menus[MENU_FORMAT].Items[10].Enabled := True;
+ Menus[MENU_FORMAT].Items[11].Caption := 'Renommer...';
+ Menus[MENU_FORMAT].Items[11].Shortcut := 'REN';
+ Menus[MENU_FORMAT].Items[11].Enabled := True;
+
+ { Menu Outils }
+ Menus[MENU_TOOLS].Title := 'Outils';
+ Menus[MENU_TOOLS].X := 195;
+ Menus[MENU_TOOLS].Width := 220;
+ Menus[MENU_TOOLS].ItemCount := 14;
+ Menus[MENU_TOOLS].Items[0].Caption := 'Orthographe';
+ Menus[MENU_TOOLS].Items[0].Shortcut := 'SP';
+ Menus[MENU_TOOLS].Items[0].Enabled := True;
+ Menus[MENU_TOOLS].Items[1].Caption := 'Selection rapide...';
+ Menus[MENU_TOOLS].Items[1].Shortcut := '';
+ Menus[MENU_TOOLS].Items[1].Enabled := True;
+ Menus[MENU_TOOLS].Items[2].Separator := True;
+ Menus[MENU_TOOLS].Items[3].Caption := 'Ordre de dessin';
+ Menus[MENU_TOOLS].Items[3].Shortcut := '';
+ Menus[MENU_TOOLS].Items[3].Enabled := True;
+ Menus[MENU_TOOLS].Items[4].Caption := 'Renseigner';
+ Menus[MENU_TOOLS].Items[4].Shortcut := '';
+ Menus[MENU_TOOLS].Items[4].Enabled := True;
+ Menus[MENU_TOOLS].Items[5].Separator := True;
+ Menus[MENU_TOOLS].Items[6].Caption := 'Charger une application...';
+ Menus[MENU_TOOLS].Items[6].Shortcut := 'AP';
+ Menus[MENU_TOOLS].Items[6].Enabled := True;
+ Menus[MENU_TOOLS].Items[7].Caption := 'Executer un script...';
+ Menus[MENU_TOOLS].Items[7].Shortcut := 'SCR';
+ Menus[MENU_TOOLS].Items[7].Enabled := True;
+ Menus[MENU_TOOLS].Items[8].Separator := True;
+ Menus[MENU_TOOLS].Items[9].Caption := 'AutoLISP';
+ Menus[MENU_TOOLS].Items[9].Shortcut := '';
+ Menus[MENU_TOOLS].Items[9].Enabled := True;
+ Menus[MENU_TOOLS].Items[10].Separator := True;
+ Menus[MENU_TOOLS].Items[11].Caption := 'Parametres de dessin...';
+ Menus[MENU_TOOLS].Items[11].Shortcut := 'DS';
+ Menus[MENU_TOOLS].Items[11].Enabled := True;
+ Menus[MENU_TOOLS].Items[12].Caption := 'Personnaliser';
+ Menus[MENU_TOOLS].Items[12].Shortcut := '';
+ Menus[MENU_TOOLS].Items[12].Enabled := True;
+ Menus[MENU_TOOLS].Items[13].Caption := 'Options...';
+ Menus[MENU_TOOLS].Items[13].Shortcut := 'OP';
+ Menus[MENU_TOOLS].Items[13].Enabled := True;
+
+ { Menu Dessin }
+ Menus[MENU_DRAW].Title := 'Dessin';
+ Menus[MENU_DRAW].X := 235;
+ Menus[MENU_DRAW].Width := 200;
+ Menus[MENU_DRAW].ItemCount := 20;
+ Menus[MENU_DRAW].Items[0].Caption := 'Ligne';
+ Menus[MENU_DRAW].Items[0].Shortcut := 'L';
+ Menus[MENU_DRAW].Items[0].Enabled := True;
+ Menus[MENU_DRAW].Items[1].Caption := 'Demi-droite';
+ Menus[MENU_DRAW].Items[1].Shortcut := 'RAY';
+ Menus[MENU_DRAW].Items[1].Enabled := True;
+ Menus[MENU_DRAW].Items[2].Caption := 'Ligne de construction';
+ Menus[MENU_DRAW].Items[2].Shortcut := 'XL';
+ Menus[MENU_DRAW].Items[2].Enabled := True;
+ Menus[MENU_DRAW].Items[3].Separator := True;
+ Menus[MENU_DRAW].Items[4].Caption := 'Polyligne';
+ Menus[MENU_DRAW].Items[4].Shortcut := 'PL';
+ Menus[MENU_DRAW].Items[4].Enabled := True;
+ Menus[MENU_DRAW].Items[5].Caption := 'Polygone';
+ Menus[MENU_DRAW].Items[5].Shortcut := 'POL';
+ Menus[MENU_DRAW].Items[5].Enabled := True;
+ Menus[MENU_DRAW].Items[6].Caption := 'Rectangle';
+ Menus[MENU_DRAW].Items[6].Shortcut := 'REC';
+ Menus[MENU_DRAW].Items[6].Enabled := True;
+ Menus[MENU_DRAW].Items[7].Separator := True;
+ Menus[MENU_DRAW].Items[8].Caption := 'Arc';
+ Menus[MENU_DRAW].Items[8].Shortcut := 'A';
+ Menus[MENU_DRAW].Items[8].Enabled := True;
+ Menus[MENU_DRAW].Items[9].Caption := 'Cercle';
+ Menus[MENU_DRAW].Items[9].Shortcut := 'C';
+ Menus[MENU_DRAW].Items[9].Enabled := True;
+ Menus[MENU_DRAW].Items[10].Caption := 'Spline';
+ Menus[MENU_DRAW].Items[10].Shortcut := 'SPL';
+ Menus[MENU_DRAW].Items[10].Enabled := True;
+ Menus[MENU_DRAW].Items[11].Caption := 'Ellipse';
+ Menus[MENU_DRAW].Items[11].Shortcut := 'EL';
+ Menus[MENU_DRAW].Items[11].Enabled := True;
+ Menus[MENU_DRAW].Items[12].Separator := True;
+ Menus[MENU_DRAW].Items[13].Caption := 'Point';
+ Menus[MENU_DRAW].Items[13].Shortcut := 'PO';
+ Menus[MENU_DRAW].Items[13].Enabled := True;
+ Menus[MENU_DRAW].Items[14].Caption := 'Hachures...';
+ Menus[MENU_DRAW].Items[14].Shortcut := 'H';
+ Menus[MENU_DRAW].Items[14].Enabled := True;
+ Menus[MENU_DRAW].Items[15].Caption := 'Region';
+ Menus[MENU_DRAW].Items[15].Shortcut := 'REG';
+ Menus[MENU_DRAW].Items[15].Enabled := True;
+ Menus[MENU_DRAW].Items[16].Separator := True;
+ Menus[MENU_DRAW].Items[17].Caption := 'Texte';
+ Menus[MENU_DRAW].Items[17].Shortcut := 'T';
+ Menus[MENU_DRAW].Items[17].Enabled := True;
+ Menus[MENU_DRAW].Items[18].Caption := 'Surface';
+ Menus[MENU_DRAW].Items[18].Shortcut := 'SUR';
+ Menus[MENU_DRAW].Items[18].Enabled := True;
+ Menus[MENU_DRAW].Items[19].Caption := 'Solide';
+ Menus[MENU_DRAW].Items[19].Shortcut := 'SO';
+ Menus[MENU_DRAW].Items[19].Enabled := True;
+
+ { Menu Cotation }
+ Menus[MENU_DIMENSION].Title := 'Cotation';
+ Menus[MENU_DIMENSION].X := 280;
+ Menus[MENU_DIMENSION].Width := 180;
+ Menus[MENU_DIMENSION].ItemCount := 14;
+ Menus[MENU_DIMENSION].Items[0].Caption := 'Cotation rapide';
+ Menus[MENU_DIMENSION].Items[0].Shortcut := 'QDIM';
+ Menus[MENU_DIMENSION].Items[0].Enabled := True;
+ Menus[MENU_DIMENSION].Items[1].Separator := True;
+ Menus[MENU_DIMENSION].Items[2].Caption := 'Lineaire';
+ Menus[MENU_DIMENSION].Items[2].Shortcut := 'DLI';
+ Menus[MENU_DIMENSION].Items[2].Enabled := True;
+ Menus[MENU_DIMENSION].Items[3].Caption := 'Alignee';
+ Menus[MENU_DIMENSION].Items[3].Shortcut := 'DAL';
+ Menus[MENU_DIMENSION].Items[3].Enabled := True;
+ Menus[MENU_DIMENSION].Items[4].Caption := 'Longueur d''arc';
+ Menus[MENU_DIMENSION].Items[4].Shortcut := '';
+ Menus[MENU_DIMENSION].Items[4].Enabled := True;
+ Menus[MENU_DIMENSION].Items[5].Caption := 'Ordonnee';
+ Menus[MENU_DIMENSION].Items[5].Shortcut := 'DOR';
+ Menus[MENU_DIMENSION].Items[5].Enabled := True;
+ Menus[MENU_DIMENSION].Items[6].Separator := True;
+ Menus[MENU_DIMENSION].Items[7].Caption := 'Rayon';
+ Menus[MENU_DIMENSION].Items[7].Shortcut := 'DRA';
+ Menus[MENU_DIMENSION].Items[7].Enabled := True;
+ Menus[MENU_DIMENSION].Items[8].Caption := 'Diametre';
+ Menus[MENU_DIMENSION].Items[8].Shortcut := 'DDI';
+ Menus[MENU_DIMENSION].Items[8].Enabled := True;
+ Menus[MENU_DIMENSION].Items[9].Caption := 'Angulaire';
+ Menus[MENU_DIMENSION].Items[9].Shortcut := 'DAN';
+ Menus[MENU_DIMENSION].Items[9].Enabled := True;
+ Menus[MENU_DIMENSION].Items[10].Separator := True;
+ Menus[MENU_DIMENSION].Items[11].Caption := 'Ligne de base';
+ Menus[MENU_DIMENSION].Items[11].Shortcut := 'DBA';
+ Menus[MENU_DIMENSION].Items[11].Enabled := True;
+ Menus[MENU_DIMENSION].Items[12].Caption := 'Continuer';
+ Menus[MENU_DIMENSION].Items[12].Shortcut := 'DCO';
+ Menus[MENU_DIMENSION].Items[12].Enabled := True;
+ Menus[MENU_DIMENSION].Items[13].Caption := 'Ligne de repere';
+ Menus[MENU_DIMENSION].Items[13].Shortcut := 'LE';
+ Menus[MENU_DIMENSION].Items[13].Enabled := True;
+
+ { Menu Modifier }
+ Menus[MENU_MODIFY].Title := 'Modifier';
+ Menus[MENU_MODIFY].X := 350;
+ Menus[MENU_MODIFY].Width := 190;
+ Menus[MENU_MODIFY].ItemCount := 19;
+ Menus[MENU_MODIFY].Items[0].Caption := 'Proprietes';
+ Menus[MENU_MODIFY].Items[0].Shortcut := 'PR';
+ Menus[MENU_MODIFY].Items[0].Enabled := True;
+ Menus[MENU_MODIFY].Items[1].Caption := 'Copier les proprietes';
+ Menus[MENU_MODIFY].Items[1].Shortcut := 'MA';
+ Menus[MENU_MODIFY].Items[1].Enabled := True;
+ Menus[MENU_MODIFY].Items[2].Separator := True;
+ Menus[MENU_MODIFY].Items[3].Caption := 'Effacer';
+ Menus[MENU_MODIFY].Items[3].Shortcut := 'E';
+ Menus[MENU_MODIFY].Items[3].Enabled := True;
+ Menus[MENU_MODIFY].Items[4].Caption := 'Copier';
+ Menus[MENU_MODIFY].Items[4].Shortcut := 'CO';
+ Menus[MENU_MODIFY].Items[4].Enabled := True;
+ Menus[MENU_MODIFY].Items[5].Caption := 'Miroir';
+ Menus[MENU_MODIFY].Items[5].Shortcut := 'MI';
+ Menus[MENU_MODIFY].Items[5].Enabled := True;
+ Menus[MENU_MODIFY].Items[6].Caption := 'Decaler';
+ Menus[MENU_MODIFY].Items[6].Shortcut := 'O';
+ Menus[MENU_MODIFY].Items[6].Enabled := True;
+ Menus[MENU_MODIFY].Items[7].Caption := 'Reseau';
+ Menus[MENU_MODIFY].Items[7].Shortcut := 'AR';
+ Menus[MENU_MODIFY].Items[7].Enabled := True;
+ Menus[MENU_MODIFY].Items[8].Caption := 'Deplacer';
+ Menus[MENU_MODIFY].Items[8].Shortcut := 'M';
+ Menus[MENU_MODIFY].Items[8].Enabled := True;
+ Menus[MENU_MODIFY].Items[9].Caption := 'Rotation';
+ Menus[MENU_MODIFY].Items[9].Shortcut := 'RO';
+ Menus[MENU_MODIFY].Items[9].Enabled := True;
+ Menus[MENU_MODIFY].Items[10].Caption := 'Echelle';
+ Menus[MENU_MODIFY].Items[10].Shortcut := 'SC';
+ Menus[MENU_MODIFY].Items[10].Enabled := True;
+ Menus[MENU_MODIFY].Items[11].Caption := 'Etirer';
+ Menus[MENU_MODIFY].Items[11].Shortcut := 'S';
+ Menus[MENU_MODIFY].Items[11].Enabled := True;
+ Menus[MENU_MODIFY].Items[12].Separator := True;
+ Menus[MENU_MODIFY].Items[13].Caption := 'Ajuster';
+ Menus[MENU_MODIFY].Items[13].Shortcut := 'TR';
+ Menus[MENU_MODIFY].Items[13].Enabled := True;
+ Menus[MENU_MODIFY].Items[14].Caption := 'Prolonger';
+ Menus[MENU_MODIFY].Items[14].Shortcut := 'EX';
+ Menus[MENU_MODIFY].Items[14].Enabled := True;
+ Menus[MENU_MODIFY].Items[15].Caption := 'Briser';
+ Menus[MENU_MODIFY].Items[15].Shortcut := 'BR';
+ Menus[MENU_MODIFY].Items[15].Enabled := True;
+ Menus[MENU_MODIFY].Items[16].Caption := 'Chanfrein';
+ Menus[MENU_MODIFY].Items[16].Shortcut := 'CHA';
+ Menus[MENU_MODIFY].Items[16].Enabled := True;
+ Menus[MENU_MODIFY].Items[17].Caption := 'Raccord';
+ Menus[MENU_MODIFY].Items[17].Shortcut := 'F';
+ Menus[MENU_MODIFY].Items[17].Enabled := True;
+ Menus[MENU_MODIFY].Items[18].Caption := 'Decomposer';
+ Menus[MENU_MODIFY].Items[18].Shortcut := 'X';
+ Menus[MENU_MODIFY].Items[18].Enabled := True;
+
+ { Menu Fenetre }
+ Menus[MENU_WINDOW].Title := 'Fenetre';
+ Menus[MENU_WINDOW].X := 410;
+ Menus[MENU_WINDOW].Width := 180;
+ Menus[MENU_WINDOW].ItemCount := 6;
+ Menus[MENU_WINDOW].Items[0].Caption := 'Fermer';
+ Menus[MENU_WINDOW].Items[0].Shortcut := '';
+ Menus[MENU_WINDOW].Items[0].Enabled := True;
+ Menus[MENU_WINDOW].Items[1].Caption := 'Fermer tout';
+ Menus[MENU_WINDOW].Items[1].Shortcut := '';
+ Menus[MENU_WINDOW].Items[1].Enabled := True;
+ Menus[MENU_WINDOW].Items[2].Separator := True;
+ Menus[MENU_WINDOW].Items[3].Caption := 'Cascade';
+ Menus[MENU_WINDOW].Items[3].Shortcut := '';
+ Menus[MENU_WINDOW].Items[3].Enabled := True;
+ Menus[MENU_WINDOW].Items[4].Caption := 'Mosaique horizontale';
+ Menus[MENU_WINDOW].Items[4].Shortcut := '';
+ Menus[MENU_WINDOW].Items[4].Enabled := True;
+ Menus[MENU_WINDOW].Items[5].Caption := 'Mosaique verticale';
+ Menus[MENU_WINDOW].Items[5].Shortcut := '';
+ Menus[MENU_WINDOW].Items[5].Enabled := True;
+
+ { Menu Aide }
+ Menus[MENU_HELP].Title := '?';
+ Menus[MENU_HELP].X := 470;
+ Menus[MENU_HELP].Width := 170;
+ Menus[MENU_HELP].ItemCount := 6;
+ Menus[MENU_HELP].Items[0].Caption := 'Aide';
+ Menus[MENU_HELP].Items[0].Shortcut := 'F1';
+ Menus[MENU_HELP].Items[0].Enabled := True;
+ Menus[MENU_HELP].Items[1].Caption := 'Centre d''info';
+ Menus[MENU_HELP].Items[1].Shortcut := '';
+ Menus[MENU_HELP].Items[1].Enabled := True;
+ Menus[MENU_HELP].Items[2].Separator := True;
+ Menus[MENU_HELP].Items[3].Caption := 'Nouveautes';
+ Menus[MENU_HELP].Items[3].Shortcut := '';
+ Menus[MENU_HELP].Items[3].Enabled := True;
+ Menus[MENU_HELP].Items[4].Separator := True;
+ Menus[MENU_HELP].Items[5].Caption := 'A propos d''AutoCAD';
+ Menus[MENU_HELP].Items[5].Shortcut := '';
+ Menus[MENU_HELP].Items[5].Enabled := True;
+  End;
+ End;
+
+ { Calcul automatique de la largeur de chaque menu deroulant en fonction
+   des libelles et raccourcis. Padding gauche=5, gap caption/shortcut=10,
+   padding droit=10. }
+ For I := 0 To MAX_MENUS - 1 Do Begin
+  MaxW := 0;
+  For W := 0 To Menus[I].ItemCount - 1 Do Begin
+   If Not Menus[I].Items[W].Separator Then Begin
+    If Length(Menus[I].Items[W].Shortcut) > 0 Then
+     ItemW := TextWidth(Menus[I].Items[W].Caption) + 10 +
+              TextWidth(Menus[I].Items[W].Shortcut)
+    Else
+     ItemW := TextWidth(Menus[I].Items[W].Caption);
+    If ItemW > MaxW Then MaxW := ItemW;
+   End;
+  End;
+  Menus[I].Width := MaxW + 15;
+ End;
 
  { Initialisation des variables de menu }
  MenuActive := False;
@@ -2144,12 +2610,26 @@ Procedure DrawMenuBar;
 Var
  I: Integer;
  X: Integer;
+ Gap: Integer;
+ TotalTitles: Integer;
+ Available: Integer;
 Begin
  { Fond de la barre de menu - Style AutoCAD gris foncé }
  SetFillStyle(SolidFill, DarkGray);
  Bar(0, 0, ScreenWidth - 1, MENUBAR_HEIGHT - 1);
  SetColor(Black);
  Line(0, MENUBAR_HEIGHT - 1, ScreenWidth - 1, MENUBAR_HEIGHT - 1);
+
+ { Calculer la largeur totale des titres pour adapter l'espacement
+   afin que tous les menus rentrent sur des ecrans 640x480. }
+ TotalTitles := 0;
+ For I := 0 to MAX_MENUS - 1 do
+  TotalTitles := TotalTitles + TextWidth(Menus[I].Title);
+ Available := ScreenWidth - 10 - TotalTitles;
+ If MAX_MENUS > 1 Then Gap := Available div (MAX_MENUS - 1)
+ Else Gap := 15;
+ If Gap > 15 Then Gap := 15;
+ If Gap < 4 Then Gap := 4;
 
  { Dessiner les titres des menus }
  X := 5;
@@ -2164,7 +2644,7 @@ Begin
    SetColor(White);
   End;
   OutTextXY(X, 5, Menus[I].Title);
-  X := X + TextWidth(Menus[I].Title) + 15;
+  X := X + TextWidth(Menus[I].Title) + Gap;
  End;
 End;
 
@@ -2183,6 +2663,11 @@ Begin
 
  X := Menus[MenuIndex].X;
  Y := MENUBAR_HEIGHT;
+
+ { Decaler le menu deroulant vers la gauche si il deborde a droite }
+ If X + Menus[MenuIndex].Width > ScreenWidth - 2 Then
+  X := ScreenWidth - 2 - Menus[MenuIndex].Width;
+ If X < 2 Then X := 2;
 
  { Fond du menu déroulant }
  SetFillStyle(SolidFill, LightGray);
@@ -14555,6 +15040,27 @@ Var
  ArgExt: String;
  I: Integer;
 BEGIN
+ { Initialiser la langue }
+ Language:=_French;
+ TmpLanguage:=GetEnv('LANGUAGE');
+ If TmpLanguage<>''Then Begin
+  If TmpLanguage[1]='"'Then TmpLanguage:=Copy(TmpLanguage,2,255);
+  If StrToUpper(Copy(TmpLanguage,1,2))='EN'Then Language:=_English Else
+  If StrToUpper(Copy(TmpLanguage,1,2))='GR'Then Language:=_Germany Else
+  If StrToUpper(Copy(TmpLanguage,1,2))='IT'Then Language:=_Italian Else
+  If StrToUpper(Copy(TmpLanguage,1,2))='SP'Then Language:=_Spain Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='SQ')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='ALB')Then Language:=_Albanian Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='PT')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='PRT')Then Language:=_Portuguese Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='SE')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='SWE')Then Language:=_Swedish Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='DK')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='DNK')Then Language:=_Danish Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='JP')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='JPN')Then Language:=_Japanese;
+ End;
+
  { Initialisation }
  InitializeGraphics;
  ScreenWidth := GetMaxX + 1;

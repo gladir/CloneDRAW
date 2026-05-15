@@ -18767,7 +18767,12 @@ Begin
      End;
     End;
     #13: Begin { Enter : exécuter la commande }
-     If PendingFileAction <> 0 Then Begin
+     If MenuActive and (ActiveMenu >= 0) and (ActiveMenuItem >= 0) Then Begin
+      { Activer l'element de menu actuellement surligne (simule un clic) }
+      HandleMouseClick(Menus[ActiveMenu].X + 4,
+                       MENUBAR_HEIGHT + 2 + ActiveMenuItem * 18 + 4,
+                       MOUSE_BUTTON_LEFT);
+     End Else If PendingFileAction <> 0 Then Begin
       If CommandBuffer = '' Then Begin
        { Saisie annulee }
        PendingFileAction := 0;
@@ -19709,9 +19714,43 @@ Begin
       DrawCommandLine;
      End;
     End;
-    { TODO 7: Touche spéciale (flèches) pour le pan }
+    { TODO 7: Touche spéciale (flèches) - navigation menus ou pan du dessin }
     #0: Begin
      Key := ReadKey; { Lire le code étendu }
+     If MenuActive and (ActiveMenu >= 0) Then Begin
+      { Navigation clavier dans le menu deroulant actif }
+      Case Key Of
+       #72: Begin { Fleche haut - element precedent (saute les separateurs) }
+        If ActiveMenuItem < 0 Then NewIdx := 0 Else NewIdx := ActiveMenuItem;
+        For I := 1 To Menus[ActiveMenu].ItemCount Do Begin
+         NewIdx := (NewIdx - 1 + Menus[ActiveMenu].ItemCount)
+                   Mod Menus[ActiveMenu].ItemCount;
+         If Not Menus[ActiveMenu].Items[NewIdx].Separator Then Break;
+        End;
+        ActiveMenuItem := NewIdx;
+        DrawInterface;
+       End;
+       #80: Begin { Fleche bas - element suivant (saute les separateurs) }
+        NewIdx := ActiveMenuItem;
+        For I := 1 To Menus[ActiveMenu].ItemCount Do Begin
+         NewIdx := (NewIdx + 1) Mod Menus[ActiveMenu].ItemCount;
+         If Not Menus[ActiveMenu].Items[NewIdx].Separator Then Break;
+        End;
+        ActiveMenuItem := NewIdx;
+        DrawInterface;
+       End;
+       #75: Begin { Fleche gauche - menu precedent dans la barre }
+        ActiveMenu := (ActiveMenu + MAX_MENUS - 1) Mod MAX_MENUS;
+        ActiveMenuItem := -1;
+        DrawInterface;
+       End;
+       #77: Begin { Fleche droite - menu suivant dans la barre }
+        ActiveMenu := (ActiveMenu + 1) Mod MAX_MENUS;
+        ActiveMenuItem := -1;
+        DrawInterface;
+       End;
+      End;
+     End Else Begin
      PanStep := 50.0 / ZoomLevel;
      Case Key of
       #72: Begin { Flèche haut - pan vers le haut }
@@ -19746,6 +19785,7 @@ Begin
        If ConfirmExit Then Running := False;
       End;
      End;
+     End; { Else (pas dans un menu) }
     End;
     Else Begin
      { Caractère imprimable : ajouter au tampon de la ligne de commande }

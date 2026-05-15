@@ -369,6 +369,12 @@ Var
  DrawStartX, DrawStartY: Integer;
  LastMouseX, LastMouseY: Integer;
  LastMouseButton: LongInt;
+ { Apercu XOR (rubber-band) pendant le dessin d'une forme }
+ PreviewValid: Boolean;
+ PreviewTool: TToolType;
+ PreviewX1, PreviewY1, PreviewX2, PreviewY2: Integer;
+ PreviewBlinkTick: Word;
+ PreviewVisible: Boolean;
  { Variables pour le menu contextuel (clic droit) }
  ContextMenuVisible: Boolean;
  ContextMenuX, ContextMenuY: Integer;
@@ -5593,6 +5599,8 @@ Var
  TxtContent: String;
  PalIdx: Integer;
  PaletteFill: Array[0..5] of Integer;
+ NativeX1, TypeStr, FillStr, LineStr, LWStr, LSStr: String;
+ TypeVal, ValCode: Integer;
 Begin
  PaletteFill[0] := LightCyan;
  PaletteFill[1] := LightGreen;
@@ -5641,47 +5649,97 @@ Begin
   If P < 0 Then Break;
   EndOfShape := VFXFindFrom('</Shape>', P);
   If EndOfShape < 0 Then Break;
-  PinX := VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'PinX'));
-  PinY := VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'PinY'));
-  W    := VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'Width'));
-  H    := VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'Height'));
   TxtContent := VFXFindShapeText(P, EndOfShape);
 
-  If (W > 0) And (H > 0) And (ShapeCount < MAX_SHAPES - 1) Then Begin
-   Cx := PinX;
-   Cy := PageH - PinY;
-   Sx1 := OffX + Round((Cx - W / 2) * Scale);
-   Sy1 := OffY + Round((Cy - H / 2) * Scale);
-   Sx2 := OffX + Round((Cx + W / 2) * Scale);
-   Sy2 := OffY + Round((Cy + H / 2) * Scale);
-   If Sx1 < WorkX1 Then Sx1 := WorkX1;
-   If Sy1 < WorkY1 Then Sy1 := WorkY1;
-   If Sx2 > WorkX2 Then Sx2 := WorkX2;
-   If Sy2 > WorkY2 Then Sy2 := WorkY2;
-   Inc(ShapeCount); VFXResetShape(Shapes[ShapeCount]);
-   Shapes[ShapeCount].ShapeType := stRectangle;
-   Shapes[ShapeCount].X1 := Sx1; Shapes[ShapeCount].Y1 := Sy1;
-   Shapes[ShapeCount].X2 := Sx2; Shapes[ShapeCount].Y2 := Sy2;
-   Shapes[ShapeCount].FillColor := PaletteFill[PalIdx mod 6];
-   Shapes[ShapeCount].LineColor := Blue;
-   Shapes[ShapeCount].LineWidth := 1;
-   Shapes[ShapeCount].LineStyle := LINESTYLE_SOLID;
-   Shapes[ShapeCount].Text := Copy(TxtContent, 1, 80);
-   Inc(PalIdx);
-
-   If (Length(TxtContent) > 0) And (ShapeCount < MAX_SHAPES) Then Begin
-    TxtX := (Sx1 + Sx2) Div 2 - (Length(TxtContent) * 4);
-    TxtY := (Sy1 + Sy2) Div 2 - 4;
-    If TxtX < Sx1 + 2 Then TxtX := Sx1 + 2;
-    If TxtY < Sy1 + 2 Then TxtY := Sy1 + 2;
+  { Format natif (round-trip): X1/Y1/X2/Y2 + Type + couleurs en pixels }
+  NativeX1 := VFXFindCellValue(P, EndOfShape, 'X1');
+  If NativeX1 <> '' Then Begin
+   If ShapeCount < MAX_SHAPES - 1 Then Begin
+    Sx1 := Round(VFXStrToReal(NativeX1));
+    Sy1 := Round(VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'Y1')));
+    Sx2 := Round(VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'X2')));
+    Sy2 := Round(VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'Y2')));
     Inc(ShapeCount); VFXResetShape(Shapes[ShapeCount]);
-    Shapes[ShapeCount].ShapeType := stText;
-    Shapes[ShapeCount].X1 := TxtX; Shapes[ShapeCount].Y1 := TxtY;
-    Shapes[ShapeCount].X2 := TxtX + Length(TxtContent) * 8;
-    Shapes[ShapeCount].Y2 := TxtY + 8;
-    Shapes[ShapeCount].LineColor := Black;
+    { Type de forme }
+    Shapes[ShapeCount].ShapeType := stRectangle;
+    TypeStr := VFXFindCellValue(P, EndOfShape, 'Type');
+    If TypeStr <> '' Then Begin
+     Val(TypeStr, TypeVal, ValCode);
+     If (ValCode = 0) And (TypeVal >= 0) And (TypeVal <= 8) Then
+      Shapes[ShapeCount].ShapeType := TShapeType(TypeVal);
+    End;
+    Shapes[ShapeCount].X1 := Sx1; Shapes[ShapeCount].Y1 := Sy1;
+    Shapes[ShapeCount].X2 := Sx2; Shapes[ShapeCount].Y2 := Sy2;
+    { Couleurs }
+    FillStr := VFXFindCellValue(P, EndOfShape, 'FillColor');
+    LineStr := VFXFindCellValue(P, EndOfShape, 'LineColor');
+    LWStr   := VFXFindCellValue(P, EndOfShape, 'LineWidth');
+    LSStr   := VFXFindCellValue(P, EndOfShape, 'LineStyle');
     Shapes[ShapeCount].FillColor := White;
+    Shapes[ShapeCount].LineColor := Black;
+    Shapes[ShapeCount].LineWidth := 1;
+    Shapes[ShapeCount].LineStyle := LINESTYLE_SOLID;
+    If FillStr <> '' Then Begin
+     Val(FillStr, TypeVal, ValCode);
+     If ValCode = 0 Then Shapes[ShapeCount].FillColor := TypeVal;
+    End;
+    If LineStr <> '' Then Begin
+     Val(LineStr, TypeVal, ValCode);
+     If ValCode = 0 Then Shapes[ShapeCount].LineColor := TypeVal;
+    End;
+    If LWStr <> '' Then Begin
+     Val(LWStr, TypeVal, ValCode);
+     If (ValCode = 0) And (TypeVal > 0) Then Shapes[ShapeCount].LineWidth := TypeVal;
+    End;
+    If LSStr <> '' Then Begin
+     Val(LSStr, TypeVal, ValCode);
+     If ValCode = 0 Then Shapes[ShapeCount].LineStyle := TypeVal;
+    End;
     Shapes[ShapeCount].Text := Copy(TxtContent, 1, 80);
+   End;
+  End Else Begin
+   { Format Visio canonique (PinX/PinY/Width/Height en unites de page) }
+   PinX := VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'PinX'));
+   PinY := VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'PinY'));
+   W    := VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'Width'));
+   H    := VFXStrToReal(VFXFindCellValue(P, EndOfShape, 'Height'));
+
+   If (W > 0) And (H > 0) And (ShapeCount < MAX_SHAPES - 1) Then Begin
+    Cx := PinX;
+    Cy := PageH - PinY;
+    Sx1 := OffX + Round((Cx - W / 2) * Scale);
+    Sy1 := OffY + Round((Cy - H / 2) * Scale);
+    Sx2 := OffX + Round((Cx + W / 2) * Scale);
+    Sy2 := OffY + Round((Cy + H / 2) * Scale);
+    If Sx1 < WorkX1 Then Sx1 := WorkX1;
+    If Sy1 < WorkY1 Then Sy1 := WorkY1;
+    If Sx2 > WorkX2 Then Sx2 := WorkX2;
+    If Sy2 > WorkY2 Then Sy2 := WorkY2;
+    Inc(ShapeCount); VFXResetShape(Shapes[ShapeCount]);
+    Shapes[ShapeCount].ShapeType := stRectangle;
+    Shapes[ShapeCount].X1 := Sx1; Shapes[ShapeCount].Y1 := Sy1;
+    Shapes[ShapeCount].X2 := Sx2; Shapes[ShapeCount].Y2 := Sy2;
+    Shapes[ShapeCount].FillColor := PaletteFill[PalIdx mod 6];
+    Shapes[ShapeCount].LineColor := Blue;
+    Shapes[ShapeCount].LineWidth := 1;
+    Shapes[ShapeCount].LineStyle := LINESTYLE_SOLID;
+    Shapes[ShapeCount].Text := Copy(TxtContent, 1, 80);
+    Inc(PalIdx);
+
+    If (Length(TxtContent) > 0) And (ShapeCount < MAX_SHAPES) Then Begin
+     TxtX := (Sx1 + Sx2) Div 2 - (Length(TxtContent) * 4);
+     TxtY := (Sy1 + Sy2) Div 2 - 4;
+     If TxtX < Sx1 + 2 Then TxtX := Sx1 + 2;
+     If TxtY < Sy1 + 2 Then TxtY := Sy1 + 2;
+     Inc(ShapeCount); VFXResetShape(Shapes[ShapeCount]);
+     Shapes[ShapeCount].ShapeType := stText;
+     Shapes[ShapeCount].X1 := TxtX; Shapes[ShapeCount].Y1 := TxtY;
+     Shapes[ShapeCount].X2 := TxtX + Length(TxtContent) * 8;
+     Shapes[ShapeCount].Y2 := TxtY + 8;
+     Shapes[ShapeCount].LineColor := Black;
+     Shapes[ShapeCount].FillColor := White;
+     Shapes[ShapeCount].Text := Copy(TxtContent, 1, 80);
+    End;
    End;
   End;
   P := EndOfShape + 8;
@@ -6122,277 +6180,207 @@ Begin
  WriteVSDFile := True;
 End;
 
-{ Fonction pour calculer le CRC32 simplifiÃ© }
+{ Fonction pour calculer le CRC32 standard (ZIP / PKZIP) }
 Function CalcCRC32(Const Data; Size: Integer): LongInt;
 Var
  I: Integer;
  CRC: LongInt;
  P: ^Byte;
 Begin
- CRC := $FFFFFFFF;
+ InitCRC32;
+ CRC := LongInt($FFFFFFFF);
  P := @Data;
  For I := 0 to Size - 1 do Begin
-  CRC := CRC xor P^;
+  CRC := CRC32Value(CRC, P^);
   Inc(P);
  End;
- CalcCRC32 := CRC xor $FFFFFFFF;
+ CalcCRC32 := CRC xor LongInt($FFFFFFFF);
 End;
 
-{ Fonction pour Ã©crire un fichier VSDX (format ZIP avec XML) }
+{ Fonction pour ecrire un fichier VSDX (format ZIP avec XML canonique Visio) }
 Function WriteVSDXFile(Const FileName: String): Boolean;
+Const
+ EntryName    = 'visio/pages/page1.xml';
+ EntryNameLen = 21;
 Var
  F: File;
  LocalHeader: Array[0..29] of Byte;
  CentralDir: Array[0..45] of Byte;
  EndRecord: Array[0..21] of Byte;
- XMLData: String;
  BytesWritten: Integer;
- I: Integer;
- FileOffset, CentralDirOffset: LongInt;
- XMLSize: Integer;
+ CentralDirOffset, CDirSize: LongInt;
+ XMLSize: LongInt;
  CRC: LongInt;
- VShape: TVisioShape;
  ShapeIndex: Integer;
- TempStr: String;
-Begin
- WriteVSDXFile := False;
+ EName: String;
+ Sh: TShapeObject;
+ CXf, CYf, PinX, PinY: Real;
+ Wv, Hv: Integer;
+ PageW, PageH: LongInt;
 
- Assign(F, FileName);
- {$I-}
- Rewrite(F, 1);
- {$I+}
- If IOResult <> 0 Then Exit;
+ Function INum(N: LongInt): String;
+ Var S: String; Begin Str(N, S); INum := S; End;
 
- FileOffset := 0;
+ Function FNum(R: Real): String;
+ Var S: String; Begin Str(R:0:2, S); FNum := S; End;
 
- { Construire le contenu XML du document Visio }
- XMLData := '<?xml version="1.0" encoding="UTF-8"?>' + #13#10;
- XMLData := XMLData + '<VisioDocument xmlns="http://schemas.microsoft.com/visio/2003/core">' + #13#10;
- XMLData := XMLData + '  <Pages>' + #13#10;
- XMLData := XMLData + '    <Page ID="0" Name="Page-1">' + #13#10;
- XMLData := XMLData + '      <Shapes>' + #13#10;
-
- For ShapeIndex := 1 to ShapeCount do Begin
-  ShapeObjectToVisioShape(Shapes[ShapeIndex], VShape);
-
-  XMLData := XMLData + '        <Shape ID="' + Chr(48 + ShapeIndex) + '">' + #13#10;
-
-  { Type de forme }
-  Case VShape.ShapeType of
-   VISIO_SHAPE_RECTANGLE: TempStr := 'Rectangle';
-   VISIO_SHAPE_ELLIPSE: TempStr := 'Ellipse';
-   VISIO_SHAPE_LINE: TempStr := 'Line';
-   VISIO_SHAPE_CONNECTOR: TempStr := 'Connector';
-   VISIO_SHAPE_TEXT: TempStr := 'Text';
-  Else
-   TempStr := 'Shape';
-  End;
-  XMLData := XMLData + '          <Name>' + TempStr + '</Name>' + #13#10;
-
-  { GÃ©omÃ©trie }
-  XMLData := XMLData + '          <XForm>' + #13#10;
-  Str(VShape.X:0:2, TempStr);
-  XMLData := XMLData + '            <PinX>' + TempStr + '</PinX>' + #13#10;
-  Str(VShape.Y:0:2, TempStr);
-  XMLData := XMLData + '            <PinY>' + TempStr + '</PinY>' + #13#10;
-  Str(VShape.Width:0:2, TempStr);
-  XMLData := XMLData + '            <Width>' + TempStr + '</Width>' + #13#10;
-  Str(VShape.Height:0:2, TempStr);
-  XMLData := XMLData + '            <Height>' + TempStr + '</Height>' + #13#10;
-  XMLData := XMLData + '          </XForm>' + #13#10;
-
-  { Couleurs }
-  XMLData := XMLData + '          <Fill>' + #13#10;
-  Str(VShape.FillColor, TempStr);
-  XMLData := XMLData + '            <FillForegnd>#' + TempStr + '</FillForegnd>' + #13#10;
-  XMLData := XMLData + '          </Fill>' + #13#10;
-
-  XMLData := XMLData + '          <Line>' + #13#10;
-  Str(VShape.LineColor, TempStr);
-  XMLData := XMLData + '            <LineColor>#' + TempStr + '</LineColor>' + #13#10;
-  Str(VShape.LineWeight:0:2, TempStr);
-  XMLData := XMLData + '            <LineWeight>' + TempStr + '</LineWeight>' + #13#10;
-  XMLData := XMLData + '          </Line>' + #13#10;
-
-  { Texte }
-  If Length(VShape.Text) > 0 Then Begin
-   XMLData := XMLData + '          <Text>' + VShape.Text + '</Text>' + #13#10;
-  End;
-
-  XMLData := XMLData + '        </Shape>' + #13#10;
+ Function XmlEscape(Const S: String): String;
+ Var II: Integer; R: String;
+ Begin
+  R := '';
+  For II := 1 To Length(S) Do
+   Case S[II] Of
+    '<' : R := R + '&lt;';
+    '>' : R := R + '&gt;';
+    '&' : R := R + '&amp;';
+    '''': R := R + '&apos;';
+    '"' : R := R + '&quot;';
+   Else
+    If (Ord(S[II]) >= 32) And (Ord(S[II]) < 127) Then R := R + S[II];
+   End;
+  XmlEscape := R;
  End;
 
- XMLData := XMLData + '      </Shapes>' + #13#10;
- XMLData := XMLData + '    </Page>' + #13#10;
- XMLData := XMLData + '  </Pages>' + #13#10;
- XMLData := XMLData + '</VisioDocument>' + #13#10;
+ Procedure EmitS(Const S: String);
+ Var II, Wrt: Integer;
+ Begin
+  If Length(S) = 0 Then Exit;
+  BlockWrite(F, S[1], Length(S), Wrt);
+  For II := 1 To Length(S) Do CRC := CRC32Value(CRC, Byte(S[II]));
+  Inc(XMLSize, Length(S));
+ End;
 
- XMLSize := Length(XMLData);
- CRC := CalcCRC32(XMLData[1], XMLSize);
+Begin
+ WriteVSDXFile := False;
+ InitCRC32;
 
- { === Ã‰crire l'en-tÃªte local du fichier ZIP === }
- { Signature PK }
- LocalHeader[0] := $50;  { P }
- LocalHeader[1] := $4B;  { K }
- LocalHeader[2] := $03;
- LocalHeader[3] := $04;
- { Version nÃ©cessaire pour extraire }
- LocalHeader[4] := 20;   { 2.0 }
- LocalHeader[5] := 0;
- { Flags }
- LocalHeader[6] := 0;
- LocalHeader[7] := 0;
- { MÃ©thode de compression (0 = stockÃ©, pas de compression) }
- LocalHeader[8] := 0;
- LocalHeader[9] := 0;
- { Heure de modification }
- LocalHeader[10] := 0;
- LocalHeader[11] := 0;
- { Date de modification }
- LocalHeader[12] := 0;
- LocalHeader[13] := 0;
- { CRC-32 }
- LocalHeader[14] := CRC and $FF;
- LocalHeader[15] := (CRC shr 8) and $FF;
- LocalHeader[16] := (CRC shr 16) and $FF;
- LocalHeader[17] := (CRC shr 24) and $FF;
- { Taille compressÃ©e }
- LocalHeader[18] := XMLSize and $FF;
- LocalHeader[19] := (XMLSize shr 8) and $FF;
- LocalHeader[20] := (XMLSize shr 16) and $FF;
- LocalHeader[21] := (XMLSize shr 24) and $FF;
- { Taille non compressÃ©e }
- LocalHeader[22] := XMLSize and $FF;
- LocalHeader[23] := (XMLSize shr 8) and $FF;
- LocalHeader[24] := (XMLSize shr 16) and $FF;
- LocalHeader[25] := (XMLSize shr 24) and $FF;
- { Longueur du nom de fichier }
- LocalHeader[26] := 20;  { "visio/document.xml" = 19 caractÃ¨res + 1 }
- LocalHeader[27] := 0;
- { Longueur du champ extra }
- LocalHeader[28] := 0;
- LocalHeader[29] := 0;
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
 
+ PageW := ScreenWidth;  If PageW < 100 Then PageW := 1024;
+ PageH := ScreenHeight; If PageH < 100 Then PageH := 768;
+ EName := EntryName;
+
+ { Reserver l'espace du local header (sera reecrit a la fin avec CRC/Size) }
+ FillChar(LocalHeader, SizeOf(LocalHeader), 0);
  BlockWrite(F, LocalHeader, 30, BytesWritten);
- FileOffset := FileOffset + 30;
+ BlockWrite(F, EName[1], EntryNameLen, BytesWritten);
 
- { Nom du fichier }
- TempStr := 'visio/document.xml';
- BlockWrite(F, TempStr[1], 18, BytesWritten);
- FileOffset := FileOffset + 18;
+ { Generer le XML en streaming, accumuler CRC32 et taille }
+ XMLSize := 0;
+ CRC := LongInt($FFFFFFFF);
 
- { DonnÃ©es XML }
- BlockWrite(F, XMLData[1], XMLSize, BytesWritten);
- FileOffset := FileOffset + XMLSize;
+ EmitS('<?xml version="1.0" encoding="UTF-8"?>'#13#10);
+ EmitS('<PageContents>'#13#10);
+ EmitS(' <PageSheet>'#13#10);
+ EmitS('  <Cell N=''PageWidth'' V='''+INum(PageW)+'''/>'#13#10);
+ EmitS('  <Cell N=''PageHeight'' V='''+INum(PageH)+'''/>'#13#10);
+ EmitS(' </PageSheet>'#13#10);
+ EmitS(' <Shapes>'#13#10);
 
- CentralDirOffset := FileOffset;
+ For ShapeIndex := 1 To ShapeCount Do Begin
+  Sh := Shapes[ShapeIndex];
+  CXf := (Sh.X1 + Sh.X2) / 2;
+  CYf := (Sh.Y1 + Sh.Y2) / 2;
+  Wv := Sh.X2 - Sh.X1; If Wv < 0 Then Wv := -Wv;
+  Hv := Sh.Y2 - Sh.Y1; If Hv < 0 Then Hv := -Hv;
+  PinX := CXf;
+  PinY := PageH - CYf;
 
- { === Ã‰crire l'entrÃ©e du rÃ©pertoire central === }
- { Signature }
- CentralDir[0] := $50;   { P }
- CentralDir[1] := $4B;   { K }
- CentralDir[2] := $01;
- CentralDir[3] := $02;
- { Version crÃ©Ã©e par }
- CentralDir[4] := 20;
- CentralDir[5] := 0;
- { Version nÃ©cessaire pour extraire }
- CentralDir[6] := 20;
- CentralDir[7] := 0;
- { Flags }
- CentralDir[8] := 0;
- CentralDir[9] := 0;
- { MÃ©thode de compression }
- CentralDir[10] := 0;
- CentralDir[11] := 0;
- { Heure de modification }
- CentralDir[12] := 0;
- CentralDir[13] := 0;
- { Date de modification }
- CentralDir[14] := 0;
- CentralDir[15] := 0;
- { CRC-32 }
- CentralDir[16] := CRC and $FF;
- CentralDir[17] := (CRC shr 8) and $FF;
- CentralDir[18] := (CRC shr 16) and $FF;
- CentralDir[19] := (CRC shr 24) and $FF;
- { Taille compressÃ©e }
- CentralDir[20] := XMLSize and $FF;
- CentralDir[21] := (XMLSize shr 8) and $FF;
- CentralDir[22] := (XMLSize shr 16) and $FF;
- CentralDir[23] := (XMLSize shr 24) and $FF;
- { Taille non compressÃ©e }
- CentralDir[24] := XMLSize and $FF;
- CentralDir[25] := (XMLSize shr 8) and $FF;
- CentralDir[26] := (XMLSize shr 16) and $FF;
- CentralDir[27] := (XMLSize shr 24) and $FF;
- { Longueur du nom de fichier }
- CentralDir[28] := 18;
+  EmitS(' <Shape ID='''+INum(ShapeIndex)+'''>'#13#10);
+  EmitS('  <Cell N=''Type'' V='''+INum(Ord(Sh.ShapeType))+'''/>'#13#10);
+  EmitS('  <Cell N=''PinX'' V='''+FNum(PinX)+'''/>'#13#10);
+  EmitS('  <Cell N=''PinY'' V='''+FNum(PinY)+'''/>'#13#10);
+  EmitS('  <Cell N=''Width'' V='''+INum(Wv)+'''/>'#13#10);
+  EmitS('  <Cell N=''Height'' V='''+INum(Hv)+'''/>'#13#10);
+  EmitS('  <Cell N=''X1'' V='''+INum(Sh.X1)+'''/>'#13#10);
+  EmitS('  <Cell N=''Y1'' V='''+INum(Sh.Y1)+'''/>'#13#10);
+  EmitS('  <Cell N=''X2'' V='''+INum(Sh.X2)+'''/>'#13#10);
+  EmitS('  <Cell N=''Y2'' V='''+INum(Sh.Y2)+'''/>'#13#10);
+  EmitS('  <Cell N=''FillColor'' V='''+INum(Sh.FillColor)+'''/>'#13#10);
+  EmitS('  <Cell N=''LineColor'' V='''+INum(Sh.LineColor)+'''/>'#13#10);
+  EmitS('  <Cell N=''LineWidth'' V='''+INum(Sh.LineWidth)+'''/>'#13#10);
+  EmitS('  <Cell N=''LineStyle'' V='''+INum(Sh.LineStyle)+'''/>'#13#10);
+  If Length(Sh.Text) > 0 Then
+   EmitS('  <Text>'+XmlEscape(Sh.Text)+'</Text>'#13#10);
+  EmitS(' </Shape>'#13#10);
+ End;
+
+ EmitS(' </Shapes>'#13#10);
+ EmitS('</PageContents>'#13#10);
+
+ CRC := CRC Xor LongInt($FFFFFFFF);
+ CentralDirOffset := 30 + EntryNameLen + XMLSize;
+
+ { === Local file header (definitif) === }
+ LocalHeader[0] := $50; LocalHeader[1] := $4B;
+ LocalHeader[2] := $03; LocalHeader[3] := $04;
+ LocalHeader[4] := 20;  LocalHeader[5] := 0;
+ LocalHeader[6] := 0;   LocalHeader[7] := 0;
+ LocalHeader[8] := 0;   LocalHeader[9] := 0;
+ LocalHeader[10] := 0;  LocalHeader[11] := 0;
+ LocalHeader[12] := 0;  LocalHeader[13] := 0;
+ LocalHeader[14] := CRC And $FF;
+ LocalHeader[15] := (CRC Shr 8) And $FF;
+ LocalHeader[16] := (CRC Shr 16) And $FF;
+ LocalHeader[17] := (CRC Shr 24) And $FF;
+ LocalHeader[18] := XMLSize And $FF;
+ LocalHeader[19] := (XMLSize Shr 8) And $FF;
+ LocalHeader[20] := (XMLSize Shr 16) And $FF;
+ LocalHeader[21] := (XMLSize Shr 24) And $FF;
+ LocalHeader[22] := XMLSize And $FF;
+ LocalHeader[23] := (XMLSize Shr 8) And $FF;
+ LocalHeader[24] := (XMLSize Shr 16) And $FF;
+ LocalHeader[25] := (XMLSize Shr 24) And $FF;
+ LocalHeader[26] := EntryNameLen;
+ LocalHeader[27] := 0;
+ LocalHeader[28] := 0;  LocalHeader[29] := 0;
+
+ { === Central directory entry === }
+ FillChar(CentralDir, SizeOf(CentralDir), 0);
+ CentralDir[0] := $50; CentralDir[1] := $4B;
+ CentralDir[2] := $01; CentralDir[3] := $02;
+ CentralDir[4] := 20;  CentralDir[5] := 0;
+ CentralDir[6] := 20;  CentralDir[7] := 0;
+ CentralDir[16] := CRC And $FF;
+ CentralDir[17] := (CRC Shr 8) And $FF;
+ CentralDir[18] := (CRC Shr 16) And $FF;
+ CentralDir[19] := (CRC Shr 24) And $FF;
+ CentralDir[20] := XMLSize And $FF;
+ CentralDir[21] := (XMLSize Shr 8) And $FF;
+ CentralDir[22] := (XMLSize Shr 16) And $FF;
+ CentralDir[23] := (XMLSize Shr 24) And $FF;
+ CentralDir[24] := XMLSize And $FF;
+ CentralDir[25] := (XMLSize Shr 8) And $FF;
+ CentralDir[26] := (XMLSize Shr 16) And $FF;
+ CentralDir[27] := (XMLSize Shr 24) And $FF;
+ CentralDir[28] := EntryNameLen;
  CentralDir[29] := 0;
- { Longueur du champ extra }
- CentralDir[30] := 0;
- CentralDir[31] := 0;
- { Longueur du commentaire }
- CentralDir[32] := 0;
- CentralDir[33] := 0;
- { NumÃ©ro de disque de dÃ©but }
- CentralDir[34] := 0;
- CentralDir[35] := 0;
- { Attributs internes }
- CentralDir[36] := 0;
- CentralDir[37] := 0;
- { Attributs externes }
- CentralDir[38] := 0;
- CentralDir[39] := 0;
- CentralDir[40] := 0;
- CentralDir[41] := 0;
- { Offset de l'en-tÃªte local }
- CentralDir[42] := 0;
- CentralDir[43] := 0;
- CentralDir[44] := 0;
- CentralDir[45] := 0;
 
  BlockWrite(F, CentralDir, 46, BytesWritten);
- FileOffset := FileOffset + 46;
+ BlockWrite(F, EName[1], EntryNameLen, BytesWritten);
 
- { Nom du fichier }
- TempStr := 'visio/document.xml';
- BlockWrite(F, TempStr[1], 18, BytesWritten);
- FileOffset := FileOffset + 18;
-
- { === Ã‰crire l'enregistrement de fin du rÃ©pertoire central === }
- { Signature }
- EndRecord[0] := $50;    { P }
- EndRecord[1] := $4B;    { K }
- EndRecord[2] := $05;
- EndRecord[3] := $06;
- { NumÃ©ro de ce disque }
- EndRecord[4] := 0;
- EndRecord[5] := 0;
- { Disque oÃ¹ commence le rÃ©pertoire central }
- EndRecord[6] := 0;
- EndRecord[7] := 0;
- { Nombre d'entrÃ©es dans le rÃ©pertoire central sur ce disque }
- EndRecord[8] := 1;
- EndRecord[9] := 0;
- { Nombre total d'entrÃ©es }
- EndRecord[10] := 1;
- EndRecord[11] := 0;
- { Taille du rÃ©pertoire central }
- EndRecord[12] := 64;    { 46 + 18 }
- EndRecord[13] := 0;
- EndRecord[14] := 0;
- EndRecord[15] := 0;
- { Offset du rÃ©pertoire central }
- EndRecord[16] := CentralDirOffset and $FF;
- EndRecord[17] := (CentralDirOffset shr 8) and $FF;
- EndRecord[18] := (CentralDirOffset shr 16) and $FF;
- EndRecord[19] := (CentralDirOffset shr 24) and $FF;
- { Longueur du commentaire }
- EndRecord[20] := 0;
- EndRecord[21] := 0;
+ { === End of central directory record === }
+ CDirSize := 46 + EntryNameLen;
+ FillChar(EndRecord, SizeOf(EndRecord), 0);
+ EndRecord[0] := $50; EndRecord[1] := $4B;
+ EndRecord[2] := $05; EndRecord[3] := $06;
+ EndRecord[8] := 1; EndRecord[10] := 1;
+ EndRecord[12] := CDirSize And $FF;
+ EndRecord[13] := (CDirSize Shr 8) And $FF;
+ EndRecord[14] := (CDirSize Shr 16) And $FF;
+ EndRecord[15] := (CDirSize Shr 24) And $FF;
+ EndRecord[16] := CentralDirOffset And $FF;
+ EndRecord[17] := (CentralDirOffset Shr 8) And $FF;
+ EndRecord[18] := (CentralDirOffset Shr 16) And $FF;
+ EndRecord[19] := (CentralDirOffset Shr 24) And $FF;
 
  BlockWrite(F, EndRecord, 22, BytesWritten);
+
+ { Retour au debut, ecrire le local header definitif (avec CRC/Size corrects) }
+ Seek(F, 0);
+ BlockWrite(F, LocalHeader, 30, BytesWritten);
 
  Close(F);
  WriteVSDXFile := True;
@@ -14775,6 +14763,99 @@ End;
 { === FIN DES PROCEDURES DE GLISSER-DEPOSER === }
 { ============================================================================ }
 
+{ ============================================================================ }
+{ === APERCU XOR (RUBBER-BAND) DE DESSIN DE FORME === }
+{ ============================================================================ }
+
+{ Trace une ellipse en XOR + DottedLn en l'approximant par une polyligne.
+  Un second appel avec les memes parametres efface exactement le precedent. }
+Procedure XorPreviewEllipse(CX, CY, RX, RY: Integer);
+Const
+ PiOver180 = 3.14159265358979 / 180.0;
+Var
+ I, N, Step: Integer;
+ PX1, PY1, PX2, PY2: Integer;
+ Theta: Real;
+Begin
+ If (RX <= 0) or (RY <= 0) Then Exit;
+ N := (RX + RY) Div 2;
+ If N < 16 Then N := 16;
+ If N > 72 Then N := 72;
+ Step := 360 Div N;
+ If Step < 5 Then Step := 5;
+ PX1 := CX + RX; PY1 := CY;
+ I := Step;
+ While I <= 360 Do Begin
+  Theta := I * PiOver180;
+  PX2 := CX + Round(RX * Cos(Theta));
+  PY2 := CY + Round(RY * Sin(Theta));
+  Line(PX1, PY1, PX2, PY2);
+  PX1 := PX2; PY1 := PY2;
+  Inc(I, Step);
+ End;
+ If (PX1 <> CX + RX) or (PY1 <> CY) Then
+  Line(PX1, PY1, CX + RX, CY);
+End;
+
+{ Trace l'apercu d'une forme en XOR + pointilles. Un second appel identique
+  efface le precedent. Supporte Rectangle, Ellipse, Ligne, Connecteur. }
+Procedure XorPreviewShape(Tool: TToolType; X1, Y1, X2, Y2: Integer);
+Var
+ CX, CY, RX, RY: Integer;
+Begin
+ SetWriteMode(XORPut);
+ SetColor(15); { Blanc }
+ SetLineStyle(DottedLn, 0, NormWidth);
+ Case Tool of
+  ttRectangle: Rectangle(X1, Y1, X2, Y2);
+  ttEllipse: Begin
+   CX := (X1 + X2) Div 2;
+   CY := (Y1 + Y2) Div 2;
+   RX := Abs(X2 - X1) Div 2;
+   RY := Abs(Y2 - Y1) Div 2;
+   XorPreviewEllipse(CX, CY, RX, RY);
+  End;
+  ttLine, ttConnector: Line(X1, Y1, X2, Y2);
+ End;
+ SetLineStyle(SolidLn, 0, NormWidth);
+ SetWriteMode(CopyPut);
+End;
+
+{ Efface l'apercu en cours (s'il est visible) et reinitialise l'etat. }
+Procedure ClearPreview;
+Begin
+ If PreviewValid And PreviewVisible Then
+  XorPreviewShape(PreviewTool, PreviewX1, PreviewY1, PreviewX2, PreviewY2);
+ PreviewValid := False;
+ PreviewVisible := False;
+End;
+
+{ Met a jour l'apercu pour la position courante de la souris. Efface l'ancien
+  rectangle XOR (s'il existe) puis dessine le nouveau. }
+Procedure UpdatePreview(Tool: TToolType; X1, Y1, X2, Y2: Integer);
+Begin
+ If PreviewValid And PreviewVisible Then
+  XorPreviewShape(PreviewTool, PreviewX1, PreviewY1, PreviewX2, PreviewY2);
+ PreviewTool := Tool;
+ PreviewX1 := X1; PreviewY1 := Y1;
+ PreviewX2 := X2; PreviewY2 := Y2;
+ XorPreviewShape(PreviewTool, PreviewX1, PreviewY1, PreviewX2, PreviewY2);
+ PreviewValid := True;
+ PreviewVisible := True;
+End;
+
+{ Fait clignoter l'apercu : toggle son etat visible/invisible aux memes coords. }
+Procedure BlinkPreview;
+Begin
+ If Not PreviewValid Then Exit;
+ XorPreviewShape(PreviewTool, PreviewX1, PreviewY1, PreviewX2, PreviewY2);
+ PreviewVisible := Not PreviewVisible;
+End;
+
+{ ============================================================================ }
+{ === FIN APERCU XOR === }
+{ ============================================================================ }
+
 { ProcÃ©dure pour ajouter un nouvel objet }
 Procedure AddShape(ShapeType: TShapeType; X1, Y1, X2, Y2: Integer);
 Var
@@ -15108,6 +15189,9 @@ Begin
  LastMouseX := 0;
  LastMouseY := 0;
  LastMouseButton := 0;
+ PreviewValid := False;
+ PreviewVisible := False;
+ PreviewBlinkTick := 0;
  { Initialiser le glisser-dÃ©poser }
  InitDragDrop;
  { Initialiser les variables pour les points d'ancrage }
@@ -17489,10 +17573,26 @@ BEGIN
       HandleMouseMove(LastMouseX, LastMouseY);
       RefreshScreen;
       ShowMouse;
+     End
+     Else If IsDrawing And
+            ((CurrentTool = ttRectangle) Or (CurrentTool = ttEllipse) Or
+             (CurrentTool = ttLine) Or (CurrentTool = ttConnector))
+     Then Begin
+      HideMouse;
+      If (Not PreviewValid) Or
+         (PreviewX2 <> LastMouseX) Or (PreviewY2 <> LastMouseY) Then
+       UpdatePreview(CurrentTool, DrawStartX, DrawStartY,
+                     LastMouseX, LastMouseY)
+      Else Begin
+       Inc(PreviewBlinkTick);
+       If (PreviewBlinkTick And $1F) = 0 Then BlinkPreview;
+      End;
+      ShowMouse;
      End;
     Until (LastMouseButton and 1) = 0;
     { GÃ©rer le relÃ¢chement du bouton }
     HideMouse;
+    ClearPreview;
     HandleLeftRelease(LastMouseX, LastMouseY);
     RefreshScreen;
     ShowMouse;

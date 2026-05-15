@@ -15399,10 +15399,31 @@ Begin
 End;
 
 { Cycle le filtre suivant }
+Function VFDFilterPrimaryExt: String; Forward;
+
 Procedure VFDCycleFilter;
+Var NewExt: String; DotPos, I: Integer;
 Begin
  If VFD_FilterCount = 0 Then Exit;
  VFD_FilterIndex := (VFD_FilterIndex + 1) Mod VFD_FilterCount;
+ { En mode export, ajuster l'extension du nom de fichier saisi sur le }
+ { nouveau filtre selectionne (ex: .png -> .gif quand on choisit GIF).  }
+ If VFD_ExportMode And (Length(VFD_InputText) > 0) Then Begin
+  NewExt := VFDFilterPrimaryExt;
+  If Length(NewExt) > 0 Then Begin
+   { Trouver le dernier point apres le dernier separateur }
+   DotPos := 0;
+   For I := Length(VFD_InputText) DownTo 1 Do Begin
+    If (VFD_InputText[I] = '\') Or (VFD_InputText[I] = '/') Then Break;
+    If VFD_InputText[I] = '.' Then Begin DotPos := I; Break; End;
+   End;
+   If DotPos > 0 Then
+    VFD_InputText := Copy(VFD_InputText, 1, DotPos) + NewExt
+   Else
+    VFD_InputText := VFD_InputText + '.' + NewExt;
+   VFD_InputCursor := Length(VFD_InputText);
+  End;
+ End;
  VFDLoadDirectory;
 End;
 

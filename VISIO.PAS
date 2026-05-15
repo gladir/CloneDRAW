@@ -356,6 +356,8 @@ Var
  MenuState: TMenuState;
  ScreenWidth, ScreenHeight: Integer;
  CurrentTool: TToolType;
+ { Message d'etat (affiche en bas de l'ecran apres une action) }
+ StatusMessage: String[80];
  { Variables pour les objets graphiques }
  Shapes: Array[1..MAX_SHAPES] of TShapeObject;
  ShapeCount: Integer;
@@ -5365,59 +5367,51 @@ Procedure FileNew;
 Begin
  CurrentFileName := '';
  DocumentModified := False;
- { TODO: RÃ©initialiser le canevas et les objets }
+ ShapeCount := 0;
+ SelectedShape := 0;
+ If Language = _English Then StatusMessage := 'New document'
+                       Else StatusMessage := 'Nouveau document';
 End;
 
-{ ProcÃ©dure Open - Ouvrir un fichier }
+{ Declaration forward du dialogue d'ouverture/enregistrement de fichier
+  (implementation plus bas dans le fichier) }
+Function ShowVisioFileDialog(SaveMode: Boolean;
+                             Const DefaultName: String;
+                             Var ChosenFile: String): Boolean; Forward;
+
+{ ProcÃ©dure Open - Ouvrir un fichier (dialogue style Visio) }
 Procedure FileOpen;
 Var
- FileName: String;
- FileFormat: Integer;
+ ChosenFile: String;
  Success: Boolean;
 Begin
- { Pour l'instant, utiliser un nom de fichier hardcodÃ© pour les tests }
- { Une vraie implÃ©mentation afficherait une boÃ®te de dialogue }
- FileName := '';
-
- { Demander le nom du fichier (simplifiÃ©) }
- { TODO: ImplÃ©menter une vraie boÃ®te de dialogue de sÃ©lection de fichier }
-
- If FileName = '' Then Begin
-  { Aucun fichier sÃ©lectionnÃ©, utiliser un fichier de test }
-  { En production, on afficherait une boÃ®te de dialogue }
+ If Not ShowVisioFileDialog(False, '', ChosenFile) Then Begin
+  If Language = _English Then StatusMessage := 'Open cancelled'
+                        Else StatusMessage := 'Ouverture annulee';
   Exit;
  End;
-
- { DÃ©tecter et charger le fichier }
- FileFormat := DetectVisioFormat(FileName);
-
- Case FileFormat of
-  VISIO_FORMAT_VSD: Begin
-   Success := ParseVSDFile(FileName);
-   If Success Then Begin
-    CurrentFileName := FileName;
-    DocumentModified := False;
-   End;
-  End;
-  VISIO_FORMAT_VSDX: Begin
-   Success := ParseVSDXFile(FileName);
-   If Success Then Begin
-    CurrentFileName := FileName;
-    DocumentModified := False;
-   End;
-  End;
- Else
-  { Format inconnu }
-  { TODO: Afficher un message d'erreur }
+ Success := LoadVisioFile(ChosenFile);
+ If Success Then Begin
+  CurrentFileName := ChosenFile;
+  DocumentModified := False;
+  SelectedShape := 0;
+  If Language = _English Then StatusMessage := 'Opened: ' + ChosenFile
+                        Else StatusMessage := 'Ouvert : ' + ChosenFile;
+ End Else Begin
+  If Language = _English Then StatusMessage := 'Open failed: ' + ChosenFile
+                        Else StatusMessage := 'Echec ouverture : ' + ChosenFile;
  End;
 End;
 
 { ProcÃ©dure Close - Fermer le document actuel }
 Procedure FileClose;
 Begin
- { TODO: VÃ©rifier si le document a Ã©tÃ© modifiÃ© et proposer de sauvegarder }
  CurrentFileName := '';
  DocumentModified := False;
+ ShapeCount := 0;
+ SelectedShape := 0;
+ If Language = _English Then StatusMessage := 'Document closed'
+                       Else StatusMessage := 'Document ferme';
 End;
 
 { Forward pour permettre Ã  FileSave d'appeler FileSaveAs }
@@ -5437,6 +5431,12 @@ Begin
   Success := SaveVisioFile(CurrentFileName, VISIO_FORMAT_UNKNOWN);
   If Success Then Begin
    DocumentModified := False;
+   If Language = _English Then StatusMessage := 'Saved: ' + CurrentFileName
+                         Else StatusMessage := 'Enregistre : ' + CurrentFileName;
+  End
+  Else Begin
+   If Language = _English Then StatusMessage := 'Save failed: ' + CurrentFileName
+                         Else StatusMessage := 'Echec enregistrement : ' + CurrentFileName;
   End;
  End;
 End;
@@ -5444,16 +5444,17 @@ End;
 { ProcÃ©dure Save As - Sauvegarder sous un nouveau nom }
 Procedure FileSaveAs;
 Var
- FileName: String;
+ FileName, DefName: String;
  FileFormat: Integer;
  Success: Boolean;
 Begin
- { Pour l'instant, utiliser un nom de fichier par dÃ©faut }
- { Une vraie implÃ©mentation afficherait une boÃ®te de dialogue }
- FileName := 'document.vsdx';  { Format VSDX par dÃ©faut }
-
- { TODO: ImplÃ©menter une vraie boÃ®te de dialogue de sÃ©lection de fichier }
-
+ If CurrentFileName <> '' Then DefName := CurrentFileName
+                          Else DefName := 'document.vsdx';
+ If Not ShowVisioFileDialog(True, DefName, FileName) Then Begin
+  If Language = _English Then StatusMessage := 'Save As cancelled'
+                        Else StatusMessage := 'Enregistrement annule';
+  Exit;
+ End;
  If FileName <> '' Then Begin
   { DÃ©tecter le format depuis l'extension }
   FileFormat := GetVisioFormatFromExtension(FileName);
@@ -5463,6 +5464,12 @@ Begin
   If Success Then Begin
    CurrentFileName := FileName;
    DocumentModified := False;
+   If Language = _English Then StatusMessage := 'Saved as: ' + FileName
+                         Else StatusMessage := 'Enregistre sous : ' + FileName;
+  End
+  Else Begin
+   If Language = _English Then StatusMessage := 'Save As failed: ' + FileName
+                         Else StatusMessage := 'Echec enregistrement : ' + FileName;
   End;
  End;
 End;
@@ -5470,21 +5477,21 @@ End;
 { ProcÃ©dure Export - Exporter dans un autre format }
 Procedure FileExport;
 Begin
- { TODO: Afficher une boÃ®te de dialogue pour choisir le format d'export }
- { TODO: Exporter le document (BMP, SVG, etc.) }
+ If Language = _English Then StatusMessage := 'Export: not yet implemented'
+                       Else StatusMessage := 'Exporter : non implemente';
 End;
 
 { ProcÃ©dure Print - Imprimer le document }
 Procedure FilePrint;
 Begin
- { TODO: Afficher la boÃ®te de dialogue d'impression }
- { TODO: Envoyer le document Ã  l'imprimante }
+ If Language = _English Then StatusMessage := 'Print: not yet implemented'
+                       Else StatusMessage := 'Imprimer : non implemente';
 End;
 
-{ ProcÃ©dure Print Preview - AperÃ§u avant impression }
 Procedure FilePrintPreview;
 Begin
- { TODO: Afficher un aperÃ§u du document tel qu'il sera imprimÃ© }
+ If Language = _English Then StatusMessage := 'Print Preview: not yet implemented'
+                       Else StatusMessage := 'Apercu impression : non implemente';
 End;
 
 { ProcÃ©dure Exit - Quitter l'application }
@@ -8682,6 +8689,899 @@ Begin
  StrToUpper:=R;
 End;
 
+{ ============================================================================ }
+{ === BOITE DE DIALOGUE D'OUVERTURE/ENREGISTREMENT DE FICHIER (style Visio) === }
+{ === Inspire de DEVENV.PAS - navigation repertoires + filtres VSD/VSDX/SVG  === }
+{ ============================================================================ }
+
+Const
+ VFD_WIDTH         = 540;        { Largeur du dialogue }
+ VFD_HEIGHT        = 400;        { Hauteur du dialogue }
+ VFD_TITLE_H       = 22;         { Hauteur barre de titre }
+ VFD_PAD           = 10;         { Marge interne }
+ VFD_BTN_W         = 90;         { Largeur bouton OK/Annuler }
+ VFD_BTN_H         = 24;         { Hauteur bouton }
+ VFD_BTN_SP        = 12;         { Espacement entre boutons }
+ VFD_INPUT_H       = 20;         { Hauteur champ saisie }
+ VFD_FILTER_H      = 20;         { Hauteur selecteur filtre }
+ VFD_LABEL_H       = 16;         { Hauteur etiquette }
+ VFD_ROW_H         = 16;         { Hauteur ligne dans la liste }
+ VFD_PATH_H        = 18;         { Hauteur affichage chemin }
+ VFD_DRIVE_H       = 20;         { Hauteur barre de lecteurs }
+ VFD_DRIVE_W       = 26;         { Largeur d'un bouton lecteur }
+ VFD_MAX_FILES     = 512;        { Capacite maxi de la liste }
+ VFD_MAX_FILTERS   = 8;          { Nb maxi de filtres }
+ VFD_MAX_DRIVES    = 26;         { A..Z }
+
+ { Couleurs (palette EGA/VGA 0..15) }
+ VFD_CLR_BG        = 7;          { Fond du dialogue : LightGray }
+ VFD_CLR_TITLE_BG  = 1;          { Fond titre : Blue }
+ VFD_CLR_TITLE_FG  = 15;         { Texte titre : White }
+ VFD_CLR_BORDER    = 0;          { Bordure : Black }
+ VFD_CLR_SHADOW    = 8;          { Ombre : DarkGray }
+ VFD_CLR_LIST_BG   = 15;         { Fond liste : White }
+ VFD_CLR_LIST_FG   = 0;          { Texte liste : Black }
+ VFD_CLR_DIR_FG    = 1;          { Repertoire : Blue }
+ VFD_CLR_SEL_BG    = 1;          { Selection : Blue }
+ VFD_CLR_SEL_FG    = 15;         { Texte selection : White }
+ VFD_CLR_INPUT_BG  = 15;         { Fond saisie : White }
+ VFD_CLR_INPUT_FG  = 0;          { Texte saisie : Black }
+ VFD_CLR_BTN_BG    = 7;          { Fond bouton : LightGray }
+ VFD_CLR_BTN_FG    = 0;          { Texte bouton : Black }
+ VFD_CLR_BTN_FOCUS = 9;          { Focus bouton : LightBlue }
+ VFD_CLR_SCROLL_BG = 8;          { Scrollbar fond }
+ VFD_CLR_SCROLL_FG = 7;          { Scrollbar curseur }
+ VFD_CLR_LABEL_FG  = 0;          { Texte etiquettes }
+ VFD_CLR_DRIVE_BG  = 7;
+ VFD_CLR_DRIVE_FG  = 0;
+
+Type
+ TVFDEntry = Record
+  Name : String[63];
+  IsDir: Boolean;
+  Size : LongInt;
+ End;
+
+ TVFDFilter = Record
+  Desc   : String[63];
+  Pattern: String[63];   { peut contenir plusieurs masques separes par ';' }
+ End;
+
+Var
+ { Etat global du dialogue (une seule instance modale a la fois) }
+ VFD_Title       : String[63];
+ VFD_X, VFD_Y    : Integer;
+ VFD_W, VFD_H    : Integer;
+ VFD_SaveMode    : Boolean;
+ VFD_CurrentPath : String[255];
+ VFD_SelectedFile: String[255];
+ VFD_Files       : Array[0..VFD_MAX_FILES-1] Of TVFDEntry;
+ VFD_FileCount   : Integer;
+ VFD_Filters     : Array[0..VFD_MAX_FILTERS-1] Of TVFDFilter;
+ VFD_FilterCount : Integer;
+ VFD_FilterIndex : Integer;
+ VFD_ScrollTop   : Integer;
+ VFD_SelIndex    : Integer;
+ VFD_InputText   : String[127];
+ VFD_InputCursor : Integer;
+ VFD_Result      : Integer;      { 0=ouvert, 1=OK, 2=Cancel }
+ VFD_FilterOpen  : Boolean;      { Liste deroulante filtre ouverte }
+ VFD_Drives      : Array[1..VFD_MAX_DRIVES] Of Char;
+ VFD_DriveCount  : Integer;
+ VFD_ListVisible : Integer;      { Nb de lignes visibles dans la liste }
+
+{ Convertit en minuscules ASCII }
+Function VFDLower(Const S: String): String;
+Var I: Integer; R: String;
+Begin
+ R := S;
+ For I := 1 To Length(R) Do
+  If (R[I] >= 'A') And (R[I] <= 'Z') Then R[I] := Chr(Ord(R[I]) + 32);
+ VFDLower := R;
+End;
+
+{ Recupere l'extension d'un nom de fichier (avec le point, en minuscules) }
+Function VFDExt(Const S: String): String;
+Var I, P: Integer;
+Begin
+ P := 0;
+ For I := Length(S) DownTo 1 Do
+  If S[I] = '.' Then Begin P := I; Break; End;
+ If P = 0 Then VFDExt := ''
+ Else VFDExt := VFDLower(Copy(S, P, Length(S) - P + 1));
+End;
+
+{ Teste si un nom correspond a un masque (un seul) du genre *.ext ou *.* }
+Function VFDMatchOne(Const Name, Mask: String): Boolean;
+Var ME, NE: String;
+Begin
+ If (Mask = '*.*') Or (Mask = '*') Or (Mask = '') Then Begin
+  VFDMatchOne := True; Exit;
+ End;
+ ME := VFDExt(Mask);
+ NE := VFDExt(Name);
+ If ME = '' Then Begin VFDMatchOne := True; Exit; End;
+ VFDMatchOne := (NE = ME);
+End;
+
+{ Teste si un nom correspond a un masque compose (separe par ';') }
+Function VFDMatchPattern(Const Name, Pattern: String): Boolean;
+Var P, Q: Integer; Tok: String;
+Begin
+ VFDMatchPattern := False;
+ P := 1;
+ While P <= Length(Pattern) Do Begin
+  Q := P;
+  While (Q <= Length(Pattern)) And (Pattern[Q] <> ';') Do Inc(Q);
+  Tok := Copy(Pattern, P, Q - P);
+  { Trim espaces }
+  While (Length(Tok) > 0) And (Tok[1] = ' ') Do Delete(Tok, 1, 1);
+  While (Length(Tok) > 0) And (Tok[Length(Tok)] = ' ') Do
+   Delete(Tok, Length(Tok), 1);
+  If VFDMatchOne(Name, Tok) Then Begin
+   VFDMatchPattern := True; Exit;
+  End;
+  P := Q + 1;
+ End;
+End;
+
+{ Normalise un chemin en s'assurant qu'il finit par '\' }
+Procedure VFDEnsureTrailingSlash(Var P: String);
+Begin
+ If Length(P) = 0 Then Begin P := '\'; Exit; End;
+ If (P[Length(P)] <> '\') And (P[Length(P)] <> '/') Then P := P + '\';
+End;
+
+{ Detecte les lecteurs disponibles (A..Z) via Dos.DiskSize }
+Procedure VFDScanDrives;
+Var I: Integer; Sz: LongInt;
+Begin
+ VFD_DriveCount := 0;
+ For I := 1 To 26 Do Begin
+  Sz := DiskSize(I);
+  If Sz > 0 Then Begin
+   Inc(VFD_DriveCount);
+   VFD_Drives[VFD_DriveCount] := Chr(Ord('A') + I - 1);
+  End;
+ End;
+End;
+
+{ Tri (insertion) : repertoires d'abord, puis fichiers ; alpha ASCII insensitive }
+Procedure VFDSortFiles;
+Var I, J: Integer; Tmp: TVFDEntry;
+ Function Less(Const A, B: TVFDEntry): Boolean;
+ Begin
+  If A.IsDir And Not B.IsDir Then Begin Less := True; Exit; End;
+  If B.IsDir And Not A.IsDir Then Begin Less := False; Exit; End;
+  Less := VFDLower(A.Name) < VFDLower(B.Name);
+ End;
+Begin
+ For I := 1 To VFD_FileCount - 1 Do Begin
+  Tmp := VFD_Files[I];
+  J := I;
+  While (J > 0) And Less(Tmp, VFD_Files[J - 1]) Do Begin
+   VFD_Files[J] := VFD_Files[J - 1];
+   Dec(J);
+  End;
+  VFD_Files[J] := Tmp;
+ End;
+End;
+
+{ Charge le contenu du repertoire courant (filtre par le masque actif) }
+Procedure VFDLoadDirectory;
+Var SR: SearchRec; Pat: String;
+Begin
+ VFD_FileCount := 0;
+ VFD_SelIndex := -1;
+ VFD_ScrollTop := 0;
+ { Entree parent '..' si on n'est pas a la racine }
+ If (Length(VFD_CurrentPath) > 3) And (VFD_FileCount < VFD_MAX_FILES) Then
+ Begin
+  VFD_Files[VFD_FileCount].Name := '..';
+  VFD_Files[VFD_FileCount].IsDir := True;
+  VFD_Files[VFD_FileCount].Size := 0;
+  Inc(VFD_FileCount);
+ End;
+ { Repertoires }
+ FindFirst(VFD_CurrentPath + '*.*', Directory, SR);
+ While (DosError = 0) And (VFD_FileCount < VFD_MAX_FILES) Do Begin
+  If ((SR.Attr And Directory) <> 0) And (SR.Name <> '.') And
+     (SR.Name <> '..') Then Begin
+   VFD_Files[VFD_FileCount].Name := SR.Name;
+   VFD_Files[VFD_FileCount].IsDir := True;
+   VFD_Files[VFD_FileCount].Size := 0;
+   Inc(VFD_FileCount);
+  End;
+  FindNext(SR);
+ End;
+ FindClose(SR);
+ { Fichiers correspondant au filtre actif }
+ If (VFD_FilterIndex >= 0) And (VFD_FilterIndex < VFD_FilterCount) Then
+  Pat := VFD_Filters[VFD_FilterIndex].Pattern
+ Else
+  Pat := '*.*';
+ FindFirst(VFD_CurrentPath + '*.*', AnyFile, SR);
+ While (DosError = 0) And (VFD_FileCount < VFD_MAX_FILES) Do Begin
+  If (SR.Attr And Directory) = 0 Then
+   If VFDMatchPattern(SR.Name, Pat) Then Begin
+    VFD_Files[VFD_FileCount].Name := SR.Name;
+    VFD_Files[VFD_FileCount].IsDir := False;
+    VFD_Files[VFD_FileCount].Size := SR.Size;
+    Inc(VFD_FileCount);
+   End;
+  FindNext(SR);
+ End;
+ FindClose(SR);
+ VFDSortFiles;
+End;
+
+{ Initialise les filtres standards Visio (selon la langue) }
+Procedure VFDInitFilters;
+ Procedure Add(Const D, P: String);
+ Begin
+  If VFD_FilterCount < VFD_MAX_FILTERS Then Begin
+   VFD_Filters[VFD_FilterCount].Desc := D;
+   VFD_Filters[VFD_FilterCount].Pattern := P;
+   Inc(VFD_FilterCount);
+  End;
+ End;
+Begin
+ VFD_FilterCount := 0;
+ If Language = _English Then Begin
+  Add('All Visio files (*.VSD;*.VSDX;*.SVG)', '*.VSD;*.VSDX;*.SVG');
+  Add('Visio 2003 binary (*.VSD)',           '*.VSD');
+  Add('Visio 2013+ XML (*.VSDX)',            '*.VSDX');
+  Add('SVG vector (*.SVG)',                  '*.SVG');
+  Add('All files (*.*)',                     '*.*');
+ End Else Begin
+  Add('Tous les fichiers Visio (*.VSD;*.VSDX;*.SVG)', '*.VSD;*.VSDX;*.SVG');
+  Add('Visio 2003 binaire (*.VSD)',          '*.VSD');
+  Add('Visio 2013+ XML (*.VSDX)',            '*.VSDX');
+  Add('Vectoriel SVG (*.SVG)',               '*.SVG');
+  Add('Tous les fichiers (*.*)',             '*.*');
+ End;
+ VFD_FilterIndex := 0;
+End;
+
+{ Initialise le dialogue (etat global) }
+Procedure VFDInit(Const Title: String; SaveMode: Boolean;
+                  Const DefaultName: String);
+Begin
+ VFD_Title := Title;
+ VFD_W := VFD_WIDTH; VFD_H := VFD_HEIGHT;
+ VFD_X := (ScreenWidth - VFD_W) Div 2;
+ VFD_Y := (ScreenHeight - VFD_H) Div 2;
+ If VFD_X < 0 Then VFD_X := 0;
+ If VFD_Y < 0 Then VFD_Y := 0;
+ VFD_SaveMode := SaveMode;
+ GetDir(0, VFD_CurrentPath);
+ VFDEnsureTrailingSlash(VFD_CurrentPath);
+ VFD_SelectedFile := '';
+ VFD_InputText := DefaultName;
+ VFD_InputCursor := Length(DefaultName);
+ VFD_Result := 0;
+ VFD_FilterOpen := False;
+ VFDInitFilters;
+ VFDScanDrives;
+ VFDLoadDirectory;
+End;
+
+{ Dessine un bouton 3D (style Windows 3.1) }
+Procedure VFDDrawButton(X, Y, W, H: Integer; Const Caption: String;
+                        Focused: Boolean);
+Var BG, FG: Integer; TX, TY: Integer;
+Begin
+ If Focused Then Begin BG := VFD_CLR_BTN_FOCUS; FG := 15; End
+            Else Begin BG := VFD_CLR_BTN_BG;    FG := VFD_CLR_BTN_FG; End;
+ SetFillStyle(SolidFill, BG);
+ Bar(X, Y, X + W - 1, Y + H - 1);
+ { Relief 3D }
+ SetColor(15);
+ Line(X, Y, X + W - 1, Y);
+ Line(X, Y, X, Y + H - 1);
+ SetColor(VFD_CLR_SHADOW);
+ Line(X + W - 1, Y, X + W - 1, Y + H - 1);
+ Line(X, Y + H - 1, X + W - 1, Y + H - 1);
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(X - 1, Y - 1, X + W, Y + H);
+ SetColor(FG);
+ TX := X + (W - TextWidth(Caption)) Div 2;
+ TY := Y + (H - TextHeight(Caption)) Div 2;
+ OutTextXY(TX, TY, Caption);
+End;
+
+{ Dessine le cadre principal + barre titre }
+Procedure VFDDrawFrame;
+Var X1, Y1, X2, Y2: Integer;
+Begin
+ X1 := VFD_X; Y1 := VFD_Y;
+ X2 := X1 + VFD_W - 1; Y2 := Y1 + VFD_H - 1;
+ { Ombre portee }
+ SetFillStyle(SolidFill, VFD_CLR_SHADOW);
+ Bar(X1 + 6, Y2 + 1, X2 + 6, Y2 + 6);
+ Bar(X2 + 1, Y1 + 6, X2 + 6, Y2 + 6);
+ { Fond }
+ SetFillStyle(SolidFill, VFD_CLR_BG);
+ Bar(X1, Y1, X2, Y2);
+ { Bordure exterieure }
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(X1, Y1, X2, Y2);
+ { Barre de titre }
+ SetFillStyle(SolidFill, VFD_CLR_TITLE_BG);
+ Bar(X1 + 2, Y1 + 2, X2 - 2, Y1 + VFD_TITLE_H - 1);
+ SetColor(VFD_CLR_TITLE_FG);
+ OutTextXY(X1 + VFD_PAD, Y1 + 5, VFD_Title);
+ { Bouton X de fermeture }
+ SetFillStyle(SolidFill, VFD_CLR_BTN_BG);
+ Bar(X2 - 22, Y1 + 4, X2 - 6, Y1 + VFD_TITLE_H - 3);
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(X2 - 22, Y1 + 4, X2 - 6, Y1 + VFD_TITLE_H - 3);
+ OutTextXY(X2 - 18, Y1 + 6, 'X');
+End;
+
+{ Calcule le rectangle de la liste de fichiers }
+Procedure VFDListRect(Var X1, Y1, X2, Y2: Integer);
+Begin
+ X1 := VFD_X + VFD_PAD;
+ Y1 := VFD_Y + VFD_TITLE_H + VFD_PAD + VFD_DRIVE_H + 4
+       + VFD_PATH_H + 4 + VFD_LABEL_H;
+ X2 := VFD_X + VFD_W - VFD_PAD;
+ Y2 := VFD_Y + VFD_H - VFD_PAD - VFD_BTN_H - VFD_PAD
+       - VFD_FILTER_H - VFD_LABEL_H - VFD_PAD
+       - VFD_INPUT_H - VFD_LABEL_H - 4;
+End;
+
+{ Dessine la barre des lecteurs (A:, B:, C:, ...) }
+Procedure VFDDrawDrives;
+Var I, BX, BY: Integer; Cap: String;
+Begin
+ BY := VFD_Y + VFD_TITLE_H + VFD_PAD;
+ SetColor(VFD_CLR_LABEL_FG);
+ If Language = _English Then OutTextXY(VFD_X + VFD_PAD, BY, 'Drives:')
+                        Else OutTextXY(VFD_X + VFD_PAD, BY, 'Lecteurs :');
+ BY := BY + VFD_LABEL_H - 2;
+ For I := 1 To VFD_DriveCount Do Begin
+  BX := VFD_X + VFD_PAD + (I - 1) * (VFD_DRIVE_W + 2);
+  If BX + VFD_DRIVE_W > VFD_X + VFD_W - VFD_PAD Then Break;
+  Cap := VFD_Drives[I] + ':';
+  If (Length(VFD_CurrentPath) >= 2) And
+     (StrToUpper(VFD_CurrentPath)[1] = VFD_Drives[I]) And
+     (VFD_CurrentPath[2] = ':') Then
+   VFDDrawButton(BX, BY, VFD_DRIVE_W, VFD_DRIVE_H, Cap, True)
+  Else
+   VFDDrawButton(BX, BY, VFD_DRIVE_W, VFD_DRIVE_H, Cap, False);
+ End;
+End;
+
+{ Dessine le chemin courant }
+Procedure VFDDrawPath;
+Var PY: Integer; S: String;
+Begin
+ PY := VFD_Y + VFD_TITLE_H + VFD_PAD + VFD_LABEL_H - 2
+       + VFD_DRIVE_H + 4;
+ SetColor(VFD_CLR_LABEL_FG);
+ If Language = _English Then S := 'Path: ' Else S := 'Chemin : ';
+ OutTextXY(VFD_X + VFD_PAD, PY, S + VFD_CurrentPath);
+End;
+
+{ Dessine la liste de fichiers }
+Procedure VFDDrawList;
+Var X1, Y1, X2, Y2, I, Row, TY, LH: Integer;
+    Disp: String;
+Begin
+ VFDListRect(X1, Y1, X2, Y2);
+ LH := Y2 - Y1 + 1;
+ VFD_ListVisible := LH Div VFD_ROW_H;
+ { Etiquette }
+ SetColor(VFD_CLR_LABEL_FG);
+ If Language = _English Then
+  OutTextXY(X1, Y1 - VFD_LABEL_H, 'Files and folders:')
+ Else
+  OutTextXY(X1, Y1 - VFD_LABEL_H, 'Fichiers et dossiers :');
+ { Cadre liste }
+ SetFillStyle(SolidFill, VFD_CLR_LIST_BG);
+ Bar(X1, Y1, X2, Y2);
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(X1, Y1, X2, Y2);
+ { Lignes }
+ Row := 0;
+ I := VFD_ScrollTop;
+ While (I < VFD_FileCount) And (Row < VFD_ListVisible) Do Begin
+  TY := Y1 + 2 + Row * VFD_ROW_H;
+  If I = VFD_SelIndex Then Begin
+   SetFillStyle(SolidFill, VFD_CLR_SEL_BG);
+   Bar(X1 + 2, TY, X2 - 14, TY + VFD_ROW_H - 1);
+   SetColor(VFD_CLR_SEL_FG);
+  End Else Begin
+   If VFD_Files[I].IsDir Then SetColor(VFD_CLR_DIR_FG)
+                         Else SetColor(VFD_CLR_LIST_FG);
+  End;
+  If VFD_Files[I].IsDir Then
+   Disp := '[' + VFD_Files[I].Name + ']'
+  Else
+   Disp := VFD_Files[I].Name;
+  OutTextXY(X1 + 6, TY + 2, Disp);
+  Inc(Row); Inc(I);
+ End;
+ { Scrollbar (esthetique) }
+ SetFillStyle(SolidFill, VFD_CLR_SCROLL_BG);
+ Bar(X2 - 12, Y1 + 1, X2 - 1, Y2 - 1);
+ If VFD_FileCount > VFD_ListVisible Then Begin
+  SetFillStyle(SolidFill, VFD_CLR_SCROLL_FG);
+  Bar(X2 - 11, Y1 + 2 + (VFD_ScrollTop * (LH - 24)) Div
+                       (VFD_FileCount + 1),
+      X2 - 2, Y1 + 2 + (VFD_ScrollTop * (LH - 24)) Div
+                       (VFD_FileCount + 1) + 18);
+ End;
+End;
+
+{ Dessine le champ saisie nom de fichier }
+Procedure VFDDrawInput;
+Var IX, IY, IW: Integer; CX: Integer;
+Begin
+ IX := VFD_X + VFD_PAD;
+ IW := VFD_W - 2 * VFD_PAD;
+ IY := VFD_Y + VFD_H - VFD_PAD - VFD_BTN_H - VFD_PAD
+       - VFD_FILTER_H - VFD_LABEL_H - VFD_PAD - VFD_INPUT_H;
+ SetColor(VFD_CLR_LABEL_FG);
+ If Language = _English Then
+  OutTextXY(IX, IY - VFD_LABEL_H, 'File name:')
+ Else
+  OutTextXY(IX, IY - VFD_LABEL_H, 'Nom du fichier :');
+ SetFillStyle(SolidFill, VFD_CLR_INPUT_BG);
+ Bar(IX, IY, IX + IW - 1, IY + VFD_INPUT_H - 1);
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(IX, IY, IX + IW - 1, IY + VFD_INPUT_H - 1);
+ SetColor(VFD_CLR_INPUT_FG);
+ OutTextXY(IX + 4, IY + 3, VFD_InputText);
+ { Curseur }
+ CX := IX + 4 + TextWidth(Copy(VFD_InputText, 1, VFD_InputCursor));
+ SetColor(VFD_CLR_BORDER);
+ Line(CX, IY + 3, CX, IY + VFD_INPUT_H - 4);
+End;
+
+{ Dessine le selecteur de filtre }
+Procedure VFDDrawFilter;
+Var FX, FY, FW: Integer; Txt: String;
+Begin
+ FX := VFD_X + VFD_PAD;
+ FW := VFD_W - 2 * VFD_PAD;
+ FY := VFD_Y + VFD_H - VFD_PAD - VFD_BTN_H - VFD_PAD - VFD_FILTER_H;
+ SetColor(VFD_CLR_LABEL_FG);
+ If Language = _English Then
+  OutTextXY(FX, FY - VFD_LABEL_H, 'File type:')
+ Else
+  OutTextXY(FX, FY - VFD_LABEL_H, 'Type de fichier :');
+ SetFillStyle(SolidFill, VFD_CLR_INPUT_BG);
+ Bar(FX, FY, FX + FW - 1, FY + VFD_FILTER_H - 1);
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(FX, FY, FX + FW - 1, FY + VFD_FILTER_H - 1);
+ If (VFD_FilterIndex >= 0) And (VFD_FilterIndex < VFD_FilterCount) Then
+  Txt := VFD_Filters[VFD_FilterIndex].Desc
+ Else
+  Txt := '*.*';
+ SetColor(VFD_CLR_INPUT_FG);
+ OutTextXY(FX + 4, FY + 3, Txt);
+ { Petite fleche v }
+ SetFillStyle(SolidFill, VFD_CLR_BTN_BG);
+ Bar(FX + FW - 18, FY + 1, FX + FW - 2, FY + VFD_FILTER_H - 2);
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(FX + FW - 18, FY + 1, FX + FW - 2, FY + VFD_FILTER_H - 2);
+ OutTextXY(FX + FW - 14, FY + 4, 'v');
+ { Si la liste deroulante est ouverte, l'afficher au-dessus }
+ If VFD_FilterOpen Then Begin
+  Dec(FY, VFD_FilterCount * VFD_ROW_H + 2);
+  SetFillStyle(SolidFill, VFD_CLR_INPUT_BG);
+  Bar(FX, FY, FX + FW - 1, FY + VFD_FilterCount * VFD_ROW_H + 1);
+  SetColor(VFD_CLR_BORDER);
+  Rectangle(FX, FY, FX + FW - 1, FY + VFD_FilterCount * VFD_ROW_H + 1);
+  SetColor(VFD_CLR_INPUT_FG);
+  Txt := '';
+  Bar(FX + 1, FY + 1, FX + FW - 2, FY + VFD_FilterCount * VFD_ROW_H);
+ End;
+End;
+
+{ Dessine les boutons OK / Annuler }
+Procedure VFDDrawButtons;
+Var BX, BY: Integer; OKLab, CnLab: String;
+Begin
+ BY := VFD_Y + VFD_H - VFD_PAD - VFD_BTN_H;
+ BX := VFD_X + VFD_W - VFD_PAD - VFD_BTN_W;
+ If VFD_SaveMode Then Begin
+  If Language = _English Then OKLab := 'Save' Else OKLab := 'Enregistrer';
+ End Else Begin
+  If Language = _English Then OKLab := 'Open' Else OKLab := 'Ouvrir';
+ End;
+ If Language = _English Then CnLab := 'Cancel' Else CnLab := 'Annuler';
+ VFDDrawButton(BX, BY, VFD_BTN_W, VFD_BTN_H, OKLab, True);
+ VFDDrawButton(BX - VFD_BTN_SP - VFD_BTN_W, BY,
+               VFD_BTN_W, VFD_BTN_H, CnLab, False);
+End;
+
+{ Dessine le dialogue complet }
+Procedure VFDDraw;
+Begin
+ VFDDrawFrame;
+ VFDDrawDrives;
+ VFDDrawPath;
+ VFDDrawList;
+ VFDDrawInput;
+ VFDDrawFilter;
+ VFDDrawButtons;
+End;
+
+{ Test : (X,Y) est-il dans le rectangle [X1,Y1,X2,Y2] ? }
+Function VFDInRect(X, Y, X1, Y1, X2, Y2: Integer): Boolean;
+Begin
+ VFDInRect := (X >= X1) And (X <= X2) And (Y >= Y1) And (Y <= Y2);
+End;
+
+{ Retourne l'index de la ligne cliquee dans la liste (-1 si aucun) }
+Function VFDHitList(MX, MY: Integer): Integer;
+Var X1, Y1, X2, Y2, Row: Integer;
+Begin
+ VFDHitList := -1;
+ VFDListRect(X1, Y1, X2, Y2);
+ If VFDInRect(MX, MY, X1, Y1, X2 - 14, Y2) Then Begin
+  Row := (MY - Y1 - 2) Div VFD_ROW_H;
+  If (Row >= 0) And (VFD_ScrollTop + Row < VFD_FileCount) Then
+   VFDHitList := VFD_ScrollTop + Row;
+ End;
+End;
+
+{ Retourne l'index du bouton clique : 0=OK, 1=Cancel, -1 sinon }
+Function VFDHitButton(MX, MY: Integer): Integer;
+Var BX, BY: Integer;
+Begin
+ VFDHitButton := -1;
+ BY := VFD_Y + VFD_H - VFD_PAD - VFD_BTN_H;
+ BX := VFD_X + VFD_W - VFD_PAD - VFD_BTN_W;
+ If VFDInRect(MX, MY, BX, BY, BX + VFD_BTN_W - 1, BY + VFD_BTN_H - 1) Then
+ Begin VFDHitButton := 0; Exit; End;
+ BX := BX - VFD_BTN_SP - VFD_BTN_W;
+ If VFDInRect(MX, MY, BX, BY, BX + VFD_BTN_W - 1, BY + VFD_BTN_H - 1) Then
+  VFDHitButton := 1;
+End;
+
+{ Retourne l'index du lecteur clique (-1 si aucun) }
+Function VFDHitDrive(MX, MY: Integer): Integer;
+Var I, BX, BY: Integer;
+Begin
+ VFDHitDrive := -1;
+ BY := VFD_Y + VFD_TITLE_H + VFD_PAD + VFD_LABEL_H - 2;
+ For I := 1 To VFD_DriveCount Do Begin
+  BX := VFD_X + VFD_PAD + (I - 1) * (VFD_DRIVE_W + 2);
+  If BX + VFD_DRIVE_W > VFD_X + VFD_W - VFD_PAD Then Break;
+  If VFDInRect(MX, MY, BX, BY,
+               BX + VFD_DRIVE_W - 1, BY + VFD_DRIVE_H - 1) Then Begin
+   VFDHitDrive := I; Exit;
+  End;
+ End;
+End;
+
+{ Teste si (MX,MY) est sur le selecteur de filtre }
+Function VFDHitFilter(MX, MY: Integer): Boolean;
+Var FX, FY, FW: Integer;
+Begin
+ FX := VFD_X + VFD_PAD;
+ FW := VFD_W - 2 * VFD_PAD;
+ FY := VFD_Y + VFD_H - VFD_PAD - VFD_BTN_H - VFD_PAD - VFD_FILTER_H;
+ VFDHitFilter := VFDInRect(MX, MY, FX, FY,
+                           FX + FW - 1, FY + VFD_FILTER_H - 1);
+End;
+
+{ Teste si (MX,MY) est sur le bouton fermer X de la barre titre }
+Function VFDHitClose(MX, MY: Integer): Boolean;
+Begin
+ VFDHitClose := VFDInRect(MX, MY,
+  VFD_X + VFD_W - 23, VFD_Y + 4,
+  VFD_X + VFD_W - 7,  VFD_Y + VFD_TITLE_H - 3);
+End;
+
+{ Navigation : monter d'un niveau }
+Procedure VFDGoUp;
+Var P: String; I: Integer;
+Begin
+ P := VFD_CurrentPath;
+ { Retirer le slash final }
+ If (Length(P) > 0) And
+    ((P[Length(P)] = '\') Or (P[Length(P)] = '/')) Then
+  Dec(P[0]);
+ { Trouver le dernier slash }
+ I := Length(P);
+ While (I > 0) And (P[I] <> '\') And (P[I] <> '/') Do Dec(I);
+ If I <= 3 Then Begin
+  { Racine du lecteur }
+  If (Length(P) >= 2) And (P[2] = ':') Then
+   P := Copy(P, 1, 2) + '\'
+  Else
+   P := '\';
+ End Else
+  P := Copy(P, 1, I);
+ VFD_CurrentPath := P;
+ VFDEnsureTrailingSlash(VFD_CurrentPath);
+ VFDLoadDirectory;
+End;
+
+{ Navigation : entrer dans un sous-repertoire }
+Procedure VFDEnterDir(Const Name: String);
+Begin
+ If Name = '..' Then Begin VFDGoUp; Exit; End;
+ VFD_CurrentPath := VFD_CurrentPath + Name;
+ VFDEnsureTrailingSlash(VFD_CurrentPath);
+ VFDLoadDirectory;
+End;
+
+{ Change de lecteur }
+Procedure VFDChangeDrive(DriveIdx: Integer);
+Var NewPath: String;
+Begin
+ If (DriveIdx < 1) Or (DriveIdx > VFD_DriveCount) Then Exit;
+ NewPath := VFD_Drives[DriveIdx] + ':\';
+ { Verifier que le lecteur est accessible }
+ If DiskSize(Ord(VFD_Drives[DriveIdx]) - Ord('A') + 1) <= 0 Then Exit;
+ VFD_CurrentPath := NewPath;
+ VFDLoadDirectory;
+End;
+
+{ Cycle le filtre suivant }
+Procedure VFDCycleFilter;
+Begin
+ If VFD_FilterCount = 0 Then Exit;
+ VFD_FilterIndex := (VFD_FilterIndex + 1) Mod VFD_FilterCount;
+ VFDLoadDirectory;
+End;
+
+{ Valide la selection courante. Retourne True si on doit fermer le dialogue }
+Function VFDAccept: Boolean;
+Var Full: String;
+Begin
+ VFDAccept := False;
+ { Si une ligne est selectionnee et c'est un repertoire : naviguer }
+ If (VFD_SelIndex >= 0) And (VFD_SelIndex < VFD_FileCount) And
+    VFD_Files[VFD_SelIndex].IsDir Then Begin
+  VFDEnterDir(VFD_Files[VFD_SelIndex].Name);
+  VFD_InputText := '';
+  VFD_InputCursor := 0;
+  Exit;
+ End;
+ { Sinon, prendre VFD_InputText }
+ If Length(VFD_InputText) = 0 Then Exit;
+ { Si le texte contient un chemin absolu ou relatif, le traiter }
+ If (Length(VFD_InputText) >= 2) And (VFD_InputText[2] = ':') Then
+  Full := VFD_InputText
+ Else If (Length(VFD_InputText) > 0) And
+         ((VFD_InputText[1] = '\') Or (VFD_InputText[1] = '/')) Then
+  Full := Copy(VFD_CurrentPath, 1, 2) + VFD_InputText
+ Else
+  Full := VFD_CurrentPath + VFD_InputText;
+ VFD_SelectedFile := Full;
+ VFD_Result := 1;
+ VFDAccept := True;
+End;
+
+{ Boucle modale du dialogue. Retourne True si OK, False si Annuler }
+Function VFDRun: Boolean;
+Var
+ Key: Char;
+ MX, MY: Integer;
+ MB: LongInt;
+ PrevMB: LongInt;
+ Idx: Integer;
+ NeedRedraw: Boolean;
+ MXL, MYL: LongInt;
+Begin
+ PrevMB := 0;
+ NeedRedraw := True;
+ HideMouse;
+ VFDDraw;
+ ShowMouse;
+ Repeat
+  If NeedRedraw Then Begin
+   HideMouse;
+   VFDDraw;
+   ShowMouse;
+   NeedRedraw := False;
+  End;
+
+  { ----- Clavier ----- }
+  If KeyPressed Then Begin
+   Key := ReadKey;
+   If Key = #27 Then Begin
+    VFD_Result := 2;
+    Break;
+   End
+   Else If Key = #13 Then Begin
+    If VFDAccept Then Break;
+    NeedRedraw := True;
+   End
+   Else If Key = #8 Then Begin
+    If (VFD_InputCursor > 0) And (Length(VFD_InputText) > 0) Then Begin
+     Delete(VFD_InputText, VFD_InputCursor, 1);
+     Dec(VFD_InputCursor);
+     NeedRedraw := True;
+    End;
+   End
+   Else If Key = #9 Then Begin
+    { Tab : cycler filtre }
+    VFDCycleFilter;
+    NeedRedraw := True;
+   End
+   Else If Key = #0 Then Begin
+    Key := ReadKey;
+    Case Key Of
+     #72: Begin { Fleche haut }
+           If VFD_SelIndex > 0 Then Begin
+            Dec(VFD_SelIndex);
+            If VFD_SelIndex < VFD_ScrollTop Then
+             VFD_ScrollTop := VFD_SelIndex;
+            If Not VFD_Files[VFD_SelIndex].IsDir Then Begin
+             VFD_InputText := VFD_Files[VFD_SelIndex].Name;
+             VFD_InputCursor := Length(VFD_InputText);
+            End;
+            NeedRedraw := True;
+           End;
+          End;
+     #80: Begin { Fleche bas }
+           If VFD_SelIndex < VFD_FileCount - 1 Then Begin
+            Inc(VFD_SelIndex);
+            If VFD_ListVisible > 0 Then
+             If VFD_SelIndex >= VFD_ScrollTop + VFD_ListVisible Then
+              VFD_ScrollTop := VFD_SelIndex - VFD_ListVisible + 1;
+            If Not VFD_Files[VFD_SelIndex].IsDir Then Begin
+             VFD_InputText := VFD_Files[VFD_SelIndex].Name;
+             VFD_InputCursor := Length(VFD_InputText);
+            End;
+            NeedRedraw := True;
+           End Else If VFD_FileCount > 0 Then Begin
+            VFD_SelIndex := 0;
+            VFD_ScrollTop := 0;
+            NeedRedraw := True;
+           End;
+          End;
+     #73: Begin { PgUp }
+           If VFD_ListVisible > 0 Then Begin
+            VFD_SelIndex := VFD_SelIndex - VFD_ListVisible;
+            If VFD_SelIndex < 0 Then VFD_SelIndex := 0;
+            VFD_ScrollTop := VFD_ScrollTop - VFD_ListVisible;
+            If VFD_ScrollTop < 0 Then VFD_ScrollTop := 0;
+            NeedRedraw := True;
+           End;
+          End;
+     #81: Begin { PgDn }
+           If VFD_ListVisible > 0 Then Begin
+            VFD_SelIndex := VFD_SelIndex + VFD_ListVisible;
+            If VFD_SelIndex >= VFD_FileCount Then
+             VFD_SelIndex := VFD_FileCount - 1;
+            VFD_ScrollTop := VFD_ScrollTop + VFD_ListVisible;
+            If VFD_ScrollTop + VFD_ListVisible > VFD_FileCount Then
+             VFD_ScrollTop := VFD_FileCount - VFD_ListVisible;
+            If VFD_ScrollTop < 0 Then VFD_ScrollTop := 0;
+            NeedRedraw := True;
+           End;
+          End;
+     #71: Begin { Home }
+           VFD_SelIndex := 0;
+           VFD_ScrollTop := 0;
+           NeedRedraw := True;
+          End;
+     #79: Begin { End }
+           If VFD_FileCount > 0 Then Begin
+            VFD_SelIndex := VFD_FileCount - 1;
+            If VFD_ListVisible > 0 Then Begin
+             VFD_ScrollTop := VFD_FileCount - VFD_ListVisible;
+             If VFD_ScrollTop < 0 Then VFD_ScrollTop := 0;
+            End;
+            NeedRedraw := True;
+           End;
+          End;
+     #75: Begin { Fleche gauche : curseur saisie }
+           If VFD_InputCursor > 0 Then Begin
+            Dec(VFD_InputCursor); NeedRedraw := True;
+           End;
+          End;
+     #77: Begin { Fleche droite : curseur saisie }
+           If VFD_InputCursor < Length(VFD_InputText) Then Begin
+            Inc(VFD_InputCursor); NeedRedraw := True;
+           End;
+          End;
+    End;
+   End
+   Else If (Key >= ' ') And (Key <= '~') Then Begin
+    If Length(VFD_InputText) < 127 Then Begin
+     Inc(VFD_InputCursor);
+     Insert(Key, VFD_InputText, VFD_InputCursor);
+     NeedRedraw := True;
+    End;
+   End;
+  End;
+
+  { ----- Souris ----- }
+  {$IFDEF FPC}
+   GetMouseState(MXL, MYL, MB);
+   MX := MXL; MY := MYL;
+  {$ELSE}
+   GetMouseState(MX, MY, MB);
+  {$ENDIF}
+  { Rising edge : bouton gauche presse }
+  If ((MB And 1) = 1) And ((PrevMB And 1) = 0) Then Begin
+   { Bouton fermer dans la barre titre }
+   If VFDHitClose(MX, MY) Then Begin
+    VFD_Result := 2; PrevMB := MB; Break;
+   End;
+
+   { Boutons OK / Cancel }
+   Idx := VFDHitButton(MX, MY);
+   If Idx = 0 Then Begin
+    If VFDAccept Then Break;
+    NeedRedraw := True;
+   End
+   Else If Idx = 1 Then Begin
+    VFD_Result := 2; PrevMB := MB; Break;
+   End;
+
+   { Selecteur de filtre : cycler }
+   If VFDHitFilter(MX, MY) Then Begin
+    VFDCycleFilter;
+    NeedRedraw := True;
+   End;
+
+   { Barre lecteurs }
+   Idx := VFDHitDrive(MX, MY);
+   If Idx > 0 Then Begin
+    VFDChangeDrive(Idx);
+    NeedRedraw := True;
+   End;
+
+   { Liste de fichiers : un seul clic suffit (rep = navigue, fichier = selec) }
+   Idx := VFDHitList(MX, MY);
+   If Idx >= 0 Then Begin
+    If VFD_Files[Idx].IsDir Then Begin
+     VFDEnterDir(VFD_Files[Idx].Name);
+     VFD_InputText := '';
+     VFD_InputCursor := 0;
+    End Else Begin
+     VFD_SelIndex := Idx;
+     VFD_InputText := VFD_Files[Idx].Name;
+     VFD_InputCursor := Length(VFD_InputText);
+    End;
+    NeedRedraw := True;
+   End;
+  End;
+  PrevMB := MB;
+ Until False;
+
+ If VFD_Result = 1 Then VFDRun := True
+                   Else VFDRun := False;
+End;
+
+{ Point d'entree externe : affiche le dialogue et renvoie le chemin choisi }
+Function ShowVisioFileDialog(SaveMode: Boolean;
+                             Const DefaultName: String;
+                             Var ChosenFile: String): Boolean;
+Var Title: String;
+Begin
+ If SaveMode Then Begin
+  If Language = _English Then Title := 'Save Visio document as'
+                        Else Title := 'Enregistrer le document Visio sous';
+ End Else Begin
+  If Language = _English Then Title := 'Open Visio document'
+                        Else Title := 'Ouvrir un document Visio';
+ End;
+ VFDInit(Title, SaveMode, DefaultName);
+ If VFDRun Then Begin
+  ChosenFile := VFD_SelectedFile;
+  ShowVisioFileDialog := True;
+ End Else Begin
+  ChosenFile := '';
+  ShowVisioFileDialog := False;
+ End;
+End;
+
+{ ============================================================================ }
+{ === FIN BOITE DE DIALOGUE FICHIER ========================================== }
+{ ============================================================================ }
+
 { ProcÃ©dure pour initialiser le systÃ¨me de menus }
 Procedure InitMenuSystem;
 Begin
@@ -8691,6 +9591,7 @@ Begin
  OldHoveredMenuItem := 0;
  PrevMouseX := -1;
  PrevMouseY := -1;
+ StatusMessage := '';
 
  { Localisation des noms et positions de la barre de menu.
    Defaut = anglais (deja en typed const). Si Language <> _English,
@@ -8883,7 +9784,7 @@ End;
 Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer;
 Const
  ItemHeight = 16;
- MenuWidth = 150;
+ MenuWidth = 260;
 Var
  X, Y, ItemCount, I: Integer;
 Begin
@@ -8967,6 +9868,16 @@ Begin
  { Dessiner la boÃ®te de dialogue des calques si elle est visible }
  If LayerDialogVisible Then Begin
   DrawLayerDialog;
+ End;
+
+ { Barre d'etat : afficher le dernier message d'action }
+ If StatusMessage <> '' Then Begin
+  SetFillStyle(SolidFill, LightGray);
+  Bar(0, ScreenHeight - 16, ScreenWidth, ScreenHeight);
+  SetColor(DarkGray);
+  Line(0, ScreenHeight - 16, ScreenWidth, ScreenHeight - 16);
+  SetColor(Black);
+  OutTextXY(6, ScreenHeight - 12, StatusMessage);
  End;
 End;
 

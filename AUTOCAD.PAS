@@ -19705,6 +19705,49 @@ Begin
        LispEvaluator.LastResult := LispEvaluate(CommandBuffer);
        If LispEvaluator.LastResult.ValueType = LISP_VAL_ERROR Then
         CommandLastLine := 'Error: ' + LispEvaluator.LastResult.StrValue;
+      End Else Begin
+       { Dispatcher commandes AutoCAD tapees au clavier (LINE, CIRCLE, ...) }
+       Ext := '';
+       For I := 1 To Length(CommandBuffer) Do
+        If Length(Ext) < 8 Then Ext := Ext + UpCase(CommandBuffer[I]);
+       If (Ext = 'LINE') or (Ext = 'L') Then Begin
+        PendingFileAction := 40; CommandPrompt := 'Ligne X1,Y1 X2,Y2:';
+       End Else If Ext = 'RAY' Then Begin
+        PendingFileAction := 41;
+        CommandPrompt := 'Demi-droite X1,Y1 X2,Y2 (origine, direction):';
+       End Else If (Ext = 'XLINE') or (Ext = 'XL') Then Begin
+        PendingFileAction := 42;
+        CommandPrompt := 'Droite de construction X1,Y1 X2,Y2:';
+       End Else If (Ext = 'PLINE') or (Ext = 'PL') Then Begin
+        PendingFileAction := 43;
+        CommandPrompt := 'Polyligne X1,Y1 X2,Y2 X3,Y3 ... :';
+       End Else If (Ext = 'POLYGON') or (Ext = 'POL') Then Begin
+        PendingFileAction := 44;
+        CommandPrompt := 'Polygone N CX,CY R (cotes, centre, rayon):';
+       End Else If (Ext = 'RECTANG') or (Ext = 'REC') or
+                   (Ext = 'RECTANGL') Then Begin
+        PendingFileAction := 45; CommandPrompt := 'Rectangle X1,Y1 X2,Y2:';
+       End Else If Ext = 'ARC' Then Begin
+        PendingFileAction := 46;
+        CommandPrompt := 'Arc CX,CY R AngDebut AngFin (degres):';
+       End Else If (Ext = 'CIRCLE') or (Ext = 'C') Then Begin
+        PendingFileAction := 47; CommandPrompt := 'Cercle CX,CY R:';
+       End Else If (Ext = 'SPLINE') or (Ext = 'SPL') Then Begin
+        PendingFileAction := 48;
+        CommandPrompt := 'Spline X1,Y1 X2,Y2 X3,Y3 ... :';
+       End Else If (Ext = 'ELLIPSE') or (Ext = 'EL') Then Begin
+        PendingFileAction := 49; CommandPrompt := 'Ellipse CX,CY RX RY:';
+       End Else If (Ext = 'POINT') or (Ext = 'PO') Then Begin
+        PendingFileAction := 50; CommandPrompt := 'Point X,Y:';
+       End Else If (Ext = 'TEXT') or (Ext = 'T') or (Ext = 'DTEXT') Then Begin
+        PendingFileAction := 51; CommandPrompt := 'Texte X Y H Contenu:';
+       End Else If Ext = 'HATCH' Then Begin
+        ExecuteDrawHatch;
+       End Else If Ext = 'REGION' Then Begin
+        ExecuteDrawRegion;
+       End Else Begin
+        CommandLastLine := 'Commande inconnue: ' + CommandBuffer;
+       End;
       End;
       CommandBuffer := '';
       CommandCursorBlink := True;

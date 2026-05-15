@@ -14548,6 +14548,12 @@ Begin
  HideMouse;
 End;
 
+Var
+ CmdArg: String;
+ SavedSW, SavedSH: Integer;
+ LoadOK: Boolean;
+ ArgExt: String;
+ I: Integer;
 BEGIN
  { Initialisation }
  InitializeGraphics;
@@ -14571,6 +14577,33 @@ BEGIN
  CommandPrompt := 'Command:';
  CommandLastLine := '';
  CommandCursorBlink := True;
+
+ { Charger un fichier passe en argument de ligne de commande }
+ If ParamCount >= 1 Then Begin
+  CmdArg := ParamStr(1);
+  ArgExt := '';
+  For I := Length(CmdArg) DownTo 1 Do
+   If CmdArg[I] = '.' Then Begin
+    ArgExt := Copy(CmdArg, I + 1, Length(CmdArg) - I);
+    Break;
+   End;
+  { Forcer majuscules pour comparaison }
+  For I := 1 To Length(ArgExt) Do
+   ArgExt[I] := UpCase(ArgExt[I]);
+
+  SavedSW := ScreenWidth;
+  SavedSH := ScreenHeight;
+  LoadOK := False;
+  If ArgExt = 'DWG' Then LoadOK := ReadDWGFile(CmdArg);
+  { Restaurer dimensions ecran (ReadDWGHeader les ecrase) }
+  ScreenWidth := SavedSW;
+  ScreenHeight := SavedSH;
+
+  If LoadOK Then
+   CommandLastLine := 'Charge: ' + CmdArg
+  Else
+   CommandLastLine := 'Echec chargement: ' + CmdArg;
+ End;
 
  { Dessiner l'interface initiale }
  DrawInterface;

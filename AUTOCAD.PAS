@@ -582,13 +582,18 @@ Type
   X, Width: Integer;
  End;
 
+ { Icône 16x16 (matrice de pixels, 255 = transparent) }
+ TIcon16 = Array[0..15, 0..15] Of Byte;
+
  { Structure pour les boutons de barre d'outils - TODO 5 }
  TToolbarButton = Record
   Caption: String[20];      { Nom du bouton pour tooltip }
-  Symbol: Char;             { Caractère symbole à afficher }
+  Symbol: Char;             { Caractère symbole (fallback) }
   Command: String[20];      { Commande associée }
   Enabled: Boolean;
   Separator: Boolean;       { Séparateur visuel }
+  HasIcon: Boolean;         { True si Icon contient un dessin }
+  Icon: TIcon16;            { Matrice 16x16 de pixels }
  End;
 
  { Structure pour les barres d'outils - TODO 5 }
@@ -2725,6 +2730,695 @@ End;
 { Procédures de dessin des barres d'outils - TODO 5                            }
 { ============================================================================ }
 
+{ --- Icônes 16x16 : primitives ---------------------------------------------- }
+
+Procedure ClearIcon(Var Icon: TIcon16; Color: Byte);
+Var
+ IX, IY: Integer;
+Begin
+ For IY := 0 To 15 Do
+  For IX := 0 To 15 Do
+   Icon[IY, IX] := Color;
+End;
+
+Procedure IconPutPixel(Var Icon: TIcon16; X, Y: Integer; C: Byte);
+Begin
+ If (X >= 0) And (X <= 15) And (Y >= 0) And (Y <= 15) Then
+  Icon[Y, X] := C;
+End;
+
+Procedure IconHLine(Var Icon: TIcon16; X1, X2, Y: Integer; C: Byte);
+Var
+ X: Integer;
+Begin
+ For X := X1 To X2 Do
+  IconPutPixel(Icon, X, Y, C);
+End;
+
+Procedure IconVLine(Var Icon: TIcon16; X, Y1, Y2: Integer; C: Byte);
+Var
+ Y: Integer;
+Begin
+ For Y := Y1 To Y2 Do
+  IconPutPixel(Icon, X, Y, C);
+End;
+
+Procedure IconRect(Var Icon: TIcon16; X1, Y1, X2, Y2: Integer; C: Byte);
+Begin
+ IconHLine(Icon, X1, X2, Y1, C);
+ IconHLine(Icon, X1, X2, Y2, C);
+ IconVLine(Icon, X1, Y1, Y2, C);
+ IconVLine(Icon, X2, Y1, Y2, C);
+End;
+
+Procedure IconFillRect(Var Icon: TIcon16; X1, Y1, X2, Y2: Integer;
+                       C: Byte);
+Var
+ Y: Integer;
+Begin
+ For Y := Y1 To Y2 Do
+  IconHLine(Icon, X1, X2, Y, C);
+End;
+
+{ Ligne diagonale de Bresenham simplifiée dans l'icône }
+Procedure IconLine(Var Icon: TIcon16; X1, Y1, X2, Y2: Integer; C: Byte);
+Var
+ DX, DY, SX, SY, Err, E2: Integer;
+Begin
+ DX := Abs(X2 - X1);
+ DY := Abs(Y2 - Y1);
+ If X1 < X2 Then SX := 1 Else SX := -1;
+ If Y1 < Y2 Then SY := 1 Else SY := -1;
+ Err := DX - DY;
+ While True Do Begin
+  IconPutPixel(Icon, X1, Y1, C);
+  If (X1 = X2) And (Y1 = Y2) Then Break;
+  E2 := 2 * Err;
+  If E2 > -DY Then Begin
+   Err := Err - DY;
+   X1 := X1 + SX;
+  End;
+  If E2 < DX Then Begin
+   Err := Err + DX;
+   Y1 := Y1 + SY;
+  End;
+ End;
+End;
+
+{ Cercle dans l'icône (centre CX,CY, rayon R) }
+Procedure IconCircle(Var Icon: TIcon16; CX, CY, R: Integer; C: Byte);
+Var
+ X, Y, D: Integer;
+Begin
+ X := 0;
+ Y := R;
+ D := 3 - 2 * R;
+ While Y >= X Do Begin
+  IconPutPixel(Icon, CX + X, CY + Y, C);
+  IconPutPixel(Icon, CX - X, CY + Y, C);
+  IconPutPixel(Icon, CX + X, CY - Y, C);
+  IconPutPixel(Icon, CX - X, CY - Y, C);
+  IconPutPixel(Icon, CX + Y, CY + X, C);
+  IconPutPixel(Icon, CX - Y, CY + X, C);
+  IconPutPixel(Icon, CX + Y, CY - X, C);
+  IconPutPixel(Icon, CX - Y, CY - X, C);
+  If D < 0 Then
+   D := D + 4 * X + 6
+  Else Begin
+   D := D + 4 * (X - Y) + 10;
+   Y := Y - 1;
+  End;
+  X := X + 1;
+ End;
+End;
+
+{ Dessiner une icône 16x16 à l'écran (255 = transparent) }
+Procedure DrawIcon16x16(X, Y: Integer; Var Icon: TIcon16);
+Var
+ IX, IY: Integer;
+ C: Byte;
+Begin
+ For IY := 0 To 15 Do
+  For IX := 0 To 15 Do Begin
+   C := Icon[IY, IX];
+   If C <> 255 Then
+    PutPixel(X + IX, Y + IY, C);
+  End;
+End;
+
+{ --- Icônes 16x16 : commandes communes (portées de DEVENV.PAS) -------------- }
+
+Procedure MakeIconNewFile(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconFillRect(Icon, 3, 1, 11, 14, 15);
+ IconRect(Icon, 3, 1, 11, 14, 0);
+ IconPutPixel(Icon, 9, 1, 0);
+ IconPutPixel(Icon, 10, 2, 0);
+ IconPutPixel(Icon, 11, 3, 0);
+ IconPutPixel(Icon, 9, 3, 8);
+ IconPutPixel(Icon, 10, 3, 8);
+ IconHLine(Icon, 5, 9, 6, 8);
+ IconHLine(Icon, 5, 9, 8, 8);
+ IconHLine(Icon, 5, 8, 10, 8);
+End;
+
+Procedure MakeIconOpen(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconFillRect(Icon, 1, 5, 14, 13, 14);
+ IconRect(Icon, 1, 5, 14, 13, 0);
+ IconFillRect(Icon, 1, 3, 6, 5, 14);
+ IconRect(Icon, 1, 3, 6, 5, 0);
+ IconHLine(Icon, 2, 13, 7, 0);
+End;
+
+Procedure MakeIconSave(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconFillRect(Icon, 2, 1, 13, 14, 1);
+ IconRect(Icon, 2, 1, 13, 14, 0);
+ IconFillRect(Icon, 4, 1, 11, 5, 15);
+ IconRect(Icon, 4, 1, 11, 5, 0);
+ IconFillRect(Icon, 5, 9, 10, 14, 8);
+ IconRect(Icon, 5, 9, 10, 14, 0);
+End;
+
+Procedure MakeIconUndo(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconPutPixel(Icon, 3, 6, 1);
+ IconPutPixel(Icon, 4, 5, 1);
+ IconPutPixel(Icon, 5, 4, 1);
+ IconHLine(Icon, 5, 11, 6, 1);
+ IconHLine(Icon, 5, 11, 7, 1);
+ IconPutPixel(Icon, 5, 8, 1);
+ IconPutPixel(Icon, 4, 7, 1);
+ IconPutPixel(Icon, 3, 8, 1);
+ IconVLine(Icon, 11, 7, 11, 1);
+ IconVLine(Icon, 12, 7, 11, 1);
+ IconHLine(Icon, 7, 11, 11, 1);
+End;
+
+Procedure MakeIconRedo(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconPutPixel(Icon, 12, 6, 1);
+ IconPutPixel(Icon, 11, 5, 1);
+ IconPutPixel(Icon, 10, 4, 1);
+ IconHLine(Icon, 4, 10, 6, 1);
+ IconHLine(Icon, 4, 10, 7, 1);
+ IconPutPixel(Icon, 10, 8, 1);
+ IconPutPixel(Icon, 11, 7, 1);
+ IconPutPixel(Icon, 12, 8, 1);
+ IconVLine(Icon, 4, 7, 11, 1);
+ IconVLine(Icon, 3, 7, 11, 1);
+ IconHLine(Icon, 4, 8, 11, 1);
+End;
+
+Procedure MakeIconCopy(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconFillRect(Icon, 4, 3, 13, 14, 15);
+ IconRect(Icon, 4, 3, 13, 14, 0);
+ IconFillRect(Icon, 1, 0, 10, 11, 15);
+ IconRect(Icon, 1, 0, 10, 11, 0);
+ IconHLine(Icon, 3, 8, 3, 8);
+ IconHLine(Icon, 3, 8, 5, 8);
+ IconHLine(Icon, 3, 7, 7, 8);
+End;
+
+{ --- Icônes 16x16 : commandes spécifiques CAO ------------------------------- }
+
+{ Imprimer : imprimante stylisée }
+Procedure MakeIconPrint(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ { Feuille du dessus }
+ IconFillRect(Icon, 4, 1, 11, 5, 15);
+ IconRect(Icon, 4, 1, 11, 5, 0);
+ { Corps imprimante }
+ IconFillRect(Icon, 2, 6, 13, 11, 8);
+ IconRect(Icon, 2, 6, 13, 11, 0);
+ IconPutPixel(Icon, 12, 8, 2);  { LED verte }
+ { Feuille sortante }
+ IconFillRect(Icon, 4, 10, 11, 14, 15);
+ IconRect(Icon, 4, 10, 11, 14, 0);
+ IconHLine(Icon, 5, 10, 12, 8);
+ IconHLine(Icon, 5, 9, 13, 8);
+End;
+
+{ Zoom : loupe }
+Procedure MakeIconZoom(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconCircle(Icon, 6, 6, 4, 0);
+ IconCircle(Icon, 6, 6, 3, 0);
+ IconFillRect(Icon, 4, 4, 8, 8, 15);
+ IconCircle(Icon, 6, 6, 4, 0);
+ IconHLine(Icon, 5, 7, 6, 1);   { + horizontal }
+ IconVLine(Icon, 6, 5, 7, 1);   { + vertical }
+ { Manche }
+ IconLine(Icon, 9, 9, 13, 13, 0);
+ IconLine(Icon, 10, 9, 13, 12, 0);
+End;
+
+{ Ligne : segment diagonal avec extrémités marquées }
+Procedure MakeIconLine(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconLine(Icon, 2, 13, 13, 2, 0);
+ IconFillRect(Icon, 1, 12, 3, 14, 4);
+ IconFillRect(Icon, 12, 1, 14, 3, 4);
+End;
+
+{ Polyligne : zigzag connecté }
+Procedure MakeIconPolyline(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconLine(Icon, 1, 12, 5, 4, 0);
+ IconLine(Icon, 5, 4, 9, 11, 0);
+ IconLine(Icon, 9, 11, 14, 3, 0);
+ IconFillRect(Icon, 0, 11, 2, 13, 4);
+ IconFillRect(Icon, 4, 3, 6, 5, 4);
+ IconFillRect(Icon, 8, 10, 10, 12, 4);
+ IconFillRect(Icon, 13, 2, 15, 4, 4);
+End;
+
+{ Rectangle : cadre simple }
+Procedure MakeIconRectangle(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconRect(Icon, 2, 3, 13, 12, 0);
+ IconFillRect(Icon, 1, 2, 3, 4, 4);
+ IconFillRect(Icon, 12, 11, 14, 13, 4);
+End;
+
+{ Polygone : hexagone régulier }
+Procedure MakeIconPolygon(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconLine(Icon, 4, 2, 11, 2, 0);
+ IconLine(Icon, 11, 2, 14, 8, 0);
+ IconLine(Icon, 14, 8, 11, 13, 0);
+ IconLine(Icon, 11, 13, 4, 13, 0);
+ IconLine(Icon, 4, 13, 1, 8, 0);
+ IconLine(Icon, 1, 8, 4, 2, 0);
+End;
+
+{ Cercle : cercle simple }
+Procedure MakeIconCircle(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconCircle(Icon, 7, 7, 6, 0);
+ IconPutPixel(Icon, 7, 7, 4);
+End;
+
+{ Arc : demi-cercle supérieur }
+Procedure MakeIconArc(Var Icon: TIcon16);
+Var
+ X, Y, D: Integer;
+Begin
+ ClearIcon(Icon, 255);
+ { Demi-cercle (Y <= centre) }
+ X := 0;
+ Y := 6;
+ D := 3 - 12;
+ While Y >= X Do Begin
+  IconPutPixel(Icon, 7 + X, 9 - Y, 0);
+  IconPutPixel(Icon, 7 - X, 9 - Y, 0);
+  IconPutPixel(Icon, 7 + Y, 9 - X, 0);
+  IconPutPixel(Icon, 7 - Y, 9 - X, 0);
+  If D < 0 Then D := D + 4 * X + 6
+  Else Begin D := D + 4 * (X - Y) + 10; Y := Y - 1; End;
+  X := X + 1;
+ End;
+ IconHLine(Icon, 1, 13, 9, 0);
+End;
+
+{ Ellipse : ovale aplati }
+Procedure MakeIconEllipse(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconHLine(Icon, 4, 11, 4, 0);
+ IconHLine(Icon, 4, 11, 11, 0);
+ IconHLine(Icon, 2, 13, 7, 0);
+ IconHLine(Icon, 2, 13, 8, 0);
+ IconPutPixel(Icon, 3, 5, 0);
+ IconPutPixel(Icon, 12, 5, 0);
+ IconPutPixel(Icon, 3, 10, 0);
+ IconPutPixel(Icon, 12, 10, 0);
+ IconPutPixel(Icon, 2, 6, 0);
+ IconPutPixel(Icon, 13, 6, 0);
+ IconPutPixel(Icon, 2, 9, 0);
+ IconPutPixel(Icon, 13, 9, 0);
+End;
+
+{ Texte : lettre A capitale }
+Procedure MakeIconText(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconLine(Icon, 7, 2, 3, 13, 0);
+ IconLine(Icon, 8, 2, 12, 13, 0);
+ IconHLine(Icon, 5, 10, 9, 0);
+End;
+
+{ Hachure : carré rempli de diagonales }
+Procedure MakeIconHatch(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconRect(Icon, 2, 2, 13, 13, 0);
+ IconLine(Icon, 2, 6, 6, 2, 1);
+ IconLine(Icon, 2, 10, 10, 2, 1);
+ IconLine(Icon, 2, 13, 13, 2, 1);
+ IconLine(Icon, 6, 13, 13, 6, 1);
+ IconLine(Icon, 10, 13, 13, 10, 1);
+End;
+
+{ Point : croix marqueur }
+Procedure MakeIconPoint(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconHLine(Icon, 3, 11, 7, 0);
+ IconVLine(Icon, 7, 3, 11, 0);
+ IconFillRect(Icon, 6, 6, 8, 8, 4);
+End;
+
+{ Effacer : X rouge sur ligne }
+Procedure MakeIconErase(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconLine(Icon, 2, 12, 13, 1, 8);
+ IconLine(Icon, 3, 13, 14, 2, 8);
+ IconLine(Icon, 3, 3, 12, 12, 4);
+ IconLine(Icon, 4, 3, 12, 11, 4);
+ IconLine(Icon, 12, 3, 3, 12, 4);
+ IconLine(Icon, 11, 3, 3, 11, 4);
+End;
+
+{ Déplacer : croix de flèches 4 directions }
+Procedure MakeIconMove(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconHLine(Icon, 2, 13, 7, 1);
+ IconHLine(Icon, 2, 13, 8, 1);
+ IconVLine(Icon, 7, 2, 13, 1);
+ IconVLine(Icon, 8, 2, 13, 1);
+ { Pointes haut/bas }
+ IconPutPixel(Icon, 6, 3, 1); IconPutPixel(Icon, 9, 3, 1);
+ IconPutPixel(Icon, 5, 4, 1); IconPutPixel(Icon, 10, 4, 1);
+ IconPutPixel(Icon, 6, 12, 1); IconPutPixel(Icon, 9, 12, 1);
+ IconPutPixel(Icon, 5, 11, 1); IconPutPixel(Icon, 10, 11, 1);
+ { Pointes gauche/droite }
+ IconPutPixel(Icon, 3, 6, 1); IconPutPixel(Icon, 3, 9, 1);
+ IconPutPixel(Icon, 4, 5, 1); IconPutPixel(Icon, 4, 10, 1);
+ IconPutPixel(Icon, 12, 6, 1); IconPutPixel(Icon, 12, 9, 1);
+ IconPutPixel(Icon, 11, 5, 1); IconPutPixel(Icon, 11, 10, 1);
+End;
+
+{ Miroir : axe vertical + 2 triangles symétriques }
+Procedure MakeIconMirror(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconVLine(Icon, 7, 1, 14, 0);
+ IconVLine(Icon, 8, 1, 14, 0);
+ IconLine(Icon, 1, 3, 5, 12, 1);
+ IconLine(Icon, 5, 12, 1, 12, 1);
+ IconLine(Icon, 1, 12, 1, 3, 1);
+ IconLine(Icon, 14, 3, 10, 12, 1);
+ IconLine(Icon, 10, 12, 14, 12, 1);
+ IconLine(Icon, 14, 12, 14, 3, 1);
+End;
+
+{ Rotation : flèche circulaire }
+Procedure MakeIconRotate(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconCircle(Icon, 7, 8, 5, 0);
+ { Effacer un quart pour faire la flèche }
+ IconHLine(Icon, 7, 12, 8, 255);
+ IconPutPixel(Icon, 12, 7, 255);
+ IconPutPixel(Icon, 12, 9, 255);
+ { Pointe }
+ IconPutPixel(Icon, 11, 4, 0);
+ IconPutPixel(Icon, 12, 5, 0);
+ IconPutPixel(Icon, 13, 6, 0);
+ IconLine(Icon, 11, 4, 14, 7, 0);
+ IconLine(Icon, 9, 5, 11, 4, 0);
+End;
+
+{ Échelle : petit carré + grand carré }
+Procedure MakeIconScale(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconRect(Icon, 1, 9, 6, 14, 0);
+ IconRect(Icon, 4, 1, 14, 11, 0);
+ IconLine(Icon, 6, 9, 14, 1, 1);
+ IconPutPixel(Icon, 13, 2, 1);
+ IconPutPixel(Icon, 14, 2, 1);
+ IconPutPixel(Icon, 13, 1, 1);
+End;
+
+{ Décalage : deux rectangles parallèles }
+Procedure MakeIconOffset(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconRect(Icon, 1, 4, 8, 11, 0);
+ IconRect(Icon, 4, 1, 14, 14, 1);
+End;
+
+{ Trim : ciseaux }
+Procedure MakeIconTrim(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconLine(Icon, 2, 13, 13, 2, 8);  { ligne à trimer }
+ IconRect(Icon, 1, 9, 4, 13, 0);   { poignée gauche }
+ IconRect(Icon, 9, 9, 12, 13, 0);  { poignée droite }
+ IconLine(Icon, 4, 11, 8, 7, 0);
+ IconLine(Icon, 9, 11, 8, 7, 0);
+ IconPutPixel(Icon, 7, 6, 0);
+ IconPutPixel(Icon, 8, 6, 0);
+End;
+
+{ Extend : ligne + flèche vers cible }
+Procedure MakeIconExtend(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconVLine(Icon, 13, 2, 13, 0);   { mur cible }
+ IconVLine(Icon, 14, 2, 13, 0);
+ IconHLine(Icon, 2, 11, 7, 0);    { ligne à étendre }
+ IconHLine(Icon, 2, 11, 8, 0);
+ { Pointe de flèche }
+ IconPutPixel(Icon, 9, 5, 0);
+ IconPutPixel(Icon, 10, 6, 0);
+ IconPutPixel(Icon, 11, 7, 0);
+ IconPutPixel(Icon, 11, 8, 0);
+ IconPutPixel(Icon, 10, 9, 0);
+ IconPutPixel(Icon, 9, 10, 0);
+End;
+
+{ Fillet : coin avec arrondi }
+Procedure MakeIconFillet(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconHLine(Icon, 8, 14, 13, 0);
+ IconVLine(Icon, 2, 1, 7, 0);
+ { Quart de cercle entre (2,7) et (8,13) }
+ IconPutPixel(Icon, 3, 7, 0);
+ IconPutPixel(Icon, 4, 8, 0);
+ IconPutPixel(Icon, 5, 9, 0);
+ IconPutPixel(Icon, 5, 10, 0);
+ IconPutPixel(Icon, 6, 11, 0);
+ IconPutPixel(Icon, 7, 12, 0);
+ IconPutPixel(Icon, 8, 12, 0);
+ IconPutPixel(Icon, 2, 8, 1);
+ IconPutPixel(Icon, 3, 9, 1);
+ IconPutPixel(Icon, 4, 10, 1);
+ IconPutPixel(Icon, 5, 11, 1);
+ IconPutPixel(Icon, 6, 12, 1);
+End;
+
+{ Couche/Layer : feuilles empilées avec L }
+Procedure MakeIconLayer(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconFillRect(Icon, 2, 8, 11, 13, 14);
+ IconRect(Icon, 2, 8, 11, 13, 0);
+ IconFillRect(Icon, 4, 5, 13, 10, 11);
+ IconRect(Icon, 4, 5, 13, 10, 0);
+ IconFillRect(Icon, 6, 2, 14, 7, 15);
+ IconRect(Icon, 6, 2, 14, 7, 0);
+End;
+
+{ Layer current : feuille + plus }
+Procedure MakeIconLayerCurrent(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconFillRect(Icon, 2, 2, 9, 11, 15);
+ IconRect(Icon, 2, 2, 9, 11, 0);
+ { Plus vert }
+ IconHLine(Icon, 9, 13, 11, 2);
+ IconHLine(Icon, 9, 13, 12, 2);
+ IconVLine(Icon, 10, 9, 14, 2);
+ IconVLine(Icon, 11, 9, 14, 2);
+End;
+
+{ Layer off : feuille + X }
+Procedure MakeIconLayerOff(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconFillRect(Icon, 2, 2, 11, 13, 15);
+ IconRect(Icon, 2, 2, 11, 13, 0);
+ IconLine(Icon, 3, 3, 10, 12, 4);
+ IconLine(Icon, 10, 3, 3, 12, 4);
+End;
+
+{ Layer freeze : flocon }
+Procedure MakeIconLayerFreeze(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ { Axe vertical }
+ IconVLine(Icon, 7, 1, 14, 9);
+ IconVLine(Icon, 8, 1, 14, 9);
+ { Axe horizontal }
+ IconHLine(Icon, 1, 14, 7, 9);
+ IconHLine(Icon, 1, 14, 8, 9);
+ { Diagonales }
+ IconLine(Icon, 3, 3, 12, 12, 9);
+ IconLine(Icon, 12, 3, 3, 12, 9);
+ { Petites pointes }
+ IconPutPixel(Icon, 6, 2, 9); IconPutPixel(Icon, 9, 2, 9);
+ IconPutPixel(Icon, 6, 13, 9); IconPutPixel(Icon, 9, 13, 9);
+ IconPutPixel(Icon, 2, 6, 9); IconPutPixel(Icon, 2, 9, 9);
+ IconPutPixel(Icon, 13, 6, 9); IconPutPixel(Icon, 13, 9, 9);
+End;
+
+{ Propriétés : feuille avec lignes de texte }
+Procedure MakeIconProperties(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconFillRect(Icon, 2, 1, 13, 14, 15);
+ IconRect(Icon, 2, 1, 13, 14, 0);
+ IconHLine(Icon, 4, 11, 3, 1);
+ IconHLine(Icon, 4, 8, 5, 0);
+ IconHLine(Icon, 9, 11, 5, 1);
+ IconHLine(Icon, 4, 8, 7, 0);
+ IconHLine(Icon, 9, 11, 7, 1);
+ IconHLine(Icon, 4, 8, 9, 0);
+ IconHLine(Icon, 9, 11, 9, 1);
+ IconHLine(Icon, 4, 8, 11, 0);
+ IconHLine(Icon, 9, 11, 11, 1);
+End;
+
+{ Match properties : pinceau }
+Procedure MakeIconMatchProp(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ { Tête du pinceau }
+ IconFillRect(Icon, 2, 2, 9, 6, 14);
+ IconRect(Icon, 2, 2, 9, 6, 0);
+ { Métal }
+ IconFillRect(Icon, 3, 7, 8, 9, 8);
+ IconRect(Icon, 3, 7, 8, 9, 0);
+ { Poils }
+ IconFillRect(Icon, 4, 10, 7, 14, 4);
+ IconRect(Icon, 4, 10, 7, 14, 0);
+ { Goutte de peinture }
+ IconPutPixel(Icon, 11, 9, 4);
+ IconPutPixel(Icon, 12, 10, 4);
+ IconPutPixel(Icon, 11, 11, 4);
+ IconPutPixel(Icon, 12, 12, 4);
+ IconPutPixel(Icon, 13, 11, 4);
+End;
+
+{ List : lignes de liste avec puces }
+Procedure MakeIconList(Var Icon: TIcon16);
+Begin
+ ClearIcon(Icon, 255);
+ IconPutPixel(Icon, 2, 3, 0); IconPutPixel(Icon, 3, 3, 0);
+ IconPutPixel(Icon, 2, 4, 0); IconPutPixel(Icon, 3, 4, 0);
+ IconHLine(Icon, 5, 13, 3, 0);
+ IconHLine(Icon, 5, 13, 4, 0);
+ IconPutPixel(Icon, 2, 7, 0); IconPutPixel(Icon, 3, 7, 0);
+ IconPutPixel(Icon, 2, 8, 0); IconPutPixel(Icon, 3, 8, 0);
+ IconHLine(Icon, 5, 13, 7, 0);
+ IconHLine(Icon, 5, 13, 8, 0);
+ IconPutPixel(Icon, 2, 11, 0); IconPutPixel(Icon, 3, 11, 0);
+ IconPutPixel(Icon, 2, 12, 0); IconPutPixel(Icon, 3, 12, 0);
+ IconHLine(Icon, 5, 13, 11, 0);
+ IconHLine(Icon, 5, 13, 12, 0);
+End;
+
+{ --- Initialisation de toutes les icônes des barres d'outils ---------------- }
+
+Procedure InitToolbarIcons;
+Begin
+ { ----- TOOLBAR_STANDARD ----- }
+ MakeIconNewFile(Toolbars[TOOLBAR_STANDARD].Buttons[0].Icon);
+ Toolbars[TOOLBAR_STANDARD].Buttons[0].HasIcon := True;
+ MakeIconOpen(Toolbars[TOOLBAR_STANDARD].Buttons[1].Icon);
+ Toolbars[TOOLBAR_STANDARD].Buttons[1].HasIcon := True;
+ MakeIconSave(Toolbars[TOOLBAR_STANDARD].Buttons[2].Icon);
+ Toolbars[TOOLBAR_STANDARD].Buttons[2].HasIcon := True;
+ { 3 = séparateur }
+ MakeIconPrint(Toolbars[TOOLBAR_STANDARD].Buttons[4].Icon);
+ Toolbars[TOOLBAR_STANDARD].Buttons[4].HasIcon := True;
+ { 5 = séparateur }
+ MakeIconUndo(Toolbars[TOOLBAR_STANDARD].Buttons[6].Icon);
+ Toolbars[TOOLBAR_STANDARD].Buttons[6].HasIcon := True;
+ MakeIconRedo(Toolbars[TOOLBAR_STANDARD].Buttons[7].Icon);
+ Toolbars[TOOLBAR_STANDARD].Buttons[7].HasIcon := True;
+ { 8 = séparateur }
+ MakeIconZoom(Toolbars[TOOLBAR_STANDARD].Buttons[9].Icon);
+ Toolbars[TOOLBAR_STANDARD].Buttons[9].HasIcon := True;
+
+ { ----- TOOLBAR_DRAW ----- }
+ MakeIconLine(Toolbars[TOOLBAR_DRAW].Buttons[0].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[0].HasIcon := True;
+ MakeIconPolyline(Toolbars[TOOLBAR_DRAW].Buttons[1].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[1].HasIcon := True;
+ MakeIconRectangle(Toolbars[TOOLBAR_DRAW].Buttons[2].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[2].HasIcon := True;
+ MakeIconPolygon(Toolbars[TOOLBAR_DRAW].Buttons[3].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[3].HasIcon := True;
+ { 4 = séparateur }
+ MakeIconCircle(Toolbars[TOOLBAR_DRAW].Buttons[5].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[5].HasIcon := True;
+ MakeIconArc(Toolbars[TOOLBAR_DRAW].Buttons[6].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[6].HasIcon := True;
+ MakeIconEllipse(Toolbars[TOOLBAR_DRAW].Buttons[7].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[7].HasIcon := True;
+ { 8 = séparateur }
+ MakeIconText(Toolbars[TOOLBAR_DRAW].Buttons[9].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[9].HasIcon := True;
+ MakeIconHatch(Toolbars[TOOLBAR_DRAW].Buttons[10].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[10].HasIcon := True;
+ MakeIconPoint(Toolbars[TOOLBAR_DRAW].Buttons[11].Icon);
+ Toolbars[TOOLBAR_DRAW].Buttons[11].HasIcon := True;
+
+ { ----- TOOLBAR_MODIFY ----- }
+ MakeIconErase(Toolbars[TOOLBAR_MODIFY].Buttons[0].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[0].HasIcon := True;
+ MakeIconCopy(Toolbars[TOOLBAR_MODIFY].Buttons[1].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[1].HasIcon := True;
+ MakeIconMove(Toolbars[TOOLBAR_MODIFY].Buttons[2].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[2].HasIcon := True;
+ MakeIconMirror(Toolbars[TOOLBAR_MODIFY].Buttons[3].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[3].HasIcon := True;
+ { 4 = séparateur }
+ MakeIconRotate(Toolbars[TOOLBAR_MODIFY].Buttons[5].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[5].HasIcon := True;
+ MakeIconScale(Toolbars[TOOLBAR_MODIFY].Buttons[6].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[6].HasIcon := True;
+ MakeIconOffset(Toolbars[TOOLBAR_MODIFY].Buttons[7].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[7].HasIcon := True;
+ { 8 = séparateur }
+ MakeIconTrim(Toolbars[TOOLBAR_MODIFY].Buttons[9].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[9].HasIcon := True;
+ MakeIconExtend(Toolbars[TOOLBAR_MODIFY].Buttons[10].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[10].HasIcon := True;
+ MakeIconFillet(Toolbars[TOOLBAR_MODIFY].Buttons[11].Icon);
+ Toolbars[TOOLBAR_MODIFY].Buttons[11].HasIcon := True;
+
+ { ----- TOOLBAR_LAYERS ----- }
+ MakeIconLayer(Toolbars[TOOLBAR_LAYERS].Buttons[0].Icon);
+ Toolbars[TOOLBAR_LAYERS].Buttons[0].HasIcon := True;
+ MakeIconLayerCurrent(Toolbars[TOOLBAR_LAYERS].Buttons[1].Icon);
+ Toolbars[TOOLBAR_LAYERS].Buttons[1].HasIcon := True;
+ MakeIconLayerOff(Toolbars[TOOLBAR_LAYERS].Buttons[2].Icon);
+ Toolbars[TOOLBAR_LAYERS].Buttons[2].HasIcon := True;
+ MakeIconLayerFreeze(Toolbars[TOOLBAR_LAYERS].Buttons[3].Icon);
+ Toolbars[TOOLBAR_LAYERS].Buttons[3].HasIcon := True;
+
+ { ----- TOOLBAR_PROPERTIES ----- }
+ MakeIconProperties(Toolbars[TOOLBAR_PROPERTIES].Buttons[0].Icon);
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[0].HasIcon := True;
+ MakeIconMatchProp(Toolbars[TOOLBAR_PROPERTIES].Buttons[1].Icon);
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[1].HasIcon := True;
+ MakeIconList(Toolbars[TOOLBAR_PROPERTIES].Buttons[2].Icon);
+ Toolbars[TOOLBAR_PROPERTIES].Buttons[2].HasIcon := True;
+End;
+
 { Dessiner un bouton de barre d'outils }
 Procedure DrawToolbarButton(X, Y: Integer; Var Button: TToolbarButton;
                            IsHovered: Boolean);
@@ -2763,13 +3457,18 @@ Begin
    Line(X, Y + BtnSize - 1, X + BtnSize - 1, Y + BtnSize - 1);
   End;
 
-  { Dessiner le symbole centré }
-  If Button.Enabled Then
-   SetColor(Black)
-  Else
-   SetColor(DarkGray);
-  OutTextXY(X + (BtnSize - TextWidth(Button.Symbol)) div 2,
-            Y + (BtnSize - 10) div 2, Button.Symbol);
+  { Dessiner l'icône (si disponible) ou le symbole en fallback }
+  If Button.HasIcon Then Begin
+   DrawIcon16x16(X + (BtnSize - 16) div 2, Y + (BtnSize - 16) div 2,
+                 Button.Icon);
+  End Else Begin
+   If Button.Enabled Then
+    SetColor(Black)
+   Else
+    SetColor(DarkGray);
+   OutTextXY(X + (BtnSize - TextWidth(Button.Symbol)) div 2,
+             Y + (BtnSize - 10) div 2, Button.Symbol);
+  End;
  End;
 End;
 
@@ -15149,6 +15848,7 @@ BEGIN
 
  { Initialiser les barres d'outils - TODO 5 }
  InitToolbars;
+ InitToolbarIcons;
 
  { Initialiser la gestion de la souris - TODO 6 }
  InitMouseState;

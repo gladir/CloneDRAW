@@ -8349,6 +8349,29 @@ Begin
  WriteLn(F, '  <polygon points="' + Points + '" ' + ShapeToSVGStyle(Shape) + ' />');
 End;
 
+{ Echappement XML basique pour le contenu textuel d'un noeud SVG. }
+Function XMLEscape(Const S: String): String;
+Var
+ I: Integer;
+ R: String;
+ C: Char;
+Begin
+ R := '';
+ For I := 1 to Length(S) do Begin
+  C := S[I];
+  Case C of
+   '&': R := R + '&amp;';
+   '<': R := R + '&lt;';
+   '>': R := R + '&gt;';
+   '"': R := R + '&quot;';
+   '''': R := R + '&apos;';
+  Else
+   R := R + C;
+  End;
+ End;
+ XMLEscape := R;
+End;
+
 { ProcÃ©dure pour Ã©crire un texte en SVG }
 Procedure WriteSVGText(Var F: Text; Const Shape: TShapeObject);
 Var
@@ -8366,7 +8389,7 @@ Begin
  Style := Style + 'font-size:14px;font-family:sans-serif;"';
 
  WriteLn(F, '  <text x="' + IntToStrSVG(Shape.X1) + '" y="' + IntToStrSVG(Shape.Y2) +
-            '" ' + Style + '>' + Shape.Text + '</text>');
+            '" ' + Style + '>' + XMLEscape(Shape.Text) + '</text>');
 End;
 
 { ProcÃ©dure pour Ã©crire un connecteur en SVG (comme une ligne avec des marqueurs) }
@@ -8379,18 +8402,35 @@ Begin
 End;
 
 { ProcÃ©dure pour Ã©crire une courbe de BÃ©zier en SVG }
+{ - 4 points     -> 1 segment cubique  (M c1 c2 c3)               }
+{ - 4+3k points  -> k+1 segments cubiques (M c1 c2 c3 c4 c5 c6 ...)}
+{ - sinon        -> polyligne par segments droits                 }
 Procedure WriteSVGBezier(Var F: Text; Const Shape: TShapeObject);
 Var
  PathData: String;
- I: Integer;
+ I, N: Integer;
 Begin
- If Shape.PointCount < 2 Then Exit;
+ N := Shape.PointCount;
+ If N < 2 Then Exit;
 
- { CrÃ©er un chemin avec des segments de ligne pour simplifier }
  PathData := 'M' + IntToStrSVG(Shape.Points[1].X) + ',' + IntToStrSVG(Shape.Points[1].Y);
 
- For I := 2 to Shape.PointCount do
-  PathData := PathData + ' L' + IntToStrSVG(Shape.Points[I].X) + ',' + IntToStrSVG(Shape.Points[I].Y);
+ If (N >= 4) And (((N - 1) Mod 3) = 0) Then Begin
+  { Cubic Bezier : groupes de 3 points (deux controles + ancre) }
+  I := 2;
+  While I + 2 <= N do Begin
+   PathData := PathData + ' C' +
+               IntToStrSVG(Shape.Points[I].X)   + ',' + IntToStrSVG(Shape.Points[I].Y) + ' ' +
+               IntToStrSVG(Shape.Points[I+1].X) + ',' + IntToStrSVG(Shape.Points[I+1].Y) + ' ' +
+               IntToStrSVG(Shape.Points[I+2].X) + ',' + IntToStrSVG(Shape.Points[I+2].Y);
+   I := I + 3;
+  End;
+ End
+ Else Begin
+  { Repli : polyligne }
+  For I := 2 to N do
+   PathData := PathData + ' L' + IntToStrSVG(Shape.Points[I].X) + ',' + IntToStrSVG(Shape.Points[I].Y);
+ End;
 
  WriteLn(F, '  <path d="' + PathData + '" ' + ShapeToSVGStyle(Shape) + ' />');
 End;
@@ -8656,6 +8696,12 @@ Type
 Var
  PixelBuffer: PPixelBuffer;
  BufferWidth, BufferHeight: Integer;
+ { Selecteur de mode d'export raster : True = capture canvas BGI (WYSIWYG),  }
+ { False = re-rendu depuis Shapes[] (rendu propre, sans residus dialogue).   }
+ ExportFromScreen: Boolean;
+
+{ Forward : helper unifie de preparation du PixelBuffer (defini plus bas). }
+Function PrepareExportBuffer(Var Width, Height: Integer): Boolean; Forward;
 
 { Initialiser le buffer de pixels }
 Procedure InitPixelBuffer(Width, Height: Integer);
@@ -9044,64 +9090,10 @@ End;
 { BitsPerPixel peut Ãªtre 1, 4, 8, ou 24 }
 Function SaveBMPFile(Const FileName: String; BitsPerPixel: Integer): Boolean;
 Var
- MinX, MinY, MaxX, MaxY: Integer;
  Width, Height: Integer;
- I: Integer;
 Begin
  SaveBMPFile := False;
-
- { Calculer les dimensions du dessin }
- MinX := 32767; MinY := 32767;
- MaxX := 0; MaxY := 0;
-
- For I := 1 to ShapeCount do Begin
-  If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
-  If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
-  If Shapes[I].X2 < MinX Then MinX := Shapes[I].X2;
-  If Shapes[I].Y2 < MinY Then MinY := Shapes[I].Y2;
-  If Shapes[I].X1 > MaxX Then MaxX := Shapes[I].X1;
-  If Shapes[I].Y1 > MaxY Then MaxY := Shapes[I].Y1;
-  If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
-  If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
- End;
-
- If ShapeCount = 0 Then Begin
-  Width := 640;
-  Height := 480;
-  MinX := 0;
-  MinY := 0;
- End
- Else Begin
-  Width := MaxX - MinX + 20;
-  Height := MaxY - MinY + 20;
-  If Width < 100 Then Width := 100;
-  If Height < 100 Then Height := 100;
- End;
-
- { Limiter les dimensions }
- If Width > 2048 Then Width := 2048;
- If Height > 2048 Then Height := 2048;
-
- { Initialiser le buffer et rendre les formes }
- InitPixelBuffer(Width, Height);
-
- { DÃ©caler les formes pour qu'elles commencent Ã  (10, 10) }
- For I := 1 to ShapeCount do Begin
-  Shapes[I].X1 := Shapes[I].X1 - MinX + 10;
-  Shapes[I].Y1 := Shapes[I].Y1 - MinY + 10;
-  Shapes[I].X2 := Shapes[I].X2 - MinX + 10;
-  Shapes[I].Y2 := Shapes[I].Y2 - MinY + 10;
- End;
-
- RenderShapesToBuffer;
-
- { Restaurer les positions originales }
- For I := 1 to ShapeCount do Begin
-  Shapes[I].X1 := Shapes[I].X1 + MinX - 10;
-  Shapes[I].Y1 := Shapes[I].Y1 + MinY - 10;
-  Shapes[I].X2 := Shapes[I].X2 + MinX - 10;
-  Shapes[I].Y2 := Shapes[I].Y2 + MinY - 10;
- End;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
 
  { Exporter selon le nombre de bits }
  Case BitsPerPixel of
@@ -9403,72 +9395,18 @@ End;
 Function SaveGIFFile(Const FileName: String; TransparentIndex: Integer): Boolean;
 Var
  F: File;
- MinX, MinY, MaxX, MaxY: Integer;
  Width, Height: Integer;
- I: Integer;
  HasTransparency: Boolean;
  ColorBits: Integer;
 Begin
  SaveGIFFile := False;
- ColorBits := 8;  { 256 couleurs }
+ ColorBits := 8;
  HasTransparency := (TransparentIndex >= 0) And (TransparentIndex <= 255);
 
- { Calculer les dimensions du dessin }
- MinX := 32767; MinY := 32767;
- MaxX := 0; MaxY := 0;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
 
- For I := 1 to ShapeCount do Begin
-  If Shapes[I].X1 < MinX Then MinX := Shapes[I].X1;
-  If Shapes[I].Y1 < MinY Then MinY := Shapes[I].Y1;
-  If Shapes[I].X2 < MinX Then MinX := Shapes[I].X2;
-  If Shapes[I].Y2 < MinY Then MinY := Shapes[I].Y2;
-  If Shapes[I].X1 > MaxX Then MaxX := Shapes[I].X1;
-  If Shapes[I].Y1 > MaxY Then MaxY := Shapes[I].Y1;
-  If Shapes[I].X2 > MaxX Then MaxX := Shapes[I].X2;
-  If Shapes[I].Y2 > MaxY Then MaxY := Shapes[I].Y2;
- End;
-
- If ShapeCount = 0 Then Begin
-  Width := 640;
-  Height := 480;
-  MinX := 0;
-  MinY := 0;
- End
- Else Begin
-  Width := MaxX - MinX + 20;
-  Height := MaxY - MinY + 20;
-  If Width < 100 Then Width := 100;
-  If Height < 100 Then Height := 100;
- End;
-
- { Limiter les dimensions }
- If Width > 2048 Then Width := 2048;
- If Height > 2048 Then Height := 2048;
-
- { Initialiser le buffer et rendre les formes }
- InitPixelBuffer(Width, Height);
-
- { Si transparence, initialiser avec la couleur transparente }
  If HasTransparency Then
   FillChar(PixelBuffer^, SizeOf(TPixelBuffer), TransparentIndex);
-
- { DÃ©caler les formes pour qu'elles commencent Ã  (10, 10) }
- For I := 1 to ShapeCount do Begin
-  Shapes[I].X1 := Shapes[I].X1 - MinX + 10;
-  Shapes[I].Y1 := Shapes[I].Y1 - MinY + 10;
-  Shapes[I].X2 := Shapes[I].X2 - MinX + 10;
-  Shapes[I].Y2 := Shapes[I].Y2 - MinY + 10;
- End;
-
- RenderShapesToBuffer;
-
- { Restaurer les positions originales }
- For I := 1 to ShapeCount do Begin
-  Shapes[I].X1 := Shapes[I].X1 + MinX - 10;
-  Shapes[I].Y1 := Shapes[I].Y1 + MinY - 10;
-  Shapes[I].X2 := Shapes[I].X2 + MinX - 10;
-  Shapes[I].Y2 := Shapes[I].Y2 + MinY - 10;
- End;
 
  { Ouvrir le fichier }
  Assign(F, FileName);
@@ -9957,7 +9895,6 @@ End;
 Function SaveJPEGFile(Const FileName: String; Quality: Integer): Boolean;
 Var
  F: File;
- MinX, MinY, MaxX, MaxY: Integer;
  Width, Height: Integer;
 Begin
  SaveJPEGFile := False;
@@ -9965,29 +9902,7 @@ Begin
  If JPEGQuality < 1 Then JPEGQuality := 1;
  If JPEGQuality > 100 Then JPEGQuality := 100;
 
- { Calculer les dimensions du dessin }
- If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Begin
-  { Pas de formes, crÃ©er une image par dÃ©faut }
-  MinX := 0; MinY := WORK_AREA_TOP;
-  MaxX := 640; MaxY := 480;
- End;
-
- Width := MaxX - MinX + 1;
- Height := MaxY - MinY + 1;
- If Width < 1 Then Width := 1;
- If Height < 1 Then Height := 1;
-
- { Initialiser le buffer de pixels et le remplir }
- InitPixelBuffer(Width, Height);
-
- { Repositionner les formes pour le buffer }
- AdjustShapesForBuffer(MinX, MinY);
-
- { Rendre les formes dans le buffer }
- RenderShapesToBuffer;
-
- { Restaurer les positions originales }
- AdjustShapesForBuffer(-MinX, -MinY);
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
 
  { Initialiser les tables de quantisation }
  InitJPEGQuantTables(JPEGQuality);
@@ -10180,142 +10095,198 @@ Begin
  WritePNGChunk(F, PNG_CHUNK_IHDR, Data, 13);
 End;
 
-{ Variables pour la compression DEFLATE simplifiÃ©e }
-Var
- PNGCompressBuffer: Array[0..65535] of Byte;
- PNGCompressLen: Integer;
+{ ============================================================================ }
+{ Streaming PNG IDAT writer.                                                   }
+{                                                                              }
+{ Plutot que de bufferiser toute l'image puis de l'ecrire en un seul chunk     }
+{ (ce qui plafonne a ~32 KB en -Mtp a cause de Integer 16-bit signe et         }
+{ produit des PNG tronques pour les images depassant ~128x128 en RGBA), on     }
+{ ecrit le chunk IDAT en streaming :                                           }
+{   - taille IDAT calculee a l'avance (zlib header + N blocs stored + adler)   }
+{   - octets ecrits directement dans le fichier au fur et a mesure             }
+{   - blocs deflate BTYPE=00 (stored) de 65535 octets maximum                  }
+{   - CRC-32 du chunk et Adler-32 du flux zlib mis a jour incrementalement     }
+{                                                                              }
+{ Pattern inspire de BMP2PNG.PAS de ce meme projet.                             }
+{ ============================================================================ }
 
-{ Ajouter un octet au buffer de compression }
-Procedure AddPNGCompressByte(B: Byte);
+Const
+ PNG_MaxStoredBlock = 65535;
+
+Var
+ PNG_IDATCRC:         LongInt;
+ PNG_IDATRemaining:   LongInt;
+ PNG_IDATBlockRemain: LongInt;
+ PNG_Adler_A:         LongInt;
+ PNG_Adler_B:         LongInt;
+ PNG_DestFile:        ^File;
+
+Procedure PNG_WriteRawByte(B: Byte);
+Var
+ Buf: Array[0..0] of Byte;
+ Wr: Word;
 Begin
- If PNGCompressLen < 65536 Then Begin
-  PNGCompressBuffer[PNGCompressLen] := B;
-  Inc(PNGCompressLen);
+ Buf[0] := B;
+ BlockWrite(PNG_DestFile^, Buf, 1, Wr);
+End;
+
+Procedure PNG_WriteRawBE32(Value: LongInt);
+Var
+ Buf: Array[0..3] of Byte;
+ Wr: Word;
+Begin
+ Buf[0] := Byte((Value Shr 24) And $FF);
+ Buf[1] := Byte((Value Shr 16) And $FF);
+ Buf[2] := Byte((Value Shr 8)  And $FF);
+ Buf[3] := Byte( Value         And $FF);
+ BlockWrite(PNG_DestFile^, Buf, 4, Wr);
+End;
+
+{ Met a jour le CRC du chunk IDAT pour un octet. }
+Procedure PNG_IDATCRCByte(B: Byte);
+Begin
+ PNG_IDATCRC := PNG_CRC_Table[(PNG_IDATCRC Xor LongInt(B)) And $FF] Xor (PNG_IDATCRC Shr 8);
+End;
+
+{ Ecrit un octet brut dans le fichier ET met a jour le CRC IDAT. }
+Procedure PNG_IDATByte(B: Byte);
+Begin
+ PNG_WriteRawByte(B);
+ PNG_IDATCRCByte(B);
+End;
+
+{ Ecrit l'en-tete d'un bloc deflate stored : 1 octet flags + 2 LEN + 2 NLEN. }
+Procedure PNG_WriteStoredHeader(BlockLen: LongInt; IsLast: Byte);
+Begin
+ PNG_IDATByte(IsLast);
+ PNG_IDATByte(Byte( BlockLen        And $FF));
+ PNG_IDATByte(Byte((BlockLen Shr 8) And $FF));
+ PNG_IDATByte(Byte((Not BlockLen)        And $FF));
+ PNG_IDATByte(Byte((Not BlockLen) Shr 8  And $FF));
+End;
+
+{ Adler-32 (RFC 1950) incremental. }
+Procedure PNG_UpdateAdler(B: Byte);
+Begin
+ PNG_Adler_A := (PNG_Adler_A + LongInt(B)) Mod 65521;
+ PNG_Adler_B := (PNG_Adler_B + PNG_Adler_A) Mod 65521;
+End;
+
+{ Initialise l'ecriture du chunk IDAT pour TotalRaw octets de donnees zlib. }
+Procedure PNG_BeginIDAT(TotalRaw: LongInt);
+Var
+ NumBlocks, IDATLen: LongInt;
+ TypeBuf: Array[0..3] of Byte;
+ Wr: Word;
+Begin
+ If TotalRaw <= 0 Then NumBlocks := 1
+                  Else NumBlocks := (TotalRaw + PNG_MaxStoredBlock - 1) Div PNG_MaxStoredBlock;
+ { Longueur du chunk IDAT = zlib hdr (2) + (5 + data) * NumBlocks + Adler (4). }
+ IDATLen := 2 + TotalRaw + NumBlocks * 5 + 4;
+
+ PNG_WriteRawBE32(IDATLen);
+
+ TypeBuf[0] := Ord('I');
+ TypeBuf[1] := Ord('D');
+ TypeBuf[2] := Ord('A');
+ TypeBuf[3] := Ord('T');
+ BlockWrite(PNG_DestFile^, TypeBuf, 4, Wr);
+
+ PNG_IDATCRC := LongInt($FFFFFFFF);
+ PNG_IDATCRCByte(TypeBuf[0]);
+ PNG_IDATCRCByte(TypeBuf[1]);
+ PNG_IDATCRCByte(TypeBuf[2]);
+ PNG_IDATCRCByte(TypeBuf[3]);
+
+ { zlib header : CMF=0x78 (deflate, 32K window), FLG=0x01 (compute checksum). }
+ PNG_IDATByte($78);
+ PNG_IDATByte($01);
+
+ PNG_Adler_A := 1;
+ PNG_Adler_B := 0;
+ PNG_IDATRemaining   := TotalRaw;
+ PNG_IDATBlockRemain := 0;
+
+ If TotalRaw <= 0 Then PNG_WriteStoredHeader(0, 1);
+End;
+
+{ Ecrit un bloc d'octets de donnees image dans le flux IDAT (decoupe en blocs }
+{ stored de PNG_MaxStoredBlock octets selon besoin).                          }
+Procedure PNG_WriteIDATBytes(Const Data: Array of Byte; Len: LongInt);
+Var
+ I, Chunk, BlockLen: LongInt;
+ IsLast: Byte;
+ SrcIdx: LongInt;
+Begin
+ SrcIdx := 0;
+ While Len > 0 Do Begin
+  If PNG_IDATBlockRemain = 0 Then Begin
+   If PNG_IDATRemaining > PNG_MaxStoredBlock Then BlockLen := PNG_MaxStoredBlock
+                                              Else BlockLen := PNG_IDATRemaining;
+   If BlockLen = PNG_IDATRemaining Then IsLast := 1 Else IsLast := 0;
+   PNG_WriteStoredHeader(BlockLen, IsLast);
+   PNG_IDATBlockRemain := BlockLen;
+  End;
+  If Len > PNG_IDATBlockRemain Then Chunk := PNG_IDATBlockRemain Else Chunk := Len;
+  For I := 0 To Chunk - 1 Do Begin
+   PNG_IDATByte(Data[SrcIdx]);
+   PNG_UpdateAdler(Data[SrcIdx]);
+   Inc(SrcIdx);
+  End;
+  Dec(Len, Chunk);
+  Dec(PNG_IDATRemaining, Chunk);
+  Dec(PNG_IDATBlockRemain, Chunk);
  End;
 End;
 
-{ Compression DEFLATE simplifiÃ©e (donnÃ©es non compressÃ©es) }
-{ Utilise des blocs non compressÃ©s pour la simplicitÃ© }
-Procedure CompressPNGData(Const InputData: Array of Byte; InputLen: Integer);
+{ Ferme le chunk IDAT : ecrit Adler-32 puis le CRC final. }
+Procedure PNG_EndIDAT;
 Var
- I: Integer;
- BlockLen: Integer;
- Pos: Integer;
- Adler1, Adler2: LongInt;
+ Adler: LongInt;
 Begin
- PNGCompressLen := 0;
-
- { En-tÃªte zlib }
- AddPNGCompressByte($78);  { CMF: deflate, 32K window }
- AddPNGCompressByte($01);  { FLG: no dict, level 0 }
-
- { DonnÃ©es en blocs non compressÃ©s }
- Pos := 0;
- While Pos < InputLen do Begin
-  BlockLen := InputLen - Pos;
-  If BlockLen > 65535 Then BlockLen := 65535;
-
-  { Header du bloc }
-  If Pos + BlockLen >= InputLen Then
-   AddPNGCompressByte($01)  { Dernier bloc, non compressÃ© }
-  Else
-   AddPNGCompressByte($00); { Pas dernier bloc, non compressÃ© }
-
-  { Longueur et complÃ©ment }
-  AddPNGCompressByte(BlockLen And $FF);
-  AddPNGCompressByte((BlockLen Shr 8) And $FF);
-  AddPNGCompressByte((Not BlockLen) And $FF);
-  AddPNGCompressByte((Not (BlockLen Shr 8)) And $FF);
-
-  { DonnÃ©es }
-  For I := 0 to BlockLen - 1 do
-   AddPNGCompressByte(InputData[Pos + I]);
-
-  Pos := Pos + BlockLen;
- End;
-
- { Calculer Adler-32 }
- Adler1 := 1;
- Adler2 := 0;
- For I := 0 to InputLen - 1 do Begin
-  Adler1 := (Adler1 + InputData[I]) Mod 65521;
-  Adler2 := (Adler2 + Adler1) Mod 65521;
- End;
-
- { Ã‰crire Adler-32 (big-endian) }
- AddPNGCompressByte((Adler2 Shr 8) And $FF);
- AddPNGCompressByte(Adler2 And $FF);
- AddPNGCompressByte((Adler1 Shr 8) And $FF);
- AddPNGCompressByte(Adler1 And $FF);
+ Adler := (PNG_Adler_B Shl 16) Or PNG_Adler_A;
+ PNG_IDATByte(Byte((Adler Shr 24) And $FF));
+ PNG_IDATByte(Byte((Adler Shr 16) And $FF));
+ PNG_IDATByte(Byte((Adler Shr 8)  And $FF));
+ PNG_IDATByte(Byte( Adler         And $FF));
+ PNG_IDATCRC := PNG_IDATCRC Xor LongInt($FFFFFFFF);
+ PNG_WriteRawBE32(PNG_IDATCRC);
 End;
 
-{ Type pour les donnÃ©es d'image PNG }
-Type
- TPNGRawData = Array[0..65535] of Byte;
- PPNGRawData = ^TPNGRawData;
-
-{ Ã‰crire les donnÃ©es d'image RGBA avec alpha }
+{ Ecrit le chunk IDAT complet en RGB 8-bit (3 octets/pixel + 1 octet filtre/ligne). }
+{ TransparentIndex >= 0 : la couleur d'index palette = TransparentIndex est        }
+{ traitee comme transparente via une tRNS RGB chunk (ecrite par l'appelant).       }
 Procedure WritePNGImageData(Var F: File; Width, Height: Integer; TransparentIndex: Integer);
 Var
- RawData: PPNGRawData;
- RawLen: LongInt;
  X, Y: Integer;
- R, G, B, A: Byte;
- Idx: LongInt;
+ R, G, B: Byte;
  PixelColor: Byte;
+ RowBuf: Array[0..8191] of Byte;     { 1 filtre + jusqu'a 2048*3 RGB bytes (avec marge) }
+ RowLen: LongInt;
+ TotalRaw: LongInt;
 Begin
- { Calculer la taille des donnÃ©es brutes (filtre + RGBA par pixel) }
- RawLen := LongInt(Height) * (1 + LongInt(Width) * 4);
+ PNG_DestFile := @F;
+ RowLen := 1 + LongInt(Width) * 3;
+ TotalRaw := LongInt(Height) * RowLen;
 
- { Limiter pour Ã©viter le dÃ©passement de mÃ©moire }
- If RawLen > 65535 Then Begin
-  { Pour les grandes images, on Ã©crit en plusieurs chunks }
-  RawLen := 65535;
- End;
+ PNG_BeginIDAT(TotalRaw);
 
- New(RawData);
- Idx := 0;
-
- For Y := 0 to Height - 1 do Begin
-  If Idx >= 65535 Then Break;
-
-  { Octet de filtre (0 = None) }
-  RawData^[Idx] := 0;
-  Inc(Idx);
-
-  For X := 0 to Width - 1 do Begin
-   If Idx + 4 > 65535 Then Break;
-
-   { Obtenir la couleur du pixel }
+ For Y := 0 To Height - 1 Do Begin
+  RowBuf[0] := 0;  { filter = None }
+  For X := 0 To Width - 1 Do Begin
    If (X < BufferWidth) And (Y < BufferHeight) Then
     PixelColor := PixelBuffer^[Y, X]
    Else
-    PixelColor := 15;  { Blanc par dÃ©faut }
-
-   { Convertir en RGB }
+    PixelColor := 15;
    PaletteToRGB(PixelColor, R, G, B);
-
-   { DÃ©terminer l'alpha }
-   If (TransparentIndex >= 0) And (PixelColor = TransparentIndex) Then
-    A := 0    { Transparent }
-   Else
-    A := 255; { Opaque }
-
-   { Ã‰crire RGBA }
-   RawData^[Idx] := R; Inc(Idx);
-   RawData^[Idx] := G; Inc(Idx);
-   RawData^[Idx] := B; Inc(Idx);
-   RawData^[Idx] := A; Inc(Idx);
+   RowBuf[1 + X * 3]     := R;
+   RowBuf[1 + X * 3 + 1] := G;
+   RowBuf[1 + X * 3 + 2] := B;
   End;
+  PNG_WriteIDATBytes(RowBuf, RowLen);
  End;
 
- { Compresser les donnÃ©es }
- CompressPNGData(RawData^, Idx);
-
- { Ã‰crire le chunk IDAT }
- WritePNGChunk(F, PNG_CHUNK_IDAT, PNGCompressBuffer, PNGCompressLen);
-
- Dispose(RawData);
+ PNG_EndIDAT;
 End;
 
 { Ã‰crire le chunk IEND }
@@ -10332,43 +10303,18 @@ End;
 Function SavePNGFile(Const FileName: String; TransparentIndex: Integer): Boolean;
 Var
  F: File;
- MinX, MinY, MaxX, MaxY: Integer;
  Width, Height: Integer;
+ TRNS: Array[0..5] of Byte;
+ R, G, B: Byte;
 Begin
  SavePNGFile := False;
 
  { Initialiser la table CRC }
  InitPNGCRCTable;
 
- { Calculer les dimensions du dessin }
- If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Begin
-  { Pas de formes, crÃ©er une image par dÃ©faut }
-  MinX := 0; MinY := WORK_AREA_TOP;
-  MaxX := 640; MaxY := 480;
- End;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
 
- Width := MaxX - MinX + 1;
- Height := MaxY - MinY + 1;
- If Width < 1 Then Width := 1;
- If Height < 1 Then Height := 1;
-
- { Limiter la taille pour Ã©viter les problÃ¨mes de mÃ©moire }
- If Width > 256 Then Width := 256;
- If Height > 256 Then Height := 256;
-
- { Initialiser le buffer de pixels et le remplir }
- InitPixelBuffer(Width, Height);
-
- { Repositionner les formes pour le buffer }
- AdjustShapesForBuffer(MinX, MinY);
-
- { Rendre les formes dans le buffer }
- RenderShapesToBuffer;
-
- { Restaurer les positions originales }
- AdjustShapesForBuffer(-MinX, -MinY);
-
- { CrÃ©er le fichier }
+ { Creer le fichier }
  Assign(F, FileName);
  {$I-}
  Rewrite(F, 1);
@@ -10378,16 +10324,25 @@ Begin
   Exit;
  End;
 
- { Ã‰crire la signature PNG }
+ { Signature PNG (8 octets fixes) }
  WritePNGSignature(F);
 
- { Ã‰crire le chunk IHDR (RGBA, 8 bits par canal) }
- WritePNGIHDR(F, Width, Height, PNG_COLOR_RGBA, 8);
+ { IHDR : RGB 8-bit (3 octets/pixel, sans canal alpha) }
+ WritePNGIHDR(F, Width, Height, PNG_COLOR_RGB, 8);
 
- { Ã‰crire les donnÃ©es d'image }
+ { tRNS optionnel : couleur transparente unique en RGB (2 octets / canal) }
+ If (TransparentIndex >= 0) And (TransparentIndex <= 15) Then Begin
+  PaletteToRGB(TransparentIndex, R, G, B);
+  TRNS[0] := 0; TRNS[1] := R;
+  TRNS[2] := 0; TRNS[3] := G;
+  TRNS[4] := 0; TRNS[5] := B;
+  WritePNGChunk(F, PNG_CHUNK_tRNS, TRNS, 6);
+ End;
+
+ { IDAT streaming (gere arbitrairement les images grandes) }
  WritePNGImageData(F, Width, Height, TransparentIndex);
 
- { Ã‰crire le chunk IEND }
+ { IEND }
  WritePNGIEND(F);
 
  Close(F);
@@ -10399,7 +10354,939 @@ End;
 { === FIN DES FONCTIONS D'EXPORT PNG === }
 { ============================================================================ }
 
-{ ProcÃ©dure New - CrÃ©er un nouveau document }
+
+{ ============================================================================ }
+{ === EXPORT EXTENSIONS: PCX, PPM, TIFF, WPG, XBM, BGX, FAX, DCM ============= }
+{ ============================================================================ }
+{ Tous ces encodeurs lisent PixelBuffer^[Y,X] (palette 16 couleurs EGA)        }
+{ et produisent un fichier valide. La preparation du buffer (bbox + render)    }
+{ est factorisee dans PrepareRasterExportBuffer.                              }
+{ ============================================================================ }
+
+{ Helper: prepare PixelBuffer with rendered shapes. Returns False if cannot. }
+Function PrepareRasterExportBuffer(Var Width, Height: Integer): Boolean;
+Var
+ MinX, MinY, MaxX, MaxY: Integer;
+Begin
+ PrepareRasterExportBuffer := False;
+ If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Begin
+  MinX := 0; MinY := WORK_AREA_TOP;
+  MaxX := 640; MaxY := 480;
+ End;
+ Width := MaxX - MinX + 1;
+ Height := MaxY - MinY + 1;
+ If Width < 1 Then Width := 1;
+ If Height < 1 Then Height := 1;
+ If Width > 2048 Then Width := 2048;
+ If Height > 2048 Then Height := 2048;
+ InitPixelBuffer(Width, Height);
+ AdjustShapesForBuffer(MinX, MinY);
+ RenderShapesToBuffer;
+ AdjustShapesForBuffer(-MinX, -MinY);
+ PrepareRasterExportBuffer := True;
+End;
+
+{ Helper: capture la zone de travail BGI a l'ecran vers PixelBuffer.        }
+{ Lit GetPixel pour chaque pixel entre (0, WORK_AREA_TOP+1) et              }
+{ (ScreenWidth-1, ScreenHeight-17). Cela fournit un veritable instantane     }
+{ du canvas tel que rendu par BGI, incluant motifs de remplissage, textes   }
+{ vectoriels BGI, lignes stylees, etc. Renvoie False si dimensions nulles.  }
+Function CaptureCanvasToBuffer(Var Width, Height: Integer): Boolean;
+Var
+ X1, Y1, X2, Y2, X, Y: Integer;
+ Pix: Word;
+Begin
+ CaptureCanvasToBuffer := False;
+ X1 := TOOLBAR_WIDTH + 1;
+ Y1 := WORK_AREA_TOP + 1;
+ X2 := ScreenWidth - 1;
+ Y2 := ScreenHeight - 17;
+ If (X2 <= X1) Or (Y2 <= Y1) Then Exit;
+ Width  := X2 - X1 + 1;
+ Height := Y2 - Y1 + 1;
+ If Width  > 2048 Then Width  := 2048;
+ If Height > 2048 Then Height := 2048;
+ InitPixelBuffer(Width, Height);
+ For Y := 0 To Height - 1 Do
+  For X := 0 To Width - 1 Do Begin
+   Pix := GetPixel(X1 + X, Y1 + Y);
+   PixelBuffer^[Y, X] := Byte(Pix And $0F);
+  End;
+ CaptureCanvasToBuffer := True;
+End;
+
+{ Mode de capture pour les exports raster:                                   }
+{   False = re-rendu logique a partir de Shapes[] via RenderShapesToBuffer   }
+{   True  = instantane BGI a l'ecran (zone canvas), via GetPixel             }
+{ Par defaut True pour reproduire le comportement Visio (WYSIWYG).           }
+{ (La variable est declaree plus haut, pres de PixelBuffer.)                }
+
+{ Helper unifie utilise par les encodeurs : selectionne le mode courant. }
+Function PrepareExportBuffer(Var Width, Height: Integer): Boolean;
+Begin
+ If ExportFromScreen Then
+  PrepareExportBuffer := CaptureCanvasToBuffer(Width, Height)
+ Else
+  PrepareExportBuffer := PrepareRasterExportBuffer(Width, Height);
+End;
+
+{ ---------- PCX (ZSoft Picture Exchange, 8-bit indexed, RLE) ---------- }
+
+Procedure PCXWriteRun(Var F: File; Value, Count: Byte);
+Var B: Byte;
+Begin
+ If Count = 0 Then Exit;
+ If (Count > 1) Or (Value >= $C0) Then Begin
+  B := $C0 Or Count;
+  BlockWrite(F, B, 1);
+  BlockWrite(F, Value, 1);
+ End Else
+  BlockWrite(F, Value, 1);
+End;
+
+Procedure PCXEncodeRow(Var F: File; Y, Width, BPL: Integer);
+Var
+ X: Integer;
+ Run, V, Cur: Byte;
+Begin
+ V := PixelBuffer^[Y, 0];
+ Run := 1;
+ For X := 1 To BPL - 1 Do Begin
+  If X < Width Then Cur := PixelBuffer^[Y, X]
+               Else Cur := 0;
+  If (Cur = V) And (Run < 63) Then
+   Inc(Run)
+  Else Begin
+   PCXWriteRun(F, V, Run);
+   V := Cur;
+   Run := 1;
+  End;
+ End;
+ PCXWriteRun(F, V, Run);
+End;
+
+Function SavePCXFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, Y, I: Integer;
+ BPL: Integer;
+ Header: Array[0..127] of Byte;
+ PaletteMarker: Byte;
+ R, G, B: Byte;
+Begin
+ SavePCXFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+
+ BPL := Width;
+ If Odd(BPL) Then Inc(BPL);
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+
+ FillChar(Header, SizeOf(Header), 0);
+ Header[0]  := 10;             { Manufacturer ZSoft }
+ Header[1]  := 5;              { Version PB 3.0+    }
+ Header[2]  := 1;              { Encoding RLE       }
+ Header[3]  := 8;              { Bits per pixel     }
+ Header[4]  := 0; Header[5]  := 0;      { Xmin = 0 }
+ Header[6]  := 0; Header[7]  := 0;      { Ymin = 0 }
+ Header[8]  := Lo(Word(Width - 1));  Header[9]  := Hi(Word(Width - 1));
+ Header[10] := Lo(Word(Height - 1)); Header[11] := Hi(Word(Height - 1));
+ Header[12] := 72; Header[13] := 0;     { HDpi = 72 }
+ Header[14] := 72; Header[15] := 0;     { VDpi = 72 }
+ { 16-color EGA palette at offset 16 (48 bytes) }
+ For I := 0 To 15 Do Begin
+  PaletteToRGB(I, R, G, B);
+  Header[16 + I*3 + 0] := R;
+  Header[16 + I*3 + 1] := G;
+  Header[16 + I*3 + 2] := B;
+ End;
+ Header[65] := 1;              { NPlanes }
+ Header[66] := Lo(Word(BPL));
+ Header[67] := Hi(Word(BPL));
+ Header[68] := 1; Header[69] := 0;  { PaletteInfo = color }
+ BlockWrite(F, Header, 128);
+
+ For Y := 0 To Height - 1 Do
+  PCXEncodeRow(F, Y, Width, BPL);
+
+ { 256-color palette trailer for 8-bit PCX }
+ PaletteMarker := $0C;
+ BlockWrite(F, PaletteMarker, 1);
+ For I := 0 To 15 Do Begin
+  PaletteToRGB(I, R, G, B);
+  BlockWrite(F, R, 1); BlockWrite(F, G, 1); BlockWrite(F, B, 1);
+ End;
+ For I := 16 To 255 Do Begin
+  R := 0; BlockWrite(F, R, 1); BlockWrite(F, R, 1); BlockWrite(F, R, 1);
+ End;
+
+ Close(F);
+ FreePixelBuffer;
+ SavePCXFile := True;
+End;
+
+{ ---------- PPM (Portable PixMap, P6 binary 24-bit RGB) ---------- }
+
+Function SavePPMFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y: Integer;
+ HeaderStr: String;
+ SW, SH: String;
+ R, G, B: Byte;
+ RGB: Array[0..2] of Byte;
+Begin
+ SavePPMFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+
+ Str(Width, SW);
+ Str(Height, SH);
+ HeaderStr := 'P6'#10 + SW + ' ' + SH + #10 + '255'#10;
+ BlockWrite(F, HeaderStr[1], Length(HeaderStr));
+
+ For Y := 0 To Height - 1 Do
+  For X := 0 To Width - 1 Do Begin
+   PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
+   RGB[0] := R; RGB[1] := G; RGB[2] := B;
+   BlockWrite(F, RGB, 3);
+  End;
+
+ Close(F);
+ FreePixelBuffer;
+ SavePPMFile := True;
+End;
+
+{ ---------- TIFF (Baseline 6.0, 24-bit RGB uncompressed, little-endian) ---------- }
+
+Procedure TIFFWriteIFDEntry(Var F: File; Tag, FType: Word; Count, Value: LongInt);
+Begin
+ WriteWord(F, Tag);
+ WriteWord(F, FType);
+ WriteDWord(F, Count);
+ WriteDWord(F, Value);
+End;
+
+Function SaveTIFFFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y: Integer;
+ NumEntries: Word;
+ ExternalStart, XResOffset, YResOffset, BPSOffset, StripOffset, StripBytes: LongInt;
+ RGB: Array[0..2] of Byte;
+ R, G, B: Byte;
+ Zero: Word;
+Begin
+ SaveTIFFFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+
+ StripBytes := LongInt(Width) * 3 * LongInt(Height);
+ NumEntries := 12;
+ { Header (8) + IFD count (2) + entries (12*NumEntries) + next-IFD (4) }
+ ExternalStart := 8 + 2 + LongInt(NumEntries) * 12 + 4;
+ XResOffset    := ExternalStart;
+ YResOffset    := XResOffset + 8;
+ BPSOffset     := YResOffset + 8;  { 3 SHORTs = 6 bytes }
+ StripOffset   := BPSOffset + 6;
+
+ { TIFF header }
+ WriteWord(F, $4949);    { 'II' little-endian }
+ WriteWord(F, 42);       { magic }
+ WriteDWord(F, 8);       { offset to IFD }
+
+ { IFD }
+ WriteWord(F, NumEntries);
+ TIFFWriteIFDEntry(F, 256, 3, 1, Width);              { ImageWidth   SHORT }
+ TIFFWriteIFDEntry(F, 257, 3, 1, Height);             { ImageLength  SHORT }
+ TIFFWriteIFDEntry(F, 258, 3, 3, BPSOffset);          { BitsPerSample 3xSHORT }
+ TIFFWriteIFDEntry(F, 259, 3, 1, 1);                  { Compression = none }
+ TIFFWriteIFDEntry(F, 262, 3, 1, 2);                  { Photometric  = RGB  }
+ TIFFWriteIFDEntry(F, 273, 4, 1, StripOffset);        { StripOffsets LONG  }
+ TIFFWriteIFDEntry(F, 277, 3, 1, 3);                  { SamplesPerPixel    }
+ TIFFWriteIFDEntry(F, 278, 4, 1, Height);             { RowsPerStrip       }
+ TIFFWriteIFDEntry(F, 279, 4, 1, StripBytes);         { StripByteCounts    }
+ TIFFWriteIFDEntry(F, 282, 5, 1, XResOffset);         { XResolution        }
+ TIFFWriteIFDEntry(F, 283, 5, 1, YResOffset);         { YResolution        }
+ TIFFWriteIFDEntry(F, 296, 3, 1, 2);                  { ResolutionUnit=inch}
+ WriteDWord(F, 0);       { next IFD = none }
+
+ { External data: XResolution, YResolution, BitsPerSample }
+ WriteDWord(F, 72); WriteDWord(F, 1);   { 72/1 dpi }
+ WriteDWord(F, 72); WriteDWord(F, 1);
+ WriteWord(F, 8); WriteWord(F, 8); WriteWord(F, 8); { 3xSHORT BitsPerSample }
+
+ { Strip data: RGB pixels, top-to-bottom }
+ For Y := 0 To Height - 1 Do
+  For X := 0 To Width - 1 Do Begin
+   PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
+   RGB[0] := R; RGB[1] := G; RGB[2] := B;
+   BlockWrite(F, RGB, 3);
+  End;
+
+ Close(F);
+ FreePixelBuffer;
+ Zero := 0; { suppress unused warning }
+ If Zero = 1 Then ;
+ SaveTIFFFile := True;
+End;
+
+{ ---------- WPG (WordPerfect Graphics 1.0, 8-bit indexed, BE multi-byte) ---------- }
+
+Procedure WPGWriteWordBE(Var F: File; W: Word);
+Var Buf: Array[0..1] of Byte;
+Begin
+ Buf[0] := Hi(W); Buf[1] := Lo(W);
+ BlockWrite(F, Buf, 2);
+End;
+
+Procedure WPGWriteLongBE(Var F: File; L: LongInt);
+Var Buf: Array[0..3] of Byte;
+Begin
+ Buf[0] := Byte((L Shr 24) And $FF);
+ Buf[1] := Byte((L Shr 16) And $FF);
+ Buf[2] := Byte((L Shr 8) And $FF);
+ Buf[3] := Byte(L And $FF);
+ BlockWrite(F, Buf, 4);
+End;
+
+Procedure WPGWriteRecLen(Var F: File; Len: LongInt);
+Var B: Byte;
+Begin
+ If Len < $FF Then Begin
+  B := Byte(Len);
+  BlockWrite(F, B, 1);
+ End Else Begin
+  B := $FF; BlockWrite(F, B, 1);
+  WPGWriteWordBE(F, Word(Len));
+ End;
+End;
+
+Function SaveWPGFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y, I: Integer;
+ R, G, B, Pix: Byte;
+ RecLen: LongInt;
+ Buf: Array[0..2047] of Byte;
+ RunCount: Byte;
+Begin
+ SaveWPGFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+
+ { Header: FF 'WPC' + dataOffset(LE 4) + ProductType + FileType + Ver + Ver }
+ Buf[0] := $FF; Buf[1] := Ord('W'); Buf[2] := Ord('P'); Buf[3] := Ord('C');
+ BlockWrite(F, Buf, 4);
+ { Data offset = 16 (immediately after header) - LE in WPG header }
+ WriteDWord(F, 16);
+ Buf[0] := 1;          { ProductType }
+ Buf[1] := $16;        { FileType    }
+ Buf[2] := 1;          { Major ver   }
+ Buf[3] := 0;          { Minor ver   }
+ Buf[4] := 0; Buf[5] := 0; { Encryption 2 bytes }
+ BlockWrite(F, Buf, 6);
+
+ { Record: Start (0x0F) length 0 }
+ Buf[0] := $0F; BlockWrite(F, Buf, 1);
+ WPGWriteRecLen(F, 0);
+
+ { Record: ColorMap (0x0E) - 16 entries x 3 bytes + 4 bytes header }
+ Buf[0] := $0E; BlockWrite(F, Buf, 1);
+ WPGWriteRecLen(F, 4 + 16 * 3);
+ WPGWriteWordBE(F, 0);       { Start index }
+ WPGWriteWordBE(F, 16);      { Count       }
+ For I := 0 To 15 Do Begin
+  PaletteToRGB(I, R, G, B);
+  Buf[0] := R; Buf[1] := G; Buf[2] := B;
+  BlockWrite(F, Buf, 3);
+ End;
+
+ { Record: Bitmap1 (0x0B) - simple bitmap. Header: Width, Height, depth, HRes, VRes (5 WORDs BE), then RLE row data. }
+ { We'll write each row as a single literal run (count byte 0..127 + that many bytes). MaxRunLen=127. }
+ Buf[0] := $0B; BlockWrite(F, Buf, 1);
+ { Compute total record length: 10 (header) + sum of row encodings }
+ RecLen := 10;
+ For Y := 0 To Height - 1 Do Begin
+  X := Width;
+  While X > 0 Do Begin
+   If X > 127 Then Begin Inc(RecLen, 128); Dec(X, 127); End
+              Else Begin Inc(RecLen, 1 + X); X := 0; End;
+  End;
+ End;
+ WPGWriteRecLen(F, RecLen);
+ WPGWriteWordBE(F, Word(Width));
+ WPGWriteWordBE(F, Word(Height));
+ WPGWriteWordBE(F, 8);          { depth = 8 bpp }
+ WPGWriteWordBE(F, 75);         { HRes }
+ WPGWriteWordBE(F, 75);         { VRes }
+ For Y := 0 To Height - 1 Do Begin
+  X := 0;
+  While X < Width Do Begin
+   If Width - X > 127 Then RunCount := 127
+                      Else RunCount := Byte(Width - X);
+   BlockWrite(F, RunCount, 1);
+   For I := 0 To RunCount - 1 Do Begin
+    Pix := PixelBuffer^[Y, X + I];
+    BlockWrite(F, Pix, 1);
+   End;
+   Inc(X, RunCount);
+  End;
+ End;
+
+ { Record: End (0x10) length 0 }
+ Buf[0] := $10; BlockWrite(F, Buf, 1);
+ WPGWriteRecLen(F, 0);
+
+ Close(F);
+ FreePixelBuffer;
+ SaveWPGFile := True;
+End;
+
+{ ---------- XBM (X11 Bitmap, 1-bit ASCII C array) ---------- }
+
+Function XBMShortName(Const FileName: String): String;
+Var I, J: Integer; S: String;
+Begin
+ J := 0;
+ For I := Length(FileName) DownTo 1 Do
+  If (FileName[I] = '\') Or (FileName[I] = '/') Or (FileName[I] = ':') Then Begin
+   J := I; Break;
+  End;
+ S := Copy(FileName, J + 1, 255);
+ J := Pos('.', S);
+ If J > 0 Then S := Copy(S, 1, J - 1);
+ { Sanitize: replace non-alnum by underscore }
+ For I := 1 To Length(S) Do
+  If Not (((S[I] >= 'A') And (S[I] <= 'Z')) Or
+          ((S[I] >= 'a') And (S[I] <= 'z')) Or
+          ((S[I] >= '0') And (S[I] <= '9'))) Then S[I] := '_';
+ If S = '' Then S := 'image';
+ XBMShortName := S;
+End;
+
+{ Convert palette index to 1-bit (0 = black/foreground, 1 = white/background) }
+Function XBMPaletteToBit(Idx: Byte): Byte;
+Var R, G, B: Byte;
+Begin
+ PaletteToRGB(Idx, R, G, B);
+ { Threshold on luminance ~ 128 }
+ If (LongInt(R) + LongInt(G) + LongInt(B)) >= 384 Then XBMPaletteToBit := 0
+                                                   Else XBMPaletteToBit := 1;
+End;
+
+Procedure XBMWriteStr(Var F: File; Const S: String);
+Begin
+ If Length(S) > 0 Then BlockWrite(F, S[1], Length(S));
+End;
+
+Function SaveXBMFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y: Integer;
+ Name, S, Hex: String;
+ RowBytes, I, Col: Integer;
+ B, Bit: Byte;
+ HexDigits: String;
+Begin
+ SaveXBMFile := False;
+ HexDigits := '0123456789ABCDEF';
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+
+ Name := XBMShortName(FileName);
+ Str(Width, S);
+ XBMWriteStr(F, '#define ' + Name + '_width ' + S + #10);
+ Str(Height, S);
+ XBMWriteStr(F, '#define ' + Name + '_height ' + S + #10);
+ XBMWriteStr(F, 'static unsigned char ' + Name + '_bits[] = {' + #10);
+
+ RowBytes := (Width + 7) Div 8;
+ Col := 0;
+ For Y := 0 To Height - 1 Do Begin
+  For I := 0 To RowBytes - 1 Do Begin
+   B := 0;
+   For X := 0 To 7 Do Begin
+    If I*8 + X < Width Then Bit := XBMPaletteToBit(PixelBuffer^[Y, I*8 + X])
+                       Else Bit := 0;
+    If Bit <> 0 Then B := B Or (1 Shl X);
+   End;
+   Hex := '0x' + HexDigits[((B Shr 4) And $0F) + 1] + HexDigits[(B And $0F) + 1];
+   If (Y = Height - 1) And (I = RowBytes - 1) Then XBMWriteStr(F, ' ' + Hex)
+   Else Begin
+    XBMWriteStr(F, ' ' + Hex + ',');
+    Inc(Col);
+    If Col >= 12 Then Begin XBMWriteStr(F, #10); Col := 0; End;
+   End;
+  End;
+ End;
+ XBMWriteStr(F, #10 + '};' + #10);
+
+ Close(F);
+ FreePixelBuffer;
+ SaveXBMFile := True;
+End;
+
+{ ---------- BGX (MonsterBook 8-bit raw, signature 'BGX1') ---------- }
+
+Function SaveBGXFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y: Integer;
+ Sig: Array[0..3] of Char;
+ W16, H16: Word;
+ Bpp: Byte;
+ Pix: Byte;
+Begin
+ SaveBGXFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+
+ Sig[0] := 'B'; Sig[1] := 'G'; Sig[2] := 'X'; Sig[3] := '1';
+ BlockWrite(F, Sig, 4);
+ W16 := Word(Width);  WriteWord(F, W16);
+ H16 := Word(Height); WriteWord(F, H16);
+ Bpp := 8;            BlockWrite(F, Bpp, 1);
+
+ For Y := 0 To Height - 1 Do
+  For X := 0 To Width - 1 Do Begin
+   Pix := PixelBuffer^[Y, X];
+   BlockWrite(F, Pix, 1);
+  End;
+
+ Close(F);
+ FreePixelBuffer;
+ SaveBGXFile := True;
+End;
+
+{ ---------- FAX (CCITT G3 1D, MH encoding) ---------- }
+
+Const
+ FAX_EOL = '000000000001';
+
+Var
+ FAX_OutByte: Byte;
+ FAX_OutBits: Byte;
+
+Procedure FAXWriteBit(Var F: File; Bit: Byte);
+Var B: Byte;
+Begin
+ If (Bit And 1) <> 0 Then
+  FAX_OutByte := FAX_OutByte Or (Byte(1) Shl (7 - FAX_OutBits));
+ Inc(FAX_OutBits);
+ If FAX_OutBits = 8 Then Begin
+  B := FAX_OutByte;
+  BlockWrite(F, B, 1);
+  FAX_OutByte := 0;
+  FAX_OutBits := 0;
+ End;
+End;
+
+Procedure FAXWriteCode(Var F: File; Const Code: String);
+Var I: Integer;
+Begin
+ For I := 1 To Length(Code) Do
+  If Code[I] = '1' Then FAXWriteBit(F, 1)
+                   Else FAXWriteBit(F, 0);
+End;
+
+Procedure FAXFlush(Var F: File);
+Var B: Byte;
+Begin
+ If FAX_OutBits <> 0 Then Begin
+  B := FAX_OutByte;
+  BlockWrite(F, B, 1);
+  FAX_OutByte := 0; FAX_OutBits := 0;
+ End;
+End;
+
+Function FAXWhiteTC(Run: Byte): String;
+Begin
+ Case Run of
+  0:FAXWhiteTC:='00110101';   1:FAXWhiteTC:='000111';
+  2:FAXWhiteTC:='0111';       3:FAXWhiteTC:='1000';
+  4:FAXWhiteTC:='1011';       5:FAXWhiteTC:='1100';
+  6:FAXWhiteTC:='1110';       7:FAXWhiteTC:='1111';
+  8:FAXWhiteTC:='10011';      9:FAXWhiteTC:='10100';
+  10:FAXWhiteTC:='00111';     11:FAXWhiteTC:='01000';
+  12:FAXWhiteTC:='001000';    13:FAXWhiteTC:='000011';
+  14:FAXWhiteTC:='110100';    15:FAXWhiteTC:='110101';
+  16:FAXWhiteTC:='101010';    17:FAXWhiteTC:='101011';
+  18:FAXWhiteTC:='0100111';   19:FAXWhiteTC:='0001100';
+  20:FAXWhiteTC:='0001000';   21:FAXWhiteTC:='0010111';
+  22:FAXWhiteTC:='0000011';   23:FAXWhiteTC:='0000100';
+  24:FAXWhiteTC:='0101000';   25:FAXWhiteTC:='0101011';
+  26:FAXWhiteTC:='0010011';   27:FAXWhiteTC:='0100100';
+  28:FAXWhiteTC:='0011000';   29:FAXWhiteTC:='00000010';
+  30:FAXWhiteTC:='00000011';  31:FAXWhiteTC:='00011010';
+  32:FAXWhiteTC:='00011011';  33:FAXWhiteTC:='00010010';
+  34:FAXWhiteTC:='00010011';  35:FAXWhiteTC:='00010100';
+  36:FAXWhiteTC:='00010101';  37:FAXWhiteTC:='00010110';
+  38:FAXWhiteTC:='00010111';  39:FAXWhiteTC:='00101000';
+  40:FAXWhiteTC:='00101001';  41:FAXWhiteTC:='00101010';
+  42:FAXWhiteTC:='00101011';  43:FAXWhiteTC:='00101100';
+  44:FAXWhiteTC:='00101101';  45:FAXWhiteTC:='00000100';
+  46:FAXWhiteTC:='00000101';  47:FAXWhiteTC:='00001010';
+  48:FAXWhiteTC:='00001011';  49:FAXWhiteTC:='01010010';
+  50:FAXWhiteTC:='01010011';  51:FAXWhiteTC:='01010100';
+  52:FAXWhiteTC:='01010101';  53:FAXWhiteTC:='00100100';
+  54:FAXWhiteTC:='00100101';  55:FAXWhiteTC:='01011000';
+  56:FAXWhiteTC:='01011001';  57:FAXWhiteTC:='01011010';
+  58:FAXWhiteTC:='01011011';  59:FAXWhiteTC:='01001010';
+  60:FAXWhiteTC:='01001011';  61:FAXWhiteTC:='00110010';
+  62:FAXWhiteTC:='00110011';  Else FAXWhiteTC:='00110100';
+ End;
+End;
+
+Function FAXBlackTC(Run: Byte): String;
+Begin
+ Case Run of
+  0:FAXBlackTC:='0000110111';   1:FAXBlackTC:='010';
+  2:FAXBlackTC:='11';            3:FAXBlackTC:='10';
+  4:FAXBlackTC:='011';           5:FAXBlackTC:='0011';
+  6:FAXBlackTC:='0010';          7:FAXBlackTC:='00011';
+  8:FAXBlackTC:='000101';        9:FAXBlackTC:='000100';
+  10:FAXBlackTC:='0000100';     11:FAXBlackTC:='0000101';
+  12:FAXBlackTC:='0000111';     13:FAXBlackTC:='00000100';
+  14:FAXBlackTC:='00000111';    15:FAXBlackTC:='000011000';
+  16:FAXBlackTC:='0000010111';  17:FAXBlackTC:='0000011000';
+  18:FAXBlackTC:='0000001000';  19:FAXBlackTC:='00001100111';
+  20:FAXBlackTC:='00001101000'; 21:FAXBlackTC:='00001101100';
+  22:FAXBlackTC:='00000110111'; 23:FAXBlackTC:='00000101000';
+  24:FAXBlackTC:='00000010111'; 25:FAXBlackTC:='00000011000';
+  26:FAXBlackTC:='000011001010';27:FAXBlackTC:='000011001011';
+  28:FAXBlackTC:='000011001100';29:FAXBlackTC:='000011001101';
+  30:FAXBlackTC:='000001101000';31:FAXBlackTC:='000001101001';
+  32:FAXBlackTC:='000001101010';33:FAXBlackTC:='000001101011';
+  34:FAXBlackTC:='000011010010';35:FAXBlackTC:='000011010011';
+  36:FAXBlackTC:='000011010100';37:FAXBlackTC:='000011010101';
+  38:FAXBlackTC:='000011010110';39:FAXBlackTC:='000011010111';
+  40:FAXBlackTC:='000001101100';41:FAXBlackTC:='000001101101';
+  42:FAXBlackTC:='000011011010';43:FAXBlackTC:='000011011011';
+  44:FAXBlackTC:='000001010100';45:FAXBlackTC:='000001010101';
+  46:FAXBlackTC:='000001010110';47:FAXBlackTC:='000001010111';
+  48:FAXBlackTC:='000001100100';49:FAXBlackTC:='000001100101';
+  50:FAXBlackTC:='000001010010';51:FAXBlackTC:='000001010011';
+  52:FAXBlackTC:='000000100100';53:FAXBlackTC:='000000110111';
+  54:FAXBlackTC:='000000111000';55:FAXBlackTC:='000000100111';
+  56:FAXBlackTC:='000000101000';57:FAXBlackTC:='000001011000';
+  58:FAXBlackTC:='000001011001';59:FAXBlackTC:='000000101011';
+  60:FAXBlackTC:='000000101100';61:FAXBlackTC:='000001011010';
+  62:FAXBlackTC:='000001100110';Else FAXBlackTC:='000001100111';
+ End;
+End;
+
+Function FAXMakeup(Run: Word; Black: Boolean): String;
+Begin
+ Case Run of
+  64: If Black Then FAXMakeup:='0000001111'   Else FAXMakeup:='11011';
+  128:If Black Then FAXMakeup:='000011001000' Else FAXMakeup:='10010';
+  192:If Black Then FAXMakeup:='000011001001' Else FAXMakeup:='010111';
+  256:If Black Then FAXMakeup:='000001011011' Else FAXMakeup:='0110111';
+  320:If Black Then FAXMakeup:='000000110011' Else FAXMakeup:='00110110';
+  384:If Black Then FAXMakeup:='000000110100' Else FAXMakeup:='00110111';
+  448:If Black Then FAXMakeup:='000000110101' Else FAXMakeup:='01100100';
+  512:If Black Then FAXMakeup:='0000001101100'Else FAXMakeup:='01100101';
+  576:If Black Then FAXMakeup:='0000001101101'Else FAXMakeup:='01101000';
+  640:If Black Then FAXMakeup:='0000001001010'Else FAXMakeup:='01100111';
+  704:If Black Then FAXMakeup:='0000001001011'Else FAXMakeup:='011001100';
+  768:If Black Then FAXMakeup:='0000001001100'Else FAXMakeup:='011001101';
+  832:If Black Then FAXMakeup:='0000001001101'Else FAXMakeup:='011010010';
+  896:If Black Then FAXMakeup:='0000001110010'Else FAXMakeup:='011010011';
+  960:If Black Then FAXMakeup:='0000001110011'Else FAXMakeup:='011010100';
+  1024:If Black Then FAXMakeup:='0000001110100'Else FAXMakeup:='011010101';
+  1088:If Black Then FAXMakeup:='0000001110101'Else FAXMakeup:='011010110';
+  1152:If Black Then FAXMakeup:='0000001110110'Else FAXMakeup:='011010111';
+  1216:If Black Then FAXMakeup:='0000001110111'Else FAXMakeup:='011011000';
+  1280:If Black Then FAXMakeup:='0000001010010'Else FAXMakeup:='011011001';
+  1344:If Black Then FAXMakeup:='0000001010011'Else FAXMakeup:='011011010';
+  1408:If Black Then FAXMakeup:='0000001010100'Else FAXMakeup:='011011011';
+  1472:If Black Then FAXMakeup:='0000001010101'Else FAXMakeup:='010011000';
+  1536:If Black Then FAXMakeup:='0000001011010'Else FAXMakeup:='010011001';
+  1600:If Black Then FAXMakeup:='0000001011011'Else FAXMakeup:='010011010';
+  1664:If Black Then FAXMakeup:='0000001100100'Else FAXMakeup:='011000';
+  1728:If Black Then FAXMakeup:='0000001100101'Else FAXMakeup:='010011011';
+  Else FAXMakeup:='00000001111';
+ End;
+End;
+
+Procedure FAXWriteRun(Var F: File; Run: Word; Black: Boolean);
+Var Makeup: Word;
+Begin
+ While Run >= 1792 Do Begin
+  FAXWriteCode(F, FAXMakeup(1728, Black));
+  Dec(Run, 1728);
+ End;
+ If Run >= 64 Then Begin
+  Makeup := (Run Div 64) * 64;
+  FAXWriteCode(F, FAXMakeup(Makeup, Black));
+  Run := Run Mod 64;
+ End;
+ If Black Then FAXWriteCode(F, FAXBlackTC(Byte(Run)))
+          Else FAXWriteCode(F, FAXWhiteTC(Byte(Run)));
+End;
+
+Function SaveFAXFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y: Integer;
+ R, G, B: Byte;
+ CurBlack: Boolean;
+ CurBit, RunLen: Word;
+ PixIsBlack: Boolean;
+Begin
+ SaveFAXFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+
+ FAX_OutByte := 0;
+ FAX_OutBits := 0;
+ { Leading EOL }
+ FAXWriteCode(F, FAX_EOL);
+ For Y := 0 To Height - 1 Do Begin
+  { Each line starts with a white run (possibly zero) }
+  CurBlack := False;
+  RunLen := 0;
+  For X := 0 To Width - 1 Do Begin
+   PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
+   PixIsBlack := (LongInt(R) + LongInt(G) + LongInt(B)) < 384;
+   If PixIsBlack = CurBlack Then Inc(RunLen)
+   Else Begin
+    FAXWriteRun(F, RunLen, CurBlack);
+    CurBlack := PixIsBlack;
+    RunLen := 1;
+   End;
+  End;
+  FAXWriteRun(F, RunLen, CurBlack);
+  FAXWriteCode(F, FAX_EOL);
+ End;
+ { 6 trailing EOLs (RTC) }
+ For X := 0 To 4 Do FAXWriteCode(F, FAX_EOL);
+ FAXFlush(F);
+
+ { Suppress unused warning on local CurBit }
+ CurBit := 0; If CurBit = 1 Then ;
+
+ Close(F);
+ FreePixelBuffer;
+ SaveFAXFile := True;
+End;
+
+{ ---------- DCM (DICOM Secondary Capture, 8-bit grayscale uncompressed) ---------- }
+
+Procedure DCMWriteStr(Var F: File; Const S: String);
+Begin
+ If Length(S) > 0 Then BlockWrite(F, S[1], Length(S));
+End;
+
+Procedure DCMWritePadded(Var F: File; Const S: String; PadCh: Char);
+Var L: Integer; C: Char;
+Begin
+ If Length(S) > 0 Then BlockWrite(F, S[1], Length(S));
+ If Odd(Length(S)) Then Begin C := PadCh; BlockWrite(F, C, 1); End;
+ L := 0; If L = 1 Then ;
+End;
+
+Procedure DCMWriteTag(Var F: File; Group, Element: Word);
+Begin
+ WriteWord(F, Group);
+ WriteWord(F, Element);
+End;
+
+Procedure DCMWriteVR(Var F: File; Const VR: String);
+Var Buf: Array[0..1] of Char;
+Begin
+ If Length(VR) >= 2 Then Begin Buf[0] := VR[1]; Buf[1] := VR[2]; End
+                    Else Begin Buf[0] := ' '; Buf[1] := ' '; End;
+ BlockWrite(F, Buf, 2);
+End;
+
+Procedure DCMWriteElemStr(Var F: File; G, E: Word; Const VR, Value: String);
+Var L: Word; Pad: Char;
+Begin
+ If VR = 'UI' Then Pad := #0 Else Pad := ' ';
+ L := Length(Value);
+ If Odd(L) Then Inc(L);
+ DCMWriteTag(F, G, E);
+ DCMWriteVR(F, VR);
+ WriteWord(F, L);
+ DCMWritePadded(F, Value, Pad);
+End;
+
+Procedure DCMWriteElemUS(Var F: File; G, E, V: Word);
+Begin
+ DCMWriteTag(F, G, E);
+ DCMWriteVR(F, 'US');
+ WriteWord(F, 2);
+ WriteWord(F, V);
+End;
+
+Procedure DCMWriteElemUL(Var F: File; G, E: Word; V: LongInt);
+Begin
+ DCMWriteTag(F, G, E);
+ DCMWriteVR(F, 'UL');
+ WriteWord(F, 4);
+ WriteDWord(F, V);
+End;
+
+Function DCMPad2(W: Word): String;
+Var S: String;
+Begin
+ Str(W, S);
+ While Length(S) < 2 Do S := '0' + S;
+ DCMPad2 := S;
+End;
+
+Function DCMPad4(W: Word): String;
+Var S: String;
+Begin
+ Str(W, S);
+ While Length(S) < 4 Do S := '0' + S;
+ DCMPad4 := S;
+End;
+
+Function SaveDCMFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y: Integer;
+ Preamble: Array[0..127] of Byte;
+ Magic: Array[0..3] of Char;
+ GroupLenPos, GroupStart, GroupEnd: LongInt;
+ SOPUID, StudyUID, SeriesUID: String;
+ TS: String;
+ DateStr, TimeStr: String;
+ Yr, Mo, Da, Dow: Word;
+ Hr, Mi, Se, Hs: Word;
+ PixelDataLen: LongInt;
+ R, G, B, Gray: Byte;
+ GroupLenVal: LongInt;
+Begin
+ SaveDCMFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+
+ { 128-byte zero preamble + DICM }
+ FillChar(Preamble, 128, 0);
+ BlockWrite(F, Preamble, 128);
+ Magic[0]:='D'; Magic[1]:='I'; Magic[2]:='C'; Magic[3]:='M';
+ BlockWrite(F, Magic, 4);
+
+ { Build deterministic-ish UIDs based on dims }
+ Str(LongInt(Width) * 17 + LongInt(Height) * 31 + 1, SOPUID);
+ SOPUID    := '1.2.826.0.1.3680043.10.543.2.' + SOPUID + '.1';
+ Str(LongInt(Width) * 17 + LongInt(Height) * 31 + 2, StudyUID);
+ StudyUID  := '1.2.826.0.1.3680043.10.543.2.' + StudyUID + '.2';
+ Str(LongInt(Width) * 17 + LongInt(Height) * 31 + 3, SeriesUID);
+ SeriesUID := '1.2.826.0.1.3680043.10.543.2.' + SeriesUID + '.3';
+ TS := '1.2.840.10008.1.2.1';     { Explicit VR Little Endian }
+
+ GetDate(Yr, Mo, Da, Dow);
+ GetTime(Hr, Mi, Se, Hs);
+ DateStr := DCMPad4(Yr) + DCMPad2(Mo) + DCMPad2(Da);
+ TimeStr := DCMPad2(Hr) + DCMPad2(Mi) + DCMPad2(Se);
+
+ { Meta group (0002,xxxx) - Explicit VR }
+ { Write (0002,0000) Group Length, value patched after }
+ DCMWriteTag(F, $0002, $0000);
+ DCMWriteVR(F, 'UL');
+ WriteWord(F, 4);
+ GroupLenPos := FilePos(F);
+ WriteDWord(F, 0);                 { placeholder }
+ GroupStart := FilePos(F);
+ { (0002,0001) File Meta Info Version OB }
+ DCMWriteTag(F, $0002, $0001);
+ DCMWriteVR(F, 'OB');
+ WriteWord(F, 0);
+ WriteDWord(F, 2);
+ WriteWord(F, $0100);              { 00 01 -> as LE word 0x0100 (00 then 01) }
+ { (0002,0002) Media Storage SOP Class UID UI = SecondaryCapture }
+ DCMWriteElemStr(F, $0002, $0002, 'UI', '1.2.840.10008.5.1.4.1.1.7');
+ { (0002,0003) Media Storage SOP Instance UID }
+ DCMWriteElemStr(F, $0002, $0003, 'UI', SOPUID);
+ { (0002,0010) Transfer Syntax UID }
+ DCMWriteElemStr(F, $0002, $0010, 'UI', TS);
+ { (0002,0012) Implementation Class UID }
+ DCMWriteElemStr(F, $0002, $0012, 'UI', '1.2.826.0.1.3680043.10.543.1');
+ GroupEnd := FilePos(F);
+ GroupLenVal := GroupEnd - GroupStart;
+ Seek(F, GroupLenPos);
+ WriteDWord(F, GroupLenVal);
+ Seek(F, GroupEnd);
+
+ { Dataset - Explicit VR Little Endian }
+ DCMWriteElemStr(F, $0008, $0016, 'UI', '1.2.840.10008.5.1.4.1.1.7');
+ DCMWriteElemStr(F, $0008, $0018, 'UI', SOPUID);
+ DCMWriteElemStr(F, $0008, $0020, 'DA', DateStr);
+ DCMWriteElemStr(F, $0008, $0030, 'TM', TimeStr);
+ DCMWriteElemStr(F, $0008, $0060, 'CS', 'OT');
+ DCMWriteElemStr(F, $0008, $0070, 'LO', 'GLADIR');
+ DCMWriteElemStr(F, $0010, $0010, 'PN', 'CLONEDRAW^EXPORT');
+ DCMWriteElemStr(F, $0010, $0020, 'LO', 'CLONEDRAW-001');
+ DCMWriteElemStr(F, $0020, $000D, 'UI', StudyUID);
+ DCMWriteElemStr(F, $0020, $000E, 'UI', SeriesUID);
+ DCMWriteElemStr(F, $0020, $0010, 'SH', '1');
+ DCMWriteElemStr(F, $0020, $0011, 'IS', '1');
+ DCMWriteElemStr(F, $0020, $0013, 'IS', '1');
+ DCMWriteElemUS(F, $0028, $0002, 1);                 { SamplesPerPixel = 1 (grayscale) }
+ DCMWriteElemStr(F, $0028, $0004, 'CS', 'MONOCHROME2');
+ DCMWriteElemUS(F, $0028, $0010, Word(Height));      { Rows    }
+ DCMWriteElemUS(F, $0028, $0011, Word(Width));       { Columns }
+ DCMWriteElemUS(F, $0028, $0100, 8);                 { BitsAllocated }
+ DCMWriteElemUS(F, $0028, $0101, 8);                 { BitsStored    }
+ DCMWriteElemUS(F, $0028, $0102, 7);                 { HighBit       }
+ DCMWriteElemUS(F, $0028, $0103, 0);                 { PixelRepresentation }
+
+ PixelDataLen := LongInt(Width) * LongInt(Height);
+ If Odd(PixelDataLen) Then ; { even byte length: W*H is even when either dim is even; if not, pad below }
+
+ { (7FE0,0010) PixelData OB }
+ DCMWriteTag(F, $7FE0, $0010);
+ DCMWriteVR(F, 'OB');
+ WriteWord(F, 0);
+ If Odd(PixelDataLen) Then WriteDWord(F, PixelDataLen + 1)
+                      Else WriteDWord(F, PixelDataLen);
+ For Y := 0 To Height - 1 Do
+  For X := 0 To Width - 1 Do Begin
+   PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
+   Gray := Byte((LongInt(R) + LongInt(G) + LongInt(B)) Div 3);
+   BlockWrite(F, Gray, 1);
+  End;
+ If Odd(PixelDataLen) Then Begin Gray := 0; BlockWrite(F, Gray, 1); End;
+
+ Close(F);
+ FreePixelBuffer;
+ SaveDCMFile := True;
+End;
+
+{ ============================================================================ }
+{ === FIN EXPORT EXTENSIONS ================================================= }
+{ ============================================================================ }
+
+
+{ Procedure New - Creer un nouveau document }
 Procedure FileNew;
 Begin
  CurrentFileName := '';
@@ -10415,6 +11302,12 @@ End;
 Function ShowVisioFileDialog(SaveMode: Boolean;
                              Const DefaultName: String;
                              Var ChosenFile: String): Boolean; Forward;
+
+Function ShowVisioExportDialog(Const DefaultName: String;
+                               Var ChosenFile: String;
+                               Var SelectedExt: String): Boolean; Forward;
+
+Procedure RefreshScreen; Forward;
 
 { ProcÃ©dure Open - Ouvrir un fichier (dialogue style Visio) }
 Procedure FileOpen;
@@ -10511,11 +11404,91 @@ Begin
  End;
 End;
 
+{ Helpers for FileExport }
+Function ExportExt(Const FileName: String): String;
+Var I, J: Integer; E: String;
+Begin
+ J := 0;
+ For I := Length(FileName) DownTo 1 Do
+  If FileName[I] = '.' Then Begin J := I; Break; End
+  Else If (FileName[I] = '\') Or (FileName[I] = '/') Or (FileName[I] = ':') Then Break;
+ If J = 0 Then E := ''
+          Else E := Copy(FileName, J + 1, 16);
+ For I := 1 To Length(E) Do
+  If (E[I] >= 'a') And (E[I] <= 'z') Then E[I] := Chr(Ord(E[I]) - 32);
+ ExportExt := E;
+End;
+
 { ProcÃ©dure Export - Exporter dans un autre format }
 Procedure FileExport;
+Var
+ FileName, DefName, Ext, FilterExt: String;
+ Success: Boolean;
+ TransIdx: Integer;
 Begin
- If Language = _English Then StatusMessage := 'Export: not yet implemented'
-                       Else StatusMessage := 'Exporter : non implemente';
+ If CurrentFileName <> '' Then Begin
+  DefName := CurrentFileName;
+  Ext := ExportExt(DefName);
+  If Ext <> '' Then DefName := Copy(DefName, 1, Length(DefName) - Length(Ext) - 1);
+  DefName := DefName + '.png';
+ End Else
+  DefName := 'document.png';
+
+ If Not ShowVisioExportDialog(DefName, FileName, FilterExt) Then Begin
+  If Language = _English Then StatusMessage := 'Export cancelled'
+                        Else StatusMessage := 'Export annule';
+  Exit;
+ End;
+ If FileName = '' Then Exit;
+
+ Ext := ExportExt(FileName);
+ If Ext = '' Then Begin
+  { Pas d'extension tapee : utiliser celle du filtre selectionne }
+  If FilterExt = '' Then FilterExt := 'PNG';
+  FileName := FileName + '.' + FilterExt;
+  Ext := FilterExt;
+ End;
+
+ { Toujours utiliser le re-rendu logique a partir de Shapes[] : on n'exporte  }
+ { JAMAIS l'etat ecran (menus deroulants, dialogues, toolbars, status bar,    }
+ { selection en cours, etc.). Ainsi le PNG/GIF/BMP/... contient uniquement le }
+ { dessin de l'utilisateur sur un fond transparent.                           }
+ ExportFromScreen := False;
+
+ Success := False;
+ { Indice 15 (blanc) = fond du papier -> transparent dans les formats qui le  }
+ { supportent (PNG via tRNS, GIF via GCE). Pour les autres formats raster,    }
+ { l'indice est ignore et le fond reste blanc.                                }
+ TransIdx := 15;
+ If      Ext = 'PNG'  Then Success := SavePNGFile(FileName, TransIdx)
+ Else If Ext = 'GIF'  Then Success := SaveGIFFile(FileName, TransIdx)
+ Else If Ext = 'JPG'  Then Success := SaveJPEGFile(FileName, 85)
+ Else If Ext = 'JPEG' Then Success := SaveJPEGFile(FileName, 85)
+ Else If Ext = 'BMP'  Then Success := SaveBMPFile(FileName, 24)
+ Else If Ext = 'DIB'  Then Success := SaveBMPFile(FileName, 24)
+ Else If Ext = 'SVG'  Then Success := SaveSVGFile(FileName)
+ Else If Ext = 'PCX'  Then Success := SavePCXFile(FileName)
+ Else If Ext = 'PPM'  Then Success := SavePPMFile(FileName)
+ Else If Ext = 'TIF'  Then Success := SaveTIFFFile(FileName)
+ Else If Ext = 'TIFF' Then Success := SaveTIFFFile(FileName)
+ Else If Ext = 'WPG'  Then Success := SaveWPGFile(FileName)
+ Else If Ext = 'XBM'  Then Success := SaveXBMFile(FileName)
+ Else If Ext = 'BGX'  Then Success := SaveBGXFile(FileName)
+ Else If Ext = 'FAX'  Then Success := SaveFAXFile(FileName)
+ Else If Ext = 'DCM'  Then Success := SaveDCMFile(FileName)
+ Else Begin
+  If Language = _English Then StatusMessage := 'Unsupported export format: .' + Ext
+                        Else StatusMessage := 'Format export non supporte : .' + Ext;
+  Exit;
+ End;
+
+ If Success Then Begin
+  If Language = _English Then StatusMessage := 'Exported: ' + FileName
+                        Else StatusMessage := 'Exporte : ' + FileName;
+ End Else Begin
+  If Language = _English Then StatusMessage := 'Export failed: ' + FileName
+                        Else StatusMessage := 'Echec export : ' + FileName;
+ End;
 End;
 
 { ProcÃ©dure Print - Imprimer le document }
@@ -12852,7 +13825,6 @@ Procedure ExecuteFormatMenuAction(ItemIndex: Integer); Forward;
 Procedure ExecuteShapeMenuAction(ItemIndex: Integer); Forward;
 Function GetMenuAtPosition(MouseX, MouseY: Integer): Integer; Forward;
 Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer; Forward;
-Procedure RefreshScreen; Forward;
 
 { ProcÃ©dure pour gÃ©rer le clic gauche de la souris }
 Procedure HandleLeftClick(X, Y: Integer);
@@ -13747,7 +14719,7 @@ Const
  VFD_DRIVE_H       = 20;         { Hauteur barre de lecteurs }
  VFD_DRIVE_W       = 26;         { Largeur d'un bouton lecteur }
  VFD_MAX_FILES     = 512;        { Capacite maxi de la liste }
- VFD_MAX_FILTERS   = 8;          { Nb maxi de filtres }
+ VFD_MAX_FILTERS   = 16;         { Nb maxi de filtres }
  VFD_MAX_DRIVES    = 26;         { A..Z }
 
  { Couleurs (palette EGA/VGA 0..15) }
@@ -13790,6 +14762,7 @@ Var
  VFD_X, VFD_Y    : Integer;
  VFD_W, VFD_H    : Integer;
  VFD_SaveMode    : Boolean;
+ VFD_ExportMode  : Boolean;
  VFD_CurrentPath : String[255];
  VFD_SelectedFile: String[255];
  VFD_Files       : Array[0..VFD_MAX_FILES-1] Of TVFDEntry;
@@ -13964,7 +14937,39 @@ Procedure VFDInitFilters;
  End;
 Begin
  VFD_FilterCount := 0;
- If Language = _English Then Begin
+ If VFD_ExportMode Then Begin
+  If Language = _English Then Begin
+   Add('PNG image (*.PNG)',                    '*.PNG');
+   Add('GIF image (*.GIF)',                    '*.GIF');
+   Add('JPEG image (*.JPG;*.JPEG)',            '*.JPG;*.JPEG');
+   Add('Windows bitmap (*.BMP;*.DIB)',         '*.BMP;*.DIB');
+   Add('SVG vector (*.SVG)',                   '*.SVG');
+   Add('ZSoft Paintbrush (*.PCX)',             '*.PCX');
+   Add('Portable pixmap (*.PPM)',              '*.PPM');
+   Add('TIFF image (*.TIF;*.TIFF)',            '*.TIF;*.TIFF');
+   Add('WordPerfect Graphics (*.WPG)',         '*.WPG');
+   Add('X11 bitmap (*.XBM)',                   '*.XBM');
+   Add('Borland BGI (*.BGX)',                  '*.BGX');
+   Add('CCITT G3 fax (*.FAX)',                 '*.FAX');
+   Add('DICOM image (*.DCM)',                  '*.DCM');
+   Add('All files (*.*)',                      '*.*');
+  End Else Begin
+   Add('Image PNG (*.PNG)',                    '*.PNG');
+   Add('Image GIF (*.GIF)',                    '*.GIF');
+   Add('Image JPEG (*.JPG;*.JPEG)',            '*.JPG;*.JPEG');
+   Add('Bitmap Windows (*.BMP;*.DIB)',         '*.BMP;*.DIB');
+   Add('Vectoriel SVG (*.SVG)',                '*.SVG');
+   Add('ZSoft Paintbrush (*.PCX)',             '*.PCX');
+   Add('Pixmap portable (*.PPM)',              '*.PPM');
+   Add('Image TIFF (*.TIF;*.TIFF)',            '*.TIF;*.TIFF');
+   Add('WordPerfect Graphics (*.WPG)',         '*.WPG');
+   Add('Bitmap X11 (*.XBM)',                   '*.XBM');
+   Add('Borland BGI (*.BGX)',                  '*.BGX');
+   Add('Fax CCITT G3 (*.FAX)',                 '*.FAX');
+   Add('Image DICOM (*.DCM)',                  '*.DCM');
+   Add('Tous les fichiers (*.*)',              '*.*');
+  End;
+ End Else If Language = _English Then Begin
   Add('All Visio files (*.VSD;*.VSDX;*.SVG)', '*.VSD;*.VSDX;*.SVG');
   Add('Visio 2003 binary (*.VSD)',           '*.VSD');
   Add('Visio 2013+ XML (*.VSDX)',            '*.VSDX');
@@ -14598,6 +15603,7 @@ Function ShowVisioFileDialog(SaveMode: Boolean;
                              Var ChosenFile: String): Boolean;
 Var Title: String;
 Begin
+ VFD_ExportMode := False;
  If SaveMode Then Begin
   If Language = _English Then Title := 'Save Visio document as'
                         Else Title := 'Enregistrer le document Visio sous';
@@ -14613,6 +15619,51 @@ Begin
   ChosenFile := '';
   ShowVisioFileDialog := False;
  End;
+End;
+
+{ Retourne l'extension principale du filtre courant (sans le point), ou '' }
+Function VFDFilterPrimaryExt: String;
+Var P, E: String; I: Integer;
+Begin
+ VFDFilterPrimaryExt := '';
+ If (VFD_FilterIndex < 0) Or (VFD_FilterIndex >= VFD_FilterCount) Then Exit;
+ P := VFD_Filters[VFD_FilterIndex].Pattern;
+ I := Pos('*.', P);
+ If I = 0 Then Exit;
+ E := Copy(P, I + 2, Length(P));
+ I := 1;
+ While (I <= Length(E)) And (E[I] <> ';') And (E[I] <> ',') And
+       (E[I] <> ' ') And (E[I] <> ')') Do Inc(I);
+ E := Copy(E, 1, I - 1);
+ If E = '*' Then E := '';
+ { Uppercase }
+ For I := 1 To Length(E) Do
+  If (E[I] >= 'a') And (E[I] <= 'z') Then E[I] := Chr(Ord(E[I]) - 32);
+ VFDFilterPrimaryExt := E;
+End;
+
+{ Variante Export : meme dialogue mais avec la liste des formats d'export. }
+{ Retourne aussi l'extension primaire du filtre choisi (utile si l'utilisateur }
+{ a tape un nom sans extension).                                             }
+Function ShowVisioExportDialog(Const DefaultName: String;
+                               Var ChosenFile: String;
+                               Var SelectedExt: String): Boolean;
+Var Title: String;
+Begin
+ VFD_ExportMode := True;
+ If Language = _English Then Title := 'Export drawing as'
+                       Else Title := 'Exporter le dessin sous';
+ VFDInit(Title, True, DefaultName);
+ If VFDRun Then Begin
+  ChosenFile := VFD_SelectedFile;
+  SelectedExt := VFDFilterPrimaryExt;
+  ShowVisioExportDialog := True;
+ End Else Begin
+  ChosenFile := '';
+  SelectedExt := '';
+  ShowVisioExportDialog := False;
+ End;
+ VFD_ExportMode := False;
 End;
 
 { ============================================================================ }

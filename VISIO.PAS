@@ -4864,7 +4864,7 @@ Begin
   If S[I]='\'Then Begin
    If P<>''Then Begin
     {$I-}MkDir(P);{$I+}
-    If(IoResult<>0)Then WriteLn('Error de creation de dossier.');
+    If IoResult<>0 Then ; { dir already exists or unwritable - silent }
    End;
   End;
   P:=P+S[I];
@@ -4973,7 +4973,7 @@ Begin
     If Not(TestMode or PipeMode or CatMode) Then Begin
      If OutName<>'' Then Begin
       {$I-}MkDir(OutName);{$I+}
-      If(IoResult<>0)Then WriteLn('Erreur de creation de dossier');
+      If IoResult<>0 Then ; { dir already exists - silent }
      End;
     End;
     SkipBytes(CompSize);

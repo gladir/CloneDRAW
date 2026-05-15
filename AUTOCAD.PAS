@@ -17492,6 +17492,41 @@ Begin
        End;
        18: ExecuteModifyExplode;
       End;
+     End Else If ActiveMenu = MENU_WINDOW Then Begin
+      Case NewItem Of
+       0: Begin                       { Close }
+        ObjectCount := 0;
+        ClearSelection;
+        ClearGrips;
+        CurrentFileName := '';
+        MarkDocumentSaved;
+        CommandLastLine := 'Dessin ferme';
+        DrawInterface;
+       End;
+       1: Begin                       { Close All }
+        ObjectCount := 0;
+        ClearSelection;
+        ClearGrips;
+        CurrentFileName := '';
+        MarkDocumentSaved;
+        CommandLastLine := 'Tous les dessins fermes';
+        DrawInterface;
+       End;
+       3: CommandLastLine := 'Cascade: vue unique, aucun arrangement requis';
+       4: CommandLastLine := 'Mosaique horizontale: vue unique';
+       5: CommandLastLine := 'Mosaique verticale: vue unique';
+      End;
+     End Else If ActiveMenu = MENU_HELP Then Begin
+      Case NewItem Of
+       0: CommandLastLine :=
+         'Aide: F1=Aide ESC=Annuler - Cliquez les menus ou tapez les commandes';
+       1: CommandLastLine :=
+         'Centre d''info: CloneDRAW clone AutoCAD - FPC -Mtp mode Turbo Pascal';
+       3: CommandLastLine :=
+         'Nouveautes: menus Dessin / Cotation / Modifier / Fenetre / Aide cables';
+       5: CommandLastLine :=
+         'CloneDRAW v1.0 - github.com/clonedraw - Licence libre';
+      End;
      End;
      MenuActive := False;
      ActiveMenu := -1;

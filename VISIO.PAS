@@ -9405,9 +9405,6 @@ Begin
 
  If Not PrepareExportBuffer(Width, Height) Then Exit;
 
- If HasTransparency Then
-  FillChar(PixelBuffer^, SizeOf(TPixelBuffer), TransparentIndex);
-
  { Ouvrir le fichier }
  Assign(F, FileName);
  {$I-}
@@ -9502,6 +9499,19 @@ Const
  JPEG_DC_BITS: Array[0..15] of Byte = (0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
  JPEG_DC_VALS: Array[0..11] of Byte = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
  JPEG_AC_BITS: Array[0..15] of Byte = (0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125);
+ JPEG_AC_VALS: Array[0..161] of Byte = (
+  $01, $02, $03, $00, $04, $11, $05, $12, $21, $31, $41, $06, $13, $51, $61, $07,
+  $22, $71, $14, $32, $81, $91, $A1, $08, $23, $42, $B1, $C1, $15, $52, $D1, $F0,
+  $24, $33, $62, $72, $82, $09, $0A, $16, $17, $18, $19, $1A, $25, $26, $27, $28,
+  $29, $2A, $34, $35, $36, $37, $38, $39, $3A, $43, $44, $45, $46, $47, $48, $49,
+  $4A, $53, $54, $55, $56, $57, $58, $59, $5A, $63, $64, $65, $66, $67, $68, $69,
+  $6A, $73, $74, $75, $76, $77, $78, $79, $7A, $83, $84, $85, $86, $87, $88, $89,
+  $8A, $92, $93, $94, $95, $96, $97, $98, $99, $9A, $A2, $A3, $A4, $A5, $A6, $A7,
+  $A8, $A9, $AA, $B2, $B3, $B4, $B5, $B6, $B7, $B8, $B9, $BA, $C2, $C3, $C4, $C5,
+  $C6, $C7, $C8, $C9, $CA, $D2, $D3, $D4, $D5, $D6, $D7, $D8, $D9, $DA, $E1, $E2,
+  $E3, $E4, $E5, $E6, $E7, $E8, $E9, $EA, $F1, $F2, $F3, $F4, $F5, $F6, $F7, $F8,
+  $F9, $FA
+ );
 
 Type
  TJPEGBlock = Array[0..63] of Integer;
@@ -9768,7 +9778,7 @@ Begin
 End;
 
 { Ã‰crire des bits dans le buffer JPEG }
-Procedure WriteJPEGBits(Var F: File; Value: Integer; NumBits: Integer);
+Procedure WriteJPEGBits(Var F: File; Value: LongInt; NumBits: Integer);
 Var
  B: Byte;
 Begin
@@ -9786,69 +9796,209 @@ Begin
  End;
 End;
 
-{ Encoder les donnÃ©es d'image JPEG (version simplifiÃ©e) }
+{ Encoder les donnÃ©es d'image JPEG (encodeur baseline complet) }
+
+Type
+ TJPEGRealBlock = Array[0..63] of Real;
+ TJPEGSymCode   = Array[0..255] of Word;
+ TJPEGSymSize   = Array[0..255] of Byte;
+
+Var
+ JPEG_CosTab: Array[0..7, 0..7] of Real;
+ JPEG_DCCode, JPEG_ACCode: TJPEGSymCode;
+ JPEG_DCSize, JPEG_ACSize: TJPEGSymSize;
+
+Procedure InitJPEGCosTab;
+Var I, J: Integer;
+Begin
+ For I := 0 To 7 Do
+  For J := 0 To 7 Do
+   JPEG_CosTab[I, J] := Cos((2*I + 1) * J * Pi / 16);
+End;
+
+Procedure BuildJPEGHuffTable(Const Counts: Array of Byte;
+                             Const Values: Array of Byte;
+                             NumValues: Integer;
+                             Var Codes: TJPEGSymCode;
+                             Var Sizes: TJPEGSymSize);
+Var
+ I, J, K: Integer;
+ Code: Word;
+ Size: Integer;
+ HuffSize: Array[0..256] of Byte;
+ HuffCode: Array[0..256] of Word;
+Begin
+ K := 0;
+ For I := 1 To 16 Do
+  For J := 1 To Counts[I-1] Do Begin
+   HuffSize[K] := Byte(I);
+   Inc(K);
+  End;
+ HuffSize[K] := 0;
+ Code := 0;
+ Size := HuffSize[0];
+ K := 0;
+ While HuffSize[K] <> 0 Do Begin
+  While (HuffSize[K] <> 0) And (Integer(HuffSize[K]) = Size) Do Begin
+   HuffCode[K] := Code;
+   Inc(Code);
+   Inc(K);
+  End;
+  If HuffSize[K] = 0 Then Break;
+  Repeat
+   Code := Word(Code Shl 1);
+   Inc(Size);
+  Until Integer(HuffSize[K]) = Size;
+ End;
+ For I := 0 To 255 Do Begin Codes[I] := 0; Sizes[I] := 0; End;
+ For I := 0 To NumValues - 1 Do Begin
+  Codes[Values[I]] := HuffCode[I];
+  Sizes[Values[I]] := HuffSize[I];
+ End;
+End;
+
+Procedure InitJPEGHuffTables;
+Begin
+ BuildJPEGHuffTable(JPEG_DC_BITS, JPEG_DC_VALS, 12,
+                    JPEG_DCCode, JPEG_DCSize);
+ BuildJPEGHuffTable(JPEG_AC_BITS, JPEG_AC_VALS, 162,
+                    JPEG_ACCode, JPEG_ACSize);
+End;
+
+Procedure JPEGForwardDCT(Var Blk: TJPEGRealBlock);
+Const OneOverSqrt2 = 0.70710678118654752;
+Var
+ U, V, X, Y: Integer;
+ Sum, Cu, Cv: Real;
+ Tmp: TJPEGRealBlock;
+Begin
+ For V := 0 To 7 Do Begin
+  If V = 0 Then Cv := OneOverSqrt2 Else Cv := 1.0;
+  For U := 0 To 7 Do Begin
+   If U = 0 Then Cu := OneOverSqrt2 Else Cu := 1.0;
+   Sum := 0.0;
+   For Y := 0 To 7 Do
+    For X := 0 To 7 Do
+     Sum := Sum + Blk[Y*8+X] * JPEG_CosTab[X, U] * JPEG_CosTab[Y, V];
+   Tmp[V*8+U] := 0.25 * Cu * Cv * Sum;
+  End;
+ End;
+ For U := 0 To 63 Do Blk[U] := Tmp[U];
+End;
+
+Procedure JPEGQuantizeZigzag(Const Src: TJPEGRealBlock;
+                             Const QT: TJPEGQuantTable;
+                             Var Dst: TJPEGBlock);
+Var I, Q: Integer; V: Real;
+Begin
+ For I := 0 To 63 Do Begin
+  V := Src[JPEG_ZIGZAG[I]];
+  Q := QT[JPEG_ZIGZAG[I]];
+  If Q < 1 Then Q := 1;
+  If V >= 0 Then Dst[I] := Trunc((V + Q/2) / Q)
+            Else Dst[I] := -Trunc((-V + Q/2) / Q);
+ End;
+End;
+
+Procedure JPEGEncodeCoef(Value: Integer; Var Size: Integer; Var Bits: Word);
+Var AV: LongInt;
+Begin
+ AV := Abs(Value);
+ Size := 0;
+ While AV <> 0 Do Begin Inc(Size); AV := AV Shr 1; End;
+ If Value < 0 Then
+  Bits := Word((LongInt(Value) + (LongInt(1) Shl Size) - 1)
+               And ((LongInt(1) Shl Size) - 1))
+ Else
+  Bits := Word(Value);
+End;
+
+Procedure JPEGEncodeBlock(Var F: File; Const ZZ: TJPEGBlock; Var PrevDC: Integer);
+Var K, RunLen, Size, RS: Integer; Diff: Integer; Bits: Word;
+Begin
+ { Coefficient DC : codage diffÃ©rentiel }
+ Diff := ZZ[0] - PrevDC;
+ PrevDC := ZZ[0];
+ JPEGEncodeCoef(Diff, Size, Bits);
+ WriteJPEGBits(F, JPEG_DCCode[Size], JPEG_DCSize[Size]);
+ If Size > 0 Then WriteJPEGBits(F, Bits, Size);
+ { Coefficients AC }
+ K := 1;
+ While K <= 63 Do Begin
+  RunLen := 0;
+  While (K <= 63) And (ZZ[K] = 0) Do Begin Inc(K); Inc(RunLen); End;
+  If K > 63 Then Begin
+   WriteJPEGBits(F, JPEG_ACCode[$00], JPEG_ACSize[$00]); { EOB }
+   Break;
+  End;
+  While RunLen >= 16 Do Begin
+   WriteJPEGBits(F, JPEG_ACCode[$F0], JPEG_ACSize[$F0]); { ZRL }
+   Dec(RunLen, 16);
+  End;
+  JPEGEncodeCoef(ZZ[K], Size, Bits);
+  RS := (RunLen Shl 4) Or Size;
+  WriteJPEGBits(F, JPEG_ACCode[RS], JPEG_ACSize[RS]);
+  If Size > 0 Then WriteJPEGBits(F, Bits, Size);
+  Inc(K);
+ End;
+End;
+
 Procedure WriteJPEGImageData(Var F: File; Width, Height: Integer);
 Var
  X, Y, BX, BY, I, J: Integer;
  R, G, B: Byte;
- YVal, CbVal, CrVal: Integer;
- Block: TJPEGBlock;
- DC: Integer;
+ YV, CbV, CrV: Integer;
+ BlkY, BlkCb, BlkCr: TJPEGRealBlock;
+ ZZ: TJPEGBlock;
 Begin
+ InitJPEGCosTab;
+ InitJPEGHuffTables;
  JPEGBitBuffer := 0;
  JPEGBitsInBuffer := 0;
  JPEGPrevDC_Y := 0;
  JPEGPrevDC_Cb := 0;
  JPEGPrevDC_Cr := 0;
 
- { Traiter l'image par blocs de 8x8 }
  BY := 0;
- While BY < Height do Begin
+ While BY < Height Do Begin
   BX := 0;
-  While BX < Width do Begin
-   { Construire un bloc Y simplifiÃ© }
-   DC := 0;
-   For J := 0 to 7 do Begin
-    For I := 0 to 7 do Begin
+  While BX < Width Do Begin
+   For J := 0 To 7 Do Begin
+    For I := 0 To 7 Do Begin
      X := BX + I;
      Y := BY + J;
-     If (X < Width) And (X < BufferWidth) And (Y < Height) And (Y < BufferHeight) Then Begin
+     If X >= Width Then X := Width - 1;
+     If Y >= Height Then Y := Height - 1;
+     If (X < BufferWidth) And (Y < BufferHeight) Then Begin
       PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
-      RGBToYCbCr(R, G, B, YVal, CbVal, CrVal);
-      DC := DC + YVal;
-     End
-     Else
-      DC := DC + 128;
+      RGBToYCbCr(R, G, B, YV, CbV, CrV);
+     End Else Begin
+      YV := 128; CbV := 128; CrV := 128;
+     End;
+     BlkY [J*8+I] := YV  - 128;
+     BlkCb[J*8+I] := CbV - 128;
+     BlkCr[J*8+I] := CrV - 128;
     End;
    End;
-   DC := DC Div 64;
-
-   { Ã‰crire un coefficient DC simplifiÃ© (code 0 = pas de diffÃ©rence) }
-   WriteJPEGBits(F, 0, 2);  { Code EOB simplifiÃ© }
-
-   BX := BX + 8;
+   JPEGForwardDCT(BlkY);
+   JPEGQuantizeZigzag(BlkY, JPEGQuantLuma, ZZ);
+   JPEGEncodeBlock(F, ZZ, JPEGPrevDC_Y);
+   JPEGForwardDCT(BlkCb);
+   JPEGQuantizeZigzag(BlkCb, JPEGQuantChroma, ZZ);
+   JPEGEncodeBlock(F, ZZ, JPEGPrevDC_Cb);
+   JPEGForwardDCT(BlkCr);
+   JPEGQuantizeZigzag(BlkCr, JPEGQuantChroma, ZZ);
+   JPEGEncodeBlock(F, ZZ, JPEGPrevDC_Cr);
+   Inc(BX, 8);
   End;
-  BY := BY + 8;
+  Inc(BY, 8);
  End;
 
  FlushJPEGBits(F);
 End;
 
-{ Constantes pour les tables de Huffman AC standard }
-Const
- JPEG_AC_VALS: Array[0..161] of Byte = (
-  $01, $02, $03, $00, $04, $11, $05, $12, $21, $31, $41, $06, $13, $51, $61, $07,
-  $22, $71, $14, $32, $81, $91, $A1, $08, $23, $42, $B1, $C1, $15, $52, $D1, $F0,
-  $24, $33, $62, $72, $82, $09, $0A, $16, $17, $18, $19, $1A, $25, $26, $27, $28,
-  $29, $2A, $34, $35, $36, $37, $38, $39, $3A, $43, $44, $45, $46, $47, $48, $49,
-  $4A, $53, $54, $55, $56, $57, $58, $59, $5A, $63, $64, $65, $66, $67, $68, $69,
-  $6A, $73, $74, $75, $76, $77, $78, $79, $7A, $83, $84, $85, $86, $87, $88, $89,
-  $8A, $92, $93, $94, $95, $96, $97, $98, $99, $9A, $A2, $A3, $A4, $A5, $A6, $A7,
-  $A8, $A9, $AA, $B2, $B3, $B4, $B5, $B6, $B7, $B8, $B9, $BA, $C2, $C3, $C4, $C5,
-  $C6, $C7, $C8, $C9, $CA, $D2, $D3, $D4, $D5, $D6, $D7, $D8, $D9, $DA, $E1, $E2,
-  $E3, $E4, $E5, $E6, $E7, $E8, $E9, $EA, $F1, $F2, $F3, $F4, $F5, $F6, $F7, $F8,
-  $F9, $FA
- );
+{ Fonction principale pour sauvegarder un fichier JPEG }
+{ Quality: niveau de qualitÃ© de 1 (pire) Ã  100 (meilleur) }
 
 { Fonction principale pour sauvegarder un fichier JPEG }
 { Quality: niveau de qualitÃ© de 1 (pire) Ã  100 (meilleur) }
@@ -10681,86 +10831,302 @@ Begin
 End;
 
 Function SaveWPGFile(Const FileName: String): Boolean;
+{ Exporteur WPG VECTORIEL (WordPerfect Graphics 1.0).
+  Au lieu de rasteriser le dessin, on emet directement les primitives
+  vectorielles (rectangle, ligne, polygone, ellipse approchee). Tous les
+  champs multi-octets sont en little-endian conformement au format WPG. }
+Const
+ WPG_REC_FILLATTR  = $01;
+ WPG_REC_LINEATTR  = $02;
+ WPG_REC_POLYLINE  = $06;
+ WPG_REC_RECTANGLE = $07;
+ WPG_REC_POLYGON   = $08;
+ WPG_REC_COLORMAP  = $0E;
+ WPG_REC_START     = $0F;
+ WPG_REC_END       = $10;
 Var
  F: File;
- Width, Height, X, Y, I: Integer;
- R, G, B, Pix: Byte;
- RecLen: LongInt;
- Buf: Array[0..2047] of Byte;
- RunCount: Byte;
+ I, J, K: Integer;
+ MinX, MinY, MaxX, MaxY: Integer;
+ PicW, PicH: LongInt;
+ OffX, OffY: Integer;
+ LastLineCol, LastFillCol: Integer;
+ NPts: Integer;
+ PolyX: Array[0..127] of Word;
+ PolyY: Array[0..127] of Word;
+ RecBuf: Array[0..1023] of Byte;
+ RecPos: Integer;
+ R, G, B: Byte;
+ TmpHdr: Array[0..15] of Byte;
+
+ Procedure RBufInit;
+ Begin RecPos := 0; End;
+
+ Procedure RBufByte(Bb: Byte);
+ Begin RecBuf[RecPos] := Bb; Inc(RecPos); End;
+
+ Procedure RBufWordLE(W: Word);
+ Begin
+  RecBuf[RecPos]   := Byte(W And $FF);
+  RecBuf[RecPos+1] := Byte((W Shr 8) And $FF);
+  Inc(RecPos, 2);
+ End;
+
+ Procedure EmitRecord(RecType: Byte);
+ Var Hdr: Array[0..3] of Byte; HLen: Integer;
+ Begin
+  Hdr[0] := RecType;
+  If RecPos < $FF Then Begin
+   Hdr[1] := Byte(RecPos);
+   HLen := 2;
+  End Else Begin
+   Hdr[1] := $FF;
+   Hdr[2] := Byte(RecPos And $FF);
+   Hdr[3] := Byte((RecPos Shr 8) And $FF);
+   HLen := 4;
+  End;
+  BlockWrite(F, Hdr, HLen);
+  If RecPos > 0 Then BlockWrite(F, RecBuf, RecPos);
+ End;
+
+ Function MapX(VX: Integer): Word;
+ Var T: LongInt;
+ Begin
+  T := LongInt(VX) - LongInt(OffX);
+  If T < 0 Then T := 0;
+  If T > 65535 Then T := 65535;
+  MapX := Word(T);
+ End;
+
+ Function MapY(VY: Integer): Word;
+ Var T: LongInt;
+ Begin
+  { WPG : axe Y vers le haut, origine en bas a gauche. Inverser. }
+  T := PicH - (LongInt(VY) - LongInt(OffY));
+  If T < 0 Then T := 0;
+  If T > 65535 Then T := 65535;
+  MapY := Word(T);
+ End;
+
+ Procedure EmitLineAttr(ColorIdx: Integer);
+ Begin
+  If ColorIdx = LastLineCol Then Exit;
+  LastLineCol := ColorIdx;
+  RBufInit;
+  RBufByte(1);                  { Style = solid }
+  RBufByte(Byte(ColorIdx And $FF));
+  EmitRecord(WPG_REC_LINEATTR);
+ End;
+
+ Procedure EmitFillAttr(ColorIdx: Integer);
+ Begin
+  If ColorIdx = LastFillCol Then Exit;
+  LastFillCol := ColorIdx;
+  RBufInit;
+  If ColorIdx < 0 Then Begin
+   RBufByte(0);                 { Style = none }
+   RBufByte(0);
+  End Else Begin
+   RBufByte(1);                 { Style = solid }
+   RBufByte(Byte(ColorIdx And $FF));
+  End;
+  EmitRecord(WPG_REC_FILLATTR);
+ End;
+
+ Procedure EmitRectangleRec(X1, Y1, X2, Y2: Integer);
+ Var WX1, WY1, WW, WH: Word; T: Integer; A, B2: LongInt;
+ Begin
+  If X1 > X2 Then Begin T := X1; X1 := X2; X2 := T; End;
+  If Y1 > Y2 Then Begin T := Y1; Y1 := Y2; Y2 := T; End;
+  { WPG rectangle : x,y est le coin BAS-gauche en coords WPG. }
+  WX1 := MapX(X1);
+  WY1 := MapY(Y2);              { coin bas en visio = y2 (max) }
+  A := LongInt(MapX(X2)) - LongInt(WX1);
+  B2:= LongInt(MapY(Y1)) - LongInt(WY1);
+  If A < 0 Then A := 0; If A > 65535 Then A := 65535;
+  If B2< 0 Then B2:= 0; If B2> 65535 Then B2:= 65535;
+  WW := Word(A); WH := Word(B2);
+  RBufInit;
+  RBufWordLE(WX1); RBufWordLE(WY1);
+  RBufWordLE(WW);  RBufWordLE(WH);
+  EmitRecord(WPG_REC_RECTANGLE);
+ End;
+
+ Procedure EmitPolyPoints(RecType: Byte);
+ Var Ii: Integer;
+ Begin
+  RBufInit;
+  RBufWordLE(Word(NPts));
+  For Ii := 0 To NPts - 1 Do Begin
+   RBufWordLE(PolyX[Ii]);
+   RBufWordLE(PolyY[Ii]);
+  End;
+  EmitRecord(RecType);
+ End;
+
+ Procedure AddPoint(VX, VY: Integer);
+ Begin
+  If NPts > 127 Then Exit;
+  PolyX[NPts] := MapX(VX);
+  PolyY[NPts] := MapY(VY);
+  Inc(NPts);
+ End;
+
+ Procedure ApproxEllipse(X1, Y1, X2, Y2: Integer);
+ Var Cx, Cy, Rx, Ry: LongInt;
+     Step: Integer;
+     Theta: Real;
+     Px, Py: Integer;
+ Begin
+  Cx := (LongInt(X1) + LongInt(X2)) Div 2;
+  Cy := (LongInt(Y1) + LongInt(Y2)) Div 2;
+  Rx := Abs(LongInt(X2) - LongInt(X1)) Div 2;
+  Ry := Abs(LongInt(Y2) - LongInt(Y1)) Div 2;
+  NPts := 0;
+  For Step := 0 To 35 Do Begin
+   Theta := Step * (2.0 * Pi / 36.0);
+   Px := Integer(Cx + Round(Rx * Cos(Theta)));
+   Py := Integer(Cy + Round(Ry * Sin(Theta)));
+   AddPoint(Px, Py);
+  End;
+  { Fermer le polygone }
+  AddPoint(Integer(Cx + Rx), Integer(Cy));
+ End;
+
+ Procedure ApproxBezier(Const Pts: TPointArray; Cnt: Integer);
+ Var Step: Integer; T: Real;
+     X0, Y0, X1c, Y1c, X2c, Y2c, X3, Y3: Integer;
+     Bx, By: Real;
+     OneMt, OneMt2, OneMt3, T2, T3: Real;
+ Begin
+  NPts := 0;
+  If Cnt < 4 Then Exit;
+  X0 := Pts[1].X; Y0 := Pts[1].Y;
+  X1c:= Pts[2].X; Y1c:= Pts[2].Y;
+  X2c:= Pts[3].X; Y2c:= Pts[3].Y;
+  X3 := Pts[4].X; Y3 := Pts[4].Y;
+  For Step := 0 To 30 Do Begin
+   T := Step / 30.0;
+   OneMt := 1.0 - T;
+   OneMt2:= OneMt * OneMt;
+   OneMt3:= OneMt2 * OneMt;
+   T2 := T * T;
+   T3 := T2 * T;
+   Bx := OneMt3*X0 + 3*OneMt2*T*X1c + 3*OneMt*T2*X2c + T3*X3;
+   By := OneMt3*Y0 + 3*OneMt2*T*Y1c + 3*OneMt*T2*Y2c + T3*Y3;
+   AddPoint(Round(Bx), Round(By));
+  End;
+ End;
+
 Begin
  SaveWPGFile := False;
- If Not PrepareExportBuffer(Width, Height) Then Exit;
+ If ShapeCount <= 0 Then Begin
+  If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Exit;
+ End Else Begin
+  If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Exit;
+ End;
+ { Ajouter une marge }
+ Dec(MinX, 10); Dec(MinY, 10);
+ Inc(MaxX, 10); Inc(MaxY, 10);
+ OffX := MinX; OffY := MinY;
+ PicW := LongInt(MaxX) - LongInt(MinX);
+ PicH := LongInt(MaxY) - LongInt(MinY);
+ If PicW < 1 Then PicW := 1;
+ If PicH < 1 Then PicH := 1;
+ If PicW > 65535 Then PicW := 65535;
+ If PicH > 65535 Then PicH := 65535;
 
  Assign(F, FileName);
  {$I-} Rewrite(F, 1); {$I+}
- If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+ If IOResult <> 0 Then Exit;
 
- { Header: FF 'WPC' + dataOffset(LE 4) + ProductType + FileType + Ver + Ver }
- Buf[0] := $FF; Buf[1] := Ord('W'); Buf[2] := Ord('P'); Buf[3] := Ord('C');
- BlockWrite(F, Buf, 4);
- { Data offset = 16 (immediately after header) - LE in WPG header }
- WriteDWord(F, 16);
- Buf[0] := 1;          { ProductType }
- Buf[1] := $16;        { FileType    }
- Buf[2] := 1;          { Major ver   }
- Buf[3] := 0;          { Minor ver   }
- Buf[4] := 0; Buf[5] := 0; { Encryption 2 bytes }
- BlockWrite(F, Buf, 6);
+ { ===== En-tete WPG fixe ===== }
+ TmpHdr[0]  := $FF;
+ TmpHdr[1]  := Ord('W');
+ TmpHdr[2]  := Ord('P');
+ TmpHdr[3]  := Ord('C');
+ TmpHdr[4]  := 16; TmpHdr[5] := 0; TmpHdr[6] := 0; TmpHdr[7] := 0; { DataOffset LE }
+ TmpHdr[8]  := 1;     { ProductType }
+ TmpHdr[9]  := $16;   { FileType = graphics }
+ TmpHdr[10] := 1;     { Major version }
+ TmpHdr[11] := 0;     { Minor version }
+ TmpHdr[12] := 0; TmpHdr[13] := 0; TmpHdr[14] := 0; TmpHdr[15] := 0;
+ BlockWrite(F, TmpHdr, 16);
 
- { Record: Start (0x0F) length 0 }
- Buf[0] := $0F; BlockWrite(F, Buf, 1);
- WPGWriteRecLen(F, 0);
+ { ===== Record Start ===== }
+ RBufInit;
+ RBufByte(1);                   { Version }
+ RBufByte(0);                   { Flags }
+ RBufWordLE(Word(PicW));
+ RBufWordLE(Word(PicH));
+ EmitRecord(WPG_REC_START);
 
- { Record: ColorMap (0x0E) - 16 entries x 3 bytes + 4 bytes header }
- Buf[0] := $0E; BlockWrite(F, Buf, 1);
- WPGWriteRecLen(F, 4 + 16 * 3);
- WPGWriteWordBE(F, 0);       { Start index }
- WPGWriteWordBE(F, 16);      { Count       }
+ { ===== ColorMap : palette EGA 16 couleurs ===== }
+ RBufInit;
+ RBufWordLE(0);                 { Start index }
+ RBufWordLE(16);                { Count }
  For I := 0 To 15 Do Begin
   PaletteToRGB(I, R, G, B);
-  Buf[0] := R; Buf[1] := G; Buf[2] := B;
-  BlockWrite(F, Buf, 3);
+  RBufByte(R); RBufByte(G); RBufByte(B);
  End;
+ EmitRecord(WPG_REC_COLORMAP);
 
- { Record: Bitmap1 (0x0B) - simple bitmap. Header: Width, Height, depth, HRes, VRes (5 WORDs BE), then RLE row data. }
- { We'll write each row as a single literal run (count byte 0..127 + that many bytes). MaxRunLen=127. }
- Buf[0] := $0B; BlockWrite(F, Buf, 1);
- { Compute total record length: 10 (header) + sum of row encodings }
- RecLen := 10;
- For Y := 0 To Height - 1 Do Begin
-  X := Width;
-  While X > 0 Do Begin
-   If X > 127 Then Begin Inc(RecLen, 128); Dec(X, 127); End
-              Else Begin Inc(RecLen, 1 + X); X := 0; End;
-  End;
- End;
- WPGWriteRecLen(F, RecLen);
- WPGWriteWordBE(F, Word(Width));
- WPGWriteWordBE(F, Word(Height));
- WPGWriteWordBE(F, 8);          { depth = 8 bpp }
- WPGWriteWordBE(F, 75);         { HRes }
- WPGWriteWordBE(F, 75);         { VRes }
- For Y := 0 To Height - 1 Do Begin
-  X := 0;
-  While X < Width Do Begin
-   If Width - X > 127 Then RunCount := 127
-                      Else RunCount := Byte(Width - X);
-   BlockWrite(F, RunCount, 1);
-   For I := 0 To RunCount - 1 Do Begin
-    Pix := PixelBuffer^[Y, X + I];
-    BlockWrite(F, Pix, 1);
+ { ===== Emettre les formes ===== }
+ LastLineCol := -2;
+ LastFillCol := -2;
+
+ For I := 1 To ShapeCount Do Begin
+  Case Shapes[I].ShapeType Of
+   stRectangle: Begin
+    EmitLineAttr(Shapes[I].LineColor);
+    EmitFillAttr(Shapes[I].FillColor);
+    EmitRectangleRec(Shapes[I].X1, Shapes[I].Y1,
+                     Shapes[I].X2, Shapes[I].Y2);
    End;
-   Inc(X, RunCount);
+   stEllipse: Begin
+    EmitLineAttr(Shapes[I].LineColor);
+    EmitFillAttr(Shapes[I].FillColor);
+    ApproxEllipse(Shapes[I].X1, Shapes[I].Y1,
+                  Shapes[I].X2, Shapes[I].Y2);
+    EmitPolyPoints(WPG_REC_POLYGON);
+   End;
+   stLine, stConnector: Begin
+    EmitLineAttr(Shapes[I].LineColor);
+    NPts := 0;
+    AddPoint(Shapes[I].X1, Shapes[I].Y1);
+    AddPoint(Shapes[I].X2, Shapes[I].Y2);
+    EmitPolyPoints(WPG_REC_POLYLINE);
+   End;
+   stPolygon: Begin
+    If Shapes[I].PointCount >= 2 Then Begin
+     EmitLineAttr(Shapes[I].LineColor);
+     EmitFillAttr(Shapes[I].FillColor);
+     NPts := 0;
+     For J := 1 To Shapes[I].PointCount Do
+      AddPoint(Shapes[I].Points[J].X, Shapes[I].Points[J].Y);
+     If Shapes[I].PointCount >= 3 Then
+      EmitPolyPoints(WPG_REC_POLYGON)
+     Else
+      EmitPolyPoints(WPG_REC_POLYLINE);
+    End;
+   End;
+   stBezier: Begin
+    If Shapes[I].PointCount >= 4 Then Begin
+     EmitLineAttr(Shapes[I].LineColor);
+     ApproxBezier(Shapes[I].Points, Shapes[I].PointCount);
+     EmitPolyPoints(WPG_REC_POLYLINE);
+    End;
+   End;
+   { stText, stImage : pas de support vectoriel direct dans WPG 1.0 simple }
   End;
+  K := 0; If K <> 0 Then ; { silence compiler }
  End;
 
- { Record: End (0x10) length 0 }
- Buf[0] := $10; BlockWrite(F, Buf, 1);
- WPGWriteRecLen(F, 0);
+ { ===== Record End ===== }
+ RBufInit;
+ EmitRecord(WPG_REC_END);
 
  Close(F);
- FreePixelBuffer;
  SaveWPGFile := True;
 End;
 

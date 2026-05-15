@@ -53,9 +53,9 @@ Program VISIO;
 {$ENDIF}
 
 Uses {$IFDEF FPC}
-      Crt,PtcGraph,PtcCrt,PtcMouse
+      Crt,PtcGraph,PtcCrt,PtcMouse,Dos
      {$ELSE}
-      Crt,Graph
+      Crt,Graph,Dos
      {$ENDIF};
 
 Const
@@ -349,6 +349,9 @@ Type
  End;
 
 Var
+ Language:(_French,_English,_Germany,_Italian,_Spain,_Albanian,_Portuguese,_Swedish,_Danish,_Japanese);
+ TmpLanguage:String;
+
  CurrentMenu: Integer;
  MenuState: TMenuState;
  ScreenWidth, ScreenHeight: Integer;
@@ -8369,7 +8372,9 @@ Var
  Items: Array[1..MaxItems] of String[20];
 Begin
  { DÃ©finir les Ã©lÃ©ments selon le menu sÃ©lectionnÃ© }
- Case MenuIndex of
+ Case Language Of
+  _English: Begin
+   Case MenuIndex of
   1: Begin { File }
       ItemCount := 11;
       Items[1] := 'New';
@@ -8465,6 +8470,107 @@ Begin
      End;
   Else
    ItemCount := 0;
+   End;
+  End;
+  Else Begin { Francais par defaut }
+   Case MenuIndex of
+    1: Begin { Fichier }
+        ItemCount := 11;
+        Items[1] := 'Nouveau';
+        Items[2] := 'Ouvrir...';
+        Items[3] := 'Fermer';
+        Items[4] := 'Enregistrer';
+        Items[5] := 'Enregistrer sous...';
+        Items[6] := '-';
+        Items[7] := 'Exporter...';
+        Items[8] := '-';
+        Items[9] := 'Imprimer...';
+        Items[10] := 'Apercu impression';
+        Items[11] := 'Quitter';
+       End;
+    2: Begin { Edition }
+        ItemCount := 12;
+        Items[1] := 'Annuler';
+        Items[2] := 'Retablir';
+        Items[3] := '-';
+        Items[4] := 'Couper';
+        Items[5] := 'Copier';
+        Items[6] := 'Coller';
+        Items[7] := 'Supprimer';
+        Items[8] := '-';
+        Items[9] := 'Tout selectionner';
+        Items[10] := '-';
+        Items[11] := 'Rechercher...';
+        Items[12] := 'Remplacer...';
+       End;
+    3: Begin { Affichage }
+        ItemCount := 9;
+        Items[1] := 'Zoom avant';
+        Items[2] := 'Zoom arriere';
+        Items[3] := 'Page entiere';
+        Items[4] := '-';
+        Items[5] := 'Grille';
+        Items[6] := 'Regles';
+        Items[7] := 'Reperes';
+        Items[8] := '-';
+        Items[9] := 'Aligner sur grille';
+       End;
+    4: Begin { Insertion }
+        ItemCount := 6;
+        Items[1] := 'Forme';
+        Items[2] := 'Zone de texte';
+        Items[3] := 'Image...';
+        Items[4] := 'Connecteur';
+        Items[5] := 'Page';
+        Items[6] := 'Calque';
+       End;
+    5: Begin { Format }
+        ItemCount := 7;
+        Items[1] := 'Remplissage...';
+        Items[2] := 'Trait...';
+        Items[3] := 'Texte...';
+        Items[4] := '-';
+        Items[5] := 'Alignement';
+        Items[6] := 'Grouper';
+        Items[7] := 'Degrouper';
+       End;
+    6: Begin { Forme }
+        ItemCount := 10;
+        Items[1] := 'Rotation';
+        Items[2] := 'Retournement';
+        Items[3] := '-';
+        Items[4] := 'Aligner';
+        Items[5] := 'Distribuer';
+        Items[6] := '-';
+        Items[7] := 'Taille';
+        Items[8] := 'Position';
+        Items[9] := '-';
+        Items[10] := 'Operations';
+       End;
+    7: Begin { Outils }
+        ItemCount := 4;
+        Items[1] := 'Aligner sur grille';
+        Items[2] := 'Aligner sur reperes';
+        Items[3] := '-';
+        Items[4] := 'Options...';
+       End;
+    8: Begin { Fenetre }
+        ItemCount := 4;
+        Items[1] := 'Nouvelle fenetre';
+        Items[2] := 'Cascade';
+        Items[3] := 'Mosaique';
+        Items[4] := 'Fermer tout';
+       End;
+    9: Begin { Aide }
+        ItemCount := 3;
+        Items[1] := 'Rubriques d''aide';
+        Items[2] := '-';
+        Items[3] := 'A propos de Visio';
+       End;
+    Else
+     ItemCount := 0;
+   End;
+  End;
  End;
 
  If ItemCount = 0 Then Exit;
@@ -8525,6 +8631,16 @@ Begin
  End;
 End;
 
+{ Fonction utilitaire : conversion de chaine en majuscules (ASCII) }
+Function StrToUpper(Const S:String):String;
+Var I:Integer; R:String;
+Begin
+ R:=S;
+ For I:=1 To Length(R) Do
+  If(R[I]>='a')And(R[I]<='z')Then R[I]:=Chr(Ord(R[I])-32);
+ StrToUpper:=R;
+End;
+
 { ProcÃ©dure pour initialiser le systÃ¨me de menus }
 Procedure InitMenuSystem;
 Begin
@@ -8534,6 +8650,31 @@ Begin
  OldHoveredMenuItem := 0;
  PrevMouseX := -1;
  PrevMouseY := -1;
+
+ { Localisation des noms et positions de la barre de menu.
+   Defaut = anglais (deja en typed const). Si Language <> _English,
+   on bascule en francais. }
+ If Language <> _English Then Begin
+  MenuNames[1] := 'Fichier';
+  MenuNames[2] := 'Edition';
+  MenuNames[3] := 'Affichage';
+  MenuNames[4] := 'Insertion';
+  MenuNames[5] := 'Format';
+  MenuNames[6] := 'Forme';
+  MenuNames[7] := 'Outils';
+  MenuNames[8] := 'Fenetre';
+  MenuNames[9] := 'Aide';
+  MenuPositions[1] := 5;
+  MenuPositions[2] := 70;
+  MenuPositions[3] := 135;
+  MenuPositions[4] := 215;
+  MenuPositions[5] := 295;
+  MenuPositions[6] := 350;
+  MenuPositions[7] := 400;
+  MenuPositions[8] := 455;
+  MenuPositions[9] := 520;
+ End;
+
  ScreenWidth := GetMaxX;
  ScreenHeight := GetMaxY;
  CurrentFileName := '';
@@ -8789,6 +8930,26 @@ Begin
 End;
 
 BEGIN
+ { Initialiser la langue }
+ Language:=_French;
+ TmpLanguage:=GetEnv('LANGUAGE');
+ If TmpLanguage<>''Then Begin
+  If TmpLanguage[1]='"'Then TmpLanguage:=Copy(TmpLanguage,2,255);
+  If StrToUpper(Copy(TmpLanguage,1,2))='EN'Then Language:=_English Else
+  If StrToUpper(Copy(TmpLanguage,1,2))='GR'Then Language:=_Germany Else
+  If StrToUpper(Copy(TmpLanguage,1,2))='IT'Then Language:=_Italian Else
+  If StrToUpper(Copy(TmpLanguage,1,2))='SP'Then Language:=_Spain Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='SQ')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='ALB')Then Language:=_Albanian Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='PT')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='PRT')Then Language:=_Portuguese Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='SE')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='SWE')Then Language:=_Swedish Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='DK')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='DNK')Then Language:=_Danish Else
+  If(StrToUpper(Copy(TmpLanguage,1,2))='JP')or
+    (StrToUpper(Copy(TmpLanguage,1,3))='JPN')Then Language:=_Japanese;
+ End;
  InitializeGraphics;
  InitMenuSystem;
  InitShapes;

@@ -1169,6 +1169,7 @@ Procedure DetachOLEObject(OleIdx: Integer); Forward;
 Function GetOLEObjectStatus(OleIdx: Integer): String; Forward;
 Function DetectOLEApplication(Const FilePath: String): String; Forward;
 Function Import3DSFile(Const FilePath: String; Var EdgeCount: Integer): Boolean; Forward;
+Function ImportACISFile(Const FilePath: String; Var EdgeCount: Integer): Boolean; Forward;
 Function GetImageRefStatus(ImgIdx: Integer): String; Forward;
 Function DetectImageDimensions(Const FilePath: String; Var PW, PH: Integer): Boolean; Forward;
 
@@ -11820,6 +11821,154 @@ Begin
 End;
 
 { ============================================================================ }
+{ Import ACIS (.SAT) - extraction des points et reconstruction polyligne      }
+{ ============================================================================ }
+
+{ Le format ACIS SAT (Standard ACIS Text) est un fichier texte decrivant des
+  entites de modelisation 3D. Chaque enregistrement se termine par '#' et
+  contient un type d'entite suivi de references ($N) et de valeurs. Pour un
+  apercu lineaire suffisant a une importation graphique, on extrait les
+  entites 'point' (chacune fournit X Y Z) et on relie les points consecutifs
+  par des segments en projection orthographique (Z ignore). Les 3 premieres
+  lignes du fichier constituent l'en-tete (version, produit/date/unites,
+  facteurs d'echelle) et sont ignorees. }
+
+Function ImportACISFile(Const FilePath: String; Var EdgeCount: Integer): Boolean;
+Const
+ MAX_PTS = 4096;
+ MAX_TOKENS = 16;
+Type
+ TPt3D = Record X, Y, Z: Real; End;
+Var
+ F: Text;
+ Pts: Array[0..MAX_PTS-1] of TPt3D;
+ ProjX, ProjY: Array[0..MAX_PTS-1] of Real;
+ Tokens: Array[0..MAX_TOKENS-1] of String;
+ LineStr: String;
+ PtCount, NTok, P, K, I, PIdx, ObjIdx: Integer;
+ Code: Integer;
+ X, Y, Z: Real;
+ MinX, MinY, MaxX, MaxY, SX, SY, Scale, CX, CY: Real;
+ Found: Boolean;
+Begin
+ ImportACISFile := False;
+ EdgeCount := 0;
+ PtCount := 0;
+
+ {$I-}
+ Assign(F, FilePath);
+ Reset(F);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+
+ { Ignorer les 3 lignes d'en-tete SAT }
+ For K := 1 To 3 Do
+  If Not EOF(F) Then ReadLn(F, LineStr);
+
+ While (Not EOF(F)) and (PtCount < MAX_PTS) Do Begin
+  ReadLn(F, LineStr);
+
+  { Tokeniser sur espaces et tabulations }
+  NTok := 0;
+  P := 1;
+  While (P <= Length(LineStr)) and (NTok < MAX_TOKENS) Do Begin
+   While (P <= Length(LineStr)) and
+         ((LineStr[P] = ' ') or (LineStr[P] = #9)) Do Inc(P);
+   If P > Length(LineStr) Then Break;
+   Tokens[NTok] := '';
+   While (P <= Length(LineStr)) and
+         (LineStr[P] <> ' ') and (LineStr[P] <> #9) Do Begin
+    Tokens[NTok] := Tokens[NTok] + LineStr[P];
+    Inc(P);
+   End;
+   Inc(NTok);
+  End;
+
+  { Chercher un token 'point' suivi de 3 nombres }
+  For K := 0 To NTok - 1 Do
+   If Tokens[K] = 'point' Then Begin
+    PIdx := K + 1;
+    { Sauter les references $N (souvent $-1 pour l'attribut box) }
+    While (PIdx < NTok) and (Length(Tokens[PIdx]) > 0) and
+          (Tokens[PIdx][1] = '$') Do Inc(PIdx);
+    If PIdx + 2 < NTok Then Begin
+     Val(Tokens[PIdx], X, Code);
+     If Code = 0 Then Begin
+      Val(Tokens[PIdx+1], Y, Code);
+      If Code = 0 Then Begin
+       Val(Tokens[PIdx+2], Z, Code);
+       If (Code = 0) and (PtCount < MAX_PTS) Then Begin
+        Pts[PtCount].X := X;
+        Pts[PtCount].Y := Y;
+        Pts[PtCount].Z := Z;
+        Inc(PtCount);
+       End;
+      End;
+     End;
+    End;
+    Break;
+   End;
+ End;
+ Close(F);
+
+ If PtCount < 2 Then Exit;
+
+ { Calcul des bornes pour mise a l'echelle ~200 unites monde }
+ MinX := Pts[0].X; MaxX := Pts[0].X;
+ MinY := Pts[0].Y; MaxY := Pts[0].Y;
+ For I := 1 To PtCount - 1 Do Begin
+  If Pts[I].X < MinX Then MinX := Pts[I].X;
+  If Pts[I].X > MaxX Then MaxX := Pts[I].X;
+  If Pts[I].Y < MinY Then MinY := Pts[I].Y;
+  If Pts[I].Y > MaxY Then MaxY := Pts[I].Y;
+ End;
+ SX := MaxX - MinX;
+ SY := MaxY - MinY;
+ If SX < 0.000001 Then SX := 1;
+ If SY < 0.000001 Then SY := 1;
+ If SX > SY Then Scale := 200.0 / SX
+ Else Scale := 200.0 / SY;
+ CX := (MinX + MaxX) * 0.5;
+ CY := (MinY + MaxY) * 0.5;
+ For I := 0 To PtCount - 1 Do Begin
+  ProjX[I] := (Pts[I].X - CX) * Scale - ViewOffsetX;
+  ProjY[I] := (Pts[I].Y - CY) * Scale - ViewOffsetY;
+ End;
+
+ { Reconstruire un fil de fer en reliant les points consecutifs.
+   Une SAT complete necessiterait le suivi des entites edge/vertex/coedge,
+   mais une polyligne sequentielle donne un apercu visuel exploitable. }
+ For I := 0 To PtCount - 2 Do Begin
+  Found := False;
+  ObjIdx := -1;
+  For K := 0 To MAX_OBJECTS - 1 Do
+   If DrawObjects[K].ObjType = OBJ_NONE Then Begin
+    ObjIdx := K;
+    Found := True;
+    Break;
+   End;
+  If Not Found Then Break;
+  DrawObjects[ObjIdx].ObjType := OBJ_LINE;
+  DrawObjects[ObjIdx].X1 := ProjX[I];
+  DrawObjects[ObjIdx].Y1 := ProjY[I];
+  DrawObjects[ObjIdx].X2 := ProjX[I+1];
+  DrawObjects[ObjIdx].Y2 := ProjY[I+1];
+  DrawObjects[ObjIdx].Color := White;
+  DrawObjects[ObjIdx].LineType := 0;
+  DrawObjects[ObjIdx].LineWeight := 0;
+  DrawObjects[ObjIdx].LayerIndex := CurrentLayer;
+  DrawObjects[ObjIdx].Selected := False;
+  DrawObjects[ObjIdx].Visible := True;
+  DrawObjects[ObjIdx].Closed := False;
+  DrawObjects[ObjIdx].VertexCount := 0;
+  If ObjIdx >= ObjectCount Then ObjectCount := ObjIdx + 1;
+  Inc(EdgeCount);
+ End;
+
+ ImportACISFile := EdgeCount > 0;
+End;
+
+{ ============================================================================ }
 { Suivi des modifications et confirmation de sortie                            }
 { ============================================================================ }
 
@@ -16363,7 +16512,11 @@ Begin
         CommandPrompt := 'Fichier 3D Studio (.3DS) a importer:';
         CommandBuffer := '';
        End;
-       7: CommandLastLine := 'ACIS: fonction non disponible dans cette version';
+       7: Begin { Fichier ACIS (.SAT) }
+        PendingFileAction := 10;
+        CommandPrompt := 'Fichier ACIS (.SAT) a importer:';
+        CommandBuffer := '';
+       End;
        9: Begin { Objet OLE... }
         PendingFileAction := 8;
         CommandPrompt := 'Fichier source pour objet OLE:';
@@ -17668,6 +17821,15 @@ Begin
           MarkDocumentModified;
          End Else
           CommandLastLine := 'Echec import 3DS: ' + CommandBuffer;
+        End;
+        10: Begin { Importer un fichier ACIS (.SAT) }
+         I := 0;
+         If ImportACISFile(CommandBuffer, I) Then Begin
+          Str(I, CmdBufStr);
+          CommandLastLine := 'Fichier ACIS importe (' + CmdBufStr + ' segments): ' + CommandBuffer;
+          MarkDocumentModified;
+         End Else
+          CommandLastLine := 'Echec import ACIS: ' + CommandBuffer;
         End;
        End;
        PendingFileAction := 0;

@@ -10799,6 +10799,595 @@ Begin
  SaveTIFFFile := True;
 End;
 
+{ ---------- LBM (Electronic Arts IFF/ILBM, planar, 4 plans = 16 couleurs) ---------- }
+
+Function SaveLBMFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y, I: Integer;
+ Plane: Integer;
+ RowBytes: Word;
+ PlaneRow: Array[0..511] of Byte;
+ BMHDBuf: Array[0..19] of Byte;
+ CMAPBuf: Array[0..47] of Byte;
+ IdBuf: Array[0..3] of Char;
+ BodyStart, BodyEnd, FormStart, FormEnd: LongInt;
+ Size: LongInt;
+ Pix, BitVal, ByteIdx, BitInByte: Byte;
+ R, G, B: Byte;
+ PadByte: Byte;
+ DummyW: Word;
+
+ Procedure WriteBE16Local(Value: Word);
+ Var Bb: Array[0..1] of Byte;
+ Begin
+  Bb[0] := Hi(Value); Bb[1] := Lo(Value);
+  BlockWrite(F, Bb, 2);
+ End;
+
+ Procedure WriteBE32Local(Value: LongInt);
+ Var Bb: Array[0..3] of Byte;
+ Begin
+  Bb[0] := Byte((Value Shr 24) And $FF);
+  Bb[1] := Byte((Value Shr 16) And $FF);
+  Bb[2] := Byte((Value Shr  8) And $FF);
+  Bb[3] := Byte( Value         And $FF);
+  BlockWrite(F, Bb, 4);
+ End;
+
+ Procedure WriteId(Const Id: String);
+ Var Bb: Array[0..3] of Char; Ii: Integer;
+ Begin
+  For Ii := 0 To 3 Do
+   If (Ii + 1) <= Length(Id) Then Bb[Ii] := Id[Ii + 1]
+                              Else Bb[Ii] := ' ';
+  BlockWrite(F, Bb, 4);
+ End;
+
+Begin
+ SaveLBMFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+ RowBytes := Word(((Word(Width) + 15) Div 16) * 2);
+ { FORM <size> ILBM ... }
+ WriteId('FORM');
+ FormStart := FilePos(F);
+ WriteBE32Local(0);                 { placeholder }
+ WriteId('ILBM');
+ { BMHD chunk: 20 bytes BE }
+ BMHDBuf[ 0] := Byte((Width  Shr 8) And $FF);  BMHDBuf[ 1] := Byte(Width  And $FF);
+ BMHDBuf[ 2] := Byte((Height Shr 8) And $FF);  BMHDBuf[ 3] := Byte(Height And $FF);
+ BMHDBuf[ 4] := 0; BMHDBuf[ 5] := 0;
+ BMHDBuf[ 6] := 0; BMHDBuf[ 7] := 0;
+ BMHDBuf[ 8] := 4;                  { nPlanes = 4 (16 couleurs EGA) }
+ BMHDBuf[ 9] := 0;                  { masking }
+ BMHDBuf[10] := 0;                  { compression : aucune }
+ BMHDBuf[11] := 0;
+ BMHDBuf[12] := 0; BMHDBuf[13] := 0;
+ BMHDBuf[14] := 1; BMHDBuf[15] := 1;
+ BMHDBuf[16] := BMHDBuf[ 0]; BMHDBuf[17] := BMHDBuf[ 1];
+ BMHDBuf[18] := BMHDBuf[ 2]; BMHDBuf[19] := BMHDBuf[ 3];
+ WriteId('BMHD'); WriteBE32Local(20);
+ BlockWrite(F, BMHDBuf, 20);
+ { CMAP chunk: 16 entrees * 3 octets = 48 octets }
+ For I := 0 To 15 Do Begin
+  PaletteToRGB(I, R, G, B);
+  CMAPBuf[I*3+0] := R; CMAPBuf[I*3+1] := G; CMAPBuf[I*3+2] := B;
+ End;
+ WriteId('CMAP'); WriteBE32Local(48);
+ BlockWrite(F, CMAPBuf, 48);
+ { BODY chunk }
+ WriteId('BODY');
+ BodyStart := FilePos(F);
+ WriteBE32Local(0);                 { placeholder taille BODY }
+ For Y := 0 To Height - 1 Do
+  For Plane := 0 To 3 Do Begin
+   FillChar(PlaneRow, RowBytes, 0);
+   For X := 0 To Width - 1 Do Begin
+    Pix := PixelBuffer^[Y, X];
+    BitVal := (Pix Shr Plane) And 1;
+    If BitVal <> 0 Then Begin
+     ByteIdx   := Byte(X Shr 3);
+     BitInByte := Byte(7 - (X And 7));
+     PlaneRow[ByteIdx] := PlaneRow[ByteIdx] Or Byte(1 Shl BitInByte);
+    End;
+   End;
+   BlockWrite(F, PlaneRow, RowBytes);
+  End;
+ BodyEnd := FilePos(F);
+ Size := BodyEnd - BodyStart - 4;
+ Seek(F, BodyStart); WriteBE32Local(Size);
+ Seek(F, BodyEnd);
+ If (Size And 1) <> 0 Then Begin
+  PadByte := 0; BlockWrite(F, PadByte, 1);
+ End;
+ { Fix FORM size }
+ FormEnd := FilePos(F);
+ Size := FormEnd - FormStart - 4;
+ Seek(F, FormStart); WriteBE32Local(Size);
+ Seek(F, FormEnd);
+ Close(F);
+ FreePixelBuffer;
+ IdBuf[0] := ' '; DummyW := 0; { suppress unused warnings }
+ If DummyW <> 0 Then ;
+ SaveLBMFile := True;
+End;
+
+{ ---------- CR2 (Canon RAW 2 minimal, conteneur TIFF LE + CFA Bayer 16 bits) ---------- }
+
+Function SaveCR2File(Const FileName: String): Boolean;
+Const
+ MakeText     = 'Canon'#0;
+ ModelText    = 'Canon EOS 5D'#0;
+ SoftwareText = 'CloneDRAW VISIO'#0;
+ DateTimeText = '2026:01:01 00:00:00'#0;
+Var
+ F: File;
+ Width, Height: Integer;
+ X, Y: Integer;
+ R, G, B: Byte;
+ Raw8: Byte;
+ Raw16: Word;
+ NumEntries: Word;
+ XResOffset, YResOffset: LongInt;
+ MakeOffset, ModelOffset, SoftwareOffset, DateTimeOffset: LongInt;
+ ColorMatrixOffset, StripOffset, StripByteCount: LongInt;
+
+ Procedure W8(Bb: Byte);
+ Begin BlockWrite(F, Bb, 1); End;
+
+ Procedure W16(W: Word);
+ Var Bb: Array[0..1] of Byte;
+ Begin
+  Bb[0] := Byte(W And $FF); Bb[1] := Byte((W Shr 8) And $FF);
+  BlockWrite(F, Bb, 2);
+ End;
+
+ Procedure W32(L: LongInt);
+ Var Bb: Array[0..3] of Byte;
+ Begin
+  Bb[0] := Byte(L And $FF);
+  Bb[1] := Byte((L Shr  8) And $FF);
+  Bb[2] := Byte((L Shr 16) And $FF);
+  Bb[3] := Byte((L Shr 24) And $FF);
+  BlockWrite(F, Bb, 4);
+ End;
+
+ Procedure IFDEntry(Tag, FType: Word; Count, Value: LongInt);
+ Begin W16(Tag); W16(FType); W32(Count); W32(Value); End;
+
+ Procedure WriteStr(Const S: String);
+ Var Ii: Integer; C: Char;
+ Begin
+  For Ii := 1 To Length(S) Do Begin
+   C := S[Ii]; BlockWrite(F, C, 1);
+  End;
+ End;
+
+Begin
+ SaveCR2File := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+ NumEntries := 25;
+ XResOffset := 16 + 2 + LongInt(NumEntries) * 12 + 4;
+ YResOffset := XResOffset + 8;
+ MakeOffset := YResOffset + 8;
+ ModelOffset    := MakeOffset     + Length(MakeText);
+ SoftwareOffset := ModelOffset    + Length(ModelText);
+ DateTimeOffset := SoftwareOffset + Length(SoftwareText);
+ ColorMatrixOffset := DateTimeOffset + Length(DateTimeText);
+ StripOffset    := ColorMatrixOffset + 72;
+ StripByteCount := LongInt(Width) * LongInt(Height) * 2;
+ { TIFF header LE + CR2 marker }
+ W16($4949); W16(42); W32(16);
+ W8(Ord('C')); W8(Ord('R')); W16(2); W32(0);
+ { IFD0 }
+ W16(NumEntries);
+ IFDEntry(256, 4, 1, LongInt(Width));
+ IFDEntry(257, 4, 1, LongInt(Height));
+ IFDEntry(258, 3, 1, 16);
+ IFDEntry(259, 3, 1, 1);                  { Compression = none }
+ IFDEntry(262, 3, 1, 32803);              { Photometric = CFA }
+ IFDEntry(271, 2, Length(MakeText),     MakeOffset);
+ IFDEntry(272, 2, Length(ModelText),    ModelOffset);
+ IFDEntry(273, 4, 1, StripOffset);
+ IFDEntry(274, 3, 1, 1);
+ IFDEntry(277, 3, 1, 1);
+ IFDEntry(278, 4, 1, LongInt(Height));
+ IFDEntry(279, 4, 1, StripByteCount);
+ IFDEntry(282, 5, 1, XResOffset);
+ IFDEntry(283, 5, 1, YResOffset);
+ IFDEntry(284, 3, 1, 1);
+ IFDEntry(296, 3, 1, 2);
+ IFDEntry(305, 2, Length(SoftwareText), SoftwareOffset);
+ IFDEntry(306, 2, Length(DateTimeText), DateTimeOffset);
+ IFDEntry(33421, 3, 2, LongInt($00020002));
+ IFDEntry(33422, 1, 4, LongInt($02010100));
+ IFDEntry(50710, 1, 3, LongInt($00020100));
+ IFDEntry(50711, 3, 1, 1);
+ IFDEntry(50714, 4, 1, 0);
+ IFDEntry(50717, 4, 1, 65535);
+ IFDEntry(50721, 10, 9, ColorMatrixOffset);
+ W32(0);
+ { Donnees referencees }
+ W32(72); W32(1); W32(72); W32(1);
+ WriteStr(MakeText); WriteStr(ModelText);
+ WriteStr(SoftwareText); WriteStr(DateTimeText);
+ { Matrice neutre 3x3 (SRationals) }
+ W32(1); W32(1); W32(0); W32(1); W32(0); W32(1);
+ W32(0); W32(1); W32(1); W32(1); W32(0); W32(1);
+ W32(0); W32(1); W32(0); W32(1); W32(1); W32(1);
+ { Strip CFA Bayer RGGB 16 bits }
+ For Y := 0 To Height - 1 Do
+  For X := 0 To Width - 1 Do Begin
+   PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
+   If (Y And 1) = 0 Then Begin
+    If (X And 1) = 0 Then Raw8 := R Else Raw8 := G;
+   End Else Begin
+    If (X And 1) = 0 Then Raw8 := G Else Raw8 := B;
+   End;
+   Raw16 := Word(Raw8) * 257;
+   W16(Raw16);
+  End;
+ Close(F);
+ FreePixelBuffer;
+ SaveCR2File := True;
+End;
+
+{ ---------- CUT (Dr. HALO, 8-bit indexed, RLE-mark $80) ---------- }
+
+Function SaveCUTFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y: Integer;
+ Hdr: Array[0..5] of Byte;
+ PixLine: Array[0..2047] of Byte;
+ RLEBuf:  Array[0..4159] of Byte;
+ Pos, DestPos: Word;
+ RunLen, LitLen, K: Word;
+ RLELen: Word;
+ EndMarker: Word;
+Begin
+ SaveCUTFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+ Hdr[0] := Lo(Word(Width));  Hdr[1] := Hi(Word(Width));
+ Hdr[2] := Lo(Word(Height)); Hdr[3] := Hi(Word(Height));
+ Hdr[4] := 0; Hdr[5] := 0;
+ BlockWrite(F, Hdr, 6);
+ For Y := 0 To Height - 1 Do Begin
+  For X := 0 To Width - 1 Do PixLine[X] := PixelBuffer^[Y, X];
+  { Encodage RLE Dr.HALO }
+  Pos := 0; DestPos := 0;
+  While Pos < Word(Width) Do Begin
+   RunLen := 1;
+   While (Pos + RunLen < Word(Width)) And (RunLen < 127) And
+         (PixLine[Pos + RunLen] = PixLine[Pos]) Do Inc(RunLen);
+   If RunLen >= 2 Then Begin
+    RLEBuf[DestPos]     := $80 Or Byte(RunLen);
+    RLEBuf[DestPos + 1] := PixLine[Pos];
+    Inc(DestPos, 2); Inc(Pos, RunLen);
+   End Else Begin
+    LitLen := 0;
+    While (Pos + LitLen < Word(Width)) And (LitLen < 127) Do Begin
+     If (Pos + LitLen + 1 < Word(Width)) And
+        (PixLine[Pos + LitLen] = PixLine[Pos + LitLen + 1]) Then Break;
+     Inc(LitLen);
+    End;
+    If LitLen = 0 Then LitLen := 1;
+    RLEBuf[DestPos] := Byte(LitLen); Inc(DestPos);
+    For K := 0 To LitLen - 1 Do
+     RLEBuf[DestPos + K] := PixLine[Pos + K];
+    Inc(DestPos, LitLen); Inc(Pos, LitLen);
+   End;
+  End;
+  RLEBuf[DestPos] := 0; Inc(DestPos);
+  RLELen := DestPos;
+  BlockWrite(F, RLELen, 2);
+  BlockWrite(F, RLEBuf, RLELen);
+ End;
+ EndMarker := 0;
+ BlockWrite(F, EndMarker, 2);
+ Close(F);
+ FreePixelBuffer;
+ SaveCUTFile := True;
+End;
+
+{ ---------- GEM/IMG (Digital Research, big-endian, 4 plans + XIMG) ---------- }
+
+Function SaveGEMFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y, I, Plane: Integer;
+ PlaneBytes: Word;
+ PlaneBuf: Array[0..511] of Byte;
+ Pix, Idx: Byte;
+ R, G, B: Byte;
+ P, LStart: Word;
+ RunByte, Cmd: Byte;
+ RunCount, EmitN: Word;
+ RVal, GVal, BVal: Word;
+ HdrLen: Word;
+
+ Procedure W16BE(W: Word);
+ Var Bb: Array[0..1] of Byte;
+ Begin
+  Bb[0] := Hi(W); Bb[1] := Lo(W); BlockWrite(F, Bb, 2);
+ End;
+
+ Procedure W8(Bb: Byte);
+ Begin BlockWrite(F, Bb, 1); End;
+
+ Function ToGEM(C: Byte): Word;
+ Begin ToGEM := Word((LongInt(C) * 1000 + 127) Div 255); End;
+
+Begin
+ SaveGEMFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+ PlaneBytes := Word((LongInt(Width) + 7) Div 8);
+ HdrLen := Word(11 + 3 * 16);     { 4 plans + XIMG 16 entrees }
+ W16BE(1);                         { Version }
+ W16BE(HdrLen);                    { HeaderLen en mots 16 bits }
+ W16BE(4);                         { NumPlanes }
+ W16BE(2);                         { PatternLen }
+ W16BE(372); W16BE(372);           { PixelDim }
+ W16BE(Word(Width)); W16BE(Word(Height));
+ W8(Ord('X')); W8(Ord('I')); W8(Ord('M')); W8(Ord('G'));
+ W16BE(0);                         { ColorModelRGB }
+ For I := 0 To 15 Do Begin
+  PaletteToRGB(I, R, G, B);
+  RVal := ToGEM(R); GVal := ToGEM(G); BVal := ToGEM(B);
+  W16BE(RVal); W16BE(GVal); W16BE(BVal);
+ End;
+ For Y := 0 To Height - 1 Do
+  For Plane := 0 To 3 Do Begin
+   FillChar(PlaneBuf, PlaneBytes, 0);
+   For X := 0 To Width - 1 Do Begin
+    Pix := PixelBuffer^[Y, X];
+    Idx := Pix;
+    If ((Idx Shr Plane) And 1) <> 0 Then
+     PlaneBuf[X Shr 3] := PlaneBuf[X Shr 3] Or Byte(1 Shl (7 - (X And 7)));
+   End;
+   { Encode RLE GEM }
+   P := 0;
+   While P < PlaneBytes Do Begin
+    RunByte := PlaneBuf[P];
+    If (RunByte = 0) Or (RunByte = $FF) Then Begin
+     RunCount := 1;
+     While (P + RunCount < PlaneBytes) And
+           (PlaneBuf[P + RunCount] = RunByte) Do Inc(RunCount);
+     While RunCount > 0 Do Begin
+      If RunCount > 127 Then EmitN := 127
+                        Else EmitN := RunCount;
+      If RunByte = 0 Then Cmd := Byte(EmitN)
+                     Else Cmd := Byte($80 Or EmitN);
+      W8(Cmd);
+      Dec(RunCount, EmitN); Inc(P, EmitN);
+     End;
+    End Else Begin
+     LStart := P;
+     While (P < PlaneBytes) And (PlaneBuf[P] <> 0) And
+           (PlaneBuf[P] <> $FF) And (P - LStart < 255) Do Inc(P);
+     EmitN := P - LStart;
+     W8($80); W8(Byte(EmitN));
+     BlockWrite(F, PlaneBuf[LStart], EmitN);
+    End;
+   End;
+  End;
+ Close(F);
+ FreePixelBuffer;
+ SaveGEMFile := True;
+End;
+
+{ ---------- HDR (Radiance RGBE, 4 octets/pixel, en-tete ASCII) ---------- }
+
+Function SaveHDRFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y: Integer;
+ R, G, B: Byte;
+ MaxC: Word;
+ ExpValue: Byte;
+ Pow2: Word;
+ Scale: Real;
+ RGBE: Array[0..3] of Byte;
+
+ Procedure WriteText(Const S: String);
+ Var Ii: Integer; C: Char;
+ Begin
+  For Ii := 1 To Length(S) Do Begin
+   C := S[Ii]; BlockWrite(F, C, 1);
+  End;
+ End;
+
+ Function NumStr(V: LongInt): String;
+ Var S: String;
+ Begin
+  Str(V, S);
+  While (Length(S) > 0) And (S[1] = ' ') Do Delete(S, 1, 1);
+  NumStr := S;
+ End;
+
+Begin
+ SaveHDRFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+ WriteText('#?RADIANCE'#10);
+ WriteText('SOFTWARE=CloneDRAW VISIO'#10);
+ WriteText('FORMAT=32-bit_rle_rgbe'#10);
+ WriteText('EXPOSURE=1.0000000000000'#10);
+ WriteText(#10);
+ WriteText('-Y ' + NumStr(Height) + ' +X ' + NumStr(Width) + #10);
+ For Y := 0 To Height - 1 Do
+  For X := 0 To Width - 1 Do Begin
+   PaletteToRGB(PixelBuffer^[Y, X], R, G, B);
+   MaxC := R;
+   If G > MaxC Then MaxC := G;
+   If B > MaxC Then MaxC := B;
+   If MaxC = 0 Then Begin
+    RGBE[0] := 0; RGBE[1] := 0; RGBE[2] := 0; RGBE[3] := 0;
+   End Else Begin
+    ExpValue := 0; Pow2 := 1;
+    While Pow2 <= MaxC Do Begin Pow2 := Pow2 Shl 1; Inc(ExpValue); End;
+    Scale := 256.0 / Pow2;
+    RGBE[0] := Byte(Round(R * Scale));
+    RGBE[1] := Byte(Round(G * Scale));
+    RGBE[2] := Byte(Round(B * Scale));
+    RGBE[3] := Byte(ExpValue + 128);
+   End;
+   BlockWrite(F, RGBE, 4);
+  End;
+ Close(F);
+ FreePixelBuffer;
+ SaveHDRFile := True;
+End;
+
+{ ---------- MAC (MacPaint Apple, 576x720 monochrome, PackBits) ---------- }
+
+Function SaveMACFile(Const FileName: String): Boolean;
+Const
+ MacW = 576; MacH = 720; MacRB = 72;
+Var
+ F: File;
+ Width, Height, X, Y, I: Integer;
+ ZeroByte, PadByte: Byte;
+ RowBuf:  Array[0..MacRB - 1] of Byte;
+ PackBuf: Array[0..MacRB * 2 + 1] of Byte;
+ Pos, DestPos: Word;
+ RunLen, LitLen, K: Word;
+ PixVal: Byte;
+ IsBlack: Boolean;
+Begin
+ SaveMACFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+ { En-tete 512 octets a zero }
+ ZeroByte := 0;
+ For I := 1 To 512 Do BlockWrite(F, ZeroByte, 1);
+ { 720 lignes PackBits }
+ For Y := 0 To MacH - 1 Do Begin
+  FillChar(RowBuf, MacRB, 0);
+  If Y < Height Then
+   For X := 0 To MacW - 1 Do
+    If X < Width Then Begin
+     PixVal := PixelBuffer^[Y, X];
+     { Indice EGA < 8 = couleur sombre, sinon claire ;
+       indice 0 noir, 15 blanc. Heuristique : < 8 => noir. }
+     IsBlack := (PixVal < 8) And (PixVal <> 7);
+     If PixVal = 7 Then IsBlack := False; { 7 = gris clair }
+     If IsBlack Then
+      RowBuf[X Shr 3] := RowBuf[X Shr 3] Or Byte(1 Shl (7 - (X And 7)));
+    End;
+  { PackBits compress }
+  Pos := 0; DestPos := 0;
+  While Pos < MacRB Do Begin
+   RunLen := 1;
+   While (Pos + RunLen < MacRB) And (RunLen < 128) And
+         (RowBuf[Pos + RunLen] = RowBuf[Pos]) Do Inc(RunLen);
+   If RunLen >= 3 Then Begin
+    PackBuf[DestPos]     := Byte(257 - RunLen);
+    PackBuf[DestPos + 1] := RowBuf[Pos];
+    Inc(DestPos, 2); Inc(Pos, RunLen);
+   End Else Begin
+    LitLen := 0;
+    While (Pos + LitLen < MacRB) And (LitLen < 128) Do Begin
+     If (Pos + LitLen + 2 < MacRB) And
+        (RowBuf[Pos + LitLen]     = RowBuf[Pos + LitLen + 1]) And
+        (RowBuf[Pos + LitLen + 1] = RowBuf[Pos + LitLen + 2]) Then Break;
+     Inc(LitLen);
+    End;
+    If LitLen = 0 Then LitLen := 1;
+    PackBuf[DestPos] := Byte(LitLen - 1); Inc(DestPos);
+    For K := 0 To LitLen - 1 Do PackBuf[DestPos + K] := RowBuf[Pos + K];
+    Inc(DestPos, LitLen); Inc(Pos, LitLen);
+   End;
+  End;
+  BlockWrite(F, PackBuf, DestPos);
+ End;
+ Close(F);
+ FreePixelBuffer;
+ PadByte := 0; If PadByte = 1 Then ; { suppress unused }
+ SaveMACFile := True;
+End;
+
+{ ---------- MSP (Microsoft Paint v1 "DanM", 1bpp non compresse) ---------- }
+
+Function SaveMSPFile(Const FileName: String): Boolean;
+Var
+ F: File;
+ Width, Height, X, Y: Integer;
+ BytesPerLine: Word;
+ OutLine: Array[0..511] of Byte;
+ Hdr: Array[0..31] of Byte;
+ PixVal: Byte;
+ IsInk: Boolean;
+ W: Word;
+
+ Procedure SetW(Off: Integer; Val: Word);
+ Begin
+  Hdr[Off]   := Byte(Val And $FF);
+  Hdr[Off+1] := Byte((Val Shr 8) And $FF);
+ End;
+
+ Function GetW(Off: Integer): Word;
+ Begin
+  GetW := Word(Hdr[Off]) Or (Word(Hdr[Off+1]) Shl 8);
+ End;
+
+Begin
+ SaveMSPFile := False;
+ If Not PrepareExportBuffer(Width, Height) Then Exit;
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreePixelBuffer; Exit; End;
+ BytesPerLine := Word((LongInt(Width) + 7) Div 8);
+ FillChar(Hdr, 32, 0);
+ SetW(0,  $6144);                  { 'D','a' }
+ SetW(2,  $4D6E);                  { 'n','M' }
+ SetW(4,  Word(Width));
+ SetW(6,  Word(Height));
+ SetW(8,  1); SetW(10, 1);
+ SetW(12, Word(Width));
+ SetW(14, Word(Height));
+ SetW(16, 0); SetW(18, 0);
+ W := 0;
+ W := W Xor GetW(0);  W := W Xor GetW(2);
+ W := W Xor GetW(4);  W := W Xor GetW(6);
+ W := W Xor GetW(8);  W := W Xor GetW(10);
+ W := W Xor GetW(12); W := W Xor GetW(14);
+ W := W Xor GetW(16); W := W Xor GetW(18);
+ SetW(20, W);
+ BlockWrite(F, Hdr, 32);
+ For Y := 0 To Height - 1 Do Begin
+  FillChar(OutLine, BytesPerLine, 0);
+  For X := 0 To Width - 1 Do Begin
+   PixVal := PixelBuffer^[Y, X];
+   { Convention MSP : bit 1 = encre (noir). Heuristique : indice
+     EGA 0..7 sombre (sauf 7=gris clair) considere comme encre. }
+   IsInk := (PixVal < 8) And (PixVal <> 7);
+   If IsInk Then
+    OutLine[X Shr 3] := OutLine[X Shr 3] Or Byte(1 Shl (7 - (X And 7)));
+  End;
+  BlockWrite(F, OutLine, BytesPerLine);
+ End;
+ Close(F);
+ FreePixelBuffer;
+ SaveMSPFile := True;
+End;
+
 { ---------- WPG (WordPerfect Graphics 1.0, 8-bit indexed, BE multi-byte) ---------- }
 
 Procedure WPGWriteWordBE(Var F: File; W: Word);
@@ -11867,6 +12456,13 @@ Begin
  Else If Ext = 'BGX'  Then Success := SaveBGXFile(FileName)
  Else If Ext = 'FAX'  Then Success := SaveFAXFile(FileName)
  Else If Ext = 'DCM'  Then Success := SaveDCMFile(FileName)
+ Else If Ext = 'LBM'  Then Success := SaveLBMFile(FileName)
+ Else If Ext = 'CR2'  Then Success := SaveCR2File(FileName)
+ Else If Ext = 'CUT'  Then Success := SaveCUTFile(FileName)
+ Else If Ext = 'GEM'  Then Success := SaveGEMFile(FileName)
+ Else If Ext = 'HDR'  Then Success := SaveHDRFile(FileName)
+ Else If Ext = 'MAC'  Then Success := SaveMACFile(FileName)
+ Else If Ext = 'MSP'  Then Success := SaveMSPFile(FileName)
  Else Begin
   If Language = _English Then StatusMessage := 'Unsupported export format: .' + Ext
                         Else StatusMessage := 'Format export non supporte : .' + Ext;
@@ -15117,8 +15713,11 @@ Const
  VFD_DRIVE_H       = 20;         { Hauteur barre de lecteurs }
  VFD_DRIVE_W       = 26;         { Largeur d'un bouton lecteur }
  VFD_MAX_FILES     = 512;        { Capacite maxi de la liste }
- VFD_MAX_FILTERS   = 16;         { Nb maxi de filtres }
+ VFD_MAX_FILTERS   = 32;         { Nb maxi de filtres }
  VFD_MAX_DRIVES    = 26;         { A..Z }
+ VFD_FILTER_VISIBLE = 8;         { Lignes visibles dans le drop-down filtre }
+ VFD_FILTER_SB_W   = 14;         { Largeur scrollbar drop-down filtre }
+ VFD_FILTER_ARROW_H = 14;        { Hauteur des boutons fleche scrollbar filtre }
 
  { Couleurs (palette EGA/VGA 0..15) }
  VFD_CLR_BG        = 7;          { Fond du dialogue : LightGray }
@@ -15168,6 +15767,7 @@ Var
  VFD_Filters     : Array[0..VFD_MAX_FILTERS-1] Of TVFDFilter;
  VFD_FilterCount : Integer;
  VFD_FilterIndex : Integer;
+ VFD_FilterScrollTop : Integer;  { Premier item visible dans le drop-down filtre }
  VFD_ScrollTop   : Integer;
  VFD_SelIndex    : Integer;
  VFD_InputText   : String[127];
@@ -15347,9 +15947,16 @@ Begin
    Add('TIFF image (*.TIF;*.TIFF)',            '*.TIF;*.TIFF');
    Add('WordPerfect Graphics (*.WPG)',         '*.WPG');
    Add('X11 bitmap (*.XBM)',                   '*.XBM');
-   Add('Borland BGI (*.BGX)',                  '*.BGX');
+   Add('Bitmap Genesis graphiX (*.BGX)',       '*.BGX');
    Add('CCITT G3 fax (*.FAX)',                 '*.FAX');
    Add('DICOM image (*.DCM)',                  '*.DCM');
+   Add('IFF/ILBM Amiga (*.LBM)',               '*.LBM');
+   Add('Canon RAW 2 (*.CR2)',                  '*.CR2');
+   Add('Dr. HALO (*.CUT)',                     '*.CUT');
+   Add('GEM/IMG image (*.GEM)',                '*.GEM');
+   Add('Radiance RGBE (*.HDR)',                '*.HDR');
+   Add('MacPaint (*.MAC)',                     '*.MAC');
+   Add('Microsoft Paint (*.MSP)',              '*.MSP');
    Add('All files (*.*)',                      '*.*');
   End Else Begin
    Add('Image PNG (*.PNG)',                    '*.PNG');
@@ -15362,9 +15969,16 @@ Begin
    Add('Image TIFF (*.TIF;*.TIFF)',            '*.TIF;*.TIFF');
    Add('WordPerfect Graphics (*.WPG)',         '*.WPG');
    Add('Bitmap X11 (*.XBM)',                   '*.XBM');
-   Add('Borland BGI (*.BGX)',                  '*.BGX');
+   Add('Bitmap Genesis graphiX (*.BGX)',       '*.BGX');
    Add('Fax CCITT G3 (*.FAX)',                 '*.FAX');
    Add('Image DICOM (*.DCM)',                  '*.DCM');
+   Add('IFF/ILBM Amiga (*.LBM)',               '*.LBM');
+   Add('Canon RAW 2 (*.CR2)',                  '*.CR2');
+   Add('Dr. HALO (*.CUT)',                     '*.CUT');
+   Add('Image GEM/IMG (*.GEM)',                '*.GEM');
+   Add('Radiance RGBE (*.HDR)',                '*.HDR');
+   Add('MacPaint (*.MAC)',                     '*.MAC');
+   Add('Microsoft Paint (*.MSP)',              '*.MSP');
    Add('Tous les fichiers (*.*)',              '*.*');
   End;
  End Else If Language = _English Then Begin
@@ -15401,6 +16015,7 @@ Begin
  VFD_InputCursor := Length(DefaultName);
  VFD_Result := 0;
  VFD_FilterOpen := False;
+ VFD_FilterScrollTop := 0;
  VFDInitFilters;
  VFDScanDrives;
  VFDLoadDirectory;
@@ -15580,13 +16195,96 @@ Begin
  Line(CX, IY + 3, CX, IY + VFD_INPUT_H - 4);
 End;
 
-{ Dessine le selecteur de filtre }
-Procedure VFDDrawFilter;
-Var FX, FY, FW: Integer; Txt: String;
+{ Dessine une fleche triangulaire pointant vers le haut (centree en CX, TopY) }
+Procedure VFDArrowUp(CX, TopY, Size: Integer);
+Var I: Integer;
+Begin
+ For I := 0 To Size - 1 Do
+  Line(CX - I, TopY + I, CX + I, TopY + I);
+End;
+
+{ Dessine une fleche triangulaire pointant vers le bas }
+Procedure VFDArrowDown(CX, TopY, Size: Integer);
+Var I: Integer;
+Begin
+ For I := 0 To Size - 1 Do
+  Line(CX - (Size - 1 - I), TopY + I, CX + (Size - 1 - I), TopY + I);
+End;
+
+{ Rectangle du combo-box filtre (la zone fermee, sans drop-down) }
+Procedure VFDFilterComboRect(Var FX, FY, FW: Integer);
 Begin
  FX := VFD_X + VFD_PAD;
  FW := VFD_W - 2 * VFD_PAD;
  FY := VFD_Y + VFD_H - VFD_PAD - VFD_BTN_H - VFD_PAD - VFD_FILTER_H;
+End;
+
+{ Nombre de lignes effectivement visibles dans le drop-down filtre }
+Function VFDFilterListVisible: Integer;
+Begin
+ If VFD_FilterCount < VFD_FILTER_VISIBLE Then
+  VFDFilterListVisible := VFD_FilterCount
+ Else
+  VFDFilterListVisible := VFD_FILTER_VISIBLE;
+End;
+
+{ Rectangle de la liste deroulante (au-dessus du combo) }
+Procedure VFDFilterListRect(Var LX, LY, LW, LH: Integer);
+Var FX, FY, FW, NVis: Integer;
+Begin
+ VFDFilterComboRect(FX, FY, FW);
+ NVis := VFDFilterListVisible;
+ If NVis < 1 Then NVis := 1;
+ LX := FX;
+ LW := FW;
+ LH := NVis * VFD_ROW_H + 2;
+ LY := FY - LH - 1;
+End;
+
+{ Rectangle du bouton fleche-haut de la scrollbar du drop-down }
+Procedure VFDFilterScrollUpRect(Var SX, SY, SW, SH: Integer);
+Var LX, LY, LW, LH: Integer;
+Begin
+ VFDFilterListRect(LX, LY, LW, LH);
+ SW := VFD_FILTER_SB_W;
+ SH := VFD_FILTER_ARROW_H;
+ SX := LX + LW - SW - 1;
+ SY := LY + 1;
+End;
+
+{ Rectangle du bouton fleche-bas de la scrollbar du drop-down }
+Procedure VFDFilterScrollDownRect(Var SX, SY, SW, SH: Integer);
+Var LX, LY, LW, LH: Integer;
+Begin
+ VFDFilterListRect(LX, LY, LW, LH);
+ SW := VFD_FILTER_SB_W;
+ SH := VFD_FILTER_ARROW_H;
+ SX := LX + LW - SW - 1;
+ SY := LY + LH - SH - 1;
+End;
+
+{ Ajuste VFD_FilterScrollTop pour garder VFD_FilterIndex visible }
+Procedure VFDFilterEnsureVisible;
+Var NVis: Integer;
+Begin
+ NVis := VFDFilterListVisible;
+ If NVis < 1 Then Begin VFD_FilterScrollTop := 0; Exit; End;
+ If VFD_FilterIndex < VFD_FilterScrollTop Then
+  VFD_FilterScrollTop := VFD_FilterIndex
+ Else If VFD_FilterIndex >= VFD_FilterScrollTop + NVis Then
+  VFD_FilterScrollTop := VFD_FilterIndex - NVis + 1;
+ If VFD_FilterScrollTop < 0 Then VFD_FilterScrollTop := 0;
+ If VFD_FilterScrollTop > VFD_FilterCount - NVis Then
+  VFD_FilterScrollTop := VFD_FilterCount - NVis;
+ If VFD_FilterScrollTop < 0 Then VFD_FilterScrollTop := 0;
+End;
+
+{ Dessine le selecteur de filtre (ferme : combo-box) }
+Procedure VFDDrawFilter;
+Var FX, FY, FW: Integer; Txt: String;
+    ArrowCX, ArrowTop: Integer;
+Begin
+ VFDFilterComboRect(FX, FY, FW);
  SetColor(VFD_CLR_LABEL_FG);
  If Language = _English Then
   OutTextXY(FX, FY - VFD_LABEL_H, 'File type:')
@@ -15602,22 +16300,85 @@ Begin
   Txt := '*.*';
  SetColor(VFD_CLR_INPUT_FG);
  OutTextXY(FX + 4, FY + 3, Txt);
- { Petite fleche v }
+ { Bouton fleche descendante a droite }
  SetFillStyle(SolidFill, VFD_CLR_BTN_BG);
  Bar(FX + FW - 18, FY + 1, FX + FW - 2, FY + VFD_FILTER_H - 2);
  SetColor(VFD_CLR_BORDER);
  Rectangle(FX + FW - 18, FY + 1, FX + FW - 2, FY + VFD_FILTER_H - 2);
- OutTextXY(FX + FW - 14, FY + 4, 'v');
- { Si la liste deroulante est ouverte, l'afficher au-dessus }
- If VFD_FilterOpen Then Begin
-  Dec(FY, VFD_FilterCount * VFD_ROW_H + 2);
-  SetFillStyle(SolidFill, VFD_CLR_INPUT_BG);
-  Bar(FX, FY, FX + FW - 1, FY + VFD_FilterCount * VFD_ROW_H + 1);
-  SetColor(VFD_CLR_BORDER);
-  Rectangle(FX, FY, FX + FW - 1, FY + VFD_FilterCount * VFD_ROW_H + 1);
-  SetColor(VFD_CLR_INPUT_FG);
-  Txt := '';
-  Bar(FX + 1, FY + 1, FX + FW - 2, FY + VFD_FilterCount * VFD_ROW_H);
+ SetColor(VFD_CLR_BTN_FG);
+ ArrowCX  := FX + FW - 10;
+ ArrowTop := FY + (VFD_FILTER_H Div 2) - 2;
+ VFDArrowDown(ArrowCX, ArrowTop, 5);
+End;
+
+{ Dessine la liste deroulante du filtre quand elle est ouverte. A appeler }
+{ EN DERNIER dans VFDDraw pour qu'elle soit au-dessus de tout le reste.   }
+Procedure VFDDrawFilterDropdown;
+Var LX, LY, LW, LH, InnerW: Integer;
+    NVis, Row, I, TY: Integer;
+    SUX, SUY, SUW, SUH: Integer;
+    SDX, SDY, SDW, SDH: Integer;
+    TrackTop, TrackBot, TrackH, ThumbH, ThumbY: Integer;
+Begin
+ If Not VFD_FilterOpen Then Exit;
+ NVis := VFDFilterListVisible;
+ If NVis <= 0 Then Exit;
+ VFDFilterListRect(LX, LY, LW, LH);
+ InnerW := LW - VFD_FILTER_SB_W - 2;
+ { Cadre + fond }
+ SetFillStyle(SolidFill, VFD_CLR_INPUT_BG);
+ Bar(LX, LY, LX + LW - 1, LY + LH - 1);
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(LX, LY, LX + LW - 1, LY + LH - 1);
+ { Lignes }
+ For Row := 0 To NVis - 1 Do Begin
+  I := VFD_FilterScrollTop + Row;
+  If I >= VFD_FilterCount Then Break;
+  TY := LY + 1 + Row * VFD_ROW_H;
+  If I = VFD_FilterIndex Then Begin
+   SetFillStyle(SolidFill, VFD_CLR_SEL_BG);
+   Bar(LX + 1, TY, LX + InnerW, TY + VFD_ROW_H - 1);
+   SetColor(VFD_CLR_SEL_FG);
+  End Else
+   SetColor(VFD_CLR_INPUT_FG);
+  OutTextXY(LX + 4, TY + 2, VFD_Filters[I].Desc);
+ End;
+ { Scrollbar : fond piste }
+ SetFillStyle(SolidFill, VFD_CLR_SCROLL_BG);
+ Bar(LX + LW - VFD_FILTER_SB_W - 1, LY + 1,
+     LX + LW - 2,                   LY + LH - 2);
+ { Boutons fleches }
+ VFDFilterScrollUpRect(SUX, SUY, SUW, SUH);
+ VFDFilterScrollDownRect(SDX, SDY, SDW, SDH);
+ SetFillStyle(SolidFill, VFD_CLR_BTN_BG);
+ Bar(SUX, SUY, SUX + SUW - 1, SUY + SUH - 1);
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(SUX, SUY, SUX + SUW - 1, SUY + SUH - 1);
+ SetColor(VFD_CLR_BTN_FG);
+ VFDArrowUp(SUX + SUW Div 2, SUY + 3, 5);
+ SetFillStyle(SolidFill, VFD_CLR_BTN_BG);
+ Bar(SDX, SDY, SDX + SDW - 1, SDY + SDH - 1);
+ SetColor(VFD_CLR_BORDER);
+ Rectangle(SDX, SDY, SDX + SDW - 1, SDY + SDH - 1);
+ SetColor(VFD_CLR_BTN_FG);
+ VFDArrowDown(SDX + SDW Div 2, SDY + 3, 5);
+ { Thumb }
+ If (VFD_FilterCount > NVis) Then Begin
+  TrackTop := SUY + SUH + 1;
+  TrackBot := SDY - 2;
+  TrackH   := TrackBot - TrackTop + 1;
+  If TrackH > 0 Then Begin
+   ThumbH := (TrackH * NVis) Div VFD_FilterCount;
+   If ThumbH < 8 Then ThumbH := 8;
+   If ThumbH > TrackH Then ThumbH := TrackH;
+   ThumbY := TrackTop +
+             (VFD_FilterScrollTop * (TrackH - ThumbH))
+              Div (VFD_FilterCount - NVis);
+   SetFillStyle(SolidFill, VFD_CLR_SCROLL_FG);
+   Bar(SUX + 1, ThumbY, SUX + SUW - 2, ThumbY + ThumbH - 1);
+   SetColor(VFD_CLR_BORDER);
+   Rectangle(SUX + 1, ThumbY, SUX + SUW - 2, ThumbY + ThumbH - 1);
+  End;
  End;
 End;
 
@@ -15648,6 +16409,7 @@ Begin
  VFDDrawInput;
  VFDDrawFilter;
  VFDDrawButtons;
+ VFDDrawFilterDropdown;   { dessine en dernier pour etre au-dessus }
 End;
 
 { Test : (X,Y) est-il dans le rectangle [X1,Y1,X2,Y2] ? }
@@ -15710,6 +16472,70 @@ Begin
                            FX + FW - 1, FY + VFD_FILTER_H - 1);
 End;
 
+{ Retourne l'index de la ligne cliquee dans le drop-down filtre (-1 si aucun) }
+Function VFDHitFilterRow(MX, MY: Integer): Integer;
+Var LX, LY, LW, LH, InnerW, Row: Integer;
+Begin
+ VFDHitFilterRow := -1;
+ If Not VFD_FilterOpen Then Exit;
+ VFDFilterListRect(LX, LY, LW, LH);
+ InnerW := LW - VFD_FILTER_SB_W - 2;
+ If VFDInRect(MX, MY, LX + 1, LY + 1,
+              LX + InnerW, LY + LH - 2) Then Begin
+  Row := (MY - (LY + 1)) Div VFD_ROW_H;
+  If (Row >= 0) And (VFD_FilterScrollTop + Row < VFD_FilterCount) Then
+   VFDHitFilterRow := VFD_FilterScrollTop + Row;
+ End;
+End;
+
+{ Teste si (MX,MY) est sur la fleche-haut de la scrollbar du drop-down }
+Function VFDHitFilterArrowUp(MX, MY: Integer): Boolean;
+Var SX, SY, SW, SH: Integer;
+Begin
+ VFDHitFilterArrowUp := False;
+ If Not VFD_FilterOpen Then Exit;
+ VFDFilterScrollUpRect(SX, SY, SW, SH);
+ VFDHitFilterArrowUp := VFDInRect(MX, MY, SX, SY,
+                                  SX + SW - 1, SY + SH - 1);
+End;
+
+{ Teste si (MX,MY) est sur la fleche-bas de la scrollbar du drop-down }
+Function VFDHitFilterArrowDown(MX, MY: Integer): Boolean;
+Var SX, SY, SW, SH: Integer;
+Begin
+ VFDHitFilterArrowDown := False;
+ If Not VFD_FilterOpen Then Exit;
+ VFDFilterScrollDownRect(SX, SY, SW, SH);
+ VFDHitFilterArrowDown := VFDInRect(MX, MY, SX, SY,
+                                    SX + SW - 1, SY + SH - 1);
+End;
+
+{ Teste si (MX,MY) est sur la piste de la scrollbar (hors fleches) }
+Function VFDHitFilterTrack(MX, MY: Integer): Boolean;
+Var LX, LY, LW, LH, SUX, SUY, SUW, SUH: Integer;
+    SDX, SDY, SDW, SDH: Integer;
+Begin
+ VFDHitFilterTrack := False;
+ If Not VFD_FilterOpen Then Exit;
+ VFDFilterListRect(LX, LY, LW, LH);
+ VFDFilterScrollUpRect(SUX, SUY, SUW, SUH);
+ VFDFilterScrollDownRect(SDX, SDY, SDW, SDH);
+ VFDHitFilterTrack := VFDInRect(MX, MY,
+  SUX, SUY + SUH,
+  SUX + SUW - 1, SDY - 1);
+End;
+
+{ Teste si (MX,MY) est entierement dans la zone du drop-down ouvert }
+Function VFDHitFilterDropdown(MX, MY: Integer): Boolean;
+Var LX, LY, LW, LH: Integer;
+Begin
+ VFDHitFilterDropdown := False;
+ If Not VFD_FilterOpen Then Exit;
+ VFDFilterListRect(LX, LY, LW, LH);
+ VFDHitFilterDropdown := VFDInRect(MX, MY, LX, LY,
+                                   LX + LW - 1, LY + LH - 1);
+End;
+
 { Teste si (MX,MY) est sur le bouton fermer X de la barre titre }
 Function VFDHitClose(MX, MY: Integer): Boolean;
 Begin
@@ -15767,17 +16593,17 @@ End;
 { Cycle le filtre suivant }
 Function VFDFilterPrimaryExt: String; Forward;
 
-Procedure VFDCycleFilter;
+{ Selectionne un filtre donne et applique ses effets (extension auto + reload) }
+Procedure VFDApplyFilter(NewIdx: Integer);
 Var NewExt: String; DotPos, I: Integer;
 Begin
  If VFD_FilterCount = 0 Then Exit;
- VFD_FilterIndex := (VFD_FilterIndex + 1) Mod VFD_FilterCount;
- { En mode export, ajuster l'extension du nom de fichier saisi sur le }
- { nouveau filtre selectionne (ex: .png -> .gif quand on choisit GIF).  }
+ If NewIdx < 0 Then NewIdx := 0;
+ If NewIdx >= VFD_FilterCount Then NewIdx := VFD_FilterCount - 1;
+ VFD_FilterIndex := NewIdx;
  If VFD_ExportMode And (Length(VFD_InputText) > 0) Then Begin
   NewExt := VFDFilterPrimaryExt;
   If Length(NewExt) > 0 Then Begin
-   { Trouver le dernier point apres le dernier separateur }
    DotPos := 0;
    For I := Length(VFD_InputText) DownTo 1 Do Begin
     If (VFD_InputText[I] = '\') Or (VFD_InputText[I] = '/') Then Break;
@@ -15790,7 +16616,14 @@ Begin
    VFD_InputCursor := Length(VFD_InputText);
   End;
  End;
+ VFDFilterEnsureVisible;
  VFDLoadDirectory;
+End;
+
+Procedure VFDCycleFilter;
+Begin
+ If VFD_FilterCount = 0 Then Exit;
+ VFDApplyFilter((VFD_FilterIndex + 1) Mod VFD_FilterCount);
 End;
 
 { Valide la selection courante. Retourne True si on doit fermer le dialogue }
@@ -15849,12 +16682,23 @@ Begin
   If KeyPressed Then Begin
    Key := ReadKey;
    If Key = #27 Then Begin
-    VFD_Result := 2;
-    Break;
+    If VFD_FilterOpen Then Begin
+     VFD_FilterOpen := False;
+     NeedRedraw := True;
+    End Else Begin
+     VFD_Result := 2;
+     Break;
+    End;
    End
    Else If Key = #13 Then Begin
-    If VFDAccept Then Break;
-    NeedRedraw := True;
+    If VFD_FilterOpen Then Begin
+     VFDApplyFilter(VFD_FilterIndex);
+     VFD_FilterOpen := False;
+     NeedRedraw := True;
+    End Else Begin
+     If VFDAccept Then Break;
+     NeedRedraw := True;
+    End;
    End
    Else If Key = #8 Then Begin
     If (VFD_InputCursor > 0) And (Length(VFD_InputText) > 0) Then Begin
@@ -15864,12 +16708,52 @@ Begin
     End;
    End
    Else If Key = #9 Then Begin
-    { Tab : cycler filtre }
-    VFDCycleFilter;
+    { Tab : ouvrir / cycler filtre }
+    If VFD_FilterOpen Then Begin
+     If VFD_FilterCount > 0 Then Begin
+      VFD_FilterIndex := (VFD_FilterIndex + 1) Mod VFD_FilterCount;
+      VFDFilterEnsureVisible;
+     End;
+    End Else
+     VFDCycleFilter;
     NeedRedraw := True;
    End
    Else If Key = #0 Then Begin
     Key := ReadKey;
+    If VFD_FilterOpen Then Begin
+     Case Key Of
+      #72: { Up } If VFD_FilterIndex > 0 Then Begin
+                   Dec(VFD_FilterIndex); VFDFilterEnsureVisible;
+                   NeedRedraw := True;
+                  End;
+      #80: { Down } If VFD_FilterIndex < VFD_FilterCount - 1 Then Begin
+                     Inc(VFD_FilterIndex); VFDFilterEnsureVisible;
+                     NeedRedraw := True;
+                    End;
+      #73: { PgUp } Begin
+                     VFD_FilterIndex := VFD_FilterIndex
+                                          - VFDFilterListVisible;
+                     If VFD_FilterIndex < 0 Then VFD_FilterIndex := 0;
+                     VFDFilterEnsureVisible; NeedRedraw := True;
+                    End;
+      #81: { PgDn } Begin
+                     VFD_FilterIndex := VFD_FilterIndex
+                                          + VFDFilterListVisible;
+                     If VFD_FilterIndex >= VFD_FilterCount Then
+                      VFD_FilterIndex := VFD_FilterCount - 1;
+                     VFDFilterEnsureVisible; NeedRedraw := True;
+                    End;
+      #71: { Home } Begin
+                     VFD_FilterIndex := 0;
+                     VFDFilterEnsureVisible; NeedRedraw := True;
+                    End;
+      #79: { End } Begin
+                    If VFD_FilterCount > 0 Then
+                     VFD_FilterIndex := VFD_FilterCount - 1;
+                    VFDFilterEnsureVisible; NeedRedraw := True;
+                   End;
+     End;
+    End Else
     Case Key Of
      #72: Begin { Fleche haut }
            If VFD_SelIndex > 0 Then Begin
@@ -15966,6 +16850,49 @@ Begin
   {$ENDIF}
   { Rising edge : bouton gauche presse }
   If ((MB And 1) = 1) And ((PrevMB And 1) = 0) Then Begin
+   { Si le drop-down filtre est ouvert, traiter ses clics en priorite }
+   If VFD_FilterOpen Then Begin
+    If VFDHitFilterArrowUp(MX, MY) Then Begin
+     If VFD_FilterScrollTop > 0 Then Dec(VFD_FilterScrollTop);
+     NeedRedraw := True;
+     PrevMB := MB; Continue;
+    End;
+    If VFDHitFilterArrowDown(MX, MY) Then Begin
+     If VFD_FilterScrollTop + VFDFilterListVisible < VFD_FilterCount Then
+      Inc(VFD_FilterScrollTop);
+     NeedRedraw := True;
+     PrevMB := MB; Continue;
+    End;
+    If VFDHitFilterTrack(MX, MY) Then Begin
+     { Page-scroll dans la piste }
+     Idx := VFDFilterListVisible;
+     If MY < VFD_Y + VFD_H Then Begin
+      If VFD_FilterScrollTop > Idx Then Dec(VFD_FilterScrollTop, Idx)
+                                    Else VFD_FilterScrollTop := 0;
+     End;
+     NeedRedraw := True;
+     PrevMB := MB; Continue;
+    End;
+    Idx := VFDHitFilterRow(MX, MY);
+    If Idx >= 0 Then Begin
+     VFDApplyFilter(Idx);
+     VFD_FilterOpen := False;
+     NeedRedraw := True;
+     PrevMB := MB; Continue;
+    End;
+    { Clic sur le combo lui-meme = referme }
+    If VFDHitFilter(MX, MY) Then Begin
+     VFD_FilterOpen := False;
+     NeedRedraw := True;
+     PrevMB := MB; Continue;
+    End;
+    { Clic n'importe ou ailleurs : fermer le drop-down ET ne pas
+      traiter le clic comme une action normale }
+    VFD_FilterOpen := False;
+    NeedRedraw := True;
+    PrevMB := MB; Continue;
+   End;
+
    { Bouton fermer dans la barre titre }
    If VFDHitClose(MX, MY) Then Begin
     VFD_Result := 2; PrevMB := MB; Break;
@@ -15981,10 +16908,12 @@ Begin
     VFD_Result := 2; PrevMB := MB; Break;
    End;
 
-   { Selecteur de filtre : cycler }
+   { Selecteur de filtre : ouvrir la liste deroulante }
    If VFDHitFilter(MX, MY) Then Begin
-    VFDCycleFilter;
+    VFD_FilterOpen := True;
+    VFDFilterEnsureVisible;
     NeedRedraw := True;
+    PrevMB := MB; Continue;
    End;
 
    { Barre lecteurs }

@@ -167,6 +167,20 @@ Const
  MAX_XREFS = 20;             { Nombre maximum de références externes }
  XREF_PATH_LENGTH = 255;     { Longueur maximum du chemin XREF }
 
+ { Constantes pour les references d'images (raster) }
+ MAX_IMAGE_REFS = 30;        { Nombre maximum de references d'images }
+ IMGREF_LOADED = 0;          { Image trouvee et chargee }
+ IMGREF_NOT_FOUND = 1;       { Fichier image introuvable }
+ IMGREF_UNLOADED = 2;        { Image dechargee (cachee) }
+
+ { Constantes pour les objets OLE incorpores ou lies }
+ MAX_OLE_OBJECTS = 20;       { Nombre maximum d'objets OLE }
+ OLE_LOADED = 0;             { Objet trouve et lie }
+ OLE_NOT_FOUND = 1;          { Fichier source introuvable }
+ OLE_UNLOADED = 2;           { Objet decharge }
+ OLE_KIND_LINK = 0;          { Lie (reference sur disque) }
+ OLE_KIND_EMBED = 1;         { Incorpore (placeholder) }
+
  { États des XREFs }
  XREF_LOADED = 0;            { XREF chargée normalement }
  XREF_UNLOADED = 1;          { XREF déchargée (non affichée) }
@@ -739,6 +753,41 @@ Type
   Visible: Boolean;              { True si visible }
  End;
 
+ { Structure pour une reference d'image (raster attachee) }
+ TImageRef = Record
+  Name: String[30];              { Nom court de l'image }
+  FilePath: String[255];         { Chemin complet du fichier }
+  InsertX, InsertY: Real;        { Coin inferieur gauche (monde) }
+  Width, Height: Real;           { Dimensions en unites monde }
+  Rotation: Real;                { Angle de rotation (radians) }
+  Status: Byte;                  { IMGREF_LOADED, IMGREF_NOT_FOUND, ... }
+  PixelWidth, PixelHeight: Integer; { Dimensions natives en pixels }
+  LayerIndex: Byte;              { Index du calque }
+  Brightness: Integer;           { Luminosite 0..100 }
+  Contrast: Integer;             { Contraste 0..100 }
+  Fade: Integer;                 { Fondu 0..100 }
+  ShowFrame: Boolean;            { Afficher le cadre }
+  ShowImage: Boolean;            { Afficher l'image (sinon cadre seul) }
+  Selected: Boolean;             { True si selectionnee }
+  Visible: Boolean;              { True si visible }
+ End;
+
+ { Reference d'objet OLE (Object Linking and Embedding) }
+ TOLEObject = Record
+  Name: String[30];              { Nom court (sans chemin) }
+  FilePath: String[255];         { Chemin complet du fichier source }
+  AppName: String[30];           { Application associee (Word, Excel, ...) }
+  InsertX, InsertY: Real;        { Coin inferieur gauche (monde) }
+  Width, Height: Real;           { Dimensions du cadre placeholder }
+  Rotation: Real;                { Rotation (radians) }
+  Status: Byte;                  { OLE_LOADED, OLE_NOT_FOUND, ... }
+  Kind: Byte;                    { OLE_KIND_LINK ou OLE_KIND_EMBED }
+  FileSize: LongInt;             { Taille du fichier (octets) }
+  LayerIndex: Byte;
+  Selected: Boolean;
+  Visible: Boolean;
+ End;
+
  { Structure pour un token AutoLISP - TODO 11 }
  TLispToken = Record
   TokenType: Byte;                         { Type du token (LISP_TOKEN_xxx) }
@@ -867,8 +916,16 @@ Var
  CommandLastLine: String;        { Dernière ligne exécutée (historique simple) }
 
  { Action fichier en attente (saisie du nom dans la ligne de commande) }
- PendingFileAction: Integer;     { 0=aucune, 1=Ouvrir, 2=Enregistrer sous }
+ PendingFileAction: Integer;     { 0=aucune, 1=Ouvrir, 2=Enregistrer sous, 3=Importer, 4=Exporter, 5=Inserer bloc, 6=Inserer DWG, 7=Inserer image }
  CurrentFileName: String;        { Nom du fichier courant (vide si jamais enregistre) }
+
+ { Suivi des modifications pour confirmation a la fermeture }
+ DocumentModified: Boolean;      { True si le dessin a ete modifie depuis la derniere sauvegarde/chargement }
+ LastSavedObjectCount: Integer;  { Nombre d'objets au dernier point de synchronisation }
+ LastSavedBlockRefCount: Integer;{ Idem pour les references de blocs }
+ LastSavedImageRefCount: Integer;{ Idem pour les references d'images }
+ LastSavedXRefCount: Integer;    { Idem pour les references externes DWG }
+ LastSavedOLECount: Integer;     { Idem pour les objets OLE }
 
  { Variables pour les barres d'outils - TODO 5 }
  Toolbars: Array[0..MAX_TOOLBARS-1] of TToolbar;
@@ -939,6 +996,10 @@ Var
  BlockRefCount: Integer;                               { Nombre de références de blocs }
  XRefs: Array[0..MAX_XREFS-1] of TXRef;                { Références externes }
  XRefCount: Integer;                                   { Nombre de XREFs }
+ ImageRefs: Array[0..MAX_IMAGE_REFS-1] of TImageRef;   { References d'images attachees }
+ ImageRefCount: Integer;                               { Nombre de references d'images }
+ OLEObjects: Array[0..MAX_OLE_OBJECTS-1] of TOLEObject;{ Objets OLE incorpores ou lies }
+ OLEObjectCount: Integer;                              { Nombre d'objets OLE }
  BlockEntities: Array[0..MAX_BLOCKS*MAX_BLOCK_ENTITIES-1] of TDrawObject;  { Entités des blocs }
  BlockEntityCount: Integer;                            { Nombre total d'entités dans les blocs }
 
@@ -991,6 +1052,15 @@ Procedure DeleteSelectedObjects; Forward;
 Procedure CutSelection; Forward;
 Procedure PasteFromClipboard; Forward;
 Procedure SelectAllObjects; Forward;
+
+{ Forward declarations - menu Affichage }
+Procedure ViewZoomIn; Forward;
+Procedure ViewZoomOut; Forward;
+Procedure ViewZoomExtents; Forward;
+Procedure ViewZoomAll; Forward;
+Procedure ViewRedraw; Forward;
+Procedure ViewEnterPanMode; Forward;
+Procedure ViewEnterZoomWindowMode; Forward;
 
 { Forward declarations - TODO 10 - Système de grips }
 Procedure InitGripSystem; Forward;
@@ -1090,6 +1160,23 @@ Procedure UnloadXRef(XRefIdx: Integer); Forward;
 Procedure BindXRef(XRefIdx: Integer); Forward;
 Procedure DrawXRef(XRefIdx: Integer); Forward;
 Function GetXRefStatus(XRefIdx: Integer): String; Forward;
+Function AttachImageRef(Const FilePath: String; InsX, InsY, W, H, Rot: Real): Integer; Forward;
+Function AttachOLEObject(Const FilePath: String; InsX, InsY, W, H: Real): Integer; Forward;
+Procedure DetachImageRef(ImgIdx: Integer); Forward;
+Procedure DrawImageRef(ImgIdx: Integer); Forward;
+Procedure DrawOLEObject(OleIdx: Integer); Forward;
+Procedure DetachOLEObject(OleIdx: Integer); Forward;
+Function GetOLEObjectStatus(OleIdx: Integer): String; Forward;
+Function DetectOLEApplication(Const FilePath: String): String; Forward;
+Function GetImageRefStatus(ImgIdx: Integer): String; Forward;
+Function DetectImageDimensions(Const FilePath: String; Var PW, PH: Integer): Boolean; Forward;
+
+{ Forward declarations - Suivi des modifications et confirmation de sortie }
+Function IsDocumentModified: Boolean; Forward;
+Procedure DrawInterface; Forward;
+Procedure MarkDocumentSaved; Forward;
+Procedure MarkDocumentModified; Forward;
+Function ConfirmExit: Boolean; Forward;
 Procedure TransformPoint(Var X, Y: Real; InsX, InsY, ScaleX, ScaleY, Rotation: Real); Forward;
 
 { Forward declarations - TODO 21 - Format DWG }
@@ -4405,6 +4492,17 @@ Begin
  For I := 0 to XRefCount - 1 do Begin
   If XRefs[I].Visible and (XRefs[I].Name <> '') Then
    DrawXRef(I);
+ End;
+
+ { Dessiner les references d'images }
+ For I := 0 to ImageRefCount - 1 do Begin
+  If ImageRefs[I].Visible and (ImageRefs[I].Name <> '') Then
+   DrawImageRef(I);
+ End;
+
+ For I := 0 to OLEObjectCount - 1 do Begin
+  If OLEObjects[I].Visible and (OLEObjects[I].Name <> '') Then
+   DrawOLEObject(I);
  End;
 
  { Dessiner le rectangle de sélection si actif }
@@ -10361,6 +10459,8 @@ Begin
  BlockDefCount := 0;
  BlockRefCount := 0;
  XRefCount := 0;
+ ImageRefCount := 0;
+ OLEObjectCount := 0;
  BlockEntityCount := 0;
 
  { Initialiser toutes les définitions de blocs }
@@ -10405,6 +10505,46 @@ Begin
   XRefs[I].Overlay := False;
   XRefs[I].Selected := False;
   XRefs[I].Visible := True;
+ End;
+
+ { Initialiser toutes les references d'images }
+ For I := 0 to MAX_IMAGE_REFS - 1 do Begin
+  ImageRefs[I].Name := '';
+  ImageRefs[I].FilePath := '';
+  ImageRefs[I].InsertX := 0;
+  ImageRefs[I].InsertY := 0;
+  ImageRefs[I].Width := 100;
+  ImageRefs[I].Height := 100;
+  ImageRefs[I].Rotation := 0;
+  ImageRefs[I].Status := IMGREF_UNLOADED;
+  ImageRefs[I].PixelWidth := 0;
+  ImageRefs[I].PixelHeight := 0;
+  ImageRefs[I].LayerIndex := 0;
+  ImageRefs[I].Brightness := 50;
+  ImageRefs[I].Contrast := 50;
+  ImageRefs[I].Fade := 0;
+  ImageRefs[I].ShowFrame := True;
+  ImageRefs[I].ShowImage := True;
+  ImageRefs[I].Selected := False;
+  ImageRefs[I].Visible := True;
+ End;
+
+ { Initialiser tous les objets OLE }
+ For I := 0 to MAX_OLE_OBJECTS - 1 do Begin
+  OLEObjects[I].Name := '';
+  OLEObjects[I].FilePath := '';
+  OLEObjects[I].AppName := '';
+  OLEObjects[I].InsertX := 0;
+  OLEObjects[I].InsertY := 0;
+  OLEObjects[I].Width := 150;
+  OLEObjects[I].Height := 100;
+  OLEObjects[I].Rotation := 0;
+  OLEObjects[I].Status := OLE_UNLOADED;
+  OLEObjects[I].Kind := OLE_KIND_LINK;
+  OLEObjects[I].FileSize := 0;
+  OLEObjects[I].LayerIndex := 0;
+  OLEObjects[I].Selected := False;
+  OLEObjects[I].Visible := True;
  End;
 End;
 
@@ -10791,6 +10931,7 @@ Begin
  ReloadXRef(XRefIdx);
 
  AttachXRef := XRefIdx;
+ MarkDocumentModified;
 End;
 
 { Détacher une XREF }
@@ -10808,6 +10949,7 @@ Begin
  XRefs[XRefIdx].Status := XREF_UNLOADED;
  XRefs[XRefIdx].BlockIndex := -1;
  XRefs[XRefIdx].Visible := False;
+ MarkDocumentModified;
 End;
 
 { Recharger une XREF depuis le fichier }
@@ -10935,6 +11077,719 @@ Begin
   XREF_NEEDS_RELOAD: GetXRefStatus := 'Reload';
  Else
   GetXRefStatus := 'Unknown';
+ End;
+End;
+
+{ ============================================================================ }
+{ Fonctions pour les references d'images (raster attachees)                    }
+{ ============================================================================ }
+
+{ Detecter les dimensions natives d'une image selon son extension/entete.
+  Lecture minimale des en-tetes BMP, PNG, GIF, JPEG. Retourne True si reussi. }
+Function DetectImageDimensions(Const FilePath: String; Var PW, PH: Integer): Boolean;
+Var
+ F: File;
+ Buf: Array[0..31] of Byte;
+ BytesRead: Word;
+ Ext: String;
+ I: Integer;
+ W32, H32: LongInt;
+Begin
+ DetectImageDimensions := False;
+ PW := 0;
+ PH := 0;
+ Ext := '';
+ For I := Length(FilePath) DownTo 1 Do
+  If FilePath[I] = '.' Then Begin
+   Ext := Copy(FilePath, I + 1, Length(FilePath) - I);
+   Break;
+  End;
+ For I := 1 To Length(Ext) Do Ext[I] := UpCase(Ext[I]);
+
+ {$I-}
+ Assign(F, FilePath);
+ Reset(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+
+ {$I-}
+ BlockRead(F, Buf, 32, BytesRead);
+ {$I+}
+ If IOResult <> 0 Then BytesRead := 0;
+ Close(F);
+
+ If BytesRead < 24 Then Exit;
+
+ If (Ext = 'BMP') and (Buf[0] = $42) and (Buf[1] = $4D) Then Begin
+  { BMP : largeur a offset 18 (LongInt LE), hauteur a offset 22 }
+  W32 := LongInt(Buf[18]) or (LongInt(Buf[19]) shl 8) or
+         (LongInt(Buf[20]) shl 16) or (LongInt(Buf[21]) shl 24);
+  H32 := LongInt(Buf[22]) or (LongInt(Buf[23]) shl 8) or
+         (LongInt(Buf[24]) shl 16) or (LongInt(Buf[25]) shl 24);
+  If H32 < 0 Then H32 := -H32;
+  PW := W32;
+  PH := H32;
+  DetectImageDimensions := (PW > 0) and (PH > 0);
+ End Else
+ If (Buf[0] = $89) and (Buf[1] = $50) and (Buf[2] = $4E) and (Buf[3] = $47) Then Begin
+  { PNG : largeur/hauteur big-endian a offset 16/20 }
+  PW := (Integer(Buf[16]) shl 24) or (Integer(Buf[17]) shl 16) or
+        (Integer(Buf[18]) shl 8) or Integer(Buf[19]);
+  PH := (Integer(Buf[20]) shl 24) or (Integer(Buf[21]) shl 16) or
+        (Integer(Buf[22]) shl 8) or Integer(Buf[23]);
+  DetectImageDimensions := (PW > 0) and (PH > 0);
+ End Else
+ If (Buf[0] = $47) and (Buf[1] = $49) and (Buf[2] = $46) Then Begin
+  { GIF : largeur/hauteur LE a offset 6/8 (Word) }
+  PW := Integer(Buf[6]) or (Integer(Buf[7]) shl 8);
+  PH := Integer(Buf[8]) or (Integer(Buf[9]) shl 8);
+  DetectImageDimensions := (PW > 0) and (PH > 0);
+ End Else
+ If (Buf[0] = $FF) and (Buf[1] = $D8) Then Begin
+  { JPEG : recherche superficielle, dimensions a la premiere marque SOF.
+    Dans cette stub, on ne fait pas l'analyse complete. }
+  PW := 0;
+  PH := 0;
+ End;
+End;
+
+{ Attacher une nouvelle reference d'image au dessin. Retourne l'index ou -1. }
+Function AttachImageRef(Const FilePath: String; InsX, InsY, W, H, Rot: Real): Integer;
+Var
+ Idx, I, SlashPos: Integer;
+ ShortName: String;
+ PW, PH: Integer;
+ FileExists: Boolean;
+ F: File;
+Begin
+ AttachImageRef := -1;
+ If ImageRefCount >= MAX_IMAGE_REFS Then Exit;
+
+ { Reutiliser une entree vide si possible }
+ Idx := -1;
+ For I := 0 To ImageRefCount - 1 Do
+  If ImageRefs[I].Name = '' Then Begin
+   Idx := I;
+   Break;
+  End;
+ If Idx < 0 Then Begin
+  Idx := ImageRefCount;
+  Inc(ImageRefCount);
+ End;
+
+ { Extraire le nom court (sans chemin) }
+ ShortName := FilePath;
+ SlashPos := 0;
+ For I := Length(FilePath) DownTo 1 Do
+  If (FilePath[I] = '\') or (FilePath[I] = '/') or (FilePath[I] = ':') Then Begin
+   SlashPos := I;
+   Break;
+  End;
+ If SlashPos > 0 Then ShortName := Copy(FilePath, SlashPos + 1, Length(FilePath) - SlashPos);
+ If Length(ShortName) > 30 Then ShortName := Copy(ShortName, 1, 30);
+
+ { Verifier l'existence du fichier }
+ {$I-}
+ Assign(F, FilePath);
+ Reset(F, 1);
+ {$I+}
+ FileExists := (IOResult = 0);
+ If FileExists Then Close(F);
+
+ ImageRefs[Idx].Name := ShortName;
+ ImageRefs[Idx].FilePath := FilePath;
+ ImageRefs[Idx].InsertX := InsX;
+ ImageRefs[Idx].InsertY := InsY;
+ ImageRefs[Idx].Rotation := Rot;
+ ImageRefs[Idx].Brightness := 50;
+ ImageRefs[Idx].Contrast := 50;
+ ImageRefs[Idx].Fade := 0;
+ ImageRefs[Idx].ShowFrame := True;
+ ImageRefs[Idx].ShowImage := True;
+ ImageRefs[Idx].LayerIndex := 0;
+ ImageRefs[Idx].Selected := False;
+ ImageRefs[Idx].Visible := True;
+
+ If FileExists Then Begin
+  ImageRefs[Idx].Status := IMGREF_LOADED;
+  If DetectImageDimensions(FilePath, PW, PH) Then Begin
+   ImageRefs[Idx].PixelWidth := PW;
+   ImageRefs[Idx].PixelHeight := PH;
+   { Si dimensions monde non specifiees, utiliser les pixels comme unite }
+   If (W <= 0) or (H <= 0) Then Begin
+    ImageRefs[Idx].Width := PW;
+    ImageRefs[Idx].Height := PH;
+   End Else Begin
+    ImageRefs[Idx].Width := W;
+    ImageRefs[Idx].Height := H;
+   End;
+  End Else Begin
+   ImageRefs[Idx].PixelWidth := 0;
+   ImageRefs[Idx].PixelHeight := 0;
+   If (W <= 0) or (H <= 0) Then Begin
+    ImageRefs[Idx].Width := 100;
+    ImageRefs[Idx].Height := 100;
+   End Else Begin
+    ImageRefs[Idx].Width := W;
+    ImageRefs[Idx].Height := H;
+   End;
+  End;
+ End Else Begin
+  ImageRefs[Idx].Status := IMGREF_NOT_FOUND;
+  ImageRefs[Idx].PixelWidth := 0;
+  ImageRefs[Idx].PixelHeight := 0;
+  If (W <= 0) or (H <= 0) Then Begin
+   ImageRefs[Idx].Width := 100;
+   ImageRefs[Idx].Height := 100;
+  End Else Begin
+   ImageRefs[Idx].Width := W;
+   ImageRefs[Idx].Height := H;
+  End;
+ End;
+
+ AttachImageRef := Idx;
+ MarkDocumentModified;
+End;
+
+{ Detacher (supprimer) une reference d'image }
+Procedure DetachImageRef(ImgIdx: Integer);
+Begin
+ If (ImgIdx < 0) or (ImgIdx >= ImageRefCount) Then Exit;
+ ImageRefs[ImgIdx].Name := '';
+ ImageRefs[ImgIdx].FilePath := '';
+ ImageRefs[ImgIdx].Status := IMGREF_UNLOADED;
+ ImageRefs[ImgIdx].Visible := False;
+ MarkDocumentModified;
+End;
+
+{ Obtenir le statut d'une reference d'image sous forme de texte }
+Function GetImageRefStatus(ImgIdx: Integer): String;
+Begin
+ If (ImgIdx < 0) or (ImgIdx >= ImageRefCount) Then Begin
+  GetImageRefStatus := 'Invalid';
+  Exit;
+ End;
+ Case ImageRefs[ImgIdx].Status of
+  IMGREF_LOADED:    GetImageRefStatus := 'Loaded';
+  IMGREF_NOT_FOUND: GetImageRefStatus := 'Not Found';
+  IMGREF_UNLOADED:  GetImageRefStatus := 'Unloaded';
+ Else
+  GetImageRefStatus := 'Unknown';
+ End;
+End;
+
+{ Dessiner une reference d'image (cadre + diagonales + nom de fichier).
+  L'image elle-meme n'est pas decodee : on affiche un placeholder. }
+Procedure DrawImageRef(ImgIdx: Integer);
+Var
+ SX1, SY1, SX2, SY2: Integer;
+ InfoText: String;
+Begin
+ If (ImgIdx < 0) or (ImgIdx >= ImageRefCount) Then Exit;
+ If Not ImageRefs[ImgIdx].Visible Then Exit;
+ If ImageRefs[ImgIdx].Name = '' Then Exit;
+
+ SX1 := WorldToScreenX(ImageRefs[ImgIdx].InsertX);
+ SY1 := WorldToScreenY(ImageRefs[ImgIdx].InsertY + ImageRefs[ImgIdx].Height);
+ SX2 := WorldToScreenX(ImageRefs[ImgIdx].InsertX + ImageRefs[ImgIdx].Width);
+ SY2 := WorldToScreenY(ImageRefs[ImgIdx].InsertY);
+
+ If ImageRefs[ImgIdx].Status = IMGREF_LOADED Then
+  SetColor(LightGray)
+ Else
+  SetColor(Red);
+
+ If ImageRefs[ImgIdx].ShowFrame Then
+  Rectangle(SX1, SY1, SX2, SY2);
+
+ { Diagonales pour indiquer un cadre image }
+ If ImageRefs[ImgIdx].Status <> IMGREF_LOADED Then Begin
+  Line(SX1, SY1, SX2, SY2);
+  Line(SX1, SY2, SX2, SY1);
+ End;
+
+ { Etiquette }
+ SetColor(Yellow);
+ InfoText := ImageRefs[ImgIdx].Name;
+ If ImageRefs[ImgIdx].Status <> IMGREF_LOADED Then
+  InfoText := InfoText + ' [' + GetImageRefStatus(ImgIdx) + ']';
+ OutTextXY(SX1 + 2, SY1 + 2, InfoText);
+
+ { Indicateur de selection }
+ If ImageRefs[ImgIdx].Selected Then Begin
+  SetFillStyle(SolidFill, Magenta);
+  Bar(SX1 - 3, SY1 - 3, SX1 + 3, SY1 + 3);
+  Bar(SX2 - 3, SY1 - 3, SX2 + 3, SY1 + 3);
+  Bar(SX1 - 3, SY2 - 3, SX1 + 3, SY2 + 3);
+  Bar(SX2 - 3, SY2 - 3, SX2 + 3, SY2 + 3);
+ End;
+End;
+
+{ ============================================================================ }
+{ Objets OLE (Object Linking and Embedding) - placeholder graphique           }
+{ ============================================================================ }
+
+{ Determiner l'application associee a un fichier selon son extension.
+  Retourne un nom court affiche dans le cadre placeholder. }
+Function DetectOLEApplication(Const FilePath: String): String;
+Var
+ Ext: String;
+ I: Integer;
+Begin
+ Ext := '';
+ For I := Length(FilePath) DownTo 1 Do
+  If FilePath[I] = '.' Then Begin
+   Ext := Copy(FilePath, I + 1, Length(FilePath) - I);
+   Break;
+  End;
+ For I := 1 To Length(Ext) Do Ext[I] := UpCase(Ext[I]);
+
+ If (Ext = 'DOC') or (Ext = 'DOCX') or (Ext = 'RTF') Then
+  DetectOLEApplication := 'Word Document'
+ Else If (Ext = 'XLS') or (Ext = 'XLSX') or (Ext = 'CSV') Then
+  DetectOLEApplication := 'Excel Sheet'
+ Else If (Ext = 'PPT') or (Ext = 'PPTX') Then
+  DetectOLEApplication := 'PowerPoint'
+ Else If (Ext = 'MDB') or (Ext = 'ACCDB') Then
+  DetectOLEApplication := 'Access DB'
+ Else If (Ext = 'PDF') Then
+  DetectOLEApplication := 'PDF Document'
+ Else If (Ext = 'TXT') or (Ext = 'LOG') Then
+  DetectOLEApplication := 'Text Document'
+ Else If (Ext = 'BMP') or (Ext = 'JPG') or (Ext = 'JPEG') or
+         (Ext = 'PNG') or (Ext = 'GIF') Then
+  DetectOLEApplication := 'Bitmap Image'
+ Else If (Ext = 'WAV') or (Ext = 'MP3') or (Ext = 'MID') Then
+  DetectOLEApplication := 'Sound Clip'
+ Else If (Ext = 'AVI') or (Ext = 'MPG') or (Ext = 'MP4') Then
+  DetectOLEApplication := 'Video Clip'
+ Else If (Ext = 'VSD') or (Ext = 'VSDX') Then
+  DetectOLEApplication := 'Visio Drawing'
+ Else If Ext <> '' Then
+  DetectOLEApplication := Ext + ' Object'
+ Else
+  DetectOLEApplication := 'OLE Object';
+End;
+
+{ Attacher un nouvel objet OLE au dessin. Retourne l'index ou -1. }
+Function AttachOLEObject(Const FilePath: String; InsX, InsY, W, H: Real): Integer;
+Var
+ Idx, I, SlashPos: Integer;
+ ShortName: String;
+ FileExists: Boolean;
+ FSize: LongInt;
+ F: File;
+Begin
+ AttachOLEObject := -1;
+ If OLEObjectCount >= MAX_OLE_OBJECTS Then Exit;
+
+ { Reutiliser une entree vide si possible }
+ Idx := -1;
+ For I := 0 To OLEObjectCount - 1 Do
+  If OLEObjects[I].Name = '' Then Begin
+   Idx := I;
+   Break;
+  End;
+ If Idx < 0 Then Begin
+  Idx := OLEObjectCount;
+  Inc(OLEObjectCount);
+ End;
+
+ { Extraire le nom court }
+ ShortName := FilePath;
+ SlashPos := 0;
+ For I := Length(FilePath) DownTo 1 Do
+  If (FilePath[I] = '\') or (FilePath[I] = '/') or (FilePath[I] = ':') Then Begin
+   SlashPos := I;
+   Break;
+  End;
+ If SlashPos > 0 Then ShortName := Copy(FilePath, SlashPos + 1, Length(FilePath) - SlashPos);
+ If Length(ShortName) > 30 Then ShortName := Copy(ShortName, 1, 30);
+
+ { Verifier l'existence et lire la taille }
+ FSize := 0;
+ {$I-}
+ Assign(F, FilePath);
+ Reset(F, 1);
+ {$I+}
+ FileExists := (IOResult = 0);
+ If FileExists Then Begin
+  FSize := FileSize(F);
+  {$I-} Close(F); {$I+}
+  If IOResult <> 0 Then ;
+ End;
+
+ OLEObjects[Idx].Name := ShortName;
+ OLEObjects[Idx].FilePath := FilePath;
+ OLEObjects[Idx].AppName := DetectOLEApplication(FilePath);
+ OLEObjects[Idx].InsertX := InsX;
+ OLEObjects[Idx].InsertY := InsY;
+ If (W <= 0) or (H <= 0) Then Begin
+  OLEObjects[Idx].Width := 150;
+  OLEObjects[Idx].Height := 100;
+ End Else Begin
+  OLEObjects[Idx].Width := W;
+  OLEObjects[Idx].Height := H;
+ End;
+ OLEObjects[Idx].Rotation := 0;
+ OLEObjects[Idx].Kind := OLE_KIND_LINK;
+ OLEObjects[Idx].FileSize := FSize;
+ OLEObjects[Idx].LayerIndex := 0;
+ OLEObjects[Idx].Selected := False;
+ OLEObjects[Idx].Visible := True;
+ If FileExists Then
+  OLEObjects[Idx].Status := OLE_LOADED
+ Else
+  OLEObjects[Idx].Status := OLE_NOT_FOUND;
+
+ AttachOLEObject := Idx;
+ MarkDocumentModified;
+End;
+
+{ Detacher un objet OLE }
+Procedure DetachOLEObject(OleIdx: Integer);
+Begin
+ If (OleIdx < 0) or (OleIdx >= OLEObjectCount) Then Exit;
+ OLEObjects[OleIdx].Name := '';
+ OLEObjects[OleIdx].FilePath := '';
+ OLEObjects[OleIdx].AppName := '';
+ OLEObjects[OleIdx].Status := OLE_UNLOADED;
+ OLEObjects[OleIdx].Visible := False;
+ MarkDocumentModified;
+End;
+
+{ Statut texte d'un objet OLE }
+Function GetOLEObjectStatus(OleIdx: Integer): String;
+Begin
+ If (OleIdx < 0) or (OleIdx >= OLEObjectCount) Then Begin
+  GetOLEObjectStatus := 'Invalid';
+  Exit;
+ End;
+ Case OLEObjects[OleIdx].Status of
+  OLE_LOADED:    GetOLEObjectStatus := 'Linked';
+  OLE_NOT_FOUND: GetOLEObjectStatus := 'Not Found';
+  OLE_UNLOADED:  GetOLEObjectStatus := 'Unloaded';
+ Else
+  GetOLEObjectStatus := 'Unknown';
+ End;
+End;
+
+{ Dessiner un objet OLE : cadre + bandeau d'application + nom de fichier. }
+Procedure DrawOLEObject(OleIdx: Integer);
+Var
+ SX1, SY1, SX2, SY2, BannerH: Integer;
+ SizeText: String;
+ KB: LongInt;
+Begin
+ If (OleIdx < 0) or (OleIdx >= OLEObjectCount) Then Exit;
+ If Not OLEObjects[OleIdx].Visible Then Exit;
+ If OLEObjects[OleIdx].Name = '' Then Exit;
+
+ SX1 := WorldToScreenX(OLEObjects[OleIdx].InsertX);
+ SY1 := WorldToScreenY(OLEObjects[OleIdx].InsertY + OLEObjects[OleIdx].Height);
+ SX2 := WorldToScreenX(OLEObjects[OleIdx].InsertX + OLEObjects[OleIdx].Width);
+ SY2 := WorldToScreenY(OLEObjects[OleIdx].InsertY);
+
+ BannerH := 14;
+ If (SY2 - SY1) < (BannerH * 3) Then BannerH := (SY2 - SY1) Div 3;
+ If BannerH < 8 Then BannerH := 8;
+
+ { Fond du cadre }
+ If OLEObjects[OleIdx].Status = OLE_LOADED Then Begin
+  SetFillStyle(SolidFill, LightGray);
+  Bar(SX1 + 1, SY1 + 1, SX2 - 1, SY2 - 1);
+  SetColor(DarkGray);
+ End Else Begin
+  SetFillStyle(SolidFill, Red);
+  Bar(SX1 + 1, SY1 + 1, SX2 - 1, SY1 + BannerH);
+  SetFillStyle(SolidFill, LightGray);
+  Bar(SX1 + 1, SY1 + BannerH + 1, SX2 - 1, SY2 - 1);
+  SetColor(Red);
+ End;
+ Rectangle(SX1, SY1, SX2, SY2);
+
+ { Bandeau d'application en haut }
+ If OLEObjects[OleIdx].Status = OLE_LOADED Then Begin
+  SetFillStyle(SolidFill, Blue);
+  Bar(SX1 + 1, SY1 + 1, SX2 - 1, SY1 + BannerH);
+ End;
+ SetColor(White);
+ OutTextXY(SX1 + 4, SY1 + 3, OLEObjects[OleIdx].AppName);
+
+ { Nom et taille au centre du placeholder }
+ SetColor(Black);
+ OutTextXY(SX1 + 4, SY1 + BannerH + 6, OLEObjects[OleIdx].Name);
+ If OLEObjects[OleIdx].Status = OLE_LOADED Then Begin
+  KB := OLEObjects[OleIdx].FileSize Div 1024;
+  Str(KB, SizeText);
+  SizeText := SizeText + ' KB';
+  OutTextXY(SX1 + 4, SY1 + BannerH + 18, SizeText);
+ End Else Begin
+  SetColor(Red);
+  OutTextXY(SX1 + 4, SY1 + BannerH + 18, '[' + GetOLEObjectStatus(OleIdx) + ']');
+ End;
+
+ { Icone symbolique en bas a droite (carre avec coin plie) }
+ If OLEObjects[OleIdx].Status = OLE_LOADED Then Begin
+  SetColor(DarkGray);
+  Rectangle(SX2 - 18, SY2 - 18, SX2 - 4, SY2 - 4);
+  Line(SX2 - 18, SY2 - 11, SX2 - 11, SY2 - 18);
+  Line(SX2 - 11, SY2 - 18, SX2 - 4, SY2 - 11);
+ End;
+
+ { Indicateur de selection }
+ If OLEObjects[OleIdx].Selected Then Begin
+  SetFillStyle(SolidFill, Magenta);
+  Bar(SX1 - 3, SY1 - 3, SX1 + 3, SY1 + 3);
+  Bar(SX2 - 3, SY1 - 3, SX2 + 3, SY1 + 3);
+  Bar(SX1 - 3, SY2 - 3, SX1 + 3, SY2 + 3);
+  Bar(SX2 - 3, SY2 - 3, SX2 + 3, SY2 + 3);
+ End;
+End;
+
+{ ============================================================================ }
+{ Suivi des modifications et confirmation de sortie                            }
+{ ============================================================================ }
+
+{ Marquer le document comme synchronise avec le disque (sauvegarde ou charge) }
+Procedure MarkDocumentSaved;
+Begin
+ DocumentModified := False;
+ LastSavedObjectCount := ObjectCount;
+ LastSavedBlockRefCount := BlockRefCount;
+ LastSavedImageRefCount := ImageRefCount;
+ LastSavedXRefCount := XRefCount;
+ LastSavedOLECount := OLEObjectCount;
+End;
+
+{ Marquer explicitement le document comme modifie }
+Procedure MarkDocumentModified;
+Begin
+ DocumentModified := True;
+End;
+
+{ Verifier si le document a ete modifie depuis la derniere sauvegarde.
+  La comparaison sur les compteurs detecte les ajouts et suppressions sans
+  avoir a instrumenter chaque site de modification. }
+Function IsDocumentModified: Boolean;
+Begin
+ IsDocumentModified := DocumentModified or
+                       (ObjectCount <> LastSavedObjectCount) or
+                       (BlockRefCount <> LastSavedBlockRefCount) or
+                       (ImageRefCount <> LastSavedImageRefCount) or
+                       (XRefCount <> LastSavedXRefCount) or
+                       (OLEObjectCount <> LastSavedOLECount);
+End;
+
+{ Dialogue de confirmation de fermeture. Retourne True si l'application
+  peut quitter, False si l'utilisateur a annule. Si l'utilisateur choisit
+  d'enregistrer, on declenche la procedure d'enregistrement. }
+Function ConfirmExit: Boolean;
+Const
+ BTN_COUNT = 3;
+ BTN_OUI = 0;
+ BTN_NON = 1;
+ BTN_ANN = 2;
+Type
+ TBtnRect = Record
+  X1, Y1, X2, Y2: Integer;
+  Caption: String[10];
+  Shortcut: Char;
+ End;
+Var
+ CX, CY, W, H: Integer;
+ K: Char;
+ OkFlag: Boolean;
+ SaveName: String;
+ Done: Boolean;
+ Focus, Action, I: Integer;
+ Btn: Array[0..BTN_COUNT-1] of TBtnRect;
+ LX, LY, LB, PrevLB: LongInt;
+ HitBtn: Integer;
+ BtnW, BtnH, Gap, BaseX, BaseY: Integer;
+
+ Procedure DrawBtn(Idx: Integer);
+ Var
+  TX, TY, CapLen: Integer;
+ Begin
+  If Idx = Focus Then Begin
+   SetFillStyle(SolidFill, Blue);
+   Bar(Btn[Idx].X1, Btn[Idx].Y1, Btn[Idx].X2, Btn[Idx].Y2);
+   SetColor(White);
+   Rectangle(Btn[Idx].X1, Btn[Idx].Y1, Btn[Idx].X2, Btn[Idx].Y2);
+   Rectangle(Btn[Idx].X1 - 2, Btn[Idx].Y1 - 2, Btn[Idx].X2 + 2, Btn[Idx].Y2 + 2);
+  End Else Begin
+   SetFillStyle(SolidFill, LightGray);
+   Bar(Btn[Idx].X1, Btn[Idx].Y1, Btn[Idx].X2, Btn[Idx].Y2);
+   SetColor(White);
+   Line(Btn[Idx].X1, Btn[Idx].Y1, Btn[Idx].X2, Btn[Idx].Y1);
+   Line(Btn[Idx].X1, Btn[Idx].Y1, Btn[Idx].X1, Btn[Idx].Y2);
+   SetColor(DarkGray);
+   Line(Btn[Idx].X2, Btn[Idx].Y1, Btn[Idx].X2, Btn[Idx].Y2);
+   Line(Btn[Idx].X1, Btn[Idx].Y2, Btn[Idx].X2, Btn[Idx].Y2);
+   SetColor(Black);
+  End;
+  CapLen := Length(Btn[Idx].Caption);
+  TX := Btn[Idx].X1 + ((Btn[Idx].X2 - Btn[Idx].X1) - 8 * CapLen) Div 2;
+  TY := Btn[Idx].Y1 + ((Btn[Idx].Y2 - Btn[Idx].Y1) - 8) Div 2;
+  If TX < Btn[Idx].X1 + 4 Then TX := Btn[Idx].X1 + 4;
+  If TY < Btn[Idx].Y1 + 2 Then TY := Btn[Idx].Y1 + 2;
+  OutTextXY(TX, TY, Btn[Idx].Caption);
+ End;
+
+ Function HitTest(MX, MY: LongInt): Integer;
+ Var J: Integer;
+ Begin
+  HitTest := -1;
+  For J := 0 To BTN_COUNT - 1 Do
+   If (MX >= Btn[J].X1) and (MX <= Btn[J].X2) and
+      (MY >= Btn[J].Y1) and (MY <= Btn[J].Y2) Then Begin
+    HitTest := J;
+    Exit;
+   End;
+ End;
+
+ Procedure RedrawAllButtons;
+ Var J: Integer;
+ Begin
+  HideMouse;
+  For J := 0 To BTN_COUNT - 1 Do DrawBtn(J);
+  ShowMouse;
+ End;
+
+ Procedure SetFocus(NewFocus: Integer);
+ Begin
+  If (NewFocus < 0) or (NewFocus >= BTN_COUNT) Then Exit;
+  If NewFocus = Focus Then Exit;
+  Focus := NewFocus;
+  RedrawAllButtons;
+ End;
+
+Begin
+ If Not IsDocumentModified Then Begin
+  ConfirmExit := True;
+  Exit;
+ End;
+
+ { Boite centree sur l'ecran }
+ W := 440;
+ H := 160;
+ CX := (ScreenWidth - W) Div 2;
+ CY := (ScreenHeight - H) Div 2;
+ If CX < 0 Then CX := 0;
+ If CY < 0 Then CY := 0;
+
+ HideMouse;
+ SetFillStyle(SolidFill, LightGray);
+ Bar(CX, CY, CX + W, CY + H);
+ SetColor(Black);
+ Rectangle(CX, CY, CX + W, CY + H);
+ Rectangle(CX + 2, CY + 2, CX + W - 2, CY + H - 2);
+
+ { Barre de titre }
+ SetFillStyle(SolidFill, Blue);
+ Bar(CX + 3, CY + 3, CX + W - 3, CY + 22);
+ SetColor(White);
+ OutTextXY(CX + 10, CY + 8, 'Quitter AUTOCAD');
+
+ SetColor(Black);
+ If CurrentFileName = '' Then
+  OutTextXY(CX + 14, CY + 40, 'Le dessin <sans nom> a ete modifie.')
+ Else
+  OutTextXY(CX + 14, CY + 40, 'Le dessin "' + CurrentFileName + '" a ete modifie.');
+ OutTextXY(CX + 14, CY + 58, 'Enregistrer les modifications avant de quitter ?');
+
+ { Definir les boutons }
+ BtnW := 110;
+ BtnH := 28;
+ Gap := 14;
+ BaseX := CX + ((W - (BtnW * BTN_COUNT + Gap * (BTN_COUNT - 1))) Div 2);
+ BaseY := CY + H - BtnH - 16;
+
+ For I := 0 To BTN_COUNT - 1 Do Begin
+  Btn[I].X1 := BaseX + I * (BtnW + Gap);
+  Btn[I].Y1 := BaseY;
+  Btn[I].X2 := Btn[I].X1 + BtnW;
+  Btn[I].Y2 := BaseY + BtnH;
+ End;
+ Btn[BTN_OUI].Caption := 'Oui (O)';   Btn[BTN_OUI].Shortcut := 'O';
+ Btn[BTN_NON].Caption := 'Non (N)';   Btn[BTN_NON].Shortcut := 'N';
+ Btn[BTN_ANN].Caption := 'Annuler';   Btn[BTN_ANN].Shortcut := #27;
+
+ Focus := BTN_OUI;
+ For I := 0 To BTN_COUNT - 1 Do DrawBtn(I);
+ ShowMouse;
+
+ Done := False;
+ ConfirmExit := False;
+ Action := -1;
+ PrevLB := 0;
+ GetMouseState(LX, LY, PrevLB);
+
+ While Not Done Do Begin
+  { Souris : suivi du survol et detection du clic (front montant) }
+  GetMouseState(LX, LY, LB);
+  HitBtn := HitTest(LX, LY);
+  If (HitBtn >= 0) and (HitBtn <> Focus) Then SetFocus(HitBtn);
+  If ((LB and 1) <> 0) and ((PrevLB and 1) = 0) Then Begin
+   If HitBtn >= 0 Then Begin
+    Action := HitBtn;
+    Done := True;
+   End;
+  End;
+  PrevLB := LB;
+
+  { Clavier }
+  If KeyPressed Then Begin
+   K := ReadKey;
+   If K = #0 Then Begin
+    K := ReadKey;
+    Case K of
+     #75: SetFocus((Focus + BTN_COUNT - 1) Mod BTN_COUNT); { Gauche }
+     #77: SetFocus((Focus + 1) Mod BTN_COUNT);             { Droite }
+     #15: SetFocus((Focus + 1) Mod BTN_COUNT);             { Shift+Tab... mappage simplifie }
+    End;
+   End Else Begin
+    Case K of
+     'o', 'O', 'y', 'Y': Begin Action := BTN_OUI; Done := True; End;
+     'n', 'N':           Begin Action := BTN_NON; Done := True; End;
+     #27:                Begin Action := BTN_ANN; Done := True; End;
+     #9:                 SetFocus((Focus + 1) Mod BTN_COUNT); { Tab }
+     #13, ' ':           Begin Action := Focus; Done := True; End;
+    End;
+   End;
+  End;
+ End;
+
+ { Executer l'action choisie }
+ Case Action Of
+  BTN_OUI: Begin
+   If CurrentFileName = '' Then Begin
+    PendingFileAction := 2;
+    CommandPrompt := 'Enregistrer sous (nom du fichier):';
+    CommandBuffer := '';
+    CommandLastLine := 'Saisissez un nom de fichier puis relancez Quitter.';
+    DrawInterface;
+    ConfirmExit := False;
+   End Else Begin
+    SaveName := CurrentFileName;
+    OkFlag := WriteDWGFile(SaveName);
+    If OkFlag Then Begin
+     MarkDocumentSaved;
+     CommandLastLine := 'Enregistre: ' + SaveName;
+     ConfirmExit := True;
+    End Else Begin
+     CommandLastLine := 'Echec enregistrement: ' + SaveName + ' - sortie annulee';
+     DrawInterface;
+     ConfirmExit := False;
+    End;
+   End;
+  End;
+  BTN_NON: ConfirmExit := True;
+  BTN_ANN: Begin
+   DrawInterface;
+   ConfirmExit := False;
+  End;
  End;
 End;
 
@@ -11222,6 +12077,7 @@ Begin
 
  Close(F);
  WriteDWGFile := True;
+ MarkDocumentSaved;
 End;
 
 { Lire l'en-tête du fichier DWG }
@@ -11460,6 +12316,7 @@ Begin
  ClearGrips;
 
  ReadDWGFile := True;
+ MarkDocumentSaved;
 End;
 
 { ============================================================================ }
@@ -11867,6 +12724,7 @@ Begin
 
  Close(F);
  WriteDXFFile := True;
+ MarkDocumentSaved;
 End;
 
 { Lire un code de groupe DXF }
@@ -12236,6 +13094,7 @@ Begin
  ClearGrips;
 
  ReadDXFFile := True;
+ MarkDocumentSaved;
 End;
 
 { ============================================================================ }
@@ -13287,6 +14146,7 @@ Begin
 
  Close(F);
  WriteSVGFile := True;
+ MarkDocumentSaved;
 End;
 
 { ============================================================================ }
@@ -13995,6 +14855,7 @@ Begin
 
  Close(F);
  ReadSVGFile := True;
+ MarkDocumentSaved;
 End;
 
 { Initialiser le panneau de propriétés }
@@ -15042,6 +15903,7 @@ Begin
        ClearSelection;
        ClearGrips;
        CurrentFileName := '';
+       MarkDocumentSaved;
        CommandLastLine := 'Nouveau dessin';
        DrawInterface;
       End Else If Toolbars[TbHit].Buttons[BtnHit].Command = 'OPEN' Then Begin
@@ -15119,6 +15981,7 @@ Begin
         ClearSelection;
         ClearGrips;
         CurrentFileName := '';
+        MarkDocumentSaved;
         CommandLastLine := 'Nouveau dessin';
        End;
        1: Begin { Ouvrir }
@@ -15172,7 +16035,7 @@ Begin
                             '  Calques=' + NumStr2 + '  Blocs=' + NumStr3;
        End;
        13: Begin { Quitter }
-        Running := False;
+        If ConfirmExit Then Running := False;
        End;
       End;
      End Else If ActiveMenu = MENU_EDIT Then Begin
@@ -15186,6 +16049,50 @@ Begin
        7: PasteFromClipboard;           { Coller comme bloc }
        9: DeleteSelectedObjects;        { Effacer }
        11: SelectAllObjects;            { Tout selectionner }
+      End;
+     End Else If ActiveMenu = MENU_VIEW Then Begin
+      Case NewItem Of
+       0: ViewRedraw;                   { Redraw }
+       1: ViewRedraw;                   { Regen }
+       3: ViewZoomIn;                   { Zoom In }
+       4: ViewZoomOut;                  { Zoom Out }
+       5: ViewEnterZoomWindowMode;      { Zoom Window }
+       6: ViewZoomExtents;              { Zoom Extents }
+       7: ViewZoomAll;                  { Zoom All }
+       9: ViewEnterPanMode;             { Pan }
+       11: CommandLastLine := 'Vues nommees: fonction non disponible dans cette version';
+       12: CommandLastLine := 'Vues 3D: fonction non disponible dans cette version';
+       13: CommandLastLine := 'Fenetres: fonction non disponible dans cette version';
+      End;
+     End Else If ActiveMenu = MENU_INSERT Then Begin
+      Case NewItem Of
+       0: Begin { Block... }
+        If BlockDefCount <= 0 Then
+         CommandLastLine := 'Inserer bloc: aucun bloc defini dans le dessin'
+        Else Begin
+         PendingFileAction := 5;
+         CommandPrompt := 'Nom du bloc a inserer:';
+         CommandBuffer := '';
+        End;
+       End;
+       1: Begin { DWG Reference... }
+        PendingFileAction := 6;
+        CommandPrompt := 'Fichier DWG a referencer:';
+        CommandBuffer := '';
+       End;
+       2: Begin { Image Reference... }
+        PendingFileAction := 7;
+        CommandPrompt := 'Fichier image a referencer:';
+        CommandBuffer := '';
+       End;
+       4: CommandLastLine := 'Layout: fonction non disponible dans cette version';
+       6: CommandLastLine := '3D Studio: fonction non disponible dans cette version';
+       7: CommandLastLine := 'ACIS: fonction non disponible dans cette version';
+       9: Begin { Objet OLE... }
+        PendingFileAction := 8;
+        CommandPrompt := 'Fichier source pour objet OLE:';
+        CommandBuffer := '';
+       End;
       End;
      End;
      MenuActive := False;
@@ -15818,6 +16725,149 @@ Begin
  CommandLastLine := 'Tout selectionner: ' + NStr + ' objet(s)';
 End;
 
+{ ================ Menu Affichage : Redraw, Regen, Zoom, Pan ================ }
+
+{ Calculer la boite englobante de tous les objets visibles. Retourne True si non vide. }
+Function ComputeDrawingBounds(Var Bx1, By1, Bx2, By2: Real): Boolean;
+Var
+ I, J: Integer;
+ HasAny: Boolean;
+ R: Real;
+Begin
+ HasAny := False;
+ Bx1 := 0; By1 := 0; Bx2 := 0; By2 := 0;
+ For I := 0 To ObjectCount - 1 Do Begin
+  If Not DrawObjects[I].Visible Then Continue;
+  If DrawObjects[I].ObjType = OBJ_NONE Then Continue;
+  If Not IsObjectOnVisibleLayer(I) Then Continue;
+  Case DrawObjects[I].ObjType Of
+   OBJ_LINE, OBJ_RECTANGLE: Begin
+    If Not HasAny Then Begin
+     Bx1 := DrawObjects[I].X1; By1 := DrawObjects[I].Y1;
+     Bx2 := Bx1; By2 := By1; HasAny := True;
+    End;
+    If DrawObjects[I].X1 < Bx1 Then Bx1 := DrawObjects[I].X1;
+    If DrawObjects[I].Y1 < By1 Then By1 := DrawObjects[I].Y1;
+    If DrawObjects[I].X1 > Bx2 Then Bx2 := DrawObjects[I].X1;
+    If DrawObjects[I].Y1 > By2 Then By2 := DrawObjects[I].Y1;
+    If DrawObjects[I].X2 < Bx1 Then Bx1 := DrawObjects[I].X2;
+    If DrawObjects[I].Y2 < By1 Then By1 := DrawObjects[I].Y2;
+    If DrawObjects[I].X2 > Bx2 Then Bx2 := DrawObjects[I].X2;
+    If DrawObjects[I].Y2 > By2 Then By2 := DrawObjects[I].Y2;
+   End;
+   OBJ_CIRCLE, OBJ_ARC, OBJ_ELLIPSE: Begin
+    R := DrawObjects[I].Radius;
+    If R < 0 Then R := -R;
+    If Not HasAny Then Begin
+     Bx1 := DrawObjects[I].X1 - R; By1 := DrawObjects[I].Y1 - R;
+     Bx2 := DrawObjects[I].X1 + R; By2 := DrawObjects[I].Y1 + R;
+     HasAny := True;
+    End Else Begin
+     If DrawObjects[I].X1 - R < Bx1 Then Bx1 := DrawObjects[I].X1 - R;
+     If DrawObjects[I].Y1 - R < By1 Then By1 := DrawObjects[I].Y1 - R;
+     If DrawObjects[I].X1 + R > Bx2 Then Bx2 := DrawObjects[I].X1 + R;
+     If DrawObjects[I].Y1 + R > By2 Then By2 := DrawObjects[I].Y1 + R;
+    End;
+   End;
+   OBJ_POINT, OBJ_TEXT: Begin
+    If Not HasAny Then Begin
+     Bx1 := DrawObjects[I].X1; By1 := DrawObjects[I].Y1;
+     Bx2 := Bx1; By2 := By1; HasAny := True;
+    End Else Begin
+     If DrawObjects[I].X1 < Bx1 Then Bx1 := DrawObjects[I].X1;
+     If DrawObjects[I].Y1 < By1 Then By1 := DrawObjects[I].Y1;
+     If DrawObjects[I].X1 > Bx2 Then Bx2 := DrawObjects[I].X1;
+     If DrawObjects[I].Y1 > By2 Then By2 := DrawObjects[I].Y1;
+    End;
+   End;
+   OBJ_POLYLINE: Begin
+    For J := 0 To DrawObjects[I].VertexCount - 1 Do Begin
+     If Not HasAny Then Begin
+      Bx1 := DrawObjects[I].Vertices[J].X; By1 := DrawObjects[I].Vertices[J].Y;
+      Bx2 := Bx1; By2 := By1; HasAny := True;
+     End Else Begin
+      If DrawObjects[I].Vertices[J].X < Bx1 Then Bx1 := DrawObjects[I].Vertices[J].X;
+      If DrawObjects[I].Vertices[J].Y < By1 Then By1 := DrawObjects[I].Vertices[J].Y;
+      If DrawObjects[I].Vertices[J].X > Bx2 Then Bx2 := DrawObjects[I].Vertices[J].X;
+      If DrawObjects[I].Vertices[J].Y > By2 Then By2 := DrawObjects[I].Vertices[J].Y;
+     End;
+    End;
+   End;
+  End;
+ End;
+ ComputeDrawingBounds := HasAny;
+End;
+
+Procedure ViewZoomIn;
+Begin
+ ZoomLevel := ZoomLevel * 1.25;
+ If ZoomLevel > 20.0 Then ZoomLevel := 20.0;
+ CommandLastLine := 'Zoom avant';
+ DrawInterface;
+End;
+
+Procedure ViewZoomOut;
+Begin
+ ZoomLevel := ZoomLevel * 0.8;
+ If ZoomLevel < 0.1 Then ZoomLevel := 0.1;
+ CommandLastLine := 'Zoom arriere';
+ DrawInterface;
+End;
+
+Procedure ViewZoomExtents;
+Var
+ Bx1, By1, Bx2, By2, W, H, ZX, ZY, NewZ: Real;
+ CanvasH: Integer;
+Begin
+ If Not ComputeDrawingBounds(Bx1, By1, Bx2, By2) Then Begin
+  CommandLastLine := 'Zoom etendu: aucun objet';
+  Exit;
+ End;
+ W := Bx2 - Bx1;
+ H := By2 - By1;
+ If W < 0.0001 Then W := 1.0;
+ If H < 0.0001 Then H := 1.0;
+ CanvasH := ScreenHeight - MENUBAR_HEIGHT - TOOLBAR_HEIGHT
+            - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
+ ZX := (ScreenWidth * 0.9) / W;
+ ZY := (CanvasH * 0.9) / H;
+ If ZX < ZY Then NewZ := ZX Else NewZ := ZY;
+ If NewZ < 0.1 Then NewZ := 0.1;
+ If NewZ > 20.0 Then NewZ := 20.0;
+ ZoomLevel := NewZ;
+ ViewOffsetX := -(Bx1 + Bx2) / 2.0;
+ ViewOffsetY := -(By1 + By2) / 2.0;
+ CommandLastLine := 'Zoom etendu';
+ DrawInterface;
+End;
+
+Procedure ViewZoomAll;
+Begin
+ { Zoom All = Zoom Extents pour ce clone (pas de limites de dessin distinctes) }
+ ViewZoomExtents;
+ CommandLastLine := 'Zoom tout';
+End;
+
+Procedure ViewRedraw;
+Begin
+ DrawInterface;
+ CommandLastLine := 'Redessine';
+End;
+
+Procedure ViewEnterPanMode;
+Begin
+ MouseMode := MOUSE_MODE_PAN;
+ CommandLastLine := 'Mode Pan actif - cliquez-glissez pour deplacer la vue (Esc pour sortir)';
+ DrawInterface;
+End;
+
+Procedure ViewEnterZoomWindowMode;
+Begin
+ MouseMode := MOUSE_MODE_ZOOM;
+ CommandLastLine := 'Mode Zoom fenetre - cliquez-glissez la zone a agrandir (Esc pour sortir)';
+ DrawInterface;
+End;
+
 { Apercu avant impression : rendu plein ecran sur "papier" blanc, encre noire.
   Sauve Zoom/Offset, ajuste pour cadrer tous les objets visibles, attend une
   touche, puis restaure et redessine l'interface normale. }
@@ -16198,7 +17248,7 @@ Begin
       ClearGrips;  { TODO 10: Effacer les grips }
       DrawInterface;
      End Else Begin
-      Running := False;
+      If ConfirmExit Then Running := False;
      End;
     End;
     #8: Begin { Backspace : effacer un caractère }
@@ -16281,6 +17331,58 @@ Begin
            CommandLastLine := 'Echec exportation: ' + CommandBuffer;
          End;
         End;
+        5: Begin { Inserer un bloc par nom }
+         I := FindBlockByName(CommandBuffer);
+         If I < 0 Then
+          CommandLastLine := 'Bloc introuvable: ' + CommandBuffer
+         Else If Not BlockDefs[I].IsDefined Then
+          CommandLastLine := 'Bloc non defini: ' + CommandBuffer
+         Else Begin
+          If InsertBlock(I, -ViewOffsetX, -ViewOffsetY, 1.0, 1.0, 0.0) >= 0 Then
+           CommandLastLine := 'Bloc insere: ' + CommandBuffer
+          Else
+           CommandLastLine := 'Echec insertion bloc: ' + CommandBuffer;
+         End;
+        End;
+        6: Begin { Inserer reference DWG (comportement = import) }
+         Ext := '';
+         For I := Length(CommandBuffer) DownTo 1 Do
+          If CommandBuffer[I] = '.' Then Begin
+           Ext := Copy(CommandBuffer, I + 1, Length(CommandBuffer) - I);
+           Break;
+          End;
+         For I := 1 To Length(Ext) Do Ext[I] := UpCase(Ext[I]);
+         SavedSW := ScreenWidth;
+         SavedSH := ScreenHeight;
+         OkFlag := False;
+         If (Ext = 'DWG') or (Ext = '') Then OkFlag := ReadDWGFile(CommandBuffer)
+         Else CommandLastLine := 'Reference DWG: extension non .DWG';
+         ScreenWidth := SavedSW;
+         ScreenHeight := SavedSH;
+         If OkFlag Then Begin
+          CurrentFileName := CommandBuffer;
+          CommandLastLine := 'Reference DWG chargee: ' + CommandBuffer;
+         End Else If (Ext = 'DWG') or (Ext = '') Then
+          CommandLastLine := 'Echec reference DWG: ' + CommandBuffer;
+        End;
+        7: Begin { Inserer reference d'image }
+         I := AttachImageRef(CommandBuffer, -ViewOffsetX, -ViewOffsetY, 0, 0, 0.0);
+         If I < 0 Then
+          CommandLastLine := 'Echec attache image: ' + CommandBuffer
+         Else If ImageRefs[I].Status = IMGREF_NOT_FOUND Then
+          CommandLastLine := 'Image attachee (fichier manquant): ' + CommandBuffer
+         Else
+          CommandLastLine := 'Image attachee: ' + CommandBuffer;
+        End;
+        8: Begin { Inserer objet OLE }
+         I := AttachOLEObject(CommandBuffer, -ViewOffsetX, -ViewOffsetY, 0, 0);
+         If I < 0 Then
+          CommandLastLine := 'Echec insertion OLE: ' + CommandBuffer
+         Else If OLEObjects[I].Status = OLE_NOT_FOUND Then
+          CommandLastLine := 'Objet OLE insere (fichier manquant): ' + CommandBuffer
+         Else
+          CommandLastLine := 'Objet OLE insere (' + OLEObjects[I].AppName + '): ' + CommandBuffer;
+        End;
        End;
        PendingFileAction := 0;
        CommandPrompt := 'Command:';
@@ -16338,7 +17440,7 @@ Begin
        DrawInterface;
       End;
       #107: Begin { Alt+F4 - Quitter }
-       Running := False;
+       If ConfirmExit Then Running := False;
       End;
      End;
     End;
@@ -16421,6 +17523,14 @@ BEGIN
  CommandCursorBlink := True;
  PendingFileAction := 0;
  CurrentFileName := '';
+
+ { Initialiser le suivi des modifications }
+ DocumentModified := False;
+ LastSavedObjectCount := 0;
+ LastSavedBlockRefCount := 0;
+ LastSavedImageRefCount := 0;
+ LastSavedXRefCount := 0;
+ LastSavedOLECount := 0;
 
  { Charger un fichier passe en argument de ligne de commande }
  If ParamCount >= 1 Then Begin

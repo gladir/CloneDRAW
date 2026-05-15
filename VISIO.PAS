@@ -15594,7 +15594,7 @@ Begin
       Shortcuts[2] := 'Ctrl+O';
       Shortcuts[3] := 'Ctrl+W';
       Shortcuts[4] := 'Ctrl+S';
-      Shortcuts[5] := 'Ctrl+Shift+S';
+      Shortcuts[5] := 'F12';
       Shortcuts[9] := 'Ctrl+P';
       Shortcuts[11] := 'Alt+F4';
      End;
@@ -17596,7 +17596,19 @@ BEGIN
             Break; { Escape pour quitter }
            End;
           End;
-     #0: Begin { Touches de fonction }
+     #1:  Begin EditSelectAll; RefreshScreen; End;  { Ctrl+A }
+     #3:  Begin EditCopy;      RefreshScreen; End;  { Ctrl+C }
+     #6:  Begin EditFind;      RefreshScreen; End;  { Ctrl+F }
+     #14: Begin FileNew;       RefreshScreen; End;  { Ctrl+N }
+     #15: Begin FileOpen;      RefreshScreen; End;  { Ctrl+O }
+     #16: Begin FilePrint;     RefreshScreen; End;  { Ctrl+P }
+     #19: Begin FileSave;      RefreshScreen; End;  { Ctrl+S }
+     #22: Begin EditPaste;     RefreshScreen; End;  { Ctrl+V }
+     #23: Begin FileClose;     RefreshScreen; End;  { Ctrl+W }
+     #24: Begin EditCut;       RefreshScreen; End;  { Ctrl+X }
+     #25: Begin EditRedo;      RefreshScreen; End;  { Ctrl+Y }
+     #26: Begin EditUndo;      RefreshScreen; End;  { Ctrl+Z }
+     #0: Begin { Touches de fonction et combinaisons Alt/Shift }
           MainLoopKey := ReadKey;
           Case MainLoopKey of
            #59: Begin { F1 - Aide }
@@ -17604,6 +17616,48 @@ BEGIN
                  MenuState := msDropDown;
                  HoveredMenuItem := 0;
                  RefreshScreen;
+                End;
+           #107: Begin { Alt+F4 - Quitter }
+                  If FileExit Then Halt;
+                 End;
+           #134: Begin { F12 - Enregistrer sous (alternative a Ctrl+Shift+S) }
+                  FileSaveAs; RefreshScreen;
+                 End;
+           #33: Begin  { Alt+F - menu Fichier }
+                 CurrentMenu := 1; MenuState := msDropDown;
+                 HoveredMenuItem := 0; RefreshScreen;
+                End;
+           #18: Begin  { Alt+E - menu Edition }
+                 CurrentMenu := 2; MenuState := msDropDown;
+                 HoveredMenuItem := 0; RefreshScreen;
+                End;
+           #30: Begin  { Alt+A - menu Affichage }
+                 CurrentMenu := 3; MenuState := msDropDown;
+                 HoveredMenuItem := 0; RefreshScreen;
+                End;
+           #23: Begin  { Alt+I - menu Insertion }
+                 CurrentMenu := 4; MenuState := msDropDown;
+                 HoveredMenuItem := 0; RefreshScreen;
+                End;
+           #50: Begin  { Alt+M - menu Format }
+                 CurrentMenu := 5; MenuState := msDropDown;
+                 HoveredMenuItem := 0; RefreshScreen;
+                End;
+           #34: Begin  { Alt+G - menu Forme (G comme "Geometrie") }
+                 CurrentMenu := 6; MenuState := msDropDown;
+                 HoveredMenuItem := 0; RefreshScreen;
+                End;
+           #24: Begin  { Alt+O - menu Outils }
+                 CurrentMenu := 7; MenuState := msDropDown;
+                 HoveredMenuItem := 0; RefreshScreen;
+                End;
+           #49: Begin  { Alt+N - menu Fenetre }
+                 CurrentMenu := 8; MenuState := msDropDown;
+                 HoveredMenuItem := 0; RefreshScreen;
+                End;
+           #35: Begin  { Alt+H - menu Aide (Help) }
+                 CurrentMenu := 9; MenuState := msDropDown;
+                 HoveredMenuItem := 0; RefreshScreen;
                 End;
           End;
          End;

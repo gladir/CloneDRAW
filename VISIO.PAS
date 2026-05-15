@@ -369,6 +369,14 @@ Var
  { Variable pour le survol des poignÃ©es }
  HoveredHandle: Integer;      { PoignÃ©e actuellement survolÃ©e (RESIZE_HANDLE_*) }
  OldHoveredHandle: Integer;   { Ancienne poignÃ©e survolÃ©e (pour dÃ©tection de changement) }
+ { Variables pour le survol clavier/souris des items de menu deroulant }
+ HoveredMenuItem: Integer;    { Item de menu actuellement survole (0=aucun) }
+ OldHoveredMenuItem: Integer; { Pour detection de changement }
+ PrevMouseX, PrevMouseY: Integer; { Position precedente de la souris (detection de mouvement) }
+ HoveredMenuOnBar: Integer;   { Menu de la barre survole quand un deroulant est ouvert }
+ { Variables temporaires de la boucle principale (clavier) }
+ MainLoopKey: Char;
+ MainLoopExit: Boolean;
  { Variables pour les connecteurs et points d'ancrage }
  HoveredShapeForAnchor: Integer;  { Forme survolÃ©e pour afficher les points d'ancrage }
  NearestAnchorPoint: Integer;     { Point d'ancrage le plus proche de la souris }
@@ -8119,6 +8127,38 @@ Begin
  End;
 End;
 
+{ Renvoie le nombre d'elements (separateurs inclus) d'un menu deroulant. }
+Function GetMenuItemCount(MenuIndex: Integer): Integer;
+Begin
+ Case MenuIndex of
+  1: GetMenuItemCount := 11;
+  2: GetMenuItemCount := 12;
+  3: GetMenuItemCount := 9;
+  4: GetMenuItemCount := 6;
+  5: GetMenuItemCount := 7;
+  6: GetMenuItemCount := 10;
+  7: GetMenuItemCount := 4;
+  8: GetMenuItemCount := 4;
+  9: GetMenuItemCount := 3;
+  Else GetMenuItemCount := 0;
+ End;
+End;
+
+{ Indique si la ligne d'index ItemIdx du menu MenuIndex est un separateur. }
+Function IsMenuSeparator(MenuIndex, ItemIdx: Integer): Boolean;
+Begin
+ Case MenuIndex of
+  1: IsMenuSeparator := (ItemIdx = 6) or (ItemIdx = 8);
+  2: IsMenuSeparator := (ItemIdx = 3) or (ItemIdx = 8) or (ItemIdx = 10);
+  3: IsMenuSeparator := (ItemIdx = 4) or (ItemIdx = 8);
+  5: IsMenuSeparator := ItemIdx = 4;
+  6: IsMenuSeparator := (ItemIdx = 3) or (ItemIdx = 6) or (ItemIdx = 9);
+  7: IsMenuSeparator := ItemIdx = 3;
+  9: IsMenuSeparator := ItemIdx = 2;
+  Else IsMenuSeparator := False;
+ End;
+End;
+
 { ProcÃ©dure pour dessiner un sous-menu dÃ©roulant }
 Procedure DrawDropDownMenu(MenuIndex: Integer);
 Const
@@ -8238,6 +8278,14 @@ Begin
  SetFillStyle(SolidFill, MENU_BAR_COLOR);
  Bar(X, Y, X + MenuWidth, Y + ItemCount * ItemHeight + 4);
 
+ { Dessiner la bande de surlignage si un item non-separateur est survole }
+ If (HoveredMenuItem >= 1) and (HoveredMenuItem <= ItemCount) and
+    (Items[HoveredMenuItem] <> '-') Then Begin
+  SetFillStyle(SolidFill, MENU_HIGHLIGHT_BG);
+  Bar(X + 1, Y + (HoveredMenuItem - 1) * ItemHeight + 2,
+      X + MenuWidth - 1, Y + HoveredMenuItem * ItemHeight + 2);
+ End;
+
  { Dessiner la bordure }
  SetColor(DarkGray);
  Rectangle(X, Y, X + MenuWidth, Y + ItemCount * ItemHeight + 4);
@@ -8252,6 +8300,8 @@ Begin
    SetColor(MENU_TEXT_COLOR);
   End
   Else Begin
+   If I = HoveredMenuItem Then SetColor(MENU_HIGHLIGHT_FG)
+                          Else SetColor(MENU_TEXT_COLOR);
    OutTextXY(X + 10, Y + (I - 1) * ItemHeight + 4, Items[I]);
   End;
  End;
@@ -8281,6 +8331,10 @@ Procedure InitMenuSystem;
 Begin
  CurrentMenu := 0;
  MenuState := msNone;
+ HoveredMenuItem := 0;
+ OldHoveredMenuItem := 0;
+ PrevMouseX := -1;
+ PrevMouseY := -1;
  ScreenWidth := GetMaxX;
  ScreenHeight := GetMaxY;
  CurrentFileName := '';
@@ -8558,6 +8612,35 @@ BEGIN
     HoveredHandle := RESIZE_HANDLE_NONE;
    End;
 
+   { Detecter le survol des items du menu deroulant.
+     N'agir QUE si la souris a reellement bouge, sinon les fleches du
+     clavier sont ecrasees a chaque iteration. Comportement style PAINT.PAS :
+     si la souris glisse sur un autre nom de menu dans la barre, basculer
+     le menu deroulant sur ce menu. }
+   If (MenuState = msDropDown) and (CurrentMenu > 0) and
+      ((LastMouseX <> PrevMouseX) or (LastMouseY <> PrevMouseY)) Then Begin
+    HoveredMenuOnBar := GetMenuAtPosition(LastMouseX, LastMouseY);
+    If (HoveredMenuOnBar > 0) and (HoveredMenuOnBar <> CurrentMenu) Then Begin
+     CurrentMenu := HoveredMenuOnBar;
+     HoveredMenuItem := 0;
+     HideMouse;
+     RefreshScreen;
+     ShowMouse;
+    End
+    Else Begin
+     OldHoveredMenuItem := HoveredMenuItem;
+     HoveredMenuItem := GetDropDownItemAtPosition(CurrentMenu,
+                                                   LastMouseX, LastMouseY);
+     If HoveredMenuItem <> OldHoveredMenuItem Then Begin
+      HideMouse;
+      RefreshScreen;
+      ShowMouse;
+     End;
+    End;
+   End;
+   PrevMouseX := LastMouseX;
+   PrevMouseY := LastMouseY;
+
    { DÃ©tecter le survol des formes pour afficher les points d'ancrage (outil connecteur) }
    If (CurrentTool = ttConnector) and (DragMode = DRAG_MODE_NONE) Then Begin
     { Trouver la forme sous la souris }
@@ -8644,26 +8727,97 @@ BEGIN
 
   { Attendre une entrÃ©e clavier }
   If KeyPressed Then Begin
-   Case ReadKey of
-    #27: Begin
-          { Si le menu contextuel est visible, le fermer }
-          If ContextMenuVisible Then Begin
-           HideContextMenu;
-           RefreshScreen;
-          End
-          Else Begin
-           Break; { Escape pour quitter }
+   MainLoopKey := ReadKey;
+   { Si un menu deroulant est ouvert, intercepter Enter/Esc/fleches }
+   If (MenuState = msDropDown) and (CurrentMenu > 0) Then Begin
+    If MainLoopKey = #13 Then Begin
+     { Enter : activer l'element survole }
+     If (HoveredMenuItem >= 1) and
+        (HoveredMenuItem <= GetMenuItemCount(CurrentMenu)) and
+        Not IsMenuSeparator(CurrentMenu, HoveredMenuItem) Then Begin
+      Case CurrentMenu of
+       1: Begin
+           MainLoopExit := ExecuteFileMenuAction(HoveredMenuItem);
+           If MainLoopExit Then Halt;
+          End;
+       2: ExecuteEditMenuAction(HoveredMenuItem);
+       3: ExecuteViewMenuAction(HoveredMenuItem);
+       4: ExecuteInsertMenuAction(HoveredMenuItem);
+       5: ExecuteFormatMenuAction(HoveredMenuItem);
+       6: ExecuteShapeMenuAction(HoveredMenuItem);
+      End;
+      MenuState := msNone;
+      CurrentMenu := 0;
+      HoveredMenuItem := 0;
+      RefreshScreen;
+     End;
+    End
+    Else If MainLoopKey = #27 Then Begin
+     { Esc : fermer le menu }
+     MenuState := msNone;
+     CurrentMenu := 0;
+     HoveredMenuItem := 0;
+     RefreshScreen;
+    End
+    Else If MainLoopKey = #0 Then Begin
+     MainLoopKey := ReadKey;
+     Case MainLoopKey of
+      #72: Begin { fleche haut - element precedent (saute les separateurs) }
+            If HoveredMenuItem <= 0 Then
+             HoveredMenuItem := GetMenuItemCount(CurrentMenu) + 1;
+            Repeat
+             Dec(HoveredMenuItem);
+             If HoveredMenuItem < 1 Then
+              HoveredMenuItem := GetMenuItemCount(CurrentMenu);
+            Until Not IsMenuSeparator(CurrentMenu, HoveredMenuItem);
+            RefreshScreen;
+           End;
+      #80: Begin { fleche bas - element suivant (saute les separateurs) }
+            Repeat
+             Inc(HoveredMenuItem);
+             If HoveredMenuItem > GetMenuItemCount(CurrentMenu) Then
+              HoveredMenuItem := 1;
+            Until Not IsMenuSeparator(CurrentMenu, HoveredMenuItem);
+            RefreshScreen;
+           End;
+      #75: Begin { fleche gauche - menu precedent }
+            CurrentMenu := ((CurrentMenu - 2 + MENU_COUNT) Mod MENU_COUNT) + 1;
+            HoveredMenuItem := 0;
+            RefreshScreen;
+           End;
+      #77: Begin { fleche droite - menu suivant }
+            CurrentMenu := (CurrentMenu Mod MENU_COUNT) + 1;
+            HoveredMenuItem := 0;
+            RefreshScreen;
+           End;
+     End;
+    End;
+   End
+   Else Begin
+    { Aucun menu deroulant ouvert : comportement habituel }
+    Case MainLoopKey of
+     #27: Begin
+           { Si le menu contextuel est visible, le fermer }
+           If ContextMenuVisible Then Begin
+            HideContextMenu;
+            RefreshScreen;
+           End
+           Else Begin
+            Break; { Escape pour quitter }
+           End;
+          End;
+     #0: Begin { Touches de fonction }
+          MainLoopKey := ReadKey;
+          Case MainLoopKey of
+           #59: Begin { F1 - Aide }
+                 CurrentMenu := 9;
+                 MenuState := msDropDown;
+                 HoveredMenuItem := 0;
+                 RefreshScreen;
+                End;
           End;
          End;
-    #0: Begin { Touches de fonction }
-         Case ReadKey of
-          #59: Begin { F1 - Aide }
-                CurrentMenu := 9;
-                MenuState := msDropDown;
-                RefreshScreen;
-               End;
-         End;
-        End;
+    End;
    End;
   End;
  Until False;

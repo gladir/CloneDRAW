@@ -10386,30 +10386,40 @@ Begin
  PrepareRasterExportBuffer := True;
 End;
 
-{ Helper: capture la zone de travail BGI a l'ecran vers PixelBuffer.        }
-{ Lit GetPixel pour chaque pixel entre (0, WORK_AREA_TOP+1) et              }
-{ (ScreenWidth-1, ScreenHeight-17). Cela fournit un veritable instantane     }
-{ du canvas tel que rendu par BGI, incluant motifs de remplissage, textes   }
-{ vectoriels BGI, lignes stylees, etc. Renvoie False si dimensions nulles.  }
+{ Helper: capture la zone exacte du DESSIN (bounding box des Shapes[]) a       }
+{ l'ecran vers PixelBuffer. Aucune barre d'outils, aucun menu, aucune        }
+{ barre de statut ne peut etre incluse : on lit GetPixel uniquement entre    }
+{ (MinX,MinY)-(MaxX,MaxY). Si aucune forme, renvoie False.                   }
+{ Suppose que l'appelant a deja appele RefreshScreen (avec menus/dialogues   }
+{ supprimes) pour rendre les formes proprement sur le canvas BGI : ainsi le  }
+{ texte (OutTextXY), motifs de remplissage et autres primitives BGI sont    }
+{ rendus avec leur apparence exacte.                                        }
 Function CaptureCanvasToBuffer(Var Width, Height: Integer): Boolean;
 Var
- X1, Y1, X2, Y2, X, Y: Integer;
+ MinX, MinY, MaxX, MaxY: Integer;
+ X, Y: Integer;
  Pix: Word;
 Begin
  CaptureCanvasToBuffer := False;
- X1 := TOOLBAR_WIDTH + 1;
- Y1 := WORK_AREA_TOP + 1;
- X2 := ScreenWidth - 1;
- Y2 := ScreenHeight - 17;
- If (X2 <= X1) Or (Y2 <= Y1) Then Exit;
- Width  := X2 - X1 + 1;
- Height := Y2 - Y1 + 1;
+ If Not CalculateDrawingBounds(MinX, MinY, MaxX, MaxY) Then Exit;
+
+ { Marge d'un pixel pour ne pas couper les contours, mais sans rentrer dans  }
+ { la barre d'outils gauche / la barre de menu en haut.                     }
+ Dec(MinX); Dec(MinY); Inc(MaxX); Inc(MaxY);
+ If MinX < TOOLBAR_WIDTH + 1 Then MinX := TOOLBAR_WIDTH + 1;
+ If MinY < WORK_AREA_TOP  + 1 Then MinY := WORK_AREA_TOP  + 1;
+ If MaxX > ScreenWidth  - 1    Then MaxX := ScreenWidth  - 1;
+ If MaxY > ScreenHeight - 17   Then MaxY := ScreenHeight - 17;
+ If (MaxX <= MinX) Or (MaxY <= MinY) Then Exit;
+
+ Width  := MaxX - MinX + 1;
+ Height := MaxY - MinY + 1;
  If Width  > 2048 Then Width  := 2048;
  If Height > 2048 Then Height := 2048;
  InitPixelBuffer(Width, Height);
  For Y := 0 To Height - 1 Do
   For X := 0 To Width - 1 Do Begin
-   Pix := GetPixel(X1 + X, Y1 + Y);
+   Pix := GetPixel(MinX + X, MinY + Y);
    PixelBuffer^[Y, X] := Byte(Pix And $0F);
   End;
  CaptureCanvasToBuffer := True;
@@ -11425,6 +11435,9 @@ Var
  FileName, DefName, Ext, FilterExt: String;
  Success: Boolean;
  TransIdx: Integer;
+ SavedMenuState: TMenuState;
+ SavedCtxVisible, SavedLayerVis: Boolean;
+ SavedSelected: Integer;
 Begin
  If CurrentFileName <> '' Then Begin
   DefName := CurrentFileName;
@@ -11449,11 +11462,23 @@ Begin
   Ext := FilterExt;
  End;
 
- { Toujours utiliser le re-rendu logique a partir de Shapes[] : on n'exporte  }
- { JAMAIS l'etat ecran (menus deroulants, dialogues, toolbars, status bar,    }
- { selection en cours, etc.). Ainsi le PNG/GIF/BMP/... contient uniquement le }
- { dessin de l'utilisateur sur un fond transparent.                           }
- ExportFromScreen := False;
+ { Capturer le canvas BGI reel (rendu WYSIWYG : texte, motifs, styles BGI    }
+ { sont preserves tels quels) MAIS en supprimant temporairement tous les     }
+ { elements d'UI (menu deroulant, dialogues, menu contextuel, selection).    }
+ { La capture est ensuite recadree au bounding box des Shapes[] pour exclure }
+ { la barre de menus, la toolbar, la barre de statut et le fond hors-dessin. }
+ SavedMenuState   := MenuState;
+ SavedCtxVisible  := ContextMenuVisible;
+ SavedLayerVis    := LayerDialogVisible;
+ SavedSelected    := SelectedShape;
+ MenuState               := msNone;
+ ContextMenuVisible      := False;
+ LayerDialogVisible      := False;
+ SelectedShape           := 0;     { supprime les poignees de redimensionnement }
+
+ If Ext = 'SVG' Then ExportFromScreen := False
+                Else ExportFromScreen := True;
+ If ExportFromScreen Then RefreshScreen;
 
  Success := False;
  { Indice 15 (blanc) = fond du papier -> transparent dans les formats qui le  }
@@ -11479,8 +11504,15 @@ Begin
  Else Begin
   If Language = _English Then StatusMessage := 'Unsupported export format: .' + Ext
                         Else StatusMessage := 'Format export non supporte : .' + Ext;
-  Exit;
+  Success := False;
  End;
+
+ { Restaurer l'etat UI sauvegarde et redessiner l'ecran tel qu'avant export. }
+ MenuState          := SavedMenuState;
+ ContextMenuVisible := SavedCtxVisible;
+ LayerDialogVisible := SavedLayerVis;
+ SelectedShape      := SavedSelected;
+ RefreshScreen;
 
  If Success Then Begin
   If Language = _English Then StatusMessage := 'Exported: ' + FileName

@@ -3439,7 +3439,10 @@ End;
 Procedure ShowMessage(Const Title, Msg: String);
 Var
  BoxX, BoxY, BoxW, BoxH: Integer;
+ BtnX1, BtnY1, BtnX2, BtnY2: Integer;
  K: Char;
+ MX, MY, MB: Integer;
+ PrevB: Integer;
 Begin
  BoxW := TextWidth(Msg) + 40;
  If TextWidth(Title) + 40 > BoxW Then BoxW := TextWidth(Title) + 40;
@@ -3458,19 +3461,37 @@ Begin
  OutTextXY(BoxX + 8, BoxY + 5, Title);
  SetColor(Black);
  OutTextXY(BoxX + 20, BoxY + 35, Msg);
+ BtnX1 := BoxX + BoxW div 2 - 30;
+ BtnY1 := BoxY + BoxH - 25;
+ BtnX2 := BoxX + BoxW div 2 + 30;
+ BtnY2 := BoxY + BoxH - 8;
  SetFillStyle(SolidFill, DarkGray);
- Bar(BoxX + BoxW div 2 - 30, BoxY + BoxH - 25,
-     BoxX + BoxW div 2 + 30, BoxY + BoxH - 8);
+ Bar(BtnX1, BtnY1, BtnX2, BtnY2);
  SetColor(White);
  OutTextXY(BoxX + BoxW div 2 - 8, BoxY + BoxH - 22, 'OK');
 
- { Attendre Entree/Espace/Echap }
+ { Attendre Entree/Espace/Echap OU clic sur OK }
+ GetMouseStateLocal(MX, MY, PrevB);
  Repeat
-  While Not KeyPressed Do Delay(10);
-  K := ReadKey;
-  If K = #0 Then ReadKey;
- Until (K = #13) or (K = #27) or (K = ' ');
- RedrawInterface;
+  If KeyPressed Then Begin
+   K := ReadKey;
+   If K = #0 Then ReadKey;
+   If (K = #13) or (K = #27) or (K = ' ') Then Begin
+    RedrawInterface;
+    Exit;
+   End;
+  End;
+  GetMouseStateLocal(MX, MY, MB);
+  If ((MB and 1) <> 0) and ((PrevB and 1) = 0) Then Begin
+   If (MX >= BtnX1) and (MX <= BtnX2) and
+      (MY >= BtnY1) and (MY <= BtnY2) Then Begin
+    RedrawInterface;
+    Exit;
+   End;
+  End;
+  PrevB := MB;
+  Delay(10);
+ Until False;
 End;
 
 Function PromptString(Const Title, Prompt: String; Var Value: String): Boolean;
@@ -3478,6 +3499,9 @@ Var
  BoxX, BoxY, BoxW, BoxH: Integer;
  K: Char;
  InputX, InputY, InputW: Integer;
+ OkX1, OkY1, OkX2, OkY2: Integer;
+ CaX1, CaY1, CaX2, CaY2: Integer;
+ MX, MY, MB, PrevB: Integer;
 
  Procedure DrawInput;
  Begin
@@ -3489,10 +3513,24 @@ Var
   OutTextXY(InputX + 4, InputY + 3, Value + '_');
  End;
 
+ Procedure DrawButtons;
+ Begin
+  SetFillStyle(SolidFill, DarkGray);
+  Bar(OkX1, OkY1, OkX2, OkY2);
+  SetColor(White);
+  OutTextXY(OkX1 + (OkX2 - OkX1 - TextWidth('OK')) div 2,
+            OkY1 + 4, 'OK');
+  SetFillStyle(SolidFill, DarkGray);
+  Bar(CaX1, CaY1, CaX2, CaY2);
+  SetColor(White);
+  OutTextXY(CaX1 + (CaX2 - CaX1 - TextWidth('Annuler')) div 2,
+            CaY1 + 4, 'Annuler');
+ End;
+
 Begin
  PromptString := False;
  BoxW := 380;
- BoxH := 110;
+ BoxH := 130;
  BoxX := (ScreenWidth - BoxW) div 2;
  BoxY := (ScreenHeight - BoxH) div 2;
 
@@ -3514,31 +3552,59 @@ Begin
  InputW := BoxW - 20;
  DrawInput;
 
+ OkX1 := BoxX + BoxW div 2 - 90;
+ OkY1 := BoxY + BoxH - 45;
+ OkX2 := OkX1 + 70;
+ OkY2 := OkY1 + 20;
+ CaX1 := BoxX + BoxW div 2 + 20;
+ CaY1 := OkY1;
+ CaX2 := CaX1 + 70;
+ CaY2 := OkY2;
+ DrawButtons;
+
+ GetMouseStateLocal(MX, MY, PrevB);
  Repeat
-  While Not KeyPressed Do Delay(10);
-  K := ReadKey;
-  If K = #0 Then Begin
-   ReadKey; { ignorer touche etendue }
-  End
-  Else If K = #13 Then Begin
-   PromptString := True;
-   RedrawInterface;
-   Exit;
-  End
-  Else If K = #27 Then Begin
-   RedrawInterface;
-   Exit;
-  End
-  Else If K = #8 Then Begin
-   If Length(Value) > 0 Then Begin
-    Delete(Value, Length(Value), 1);
+  If KeyPressed Then Begin
+   K := ReadKey;
+   If K = #0 Then Begin
+    ReadKey; { ignorer touche etendue }
+   End
+   Else If K = #13 Then Begin
+    PromptString := True;
+    RedrawInterface;
+    Exit;
+   End
+   Else If K = #27 Then Begin
+    RedrawInterface;
+    Exit;
+   End
+   Else If K = #8 Then Begin
+    If Length(Value) > 0 Then Begin
+     Delete(Value, Length(Value), 1);
+     DrawInput;
+    End;
+   End
+   Else If (K >= ' ') and (Length(Value) < 200) Then Begin
+    Value := Value + K;
     DrawInput;
    End;
-  End
-  Else If (K >= ' ') and (Length(Value) < 200) Then Begin
-   Value := Value + K;
-   DrawInput;
   End;
+  GetMouseStateLocal(MX, MY, MB);
+  If ((MB and 1) <> 0) and ((PrevB and 1) = 0) Then Begin
+   If (MX >= OkX1) and (MX <= OkX2) and
+      (MY >= OkY1) and (MY <= OkY2) Then Begin
+    PromptString := True;
+    RedrawInterface;
+    Exit;
+   End;
+   If (MX >= CaX1) and (MX <= CaX2) and
+      (MY >= CaY1) and (MY <= CaY2) Then Begin
+    RedrawInterface;
+    Exit;
+   End;
+  End;
+  PrevB := MB;
+  Delay(10);
  Until False;
 End;
 
@@ -3547,12 +3613,25 @@ Function PromptYesNoCancel(Const Title, Msg: String): Integer;
 Var
  BoxX, BoxY, BoxW, BoxH: Integer;
  K: Char;
+ YX1, YY1, YX2, YY2: Integer;
+ NX1, NY1, NX2, NY2: Integer;
+ CX1, CY1, CX2, CY2: Integer;
+ MX, MY, MB, PrevB: Integer;
+
+ Procedure DrawBtn(X1, Y1, X2, Y2: Integer; Const Lbl: String);
+ Begin
+  SetFillStyle(SolidFill, DarkGray);
+  Bar(X1, Y1, X2, Y2);
+  SetColor(White);
+  OutTextXY(X1 + (X2 - X1 - TextWidth(Lbl)) div 2, Y1 + 4, Lbl);
+ End;
+
 Begin
  PromptYesNoCancel := 0;
  BoxW := TextWidth(Msg) + 40;
  If TextWidth(Title) + 40 > BoxW Then BoxW := TextWidth(Title) + 40;
  If BoxW < 360 Then BoxW := 360;
- BoxH := 110;
+ BoxH := 130;
  BoxX := (ScreenWidth - BoxW) div 2;
  BoxY := (ScreenHeight - BoxH) div 2;
 
@@ -3569,28 +3648,69 @@ Begin
  OutTextXY(BoxX + 10, BoxY + BoxH - 18,
            'O = Oui   N = Non   Echap = Annuler');
 
+ YX1 := BoxX + 20;
+ YY1 := BoxY + BoxH - 50;
+ YX2 := YX1 + 70;
+ YY2 := YY1 + 20;
+ NX1 := BoxX + (BoxW - 70) div 2;
+ NY1 := YY1;
+ NX2 := NX1 + 70;
+ NY2 := YY2;
+ CX1 := BoxX + BoxW - 90;
+ CY1 := YY1;
+ CX2 := CX1 + 70;
+ CY2 := YY2;
+ DrawBtn(YX1, YY1, YX2, YY2, 'Oui');
+ DrawBtn(NX1, NY1, NX2, NY2, 'Non');
+ DrawBtn(CX1, CY1, CX2, CY2, 'Annuler');
+
+ GetMouseStateLocal(MX, MY, PrevB);
  Repeat
-  While Not KeyPressed Do Delay(10);
-  K := ReadKey;
-  If K = #0 Then ReadKey
-  Else Begin
-   K := UpCase(K);
-   If (K = 'O') or (K = 'Y') or (K = #13) Then Begin
+  If KeyPressed Then Begin
+   K := ReadKey;
+   If K = #0 Then ReadKey
+   Else Begin
+    K := UpCase(K);
+    If (K = 'O') or (K = 'Y') or (K = #13) Then Begin
+     PromptYesNoCancel := 1;
+     RedrawInterface;
+     Exit;
+    End;
+    If K = 'N' Then Begin
+     PromptYesNoCancel := 2;
+     RedrawInterface;
+     Exit;
+    End;
+    If K = #27 Then Begin
+     PromptYesNoCancel := 0;
+     RedrawInterface;
+     Exit;
+    End;
+   End;
+  End;
+  GetMouseStateLocal(MX, MY, MB);
+  If ((MB and 1) <> 0) and ((PrevB and 1) = 0) Then Begin
+   If (MX >= YX1) and (MX <= YX2) and
+      (MY >= YY1) and (MY <= YY2) Then Begin
     PromptYesNoCancel := 1;
     RedrawInterface;
     Exit;
    End;
-   If K = 'N' Then Begin
+   If (MX >= NX1) and (MX <= NX2) and
+      (MY >= NY1) and (MY <= NY2) Then Begin
     PromptYesNoCancel := 2;
     RedrawInterface;
     Exit;
    End;
-   If K = #27 Then Begin
+   If (MX >= CX1) and (MX <= CX2) and
+      (MY >= CY1) and (MY <= CY2) Then Begin
     PromptYesNoCancel := 0;
     RedrawInterface;
     Exit;
    End;
   End;
+  PrevB := MB;
+  Delay(10);
  Until False;
 End;
 

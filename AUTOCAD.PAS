@@ -861,6 +861,10 @@ Var
  CommandCursorBlink: Boolean;    { État courant du curseur clignotant }
  CommandLastLine: String;        { Dernière ligne exécutée (historique simple) }
 
+ { Action fichier en attente (saisie du nom dans la ligne de commande) }
+ PendingFileAction: Integer;     { 0=aucune, 1=Ouvrir, 2=Enregistrer sous }
+ CurrentFileName: String;        { Nom du fichier courant (vide si jamais enregistre) }
+
  { Variables pour les barres d'outils - TODO 5 }
  Toolbars: Array[0..MAX_TOOLBARS-1] of TToolbar;
  HoveredToolbar: Integer;
@@ -14367,9 +14371,41 @@ Begin
     NewItem := GetMenuItemAtPosition(ActiveMenu, X, Y);
     If NewItem >= 0 Then Begin
      { Exécuter l'action du menu }
-     If (ActiveMenu = MENU_FILE) and (NewItem = 13) Then Begin
-      { Exit }
-      Running := False;
+     If ActiveMenu = MENU_FILE Then Begin
+      Case NewItem Of
+       0: Begin { Nouveau }
+        ObjectCount := 0;
+        ClearSelection;
+        ClearGrips;
+        CurrentFileName := '';
+        CommandLastLine := 'Nouveau dessin';
+       End;
+       1: Begin { Ouvrir }
+        PendingFileAction := 1;
+        CommandPrompt := 'Nom du fichier a ouvrir:';
+        CommandBuffer := '';
+       End;
+       2: Begin { Enregistrer }
+        If CurrentFileName <> '' Then Begin
+         If WriteDWGFile(CurrentFileName) Then
+          CommandLastLine := 'Enregistre: ' + CurrentFileName
+         Else
+          CommandLastLine := 'Echec enregistrement: ' + CurrentFileName;
+        End Else Begin
+         PendingFileAction := 2;
+         CommandPrompt := 'Enregistrer sous:';
+         CommandBuffer := '';
+        End;
+       End;
+       3: Begin { Enregistrer sous... }
+        PendingFileAction := 2;
+        CommandPrompt := 'Enregistrer sous:';
+        CommandBuffer := '';
+       End;
+       13: Begin { Quitter }
+        Running := False;
+       End;
+      End;
      End;
      MenuActive := False;
      ActiveMenu := -1;
@@ -14821,6 +14857,7 @@ Var
  PanStep: Real;
  I: Integer;  { TODO 9: Variable pour la sélection }
  BlinkTick: Integer;
+ SavedSW, SavedSH: Integer;
 Begin
  Running := True;
  OldMouseX := -1;
@@ -14925,6 +14962,13 @@ Begin
       ActiveMenu := -1;
       ActiveMenuItem := -1;
       DrawInterface;
+     End Else If PendingFileAction <> 0 Then Begin
+      { Annuler la saisie d'un nom de fichier }
+      PendingFileAction := 0;
+      CommandPrompt := 'Command:';
+      CommandBuffer := '';
+      CommandLastLine := '*Cancel*';
+      DrawInterface;
      End Else If CommandBuffer <> '' Then Begin
       { Effacer la commande en cours de saisie }
       CommandBuffer := '';
@@ -14956,7 +15000,41 @@ Begin
      End;
     End;
     #13: Begin { Enter : exécuter la commande }
-     If CommandBuffer <> '' Then Begin
+     If PendingFileAction <> 0 Then Begin
+      If CommandBuffer = '' Then Begin
+       { Saisie annulee }
+       PendingFileAction := 0;
+       CommandPrompt := 'Command:';
+       CommandLastLine := '*Cancel*';
+      End Else Begin
+       Case PendingFileAction Of
+        1: Begin { Ouvrir }
+         SavedSW := ScreenWidth;
+         SavedSH := ScreenHeight;
+         If ReadDWGFile(CommandBuffer) Then Begin
+          CurrentFileName := CommandBuffer;
+          CommandLastLine := 'Charge: ' + CommandBuffer;
+         End Else
+          CommandLastLine := 'Echec chargement: ' + CommandBuffer;
+         { Restaurer dimensions ecran (ReadDWGHeader les ecrase) }
+         ScreenWidth := SavedSW;
+         ScreenHeight := SavedSH;
+        End;
+        2: Begin { Enregistrer sous }
+         If WriteDWGFile(CommandBuffer) Then Begin
+          CurrentFileName := CommandBuffer;
+          CommandLastLine := 'Enregistre: ' + CommandBuffer;
+         End Else
+          CommandLastLine := 'Echec enregistrement: ' + CommandBuffer;
+        End;
+       End;
+       PendingFileAction := 0;
+       CommandPrompt := 'Command:';
+      End;
+      CommandBuffer := '';
+      CommandCursorBlink := True;
+      DrawInterface;
+     End Else If CommandBuffer <> '' Then Begin
       CommandLastLine := 'Command: ' + CommandBuffer;
       { Si la ligne ressemble à du LISP (commence par '('), évaluer }
       If (Length(CommandBuffer) > 0) and (CommandBuffer[1] = '(') Then Begin
@@ -15083,6 +15161,8 @@ BEGIN
  CommandPrompt := 'Command:';
  CommandLastLine := '';
  CommandCursorBlink := True;
+ PendingFileAction := 0;
+ CurrentFileName := '';
 
  { Charger un fichier passe en argument de ligne de commande }
  If ParamCount >= 1 Then Begin

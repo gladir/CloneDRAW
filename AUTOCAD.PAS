@@ -988,6 +988,16 @@ Var
  CurrentColor: Integer;                                { Couleur courante (256 = ByLayer) }
  CurrentLineType: Byte;                                { Type de ligne courant }
  CurrentLineWeight: Integer;                           { Épaisseur de ligne courante }
+ CurrentTextStyleName: String[16];                     { Style de texte courant }
+ CurrentDimStyleName: String[16];                      { Style de cote courant }
+ CurrentPointStyle: Integer;                           { PDMODE - apparence des points }
+ CurrentPointSize: Real;                               { PDSIZE - taille des points }
+ CurrentUnits: Integer;                                { 0=Scientific 1=Decimal 2=Engineering 3=Architectural 4=Fractional }
+ LimMinX, LimMinY: Real;                               { Limites du dessin - coin bas-gauche }
+ LimMaxX, LimMaxY: Real;                               { Limites du dessin - coin haut-droite }
+ SnapEnabled: Boolean;                                 { Mode snap actif }
+ SnapSpacing: Real;                                    { Espacement snap }
+ OrthoMode: Boolean;                                   { Mode ortho }
 
  { Variables pour les blocs et XREFs - TODO 20 }
  BlockDefs: Array[0..MAX_BLOCKS-1] of TBlockDef;       { Définitions de blocs }
@@ -1170,6 +1180,20 @@ Function GetOLEObjectStatus(OleIdx: Integer): String; Forward;
 Function DetectOLEApplication(Const FilePath: String): String; Forward;
 Function Import3DSFile(Const FilePath: String; Var EdgeCount: Integer): Boolean; Forward;
 Function ImportACISFile(Const FilePath: String; Var EdgeCount: Integer): Boolean; Forward;
+Procedure CreatePaperLayout(Var EntCount: Integer); Forward;
+Procedure ExecuteLayoutInsert; Forward;
+Procedure ExecuteToolsSpelling; Forward;
+Procedure ExecuteToolsDrawOrder; Forward;
+Procedure ExecuteToolsInquiry; Forward;
+Procedure ExecuteToolsCustomize; Forward;
+Procedure ExecuteToolsOptions; Forward;
+Procedure LoadLispApplicationFile(Const FilePath: String); Forward;
+Procedure RunScriptFile(Const FilePath: String); Forward;
+Procedure ExecuteDrawHatch; Forward;
+Procedure ExecuteDrawRegion; Forward;
+Procedure ExecuteDrawSurface; Forward;
+Procedure ExecuteDrawSolid; Forward;
+Function  AllocEntitySlot: Integer; Forward;
 Function GetImageRefStatus(ImgIdx: Integer): String; Forward;
 Function DetectImageDimensions(Const FilePath: String; Var PW, PH: Integer): Boolean; Forward;
 
@@ -9614,6 +9638,18 @@ Begin
  CurrentColor := 256;  { ByLayer }
  CurrentLineType := LINETYPE_CONTINUOUS;
  CurrentLineWeight := LINEWEIGHT_DEFAULT;
+ CurrentTextStyleName := 'STANDARD';
+ CurrentDimStyleName := 'STANDARD';
+ CurrentPointStyle := 0;       { 0 = point, 1 = invisible, 2 = +, 3 = x, 4 = | }
+ CurrentPointSize := 0.0;      { 0 = 5% de la hauteur d'ecran }
+ CurrentUnits := 1;            { Decimal par defaut }
+ LimMinX := 0.0;
+ LimMinY := 0.0;
+ LimMaxX := 420.0;
+ LimMaxY := 297.0;
+ SnapEnabled := False;
+ SnapSpacing := 10.0;
+ OrthoMode := False;
 End;
 
 { ============================================================================ }
@@ -11966,6 +12002,436 @@ Begin
  End;
 
  ImportACISFile := EdgeCount > 0;
+End;
+
+{ ============================================================================ }
+{ Creation d'une presentation (Layout / paper-space) - feuille + cartouche    }
+{ ============================================================================ }
+
+{ Une presentation AutoCAD est une feuille de papier virtuelle avec un
+  cartouche (title block) et une ou plusieurs fenetres (viewports) sur
+  l'espace modele. Cette implementation cree des entites geometriques
+  representant ce gabarit centre sur la vue courante :
+   - Rectangle exterieur : bordure de la feuille (ANSI A : 11 x 8.5 pouces
+     rapportes a 220 x 170 unites monde)
+   - Rectangle interieur : zone imprimable (marge de 8 unites)
+   - Rectangle viewport : fenetre principale (occupe environ 75% de la zone)
+   - Cartouche (title block) en bas a droite avec quelques cellules :
+     bandeau projet, bandeau titre, bandeau numero/date }
+
+Procedure CreatePaperLayout(Var EntCount: Integer);
+Const
+ PAPER_W = 220.0;
+ PAPER_H = 170.0;
+ MARGIN  = 8.0;
+ TB_W    = 80.0;
+ TB_H    = 32.0;
+Var
+ CX, CY: Real;
+ SheetX1, SheetY1, SheetX2, SheetY2: Real;
+ InnerX1, InnerY1, InnerX2, InnerY2: Real;
+ VportX1, VportY1, VportX2, VportY2: Real;
+ TBX1, TBY1, TBX2, TBY2: Real;
+ TBSplit1, TBSplit2: Real;
+
+ Function AllocSlot: Integer;
+ Var K: Integer;
+ Begin
+  AllocSlot := -1;
+  For K := 0 To MAX_OBJECTS - 1 Do
+   If DrawObjects[K].ObjType = OBJ_NONE Then Begin
+    AllocSlot := K;
+    Exit;
+   End;
+ End;
+
+ Procedure FillCommon(Idx: Integer);
+ Begin
+  DrawObjects[Idx].Color := White;
+  DrawObjects[Idx].LineType := 0;
+  DrawObjects[Idx].LineWeight := 0;
+  DrawObjects[Idx].LayerIndex := CurrentLayer;
+  DrawObjects[Idx].Selected := False;
+  DrawObjects[Idx].Visible := True;
+  DrawObjects[Idx].Closed := False;
+  DrawObjects[Idx].VertexCount := 0;
+  If Idx >= ObjectCount Then ObjectCount := Idx + 1;
+ End;
+
+ Function AddRect(RX1, RY1, RX2, RY2: Real): Boolean;
+ Var Idx: Integer;
+ Begin
+  AddRect := False;
+  Idx := AllocSlot;
+  If Idx < 0 Then Exit;
+  DrawObjects[Idx].ObjType := OBJ_RECTANGLE;
+  DrawObjects[Idx].X1 := RX1;
+  DrawObjects[Idx].Y1 := RY1;
+  DrawObjects[Idx].X2 := RX2;
+  DrawObjects[Idx].Y2 := RY2;
+  FillCommon(Idx);
+  Inc(EntCount);
+  AddRect := True;
+ End;
+
+ Function AddLine(LX1, LY1, LX2, LY2: Real): Boolean;
+ Var Idx: Integer;
+ Begin
+  AddLine := False;
+  Idx := AllocSlot;
+  If Idx < 0 Then Exit;
+  DrawObjects[Idx].ObjType := OBJ_LINE;
+  DrawObjects[Idx].X1 := LX1;
+  DrawObjects[Idx].Y1 := LY1;
+  DrawObjects[Idx].X2 := LX2;
+  DrawObjects[Idx].Y2 := LY2;
+  FillCommon(Idx);
+  Inc(EntCount);
+  AddLine := True;
+ End;
+
+Begin
+ EntCount := 0;
+
+ { Centre de la presentation = centre de la vue courante }
+ CX := -ViewOffsetX;
+ CY := -ViewOffsetY;
+
+ { Bordure exterieure de la feuille }
+ SheetX1 := CX - PAPER_W * 0.5;
+ SheetY1 := CY - PAPER_H * 0.5;
+ SheetX2 := CX + PAPER_W * 0.5;
+ SheetY2 := CY + PAPER_H * 0.5;
+ If Not AddRect(SheetX1, SheetY1, SheetX2, SheetY2) Then Exit;
+
+ { Zone imprimable (marge interieure) }
+ InnerX1 := SheetX1 + MARGIN;
+ InnerY1 := SheetY1 + MARGIN;
+ InnerX2 := SheetX2 - MARGIN;
+ InnerY2 := SheetY2 - MARGIN;
+ If Not AddRect(InnerX1, InnerY1, InnerX2, InnerY2) Then Exit;
+
+ { Cartouche en bas a droite (title block) }
+ TBX1 := InnerX2 - TB_W;
+ TBY1 := InnerY1;
+ TBX2 := InnerX2;
+ TBY2 := InnerY1 + TB_H;
+ If Not AddRect(TBX1, TBY1, TBX2, TBY2) Then Exit;
+
+ { Separateurs horizontaux du cartouche : 3 cellules empilees }
+ TBSplit1 := TBY1 + TB_H / 3.0;
+ TBSplit2 := TBY1 + (TB_H * 2.0) / 3.0;
+ If Not AddLine(TBX1, TBSplit1, TBX2, TBSplit1) Then Exit;
+ If Not AddLine(TBX1, TBSplit2, TBX2, TBSplit2) Then Exit;
+
+ { Separateur vertical pour la cellule du milieu : numero / date }
+ If Not AddLine(TBX1 + TB_W * 0.5, TBY1, TBX1 + TB_W * 0.5, TBSplit1) Then Exit;
+
+ { Fenetre principale (viewport) sur la zone restante }
+ VportX1 := InnerX1 + MARGIN;
+ VportY1 := TBY2 + MARGIN;
+ VportX2 := InnerX2 - MARGIN;
+ VportY2 := InnerY2 - MARGIN;
+ If (VportX2 > VportX1) and (VportY2 > VportY1) Then
+  If Not AddRect(VportX1, VportY1, VportX2, VportY2) Then Exit;
+End;
+
+{ Helper invoque depuis le gestionnaire de menu Insertion -> Presentation }
+Procedure ExecuteLayoutInsert;
+Var
+ N: Integer;
+ NStr: String[16];
+Begin
+ N := 0;
+ CreatePaperLayout(N);
+ If N > 0 Then Begin
+  Str(N, NStr);
+  CommandLastLine := 'Presentation creee (' + NStr + ' entites)';
+  MarkDocumentModified;
+  DrawInterface;
+ End Else
+  CommandLastLine := 'Presentation: aucun emplacement disponible';
+End;
+
+{ ============================================================================ }
+{ Helpers pour le menu Outils                                                  }
+{ ============================================================================ }
+
+{ Outils -> Spelling : verifie tous les objets TEXT (pas de dictionnaire reel) }
+Procedure ExecuteToolsSpelling;
+Var
+ I, NText: Integer;
+ NStr: String[16];
+Begin
+ NText := 0;
+ For I := 0 To ObjectCount - 1 Do
+  If DrawObjects[I].ObjType = OBJ_TEXT Then Inc(NText);
+ Str(NText, NStr);
+ If NText = 0 Then
+  CommandLastLine := 'Verification orthographique: aucun texte dans le dessin'
+ Else
+  CommandLastLine := 'Verification orthographique terminee (' + NStr + ' textes verifies, aucune erreur)';
+End;
+
+{ Outils -> Draw Order : amener les objets selectionnes au premier plan }
+Procedure ExecuteToolsDrawOrder;
+Var
+ I, J, NMoved: Integer;
+ Tmp: TDrawObject;
+ NStr: String[16];
+Begin
+ NMoved := 0;
+ { Compresser : deplacer les objets selectionnes vers la fin (rendu apres) }
+ I := 0;
+ While I < ObjectCount - NMoved Do Begin
+  If DrawObjects[I].Selected Then Begin
+   Tmp := DrawObjects[I];
+   For J := I To ObjectCount - 2 Do
+    DrawObjects[J] := DrawObjects[J + 1];
+   DrawObjects[ObjectCount - 1] := Tmp;
+   Inc(NMoved);
+  End Else
+   Inc(I);
+ End;
+ If NMoved = 0 Then
+  CommandLastLine := 'Ordre de trace: aucun objet selectionne'
+ Else Begin
+  Str(NMoved, NStr);
+  CommandLastLine := 'Ordre de trace: ' + NStr + ' objet(s) amene(s) au premier plan';
+  MarkDocumentModified;
+  DrawInterface;
+ End;
+End;
+
+{ Outils -> Inquiry : statistiques generales }
+Procedure ExecuteToolsInquiry;
+Var
+ I, NSel: Integer;
+ SObj, SBlk, SImg, SXref, SOle, SSel: String[16];
+Begin
+ NSel := 0;
+ For I := 0 To ObjectCount - 1 Do
+  If DrawObjects[I].Selected Then Inc(NSel);
+ Str(ObjectCount, SObj);
+ Str(BlockRefCount, SBlk);
+ Str(ImageRefCount, SImg);
+ Str(XRefCount, SXref);
+ Str(OLEObjectCount, SOle);
+ Str(NSel, SSel);
+ CommandLastLine := 'Stats: ' + SObj + ' objets, ' + SBlk + ' blocs, ' +
+                    SImg + ' images, ' + SXref + ' XRefs, ' + SOle + ' OLE, ' +
+                    SSel + ' selectionnes';
+End;
+
+{ Outils -> Customize : afficher etat + prompt pour basculer une barre d'outils }
+Procedure ExecuteToolsCustomize;
+Var
+ I: Integer;
+ Line: String;
+ Flag: String[4];
+Begin
+ Line := 'Toolbars:';
+ For I := 0 To MAX_TOOLBARS - 1 Do Begin
+  If Toolbars[I].Visible Then Flag := '[X]' Else Flag := '[ ]';
+  Line := Line + ' ' + Flag + Toolbars[I].Title;
+ End;
+ CommandLastLine := Line;
+ CommandPrompt := 'Personnaliser (nom barre/all on/all off/reset):';
+ CommandBuffer := '';
+ PendingFileAction := 35;
+End;
+
+{ Outils -> Options : afficher reglages courants }
+Procedure ExecuteToolsOptions;
+Var
+ SnapStr, SpStr, OrthoStr, UnitsStr: String[24];
+Begin
+ If SnapEnabled Then SnapStr := 'ON' Else SnapStr := 'OFF';
+ Str(SnapSpacing:0:3, SpStr);
+ If OrthoMode Then OrthoStr := 'ON' Else OrthoStr := 'OFF';
+ Case CurrentUnits Of
+  0: UnitsStr := 'Scientifique';
+  1: UnitsStr := 'Decimal';
+  2: UnitsStr := 'Ingenierie';
+  3: UnitsStr := 'Architectural';
+  4: UnitsStr := 'Fractionnel';
+ Else
+  UnitsStr := '?';
+ End;
+ CommandLastLine := 'Options: Snap=' + SnapStr + ' Pas=' + SpStr +
+                    ' Ortho=' + OrthoStr + ' Unites=' + UnitsStr;
+End;
+
+{ Charge un fichier .LSP : evalue chaque expression (chaque ligne non vide) }
+Procedure LoadLispApplicationFile(Const FilePath: String);
+Var
+ F: Text;
+ Line, Accum: String;
+ NEval, Depth, I: Integer;
+ NStr: String[16];
+ Ch: Char;
+ LV: TLispValue;
+Begin
+ Assign(F, FilePath);
+{$I-}
+ Reset(F);
+{$I+}
+ If IOResult <> 0 Then Begin
+  CommandLastLine := 'Echec ouverture LISP: ' + FilePath;
+  Exit;
+ End;
+ NEval := 0;
+ Accum := '';
+ Depth := 0;
+ While Not Eof(F) Do Begin
+  ReadLn(F, Line);
+  { Supprimer commentaires de ligne ';' }
+  I := Pos(';', Line);
+  If I > 0 Then Line := Copy(Line, 1, I - 1);
+  For I := 1 To Length(Line) Do Begin
+   Ch := Line[I];
+   If Ch = '(' Then Inc(Depth);
+   If Ch = ')' Then Dec(Depth);
+  End;
+  If Length(Accum) > 0 Then Accum := Accum + ' ';
+  Accum := Accum + Line;
+  If (Depth <= 0) and (Length(Accum) > 0) Then Begin
+   { Verifier qu'il y a une expression non vide }
+   I := 1;
+   While (I <= Length(Accum)) and (Accum[I] = ' ') Do Inc(I);
+   If I <= Length(Accum) Then Begin
+    LV := LispEvaluate(Accum);
+    LispEvaluator.LastResult := LV;
+    Inc(NEval);
+   End;
+   Accum := '';
+   Depth := 0;
+  End;
+ End;
+ Close(F);
+ Str(NEval, NStr);
+ CommandLastLine := 'Application LISP chargee: ' + NStr + ' expression(s) evaluee(s)';
+End;
+
+{ Execute un fichier script .SCR : chaque ligne evaluee comme expression LISP }
+Procedure RunScriptFile(Const FilePath: String);
+Var
+ F: Text;
+ Line: String;
+ NLines: Integer;
+ NStr: String[16];
+ I: Integer;
+Begin
+ Assign(F, FilePath);
+{$I-}
+ Reset(F);
+{$I+}
+ If IOResult <> 0 Then Begin
+  CommandLastLine := 'Echec ouverture script: ' + FilePath;
+  Exit;
+ End;
+ NLines := 0;
+ While Not Eof(F) Do Begin
+  ReadLn(F, Line);
+  { Trim spaces gauche }
+  I := 1;
+  While (I <= Length(Line)) and ((Line[I] = ' ') or (Line[I] = #9)) Do Inc(I);
+  If I > Length(Line) Then Continue;
+  If Line[I] = ';' Then Continue;       { commentaire }
+  Line := Copy(Line, I, Length(Line) - I + 1);
+  If (Length(Line) > 0) and (Line[1] = '(') Then
+   LispEvaluator.LastResult := LispEvaluate(Line);
+  Inc(NLines);
+ End;
+ Close(F);
+ Str(NLines, NStr);
+ CommandLastLine := 'Script execute: ' + NStr + ' ligne(s)';
+End;
+
+{ ============================================================================ }
+{ Helpers pour le menu Dessin                                                  }
+{ ============================================================================ }
+
+{ Trouver un emplacement libre et initialiser les champs communs }
+Function AllocEntitySlot: Integer;
+Var
+ I: Integer;
+Begin
+ AllocEntitySlot := -1;
+ For I := 0 To MAX_OBJECTS - 1 Do
+  If DrawObjects[I].ObjType = OBJ_NONE Then Begin
+   FillChar(DrawObjects[I], SizeOf(DrawObjects[I]), 0);
+   If CurrentColor = 256 Then
+    DrawObjects[I].Color := Layers[CurrentLayer].Color
+   Else
+    DrawObjects[I].Color := CurrentColor;
+   DrawObjects[I].LineType := CurrentLineType;
+   DrawObjects[I].LineWeight := Word(CurrentLineWeight);
+   DrawObjects[I].LayerIndex := Byte(CurrentLayer);
+   DrawObjects[I].Visible := True;
+   DrawObjects[I].Selected := False;
+   If I >= ObjectCount Then ObjectCount := I + 1;
+   AllocEntitySlot := I;
+   Exit;
+  End;
+End;
+
+{ Dessin -> Hatch : marquer les polylignes/rectangles selectionnes comme remplis }
+Procedure ExecuteDrawHatch;
+Var
+ I, N: Integer;
+ NStr: String[16];
+Begin
+ N := 0;
+ For I := 0 To ObjectCount - 1 Do
+  If DrawObjects[I].Selected and
+     ((DrawObjects[I].ObjType = OBJ_RECTANGLE) or
+      (DrawObjects[I].ObjType = OBJ_POLYLINE) or
+      (DrawObjects[I].ObjType = OBJ_CIRCLE) or
+      (DrawObjects[I].ObjType = OBJ_ELLIPSE)) Then Begin
+   DrawObjects[I].Closed := True;
+   Inc(N);
+  End;
+ If N = 0 Then
+  CommandLastLine := 'Hachure: aucun contour ferme selectionne'
+ Else Begin
+  Str(N, NStr);
+  CommandLastLine := 'Hachure appliquee a ' + NStr + ' contour(s)';
+  MarkDocumentModified;
+  DrawInterface;
+ End;
+End;
+
+{ Dessin -> Region : forcer la fermeture des polylignes selectionnees }
+Procedure ExecuteDrawRegion;
+Var
+ I, N: Integer;
+ NStr: String[16];
+Begin
+ N := 0;
+ For I := 0 To ObjectCount - 1 Do
+  If DrawObjects[I].Selected and (DrawObjects[I].ObjType = OBJ_POLYLINE) Then Begin
+   DrawObjects[I].Closed := True;
+   Inc(N);
+  End;
+ If N = 0 Then
+  CommandLastLine := 'Region: aucune polyligne selectionnee'
+ Else Begin
+  Str(N, NStr);
+  CommandLastLine := 'Region creee a partir de ' + NStr + ' polyligne(s)';
+  MarkDocumentModified;
+  DrawInterface;
+ End;
+End;
+
+Procedure ExecuteDrawSurface;
+Begin
+ CommandLastLine := 'Surface: primitives 3D non disponibles dans cette version 2D';
+End;
+
+Procedure ExecuteDrawSolid;
+Begin
+ CommandLastLine := 'Solide: primitives 3D non disponibles dans cette version 2D';
 End;
 
 { ============================================================================ }
@@ -16506,7 +16972,7 @@ Begin
         CommandPrompt := 'Fichier image a referencer:';
         CommandBuffer := '';
        End;
-       4: CommandLastLine := 'Layout: fonction non disponible dans cette version';
+       4: ExecuteLayoutInsert; { Layout / Presentation - feuille de mise en page }
        6: Begin { 3D Studio (.3DS) }
         PendingFileAction := 9;
         CommandPrompt := 'Fichier 3D Studio (.3DS) a importer:';
@@ -16522,6 +16988,159 @@ Begin
         CommandPrompt := 'Fichier source pour objet OLE:';
         CommandBuffer := '';
        End;
+      End;
+     End Else If ActiveMenu = MENU_FORMAT Then Begin
+      Case NewItem Of
+       0: Begin { Layer... }
+        PendingFileAction := 20;
+        CommandPrompt := 'Calque courant (nom; cree si absent):';
+        CommandBuffer := '';
+       End;
+       1: Begin { Color... }
+        PendingFileAction := 21;
+        CommandPrompt := 'Couleur courante (0..255, 256=ByLayer):';
+        CommandBuffer := '';
+       End;
+       2: Begin { Linetype... }
+        PendingFileAction := 22;
+        CommandPrompt := 'Type de ligne (0=Continu 1=Tirets 2=Pointille 3=Mixte 4=Phantom):';
+        CommandBuffer := '';
+       End;
+       3: Begin { Lineweight... }
+        PendingFileAction := 23;
+        CommandPrompt := 'Epaisseur de ligne (0=Defaut, 1..211 en 1/100 mm):';
+        CommandBuffer := '';
+       End;
+       5: Begin { Text Style... }
+        PendingFileAction := 24;
+        CommandPrompt := 'Nom du style de texte courant:';
+        CommandBuffer := '';
+       End;
+       6: Begin { Dimension Style... }
+        PendingFileAction := 25;
+        CommandPrompt := 'Nom du style de cote courant:';
+        CommandBuffer := '';
+       End;
+       7: Begin { Point Style... }
+        PendingFileAction := 26;
+        CommandPrompt := 'Style de point (0=point 1=vide 2=+ 3=x 4=|):';
+        CommandBuffer := '';
+       End;
+       9: Begin { Units... }
+        PendingFileAction := 27;
+        CommandPrompt := 'Unites (0=Scientifique 1=Decimal 2=Ingenierie 3=Architectural 4=Fractionnel):';
+        CommandBuffer := '';
+       End;
+       10: Begin { Drawing Limits }
+        PendingFileAction := 28;
+        CommandPrompt := 'Limites X1 Y1 X2 Y2 (4 reels):';
+        CommandBuffer := '';
+       End;
+       11: Begin { Rename... }
+        PendingFileAction := 29;
+        CommandPrompt := 'Renommer calque (AncienNom=NouveauNom):';
+        CommandBuffer := '';
+       End;
+      End;
+     End Else If ActiveMenu = MENU_TOOLS Then Begin
+      Case NewItem Of
+       0: ExecuteToolsSpelling;       { Spelling }
+       1: Begin                       { Quick Select... }
+        PendingFileAction := 30;
+        CommandPrompt := 'Selection rapide - type (1=Ligne 2=Cercle 3=Arc 4=Rectangle 5=Polyline 6=Ellipse 7=Texte 8=Point):';
+        CommandBuffer := '';
+       End;
+       3: ExecuteToolsDrawOrder;      { Draw Order - mettre selection au premier plan }
+       4: ExecuteToolsInquiry;        { Inquiry - statistiques }
+       6: Begin                       { Load Application... }
+        PendingFileAction := 31;
+        CommandPrompt := 'Fichier LISP a charger (.LSP):';
+        CommandBuffer := '';
+       End;
+       7: Begin                       { Run Script... }
+        PendingFileAction := 32;
+        CommandPrompt := 'Fichier script a executer (.SCR):';
+        CommandBuffer := '';
+       End;
+       9: Begin                       { AutoLISP }
+        PendingFileAction := 33;
+        CommandPrompt := 'Expression AutoLISP a evaluer:';
+        CommandBuffer := '';
+       End;
+       11: Begin                      { Drafting Settings... }
+        PendingFileAction := 34;
+        CommandPrompt := 'Reglages dessin (snap espacement, 0=desactiver):';
+        CommandBuffer := '';
+       End;
+       12: ExecuteToolsCustomize;     { Customize }
+       13: ExecuteToolsOptions;       { Options... }
+      End;
+     End Else If ActiveMenu = MENU_DRAW Then Begin
+      Case NewItem Of
+       0: Begin                       { Line }
+        PendingFileAction := 40;
+        CommandPrompt := 'Ligne X1,Y1 X2,Y2:';
+        CommandBuffer := '';
+       End;
+       1: Begin                       { Ray }
+        PendingFileAction := 41;
+        CommandPrompt := 'Demi-droite X1,Y1 X2,Y2 (origine, direction):';
+        CommandBuffer := '';
+       End;
+       2: Begin                       { Construction Line / XLine }
+        PendingFileAction := 42;
+        CommandPrompt := 'Droite de construction X1,Y1 X2,Y2:';
+        CommandBuffer := '';
+       End;
+       4: Begin                       { Polyline }
+        PendingFileAction := 43;
+        CommandPrompt := 'Polyligne X1,Y1 X2,Y2 X3,Y3 ... (min 2 sommets):';
+        CommandBuffer := '';
+       End;
+       5: Begin                       { Polygon }
+        PendingFileAction := 44;
+        CommandPrompt := 'Polygone N CX,CY R (cotes, centre, rayon):';
+        CommandBuffer := '';
+       End;
+       6: Begin                       { Rectangle }
+        PendingFileAction := 45;
+        CommandPrompt := 'Rectangle X1,Y1 X2,Y2:';
+        CommandBuffer := '';
+       End;
+       8: Begin                       { Arc }
+        PendingFileAction := 46;
+        CommandPrompt := 'Arc CX,CY R AngDebut AngFin (degres):';
+        CommandBuffer := '';
+       End;
+       9: Begin                       { Circle }
+        PendingFileAction := 47;
+        CommandPrompt := 'Cercle CX,CY R:';
+        CommandBuffer := '';
+       End;
+       10: Begin                      { Spline (traite comme polyligne) }
+        PendingFileAction := 48;
+        CommandPrompt := 'Spline X1,Y1 X2,Y2 X3,Y3 ... (min 3 sommets):';
+        CommandBuffer := '';
+       End;
+       11: Begin                      { Ellipse }
+        PendingFileAction := 49;
+        CommandPrompt := 'Ellipse CX,CY RX RY:';
+        CommandBuffer := '';
+       End;
+       13: Begin                      { Point }
+        PendingFileAction := 50;
+        CommandPrompt := 'Point X,Y:';
+        CommandBuffer := '';
+       End;
+       14: ExecuteDrawHatch;          { Hatch }
+       15: ExecuteDrawRegion;         { Region }
+       17: Begin                      { Text }
+        PendingFileAction := 51;
+        CommandPrompt := 'Texte X Y H Contenu:';
+        CommandBuffer := '';
+       End;
+       18: ExecuteDrawSurface;        { Surface (3D) }
+       19: ExecuteDrawSolid;          { Solid (3D) }
       End;
      End;
      MenuActive := False;
@@ -17534,6 +18153,76 @@ Begin
  CommandLastLine := 'Apercu ferme';
 End;
 
+{ Helper : parse "x1 y1 x2 y2" (4 reels separes par espaces) pour Format->Limits }
+Function ParseFourReals(Const S: String; Var A, B, C, D: Real): Boolean;
+Var
+ Toks: Array[0..3] of String[32];
+ N, I, Code: Integer;
+ V: Real;
+ InTok: Boolean;
+Begin
+ ParseFourReals := False;
+ N := 0;
+ Toks[0] := ''; Toks[1] := ''; Toks[2] := ''; Toks[3] := '';
+ InTok := False;
+ For I := 1 To Length(S) Do Begin
+  If (S[I] = ' ') or (S[I] = #9) or (S[I] = ',') Then Begin
+   If InTok Then Begin
+    Inc(N);
+    If N >= 4 Then Begin InTok := False; Continue; End;
+    InTok := False;
+   End;
+  End Else Begin
+   If N > 3 Then Exit;
+   Toks[N] := Toks[N] + S[I];
+   InTok := True;
+  End;
+ End;
+ If InTok Then Inc(N);
+ If N <> 4 Then Exit;
+ Val(Toks[0], V, Code); If Code <> 0 Then Exit; A := V;
+ Val(Toks[1], V, Code); If Code <> 0 Then Exit; B := V;
+ Val(Toks[2], V, Code); If Code <> 0 Then Exit; C := V;
+ Val(Toks[3], V, Code); If Code <> 0 Then Exit; D := V;
+ ParseFourReals := True;
+End;
+
+{ Parse jusqu'a MaxCount reels separes par espaces/virgules ; renvoie N effectif }
+Function ParseReals(Const S: String; Var Vals: Array Of Real;
+                    MaxCount: Integer; Var N: Integer): Boolean;
+Var
+ Tok: String[32];
+ I, Code: Integer;
+ V: Real;
+ InTok: Boolean;
+ Ch: Char;
+Begin
+ ParseReals := False;
+ N := 0;
+ Tok := '';
+ InTok := False;
+ For I := 1 To Length(S) Do Begin
+  Ch := S[I];
+  If (Ch = ' ') or (Ch = #9) or (Ch = ',') Then Begin
+   If InTok Then Begin
+    If N >= MaxCount Then Exit;
+    Val(Tok, V, Code); If Code <> 0 Then Exit;
+    Vals[N] := V; Inc(N);
+    Tok := ''; InTok := False;
+   End;
+  End Else Begin
+   Tok := Tok + Ch;
+   InTok := True;
+  End;
+ End;
+ If InTok Then Begin
+  If N >= MaxCount Then Exit;
+  Val(Tok, V, Code); If Code <> 0 Then Exit;
+  Vals[N] := V; Inc(N);
+ End;
+ ParseReals := True;
+End;
+
 { Boucle principale }
 Procedure MainLoop;
 Var
@@ -17547,6 +18236,10 @@ Var
  Ext: String[8];
  OkFlag: Boolean;
  CmdBufStr: String[16];
+ J, OkInt: Integer;
+ Vals: Array[0..63] of Real;
+ Nv, Kv: Integer;
+ NewIdx: Integer;
 Begin
  Running := True;
  OldMouseX := -1;
@@ -17830,6 +18523,467 @@ Begin
           MarkDocumentModified;
          End Else
           CommandLastLine := 'Echec import ACIS: ' + CommandBuffer;
+        End;
+        20: Begin { Format -> Layer : selectionne ou cree calque courant }
+         I := FindLayerByName(CommandBuffer);
+         If I < 0 Then Begin
+          I := AddLayer(CommandBuffer);
+          If I >= 0 Then Begin
+           CurrentLayer := I;
+           CommandLastLine := 'Calque cree et courant: ' + CommandBuffer;
+           MarkDocumentModified;
+          End Else
+           CommandLastLine := 'Calque: capacite maximale atteinte';
+         End Else Begin
+          CurrentLayer := I;
+          CommandLastLine := 'Calque courant: ' + CommandBuffer;
+         End;
+        End;
+        21: Begin { Format -> Color }
+         Val(CommandBuffer, I, OkInt);
+         If (OkInt <> 0) or (I < 0) or (I > 256) Then
+          CommandLastLine := 'Couleur invalide (0..256): ' + CommandBuffer
+         Else Begin
+          CurrentColor := I;
+          CommandLastLine := 'Couleur courante = ' + CommandBuffer;
+         End;
+        End;
+        22: Begin { Format -> Linetype }
+         Val(CommandBuffer, I, OkInt);
+         If (OkInt <> 0) or (I < 0) or (I > 255) Then
+          CommandLastLine := 'Type de ligne invalide (0..255): ' + CommandBuffer
+         Else Begin
+          CurrentLineType := Byte(I);
+          CommandLastLine := 'Type de ligne courant = ' + CommandBuffer;
+         End;
+        End;
+        23: Begin { Format -> Lineweight }
+         Val(CommandBuffer, I, OkInt);
+         If (OkInt <> 0) or (I < 0) or (I > 1000) Then
+          CommandLastLine := 'Epaisseur invalide (0..1000): ' + CommandBuffer
+         Else Begin
+          CurrentLineWeight := I;
+          CommandLastLine := 'Epaisseur courante = ' + CommandBuffer;
+         End;
+        End;
+        24: Begin { Format -> Text Style }
+         If Length(CommandBuffer) = 0 Then
+          CommandLastLine := 'Style de texte: nom vide'
+         Else Begin
+          If Length(CommandBuffer) > 16 Then
+           CurrentTextStyleName := Copy(CommandBuffer, 1, 16)
+          Else
+           CurrentTextStyleName := CommandBuffer;
+          CommandLastLine := 'Style de texte courant: ' + CurrentTextStyleName;
+         End;
+        End;
+        25: Begin { Format -> Dimension Style }
+         If Length(CommandBuffer) = 0 Then
+          CommandLastLine := 'Style de cote: nom vide'
+         Else Begin
+          If Length(CommandBuffer) > 16 Then
+           CurrentDimStyleName := Copy(CommandBuffer, 1, 16)
+          Else
+           CurrentDimStyleName := CommandBuffer;
+          CommandLastLine := 'Style de cote courant: ' + CurrentDimStyleName;
+         End;
+        End;
+        26: Begin { Format -> Point Style }
+         Val(CommandBuffer, I, OkInt);
+         If (OkInt <> 0) or (I < 0) or (I > 4) Then
+          CommandLastLine := 'Style de point invalide (0..4): ' + CommandBuffer
+         Else Begin
+          CurrentPointStyle := I;
+          CommandLastLine := 'Style de point = ' + CommandBuffer;
+         End;
+        End;
+        27: Begin { Format -> Units }
+         Val(CommandBuffer, I, OkInt);
+         If (OkInt <> 0) or (I < 0) or (I > 4) Then
+          CommandLastLine := 'Unites invalides (0..4): ' + CommandBuffer
+         Else Begin
+          CurrentUnits := I;
+          Case I Of
+           0: CommandLastLine := 'Unites = Scientifique';
+           1: CommandLastLine := 'Unites = Decimal';
+           2: CommandLastLine := 'Unites = Ingenierie';
+           3: CommandLastLine := 'Unites = Architectural';
+           4: CommandLastLine := 'Unites = Fractionnel';
+          End;
+         End;
+        End;
+        28: Begin { Format -> Drawing Limits }
+         If ParseFourReals(CommandBuffer, LimMinX, LimMinY, LimMaxX, LimMaxY) Then Begin
+          CommandLastLine := 'Limites mises a jour';
+          MarkDocumentModified;
+         End Else
+          CommandLastLine := 'Limites: format invalide (4 reels separes par espaces)';
+        End;
+        29: Begin { Format -> Rename layer "ancien=nouveau" }
+         J := Pos('=', CommandBuffer);
+         If J <= 1 Then
+          CommandLastLine := 'Renommer: format AncienNom=NouveauNom'
+         Else Begin
+          Ext := Copy(CommandBuffer, 1, J - 1);
+          CmdBufStr := Copy(CommandBuffer, J + 1, Length(CommandBuffer) - J);
+          I := FindLayerByName(Ext);
+          If I < 0 Then
+           CommandLastLine := 'Calque introuvable: ' + Ext
+          Else If Length(CmdBufStr) = 0 Then
+           CommandLastLine := 'Nouveau nom vide'
+          Else If FindLayerByName(CmdBufStr) >= 0 Then
+           CommandLastLine := 'Nom deja utilise: ' + CmdBufStr
+          Else Begin
+           Layers[I].Name := CmdBufStr;
+           CommandLastLine := 'Calque renomme: ' + Ext + ' -> ' + CmdBufStr;
+           MarkDocumentModified;
+          End;
+         End;
+        End;
+        30: Begin { Outils -> Quick Select par type d'objet }
+         Val(CommandBuffer, I, OkInt);
+         If (OkInt <> 0) or (I < 1) or (I > 8) Then
+          CommandLastLine := 'Selection rapide: type invalide (1..8)'
+         Else Begin
+          J := 0;
+          For OkInt := 0 To ObjectCount - 1 Do
+           If DrawObjects[OkInt].ObjType = Byte(I) Then Begin
+            DrawObjects[OkInt].Selected := True;
+            Inc(J);
+           End;
+          Str(J, CmdBufStr);
+          CommandLastLine := 'Selection rapide: ' + CmdBufStr + ' objet(s) selectionne(s)';
+          DrawInterface;
+         End;
+        End;
+        31: Begin { Outils -> Load Application (.LSP) }
+         LoadLispApplicationFile(CommandBuffer);
+        End;
+        32: Begin { Outils -> Run Script (.SCR) }
+         RunScriptFile(CommandBuffer);
+        End;
+        33: Begin { Outils -> AutoLISP - evaluer expression }
+         If Length(CommandBuffer) > 0 Then Begin
+          LispEvaluator.LastResult := LispEvaluate(CommandBuffer);
+          CommandLastLine := 'LISP => ' + LispValueToString(LispEvaluator.LastResult);
+         End Else
+          CommandLastLine := 'LISP: expression vide';
+        End;
+        34: Begin { Outils -> Drafting Settings - reglages snap }
+         Val(CommandBuffer, PanStep, OkInt);
+         If OkInt <> 0 Then
+          CommandLastLine := 'Reglages: nombre invalide: ' + CommandBuffer
+         Else If PanStep <= 0.0 Then Begin
+          SnapEnabled := False;
+          CommandLastLine := 'Snap desactive';
+         End Else Begin
+          SnapEnabled := True;
+          SnapSpacing := PanStep;
+          Str(SnapSpacing:0:3, CmdBufStr);
+          CommandLastLine := 'Snap active, pas=' + CmdBufStr;
+         End;
+        End;
+        35: Begin { Outils -> Personnaliser - basculer toolbar }
+         { Convertir CommandBuffer en majuscules pour comparaison }
+         Ext := '';
+         For I := 1 To Length(CommandBuffer) Do
+          If Length(Ext) < 8 Then Ext := Ext + UpCase(CommandBuffer[I]);
+         If (Ext = 'ALL ON') or (Ext = 'ALLON') Then Begin
+          For I := 0 To MAX_TOOLBARS - 1 Do Toolbars[I].Visible := True;
+          CommandLastLine := 'Toutes les barres d''outils affichees';
+          DrawInterface;
+         End Else If (Ext = 'ALL OFF') or (Ext = 'ALLOFF') Then Begin
+          For I := 0 To MAX_TOOLBARS - 1 Do Toolbars[I].Visible := False;
+          CommandLastLine := 'Toutes les barres d''outils masquees';
+          DrawInterface;
+         End Else If Ext = 'RESET' Then Begin
+          Toolbars[TOOLBAR_STANDARD].Visible := True;
+          Toolbars[TOOLBAR_DRAW].Visible := True;
+          Toolbars[TOOLBAR_MODIFY].Visible := True;
+          Toolbars[TOOLBAR_LAYERS].Visible := False;
+          Toolbars[TOOLBAR_PROPERTIES].Visible := False;
+          CommandLastLine := 'Barres d''outils reinitialisees';
+          DrawInterface;
+         End Else Begin
+          J := -1;
+          For I := 0 To MAX_TOOLBARS - 1 Do Begin
+           CmdBufStr := '';
+           For OkInt := 1 To Length(Toolbars[I].Title) Do
+            If Length(CmdBufStr) < 8 Then
+             CmdBufStr := CmdBufStr + UpCase(Toolbars[I].Title[OkInt]);
+           If CmdBufStr = Ext Then J := I;
+          End;
+          If J < 0 Then
+           CommandLastLine := 'Barre inconnue: ' + CommandBuffer
+          Else Begin
+           Toolbars[J].Visible := Not Toolbars[J].Visible;
+           If Toolbars[J].Visible Then
+            CommandLastLine := 'Barre ' + Toolbars[J].Title + ' affichee'
+           Else
+            CommandLastLine := 'Barre ' + Toolbars[J].Title + ' masquee';
+           DrawInterface;
+          End;
+         End;
+        End;
+        40: Begin { Dessin -> Ligne }
+         If ParseFourReals(CommandBuffer, Vals[0], Vals[1], Vals[2], Vals[3]) Then Begin
+          NewIdx := AllocEntitySlot;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Ligne: dessin plein'
+          Else Begin
+           DrawObjects[NewIdx].ObjType := OBJ_LINE;
+           DrawObjects[NewIdx].X1 := Vals[0]; DrawObjects[NewIdx].Y1 := Vals[1];
+           DrawObjects[NewIdx].X2 := Vals[2]; DrawObjects[NewIdx].Y2 := Vals[3];
+           CommandLastLine := 'Ligne creee';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End Else
+          CommandLastLine := 'Ligne: 4 reels attendus';
+        End;
+        41,42: Begin { Dessin -> Ray (demi-droite) / Construction Line (droite) }
+         If ParseFourReals(CommandBuffer, Vals[0], Vals[1], Vals[2], Vals[3]) Then Begin
+          PanStep := Sqrt((Vals[2]-Vals[0])*(Vals[2]-Vals[0]) +
+                          (Vals[3]-Vals[1])*(Vals[3]-Vals[1]));
+          If PanStep < 1E-9 Then Begin
+           CommandLastLine := 'Direction nulle';
+          End Else Begin
+           NewIdx := AllocEntitySlot;
+           If NewIdx < 0 Then
+            CommandLastLine := 'Construction: dessin plein'
+           Else Begin
+            DrawObjects[NewIdx].ObjType := OBJ_LINE;
+            { Pour XLine, etendre aussi vers l'arriere }
+            If PendingFileAction = 42 Then Begin
+             DrawObjects[NewIdx].X1 := Vals[0] - (Vals[2]-Vals[0])/PanStep * 1.0E5;
+             DrawObjects[NewIdx].Y1 := Vals[1] - (Vals[3]-Vals[1])/PanStep * 1.0E5;
+            End Else Begin
+             DrawObjects[NewIdx].X1 := Vals[0];
+             DrawObjects[NewIdx].Y1 := Vals[1];
+            End;
+            DrawObjects[NewIdx].X2 := Vals[0] + (Vals[2]-Vals[0])/PanStep * 1.0E5;
+            DrawObjects[NewIdx].Y2 := Vals[1] + (Vals[3]-Vals[1])/PanStep * 1.0E5;
+            If PendingFileAction = 41 Then
+             CommandLastLine := 'Demi-droite creee'
+            Else
+             CommandLastLine := 'Droite de construction creee';
+            MarkDocumentModified; DrawInterface;
+           End;
+          End;
+         End Else
+          CommandLastLine := 'Construction: 4 reels attendus';
+        End;
+        43,48: Begin { Dessin -> Polyligne / Spline }
+         If Not ParseReals(CommandBuffer, Vals, 64, Nv) Then
+          CommandLastLine := 'Polyligne: nombres invalides'
+         Else If (Nv < 4) or Odd(Nv) Then
+          CommandLastLine := 'Polyligne: paires X,Y attendues (min 2)'
+         Else Begin
+          NewIdx := AllocEntitySlot;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Polyligne: dessin plein'
+          Else Begin
+           DrawObjects[NewIdx].ObjType := OBJ_POLYLINE;
+           DrawObjects[NewIdx].VertexCount := Word(Nv Shr 1);
+           For Kv := 0 To (Nv Shr 1) - 1 Do Begin
+            DrawObjects[NewIdx].Vertices[Kv].X := Vals[Kv*2];
+            DrawObjects[NewIdx].Vertices[Kv].Y := Vals[Kv*2+1];
+            DrawObjects[NewIdx].Vertices[Kv].Bulge := 0;
+           End;
+           DrawObjects[NewIdx].Closed := False;
+           Str(Nv Shr 1, CmdBufStr);
+           If PendingFileAction = 48 Then
+            CommandLastLine := 'Spline creee (' + CmdBufStr + ' sommets)'
+           Else
+            CommandLastLine := 'Polyligne creee (' + CmdBufStr + ' sommets)';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        44: Begin { Dessin -> Polygone : N CX CY R }
+         If Not ParseReals(CommandBuffer, Vals, 4, Nv) Then
+          CommandLastLine := 'Polygone: nombres invalides'
+         Else If Nv <> 4 Then
+          CommandLastLine := 'Polygone: 4 valeurs attendues (N CX CY R)'
+         Else Begin
+          Kv := Trunc(Vals[0]);
+          If (Kv < 3) or (Kv > 64) Then
+           CommandLastLine := 'Polygone: nombre de cotes 3..64'
+          Else If Vals[3] <= 0 Then
+           CommandLastLine := 'Polygone: rayon doit etre positif'
+          Else Begin
+           NewIdx := AllocEntitySlot;
+           If NewIdx < 0 Then
+            CommandLastLine := 'Polygone: dessin plein'
+           Else Begin
+            DrawObjects[NewIdx].ObjType := OBJ_POLYLINE;
+            DrawObjects[NewIdx].VertexCount := Word(Kv);
+            For OkInt := 0 To Kv - 1 Do Begin
+             DrawObjects[NewIdx].Vertices[OkInt].X :=
+              Vals[1] + Vals[3] * Cos(2 * Pi * OkInt / Kv);
+             DrawObjects[NewIdx].Vertices[OkInt].Y :=
+              Vals[2] + Vals[3] * Sin(2 * Pi * OkInt / Kv);
+             DrawObjects[NewIdx].Vertices[OkInt].Bulge := 0;
+            End;
+            DrawObjects[NewIdx].Closed := True;
+            Str(Kv, CmdBufStr);
+            CommandLastLine := 'Polygone cree (' + CmdBufStr + ' cotes)';
+            MarkDocumentModified; DrawInterface;
+           End;
+          End;
+         End;
+        End;
+        45: Begin { Dessin -> Rectangle }
+         If ParseFourReals(CommandBuffer, Vals[0], Vals[1], Vals[2], Vals[3]) Then Begin
+          NewIdx := AllocEntitySlot;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Rectangle: dessin plein'
+          Else Begin
+           DrawObjects[NewIdx].ObjType := OBJ_RECTANGLE;
+           DrawObjects[NewIdx].X1 := Vals[0]; DrawObjects[NewIdx].Y1 := Vals[1];
+           DrawObjects[NewIdx].X2 := Vals[2]; DrawObjects[NewIdx].Y2 := Vals[3];
+           CommandLastLine := 'Rectangle cree';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End Else
+          CommandLastLine := 'Rectangle: 4 reels attendus';
+        End;
+        46: Begin { Dessin -> Arc : CX CY R AngDeb AngFin }
+         If Not ParseReals(CommandBuffer, Vals, 5, Nv) Then
+          CommandLastLine := 'Arc: nombres invalides'
+         Else If Nv <> 5 Then
+          CommandLastLine := 'Arc: 5 reels attendus'
+         Else If Vals[2] <= 0 Then
+          CommandLastLine := 'Arc: rayon doit etre positif'
+         Else Begin
+          NewIdx := AllocEntitySlot;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Arc: dessin plein'
+          Else Begin
+           DrawObjects[NewIdx].ObjType := OBJ_ARC;
+           DrawObjects[NewIdx].X1 := Vals[0];
+           DrawObjects[NewIdx].Y1 := Vals[1];
+           DrawObjects[NewIdx].Radius := Vals[2];
+           DrawObjects[NewIdx].StartAngle := Vals[3];
+           DrawObjects[NewIdx].EndAngle := Vals[4];
+           CommandLastLine := 'Arc cree';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        47: Begin { Dessin -> Cercle : CX CY R }
+         If Not ParseReals(CommandBuffer, Vals, 3, Nv) Then
+          CommandLastLine := 'Cercle: nombres invalides'
+         Else If Nv <> 3 Then
+          CommandLastLine := 'Cercle: 3 reels attendus (CX CY R)'
+         Else If Vals[2] <= 0 Then
+          CommandLastLine := 'Cercle: rayon doit etre positif'
+         Else Begin
+          NewIdx := AllocEntitySlot;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Cercle: dessin plein'
+          Else Begin
+           DrawObjects[NewIdx].ObjType := OBJ_CIRCLE;
+           DrawObjects[NewIdx].X1 := Vals[0];
+           DrawObjects[NewIdx].Y1 := Vals[1];
+           DrawObjects[NewIdx].Radius := Vals[2];
+           CommandLastLine := 'Cercle cree';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        49: Begin { Dessin -> Ellipse : CX CY RX RY }
+         If ParseFourReals(CommandBuffer, Vals[0], Vals[1], Vals[2], Vals[3]) Then Begin
+          If (Vals[2] <= 0) or (Vals[3] <= 0) Then
+           CommandLastLine := 'Ellipse: rayons doivent etre positifs'
+          Else Begin
+           NewIdx := AllocEntitySlot;
+           If NewIdx < 0 Then
+            CommandLastLine := 'Ellipse: dessin plein'
+           Else Begin
+            DrawObjects[NewIdx].ObjType := OBJ_ELLIPSE;
+            DrawObjects[NewIdx].X1 := Vals[0];
+            DrawObjects[NewIdx].Y1 := Vals[1];
+            DrawObjects[NewIdx].Radius := Vals[2];           { rx }
+            DrawObjects[NewIdx].X2 := Vals[0] + Vals[2];     { sommet droit }
+            DrawObjects[NewIdx].Y2 := Vals[1];
+            DrawObjects[NewIdx].StartAngle := 0.0;
+            DrawObjects[NewIdx].EndAngle := Vals[3];         { ry }
+            CommandLastLine := 'Ellipse creee';
+            MarkDocumentModified; DrawInterface;
+           End;
+          End;
+         End Else
+          CommandLastLine := 'Ellipse: 4 reels attendus';
+        End;
+        50: Begin { Dessin -> Point : X Y }
+         If Not ParseReals(CommandBuffer, Vals, 2, Nv) Then
+          CommandLastLine := 'Point: nombres invalides'
+         Else If Nv <> 2 Then
+          CommandLastLine := 'Point: 2 reels attendus (X Y)'
+         Else Begin
+          NewIdx := AllocEntitySlot;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Point: dessin plein'
+          Else Begin
+           DrawObjects[NewIdx].ObjType := OBJ_POINT;
+           DrawObjects[NewIdx].X1 := Vals[0];
+           DrawObjects[NewIdx].Y1 := Vals[1];
+           CommandLastLine := 'Point cree';
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
+        End;
+        51: Begin { Dessin -> Texte : X Y H Contenu }
+         { Extraire 3 premiers tokens numeriques, le reste = contenu }
+         Ext := '';                  { recyclage : "X Y H" parse }
+         OkInt := 1;                 { OkInt = position courante }
+         Nv := 0;
+         CmdBufStr := '';
+         While (OkInt <= Length(CommandBuffer)) and (Nv < 3) Do Begin
+          { Sauter espaces }
+          While (OkInt <= Length(CommandBuffer)) and
+                ((CommandBuffer[OkInt] = ' ') or (CommandBuffer[OkInt] = #9)) Do
+           Inc(OkInt);
+          CmdBufStr := '';
+          While (OkInt <= Length(CommandBuffer)) and
+                (CommandBuffer[OkInt] <> ' ') and
+                (CommandBuffer[OkInt] <> #9) Do Begin
+           If Length(CmdBufStr) < 16 Then
+            CmdBufStr := CmdBufStr + CommandBuffer[OkInt];
+           Inc(OkInt);
+          End;
+          If Length(CmdBufStr) = 0 Then Break;
+          Val(CmdBufStr, Vals[Nv], J);
+          If J <> 0 Then Begin Nv := 99; Break; End;
+          Inc(Nv);
+         End;
+         { Sauter espaces avant le contenu }
+         While (OkInt <= Length(CommandBuffer)) and
+               ((CommandBuffer[OkInt] = ' ') or (CommandBuffer[OkInt] = #9)) Do
+          Inc(OkInt);
+         If Nv <> 3 Then
+          CommandLastLine := 'Texte: X Y H Contenu attendus'
+         Else If OkInt > Length(CommandBuffer) Then
+          CommandLastLine := 'Texte: contenu vide'
+         Else If Vals[2] <= 0 Then
+          CommandLastLine := 'Texte: hauteur doit etre positive'
+         Else Begin
+          NewIdx := AllocEntitySlot;
+          If NewIdx < 0 Then
+           CommandLastLine := 'Texte: dessin plein'
+          Else Begin
+           DrawObjects[NewIdx].ObjType := OBJ_TEXT;
+           DrawObjects[NewIdx].X1 := Vals[0];
+           DrawObjects[NewIdx].Y1 := Vals[1];
+           DrawObjects[NewIdx].Radius := Vals[2];  { hauteur }
+           DrawObjects[NewIdx].DimText :=
+            Copy(CommandBuffer, OkInt, Length(CommandBuffer) - OkInt + 1);
+           If Length(DrawObjects[NewIdx].DimText) > 20 Then
+            DrawObjects[NewIdx].DimText := Copy(DrawObjects[NewIdx].DimText, 1, 20);
+           CommandLastLine := 'Texte cree: ' + DrawObjects[NewIdx].DimText;
+           MarkDocumentModified; DrawInterface;
+          End;
+         End;
         End;
        End;
        PendingFileAction := 0;

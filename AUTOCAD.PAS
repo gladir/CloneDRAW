@@ -11432,6 +11432,31 @@ Begin
   Exit;
  End;
 
+ { Validation des compteurs et parametres de vue lus dans l'en-tete.
+   Un fichier dont la signature AC10xx matche mais qui n'est pas un
+   DWG produit par cette appli (ou un fichier corrompu) peut contenir
+   des valeurs aberrantes qui debordent DrawObjects[] ou rendent la
+   vue invisible (ZoomLevel=0, ViewOffset hors echelle...). }
+ If (ObjectCount < 0) or (ObjectCount > MAX_OBJECTS) Then Begin
+  Close(F);
+  ObjectCount := TempCount;
+  Exit;
+ End;
+ If (LayerCount < 0) or (LayerCount > MAX_LAYERS) Then Begin
+  Close(F);
+  ObjectCount := TempCount;
+  Exit;
+ End;
+ If (BlockDefCount < 0) or (BlockDefCount > MAX_BLOCKS) Then Begin
+  Close(F);
+  ObjectCount := TempCount;
+  Exit;
+ End;
+ If (ZoomLevel <= 0.0) or (ZoomLevel > 1000.0) Then
+  ZoomLevel := 1.0;
+ If (Abs(ViewOffsetX) > 1.0E9) Then ViewOffsetX := 0.0;
+ If (Abs(ViewOffsetY) > 1.0E9) Then ViewOffsetY := 0.0;
+
  { Lire les calques }
  If Not ReadDWGLayers(F) Then Begin
   Close(F);
@@ -14920,10 +14945,12 @@ Begin
  { Effacer l'écran }
  ClearDevice;
 
- { Dessiner les éléments de l'interface }
+ { Dessiner le canvas en premier, puis les barres par-dessus
+   pour que le pan/zoom ne deborde pas sur la barre de menu
+   et les barres d'outils. }
+ DrawCanvas;
  DrawMenuBar;
  DrawAllToolbars;  { TODO 5: Barres d'outils }
- DrawCanvas;
  DrawCommandLine;
  DrawStatusBar;
 
@@ -14999,6 +15026,7 @@ Var
  SelectedObj: Integer;
  CanvasTop, CanvasBottom: Integer;
  ClickedGrip: Integer;
+ TbHit, BtnHit: Integer;
 Begin
  CanvasTop := MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
  CanvasBottom := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
@@ -15029,6 +15057,45 @@ Begin
 
  Case Button of
   MOUSE_BUTTON_LEFT: Begin { Clic gauche }
+   { Dispatch des clics sur les boutons de barres d'outils }
+   If (Y >= MENUBAR_HEIGHT) and (Y < MENUBAR_HEIGHT + TOOLBAR_HEIGHT) Then Begin
+    GetToolbarButtonAtPosition(X, Y, TbHit, BtnHit);
+    If (TbHit >= 0) and (BtnHit >= 0) Then Begin
+     If Toolbars[TbHit].Buttons[BtnHit].Enabled Then Begin
+      If Toolbars[TbHit].Buttons[BtnHit].Command = 'NEW' Then Begin
+       ObjectCount := 0;
+       ClearSelection;
+       ClearGrips;
+       CurrentFileName := '';
+       CommandLastLine := 'Nouveau dessin';
+       DrawInterface;
+      End Else If Toolbars[TbHit].Buttons[BtnHit].Command = 'OPEN' Then Begin
+       PendingFileAction := 1;
+       CommandPrompt := 'Nom du fichier a ouvrir:';
+       CommandBuffer := '';
+       DrawInterface;
+      End Else If Toolbars[TbHit].Buttons[BtnHit].Command = 'SAVE' Then Begin
+       If CurrentFileName <> '' Then Begin
+        If WriteDWGFile(CurrentFileName) Then
+         CommandLastLine := 'Enregistre: ' + CurrentFileName
+        Else
+         CommandLastLine := 'Echec enregistrement: ' + CurrentFileName;
+       End Else Begin
+        PendingFileAction := 2;
+        CommandPrompt := 'Enregistrer sous:';
+        CommandBuffer := '';
+       End;
+       DrawInterface;
+      End Else Begin
+       { Commande non implémentée : afficher dans la ligne de commande }
+       CommandLastLine := 'Commande: ' + Toolbars[TbHit].Buttons[BtnHit].Command;
+       DrawInterface;
+      End;
+      Exit;
+     End;
+    End;
+   End;
+
    { TODO 10: Vérifier d'abord si on clique sur un grip }
    If (Y >= CanvasTop) and (Y <= CanvasBottom) and (CurrentGrips.Count > 0) Then Begin
     ClickedGrip := GetGripAtPoint(X, Y);

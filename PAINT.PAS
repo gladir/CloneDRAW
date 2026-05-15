@@ -294,6 +294,7 @@ Var
  TextInput: String;
  TextInsertMode: Boolean;
  TextX, TextY: Integer;
+ TextPrevW, TextPrevH: Integer;  { Taille du dernier apercu pour effacement }
 
  { Variables pour le dessin }
  Drawing: Boolean;
@@ -508,6 +509,22 @@ Begin
   GetImageFormat := FMT_TIFF
  Else
   GetImageFormat := FMT_BMP;
+End;
+
+Function EnsureSaveExtension(FileName: String): String;
+{ Si l'utilisateur n'a pas indique d'extension reconnue, ajoute .BMP. }
+Var
+ Ext: String;
+Begin
+ Ext := ExtractFileExt(FileName);
+ If (Ext = '.BMP') or (Ext = '.DIB') or
+    (Ext = '.GIF') or (Ext = '.PNG') or
+    (Ext = '.JPG') or (Ext = '.JPEG') or
+    (Ext = '.PCX') or (Ext = '.TGA') or (Ext = '.TARGA') or
+    (Ext = '.TIF') or (Ext = '.TIFF') Then
+  EnsureSaveExtension := FileName
+ Else
+  EnsureSaveExtension := FileName + '.bmp';
 End;
 
 { Procédures d'initialisation }
@@ -731,6 +748,15 @@ Begin
 End;
 
 Procedure InitImage;
+Const
+ VGA_R: Array[0..15] of Byte =
+   (  0,   0,   0,   0, 168, 168, 168, 168,  84,  84,  84,  84, 252, 252, 252, 252);
+ VGA_G: Array[0..15] of Byte =
+   (  0,   0, 168, 168,   0,   0,  84, 168,  84,  84, 252, 252,  84,  84, 252, 252);
+ VGA_B: Array[0..15] of Byte =
+   (  0, 168,   0, 168,   0, 168,   0, 168,  84, 252,  84, 252,  84, 252,  84, 252);
+Var
+ I: Integer;
 Begin
  ImageBuffer.Width := 640;
  ImageBuffer.Height := 480;
@@ -739,6 +765,22 @@ Begin
  ImageBuffer.Modified := False;
  ImageBuffer.FileName := '';
  ImageBuffer.Format := FMT_BMP;
+
+ { Initialiser la palette : 16 couleurs VGA standard puis degrade de gris.
+   Sans cela ImageBuffer.Palette reste a zero -> Save* ecrit une palette
+   tout-noire et l'image rechargee parait entierement noire. }
+ For I := 0 to 15 do Begin
+  ImageBuffer.Palette[I].R := VGA_R[I];
+  ImageBuffer.Palette[I].G := VGA_G[I];
+  ImageBuffer.Palette[I].B := VGA_B[I];
+  ImageBuffer.Palette[I].A := 255;
+ End;
+ For I := 16 to 255 do Begin
+  ImageBuffer.Palette[I].R := Byte(I);
+  ImageBuffer.Palette[I].G := Byte(I);
+  ImageBuffer.Palette[I].B := Byte(I);
+  ImageBuffer.Palette[I].A := 255;
+ End;
 
  CanvasX := TOOLBAR_WIDTH + 5;
  CanvasY := MENUBAR_HEIGHT + 5;
@@ -1304,6 +1346,14 @@ End;
 { Procédures de gestion des fichiers image }
 
 Function LoadBMP(FileName: String): Boolean;
+{ Couleurs VGA standard 0..15 en RGB 0..255 (palette EGA/VGA classique). }
+Const
+ VGA_R: Array[0..15] of Byte =
+   (  0,   0,   0,   0, 168, 168, 168, 168,  84,  84,  84,  84, 252, 252, 252, 252);
+ VGA_G: Array[0..15] of Byte =
+   (  0,   0, 168, 168,   0,   0,  84, 168,  84,  84, 252, 252,  84,  84, 252, 252);
+ VGA_B: Array[0..15] of Byte =
+   (  0, 168,   0, 168,   0, 168,   0, 168,  84, 252,  84, 252,  84, 252,  84, 252);
 Var
  F: File;
  FileHeader: TBMPFileHeader;
@@ -1318,6 +1368,9 @@ Var
  ByteVal: Byte;
  BitPos: Integer;
  TopDown: Boolean;
+ PalRemap: Array[0..255] of Byte;
+ I, Best: Integer;
+ DR, DG, DB, Dist, BestDist: LongInt;
 Begin
  LoadBMP := False;
 
@@ -1376,17 +1429,34 @@ Begin
    Exit;
   End;
 
-  { Convertir la palette BMP en palette de l'écran VGA }
+  { Convertir la palette BMP : on NE remplace PAS la palette VGA systeme
+    (sinon menus/boutons deviennent invisibles). On construit une table de
+    correspondance vers les 16 couleurs VGA standard via plus proche voisin. }
   For X := 0 to PaletteEntries - 1 do Begin
    ImageBuffer.Palette[X].R := BMPPalette[X].Red;
    ImageBuffer.Palette[X].G := BMPPalette[X].Green;
    ImageBuffer.Palette[X].B := BMPPalette[X].Blue;
    ImageBuffer.Palette[X].A := 255;
-   { Appliquer la palette au système graphique }
-   SetRGBPalette(X, BMPPalette[X].Red shr 2,
-                    BMPPalette[X].Green shr 2,
-                    BMPPalette[X].Blue shr 2);
+   Best := 0;
+   BestDist := MaxLongInt;
+   For I := 0 to 15 do Begin
+    DR := LongInt(BMPPalette[X].Red)   - LongInt(VGA_R[I]);
+    DG := LongInt(BMPPalette[X].Green) - LongInt(VGA_G[I]);
+    DB := LongInt(BMPPalette[X].Blue)  - LongInt(VGA_B[I]);
+    Dist := DR*DR + DG*DG + DB*DB;
+    If Dist < BestDist Then Begin
+     BestDist := Dist;
+     Best := I;
+    End;
+   End;
+   PalRemap[X] := Byte(Best);
   End;
+  { Entrees non lues : mapper sur noir par defaut. }
+  For X := PaletteEntries to 255 do PalRemap[X] := 0;
+ End
+ Else Begin
+  { Pas de palette indexee : remap identite pour le code partage plus bas. }
+  For X := 0 to 255 do PalRemap[X] := Byte(X);
  End;
 
  { Se positionner au début des données de l'image }
@@ -1417,17 +1487,17 @@ Begin
      1: Begin
       ByteVal := RowBuffer[X div 8];
       BitPos := 7 - (X mod 8);
-      PixelColor := (ByteVal shr BitPos) and 1;
+      PixelColor := PalRemap[(ByteVal shr BitPos) and 1];
      End;
      4: Begin
       ByteVal := RowBuffer[X div 2];
       If (X mod 2) = 0 Then
-       PixelColor := (ByteVal shr 4) and $0F
+       PixelColor := PalRemap[(ByteVal shr 4) and $0F]
       Else
-       PixelColor := ByteVal and $0F;
+       PixelColor := PalRemap[ByteVal and $0F];
      End;
      8: Begin
-      PixelColor := RowBuffer[X];
+      PixelColor := PalRemap[RowBuffer[X]];
      End;
      24: Begin
       { Pour les images 24 bits, trouver la couleur la plus proche }
@@ -1935,7 +2005,24 @@ End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format: Byte;
+ F: File;
+ Ext: String;
 Begin
+ LoadImage := False;
+
+ { Verifier que le fichier existe et est lisible }
+ Assign(F, FileName);
+ {$I-} Reset(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
+ {$I-} Close(F); {$I+}
+ If IOResult <> 0 Then;
+
+ { Refuser les extensions inconnues plutot que de tenter un BMP au hasard }
+ Ext := ExtractFileExt(FileName);
+ If (Ext <> '.BMP') and (Ext <> '.DIB') and
+    (Ext <> '.GIF') and (Ext <> '.PNG') and
+    (Ext <> '.JPG') and (Ext <> '.JPEG') Then Exit;
+
  Format := GetImageFormat(FileName);
 
  Case Format of
@@ -1962,6 +2049,7 @@ Var
  PaletteEntries: Integer;
  PadBytes: Integer;
  I: Integer;
+ SrcP: PByte;
 Begin
  SaveBMP := False;
 
@@ -2034,15 +2122,23 @@ Begin
   End;
  End;
 
- { Écrire les données de l'image ligne par ligne (de bas en haut) }
+ { Écrire les données de l'image ligne par ligne (de bas en haut).
+   On lit depuis CanvasImage (et non l'ecran via GetPixel) pour ne pas
+   capturer un menu deroulant, le curseur souris, ou tout autre overlay
+   d'interface qui pourrait masquer la zone canvas au moment de la
+   sauvegarde. CanvasImage est tenu a jour par SyncCanvasImage apres
+   chaque primitive de dessin. }
  For Y := ImageBuffer.Height - 1 downto 0 do Begin
   { Initialiser le buffer de ligne à zéro }
   FillChar(RowBuffer, RowSize, 0);
 
-  { Lire les pixels de l'écran }
+  { Lire les pixels depuis le buffer canvas en memoire }
   For X := 0 to ImageBuffer.Width - 1 do Begin
-   If (X < CanvasWidth) and (Y < CanvasHeight) Then Begin
-    PixelColor := GetPixel(CanvasX + X, CanvasY + Y);
+   If (CanvasImage <> Nil) and
+      (X < CanvasImageW) and (Y < CanvasImageH) Then Begin
+    SrcP := CanvasImage;
+    Inc(SrcP, LongInt(Y) * LongInt(CanvasImageW) + X);
+    PixelColor := SrcP^;
    End Else Begin
     PixelColor := 0;
    End;
@@ -2099,6 +2195,7 @@ Var
  I, X, Y: Integer;
  PixelColor: Byte;
  DataPos: Integer;
+ SrcP: PByte;
 Begin
  SaveGIF := False;
 
@@ -2192,8 +2289,14 @@ Begin
  DataPos := 0;
  For Y := 0 to ImageBuffer.Height - 1 do Begin
   For X := 0 to ImageBuffer.Width - 1 do Begin
-   If (X < CanvasWidth) and (Y < CanvasHeight) Then
-    PixelColor := GetPixel(CanvasX + X, CanvasY + Y)
+   { Lecture depuis CanvasImage (pas l'ecran) pour eviter de capturer
+     un menu deroulant ou le curseur souris. }
+   If (CanvasImage <> Nil) and
+      (X < CanvasImageW) and (Y < CanvasImageH) Then Begin
+    SrcP := CanvasImage;
+    Inc(SrcP, LongInt(Y) * LongInt(CanvasImageW) + X);
+    PixelColor := SrcP^;
+   End
    Else
     PixelColor := 0;
 
@@ -2248,6 +2351,7 @@ Var
  I, X, Y: Integer;
  PixelColor: Byte;
  DataPos: Integer;
+ SrcP: PByte;
 
  Function SwapLong(L: LongInt): LongInt;
  Var
@@ -2384,10 +2488,15 @@ Begin
   PixelColor := 0;
   BlockWrite(F, PixelColor, 1, BytesWritten);
 
-  { Données de la ligne }
+  { Données de la ligne. Lecture depuis CanvasImage (pas l'ecran)
+    pour ne pas capturer un menu deroulant ou le curseur souris. }
   For X := 0 to ImageBuffer.Width - 1 do Begin
-   If (X < CanvasWidth) and (Y < CanvasHeight) Then
-    RowBuffer[X] := GetPixel(CanvasX + X, CanvasY + Y)
+   If (CanvasImage <> Nil) and
+      (X < CanvasImageW) and (Y < CanvasImageH) Then Begin
+    SrcP := CanvasImage;
+    Inc(SrcP, LongInt(Y) * LongInt(CanvasImageW) + X);
+    RowBuffer[X] := SrcP^;
+   End
    Else
     RowBuffer[X] := 0;
   End;
@@ -3147,6 +3256,55 @@ Begin
  End;
 End;
 
+Procedure BlitCanvasRect(X1, Y1, X2, Y2: Integer);
+{ Re-affiche les pixels stockes dans CanvasImage sur la zone ecran donnee.
+  Sert a effacer un apercu en restaurant le canvas en dessous. }
+Var
+ X, Y, BX, BY, T: Integer;
+ P: PByte;
+Begin
+ If CanvasImage = Nil Then Exit;
+ If X1 > X2 Then Begin T := X1; X1 := X2; X2 := T; End;
+ If Y1 > Y2 Then Begin T := Y1; Y1 := Y2; Y2 := T; End;
+ If X1 < CanvasX Then X1 := CanvasX;
+ If Y1 < CanvasY Then Y1 := CanvasY;
+ If X2 >= CanvasX + CanvasImageW Then X2 := CanvasX + CanvasImageW - 1;
+ If Y2 >= CanvasY + CanvasImageH Then Y2 := CanvasY + CanvasImageH - 1;
+ If (X1 > X2) or (Y1 > Y2) Then Exit;
+ For Y := Y1 to Y2 do Begin
+  BY := Y - CanvasY;
+  For X := X1 to X2 do Begin
+   BX := X - CanvasX;
+   P := CanvasImage;
+   Inc(P, LongInt(BY) * LongInt(CanvasImageW) + BX);
+   PutPixel(X, Y, P^);
+  End;
+ End;
+End;
+
+Procedure ErasePreviewText;
+{ Restaure le canvas sous l'apercu de texte en cours. }
+Begin
+ If (TextPrevW > 0) and (TextPrevH > 0) Then
+  BlitCanvasRect(TextX, TextY, TextX + TextPrevW, TextY + TextPrevH);
+ TextPrevW := 0;
+ TextPrevH := 0;
+End;
+
+Procedure DrawTextPreview;
+{ Efface l'ancien apercu puis dessine le texte courant (sans modifier
+  CanvasImage) avec un curseur '_' en fin. }
+Var
+ S: String;
+Begin
+ ErasePreviewText;
+ S := TextInput + '_';
+ SetColor(CurrentColor);
+ OutTextXY(TextX, TextY, S);
+ TextPrevW := TextWidth(S) + 1;
+ TextPrevH := TextHeight('M') + 1;
+End;
+
 Procedure DrawLine(X1, Y1, X2, Y2: Integer; Color: Byte);
 Begin
  SetColor(Color);
@@ -3221,11 +3379,19 @@ Begin
 End;
 
 Procedure DrawText(X, Y: Integer; Text: String; Color: Byte);
+Var
+ W, H: Integer;
 Begin
+ W := TextWidth(Text);
+ H := TextHeight(Text);
+ If H < 8 Then H := 8;
+ HideMouse;
  SetColor(Color);
  OutTextXY(X, Y, Text);
- { Largeur approximative: TextWidth, hauteur: TextHeight. }
- SyncCanvasImage(X, Y, X + TextWidth(Text) + 1, Y + TextHeight(Text) + 1);
+ { Synchroniser une zone genereuse pour eviter que SyncCanvasImage rate
+   des pixels du glyphe (descenders, etc.) ou capture le curseur souris. }
+ SyncCanvasImage(X, Y, X + W + 2, Y + H + 2);
+ ShowMouse;
  ImageBuffer.Modified := True;
 End;
 
@@ -3376,6 +3542,115 @@ Begin
  Until False;
 End;
 
+Function PromptYesNoCancel(Const Title, Msg: String): Integer;
+{ Boite de dialogue 3 etats : 1=Oui, 2=Non, 0=Annuler. }
+Var
+ BoxX, BoxY, BoxW, BoxH: Integer;
+ K: Char;
+Begin
+ PromptYesNoCancel := 0;
+ BoxW := TextWidth(Msg) + 40;
+ If TextWidth(Title) + 40 > BoxW Then BoxW := TextWidth(Title) + 40;
+ If BoxW < 360 Then BoxW := 360;
+ BoxH := 110;
+ BoxX := (ScreenWidth - BoxW) div 2;
+ BoxY := (ScreenHeight - BoxH) div 2;
+
+ SetFillStyle(SolidFill, LightGray);
+ Bar(BoxX, BoxY, BoxX + BoxW, BoxY + BoxH);
+ SetColor(DarkGray);
+ Rectangle(BoxX, BoxY, BoxX + BoxW, BoxY + BoxH);
+ SetFillStyle(SolidFill, Blue);
+ Bar(BoxX + 1, BoxY + 1, BoxX + BoxW - 1, BoxY + 18);
+ SetColor(White);
+ OutTextXY(BoxX + 8, BoxY + 5, Title);
+ SetColor(Black);
+ OutTextXY(BoxX + 20, BoxY + 35, Msg);
+ OutTextXY(BoxX + 10, BoxY + BoxH - 18,
+           'O = Oui   N = Non   Echap = Annuler');
+
+ Repeat
+  While Not KeyPressed Do Delay(10);
+  K := ReadKey;
+  If K = #0 Then ReadKey
+  Else Begin
+   K := UpCase(K);
+   If (K = 'O') or (K = 'Y') or (K = #13) Then Begin
+    PromptYesNoCancel := 1;
+    RedrawInterface;
+    Exit;
+   End;
+   If K = 'N' Then Begin
+    PromptYesNoCancel := 2;
+    RedrawInterface;
+    Exit;
+   End;
+   If K = #27 Then Begin
+    PromptYesNoCancel := 0;
+    RedrawInterface;
+    Exit;
+   End;
+  End;
+ Until False;
+End;
+
+Function SaveCurrentImage: Boolean;
+{ Sauvegarde l'image courante. Si pas de nom de fichier, demande un nom.
+  Retourne True en cas de succes, False si annule ou erreur. }
+Var
+ NewName: String;
+ Fmt: Byte;
+Begin
+ SaveCurrentImage := False;
+ If ImageBuffer.FileName <> '' Then Begin
+  If SaveImage(ImageBuffer.FileName, ImageBuffer.Format) Then Begin
+   ImageBuffer.Modified := False;
+   SaveCurrentImage := True;
+  End
+  Else
+   ShowMessage('Erreur', 'Echec de l''enregistrement.');
+ End
+ Else Begin
+  NewName := '';
+  If PromptString('Enregistrer sous', 'Nom du fichier :', NewName) and
+     (NewName <> '') Then Begin
+   NewName := EnsureSaveExtension(NewName);
+   Fmt := GetImageFormat(NewName);
+   If SaveImage(NewName, Fmt) Then Begin
+    ImageBuffer.FileName := NewName;
+    ImageBuffer.Format := Fmt;
+    ImageBuffer.Modified := False;
+    DrawStatusBar;
+    SaveCurrentImage := True;
+   End
+   Else
+    ShowMessage('Erreur', 'Echec de l''enregistrement.');
+  End;
+ End;
+End;
+
+Function ConfirmDiscardChanges: Boolean;
+{ Si des modifications non sauvegardees existent, demande a l'utilisateur.
+  - Oui     : sauvegarde et retourne True si OK, False si echec.
+  - Non     : abandonne les modifs, retourne True.
+  - Annuler : retourne False (l'appelant ne doit PAS quitter). }
+Var
+ R: Integer;
+Begin
+ If Not ImageBuffer.Modified Then Begin
+  ConfirmDiscardChanges := True;
+  Exit;
+ End;
+ R := PromptYesNoCancel('Modifications non enregistrees',
+   'Enregistrer les modifications avant de quitter ?');
+ Case R of
+  1: ConfirmDiscardChanges := SaveCurrentImage;
+  2: ConfirmDiscardChanges := True;
+ Else
+  ConfirmDiscardChanges := False;
+ End;
+End;
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -3388,6 +3663,10 @@ Begin
    Case ItemIndex of
     0: Begin { Nouveau }
      AddSnapshotToHistory(TOOL_PENCIL);
+     { Reinitialiser la palette aux 16 couleurs VGA standard. Si une image
+       avait ete chargee, sa palette restait active et etait sauvegardee
+       avec la nouvelle image. }
+     InitImage;
      ClearImage;
      If (CanvasImage <> Nil) and (CanvasImageW > 0) and (CanvasImageH > 0) Then
       FillChar(CanvasImage^, CanvasImageW * CanvasImageH, BackgroundColor);
@@ -3418,6 +3697,7 @@ Begin
      Else Begin
       NewName := '';
       If PromptString('Enregistrer sous', 'Nom du fichier :', NewName) and (NewName <> '') Then Begin
+       NewName := EnsureSaveExtension(NewName);
        Fmt := GetImageFormat(NewName);
        If SaveImage(NewName, Fmt) Then Begin
         ImageBuffer.FileName := NewName;
@@ -3433,6 +3713,7 @@ Begin
     3: Begin { Enregistrer sous }
      NewName := ImageBuffer.FileName;
      If PromptString('Enregistrer sous', 'Nom du fichier :', NewName) and (NewName <> '') Then Begin
+      NewName := EnsureSaveExtension(NewName);
       Fmt := GetImageFormat(NewName);
       If SaveImage(NewName, Fmt) Then Begin
        ImageBuffer.FileName := NewName;
@@ -3456,7 +3737,7 @@ Begin
      InfoMsg := InfoMsg + NewName + ' bpp';
      ShowMessage('Proprietes', InfoMsg);
     End;
-    9: Running := False; { Quitter }
+    9: If ConfirmDiscardChanges Then Running := False; { Quitter }
    End;
   End;
   MENU_EDIT: Begin
@@ -3718,6 +3999,9 @@ Begin
    TextY := Y;
    TextInsertMode := True;
    TextInput := '';
+   TextPrevW := 0;
+   TextPrevH := 0;
+   DrawTextPreview;
   End;
   TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_ROUNDRECT, TOOL_CURVE, TOOL_POLYGON: Begin
    Drawing := True;
@@ -4031,8 +4315,8 @@ Begin
    End;
    #60: Begin { F2 }
    End;
-   #68: Running := False; { F10 - Quitter }
-   #107: Running := False; { Alt+F4 - Quitter }
+   #68: If ConfirmDiscardChanges Then Running := False; { F10 - Quitter }
+   #107: If ConfirmDiscardChanges Then Running := False; { Alt+F4 - Quitter }
    #33: Begin { Alt+F - Menu Fichier }
     MenuActive := True;
     ActiveMenu := MENU_FILE;
@@ -4101,21 +4385,25 @@ Begin
   { Mode saisie de texte }
   If TextInsertMode Then Begin
    If Key = #13 Then Begin { Entrée }
+    ErasePreviewText;
     DrawText(TextX, TextY, TextInput, CurrentColor);
     TextInsertMode := False;
     TextInput := '';
     AddToHistory(TOOL_TEXT);
    End
    Else If Key = #27 Then Begin { Échap }
+    ErasePreviewText;
     TextInsertMode := False;
     TextInput := '';
    End
    Else If Key = #8 Then Begin { Retour arrière }
     If Length(TextInput) > 0 Then
      Delete(TextInput, Length(TextInput), 1);
+    DrawTextPreview;
    End
    Else Begin
     TextInput := TextInput + Key;
+    DrawTextPreview;
    End;
   End
   Else Begin
@@ -4123,7 +4411,7 @@ Begin
    Case UpCase(Key) of
     '+': If ZoomLevel < 800 Then ZoomLevel := ZoomLevel * 2;
     '-': If ZoomLevel > 25 Then ZoomLevel := ZoomLevel div 2;
-    'Q': Running := False; { Quitter rapidement }
+    'Q': If ConfirmDiscardChanges Then Running := False; { Quitter rapidement }
     #27: Begin { Échap }
      If MenuActive Then Begin
       MenuActive := False;
@@ -4286,7 +4574,10 @@ BEGIN
      dans le canvas. Ne PAS rappeler RedrawInterface ici, sinon les pixels
      du BMP/GIF/etc. sont effacés avant même d'être visibles. }
    If LoadImage(ParamStr(1)) Then
-    DrawStatusBar;
+    DrawStatusBar
+   Else
+    ShowMessage('Erreur de chargement',
+                'Impossible de charger : ' + ParamStr(1));
   End;
 
   MainLoop;

@@ -3,13 +3,13 @@ Suite de programme de dessin en Pascal (Turbo Pascal/Free Pascal)
 
 <h2>Liste des fichiers</h2>
 
-Voici la liste des différents fichiers proposés dans Corail :
+Voici la liste des différents fichiers proposés dans CloneDRAW :
 
 <table>
-		<tr>
-			<th>Nom</th>
-			<th>Description</th>	
-		</tr>
+	<tr>
+		<th>Nom</th>
+		<th>Description</th>	
+	</tr>
     <tr>
         <td><b>AUTOCAD.PAS</b></td>
         <td>Cette commande permet de lancer un clone de AutoCAD.</td>
@@ -26,7 +26,7 @@ Voici la liste des différents fichiers proposés dans Corail :
 			<td><b>BMP2BGX.PAS</b></td>
 			<td>Cette commande permet de convertir une image BitMap (.BMP) en format BGX (MonsterBook).</td>
 		</tr>
-  <tr>
+  		<tr>
 			<td><b>BMP2CR2.PAS</b></td>
 			<td>Cette commande permet de convertir une image BitMap (.BMP) en fichier .CR2 minimal de type Canon RAW 2.</td>
 		</tr>
@@ -42,8 +42,6 @@ Voici la liste des différents fichiers proposés dans Corail :
 			<td><b>BMP2DCM.PAS</b></td>
 			<td>Cette commande permet de convertir une image BitMap (.BMP) en fichier DICOM (.DCM) Secondary Capture.</td>
 		</tr>
-
-
     <tr>
       <td><b>PAINT.PAS</b></td>
       <td>Cette commande permet de laner le programme de dessin Bitamp (Paint).</td>

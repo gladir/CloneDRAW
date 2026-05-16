@@ -1314,6 +1314,82 @@ Begin
  SaveBMP24 := True;
 End;
 
+{ ============================================================
+   PSD Save (Adobe Photoshop, Mode 3 RGB, 8 bits, no compression)
+  ============================================================ }
+
+Function SavePSD(Const FileName: String): Boolean;
+Var
+ F: File;
+ Hdr: Array[0..25] of Byte;
+ Sect: Array[0..3] of Byte;
+ Comp: Array[0..1] of Byte;
+ RowBuf: Array[0..4095] of Byte;
+ X, Y, Ch: Integer;
+ V: Byte;
+Begin
+ SavePSD := False;
+ If (ImgW < 1) Or (ImgH < 1) Or (ImgW > 4096) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
+
+ FillChar(Hdr, SizeOf(Hdr), 0);
+ { '8BPS' }
+ Hdr[0]:=$38; Hdr[1]:=$42; Hdr[2]:=$50; Hdr[3]:=$53;
+ { Version BE16 = 1 }
+ Hdr[4]:=0; Hdr[5]:=1;
+ { Reserved 6 zeros : Hdr[6..11] }
+ { NumChans BE16 = 3 }
+ Hdr[12]:=0; Hdr[13]:=3;
+ { Height BE32 }
+ Hdr[14] := Byte((LongInt(ImgH) Shr 24) And $FF);
+ Hdr[15] := Byte((LongInt(ImgH) Shr 16) And $FF);
+ Hdr[16] := Byte((LongInt(ImgH) Shr 8) And $FF);
+ Hdr[17] := Byte(LongInt(ImgH) And $FF);
+ { Width BE32 }
+ Hdr[18] := Byte((LongInt(ImgW) Shr 24) And $FF);
+ Hdr[19] := Byte((LongInt(ImgW) Shr 16) And $FF);
+ Hdr[20] := Byte((LongInt(ImgW) Shr 8) And $FF);
+ Hdr[21] := Byte(LongInt(ImgW) And $FF);
+ { Depth BE16 = 8 }
+ Hdr[22]:=0; Hdr[23]:=8;
+ { ColorMode BE16 = 3 (RGB) }
+ Hdr[24]:=0; Hdr[25]:=3;
+ BlockWrite(F, Hdr, 26);
+
+ { Color Mode Data : longueur 0 }
+ FillChar(Sect, 4, 0); BlockWrite(F, Sect, 4);
+ { Image Resources : longueur 0 }
+ BlockWrite(F, Sect, 4);
+ { Layer and Mask Info : longueur 0 }
+ BlockWrite(F, Sect, 4);
+
+ { Compression BE16 = 0 (raw) }
+ Comp[0]:=0; Comp[1]:=0;
+ BlockWrite(F, Comp, 2);
+
+ { Donnees planaires : R complet, puis G complet, puis B complet }
+ For Ch := 0 To 2 Do
+  For Y := 0 To ImgH-1 Do Begin
+   For X := 0 To ImgW-1 Do Begin
+    V := Composite(X, Y);
+    If V=255 Then V:=15;
+    If V>15 Then V:=0;
+    Case Ch Of
+     0: RowBuf[X] := VGA_R[V];
+     1: RowBuf[X] := VGA_G[V];
+     2: RowBuf[X] := VGA_B[V];
+    End;
+   End;
+   BlockWrite(F, RowBuf, ImgW);
+  End;
+
+ Close(F);
+ SavePSD := True;
+End;
+
 Function LoadBMP(Const FileName: String): Boolean;
 Var
  F: File;
@@ -4747,14 +4823,22 @@ Begin
  End;
 End;
 
+Function SaveByExt(Const FN: String): Boolean;
+Var Ext: String;
+Begin
+ Ext := ExtractExt(FN);
+ If Ext = '.PSD' Then SaveByExt := SavePSD(FN)
+ Else SaveByExt := SaveBMP24(FN);
+End;
+
 Procedure SaveAsAction;
 Var FN: String;
 Begin
  FN := CurrentFileName;
  If FN='' Then FN := 'image.bmp';
- If PromptStr('Enregistrer sous', 'Nom du fichier .BMP :', FN) Then Begin
+ If PromptStr('Enregistrer sous', 'Nom du fichier (.BMP ou .PSD) :', FN) Then Begin
   If ExtractExt(FN)='' Then FN := FN + '.bmp';
-  If SaveBMP24(FN) Then Begin
+  If SaveByExt(FN) Then Begin
    CurrentFileName := FN;
    ImageModified := False;
    FI_SaveSidecar(FN);
@@ -4766,7 +4850,7 @@ End;
 Procedure SaveAction;
 Begin
  If CurrentFileName='' Then SaveAsAction
- Else If SaveBMP24(CurrentFileName) Then Begin
+ Else If SaveByExt(CurrentFileName) Then Begin
   ImageModified := False;
   FI_SaveSidecar(CurrentFileName);
  End

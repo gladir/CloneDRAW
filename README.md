@@ -1,6 +1,18 @@
 # CloneDRAW
 Suite de programme de dessin en Pascal (Turbo Pascal/Free Pascal)
 
+Apercu de AUTOCAD :
+
+<img width="642" height="482" alt="image" src="https://github.com/user-attachments/assets/2628f44b-b358-4ced-9eb7-591b17ead65c" />
+
+Apercu de PAINT :
+
+<img width="641" height="480" alt="image" src="https://github.com/user-attachments/assets/a9503152-d653-4fd0-9e35-14865e377008" />
+
+Apercu de VISIO :
+
+<img width="640" height="481" alt="image" src="https://github.com/user-attachments/assets/c626c543-6380-4c46-8035-a4d8a92014f7" />
+
 <h2>Liste des fichiers</h2>
 
 Voici la liste des différents fichiers proposés dans CloneDRAW :

@@ -2971,6 +2971,234 @@ Begin
  LoadPCX := True;
 End;
 
+{ ------------------------------------------------------------
+   LoadPSD : Adobe Photoshop natif
+   - Signature "8BPS", version 1
+   - Profondeur 8 bits
+   - Modes : 1=Grayscale, 2=Indexed (palette 768o), 3=RGB
+   - Compression : 0=brut, 1=PackBits RLE
+   - Image composite seulement (layers ignores)
+  ------------------------------------------------------------ }
+
+{$PUSH}{$R-}
+Function LoadPSD(Const FileName: String): Boolean;
+Type
+ PByteArr = ^TByteArr;
+ TByteArr = Array[0..1048575] of Byte;
+Var
+ F: File;
+ BytesRead: Word;
+ Sig: Array[0..3] of Byte;
+ Buf2: Array[0..1] of Byte;
+ Buf4: Array[0..3] of Byte;
+ Skip6: Array[0..5] of Byte;
+ Version, NumChanFile, Depth, ColorMode, Compression: Word;
+ PW, PH: LongInt;
+ SectLen: LongInt;
+ PSDPal: Array[0..767] of Byte;
+ HasPal: Boolean;
+ ChanBuf: Array[0..2] of PByteArr;
+ ChanNeed: Integer;
+ X, Y, I, C, Best: Integer;
+ R, G, B, Vidx, PalIdx: Byte;
+ DR, DG, DB, Dist, BestDist: LongInt;
+ PalRemap: Array[0..255] of Byte;
+ RowCountsPtr: PByteArr;
+ RowCountBytes: LongInt;
+ RowIdx, ChannelIdx: Integer;
+ EncLen: Word;
+ PixOff: LongInt;
+ LineBuf: PByteArr;
+ ChanBytes: LongInt;
+
+ Function ReadBE16: Word;
+ Begin
+  BlockRead(F, Buf2, 2, BytesRead);
+  ReadBE16 := (Word(Buf2[0]) Shl 8) Or Word(Buf2[1]);
+ End;
+
+ Function ReadBE32: LongInt;
+ Begin
+  BlockRead(F, Buf4, 4, BytesRead);
+  ReadBE32 := (LongInt(Buf4[0]) Shl 24) Or (LongInt(Buf4[1]) Shl 16) Or
+              (LongInt(Buf4[2]) Shl 8) Or LongInt(Buf4[3]);
+ End;
+
+ Procedure DecodeRLERow(ByteCount: Word; Dest: PByteArr; OutW: LongInt);
+ Var RP: LongInt; OutPos: LongInt; N, J: Integer; RH, Bv: Byte;
+ Begin
+  RP := 0; OutPos := 0;
+  While (RP < ByteCount) And (OutPos < OutW) Do Begin
+   BlockRead(F, RH, 1, BytesRead); Inc(RP);
+   If RH < 128 Then Begin
+    N := Integer(RH) + 1;
+    For J := 0 To N-1 Do Begin
+     BlockRead(F, Bv, 1, BytesRead); Inc(RP);
+     If OutPos < OutW Then Begin Dest^[OutPos] := Bv; Inc(OutPos); End;
+    End;
+   End Else If RH > 128 Then Begin
+    N := 257 - Integer(RH);
+    BlockRead(F, Bv, 1, BytesRead); Inc(RP);
+    For J := 0 To N-1 Do Begin
+     If OutPos < OutW Then Begin Dest^[OutPos] := Bv; Inc(OutPos); End;
+    End;
+   End;
+   { RH = 128 : no-op selon spec PackBits }
+  End;
+ End;
+
+Begin
+ LoadPSD := False;
+ ChanBuf[0] := Nil; ChanBuf[1] := Nil; ChanBuf[2] := Nil;
+ RowCountsPtr := Nil; LineBuf := Nil; ChanBytes := 0;
+ RowCountBytes := 0;
+ Assign(F, FileName);
+ {$I-} Reset(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
+
+ BlockRead(F, Sig, 4, BytesRead);
+ If (BytesRead<>4) Or (Sig[0]<>$38) Or (Sig[1]<>$42) Or
+    (Sig[2]<>$50) Or (Sig[3]<>$53) Then Begin Close(F); Exit; End;
+
+ Version := ReadBE16;
+ If Version <> 1 Then Begin Close(F); Exit; End;
+
+ BlockRead(F, Skip6, 6, BytesRead);
+ NumChanFile := ReadBE16;
+ PH := ReadBE32;
+ PW := ReadBE32;
+ Depth := ReadBE16;
+ ColorMode := ReadBE16;
+
+ If Depth <> 8 Then Begin Close(F); Exit; End;
+ If (ColorMode <> 1) And (ColorMode <> 2) And (ColorMode <> 3) Then Begin Close(F); Exit; End;
+ If (PW < 1) Or (PH < 1) Or (NumChanFile < 1) Or (NumChanFile > 56) Then Begin Close(F); Exit; End;
+
+ { Color Mode Data }
+ SectLen := ReadBE32;
+ HasPal := False;
+ If (ColorMode = 2) And (SectLen = 768) Then Begin
+  BlockRead(F, PSDPal, 768, BytesRead);
+  HasPal := True;
+ End Else If SectLen > 0 Then
+  Seek(F, FilePos(F) + SectLen);
+
+ { Image Resources }
+ SectLen := ReadBE32;
+ If SectLen > 0 Then Seek(F, FilePos(F) + SectLen);
+
+ { Layer and Mask Information }
+ SectLen := ReadBE32;
+ If SectLen > 0 Then Seek(F, FilePos(F) + SectLen);
+
+ { Image Data : composite global }
+ Compression := ReadBE16;
+ If (Compression <> 0) And (Compression <> 1) Then Begin Close(F); Exit; End;
+
+ If PW > 1024 Then PW := 1024;
+ If PH > 1024 Then PH := 1024;
+
+ If ColorMode = 3 Then ChanNeed := 3 Else ChanNeed := 1;
+ If NumChanFile < ChanNeed Then Begin Close(F); Exit; End;
+
+ GetMem(LineBuf, PW + 16);
+ ChanBytes := PW * PH;
+ For I := 0 To ChanNeed-1 Do GetMem(ChanBuf[I], ChanBytes);
+
+ If Compression = 1 Then Begin
+  RowCountBytes := LongInt(PH) * NumChanFile * 2;
+  GetMem(RowCountsPtr, RowCountBytes);
+  BlockRead(F, RowCountsPtr^, RowCountBytes, BytesRead);
+ End;
+
+ For ChannelIdx := 0 To NumChanFile - 1 Do
+  For RowIdx := 0 To PH - 1 Do Begin
+   If Compression = 0 Then Begin
+    BlockRead(F, LineBuf^, PW, BytesRead);
+   End Else Begin
+    PixOff := (LongInt(ChannelIdx) * PH + RowIdx) * 2;
+    EncLen := (Word(RowCountsPtr^[PixOff]) Shl 8) Or Word(RowCountsPtr^[PixOff+1]);
+    DecodeRLERow(EncLen, LineBuf, PW);
+   End;
+   If ChannelIdx < ChanNeed Then
+    Move(LineBuf^, ChanBuf[ChannelIdx]^[LongInt(RowIdx) * PW], PW);
+  End;
+
+ Close(F);
+
+ { Palette indexed (PSD : 256 R puis 256 G puis 256 B) }
+ If (ColorMode = 2) And HasPal Then Begin
+  For I := 0 To 255 Do Begin
+   R := PSDPal[I]; G := PSDPal[256+I]; B := PSDPal[512+I];
+   Best := 0; BestDist := MaxLongInt;
+   For C := 0 To 15 Do Begin
+    DR := LongInt(R) - VGA_R[C];
+    DG := LongInt(G) - VGA_G[C];
+    DB := LongInt(B) - VGA_B[C];
+    Dist := DR*DR + DG*DG + DB*DB;
+    If Dist < BestDist Then Begin BestDist := Dist; Best := C; End;
+   End;
+   PalRemap[I] := Byte(Best);
+  End;
+ End;
+
+ { Redimensionner si necessaire }
+ If (PW <> ImgW) Or (PH <> ImgH) Then Begin
+  For I := 0 To MAX_LAYERS-1 Do If Layers[I].Used Then FreeLayer(I);
+  ImgW := PW; ImgH := PH;
+  AllocLayer(0, 'Arriere-plan', False);
+  LayerCount := 1; ActiveLayer := 0;
+ End;
+
+ For Y := 0 To PH - 1 Do
+  For X := 0 To PW - 1 Do Begin
+   Vidx := 0;
+   Case ColorMode Of
+    1: Begin
+     R := ChanBuf[0]^[LongInt(Y)*PW + X]; G := R; B := R;
+     Best := 0; BestDist := MaxLongInt;
+     For C := 0 To 15 Do Begin
+      DR := LongInt(R) - VGA_R[C];
+      DG := LongInt(G) - VGA_G[C];
+      DB := LongInt(B) - VGA_B[C];
+      Dist := DR*DR + DG*DG + DB*DB;
+      If Dist < BestDist Then Begin BestDist := Dist; Best := C; End;
+     End;
+     Vidx := Byte(Best);
+    End;
+    2: Begin
+     PalIdx := ChanBuf[0]^[LongInt(Y)*PW + X];
+     If HasPal Then Vidx := PalRemap[PalIdx] Else Vidx := PalIdx And 15;
+    End;
+    3: Begin
+     R := ChanBuf[0]^[LongInt(Y)*PW + X];
+     G := ChanBuf[1]^[LongInt(Y)*PW + X];
+     B := ChanBuf[2]^[LongInt(Y)*PW + X];
+     Best := 0; BestDist := MaxLongInt;
+     For C := 0 To 15 Do Begin
+      DR := LongInt(R) - VGA_R[C];
+      DG := LongInt(G) - VGA_G[C];
+      DB := LongInt(B) - VGA_B[C];
+      Dist := DR*DR + DG*DG + DB*DB;
+      If Dist < BestDist Then Begin BestDist := Dist; Best := C; End;
+     End;
+     Vidx := Byte(Best);
+    End;
+   End;
+   SetLayerPixel(ActiveLayer, X, Y, Vidx);
+  End;
+
+ For I := 0 To ChanNeed-1 Do
+  If ChanBuf[I] <> Nil Then FreeMem(ChanBuf[I], ChanBytes);
+ If LineBuf <> Nil Then FreeMem(LineBuf, PW + 16);
+ If RowCountsPtr <> Nil Then FreeMem(RowCountsPtr, RowCountBytes);
+
+ CurrentFileName := FileName;
+ ImageModified := False;
+ LoadPSD := True;
+End;
+{$POP}
+
 { ============================================================
    Dialogues
   ============================================================ }
@@ -3229,6 +3457,8 @@ Begin
   FI_FormatName := 'Truevision Targa'
  Else If (Ext = 'TIF') Or (Ext = 'TIFF') Then
   FI_FormatName := 'Tagged Image File Format'
+ Else If Ext = 'PSD' Then
+  FI_FormatName := 'Adobe Photoshop Document'
  Else If Ext = '' Then
   FI_FormatName := '(aucun)'
  Else
@@ -3845,7 +4075,7 @@ End;
 Const
  FD_MAXENT = 256;
  FD_ROWH   = 10;
- FD_NUM_FILTERS = 9;
+ FD_NUM_FILTERS = 10;
  FD_FILTER_LABELS: Array[0..FD_NUM_FILTERS-1] of String[36] = (
   'Tous formats images',
   'BMP (*.BMP;*.DIB)',
@@ -3855,6 +4085,7 @@ Const
   'PCX (*.PCX)',
   'TGA (*.TGA)',
   'TIFF (*.TIF;*.TIFF)',
+  'PSD (*.PSD)',
   'Tous fichiers (*.*)' );
 
 Type
@@ -3886,7 +4117,7 @@ Begin
  Case FD_FilterIdx Of
   0: FD_ExtMatches := (E='.BMP') Or (E='.DIB') Or (E='.GIF') Or (E='.PNG') Or
                       (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or
-                      (E='.TIF') Or (E='.TIFF');
+                      (E='.TIF') Or (E='.TIFF') Or (E='.PSD');
   1: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
   2: FD_ExtMatches := E='.GIF';
   3: FD_ExtMatches := E='.PNG';
@@ -3894,7 +4125,8 @@ Begin
   5: FD_ExtMatches := E='.PCX';
   6: FD_ExtMatches := E='.TGA';
   7: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
-  8: FD_ExtMatches := True;
+  8: FD_ExtMatches := E='.PSD';
+  9: FD_ExtMatches := True;
  Else FD_ExtMatches := False; End;
 End;
 
@@ -4326,8 +4558,7 @@ Begin
    If (MX>=DirX1) And (MX<=DirX2) And (MY>=DirY1) And (MY<=DirY2) Then Begin
     Idx := FD_TopDir + (MY - DirY1 - 2) Div FD_ROWH;
     If (Idx >= 0) And (Idx < FD_NDirs) Then Begin
-     If (FD_Focus = 0) And (Idx = FD_SelDir) Then DoActivate
-     Else Begin FD_SelDir := Idx; FD_Focus := 0; RedrawAll; End;
+     FD_SelDir := Idx; FD_Focus := 0; RedrawAll; DoActivate;
     End Else Begin FD_Focus := 0; RedrawAll; End;
    End
    Else If (MX>=FilX1) And (MX<=FilX2) And (MY>=FilY1) And (MY<=FilY2) Then Begin
@@ -4384,6 +4615,10 @@ Begin
   End
   Else If Ext='.PCX' Then Begin
    If LoadPCX(FN) Then Loaded := True
+   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
+  End
+  Else If Ext='.PSD' Then Begin
+   If LoadPSD(FN) Then Loaded := True
    Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
   End
   Else If (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then

@@ -188,6 +188,12 @@ Var
  Drawing: Boolean;
  StartX, StartY, EndX, EndY: Integer;
 
+ PreviewActive: Boolean;
+ PrevX1, PrevY1, PrevX2, PrevY2: Integer;
+ PrevTool: Integer;
+
+ BatchDrawing: Boolean;
+
  UndoBuffers: Array[0..MAX_UNDO_LEVELS-1] of PByteArr;
  UndoCount: Integer;
 
@@ -911,7 +917,7 @@ Begin
  ImgToScreen(IX, IY, SX, SY);
  Z := ZoomLevel Div 100;
  If Z<1 Then Z:=1;
- HideMouseCursor;
+ If Not BatchDrawing Then HideMouseCursor;
  If Z=1 Then Begin
   If Color=255 Then PutPixel(SX, SY, White) Else PutPixel(SX, SY, Color);
  End Else Begin
@@ -920,7 +926,7 @@ Begin
     If Color=255 Then PutPixel(SX+DX, SY+DY, White)
                  Else PutPixel(SX+DX, SY+DY, Color);
  End;
- ShowMouseCursor;
+ If Not BatchDrawing Then ShowMouseCursor;
 End;
 
 { ============================================================
@@ -1061,13 +1067,15 @@ End;
   ============================================================ }
 
 Procedure FilterInvert;
-Var X, Y: Integer; V: Byte;
+Var X, Y: Integer; V, NV: Byte;
 Begin
  PushUndo;
  For Y:=0 To ImgH-1 Do
   For X:=0 To ImgW-1 Do Begin
    V := GetLayerPixel(ActiveLayer, X, Y);
-   If V<>255 Then SetLayerPixel(ActiveLayer, X, Y, 15 - (V And 15));
+   If V=255 Then Continue;
+   If V>15 Then NV := 15 Else NV := Byte(15 - V);
+   SetLayerPixel(ActiveLayer, X, Y, NV);
   End;
  ImageModified := True;
 End;
@@ -1797,6 +1805,40 @@ End;
    Gestion souris : clic/drag/release
   ============================================================ }
 
+Procedure RubberBandDraw(X1, Y1, X2, Y2, ToolKind: Integer);
+Var L, T, R, B, CX, CY, RX, RY: Integer;
+Begin
+ SetWriteMode(XORPut);
+ SetLineStyle(DottedLn, 0, NormWidth);
+ SetColor(White);
+ Case ToolKind Of
+  TOOL_LINE: Line(X1, Y1, X2, Y2);
+  TOOL_RECT, TOOL_SHAPE, TOOL_MARQUEE: Begin
+   L := Min(X1, X2); T := Min(Y1, Y2);
+   R := Max(X1, X2); B := Max(Y1, Y2);
+   Rectangle(L, T, R, B);
+  End;
+  TOOL_ELLIPSE: Begin
+   CX := (X1 + X2) Div 2; CY := (Y1 + Y2) Div 2;
+   RX := Abs(X2 - X1) Div 2; RY := Abs(Y2 - Y1) Div 2;
+   If RX < 1 Then RX := 1;
+   If RY < 1 Then RY := 1;
+   Ellipse(CX, CY, 0, 360, RX, RY);
+  End;
+ End;
+ SetWriteMode(NormalPut);
+ SetLineStyle(SolidLn, 0, NormWidth);
+End;
+
+Procedure ClearRubberBand;
+Begin
+ If Not PreviewActive Then Exit;
+ HideMouseCursor;
+ RubberBandDraw(PrevX1, PrevY1, PrevX2, PrevY2, PrevTool);
+ ShowMouseCursor;
+ PreviewActive := False;
+End;
+
 Procedure HandleCanvasPress(SX, SY: Integer);
 Var IX, IY: Integer;
 Begin
@@ -1820,23 +1862,49 @@ Begin
    DrawFullUI;
    Drawing := False;
   End;
-  TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_SHAPE, TOOL_MARQUEE:
+  TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_SHAPE, TOOL_MARQUEE: Begin
    PushUndo;
+   PreviewActive := False;
+  End;
  End;
 End;
 
 Procedure HandleCanvasDrag(SX, SY: Integer);
-Var IX, IY: Integer;
+Var IX, IY, SX1, SY1, SX2, SY2: Integer;
 Begin
  If Not Drawing Then Exit;
  If Not ScreenToImg(SX, SY, IX, IY) Then Exit;
  EndX := IX; EndY := IY;
+ HideMouseCursor;
+ BatchDrawing := True;
  Case CurrentTool Of
-  TOOL_PENCIL: ImgLine(StartX, StartY, IX, IY, FgColor);
-  TOOL_BRUSH: Begin DrawWithBrush(IX, IY, FgColor); ImgLine(StartX, StartY, IX, IY, FgColor); End;
-  TOOL_ERASER: EraseAt(IX, IY);
+  TOOL_PENCIL: Begin
+   ImgLine(StartX, StartY, IX, IY, FgColor);
+   StartX := IX; StartY := IY;
+  End;
+  TOOL_BRUSH: Begin
+   DrawWithBrush(IX, IY, FgColor);
+   ImgLine(StartX, StartY, IX, IY, FgColor);
+   StartX := IX; StartY := IY;
+  End;
+  TOOL_ERASER: Begin
+   EraseAt(IX, IY);
+   StartX := IX; StartY := IY;
+  End;
+  TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_SHAPE, TOOL_MARQUEE: Begin
+   If PreviewActive Then
+    RubberBandDraw(PrevX1, PrevY1, PrevX2, PrevY2, PrevTool);
+   ImgToScreen(StartX, StartY, SX1, SY1);
+   ImgToScreen(IX, IY, SX2, SY2);
+   RubberBandDraw(SX1, SY1, SX2, SY2, CurrentTool);
+   PrevX1 := SX1; PrevY1 := SY1;
+   PrevX2 := SX2; PrevY2 := SY2;
+   PrevTool := CurrentTool;
+   PreviewActive := True;
+  End;
  End;
- StartX := IX; StartY := IY;
+ BatchDrawing := False;
+ ShowMouseCursor;
  DrawStatusBar;
 End;
 
@@ -1845,6 +1913,9 @@ Var IX, IY: Integer;
 Begin
  If Not Drawing Then Exit;
  If ScreenToImg(SX, SY, IX, IY) Then Begin EndX := IX; EndY := IY; End;
+ ClearRubberBand;
+ HideMouseCursor;
+ BatchDrawing := True;
  Case CurrentTool Of
   TOOL_LINE: ImgLine(StartX, StartY, EndX, EndY, FgColor);
   TOOL_RECT: ImgRect(StartX, StartY, EndX, EndY, FgColor, False);
@@ -1859,8 +1930,10 @@ Begin
    SelectionRect.B := Max(StartY, EndY);
   End;
  End;
+ BatchDrawing := False;
+ ShowMouseCursor;
  Drawing := False;
- RefreshCanvas;
+ DrawStatusBar;
 End;
 
 Procedure HandleClick(MX, MY: Integer);

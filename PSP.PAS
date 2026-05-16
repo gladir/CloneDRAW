@@ -1633,13 +1633,32 @@ Begin
  End;
 End;
 
+Function MenuDropdownWidth(MIdx: Integer): Integer;
+Var I, CapLen, ScLen, MaxCap, MaxSc, W: Integer;
+Begin
+ MaxCap := 0; MaxSc := 0;
+ For I:=0 To Menus[MIdx].ItemCount-1 Do Begin
+  If Menus[MIdx].Items[I].Separator Then Continue;
+  CapLen := Length(Menus[MIdx].Items[I].Caption);
+  ScLen  := Length(Menus[MIdx].Items[I].Shortcut);
+  If CapLen>MaxCap Then MaxCap := CapLen;
+  If ScLen >MaxSc  Then MaxSc  := ScLen;
+ End;
+ W := 8 + MaxCap*8 + 16;
+ If MaxSc>0 Then W := W + MaxSc*8 + 8;
+ If W<120 Then W := 120;
+ MenuDropdownWidth := W;
+End;
+
 Procedure DrawMenuDropdown(MIdx: Integer);
 Var
- X1, Y1, X2, Y2, ItemY, I: Integer;
+ X1, Y1, X2, Y2, ItemY, I, W, ScW: Integer;
 Begin
+ W := MenuDropdownWidth(MIdx);
  X1 := Menus[MIdx].X;
+ If X1 + W >= ScreenWidth Then X1 := ScreenWidth - W - 1;
  Y1 := MENUBAR_HEIGHT;
- X2 := X1 + 160;
+ X2 := X1 + W;
  Y2 := Y1 + Menus[MIdx].ItemCount*16 + 4;
  HideMouseCursor;
  FillRect(X1, Y1, X2, Y2, UI_BG_PANEL);
@@ -1656,8 +1675,10 @@ Begin
    End Else
     SetColor(UI_TEXT);
    OutTextXY(X1+8, ItemY+2, Menus[MIdx].Items[I].Caption);
-   If Menus[MIdx].Items[I].Shortcut<>'' Then
-    OutTextXY(X2-80, ItemY+2, Menus[MIdx].Items[I].Shortcut);
+   If Menus[MIdx].Items[I].Shortcut<>'' Then Begin
+    ScW := Length(Menus[MIdx].Items[I].Shortcut)*8;
+    OutTextXY(X2-ScW-8, ItemY+2, Menus[MIdx].Items[I].Shortcut);
+   End;
   End;
   ItemY := ItemY + 16;
  End;
@@ -1665,12 +1686,15 @@ Begin
 End;
 
 Function MenuItemHitTest(MX, MY: Integer): Integer;
-Var I, Y: Integer;
+Var I, Y, W, X1: Integer;
 Begin
  MenuItemHitTest := -1;
  If Not MenuActive Then Exit;
- If MX<Menus[ActiveMenu].X Then Exit;
- If MX>Menus[ActiveMenu].X+160 Then Exit;
+ W := MenuDropdownWidth(ActiveMenu);
+ X1 := Menus[ActiveMenu].X;
+ If X1 + W >= ScreenWidth Then X1 := ScreenWidth - W - 1;
+ If MX<X1 Then Exit;
+ If MX>X1+W Then Exit;
  Y := MENUBAR_HEIGHT + 3;
  For I:=0 To Menus[ActiveMenu].ItemCount-1 Do Begin
   If Menus[ActiveMenu].Items[I].Separator Then Begin
@@ -1738,6 +1762,34 @@ Begin
    LayerHitTest := I; Exit;
   End;
   Y := Y + 20;
+ End;
+End;
+
+Procedure MenuSwitch(NewMenu: Integer);
+Begin
+ If (NewMenu<0) Or (NewMenu>=NUM_MENUS) Then Exit;
+ If NewMenu=ActiveMenu Then Exit;
+ ActiveMenu := NewMenu;
+ ActiveMenuItem := -1;
+ DrawFullUI;
+ DrawMenuDropdown(ActiveMenu);
+End;
+
+Procedure MenuNextItem(Step: Integer);
+Var N, I: Integer;
+Begin
+ If (ActiveMenu<0) Or (ActiveMenu>=NUM_MENUS) Then Exit;
+ N := Menus[ActiveMenu].ItemCount;
+ If N<=0 Then Exit;
+ If ActiveMenuItem<0 Then Begin
+  If Step>0 Then ActiveMenuItem := -1
+            Else ActiveMenuItem := N;
+ End;
+ For I:=1 To N Do Begin
+  ActiveMenuItem := ActiveMenuItem + Step;
+  If ActiveMenuItem<0 Then ActiveMenuItem := N-1;
+  If ActiveMenuItem>=N Then ActiveMenuItem := 0;
+  If Not Menus[ActiveMenu].Items[ActiveMenuItem].Separator Then Exit;
  End;
 End;
 
@@ -1876,7 +1928,7 @@ End;
 Procedure HandleMouseEvent;
 Var
  LB, OldLB: Boolean;
- IIdx: Integer;
+ IIdx, BarHit: Integer;
 Begin
  OldMouseX := MouseX;
  OldMouseY := MouseY;
@@ -1886,11 +1938,16 @@ Begin
  LB := (MouseButtons And 1)<>0;
  OldLB := (OldMouseButtons And 1)<>0;
 
- If MenuActive Then Begin
-  IIdx := MenuItemHitTest(MouseX, MouseY);
-  If IIdx<>ActiveMenuItem Then Begin
-   ActiveMenuItem := IIdx;
-   DrawMenuDropdown(ActiveMenu);
+ If MenuActive And ((MouseX<>OldMouseX) Or (MouseY<>OldMouseY)) Then Begin
+  BarHit := MenuBarHitTest(MouseX, MouseY);
+  If (BarHit>=0) And (BarHit<>ActiveMenu) Then Begin
+   MenuSwitch(BarHit);
+  End Else Begin
+   IIdx := MenuItemHitTest(MouseX, MouseY);
+   If IIdx<>ActiveMenuItem Then Begin
+    ActiveMenuItem := IIdx;
+    DrawMenuDropdown(ActiveMenu);
+   End;
   End;
  End;
 
@@ -1946,9 +2003,23 @@ Begin
  Ch := ReadKey;
  If Ch=#0 Then Begin
   Ch2 := ReadKey;
+  If MenuActive Then Begin
+   Case Ch2 Of
+    #72: Begin MenuNextItem(-1); DrawMenuDropdown(ActiveMenu); Exit; End;
+    #80: Begin MenuNextItem(+1); DrawMenuDropdown(ActiveMenu); Exit; End;
+    #75: Begin MenuSwitch((ActiveMenu + NUM_MENUS - 1) Mod NUM_MENUS); Exit; End;
+    #77: Begin MenuSwitch((ActiveMenu + 1) Mod NUM_MENUS); Exit; End;
+   End;
+  End;
   Case Ch2 Of
    #59: ShowDialog('Aide', 'V/M/B/E/G/K - Outils. [ ] - Taille pinceau. + - Zoom.');
-   #68: Begin DrawLayersPanel; End;
+   #68: Begin
+    MenuActive := True;
+    ActiveMenu := MENU_FILE;
+    ActiveMenuItem := -1;
+    DrawFullUI;
+    DrawMenuDropdown(ActiveMenu);
+   End;
   End;
   Exit;
  End;
@@ -1956,6 +2027,11 @@ Begin
   #27: Begin
    If MenuActive Then Begin MenuActive := False; DrawFullUI; End
    Else Running := False;
+  End;
+  #13: Begin
+   If MenuActive And (ActiveMenuItem>=0) Then
+    If Not Menus[ActiveMenu].Items[ActiveMenuItem].Separator Then
+     HandleMenuClick(ActiveMenu, ActiveMenuItem);
   End;
   Else HandleKey(Ch);
  End;

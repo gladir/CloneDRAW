@@ -3109,6 +3109,649 @@ Begin
 End;
 
 { ============================================================
+   Info fichier - dialogue type Adobe Photoshop
+   ============================================================
+   Composition :
+   - Liste de categories a gauche (Basique, Donnees camera,
+     Origine, IPTC, GPS, Audio, Video, Photoshop, DICOM,
+     Donnees brutes).
+   - Panneau de champs editables (saisie clavier) ou en lecture
+     seule (auto-renseignes : nom, format, dimensions, taille,
+     date du fichier...).
+   - Boutons OK / Annuler.
+   - Navigation clavier : Tab/Maj+Tab entre champs editables,
+     fleches haut/bas pour changer de categorie, Suppr pour vider
+     un champ, Enter=OK, Esc=Annuler.
+   - Souris : clic categorie a gauche, clic champ a droite,
+     clic boutons en bas.
+  ============================================================ }
+
+Const
+ FI_DLG_W        = 600;
+ FI_DLG_H        = 430;
+ FI_LIST_W       = 134;
+ FI_ROW_H        = 22;
+ FI_FIELDLABEL_W = 132;
+ FI_CAT_COUNT    = 10;
+ FI_MAX_FIELDS   = 16;
+ FI_VALUE_MAX    = 80;
+
+Type
+ TFI_Field = Record
+  Lbl     : String[28];
+  Value   : String[FI_VALUE_MAX];
+  Editable: Boolean;
+ End;
+
+ TFI_Category = Record
+  Name  : String[24];
+  Count : Byte;
+  Fields: Array[0..FI_MAX_FIELDS-1] of TFI_Field;
+ End;
+
+Var
+ FICats   : Array[0..FI_CAT_COUNT-1] of TFI_Category;
+ FICurCat : Integer;
+ FIFocus  : Integer;
+ FIScroll : Integer;
+ FIDirty  : Boolean;
+ FIInit   : Boolean;
+ FIX1, FIY1, FIX2, FIY2     : Integer;
+ FILX1, FILY1, FILX2, FILY2 : Integer;
+ FIRX1, FIRY1, FIRX2, FIRY2 : Integer;
+ FIOKx1, FIOKy1, FIOKx2, FIOKy2 : Integer;
+ FICX1, FICY1, FICX2, FICY2     : Integer;
+
+Procedure FI_AddField(Cat: Integer; Const L, V: String; Edit: Boolean);
+Var N: Integer;
+Begin
+ N := FICats[Cat].Count;
+ If N >= FI_MAX_FIELDS Then Exit;
+ FICats[Cat].Fields[N].Lbl := L;
+ FICats[Cat].Fields[N].Value := V;
+ FICats[Cat].Fields[N].Editable := Edit;
+ FICats[Cat].Count := N + 1;
+End;
+
+Procedure FI_ResetCategories;
+Var I: Integer;
+Begin
+ For I := 0 To FI_CAT_COUNT-1 Do FICats[I].Count := 0;
+End;
+
+Function FI_FileSizeStr(Sz: LongInt): String;
+Var Frac: LongInt;
+Begin
+ If Sz < 1024 Then
+  FI_FileSizeStr := IntToStr(Sz) + ' octets'
+ Else If Sz < 1048576 Then Begin
+  Frac := (Sz * 10) Div 1024;
+  FI_FileSizeStr := IntToStr(Frac Div 10) + ',' + IntToStr(Frac Mod 10) + ' Ko';
+ End Else Begin
+  Frac := (Sz Div 1024 * 10) Div 1024;
+  FI_FileSizeStr := IntToStr(Frac Div 10) + ',' + IntToStr(Frac Mod 10) + ' Mo';
+ End;
+End;
+
+Function FI_TwoDig(N: Integer): String;
+Var S: String;
+Begin
+ S := IntToStr(N);
+ If Length(S) < 2 Then S := '0' + S;
+ FI_TwoDig := S;
+End;
+
+Function FI_UpperExt(Const Fn: String): String;
+Var I, DotPos: Integer; E: String;
+Begin
+ DotPos := 0;
+ For I := Length(Fn) DownTo 1 Do
+  If Fn[I] = '.' Then Begin DotPos := I; Break; End;
+ If DotPos = 0 Then Begin FI_UpperExt := ''; Exit; End;
+ E := Copy(Fn, DotPos + 1, 8);
+ For I := 1 To Length(E) Do E[I] := UpCase(E[I]);
+ FI_UpperExt := E;
+End;
+
+Function FI_FormatName(Const Ext: String): String;
+Begin
+ If (Ext = 'JPG') Or (Ext = 'JPEG') Then
+  FI_FormatName := 'JPEG (Joint Photographic Experts Group)'
+ Else If Ext = 'PNG' Then
+  FI_FormatName := 'PNG (Portable Network Graphics)'
+ Else If Ext = 'GIF' Then
+  FI_FormatName := 'GIF (Graphics Interchange Format)'
+ Else If (Ext = 'BMP') Or (Ext = 'DIB') Then
+  FI_FormatName := 'Windows Bitmap'
+ Else If Ext = 'PCX' Then
+  FI_FormatName := 'ZSoft PCX'
+ Else If Ext = 'TGA' Then
+  FI_FormatName := 'Truevision Targa'
+ Else If (Ext = 'TIF') Or (Ext = 'TIFF') Then
+  FI_FormatName := 'Tagged Image File Format'
+ Else If Ext = '' Then
+  FI_FormatName := '(aucun)'
+ Else
+  FI_FormatName := Ext;
+End;
+
+Procedure FI_InitDefaults;
+Begin
+ { 0 : General }
+ FICats[0].Name := 'General';
+ FI_AddField(0, 'Titre du document',     '',         True);
+ FI_AddField(0, 'Auteur',                '',         True);
+ FI_AddField(0, 'Titre auteur',          '',         True);
+ FI_AddField(0, 'Description',           '',         True);
+ FI_AddField(0, 'Mots-cles',             '',         True);
+ FI_AddField(0, 'Note',                  '0',        True);
+ FI_AddField(0, 'Redacteur description', '',         True);
+ FI_AddField(0, 'Statut copyright',      'Inconnu',  True);
+ FI_AddField(0, 'Avis copyright',        '',         True);
+ FI_AddField(0, 'URL copyright',         '',         True);
+
+ { 1 : Donnees camera }
+ FICats[1].Name := 'Donnees camera';
+ FI_AddField(1, 'Marque',                '',         True);
+ FI_AddField(1, 'Modele',                '',         True);
+ FI_AddField(1, 'Date/heure prise',      '',         True);
+ FI_AddField(1, 'Vitesse obturation',    '',         True);
+ FI_AddField(1, 'Ouverture',             '',         True);
+ FI_AddField(1, 'ISO',                   '',         True);
+ FI_AddField(1, 'Distance focale',       '',         True);
+ FI_AddField(1, 'Flash',                 'Non',      True);
+ FI_AddField(1, 'Mode mesure',           '',         True);
+ FI_AddField(1, 'Balance des blancs',    'Auto',     True);
+ FI_AddField(1, 'Compensation expo',     '0 EV',     True);
+
+ { 2 : Origine }
+ FICats[2].Name := 'Origine';
+ FI_AddField(2, 'Date de creation',      '',         True);
+ FI_AddField(2, 'Ville',                 '',         True);
+ FI_AddField(2, 'Etat/Province',         '',         True);
+ FI_AddField(2, 'Pays',                  '',         True);
+ FI_AddField(2, 'Code postal',           '',         True);
+ FI_AddField(2, 'Source',                '',         True);
+ FI_AddField(2, 'Titre du travail',      '',         True);
+ FI_AddField(2, 'Instructions',          '',         True);
+ FI_AddField(2, 'Credit',                '',         True);
+
+ { 3 : IPTC }
+ FICats[3].Name := 'IPTC';
+ FI_AddField(3, 'Createur',              '',         True);
+ FI_AddField(3, 'Adresse createur',      '',         True);
+ FI_AddField(3, 'Ville createur',        '',         True);
+ FI_AddField(3, 'Etat/Province',         '',         True);
+ FI_AddField(3, 'Code postal',           '',         True);
+ FI_AddField(3, 'Pays',                  '',         True);
+ FI_AddField(3, 'Telephone',             '',         True);
+ FI_AddField(3, 'Courriel',              '',         True);
+ FI_AddField(3, 'Site web',              '',         True);
+ FI_AddField(3, 'Titre du poste',        '',         True);
+
+ { 4 : Donnees GPS }
+ FICats[4].Name := 'Donnees GPS';
+ FI_AddField(4, 'Latitude',              '',         True);
+ FI_AddField(4, 'Longitude',             '',         True);
+ FI_AddField(4, 'Altitude',              '',         True);
+ FI_AddField(4, 'Direction',             '',         True);
+ FI_AddField(4, 'Vitesse',               '',         True);
+ FI_AddField(4, 'Date/heure UTC',        '',         True);
+
+ { 5 : Donnees audio }
+ FICats[5].Name := 'Donnees audio';
+ FI_AddField(5, 'Artiste',               '',         True);
+ FI_AddField(5, 'Album',                 '',         True);
+ FI_AddField(5, 'Piste',                 '',         True);
+ FI_AddField(5, 'Genre',                 '',         True);
+ FI_AddField(5, 'Annee',                 '',         True);
+ FI_AddField(5, 'Compositeur',           '',         True);
+
+ { 6 : Donnees video }
+ FICats[6].Name := 'Donnees video';
+ FI_AddField(6, 'Codec',                 '',         True);
+ FI_AddField(6, 'Frequence images',      '',         True);
+ FI_AddField(6, 'Duree',                 '',         True);
+ FI_AddField(6, 'Realisateur',           '',         True);
+ FI_AddField(6, 'Camera',                '',         True);
+
+ { 7 : Photoshop }
+ FICats[7].Name := 'Photoshop';
+ FI_AddField(7, 'Categorie',             '',         True);
+ FI_AddField(7, 'Mots-cles supp.',       '',         True);
+ FI_AddField(7, 'Urgence',               '0',        True);
+ FI_AddField(7, 'Instructions',          '',         True);
+
+ { 8 : DICOM }
+ FICats[8].Name := 'DICOM';
+ FI_AddField(8, 'Patient ID',            '',         True);
+ FI_AddField(8, 'Nom patient',           '',         True);
+ FI_AddField(8, 'Sexe',                  '',         True);
+ FI_AddField(8, 'Date naissance',        '',         True);
+ FI_AddField(8, 'Description etude',     '',         True);
+ FI_AddField(8, 'Description serie',     '',         True);
+End;
+
+Procedure FI_ResetMetadata;
+Begin
+ FI_ResetCategories;
+ FIInit := False;
+End;
+
+Function FI_SidecarName(Const Fn: String): String;
+Begin
+ If Fn = '' Then FI_SidecarName := '' Else FI_SidecarName := Fn + '.meta';
+End;
+
+Procedure FI_SaveSidecar(Const Fn: String);
+Var Tf: Text; SF: String; C, Fld: Integer;
+    AnyVal: Boolean;
+Begin
+ SF := FI_SidecarName(Fn);
+ If SF = '' Then Exit;
+ If Not FIInit Then Exit;
+ AnyVal := False;
+ For C := 0 To FI_CAT_COUNT - 2 Do
+  For Fld := 0 To FICats[C].Count - 1 Do
+   If FICats[C].Fields[Fld].Editable Then
+    If FICats[C].Fields[Fld].Value <> '' Then Begin AnyVal := True; Break; End;
+ If Not AnyVal Then Exit;
+ Assign(Tf, SF);
+ {$I-} Rewrite(Tf); {$I+}
+ If IOResult <> 0 Then Exit;
+ Writeln(Tf, '# PSP metadata sidecar v1');
+ For C := 0 To FI_CAT_COUNT - 2 Do
+  For Fld := 0 To FICats[C].Count - 1 Do
+   If FICats[C].Fields[Fld].Editable Then
+    If FICats[C].Fields[Fld].Value <> '' Then
+     Writeln(Tf, IntToStr(C), '|', IntToStr(Fld), '=',
+             FICats[C].Fields[Fld].Value);
+ Close(Tf);
+End;
+
+Procedure FI_LoadSidecar(Const Fn: String);
+Var Tf: Text; SF, Line, NumStr, ValStr: String;
+    C, Fld, P, Q, Code: Integer;
+Begin
+ SF := FI_SidecarName(Fn);
+ If SF = '' Then Exit;
+ Assign(Tf, SF);
+ {$I-} Reset(Tf); {$I+}
+ If IOResult <> 0 Then Exit;
+ If Not FIInit Then Begin
+  FI_ResetCategories;
+  FI_InitDefaults;
+  FIInit := True;
+ End;
+ While Not Eof(Tf) Do Begin
+  {$I-} Readln(Tf, Line); {$I+}
+  If IOResult <> 0 Then Break;
+  If Line = '' Then Continue;
+  If Line[1] = '#' Then Continue;
+  P := Pos('|', Line);
+  Q := Pos('=', Line);
+  If (P = 0) Or (Q = 0) Or (P > Q) Then Continue;
+  NumStr := Copy(Line, 1, P - 1);
+  Val(NumStr, C, Code); If Code <> 0 Then Continue;
+  NumStr := Copy(Line, P + 1, Q - P - 1);
+  Val(NumStr, Fld, Code); If Code <> 0 Then Continue;
+  ValStr := Copy(Line, Q + 1, FI_VALUE_MAX);
+  If (C < 0) Or (C >= FI_CAT_COUNT - 1) Then Continue;
+  If (Fld < 0) Or (Fld >= FICats[C].Count) Then Continue;
+  If Not FICats[C].Fields[Fld].Editable Then Continue;
+  FICats[C].Fields[Fld].Value := ValStr;
+ End;
+ Close(Tf);
+End;
+
+Procedure FI_GatherInfo;
+Var SR: SearchRec; DT: DateTime;
+    FSize: LongInt;
+    FYr, FMo, FDy, FHr, FMn: Integer;
+    Ext: String;
+    Has: Boolean;
+Begin
+ If Not FIInit Then Begin
+  FI_ResetCategories;
+  FI_InitDefaults;
+  FIInit := True;
+ End;
+
+ { 9 : Donnees brutes (auto, lecture seule) - toujours regenere }
+ FICats[9].Count := 0;
+ FICats[9].Name := 'Donnees brutes';
+ If CurrentFileName = '' Then
+  FI_AddField(9, 'Nom du fichier',  '(sans titre)',   False)
+ Else
+  FI_AddField(9, 'Nom du fichier',  CurrentFileName,  False);
+
+ Ext := FI_UpperExt(CurrentFileName);
+ FI_AddField(9, 'Format',           FI_FormatName(Ext),  False);
+ FI_AddField(9, 'Largeur',          IntToStr(ImgW) + ' pixels', False);
+ FI_AddField(9, 'Hauteur',          IntToStr(ImgH) + ' pixels', False);
+ FI_AddField(9, 'Mode couleur',     'Indexe 16 (VGA)',          False);
+ FI_AddField(9, 'Profondeur',       '4 bits/pixel',             False);
+ FI_AddField(9, 'Calques',          IntToStr(LayerCount),       False);
+ FI_AddField(9, 'Resolution',       '72 dpi',                   False);
+
+ Has := False;
+ FSize := 0; FYr := 0; FMo := 0; FDy := 0; FHr := 0; FMn := 0;
+ If CurrentFileName <> '' Then Begin
+  FindFirst(CurrentFileName, AnyFile, SR);
+  If DosError = 0 Then Begin
+   FSize := SR.Size;
+   UnpackTime(SR.Time, DT);
+   FYr := DT.Year; FMo := DT.Month; FDy := DT.Day;
+   FHr := DT.Hour; FMn := DT.Min;
+   Has := True;
+  End;
+  FindClose(SR);
+ End;
+ If Has Then Begin
+  FI_AddField(9, 'Taille fichier', FI_FileSizeStr(FSize), False);
+  FI_AddField(9, 'Date modif.',
+   FI_TwoDig(FYr Mod 100) + '/' + FI_TwoDig(FMo) + '/' +
+   FI_TwoDig(FDy) + ' ' + FI_TwoDig(FHr) + ':' + FI_TwoDig(FMn), False);
+ End Else Begin
+  FI_AddField(9, 'Taille fichier', 'N/A', False);
+  FI_AddField(9, 'Date modif.',    'N/A', False);
+ End;
+
+ FIFocus := -1;
+ FIScroll := 0;
+ FIDirty := False;
+End;
+
+Procedure FI_FieldRect(FIdx: Integer; Var X1, Y1, X2, Y2: Integer);
+Begin
+ X1 := FIRX1 + 8 + FI_FIELDLABEL_W;
+ X2 := FIRX2 - 8;
+ Y1 := FIRY1 + 8 + FIdx * FI_ROW_H - FIScroll;
+ Y2 := Y1 + FI_ROW_H - 6;
+End;
+
+Procedure FI_DrawCategoryList;
+Var I, ItemY: Integer; Sel: Boolean;
+Begin
+ HideMouseCursor;
+ FillRect(FILX1, FILY1, FILX2, FILY2, UI_BG_DARK);
+ DrawBevel(FILX1, FILY1, FILX2, FILY2, False);
+ For I := 0 To FI_CAT_COUNT-1 Do Begin
+  ItemY := FILY1 + 4 + I * FI_ROW_H;
+  Sel := (I = FICurCat);
+  If Sel Then FillRect(FILX1+2, ItemY-2, FILX2-2, ItemY + FI_ROW_H - 4, UI_ACCENT);
+  SetColor(UI_TEXT_LITE);
+  OutTextXY(FILX1 + 6, ItemY + 3, FICats[I].Name);
+ End;
+ ShowMouseCursor;
+End;
+
+Procedure FI_DrawField(FIdx: Integer; Focused: Boolean);
+Var FX1, FY1, FX2, FY2: Integer;
+    BG: Byte; V: String; AvailW, CurPx: Integer;
+Begin
+ FI_FieldRect(FIdx, FX1, FY1, FX2, FY2);
+ If (FY2 < FIRY1 + 8) Or (FY1 > FIRY2 - 8) Then Exit;
+ HideMouseCursor;
+ { Etiquette }
+ FillRect(FIRX1 + 4, FY1, FX1 - 2, FY2, UI_BG_PANEL);
+ SetColor(UI_TEXT_LITE);
+ OutTextXY(FIRX1 + 10, FY1 + 4, FICats[FICurCat].Fields[FIdx].Lbl + ' :');
+ { Boite saisie }
+ If FICats[FICurCat].Fields[FIdx].Editable Then BG := White Else BG := UI_BG_DARK;
+ FillRect(FX1, FY1, FX2, FY2, BG);
+ DrawBevel(FX1, FY1, FX2, FY2, False);
+ If Focused Then Begin
+  SetColor(UI_ACCENT);
+  Rectangle(FX1 - 1, FY1 - 1, FX2 + 1, FY2 + 1);
+ End;
+ V := FICats[FICurCat].Fields[FIdx].Value;
+ AvailW := (FX2 - FX1 - 6) Div 8;
+ If AvailW < 1 Then AvailW := 1;
+ If Length(V) > AvailW Then V := Copy(V, Length(V) - AvailW + 1, AvailW);
+ If FICats[FICurCat].Fields[FIdx].Editable Then SetColor(UI_TEXT)
+                                          Else SetColor(UI_TEXT_LITE);
+ OutTextXY(FX1 + 4, FY1 + 4, V);
+ If Focused Then Begin
+  CurPx := FX1 + 4 + Length(V) * 8;
+  If CurPx > FX2 - 2 Then CurPx := FX2 - 2;
+  SetColor(UI_TEXT);
+  Line(CurPx, FY1 + 3, CurPx, FY2 - 3);
+ End;
+ ShowMouseCursor;
+End;
+
+Procedure FI_DrawFields;
+Var I: Integer;
+Begin
+ HideMouseCursor;
+ FillRect(FIRX1, FIRY1 - 16, FIRX2, FIRY1 - 2, UI_BG_PANEL);
+ FillRect(FIRX1, FIRY1, FIRX2, FIRY2, UI_BG_PANEL);
+ DrawBevel(FIRX1, FIRY1, FIRX2, FIRY2, False);
+ SetColor(UI_TEXT_LITE);
+ OutTextXY(FIRX1 + 4, FIRY1 - 12, 'Categorie : ' + FICats[FICurCat].Name);
+ ShowMouseCursor;
+ For I := 0 To FICats[FICurCat].Count - 1 Do
+  FI_DrawField(I, I = FIFocus);
+End;
+
+Procedure FI_DrawButtons(OkDown, CancelDown: Boolean);
+Begin
+ DrawDlgButton(FIOKx1, FIOKy1, FIOKx2, FIOKy2, 'OK',      OkDown);
+ DrawDlgButton(FICX1,  FICY1,  FICX2,  FICY2, 'Annuler', CancelDown);
+End;
+
+Procedure FI_DrawDialog;
+Var TitleStr: String;
+Begin
+ HideMouseCursor;
+ FillRect(FIX1, FIY1, FIX2, FIY2, UI_BG_PANEL);
+ DrawBevel(FIX1, FIY1, FIX2, FIY2, True);
+ FillRect(FIX1 + 1, FIY1 + 1, FIX2 - 1, FIY1 + 18, UI_BG_DARK);
+ SetColor(UI_TEXT_LITE);
+ TitleStr := 'Info fichier';
+ If CurrentFileName <> '' Then TitleStr := TitleStr + ' - ' + CurrentFileName;
+ OutTextXY(FIX1 + 8, FIY1 + 5, TitleStr);
+ SetColor(UI_TEXT);
+ OutTextXY(FIX1 + 12, FIY2 - 30,
+  'Tab/Maj-Tab: champ  Fleches: categorie  Suppr: vider');
+ ShowMouseCursor;
+ FI_DrawCategoryList;
+ FI_DrawFields;
+ FI_DrawButtons(False, False);
+End;
+
+Function FI_HitCategory(MX, MY: Integer): Integer;
+Var I, ItemY: Integer;
+Begin
+ FI_HitCategory := -1;
+ If (MX < FILX1) Or (MX > FILX2) Then Exit;
+ If (MY < FILY1) Or (MY > FILY2) Then Exit;
+ For I := 0 To FI_CAT_COUNT - 1 Do Begin
+  ItemY := FILY1 + 4 + I * FI_ROW_H;
+  If (MY >= ItemY - 2) And (MY <= ItemY + FI_ROW_H - 4) Then Begin
+   FI_HitCategory := I; Exit;
+  End;
+ End;
+End;
+
+Function FI_HitField(MX, MY: Integer): Integer;
+Var I, FX1, FY1, FX2, FY2: Integer;
+Begin
+ FI_HitField := -1;
+ For I := 0 To FICats[FICurCat].Count - 1 Do Begin
+  FI_FieldRect(I, FX1, FY1, FX2, FY2);
+  If (MX >= FX1) And (MX <= FX2) And (MY >= FY1) And (MY <= FY2) Then Begin
+   FI_HitField := I; Exit;
+  End;
+ End;
+End;
+
+Procedure FI_NextEditable(Dir: Integer);
+Var Idx, N, Tries: Integer;
+Begin
+ N := FICats[FICurCat].Count;
+ If N = 0 Then Exit;
+ If FIFocus < 0 Then Begin
+  If Dir > 0 Then Idx := 0 Else Idx := N - 1;
+ End Else Idx := FIFocus + Dir;
+ Tries := 0;
+ While Tries < N * 2 Do Begin
+  If Idx < 0 Then Idx := N - 1;
+  If Idx >= N Then Idx := 0;
+  If FICats[FICurCat].Fields[Idx].Editable Then Begin
+   FIFocus := Idx; Exit;
+  End;
+  Idx := Idx + Dir;
+  Inc(Tries);
+ End;
+End;
+
+Function FI_Run: Boolean;
+Var Ch, Ch2: Char;
+    Done, Ok: Boolean;
+    MX, MY, MB, OldMB: Integer;
+    NewCat, Hit: Integer;
+    OkInRect, CXInRect, BtnOkDown, BtnCxDown: Boolean;
+Begin
+ FI_GatherInfo;
+ FIX1 := (ScreenWidth - FI_DLG_W) Div 2;
+ FIY1 := (ScreenHeight - FI_DLG_H) Div 2;
+ If FIY1 < MENUBAR_HEIGHT + 2 Then FIY1 := MENUBAR_HEIGHT + 2;
+ If FIX1 < 4 Then FIX1 := 4;
+ FIX2 := FIX1 + FI_DLG_W;
+ FIY2 := FIY1 + FI_DLG_H;
+ FILX1 := FIX1 + 8;          FILY1 := FIY1 + 40;
+ FILX2 := FILX1 + FI_LIST_W; FILY2 := FIY2 - 50;
+ FIRX1 := FILX2 + 10;        FIRY1 := FIY1 + 40;
+ FIRX2 := FIX2 - 8;          FIRY2 := FIY2 - 50;
+ FIOKx1 := FIX2 - 180; FIOKy1 := FIY2 - 36;
+ FIOKx2 := FIOKx1 + 70; FIOKy2 := FIOKy1 + 24;
+ FICX1  := FIX2 - 96;  FICY1 := FIY2 - 36;
+ FICX2  := FICX1 + 86; FICY2 := FICY1 + 24;
+
+ FI_DrawDialog;
+ While KeyPressed Do ReadKey;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
+ Done := False; Ok := False; OldMB := 0;
+ BtnOkDown := False; BtnCxDown := False;
+
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then Begin
+    Ch2 := ReadKey;
+    Case Ch2 Of
+     #72: Begin
+      If FICurCat > 0 Then Begin
+       Dec(FICurCat); FIFocus := -1; FIScroll := 0;
+       FI_DrawCategoryList; FI_DrawFields;
+      End;
+     End;
+     #80: Begin
+      If FICurCat < FI_CAT_COUNT - 1 Then Begin
+       Inc(FICurCat); FIFocus := -1; FIScroll := 0;
+       FI_DrawCategoryList; FI_DrawFields;
+      End;
+     End;
+     #15: Begin
+      FI_NextEditable(-1);
+      FI_DrawFields;
+     End;
+     #83: Begin
+      If (FIFocus >= 0) And FICats[FICurCat].Fields[FIFocus].Editable Then Begin
+       FICats[FICurCat].Fields[FIFocus].Value := '';
+       FIDirty := True;
+       FI_DrawField(FIFocus, True);
+      End;
+     End;
+     #71: Begin   { Home : premiere categorie }
+      If FICurCat <> 0 Then Begin
+       FICurCat := 0; FIFocus := -1; FIScroll := 0;
+       FI_DrawCategoryList; FI_DrawFields;
+      End;
+     End;
+     #79: Begin   { End : derniere categorie }
+      If FICurCat <> FI_CAT_COUNT - 1 Then Begin
+       FICurCat := FI_CAT_COUNT - 1; FIFocus := -1; FIScroll := 0;
+       FI_DrawCategoryList; FI_DrawFields;
+      End;
+     End;
+    End;
+   End Else Begin
+    Case Ch Of
+     #9 : Begin FI_NextEditable(+1); FI_DrawFields; End;
+     #13: Begin Done := True; Ok := True; End;
+     #27: Begin Done := True; Ok := False; End;
+     #8 : Begin
+      If (FIFocus >= 0) And FICats[FICurCat].Fields[FIFocus].Editable Then
+       If Length(FICats[FICurCat].Fields[FIFocus].Value) > 0 Then Begin
+        Delete(FICats[FICurCat].Fields[FIFocus].Value,
+               Length(FICats[FICurCat].Fields[FIFocus].Value), 1);
+        FIDirty := True;
+        FI_DrawField(FIFocus, True);
+       End;
+     End;
+    Else
+     If (Ch >= ' ') And (Ord(Ch) < 127) Then
+      If (FIFocus >= 0) And FICats[FICurCat].Fields[FIFocus].Editable Then
+       If Length(FICats[FICurCat].Fields[FIFocus].Value) < FI_VALUE_MAX Then Begin
+        FICats[FICurCat].Fields[FIFocus].Value :=
+         FICats[FICurCat].Fields[FIFocus].Value + Ch;
+        FIDirty := True;
+        FI_DrawField(FIFocus, True);
+       End;
+    End;
+   End;
+  End;
+
+  GetMouseStateLocal(MX, MY, MB);
+  OkInRect := (MX>=FIOKx1) And (MX<=FIOKx2) And (MY>=FIOKy1) And (MY<=FIOKy2);
+  CXInRect := (MX>=FICX1)  And (MX<=FICX2)  And (MY>=FICY1)  And (MY<=FICY2);
+
+  If (OldMB And 1 = 0) And (MB And 1 <> 0) Then Begin
+   If OkInRect Then Begin
+    BtnOkDown := True; FI_DrawButtons(True, False);
+   End Else If CXInRect Then Begin
+    BtnCxDown := True; FI_DrawButtons(False, True);
+   End Else Begin
+    NewCat := FI_HitCategory(MX, MY);
+    If NewCat >= 0 Then Begin
+     If NewCat <> FICurCat Then Begin
+      FICurCat := NewCat; FIFocus := -1; FIScroll := 0;
+      FI_DrawCategoryList; FI_DrawFields;
+     End;
+    End Else Begin
+     Hit := FI_HitField(MX, MY);
+     If (Hit >= 0) And FICats[FICurCat].Fields[Hit].Editable Then Begin
+      FIFocus := Hit;
+      FI_DrawFields;
+     End;
+    End;
+   End;
+  End;
+
+  If (OldMB And 1 <> 0) And (MB And 1 = 0) Then Begin
+   If BtnOkDown Then Begin
+    BtnOkDown := False; FI_DrawButtons(False, False);
+    If OkInRect Then Begin Done := True; Ok := True; End;
+   End;
+   If BtnCxDown Then Begin
+    BtnCxDown := False; FI_DrawButtons(False, False);
+    If CXInRect Then Begin Done := True; Ok := False; End;
+   End;
+  End;
+
+  OldMB := MB;
+ Until Done;
+
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
+ MouseButtons := 0; OldMouseButtons := 0;
+ DrawFullUI;
+ FI_Run := Ok;
+End;
+
+{ ============================================================
    Gestion calques
   ============================================================ }
 
@@ -3191,6 +3834,8 @@ Begin
  ImageModified := False;
  UndoCount := 0;
  ZoomLevel := 100;
+ FI_ResetMetadata;
+ FICurCat := 0;
 End;
 
 { ============================================================
@@ -3715,30 +4360,40 @@ Begin
 End;
 
 Procedure OpenFileAction;
-Var FN, Ext: String;
+Var FN, Ext: String; Loaded: Boolean;
 Begin
  FN := '';
+ Loaded := False;
  If FD_Open('Ouvrir un fichier', FN) Then Begin
   Ext := ExtractExt(FN);
   If (Ext='.BMP') Or (Ext='.DIB') Then Begin
-   If Not LoadBMP(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+   If LoadBMP(FN) Then Loaded := True
+   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
   End
   Else If Ext='.GIF' Then Begin
-   If Not LoadGIF(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+   If LoadGIF(FN) Then Loaded := True
+   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
   End
   Else If (Ext='.JPG') Or (Ext='.JPEG') Then Begin
-   If Not LoadJPEG(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+   If LoadJPEG(FN) Then Loaded := True
+   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
   End
   Else If Ext='.PNG' Then Begin
-   If Not LoadPNG(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+   If LoadPNG(FN) Then Loaded := True
+   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
   End
   Else If Ext='.PCX' Then Begin
-   If Not LoadPCX(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+   If LoadPCX(FN) Then Loaded := True
+   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
   End
   Else If (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then
    ShowDialog('Format non supporte', 'Le decodage '+Ext+' n est pas encore implemente.')
   Else
    ShowDialog('Format inconnu', 'Extension '+Ext+' non reconnue.');
+  If Loaded Then Begin
+   FI_ResetMetadata;
+   FI_LoadSidecar(FN);
+  End;
  End;
 End;
 
@@ -3867,6 +4522,7 @@ Begin
   If SaveBMP24(FN) Then Begin
    CurrentFileName := FN;
    ImageModified := False;
+   FI_SaveSidecar(FN);
   End Else
    ShowDialog('Erreur', 'Echec de sauvegarde.');
  End;
@@ -3875,7 +4531,10 @@ End;
 Procedure SaveAction;
 Begin
  If CurrentFileName='' Then SaveAsAction
- Else If SaveBMP24(CurrentFileName) Then ImageModified := False
+ Else If SaveBMP24(CurrentFileName) Then Begin
+  ImageModified := False;
+  FI_SaveSidecar(CurrentFileName);
+ End
  Else ShowDialog('Erreur', 'Echec de sauvegarde.');
 End;
 
@@ -3951,10 +4610,9 @@ Begin
 End;
 
 Procedure FileInfoAction;
-Var S: String;
 Begin
- If CurrentFileName='' Then S := '(sans titre)' Else S := CurrentFileName;
- ShowDialog('Info fichier', S+' - '+IntToStr(ImgW)+'x'+IntToStr(ImgH));
+ If FI_Run Then
+  If FIDirty Then ImageModified := True;
 End;
 
 Procedure PrintAction;

@@ -1397,6 +1397,247 @@ Begin
 End;
 
 { ============================================================
+   Decodeur GIF (LZW complet, GIF87a/GIF89a, 1ere frame)
+  ============================================================ }
+
+Function LoadGIF(Const FileName: String): Boolean;
+Var
+ F: File;
+ BytesRead: Word;
+ Hdr: Packed Record
+  Sig: Array[0..5] of Char;
+  ScrW, ScrH: Word;
+  Flags: Byte;
+  BgColor: Byte;
+  Aspect: Byte;
+ End;
+ GP: Array[0..255, 0..2] of Byte;
+ LP: Array[0..255, 0..2] of Byte;
+ PalSize, LocalPalSize: Integer;
+ PalRemap: Array[0..255] of Byte;
+ I, X, Best: Integer;
+ DR, DG, DB, Dist, BestDist: LongInt;
+ BlockType, ExtLabel, SubSize: Byte;
+ ImgL, ImgT, ImgWid, ImgHei: Word;
+ ImgFlags, LZWMin, B: Byte;
+ HasLocalPal, Interlaced: Boolean;
+
+ SubBuf: Array[0..255] of Byte;
+ SubLen, SubPos: Integer;
+ EOFData: Boolean;
+ BitBuf: LongInt;
+ BitCnt: Integer;
+ ClearCode, EOICode: Integer;
+ CodeSize, NextCode, PrevCode: Integer;
+ PrefixTab: Array[0..4095] of Integer;
+ SuffixTab: Array[0..4095] of Byte;
+ Stack: Array[0..4095] of Byte;
+ SP: Integer;
+ OutX, OutY, ImgRow, InterlacePass: Integer;
+ Code, IncomingCode, FirstChar: Integer;
+ BrTmp: Word;
+ Tmp16: Word;
+
+ Function NextDataByte(Var Bv: Byte): Boolean;
+ Var Br: Word; H: Byte;
+ Begin
+  NextDataByte := False;
+  If EOFData Then Exit;
+  If SubPos >= SubLen Then Begin
+   BlockRead(F, H, 1, Br);
+   If Br <> 1 Then Begin EOFData := True; Exit; End;
+   If H = 0 Then Begin EOFData := True; Exit; End;
+   SubLen := H;
+   BlockRead(F, SubBuf, SubLen, Br);
+   If Br <> Word(SubLen) Then Begin EOFData := True; Exit; End;
+   SubPos := 0;
+  End;
+  Bv := SubBuf[SubPos];
+  Inc(SubPos);
+  NextDataByte := True;
+ End;
+
+ Function NextCodeF: Integer;
+ Var Bv: Byte;
+ Begin
+  While BitCnt < CodeSize Do Begin
+   If Not NextDataByte(Bv) Then Begin NextCodeF := -1; Exit; End;
+   BitBuf := BitBuf Or (LongInt(Bv) Shl BitCnt);
+   Inc(BitCnt, 8);
+  End;
+  NextCodeF := Integer(BitBuf And ((LongInt(1) Shl CodeSize) - 1));
+  BitBuf := BitBuf Shr CodeSize;
+  Dec(BitCnt, CodeSize);
+ End;
+
+ Procedure NextInterlaceRow;
+ Begin
+  Case InterlacePass Of
+   1: Begin Inc(ImgRow, 8);
+       If ImgRow >= ImgHei Then Begin InterlacePass := 2; ImgRow := 4; End; End;
+   2: Begin Inc(ImgRow, 8);
+       If ImgRow >= ImgHei Then Begin InterlacePass := 3; ImgRow := 2; End; End;
+   3: Begin Inc(ImgRow, 4);
+       If ImgRow >= ImgHei Then Begin InterlacePass := 4; ImgRow := 1; End; End;
+   4: Inc(ImgRow, 2);
+  End;
+ End;
+
+ Procedure EmitPixel(PixIdx: Byte);
+ Var DstX, DstY: Integer;
+ Begin
+  DstX := ImgL + OutX;
+  If Interlaced Then DstY := ImgT + ImgRow Else DstY := ImgT + OutY;
+  If (DstX >= 0) And (DstX < ImgW) And (DstY >= 0) And (DstY < ImgH) Then
+   SetLayerPixel(ActiveLayer, DstX, DstY, PalRemap[PixIdx]);
+  Inc(OutX);
+  If OutX >= ImgWid Then Begin
+   OutX := 0;
+   If Interlaced Then NextInterlaceRow Else Inc(OutY);
+  End;
+ End;
+
+ Procedure BuildRemapFrom(Var PP: Array of Byte; N: Integer);
+ Var II, BB, K: Integer; DDR, DDG, DDB, DD, BD: LongInt;
+ Begin
+  For K := 0 To N-1 Do Begin
+   BB := 0; BD := MaxLongInt;
+   For II := 0 To 15 Do Begin
+    DDR := LongInt(PP[K*3])   - VGA_R[II];
+    DDG := LongInt(PP[K*3+1]) - VGA_G[II];
+    DDB := LongInt(PP[K*3+2]) - VGA_B[II];
+    DD := DDR*DDR + DDG*DDG + DDB*DDB;
+    If DD < BD Then Begin BD := DD; BB := II; End;
+   End;
+   PalRemap[K] := Byte(BB);
+  End;
+  For K := N To 255 Do PalRemap[K] := 0;
+ End;
+
+Begin
+ LoadGIF := False;
+ Assign(F, FileName);
+ {$I-} Reset(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
+ BlockRead(F, Hdr, SizeOf(Hdr), BytesRead);
+ If BytesRead <> SizeOf(Hdr) Then Begin Close(F); Exit; End;
+ If (Hdr.Sig[0]<>'G') Or (Hdr.Sig[1]<>'I') Or (Hdr.Sig[2]<>'F') Then
+  Begin Close(F); Exit; End;
+
+ If (Hdr.ScrW <> ImgW) Or (Hdr.ScrH <> ImgH) Then Begin
+  For I:=0 To MAX_LAYERS-1 Do If Layers[I].Used Then FreeLayer(I);
+  ImgW := Hdr.ScrW; ImgH := Hdr.ScrH;
+  If ImgW > 1024 Then ImgW := 1024;
+  If ImgH > 1024 Then ImgH := 1024;
+  AllocLayer(0, 'Arriere-plan', False);
+  LayerCount := 1;
+  ActiveLayer := 0;
+ End Else Begin
+  For X := 0 To ImgW-1 Do
+   For I := 0 To ImgH-1 Do
+    SetLayerPixel(ActiveLayer, X, I, 0);
+ End;
+
+ PalSize := 0;
+ If (Hdr.Flags And $80) <> 0 Then Begin
+  PalSize := 1 Shl ((Hdr.Flags And 7) + 1);
+  BlockRead(F, GP, PalSize*3, BytesRead);
+  If BytesRead <> Word(PalSize*3) Then Begin Close(F); Exit; End;
+  BuildRemapFrom(GP[0,0], PalSize);
+ End Else
+  For I := 0 To 255 Do PalRemap[I] := Byte(I And 15);
+
+ Repeat
+  BlockRead(F, BlockType, 1, BrTmp);
+  If BrTmp <> 1 Then Begin Close(F); Exit; End;
+  If BlockType = $3B Then Break;
+  If BlockType = $21 Then Begin
+   BlockRead(F, ExtLabel, 1, BrTmp);
+   Repeat
+    BlockRead(F, SubSize, 1, BrTmp);
+    If SubSize > 0 Then Seek(F, FilePos(F) + SubSize);
+   Until SubSize = 0;
+  End Else If BlockType = $2C Then Begin
+   BlockRead(F, Tmp16, 2, BrTmp); ImgL := Tmp16;
+   BlockRead(F, Tmp16, 2, BrTmp); ImgT := Tmp16;
+   BlockRead(F, Tmp16, 2, BrTmp); ImgWid := Tmp16;
+   BlockRead(F, Tmp16, 2, BrTmp); ImgHei := Tmp16;
+   BlockRead(F, ImgFlags, 1, BrTmp);
+   HasLocalPal := (ImgFlags And $80) <> 0;
+   Interlaced  := (ImgFlags And $40) <> 0;
+   If HasLocalPal Then Begin
+    LocalPalSize := 1 Shl ((ImgFlags And 7) + 1);
+    BlockRead(F, LP, LocalPalSize*3, BrTmp);
+    BuildRemapFrom(LP[0,0], LocalPalSize);
+   End;
+   BlockRead(F, LZWMin, 1, BrTmp);
+
+   ClearCode := 1 Shl LZWMin;
+   EOICode := ClearCode + 1;
+   CodeSize := LZWMin + 1;
+   NextCode := EOICode + 1;
+   PrevCode := -1;
+   BitBuf := 0; BitCnt := 0;
+   SubLen := 0; SubPos := 0; EOFData := False;
+   For I := 0 To ClearCode - 1 Do Begin
+    PrefixTab[I] := -1;
+    SuffixTab[I] := Byte(I);
+   End;
+   SP := 0;
+   OutX := 0; OutY := 0; ImgRow := 0; InterlacePass := 1;
+   FirstChar := 0;
+
+   Repeat
+    Code := NextCodeF;
+    If Code < 0 Then Break;
+    If Code = EOICode Then Break;
+    If Code = ClearCode Then Begin
+     CodeSize := LZWMin + 1;
+     NextCode := EOICode + 1;
+     PrevCode := -1;
+    End Else Begin
+     IncomingCode := Code;
+     If Code >= NextCode Then Begin
+      If PrevCode < 0 Then Break;
+      Stack[SP] := Byte(FirstChar); Inc(SP);
+      Code := PrevCode;
+     End;
+     While Code >= ClearCode Do Begin
+      Stack[SP] := SuffixTab[Code]; Inc(SP);
+      Code := PrefixTab[Code];
+      If Code < 0 Then Break;
+     End;
+     If Code >= 0 Then Begin
+      Stack[SP] := SuffixTab[Code]; Inc(SP);
+      FirstChar := SuffixTab[Code];
+     End;
+     While SP > 0 Do Begin
+      Dec(SP);
+      EmitPixel(Stack[SP]);
+     End;
+     If (PrevCode >= 0) And (NextCode < 4096) Then Begin
+      PrefixTab[NextCode] := PrevCode;
+      SuffixTab[NextCode] := Byte(FirstChar);
+      Inc(NextCode);
+      If (NextCode = (1 Shl CodeSize)) And (CodeSize < 12) Then Inc(CodeSize);
+     End;
+     PrevCode := IncomingCode;
+    End;
+   Until False;
+
+   While Not EOFData Do
+    If Not NextDataByte(B) Then EOFData := True;
+   Break;
+  End Else Break;
+ Until False;
+
+ Close(F);
+ CurrentFileName := FileName;
+ ImageModified := False;
+ LoadGIF := True;
+End;
+
+{ ============================================================
    Dialogues
   ============================================================ }
 
@@ -1618,12 +1859,659 @@ Begin
  ZoomLevel := 100;
 End;
 
+{ ============================================================
+   Selecteur de fichiers style Photoshop
+  ============================================================ }
+
+Const
+ FD_MAXENT = 256;
+ FD_ROWH   = 10;
+ FD_NUM_FILTERS = 9;
+ FD_FILTER_LABELS: Array[0..FD_NUM_FILTERS-1] of String[36] = (
+  'Tous formats images',
+  'BMP (*.BMP;*.DIB)',
+  'GIF (*.GIF)',
+  'PNG (*.PNG)',
+  'JPEG (*.JPG;*.JPEG)',
+  'PCX (*.PCX)',
+  'TGA (*.TGA)',
+  'TIFF (*.TIF;*.TIFF)',
+  'Tous fichiers (*.*)' );
+
+Type
+ TFDEntry = Record
+  Name: String[60];
+  IsDir: Boolean;
+  Size: LongInt;
+  Yr, Mo, Dy: Word;
+ End;
+
+Var
+ FD_Dirs:  Array[0..FD_MAXENT-1] of TFDEntry;
+ FD_Files: Array[0..FD_MAXENT-1] of TFDEntry;
+ FD_NDirs, FD_NFiles: Integer;
+ FD_SelDir, FD_SelFile: Integer;
+ FD_TopDir, FD_TopFile: Integer;
+ FD_Focus: Integer;
+ FD_NameBuf: String;
+ FD_FilterIdx: Integer;
+ FD_CurDir: String;
+
+Function FD_FilterLabel: String;
+Begin FD_FilterLabel := FD_FILTER_LABELS[FD_FilterIdx]; End;
+
+Function FD_ExtMatches(Const Nm: String): Boolean;
+Var E: String;
+Begin
+ E := ExtractExt(Nm);
+ Case FD_FilterIdx Of
+  0: FD_ExtMatches := (E='.BMP') Or (E='.DIB') Or (E='.GIF') Or (E='.PNG') Or
+                      (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or
+                      (E='.TIF') Or (E='.TIFF');
+  1: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
+  2: FD_ExtMatches := E='.GIF';
+  3: FD_ExtMatches := E='.PNG';
+  4: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
+  5: FD_ExtMatches := E='.PCX';
+  6: FD_ExtMatches := E='.TGA';
+  7: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
+  8: FD_ExtMatches := True;
+ Else FD_ExtMatches := False; End;
+End;
+
+Procedure FD_Pad2(Var S: String);
+Begin While Length(S)<2 Do S:='0'+S; End;
+
+Function FD_FmtDate(Const E: TFDEntry): String;
+Var S, T: String;
+Begin
+ Str(E.Yr, S); Str(E.Mo, T); FD_Pad2(T); S:=S+'-'+T;
+ Str(E.Dy, T); FD_Pad2(T); FD_FmtDate := S+'-'+T;
+End;
+
+Function FD_FmtSize(Sz: LongInt): String;
+Var S: String;
+Begin
+ Str(Sz, S);
+ While Length(S)<8 Do S:=' '+S;
+ FD_FmtSize := S;
+End;
+
+Procedure FD_SortArr(Var A: Array of TFDEntry; N: Integer);
+Var I, J: Integer; T: TFDEntry;
+Begin
+ For I:=0 To N-2 Do
+  For J:=0 To N-2-I Do
+   If UpperStr(A[J].Name) > UpperStr(A[J+1].Name) Then Begin
+    T:=A[J]; A[J]:=A[J+1]; A[J+1]:=T;
+   End;
+End;
+
+Procedure FD_Scan;
+Var SR: SearchRec; DT: DateTime; E: TFDEntry;
+Begin
+ FD_NDirs:=0; FD_NFiles:=0;
+ GetDir(0, FD_CurDir);
+ FindFirst('*.*', Directory, SR);
+ While DosError = 0 Do Begin
+  If (SR.Attr And Directory) <> 0 Then
+   If (SR.Name <> '.') And (FD_NDirs < FD_MAXENT) Then Begin
+    E.Name := SR.Name; E.IsDir := True; E.Size := 0;
+    UnpackTime(SR.Time, DT);
+    E.Yr := DT.Year; E.Mo := DT.Month; E.Dy := DT.Day;
+    FD_Dirs[FD_NDirs] := E; Inc(FD_NDirs);
+   End;
+  FindNext(SR);
+ End;
+ FindClose(SR);
+ FindFirst('*.*', AnyFile, SR);
+ While DosError = 0 Do Begin
+  If ((SR.Attr And Directory) = 0) And ((SR.Attr And VolumeID) = 0) Then
+   If FD_ExtMatches(SR.Name) And (FD_NFiles < FD_MAXENT) Then Begin
+    E.Name := SR.Name; E.IsDir := False; E.Size := SR.Size;
+    UnpackTime(SR.Time, DT);
+    E.Yr := DT.Year; E.Mo := DT.Month; E.Dy := DT.Day;
+    FD_Files[FD_NFiles] := E; Inc(FD_NFiles);
+   End;
+  FindNext(SR);
+ End;
+ FindClose(SR);
+ FD_SortArr(FD_Dirs, FD_NDirs);
+ FD_SortArr(FD_Files, FD_NFiles);
+ If FD_SelDir >= FD_NDirs Then FD_SelDir := 0;
+ If FD_SelFile >= FD_NFiles Then FD_SelFile := 0;
+ FD_TopDir := 0; FD_TopFile := 0;
+End;
+
+Procedure FD_EnsureVisible(Var Top: Integer; Sel, Rows: Integer);
+Begin
+ If Sel < Top Then Top := Sel;
+ If Sel >= Top + Rows Then Top := Sel - Rows + 1;
+ If Top < 0 Then Top := 0;
+End;
+
+Procedure FD_DrawDirs(X1, Y1, X2, Y2: Integer; Active: Boolean);
+Var Rows, I, Idx, RY: Integer; Nm: String; Bg: Byte;
+Begin
+ HideMouseCursor;
+ FillRect(X1+1, Y1+1, X2-1, Y2-1, White);
+ Rows := (Y2 - Y1 - 2) Div FD_ROWH;
+ For I:=0 To Rows-1 Do Begin
+  Idx := FD_TopDir + I;
+  If Idx >= FD_NDirs Then Break;
+  RY := Y1 + 2 + I * FD_ROWH;
+  If Idx = FD_SelDir Then Begin
+   If Active Then Bg := Blue Else Bg := DarkGray;
+   FillRect(X1+1, RY-1, X2-1, RY+FD_ROWH-2, Bg);
+   SetColor(UI_TEXT_LITE);
+  End Else SetColor(UI_TEXT);
+  Nm := '['+FD_Dirs[Idx].Name+']';
+  If Length(Nm) > 18 Then Nm := Copy(Nm, 1, 18);
+  OutTextXY(X1+4, RY, Nm);
+ End;
+ DrawBevel(X1, Y1, X2, Y2, False);
+ ShowMouseCursor;
+End;
+
+Procedure FD_DrawFiles(X1, Y1, X2, Y2: Integer; Active: Boolean);
+Var Rows, I, Idx, RY: Integer; Nm: String; Bg: Byte;
+Begin
+ HideMouseCursor;
+ FillRect(X1+1, Y1+1, X2-1, Y2-1, White);
+ Rows := (Y2 - Y1 - 2) Div FD_ROWH;
+ For I:=0 To Rows-1 Do Begin
+  Idx := FD_TopFile + I;
+  If Idx >= FD_NFiles Then Break;
+  RY := Y1 + 2 + I * FD_ROWH;
+  If Idx = FD_SelFile Then Begin
+   If Active Then Bg := Blue Else Bg := DarkGray;
+   FillRect(X1+1, RY-1, X2-1, RY+FD_ROWH-2, Bg);
+   SetColor(UI_TEXT_LITE);
+  End Else SetColor(UI_TEXT);
+  Nm := FD_Files[Idx].Name;
+  If Length(Nm) > 22 Then Nm := Copy(Nm, 1, 22);
+  OutTextXY(X1+4, RY, Nm);
+  OutTextXY(X1+200, RY, FD_FmtSize(FD_Files[Idx].Size));
+  OutTextXY(X1+285, RY, FD_FmtDate(FD_Files[Idx]));
+ End;
+ DrawBevel(X1, Y1, X2, Y2, False);
+ ShowMouseCursor;
+End;
+
+Function FD_Open(Const Title: String; Var FN: String): Boolean;
+Var
+ DX1, DY1, DX2, DY2: Integer;
+ DirX1, DirY1, DirX2, DirY2: Integer;
+ FilX1, FilY1, FilX2, FilY2: Integer;
+ NamX1, NamY1, NamX2, NamY2: Integer;
+ TypX1, TypX2: Integer;
+ OkX1, OkY1, OkX2, OkY2: Integer;
+ CcX1, CcY1, CcX2, CcY2: Integer;
+ DirRows, FileRows: Integer;
+ Done, ResultVal: Boolean;
+ Ch: Char;
+ MX, MY, MB, OldMB: Integer;
+ Idx: Integer;
+ PathStr, Nm: String;
+
+ Procedure RedrawAll;
+ Begin
+  HideMouseCursor;
+  FillRect(DX1, DY1, DX2, DY2, UI_BG_PANEL);
+  DrawBevel(DX1, DY1, DX2, DY2, True);
+  FillRect(DX1+1, DY1+1, DX2-1, DY1+16, UI_BG_DARK);
+  SetColor(UI_TEXT_LITE); OutTextXY(DX1+8, DY1+5, Title);
+  SetColor(UI_TEXT);
+  OutTextXY(DX1+5, DY1+22, 'Chemin:');
+  FillRect(DX1+58, DY1+19, DX2-8, DY1+33, White);
+  DrawBevel(DX1+58, DY1+19, DX2-8, DY1+33, False);
+  PathStr := FD_CurDir;
+  If Length(PathStr) > 65 Then PathStr := '...'+Copy(PathStr, Length(PathStr)-61, 62);
+  OutTextXY(DX1+62, DY1+22, PathStr);
+  OutTextXY(DirX1, DY1+38, 'Dossiers');
+  OutTextXY(FilX1, DY1+38, 'Fichiers');
+  ShowMouseCursor;
+  FD_DrawDirs(DirX1, DirY1, DirX2, DirY2, FD_Focus=0);
+  FD_DrawFiles(FilX1, FilY1, FilX2, FilY2, FD_Focus=1);
+  HideMouseCursor;
+  SetColor(UI_TEXT);
+  OutTextXY(DX1+10, NamY1+4, 'Nom:');
+  FillRect(NamX1, NamY1, NamX2, NamY2, White);
+  DrawBevel(NamX1, NamY1, NamX2, NamY2, False);
+  SetColor(UI_TEXT);
+  OutTextXY(NamX1+4, NamY1+4, FD_NameBuf);
+  If FD_Focus=2 Then OutTextXY(NamX1+4+Length(FD_NameBuf)*8, NamY1+4, '_');
+  OutTextXY(DX2-220, NamY1+4, 'Type:');
+  FillRect(TypX1, NamY1, TypX2, NamY2, UI_BG_PANEL);
+  DrawBevel(TypX1, NamY1, TypX2, NamY2, True);
+  SetColor(UI_TEXT);
+  OutTextXY(TypX1+4, NamY1+4, FD_FilterLabel);
+  OutTextXY(TypX2-12, NamY1+4, 'v');
+  ShowMouseCursor;
+  DrawDlgButton(OkX1, OkY1, OkX2, OkY2, 'Ouvrir', False);
+  DrawDlgButton(CcX1, CcY1, CcX2, CcY2, 'Annuler', False);
+ End;
+
+ Procedure DoActivate;
+ Var Sel: String; I: Integer;
+ Begin
+  If (FD_Focus = 0) And (FD_NDirs > 0) And (FD_SelDir < FD_NDirs) Then Begin
+   Sel := FD_Dirs[FD_SelDir].Name;
+   {$I-} ChDir(Sel); {$I+}
+   If IOResult = 0 Then Begin FD_NameBuf := ''; FD_Scan; RedrawAll; End;
+   Exit;
+  End;
+  Sel := FD_NameBuf;
+  If Sel = '' Then
+   If (FD_NFiles > 0) And (FD_SelFile < FD_NFiles) Then Sel := FD_Files[FD_SelFile].Name;
+  If Sel = '' Then Exit;
+  For I := 0 To FD_NDirs-1 Do
+   If UpperStr(FD_Dirs[I].Name) = UpperStr(Sel) Then Begin
+    {$I-} ChDir(Sel); {$I+}
+    If IOResult = 0 Then Begin
+     FD_NameBuf := ''; FD_Scan; RedrawAll; Exit;
+    End;
+   End;
+  If (Length(Sel) >= 2) And (Sel[2] = ':') Then FN := Sel
+  Else If (Length(Sel) >= 1) And (Sel[1] = '\') Then FN := Sel
+  Else Begin
+   FN := FD_CurDir;
+   If (Length(FN) > 0) And (FN[Length(FN)] <> '\') Then FN := FN + '\';
+   FN := FN + Sel;
+  End;
+  ResultVal := True;
+  Done := True;
+ End;
+
+ Procedure DoFilterDropdown;
+ Var
+  DDX1, DDY1, DDX2, DDY2: Integer;
+  UpX1, UpY1, UpX2, UpY2: Integer;
+  DnX1, DnY1, DnX2, DnY2: Integer;
+  SbX1, SbX2, SbTop, SbBot: Integer;
+  ThY1, ThY2: Integer;
+  TopF, SelF, VisRows: Integer;
+  DDone: Boolean; Ch2: Char;
+  DMX, DMY, DMB, DOldMB: Integer;
+  Idx2: Integer;
+
+  Procedure DrawDD;
+  Var Q, II, RowY: Integer;
+  Begin
+   HideMouseCursor;
+   FillRect(DDX1, DDY1, DDX2, DDY2, White);
+   DrawBevel(DDX1, DDY1, DDX2, DDY2, False);
+   FillRect(UpX1+1, UpY1+1, UpX2-1, UpY2-1, UI_BG_PANEL);
+   DrawBevel(UpX1, UpY1, UpX2, UpY2, True);
+   SetColor(UI_TEXT);
+   Line(UpX1+6, UpY1+3, UpX1+2, UpY1+8);
+   Line(UpX1+6, UpY1+3, UpX1+10, UpY1+8);
+   Line(UpX1+2, UpY1+8, UpX1+10, UpY1+8);
+   FillRect(DnX1+1, DnY1+1, DnX2-1, DnY2-1, UI_BG_PANEL);
+   DrawBevel(DnX1, DnY1, DnX2, DnY2, True);
+   Line(DnX1+2, DnY1+3, DnX1+10, DnY1+3);
+   Line(DnX1+2, DnY1+3, DnX1+6, DnY1+8);
+   Line(DnX1+10, DnY1+3, DnX1+6, DnY1+8);
+   FillRect(SbX1, SbTop, SbX2, SbBot, DarkGray);
+   If FD_NUM_FILTERS > VisRows Then Begin
+    ThY1 := SbTop + (LongInt(TopF) * (SbBot-SbTop)) Div FD_NUM_FILTERS;
+    ThY2 := SbTop + (LongInt(TopF+VisRows) * (SbBot-SbTop)) Div FD_NUM_FILTERS;
+    If ThY2-ThY1 < 8 Then ThY2 := ThY1+8;
+    If ThY2 > SbBot Then ThY2 := SbBot;
+    FillRect(SbX1, ThY1, SbX2, ThY2, UI_BG_PANEL);
+    DrawBevel(SbX1, ThY1, SbX2, ThY2, True);
+   End Else FillRect(SbX1, SbTop, SbX2, SbBot, UI_BG_PANEL);
+   For Q:=0 To VisRows-1 Do Begin
+    II := TopF + Q;
+    If II >= FD_NUM_FILTERS Then Break;
+    RowY := DDY1+2 + Q*FD_ROWH;
+    If II = SelF Then Begin
+     FillRect(DDX1+1, RowY-1, SbX1-1, RowY+FD_ROWH-2, Blue);
+     SetColor(UI_TEXT_LITE);
+    End Else SetColor(UI_TEXT);
+    OutTextXY(DDX1+4, RowY, FD_FILTER_LABELS[II]);
+   End;
+   ShowMouseCursor;
+  End;
+
+ Begin
+  SelF := FD_FilterIdx;
+  VisRows := FD_NUM_FILTERS; If VisRows > 6 Then VisRows := 6;
+  DDX1 := TypX1; DDY1 := NamY2+1;
+  DDX2 := TypX2; DDY2 := DDY1 + VisRows*FD_ROWH + 4;
+  SbX2 := DDX2-2; SbX1 := SbX2-10;
+  UpX1 := SbX1; UpY1 := DDY1+1; UpX2 := SbX2; UpY2 := UpY1+11;
+  DnX1 := SbX1; DnY2 := DDY2-1; DnX2 := SbX2; DnY1 := DnY2-11;
+  SbTop := UpY2+1; SbBot := DnY1-1;
+  TopF := 0; If SelF >= VisRows Then TopF := SelF - VisRows + 1;
+  DrawDD;
+  Repeat GetMouseStateLocal(DMX, DMY, DMB); Until DMB And 1 = 0;
+  DOldMB := 0; DDone := False;
+  Repeat
+   If KeyPressed Then Begin
+    Ch2 := ReadKey;
+    If Ch2 = #0 Then Begin
+     Ch2 := ReadKey;
+     Case Ch2 Of
+      #72: If SelF > 0 Then Begin Dec(SelF); If SelF < TopF Then TopF := SelF; DrawDD; End;
+      #80: If SelF < FD_NUM_FILTERS-1 Then Begin Inc(SelF);
+            If SelF >= TopF+VisRows Then TopF := SelF-VisRows+1; DrawDD; End;
+      #71: Begin SelF := 0; TopF := 0; DrawDD; End;
+      #79: Begin SelF := FD_NUM_FILTERS-1;
+            If SelF >= VisRows Then TopF := SelF-VisRows+1; DrawDD; End;
+     End;
+    End Else Begin
+     Case Ch2 Of
+      #27: DDone := True;
+      #13: Begin FD_FilterIdx := SelF; FD_Scan; DDone := True; End;
+     End;
+    End;
+   End;
+   GetMouseStateLocal(DMX, DMY, DMB);
+   If (DOldMB And 1 = 0) And (DMB And 1 <> 0) Then Begin
+    If (DMX < DDX1) Or (DMX > DDX2) Or (DMY < DDY1) Or (DMY > DDY2) Then DDone := True
+    Else If (DMX>=UpX1) And (DMX<=UpX2) And (DMY>=UpY1) And (DMY<=UpY2) Then Begin
+     If TopF > 0 Then Begin Dec(TopF); DrawDD; End;
+    End Else If (DMX>=DnX1) And (DMX<=DnX2) And (DMY>=DnY1) And (DMY<=DnY2) Then Begin
+     If TopF < FD_NUM_FILTERS - VisRows Then Begin Inc(TopF); DrawDD; End;
+    End Else If (DMX>=SbX1) And (DMX<=SbX2) And (DMY>=SbTop) And (DMY<=SbBot) Then Begin
+     TopF := (LongInt(DMY-SbTop) * FD_NUM_FILTERS) Div (SbBot-SbTop) - VisRows Div 2;
+     If TopF < 0 Then TopF := 0;
+     If TopF > FD_NUM_FILTERS - VisRows Then TopF := FD_NUM_FILTERS - VisRows;
+     DrawDD;
+    End Else Begin
+     Idx2 := TopF + (DMY - DDY1 - 2) Div FD_ROWH;
+     If (Idx2 >= 0) And (Idx2 < FD_NUM_FILTERS) Then Begin
+      If Idx2 = SelF Then Begin FD_FilterIdx := SelF; FD_Scan; DDone := True; End
+      Else Begin SelF := Idx2; DrawDD; End;
+     End;
+    End;
+   End;
+   DOldMB := DMB;
+  Until DDone;
+  Repeat GetMouseStateLocal(DMX, DMY, DMB); Until DMB And 1 = 0;
+  RedrawAll;
+ End;
+
+Begin
+ FD_Open := False;
+ FD_FilterIdx := 0;
+ FD_NameBuf := '';
+ FD_Focus := 1;
+ FD_SelDir := 0; FD_SelFile := 0;
+ FD_Scan;
+ DX1 := (ScreenWidth - 600) Div 2; If DX1<0 Then DX1:=0;
+ DY1 := (ScreenHeight - 420) Div 2; If DY1<0 Then DY1:=0;
+ DX2 := DX1 + 600; DY2 := DY1 + 420;
+ DirX1:=DX1+5;   DirY1:=DY1+50; DirX2:=DX1+165; DirY2:=DY2-82;
+ FilX1:=DX1+170; FilY1:=DY1+50; FilX2:=DX2-5;   FilY2:=DY2-82;
+ NamX1:=DX1+50;  NamY1:=DY2-76; NamX2:=DX2-220; NamY2:=DY2-60;
+ TypX1:=DX2-175; TypX2:=DX2-10;
+ OkX1:=DX2-180; OkY1:=DY2-50; OkX2:=DX2-100; OkY2:=DY2-32;
+ CcX1:=DX2-90;  CcY1:=DY2-50; CcX2:=DX2-10;  CcY2:=DY2-32;
+ DirRows  := (DirY2 - DirY1 - 2) Div FD_ROWH;
+ FileRows := (FilY2 - FilY1 - 2) Div FD_ROWH;
+ RedrawAll;
+ While KeyPressed Do ReadKey;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
+ Done := False; ResultVal := False; OldMB := 0;
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then Begin
+    Ch := ReadKey;
+    Case Ch Of
+     #72: Begin
+      If FD_Focus = 0 Then Begin If FD_SelDir > 0 Then Dec(FD_SelDir);
+       FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin If FD_SelFile > 0 Then Dec(FD_SelFile);
+       FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows);
+       If FD_SelFile < FD_NFiles Then FD_NameBuf := FD_Files[FD_SelFile].Name; End;
+      RedrawAll;
+     End;
+     #80: Begin
+      If FD_Focus = 0 Then Begin If FD_SelDir < FD_NDirs-1 Then Inc(FD_SelDir);
+       FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin If FD_SelFile < FD_NFiles-1 Then Inc(FD_SelFile);
+       FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows);
+       If FD_SelFile < FD_NFiles Then FD_NameBuf := FD_Files[FD_SelFile].Name; End;
+      RedrawAll;
+     End;
+     #73: Begin
+      If FD_Focus = 0 Then Begin Dec(FD_SelDir, DirRows); If FD_SelDir < 0 Then FD_SelDir := 0;
+       FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin Dec(FD_SelFile, FileRows); If FD_SelFile < 0 Then FD_SelFile := 0;
+       FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows); End;
+      RedrawAll;
+     End;
+     #81: Begin
+      If FD_Focus = 0 Then Begin Inc(FD_SelDir, DirRows); If FD_SelDir >= FD_NDirs Then FD_SelDir := FD_NDirs-1;
+       FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin Inc(FD_SelFile, FileRows); If FD_SelFile >= FD_NFiles Then FD_SelFile := FD_NFiles-1;
+       FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows); End;
+      RedrawAll;
+     End;
+     #71: Begin
+      If FD_Focus = 0 Then Begin FD_SelDir := 0; FD_TopDir := 0; End
+      Else If FD_Focus = 1 Then Begin FD_SelFile := 0; FD_TopFile := 0; End;
+      RedrawAll;
+     End;
+     #79: Begin
+      If FD_Focus = 0 Then Begin FD_SelDir := FD_NDirs-1; FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin FD_SelFile := FD_NFiles-1; FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows); End;
+      RedrawAll;
+     End;
+    End;
+   End Else Begin
+    Case Ch Of
+     #27: Done := True;
+     #13: DoActivate;
+     #9 : Begin FD_Focus := (FD_Focus + 1) Mod 3; RedrawAll; End;
+     #8 : If FD_Focus = 2 Then Begin
+           If Length(FD_NameBuf) > 0 Then Delete(FD_NameBuf, Length(FD_NameBuf), 1);
+           RedrawAll;
+          End;
+    Else
+     If Ch >= ' ' Then Begin
+      If FD_Focus = 2 Then Begin
+       If Length(FD_NameBuf) < 60 Then FD_NameBuf := FD_NameBuf + Ch;
+       RedrawAll;
+      End Else If FD_Focus = 0 Then Begin
+       For Idx:=0 To FD_NDirs-1 Do Begin
+        Nm := FD_Dirs[Idx].Name;
+        If (Length(Nm)>0) And (UpCase(Nm[1])=UpCase(Ch)) Then Begin
+         FD_SelDir := Idx;
+         FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows);
+         Break;
+        End;
+       End;
+       RedrawAll;
+      End Else If FD_Focus = 1 Then Begin
+       For Idx:=0 To FD_NFiles-1 Do Begin
+        Nm := FD_Files[Idx].Name;
+        If (Length(Nm)>0) And (UpCase(Nm[1])=UpCase(Ch)) Then Begin
+         FD_SelFile := Idx;
+         FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows);
+         FD_NameBuf := Nm;
+         Break;
+        End;
+       End;
+       RedrawAll;
+      End;
+     End;
+    End;
+   End;
+  End;
+  GetMouseStateLocal(MX, MY, MB);
+  If (OldMB And 1 = 0) And (MB And 1 <> 0) Then Begin
+   If (MX>=DirX1) And (MX<=DirX2) And (MY>=DirY1) And (MY<=DirY2) Then Begin
+    Idx := FD_TopDir + (MY - DirY1 - 2) Div FD_ROWH;
+    If (Idx >= 0) And (Idx < FD_NDirs) Then Begin
+     If (FD_Focus = 0) And (Idx = FD_SelDir) Then DoActivate
+     Else Begin FD_SelDir := Idx; FD_Focus := 0; RedrawAll; End;
+    End Else Begin FD_Focus := 0; RedrawAll; End;
+   End
+   Else If (MX>=FilX1) And (MX<=FilX2) And (MY>=FilY1) And (MY<=FilY2) Then Begin
+    Idx := FD_TopFile + (MY - FilY1 - 2) Div FD_ROWH;
+    If (Idx >= 0) And (Idx < FD_NFiles) Then Begin
+     If (FD_Focus = 1) And (Idx = FD_SelFile) Then Begin
+      FD_NameBuf := FD_Files[Idx].Name; DoActivate;
+     End Else Begin
+      FD_SelFile := Idx; FD_Focus := 1;
+      FD_NameBuf := FD_Files[Idx].Name;
+      RedrawAll;
+     End;
+    End Else Begin FD_Focus := 1; RedrawAll; End;
+   End
+   Else If (MX>=NamX1) And (MX<=NamX2) And (MY>=NamY1) And (MY<=NamY2) Then Begin
+    FD_Focus := 2; RedrawAll;
+   End
+   Else If (MX>=TypX1) And (MX<=TypX2) And (MY>=NamY1) And (MY<=NamY2) Then Begin
+    DoFilterDropdown;
+   End
+   Else If (MX>=OkX1) And (MX<=OkX2) And (MY>=OkY1) And (MY<=OkY2) Then DoActivate
+   Else If (MX>=CcX1) And (MX<=CcX2) And (MY>=CcY1) And (MY<=CcY2) Then Done := True;
+  End;
+  OldMB := MB;
+ Until Done;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
+ MouseButtons := 0; OldMouseButtons := 0;
+ DrawFullUI;
+ FD_Open := ResultVal;
+End;
+
 Procedure OpenFileAction;
+Var FN, Ext: String;
+Begin
+ FN := '';
+ If FD_Open('Ouvrir un fichier', FN) Then Begin
+  Ext := ExtractExt(FN);
+  If (Ext='.BMP') Or (Ext='.DIB') Then Begin
+   If Not LoadBMP(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+  End
+  Else If Ext='.GIF' Then Begin
+   If Not LoadGIF(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+  End
+  Else If (Ext='.PNG') Or (Ext='.JPG') Or (Ext='.JPEG') Or
+          (Ext='.PCX') Or (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then
+   ShowDialog('Format non supporte', 'Le decodage '+Ext+' n est pas encore implemente.')
+  Else
+   ShowDialog('Format inconnu', 'Extension '+Ext+' non reconnue.');
+ End;
+End;
+
+Function ImportBMPAsLayer(Const FileName: String): Boolean;
+Var
+ F: File;
+ FH: TBMPFileHeader;
+ IH: TBMPInfoHeader;
+ BytesRead: Word;
+ RowSize, X, Y, SrcY, DstY, I, Best, NewIdx: Integer;
+ SrcW, SrcH: Integer;
+ RowBuf: Array[0..4095] of Byte;
+ R, G, B: Byte;
+ DR, DG, DB, Dist, BestDist: LongInt;
+ BMPPal: Array[0..255] of TRGBQuad;
+ PalRemap: Array[0..255] of Byte;
+ PaletteEntries: Integer;
+ V: Byte;
+ BitPos: Integer;
+ ByteVal: Byte;
+ LayerName: String;
+Begin
+ ImportBMPAsLayer := False;
+ If LayerCount>=MAX_LAYERS Then Begin
+  ShowDialog('Importer', 'Nombre maximum de calques atteint.');
+  Exit;
+ End;
+ Assign(F, FileName);
+ {$I-} Reset(F, 1); {$I+}
+ If IOResult<>0 Then Exit;
+ BlockRead(F, FH, SizeOf(FH), BytesRead);
+ If (BytesRead<>SizeOf(FH)) Or (FH.bfType<>BMP_SIGNATURE) Then Begin Close(F); Exit; End;
+ BlockRead(F, IH, SizeOf(IH), BytesRead);
+ If BytesRead<>SizeOf(IH) Then Begin Close(F); Exit; End;
+
+ SrcW := IH.biWidth;
+ SrcH := Abs(IH.biHeight);
+ RowSize := ((LongInt(SrcW) * IH.biBitCount + 31) Div 32) * 4;
+
+ If IH.biBitCount<=8 Then Begin
+  If IH.biClrUsed>0 Then PaletteEntries := IH.biClrUsed
+                    Else PaletteEntries := 1 Shl IH.biBitCount;
+  BlockRead(F, BMPPal, PaletteEntries*4, BytesRead);
+  For X:=0 To PaletteEntries-1 Do Begin
+   Best := 0; BestDist := MaxLongInt;
+   For I:=0 To 15 Do Begin
+    DR := LongInt(BMPPal[X].Red) - VGA_R[I];
+    DG := LongInt(BMPPal[X].Green) - VGA_G[I];
+    DB := LongInt(BMPPal[X].Blue) - VGA_B[I];
+    Dist := DR*DR + DG*DG + DB*DB;
+    If Dist<BestDist Then Begin BestDist:=Dist; Best:=I; End;
+   End;
+   PalRemap[X] := Byte(Best);
+  End;
+  For X:=PaletteEntries To 255 Do PalRemap[X]:=0;
+ End;
+
+ Seek(F, FH.bfOffBits);
+
+ NewIdx := LayerCount;
+ LayerName := 'Import';
+ AllocLayer(NewIdx, LayerName, True);
+ Inc(LayerCount);
+ ActiveLayer := NewIdx;
+
+ For Y:=0 To SrcH-1 Do Begin
+  If IH.biHeight<0 Then SrcY := Y Else SrcY := SrcH-1-Y;
+  BlockRead(F, RowBuf, RowSize, BytesRead);
+  If BytesRead<>RowSize Then Break;
+  DstY := SrcY;
+  If (DstY<0) Or (DstY>=ImgH) Then Continue;
+  For X:=0 To SrcW-1 Do Begin
+   If X>=ImgW Then Break;
+   V := 0;
+   Case IH.biBitCount Of
+    1: Begin
+     ByteVal := RowBuf[X Div 8];
+     BitPos := 7 - (X Mod 8);
+     V := PalRemap[(ByteVal Shr BitPos) And 1];
+    End;
+    4: Begin
+     ByteVal := RowBuf[X Div 2];
+     If (X And 1)=0 Then V := PalRemap[(ByteVal Shr 4) And 15]
+                    Else V := PalRemap[ByteVal And 15];
+    End;
+    8: V := PalRemap[RowBuf[X]];
+    24: Begin
+     B := RowBuf[X*3]; G := RowBuf[X*3+1]; R := RowBuf[X*3+2];
+     Best := 0; BestDist := MaxLongInt;
+     For I:=0 To 15 Do Begin
+      DR := LongInt(R) - VGA_R[I];
+      DG := LongInt(G) - VGA_G[I];
+      DB := LongInt(B) - VGA_B[I];
+      Dist := DR*DR + DG*DG + DB*DB;
+      If Dist<BestDist Then Begin BestDist:=Dist; Best:=I; End;
+     End;
+     V := Byte(Best);
+    End;
+   End;
+   SetLayerPixel(NewIdx, X, DstY, V);
+  End;
+ End;
+
+ Close(F);
+ ImageModified := True;
+ ImportBMPAsLayer := True;
+End;
+
+Procedure ImportAction;
 Var FN: String;
 Begin
  FN := '';
- If PromptStr('Ouvrir', 'Nom du fichier .BMP :', FN) Then Begin
-  If Not LoadBMP(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+ If FD_Open('Importer un fichier', FN) Then Begin
+  If Not ImportBMPAsLayer(FN) Then
+   ShowDialog('Erreur', 'Echec de l import : '+FN);
  End;
 End;
 
@@ -1669,7 +2557,7 @@ Begin
    1: Begin OpenFileAction; DrawFullUI; End;
    2: Begin SaveAction; DrawFullUI; End;
    3: Begin SaveAsAction; DrawFullUI; End;
-   5: ShowDialog('Importer', 'Importer non implemente.');
+   5: Begin ImportAction; DrawFullUI; End;
    6: Running := False;
   End;
   MENU_EDIT: Case IIdx Of

@@ -1433,6 +1433,92 @@ Begin
  SavePSD := True;
 End;
 
+{ ============================================================
+   TGA Save (Targa, 24-bit BGR, uncompressed, top-down)
+  ============================================================ }
+
+Function SaveTGA24(Const FileName: String): Boolean;
+Var
+ F: File;
+ Hdr: Array[0..17] of Byte;
+ RowBuf: Array[0..4095] of Byte;
+ X, Y: Integer;
+ V: Byte;
+Begin
+ SaveTGA24 := False;
+ If (ImgW < 1) Or (ImgH < 1) Or (ImgW > 4096) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
+
+ FillChar(Hdr, SizeOf(Hdr), 0);
+ Hdr[2] := 2;                        { Uncompressed truecolor }
+ Hdr[12] := Byte(ImgW And $FF);
+ Hdr[13] := Byte((ImgW Shr 8) And $FF);
+ Hdr[14] := Byte(ImgH And $FF);
+ Hdr[15] := Byte((ImgH Shr 8) And $FF);
+ Hdr[16] := 24;                      { Pixel depth }
+ Hdr[17] := $20;                     { Top-down, no alpha bits }
+ BlockWrite(F, Hdr, 18);
+
+ For Y := 0 To ImgH-1 Do Begin
+  For X := 0 To ImgW-1 Do Begin
+   V := Composite(X, Y);
+   If V=255 Then V:=15;
+   If V>15 Then V:=0;
+   RowBuf[X*3]   := VGA_B[V];
+   RowBuf[X*3+1] := VGA_G[V];
+   RowBuf[X*3+2] := VGA_R[V];
+  End;
+  BlockWrite(F, RowBuf, ImgW*3);
+ End;
+
+ Close(F);
+ SaveTGA24 := True;
+End;
+
+{ ============================================================
+   PPM Save (Portable Pixmap, P6 binary RGB)
+  ============================================================ }
+
+Function SavePPM(Const FileName: String): Boolean;
+Var
+ F: File;
+ RowBuf: Array[0..4095] of Byte;
+ Header: String;
+ SW, SH: String;
+ X, Y: Integer;
+ V: Byte;
+Begin
+ SavePPM := False;
+ If (ImgW < 1) Or (ImgH < 1) Or (ImgW > 4096) Then Exit;
+
+ Assign(F, FileName);
+ {$I-} Rewrite(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
+
+ Str(ImgW, SW);
+ Str(ImgH, SH);
+ Header := 'P6'+#10+SW+' '+SH+#10+'255'+#10;
+ BlockWrite(F, Header[1], Length(Header));
+
+ For Y := 0 To ImgH-1 Do Begin
+  For X := 0 To ImgW-1 Do Begin
+   V := Composite(X, Y);
+   If V=255 Then V:=15;
+   If V>15 Then V:=0;
+   RowBuf[X*3]   := VGA_R[V];
+   RowBuf[X*3+1] := VGA_G[V];
+   RowBuf[X*3+2] := VGA_B[V];
+  End;
+  BlockWrite(F, RowBuf, ImgW*3);
+ End;
+
+ Close(F);
+ SavePPM := True;
+End;
+
 Function LoadBMP(Const FileName: String): Boolean;
 Var
  F: File;
@@ -3336,24 +3422,113 @@ Begin
 End;
 
 Procedure ShowDialog(Const Title, Msg: String);
+Const
+ CHAR_W    = 8;
+ LINE_H    = 12;
+ PAD_X     = 16;
+ PAD_TOP   = 28;
+ PAD_BOT   = 12;
+ BTN_W     = 60;
+ BTN_H     = 18;
+ MIN_W     = 240;
+ MAX_LINES = 32;
 Var X1, Y1, X2, Y2, BX1, BY1, BX2, BY2: Integer;
     Ch: Char; Done, BtnDown, InRect: Boolean;
     MX, MY, MB, OldMB: Integer;
+    Lines: Array[0..MAX_LINES-1] of String;
+    NLines, MaxLineLen, MaxChars, DlgW, DlgH, TextY, I: Integer;
+    Para, Line, W: String;
+    PStart, PEnd, Pos2, WordStart, WLen, TitleW, ContentW: Integer;
+
+ Procedure AddLine(Const S: String);
+ Begin
+  If NLines < MAX_LINES Then Begin
+   Lines[NLines] := S;
+   If Length(S) > MaxLineLen Then MaxLineLen := Length(S);
+   Inc(NLines);
+  End;
+ End;
+
+ Procedure WrapParagraph(Const Pa: String);
+ Begin
+  Line := '';
+  Pos2 := 1;
+  If Pa = '' Then Begin AddLine(''); Exit; End;
+  While Pos2 <= Length(Pa) Do Begin
+   While (Pos2 <= Length(Pa)) And (Pa[Pos2] = ' ') Do Inc(Pos2);
+   WordStart := Pos2;
+   While (Pos2 <= Length(Pa)) And (Pa[Pos2] <> ' ') Do Inc(Pos2);
+   WLen := Pos2 - WordStart;
+   If WLen <= 0 Then Break;
+   W := Copy(Pa, WordStart, WLen);
+   While Length(W) > MaxChars Do Begin
+    If Length(Line) > 0 Then Begin AddLine(Line); Line := ''; End;
+    AddLine(Copy(W, 1, MaxChars));
+    W := Copy(W, MaxChars+1, Length(W));
+   End;
+   If Line = '' Then Line := W
+   Else If Length(Line) + 1 + Length(W) <= MaxChars Then Line := Line + ' ' + W
+   Else Begin AddLine(Line); Line := W; End;
+  End;
+  If Line <> '' Then AddLine(Line);
+ End;
+
 Begin
  HideMouseCursor;
- X1 := ScreenWidth Div 2 - 160;
- Y1 := ScreenHeight Div 2 - 50;
- X2 := X1 + 320;
- Y2 := Y1 + 100;
+
+ { Wrap message into lines, splitting on #10 / #13 paragraph breaks }
+ NLines := 0;
+ MaxLineLen := 0;
+ MaxChars := (ScreenWidth - 60) Div CHAR_W;
+ If MaxChars > 80 Then MaxChars := 80;
+ If MaxChars < 30 Then MaxChars := 30;
+ PStart := 1;
+ PEnd := 1;
+ While PEnd <= Length(Msg) Do Begin
+  If (Msg[PEnd] = #10) Or (Msg[PEnd] = #13) Then Begin
+   Para := Copy(Msg, PStart, PEnd - PStart);
+   WrapParagraph(Para);
+   If (PEnd < Length(Msg)) And ((Msg[PEnd]=#13) And (Msg[PEnd+1]=#10)) Then Inc(PEnd);
+   PStart := PEnd + 1;
+  End;
+  Inc(PEnd);
+ End;
+ If PStart <= Length(Msg) Then
+  WrapParagraph(Copy(Msg, PStart, Length(Msg) - PStart + 1))
+ Else If NLines = 0 Then
+  AddLine('');
+
+ { Compute dialog size }
+ TitleW   := (Length(Title) + 2) * CHAR_W;
+ ContentW := MaxLineLen * CHAR_W + 2*PAD_X;
+ DlgW := MIN_W;
+ If ContentW > DlgW Then DlgW := ContentW;
+ If TitleW + 24 > DlgW Then DlgW := TitleW + 24;
+ If DlgW > ScreenWidth - 20 Then DlgW := ScreenWidth - 20;
+
+ DlgH := PAD_TOP + NLines * LINE_H + PAD_BOT + BTN_H + 10;
+ If DlgH < 90 Then DlgH := 90;
+ If DlgH > ScreenHeight - 40 Then DlgH := ScreenHeight - 40;
+
+ X1 := (ScreenWidth  - DlgW) Div 2;
+ Y1 := (ScreenHeight - DlgH) Div 2;
+ X2 := X1 + DlgW;
+ Y2 := Y1 + DlgH;
+
  FillRect(X1, Y1, X2, Y2, UI_BG_PANEL);
  DrawBevel(X1, Y1, X2, Y2, True);
  FillRect(X1+1, Y1+1, X2-1, Y1+18, UI_BG_DARK);
  SetColor(UI_TEXT_LITE);
  OutTextXY(X1+8, Y1+5, Title);
  SetColor(UI_TEXT);
- OutTextXY(X1+12, Y1+40, Msg);
- BX1 := X1 + 130; BY1 := Y2 - 28;
- BX2 := BX1 + 60; BY2 := BY1 + 18;
+ TextY := Y1 + PAD_TOP;
+ For I := 0 To NLines-1 Do
+  OutTextXY(X1 + PAD_X, TextY + I*LINE_H, Lines[I]);
+
+ BX1 := X1 + (DlgW - BTN_W) Div 2;
+ BY1 := Y2 - BTN_H - 8;
+ BX2 := BX1 + BTN_W;
+ BY2 := BY1 + BTN_H;
  DrawDlgButton(BX1, BY1, BX2, BY2, 'OK', False);
  ShowMouseCursor;
  While KeyPressed Do ReadKey;
@@ -4194,7 +4369,7 @@ End;
 Const
  FD_MAXENT = 256;
  FD_ROWH   = 10;
- FD_NUM_FILTERS = 10;
+ FD_NUM_FILTERS = 11;
  FD_FILTER_LABELS: Array[0..FD_NUM_FILTERS-1] of String[36] = (
   'Tous formats images',
   'BMP (*.BMP;*.DIB)',
@@ -4205,7 +4380,8 @@ Const
   'TGA (*.TGA)',
   'TIFF (*.TIF;*.TIFF)',
   'PSD (*.PSD)',
-  'Tous fichiers (*.*)' );
+  'Tous fichiers (*.*)',
+  'PPM Portable Pixmap (*.PPM)' );
 
 Type
  TFDEntry = Record
@@ -4236,7 +4412,7 @@ Begin
  Case FD_FilterIdx Of
   0: FD_ExtMatches := (E='.BMP') Or (E='.DIB') Or (E='.GIF') Or (E='.PNG') Or
                       (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or
-                      (E='.TIF') Or (E='.TIFF') Or (E='.PSD');
+                      (E='.TIF') Or (E='.TIFF') Or (E='.PSD') Or (E='.PPM');
   1: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
   2: FD_ExtMatches := E='.GIF';
   3: FD_ExtMatches := E='.PNG';
@@ -4246,6 +4422,7 @@ Begin
   7: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
   8: FD_ExtMatches := E='.PSD';
   9: FD_ExtMatches := True;
+  10: FD_ExtMatches := E='.PPM';
  Else FD_ExtMatches := False; End;
 End;
 
@@ -4771,13 +4948,15 @@ End;
   ============================================================ }
 
 Const
- FD_SAVE_NUM = 2;
+ FD_SAVE_NUM = 4;
  FD_SAVE_LABELS: Array[0..FD_SAVE_NUM-1] of String[24] = (
   'BMP (*.BMP)',
-  'Photoshop PSD (*.PSD)' );
+  'Photoshop PSD (*.PSD)',
+  'Targa TGA (*.TGA)',
+  'Portable Pixmap (*.PPM)' );
  FD_SAVE_EXT: Array[0..FD_SAVE_NUM-1] of String[4] = (
-  '.BMP', '.PSD' );
- FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (1, 8);
+  '.BMP', '.PSD', '.TGA', '.PPM' );
+ FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (1, 8, 6, 10);
 
 Var
  FD_SaveFilterIdx: Integer;
@@ -4850,7 +5029,8 @@ Var
  Begin
   E := ExtractExt(S);
   If (E='.BMP') Or (E='.DIB') Or (E='.PSD') Or (E='.GIF') Or (E='.PNG') Or
-     (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or (E='.TIF') Or (E='.TIFF') Then
+     (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or (E='.TIF') Or (E='.TIFF') Or
+     (E='.PPM') Then
    S := Copy(S, 1, Length(S) - Length(E));
  End;
 
@@ -4875,7 +5055,8 @@ Var
   ChosenExt := FD_SAVE_EXT[FD_SaveFilterIdx];
   Curr := ExtractExt(Sel);
   If Curr = '' Then Sel := Sel + ChosenExt
-  Else If (Curr <> '.BMP') And (Curr <> '.DIB') And (Curr <> '.PSD') Then Begin
+  Else If (Curr <> '.BMP') And (Curr <> '.DIB') And (Curr <> '.PSD') And
+          (Curr <> '.TGA') And (Curr <> '.PPM') Then Begin
    StripExtIfMatchesAny(Sel);
    Sel := Sel + ChosenExt;
   End Else ChosenExt := Curr;
@@ -5269,6 +5450,8 @@ Var Ext: String;
 Begin
  Ext := ExtractExt(FN);
  If Ext = '.PSD' Then SaveByExt := SavePSD(FN)
+ Else If Ext = '.TGA' Then SaveByExt := SaveTGA24(FN)
+ Else If Ext = '.PPM' Then SaveByExt := SavePPM(FN)
  Else SaveByExt := SaveBMP24(FN);
 End;
 
@@ -5349,8 +5532,33 @@ Begin
 End;
 
 Procedure ExportAction;
+Var FN, SaveExt, BaseName: String;
+    DotPos, I: Integer;
 Begin
- ShowDialog('Exporter', 'Exportation non implementee.');
+ { Pre-fill the export name from current document, swapping to .PNG-like
+   suggestion is overkill; reuse current name with .TGA as a Photoshop-ish
+   default for "Export As". The format dropdown lets the user pick BMP,
+   PSD, TGA or PPM. }
+ FN := CurrentFileName;
+ If FN = '' Then BaseName := 'image'
+ Else Begin
+  BaseName := FN;
+  DotPos := 0;
+  For I := Length(BaseName) DownTo 1 Do
+   If BaseName[I] = '.' Then Begin DotPos := I; Break; End
+   Else If (BaseName[I] = '\') Or (BaseName[I] = '/') Or (BaseName[I] = ':') Then Break;
+  If DotPos > 0 Then BaseName := Copy(BaseName, 1, DotPos-1);
+ End;
+ FN := BaseName + '.TGA';
+ FD_SaveFilterIdx := 2;  { default to TGA in the export dialog }
+ If FD_Save('Exporter sous', FN, SaveExt) Then Begin
+  If SaveByExt(FN) Then
+   ShowDialog('Exporter', 'Image exportee : '+FN)
+  Else
+   ShowDialog('Erreur', 'Echec de l export : '+FN);
+ End;
+ { Restore default save filter to BMP so Save As is unaffected }
+ FD_SaveFilterIdx := 0;
 End;
 
 Procedure GenerateAction;

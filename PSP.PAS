@@ -1637,6 +1637,496 @@ Begin
  LoadGIF := True;
 End;
 
+{ ------------------------------------------------------------
+   LoadJPEG : decodeur baseline (SOF0) Huffman + IDCT
+  ------------------------------------------------------------ }
+
+Function LoadJPEG(Const FileName: String): Boolean;
+Type
+ THTbl = Record
+  MinC, MaxC: Array[1..16] of LongInt;
+  ValPtr: Array[1..16] of Integer;
+  Vals: Array[0..255] of Byte;
+  Defined: Boolean;
+ End;
+Const
+ ZZ: Array[0..63] of Byte = (
+   0, 1, 8,16, 9, 2, 3,10, 17,24,32,25,18,11, 4, 5,
+  12,19,26,33,40,48,41,34, 27,20,13, 6, 7,14,21,28,
+  35,42,49,56,57,50,43,36, 29,22,15,23,30,37,44,51,
+  58,59,52,45,38,31,39,46, 53,60,61,54,47,55,62,63);
+ SQRT_HALF = 0.70710678118654752;
+Var
+ F: File;
+ InBuf: Array[0..16383] of Byte;
+ InLen, InPos: Integer;
+ InEOF: Boolean;
+ PendingMk: Integer;     { marker byte awaiting service (0 = none) }
+ JW, JH, Prec, NComp: Integer;
+ CID, CH, CV, CTq, CTd, CTa: Array[0..3] of Integer;
+ MaxH, MaxV, MCUW, MCUH, NMCUx, NMCUy: Integer;
+ QT: Array[0..3, 0..63] of LongInt;
+ HDC, HAC: Array[0..3] of THTbl;
+ RestartInt: Integer;
+ RstCount: Integer;
+ PrevDC: Array[0..3] of LongInt;
+ BBuf: LongInt; BCnt: Integer;
+ EntEOF: Boolean;
+ CompPix: Array[0..2, 0..15, 0..15] of Integer;
+ BlkDeq: Array[0..63] of LongInt;
+ BlkOut: Array[0..63] of Integer;
+ CosT: Array[0..7, 0..7] of Double;
+ K, K2, K3: Integer;
+ OK: Boolean;
+ Got: Word;
+
+ Function R1: Integer;
+ Begin
+  If InPos >= InLen Then Begin
+   If InEOF Then Begin R1 := -1; Exit; End;
+   BlockRead(F, InBuf, 16384, Got);
+   InLen := Got; InPos := 0;
+   If Got = 0 Then Begin InEOF := True; R1 := -1; Exit; End;
+  End;
+  R1 := InBuf[InPos]; Inc(InPos);
+ End;
+
+ Function R2: Integer;
+ Var A, B: Integer;
+ Begin
+  A := R1; B := R1;
+  R2 := (A Shl 8) Or (B And $FF);
+ End;
+
+ Function NextEntByte: Integer;
+ Var B, B2: Integer;
+ Begin
+  If EntEOF Then Begin NextEntByte := -1; Exit; End;
+  B := R1;
+  If B < 0 Then Begin EntEOF := True; NextEntByte := -1; Exit; End;
+  If B = $FF Then Begin
+   B2 := R1;
+   While B2 = $FF Do B2 := R1;     { fill bytes }
+   If B2 = 0 Then NextEntByte := $FF
+   Else Begin
+    PendingMk := B2;
+    EntEOF := True;
+    NextEntByte := -1;
+   End;
+  End Else NextEntByte := B;
+ End;
+
+ Function GetBit: Integer;
+ Var B: Integer;
+ Begin
+  If BCnt = 0 Then Begin
+   B := NextEntByte;
+   If B < 0 Then Begin GetBit := 0; Exit; End;
+   BBuf := B; BCnt := 8;
+  End;
+  Dec(BCnt);
+  GetBit := Integer((BBuf Shr BCnt) And 1);
+ End;
+
+ Function GetBits(N: Integer): LongInt;
+ Var V: LongInt; I: Integer;
+ Begin
+  V := 0;
+  For I := 0 To N-1 Do V := (V Shl 1) Or GetBit;
+  GetBits := V;
+ End;
+
+ Function Extend(V: LongInt; N: Integer): LongInt;
+ Var Vt: LongInt;
+ Begin
+  If N = 0 Then Begin Extend := 0; Exit; End;
+  Vt := LongInt(1) Shl (N-1);
+  If V < Vt Then Extend := V + ((LongInt(-1) Shl N) + 1)
+  Else Extend := V;
+ End;
+
+ Function HuffDec(Var T: THTbl): Integer;
+ Var I: Integer; Code: LongInt;
+ Begin
+  Code := GetBit;
+  I := 1;
+  While Code > T.MaxC[I] Do Begin
+   Code := (Code Shl 1) Or GetBit;
+   Inc(I);
+   If I > 16 Then Begin HuffDec := -1; Exit; End;
+  End;
+  HuffDec := T.Vals[T.ValPtr[I] + Integer(Code - T.MinC[I])];
+ End;
+
+ Procedure BuildHuff(Var T: THTbl; Const Bits: Array of Byte; Const HV: Array of Byte; NV: Integer);
+ Var I, J, P, SI: Integer; Code: LongInt;
+     HSize: Array[0..256] of Integer;
+     HCode: Array[0..256] of LongInt;
+ Begin
+  P := 0;
+  For I := 1 To 16 Do
+   For J := 1 To Bits[I-1] Do Begin HSize[P] := I; Inc(P); End;
+  HSize[P] := 0;
+  SI := P;
+  Code := 0; J := HSize[0]; P := 0;
+  While HSize[P] <> 0 Do Begin
+   While (HSize[P] = J) And (HSize[P] <> 0) Do Begin
+    HCode[P] := Code; Inc(Code); Inc(P);
+   End;
+   If HSize[P] = 0 Then Break;
+   While HSize[P] <> J Do Begin Code := Code Shl 1; Inc(J); End;
+  End;
+  P := 0;
+  For I := 1 To 16 Do Begin
+   If Bits[I-1] = 0 Then Begin
+    T.MaxC[I] := -1;
+   End Else Begin
+    T.ValPtr[I] := P;
+    T.MinC[I]  := HCode[P];
+    Inc(P, Bits[I-1]);
+    T.MaxC[I]  := HCode[P-1];
+   End;
+  End;
+  For I := 0 To NV-1 Do T.Vals[I] := HV[I];
+  T.Defined := True;
+ End;
+
+ Procedure ResetEntropy;
+ Var I: Integer;
+ Begin
+  BBuf := 0; BCnt := 0; EntEOF := False;
+  For I := 0 To 3 Do PrevDC[I] := 0;
+  RstCount := RestartInt;
+ End;
+
+ Procedure IDCT;
+ Var X, Y, U, V: Integer; S, Cu, Cv: Double; G: Array[0..7,0..7] of Double;
+ Begin
+  For Y := 0 To 7 Do
+   For U := 0 To 7 Do Begin
+    S := 0;
+    For V := 0 To 7 Do Begin
+     If V = 0 Then Cv := SQRT_HALF Else Cv := 1.0;
+     S := S + Cv * BlkDeq[V*8+U] * CosT[Y, V];
+    End;
+    G[Y, U] := S;
+   End;
+  For Y := 0 To 7 Do
+   For X := 0 To 7 Do Begin
+    S := 0;
+    For U := 0 To 7 Do Begin
+     If U = 0 Then Cu := SQRT_HALF Else Cu := 1.0;
+     S := S + Cu * G[Y, U] * CosT[X, U];
+    End;
+    BlkOut[Y*8+X] := Round(S / 4.0) + 128;
+   End;
+ End;
+
+ Function DecodeBlock(Ci: Integer): Boolean;
+ Var I, S, R, RS, Cat: Integer; DCDiff, V: LongInt;
+ Begin
+  DecodeBlock := False;
+  For I := 0 To 63 Do BlkDeq[I] := 0;
+  Cat := HuffDec(HDC[CTd[Ci]]);
+  If Cat < 0 Then Exit;
+  If Cat > 0 Then DCDiff := Extend(GetBits(Cat), Cat) Else DCDiff := 0;
+  PrevDC[Ci] := PrevDC[Ci] + DCDiff;
+  BlkDeq[0] := PrevDC[Ci] * QT[CTq[Ci], 0];
+  I := 1;
+  While I < 64 Do Begin
+   RS := HuffDec(HAC[CTa[Ci]]);
+   If RS < 0 Then Exit;
+   S := RS And 15; R := (RS Shr 4) And 15;
+   If S = 0 Then Begin
+    If R = 15 Then Inc(I, 16)         { ZRL }
+    Else Break;                       { EOB }
+   End Else Begin
+    Inc(I, R);
+    If I >= 64 Then Break;
+    V := Extend(GetBits(S), S);
+    BlkDeq[ZZ[I]] := V * QT[CTq[Ci], ZZ[I]];
+    Inc(I);
+   End;
+  End;
+  IDCT;
+  DecodeBlock := True;
+ End;
+
+ Procedure YCbCr2RGB(Y, Cb, Cr: Integer; Var R, G, B: Integer);
+ Var Cr2, Cb2: Integer;
+ Begin
+  Cr2 := Cr - 128; Cb2 := Cb - 128;
+  R := Y + ((LongInt(91881) * Cr2 + 32768) Shr 16);
+  G := Y - ((LongInt(22554) * Cb2 + LongInt(46802) * Cr2 + 32768) Shr 16);
+  B := Y + ((LongInt(116130) * Cb2 + 32768) Shr 16);
+  If R < 0 Then R := 0 Else If R > 255 Then R := 255;
+  If G < 0 Then G := 0 Else If G > 255 Then G := 255;
+  If B < 0 Then B := 0 Else If B > 255 Then B := 255;
+ End;
+
+ Function NearestVGA16(R, G, B: Integer): Byte;
+ Var II, Best: Integer; D, BD, DR, DG, DB: LongInt;
+ Begin
+  Best := 0; BD := MaxLongInt;
+  For II := 0 To 15 Do Begin
+   DR := LongInt(R) - VGA_R[II];
+   DG := LongInt(G) - VGA_G[II];
+   DB := LongInt(B) - VGA_B[II];
+   D := DR*DR + DG*DG + DB*DB;
+   If D < BD Then Begin BD := D; Best := II; End;
+  End;
+  NearestVGA16 := Byte(Best);
+ End;
+
+ Function DecodeScan: Boolean;
+ Var MX, MY, Ci, BlV, BlH, PX, PY, I, J: Integer;
+     Gx, Gy, SX, SY: Integer;
+     Yv, Cbv, Crv, Rv, Gv, Bv: Integer;
+ Begin
+  DecodeScan := False;
+  ResetEntropy;
+  For MY := 0 To NMCUy-1 Do
+   For MX := 0 To NMCUx-1 Do Begin
+    For Ci := 0 To NComp-1 Do
+     For BlV := 0 To CV[Ci]-1 Do
+      For BlH := 0 To CH[Ci]-1 Do Begin
+       If Not DecodeBlock(Ci) Then Exit;
+       For PY := 0 To 7 Do
+        For PX := 0 To 7 Do
+         CompPix[Ci, BlV*8+PY, BlH*8+PX] := BlkOut[PY*8+PX];
+      End;
+    { ecrire les pixels de cette MCU dans le calque }
+    For PY := 0 To MCUH-1 Do Begin
+     Gy := MY*MCUH + PY;
+     If Gy >= JH Then Continue;
+     For PX := 0 To MCUW-1 Do Begin
+      Gx := MX*MCUW + PX;
+      If Gx >= JW Then Continue;
+      If NComp = 1 Then Begin
+       SX := PX*CH[0] Div MaxH;
+       SY := PY*CV[0] Div MaxV;
+       Yv := CompPix[0, SY, SX];
+       If Yv < 0 Then Yv := 0 Else If Yv > 255 Then Yv := 255;
+       Rv := Yv; Gv := Yv; Bv := Yv;
+      End Else Begin
+       SX := PX*CH[0] Div MaxH; SY := PY*CV[0] Div MaxV;
+       Yv := CompPix[0, SY, SX];
+       SX := PX*CH[1] Div MaxH; SY := PY*CV[1] Div MaxV;
+       Cbv := CompPix[1, SY, SX];
+       SX := PX*CH[2] Div MaxH; SY := PY*CV[2] Div MaxV;
+       Crv := CompPix[2, SY, SX];
+       YCbCr2RGB(Yv, Cbv, Crv, Rv, Gv, Bv);
+      End;
+      If (Gx < ImgW) And (Gy < ImgH) Then
+       SetLayerPixel(ActiveLayer, Gx, Gy, NearestVGA16(Rv, Gv, Bv));
+     End;
+    End;
+    { restart marker ? }
+    If RestartInt > 0 Then Begin
+     Dec(RstCount);
+     If RstCount = 0 Then Begin
+      { aligner sur octet, consommer le marqueur RSTn }
+      BCnt := 0; BBuf := 0;
+      If PendingMk = 0 Then NextEntByte;   { force lecture de l'octet de marqueur }
+      I := PendingMk; PendingMk := 0;
+      If (I < $D0) Or (I > $D7) Then Begin
+       { pas de RST trouve ; tolere }
+      End;
+      EntEOF := False;
+      For J := 0 To 3 Do PrevDC[J] := 0;
+      RstCount := RestartInt;
+     End;
+    End;
+   End;
+  DecodeScan := True;
+ End;
+
+ Function ParseDQT(Len: Integer): Boolean;
+ Var Pq, Tq, I, B: Integer;
+ Begin
+  ParseDQT := False;
+  Dec(Len, 2);
+  While Len > 0 Do Begin
+   B := R1; Dec(Len);
+   If B < 0 Then Exit;
+   Pq := (B Shr 4) And 15; Tq := B And 15;
+   If (Tq > 3) Or (Pq > 1) Then Exit;
+   For I := 0 To 63 Do Begin
+    If Pq = 0 Then Begin
+     B := R1; Dec(Len);
+    End Else Begin
+     B := R2; Dec(Len, 2);
+    End;
+    If B < 0 Then Exit;
+    QT[Tq, ZZ[I]] := B;
+   End;
+  End;
+  ParseDQT := True;
+ End;
+
+ Function ParseDHT(Len: Integer): Boolean;
+ Var TcTh, Tc, Th, I, NV, B: Integer;
+     Bits: Array[0..15] of Byte;
+     Vals: Array[0..255] of Byte;
+ Begin
+  ParseDHT := False;
+  Dec(Len, 2);
+  While Len > 0 Do Begin
+   B := R1; Dec(Len);
+   If B < 0 Then Exit;
+   TcTh := B; Tc := (TcTh Shr 4) And 15; Th := TcTh And 15;
+   If (Tc > 1) Or (Th > 3) Then Exit;
+   NV := 0;
+   For I := 0 To 15 Do Begin
+    B := R1; Dec(Len);
+    If B < 0 Then Exit;
+    Bits[I] := B; Inc(NV, B);
+   End;
+   If NV > 256 Then Exit;
+   For I := 0 To NV-1 Do Begin
+    B := R1; Dec(Len);
+    If B < 0 Then Exit;
+    Vals[I] := B;
+   End;
+   If Tc = 0 Then BuildHuff(HDC[Th], Bits, Vals, NV)
+   Else            BuildHuff(HAC[Th], Bits, Vals, NV);
+  End;
+  ParseDHT := True;
+ End;
+
+ Function ParseSOF0(Len: Integer): Boolean;
+ Var I, B, HV: Integer;
+ Begin
+  ParseSOF0 := False;
+  Prec := R1;
+  JH := R2; JW := R2;
+  NComp := R1;
+  If (Prec <> 8) Or (NComp < 1) Or (NComp > 3) Then Exit;
+  If (JW <= 0) Or (JH <= 0) Then Exit;
+  For I := 0 To NComp-1 Do Begin
+   CID[I] := R1;
+   HV := R1;
+   CH[I] := (HV Shr 4) And 15;
+   CV[I] := HV And 15;
+   CTq[I] := R1;
+   If (CH[I] < 1) Or (CH[I] > 4) Or (CV[I] < 1) Or (CV[I] > 4) Then Exit;
+   If CTq[I] > 3 Then Exit;
+  End;
+  MaxH := CH[0]; MaxV := CV[0];
+  For I := 1 To NComp-1 Do Begin
+   If CH[I] > MaxH Then MaxH := CH[I];
+   If CV[I] > MaxV Then MaxV := CV[I];
+  End;
+  MCUW := MaxH * 8; MCUH := MaxV * 8;
+  NMCUx := (JW + MCUW - 1) Div MCUW;
+  NMCUy := (JH + MCUH - 1) Div MCUH;
+  ParseSOF0 := True;
+ End;
+
+ Function ParseSOS(Len: Integer): Boolean;
+ Var Ns, I, J, CS, TT: Integer;
+ Begin
+  ParseSOS := False;
+  Ns := R1;
+  If Ns <> NComp Then Exit;
+  For I := 0 To Ns-1 Do Begin
+   CS := R1; TT := R1;
+   For J := 0 To NComp-1 Do
+    If CID[J] = CS Then Begin
+     CTd[J] := (TT Shr 4) And 15;
+     CTa[J] := TT And 15;
+    End;
+  End;
+  R1; R1; R1;   { Ss, Se, Ah|Al }
+  ParseSOS := True;
+ End;
+
+Begin
+ LoadJPEG := False;
+ InLen := 0; InPos := 0; InEOF := False; PendingMk := 0;
+ RestartInt := 0;
+ For K := 0 To 3 Do Begin
+  HDC[K].Defined := False; HAC[K].Defined := False;
+  For K2 := 0 To 63 Do QT[K, K2] := 1;
+ End;
+
+ { precompute cosines }
+ For K := 0 To 7 Do
+  For K2 := 0 To 7 Do
+   CosT[K, K2] := Cos((2.0*K + 1.0) * K2 * PI / 16.0);
+
+ Assign(F, FileName);
+ {$I-} Reset(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
+
+ { signature SOI = FFD8 }
+ K  := R1; K2 := R1;
+ If (K <> $FF) Or (K2 <> $D8) Then Begin Close(F); Exit; End;
+
+ OK := False;
+ { boucle marqueurs jusqu'a SOS }
+ Repeat
+  K := R1;
+  If K < 0 Then Begin Close(F); Exit; End;
+  If K <> $FF Then Begin Close(F); Exit; End;
+  While K = $FF Do K := R1;
+  Case K Of
+   $C0: Begin
+         K2 := R2;
+         If Not ParseSOF0(K2) Then Begin Close(F); Exit; End;
+        End;
+   $C4: Begin
+         K2 := R2;
+         If Not ParseDHT(K2) Then Begin Close(F); Exit; End;
+        End;
+   $DB: Begin
+         K2 := R2;
+         If Not ParseDQT(K2) Then Begin Close(F); Exit; End;
+        End;
+   $DD: Begin
+         K2 := R2;
+         RestartInt := R2;
+        End;
+   $DA: Begin
+         K2 := R2;
+         If Not ParseSOS(K2) Then Begin Close(F); Exit; End;
+         OK := True;
+        End;
+   $D9: Begin Close(F); Exit; End;
+   { SOF1..SOF15 sauf SOF4 = non-baseline non gere }
+   $C1, $C2, $C3, $C5, $C6, $C7, $C9, $CA, $CB, $CD, $CE, $CF:
+        Begin Close(F); Exit; End;
+   Else Begin
+    { tout autre marqueur avec longueur : on saute }
+    K2 := R2;
+    For K3 := 1 To K2-2 Do R1;
+   End;
+  End;
+ Until OK;
+
+ { redimensionner le calque si necessaire }
+ If (JW <> ImgW) Or (JH <> ImgH) Then Begin
+  For K := 0 To MAX_LAYERS-1 Do If Layers[K].Used Then FreeLayer(K);
+  ImgW := JW; ImgH := JH;
+  If ImgW > 1024 Then ImgW := 1024;
+  If ImgH > 1024 Then ImgH := 1024;
+  AllocLayer(0, 'Arriere-plan', False);
+  LayerCount := 1;
+  ActiveLayer := 0;
+ End Else Begin
+  For K := 0 To ImgW-1 Do
+   For K2 := 0 To ImgH-1 Do
+    SetLayerPixel(ActiveLayer, K, K2, 0);
+ End;
+
+ If Not DecodeScan Then Begin Close(F); Exit; End;
+
+ Close(F);
+ CurrentFileName := FileName;
+ ImageModified := False;
+ LoadJPEG := True;
+End;
+
 { ============================================================
    Dialogues
   ============================================================ }
@@ -2392,7 +2882,10 @@ Begin
   Else If Ext='.GIF' Then Begin
    If Not LoadGIF(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
   End
-  Else If (Ext='.PNG') Or (Ext='.JPG') Or (Ext='.JPEG') Or
+  Else If (Ext='.JPG') Or (Ext='.JPEG') Then Begin
+   If Not LoadJPEG(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+  End
+  Else If (Ext='.PNG') Or
           (Ext='.PCX') Or (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then
    ShowDialog('Format non supporte', 'Le decodage '+Ext+' n est pas encore implemente.')
   Else

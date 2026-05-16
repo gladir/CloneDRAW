@@ -1400,9 +1400,22 @@ End;
    Dialogues
   ============================================================ }
 
+Procedure DrawDlgButton(BX1, BY1, BX2, BY2: Integer; Const Cap: String; Pressed: Boolean);
+Var TX: Integer;
+Begin
+ HideMouseCursor;
+ FillRect(BX1, BY1, BX2, BY2, UI_BG_PANEL);
+ DrawBevel(BX1, BY1, BX2, BY2, Pressed);
+ SetColor(UI_TEXT);
+ TX := BX1 + ((BX2-BX1) - Length(Cap)*8) Div 2;
+ If Pressed Then OutTextXY(TX+1, BY1+6, Cap)
+ Else OutTextXY(TX, BY1+5, Cap);
+ ShowMouseCursor;
+End;
+
 Procedure ShowDialog(Const Title, Msg: String);
 Var X1, Y1, X2, Y2, BX1, BY1, BX2, BY2: Integer;
-    Ch: Char; Done: Boolean;
+    Ch: Char; Done, BtnDown, InRect: Boolean;
     MX, MY, MB, OldMB: Integer;
 Begin
  HideMouseCursor;
@@ -1419,25 +1432,35 @@ Begin
  OutTextXY(X1+12, Y1+40, Msg);
  BX1 := X1 + 130; BY1 := Y2 - 28;
  BX2 := BX1 + 60; BY2 := BY1 + 18;
- FillRect(BX1, BY1, BX2, BY2, UI_BG_PANEL);
- DrawBevel(BX1, BY1, BX2, BY2, False);
- SetColor(UI_TEXT);
- OutTextXY(BX1+20, BY1+5, 'OK');
+ DrawDlgButton(BX1, BY1, BX2, BY2, 'OK', False);
  ShowMouseCursor;
+ While KeyPressed Do ReadKey;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
  Done := False;
+ BtnDown := False;
  OldMB := 0;
  Repeat
   If KeyPressed Then Begin
    Ch := ReadKey;
-   If Ch=#0 Then ReadKey;
-   If (Ch=#13) Or (Ch=#27) Or (Ch=' ') Then Done := True;
+   If Ch=#0 Then ReadKey
+   Else If (Ch=#13) Or (Ch=#27) Or (Ch=' ') Then Done := True;
   End;
   GetMouseStateLocal(MX, MY, MB);
-  If (OldMB And 1 <> 0) And (MB And 1 = 0) Then Begin
-   If (MX>=BX1) And (MX<=BX2) And (MY>=BY1) And (MY<=BY2) Then Done := True;
+  InRect := (MX>=BX1) And (MX<=BX2) And (MY>=BY1) And (MY<=BY2);
+  If (OldMB And 1 = 0) And (MB And 1 <> 0) And InRect Then Begin
+   BtnDown := True;
+   DrawDlgButton(BX1, BY1, BX2, BY2, 'OK', True);
+  End;
+  If BtnDown And (OldMB And 1 <> 0) And (MB And 1 = 0) Then Begin
+   DrawDlgButton(BX1, BY1, BX2, BY2, 'OK', False);
+   BtnDown := False;
+   If InRect Then Done := True;
   End;
   OldMB := MB;
  Until Done;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
+ MouseButtons := 0; OldMouseButtons := 0;
+ DrawFullUI;
 End;
 
 Function PromptStr(Const Title, Prompt: String; Var Value: String): Boolean;
@@ -1471,6 +1494,8 @@ Begin
  OutTextXY(OKx1+20, OKy1+5, 'OK');
  OutTextXY(CXx1+16, CYy1+5, 'Annuler');
  ShowMouseCursor;
+ While KeyPressed Do ReadKey;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
  Done := False;
  OldMB := 0;
  Repeat
@@ -1482,7 +1507,7 @@ Begin
   Repeat
    If KeyPressed Then Break;
    GetMouseStateLocal(MX, MY, MB);
-   If (OldMB And 1 <> 0) And (MB And 1 = 0) Then Begin
+   If (OldMB And 1 = 0) And (MB And 1 <> 0) Then Begin
     If (MX>=OKx1) And (MX<=OKx2) And (MY>=OKy1) And (MY<=OKy2) Then Begin
      Done := True; Ok := True; OldMB := MB; Break;
     End;
@@ -1503,6 +1528,7 @@ Begin
    If (Ch>=' ') And (Length(Value)<60) Then Value := Value + Ch;
   End;
  Until Done;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
  ShowMouseCursor;
  PromptStr := Ok;
 End;

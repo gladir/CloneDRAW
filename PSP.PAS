@@ -4666,45 +4666,37 @@ Begin
  FD_Open := ResultVal;
 End;
 
+Function LoadFileByExt(Const FN: String; Var ErrMsg: String): Boolean;
+Var Ext: String;
+Begin
+ LoadFileByExt := False;
+ ErrMsg := '';
+ Ext := ExtractExt(FN);
+ If (Ext='.BMP') Or (Ext='.DIB') Then LoadFileByExt := LoadBMP(FN)
+ Else If Ext='.GIF' Then LoadFileByExt := LoadGIF(FN)
+ Else If (Ext='.JPG') Or (Ext='.JPEG') Then LoadFileByExt := LoadJPEG(FN)
+ Else If Ext='.PNG' Then LoadFileByExt := LoadPNG(FN)
+ Else If Ext='.PCX' Then LoadFileByExt := LoadPCX(FN)
+ Else If Ext='.PSD' Then LoadFileByExt := LoadPSD(FN)
+ Else If (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then
+  ErrMsg := 'Le decodage '+Ext+' n est pas encore implemente.'
+ Else
+  ErrMsg := 'Extension '+Ext+' non reconnue.';
+End;
+
 Procedure OpenFileAction;
-Var FN, Ext: String; Loaded: Boolean;
+Var FN, ErrMsg: String; Loaded: Boolean;
 Begin
  FN := '';
- Loaded := False;
  If FD_Open('Ouvrir un fichier', FN) Then Begin
-  Ext := ExtractExt(FN);
-  If (Ext='.BMP') Or (Ext='.DIB') Then Begin
-   If LoadBMP(FN) Then Loaded := True
-   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
-  End
-  Else If Ext='.GIF' Then Begin
-   If LoadGIF(FN) Then Loaded := True
-   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
-  End
-  Else If (Ext='.JPG') Or (Ext='.JPEG') Then Begin
-   If LoadJPEG(FN) Then Loaded := True
-   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
-  End
-  Else If Ext='.PNG' Then Begin
-   If LoadPNG(FN) Then Loaded := True
-   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
-  End
-  Else If Ext='.PCX' Then Begin
-   If LoadPCX(FN) Then Loaded := True
-   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
-  End
-  Else If Ext='.PSD' Then Begin
-   If LoadPSD(FN) Then Loaded := True
-   Else ShowDialog('Erreur', 'Impossible de charger : '+FN);
-  End
-  Else If (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then
-   ShowDialog('Format non supporte', 'Le decodage '+Ext+' n est pas encore implemente.')
-  Else
-   ShowDialog('Format inconnu', 'Extension '+Ext+' non reconnue.');
+  Loaded := LoadFileByExt(FN, ErrMsg);
   If Loaded Then Begin
    FI_ResetMetadata;
    FI_LoadSidecar(FN);
-  End;
+  End Else If ErrMsg<>'' Then
+   ShowDialog('Format', ErrMsg)
+  Else
+   ShowDialog('Erreur', 'Impossible de charger : '+FN);
  End;
 End;
 
@@ -5553,8 +5545,24 @@ Begin
  End;
 End;
 
+Procedure HandleCmdLine;
+Var FN, ErrMsg: String;
+Begin
+ If ParamCount < 1 Then Exit;
+ FN := ParamStr(1);
+ If LoadFileByExt(FN, ErrMsg) Then Begin
+  FI_ResetMetadata;
+  FI_LoadSidecar(FN);
+  DrawFullUI;
+ End Else If ErrMsg<>'' Then
+  ShowDialog('Format', ErrMsg)
+ Else
+  ShowDialog('Erreur', 'Impossible de charger : '+FN);
+End;
+
 BEGIN
  Initialize;
+ HandleCmdLine;
  MainLoop;
  Cleanup;
 END.

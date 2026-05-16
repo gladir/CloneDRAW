@@ -137,7 +137,7 @@ Type
 
  TMenuItem = Record
   Caption: String[28];
-  Shortcut: String[10];
+  Shortcut: String[16];
   Separator: Boolean;
  End;
 
@@ -145,7 +145,7 @@ Type
   Title: String[12];
   X, Width: Integer;
   ItemCount: Byte;
-  Items: Array[0..15] of TMenuItem;
+  Items: Array[0..27] of TMenuItem;
  End;
 
  TToolDef = Record
@@ -418,14 +418,31 @@ Begin
  Menus[MENU_WINDOW].Title  := 'Fenetre';
  Menus[MENU_HELP].Title    := 'Aide';
 
- Menus[MENU_FILE].ItemCount := 7;
- SetMenuItem(MENU_FILE, 0, 'Nouveau...',       'Ctrl+N', False);
- SetMenuItem(MENU_FILE, 1, 'Ouvrir...',        'Ctrl+O', False);
- SetMenuItem(MENU_FILE, 2, 'Enregistrer',      'Ctrl+S', False);
- SetMenuItem(MENU_FILE, 3, 'Enregistrer sous', '',       False);
- SetMenuItem(MENU_FILE, 4, '-',                '',       True);
- SetMenuItem(MENU_FILE, 5, 'Importer',         '',       False);
- SetMenuItem(MENU_FILE, 6, 'Quitter',          'Alt+F4', False);
+ Menus[MENU_FILE].ItemCount := 24;
+ SetMenuItem(MENU_FILE, 0,  'Nouveau...',         'Ctrl+N',         False);
+ SetMenuItem(MENU_FILE, 1,  'Ouvrir...',          'Ctrl+O',         False);
+ SetMenuItem(MENU_FILE, 2,  'Ouvrir sous...',     'Alt+Ctrl+O',     False);
+ SetMenuItem(MENU_FILE, 3,  'Ouvrir recent',      '',               False);
+ SetMenuItem(MENU_FILE, 4,  '-',                  '',               True);
+ SetMenuItem(MENU_FILE, 5,  'Fermer',             'Ctrl+W',         False);
+ SetMenuItem(MENU_FILE, 6,  'Fermer tout',        'Alt+Ctrl+W',     False);
+ SetMenuItem(MENU_FILE, 7,  'Revenir',            'F12',            False);
+ SetMenuItem(MENU_FILE, 8,  '-',                  '',               True);
+ SetMenuItem(MENU_FILE, 9,  'Enregistrer',        'Ctrl+S',         False);
+ SetMenuItem(MENU_FILE, 10, 'Enregistrer sous...','Maj+Ctrl+S',     False);
+ SetMenuItem(MENU_FILE, 11, '-',                  '',               True);
+ SetMenuItem(MENU_FILE, 12, 'Importer',           '',               False);
+ SetMenuItem(MENU_FILE, 13, 'Exporter',           '',               False);
+ SetMenuItem(MENU_FILE, 14, 'Generer',            '',               False);
+ SetMenuItem(MENU_FILE, 15, 'Scripts',            '',               False);
+ SetMenuItem(MENU_FILE, 16, 'Automatiser',        '',               False);
+ SetMenuItem(MENU_FILE, 17, '-',                  '',               True);
+ SetMenuItem(MENU_FILE, 18, 'Info fichier...',    'Alt+Maj+Ctrl+I', False);
+ SetMenuItem(MENU_FILE, 19, '-',                  '',               True);
+ SetMenuItem(MENU_FILE, 20, 'Imprimer...',        'Ctrl+P',         False);
+ SetMenuItem(MENU_FILE, 21, 'Imprimer une copie', 'Alt+Maj+Ctrl+P', False);
+ SetMenuItem(MENU_FILE, 22, '-',                  '',               True);
+ SetMenuItem(MENU_FILE, 23, 'Quitter',            'Ctrl+Q',         False);
 
  Menus[MENU_EDIT].ItemCount := 7;
  SetMenuItem(MENU_EDIT, 0, 'Annuler',          'Ctrl+Z', False);
@@ -2127,6 +2144,833 @@ Begin
  LoadJPEG := True;
 End;
 
+{ ------------------------------------------------------------
+   LoadPNG : signature + chunks + DEFLATE + filtres
+  ------------------------------------------------------------ }
+
+Function LoadPNG(Const FileName: String): Boolean;
+Type
+ PByteArr = ^TByteArr;
+ TByteArr = Array[0..0] of Byte;
+ THuf = Record
+  Counts: Array[0..15] of Integer;
+  Symbols: Array[0..287] of Integer;
+ End;
+Const
+ PngSig: Array[0..7] of Byte = ($89,$50,$4E,$47,$0D,$0A,$1A,$0A);
+ LenBaseT: Array[0..28] of Integer =
+   (3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,
+    35,43,51,59,67,83,99,115,131,163,195,227,258);
+ LenExtT: Array[0..28] of Integer =
+   (0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0);
+ DistBaseT: Array[0..29] of LongInt =
+   (1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,
+    1025,1537,2049,3073,4097,6145,8193,12289,16385,24577);
+ DistExtT: Array[0..29] of Integer =
+   (0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13);
+ ClenOrd: Array[0..18] of Byte =
+   (16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15);
+Var
+ F: File;
+ FBuf: Array[0..16383] of Byte;
+ FLen, FPos: Integer;
+ FEOF: Boolean;
+ Got: Word;
+ Sig: Array[0..7] of Byte;
+ PngW, PngH: LongInt;
+ Depth, ColorT, IntlcM: Integer;
+ Channels, BPP: Integer;
+ BytesPerScan: LongInt;
+ PalR, PalG, PalB: Array[0..255] of Byte;
+ PalCount: Integer;
+ HasPal: Boolean;
+ PalRemap: Array[0..255] of Byte;
+ IDATTotal, IDATIdx: LongInt;
+ IDATBuf: PByteArr;
+ DecBuf: PByteArr;
+ DecSize, DecWP: LongInt;
+ BBuf: LongInt;
+ BCnt: Integer;
+ EndStream: Boolean;
+ HLitTab, HDistTab: THuf;
+ ChunkLen: LongInt;
+ ChunkType: Array[0..3] of Char;
+ K, K2: LongInt;
+ OkSig: Boolean;
+ FilePtr: LongInt;
+ SeekOrigPos: LongInt;
+
+ Function R1: Integer;
+ Begin
+  If FPos >= FLen Then Begin
+   If FEOF Then Begin R1 := -1; Exit; End;
+   BlockRead(F, FBuf, 16384, Got);
+   FLen := Got; FPos := 0;
+   If Got = 0 Then Begin FEOF := True; R1 := -1; Exit; End;
+  End;
+  R1 := FBuf[FPos]; Inc(FPos);
+ End;
+
+ Function R4: LongInt;
+ Var A, B, C, D: Integer;
+ Begin
+  A := R1; B := R1; C := R1; D := R1;
+  R4 := (LongInt(A And $FF) Shl 24)
+     Or (LongInt(B And $FF) Shl 16)
+     Or (LongInt(C And $FF) Shl 8)
+     Or  LongInt(D And $FF);
+ End;
+
+ Function ReadChunkHdr: Boolean;
+ Var I: Integer;
+ Begin
+  ChunkLen := R4;
+  For I := 0 To 3 Do ChunkType[I] := Chr(R1 And $FF);
+  ReadChunkHdr := Not FEOF;
+ End;
+
+ Function CT(A, B, C, D: Char): Boolean;
+ Begin
+  CT := (ChunkType[0]=A) And (ChunkType[1]=B)
+    And (ChunkType[2]=C) And (ChunkType[3]=D);
+ End;
+
+ Procedure SkipChunkData;
+ Var I: LongInt;
+ Begin
+  For I := 1 To ChunkLen Do R1;
+  R4;   { CRC }
+ End;
+
+ Function NextRawByte: Integer;
+ Begin
+  If IDATIdx >= IDATTotal Then Begin NextRawByte := -1; Exit; End;
+  NextRawByte := IDATBuf^[IDATIdx]; Inc(IDATIdx);
+ End;
+
+ Function GetBit: Integer;
+ Var B: Integer;
+ Begin
+  If BCnt = 0 Then Begin
+   B := NextRawByte;
+   If B < 0 Then Begin EndStream := True; GetBit := 0; Exit; End;
+   BBuf := B; BCnt := 8;
+  End;
+  GetBit := Integer(BBuf And 1);
+  BBuf := BBuf Shr 1;
+  Dec(BCnt);
+ End;
+
+ Function GetBits(N: Integer): LongInt;
+ Var V: LongInt; I: Integer;
+ Begin
+  V := 0;
+  For I := 0 To N-1 Do V := V Or (LongInt(GetBit) Shl I);
+  GetBits := V;
+ End;
+
+ Procedure BuildHuf(Var H: THuf; Const Lens: Array of Integer; N: Integer);
+ Var I, J: Integer; Offs: Array[0..16] of Integer;
+ Begin
+  For I := 0 To 15 Do H.Counts[I] := 0;
+  For I := 0 To N-1 Do
+   If (Lens[I] >= 0) And (Lens[I] <= 15) Then Inc(H.Counts[Lens[I]]);
+  H.Counts[0] := 0;
+  Offs[1] := 0;
+  For I := 1 To 15 Do Offs[I+1] := Offs[I] + H.Counts[I];
+  For I := 0 To N-1 Do
+   If (Lens[I] > 0) And (Lens[I] <= 15) Then Begin
+    H.Symbols[Offs[Lens[I]]] := I;
+    Inc(Offs[Lens[I]]);
+   End;
+ End;
+
+ Function DecSym(Var H: THuf): Integer;
+ Var Code, First, Idx, Count, Len: Integer;
+ Begin
+  Code := 0; First := 0; Idx := 0;
+  For Len := 1 To 15 Do Begin
+   Code := (Code Shl 1) Or GetBit;
+   Count := H.Counts[Len];
+   If Code - Count < First Then Begin
+    DecSym := H.Symbols[Idx + (Code - First)];
+    Exit;
+   End;
+   Inc(Idx, Count);
+   First := (First + Count) Shl 1;
+  End;
+  DecSym := -1;
+ End;
+
+ Procedure EmitDec(B: Byte);
+ Begin
+  If DecWP < DecSize Then DecBuf^[DecWP] := B;
+  Inc(DecWP);
+ End;
+
+ Procedure BuildFixed;
+ Var L: Array[0..287] of Integer; LD: Array[0..29] of Integer; I: Integer;
+ Begin
+  For I := 0   To 143 Do L[I] := 8;
+  For I := 144 To 255 Do L[I] := 9;
+  For I := 256 To 279 Do L[I] := 7;
+  For I := 280 To 287 Do L[I] := 8;
+  BuildHuf(HLitTab, L, 288);
+  For I := 0 To 29 Do LD[I] := 5;
+  BuildHuf(HDistTab, LD, 30);
+ End;
+
+ Function ReadDynamic: Boolean;
+ Var HLit, HDistN, HCLen: Integer;
+     CLens: Array[0..18] of Integer;
+     HClenTab: THuf;
+     LitDistLens: Array[0..319] of Integer;
+     I, N, Sym, Rep, Prev: Integer;
+ Begin
+  ReadDynamic := False;
+  HLit  := Integer(GetBits(5)) + 257;
+  HDistN:= Integer(GetBits(5)) + 1;
+  HCLen := Integer(GetBits(4)) + 4;
+  For I := 0 To 18 Do CLens[I] := 0;
+  For I := 0 To HCLen-1 Do CLens[ClenOrd[I]] := Integer(GetBits(3));
+  BuildHuf(HClenTab, CLens, 19);
+  N := 0;
+  While N < HLit + HDistN Do Begin
+   Sym := DecSym(HClenTab);
+   If Sym < 0 Then Exit;
+   If Sym < 16 Then Begin
+    LitDistLens[N] := Sym; Inc(N);
+   End Else If Sym = 16 Then Begin
+    If N = 0 Then Exit;
+    Prev := LitDistLens[N-1];
+    Rep := Integer(GetBits(2)) + 3;
+    While (Rep > 0) And (N < HLit + HDistN) Do Begin
+     LitDistLens[N] := Prev; Inc(N); Dec(Rep);
+    End;
+   End Else If Sym = 17 Then Begin
+    Rep := Integer(GetBits(3)) + 3;
+    While (Rep > 0) And (N < HLit + HDistN) Do Begin
+     LitDistLens[N] := 0; Inc(N); Dec(Rep);
+    End;
+   End Else If Sym = 18 Then Begin
+    Rep := Integer(GetBits(7)) + 11;
+    While (Rep > 0) And (N < HLit + HDistN) Do Begin
+     LitDistLens[N] := 0; Inc(N); Dec(Rep);
+    End;
+   End Else Exit;
+  End;
+  BuildHuf(HLitTab, LitDistLens, HLit);
+  { decales pour la table distance }
+  For I := 0 To HDistN-1 Do LitDistLens[I] := LitDistLens[HLit + I];
+  BuildHuf(HDistTab, LitDistLens, HDistN);
+  ReadDynamic := True;
+ End;
+
+ Function DecodeData: Boolean;
+ Var Sym, LIdx, DSym: Integer; L: LongInt; D: LongInt; I: LongInt;
+ Begin
+  DecodeData := False;
+  Repeat
+   Sym := DecSym(HLitTab);
+   If Sym < 0 Then Exit;
+   If Sym < 256 Then EmitDec(Byte(Sym))
+   Else If Sym = 256 Then Begin DecodeData := True; Exit; End
+   Else Begin
+    LIdx := Sym - 257;
+    If LIdx > 28 Then Exit;
+    L := LenBaseT[LIdx] + GetBits(LenExtT[LIdx]);
+    DSym := DecSym(HDistTab);
+    If (DSym < 0) Or (DSym > 29) Then Exit;
+    D := DistBaseT[DSym] + GetBits(DistExtT[DSym]);
+    If D > DecWP Then Exit;
+    For I := 1 To L Do
+     If DecWP < DecSize Then Begin
+      DecBuf^[DecWP] := DecBuf^[DecWP - D];
+      Inc(DecWP);
+     End Else Inc(DecWP);
+   End;
+  Until False;
+ End;
+
+ Function Inflate: Boolean;
+ Var BFINAL, BTYPE: Integer; LEN, NLEN, I, B: LongInt;
+ Begin
+  Inflate := False;
+  BBuf := 0; BCnt := 0; EndStream := False;
+  { zlib header CMF, FLG }
+  NextRawByte; NextRawByte;
+  Repeat
+   BFINAL := GetBit;
+   BTYPE  := Integer(GetBits(2));
+   Case BTYPE Of
+    0: Begin
+        BCnt := 0; BBuf := 0;
+        LEN  := NextRawByte; LEN  := LEN  Or (LongInt(NextRawByte) Shl 8);
+        NLEN := NextRawByte; NLEN := NLEN Or (LongInt(NextRawByte) Shl 8);
+        For I := 1 To LEN Do Begin
+         B := NextRawByte;
+         If B < 0 Then Exit;
+         EmitDec(Byte(B));
+        End;
+       End;
+    1: Begin
+        BuildFixed;
+        If Not DecodeData Then Exit;
+       End;
+    2: Begin
+        If Not ReadDynamic Then Exit;
+        If Not DecodeData Then Exit;
+       End;
+    Else Exit;
+   End;
+  Until BFINAL = 1;
+  Inflate := True;
+ End;
+
+ Function PaethPred(A, B, C: Integer): Integer;
+ Var P, PA, PB, PC: Integer;
+ Begin
+  P := A + B - C;
+  PA := P - A; If PA < 0 Then PA := -PA;
+  PB := P - B; If PB < 0 Then PB := -PB;
+  PC := P - C; If PC < 0 Then PC := -PC;
+  If (PA <= PB) And (PA <= PC) Then PaethPred := A
+  Else If PB <= PC Then PaethPred := B
+  Else PaethPred := C;
+ End;
+
+ Procedure UnfilterAll;
+ Var Y, X: LongInt; FT: Integer; RowOff, PrevOff: LongInt;
+     A, B, C, Recon: Integer;
+ Begin
+  For Y := 0 To PngH-1 Do Begin
+   RowOff := Y * (BytesPerScan + 1);
+   If RowOff >= DecSize Then Break;
+   FT := DecBuf^[RowOff];
+   If Y = 0 Then PrevOff := -1 Else PrevOff := (Y-1) * (BytesPerScan + 1) + 1;
+   For X := 0 To BytesPerScan-1 Do Begin
+    If X >= BPP Then A := DecBuf^[RowOff + 1 + X - BPP] Else A := 0;
+    If PrevOff >= 0 Then B := DecBuf^[PrevOff + X] Else B := 0;
+    If (PrevOff >= 0) And (X >= BPP) Then C := DecBuf^[PrevOff + X - BPP] Else C := 0;
+    Case FT Of
+     0: Recon := DecBuf^[RowOff + 1 + X];
+     1: Recon := (DecBuf^[RowOff + 1 + X] + A) And $FF;
+     2: Recon := (DecBuf^[RowOff + 1 + X] + B) And $FF;
+     3: Recon := (DecBuf^[RowOff + 1 + X] + ((A + B) Div 2)) And $FF;
+     4: Recon := (DecBuf^[RowOff + 1 + X] + PaethPred(A, B, C)) And $FF;
+     Else Recon := DecBuf^[RowOff + 1 + X];
+    End;
+    DecBuf^[RowOff + 1 + X] := Byte(Recon);
+   End;
+  End;
+ End;
+
+ Function GetSample(RowOff: LongInt; X: LongInt): Integer;
+ Var ByteOff, BitOff, V: LongInt;
+ Begin
+  GetSample := 0;
+  Case Depth Of
+   1: Begin
+       ByteOff := X Shr 3; BitOff := 7 - (X And 7);
+       V := DecBuf^[RowOff + 1 + ByteOff];
+       GetSample := Integer((V Shr BitOff) And 1);
+      End;
+   2: Begin
+       ByteOff := X Shr 2; BitOff := 6 - 2*(X And 3);
+       V := DecBuf^[RowOff + 1 + ByteOff];
+       GetSample := Integer((V Shr BitOff) And 3);
+      End;
+   4: Begin
+       ByteOff := X Shr 1; BitOff := 4 - 4*(X And 1);
+       V := DecBuf^[RowOff + 1 + ByteOff];
+       GetSample := Integer((V Shr BitOff) And 15);
+      End;
+   8: GetSample := DecBuf^[RowOff + 1 + X];
+   16: GetSample := DecBuf^[RowOff + 1 + X*2];     { MSB }
+  End;
+ End;
+
+ Function NearestVGA(R, G, B: Integer): Byte;
+ Var II, Best: Integer; D, BD, DR, DG, DB: LongInt;
+ Begin
+  Best := 0; BD := MaxLongInt;
+  For II := 0 To 15 Do Begin
+   DR := LongInt(R) - VGA_R[II];
+   DG := LongInt(G) - VGA_G[II];
+   DB := LongInt(B) - VGA_B[II];
+   D := DR*DR + DG*DG + DB*DB;
+   If D < BD Then Begin BD := D; Best := II; End;
+  End;
+  NearestVGA := Byte(Best);
+ End;
+
+ Procedure EmitPixels;
+ Var Y, X: LongInt; RowOff: LongInt;
+     R, G, B, Idx, Sv: Integer;
+     S0, S1, S2, S3: Integer; ByteOff: LongInt;
+     PixIdx: Byte;
+ Begin
+  For Y := 0 To PngH-1 Do Begin
+   If Y >= ImgH Then Break;
+   RowOff := Y * (BytesPerScan + 1);
+   If RowOff >= DecSize Then Break;
+   For X := 0 To PngW-1 Do Begin
+    If X >= ImgW Then Break;
+    Case ColorT Of
+     0: Begin
+         Sv := GetSample(RowOff, X);
+         Case Depth Of
+          1: Sv := Sv * 255;
+          2: Sv := Sv * 85;
+          4: Sv := Sv * 17;
+         End;
+         R := Sv; G := Sv; B := Sv;
+         PixIdx := NearestVGA(R, G, B);
+        End;
+     2: Begin
+         If Depth = 8 Then Begin
+          ByteOff := RowOff + 1 + X*3;
+          R := DecBuf^[ByteOff];
+          G := DecBuf^[ByteOff+1];
+          B := DecBuf^[ByteOff+2];
+         End Else Begin   { 16-bit }
+          ByteOff := RowOff + 1 + X*6;
+          R := DecBuf^[ByteOff];
+          G := DecBuf^[ByteOff+2];
+          B := DecBuf^[ByteOff+4];
+         End;
+         PixIdx := NearestVGA(R, G, B);
+        End;
+     3: Begin
+         Idx := GetSample(RowOff, X);
+         If Idx >= PalCount Then Idx := 0;
+         PixIdx := PalRemap[Idx];
+        End;
+     4: Begin
+         If Depth = 8 Then Begin
+          ByteOff := RowOff + 1 + X*2;
+          Sv := DecBuf^[ByteOff];
+         End Else Begin
+          ByteOff := RowOff + 1 + X*4;
+          Sv := DecBuf^[ByteOff];
+         End;
+         R := Sv; G := Sv; B := Sv;
+         PixIdx := NearestVGA(R, G, B);
+        End;
+     6: Begin
+         If Depth = 8 Then Begin
+          ByteOff := RowOff + 1 + X*4;
+          R := DecBuf^[ByteOff];
+          G := DecBuf^[ByteOff+1];
+          B := DecBuf^[ByteOff+2];
+         End Else Begin
+          ByteOff := RowOff + 1 + X*8;
+          R := DecBuf^[ByteOff];
+          G := DecBuf^[ByteOff+2];
+          B := DecBuf^[ByteOff+4];
+         End;
+         PixIdx := NearestVGA(R, G, B);
+        End;
+     Else PixIdx := 0;
+    End;
+    SetLayerPixel(ActiveLayer, X, Y, PixIdx);
+   End;
+  End;
+ End;
+
+ Procedure BuildPalRemap;
+ Var K3: Integer; DR, DG, DB, D, BD: LongInt; Best, II: Integer;
+ Begin
+  For K3 := 0 To PalCount-1 Do Begin
+   Best := 0; BD := MaxLongInt;
+   For II := 0 To 15 Do Begin
+    DR := LongInt(PalR[K3]) - VGA_R[II];
+    DG := LongInt(PalG[K3]) - VGA_G[II];
+    DB := LongInt(PalB[K3]) - VGA_B[II];
+    D := DR*DR + DG*DG + DB*DB;
+    If D < BD Then Begin BD := D; Best := II; End;
+   End;
+   PalRemap[K3] := Byte(Best);
+  End;
+  For K3 := PalCount To 255 Do PalRemap[K3] := 0;
+ End;
+
+Begin
+ LoadPNG := False;
+ IDATBuf := Nil; DecBuf := Nil;
+ FLen := 0; FPos := 0; FEOF := False;
+ IDATTotal := 0; PalCount := 0; HasPal := False;
+
+ Assign(F, FileName);
+ {$I-} Reset(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
+
+ { lire signature }
+ For K := 0 To 7 Do Sig[K] := R1 And $FF;
+ OkSig := True;
+ For K := 0 To 7 Do If Sig[K] <> PngSig[K] Then OkSig := False;
+ If Not OkSig Then Begin Close(F); Exit; End;
+
+ { Pass 1 : parser IHDR/PLTE, accumuler taille IDAT }
+ SeekOrigPos := FilePos(F) - (FLen - FPos);
+ Repeat
+  If Not ReadChunkHdr Then Begin Close(F); Exit; End;
+  If CT('I','H','D','R') Then Begin
+   If ChunkLen < 13 Then Begin Close(F); Exit; End;
+   PngW := R4; PngH := R4;
+   Depth := R1; ColorT := R1;
+   R1; { compression method, doit etre 0 }
+   R1; { filter method, doit etre 0 }
+   IntlcM := R1;
+   For K := 14 To ChunkLen Do R1;
+   R4; { CRC }
+   If (PngW <= 0) Or (PngH <= 0) Then Begin Close(F); Exit; End;
+   If IntlcM <> 0 Then Begin Close(F); Exit; End;     { Adam7 non gere }
+  End Else If CT('P','L','T','E') Then Begin
+   PalCount := Integer(ChunkLen Div 3);
+   If PalCount > 256 Then PalCount := 256;
+   For K := 0 To PalCount-1 Do Begin
+    PalR[K] := R1; PalG[K] := R1; PalB[K] := R1;
+   End;
+   For K := LongInt(PalCount)*3 To ChunkLen-1 Do R1;
+   R4;
+   HasPal := True;
+  End Else If CT('I','D','A','T') Then Begin
+   Inc(IDATTotal, ChunkLen);
+   SkipChunkData;
+  End Else If CT('I','E','N','D') Then Begin
+   SkipChunkData;
+   Break;
+  End Else SkipChunkData;
+ Until False;
+
+ { valider color type / depth }
+ Case ColorT Of
+  0: Channels := 1;
+  2: Channels := 3;
+  3: Channels := 1;
+  4: Channels := 2;
+  6: Channels := 4;
+  Else Begin Close(F); Exit; End;
+ End;
+ Case Depth Of
+  1, 2, 4: If (ColorT <> 0) And (ColorT <> 3) Then Begin Close(F); Exit; End;
+  8, 16  : ;
+  Else Begin Close(F); Exit; End;
+ End;
+ If (ColorT = 3) And (Depth = 16) Then Begin Close(F); Exit; End;
+
+ BPP := (Channels * Depth + 7) Div 8;
+ BytesPerScan := (PngW * Channels * Depth + 7) Div 8;
+ DecSize := PngH * (BytesPerScan + 1);
+ If IDATTotal <= 0 Then Begin Close(F); Exit; End;
+ If DecSize > 16777216 Then Begin Close(F); Exit; End;     { > 16 MB : refus }
+ If IDATTotal > 16777216 Then Begin Close(F); Exit; End;
+
+ GetMem(IDATBuf, IDATTotal);
+ GetMem(DecBuf, DecSize);
+ If (IDATBuf = Nil) Or (DecBuf = Nil) Then Begin
+  If IDATBuf <> Nil Then FreeMem(IDATBuf, IDATTotal);
+  If DecBuf  <> Nil Then FreeMem(DecBuf, DecSize);
+  Close(F); Exit;
+ End;
+
+ { Pass 2 : relire le fichier pour copier les IDAT }
+ Close(F);
+ Assign(F, FileName);
+ {$I-} Reset(F, 1); {$I+}
+ If IOResult <> 0 Then Begin FreeMem(IDATBuf, IDATTotal); FreeMem(DecBuf, DecSize); Exit; End;
+ FLen := 0; FPos := 0; FEOF := False;
+ For K := 0 To 7 Do R1;     { signature }
+
+ IDATIdx := 0;
+ Repeat
+  If Not ReadChunkHdr Then Break;
+  If CT('I','D','A','T') Then Begin
+   For K := 1 To ChunkLen Do Begin
+    K2 := R1;
+    If (IDATIdx < IDATTotal) And (K2 >= 0) Then Begin
+     IDATBuf^[IDATIdx] := Byte(K2); Inc(IDATIdx);
+    End;
+   End;
+   R4;     { CRC }
+  End Else If CT('I','E','N','D') Then Begin
+   SkipChunkData; Break;
+  End Else SkipChunkData;
+ Until False;
+ Close(F);
+
+ { redimensionner le calque }
+ If (PngW <> ImgW) Or (PngH <> ImgH) Then Begin
+  For K := 0 To MAX_LAYERS-1 Do If Layers[K].Used Then FreeLayer(K);
+  ImgW := PngW; ImgH := PngH;
+  If ImgW > 1024 Then ImgW := 1024;
+  If ImgH > 1024 Then ImgH := 1024;
+  AllocLayer(0, 'Arriere-plan', False);
+  LayerCount := 1;
+  ActiveLayer := 0;
+ End Else Begin
+  For K := 0 To ImgW-1 Do
+   For K2 := 0 To ImgH-1 Do
+    SetLayerPixel(ActiveLayer, K, K2, 0);
+ End;
+
+ IDATIdx := 0;
+ DecWP := 0;
+ If Not Inflate Then Begin
+  FreeMem(IDATBuf, IDATTotal); FreeMem(DecBuf, DecSize);
+  Exit;
+ End;
+
+ UnfilterAll;
+
+ If ColorT = 3 Then Begin
+  If Not HasPal Then PalCount := 0;
+  BuildPalRemap;
+ End;
+
+ EmitPixels;
+
+ FreeMem(IDATBuf, IDATTotal);
+ FreeMem(DecBuf, DecSize);
+
+ CurrentFileName := FileName;
+ ImageModified := False;
+ LoadPNG := True;
+End;
+
+{ ------------------------------------------------------------
+   LoadPCX : PCX ZSoft, RLE par plan
+  ------------------------------------------------------------ }
+
+Function LoadPCX(Const FileName: String): Boolean;
+Type
+ TPCXHdr = Packed Record
+  Manuf, Ver, Enc, BPP: Byte;
+  Xmin, Ymin, Xmax, Ymax: Word;
+  HDpi, VDpi: Word;
+  EgaPal: Array[0..47] of Byte;
+  Reserved: Byte;
+  NPlanes: Byte;
+  BytesPerLine: Word;
+  PalInfo: Word;
+  HScrSize, VScrSize: Word;
+  Filler: Array[0..53] of Byte;
+ End;
+Var
+ F: File;
+ H: TPCXHdr;
+ Got: Word;
+ FBuf: Array[0..16383] of Byte;
+ FLen, FPos: Integer;
+ FEOFf: Boolean;
+ PcxW, PcxH: LongInt;
+ ScanBytes: LongInt;
+ Scan: Array[0..16383] of Byte;
+ PalR, PalG, PalB: Array[0..255] of Byte;
+ PalRemap: Array[0..255] of Byte;
+ PalCount: Integer;
+ HasPal8: Boolean;
+ K, K2: LongInt;
+ FSize: LongInt;
+ TailByte: Byte;
+ TailBuf: Array[0..768] of Byte;
+ X, Y, I, II, Best: LongInt;
+ R, G, B: Integer;
+ BitIdx, ByteOff: LongInt;
+ Plane, Bit: Integer;
+ Idx: Integer;
+ DR, DG, DB, Dist, BD: LongInt;
+ BR: Word;
+
+ Function R1: Integer;
+ Begin
+  If FPos >= FLen Then Begin
+   If FEOFf Then Begin R1 := -1; Exit; End;
+   BlockRead(F, FBuf, 16384, Got);
+   FLen := Got; FPos := 0;
+   If Got = 0 Then Begin FEOFf := True; R1 := -1; Exit; End;
+  End;
+  R1 := FBuf[FPos]; Inc(FPos);
+ End;
+
+ Function ReadScanline: Boolean;
+ Var Cnt, Val, J: Integer; P: LongInt;
+ Begin
+  ReadScanline := False;
+  P := 0;
+  While P < ScanBytes Do Begin
+   Val := R1;
+   If Val < 0 Then Exit;
+   If (Val And $C0) = $C0 Then Begin
+    Cnt := Val And $3F;
+    Val := R1;
+    If Val < 0 Then Exit;
+    For J := 1 To Cnt Do Begin
+     If P < ScanBytes Then Scan[P] := Byte(Val);
+     Inc(P);
+    End;
+   End Else Begin
+    Scan[P] := Byte(Val); Inc(P);
+   End;
+  End;
+  ReadScanline := True;
+ End;
+
+ Function NearestVGA(Rv, Gv, Bv: Integer): Byte;
+ Var Jj, Bb: Integer; D, BBd, Dd1, Dd2, Dd3: LongInt;
+ Begin
+  Bb := 0; BBd := MaxLongInt;
+  For Jj := 0 To 15 Do Begin
+   Dd1 := LongInt(Rv) - VGA_R[Jj];
+   Dd2 := LongInt(Gv) - VGA_G[Jj];
+   Dd3 := LongInt(Bv) - VGA_B[Jj];
+   D := Dd1*Dd1 + Dd2*Dd2 + Dd3*Dd3;
+   If D < BBd Then Begin BBd := D; Bb := Jj; End;
+  End;
+  NearestVGA := Byte(Bb);
+ End;
+
+Begin
+ LoadPCX := False;
+ FLen := 0; FPos := 0; FEOFf := False;
+ Assign(F, FileName);
+ {$I-} Reset(F, 1); {$I+}
+ If IOResult <> 0 Then Exit;
+
+ BlockRead(F, H, SizeOf(H), Got);
+ If Got <> SizeOf(H) Then Begin Close(F); Exit; End;
+ If H.Manuf <> $0A Then Begin Close(F); Exit; End;
+ If H.Enc <> 1 Then Begin Close(F); Exit; End;
+ If (H.BPP <> 1) And (H.BPP <> 2) And (H.BPP <> 4) And (H.BPP <> 8) Then Begin Close(F); Exit; End;
+ If (H.NPlanes < 1) Or (H.NPlanes > 4) Then Begin Close(F); Exit; End;
+
+ PcxW := LongInt(H.Xmax) - H.Xmin + 1;
+ PcxH := LongInt(H.Ymax) - H.Ymin + 1;
+ If (PcxW <= 0) Or (PcxH <= 0) Then Begin Close(F); Exit; End;
+ If (PcxW > 1024) Or (PcxH > 1024) Then Begin Close(F); Exit; End;
+
+ ScanBytes := LongInt(H.BytesPerLine) * H.NPlanes;
+ If ScanBytes <= 0 Then Begin Close(F); Exit; End;
+ If ScanBytes > 16384 Then Begin Close(F); Exit; End;
+
+ { palette : pour 8bpp 1 plan, regarder la queue du fichier }
+ HasPal8 := False; PalCount := 0;
+ If (H.BPP = 8) And (H.NPlanes = 1) Then Begin
+  FSize := FileSize(F);
+  If FSize >= 769 Then Begin
+   Seek(F, FSize - 769);
+   FLen := 0; FPos := 0; FEOFf := False;
+   BlockRead(F, TailBuf, 769, BR);
+   If (BR = 769) And (TailBuf[0] = $0C) Then Begin
+    HasPal8 := True; PalCount := 256;
+    For K := 0 To 255 Do Begin
+     PalR[K] := TailBuf[1 + K*3];
+     PalG[K] := TailBuf[1 + K*3 + 1];
+     PalB[K] := TailBuf[1 + K*3 + 2];
+    End;
+   End;
+  End;
+  { revenir apres l'en-tete }
+  Seek(F, 128);
+  FLen := 0; FPos := 0; FEOFf := False;
+ End;
+
+ { palette EGA 16 couleurs depuis en-tete (pour 1bpp x 1..4 planes, ou 4bpp 1 plane) }
+ If (Not HasPal8) Then Begin
+  PalCount := 16;
+  For K := 0 To 15 Do Begin
+   PalR[K] := H.EgaPal[K*3];
+   PalG[K] := H.EgaPal[K*3 + 1];
+   PalB[K] := H.EgaPal[K*3 + 2];
+  End;
+  { cas monochrome (1 plan, 1 bpp) : noir/blanc force }
+  If (H.NPlanes = 1) And (H.BPP = 1) Then Begin
+   PalR[0]:=0; PalG[0]:=0; PalB[0]:=0;
+   PalR[1]:=255; PalG[1]:=255; PalB[1]:=255;
+  End;
+ End;
+
+ { construire PalRemap (sauf pour mode 24-bit) }
+ If Not ((H.NPlanes = 3) And (H.BPP = 8)) Then Begin
+  For I := 0 To PalCount-1 Do Begin
+   Best := 0; BD := MaxLongInt;
+   For II := 0 To 15 Do Begin
+    DR := LongInt(PalR[I]) - VGA_R[II];
+    DG := LongInt(PalG[I]) - VGA_G[II];
+    DB := LongInt(PalB[I]) - VGA_B[II];
+    Dist := DR*DR + DG*DG + DB*DB;
+    If Dist < BD Then Begin BD := Dist; Best := II; End;
+   End;
+   PalRemap[I] := Byte(Best);
+  End;
+  For I := PalCount To 255 Do PalRemap[I] := 0;
+ End;
+
+ { redimensionner le calque }
+ If (PcxW <> ImgW) Or (PcxH <> ImgH) Then Begin
+  For K := 0 To MAX_LAYERS-1 Do If Layers[K].Used Then FreeLayer(K);
+  ImgW := PcxW; ImgH := PcxH;
+  AllocLayer(0, 'Arriere-plan', False);
+  LayerCount := 1;
+  ActiveLayer := 0;
+ End Else Begin
+  For K := 0 To ImgW-1 Do
+   For K2 := 0 To ImgH-1 Do
+    SetLayerPixel(ActiveLayer, K, K2, 0);
+ End;
+
+ { decodage RLE ligne par ligne }
+ For Y := 0 To PcxH-1 Do Begin
+  If Not ReadScanline Then Begin Close(F); Exit; End;
+  If Y >= ImgH Then Continue;
+  For X := 0 To PcxW-1 Do Begin
+   If X >= ImgW Then Break;
+   If (H.NPlanes = 1) And (H.BPP = 8) Then Begin
+    Idx := Scan[X];
+    SetLayerPixel(ActiveLayer, X, Y, PalRemap[Idx]);
+   End
+   Else If (H.NPlanes = 3) And (H.BPP = 8) Then Begin
+    R := Scan[X];
+    G := Scan[H.BytesPerLine + X];
+    B := Scan[2*H.BytesPerLine + X];
+    SetLayerPixel(ActiveLayer, X, Y, NearestVGA(R, G, B));
+   End
+   Else If (H.NPlanes = 1) And (H.BPP = 1) Then Begin
+    ByteOff := X Shr 3; BitIdx := 7 - (X And 7);
+    Idx := (Scan[ByteOff] Shr BitIdx) And 1;
+    SetLayerPixel(ActiveLayer, X, Y, PalRemap[Idx]);
+   End
+   Else If (H.NPlanes = 1) And (H.BPP = 4) Then Begin
+    ByteOff := X Shr 1;
+    If (X And 1) = 0 Then Idx := (Scan[ByteOff] Shr 4) And 15
+    Else                  Idx := Scan[ByteOff] And 15;
+    SetLayerPixel(ActiveLayer, X, Y, PalRemap[Idx]);
+   End
+   Else If (H.NPlanes = 1) And (H.BPP = 2) Then Begin
+    ByteOff := X Shr 2;
+    Bit := 6 - 2*(X And 3);
+    Idx := (Scan[ByteOff] Shr Bit) And 3;
+    SetLayerPixel(ActiveLayer, X, Y, PalRemap[Idx]);
+   End
+   Else If (H.BPP = 1) And (H.NPlanes >= 2) And (H.NPlanes <= 4) Then Begin
+    { plans bit : combiner les bits a la meme position }
+    ByteOff := X Shr 3; BitIdx := 7 - (X And 7);
+    Idx := 0;
+    For Plane := 0 To H.NPlanes-1 Do
+     If ((Scan[Plane*H.BytesPerLine + ByteOff] Shr BitIdx) And 1) <> 0 Then
+      Idx := Idx Or (1 Shl Plane);
+    SetLayerPixel(ActiveLayer, X, Y, PalRemap[Idx]);
+   End;
+  End;
+ End;
+
+ Close(F);
+ CurrentFileName := FileName;
+ ImageModified := False;
+ LoadPCX := True;
+End;
+
 { ============================================================
    Dialogues
   ============================================================ }
@@ -2885,8 +3729,13 @@ Begin
   Else If (Ext='.JPG') Or (Ext='.JPEG') Then Begin
    If Not LoadJPEG(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
   End
-  Else If (Ext='.PNG') Or
-          (Ext='.PCX') Or (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then
+  Else If Ext='.PNG' Then Begin
+   If Not LoadPNG(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+  End
+  Else If Ext='.PCX' Then Begin
+   If Not LoadPCX(FN) Then ShowDialog('Erreur', 'Impossible de charger : '+FN);
+  End
+  Else If (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then
    ShowDialog('Format non supporte', 'Le decodage '+Ext+' n est pas encore implemente.')
   Else
    ShowDialog('Format inconnu', 'Extension '+Ext+' non reconnue.');
@@ -3040,18 +3889,108 @@ End;
 Procedure Deselect;
 Begin SelectionActive := False; End;
 
+Procedure CloseAction;
+Var K: Integer;
+Begin
+ If ImageModified Then
+  ShowDialog('Fermer', 'Document modifie - changements perdus.');
+ For K := 0 To MAX_LAYERS-1 Do
+  If Layers[K].Used Then FreeLayer(K);
+ LayerCount := 0; ActiveLayer := 0;
+ ImgW := 800; ImgH := 600;
+ AllocLayer(0, 'Arriere-plan', False);
+ LayerCount := 1; ActiveLayer := 0;
+ CurrentFileName := '';
+ ImageModified := False;
+End;
+
+Procedure CloseAllAction;
+Begin
+ CloseAction;
+End;
+
+Procedure RevertAction;
+Begin
+ If CurrentFileName='' Then Begin
+  ShowDialog('Revenir', 'Aucun fichier de reference.'); Exit;
+ End;
+ ShowDialog('Revenir', 'Rechargement depuis : '+CurrentFileName);
+End;
+
+Procedure OpenAsAction;
+Begin
+ OpenFileAction;
+End;
+
+Procedure OpenRecentAction;
+Begin
+ If CurrentFileName='' Then
+  ShowDialog('Ouvrir recent', 'Aucun fichier recent.')
+ Else
+  ShowDialog('Ouvrir recent', CurrentFileName);
+End;
+
+Procedure ExportAction;
+Begin
+ ShowDialog('Exporter', 'Exportation non implementee.');
+End;
+
+Procedure GenerateAction;
+Begin
+ ShowDialog('Generer', 'Generation d''actifs non implementee.');
+End;
+
+Procedure ScriptsAction;
+Begin
+ ShowDialog('Scripts', 'Execution de scripts non implementee.');
+End;
+
+Procedure AutomateAction;
+Begin
+ ShowDialog('Automatiser', 'Automatisation non implementee.');
+End;
+
+Procedure FileInfoAction;
+Var S: String;
+Begin
+ If CurrentFileName='' Then S := '(sans titre)' Else S := CurrentFileName;
+ ShowDialog('Info fichier', S+' - '+IntToStr(ImgW)+'x'+IntToStr(ImgH));
+End;
+
+Procedure PrintAction;
+Begin
+ ShowDialog('Imprimer', 'Impression non implementee.');
+End;
+
+Procedure PrintOneCopyAction;
+Begin
+ ShowDialog('Imprimer une copie', 'Impression non implementee.');
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
  DrawFullUI;
  Case MIdx Of
   MENU_FILE: Case IIdx Of
-   0: Begin NewImage; DrawFullUI; End;
-   1: Begin OpenFileAction; DrawFullUI; End;
-   2: Begin SaveAction; DrawFullUI; End;
-   3: Begin SaveAsAction; DrawFullUI; End;
-   5: Begin ImportAction; DrawFullUI; End;
-   6: Running := False;
+   0:  Begin NewImage; DrawFullUI; End;
+   1:  Begin OpenFileAction; DrawFullUI; End;
+   2:  Begin OpenAsAction; DrawFullUI; End;
+   3:  Begin OpenRecentAction; DrawFullUI; End;
+   5:  Begin CloseAction; DrawFullUI; End;
+   6:  Begin CloseAllAction; DrawFullUI; End;
+   7:  Begin RevertAction; DrawFullUI; End;
+   9:  Begin SaveAction; DrawFullUI; End;
+   10: Begin SaveAsAction; DrawFullUI; End;
+   12: Begin ImportAction; DrawFullUI; End;
+   13: Begin ExportAction; DrawFullUI; End;
+   14: Begin GenerateAction; DrawFullUI; End;
+   15: Begin ScriptsAction; DrawFullUI; End;
+   16: Begin AutomateAction; DrawFullUI; End;
+   18: Begin FileInfoAction; DrawFullUI; End;
+   20: Begin PrintAction; DrawFullUI; End;
+   21: Begin PrintOneCopyAction; DrawFullUI; End;
+   23: Running := False;
   End;
   MENU_EDIT: Case IIdx Of
    0: Begin DoUndo; DrawFullUI; End;
@@ -3547,6 +4486,7 @@ Begin
     DrawFullUI;
     DrawMenuDropdown(ActiveMenu);
    End;
+   #134: Begin RevertAction; DrawFullUI; End;              { F12 }
   End;
   Exit;
  End;
@@ -3560,6 +4500,19 @@ Begin
     If Not Menus[ActiveMenu].Items[ActiveMenuItem].Separator Then
      HandleMenuClick(ActiveMenu, ActiveMenuItem);
   End;
+  #14: Begin NewImage; DrawFullUI; End;                    { Ctrl+N }
+  #15: Begin OpenFileAction; DrawFullUI; End;              { Ctrl+O }
+  #19: Begin SaveAction; DrawFullUI; End;                  { Ctrl+S }
+  #23: Begin CloseAction; DrawFullUI; End;                 { Ctrl+W }
+  #16: Begin PrintAction; DrawFullUI; End;                 { Ctrl+P }
+  #17: Running := False;                                   { Ctrl+Q }
+  #26: Begin DoUndo; DrawFullUI; End;                      { Ctrl+Z }
+  #25: ShowDialog('Retablir', 'Refaire non implemente.');  { Ctrl+Y }
+  #24: ShowDialog('Couper', 'Couper non implemente.');     { Ctrl+X }
+  #3:  ShowDialog('Copier', 'Copier non implemente.');     { Ctrl+C }
+  #22: ShowDialog('Coller', 'Coller non implemente.');     { Ctrl+V }
+  #1:  Begin SelectAll; DrawFullUI; End;                   { Ctrl+A }
+  #4:  Begin Deselect; DrawFullUI; End;                    { Ctrl+D }
   Else HandleKey(Ch);
  End;
 End;

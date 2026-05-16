@@ -86,10 +86,11 @@ Const
  MENU_LAYER   = 3;
  MENU_SELECT  = 4;
  MENU_FILTER  = 5;
- MENU_VIEW    = 6;
- MENU_WINDOW  = 7;
- MENU_HELP    = 8;
- NUM_MENUS    = 9;
+ MENU_3D      = 6;
+ MENU_VIEW    = 7;
+ MENU_WINDOW  = 8;
+ MENU_HELP    = 9;
+ NUM_MENUS    = 10;
 
  MAX_LAYERS   = 8;
  MAX_UNDO_LEVELS = 4;
@@ -145,7 +146,7 @@ Type
   Title: String[12];
   X, Width: Integer;
   ItemCount: Byte;
-  Items: Array[0..27] of TMenuItem;
+  Items: Array[0..47] of TMenuItem;
  End;
 
  TToolDef = Record
@@ -414,6 +415,7 @@ Begin
  Menus[MENU_LAYER].Title   := 'Calque';
  Menus[MENU_SELECT].Title  := 'Selection';
  Menus[MENU_FILTER].Title  := 'Filtre';
+ Menus[MENU_3D].Title      := '3D';
  Menus[MENU_VIEW].Title    := 'Affichage';
  Menus[MENU_WINDOW].Title  := 'Fenetre';
  Menus[MENU_HELP].Title    := 'Aide';
@@ -480,6 +482,47 @@ Begin
  SetMenuItem(MENU_FILTER, 3, 'Lumiere -',      '',       False);
  SetMenuItem(MENU_FILTER, 4, 'Flou',           '',       False);
  SetMenuItem(MENU_FILTER, 5, 'Nettete',        '',       False);
+
+ Menus[MENU_3D].ItemCount := 39;
+ SetMenuItem(MENU_3D, 0,  'Nouv. calque 3D du fichier', '', False);
+ SetMenuItem(MENU_3D, 1,  'Fusionner les calques 3D',   '', False);
+ SetMenuItem(MENU_3D, 2,  'Exporter calque 3D...',      '', False);
+ SetMenuItem(MENU_3D, 3,  'Panorama spherique',         '', False);
+ SetMenuItem(MENU_3D, 4,  'Partager sur Sketchfab...',  '', False);
+ SetMenuItem(MENU_3D, 5,  '-',                          '', True);
+ SetMenuItem(MENU_3D, 6,  'Obtenir plus de contenu...', '', False);
+ SetMenuItem(MENU_3D, 7,  '-',                          '', True);
+ SetMenuItem(MENU_3D, 8,  'Extrusion 3D du calque',     '', False);
+ SetMenuItem(MENU_3D, 9,  'Extrusion 3D du trace',      '', False);
+ SetMenuItem(MENU_3D, 10, 'Extrusion 3D selection',     '', False);
+ SetMenuItem(MENU_3D, 11, 'Maillage depuis calque',     '', False);
+ SetMenuItem(MENU_3D, 12, '-',                          '', True);
+ SetMenuItem(MENU_3D, 13, 'Grouper objets',             '', False);
+ SetMenuItem(MENU_3D, 14, 'Grouper toute la scene',     '', False);
+ SetMenuItem(MENU_3D, 15, 'Placer sur le sol',          '', False);
+ SetMenuItem(MENU_3D, 16, 'Tasser objets au sol',       '', False);
+ SetMenuItem(MENU_3D, 17, '-',                          '', True);
+ SetMenuItem(MENU_3D, 18, 'Peinture mosaique calque',   '', False);
+ SetMenuItem(MENU_3D, 19, 'Generer UV...',              '', False);
+ SetMenuItem(MENU_3D, 20, 'Attenuation peinture...',    '', False);
+ SetMenuItem(MENU_3D, 21, 'Systeme de peinture',        '', False);
+ SetMenuItem(MENU_3D, 22, 'Peindre sur texture cible',  '', False);
+ SetMenuItem(MENU_3D, 23, 'Selec. zones peignables',    '', False);
+ SetMenuItem(MENU_3D, 24, 'Calque de peinture',         '', False);
+ SetMenuItem(MENU_3D, 25, '-',                          '', True);
+ SetMenuItem(MENU_3D, 26, 'Diviser extrusion',          '', False);
+ SetMenuItem(MENU_3D, 27, 'Coupe sur la scene',         '', False);
+ SetMenuItem(MENU_3D, 28, 'Unifier pour impression',    '', False);
+ SetMenuItem(MENU_3D, 29, 'Simplifier maillage...',     '', False);
+ SetMenuItem(MENU_3D, 30, 'Aff/Masq. polygones',        '', False);
+ SetMenuItem(MENU_3D, 31, 'Trace depuis calque 3D',     '', False);
+ SetMenuItem(MENU_3D, 32, '-',                          '', True);
+ SetMenuItem(MENU_3D, 33, 'Rendu du calque 3D',         '', False);
+ SetMenuItem(MENU_3D, 34, 'Rendu vers fichier...',      '', False);
+ SetMenuItem(MENU_3D, 35, 'Esquisse au pinceau',        '', False);
+ SetMenuItem(MENU_3D, 36, '-',                          '', True);
+ SetMenuItem(MENU_3D, 37, 'Config. impression 3D...',   '', False);
+ SetMenuItem(MENU_3D, 38, 'Imprimer en 3D...',          '', False);
 
  Menus[MENU_VIEW].ItemCount := 4;
  SetMenuItem(MENU_VIEW, 0, 'Zoom +',           'Ctrl++', False);
@@ -4666,6 +4709,412 @@ Begin
  FD_Open := ResultVal;
 End;
 
+{ ============================================================
+   Dialogue Yes/No (confirmation, ecrasement fichier)
+  ============================================================ }
+
+Function YesNoDialog(Const Title, Msg: String): Boolean;
+Var
+ X1, Y1, X2, Y2: Integer;
+ YX1, YY1, YX2, YY2: Integer;
+ NX1, NY1, NX2, NY2: Integer;
+ Ch: Char; Done, Res: Boolean;
+ MX, MY, MB, OldMB: Integer;
+Begin
+ HideMouseCursor;
+ X1 := ScreenWidth Div 2 - 180;
+ Y1 := ScreenHeight Div 2 - 55;
+ X2 := X1 + 360; Y2 := Y1 + 110;
+ FillRect(X1, Y1, X2, Y2, UI_BG_PANEL);
+ DrawBevel(X1, Y1, X2, Y2, True);
+ FillRect(X1+1, Y1+1, X2-1, Y1+18, UI_BG_DARK);
+ SetColor(UI_TEXT_LITE); OutTextXY(X1+8, Y1+5, Title);
+ SetColor(UI_TEXT); OutTextXY(X1+12, Y1+38, Msg);
+ YX1 := X1+90;  YY1 := Y2-32; YX2 := YX1+70; YY2 := YY1+20;
+ NX1 := X1+200; NY1 := Y2-32; NX2 := NX1+70; NY2 := NY1+20;
+ DrawDlgButton(YX1, YY1, YX2, YY2, 'Oui', False);
+ DrawDlgButton(NX1, NY1, NX2, NY2, 'Non', False);
+ ShowMouseCursor;
+ While KeyPressed Do ReadKey;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
+ Done := False; Res := False; OldMB := 0;
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then ReadKey
+   Else If (Ch=#13) Or (UpCase(Ch)='O') Or (UpCase(Ch)='Y') Then Begin Res:=True; Done:=True; End
+   Else If (Ch=#27) Or (UpCase(Ch)='N') Then Begin Res:=False; Done:=True; End;
+  End;
+  GetMouseStateLocal(MX, MY, MB);
+  If (OldMB And 1 = 0) And (MB And 1 <> 0) Then Begin
+   If (MX>=YX1) And (MX<=YX2) And (MY>=YY1) And (MY<=YY2) Then Begin Res:=True; Done:=True; End
+   Else If (MX>=NX1) And (MX<=NX2) And (MY>=NY1) And (MY<=NY2) Then Begin Res:=False; Done:=True; End;
+  End;
+  OldMB := MB;
+ Until Done;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
+ MouseButtons := 0; OldMouseButtons := 0;
+ YesNoDialog := Res;
+End;
+
+Function FileExistsLocal(Const FN: String): Boolean;
+Var F: File;
+Begin
+ Assign(F, FN);
+ {$I-} Reset(F, 1); {$I+}
+ If IOResult = 0 Then Begin Close(F); FileExistsLocal := True; End
+ Else FileExistsLocal := False;
+End;
+
+{ ============================================================
+   Selecteur de fichiers : dialogue "Enregistrer sous"
+  ============================================================ }
+
+Const
+ FD_SAVE_NUM = 2;
+ FD_SAVE_LABELS: Array[0..FD_SAVE_NUM-1] of String[24] = (
+  'BMP (*.BMP)',
+  'Photoshop PSD (*.PSD)' );
+ FD_SAVE_EXT: Array[0..FD_SAVE_NUM-1] of String[4] = (
+  '.BMP', '.PSD' );
+ FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (1, 8);
+
+Var
+ FD_SaveFilterIdx: Integer;
+
+Function FD_Save(Const Title: String; Var FN: String; Var SaveExt: String): Boolean;
+Var
+ DX1, DY1, DX2, DY2: Integer;
+ DirX1, DirY1, DirX2, DirY2: Integer;
+ FilX1, FilY1, FilX2, FilY2: Integer;
+ NamX1, NamY1, NamX2, NamY2: Integer;
+ TypX1, TypX2: Integer;
+ OkX1, OkY1, OkX2, OkY2: Integer;
+ CcX1, CcY1, CcX2, CcY2: Integer;
+ DirRows, FileRows: Integer;
+ Done, ResultVal: Boolean;
+ Ch: Char;
+ MX, MY, MB, OldMB: Integer;
+ Idx: Integer;
+ PathStr, Nm, Candidate, ChosenExt: String;
+
+ Function CurFilterLabel: String;
+ Begin CurFilterLabel := FD_SAVE_LABELS[FD_SaveFilterIdx]; End;
+
+ Procedure RedrawAll;
+ Begin
+  HideMouseCursor;
+  FillRect(DX1, DY1, DX2, DY2, UI_BG_PANEL);
+  DrawBevel(DX1, DY1, DX2, DY2, True);
+  FillRect(DX1+1, DY1+1, DX2-1, DY1+16, UI_BG_DARK);
+  SetColor(UI_TEXT_LITE); OutTextXY(DX1+8, DY1+5, Title);
+  SetColor(UI_TEXT);
+  OutTextXY(DX1+5, DY1+22, 'Chemin:');
+  FillRect(DX1+58, DY1+19, DX2-8, DY1+33, White);
+  DrawBevel(DX1+58, DY1+19, DX2-8, DY1+33, False);
+  PathStr := FD_CurDir;
+  If Length(PathStr) > 65 Then PathStr := '...'+Copy(PathStr, Length(PathStr)-61, 62);
+  OutTextXY(DX1+62, DY1+22, PathStr);
+  OutTextXY(DirX1, DY1+38, 'Dossiers');
+  OutTextXY(FilX1, DY1+38, 'Fichiers existants');
+  ShowMouseCursor;
+  FD_DrawDirs(DirX1, DirY1, DirX2, DirY2, FD_Focus=0);
+  FD_DrawFiles(FilX1, FilY1, FilX2, FilY2, FD_Focus=1);
+  HideMouseCursor;
+  SetColor(UI_TEXT);
+  OutTextXY(DX1+10, NamY1+4, 'Nom:');
+  FillRect(NamX1, NamY1, NamX2, NamY2, White);
+  DrawBevel(NamX1, NamY1, NamX2, NamY2, False);
+  SetColor(UI_TEXT);
+  OutTextXY(NamX1+4, NamY1+4, FD_NameBuf);
+  If FD_Focus=2 Then OutTextXY(NamX1+4+Length(FD_NameBuf)*8, NamY1+4, '_');
+  OutTextXY(DX2-220, NamY1+4, 'Format:');
+  FillRect(TypX1, NamY1, TypX2, NamY2, UI_BG_PANEL);
+  DrawBevel(TypX1, NamY1, TypX2, NamY2, True);
+  SetColor(UI_TEXT);
+  OutTextXY(TypX1+4, NamY1+4, CurFilterLabel);
+  OutTextXY(TypX2-12, NamY1+4, 'v');
+  ShowMouseCursor;
+  DrawDlgButton(OkX1, OkY1, OkX2, OkY2, 'Enregistrer', False);
+  DrawDlgButton(CcX1, CcY1, CcX2, CcY2, 'Annuler', False);
+ End;
+
+ Procedure RescanForFilter;
+ Begin
+  FD_FilterIdx := FD_SAVE_FILTERMAP[FD_SaveFilterIdx];
+  FD_Scan;
+ End;
+
+ Procedure StripExtIfMatchesAny(Var S: String);
+ Var E: String;
+ Begin
+  E := ExtractExt(S);
+  If (E='.BMP') Or (E='.DIB') Or (E='.PSD') Or (E='.GIF') Or (E='.PNG') Or
+     (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or (E='.TIF') Or (E='.TIFF') Then
+   S := Copy(S, 1, Length(S) - Length(E));
+ End;
+
+ Procedure DoActivate;
+ Var Sel, Curr: String; I: Integer;
+ Begin
+  If (FD_Focus = 0) And (FD_NDirs > 0) And (FD_SelDir < FD_NDirs) Then Begin
+   Sel := FD_Dirs[FD_SelDir].Name;
+   {$I-} ChDir(Sel); {$I+}
+   If IOResult = 0 Then Begin RescanForFilter; RedrawAll; End;
+   Exit;
+  End;
+  Sel := FD_NameBuf;
+  If Sel = '' Then Exit;
+  For I := 0 To FD_NDirs-1 Do
+   If UpperStr(FD_Dirs[I].Name) = UpperStr(Sel) Then Begin
+    {$I-} ChDir(Sel); {$I+}
+    If IOResult = 0 Then Begin
+     FD_NameBuf := ''; RescanForFilter; RedrawAll; Exit;
+    End;
+   End;
+  ChosenExt := FD_SAVE_EXT[FD_SaveFilterIdx];
+  Curr := ExtractExt(Sel);
+  If Curr = '' Then Sel := Sel + ChosenExt
+  Else If (Curr <> '.BMP') And (Curr <> '.DIB') And (Curr <> '.PSD') Then Begin
+   StripExtIfMatchesAny(Sel);
+   Sel := Sel + ChosenExt;
+  End Else ChosenExt := Curr;
+  If (Length(Sel) >= 2) And (Sel[2] = ':') Then Candidate := Sel
+  Else If (Length(Sel) >= 1) And (Sel[1] = '\') Then Candidate := Sel
+  Else Begin
+   Candidate := FD_CurDir;
+   If (Length(Candidate) > 0) And (Candidate[Length(Candidate)] <> '\') Then Candidate := Candidate + '\';
+   Candidate := Candidate + Sel;
+  End;
+  If FileExistsLocal(Candidate) Then
+   If Not YesNoDialog('Confirmation', 'Le fichier existe deja. L ecraser ?') Then Begin
+    RedrawAll; Exit;
+   End;
+  FN := Candidate;
+  SaveExt := ChosenExt;
+  ResultVal := True;
+  Done := True;
+ End;
+
+ Procedure DoFilterDropdown;
+ Var
+  DDX1, DDY1, DDX2, DDY2: Integer;
+  SelF, VisRows: Integer;
+  DDone: Boolean; Ch2: Char;
+  DMX, DMY, DMB, DOldMB: Integer;
+  Idx2: Integer;
+
+  Procedure DrawDD;
+  Var Q, RowY: Integer;
+  Begin
+   HideMouseCursor;
+   FillRect(DDX1, DDY1, DDX2, DDY2, White);
+   DrawBevel(DDX1, DDY1, DDX2, DDY2, False);
+   For Q:=0 To VisRows-1 Do Begin
+    RowY := DDY1+2 + Q*FD_ROWH;
+    If Q = SelF Then Begin
+     FillRect(DDX1+1, RowY-1, DDX2-1, RowY+FD_ROWH-2, Blue);
+     SetColor(UI_TEXT_LITE);
+    End Else SetColor(UI_TEXT);
+    OutTextXY(DDX1+4, RowY, FD_SAVE_LABELS[Q]);
+   End;
+   ShowMouseCursor;
+  End;
+
+ Begin
+  SelF := FD_SaveFilterIdx;
+  VisRows := FD_SAVE_NUM;
+  DDX1 := TypX1; DDY1 := NamY2+1;
+  DDX2 := TypX2; DDY2 := DDY1 + VisRows*FD_ROWH + 4;
+  DrawDD;
+  Repeat GetMouseStateLocal(DMX, DMY, DMB); Until DMB And 1 = 0;
+  DOldMB := 0; DDone := False;
+  Repeat
+   If KeyPressed Then Begin
+    Ch2 := ReadKey;
+    If Ch2 = #0 Then Begin
+     Ch2 := ReadKey;
+     Case Ch2 Of
+      #72: If SelF > 0 Then Begin Dec(SelF); DrawDD; End;
+      #80: If SelF < FD_SAVE_NUM-1 Then Begin Inc(SelF); DrawDD; End;
+     End;
+    End Else Begin
+     Case Ch2 Of
+      #27: DDone := True;
+      #13: Begin FD_SaveFilterIdx := SelF; RescanForFilter; DDone := True; End;
+     End;
+    End;
+   End;
+   GetMouseStateLocal(DMX, DMY, DMB);
+   If (DOldMB And 1 = 0) And (DMB And 1 <> 0) Then Begin
+    If (DMX < DDX1) Or (DMX > DDX2) Or (DMY < DDY1) Or (DMY > DDY2) Then DDone := True
+    Else Begin
+     Idx2 := (DMY - DDY1 - 2) Div FD_ROWH;
+     If (Idx2 >= 0) And (Idx2 < FD_SAVE_NUM) Then Begin
+      FD_SaveFilterIdx := Idx2; RescanForFilter; DDone := True;
+     End;
+    End;
+   End;
+   DOldMB := DMB;
+  Until DDone;
+  Repeat GetMouseStateLocal(DMX, DMY, DMB); Until DMB And 1 = 0;
+  RedrawAll;
+ End;
+
+Begin
+ FD_Save := False;
+ SaveExt := '';
+ { Heriter du nom propose par l'appelant }
+ If FN <> '' Then Begin
+  Nm := FN;
+  { isoler le nom de fichier seul }
+  Idx := Length(Nm);
+  While (Idx > 0) And (Nm[Idx] <> '\') And (Nm[Idx] <> '/') And (Nm[Idx] <> ':') Do Dec(Idx);
+  If Idx > 0 Then FD_NameBuf := Copy(Nm, Idx+1, Length(Nm)-Idx)
+  Else FD_NameBuf := Nm;
+ End Else FD_NameBuf := '';
+ { Choisir le filtre selon l'extension proposee }
+ ChosenExt := ExtractExt(FD_NameBuf);
+ If ChosenExt = '.PSD' Then FD_SaveFilterIdx := 1
+ Else FD_SaveFilterIdx := 0;
+ FD_Focus := 2;
+ FD_SelDir := 0; FD_SelFile := 0;
+ RescanForFilter;
+ DX1 := (ScreenWidth - 600) Div 2; If DX1<0 Then DX1:=0;
+ DY1 := (ScreenHeight - 420) Div 2; If DY1<0 Then DY1:=0;
+ DX2 := DX1 + 600; DY2 := DY1 + 420;
+ DirX1:=DX1+5;   DirY1:=DY1+50; DirX2:=DX1+165; DirY2:=DY2-82;
+ FilX1:=DX1+170; FilY1:=DY1+50; FilX2:=DX2-5;   FilY2:=DY2-82;
+ NamX1:=DX1+50;  NamY1:=DY2-76; NamX2:=DX2-220; NamY2:=DY2-60;
+ TypX1:=DX2-175; TypX2:=DX2-10;
+ OkX1:=DX2-180; OkY1:=DY2-50; OkX2:=DX2-100; OkY2:=DY2-32;
+ CcX1:=DX2-90;  CcY1:=DY2-50; CcX2:=DX2-10;  CcY2:=DY2-32;
+ DirRows  := (DirY2 - DirY1 - 2) Div FD_ROWH;
+ FileRows := (FilY2 - FilY1 - 2) Div FD_ROWH;
+ RedrawAll;
+ While KeyPressed Do ReadKey;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
+ Done := False; ResultVal := False; OldMB := 0;
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then Begin
+    Ch := ReadKey;
+    Case Ch Of
+     #72: Begin
+      If FD_Focus = 0 Then Begin If FD_SelDir > 0 Then Dec(FD_SelDir);
+       FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin If FD_SelFile > 0 Then Dec(FD_SelFile);
+       FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows);
+       If FD_SelFile < FD_NFiles Then FD_NameBuf := FD_Files[FD_SelFile].Name; End;
+      RedrawAll;
+     End;
+     #80: Begin
+      If FD_Focus = 0 Then Begin If FD_SelDir < FD_NDirs-1 Then Inc(FD_SelDir);
+       FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin If FD_SelFile < FD_NFiles-1 Then Inc(FD_SelFile);
+       FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows);
+       If FD_SelFile < FD_NFiles Then FD_NameBuf := FD_Files[FD_SelFile].Name; End;
+      RedrawAll;
+     End;
+     #73: Begin
+      If FD_Focus = 0 Then Begin Dec(FD_SelDir, DirRows); If FD_SelDir < 0 Then FD_SelDir := 0;
+       FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin Dec(FD_SelFile, FileRows); If FD_SelFile < 0 Then FD_SelFile := 0;
+       FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows); End;
+      RedrawAll;
+     End;
+     #81: Begin
+      If FD_Focus = 0 Then Begin Inc(FD_SelDir, DirRows); If FD_SelDir >= FD_NDirs Then FD_SelDir := FD_NDirs-1;
+       FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin Inc(FD_SelFile, FileRows); If FD_SelFile >= FD_NFiles Then FD_SelFile := FD_NFiles-1;
+       FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows); End;
+      RedrawAll;
+     End;
+     #71: Begin
+      If FD_Focus = 0 Then Begin FD_SelDir := 0; FD_TopDir := 0; End
+      Else If FD_Focus = 1 Then Begin FD_SelFile := 0; FD_TopFile := 0; End;
+      RedrawAll;
+     End;
+     #79: Begin
+      If FD_Focus = 0 Then Begin FD_SelDir := FD_NDirs-1; FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows); End
+      Else If FD_Focus = 1 Then Begin FD_SelFile := FD_NFiles-1; FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows); End;
+      RedrawAll;
+     End;
+    End;
+   End Else Begin
+    Case Ch Of
+     #27: Done := True;
+     #13: DoActivate;
+     #9 : Begin FD_Focus := (FD_Focus + 1) Mod 3; RedrawAll; End;
+     #8 : If FD_Focus = 2 Then Begin
+           If Length(FD_NameBuf) > 0 Then Delete(FD_NameBuf, Length(FD_NameBuf), 1);
+           RedrawAll;
+          End;
+    Else
+     If Ch >= ' ' Then Begin
+      If FD_Focus = 2 Then Begin
+       If Length(FD_NameBuf) < 60 Then FD_NameBuf := FD_NameBuf + Ch;
+       RedrawAll;
+      End Else If FD_Focus = 0 Then Begin
+       For Idx:=0 To FD_NDirs-1 Do Begin
+        Nm := FD_Dirs[Idx].Name;
+        If (Length(Nm)>0) And (UpCase(Nm[1])=UpCase(Ch)) Then Begin
+         FD_SelDir := Idx;
+         FD_EnsureVisible(FD_TopDir, FD_SelDir, DirRows);
+         Break;
+        End;
+       End;
+       RedrawAll;
+      End Else If FD_Focus = 1 Then Begin
+       For Idx:=0 To FD_NFiles-1 Do Begin
+        Nm := FD_Files[Idx].Name;
+        If (Length(Nm)>0) And (UpCase(Nm[1])=UpCase(Ch)) Then Begin
+         FD_SelFile := Idx;
+         FD_EnsureVisible(FD_TopFile, FD_SelFile, FileRows);
+         FD_NameBuf := Nm;
+         Break;
+        End;
+       End;
+       RedrawAll;
+      End;
+     End;
+    End;
+   End;
+  End;
+  GetMouseStateLocal(MX, MY, MB);
+  If (OldMB And 1 = 0) And (MB And 1 <> 0) Then Begin
+   If (MX>=DirX1) And (MX<=DirX2) And (MY>=DirY1) And (MY<=DirY2) Then Begin
+    Idx := FD_TopDir + (MY - DirY1 - 2) Div FD_ROWH;
+    If (Idx >= 0) And (Idx < FD_NDirs) Then Begin
+     FD_SelDir := Idx; FD_Focus := 0; RedrawAll; DoActivate;
+    End Else Begin FD_Focus := 0; RedrawAll; End;
+   End
+   Else If (MX>=FilX1) And (MX<=FilX2) And (MY>=FilY1) And (MY<=FilY2) Then Begin
+    Idx := FD_TopFile + (MY - FilY1 - 2) Div FD_ROWH;
+    If (Idx >= 0) And (Idx < FD_NFiles) Then Begin
+     FD_SelFile := Idx; FD_Focus := 1;
+     FD_NameBuf := FD_Files[Idx].Name;
+     RedrawAll;
+    End Else Begin FD_Focus := 1; RedrawAll; End;
+   End
+   Else If (MX>=NamX1) And (MX<=NamX2) And (MY>=NamY1) And (MY<=NamY2) Then Begin
+    FD_Focus := 2; RedrawAll;
+   End
+   Else If (MX>=TypX1) And (MX<=TypX2) And (MY>=NamY1) And (MY<=NamY2) Then Begin
+    DoFilterDropdown;
+   End
+   Else If (MX>=OkX1) And (MX<=OkX2) And (MY>=OkY1) And (MY<=OkY2) Then DoActivate
+   Else If (MX>=CcX1) And (MX<=CcX2) And (MY>=CcY1) And (MY<=CcY2) Then Done := True;
+  End;
+  OldMB := MB;
+ Until Done;
+ Repeat GetMouseStateLocal(MX, MY, MB); Until MB And 1 = 0;
+ MouseButtons := 0; OldMouseButtons := 0;
+ DrawFullUI;
+ FD_Save := ResultVal;
+End;
+
 Function LoadFileByExt(Const FN: String; Var ErrMsg: String): Boolean;
 Var Ext: String;
 Begin
@@ -4824,12 +5273,11 @@ Begin
 End;
 
 Procedure SaveAsAction;
-Var FN: String;
+Var FN, SaveExt: String;
 Begin
  FN := CurrentFileName;
  If FN='' Then FN := 'image.bmp';
- If PromptStr('Enregistrer sous', 'Nom du fichier (.BMP ou .PSD) :', FN) Then Begin
-  If ExtractExt(FN)='' Then FN := FN + '.bmp';
+ If FD_Save('Enregistrer sous', FN, SaveExt) Then Begin
   If SaveByExt(FN) Then Begin
    CurrentFileName := FN;
    ImageModified := False;
@@ -4991,6 +5439,7 @@ Begin
    4: Begin FilterBlur; DrawFullUI; End;
    5: Begin FilterSharpen; DrawFullUI; End;
   End;
+  MENU_3D: ShowDialog('3D', 'Fonction 3D non implementee dans cette version.');
   MENU_VIEW: Case IIdx Of
    0: Begin If ZoomLevel<400 Then ZoomLevel := ZoomLevel + 50; DrawFullUI; End;
    1: Begin If ZoomLevel>50 Then ZoomLevel := ZoomLevel - 50; DrawFullUI; End;

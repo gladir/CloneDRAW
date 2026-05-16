@@ -1401,7 +1401,9 @@ End;
   ============================================================ }
 
 Procedure ShowDialog(Const Title, Msg: String);
-Var X1, Y1, X2, Y2: Integer;
+Var X1, Y1, X2, Y2, BX1, BY1, BX2, BY2: Integer;
+    Ch: Char; Done: Boolean;
+    MX, MY, MB, OldMB: Integer;
 Begin
  HideMouseCursor;
  X1 := ScreenWidth Div 2 - 160;
@@ -1415,17 +1417,37 @@ Begin
  OutTextXY(X1+8, Y1+5, Title);
  SetColor(UI_TEXT);
  OutTextXY(X1+12, Y1+40, Msg);
- OutTextXY(X1+120, Y2-20, '[ OK ]');
+ BX1 := X1 + 130; BY1 := Y2 - 28;
+ BX2 := BX1 + 60; BY2 := BY1 + 18;
+ FillRect(BX1, BY1, BX2, BY2, UI_BG_PANEL);
+ DrawBevel(BX1, BY1, BX2, BY2, False);
+ SetColor(UI_TEXT);
+ OutTextXY(BX1+20, BY1+5, 'OK');
  ShowMouseCursor;
- Repeat Until KeyPressed;
- While KeyPressed Do ReadKey;
+ Done := False;
+ OldMB := 0;
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch=#0 Then ReadKey;
+   If (Ch=#13) Or (Ch=#27) Or (Ch=' ') Then Done := True;
+  End;
+  GetMouseStateLocal(MX, MY, MB);
+  If (OldMB And 1 <> 0) And (MB And 1 = 0) Then Begin
+   If (MX>=BX1) And (MX<=BX2) And (MY>=BY1) And (MY<=BY2) Then Done := True;
+  End;
+  OldMB := MB;
+ Until Done;
 End;
 
 Function PromptStr(Const Title, Prompt: String; Var Value: String): Boolean;
 Var
  X1, Y1, X2, Y2: Integer;
+ OKx1, OKy1, OKx2, OKy2: Integer;
+ CXx1, CYy1, CXx2, CYy2: Integer;
  Ch: Char;
  Done, Ok: Boolean;
+ MX, MY, MB, OldMB: Integer;
 Begin
  Ok := False;
  HideMouseCursor;
@@ -1441,11 +1463,36 @@ Begin
  SetColor(UI_TEXT);
  OutTextXY(X1+12, Y1+30, Prompt);
  DrawBevel(X1+12, Y1+50, X2-12, Y1+68, False);
+ OKx1 := X1+90;  OKy1 := Y2-26; OKx2 := OKx1+60; OKy2 := OKy1+18;
+ CXx1 := X1+170; CYy1 := Y2-26; CXx2 := CXx1+80; CYy2 := CYy1+18;
+ FillRect(OKx1, OKy1, OKx2, OKy2, UI_BG_PANEL); DrawBevel(OKx1, OKy1, OKx2, OKy2, False);
+ FillRect(CXx1, CYy1, CXx2, CYy2, UI_BG_PANEL); DrawBevel(CXx1, CYy1, CXx2, CYy2, False);
+ SetColor(UI_TEXT);
+ OutTextXY(OKx1+20, OKy1+5, 'OK');
+ OutTextXY(CXx1+16, CYy1+5, 'Annuler');
+ ShowMouseCursor;
  Done := False;
+ OldMB := 0;
  Repeat
+  HideMouseCursor;
   FillRect(X1+13, Y1+51, X2-13, Y1+67, White);
   SetColor(UI_TEXT);
   OutTextXY(X1+16, Y1+55, Value+'_');
+  ShowMouseCursor;
+  Repeat
+   If KeyPressed Then Break;
+   GetMouseStateLocal(MX, MY, MB);
+   If (OldMB And 1 <> 0) And (MB And 1 = 0) Then Begin
+    If (MX>=OKx1) And (MX<=OKx2) And (MY>=OKy1) And (MY<=OKy2) Then Begin
+     Done := True; Ok := True; OldMB := MB; Break;
+    End;
+    If (MX>=CXx1) And (MX<=CXx2) And (MY>=CYy1) And (MY<=CYy2) Then Begin
+     Done := True; Ok := False; OldMB := MB; Break;
+    End;
+   End;
+   OldMB := MB;
+  Until False;
+  If Done Then Break;
   Ch := ReadKey;
   Case Ch Of
    #13: Begin Done := True; Ok := True; End;

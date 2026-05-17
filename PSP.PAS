@@ -5562,13 +5562,235 @@ Begin
 End;
 
 Procedure GenerateAction;
+Var I, J, Count, Failed, DotPos: Integer;
+    SavedVis: Array[0..MAX_LAYERS-1] of Boolean;
+    Ext, LayerName, OutDir, OutPath, BaseDir, DocBase, Msg, NumStr: String;
 Begin
- ShowDialog('Generer', 'Generation d''actifs non implementee.');
+ { Photoshop "Image Assets" generator : tout calque dont le nom se termine
+   par une extension d'image reconnue (.BMP/.DIB/.PSD/.TGA/.PPM) est
+   exporte comme actif individuel dans <document>-assets\. }
+
+ If CurrentFileName <> '' Then Begin
+  BaseDir := '';
+  DocBase := CurrentFileName;
+  For J := Length(DocBase) DownTo 1 Do
+   If (DocBase[J]='\') Or (DocBase[J]='/') Or (DocBase[J]=':') Then Begin
+    BaseDir := Copy(DocBase, 1, J);
+    DocBase := Copy(DocBase, J+1, 255);
+    Break;
+   End;
+  DotPos := 0;
+  For J := Length(DocBase) DownTo 1 Do
+   If DocBase[J] = '.' Then Begin DotPos := J; Break; End;
+  If DotPos > 0 Then DocBase := Copy(DocBase, 1, DotPos-1);
+  If DocBase = '' Then DocBase := 'image';
+  OutDir := BaseDir + DocBase + '-assets';
+ End Else
+  OutDir := 'image-assets';
+
+ {$I-} MkDir(OutDir); {$I+}
+ If IOResult <> 0 Then ;  { ignore : repertoire deja existant }
+
+ For I := 0 To MAX_LAYERS-1 Do SavedVis[I] := Layers[I].Visible;
+
+ Count := 0;
+ Failed := 0;
+ For I := 0 To LayerCount-1 Do Begin
+  If Not Layers[I].Used Then Continue;
+  LayerName := Layers[I].Name;
+  Ext := ExtractExt(LayerName);
+  If (Ext='.BMP') Or (Ext='.DIB') Or (Ext='.PSD') Or
+     (Ext='.TGA') Or (Ext='.PPM') Then Begin
+   For J := 0 To MAX_LAYERS-1 Do Layers[J].Visible := False;
+   Layers[I].Visible := True;
+   OutPath := OutDir + '\' + LayerName;
+   If SaveByExt(OutPath) Then Inc(Count) Else Inc(Failed);
+  End;
+ End;
+
+ For I := 0 To MAX_LAYERS-1 Do Layers[I].Visible := SavedVis[I];
+
+ If (Count = 0) And (Failed = 0) Then
+  Msg := 'Aucun calque ne porte un nom se terminant par une extension '+
+         'd image reconnue. Renommez vos calques avec un suffixe '+
+         '.BMP, .PSD, .TGA, .PPM ou .DIB pour generer des actifs.'
+ Else Begin
+  Str(Count, NumStr);
+  Msg := NumStr + ' actif(s) genere(s) dans ' + OutDir;
+  If Failed > 0 Then Begin
+   Str(Failed, NumStr);
+   Msg := Msg + #13#10 + NumStr + ' echec(s) d ecriture.';
+  End;
+ End;
+
+ ShowDialog('Generer', Msg);
 End;
 
 Procedure ScriptsAction;
+Const
+ MAX_ERRS = 8;
+Var
+ ScriptFN, Line, Verb, Arg, ErrMsg, Summary, NumStr: String;
+ F: Text;
+ LineNo, Executed, Errs, I, V, NewIdx, NumCol: Integer;
+ ErrLines: Array[0..MAX_ERRS-1] of Integer;
+ Ok: Boolean;
+
+ Procedure NoteError(Ln: Integer);
+ Begin
+  If Errs < MAX_ERRS Then ErrLines[Errs] := Ln;
+  Inc(Errs);
+ End;
+
+ Function UpCaseStr(Const S: String): String;
+ Var II: Integer; T: String;
+ Begin
+  T := S;
+  For II := 1 To Length(T) Do
+   If (T[II]>='a') And (T[II]<='z') Then T[II] := Chr(Ord(T[II]) - 32);
+  UpCaseStr := T;
+ End;
+
+ Procedure SplitVerbArg(Const Src: String; Var Vrb, A: String);
+ Var P, II: Integer;
+ Begin
+  Vrb := ''; A := '';
+  II := 1;
+  While (II <= Length(Src)) And ((Src[II]=' ') Or (Src[II]=#9)) Do Inc(II);
+  P := II;
+  While (P <= Length(Src)) And (Src[P]<>' ') And (Src[P]<>#9) Do Inc(P);
+  Vrb := UpCaseStr(Copy(Src, II, P-II));
+  While (P <= Length(Src)) And ((Src[P]=' ') Or (Src[P]=#9)) Do Inc(P);
+  A := Copy(Src, P, Length(Src) - P + 1);
+  { trim trailing whitespace }
+  While (Length(A) > 0) And ((A[Length(A)]=' ') Or (A[Length(A)]=#9) Or
+        (A[Length(A)]=#13) Or (A[Length(A)]=#10)) Do
+   A := Copy(A, 1, Length(A)-1);
+ End;
+
+ Function ParseInt(Const S: String; Var N: Integer): Boolean;
+ Var Code: Integer;
+ Begin
+  Val(S, N, Code);
+  ParseInt := Code = 0;
+ End;
+
 Begin
- ShowDialog('Scripts', 'Execution de scripts non implementee.');
+ ScriptFN := '';
+ If Not FD_Open('Executer un script (.PSP)', ScriptFN) Then Exit;
+
+ Assign(F, ScriptFN);
+ {$I-} Reset(F); {$I+}
+ If IOResult <> 0 Then Begin
+  ShowDialog('Scripts', 'Impossible d ouvrir le script : '+ScriptFN);
+  Exit;
+ End;
+
+ LineNo := 0;
+ Executed := 0;
+ Errs := 0;
+
+ While Not Eof(F) Do Begin
+  ReadLn(F, Line);
+  Inc(LineNo);
+  { trim leading whitespace }
+  While (Length(Line)>0) And ((Line[1]=' ') Or (Line[1]=#9)) Do Line := Copy(Line, 2, 255);
+  If Line = '' Then Continue;
+  If (Line[1] = '#') Or (Line[1] = ';') Then Continue;
+  If (Length(Line) >= 2) And (Line[1]='/') And (Line[2]='/') Then Continue;
+
+  SplitVerbArg(Line, Verb, Arg);
+  If Verb = '' Then Continue;
+
+  Ok := True;
+  If Verb = 'OPEN' Then Begin
+   Ok := LoadFileByExt(Arg, ErrMsg);
+  End
+  Else If Verb = 'SAVE' Then Begin
+   If Arg = '' Then Begin
+    If CurrentFileName = '' Then Ok := False
+    Else Ok := SaveByExt(CurrentFileName);
+   End Else Begin
+    Ok := SaveByExt(Arg);
+    If Ok Then Begin CurrentFileName := Arg; ImageModified := False; End;
+   End;
+  End
+  Else If Verb = 'EXPORT' Then Begin
+   If Arg = '' Then Ok := False Else Ok := SaveByExt(Arg);
+  End
+  Else If Verb = 'NEW' Then Begin
+   NewImage;
+  End
+  Else If Verb = 'FILL' Then Begin
+   If Not ParseInt(Arg, V) Then Ok := False
+   Else If (V<0) Or (V>15) Then Ok := False
+   Else Begin
+    PushUndo;
+    For NumCol := 0 To ImgH-1 Do
+     For I := 0 To ImgW-1 Do
+      SetLayerPixel(ActiveLayer, I, NumCol, Byte(V));
+    ImageModified := True;
+   End;
+  End
+  Else If Verb = 'FLIPH' Then FlipH
+  Else If Verb = 'FLIPV' Then FlipV
+  Else If Verb = 'ROTATE' Then Begin
+   If UpCaseStr(Arg) = 'CW' Then RotateLayer90(True)
+   Else If UpCaseStr(Arg) = 'CCW' Then RotateLayer90(False)
+   Else Ok := False;
+  End
+  Else If Verb = 'INVERT'   Then FilterInvert
+  Else If Verb = 'GRAY'     Then FilterGray
+  Else If Verb = 'BLUR'     Then FilterBlur
+  Else If Verb = 'SHARPEN'  Then FilterSharpen
+  Else If Verb = 'BRIGHTER' Then FilterBrighter
+  Else If Verb = 'DARKER'   Then FilterDarker
+  Else If Verb = 'LAYER' Then Begin
+   If LayerCount >= MAX_LAYERS Then Ok := False
+   Else Begin
+    NewIdx := LayerCount;
+    If Arg = '' Then Arg := 'Calque';
+    AllocLayer(NewIdx, Arg, True);
+    Inc(LayerCount);
+    ActiveLayer := NewIdx;
+   End;
+  End
+  Else If Verb = 'ACTIVE' Then Begin
+   If Not ParseInt(Arg, V) Then Ok := False
+   Else If (V<0) Or (V>=LayerCount) Or (Not Layers[V].Used) Then Ok := False
+   Else ActiveLayer := V;
+  End
+  Else If Verb = 'VISIBLE' Then Begin
+   If Not ParseInt(Arg, V) Then Ok := False
+   Else If (ActiveLayer<0) Or (Not Layers[ActiveLayer].Used) Then Ok := False
+   Else Layers[ActiveLayer].Visible := V <> 0;
+  End
+  Else If Verb = 'ECHO' Then Begin
+   ShowDialog('Script', Arg);
+  End
+  Else Ok := False;
+
+  If Ok Then Inc(Executed) Else NoteError(LineNo);
+ End;
+ Close(F);
+
+ Str(Executed, NumStr);
+ Summary := NumStr + ' commande(s) executee(s)';
+ If Errs > 0 Then Begin
+  Str(Errs, NumStr);
+  Summary := Summary + ', ' + NumStr + ' erreur(s)';
+  Summary := Summary + ' (lignes:';
+  For I := 0 To Errs-1 Do Begin
+   If I >= MAX_ERRS Then Break;
+   Str(ErrLines[I], NumStr);
+   Summary := Summary + ' ' + NumStr;
+  End;
+  If Errs > MAX_ERRS Then Summary := Summary + ' ...';
+  Summary := Summary + ').';
+ End Else
+  Summary := Summary + '.';
+
+ ShowDialog('Scripts', Summary);
 End;
 
 Procedure AutomateAction;

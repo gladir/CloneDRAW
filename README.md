@@ -9,6 +9,18 @@ Apercu de PAINT :
 
 <img width="641" height="480" alt="image" src="https://github.com/user-attachments/assets/a9503152-d653-4fd0-9e35-14865e377008" />
 
+<table>
+	<tr>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/cfbb27cb-5a2a-456d-b422-2ef092acfa99" /></td>
+		<td></td>
+	</tr>
+	<tr>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/98414f58-4b96-4ab3-8b91-cea18d8fcfd9" /></td>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ace36e01-3760-4a95-bce8-c8a24827063e" /></td>
+	</tr>
+</table>
+
+
 Apercu de VISIO :
 
 <img width="640" height="481" alt="image" src="https://github.com/user-attachments/assets/c626c543-6380-4c46-8035-a4d8a92014f7" />

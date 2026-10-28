@@ -7716,6 +7716,1219 @@ Begin
 End;
 
 
+{ Etirer/Incliner : geometrie inverse, reechantillonnage RVB et palette
+  adaptee. Le document indexe reste intact jusqu'a la fin du calcul.
+  Les apercus interrogent exactement les memes filtres que le rendu final. }
+
+Const
+ ST_NEAREST = 0;
+ ST_BILINEAR = 1;
+ ST_BICUBIC = 2;
+ ST_SMOOTH = 3;
+ ST_SHARP = 4;
+ ST_PI = 3.14159265358979323846;
+ ST_HIST_SIZE = 32768;
+ ST_MAX_BOXES = 240;
+ ST_FIELD_COUNT = 4;
+ ST_FOCUS_APPLY = 19;
+ ST_FOCUS_CANCEL = 20;
+ ST_FOCUS_RESET = 21;
+ ST_FOCUS_HELP = 22;
+
+Type
+ PSTHistogram = ^TSTHistogram;
+ TSTHistogram = Record
+  Counts: Array[0..ST_HIST_SIZE-1] of LongInt;
+  Reds, Greens, Blues: Array[0..ST_HIST_SIZE-1] of Real;
+ End;
+ PSTLookup = ^TSTLookup;
+ TSTLookup = Array[0..ST_HIST_SIZE-1] of Byte;
+ TSTBox = Record
+  R0, R1, G0, G1, B0, B1: Integer;
+  Count: LongInt;
+  SumR, SumG, SumB: Real;
+ End;
+ TSTBoxes = Array[0..ST_MAX_BOXES-1] of TSTBox;
+ TSTState = Record
+  X, Y: Integer;
+  OriginalW, OriginalH: Integer;
+  ScaledW, ScaledH: Integer;
+  ResultW, ResultH: Integer;
+  PercentUnits, KeepAspect, ExpandCanvas: Boolean;
+  SkewX, SkewY: Integer;
+  KX, KY, Determinant, OriginX, OriginY: Real;
+  Method: Integer;
+  Fields: Array[0..ST_FIELD_COUNT-1] of String[12];
+  FieldRects: Array[0..ST_FIELD_COUNT-1] of TRect;
+  MinusRects, PlusRects: Array[0..ST_FIELD_COUNT-1] of TRect;
+  Presets: Array[0..3] of TRect;
+  BeforeBox, AfterBox, PercentRect, PixelsRect: TRect;
+  LockRect, ExpandRect: TRect;
+  MethodRects: Array[0..4] of TRect;
+  ApplyRect, CancelRect, ResetRect, HelpRect: TRect;
+  RefreshRect, ZeroAnglesRect: TRect;
+  Focus, FieldError: Integer;
+  FieldSelected, Dirty, ValidResult, Done, Accepted: Boolean;
+  Status: String[77];
+  PaletteData: TPEState;
+  MX, MY, MB, PreviousButtons: Integer;
+ End;
+
+Function STFloor(Value: Real): LongInt;
+Var
+ N: LongInt;
+Begin
+ N := Trunc(Value);
+ If N > Value Then
+  Dec(N);
+ STFloor := N;
+End;
+
+Function STCeil(Value: Real): LongInt;
+Begin
+ STCeil := -STFloor(-Value);
+End;
+
+Function STNumber(Value: Real): String;
+Var
+ S: String;
+Begin
+ Str(Value:0:2,S);
+ While (Length(S)>0) And (S[Length(S)]='0') Do
+  Delete(S,Length(S),1);
+ If (Length(S)>0) And (S[Length(S)]='.') Then
+  Delete(S,Length(S),1);
+ STNumber := S;
+End;
+
+Function STMemoryText(Bytes: LongInt): String;
+Var
+ S: String;
+ I: Integer;
+Begin
+ If Bytes < 1024 Then
+  S := PENumber(Bytes)+' o'
+ Else If Bytes < 1024*1024 Then
+  S := STNumber(Bytes/1024.0)+' Ko'
+ Else
+  S := STNumber(Bytes/1048576.0)+' Mo';
+ For I := 1 To Length(S) Do
+  If S[I]='.' Then
+   S[I] := ',';
+ STMemoryText := S;
+End;
+
+Function STParseNumber(S: String; Var Value: Real): Boolean;
+Var
+ I, Code: Integer;
+Begin
+ STParseNumber := False;
+ If Length(S)=0 Then
+  Exit;
+ For I := 1 To Length(S) Do
+  If S[I]=',' Then
+   S[I] := '.';
+ Val(S,Value,Code);
+ STParseNumber := Code=0;
+End;
+
+Procedure STSyncFields(Var D: TSTState);
+Begin
+ If D.PercentUnits Then Begin
+  D.Fields[0] := STNumber(D.ScaledW*100.0/D.OriginalW);
+  D.Fields[1] := STNumber(D.ScaledH*100.0/D.OriginalH);
+ End
+ Else Begin
+  D.Fields[0] := PENumber(D.ScaledW);
+  D.Fields[1] := PENumber(D.ScaledH);
+ End;
+ D.Fields[2] := PENumber(D.SkewX);
+ D.Fields[3] := PENumber(D.SkewY);
+ D.FieldError := -1;
+End;
+
+Procedure STUpdateGeometry(Var D: TSTState);
+Var
+ MinX, MaxX, MinY, MaxY: Real;
+ W, H: LongInt;
+Begin
+ D.KX := Sin(D.SkewX*ST_PI/180)/Cos(D.SkewX*ST_PI/180);
+ D.KY := Sin(D.SkewY*ST_PI/180)/Cos(D.SkewY*ST_PI/180);
+ D.Determinant := 1-D.KX*D.KY;
+ MinX := 0;
+ MaxX := D.ScaledW;
+ MinY := 0;
+ MaxY := D.ScaledH;
+ If D.KX < 0 Then
+  MinX := D.KX*D.ScaledH
+ Else
+  MaxX := MaxX+D.KX*D.ScaledH;
+ If D.KY < 0 Then
+  MinY := D.KY*D.ScaledW
+ Else
+  MaxY := MaxY+D.KY*D.ScaledW;
+ If D.ExpandCanvas Then Begin
+  W := STCeil(MaxX-MinX-0.0000001);
+  H := STCeil(MaxY-MinY-0.0000001);
+  D.OriginX := MinX;
+  D.OriginY := MinY;
+ End
+ Else Begin
+  W := D.ScaledW;
+  H := D.ScaledH;
+  D.OriginX := (MinX+MaxX-W)/2;
+  D.OriginY := (MinY+MaxY-H)/2;
+ End;
+ D.ValidResult := (W>=1) And (W<=MAX_IMAGE_WIDTH) And
+                  (H>=1) And (H<=MAX_IMAGE_HEIGHT) And
+                  (Abs(D.Determinant)>0.000001) And (D.FieldError<0);
+ If W<1 Then D.ResultW := 1
+ Else If W>MAX_IMAGE_WIDTH Then D.ResultW := MAX_IMAGE_WIDTH
+ Else D.ResultW := W;
+ If H<1 Then D.ResultH := 1
+ Else If H>MAX_IMAGE_HEIGHT Then D.ResultH := MAX_IMAGE_HEIGHT
+ Else D.ResultH := H;
+ If Abs(D.Determinant)<=0.000001 Then
+  D.Status := 'Ces deux angles aplatissent l image. Modifiez une inclinaison.'
+ Else If (W>MAX_IMAGE_WIDTH) Or (H>MAX_IMAGE_HEIGHT) Then
+  D.Status := 'Resultat trop grand : maximum 4096 x 4096 pixels. Reduisez les valeurs.'
+ Else If Not D.ExpandCanvas And ((D.SkewX<>0) Or (D.SkewY<>0)) Then
+  D.Status := 'Cadre fixe : les parties qui depassent seront coupees.'
+ Else
+  D.Status := 'Apercu automatique. Entree applique ; Echap conserve le dessin original.';
+ D.Dirty := True;
+End;
+
+Function STChanged(Const D: TSTState): Boolean;
+Begin
+ STChanged := (D.ScaledW<>D.OriginalW) Or (D.ScaledH<>D.OriginalH) Or
+              (D.SkewX<>0) Or (D.SkewY<>0);
+End;
+
+Function STValidateField(Var D: TSTState; Index: Integer): Boolean;
+Var
+ Value: Real;
+ W, H, Angle: LongInt;
+ I: Integer;
+ Saved: String;
+Begin
+ STValidateField := False;
+ If (Index<0) Or (Index>=ST_FIELD_COUNT) Then
+  Exit;
+ If Not STParseNumber(D.Fields[Index],Value) Then Begin
+  D.Status := 'Saisissez une valeur numerique ; virgule ou point pour les pourcentages.';
+  D.FieldError := Index;
+  D.Dirty := True;
+  Exit;
+ End;
+ W := D.ScaledW;
+ H := D.ScaledH;
+ If Index<2 Then Begin
+  If D.PercentUnits Then Begin
+   If (Value<=0) Or (Value>409600) Then Begin
+    D.Status := 'Pourcentage positif attendu ; les dimensions finales sont limitees a 4096 px.';
+    D.FieldError := Index;
+    D.Dirty := True;
+    Exit;
+   End;
+   If Index=0 Then Begin
+    W := Round(D.OriginalW*Value/100);
+    If W<1 Then W := 1;
+   End
+   Else Begin
+    H := Round(D.OriginalH*Value/100);
+    If H<1 Then H := 1;
+   End;
+  End
+  Else Begin
+   If (Value<1) Or (Value>4096) Or (Abs(Value-Round(Value))>0.000001) Then Begin
+    D.Status := 'La taille en pixels doit etre un entier compris entre 1 et 4096.';
+    D.FieldError := Index;
+    D.Dirty := True;
+    Exit;
+   End;
+   If Index=0 Then
+    W := Round(Value)
+   Else
+    H := Round(Value);
+  End;
+  If D.KeepAspect Then Begin
+   If Index=0 Then Begin
+    H := Round(W*1.0*D.OriginalH/D.OriginalW);
+    If H<1 Then H := 1;
+   End
+   Else Begin
+    W := Round(H*1.0*D.OriginalW/D.OriginalH);
+    If W<1 Then W := 1;
+   End;
+  End;
+  If (W>4096) Or (H>4096) Then Begin
+   D.Status := 'Ces dimensions depassent 4096 pixels. Reduisez la taille demandee.';
+   D.FieldError := Index;
+   D.Dirty := True;
+   Exit;
+  End;
+  D.ScaledW := W;
+  D.ScaledH := H;
+ End
+ Else Begin
+  If (Value < -89) Or (Value>89) Or (Abs(Value-Round(Value))>0.000001) Then Begin
+   D.Status := 'L inclinaison doit etre un nombre entier de -89 a +89 degres.';
+   D.FieldError := Index;
+   D.Dirty := True;
+   Exit;
+  End;
+  Angle := Round(Value);
+  If Index=2 Then
+   D.SkewX := Angle
+  Else
+   D.SkewY := Angle;
+ End;
+ Saved := D.Fields[Index];
+ STSyncFields(D);
+ D.Fields[Index] := Saved;
+ D.FieldError := -1;
+ STUpdateGeometry(D);
+ STValidateField := True;
+End;
+
+Function STLeaveField(Var D: TSTState): Boolean;
+Var
+ Valid: Boolean;
+Begin
+ Valid := True;
+ If D.Focus<ST_FIELD_COUNT Then Begin
+  Valid := STValidateField(D,D.Focus);
+  If Valid Then STSyncFields(D);
+ End;
+ STLeaveField := Valid;
+End;
+
+Procedure STMapPoint(Const D: TSTState; X, Y: Real; Var SX, SY: Real);
+Var
+ TX, TY, UX, UY: Real;
+Begin
+ TX := X+0.5+D.OriginX;
+ TY := Y+0.5+D.OriginY;
+ UX := (TX-D.KX*TY)/D.Determinant;
+ UY := (TY-D.KY*TX)/D.Determinant;
+ SX := UX*D.OriginalW/D.ScaledW-0.5;
+ SY := UY*D.OriginalH/D.ScaledH-0.5;
+End;
+
+Function STChannel(Value: Real): Integer;
+Begin
+ If Value<0 Then
+  STChannel := 0
+ Else If Value>255 Then
+  STChannel := 255
+ Else
+  STChannel := Round(Value);
+End;
+
+Function STSourceRGB(X, Y: Integer): TRGBColor;
+Var
+ C: TRGBColor;
+Begin
+ X := PEClamp(X,0,CanvasImageW-1);
+ Y := PEClamp(Y,0,CanvasImageH-1);
+ If Not PGReadRGB(X,Y,C) Then
+  C := ImageBuffer.Palette[BackgroundColor];
+ STSourceRGB := C;
+End;
+
+Function STCubicWeight(X, B, C: Real): Real;
+Begin
+ X := Abs(X);
+ If X<1 Then
+  STCubicWeight := ((12-9*B-6*C)*X*X*X+(-18+12*B+6*C)*X*X+6-2*B)/6
+ Else If X<2 Then
+  STCubicWeight := ((-B-6*C)*X*X*X+(6*B+30*C)*X*X+
+                   (-12*B-48*C)*X+8*B+24*C)/6
+ Else
+  STCubicWeight := 0;
+End;
+
+Function STInterpolate(Const D: TSTState; SX, SY: Real): TRGBColor;
+Var
+ X0, Y0, X, Y: Integer;
+ FX, FY, WX, WY, Weight, Total: Real;
+ R, G, Bl, B, C: Real;
+ Pixel: TRGBColor;
+Begin
+ If (SX < -0.5) Or (SY < -0.5) Or
+    (SX > D.OriginalW-0.5) Or (SY > D.OriginalH-0.5) Then Begin
+  STInterpolate := ImageBuffer.Palette[BackgroundColor];
+  Exit;
+ End;
+ If D.Method=ST_NEAREST Then Begin
+  STInterpolate := STSourceRGB(STFloor(SX+0.5),STFloor(SY+0.5));
+  Exit;
+ End;
+ X0 := STFloor(SX);
+ Y0 := STFloor(SY);
+ FX := SX-X0;
+ FY := SY-Y0;
+ R := 0;
+ G := 0;
+ Bl := 0;
+ Total := 0;
+ If D.Method=ST_BILINEAR Then Begin
+  For Y := 0 To 1 Do
+   For X := 0 To 1 Do Begin
+    If X=0 Then WX := 1-FX Else WX := FX;
+    If Y=0 Then WY := 1-FY Else WY := FY;
+    Weight := WX*WY;
+    Pixel := STSourceRGB(X0+X,Y0+Y);
+    R := R+Pixel.R*Weight;
+    G := G+Pixel.G*Weight;
+    Bl := Bl+Pixel.B*Weight;
+   End;
+ End
+ Else Begin
+  B := 0;
+  C := 0.5;
+  If D.Method=ST_SMOOTH Then Begin B := 1; C := 0; End;
+  If D.Method=ST_SHARP Then C := 0.75;
+  For Y := -1 To 2 Do Begin
+   WY := STCubicWeight(Y-FY,B,C);
+   For X := -1 To 2 Do Begin
+    WX := STCubicWeight(X-FX,B,C);
+    Weight := WX*WY;
+    Pixel := STSourceRGB(X0+X,Y0+Y);
+    R := R+Pixel.R*Weight;
+    G := G+Pixel.G*Weight;
+    Bl := Bl+Pixel.B*Weight;
+    Total := Total+Weight;
+   End;
+  End;
+  If Abs(Total)>0.000001 Then Begin
+   R := R/Total;
+   G := G/Total;
+   Bl := Bl/Total;
+  End;
+ End;
+ STInterpolate := PERGB(STChannel(R),STChannel(G),STChannel(Bl));
+End;
+
+Function STOutputRGB(Const D: TSTState; X, Y: Real): TRGBColor;
+Var
+ SX, SY: Real;
+Begin
+ STMapPoint(D,X,Y,SX,SY);
+ STOutputRGB := STInterpolate(D,SX,SY);
+End;
+
+Function STBin(Const C: TRGBColor): Integer;
+Begin
+ STBin := (Integer(C.R Shr 3) Shl 10)+(Integer(C.G Shr 3) Shl 5)+(C.B Shr 3);
+End;
+
+Function STAllocate(Var P: Pointer; Size: LongInt): Boolean;
+{$IFDEF FPC}
+Var
+ Previous: Boolean;
+{$ENDIF}
+Begin
+ P := Nil;
+ If Size<=0 Then Begin STAllocate := False; Exit; End;
+ {$IFDEF FPC}
+ Previous := ReturnNilIfGrowHeapFails;
+ ReturnNilIfGrowHeapFails := True;
+ GetMem(P,Size);
+ ReturnNilIfGrowHeapFails := Previous;
+ {$ELSE}
+ If MaxAvail>=Size Then GetMem(P,Size);
+ {$ENDIF}
+ STAllocate := P<>Nil;
+End;
+
+Procedure STBoxStats(Var B: TSTBox; Histogram: PSTHistogram);
+Var
+ R, G, Bl, MinR, MaxR, MinG, MaxG, MinB, MaxB, Index: Integer;
+ Count: LongInt;
+Begin
+ B.Count := 0;
+ B.SumR := 0;
+ B.SumG := 0;
+ B.SumB := 0;
+ MinR := 31; MaxR := 0;
+ MinG := 31; MaxG := 0;
+ MinB := 31; MaxB := 0;
+ For R := B.R0 To B.R1 Do
+  For G := B.G0 To B.G1 Do
+   For Bl := B.B0 To B.B1 Do Begin
+    Index := (R Shl 10)+(G Shl 5)+Bl;
+    Count := Histogram^.Counts[Index];
+    If Count>0 Then Begin
+     B.Count := B.Count+Count;
+     B.SumR := B.SumR+Histogram^.Reds[Index];
+     B.SumG := B.SumG+Histogram^.Greens[Index];
+     B.SumB := B.SumB+Histogram^.Blues[Index];
+     MinR := Min(MinR,R); MaxR := Max(MaxR,R);
+     MinG := Min(MinG,G); MaxG := Max(MaxG,G);
+     MinB := Min(MinB,Bl); MaxB := Max(MaxB,Bl);
+    End;
+   End;
+ If B.Count>0 Then Begin
+  B.R0 := MinR; B.R1 := MaxR;
+  B.G0 := MinG; B.G1 := MaxG;
+  B.B0 := MinB; B.B1 := MaxB;
+ End;
+End;
+
+Function STSplitBox(Var A, B: TSTBox; Histogram: PSTHistogram): Boolean;
+Var
+ Axis, Range, I, R, G, Bl, Index, Low, High, Split: Integer;
+ Counts: Array[0..31] of LongInt;
+ Sum: LongInt;
+Begin
+ STSplitBox := False;
+ Axis := 0;
+ Range := A.R1-A.R0;
+ If A.G1-A.G0>Range Then Begin Axis := 1; Range := A.G1-A.G0; End;
+ If A.B1-A.B0>Range Then Begin Axis := 2; Range := A.B1-A.B0; End;
+ If Range=0 Then Exit;
+ FillChar(Counts,SizeOf(Counts),0);
+ For R := A.R0 To A.R1 Do
+  For G := A.G0 To A.G1 Do
+   For Bl := A.B0 To A.B1 Do Begin
+    Index := (R Shl 10)+(G Shl 5)+Bl;
+    Case Axis Of
+     0: I := R;
+     1: I := G;
+    Else I := Bl;
+    End;
+    Counts[I] := Counts[I]+Histogram^.Counts[Index];
+   End;
+ Case Axis Of
+  0: Begin Low := A.R0; High := A.R1; End;
+  1: Begin Low := A.G0; High := A.G1; End;
+ Else Begin Low := A.B0; High := A.B1; End;
+ End;
+ Sum := 0;
+ Split := Low;
+ For I := Low To High-1 Do Begin
+  Sum := Sum+Counts[I];
+  Split := I;
+  If Sum>=A.Count Div 2 Then Break;
+ End;
+ B := A;
+ Case Axis Of
+  0: Begin A.R1 := Split; B.R0 := Split+1; End;
+  1: Begin A.G1 := Split; B.G0 := Split+1; End;
+  2: Begin A.B1 := Split; B.B0 := Split+1; End;
+ End;
+ STBoxStats(A,Histogram);
+ STBoxStats(B,Histogram);
+ STSplitBox := (A.Count>0) And (B.Count>0);
+End;
+
+Procedure STMakePalette(Histogram: PSTHistogram; Var Palette: TPalette);
+Var
+ Boxes: TSTBoxes;
+ I, Best, Count, Range: Integer;
+ Score, BestScore: Real;
+ A, B: TSTBox;
+Begin
+ Palette := ImageBuffer.Palette;
+ FillChar(Boxes,SizeOf(Boxes),0);
+ Boxes[0].R1 := 31;
+ Boxes[0].G1 := 31;
+ Boxes[0].B1 := 31;
+ STBoxStats(Boxes[0],Histogram);
+ Count := 1;
+ While Count<ST_MAX_BOXES Do Begin
+  Best := -1;
+  BestScore := 0;
+  For I := 0 To Count-1 Do Begin
+   Range := Max(Boxes[I].R1-Boxes[I].R0,
+                Max(Boxes[I].G1-Boxes[I].G0,Boxes[I].B1-Boxes[I].B0));
+   Score := Range*1.0*Boxes[I].Count;
+   If Score>BestScore Then Begin
+    BestScore := Score;
+    Best := I;
+   End;
+  End;
+  If Best<0 Then Break;
+  A := Boxes[Best];
+  If Not STSplitBox(A,B,Histogram) Then Break;
+  Boxes[Best] := A;
+  Boxes[Count] := B;
+  Inc(Count);
+ End;
+ For I := 0 To Count-1 Do
+  If Boxes[I].Count>0 Then
+   Palette[16+I] := PERGB(STChannel(Boxes[I].SumR/Boxes[I].Count),
+                         STChannel(Boxes[I].SumG/Boxes[I].Count),
+                         STChannel(Boxes[I].SumB/Boxes[I].Count));
+End;
+
+Function STNearestColor(Const C: TRGBColor; Const Palette: TPalette): Byte;
+Var
+ I, Best: Integer;
+ Distance, BestDistance: LongInt;
+Begin
+ Best := 0;
+ BestDistance := MaxLongInt;
+ For I := 0 To 255 Do Begin
+  Distance := PGDistance(C,Palette[I]);
+  If Distance<BestDistance Then Begin
+   BestDistance := Distance;
+   Best := I;
+   If Distance=0 Then Break;
+  End;
+ End;
+ STNearestColor := Best;
+End;
+
+Function STProgress(Row, Total: Integer; Const Stage: String; Interactive: Boolean): Boolean;
+Var
+ K: Char;
+ R: TRect;
+Begin
+ STProgress := True;
+ If Not Interactive Then Exit;
+ If (Row Mod 16=0) Or (Row=Total-1) Then Begin
+  PEHideMouse;
+  PERect(R,160,ScreenHeight Div 2-32,320,65);
+  PEFill(R,LightGray);
+  PEBevel(R,False);
+  PELabel(R.Left+12,R.Top+10,Stage+' - Echap annule');
+  SetColor(Black);
+  Rectangle(R.Left+12,R.Top+28,R.Right-12,R.Top+46);
+  SetFillStyle(SolidFill,Blue);
+  Bar(R.Left+14,R.Top+30,R.Left+14+(LongInt(Row+1)*290) Div Total,R.Top+44);
+  PEShowMouse;
+ End;
+ While KeyPressed Do Begin
+  K := ReadKey;
+  If K=#0 Then K := ReadKey
+  Else If K=#27 Then STProgress := False;
+ End;
+End;
+
+Function STBuildResult(Const D: TSTState; Var Buffer: PByte;
+                       Var Palette: TPalette; Interactive: Boolean): Boolean;
+Var
+ RGBBuffer, OutPixel, RGBPixel, Src: PByte;
+ Histogram: PSTHistogram;
+ Lookup: PSTLookup;
+ Memory: Pointer;
+ Pixels, I: LongInt;
+ X, Y, Index: Integer;
+ SX, SY: Real;
+ C: TRGBColor;
+ Successful: Boolean;
+Begin
+ STBuildResult := False;
+ Buffer := Nil;
+ RGBBuffer := Nil;
+ Histogram := Nil;
+ Lookup := Nil;
+ Palette := ImageBuffer.Palette;
+ If Not D.ValidResult Or (D.FieldError>=0) Or Not PGHasImage Then Exit;
+ Pixels := LongInt(D.ResultW)*D.ResultH;
+ If Not STAllocate(Memory,Pixels) Then Exit;
+ Buffer := Memory;
+ If D.Method=ST_NEAREST Then Begin
+  OutPixel := Buffer;
+  Successful := True;
+  For Y := 0 To D.ResultH-1 Do Begin
+   If Not STProgress(Y,D.ResultH,'Transformation',Interactive) Then Begin
+    Successful := False;
+    Break;
+   End;
+   For X := 0 To D.ResultW-1 Do Begin
+    STMapPoint(D,X,Y,SX,SY);
+    OutPixel^ := BackgroundColor;
+    If (SX>=-0.5) And (SY>=-0.5) And
+       (SX<D.OriginalW-0.5) And (SY<D.OriginalH-0.5) Then
+     If PGReadIndex(PEClamp(STFloor(SX+0.5),0,D.OriginalW-1),
+                    PEClamp(STFloor(SY+0.5),0,D.OriginalH-1),OutPixel^) Then
+      Successful := True;
+    Inc(OutPixel);
+   End;
+  End;
+  If Successful Then STBuildResult := True
+  Else Begin FreeMem(Buffer,Pixels); Buffer := Nil; End;
+  Exit;
+ End;
+ Successful := STAllocate(Memory,Pixels*3);
+ If Successful Then RGBBuffer := Memory;
+ If Successful Then Begin
+  Successful := STAllocate(Memory,SizeOf(TSTHistogram));
+  If Successful Then Histogram := Memory;
+ End;
+ If Successful Then Begin
+  Successful := STAllocate(Memory,SizeOf(TSTLookup));
+  If Successful Then Lookup := Memory;
+ End;
+ If Successful Then Begin
+  FillChar(Histogram^,SizeOf(TSTHistogram),0);
+  RGBPixel := RGBBuffer;
+  For Y := 0 To D.ResultH-1 Do Begin
+   If Not STProgress(Y,D.ResultH,'Reechantillonnage RVB',Interactive) Then Begin
+    Successful := False;
+    Break;
+   End;
+   For X := 0 To D.ResultW-1 Do Begin
+    C := STOutputRGB(D,X,Y);
+    RGBPixel^ := C.R; Inc(RGBPixel);
+    RGBPixel^ := C.G; Inc(RGBPixel);
+    RGBPixel^ := C.B; Inc(RGBPixel);
+    Index := STBin(C);
+    Inc(Histogram^.Counts[Index]);
+    Histogram^.Reds[Index] := Histogram^.Reds[Index]+C.R;
+    Histogram^.Greens[Index] := Histogram^.Greens[Index]+C.G;
+    Histogram^.Blues[Index] := Histogram^.Blues[Index]+C.B;
+   End;
+  End;
+ End;
+ If Successful Then Begin
+  STMakePalette(Histogram,Palette);
+  For Index := 0 To ST_HIST_SIZE-1 Do Begin
+   If Index Mod 128=0 Then
+    If Not STProgress(Index Div 128,256,'Adaptation des couleurs',Interactive) Then Begin
+     Successful := False;
+     Break;
+    End;
+   C := PERGB(((Index Shr 10) And 31)*8+4,
+              ((Index Shr 5) And 31)*8+4,(Index And 31)*8+4);
+   Lookup^[Index] := STNearestColor(C,Palette);
+  End;
+ End;
+ If Successful Then Begin
+  RGBPixel := RGBBuffer;
+  OutPixel := Buffer;
+  For I := 0 To Pixels-1 Do Begin
+   C.R := RGBPixel^; Inc(RGBPixel);
+   C.G := RGBPixel^; Inc(RGBPixel);
+   C.B := RGBPixel^; Inc(RGBPixel);
+   OutPixel^ := Lookup^[STBin(C)];
+   Inc(OutPixel);
+  End;
+  STBuildResult := True;
+ End;
+ If RGBBuffer<>Nil Then FreeMem(RGBBuffer,Pixels*3);
+ If Histogram<>Nil Then FreeMem(Histogram,SizeOf(TSTHistogram));
+ If Lookup<>Nil Then FreeMem(Lookup,SizeOf(TSTLookup));
+ If Not Successful Then Begin FreeMem(Buffer,Pixels); Buffer := Nil; End;
+End;
+
+Function STApply(Const D: TSTState; Interactive: Boolean): Boolean;
+Var
+ Buffer: PByte;
+ Palette: TPalette;
+ ForegroundRGB, BackgroundRGB: TRGBColor;
+ Swatches: Array[0..27] of TRGBColor;
+ I: Integer;
+Begin
+ STApply := False;
+ If Not STChanged(D) Then Exit;
+ If Not STBuildResult(D,Buffer,Palette,Interactive) Then Exit;
+ ForegroundRGB := ImageBuffer.Palette[CurrentColor];
+ BackgroundRGB := ImageBuffer.Palette[BackgroundColor];
+ For I := 0 To 27 Do Swatches[I] := ImageBuffer.Palette[StandardPalette[I]];
+ AddSnapshotToHistory(TOOL_PENCIL);
+ FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+ CanvasImage := Buffer;
+ CanvasImageW := D.ResultW;
+ CanvasImageH := D.ResultH;
+ ImageBuffer.Width := D.ResultW;
+ ImageBuffer.Height := D.ResultH;
+ ImageBuffer.Palette := Palette;
+ ImageBuffer.BitDepth := 8;
+ ImageBuffer.Modified := True;
+ If D.Method<>ST_NEAREST Then Begin
+  CurrentColor := STNearestColor(ForegroundRGB,Palette);
+  BackgroundColor := STNearestColor(BackgroundRGB,Palette);
+  For I := 0 To 27 Do StandardPalette[I] := STNearestColor(Swatches[I],Palette);
+ End;
+ SelectionActive := False;
+ AntsValid := False;
+ PreviewValid := False;
+ RubberValid := False;
+ PEInstallDocumentPalette;
+ STApply := True;
+End;
+
+Procedure STLayout(Var D: TSTState);
+Var
+ I, Y: Integer;
+Begin
+ D.X := (ScreenWidth-620) Div 2;
+ D.Y := (ScreenHeight-440) Div 2;
+ PERect(D.PercentRect,D.X+12,D.Y+47,132,20);
+ PERect(D.PixelsRect,D.X+154,D.Y+47,132,20);
+ For I := 0 To 3 Do Begin
+  Case I Of
+   0: Y := 77;
+   1: Y := 111;
+   2: Y := 217;
+  Else Y := 251;
+  End;
+  PERect(D.FieldRects[I],D.X+168,D.Y+Y,68,22);
+  PERect(D.MinusRects[I],D.X+241,D.Y+Y,21,22);
+  PERect(D.PlusRects[I],D.X+267,D.Y+Y,21,22);
+ End;
+ PERect(D.LockRect,D.X+12,D.Y+143,280,19);
+ For I := 0 To 3 Do PERect(D.Presets[I],D.X+12+I*70,D.Y+165,63,23);
+ For I := 0 To 4 Do PERect(D.MethodRects[I],D.X+12,D.Y+301+I*18,280,17);
+ PERect(D.BeforeBox,D.X+314,D.Y+52,137,126);
+ PERect(D.AfterBox,D.X+465,D.Y+52,137,126);
+ PERect(D.ExpandRect,D.X+314,D.Y+330,288,18);
+ PERect(D.RefreshRect,D.X+314,D.Y+373,130,22);
+ PERect(D.ZeroAnglesRect,D.X+454,D.Y+373,148,22);
+ PERect(D.ApplyRect,D.X+12,D.Y+406,124,25);
+ PERect(D.CancelRect,D.X+148,D.Y+406,120,25);
+ PERect(D.ResetRect,D.X+280,D.Y+406,146,25);
+ PERect(D.HelpRect,D.X+438,D.Y+406,164,25);
+End;
+
+Function STMethodName(Method: Integer): String;
+Begin
+ Case Method Of
+  ST_NEAREST: STMethodName := 'Au plus proche';
+  ST_BILINEAR: STMethodName := 'Bilineaire';
+  ST_BICUBIC: STMethodName := 'Bicubique';
+  ST_SMOOTH: STMethodName := 'Bicubique plus lisse';
+  ST_SHARP: STMethodName := 'Bicubique plus net';
+ Else STMethodName := '';
+ End;
+End;
+
+Procedure STAxisIcon(X, Y: Integer; Vertical, Skew: Boolean);
+Begin
+ SetColor(Blue);
+ If Vertical Then Begin
+  Line(X+10,Y+1,X+10,Y+20);
+  RFArrowHead(X+10,Y+1,2);
+  RFArrowHead(X+10,Y+20,3);
+ End
+ Else Begin
+  Line(X,Y+10,X+22,Y+10);
+  RFArrowHead(X,Y+10,0);
+  RFArrowHead(X+22,Y+10,1);
+ End;
+ If Skew Then Begin
+  SetColor(DarkGray);
+  Line(X+2,Y+18,X+7,Y+3);
+  Line(X+7,Y+3,X+22,Y+3);
+  Line(X+22,Y+3,X+17,Y+18);
+  Line(X+17,Y+18,X+2,Y+18);
+ End;
+End;
+
+Procedure STDrawField(Const D: TSTState; Index: Integer);
+Var
+ R: TRect;
+ S: String;
+Begin
+ R := D.FieldRects[Index];
+ STAxisIcon(D.X+14,R.Top,(Index And 1)<>0,Index>=2);
+ If (Index And 1)=0 Then S := 'Horizontal' Else S := 'Vertical';
+ PELabel(D.X+48,R.Top+7,S);
+ PEFill(R,White);
+ PEBevel(R,True);
+ If (D.Focus=Index) And D.FieldSelected Then Begin
+  SetFillStyle(SolidFill,Blue);
+  Bar(R.Left+3,R.Top+3,R.Right-3,R.Bottom-3);
+  SetColor(White);
+ End
+ Else SetColor(Black);
+ OutTextXY(R.Left+5,R.Top+7,Copy(D.Fields[Index],1,7));
+ If (D.Focus=Index) And Not D.FieldSelected Then Begin
+  SetColor(Black);
+  Line(Min(R.Right-3,R.Left+5+TextWidth(D.Fields[Index])),R.Top+4,
+       Min(R.Right-3,R.Left+5+TextWidth(D.Fields[Index])),R.Bottom-4);
+ End;
+ If D.FieldError=Index Then Begin
+  SetColor(Red);
+  Rectangle(R.Left-1,R.Top-1,R.Right+1,R.Bottom+1);
+ End;
+ PEButton(D.MinusRects[Index],'-',False);
+ PEButton(D.PlusRects[Index],'+',False);
+End;
+
+Procedure STDrawRadio(Const R: TRect; const LabelText: String;
+                      Selected, Focused: Boolean);
+Var
+ S: String;
+Begin
+ If Selected Then S := '(*) ' Else S := '( ) ';
+ PELabel(R.Left,R.Top+4,S+LabelText);
+ If Focused Then Begin
+  SetColor(Black);
+  SetLineStyle(DottedLn,0,NormWidth);
+  Rectangle(R.Left-2,R.Top-1,R.Right+1,R.Bottom);
+  SetLineStyle(SolidLn,0,NormWidth);
+ End;
+End;
+
+Procedure STDrawPreview(Const D: TSTState; Const R: TRect; After: Boolean);
+Var
+ W, H, DW, DH, Left, Top, X, Y: Integer;
+ DX, DY: Real;
+ Inner: TRect;
+ C: TRGBColor;
+Begin
+ Inner := R;
+ Inc(Inner.Left,2); Inc(Inner.Top,2);
+ Dec(Inner.Right,2); Dec(Inner.Bottom,2);
+ RFChecker(Inner);
+ PEBevel(R,True);
+ If After And (Not D.ValidResult Or (D.FieldError>=0)) Then Begin
+  PELabel(R.Left+14,R.Top+53,'Valeurs a');
+  PELabel(R.Left+14,R.Top+67,'corriger');
+  Exit;
+ End;
+ W := D.OriginalW; H := D.OriginalH;
+ If After Then Begin W := D.ResultW; H := D.ResultH; End;
+ RFFitSize(W,H,129,118,DW,DH);
+ Left := R.Left+(137-DW) Div 2;
+ Top := R.Top+(126-DH) Div 2;
+ For Y := 0 To DH-1 Do
+  For X := 0 To DW-1 Do Begin
+   DX := (X+0.5)*W/DW-0.5;
+   DY := (Y+0.5)*H/DH-0.5;
+   If After Then Begin
+    { Afficher les pixels du resultat, pas une nouvelle interpolation du
+      document original a la taille du panneau. Important en reduction. }
+    DX := STFloor((X+0.5)*W/DW);
+    DY := STFloor((Y+0.5)*H/DH);
+    C := STOutputRGB(D,DX,DY);
+   End
+   Else C := STSourceRGB(STFloor(DX+0.5),STFloor(DY+0.5));
+   PutPixel(Left+X,Top+Y,PEDisplayColor(C));
+  End;
+ SetColor(DarkGray);
+ Rectangle(Left-1,Top-1,Left+DW,Top+DH);
+End;
+
+Procedure STDrawEstimate(Const D: TSTState);
+Var
+ Pixels, SourcePixels, Work: LongInt;
+ S: String;
+ R: TRect;
+Begin
+ Pixels := LongInt(D.ResultW)*D.ResultH;
+ SourcePixels := LongInt(D.OriginalW)*D.OriginalH;
+ Work := Pixels+SourcePixels;
+ If D.Method<>ST_NEAREST Then Work := Work+Pixels*3+SizeOf(TSTHistogram)+SizeOf(TSTLookup);
+ PERect(R,D.X+314,D.Y+207,288,112);
+ PEBevel(R,True);
+ PELabel(R.Left+8,R.Top+8,'Resultat : '+PENumber(D.ResultW)+' x '+PENumber(D.ResultH));
+ Str(Pixels,S);
+ PELabel(R.Left+8,R.Top+27,'Pixels : '+S);
+ PELabel(R.Left+8,R.Top+46,'Image indexee : '+STMemoryText(Pixels+1024));
+ PELabel(R.Left+8,R.Top+65,'RVB 24 bits : '+STMemoryText(Pixels*3));
+ PELabel(R.Left+8,R.Top+84,'Travail en plus : '+STMemoryText(Work));
+End;
+
+Procedure STDraw(Var D: TSTState);
+Var
+ R: TRect;
+ I: Integer;
+ S: String;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut);
+ SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,620,440);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.X+3,D.Y+3,D.X+616,D.Y+21);
+ SetColor(White);
+ OutTextXY(D.X+9,D.Y+7,'Etirer / Incliner - PAINT');
+ OutTextXY(D.X+602,D.Y+7,'X');
+ PELabel(D.X+12,D.Y+32,'ETIREMENT');
+ STDrawRadio(D.PercentRect,'Pourcentage',D.PercentUnits,D.Focus=4);
+ STDrawRadio(D.PixelsRect,'Pixels',Not D.PercentUnits,D.Focus=5);
+ For I := 0 To 3 Do STDrawField(D,I);
+ If D.KeepAspect Then S := '[x] ' Else S := '[ ] ';
+ PELabel(D.LockRect.Left,D.LockRect.Top+4,S+'Conserver les proportions');
+ If D.Focus=6 Then PEFocusRect(D.LockRect);
+ PEButton(D.Presets[0],'25 %',D.Focus=13);
+ PEButton(D.Presets[1],'50 %',D.Focus=14);
+ PEButton(D.Presets[2],'100 %',D.Focus=15);
+ PEButton(D.Presets[3],'200 %',D.Focus=16);
+ PELabel(D.X+12,D.Y+198,'INCLINAISON (degres, -89 a +89)');
+ PELabel(D.X+12,D.Y+286,'REECHANTILLONNAGE');
+ For I := 0 To 4 Do
+  STDrawRadio(D.MethodRects[I],STMethodName(I),D.Method=I,D.Focus=7+I);
+ PELabel(D.X+314,D.Y+32,'AVANT');
+ PELabel(D.X+465,D.Y+32,'APRES');
+ STDrawPreview(D,D.BeforeBox,False);
+ STDrawPreview(D,D.AfterBox,True);
+ PELabel(D.X+314,D.Y+186,PENumber(D.OriginalW)+'x'+PENumber(D.OriginalH)+' px');
+ PELabel(D.X+465,D.Y+186,PENumber(D.ResultW)+'x'+PENumber(D.ResultH)+' px');
+ STDrawEstimate(D);
+ If D.ExpandCanvas Then S := '[x] ' Else S := '[ ] ';
+ PELabel(D.ExpandRect.Left,D.ExpandRect.Top+4,S+'Agrandir pour tout conserver');
+ If D.Focus=12 Then PEFocusRect(D.ExpandRect);
+ PELabel(D.X+314,D.Y+353,'Fond : couleur d arriere-plan');
+ PEButton(D.RefreshRect,'Actualiser',D.Focus=18);
+ PEButton(D.ZeroAnglesRect,'Angles a zero',D.Focus=17);
+ PEButton(D.ApplyRect,'Appliquer',D.Focus=ST_FOCUS_APPLY);
+ If Not D.ValidResult Or (D.FieldError>=0) Or Not STChanged(D) Then Begin
+  PEFill(D.ApplyRect,LightGray); PEBevel(D.ApplyRect,False);
+  SetColor(DarkGray); RFCenteredText(D.ApplyRect,D.ApplyRect.Top+8,'Appliquer');
+ End;
+ PEButton(D.CancelRect,'Annuler',D.Focus=ST_FOCUS_CANCEL);
+ PEButton(D.ResetRect,'Reinitialiser',D.Focus=ST_FOCUS_RESET);
+ PEButton(D.HelpRect,'Aide (F1)',D.Focus=ST_FOCUS_HELP);
+ SetFillStyle(SolidFill,LightGray);
+ Bar(0,ScreenHeight-STATUSBAR_HEIGHT,ScreenWidth-1,ScreenHeight-1);
+ PELabel(5,ScreenHeight-STATUSBAR_HEIGHT+5,D.Status);
+ PEShowMouse;
+ D.Dirty := False;
+End;
+
+Procedure STReset(Var D: TSTState);
+Begin
+ D.ScaledW := D.OriginalW;
+ D.ScaledH := D.OriginalH;
+ D.SkewX := 0; D.SkewY := 0;
+ D.PercentUnits := True;
+ D.KeepAspect := True;
+ D.ExpandCanvas := True;
+ D.Method := ST_NEAREST;
+ D.FieldError := -1;
+ STSyncFields(D);
+ STUpdateGeometry(D);
+End;
+
+Procedure STInitialize(Var D: TSTState);
+Begin
+ FillChar(D,SizeOf(D),0);
+ PEInitialize(D.PaletteData);
+ D.OriginalW := CanvasImageW;
+ D.OriginalH := CanvasImageH;
+ STLayout(D);
+ STReset(D);
+ D.FieldSelected := True;
+ GetMouseStateLocal(D.MX,D.MY,D.PreviousButtons);
+End;
+
+Procedure STHelp(Var D: TSTState);
+Begin
+ ShowMessage('Aide - Etirer / Incliner',
+  'Pourcentage : 100 = taille originale ; 200 = double.'+#10+
+  'Pixels : largeur et hauteur exactes avant inclinaison.'+#10+
+  'Angles : deformation horizontale / verticale.'+#10+
+  'Plus proche : pixels nets ; autres : lissage RVB.'+#10+
+  'Sortie indexee : 256 couleurs. Echap annule.');
+ D.Dirty := True;
+End;
+
+Procedure STStepField(Var D: TSTState; Index, Delta: Integer);
+Var
+ Value: Real;
+Begin
+ If Not STParseNumber(D.Fields[Index],Value) Then Value := 0;
+ Value := Value+Delta;
+ If Index<2 Then Begin
+  If D.PercentUnits Then Begin
+   If Value<1 Then Value := 1;
+   If Value>409600 Then Value := 409600;
+  End
+  Else Value := PEClamp(Round(Value),1,4096);
+ End
+ Else Value := PEClamp(Round(Value),-89,89);
+ D.Fields[Index] := STNumber(Value);
+ D.Focus := Index;
+ D.FieldSelected := True;
+ If STValidateField(D,Index) Then STSyncFields(D);
+End;
+
+Procedure STActivate(Var D: TSTState; Action: Integer);
+Var
+ Percent: Integer;
+ NewW, NewH: LongInt;
+Begin
+ If Action=ST_FOCUS_CANCEL Then Begin D.Done := True; D.Accepted := False; Exit; End;
+ If Action=ST_FOCUS_RESET Then Begin STReset(D); Exit; End;
+ If Action=ST_FOCUS_HELP Then Begin STHelp(D); Exit; End;
+ If Not STLeaveField(D) Then Exit;
+ D.Focus := Action;
+ Case Action Of
+  4,5: Begin D.PercentUnits := Action=4; STSyncFields(D); D.Dirty := True; End;
+  6: Begin
+   D.KeepAspect := Not D.KeepAspect;
+   If D.KeepAspect Then Begin
+    D.Fields[0] := STNumber(D.ScaledW);
+    If D.PercentUnits Then D.Fields[0] := STNumber(D.ScaledW*100.0/D.OriginalW);
+    If STValidateField(D,0) Then STSyncFields(D);
+   End;
+   D.Dirty := True;
+  End;
+  7..11: Begin D.Method := Action-7; D.Dirty := True; End;
+  12: Begin D.ExpandCanvas := Not D.ExpandCanvas; STUpdateGeometry(D); End;
+  13..16: Begin
+   Case Action Of
+    13: Percent := 25;
+    14: Percent := 50;
+    15: Percent := 100;
+   Else Percent := 200;
+   End;
+   NewW := Round(D.OriginalW*Percent/100.0);
+   NewH := Round(D.OriginalH*Percent/100.0);
+   If NewW<1 Then NewW := 1;
+   If NewH<1 Then NewH := 1;
+   If (NewW>4096) Or (NewH>4096) Then Begin
+    D.Status := 'Ce prereglage depasse 4096 pixels. Les dimensions restent inchangees.';
+    D.Dirty := True;
+    Exit;
+   End;
+   D.ScaledW := NewW;
+   D.ScaledH := NewH;
+   STSyncFields(D); STUpdateGeometry(D);
+  End;
+  17: Begin D.SkewX := 0; D.SkewY := 0; STSyncFields(D); STUpdateGeometry(D); End;
+  18: Begin STUpdateGeometry(D); D.Dirty := True; End;
+  ST_FOCUS_APPLY: If D.ValidResult And (D.FieldError<0) And STChanged(D) Then Begin
+   D.Accepted := True; D.Done := True;
+  End;
+ End;
+End;
+
+Procedure STSetFocus(Var D: TSTState; Focus: Integer);
+Begin
+ If Not STLeaveField(D) Then Exit;
+ D.Focus := Focus;
+ D.FieldSelected := Focus<ST_FIELD_COUNT;
+ D.Dirty := True;
+End;
+
+Procedure STFieldKey(Var D: TSTState; K: Char);
+Var
+ S: String;
+ Allowed: Boolean;
+Begin
+ If D.Focus>=ST_FIELD_COUNT Then Exit;
+ S := D.Fields[D.Focus];
+ If K=#1 Then Begin D.FieldSelected := True; D.Dirty := True; Exit; End;
+ If K=#8 Then Begin
+  If D.FieldSelected Then S := ''
+  Else If Length(S)>0 Then Delete(S,Length(S),1);
+ End
+ Else Begin
+  Allowed := (K>='0') And (K<='9');
+  If D.PercentUnits And (D.Focus<2) And ((K='.') Or (K=',')) Then
+   Allowed := (Pos('.',S)=0) And (Pos(',',S)=0) Or D.FieldSelected;
+  If (D.Focus>=2) And (K='-') Then Allowed := (Length(S)=0) Or D.FieldSelected;
+  If Not Allowed Then Exit;
+  If D.FieldSelected Then S := '';
+  If Length(S)<9 Then S := S+K;
+ End;
+ D.Fields[D.Focus] := S;
+ D.FieldSelected := False;
+ D.FieldError := -1;
+ If Not STValidateField(D,D.Focus) Then D.Dirty := True;
+End;
+
+Procedure STKeyboard(Var D: TSTState);
+Var
+ K: Char;
+ Next: Integer;
+Begin
+ K := ReadKey;
+ If K=#0 Then Begin
+  K := ReadKey;
+  Case Ord(K) Of
+   15: Begin Next := (D.Focus+ST_FOCUS_HELP) Mod (ST_FOCUS_HELP+1); STSetFocus(D,Next); End;
+   59: STHelp(D);
+   72,80,73,81: If D.Focus<ST_FIELD_COUNT Then Begin
+    Case Ord(K) Of
+     72: STStepField(D,D.Focus,1);
+     80: STStepField(D,D.Focus,-1);
+     73: STStepField(D,D.Focus,10);
+     81: STStepField(D,D.Focus,-10);
+    End;
+   End;
+   83: If D.Focus<ST_FIELD_COUNT Then Begin
+    D.Fields[D.Focus] := ''; D.FieldSelected := False; D.Dirty := True;
+   End;
+  End;
+  Exit;
+ End;
+ Case K Of
+  #27: STActivate(D,ST_FOCUS_CANCEL);
+  #9: STSetFocus(D,(D.Focus+1) Mod (ST_FOCUS_HELP+1));
+  #13: If D.Focus<ST_FIELD_COUNT Then Begin
+   If STLeaveField(D) Then STSetFocus(D,ST_FOCUS_APPLY);
+  End Else If D.Focus>=ST_FOCUS_APPLY Then STActivate(D,D.Focus)
+  Else STActivate(D,ST_FOCUS_APPLY);
+  ' ': If D.Focus>=ST_FIELD_COUNT Then STActivate(D,D.Focus);
+ Else STFieldKey(D,K);
+ End;
+End;
+
+Procedure STMouse(Var D: TSTState);
+Var
+ I: Integer;
+Begin
+ GetMouseStateLocal(D.MX,D.MY,D.MB);
+ If ((D.MB And 1)<>0) And ((D.PreviousButtons And 1)=0) Then Begin
+  If ((D.MX>=D.X+596) And (D.MX<=D.X+617) And
+      (D.MY>=D.Y+3) And (D.MY<=D.Y+21)) Or
+     PEInside(D.MX,D.MY,D.CancelRect) Then STActivate(D,ST_FOCUS_CANCEL)
+  Else If PEInside(D.MX,D.MY,D.ResetRect) Then STActivate(D,ST_FOCUS_RESET)
+  Else If PEInside(D.MX,D.MY,D.HelpRect) Then STActivate(D,ST_FOCUS_HELP)
+  Else If PEInside(D.MX,D.MY,D.ApplyRect) Then STActivate(D,ST_FOCUS_APPLY)
+  Else If PEInside(D.MX,D.MY,D.PercentRect) Then STActivate(D,4)
+  Else If PEInside(D.MX,D.MY,D.PixelsRect) Then STActivate(D,5)
+  Else If PEInside(D.MX,D.MY,D.LockRect) Then STActivate(D,6)
+  Else If PEInside(D.MX,D.MY,D.ExpandRect) Then STActivate(D,12)
+  Else If PEInside(D.MX,D.MY,D.RefreshRect) Then STActivate(D,18)
+  Else If PEInside(D.MX,D.MY,D.ZeroAnglesRect) Then STActivate(D,17)
+  Else Begin
+   For I := 0 To 3 Do Begin
+    If PEInside(D.MX,D.MY,D.FieldRects[I]) Then STSetFocus(D,I);
+    If PEInside(D.MX,D.MY,D.MinusRects[I]) Then STStepField(D,I,-1);
+    If PEInside(D.MX,D.MY,D.PlusRects[I]) Then STStepField(D,I,1);
+    If PEInside(D.MX,D.MY,D.Presets[I]) Then STActivate(D,13+I);
+   End;
+   For I := 0 To 4 Do
+    If PEInside(D.MX,D.MY,D.MethodRects[I]) Then STActivate(D,7+I);
+  End;
+ End;
+ D.PreviousButtons := D.MB;
+End;
+
+Procedure StretchSkewDialog;
+Var
+ D: TSTState;
+ Applied: Boolean;
+Begin
+ If Not PGHasImage Then Begin ShowMessage('Etirer / Incliner','Aucune image a transformer.'); Exit; End;
+ MenuActive := False;
+ RedrawInterface;
+ STInitialize(D);
+ PEHideMouse; PEBuildDisplayPalette; PEShowMouse;
+ While Not D.Done Do Begin
+  If D.Dirty Then STDraw(D);
+  If KeyPressed Then STKeyboard(D);
+  If Not D.Done Then STMouse(D);
+  Delay(10);
+ End;
+ PEHideMouse; PERestoreHardware(D.PaletteData); PEShowMouse;
+ If D.Accepted Then Begin
+  Applied := STApply(D,True);
+  If Not Applied Then ShowMessage('Etirer / Incliner',
+   'Operation annulee ou memoire insuffisante. Le dessin original est conserve.');
+ End;
+ Repeat
+  GetMouseStateLocal(D.MX,D.MY,D.MB);
+  If (D.MB And 1)<>0 Then Delay(10);
+ Until (D.MB And 1)=0;
+ OldMouseButtons := 0; MouseButtons := 0;
+ RedrawInterface;
+End;
+
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -7870,29 +9083,8 @@ Begin
     0: Begin { Retourner/Pivoter : choix visuel et apercu avant/apres }
      FlipRotateDialog;
     End;
-    1: Begin { Étirer/Incliner }
-     Str(ImageBuffer.Width, NewName);
-     Str(ImageBuffer.Height, InfoMsg);
-     NewName := NewName + 'x' + InfoMsg;
-     If PromptString('Etirer',
-                     'Nouvelle taille (LARGEURxHAUTEUR) :',
-                     NewName) and (NewName <> '') Then Begin
-      Fmt := Pos('x', NewName);
-      If Fmt = 0 Then Fmt := Pos('X', NewName);
-      If Fmt > 1 Then Begin
-       Val(Copy(NewName, 1, Fmt - 1), NewW, ValErr);
-       If ValErr = 0 Then Val(Copy(NewName, Fmt + 1, Length(NewName) - Fmt),
-                              NewH, ValErr);
-       If (ValErr = 0) and (NewW > 0) and (NewH > 0) Then Begin
-        AddSnapshotToHistory(TOOL_PENCIL);
-        StretchCanvas(NewW, NewH);
-       End
-       Else
-        ShowMessage('Erreur', 'Dimensions invalides.');
-      End
-      Else
-       ShowMessage('Erreur', 'Format attendu : LARGEURxHAUTEUR.');
-     End;
+    1: Begin { Etirer/Incliner : reglages visuels, filtres RVB et apercus }
+     StretchSkewDialog;
     End;
     2: Begin AddSnapshotToHistory(TOOL_PENCIL); InvertColors; End;
     4: Begin { Redimensionner }

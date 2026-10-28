@@ -45,11 +45,44 @@ Program Paint;
 
 Uses
  {$IFDEF FPC}
-  {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   Crt, PtcGraph, PtcCrt, PtcMouse, Dos
  {$ELSE}
   Crt, Graph, Dos
  {$ENDIF};
+
+{$IFDEF WINDOWS}
+{ Declarations minimales des API du presse-papiers, sans l'unite Windows.
+  BOOL et UINT restent sur 32 bits ; HANDLE et SIZE_T suivent le pointeur.
+  stdcall correspond a l'ABI Win32 et est adapte par FPC sous Win64. }
+Type
+ TPaintWinBool = LongBool;
+ TPaintWinUInt = LongWord;
+ TPaintWinHandle = PtrUInt;
+ TPaintWinSize = PtrUInt;
+
+Const
+ PAINT_CF_TEXT = 1;
+ PAINT_GMEM_MOVEABLE = $0002;
+
+Function PaintWinOpenClipboard(Owner: TPaintWinHandle): TPaintWinBool;
+ stdcall; external 'user32.dll' name 'OpenClipboard';
+Function PaintWinCloseClipboard: TPaintWinBool;
+ stdcall; external 'user32.dll' name 'CloseClipboard';
+Function PaintWinEmptyClipboard: TPaintWinBool;
+ stdcall; external 'user32.dll' name 'EmptyClipboard';
+Function PaintWinSetClipboardData(Format: TPaintWinUInt;
+                                Memory: TPaintWinHandle): TPaintWinHandle;
+ stdcall; external 'user32.dll' name 'SetClipboardData';
+Function PaintWinGlobalAlloc(Flags: TPaintWinUInt;
+                            Bytes: TPaintWinSize): TPaintWinHandle;
+ stdcall; external 'kernel32.dll' name 'GlobalAlloc';
+Function PaintWinGlobalLock(Memory: TPaintWinHandle): Pointer;
+ stdcall; external 'kernel32.dll' name 'GlobalLock';
+Function PaintWinGlobalUnlock(Memory: TPaintWinHandle): TPaintWinBool;
+ stdcall; external 'kernel32.dll' name 'GlobalUnlock';
+Function PaintWinGlobalFree(Memory: TPaintWinHandle): TPaintWinHandle;
+ stdcall; external 'kernel32.dll' name 'GlobalFree';
+{$ENDIF}
 
 Const
  { Constantes de version }
@@ -6344,38 +6377,38 @@ Begin
 End;
 
 Function PGCopyText(Const Value: String): Boolean;
-{$IFDEF MSWINDOWS}
+{$IFDEF WINDOWS}
 Var
- Memory: HGLOBAL;
+ Memory: TPaintWinHandle;
  Buffer: PChar;
  I: Integer;
 Begin
  PGCopyText := False;
- If Not OpenClipboard(0) Then
+ If Not PaintWinOpenClipboard(0) Then
   Exit;
- Memory := GlobalAlloc(GMEM_MOVEABLE,Length(Value)+1);
+ Memory := PaintWinGlobalAlloc(PAINT_GMEM_MOVEABLE,Length(Value)+1);
  If Memory = 0 Then Begin
-  CloseClipboard;
+  PaintWinCloseClipboard;
   Exit;
  End;
- Buffer := GlobalLock(Memory);
+ Buffer := PChar(PaintWinGlobalLock(Memory));
  If Buffer = Nil Then Begin
-  GlobalFree(Memory);
-  CloseClipboard;
+  PaintWinGlobalFree(Memory);
+  PaintWinCloseClipboard;
   Exit;
  End;
  For I := 1 To Length(Value) Do
   Buffer[I-1] := Value[I];
  Buffer[Length(Value)] := #0;
- GlobalUnlock(Memory);
- If EmptyClipboard Then
-  If SetClipboardData(CF_TEXT,Memory) <> 0 Then Begin
+ PaintWinGlobalUnlock(Memory);
+ If PaintWinEmptyClipboard Then
+  If PaintWinSetClipboardData(PAINT_CF_TEXT,Memory) <> 0 Then Begin
    PGCopyText := True;
    Memory := 0;
   End;
  If Memory <> 0 Then
-  GlobalFree(Memory);
- CloseClipboard;
+  PaintWinGlobalFree(Memory);
+ PaintWinCloseClipboard;
 End;
 {$ELSE}
 Begin

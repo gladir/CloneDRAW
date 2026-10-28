@@ -543,8 +543,9 @@ End;
 Procedure InitGraphics;
 {$IFDEF FPC}
 Begin
- GraphDriver := VGA;
- GraphMode := VGAHi;
+ { 256 indices : couleurs du dessin separees de celles de l interface. }
+ GraphDriver := D8bit;
+ GraphMode := m640x480;
  InitGraph(GraphDriver, GraphMode, '');
  If GraphResult <> grOk Then Begin
   WriteLn('Erreur d''initialisation graphique!');
@@ -1380,7 +1381,7 @@ Var
  BitPos: Integer;
  TopDown: Boolean;
  PalRemap: Array[0..255] of Byte;
- I, Best: Integer;
+ I, Best, NextColor: Integer;
  DR, DG, DB, Dist, BestDist: LongInt;
 Begin
  LoadBMP := False;
@@ -1434,33 +1435,57 @@ Begin
   Else
    PaletteEntries := 1 shl InfoHeader.biBitCount;
 
+  If (PaletteEntries < 1) Or (PaletteEntries > 256) Then Begin
+   Close(F);
+   Exit;
+  End;
   BlockRead(F, BMPPalette, PaletteEntries * 4, BytesRead);
   If BytesRead <> PaletteEntries * 4 Then Begin
    Close(F);
    Exit;
   End;
 
-  { Convertir la palette BMP : on NE remplace PAS la palette VGA systeme
-    (sinon menus/boutons deviennent invisibles). On construit une table de
-    correspondance vers les 16 couleurs VGA standard via plus proche voisin. }
-  For X := 0 to PaletteEntries - 1 do Begin
-   ImageBuffer.Palette[X].R := BMPPalette[X].Red;
-   ImageBuffer.Palette[X].G := BMPPalette[X].Green;
-   ImageBuffer.Palette[X].B := BMPPalette[X].Blue;
-   ImageBuffer.Palette[X].A := 255;
+  { Reserver les 16 couleurs de l'interface. En mode 256 couleurs,
+    conserver les couleurs BMP exactes dans les autres registres, au lieu
+    de perdre les couleurs personnalisees lors de la reouverture. }
+  For I := 0 To 15 Do Begin
+   ImageBuffer.Palette[I].R := VGA_R[I];
+   ImageBuffer.Palette[I].G := VGA_G[I];
+   ImageBuffer.Palette[I].B := VGA_B[I];
+   ImageBuffer.Palette[I].A := 255;
+  End;
+  NextColor := 16;
+  For X := 0 To PaletteEntries-1 Do Begin
    Best := 0;
    BestDist := MaxLongInt;
-   For I := 0 to 15 do Begin
-    DR := LongInt(BMPPalette[X].Red)   - LongInt(VGA_R[I]);
-    DG := LongInt(BMPPalette[X].Green) - LongInt(VGA_G[I]);
-    DB := LongInt(BMPPalette[X].Blue)  - LongInt(VGA_B[I]);
-    Dist := DR*DR + DG*DG + DB*DB;
+   For I := 0 To NextColor-1 Do Begin
+    DR := LongInt(BMPPalette[X].Red)-ImageBuffer.Palette[I].R;
+    DG := LongInt(BMPPalette[X].Green)-ImageBuffer.Palette[I].G;
+    DB := LongInt(BMPPalette[X].Blue)-ImageBuffer.Palette[I].B;
+    Dist := DR*DR+DG*DG+DB*DB;
     If Dist < BestDist Then Begin
      BestDist := Dist;
      Best := I;
     End;
    End;
+   If (BestDist <> 0) And (GetMaxColor >= 255) And (NextColor < 256) Then Begin
+    Best := NextColor;
+    ImageBuffer.Palette[Best].R := BMPPalette[X].Red;
+    ImageBuffer.Palette[Best].G := BMPPalette[X].Green;
+    ImageBuffer.Palette[Best].B := BMPPalette[X].Blue;
+    ImageBuffer.Palette[Best].A := 255;
+    Inc(NextColor);
+   End;
    PalRemap[X] := Byte(Best);
+  End;
+  For I := 0 To NextColor-1 Do Begin
+   {$IFDEF FPC}
+   SetRGBPalette(I,ImageBuffer.Palette[I].R,
+                   ImageBuffer.Palette[I].G,ImageBuffer.Palette[I].B);
+   {$ELSE}
+   SetRGBPalette(I,ImageBuffer.Palette[I].R Shr 2,
+                   ImageBuffer.Palette[I].G Shr 2,ImageBuffer.Palette[I].B Shr 2);
+   {$ENDIF}
   End;
   { Entrees non lues : mapper sur noir par defaut. }
   For X := PaletteEntries to 255 do PalRemap[X] := 0;
@@ -2782,7 +2807,41 @@ Type
   DataSize: LongInt;
   IsFullSnapshot: Boolean;   { True = snapshot complet de CanvasImage (taille variable) }
   ImgW, ImgH: Integer;       { Dimensions du buffer image pour les snapshots }
+  SavedColors: TPalette;
+  SavedSwatches: Array[0..27] of Byte;
+  SavedForeground, SavedBackground, SavedDepth: Byte;
  End;
+
+Procedure SaveHistoryPalette(Data: PHistoryData);
+Begin
+ Data^.SavedColors := ImageBuffer.Palette;
+ Move(StandardPalette,Data^.SavedSwatches,SizeOf(StandardPalette));
+ Data^.SavedForeground := CurrentColor;
+ Data^.SavedBackground := BackgroundColor;
+ Data^.SavedDepth := ImageBuffer.BitDepth;
+End;
+
+Procedure RestoreHistoryPalette(Data: PHistoryData);
+Var
+ I: Integer;
+Begin
+ ImageBuffer.Palette := Data^.SavedColors;
+ Move(Data^.SavedSwatches,StandardPalette,SizeOf(StandardPalette));
+ CurrentColor := Data^.SavedForeground;
+ BackgroundColor := Data^.SavedBackground;
+ ImageBuffer.BitDepth := Data^.SavedDepth;
+ For I := 0 To 255 Do
+  If I <= GetMaxColor Then Begin
+   {$IFDEF FPC}
+   SetRGBPalette(I,ImageBuffer.Palette[I].R,
+                   ImageBuffer.Palette[I].G,ImageBuffer.Palette[I].B);
+   {$ELSE}
+   SetRGBPalette(I,ImageBuffer.Palette[I].R Shr 2,
+                   ImageBuffer.Palette[I].G Shr 2,ImageBuffer.Palette[I].B Shr 2);
+   {$ENDIF}
+  End;
+ ImageBuffer.Modified := True;
+End;
 
 Function SaveCanvasRegion(X1, Y1, X2, Y2: Integer): PHistoryData;
 Var
@@ -2811,6 +2870,7 @@ Begin
 
  { Allouer la structure de données }
  New(Data);
+ SaveHistoryPalette(Data);
  Data^.X1 := X1;
  Data^.Y1 := Y1;
  Data^.X2 := X2;
@@ -2844,6 +2904,7 @@ Var
 Begin
  If Data = Nil Then Exit;
  If Data^.PixelData = Nil Then Exit;
+ RestoreHistoryPalette(Data);
 
  PixelBuffer := Data^.PixelData;
 
@@ -2888,6 +2949,7 @@ Begin
  SaveFullSnapshot := Nil;
  If (CanvasImage = Nil) or (CanvasImageW <= 0) or (CanvasImageH <= 0) Then Exit;
  New(Data);
+ SaveHistoryPalette(Data);
  Data^.X1 := 0;
  Data^.Y1 := 0;
  Data^.X2 := CanvasImageW - 1;
@@ -2911,6 +2973,7 @@ Begin
  If Data = Nil Then Exit;
  If Not Data^.IsFullSnapshot Then Exit;
  If Data^.PixelData = Nil Then Exit;
+ RestoreHistoryPalette(Data);
  Sz := LongInt(Data^.ImgW) * LongInt(Data^.ImgH);
  If CanvasImage <> Nil Then
   FreeMem(CanvasImage, LongInt(CanvasImageW) * LongInt(CanvasImageH));
@@ -3804,6 +3867,1567 @@ Begin
  End;
 End;
 
+{ Editeur de couleurs PAINT : travail transactionnel jusqu'a validation.
+  Les indices 0..15 restent reserves aux elements de l'interface.
+  Les cases de la barre utilisent 16..43 en mode 256 couleurs.
+  Le dialogue utilise 44..63 pour ses echantillons et 64..255
+  pour un cube RVB temporaire. Ces entrees sont restaurees a la sortie.
+  Aucune capture du dialogue ne doit etre synchronisee dans CanvasImage. }
+
+Const
+ PE_BASIC_COUNT = 48;
+ PE_CUSTOM_COUNT = 16;
+ PE_SLOT_COUNT = 28;
+ PE_FIELD_COUNT = 7;
+ PE_BUTTON_COUNT = 10;
+ PE_FOCUS_BASIC = 0;
+ PE_FOCUS_CUSTOM = 1;
+ PE_FOCUS_SLOTS = 2;
+ PE_FOCUS_PLANE = 3;
+ PE_FOCUS_LUMA = 4;
+ PE_FOCUS_FIELD = 5;
+ PE_FOCUS_BUTTON = 12;
+ PE_FOCUS_LAST = 21;
+ PE_PREVIEW = 44;
+ PE_OLD_PREVIEW = 45;
+ PE_CUSTOM_FIRST = 46;
+ PE_CUBE_FIRST = 64;
+ PE_DIALOG_W = 620;
+ PE_DIALOG_H = 430;
+ PE_COMPACT_W = 304;
+ PE_COMPACT_H = 430;
+
+Type
+ TPECustomColors = Array[0..PE_CUSTOM_COUNT-1] of TRGBColor;
+ TPESlotColors = Array[0..PE_SLOT_COUNT-1] of TRGBColor;
+ TPEFields = Array[0..PE_FIELD_COUNT-1] of String[8];
+ TPEButtons = Array[0..PE_BUTTON_COUNT-1] of TRect;
+ TPEFieldRects = Array[0..PE_FIELD_COUNT-1] of TRect;
+ TPEState = Record
+  X, Y, W, H: Integer;
+  Expanded: Boolean;
+  Done, Accepted: Boolean;
+  Dirty, PlaneDirty: Boolean;
+  Focus: Integer;
+  BasicIndex, CustomIndex, SlotIndex: Integer;
+  TargetBackground: Boolean;
+  RGB, Original, Previous: TRGBColor;
+  Hue, Saturation, Luminance: Integer;
+  Slots: TPESlotColors;
+  Customs: TPECustomColors;
+  Fields: TPEFields;
+  FieldRects: TPEFieldRects;
+  Buttons: TPEButtons;
+  FieldSelected: Boolean;
+  FieldError: Integer;
+  Status: String[76];
+  MX, MY, MB, PrevButtons: Integer;
+  DragKind: Integer;
+  LastX, LastY: Integer;
+  SavedPalette: TPalette;
+ End;
+
+Var
+ PaintCustomColors: TPECustomColors;
+ PaintCustomReady: Boolean;
+ ActivePaletteSlot: Integer;
+
+Function PEClamp(Value, LowValue, HighValue: Integer): Integer;
+Begin
+ If Value < LowValue Then
+  Value := LowValue;
+ If Value > HighValue Then
+  Value := HighValue;
+ PEClamp := Value;
+End;
+
+Function PERGB(R, G, B: Integer): TRGBColor;
+Var
+ C: TRGBColor;
+Begin
+ C.R := PEClamp(R, 0, 255);
+ C.G := PEClamp(G, 0, 255);
+ C.B := PEClamp(B, 0, 255);
+ C.A := 255;
+ PERGB := C;
+End;
+
+Function PESameColor(Const A, B: TRGBColor): Boolean;
+Begin
+ PESameColor := (A.R = B.R) And (A.G = B.G) And (A.B = B.B);
+End;
+
+Function PEDefaultColor(Index: Integer): TRGBColor;
+Const
+ Values: Array[0..15, 0..2] of Byte = (
+  (0,0,0), (0,0,168), (0,168,0), (0,168,168),
+  (168,0,0), (168,0,168), (168,84,0), (168,168,168),
+  (84,84,84), (84,84,252), (84,252,84), (84,252,252),
+  (252,84,84), (252,84,252), (252,252,84), (252,252,252));
+Begin
+ Index := PEClamp(Index, 0, 15);
+ PEDefaultColor := PERGB(Values[Index,0], Values[Index,1], Values[Index,2]);
+End;
+
+Function PEBasicColor(Index: Integer): TRGBColor;
+Const
+ Values: Array[0..PE_BASIC_COUNT-1, 0..2] of Byte = (
+  (255,128,128), (255,255,128), (128,255,128), (0,255,128),
+  (128,255,255), (0,128,255), (255,128,192), (255,128,255),
+  (255,0,0), (255,255,0), (128,255,0), (0,255,64),
+  (0,255,255), (0,128,192), (128,128,192), (255,0,255),
+  (128,64,64), (255,128,64), (0,255,0), (0,128,128),
+  (0,64,128), (128,128,255), (128,0,64), (255,0,128),
+  (128,0,0), (255,128,0), (0,128,0), (0,128,64),
+  (0,0,255), (0,0,160), (128,0,128), (128,0,255),
+  (64,0,0), (128,64,0), (0,64,0), (0,64,64),
+  (0,0,128), (0,0,64), (64,0,64), (64,0,128),
+  (0,0,0), (128,128,0), (128,128,64), (128,128,128),
+  (64,128,128), (192,192,192), (64,0,64), (255,255,255));
+Begin
+ Index := PEClamp(Index, 0, PE_BASIC_COUNT-1);
+ PEBasicColor := PERGB(Values[Index,0], Values[Index,1], Values[Index,2]);
+End;
+
+Function PEHueComponent(P, Q, T: Real): Real;
+Begin
+ While T < 0 Do
+  T := T + 1;
+ While T > 1 Do
+  T := T - 1;
+ If T < 1.0/6 Then
+  PEHueComponent := P + (Q-P)*6*T
+ Else If T < 0.5 Then
+  PEHueComponent := Q
+ Else If T < 2.0/3 Then
+  PEHueComponent := P + (Q-P)*(2.0/3-T)*6
+ Else
+  PEHueComponent := P;
+End;
+
+Function PEHSLToRGB(Hue, Sat, Lum: Integer): TRGBColor;
+Var
+ H, S, L, P, Q: Real;
+Begin
+ H := PEClamp(Hue, 0, 239) / 240.0;
+ S := PEClamp(Sat, 0, 240) / 240.0;
+ L := PEClamp(Lum, 0, 240) / 240.0;
+ If Sat = 0 Then Begin
+  PEHSLToRGB := PERGB(Round(L*255), Round(L*255), Round(L*255));
+  Exit;
+ End;
+ If L < 0.5 Then
+  Q := L*(1+S)
+ Else
+  Q := L+S-L*S;
+ P := 2*L-Q;
+ PEHSLToRGB := PERGB(
+  Round(255*PEHueComponent(P,Q,H+1.0/3)),
+  Round(255*PEHueComponent(P,Q,H)),
+  Round(255*PEHueComponent(P,Q,H-1.0/3)));
+End;
+
+Procedure PERGBToHSL(Const C: TRGBColor; Var H, S, L: Integer);
+Var
+ R, G, B, Highest, Lowest, Delta, HF, SF, LF: Real;
+Begin
+ R := C.R/255.0;
+ G := C.G/255.0;
+ B := C.B/255.0;
+ Highest := R;
+ If G > Highest Then
+  Highest := G;
+ If B > Highest Then
+  Highest := B;
+ Lowest := R;
+ If G < Lowest Then
+  Lowest := G;
+ If B < Lowest Then
+  Lowest := B;
+ Delta := Highest-Lowest;
+ LF := (Highest+Lowest)/2;
+ If Delta < 0.000001 Then Begin
+  { Conserver la teinte choisie lorsque la couleur devient grise. }
+  S := 0;
+  L := PEClamp(Round(LF*240),0,240);
+  Exit;
+ End;
+ If LF > 0.5 Then
+  SF := Delta/(2-Highest-Lowest)
+ Else
+  SF := Delta/(Highest+Lowest);
+ If Highest = R Then Begin
+  HF := (G-B)/Delta;
+  If G < B Then
+   HF := HF+6;
+ End
+ Else If Highest = G Then
+  HF := (B-R)/Delta+2
+ Else
+  HF := (R-G)/Delta+4;
+ H := Round(HF*40) Mod 240;
+ S := PEClamp(Round(SF*240),0,240);
+ L := PEClamp(Round(LF*240),0,240);
+End;
+
+Function PEHexDigit(Value: Integer): Char;
+Const
+ Digits: String[16] = '0123456789ABCDEF';
+Begin
+ PEHexDigit := Digits[(Value And 15)+1];
+End;
+
+Function PEHexByte(Value: Byte): String;
+Begin
+ PEHexByte := PEHexDigit(Value Shr 4)+PEHexDigit(Value And 15);
+End;
+
+Function PEHexColor(Const C: TRGBColor): String;
+Begin
+ PEHexColor := PEHexByte(C.R)+PEHexByte(C.G)+PEHexByte(C.B);
+End;
+
+Function PEHexValue(C: Char): Integer;
+Begin
+ C := UpCase(C);
+ If (C >= '0') And (C <= '9') Then
+  PEHexValue := Ord(C)-Ord('0')
+ Else If (C >= 'A') And (C <= 'F') Then
+  PEHexValue := Ord(C)-Ord('A')+10
+ Else
+  PEHexValue := -1;
+End;
+
+Function PEParseHex(S: String; Var C: TRGBColor): Boolean;
+Var
+ I, D: Integer;
+ Value: LongInt;
+Begin
+ PEParseHex := False;
+ If (Length(S) > 0) And (S[1] = '#') Then
+  Delete(S,1,1);
+ If Length(S) <> 6 Then
+  Exit;
+ Value := 0;
+ For I := 1 To 6 Do Begin
+  D := PEHexValue(S[I]);
+  If D < 0 Then
+   Exit;
+  Value := Value*16+D;
+ End;
+ C := PERGB((Value Shr 16) And 255, (Value Shr 8) And 255, Value And 255);
+ PEParseHex := True;
+End;
+
+Function PENumber(Value: Integer): String;
+Var
+ S: String;
+Begin
+ Str(Value,S);
+ PENumber := S;
+End;
+
+Function PEInside(X, Y: Integer; Const R: TRect): Boolean;
+Begin
+ PEInside := (X >= R.Left) And (X <= R.Right) And
+             (Y >= R.Top) And (Y <= R.Bottom);
+End;
+
+Procedure PERect(Var R: TRect; X, Y, W, H: Integer);
+Begin
+ R.Left := X;
+ R.Top := Y;
+ R.Right := X+W-1;
+ R.Bottom := Y+H-1;
+End;
+
+Procedure PEHideMouse;
+Begin
+ {$IFDEF FPC}
+ HideMouseCursor;
+ {$ELSE}
+ HideMouse;
+ {$ENDIF}
+End;
+
+Procedure PEShowMouse;
+Begin
+ {$IFDEF FPC}
+ ShowMouseCursor;
+ {$ELSE}
+ ShowMouse;
+ {$ENDIF}
+End;
+
+Procedure PESetHardwareColor(Index: Integer; Const C: TRGBColor);
+Begin
+ If (Index < 0) Or (Index > GetMaxColor) Then
+  Exit;
+ {$IFDEF FPC}
+ { Le pilote PtcGraph 256 couleurs utilise toute la plage 0..255. }
+ SetRGBPalette(Index,C.R,C.G,C.B);
+ {$ELSE}
+ { Le pilote BGI VGA utilise des registres DAC sur 6 bits. }
+ SetRGBPalette(Index,C.R Shr 2,C.G Shr 2,C.B Shr 2);
+ {$ENDIF}
+End;
+
+Function PENearestVGA(Const C: TRGBColor): Integer;
+Var
+ I, Best: Integer;
+ DR, DG, DB, Distance, BestDistance: LongInt;
+ D: TRGBColor;
+Begin
+ Best := 0;
+ BestDistance := 200000;
+ For I := 0 To 15 Do Begin
+  D := PEDefaultColor(I);
+  DR := LongInt(C.R)-D.R;
+  DG := LongInt(C.G)-D.G;
+  DB := LongInt(C.B)-D.B;
+  Distance := DR*DR+DG*DG+DB*DB;
+  If Distance < BestDistance Then Begin
+   BestDistance := Distance;
+   Best := I;
+  End;
+ End;
+ PENearestVGA := Best;
+End;
+
+Function PEDisplayColor(Const C: TRGBColor): Integer;
+Var
+ R, G, B: Integer;
+Begin
+ If GetMaxColor < 255 Then Begin
+  PEDisplayColor := PENearestVGA(C);
+  Exit;
+ End;
+ R := (LongInt(C.R)*5+127) Div 255;
+ G := (LongInt(C.G)*7+127) Div 255;
+ B := (LongInt(C.B)*3+127) Div 255;
+ PEDisplayColor := PE_CUBE_FIRST+R*32+G*4+B;
+End;
+
+Procedure PEBuildDisplayPalette;
+Var
+ R, G, B, Index: Integer;
+ C: TRGBColor;
+Begin
+ If GetMaxColor < 255 Then
+  Exit;
+ For R := 0 To 5 Do
+  For G := 0 To 7 Do
+   For B := 0 To 3 Do Begin
+    Index := PE_CUBE_FIRST+R*32+G*4+B;
+    C := PERGB(R*51,(G*255+3) Div 7,B*85);
+    PESetHardwareColor(Index,C);
+   End;
+End;
+
+Procedure PESyncFields(Var D: TPEState);
+Begin
+ D.Fields[0] := PENumber(D.Hue);
+ D.Fields[1] := PENumber(D.Saturation);
+ D.Fields[2] := PENumber(D.Luminance);
+ D.Fields[3] := PENumber(D.RGB.R);
+ D.Fields[4] := PENumber(D.RGB.G);
+ D.Fields[5] := PENumber(D.RGB.B);
+ D.Fields[6] := PEHexColor(D.RGB);
+ D.FieldError := -1;
+End;
+
+Procedure PESelectRGB(Var D: TPEState; Const C: TRGBColor);
+Begin
+ D.Previous := D.RGB;
+ D.RGB := C;
+ D.RGB.A := 255;
+ PERGBToHSL(D.RGB,D.Hue,D.Saturation,D.Luminance);
+ PESyncFields(D);
+ D.Dirty := True;
+End;
+
+Procedure PESelectHSL(Var D: TPEState);
+Begin
+ D.Previous := D.RGB;
+ D.RGB := PEHSLToRGB(D.Hue,D.Saturation,D.Luminance);
+ PESyncFields(D);
+ D.Dirty := True;
+End;
+
+Function PEFieldMaximum(Index: Integer): Integer;
+Begin
+ Case Index Of
+  0: PEFieldMaximum := 239;
+  1,2: PEFieldMaximum := 240;
+ Else
+  PEFieldMaximum := 255;
+ End;
+End;
+
+Function PEApplyField(Var D: TPEState; Index: Integer): Boolean;
+Var
+ Value, Code: Integer;
+ C: TRGBColor;
+Begin
+ PEApplyField := False;
+ If (Index < 0) Or (Index >= PE_FIELD_COUNT) Then
+  Exit;
+ If Index = 6 Then Begin
+  If Not PEParseHex(D.Fields[Index],C) Then Begin
+   D.FieldError := Index;
+   D.Status := 'Hexadecimal : saisir exactement 6 chiffres, de 000000 a FFFFFF.';
+   D.Dirty := True;
+   Exit;
+  End;
+  PESelectRGB(D,C);
+ End
+ Else Begin
+  Val(D.Fields[Index],Value,Code);
+  If (Code <> 0) Or (Value < 0) Or (Value > PEFieldMaximum(Index)) Then Begin
+   D.FieldError := Index;
+   D.Status := 'Valeur attendue : 0 a '+PENumber(PEFieldMaximum(Index))+'.';
+   D.Dirty := True;
+   Exit;
+  End;
+  Case Index Of
+   0: D.Hue := Value;
+   1: D.Saturation := Value;
+   2: D.Luminance := Value;
+   3: D.RGB.R := Value;
+   4: D.RGB.G := Value;
+   5: D.RGB.B := Value;
+  End;
+  If Index < 3 Then
+   PESelectHSL(D)
+  Else
+   PESelectRGB(D,D.RGB);
+ End;
+ D.Status := 'Couleur : #'+PEHexColor(D.RGB)+'. Validez avec OK pour appliquer.';
+ PEApplyField := True;
+End;
+
+Function PELeaveField(Var D: TPEState): Boolean;
+Begin
+ PELeaveField := True;
+ If (D.Focus >= PE_FOCUS_FIELD) And (D.Focus < PE_FOCUS_BUTTON) Then
+  PELeaveField := PEApplyField(D,D.Focus-PE_FOCUS_FIELD);
+End;
+
+Procedure PELayout(Var D: TPEState);
+Var
+ I, Col, Row: Integer;
+Begin
+ If D.Expanded Then
+  D.W := PE_DIALOG_W
+ Else
+  D.W := PE_COMPACT_W;
+ D.H := PE_DIALOG_H;
+ D.X := (ScreenWidth-D.W) Div 2;
+ D.Y := (ScreenHeight-D.H) Div 2;
+ For I := 0 To 5 Do Begin
+  Col := I Div 3;
+  Row := I Mod 3;
+  If Col = 0 Then
+   PERect(D.FieldRects[I],D.X+375,D.Y+244+Row*25,43,20)
+  Else
+   PERect(D.FieldRects[I],D.X+499,D.Y+244+Row*25,35,20);
+ End;
+ PERect(D.FieldRects[6],D.X+375,D.Y+320,90,20);
+ PERect(D.Buttons[0],D.X+12,D.Y+389,82,25);
+ PERect(D.Buttons[1],D.X+104,D.Y+389,82,25);
+ PERect(D.Buttons[2],D.X+196,D.Y+389,94,25);
+ PERect(D.Buttons[3],D.X+12,D.Y+310,278,25);
+ PERect(D.Buttons[4],D.X+12,D.Y+342,86,25);
+ PERect(D.Buttons[5],D.X+108,D.Y+342,86,25);
+ PERect(D.Buttons[6],D.X+204,D.Y+342,86,25);
+ PERect(D.Buttons[7],D.X+314,D.Y+350,288,25);
+ PERect(D.Buttons[8],D.X+476,D.Y+318,126,25);
+ PERect(D.Buttons[9],D.X+314,D.Y+389,288,25);
+ D.PlaneDirty := True;
+ D.Dirty := True;
+End;
+
+Procedure PEBevel(Const R: TRect; Pressed: Boolean);
+Var
+ Light, Shadow: Integer;
+Begin
+ Light := White;
+ Shadow := DarkGray;
+ If Pressed Then Begin
+  Light := DarkGray;
+  Shadow := White;
+ End;
+ SetColor(Light);
+ Line(R.Left,R.Bottom,R.Left,R.Top);
+ Line(R.Left,R.Top,R.Right,R.Top);
+ SetColor(Shadow);
+ Line(R.Right,R.Top,R.Right,R.Bottom);
+ Line(R.Right,R.Bottom,R.Left,R.Bottom);
+End;
+
+Procedure PEFill(Const R: TRect; Color: Integer);
+Begin
+ SetFillStyle(SolidFill,Color);
+ Bar(R.Left,R.Top,R.Right,R.Bottom);
+End;
+
+Procedure PEFocusRect(Const R: TRect);
+Begin
+ SetColor(Black);
+ SetLineStyle(DottedLn,0,NormWidth);
+ Rectangle(R.Left+3,R.Top+3,R.Right-3,R.Bottom-3);
+ SetLineStyle(SolidLn,0,NormWidth);
+End;
+
+Procedure PELabel(X, Y: Integer; Const Caption: String);
+Begin
+ SetColor(Black);
+ OutTextXY(X,Y,Caption);
+End;
+
+Procedure PEButton(Const R: TRect; Const Caption: String; Focused: Boolean);
+Var
+ TX, TY: Integer;
+Begin
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ TX := R.Left+(R.Right-R.Left+1-TextWidth(Caption)) Div 2;
+ TY := R.Top+(R.Bottom-R.Top+1-TextHeight(Caption)) Div 2;
+ PELabel(TX,TY,Caption);
+ If Focused Then
+  PEFocusRect(R);
+End;
+
+Procedure PESwatch(Const R: TRect; Const C: TRGBColor; Selected: Boolean);
+Var
+ Inner: TRect;
+Begin
+ PEFill(R,LightGray);
+ PEBevel(R,True);
+ Inner := R;
+ Inc(Inner.Left,3);
+ Inc(Inner.Top,3);
+ Dec(Inner.Right,3);
+ Dec(Inner.Bottom,3);
+ PEFill(Inner,PEDisplayColor(C));
+ If Selected Then Begin
+  SetColor(Black);
+  Rectangle(R.Left-2,R.Top-2,R.Right+2,R.Bottom+2);
+  SetColor(White);
+  Rectangle(Inner.Left-1,Inner.Top-1,Inner.Right+1,Inner.Bottom+1);
+ End;
+End;
+
+Procedure PEGridRect(Const D: TPEState; Grid, Index: Integer; Var R: TRect);
+Var
+ X, Y, Columns, CellW, CellH: Integer;
+Begin
+ X := D.X+14;
+ Columns := 8;
+ CellW := 34;
+ CellH := 22;
+ Case Grid Of
+  PE_FOCUS_BASIC: Y := D.Y+45;
+  PE_FOCUS_CUSTOM: Y := D.Y+205;
+ Else
+  Begin
+   Y := D.Y+270;
+   Columns := 14;
+   CellW := 19;
+   CellH := 17;
+  End;
+ End;
+ PERect(R,X+(Index Mod Columns)*CellW,Y+(Index Div Columns)*CellH,
+        CellW-5,CellH-5);
+End;
+
+Procedure PEDrawGrids(Const D: TPEState);
+Var
+ I: Integer;
+ R: TRect;
+Begin
+ PELabel(D.X+12,D.Y+30,'Couleurs de base :');
+ For I := 0 To PE_BASIC_COUNT-1 Do Begin
+  PEGridRect(D,PE_FOCUS_BASIC,I,R);
+  PESwatch(R,PEBasicColor(I),(I = D.BasicIndex) And (D.Focus = PE_FOCUS_BASIC));
+ End;
+ PELabel(D.X+12,D.Y+188,'Couleurs personnalisees :');
+ For I := 0 To PE_CUSTOM_COUNT-1 Do Begin
+  PESetHardwareColor(PE_CUSTOM_FIRST+I,D.Customs[I]);
+  PEGridRect(D,PE_FOCUS_CUSTOM,I,R);
+  PESwatch(R,D.Customs[I],I = D.CustomIndex);
+  If GetMaxColor >= 255 Then Begin
+   SetFillStyle(SolidFill,PE_CUSTOM_FIRST+I);
+   Bar(R.Left+3,R.Top+3,R.Right-3,R.Bottom-3);
+  End;
+ End;
+ PELabel(D.X+12,D.Y+253,'Case de la palette a modifier :');
+ For I := 0 To PE_SLOT_COUNT-1 Do Begin
+  PEGridRect(D,PE_FOCUS_SLOTS,I,R);
+  PESwatch(R,D.Slots[I],I = D.SlotIndex);
+ End;
+End;
+
+Procedure PEDrawPlane(Const D: TPEState);
+Var
+ X, Y, PX, PY: Integer;
+ C: TRGBColor;
+Begin
+ { La zone conserve une luminosite mediane : les teintes restent visibles
+   meme lorsque la couleur selectionnee est actuellement noire ou blanche. }
+ For Y := 0 To 159 Do
+  For X := 0 To 255 Do Begin
+   C := PEHSLToRGB((LongInt(X)*239) Div 255,
+                 240-(LongInt(Y)*240) Div 159,120);
+   PutPixel(D.X+314+X,D.Y+45+Y,PEDisplayColor(C));
+  End;
+ SetColor(DarkGray);
+ Rectangle(D.X+313,D.Y+44,D.X+570,D.Y+205);
+ PX := D.X+314+(LongInt(D.Hue)*255) Div 239;
+ PY := D.Y+45+159-(LongInt(D.Saturation)*159) Div 240;
+ SetColor(White);
+ Circle(PX,PY,5);
+ SetColor(Black);
+ Circle(PX,PY,4);
+ Line(PX-7,PY,PX-3,PY);
+ Line(PX+3,PY,PX+7,PY);
+ Line(PX,PY-7,PX,PY-3);
+ Line(PX,PY+3,PX,PY+7);
+End;
+
+Procedure PEDrawLuminance(Const D: TPEState);
+Var
+ Y, Marker: Integer;
+ C: TRGBColor;
+Begin
+ For Y := 0 To 159 Do Begin
+  C := PEHSLToRGB(D.Hue,D.Saturation,240-(LongInt(Y)*240) Div 159);
+  SetColor(PEDisplayColor(C));
+  Line(D.X+582,D.Y+45+Y,D.X+594,D.Y+45+Y);
+ End;
+ SetColor(DarkGray);
+ Rectangle(D.X+581,D.Y+44,D.X+595,D.Y+205);
+ Marker := D.Y+45+159-(LongInt(D.Luminance)*159) Div 240;
+ SetColor(Black);
+ Line(D.X+597,Marker,D.X+603,Marker-4);
+ Line(D.X+597,Marker,D.X+603,Marker+4);
+ Line(D.X+603,Marker-4,D.X+603,Marker+4);
+End;
+
+Procedure PEDrawPreview(Const D: TPEState);
+Var
+ R: TRect;
+ C1, C2: Integer;
+Begin
+ C1 := PEDisplayColor(D.Original);
+ C2 := PEDisplayColor(D.RGB);
+ If GetMaxColor >= 255 Then Begin
+  PESetHardwareColor(PE_OLD_PREVIEW,D.Original);
+  PESetHardwareColor(PE_PREVIEW,D.RGB);
+  C1 := PE_OLD_PREVIEW;
+  C2 := PE_PREVIEW;
+ End;
+ PERect(R,D.X+314,D.Y+215,132,22);
+ PEFill(R,C1);
+ PEBevel(R,True);
+ PERect(R,D.X+450,D.Y+215,152,22);
+ PEFill(R,C2);
+ PEBevel(R,True);
+End;
+
+Procedure PEDrawField(Const D: TPEState; Index: Integer);
+Const
+ Labels: Array[0..6] of String[8] =
+  ('Teinte:','Satur.:','Lumin.:','Rouge:','Vert:','Bleu:','Hexa: #');
+Var
+ R: TRect;
+ S: String;
+ Focused: Boolean;
+Begin
+ R := D.FieldRects[Index];
+ Focused := D.Focus = PE_FOCUS_FIELD+Index;
+ PELabel(R.Left-61,R.Top+6,Labels[Index]);
+ PEFill(R,White);
+ PEBevel(R,True);
+ If Focused And D.FieldSelected Then Begin
+  SetFillStyle(SolidFill,Blue);
+  Bar(R.Left+3,R.Top+3,R.Right-3,R.Bottom-3);
+  SetColor(White);
+ End
+ Else
+  SetColor(Black);
+ S := D.Fields[Index];
+ OutTextXY(R.Left+5,R.Top+6,S);
+ If Focused And Not D.FieldSelected Then Begin
+  SetColor(Black);
+  Line(R.Left+5+TextWidth(S),R.Top+4,
+       R.Left+5+TextWidth(S),R.Bottom-4);
+ End;
+ If D.FieldError = Index Then Begin
+  SetColor(Red);
+  Rectangle(R.Left-1,R.Top-1,R.Right+1,R.Bottom+1);
+ End;
+End;
+
+Procedure PEDrawSliders(Const D: TPEState);
+Var
+ Channel, X, Y, Value: Integer;
+ C: TRGBColor;
+Begin
+ For Channel := 0 To 2 Do Begin
+  Y := D.Y+248+Channel*25;
+  For X := 0 To 57 Do Begin
+   C := D.RGB;
+   Value := (LongInt(X)*255) Div 57;
+   Case Channel Of
+    0: C.R := Value;
+    1: C.G := Value;
+    2: C.B := Value;
+   End;
+   SetColor(PEDisplayColor(C));
+   Line(D.X+538+X,Y,D.X+538+X,Y+9);
+  End;
+  Case Channel Of
+   0: Value := D.RGB.R;
+   1: Value := D.RGB.G;
+   2: Value := D.RGB.B;
+  End;
+  X := D.X+538+(LongInt(Value)*57) Div 255;
+  SetColor(Black);
+  Line(X-2,Y+12,X,Y+10);
+  Line(X,Y+10,X+2,Y+12);
+ End;
+End;
+
+Procedure PEDrawButtons(Const D: TPEState);
+Const
+ Captions: Array[0..9] of String[35] = (
+  'OK','Annuler','Aide (F1)','Definir les couleurs >>',
+  'Importer','Exporter','Reinitial.','Ajouter aux couleurs personnalisees',
+  'Originale','Appliquer a la case selectionnee');
+Var
+ I: Integer;
+ S: String;
+Begin
+ For I := 0 To PE_BUTTON_COUNT-1 Do Begin
+  If (I < 7) Or D.Expanded Then Begin
+   S := Captions[I];
+   If (I = 3) And D.Expanded Then
+    S := '<< Masquer les reglages avances';
+   PEButton(D.Buttons[I],S,D.Focus = PE_FOCUS_BUTTON+I);
+  End;
+ End;
+End;
+
+Procedure PEDrawTarget(Const D: TPEState);
+Var
+ R: TRect;
+Begin
+ PERect(R,D.X+12,D.Y+369,278,15);
+ PEFill(R,LightGray);
+ If D.TargetBackground Then
+  PELabel(R.Left,R.Top+3,'( ) Premier plan  (*) Arriere-plan')
+ Else
+  PELabel(R.Left,R.Top+3,'(*) Premier plan  ( ) Arriere-plan');
+End;
+
+Procedure PEDraw(Var D: TPEState);
+Var
+ R: TRect;
+ I: Integer;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut);
+ SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,D.W,D.H);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.X+3,D.Y+3,D.X+D.W-4,D.Y+21);
+ SetColor(White);
+ OutTextXY(D.X+9,D.Y+7,'Modifier les couleurs - PAINT');
+ OutTextXY(D.X+D.W-18,D.Y+7,'X');
+ PEDrawGrids(D);
+ PEDrawButtons(D);
+ PEDrawTarget(D);
+ If D.Expanded Then Begin
+  PELabel(D.X+314,D.Y+30,'Teinte / saturation');
+  PEDrawPlane(D);
+  PEDrawLuminance(D);
+  PEDrawPreview(D);
+  For I := 0 To PE_FIELD_COUNT-1 Do
+   PEDrawField(D,I);
+  PEDrawSliders(D);
+  { Statut place au-dessus du dialogue, dans une bande reservee. }
+ End;
+ SetFillStyle(SolidFill,LightGray);
+ Bar(0,ScreenHeight-STATUSBAR_HEIGHT,ScreenWidth-1,ScreenHeight-1);
+ PELabel(5,ScreenHeight-STATUSBAR_HEIGHT+5,D.Status);
+ PEShowMouse;
+ D.Dirty := False;
+ D.PlaneDirty := False;
+End;
+
+Procedure PEChooseBasic(Var D: TPEState; Index: Integer);
+Begin
+ D.BasicIndex := PEClamp(Index,0,PE_BASIC_COUNT-1);
+ D.Focus := PE_FOCUS_BASIC;
+ PESelectRGB(D,PEBasicColor(D.BasicIndex));
+ D.Status := 'Couleur de base selectionnee. OK : utiliser cette couleur.';
+End;
+
+Procedure PEChooseCustom(Var D: TPEState; Index: Integer);
+Begin
+ D.CustomIndex := PEClamp(Index,0,PE_CUSTOM_COUNT-1);
+ D.Focus := PE_FOCUS_CUSTOM;
+ PESelectRGB(D,D.Customs[D.CustomIndex]);
+ D.Status := 'Couleur personnalisee '+PENumber(D.CustomIndex+1)+' selectionnee.';
+End;
+
+Procedure PEChooseSlot(Var D: TPEState; Index: Integer);
+Begin
+ D.SlotIndex := PEClamp(Index,0,PE_SLOT_COUNT-1);
+ D.Focus := PE_FOCUS_SLOTS;
+ PESelectRGB(D,D.Slots[D.SlotIndex]);
+ D.Status := 'Case '+PENumber(D.SlotIndex+1)+' : choisissez sa nouvelle couleur.';
+End;
+
+Procedure PEAddCustom(Var D: TPEState);
+Begin
+ D.Customs[D.CustomIndex] := D.RGB;
+ D.Status := 'Couleur memorisee en case personnalisee '+
+             PENumber(D.CustomIndex+1)+'.';
+ D.CustomIndex := (D.CustomIndex+1) Mod PE_CUSTOM_COUNT;
+ D.Dirty := True;
+End;
+
+Procedure PEStageSlot(Var D: TPEState);
+Begin
+ D.Slots[D.SlotIndex] := D.RGB;
+ D.Status := 'Case '+PENumber(D.SlotIndex+1)+' preparee. OK pour enregistrer.';
+ D.Dirty := True;
+End;
+
+Procedure PEResetSlots(Var D: TPEState);
+Const
+ DefaultIndices: Array[0..15] of Byte =
+  (0,15,4,2,1,14,3,5,7,8,12,10,9,11,13,6);
+Var
+ I: Integer;
+Begin
+ For I := 0 To PE_SLOT_COUNT-1 Do Begin
+  If I < 16 Then
+   D.Slots[I] := PEDefaultColor(DefaultIndices[I])
+  Else
+   D.Slots[I] := PEDefaultColor(I Mod 16);
+ End;
+ For I := 0 To PE_CUSTOM_COUNT-1 Do
+  D.Customs[I] := PERGB(255,255,255);
+ PESelectRGB(D,D.Slots[D.SlotIndex]);
+ D.Status := 'Palette par defaut preparee. Annuler restaure la palette precedente.';
+End;
+
+Procedure PEHelp(Var D: TPEState);
+Begin
+ ShowMessage('Aide - Modifier les couleurs',
+  'Tab : controle suivant ; fleches : ajuster.'+#10+
+  'RVB 0..255 ; teinte 0..239 ; S/L 0..240.'+#10+
+  'Hexa : RRVVBB. Entree valide, Echap annule.'+#10+
+  'F2 : memoriser ; F3 : appliquer a la case.'+#10+
+  'Importer/Exporter : fichier JASC-PAL.');
+ D.Status := 'F1 aide | Tab navigation | Entree OK | Echap annuler';
+ D.Dirty := True;
+End;
+
+Function PEReadPaletteLine(Var F: Text; Var S: String): Boolean;
+Begin
+ PEReadPaletteLine := False;
+ If Eof(F) Then
+  Exit;
+ {$I-}
+ ReadLn(F,S);
+ {$I+}
+ If IOResult <> 0 Then
+  Exit;
+ PEReadPaletteLine := True;
+End;
+
+Function PEParseTriplet(Const S: String; Var C: TRGBColor): Boolean;
+Var
+ I, Start, Count, Value, Code: Integer;
+ Values: Array[0..2] of Integer;
+ Token: String;
+Begin
+ PEParseTriplet := False;
+ I := 1;
+ Count := 0;
+ While I <= Length(S) Do Begin
+  While (I <= Length(S)) And ((S[I] = ' ') Or (S[I] = #9)) Do
+   Inc(I);
+  If I > Length(S) Then
+   Break;
+  If Count >= 3 Then
+   Exit;
+  Start := I;
+  While (I <= Length(S)) And (S[I] <> ' ') And (S[I] <> #9) Do
+   Inc(I);
+  Token := Copy(S,Start,I-Start);
+  Val(Token,Value,Code);
+  If (Code <> 0) Or (Value < 0) Or (Value > 255) Then
+   Exit;
+  Values[Count] := Value;
+  Inc(Count);
+ End;
+ If Count <> 3 Then
+  Exit;
+ C := PERGB(Values[0],Values[1],Values[2]);
+ PEParseTriplet := True;
+End;
+
+Function PELoadPalette(Const FileName: String; Var D: TPEState): Boolean;
+Var
+ F: Text;
+ S: String;
+ Count, Code, I, CloseError: Integer;
+ C: TRGBColor;
+ NewSlots: TPESlotColors;
+ NewCustoms: TPECustomColors;
+ Valid: Boolean;
+Begin
+ PELoadPalette := False;
+ Assign(F,FileName);
+ {$I-}
+ Reset(F);
+ {$I+}
+ If IOResult <> 0 Then Begin
+  D.Status := 'Impossible d ouvrir cette palette.';
+  Exit;
+ End;
+ NewSlots := D.Slots;
+ NewCustoms := D.Customs;
+ Valid := PEReadPaletteLine(F,S);
+ If Valid Then
+  Valid := S = 'JASC-PAL';
+ If Valid Then
+  Valid := PEReadPaletteLine(F,S);
+ If Valid Then
+  Valid := S = '0100';
+ If Valid Then
+  Valid := PEReadPaletteLine(F,S);
+ Count := 0;
+ If Valid Then Begin
+  Val(S,Count,Code);
+  Valid := (Code = 0) And (Count >= 1) And (Count <= 256);
+ End;
+ I := 0;
+ While Valid And (I < Count) Do Begin
+  Valid := PEReadPaletteLine(F,S);
+  If Valid Then
+   Valid := PEParseTriplet(S,C);
+  If Valid Then Begin
+   If I < PE_SLOT_COUNT Then
+    NewSlots[I] := C
+   Else If I < PE_SLOT_COUNT+PE_CUSTOM_COUNT Then
+    NewCustoms[I-PE_SLOT_COUNT] := C;
+  End;
+  Inc(I);
+ End;
+ {$I-}
+ Close(F);
+ {$I+}
+ CloseError := IOResult;
+ If Not Valid Or (CloseError <> 0) Then Begin
+  D.Status := 'Palette invalide : fichier JASC-PAL 0100 attendu, RVB entre 0 et 255.';
+  Exit;
+ End;
+ D.Slots := NewSlots;
+ D.Customs := NewCustoms;
+ PESelectRGB(D,D.Slots[D.SlotIndex]);
+ D.Status := PENumber(Count)+' couleurs lues. OK pour appliquer la palette.';
+ PELoadPalette := True;
+End;
+
+Function PESavePalette(Const FileName: String; Const D: TPEState): Boolean;
+Var
+ F: Text;
+ I, ErrorCode, CloseError: Integer;
+ C: TRGBColor;
+Begin
+ PESavePalette := False;
+ Assign(F,FileName);
+ {$I-}
+ Rewrite(F);
+ {$I+}
+ If IOResult <> 0 Then
+  Exit;
+ {$I-}
+ WriteLn(F,'JASC-PAL');
+ WriteLn(F,'0100');
+ WriteLn(F,PE_SLOT_COUNT+PE_CUSTOM_COUNT);
+ {$I+}
+ ErrorCode := IOResult;
+ I := 0;
+ While (I < PE_SLOT_COUNT+PE_CUSTOM_COUNT) And (ErrorCode = 0) Do Begin
+  If I < PE_SLOT_COUNT Then
+   C := D.Slots[I]
+  Else
+   C := D.Customs[I-PE_SLOT_COUNT];
+  {$I-}
+  WriteLn(F,C.R,' ',C.G,' ',C.B);
+  {$I+}
+  ErrorCode := IOResult;
+  Inc(I);
+ End;
+ {$I-}
+ Close(F);
+ {$I+}
+ CloseError := IOResult;
+ PESavePalette := (ErrorCode = 0) And (CloseError = 0);
+End;
+
+Procedure PEFileAction(Var D: TPEState; Exporting: Boolean);
+Var
+ FileName, Title: String;
+ Exists: SearchRec;
+ Saved: TPESlotColors;
+Begin
+ FileName := 'PAINT.PAL';
+ If Exporting Then
+  Title := 'Exporter la palette JASC-PAL'
+ Else
+  Title := 'Importer une palette JASC-PAL';
+ If PromptString(Title,'Fichier .PAL :',FileName) And (FileName <> '') Then Begin
+  If ExtractFileExt(FileName) = '' Then
+   FileName := FileName+'.PAL';
+  If Exporting Then Begin
+   FindFirst(FileName,AnyFile,Exists);
+   If DosError = 0 Then Begin
+    If PromptYesNoCancel('Remplacer la palette',
+                        'Ce fichier existe. Le remplacer ?') <> 1 Then Begin
+     D.Dirty := True;
+     Exit;
+    End;
+   End;
+   { Exporter aussi la couleur actuellement en cours de reglage. }
+   Saved := D.Slots;
+   D.Slots[D.SlotIndex] := D.RGB;
+   If PESavePalette(FileName,D) Then
+    D.Status := 'Palette exportee : 28 cases et 16 couleurs personnalisees.'
+   Else
+    D.Status := 'Echec d ecriture. Verifiez le chemin et les droits du fichier.';
+   D.Slots := Saved;
+  End
+  Else
+   If Not PELoadPalette(FileName,D) Then
+    D.FieldError := -1;
+ End;
+ D.Dirty := True;
+End;
+
+Procedure PEActivateButton(Var D: TPEState; Index: Integer);
+Begin
+ If Index = 1 Then Begin
+  D.Done := True;
+  D.Accepted := False;
+  Exit;
+ End;
+ If Not PELeaveField(D) Then
+  Exit;
+ Case Index Of
+  0: Begin
+   PEStageSlot(D);
+   D.Accepted := True;
+   D.Done := True;
+  End;
+  2: PEHelp(D);
+  3: Begin
+   D.Expanded := Not D.Expanded;
+   { Effacer le precedent dialogue depuis le vrai buffer du dessin. }
+   RedrawInterface;
+   PELayout(D);
+  End;
+  4: PEFileAction(D,False);
+  5: PEFileAction(D,True);
+  6: PEResetSlots(D);
+  7: PEAddCustom(D);
+  8: Begin
+   PESelectRGB(D,D.Original);
+   D.Status := 'Couleur d origine restauree dans les reglages.';
+  End;
+  9: PEStageSlot(D);
+ End;
+End;
+
+Procedure PEFocus(Var D: TPEState; NewFocus: Integer);
+Begin
+ If Not PELeaveField(D) Then
+  Exit;
+ D.Focus := NewFocus;
+ D.FieldSelected := (NewFocus >= PE_FOCUS_FIELD) And
+                    (NewFocus < PE_FOCUS_BUTTON);
+ D.FieldError := -1;
+ D.Dirty := True;
+End;
+
+Procedure PENextFocus(Var D: TPEState; Backwards: Boolean);
+Var
+ Next: Integer;
+ Valid: Boolean;
+Begin
+ Next := D.Focus;
+ Repeat
+  If Backwards Then
+   Dec(Next)
+  Else
+   Inc(Next);
+  If Next > PE_FOCUS_LAST Then
+   Next := 0;
+  If Next < 0 Then
+   Next := PE_FOCUS_LAST;
+  Valid := True;
+  If Not D.Expanded Then Begin
+   If (Next >= PE_FOCUS_PLANE) And (Next < PE_FOCUS_BUTTON) Then
+    Valid := False;
+   If Next >= PE_FOCUS_BUTTON+7 Then
+    Valid := False;
+  End;
+ Until Valid;
+ PEFocus(D,Next);
+End;
+
+Procedure PEChangeField(Var D: TPEState; Delta: Integer);
+Var
+ Index, Value, Code: Integer;
+ C: TRGBColor;
+Begin
+ Index := D.Focus-PE_FOCUS_FIELD;
+ If Index = 6 Then Begin
+  If Not PEParseHex(D.Fields[6],C) Then
+   Exit;
+  C.R := PEClamp(Integer(C.R)+Delta,0,255);
+  C.G := PEClamp(Integer(C.G)+Delta,0,255);
+  C.B := PEClamp(Integer(C.B)+Delta,0,255);
+  PESelectRGB(D,C);
+ End
+ Else Begin
+  Val(D.Fields[Index],Value,Code);
+  If Code <> 0 Then
+   Value := 0;
+  Value := PEClamp(Value+Delta,0,PEFieldMaximum(Index));
+  D.Fields[Index] := PENumber(Value);
+  If PEApplyField(D,Index) Then
+   D.FieldSelected := True;
+ End;
+End;
+
+Procedure PEArrow(Var D: TPEState; DX, DY: Integer);
+Var
+ Index: Integer;
+Begin
+ Case D.Focus Of
+  PE_FOCUS_BASIC: Begin
+   Index := PEClamp(D.BasicIndex+DX+DY*8,0,PE_BASIC_COUNT-1);
+   PEChooseBasic(D,Index);
+  End;
+  PE_FOCUS_CUSTOM: Begin
+   Index := PEClamp(D.CustomIndex+DX+DY*8,0,PE_CUSTOM_COUNT-1);
+   PEChooseCustom(D,Index);
+  End;
+  PE_FOCUS_SLOTS: Begin
+   Index := PEClamp(D.SlotIndex+DX+DY*14,0,PE_SLOT_COUNT-1);
+   PEChooseSlot(D,Index);
+  End;
+  PE_FOCUS_PLANE: Begin
+   D.Hue := PEClamp(D.Hue+DX,0,239);
+   D.Saturation := PEClamp(D.Saturation-DY,0,240);
+   PESelectHSL(D);
+  End;
+  PE_FOCUS_LUMA: Begin
+   D.Luminance := PEClamp(D.Luminance-DY+DX,0,240);
+   PESelectHSL(D);
+  End;
+ Else
+  If (D.Focus >= PE_FOCUS_FIELD) And (D.Focus < PE_FOCUS_BUTTON) Then
+   PEChangeField(D,DX-DY);
+ End;
+End;
+
+Procedure PEFieldKey(Var D: TPEState; K: Char);
+Var
+ Index, Limit: Integer;
+ S: String;
+ Allowed: Boolean;
+Begin
+ Index := D.Focus-PE_FOCUS_FIELD;
+ If (Index < 0) Or (Index >= PE_FIELD_COUNT) Then
+  Exit;
+ S := D.Fields[Index];
+ If K = #1 Then Begin
+  D.FieldSelected := True;
+  D.Dirty := True;
+  Exit;
+ End;
+ If K = #8 Then Begin
+  If D.FieldSelected Then
+   S := ''
+  Else If Length(S) > 0 Then
+   Delete(S,Length(S),1);
+ End
+ Else Begin
+  K := UpCase(K);
+  Allowed := (K >= '0') And (K <= '9');
+  Limit := 3;
+  If Index = 6 Then Begin
+   Allowed := PEHexValue(K) >= 0;
+   Limit := 6;
+  End;
+  If Not Allowed Then
+   Exit;
+  If D.FieldSelected Then
+   S := '';
+  If Length(S) < Limit Then
+   S := S+K;
+ End;
+ D.Fields[Index] := S;
+ D.FieldSelected := False;
+ D.FieldError := -1;
+ D.Status := 'Entree ou Tab valide le champ ; fleches ajustent sa valeur.';
+ D.Dirty := True;
+End;
+
+Procedure PEKeyboard(Var D: TPEState);
+Var
+ K, Extended: Char;
+ Temp: TRGBColor;
+Begin
+ K := ReadKey;
+ If K = #0 Then Begin
+  Extended := ReadKey;
+  Case Ord(Extended) Of
+   15: PENextFocus(D,True);
+   59: PEHelp(D);
+   60: If PELeaveField(D) Then PEAddCustom(D);
+   61: If PELeaveField(D) Then PEStageSlot(D);
+   72: PEArrow(D,0,-1);
+   80: PEArrow(D,0,1);
+   75: PEArrow(D,-1,0);
+   77: PEArrow(D,1,0);
+   73: PEArrow(D,0,-10);
+   81: PEArrow(D,0,10);
+   83: If (D.Focus >= PE_FOCUS_FIELD) And
+          (D.Focus < PE_FOCUS_BUTTON) Then Begin
+    D.Fields[D.Focus-PE_FOCUS_FIELD] := '';
+    D.FieldSelected := False;
+    D.Dirty := True;
+   End;
+  End;
+  Exit;
+ End;
+ Case K Of
+  #27: Begin
+   D.Done := True;
+   D.Accepted := False;
+  End;
+  #9: PENextFocus(D,False);
+  #13: Begin
+   If D.Focus >= PE_FOCUS_BUTTON Then
+    PEActivateButton(D,D.Focus-PE_FOCUS_BUTTON)
+   Else If (D.Focus >= PE_FOCUS_FIELD) And (D.Focus < PE_FOCUS_BUTTON) Then Begin
+    If PEApplyField(D,D.Focus-PE_FOCUS_FIELD) Then
+     PEFocus(D,PE_FOCUS_BUTTON);
+   End
+   Else
+    PEActivateButton(D,0);
+  End;
+  #26: Begin
+   Temp := D.Previous;
+   PESelectRGB(D,Temp);
+   D.Status := 'Reglage precedent restaure (Ctrl+Z).';
+  End;
+  ' ': Begin
+   If D.Focus >= PE_FOCUS_BUTTON Then
+    PEActivateButton(D,D.Focus-PE_FOCUS_BUTTON);
+  End;
+ Else
+  If D.Expanded Then
+   PEFieldKey(D,K);
+ End;
+End;
+
+Procedure PEPlaneMouse(Var D: TPEState; X, Y: Integer);
+Begin
+ X := PEClamp(X-D.X-314,0,255);
+ Y := PEClamp(Y-D.Y-45,0,159);
+ D.Hue := (LongInt(X)*239+127) Div 255;
+ D.Saturation := 240-(LongInt(Y)*240+79) Div 159;
+ PESelectHSL(D);
+ D.Status := 'Glissez dans le spectre pour choisir teinte et saturation.';
+End;
+
+Procedure PELuminanceMouse(Var D: TPEState; Y: Integer);
+Begin
+ Y := PEClamp(Y-D.Y-45,0,159);
+ D.Luminance := 240-(LongInt(Y)*240+79) Div 159;
+ PESelectHSL(D);
+ D.Status := 'Luminosite : 0 = noir, 120 = couleur mediane, 240 = blanc.';
+End;
+
+Procedure PESliderMouse(Var D: TPEState; Channel, X: Integer);
+Var
+ Value: Integer;
+ C: TRGBColor;
+Begin
+ X := PEClamp(X-D.X-538,0,57);
+ Value := (LongInt(X)*255+28) Div 57;
+ C := D.RGB;
+ Case Channel Of
+  0: C.R := Value;
+  1: C.G := Value;
+  2: C.B := Value;
+ End;
+ PESelectRGB(D,C);
+ D.Status := 'Curseur RVB : glissez pour ajuster la composante.';
+End;
+
+Procedure PEMouseDown(Var D: TPEState);
+Var
+ I, Grid, Count, Channel: Integer;
+ R: TRect;
+Begin
+ { La fermeture et Annuler restent possibles meme avec un champ invalide. }
+ If (D.MY >= D.Y+3) And (D.MY <= D.Y+21) And
+    (D.MX >= D.X+D.W-25) And (D.MX < D.X+D.W) Then Begin
+  PEActivateButton(D,1);
+  Exit;
+ End;
+ If PEInside(D.MX,D.MY,D.Buttons[1]) Then Begin
+  PEActivateButton(D,1);
+  Exit;
+ End;
+ For I := 0 To PE_BUTTON_COUNT-1 Do Begin
+  If (I < 7) Or D.Expanded Then
+   If PEInside(D.MX,D.MY,D.Buttons[I]) Then Begin
+    If Not PELeaveField(D) Then
+     Exit;
+    D.Focus := PE_FOCUS_BUTTON+I;
+    PEActivateButton(D,I);
+    Exit;
+   End;
+ End;
+ If Not PELeaveField(D) Then
+  Exit;
+ For Grid := PE_FOCUS_BASIC To PE_FOCUS_SLOTS Do Begin
+  Case Grid Of
+   PE_FOCUS_BASIC: Count := PE_BASIC_COUNT;
+   PE_FOCUS_CUSTOM: Count := PE_CUSTOM_COUNT;
+  Else
+   Count := PE_SLOT_COUNT;
+  End;
+  For I := 0 To Count-1 Do Begin
+   PEGridRect(D,Grid,I,R);
+   If PEInside(D.MX,D.MY,R) Then Begin
+    Case Grid Of
+     PE_FOCUS_BASIC: PEChooseBasic(D,I);
+     PE_FOCUS_CUSTOM: PEChooseCustom(D,I);
+     PE_FOCUS_SLOTS: PEChooseSlot(D,I);
+    End;
+    Exit;
+   End;
+  End;
+ End;
+ PERect(R,D.X+12,D.Y+369,278,15);
+ If PEInside(D.MX,D.MY,R) Then Begin
+  D.TargetBackground := D.MX >= D.X+150;
+  D.Status := 'La couleur choisie sera utilisee pour le plan selectionne.';
+  D.Dirty := True;
+  Exit;
+ End;
+ If Not D.Expanded Then
+  Exit;
+ For I := 0 To PE_FIELD_COUNT-1 Do
+  If PEInside(D.MX,D.MY,D.FieldRects[I]) Then Begin
+   PEFocus(D,PE_FOCUS_FIELD+I);
+   Exit;
+  End;
+ PERect(R,D.X+314,D.Y+45,256,160);
+ If PEInside(D.MX,D.MY,R) Then Begin
+  D.Focus := PE_FOCUS_PLANE;
+  D.DragKind := 1;
+  PEPlaneMouse(D,D.MX,D.MY);
+  Exit;
+ End;
+ PERect(R,D.X+578,D.Y+43,29,164);
+ If PEInside(D.MX,D.MY,R) Then Begin
+  D.Focus := PE_FOCUS_LUMA;
+  D.DragKind := 2;
+  PELuminanceMouse(D,D.MY);
+  Exit;
+ End;
+ For Channel := 0 To 2 Do Begin
+  PERect(R,D.X+536,D.Y+245+Channel*25,64,19);
+  If PEInside(D.MX,D.MY,R) Then Begin
+   D.Focus := PE_FOCUS_FIELD+3+Channel;
+   D.FieldSelected := True;
+   D.DragKind := 3+Channel;
+   PESliderMouse(D,Channel,D.MX);
+   Exit;
+  End;
+ End;
+End;
+
+Procedure PEMouse(Var D: TPEState);
+Begin
+ GetMouseStateLocal(D.MX,D.MY,D.MB);
+ If ((D.MB And 1) <> 0) And ((D.PrevButtons And 1) = 0) Then
+  PEMouseDown(D)
+ Else If ((D.MB And 1) <> 0) And (D.DragKind <> 0) Then Begin
+  If (D.MX <> D.LastX) Or (D.MY <> D.LastY) Then
+   Case D.DragKind Of
+    1: PEPlaneMouse(D,D.MX,D.MY);
+    2: PELuminanceMouse(D,D.MY);
+    3..5: PESliderMouse(D,D.DragKind-3,D.MX);
+   End;
+ End;
+ If (D.MB And 1) = 0 Then
+  D.DragKind := 0;
+ D.LastX := D.MX;
+ D.LastY := D.MY;
+ D.PrevButtons := D.MB;
+End;
+
+Procedure PEInitialize(Var D: TPEState);
+Var
+ I: Integer;
+Begin
+ FillChar(D,SizeOf(D),0);
+ D.Expanded := True;
+ D.SlotIndex := PEClamp(ActivePaletteSlot,0,PE_SLOT_COUNT-1);
+ D.CustomIndex := 0;
+ D.FieldError := -1;
+ D.BasicIndex := 0;
+ D.Focus := PE_FOCUS_BASIC;
+ D.SavedPalette := ImageBuffer.Palette;
+ For I := 0 To PE_SLOT_COUNT-1 Do
+  D.Slots[I] := ImageBuffer.Palette[StandardPalette[I]];
+ If Not PaintCustomReady Then Begin
+  For I := 0 To PE_CUSTOM_COUNT-1 Do
+   PaintCustomColors[I] := PERGB(255,255,255);
+  PaintCustomReady := True;
+ End;
+ D.Customs := PaintCustomColors;
+ D.Original := ImageBuffer.Palette[CurrentColor];
+ D.Previous := D.Original;
+ D.RGB := D.Original;
+ D.Hue := 0;
+ PERGBToHSL(D.RGB,D.Hue,D.Saturation,D.Luminance);
+ PESyncFields(D);
+ D.Status := 'F1 aide | Tab navigation | Entree OK | Echap annuler';
+ If GetMaxColor < 255 Then
+  D.Status := 'Mode 16 couleurs : apercu et dessin arrondis a la couleur VGA proche.';
+ PELayout(D);
+ GetMouseStateLocal(D.MX,D.MY,D.PrevButtons);
+ D.LastX := D.MX;
+ D.LastY := D.MY;
+End;
+
+Procedure PERestoreHardware(Const D: TPEState);
+Var
+ I: Integer;
+Begin
+ { Retablir la palette reelle : le cube n'appartient pas au document. }
+ For I := 16 To 255 Do
+  If I <= GetMaxColor Then
+   PESetHardwareColor(I,D.SavedPalette[I]);
+End;
+
+Procedure PECommit(Const D: TPEState);
+Var
+ I, Index: Integer;
+ Changed: Boolean;
+Begin
+ Changed := False;
+ { Le snapshot garde les indices ET les couleurs pour Annuler/Retablir. }
+ AddSnapshotToHistory(TOOL_PICKER);
+ If GetMaxColor >= 255 Then Begin
+  For I := 0 To PE_SLOT_COUNT-1 Do Begin
+   Index := 16+I;
+   If Not PESameColor(ImageBuffer.Palette[Index],D.Slots[I]) Then
+    Changed := True;
+   ImageBuffer.Palette[Index] := D.Slots[I];
+   PESetHardwareColor(Index,D.Slots[I]);
+   StandardPalette[I] := Index;
+  End;
+  Index := 16+D.SlotIndex;
+ End
+ Else Begin
+  { Aucun changement des registres systeme en mode VGA 16 couleurs. }
+  For I := 0 To PE_SLOT_COUNT-1 Do
+   StandardPalette[I] := PENearestVGA(D.Slots[I]);
+  Index := StandardPalette[D.SlotIndex];
+ End;
+ If D.TargetBackground Then
+  BackgroundColor := Index
+ Else
+  CurrentColor := Index;
+ ActivePaletteSlot := D.SlotIndex;
+ PaintCustomColors := D.Customs;
+ PaintCustomReady := True;
+ If Changed Then Begin
+  { Une image 1/4 bits doit pouvoir enregistrer les nouveaux indices. }
+  If ImageBuffer.BitDepth < 8 Then
+   ImageBuffer.BitDepth := 8;
+  ImageBuffer.Modified := True;
+ End;
+End;
+
+Procedure PEInstallDocumentPalette;
+Var
+ I: Integer;
+Begin
+ { Synchroniser les registres graphiques et les couleurs sauvegardees. }
+ For I := 0 To 255 Do
+  If I <= GetMaxColor Then
+   PESetHardwareColor(I,ImageBuffer.Palette[I]);
+End;
+
+Procedure EditPaintPalette;
+Var
+ D: TPEState;
+Begin
+ { Un dialogue modal ne doit pas laisser le menu ou les fourmis de
+   selection dans le buffer de l'image. Le canvas reste la source de verite. }
+ MenuActive := False;
+ RedrawInterface;
+ PEInitialize(D);
+ PEHideMouse;
+ PEBuildDisplayPalette;
+ PEShowMouse;
+ While Not D.Done Do Begin
+  If D.Dirty Then
+   PEDraw(D);
+  If KeyPressed Then
+   PEKeyboard(D);
+  If Not D.Done Then
+   PEMouse(D);
+  Delay(10);
+ End;
+ PEHideMouse;
+ PERestoreHardware(D);
+ If D.Accepted Then
+  PECommit(D);
+ PEShowMouse;
+ { Consommer le relachement pour eviter un trait dans le dessin dessous. }
+ Repeat
+  GetMouseStateLocal(D.MX,D.MY,D.MB);
+  If (D.MB And 1) <> 0 Then
+   Delay(10);
+ Until (D.MB And 1) = 0;
+ OldMouseButtons := 0;
+ MouseButtons := 0;
+ RedrawInterface;
+End;
+
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -3820,6 +5444,9 @@ Begin
        avait ete chargee, sa palette restait active et etait sauvegardee
        avec la nouvelle image. }
      InitImage;
+     InitPalette;
+     ActivePaletteSlot := 0;
+     PEInstallDocumentPalette;
      ClearImage;
      If (CanvasImage <> Nil) and (CanvasImageW > 0) and (CanvasImageH > 0) Then
       FillChar(CanvasImage^, CanvasImageW * CanvasImageH, BackgroundColor);
@@ -4035,6 +5662,7 @@ Begin
   MENU_COLORS: Begin
    Case ItemIndex of
     0: Begin { Modifier palette }
+     EditPaintPalette;
     End;
     1: Begin { Obtenir couleurs }
     End;
@@ -4102,6 +5730,7 @@ Begin
   If (ColorX >= 0) and (ColorX < 14) and (ColorY >= 0) and (ColorY < 2) Then Begin
    ColorIndex := ColorY * 14 + ColorX;
    If ColorIndex < 28 Then Begin
+   ActivePaletteSlot := ColorIndex;
     If (MouseButtons and 1) <> 0 Then
      CurrentColor := StandardPalette[ColorIndex]
     Else If (MouseButtons and 2) <> 0 Then
@@ -4611,6 +6240,7 @@ Begin
  InitPalette;
  InitMenus;
  InitImage;
+ PEInstallDocumentPalette;
  InitTools;
  InitHistory;
 

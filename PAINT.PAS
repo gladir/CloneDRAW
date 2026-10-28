@@ -306,6 +306,7 @@ Var
  CanvasX, CanvasY: Integer;
  CanvasWidth, CanvasHeight: Integer;
  ZoomLevel: Integer;
+ ZOriginX, ZOriginY: Integer;
 
  { Variables pour la sélection }
  SelectionActive: Boolean;
@@ -574,6 +575,267 @@ End;
 
 { Procédures d'initialisation }
 
+{ Les outils conservent des coordonnees logiques CanvasX+pixel image.
+  Seul l'affichage utilise le facteur de zoom et l'origine de la vue. }
+Function ZFloorDiv(Value: LongInt; Divisor: Integer): LongInt;
+Begin
+ If Value>=0 Then ZFloorDiv := Value Div Divisor
+ Else ZFloorDiv := -((-Value+Divisor-1) Div Divisor);
+End;
+
+Function ZCeilDiv(Value: LongInt; Divisor: Integer): LongInt;
+Begin
+ ZCeilDiv := -ZFloorDiv(-Value,Divisor);
+End;
+
+Function ZScreenX(X: Integer): Integer;
+Begin
+ ZScreenX := ZOriginX+ZFloorDiv(LongInt(X-CanvasX)*100,ZoomLevel);
+End;
+
+Function ZScreenY(Y: Integer): Integer;
+Begin
+ ZScreenY := ZOriginY+ZFloorDiv(LongInt(Y-CanvasY)*100,ZoomLevel);
+End;
+
+Function ZEventX(X: Integer): Integer;
+Begin ZEventX := CanvasX+ZScreenX(X); End;
+
+Function ZEventY(Y: Integer): Integer;
+Begin ZEventY := CanvasY+ZScreenY(Y); End;
+
+Function ZViewX(X: Integer): Integer;
+Var V: LongInt;
+Begin
+ V := ZFloorDiv(LongInt(X-CanvasX-ZOriginX)*ZoomLevel,100);
+ If V < -30000 Then V := -30000;
+ If V > 30000 Then V := 30000;
+ ZViewX := V;
+End;
+
+Function ZViewY(Y: Integer): Integer;
+Var V: LongInt;
+Begin
+ V := ZFloorDiv(LongInt(Y-CanvasY-ZOriginY)*ZoomLevel,100);
+ If V < -30000 Then V := -30000;
+ If V > 30000 Then V := 30000;
+ ZViewY := V;
+End;
+
+Function ZTransformed: Boolean;
+Begin ZTransformed := (ZoomLevel<>100) Or (ZOriginX<>0) Or (ZOriginY<>0); End;
+
+Procedure ZClampView;
+Var W, H: Integer;
+Begin
+ If ZoomLevel<25 Then ZoomLevel := 25;
+ If ZoomLevel>800 Then ZoomLevel := 800;
+ W := ZCeilDiv(LongInt(CanvasWidth)*100,ZoomLevel);
+ H := ZCeilDiv(LongInt(CanvasHeight)*100,ZoomLevel);
+ ZOriginX := Max(0,Min(ZOriginX,Max(0,CanvasImageW-W)));
+ ZOriginY := Max(0,Min(ZOriginY,Max(0,CanvasImageH-H)));
+End;
+
+Function ZDisplayWidth: Integer;
+Var W: LongInt;
+Begin
+ W:=ZCeilDiv(LongInt(CanvasImageW-ZOriginX)*ZoomLevel,100);
+ If W<0 Then W:=0;
+ If W>CanvasWidth Then W:=CanvasWidth;
+ ZDisplayWidth:=W;
+End;
+
+Function ZDisplayHeight: Integer;
+Var H: LongInt;
+Begin
+ H:=ZCeilDiv(LongInt(CanvasImageH-ZOriginY)*ZoomLevel,100);
+ If H<0 Then H:=0;
+ If H>CanvasHeight Then H:=CanvasHeight;
+ ZDisplayHeight:=H;
+End;
+
+Function ZHitCanvas(X, Y: Integer): Boolean;
+Begin
+ ZHitCanvas := (X>=CanvasX) And (Y>=CanvasY) And
+               (X<CanvasX+ZDisplayWidth) And (Y<CanvasY+ZDisplayHeight);
+End;
+
+Function ZImagePixel(X, Y: Integer): Byte;
+Var P: PByte;
+Begin
+ ZImagePixel := BackgroundColor;
+ If (CanvasImage=Nil) Or (X<0) Or (Y<0) Or
+    (X>=CanvasImageW) Or (Y>=CanvasImageH) Then Exit;
+ P := CanvasImage; Inc(P,LongInt(Y)*CanvasImageW+X);
+ ZImagePixel := P^;
+End;
+
+Procedure ZPutImagePixel(X, Y: Integer; Color: Byte);
+Var P: PByte;
+Begin
+ If (CanvasImage=Nil) Or (X<0) Or (Y<0) Or
+    (X>=CanvasImageW) Or (Y>=CanvasImageH) Then Exit;
+ P := CanvasImage; Inc(P,LongInt(Y)*CanvasImageW+X);
+ P^ := Color;
+End;
+
+Procedure ZRenderPixel(X, Y: Integer; Color: Byte);
+Var L, T, R, B: Integer;
+Begin
+ If (X<0) Or (Y<0) Or (X>=CanvasImageW) Or (Y>=CanvasImageH) Then Exit;
+ L := ZCeilDiv(LongInt(X-ZOriginX)*ZoomLevel,100);
+ T := ZCeilDiv(LongInt(Y-ZOriginY)*ZoomLevel,100);
+ R := ZCeilDiv(LongInt(X-ZOriginX+1)*ZoomLevel,100)-1;
+ B := ZCeilDiv(LongInt(Y-ZOriginY+1)*ZoomLevel,100)-1;
+ L := Max(0,L); T := Max(0,T);
+ R := Min(CanvasWidth-1,R); B := Min(CanvasHeight-1,B);
+ If (L>R) Or (T>B) Then Exit;
+ SetFillStyle(SolidFill,Color);
+ Bar(CanvasX+L,CanvasY+T,CanvasX+R,CanvasY+B);
+End;
+
+Procedure ZBeginView(Var Previous: ViewPortType);
+Begin
+ GetViewSettings(Previous);
+ SetViewPort(CanvasX,CanvasY,CanvasX+Max(0,ZDisplayWidth-1),
+             CanvasY+Max(0,ZDisplayHeight-1),True);
+End;
+
+Procedure ZEndView(Const Previous: ViewPortType);
+Begin
+ SetViewPort(Previous.X1,Previous.Y1,Previous.X2,Previous.Y2,Previous.Clip);
+End;
+
+Procedure ZLine(X1,Y1,X2,Y2: Integer; Color: Byte);
+Var DX,DY,SX,SY,Error,E2: LongInt;
+Begin
+ DX := Abs(X2-X1); DY := -Abs(Y2-Y1);
+ SX := 1; If X1>X2 Then SX := -1;
+ SY := 1; If Y1>Y2 Then SY := -1;
+ Error := DX+DY;
+ Repeat
+  ZPutImagePixel(X1,Y1,Color);
+  If (X1=X2) And (Y1=Y2) Then Break;
+  E2 := 2*Error;
+  If E2>=DY Then Begin Error := Error+DY; X1 := X1+SX; End;
+  If E2<=DX Then Begin Error := Error+DX; Y1 := Y1+SY; End;
+ Until False;
+End;
+
+Procedure ZRectangle(X1,Y1,X2,Y2: Integer; Color: Byte; Filled: Boolean);
+Var X,Y,T: Integer;
+Begin
+ If X1>X2 Then Begin T:=X1; X1:=X2; X2:=T; End;
+ If Y1>Y2 Then Begin T:=Y1; Y1:=Y2; Y2:=T; End;
+ If Filled Then Begin
+  For Y:=Max(0,Y1) To Min(CanvasImageH-1,Y2) Do
+   For X:=Max(0,X1) To Min(CanvasImageW-1,X2) Do ZPutImagePixel(X,Y,Color);
+ End
+ Else Begin
+  ZLine(X1,Y1,X2,Y1,Color); ZLine(X2,Y1,X2,Y2,Color);
+  ZLine(X2,Y2,X1,Y2,Color); ZLine(X1,Y2,X1,Y1,Color);
+ End;
+End;
+
+Procedure ZEllipse(CX,CY,RX,RY: Integer; Color: Byte; Filled: Boolean);
+Var X,Y,Span: Integer;
+Begin
+ RX:=Abs(RX); RY:=Abs(RY);
+ If RX=0 Then Begin ZLine(CX,CY-RY,CX,CY+RY,Color); Exit; End;
+ If RY=0 Then Begin ZLine(CX-RX,CY,CX+RX,CY,Color); Exit; End;
+ For Y:=-RY To RY Do Begin
+  Span:=Round(RX*Sqrt(Abs(1-Y*1.0*Y/(RY*1.0*RY))));
+  If Filled Then ZLine(CX-Span,CY+Y,CX+Span,CY+Y,Color)
+  Else Begin ZPutImagePixel(CX-Span,CY+Y,Color); ZPutImagePixel(CX+Span,CY+Y,Color); End;
+ End;
+ If Not Filled Then
+  For X:=-RX To RX Do Begin
+   Span:=Round(RY*Sqrt(Abs(1-X*1.0*X/(RX*1.0*RX))));
+   ZPutImagePixel(CX+X,CY-Span,Color); ZPutImagePixel(CX+X,CY+Span,Color);
+  End;
+End;
+
+Procedure ZRoundRectangle(X1,Y1,X2,Y2,RX,RY: Integer; Color: Byte; Filled: Boolean);
+Var X,Y,T,Span,Inset,PrevInset: Integer;
+Begin
+ If X1>X2 Then Begin T:=X1; X1:=X2; X2:=T; End;
+ If Y1>Y2 Then Begin T:=Y1; Y1:=Y2; Y2:=T; End;
+ RX:=Min(Abs(RX),(X2-X1) Div 2); RY:=Min(Abs(RY),(Y2-Y1) Div 2);
+ If (RX=0) Or (RY=0) Then Begin ZRectangle(X1,Y1,X2,Y2,Color,Filled); Exit; End;
+ PrevInset:=RX;
+ For Y:=Y1 To Y2 Do Begin
+  Inset:=0;
+  If Y<Y1+RY Then Begin
+   T:=Y1+RY-Y;
+   Inset:=RX-Round(RX*Sqrt(Abs(1-T*1.0*T/(RY*1.0*RY))));
+  End;
+  If Y>Y2-RY Then Begin
+   T:=Y-(Y2-RY);
+   Inset:=RX-Round(RX*Sqrt(Abs(1-T*1.0*T/(RY*1.0*RY))));
+  End;
+  If Filled Or (Y=Y1) Or (Y=Y2) Then ZLine(X1+Inset,Y,X2-Inset,Y,Color)
+  Else Begin
+   ZLine(X1+Min(Inset,PrevInset),Y,X1+Max(Inset,PrevInset),Y,Color);
+   ZLine(X2-Max(Inset,PrevInset),Y,X2-Min(Inset,PrevInset),Y,Color);
+  End;
+  PrevInset:=Inset;
+ End;
+End;
+
+Procedure ZRasterText(X,Y: Integer; Const S: String; Color: Byte; ModifyImage: Boolean);
+Var
+ Saved: Array[0..4095] of Byte;
+ Mask: Array[0..31,0..31] of Boolean;
+ I,PX,PY,W,H,Advance: Integer;
+ Glyph: String[1];
+Begin
+ W:=TextWidth('M'); H:=TextHeight('M');
+ If (W<1) Or (H<1) Or (W>32) Or (H>32) Then Exit;
+ If ImageSize(0,0,W-1,H-1)>SizeOf(Saved) Then Exit;
+ HideMouse;
+ Advance:=0;
+ For I:=1 To Length(S) Do Begin
+  Glyph:=S[I];
+  GetImage(0,0,W-1,H-1,Saved);
+  SetFillStyle(SolidFill,Black); Bar(0,0,W-1,H-1);
+  SetColor(White); OutTextXY(0,0,Glyph);
+  For PY:=0 To H-1 Do
+   For PX:=0 To W-1 Do Mask[PX,PY]:=GetPixel(PX,PY)=White;
+  PutImage(0,0,Saved,CopyPut);
+  For PY:=0 To H-1 Do
+   For PX:=0 To W-1 Do
+    If Mask[PX,PY] Then Begin
+     If ModifyImage Then ZPutImagePixel(X+Advance+PX,Y+PY,Color)
+     Else ZRenderPixel(X+Advance+PX,Y+PY,Color);
+    End;
+  Inc(Advance,TextWidth(Glyph));
+ End;
+ ShowMouse;
+End;
+
+
+Function ZPrepareBuffer(W,H: Integer; FillColor: Byte): Boolean;
+Var
+ P:PByte;
+ {$IFDEF FPC}Previous:Boolean;{$ENDIF}
+Begin
+ ZPrepareBuffer:=False;
+ If (W<1) Or (H<1) Or (W>MAX_IMAGE_WIDTH) Or (H>MAX_IMAGE_HEIGHT) Then Exit;
+ P:=Nil;
+ {$IFDEF FPC}
+ Previous:=ReturnNilIfGrowHeapFails; ReturnNilIfGrowHeapFails:=True;
+ GetMem(P,LongInt(W)*H);
+ ReturnNilIfGrowHeapFails:=Previous;
+ {$ELSE}
+ If MaxAvail>=LongInt(W)*H Then GetMem(P,LongInt(W)*H);
+ {$ENDIF}
+ If P=Nil Then Exit;
+ FillChar(P^,LongInt(W)*H,FillColor);
+ If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+ CanvasImage:=P; CanvasImageW:=W; CanvasImageH:=H;
+ ZPrepareBuffer:=True;
+End;
+
 Procedure InitGraphics;
 {$IFDEF FPC}
 Begin
@@ -834,6 +1096,7 @@ Begin
  CanvasHeight := ScreenHeight - MENUBAR_HEIGHT - STATUSBAR_HEIGHT - COLORBAR_HEIGHT - 10;
 
  ZoomLevel := 100;
+ ZOriginX:=0; ZOriginY:=0;
 End;
 
 Procedure InitTools;
@@ -1108,7 +1371,7 @@ Begin
  { Position de la souris }
  If (MouseX >= CanvasX) and (MouseX < CanvasX + CanvasWidth) and
     (MouseY >= CanvasY) and (MouseY < CanvasY + CanvasHeight) Then Begin
-  PosStr := IntToStr(MouseX - CanvasX) + ', ' + IntToStr(MouseY - CanvasY);
+  PosStr := IntToStr(ZScreenX(MouseX)) + ', ' + IntToStr(ZScreenY(MouseY));
   OutTextXY(10, StatusY + 5, PosStr);
  End;
 
@@ -1132,56 +1395,49 @@ End;
 
 Procedure DrawCanvas;
 Var
- CX, CY, CW, CH: Integer;
+ X,Y,SX,SY,W,H: Integer;
  P: PByte;
 Begin
- { Fond du canvas (zone de dessin) }
- SetFillStyle(SolidFill, White);
- Bar(CanvasX, CanvasY, CanvasX + Min(CanvasWidth, ImageBuffer.Width) - 1,
-     CanvasY + Min(CanvasHeight, ImageBuffer.Height) - 1);
-
- { Redessiner les pixels de l'image chargée si présents }
- If (CanvasImage <> Nil) and (CanvasImageW > 0) and (CanvasImageH > 0) Then Begin
-  CW := Min(CanvasImageW, CanvasWidth);
-  CH := Min(CanvasImageH, CanvasHeight);
-  P := CanvasImage;
-  For CY := 0 to CanvasImageH - 1 do Begin
-   If CY < CH Then
-    For CX := 0 to CanvasImageW - 1 do Begin
-     If CX < CW Then PutPixel(CanvasX + CX, CanvasY + CY, P^);
-     Inc(P);
-    End
-   Else
-    Inc(P, CanvasImageW);
+ ZClampView;
+ SetFillStyle(SolidFill,DarkGray);
+ Bar(CanvasX,CanvasY,CanvasX+CanvasWidth-1,CanvasY+CanvasHeight-1);
+ W:=ZDisplayWidth; H:=ZDisplayHeight;
+ If CanvasImage<>Nil Then
+  For Y:=0 To H-1 Do Begin
+   SY:=ZOriginY+(LongInt(Y)*100) Div ZoomLevel;
+   P:=CanvasImage; Inc(P,LongInt(SY)*CanvasImageW);
+   For X:=0 To W-1 Do Begin
+    SX:=ZOriginX+(LongInt(X)*100) Div ZoomLevel;
+    PutPixel(CanvasX+X,CanvasY+Y,PByte(PtrUInt(P)+PtrUInt(SX))^);
+   End;
   End;
- End;
-
- { Bordure du canvas }
  SetColor(DarkGray);
- Rectangle(CanvasX - 1, CanvasY - 1,
-           CanvasX + Min(CanvasWidth, ImageBuffer.Width),
-           CanvasY + Min(CanvasHeight, ImageBuffer.Height));
-
- { Grille si zoom > 400% }
- If ZoomLevel >= 400 Then Begin
-  SetColor(LightGray);
-  { Dessiner la grille... }
- End;
+ Rectangle(CanvasX-1,CanvasY-1,CanvasX+W,CanvasY+H);
+ { Les pixels sont agrandis sans interpolation : le zoom ne change pas
+   les donnees de l'image et n'est pas un redimensionnement. }
 End;
+
 
 Procedure DrawSelection;
 Const
  AntsPatterns: Array[0..3] of Word = ($CCCC, $9999, $3333, $6666);
+Var
+ Previous: ViewPortType;
+ L,T,R,B: Integer;
 Begin
  If SelectionActive And (Not AntsValid) Then Begin
   { Trace en XOR avec un motif rotatif pour effet "marching ants". }
+  ZBeginView(Previous);
+  L:=ZViewX(SelectionRect.Left); T:=ZViewY(SelectionRect.Top);
+  R:=Max(L,ZViewX(SelectionRect.Right+1)-1);
+  B:=Max(T,ZViewY(SelectionRect.Bottom+1)-1);
   SetWriteMode(XORPut);
   SetColor(White);
   SetLineStyle(UserBitLn, AntsPatterns[AntsPhase and 3], NormWidth);
-  Rectangle(SelectionRect.Left, SelectionRect.Top,
-            SelectionRect.Right, SelectionRect.Bottom);
+  Rectangle(L,T,R,B);
   SetLineStyle(SolidLn, 0, NormWidth);
   SetWriteMode(CopyPut);
+  ZEndView(Previous);
   AntsValid := True;
  End;
 End;
@@ -1189,16 +1445,23 @@ End;
 Procedure EraseSelection;
 Const
  AntsPatterns: Array[0..3] of Word = ($CCCC, $9999, $3333, $6666);
+Var
+ Previous: ViewPortType;
+ L,T,R,B: Integer;
 Begin
  If SelectionActive And AntsValid Then Begin
   { Re-applique le meme motif XOR -> efface les pixels precedents. }
+  ZBeginView(Previous);
+  L:=ZViewX(SelectionRect.Left); T:=ZViewY(SelectionRect.Top);
+  R:=Max(L,ZViewX(SelectionRect.Right+1)-1);
+  B:=Max(T,ZViewY(SelectionRect.Bottom+1)-1);
   SetWriteMode(XORPut);
   SetColor(White);
   SetLineStyle(UserBitLn, AntsPatterns[AntsPhase and 3], NormWidth);
-  Rectangle(SelectionRect.Left, SelectionRect.Top,
-            SelectionRect.Right, SelectionRect.Bottom);
+  Rectangle(L,T,R,B);
   SetLineStyle(SolidLn, 0, NormWidth);
   SetWriteMode(CopyPut);
+  ZEndView(Previous);
   AntsValid := False;
  End;
 End;
@@ -1216,13 +1479,17 @@ End;
 Procedure XorRubberRect(L, T, R, B: Integer);
 { Trace un rectangle en XOR : un second appel avec les memes coordonnees
   efface exactement le precedent. }
+Var Previous: ViewPortType;
 Begin
+ ZBeginView(Previous);
+ L:=ZViewX(L); R:=ZViewX(R); T:=ZViewY(T); B:=ZViewY(B);
  SetWriteMode(XORPut);
  SetColor(White);
  SetLineStyle(DottedLn, 0, NormWidth);
  Rectangle(L, T, R, B);
  SetLineStyle(SolidLn, 0, NormWidth);
  SetWriteMode(CopyPut);
+ ZEndView(Previous);
 End;
 
 Procedure XorEllipsePreview(CX, CY, RX, RY: Integer);
@@ -1271,7 +1538,10 @@ Procedure XorPreviewShape(Tool: Byte; X1, Y1, X2, Y2: Integer);
   plutot qu'un trait blanc plein. }
 Var
  CX, CY, RX, RY: Integer;
+ Previous: ViewPortType;
 Begin
+ ZBeginView(Previous);
+ X1:=ZViewX(X1); X2:=ZViewX(X2); Y1:=ZViewY(Y1); Y2:=ZViewY(Y2);
  SetWriteMode(XORPut);
  SetColor(White);
  SetLineStyle(DottedLn, 0, NormWidth);
@@ -1289,6 +1559,7 @@ Begin
  End;
  SetLineStyle(SolidLn, 0, NormWidth);
  SetWriteMode(CopyPut);
+ ZEndView(Previous);
 End;
 
 Procedure DrawMenu(MenuIndex: Integer);
@@ -1407,7 +1678,7 @@ Var
  BytesRead: Word;
  PaletteEntries: Integer;
  BMPPalette: Array[0..255] of TRGBQuad;
- RowBuffer: Array[0..4095] of Byte;
+ RowBuffer: Array[0..12287] of Byte;
  RowSize, PadBytes: Integer;
  X, Y, SrcY: Integer;
  PixelColor: Byte;
@@ -1552,7 +1823,7 @@ Begin
 
   { Dessiner les pixels de cette ligne }
   For X := 0 to ImageBuffer.Width - 1 do Begin
-   If (X < CanvasWidth) and (SrcY < CanvasHeight) Then Begin
+   Begin
     Case InfoHeader.biBitCount of
      1: Begin
       ByteVal := RowBuffer[X div 8];
@@ -1578,7 +1849,8 @@ Begin
      Else
       PixelColor := 0;
     End;
-    PutPixel(CanvasX + X, CanvasY + SrcY, PixelColor);
+    If (X<CanvasWidth) And (SrcY<CanvasHeight) Then
+     PutPixel(CanvasX+X,CanvasY+SrcY,PixelColor);
     { Mémoriser le pixel pour pouvoir redessiner le canvas après un menu. }
     If (CanvasImage <> Nil) and (X < CanvasImageW) and (SrcY < CanvasImageH) Then
      PByte(PtrUInt(CanvasImage) + PtrUInt(SrcY) * PtrUInt(CanvasImageW) + PtrUInt(X))^ := PixelColor;
@@ -1638,6 +1910,9 @@ Begin
  ImageBuffer.Height := Header.ScreenHeight;
  ImageBuffer.FileName := FileName;
  ImageBuffer.Format := FMT_GIF;
+ If Not ZPrepareBuffer(ImageBuffer.Width,ImageBuffer.Height,Header.BackgroundColor) Then Begin
+  Close(F); Exit;
+ End;
  ImageBuffer.Modified := False;
 
  { Analyser les drapeaux }
@@ -1721,6 +1996,7 @@ Begin
       For I := 0 to SubBlockSize - 1 do Begin
        If (X < ImageDescriptor.Width) and (Y < ImageDescriptor.Height) Then Begin
         PixelColor := CompressedData[I] mod PaletteSize;
+        ZPutImagePixel(ImageDescriptor.Left+X,ImageDescriptor.Top+Y,PixelColor);
         If (ImageDescriptor.Left + X < CanvasWidth) and
            (ImageDescriptor.Top + Y < CanvasHeight) Then Begin
          PutPixel(CanvasX + ImageDescriptor.Left + X,
@@ -1841,6 +2117,9 @@ Begin
    ImageBuffer.Width := IHDRData.Width;
    ImageBuffer.Height := IHDRData.Height;
    ImageBuffer.BitDepth := IHDRData.BitDepth;
+   If Not ZPrepareBuffer(ImageBuffer.Width,ImageBuffer.Height,White) Then Begin
+    Close(F); Exit;
+   End;
 
    { Vérifier le type de couleur pour la transparence }
    If (IHDRData.ColorType and 4) <> 0 Then
@@ -1895,6 +2174,7 @@ Begin
       Else
        PixelColor := DataBuffer[I] mod 16;
 
+      ZPutImagePixel(X,Y,PixelColor);
       If (X < CanvasWidth) and (Y < CanvasHeight) Then
        PutPixel(CanvasX + X, CanvasY + Y, PixelColor);
 
@@ -2000,6 +2280,9 @@ Begin
     ImageBuffer.Width := Width;
     ImageBuffer.Height := Height;
     ImageBuffer.BitDepth := 24;
+    If Not ZPrepareBuffer(ImageBuffer.Width,ImageBuffer.Height,White) Then Begin
+     Close(F); Exit;
+    End;
     SOFFound := True;
 
     { Sauter le reste du segment }
@@ -2029,7 +2312,7 @@ Begin
     { Lecture simplifiée des données compressées }
     Y := 0;
     X := 0;
-    While (Y < ImageBuffer.Height) and (Y < CanvasHeight) do Begin
+    While Y < ImageBuffer.Height do Begin
      BlockRead(F, DataBuffer, 4096, BytesRead);
      If BytesRead = 0 Then Break;
 
@@ -2038,6 +2321,7 @@ Begin
       { Éviter les marqueurs JPEG }
       If DataBuffer[I] <> $FF Then Begin
        PixelColor := DataBuffer[I] mod 16;
+       ZPutImagePixel(X,Y,PixelColor);
        If (X < ImageBuffer.Width) and (X < CanvasWidth) and
           (Y < ImageBuffer.Height) and (Y < CanvasHeight) Then Begin
         PutPixel(CanvasX + X, CanvasY + Y, PixelColor);
@@ -2075,6 +2359,7 @@ End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format: Byte;
+ Succeeded: Boolean;
  F: File;
  Ext: String;
 Begin
@@ -2096,12 +2381,14 @@ Begin
  Format := GetImageFormat(FileName);
 
  Case Format of
-  FMT_BMP: LoadImage := LoadBMP(FileName);
-  FMT_GIF: LoadImage := LoadGIF(FileName);
-  FMT_PNG: LoadImage := LoadPNG(FileName);
-  FMT_JPEG: LoadImage := LoadJPEG(FileName);
-  Else LoadImage := False;
+  FMT_BMP: Succeeded := LoadBMP(FileName);
+  FMT_GIF: Succeeded := LoadGIF(FileName);
+  FMT_PNG: Succeeded := LoadPNG(FileName);
+  FMT_JPEG: Succeeded := LoadJPEG(FileName);
+  Else Succeeded := False;
  End;
+ LoadImage:=Succeeded;
+ If Succeeded Then RedrawInterface;
 End;
 
 Function SaveBMP(FileName: String): Boolean;
@@ -2113,7 +2400,7 @@ Var
  RowSize: LongInt;
  ImageSize: LongInt;
  BMPPalette: Array[0..255] of TRGBQuad;
- RowBuffer: Array[0..4095] of Byte;
+ RowBuffer: Array[0..12287] of Byte;
  X, Y, SrcY: Integer;
  PixelColor: Byte;
  PaletteEntries: Integer;
@@ -2823,11 +3110,10 @@ End;
 
 Procedure ClearImage;
 Begin
- { Effacer l'image (remplir avec la couleur d'arrière-plan) }
- SetFillStyle(SolidFill, BackgroundColor);
- Bar(CanvasX, CanvasY, CanvasX + Min(CanvasWidth, ImageBuffer.Width) - 1,
-     CanvasY + Min(CanvasHeight, ImageBuffer.Height) - 1);
- ImageBuffer.Modified := True;
+ If CanvasImage<>Nil Then
+  FillChar(CanvasImage^,LongInt(CanvasImageW)*CanvasImageH,BackgroundColor);
+ ImageBuffer.Modified:=True;
+ DrawCanvas;
 End;
 
 { Procédures d'historique (Undo/Redo) }
@@ -3318,27 +3604,13 @@ End;
 
 { Procédures de dessin }
 
-Procedure DrawPixel(X, Y: Integer; Color: Byte);
-Var
- BX, BY: Integer;
- ImgP: PByte;
+Procedure DrawPixel(X,Y: Integer; Color: Byte);
 Begin
- If (X >= CanvasX) and (X < CanvasX + ImageBuffer.Width) and
-    (Y >= CanvasY) and (Y < CanvasY + ImageBuffer.Height) Then Begin
-  PutPixel(X, Y, Color);
-  { Synchroniser le buffer image. }
-  If CanvasImage <> Nil Then Begin
-   BX := X - CanvasX;
-   BY := Y - CanvasY;
-   If (BX >= 0) and (BX < CanvasImageW) and
-      (BY >= 0) and (BY < CanvasImageH) Then Begin
-    ImgP := CanvasImage;
-    Inc(ImgP, LongInt(BY) * LongInt(CanvasImageW) + BX);
-    ImgP^ := Color;
-   End;
-  End;
-  ImageBuffer.Modified := True;
- End;
+ X:=X-CanvasX; Y:=Y-CanvasY;
+ If (X<0) Or (Y<0) Or (X>=CanvasImageW) Or (Y>=CanvasImageH) Then Exit;
+ ZPutImagePixel(X,Y,Color);
+ ZRenderPixel(X,Y,Color);
+ ImageBuffer.Modified:=True;
 End;
 
 Procedure SyncCanvasImage(X1, Y1, X2, Y2: Integer);
@@ -3350,6 +3622,7 @@ Var
  X, Y, BX, BY, T: Integer;
  ImgP: PByte;
 Begin
+ If ZTransformed Then Exit;
  If CanvasImage = Nil Then Exit;
  { Normaliser }
  If X1 > X2 Then Begin T := X1; X1 := X2; X2 := T; End;
@@ -3378,6 +3651,7 @@ Var
  X, Y, BX, BY, T: Integer;
  P: PByte;
 Begin
+ If ZTransformed Then Begin DrawCanvas; Exit; End;
  If CanvasImage = Nil Then Exit;
  If X1 > X2 Then Begin T := X1; X1 := X2; X2 := T; End;
  If Y1 > Y2 Then Begin T := Y1; Y1 := Y2; Y2 := T; End;
@@ -3414,6 +3688,11 @@ Var
 Begin
  ErasePreviewText;
  S := TextInput + '_';
+ If ZTransformed Then Begin
+  ZRasterText(TextX-CanvasX,TextY-CanvasY,S,CurrentColor,False);
+  TextPrevW:=TextWidth(S)+1; TextPrevH:=TextHeight('M')+1;
+  Exit;
+ End;
  SetColor(CurrentColor);
  OutTextXY(TextX, TextY, S);
  TextPrevW := TextWidth(S) + 1;
@@ -3422,6 +3701,12 @@ End;
 
 Procedure DrawLine(X1, Y1, X2, Y2: Integer; Color: Byte);
 Begin
+ If ZTransformed Then Begin
+  ZLine(X1-CanvasX,Y1-CanvasY,X2-CanvasX,Y2-CanvasY,Color);
+  ImageBuffer.Modified:=True;
+  DrawCanvas;
+  Exit;
+ End;
  SetColor(Color);
  Line(X1, Y1, X2, Y2);
  SyncCanvasImage(X1, Y1, X2, Y2);
@@ -3430,6 +3715,12 @@ End;
 
 Procedure DrawRectangle(X1, Y1, X2, Y2: Integer; Color: Byte; Filled: Boolean);
 Begin
+ If ZTransformed Then Begin
+  ZRectangle(X1-CanvasX,Y1-CanvasY,X2-CanvasX,Y2-CanvasY,Color,Filled);
+  ImageBuffer.Modified:=True;
+  DrawCanvas;
+  Exit;
+ End;
  SetColor(Color);
  If Filled Then Begin
   SetFillStyle(SolidFill, Color);
@@ -3443,6 +3734,12 @@ End;
 
 Procedure DrawEllipse(X, Y, RadiusX, RadiusY: Integer; Color: Byte; Filled: Boolean);
 Begin
+ If ZTransformed Then Begin
+  ZEllipse(X-CanvasX,Y-CanvasY,RadiusX,RadiusY,Color,Filled);
+  ImageBuffer.Modified:=True;
+  DrawCanvas;
+  Exit;
+ End;
  SetColor(Color);
  If Filled Then Begin
   SetFillStyle(SolidFill, Color);
@@ -3462,6 +3759,12 @@ End;
 
 Procedure DrawRoundRectShape(X1, Y1, X2, Y2, RadiusX, RadiusY: Integer; Color: Byte; Filled: Boolean);
 Begin
+ If ZTransformed Then Begin
+  ZRoundRectangle(X1-CanvasX,Y1-CanvasY,X2-CanvasX,Y2-CanvasY,RadiusX,RadiusY,Color,Filled);
+  ImageBuffer.Modified:=True;
+  DrawCanvas;
+  Exit;
+ End;
  SetColor(Color);
  If Filled Then Begin
   SetFillStyle(SolidFill, Color);
@@ -3479,24 +3782,64 @@ Begin
  ImageBuffer.Modified := True;
 End;
 
-Procedure FloodFillArea(X, Y: Integer; FillColor, BorderColor: Byte);
+Procedure FloodFillArea(X,Y: Integer; FillColor,BorderColor: Byte);
+Var
+ Queue: PLongInt;
+ Head,Tail,Count,ID: LongInt;
+ PX,PY: Integer;
+ Target: Byte;
+ {$IFDEF FPC}Previous: Boolean;{$ENDIF}
+
+ Procedure Enqueue(NX,NY: Integer);
+ Begin
+  If (NX<0) Or (NY<0) Or (NX>=CanvasImageW) Or (NY>=CanvasImageH) Then Exit;
+  If ZImagePixel(NX,NY)<>Target Then Exit;
+  ZPutImagePixel(NX,NY,FillColor);
+  PLongInt(PtrUInt(Queue)+PtrUInt(Tail)*SizeOf(LongInt))^:=LongInt(NY)*CanvasImageW+NX;
+  Inc(Tail);
+ End;
+
 Begin
- SetFillStyle(SolidFill, FillColor);
+ X:=X-CanvasX; Y:=Y-CanvasY;
+ If (CanvasImage=Nil) Or (X<0) Or (Y<0) Or
+    (X>=CanvasImageW) Or (Y>=CanvasImageH) Then Exit;
+ Target:=ZImagePixel(X,Y);
+ If FillColor=Target Then Exit;
+ Count:=LongInt(CanvasImageW)*CanvasImageH;
+ Queue:=Nil;
  {$IFDEF FPC}
- PtcGraph.FloodFill(X, Y, BorderColor);
+ Previous:=ReturnNilIfGrowHeapFails;
+ ReturnNilIfGrowHeapFails:=True;
+ GetMem(Queue,Count*SizeOf(LongInt));
+ ReturnNilIfGrowHeapFails:=Previous;
  {$ELSE}
- Graph.FloodFill(X, Y, BorderColor);
+ If MaxAvail>=Count*SizeOf(LongInt) Then GetMem(Queue,Count*SizeOf(LongInt));
  {$ENDIF}
- { Le remplissage peut toucher tout le canvas. }
- SyncCanvasImage(CanvasX, CanvasY,
-                 CanvasX + CanvasImageW - 1, CanvasY + CanvasImageH - 1);
- ImageBuffer.Modified := True;
+ If Queue=Nil Then Exit;
+ Head:=0; Tail:=0;
+ Enqueue(X,Y);
+ While Head<Tail Do Begin
+  ID:=PLongInt(PtrUInt(Queue)+PtrUInt(Head)*SizeOf(LongInt))^;
+  Inc(Head);
+  PX:=ID Mod CanvasImageW; PY:=ID Div CanvasImageW;
+  Enqueue(PX-1,PY); Enqueue(PX+1,PY);
+  Enqueue(PX,PY-1); Enqueue(PX,PY+1);
+ End;
+ FreeMem(Queue,Count*SizeOf(LongInt));
+ ImageBuffer.Modified:=True;
+ RedrawInterface;
 End;
 
 Procedure DrawText(X, Y: Integer; Text: String; Color: Byte);
 Var
  W, H: Integer;
 Begin
+ If ZTransformed Then Begin
+  ZRasterText(X-CanvasX,Y-CanvasY,Text,Color,True);
+  ImageBuffer.Modified:=True;
+  DrawCanvas;
+  Exit;
+ End;
  W := TextWidth(Text);
  H := TextHeight(Text);
  If H < 8 Then H := 8;
@@ -3540,13 +3883,12 @@ Begin
  DrawWithBrush(X, Y, BackgroundColor);
 End;
 
-Procedure ColorPicker(X, Y: Integer);
+Procedure ColorPicker(X,Y: Integer);
 Begin
- If (X >= CanvasX) and (X < CanvasX + ImageBuffer.Width) and
-    (Y >= CanvasY) and (Y < CanvasY + ImageBuffer.Height) Then Begin
-  CurrentColor := GetPixel(X, Y);
-  DrawColorPalette;
- End;
+ X:=X-CanvasX; Y:=Y-CanvasY;
+ If (X<0) Or (Y<0) Or (X>=CanvasImageW) Or (Y>=CanvasImageH) Then Exit;
+ CurrentColor:=ZImagePixel(X,Y);
+ DrawColorPalette;
 End;
 
 { Procédures de gestion des événements }
@@ -5594,8 +5936,9 @@ Begin
   R.Bottom := PEClamp(SelectionRect.Bottom-CanvasY,0,CanvasImageH-1);
  End;
  If D.Source = 2 Then Begin
-  R.Right := Min(CanvasWidth,CanvasImageW)-1;
-  R.Bottom := Min(CanvasHeight,CanvasImageH)-1;
+  R.Left:=ZOriginX; R.Top:=ZOriginY;
+  R.Right:=Min(CanvasImageW-1,ZOriginX+ZCeilDiv(LongInt(CanvasWidth)*100,ZoomLevel)-1);
+  R.Bottom:=Min(CanvasImageH-1,ZOriginY+ZCeilDiv(LongInt(CanvasHeight)*100,ZoomLevel)-1);
  End;
 End;
 
@@ -6458,11 +6801,9 @@ Begin
  GetMouseStateLocal(X,Y,PreviousButtons);
  Repeat
   GetMouseStateLocal(X,Y,Buttons);
-  Inside := (X >= CanvasX) And (Y >= CanvasY) And
-            (X < CanvasX+Min(CanvasWidth,CanvasImageW)) And
-            (Y < CanvasY+Min(CanvasHeight,CanvasImageH));
+  Inside := ZHitCanvas(X,Y);
   If Inside And ((X <> LastX) Or (Y <> LastY)) Then Begin
-   If PGSampleAt(D,X-CanvasX,Y-CanvasY) Then Begin
+   If PGSampleAt(D,ZScreenX(X),ZScreenY(Y)) Then Begin
     PEHideMouse;
     SetFillStyle(SolidFill,LightGray);
     Bar(0,ScreenHeight-STATUSBAR_HEIGHT,ScreenWidth-1,ScreenHeight-1);
@@ -9134,6 +9475,43 @@ Begin
 End;
 
 
+Procedure ZSetZoom(NewLevel, AnchorX, AnchorY: Integer);
+Var ImageX,ImageY: Integer;
+Begin
+ If Drawing Then Exit;
+ ImageX:=ZScreenX(AnchorX);
+ ImageY:=ZScreenY(AnchorY);
+ If NewLevel<25 Then NewLevel:=25;
+ If NewLevel>800 Then NewLevel:=800;
+ If NewLevel=ZoomLevel Then Exit;
+ ZoomLevel:=NewLevel;
+ ZOriginX:=ImageX-(LongInt(AnchorX-CanvasX)*100) Div ZoomLevel;
+ ZOriginY:=ImageY-(LongInt(AnchorY-CanvasY)*100) Div ZoomLevel;
+ ZClampView;
+ TextPrevW:=0; TextPrevH:=0;
+ RedrawInterface;
+ If TextInsertMode Then DrawTextPreview;
+End;
+
+Procedure ZZoomStep(ZoomIn: Boolean);
+Var Level: Integer;
+Begin
+ Level:=ZoomLevel;
+ If ZoomIn Then Level:=Level*2 Else Level:=Level Div 2;
+ ZSetZoom(Level,CanvasX+ZDisplayWidth Div 2,CanvasY+ZDisplayHeight Div 2);
+End;
+
+Procedure ZPan(DX,DY: Integer);
+Begin
+ If Drawing Then Exit;
+ ZOriginX:=ZOriginX+DX; ZOriginY:=ZOriginY+DY;
+ ZClampView;
+ TextPrevW:=0; TextPrevH:=0;
+ RedrawInterface;
+ If TextInsertMode Then DrawTextPreview;
+End;
+
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -9153,6 +9531,9 @@ Begin
      InitPalette;
      ActivePaletteSlot := 0;
      PEInstallDocumentPalette;
+     If Not ZPrepareBuffer(ImageBuffer.Width,ImageBuffer.Height,BackgroundColor) Then Begin
+      ShowMessage('Nouveau','Memoire insuffisante.'); Exit;
+     End;
      ClearImage;
      If (CanvasImage <> Nil) and (CanvasImageW > 0) and (CanvasImageH > 0) Then
       FillChar(CanvasImage^, CanvasImageW * CanvasImageH, BackgroundColor);
@@ -9238,11 +9619,10 @@ Begin
     End;
     6: Begin { Effacer sélection }
      If SelectionActive Then Begin
-      SetFillStyle(SolidFill, BackgroundColor);
-      Bar(SelectionRect.Left, SelectionRect.Top,
-          SelectionRect.Right, SelectionRect.Bottom);
-      SyncCanvasImage(SelectionRect.Left, SelectionRect.Top,
-                      SelectionRect.Right, SelectionRect.Bottom);
+      AddSnapshotToHistory(TOOL_SELECT);
+      EraseSelection;
+      DrawRectangle(SelectionRect.Left,SelectionRect.Top,
+                    SelectionRect.Right,SelectionRect.Bottom,BackgroundColor,True);
       SelectionActive := False;
       ImageBuffer.Modified := True;
      End;
@@ -9267,18 +9647,8 @@ Begin
     2: Begin { Barre d'état }
      Menus[MENU_VIEW].Items[2].Checked := Not Menus[MENU_VIEW].Items[2].Checked;
     End;
-    4: Begin { Zoom avant }
-     If ZoomLevel < 800 Then Begin
-      ZoomLevel := ZoomLevel * 2;
-      If ZoomLevel > 800 Then ZoomLevel := 800;
-     End;
-    End;
-    5: Begin { Zoom arrière }
-     If ZoomLevel > 25 Then Begin
-      ZoomLevel := ZoomLevel div 2;
-      If ZoomLevel < 25 Then ZoomLevel := 25;
-     End;
-    End;
+    4: Begin ZZoomStep(True); End;
+    5: Begin ZZoomStep(False); End;
     7: Begin { Plein écran }
     End;
    End;
@@ -9400,6 +9770,11 @@ End;
 Procedure HandleCanvasClick(X, Y: Integer);
 Begin
  If Drawing Then Exit;
+ If CurrentTool In [TOOL_ERASER,TOOL_FILL,TOOL_PENCIL,TOOL_BRUSH,
+                    TOOL_AIRBRUSH,TOOL_LINE,TOOL_RECT,TOOL_ELLIPSE,TOOL_ROUNDRECT] Then
+  AddSnapshotToHistory(CurrentTool);
+ If (CurrentTool<>TOOL_SELECT) And (CurrentTool<>TOOL_MAGNIFY) And
+    (CurrentTool<>TOOL_PICKER) Then Begin EraseSelection; SelectionActive:=False; End;
 
  Case CurrentTool of
   TOOL_SELECT: Begin
@@ -9420,15 +9795,13 @@ Begin
    EraseTool(X, Y);
   End;
   TOOL_FILL: Begin
-   FloodFillArea(X, Y, CurrentColor, GetPixel(X, Y));
-   AddToHistory(TOOL_FILL);
+   FloodFillArea(X,Y,CurrentColor,ZImagePixel(X-CanvasX,Y-CanvasY));
   End;
   TOOL_PICKER: Begin
    ColorPicker(X, Y);
   End;
   TOOL_MAGNIFY: Begin
-   If ZoomLevel < 800 Then
-    ZoomLevel := ZoomLevel * 2;
+   ZSetZoom(ZoomLevel*2,CanvasX+ZViewX(X),CanvasY+ZViewY(Y));
   End;
   TOOL_PENCIL: Begin
    Drawing := True;
@@ -9484,7 +9857,7 @@ Begin
    EraseTool(X, Y);
   End;
   TOOL_PENCIL: Begin
-   DrawLine(OldMouseX, OldMouseY, X, Y, CurrentColor);
+   DrawLine(ZEventX(OldMouseX),ZEventY(OldMouseY),X,Y,CurrentColor);
   End;
   TOOL_BRUSH: Begin
    DrawWithBrush(X, Y, CurrentColor);
@@ -9549,11 +9922,9 @@ Begin
   End;
   TOOL_LINE: Begin
    DrawLine(StartX, StartY, X, Y, CurrentColor);
-   AddToHistory(TOOL_LINE);
   End;
   TOOL_RECT: Begin
    DrawRectangle(StartX, StartY, X, Y, CurrentColor, FillStyle > 0);
-   AddToHistory(TOOL_RECT);
   End;
   TOOL_ELLIPSE: Begin
    CenterX := (StartX + X) div 2;
@@ -9561,13 +9932,12 @@ Begin
    RadiusX := Abs(X - StartX) div 2;
    RadiusY := Abs(Y - StartY) div 2;
    DrawEllipse(CenterX, CenterY, RadiusX, RadiusY, CurrentColor, FillStyle > 0);
-   AddToHistory(TOOL_ELLIPSE);
   End;
   TOOL_ROUNDRECT: Begin
    DrawRoundRectShape(StartX, StartY, X, Y, 10, 10, CurrentColor, FillStyle > 0);
-   AddToHistory(TOOL_ROUNDRECT);
   End;
  End;
+ If CurrentTool<>TOOL_SELECT Then RedrawInterface;
 End;
 
 { --- Menu : hit-test et navigation (inspire de DEV-COOLS\DEVENV.PAS) --- }
@@ -9699,19 +10069,20 @@ Begin
   End
   Else If (MouseX >= CanvasX) and (MouseX < CanvasX + CanvasWidth) and
           (MouseY >= CanvasY) and (MouseY < CanvasY + CanvasHeight) Then Begin
-   HandleCanvasClick(MouseX, MouseY);
+   If ZHitCanvas(MouseX,MouseY) Then HandleCanvasClick(ZEventX(MouseX),ZEventY(MouseY));
   End;
  End
  Else If ((MouseButtons and 1) <> 0) and Drawing Then Begin
   { Bouton maintenu : continuer le trace sur le canvas }
   If (MouseX >= CanvasX) and (MouseX < CanvasX + CanvasWidth) and
      (MouseY >= CanvasY) and (MouseY < CanvasY + CanvasHeight) Then
-   HandleCanvasDrag(MouseX, MouseY);
+   HandleCanvasDrag(ZEventX(MouseX),ZEventY(MouseY));
  End
  Else If ((MouseButtons and 1) = 0) and ((OldMouseButtons and 1) <> 0) Then Begin
   { Bouton relache (front descendant) }
   If Drawing Then
-   HandleCanvasRelease(MouseX, MouseY);
+   HandleCanvasRelease(ZEventX(Min(CanvasX+ZDisplayWidth-1,Max(CanvasX,MouseX))),
+                       ZEventY(Min(CanvasY+ZDisplayHeight-1,Max(CanvasY,MouseY))));
  End;
 
  { Mise a jour de la barre d'etat si la souris a bouge }
@@ -9801,11 +10172,18 @@ Begin
     ActiveMenuItem := -1;
     RedrawInterface;
    End;
-   #72: Begin { Flèche haut }
+   #75: ZPan(-Max(1,CanvasWidth*100 Div ZoomLevel Div 8),0);
+   #77: ZPan(Max(1,CanvasWidth*100 Div ZoomLevel Div 8),0);
+   #73: ZPan(0,-Max(1,CanvasHeight*100 Div ZoomLevel Div 2));
+   #81: ZPan(0,Max(1,CanvasHeight*100 Div ZoomLevel Div 2));
+   #71: ZPan(-ZOriginX,-ZOriginY);
+   #72: Begin { Fleche haut : deplacement de la vue agrandie }
+    If ZoomLevel<>100 Then Begin ZPan(0,-Max(1,CanvasHeight*100 Div ZoomLevel Div 8)); Exit; End;
     If BrushSize < 50 Then Inc(BrushSize);
     DrawToolbar;
    End;
-   #80: Begin { Flèche bas }
+   #80: Begin { Fleche bas : deplacement de la vue agrandie }
+    If ZoomLevel<>100 Then Begin ZPan(0,Max(1,CanvasHeight*100 Div ZoomLevel Div 8)); Exit; End;
     If BrushSize > 1 Then Dec(BrushSize);
     DrawToolbar;
    End;
@@ -9835,10 +10213,11 @@ Begin
   If TextInsertMode Then Begin
    If Key = #13 Then Begin { Entrée }
     ErasePreviewText;
+    AddSnapshotToHistory(TOOL_TEXT);
     DrawText(TextX, TextY, TextInput, CurrentColor);
     TextInsertMode := False;
     TextInput := '';
-    AddToHistory(TOOL_TEXT);
+    RedrawInterface;
    End
    Else If Key = #27 Then Begin { Échap }
     ErasePreviewText;
@@ -9858,8 +10237,8 @@ Begin
   Else Begin
    { Raccourcis clavier - implémentation simplifiée }
    Case UpCase(Key) of
-    '+': If ZoomLevel < 800 Then ZoomLevel := ZoomLevel * 2;
-    '-': If ZoomLevel > 25 Then ZoomLevel := ZoomLevel div 2;
+    '+': ZZoomStep(True);
+    '-': ZZoomStep(False);
     'Q': If ConfirmDiscardChanges Then Running := False; { Quitter rapidement }
     #27: Begin { Échap }
      If MenuActive Then Begin

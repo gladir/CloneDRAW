@@ -2,6 +2,7 @@
   @created: 2026
   @version: 1.00
   @website(https://www.gladir.com/clonedraw)
+  @website(https://www.gladir.com/office-0)
   @abstract(Target: Free Pascal 3.2
   @description: Clone de l'application Visio de Microsoft
 }
@@ -69,8 +70,8 @@ Const
 
  { Constantes pour la barre d'outils (verticale, a gauche) }
  TOOLBAR_COUNT = 9;
- TOOLBAR_TOP = 43;        { Juste en dessous de la barre d'icones }
- TOOLBAR_WIDTH = 28;      { Largeur de la barre d'outils verticale }
+ CLASSIC_TOOLBAR_TOP = 43;        { Juste en dessous de la barre d'icones }
+ CLASSIC_TOOLBAR_WIDTH = 28;      { Largeur de la barre d'outils verticale }
  TOOLBAR_HEIGHT = 26;     { Conserve pour compatibilite (hauteur d'un bouton) }
  TOOLBAR_BUTTON_SIZE = 24; { Taille d'un bouton }
  TOOLBAR_PADDING = 2;     { Espacement entre les boutons }
@@ -88,7 +89,7 @@ Const
  ICONBAR_COLOR = 7;       { Gris clair }
 
  { Constantes pour la zone de travail et les objets }
- WORK_AREA_TOP = 43;      { DÃ©but de la zone de travail (sous barre d'icones) }
+ CLASSIC_WORK_AREA_TOP = 43;      { DÃ©but de la zone de travail (sous barre d'icones) }
  MAX_SHAPES = 100;        { Nombre maximum d'objets }
  DEFAULT_SHAPE_WIDTH = 80;  { Largeur par dÃ©faut d'une forme }
  DEFAULT_SHAPE_HEIGHT = 60; { Hauteur par dÃ©faut d'une forme }
@@ -225,6 +226,8 @@ Const
  );
 
 Type
+ TMenuLabels = Array[1..12] of String[20];
+ TMenuShortcuts = Array[1..12] of String[12];
  TMenuState = (msNone, msMenuBar, msDropDown);
  TToolType = (ttSelection, ttRectangle, ttEllipse, ttLine, ttConnector, ttText, ttPolygon, ttBezier, ttImage);
  TShapeType = (stNone, stRectangle, stEllipse, stLine, stConnector, stText, stPolygon, stBezier, stImage);
@@ -349,6 +352,15 @@ Type
  End;
 
 Var
+ TOOLBAR_TOP, TOOLBAR_WIDTH, WORK_AREA_TOP: Integer;
+ RibbonMode, RibbonKeyboard: Boolean;
+ AboutDialogVisible: Boolean;
+ TextEditShape, TextEditCursor, TextEditOldX2, TextEditOldY2: Integer;
+ TextEditOriginal: String[80];
+ TextEditSelectAll, TextEditWasModified, MainLoopScanRead: Boolean;
+ RibbonTab, RibbonFocus, RibbonHover: Integer;
+ RibbonScan: Char;
+ CommandLineFile: String;
  Language:(_French,_English,_Germany,_Italian,_Spain,_Albanian,_Portuguese,_Swedish,_Danish,_Japanese);
  TmpLanguage:String;
 
@@ -12696,6 +12708,7 @@ Begin
  { TODO: Passer en mode dessin de zone de texte }
  { TODO: Permettre de dessiner un rectangle pour la zone de texte }
  InsertMode := 2;
+ CurrentTool := ttText;
 End;
 
 { ProcÃ©dure InsertImage - InsÃ©rer une image }
@@ -14012,6 +14025,7 @@ Procedure DrawIconBar;
 Var
  I: Integer;
 Begin
+ If RibbonMode Then Exit;
  { Fond }
  SetFillStyle(SolidFill, ICONBAR_COLOR);
  Bar(0, ICONBAR_TOP, ScreenWidth, ICONBAR_TOP + ICONBAR_HEIGHT);
@@ -14027,6 +14041,7 @@ Function GetIconBarButtonAtPosition(MouseX, MouseY: Integer): Integer;
 Var
  I, X: Integer;
 Begin
+ If RibbonMode Then Begin GetIconBarButtonAtPosition := 0; Exit; End;
  GetIconBarButtonAtPosition := 0;
  If (MouseY < ICONBAR_TOP + 2) or
     (MouseY > ICONBAR_TOP + 2 + ICONBAR_BUTTON_SIZE) Then Exit;
@@ -14570,6 +14585,8 @@ Begin
  GetResizeHandle := RESIZE_HANDLE_NONE;
 
  If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
+ If Not IsLayerVisible(Shapes[ShapeIndex].LayerIndex) or
+    IsLayerLocked(Shapes[ShapeIndex].LayerIndex) Then Exit;
  If Not Shapes[ShapeIndex].Selected Then Exit;
 
  X1 := Shapes[ShapeIndex].X1;
@@ -14686,6 +14703,8 @@ End;
 Procedure StartDrag(ShapeIndex: Integer; X, Y: Integer; Handle: Integer);
 Begin
  If (ShapeIndex < 1) or (ShapeIndex > ShapeCount) Then Exit;
+ If Not IsLayerVisible(Shapes[ShapeIndex].LayerIndex) or
+    IsLayerLocked(Shapes[ShapeIndex].LayerIndex) Then Exit;
 
  DragStartX := X;
  DragStartY := Y;
@@ -14902,6 +14921,153 @@ Function GetMenuAtPosition(MouseX, MouseY: Integer): Integer; Forward;
 Function GetDropDownItemAtPosition(MenuIndex, MouseX, MouseY: Integer): Integer; Forward;
 
 { ProcÃ©dure pour gÃ©rer le clic gauche de la souris }
+{ Edition directe des objets texte. Les positions du curseur sont entre caracteres. }
+Procedure FinishTextEdit(Cancel:Boolean);
+Begin
+ If (TextEditShape>0) and (TextEditShape<=ShapeCount) Then Begin
+  If Cancel Then Begin
+   Shapes[TextEditShape].Text:=TextEditOriginal;
+   Shapes[TextEditShape].X2:=TextEditOldX2;
+   Shapes[TextEditShape].Y2:=TextEditOldY2;
+   DocumentModified:=TextEditWasModified;
+  End;
+ End;
+ TextEditShape:=0;TextEditSelectAll:=False;
+ StatusMessage:='';
+End;
+
+Procedure BeginTextEdit(Index,MouseX:Integer;SelectAll:Boolean);
+Begin
+ If (Index<1) or (Index>ShapeCount) Then Exit;
+ If Shapes[Index].ShapeType<>stText Then Exit;
+ If IsLayerLocked(Shapes[Index].LayerIndex) Then Exit;
+ If TextEditShape<>Index Then Begin
+  FinishTextEdit(False);SelectShape(Index);EndDrag;IsDrawing:=False;
+  TextEditShape:=Index;TextEditOriginal:=Shapes[Index].Text;
+  TextEditOldX2:=Shapes[Index].X2;TextEditOldY2:=Shapes[Index].Y2;
+  TextEditWasModified:=DocumentModified;
+ End;
+ TextEditCursor:=(MouseX-Shapes[Index].X1+4) div 8;
+ If TextEditCursor<0 Then TextEditCursor:=0;
+ If TextEditCursor>Length(Shapes[Index].Text) Then TextEditCursor:=Length(Shapes[Index].Text);
+ TextEditSelectAll:=SelectAll;
+ If Language=_English Then StatusMessage:='Text: Enter to finish, Esc to cancel'
+ Else StatusMessage:='Texte : Entree pour terminer, Echap pour annuler';
+End;
+
+Function HandleTextEditKey(Key,Scan:Char):Boolean;
+Var S:String[80];Before:String[80];
+Begin
+ HandleTextEditKey:=False;
+ If (TextEditShape<1) or (TextEditShape>ShapeCount) Then Exit;
+ HandleTextEditKey:=True;
+ S:=Shapes[TextEditShape].Text;Before:=S;
+ If Key=#0 Then Begin
+  Case Scan Of
+   #75:If TextEditCursor>0 Then Dec(TextEditCursor);
+   #77:If TextEditCursor<Length(S) Then Inc(TextEditCursor);
+   #71:TextEditCursor:=0;
+   #79:TextEditCursor:=Length(S);
+   #83:Begin
+    If TextEditSelectAll Then Begin S:='';TextEditCursor:=0;End
+    Else Delete(S,TextEditCursor+1,1);
+   End;
+   Else Begin FinishTextEdit(False);HandleTextEditKey:=False;Exit;End;
+  End;
+  TextEditSelectAll:=False;
+ End Else Case Key Of
+  #13,#9:Begin FinishTextEdit(False);Exit;End;
+  #27:Begin FinishTextEdit(True);Exit;End;
+  #1:TextEditSelectAll:=True;
+  #8:Begin
+   If TextEditSelectAll Then Begin S:='';TextEditCursor:=0;End
+   Else If TextEditCursor>0 Then Begin Delete(S,TextEditCursor,1);Dec(TextEditCursor);End;
+   TextEditSelectAll:=False;
+  End;
+  #32..#255:Begin
+   If TextEditSelectAll Then Begin S:='';TextEditCursor:=0;End;
+   If Length(S)<80 Then Begin Insert(Key,S,TextEditCursor+1);Inc(TextEditCursor);End;
+   TextEditSelectAll:=False;
+  End;
+  Else Begin FinishTextEdit(False);HandleTextEditKey:=False;Exit;End;
+ End;
+ If S<>Before Then Begin
+  Shapes[TextEditShape].Text:=S;
+  Shapes[TextEditShape].X2:=Shapes[TextEditShape].X1+Length(S)*8+8;
+  Shapes[TextEditShape].Y2:=Shapes[TextEditShape].Y1+12;
+  DocumentModified:=True;
+ End;
+End;
+
+Procedure DrawTextEditor;
+Var X,Y,W,CX:Integer;
+Begin
+ If (TextEditShape<1) or (TextEditShape>ShapeCount) Then Exit;
+ X:=Shapes[TextEditShape].X1;Y:=Shapes[TextEditShape].Y1;
+ W:=Length(Shapes[TextEditShape].Text)*8+8;
+ SetColor(Blue);Rectangle(X-2,Y-2,X+W,Y+12);
+ If TextEditSelectAll Then Begin
+  SetFillStyle(SolidFill,Blue);Bar(X,Y,X+W-8,Y+8);
+  SetColor(White);OutTextXY(X,Y,Shapes[TextEditShape].Text);
+ End Else Begin
+  CX:=X+TextEditCursor*8;Line(CX,Y,CX,Y+9);
+ End;
+End;
+
+Procedure ShowAboutDialog;
+Begin
+ AboutDialogVisible:=True;
+ MenuState:=msNone;CurrentMenu:=0;HoveredMenuItem:=0;
+ RibbonKeyboard:=False;RibbonFocus:=0;RibbonHover:=0;
+End;
+
+Procedure AboutDialogBox(Var X,Y,W,H:Integer);
+Begin
+ W:=420;H:=206;X:=(ScreenWidth-W) div 2;Y:=(ScreenHeight-H) div 2;
+End;
+
+Procedure DrawAboutDialog;
+Var X,Y,W,H:Integer;Title,Description:String;
+Begin
+ If Not AboutDialogVisible Then Exit;
+ AboutDialogBox(X,Y,W,H);
+ If Language=_English Then Begin
+  Title:='About Visio';Description:='Diagram editor written in Pascal';
+ End Else Begin
+  Title:='A propos de Visio';Description:='Editeur de diagrammes en Pascal';
+ End;
+ SetFillStyle(SolidFill,DarkGray);Bar(X+5,Y+5,X+W+5,Y+H+5);
+ SetFillStyle(SolidFill,LightGray);Bar(X,Y,X+W,Y+H);
+ SetColor(White);Rectangle(X,Y,X+W,Y+H);
+ SetFillStyle(SolidFill,Blue);Bar(X+2,Y+2,X+W-2,Y+23);
+ SetColor(White);OutTextXY(X+10,Y+9,Title);
+ SetFillStyle(SolidFill,Blue);Bar(X+20,Y+44,X+65,Y+89);
+ SetColor(White);OutTextXY(X+34,Y+62,'V');
+ SetColor(Black);OutTextXY(X+82,Y+49,'VISIO - OFFICE-0');
+ OutTextXY(X+82,Y+69,'Version 1.0');
+ OutTextXY(X+20,Y+107,Description);
+ OutTextXY(X+20,Y+127,'Sylvain Maltais - gladir.com');
+ SetFillStyle(SolidFill,LightGray);Bar(X+W div 2-40,Y+H-38,X+W div 2+40,Y+H-12);
+ SetColor(White);Line(X+W div 2-40,Y+H-38,X+W div 2+40,Y+H-38);
+ Line(X+W div 2-40,Y+H-38,X+W div 2-40,Y+H-12);
+ SetColor(Black);Line(X+W div 2-40,Y+H-12,X+W div 2+40,Y+H-12);
+ Line(X+W div 2+40,Y+H-38,X+W div 2+40,Y+H-12);
+ Rectangle(X+W div 2-36,Y+H-34,X+W div 2+36,Y+H-16);
+ OutTextXY(X+W div 2-8,Y+H-29,'OK');
+End;
+
+Procedure HandleAboutDialogClick(MX,MY:Integer);
+Var X,Y,W,H:Integer;
+Begin
+ AboutDialogBox(X,Y,W,H);
+ If (MX>=X+W div 2-40) and (MX<=X+W div 2+40) and
+    (MY>=Y+H-38) and (MY<=Y+H-12) Then AboutDialogVisible:=False;
+End;
+
+Procedure DrawRibbon; Forward;
+Function RibbonHitAt(X,Y:Integer):Integer; Forward;
+Procedure ExecuteRibbonEntry(Index:Integer); Forward;
+
 Procedure HandleLeftClick(X, Y: Integer);
 Var
  ShapeIndex: Integer;
@@ -14910,6 +15076,20 @@ Var
  MenuIdx, ItemIdx: Integer;
  ShouldExit: Boolean;
 Begin
+ If (Y>WORK_AREA_TOP) and (CurrentTool in [ttSelection,ttText]) Then Begin
+  ShapeIndex:=GetShapeAtPosition(X,Y);
+  If (ShapeIndex>0) and (Shapes[ShapeIndex].ShapeType=stText) Then Begin
+   BeginTextEdit(ShapeIndex,X,False);Exit;
+  End;
+ End;
+ FinishTextEdit(False);
+ If RibbonMode and (Y <= WORK_AREA_TOP) Then Begin
+  RibbonKeyboard := False; RibbonFocus := 0;
+  MenuIdx := GetMenuAtPosition(X,Y);
+  If MenuIdx > 0 Then Begin RibbonTab := MenuIdx; RibbonHover := 0; End
+  Else ExecuteRibbonEntry(RibbonHitAt(X,Y));
+  Exit;
+ End;
  { Si un menu déroulant est ouvert, traiter d'abord la sélection d'un item }
  If (MenuState = msDropDown) and (CurrentMenu > 0) Then Begin
   ItemIdx := GetDropDownItemAtPosition(CurrentMenu, X, Y);
@@ -14925,6 +15105,7 @@ Begin
     4: ExecuteInsertMenuAction(ItemIdx);
     5: ExecuteFormatMenuAction(ItemIdx);
     6: ExecuteShapeMenuAction(ItemIdx);
+    9: If ItemIdx=3 Then ShowAboutDialog;
     { Tools/Window/Help : pas de dispatcher implémenté }
    End;
    { Fermer le menu après l'action }
@@ -15023,9 +15204,10 @@ Begin
       Shapes[ShapeCount].Y1 := Y;
       Shapes[ShapeCount].X2 := X + 50;
       Shapes[ShapeCount].Y2 := Y + 12;
-      Shapes[ShapeCount].Text := 'Text';
+      Shapes[ShapeCount].Text := '';
       Shapes[ShapeCount].LineColor := CurrentLineColor;
       DocumentModified := True;
+      BeginTextEdit(ShapeCount,X,False);
      End;
     End;
    ttPolygon: Begin
@@ -15172,7 +15354,12 @@ Begin
 
  { Ajouter la forme si elle a une taille minimale }
  If (Abs(X - DrawStartX) > 5) or (Abs(Y - DrawStartY) > 5) Then Begin
-  AddShape(ShapeType, DrawStartX, DrawStartY, X, Y);
+  If ShapeCount<MAX_SHAPES Then Begin
+   AddShape(ShapeType, DrawStartX, DrawStartY, X, Y);
+   { Donner immediatement le focus et les poignees a la nouvelle forme. }
+   SelectShape(ShapeCount);
+   CurrentTool:=ttSelection;
+  End;
  End;
 End;
 
@@ -15356,6 +15543,7 @@ Procedure HandleRightClick(X, Y: Integer);
 Var
  ShapeIndex: Integer;
 Begin
+ FinishTextEdit(False);
  { Masquer le menu contextuel s'il est dÃ©jÃ  visible }
  If ContextMenuVisible Then Begin
   HideContextMenu;
@@ -15409,7 +15597,8 @@ Begin
   TextX := MenuPositions[I];
 
   { Si ce menu est sÃ©lectionnÃ©, dessiner le fond en surbrillance }
-  If (I = CurrentMenu) and (MenuState <> msNone) Then Begin
+  If ((I = CurrentMenu) and (MenuState <> msNone)) or
+     (RibbonMode and (I = RibbonTab)) Then Begin
    SetFillStyle(SolidFill, MENU_HIGHLIGHT_BG);
    Bar(TextX - 4, 1, TextX + Length(MenuNames[I]) * 8 + 4, MENU_HEIGHT - 1);
    SetColor(MENU_HIGHLIGHT_FG);
@@ -15456,15 +15645,10 @@ Begin
 End;
 
 { ProcÃ©dure pour dessiner un sous-menu dÃ©roulant }
-Procedure DrawDropDownMenu(MenuIndex: Integer);
-Const
- MaxItems = 12;
- ItemHeight = 16;
- MenuWidth = 260;
-Var
- X, Y, I, ItemCount: Integer;
- Items: Array[1..MaxItems] of String[20];
- Shortcuts: Array[1..MaxItems] of String[12];
+Procedure GetMenuLabels(MenuIndex: Integer; Var Items: TMenuLabels;
+ Var Shortcuts: TMenuShortcuts; Var ItemCount: Integer);
+Const MaxItems = 12;
+Var I: Integer;
 Begin
  { DÃ©finir les Ã©lÃ©ments selon le menu sÃ©lectionnÃ© }
  Case Language Of
@@ -15706,6 +15890,16 @@ Begin
       Shortcuts[1] := 'F1';
      End;
  End;
+
+End;
+
+Procedure DrawDropDownMenu(MenuIndex: Integer);
+Const ItemHeight = 16; MenuWidth = 260;
+Var X, Y, I, ItemCount: Integer;
+ Items: TMenuLabels; Shortcuts: TMenuShortcuts;
+Begin
+ GetMenuLabels(MenuIndex, Items, Shortcuts, ItemCount);
+ If ItemCount = 0 Then Exit;
 
  { Calculer la position du menu dÃ©roulant }
  X := MenuPositions[MenuIndex] - 4;
@@ -17352,6 +17546,158 @@ Begin
 End;
 
 { ProcÃ©dure pour rafraÃ®chir l'affichage complet }
+Function RibbonMenuItem(Index:Integer):Integer;
+Var I,N:Integer;
+Begin
+ N:=0;RibbonMenuItem:=0;
+ For I:=1 To GetMenuItemCount(RibbonTab) Do
+  If Not IsMenuSeparator(RibbonTab,I) Then Begin
+   Inc(N);If N=Index Then RibbonMenuItem:=I;
+  End;
+End;
+
+Function RibbonItemCount:Integer;
+Var I,N:Integer;
+Begin
+ N:=0;For I:=1 To GetMenuItemCount(RibbonTab) Do
+  If Not IsMenuSeparator(RibbonTab,I) Then Inc(N);
+ RibbonItemCount:=N;
+End;
+
+Procedure RibbonButtonBox(Index:Integer;Var X,Y,W,H:Integer);
+Begin
+ W:=(ScreenWidth-8) div 4;H:=28;
+ X:=4+((Index-1) div 4)*W;Y:=MENU_HEIGHT+4+((Index-1) mod 4)*H;
+End;
+
+Function RibbonHitAt(X,Y:Integer):Integer;
+Var I,BX,BY,W,H:Integer;
+Begin
+ RibbonHitAt:=0;If Not RibbonMode Then Exit;
+ For I:=1 To RibbonItemCount Do Begin
+  RibbonButtonBox(I,BX,BY,W,H);
+  If (X>=BX) and (X<BX+W) and (Y>=BY) and (Y<BY+H) Then RibbonHitAt:=I;
+ End;
+End;
+
+Procedure DrawRibbon;
+Var I,J,X,Y,W,H,N,Icon:Integer;Items:TMenuLabels;Shortcuts:TMenuShortcuts;Caption:String;
+Begin
+ If Not RibbonMode Then Exit;
+ SetFillStyle(SolidFill,LightGray);Bar(0,MENU_HEIGHT+1,ScreenWidth,WORK_AREA_TOP);
+ GetMenuLabels(RibbonTab,Items,Shortcuts,N);
+ For I:=1 To RibbonItemCount Do Begin
+  RibbonButtonBox(I,X,Y,W,H);J:=RibbonMenuItem(I);
+  If (I=RibbonHover) or (RibbonKeyboard and (I=RibbonFocus)) Then Begin
+   SetFillStyle(SolidFill,White);Bar(X,Y,X+W-2,Y+H-2);
+  End;
+  If J>0 Then Begin
+   Caption:=Items[J];Icon:=0;
+   If RibbonTab=1 Then Case J Of 1:Icon:=1;2:Icon:=2;4:Icon:=3;9:Icon:=5;End;
+   If RibbonTab=2 Then Case J Of 1:Icon:=7;2:Icon:=8;End;
+   If Icon>0 Then DrawIconBarIcon(X+2,Y+3,Icon)
+   Else Begin
+    SetColor(Blue);Rectangle(X+5,Y+6,X+19,Y+19);
+    Line(X+8,Y+10,X+16,Y+10);Line(X+8,Y+14,X+16,Y+14);
+   End;
+  End;
+  If (RibbonTab>6) and Not ((RibbonTab=9) and (J=3)) Then SetColor(DarkGray)
+  Else SetColor(Black);
+  OutTextXY(X+28,Y+10,Copy(Caption,1,(W-32) div 8));
+ End;
+ SetColor(DarkGray);Line(0,WORK_AREA_TOP,ScreenWidth,WORK_AREA_TOP);
+End;
+
+Procedure ExecuteRibbonEntry(Index:Integer);
+Var J:Integer;
+Begin
+ If (Index<1) or (Index>RibbonItemCount) Then Exit;
+ J:=RibbonMenuItem(Index);
+ If J=0 Then Exit;
+ Case RibbonTab Of
+  1: If ExecuteFileMenuAction(J) Then Halt;
+  2: ExecuteEditMenuAction(J);
+  3: ExecuteViewMenuAction(J);
+  4: ExecuteInsertMenuAction(J);
+  5: ExecuteFormatMenuAction(J);
+  6: ExecuteShapeMenuAction(J);
+  9: If J=3 Then ShowAboutDialog;
+ End;
+ RibbonKeyboard:=False;RibbonFocus:=0;
+End;
+
+Function HandleRibbonKey(Key,Scan:Char):Boolean;
+Var TabIndex:Integer;
+Begin
+ HandleRibbonKey:=False;If Not RibbonMode Then Exit;
+ TabIndex:=0;
+ If Key=#0 Then Case Scan Of
+  #33:TabIndex:=1;#18:TabIndex:=2;#30:TabIndex:=3;#23:TabIndex:=4;
+  #50:TabIndex:=5;#34:TabIndex:=6;#24:TabIndex:=7;#49:TabIndex:=8;#35,#59:TabIndex:=9;
+  #68:TabIndex:=RibbonTab;
+ End;
+ If TabIndex>0 Then Begin
+  RibbonTab:=TabIndex;RibbonFocus:=0;RibbonKeyboard:=True;
+ End Else If RibbonKeyboard Then Begin
+  If Key=#0 Then Case Scan Of
+   #75:Begin RibbonTab:=(RibbonTab+MENU_COUNT-2) mod MENU_COUNT+1;RibbonFocus:=0;End;
+   #77:Begin RibbonTab:=RibbonTab mod MENU_COUNT+1;RibbonFocus:=0;End;
+   #72:RibbonFocus:=(RibbonFocus+RibbonItemCount-2) mod RibbonItemCount+1;
+   #80:RibbonFocus:=RibbonFocus mod RibbonItemCount+1;
+   #15:RibbonFocus:=(RibbonFocus+RibbonItemCount-2) mod RibbonItemCount+1;
+   Else Exit;
+  End Else Case Key Of
+   #9:RibbonFocus:=RibbonFocus mod RibbonItemCount+1;
+   #13,' ':If RibbonFocus>0 Then ExecuteRibbonEntry(RibbonFocus);
+   #27:Begin RibbonKeyboard:=False;RibbonFocus:=0;End;
+   Else Exit;
+  End;
+ End Else Exit;
+ HandleRibbonKey:=True;HideMouse;DrawMenuBar;DrawRibbon;ShowMouse;
+End;
+
+Function CommandLineHelpRequested:Boolean;
+Var I:Integer;S:String;
+Begin
+ CommandLineHelpRequested:=False;
+ For I:=1 To ParamCount Do Begin
+  S:=StrToUpper(ParamStr(I));
+  If (S='/?') or (S='-H') or (S='--HELP') Then CommandLineHelpRequested:=True;
+ End;
+End;
+
+Procedure ShowCommandLineHelp;
+Var OutputFile:Text;
+Begin
+ Assign(OutputFile,'');Rewrite(OutputFile);
+ WriteLn(OutputFile,'VISIO - Editeur de diagrammes');
+ WriteLn(OutputFile,'Syntaxe : VISIO [/CLASSICMENU | /RUBANMENU] [fichier.VSDX]');
+ WriteLn(OutputFile,' /CLASSICMENU  Menus classiques (par defaut).');
+ WriteLn(OutputFile,' /RUBANMENU    Ruban avec commandes et outils de dessin integres.');
+ WriteLn(OutputFile,' /?            Afficher cette aide (-h et --help aussi).');
+ WriteLn(OutputFile,' Si plusieurs modes sont specifies, le dernier est utilise.');
+ Close(OutputFile);
+End;
+
+Procedure ParseCommandLine;
+Var I:Integer;S:String;
+Begin
+ RibbonMode:=False;RibbonTab:=2;RibbonHover:=0;RibbonFocus:=0;RibbonKeyboard:=False;
+ CommandLineFile:='';
+ For I:=1 To ParamCount Do Begin
+  S:=StrToUpper(ParamStr(I));
+  If S='/CLASSICMENU' Then RibbonMode:=False
+  Else If S='/RUBANMENU' Then RibbonMode:=True
+  Else Begin
+   If CommandLineFile<>'' Then CommandLineFile:=CommandLineFile+' ';
+   CommandLineFile:=CommandLineFile+ParamStr(I);
+  End;
+ End;
+ TOOLBAR_WIDTH:=CLASSIC_TOOLBAR_WIDTH;WORK_AREA_TOP:=CLASSIC_WORK_AREA_TOP;
+ If RibbonMode Then WORK_AREA_TOP:=MENU_HEIGHT+120;
+ TOOLBAR_TOP:=WORK_AREA_TOP;
+End;
+
 Procedure RefreshScreen;
 Begin
  { Effacer l'Ã©cran avec fond blanc (zone de travail sous la barre d'outils) }
@@ -17365,7 +17711,7 @@ Begin
  DrawMenuBar;
 
  { Dessiner la barre d'icones horizontale }
- DrawIconBar;
+ If RibbonMode Then DrawRibbon Else DrawIconBar;
 
  { Dessiner la barre d'outils }
  DrawToolbar;
@@ -17399,6 +17745,8 @@ Begin
   SetColor(Black);
   OutTextXY(6, ScreenHeight - 12, StatusMessage);
  End;
+ DrawTextEditor;
+ DrawAboutDialog;
 End;
 
 BEGIN
@@ -17422,21 +17770,15 @@ BEGIN
   If(StrToUpper(Copy(TmpLanguage,1,2))='JP')or
     (StrToUpper(Copy(TmpLanguage,1,3))='JPN')Then Language:=_Japanese;
  End;
- If(ParamStr(1)='/?')or(ParamStr(1)='--help')or(ParamStr(1)='-h')Then Begin
-  WriteLn('VISIO : Cette commande permet de lancer un clone de Visio.');
-  WriteLn;
-  WriteLn('Syntaxe : VISIO [image.VSDX]');
-  WriteLn;
-  WriteLn(' image.VSDX       Nom du fichier ".VSDX" a editer');
-  Halt;
- End;
+ If CommandLineHelpRequested Then Begin ShowCommandLineHelp;Halt(0);End;
+ ParseCommandLine;
  InitializeGraphics;
  InitMenuSystem;
  InitShapes;
  InitContextMenu;
  { Si un nom de fichier est passe en ligne de commande, l'ouvrir }
- If ParamCount >= 1 Then Begin
-  CurrentFileName := ParamStr(1);
+ If CommandLineFile <> '' Then Begin
+  CurrentFileName := CommandLineFile;
   If LoadVisioFile(CurrentFileName) Then Begin
    DocumentModified := False;
    SelectedShape := 0;
@@ -17471,6 +17813,14 @@ BEGIN
     GetMouseState(LastMouseX, LastMouseY, LastMouseButton);
    {$ENDIF}
 
+   If RibbonMode and Not AboutDialogVisible and Not PropertiesDialogVisible and Not LayerDialogVisible and
+      Not ContextMenuVisible and (DragMode=DRAG_MODE_NONE) and
+      ((LastMouseX<>PrevMouseX) or (LastMouseY<>PrevMouseY)) Then Begin
+    HoveredMenuOnBar:=RibbonHitAt(LastMouseX,LastMouseY);
+    If HoveredMenuOnBar<>RibbonHover Then Begin
+     RibbonHover:=HoveredMenuOnBar;HideMouse;DrawRibbon;ShowMouse;
+    End;
+   End;
    { DÃ©tecter le survol des poignÃ©es de redimensionnement }
    If (SelectedShape > 0) and (DragMode = DRAG_MODE_NONE) Then Begin
     OldHoveredHandle := HoveredHandle;
@@ -17537,7 +17887,8 @@ BEGIN
    If (LastMouseButton and 1) = 1 Then Begin
     HideMouse;
     { Si la boÃ®te de dialogue des calques est visible, gÃ©rer le clic }
-    If LayerDialogVisible Then Begin
+    If AboutDialogVisible Then HandleAboutDialogClick(LastMouseX,LastMouseY)
+    Else If LayerDialogVisible Then Begin
      HandleLayerDialogClick(LastMouseX, LastMouseY);
     End
     { Si la boÃ®te de dialogue des propriÃ©tÃ©s est visible, gÃ©rer le clic }
@@ -17599,7 +17950,7 @@ BEGIN
    End;
 
    { DÃ©tecter un clic droit (bouton 2) }
-   If (LastMouseButton and 2) = 2 Then Begin
+   If ((LastMouseButton and 2) = 2) and Not AboutDialogVisible Then Begin
     HideMouse;
     HandleRightClick(LastMouseX, LastMouseY);
     RefreshScreen;
@@ -17618,6 +17969,28 @@ BEGIN
   { Attendre une entrÃ©e clavier }
   If KeyPressed Then Begin
    MainLoopKey := ReadKey;
+   MainLoopScanRead:=False;
+   If AboutDialogVisible Then Begin
+    If MainLoopKey=#0 Then MainLoopKey:=ReadKey
+    Else If (MainLoopKey=#13) or (MainLoopKey=#27) or (MainLoopKey=' ') Then
+     AboutDialogVisible:=False;
+    HideMouse;RefreshScreen;ShowMouse;
+    Continue;
+   End;
+   RibbonScan:=#0;
+   If (RibbonMode or (TextEditShape>0)) and (MainLoopKey=#0) Then Begin
+    RibbonScan:=ReadKey;MainLoopScanRead:=True;
+   End;
+   If TextEditShape>0 Then Begin
+    If HandleTextEditKey(MainLoopKey,RibbonScan) Then Begin
+     HideMouse;RefreshScreen;ShowMouse;Continue;
+    End;
+   End;
+   If (MainLoopKey=#0) and (RibbonScan=#60) and (SelectedShape>0) Then Begin
+    BeginTextEdit(SelectedShape,Shapes[SelectedShape].X2,False);
+    HideMouse;RefreshScreen;ShowMouse;Continue;
+   End;
+   If HandleRibbonKey(MainLoopKey,RibbonScan) Then Begin RefreshScreen;Continue;End;
    { Si un menu deroulant est ouvert, intercepter Enter/Esc/fleches }
    If (MenuState = msDropDown) and (CurrentMenu > 0) Then Begin
     If MainLoopKey = #13 Then Begin
@@ -17635,6 +18008,7 @@ BEGIN
        4: ExecuteInsertMenuAction(HoveredMenuItem);
        5: ExecuteFormatMenuAction(HoveredMenuItem);
        6: ExecuteShapeMenuAction(HoveredMenuItem);
+       9: If HoveredMenuItem=3 Then ShowAboutDialog;
       End;
       MenuState := msNone;
       CurrentMenu := 0;
@@ -17650,7 +18024,7 @@ BEGIN
      RefreshScreen;
     End
     Else If MainLoopKey = #0 Then Begin
-     MainLoopKey := ReadKey;
+     If RibbonMode or MainLoopScanRead Then MainLoopKey := RibbonScan Else MainLoopKey := ReadKey;
      Case MainLoopKey of
       #72: Begin { fleche haut - element precedent (saute les separateurs) }
             If HoveredMenuItem <= 0 Then
@@ -17709,8 +18083,12 @@ BEGIN
      #25: Begin EditRedo;      RefreshScreen; End;  { Ctrl+Y }
      #26: Begin EditUndo;      RefreshScreen; End;  { Ctrl+Z }
      #0: Begin { Touches de fonction et combinaisons Alt/Shift }
-          MainLoopKey := ReadKey;
+          If RibbonMode or MainLoopScanRead Then MainLoopKey := RibbonScan Else MainLoopKey := ReadKey;
           Case MainLoopKey of
+           #60: Begin
+                 If SelectedShape>0 Then BeginTextEdit(SelectedShape,Shapes[SelectedShape].X2,False);
+                 RefreshScreen;
+                End;
            #59: Begin { F1 - Aide }
                  CurrentMenu := 9;
                  MenuState := msDropDown;

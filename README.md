@@ -12,7 +12,8 @@ Apercu de PAINT :
 <table>
 	<tr>
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/cfbb27cb-5a2a-456d-b422-2ef092acfa99" /></td>
-		<td></td>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9e46caf0-2dfd-45e3-8c44-88cd0c8554ee" />
+</td>
 	</tr>
 	<tr>
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/98414f58-4b96-4ab3-8b91-cea18d8fcfd9" /></td>

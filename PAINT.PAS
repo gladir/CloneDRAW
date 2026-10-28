@@ -45,6 +45,7 @@ Program Paint;
 
 Uses
  {$IFDEF FPC}
+  {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   Crt, PtcGraph, PtcCrt, PtcMouse, Dos
  {$ELSE}
   Crt, Graph, Dos
@@ -5428,6 +5429,1553 @@ Begin
 End;
 
 
+{ Obtenir des couleurs : lecture du document indexe, jamais du dialogue.
+  Toutes les couleurs, cases personnalisees et captures restent locales
+  jusqu'a OK. Les pixels de CanvasImage ne sont jamais modifies ici. }
+
+Const
+ PG_HISTORY_COUNT = 32;
+ PG_DOMINANT_COUNT = 16;
+ PG_BUTTON_COUNT = 15;
+ PG_MODE_COUNT = 6;
+ PG_MAX_RADIUS = 8;
+ PG_MAX_SAMPLES = 289;
+ PG_FOCUS_LAST = 22;
+
+Type
+ TPGHistogram = Array[0..255] of LongInt;
+ TPGHistory = Array[0..PG_HISTORY_COUNT-1] of TRGBColor;
+ TPGSamples = Array[0..PG_MAX_SAMPLES-1] of Byte;
+ TPGButtons = Array[0..PG_BUTTON_COUNT-1] of TRect;
+ TPGState = Record
+  PaletteData: TPEState;
+  X, Y: Integer;
+  ImageX, ImageY: Integer;
+  Source: Integer;
+  Method: Integer;
+  Radius: Integer;
+  Magnification: Integer;
+  IgnoreBackground: Boolean;
+  ShowGrid: Boolean;
+  TargetBackground: Boolean;
+  AddToBar: Boolean;
+  Accepted, Done, Dirty: Boolean;
+  ValidSample: Boolean;
+  RGB, Original: TRGBColor;
+  SampleCount: Integer;
+  SampleRect: TRect;
+  Histogram: TPGHistogram;
+  DominantIndices: Array[0..PG_DOMINANT_COUNT-1] of Integer;
+  DominantCounts: Array[0..PG_DOMINANT_COUNT-1] of LongInt;
+  DominantCount: Integer;
+  TotalPixels: LongInt;
+  History: TPGHistory;
+  HistoryCount: Integer;
+  HistoryIndex: Integer;
+  CustomIndex: Integer;
+  DominantIndex: Integer;
+  Focus: Integer;
+  CoordText: Array[0..1] of String[5];
+  CoordSelected: Boolean;
+  CoordError: Integer;
+  Buttons: TPGButtons;
+  CoordRects: Array[0..1] of TRect;
+  Thumbnail: TRect;
+  ThumbnailImage: TRect;
+  Loupe: TRect;
+  Status: String[77];
+  MX, MY, MB, PreviousButtons: Integer;
+  LastMouseX, LastMouseY: Integer;
+  DragThumbnail: Boolean;
+ End;
+
+Var
+ PaintCapturedColors: TPGHistory;
+ PaintCapturedCount: Integer;
+
+Function PGHasImage: Boolean;
+Begin
+ PGHasImage := (CanvasImage <> Nil) And (CanvasImageW > 0) And
+               (CanvasImageH > 0);
+End;
+
+Function PGReadIndex(X, Y: Integer; Var Index: Byte): Boolean;
+Var
+ P: PByte;
+Begin
+ PGReadIndex := False;
+ If Not PGHasImage Then
+  Exit;
+ If (X < 0) Or (Y < 0) Or (X >= CanvasImageW) Or (Y >= CanvasImageH) Then
+  Exit;
+ P := CanvasImage;
+ Inc(P,LongInt(Y)*LongInt(CanvasImageW)+X);
+ Index := P^;
+ PGReadIndex := True;
+End;
+
+Function PGReadRGB(X, Y: Integer; Var C: TRGBColor): Boolean;
+Var
+ Index: Byte;
+ Valid: Boolean;
+Begin
+ Valid := PGReadIndex(X,Y,Index);
+ If Valid Then
+  C := ImageBuffer.Palette[Index];
+ PGReadRGB := Valid;
+End;
+
+Function PGBrightness(Const C: TRGBColor): LongInt;
+Begin
+ { Ponderation entiere Rec.601, sans virgule flottante. }
+ PGBrightness := LongInt(C.R)*299+LongInt(C.G)*587+LongInt(C.B)*114;
+End;
+
+Function PGDistance(Const A, B: TRGBColor): LongInt;
+Var
+ R, G, Bl: LongInt;
+Begin
+ R := LongInt(A.R)-B.R;
+ G := LongInt(A.G)-B.G;
+ Bl := LongInt(A.B)-B.B;
+ PGDistance := R*R+G*G+Bl*Bl;
+End;
+
+Procedure PGSourceBounds(Const D: TPGState; Var R: TRect);
+Begin
+ R.Left := 0;
+ R.Top := 0;
+ R.Right := CanvasImageW-1;
+ R.Bottom := CanvasImageH-1;
+ If (D.Source = 1) And SelectionActive Then Begin
+  R.Left := PEClamp(SelectionRect.Left-CanvasX,0,CanvasImageW-1);
+  R.Top := PEClamp(SelectionRect.Top-CanvasY,0,CanvasImageH-1);
+  R.Right := PEClamp(SelectionRect.Right-CanvasX,0,CanvasImageW-1);
+  R.Bottom := PEClamp(SelectionRect.Bottom-CanvasY,0,CanvasImageH-1);
+ End;
+ If D.Source = 2 Then Begin
+  R.Right := Min(CanvasWidth,CanvasImageW)-1;
+  R.Bottom := Min(CanvasHeight,CanvasImageH)-1;
+ End;
+End;
+
+Function PGAcceptColor(Const D: TPGState; Const C: TRGBColor): Boolean;
+Begin
+ PGAcceptColor := True;
+ If D.IgnoreBackground Then
+  PGAcceptColor := Not PESameColor(C,ImageBuffer.Palette[BackgroundColor]);
+End;
+
+Procedure PGSortSamples(Var Values: TPGSamples; Count: Integer);
+Var
+ I, J: Integer;
+ Value: Byte;
+Begin
+ { Tri par insertion : au plus 289 echantillons, sans allocation. }
+ For I := 1 To Count-1 Do Begin
+  Value := Values[I];
+  J := I-1;
+  While J >= 0 Do Begin
+   If Values[J] <= Value Then
+    Break;
+   Values[J+1] := Values[J];
+   Dec(J);
+  End;
+  Values[J+1] := Value;
+ End;
+End;
+
+Function PGMedian(Var Values: TPGSamples; Count: Integer): Integer;
+Begin
+ PGSortSamples(Values,Count);
+ If (Count And 1) <> 0 Then
+  PGMedian := Values[Count Div 2]
+ Else
+  PGMedian := (Integer(Values[Count Div 2-1])+Values[Count Div 2]) Div 2;
+End;
+
+Procedure PGSyncCoordinates(Var D: TPGState);
+Begin
+ D.CoordText[0] := PENumber(D.ImageX);
+ D.CoordText[1] := PENumber(D.ImageY);
+ D.CoordError := -1;
+End;
+
+Procedure PGSetColor(Var D: TPGState; Const C: TRGBColor);
+Begin
+ D.RGB := C;
+ D.RGB.A := 255;
+ D.ValidSample := True;
+ D.Dirty := True;
+End;
+
+Function PGSampleAt(Var D: TPGState; X, Y: Integer): Boolean;
+Var
+ Region: TRect;
+ SX, SY, I, J, Best, Count: Integer;
+ Index: Byte;
+ Reds, Greens, Blues: TPGSamples;
+ Counts: TPGHistogram;
+ SumR, SumG, SumB: LongInt;
+ Weight, BestWeight: LongInt;
+ C, ResultColor: TRGBColor;
+Begin
+ PGSampleAt := False;
+ If Not PGHasImage Then Begin
+  D.Status := 'Aucune image a echantillonner.';
+  D.Dirty := True;
+  Exit;
+ End;
+ PGSourceBounds(D,Region);
+ X := PEClamp(X,Region.Left,Region.Right);
+ Y := PEClamp(Y,Region.Top,Region.Bottom);
+ D.ImageX := X;
+ D.ImageY := Y;
+ PGSyncCoordinates(D);
+ D.SampleRect.Left := Max(Region.Left,X-D.Radius);
+ D.SampleRect.Top := Max(Region.Top,Y-D.Radius);
+ D.SampleRect.Right := Min(Region.Right,X+D.Radius);
+ D.SampleRect.Bottom := Min(Region.Bottom,Y+D.Radius);
+ If D.Method = 0 Then Begin
+  PERect(D.SampleRect,X,Y,1,1);
+ End;
+ Count := 0;
+ SumR := 0;
+ SumG := 0;
+ SumB := 0;
+ FillChar(Counts,SizeOf(Counts),0);
+ BestWeight := 0;
+ If D.Method = 5 Then
+  BestWeight := MaxLongInt;
+ ResultColor := D.RGB;
+ For SY := D.SampleRect.Top To D.SampleRect.Bottom Do
+  For SX := D.SampleRect.Left To D.SampleRect.Right Do Begin
+   If PGReadIndex(SX,SY,Index) Then Begin
+    C := ImageBuffer.Palette[Index];
+    If PGAcceptColor(D,C) Then Begin
+     Reds[Count] := C.R;
+     Greens[Count] := C.G;
+     Blues[Count] := C.B;
+     SumR := SumR+C.R;
+     SumG := SumG+C.G;
+     SumB := SumB+C.B;
+     Inc(Counts[Index]);
+     Weight := PGBrightness(C);
+     If (Count = 0) Or
+        ((D.Method = 4) And (Weight > BestWeight)) Or
+        ((D.Method = 5) And (Weight < BestWeight)) Then Begin
+      BestWeight := Weight;
+      ResultColor := C;
+     End;
+     Inc(Count);
+    End;
+   End;
+  End;
+ D.SampleCount := Count;
+ If Count = 0 Then Begin
+  D.Status := 'Aucun pixel retenu : desactivez Ignorer le fond ou deplacez la pipette.';
+  D.ValidSample := False;
+  D.Dirty := True;
+  Exit;
+ End;
+ Case D.Method Of
+  1: ResultColor := PERGB((SumR+Count Div 2) Div Count,
+                         (SumG+Count Div 2) Div Count,
+                         (SumB+Count Div 2) Div Count);
+  2: ResultColor := PERGB(PGMedian(Reds,Count),PGMedian(Greens,Count),
+                         PGMedian(Blues,Count));
+  3: Begin
+   { Fusionner les indices qui representent le meme triplet RVB. }
+   For I := 0 To 254 Do
+    If Counts[I] > 0 Then
+     For J := I+1 To 255 Do
+      If (Counts[J] > 0) And PESameColor(ImageBuffer.Palette[I],
+                                        ImageBuffer.Palette[J]) Then Begin
+       Counts[I] := Counts[I]+Counts[J];
+       Counts[J] := 0;
+      End;
+   Best := 0;
+   For I := 1 To 255 Do
+    If Counts[I] > Counts[Best] Then
+     Best := I;
+   ResultColor := ImageBuffer.Palette[Best];
+  End;
+ End;
+ PGSetColor(D,ResultColor);
+ D.Status := 'Position '+PENumber(X)+','+PENumber(Y)+' : '+
+             PENumber(Count)+' pixel(s), #'+PEHexColor(D.RGB)+'.';
+ PGSampleAt := True;
+End;
+
+Procedure PGAddHistory(Var D: TPGState);
+Var
+ I, Found, Last: Integer;
+ C: TRGBColor;
+Begin
+ If Not D.ValidSample Then
+  Exit;
+ C := D.RGB;
+ Found := -1;
+ For I := 0 To D.HistoryCount-1 Do
+  If PESameColor(D.History[I],C) Then
+   Found := I;
+ If Found >= 0 Then
+  Last := Found
+ Else Begin
+  Last := Min(D.HistoryCount,PG_HISTORY_COUNT-1);
+  If D.HistoryCount < PG_HISTORY_COUNT Then
+   Inc(D.HistoryCount);
+ End;
+ For I := Last DownTo 1 Do
+  D.History[I] := D.History[I-1];
+ D.History[0] := C;
+ D.HistoryIndex := 0;
+ D.Status := 'Capture ajoutee a l historique : #'+PEHexColor(C)+'.';
+ D.Dirty := True;
+End;
+
+Procedure PGHistogram(Var D: TPGState);
+Var
+ Region: TRect;
+ X, Y, I, J, K, Best: Integer;
+ P: PByte;
+ Working: TPGHistogram;
+ Counted: LongInt;
+Begin
+ FillChar(D.Histogram,SizeOf(D.Histogram),0);
+ FillChar(D.DominantCounts,SizeOf(D.DominantCounts),0);
+ For I := 0 To PG_DOMINANT_COUNT-1 Do
+  D.DominantIndices[I] := -1;
+ D.DominantCount := 0;
+ D.TotalPixels := 0;
+ If Not PGHasImage Then
+  Exit;
+ PGSourceBounds(D,Region);
+ For Y := Region.Top To Region.Bottom Do Begin
+  P := CanvasImage;
+  Inc(P,LongInt(Y)*CanvasImageW+Region.Left);
+  For X := Region.Left To Region.Right Do Begin
+   If PGAcceptColor(D,ImageBuffer.Palette[P^]) Then Begin
+    Inc(D.Histogram[P^]);
+    Inc(D.TotalPixels);
+   End;
+   Inc(P);
+  End;
+ End;
+ Working := D.Histogram;
+ { Les frequences sont calculees sur toute la source, sans sous-echantillon. }
+ For I := 0 To 254 Do
+  If Working[I] > 0 Then
+   For J := I+1 To 255 Do
+    If (Working[J] > 0) And PESameColor(ImageBuffer.Palette[I],
+                                      ImageBuffer.Palette[J]) Then Begin
+     Working[I] := Working[I]+Working[J];
+     Working[J] := 0;
+    End;
+ For K := 0 To PG_DOMINANT_COUNT-1 Do Begin
+  Best := -1;
+  Counted := 0;
+  For I := 0 To 255 Do
+   If Working[I] > Counted Then Begin
+    Best := I;
+    Counted := Working[I];
+   End;
+  If Best < 0 Then
+   Break;
+  D.DominantIndices[K] := Best;
+  D.DominantCounts[K] := Counted;
+  Inc(D.DominantCount);
+  Working[Best] := 0;
+ End;
+ D.DominantIndex := 0;
+ D.Dirty := True;
+End;
+
+Procedure PGChooseDominant(Var D: TPGState; Index: Integer);
+Var
+ ColorIndex: Integer;
+ Percent: Real;
+ S: String;
+Begin
+ If (Index < 0) Or (Index >= D.DominantCount) Then
+  Exit;
+ D.DominantIndex := Index;
+ ColorIndex := D.DominantIndices[Index];
+ PGSetColor(D,ImageBuffer.Palette[ColorIndex]);
+ Percent := 0;
+ If D.TotalPixels > 0 Then
+  Percent := D.DominantCounts[Index]*100.0/D.TotalPixels;
+ Str(Percent:0:1,S);
+ D.Status := 'Couleur dominante '+PENumber(Index+1)+' : '+S+
+             '% des pixels retenus, #'+PEHexColor(D.RGB)+'.';
+End;
+
+Procedure PGChooseHistory(Var D: TPGState; Index: Integer);
+Begin
+ If (Index < 0) Or (Index >= D.HistoryCount) Then
+  Exit;
+ D.HistoryIndex := Index;
+ PGSetColor(D,D.History[Index]);
+ D.Status := 'Capture precedente '+PENumber(Index+1)+' : #'+PEHexColor(D.RGB)+'.';
+End;
+
+Procedure PGChooseCustom(Var D: TPGState; Index: Integer);
+Begin
+ D.CustomIndex := PEClamp(Index,0,PE_CUSTOM_COUNT-1);
+ PGSetColor(D,D.PaletteData.Customs[D.CustomIndex]);
+ D.Status := 'Couleur personnalisee '+PENumber(D.CustomIndex+1)+' selectionnee.';
+End;
+
+Procedure PGAddCustom(Var D: TPGState);
+Begin
+ If Not D.ValidSample Then
+  Exit;
+ D.PaletteData.Customs[D.CustomIndex] := D.RGB;
+ D.Status := 'Case personnalisee '+PENumber(D.CustomIndex+1)+
+             ' preparee. OK conserve les modifications.';
+ D.CustomIndex := (D.CustomIndex+1) Mod PE_CUSTOM_COUNT;
+ D.Dirty := True;
+End;
+
+Function PGCommitCoordinates(Var D: TPGState): Boolean;
+Var
+ X, Y, Code: Integer;
+Begin
+ PGCommitCoordinates := False;
+ If Not PGHasImage Then
+  Exit;
+ Val(D.CoordText[0],X,Code);
+ If (Code <> 0) Or (X < 0) Or (X >= CanvasImageW) Then Begin
+  D.CoordError := 0;
+  D.Focus := 0;
+  D.Status := 'X doit etre compris entre 0 et '+PENumber(CanvasImageW-1)+'.';
+  D.Dirty := True;
+  Exit;
+ End;
+ Val(D.CoordText[1],Y,Code);
+ If (Code <> 0) Or (Y < 0) Or (Y >= CanvasImageH) Then Begin
+  D.CoordError := 1;
+  D.Focus := 1;
+  D.Status := 'Y doit etre compris entre 0 et '+PENumber(CanvasImageH-1)+'.';
+  D.Dirty := True;
+  Exit;
+ End;
+ PGCommitCoordinates := PGSampleAt(D,X,Y);
+End;
+
+Procedure PGLayout(Var D: TPGState);
+Begin
+ D.X := (ScreenWidth-620) Div 2;
+ D.Y := (ScreenHeight-430) Div 2;
+ PERect(D.Thumbnail,D.X+12,D.Y+42,288,150);
+ PERect(D.Loupe,D.X+314,D.Y+42,112,112);
+ PERect(D.CoordRects[0],D.X+35,D.Y+199,60,20);
+ PERect(D.CoordRects[1],D.X+134,D.Y+199,60,20);
+ PERect(D.Buttons[0],D.X+12,D.Y+389,82,25);
+ PERect(D.Buttons[1],D.X+104,D.Y+389,82,25);
+ PERect(D.Buttons[2],D.X+196,D.Y+389,104,25);
+ PERect(D.Buttons[3],D.X+208,D.Y+198,92,23);
+ PERect(D.Buttons[4],D.X+12,D.Y+227,140,24);
+ PERect(D.Buttons[5],D.X+158,D.Y+227,142,24);
+ PERect(D.Buttons[6],D.X+12,D.Y+257,140,24);
+ PERect(D.Buttons[7],D.X+158,D.Y+257,142,24);
+ PERect(D.Buttons[8],D.X+314,D.Y+326,142,24);
+ PERect(D.Buttons[9],D.X+462,D.Y+326,140,24);
+ PERect(D.Buttons[10],D.X+314,D.Y+357,142,24);
+ PERect(D.Buttons[11],D.X+462,D.Y+357,140,24);
+ PERect(D.Buttons[12],D.X+314,D.Y+389,142,25);
+ PERect(D.Buttons[13],D.X+462,D.Y+389,140,25);
+ PERect(D.Buttons[14],D.X+314,D.Y+158,112,23);
+End;
+
+Procedure PGThumbnailBounds(Var D: TPGState);
+Var
+ Region: TRect;
+ W, H, DrawW, DrawH: Integer;
+Begin
+ PGSourceBounds(D,Region);
+ W := Region.Right-Region.Left+1;
+ H := Region.Bottom-Region.Top+1;
+ DrawW := 284;
+ DrawH := 146;
+ If (W <= 0) Or (H <= 0) Then Begin
+  PERect(D.ThumbnailImage,D.Thumbnail.Left+2,D.Thumbnail.Top+2,1,1);
+  Exit;
+ End;
+ If LongInt(W)*146 > LongInt(H)*284 Then
+  DrawH := Max(1,(LongInt(H)*284) Div W)
+ Else
+  DrawW := Max(1,(LongInt(W)*146) Div H);
+ PERect(D.ThumbnailImage,
+        D.Thumbnail.Left+(288-DrawW) Div 2,
+        D.Thumbnail.Top+(150-DrawH) Div 2,DrawW,DrawH);
+End;
+
+Procedure PGDrawThumbnail(Var D: TPGState);
+Var
+ Region: TRect;
+ X, Y, SX, SY, W, H, PX, PY: Integer;
+ C: TRGBColor;
+Begin
+ PEFill(D.Thumbnail,DarkGray);
+ PEBevel(D.Thumbnail,True);
+ If Not PGHasImage Then
+  Exit;
+ PGThumbnailBounds(D);
+ PGSourceBounds(D,Region);
+ W := D.ThumbnailImage.Right-D.ThumbnailImage.Left+1;
+ H := D.ThumbnailImage.Bottom-D.ThumbnailImage.Top+1;
+ For Y := 0 To H-1 Do Begin
+  SY := Region.Top+(LongInt(Y)*(Region.Bottom-Region.Top+1)) Div H;
+  For X := 0 To W-1 Do Begin
+   SX := Region.Left+(LongInt(X)*(Region.Right-Region.Left+1)) Div W;
+   If PGReadRGB(SX,SY,C) Then
+    PutPixel(D.ThumbnailImage.Left+X,D.ThumbnailImage.Top+Y,PEDisplayColor(C));
+  End;
+ End;
+ PX := D.ThumbnailImage.Left+
+       (LongInt(D.ImageX-Region.Left)*W) Div (Region.Right-Region.Left+1);
+ PY := D.ThumbnailImage.Top+
+       (LongInt(D.ImageY-Region.Top)*H) Div (Region.Bottom-Region.Top+1);
+ SetColor(White);
+ Circle(PX,PY,4);
+ SetColor(Black);
+ Circle(PX,PY,3);
+ Line(PX-6,PY,PX-2,PY);
+ Line(PX+2,PY,PX+6,PY);
+ Line(PX,PY-6,PX,PY-2);
+ Line(PX,PY+2,PX,PY+6);
+End;
+
+Procedure PGDrawLoupe(Const D: TPGState);
+Var
+ Cells, Half, CellSize, Left, Top: Integer;
+ X, Y, SX, SY: Integer;
+ R: TRect;
+ C: TRGBColor;
+Begin
+ PEFill(D.Loupe,DarkGray);
+ PEBevel(D.Loupe,True);
+ CellSize := D.Magnification;
+ Cells := 108 Div CellSize;
+ If (Cells And 1) = 0 Then
+  Dec(Cells);
+ Half := Cells Div 2;
+ Left := D.Loupe.Left+(112-Cells*CellSize) Div 2;
+ Top := D.Loupe.Top+(112-Cells*CellSize) Div 2;
+ For Y := 0 To Cells-1 Do
+  For X := 0 To Cells-1 Do Begin
+   SX := D.ImageX+X-Half;
+   SY := D.ImageY+Y-Half;
+   PERect(R,Left+X*CellSize,Top+Y*CellSize,CellSize,CellSize);
+   If PGReadRGB(SX,SY,C) Then
+    PEFill(R,PEDisplayColor(C))
+   Else Begin
+    If ((X+Y) And 1) = 0 Then
+     PEFill(R,LightGray)
+    Else
+     PEFill(R,DarkGray);
+   End;
+   If D.ShowGrid And (CellSize >= 8) Then Begin
+    SetColor(DarkGray);
+    Rectangle(R.Left,R.Top,R.Right,R.Bottom);
+   End;
+  End;
+ { Le pixel central reste encadre, y compris dans une zone uniforme. }
+ PERect(R,Left+Half*CellSize,Top+Half*CellSize,CellSize,CellSize);
+ SetColor(White);
+ Rectangle(R.Left-1,R.Top-1,R.Right+1,R.Bottom+1);
+ SetColor(Black);
+ Rectangle(R.Left,R.Top,R.Right,R.Bottom);
+End;
+
+Procedure PGDrawInfo(Const D: TPGState);
+Var
+ R: TRect;
+ H, S, L, C1, C2: Integer;
+ Text: String;
+Begin
+ PESetHardwareColor(PE_PREVIEW,D.RGB);
+ PESetHardwareColor(PE_OLD_PREVIEW,D.Original);
+ C1 := PEDisplayColor(D.Original);
+ C2 := PEDisplayColor(D.RGB);
+ If GetMaxColor >= 255 Then Begin
+  C1 := PE_OLD_PREVIEW;
+  C2 := PE_PREVIEW;
+ End;
+ PERect(R,D.X+438,D.Y+42,80,40);
+ PEFill(R,C1);
+ PEBevel(R,True);
+ PERect(R,D.X+522,D.Y+42,80,40);
+ PEFill(R,C2);
+ PEBevel(R,True);
+ PELabel(D.X+438,D.Y+87,'Avant     Capture');
+ PELabel(D.X+438,D.Y+104,'R:'+PENumber(D.RGB.R)+' V:'+PENumber(D.RGB.G));
+ PELabel(D.X+438,D.Y+118,'B:'+PENumber(D.RGB.B));
+ PELabel(D.X+438,D.Y+135,'#'+PEHexColor(D.RGB));
+ H := 0;
+ PERGBToHSL(D.RGB,H,S,L);
+ PELabel(D.X+438,D.Y+153,'T:'+PENumber(H)+' S:'+PENumber(S));
+ PELabel(D.X+438,D.Y+167,'L:'+PENumber(L));
+ Text := 'X:'+PENumber(D.ImageX)+' Y:'+PENumber(D.ImageY);
+ PELabel(D.X+314,D.Y+30,Text);
+End;
+
+Procedure PGCellRect(Const D: TPGState; Group, Index: Integer; Var R: TRect);
+Var
+ X, Y, Columns, CW, CH: Integer;
+Begin
+ Columns := 8;
+ CW := 36;
+ CH := 23;
+ X := D.X+314;
+ Case Group Of
+  0: Y := D.Y+207;
+  1: Y := D.Y+278;
+ Else
+  Begin
+   X := D.X+13;
+   Y := D.Y+342;
+   Columns := 16;
+   CW := 18;
+   CH := 18;
+  End;
+ End;
+ PERect(R,X+(Index Mod Columns)*CW,Y+(Index Div Columns)*CH,CW-5,CH-5);
+End;
+
+Procedure PGDrawCells(Const D: TPGState);
+Var
+ I: Integer;
+ R: TRect;
+ C: TRGBColor;
+Begin
+ PELabel(D.X+314,D.Y+190,'Couleurs dominantes :');
+ For I := 0 To PG_DOMINANT_COUNT-1 Do Begin
+  PGCellRect(D,0,I,R);
+  If I < D.DominantCount Then Begin
+   C := ImageBuffer.Palette[D.DominantIndices[I]];
+   PESwatch(R,C,(D.Focus = 20) And (I = D.DominantIndex));
+  End
+  Else Begin
+   PEFill(R,LightGray);
+   PEBevel(R,True);
+  End;
+ End;
+ PELabel(D.X+314,D.Y+262,'Couleurs personnalisees :');
+ For I := 0 To PE_CUSTOM_COUNT-1 Do Begin
+  PGCellRect(D,1,I,R);
+  PESwatch(R,D.PaletteData.Customs[I],I = D.CustomIndex);
+ End;
+ PELabel(D.X+12,D.Y+327,'Historique des captures :');
+ For I := 0 To PG_HISTORY_COUNT-1 Do Begin
+  PGCellRect(D,2,I,R);
+  If I < D.HistoryCount Then
+   PESwatch(R,D.History[I],(D.Focus = 22) And (I = D.HistoryIndex))
+  Else Begin
+   PEFill(R,LightGray);
+   PEBevel(R,True);
+  End;
+ End;
+End;
+
+Function PGMethodName(Method: Integer): String;
+Begin
+ Case Method Of
+  0: PGMethodName := 'Pixel';
+  1: PGMethodName := 'Moyenne';
+  2: PGMethodName := 'Mediane';
+  3: PGMethodName := 'Dominante';
+  4: PGMethodName := 'Plus claire';
+ Else
+  PGMethodName := 'Plus sombre';
+ End;
+End;
+
+Function PGSourceName(Source: Integer): String;
+Begin
+ Case Source Of
+  0: PGSourceName := 'Image';
+  1: PGSourceName := 'Selection';
+ Else
+  PGSourceName := 'Zone visible';
+ End;
+End;
+
+Procedure PGDrawButtons(Const D: TPGState);
+Var
+ I: Integer;
+ Caption: String;
+Begin
+ For I := 0 To PG_BUTTON_COUNT-1 Do Begin
+  Case I Of
+   0: Caption := 'OK';
+   1: Caption := 'Annuler';
+   2: Caption := 'Aide (F1)';
+   3: Caption := 'Pipette';
+   4: Caption := PGSourceName(D.Source);
+   5: Caption := PGMethodName(D.Method);
+   6: Caption := 'Zone '+PENumber(D.Radius*2+1)+'x'+PENumber(D.Radius*2+1);
+   7: Caption := 'Loupe x'+PENumber(D.Magnification);
+   8: Caption := 'Personnaliser';
+   9: Caption := 'Memoriser (F2)';
+   10: Caption := 'Copier #RVB';
+   11: Caption := 'Copier RVB';
+   12: Begin
+    If D.AddToBar Then
+     Caption := '[x] Palette'
+    Else
+     Caption := '[ ] Palette';
+   End;
+   13: Caption := 'Rechercher #';
+   14: Begin
+    If D.ShowGrid Then
+     Caption := '[x] Grille'
+    Else
+     Caption := '[ ] Grille';
+   End;
+  End;
+  PEButton(D.Buttons[I],Caption,D.Focus = I+2);
+ End;
+End;
+
+Procedure PGDrawCoordinates(Const D: TPGState);
+Var
+ I: Integer;
+ R: TRect;
+Begin
+ PELabel(D.X+12,D.Y+205,'X :');
+ PELabel(D.X+111,D.Y+205,'Y :');
+ For I := 0 To 1 Do Begin
+  R := D.CoordRects[I];
+  PEFill(R,White);
+  PEBevel(R,True);
+  If (D.Focus = I) And D.CoordSelected Then Begin
+   SetFillStyle(SolidFill,Blue);
+   Bar(R.Left+3,R.Top+3,R.Right-3,R.Bottom-3);
+   SetColor(White);
+  End
+  Else
+   SetColor(Black);
+  OutTextXY(R.Left+4,R.Top+6,D.CoordText[I]);
+  If D.CoordError = I Then Begin
+   SetColor(Red);
+   Rectangle(R.Left-1,R.Top-1,R.Right+1,R.Bottom+1);
+  End;
+ End;
+End;
+
+Procedure PGDrawOptions(Const D: TPGState);
+Var
+ Mark: String;
+Begin
+ If D.IgnoreBackground Then
+  Mark := '[x]'
+ Else
+  Mark := '[ ]';
+ PELabel(D.X+13,D.Y+291,Mark+' Ignorer la couleur de fond');
+ If D.Focus = 18 Then Begin
+  SetColor(Black);
+  Rectangle(D.X+11,D.Y+287,D.X+299,D.Y+303);
+ End;
+ If D.TargetBackground Then
+  Mark := '( ) Premier plan (*) Fond'
+ Else
+  Mark := '(*) Premier plan ( ) Fond';
+ PELabel(D.X+13,D.Y+309,Mark);
+ If D.Focus = 19 Then Begin
+  SetColor(Black);
+  Rectangle(D.X+11,D.Y+305,D.X+299,D.Y+321);
+ End;
+End;
+
+Procedure PGDraw(Var D: TPGState);
+Var
+ R: TRect;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut);
+ SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,620,430);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.X+3,D.Y+3,D.X+616,D.Y+21);
+ SetColor(White);
+ OutTextXY(D.X+9,D.Y+7,'Obtenir des couleurs - PAINT');
+ OutTextXY(D.X+602,D.Y+7,'X');
+ PGDrawThumbnail(D);
+ PGDrawLoupe(D);
+ PGDrawInfo(D);
+ PGDrawCoordinates(D);
+ PGDrawButtons(D);
+ PGDrawOptions(D);
+ PGDrawCells(D);
+ SetFillStyle(SolidFill,LightGray);
+ Bar(0,ScreenHeight-STATUSBAR_HEIGHT,ScreenWidth-1,ScreenHeight-1);
+ PELabel(5,ScreenHeight-STATUSBAR_HEIGHT+5,D.Status);
+ PEShowMouse;
+ D.Dirty := False;
+End;
+
+Procedure PGHelp(Var D: TPGState);
+Begin
+ ShowMessage('Aide - Obtenir des couleurs',
+  'Cliquez la miniature ou utilisez la Pipette (F4).'+#10+
+  'Fleches : viser ; Entree : valider ; Echap : annuler.'+#10+
+  'Tab : controle suivant ; F2 : memoriser la capture.'+#10+
+  'M : methode ; Z : loupe ; G : grille.'+#10+
+  'OK applique ; Annuler ne change pas la palette.');
+ D.Dirty := True;
+End;
+
+Procedure PGAdvanceSource(Var D: TPGState);
+Begin
+ D.Source := (D.Source+1) Mod 3;
+ If (D.Source = 1) And Not SelectionActive Then
+  D.Source := 2;
+ PGHistogram(D);
+ If PGSampleAt(D,D.ImageX,D.ImageY) Then
+  D.Status := 'Source : '+PGSourceName(D.Source)+'. Couleurs dominantes recalculees.';
+End;
+
+Procedure PGAdvanceMethod(Var D: TPGState);
+Begin
+ D.Method := (D.Method+1) Mod PG_MODE_COUNT;
+ If PGSampleAt(D,D.ImageX,D.ImageY) Then
+  D.Status := 'Echantillonnage : '+PGMethodName(D.Method)+'.';
+End;
+
+Procedure PGAdvanceRadius(Var D: TPGState);
+Begin
+ Case D.Radius Of
+  0: D.Radius := 1;
+  1: D.Radius := 2;
+  2: D.Radius := 4;
+  4: D.Radius := 8;
+ Else
+  D.Radius := 0;
+ End;
+ If PGSampleAt(D,D.ImageX,D.ImageY) Then
+  D.Status := 'Zone : '+PENumber(D.Radius*2+1)+'x'+PENumber(D.Radius*2+1)+'.';
+End;
+
+Procedure PGAdvanceZoom(Var D: TPGState);
+Begin
+ Case D.Magnification Of
+  4: D.Magnification := 8;
+  8: D.Magnification := 12;
+  12: D.Magnification := 16;
+ Else
+  D.Magnification := 4;
+ End;
+ D.Status := 'Loupe : un pixel de l image occupe '+
+             PENumber(D.Magnification)+' pixels a l ecran.';
+ D.Dirty := True;
+End;
+
+Function PGFindColor(Var D: TPGState; Const Wanted: TRGBColor): Boolean;
+Var
+ Region: TRect;
+ I, Best, X, Y: Integer;
+ Distance, BestDistance: LongInt;
+ P: PByte;
+Begin
+ PGFindColor := False;
+ Best := -1;
+ BestDistance := MaxLongInt;
+ For I := 0 To 255 Do
+  If D.Histogram[I] > 0 Then Begin
+   Distance := PGDistance(Wanted,ImageBuffer.Palette[I]);
+   If Distance < BestDistance Then Begin
+    Best := I;
+    BestDistance := Distance;
+   End;
+  End;
+ If Best < 0 Then Begin
+  D.Status := 'La source ne contient aucun pixel retenu.';
+  D.Dirty := True;
+  Exit;
+ End;
+ PGSourceBounds(D,Region);
+ For Y := Region.Top To Region.Bottom Do Begin
+  P := CanvasImage;
+  Inc(P,LongInt(Y)*CanvasImageW+Region.Left);
+  For X := Region.Left To Region.Right Do Begin
+   If P^ = Best Then Begin
+    D.ImageX := X;
+    D.ImageY := Y;
+    PGSyncCoordinates(D);
+    PGSetColor(D,ImageBuffer.Palette[Best]);
+    If BestDistance = 0 Then
+     D.Status := 'Couleur exacte trouvee a '+PENumber(X)+','+PENumber(Y)+'.'
+    Else
+     D.Status := 'Couleur la plus proche trouvee : #'+PEHexColor(D.RGB)+'.';
+    PGFindColor := True;
+    Exit;
+   End;
+   Inc(P);
+  End;
+ End;
+End;
+
+Procedure PGSearch(Var D: TPGState);
+Var
+ S: String;
+ C: TRGBColor;
+Begin
+ S := PEHexColor(D.RGB);
+ If PromptString('Rechercher une couleur','Hexadecimal RRVVBB :',S) Then Begin
+  If PEParseHex(S,C) Then Begin
+   If Not PGFindColor(D,C) Then
+    D.Status := 'Aucune couleur disponible dans la source choisie.';
+  End
+  Else
+   D.Status := 'Couleur invalide : six chiffres hexadecimaux sont attendus.';
+ End;
+ D.Dirty := True;
+End;
+
+Function PGCopyText(Const Value: String): Boolean;
+{$IFDEF MSWINDOWS}
+Var
+ Memory: HGLOBAL;
+ Buffer: PChar;
+ I: Integer;
+Begin
+ PGCopyText := False;
+ If Not OpenClipboard(0) Then
+  Exit;
+ Memory := GlobalAlloc(GMEM_MOVEABLE,Length(Value)+1);
+ If Memory = 0 Then Begin
+  CloseClipboard;
+  Exit;
+ End;
+ Buffer := GlobalLock(Memory);
+ If Buffer = Nil Then Begin
+  GlobalFree(Memory);
+  CloseClipboard;
+  Exit;
+ End;
+ For I := 1 To Length(Value) Do
+  Buffer[I-1] := Value[I];
+ Buffer[Length(Value)] := #0;
+ GlobalUnlock(Memory);
+ If EmptyClipboard Then
+  If SetClipboardData(CF_TEXT,Memory) <> 0 Then Begin
+   PGCopyText := True;
+   Memory := 0;
+  End;
+ If Memory <> 0 Then
+  GlobalFree(Memory);
+ CloseClipboard;
+End;
+{$ELSE}
+Begin
+ PGCopyText := False;
+End;
+{$ENDIF}
+
+Procedure PGCopyColor(Var D: TPGState; Hexadecimal: Boolean);
+Var
+ S: String;
+Begin
+ If Not D.ValidSample Then
+  Exit;
+ If Hexadecimal Then
+  S := '#'+PEHexColor(D.RGB)
+ Else
+  S := PENumber(D.RGB.R)+', '+PENumber(D.RGB.G)+', '+PENumber(D.RGB.B);
+ If PGCopyText(S) Then
+  D.Status := 'Copie dans le presse-papiers : '+S
+ Else
+  D.Status := 'Presse-papiers indisponible. Valeur : '+S;
+ D.Dirty := True;
+End;
+
+Procedure PGCaptureCanvas(Var D: TPGState);
+Var
+ X, Y, Buttons, PreviousButtons, LastX, LastY: Integer;
+ OldX, OldY: Integer;
+ K: Char;
+ Finished, Captured, Inside: Boolean;
+ OldRGB: TRGBColor;
+ OldValid: Boolean;
+ R: TRect;
+Begin
+ OldX := D.ImageX;
+ OldY := D.ImageY;
+ OldRGB := D.RGB;
+ OldValid := D.ValidSample;
+ PEHideMouse;
+ PERestoreHardware(D.PaletteData);
+ PEShowMouse;
+ RedrawInterface;
+ Finished := False;
+ Captured := False;
+ LastX := -1;
+ LastY := -1;
+ GetMouseStateLocal(X,Y,PreviousButtons);
+ Repeat
+  GetMouseStateLocal(X,Y,Buttons);
+  Inside := (X >= CanvasX) And (Y >= CanvasY) And
+            (X < CanvasX+Min(CanvasWidth,CanvasImageW)) And
+            (Y < CanvasY+Min(CanvasHeight,CanvasImageH));
+  If Inside And ((X <> LastX) Or (Y <> LastY)) Then Begin
+   If PGSampleAt(D,X-CanvasX,Y-CanvasY) Then Begin
+    PEHideMouse;
+    SetFillStyle(SolidFill,LightGray);
+    Bar(0,ScreenHeight-STATUSBAR_HEIGHT,ScreenWidth-1,ScreenHeight-1);
+    PELabel(5,ScreenHeight-STATUSBAR_HEIGHT+5,
+     'Pipette '+PENumber(D.ImageX)+','+PENumber(D.ImageY)+
+     ' #'+PEHexColor(D.RGB)+' | clic : capturer ; Echap : retour');
+    PEShowMouse;
+   End;
+  End;
+  If Inside And ((Buttons And 1) <> 0) And
+     ((PreviousButtons And 1) = 0) Then Begin
+   Captured := D.ValidSample;
+   Finished := True;
+  End;
+  If (Buttons And 2) <> 0 Then
+   Finished := True;
+  If KeyPressed Then Begin
+   K := ReadKey;
+   If K = #0 Then Begin
+    K := ReadKey;
+    Case Ord(K) Of
+     75: If PGSampleAt(D,D.ImageX-1,D.ImageY) Then D.Dirty := True;
+     77: If PGSampleAt(D,D.ImageX+1,D.ImageY) Then D.Dirty := True;
+     72: If PGSampleAt(D,D.ImageX,D.ImageY-1) Then D.Dirty := True;
+     80: If PGSampleAt(D,D.ImageX,D.ImageY+1) Then D.Dirty := True;
+    End;
+   End
+   Else If K = #27 Then
+    Finished := True
+   Else If K = #13 Then Begin
+    Captured := D.ValidSample;
+    Finished := True;
+   End;
+  End;
+  LastX := X;
+  LastY := Y;
+  PreviousButtons := Buttons;
+  Delay(10);
+ Until Finished;
+ Repeat
+  GetMouseStateLocal(X,Y,Buttons);
+  If (Buttons And 3) <> 0 Then
+   Delay(10);
+ Until (Buttons And 3) = 0;
+ If Captured Then
+  PGAddHistory(D)
+ Else Begin
+  D.ImageX := OldX;
+  D.ImageY := OldY;
+  D.RGB := OldRGB;
+  D.ValidSample := OldValid;
+  PGSyncCoordinates(D);
+  D.Status := 'Prelevement annule. La couleur precedente est conservee.';
+ End;
+ PEHideMouse;
+ PEBuildDisplayPalette;
+ PEShowMouse;
+ D.PreviousButtons := 0;
+ D.DragThumbnail := False;
+ D.Dirty := True;
+End;
+
+Procedure PGActivate(Var D: TPGState; Button: Integer);
+Begin
+ If Button = 1 Then Begin
+  D.Accepted := False;
+  D.Done := True;
+  Exit;
+ End;
+ If (D.Focus <= 1) And (Button <> 2) Then
+  If Not PGCommitCoordinates(D) Then
+   Exit;
+ Case Button Of
+  0: Begin
+   If D.ValidSample Then Begin
+    PGAddHistory(D);
+    D.Accepted := True;
+    D.Done := True;
+   End
+   Else Begin
+    D.Status := 'Choisissez une couleur avant de valider.';
+    D.Dirty := True;
+   End;
+  End;
+  2: PGHelp(D);
+  3: PGCaptureCanvas(D);
+  4: PGAdvanceSource(D);
+  5: PGAdvanceMethod(D);
+  6: PGAdvanceRadius(D);
+  7: PGAdvanceZoom(D);
+  8: PGAddCustom(D);
+  9: PGAddHistory(D);
+  10: PGCopyColor(D,True);
+  11: PGCopyColor(D,False);
+  12: Begin
+   D.AddToBar := Not D.AddToBar;
+   D.Dirty := True;
+  End;
+  13: PGSearch(D);
+  14: Begin
+   D.ShowGrid := Not D.ShowGrid;
+   D.Dirty := True;
+  End;
+ End;
+End;
+
+Procedure PGSetFocus(Var D: TPGState; Focus: Integer);
+Begin
+ If D.Focus <= 1 Then
+  If Not PGCommitCoordinates(D) Then
+   Exit;
+ D.Focus := Focus;
+ D.CoordSelected := Focus <= 1;
+ D.Dirty := True;
+End;
+
+Procedure PGNextFocus(Var D: TPGState; Backwards: Boolean);
+Var
+ Next: Integer;
+Begin
+ Next := D.Focus;
+ If Backwards Then
+  Dec(Next)
+ Else
+  Inc(Next);
+ If Next > PG_FOCUS_LAST Then
+  Next := 0;
+ If Next < 0 Then
+  Next := PG_FOCUS_LAST;
+ { Le focus 17 correspond a la miniature. }
+ PGSetFocus(D,Next);
+End;
+
+Procedure PGCoordinateKey(Var D: TPGState; K: Char);
+Var
+ S: String;
+Begin
+ If (D.Focus < 0) Or (D.Focus > 1) Then
+  Exit;
+ S := D.CoordText[D.Focus];
+ If K = #1 Then Begin
+  D.CoordSelected := True;
+  D.Dirty := True;
+  Exit;
+ End;
+ If K = #8 Then Begin
+  If D.CoordSelected Then
+   S := ''
+  Else If Length(S) > 0 Then
+   Delete(S,Length(S),1);
+ End
+ Else If (K >= '0') And (K <= '9') Then Begin
+  If D.CoordSelected Then
+   S := '';
+  If Length(S) < 5 Then
+   S := S+K;
+ End
+ Else
+  Exit;
+ D.CoordText[D.Focus] := S;
+ D.CoordSelected := False;
+ D.CoordError := -1;
+ D.Status := 'Coordonnees en pixels. Entree ou Tab pour echantillonner.';
+ D.Dirty := True;
+End;
+
+Procedure PGArrow(Var D: TPGState; DX, DY: Integer);
+Var
+ Index: Integer;
+Begin
+ Case D.Focus Of
+  20: Begin
+   Index := PEClamp(D.DominantIndex+DX+DY*8,0,Max(0,D.DominantCount-1));
+   PGChooseDominant(D,Index);
+  End;
+  21: Begin
+   Index := PEClamp(D.CustomIndex+DX+DY*8,0,PE_CUSTOM_COUNT-1);
+   PGChooseCustom(D,Index);
+  End;
+  22: Begin
+   Index := PEClamp(D.HistoryIndex+DX+DY*16,0,Max(0,D.HistoryCount-1));
+   PGChooseHistory(D,Index);
+  End;
+ Else
+  If PGSampleAt(D,D.ImageX+DX,D.ImageY+DY) Then
+   D.Dirty := True;
+ End;
+End;
+
+Procedure PGKeyboard(Var D: TPGState);
+Var
+ K: Char;
+Begin
+ K := ReadKey;
+ If K = #0 Then Begin
+  K := ReadKey;
+  Case Ord(K) Of
+   15: PGNextFocus(D,True);
+   59: PGHelp(D);
+   60: PGAddHistory(D);
+   61: PGAddCustom(D);
+   62: PGCaptureCanvas(D);
+   72: PGArrow(D,0,-1);
+   80: PGArrow(D,0,1);
+   75: PGArrow(D,-1,0);
+   77: PGArrow(D,1,0);
+   73: PGArrow(D,0,-10);
+   81: PGArrow(D,0,10);
+   83: If D.Focus <= 1 Then Begin
+    D.CoordText[D.Focus] := '';
+    D.CoordSelected := False;
+    D.Dirty := True;
+   End;
+  End;
+  Exit;
+ End;
+ Case K Of
+  #27: PGActivate(D,1);
+  #9: PGNextFocus(D,False);
+  #13: Begin
+   If D.Focus <= 1 Then Begin
+    If PGCommitCoordinates(D) Then
+     PGSetFocus(D,2);
+   End
+   Else If D.Focus <= 16 Then
+    PGActivate(D,D.Focus-2)
+   Else
+    PGActivate(D,0);
+  End;
+  ' ': Begin
+   If (D.Focus >= 2) And (D.Focus <= 16) Then
+    PGActivate(D,D.Focus-2)
+   Else If D.Focus = 18 Then Begin
+    D.IgnoreBackground := Not D.IgnoreBackground;
+    PGHistogram(D);
+    If PGSampleAt(D,D.ImageX,D.ImageY) Then D.Dirty := True;
+   End
+   Else If D.Focus = 19 Then Begin
+    D.TargetBackground := Not D.TargetBackground;
+    D.Dirty := True;
+   End;
+  End;
+ Else
+  If D.Focus <= 1 Then
+   PGCoordinateKey(D,K)
+  Else Case UpCase(K) Of
+   'M': PGAdvanceMethod(D);
+   'Z': PGAdvanceZoom(D);
+   'G': Begin D.ShowGrid := Not D.ShowGrid; D.Dirty := True; End;
+   'S': PGAdvanceSource(D);
+   'R': PGAdvanceRadius(D);
+  End;
+ End;
+End;
+
+Procedure PGThumbnailMouse(Var D: TPGState; X, Y: Integer);
+Var
+ Region: TRect;
+ W, H, SX, SY: Integer;
+Begin
+ If Not PGHasImage Then
+  Exit;
+ PGSourceBounds(D,Region);
+ W := D.ThumbnailImage.Right-D.ThumbnailImage.Left+1;
+ H := D.ThumbnailImage.Bottom-D.ThumbnailImage.Top+1;
+ X := PEClamp(X-D.ThumbnailImage.Left,0,W-1);
+ Y := PEClamp(Y-D.ThumbnailImage.Top,0,H-1);
+ SX := Region.Left+(LongInt(X)*(Region.Right-Region.Left+1)) Div W;
+ SY := Region.Top+(LongInt(Y)*(Region.Bottom-Region.Top+1)) Div H;
+ If PGSampleAt(D,SX,SY) Then
+  D.Dirty := True;
+End;
+
+Procedure PGLoupeMouse(Var D: TPGState; X, Y: Integer);
+Var
+ Cells, Left, Top, SX, SY: Integer;
+Begin
+ Cells := 108 Div D.Magnification;
+ If (Cells And 1) = 0 Then
+  Dec(Cells);
+ Left := D.Loupe.Left+(112-Cells*D.Magnification) Div 2;
+ Top := D.Loupe.Top+(112-Cells*D.Magnification) Div 2;
+ If (X < Left) Or (Y < Top) Or
+    (X >= Left+Cells*D.Magnification) Or
+    (Y >= Top+Cells*D.Magnification) Then
+  Exit;
+ SX := D.ImageX+(X-Left) Div D.Magnification-Cells Div 2;
+ SY := D.ImageY+(Y-Top) Div D.Magnification-Cells Div 2;
+ If PGSampleAt(D,SX,SY) Then
+  D.Dirty := True;
+End;
+
+Procedure PGMouseDown(Var D: TPGState);
+Var
+ I, Group, Count: Integer;
+ R: TRect;
+Begin
+ If (D.MX >= D.X+596) And (D.MX <= D.X+617) And
+    (D.MY >= D.Y+3) And (D.MY <= D.Y+21) Then Begin
+  PGActivate(D,1);
+  Exit;
+ End;
+ If PEInside(D.MX,D.MY,D.Buttons[1]) Then Begin
+  PGActivate(D,1);
+  Exit;
+ End;
+ For I := 0 To PG_BUTTON_COUNT-1 Do
+  If PEInside(D.MX,D.MY,D.Buttons[I]) Then Begin
+   If D.Focus <= 1 Then
+    If Not PGCommitCoordinates(D) Then
+     Exit;
+   D.Focus := I+2;
+   PGActivate(D,I);
+   Exit;
+  End;
+ For I := 0 To 1 Do
+  If PEInside(D.MX,D.MY,D.CoordRects[I]) Then Begin
+   PGSetFocus(D,I);
+   Exit;
+  End;
+ If D.Focus <= 1 Then
+  If Not PGCommitCoordinates(D) Then
+   Exit;
+ If PEInside(D.MX,D.MY,D.ThumbnailImage) Then Begin
+  D.Focus := 17;
+  D.DragThumbnail := True;
+  PGThumbnailMouse(D,D.MX,D.MY);
+  Exit;
+ End;
+ If PEInside(D.MX,D.MY,D.Loupe) Then Begin
+  D.Focus := 17;
+  PGLoupeMouse(D,D.MX,D.MY);
+  Exit;
+ End;
+ PERect(R,D.X+12,D.Y+286,288,18);
+ If PEInside(D.MX,D.MY,R) Then Begin
+  D.Focus := 18;
+  D.IgnoreBackground := Not D.IgnoreBackground;
+  PGHistogram(D);
+  If PGSampleAt(D,D.ImageX,D.ImageY) Then D.Dirty := True;
+  Exit;
+ End;
+ PERect(R,D.X+12,D.Y+305,288,18);
+ If PEInside(D.MX,D.MY,R) Then Begin
+  D.Focus := 19;
+  D.TargetBackground := D.MX >= D.X+158;
+  D.Dirty := True;
+  Exit;
+ End;
+ For Group := 0 To 2 Do Begin
+  Case Group Of
+   0: Count := D.DominantCount;
+   1: Count := PE_CUSTOM_COUNT;
+  Else
+   Count := D.HistoryCount;
+  End;
+  For I := 0 To Count-1 Do Begin
+   PGCellRect(D,Group,I,R);
+   If PEInside(D.MX,D.MY,R) Then Begin
+    D.Focus := 20+Group;
+    Case Group Of
+     0: PGChooseDominant(D,I);
+     1: PGChooseCustom(D,I);
+     2: PGChooseHistory(D,I);
+    End;
+    Exit;
+   End;
+  End;
+ End;
+End;
+
+Procedure PGMouse(Var D: TPGState);
+Begin
+ GetMouseStateLocal(D.MX,D.MY,D.MB);
+ If ((D.MB And 1) <> 0) And ((D.PreviousButtons And 1) = 0) Then
+  PGMouseDown(D)
+ Else If ((D.MB And 1) <> 0) And D.DragThumbnail Then Begin
+  If (D.MX <> D.LastMouseX) Or (D.MY <> D.LastMouseY) Then
+   PGThumbnailMouse(D,D.MX,D.MY);
+ End;
+ If ((D.MB And 1) = 0) And D.DragThumbnail Then Begin
+  D.DragThumbnail := False;
+  PGAddHistory(D);
+ End;
+ D.LastMouseX := D.MX;
+ D.LastMouseY := D.MY;
+ D.PreviousButtons := D.MB;
+End;
+
+Procedure PGInitialize(Var D: TPGState);
+Begin
+ FillChar(D,SizeOf(D),0);
+ PEInitialize(D.PaletteData);
+ D.RGB := ImageBuffer.Palette[CurrentColor];
+ D.Original := D.RGB;
+ D.ValidSample := True;
+ D.Radius := 1;
+ D.Magnification := 8;
+ D.ShowGrid := True;
+ D.AddToBar := True;
+ D.CoordError := -1;
+ D.Focus := 17;
+ D.History := PaintCapturedColors;
+ D.HistoryCount := PEClamp(PaintCapturedCount,0,PG_HISTORY_COUNT);
+ If PGHasImage Then Begin
+  D.ImageX := CanvasImageW Div 2;
+  D.ImageY := CanvasImageH Div 2;
+ End;
+ PGSyncCoordinates(D);
+ PGLayout(D);
+ PGHistogram(D);
+ D.Status := 'Miniature : cliquez ou glissez. Pipette (F4) : prelever sur le dessin.';
+ GetMouseStateLocal(D.MX,D.MY,D.PreviousButtons);
+ D.LastMouseX := D.MX;
+ D.LastMouseY := D.MY;
+ D.Dirty := True;
+End;
+
+Function PGFindPaletteIndex(Const C: TRGBColor; Var Exact: Boolean): Integer;
+Var
+ I, Best: Integer;
+ Distance, BestDistance: LongInt;
+Begin
+ Best := 0;
+ BestDistance := MaxLongInt;
+ For I := 0 To Min(GetMaxColor,255) Do Begin
+  Distance := PGDistance(C,ImageBuffer.Palette[I]);
+  If Distance < BestDistance Then Begin
+   BestDistance := Distance;
+   Best := I;
+  End;
+ End;
+ Exact := BestDistance = 0;
+ PGFindPaletteIndex := Best;
+End;
+
+Function PGFreePaletteIndex: Integer;
+Var
+ Used: Array[0..255] of Boolean;
+ I: Integer;
+ Count: LongInt;
+ P: PByte;
+Begin
+ FillChar(Used,SizeOf(Used),0);
+ For I := 0 To 15 Do
+  Used[I] := True;
+ For I := 0 To 27 Do
+  Used[StandardPalette[I]] := True;
+ Used[CurrentColor] := True;
+ Used[BackgroundColor] := True;
+ If PGHasImage Then Begin
+  Count := LongInt(CanvasImageW)*CanvasImageH;
+  P := CanvasImage;
+  While Count > 0 Do Begin
+   Used[P^] := True;
+   Inc(P);
+   Dec(Count);
+  End;
+ End;
+ PGFreePaletteIndex := -1;
+ For I := Min(GetMaxColor,255) DownTo 16 Do
+  If Not Used[I] Then Begin
+   PGFreePaletteIndex := I;
+   Exit;
+  End;
+End;
+
+Procedure PGCommit(Var D: TPGState);
+Var
+ Index, FreeIndex, Slot: Integer;
+ Exact: Boolean;
+Begin
+ If Not D.ValidSample Then
+  Exit;
+ Index := PGFindPaletteIndex(D.RGB,Exact);
+ FreeIndex := -1;
+ If Not Exact Then
+  FreeIndex := PGFreePaletteIndex;
+ { Snapshot complet : les indices, les cases et la profondeur sont annulates. }
+ AddSnapshotToHistory(TOOL_PICKER);
+ If FreeIndex >= 16 Then Begin
+  Index := FreeIndex;
+  ImageBuffer.Palette[Index] := D.RGB;
+  PESetHardwareColor(Index,D.RGB);
+  If ImageBuffer.BitDepth < 8 Then
+   ImageBuffer.BitDepth := 8;
+  ImageBuffer.Modified := True;
+ End;
+ If D.TargetBackground Then
+  BackgroundColor := Index
+ Else
+  CurrentColor := Index;
+ If D.AddToBar Then Begin
+  Slot := PEClamp(ActivePaletteSlot,0,27);
+  StandardPalette[Slot] := Index;
+ End;
+ PaintCustomColors := D.PaletteData.Customs;
+ PaintCustomReady := True;
+ PaintCapturedColors := D.History;
+ PaintCapturedCount := D.HistoryCount;
+End;
+
+Procedure ObtainPaintColors;
+Var
+ D: TPGState;
+ Approximation: Boolean;
+ Index: Integer;
+Begin
+ MenuActive := False;
+ RedrawInterface;
+ PGInitialize(D);
+ PEHideMouse;
+ PEBuildDisplayPalette;
+ PEShowMouse;
+ While Not D.Done Do Begin
+  If D.Dirty Then
+   PGDraw(D);
+  If KeyPressed Then
+   PGKeyboard(D);
+  If Not D.Done Then
+   PGMouse(D);
+  Delay(10);
+ End;
+ PEHideMouse;
+ PERestoreHardware(D.PaletteData);
+ If D.Accepted Then Begin
+  Index := PGFindPaletteIndex(D.RGB,Approximation);
+  { Une palette saturee ne doit pas recolorer les pixels deja presents. }
+  If (Not Approximation) And (PGFreePaletteIndex < 0) Then Begin
+   PEShowMouse;
+   If PromptYesNoCancel('Palette pleine',
+      'Utiliser la couleur disponible la plus proche ?') = 1 Then Begin
+    PEHideMouse;
+    PGCommit(D);
+    PEShowMouse;
+   End;
+   PEHideMouse;
+  End
+  Else
+   PGCommit(D);
+ End;
+ PEShowMouse;
+ Repeat
+  GetMouseStateLocal(D.MX,D.MY,D.MB);
+  If (D.MB And 3) <> 0 Then
+   Delay(10);
+ Until (D.MB And 3) = 0;
+ OldMouseButtons := 0;
+ MouseButtons := 0;
+ RedrawInterface;
+End;
+
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -5665,6 +7213,7 @@ Begin
      EditPaintPalette;
     End;
     1: Begin { Obtenir couleurs }
+     ObtainPaintColors;
     End;
    End;
   End;

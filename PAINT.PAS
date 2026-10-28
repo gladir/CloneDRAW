@@ -7788,6 +7788,7 @@ Type
   ScaledW, ScaledH: Integer;
   ResultW, ResultH: Integer;
   PercentUnits, KeepAspect, ExpandCanvas: Boolean;
+  ResizeOnly: Boolean;
   SkewX, SkewY: Integer;
   KX, KY, Determinant, OriginX, OriginY: Real;
   Method: Integer;
@@ -8659,12 +8660,88 @@ Begin
  PELabel(R.Left+8,R.Top+84,'Travail en plus : '+STMemoryText(Work));
 End;
 
+Procedure RDDraw(Var D: TSTState);
+Var
+ R: TRect;
+ I: Integer;
+ S, Description: String;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut);
+ SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,620,440);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.X+3,D.Y+3,D.X+616,D.Y+21);
+ SetColor(White);
+ OutTextXY(D.X+9,D.Y+7,'Redimensionner l image - PAINT');
+ OutTextXY(D.X+602,D.Y+7,'X');
+ PELabel(D.X+12,D.Y+32,'NOUVELLE TAILLE');
+ STDrawRadio(D.PercentRect,'Pourcentage',D.PercentUnits,D.Focus=4);
+ STDrawRadio(D.PixelsRect,'Pixels',Not D.PercentUnits,D.Focus=5);
+ STDrawField(D,0);
+ STDrawField(D,1);
+ If D.KeepAspect Then S := '[x] ' Else S := '[ ] ';
+ PELabel(D.LockRect.Left,D.LockRect.Top+4,S+'Conserver les proportions');
+ If D.Focus=6 Then PEFocusRect(D.LockRect);
+ PEButton(D.Presets[0],'25 %',D.Focus=13);
+ PEButton(D.Presets[1],'50 %',D.Focus=14);
+ PEButton(D.Presets[2],'100 %',D.Focus=15);
+ PEButton(D.Presets[3],'200 %',D.Focus=16);
+ PELabel(D.X+12,D.Y+202,'DIMENSIONS ET PROPORTIONS');
+ PELabel(D.X+12,D.Y+223,'Origine : '+PENumber(D.OriginalW)+' x '+PENumber(D.OriginalH)+' px');
+ PELabel(D.X+12,D.Y+242,'Echelle : '+STNumber(D.ScaledW*100.0/D.OriginalW)+' % x '+
+                              STNumber(D.ScaledH*100.0/D.OriginalH)+' %');
+ If D.KeepAspect Then S := 'Largeur et hauteur liees.'
+ Else S := 'Largeur et hauteur independantes.';
+ PELabel(D.X+12,D.Y+261,S);
+ PELabel(D.X+12,D.Y+286,'REECHANTILLONNAGE');
+ For I := 0 To 4 Do
+  STDrawRadio(D.MethodRects[I],STMethodName(I),D.Method=I,D.Focus=7+I);
+ PELabel(D.X+314,D.Y+32,'AVANT');
+ PELabel(D.X+465,D.Y+32,'APRES');
+ STDrawPreview(D,D.BeforeBox,False);
+ STDrawPreview(D,D.AfterBox,True);
+ PELabel(D.X+314,D.Y+186,PENumber(D.OriginalW)+'x'+PENumber(D.OriginalH)+' px');
+ PELabel(D.X+465,D.Y+186,PENumber(D.ResultW)+'x'+PENumber(D.ResultH)+' px');
+ STDrawEstimate(D);
+ Case D.Method Of
+  ST_NEAREST: Description := 'Pixels nets : dessins et pixel art.';
+  ST_BILINEAR: Description := 'Lissage par melange des voisins.';
+  ST_BICUBIC: Description := 'Lissage bicubique equilibre.';
+  ST_SMOOTH: Description := 'Contours plus doux, moins d angles.';
+  ST_SHARP: Description := 'Contours renforces, rendu plus net.';
+ End;
+ PELabel(D.X+314,D.Y+334,Description);
+ PELabel(D.X+314,D.Y+353,'Image entiere ; 256 couleurs max.');
+ PEButton(D.RefreshRect,'Actualiser',D.Focus=18);
+ PEButton(D.ZeroAnglesRect,'Taille origine',D.Focus=17);
+ PEButton(D.ApplyRect,'Appliquer',D.Focus=ST_FOCUS_APPLY);
+ If Not D.ValidResult Or (D.FieldError>=0) Or Not STChanged(D) Then Begin
+  PEFill(D.ApplyRect,LightGray);
+  PEBevel(D.ApplyRect,False);
+  SetColor(DarkGray);
+  RFCenteredText(D.ApplyRect,D.ApplyRect.Top+8,'Appliquer');
+ End;
+ PEButton(D.CancelRect,'Annuler',D.Focus=ST_FOCUS_CANCEL);
+ PEButton(D.ResetRect,'Reinitialiser',D.Focus=ST_FOCUS_RESET);
+ PEButton(D.HelpRect,'Aide (F1)',D.Focus=ST_FOCUS_HELP);
+ SetFillStyle(SolidFill,LightGray);
+ Bar(0,ScreenHeight-STATUSBAR_HEIGHT,ScreenWidth-1,ScreenHeight-1);
+ PELabel(5,ScreenHeight-STATUSBAR_HEIGHT+5,D.Status);
+ PEShowMouse;
+ D.Dirty := False;
+End;
+
+
 Procedure STDraw(Var D: TSTState);
 Var
  R: TRect;
  I: Integer;
  S: String;
 Begin
+ If D.ResizeOnly Then Begin RDDraw(D); Exit; End;
  PEHideMouse;
  SetWriteMode(CopyPut);
  SetLineStyle(SolidLn,0,NormWidth);
@@ -8747,6 +8824,16 @@ End;
 
 Procedure STHelp(Var D: TSTState);
 Begin
+ If D.ResizeOnly Then Begin
+  ShowMessage('Aide - Redimensionner',
+   'Horizontal = largeur ; vertical = hauteur.'+#10+
+   '100 % conserve la taille ; 200 % la double.'+#10+
+   'Proportions liees : modifier une seule dimension.'+#10+
+   'Choisissez le lissage et comparez les apercus.'+#10+
+   'Appliquer valide ; Echap annule ; Ctrl+Z ensuite.');
+  D.Dirty := True;
+  Exit;
+ End;
  ShowMessage('Aide - Etirer / Incliner',
   'Pourcentage : 100 = taille originale ; 200 = double.'+#10+
   'Pixels : largeur et hauteur exactes avant inclinaison.'+#10+
@@ -8819,7 +8906,14 @@ Begin
    D.ScaledH := NewH;
    STSyncFields(D); STUpdateGeometry(D);
   End;
-  17: Begin D.SkewX := 0; D.SkewY := 0; STSyncFields(D); STUpdateGeometry(D); End;
+  17: Begin
+   D.SkewX := 0; D.SkewY := 0;
+   If D.ResizeOnly Then Begin
+    D.ScaledW := D.OriginalW;
+    D.ScaledH := D.OriginalH;
+   End;
+   STSyncFields(D); STUpdateGeometry(D);
+  End;
   18: Begin STUpdateGeometry(D); D.Dirty := True; End;
   ST_FOCUS_APPLY: If D.ValidResult And (D.FieldError<0) And STChanged(D) Then Begin
    D.Accepted := True; D.Done := True;
@@ -8862,6 +8956,19 @@ Begin
  If Not STValidateField(D,D.Focus) Then D.Dirty := True;
 End;
 
+Function STNextFocus(Const D: TSTState; Backwards: Boolean): Integer;
+Var
+ Next: Integer;
+Begin
+ Next := D.Focus;
+ Repeat
+  If Backwards Then Dec(Next) Else Inc(Next);
+  If Next<0 Then Next := ST_FOCUS_HELP;
+  If Next>ST_FOCUS_HELP Then Next := 0;
+ Until Not D.ResizeOnly Or ((Next<>2) And (Next<>3) And (Next<>12));
+ STNextFocus := Next;
+End;
+
 Procedure STKeyboard(Var D: TSTState);
 Var
  K: Char;
@@ -8871,7 +8978,7 @@ Begin
  If K=#0 Then Begin
   K := ReadKey;
   Case Ord(K) Of
-   15: Begin Next := (D.Focus+ST_FOCUS_HELP) Mod (ST_FOCUS_HELP+1); STSetFocus(D,Next); End;
+   15: Begin Next := STNextFocus(D,True); STSetFocus(D,Next); End;
    59: STHelp(D);
    72,80,73,81: If D.Focus<ST_FIELD_COUNT Then Begin
     Case Ord(K) Of
@@ -8889,7 +8996,7 @@ Begin
  End;
  Case K Of
   #27: STActivate(D,ST_FOCUS_CANCEL);
-  #9: STSetFocus(D,(D.Focus+1) Mod (ST_FOCUS_HELP+1));
+  #9: STSetFocus(D,STNextFocus(D,False));
   #13: If D.Focus<ST_FIELD_COUNT Then Begin
    If STLeaveField(D) Then STSetFocus(D,ST_FOCUS_APPLY);
   End Else If D.Focus>=ST_FOCUS_APPLY Then STActivate(D,D.Focus)
@@ -8958,6 +9065,71 @@ Begin
   If (D.MB And 1)<>0 Then Delay(10);
  Until (D.MB And 1)=0;
  OldMouseButtons := 0; MouseButtons := 0;
+ RedrawInterface;
+End;
+
+
+{ Dialogue dedie au redimensionnement. Les filtres, la validation des
+  dimensions, les apercus et l'application transactionnelle sont partages
+  avec Etirer/Incliner ; aucun angle n'est expose dans ce dialogue. }
+
+Procedure RDLayout(Var D: TSTState);
+Var
+ I: Integer;
+Begin
+ STLayout(D);
+ For I := 2 To 3 Do Begin
+  PERect(D.FieldRects[I],-1000,-1000,1,1);
+  PERect(D.MinusRects[I],-1000,-1000,1,1);
+  PERect(D.PlusRects[I],-1000,-1000,1,1);
+ End;
+ PERect(D.ExpandRect,-1000,-1000,1,1);
+End;
+
+Procedure RDInitialize(Var D: TSTState);
+Begin
+ STInitialize(D);
+ D.ResizeOnly := True;
+ RDLayout(D);
+ D.Status := 'Pourcentage ou pixels : ajustez largeur et hauteur, puis cliquez Appliquer.';
+End;
+
+Procedure ResizeImageDialog;
+Var
+ D: TSTState;
+ Applied: Boolean;
+Begin
+ If Not PGHasImage Then Begin
+  ShowMessage('Redimensionner','Aucune image a redimensionner.');
+  Exit;
+ End;
+ MenuActive := False;
+ RedrawInterface;
+ RDInitialize(D);
+ PEHideMouse;
+ PEBuildDisplayPalette;
+ PEShowMouse;
+ While Not D.Done Do Begin
+  If D.Dirty Then STDraw(D);
+  If KeyPressed Then STKeyboard(D);
+  If Not D.Done Then STMouse(D);
+  Delay(10);
+ End;
+ PEHideMouse;
+ PERestoreHardware(D.PaletteData);
+ PEShowMouse;
+ If D.Accepted Then Begin
+  Applied := STApply(D,True);
+  If Not Applied Then
+   ShowMessage('Redimensionner',
+    'Operation annulee ou memoire insuffisante. L image originale est conservee.');
+ End;
+ Repeat
+  GetMouseStateLocal(D.MX,D.MY,D.MB);
+  If (D.MB And 1)<>0 Then Delay(10);
+ Until (D.MB And 1)=0;
+ OldMouseButtons := 0;
+ MouseButtons := 0;
  RedrawInterface;
 End;
 
@@ -9120,27 +9292,8 @@ Begin
      StretchSkewDialog;
     End;
     2: Begin AddSnapshotToHistory(TOOL_PENCIL); InvertColors; End;
-    4: Begin { Redimensionner }
-     Str(ImageBuffer.Width, NewName);
-     Str(ImageBuffer.Height, InfoMsg);
-     NewName := NewName + 'x' + InfoMsg;
-     If PromptString('Redimensionner',
-                     'Nouvelle taille (LARGEURxHAUTEUR) :',
-                     NewName) and (NewName <> '') Then Begin
-      Fmt := Pos('x', NewName);
-      If Fmt = 0 Then Fmt := Pos('X', NewName);
-      If Fmt > 1 Then Begin
-       Val(Copy(NewName, 1, Fmt - 1), NewW, ValErr);
-       If ValErr = 0 Then Val(Copy(NewName, Fmt + 1, Length(NewName) - Fmt),
-                              NewH, ValErr);
-       If (ValErr = 0) and (NewW > 0) and (NewH > 0) Then Begin
-        AddSnapshotToHistory(TOOL_PENCIL);
-        StretchCanvas(NewW, NewH);
-       End
-       Else
-        ShowMessage('Erreur', 'Dimensions invalides.');
-      End;
-     End;
+    4: Begin { Redimensionner : dialogue visuel dedie }
+     ResizeImageDialog;
     End;
     5: Begin { Rogner }
      If SelectionActive Then Begin
@@ -9673,6 +9826,7 @@ Begin
   { Raccourcis Ctrl+lettre (codes ASCII 1..26) }
   If Not TextInsertMode Then Begin
    Case Key of
+    #23: Begin HandleMenuClick(MENU_IMAGE,4); Exit; End; { Ctrl+W }
     #26: Begin Undo; Exit; End;          { Ctrl+Z }
     #25: Begin Redo; Exit; End;          { Ctrl+Y }
    End;

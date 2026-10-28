@@ -3454,11 +3454,32 @@ Var
  K: Char;
  MX, MY, MB: Integer;
  PrevB: Integer;
+ Lines: Array[1..16] of String;
+ LineCount, I, StartPos: Integer;
 Begin
- BoxW := TextWidth(Msg) + 40;
+ { Messages multilignes, separes par LF (ou CR/LF). }
+ LineCount := 0;
+ StartPos := 1;
+ For I := 1 To Length(Msg) + 1 Do Begin
+  If I <= Length(Msg) Then Begin
+   If Msg[I] <> #10 Then Continue;
+  End;
+  If LineCount < 16 Then Begin
+   Inc(LineCount);
+   Lines[LineCount] := Copy(Msg, StartPos, I - StartPos);
+   If Length(Lines[LineCount]) > 0 Then
+    If Lines[LineCount][Length(Lines[LineCount])] = #13 Then
+     Delete(Lines[LineCount], Length(Lines[LineCount]), 1);
+  End;
+  StartPos := I + 1;
+ End;
+ BoxW := 240;
+ For I := 1 To LineCount Do
+  If TextWidth(Lines[I]) + 40 > BoxW Then
+   BoxW := TextWidth(Lines[I]) + 40;
  If TextWidth(Title) + 40 > BoxW Then BoxW := TextWidth(Title) + 40;
  If BoxW < 240 Then BoxW := 240;
- BoxH := 90;
+ BoxH := 90 + (LineCount - 1) * 16;
  BoxX := (ScreenWidth - BoxW) div 2;
  BoxY := (ScreenHeight - BoxH) div 2;
 
@@ -3471,7 +3492,8 @@ Begin
  SetColor(White);
  OutTextXY(BoxX + 8, BoxY + 5, Title);
  SetColor(Black);
- OutTextXY(BoxX + 20, BoxY + 35, Msg);
+ For I := 1 To LineCount Do
+  OutTextXY(BoxX + 20, BoxY + 35 + (I - 1) * 16, Lines[I]);
  BtnX1 := BoxX + BoxW div 2 - 30;
  BtnY1 := BoxY + BoxH - 25;
  BtnX2 := BoxX + BoxW div 2 + 30;
@@ -4026,7 +4048,14 @@ Begin
       Str(VERSION_MAJOR, InfoMsg);
       Str(VERSION_MINOR, NewName);
       ShowMessage('A propos de PAINT',
-            PROGRAM_NAME + ' ' + InfoMsg + '.' + NewName);
+            PROGRAM_NAME + #10 +
+            'Version : ' + InfoMsg + '.' + NewName + #10 +
+            'Auteur : Sylvain Maltais' + #10 +
+            'Creation du produit : 2024' + #10 +
+            'Copyright (c) 2026 Sylvain Maltais' + #10 +
+            'Licence : MIT (voir LICENSE)' + #10 +
+            'Contact : support@gladir.com' + #10 +
+            'www.gladir.com/clonedraw');
     End;
    End;
   End;

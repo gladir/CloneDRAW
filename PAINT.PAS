@@ -4023,7 +4023,10 @@ Begin
     0: Begin { Aide }
     End;
     1: Begin { À propos }
-     { Afficher la boîte de dialogue À propos }
+      Str(VERSION_MAJOR, InfoMsg);
+      Str(VERSION_MINOR, NewName);
+      ShowMessage('A propos de PAINT',
+            PROGRAM_NAME + ' ' + InfoMsg + '.' + NewName);
     End;
    End;
   End;

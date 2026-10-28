@@ -2811,6 +2811,8 @@ Type
   SavedColors: TPalette;
   SavedSwatches: Array[0..27] of Byte;
   SavedForeground, SavedBackground, SavedDepth: Byte;
+  SavedSelectionActive: Boolean;
+  SavedSelectionRect: TRect;
  End;
 
 Procedure SaveHistoryPalette(Data: PHistoryData);
@@ -2820,6 +2822,8 @@ Begin
  Data^.SavedForeground := CurrentColor;
  Data^.SavedBackground := BackgroundColor;
  Data^.SavedDepth := ImageBuffer.BitDepth;
+ Data^.SavedSelectionActive := SelectionActive;
+ Data^.SavedSelectionRect := SelectionRect;
 End;
 
 Procedure RestoreHistoryPalette(Data: PHistoryData);
@@ -2831,6 +2835,9 @@ Begin
  CurrentColor := Data^.SavedForeground;
  BackgroundColor := Data^.SavedBackground;
  ImageBuffer.BitDepth := Data^.SavedDepth;
+ SelectionActive := Data^.SavedSelectionActive;
+ SelectionRect := Data^.SavedSelectionRect;
+ AntsValid := False;
  For I := 0 To 255 Do
   If I <= GetMaxColor Then Begin
    {$IFDEF FPC}
@@ -6976,6 +6983,739 @@ Begin
 End;
 
 
+{ Retourner/Pivoter : une meme transformation de coordonnees est utilisee
+  pour les icones, l'apercu et les pixels definitifs. Aucune interpolation
+  ni conversion de palette : les rotations par quarts de tour sont exactes. }
+
+Const
+ RF_ORIGINAL = 0;
+ RF_HORIZONTAL = 1;
+ RF_VERTICAL = 2;
+ RF_LEFT = 3;
+ RF_RIGHT = 4;
+ RF_HALF = 5;
+ RF_MODE_COUNT = 6;
+ RF_FOCUS_SCOPE = 6;
+ RF_FOCUS_APPLY = 7;
+ RF_FOCUS_CANCEL = 8;
+ RF_FOCUS_RESET = 9;
+ RF_FOCUS_HELP = 10;
+
+Type
+ TRFState = Record
+  X, Y: Integer;
+  Mode, Focus: Integer;
+  UseSelection, HasSelection: Boolean;
+  Done, Accepted, Dirty: Boolean;
+  Source: TRect;
+  Destination: TRect;
+  SourceW, SourceH, ResultW, ResultH: Integer;
+  ValidResult: Boolean;
+  Tiles: Array[0..RF_MODE_COUNT-1] of TRect;
+  BeforeBox, AfterBox: TRect;
+  ApplyButton, CancelButton, ResetButton, HelpButton: TRect;
+  ScopeBox: TRect;
+  PaletteData: TPEState;
+  Status: String[77];
+  MX, MY, MB, PreviousButtons: Integer;
+ End;
+
+Procedure RFDimensions(Mode, W, H: Integer; Var NW, NH: Integer);
+Begin
+ NW := W;
+ NH := H;
+ If (Mode = RF_LEFT) Or (Mode = RF_RIGHT) Then Begin
+  NW := H;
+  NH := W;
+ End;
+End;
+
+Procedure RFMapPixel(Mode, W, H, X, Y: Integer; Var SX, SY: Integer);
+Begin
+ SX := X;
+ SY := Y;
+ Case Mode Of
+  RF_HORIZONTAL: SX := W-1-X;
+  RF_VERTICAL: SY := H-1-Y;
+  RF_LEFT: Begin
+   SX := W-1-Y;
+   SY := X;
+  End;
+  RF_RIGHT: Begin
+   SX := Y;
+   SY := H-1-X;
+  End;
+  RF_HALF: Begin
+   SX := W-1-X;
+   SY := H-1-Y;
+  End;
+ End;
+End;
+
+Procedure RFSourceBounds(Var D: TRFState);
+Var
+ T: Integer;
+Begin
+ PERect(D.Source,0,0,CanvasImageW,CanvasImageH);
+ If D.UseSelection And D.HasSelection Then Begin
+  D.Source.Left := SelectionRect.Left-CanvasX;
+  D.Source.Top := SelectionRect.Top-CanvasY;
+  D.Source.Right := SelectionRect.Right-CanvasX;
+  D.Source.Bottom := SelectionRect.Bottom-CanvasY;
+  If D.Source.Left > D.Source.Right Then Begin
+   T := D.Source.Left;
+   D.Source.Left := D.Source.Right;
+   D.Source.Right := T;
+  End;
+  If D.Source.Top > D.Source.Bottom Then Begin
+   T := D.Source.Top;
+   D.Source.Top := D.Source.Bottom;
+   D.Source.Bottom := T;
+  End;
+  D.Source.Left := Max(0,D.Source.Left);
+  D.Source.Top := Max(0,D.Source.Top);
+  D.Source.Right := Min(CanvasImageW-1,D.Source.Right);
+  D.Source.Bottom := Min(CanvasImageH-1,D.Source.Bottom);
+ End;
+ D.SourceW := D.Source.Right-D.Source.Left+1;
+ D.SourceH := D.Source.Bottom-D.Source.Top+1;
+End;
+
+Procedure RFUpdateResult(Var D: TRFState);
+Var
+ Left, Top: Integer;
+Begin
+ RFSourceBounds(D);
+ RFDimensions(D.Mode,D.SourceW,D.SourceH,D.ResultW,D.ResultH);
+ D.ValidResult := PGHasImage And (D.SourceW > 0) And (D.SourceH > 0) And
+                  (D.ResultW <= MAX_IMAGE_WIDTH) And
+                  (D.ResultH <= MAX_IMAGE_HEIGHT);
+ If D.UseSelection Then Begin
+  { Conserver le centre de la selection, puis ajuster sa position pour
+    qu'elle reste dans l'image. Ne jamais tronquer silencieusement. }
+  If (D.ResultW > CanvasImageW) Or (D.ResultH > CanvasImageH) Then
+   D.ValidResult := False;
+  Left := D.Source.Left+(D.SourceW-D.ResultW) Div 2;
+  Top := D.Source.Top+(D.SourceH-D.ResultH) Div 2;
+  If D.ValidResult Then Begin
+   Left := PEClamp(Left,0,CanvasImageW-D.ResultW);
+   Top := PEClamp(Top,0,CanvasImageH-D.ResultH);
+  End;
+ End
+ Else Begin
+  Left := 0;
+  Top := 0;
+ End;
+ PERect(D.Destination,Left,Top,D.ResultW,D.ResultH);
+ If Not D.ValidResult Then
+  D.Status := 'Selection pivotee trop grande. Choisissez Image entiere.'
+ Else If D.Mode = RF_ORIGINAL Then
+  D.Status := 'Choisissez une transformation illustree. Rien n est encore modifie.'
+ Else If D.UseSelection Then
+  D.Status := 'Selection centree ; ancien emplacement rempli avec la couleur de fond.'
+ Else
+  D.Status := 'Image entiere : aucun pixel perdu. Entree applique ; Echap annule.';
+ D.Dirty := True;
+End;
+
+Procedure RFLayout(Var D: TRFState);
+Var
+ I: Integer;
+Begin
+ D.X := (ScreenWidth-620) Div 2;
+ D.Y := (ScreenHeight-430) Div 2;
+ For I := 0 To RF_MODE_COUNT-1 Do
+  PERect(D.Tiles[I],D.X+12+(I Mod 2)*120,D.Y+55+(I Div 2)*80,112,74);
+ PERect(D.BeforeBox,D.X+264,D.Y+65,164,164);
+ PERect(D.AfterBox,D.X+442,D.Y+65,164,164);
+ PERect(D.ScopeBox,D.X+12,D.Y+307,232,52);
+ PERect(D.ApplyButton,D.X+12,D.Y+389,120,25);
+ PERect(D.CancelButton,D.X+144,D.Y+389,108,25);
+ PERect(D.ResetButton,D.X+264,D.Y+389,150,25);
+ PERect(D.HelpButton,D.X+442,D.Y+389,164,25);
+End;
+
+Function RFModeTitle(Mode: Integer): String;
+Begin
+ Case Mode Of
+  RF_ORIGINAL: RFModeTitle := 'Original';
+  RF_HORIZONTAL: RFModeTitle := 'Horizontal';
+  RF_VERTICAL: RFModeTitle := 'Vertical';
+  RF_LEFT: RFModeTitle := '90 deg gauche';
+  RF_RIGHT: RFModeTitle := '90 deg droite';
+  RF_HALF: RFModeTitle := '180 deg';
+ Else
+  RFModeTitle := '';
+ End;
+End;
+
+Function RFModeSubtitle(Mode: Integer): String;
+Begin
+ Case Mode Of
+  RF_ORIGINAL: RFModeSubtitle := 'Sans effet';
+  RF_HORIZONTAL: RFModeSubtitle := 'Gauche/droite';
+  RF_VERTICAL: RFModeSubtitle := 'Haut/bas';
+  RF_LEFT: RFModeSubtitle := 'Quart de tour';
+  RF_RIGHT: RFModeSubtitle := 'Quart de tour';
+  RF_HALF: RFModeSubtitle := 'Demi-tour';
+ Else
+  RFModeSubtitle := '';
+ End;
+End;
+
+Procedure RFExplanation(Mode: Integer; Var Line1, Line2, Line3: String);
+Begin
+ Case Mode Of
+  RF_ORIGINAL: Begin
+   Line1 := 'Aucune transformation selectionnee.';
+   Line2 := 'Comparez les symboles puis choisissez';
+   Line3 := 'le resultat dans les boutons a gauche.';
+  End;
+  RF_HORIZONTAL: Begin
+   Line1 := 'Miroir selon un axe vertical.';
+   Line2 := 'La gauche et la droite sont echangees.';
+   Line3 := 'La largeur et la hauteur sont conservees.';
+  End;
+  RF_VERTICAL: Begin
+   Line1 := 'Miroir selon un axe horizontal.';
+   Line2 := 'Le haut et le bas sont echanges.';
+   Line3 := 'La largeur et la hauteur sont conservees.';
+  End;
+  RF_LEFT: Begin
+   Line1 := '90 deg vers la gauche : antihoraire.';
+   Line2 := 'Equivalent a 270 deg vers la droite.';
+   Line3 := 'La largeur et la hauteur sont echangees.';
+  End;
+  RF_RIGHT: Begin
+   Line1 := '90 deg vers la droite : sens horaire.';
+   Line2 := 'Equivalent a 270 deg vers la gauche.';
+   Line3 := 'La largeur et la hauteur sont echangees.';
+  End;
+  RF_HALF: Begin
+   Line1 := '180 deg : un demi-tour complet.';
+   Line2 := 'Le haut devient le bas, et inversement.';
+   Line3 := 'La largeur et la hauteur sont conservees.';
+  End;
+ End;
+End;
+
+Procedure RFCenteredText(Const R: TRect; Y: Integer; Const S: String);
+Begin
+ OutTextXY(R.Left+(R.Right-R.Left+1-TextWidth(S)) Div 2,Y,S);
+End;
+
+Procedure RFArrowHead(X, Y, Direction: Integer);
+Begin
+ Case Direction Of
+  0: Begin Line(X,Y,X+4,Y-4); Line(X,Y,X+4,Y+4); End;
+  1: Begin Line(X,Y,X-4,Y-4); Line(X,Y,X-4,Y+4); End;
+  2: Begin Line(X,Y,X-4,Y+4); Line(X,Y,X+4,Y+4); End;
+  3: Begin Line(X,Y,X-4,Y-4); Line(X,Y,X+4,Y-4); End;
+ End;
+End;
+
+Procedure RFDrawIcon(Const R: TRect; Mode: Integer; Selected: Boolean);
+Const
+ Letter: Array[0..6] of Byte = ($7C,$40,$40,$78,$40,$40,$40);
+Var
+ X, Y, SX, SY, Left, Top, Ink: Integer;
+Begin
+ Left := R.Left+24;
+ Top := R.Top+8;
+ Ink := Blue;
+ If Selected Then
+  Ink := White;
+ { La lettre F asymetrique rend les deux miroirs faciles a distinguer. }
+ For Y := 0 To 6 Do
+  For X := 0 To 6 Do Begin
+   RFMapPixel(Mode,7,7,X,Y,SX,SY);
+   If (Letter[SY] And (1 Shl (6-SX))) <> 0 Then Begin
+    SetFillStyle(SolidFill,Ink);
+    Bar(Left+X*4,Top+Y*4,Left+X*4+3,Top+Y*4+3);
+   End;
+  End;
+ SetColor(Ink);
+ Case Mode Of
+  RF_HORIZONTAL: Begin
+   Line(R.Left+62,R.Top+22,R.Left+96,R.Top+22);
+   RFArrowHead(R.Left+62,R.Top+22,0);
+   RFArrowHead(R.Left+96,R.Top+22,1);
+  End;
+  RF_VERTICAL: Begin
+   Line(R.Left+82,R.Top+8,R.Left+82,R.Top+36);
+   RFArrowHead(R.Left+82,R.Top+8,2);
+   RFArrowHead(R.Left+82,R.Top+36,3);
+  End;
+  RF_LEFT: Begin
+   Arc(R.Left+82,R.Top+22,25,310,13);
+   RFArrowHead(R.Left+93,R.Top+16,3);
+  End;
+  RF_RIGHT: Begin
+   Arc(R.Left+82,R.Top+22,230,155,13);
+   RFArrowHead(R.Left+71,R.Top+16,3);
+  End;
+  RF_HALF: Begin
+   Arc(R.Left+82,R.Top+22,0,180,13);
+   RFArrowHead(R.Left+69,R.Top+22,3);
+   RFArrowHead(R.Left+95,R.Top+22,2);
+  End;
+ End;
+End;
+
+Procedure RFDrawTile(Const D: TRFState; Index: Integer);
+Var
+ R: TRect;
+ Selected: Boolean;
+Begin
+ R := D.Tiles[Index];
+ Selected := D.Mode = Index;
+ If Selected Then
+  PEFill(R,Blue)
+ Else
+  PEFill(R,LightGray);
+ PEBevel(R,Selected);
+ RFDrawIcon(R,Index,Selected);
+ If Selected Then
+  SetColor(White)
+ Else
+  SetColor(Black);
+ RFCenteredText(R,R.Top+48,RFModeTitle(Index));
+ RFCenteredText(R,R.Top+61,RFModeSubtitle(Index));
+ If D.Focus = Index Then Begin
+  SetLineStyle(DottedLn,0,NormWidth);
+  Rectangle(R.Left+3,R.Top+3,R.Right-3,R.Bottom-3);
+  SetLineStyle(SolidLn,0,NormWidth);
+ End;
+End;
+
+Procedure RFChecker(const R: TRect);
+Var
+ X, Y, Right, Bottom: Integer;
+Begin
+ Y := R.Top;
+ While Y <= R.Bottom Do Begin
+  X := R.Left;
+  While X <= R.Right Do Begin
+   If (((X-R.Left) Div 8+(Y-R.Top) Div 8) And 1) = 0 Then
+    SetFillStyle(SolidFill,LightGray)
+   Else
+    SetFillStyle(SolidFill,White);
+   Right := Min(X+7,R.Right);
+   Bottom := Min(Y+7,R.Bottom);
+   Bar(X,Y,Right,Bottom);
+   Inc(X,8);
+  End;
+  Inc(Y,8);
+ End;
+End;
+
+Procedure RFFitSize(W, H, MaxW, MaxH: Integer; Var DrawW, DrawH: Integer);
+Begin
+ DrawW := 1;
+ DrawH := 1;
+ If (W <= 0) Or (H <= 0) Then
+  Exit;
+ If LongInt(W)*MaxH >= LongInt(H)*MaxW Then Begin
+  DrawW := MaxW;
+  DrawH := Max(1,(LongInt(H)*MaxW) Div W);
+ End
+ Else Begin
+  DrawH := MaxH;
+  DrawW := Max(1,(LongInt(W)*MaxH) Div H);
+ End;
+End;
+
+Procedure RFDrawPreview(Const D: TRFState; Const R: TRect; After: Boolean);
+Var
+ W, H, Mode, DrawW, DrawH: Integer;
+ X, Y, DX, DY, SX, SY, Left, Top: Integer;
+ Inner: TRect;
+ C: TRGBColor;
+Begin
+ Inner := R;
+ Inc(Inner.Left,2);
+ Inc(Inner.Top,2);
+ Dec(Inner.Right,2);
+ Dec(Inner.Bottom,2);
+ RFChecker(Inner);
+ PEBevel(R,True);
+ If Not PGHasImage Or (D.SourceW <= 0) Or (D.SourceH <= 0) Then
+  Exit;
+ W := D.SourceW;
+ H := D.SourceH;
+ Mode := RF_ORIGINAL;
+ If After Then Begin
+  W := D.ResultW;
+  H := D.ResultH;
+  Mode := D.Mode;
+ End;
+ RFFitSize(W,H,156,156,DrawW,DrawH);
+ Left := R.Left+(R.Right-R.Left+1-DrawW) Div 2;
+ Top := R.Top+(R.Bottom-R.Top+1-DrawH) Div 2;
+ For Y := 0 To DrawH-1 Do Begin
+  DY := Min(H-1,(LongInt(Y)*H+H Div 2) Div DrawH);
+  For X := 0 To DrawW-1 Do Begin
+   DX := Min(W-1,(LongInt(X)*W+W Div 2) Div DrawW);
+   RFMapPixel(Mode,D.SourceW,D.SourceH,DX,DY,SX,SY);
+   If PGReadRGB(D.Source.Left+SX,D.Source.Top+SY,C) Then
+    PutPixel(Left+X,Top+Y,PEDisplayColor(C));
+  End;
+ End;
+ SetColor(DarkGray);
+ Rectangle(Left-1,Top-1,Left+DrawW,Top+DrawH);
+End;
+
+Procedure RFDrawScope(Const D: TRFState);
+Begin
+ PELabel(D.X+12,D.Y+307,'Zone a transformer :');
+ If D.UseSelection Then Begin
+  PELabel(D.X+12,D.Y+325,'( ) Image entiere');
+  PELabel(D.X+12,D.Y+344,'(*) Selection active');
+ End
+ Else Begin
+  PELabel(D.X+12,D.Y+325,'(*) Image entiere');
+  If D.HasSelection Then
+   PELabel(D.X+12,D.Y+344,'( ) Selection active')
+  Else Begin
+   SetColor(DarkGray);
+   OutTextXY(D.X+12,D.Y+344,'( ) Selection indisponible');
+  End;
+ End;
+ If D.Focus = RF_FOCUS_SCOPE Then Begin
+  SetColor(Black);
+  SetLineStyle(DottedLn,0,NormWidth);
+  Rectangle(D.ScopeBox.Left-2,D.ScopeBox.Top-2,
+            D.ScopeBox.Right+2,D.ScopeBox.Bottom+2);
+  SetLineStyle(SolidLn,0,NormWidth);
+ End;
+End;
+
+Procedure RFDrawExplanation(Const D: TRFState);
+Var
+ L1, L2, L3: String;
+Begin
+ RFExplanation(D.Mode,L1,L2,L3);
+ PELabel(D.X+264,D.Y+274,L1);
+ PELabel(D.X+264,D.Y+291,L2);
+ PELabel(D.X+264,D.Y+308,L3);
+ If D.UseSelection Then Begin
+  PELabel(D.X+264,D.Y+337,'Apercu de la zone selectionnee.');
+  PELabel(D.X+264,D.Y+353,'Le reste du dessin est conserve.');
+ End
+ Else Begin
+  PELabel(D.X+264,D.Y+337,'Apercu de l image entiere.');
+  PELabel(D.X+264,D.Y+353,'Transformation sans perte de couleur.');
+ End;
+End;
+
+Procedure RFDraw(Var D: TRFState);
+Var
+ R: TRect;
+ I: Integer;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut);
+ SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,620,430);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.X+3,D.Y+3,D.X+616,D.Y+21);
+ SetColor(White);
+ OutTextXY(D.X+9,D.Y+7,'Retourner / Pivoter - PAINT');
+ OutTextXY(D.X+602,D.Y+7,'X');
+ PELabel(D.X+12,D.Y+33,'Choisissez le resultat souhaite :');
+ For I := 0 To RF_MODE_COUNT-1 Do
+  RFDrawTile(D,I);
+ PELabel(D.X+264,D.Y+49,'AVANT');
+ PELabel(D.X+442,D.Y+49,'APRES');
+ RFDrawPreview(D,D.BeforeBox,False);
+ RFDrawPreview(D,D.AfterBox,True);
+ PELabel(D.X+264,D.Y+239,PENumber(D.SourceW)+' x '+PENumber(D.SourceH)+' px');
+ PELabel(D.X+442,D.Y+239,PENumber(D.ResultW)+' x '+PENumber(D.ResultH)+' px');
+ PELabel(D.X+264,D.Y+255,'Apercus ajustes aux proportions.');
+ RFDrawScope(D);
+ RFDrawExplanation(D);
+ PEButton(D.ApplyButton,'Appliquer',D.Focus = RF_FOCUS_APPLY);
+ If (D.Mode = RF_ORIGINAL) Or Not D.ValidResult Then Begin
+  PEFill(D.ApplyButton,LightGray);
+  PEBevel(D.ApplyButton,False);
+  SetColor(DarkGray);
+  RFCenteredText(D.ApplyButton,D.ApplyButton.Top+8,'Appliquer');
+ End;
+ PEButton(D.CancelButton,'Annuler',D.Focus = RF_FOCUS_CANCEL);
+ PEButton(D.ResetButton,'Reinitialiser',D.Focus = RF_FOCUS_RESET);
+ PEButton(D.HelpButton,'Aide (F1)',D.Focus = RF_FOCUS_HELP);
+ SetFillStyle(SolidFill,LightGray);
+ Bar(0,ScreenHeight-STATUSBAR_HEIGHT,ScreenWidth-1,ScreenHeight-1);
+ PELabel(5,ScreenHeight-STATUSBAR_HEIGHT+5,D.Status);
+ PEShowMouse;
+ D.Dirty := False;
+End;
+
+Procedure RFChoose(Var D: TRFState; Mode: Integer);
+Begin
+ D.Mode := PEClamp(Mode,0,RF_MODE_COUNT-1);
+ D.Focus := D.Mode;
+ RFUpdateResult(D);
+End;
+
+Procedure RFHelp(Var D: TRFState);
+Begin
+ ShowMessage('Aide - Retourner / Pivoter',
+  'Horizontal : echange gauche et droite.'+#10+
+  'Vertical : echange haut et bas.'+#10+
+  '90 deg : quart de tour ; 180 deg : demi-tour.'+#10+
+  'H/V : miroirs ; G/D : gauche/droite ; I : 180.'+#10+
+  'Entree applique ; Echap annule ; Ctrl+Z ensuite.');
+ D.Dirty := True;
+End;
+
+Procedure RFActivate(Var D: TRFState; Action: Integer);
+Begin
+ Case Action Of
+  RF_FOCUS_APPLY: Begin
+   If D.ValidResult And (D.Mode <> RF_ORIGINAL) Then Begin
+    D.Accepted := True;
+    D.Done := True;
+   End;
+  End;
+  RF_FOCUS_CANCEL: Begin
+   D.Accepted := False;
+   D.Done := True;
+  End;
+  RF_FOCUS_RESET: RFChoose(D,RF_ORIGINAL);
+  RF_FOCUS_HELP: RFHelp(D);
+  RF_FOCUS_SCOPE: Begin
+   If D.HasSelection Then Begin
+    D.UseSelection := Not D.UseSelection;
+    RFUpdateResult(D);
+   End;
+  End;
+ Else
+  If (Action >= 0) And (Action < RF_MODE_COUNT) Then
+   RFChoose(D,Action);
+ End;
+End;
+
+Procedure RFKeyboard(Var D: TRFState);
+Var
+ K: Char;
+ Next: Integer;
+Begin
+ K := ReadKey;
+ If K = #0 Then Begin
+  K := ReadKey;
+  Case Ord(K) Of
+   15: Begin
+    D.Focus := (D.Focus+RF_FOCUS_HELP) Mod (RF_FOCUS_HELP+1);
+    D.Dirty := True;
+   End;
+   59: RFHelp(D);
+   72,75,77,80: Begin
+    If D.Focus < RF_MODE_COUNT Then Begin
+     Next := D.Focus;
+     Case Ord(K) Of
+      72: Dec(Next,2);
+      80: Inc(Next,2);
+      75: Dec(Next);
+      77: Inc(Next);
+     End;
+     Next := (Next+RF_MODE_COUNT) Mod RF_MODE_COUNT;
+     RFChoose(D,Next);
+    End;
+   End;
+  End;
+  Exit;
+ End;
+ Case K Of
+  #27: RFActivate(D,RF_FOCUS_CANCEL);
+  #9: Begin
+   D.Focus := (D.Focus+1) Mod (RF_FOCUS_HELP+1);
+   D.Dirty := True;
+  End;
+  #13: Begin
+   If D.Focus >= RF_FOCUS_SCOPE Then
+    RFActivate(D,D.Focus)
+   Else
+    RFActivate(D,RF_FOCUS_APPLY);
+  End;
+  ' ': RFActivate(D,D.Focus);
+ Else
+  Case UpCase(K) Of
+   'H': RFChoose(D,RF_HORIZONTAL);
+   'V': RFChoose(D,RF_VERTICAL);
+   'G','L': RFChoose(D,RF_LEFT);
+   'D','R': RFChoose(D,RF_RIGHT);
+   'I': RFChoose(D,RF_HALF);
+   'O','0': RFChoose(D,RF_ORIGINAL);
+  End;
+ End;
+End;
+
+Procedure RFMouse(Var D: TRFState);
+Var
+ I: Integer;
+Begin
+ GetMouseStateLocal(D.MX,D.MY,D.MB);
+ If ((D.MB And 1) <> 0) And ((D.PreviousButtons And 1) = 0) Then Begin
+  If (D.MX >= D.X+596) And (D.MX <= D.X+617) And
+     (D.MY >= D.Y+3) And (D.MY <= D.Y+21) Then
+   RFActivate(D,RF_FOCUS_CANCEL)
+  Else If PEInside(D.MX,D.MY,D.ApplyButton) Then
+   RFActivate(D,RF_FOCUS_APPLY)
+  Else If PEInside(D.MX,D.MY,D.CancelButton) Then
+   RFActivate(D,RF_FOCUS_CANCEL)
+  Else If PEInside(D.MX,D.MY,D.ResetButton) Then
+   RFActivate(D,RF_FOCUS_RESET)
+  Else If PEInside(D.MX,D.MY,D.HelpButton) Then
+   RFActivate(D,RF_FOCUS_HELP)
+  Else If PEInside(D.MX,D.MY,D.ScopeBox) And D.HasSelection Then Begin
+   D.UseSelection := D.MY >= D.Y+338;
+   D.Focus := RF_FOCUS_SCOPE;
+   RFUpdateResult(D);
+  End
+  Else
+   For I := 0 To RF_MODE_COUNT-1 Do
+    If PEInside(D.MX,D.MY,D.Tiles[I]) Then
+     RFChoose(D,I);
+ End;
+ D.PreviousButtons := D.MB;
+End;
+
+Procedure RFInitialize(Var D: TRFState);
+Begin
+ FillChar(D,SizeOf(D),0);
+ PEInitialize(D.PaletteData);
+ D.HasSelection := SelectionActive;
+ D.UseSelection := D.HasSelection;
+ RFLayout(D);
+ RFUpdateResult(D);
+ GetMouseStateLocal(D.MX,D.MY,D.PreviousButtons);
+End;
+
+Function RFBuildResult(Const D: TRFState; Var Buffer: PByte): Boolean;
+Var
+ X, Y, SX, SY: Integer;
+ Dest: PByte;
+ Index: Byte;
+ Size: LongInt;
+Begin
+ Buffer := Nil;
+ RFBuildResult := False;
+ If Not D.ValidResult Or (D.Mode = RF_ORIGINAL) Then
+  Exit;
+ Size := LongInt(D.ResultW)*D.ResultH;
+ If Size <= 0 Then
+  Exit;
+ GetMem(Buffer,Size);
+ Dest := Buffer;
+ For Y := 0 To D.ResultH-1 Do
+  For X := 0 To D.ResultW-1 Do Begin
+   RFMapPixel(D.Mode,D.SourceW,D.SourceH,X,Y,SX,SY);
+   If Not PGReadIndex(D.Source.Left+SX,D.Source.Top+SY,Index) Then Begin
+    FreeMem(Buffer,Size);
+    Buffer := Nil;
+    Exit;
+   End;
+   Dest^ := Index;
+   Inc(Dest);
+  End;
+ RFBuildResult := True;
+End;
+
+Function RFApply(Const D: TRFState): Boolean;
+Var
+ Buffer, SourceRow, DestRow: PByte;
+ X, Y: Integer;
+Begin
+ RFApply := False;
+ If Not RFBuildResult(D,Buffer) Then
+  Exit;
+ { Aucun changement du document avant que le resultat soit disponible. }
+ AddSnapshotToHistory(TOOL_PENCIL);
+ If D.UseSelection Then Begin
+  For Y := D.Source.Top To D.Source.Bottom Do Begin
+   DestRow := CanvasImage;
+   Inc(DestRow,LongInt(Y)*CanvasImageW+D.Source.Left);
+   FillChar(DestRow^,D.SourceW,BackgroundColor);
+  End;
+  SourceRow := Buffer;
+  For Y := 0 To D.ResultH-1 Do Begin
+   DestRow := CanvasImage;
+   Inc(DestRow,LongInt(D.Destination.Top+Y)*CanvasImageW+D.Destination.Left);
+   For X := 0 To D.ResultW-1 Do Begin
+    DestRow^ := SourceRow^;
+    Inc(DestRow);
+    Inc(SourceRow);
+   End;
+  End;
+  FreeMem(Buffer,LongInt(D.ResultW)*D.ResultH);
+  SelectionRect.Left := CanvasX+D.Destination.Left;
+  SelectionRect.Top := CanvasY+D.Destination.Top;
+  SelectionRect.Right := CanvasX+D.Destination.Right;
+  SelectionRect.Bottom := CanvasY+D.Destination.Bottom;
+  SelectionActive := True;
+ End
+ Else Begin
+  FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+  CanvasImage := Buffer;
+  CanvasImageW := D.ResultW;
+  CanvasImageH := D.ResultH;
+  ImageBuffer.Width := D.ResultW;
+  ImageBuffer.Height := D.ResultH;
+  SelectionActive := False;
+ End;
+ AntsValid := False;
+ RubberValid := False;
+ PreviewValid := False;
+ ImageBuffer.Modified := True;
+ RFApply := True;
+End;
+
+Procedure FlipRotateDialog;
+Var
+ D: TRFState;
+Begin
+ If Not PGHasImage Then Begin
+  ShowMessage('Retourner / Pivoter','Aucune image a transformer.');
+  Exit;
+ End;
+ MenuActive := False;
+ RedrawInterface;
+ RFInitialize(D);
+ PEHideMouse;
+ PEBuildDisplayPalette;
+ PEShowMouse;
+ While Not D.Done Do Begin
+  If D.Dirty Then
+   RFDraw(D);
+  If KeyPressed Then
+   RFKeyboard(D);
+  If Not D.Done Then
+   RFMouse(D);
+  Delay(10);
+ End;
+ PEHideMouse;
+ PERestoreHardware(D.PaletteData);
+ If D.Accepted Then
+  If Not RFApply(D) Then Begin
+   PEShowMouse;
+   ShowMessage('Retourner / Pivoter','Transformation impossible. Le dessin est conserve.');
+   PEHideMouse;
+  End;
+ PEShowMouse;
+ Repeat
+  GetMouseStateLocal(D.MX,D.MY,D.MB);
+  If (D.MB And 1) <> 0 Then
+   Delay(10);
+ Until (D.MB And 1) = 0;
+ OldMouseButtons := 0;
+ MouseButtons := 0;
+ RedrawInterface;
+End;
+
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -7127,19 +7867,8 @@ Begin
   End;
   MENU_IMAGE: Begin
    Case ItemIndex of
-    0: Begin { Retourner/Pivoter }
-     NewName := '';
-     If PromptString('Retourner / Pivoter',
-                     'H=horizontal V=vertical L=90gauche R=90droite I=180',
-                     NewName) and (NewName <> '') Then Begin
-      Case UpCase(NewName[1]) of
-       'H': Begin AddSnapshotToHistory(TOOL_PENCIL); FlipHorizontal; End;
-       'V': Begin AddSnapshotToHistory(TOOL_PENCIL); FlipVertical; End;
-       'L': Begin AddSnapshotToHistory(TOOL_PENCIL); RotateImage(270); End;
-       'R': Begin AddSnapshotToHistory(TOOL_PENCIL); RotateImage(90); End;
-       'I': Begin AddSnapshotToHistory(TOOL_PENCIL); RotateImage(180); End;
-      End;
-     End;
+    0: Begin { Retourner/Pivoter : choix visuel et apercu avant/apres }
+     FlipRotateDialog;
     End;
     1: Begin { Étirer/Incliner }
      Str(ImageBuffer.Width, NewName);

@@ -147,6 +147,7 @@ Const
  FMT_APNG = 17;
  FMT_ARW = 18;
  FMT_CR2 = 19;
+ FMT_PPM = 20;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -583,6 +584,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If Ext = '.PPM' Then
+  GetImageFormat := FMT_PPM
  Else If Ext = '.CR2' Then
   GetImageFormat := FMT_CR2
  Else If Ext = '.ARW' Then
@@ -6500,6 +6503,167 @@ End;
 
 
 
+{ Netpbm : PPM P3/P6 et compatibilite gris P2/P5, 1..65535.
+  Commentaires # et espaces dans l'entete ; raster 16 bits big-endian.
+  Une image par fichier. Le separateur final n'avale jamais les pixels. }
+Type
+ TPMState = Record
+  Data,RGB: PPNBytes;
+  Size,Position,RGBSize: LongInt;
+  Width,Height,Channels,BytesPerSample: Integer;
+  Maximum: LongInt;
+  Binary,Bad: Boolean;
+ End;
+ PPMState = ^TPMState;
+
+Function PMWhite(B: Byte): Boolean;
+Begin
+ PMWhite:=B In [9,10,11,12,13,32];
+End;
+
+Procedure PMSkip(Var D: TPMState);
+Begin
+ While D.Position<D.Size Do Begin
+  If PMWhite(D.Data^[D.Position]) Then Inc(D.Position)
+  Else If D.Data^[D.Position]=35 Then Begin
+   While D.Position<D.Size Do Begin
+    If D.Data^[D.Position] In [10,13] Then Break;
+    Inc(D.Position);
+   End;
+  End Else Break;
+ End;
+End;
+
+Function PMNumber(Var D: TPMState; Limit: LongInt): LongInt;
+Var V: LongInt; B,N: Integer;
+Begin
+ PMNumber:=0; If D.Bad Then Exit;
+ PMSkip(D); V:=0; N:=0;
+ While D.Position<D.Size Do Begin
+  B:=D.Data^[D.Position];
+  If Not (B In [48..57]) Then Break;
+  Inc(N); Dec(B,48);
+  If (N>10) Or (V>(Limit-B) Div 10) Then Begin
+   D.Bad:=True; Exit;
+  End;
+  V:=V*10+B; Inc(D.Position);
+ End;
+ If (N=0) Or (V>Limit) Then Begin D.Bad:=True; Exit; End;
+ If D.Position<D.Size Then
+  If Not PMWhite(D.Data^[D.Position]) And
+     (D.Data^[D.Position]<>35) Then Begin D.Bad:=True; Exit; End;
+ PMNumber:=V;
+End;
+
+Function PMRead(Const Name: String; Var D: TPMState): Boolean;
+Var F: File; OldMode: Byte; Bytes,Needed,N,V: LongInt;
+    C,Value: Integer; Failed: Boolean;
+Begin
+ PMRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=7) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ If (D.Data^[0]<>80) Or Not (D.Data^[1] In [50,51,53,54]) Then Exit;
+ If Not PMWhite(D.Data^[2]) And (D.Data^[2]<>35) Then Exit;
+ D.Binary:=D.Data^[1] In [53,54]; D.Channels:=3;
+ If D.Data^[1] In [50,53] Then D.Channels:=1;
+ D.Position:=2;
+ V:=PMNumber(D,MAX_IMAGE_WIDTH); If D.Bad Or (V=0) Then Exit;
+ D.Width:=V;
+ V:=PMNumber(D,MAX_IMAGE_HEIGHT); If D.Bad Or (V=0) Then Exit;
+ D.Height:=V;
+ D.Maximum:=PMNumber(D,65535);
+ If D.Bad Or (D.Maximum=0) Then Exit;
+ D.BytesPerSample:=1; If D.Maximum>255 Then D.BytesPerSample:=2;
+ Needed:=LongInt(D.Width)*D.Height*D.Channels*D.BytesPerSample;
+ If D.Binary Then Begin
+  If D.Position>=D.Size Then Exit;
+  If Not PMWhite(D.Data^[D.Position]) Then Exit;
+  Value:=D.Data^[D.Position]; Inc(D.Position);
+  { Accepter CRLF tout en preservant un vrai pixel LF apres un CR seul. }
+  If (Value=13) And (D.Size-D.Position=Needed+1) Then
+   If D.Data^[D.Position]=10 Then Inc(D.Position);
+  If D.Size-D.Position<>Needed Then Exit;
+ End;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ For N:=0 To LongInt(D.Width)*D.Height-1 Do Begin
+  For C:=0 To D.Channels-1 Do Begin
+   If D.Binary Then Begin
+    V:=D.Data^[D.Position]; Inc(D.Position);
+    If D.BytesPerSample=2 Then Begin
+     V:=V*256+D.Data^[D.Position]; Inc(D.Position);
+    End;
+    If V>D.Maximum Then Exit;
+   End Else Begin
+    V:=PMNumber(D,D.Maximum); If D.Bad Then Exit;
+   End;
+   Value:=(V*255+D.Maximum Div 2) Div D.Maximum;
+   D.RGB^[N*3+C]:=Value;
+  End;
+  If D.Channels=1 Then Begin
+   D.RGB^[N*3+1]:=D.RGB^[N*3]; D.RGB^[N*3+2]:=D.RGB^[N*3];
+  End;
+ End;
+ If Not D.Binary Then PMSkip(D);
+ PMRead:=D.Position=D.Size;
+End;
+
+Function LoadPPM(FileName: String): Boolean;
+Var D: PPMState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadPPM:=False; Pixels:=Nil; Q:=Nil;
+ D:=PPMState(JDAllocate(SizeOf(TPMState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If PMRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+   ImageBuffer.BitDepth:=D^.Channels*D^.BytesPerSample*8;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_PPM;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadPPM:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TPMState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -6524,7 +6688,10 @@ Begin
     (Ext <> '.GIF') and (Ext <> '.PNG') and
     (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') and (Ext <> '.WPG') and
     (Ext <> '.LBM') and (Ext <> '.ILBM') and (Ext <> '.IFF') and
-    (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR') and (Ext <> '.DNG') and (Ext <> '.BGX') and (Ext <> '.DDS') and (Ext <> '.DCM') and (Ext <> '.APNG') and (Ext <> '.ARW') and (Ext <> '.CR2') Then Exit;
+    (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR')
+    and (Ext <> '.DNG') and (Ext <> '.BGX') and (Ext <> '.DDS') and (Ext <>
+    '.DCM') and (Ext <> '.APNG') and (Ext <> '.ARW') and (Ext <> '.CR2') and
+    (Ext <> '.PPM') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -6546,6 +6713,7 @@ Begin
   FMT_APNG: Succeeded := LoadAPNG(FileName);
   FMT_ARW: Succeeded := LoadARW(FileName);
   FMT_CR2: Succeeded := LoadCR2(FileName);
+  FMT_PPM: Succeeded := LoadPPM(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -13570,6 +13738,7 @@ Begin
   FMT_APNG: APFormatName:='APNG (premiere trame)';
   FMT_ARW: APFormatName:='ARW Bayer';
   FMT_CR2: APFormatName:='CR2 Bayer';
+  FMT_PPM: APFormatName:='PPM / Netpbm';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -14272,7 +14441,7 @@ Begin
                 (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF') Or
                 (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR') Or
                 (E='.DNG') Or (E='.BGX') Or (E='.DDS') Or (E='.DCM') Or
-                (E='.APNG') Or (E='.ARW') Or (E='.CR2');
+                (E='.APNG') Or (E='.ARW') Or (E='.CR2') Or (E='.PPM');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -14290,6 +14459,7 @@ Begin
   15: OFMatches:=E='.APNG';
   16: OFMatches:=E='.ARW';
   17: OFMatches:=E='.CR2';
+  18: OFMatches:=E='.PPM';
   Else OFMatches:=True;
  End;
 End;
@@ -14297,7 +14467,9 @@ End;
 Function OFFilterLabel(N: Integer): String;
 Begin
  Case N Of
-  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR, DNG, BGX, DDS, DCM, APNG, ARW, CR2';
+  0:
+  OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HD' +
+  'R, FAX, EXR, DNG, BGX, DDS, DCM, APNG, ARW, CR2, PPM';
   1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
   2: OFFilterLabel:='GIF : *.gif';
   3: OFFilterLabel:='PNG : *.png';
@@ -14315,6 +14487,7 @@ Begin
   15: OFFilterLabel:='APNG : *.apng';
   16: OFFilterLabel:='ARW Bayer non compresse : *.arw';
   17: OFFilterLabel:='CR2 Bayer non compresse : *.cr2';
+  18: OFFilterLabel:='PPM Portable Pixmap : *.ppm';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -14726,17 +14899,19 @@ Begin
  If DosError<>0 Then Begin D.Notice:='Fichier introuvable ou inaccessible.'; D.Dirty:=True; Exit; End;
  {$IFDEF FPC}FindClose(R);{$ENDIF}
  If Not OFMatches(S,0) Then Begin
-  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR, DNG, BGX, DDS, DCM, APNG, ARW, CR2.'; D.Dirty:=True; Exit;
+  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, L' +
+  'BM, HDR, FAX, EXR, DNG, BGX, DDS, DCM, APNG, ARW, CR2, PPM.'; D.Dirty:=True;
+  Exit;
  End;
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..18] Of Integer;
+Type TOFFilterOrder = Array[0..19] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=19; If Saving Then Count:=3;
+ Count:=20; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;
@@ -14887,7 +15062,8 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG/BGX/DDS/DCM/APNG/ARW/CR2 : ouverture uniquement.';
+  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG' +
+  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -16222,13 +16398,15 @@ BEGIN
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
-  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|dng|bgx|dds|dcm|apng|arw|cr2]');
+  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
+  'dng|bgx|dds|dcm|apng|arw|cr2|ppm]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
   WriteLn(' - Support de la souris (Int 33h / PtcMouse)');
   WriteLn(' - Outils de dessin: Crayon, Pinceau, A'+#130+'rographe, Ligne, Rectangle, Ellipse...');
-  WriteLn(' - Formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM), HDR (RGBE), FAX (G3 1D), EXR, DNG, BGX, DDS, DCM, APNG, ARW, CR2');
+  WriteLn(' - Formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM), HDR (' +
+  'RGBE), FAX (G3 1D), EXR, DNG, BGX, DDS, DCM, APNG, ARW, CR2, PPM');
   WriteLn(' - Support de la transparence pour GIF et PNG');
   WriteLn(' - Redimensionnement et rognage d''image');
   WriteLn(' - Support de 2 a 32 bits de profondeur de couleur');

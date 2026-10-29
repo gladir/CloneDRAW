@@ -343,6 +343,11 @@ Var
 
  { Variables pour le dessin }
  Drawing: Boolean;
+ PolygonCount,PolygonMouseX,PolygonMouseY: Integer;
+ PolygonX,PolygonY: Array[0..255] Of Integer;
+ PolygonHover,PolygonOverlayValid: Boolean;
+ PolygonLastClick: LongInt;
+
  StartX, StartY: Integer;
  EndX, EndY: Integer;
 
@@ -1305,7 +1310,7 @@ Begin
   TOOL_TEXT: ToolTipText:='Texte : cliquer puis saisir du texte';
   TOOL_LINE: ToolTipText:='Ligne : tracer un segment droit';
   TOOL_CURVE: ToolTipText:='Courbe : tracer une ligne courbe';
-  TOOL_POLYGON: ToolTipText:='Polygone : dessiner plusieurs segments relies';
+  TOOL_POLYGON: ToolTipText:='Polygone : clics = sommets, Entree = fermer';
   TOOL_RECT: ToolTipText:='Rectangle : tracer une forme rectangulaire';
   TOOL_ELLIPSE: ToolTipText:='Ellipse : dessiner un ovale ou un cercle';
   TOOL_ROUNDRECT: ToolTipText:='Rectangle arrondi : tracer des coins arrondis';
@@ -1360,7 +1365,7 @@ Procedure UpdateToolTip;
 Var Index: Integer; Now,Elapsed: LongInt;
 Begin
  Index:=-1;
- If Not MenuActive And Not Drawing And Not TextInsertMode And (MouseButtons=0) Then
+ If Not MenuActive And Not Drawing And Not TextInsertMode And (PolygonCount=0) And (MouseButtons=0) Then
   Index:=ToolTipHit(MouseX,MouseY);
  Now:=ToolTipClock;
  If Index<>ToolTipCandidate Then Begin
@@ -1728,10 +1733,13 @@ Begin
  End;
 End;
 
+Procedure PolygonPreview; Forward;
+
 Procedure RedrawInterface;
 Begin
  { Le redessin complet remplace aussi toute infobulle affichee. }
  ToolTipVisible:=False; ToolTipCandidate:=-1;
+ PolygonOverlayValid:=False;
  {$IFDEF FPC}
  HideMouse;
  {$ELSE}
@@ -1753,6 +1761,7 @@ Begin
  DrawColorPalette;
  DrawStatusBar;
  DrawSelection;
+ PolygonPreview;
 
  { Dessiner le menu actif si nécessaire }
  If MenuActive Then
@@ -12028,6 +12037,112 @@ Begin
 End;
 
 
+{ Construction temporaire d'un polygone : aucun pixel du document n'est
+  modifie avant validation. Une seule entree Annuler pour la forme complete. }
+Procedure PolygonPaint;
+Var I,X,Y: Integer; Previous: ViewPortType;
+Begin
+ If (PolygonCount=0) Or (CurrentTool<>TOOL_POLYGON) Then Exit;
+ ZBeginView(Previous); SetWriteMode(XORPut); SetColor(White);
+ SetLineStyle(SolidLn,0,NormWidth);
+ For I:=1 To PolygonCount-1 Do
+  Line(ZViewX(PolygonX[I-1]),ZViewY(PolygonY[I-1]),ZViewX(PolygonX[I]),ZViewY(PolygonY[I]));
+ If PolygonHover Then Begin
+  SetLineStyle(DottedLn,0,NormWidth);
+  Line(ZViewX(PolygonX[PolygonCount-1]),ZViewY(PolygonY[PolygonCount-1]),
+       ZViewX(PolygonMouseX),ZViewY(PolygonMouseY));
+  If PolygonCount>=2 Then Line(ZViewX(PolygonMouseX),ZViewY(PolygonMouseY),ZViewX(PolygonX[0]),ZViewY(PolygonY[0]));
+ End;
+ SetLineStyle(SolidLn,0,NormWidth);
+ For I:=0 To PolygonCount-1 Do Begin
+  X:=ZViewX(PolygonX[I]); Y:=ZViewY(PolygonY[I]);
+  Rectangle(X-2,Y-2,X+2,Y+2);
+ End;
+ SetWriteMode(CopyPut); ZEndView(Previous);
+End;
+
+Procedure PolygonPreview;
+Begin
+ PolygonPaint;
+ PolygonOverlayValid:=(PolygonCount>0) And (CurrentTool=TOOL_POLYGON);
+End;
+
+Procedure ErasePolygonPreview;
+Begin
+ If PolygonOverlayValid Then PolygonPaint;
+ PolygonOverlayValid:=False;
+End;
+
+Procedure PolygonCancel;
+Begin
+ If PolygonCount=0 Then Exit;
+ PolygonCount:=0; PolygonHover:=False; RedrawInterface;
+End;
+
+Procedure PolygonFinish;
+Var I,J,K,Count,MinY,MaxY,Y,SwapX: Integer;
+    Crossings: Array[0..255] Of Integer; CX: LongInt;
+Begin
+ If PolygonCount<3 Then Begin PolygonCancel; Exit; End;
+ AddSnapshotToHistory(TOOL_POLYGON);
+ If FillStyle>0 Then Begin
+  MinY:=PolygonY[0]; MaxY:=MinY;
+  For I:=1 To PolygonCount-1 Do Begin MinY:=Min(MinY,PolygonY[I]); MaxY:=Max(MaxY,PolygonY[I]); End;
+  { Remplissage pair/impair, sommets superieurs exclus pour eviter de
+    compter deux fois une intersection commune a deux aretes. }
+  For Y:=MinY To MaxY Do Begin
+   Count:=0; J:=PolygonCount-1;
+   For I:=0 To PolygonCount-1 Do Begin
+    If ((PolygonY[I]<=Y) And (PolygonY[J]>Y)) Or
+       ((PolygonY[J]<=Y) And (PolygonY[I]>Y)) Then Begin
+     CX:=PolygonX[I]+LongInt(Y-PolygonY[I])*(PolygonX[J]-PolygonX[I]) Div (PolygonY[J]-PolygonY[I]);
+     Crossings[Count]:=CX; Inc(Count);
+    End;
+    J:=I;
+   End;
+   For I:=1 To Count-1 Do Begin
+    SwapX:=Crossings[I]; K:=I-1;
+    While K>=0 Do Begin
+     If Crossings[K]<=SwapX Then Break;
+     Crossings[K+1]:=Crossings[K]; Dec(K);
+    End;
+    Crossings[K+1]:=SwapX;
+   End;
+   I:=0;
+   While I+1<Count Do Begin ZLine(Crossings[I]-CanvasX,Y-CanvasY,Crossings[I+1]-CanvasX,Y-CanvasY,CurrentColor); Inc(I,2); End;
+  End;
+ End;
+ J:=PolygonCount-1;
+ For I:=0 To PolygonCount-1 Do Begin ZLine(PolygonX[J]-CanvasX,PolygonY[J]-CanvasY,PolygonX[I]-CanvasX,PolygonY[I]-CanvasY,CurrentColor); J:=I; End;
+ ImageBuffer.Modified:=True;
+ PolygonCount:=0; PolygonHover:=False; RedrawInterface;
+End;
+
+Function PolygonNear(X,Y,PX,PY: Integer): Boolean;
+Begin
+ PolygonNear:=(Abs(LongInt(X)-PX)*ZoomLevel<=500) And (Abs(LongInt(Y)-PY)*ZoomLevel<=500);
+End;
+
+Procedure PolygonClick(X,Y: Integer);
+Var Now,Elapsed: LongInt;
+Begin
+ Now:=ToolTipClock; Elapsed:=Now-PolygonLastClick;
+ If Elapsed<0 Then Inc(Elapsed,8640000);
+ If PolygonCount>=3 Then Begin
+  If PolygonNear(X,Y,PolygonX[0],PolygonY[0]) Or
+     ((Elapsed<45) And PolygonNear(X,Y,PolygonX[PolygonCount-1],PolygonY[PolygonCount-1])) Then Begin
+   PolygonFinish; Exit;
+  End;
+ End;
+ If PolygonCount>0 Then
+  If (X=PolygonX[PolygonCount-1]) And (Y=PolygonY[PolygonCount-1]) Then Exit;
+ If PolygonCount>=256 Then Exit;
+ PolygonX[PolygonCount]:=X; PolygonY[PolygonCount]:=Y; Inc(PolygonCount);
+ PolygonMouseX:=X; PolygonMouseY:=Y; PolygonHover:=True; PolygonLastClick:=Now;
+ EraseSelection; SelectionActive:=False; RedrawInterface;
+End;
+
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -12035,6 +12150,7 @@ Var
  InfoMsg: String;
  NewW, NewH, ValErr: Integer;
 Begin
+ PolygonCancel;
  Case MenuIndex of
   MENU_FILE: Begin
    Case ItemIndex of
@@ -12234,6 +12350,7 @@ Begin
  If (ToolX >= 0) and (ToolX < ToolsPerRow) and (ToolY >= 0) and (ToolY < 8) Then Begin
   ToolIndex := ToolY * ToolsPerRow + ToolX;
   If (ToolIndex >= 0) and (ToolIndex <= 14) Then Begin
+   If CurrentTool<>ToolIndex Then PolygonCancel;
    CurrentTool := ToolIndex;
    DrawToolbar;
   End;
@@ -12271,6 +12388,7 @@ End;
 
 Procedure HandleCanvasClick(X, Y: Integer);
 Begin
+ If CurrentTool=TOOL_POLYGON Then Begin PolygonClick(X,Y); Exit; End;
  If Drawing Then Exit;
  If CurrentTool In [TOOL_ERASER,TOOL_FILL,TOOL_PENCIL,TOOL_BRUSH,
                     TOOL_AIRBRUSH,TOOL_LINE,TOOL_RECT,TOOL_ELLIPSE,TOOL_ROUNDRECT] Then
@@ -12326,7 +12444,7 @@ Begin
    TextPrevH := 0;
    DrawTextPreview;
   End;
-  TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_ROUNDRECT, TOOL_CURVE, TOOL_POLYGON: Begin
+  TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_ROUNDRECT, TOOL_CURVE: Begin
    Drawing := True;
    StartX := X;
    StartY := Y;
@@ -12388,6 +12506,10 @@ Procedure HandleCanvasRelease(X, Y: Integer);
 Var
  CenterX, CenterY, RadiusX, RadiusY: Integer;
 Begin
+ If (CurrentTool=TOOL_POLYGON) And (PolygonCount=1) Then Begin
+  If Not PolygonNear(X,Y,PolygonX[0],PolygonY[0]) Then PolygonClick(X,Y);
+  Exit;
+ End;
  If Not Drawing Then Exit;
  Drawing := False;
 
@@ -12533,7 +12655,10 @@ Begin
   End;
  End;
 
+ If (PolygonCount>0) And ((MouseButtons And 2)<>0) And ((OldMouseButtons And 2)=0) Then
+  PolygonFinish;
  If ButtonPressed Then Begin
+  If MenuBarHitTest(MouseX,MouseY)>=0 Then PolygonCancel;
   BarHit := MenuBarHitTest(MouseX, MouseY);
   If BarHit >= 0 Then Begin
    { Clic sur la barre de menu : ouvrir/basculer/fermer }
@@ -12589,6 +12714,13 @@ Begin
                        ZEventY(Min(CanvasY+ZDisplayHeight-1,Max(CanvasY,MouseY))));
  End;
 
+ { Apercu du prochain segment, meme sans bouton enfonce. }
+ If (PolygonCount>0) And ((MouseX<>OldMouseX) Or (MouseY<>OldMouseY)) Then Begin
+  HideMouse; ErasePolygonPreview;
+  PolygonHover:=ZHitCanvas(MouseX,MouseY);
+  If PolygonHover Then Begin PolygonMouseX:=ZEventX(MouseX); PolygonMouseY:=ZEventY(MouseY); End;
+  PolygonPreview; ShowMouse;
+ End;
  { Mise a jour de la barre d'etat si la souris a bouge }
  If (MouseX <> OldMouseX) or (MouseY <> OldMouseY) Then Begin
   DrawStatusBar;
@@ -12607,6 +12739,15 @@ Begin
  ResetToolTip;
 
  Key := ReadKey;
+ If PolygonCount>0 Then Begin
+  Case Key Of
+   #13: Begin PolygonFinish; Exit; End;
+   #27,#26: Begin PolygonCancel; Exit; End;
+   #8: Begin
+    Dec(PolygonCount); RedrawInterface; Exit;
+   End;
+  End;
+ End;
 
  { Touche étendue }
  If Key = #0 Then Begin
@@ -12788,6 +12929,7 @@ Begin
 
  { Variables d'état }
  Running := True;
+ PolygonCount:=0; PolygonHover:=False;
  ToolTipVisible:=False; ToolTipCandidate:=-1;
  MenuActive := False;
  ActiveMenu := -1;

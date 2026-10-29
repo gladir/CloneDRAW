@@ -150,6 +150,7 @@ Const
  FMT_PPM = 20;
  FMT_DIB = 21;
  FMT_CUR = 22;
+ FMT_MSP = 23;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -590,6 +591,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If Ext = '.MSP' Then
+  GetImageFormat := FMT_MSP
  Else If Ext = '.CUR' Then
   GetImageFormat := FMT_CUR
  Else If Ext = '.PPM' Then
@@ -7401,6 +7404,152 @@ Begin
  If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
  FreeMem(D,SizeOf(TPXState));
 End;
+{ Microsoft Paint MSP : DanM brut et LinS RLE par ligne.
+  Compatibilite avec le profil d'en-tete et la polarite BMP2MSP/PCX2MSP.
+  Le checksum des treize premiers mots est controle avant decodage. }
+Type
+ TMSState = Record
+  Data,RGB: PPNBytes;
+  Size,RGBSize,Position: LongInt;
+  Width,Height,RowBytes,Version: Integer;
+  LocalInk: Boolean;
+  Row: Array[0..511] Of Byte;
+ End;
+ PMSState = ^TMSState;
+
+Function MSWord(Const D: TMSState; P: LongInt): Word;
+Begin
+ MSWord:=Word(D.Data^[P]) Or (Word(D.Data^[P+1]) Shl 8);
+End;
+
+Function MSRead(Const Name: String; Var D: TMSState): Boolean;
+Var F: File; OldMode: Byte; Bytes,EndRow,Dest: LongInt;
+    Failed: Boolean; I,X,Y,N,Count,Value,Produced: Integer;
+    V,Checksum,LocalSum: Word;
+Begin
+ MSRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=32) And (D.Size<=16777216) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ If (MSWord(D,0)=$6144) And (MSWord(D,2)=$4D6E) Then D.Version:=1
+ Else If (MSWord(D,0)=$694C) And (MSWord(D,2)=$536E) Then D.Version:=2
+ Else Exit;
+ V:=MSWord(D,4); If (V<1) Or (V>4096) Then Exit; D.Width:=V;
+ V:=MSWord(D,6); If (V<1) Or (V>4096) Then Exit; D.Height:=V;
+ Checksum:=0; For I:=0 To 12 Do Checksum:=Checksum Xor MSWord(D,I*2);
+ If Checksum<>0 Then Exit;
+ D.LocalInk:=(D.Version=1) And (MSWord(D,8)=1) And
+  (MSWord(D,10)=1) And (MSWord(D,12)=D.Width) And
+  (MSWord(D,14)=D.Height) And (MSWord(D,16)=0) And (MSWord(D,18)=0);
+ LocalSum:=0; For I:=0 To 9 Do LocalSum:=LocalSum Xor MSWord(D,I*2);
+ If MSWord(D,20)<>LocalSum Then D.LocalInk:=False;
+ For I:=11 To 15 Do If MSWord(D,I*2)<>0 Then D.LocalInk:=False;
+ D.RowBytes:=(D.Width+7) Div 8;
+ D.Position:=32;
+ If D.Version=1 Then Begin
+  If LongInt(D.RowBytes)*D.Height<>D.Size-32 Then Exit;
+ End Else Begin
+  If LongInt(D.Height)*2>D.Size-32 Then Exit;
+  Inc(D.Position,LongInt(D.Height)*2);
+ End;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ Dest:=0;
+ For Y:=0 To D.Height-1 Do Begin
+  If D.Version=1 Then Begin
+   Move(D.Data^[D.Position],D.Row,D.RowBytes);
+   Inc(D.Position,D.RowBytes);
+  End Else Begin
+   N:=MSWord(D,32+LongInt(Y)*2);
+   { Une ligne vide dans la table signifie une ligne blanche. }
+   FillChar(D.Row,SizeOf(D.Row),255);
+   If N>D.Size-D.Position Then Exit;
+   EndRow:=D.Position+N; Produced:=0;
+   While D.Position<EndRow Do Begin
+    Count:=D.Data^[D.Position]; Inc(D.Position);
+    If Count=0 Then Begin
+     If EndRow-D.Position<2 Then Exit;
+     Count:=D.Data^[D.Position]; Value:=D.Data^[D.Position+1];
+     Inc(D.Position,2);
+     If (Count=0) Or (Count>D.RowBytes-Produced) Then Exit;
+     While Count>0 Do Begin
+      D.Row[Produced]:=Value; Inc(Produced); Dec(Count);
+     End;
+    End Else Begin
+     If (Count>EndRow-D.Position) Or
+        (Count>D.RowBytes-Produced) Then Exit;
+     Move(D.Data^[D.Position],D.Row[Produced],Count);
+     Inc(D.Position,Count); Inc(Produced,Count);
+    End;
+   End;
+   If (N<>0) And (Produced<>D.RowBytes) Then Exit;
+  End;
+  For X:=0 To D.Width-1 Do Begin
+   Value:=0;
+   If ((D.Row[X Div 8] Shr (7-(X And 7))) And 1)<>0 Then Value:=255;
+   If D.LocalInk Then Value:=255-Value;
+   D.RGB^[Dest]:=Value; D.RGB^[Dest+1]:=Value;
+   D.RGB^[Dest+2]:=Value; Inc(Dest,3);
+  End;
+ End;
+ MSRead:=D.Position=D.Size;
+End;
+
+Function LoadMSP(FileName: String): Boolean;
+Var D: PMSState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadMSP:=False; Pixels:=Nil; Q:=Nil;
+ D:=PMSState(JDAllocate(SizeOf(TMSState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If MSRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+   ImageBuffer.BitDepth:=1;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_MSP;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadMSP:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TMSState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -7428,7 +7577,8 @@ Begin
     (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR')
     and (Ext <> '.DNG') and (Ext <> '.BGX') and (Ext <> '.DDS') and (Ext <>
     '.DCM') and (Ext <> '.APNG') and (Ext <> '.ARW') and (Ext <> '.CR2') and
-    (Ext <> '.PPM') and (Ext <> '.CUR') and (Ext <> '.PCX') Then Exit;
+    (Ext <> '.PPM') and (Ext <> '.CUR') and (Ext <> '.PCX') and (Ext <> '.MSP')
+    Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -7454,6 +7604,7 @@ Begin
   FMT_DIB: Succeeded := LoadDIB(FileName);
   FMT_CUR: Succeeded := LoadCUR(FileName);
   FMT_PCX: Succeeded := LoadPCX(FileName);
+  FMT_MSP: Succeeded := LoadMSP(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -14485,6 +14636,7 @@ Begin
   FMT_PPM: APFormatName:='PPM / Netpbm';
   FMT_DIB: APFormatName:='DIB';
   FMT_CUR: APFormatName:='CUR Windows';
+  FMT_MSP: APFormatName:='MSP Microsoft Paint';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -15188,7 +15340,7 @@ Begin
                 (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR') Or
                 (E='.DNG') Or (E='.BGX') Or (E='.DDS') Or (E='.DCM') Or
                 (E='.APNG') Or (E='.ARW') Or (E='.CR2') Or (E='.PPM') Or
-                (E='.CUR') Or (E='.PCX');
+                (E='.CUR') Or (E='.PCX') Or (E='.MSP');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -15210,6 +15362,7 @@ Begin
   19: OFMatches:=E='.DIB';
   20: OFMatches:=E='.CUR';
   21: OFMatches:=E='.PCX';
+  22: OFMatches:=E='.MSP';
   Else OFMatches:=True;
  End;
 End;
@@ -15239,6 +15392,7 @@ Begin
   19: OFFilterLabel:='DIB Device Independent Bitmap : *.dib';
   20: OFFilterLabel:='CUR Curseur Windows : *.cur';
   21: OFFilterLabel:='PCX ZSoft Paintbrush : *.pcx';
+  22: OFFilterLabel:='MSP Microsoft Paint : *.msp';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -15657,12 +15811,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..22] Of Integer;
+Type TOFFilterOrder = Array[0..23] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=23; If Saving Then Count:=3;
+ Count:=24; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;
@@ -15814,7 +15968,7 @@ Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
   D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG' +
-  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB/CUR/PCX : ouverture uniquement.';
+  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB/CUR/PCX/MSP : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -17156,7 +17310,7 @@ BEGIN
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
   WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
-  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx]');
+  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx|msp]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');

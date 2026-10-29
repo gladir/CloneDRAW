@@ -153,6 +153,7 @@ Const
  FMT_MSP = 23;
  FMT_MAC = 24;
  FMT_PAS = 25;
+ FMT_ICO = 26;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -599,6 +600,8 @@ Begin
   GetImageFormat := FMT_MAC
  Else If Ext = '.MSP' Then
   GetImageFormat := FMT_MSP
+ Else If Ext = '.ICO' Then
+  GetImageFormat := FMT_ICO
  Else If Ext = '.CUR' Then
   GetImageFormat := FMT_CUR
  Else If Ext = '.PPM' Then
@@ -7000,7 +7003,7 @@ Type
   Data,RGB: PPNBytes;
   Size,RGBSize: LongInt;
   Width,Height,Bits,HotX,HotY,Count: Integer;
-  Transparent: Boolean;
+  Transparent,Icon: Boolean;
  End;
  PCUState = ^TCUState;
 
@@ -7064,7 +7067,9 @@ Begin
          (7-(X And 7))) And 1)<>0 Then Begin
       YY:=Y; If Not B^.TopDown Then YY:=D.Height-1-Y;
       Dest:=(LongInt(YY)*D.Width+X)*3;
-      For I:=0 To 2 Do B^.RGB^[Dest+I]:=255-B^.RGB^[Dest+I];
+      For I:=0 To 2 Do
+       If D.Icon Then B^.RGB^[Dest+I]:=255
+       Else B^.RGB^[Dest+I]:=255-B^.RGB^[Dest+I];
       D.Transparent:=True;
      End;
     D.RGB:=B^.RGB; D.RGBSize:=B^.RGBSize; B^.RGB:=Nil;
@@ -7097,12 +7102,14 @@ Begin
  PNFree(P);
 End;
 
-Function CURead(Const Name: String; Var D: TCUState): Boolean;
+Function CUContainer(Const Name: String; Var D: TCUState;
+                     Icon: Boolean): Boolean;
 Var F: File; OldMode: Byte; Bytes,P,Offset,Size,BestOffset,BestSize: LongInt;
     W,H,Bits,HX,HY,I,J: Integer; V,Header,Area,BestArea: LongWord;
     Failed,PNG,BestPNG,Usable: Boolean;
 Begin
- CURead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ CUContainer:=False; D.Icon:=Icon; Assign(F,Name); OldMode:=FileMode;
+ FileMode:=0;
  {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
  {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
  If Not Failed And (D.Size>=22) And (D.Size<=134217728) Then Begin
@@ -7114,15 +7121,24 @@ Begin
  End Else Failed:=True;
  {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
  If Failed Then Exit;
- If (CUWord(D,0)<>0) Or (CUWord(D,2)<>2) Then Exit;
+ If CUWord(D,0)<>0 Then Exit;
+ If Icon Then Begin If CUWord(D,2)<>1 Then Exit; End
+ Else If CUWord(D,2)<>2 Then Exit;
  D.Count:=CUWord(D,4);
  If (D.Count<1) Or (D.Count>256) Then Exit;
  If LongInt(D.Count)*16>D.Size-6 Then Exit;
  BestOffset:=0; BestSize:=0; BestArea:=0; BestPNG:=False;
  For I:=0 To D.Count-1 Do Begin
   P:=6+LongInt(I)*16; If D.Data^[P+3]<>0 Then Exit;
-  V:=CUWord(D,P+4); If V>4095 Then Exit; HX:=V;
-  V:=CUWord(D,P+6); If V>4095 Then Exit; HY:=V;
+  HX:=0; HY:=0;
+  If Icon Then Begin
+   If CUWord(D,P+4)>1 Then Exit;
+   V:=CUWord(D,P+6);
+   If Not (V In [0,1,4,8,16,24,32]) Then Exit;
+  End Else Begin
+   V:=CUWord(D,P+4); If V>4095 Then Exit; HX:=V;
+   V:=CUWord(D,P+6); If V>4095 Then Exit; HY:=V;
+  End;
   V:=CULong(D,P+8); If (V<12) Or (V>LongWord(D.Size)) Then Exit;
   Size:=V; V:=CULong(D,P+12);
   If (V<LongWord(6+D.Count*16)) Or
@@ -7170,9 +7186,15 @@ Begin
   End;
  End;
  If BestOffset=0 Then Exit;
- If BestPNG Then CURead:=CUPNG(D,BestOffset,BestSize)
- Else CURead:=CUDIB(D,BestOffset,BestSize);
+ If BestPNG Then CUContainer:=CUPNG(D,BestOffset,BestSize)
+ Else CUContainer:=CUDIB(D,BestOffset,BestSize);
 End;
+
+Function CURead(Const Name: String; Var D: TCUState): Boolean;
+Begin CURead:=CUContainer(Name,D,False); End;
+
+Function ICRead(Const Name: String; Var D: TCUState): Boolean;
+Begin ICRead:=CUContainer(Name,D,True); End;
 
 Function LoadCUR(FileName: String): Boolean;
 Var D: PCUState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
@@ -8674,6 +8696,58 @@ Begin
  If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
  FreeMem(D,SizeOf(TTGState));
 End;
+Function LoadICO(FileName: String): Boolean;
+Var D: PCUState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadICO:=False; Pixels:=Nil; Q:=Nil;
+ D:=PCUState(JDAllocate(SizeOf(TCUState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If ICRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+   ImageBuffer.BitDepth:=D^.Bits;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_ICO;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=D^.Transparent;
+   ImageBuffer.HasHotspot:=False;
+   ImageBuffer.HotspotX:=D^.HotX; ImageBuffer.HotspotY:=D^.HotY;
+   ImageBuffer.CursorImages:=D^.Count;
+   FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0);
+   ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadICO:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TCUState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -8706,7 +8780,7 @@ Begin
     (Ext <> '.TIF') and (Ext <> '.TIFF') and
     (Ext <> '.MAC') and (Ext <> '.PNTG') and
     (Ext <> '.PAS') and (Ext <> '.TGA') and
-    (Ext <> '.TARGA') Then Exit;
+    (Ext <> '.TARGA') and (Ext <> '.ICO') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -8731,6 +8805,7 @@ Begin
   FMT_PPM: Succeeded := LoadPPM(FileName);
   FMT_DIB: Succeeded := LoadDIB(FileName);
   FMT_CUR: Succeeded := LoadCUR(FileName);
+  FMT_ICO: Succeeded := LoadICO(FileName);
   FMT_PCX: Succeeded := LoadPCX(FileName);
   FMT_MSP: Succeeded := LoadMSP(FileName);
   FMT_TIFF: Succeeded := LoadTIFF(FileName);
@@ -15769,6 +15844,7 @@ Begin
   FMT_PPM: APFormatName:='PPM / Netpbm';
   FMT_DIB: APFormatName:='DIB';
   FMT_CUR: APFormatName:='CUR Windows';
+  FMT_ICO: APFormatName:='ICO Icone Windows';
   FMT_MSP: APFormatName:='MSP Microsoft Paint';
   FMT_MAC: APFormatName:='MAC MacPaint';
   FMT_PAS: APFormatName:='PAS constantes Pascal';
@@ -16478,7 +16554,7 @@ Begin
                 (E='.CUR') Or (E='.PCX') Or (E='.MSP') Or
                 (E='.TIF') Or (E='.TIFF') Or
                 (E='.MAC') Or (E='.PNTG') Or (E='.PAS') Or
-                (E='.TGA') Or (E='.TARGA');
+                (E='.TGA') Or (E='.TARGA') Or (E='.ICO');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -16505,6 +16581,7 @@ Begin
   24: OFMatches:=(E='.MAC') Or (E='.PNTG');
   25: OFMatches:=(E='.PAS');
   26: OFMatches:=(E='.TGA') Or (E='.TARGA');
+  27: OFMatches:=E='.ICO';
   Else OFMatches:=True;
  End;
 End;
@@ -16539,6 +16616,7 @@ Begin
   24: OFFilterLabel:='MacPaint : *.mac; *.pntg';
   25: OFFilterLabel:='Pascal Bitmap : *.pas';
   26: OFFilterLabel:='Targa : *.tga; *.targa';
+  27: OFFilterLabel:='ICO Icone Windows : *.ico';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -16957,12 +17035,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..27] Of Integer;
+Type TOFFilterOrder = Array[0..28] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=28; If Saving Then Count:=3;
+ Count:=29; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;

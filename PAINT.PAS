@@ -6506,7 +6506,7 @@ Begin
   If (Pixels<>Nil) And (Q<>Nil) Then Begin
    FillChar(Q^,SizeOf(Q^),0);
    For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
-   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   Used:=0; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
    For N:=0 To Size-1 Do Begin
     R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
     For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
@@ -10083,6 +10083,105 @@ Begin
 End;
 
 
+{ DICOM Part 10, Secondary Capture, Explicit VR Little Endian, RGB8. }
+Var DCSaveSerial:LongInt;
+Function SaveDCM(FileName:String):Boolean;
+Const SOPClass='1.2.840.10008.5.1.4.1.1.7';
+ TransferSyntax='1.2.840.10008.1.2.1';
+ ImplementationUID='2.25.28377616209933487502189927845026860456';
+Var F:File;Buffer:Array[0..8191] Of Byte;Used,I,X,Y:Integer;
+ Failed:Boolean;Position,MetaEnd,PixelSize:LongInt;C:TRGBColor;
+ Year,Month,Day,WeekDay,Hour,Minute,Second,Hundredth:Word;
+ DateText,TimeText,InstanceUID,StudyUID,SeriesUID,BaseUID:String;
+ Procedure Flush;
+ Var Written:LongInt;
+ Begin
+  If Failed Or (Used=0) Then Exit;
+  {$I-}BlockWrite(F,Buffer,Used,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Used);Used:=0;
+ End;
+ Procedure B(Value:Byte);
+ Begin
+  If Failed Then Exit;Buffer[Used]:=Value;Inc(Used);Inc(Position);
+  If Used=SizeOf(Buffer) Then Flush;
+ End;
+ Procedure W(Value:Word);
+ Begin B(Value And 255);B(Value Shr 8);End;
+ Procedure L(Value:LongWord);
+ Begin W(Value And 65535);W(Value Shr 16);End;
+ Procedure TextData(Const S:String);
+ Var J:Integer;
+ Begin For J:=1 To Length(S) Do B(Ord(S[J]));End;
+ Procedure Tag(Group,Element:Word;Const VR:String);
+ Begin W(Group);W(Element);TextData(VR);End;
+ Procedure TextElement(Group,Element:Word;Const VR,Value:String);
+ Begin
+  Tag(Group,Element,VR);W((Length(Value)+1) And $FFFE);
+  TextData(Value);
+  If Odd(Length(Value)) Then
+   If VR='UI' Then B(0) Else B(32);
+ End;
+ Procedure US(Group,Element,Value:Word);
+ Begin Tag(Group,Element,'US');W(2);W(Value);End;
+ Function Two(Value:Word):String;
+ Var T:String;
+ Begin T:=IntToStr(Value);If Length(T)<2 Then T:='0'+T;Two:=T;End;
+Begin
+ SaveDCM:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ GetDate(Year,Month,Day,WeekDay);GetTime(Hour,Minute,Second,Hundredth);
+ DateText:=IntToStr(Year)+Two(Month)+Two(Day);
+ TimeText:=Two(Hour)+Two(Minute)+Two(Second)+'.'+Two(Hundredth);
+ If DCSaveSerial>=999999 Then DCSaveSerial:=0;Inc(DCSaveSerial);
+ BaseUID:='2.25.'+DateText+Two(Hour)+Two(Minute)+Two(Second)+
+  Two(Hundredth)+IntToStr(DCSaveSerial)+IntToStr(Random(32768))+
+  IntToStr(Random(32768));
+ InstanceUID:=BaseUID+'1';StudyUID:=BaseUID+'2';SeriesUID:=BaseUID+'3';
+ PixelSize:=LongInt(CanvasImageW)*CanvasImageH*3;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Failed:=False;Used:=0;Position:=0;
+ For I:=1 To 128 Do B(0);TextData('DICM');
+ Tag(2,0,'UL');W(4);L(0);
+ Tag(2,1,'OB');W(0);L(2);B(0);B(1);
+ TextElement(2,2,'UI',SOPClass);TextElement(2,3,'UI',InstanceUID);
+ TextElement(2,16,'UI',TransferSyntax);
+ TextElement(2,18,'UI',ImplementationUID);
+ TextElement(2,19,'SH','CLONEDRAW_PAINT');MetaEnd:=Position;
+ TextElement(8,8,'CS','DERIVED\SECONDARY');
+ TextElement(8,22,'UI',SOPClass);TextElement(8,24,'UI',InstanceUID);
+ TextElement(8,32,'DA',DateText);TextElement(8,35,'DA',DateText);
+ TextElement(8,48,'TM',TimeText);TextElement(8,51,'TM',TimeText);
+ TextElement(8,80,'SH','');TextElement(8,96,'CS','OT');
+ TextElement(8,100,'CS','WSD');
+ TextElement(8,112,'LO','CloneDRAW');TextElement(8,144,'PN','');
+ TextElement(8,$103E,'LO','CloneDRAW canvas export');
+ TextElement(16,16,'PN','');TextElement(16,32,'LO','');
+ TextElement(16,48,'DA','');TextElement(16,64,'CS','');
+ TextElement(32,13,'UI',StudyUID);TextElement(32,14,'UI',SeriesUID);
+ TextElement(32,16,'SH','');TextElement(32,17,'IS','1');
+ TextElement(32,19,'IS','1');US(40,2,3);
+ TextElement(40,4,'CS','RGB');US(40,6,0);
+ US(40,16,CanvasImageH);US(40,17,CanvasImageW);
+ US(40,256,8);US(40,257,8);US(40,258,7);US(40,259,0);
+ TextElement(40,$2110,'CS','00');
+ Tag($7FE0,16,'OB');W(0);L((PixelSize+1) And $FFFFFFFE);
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];B(C.R);B(C.G);B(C.B);
+  End;
+ End;
+ If Odd(PixelSize) Then B(0);Flush;
+ If Not Failed Then Begin
+  {$I-}Seek(F,140);{$I+}Failed:=IOResult<>0;
+  If Not Failed Then Begin L(MetaEnd-144);Flush;End;
+ End;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveDCM:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -10108,7 +10207,7 @@ Begin
  End;
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
- FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2])
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
@@ -10138,6 +10237,7 @@ Begin
   FMT_APNG: OK:=SaveAPNG(Temp);
   FMT_ARW: OK:=SaveARW(Temp);
   FMT_CR2: OK:=SaveCR2(Temp);
+  FMT_DCM: OK:=SaveDCM(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -11472,7 +11572,7 @@ Begin
  SaveCurrentImage:=False;
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
- FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2])
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -17920,7 +18020,8 @@ Begin
  18: OFSaveExtension:='.ppm';
  15: OFSaveExtension:='.apng';
  16: OFSaveExtension:='.arw';
- 17: OFSaveExtension:='.cr2'; Else OFSaveExtension:='.bmp'; End;
+ 17: OFSaveExtension:='.cr2';
+ 14: OFSaveExtension:='.dcm'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -18036,13 +18137,14 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=12;
+ Count:=29; If Saving Then Count:=13;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
    If I=4 Then Order[I]:=4; If I=5 Then Order[I]:=25; If I=6 Then Order[I]:=12;
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
-   If I=10 Then Order[I]:=16; If I=11 Then Order[I]:=17;
+   If I=10 Then Order[I]:=16; If I=11 Then Order[I]:=17; If I=12 Then
+   Order[I]:=14;
   End;
  End;
  { Trier uniquement la presentation, sans changer les identifiants des formats. }
@@ -18186,7 +18288,8 @@ Begin
    Else If SaveFormat=FMT_PPM Then D^.Filter:=18
    Else If SaveFormat=FMT_APNG Then D^.Filter:=15
    Else If SaveFormat=FMT_ARW Then D^.Filter:=16
-   Else If SaveFormat=FMT_CR2 Then D^.Filter:=17;
+   Else If SaveFormat=FMT_CR2 Then D^.Filter:=17
+   Else If SaveFormat=FMT_DCM Then D^.Filter:=14;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -18356,7 +18459,8 @@ Begin
    18: SaveFormat:=FMT_PPM;
    15: SaveFormat:=FMT_APNG;
    16: SaveFormat:=FMT_ARW;
-   17: SaveFormat:=FMT_CR2; Else SaveFormat:=FMT_BMP; End;
+   17: SaveFormat:=FMT_CR2;
+   14: SaveFormat:=FMT_DCM; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -18373,7 +18477,7 @@ Begin
  SaveAsCurrentImage:=False; Name:=ImageBuffer.FileName; Format:=ImageBuffer.Format;
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
- FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2])
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -18661,7 +18765,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 12 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 13 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

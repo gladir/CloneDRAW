@@ -6304,7 +6304,7 @@ Begin
   If (Pixels<>Nil) And (Q<>Nil) Then Begin
    FillChar(Q^,SizeOf(Q^),0);
    For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
-   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   Used:=0; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
    For N:=0 To Size-1 Do Begin
     R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
     For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
@@ -10182,6 +10182,50 @@ Begin
 End;
 
 
+{ DDS classique A8R8G8B8 non compresse, une texture 2D sans mipmaps. }
+Function SaveDDS(FileName:String):Boolean;
+Var F:File;Header:Array[0..127] Of Byte;
+ Row:Array[0..16383] Of Byte;X,Y:Integer;C:TRGBColor;
+ Written,RowSize:LongInt;Failed:Boolean;
+ Procedure PutLong(P:Integer;V:LongWord);
+ Begin
+  Header[P]:=V And 255;Header[P+1]:=(V Shr 8) And 255;
+  Header[P+2]:=(V Shr 16) And 255;Header[P+3]:=V Shr 24;
+ End;
+ Procedure WriteBytes(Var Buffer;Count:LongInt);
+ Begin
+  If Failed Then Exit;
+  {$I-}BlockWrite(F,Buffer,Count,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Count);
+ End;
+Begin
+ SaveDDS:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ FillChar(Header,SizeOf(Header),0);
+ Header[0]:=Ord('D');Header[1]:=Ord('D');Header[2]:=Ord('S');
+ Header[3]:=32;RowSize:=LongInt(CanvasImageW)*4;
+ PutLong(4,124);PutLong(8,$100F);PutLong(12,CanvasImageH);
+ PutLong(16,CanvasImageW);PutLong(20,RowSize);
+ PutLong(76,32);PutLong(80,$41);PutLong(88,32);
+ PutLong(92,$00FF0000);PutLong(96,$0000FF00);
+ PutLong(100,$000000FF);PutLong(104,$FF000000);PutLong(108,$1000);
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Failed:=False;WriteBytes(Header,SizeOf(Header));
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];
+   Row[X*4]:=C.B;Row[X*4+1]:=C.G;Row[X*4+2]:=C.R;
+   Row[X*4+3]:=255;
+  End;
+  WriteBytes(Row,RowSize);
+ End;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveDDS:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -10207,7 +10251,7 @@ Begin
  End;
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
- FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM])
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,FMT_DDS])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
@@ -10238,6 +10282,7 @@ Begin
   FMT_ARW: OK:=SaveARW(Temp);
   FMT_CR2: OK:=SaveCR2(Temp);
   FMT_DCM: OK:=SaveDCM(Temp);
+  FMT_DDS: OK:=SaveDDS(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -11572,7 +11617,7 @@ Begin
  SaveCurrentImage:=False;
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
- FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM])
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,FMT_DDS])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -18021,7 +18066,8 @@ Begin
  15: OFSaveExtension:='.apng';
  16: OFSaveExtension:='.arw';
  17: OFSaveExtension:='.cr2';
- 14: OFSaveExtension:='.dcm'; Else OFSaveExtension:='.bmp'; End;
+ 14: OFSaveExtension:='.dcm';
+ 13: OFSaveExtension:='.dds'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -18137,12 +18183,13 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=13;
+ Count:=29; If Saving Then Count:=14;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
    If I=4 Then Order[I]:=4; If I=5 Then Order[I]:=25; If I=6 Then Order[I]:=12;
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
+   If I=13 Then Order[I]:=13;
    If I=10 Then Order[I]:=16; If I=11 Then Order[I]:=17; If I=12 Then
    Order[I]:=14;
   End;
@@ -18289,7 +18336,8 @@ Begin
    Else If SaveFormat=FMT_APNG Then D^.Filter:=15
    Else If SaveFormat=FMT_ARW Then D^.Filter:=16
    Else If SaveFormat=FMT_CR2 Then D^.Filter:=17
-   Else If SaveFormat=FMT_DCM Then D^.Filter:=14;
+   Else If SaveFormat=FMT_DCM Then D^.Filter:=14
+   Else If SaveFormat=FMT_DDS Then D^.Filter:=13;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -18460,7 +18508,8 @@ Begin
    15: SaveFormat:=FMT_APNG;
    16: SaveFormat:=FMT_ARW;
    17: SaveFormat:=FMT_CR2;
-   14: SaveFormat:=FMT_DCM; Else SaveFormat:=FMT_BMP; End;
+   14: SaveFormat:=FMT_DCM;
+   13: SaveFormat:=FMT_DDS; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -18477,7 +18526,7 @@ Begin
  SaveAsCurrentImage:=False; Name:=ImageBuffer.FileName; Format:=ImageBuffer.Format;
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
- FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM])
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,FMT_DDS])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -18765,7 +18814,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 13 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 14 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

@@ -134,6 +134,7 @@ Const
  FMT_PCX = 4;
  FMT_TARGA = 5;
  FMT_TIFF = 6;
+ FMT_XBM = 7;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -565,6 +566,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If Ext = '.XBM' Then
+  GetImageFormat := FMT_XBM
  Else If (Ext = '.TIF') or (Ext = '.TIFF') Then
   GetImageFormat := FMT_TIFF
  Else
@@ -3561,6 +3564,269 @@ Begin
 End;
 
 
+{ Lecture XBM integree : tableaux C X11 (char), X10 (short), et variante
+  RGB 24 bits emise par PPM2XBM.PAS. Le texte n'est jamais execute.
+  Les bits monochromes sont lus du poids faible vers le poids fort.
+  Les constantes de dimensions sont associees au prefixe du tableau _bits. }
+Type
+ TXBDimension = Record
+  Prefix: String;
+  Width,Height: LongInt;
+ End;
+ TXBState = Record
+  Data: PPNBytes;
+  Size,Position: LongInt;
+  Bad: Boolean;
+  Dimensions: Array[0..63] Of TXBDimension;
+  DimensionCount: Integer;
+ End;
+ PXBState = ^TXBState;
+
+Function XBToken(Var D: TXBState): String;
+Var C,Q: Char; S: String; Closed: Boolean;
+Begin
+ XBToken:='';
+ While (D.Position<D.Size) And Not D.Bad Do Begin
+  C:=Chr(D.Data^[D.Position]);
+  If C In [#9,#10,#13,' '] Then Inc(D.Position)
+  Else If (C='/') And (D.Position+1<D.Size) Then Begin
+   Q:=Chr(D.Data^[D.Position+1]);
+   If Q='/' Then Begin
+    Inc(D.Position,2); While (D.Position<D.Size) And (D.Data^[D.Position]<>10) Do Inc(D.Position);
+   End Else If Q='*' Then Begin
+    Inc(D.Position,2); Closed:=False;
+    While D.Position+1<D.Size Do Begin
+     If (D.Data^[D.Position]=Ord('*')) And (D.Data^[D.Position+1]=Ord('/')) Then Begin Inc(D.Position,2); Closed:=True; Break; End;
+     Inc(D.Position);
+    End;
+    If Not Closed Then D.Bad:=True;
+   End Else Break;
+  End Else Break;
+ End;
+ If D.Bad Or (D.Position>=D.Size) Then Exit;
+ C:=Chr(D.Data^[D.Position]); S:='';
+ If C In ['a'..'z','A'..'Z','0'..'9','_'] Then Begin
+  While D.Position<D.Size Do Begin
+   C:=Chr(D.Data^[D.Position]); If Not (C In ['a'..'z','A'..'Z','0'..'9','_']) Then Break;
+   If Length(S)=255 Then Begin D.Bad:=True; Exit; End;
+   S:=S+C; Inc(D.Position);
+  End;
+ End Else If C In ['"',#39] Then Begin
+  Q:=C; Inc(D.Position); Closed:=False;
+  While D.Position<D.Size Do Begin
+   C:=Chr(D.Data^[D.Position]); Inc(D.Position);
+   If C='\' Then Begin If D.Position<D.Size Then Inc(D.Position); End
+   Else If C=Q Then Begin Closed:=True; Break; End;
+  End;
+  If Not Closed Then D.Bad:=True;
+  S:='"string"';
+ End Else Begin S:=C; Inc(D.Position); End;
+ XBToken:=S;
+End;
+
+Function XBNumber(S: String; Var Value: LongInt): Boolean;
+Var Base,I,Digit,Start: Integer; C: Char;
+Begin
+ XBNumber:=False; Value:=0;
+ While (Length(S)>0) And (UpCase(S[Length(S)]) In ['U','L']) Do Delete(S,Length(S),1);
+ If S='' Then Exit;
+ Base:=10; Start:=1;
+ If (Length(S)>2) And (Copy(UpperCase(S),1,2)='0X') Then Begin Base:=16; Start:=3; End
+ Else If (Length(S)>1) And (S[1]='0') Then Base:=8;
+ For I:=Start To Length(S) Do Begin
+  C:=UpCase(S[I]); Digit:=Pos(C,'0123456789ABCDEF')-1;
+  If (Digit<0) Or (Digit>=Base) Then Exit;
+  If Value>(MaxLongInt-Digit) Div Base Then Exit;
+  Value:=Value*Base+Digit;
+ End;
+ XBNumber:=True;
+End;
+
+Function XBValue(Var D: TXBState; Token: String; Var Value: LongInt): Boolean;
+Var Negative,Parentheses: Boolean;
+Begin
+ Parentheses:=Token='('; If Parentheses Then Token:=XBToken(D);
+ Negative:=Token='-';
+ If Negative Or (Token='+') Then Token:=XBToken(D);
+ XBValue:=False;
+ If Not XBNumber(Token,Value) Then Exit;
+ If Negative Then Value:=-Value;
+ If Parentheses Then If XBToken(D)<>')' Then Exit;
+ XBValue:=Not D.Bad;
+End;
+
+Function XBFindArray(Var D: TXBState; Var Width,Height,UnitBits: Integer;
+                      Var ArrayStart: LongInt): Boolean;
+Var Token,Name,Prefix,S: String; I,N: Integer; Value: LongInt; ShortType: Boolean;
+Begin
+ XBFindArray:=False; ShortType:=False;
+ Repeat
+  Token:=XBToken(D); If (Token='') Or D.Bad Then Exit;
+  If Token='#' Then Begin
+   Token:=XBToken(D);
+   If Token='define' Then Begin
+    Name:=XBToken(D); N:=Length(Name); Prefix:=''; S:='';
+    If (N>6) And (Copy(Name,N-5,6)='_width') Then Begin Prefix:=Copy(Name,1,N-6); S:='w'; End;
+    If (N>7) And (Copy(Name,N-6,7)='_height') Then Begin Prefix:=Copy(Name,1,N-7); S:='h'; End;
+    If Prefix<>'' Then Begin
+     Token:=XBToken(D); If Not XBValue(D,Token,Value) Then Exit;
+     If (Value<1) Or (Value>MAX_IMAGE_WIDTH) Then Exit;
+     I:=0; While (I<D.DimensionCount) And (D.Dimensions[I].Prefix<>Prefix) Do Inc(I);
+     If I=D.DimensionCount Then Begin
+      If I=64 Then Exit; D.Dimensions[I].Prefix:=Prefix; Inc(D.DimensionCount);
+     End;
+     If S='w' Then Begin
+      If (D.Dimensions[I].Width<>0) And (D.Dimensions[I].Width<>Value) Then Exit;
+      D.Dimensions[I].Width:=Value;
+     End Else Begin
+      If (D.Dimensions[I].Height<>0) And (D.Dimensions[I].Height<>Value) Then Exit;
+      D.Dimensions[I].Height:=Value;
+     End;
+    End;
+   End;
+  End Else If (Token='static') Or (Token=';') Then ShortType:=False
+  Else If Token='short' Then ShortType:=True
+  Else If Token='char' Then ShortType:=False
+  Else If (Length(Token)>5) And (Copy(Token,Length(Token)-4,5)='_bits') Then Begin
+   Prefix:=Copy(Token,1,Length(Token)-5); I:=0;
+   While (I<D.DimensionCount) And (D.Dimensions[I].Prefix<>Prefix) Do Inc(I);
+   If I=D.DimensionCount Then Exit;
+   Width:=D.Dimensions[I].Width; Height:=D.Dimensions[I].Height;
+   If (Width<1) Or (Height<1) Or (Width>MAX_IMAGE_WIDTH) Or (Height>MAX_IMAGE_HEIGHT) Then Exit;
+   If XBToken(D)<>'[' Then Exit;
+   Token:=XBToken(D);
+   If Token<>']' Then Begin
+    If Not XBNumber(Token,Value) Then Exit;
+    If XBToken(D)<>']' Then Exit;
+   End;
+   If XBToken(D)<>'=' Then Exit;
+   If XBToken(D)<>'{' Then Exit;
+   ArrayStart:=D.Position; UnitBits:=8; If ShortType Then UnitBits:=16;
+   XBFindArray:=Not D.Bad; Exit;
+  End;
+ Until D.Bad;
+End;
+
+Function XBCountValues(Var D: TXBState; UnitBits: Integer; Limit: LongInt;
+                        Var Count: LongInt): Boolean;
+Var Token: String; Value: LongInt;
+Begin
+ XBCountValues:=False; Count:=0; Token:=XBToken(D);
+ If Token='}' Then Exit;
+ Repeat
+  If Not XBValue(D,Token,Value) Then Exit;
+  If UnitBits=8 Then Begin
+   If (Value< -128) Or (Value>255) Then Exit;
+  End Else If (Value< -32768) Or (Value>65535) Then Exit;
+  Inc(Count); If Count>Limit Then Exit;
+  Token:=XBToken(D);
+  If Token='}' Then Break;
+  If Token<>',' Then Exit;
+  Token:=XBToken(D); If Token='}' Then Break;
+ Until D.Bad;
+ If D.Bad Then Exit;
+ Token:=XBToken(D); If (Token<>';') And (Token<>'') Then Exit;
+ XBCountValues:=True;
+End;
+
+Function LoadXBM(FileName: String): Boolean;
+Var D: PXBState; F: File; OldMode: Byte; Bytes,ArrayStart,Count,Stride,I,Index,Size,Value: LongInt;
+    W,H,UnitBits,Mode,X,Y,J,K,Used,Slot: Integer; Token: String;
+    Pixels,Dest,Source: PByte; RGB: PByte; Q: PJPQuantizer; Palette: TPalette;
+    Img: TJDImage; R,G,B: Byte; Exact,OK: Boolean;
+Begin
+ LoadXBM:=False; Pixels:=Nil; RGB:=Nil; Q:=Nil;
+ D:=PXBState(JDAllocate(SizeOf(TXBState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ Assign(F,FileName); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
+ If IOResult<>0 Then Begin FreeMem(D,SizeOf(TXBState)); Exit; End;
+ {$I-}
+ D^.Size:=FileSize(F);
+ If (D^.Size>0) And (D^.Size<=134217728) Then Begin
+  D^.Data:=PPNBytes(JDAllocate(D^.Size));
+  If D^.Data<>Nil Then Begin BlockRead(F,D^.Data^,D^.Size,Bytes); D^.Bad:=Bytes<>D^.Size; End
+  Else D^.Bad:=True;
+ End Else D^.Bad:=True;
+ Close(F);
+ {$I+}If IOResult<>0 Then D^.Bad:=True;
+ OK:=False; Size:=0;
+ If Not D^.Bad Then If XBFindArray(D^,W,H,UnitBits,ArrayStart) Then Begin
+  Size:=LongInt(W)*H; Stride:=(LongInt(W)+UnitBits-1) Div UnitBits;
+  If XBCountValues(D^,UnitBits,Size*3,Count) Then Begin
+   Mode:=0;
+   If Count=Stride*H Then Mode:=1
+   Else If (UnitBits=8) And (Count=Size*3) Then Mode:=24;
+   If Mode<>0 Then Begin
+    Pixels:=PByte(JDAllocate(Size));
+    If Mode=24 Then RGB:=PByte(JDAllocate(Size*3));
+    If (Pixels<>Nil) And ((Mode=1) Or (RGB<>Nil)) Then Begin
+     D^.Position:=ArrayStart; Dest:=Pixels; Source:=RGB;
+     FillChar(Palette,SizeOf(Palette),0);
+     For J:=0 To 15 Do Begin Palette[J].R:=VGA_R[J]; Palette[J].G:=VGA_G[J]; Palette[J].B:=VGA_B[J]; Palette[J].A:=255; End;
+     Palette[16].R:=255; Palette[16].G:=255; Palette[16].B:=255; Palette[16].A:=255;
+     OK:=True;
+     For I:=0 To Count-1 Do Begin
+      Token:=XBToken(D^);
+      If Not XBValue(D^,Token,Value) Then Begin OK:=False; Break; End;
+      If Mode=1 Then Begin
+       Y:=I Div Stride; X:=(I Mod Stride)*UnitBits;
+       For K:=0 To UnitBits-1 Do If X+K<W Then Begin
+        Index:=LongInt(Y)*W+X+K;
+        If ((Value Shr K) And 1)<>0 Then PPNBytes(Pixels)^[Index]:=Black Else PPNBytes(Pixels)^[Index]:=16;
+       End;
+      End Else Begin Source^:=Value; Inc(Source); End;
+      If I<Count-1 Then If XBToken(D^)<>',' Then Begin OK:=False; Break; End;
+     End;
+     If OK And (Mode=24) Then Begin
+      Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+      If Q=Nil Then OK:=False
+      Else Begin
+       Used:=16; Exact:=True; Source:=RGB; Dest:=Pixels;
+       For I:=0 To Size-1 Do Begin
+        R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+        For J:=0 To Used-1 Do If (Palette[J].R=R) And (Palette[J].G=G) And (Palette[J].B=B) Then Begin Slot:=J; Break; End;
+        If Slot<0 Then Begin
+         If Used=256 Then Begin Exact:=False; Break; End;
+         Slot:=Used; Inc(Used); Palette[Slot].R:=R; Palette[Slot].G:=G; Palette[Slot].B:=B; Palette[Slot].A:=255;
+        End;
+        Dest^:=Slot; Inc(Dest);
+       End;
+       If Not Exact Then Begin
+        Img.Width:=W; Img.Height:=H; Img.Pixels:=RGB; JPBuildPalette(Q^,Img); Palette:=Q^.Palette;
+        Source:=RGB; Dest:=Pixels;
+        For I:=0 To Size-1 Do Begin
+         R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source);
+         Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest);
+        End;
+       End;
+      End;
+     End;
+     If OK Then Begin
+      If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+      CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=W; CanvasImageH:=H;
+      ImageBuffer.Width:=W; ImageBuffer.Height:=H; ImageBuffer.BitDepth:=Mode;
+      ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_XBM; ImageBuffer.Modified:=False;
+      ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0);
+      ImageBuffer.Palette:=Palette;
+      For J:=0 To 255 Do Begin
+       {$IFDEF FPC}SetRGBPalette(J,Palette[J].R,Palette[J].G,Palette[J].B);
+       {$ELSE}SetRGBPalette(J,Palette[J].R Shr 2,Palette[J].G Shr 2,Palette[J].B Shr 2);{$ENDIF}
+      End;
+      LoadXBM:=True;
+     End;
+    End;
+   End;
+  End;
+ End;
+ If Pixels<>Nil Then FreeMem(Pixels,Size);
+ If RGB<>Nil Then FreeMem(RGB,Size*3);
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TXBState));
+End;
+
+
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -3583,7 +3849,7 @@ Begin
  Ext := ExtractFileExt(FileName);
  If (Ext <> '.BMP') and (Ext <> '.DIB') and
     (Ext <> '.GIF') and (Ext <> '.PNG') and
-    (Ext <> '.JPG') and (Ext <> '.JPEG') Then Exit;
+    (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -3592,6 +3858,7 @@ Begin
   FMT_GIF: Succeeded := LoadGIF(FileName);
   FMT_PNG: Succeeded := LoadPNG(FileName);
   FMT_JPEG: Succeeded := LoadJPEG(FileName);
+  FMT_XBM: Succeeded := LoadXBM(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -10579,6 +10846,7 @@ Begin
   FMT_PCX: APFormatName:='PCX';
   FMT_TARGA: APFormatName:='TGA';
   FMT_TIFF: APFormatName:='TIFF';
+  FMT_XBM: APFormatName:='XBM';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -11277,11 +11545,12 @@ Begin
  E:=OFUpper(ExtractFileExt(Name));
  Case Filter Of
   0: OFMatches:=(E='.BMP') Or (E='.DIB') Or (E='.GIF') Or
-                (E='.PNG') Or (E='.JPG') Or (E='.JPEG');
+                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
   4: OFMatches:=(E='.JPG') Or (E='.JPEG');
+  5: OFMatches:=E='.XBM';
   Else OFMatches:=True;
  End;
 End;
@@ -11289,11 +11558,12 @@ End;
 Function OFFilterLabel(N: Integer): String;
 Begin
  Case N Of
-  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG';
+  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM';
   1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
   2: OFFilterLabel:='GIF : *.gif';
   3: OFFilterLabel:='PNG : *.png';
   4: OFFilterLabel:='JPEG : *.jpg; *.jpeg';
+  5: OFFilterLabel:='X Bitmap : *.xbm';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -11705,7 +11975,7 @@ Begin
  If DosError<>0 Then Begin D.Notice:='Fichier introuvable ou inaccessible.'; D.Dirty:=True; Exit; End;
  {$IFDEF FPC}FindClose(R);{$ENDIF}
  If Not OFMatches(S,0) Then Begin
-  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG.'; D.Dirty:=True; Exit;
+  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM.'; D.Dirty:=True; Exit;
  End;
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
@@ -11714,7 +11984,7 @@ Procedure OFChooseFilter(Var D: TOFState);
 Var X,Y,W,I,N,MX,MY,B,Prev: Integer; K,E: Char; Done,Accept: Boolean; MaxFilter: Integer; OldName: String; PopupHeight: Integer;
 Begin
  X:=D.X+38; Y:=D.Y+120; W:=D.W-76;
- N:=D.Filter; MaxFilter:=6; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
+ N:=D.Filter; MaxFilter:=7; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
  PopupHeight:=50+MaxFilter*21;
  GetMouseStateLocal(MX,MY,Prev);
  Repeat
@@ -11823,7 +12093,7 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='BMP, GIF et PNG disponibles. JPEG : ouverture uniquement.';
+  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -12963,13 +13233,13 @@ BEGIN
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
-  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg]');
+  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
   WriteLn(' - Support de la souris (Int 33h / PtcMouse)');
   WriteLn(' - Outils de dessin: Crayon, Pinceau, A'+#130+'rographe, Ligne, Rectangle, Ellipse...');
-  WriteLn(' - Support des formats: BMP, GIF, PNG, JPEG');
+  WriteLn(' - Support des formats: BMP, GIF, PNG, JPEG, XBM');
   WriteLn(' - Support de la transparence pour GIF et PNG');
   WriteLn(' - Redimensionnement et rognage d''image');
   WriteLn(' - Support de 2 a 32 bits de profondeur de couleur');

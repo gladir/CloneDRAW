@@ -9116,6 +9116,69 @@ End;
 
 Var PaintSaveError: String;
 
+{ PCX version 5 : un plan indexe 8 bits, RLE par ligne, palette VGA.
+  Le canevas et sa palette sont conserves exactement, sans quantification. }
+Function SavePCX(FileName: String): Boolean;
+Var F: File; Header: Array[0..127] Of Byte;
+    Output: Array[0..8191] Of Byte; Palette: Array[0..768] Of Byte;
+    X,Y,I,Run,Used,Stride: Integer; Value,Next: Byte;
+    Written: LongInt; Failed: Boolean;
+ Procedure PutWord(P,V: Integer);
+ Begin Header[P]:=V And 255; Header[P+1]:=V Shr 8; End;
+ Procedure WriteBytes(Var Buffer; Count: LongInt);
+ Begin
+  If Failed Then Exit;
+  {$I-}BlockWrite(F,Buffer,Count,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Count);
+ End;
+Begin
+ SavePCX:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ FillChar(Header,SizeOf(Header),0);
+ Header[0]:=10; Header[1]:=5; Header[2]:=1; Header[3]:=8;
+ PutWord(8,CanvasImageW-1); PutWord(10,CanvasImageH-1);
+ PutWord(12,72); PutWord(14,72);
+ For I:=0 To 15 Do Begin
+  Header[16+I*3]:=ImageBuffer.Palette[I].R;
+  Header[17+I*3]:=ImageBuffer.Palette[I].G;
+  Header[18+I*3]:=ImageBuffer.Palette[I].B;
+ End;
+ Stride:=(CanvasImageW+1) And $FFFE;
+ Header[65]:=1; PutWord(66,Stride); PutWord(68,1);
+ PutWord(70,CanvasImageW); PutWord(72,CanvasImageH);
+ Palette[0]:=12;
+ For I:=0 To 255 Do Begin
+  Palette[1+I*3]:=ImageBuffer.Palette[I].R;
+  Palette[2+I*3]:=ImageBuffer.Palette[I].G;
+  Palette[3+I*3]:=ImageBuffer.Palette[I].B;
+ End;
+ Assign(F,FileName); {$I-}Rewrite(F,1);{$I+}
+ If IOResult<>0 Then Exit;
+ Failed:=False; WriteBytes(Header,SizeOf(Header));
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break; X:=0; Used:=0;
+  While X<Stride Do Begin
+   Value:=0; If X<CanvasImageW Then Value:=ZImagePixel(X,Y);
+   Run:=1;
+   While (Run<63) And (X+Run<Stride) Do Begin
+    Next:=0;
+    If X+Run<CanvasImageW Then Next:=ZImagePixel(X+Run,Y);
+    If Next<>Value Then Break; Inc(Run);
+   End;
+   If (Run>1) Or (Value>=192) Then Begin
+    Output[Used]:=192 Or Run; Inc(Used);
+   End;
+   Output[Used]:=Value; Inc(Used); Inc(X,Run);
+  End;
+  WriteBytes(Output,Used);
+ End;
+ WriteBytes(Palette,SizeOf(Palette));
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SavePCX:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -9138,7 +9201,8 @@ Begin
     (CanvasImageW<>ImageBuffer.Width) Or (CanvasImageH<>ImageBuffer.Height) Then Begin
   PaintSaveError:='Image absente ou dimensions incoherentes.'; Exit;
  End;
- If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG]) Then Begin PaintSaveError:='Choisissez BMP, GIF ou PNG.'; Exit; End;
+ If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX]) Then Begin
+ PaintSaveError:='Choisissez BMP, GIF, PNG ou PCX.'; Exit; End;
  Old:=ImageBuffer; Exists:=Present(FileName);
  If Exists And ((R.Attr And (Directory+ReadOnly))<>0) Then Begin PaintSaveError:='Cible en lecture seule ou dossier.'; Exit; End;
  Pos:=Length(FileName); While (Pos>0) And Not (FileName[Pos] In ['\','/']) Do Dec(Pos);
@@ -9154,6 +9218,7 @@ Begin
  Case Format Of
   FMT_BMP: OK:=SaveBMP(Temp);
   FMT_GIF: OK:=SaveGIF(Temp);
+  FMT_PCX: OK:=SavePCX(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -10486,7 +10551,8 @@ Function SaveAsCurrentImage: Boolean; Forward;
 Function SaveCurrentImage: Boolean;
 Begin
  SaveCurrentImage:=False;
- If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In [FMT_BMP,FMT_GIF,FMT_PNG]) Then Begin
+ If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
+ [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX]) Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
  If SaveImage(ImageBuffer.FileName,ImageBuffer.Format) Then Begin SaveCurrentImage:=True; DrawStatusBar; End
@@ -16924,7 +16990,8 @@ End;
 
 Function OFSaveExtension(Filter: Integer): String;
 Begin
- Case Filter Of 2: OFSaveExtension:='.gif'; 3: OFSaveExtension:='.png'; Else OFSaveExtension:='.bmp'; End;
+ Case Filter Of 2: OFSaveExtension:='.gif'; 3: OFSaveExtension:='.png';
+ 21: OFSaveExtension:='.pcx'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -17040,9 +17107,11 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=3;
+ Count:=29; If Saving Then Count:=4;
  For I:=0 To Count-1 Do Begin
-  Order[I]:=I; If Saving Then Order[I]:=I+1;
+  Order[I]:=I; If Saving Then Begin
+   Order[I]:=I+1; If I=3 Then Order[I]:=21;
+  End;
  End;
  { Trier uniquement la presentation, sans changer les identifiants des formats. }
  For I:=1 To Count-1 Do Begin
@@ -17148,7 +17217,8 @@ Var D: POFState; MX,MY,MB,PrevB,I,N,Y,BX,BY: Integer; K,E: Char;
  Begin
   If Saving Then Begin
    ShowMessage('Enregistrer sous - aide','Choisissez le dossier, le nom et le type. Un fichier existant demande confirmation.');
-   ShowMessage('Formats disponibles','BMP, GIF et PNG conservent les couleurs du canevas. F7 : nouveau dossier.');
+   ShowMessage('Formats disponibles','BMP, GIF, PNG et PCX conservent les c' +
+   'ouleurs du canevas. F7 : nouveau dossier.');
   End Else ShowMessage('Ouvrir - aide','Arbre : +/- deplie, nom = naviguer. Liste : double-clic ou Entree.');
   ShowMessage('Saisie et navigation','Ctrl+A/C/X/V : selectionner/copier/couper/coller. Alt+Haut : parent.');
   D^.Dirty:=True;
@@ -17161,7 +17231,9 @@ Begin
  D^.Rows:=(D^.H-285) Div 16; D^.Rows:=Max(4,D^.Rows);
  GetDir(0,S); D^.Folder:=S;
  If Saving Then Begin
-  D^.Filter:=1; If SaveFormat=FMT_GIF Then D^.Filter:=2 Else If SaveFormat=FMT_PNG Then D^.Filter:=3;
+  D^.Filter:=1; If SaveFormat=FMT_GIF Then D^.Filter:=2 Else If
+  SaveFormat=FMT_PNG Then D^.Filter:=3
+   Else If SaveFormat=FMT_PCX Then D^.Filter:=21;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -17191,7 +17263,7 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='Exports : BMP, GIF, PNG. Autres formats : ouverture seule.';
+  D^.Notice:='Exports : BMP, GIF, PNG, PCX. Autres formats : ouverture seule.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -17304,7 +17376,9 @@ Begin
  Until D^.Done;
  If D^.Accepted Then Begin
   FileName:=D^.Name; PaintFileDialog:=True;
-  If Saving Then Case D^.Filter Of 2: SaveFormat:=FMT_GIF; 3: SaveFormat:=FMT_PNG; Else SaveFormat:=FMT_BMP; End;
+  If Saving Then Case D^.Filter Of 2: SaveFormat:=FMT_GIF; 3:
+  SaveFormat:=FMT_PNG;
+   21: SaveFormat:=FMT_PCX; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -17319,7 +17393,7 @@ Function SaveAsCurrentImage: Boolean;
 Var Name: String; Format: Byte;
 Begin
  SaveAsCurrentImage:=False; Name:=ImageBuffer.FileName; Format:=ImageBuffer.Format;
- If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG]) Then Format:=FMT_PNG;
+ If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX]) Then Format:=FMT_PNG;
  Repeat
   If Not PaintFileDialog(Name,True,Format) Then Exit;
   If SaveImage(Name,Format) Then Begin SaveAsCurrentImage:=True; RedrawInterface; Exit; End;
@@ -17605,7 +17679,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : BMP, GIF, PNG');
+   OutTextXY(X+W-198,Y+270,'Exports : BMP, GIF, PNG, PCX');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

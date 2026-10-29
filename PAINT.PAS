@@ -9512,6 +9512,684 @@ Begin
 End;
 
 
+{ Attributs du document : lecture du buffer image, jamais des pixels du
+  dialogue. Les tailles de fichier, de stockage estime et de memoire sont
+  distinguees. Seul le bouton Redimensionner ouvre une operation d'edition. }
+
+Const
+ AP_TAB_COUNT = 4;
+ AP_BUTTON_COUNT = 6;
+ AP_CHART_COUNT = 9;
+
+Type
+ TAPReport = Record
+  Count: Integer;
+  Lines: Array[0..63] of String[160];
+ End;
+ TAPChart = Record
+  Count: Integer;
+  Values: Array[0..AP_CHART_COUNT-1] of LongInt;
+  Labels: Array[0..AP_CHART_COUNT-1] of String[24];
+  Colors: Array[0..AP_CHART_COUNT-1] of TRGBColor;
+  Total: LongInt;
+ End;
+ TAPState = Record
+  X,Y,Tab,Focus,SelectedColor: Integer;
+  Tabs: Array[0..AP_TAB_COUNT-1] of TRect;
+  Buttons: Array[0..AP_BUTTON_COUNT-1] of TRect;
+  Colors: TAPChart;
+  Memory: TAPChart;
+  PixelCount,PixelBytes,PaletteBytes,MetadataBytes: LongInt;
+  UndoBytes,RedoBytes,TotalBytes,DiskBytes: LongInt;
+  UsedIndices,DistinctColors: Integer;
+  MeanColor: TRGBColor;
+  MinLight,MaxLight: Integer;
+  HasDiskFile: Boolean;
+  FileDate: String[32];
+  SavedPalette: TPalette;
+  Histogram: TPGHistogram;
+  Status: String[77];
+  Done,Dirty: Boolean;
+  MX,MY,MB,PreviousButtons: Integer;
+ End;
+
+Function APFormatName(Format: Byte): String;
+Begin
+ Case Format Of
+  FMT_BMP: APFormatName:='BMP';
+  FMT_GIF: APFormatName:='GIF';
+  FMT_PNG: APFormatName:='PNG';
+  FMT_JPEG: APFormatName:='JPEG';
+  FMT_PCX: APFormatName:='PCX';
+  FMT_TARGA: APFormatName:='TGA';
+  FMT_TIFF: APFormatName:='TIFF';
+ Else APFormatName:='Non renseigne';
+ End;
+End;
+
+Function APPercent(Part,Total: LongInt): String;
+Var S:String; I:Integer;
+Begin
+ If Total<=0 Then S:='0,0'
+ Else Begin
+  Str(Part*100.0/Total:0:1,S);
+  For I:=1 To Length(S) Do If S[I]='.' Then S[I]:=',';
+ End;
+ APPercent:=S+' %';
+End;
+
+Function APTwoDigits(N:Integer):String;
+Var S:String;
+Begin
+ Str(N,S);
+ If Length(S)<2 Then S:='0'+S;
+ APTwoDigits:=S;
+End;
+
+Function APHistoryBytes(Item:PHistoryItem):LongInt;
+Var Total:LongInt; Data:PHistoryData;
+Begin
+ Total:=0;
+ While Item<>Nil Do Begin
+  Total:=Total+SizeOf(THistoryItem);
+  Data:=PHistoryData(Item^.Data);
+  If Data<>Nil Then Begin
+   Total:=Total+SizeOf(THistoryData);
+   If Data^.PixelData<>Nil Then Total:=Total+Data^.DataSize;
+  End;
+  Item:=Item^.Next;
+ End;
+ APHistoryBytes:=Total;
+End;
+
+Function APBMPEstimate(W,H,Bits:Integer):LongInt;
+Var Row,PaletteSize:LongInt;
+Begin
+ PaletteSize:=0;
+ If Bits<=8 Then PaletteSize:=(LongInt(1) Shl Bits)*4;
+ Row:=((LongInt(W)*Bits+31) Div 32)*4;
+ APBMPEstimate:=54+PaletteSize+Row*H;
+End;
+
+Procedure APClearChart(Var C:TAPChart);
+Begin FillChar(C,SizeOf(C),0); End;
+
+Procedure APAddChart(Var C:TAPChart; const LabelText:String;
+                      Value:LongInt; const Color:TRGBColor);
+Begin
+ If (C.Count>=AP_CHART_COUNT) Or (Value<0) Then Exit;
+ C.Labels[C.Count]:=LabelText;
+ C.Values[C.Count]:=Value;
+ C.Colors[C.Count]:=Color;
+ C.Total:=C.Total+Value;
+ Inc(C.Count);
+End;
+
+Procedure APReadFile(Var D:TAPState);
+Var Info:SearchRec; Stamp:DateTime;
+Begin
+ D.HasDiskFile:=False;
+ D.DiskBytes:=0;
+ D.FileDate:='Non disponible';
+ If ImageBuffer.FileName='' Then Exit;
+ FindFirst(ImageBuffer.FileName,AnyFile,Info);
+ If DosError<>0 Then Exit;
+ If (Info.Attr And Directory)<>0 Then Exit;
+ D.HasDiskFile:=True;
+ D.DiskBytes:=Info.Size;
+ UnpackTime(Info.Time,Stamp);
+ D.FileDate:=APTwoDigits(Stamp.Day)+'/'+APTwoDigits(Stamp.Month)+'/'+
+             IntToStr(Stamp.Year)+' '+APTwoDigits(Stamp.Hour)+':'+APTwoDigits(Stamp.Min);
+End;
+
+Procedure APRefresh(Var D:TAPState);
+Var
+ Work:TPGState;
+ I,J,Light:Integer;
+ Duplicate:Boolean;
+ SumR,SumG,SumB:Real;
+ Counted:LongInt;
+Begin
+ D.SavedPalette:=ImageBuffer.Palette;
+ FillChar(Work,SizeOf(Work),0);
+ Work.Source:=0;
+ PGHistogram(Work);
+ D.Histogram:=Work.Histogram;
+ D.PixelCount:=Work.TotalPixels;
+ D.PixelBytes:=0;
+ If PGHasImage Then D.PixelBytes:=LongInt(CanvasImageW)*CanvasImageH;
+ D.PaletteBytes:=SizeOf(TPalette);
+ D.MetadataBytes:=SizeOf(TImageBuffer)-SizeOf(TPalette);
+ D.UndoBytes:=APHistoryBytes(UndoList);
+ D.RedoBytes:=APHistoryBytes(RedoList);
+ D.TotalBytes:=D.PixelBytes+D.PaletteBytes+D.MetadataBytes+D.UndoBytes+D.RedoBytes;
+ D.UsedIndices:=0;
+ D.DistinctColors:=0;
+ D.MinLight:=255;
+ D.MaxLight:=0;
+ SumR:=0; SumG:=0; SumB:=0;
+ For I:=0 To 255 Do
+  If D.Histogram[I]>0 Then Begin
+   Inc(D.UsedIndices);
+   SumR:=SumR+ImageBuffer.Palette[I].R*1.0*D.Histogram[I];
+   SumG:=SumG+ImageBuffer.Palette[I].G*1.0*D.Histogram[I];
+   SumB:=SumB+ImageBuffer.Palette[I].B*1.0*D.Histogram[I];
+   Light:=PGBrightness(ImageBuffer.Palette[I]) Div 1000;
+   D.MinLight:=Min(D.MinLight,Light);
+   D.MaxLight:=Max(D.MaxLight,Light);
+   Duplicate:=False;
+   For J:=0 To I-1 Do
+    If (D.Histogram[J]>0) And PESameColor(ImageBuffer.Palette[I],ImageBuffer.Palette[J]) Then
+     Duplicate:=True;
+   If Not Duplicate Then Inc(D.DistinctColors);
+  End;
+ D.MeanColor:=PERGB(0,0,0);
+ If D.PixelCount>0 Then
+  D.MeanColor:=PERGB(Round(SumR/D.PixelCount),Round(SumG/D.PixelCount),Round(SumB/D.PixelCount))
+ Else D.MinLight:=0;
+ APClearChart(D.Colors);
+ Counted:=0;
+ For I:=0 To Min(Work.DominantCount,8)-1 Do Begin
+  J:=Work.DominantIndices[I];
+  APAddChart(D.Colors,'#'+PEHexColor(ImageBuffer.Palette[J]),
+             Work.DominantCounts[I],ImageBuffer.Palette[J]);
+  Counted:=Counted+Work.DominantCounts[I];
+ End;
+ If Counted<D.PixelCount Then
+  APAddChart(D.Colors,'Autres couleurs',D.PixelCount-Counted,PERGB(168,168,168));
+ APClearChart(D.Memory);
+ APAddChart(D.Memory,'Pixels',D.PixelBytes,PERGB(32,128,240));
+ APAddChart(D.Memory,'Palette',D.PaletteBytes,PERGB(32,192,96));
+ APAddChart(D.Memory,'Metadonnees',D.MetadataBytes,PERGB(240,192,32));
+ APAddChart(D.Memory,'Annuler',D.UndoBytes,PERGB(208,80,208));
+ APAddChart(D.Memory,'Retablir',D.RedoBytes,PERGB(240,112,48));
+ APReadFile(D);
+ D.SelectedColor:=PEClamp(D.SelectedColor,0,Max(0,D.Colors.Count-1));
+ D.Status:='Attributs calcules sur l image entiere, independamment du zoom.';
+ D.Dirty:=True;
+End;
+
+Procedure APRestorePalette(Const D:TAPState);
+Var I:Integer;
+Begin
+ For I:=16 To Min(GetMaxColor,255) Do PESetHardwareColor(I,D.SavedPalette[I]);
+End;
+
+Procedure APLayout(Var D:TAPState);
+Var I:Integer;
+Begin
+ D.X:=(ScreenWidth-620) Div 2;
+ D.Y:=(ScreenHeight-440) Div 2;
+ For I:=0 To AP_TAB_COUNT-1 Do PERect(D.Tabs[I],D.X+12+I*150,D.Y+32,144,25);
+ PERect(D.Buttons[0],D.X+12,D.Y+406,84,25);
+ PERect(D.Buttons[1],D.X+104,D.Y+406,128,25);
+ PERect(D.Buttons[2],D.X+240,D.Y+406,96,25);
+ PERect(D.Buttons[3],D.X+344,D.Y+406,72,25);
+ PERect(D.Buttons[4],D.X+424,D.Y+406,80,25);
+ PERect(D.Buttons[5],D.X+512,D.Y+406,90,25);
+End;
+
+Procedure APKeyValue(X,Y:Integer; const LabelText,Value:String);
+Begin
+ PELabel(X,Y,LabelText);
+ PELabel(X+186,Y,Value);
+End;
+
+Procedure APPreview(Const R:TRect);
+Var Inner:TRect; W,H,X,Y,SX,SY,Left,Top:Integer; C:TRGBColor;
+Begin
+ Inner:=R;
+ Inc(Inner.Left,2); Inc(Inner.Top,2); Dec(Inner.Right,2); Dec(Inner.Bottom,2);
+ RFChecker(Inner);
+ PEBevel(R,True);
+ If Not PGHasImage Then Exit;
+ RFFitSize(CanvasImageW,CanvasImageH,R.Right-R.Left-7,R.Bottom-R.Top-7,W,H);
+ Left:=R.Left+(R.Right-R.Left+1-W) Div 2;
+ Top:=R.Top+(R.Bottom-R.Top+1-H) Div 2;
+ For Y:=0 To H-1 Do
+  For X:=0 To W-1 Do Begin
+   SX:=(LongInt(X)*CanvasImageW) Div W;
+   SY:=(LongInt(Y)*CanvasImageH) Div H;
+   If PGReadRGB(SX,SY,C) Then PutPixel(Left+X,Top+Y,PEDisplayColor(C));
+  End;
+End;
+
+Function APSectorAt(Const C:TAPChart; Angle:Real):Integer;
+Var I:Integer; Sum:LongInt;
+Begin
+ APSectorAt:=-1;
+ If C.Total<=0 Then Exit;
+ Sum:=0;
+ For I:=0 To C.Count-1 Do Begin
+  Sum:=Sum+C.Values[I];
+  If Angle<Sum*360.0/C.Total Then Begin APSectorAt:=I; Exit; End;
+ End;
+ APSectorAt:=C.Count-1;
+End;
+
+Function APAngle(DX,DY:Integer):Real;
+Var A:Real;
+Begin
+ If DX=0 Then Begin
+  If DY>=0 Then A:=90 Else A:=270;
+ End
+ Else Begin
+  A:=ArcTan(DY*1.0/DX)*180/ST_PI;
+  If DX<0 Then A:=A+180;
+  If A<0 Then A:=A+360;
+ End;
+ APAngle:=A;
+End;
+
+Procedure APPie(const C:TAPChart; CX,CY,Radius:Integer);
+Var X,Y,Index:Integer;
+Begin
+ If C.Total<=0 Then Begin
+  SetColor(DarkGray); Circle(CX,CY,Radius);
+  PELabel(CX-48,CY-4,'Aucune donnee');
+  Exit;
+ End;
+ For Y:=-Radius To Radius Do
+  For X:=-Radius To Radius Do
+   If LongInt(X)*X+LongInt(Y)*Y<=LongInt(Radius)*Radius Then Begin
+    Index:=APSectorAt(C,APAngle(X,-Y));
+    If Index>=0 Then PutPixel(CX+X,CY+Y,PEDisplayColor(C.Colors[Index]));
+   End;
+ SetColor(Black); Circle(CX,CY,Radius);
+End;
+
+Procedure APBars(Const C:TAPChart; X,Y,Step,BarW:Integer; MemoryUnits:Boolean; Selected:Integer);
+Var I,W:Integer; Largest:LongInt; R:TRect; S:String;
+Begin
+ { Une bande complete represente 100 % du total, comme le camembert. }
+ Largest:=C.Total;
+ For I:=0 To C.Count-1 Do Begin
+  S:=C.Labels[I];
+  If Length(S)>13 Then S:=Copy(S,1,12)+'.';
+  PELabel(X,Y+I*Step,S);
+  PERect(R,X+112,Y+I*Step-2,BarW,13);
+  PEFill(R,White); PEBevel(R,True);
+  W:=0;
+  If Largest>0 Then W:=Round((BarW-4)*1.0*C.Values[I]/Largest);
+  If W>0 Then Begin
+   SetFillStyle(SolidFill,PEDisplayColor(C.Colors[I]));
+   Bar(R.Left+2,R.Top+2,R.Left+1+W,R.Bottom-2);
+  End;
+  If MemoryUnits Then S:=STMemoryText(C.Values[I]) Else S:=APPercent(C.Values[I],C.Total);
+  PELabel(R.Right+10,Y+I*Step,S);
+  If I=Selected Then Begin
+   SetColor(Black); SetLineStyle(DottedLn,0,NormWidth);
+   Rectangle(X-3,Y+I*Step-5,R.Right+79,Y+I*Step+12);
+   SetLineStyle(SolidLn,0,NormWidth);
+  End;
+ End;
+End;
+
+Procedure APDrawSummary(Const D:TAPState);
+Var R:TRect; S:String;
+Begin
+ APKeyValue(D.X+20,D.Y+80,'Dimensions',IntToStr(CanvasImageW)+' x '+IntToStr(CanvasImageH)+' px');
+ APKeyValue(D.X+20,D.Y+103,'Nombre de pixels',IntToStr(D.PixelCount));
+ APKeyValue(D.X+20,D.Y+126,'Couleurs distinctes',IntToStr(D.DistinctColors));
+ APKeyValue(D.X+20,D.Y+149,'Indices utilises',IntToStr(D.UsedIndices)+' / 256');
+ APKeyValue(D.X+20,D.Y+172,'Profondeur declaree',IntToStr(ImageBuffer.BitDepth)+' bits');
+ APKeyValue(D.X+20,D.Y+195,'Buffer de pixels',STMemoryText(D.PixelBytes));
+ APKeyValue(D.X+20,D.Y+218,'Palette',STMemoryText(D.PaletteBytes));
+ APKeyValue(D.X+20,D.Y+241,'Format indique',APFormatName(ImageBuffer.Format));
+ APKeyValue(D.X+20,D.Y+264,'Zoom de la vue',IntToStr(ZoomLevel)+' %');
+ If ImageBuffer.Modified Then S:='Modifiee' Else S:='Non modifiee';
+ APKeyValue(D.X+20,D.Y+287,'Image en memoire',S);
+ PELabel(D.X+366,D.Y+65,'APERCU DE L IMAGE');
+ PERect(R,D.X+366,D.Y+82,230,146); APPreview(R);
+ If SelectionActive Then Begin
+  S:=IntToStr(Abs(SelectionRect.Right-SelectionRect.Left)+1)+' x '+
+     IntToStr(Abs(SelectionRect.Bottom-SelectionRect.Top)+1)+' px';
+  PELabel(D.X+366,D.Y+246,'Selection : '+S);
+ End
+ Else PELabel(D.X+366,D.Y+246,'Selection : aucune');
+ PELabel(D.X+366,D.Y+267,'Moyenne : #'+PEHexColor(D.MeanColor));
+ PERect(R,D.X+20,D.Y+325,576,58); PEBevel(R,True);
+ PELabel(R.Left+10,R.Top+11,'Image + palette : '+STMemoryText(D.PixelBytes+D.PaletteBytes));
+ PELabel(R.Left+10,R.Top+32,'Image et historique : '+STMemoryText(D.TotalBytes));
+End;
+
+Procedure APDrawColors(Const D:TAPState);
+Var Index:Integer; S:String;
+Begin
+ PELabel(D.X+24,D.Y+73,'REPARTITION DES PIXELS');
+ APPie(D.Colors,D.X+112,D.Y+164,72);
+ PELabel(D.X+24,D.Y+255,IntToStr(D.DistinctColors)+' couleurs distinctes');
+ PELabel(D.X+24,D.Y+277,IntToStr(D.UsedIndices)+' indices de palette');
+ PELabel(D.X+24,D.Y+299,'Luminosite : '+IntToStr(D.MinLight)+' a '+IntToStr(D.MaxLight));
+ PELabel(D.X+234,D.Y+73,'COULEURS DOMINANTES');
+ APBars(D.Colors,D.X+234,D.Y+100,25,158,False,D.SelectedColor);
+ Index:=D.SelectedColor;
+ If (Index>=0) And (Index<D.Colors.Count) Then Begin
+  S:=D.Colors.Labels[Index]+' : '+IntToStr(D.Colors.Values[Index])+' pixels';
+  PELabel(D.X+24,D.Y+349,S);
+  PELabel(D.X+24,D.Y+370,APPercent(D.Colors.Values[Index],D.PixelCount)+' de l image. Cliquez une bande pour le detail.');
+ End;
+End;
+
+Procedure APDrawMemory(Const D:TAPState);
+Const Depths:Array[0..4]of Integer=(1,4,8,24,32);
+Var I:Integer;
+Begin
+ PELabel(D.X+24,D.Y+73,'IMAGE ET HISTORIQUE');
+ APPie(D.Memory,D.X+112,D.Y+155,66);
+ APBars(D.Memory,D.X+234,D.Y+99,28,142,True,-1);
+ PELabel(D.X+24,D.Y+239,'Total estime : '+STMemoryText(D.TotalBytes));
+ PELabel(D.X+24,D.Y+266,'ESTIMATIONS BMP NON COMPRESSE (palette + alignement inclus)');
+ For I:=0 To 4 Do Begin
+  PELabel(D.X+24,D.Y+290+I*18,IntToStr(Depths[I])+' bits / pixel');
+  PELabel(D.X+210,D.Y+290+I*18,STMemoryText(APBMPEstimate(CanvasImageW,CanvasImageH,Depths[I])));
+ End;
+ PELabel(D.X+348,D.Y+296,'Le total inclut Annuler/Retablir.');
+ PELabel(D.X+348,D.Y+319,'Hors moteur graphique et systeme.');
+ PELabel(D.X+348,D.Y+350,'PNG/JPEG : taille variable selon');
+ PELabel(D.X+348,D.Y+368,'le contenu et la compression.');
+End;
+
+Procedure APDrawFile(Const D:TAPState);
+Var S,Part:String; Row,Start:Integer;
+Begin
+ PELabel(D.X+24,D.Y+76,'CHEMIN DU DOCUMENT');
+ S:=ImageBuffer.FileName;
+ If S='' Then S:='Sans titre - aucun fichier associe';
+ Start:=1; Row:=0;
+ Repeat
+  Part:=Copy(S,Start,70);
+  PELabel(D.X+24,D.Y+99+Row*17,Part);
+  Inc(Start,70); Inc(Row);
+ Until (Start>Length(S)) Or (Row=4);
+ APKeyValue(D.X+24,D.Y+184,'Format indique',APFormatName(ImageBuffer.Format));
+ If D.HasDiskFile Then S:=STMemoryText(D.DiskBytes)+' ('+IntToStr(D.DiskBytes)+' o)'
+ Else S:='Non disponible';
+ APKeyValue(D.X+24,D.Y+208,'Fichier sur disque',S);
+ APKeyValue(D.X+24,D.Y+232,'Date du fichier',D.FileDate);
+ If ImageBuffer.Modified Then S:='Modifications non enregistrees' Else S:='Aucune modification signalee';
+ APKeyValue(D.X+24,D.Y+256,'Etat en memoire',S);
+ If ImageBuffer.HasTransparency Then S:='Oui (metadonnees)' Else S:='Non';
+ APKeyValue(D.X+24,D.Y+280,'Transparence declaree',S);
+ APKeyValue(D.X+24,D.Y+304,'Dimensions declarees',IntToStr(ImageBuffer.Width)+' x '+IntToStr(ImageBuffer.Height));
+ PELabel(D.X+24,D.Y+347,'La taille sur disque concerne la derniere version enregistree.');
+ PELabel(D.X+24,D.Y+370,'Les estimations memoire ne sont pas des tailles de fichiers compresses.');
+End;
+
+Procedure APDraw(Var D:TAPState);
+Const
+ TabLabels:Array[0..3]of String[12]=('Resume','Couleurs','Memoire','Fichier');
+ ButtonLabels:Array[0..5]of String[14]=('Fermer','Redimensionner','Actualiser','Copier','Exporter','Aide (F1)');
+Var R:TRect; I:Integer;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut); SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,620,440); PEFill(R,LightGray); PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue); Bar(D.X+3,D.Y+3,D.X+616,D.Y+21);
+ SetColor(White); OutTextXY(D.X+9,D.Y+7,'Attributs de l image - PAINT');
+ OutTextXY(D.X+602,D.Y+7,'X');
+ For I:=0 To AP_TAB_COUNT-1 Do Begin
+  PEButton(D.Tabs[I],TabLabels[I],D.Focus=I);
+  If D.Tab=I Then Begin
+   SetColor(Blue);
+   Line(D.Tabs[I].Left+4,D.Tabs[I].Bottom-3,D.Tabs[I].Right-4,D.Tabs[I].Bottom-3);
+  End;
+ End;
+ Case D.Tab Of
+  0: APDrawSummary(D);
+  1: APDrawColors(D);
+  2: APDrawMemory(D);
+  3: APDrawFile(D);
+ End;
+ For I:=0 To AP_BUTTON_COUNT-1 Do PEButton(D.Buttons[I],ButtonLabels[I],D.Focus=4+I);
+ SetFillStyle(SolidFill,LightGray);
+ Bar(0,ScreenHeight-STATUSBAR_HEIGHT,ScreenWidth-1,ScreenHeight-1);
+ PELabel(5,ScreenHeight-STATUSBAR_HEIGHT+5,D.Status);
+ PEShowMouse; D.Dirty:=False;
+End;
+
+Procedure APReportLine(Var Report:TAPReport; S:String);
+Begin
+ While (Length(S)>160) And (Report.Count<64) Do Begin
+  Report.Lines[Report.Count]:=Copy(S,1,160); Inc(Report.Count);
+  Delete(S,1,160);
+ End;
+ If Report.Count>=64 Then Exit;
+ Report.Lines[Report.Count]:=S; Inc(Report.Count);
+End;
+
+Procedure APBuildReport(Const D:TAPState; Var Report:TAPReport);
+Const Depths:Array[0..4]of Integer=(1,4,8,24,32);
+Var I:Integer; S:String;
+Begin
+ FillChar(Report,SizeOf(Report),0);
+ APReportLine(Report,'PAINT - Attributs de l image');
+ S:=ImageBuffer.FileName; If S='' Then S:='Sans titre';
+ APReportLine(Report,'Fichier :');
+ APReportLine(Report,S);
+ APReportLine(Report,'Format indique : '+APFormatName(ImageBuffer.Format));
+ APReportLine(Report,'Dimensions : '+IntToStr(CanvasImageW)+' x '+IntToStr(CanvasImageH)+' pixels');
+ APReportLine(Report,'Nombre de pixels : '+IntToStr(D.PixelCount));
+ APReportLine(Report,'Profondeur declaree : '+IntToStr(ImageBuffer.BitDepth)+' bits');
+ APReportLine(Report,'Buffer indexe : 8 bits par pixel');
+ APReportLine(Report,'Couleurs distinctes : '+IntToStr(D.DistinctColors));
+ APReportLine(Report,'Indices de palette utilises : '+IntToStr(D.UsedIndices));
+ APReportLine(Report,'Couleur moyenne : #'+PEHexColor(D.MeanColor));
+ APReportLine(Report,'Luminosite : '+IntToStr(D.MinLight)+' a '+IntToStr(D.MaxLight));
+ APReportLine(Report,'Zoom de la vue : '+IntToStr(ZoomLevel)+' %');
+ If ImageBuffer.Modified Then S:='oui' Else S:='non';
+ APReportLine(Report,'Modifications non enregistrees : '+S);
+ If ImageBuffer.HasTransparency Then S:='oui' Else S:='non';
+ APReportLine(Report,'Transparence declaree : '+S);
+ APReportLine(Report,'');
+ APReportLine(Report,'MEMOIRE ESTIMEE (hors moteur graphique et systeme)');
+ For I:=0 To D.Memory.Count-1 Do
+  APReportLine(Report,D.Memory.Labels[I]+' : '+STMemoryText(D.Memory.Values[I])+ ' ('+IntToStr(D.Memory.Values[I])+' octets)');
+ APReportLine(Report,'Total image et historique : '+STMemoryText(D.TotalBytes));
+ If D.HasDiskFile Then Begin
+  APReportLine(Report,'Fichier sur disque : '+STMemoryText(D.DiskBytes)+' ('+IntToStr(D.DiskBytes)+' octets)');
+  APReportLine(Report,'Date du fichier : '+D.FileDate);
+ End Else APReportLine(Report,'Fichier sur disque : non disponible');
+ APReportLine(Report,'');
+ APReportLine(Report,'ESTIMATIONS BMP NON COMPRESSE');
+ For I:=0 To 4 Do
+  APReportLine(Report,IntToStr(Depths[I])+' bits : '+STMemoryText(APBMPEstimate(CanvasImageW,CanvasImageH,Depths[I])));
+ APReportLine(Report,'Palette et alignement des lignes inclus ; PNG/JPEG selon contenu et compression.');
+ APReportLine(Report,'');
+ APReportLine(Report,'COULEURS DOMINANTES');
+ For I:=0 To D.Colors.Count-1 Do
+  APReportLine(Report,D.Colors.Labels[I]+' : '+IntToStr(D.Colors.Values[I])+' pixels ; '+APPercent(D.Colors.Values[I],D.PixelCount));
+End;
+
+Function APCopyReport(Const Report:TAPReport):Boolean;
+{$IFDEF WINDOWS}
+Var Memory:TPaintWinHandle; Buffer:PChar; I,J:Integer; Bytes,Pos:LongInt;
+Begin
+ APCopyReport:=False;
+ Bytes:=1;
+ For I:=0 To Report.Count-1 Do Bytes:=Bytes+Length(Report.Lines[I])+2;
+ If Not PaintWinOpenClipboard(0) Then Exit;
+ Memory:=PaintWinGlobalAlloc(PAINT_GMEM_MOVEABLE,Bytes);
+ If Memory=0 Then Begin PaintWinCloseClipboard; Exit; End;
+ Buffer:=PChar(PaintWinGlobalLock(Memory));
+ If Buffer=Nil Then Begin PaintWinGlobalFree(Memory); PaintWinCloseClipboard; Exit; End;
+ Pos:=0;
+ For I:=0 To Report.Count-1 Do Begin
+  For J:=1 To Length(Report.Lines[I]) Do Begin Buffer[Pos]:=Report.Lines[I][J]; Inc(Pos); End;
+  Buffer[Pos]:=#13; Inc(Pos); Buffer[Pos]:=#10; Inc(Pos);
+ End;
+ Buffer[Pos]:=#0;
+ PaintWinGlobalUnlock(Memory);
+ If PaintWinEmptyClipboard Then
+  If PaintWinSetClipboardData(PAINT_CF_TEXT,Memory)<>0 Then Begin
+   Memory:=0; APCopyReport:=True;
+  End;
+ If Memory<>0 Then PaintWinGlobalFree(Memory);
+ PaintWinCloseClipboard;
+End;
+{$ELSE}
+Begin APCopyReport:=False; End;
+{$ENDIF}
+
+Function APSaveReport(Const FileName:String; Const Report:TAPReport):Boolean;
+Var F:Text; I,ErrorCode,CloseError:Integer;
+Begin
+ APSaveReport:=False;
+ Assign(F,FileName); {$I-}Rewrite(F);{$I+}
+ If IOResult<>0 Then Exit;
+ ErrorCode:=0;
+ For I:=0 To Report.Count-1 Do Begin
+  {$I-}WriteLn(F,Report.Lines[I]);{$I+}
+  ErrorCode:=IOResult;
+  If ErrorCode<>0 Then Break;
+ End;
+ {$I-}Close(F);{$I+} CloseError:=IOResult;
+ APSaveReport:=(ErrorCode=0) And (CloseError=0);
+End;
+
+Procedure APExport(Var D:TAPState; Const Report:TAPReport);
+Var Name:String; Info:SearchRec;
+Begin
+ Name:='PAINT-ATTRIBUTS.TXT';
+ If PromptString('Exporter les attributs','Rapport texte :',Name) And (Name<>'') Then Begin
+  If ExtractFileExt(Name)='' Then Name:=Name+'.TXT';
+  FindFirst(Name,AnyFile,Info);
+  If DosError=0 Then
+   If PromptYesNoCancel('Remplacer le rapport','Ce fichier existe. Le remplacer ?')<>1 Then Begin
+    D.Dirty:=True; Exit;
+   End;
+  If APSaveReport(Name,Report) Then D.Status:='Rapport des attributs exporte.'
+  Else D.Status:='Echec d ecriture du rapport. Verifiez le chemin.';
+ End;
+ D.Dirty:=True;
+End;
+
+Procedure APHelp(Var D:TAPState);
+Begin
+ ShowMessage('Aide - Attributs',
+  '1..4 : onglets ; Tab : commande suivante.'+#10+
+  'Secteurs et bandes : proportion du total.'+#10+
+  'Memoire : pixels, palette et historique inclus.'+#10+
+  'Disque : derniere version enregistree du fichier.'+#10+
+  'F5 actualise ; Echap ferme ; Ctrl+C copie le rapport.');
+ D.Dirty:=True;
+End;
+
+Procedure APActivate(Var D:TAPState; Action:Integer);
+Var Report:TAPReport;
+Begin
+ If (Action>=0) And (Action<AP_TAB_COUNT) Then Begin
+  D.Tab:=Action; D.Focus:=Action; D.Dirty:=True; Exit;
+ End;
+ Case Action Of
+  4: D.Done:=True;
+  5: Begin
+   PEHideMouse; APRestorePalette(D); PEShowMouse;
+   ResizeImageDialog;
+   APRefresh(D);
+   PEHideMouse; PEBuildDisplayPalette; PEShowMouse;
+  End;
+  6: Begin APRefresh(D); PEHideMouse; PEBuildDisplayPalette; PEShowMouse; End;
+  7: Begin
+   APBuildReport(D,Report);
+   If APCopyReport(Report) Then D.Status:='Rapport complet copie dans le presse-papiers.'
+   Else D.Status:='Presse-papiers indisponible. Utilisez Exporter.';
+   D.Dirty:=True;
+  End;
+  8: Begin APBuildReport(D,Report); APExport(D,Report); End;
+  9: APHelp(D);
+ End;
+End;
+
+Procedure APKeyboard(Var D:TAPState);
+Var K:Char; Next:Integer;
+Begin
+ K:=ReadKey;
+ If K=#0 Then Begin
+  K:=ReadKey;
+  Case Ord(K) Of
+   15: Begin D.Focus:=D.Focus-1; If D.Focus<0 Then D.Focus:=9; D.Dirty:=True; End;
+   59: APHelp(D);
+   63: APActivate(D,6);
+   73: APActivate(D,(D.Tab+3) Mod AP_TAB_COUNT);
+   81: APActivate(D,(D.Tab+1) Mod AP_TAB_COUNT);
+   75,77: If D.Focus<4 Then Begin
+    Next:=D.Tab+1; If Ord(K)=75 Then Next:=D.Tab+3;
+    APActivate(D,Next Mod AP_TAB_COUNT);
+   End;
+   72,80: If D.Tab=1 Then Begin
+    If Ord(K)=72 Then Dec(D.SelectedColor) Else Inc(D.SelectedColor);
+    D.SelectedColor:=PEClamp(D.SelectedColor,0,Max(0,D.Colors.Count-1));
+    D.Dirty:=True;
+   End;
+  End;
+  Exit;
+ End;
+ Case K Of
+  #27: D.Done:=True;
+  #9: Begin Inc(D.Focus); If D.Focus>9 Then D.Focus:=0; D.Dirty:=True; End;
+  #13,' ': APActivate(D,D.Focus);
+  #3: APActivate(D,7);
+  '1'..'4': APActivate(D,Ord(K)-Ord('1'));
+ End;
+End;
+
+Procedure APMouse(Var D:TAPState);
+Var I,DX,DY:Integer;
+Begin
+ GetMouseStateLocal(D.MX,D.MY,D.MB);
+ If ((D.MB And 1)<>0) And ((D.PreviousButtons And 1)=0) Then Begin
+  If (D.MX>=D.X+596) And (D.MX<=D.X+617) And
+     (D.MY>=D.Y+3) And (D.MY<=D.Y+21) Then D.Done:=True
+  Else Begin
+   For I:=0 To AP_TAB_COUNT-1 Do
+    If PEInside(D.MX,D.MY,D.Tabs[I]) Then APActivate(D,I);
+   For I:=0 To AP_BUTTON_COUNT-1 Do
+    If PEInside(D.MX,D.MY,D.Buttons[I]) Then Begin D.Focus:=I+4; APActivate(D,I+4); End;
+   If D.Tab=1 Then Begin
+    DX:=D.MX-(D.X+112); DY:=(D.Y+164)-D.MY;
+    If LongInt(DX)*DX+LongInt(DY)*DY<=72*72 Then Begin
+     I:=APSectorAt(D.Colors,APAngle(DX,DY));
+     If I>=0 Then Begin D.SelectedColor:=I; D.Dirty:=True; End;
+    End;
+    If (D.MX>=D.X+231) And (D.MX<=D.X+604) And
+       (D.MY>=D.Y+95) And (D.MY<D.Y+95+D.Colors.Count*25) Then Begin
+     D.SelectedColor:=(D.MY-D.Y-95) Div 25;
+     D.Dirty:=True;
+    End;
+   End;
+  End;
+ End;
+ D.PreviousButtons:=D.MB;
+End;
+
+Procedure ImageAttributesDialog;
+Var D:TAPState;
+Begin
+ MenuActive:=False;
+ RedrawInterface;
+ FillChar(D,SizeOf(D),0);
+ D.Focus:=4;
+ APLayout(D);
+ APRefresh(D);
+ GetMouseStateLocal(D.MX,D.MY,D.PreviousButtons);
+ PEHideMouse; PEBuildDisplayPalette; PEShowMouse;
+ While Not D.Done Do Begin
+  If D.Dirty Then APDraw(D);
+  If KeyPressed Then APKeyboard(D);
+  If Not D.Done Then APMouse(D);
+  Delay(10);
+ End;
+ PEHideMouse; APRestorePalette(D); PEShowMouse;
+ Repeat
+  GetMouseStateLocal(D.MX,D.MY,D.MB);
+  If (D.MB And 1)<>0 Then Delay(10);
+ Until (D.MB And 1)=0;
+ OldMouseButtons:=0; MouseButtons:=0;
+ RedrawInterface;
+End;
+
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -9674,12 +10352,8 @@ Begin
       ShowMessage('Rogner',
                   'Selectionnez d''abord une zone avec l''outil Selection.');
     End;
-    7: Begin { Attributs }
-     Str(ImageBuffer.Width, InfoMsg);
-     InfoMsg := 'Largeur : ' + InfoMsg;
-     Str(ImageBuffer.Height, NewName);
-     InfoMsg := InfoMsg + '  Hauteur : ' + NewName;
-     ShowMessage('Attributs', InfoMsg);
+    7: Begin { Attributs : statistiques, graphiques et rapport }
+     ImageAttributesDialog;
     End;
     9: Begin AddSnapshotToHistory(TOOL_PENCIL); ClearImage; End;
    End;

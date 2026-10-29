@@ -238,6 +238,10 @@ Type
  End;
 
  { Structure pour l'image en mémoire }
+ TPaintMetadata = Record
+  Values: Array[0..5] Of String; { Titre, auteur, droits, logiciel, description, note }
+  Limited: Boolean;
+ End;
  PImageBuffer = ^TImageBuffer;
  TImageBuffer = Record
   Width, Height: Integer;
@@ -248,6 +252,7 @@ Type
   Modified: Boolean;
   FileName: String;
   Format: Byte;
+  Metadata: TPaintMetadata;
  End;
 
  { Structure pour l'historique (Undo/Redo) }
@@ -1102,6 +1107,26 @@ Begin
  End;
 End;
 
+Function PMKey(Index: Integer): String;
+Begin
+ Case Index Of
+  0: PMKey:='Title'; 1: PMKey:='Author'; 2: PMKey:='Copyright';
+  3: PMKey:='Software'; 4: PMKey:='Description'; 5: PMKey:='Comment';
+ Else PMKey:=''; End;
+End;
+
+Function PMIndex(Const Key: String): Integer;
+Var I: Integer;
+Begin
+ PMIndex:=-1; For I:=0 To 5 Do If PMKey(I)=Key Then Begin PMIndex:=I; Exit; End;
+End;
+
+Procedure PMByte(Var M: TPaintMetadata; Index,B: Integer);
+Begin
+ If Length(M.Values[Index])<255 Then M.Values[Index]:=M.Values[Index]+Chr(B)
+ Else M.Limited:=True;
+End;
+
 Procedure InitImage;
 Const
  VGA_R: Array[0..15] of Byte =
@@ -1120,6 +1145,7 @@ Begin
  ImageBuffer.Modified := False;
  ImageBuffer.FileName := '';
  ImageBuffer.Format := FMT_BMP;
+ FillChar(ImageBuffer.Metadata,SizeOf(TPaintMetadata),0);
 
  { Initialiser la palette : 16 couleurs VGA standard puis degrade de gris.
    Sans cela ImageBuffer.Palette reste a zero -> Save* ecrit une palette
@@ -2034,6 +2060,7 @@ Type
   Prefix: Array[0..4095] Of Word;
   Suffix: Array[0..4095] Of Byte;
   Stack: Array[0..4096] Of Byte;
+  Metadata: TPaintMetadata;
  End;
  PGFState = ^TGFState;
 
@@ -2218,6 +2245,16 @@ Begin
  If Not D.Bad Then D.HaveImage:=True;
 End;
 
+Procedure GFComment(Var D: TGFState);
+Var N,I,B: Integer;
+Begin
+ If D.Metadata.Values[5]<>'' Then PMByte(D.Metadata,5,10);
+ Repeat
+  N:=GFByte(D); If D.Bad Or (N=0) Then Exit;
+  For I:=1 To N Do Begin B:=GFByte(D); If D.Bad Then Exit; PMByte(D.Metadata,5,B); End;
+ Until D.Bad;
+End;
+
 Function GFDecode(Const FileName: String; Var D: PGFState): Boolean;
 Var F: File; Bytes: LongInt; OldMode: Byte; I,Flags,BlockType,LabelID: Integer;
     Signature: String; Ended: Boolean;
@@ -2259,7 +2296,8 @@ Begin
    $3B: Ended:=True;
    $21: Begin
     LabelID:=GFByte(D^);
-    If (LabelID=$F9) And Not D^.HaveImage Then GFReadControl(D^)
+    If LabelID=$FE Then GFComment(D^)
+    Else If (LabelID=$F9) And Not D^.HaveImage Then GFReadControl(D^)
     Else Begin
      GFSkipBlocks(D^);
      { Le controle graphique ne s'applique qu'au prochain rendu. }
@@ -2354,7 +2392,7 @@ Begin
   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_GIF; ImageBuffer.BitDepth:=8;
   ImageBuffer.HasTransparency:=D^.Transparent; ImageBuffer.TransparentColor:=D^.Background;
-  ImageBuffer.Modified:=False; ImageBuffer.Palette:=Palette;
+  ImageBuffer.Modified:=False; ImageBuffer.Palette:=Palette; ImageBuffer.Metadata:=D^.Metadata;
   For I:=0 To 255 Do Begin
    {$IFDEF FPC}SetRGBPalette(I,Palette[I].R,Palette[I].G,Palette[I].B);
    {$ELSE}SetRGBPalette(I,Palette[I].R Shr 2,Palette[I].G Shr 2,Palette[I].B Shr 2);{$ENDIF}
@@ -2383,6 +2421,8 @@ Type
   FileSize,CompressedSize,RawSize,RGBSize,Position: LongInt;
   Width,Height,Depth,ColorType,Channels,Interlace,PaletteCount: Integer;
   APCanvasW,APCanvasH,APX,APY: Integer;
+  Metadata: TPaintMetadata;
+  AllowShort: Boolean;
   Palette: TPalette;
   Alpha: Array[0..255] Of Byte;
   Transparent: Array[0..2] Of LongInt;
@@ -2438,6 +2478,66 @@ Begin
   If (W>0) And (H>0) Then Begin Row:=(W*D.Channels*D.Depth+7) Div 8; Inc(Total,(Row+1)*H); End;
  End;
  PNExpected:=Total;
+End;
+
+Function PNInflate(Var D: TPNState): Boolean; Forward;
+
+Procedure PNTextMetadata(Var D: TPNState; Const Kind: String; Start,Count: LongInt);
+Var P,Stop,TextStart,TextSize,I,Index,Flag,Method,B,C,Code,N: LongInt;
+    Key: String; Z: PPNState; Buffer: PPNBytes; UTF8,Compressed: Boolean;
+Begin
+ P:=Start; Stop:=Start+Count; Key:='';
+ While (P<Stop) And (D.FileData^[P]<>0) Do Begin
+  If Length(Key)>=79 Then Exit; Key:=Key+Chr(D.FileData^[P]); Inc(P);
+ End;
+ Index:=PMIndex(Key); If (Index<0) Or (P>=Stop) Then Exit;
+ Inc(P); UTF8:=Kind='iTXt'; Compressed:=Kind='zTXt';
+ If UTF8 Then Begin
+  If Stop-P<2 Then Begin D.Metadata.Limited:=True; Exit; End;
+  Flag:=D.FileData^[P]; Method:=D.FileData^[P+1]; Inc(P,2);
+  If (Flag>1) Or (Method<>0) Then Begin D.Metadata.Limited:=True; Exit; End;
+  Compressed:=Flag=1;
+  For I:=1 To 2 Do Begin
+   While (P<Stop) And (D.FileData^[P]<>0) Do Inc(P);
+   If P=Stop Then Begin D.Metadata.Limited:=True; Exit; End; Inc(P);
+  End;
+ End Else If Compressed Then Begin
+  If (P>=Stop) Or (D.FileData^[P]<>0) Then Begin D.Metadata.Limited:=True; Exit; End; Inc(P);
+ End;
+ Z:=Nil; Buffer:=D.FileData; TextStart:=P; TextSize:=Stop-P;
+ If Compressed Then Begin
+  Z:=PPNState(JDAllocate(SizeOf(TPNState))); If Z=Nil Then Begin D.Metadata.Limited:=True; Exit; End;
+  FillChar(Z^,SizeOf(Z^),0); Z^.Compressed:=PPNBytes(@D.FileData^[P]); Z^.CompressedSize:=Stop-P;
+  Z^.RawSize:=65536; Z^.Raw:=PPNBytes(JDAllocate(65536)); Z^.AllowShort:=True;
+  If Z^.Raw=Nil Then Begin FreeMem(Z,SizeOf(TPNState)); D.Metadata.Limited:=True; Exit; End;
+  If Not PNInflate(Z^) Then Begin
+   FreeMem(Z^.Raw,65536); FreeMem(Z,SizeOf(TPNState)); D.Metadata.Limited:=True; Exit;
+  End;
+  Buffer:=Z^.Raw; TextStart:=0; TextSize:=Z^.OutputPosition;
+ End;
+ { Champs Latin-1, 255 octets. Les textes non representables sont signales,
+   et leur remplacement requiert une confirmation dans Proprietes. }
+ If D.Metadata.Values[Index]<>'' Then D.Metadata.Limited:=True;
+ D.Metadata.Values[Index]:=''; P:=TextStart; Stop:=TextStart+TextSize;
+ While P<Stop Do Begin
+  B:=Buffer^[P]; Inc(P); Code:=B;
+  If UTF8 And (B>=128) Then Begin
+   N:=0;
+   If (B>=194) And (B<=223) Then Begin N:=1; Code:=B And 31; End
+   Else If (B>=224) And (B<=239) Then Begin N:=2; Code:=B And 15; End
+   Else If (B>=240) And (B<=244) Then Begin N:=3; Code:=B And 7; End;
+   If (N=0) Or (Stop-P<N) Then Begin Code:=63; D.Metadata.Limited:=True; End
+   Else For I:=1 To N Do Begin
+    C:=Buffer^[P]; Inc(P);
+    If (C And 192)<>128 Then Begin D.Metadata.Limited:=True; Code:=256; End
+    Else Code:=Code*64+(C And 63);
+   End;
+   If Code>255 Then Begin Code:=63; D.Metadata.Limited:=True; End;
+  End;
+  If Code=0 Then Begin Code:=32; D.Metadata.Limited:=True; End;
+  PMByte(D.Metadata,Index,Code);
+ End;
+ If Z<>Nil Then Begin FreeMem(Z^.Raw,65536); FreeMem(Z,SizeOf(TPNState)); End;
 End;
 
 Function PNReadChunks(Const Name: String; Var D: TPNState): Boolean;
@@ -2520,6 +2620,8 @@ Begin
     Else Exit;
    End;
    D.HasTRNS:=True;
+  End Else If (Kind='tEXt') Or (Kind='zTXt') Or (Kind='iTXt') Then Begin
+   PNTextMetadata(D,Kind,Start,Length);
   End Else If Kind='IDAT' Then Begin
    If PastData Or ((D.ColorType=3) And Not HavePalette) Then Exit;
    If Length>D.FileSize-D.CompressedSize Then Exit;
@@ -2778,9 +2880,9 @@ Begin
   End;
   If D.Bad Then Exit;
  Until FinalBlock<>0;
- If (D.OutputPosition<>D.RawSize) Or (D.InputPosition<>D.InputLimit) Then Exit;
+ If ((D.OutputPosition<>D.RawSize) And Not D.AllowShort) Or (D.InputPosition<>D.InputLimit) Then Exit;
  A:=1; B:=0;
- For I:=0 To D.RawSize-1 Do Begin
+ For I:=0 To D.OutputPosition-1 Do Begin
   A:=(A+D.Raw^[I]) Mod 65521; B:=(B+A) Mod 65521;
  End;
  PNInflate:=((B Shl 16) Or A)=PNBE(D.Compressed,D.CompressedSize-4);
@@ -3665,7 +3767,7 @@ Begin
   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=D^.Depth*D^.Channels;
   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_PNG; ImageBuffer.Modified:=False;
-  ImageBuffer.Palette:=Q^.Palette; ImageBuffer.HasTransparency:=D^.HasTransparency;
+  ImageBuffer.Palette:=Q^.Palette; ImageBuffer.HasTransparency:=D^.HasTransparency; ImageBuffer.Metadata:=D^.Metadata;
   ImageBuffer.TransparentColor.R:=255; ImageBuffer.TransparentColor.G:=255;
   ImageBuffer.TransparentColor.B:=255; ImageBuffer.TransparentColor.A:=0;
   For I:=0 To 255 Do Begin
@@ -3724,7 +3826,7 @@ Begin
   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=D^.Depth*D^.Channels;
   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_APNG; ImageBuffer.Modified:=False;
-  ImageBuffer.Palette:=Q^.Palette; ImageBuffer.HasTransparency:=D^.HasTransparency;
+  ImageBuffer.Palette:=Q^.Palette; ImageBuffer.HasTransparency:=D^.HasTransparency; ImageBuffer.Metadata:=D^.Metadata;
   ImageBuffer.TransparentColor.R:=255; ImageBuffer.TransparentColor.G:=255;
   ImageBuffer.TransparentColor.B:=255; ImageBuffer.TransparentColor.A:=0;
   For I:=0 To 255 Do Begin
@@ -6303,7 +6405,10 @@ Begin
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
- If Succeeded Then RedrawInterface;
+ If Succeeded Then Begin
+  If Not (Format In [FMT_GIF,FMT_PNG,FMT_APNG]) Then FillChar(ImageBuffer.Metadata,SizeOf(TPaintMetadata),0);
+  RedrawInterface;
+ End;
 End;
 
 Function SaveBMP(FileName: String): Boolean;
@@ -6488,13 +6593,19 @@ Begin
  Assign(F,FileName); {$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
  Bad:=False; Count:=0; Bits:=0; Acc:=0; SinceClear:=0;
  FillChar(Header,SizeOf(Header),0); Move(GIF87_SIGNATURE[1],Header.Signature,6);
+ If ImageBuffer.Metadata.Values[5]<>'' Then Move(GIF89_SIGNATURE[1],Header.Signature,6);
  Header.ScreenWidth:=CanvasImageW; Header.ScreenHeight:=CanvasImageH; Header.Flags:=$F7;
  WriteData(Header,SizeOf(Header));
  For I:=0 To 255 Do Begin
   Palette[I*3]:=ImageBuffer.Palette[I].R; Palette[I*3+1]:=ImageBuffer.Palette[I].G;
   Palette[I*3+2]:=ImageBuffer.Palette[I].B;
  End;
- WriteData(Palette,768); FillChar(Descriptor,SizeOf(Descriptor),0);
+ WriteData(Palette,768);
+ If ImageBuffer.Metadata.Values[5]<>'' Then Begin
+  WriteByte($21); WriteByte($FE); WriteByte(Length(ImageBuffer.Metadata.Values[5]));
+  WriteData(ImageBuffer.Metadata.Values[5][1],Length(ImageBuffer.Metadata.Values[5])); WriteByte(0);
+ End;
+ FillChar(Descriptor,SizeOf(Descriptor),0);
  Descriptor[0]:=$2C; Descriptor[5]:=Lo(CanvasImageW); Descriptor[6]:=Hi(CanvasImageW);
  Descriptor[7]:=Lo(CanvasImageH); Descriptor[8]:=Hi(CanvasImageH);
  WriteData(Descriptor,10); WriteByte(8); Code(256);
@@ -6537,6 +6648,17 @@ Var F: File; D: PPNState; Data: PPNBytes; RawSize,Size,Pos,Offset,N,I,X,Y: LongI
   End;
   BE(C Xor $FFFFFFFF); WriteData(Bytes,4);
  End;
+ Procedure TextChunk(Index: Integer);
+ Var Buffer: Array[0..511] Of Byte; Key,Value: String; J,N: Integer;
+ Begin
+  Value:=ImageBuffer.Metadata.Values[Index]; If Value='' Then Exit;
+  Key:=PMKey(Index); N:=0;
+  For J:=1 To Length(Key) Do Begin Buffer[N]:=Ord(Key[J]); Inc(N); End;
+  Buffer[N]:=0; Inc(N);
+  For J:=1 To Length(Value) Do Begin Buffer[N]:=Ord(Value[J]); Inc(N); End;
+  Chunk('tEXt',@Buffer,N);
+ End;
+
 Begin
  SavePNG:=False; Data:=Nil;
  If (CanvasImage=Nil) Or (CanvasImageW<>ImageBuffer.Width) Or (CanvasImageH<>ImageBuffer.Height) Then Exit;
@@ -6570,6 +6692,7 @@ Begin
  Assign(F,FileName); {$I-}Rewrite(F,1);{$I+}Bad:=IOResult<>0;
  If Not Bad Then Begin
   WriteData(PNG_SIGNATURE,8); Chunk('IHDR',@Header,13); Chunk('PLTE',@Palette,768);
+  For X:=0 To 5 Do TextChunk(X);
   Chunk('IDAT',Data,Pos); Chunk('IEND',Nil,0);
   {$I-}Close(F);{$I+}If IOResult<>0 Then Bad:=True;
  End;
@@ -6592,6 +6715,9 @@ Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
  End;
 Begin
  SaveImage:=False; PaintSaveError:='';
+ If ImageBuffer.Metadata.Limited And (Format In [FMT_GIF,FMT_PNG]) Then Begin
+  PaintSaveError:='Textes longs ou Unicode : validez leur remplacement dans Proprietes avant de sauvegarder.'; Exit;
+ End;
  If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
     (CanvasImageW>MAX_IMAGE_WIDTH) Or (CanvasImageH>MAX_IMAGE_HEIGHT) Or
     (CanvasImageW<>ImageBuffer.Width) Or (CanvasImageH<>ImageBuffer.Height) Then Begin
@@ -14882,6 +15008,209 @@ Begin
 End;
 
 
+{ Proprietes du document : informations calculees et metadonnees persistantes.
+  Les changements restent locaux jusqu'a Appliquer/OK/Enregistrer. }
+Procedure ImagePropertiesDialog;
+Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,Used: Integer;
+    Colors: Array[0..255] Of Boolean; R: SearchRec; DT: DateTime; Preview: TRect;
+    DiskSize,N: LongInt; Stamp,Attributes,Notice,S,T: String; K,E: Char;
+    Done,Dirty,Exists,Changed,Saved: Boolean;
+ Function Editable(Index: Integer): Boolean;
+ Begin
+  Editable:=(ImageBuffer.Format=FMT_PNG) Or ((ImageBuffer.Format=FMT_GIF) And (Index=5));
+ End;
+ Function FieldName(Index: Integer): String;
+ Begin
+  Case Index Of
+   0: FieldName:='Titre'; 1: FieldName:='Auteur'; 2: FieldName:='Copyright';
+   3: FieldName:='Logiciel'; 4: FieldName:='Description'; 5: FieldName:='Note (GIF/PNG)';
+  Else FieldName:=''; End;
+ End;
+ Function YesNo(Value: Boolean): String;
+ Begin If Value Then YesNo:='Oui' Else YesNo:='Non'; End;
+ Procedure StoreField;
+ Begin If (Tab=1) And (Focus<6) And Editable(Focus) Then Draft.Values[Focus]:=Editor^.Name; End;
+ Procedure SetFocus(Value: Integer);
+ Begin
+  StoreField; Focus:=Value;
+  If Focus<6 Then Begin
+   Editor^.Name:=Draft.Values[Focus]; Editor^.Cursor:=Length(Editor^.Name); Editor^.Anchor:=Editor^.Cursor;
+  End;
+  Dirty:=True;
+ End;
+ Procedure FileDetails;
+ Begin
+  DiskSize:=0; Stamp:='Non enregistre'; Attributes:=''; Exists:=False;
+  If ImageBuffer.FileName='' Then Exit;
+  FindFirst(ImageBuffer.FileName,AnyFile,R);
+  If DosError=0 Then Begin
+   Exists:=True; DiskSize:=R.Size; UnpackTime(R.Time,DT);
+   Stamp:=APTwoDigits(DT.Day)+'/'+APTwoDigits(DT.Month)+'/'+IntToStr(DT.Year)+' '+APTwoDigits(DT.Hour)+':'+APTwoDigits(DT.Min);
+   If (R.Attr And ReadOnly)<>0 Then Attributes:='Lecture seule ' Else Attributes:='Accessible en ecriture ';
+   If (R.Attr And Hidden)<>0 Then Attributes:=Attributes+' / cache';
+  End;
+  {$IFDEF FPC}FindClose(R);{$ENDIF}
+ End;
+ Function Apply: Boolean;
+ Begin
+  Apply:=False; StoreField;
+  Changed:=CompareByte(Draft,ImageBuffer.Metadata,SizeOf(Draft))<>0;
+  If Draft.Limited Then Begin
+   If PromptYesNoCancel('Remplacement des textes importes',
+    'Certains textes depassent 255 caracteres ou Latin-1. Remplacer par les champs affiches ?')<>1 Then Begin Dirty:=True; Exit; End;
+   Draft.Limited:=False; Changed:=True;
+  End;
+  If Changed Then Begin ImageBuffer.Metadata:=Draft; ImageBuffer.Modified:=True; End;
+  Notice:='Champs appliques au document. Enregistrer pour les ecrire dans le fichier.';
+  Apply:=True; Dirty:=True;
+ End;
+ Procedure Activate(Button: Integer);
+ Begin
+  Case Button Of
+   0: If Apply Then Done:=True;
+   1: Apply;
+   2: Done:=True;
+   3: If Apply Then Begin
+    Saved:=SaveCurrentImage; FileDetails;
+    If Saved Then Notice:='Fichier enregistre avec les champs disponibles dans ce format.';
+    Dirty:=True;
+   End;
+   4: Begin
+    ShowMessage('Textes et enregistrement','PNG : titre, auteur, droits, logiciel, description et commentaire. GIF : commentaire seul.');
+    ShowMessage('Edition','255 caracteres Latin-1 par champ. Tab, fleches, Ctrl+A/C/X/V. Appliquer ne modifie pas encore le fichier.');
+    Dirty:=True;
+   End;
+  End;
+ End;
+ Procedure KeyValue(Row: Integer; Const LabelText,Value: String);
+ Begin
+  SetColor(DarkGray); OutTextXY(X+14,Y+82+Row*22,LabelText);
+  SetColor(Black); OutTextXY(X+168,Y+82+Row*22,OFShort(Value,W-390));
+ End;
+ Procedure Field(Index: Integer);
+ Var XX,YY,WW,Offset,Lo,Hi,LeftPos,RightPos,Caret: Integer; Value: String;
+ Begin
+  XX:=X+158; YY:=Y+124+Index*39; WW:=W-174;
+  SetColor(Black); OutTextXY(X+12,YY+7,FieldName(Index));
+  If Editable(Index) Then SetFillStyle(SolidFill,White) Else SetFillStyle(SolidFill,LightGray);
+  Bar(XX,YY,XX+WW,YY+23);
+  If Focus=Index Then SetColor(Blue) Else SetColor(DarkGray); Rectangle(XX,YY,XX+WW,YY+23);
+  Value:=Draft.Values[Index]; If Focus=Index Then Value:=Editor^.Name;
+  { Les sauts de ligne importes restent stockes, mais se lisent sur une ligne. }
+  For Caret:=1 To Length(Value) Do If Value[Caret]<' ' Then Value[Caret]:=' ';
+  Offset:=0;
+  If Focus=Index Then While TextWidth(Copy(Value,Offset+1,Editor^.Cursor-Offset))+12>WW Do Inc(Offset);
+  SetColor(Black); If Not Editable(Index) Then SetColor(DarkGray);
+  OutTextXY(XX+5,YY+7,OFShort(Copy(Value,Offset+1,255),WW-12));
+  If (Focus=Index) And Editable(Index) Then Begin
+   Lo:=Min(Editor^.Cursor,Editor^.Anchor); Hi:=Max(Editor^.Cursor,Editor^.Anchor);
+   LeftPos:=XX+5+TextWidth(Copy(Value,Offset+1,Max(0,Lo-Offset)));
+   RightPos:=Min(XX+WW-4,XX+5+TextWidth(Copy(Value,Offset+1,Max(0,Hi-Offset))));
+   If (Hi>Lo) And (RightPos>LeftPos) Then Begin
+    SetFillStyle(SolidFill,LightBlue); Bar(LeftPos,YY+4,RightPos,YY+19);
+    SetColor(Black); OutTextXY(LeftPos,YY+7,OFShort(Copy(Value,Max(Lo,Offset)+1,Hi-Max(Lo,Offset)),RightPos-LeftPos));
+   End;
+   Caret:=XX+5+TextWidth(Copy(Value,Offset+1,Editor^.Cursor-Offset));
+   SetColor(Black); Line(Caret,YY+4,Caret,YY+19);
+  End;
+ End;
+ Procedure DrawPreview;
+ Var PW,PH,PX,PY,L,T: Integer;
+ Begin
+  PERect(Preview,X+W-200,Y+80,184,154); RFChecker(Preview); PEBevel(Preview,True);
+  If Not PGHasImage Then Exit;
+  RFFitSize(CanvasImageW,CanvasImageH,176,146,PW,PH);
+  L:=Preview.Left+(184-PW) Div 2; T:=Preview.Top+(154-PH) Div 2;
+  For PY:=0 To PH-1 Do For PX:=0 To PW-1 Do
+   PutPixel(L+PX,T+PY,ZImagePixel((LongInt(PX)*CanvasImageW) Div PW,(LongInt(PY)*CanvasImageH) Div PH));
+ End;
+ Procedure Draw;
+ Var I: Integer;
+ Begin
+  HideMouse; SetFillStyle(SolidFill,LightGray); Bar(X,Y,X+W,Y+H);
+  SetColor(DarkGray); Rectangle(X,Y,X+W,Y+H);
+  SetFillStyle(SolidFill,Blue); Bar(X+1,Y+1,X+W-1,Y+24);
+  SetColor(White); OutTextXY(X+12,Y+8,'Proprietes de l''image');
+  OFButton(X+12,Y+32,150,'Informations',Tab=0); OFButton(X+168,Y+32,150,'Metadonnees',Tab=1);
+  If Tab=0 Then Begin
+   S:=OFBase(ImageBuffer.FileName); If S='' Then S:='Sans titre';
+   KeyValue(0,'Nom',S); KeyValue(1,'Format source',APFormatName(ImageBuffer.Format));
+   KeyValue(2,'Dimensions',IntToStr(ImageBuffer.Width)+' x '+IntToStr(ImageBuffer.Height)+' px');
+   KeyValue(3,'Profondeur source',IntToStr(ImageBuffer.BitDepth)+' bits / pixel');
+   KeyValue(4,'Canevas PAINT','8 bits indexes / 256 entrees');
+   KeyValue(5,'Couleurs utilisees',IntToStr(Used));
+   KeyValue(6,'Transparence',YesNo(ImageBuffer.HasTransparency));
+   KeyValue(7,'Modifications',YesNo(ImageBuffer.Modified));
+   If Exists Then KeyValue(8,'Taille sur disque',STMemoryText(DiskSize)+' ('+IntToStr(DiskSize)+' octets)')
+   Else KeyValue(8,'Taille sur disque','Fichier absent / nouveau');
+   KeyValue(9,'Memoire des pixels',STMemoryText(LongInt(CanvasImageW)*CanvasImageH));
+   KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
+   DrawPreview;
+   SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
+   OutTextXY(X+W-198,Y+270,'Exports : BMP, GIF, PNG');
+   OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
+   OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
+   OutTextXY(X+12,Y+354,'Chemin : '+OFShort(ImageBuffer.FileName,W-100));
+  End Else Begin
+   SetColor(Black);
+   If ImageBuffer.Format=FMT_PNG Then S:='PNG : les six champs sont lus et enregistres dans le fichier.'
+   Else If ImageBuffer.Format=FMT_GIF Then S:='GIF : seule la note / le commentaire peut etre modifie.'
+   Else S:='Lecture seule pour ce format. Enregistrez en PNG pour editer ces champs.';
+   OutTextXY(X+12,Y+78,OFShort(S,W-24));
+   If Draft.Limited Then Begin SetColor(Red); S:='Textes longs / Unicode : remplacement soumis a confirmation.'; End
+   Else Begin SetColor(DarkGray); S:='255 caracteres par champ. Ctrl+A/C/X/V : selection et presse-papiers.'; End;
+   OutTextXY(X+12,Y+100,OFShort(S,W-24));
+   For I:=0 To 5 Do Field(I);
+  End;
+  SetColor(DarkGray); OutTextXY(X+12,Y+H-65,OFShort(Notice,W-24));
+  For I:=0 To 4 Do Begin
+   Case I Of 0:S:='OK'; 1:S:='Appliquer'; 2:S:='Annuler'; 3:S:='Enregistrer'; 4:S:='Aide'; End;
+   OFButton(X+12+I*((W-24) Div 5),Y+H-40,(W-34) Div 5,S,Focus=I+6);
+  End;
+  ShowMouse; Dirty:=False;
+ End;
+Begin
+ Editor:=POFState(JDAllocate(SizeOf(TOFState))); If Editor=Nil Then Exit;
+ FillChar(Editor^,SizeOf(TOFState),0); Draft:=ImageBuffer.Metadata;
+ X:=10; W:=Min(760,ScreenWidth-20); H:=Min(520,ScreenHeight-20);
+ X:=(ScreenWidth-W) Div 2; Y:=(ScreenHeight-H) Div 2;
+ Tab:=0; Focus:=6; Done:=False; Dirty:=True; Used:=0;
+ FillChar(Colors,SizeOf(Colors),0);
+ If CanvasImage<>Nil Then For N:=0 To LongInt(CanvasImageW)*CanvasImageH-1 Do Colors[PPNBytes(CanvasImage)^[N]]:=True;
+ For I:=0 To 255 Do If Colors[I] Then Inc(Used);
+ FileDetails; Notice:='F1 : informations   F2 : metadonnees   Echap : annuler';
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  If KeyPressed Then Begin
+   K:=ReadKey; E:=#0; If K=#0 Then E:=ReadKey;
+   If K=#27 Then Done:=True
+   Else If (K=#0) And (E In [#59,#60]) Then Begin StoreField; Tab:=Ord(E)-59; SetFocus(6); End
+   Else If K=#9 Then Begin
+    J:=Focus;
+    Repeat J:=(J+1) Mod 11; Until (J>=6) Or ((Tab=1) And Editable(J));
+    SetFocus(J);
+   End Else If K=#13 Then Begin If Focus>=6 Then Activate(Focus-6) Else Activate(0); End
+   Else If (K=' ') And (Focus>=6) Then Activate(Focus-6)
+   Else If (Tab=1) And (Focus<6) And (Editable(Focus) Or (K In [#1,#3])) Then Begin OFEdit(Editor^,K,E); Dirty:=True; End;
+  End;
+  GetMouseStateLocal(MX,MY,B);
+  If ((B And 1)<>0) And ((Prev And 1)=0) Then Begin
+   If (MY>=Y+32) And (MY<=Y+54) Then Begin
+    If (MX>=X+12) And (MX<=X+162) Then Begin StoreField; Tab:=0; SetFocus(6); End;
+    If (MX>=X+168) And (MX<=X+318) Then Begin StoreField; Tab:=1; SetFocus(6); End;
+   End;
+   If Tab=1 Then For J:=0 To 5 Do
+    If (MX>=X+158) And (MX<=X+W-16) And (MY>=Y+124+J*39) And (MY<=Y+147+J*39) Then SetFocus(J);
+   If (MY>=Y+H-40) And (MY<=Y+H-18) And (MX>=X+12) And (MX<X+W-12) Then Begin
+    J:=(MX-X-12) Div ((W-24) Div 5); If J<=4 Then Begin SetFocus(J+6); Activate(J); End;
+   End;
+  End;
+  Prev:=B; Delay(10);
+ Until Done;
+ FreeMem(Editor,SizeOf(TOFState)); RedrawInterface;
+End;
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -14918,15 +15247,7 @@ Begin
     5: Begin { Imprimer }
      ShowMessage('Imprimer', 'Impression non disponible.');
     End;
-    7: Begin { Propriétés }
-     Str(ImageBuffer.Width, InfoMsg);
-     InfoMsg := 'Taille : ' + InfoMsg + ' x ';
-     Str(ImageBuffer.Height, NewName);
-     InfoMsg := InfoMsg + NewName + '  -  ';
-     Str(ImageBuffer.BitDepth, NewName);
-     InfoMsg := InfoMsg + NewName + ' bpp';
-     ShowMessage('Proprietes', InfoMsg);
-    End;
+    7: ImagePropertiesDialog; { Proprietes detaillees et textes persistants }
     9: If ConfirmDiscardChanges Then Running := False; { Quitter }
    End;
   End;

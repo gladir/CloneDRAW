@@ -148,6 +148,7 @@ Const
  FMT_ARW = 18;
  FMT_CR2 = 19;
  FMT_PPM = 20;
+ FMT_DIB = 21;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -572,8 +573,10 @@ Var
  Ext: String;
 Begin
  Ext := ExtractFileExt(FileName);
- If (Ext = '.BMP') or (Ext = '.DIB') Then
+ If Ext = '.BMP' Then
   GetImageFormat := FMT_BMP
+ Else If Ext = '.DIB' Then
+  GetImageFormat := FMT_DIB
  Else If Ext = '.GIF' Then
   GetImageFormat := FMT_GIF
  Else If Ext = '.PNG' Then
@@ -6664,6 +6667,291 @@ Begin
  If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
  FreeMem(D,SizeOf(TPMState));
 End;
+{ DIB compact (BMP2DIB / PCX2DIB), avec ou sans BITMAPFILEHEADER.
+  CORE/INFO/V2/V3/V4/V5, RGB 1/4/8/16/24/32, BITFIELDS, RLE4/RLE8.
+  RLE : https://learn.microsoft.com/windows/win32/gdi/bitmap-compression
+  Les profils ICC externes et les rasters JPEG/PNG encapsules sont refuses. }
+Type
+ TIBState = Record
+  Data,RGB: PPNBytes;
+  Size,RGBSize,Position,Limit,RowSize,PixelStart: LongInt;
+  Width,Height,Bits,Compression,PaletteCount: Integer;
+  Palette: TPalette;
+  Masks,Maximum: Array[0..3] Of LongWord;
+  Shifts: Array[0..3] Of Integer;
+  TopDown,Bad: Boolean;
+ End;
+ PIBState = ^TIBState;
+
+Function IBWord(Var D: TIBState; P: LongInt): Word;
+Begin
+ IBWord:=0; If D.Bad Then Exit;
+ If (P<0) Or (P>D.Size-2) Then Begin D.Bad:=True; Exit; End;
+ IBWord:=Word(D.Data^[P]) Or (Word(D.Data^[P+1]) Shl 8);
+End;
+
+Function IBLong(Var D: TIBState; P: LongInt): LongWord;
+Var A,B: LongWord;
+Begin
+ A:=IBWord(D,P); B:=IBWord(D,P+2); IBLong:=A Or (B Shl 16);
+End;
+
+Function IBByte(Var D: TIBState): Integer;
+Begin
+ IBByte:=0; If D.Bad Then Exit;
+ If D.Position>=D.Limit Then Begin D.Bad:=True; Exit; End;
+ IBByte:=D.Data^[D.Position]; Inc(D.Position);
+End;
+
+Procedure IBIndex(Var D: TIBState; X,Y,Index: Integer);
+Var P: LongInt;
+Begin
+ If D.Bad Then Exit;
+ If (X<0) Or (X>=D.Width) Or (Y<0) Or (Y>=D.Height) Or
+    (Index<0) Or (Index>=D.PaletteCount) Then Begin
+  D.Bad:=True; Exit;
+ End;
+ If Not D.TopDown Then Y:=D.Height-1-Y;
+ P:=(LongInt(Y)*D.Width+X)*3;
+ D.RGB^[P]:=D.Palette[Index].R;
+ D.RGB^[P+1]:=D.Palette[Index].G;
+ D.RGB^[P+2]:=D.Palette[Index].B;
+End;
+
+Function IBHeader(Var D: TIBState): Boolean;
+Var Base,H,P,Offset,ImageSize,Height: LongInt;
+    V,Mask,Used: LongWord; I,J,EntrySize: Integer; Wrapped: Boolean;
+Begin
+ IBHeader:=False; Base:=0; Offset:=0; Wrapped:=False;
+ If D.Size<12 Then Exit;
+ If IBWord(D,0)=$4D42 Then Begin
+  If D.Size<26 Then Exit;
+  Wrapped:=True; Base:=14; V:=IBLong(D,10);
+  If V>LongWord(D.Size) Then Exit; Offset:=V;
+ End;
+ V:=IBLong(D,Base);
+ If Not (V In [12,40,52,56,108,124]) Then Exit; H:=V;
+ If H>D.Size-Base Then Exit;
+ EntrySize:=4; ImageSize:=0;
+ If H=12 Then Begin
+  D.Width:=0; V:=IBWord(D,Base+4); If (V=0) Or (V>4096) Then Exit;
+  D.Width:=V; V:=IBWord(D,Base+6); If (V=0) Or (V>4096) Then Exit;
+  D.Height:=V; If IBWord(D,Base+8)<>1 Then Exit;
+  D.Bits:=IBWord(D,Base+10); EntrySize:=3;
+ End Else Begin
+  V:=IBLong(D,Base+4); If (V=0) Or (V>4096) Then Exit;
+  D.Width:=V; Height:=LongInt(IBLong(D,Base+8));
+  If (Height=0) Or (Height< -4096) Or (Height>4096) Then Exit;
+  D.TopDown:=Height<0; D.Height:=Abs(Height);
+  If IBWord(D,Base+12)<>1 Then Exit;
+  V:=IBWord(D,Base+14); If V>32 Then Exit; D.Bits:=V;
+  V:=IBLong(D,Base+16); If V>6 Then Exit; D.Compression:=V;
+  V:=IBLong(D,Base+20); If V>LongWord(D.Size) Then Exit;
+  ImageSize:=V;
+  If H=124 Then
+   If (IBLong(D,Base+112)<>0) Or (IBLong(D,Base+116)<>0) Then Exit;
+ End;
+ If Not (D.Bits In [1,4,8,16,24,32]) Then Exit;
+ Case D.Compression Of
+  0: ;
+  1: If (D.Bits<>8) Or D.TopDown Then Exit;
+  2: If (D.Bits<>4) Or D.TopDown Then Exit;
+  3,6: If Not (D.Bits In [16,32]) Then Exit;
+ Else Exit; End;
+ P:=Base+H;
+ If D.Bits>=16 Then Begin
+  If D.Bits=16 Then Begin
+   D.Masks[0]:=$7C00; D.Masks[1]:=$03E0; D.Masks[2]:=$001F;
+  End Else Begin
+   D.Masks[0]:=$FF0000; D.Masks[1]:=$00FF00; D.Masks[2]:=$0000FF;
+  End;
+  If D.Compression In [3,6] Then Begin
+   If H=40 Then Begin
+    J:=3; If D.Compression=6 Then J:=4;
+    If D.Size-P<J*4 Then Exit;
+    For I:=0 To J-1 Do D.Masks[I]:=IBLong(D,P+I*4);
+    Inc(P,J*4);
+   End Else Begin
+    For I:=0 To 2 Do D.Masks[I]:=IBLong(D,Base+40+I*4);
+    If H>=56 Then D.Masks[3]:=IBLong(D,Base+52);
+   End;
+  End;
+  If (D.Compression=6) And (D.Masks[3]=0) Then Exit;
+  Used:=0;
+  For I:=0 To 3 Do Begin
+   Mask:=D.Masks[I]; If (I<3) And (Mask=0) Then Exit;
+   If (D.Bits<32) And ((Mask Shr D.Bits)<>0) Then Exit;
+   If (Used And Mask)<>0 Then Exit; Used:=Used Or Mask;
+   If Mask<>0 Then Begin
+    While (Mask And 1)=0 Do Begin
+     Mask:=Mask Shr 1; Inc(D.Shifts[I]);
+    End;
+    D.Maximum[I]:=Mask;
+    While (Mask And 1)<>0 Do Mask:=Mask Shr 1;
+    If Mask<>0 Then Exit;
+   End;
+  End;
+ End;
+ If D.Bits<=8 Then Begin
+  V:=0; If H<>12 Then V:=IBLong(D,Base+32);
+  If V=0 Then V:=LongWord(1) Shl D.Bits;
+  If V>LongWord(1 Shl D.Bits) Then Exit; D.PaletteCount:=V;
+  If D.Size-P<D.PaletteCount*EntrySize Then Exit;
+  For I:=0 To D.PaletteCount-1 Do Begin
+   D.Palette[I].B:=D.Data^[P]; D.Palette[I].G:=D.Data^[P+1];
+   D.Palette[I].R:=D.Data^[P+2]; Inc(P,EntrySize);
+  End;
+ End Else If H<>12 Then Begin
+  V:=IBLong(D,Base+32); If V>256 Then Exit;
+  If V>LongWord((D.Size-P) Div 4) Then Exit; Inc(P,LongInt(V)*4);
+ End;
+ If Wrapped Then Begin If Offset<P Then Exit; P:=Offset; End;
+ D.PixelStart:=P; D.Position:=P; D.Limit:=D.Size;
+ If ImageSize>0 Then Begin
+  If ImageSize>D.Size-P Then Exit; D.Limit:=P+ImageSize;
+ End;
+ D.RowSize:=((LongInt(D.Width)*D.Bits+31) Div 32)*4;
+ If D.Compression In [0,3,6] Then
+  If D.RowSize>(D.Limit-P) Div D.Height Then Exit;
+ If D.Bad Then Exit;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); IBHeader:=D.RGB<>Nil;
+End;
+
+Function IBRLE(Var D: TIBState): Boolean;
+Var X,Y,N,V,I,Index,Count,DX,DY: Integer; P: LongInt;
+Begin
+ IBRLE:=False; X:=0; Y:=0;
+ For P:=0 To LongInt(D.Width)*D.Height-1 Do Begin
+  D.RGB^[P*3]:=D.Palette[0].R;
+  D.RGB^[P*3+1]:=D.Palette[0].G;
+  D.RGB^[P*3+2]:=D.Palette[0].B;
+ End;
+ While Not D.Bad Do Begin
+  N:=IBByte(D); V:=IBByte(D); If D.Bad Then Exit;
+  If N>0 Then Begin
+   If N>D.Width-X Then Exit;
+   For I:=0 To N-1 Do Begin
+    Index:=V;
+    If D.Bits=4 Then Index:=(V Shr (4-((I And 1)*4))) And 15;
+    IBIndex(D,X,Y,Index); Inc(X);
+   End;
+  End Else Case V Of
+   0: Begin X:=0; Inc(Y); If Y>D.Height Then Exit; End;
+   1: Begin IBRLE:=Not D.Bad; Exit; End;
+   2: Begin
+    DX:=IBByte(D); DY:=IBByte(D);
+    If (DX>=D.Width-X) Or (DY>=D.Height-Y) Then Exit;
+    Inc(X,DX); Inc(Y,DY);
+   End;
+  Else
+   N:=V; If N>D.Width-X Then Exit;
+   Count:=N; If D.Bits=4 Then Count:=(N+1) Div 2;
+   For I:=0 To N-1 Do Begin
+    If (D.Bits=8) Or ((I And 1)=0) Then V:=IBByte(D);
+    Index:=V;
+    If D.Bits=4 Then Index:=(V Shr (4-((I And 1)*4))) And 15;
+    IBIndex(D,X,Y,Index); Inc(X);
+   End;
+   If Odd(Count) Then IBByte(D);
+  End;
+ End;
+End;
+
+Function IBRead(Const Name: String; Var D: TIBState): Boolean;
+Var F: File; OldMode: Byte; Bytes,P,N,Dest: LongInt;
+    Failed: Boolean; X,Y,YY,I,Index,A: Integer; V: LongWord;
+    Color: Array[0..2] Of Integer;
+Begin
+ IBRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=12) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Or Not IBHeader(D) Then Exit;
+ If D.Compression In [1,2] Then Begin IBRead:=IBRLE(D); Exit; End;
+ For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do Begin
+  P:=D.PixelStart+LongInt(Y)*D.RowSize;
+  If D.Bits<=8 Then Begin
+   If D.Bits=8 Then Index:=D.Data^[P+X]
+   Else Index:=(D.Data^[P+(LongInt(X)*D.Bits) Div 8] Shr
+    (8-D.Bits-((X*D.Bits) And 7))) And ((1 Shl D.Bits)-1);
+   IBIndex(D,X,Y,Index); If D.Bad Then Exit;
+  End Else Begin
+   Inc(P,LongInt(X)*(D.Bits Div 8)); V:=0;
+   For I:=0 To D.Bits Div 8-1 Do
+    V:=V Or (LongWord(D.Data^[P+I]) Shl (I*8));
+   For I:=0 To 2 Do
+    Color[I]:=Round(((V And D.Masks[I]) Shr D.Shifts[I])/
+     (D.Maximum[I]*1.0)*255);
+   A:=255;
+   If D.Masks[3]<>0 Then
+    A:=Round(((V And D.Masks[3]) Shr D.Shifts[3])/
+     (D.Maximum[3]*1.0)*255);
+   YY:=Y; If Not D.TopDown Then YY:=D.Height-1-Y;
+   Dest:=(LongInt(YY)*D.Width+X)*3;
+   For I:=0 To 2 Do Begin
+    N:=LongInt(Color[I])*A+LongInt(255)*(255-A)+127;
+    D.RGB^[Dest+I]:=N Div 255;
+   End;
+  End;
+ End;
+ IBRead:=Not D.Bad;
+End;
+
+Function LoadDIB(FileName: String): Boolean;
+Var D: PIBState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadDIB:=False; Pixels:=Nil; Q:=Nil;
+ D:=PIBState(JDAllocate(SizeOf(TIBState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If IBRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+   ImageBuffer.BitDepth:=D^.Bits;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_DIB;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadDIB:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TIBState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -6714,6 +7002,7 @@ Begin
   FMT_ARW: Succeeded := LoadARW(FileName);
   FMT_CR2: Succeeded := LoadCR2(FileName);
   FMT_PPM: Succeeded := LoadPPM(FileName);
+  FMT_DIB: Succeeded := LoadDIB(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -13739,6 +14028,7 @@ Begin
   FMT_ARW: APFormatName:='ARW Bayer';
   FMT_CR2: APFormatName:='CR2 Bayer';
   FMT_PPM: APFormatName:='PPM / Netpbm';
+  FMT_DIB: APFormatName:='DIB';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -14460,6 +14750,7 @@ Begin
   16: OFMatches:=E='.ARW';
   17: OFMatches:=E='.CR2';
   18: OFMatches:=E='.PPM';
+  19: OFMatches:=E='.DIB';
   Else OFMatches:=True;
  End;
 End;
@@ -14488,6 +14779,7 @@ Begin
   16: OFFilterLabel:='ARW Bayer non compresse : *.arw';
   17: OFFilterLabel:='CR2 Bayer non compresse : *.cr2';
   18: OFFilterLabel:='PPM Portable Pixmap : *.ppm';
+  19: OFFilterLabel:='DIB Device Independent Bitmap : *.dib';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -14906,12 +15198,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..19] Of Integer;
+Type TOFFilterOrder = Array[0..20] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=20; If Saving Then Count:=3;
+ Count:=21; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;
@@ -15063,7 +15355,7 @@ Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
   D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG' +
-  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM : ouverture uniquement.';
+  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -16399,7 +16691,7 @@ BEGIN
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
   WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
-  'dng|bgx|dds|dcm|apng|arw|cr2|ppm]');
+  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');

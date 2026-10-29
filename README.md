@@ -19,6 +19,10 @@ Apercu de PAINT :
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/98414f58-4b96-4ab3-8b91-cea18d8fcfd9" /></td>
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ace36e01-3760-4a95-bce8-c8a24827063e" /></td>
 	</tr>
+	<tr>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/201c76b2-ef06-411a-b507-1ca8f53f4523" /></td>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9f2fccee-708a-44e8-84e5-7f94ebf691d5" /></td>
+	</tr>
 </table>
 
 

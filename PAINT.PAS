@@ -152,6 +152,7 @@ Const
  FMT_CUR = 22;
  FMT_MSP = 23;
  FMT_MAC = 24;
+ FMT_PAS = 25;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -592,6 +593,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If Ext = '.PAS' Then
+  GetImageFormat := FMT_PAS
  Else If (Ext = '.MAC') Or (Ext = '.PNTG') Then
   GetImageFormat := FMT_MAC
  Else If Ext = '.MSP' Then
@@ -7998,6 +8001,487 @@ Begin
  If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
  FreeMem(D,SizeOf(TMAState));
 End;
+{ Import de constantes Pascal, jamais compilation ni execution du texte.
+  Conventions BMP2PAS, PPM2PAS, XBM2PAS : dimensions et BitmapData.
+  RGB par defaut, ColorOrder='BGR' et LSBFirst/HasAlpha optionnels.
+  Sans palette explicite : VGA 0..15 puis gris, comme le canevas PAINT. }
+Type
+ TPSConstant = Record Name: String[63]; Value: LongInt; End;
+ TPSState = Record
+  Data,Bytes,RGB: PPNBytes;
+  Size,Position,Count,Declared,RGBSize,Stride,Number: LongInt;
+  Width,Height,Bits,Symbols,Depth: Integer;
+  Constants: Array[0..127] Of TPSConstant;
+  Token,Text: String;
+  Palette: TPalette;
+  PaletteCount: Integer;
+  Bad,SwapRB,OrderSet,LSBFirst,Alpha,BottomUp: Boolean;
+ End;
+ PPSState = ^TPSState;
+
+Procedure PSNext(Var D: TPSState);
+Var C,Q: Byte; N,Base,Digit,Level: Integer; Closed: Boolean;
+Begin
+ D.Token:=''; D.Text:=''; If D.Bad Then Exit;
+ Repeat
+  While D.Position<D.Size Do Begin
+   If D.Data^[D.Position]>32 Then Break; Inc(D.Position);
+  End;
+  If D.Position>=D.Size Then Exit;
+  C:=D.Data^[D.Position];
+  If (C=123) Or ((C=40) And (D.Position+1<D.Size) And
+     (D.Data^[D.Position+1]=42)) Then Begin
+   Q:=C; Inc(D.Position); If Q=40 Then Inc(D.Position);
+   Level:=1;
+   While (D.Position<D.Size) And (Level>0) Do Begin
+    C:=D.Data^[D.Position]; Inc(D.Position);
+    If Q=123 Then Begin
+     If C=123 Then Inc(Level) Else If C=125 Then Dec(Level);
+    End Else If (D.Position<D.Size) And (C=42) And
+       (D.Data^[D.Position]=41) Then Begin Inc(D.Position); Dec(Level); End
+    Else If (D.Position<D.Size) And (C=40) And
+       (D.Data^[D.Position]=42) Then Begin Inc(D.Position); Inc(Level); End;
+    If Level>32 Then Begin D.Bad:=True; Exit; End;
+   End;
+   If Level<>0 Then Begin D.Bad:=True; Exit; End;
+  End Else If (C=47) And (D.Position+1<D.Size) And
+     (D.Data^[D.Position+1]=47) Then Begin
+   While D.Position<D.Size Do Begin
+    C:=D.Data^[D.Position]; Inc(D.Position); If C In [10,13] Then Break;
+   End;
+  End Else Break;
+ Until D.Bad;
+ If D.Position>=D.Size Then Exit;
+ C:=D.Data^[D.Position]; Inc(D.Position);
+ If C=39 Then Begin
+  Closed:=False;
+  While D.Position<D.Size Do Begin
+   C:=D.Data^[D.Position]; Inc(D.Position);
+   If C=39 Then Begin
+    If (D.Position<D.Size) And (D.Data^[D.Position]=39) Then
+     Inc(D.Position)
+    Else Begin Closed:=True; Break; End;
+   End;
+   If Length(D.Text)=255 Then Begin D.Bad:=True; Exit; End;
+   D.Text:=D.Text+Chr(C);
+  End;
+  If Not Closed Then D.Bad:=True;
+  D.Token:='STRING'; Exit;
+ End;
+ If Chr(C) In ['A'..'Z','a'..'z','_'] Then Begin
+  D.Token:=UpCase(Chr(C));
+  While D.Position<D.Size Do Begin
+   C:=D.Data^[D.Position];
+   If Not (Chr(C) In ['A'..'Z','a'..'z','_','0'..'9']) Then Break;
+   If Length(D.Token)>=63 Then Begin D.Bad:=True; Exit; End;
+   D.Token:=D.Token+UpCase(Chr(C)); Inc(D.Position);
+  End;
+  Exit;
+ End;
+ If (Chr(C) In ['0'..'9']) Or (C In [36,37,38]) Then Begin
+  Base:=10; D.Number:=0; N:=0;
+  If C=36 Then Base:=16 Else If C=37 Then Base:=2
+  Else If C=38 Then Base:=8 Else Dec(D.Position);
+  While D.Position<D.Size Do Begin
+   C:=D.Data^[D.Position];
+   Digit:=Pos(UpCase(Chr(C)),'0123456789ABCDEF')-1;
+   If (Digit<0) Or (Digit>=Base) Then Break;
+   If D.Number>(67108864-Digit) Div Base Then Begin
+    D.Bad:=True; Exit;
+   End;
+   D.Number:=D.Number*Base+Digit; Inc(D.Position); Inc(N);
+  End;
+  If N=0 Then D.Bad:=True; D.Token:='NUMBER'; Exit;
+ End;
+ D.Token:=Chr(C);
+ If (C=46) And (D.Position<D.Size) Then
+  If D.Data^[D.Position]=46 Then Begin
+   D.Token:='..'; Inc(D.Position);
+  End;
+End;
+
+Function PSExpression(Var D: TPSState): LongInt; Forward;
+
+Function PSFactor(Var D: TPSState): LongInt;
+Var I: Integer; V: LongInt; Negative,Found: Boolean;
+Begin
+ PSFactor:=0; If D.Bad Then Exit;
+ Inc(D.Depth); If D.Depth>16 Then Begin D.Bad:=True; Exit; End;
+ Negative:=False;
+ If (D.Token='+') Or (D.Token='-') Then Begin
+  Negative:=D.Token='-'; PSNext(D);
+ End;
+ V:=0;
+ If D.Token='(' Then Begin
+  PSNext(D); V:=PSExpression(D);
+  If D.Token<>')' Then D.Bad:=True Else PSNext(D);
+ End Else If D.Token='NUMBER' Then Begin V:=D.Number; PSNext(D); End
+ Else If (D.Token='TRUE') Or (D.Token='FALSE') Then Begin
+  V:=Ord(D.Token='TRUE'); PSNext(D);
+ End Else Begin
+  Found:=False;
+  For I:=0 To D.Symbols-1 Do If D.Constants[I].Name=D.Token Then Begin
+   V:=D.Constants[I].Value; Found:=True; Break;
+  End;
+  If Not Found Then D.Bad:=True Else PSNext(D);
+ End;
+ If Negative Then V:=-V; Dec(D.Depth); PSFactor:=V;
+End;
+
+Function PSTerm(Var D: TPSState): LongInt;
+Var A,B: LongInt; V: Double; Op: String;
+Begin
+ A:=PSFactor(D);
+ While Not D.Bad Do Begin
+  Op:=D.Token;
+  If (Op<>'*') And (Op<>'DIV') And (Op<>'MOD') And
+     (Op<>'SHL') And (Op<>'SHR') And (Op<>'AND') Then Break;
+  PSNext(D); B:=PSFactor(D); V:=A;
+  If Op='*' Then V:=A*(B*1.0)
+  Else If (Op='DIV') Or (Op='MOD') Then Begin
+   If B=0 Then D.Bad:=True
+   Else If Op='DIV' Then V:=A Div B Else V:=A Mod B;
+  End Else If Op='AND' Then V:=A And B
+  Else Begin
+   If (B<0) Or (B>24) Or (A<0) Then D.Bad:=True
+   Else If Op='SHL' Then V:=A*Exp(B*Ln(2)) Else V:=A Shr B;
+  End;
+  If Abs(V)>67108864 Then D.Bad:=True;
+  If Not D.Bad Then A:=Round(V);
+ End;
+ PSTerm:=A;
+End;
+
+Function PSExpression(Var D: TPSState): LongInt;
+Var A,B: LongInt; V: Double; Op: String;
+Begin
+ A:=PSTerm(D);
+ While Not D.Bad Do Begin
+  Op:=D.Token;
+  If (Op<>'+') And (Op<>'-') And (Op<>'OR') And (Op<>'XOR') Then Break;
+  PSNext(D); B:=PSTerm(D); V:=A;
+  If Op='+' Then V:=A+(B*1.0) Else If Op='-' Then V:=A-(B*1.0)
+  Else If Op='OR' Then V:=A Or B Else V:=A Xor B;
+  If Abs(V)>67108864 Then D.Bad:=True;
+  If Not D.Bad Then A:=Round(V);
+ End;
+ PSExpression:=A;
+End;
+
+Procedure PSList(Var D: TPSState; Buffer: PPNBytes;
+                 Var Count: LongInt; ElementSize,Level: Integer);
+Var V: LongInt;
+Begin
+ If D.Bad Then Exit;
+ If (Level>8) Or (D.Token<>'(') Then Begin D.Bad:=True; Exit; End;
+ PSNext(D);
+ While Not D.Bad And (D.Token<>')') Do Begin
+  If D.Token='' Then Begin D.Bad:=True; Exit; End;
+  If D.Token=',' Then Begin PSNext(D); Continue; End;
+  If D.Token='(' Then PSList(D,Buffer,Count,ElementSize,Level+1)
+  Else Begin
+   V:=PSExpression(D);
+   If (V<0) Or ((ElementSize=1) And (V>255)) Or (V>65535) Or
+      (Count>D.Size-ElementSize) Then Begin D.Bad:=True; Exit; End;
+   Buffer^[Count]:=V And 255; Inc(Count);
+   If ElementSize=2 Then Begin Buffer^[Count]:=V Shr 8; Inc(Count); End;
+  End;
+  If (D.Token<>',') And (D.Token<>')') Then D.Bad:=True;
+ End;
+ If Not D.Bad Then PSNext(D);
+End;
+
+Procedure PSArray(Var D: TPSState; Const Name: String);
+Var Low,High,Elements,Count: LongInt; Size,I: Integer;
+    V: Double; Buffer: PPNBytes; Candidate,Palette: Boolean;
+Begin
+ PSNext(D); If D.Token<>'[' Then Begin D.Bad:=True; Exit; End;
+ Elements:=1;
+ Repeat
+  PSNext(D); Low:=PSExpression(D);
+  If D.Token<>'..' Then Begin D.Bad:=True; Exit; End;
+  PSNext(D); High:=PSExpression(D);
+  V:=(High-Low+1)*(Elements*1.0);
+  If (High<Low) Or (V<1) Or (V>67108864) Then Begin
+   D.Bad:=True; Exit;
+  End;
+  Elements:=Round(V);
+ Until (D.Token<>',') Or D.Bad;
+ If D.Token<>']' Then Begin D.Bad:=True; Exit; End;
+ PSNext(D); If D.Token<>'OF' Then Begin D.Bad:=True; Exit; End;
+ PSNext(D); Size:=1;
+ If D.Token='WORD' Then Size:=2 Else If D.Token<>'BYTE' Then Begin
+  D.Bad:=True; Exit;
+ End;
+ PSNext(D); If D.Token<>'=' Then Begin D.Bad:=True; Exit; End;
+ PSNext(D); Buffer:=PPNBytes(JDAllocate(D.Size));
+ If Buffer=Nil Then Begin D.Bad:=True; Exit; End;
+ Count:=0; PSList(D,Buffer,Count,Size,0);
+ Palette:=(Name='PALETTE') Or (Name='BITMAPPALETTE') Or
+          (Name='PALETTEDATA');
+ Candidate:=(Pos('BITMAP',Name)>0) Or (Name='IMAGEDATA') Or
+            (Name='IMAGEBYTES');
+ If Not Candidate And Not Palette And (Count>=12) Then
+  Candidate:=((Buffer^[0]=66) And (Buffer^[1]=77)) Or
+   ((Buffer^[0]=137) And (Buffer^[1]=80) And (Buffer^[2]=78));
+ If Not D.Bad Then Begin
+  If Palette Then Begin
+   If (Size<>1) Or (Count<3) Or (Count>768) Or (Count Mod 3<>0) Or
+   (Count<>Elements*Size)
+    Then D.Bad:=True
+   Else Begin
+    D.PaletteCount:=Count Div 3;
+    For I:=0 To D.PaletteCount-1 Do Begin
+     D.Palette[I].R:=Buffer^[I*3]; D.Palette[I].G:=Buffer^[I*3+1];
+     D.Palette[I].B:=Buffer^[I*3+2];
+    End;
+   End;
+  End Else If Candidate And (D.Bytes=Nil) Then Begin
+   D.Bytes:=Buffer; Buffer:=Nil; D.Count:=Count;
+   D.Declared:=Elements*Size;
+  End;
+ End;
+ If Buffer<>Nil Then FreeMem(Buffer,D.Size);
+ If D.Token<>';' Then D.Bad:=True Else PSNext(D);
+End;
+
+Function PSConstants(Var D: TPSState): Boolean;
+Var Name,S: String; V: LongInt; Active: Boolean; I: Integer;
+Begin
+ PSConstants:=False; Active:=False; PSNext(D);
+ While Not D.Bad And (D.Token<>'') Do Begin
+  If D.Token='CONST' Then Begin
+   If Active And (D.Bytes<>Nil) Then Break;
+   Active:=True; PSNext(D); Continue;
+  End;
+  If (D.Token='BEGIN') Or (D.Token='VAR') Or (D.Token='TYPE') Or
+     (D.Token='PROCEDURE') Or (D.Token='FUNCTION') Then Begin
+   If D.Bytes<>Nil Then Break;
+   Active:=False;
+  End;
+  If Not Active Then Begin PSNext(D); Continue; End;
+  Name:=D.Token; PSNext(D);
+  If D.Token=':' Then Begin
+   PSNext(D); If D.Token='PACKED' Then PSNext(D);
+   If D.Token='ARRAY' Then Begin
+    PSArray(D,Name); Continue;
+   End;
+   If (D.Token='BYTE') Or (D.Token='WORD') Or (D.Token='INTEGER') Or
+      (D.Token='LONGINT') Or (D.Token='BOOLEAN') Or
+      (D.Token='STRING') Then PSNext(D);
+  End;
+  If D.Token<>'=' Then Continue;
+  PSNext(D);
+  If D.Token='STRING' Then Begin
+   If (Name='COLORORDER') Or (Name='PIXELORDER') Then Begin
+    S:=D.Text; For I:=1 To Length(S) Do S[I]:=UpCase(S[I]);
+    If (S<>'RGB') And (S<>'BGR') Then D.Bad:=True;
+    D.SwapRB:=S='BGR'; D.OrderSet:=True;
+   End;
+   PSNext(D);
+  End Else Begin
+   V:=PSExpression(D); If D.Bad Then Exit;
+   If D.Symbols=128 Then Exit;
+   D.Constants[D.Symbols].Name:=Name;
+   D.Constants[D.Symbols].Value:=V; Inc(D.Symbols);
+   If (Name='NUMXPIXELS') Or (Name='WIDTH') Then Begin
+    If (V<1) Or (V>4096) Then Exit; D.Width:=V;
+   End Else If (Name='NUMYPIXELS') Or (Name='HEIGHT') Then Begin
+    If (V<1) Or (V>4096) Then Exit; D.Height:=V;
+   End Else If (Name='BITSPERPIXEL') Or (Name='BPP') Then Begin
+    If Not (V In [1,2,4,8,15,16,24,32]) Then Exit; D.Bits:=V;
+   End Else If Name='BYTESPERLINE' Then Begin
+    If (V<1) Or (V>1048576) Then Exit; D.Stride:=V;
+   End Else If Name='LSBFIRST' Then D.LSBFirst:=V<>0
+   Else If Name='HASALPHA' Then D.Alpha:=V<>0
+   Else If Name='BOTTOMUP' Then D.BottomUp:=V<>0;
+  End;
+  If D.Token<>';' Then Begin D.Bad:=True; Exit; End; PSNext(D);
+ End;
+ PSConstants:=Not D.Bad And (D.Bytes<>Nil) And (D.Count>0);
+End;
+
+Function PSEmbedded(Var D: TPSState): Boolean;
+Var B: PIBState; P: PPNState; PNG: Boolean; I: Integer;
+Begin
+ PSEmbedded:=False; If D.Count<>D.Declared Then Exit;
+ PNG:=D.Count>=45;
+ If PNG Then For I:=0 To 7 Do
+  If D.Bytes^[I]<>PNG_SIGNATURE[I] Then PNG:=False;
+ If PNG Then Begin
+  P:=PPNState(JDAllocate(SizeOf(TPNState))); If P=Nil Then Exit;
+  FillChar(P^,SizeOf(P^),0); FillChar(P^.Alpha,SizeOf(P^.Alpha),255);
+  P^.FileData:=D.Bytes; P^.FileSize:=D.Count;
+  If PNParseChunks(P^) Then If PNInflate(P^) Then
+   If PNReconstruct(P^) Then Begin
+    D.Width:=P^.Width; D.Height:=P^.Height;
+    D.Bits:=P^.Depth*P^.Channels; D.RGB:=P^.RGB;
+    D.RGBSize:=P^.RGBSize; P^.RGB:=Nil; PSEmbedded:=True;
+   End;
+  P^.FileData:=Nil; PNFree(P); Exit;
+ End;
+ B:=PIBState(JDAllocate(SizeOf(TIBState))); If B=Nil Then Exit;
+ FillChar(B^,SizeOf(B^),0); B^.Data:=D.Bytes; B^.Size:=D.Count;
+ If IBHeader(B^) Then If IBRaster(B^) Then Begin
+  D.Width:=B^.Width; D.Height:=B^.Height; D.Bits:=B^.Bits;
+  D.RGB:=B^.RGB; D.RGBSize:=B^.RGBSize; B^.RGB:=Nil;
+  PSEmbedded:=True;
+ End;
+ If B^.RGB<>Nil Then FreeMem(B^.RGB,B^.RGBSize);
+ FreeMem(B,SizeOf(TIBState));
+End;
+
+Function PSDecode(Var D: TPSState): Boolean;
+Var Row,Minimum,Needed,P,Dest: LongInt; X,Y,YY,I,Index,R,G,B,A: Integer;
+    V: Word; Legacy: Boolean;
+Begin
+ PSDecode:=False;
+ If (D.Width=0) Or (D.Height=0) Or (D.Bits=0) Then Begin
+  PSDecode:=PSEmbedded(D); Exit;
+ End;
+ Minimum:=(LongInt(D.Width)*D.Bits+7) Div 8;
+ If D.Bits=15 Then Minimum:=LongInt(D.Width)*2;
+ If D.Stride=0 Then D.Stride:=Minimum;
+ If D.Stride<Minimum Then Exit;
+ If D.Stride>67108864 Div D.Height-1 Then Exit;
+ Row:=D.Stride; Needed:=Row*D.Height; Legacy:=False;
+ If (D.Declared=Needed) And (D.Count<>Needed) Then Begin
+  If (D.Bits=8) And (D.Count=(Row+1)*D.Height) Then Begin
+   Inc(Row); Legacy:=True;
+  End Else If (D.Bits=24) And
+    (D.Count=(((Row+1)*D.Height) Div 3)*3) And
+    (D.Count>Needed) Then Begin Inc(Row); Legacy:=True; End
+  Else If (D.Bits=4) And (D.Count=Minimum*D.Height) Then Row:=Minimum
+  Else Exit;
+ End Else If (D.Count<>Needed) Or (D.Declared<>D.Count) Then Exit;
+ If (LongInt(D.Height)-1)*Row+Minimum>D.Count Then Exit;
+ If Legacy And Not D.OrderSet Then D.SwapRB:=D.Bits=24;
+ If D.PaletteCount=0 Then Begin
+  D.PaletteCount:=256;
+  For I:=0 To 255 Do Begin
+   If I<16 Then Begin
+    D.Palette[I].R:=VGA_R[I]; D.Palette[I].G:=VGA_G[I];
+    D.Palette[I].B:=VGA_B[I];
+   End Else Begin
+    D.Palette[I].R:=I; D.Palette[I].G:=I; D.Palette[I].B:=I;
+   End;
+  End;
+  If D.Bits=1 Then Begin
+   D.Palette[1].R:=255; D.Palette[1].G:=255; D.Palette[1].B:=255;
+  End;
+ End;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do Begin
+  YY:=Y; If D.BottomUp Then YY:=D.Height-1-Y;
+  P:=LongInt(YY)*Row; R:=0; G:=0; B:=0; A:=255;
+  Case D.Bits Of
+   1,2,4,8: Begin
+    If D.Bits=8 Then Index:=D.Bytes^[P+X]
+    Else If D.LSBFirst Then
+     Index:=(D.Bytes^[P+(X*D.Bits) Div 8] Shr ((X*D.Bits) And 7))
+      And ((1 Shl D.Bits)-1)
+    Else Index:=(D.Bytes^[P+(X*D.Bits) Div 8] Shr
+      (8-D.Bits-((X*D.Bits) And 7))) And ((1 Shl D.Bits)-1);
+    If Index>=D.PaletteCount Then Exit;
+    R:=D.Palette[Index].R; G:=D.Palette[Index].G;
+    B:=D.Palette[Index].B;
+   End;
+   15,16: Begin
+    Inc(P,LongInt(X)*2);
+    V:=Word(D.Bytes^[P]) Or (Word(D.Bytes^[P+1]) Shl 8);
+    If D.Bits=15 Then Begin
+     R:=((V Shr 10) And 31)*255 Div 31;
+     G:=((V Shr 5) And 31)*255 Div 31;
+    End Else Begin
+     R:=((V Shr 11) And 31)*255 Div 31;
+     G:=((V Shr 5) And 63)*255 Div 63;
+    End;
+    B:=(V And 31)*255 Div 31;
+   End;
+   24,32: Begin
+    Inc(P,LongInt(X)*(D.Bits Div 8));
+    R:=D.Bytes^[P]; G:=D.Bytes^[P+1]; B:=D.Bytes^[P+2];
+    If D.SwapRB Then Begin I:=R; R:=B; B:=I; End;
+    If (D.Bits=32) And D.Alpha Then A:=D.Bytes^[P+3];
+   End;
+  End;
+  Dest:=(LongInt(Y)*D.Width+X)*3;
+  D.RGB^[Dest]:=(LongInt(R)*A+LongInt(255)*(255-A)+127) Div 255;
+  D.RGB^[Dest+1]:=(LongInt(G)*A+LongInt(255)*(255-A)+127) Div 255;
+  D.RGB^[Dest+2]:=(LongInt(B)*A+LongInt(255)*(255-A)+127) Div 255;
+ End;
+ PSDecode:=True;
+End;
+
+Function PSRead(Const Name: String; Var D: TPSState): Boolean;
+Var F: File; OldMode: Byte; Bytes: LongInt; Failed: Boolean;
+Begin
+ PSRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=12) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ If D.Size>=3 Then If (D.Data^[0]=239) And (D.Data^[1]=187) And
+  (D.Data^[2]=191) Then D.Position:=3;
+ If PSConstants(D) Then PSRead:=PSDecode(D);
+End;
+
+Function LoadPAS(FileName: String): Boolean;
+Var D: PPSState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadPAS:=False; Pixels:=Nil; Q:=Nil;
+ D:=PPSState(JDAllocate(SizeOf(TPSState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If PSRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+   ImageBuffer.BitDepth:=D^.Bits;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_PAS;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadPAS:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Bytes<>Nil Then FreeMem(D^.Bytes,D^.Size);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TPSState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -8028,7 +8512,8 @@ Begin
     (Ext <> '.PPM') and (Ext <> '.CUR') and (Ext <> '.PCX') and
     (Ext <> '.MSP') and
     (Ext <> '.TIF') and (Ext <> '.TIFF') and
-    (Ext <> '.MAC') and (Ext <> '.PNTG') Then Exit;
+    (Ext <> '.MAC') and (Ext <> '.PNTG') and
+    (Ext <> '.PAS') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -8057,6 +8542,7 @@ Begin
   FMT_MSP: Succeeded := LoadMSP(FileName);
   FMT_TIFF: Succeeded := LoadTIFF(FileName);
   FMT_MAC: Succeeded := LoadMAC(FileName);
+  FMT_PAS: Succeeded := LoadPAS(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -15091,6 +15577,7 @@ Begin
   FMT_CUR: APFormatName:='CUR Windows';
   FMT_MSP: APFormatName:='MSP Microsoft Paint';
   FMT_MAC: APFormatName:='MAC MacPaint';
+  FMT_PAS: APFormatName:='PAS constantes Pascal';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -15796,7 +16283,7 @@ Begin
                 (E='.APNG') Or (E='.ARW') Or (E='.CR2') Or (E='.PPM') Or
                 (E='.CUR') Or (E='.PCX') Or (E='.MSP') Or
                 (E='.TIF') Or (E='.TIFF') Or
-                (E='.MAC') Or (E='.PNTG');
+                (E='.MAC') Or (E='.PNTG') Or (E='.PAS');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -15821,6 +16308,7 @@ Begin
   22: OFMatches:=E='.MSP';
   23: OFMatches:=(E='.TIF') Or (E='.TIFF');
   24: OFMatches:=(E='.MAC') Or (E='.PNTG');
+  25: OFMatches:=(E='.PAS');
   Else OFMatches:=True;
  End;
 End;
@@ -15853,6 +16341,7 @@ Begin
   22: OFFilterLabel:='MSP Microsoft Paint : *.msp';
   23: OFFilterLabel:='TIFF : *.tif; *.tiff';
   24: OFFilterLabel:='MacPaint : *.mac; *.pntg';
+  25: OFFilterLabel:='Pascal Bitmap : *.pas';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -16271,12 +16760,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..25] Of Integer;
+Type TOFFilterOrder = Array[0..26] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=26; If Saving Then Count:=3;
+ Count:=27; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;
@@ -17769,7 +18258,7 @@ BEGIN
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
   WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
-  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx|msp|tif|mac]');
+  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx|msp|tif|mac|pas]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');

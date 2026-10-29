@@ -144,6 +144,7 @@ Const
  FMT_BGX = 14;
  FMT_DDS = 15;
  FMT_DCM = 16;
+ FMT_APNG = 17;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -575,6 +576,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If Ext = '.APNG' Then
+  GetImageFormat := FMT_APNG
  Else If Ext = '.DCM' Then
   GetImageFormat := FMT_DCM
  Else If Ext = '.DDS' Then
@@ -2379,6 +2382,7 @@ Type
   FileData,Compressed,Raw,RGB: PPNBytes;
   FileSize,CompressedSize,RawSize,RGBSize,Position: LongInt;
   Width,Height,Depth,ColorType,Channels,Interlace,PaletteCount: Integer;
+  APCanvasW,APCanvasH,APX,APY: Integer;
   Palette: TPalette;
   Alpha: Array[0..255] Of Byte;
   Transparent: Array[0..2] Of LongInt;
@@ -2532,6 +2536,90 @@ Begin
  If (D.RawSize<1) Or (D.RawSize>150994944) Then Exit;
  D.Raw:=PPNBytes(JDAllocate(D.RawSize));
  PNReadChunks:=D.Raw<>Nil;
+End;
+
+{ APNG : premiere trame animee importee comme image fixe, sur fond blanc.
+  Controle acTL/fcTL/fdAT, sequences et rectangles selon W3C PNG 3,
+  https://www.w3.org/TR/png-3/#apng-frame-based-animation
+  Le decodeur PNG integre verifie les CRC et decompresse la trame choisie.
+  Les autres trames sont controlees structurellement, sans lecture animee. }
+Function APReadChunks(Const Name: String; Var D: TPNState): Boolean;
+Var P,Start,Length,N,Frames,Expected,Sequence,FW,FH,FX,FY: LongInt;
+    Kind: String; I: Integer; V: LongWord;
+    Control,HaveIDAT,FrameData,DefaultFrame,FirstDefault: Boolean;
+Begin
+ APReadChunks:=False;
+ If Not PNReadChunks(Name,D) Then Exit;
+ D.APCanvasW:=D.Width; D.APCanvasH:=D.Height;
+ P:=8; Frames:=0; Expected:=0; Sequence:=0;
+ FW:=0; FH:=0; FX:=0; FY:=0;
+ Control:=False; HaveIDAT:=False; FrameData:=False; DefaultFrame:=False; FirstDefault:=False;
+ While P<D.FileSize Do Begin
+  { Les bornes et CRC de chaque bloc ont deja ete verifies par PNReadChunks. }
+  Length:=PNBE(D.FileData,P); Start:=P+8;
+  Kind:=''; For I:=0 To 3 Do Kind:=Kind+Chr(D.FileData^[P+4+I]);
+  If Kind='acTL' Then Begin
+   If Control Or HaveIDAT Or (Length<>8) Then Exit;
+   V:=PNBE(D.FileData,Start); If (V=0) Or (V>10000) Then Exit;
+   Expected:=V; Control:=True;
+  End Else If Kind='fcTL' Then Begin
+   If Not Control Or (Length<>26) Then Exit;
+   If (Frames>0) And Not FrameData Then Exit;
+   If PNBE(D.FileData,Start)<>LongWord(Sequence) Then Exit; Inc(Sequence);
+   V:=PNBE(D.FileData,Start+4); If (V=0) Or (V>LongWord(D.APCanvasW)) Then Exit; N:=V;
+   V:=PNBE(D.FileData,Start+8); If (V=0) Or (V>LongWord(D.APCanvasH)) Then Exit;
+   If PNBE(D.FileData,Start+12)>LongWord(D.APCanvasW-N) Then Exit;
+   If PNBE(D.FileData,Start+16)>LongWord(D.APCanvasH-LongInt(V)) Then Exit;
+   If (D.FileData^[Start+24]>2) Or (D.FileData^[Start+25]>1) Then Exit;
+   Inc(Frames); If Frames>Expected Then Exit;
+   DefaultFrame:=Not HaveIDAT; FrameData:=False;
+   If DefaultFrame Then Begin
+    If (Frames<>1) Or (N<>D.APCanvasW) Or (V<>LongWord(D.APCanvasH)) Or
+       (PNBE(D.FileData,Start+12)<>0) Or (PNBE(D.FileData,Start+16)<>0) Then Exit;
+   End;
+   If Frames=1 Then Begin
+    FW:=N; FH:=V; FX:=PNBE(D.FileData,Start+12); FY:=PNBE(D.FileData,Start+16);
+    FirstDefault:=DefaultFrame;
+    If Not FirstDefault Then D.CompressedSize:=0;
+   End;
+  End Else If Kind='IDAT' Then Begin
+   HaveIDAT:=True;
+   If (Frames>0) And Not DefaultFrame Then Exit;
+   If DefaultFrame And (Length>0) Then FrameData:=True;
+  End Else If Kind='fdAT' Then Begin
+   If Not Control Or Not HaveIDAT Or (Frames=0) Or DefaultFrame Or (Length<4) Then Exit;
+   If PNBE(D.FileData,Start)<>LongWord(Sequence) Then Exit; Inc(Sequence);
+   If Length>4 Then FrameData:=True;
+   If (Frames=1) And Not FirstDefault Then Begin
+    If Length-4>D.FileSize-D.CompressedSize Then Exit;
+    If Length>4 Then Move(D.FileData^[Start+4],D.Compressed^[D.CompressedSize],Length-4);
+    Inc(D.CompressedSize,Length-4);
+   End;
+  End;
+  Inc(P,Length+12);
+ End;
+ If Not Control Or (Frames<>Expected) Or Not FrameData Or (D.CompressedSize<6) Then Exit;
+ D.APX:=FX; D.APY:=FY; D.Width:=FW; D.Height:=FH;
+ If D.Raw<>Nil Then Begin FreeMem(D.Raw,D.RawSize); D.Raw:=Nil; End;
+ D.RawSize:=PNExpected(D); If (D.RawSize<1) Or (D.RawSize>150994944) Then Exit;
+ D.Raw:=PPNBytes(JDAllocate(D.RawSize)); APReadChunks:=D.Raw<>Nil;
+End;
+
+Function APExpand(Var D: TPNState): Boolean;
+Var Buffer: PPNBytes; Size,P: LongInt; Y: Integer;
+Begin
+ APExpand:=False;
+ If (D.Width=D.APCanvasW) And (D.Height=D.APCanvasH) Then Begin APExpand:=True; Exit; End;
+ Size:=LongInt(D.APCanvasW)*D.APCanvasH*3;
+ Buffer:=PPNBytes(JDAllocate(Size)); If Buffer=Nil Then Exit;
+ FillChar(Buffer^,Size,255);
+ For Y:=0 To D.Height-1 Do Begin
+  P:=(LongInt(Y+D.APY)*D.APCanvasW+D.APX)*3;
+  Move(D.RGB^[LongInt(Y)*D.Width*3],Buffer^[P],LongInt(D.Width)*3);
+ End;
+ FreeMem(D.RGB,D.RGBSize); D.RGB:=Buffer; D.RGBSize:=Size;
+ D.Width:=D.APCanvasW; D.Height:=D.APCanvasH; D.HasTransparency:=True;
+ APExpand:=True;
 End;
 
 Function PNBits(Var D: TPNState; Count: Integer): LongInt;
@@ -3585,6 +3673,65 @@ Begin
    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
   End;
   LoadPNG:=True;
+ End;
+ If Pixels<>Nil Then FreeMem(Pixels,Size);
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer)); PNFree(D);
+End;
+
+
+Function LoadAPNG(FileName: String): Boolean;
+Var D: PPNState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadAPNG:=False; Pixels:=Nil; Q:=Nil;
+ D:=PPNState(JDAllocate(SizeOf(TPNState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0); FillChar(D^.Alpha,SizeOf(D^.Alpha),255);
+ If Not APReadChunks(FileName,D^) Then Begin PNFree(D); Exit; End;
+ If Not PNInflate(D^) Then Begin PNFree(D); Exit; End;
+ If Not PNReconstruct(D^) Then Begin PNFree(D); Exit; End;
+ If Not APExpand(D^) Then Begin PNFree(D); Exit; End;
+ Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+ Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size));
+ If (Q<>Nil) And (Pixels<>Nil) Then Begin
+  FillChar(Q^,SizeOf(Q^),0);
+  For I:=0 To 15 Do Begin
+   Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255;
+  End;
+  { Conserver les couleurs exactes des captures/elements graphiques PNG.
+    La quantification n'intervient que si les registres sont tous occupes. }
+  Used:=16; Source:=PByte(D^.RGB); Dest:=Pixels; Exact:=True;
+  For N:=0 To Size-1 Do Begin
+   R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+   For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+   If Slot<0 Then Begin
+    If Used=256 Then Begin Exact:=False; Break; End;
+    Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G;
+    Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+   End;
+   Dest^:=Slot; Inc(Dest);
+  End;
+  If Not Exact Then Begin
+   Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB);
+   JPBuildPalette(Q^,Img); Source:=Img.Pixels; Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source);
+    Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest);
+   End;
+  End;
+  { Commit : ni la palette ni les pixels du document ne changent en cas
+    de CRC invalide, flux tronque, filtre inconnu ou echec d'allocation. }
+  If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+  CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+  ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=D^.Depth*D^.Channels;
+  ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_APNG; ImageBuffer.Modified:=False;
+  ImageBuffer.Palette:=Q^.Palette; ImageBuffer.HasTransparency:=D^.HasTransparency;
+  ImageBuffer.TransparentColor.R:=255; ImageBuffer.TransparentColor.G:=255;
+  ImageBuffer.TransparentColor.B:=255; ImageBuffer.TransparentColor.A:=0;
+  For I:=0 To 255 Do Begin
+   {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+   {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+  End;
+  LoadAPNG:=True;
  End;
  If Pixels<>Nil Then FreeMem(Pixels,Size);
  If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer)); PNFree(D);
@@ -6133,7 +6280,7 @@ Begin
     (Ext <> '.GIF') and (Ext <> '.PNG') and
     (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') and (Ext <> '.WPG') and
     (Ext <> '.LBM') and (Ext <> '.ILBM') and (Ext <> '.IFF') and
-    (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR') and (Ext <> '.DNG') and (Ext <> '.BGX') and (Ext <> '.DDS') and (Ext <> '.DCM') Then Exit;
+    (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR') and (Ext <> '.DNG') and (Ext <> '.BGX') and (Ext <> '.DDS') and (Ext <> '.DCM') and (Ext <> '.APNG') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -6152,6 +6299,7 @@ Begin
   FMT_BGX: Succeeded := LoadBGX(FileName);
   FMT_DDS: Succeeded := LoadDDS(FileName);
   FMT_DCM: Succeeded := LoadDCM(FileName);
+  FMT_APNG: Succeeded := LoadAPNG(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -13149,6 +13297,7 @@ Begin
   FMT_BGX: APFormatName:='BGX MonsterBook';
   FMT_DDS: APFormatName:='DDS';
   FMT_DCM: APFormatName:='DICOM';
+  FMT_APNG: APFormatName:='APNG (premiere trame)';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -13847,7 +13996,7 @@ Begin
  E:=OFUpper(ExtractFileExt(Name));
  Case Filter Of
   0: OFMatches:=(E='.BMP') Or (E='.DIB') Or (E='.GIF') Or
-                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF') Or (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR') Or (E='.DNG') Or (E='.BGX') Or (E='.DDS') Or (E='.DCM');
+                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF') Or (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR') Or (E='.DNG') Or (E='.BGX') Or (E='.DDS') Or (E='.DCM') Or (E='.APNG');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -13862,6 +14011,7 @@ Begin
   12: OFMatches:=E='.BGX';
   13: OFMatches:=E='.DDS';
   14: OFMatches:=E='.DCM';
+  15: OFMatches:=E='.APNG';
   Else OFMatches:=True;
  End;
 End;
@@ -13869,7 +14019,7 @@ End;
 Function OFFilterLabel(N: Integer): String;
 Begin
  Case N Of
-  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR, DNG, BGX, DDS, DCM';
+  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR, DNG, BGX, DDS, DCM, APNG';
   1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
   2: OFFilterLabel:='GIF : *.gif';
   3: OFFilterLabel:='PNG : *.png';
@@ -13884,6 +14034,7 @@ Begin
   12: OFFilterLabel:='MonsterBook BGX : *.bgx';
   13: OFFilterLabel:='DirectDraw Surface : *.dds';
   14: OFFilterLabel:='DICOM non compresse : *.dcm';
+  15: OFFilterLabel:='APNG : *.apng';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -14295,17 +14446,17 @@ Begin
  If DosError<>0 Then Begin D.Notice:='Fichier introuvable ou inaccessible.'; D.Dirty:=True; Exit; End;
  {$IFDEF FPC}FindClose(R);{$ENDIF}
  If Not OFMatches(S,0) Then Begin
-  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR, DNG, BGX, DDS, DCM.'; D.Dirty:=True; Exit;
+  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR, DNG, BGX, DDS, DCM, APNG.'; D.Dirty:=True; Exit;
  End;
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..15] Of Integer;
+Type TOFFilterOrder = Array[0..16] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=16; If Saving Then Count:=3;
+ Count:=17; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;
@@ -14456,7 +14607,7 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG/BGX/DDS/DCM : ouverture uniquement.';
+  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG/BGX/DDS/DCM/APNG : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -15596,13 +15747,13 @@ BEGIN
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
-  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|dng|bgx|dds|dcm]');
+  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|dng|bgx|dds|dcm|apng]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
   WriteLn(' - Support de la souris (Int 33h / PtcMouse)');
   WriteLn(' - Outils de dessin: Crayon, Pinceau, A'+#130+'rographe, Ligne, Rectangle, Ellipse...');
-  WriteLn(' - Formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM), HDR (RGBE), FAX (G3 1D), EXR, DNG, BGX, DDS, DCM');
+  WriteLn(' - Formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM), HDR (RGBE), FAX (G3 1D), EXR, DNG, BGX, DDS, DCM, APNG');
   WriteLn(' - Support de la transparence pour GIF et PNG');
   WriteLn(' - Redimensionnement et rognage d''image');
   WriteLn(' - Support de 2 a 32 bits de profondeur de couleur');

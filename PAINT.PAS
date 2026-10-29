@@ -7205,6 +7205,202 @@ Begin
  If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
  FreeMem(D,SizeOf(TCUState));
 End;
+{ PCX ZSoft : codage brut/RLE, 1/2/4 bits plans indexes, VGA 8 bits,
+  gris 8 bits et RGB 24 bits (trois plans). Aucun decodeur externe.
+  Les repetitions sont bornees a une ligne complete, plans compris. }
+Type
+ TPXState = Record
+  Data,Row,RGB: PPNBytes;
+  Size,Position,Limit,RowBytes,RowSize,RGBSize: LongInt;
+  Width,Height,Bits,Planes,Encoding,Depth: Integer;
+  Palette: TPalette;
+ End;
+ PPXState = ^TPXState;
+
+Function PXWord(Const D: TPXState; P: LongInt): Word;
+Begin
+ PXWord:=Word(D.Data^[P]) Or (Word(D.Data^[P+1]) Shl 8);
+End;
+
+Function PXRow(Var D: TPXState): Boolean;
+Var P: LongInt; B,Value,Count: Integer;
+Begin
+ PXRow:=False; P:=0;
+ While P<D.RowSize Do Begin
+  If D.Position>=D.Limit Then Exit;
+  B:=D.Data^[D.Position]; Inc(D.Position); Count:=1; Value:=B;
+  If (D.Encoding=1) And ((B And $C0)=$C0) Then Begin
+   Count:=B And 63;
+   If (Count=0) Or (D.Position>=D.Limit) Then Exit;
+   Value:=D.Data^[D.Position]; Inc(D.Position);
+  End;
+  If Count>D.RowSize-P Then Exit;
+  While Count>0 Do Begin D.Row^[P]:=Value; Inc(P); Dec(Count); End;
+ End;
+ PXRow:=True;
+End;
+
+Function PXRead(Const Name: String; Var D: TPXState): Boolean;
+Var F: File; OldMode: Byte; Bytes,V,Start,Dest: LongInt;
+    X,Y,I,C,Index,Sample,PaletteInfo,Version: Integer;
+    Failed,HavePalette,EmptyPalette: Boolean;
+Begin
+ PXRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=128) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ If D.Data^[0]<>10 Then Exit;
+ Version:=D.Data^[1]; If Not (Version In [0,2,3,4,5]) Then Exit;
+ D.Encoding:=D.Data^[2]; If D.Encoding>1 Then Exit;
+ D.Bits:=D.Data^[3]; D.Planes:=D.Data^[65];
+ If (D.Bits=8) And (D.Planes In [1,3]) Then D.Depth:=D.Bits*D.Planes
+ Else If (D.Bits In [1,2,4]) And (D.Planes>=1) And
+         (D.Planes*D.Bits<=4) Then D.Depth:=D.Bits*D.Planes
+ Else Exit;
+ V:=LongInt(PXWord(D,8))-LongInt(PXWord(D,4))+1;
+ If (V<1) Or (V>MAX_IMAGE_WIDTH) Then Exit; D.Width:=V;
+ V:=LongInt(PXWord(D,10))-LongInt(PXWord(D,6))+1;
+ If (V<1) Or (V>MAX_IMAGE_HEIGHT) Then Exit; D.Height:=V;
+ D.RowBytes:=PXWord(D,66);
+ If D.RowBytes<(LongInt(D.Width)*D.Bits+7) Div 8 Then Exit;
+ D.RowSize:=D.RowBytes*D.Planes; D.Limit:=D.Size;
+ PaletteInfo:=PXWord(D,68); HavePalette:=False;
+ If D.Depth=8 Then Begin
+  If D.Size>=897 Then
+   If D.Data^[D.Size-769]=12 Then Begin
+    HavePalette:=True;
+    For I:=0 To 255 Do Begin
+     Start:=D.Size-768+LongInt(I)*3;
+     D.Palette[I].R:=D.Data^[Start];
+     D.Palette[I].G:=D.Data^[Start+1];
+     D.Palette[I].B:=D.Data^[Start+2];
+    End;
+   End;
+  If Not HavePalette Then Begin
+   If PaletteInfo<>2 Then Exit;
+   For I:=0 To 255 Do Begin
+    D.Palette[I].R:=I; D.Palette[I].G:=I; D.Palette[I].B:=I;
+   End;
+  End;
+ End Else If D.Depth<=4 Then Begin
+  EmptyPalette:=True;
+  For I:=0 To 47 Do If D.Data^[16+I]<>0 Then EmptyPalette:=False;
+  If D.Depth=1 Then Begin
+   EmptyPalette:=True;
+   For I:=0 To 5 Do If D.Data^[16+I]<>0 Then EmptyPalette:=False;
+  End;
+  For I:=0 To (1 Shl D.Depth)-1 Do Begin
+   D.Palette[I].R:=D.Data^[16+I*3];
+   D.Palette[I].G:=D.Data^[17+I*3];
+   D.Palette[I].B:=D.Data^[18+I*3];
+   If EmptyPalette And ((Version In [0,3]) Or (D.Depth=1)) Then Begin
+    D.Palette[I].R:=VGA_R[I]; D.Palette[I].G:=VGA_G[I];
+    D.Palette[I].B:=VGA_B[I];
+    If (D.Depth=1) And (I=1) Then Begin
+     D.Palette[I].R:=255; D.Palette[I].G:=255;
+     D.Palette[I].B:=255;
+    End;
+   End;
+  End;
+ End;
+ D.Row:=PPNBytes(JDAllocate(D.RowSize));
+ D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize));
+ If (D.Row=Nil) Or (D.RGB=Nil) Then Exit;
+ D.Position:=128; Dest:=0;
+ For Y:=0 To D.Height-1 Do Begin
+  If Not PXRow(D) Then Exit;
+  For X:=0 To D.Width-1 Do Begin
+   If D.Depth=24 Then Begin
+    For C:=0 To 2 Do D.RGB^[Dest+C]:=D.Row^[C*D.RowBytes+X];
+   End Else Begin
+    Index:=0;
+    For C:=0 To D.Planes-1 Do Begin
+     If D.Bits=8 Then Sample:=D.Row^[X]
+     Else Sample:=(D.Row^[C*D.RowBytes+(X*D.Bits) Div 8] Shr
+      (8-D.Bits-((X*D.Bits) And 7))) And ((1 Shl D.Bits)-1);
+     Index:=Index Or (Sample Shl (C*D.Bits));
+    End;
+    If D.Depth=8 Then D.RGB^[Dest]:=Index
+    Else D.RGB^[Dest]:=D.Palette[Index].R;
+    D.RGB^[Dest+1]:=D.Palette[Index].G;
+    D.RGB^[Dest+2]:=D.Palette[Index].B;
+   End;
+   Inc(Dest,3);
+  End;
+ End;
+ If D.Depth=8 Then Begin
+  If HavePalette And (D.Position=D.Size-769) Then D.Limit:=D.Position
+  Else If (PaletteInfo=2) And (D.Position=D.Size) Then Begin
+   For I:=0 To 255 Do Begin
+    D.Palette[I].R:=I; D.Palette[I].G:=I; D.Palette[I].B:=I;
+   End;
+  End Else Exit;
+  For Start:=0 To D.RGBSize Div 3-1 Do Begin
+   Index:=D.RGB^[Start*3]; D.RGB^[Start*3]:=D.Palette[Index].R;
+   D.RGB^[Start*3+1]:=D.Palette[Index].G;
+   D.RGB^[Start*3+2]:=D.Palette[Index].B;
+  End;
+ End;
+ PXRead:=D.Position=D.Limit;
+End;
+
+Function LoadPCX(FileName: String): Boolean;
+Var D: PPXState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadPCX:=False; Pixels:=Nil; Q:=Nil;
+ D:=PPXState(JDAllocate(SizeOf(TPXState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If PXRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+   ImageBuffer.BitDepth:=D^.Depth;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_PCX;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadPCX:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Row<>Nil Then FreeMem(D^.Row,D^.RowSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TPXState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -7232,7 +7428,7 @@ Begin
     (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR')
     and (Ext <> '.DNG') and (Ext <> '.BGX') and (Ext <> '.DDS') and (Ext <>
     '.DCM') and (Ext <> '.APNG') and (Ext <> '.ARW') and (Ext <> '.CR2') and
-    (Ext <> '.PPM') and (Ext <> '.CUR') Then Exit;
+    (Ext <> '.PPM') and (Ext <> '.CUR') and (Ext <> '.PCX') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -7257,6 +7453,7 @@ Begin
   FMT_PPM: Succeeded := LoadPPM(FileName);
   FMT_DIB: Succeeded := LoadDIB(FileName);
   FMT_CUR: Succeeded := LoadCUR(FileName);
+  FMT_PCX: Succeeded := LoadPCX(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -14991,7 +15188,7 @@ Begin
                 (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR') Or
                 (E='.DNG') Or (E='.BGX') Or (E='.DDS') Or (E='.DCM') Or
                 (E='.APNG') Or (E='.ARW') Or (E='.CR2') Or (E='.PPM') Or
-                (E='.CUR');
+                (E='.CUR') Or (E='.PCX');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -15012,6 +15209,7 @@ Begin
   18: OFMatches:=E='.PPM';
   19: OFMatches:=E='.DIB';
   20: OFMatches:=E='.CUR';
+  21: OFMatches:=E='.PCX';
   Else OFMatches:=True;
  End;
 End;
@@ -15019,9 +15217,7 @@ End;
 Function OFFilterLabel(N: Integer): String;
 Begin
  Case N Of
-  0:
-  OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HD' +
-  'R, FAX, EXR, DNG, BGX, DDS, DCM, APNG, ARW, CR2, PPM';
+  0: OFFilterLabel:='Images : tous les formats pris en charge';
   1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
   2: OFFilterLabel:='GIF : *.gif';
   3: OFFilterLabel:='PNG : *.png';
@@ -15042,6 +15238,7 @@ Begin
   18: OFFilterLabel:='PPM Portable Pixmap : *.ppm';
   19: OFFilterLabel:='DIB Device Independent Bitmap : *.dib';
   20: OFFilterLabel:='CUR Curseur Windows : *.cur';
+  21: OFFilterLabel:='PCX ZSoft Paintbrush : *.pcx';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -15460,12 +15657,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..21] Of Integer;
+Type TOFFilterOrder = Array[0..22] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=22; If Saving Then Count:=3;
+ Count:=23; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;
@@ -15617,7 +15814,7 @@ Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
   D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG' +
-  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB/CUR : ouverture uniquement.';
+  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB/CUR/PCX : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -16959,7 +17156,7 @@ BEGIN
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
   WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
-  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur]');
+  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');

@@ -9179,6 +9179,534 @@ Begin
 End;
 
 
+{ Encodeur JPEG integre,  adapte de BMP2JPEG.PAS : JFIF baseline, 
+  qualite 90,  YCbCr 4:4:4,  DCT separable et tables Huffman standard. }
+Function SaveJPEG(FileName: String): Boolean;
+Const
+ OneOverSqrt2=0.70710678118654752440;
+ MarkerSOI=$D8;
+ MarkerEOI=$D9;
+ MarkerSOF0=$C0;
+ MarkerDHT=$C4;
+ MarkerDQT=$DB;
+ MarkerSOS=$DA;
+ MarkerAPP0=$E0;
+ ZigZag:Array[0..63]of Byte=(
+   0,  1,  8, 16,  9,  2,  3, 10, 
+  17, 24, 32, 25, 18, 11,  4,  5, 
+  12, 19, 26, 33, 40, 48, 41, 34, 
+  27, 20, 13,  6,  7, 14, 21, 28, 
+  35, 42, 49, 56, 57, 50, 43, 36, 
+  29, 22, 15, 23, 30, 37, 44, 51, 
+  58, 59, 52, 45, 38, 31, 39, 46, 
+  53, 60, 61, 54, 47, 55, 62, 63);
+ StdQTLuma:Array[0..63]of Byte=(
+  16, 11, 10, 16,  24,  40,  51,  61, 
+  12, 12, 14, 19,  26,  58,  60,  55, 
+  14, 13, 16, 24,  40,  57,  69,  56, 
+  14, 17, 22, 29,  51,  87,  80,  62, 
+  18, 22, 37, 56,  68, 109, 103,  77, 
+  24, 35, 55, 64,  81, 104, 113,  92, 
+  49, 64, 78, 87, 103, 121, 120, 101, 
+  72, 92, 95, 98, 112, 100, 103,  99);
+ StdQTChroma:Array[0..63]of Byte=(
+  17, 18, 24, 47, 99, 99, 99, 99, 
+  18, 21, 26, 66, 99, 99, 99, 99, 
+  24, 26, 56, 99, 99, 99, 99, 99, 
+  47, 66, 99, 99, 99, 99, 99, 99, 
+  99, 99, 99, 99, 99, 99, 99, 99, 
+  99, 99, 99, 99, 99, 99, 99, 99, 
+  99, 99, 99, 99, 99, 99, 99, 99, 
+  99, 99, 99, 99, 99, 99, 99, 99);
+ StdDCLumaCounts:Array[0..15]of Byte=
+   (0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+ StdDCLumaValues:Array[0..11]of Byte=
+   (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+ StdDCChromaCounts:Array[0..15]of Byte=
+   (0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0);
+ StdDCChromaValues:Array[0..11]of Byte=
+   (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+ StdACLumaCounts:Array[0..15]of Byte=
+   (0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, $7D);
+ StdACLumaValues:Array[0..161]of Byte=(
+  $01, $02, $03, $00, $04, $11, $05, $12, $21, $31, $41, $06, $13, $51, $61,
+  $07, 
+  $22, $71, $14, $32, $81, $91, $A1, $08, $23, $42, $B1, $C1, $15, $52, $D1,
+  $F0, 
+  $24, $33, $62, $72, $82, $09, $0A, $16, $17, $18, $19, $1A, $25, $26, $27,
+  $28, 
+  $29, $2A, $34, $35, $36, $37, $38, $39, $3A, $43, $44, $45, $46, $47, $48,
+  $49, 
+  $4A, $53, $54, $55, $56, $57, $58, $59, $5A, $63, $64, $65, $66, $67, $68,
+  $69, 
+  $6A, $73, $74, $75, $76, $77, $78, $79, $7A, $83, $84, $85, $86, $87, $88,
+  $89, 
+  $8A, $92, $93, $94, $95, $96, $97, $98, $99, $9A, $A2, $A3, $A4, $A5, $A6,
+  $A7, 
+  $A8, $A9, $AA, $B2, $B3, $B4, $B5, $B6, $B7, $B8, $B9, $BA, $C2, $C3, $C4,
+  $C5, 
+  $C6, $C7, $C8, $C9, $CA, $D2, $D3, $D4, $D5, $D6, $D7, $D8, $D9, $DA, $E1,
+  $E2, 
+  $E3, $E4, $E5, $E6, $E7, $E8, $E9, $EA, $F1, $F2, $F3, $F4, $F5, $F6, $F7,
+  $F8, 
+  $F9, $FA);
+ StdACChromaCounts:Array[0..15]of Byte=
+   (0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, $77);
+ StdACChromaValues:Array[0..161]of Byte=(
+  $00, $01, $02, $03, $11, $04, $05, $21, $31, $06, $12, $41, $51, $07, $61,
+  $71, 
+  $13, $22, $32, $81, $08, $14, $42, $91, $A1, $B1, $C1, $09, $23, $33, $52,
+  $F0, 
+  $15, $62, $72, $D1, $0A, $16, $24, $34, $E1, $25, $F1, $17, $18, $19, $1A,
+  $26, 
+  $27, $28, $29, $2A, $35, $36, $37, $38, $39, $3A, $43, $44, $45, $46, $47,
+  $48, 
+  $49, $4A, $53, $54, $55, $56, $57, $58, $59, $5A, $63, $64, $65, $66, $67,
+  $68, 
+  $69, $6A, $73, $74, $75, $76, $77, $78, $79, $7A, $82, $83, $84, $85, $86,
+  $87, 
+  $88, $89, $8A, $92, $93, $94, $95, $96, $97, $98, $99, $9A, $A2, $A3, $A4,
+  $A5, 
+  $A6, $A7, $A8, $A9, $AA, $B2, $B3, $B4, $B5, $B6, $B7, $B8, $B9, $BA, $C2,
+  $C3, 
+  $C4, $C5, $C6, $C7, $C8, $C9, $CA, $D2, $D3, $D4, $D5, $D6, $D7, $D8, $D9,
+  $DA, 
+  $E2, $E3, $E4, $E5, $E6, $E7, $E8, $E9, $EA, $F2, $F3, $F4, $F5, $F6, $F7,
+  $F8, 
+  $F9, $FA);
+Type
+ Block64=Array[0..63] Of Real;
+ IBlock64=Array[0..63] Of Integer;
+ TByteArr=Array[0..32767] Of Byte;
+ PByteArr=^TByteArr;
+Var
+ DestJPEG:File; Failed:Boolean;
+ Output:Array[0..8191] Of Byte; OutputCount:Integer;
+ LineBuf:Array[0..12287] Of Byte;
+ I:Integer; BlockY, BlockCb, BlockCr:Block64; ZZBlock:IBlock64;
+ MCUCol, ValidRows:Word; Y, Y2, SourceRow:LongInt;
+ QTLuma, QTChroma:Array[0..63]of Byte;
+ DCLumaCode, ACLumaCode, DCChromaCode, ACChromaCode:Array[0..255]of Word;
+ DCLumaSize, ACLumaSize, DCChromaSize, ACChromaSize:Array[0..255]of Byte;
+ CosTab:Array[0..7, 0..7]of Real;
+ YBuf, CbBuf, CrBuf:Pointer;
+ StripeWidth:Word;
+ StripeBytes:Word;
+ ImageWidth, ImageHeight:Word;
+ BitBuffer:LongInt;
+ BitsInBuffer:Integer;
+ PrevDCY, PrevDCCb, PrevDCCr:Integer;
+Procedure FlushOutput;
+Var Written:LongInt;
+Begin
+ If Failed Or (OutputCount=0) Then Exit;
+ {$I-}BlockWrite(DestJPEG, Output, OutputCount, Written);{$I+}
+ Failed:=(IOResult<>0) Or (Written<>OutputCount); OutputCount:=0;
+End;
+Procedure WriteRaw(Var Buffer; Count:Integer);
+Var P:PByte; J:Integer;
+Begin
+ If Failed Then Exit; P:=@Buffer;
+ For J:=1 To Count Do Begin
+  Output[OutputCount]:=P^;Inc(P);Inc(OutputCount);
+  If OutputCount=SizeOf(Output) Then FlushOutput;
+  If Failed Then Exit;
+ End;
+End;
+Procedure WriteByteToFile(B:Byte);
+Begin WriteRaw(B, 1); End;
+Procedure WriteWordToFile(W:Word);
+Begin WriteByteToFile(W Shr 8);WriteByteToFile(W And 255); End;
+Procedure WriteMarker(M:Byte);
+Begin WriteByteToFile(255);WriteByteToFile(M); End;
+Procedure ReadBmpRowAsRGB(RowIndex:LongInt);
+Var X:Integer; C:TRGBColor;
+Begin
+ For X:=0 To CanvasImageW-1 Do Begin
+  C:=ImageBuffer.Palette[ZImagePixel(X, RowIndex)];
+  LineBuf[X*3]:=C.B;LineBuf[X*3+1]:=C.G;LineBuf[X*3+2]:=C.R;
+ End;
+End;
+Procedure InitCosTab;
+Var
+ I, J:Integer;
+Begin
+ For I:=0 to 7 Do
+  For J:=0 to 7 Do
+   CosTab[I, J]:=Cos((2*I+1)*J*Pi/16);
+End;
+Procedure BuildQuantTables(Q:Integer);
+Var
+ I:Integer;
+ Scale, V:LongInt;
+Begin
+ If Q<1 Then Q:=1;
+ If Q>100 Then Q:=100;
+ If Q<50 Then Scale:=LongInt(5000)div LongInt(Q)
+         Else Scale:=200-2*LongInt(Q);
+ For I:=0 to 63 Do Begin
+  V:=(LongInt(StdQTLuma[I])*Scale+50)div 100;
+  If V<1 Then V:=1;
+  If V>255 Then V:=255;
+  QTLuma[I]:=Byte(V);
+  V:=(LongInt(StdQTChroma[I])*Scale+50)div 100;
+  If V<1 Then V:=1;
+  If V>255 Then V:=255;
+  QTChroma[I]:=Byte(V);
+ End;
+End;
+Procedure BuildHuffTable(Const Counts:Array of Byte;Const Values:Array of Byte;
+                         NumValues:Integer;
+                         Var Codes:Array of Word;Var Sizes:Array of Byte);
+Var
+ I, J, K:Integer;
+ Code:Word;
+ Size:Integer;
+ HuffSize:Array[0..256]of Byte;
+ HuffCode:Array[0..256]of Word;
+Begin
+ K:=0;
+ For I:=1 to 16 Do
+  For J:=1 to Counts[I-1] Do Begin
+   HuffSize[K]:=Byte(I);
+   Inc(K);
+  End;
+ HuffSize[K]:=0;
+ Code:=0;
+ Size:=HuffSize[0];
+ K:=0;
+ While HuffSize[K]<>0 Do Begin
+  While(HuffSize[K]<>0)and(Integer(HuffSize[K])=Size)Do Begin
+   HuffCode[K]:=Code;
+   Inc(Code);
+   Inc(K);
+  End;
+  If HuffSize[K]=0 Then Break;
+  Repeat
+   Code:=Word(Code shl 1);
+   Inc(Size);
+  Until Integer(HuffSize[K])=Size;
+ End;
+ For I:=0 to 255 Do Begin
+  Codes[I]:=0;
+  Sizes[I]:=0;
+ End;
+ For I:=0 to NumValues-1 Do Begin
+  Codes[Values[I]]:=HuffCode[I];
+  Sizes[Values[I]]:=HuffSize[I];
+ End;
+End;
+Procedure BuildAllHuffTables;
+Begin
+ BuildHuffTable(StdDCLumaCounts, StdDCLumaValues, 12, DCLumaCode, DCLumaSize);
+ BuildHuffTable(StdDCChromaCounts, StdDCChromaValues, 12, DCChromaCode,
+ DCChromaSize);
+ BuildHuffTable(StdACLumaCounts, StdACLumaValues, 162, ACLumaCode, ACLumaSize);
+ BuildHuffTable(StdACChromaCounts, StdACChromaValues, 162, ACChromaCode,
+ ACChromaSize);
+End;
+Procedure ForwardDCT(Var Block:Block64);
+Var U, V, X, Y:Integer; Sum, Cu, Cv:Real; Tmp:Block64;
+Begin
+ For Y:=0 To 7 Do For U:=0 To 7 Do Begin
+  Sum:=0;
+  For X:=0 To 7 Do Sum:=Sum+Block[Y*8+X]*CosTab[X, U];
+  Tmp[Y*8+U]:=Sum;
+ End;
+ For V:=0 To 7 Do For U:=0 To 7 Do Begin
+  Sum:=0;
+  For Y:=0 To 7 Do Sum:=Sum+Tmp[Y*8+U]*CosTab[Y, V];
+  Cu:=1; Cv:=1;
+  If U=0 Then Cu:=OneOverSqrt2;
+  If V=0 Then Cv:=OneOverSqrt2;
+  Block[V*8+U]:=0.25*Cu*Cv*Sum;
+ End;
+End;
+Procedure QuantizeAndZigZag(Const Src:Block64;Const QT:Array of Byte;
+                            Var Dst:IBlock64);
+Var
+ I:Integer;
+ V:Real;
+ Q:Integer;
+Begin
+ For I:=0 to 63 Do Begin
+  V:=Src[ZigZag[I]];
+  Q:=QT[ZigZag[I]];
+  If V>=0 Then Dst[I]:=Trunc((V+Q/2)/Q)
+          Else Dst[I]:=-Trunc((-V+Q/2)/Q);
+ End;
+End;
+Procedure WriteBits(Bits:Word;Size:Integer);
+Var
+ B:Byte;
+ Mask:LongInt;
+ Pad:Byte;
+Begin
+ If Size=0 Then Exit;
+ Mask:=(LongInt(1)shl Size)-1;
+ BitBuffer:=(BitBuffer shl Size)or(LongInt(Bits)and Mask);
+ Inc(BitsInBuffer, Size);
+ While BitsInBuffer>=8 Do Begin
+  Dec(BitsInBuffer, 8);
+  B:=Byte((BitBuffer shr BitsInBuffer)and $FF);
+  WriteRaw(B, 1);
+  If B=$FF Then Begin
+   Pad:=0;
+   WriteRaw(Pad, 1);
+  End;
+ End;
+End;
+Procedure FlushBits;
+Var
+ B, Pad:Byte;
+ Pad1:Integer;
+Begin
+ If BitsInBuffer>0 Then Begin
+  Pad1:=8-BitsInBuffer;
+  BitBuffer:=(BitBuffer shl Pad1)or((LongInt(1)shl Pad1)-1);
+  BitsInBuffer:=8;
+  Dec(BitsInBuffer, 8);
+  B:=Byte(BitBuffer and $FF);
+  WriteRaw(B, 1);
+  If B=$FF Then Begin
+   Pad:=0;
+   WriteRaw(Pad, 1);
+  End;
+ End;
+ BitBuffer:=0;
+ BitsInBuffer:=0;
+End;
+Procedure EncodeCoef(Value:Integer;Var Size:Integer;Var Bits:Word);
+Var
+ AV:Integer;
+Begin
+ AV:=Abs(Value);
+ Size:=0;
+ While AV<>0 Do Begin
+  Inc(Size);
+  AV:=AV shr 1;
+ End;
+ If Value<0 Then
+  Bits:=Word((Value+(LongInt(1)shl Size)-1)and((LongInt(1)shl Size)-1))
+  Else
+  Bits:=Word(Value);
+End;
+Procedure EncodeBlock(Const ZZ:IBlock64;Var PrevDC:Integer;
+                      Const DCCode:Array of Word;Const DCSize:Array of Byte;
+                      Const ACCode:Array of Word;Const ACSize:Array of Byte);
+Var
+ K, RunLen, Size:Integer;
+ Diff:Integer;
+ Bits:Word;
+ RS:Integer;
+Begin
+ Diff:=ZZ[0]-PrevDC;
+ PrevDC:=ZZ[0];
+ EncodeCoef(Diff, Size, Bits);
+ WriteBits(DCCode[Size], DCSize[Size]);
+ If Size>0 Then WriteBits(Bits, Size);
+ K:=1;
+ While K<=63 Do Begin
+  RunLen:=0;
+  While(K<=63)and(ZZ[K]=0)Do Begin
+   Inc(K); Inc(RunLen);
+  End;
+  If K>63 Then Begin
+   WriteBits(ACCode[$00], ACSize[$00]);
+   Break;
+  End;
+  While RunLen>=16 Do Begin
+   WriteBits(ACCode[$F0], ACSize[$F0]);
+   Dec(RunLen, 16);
+  End;
+  EncodeCoef(ZZ[K], Size, Bits);
+  RS:=(RunLen shl 4)or Size;
+  WriteBits(ACCode[RS], ACSize[RS]);
+  If Size>0 Then WriteBits(Bits, Size);
+  Inc(K);
+ End;
+End;
+Function ClampByte(V:Real):Byte;
+Begin
+ If V<0.0 Then ClampByte:=0
+  Else
+ If V>255.0 Then ClampByte:=255
+  Else
+ ClampByte:=Byte(Trunc(V+0.5));
+End;
+Procedure ConvertRowToYCbCr(Y8:PByteArr;Cb8:PByteArr;Cr8:PByteArr;
+                            DstRowOffset:Word);
+Var
+ X:Word;
+ R, G, B:Byte;
+ YV, CbV, CrV:Real;
+ LastB, LastG, LastR:Byte;
+Begin
+ LastB:=0; LastG:=0; LastR:=0;
+ For X:=0 to StripeWidth-1 Do Begin
+  If X<ImageWidth Then Begin
+   B:=LineBuf[X*3];
+   G:=LineBuf[X*3+1];
+   R:=LineBuf[X*3+2];
+   LastB:=B; LastG:=G; LastR:=R;
+  End
+   Else
+  Begin
+   B:=LastB; G:=LastG; R:=LastR;
+  End;
+  YV :=  0.299*R+0.587*G+0.114*B;
+  CbV:= -0.168736*R-0.331264*G+0.5*B+128.0;
+  CrV:=  0.5*R-0.418688*G-0.081312*B+128.0;
+  Y8^[DstRowOffset+X]:=ClampByte(YV);
+  Cb8^[DstRowOffset+X]:=ClampByte(CbV);
+  Cr8^[DstRowOffset+X]:=ClampByte(CrV);
+ End;
+End;
+Procedure ExtractBlock(Buf:PByteArr;ColX:Word;ValidRows:Word;Var Block:Block64);
+Var
+ R, C:Integer;
+ SrcRow:Word;
+Begin
+ For R:=0 to 7 Do Begin
+  If Word(R)<ValidRows Then SrcRow:=Word(R)
+                       Else SrcRow:=ValidRows-1;
+  For C:=0 to 7 Do
+   Block[R*8+C]:=Integer(Buf^[SrcRow*StripeWidth+ColX+Word(C)])-128;
+ End;
+End;
+Procedure WriteJFIFHeader;
+Var
+ ID:Array[0..4]of Char;
+Begin
+ WriteMarker(MarkerAPP0);
+ WriteWordToFile(16);
+ ID[0]:='J'; ID[1]:='F'; ID[2]:='I'; ID[3]:='F'; ID[4]:=#0;
+ WriteRaw(ID, 5);
+ WriteByteToFile(1);
+ WriteByteToFile(1);
+ WriteByteToFile(0);
+ WriteWordToFile(1);
+ WriteWordToFile(1);
+ WriteByteToFile(0);
+ WriteByteToFile(0);
+End;
+Procedure WriteDQT(TableID:Byte;Const QT:Array of Byte);
+Var
+ I:Integer;
+ B:Byte;
+Begin
+ WriteMarker(MarkerDQT);
+ WriteWordToFile(67);
+ WriteByteToFile(TableID);
+ For I:=0 to 63 Do Begin
+  B:=QT[ZigZag[I]];
+  WriteByteToFile(B);
+ End;
+End;
+Procedure WriteSOF0;
+Begin
+ WriteMarker(MarkerSOF0);
+ WriteWordToFile(17);
+ WriteByteToFile(8);
+ WriteWordToFile(ImageHeight);
+ WriteWordToFile(ImageWidth);
+ WriteByteToFile(3);
+ WriteByteToFile(1); WriteByteToFile($11); WriteByteToFile(0);
+ WriteByteToFile(2); WriteByteToFile($11); WriteByteToFile(1);
+ WriteByteToFile(3); WriteByteToFile($11); WriteByteToFile(1);
+End;
+Procedure WriteDHT(TableClassAndID:Byte;Const Counts:Array of Byte;
+                   Const Values:Array of Byte;NumValues:Integer);
+Var
+ I:Integer;
+Begin
+ WriteMarker(MarkerDHT);
+ WriteWordToFile(Word(2+1+16+NumValues));
+ WriteByteToFile(TableClassAndID);
+ For I:=0 to 15 Do WriteByteToFile(Counts[I]);
+ For I:=0 to NumValues-1 Do WriteByteToFile(Values[I]);
+End;
+Procedure WriteSOS;
+Begin
+ WriteMarker(MarkerSOS);
+ WriteWordToFile(12);
+ WriteByteToFile(3);
+ WriteByteToFile(1); WriteByteToFile($00);
+ WriteByteToFile(2); WriteByteToFile($11);
+ WriteByteToFile(3); WriteByteToFile($11);
+ WriteByteToFile(0);
+ WriteByteToFile(63);
+ WriteByteToFile(0);
+End;
+Begin
+ SaveJPEG:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ ImageWidth:=CanvasImageW;ImageHeight:=CanvasImageH;
+ StripeWidth:=((ImageWidth+7) Shr 3) Shl 3;
+ StripeBytes:=StripeWidth*8;
+ YBuf:=JDAllocate(StripeBytes);CbBuf:=JDAllocate(StripeBytes);
+ CrBuf:=JDAllocate(StripeBytes);
+ If (YBuf<>Nil) And (CbBuf<>Nil) And (CrBuf<>Nil) Then Begin
+  InitCosTab;BuildQuantTables(90);BuildAllHuffTables;
+  Assign(DestJPEG, FileName);{$I-}Rewrite(DestJPEG, 1);{$I+}
+  If IOResult=0 Then Begin
+   Failed:=False;OutputCount:=0;
+ WriteMarker(MarkerSOI);
+ WriteJFIFHeader;
+ WriteDQT($00, QTLuma);
+ WriteDQT($01, QTChroma);
+ WriteSOF0;
+ WriteDHT($00, StdDCLumaCounts, StdDCLumaValues, 12);
+ WriteDHT($10, StdACLumaCounts, StdACLumaValues, 162);
+ WriteDHT($01, StdDCChromaCounts, StdDCChromaValues, 12);
+ WriteDHT($11, StdACChromaCounts, StdACChromaValues, 162);
+ WriteSOS;
+ BitBuffer:=0;
+ BitsInBuffer:=0;
+ PrevDCY:=0; PrevDCCb:=0; PrevDCCr:=0;
+ Y:=0;
+ While (Y<LongInt(ImageHeight)) And Not Failed Do Begin
+  If Y+8<=LongInt(ImageHeight)Then ValidRows:=8
+                              Else ValidRows:=Word(LongInt(ImageHeight)-Y);
+  For Y2:=0 to LongInt(ValidRows)-1 Do Begin
+   SourceRow:=Y+Y2;
+   ReadBmpRowAsRGB(SourceRow);
+   ConvertRowToYCbCr(YBuf, CbBuf, CrBuf, Word(Y2)*StripeWidth);
+  End;
+  MCUCol:=0;
+  While MCUCol<StripeWidth Do Begin
+   ExtractBlock(YBuf, MCUCol, ValidRows, BlockY);
+   ForwardDCT(BlockY);
+   QuantizeAndZigZag(BlockY, QTLuma, ZZBlock);
+   EncodeBlock(ZZBlock, PrevDCY, DCLumaCode, DCLumaSize, 
+               ACLumaCode, ACLumaSize);
+   ExtractBlock(CbBuf, MCUCol, ValidRows, BlockCb);
+   ForwardDCT(BlockCb);
+   QuantizeAndZigZag(BlockCb, QTChroma, ZZBlock);
+   EncodeBlock(ZZBlock, PrevDCCb, DCChromaCode, DCChromaSize, 
+               ACChromaCode, ACChromaSize);
+   ExtractBlock(CrBuf, MCUCol, ValidRows, BlockCr);
+   ForwardDCT(BlockCr);
+   QuantizeAndZigZag(BlockCr, QTChroma, ZZBlock);
+   EncodeBlock(ZZBlock, PrevDCCr, DCChromaCode, DCChromaSize, 
+               ACChromaCode, ACChromaSize);
+   Inc(MCUCol, 8);
+  End;
+  Inc(Y, 8);
+ End;
+ FlushBits;
+ WriteMarker(MarkerEOI);
+   FlushOutput;
+   {$I-}Close(DestJPEG);{$I+}If IOResult<>0 Then Failed:=True;
+   SaveJPEG:=Not Failed;
+  End;
+ End;
+ If YBuf<>Nil Then FreeMem(YBuf, StripeBytes);
+ If CbBuf<>Nil Then FreeMem(CbBuf, StripeBytes);
+ If CrBuf<>Nil Then FreeMem(CrBuf, StripeBytes);
+End;
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -9201,8 +9729,8 @@ Begin
     (CanvasImageW<>ImageBuffer.Width) Or (CanvasImageH<>ImageBuffer.Height) Then Begin
   PaintSaveError:='Image absente ou dimensions incoherentes.'; Exit;
  End;
- If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX]) Then Begin
- PaintSaveError:='Choisissez BMP, GIF, PNG ou PCX.'; Exit; End;
+ If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG]) Then Begin
+ PaintSaveError:='Choisissez BMP, GIF, PNG, PCX ou JPEG.'; Exit; End;
  Old:=ImageBuffer; Exists:=Present(FileName);
  If Exists And ((R.Attr And (Directory+ReadOnly))<>0) Then Begin PaintSaveError:='Cible en lecture seule ou dossier.'; Exit; End;
  Pos:=Length(FileName); While (Pos>0) And Not (FileName[Pos] In ['\','/']) Do Dec(Pos);
@@ -9219,6 +9747,7 @@ Begin
   FMT_BMP: OK:=SaveBMP(Temp);
   FMT_GIF: OK:=SaveGIF(Temp);
   FMT_PCX: OK:=SavePCX(Temp);
+  FMT_JPEG: OK:=SaveJPEG(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -10552,7 +11081,7 @@ Function SaveCurrentImage: Boolean;
 Begin
  SaveCurrentImage:=False;
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
- [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX]) Then Begin
+ [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG]) Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
  If SaveImage(ImageBuffer.FileName,ImageBuffer.Format) Then Begin SaveCurrentImage:=True; DrawStatusBar; End
@@ -16991,7 +17520,8 @@ End;
 Function OFSaveExtension(Filter: Integer): String;
 Begin
  Case Filter Of 2: OFSaveExtension:='.gif'; 3: OFSaveExtension:='.png';
- 21: OFSaveExtension:='.pcx'; Else OFSaveExtension:='.bmp'; End;
+ 21: OFSaveExtension:='.pcx';
+ 4: OFSaveExtension:='.jpg'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -17107,10 +17637,11 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=4;
+ Count:=29; If Saving Then Count:=5;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
+   If I=4 Then Order[I]:=4;
   End;
  End;
  { Trier uniquement la presentation, sans changer les identifiants des formats. }
@@ -17199,7 +17730,11 @@ Begin
    D.Cursor:=Length(D.Name); D.Anchor:=0;
   End;
   OFScan(D);
-  If D.SaveMode Then D.Notice:='Type choisi : '+OFFilterLabel(D.Filter);
+  If D.SaveMode Then Begin
+   D.Notice:='Type choisi : '+OFFilterLabel(D.Filter);
+   If D.Filter=4 Then
+    D.Notice:='JPEG : compression avec pertes, qualite 90, couleurs 4:4:4.';
+  End;
  End;
  D.Dirty:=True;
 End;
@@ -17233,7 +17768,8 @@ Begin
  If Saving Then Begin
   D^.Filter:=1; If SaveFormat=FMT_GIF Then D^.Filter:=2 Else If
   SaveFormat=FMT_PNG Then D^.Filter:=3
-   Else If SaveFormat=FMT_PCX Then D^.Filter:=21;
+   Else If SaveFormat=FMT_PCX Then D^.Filter:=21
+   Else If SaveFormat=FMT_JPEG Then D^.Filter:=4;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -17263,7 +17799,10 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='Exports : BMP, GIF, PNG, PCX. Autres formats : ouverture seule.';
+  D^.Notice:='Exports : BMP, GIF, PNG, PCX, JPG. Autres formats : ouverture' +
+  ' seule.';
+  If SaveFormat=FMT_JPEG Then
+   D^.Notice:='JPEG : compression avec pertes, qualite 90, couleurs 4:4:4.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -17378,7 +17917,8 @@ Begin
   FileName:=D^.Name; PaintFileDialog:=True;
   If Saving Then Case D^.Filter Of 2: SaveFormat:=FMT_GIF; 3:
   SaveFormat:=FMT_PNG;
-   21: SaveFormat:=FMT_PCX; Else SaveFormat:=FMT_BMP; End;
+   21: SaveFormat:=FMT_PCX;
+   4: SaveFormat:=FMT_JPEG; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -17393,7 +17933,8 @@ Function SaveAsCurrentImage: Boolean;
 Var Name: String; Format: Byte;
 Begin
  SaveAsCurrentImage:=False; Name:=ImageBuffer.FileName; Format:=ImageBuffer.Format;
- If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX]) Then Format:=FMT_PNG;
+ If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG]) Then
+ Format:=FMT_PNG;
  Repeat
   If Not PaintFileDialog(Name,True,Format) Then Exit;
   If SaveImage(Name,Format) Then Begin SaveAsCurrentImage:=True; RedrawInterface; Exit; End;
@@ -17679,7 +18220,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : BMP, GIF, PNG, PCX');
+   OutTextXY(X+W-198,Y+270,'Exports : BMP, GIF, PNG, PCX, JPG');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

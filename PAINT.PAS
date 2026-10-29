@@ -135,6 +135,7 @@ Const
  FMT_TARGA = 5;
  FMT_TIFF = 6;
  FMT_XBM = 7;
+ FMT_WPG = 8;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -566,6 +567,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If Ext = '.WPG' Then
+  GetImageFormat := FMT_WPG
  Else If Ext = '.XBM' Then
   GetImageFormat := FMT_XBM
  Else If (Ext = '.TIF') or (Ext = '.TIFF') Then
@@ -3827,6 +3830,452 @@ Begin
 End;
 
 
+{ WordPerfect Graphics niveau 1, integre a PAINT.
+  Structure et primitives de VIEWWPG.PAS ; compatibilite big-endian avec
+  BMP2WPG.PAS/PCX2WPG.PAS et little-endian avec les fichiers WPG usuels.
+  RLE : litteraux, repetitions, blancs $80 et repetitions de lignes $00.
+  Les dessins vectoriels sont rasterises en conservant leurs proportions.
+  WPG2, chiffrement, texte et PostScript ne sont pas interpretes. }
+Type
+ TWGState = Record
+  Data,RGB: PPNBytes;
+  Size,Position,Limit,RGBSize,BitmapPosition,BitmapEnd: LongInt;
+  Bad,LittleEndian,HaveEnd,HaveDrawing,HaveBitmap: Boolean;
+  Width,Height,BitmapType,Depth: Integer;
+  PictureWidth,PictureHeight: LongInt;
+  SourceWidth,SourceHeight,Rotation: Integer;
+  Palette: TPalette;
+  FillIndex,LineIndex,Stroke,FillMode,LineMode: Integer;
+  Count: Integer;
+  X,Y: Array[0..4095] Of Integer;
+ End;
+ PWGState = ^TWGState;
+
+Function WGByte(Var D: TWGState): Integer;
+Begin
+ WGByte:=0;
+ If D.Bad Then Exit;
+ If D.Position>=D.Limit Then Begin D.Bad:=True; Exit; End;
+ WGByte:=D.Data^[D.Position]; Inc(D.Position);
+End;
+
+Function WGWord(Var D: TWGState): LongInt;
+Var A,B: Integer;
+Begin
+ A:=WGByte(D); B:=WGByte(D);
+ If D.LittleEndian Then WGWord:=A+LongInt(B)*256 Else WGWord:=LongInt(A)*256+B;
+End;
+
+Function WGLength(Var D: TWGState): LongInt;
+Var N: LongInt;
+Begin
+ N:=WGByte(D);
+ If N=255 Then Begin
+  N:=WGWord(D);
+  If (N And $8000)<>0 Then N:=((N And $7FFF) Shl 16)+WGWord(D);
+ End;
+ WGLength:=N;
+End;
+
+Function WGNext(Var D: TWGState; Var Kind: Integer; Var Start,Stop: LongInt): Boolean;
+Var Length: LongInt;
+Begin
+ WGNext:=False; D.Limit:=D.Size;
+ If D.Size-D.Position<2 Then Begin D.Bad:=True; Exit; End;
+ Kind:=WGByte(D); Length:=WGLength(D); Start:=D.Position;
+ If D.Bad Or (Length<0) Or (Length>D.Size-Start) Then Begin D.Bad:=True; Exit; End;
+ Stop:=Start+Length; D.Limit:=Stop; WGNext:=True;
+End;
+
+Procedure WGReadBitmapHeader(Var D: TWGState; Kind: Integer);
+Var I,Angle,W,H,BPP: Integer;
+Begin
+ Angle:=0;
+ If Kind=$14 Then Begin
+  If D.Limit-D.Position<20 Then Begin D.Bad:=True; Exit; End;
+  Angle:=WGWord(D);
+  For I:=1 To 4 Do WGWord(D);
+ End Else If D.Limit-D.Position<10 Then Begin D.Bad:=True; Exit; End;
+ W:=WGWord(D); H:=WGWord(D); BPP:=WGWord(D); WGWord(D); WGWord(D);
+ If (W<1) Or (H<1) Or (W>MAX_IMAGE_WIDTH) Or (H>MAX_IMAGE_HEIGHT) Or
+    Not (BPP In [1,2,4,8,24]) Then Begin D.Bad:=True; Exit; End;
+ If ((Angle And $0FFF)<>0) And ((Angle And $0FFF)<>90) And
+    ((Angle And $0FFF)<>180) And ((Angle And $0FFF)<>270) Then Begin D.Bad:=True; Exit; End;
+ D.SourceWidth:=W; D.SourceHeight:=H; D.Depth:=BPP; D.Rotation:=Angle;
+ D.Width:=W; D.Height:=H;
+ If ((Angle And $0FFF)=90) Or ((Angle And $0FFF)=270) Then Begin D.Width:=H; D.Height:=W; End;
+End;
+
+Procedure WGReadPalette(Var D: TWGState);
+Var First,Last,Count,I: Integer; Remaining: LongInt;
+Begin
+ If D.Limit-D.Position<4 Then Begin D.Bad:=True; Exit; End;
+ First:=WGWord(D); Last:=WGWord(D); Remaining:=D.Limit-D.Position;
+ Count:=Last-First;
+ If (Count<0) Or (Remaining<>LongInt(Count)*3) Then Count:=Last;
+ If (First<0) Or (Count<0) Or (First+LongInt(Count)>256) Or (Remaining<>LongInt(Count)*3) Then Begin D.Bad:=True; Exit; End;
+ For I:=First To First+Count-1 Do Begin
+  D.Palette[I].R:=WGByte(D); D.Palette[I].G:=WGByte(D); D.Palette[I].B:=WGByte(D); D.Palette[I].A:=255;
+ End;
+End;
+
+Procedure WGPixel(Var D: TWGState; X,Y,Index: Integer);
+Var Offset: LongInt;
+Begin
+ If (X<0) Or (Y<0) Or (X>=D.Width) Or (Y>=D.Height) Then Exit;
+ Offset:=(LongInt(Y)*D.Width+X)*3;
+ D.RGB^[Offset]:=D.Palette[Index].R; D.RGB^[Offset+1]:=D.Palette[Index].G; D.RGB^[Offset+2]:=D.Palette[Index].B;
+End;
+
+Function WGScale(Value: LongInt; Pixels: Integer; Units: LongInt): Integer;
+Var V: LongInt;
+Begin
+ If Units<1 Then Begin WGScale:=0; Exit; End;
+ V:=Round(Value*(Pixels-1.0)/Units);
+ If V< -30000 Then V:=-30000 Else If V>30000 Then V:=30000;
+ WGScale:=V;
+End;
+
+Function WGCode(Var D: TWGState; X,Y: LongInt): Integer;
+Var C: Integer;
+Begin
+ C:=0; If X<0 Then C:=C Or 1 Else If X>=D.Width Then C:=C Or 2;
+ If Y<0 Then C:=C Or 4 Else If Y>=D.Height Then C:=C Or 8;
+ WGCode:=C;
+End;
+
+Procedure WGLine(Var D: TWGState; AX,AY,BX,BY: Integer);
+Var X1,Y1,X2,Y2,X,Y,DX,DY,SX,SY,Err,E2: LongInt;
+    C1,C2,C,I,J,Guard,Radius: Integer;
+Begin
+ If D.LineMode=0 Then Exit;
+ X1:=AX; Y1:=AY; X2:=BX; Y2:=BY; Guard:=0;
+ Repeat
+  C1:=WGCode(D,X1,Y1); C2:=WGCode(D,X2,Y2);
+  If (C1 Or C2)=0 Then Break;
+  If (C1 And C2)<>0 Then Exit;
+  Inc(Guard); If Guard>16 Then Exit;
+  C:=C1; If C=0 Then C:=C2;
+  If (C And 8)<>0 Then Begin
+   If Y2=Y1 Then Exit; Y:=D.Height-1; X:=X1+Round((X2-X1)*1.0*(Y-Y1)/(Y2-Y1));
+  End Else If (C And 4)<>0 Then Begin
+   If Y2=Y1 Then Exit; Y:=0; X:=X1+Round((X2-X1)*1.0*(Y-Y1)/(Y2-Y1));
+  End Else If (C And 2)<>0 Then Begin
+   If X2=X1 Then Exit; X:=D.Width-1; Y:=Y1+Round((Y2-Y1)*1.0*(X-X1)/(X2-X1));
+  End Else Begin
+   If X2=X1 Then Exit; X:=0; Y:=Y1+Round((Y2-Y1)*1.0*(X-X1)/(X2-X1));
+  End;
+  If C=C1 Then Begin X1:=X; Y1:=Y; End Else Begin X2:=X; Y2:=Y; End;
+ Until False;
+ DX:=Abs(X2-X1); DY:=-Abs(Y2-Y1); SX:=1; SY:=1;
+ If X1>X2 Then SX:=-1; If Y1>Y2 Then SY:=-1; Err:=DX+DY;
+ Radius:=D.Stroke Div 2;
+ Repeat
+  For J:=-Radius To Radius Do For I:=-Radius To Radius Do WGPixel(D,X1+I,Y1+J,D.LineIndex);
+  If (X1=X2) And (Y1=Y2) Then Break;
+  E2:=Err*2; If E2>=DY Then Begin Inc(Err,DY); Inc(X1,SX); End;
+  If E2<=DX Then Begin Inc(Err,DX); Inc(Y1,SY); End;
+ Until False;
+End;
+
+Procedure WGSpan(Var D: TWGState; A,B,Y,Index: Integer);
+Var X,T: Integer;
+Begin
+ If (Y<0) Or (Y>=D.Height) Then Exit;
+ If A>B Then Begin T:=A; A:=B; B:=T; End;
+ A:=Max(0,A); B:=Min(D.Width-1,B);
+ For X:=A To B Do WGPixel(D,X,Y,Index);
+End;
+
+Procedure WGPolygon(Var D: TWGState; Closed: Boolean);
+Var Cross: Array[0..4095] Of Integer; I,J,K,Y,Low,High,N,T: Integer; V: Int64;
+Begin
+ If D.Count<2 Then Exit;
+ If Closed And (D.FillMode<>0) Then Begin
+  Low:=D.Y[0]; High:=Low;
+  For I:=1 To D.Count-1 Do Begin Low:=Min(Low,D.Y[I]); High:=Max(High,D.Y[I]); End;
+  Low:=Max(0,Low); High:=Min(D.Height-1,High);
+  For Y:=Low To High Do Begin
+   N:=0; J:=D.Count-1;
+   For I:=0 To D.Count-1 Do Begin
+    If ((D.Y[I]<=Y) And (D.Y[J]>Y)) Or ((D.Y[J]<=Y) And (D.Y[I]>Y)) Then Begin
+     V:=D.X[I]+(Int64(Y)-D.Y[I])*(LongInt(D.X[J])-D.X[I]) Div (LongInt(D.Y[J])-D.Y[I]);
+     Cross[N]:=V; Inc(N);
+    End;
+    J:=I;
+   End;
+   For I:=1 To N-1 Do Begin
+    T:=Cross[I]; K:=I-1;
+    While K>=0 Do Begin If Cross[K]<=T Then Break; Cross[K+1]:=Cross[K]; Dec(K); End;
+    Cross[K+1]:=T;
+   End;
+   I:=0; While I+1<N Do Begin WGSpan(D,Cross[I],Cross[I+1],Y,D.FillIndex); Inc(I,2); End;
+  End;
+ End;
+ For I:=1 To D.Count-1 Do WGLine(D,D.X[I-1],D.Y[I-1],D.X[I],D.Y[I]);
+ If Closed Then WGLine(D,D.X[D.Count-1],D.Y[D.Count-1],D.X[0],D.Y[0]);
+ D.HaveDrawing:=True;
+End;
+
+Procedure WGPointList(Var D: TWGState; Closed: Boolean);
+Var I: Integer;
+Begin
+ D.Count:=WGWord(D);
+ If (D.Count<1) Or (D.Count>4096) Or (LongInt(D.Count)*4>D.Limit-D.Position) Then Begin D.Bad:=True; Exit; End;
+ For I:=0 To D.Count-1 Do Begin
+  D.X[I]:=WGScale(WGWord(D),D.Width,D.PictureWidth);
+  D.Y[I]:=D.Height-1-WGScale(WGWord(D),D.Height,D.PictureHeight);
+ End;
+ WGPolygon(D,Closed);
+End;
+
+Procedure WGRectangle(Var D: TWGState);
+Var X,Y,W,H: LongInt;
+Begin
+ If D.Limit-D.Position<8 Then Begin D.Bad:=True; Exit; End;
+ X:=WGWord(D); Y:=WGWord(D); W:=WGWord(D); H:=WGWord(D);
+ D.Count:=4;
+ D.X[0]:=WGScale(X,D.Width,D.PictureWidth); D.X[1]:=WGScale(X+W,D.Width,D.PictureWidth);
+ D.X[2]:=D.X[1]; D.X[3]:=D.X[0];
+ D.Y[0]:=D.Height-1-WGScale(Y,D.Height,D.PictureHeight); D.Y[1]:=D.Y[0];
+ D.Y[2]:=D.Height-1-WGScale(Y+H,D.Height,D.PictureHeight); D.Y[3]:=D.Y[2];
+ WGPolygon(D,True);
+End;
+
+Function WGClampCoordinate(V: LongInt): Integer;
+Begin
+ If V< -30000 Then WGClampCoordinate:=-30000
+ Else If V>30000 Then WGClampCoordinate:=30000 Else WGClampCoordinate:=V;
+End;
+
+Procedure WGEllipse(Var D: TWGState);
+Var CX,CY,RX,RY,I,Steps: Integer; A: Double;
+Begin
+ If D.Limit-D.Position<8 Then Begin D.Bad:=True; Exit; End;
+ CX:=WGScale(WGWord(D),D.Width,D.PictureWidth); CY:=D.Height-1-WGScale(WGWord(D),D.Height,D.PictureHeight);
+ RX:=Abs(WGScale(WGWord(D),D.Width,D.PictureWidth)); RY:=Abs(WGScale(WGWord(D),D.Height,D.PictureHeight));
+ Steps:=Min(1024,Max(32,Max(Min(RX,4096),Min(RY,4096))*2));
+ D.Count:=Steps;
+ For I:=0 To Steps-1 Do Begin A:=2*Pi*I/Steps; D.X[I]:=WGClampCoordinate(CX+Round(RX*Cos(A))); D.Y[I]:=WGClampCoordinate(CY+Round(RY*Sin(A))); End;
+ WGPolygon(D,True);
+End;
+
+Procedure WGDecodeBitmap(Var D: TWGState; Kind: Integer);
+Var Raw: PPNBytes; RowBytes,Total,OutPos,I,Src,Dest: LongInt;
+    B,V,Count,X,Y,TX,TY,FX,FY,Angle: Integer; C: TRGBColor;
+Begin
+ WGReadBitmapHeader(D,Kind); If D.Bad Then Exit;
+ RowBytes:=(LongInt(D.SourceWidth)*D.Depth+7) Div 8; Total:=RowBytes*D.SourceHeight;
+ Raw:=PPNBytes(JDAllocate(Total)); If Raw=Nil Then Begin D.Bad:=True; Exit; End;
+ OutPos:=0;
+ While (OutPos<Total) And Not D.Bad Do Begin
+  B:=WGByte(D); Count:=B And $7F;
+  If (B And $80)<>0 Then Begin
+   If Count=0 Then Begin Count:=WGByte(D); V:=255; End Else V:=WGByte(D);
+   If (Count=0) Or (Count>Total-OutPos) Then Begin D.Bad:=True; Break; End;
+   FillChar(Raw^[OutPos],Count,V); Inc(OutPos,Count);
+  End Else If Count<>0 Then Begin
+   If (Count>Total-OutPos) Or (Count>D.Limit-D.Position) Then Begin D.Bad:=True; Break; End;
+   Move(D.Data^[D.Position],Raw^[OutPos],Count); Inc(D.Position,Count); Inc(OutPos,Count);
+  End Else Begin
+   Count:=WGByte(D);
+   If (Count=0) Or (OutPos<RowBytes) Or ((OutPos Mod RowBytes)<>0) Or (LongInt(Count)*RowBytes>Total-OutPos) Then Begin D.Bad:=True; Break; End;
+   For I:=1 To Count Do Begin Move(Raw^[OutPos-RowBytes],Raw^[OutPos],RowBytes); Inc(OutPos,RowBytes); End;
+  End;
+ End;
+ If (OutPos<>Total) Or (D.Position<>D.Limit) Then D.Bad:=True;
+ If Not D.Bad Then Begin
+  Angle:=D.Rotation And $0FFF;
+  For Y:=0 To D.SourceHeight-1 Do For X:=0 To D.SourceWidth-1 Do Begin
+   Src:=LongInt(Y)*RowBytes;
+   If D.Depth=24 Then Begin
+    Inc(Src,LongInt(X)*3); C.R:=Raw^[Src]; C.G:=Raw^[Src+1]; C.B:=Raw^[Src+2];
+   End Else Begin
+    Src:=Src+(LongInt(X)*D.Depth Div 8); V:=(Raw^[Src] Shr (8-D.Depth-(LongInt(X)*D.Depth Mod 8))) And ((1 Shl D.Depth)-1);
+    If D.Depth=1 Then Begin C.R:=V*255; C.G:=C.R; C.B:=C.R; End Else C:=D.Palette[V];
+   End;
+   FX:=X; FY:=Y;
+   If (D.Rotation And $8000)<>0 Then FX:=D.SourceWidth-1-FX;
+   If (D.Rotation And $2000)<>0 Then FY:=D.SourceHeight-1-FY;
+   TX:=FX; TY:=FY;
+   Case Angle Of
+    90: Begin TX:=D.SourceHeight-1-FY; TY:=FX; End;
+    180: Begin TX:=D.SourceWidth-1-FX; TY:=D.SourceHeight-1-FY; End;
+    270: Begin TX:=FY; TY:=D.SourceWidth-1-FX; End;
+   End;
+   Dest:=(LongInt(TY)*D.Width+TX)*3; D.RGB^[Dest]:=C.R; D.RGB^[Dest+1]:=C.G; D.RGB^[Dest+2]:=C.B;
+  End;
+  D.HaveDrawing:=True;
+ End;
+ FreeMem(Raw,Total);
+End;
+
+Procedure WGDefaultPalette(Var D: TWGState);
+Const
+ Gray: Array[0..15] Of Byte = (0,5,8,11,14,17,20,24,28,32,36,40,45,50,56,63);
+ Ramp: Array[0..8,0..4] Of Byte =
+  ((0,16,31,47,63),(31,39,47,55,63),(45,49,54,58,63),
+   (0,7,14,21,28),(14,17,21,24,28),(20,22,24,26,28),
+   (0,4,8,12,16),(8,10,12,14,16),(11,12,13,15,16));
+Var I,G,Phase,K,R,Green,B,Low,High: Integer;
+Begin
+ FillChar(D.Palette,SizeOf(D.Palette),0);
+ For I:=0 To 255 Do D.Palette[I].A:=255;
+ For I:=0 To 15 Do Begin D.Palette[I].R:=VGA_R[I]; D.Palette[I].G:=VGA_G[I]; D.Palette[I].B:=VGA_B[I]; End;
+ For I:=0 To 15 Do Begin D.Palette[16+I].R:=Gray[I]*4; D.Palette[16+I].G:=Gray[I]*4; D.Palette[16+I].B:=Gray[I]*4; End;
+ I:=32;
+ For G:=0 To 8 Do Begin
+  Low:=Ramp[G,0]; High:=Ramp[G,4];
+  For Phase:=0 To 5 Do For K:=0 To 3 Do Begin
+   R:=Low; Green:=Low; B:=High;
+   Case Phase Of
+    0: R:=Ramp[G,K];
+    1: Begin R:=High; B:=Ramp[G,4-K]; End;
+    2: Begin R:=High; Green:=Ramp[G,K]; B:=Low; End;
+    3: Begin R:=Ramp[G,4-K]; Green:=High; B:=Low; End;
+    4: Begin R:=Low; Green:=High; B:=Ramp[G,K]; End;
+    5: Begin R:=Low; Green:=Ramp[G,4-K]; B:=High; End;
+   End;
+   D.Palette[I].R:=R*4; D.Palette[I].G:=Green*4; D.Palette[I].B:=B*4; Inc(I);
+  End;
+ End;
+End;
+
+Function WGRead(Const Name: String; Var D: TWGState): Boolean;
+Var F: File; OldMode: Byte; Bytes,Offset,Start,Stop,Records,LowWord,HighWord,Width,Height: LongInt;
+    Kind,I: Integer; GotBitmap: Boolean;
+Begin
+ WGRead:=False;
+ Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
+ If IOResult<>0 Then Exit;
+ {$I-}
+ D.Size:=FileSize(F);
+ If (D.Size>=18) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin BlockRead(F,D.Data^,D.Size,Bytes); D.Bad:=Bytes<>D.Size; End Else D.Bad:=True;
+ End Else D.Bad:=True;
+ Close(F);
+ {$I+}If IOResult<>0 Then D.Bad:=True;
+ If D.Bad Then Exit;
+ If (D.Data^[0]<>$FF) Or (D.Data^[1]<>$57) Or (D.Data^[2]<>$50) Or (D.Data^[3]<>$43) Or
+    (D.Data^[8]<>1) Or (D.Data^[9]<>$16) Or (D.Data^[10]<>1) Or (D.Data^[12]<>0) Or (D.Data^[13]<>0) Then Exit;
+ D.Limit:=D.Size; D.Position:=4; D.LittleEndian:=True;
+ LowWord:=WGWord(D); HighWord:=WGWord(D); Offset:=LowWord+HighWord*65536;
+ If (Offset<16) Or (Offset>D.Size-2) Then Begin
+  D.Position:=4; D.LittleEndian:=False; HighWord:=WGWord(D); LowWord:=WGWord(D); Offset:=HighWord*65536+LowWord;
+ End;
+ If (Offset<16) Or (Offset>D.Size-2) Then Exit;
+ D.Position:=Offset; Records:=0;
+ { Premier passage : dimensions, premiere image raster et bornes des blocs. }
+ While Not D.Bad And Not D.HaveEnd Do Begin
+  If Not WGNext(D,Kind,Start,Stop) Then Break;
+  Inc(Records); If Records>100000 Then Exit;
+  Case Kind Of
+   $0F: Begin
+    If Stop-Start<6 Then Exit; WGByte(D); WGByte(D); D.PictureWidth:=WGWord(D); D.PictureHeight:=WGWord(D);
+   End;
+   $0B,$14: If Not D.HaveBitmap Then Begin
+    D.BitmapPosition:=Start; D.BitmapEnd:=Stop; D.BitmapType:=Kind;
+    WGReadBitmapHeader(D,Kind); D.HaveBitmap:=Not D.Bad;
+   End;
+   $10: Begin If Stop<>Start Then Exit; D.HaveEnd:=True; End;
+  End;
+  D.Position:=Stop;
+ End;
+ If D.Bad Or Not D.HaveEnd Then Exit;
+ If Not D.HaveBitmap Then Begin
+  If (D.PictureWidth<1) Or (D.PictureHeight<1) Then Exit;
+  Width:=D.PictureWidth; Height:=D.PictureHeight;
+  If (Width>MAX_IMAGE_WIDTH) Or (Height>MAX_IMAGE_HEIGHT) Then Begin
+   If Width>=Height Then Begin Height:=Max(1,Round(Height*1024.0/Width)); Width:=1024; End
+   Else Begin Width:=Max(1,Round(Width*1024.0/Height)); Height:=1024; End;
+  End;
+  D.Width:=Width; D.Height:=Height; D.Depth:=24;
+ End;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3; D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ FillChar(D.RGB^,D.RGBSize,255);
+ WGDefaultPalette(D);
+ D.FillMode:=0; D.LineMode:=1; D.LineIndex:=0; D.FillIndex:=15; D.Stroke:=1;
+ D.Position:=Offset; GotBitmap:=False;
+ Repeat
+  If Not WGNext(D,Kind,Start,Stop) Then Break;
+  Case Kind Of
+   $0E: WGReadPalette(D);
+   $0B,$14: If Start=D.BitmapPosition Then Begin WGDecodeBitmap(D,Kind); GotBitmap:=Not D.Bad; End;
+   $10: Break;
+   $0F: ;
+   Else If Not D.HaveBitmap Then Case Kind Of
+    $01: Begin If Stop-Start<2 Then Exit; D.FillMode:=WGByte(D); D.FillIndex:=WGByte(D); End;
+    $02: Begin
+     If Stop-Start<2 Then Exit; D.LineMode:=WGByte(D); D.LineIndex:=WGByte(D);
+     If Stop-Start>=4 Then D.Stroke:=Max(1,Min(32,Abs(WGScale(WGWord(D),D.Width,D.PictureWidth))));
+    End;
+    $05: Begin
+     If Stop-Start<8 Then Exit; D.Count:=2;
+     For I:=0 To 1 Do Begin D.X[I]:=WGScale(WGWord(D),D.Width,D.PictureWidth); D.Y[I]:=D.Height-1-WGScale(WGWord(D),D.Height,D.PictureHeight); End;
+     WGPolygon(D,False);
+    End;
+    $06: WGPointList(D,False);
+    $07: WGRectangle(D);
+    $08: WGPointList(D,True);
+    $09: WGEllipse(D);
+    Else Exit; { Refuser les primitives non gerees plutot qu'une image vide. }
+   End;
+  End;
+  If D.Bad Then Exit;
+  D.Position:=Stop;
+ Until False;
+ WGRead:=Not D.Bad And D.HaveDrawing And (Not D.HaveBitmap Or GotBitmap);
+End;
+
+Function LoadWPG(FileName: String): Boolean;
+Var D: PWGState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadWPG:=False; Q:=Nil; Pixels:=Nil;
+ D:=PWGState(JDAllocate(SizeOf(TWGState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If WGRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Source:=PByte(D^.RGB); Dest:=Pixels; Used:=16; Exact:=True;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=D^.Depth;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_WPG; ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadWPG:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TWGState));
+End;
+
+
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -3849,7 +4298,7 @@ Begin
  Ext := ExtractFileExt(FileName);
  If (Ext <> '.BMP') and (Ext <> '.DIB') and
     (Ext <> '.GIF') and (Ext <> '.PNG') and
-    (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') Then Exit;
+    (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') and (Ext <> '.WPG') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -3859,6 +4308,7 @@ Begin
   FMT_PNG: Succeeded := LoadPNG(FileName);
   FMT_JPEG: Succeeded := LoadJPEG(FileName);
   FMT_XBM: Succeeded := LoadXBM(FileName);
+  FMT_WPG: Succeeded := LoadWPG(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -10847,6 +11297,7 @@ Begin
   FMT_TARGA: APFormatName:='TGA';
   FMT_TIFF: APFormatName:='TIFF';
   FMT_XBM: APFormatName:='XBM';
+  FMT_WPG: APFormatName:='WPG';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -11545,12 +11996,13 @@ Begin
  E:=OFUpper(ExtractFileExt(Name));
  Case Filter Of
   0: OFMatches:=(E='.BMP') Or (E='.DIB') Or (E='.GIF') Or
-                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM');
+                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
   4: OFMatches:=(E='.JPG') Or (E='.JPEG');
   5: OFMatches:=E='.XBM';
+  6: OFMatches:=E='.WPG';
   Else OFMatches:=True;
  End;
 End;
@@ -11558,12 +12010,13 @@ End;
 Function OFFilterLabel(N: Integer): String;
 Begin
  Case N Of
-  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM';
+  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG';
   1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
   2: OFFilterLabel:='GIF : *.gif';
   3: OFFilterLabel:='PNG : *.png';
   4: OFFilterLabel:='JPEG : *.jpg; *.jpeg';
   5: OFFilterLabel:='X Bitmap : *.xbm';
+  6: OFFilterLabel:='WordPerfect Graphics : *.wpg';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -11975,7 +12428,7 @@ Begin
  If DosError<>0 Then Begin D.Notice:='Fichier introuvable ou inaccessible.'; D.Dirty:=True; Exit; End;
  {$IFDEF FPC}FindClose(R);{$ENDIF}
  If Not OFMatches(S,0) Then Begin
-  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM.'; D.Dirty:=True; Exit;
+  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG.'; D.Dirty:=True; Exit;
  End;
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
@@ -11984,7 +12437,7 @@ Procedure OFChooseFilter(Var D: TOFState);
 Var X,Y,W,I,N,MX,MY,B,Prev: Integer; K,E: Char; Done,Accept: Boolean; MaxFilter: Integer; OldName: String; PopupHeight: Integer;
 Begin
  X:=D.X+38; Y:=D.Y+120; W:=D.W-76;
- N:=D.Filter; MaxFilter:=7; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
+ N:=D.Filter; MaxFilter:=8; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
  PopupHeight:=50+MaxFilter*21;
  GetMouseStateLocal(MX,MY,Prev);
  Repeat
@@ -12093,7 +12546,7 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM : ouverture uniquement.';
+  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -13233,13 +13686,13 @@ BEGIN
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
-  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm]');
+  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
   WriteLn(' - Support de la souris (Int 33h / PtcMouse)');
   WriteLn(' - Outils de dessin: Crayon, Pinceau, A'+#130+'rographe, Ligne, Rectangle, Ellipse...');
-  WriteLn(' - Support des formats: BMP, GIF, PNG, JPEG, XBM');
+  WriteLn(' - Support des formats: BMP, GIF, PNG, JPEG, XBM, WPG');
   WriteLn(' - Support de la transparence pour GIF et PNG');
   WriteLn(' - Redimensionnement et rognage d''image');
   WriteLn(' - Support de 2 a 32 bits de profondeur de couleur');

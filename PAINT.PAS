@@ -136,6 +136,7 @@ Const
  FMT_TIFF = 6;
  FMT_XBM = 7;
  FMT_WPG = 8;
+ FMT_LBM = 9;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -567,6 +568,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If (Ext = '.LBM') or (Ext = '.ILBM') or (Ext = '.IFF') Then
+  GetImageFormat := FMT_LBM
  Else If Ext = '.WPG' Then
   GetImageFormat := FMT_WPG
  Else If Ext = '.XBM' Then
@@ -4276,6 +4279,229 @@ Begin
 End;
 
 
+{ IFF/LBM integre : ILBM a plans entrelaces, PBM Deluxe Paint, ByteRun1.
+  Organisation des plans identique a BMP2LBM.PAS et PCX2LBM.PAS :
+  lignes de 16 bits, plan 0 = poids faible, pixels MSB en premier.
+  Les chunks sont bornes par FORM et leur bourrage pair n'est pas une donnee.
+  HAM6/HAM8 et Extra-Half-Brite sont selectionnes par les drapeaux CAMG.
+  Le document indexe est opaque : les pixels masques sont composes sur blanc. }
+Type
+ TLBState = Record
+  Data,RGB: PPNBytes;
+  Size,RGBSize,BodyStart,BodyEnd,Position: LongInt;
+  Width,Height,Planes,Masking,Compression,TransparentIndex,PaletteCount: Integer;
+  CAMG: LongWord;
+  Chunky,Bad,HasTransparency: Boolean;
+  Palette: TPalette;
+  Row: Array[0..12799] Of Byte;
+ End;
+ PLBState = ^TLBState;
+
+Function LBWord(P: PPNBytes; Offset: LongInt): LongInt;
+Begin
+ LBWord:=LongInt(P^[Offset])*256+P^[Offset+1];
+End;
+
+Function LBID(P: PPNBytes; Offset: LongInt): String;
+Var I: Integer; S: String;
+Begin
+ S:=''; For I:=0 To 3 Do S:=S+Chr(P^[Offset+I]); LBID:=S;
+End;
+
+Function LBReadChunks(Const Name: String; Var D: TLBState): Boolean;
+Var F: File; OldMode: Byte; Bytes,Pos,Start,Stop,Length,FormEnd: LongInt;
+    N: LongWord; Kind,FormKind: String; I: Integer; Header,Map,Body,Mode: Boolean;
+Begin
+ LBReadChunks:=False; Header:=False; Map:=False; Body:=False; Mode:=False;
+ Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
+ If IOResult<>0 Then Exit;
+ {$I-}
+ D.Size:=FileSize(F);
+ If (D.Size>=48) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin BlockRead(F,D.Data^,D.Size,Bytes); D.Bad:=Bytes<>D.Size; End Else D.Bad:=True;
+ End Else D.Bad:=True;
+ Close(F);
+ {$I+}If IOResult<>0 Then D.Bad:=True;
+ If D.Bad Then Exit;
+ If LBID(D.Data,0)<>'FORM' Then Exit;
+ N:=PNBE(D.Data,4); If (N<4) Or (N<>LongWord(D.Size-8)) Then Exit;
+ FormEnd:=D.Size; FormKind:=LBID(D.Data,8);
+ If (FormKind<>'ILBM') And (FormKind<>'PBM ') Then Exit;
+ D.Chunky:=FormKind='PBM '; Pos:=12;
+ While Pos<FormEnd Do Begin
+  If FormEnd-Pos<8 Then Exit;
+  Kind:=LBID(D.Data,Pos); N:=PNBE(D.Data,Pos+4); Start:=Pos+8;
+  If N>LongWord(FormEnd-Start) Then Exit;
+  Length:=N; Stop:=Start+Length;
+  If Odd(Length) And (Stop>=FormEnd) Then Exit;
+  If Kind='BMHD' Then Begin
+   If Header Or Body Or (Length<>20) Then Exit;
+   D.Width:=LBWord(D.Data,Start); D.Height:=LBWord(D.Data,Start+2);
+   D.Planes:=D.Data^[Start+8]; D.Masking:=D.Data^[Start+9]; D.Compression:=D.Data^[Start+10];
+   D.TransparentIndex:=LBWord(D.Data,Start+12);
+   If (D.Width<1) Or (D.Height<1) Or (D.Width>MAX_IMAGE_WIDTH) Or (D.Height>MAX_IMAGE_HEIGHT) Or
+      (D.Masking>2) Or (D.Compression>1) Then Exit;
+   If D.Chunky Then Begin If (D.Planes<>8) Or (D.Masking=1) Then Exit; End
+   Else If Not ((D.Planes>=1) And (D.Planes<=8)) And (D.Planes<>24) Then Exit;
+   If (D.Masking=2) And ((D.Planes=24) Or (D.TransparentIndex>=(1 Shl D.Planes))) Then Exit;
+   Header:=True;
+  End Else If Kind='CMAP' Then Begin
+   If Map Or Body Or (Length<3) Or (Length>768) Or ((Length Mod 3)<>0) Then Exit;
+   D.PaletteCount:=Length Div 3;
+   For I:=0 To D.PaletteCount-1 Do Begin
+    D.Palette[I].R:=D.Data^[Start+I*3]; D.Palette[I].G:=D.Data^[Start+I*3+1];
+    D.Palette[I].B:=D.Data^[Start+I*3+2]; D.Palette[I].A:=255;
+   End;
+   Map:=True;
+  End Else If Kind='CAMG' Then Begin
+   If Mode Or Body Or (Length<>4) Then Exit;
+   D.CAMG:=PNBE(D.Data,Start); Mode:=True;
+  End Else If Kind='BODY' Then Begin
+   If Body Or Not Header Or (Length=0) Then Exit;
+   D.BodyStart:=Start; D.BodyEnd:=Stop; Body:=True;
+  End Else If (Kind='PCHG') Or (Kind='SHAM') Or (Kind='CTBL') Or (Kind='CLUT') Then Exit;
+  Pos:=Stop+(Length And 1);
+ End;
+ If Not Header Or Not Body Then Exit;
+ If (D.CAMG And $800)<>0 Then Begin
+  If D.Chunky Or Not (D.Planes In [6,8]) Or (D.PaletteCount<(1 Shl (D.Planes-2))) Then Exit;
+ End;
+ If (D.CAMG And $80)<>0 Then Begin
+  If D.Chunky Or (D.Planes<>6) Or (D.PaletteCount<32) Or ((D.CAMG And $800)<>0) Then Exit;
+  For I:=0 To 31 Do Begin
+   D.Palette[I+32].R:=D.Palette[I].R Shr 1;
+   D.Palette[I+32].G:=D.Palette[I].G Shr 1;
+   D.Palette[I+32].B:=D.Palette[I].B Shr 1; D.Palette[I+32].A:=255;
+  End;
+  D.PaletteCount:=64;
+ End;
+ { CMAP peut etre absent ou partiel. Choisir un degrade de gris pour les
+   registres non definis ; ne pas reutiliser la palette du document courant. }
+ If D.Planes<=8 Then For I:=D.PaletteCount To (1 Shl D.Planes)-1 Do Begin
+  D.Palette[I].R:=LongInt(I)*255 Div ((1 Shl D.Planes)-1);
+  D.Palette[I].G:=D.Palette[I].R; D.Palette[I].B:=D.Palette[I].R; D.Palette[I].A:=255;
+ End;
+ LBReadChunks:=Pos=FormEnd;
+End;
+
+Function LBReadRow(Var D: TLBState; Dest,Count: Integer): Boolean;
+Var Control,N,Produced: Integer;
+Begin
+ LBReadRow:=False; Produced:=0;
+ If (Dest<0) Or (Count<1) Or (LongInt(Dest)+Count>SizeOf(D.Row)) Then Exit;
+ If D.Compression=0 Then Begin
+  If Count>D.BodyEnd-D.Position Then Exit;
+  Move(D.Data^[D.Position],D.Row[Dest],Count); Inc(D.Position,Count); LBReadRow:=True; Exit;
+ End;
+ While Produced<Count Do Begin
+  If D.Position>=D.BodyEnd Then Exit;
+  Control:=D.Data^[D.Position]; Inc(D.Position);
+  If Control<128 Then Begin
+   N:=Control+1;
+   If (N>Count-Produced) Or (N>D.BodyEnd-D.Position) Then Exit;
+   Move(D.Data^[D.Position],D.Row[Dest+Produced],N); Inc(D.Position,N); Inc(Produced,N);
+  End Else If Control>128 Then Begin
+   N:=257-Control;
+   If (N>Count-Produced) Or (D.Position>=D.BodyEnd) Then Exit;
+   FillChar(D.Row[Dest+Produced],N,D.Data^[D.Position]); Inc(D.Position); Inc(Produced,N);
+  End; { $80 = aucune operation, mais avance toujours dans le flux. }
+ End;
+ LBReadRow:=True;
+End;
+
+Function LBDecode(Var D: TLBState): Boolean;
+Var RowBytes,StoredPlanes,Plane,X,Y,Control,Value: Integer;
+    Pixel,Offset: LongInt; R,G,B,HeldR,HeldG,HeldB: Byte; Visible,HAM: Boolean;
+Begin
+ LBDecode:=False; D.Position:=D.BodyStart;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3; D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ If D.Chunky Then Begin RowBytes:=(D.Width+1) And $FFFE; StoredPlanes:=1; End
+ Else Begin RowBytes:=((D.Width+15) Div 16)*2; StoredPlanes:=D.Planes; If D.Masking=1 Then Inc(StoredPlanes); End;
+ HAM:=(D.CAMG And $800)<>0;
+ For Y:=0 To D.Height-1 Do Begin
+  For Plane:=0 To StoredPlanes-1 Do If Not LBReadRow(D,Plane*RowBytes,RowBytes) Then Exit;
+  HeldR:=D.Palette[0].R; HeldG:=D.Palette[0].G; HeldB:=D.Palette[0].B;
+  For X:=0 To D.Width-1 Do Begin
+   Pixel:=0;
+   If D.Chunky Then Pixel:=D.Row[X]
+   Else For Plane:=0 To D.Planes-1 Do
+    If (D.Row[Plane*RowBytes+(X Shr 3)] And (1 Shl (7-(X And 7))))<>0 Then Pixel:=Pixel Or (LongInt(1) Shl Plane);
+   Visible:=True;
+   If D.Masking=1 Then Visible:=(D.Row[D.Planes*RowBytes+(X Shr 3)] And (1 Shl (7-(X And 7))))<>0
+   Else If D.Masking=2 Then Visible:=Pixel<>D.TransparentIndex;
+   If D.Planes=24 Then Begin R:=Pixel And 255; G:=(Pixel Shr 8) And 255; B:=(Pixel Shr 16) And 255; End
+   Else If HAM Then Begin
+    Control:=Pixel Shr (D.Planes-2); Value:=Pixel And ((1 Shl (D.Planes-2))-1);
+    If Control=0 Then Begin HeldR:=D.Palette[Value].R; HeldG:=D.Palette[Value].G; HeldB:=D.Palette[Value].B; End
+    Else Begin
+     If D.Planes=6 Then Value:=Value*17 Else Value:=Value Shl 2;
+     Case Control Of
+      1: If D.Planes=8 Then HeldB:=Value Or (HeldB And 3) Else HeldB:=Value;
+      2: If D.Planes=8 Then HeldR:=Value Or (HeldR And 3) Else HeldR:=Value;
+      3: If D.Planes=8 Then HeldG:=Value Or (HeldG And 3) Else HeldG:=Value;
+     End;
+    End;
+    R:=HeldR; G:=HeldG; B:=HeldB;
+   End Else Begin R:=D.Palette[Pixel].R; G:=D.Palette[Pixel].G; B:=D.Palette[Pixel].B; End;
+   If Not Visible Then Begin R:=255; G:=255; B:=255; D.HasTransparency:=True; End;
+   Offset:=(LongInt(Y)*D.Width+X)*3; D.RGB^[Offset]:=R; D.RGB^[Offset+1]:=G; D.RGB^[Offset+2]:=B;
+  End;
+ End;
+ If D.Compression=1 Then While (D.Position<D.BodyEnd) And (D.Data^[D.Position]=128) Do Inc(D.Position);
+ LBDecode:=D.Position=D.BodyEnd;
+End;
+
+Function LoadLBM(FileName: String): Boolean;
+Var D: PLBState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadLBM:=False; Pixels:=Nil; Q:=Nil;
+ D:=PLBState(JDAllocate(SizeOf(TLBState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If LBReadChunks(FileName,D^) Then If LBDecode(D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   { Validation terminee : remplacer maintenant le document, jamais avant. }
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=D^.Planes;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_LBM; ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=D^.HasTransparency; ImageBuffer.Palette:=Q^.Palette;
+   ImageBuffer.TransparentColor.R:=255; ImageBuffer.TransparentColor.G:=255; ImageBuffer.TransparentColor.B:=255; ImageBuffer.TransparentColor.A:=0;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadLBM:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TLBState));
+End;
+
+
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -4298,7 +4524,8 @@ Begin
  Ext := ExtractFileExt(FileName);
  If (Ext <> '.BMP') and (Ext <> '.DIB') and
     (Ext <> '.GIF') and (Ext <> '.PNG') and
-    (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') and (Ext <> '.WPG') Then Exit;
+    (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') and (Ext <> '.WPG') and
+    (Ext <> '.LBM') and (Ext <> '.ILBM') and (Ext <> '.IFF') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -4309,6 +4536,7 @@ Begin
   FMT_JPEG: Succeeded := LoadJPEG(FileName);
   FMT_XBM: Succeeded := LoadXBM(FileName);
   FMT_WPG: Succeeded := LoadWPG(FileName);
+  FMT_LBM: Succeeded := LoadLBM(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -11298,6 +11526,7 @@ Begin
   FMT_TIFF: APFormatName:='TIFF';
   FMT_XBM: APFormatName:='XBM';
   FMT_WPG: APFormatName:='WPG';
+  FMT_LBM: APFormatName:='LBM/IFF';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -11996,13 +12225,14 @@ Begin
  E:=OFUpper(ExtractFileExt(Name));
  Case Filter Of
   0: OFMatches:=(E='.BMP') Or (E='.DIB') Or (E='.GIF') Or
-                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG');
+                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
   4: OFMatches:=(E='.JPG') Or (E='.JPEG');
   5: OFMatches:=E='.XBM';
   6: OFMatches:=E='.WPG';
+  7: OFMatches:=(E='.LBM') Or (E='.ILBM') Or (E='.IFF');
   Else OFMatches:=True;
  End;
 End;
@@ -12010,13 +12240,14 @@ End;
 Function OFFilterLabel(N: Integer): String;
 Begin
  Case N Of
-  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG';
+  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM';
   1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
   2: OFFilterLabel:='GIF : *.gif';
   3: OFFilterLabel:='PNG : *.png';
   4: OFFilterLabel:='JPEG : *.jpg; *.jpeg';
   5: OFFilterLabel:='X Bitmap : *.xbm';
   6: OFFilterLabel:='WordPerfect Graphics : *.wpg';
+  7: OFFilterLabel:='IFF / LBM : *.lbm; *.ilbm; *.iff';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -12428,7 +12659,7 @@ Begin
  If DosError<>0 Then Begin D.Notice:='Fichier introuvable ou inaccessible.'; D.Dirty:=True; Exit; End;
  {$IFDEF FPC}FindClose(R);{$ENDIF}
  If Not OFMatches(S,0) Then Begin
-  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG.'; D.Dirty:=True; Exit;
+  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM.'; D.Dirty:=True; Exit;
  End;
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
@@ -12437,7 +12668,7 @@ Procedure OFChooseFilter(Var D: TOFState);
 Var X,Y,W,I,N,MX,MY,B,Prev: Integer; K,E: Char; Done,Accept: Boolean; MaxFilter: Integer; OldName: String; PopupHeight: Integer;
 Begin
  X:=D.X+38; Y:=D.Y+120; W:=D.W-76;
- N:=D.Filter; MaxFilter:=8; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
+ N:=D.Filter; MaxFilter:=9; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
  PopupHeight:=50+MaxFilter*21;
  GetMouseStateLocal(MX,MY,Prev);
  Repeat
@@ -12546,7 +12777,7 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG : ouverture uniquement.';
+  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -13686,13 +13917,13 @@ BEGIN
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
-  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg]');
+  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
   WriteLn(' - Support de la souris (Int 33h / PtcMouse)');
   WriteLn(' - Outils de dessin: Crayon, Pinceau, A'+#130+'rographe, Ligne, Rectangle, Ellipse...');
-  WriteLn(' - Support des formats: BMP, GIF, PNG, JPEG, XBM, WPG');
+  WriteLn(' - Support des formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM)');
   WriteLn(' - Support de la transparence pour GIF et PNG');
   WriteLn(' - Redimensionnement et rognage d''image');
   WriteLn(' - Support de 2 a 32 bits de profondeur de couleur');

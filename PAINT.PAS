@@ -137,6 +137,7 @@ Const
  FMT_XBM = 7;
  FMT_WPG = 8;
  FMT_LBM = 9;
+ FMT_HDR = 10;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -568,6 +569,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If (Ext = '.HDR') or (Ext = '.RGBE') Then
+  GetImageFormat := FMT_HDR
  Else If (Ext = '.LBM') or (Ext = '.ILBM') or (Ext = '.IFF') Then
   GetImageFormat := FMT_LBM
  Else If Ext = '.WPG' Then
@@ -4502,6 +4505,269 @@ Begin
 End;
 
 
+{ Radiance RGBE integre, compatible avec BMP2HDR.PAS.
+  Flux brut, ancien RLE RGBE et nouveau RLE par composante ; huit orientations.
+  Le texte de l'entete n'est jamais execute. Les valeurs flottantes d'un HDR
+  ordinaire sont normalisees au maximum et corrigees avec un gamma de 2,2
+  pour l'affichage indexe. La convention 0..255 de BMP2HDR est preservee.
+  Un document PAINT n'est pas un tampon d'edition HDR flottant. }
+Type
+ THRState = Record
+  Data,RGBE,RGB: PPNBytes;
+  Size,Position,PixelSize,RGBSize: LongInt;
+  Width,Height,ScanLength,ScanCount: Integer;
+  Axis1,Axis2: Char;
+  Negative1,Negative2,Bad,LineLong,CloneDRAW: Boolean;
+  Exposure: Double;
+  Correction: Array[0..2] Of Double;
+  Scale: Array[0..255] Of Double;
+  Scan: Array[0..4095,0..3] Of Byte;
+ End;
+ PHRState = ^THRState;
+
+Function HRByte(Var D: THRState): Integer;
+Begin
+ HRByte:=0;
+ If D.Bad Then Exit;
+ If D.Position>=D.Size Then Begin D.Bad:=True; Exit; End;
+ HRByte:=D.Data^[D.Position]; Inc(D.Position);
+End;
+
+Function HRTrim(S: String): String;
+Begin
+ While (Length(S)>0) And (S[1] In [' ',#9]) Do Delete(S,1,1);
+ While (Length(S)>0) And (S[Length(S)] In [' ',#9,#13]) Do Delete(S,Length(S),1);
+ HRTrim:=S;
+End;
+
+Function HRLine(Var D: THRState): String;
+Var S: String; B,N: Integer;
+Begin
+ S:=''; N:=0; D.LineLong:=False;
+ Repeat
+  B:=HRByte(D); If D.Bad Then Break;
+  If B=10 Then Break;
+  If (B=0) Or (B>127) Then Begin D.Bad:=True; Break; End;
+  Inc(N); If N>4096 Then Begin D.Bad:=True; Break; End;
+  If Length(S)<255 Then S:=S+Chr(B) Else D.LineLong:=True;
+ Until D.Bad;
+ HRLine:=HRTrim(S);
+End;
+
+Function HRToken(Var S: String): String;
+Var I: Integer;
+Begin
+ S:=HRTrim(S); I:=1;
+ While (I<=Length(S)) And Not (S[I] In [' ',#9]) Do Inc(I);
+ HRToken:=Copy(S,1,I-1); Delete(S,1,I-1); S:=HRTrim(S);
+End;
+
+Function HRPositive(Const S: String; Var V: Double): Boolean;
+Var Code: Integer;
+Begin
+ V:=0; Val(S,V,Code);
+ HRPositive:=(Code=0) And (V>=1.0E-30) And (V<=1.0E30);
+End;
+
+Function HRReadHeader(Var D: THRState): Boolean;
+Var S,Key,Value,A1,A2,N1,N2,T: String; P,Code,I: Integer; V1,V2: LongInt; V: Double; FormatFound: Boolean;
+Begin
+ HRReadHeader:=False; D.Exposure:=1;
+ For I:=0 To 2 Do D.Correction[I]:=1;
+ S:=HRLine(D); If (S<>'#?RADIANCE') And (S<>'#?RGBE') Then Exit;
+ FormatFound:=False;
+ Repeat
+  S:=HRLine(D); If D.Bad Or (D.Position>65536) Then Exit;
+  If S='' Then Break;
+  If Pos('CloneDRAW BMP2HDR',S)>0 Then D.CloneDRAW:=True;
+  P:=Pos('=',S);
+  If P>0 Then Begin
+   Key:=HRTrim(Copy(S,1,P-1)); Value:=HRTrim(Copy(S,P+1,255));
+   If Key='FORMAT' Then Begin
+    If FormatFound Or D.LineLong Or (Value<>'32-bit_rle_rgbe') Then Exit;
+    FormatFound:=True;
+   End Else If Key='EXPOSURE' Then Begin
+    If D.LineLong Or Not HRPositive(Value,V) Then Exit;
+    If (D.Exposure>1.0E30/V) Or (D.Exposure<1.0E-30/V) Then Exit;
+    D.Exposure:=D.Exposure*V;
+   End Else If Key='COLORCORR' Then Begin
+    If D.LineLong Then Exit;
+    For I:=0 To 2 Do Begin
+     T:=HRToken(Value); If Not HRPositive(T,V) Then Exit;
+     If (D.Correction[I]>1.0E30/V) Or (D.Correction[I]<1.0E-30/V) Then Exit;
+     D.Correction[I]:=D.Correction[I]*V;
+    End;
+    If Value<>'' Then Exit;
+   End;
+  End;
+ Until D.Bad;
+ If Not FormatFound Then Exit;
+ S:=HRLine(D); If D.Bad Or D.LineLong Then Exit;
+ A1:=HRToken(S); N1:=HRToken(S); A2:=HRToken(S); N2:=HRToken(S);
+ If (S<>'') Or (Length(A1)<>2) Or (Length(A2)<>2) Then Exit;
+ If Not (A1[1] In ['+','-']) Or Not (A2[1] In ['+','-']) Or
+    Not (A1[2] In ['X','Y']) Or Not (A2[2] In ['X','Y']) Or (A1[2]=A2[2]) Then Exit;
+ Val(N1,V1,Code); If (Code<>0) Or (V1<1) Or (V1>MAX_IMAGE_WIDTH) Then Exit;
+ Val(N2,V2,Code); If (Code<>0) Or (V2<1) Or (V2>MAX_IMAGE_HEIGHT) Then Exit;
+ D.Axis1:=A1[2]; D.Axis2:=A2[2]; D.Negative1:=A1[1]='-'; D.Negative2:=A2[1]='-';
+ D.ScanCount:=V1; D.ScanLength:=V2;
+ If D.Axis1='Y' Then Begin D.Height:=V1; D.Width:=V2; End
+ Else Begin D.Width:=V1; D.Height:=V2; End;
+ D.PixelSize:=LongInt(D.Width)*D.Height*4; D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGBE:=PPNBytes(JDAllocate(D.PixelSize)); D.RGB:=PPNBytes(JDAllocate(D.RGBSize));
+ HRReadHeader:=(D.RGBE<>Nil) And (D.RGB<>Nil);
+End;
+
+Function HROldScan(Var D: THRState): Boolean;
+Var I,J,Shift: Integer; V: Array[0..3] Of Byte; Count: LongInt;
+Begin
+ HROldScan:=False; I:=0; Shift:=0;
+ While I<D.ScanLength Do Begin
+  For J:=0 To 3 Do V[J]:=HRByte(D); If D.Bad Then Exit;
+  If (V[0]=1) And (V[1]=1) And (V[2]=1) Then Begin
+   If (I=0) Or (Shift>16) Then Exit;
+   If V[3]>(LongInt(D.ScanLength-I) Shr Shift) Then Exit;
+   Count:=LongInt(V[3]) Shl Shift;
+   While Count>0 Do Begin D.Scan[I]:=D.Scan[I-1]; Inc(I); Dec(Count); End;
+   Inc(Shift,8);
+  End Else Begin Move(V,D.Scan[I],4); Inc(I); Shift:=0; End;
+ End;
+ HROldScan:=True;
+End;
+
+Function HRScan(Var D: THRState): Boolean;
+Var Start: LongInt; A,B,C,E,Channel,I,N,Value: Integer;
+Begin
+ HRScan:=False; Start:=D.Position;
+ A:=HRByte(D); B:=HRByte(D); C:=HRByte(D); E:=HRByte(D); If D.Bad Then Exit;
+ If (D.ScanLength<8) Or (A<>2) Or (B<>2) Or ((C And 128)<>0) Then Begin
+  D.Position:=Start; HRScan:=HROldScan(D); Exit;
+ End;
+ If LongInt(C)*256+E<>D.ScanLength Then Exit;
+ For Channel:=0 To 3 Do Begin
+  I:=0;
+  While I<D.ScanLength Do Begin
+   N:=HRByte(D); If D.Bad Or (N=0) Then Exit;
+   If N>128 Then Begin
+    Dec(N,128); Value:=HRByte(D);
+    If D.Bad Or (N>D.ScanLength-I) Then Exit;
+    While N>0 Do Begin D.Scan[I,Channel]:=Value; Inc(I); Dec(N); End;
+   End Else Begin
+    If (N>D.ScanLength-I) Or (N>D.Size-D.Position) Then Exit;
+    While N>0 Do Begin D.Scan[I,Channel]:=HRByte(D); Inc(I); Dec(N); End;
+   End;
+  End;
+ End;
+ HRScan:=Not D.Bad;
+End;
+
+Function HRMap(Axis: Char; Negative: Boolean; Index,Size: Integer): Integer;
+Begin
+ If ((Axis='X') And Negative) Or ((Axis='Y') And Not Negative) Then HRMap:=Size-1-Index Else HRMap:=Index;
+End;
+
+Function HRComponent(Var D: THRState; Offset: LongInt; Channel: Integer): Double;
+Var E: Integer;
+Begin
+ E:=D.RGBE^[Offset+3];
+ If E=0 Then HRComponent:=0
+ Else HRComponent:=D.RGBE^[Offset+Channel]*D.Scale[E]/D.Exposure/D.Correction[Channel];
+End;
+
+Function HRRead(Const Name: String; Var D: THRState): Boolean;
+Var F: File; OldMode: Byte; Bytes,N,Offset: LongInt; Scan,Pixel,X,Y,C,E,Display: Integer;
+    Peak,Value: Double;
+Begin
+ HRRead:=False;
+ Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
+ If IOResult<>0 Then Exit;
+ {$I-}
+ D.Size:=FileSize(F);
+ If (D.Size>=24) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin BlockRead(F,D.Data^,D.Size,Bytes); D.Bad:=Bytes<>D.Size; End Else D.Bad:=True;
+ End Else D.Bad:=True;
+ Close(F);
+ {$I+}If IOResult<>0 Then D.Bad:=True;
+ If D.Bad Or Not HRReadHeader(D) Then Exit;
+ For Scan:=0 To D.ScanCount-1 Do Begin
+  If Not HRScan(D) Then Exit;
+  For Pixel:=0 To D.ScanLength-1 Do Begin
+   If D.Axis1='Y' Then Begin Y:=HRMap('Y',D.Negative1,Scan,D.Height); X:=HRMap('X',D.Negative2,Pixel,D.Width); End
+   Else Begin X:=HRMap('X',D.Negative1,Scan,D.Width); Y:=HRMap('Y',D.Negative2,Pixel,D.Height); End;
+   Offset:=(LongInt(Y)*D.Width+X)*4; Move(D.Scan[Pixel],D.RGBE^[Offset],4);
+  End;
+ End;
+ If D.Position<>D.Size Then Exit;
+ { Exposant partage RGBE : mantisse * 2^(E-128-8), sans unite flottante externe. }
+ D.Scale[0]:=0; D.Scale[1]:=Exp(-135*Ln(2));
+ For E:=2 To 255 Do D.Scale[E]:=D.Scale[E-1]*2;
+ Peak:=0;
+ If Not D.CloneDRAW Then For N:=0 To LongInt(D.Width)*D.Height-1 Do
+  For C:=0 To 2 Do Begin Value:=HRComponent(D,N*4,C); If Value>Peak Then Peak:=Value; End;
+ For N:=0 To LongInt(D.Width)*D.Height-1 Do For C:=0 To 2 Do Begin
+  Value:=HRComponent(D,N*4,C);
+  If D.CloneDRAW Then Begin
+   If Value>=255 Then Display:=255 Else If Value<=0 Then Display:=0 Else Display:=Round(Value);
+  End Else Begin
+   If (Value<=0) Or (Peak<=0) Then Display:=0
+   Else If Value>=Peak Then Display:=255
+   Else Display:=Round(255*Exp(Ln(Value/Peak)/2.2));
+  End;
+  D.RGB^[N*3+C]:=Display;
+ End;
+ HRRead:=True;
+End;
+
+Function LoadHDR(FileName: String): Boolean;
+Var D: PHRState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadHDR:=False; Pixels:=Nil; Q:=Nil;
+ D:=PHRState(JDAllocate(SizeOf(THRState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If HRRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=24;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_HDR; ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadHDR:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.RGBE<>Nil Then FreeMem(D^.RGBE,D^.PixelSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(THRState));
+End;
+
+
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -4525,7 +4791,8 @@ Begin
  If (Ext <> '.BMP') and (Ext <> '.DIB') and
     (Ext <> '.GIF') and (Ext <> '.PNG') and
     (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') and (Ext <> '.WPG') and
-    (Ext <> '.LBM') and (Ext <> '.ILBM') and (Ext <> '.IFF') Then Exit;
+    (Ext <> '.LBM') and (Ext <> '.ILBM') and (Ext <> '.IFF') and
+    (Ext <> '.HDR') and (Ext <> '.RGBE') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -4537,6 +4804,7 @@ Begin
   FMT_XBM: Succeeded := LoadXBM(FileName);
   FMT_WPG: Succeeded := LoadWPG(FileName);
   FMT_LBM: Succeeded := LoadLBM(FileName);
+  FMT_HDR: Succeeded := LoadHDR(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -11527,6 +11795,7 @@ Begin
   FMT_XBM: APFormatName:='XBM';
   FMT_WPG: APFormatName:='WPG';
   FMT_LBM: APFormatName:='LBM/IFF';
+  FMT_HDR: APFormatName:='HDR/RGBE';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -12225,7 +12494,7 @@ Begin
  E:=OFUpper(ExtractFileExt(Name));
  Case Filter Of
   0: OFMatches:=(E='.BMP') Or (E='.DIB') Or (E='.GIF') Or
-                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF');
+                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF') Or (E='.HDR') Or (E='.RGBE');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -12233,6 +12502,7 @@ Begin
   5: OFMatches:=E='.XBM';
   6: OFMatches:=E='.WPG';
   7: OFMatches:=(E='.LBM') Or (E='.ILBM') Or (E='.IFF');
+  8: OFMatches:=(E='.HDR') Or (E='.RGBE');
   Else OFMatches:=True;
  End;
 End;
@@ -12240,7 +12510,7 @@ End;
 Function OFFilterLabel(N: Integer): String;
 Begin
  Case N Of
-  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM';
+  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR';
   1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
   2: OFFilterLabel:='GIF : *.gif';
   3: OFFilterLabel:='PNG : *.png';
@@ -12248,6 +12518,7 @@ Begin
   5: OFFilterLabel:='X Bitmap : *.xbm';
   6: OFFilterLabel:='WordPerfect Graphics : *.wpg';
   7: OFFilterLabel:='IFF / LBM : *.lbm; *.ilbm; *.iff';
+  8: OFFilterLabel:='Radiance HDR : *.hdr; *.rgbe';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -12659,7 +12930,7 @@ Begin
  If DosError<>0 Then Begin D.Notice:='Fichier introuvable ou inaccessible.'; D.Dirty:=True; Exit; End;
  {$IFDEF FPC}FindClose(R);{$ENDIF}
  If Not OFMatches(S,0) Then Begin
-  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM.'; D.Dirty:=True; Exit;
+  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR.'; D.Dirty:=True; Exit;
  End;
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
@@ -12668,7 +12939,7 @@ Procedure OFChooseFilter(Var D: TOFState);
 Var X,Y,W,I,N,MX,MY,B,Prev: Integer; K,E: Char; Done,Accept: Boolean; MaxFilter: Integer; OldName: String; PopupHeight: Integer;
 Begin
  X:=D.X+38; Y:=D.Y+120; W:=D.W-76;
- N:=D.Filter; MaxFilter:=9; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
+ N:=D.Filter; MaxFilter:=10; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
  PopupHeight:=50+MaxFilter*21;
  GetMouseStateLocal(MX,MY,Prev);
  Repeat
@@ -12777,7 +13048,7 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM : ouverture uniquement.';
+  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -13917,13 +14188,13 @@ BEGIN
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
-  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm]');
+  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
   WriteLn(' - Support de la souris (Int 33h / PtcMouse)');
   WriteLn(' - Outils de dessin: Crayon, Pinceau, A'+#130+'rographe, Ligne, Rectangle, Ellipse...');
-  WriteLn(' - Support des formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM)');
+  WriteLn(' - Formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM), HDR (RGBE)');
   WriteLn(' - Support de la transparence pour GIF et PNG');
   WriteLn(' - Redimensionnement et rognage d''image');
   WriteLn(' - Support de 2 a 32 bits de profondeur de couleur');

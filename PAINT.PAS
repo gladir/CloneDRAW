@@ -1864,503 +1864,1593 @@ Begin
  LoadBMP := True;
 End;
 
-Function LoadGIF(FileName: String): Boolean;
-Var
- F: File;
- Header: TGIFHeader;
- BytesRead: Word;
- GlobalPalette: Array[0..255, 0..2] of Byte;
- PaletteSize: Integer;
- Flags, BackgroundIdx: Byte;
- HasGlobalPalette: Boolean;
- ColorResolution: Byte;
- BlockType: Byte;
- ImageDescriptor: Record
-  Left, Top, Width, Height: Word;
-  Flags: Byte;
+{ Decodeur GIF87a/GIF89a integre, conforme a la structure GIF89a et a son
+  annexe F : LZW a codes de 3..12 bits, Clear, EOI et dictionnaire plein.
+  Le document importe la premiere image d'un GIF anime, comme image fixe.
+  Tout est prepare hors du document ; aucune mutation en cas de refus. }
+Type
+ TGFBytes = Array[0..134217727] Of Byte;
+ PGFBytes = ^TGFBytes;
+ TGFState = Record
+  Data: PGFBytes;
+  Size,Position: LongInt;
+  Bad,HaveImage,HaveGlobal,Transparent: Boolean;
+  Width,Height,GlobalCount,ColorCount,BackgroundIndex,TransparentIndex: Integer;
+  GlobalPalette,Colors: TPalette;
+  Background: TRGBColor;
+  ImageLeft,ImageTop,ImageWidth,ImageHeight: Integer;
+  Interlaced: Boolean;
+  Frame: PGFBytes;
+  FrameSize,Produced: LongInt;
+  Row,Column,Pass: Integer;
+  BlockLeft,BitCount: Integer;
+  BitBuffer: LongInt;
+  Prefix: Array[0..4095] Of Word;
+  Suffix: Array[0..4095] Of Byte;
+  Stack: Array[0..4096] Of Byte;
  End;
- LZWMinCodeSize: Byte;
- SubBlockSize: Byte;
- CompressedData: Array[0..255] of Byte;
- I, X, Y: Integer;
- PixelColor: Byte;
- ClearCode, EndCode: Integer;
+ PGFState = ^TGFState;
+
+Function JDAllocate(Size: LongInt): Pointer; Forward;
+
+Function GFByte(Var D: TGFState): Integer;
 Begin
- LoadGIF := False;
-
- Assign(F, FileName);
- {$I-}
- Reset(F, 1);
- {$I+}
- If IOResult <> 0 Then Exit;
-
- { Lire l'en-tête GIF }
- BlockRead(F, Header, SizeOf(TGIFHeader), BytesRead);
- If BytesRead <> SizeOf(TGIFHeader) Then Begin
-  Close(F);
-  Exit;
- End;
-
- { Vérifier la signature }
- If (Copy(Header.Signature, 1, 3) <> 'GIF') Then Begin
-  Close(F);
-  Exit;
- End;
-
- { Mettre à jour les informations de l'image }
- ImageBuffer.Width := Header.ScreenWidth;
- ImageBuffer.Height := Header.ScreenHeight;
- ImageBuffer.FileName := FileName;
- ImageBuffer.Format := FMT_GIF;
- If Not ZPrepareBuffer(ImageBuffer.Width,ImageBuffer.Height,Header.BackgroundColor) Then Begin
-  Close(F); Exit;
- End;
- ImageBuffer.Modified := False;
-
- { Analyser les drapeaux }
- Flags := Header.Flags;
- HasGlobalPalette := (Flags and $80) <> 0;
- ColorResolution := ((Flags shr 4) and $07) + 1;
- PaletteSize := 1 shl ((Flags and $07) + 1);
-
- { Vérifier la transparence (GIF89a) }
- If Copy(Header.Signature, 1, 6) = GIF89_SIGNATURE Then Begin
-  ImageBuffer.HasTransparency := True;
- End Else Begin
-  ImageBuffer.HasTransparency := False;
- End;
-
- { Lire la palette globale si présente }
- If HasGlobalPalette Then Begin
-  BlockRead(F, GlobalPalette, PaletteSize * 3, BytesRead);
-  If BytesRead <> PaletteSize * 3 Then Begin
-   Close(F);
-   Exit;
-  End;
-
-  { Appliquer la palette au système graphique }
-  For I := 0 to PaletteSize - 1 do Begin
-   ImageBuffer.Palette[I].R := GlobalPalette[I, 0];
-   ImageBuffer.Palette[I].G := GlobalPalette[I, 1];
-   ImageBuffer.Palette[I].B := GlobalPalette[I, 2];
-   SetRGBPalette(I, GlobalPalette[I, 0] shr 2,
-                    GlobalPalette[I, 1] shr 2,
-                    GlobalPalette[I, 2] shr 2);
-  End;
- End;
-
- { Effacer la zone de dessin }
- SetFillStyle(SolidFill, Header.BackgroundColor);
- Bar(CanvasX, CanvasY, CanvasX + CanvasWidth - 1, CanvasY + CanvasHeight - 1);
-
- { Lire les blocs jusqu'au descripteur d'image }
- Repeat
-  BlockRead(F, BlockType, 1, BytesRead);
-  If BytesRead <> 1 Then Begin
-   Close(F);
-   Exit;
-  End;
-
-  Case BlockType of
-   $21: Begin { Extension block }
-    BlockRead(F, SubBlockSize, 1, BytesRead); { Extension type }
-    { Sauter les sous-blocs de l'extension }
-    Repeat
-     BlockRead(F, SubBlockSize, 1, BytesRead);
-     If SubBlockSize > 0 Then
-      Seek(F, FilePos(F) + SubBlockSize);
-    Until SubBlockSize = 0;
-   End;
-
-   $2C: Begin { Image descriptor }
-    BlockRead(F, ImageDescriptor, 9, BytesRead);
-    If BytesRead <> 9 Then Begin
-     Close(F);
-     Exit;
-    End;
-
-    { Lire le code minimum LZW }
-    BlockRead(F, LZWMinCodeSize, 1, BytesRead);
-
-    { Lire et décoder les données compressées LZW }
-    ClearCode := 1 shl LZWMinCodeSize;
-    EndCode := ClearCode + 1;
-
-    { Lecture simplifiée: sauter les données compressées }
-    { Une implémentation complète nécessiterait un décodeur LZW complet }
-    Y := 0;
-    X := 0;
-    Repeat
-     BlockRead(F, SubBlockSize, 1, BytesRead);
-     If SubBlockSize > 0 Then Begin
-      BlockRead(F, CompressedData, SubBlockSize, BytesRead);
-      { Simulation simplifiée: utiliser les octets comme indices de couleur }
-      For I := 0 to SubBlockSize - 1 do Begin
-       If (X < ImageDescriptor.Width) and (Y < ImageDescriptor.Height) Then Begin
-        PixelColor := CompressedData[I] mod PaletteSize;
-        ZPutImagePixel(ImageDescriptor.Left+X,ImageDescriptor.Top+Y,PixelColor);
-        If (ImageDescriptor.Left + X < CanvasWidth) and
-           (ImageDescriptor.Top + Y < CanvasHeight) Then Begin
-         PutPixel(CanvasX + ImageDescriptor.Left + X,
-                  CanvasY + ImageDescriptor.Top + Y, PixelColor);
-        End;
-        Inc(X);
-        If X >= ImageDescriptor.Width Then Begin
-         X := 0;
-         Inc(Y);
-        End;
-       End;
-      End;
-     End;
-    Until SubBlockSize = 0;
-   End;
-
-   $3B: Begin { Trailer }
-    { Fin du fichier GIF }
-   End;
-  End;
- Until (BlockType = $3B) or (BytesRead = 0);
-
- Close(F);
- LoadGIF := True;
+ GFByte:=0;
+ If D.Bad Then Exit;
+ If D.Position>=D.Size Then Begin D.Bad:=True; Exit; End;
+ GFByte:=D.Data^[D.Position]; Inc(D.Position);
 End;
 
-Function LoadPNG(FileName: String): Boolean;
-Var
- F: File;
- Signature: Array[0..7] of Byte;
- BytesRead: Word;
- I, X, Y: Integer;
- ValidSig: Boolean;
- ChunkLength: LongInt;
- ChunkType: Array[0..3] of Char;
- ChunkCRC: LongInt;
- IHDRData: Record
-  Width, Height: LongInt;
-  BitDepth, ColorType: Byte;
-  Compression, Filter, Interlace: Byte;
- End;
- PNGPalette: Array[0..255, 0..2] of Byte;
- PaletteSize: Integer;
- DataBuffer: Array[0..4095] of Byte;
- PixelColor: Byte;
- Done: Boolean;
-
- Function SwapLong(L: LongInt): LongInt;
- Var
-  B: Array[0..3] of Byte absolute L;
-  R: Array[0..3] of Byte;
-  Resultat:LongInt;
- Begin
-  R[0] := B[3];
-  R[1] := B[2];
-  R[2] := B[1];
-  R[3] := B[0];
-  Move(R, Resultat, 4);
-  SwapLong:=Resultat;
- End;
-
+Function GFWord(Var D: TGFState): LongInt;
+Var LoByte: Integer;
 Begin
- LoadPNG := False;
+ LoByte:=GFByte(D); GFWord:=LoByte+LongInt(GFByte(D))*256;
+End;
 
- Assign(F, FileName);
+Procedure GFReadPalette(Var D: TGFState; Var Colors: TPalette; Count: Integer);
+Var I: Integer;
+Begin
+ If (Count<2) Or (Count>256) Or (D.Size-D.Position<LongInt(Count)*3) Then Begin D.Bad:=True; Exit; End;
+ FillChar(Colors,SizeOf(Colors),0);
+ For I:=0 To Count-1 Do Begin
+  Colors[I].R:=GFByte(D); Colors[I].G:=GFByte(D); Colors[I].B:=GFByte(D);
+  Colors[I].A:=255;
+ End;
+End;
+
+Procedure GFSkipBlocks(Var D: TGFState);
+Var N: Integer;
+Begin
+ Repeat
+  N:=GFByte(D);
+  If D.Bad Then Exit;
+  If N>D.Size-D.Position Then Begin D.Bad:=True; Exit; End;
+  Inc(D.Position,N);
+ Until N=0;
+End;
+
+Function GFDataByte(Var D: TGFState): Integer;
+Begin
+ GFDataByte:=-1;
+ If D.Bad Then Exit;
+ If D.BlockLeft=0 Then Begin
+  D.BlockLeft:=GFByte(D);
+  If D.Bad Or (D.BlockLeft=0) Then Exit;
+  If D.BlockLeft>D.Size-D.Position Then Begin D.Bad:=True; Exit; End;
+ End;
+ GFDataByte:=GFByte(D); Dec(D.BlockLeft);
+End;
+
+Function GFCode(Var D: TGFState; Bits: Integer): Integer;
+Var B: Integer;
+Begin
+ GFCode:=0;
+ While (D.BitCount<Bits) And Not D.Bad Do Begin
+  B:=GFDataByte(D);
+  If B<0 Then Begin D.Bad:=True; Exit; End;
+  D.BitBuffer:=D.BitBuffer Or (LongInt(B) Shl D.BitCount);
+  Inc(D.BitCount,8);
+ End;
+ GFCode:=D.BitBuffer And ((1 Shl Bits)-1);
+ D.BitBuffer:=D.BitBuffer Shr Bits; Dec(D.BitCount,Bits);
+End;
+
+Procedure GFEmit(Var D: TGFState; Index: Integer);
+Const Starts: Array[0..3] Of Byte = (0,4,2,1);
+      Steps: Array[0..3] Of Byte = (8,8,4,2);
+Begin
+ If D.Bad Then Exit;
+ If (Index<0) Or (Index>=D.ColorCount) Or (D.Produced>=D.FrameSize) Or
+    (D.Row<0) Or (D.Row>=D.ImageHeight) Then Begin D.Bad:=True; Exit; End;
+ D.Frame^[LongInt(D.Row)*D.ImageWidth+D.Column]:=Index;
+ Inc(D.Produced); Inc(D.Column);
+ If D.Column=D.ImageWidth Then Begin
+  D.Column:=0;
+  If Not D.Interlaced Then Inc(D.Row)
+  Else Begin
+   Inc(D.Row,Steps[D.Pass]);
+   While (D.Row>=D.ImageHeight) And (D.Pass<3) Do Begin
+    Inc(D.Pass); D.Row:=Starts[D.Pass];
+   End;
+  End;
+ End;
+End;
+
+Procedure GFLZW(Var D: TGFState; Minimum: Integer);
+Var ClearCode,EndCode,NextCode,CodeSize,OldCode,Code,InputCode: Integer;
+    First,Top,I,Depth: Integer; SawClear,Ended: Boolean;
+Begin
+ If (Minimum<2) Or (Minimum>8) Then Begin D.Bad:=True; Exit; End;
+ ClearCode:=1 Shl Minimum; EndCode:=ClearCode+1; NextCode:=EndCode+1;
+ CodeSize:=Minimum+1; OldCode:=-1; First:=0; SawClear:=False; Ended:=False;
+ D.BlockLeft:=0; D.BitCount:=0; D.BitBuffer:=0;
+ D.Row:=0; D.Column:=0; D.Pass:=0; D.Produced:=0;
+ Repeat
+  Code:=GFCode(D,CodeSize); If D.Bad Then Exit;
+  If Code=ClearCode Then Begin
+   CodeSize:=Minimum+1; NextCode:=EndCode+1; OldCode:=-1; SawClear:=True;
+  End Else If Code=EndCode Then Begin Ended:=True; Break; End
+  Else Begin
+   If Not SawClear Then Begin D.Bad:=True; Exit; End;
+   InputCode:=Code; Top:=0;
+   If OldCode<0 Then Begin
+    If Code>=ClearCode Then Begin D.Bad:=True; Exit; End;
+    First:=Code; GFEmit(D,Code); OldCode:=Code;
+   End Else Begin
+    If Code>=NextCode Then Begin
+     If (Code<>NextCode) Or (NextCode>=4096) Then Begin D.Bad:=True; Exit; End;
+     D.Stack[Top]:=First; Inc(Top); Code:=OldCode;
+    End;
+    Depth:=0;
+    While Code>=ClearCode Do Begin
+     If (Code<=EndCode) Or (Code>=NextCode) Or (Code>=4096) Or
+        (Top>=4096) Or (Depth>=4096) Then Begin D.Bad:=True; Exit; End;
+     D.Stack[Top]:=D.Suffix[Code]; Inc(Top);
+     { Toute entree ne peut referencer qu'une entree plus ancienne. }
+     I:=D.Prefix[Code]; If I>=Code Then Begin D.Bad:=True; Exit; End;
+     Code:=I; Inc(Depth);
+    End;
+    First:=Code; D.Stack[Top]:=First; Inc(Top);
+    For I:=Top-1 DownTo 0 Do Begin GFEmit(D,D.Stack[I]); If D.Bad Then Exit; End;
+    If NextCode<4096 Then Begin
+     D.Prefix[NextCode]:=OldCode; D.Suffix[NextCode]:=First; Inc(NextCode);
+     If (NextCode=(1 Shl CodeSize)) And (CodeSize<12) Then Inc(CodeSize);
+    End;
+    OldCode:=InputCode;
+   End;
+  End;
+ Until D.Bad;
+ If Not Ended Or (D.Produced<>D.FrameSize) Then Begin D.Bad:=True; Exit; End;
+ { EOI peut preceder la fin du dernier sous-bloc. Consommer le remplissage
+   puis le terminateur, sans le confondre avec un marqueur du conteneur. }
+ If D.BlockLeft>D.Size-D.Position Then Begin D.Bad:=True; Exit; End;
+ Inc(D.Position,D.BlockLeft); D.BlockLeft:=0;
+ GFSkipBlocks(D);
+End;
+
+Procedure GFReadControl(Var D: TGFState);
+Var Flags,Index: Integer;
+Begin
+ If GFByte(D)<>4 Then Begin D.Bad:=True; Exit; End;
+ Flags:=GFByte(D); GFWord(D); Index:=GFByte(D);
+ If GFByte(D)<>0 Then D.Bad:=True;
+ If (Flags And $E0)<>0 Then D.Bad:=True;
+ D.Transparent:=(Flags And 1)<>0; D.TransparentIndex:=Index;
+End;
+
+Procedure GFReadFrame(Var D: TGFState);
+Var Left,Top,W,H,Flags,Minimum,LocalCount: Integer;
+Begin
+ Left:=GFWord(D); Top:=GFWord(D); W:=GFWord(D); H:=GFWord(D); Flags:=GFByte(D);
+ If D.Bad Then Exit;
+ If (W<1) Or (H<1) Or (Left<0) Or (Top<0) Or
+    (LongInt(Left)+W>D.Width) Or (LongInt(Top)+H>D.Height) Or
+    ((Flags And $18)<>0) Then Begin D.Bad:=True; Exit; End;
+ LocalCount:=0; If (Flags And $80)<>0 Then LocalCount:=1 Shl ((Flags And 7)+1);
+ If D.HaveImage Then Begin
+  { PAINT edite une image fixe : conserver la premiere trame, mais verifier
+    les bornes des trames suivantes et la terminaison du conteneur. }
+  If LocalCount>0 Then Begin
+   If D.Size-D.Position<LocalCount*3 Then Begin D.Bad:=True; Exit; End;
+   Inc(D.Position,LocalCount*3);
+  End;
+  Minimum:=GFByte(D); If (Minimum<2) Or (Minimum>8) Then Begin D.Bad:=True; Exit; End;
+  GFSkipBlocks(D); Exit;
+ End;
+ D.ImageLeft:=Left; D.ImageTop:=Top; D.ImageWidth:=W; D.ImageHeight:=H;
+ D.Interlaced:=(Flags And $40)<>0;
+ If LocalCount>0 Then Begin
+  D.ColorCount:=LocalCount; GFReadPalette(D,D.Colors,LocalCount);
+ End Else If D.HaveGlobal Then Begin
+  D.ColorCount:=D.GlobalCount; D.Colors:=D.GlobalPalette;
+ End Else Begin D.Bad:=True; Exit; End;
+ If D.Bad Then Exit;
+ If D.Transparent And (D.TransparentIndex>=D.ColorCount) Then Begin D.Bad:=True; Exit; End;
+ D.FrameSize:=LongInt(W)*H; D.Frame:=PGFBytes(JDAllocate(D.FrameSize));
+ If D.Frame=Nil Then Begin D.Bad:=True; Exit; End;
+ Minimum:=GFByte(D); GFLZW(D,Minimum);
+ If Not D.Bad Then D.HaveImage:=True;
+End;
+
+Function GFDecode(Const FileName: String; Var D: PGFState): Boolean;
+Var F: File; Bytes: LongInt; OldMode: Byte; I,Flags,BlockType,LabelID: Integer;
+    Signature: String; Ended: Boolean;
+Begin
+ GFDecode:=False;
+ D:=PGFState(JDAllocate(SizeOf(TGFState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0); Ended:=False;
+ Assign(F,FileName); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
+ If IOResult<>0 Then Begin D^.Bad:=True; Exit; End;
  {$I-}
- Reset(F, 1);
+ D^.Size:=FileSize(F);
+ If (D^.Size>=14) And (D^.Size<=134217728) Then Begin
+  D^.Data:=PGFBytes(JDAllocate(D^.Size));
+  If D^.Data<>Nil Then Begin BlockRead(F,D^.Data^,D^.Size,Bytes); D^.Bad:=Bytes<>D^.Size; End
+  Else D^.Bad:=True;
+ End Else D^.Bad:=True;
+ Close(F);
  {$I+}
- If IOResult <> 0 Then Exit;
-
- { Lire la signature PNG }
- BlockRead(F, Signature, 8, BytesRead);
- If BytesRead <> 8 Then Begin
-  Close(F);
-  Exit;
- End;
-
- { Vérifier la signature }
- ValidSig := True;
- For I := 0 to 7 do
-  If Signature[I] <> PNG_SIGNATURE[I] Then ValidSig := False;
-
- If Not ValidSig Then Begin
-  Close(F);
-  Exit;
- End;
-
- ImageBuffer.FileName := FileName;
- ImageBuffer.Format := FMT_PNG;
- ImageBuffer.Modified := False;
- ImageBuffer.HasTransparency := True; { PNG supporte la transparence }
- PaletteSize := 0;
-
- { Lire les chunks PNG }
- Done := False;
- While Not Done do Begin
-  { Lire la longueur du chunk }
-  BlockRead(F, ChunkLength, 4, BytesRead);
-  If BytesRead <> 4 Then Begin
-   Close(F);
-   Exit;
-  End;
-  ChunkLength := SwapLong(ChunkLength);
-
-  { Lire le type du chunk }
-  BlockRead(F, ChunkType, 4, BytesRead);
-  If BytesRead <> 4 Then Begin
-   Close(F);
-   Exit;
-  End;
-
-  { Traiter selon le type de chunk }
-  If ChunkType = 'IHDR' Then Begin
-   { Lire les informations de l'en-tête }
-   BlockRead(F, IHDRData, 13, BytesRead);
-   IHDRData.Width := SwapLong(IHDRData.Width);
-   IHDRData.Height := SwapLong(IHDRData.Height);
-   ImageBuffer.Width := IHDRData.Width;
-   ImageBuffer.Height := IHDRData.Height;
-   ImageBuffer.BitDepth := IHDRData.BitDepth;
-   If Not ZPrepareBuffer(ImageBuffer.Width,ImageBuffer.Height,White) Then Begin
-    Close(F); Exit;
+ If IOResult<>0 Then D^.Bad:=True;
+ If D^.Bad Then Exit;
+ Signature:=''; For I:=1 To 6 Do Signature:=Signature+Chr(GFByte(D^));
+ If (Signature<>GIF87_SIGNATURE) And (Signature<>GIF89_SIGNATURE) Then Begin D^.Bad:=True; Exit; End;
+ D^.Width:=GFWord(D^); D^.Height:=GFWord(D^);
+ If (D^.Width<1) Or (D^.Height<1) Or (D^.Width>MAX_IMAGE_WIDTH) Or
+    (D^.Height>MAX_IMAGE_HEIGHT) Then Begin D^.Bad:=True; Exit; End;
+ Flags:=GFByte(D^); D^.BackgroundIndex:=GFByte(D^); GFByte(D^);
+ D^.HaveGlobal:=(Flags And $80)<>0;
+ If D^.HaveGlobal Then Begin
+  D^.GlobalCount:=1 Shl ((Flags And 7)+1);
+  GFReadPalette(D^,D^.GlobalPalette,D^.GlobalCount);
+  If D^.BackgroundIndex>=D^.GlobalCount Then Begin D^.Bad:=True; Exit; End;
+  D^.Background:=D^.GlobalPalette[D^.BackgroundIndex];
+ End Else Begin D^.Background.R:=255; D^.Background.G:=255; D^.Background.B:=255; D^.Background.A:=255; End;
+ While Not D^.Bad And Not Ended Do Begin
+  BlockType:=GFByte(D^);
+  Case BlockType Of
+   $2C: GFReadFrame(D^);
+   $3B: Ended:=True;
+   $21: Begin
+    LabelID:=GFByte(D^);
+    If (LabelID=$F9) And Not D^.HaveImage Then GFReadControl(D^)
+    Else Begin
+     GFSkipBlocks(D^);
+     { Le controle graphique ne s'applique qu'au prochain rendu. }
+     If (LabelID=$01) And Not D^.HaveImage Then D^.Transparent:=False;
+    End;
    End;
+   Else D^.Bad:=True;
+  End;
+ End;
+ GFDecode:=Not D^.Bad And Ended And D^.HaveImage;
+End;
 
-   { Vérifier le type de couleur pour la transparence }
-   If (IHDRData.ColorType and 4) <> 0 Then
-    ImageBuffer.HasTransparency := True
-   Else
-    ImageBuffer.HasTransparency := False;
+Procedure GFFree(D: PGFState);
+Begin
+ If D=Nil Then Exit;
+ If D^.Frame<>Nil Then FreeMem(D^.Frame,D^.FrameSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TGFState));
+End;
 
-   { Lire le CRC }
-   BlockRead(F, ChunkCRC, 4, BytesRead);
-  End
-  Else If ChunkType = 'PLTE' Then Begin
-   { Lire la palette }
-   PaletteSize := ChunkLength div 3;
-   If PaletteSize > 256 Then PaletteSize := 256;
-   BlockRead(F, PNGPalette, PaletteSize * 3, BytesRead);
+Function GFDistance(Const A,B: TRGBColor): LongInt;
+Var R,G,Blue: LongInt;
+Begin
+ R:=LongInt(A.R)-B.R; G:=LongInt(A.G)-B.G; Blue:=LongInt(A.B)-B.B;
+ GFDistance:=R*R+G*G+Blue*Blue;
+End;
 
-   { Appliquer la palette }
-   For I := 0 to PaletteSize - 1 do Begin
-    ImageBuffer.Palette[I].R := PNGPalette[I, 0];
-    ImageBuffer.Palette[I].G := PNGPalette[I, 1];
-    ImageBuffer.Palette[I].B := PNGPalette[I, 2];
-    SetRGBPalette(I, PNGPalette[I, 0] shr 2,
-                     PNGPalette[I, 1] shr 2,
-                     PNGPalette[I, 2] shr 2);
+Procedure GFMakePalette(Var D: TGFState; Var Palette: TPalette;
+                        Var Map: Array Of Byte; Var BackgroundSlot: Byte);
+Const
+ R: Array[0..15] Of Byte = (0,0,0,0,168,168,168,168,84,84,84,84,252,252,252,252);
+ G: Array[0..15] Of Byte = (0,0,168,168,0,0,84,168,84,84,252,252,84,84,252,252);
+ B: Array[0..15] Of Byte = (0,168,0,168,0,168,0,168,84,252,84,252,84,252,84,252);
+Var Counts: Array[0..256] Of LongInt; Done: Array[0..256] Of Boolean;
+    I,J,N,Best,Slot,Used: Integer; K,Weight,Dist,BestDist: LongInt; C: TRGBColor;
+Begin
+ FillChar(Counts,SizeOf(Counts),0); FillChar(Done,SizeOf(Done),0);
+ FillChar(Palette,SizeOf(Palette),0);
+ For I:=0 To 15 Do Begin Palette[I].R:=R[I]; Palette[I].G:=G[I]; Palette[I].B:=B[I]; Palette[I].A:=255; End;
+ Used:=16;
+ If D.Transparent Then Begin
+  { Le canvas indexe de PAINT ne possede pas de canal alpha par pixel.
+    Les zones transparentes sont composees sur blanc a l'importation. }
+  D.Background.R:=255; D.Background.G:=255; D.Background.B:=255; D.Background.A:=0;
+ End;
+ Counts[256]:=LongInt(D.Width)*D.Height-D.FrameSize;
+ For K:=0 To D.FrameSize-1 Do Begin
+  I:=D.Frame^[K];
+  If D.Transparent And (I=D.TransparentIndex) Then Inc(Counts[256]) Else Inc(Counts[I]);
+ End;
+ { Choisir les couleurs utilisees par frequence. Les couleurs exactes sont
+   conservees tant que les 240 registres disponibles suffisent. }
+ BackgroundSlot:=White;
+ For N:=0 To D.ColorCount Do Begin
+  Best:=-1; Weight:=-1;
+  For I:=0 To D.ColorCount-1 Do If Not Done[I] And (Counts[I]>Weight) Then Begin Best:=I; Weight:=Counts[I]; End;
+  If Not Done[256] And (Counts[256]>Weight) Then Best:=256;
+  If Best<0 Then Break;
+  Done[Best]:=True;
+  If Best=256 Then C:=D.Background Else C:=D.Colors[Best];
+  Slot:=0; BestDist:=MaxLongInt;
+  For J:=0 To Used-1 Do Begin
+   Dist:=GFDistance(C,Palette[J]); If Dist<BestDist Then Begin BestDist:=Dist; Slot:=J; End;
+  End;
+  If (BestDist<>0) And (Used<256) Then Begin
+   Slot:=Used; Palette[Slot]:=C; Palette[Slot].A:=255; Inc(Used);
+  End;
+  If Best=256 Then BackgroundSlot:=Slot Else Map[Best]:=Slot;
+ End;
+End;
+
+Function LoadGIF(FileName: String): Boolean;
+Var D: PGFState; Pixels: PGFBytes; Palette: TPalette; Map: Array[0..255] Of Byte;
+    BackgroundSlot: Byte; X,Y,I,Index: Integer; Dest,Source,Size: LongInt;
+Begin
+ LoadGIF:=False; D:=Nil; Pixels:=Nil;
+ If Not GFDecode(FileName,D) Then Begin GFFree(D); Exit; End;
+ Size:=LongInt(D^.Width)*D^.Height; Pixels:=PGFBytes(JDAllocate(Size));
+ If Pixels<>Nil Then Begin
+  GFMakePalette(D^,Palette,Map,BackgroundSlot); FillChar(Pixels^,Size,BackgroundSlot);
+  For Y:=0 To D^.ImageHeight-1 Do Begin
+   Source:=LongInt(Y)*D^.ImageWidth;
+   Dest:=LongInt(Y+D^.ImageTop)*D^.Width+D^.ImageLeft;
+   For X:=0 To D^.ImageWidth-1 Do Begin
+    Index:=D^.Frame^[Source+X];
+    If Not D^.Transparent Or (Index<>D^.TransparentIndex) Then Pixels^[Dest+X]:=Map[Index];
    End;
+  End;
+  { Commit uniquement apres la lecture et la decompression completes. }
+  If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+  CanvasImage:=PByte(Pixels); Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+  ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+  ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_GIF; ImageBuffer.BitDepth:=8;
+  ImageBuffer.HasTransparency:=D^.Transparent; ImageBuffer.TransparentColor:=D^.Background;
+  ImageBuffer.Modified:=False; ImageBuffer.Palette:=Palette;
+  For I:=0 To 255 Do Begin
+   {$IFDEF FPC}SetRGBPalette(I,Palette[I].R,Palette[I].G,Palette[I].B);
+   {$ELSE}SetRGBPalette(I,Palette[I].R Shr 2,Palette[I].G Shr 2,Palette[I].B Shr 2);{$ENDIF}
+  End;
+  LoadGIF:=True;
+ End;
+ If Pixels<>Nil Then FreeMem(Pixels,Size);
+ GFFree(D);
+End;
 
-   { Lire le CRC }
-   BlockRead(F, ChunkCRC, 4, BytesRead);
-  End
-  Else If ChunkType = 'IDAT' Then Begin
-   { Données compressées de l'image }
-   { Note: PNG utilise DEFLATE/zlib, implémentation simplifiée ici }
 
-   { Effacer la zone de dessin }
-   SetFillStyle(SolidFill, White);
-   Bar(CanvasX, CanvasY, CanvasX + CanvasWidth - 1, CanvasY + CanvasHeight - 1);
+{ PNG integre : conteneur et CRC-32, zlib/Adler-32, DEFLATE (RFC 1950/1951),
+  cinq filtres PNG, types 0/2/3/4/6, echantillons 1/2/4/8/16 bits et Adam7.
+  Aucun appel a zlib, aucune unite image, aucune bibliotheque externe.
+  Les buffers temporaires sont bornes par les dimensions du document. }
+Type
+ TPNBytes = Array[0..150994943] Of Byte;
+ PPNBytes = ^TPNBytes;
+ TPNHuffman = Record
+  Counts: Array[0..15] Of Integer;
+  Symbols: Array[0..287] Of Integer;
+  Total: Integer;
+ End;
+ TPNState = Record
+  FileData,Compressed,Raw,RGB: PPNBytes;
+  FileSize,CompressedSize,RawSize,RGBSize,Position: LongInt;
+  Width,Height,Depth,ColorType,Channels,Interlace,PaletteCount: Integer;
+  Palette: TPalette;
+  Alpha: Array[0..255] Of Byte;
+  Transparent: Array[0..2] Of LongInt;
+  HasTRNS,HasTransparency,Bad: Boolean;
+  CRC: Array[0..255] Of LongWord;
+  InputPosition,InputLimit,OutputPosition: LongInt;
+  BitBuffer: LongInt;
+  BitCount: Integer;
+  Lit,Dist,Code: TPNHuffman;
+ End;
+ PPNState = ^TPNState;
 
-   { Lecture simplifiée: afficher un placeholder }
-   Y := 0;
-   X := 0;
-   While ChunkLength > 0 do Begin
-    If ChunkLength > 4096 Then
-     BlockRead(F, DataBuffer, 4096, BytesRead)
-    Else
-     BlockRead(F, DataBuffer, ChunkLength, BytesRead);
+Function PNBE(P: PPNBytes; Offset: LongInt): LongWord;
+Begin
+ PNBE:=(LongWord(P^[Offset]) Shl 24) Or (LongWord(P^[Offset+1]) Shl 16) Or
+       (LongWord(P^[Offset+2]) Shl 8) Or P^[Offset+3];
+End;
 
-    { Simulation: utiliser les données compressées comme pixels }
-    For I := 0 to BytesRead - 1 do Begin
-     If (X < ImageBuffer.Width) and (Y < ImageBuffer.Height) Then Begin
-      If PaletteSize > 0 Then
-       PixelColor := DataBuffer[I] mod PaletteSize
-      Else
-       PixelColor := DataBuffer[I] mod 16;
+Procedure PNInitCRC(Var D: TPNState);
+Var I,J: Integer; C: LongWord;
+Begin
+ For I:=0 To 255 Do Begin
+  C:=I;
+  For J:=1 To 8 Do If (C And 1)<>0 Then C:=(C Shr 1) Xor $EDB88320 Else C:=C Shr 1;
+  D.CRC[I]:=C;
+ End;
+End;
 
-      ZPutImagePixel(X,Y,PixelColor);
-      If (X < CanvasWidth) and (Y < CanvasHeight) Then
-       PutPixel(CanvasX + X, CanvasY + Y, PixelColor);
+Function PNCRC(Var D: TPNState; Start,Count: LongInt): LongWord;
+Var C: LongWord; I: LongInt;
+Begin
+ C:=$FFFFFFFF;
+ For I:=Start To Start+Count-1 Do C:=D.CRC[(C Xor D.FileData^[I]) And 255] Xor (C Shr 8);
+ PNCRC:=C Xor $FFFFFFFF;
+End;
 
-      Inc(X);
-      If X >= ImageBuffer.Width Then Begin
-       X := 0;
-       Inc(Y);
+Function PNPassSize(Size,Start,Step: Integer): LongInt;
+Begin
+ If Size<=Start Then PNPassSize:=0 Else PNPassSize:=(LongInt(Size)-Start+Step-1) Div Step;
+End;
+
+Function PNExpected(Var D: TPNState): LongInt;
+Const XStart: Array[0..6] Of Byte = (0,4,0,2,0,1,0);
+      YStart: Array[0..6] Of Byte = (0,0,4,0,2,0,1);
+      XStep: Array[0..6] Of Byte = (8,8,4,4,2,2,1);
+      YStep: Array[0..6] Of Byte = (8,8,8,4,4,2,2);
+Var P: Integer; W,H,Total,Row: LongInt;
+Begin
+ Total:=0;
+ If D.Interlace=0 Then Total:=((LongInt(D.Width)*D.Channels*D.Depth+7) Div 8+1)*D.Height
+ Else For P:=0 To 6 Do Begin
+  W:=PNPassSize(D.Width,XStart[P],XStep[P]); H:=PNPassSize(D.Height,YStart[P],YStep[P]);
+  If (W>0) And (H>0) Then Begin Row:=(W*D.Channels*D.Depth+7) Div 8; Inc(Total,(Row+1)*H); End;
+ End;
+ PNExpected:=Total;
+End;
+
+Function PNReadChunks(Const Name: String; Var D: TPNState): Boolean;
+Var F: File; OldMode: Byte; Bytes,Start,Length,ChunkEnd,I: LongInt;
+    Kind: String; N: LongWord; HaveHeader,HavePalette,HaveData,PastData,Ended: Boolean;
+Begin
+ PNReadChunks:=False; HaveHeader:=False; HavePalette:=False;
+ HaveData:=False; PastData:=False; Ended:=False;
+ Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
+ If IOResult<>0 Then Exit;
+ {$I-}
+ D.FileSize:=FileSize(F);
+ If (D.FileSize>=45) And (D.FileSize<=134217728) Then Begin
+  D.FileData:=PPNBytes(JDAllocate(D.FileSize));
+  If D.FileData<>Nil Then Begin BlockRead(F,D.FileData^,D.FileSize,Bytes); D.Bad:=Bytes<>D.FileSize; End
+  Else D.Bad:=True;
+ End Else D.Bad:=True;
+ Close(F);
+ {$I+}
+ If IOResult<>0 Then D.Bad:=True;
+ If D.Bad Then Exit;
+ For I:=0 To 7 Do If D.FileData^[I]<>PNG_SIGNATURE[I] Then Exit;
+ D.Compressed:=PPNBytes(JDAllocate(D.FileSize)); If D.Compressed=Nil Then Exit;
+ PNInitCRC(D); D.Position:=8;
+ While (D.Position<D.FileSize) And Not Ended Do Begin
+  If D.FileSize-D.Position<12 Then Exit;
+  N:=PNBE(D.FileData,D.Position); If N>LongWord(D.FileSize-D.Position-12) Then Exit;
+  Length:=LongInt(N); Start:=D.Position+8; ChunkEnd:=Start+Length;
+  Kind:='';
+  For I:=D.Position+4 To D.Position+7 Do Begin
+   If Not (D.FileData^[I] In [Ord('A')..Ord('Z'),Ord('a')..Ord('z')]) Then Exit;
+   Kind:=Kind+Chr(D.FileData^[I]);
+  End;
+  If (Ord(Kind[3]) And 32)<>0 Then Exit;
+  If PNCRC(D,D.Position+4,Length+4)<>PNBE(D.FileData,ChunkEnd) Then Exit;
+  If Not HaveHeader And (Kind<>'IHDR') Then Exit;
+  If HaveData And (Kind<>'IDAT') Then PastData:=True;
+  If Kind='IHDR' Then Begin
+   If HaveHeader Or (Length<>13) Then Exit;
+   N:=PNBE(D.FileData,Start); If (N=0) Or (N>MAX_IMAGE_WIDTH) Then Exit; D.Width:=N;
+   N:=PNBE(D.FileData,Start+4); If (N=0) Or (N>MAX_IMAGE_HEIGHT) Then Exit; D.Height:=N;
+   D.Depth:=D.FileData^[Start+8]; D.ColorType:=D.FileData^[Start+9];
+   D.Interlace:=D.FileData^[Start+12];
+   If (D.FileData^[Start+10]<>0) Or (D.FileData^[Start+11]<>0) Or (D.Interlace>1) Then Exit;
+   Case D.ColorType Of
+    0: Begin D.Channels:=1; If Not (D.Depth In [1,2,4,8,16]) Then Exit; End;
+    2: Begin D.Channels:=3; If Not (D.Depth In [8,16]) Then Exit; End;
+    3: Begin D.Channels:=1; If Not (D.Depth In [1,2,4,8]) Then Exit; End;
+    4: Begin D.Channels:=2; If Not (D.Depth In [8,16]) Then Exit; End;
+    6: Begin D.Channels:=4; If Not (D.Depth In [8,16]) Then Exit; End;
+    Else Exit;
+   End;
+   HaveHeader:=True;
+  End Else If Kind='PLTE' Then Begin
+   If HavePalette Or HaveData Or D.HasTRNS Or (Length=0) Or (Length>768) Or
+      ((Length Mod 3)<>0) Or (D.ColorType In [0,4]) Then Exit;
+   D.PaletteCount:=Length Div 3;
+   If (D.ColorType=3) And (D.PaletteCount>(1 Shl D.Depth)) Then Exit;
+   For I:=0 To D.PaletteCount-1 Do Begin
+    D.Palette[I].R:=D.FileData^[Start+I*3]; D.Palette[I].G:=D.FileData^[Start+I*3+1];
+    D.Palette[I].B:=D.FileData^[Start+I*3+2]; D.Palette[I].A:=255;
+   End;
+   HavePalette:=True;
+  End Else If Kind='tRNS' Then Begin
+   If D.HasTRNS Or HaveData Then Exit;
+   Case D.ColorType Of
+    0: Begin
+     If Length<>2 Then Exit;
+     D.Transparent[0]:=LongInt(D.FileData^[Start])*256+D.FileData^[Start+1];
+    End;
+    2: Begin
+     If Length<>6 Then Exit;
+     For I:=0 To 2 Do D.Transparent[I]:=LongInt(D.FileData^[Start+I*2])*256+D.FileData^[Start+I*2+1];
+    End;
+    3: Begin
+     If Not HavePalette Or (Length<1) Or (Length>D.PaletteCount) Then Exit;
+     For I:=0 To Length-1 Do D.Alpha[I]:=D.FileData^[Start+I];
+    End;
+    Else Exit;
+   End;
+   D.HasTRNS:=True;
+  End Else If Kind='IDAT' Then Begin
+   If PastData Or ((D.ColorType=3) And Not HavePalette) Then Exit;
+   If Length>D.FileSize-D.CompressedSize Then Exit;
+   If Length>0 Then Move(D.FileData^[Start],D.Compressed^[D.CompressedSize],Length);
+   Inc(D.CompressedSize,Length); HaveData:=True;
+  End Else If Kind='IEND' Then Begin
+   If (Length<>0) Or Not HaveData Or (ChunkEnd+4<>D.FileSize) Then Exit;
+   Ended:=True;
+  End Else If (Ord(Kind[1]) And 32)=0 Then Exit; { Type critique inconnu. }
+  D.Position:=ChunkEnd+4;
+ End;
+ If Not Ended Or (D.CompressedSize<6) Then Exit;
+ D.RawSize:=PNExpected(D);
+ If (D.RawSize<1) Or (D.RawSize>150994944) Then Exit;
+ D.Raw:=PPNBytes(JDAllocate(D.RawSize));
+ PNReadChunks:=D.Raw<>Nil;
+End;
+
+Function PNBits(Var D: TPNState; Count: Integer): LongInt;
+Begin
+ PNBits:=0;
+ If D.Bad Or (Count<0) Or (Count>16) Then Begin D.Bad:=True; Exit; End;
+ While D.BitCount<Count Do Begin
+  If D.InputPosition>=D.InputLimit Then Begin D.Bad:=True; Exit; End;
+  D.BitBuffer:=D.BitBuffer Or (LongInt(D.Compressed^[D.InputPosition]) Shl D.BitCount);
+  Inc(D.InputPosition); Inc(D.BitCount,8);
+ End;
+ PNBits:=D.BitBuffer And ((LongInt(1) Shl Count)-1);
+ D.BitBuffer:=D.BitBuffer Shr Count; Dec(D.BitCount,Count);
+End;
+
+Function PNBuildTree(Var T: TPNHuffman; Const Lengths: Array Of Integer;
+                     Count: Integer; AllowEmpty: Boolean): Boolean;
+Var I,N: Integer; Left: LongInt; Offset: Array[0..15] Of Integer;
+Begin
+ PNBuildTree:=False; FillChar(T,SizeOf(T),0);
+ For I:=0 To Count-1 Do Begin
+  N:=Lengths[I]; If (N<0) Or (N>15) Then Exit;
+  If N>0 Then Begin Inc(T.Counts[N]); Inc(T.Total); End;
+ End;
+ If T.Total=0 Then Begin PNBuildTree:=AllowEmpty; Exit; End;
+ Left:=1; Offset[0]:=0; Offset[1]:=0;
+ For N:=1 To 15 Do Begin
+  Left:=Left*2-T.Counts[N]; If Left<0 Then Exit;
+  If N<15 Then Offset[N+1]:=Offset[N]+T.Counts[N];
+ End;
+ If (Left>0) And Not ((T.Total=1) And (T.Counts[1]=1)) Then Exit;
+ For I:=0 To Count-1 Do Begin
+  N:=Lengths[I];
+  If N>0 Then Begin T.Symbols[Offset[N]]:=I; Inc(Offset[N]); End;
+ End;
+ PNBuildTree:=True;
+End;
+
+Function PNDecodeSymbol(Var D: TPNState; Const T: TPNHuffman): Integer;
+Var Length,Index: Integer; Code,First,Count: LongInt;
+Begin
+ PNDecodeSymbol:=0; Code:=0; First:=0; Index:=0;
+ If T.Total=0 Then Begin D.Bad:=True; Exit; End;
+ For Length:=1 To 15 Do Begin
+  Code:=Code Or PNBits(D,1); If D.Bad Then Exit;
+  Count:=T.Counts[Length];
+  If (Code>=First) And (Code-First<Count) Then Begin
+   PNDecodeSymbol:=T.Symbols[Index+Code-First]; Exit;
+  End;
+  Inc(Index,Count); First:=(First+Count)*2; Code:=Code*2;
+ End;
+ D.Bad:=True;
+End;
+
+Procedure PNFixedTrees(Var D: TPNState);
+Var L: Array[0..287] Of Integer; I: Integer;
+Begin
+ For I:=0 To 143 Do L[I]:=8;
+ For I:=144 To 255 Do L[I]:=9;
+ For I:=256 To 279 Do L[I]:=7;
+ For I:=280 To 287 Do L[I]:=8;
+ If Not PNBuildTree(D.Lit,L,288,False) Then D.Bad:=True;
+ For I:=0 To 31 Do L[I]:=5;
+ If Not PNBuildTree(D.Dist,L,32,False) Then D.Bad:=True;
+End;
+
+Procedure PNDynamicTrees(Var D: TPNState);
+Const Order: Array[0..18] Of Byte = (16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15);
+Var CL: Array[0..18] Of Integer; L: Array[0..319] Of Integer;
+    DistLengths: Array[0..31] Of Integer;
+    HLIT,HDIST,HCLEN,I,N,Symbol,RepeatCount,Value: Integer;
+Begin
+ HLIT:=PNBits(D,5)+257; HDIST:=PNBits(D,5)+1; HCLEN:=PNBits(D,4)+4;
+ If D.Bad Or (HLIT>286) Then Begin D.Bad:=True; Exit; End;
+ FillChar(CL,SizeOf(CL),0);
+ For I:=0 To HCLEN-1 Do CL[Order[I]]:=PNBits(D,3);
+ If Not PNBuildTree(D.Code,CL,19,False) Then Begin D.Bad:=True; Exit; End;
+ I:=0; N:=HLIT+HDIST;
+ While (I<N) And Not D.Bad Do Begin
+  Symbol:=PNDecodeSymbol(D,D.Code);
+  If Symbol<=15 Then Begin L[I]:=Symbol; Inc(I); End
+  Else Begin
+   Value:=0;
+   Case Symbol Of
+    16: Begin
+     If I=0 Then Begin D.Bad:=True; Exit; End;
+     Value:=L[I-1]; RepeatCount:=PNBits(D,2)+3;
+    End;
+    17: RepeatCount:=PNBits(D,3)+3;
+    18: RepeatCount:=PNBits(D,7)+11;
+    Else Begin D.Bad:=True; Exit; End;
+   End;
+   If RepeatCount>N-I Then Begin D.Bad:=True; Exit; End;
+   While RepeatCount>0 Do Begin L[I]:=Value; Inc(I); Dec(RepeatCount); End;
+  End;
+ End;
+ If D.Bad Or (L[256]=0) Then Begin D.Bad:=True; Exit; End;
+ If Not PNBuildTree(D.Lit,L,HLIT,False) Then Begin D.Bad:=True; Exit; End;
+ For I:=0 To HDIST-1 Do DistLengths[I]:=L[HLIT+I];
+ If Not PNBuildTree(D.Dist,DistLengths,HDIST,True) Then D.Bad:=True;
+End;
+
+Procedure PNInflateCodes(Var D: TPNState);
+Const LengthBase: Array[0..28] Of Integer =
+  (3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258);
+ LengthExtra: Array[0..28] Of Byte =
+  (0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0);
+ DistanceBase: Array[0..29] Of LongInt =
+  (1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577);
+ DistanceExtra: Array[0..29] Of Byte =
+  (0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13);
+Var Symbol,N,I: Integer; Length,Distance: LongInt;
+Begin
+ Repeat
+  Symbol:=PNDecodeSymbol(D,D.Lit); If D.Bad Then Exit;
+  If Symbol<256 Then Begin
+   If D.OutputPosition>=D.RawSize Then Begin D.Bad:=True; Exit; End;
+   D.Raw^[D.OutputPosition]:=Symbol; Inc(D.OutputPosition);
+  End Else If Symbol=256 Then Exit
+  Else Begin
+   If Symbol>285 Then Begin D.Bad:=True; Exit; End;
+   N:=Symbol-257; Length:=LengthBase[N]+PNBits(D,LengthExtra[N]);
+   Symbol:=PNDecodeSymbol(D,D.Dist); If D.Bad Then Exit;
+   If Symbol>29 Then Begin D.Bad:=True; Exit; End;
+   Distance:=DistanceBase[Symbol]+PNBits(D,DistanceExtra[Symbol]);
+   If D.Bad Or (Distance>D.OutputPosition) Or (Length>D.RawSize-D.OutputPosition) Then Begin D.Bad:=True; Exit; End;
+   For I:=1 To Length Do Begin
+    D.Raw^[D.OutputPosition]:=D.Raw^[D.OutputPosition-Distance]; Inc(D.OutputPosition);
+   End;
+  End;
+ Until D.Bad;
+End;
+
+Function PNInflate(Var D: TPNState): Boolean;
+Var CMF,FLG,FinalBlock,BlockType: Integer; N,InverseN,I: LongInt; A,B: LongWord;
+Begin
+ PNInflate:=False; CMF:=D.Compressed^[0]; FLG:=D.Compressed^[1];
+ If ((CMF And 15)<>8) Or ((CMF Shr 4)>7) Or (((LongInt(CMF)*256+FLG) Mod 31)<>0) Or
+    ((FLG And 32)<>0) Then Exit;
+ D.InputPosition:=2; D.InputLimit:=D.CompressedSize-4;
+ Repeat
+  FinalBlock:=PNBits(D,1); BlockType:=PNBits(D,2);
+  If D.Bad Then Exit;
+  Case BlockType Of
+   0: Begin
+    D.BitCount:=0; D.BitBuffer:=0;
+    N:=PNBits(D,16); InverseN:=PNBits(D,16);
+    If D.Bad Or ((N Xor InverseN)<>65535) Or (N>D.RawSize-D.OutputPosition) Or
+       (N>D.InputLimit-D.InputPosition) Then Exit;
+    If N>0 Then Move(D.Compressed^[D.InputPosition],D.Raw^[D.OutputPosition],N);
+    Inc(D.InputPosition,N); Inc(D.OutputPosition,N);
+   End;
+   1: Begin PNFixedTrees(D); If Not D.Bad Then PNInflateCodes(D); End;
+   2: Begin PNDynamicTrees(D); If Not D.Bad Then PNInflateCodes(D); End;
+   Else Exit;
+  End;
+  If D.Bad Then Exit;
+ Until FinalBlock<>0;
+ If (D.OutputPosition<>D.RawSize) Or (D.InputPosition<>D.InputLimit) Then Exit;
+ A:=1; B:=0;
+ For I:=0 To D.RawSize-1 Do Begin
+  A:=(A+D.Raw^[I]) Mod 65521; B:=(B+A) Mod 65521;
+ End;
+ PNInflate:=((B Shl 16) Or A)=PNBE(D.Compressed,D.CompressedSize-4);
+End;
+
+Function PNPaeth(A,B,C: Integer): Integer;
+Var P,DA,DB,DC: Integer;
+Begin
+ P:=A+B-C; DA:=Abs(P-A); DB:=Abs(P-B); DC:=Abs(P-C);
+ If (DA<=DB) And (DA<=DC) Then PNPaeth:=A Else If DB<=DC Then PNPaeth:=B Else PNPaeth:=C;
+End;
+
+Function PNSample(Var D: TPNState; Row,Sample: LongInt): LongInt;
+Var Offset,Shift: LongInt;
+Begin
+ If D.Depth=8 Then PNSample:=D.Raw^[Row+Sample]
+ Else If D.Depth=16 Then Begin
+  Offset:=Row+Sample*2; PNSample:=LongInt(D.Raw^[Offset])*256+D.Raw^[Offset+1];
+ End Else Begin
+  Offset:=Row+(Sample*D.Depth Div 8); Shift:=8-D.Depth-(Sample*D.Depth Mod 8);
+  PNSample:=(D.Raw^[Offset] Shr Shift) And ((1 Shl D.Depth)-1);
+ End;
+End;
+
+Function PNReconstruct(Var D: TPNState): Boolean;
+Const XS: Array[0..6] Of Byte = (0,4,0,2,0,1,0);
+ YS: Array[0..6] Of Byte = (0,0,4,0,2,0,1);
+ DX: Array[0..6] Of Byte = (8,8,4,4,2,2,1);
+ DY: Array[0..6] Of Byte = (8,8,8,4,4,2,2);
+Var Pass,LastPass,StartX,StartY,StepX,StepY,Filter,BPP,A,B,C,Pred: Integer;
+    W,H,RowBytes,Position,Previous,Row,X,Y,I,Dest,Sample,MaxSample: LongInt;
+    R,G,Blue,Alpha,Value: LongInt;
+Begin
+ PNReconstruct:=False; D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ Position:=0; LastPass:=0; If D.Interlace=1 Then LastPass:=6;
+ BPP:=(D.Channels*D.Depth+7) Div 8; If BPP<1 Then BPP:=1;
+ MaxSample:=(LongInt(1) Shl D.Depth)-1;
+ For Pass:=0 To LastPass Do Begin
+  If D.Interlace=0 Then Begin StartX:=0; StartY:=0; StepX:=1; StepY:=1; End
+  Else Begin StartX:=XS[Pass]; StartY:=YS[Pass]; StepX:=DX[Pass]; StepY:=DY[Pass]; End;
+  W:=PNPassSize(D.Width,StartX,StepX); H:=PNPassSize(D.Height,StartY,StepY);
+  If (W>0) And (H>0) Then Begin
+   RowBytes:=(W*D.Channels*D.Depth+7) Div 8; Previous:=-1;
+   For Y:=0 To H-1 Do Begin
+    If D.RawSize-Position<RowBytes+1 Then Exit;
+    Filter:=D.Raw^[Position]; Inc(Position); Row:=Position;
+    If Filter>4 Then Exit;
+    For I:=0 To RowBytes-1 Do Begin
+     A:=0; B:=0; C:=0;
+     If I>=BPP Then A:=D.Raw^[Row+I-BPP];
+     If Previous>=0 Then Begin
+      B:=D.Raw^[Previous+I]; If I>=BPP Then C:=D.Raw^[Previous+I-BPP];
+     End;
+     Case Filter Of
+      0: Pred:=0;
+      1: Pred:=A;
+      2: Pred:=B;
+      3: Pred:=(A+B) Div 2;
+      Else Pred:=PNPaeth(A,B,C);
+     End;
+     D.Raw^[Row+I]:=(Integer(D.Raw^[Row+I])+Pred) And 255;
+    End;
+    For X:=0 To W-1 Do Begin
+     Sample:=X*D.Channels; Value:=PNSample(D,Row,Sample); R:=Value; G:=Value; Blue:=Value; Alpha:=MaxSample;
+     Case D.ColorType Of
+      0: If D.HasTRNS And (Value=D.Transparent[0]) Then Alpha:=0;
+      2,6: Begin
+       G:=PNSample(D,Row,Sample+1); Blue:=PNSample(D,Row,Sample+2);
+       If D.ColorType=6 Then Alpha:=PNSample(D,Row,Sample+3)
+       Else If D.HasTRNS And (R=D.Transparent[0]) And (G=D.Transparent[1]) And (Blue=D.Transparent[2]) Then Alpha:=0;
       End;
+      3: Begin
+       If Value>=D.PaletteCount Then Exit;
+       R:=D.Palette[Value].R; G:=D.Palette[Value].G; Blue:=D.Palette[Value].B; Alpha:=D.Alpha[Value];
+      End;
+      4: Alpha:=PNSample(D,Row,Sample+1);
+     End;
+     If D.ColorType<>3 Then Begin
+      R:=(R*255+MaxSample Div 2) Div MaxSample; G:=(G*255+MaxSample Div 2) Div MaxSample;
+      Blue:=(Blue*255+MaxSample Div 2) Div MaxSample; Alpha:=(Alpha*255+MaxSample Div 2) Div MaxSample;
+     End;
+     If Alpha<255 Then Begin
+      D.HasTransparency:=True;
+      { Le canvas indexe est opaque : composer l'alpha sur fond blanc. }
+      R:=(R*Alpha+255*(255-Alpha)+127) Div 255;
+      G:=(G*Alpha+255*(255-Alpha)+127) Div 255;
+      Blue:=(Blue*Alpha+255*(255-Alpha)+127) Div 255;
+     End;
+     Dest:=((LongInt(StartY)+Y*StepY)*D.Width+StartX+X*StepX)*3;
+     D.RGB^[Dest]:=R; D.RGB^[Dest+1]:=G; D.RGB^[Dest+2]:=Blue;
+    End;
+    Previous:=Row; Inc(Position,RowBytes);
+   End;
+  End;
+ End;
+ PNReconstruct:=Position=D.RawSize;
+End;
+
+Procedure PNFree(D: PPNState);
+Begin
+ If D=Nil Then Exit;
+ If D^.FileData<>Nil Then FreeMem(D^.FileData,D^.FileSize);
+ If D^.Compressed<>Nil Then FreeMem(D^.Compressed,D^.FileSize);
+ If D^.Raw<>Nil Then FreeMem(D^.Raw,D^.RawSize);
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ FreeMem(D,SizeOf(TPNState));
+End;
+
+
+{ Decodeur JPEG integre. Structure du flux et decodage Huffman selon
+  ITU-T T.81, annexes B, C, F et G (JPEG sequentiel et progressif 8 bits).
+  Aucune unite image, bibliotheque externe ou API Windows n'est utilisee.
+  Les marqueurs, tables, indices et allocations sont controles avant acces. }
+Const
+ JDZigZag: Array[0..63] Of Byte =
+  (0,1,8,16,9,2,3,10,17,24,32,25,18,11,4,5,
+   12,19,26,33,40,48,41,34,27,20,13,6,7,14,21,28,
+   35,42,49,56,57,50,43,36,29,22,15,23,30,37,44,51,
+   58,59,52,45,38,31,39,46,53,60,61,54,47,55,62,63);
+Type
+ TJDBytes = Array[0..134217727] Of Byte;
+ PJDBytes = ^TJDBytes;
+ TJDInts = Array[0..16777215] Of LongInt;
+ PJDInts = ^TJDInts;
+ TJDImage = Record
+  Width,Height: Integer;
+  Pixels: PByte; { Triplets R,V,B ; resultat temporaire avant quantification. }
+ End;
+ TJDHuffman = Record
+  Ready: Boolean;
+  MinCode,MaxCode,ValueOffset: Array[1..16] Of LongInt;
+  Symbols: Array[0..255] Of Byte;
+ End;
+ TJDComponent = Record
+  ID,H,V,TQ,TD,TA: Integer;
+  BlockWidth,BlockHeight,RealWidth,RealHeight: LongInt;
+  CoefCount,PlaneSize: LongInt;
+  Predictor: LongInt;
+  Coefficients: PJDInts;
+  Plane: PJDBytes;
+  Quant: Array[0..63] Of Word;
+  Progress: Array[0..63] Of ShortInt;
+  QuantReady: Boolean;
+ End;
+ TJDState = Record
+  Data: PJDBytes;
+  Size,Position: LongInt;
+  Bad,FrameFound,ScanFound,Progressive,Adobe: Boolean;
+  Width,Height,Components,MaxH,MaxV,MCUWidth,MCUHeight: Integer;
+  AdobeTransform: Integer;
+  RestartInterval: LongInt;
+  BitsLeft,BitByte: Integer;
+  EOBRun: LongInt;
+  Quant: Array[0..3,0..63] Of Word;
+  QuantReady: Array[0..3] Of Boolean;
+  Huffman: Array[0..1,0..3] Of TJDHuffman;
+  Component: Array[0..3] Of TJDComponent;
+  Basis: Array[0..7,0..7] Of Double;
+ End;
+ PJDState = ^TJDState;
+
+Function JDAllocate(Size: LongInt): Pointer;
+Var P: Pointer;
+ {$IFDEF FPC}Previous: Boolean;{$ENDIF}
+Begin
+ P:=Nil;
+ If Size>0 Then Begin
+  {$IFDEF FPC}
+  Previous:=ReturnNilIfGrowHeapFails; ReturnNilIfGrowHeapFails:=True;
+  GetMem(P,Size); ReturnNilIfGrowHeapFails:=Previous;
+  {$ELSE}
+  If MaxAvail>=Size Then GetMem(P,Size);
+  {$ENDIF}
+ End;
+ JDAllocate:=P;
+End;
+
+Function JDByte(Var D: TJDState): Integer;
+Begin
+ JDByte:=0;
+ If D.Bad Then Exit;
+ If D.Position>=D.Size Then Begin D.Bad:=True; Exit; End;
+ JDByte:=D.Data^[D.Position]; Inc(D.Position);
+End;
+
+Function JDWord(Var D: TJDState): LongInt;
+Var A: Integer;
+Begin
+ A:=JDByte(D); JDWord:=LongInt(A)*256+JDByte(D);
+End;
+
+Function JDMarker(Var D: TJDState): Integer;
+Var M: Integer;
+Begin
+ JDMarker:=0;
+ If JDByte(D)<>255 Then Begin D.Bad:=True; Exit; End;
+ Repeat M:=JDByte(D); Until (M<>255) Or D.Bad;
+ If M=0 Then D.Bad:=True;
+ JDMarker:=M;
+End;
+
+Function JDBits(Var D: TJDState; Count: Integer): LongInt;
+Var I,B: Integer; V: LongInt;
+Begin
+ V:=0;
+ If (Count<0) Or (Count>16) Then Begin D.Bad:=True; JDBits:=0; Exit; End;
+ For I:=1 To Count Do Begin
+  If D.BitsLeft=0 Then Begin
+   B:=JDByte(D);
+   If B=255 Then If JDByte(D)<>0 Then D.Bad:=True;
+   D.BitByte:=B; D.BitsLeft:=8;
+  End;
+  Dec(D.BitsLeft); V:=V*2+((D.BitByte Shr D.BitsLeft) And 1);
+ End;
+ JDBits:=V;
+End;
+
+Function JDExtend(Var D: TJDState; Count: Integer): LongInt;
+Var V: LongInt;
+Begin
+ If Count=0 Then Begin JDExtend:=0; Exit; End;
+ V:=JDBits(D,Count);
+ If V<(LongInt(1) Shl (Count-1)) Then V:=V-(LongInt(1) Shl Count)+1;
+ JDExtend:=V;
+End;
+
+Function JDHuff(Var D: TJDState; Kind,Table: Integer): Integer;
+Var N: Integer; Code,Index: LongInt;
+Begin
+ JDHuff:=0;
+ If Not D.Huffman[Kind,Table].Ready Then Begin D.Bad:=True; Exit; End;
+ Code:=0;
+ For N:=1 To 16 Do Begin
+  Code:=Code*2+JDBits(D,1);
+  With D.Huffman[Kind,Table] Do
+   If (MaxCode[N]>=0) And (Code>=MinCode[N]) And (Code<=MaxCode[N]) Then Begin
+    Index:=Code+ValueOffset[N];
+    If (Index<0) Or (Index>255) Then D.Bad:=True
+    Else JDHuff:=Symbols[Index];
+    Exit;
+   End;
+  If D.Bad Then Exit;
+ End;
+ D.Bad:=True;
+End;
+
+Procedure JDReadQuant(Var D: TJDState; Limit: LongInt);
+Var Spec,Precision,Table,I,V: Integer;
+Begin
+ While (D.Position<Limit) And Not D.Bad Do Begin
+  Spec:=JDByte(D); Precision:=Spec Shr 4; Table:=Spec And 15;
+  If (Precision>1) Or (Table>3) Or (Limit-D.Position<64*(Precision+1)) Then Begin D.Bad:=True; Exit; End;
+  For I:=0 To 63 Do Begin
+   If Precision=0 Then V:=JDByte(D) Else V:=JDWord(D);
+   If V=0 Then D.Bad:=True;
+   D.Quant[Table,JDZigZag[I]]:=V;
+  End;
+  D.QuantReady[Table]:=True;
+ End;
+End;
+
+Procedure JDReadHuffman(Var D: TJDState; Limit: LongInt);
+Var Spec,Kind,Table,N,I,Total: Integer; Code: LongInt;
+    Counts: Array[1..16] Of Byte;
+Begin
+ While (D.Position<Limit) And Not D.Bad Do Begin
+  Spec:=JDByte(D); Kind:=Spec Shr 4; Table:=Spec And 15;
+  If (Kind>1) Or (Table>3) Or (Limit-D.Position<16) Then Begin D.Bad:=True; Exit; End;
+  Total:=0;
+  For N:=1 To 16 Do Begin Counts[N]:=JDByte(D); Inc(Total,Counts[N]); End;
+  If (Total=0) Or (Total>256) Or (Total>Limit-D.Position) Then Begin D.Bad:=True; Exit; End;
+  Code:=0; I:=0;
+  With D.Huffman[Kind,Table] Do Begin
+   For N:=1 To 16 Do Begin
+    MinCode[N]:=Code; MaxCode[N]:=-1; ValueOffset[N]:=I-Code;
+    If Counts[N]>0 Then Begin
+     MaxCode[N]:=Code+Counts[N]-1;
+     If MaxCode[N]>=(LongInt(1) Shl N)-1 Then Begin D.Bad:=True; Exit; End;
+    End;
+    Inc(Code,Counts[N]); Inc(I,Counts[N]); Code:=Code*2;
+   End;
+   For I:=0 To Total-1 Do Begin
+    Spec:=JDByte(D); Symbols[I]:=Spec;
+    If (Kind=0) And (Spec>11) Then D.Bad:=True;
+   End;
+   Ready:=True;
+  End;
+ End;
+End;
+
+Procedure JDReadFrame(Var D: TJDState; Marker: Integer; Limit: LongInt);
+Var I,J,Spec,Blocks: Integer;
+Begin
+ If D.FrameFound Or (Limit-D.Position<6) Then Begin D.Bad:=True; Exit; End;
+ If JDByte(D)<>8 Then Begin D.Bad:=True; Exit; End;
+ D.Height:=JDWord(D); D.Width:=JDWord(D); D.Components:=JDByte(D);
+ If (D.Width<1) Or (D.Height<1) Or (D.Width>MAX_IMAGE_WIDTH) Or
+    (D.Height>MAX_IMAGE_HEIGHT) Or Not (D.Components In [1,3,4]) Or
+    (Limit-D.Position<>D.Components*3) Then Begin D.Bad:=True; Exit; End;
+ D.Progressive:=Marker=$C2; D.MaxH:=1; D.MaxV:=1; Blocks:=0;
+ For I:=0 To D.Components-1 Do With D.Component[I] Do Begin
+  ID:=JDByte(D); Spec:=JDByte(D); H:=Spec Shr 4; V:=Spec And 15; TQ:=JDByte(D);
+  If (H<1) Or (H>4) Or (V<1) Or (V>4) Or (TQ>3) Then Begin D.Bad:=True; Exit; End;
+  For J:=0 To I-1 Do If ID=D.Component[J].ID Then Begin D.Bad:=True; Exit; End;
+  Inc(Blocks,H*V); D.MaxH:=Max(D.MaxH,H); D.MaxV:=Max(D.MaxV,V);
+  FillChar(Progress,SizeOf(Progress),255);
+ End;
+ If Blocks>10 Then Begin D.Bad:=True; Exit; End;
+ D.MCUWidth:=(D.Width+8*D.MaxH-1) Div (8*D.MaxH);
+ D.MCUHeight:=(D.Height+8*D.MaxV-1) Div (8*D.MaxV);
+ For I:=0 To D.Components-1 Do With D.Component[I] Do Begin
+  BlockWidth:=LongInt(D.MCUWidth)*H; BlockHeight:=LongInt(D.MCUHeight)*V;
+  RealWidth:=(LongInt(D.Width)*H+D.MaxH-1) Div D.MaxH;
+  RealHeight:=(LongInt(D.Height)*V+D.MaxV-1) Div D.MaxV;
+  CoefCount:=BlockWidth*BlockHeight*64;
+  If (CoefCount<1) Or (CoefCount>16777216) Then Begin D.Bad:=True; Exit; End;
+  Coefficients:=PJDInts(JDAllocate(CoefCount*SizeOf(LongInt)));
+  If Coefficients=Nil Then Begin D.Bad:=True; Exit; End;
+  FillChar(Coefficients^,CoefCount*SizeOf(LongInt),0);
+ End;
+ D.FrameFound:=True;
+End;
+
+Procedure JDRefineValue(Var D: TJDState; Var V: LongInt; BitValue: LongInt);
+Begin
+ If JDBits(D,1)<>0 Then If (Abs(V) And BitValue)=0 Then Begin
+  If V>=0 Then Inc(V,BitValue) Else Dec(V,BitValue);
+ End;
+End;
+
+Procedure JDDecodeBlock(Var D: TJDState; C: Integer; Block: LongInt;
+                        SS,SE,AH,AL: Integer);
+Var K,R,S,Symbol: Integer; Base,P1,NewValue,CoefIndex: LongInt; P: PJDInts;
+Begin
+ If D.Bad Then Exit;
+ With D.Component[C] Do Begin
+  Base:=Block*64; P:=Coefficients;
+  If (Base<0) Or (Base>CoefCount-64) Then Begin D.Bad:=True; Exit; End;
+  P1:=LongInt(1) Shl AL;
+  If SS=0 Then Begin
+   If AH=0 Then Begin
+    S:=JDHuff(D,0,TD); If (S>11) Or D.Bad Then Begin D.Bad:=True; Exit; End;
+    Predictor:=Predictor+JDExtend(D,S);
+    If Abs(Predictor)>32767 Then Begin D.Bad:=True; Exit; End;
+    P^[Base]:=Predictor*P1;
+   End Else If JDBits(D,1)<>0 Then P^[Base]:=P^[Base] Or P1;
+  End;
+  K:=SS; If K=0 Then K:=1;
+  If K>SE Then Exit;
+  If AH=0 Then Begin
+   If D.EOBRun>0 Then Begin Dec(D.EOBRun); Exit; End;
+   While (K<=SE) And Not D.Bad Do Begin
+    Symbol:=JDHuff(D,1,TA); R:=Symbol Shr 4; S:=Symbol And 15;
+    If S=0 Then Begin
+     If R=15 Then Begin Inc(K,16); If K>SE+1 Then D.Bad:=True; End
+     Else Begin
+      If Not D.Progressive And (R<>0) Then Begin D.Bad:=True; Exit; End;
+      D.EOBRun:=(LongInt(1) Shl R)+JDBits(D,R)-1; Exit;
+     End;
+    End Else Begin
+     If S>10 Then Begin D.Bad:=True; Exit; End;
+     Inc(K,R); If K>SE Then Begin D.Bad:=True; Exit; End;
+     P^[Base+JDZigZag[K]]:=JDExtend(D,S)*P1; Inc(K);
+    End;
+   End;
+  End Else Begin
+   { Scans AC de raffinement : les bits des coefficients deja presents
+     sont entrelaces avec les nouvelles valeurs et les suites de zeros. }
+   If D.EOBRun=0 Then Begin
+    While (K<=SE) And Not D.Bad Do Begin
+     Symbol:=JDHuff(D,1,TA); R:=Symbol Shr 4; S:=Symbol And 15; NewValue:=0;
+     If S<>0 Then Begin
+      If S<>1 Then Begin D.Bad:=True; Exit; End;
+      If JDBits(D,1)<>0 Then NewValue:=P1 Else NewValue:=-P1;
+     End Else If R<>15 Then Begin
+      D.EOBRun:=(LongInt(1) Shl R)+JDBits(D,R); Break;
+     End Else R:=16;
+     While (K<=SE) And Not D.Bad Do Begin
+      CoefIndex:=Base+JDZigZag[K];
+      If P^[CoefIndex]<>0 Then JDRefineValue(D,P^[CoefIndex],P1)
+      Else Begin
+       If R=0 Then Break;
+       Dec(R);
+       { ZRL termine exactement apres le seizieme zero. Les bits de
+         raffinement suivants appartiennent au prochain symbole. }
+       If (R=0) And (NewValue=0) Then Begin Inc(K); Break; End;
+      End;
+      Inc(K);
+     End;
+     If R<>0 Then Begin D.Bad:=True; Exit; End;
+     If NewValue<>0 Then Begin
+      If K>SE Then Begin D.Bad:=True; Exit; End;
+      P^[Base+JDZigZag[K]]:=NewValue; Inc(K);
      End;
     End;
-
-    Dec(ChunkLength, BytesRead);
    End;
-
-   { Lire le CRC }
-   BlockRead(F, ChunkCRC, 4, BytesRead);
-  End
-  Else If ChunkType = 'IEND' Then Begin
-   { Fin de l'image }
-   Done := True;
-  End
-  Else Begin
-   { Chunk inconnu, le sauter }
-   If ChunkLength > 0 Then
-    Seek(F, FilePos(F) + ChunkLength);
-   BlockRead(F, ChunkCRC, 4, BytesRead);
+   If D.EOBRun>0 Then Begin
+    While (K<=SE) And Not D.Bad Do Begin
+     CoefIndex:=Base+JDZigZag[K];
+     If P^[CoefIndex]<>0 Then JDRefineValue(D,P^[CoefIndex],P1);
+     Inc(K);
+    End;
+    Dec(D.EOBRun);
+   End;
   End;
  End;
+End;
 
- Close(F);
- LoadPNG := True;
+Procedure JDReadScan(Var D: TJDState; Limit: LongInt);
+Var NS,I,J,C,ID,Spec,SS,SE,AH,AL,BX,BY,HX,VY,Restart,Marker: Integer;
+    Order: Array[0..3] Of Integer; Found: Boolean;
+    Total,MCU,Across,Down,Block: LongInt;
+Begin
+ FillChar(Order,SizeOf(Order),0);
+ If Not D.FrameFound Then Begin D.Bad:=True; Exit; End;
+ NS:=JDByte(D);
+ If (NS<1) Or (NS>D.Components) Or (Limit-D.Position<>NS*2+3) Then Begin D.Bad:=True; Exit; End;
+ For I:=0 To NS-1 Do Begin
+  ID:=JDByte(D); Spec:=JDByte(D); Found:=False; C:=0;
+  For J:=0 To D.Components-1 Do If D.Component[J].ID=ID Then Begin C:=J; Found:=True; End;
+  If Not Found Or ((Spec Shr 4)>3) Or ((Spec And 15)>3) Then Begin D.Bad:=True; Exit; End;
+  For J:=0 To I-1 Do If Order[J]=C Then Begin D.Bad:=True; Exit; End;
+  Order[I]:=C; D.Component[C].TD:=Spec Shr 4; D.Component[C].TA:=Spec And 15;
+ End;
+ SS:=JDByte(D); SE:=JDByte(D); Spec:=JDByte(D); AH:=Spec Shr 4; AL:=Spec And 15;
+ If (SS>SE) Or (SE>63) Or (AH>13) Or (AL>13) Then Begin D.Bad:=True; Exit; End;
+ If D.Progressive Then Begin
+  If ((SS=0) And (SE<>0)) Or ((SS>0) And (NS<>1)) Or
+     ((AH<>0) And (AH<>AL+1)) Then Begin D.Bad:=True; Exit; End;
+ End Else If (SS<>0) Or (SE<>63) Or (AH<>0) Or (AL<>0) Then Begin D.Bad:=True; Exit; End;
+ For I:=0 To NS-1 Do With D.Component[Order[I]] Do Begin
+  If Not D.QuantReady[TQ] Then Begin D.Bad:=True; Exit; End;
+  If Not QuantReady Then Begin Move(D.Quant[TQ],Quant,SizeOf(Quant)); QuantReady:=True; End;
+  For J:=SS To SE Do Begin
+   If ((AH=0) And (Progress[J]<>-1)) Or ((AH<>0) And (Progress[J]<>AH)) Then Begin D.Bad:=True; Exit; End;
+   Progress[J]:=AL;
+  End;
+ End;
+ D.BitsLeft:=0; D.EOBRun:=0; Restart:=0;
+ For I:=0 To D.Components-1 Do D.Component[I].Predictor:=0;
+ If NS=1 Then Begin
+  C:=Order[0]; Across:=(D.Component[C].RealWidth+7) Div 8;
+  Down:=(D.Component[C].RealHeight+7) Div 8;
+ End Else Begin Across:=D.MCUWidth; Down:=D.MCUHeight; End;
+ Total:=Across*Down;
+ For MCU:=0 To Total-1 Do Begin
+  If (MCU>0) And (D.RestartInterval>0) And ((MCU Mod D.RestartInterval)=0) Then Begin
+   If D.EOBRun<>0 Then Begin D.Bad:=True; Exit; End;
+   D.BitsLeft:=0; Marker:=JDMarker(D);
+   If Marker<>$D0+Restart Then Begin D.Bad:=True; Exit; End;
+   Restart:=(Restart+1) And 7;
+   For I:=0 To D.Components-1 Do D.Component[I].Predictor:=0;
+  End;
+  BX:=MCU Mod Across; BY:=MCU Div Across;
+  For I:=0 To NS-1 Do Begin
+   C:=Order[I];
+   If NS=1 Then Begin
+    Block:=LongInt(BY)*D.Component[C].BlockWidth+BX;
+    JDDecodeBlock(D,C,Block,SS,SE,AH,AL);
+   End Else With D.Component[C] Do Begin
+    For VY:=0 To V-1 Do For HX:=0 To H-1 Do Begin
+     Block:=(LongInt(BY)*V+VY)*BlockWidth+LongInt(BX)*H+HX;
+     JDDecodeBlock(D,C,Block,SS,SE,AH,AL);
+    End;
+   End;
+   If D.Bad Then Exit;
+  End;
+ End;
+ If D.EOBRun<>0 Then D.Bad:=True;
+ D.BitsLeft:=0; D.ScanFound:=True;
+End;
+
+Function JDClamp(V: LongInt): Byte;
+Begin
+ If V<0 Then JDClamp:=0 Else If V>255 Then JDClamp:=255 Else JDClamp:=V;
+End;
+
+Procedure JDInverseDCT(Var D: TJDState; C: Integer);
+Var X,Y,IU,IV,I: Integer; BX,BY,Base,Dest,Stride: LongInt;
+    Temp: Array[0..7,0..7] Of Double; Sum: Double; OnlyDC: Boolean;
+Begin
+ With D.Component[C] Do Begin
+  Stride:=BlockWidth*8; PlaneSize:=Stride*BlockHeight*8;
+  Plane:=PJDBytes(JDAllocate(PlaneSize));
+  If Plane=Nil Then Begin D.Bad:=True; Exit; End;
+  For BY:=0 To BlockHeight-1 Do For BX:=0 To BlockWidth-1 Do Begin
+   Base:=(BY*BlockWidth+BX)*64;
+   OnlyDC:=True;
+   For I:=1 To 63 Do If Coefficients^[Base+I]<>0 Then Begin OnlyDC:=False; Break; End;
+   If OnlyDC Then Begin
+    I:=JDClamp(Round((1.0*Coefficients^[Base])*Quant[0]/8)+128);
+    For Y:=0 To 7 Do Begin
+     Dest:=(BY*8+Y)*Stride+BX*8;
+     For X:=0 To 7 Do Plane^[Dest+X]:=I;
+    End;
+   End Else Begin
+    { DCT inverse separable : 2 passes de 8x8x8, base calculee une fois. }
+    For IV:=0 To 7 Do For X:=0 To 7 Do Begin
+     Sum:=0;
+     For IU:=0 To 7 Do Sum:=Sum+(1.0*Coefficients^[Base+IV*8+IU])*Quant[IV*8+IU]*D.Basis[X,IU];
+     Temp[IV,X]:=Sum;
+    End;
+    For Y:=0 To 7 Do For X:=0 To 7 Do Begin
+     Sum:=0; For IV:=0 To 7 Do Sum:=Sum+Temp[IV,X]*D.Basis[Y,IV];
+     Dest:=(BY*8+Y)*Stride+BX*8+X;
+     Plane^[Dest]:=JDClamp(Round(Sum/4)+128);
+    End;
+   End;
+  End;
+ End;
+End;
+
+Function JDMin(A,B: LongInt): LongInt;
+Begin If A<B Then JDMin:=A Else JDMin:=B; End;
+Function JDMax(A,B: LongInt): LongInt;
+Begin If A>B Then JDMax:=A Else JDMax:=B; End;
+
+Function JDSample(Var D: TJDState; C,X,Y: Integer): Integer;
+Var FX,FY,AX,AY,X0,Y0,X1,Y1: LongInt; Stride: LongInt;
+Begin
+ With D.Component[C] Do Begin
+  { Interpolation bilineaire centree des chrominances sous-echantillonnees.
+    Les indices sont limites a la partie reelle du plan, pas au remplissage MCU. }
+  FX:=((LongInt(X)*2+1)*H*128) Div D.MaxH-128;
+  FY:=((LongInt(Y)*2+1)*V*128) Div D.MaxV-128;
+  FX:=JDMax(0,JDMin(FX,(RealWidth-1)*256)); FY:=JDMax(0,JDMin(FY,(RealHeight-1)*256));
+  X0:=FX Div 256; Y0:=FY Div 256; AX:=FX And 255; AY:=FY And 255;
+  X1:=JDMin(X0+1,RealWidth-1); Y1:=JDMin(Y0+1,RealHeight-1); Stride:=BlockWidth*8;
+  JDSample:=(LongInt(Plane^[Y0*Stride+X0])*(256-AX)*(256-AY)+
+             LongInt(Plane^[Y0*Stride+X1])*AX*(256-AY)+
+             LongInt(Plane^[Y1*Stride+X0])*(256-AX)*AY+
+             LongInt(Plane^[Y1*Stride+X1])*AX*AY+32768) Div 65536;
+ End;
+End;
+
+Procedure JDCompose(Var D: TJDState; Var Img: TJDImage);
+Var X,Y,I,U,V,A,B,C,K,R,G,Blue: Integer; P: PByte; DirectRGB: Boolean;
+Begin
+ For X:=0 To 7 Do For U:=0 To 7 Do Begin
+  D.Basis[X,U]:=Cos((2*X+1)*U*Pi/16);
+  If U=0 Then D.Basis[X,U]:=D.Basis[X,U]/Sqrt(2);
+ End;
+ For I:=0 To D.Components-1 Do Begin
+  If Not D.Component[I].QuantReady Or (D.Component[I].Progress[0]<0) Then Begin D.Bad:=True; Exit; End;
+  JDInverseDCT(D,I); If D.Bad Then Exit;
+ End;
+ Img.Width:=D.Width; Img.Height:=D.Height;
+ Img.Pixels:=PByte(JDAllocate(LongInt(D.Width)*D.Height*3));
+ If Img.Pixels=Nil Then Begin D.Bad:=True; Exit; End;
+ DirectRGB:=(D.Components=3) And
+  ((D.Adobe And (D.AdobeTransform=0)) Or
+   ((D.Component[0].ID=Ord('R')) And (D.Component[1].ID=Ord('G')) And (D.Component[2].ID=Ord('B'))));
+ P:=Img.Pixels;
+ For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do Begin
+  A:=JDSample(D,0,X,Y); R:=A; G:=A; Blue:=A;
+  If D.Components>=3 Then Begin
+   B:=JDSample(D,1,X,Y); C:=JDSample(D,2,X,Y);
+   If DirectRGB Or ((D.Components=4) And (Not D.Adobe Or (D.AdobeTransform=0))) Then Begin
+    R:=A; G:=B; Blue:=C;
+   End Else Begin
+    U:=B-128; V:=C-128;
+    R:=JDClamp(A+Round(1.402*V)); G:=JDClamp(A-Round(0.344136*U+0.714136*V));
+    Blue:=JDClamp(A+Round(1.772*U));
+   End;
+   If D.Components=4 Then Begin
+    K:=JDSample(D,3,X,Y);
+    If D.Adobe Then Begin
+     If D.AdobeTransform=2 Then Begin R:=255-R; G:=255-G; Blue:=255-Blue; End;
+     R:=(LongInt(R)*K+127) Div 255; G:=(LongInt(G)*K+127) Div 255;
+     Blue:=(LongInt(Blue)*K+127) Div 255;
+    End Else Begin
+     R:=(LongInt(255-R)*(255-K)+127) Div 255; G:=(LongInt(255-G)*(255-K)+127) Div 255;
+     Blue:=(LongInt(255-Blue)*(255-K)+127) Div 255;
+    End;
+   End;
+  End;
+  P^:=JDClamp(R); Inc(P); P^:=JDClamp(G); Inc(P); P^:=JDClamp(Blue); Inc(P);
+ End;
+End;
+
+Function JDDecode(Const FileName: String; Var Img: TJDImage): Boolean;
+Var D: PJDState; F: File; Bytes: LongInt; M,I: Integer; L,Limit: LongInt;
+    Ended: Boolean; OldFileMode: Byte;
+Begin
+ JDDecode:=False; FillChar(Img,SizeOf(Img),0);
+ D:=PJDState(JDAllocate(SizeOf(TJDState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0); D^.AdobeTransform:=-1; Ended:=False;
+ Assign(F,FileName); OldFileMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}
+ FileMode:=OldFileMode;
+ If IOResult=0 Then Begin
+  {$I-}
+  D^.Size:=FileSize(F);
+  If (D^.Size>=4) And (D^.Size<=134217728) Then Begin
+   D^.Data:=PJDBytes(JDAllocate(D^.Size));
+   If D^.Data<>Nil Then Begin BlockRead(F,D^.Data^,D^.Size,Bytes); D^.Bad:=Bytes<>D^.Size; End
+   Else D^.Bad:=True;
+  End Else D^.Bad:=True;
+  Close(F);
+  {$I+}
+  If IOResult<>0 Then D^.Bad:=True;
+ End Else D^.Bad:=True;
+ If Not D^.Bad Then If JDMarker(D^)<>$D8 Then D^.Bad:=True;
+ While Not D^.Bad And Not Ended Do Begin
+  M:=JDMarker(D^);
+  If D^.Bad Then Break;
+  If M=$D9 Then Begin Ended:=True; Break; End;
+  If (M=$D8) Or (M In [$D0..$D7]) Then Begin D^.Bad:=True; Break; End;
+  If M<>$01 Then Begin
+   L:=JDWord(D^);
+   If (L<2) Or (L-2>D^.Size-D^.Position) Then Begin D^.Bad:=True; Break; End;
+   Limit:=D^.Position+L-2;
+   Case M Of
+    $DB: JDReadQuant(D^,Limit);
+    $C4: JDReadHuffman(D^,Limit);
+    $C0,$C1,$C2: JDReadFrame(D^,M,Limit);
+    $DD: Begin
+     If L<>4 Then D^.Bad:=True Else D^.RestartInterval:=JDWord(D^);
+    End;
+    $DA: Begin
+     JDReadScan(D^,Limit);
+     If D^.Bad Then Break;
+     Continue; { Position est maintenant a la fin des donnees entropiques. }
+    End;
+    $EE: Begin
+     If L>=14 Then Begin
+      With D^ Do If (Data^[Position]=Ord('A')) And (Data^[Position+1]=Ord('d')) And
+       (Data^[Position+2]=Ord('o')) And (Data^[Position+3]=Ord('b')) And (Data^[Position+4]=Ord('e')) Then Begin
+        Adobe:=True; AdobeTransform:=Data^[Position+11];
+        If AdobeTransform>2 Then Bad:=True;
+       End;
+     End;
+    End;
+    $E0..$ED,$EF,$FE: ; { APP/JFIF/EXIF/ICC et commentaires non interpretables sont sautes. }
+    Else D^.Bad:=True; { JPEG arithmetique, sans perte ou hierarchique non pris en charge. }
+   End;
+   D^.Position:=Limit;
+  End;
+ End;
+ If Not D^.Bad And Ended And D^.FrameFound And D^.ScanFound Then JDCompose(D^,Img);
+ JDDecode:=Not D^.Bad And Ended And D^.FrameFound And D^.ScanFound And (Img.Pixels<>Nil);
+ If D^.Bad And (Img.Pixels<>Nil) Then Begin
+  FreeMem(Img.Pixels,LongInt(Img.Width)*Img.Height*3); Img.Pixels:=Nil;
+ End;
+ For I:=0 To 3 Do With D^.Component[I] Do Begin
+  If Coefficients<>Nil Then FreeMem(Coefficients,CoefCount*SizeOf(LongInt));
+  If Plane<>Nil Then FreeMem(Plane,PlaneSize);
+ End;
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TJDState));
+End;
+
+Const
+ JPBinCount = 32768;
+ JPFirstColor = 16; { Les seize couleurs VGA restent disponibles pour l'UI. }
+ VGA_R: Array[0..15] of Byte =
+   (  0,   0,   0,   0, 168, 168, 168, 168,  84,  84,  84,  84, 252, 252, 252, 252);
+ VGA_G: Array[0..15] of Byte =
+   (  0,   0, 168, 168,   0,   0,  84, 168,  84,  84, 252, 252,  84,  84, 252, 252);
+ VGA_B: Array[0..15] of Byte =
+   (  0, 168,   0, 168,   0, 168,   0, 168,  84, 252,  84, 252,  84, 252,  84, 252);
+Type
+ TJPBox = Record
+  First,Last: LongInt;
+  Count: LongInt;
+  LowR,HighR,LowG,HighG,LowB,HighB: Byte;
+ End;
+ TJPQuantizer = Record
+  Histogram: Array[0..JPBinCount-1] Of LongInt;
+  Bins: Array[0..JPBinCount-1] Of Word;
+  Map: Array[0..JPBinCount-1] Of Byte;
+  Boxes: Array[0..239] Of TJPBox;
+  Palette: TPalette;
+  Used,BoxCount: LongInt;
+ End;
+ PJPQuantizer = ^TJPQuantizer;
+
+Function JPBin(R,G,B: Byte): Word;
+Begin
+ JPBin:=(Word(R Shr 3) Shl 10) Or (Word(G Shr 3) Shl 5) Or (B Shr 3);
+End;
+
+Procedure JPMeasure(Var Q: TJPQuantizer; N: LongInt);
+Var I,V,R,G,B: LongInt;
+Begin
+ With Q.Boxes[N] Do Begin
+  LowR:=31; LowG:=31; LowB:=31; HighR:=0; HighG:=0; HighB:=0; Count:=0;
+  For I:=First To Last Do Begin
+   V:=Q.Bins[I]; R:=V Shr 10; G:=(V Shr 5) And 31; B:=V And 31;
+   If R<LowR Then LowR:=R; If R>HighR Then HighR:=R;
+   If G<LowG Then LowG:=G; If G>HighG Then HighG:=G;
+   If B<LowB Then LowB:=B; If B>HighB Then HighB:=B;
+   Inc(Count,Q.Histogram[V]);
+  End;
+ End;
+End;
+
+Function JPAxisValue(V,Axis: LongInt): LongInt;
+Begin
+ Case Axis Of
+  0: JPAxisValue:=V Shr 10;
+  1: JPAxisValue:=(V Shr 5) And 31;
+  Else JPAxisValue:=V And 31;
+ End;
+End;
+
+Function JPSplit(Var Q: TJPQuantizer; N: LongInt): Boolean;
+Var Axis,Range,I,J,V,Cut,MaxValue: LongInt; Total: LongInt;
+    Counts: Array[0..31] Of LongInt; T: Word;
+Begin
+ JPSplit:=False;
+ With Q.Boxes[N] Do Begin
+  If First>=Last Then Exit;
+  Axis:=0; Range:=HighR-LowR; MaxValue:=HighR;
+  If HighG-LowG>Range Then Begin Axis:=1; Range:=HighG-LowG; MaxValue:=HighG; End;
+  If HighB-LowB>Range Then Begin Axis:=2; Range:=HighB-LowB; MaxValue:=HighB; End;
+  If Range=0 Then Exit;
+  FillChar(Counts,SizeOf(Counts),0);
+  For I:=First To Last Do Begin
+   V:=Q.Bins[I]; Inc(Counts[JPAxisValue(V,Axis)],Q.Histogram[V]);
+  End;
+  Total:=0; Cut:=0;
+  While Cut<MaxValue-1 Do Begin
+   Inc(Total,Counts[Cut]);
+   If Total>=(Count+1) Div 2 Then Break;
+   Inc(Cut);
+  End;
+  I:=First; J:=Last;
+  While I<=J Do Begin
+   While (I<=J) And (JPAxisValue(Q.Bins[I],Axis)<=Cut) Do Inc(I);
+   While (I<=J) And (JPAxisValue(Q.Bins[J],Axis)>Cut) Do Dec(J);
+   If I<J Then Begin T:=Q.Bins[I]; Q.Bins[I]:=Q.Bins[J]; Q.Bins[J]:=T; Inc(I); Dec(J); End;
+  End;
+  If (I<=First) Or (I>Last) Then Exit;
+  Q.Boxes[Q.BoxCount].First:=I; Q.Boxes[Q.BoxCount].Last:=Last;
+  Last:=I-1;
+ End;
+ JPMeasure(Q,N); JPMeasure(Q,Q.BoxCount); Inc(Q.BoxCount);
+ JPSplit:=True;
+End;
+
+Procedure JPBuildPalette(Var Q: TJPQuantizer; Const Img: TJDImage);
+Var X,Y,I,J,N,V,R,G,B,DR,DG,DB,Best,Range: LongInt;
+    P: PByte; R8,G8,B8: Byte; Weight,Score,BestScore,SumR,SumG,SumB: Int64;
+    Dist,BestDist: LongInt;
+Begin
+ FillChar(Q,SizeOf(Q),0);
+ Q.Palette:=ImageBuffer.Palette;
+ For I:=0 To 15 Do Begin
+  Q.Palette[I].R:=VGA_R[I]; Q.Palette[I].G:=VGA_G[I];
+  Q.Palette[I].B:=VGA_B[I]; Q.Palette[I].A:=255;
+ End;
+ P:=Img.Pixels;
+ For Y:=0 To Img.Height-1 Do For X:=0 To Img.Width-1 Do Begin
+  R8:=P^; Inc(P); G8:=P^; Inc(P); B8:=P^; Inc(P);
+  V:=JPBin(R8,G8,B8);
+  Inc(Q.Histogram[V]);
+ End;
+ For I:=0 To JPBinCount-1 Do If Q.Histogram[I]>0 Then Begin
+  Q.Bins[Q.Used]:=I; Inc(Q.Used);
+ End;
+ Q.BoxCount:=1; Q.Boxes[0].First:=0; Q.Boxes[0].Last:=Q.Used-1;
+ JPMeasure(Q,0);
+ While Q.BoxCount<240 Do Begin
+  Best:=-1; BestScore:=-1;
+  For I:=0 To Q.BoxCount-1 Do With Q.Boxes[I] Do Begin
+   Range:=Max(HighR-LowR,Max(HighG-LowG,HighB-LowB));
+   If (First<Last) And (Range>0) Then Begin
+    Score:=Int64(Range)*Range*Count;
+    If Score>BestScore Then Begin BestScore:=Score; Best:=I; End;
+   End;
+  End;
+  If Best<0 Then Break;
+  If Not JPSplit(Q,Best) Then Break;
+ End;
+ For N:=0 To Q.BoxCount-1 Do Begin
+  SumR:=0; SumG:=0; SumB:=0; Weight:=Q.Boxes[N].Count;
+  For I:=Q.Boxes[N].First To Q.Boxes[N].Last Do Begin
+   V:=Q.Bins[I];
+   SumR:=SumR+Int64((V Shr 10)*255 Div 31)*Q.Histogram[V];
+   SumG:=SumG+Int64(((V Shr 5) And 31)*255 Div 31)*Q.Histogram[V];
+   SumB:=SumB+Int64((V And 31)*255 Div 31)*Q.Histogram[V];
+  End;
+  Q.Palette[N+JPFirstColor].R:=SumR Div Weight;
+  Q.Palette[N+JPFirstColor].G:=SumG Div Weight;
+  Q.Palette[N+JPFirstColor].B:=SumB Div Weight;
+  Q.Palette[N+JPFirstColor].A:=255;
+ End;
+ { Table de correspondance des couleurs presentes : un seul calcul par
+   couleur de l'histogramme plutot que 256 recherches pour chaque pixel. }
+ For I:=0 To Q.Used-1 Do Begin
+  V:=Q.Bins[I]; R:=(V Shr 10)*255 Div 31;
+  G:=((V Shr 5) And 31)*255 Div 31; B:=(V And 31)*255 Div 31;
+  Best:=0; BestDist:=MaxLongInt;
+  For J:=0 To JPFirstColor+Q.BoxCount-1 Do Begin
+   DR:=R-Q.Palette[J].R; DG:=G-Q.Palette[J].G; DB:=B-Q.Palette[J].B;
+   Dist:=LongInt(DR)*DR+LongInt(DG)*DG+LongInt(DB)*DB;
+   If Dist<BestDist Then Begin BestDist:=Dist; Best:=J; End;
+  End;
+  Q.Map[V]:=Best;
+ End;
 End;
 
 Function LoadJPEG(FileName: String): Boolean;
-Var
- F: File;
- Marker: Word;
- BytesRead: Word;
- SegmentLength: Word;
- SOFFound: Boolean;
- Width, Height: Word;
- Components: Byte;
- DataBuffer: Array[0..4095] of Byte;
- I, X, Y: Integer;
- PixelColor: Byte;
-
- Function ReadMarker: Word;
- Var
-  M: Word;
- Begin
-  BlockRead(F, M, 2, BytesRead);
-  ReadMarker := Swap(M);
- End;
-
+Var Img: TJDImage; Q: PJPQuantizer; Pixels,Dest,Source: PByte;
+    X,Y,I: Integer; R,G,B: Byte;
 Begin
- LoadJPEG := False;
-
- Assign(F, FileName);
- {$I-}
- Reset(F, 1);
- {$I+}
- If IOResult <> 0 Then Exit;
-
- { Lire le marqueur SOI }
- Marker := ReadMarker;
- If Marker <> JPEG_SOI Then Begin
-  Close(F);
-  Exit;
- End;
-
- ImageBuffer.FileName := FileName;
- ImageBuffer.Format := FMT_JPEG;
- ImageBuffer.Modified := False;
- ImageBuffer.HasTransparency := False; { JPEG ne supporte pas la transparence }
-
- { Lire les segments JPEG }
- SOFFound := False;
- Width := 640;
- Height := 480;
-
- While Not SOFFound do Begin
-  Marker := ReadMarker;
-  If BytesRead <> 2 Then Begin
-   Close(F);
-   Exit;
+ LoadJPEG:=False;
+ If Not JDDecode(FileName,Img) Then Exit;
+ Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+ Pixels:=PByte(JDAllocate(LongInt(Img.Width)*Img.Height));
+ If (Q<>Nil) And (Pixels<>Nil) Then Begin
+  JPBuildPalette(Q^,Img); Source:=Img.Pixels; Dest:=Pixels;
+  For Y:=0 To Img.Height-1 Do For X:=0 To Img.Width-1 Do Begin
+   R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source);
+   Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest);
   End;
-
-  Case Marker of
-   $FFC0, $FFC1, $FFC2: Begin { SOF0, SOF1, SOF2 - Start of Frame }
-    BlockRead(F, SegmentLength, 2, BytesRead);
-    SegmentLength := Swap(SegmentLength);
-
-    { Sauter la précision }
-    Seek(F, FilePos(F) + 1);
-
-    { Lire la hauteur et la largeur }
-    BlockRead(F, Height, 2, BytesRead);
-    Height := Swap(Height);
-    BlockRead(F, Width, 2, BytesRead);
-    Width := Swap(Width);
-    BlockRead(F, Components, 1, BytesRead);
-
-    ImageBuffer.Width := Width;
-    ImageBuffer.Height := Height;
-    ImageBuffer.BitDepth := 24;
-    If Not ZPrepareBuffer(ImageBuffer.Width,ImageBuffer.Height,White) Then Begin
-     Close(F); Exit;
-    End;
-    SOFFound := True;
-
-    { Sauter le reste du segment }
-    Seek(F, FilePos(F) + SegmentLength - 8);
-   End;
-
-   $FFD8: Begin { SOI - déjà traité }
-   End;
-
-   $FFD9: Begin { EOI - End of Image }
-    SOFFound := True; { Sortir de la boucle }
-   End;
-
-   $FFDA: Begin { SOS - Start of Scan }
-    { Lire la longueur du segment }
-    BlockRead(F, SegmentLength, 2, BytesRead);
-    SegmentLength := Swap(SegmentLength);
-
-    { Sauter l'en-tête SOS }
-    Seek(F, FilePos(F) + SegmentLength - 2);
-
-    { Les données d'image commencent ici }
-    { Effacer la zone de dessin }
-    SetFillStyle(SolidFill, White);
-    Bar(CanvasX, CanvasY, CanvasX + CanvasWidth - 1, CanvasY + CanvasHeight - 1);
-
-    { Lecture simplifiée des données compressées }
-    Y := 0;
-    X := 0;
-    While Y < ImageBuffer.Height do Begin
-     BlockRead(F, DataBuffer, 4096, BytesRead);
-     If BytesRead = 0 Then Break;
-
-     { Simulation: utiliser les données comme niveau de gris }
-     For I := 0 to BytesRead - 1 do Begin
-      { Éviter les marqueurs JPEG }
-      If DataBuffer[I] <> $FF Then Begin
-       PixelColor := DataBuffer[I] mod 16;
-       ZPutImagePixel(X,Y,PixelColor);
-       If (X < ImageBuffer.Width) and (X < CanvasWidth) and
-          (Y < ImageBuffer.Height) and (Y < CanvasHeight) Then Begin
-        PutPixel(CanvasX + X, CanvasY + Y, PixelColor);
-       End;
-       Inc(X);
-       If X >= ImageBuffer.Width Then Begin
-        X := 0;
-        Inc(Y);
-       End;
-      End;
-     End;
-    End;
-
-    SOFFound := True;
-   End;
-
-   Else Begin
-    { Autre segment, le sauter }
-    If (Marker and $FF00) = $FF00 Then Begin
-     BlockRead(F, SegmentLength, 2, BytesRead);
-     If BytesRead = 2 Then Begin
-      SegmentLength := Swap(SegmentLength);
-      If SegmentLength > 2 Then
-       Seek(F, FilePos(F) + SegmentLength - 2);
-     End;
-    End;
-   End;
+  { Remplacement atomique : un flux invalide ne modifie ni les pixels,
+    ni la palette, ni le nom du document courant. }
+  If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+  CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=Img.Width; CanvasImageH:=Img.Height;
+  ImageBuffer.Width:=Img.Width; ImageBuffer.Height:=Img.Height;
+  ImageBuffer.BitDepth:=24; ImageBuffer.FileName:=FileName;
+  ImageBuffer.Format:=FMT_JPEG; ImageBuffer.HasTransparency:=False;
+  ImageBuffer.Modified:=False; ImageBuffer.Palette:=Q^.Palette;
+  For I:=0 To 255 Do Begin
+   {$IFDEF FPC}
+   SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+   {$ELSE}
+   SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);
+   {$ENDIF}
   End;
+  LoadJPEG:=True;
  End;
-
- Close(F);
- LoadJPEG := True;
+ If Pixels<>Nil Then FreeMem(Pixels,LongInt(Img.Width)*Img.Height);
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ FreeMem(Img.Pixels,LongInt(Img.Width)*Img.Height*3);
 End;
+
+Function LoadPNG(FileName: String): Boolean;
+Var D: PPNState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadPNG:=False; Pixels:=Nil; Q:=Nil;
+ D:=PPNState(JDAllocate(SizeOf(TPNState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0); FillChar(D^.Alpha,SizeOf(D^.Alpha),255);
+ If Not PNReadChunks(FileName,D^) Then Begin PNFree(D); Exit; End;
+ If Not PNInflate(D^) Then Begin PNFree(D); Exit; End;
+ If Not PNReconstruct(D^) Then Begin PNFree(D); Exit; End;
+ Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+ Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size));
+ If (Q<>Nil) And (Pixels<>Nil) Then Begin
+  FillChar(Q^,SizeOf(Q^),0);
+  For I:=0 To 15 Do Begin
+   Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255;
+  End;
+  { Conserver les couleurs exactes des captures/elements graphiques PNG.
+    La quantification n'intervient que si les registres sont tous occupes. }
+  Used:=16; Source:=PByte(D^.RGB); Dest:=Pixels; Exact:=True;
+  For N:=0 To Size-1 Do Begin
+   R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+   For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+   If Slot<0 Then Begin
+    If Used=256 Then Begin Exact:=False; Break; End;
+    Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G;
+    Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+   End;
+   Dest^:=Slot; Inc(Dest);
+  End;
+  If Not Exact Then Begin
+   Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB);
+   JPBuildPalette(Q^,Img); Source:=Img.Pixels; Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source);
+    Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest);
+   End;
+  End;
+  { Commit : ni la palette ni les pixels du document ne changent en cas
+    de CRC invalide, flux tronque, filtre inconnu ou echec d'allocation. }
+  If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+  CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+  ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=D^.Depth*D^.Channels;
+  ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_PNG; ImageBuffer.Modified:=False;
+  ImageBuffer.Palette:=Q^.Palette; ImageBuffer.HasTransparency:=D^.HasTransparency;
+  ImageBuffer.TransparentColor.R:=255; ImageBuffer.TransparentColor.G:=255;
+  ImageBuffer.TransparentColor.B:=255; ImageBuffer.TransparentColor.A:=0;
+  For I:=0 To 255 Do Begin
+   {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+   {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+  End;
+  LoadPNG:=True;
+ End;
+ If Pixels<>Nil Then FreeMem(Pixels,Size);
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer)); PNFree(D);
+End;
+
 
 Function LoadImage(FileName: String): Boolean;
 Var
- Format: Byte;
+ Format,OldFileMode: Byte;
  Succeeded: Boolean;
  F: File;
  Ext: String;
@@ -2369,7 +3459,9 @@ Begin
 
  { Verifier que le fichier existe et est lisible }
  Assign(F, FileName);
+ OldFileMode:=FileMode; FileMode:=0;
  {$I-} Reset(F, 1); {$I+}
+ FileMode:=OldFileMode;
  If IOResult <> 0 Then Exit;
  {$I-} Close(F); {$I+}
  If IOResult <> 0 Then;

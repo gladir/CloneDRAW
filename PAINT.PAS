@@ -138,6 +138,8 @@ Const
  FMT_WPG = 8;
  FMT_LBM = 9;
  FMT_HDR = 10;
+ FMT_FAX = 11;
+ FMT_EXR = 12;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -569,6 +571,10 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If Ext = '.EXR' Then
+  GetImageFormat := FMT_EXR
+ Else If Ext = '.FAX' Then
+  GetImageFormat := FMT_FAX
  Else If (Ext = '.HDR') or (Ext = '.RGBE') Then
   GetImageFormat := FMT_HDR
  Else If (Ext = '.LBM') or (Ext = '.ILBM') or (Ext = '.IFF') Then
@@ -4768,6 +4774,510 @@ Begin
 End;
 
 
+{ FAX brut CCITT T.4 Group 3 1D (BMP2FAX.PAS), bits de poids fort d'abord.
+  Les dimensions sont deduites des lignes EOL ; RTC obligatoire (six EOL).
+  Deux passes valident le flux avant toute modification du document.
+  Les conteneurs TIFF et les modes Group 3 2D / Group 4 ne sont pas du FAX brut 1D. }
+Type
+ TFXNode = Record Next: Array[0..1] Of Integer; Run: Integer; End;
+ TFXState = Record
+  Data,Pixels: PPNBytes;
+  Size,BitPos,PixelSize: LongInt;
+  Width,Height,Nodes: Integer;
+  Tree: Array[0..2047] Of TFXNode;
+ End;
+ PFXState = ^TFXState;
+
+Function FXBit(Var D: TFXState): Integer;
+Begin
+ FXBit:=-1;
+ If D.BitPos>=D.Size*8 Then Exit;
+ FXBit:=(D.Data^[D.BitPos Shr 3] Shr (7-(D.BitPos And 7))) And 1;
+ Inc(D.BitPos);
+End;
+
+Function FXAdd(Var D: TFXState; Root,Run: Integer; Const Code: String): Boolean;
+Var I,B,N: Integer;
+Begin
+ FXAdd:=False; N:=Root;
+ For I:=1 To Length(Code) Do Begin
+  B:=Ord(Code[I])-Ord('0');
+  If D.Tree[N].Run>=0 Then Exit;
+  If D.Tree[N].Next[B]<0 Then Begin
+   If D.Nodes>High(D.Tree) Then Exit;
+   D.Tree[N].Next[B]:=D.Nodes; Inc(D.Nodes);
+  End;
+  N:=D.Tree[N].Next[B];
+ End;
+ If (D.Tree[N].Run>=0) Or (D.Tree[N].Next[0]>=0) Or (D.Tree[N].Next[1]>=0) Then Exit;
+ D.Tree[N].Run:=Run; FXAdd:=True;
+End;
+
+Function FXWhiteCode(Run:Byte):String;
+Begin
+ Case Run of
+  0:FXWhiteCode:='00110101'; 1:FXWhiteCode:='000111';
+  2:FXWhiteCode:='0111'; 3:FXWhiteCode:='1000';
+  4:FXWhiteCode:='1011'; 5:FXWhiteCode:='1100';
+  6:FXWhiteCode:='1110'; 7:FXWhiteCode:='1111';
+  8:FXWhiteCode:='10011'; 9:FXWhiteCode:='10100';
+  10:FXWhiteCode:='00111'; 11:FXWhiteCode:='01000';
+  12:FXWhiteCode:='001000'; 13:FXWhiteCode:='000011';
+  14:FXWhiteCode:='110100'; 15:FXWhiteCode:='110101';
+  16:FXWhiteCode:='101010'; 17:FXWhiteCode:='101011';
+  18:FXWhiteCode:='0100111'; 19:FXWhiteCode:='0001100';
+  20:FXWhiteCode:='0001000'; 21:FXWhiteCode:='0010111';
+  22:FXWhiteCode:='0000011'; 23:FXWhiteCode:='0000100';
+  24:FXWhiteCode:='0101000'; 25:FXWhiteCode:='0101011';
+  26:FXWhiteCode:='0010011'; 27:FXWhiteCode:='0100100';
+  28:FXWhiteCode:='0011000'; 29:FXWhiteCode:='00000010';
+  30:FXWhiteCode:='00000011'; 31:FXWhiteCode:='00011010';
+  32:FXWhiteCode:='00011011'; 33:FXWhiteCode:='00010010';
+  34:FXWhiteCode:='00010011'; 35:FXWhiteCode:='00010100';
+  36:FXWhiteCode:='00010101'; 37:FXWhiteCode:='00010110';
+  38:FXWhiteCode:='00010111'; 39:FXWhiteCode:='00101000';
+  40:FXWhiteCode:='00101001'; 41:FXWhiteCode:='00101010';
+  42:FXWhiteCode:='00101011'; 43:FXWhiteCode:='00101100';
+  44:FXWhiteCode:='00101101'; 45:FXWhiteCode:='00000100';
+  46:FXWhiteCode:='00000101'; 47:FXWhiteCode:='00001010';
+  48:FXWhiteCode:='00001011'; 49:FXWhiteCode:='01010010';
+  50:FXWhiteCode:='01010011'; 51:FXWhiteCode:='01010100';
+  52:FXWhiteCode:='01010101'; 53:FXWhiteCode:='00100100';
+  54:FXWhiteCode:='00100101'; 55:FXWhiteCode:='01011000';
+  56:FXWhiteCode:='01011001'; 57:FXWhiteCode:='01011010';
+  58:FXWhiteCode:='01011011'; 59:FXWhiteCode:='01001010';
+  60:FXWhiteCode:='01001011'; 61:FXWhiteCode:='00110010';
+  62:FXWhiteCode:='00110011'; Else FXWhiteCode:='00110100';
+ End;
+End;
+
+Function FXBlackCode(Run:Byte):String;
+Begin
+ Case Run of
+  0:FXBlackCode:='0000110111'; 1:FXBlackCode:='010';
+  2:FXBlackCode:='11'; 3:FXBlackCode:='10';
+  4:FXBlackCode:='011'; 5:FXBlackCode:='0011';
+  6:FXBlackCode:='0010'; 7:FXBlackCode:='00011';
+  8:FXBlackCode:='000101'; 9:FXBlackCode:='000100';
+  10:FXBlackCode:='0000100'; 11:FXBlackCode:='0000101';
+  12:FXBlackCode:='0000111'; 13:FXBlackCode:='00000100';
+  14:FXBlackCode:='00000111'; 15:FXBlackCode:='000011000';
+  16:FXBlackCode:='0000010111'; 17:FXBlackCode:='0000011000';
+  18:FXBlackCode:='0000001000'; 19:FXBlackCode:='00001100111';
+  20:FXBlackCode:='00001101000'; 21:FXBlackCode:='00001101100';
+  22:FXBlackCode:='00000110111'; 23:FXBlackCode:='00000101000';
+  24:FXBlackCode:='00000010111'; 25:FXBlackCode:='00000011000';
+  26:FXBlackCode:='000011001010'; 27:FXBlackCode:='000011001011';
+  28:FXBlackCode:='000011001100'; 29:FXBlackCode:='000011001101';
+  30:FXBlackCode:='000001101000'; 31:FXBlackCode:='000001101001';
+  32:FXBlackCode:='000001101010'; 33:FXBlackCode:='000001101011';
+  34:FXBlackCode:='000011010010'; 35:FXBlackCode:='000011010011';
+  36:FXBlackCode:='000011010100'; 37:FXBlackCode:='000011010101';
+  38:FXBlackCode:='000011010110'; 39:FXBlackCode:='000011010111';
+  40:FXBlackCode:='000001101100'; 41:FXBlackCode:='000001101101';
+  42:FXBlackCode:='000011011010'; 43:FXBlackCode:='000011011011';
+  44:FXBlackCode:='000001010100'; 45:FXBlackCode:='000001010101';
+  46:FXBlackCode:='000001010110'; 47:FXBlackCode:='000001010111';
+  48:FXBlackCode:='000001100100'; 49:FXBlackCode:='000001100101';
+  50:FXBlackCode:='000001010010'; 51:FXBlackCode:='000001010011';
+  52:FXBlackCode:='000000100100'; 53:FXBlackCode:='000000110111';
+  54:FXBlackCode:='000000111000'; 55:FXBlackCode:='000000100111';
+  56:FXBlackCode:='000000101000'; 57:FXBlackCode:='000001011000';
+  58:FXBlackCode:='000001011001'; 59:FXBlackCode:='000000101011';
+  60:FXBlackCode:='000000101100'; 61:FXBlackCode:='000001011010';
+  62:FXBlackCode:='000001100110'; Else FXBlackCode:='000001100111';
+ End;
+End;
+
+Function FXMakeupCode(Run:Word;Black:Boolean):String;
+Begin
+ Case Run of
+  64:If Black Then FXMakeupCode:='0000001111'Else FXMakeupCode:='11011';
+  128:If Black Then FXMakeupCode:='000011001000'Else FXMakeupCode:='10010';
+  192:If Black Then FXMakeupCode:='000011001001'Else FXMakeupCode:='010111';
+  256:If Black Then FXMakeupCode:='000001011011'Else FXMakeupCode:='0110111';
+  320:If Black Then FXMakeupCode:='000000110011'Else FXMakeupCode:='00110110';
+  384:If Black Then FXMakeupCode:='000000110100'Else FXMakeupCode:='00110111';
+  448:If Black Then FXMakeupCode:='000000110101'Else FXMakeupCode:='01100100';
+  512:If Black Then FXMakeupCode:='0000001101100'Else FXMakeupCode:='01100101';
+  576:If Black Then FXMakeupCode:='0000001101101'Else FXMakeupCode:='01101000';
+  640:If Black Then FXMakeupCode:='0000001001010'Else FXMakeupCode:='01100111';
+  704:If Black Then FXMakeupCode:='0000001001011'Else FXMakeupCode:='011001100';
+  768:If Black Then FXMakeupCode:='0000001001100'Else FXMakeupCode:='011001101';
+  832:If Black Then FXMakeupCode:='0000001001101'Else FXMakeupCode:='011010010';
+  896:If Black Then FXMakeupCode:='0000001110010'Else FXMakeupCode:='011010011';
+  960:If Black Then FXMakeupCode:='0000001110011'Else FXMakeupCode:='011010100';
+  1024:If Black Then FXMakeupCode:='0000001110100'Else FXMakeupCode:='011010101';
+  1088:If Black Then FXMakeupCode:='0000001110101'Else FXMakeupCode:='011010110';
+  1152:If Black Then FXMakeupCode:='0000001110110'Else FXMakeupCode:='011010111';
+  1216:If Black Then FXMakeupCode:='0000001110111'Else FXMakeupCode:='011011000';
+  1280:If Black Then FXMakeupCode:='0000001010010'Else FXMakeupCode:='011011001';
+  1344:If Black Then FXMakeupCode:='0000001010011'Else FXMakeupCode:='011011010';
+  1408:If Black Then FXMakeupCode:='0000001010100'Else FXMakeupCode:='011011011';
+  1472:If Black Then FXMakeupCode:='0000001010101'Else FXMakeupCode:='010011000';
+  1536:If Black Then FXMakeupCode:='0000001011010'Else FXMakeupCode:='010011001';
+  1600:If Black Then FXMakeupCode:='0000001011011'Else FXMakeupCode:='010011010';
+  1664:If Black Then FXMakeupCode:='0000001100100'Else FXMakeupCode:='011000';
+  1728:If Black Then FXMakeupCode:='0000001100101'Else FXMakeupCode:='010011011';
+  1792:FXMakeupCode:='00000001000'; 1856:FXMakeupCode:='00000001100';
+  1920:FXMakeupCode:='00000001101'; 1984:FXMakeupCode:='000000010010';
+  2048:FXMakeupCode:='000000010011'; 2112:FXMakeupCode:='000000010100';
+  2176:FXMakeupCode:='000000010101'; 2240:FXMakeupCode:='000000010110';
+  2304:FXMakeupCode:='000000010111'; 2368:FXMakeupCode:='000000011100';
+  2432:FXMakeupCode:='000000011101'; 2496:FXMakeupCode:='000000011110';
+  Else FXMakeupCode:='000000011111';
+ End;
+End;
+
+
+Function FXBuild(Var D: TFXState): Boolean;
+Var C,R: Integer; S: String;
+Begin
+ FXBuild:=False; FillChar(D.Tree,SizeOf(D.Tree),255); D.Nodes:=2;
+ For C:=0 To 1 Do Begin
+  For R:=0 To 63 Do Begin
+   If C=0 Then S:=FXWhiteCode(R) Else S:=FXBlackCode(R);
+   If Not FXAdd(D,C,R,S) Then Exit;
+  End;
+  R:=64;
+  While R<=2560 Do Begin
+   S:=FXMakeupCode(R,C=1); If Not FXAdd(D,C,R,S) Then Exit;
+   Inc(R,64);
+  End;
+ End;
+ FXBuild:=True;
+End;
+
+Function FXEOL(Var D: TFXState): Boolean;
+Var Saved: LongInt; B,Z: Integer;
+Begin
+ FXEOL:=False; Saved:=D.BitPos; Z:=0;
+ Repeat B:=FXBit(D); If B<>0 Then Break; Inc(Z); Until Z>64;
+ If (B=1) And (Z>=11) And (Z<=64) Then FXEOL:=True Else D.BitPos:=Saved;
+End;
+
+Function FXRun(Var D: TFXState; Black: Boolean): Integer;
+Var N,B,I: Integer;
+Begin
+ FXRun:=-1; N:=Ord(Black);
+ For I:=1 To 13 Do Begin
+  B:=FXBit(D); If B<0 Then Exit;
+  N:=D.Tree[N].Next[B]; If N<0 Then Exit;
+  If D.Tree[N].Run>=0 Then Begin FXRun:=D.Tree[N].Run; Exit; End;
+ End;
+End;
+
+Function FXDecode(Var D: TFXState; Store: Boolean): Boolean;
+Var X,Y,W,R,Pending,Empty,I,Tokens: Integer; Black: Boolean; Offset: LongInt;
+Begin
+ FXDecode:=False; D.BitPos:=0;
+ If Not FXEOL(D) Then Exit;
+ Y:=0; W:=0; Empty:=1;
+ Repeat
+  X:=0; Pending:=0; Black:=False; Tokens:=0;
+  While Not FXEOL(D) Do Begin
+   R:=FXRun(D,Black); If R<0 Then Exit;
+   Inc(Tokens); If Tokens>MAX_IMAGE_WIDTH*2+128 Then Exit;
+   If R>MAX_IMAGE_WIDTH-X-Pending Then Exit;
+   Inc(Pending,R);
+   If R<64 Then Begin
+    If Store Then Begin
+     If (Y>=D.Height) Or (X+Pending>D.Width) Then Exit;
+     Offset:=LongInt(Y)*D.Width+X;
+     For I:=0 To Pending-1 Do
+      If Black Then D.Pixels^[Offset+I]:=0 Else D.Pixels^[Offset+I]:=16;
+    End;
+    Inc(X,Pending); Pending:=0; Black:=Not Black;
+   End;
+  End;
+  If Pending<>0 Then Exit;
+  If X=0 Then Begin
+   { Uniquement les EOL vides du RTC, jamais des lignes de pixels vides. }
+   If (Y=0) Or (Tokens<>0) Then Exit;
+   Inc(Empty);
+  End Else Begin
+   If Empty<>1 Then Exit;
+   If W=0 Then W:=X Else If X<>W Then Exit;
+   Inc(Y); If Y>MAX_IMAGE_HEIGHT Then Exit;
+   Empty:=1;
+  End;
+ Until Empty=6;
+ If (D.Size*8-D.BitPos)>7 Then Exit;
+ While D.BitPos<D.Size*8 Do If FXBit(D)<>0 Then Exit;
+ If Store Then Begin If (W<>D.Width) Or (Y<>D.Height) Then Exit; End
+ Else Begin D.Width:=W; D.Height:=Y; End;
+ FXDecode:=(W>0) And (Y>0);
+End;
+
+Function FXRead(Const Name: String; Var D: TFXState): Boolean;
+Var F: File; OldMode: Byte; Bytes: LongInt; Failed: Boolean;
+Begin
+ FXRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=12) And (D.Size<=16777216) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ If Not FXBuild(D) Or Not FXDecode(D,False) Then Exit;
+ D.PixelSize:=LongInt(D.Width)*D.Height;
+ D.Pixels:=PPNBytes(JDAllocate(D.PixelSize)); If D.Pixels=Nil Then Exit;
+ FXRead:=FXDecode(D,True);
+End;
+
+Function LoadFAX(FileName: String): Boolean;
+Var D: PFXState; I: Integer;
+Begin
+ LoadFAX:=False; D:=PFXState(JDAllocate(SizeOf(TFXState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If FXRead(FileName,D^) Then Begin
+  If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+  CanvasImage:=PByte(D^.Pixels); D^.Pixels:=Nil;
+  CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+  ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=1;
+  ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_FAX; ImageBuffer.Modified:=False;
+  ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0);
+  FillChar(ImageBuffer.Palette,SizeOf(ImageBuffer.Palette),0);
+  For I:=0 To 15 Do Begin ImageBuffer.Palette[I].R:=VGA_R[I]; ImageBuffer.Palette[I].G:=VGA_G[I]; ImageBuffer.Palette[I].B:=VGA_B[I]; End;
+  ImageBuffer.Palette[16].R:=255; ImageBuffer.Palette[16].G:=255; ImageBuffer.Palette[16].B:=255;
+  For I:=0 To 255 Do Begin
+   ImageBuffer.Palette[I].A:=255;
+   {$IFDEF FPC}SetRGBPalette(I,ImageBuffer.Palette[I].R,ImageBuffer.Palette[I].G,ImageBuffer.Palette[I].B);
+   {$ELSE}SetRGBPalette(I,ImageBuffer.Palette[I].R Shr 2,ImageBuffer.Palette[I].G Shr 2,ImageBuffer.Palette[I].B Shr 2);{$ENDIF}
+  End;
+  LoadFAX:=True;
+ End;
+ If D^.Pixels<>Nil Then FreeMem(D^.Pixels,D^.PixelSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TFXState));
+End;
+
+
+{ OpenEXR scanline simple, non compresse : HALF, FLOAT et UINT.
+  Compatible BMP2EXR.PAS. Les valeurs sont bornees a [0,1] pour le canevas
+  indexe (pas de conservation des valeurs HDR flottantes). Alpha premultiplie
+  compose sur blanc. Pas de tuiles, deep, multipart ni compression. }
+Type
+ TEXChannel = Record Name: String[255]; Kind,Target: Integer; End;
+ TEXState = Record
+  Data,RGB: PPNBytes;
+  Size,Position,RGBSize,MinY,MinX,RowSize,TableEnd: LongInt;
+  Width,Height,ChannelCount: Integer;
+  Bad,HasAlpha,HasY: Boolean;
+  Channels: Array[0..63] Of TEXChannel;
+  Seen: Array[0..4095] Of Boolean;
+  Starts,Ends: Array[0..4095] Of LongInt;
+ End;
+ PEXState = ^TEXState;
+
+Function EXByte(Var D: TEXState): Byte;
+Begin
+ EXByte:=0; If D.Bad Then Exit;
+ If (D.Position<0) Or (D.Position>=D.Size) Then Begin D.Bad:=True; Exit; End;
+ EXByte:=D.Data^[D.Position]; Inc(D.Position);
+End;
+
+Function EXLong(Var D: TEXState): LongWord;
+Var V: LongWord; I: Integer;
+Begin
+ V:=0; For I:=0 To 3 Do V:=V Or (LongWord(EXByte(D)) Shl (I*8)); EXLong:=V;
+End;
+
+Function EXString(Var D: TEXState): String;
+Var S: String; B: Byte;
+Begin
+ S:='';
+ Repeat
+  B:=EXByte(D); If D.Bad Or (B=0) Then Break;
+  If (B<32) Or (B>126) Or (Length(S)=255) Then Begin D.Bad:=True; Break; End;
+  S:=S+Chr(B);
+ Until D.Bad;
+ EXString:=S;
+End;
+
+Function EXHeader(Var D: TEXState): Boolean;
+Var Name,Kind,S: String; Size,Limit,V,Flags: LongWord;
+    X1,Y1: LongInt; W,H: Double; I,J,T,K,Mask,AttrCount: Integer;
+    GotChannels,GotWindow,GotCompression,GotOrder: Boolean;
+Begin
+ EXHeader:=False;
+ If EXLong(D)<>$01312F76 Then Exit;
+ Flags:=EXLong(D); If Flags<>2 Then Exit;
+ GotChannels:=False; GotWindow:=False; GotCompression:=False; GotOrder:=False; AttrCount:=0;
+ Repeat
+  Name:=EXString(D); If D.Bad Then Exit; If Name='' Then Break;
+  Inc(AttrCount); If (AttrCount>256) Or (D.Position>1048576) Then Exit;
+  Kind:=EXString(D); Size:=EXLong(D);
+  If D.Bad Or (Size>LongWord(D.Size-D.Position)) Then Exit;
+  Limit:=LongWord(D.Position)+Size;
+  If Name='channels' Then Begin
+   If GotChannels Or (Kind<>'chlist') Then Exit; GotChannels:=True; Mask:=0;
+   Repeat
+    S:=EXString(D); If D.Bad Or (LongWord(D.Position)>Limit) Then Exit;
+    If S='' Then Break;
+    If (D.ChannelCount=64) Or (Limit-LongWord(D.Position)<16) Then Exit;
+    For J:=0 To D.ChannelCount-1 Do If D.Channels[J].Name=S Then Exit;
+    V:=EXLong(D); If V>2 Then Exit; K:=V;
+    If EXByte(D)>1 Then Exit;
+    For I:=1 To 3 Do If EXByte(D)<>0 Then Exit;
+    If EXLong(D)<>1 Then Exit; If EXLong(D)<>1 Then Exit;
+    T:=-1;
+    If S='R' Then T:=0 Else If S='G' Then T:=1 Else If S='B' Then T:=2
+    Else If S='A' Then Begin T:=3; D.HasAlpha:=True; End
+    Else If S='Y' Then Begin T:=4; D.HasY:=True; End;
+    If (T>=0) And (T<=2) Then Mask:=Mask Or (1 Shl T);
+    With D.Channels[D.ChannelCount] Do Begin Name:=S; Kind:=K; Target:=T; End;
+    Inc(D.ChannelCount);
+   Until D.Bad;
+   If (LongWord(D.Position)<>Limit) Or ((Mask<>7) And Not ((Mask=0) And D.HasY)) Then Exit;
+   If Mask=7 Then D.HasY:=False;
+  End Else If Name='compression' Then Begin
+   If GotCompression Or (Kind<>'compression') Or (Size<>1) Then Exit;
+   GotCompression:=True; If EXByte(D)<>0 Then Exit;
+  End Else If Name='dataWindow' Then Begin
+   If GotWindow Or (Kind<>'box2i') Or (Size<>16) Then Exit; GotWindow:=True;
+   D.MinX:=LongInt(EXLong(D)); D.MinY:=LongInt(EXLong(D));
+   X1:=LongInt(EXLong(D)); Y1:=LongInt(EXLong(D));
+   W:=(X1*1.0)-(D.MinX*1.0)+1; H:=(Y1*1.0)-(D.MinY*1.0)+1;
+   If (W<1) Or (W>MAX_IMAGE_WIDTH) Or (H<1) Or (H>MAX_IMAGE_HEIGHT) Then Exit;
+   D.Width:=Round(W); D.Height:=Round(H);
+  End Else If Name='lineOrder' Then Begin
+   If GotOrder Or (Kind<>'lineOrder') Or (Size<>1) Then Exit;
+   GotOrder:=True; If EXByte(D)>2 Then Exit;
+  End;
+  If D.Bad Or (LongWord(D.Position)>Limit) Then Exit;
+  D.Position:=Limit;
+ Until D.Bad;
+ If D.Bad Or Not GotChannels Or Not GotCompression Or Not GotWindow Then Exit;
+ D.RowSize:=0;
+ For I:=0 To D.ChannelCount-1 Do
+  If D.Channels[I].Kind=1 Then Inc(D.RowSize,LongInt(D.Width)*2) Else Inc(D.RowSize,LongInt(D.Width)*4);
+ D.TableEnd:=D.Position+LongInt(D.Height)*8;
+ If D.TableEnd>D.Size Then Exit;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); EXHeader:=D.RGB<>Nil;
+End;
+
+Function EXSample(Var D: TEXState; Kind: Integer): Double;
+Var V: LongWord; E,M: Integer; F: Single; H: Word; Value: Double;
+Begin
+ If Kind=1 Then Begin
+  H:=EXByte(D); H:=H Or (Word(EXByte(D)) Shl 8); E:=(H Shr 10) And 31; M:=H And 1023;
+  If (H And $8000)<>0 Then Value:=0
+  Else If E=31 Then Begin If M=0 Then Value:=1 Else Value:=0; End
+  Else If E=0 Then Value:=M/16777216.0
+  Else Value:=(1+M/1024.0)*Exp((E-15)*Ln(2));
+ End Else Begin
+  V:=EXLong(D);
+  If Kind=0 Then Value:=V/4294967295.0
+  Else If (V And $80000000)<>0 Then Value:=0
+  Else If (V And $7F800000)=$7F800000 Then Begin
+   If (V And $007FFFFF)=0 Then Value:=1 Else Value:=0;
+  End Else Begin Move(V,F,4); Value:=F; End;
+ End;
+ If Value<0 Then Value:=0; If Value>1 Then Value:=1;
+ EXSample:=Value;
+End;
+
+Function EXRead(Const Name: String; Var D: TEXState): Boolean;
+Var F: File; OldMode: Byte; Bytes,TablePos,Offset,EndPos,RowY: LongInt;
+    I,J,C,X,Y,T: Integer; Failed: Boolean; Low,HighPart,Count: LongWord;
+    Row: Array[0..4095,0..3] Of Double; Value: Double;
+Begin
+ EXRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=32) And (D.Size<=268435456) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Or Not EXHeader(D) Then Exit;
+ TablePos:=D.Position;
+ For I:=0 To D.Height-1 Do Begin
+  D.Position:=TablePos+LongInt(I)*8; Low:=EXLong(D); HighPart:=EXLong(D);
+  If D.Bad Or (HighPart<>0) Or (Low<LongWord(D.TableEnd)) Or (Low>LongWord(D.Size-8)) Then Exit;
+  Offset:=Low; D.Position:=Offset; RowY:=LongInt(EXLong(D)); Count:=EXLong(D);
+  If (Count<>LongWord(D.RowSize)) Or (Count>LongWord(D.Size-D.Position)) Then Exit;
+  EndPos:=D.Position+D.RowSize;
+  For J:=0 To I-1 Do If (Offset<D.Ends[J]) And (EndPos>D.Starts[J]) Then Exit;
+  D.Starts[I]:=Offset; D.Ends[I]:=EndPos;
+  If ((RowY*1.0)<(D.MinY*1.0)) Or ((RowY*1.0)>=(D.MinY*1.0)+D.Height) Then Exit;
+  Y:=RowY-D.MinY; If D.Seen[Y] Then Exit; D.Seen[Y]:=True;
+  FillChar(Row,SizeOf(Row),0); For X:=0 To D.Width-1 Do Row[X,3]:=1;
+  For C:=0 To D.ChannelCount-1 Do Begin
+   T:=D.Channels[C].Target;
+   For X:=0 To D.Width-1 Do Begin
+    Value:=EXSample(D,D.Channels[C].Kind);
+    If (T>=0) And (T<=3) Then Row[X,T]:=Value
+    Else If (T=4) And D.HasY Then Begin Row[X,0]:=Value; Row[X,1]:=Value; Row[X,2]:=Value; End;
+   End;
+  End;
+  If D.Bad Or (D.Position<>EndPos) Then Exit;
+  For X:=0 To D.Width-1 Do For C:=0 To 2 Do Begin
+   Value:=Row[X,C]; If D.HasAlpha Then Value:=Value+1-Row[X,3];
+   If Value>1 Then Value:=1;
+   D.RGB^[(LongInt(Y)*D.Width+X)*3+C]:=Round(Value*255);
+  End;
+ End;
+ EXRead:=True;
+End;
+
+Function LoadEXR(FileName: String): Boolean;
+Var D: PEXState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadEXR:=False; Pixels:=Nil; Q:=Nil;
+ D:=PEXState(JDAllocate(SizeOf(TEXState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If EXRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=24;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_EXR; ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadEXR:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TEXState));
+End;
+
+
+
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -4792,7 +5302,7 @@ Begin
     (Ext <> '.GIF') and (Ext <> '.PNG') and
     (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') and (Ext <> '.WPG') and
     (Ext <> '.LBM') and (Ext <> '.ILBM') and (Ext <> '.IFF') and
-    (Ext <> '.HDR') and (Ext <> '.RGBE') Then Exit;
+    (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -4805,6 +5315,8 @@ Begin
   FMT_WPG: Succeeded := LoadWPG(FileName);
   FMT_LBM: Succeeded := LoadLBM(FileName);
   FMT_HDR: Succeeded := LoadHDR(FileName);
+  FMT_FAX: Succeeded := LoadFAX(FileName);
+  FMT_EXR: Succeeded := LoadEXR(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -11796,6 +12308,8 @@ Begin
   FMT_WPG: APFormatName:='WPG';
   FMT_LBM: APFormatName:='LBM/IFF';
   FMT_HDR: APFormatName:='HDR/RGBE';
+  FMT_FAX: APFormatName:='FAX G3 1D';
+  FMT_EXR: APFormatName:='OpenEXR';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -12494,7 +13008,7 @@ Begin
  E:=OFUpper(ExtractFileExt(Name));
  Case Filter Of
   0: OFMatches:=(E='.BMP') Or (E='.DIB') Or (E='.GIF') Or
-                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF') Or (E='.HDR') Or (E='.RGBE');
+                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF') Or (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -12503,6 +13017,8 @@ Begin
   6: OFMatches:=E='.WPG';
   7: OFMatches:=(E='.LBM') Or (E='.ILBM') Or (E='.IFF');
   8: OFMatches:=(E='.HDR') Or (E='.RGBE');
+  9: OFMatches:=E='.FAX';
+  10: OFMatches:=E='.EXR';
   Else OFMatches:=True;
  End;
 End;
@@ -12510,7 +13026,7 @@ End;
 Function OFFilterLabel(N: Integer): String;
 Begin
  Case N Of
-  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR';
+  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR';
   1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
   2: OFFilterLabel:='GIF : *.gif';
   3: OFFilterLabel:='PNG : *.png';
@@ -12519,6 +13035,8 @@ Begin
   6: OFFilterLabel:='WordPerfect Graphics : *.wpg';
   7: OFFilterLabel:='IFF / LBM : *.lbm; *.ilbm; *.iff';
   8: OFFilterLabel:='Radiance HDR : *.hdr; *.rgbe';
+  9: OFFilterLabel:='FAX Group 3 1D : *.fax';
+  10: OFFilterLabel:='OpenEXR non compresse : *.exr';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -12930,7 +13448,7 @@ Begin
  If DosError<>0 Then Begin D.Notice:='Fichier introuvable ou inaccessible.'; D.Dirty:=True; Exit; End;
  {$IFDEF FPC}FindClose(R);{$ENDIF}
  If Not OFMatches(S,0) Then Begin
-  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR.'; D.Dirty:=True; Exit;
+  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR.'; D.Dirty:=True; Exit;
  End;
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
@@ -12939,7 +13457,7 @@ Procedure OFChooseFilter(Var D: TOFState);
 Var X,Y,W,I,N,MX,MY,B,Prev: Integer; K,E: Char; Done,Accept: Boolean; MaxFilter: Integer; OldName: String; PopupHeight: Integer;
 Begin
  X:=D.X+38; Y:=D.Y+120; W:=D.W-76;
- N:=D.Filter; MaxFilter:=10; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
+ N:=D.Filter; MaxFilter:=12; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
  PopupHeight:=50+MaxFilter*21;
  GetMouseStateLocal(MX,MY,Prev);
  Repeat
@@ -13048,7 +13566,7 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR : ouverture uniquement.';
+  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -14188,13 +14706,13 @@ BEGIN
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
-  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr]');
+  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
   WriteLn(' - Support de la souris (Int 33h / PtcMouse)');
   WriteLn(' - Outils de dessin: Crayon, Pinceau, A'+#130+'rographe, Ligne, Rectangle, Ellipse...');
-  WriteLn(' - Formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM), HDR (RGBE)');
+  WriteLn(' - Formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM), HDR (RGBE), FAX (G3 1D), EXR');
   WriteLn(' - Support de la transparence pour GIF et PNG');
   WriteLn(' - Redimensionnement et rognage d''image');
   WriteLn(' - Support de 2 a 32 bits de profondeur de couleur');

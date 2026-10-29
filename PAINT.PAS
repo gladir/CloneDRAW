@@ -149,6 +149,7 @@ Const
  FMT_CR2 = 19;
  FMT_PPM = 20;
  FMT_DIB = 21;
+ FMT_CUR = 22;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -257,6 +258,8 @@ Type
   FileName: String;
   Format: Byte;
   Metadata: TPaintMetadata;
+  HasHotspot: Boolean;
+  HotspotX,HotspotY,CursorImages: Integer;
  End;
 
  { Structure pour l'historique (Undo/Redo) }
@@ -587,6 +590,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If Ext = '.CUR' Then
+  GetImageFormat := FMT_CUR
  Else If Ext = '.PPM' Then
   GetImageFormat := FMT_PPM
  Else If Ext = '.CR2' Then
@@ -1158,6 +1163,9 @@ Begin
  ImageBuffer.FileName := '';
  ImageBuffer.Format := FMT_BMP;
  FillChar(ImageBuffer.Metadata,SizeOf(TPaintMetadata),0);
+ ImageBuffer.HasHotspot:=False;
+ ImageBuffer.HotspotX:=0; ImageBuffer.HotspotY:=0;
+ ImageBuffer.CursorImages:=0;
 
  { Initialiser la palette : 16 couleurs VGA standard puis degrade de gris.
    Sans cela ImageBuffer.Palette reste a zero -> Save* ecrit une palette
@@ -2552,26 +2560,14 @@ Begin
  If Z<>Nil Then Begin FreeMem(Z^.Raw,65536); FreeMem(Z,SizeOf(TPNState)); End;
 End;
 
-Function PNReadChunks(Const Name: String; Var D: TPNState): Boolean;
-Var F: File; OldMode: Byte; Bytes,Start,Length,ChunkEnd,I: LongInt;
-    Kind: String; N: LongWord; HaveHeader,HavePalette,HaveData,PastData,Ended: Boolean;
+Function PNParseChunks(Var D: TPNState): Boolean;
+Var Start,Length,ChunkEnd,I: LongInt; Kind: String; N: LongWord;
+    HaveHeader,HavePalette,HaveData,PastData,Ended: Boolean;
 Begin
- PNReadChunks:=False; HaveHeader:=False; HavePalette:=False;
+ PNParseChunks:=False;
+ If (D.FileData=Nil) Or (D.FileSize<45) Then Exit;
+ HaveHeader:=False; HavePalette:=False;
  HaveData:=False; PastData:=False; Ended:=False;
- Assign(F,Name); OldMode:=FileMode; FileMode:=0;
- {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
- If IOResult<>0 Then Exit;
- {$I-}
- D.FileSize:=FileSize(F);
- If (D.FileSize>=45) And (D.FileSize<=134217728) Then Begin
-  D.FileData:=PPNBytes(JDAllocate(D.FileSize));
-  If D.FileData<>Nil Then Begin BlockRead(F,D.FileData^,D.FileSize,Bytes); D.Bad:=Bytes<>D.FileSize; End
-  Else D.Bad:=True;
- End Else D.Bad:=True;
- Close(F);
- {$I+}
- If IOResult<>0 Then D.Bad:=True;
- If D.Bad Then Exit;
  For I:=0 To 7 Do If D.FileData^[I]<>PNG_SIGNATURE[I] Then Exit;
  D.Compressed:=PPNBytes(JDAllocate(D.FileSize)); If D.Compressed=Nil Then Exit;
  PNInitCRC(D); D.Position:=8;
@@ -2649,14 +2645,30 @@ Begin
  D.RawSize:=PNExpected(D);
  If (D.RawSize<1) Or (D.RawSize>150994944) Then Exit;
  D.Raw:=PPNBytes(JDAllocate(D.RawSize));
- PNReadChunks:=D.Raw<>Nil;
+ PNParseChunks:=D.Raw<>Nil;
 End;
 
-{ APNG : premiere trame animee importee comme image fixe, sur fond blanc.
-  Controle acTL/fcTL/fdAT, sequences et rectangles selon W3C PNG 3,
-  https://www.w3.org/TR/png-3/#apng-frame-based-animation
-  Le decodeur PNG integre verifie les CRC et decompresse la trame choisie.
-  Les autres trames sont controlees structurellement, sans lecture animee. }
+Function PNReadChunks(Const Name: String; Var D: TPNState): Boolean;
+Var F: File; OldMode: Byte; Bytes: LongInt;
+Begin
+ PNReadChunks:=False;
+ Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
+ If IOResult<>0 Then Exit;
+ {$I-}
+ D.FileSize:=FileSize(F);
+ If (D.FileSize>=45) And (D.FileSize<=134217728) Then Begin
+  D.FileData:=PPNBytes(JDAllocate(D.FileSize));
+  If D.FileData<>Nil Then Begin BlockRead(F,D.FileData^,D.FileSize,Bytes); D.Bad:=Bytes<>D.FileSize; End
+  Else D.Bad:=True;
+ End Else D.Bad:=True;
+ Close(F);
+ {$I+}
+ If IOResult<>0 Then D.Bad:=True;
+ If D.Bad Then Exit;
+ PNReadChunks:=PNParseChunks(D);
+End;
+
 Function APReadChunks(Const Name: String; Var D: TPNState): Boolean;
 Var P,Start,Length,N,Frames,Expected,Sequence,FW,FH,FX,FY: LongInt;
     Kind: String; I: Integer; V: LongWord;
@@ -6858,24 +6870,12 @@ Begin
  End;
 End;
 
-Function IBRead(Const Name: String; Var D: TIBState): Boolean;
-Var F: File; OldMode: Byte; Bytes,P,N,Dest: LongInt;
-    Failed: Boolean; X,Y,YY,I,Index,A: Integer; V: LongWord;
+Function IBRaster(Var D: TIBState): Boolean;
+Var P,N,Dest: LongInt; X,Y,YY,I,Index,A: Integer; V: LongWord;
     Color: Array[0..2] Of Integer;
 Begin
- IBRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
- {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
- {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
- If Not Failed And (D.Size>=12) And (D.Size<=134217728) Then Begin
-  D.Data:=PPNBytes(JDAllocate(D.Size));
-  If D.Data<>Nil Then Begin
-   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
-   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
-  End Else Failed:=True;
- End Else Failed:=True;
- {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
- If Failed Or Not IBHeader(D) Then Exit;
- If D.Compression In [1,2] Then Begin IBRead:=IBRLE(D); Exit; End;
+ IBRaster:=False;
+ If D.Compression In [1,2] Then Begin IBRaster:=IBRLE(D); Exit; End;
  For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do Begin
   P:=D.PixelStart+LongInt(Y)*D.RowSize;
   If D.Bits<=8 Then Begin
@@ -6902,7 +6902,25 @@ Begin
    End;
   End;
  End;
- IBRead:=Not D.Bad;
+ IBRaster:=Not D.Bad;
+End;
+
+Function IBRead(Const Name: String; Var D: TIBState): Boolean;
+Var F: File; OldMode: Byte; Bytes: LongInt; Failed: Boolean;
+Begin
+ IBRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=12) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Or Not IBHeader(D) Then Exit;
+ IBRead:=IBRaster(D);
 End;
 
 Function LoadDIB(FileName: String): Boolean;
@@ -6952,6 +6970,241 @@ Begin
  If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
  FreeMem(D,SizeOf(TIBState));
 End;
+{ CUR Windows : repertoire, DIB XOR/AND ou PNG, plus grande image.
+  Transparence et inversion monochrome composees sur fond blanc.
+  https://learn.microsoft.com/windows/win32/menurc/using-cursors
+  Les dimensions >=256 de BMP2CUR sont lues dans la ressource DIB. }
+Type
+ TCUState = Record
+  Data,RGB: PPNBytes;
+  Size,RGBSize: LongInt;
+  Width,Height,Bits,HotX,HotY,Count: Integer;
+  Transparent: Boolean;
+ End;
+ PCUState = ^TCUState;
+
+Function CUWord(Const D: TCUState; P: LongInt): Word;
+Begin
+ CUWord:=Word(D.Data^[P]) Or (Word(D.Data^[P+1]) Shl 8);
+End;
+
+Function CULong(Const D: TCUState; P: LongInt): LongWord;
+Begin
+ CULong:=LongWord(CUWord(D,P)) Or (LongWord(CUWord(D,P+2)) Shl 16);
+End;
+
+Function CUDIB(Var D: TCUState; Offset,Size: LongInt): Boolean;
+Var B: PIBState; H,MaskStart,MaskRow,P,Dest: LongInt;
+    X,Y,YY,I: Integer; Alpha,HaveMask: Boolean;
+Begin
+ CUDIB:=False; B:=PIBState(JDAllocate(SizeOf(TIBState)));
+ If B=Nil Then Exit; FillChar(B^,SizeOf(B^),0);
+ B^.Size:=Size; B^.Data:=PPNBytes(JDAllocate(Size));
+ If B^.Data<>Nil Then Begin
+  Move(D.Data^[Offset],B^.Data^,Size); H:=IBLong(B^,0);
+  If H=12 Then Begin
+   B^.Data^[6]:=(D.Height And 255);
+   B^.Data^[7]:=(D.Height Shr 8);
+  End Else Begin
+   H:=LongInt(IBLong(B^,8));
+   If H<0 Then H:=-D.Height Else H:=D.Height;
+   Move(H,B^.Data^[8],4);
+   H:=0; Move(H,B^.Data^[20],4);
+  End;
+  If IBHeader(B^) Then Begin
+   MaskStart:=B^.PixelStart+B^.RowSize*B^.Height;
+   MaskRow:=((LongInt(D.Width)+31) Div 32)*4;
+   HaveMask:=MaskRow*D.Height<=Size-MaskStart;
+   Alpha:=B^.Masks[3]<>0;
+   If (B^.Bits=32) And (B^.Compression=0) Then Begin
+    For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do
+     If B^.Data^[B^.PixelStart+LongInt(Y)*B^.RowSize+X*4+3]<>0
+      Then Alpha:=True;
+    If Not HaveMask Then Alpha:=True;
+    If Alpha Then Begin
+     B^.Masks[3]:=$FF000000; B^.Shifts[3]:=24;
+     B^.Maximum[3]:=255;
+    End;
+   End;
+   If (HaveMask Or Alpha) And (HaveMask Or (Size=MaskStart)) And
+      IBRaster(B^) Then Begin
+    D.Transparent:=False;
+    If Alpha Then Begin
+     For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do Begin
+      P:=B^.PixelStart+LongInt(Y)*B^.RowSize+
+       LongInt(X)*(B^.Bits Div 8); H:=0;
+      For I:=0 To B^.Bits Div 8-1 Do
+       H:=H Or (LongInt(B^.Data^[P+I]) Shl (I*8));
+      If (LongWord(H) And B^.Masks[3])<>B^.Masks[3] Then
+       D.Transparent:=True;
+     End;
+    End Else For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do
+     If ((B^.Data^[MaskStart+LongInt(Y)*MaskRow+X Div 8] Shr
+         (7-(X And 7))) And 1)<>0 Then Begin
+      YY:=Y; If Not B^.TopDown Then YY:=D.Height-1-Y;
+      Dest:=(LongInt(YY)*D.Width+X)*3;
+      For I:=0 To 2 Do B^.RGB^[Dest+I]:=255-B^.RGB^[Dest+I];
+      D.Transparent:=True;
+     End;
+    D.RGB:=B^.RGB; D.RGBSize:=B^.RGBSize; B^.RGB:=Nil;
+    CUDIB:=True;
+   End;
+  End;
+ End;
+ If B^.RGB<>Nil Then FreeMem(B^.RGB,B^.RGBSize);
+ If B^.Data<>Nil Then FreeMem(B^.Data,B^.Size);
+ FreeMem(B,SizeOf(TIBState));
+End;
+
+Function CUPNG(Var D: TCUState; Offset,Size: LongInt): Boolean;
+Var P: PPNState;
+Begin
+ CUPNG:=False; P:=PPNState(JDAllocate(SizeOf(TPNState)));
+ If P=Nil Then Exit; FillChar(P^,SizeOf(P^),0);
+ FillChar(P^.Alpha,SizeOf(P^.Alpha),255); P^.FileSize:=Size;
+ P^.FileData:=PPNBytes(JDAllocate(Size));
+ If P^.FileData<>Nil Then Begin
+  Move(D.Data^[Offset],P^.FileData^,Size);
+  If PNParseChunks(P^) Then If PNInflate(P^) Then
+   If PNReconstruct(P^) Then Begin
+    If (P^.Width=D.Width) And (P^.Height=D.Height) Then Begin
+     D.RGB:=P^.RGB; D.RGBSize:=P^.RGBSize; P^.RGB:=Nil;
+     D.Transparent:=P^.HasTransparency; CUPNG:=True;
+    End;
+   End;
+ End;
+ PNFree(P);
+End;
+
+Function CURead(Const Name: String; Var D: TCUState): Boolean;
+Var F: File; OldMode: Byte; Bytes,P,Offset,Size,BestOffset,BestSize: LongInt;
+    W,H,Bits,HX,HY,I,J: Integer; V,Header,Area,BestArea: LongWord;
+    Failed,PNG,BestPNG,Usable: Boolean;
+Begin
+ CURead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=22) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ If (CUWord(D,0)<>0) Or (CUWord(D,2)<>2) Then Exit;
+ D.Count:=CUWord(D,4);
+ If (D.Count<1) Or (D.Count>256) Then Exit;
+ If LongInt(D.Count)*16>D.Size-6 Then Exit;
+ BestOffset:=0; BestSize:=0; BestArea:=0; BestPNG:=False;
+ For I:=0 To D.Count-1 Do Begin
+  P:=6+LongInt(I)*16; If D.Data^[P+3]<>0 Then Exit;
+  V:=CUWord(D,P+4); If V>4095 Then Exit; HX:=V;
+  V:=CUWord(D,P+6); If V>4095 Then Exit; HY:=V;
+  V:=CULong(D,P+8); If (V<12) Or (V>LongWord(D.Size)) Then Exit;
+  Size:=V; V:=CULong(D,P+12);
+  If (V<LongWord(6+D.Count*16)) Or
+     (V>LongWord(D.Size-Size)) Then Exit; Offset:=V;
+  PNG:=True;
+  For J:=0 To 7 Do If D.Data^[Offset+J]<>PNG_SIGNATURE[J]
+   Then PNG:=False;
+  Usable:=True; Bits:=0; W:=0; H:=0;
+  If PNG Then Begin
+   If Size<33 Then Exit;
+   V:=PNBE(D.Data,Offset+16); If (V=0) Or (V>4096) Then Exit;
+   W:=V; V:=PNBE(D.Data,Offset+20);
+   If (V=0) Or (V>4096) Then Exit; H:=V; Bits:=32;
+  End Else Begin
+   Header:=CULong(D,Offset);
+   If Header=12 Then Begin
+    W:=CUWord(D,Offset+4); V:=CUWord(D,Offset+6);
+    Bits:=CUWord(D,Offset+10);
+   End Else If Header In [40,52,56,108,124] Then Begin
+    If Header>LongWord(Size) Then Exit;
+    V:=CULong(D,Offset+4); If (V=0) Or (V>4096) Then Exit;
+    W:=V; Bits:=CUWord(D,Offset+14);
+    Usable:=CULong(D,Offset+16) In [0,3,6];
+    V:=CULong(D,Offset+8);
+    If LongInt(V)<0 Then V:=LongWord(-LongInt(V));
+   End Else Begin Usable:=False; V:=0; End;
+   If Usable Then Begin
+    If (W<1) Or (W>4096) Or (V=0) Or (V>8192) Or
+       ((V And 1)<>0) Then Exit; H:=V Div 2;
+    If Not (Bits In [1,4,8,16,24,32]) Then Usable:=False;
+   End;
+  End;
+  If Usable Then Begin
+   If (D.Data^[P]<>0) And (D.Data^[P]<>W) Then Exit;
+   If (D.Data^[P+1]<>0) And (D.Data^[P+1]<>H) Then Exit;
+   If ((D.Data^[P]=0) And (W<256)) Or
+      ((D.Data^[P+1]=0) And (H<256)) Then Exit;
+   If (HX>=W) Or (HY>=H) Then Exit;
+   Area:=LongWord(W)*H;
+   If (Area>BestArea) Or ((Area=BestArea) And (Bits>D.Bits)) Then
+   Begin
+    BestArea:=Area; BestOffset:=Offset; BestSize:=Size; BestPNG:=PNG;
+    D.Width:=W; D.Height:=H; D.Bits:=Bits; D.HotX:=HX; D.HotY:=HY;
+   End;
+  End;
+ End;
+ If BestOffset=0 Then Exit;
+ If BestPNG Then CURead:=CUPNG(D,BestOffset,BestSize)
+ Else CURead:=CUDIB(D,BestOffset,BestSize);
+End;
+
+Function LoadCUR(FileName: String): Boolean;
+Var D: PCUState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadCUR:=False; Pixels:=Nil; Q:=Nil;
+ D:=PCUState(JDAllocate(SizeOf(TCUState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If CURead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+   ImageBuffer.BitDepth:=D^.Bits;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_CUR;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=D^.Transparent;
+   ImageBuffer.HasHotspot:=True;
+   ImageBuffer.HotspotX:=D^.HotX; ImageBuffer.HotspotY:=D^.HotY;
+   ImageBuffer.CursorImages:=D^.Count;
+   FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0);
+   ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadCUR:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TCUState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -6979,7 +7232,7 @@ Begin
     (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR')
     and (Ext <> '.DNG') and (Ext <> '.BGX') and (Ext <> '.DDS') and (Ext <>
     '.DCM') and (Ext <> '.APNG') and (Ext <> '.ARW') and (Ext <> '.CR2') and
-    (Ext <> '.PPM') Then Exit;
+    (Ext <> '.PPM') and (Ext <> '.CUR') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -7003,10 +7256,15 @@ Begin
   FMT_CR2: Succeeded := LoadCR2(FileName);
   FMT_PPM: Succeeded := LoadPPM(FileName);
   FMT_DIB: Succeeded := LoadDIB(FileName);
+  FMT_CUR: Succeeded := LoadCUR(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
  If Succeeded Then Begin
+  If Format<>FMT_CUR Then Begin
+   ImageBuffer.HasHotspot:=False; ImageBuffer.HotspotX:=0;
+   ImageBuffer.HotspotY:=0; ImageBuffer.CursorImages:=0;
+  End;
   If Not (Format In [FMT_GIF,FMT_PNG,FMT_APNG]) Then FillChar(ImageBuffer.Metadata,SizeOf(TPaintMetadata),0);
   RedrawInterface;
  End;
@@ -14029,6 +14287,7 @@ Begin
   FMT_CR2: APFormatName:='CR2 Bayer';
   FMT_PPM: APFormatName:='PPM / Netpbm';
   FMT_DIB: APFormatName:='DIB';
+  FMT_CUR: APFormatName:='CUR Windows';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -14731,7 +14990,8 @@ Begin
                 (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF') Or
                 (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR') Or
                 (E='.DNG') Or (E='.BGX') Or (E='.DDS') Or (E='.DCM') Or
-                (E='.APNG') Or (E='.ARW') Or (E='.CR2') Or (E='.PPM');
+                (E='.APNG') Or (E='.ARW') Or (E='.CR2') Or (E='.PPM') Or
+                (E='.CUR');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -14751,6 +15011,7 @@ Begin
   17: OFMatches:=E='.CR2';
   18: OFMatches:=E='.PPM';
   19: OFMatches:=E='.DIB';
+  20: OFMatches:=E='.CUR';
   Else OFMatches:=True;
  End;
 End;
@@ -14780,6 +15041,7 @@ Begin
   17: OFFilterLabel:='CR2 Bayer non compresse : *.cr2';
   18: OFFilterLabel:='PPM Portable Pixmap : *.ppm';
   19: OFFilterLabel:='DIB Device Independent Bitmap : *.dib';
+  20: OFFilterLabel:='CUR Curseur Windows : *.cur';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -15198,12 +15460,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..20] Of Integer;
+Type TOFFilterOrder = Array[0..21] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=21; If Saving Then Count:=3;
+ Count:=22; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;
@@ -15355,7 +15617,7 @@ Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
   D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG' +
-  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB : ouverture uniquement.';
+  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB/CUR : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -15772,6 +16034,12 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    OutTextXY(X+W-198,Y+270,'Exports : BMP, GIF, PNG');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
+   If ImageBuffer.HasHotspot Then Begin
+    OutTextXY(X+W-198,Y+324,'Point chaud : '+
+     IntToStr(ImageBuffer.HotspotX)+', '+IntToStr(ImageBuffer.HotspotY));
+    OutTextXY(X+W-198,Y+342,'Images CUR : '+
+     IntToStr(ImageBuffer.CursorImages));
+   End;
    OutTextXY(X+12,Y+354,'Chemin : '+OFShort(ImageBuffer.FileName,W-100));
   End Else Begin
    SetColor(Black);
@@ -16691,7 +16959,7 @@ BEGIN
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
   WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
-  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib]');
+  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');

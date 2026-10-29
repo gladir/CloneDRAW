@@ -154,6 +154,7 @@ Const
  FMT_MAC = 24;
  FMT_PAS = 25;
  FMT_ICO = 26;
+ FMT_GEM = 27;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -10565,6 +10566,74 @@ Begin
 End;
 
 
+{ GEM IMG version 1, extension XIMG RGB, huit plans et RLE par plan. }
+Function SaveGEM(FileName:String):Boolean;
+Var F:File;Buffer:Array[0..8191] Of Byte;Row:Array[0..511] Of Byte;
+ Used,X,Y,Plane,I,P,N,Start,Stride:Integer;Failed:Boolean;V:Byte;
+ Procedure Flush;
+ Var Written:LongInt;
+ Begin
+  If Failed Or (Used=0) Then Exit;
+  {$I-}BlockWrite(F,Buffer,Used,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Used);Used:=0;
+ End;
+ Procedure B(Value:Byte);
+ Begin
+  If Failed Then Exit;Buffer[Used]:=Value;Inc(Used);
+  If Used=SizeOf(Buffer) Then Flush;
+ End;
+ Procedure W(Value:Word);
+ Begin B(Value Shr 8);B(Value And 255);End;
+ Procedure Color(Value:Byte);
+ Begin W((LongInt(Value)*1000+127) Div 255);End;
+ Procedure EncodeRow;
+ Var J:Integer;
+ Begin
+  P:=0;
+  While P<Stride Do Begin
+   V:=Row[P];
+   If (V=0) Or (V=255) Then Begin
+    N:=1;
+    While (P+N<Stride) And (N<127) Do Begin
+     If Row[P+N]<>V Then Break;Inc(N);
+    End;
+    If V=255 Then B(128 Or N) Else B(N);Inc(P,N);
+   End Else Begin
+    Start:=P;Inc(P);
+    While (P<Stride) And (P-Start<255) Do Begin
+     If (Row[P]=0) Or (Row[P]=255) Then Break;Inc(P);
+    End;
+    B(128);B(P-Start);For J:=Start To P-1 Do B(Row[J]);
+   End;
+  End;
+ End;
+Begin
+ SaveGEM:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Used:=0;Failed:=False;Stride:=(CanvasImageW+7) Div 8;
+ W(1);W(779);W(8);W(2);W(372);W(372);W(CanvasImageW);W(CanvasImageH);
+ B(Ord('X'));B(Ord('I'));B(Ord('M'));B(Ord('G'));W(0);
+ For I:=0 To 255 Do Begin
+  Color(ImageBuffer.Palette[I].R);Color(ImageBuffer.Palette[I].G);
+  Color(ImageBuffer.Palette[I].B);
+ End;
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For Plane:=0 To 7 Do Begin
+   FillChar(Row,Stride,0);
+   For X:=0 To CanvasImageW-1 Do
+    If (ZImagePixel(X,Y) And (1 Shl Plane))<>0 Then
+     Row[X Div 8]:=Row[X Div 8] Or (128 Shr (X And 7));
+   EncodeRow;
+  End;
+ End;
+ Flush;{$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveGEM:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -10591,7 +10660,7 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
@@ -10626,6 +10695,7 @@ Begin
   FMT_WPG: OK:=SaveWPG(Temp);
   FMT_EXR: OK:=SaveEXR(Temp);
   FMT_FAX: OK:=SaveFAX(Temp);
+  FMT_GEM: OK:=SaveGEM(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -11961,7 +12031,7 @@ Begin
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -17321,6 +17391,7 @@ Begin
   FMT_DIB: APFormatName:='DIB';
   FMT_CUR: APFormatName:='CUR Windows';
   FMT_ICO: APFormatName:='ICO Icone Windows';
+  FMT_GEM: APFormatName:='GEM / XIMG';
   FMT_MSP: APFormatName:='MSP Microsoft Paint';
   FMT_MAC: APFormatName:='MAC MacPaint';
   FMT_PAS: APFormatName:='PAS constantes Pascal';
@@ -18058,6 +18129,7 @@ Begin
   25: OFMatches:=(E='.PAS');
   26: OFMatches:=(E='.TGA') Or (E='.TARGA');
   27: OFMatches:=E='.ICO';
+  29: OFMatches:=E='.GEM';
   Else OFMatches:=True;
  End;
 End;
@@ -18093,6 +18165,7 @@ Begin
   25: OFFilterLabel:='Pascal Bitmap : *.pas';
   26: OFFilterLabel:='Targa : *.tga; *.targa';
   27: OFFilterLabel:='ICO Icone Windows : *.ico';
+  29: OFFilterLabel:='GEM / XIMG : *.gem';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -18414,7 +18487,8 @@ Begin
  13: OFSaveExtension:='.dds';
  6: OFSaveExtension:='.wpg';
  10: OFSaveExtension:='.exr';
- 9: OFSaveExtension:='.fax'; Else OFSaveExtension:='.bmp'; End;
+ 9: OFSaveExtension:='.fax';
+ 29: OFSaveExtension:='.gem'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -18530,7 +18604,7 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=17;
+ Count:=29; If Saving Then Count:=18;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
@@ -18538,7 +18612,7 @@ Begin
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
    If I=13 Then Order[I]:=13; If I=14 Then Order[I]:=6; If I=15 Then
    Order[I]:=10;
-   If I=16 Then Order[I]:=9;
+   If I=16 Then Order[I]:=9; If I=17 Then Order[I]:=29;
    If I=10 Then Order[I]:=16; If I=11 Then Order[I]:=17; If I=12 Then
    Order[I]:=14;
   End;
@@ -18691,7 +18765,8 @@ Begin
    Else If SaveFormat=FMT_DDS Then D^.Filter:=13
    Else If SaveFormat=FMT_WPG Then D^.Filter:=6
    Else If SaveFormat=FMT_EXR Then D^.Filter:=10
-   Else If SaveFormat=FMT_FAX Then D^.Filter:=9;
+   Else If SaveFormat=FMT_FAX Then D^.Filter:=9
+   Else If SaveFormat=FMT_GEM Then D^.Filter:=29;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -18868,7 +18943,8 @@ Begin
    13: SaveFormat:=FMT_DDS;
    6: SaveFormat:=FMT_WPG;
    10: SaveFormat:=FMT_EXR;
-   9: SaveFormat:=FMT_FAX; Else SaveFormat:=FMT_BMP; End;
+   9: SaveFormat:=FMT_FAX;
+   29: SaveFormat:=FMT_GEM; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -18886,7 +18962,7 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -19174,7 +19250,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 17 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 18 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

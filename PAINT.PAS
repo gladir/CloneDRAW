@@ -5576,7 +5576,10 @@ Type
   Data,Raw,RGB: PPNBytes;
   Size,RawSize,RGBSize,Fixup,IFD: LongInt;
   Width,Height,OutWidth,OutHeight,Bits,Orientation,EntryCount: Integer;
-  Little,Bad,ARWMode,CR2Mode: Boolean;
+  Little,Bad,ARWMode,CR2Mode,TIFFMode: Boolean;
+  TFSamples,TFPhoto,TFPlanar,TFFill,TFPredictor,TFAlpha: Integer;
+  TFRowSize,TFCompression: LongInt;
+  Metadata: TPaintMetadata;
   Black,White: Double;
   Pattern: Array[0..3] Of Byte;
   Neutral: Array[0..2] Of Double;
@@ -5672,7 +5675,11 @@ Begin
   End;
  End;
  { Cette lecture prend en charge un seul IFD CFA, sans chaine de pages. }
- If DNLong(D,D.IFD+2+LongInt(N)*12)<>0 Then Exit;
+ V:=DNLong(D,D.IFD+2+LongInt(N)*12);
+ If D.TIFFMode Then Begin
+  If (V<>0) And ((V=LongWord(D.IFD)) Or
+     (V>LongWord(D.Size-2))) Then Exit;
+ End Else If V<>0 Then Exit;
  D.EntryCount:=N;
  For I:=0 To N-1 Do Begin
   P:=D.IFD+2+LongInt(I)*12;
@@ -5689,7 +5696,7 @@ Begin
    If (Offset<0) Or (Offset>D.Size-Bytes) Then Exit;
   End;
  End;
- If Not D.CR2Mode Then Begin
+ If Not D.CR2Mode And Not D.TIFFMode Then Begin
   K:=DNFind(D,50706); If K<0 Then Exit;
   If (D.Entries[K].Kind<>1) Or (D.Entries[K].Count<>4) Or (DNValue(D,K,0)<>1) Then Exit;
  End;
@@ -5804,10 +5811,10 @@ Begin
  DNDecode:=Not D.Bad;
 End;
 
-Function DNRead(Const Name: String; Var D: TDNState): Boolean;
+Function DNReadDirectory(Const Name: String; Var D: TDNState): Boolean;
 Var F: File; OldMode: Byte; Bytes: LongInt; Failed: Boolean;
 Begin
- DNRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ DNReadDirectory:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
  {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
  {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
  If Not Failed And (D.Size>=8) And (D.Size<=134217728) Then Begin
@@ -5816,8 +5823,13 @@ Begin
  End Else Failed:=True;
  {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
  If Failed Then Exit;
- If Not DNDirectory(D) Then Exit;
- DNRead:=DNDecode(D);
+ DNReadDirectory:=DNDirectory(D);
+End;
+
+Function DNRead(Const Name: String; Var D: TDNState): Boolean;
+Begin
+ DNRead:=False;
+ If DNReadDirectory(Name,D) Then DNRead:=DNDecode(D);
 End;
 
 Function LoadDNG(FileName: String): Boolean;
@@ -7550,6 +7562,289 @@ Begin
  If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
  FreeMem(D,SizeOf(TMSState));
 End;
+{ TIFF classique, premiere page, bandes natives/PackBits/Deflate.
+  Gris, palette, RGB, alpha 8/16 bits ; II/MM, plans et orientations.
+  Pas de BigTIFF, tuiles, LZW, JPEG ni compression CCITT.
+  https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf }
+Function TFStrip(Var D: TDNState; Offset,Count,Dest,Needed: LongInt): Boolean;
+Var P,Stop,OutPos: LongInt; Code,N,Value: Integer; Z: PPNState;
+Begin
+ TFStrip:=False;
+ If D.TFCompression=1 Then Begin
+  If Count<>Needed Then Exit;
+  Move(D.Data^[Offset],D.Raw^[Dest],Needed); TFStrip:=True; Exit;
+ End;
+ If (D.TFCompression=8) Or (D.TFCompression=32946) Then Begin
+  Z:=PPNState(JDAllocate(SizeOf(TPNState))); If Z=Nil Then Exit;
+  FillChar(Z^,SizeOf(Z^),0);
+  Z^.Compressed:=PPNBytes(@D.Data^[Offset]); Z^.CompressedSize:=Count;
+  Z^.Raw:=PPNBytes(@D.Raw^[Dest]); Z^.RawSize:=Needed;
+  TFStrip:=PNInflate(Z^); FreeMem(Z,SizeOf(TPNState)); Exit;
+ End;
+ P:=Offset; Stop:=Offset+Count; OutPos:=0;
+ While P<Stop Do Begin
+  Code:=D.Data^[P]; Inc(P);
+  If Code<128 Then Begin
+   N:=Code+1;
+   If (N>Stop-P) Or (N>Needed-OutPos) Then Exit;
+   Move(D.Data^[P],D.Raw^[Dest+OutPos],N); Inc(P,N); Inc(OutPos,N);
+  End Else If Code>128 Then Begin
+   N:=257-Code;
+   If (P>=Stop) Or (N>Needed-OutPos) Then Exit;
+   Value:=D.Data^[P]; Inc(P);
+   While N>0 Do Begin
+    D.Raw^[Dest+OutPos]:=Value; Inc(OutPos); Dec(N);
+   End;
+  End;
+ End;
+ TFStrip:=OutPos=Needed;
+End;
+
+Function TFRawWord(Var D: TDNState; P: LongInt): LongWord;
+Begin
+ If D.Little Then
+  TFRawWord:=LongWord(D.Raw^[P])+LongWord(D.Raw^[P+1])*256
+ Else TFRawWord:=LongWord(D.Raw^[P])*256+D.Raw^[P+1];
+End;
+
+Function TFSample(Var D: TDNState; X,Y,C: Integer): LongWord;
+Var Base,Sample: LongInt;
+Begin
+ If D.TFPlanar=1 Then Begin
+  Base:=LongInt(Y)*D.TFRowSize; Sample:=LongInt(X)*D.TFSamples+C;
+ End Else Begin
+  Base:=(LongInt(C)*D.Height+Y)*D.TFRowSize; Sample:=X;
+ End;
+ If D.Bits=16 Then TFSample:=TFRawWord(D,Base+Sample*2)
+ Else If D.Bits=8 Then TFSample:=D.Raw^[Base+Sample]
+ Else TFSample:=(D.Raw^[Base+(Sample*D.Bits) Div 8] Shr
+  (8-D.Bits-((Sample*D.Bits) And 7))) And ((1 Shl D.Bits)-1);
+End;
+
+Function TFDecode(Var D: TDNState): Boolean;
+Var V: Double; E,F,I,C,X,Y,OX,OY,Planes,RowSamples,Stride: Integer;
+    Strip,PerPlane,Total,Rows,Row,Offset,Count,Needed,Dest,P,J: LongInt;
+    A,Sample,Maximum,Value: LongWord;
+    Color: Array[0..2] Of Integer; Palette: TPalette;
+Begin
+ TFDecode:=False;
+ V:=DNScalar(D,256,0); If (V<1) Or (V>4096) Then Exit;
+ D.Width:=Round(V);
+ V:=DNScalar(D,257,0); If (V<1) Or (V>4096) Then Exit;
+ D.Height:=Round(V);
+ V:=DNScalar(D,277,1); If (V<1) Or (V>4) Then Exit;
+ D.TFSamples:=Round(V);
+ V:=DNScalar(D,262,-1); If (V<0) Or (V>3) Then Exit;
+ D.TFPhoto:=Round(V);
+ If D.TFPhoto=2 Then Begin
+  If Not (D.TFSamples In [3,4]) Then Exit;
+ End Else If D.TFPhoto=3 Then Begin If D.TFSamples<>1 Then Exit; End
+ Else If Not (D.TFSamples In [1,2]) Then Exit;
+ E:=DNFind(D,258); D.Bits:=1;
+ If E>=0 Then Begin
+  If (D.Entries[E].Count<>1) And
+     (D.Entries[E].Count<>D.TFSamples) Then Exit;
+  V:=DNValue(D,E,0);
+  If Not ((V=1) Or (V=2) Or (V=4) Or (V=8) Or (V=16)) Then Exit;
+  D.Bits:=Round(V);
+  For I:=1 To D.Entries[E].Count-1 Do
+   If DNValue(D,E,I)<>D.Bits Then Exit;
+ End;
+ If (D.TFSamples>1) And Not (D.Bits In [8,16]) Then Exit;
+ If (D.TFPhoto=3) And (D.Bits>8) Then Exit;
+ E:=DNFind(D,339);
+ If E>=0 Then Begin
+  If (D.Entries[E].Count<>1) And
+     (D.Entries[E].Count<>D.TFSamples) Then Exit;
+  For I:=0 To D.Entries[E].Count-1 Do If DNValue(D,E,I)<>1 Then Exit;
+ End;
+ V:=DNScalar(D,259,1);
+ If Not ((V=1) Or (V=8) Or (V=32946) Or (V=32773)) Then Exit;
+ D.TFCompression:=Round(V);
+ If DNFind(D,324)>=0 Then Exit;
+ V:=DNScalar(D,284,1); If (V<>1) And (V<>2) Then Exit;
+ D.TFPlanar:=Round(V);
+ V:=DNScalar(D,274,1); If (V<1) Or (V>8) Then Exit;
+ D.Orientation:=Round(V);
+ V:=DNScalar(D,266,1); If (V<>1) And (V<>2) Then Exit;
+ D.TFFill:=Round(V); If (D.TFFill=2) And (D.Bits>=8) Then Exit;
+ V:=DNScalar(D,317,1); If (V<>1) And (V<>2) Then Exit;
+ D.TFPredictor:=Round(V);
+ If (D.TFPredictor=2) And Not (D.Bits In [8,16]) Then Exit;
+ D.TFAlpha:=0;
+ If D.TFSamples In [2,4] Then Begin
+  V:=DNScalar(D,338,0); If (V<>1) And (V<>2) Then Exit;
+  D.TFAlpha:=Round(V);
+ End;
+ V:=DNScalar(D,278,D.Height); If V<1 Then Exit;
+ If V>D.Height Then V:=D.Height; Rows:=Round(V);
+ PerPlane:=(D.Height-1) Div Rows+1;
+ Planes:=1; If D.TFPlanar=2 Then Planes:=D.TFSamples;
+ Total:=PerPlane*Planes;
+ E:=DNFind(D,273); F:=DNFind(D,279);
+ If (E<0) Or (F<0) Then Exit;
+ If (D.Entries[E].Count<>Total) Or (D.Entries[F].Count<>Total) Then Exit;
+ RowSamples:=D.Width; If D.TFPlanar=1 Then
+  RowSamples:=D.Width*D.TFSamples;
+ D.TFRowSize:=(LongInt(RowSamples)*D.Bits+7) Div 8;
+ D.RawSize:=D.TFRowSize*D.Height*Planes;
+ If D.Bad Or (D.RawSize>150994944) Then Exit;
+ D.Raw:=PPNBytes(JDAllocate(D.RawSize)); If D.Raw=Nil Then Exit;
+ For Strip:=0 To Total-1 Do Begin
+  V:=DNValue(D,E,Strip); If (V<0) Or (V>D.Size) Then Exit;
+  Offset:=Round(V);
+  V:=DNValue(D,F,Strip); If (V<1) Or (V>D.Size-Offset) Then Exit;
+  Count:=Round(V); Row:=(Strip Mod PerPlane)*Rows;
+  Needed:=Rows; If Needed>D.Height-Row Then Needed:=D.Height-Row;
+  Needed:=Needed*D.TFRowSize;
+  Dest:=((Strip Div PerPlane)*D.Height+Row)*D.TFRowSize;
+  If D.Bad Or Not TFStrip(D,Offset,Count,Dest,Needed) Then Exit;
+ End;
+ If D.TFFill=2 Then For P:=0 To D.RawSize-1 Do Begin
+  Value:=D.Raw^[P]; Sample:=0;
+  For I:=1 To 8 Do Begin
+   Sample:=(Sample Shl 1) Or (Value And 1); Value:=Value Shr 1;
+  End;
+  D.Raw^[P]:=Sample;
+ End;
+ If D.TFPredictor=2 Then Begin
+  Stride:=1; If D.TFPlanar=1 Then Stride:=D.TFSamples;
+  For Y:=0 To D.Height*Planes-1 Do
+   For X:=Stride To RowSamples-1 Do Begin
+    P:=LongInt(Y)*D.TFRowSize+LongInt(X)*(D.Bits Div 8);
+    If D.Bits=8 Then
+     D.Raw^[P]:=(D.Raw^[P]+D.Raw^[P-Stride]) And 255
+    Else Begin
+     Value:=(TFRawWord(D,P)+TFRawWord(D,P-Stride*2)) And 65535;
+     If D.Little Then Begin
+      D.Raw^[P]:=Value And 255; D.Raw^[P+1]:=Value Shr 8;
+     End Else Begin
+      D.Raw^[P]:=Value Shr 8; D.Raw^[P+1]:=Value And 255;
+     End;
+    End;
+   End;
+ End;
+ Maximum:=(LongWord(1) Shl D.Bits)-1;
+ If D.TFPhoto=3 Then Begin
+  E:=DNFind(D,320); If E<0 Then Exit;
+  If (D.Entries[E].Kind<>3) Or
+     (D.Entries[E].Count<>3*(LongInt(1) Shl D.Bits)) Then Exit;
+  For I:=0 To (1 Shl D.Bits)-1 Do Begin
+   Palette[I].R:=Round(DNValue(D,E,I)/257);
+   Palette[I].G:=Round(DNValue(D,E,I+(1 Shl D.Bits))/257);
+   Palette[I].B:=Round(DNValue(D,E,I+(2 Shl D.Bits))/257);
+  End;
+ End;
+ D.OutWidth:=D.Width; D.OutHeight:=D.Height;
+ If D.Orientation>=5 Then Begin
+  D.OutWidth:=D.Height; D.OutHeight:=D.Width;
+ End;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do Begin
+  If D.TFPhoto=3 Then Begin
+   I:=TFSample(D,X,Y,0);
+   Color[0]:=Palette[I].R; Color[1]:=Palette[I].G;
+   Color[2]:=Palette[I].B;
+  End Else For C:=0 To 2 Do Begin
+   I:=C; If D.TFPhoto<>2 Then I:=0;
+   Sample:=TFSample(D,X,Y,I);
+   If D.TFPhoto=0 Then Sample:=Maximum-Sample;
+   Color[C]:=Round(Sample/(Maximum*1.0)*255);
+  End;
+  A:=255;
+  If D.TFAlpha<>0 Then
+   A:=Round(TFSample(D,X,Y,D.TFSamples-1)/(Maximum*1.0)*255);
+  OX:=X; OY:=Y;
+  Case D.Orientation Of
+   2: OX:=D.Width-1-X;
+   3: Begin OX:=D.Width-1-X; OY:=D.Height-1-Y; End;
+   4: OY:=D.Height-1-Y;
+   5: Begin OX:=Y; OY:=X; End;
+   6: Begin OX:=D.Height-1-Y; OY:=X; End;
+   7: Begin OX:=D.Height-1-Y; OY:=D.Width-1-X; End;
+   8: Begin OX:=Y; OY:=D.Width-1-X; End;
+  End;
+  Dest:=(LongInt(OY)*D.OutWidth+OX)*3;
+  For C:=0 To 2 Do Begin
+   If D.TFAlpha=1 Then Begin
+    Value:=Color[C]+255-A; If Value>255 Then Value:=255;
+   End Else Value:=(LongWord(Color[C])*A+255*(255-A)+127) Div 255;
+   D.RGB^[Dest+C]:=Value;
+  End;
+ End;
+ { Textes TIFF de la premiere page, conserves pour un export PNG. }
+ For I:=0 To 4 Do Begin
+  Case I Of
+   0: J:=269; 1: J:=315; 2: J:=33432; 3: J:=305; 4: J:=270;
+  End;
+  E:=DNFind(D,J);
+  If E>=0 Then If D.Entries[E].Kind=2 Then
+   For P:=0 To D.Entries[E].Count-1 Do Begin
+    J:=D.Data^[D.Entries[E].Offset+P]; If J=0 Then Break;
+    PMByte(D.Metadata,I,J);
+   End;
+ End;
+ TFDecode:=Not D.Bad;
+End;
+
+Function TFRead(Const Name: String; Var D: TDNState): Boolean;
+Begin
+ D.TIFFMode:=True; TFRead:=False;
+ If DNReadDirectory(Name,D) Then TFRead:=TFDecode(D);
+End;
+
+Function LoadTIFF(FileName: String): Boolean;
+Var D: PDNState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadTIFF:=False; Pixels:=Nil; Q:=Nil;
+ D:=PDNState(JDAllocate(SizeOf(TDNState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If TFRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.OutWidth)*D^.OutHeight; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.OutWidth; Img.Height:=D^.OutHeight; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.OutWidth; CanvasImageH:=D^.OutHeight;
+   ImageBuffer.Width:=D^.OutWidth; ImageBuffer.Height:=D^.OutHeight;
+   ImageBuffer.BitDepth:=D^.Bits*D^.TFSamples;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_TIFF;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=D^.TFAlpha<>0;
+   FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0);
+   ImageBuffer.Palette:=Q^.Palette;
+   ImageBuffer.Metadata:=D^.Metadata;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadTIFF:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Raw<>Nil Then FreeMem(D^.Raw,D^.RawSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TDNState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -7577,8 +7872,9 @@ Begin
     (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR')
     and (Ext <> '.DNG') and (Ext <> '.BGX') and (Ext <> '.DDS') and (Ext <>
     '.DCM') and (Ext <> '.APNG') and (Ext <> '.ARW') and (Ext <> '.CR2') and
-    (Ext <> '.PPM') and (Ext <> '.CUR') and (Ext <> '.PCX') and (Ext <> '.MSP')
-    Then Exit;
+    (Ext <> '.PPM') and (Ext <> '.CUR') and (Ext <> '.PCX') and
+    (Ext <> '.MSP') and
+    (Ext <> '.TIF') and (Ext <> '.TIFF') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -7605,6 +7901,7 @@ Begin
   FMT_CUR: Succeeded := LoadCUR(FileName);
   FMT_PCX: Succeeded := LoadPCX(FileName);
   FMT_MSP: Succeeded := LoadMSP(FileName);
+  FMT_TIFF: Succeeded := LoadTIFF(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -7613,7 +7910,8 @@ Begin
    ImageBuffer.HasHotspot:=False; ImageBuffer.HotspotX:=0;
    ImageBuffer.HotspotY:=0; ImageBuffer.CursorImages:=0;
   End;
-  If Not (Format In [FMT_GIF,FMT_PNG,FMT_APNG]) Then FillChar(ImageBuffer.Metadata,SizeOf(TPaintMetadata),0);
+  If Not (Format In [FMT_GIF,FMT_PNG,FMT_APNG,FMT_TIFF]) Then
+  FillChar(ImageBuffer.Metadata,SizeOf(TPaintMetadata),0);
   RedrawInterface;
  End;
 End;
@@ -15340,7 +15638,8 @@ Begin
                 (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR') Or
                 (E='.DNG') Or (E='.BGX') Or (E='.DDS') Or (E='.DCM') Or
                 (E='.APNG') Or (E='.ARW') Or (E='.CR2') Or (E='.PPM') Or
-                (E='.CUR') Or (E='.PCX') Or (E='.MSP');
+                (E='.CUR') Or (E='.PCX') Or (E='.MSP') Or
+                (E='.TIF') Or (E='.TIFF');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -15363,6 +15662,7 @@ Begin
   20: OFMatches:=E='.CUR';
   21: OFMatches:=E='.PCX';
   22: OFMatches:=E='.MSP';
+  23: OFMatches:=(E='.TIF') Or (E='.TIFF');
   Else OFMatches:=True;
  End;
 End;
@@ -15393,6 +15693,7 @@ Begin
   20: OFFilterLabel:='CUR Curseur Windows : *.cur';
   21: OFFilterLabel:='PCX ZSoft Paintbrush : *.pcx';
   22: OFFilterLabel:='MSP Microsoft Paint : *.msp';
+  23: OFFilterLabel:='TIFF : *.tif; *.tiff';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -15811,12 +16112,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..23] Of Integer;
+Type TOFFilterOrder = Array[0..24] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=24; If Saving Then Count:=3;
+ Count:=25; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;
@@ -15968,7 +16269,7 @@ Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
   D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG' +
-  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB/CUR/PCX/MSP : ouverture uniquement.';
+  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB/CUR/PCX/MSP/TIFF : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -17310,7 +17611,7 @@ BEGIN
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
   WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
-  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx|msp]');
+  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx|msp|tif]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');

@@ -539,6 +539,7 @@ Var
 Begin
  Ext := '';
  For I := Length(FileName) downto 1 do Begin
+  If FileName[I] In ['\','/',':'] Then Break;
   If FileName[I] = '.' Then Begin
    Ext := Copy(FileName, I, Length(FileName) - I + 1);
    Break;
@@ -3744,359 +3745,191 @@ Begin
  SaveBMP := True;
 End;
 
+{ Ecriture GIF/PNG integree. Les pixels proviennent du document, jamais
+  de l'ecran : menus, curseur et apercus ne peuvent pas entrer dans le fichier. }
 Function SaveGIF(FileName: String): Boolean;
-Var
- F: File;
- Header: TGIFHeader;
- BytesWritten: Word;
- GIFPalette: Array[0..255, 0..2] of Byte;
- ImageDescriptor: Array[0..9] of Byte;
- LZWMinCodeSize: Byte;
- RowBuffer: Array[0..4095] of Byte;
- SubBlockSize: Byte;
- Trailer: Byte;
- I, X, Y: Integer;
- PixelColor: Byte;
- DataPos: Integer;
- SrcP: PByte;
+Var F: File; Header: TGIFHeader; Bad: Boolean; Wrote: LongInt;
+    Palette: Array[0..767] Of Byte; Descriptor: Array[0..9] Of Byte;
+    Block: Array[0..254] Of Byte; Count,Bits,SinceClear,I,X,Y: Integer;
+    Acc: LongInt; B: Byte;
+ Procedure WriteData(Var Data; N: LongInt);
+ Begin
+  If Bad Then Exit;
+  {$I-}BlockWrite(F,Data,N,Wrote);{$I+}
+  If (IOResult<>0) Or (Wrote<>N) Then Bad:=True;
+ End;
+ Procedure WriteByte(V: Byte);
+ Begin B:=V; WriteData(B,1); End;
+ Procedure Flush;
+ Begin
+  If Count=0 Then Exit;
+  WriteByte(Count); WriteData(Block,Count); Count:=0;
+ End;
+ Procedure PackedByte(V: Byte);
+ Begin
+  Block[Count]:=V; Inc(Count); If Count=255 Then Flush;
+ End;
+ Procedure Code(V: Integer);
+ Begin
+  Acc:=Acc Or (LongInt(V) Shl Bits); Inc(Bits,9);
+  While Bits>=8 Do Begin PackedByte(Acc And 255); Acc:=Acc Shr 8; Dec(Bits,8); End;
+ End;
 Begin
- SaveGIF := False;
-
- { Préparer l'en-tête GIF }
- If ImageBuffer.HasTransparency Then
-  Move(GIF89_SIGNATURE[1], Header.Signature, 6)
- Else
-  Move(GIF87_SIGNATURE[1], Header.Signature, 6);
-
- Header.ScreenWidth := ImageBuffer.Width;
- Header.ScreenHeight := ImageBuffer.Height;
- Header.Flags := $F7; { Palette globale, 256 couleurs, 8 bits par couleur primaire }
- Header.BackgroundColor := 0;
- Header.AspectRatio := 0;
-
- Assign(F, FileName);
- {$I-}
- Rewrite(F, 1);
- {$I+}
- If IOResult <> 0 Then Exit;
-
- { Écrire l'en-tête }
- BlockWrite(F, Header, SizeOf(TGIFHeader), BytesWritten);
- If BytesWritten <> SizeOf(TGIFHeader) Then Begin
-  Close(F);
-  Exit;
+ SaveGIF:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<>ImageBuffer.Width) Or (CanvasImageH<>ImageBuffer.Height) Then Exit;
+ Assign(F,FileName); {$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Bad:=False; Count:=0; Bits:=0; Acc:=0; SinceClear:=0;
+ FillChar(Header,SizeOf(Header),0); Move(GIF87_SIGNATURE[1],Header.Signature,6);
+ Header.ScreenWidth:=CanvasImageW; Header.ScreenHeight:=CanvasImageH; Header.Flags:=$F7;
+ WriteData(Header,SizeOf(Header));
+ For I:=0 To 255 Do Begin
+  Palette[I*3]:=ImageBuffer.Palette[I].R; Palette[I*3+1]:=ImageBuffer.Palette[I].G;
+  Palette[I*3+2]:=ImageBuffer.Palette[I].B;
  End;
-
- { Écrire la palette globale (256 couleurs) }
- For I := 0 to 255 do Begin
-  GIFPalette[I, 0] := ImageBuffer.Palette[I].R;
-  GIFPalette[I, 1] := ImageBuffer.Palette[I].G;
-  GIFPalette[I, 2] := ImageBuffer.Palette[I].B;
+ WriteData(Palette,768); FillChar(Descriptor,SizeOf(Descriptor),0);
+ Descriptor[0]:=$2C; Descriptor[5]:=Lo(CanvasImageW); Descriptor[6]:=Hi(CanvasImageW);
+ Descriptor[7]:=Lo(CanvasImageH); Descriptor[8]:=Hi(CanvasImageH);
+ WriteData(Descriptor,10); WriteByte(8); Code(256);
+ { Codes litteraux LZW avec Clear periodique : flux valide a neuf bits,
+   sans dictionnaire volumineux. Le resultat conserve exactement la palette. }
+ For Y:=0 To CanvasImageH-1 Do For X:=0 To CanvasImageW-1 Do Begin
+  If SinceClear=200 Then Begin Code(256); SinceClear:=0; End;
+  Code(ZImagePixel(X,Y)); Inc(SinceClear);
  End;
- BlockWrite(F, GIFPalette, 768, BytesWritten);
- If BytesWritten <> 768 Then Begin
-  Close(F);
-  Exit;
- End;
-
- { Écrire l'extension de contrôle graphique pour la transparence (GIF89a) }
- If ImageBuffer.HasTransparency Then Begin
-  { Extension introducer }
-  SubBlockSize := $21;
-  BlockWrite(F, SubBlockSize, 1, BytesWritten);
-  { Graphic control label }
-  SubBlockSize := $F9;
-  BlockWrite(F, SubBlockSize, 1, BytesWritten);
-  { Block size }
-  SubBlockSize := 4;
-  BlockWrite(F, SubBlockSize, 1, BytesWritten);
-  { Flags: transparent color flag }
-  SubBlockSize := 1;
-  BlockWrite(F, SubBlockSize, 1, BytesWritten);
-  { Delay time }
-  SubBlockSize := 0;
-  BlockWrite(F, SubBlockSize, 1, BytesWritten);
-  BlockWrite(F, SubBlockSize, 1, BytesWritten);
-  { Transparent color index }
-  SubBlockSize := 0;
-  BlockWrite(F, SubBlockSize, 1, BytesWritten);
-  { Block terminator }
-  SubBlockSize := 0;
-  BlockWrite(F, SubBlockSize, 1, BytesWritten);
- End;
-
- { Écrire le descripteur d'image }
- ImageDescriptor[0] := $2C; { Image separator }
- ImageDescriptor[1] := 0; { Left position low }
- ImageDescriptor[2] := 0; { Left position high }
- ImageDescriptor[3] := 0; { Top position low }
- ImageDescriptor[4] := 0; { Top position high }
- ImageDescriptor[5] := Lo(ImageBuffer.Width);
- ImageDescriptor[6] := Hi(ImageBuffer.Width);
- ImageDescriptor[7] := Lo(ImageBuffer.Height);
- ImageDescriptor[8] := Hi(ImageBuffer.Height);
- ImageDescriptor[9] := 0; { Pas de palette locale, pas d'entrelacement }
- BlockWrite(F, ImageDescriptor, 10, BytesWritten);
- If BytesWritten <> 10 Then Begin
-  Close(F);
-  Exit;
- End;
-
- { Code minimum LZW (8 bits pour 256 couleurs) }
- LZWMinCodeSize := 8;
- BlockWrite(F, LZWMinCodeSize, 1, BytesWritten);
-
- { Écrire les données d'image (version simplifiée sans compression LZW réelle) }
- { Note: Une implémentation complète nécessiterait un encodeur LZW complet }
- { Ici on écrit les données brutes en blocs de 255 octets max }
- DataPos := 0;
- For Y := 0 to ImageBuffer.Height - 1 do Begin
-  For X := 0 to ImageBuffer.Width - 1 do Begin
-   { Lecture depuis CanvasImage (pas l'ecran) pour eviter de capturer
-     un menu deroulant ou le curseur souris. }
-   If (CanvasImage <> Nil) and
-      (X < CanvasImageW) and (Y < CanvasImageH) Then Begin
-    SrcP := CanvasImage;
-    Inc(SrcP, LongInt(Y) * LongInt(CanvasImageW) + X);
-    PixelColor := SrcP^;
-   End
-   Else
-    PixelColor := 0;
-
-   RowBuffer[DataPos] := PixelColor;
-   Inc(DataPos);
-
-   { Écrire un sous-bloc quand il est plein }
-   If DataPos >= 255 Then Begin
-    SubBlockSize := 255;
-    BlockWrite(F, SubBlockSize, 1, BytesWritten);
-    BlockWrite(F, RowBuffer, 255, BytesWritten);
-    DataPos := 0;
-   End;
-  End;
- End;
-
- { Écrire le dernier sous-bloc }
- If DataPos > 0 Then Begin
-  SubBlockSize := DataPos;
-  BlockWrite(F, SubBlockSize, 1, BytesWritten);
-  BlockWrite(F, RowBuffer, DataPos, BytesWritten);
- End;
-
- { Terminateur de bloc }
- SubBlockSize := 0;
- BlockWrite(F, SubBlockSize, 1, BytesWritten);
-
- { Écrire le terminateur GIF }
- Trailer := $3B;
- BlockWrite(F, Trailer, 1, BytesWritten);
-
- Close(F);
- ImageBuffer.FileName := FileName;
- ImageBuffer.Modified := False;
- SaveGIF := True;
+ Code(257); If Bits>0 Then PackedByte(Acc And 255);
+ Flush; WriteByte(0); WriteByte($3B);
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Bad:=True;
+ SaveGIF:=Not Bad;
 End;
 
 Function SavePNG(FileName: String): Boolean;
-Var
- F: File;
- BytesWritten: Word;
- IHDRChunk: Record
-  Width, Height: LongInt;
-  BitDepth, ColorType: Byte;
-  Compression, Filter, Interlace: Byte;
- End;
- ChunkLength: LongInt;
- ChunkType: Array[0..3] of Char;
- ChunkCRC: LongInt;
- PNGPalette: Array[0..255, 0..2] of Byte;
- RowBuffer: Array[0..4096] of Byte;
- I, X, Y: Integer;
- PixelColor: Byte;
- DataPos: Integer;
- SrcP: PByte;
-
- Function SwapLong(L: LongInt): LongInt;
- Var
-  B: Array[0..3] of Byte absolute L;
-  R: Array[0..3] of Byte;
-  Resultat:LongInt;
+Var F: File; D: PPNState; Data: PPNBytes; RawSize,Size,Pos,Offset,N,I,X,Y: LongInt;
+    Header: Array[0..12] Of Byte; Palette: Array[0..767] Of Byte;
+    Bytes: Array[0..3] Of Byte; AdlerA,AdlerB,C: LongWord;
+    Bad: Boolean; Wrote: LongInt;
+ Procedure WriteData(Var Buffer; Count: LongInt);
  Begin
-  R[0] := B[3];
-  R[1] := B[2];
-  R[2] := B[1];
-  R[3] := B[0];
-  Move(R, Resultat, 4);
-  SwapLong:=Resultat;
+  If Bad Then Exit;
+  {$I-}BlockWrite(F,Buffer,Count,Wrote);{$I+}
+  If (IOResult<>0) Or (Wrote<>Count) Then Bad:=True;
  End;
-
- Function CalculateCRC32(Data: Pointer; Len: Integer): LongInt;
- { Calcul CRC32 simplifié }
- Var
-  I, J: Integer;
-  CRC: LongInt;
-  B: PByte;
+ Procedure BE(Value: LongWord);
  Begin
-  CRC := LongInt($FFFFFFFF);
-  B := Data;
-  For I := 0 to Len - 1 do Begin
-   CRC := CRC xor B^;
-   For J := 0 to 7 do Begin
-    If (CRC and 1) <> 0 Then
-     CRC := (CRC shr 1) xor $EDB88320
-    Else
-     CRC := CRC shr 1;
-   End;
-   Inc(B);
+  Bytes[0]:=Value Shr 24; Bytes[1]:=Value Shr 16; Bytes[2]:=Value Shr 8; Bytes[3]:=Value;
+ End;
+ Procedure Chunk(Const Kind: String; Buffer: Pointer; Count: LongInt);
+ Var J: LongInt; P: PPNBytes; K: Array[0..3] Of Char;
+ Begin
+  BE(Count); WriteData(Bytes,4); C:=$FFFFFFFF;
+  For J:=0 To 3 Do Begin K[J]:=Kind[J+1]; C:=D^.CRC[(C Xor Ord(K[J])) And 255] Xor (C Shr 8); End;
+  WriteData(K,4); P:=PPNBytes(Buffer);
+  If Count>0 Then Begin
+   WriteData(P^,Count);
+   For J:=0 To Count-1 Do C:=D^.CRC[(C Xor P^[J]) And 255] Xor (C Shr 8);
   End;
-  CalculateCRC32 := CRC xor $FFFFFFFF;
+  BE(C Xor $FFFFFFFF); WriteData(Bytes,4);
  End;
-
 Begin
- SavePNG := False;
-
- Assign(F, FileName);
- {$I-}
- Rewrite(F, 1);
- {$I+}
- If IOResult <> 0 Then Exit;
-
- { Écrire la signature PNG }
- BlockWrite(F, PNG_SIGNATURE, 8, BytesWritten);
- If BytesWritten <> 8 Then Begin
-  Close(F);
-  Exit;
+ SavePNG:=False; Data:=Nil;
+ If (CanvasImage=Nil) Or (CanvasImageW<>ImageBuffer.Width) Or (CanvasImageH<>ImageBuffer.Height) Then Exit;
+ RawSize:=(LongInt(CanvasImageW)+1)*CanvasImageH;
+ Size:=2+RawSize+((RawSize+65534) Div 65535)*5+4;
+ Data:=PPNBytes(JDAllocate(Size)); D:=PPNState(JDAllocate(SizeOf(TPNState)));
+ If (Data=Nil) Or (D=Nil) Then Begin
+  If Data<>Nil Then FreeMem(Data,Size); If D<>Nil Then FreeMem(D,SizeOf(TPNState)); Exit;
  End;
-
- { Écrire le chunk IHDR }
- ChunkLength := SwapLong(13);
- ChunkType := 'IHDR';
- BlockWrite(F, ChunkLength, 4, BytesWritten);
- BlockWrite(F, ChunkType, 4, BytesWritten);
-
- IHDRChunk.Width := SwapLong(ImageBuffer.Width);
- IHDRChunk.Height := SwapLong(ImageBuffer.Height);
- IHDRChunk.BitDepth := 8;
- IHDRChunk.ColorType := 3; { Indexed color }
- IHDRChunk.Compression := 0;
- IHDRChunk.Filter := 0;
- IHDRChunk.Interlace := 0;
- BlockWrite(F, IHDRChunk, 13, BytesWritten);
-
- { Calculer et écrire le CRC }
- ChunkCRC := SwapLong(CalculateCRC32(@ChunkType, 17));
- BlockWrite(F, ChunkCRC, 4, BytesWritten);
-
- { Écrire le chunk PLTE (palette) }
- ChunkLength := SwapLong(768); { 256 * 3 }
- ChunkType := 'PLTE';
- BlockWrite(F, ChunkLength, 4, BytesWritten);
- BlockWrite(F, ChunkType, 4, BytesWritten);
-
- For I := 0 to 255 do Begin
-  PNGPalette[I, 0] := ImageBuffer.Palette[I].R;
-  PNGPalette[I, 1] := ImageBuffer.Palette[I].G;
-  PNGPalette[I, 2] := ImageBuffer.Palette[I].B;
- End;
- BlockWrite(F, PNGPalette, 768, BytesWritten);
-
- ChunkCRC := SwapLong(CalculateCRC32(@ChunkType, 772));
- BlockWrite(F, ChunkCRC, 4, BytesWritten);
-
- { Écrire le chunk tRNS pour la transparence si nécessaire }
- If ImageBuffer.HasTransparency Then Begin
-  ChunkLength := SwapLong(1);
-  ChunkType := 'tRNS';
-  BlockWrite(F, ChunkLength, 4, BytesWritten);
-  BlockWrite(F, ChunkType, 4, BytesWritten);
-  PixelColor := 0; { Index de couleur transparente }
-  BlockWrite(F, PixelColor, 1, BytesWritten);
-  ChunkCRC := SwapLong(CalculateCRC32(@ChunkType, 5));
-  BlockWrite(F, ChunkCRC, 4, BytesWritten);
- End;
-
- { Écrire le chunk IDAT (données non compressées - format simplifié) }
- { Note: PNG nécessite normalement la compression DEFLATE/zlib }
- { Cette version écrit les données avec un wrapper zlib minimal }
- DataPos := ImageBuffer.Width * ImageBuffer.Height + ImageBuffer.Height;
- ChunkLength := SwapLong(DataPos + 11); { Données + en-tête zlib }
- ChunkType := 'IDAT';
- BlockWrite(F, ChunkLength, 4, BytesWritten);
- BlockWrite(F, ChunkType, 4, BytesWritten);
-
- { En-tête zlib minimal (données non compressées) }
- PixelColor := $78; { CMF }
- BlockWrite(F, PixelColor, 1, BytesWritten);
- PixelColor := $01; { FLG }
- BlockWrite(F, PixelColor, 1, BytesWritten);
-
- { Écrire les lignes d'image avec le filtre type 0 (None) }
- For Y := 0 to ImageBuffer.Height - 1 do Begin
-  { Bloc non compressé }
-  If Y = ImageBuffer.Height - 1 Then
-   PixelColor := 1 { Dernier bloc }
-  Else
-   PixelColor := 0;
-  BlockWrite(F, PixelColor, 1, BytesWritten);
-
-  { Taille du bloc (2 octets little-endian + complément) }
-  DataPos := ImageBuffer.Width + 1;
-  RowBuffer[0] := Lo(DataPos);
-  RowBuffer[1] := Hi(DataPos);
-  RowBuffer[2] := Lo(DataPos) xor $FF;
-  RowBuffer[3] := Hi(DataPos) xor $FF;
-  BlockWrite(F, RowBuffer, 4, BytesWritten);
-
-  { Type de filtre (0 = None) }
-  PixelColor := 0;
-  BlockWrite(F, PixelColor, 1, BytesWritten);
-
-  { Données de la ligne. Lecture depuis CanvasImage (pas l'ecran)
-    pour ne pas capturer un menu deroulant ou le curseur souris. }
-  For X := 0 to ImageBuffer.Width - 1 do Begin
-   If (CanvasImage <> Nil) and
-      (X < CanvasImageW) and (Y < CanvasImageH) Then Begin
-    SrcP := CanvasImage;
-    Inc(SrcP, LongInt(Y) * LongInt(CanvasImageW) + X);
-    RowBuffer[X] := SrcP^;
-   End
-   Else
-    RowBuffer[X] := 0;
+ FillChar(D^,SizeOf(D^),0); PNInitCRC(D^);
+ { Zlib + blocs DEFLATE non compresses : encodage sans perte et autonome. }
+ Data^[0]:=$78; Data^[1]:=$01; Pos:=2; Offset:=0; AdlerA:=1; AdlerB:=0;
+ While Offset<RawSize Do Begin
+  N:=RawSize-Offset; If N>65535 Then N:=65535;
+  If Offset+N=RawSize Then Data^[Pos]:=1 Else Data^[Pos]:=0; Inc(Pos);
+  Data^[Pos]:=N And 255; Data^[Pos+1]:=N Shr 8;
+  Data^[Pos+2]:=(N Xor 65535) And 255; Data^[Pos+3]:=(N Xor 65535) Shr 8; Inc(Pos,4);
+  For I:=0 To N-1 Do Begin
+   X:=(Offset+I) Mod (CanvasImageW+1); Y:=(Offset+I) Div (CanvasImageW+1);
+   If X=0 Then Data^[Pos]:=0 Else Data^[Pos]:=ZImagePixel(X-1,Y);
+   AdlerA:=(AdlerA+Data^[Pos]) Mod 65521; AdlerB:=(AdlerB+AdlerA) Mod 65521; Inc(Pos);
   End;
-  BlockWrite(F, RowBuffer, ImageBuffer.Width, BytesWritten);
+  Inc(Offset,N);
  End;
-
- { Adler-32 checksum (simplifié) }
- ChunkCRC := SwapLong(1);
- BlockWrite(F, ChunkCRC, 4, BytesWritten);
-
- { CRC du chunk IDAT }
- ChunkCRC := SwapLong(0);
- BlockWrite(F, ChunkCRC, 4, BytesWritten);
-
- { Écrire le chunk IEND }
- ChunkLength := SwapLong(0);
- ChunkType := 'IEND';
- BlockWrite(F, ChunkLength, 4, BytesWritten);
- BlockWrite(F, ChunkType, 4, BytesWritten);
- ChunkCRC := SwapLong(LongInt($AE426082)); { CRC fixe pour IEND vide }
- BlockWrite(F, ChunkCRC, 4, BytesWritten);
-
- Close(F);
- ImageBuffer.FileName := FileName;
- ImageBuffer.Modified := False;
- SavePNG := True;
+ BE((AdlerB Shl 16) Or AdlerA); Move(Bytes,Data^[Pos],4); Inc(Pos,4);
+ FillChar(Header,SizeOf(Header),0); BE(CanvasImageW); Move(Bytes,Header[0],4);
+ BE(CanvasImageH); Move(Bytes,Header[4],4); Header[8]:=8; Header[9]:=3;
+ For I:=0 To 255 Do Begin
+  Palette[I*3]:=ImageBuffer.Palette[I].R; Palette[I*3+1]:=ImageBuffer.Palette[I].G; Palette[I*3+2]:=ImageBuffer.Palette[I].B;
+ End;
+ Assign(F,FileName); {$I-}Rewrite(F,1);{$I+}Bad:=IOResult<>0;
+ If Not Bad Then Begin
+  WriteData(PNG_SIGNATURE,8); Chunk('IHDR',@Header,13); Chunk('PLTE',@Palette,768);
+  Chunk('IDAT',Data,Pos); Chunk('IEND',Nil,0);
+  {$I-}Close(F);{$I+}If IOResult<>0 Then Bad:=True;
+ End;
+ FreeMem(Data,Size); FreeMem(D,SizeOf(TPNState)); SavePNG:=Not Bad;
 End;
+
+Var PaintSaveError: String;
 
 Function SaveImage(FileName: String; Format: Byte): Boolean;
-Begin
- Case Format of
-  FMT_BMP: SaveImage := SaveBMP(FileName);
-  FMT_GIF: SaveImage := SaveGIF(FileName);
-  FMT_PNG: SaveImage := SavePNG(FileName);
-  Else SaveImage := False;
+Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
+    I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
+ Function Present(Const Name: String): Boolean;
+ Begin
+  FindFirst(Name,AnyFile,R); Present:=DosError=0;
+  {$IFDEF FPC}FindClose(R);{$ENDIF}
  End;
+ Procedure RemoveTemp;
+ Begin
+  Assign(T,Temp); {$I-}Erase(T);{$I+}If IOResult<>0 Then;
+ End;
+Begin
+ SaveImage:=False; PaintSaveError:='';
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>MAX_IMAGE_WIDTH) Or (CanvasImageH>MAX_IMAGE_HEIGHT) Or
+    (CanvasImageW<>ImageBuffer.Width) Or (CanvasImageH<>ImageBuffer.Height) Then Begin
+  PaintSaveError:='Image absente ou dimensions incoherentes.'; Exit;
+ End;
+ If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG]) Then Begin PaintSaveError:='Choisissez BMP, GIF ou PNG.'; Exit; End;
+ Old:=ImageBuffer; Exists:=Present(FileName);
+ If Exists And ((R.Attr And (Directory+ReadOnly))<>0) Then Begin PaintSaveError:='Cible en lecture seule ou dossier.'; Exit; End;
+ Pos:=Length(FileName); While (Pos>0) And Not (FileName[Pos] In ['\','/']) Do Dec(Pos);
+ Folder:=Copy(FileName,1,Pos); Temp:=''; Backup:='';
+ For I:=0 To 9999 Do Begin
+  Temp:=Folder+'~paint'+IntToStr(I)+'.tmp'; Backup:=Folder+'~paint'+IntToStr(I)+'.bak';
+  If Not Present(Temp) And Not Present(Backup) And (Temp<>FileName) And (Backup<>FileName) Then Break;
+ End;
+ If (Length(Folder)>232) Or Present(Temp) Or Present(Backup) Then Begin PaintSaveError:='Impossible de creer un fichier temporaire.'; Exit; End;
+ { Normaliser uniquement la sortie BMP : le document est toujours indexe,
+   meme apres l'importation d'un PNG 16 bits ou d'un JPEG. }
+ If Format=FMT_BMP Then ImageBuffer.BitDepth:=8;
+ Case Format Of
+  FMT_BMP: OK:=SaveBMP(Temp);
+  FMT_GIF: OK:=SaveGIF(Temp);
+  Else OK:=SavePNG(Temp);
+ End;
+ ImageBuffer:=Old;
+ If Not OK Then Begin RemoveTemp; PaintSaveError:='Ecriture impossible (acces, espace disque ou image invalide).'; Exit; End;
+ MovedOld:=False;
+ If Exists Then Begin
+  Assign(F,FileName); {$I-}Rename(F,Backup);{$I+}Code:=IOResult;
+  If Code<>0 Then Begin RemoveTemp; PaintSaveError:='Le fichier existant ne peut pas etre remplace.'; Exit; End;
+  MovedOld:=True;
+ End;
+ Assign(T,Temp); {$I-}Rename(T,FileName);{$I+}Code:=IOResult;
+ If Code<>0 Then Begin
+  If MovedOld Then Begin
+   Assign(B,Backup); {$I-}Rename(B,FileName);{$I+}
+   If IOResult<>0 Then PaintSaveError:='Original conserve dans : '+Backup;
+  End;
+  RemoveTemp;
+  If PaintSaveError='' Then PaintSaveError:='Impossible de finaliser le fichier.';
+  Exit;
+ End;
+ If MovedOld Then Begin Assign(B,Backup); {$I-}Erase(B);{$I+}If IOResult<>0 Then; End;
+ ImageBuffer.FileName:=FileName; ImageBuffer.Format:=Format; ImageBuffer.Modified:=False;
+ SaveImage:=True;
 End;
+
 
 { Procédures de manipulation d'image }
 
@@ -5399,39 +5232,16 @@ Begin
  Until False;
 End;
 
+Function SaveAsCurrentImage: Boolean; Forward;
+
 Function SaveCurrentImage: Boolean;
-{ Sauvegarde l'image courante. Si pas de nom de fichier, demande un nom.
-  Retourne True en cas de succes, False si annule ou erreur. }
-Var
- NewName: String;
- Fmt: Byte;
 Begin
- SaveCurrentImage := False;
- If ImageBuffer.FileName <> '' Then Begin
-  If SaveImage(ImageBuffer.FileName, ImageBuffer.Format) Then Begin
-   ImageBuffer.Modified := False;
-   SaveCurrentImage := True;
-  End
-  Else
-   ShowMessage('Erreur', 'Echec de l''enregistrement.');
- End
- Else Begin
-  NewName := '';
-  If PromptString('Enregistrer sous', 'Nom du fichier :', NewName) and
-     (NewName <> '') Then Begin
-   NewName := EnsureSaveExtension(NewName);
-   Fmt := GetImageFormat(NewName);
-   If SaveImage(NewName, Fmt) Then Begin
-    ImageBuffer.FileName := NewName;
-    ImageBuffer.Format := Fmt;
-    ImageBuffer.Modified := False;
-    DrawStatusBar;
-    SaveCurrentImage := True;
-   End
-   Else
-    ShowMessage('Erreur', 'Echec de l''enregistrement.');
-  End;
+ SaveCurrentImage:=False;
+ If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In [FMT_BMP,FMT_GIF,FMT_PNG]) Then Begin
+  SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
+ If SaveImage(ImageBuffer.FileName,ImageBuffer.Format) Then Begin SaveCurrentImage:=True; DrawStatusBar; End
+ Else ShowMessage('Enregistrement impossible',PaintSaveError);
 End;
 
 Function ConfirmDiscardChanges: Boolean;
@@ -11423,7 +11233,7 @@ Type
   BackCount: Integer;
   LastIndex: Integer;
   LastClick: LongInt;
-  Truncated,Accepted,Done,Dirty: Boolean;
+  Truncated,Accepted,Done,Dirty,SaveMode: Boolean;
  End;
  POFState = ^TOFState;
 
@@ -11583,7 +11393,9 @@ Begin
   End;
   D.Back[D.BackCount]:=D.Folder; Inc(D.BackCount);
  End;
- D.Folder:=S; D.Address:=S; D.Name:=''; D.Cursor:=0; D.Anchor:=0;
+ D.Folder:=S; D.Address:=S;
+ If D.SaveMode Then D.Name:=OFBase(D.Name) Else D.Name:='';
+ D.Cursor:=Length(D.Name); D.Anchor:=0;
  OFScan(D);
 End;
 
@@ -11635,10 +11447,13 @@ Begin
  SetFillStyle(SolidFill,LightGray); Bar(D.X,D.Y,D.X+D.W,D.Y+D.H);
  SetColor(DarkGray); Rectangle(D.X,D.Y,D.X+D.W,D.Y+D.H);
  SetFillStyle(SolidFill,Blue); Bar(D.X+1,D.Y+1,D.X+D.W-1,D.Y+23);
- SetColor(White); OutTextXY(D.X+10,D.Y+8,'Ouvrir une image - explorateur PAINT');
+ SetColor(White);
+ If D.SaveMode Then OutTextXY(D.X+10,D.Y+8,'Enregistrer sous - explorateur PAINT')
+ Else OutTextXY(D.X+10,D.Y+8,'Ouvrir une image - explorateur PAINT');
  OFButton(D.X+8,D.Y+30,62,'Retour',False);
  OFButton(D.X+76,D.Y+30,62,'Parent',False);
  OFButton(D.X+144,D.Y+30,90,'Actualiser',False);
+ If D.SaveMode Then OFButton(D.X+240,D.Y+30,120,'Nouv. dossier',False);
  OFButton(D.X+D.W-70,D.Y+30,60,'Aide',False);
  EditBox(D.X+8,D.Y+60,D.W-88,D.Address,3);
  OFButton(D.X+D.W-72,D.Y+60,62,'Aller',D.Focus=3);
@@ -11687,9 +11502,12 @@ Begin
  Y:=D.Y+D.H-56;
  OFButton(D.X+10,Y,62,'Copier',False); OFButton(D.X+78,Y,62,'Coller',False);
  OFButton(D.X+146,Y,72,'Effacer',False);
- OFButton(D.X+D.W-180,Y,80,'Ouvrir',D.Focus=5);
+ If D.SaveMode Then OFButton(D.X+D.W-204,Y,104,'Enregistrer',D.Focus=5)
+ Else OFButton(D.X+D.W-180,Y,80,'Ouvrir',D.Focus=5);
  OFButton(D.X+D.W-92,Y,80,'Annuler',D.Focus=6);
- SetColor(DarkGray); OutTextXY(D.X+10,D.Y+D.H-19,'Tab : focus | Entree : ouvrir | F5 : actualiser | Echap : annuler');
+ SetColor(DarkGray);
+ If D.SaveMode Then OutTextXY(D.X+10,D.Y+D.H-19,'Entree : enregistrer | Echap : annuler | Ctrl+A/C/X/V : edition')
+ Else OutTextXY(D.X+10,D.Y+D.H-19,'Tab : focus | Entree : ouvrir | F5 : actualiser | Echap : annuler');
  ShowMouse; D.Dirty:=False;
 End;
 
@@ -11781,9 +11599,96 @@ Begin
  D.Dirty:=True;
 End;
 
+Function OFSaveExtension(Filter: Integer): String;
+Begin
+ Case Filter Of 2: OFSaveExtension:='.gif'; 3: OFSaveExtension:='.png'; Else OFSaveExtension:='.bmp'; End;
+End;
+
+Function OFSaveName(Const Name: String; Filter: Integer): String;
+Var E,S: String;
+Begin
+ S:=Name; E:=ExtractFileExt(S);
+ If E<>'' Then Delete(S,Length(S)-Length(E)+1,Length(E));
+ OFSaveName:=S+OFSaveExtension(Filter);
+End;
+
+Function OFValidName(Const S: String): Boolean;
+Var Base: String; I: Integer;
+Begin
+ OFValidName:=False;
+ If (S='') Or (S='.') Or (S='..') Then Exit;
+ If S[Length(S)] In [' ','.'] Then Exit;
+ For I:=1 To Length(S) Do If (S[I]<' ') Or (S[I] In ['\','/',':','*','?','"','<','>','|']) Then Exit;
+ Base:=OFUpper(S); I:=Pos('.',Base); If I>0 Then Base:=Copy(Base,1,I-1);
+ If (Base='CON') Or (Base='PRN') Or (Base='AUX') Or (Base='NUL') Or
+    (Base='CONIN$') Or (Base='CONOUT$') Then Exit;
+ If (Length(Base)=4) And ((Copy(Base,1,3)='COM') Or (Copy(Base,1,3)='LPT')) And (Base[4] In ['1'..'9']) Then Exit;
+ OFValidName:=True;
+End;
+
+Procedure OFNewFolder(Var D: TOFState);
+Var Name,Path: String; Code,I: Integer;
+Begin
+ Name:='';
+ If Not PromptString('Nouveau dossier','Nom du nouveau dossier :',Name) Then Begin D.Dirty:=True; Exit; End;
+ D.Dirty:=True;
+ If Not OFValidName(Name) Then Begin D.Notice:='Nom de dossier invalide.'; Exit; End;
+ If Length(D.Folder)+Length(Name)+1>255 Then Begin D.Notice:='Chemin trop long (255 caracteres).'; Exit; End;
+ Path:=OFJoin(D.Folder,Name);
+ {$I-}MkDir(Path);{$I+}Code:=IOResult;
+ If Code<>0 Then Begin D.Notice:='Creation impossible : dossier existant ou acces refuse.'; Exit; End;
+ For I:=0 To D.TreeCount-1 Do If OFUpper(D.Tree[I].Path)=OFUpper(D.Folder) Then Begin
+  If D.Tree[I].Expanded Then OFExpand(D,I);
+  OFExpand(D,I); Break;
+ End;
+ OFNavigate(D,Path,True);
+End;
+
+Procedure OFSaveAccept(Var D: TOFState);
+Var S,E,Base,Parent: String; R: SearchRec; Exists: Boolean; Answer: Integer;
+Begin
+ D.Dirty:=True; S:=D.Name;
+ While (Length(S)>0) And (S[1]=' ') Do Delete(S,1,1);
+ If (Length(S)>=2) And (S[1]='"') And (S[Length(S)]='"') Then S:=Copy(S,2,Length(S)-2);
+ If S='' Then Begin D.Notice:='Saisissez le nom du fichier a enregistrer.'; Exit; End;
+ If (Pos('*',S)>0) Or (Pos('?',S)>0) Then Begin D.Notice:='Les caracteres * et ? sont interdits dans le nom.'; Exit; End;
+ If (Pos(':',S)=0) And (S[1]<>'\') And (S[1]<>'/') Then Begin
+  If Length(D.Folder)+Length(S)+1>255 Then Begin D.Notice:='Chemin trop long (255 caracteres).'; Exit; End;
+  S:=OFJoin(D.Folder,S);
+ End;
+ S:=FExpand(S);
+ If OFDirectory(S) Then Begin OFNavigate(D,S,True); Exit; End;
+ Base:=OFBase(S); Parent:=OFParent(S);
+ If Not OFValidName(Base) Then Begin D.Notice:='Nom invalide ou reserve par le systeme.'; Exit; End;
+ If Not OFDirectory(Parent) Then Begin D.Notice:='Le dossier de destination n''existe pas.'; Exit; End;
+ E:=ExtractFileExt(Base);
+ If (E<>'') And (E<>'.BMP') And (E<>'.DIB') And (E<>'.PNG') And (E<>'.GIF') Then Begin
+  D.Notice:='Extensions disponibles : .bmp, .gif, .png. Changez le nom ou le type.'; Exit;
+ End;
+ If Length(S)-Length(E)+4>255 Then Begin D.Notice:='Chemin trop long apres ajout de l''extension.'; Exit; End;
+ If (E<>'') And (E<>OFUpper(OFSaveExtension(D.Filter))) Then Begin
+  D.Name:=OFSaveName(S,D.Filter); D.Cursor:=Length(D.Name); D.Anchor:=0;
+  D.Notice:='Extension adaptee au type choisi. Validez a nouveau pour enregistrer.'; Exit;
+ End;
+ If E='' Then S:=S+OFSaveExtension(D.Filter);
+ FindFirst(S,AnyFile,R); Exists:=DosError=0;
+ If Exists And ((R.Attr And (Directory+ReadOnly))<>0) Then Begin
+  {$IFDEF FPC}FindClose(R);{$ENDIF}
+  D.Notice:='La cible est un dossier ou un fichier en lecture seule.'; Exit;
+ End;
+ {$IFDEF FPC}FindClose(R);{$ENDIF}
+ If Exists Then Begin
+  Answer:=PromptYesNoCancel('Remplacer le fichier existant ?',OFShort(OFBase(S),380));
+  If Answer<>1 Then Begin D.Notice:='Fichier conserve. Choisissez un autre nom.'; Exit; End;
+ End;
+ D.Name:=S; D.Accepted:=True; D.Done:=True;
+End;
+
+
 Procedure OFAccept(Var D: TOFState);
 Var S: String; R: SearchRec;
 Begin
+ If D.SaveMode Then Begin OFSaveAccept(D); Exit; End;
  S:=D.Name;
  If (Length(S)>=2) And (S[1]='"') And (S[Length(S)]='"') Then S:=Copy(S,2,Length(S)-2);
  If S='' Then Begin D.Notice:='Selectionnez un fichier ou saisissez son nom.'; D.Dirty:=True; Exit; End;
@@ -11806,23 +11711,25 @@ Begin
 End;
 
 Procedure OFChooseFilter(Var D: TOFState);
-Var X,Y,W,I,N,MX,MY,B,Prev: Integer; K,E: Char; Done,Accept: Boolean;
+Var X,Y,W,I,N,MX,MY,B,Prev: Integer; K,E: Char; Done,Accept: Boolean; MaxFilter: Integer; OldName: String; PopupHeight: Integer;
 Begin
  X:=D.X+38; Y:=D.Y+120; W:=D.W-76;
- N:=D.Filter; Done:=False; Accept:=False;
+ N:=D.Filter; MaxFilter:=6; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
+ PopupHeight:=50+MaxFilter*21;
  GetMouseStateLocal(MX,MY,Prev);
  Repeat
   HideMouse;
-  SetFillStyle(SolidFill,LightGray); Bar(X,Y,X+W,Y+176);
-  SetColor(Black); Rectangle(X,Y,X+W,Y+176);
+  SetFillStyle(SolidFill,LightGray); Bar(X,Y,X+W,Y+PopupHeight);
+  SetColor(Black); Rectangle(X,Y,X+W,Y+PopupHeight);
   OutTextXY(X+10,Y+10,'Choisir le type de fichiers');
-  For I:=0 To 5 Do Begin
+  For I:=0 To MaxFilter-1 Do Begin
    If I=N Then SetFillStyle(SolidFill,LightBlue)
    Else SetFillStyle(SolidFill,White);
    Bar(X+6,Y+30+I*21,X+W-6,Y+49+I*21);
-   SetColor(Black); OutTextXY(X+12,Y+36+I*21,OFFilterLabel(I));
+   SetColor(Black); If D.SaveMode Then OutTextXY(X+12,Y+36+I*21,OFFilterLabel(I+1))
+   Else OutTextXY(X+12,Y+36+I*21,OFFilterLabel(I));
   End;
-  SetColor(DarkGray); OutTextXY(X+10,Y+163,'Entree : choisir   Echap : annuler'); ShowMouse;
+  SetColor(DarkGray); OutTextXY(X+10,Y+PopupHeight-13,'Entree : choisir   Echap : annuler'); ShowMouse;
   Repeat
    If KeyPressed Then Begin
     K:=ReadKey; E:=#0; If K=#0 Then E:=ReadKey;
@@ -11830,17 +11737,17 @@ Begin
      #27: Done:=True;
      #13: Begin Accept:=True; Done:=True; End;
      #0: Case E Of
-      #72: N:=(N+5) Mod 6;
-      #80: N:=(N+1) Mod 6;
+      #72: N:=(N+MaxFilter-1) Mod MaxFilter;
+      #80: N:=(N+1) Mod MaxFilter;
       #71: N:=0;
-      #79: N:=5;
+      #79: N:=MaxFilter-1;
      End;
     End;
     Break;
    End;
    GetMouseStateLocal(MX,MY,B);
    If ((B And 1)<>0) And ((Prev And 1)=0) Then Begin
-    If (MX>=X+6) And (MX<=X+W-6) And (MY>=Y+30) And (MY<Y+156) Then Begin
+    If (MX>=X+6) And (MX<=X+W-6) And (MY>=Y+30) And (MY<Y+30+MaxFilter*21) Then Begin
      N:=(MY-Y-30) Div 21; Accept:=True;
     End;
     Done:=True;
@@ -11848,11 +11755,19 @@ Begin
    Prev:=B; Delay(10);
   Until Done;
  Until Done;
- If Accept Then Begin D.Filter:=N; OFScan(D); End;
+ If Accept Then Begin
+  If D.SaveMode Then Begin
+   D.Filter:=N+1; OldName:=D.Name;
+   If OldName<>'' Then D.Name:=OFSaveName(OldName,D.Filter);
+   D.Cursor:=Length(D.Name); D.Anchor:=0;
+  End Else D.Filter:=N;
+  OFScan(D);
+  If D.SaveMode Then D.Notice:='Type choisi : '+OFFilterLabel(D.Filter);
+ End;
  D.Dirty:=True;
 End;
 
-Function OpenImageDialog(Var FileName: String): Boolean;
+Function PaintFileDialog(Var FileName: String; Saving: Boolean; Var SaveFormat: Byte): Boolean;
 Var D: POFState; MX,MY,MB,PrevB,I,N,Y,BX,BY: Integer; K,E: Char;
     S: String; Ticks: LongInt; HH,MM,SS,HS: Word;
  Procedure Focus(N: Integer);
@@ -11863,17 +11778,27 @@ Var D: POFState; MX,MY,MB,PrevB,I,N,Y,BX,BY: Integer; K,E: Char;
  End;
  Procedure Help;
  Begin
-  ShowMessage('Ouvrir - aide','Arbre : +/- deplie, nom = naviguer. Liste : double-clic ou Entree.');
+  If Saving Then Begin
+   ShowMessage('Enregistrer sous - aide','Choisissez le dossier, le nom et le type. Un fichier existant demande confirmation.');
+   ShowMessage('Formats disponibles','BMP, GIF et PNG conservent les couleurs du canevas. F7 : nouveau dossier.');
+  End Else ShowMessage('Ouvrir - aide','Arbre : +/- deplie, nom = naviguer. Liste : double-clic ou Entree.');
   ShowMessage('Saisie et navigation','Ctrl+A/C/X/V : selectionner/copier/couper/coller. Alt+Haut : parent.');
   D^.Dirty:=True;
  End;
 Begin
  MenuActive:=False;
- OpenImageDialog:=False; New(D); FillChar(D^,SizeOf(D^),0);
+ PaintFileDialog:=False; New(D); FillChar(D^,SizeOf(D^),0); D^.SaveMode:=Saving;
  D^.W:=Min(760,ScreenWidth-16); D^.H:=Min(540,ScreenHeight-16);
  D^.X:=(ScreenWidth-D^.W) Div 2; D^.Y:=(ScreenHeight-D^.H) Div 2;
  D^.Rows:=(D^.H-285) Div 16; D^.Rows:=Max(4,D^.Rows);
- GetDir(0,S); D^.Folder:=S; D^.Focus:=0; D^.Selected:=-1; D^.LastIndex:=-1;
+ GetDir(0,S); D^.Folder:=S;
+ If Saving Then Begin
+  D^.Filter:=1; If SaveFormat=FMT_GIF Then D^.Filter:=2 Else If SaveFormat=FMT_PNG Then D^.Filter:=3;
+  If FileName<>'' Then Begin
+   S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
+  End;
+ End;
+ D^.Focus:=0; D^.Selected:=-1; D^.LastIndex:=-1;
  { Les lecteurs sont les racines de l'arbre. Les branches se deploient
    dans la boite Pascal ; aucune fenetre native n'est creee. }
  For I:=Ord('A') To Ord('Z') Do Begin
@@ -11895,6 +11820,12 @@ Begin
   End;
   Inc(I);
  End;
+ If Saving Then Begin
+  D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
+  D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
+  D^.Notice:='BMP, GIF et PNG disponibles. JPEG : ouverture uniquement.';
+  If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
+ End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
  GetMouseStateLocal(MX,MY,PrevB);
  Repeat
@@ -11915,6 +11846,7 @@ Begin
      Case E Of
       #59: Help;
       #63: OFScan(D^);
+      #65: If Saving Then OFNewFolder(D^);
       #15: Focus((D^.Focus+6) Mod 7);
       #141: OFNavigate(D^,OFParent(D^.Folder),True);
       Else Begin
@@ -11952,6 +11884,7 @@ Begin
     End;
     If (BX>=76) And (BX<=138) Then OFNavigate(D^,OFParent(D^.Folder),True);
     If (BX>=144) And (BX<=234) Then OFScan(D^);
+    If Saving And (BX>=240) And (BX<=360) Then OFNewFolder(D^);
     If BX>=D^.W-70 Then Help;
    End;
    If (BY>=60) And (BY<=82) Then Begin
@@ -11995,15 +11928,37 @@ Begin
      If D^.Focus=3 Then D^.Address:='' Else D^.Name:='';
      D^.Cursor:=0; D^.Anchor:=0; D^.Dirty:=True;
     End;
-    If (BX>=D^.W-180) And (BX<=D^.W-100) Then OFAccept(D^);
+    If (BX>=D^.W-180-24*Ord(Saving)) And (BX<=D^.W-100) Then OFAccept(D^);
     If (BX>=D^.W-92) And (BX<=D^.W-12) Then D^.Done:=True;
    End;
   End;
   PrevB:=MB; Delay(10);
  Until D^.Done;
- If D^.Accepted Then Begin FileName:=D^.Name; OpenImageDialog:=True; End;
+ If D^.Accepted Then Begin
+  FileName:=D^.Name; PaintFileDialog:=True;
+  If Saving Then Case D^.Filter Of 2: SaveFormat:=FMT_GIF; 3: SaveFormat:=FMT_PNG; Else SaveFormat:=FMT_BMP; End;
+ End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
+
+Function OpenImageDialog(Var FileName: String): Boolean;
+Var Format: Byte;
+Begin
+ Format:=FMT_BMP; OpenImageDialog:=PaintFileDialog(FileName,False,Format);
+End;
+
+Function SaveAsCurrentImage: Boolean;
+Var Name: String; Format: Byte;
+Begin
+ SaveAsCurrentImage:=False; Name:=ImageBuffer.FileName; Format:=ImageBuffer.Format;
+ If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG]) Then Format:=FMT_PNG;
+ Repeat
+  If Not PaintFileDialog(Name,True,Format) Then Exit;
+  If SaveImage(Name,Format) Then Begin SaveAsCurrentImage:=True; RedrawInterface; Exit; End;
+  ShowMessage('Enregistrement impossible',PaintSaveError);
+ Until False;
+End;
+
 
 Procedure OpenImageCommand;
 Var Name: String; Backup: PHistoryData; Metadata: TImageBuffer;
@@ -12174,46 +12129,8 @@ Begin
      DrawStatusBar;
     End;
     1: OpenImageCommand; { Ouvrir : explorateur graphique Pascal }
-    2: Begin { Enregistrer }
-     If ImageBuffer.FileName <> '' Then Begin
-      If SaveImage(ImageBuffer.FileName, ImageBuffer.Format) Then Begin
-       ImageBuffer.Modified := False;
-       ShowMessage('Enregistrer', 'Enregistre : ' + ImageBuffer.FileName);
-      End
-      Else
-       ShowMessage('Erreur', 'Echec de l''enregistrement.');
-     End
-     Else Begin
-      NewName := '';
-      If PromptString('Enregistrer sous', 'Nom du fichier :', NewName) and (NewName <> '') Then Begin
-       NewName := EnsureSaveExtension(NewName);
-       Fmt := GetImageFormat(NewName);
-       If SaveImage(NewName, Fmt) Then Begin
-        ImageBuffer.FileName := NewName;
-        ImageBuffer.Format := Fmt;
-        ImageBuffer.Modified := False;
-        DrawStatusBar;
-       End
-       Else
-        ShowMessage('Erreur', 'Echec de l''enregistrement.');
-      End;
-     End;
-    End;
-    3: Begin { Enregistrer sous }
-     NewName := ImageBuffer.FileName;
-     If PromptString('Enregistrer sous', 'Nom du fichier :', NewName) and (NewName <> '') Then Begin
-      NewName := EnsureSaveExtension(NewName);
-      Fmt := GetImageFormat(NewName);
-      If SaveImage(NewName, Fmt) Then Begin
-       ImageBuffer.FileName := NewName;
-       ImageBuffer.Format := Fmt;
-       ImageBuffer.Modified := False;
-       DrawStatusBar;
-      End
-      Else
-       ShowMessage('Erreur', 'Echec de l''enregistrement.');
-     End;
-    End;
+    2: Begin SaveCurrentImage; End;
+    3: Begin SaveAsCurrentImage; End;
     5: Begin { Imprimer }
      ShowMessage('Imprimer', 'Impression non disponible.');
     End;
@@ -12851,6 +12768,7 @@ Begin
   If Not TextInsertMode Then Begin
    Case Key of
     #15: Begin HandleMenuClick(MENU_FILE,1); Exit; End; { Ctrl+O }
+    #19: Begin HandleMenuClick(MENU_FILE,2); Exit; End; { Ctrl+S }
     #23: Begin HandleMenuClick(MENU_IMAGE,4); Exit; End; { Ctrl+W }
     #26: Begin Undo; Exit; End;          { Ctrl+Z }
     #25: Begin Redo; Exit; End;          { Ctrl+Y }

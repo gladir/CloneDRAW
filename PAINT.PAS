@@ -10360,6 +10360,211 @@ Begin
 End;
 
 
+{ FAX brut CCITT T.4 Group 3 1D, suivant BMP2FAX.PAS. }
+Function SaveFAX(FileName:String):Boolean;
+Const EOLCode='000000000001';
+Var F:File;Buffer:Array[0..8191] Of Byte;Used,X,Y,I:Integer;
+ Failed,CurrentBlack,NewBlack:Boolean;Run:Word;C:TRGBColor;
+ OutByte:Byte;OutBits:Integer;
+ Procedure Flush;
+ Var Written:LongInt;
+ Begin
+  If Failed Or (Used=0) Then Exit;
+  {$I-}BlockWrite(F,Buffer,Used,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Used);Used:=0;
+ End;
+ Procedure Emit(B:Byte);
+ Begin
+  If Failed Then Exit;Buffer[Used]:=B;Inc(Used);
+  If Used=SizeOf(Buffer) Then Flush;
+ End;
+ Procedure WriteCode(Const Code:String);
+ Var J:Integer;
+ Begin
+  For J:=1 To Length(Code) Do Begin
+   OutByte:=(OutByte Shl 1) Or Ord(Code[J]='1');Inc(OutBits);
+   If OutBits=8 Then Begin Emit(OutByte);OutByte:=0;OutBits:=0;End;
+  End;
+ End;
+Function WhiteTerminatingCode(Run:Byte):String;
+Begin
+ Case Run of
+  0:WhiteTerminatingCode:='00110101'; 1:WhiteTerminatingCode:='000111';
+  2:WhiteTerminatingCode:='0111'; 3:WhiteTerminatingCode:='1000';
+  4:WhiteTerminatingCode:='1011'; 5:WhiteTerminatingCode:='1100';
+  6:WhiteTerminatingCode:='1110'; 7:WhiteTerminatingCode:='1111';
+  8:WhiteTerminatingCode:='10011'; 9:WhiteTerminatingCode:='10100';
+  10:WhiteTerminatingCode:='00111'; 11:WhiteTerminatingCode:='01000';
+  12:WhiteTerminatingCode:='001000'; 13:WhiteTerminatingCode:='000011';
+  14:WhiteTerminatingCode:='110100'; 15:WhiteTerminatingCode:='110101';
+  16:WhiteTerminatingCode:='101010'; 17:WhiteTerminatingCode:='101011';
+  18:WhiteTerminatingCode:='0100111'; 19:WhiteTerminatingCode:='0001100';
+  20:WhiteTerminatingCode:='0001000'; 21:WhiteTerminatingCode:='0010111';
+  22:WhiteTerminatingCode:='0000011'; 23:WhiteTerminatingCode:='0000100';
+  24:WhiteTerminatingCode:='0101000'; 25:WhiteTerminatingCode:='0101011';
+  26:WhiteTerminatingCode:='0010011'; 27:WhiteTerminatingCode:='0100100';
+  28:WhiteTerminatingCode:='0011000'; 29:WhiteTerminatingCode:='00000010';
+  30:WhiteTerminatingCode:='00000011'; 31:WhiteTerminatingCode:='00011010';
+  32:WhiteTerminatingCode:='00011011'; 33:WhiteTerminatingCode:='00010010';
+  34:WhiteTerminatingCode:='00010011'; 35:WhiteTerminatingCode:='00010100';
+  36:WhiteTerminatingCode:='00010101'; 37:WhiteTerminatingCode:='00010110';
+  38:WhiteTerminatingCode:='00010111'; 39:WhiteTerminatingCode:='00101000';
+  40:WhiteTerminatingCode:='00101001'; 41:WhiteTerminatingCode:='00101010';
+  42:WhiteTerminatingCode:='00101011'; 43:WhiteTerminatingCode:='00101100';
+  44:WhiteTerminatingCode:='00101101'; 45:WhiteTerminatingCode:='00000100';
+  46:WhiteTerminatingCode:='00000101'; 47:WhiteTerminatingCode:='00001010';
+  48:WhiteTerminatingCode:='00001011'; 49:WhiteTerminatingCode:='01010010';
+  50:WhiteTerminatingCode:='01010011'; 51:WhiteTerminatingCode:='01010100';
+  52:WhiteTerminatingCode:='01010101'; 53:WhiteTerminatingCode:='00100100';
+  54:WhiteTerminatingCode:='00100101'; 55:WhiteTerminatingCode:='01011000';
+  56:WhiteTerminatingCode:='01011001'; 57:WhiteTerminatingCode:='01011010';
+  58:WhiteTerminatingCode:='01011011'; 59:WhiteTerminatingCode:='01001010';
+  60:WhiteTerminatingCode:='01001011'; 61:WhiteTerminatingCode:='00110010';
+  62:WhiteTerminatingCode:='00110011'; Else WhiteTerminatingCode:='00110100';
+ End;
+End;
+
+Function BlackTerminatingCode(Run:Byte):String;
+Begin
+ Case Run of
+  0:BlackTerminatingCode:='0000110111'; 1:BlackTerminatingCode:='010';
+  2:BlackTerminatingCode:='11'; 3:BlackTerminatingCode:='10';
+  4:BlackTerminatingCode:='011'; 5:BlackTerminatingCode:='0011';
+  6:BlackTerminatingCode:='0010'; 7:BlackTerminatingCode:='00011';
+  8:BlackTerminatingCode:='000101'; 9:BlackTerminatingCode:='000100';
+  10:BlackTerminatingCode:='0000100'; 11:BlackTerminatingCode:='0000101';
+  12:BlackTerminatingCode:='0000111'; 13:BlackTerminatingCode:='00000100';
+  14:BlackTerminatingCode:='00000111'; 15:BlackTerminatingCode:='000011000';
+  16:BlackTerminatingCode:='0000010111'; 17:BlackTerminatingCode:='0000011000';
+  18:BlackTerminatingCode:='0000001000'; 19:BlackTerminatingCode:='00001100111';
+  20:BlackTerminatingCode:='00001101000';
+  21:BlackTerminatingCode:='00001101100';
+  22:BlackTerminatingCode:='00000110111';
+  23:BlackTerminatingCode:='00000101000';
+  24:BlackTerminatingCode:='00000010111';
+  25:BlackTerminatingCode:='00000011000';
+  26:BlackTerminatingCode:='000011001010';
+  27:BlackTerminatingCode:='000011001011';
+  28:BlackTerminatingCode:='000011001100';
+  29:BlackTerminatingCode:='000011001101';
+  30:BlackTerminatingCode:='000001101000';
+  31:BlackTerminatingCode:='000001101001';
+  32:BlackTerminatingCode:='000001101010';
+  33:BlackTerminatingCode:='000001101011';
+  34:BlackTerminatingCode:='000011010010';
+  35:BlackTerminatingCode:='000011010011';
+  36:BlackTerminatingCode:='000011010100';
+  37:BlackTerminatingCode:='000011010101';
+  38:BlackTerminatingCode:='000011010110';
+  39:BlackTerminatingCode:='000011010111';
+  40:BlackTerminatingCode:='000001101100';
+  41:BlackTerminatingCode:='000001101101';
+  42:BlackTerminatingCode:='000011011010';
+  43:BlackTerminatingCode:='000011011011';
+  44:BlackTerminatingCode:='000001010100';
+  45:BlackTerminatingCode:='000001010101';
+  46:BlackTerminatingCode:='000001010110';
+  47:BlackTerminatingCode:='000001010111';
+  48:BlackTerminatingCode:='000001100100';
+  49:BlackTerminatingCode:='000001100101';
+  50:BlackTerminatingCode:='000001010010';
+  51:BlackTerminatingCode:='000001010011';
+  52:BlackTerminatingCode:='000000100100';
+  53:BlackTerminatingCode:='000000110111';
+  54:BlackTerminatingCode:='000000111000';
+  55:BlackTerminatingCode:='000000100111';
+  56:BlackTerminatingCode:='000000101000';
+  57:BlackTerminatingCode:='000001011000';
+  58:BlackTerminatingCode:='000001011001';
+  59:BlackTerminatingCode:='000000101011';
+  60:BlackTerminatingCode:='000000101100';
+  61:BlackTerminatingCode:='000001011010';
+  62:BlackTerminatingCode:='000001100110'; Else
+  BlackTerminatingCode:='000001100111';
+ End;
+End;
+
+Function MakeupCode(Run:Word;Black:Boolean):String;
+Begin
+ Case Run of
+  64:If Black Then MakeupCode:='0000001111'Else MakeupCode:='11011';
+  128:If Black Then MakeupCode:='000011001000'Else MakeupCode:='10010';
+  192:If Black Then MakeupCode:='000011001001'Else MakeupCode:='010111';
+  256:If Black Then MakeupCode:='000001011011'Else MakeupCode:='0110111';
+  320:If Black Then MakeupCode:='000000110011'Else MakeupCode:='00110110';
+  384:If Black Then MakeupCode:='000000110100'Else MakeupCode:='00110111';
+  448:If Black Then MakeupCode:='000000110101'Else MakeupCode:='01100100';
+  512:If Black Then MakeupCode:='0000001101100'Else MakeupCode:='01100101';
+  576:If Black Then MakeupCode:='0000001101101'Else MakeupCode:='01101000';
+  640:If Black Then MakeupCode:='0000001001010'Else MakeupCode:='01100111';
+  704:If Black Then MakeupCode:='0000001001011'Else MakeupCode:='011001100';
+  768:If Black Then MakeupCode:='0000001001100'Else MakeupCode:='011001101';
+  832:If Black Then MakeupCode:='0000001001101'Else MakeupCode:='011010010';
+  896:If Black Then MakeupCode:='0000001110010'Else MakeupCode:='011010011';
+  960:If Black Then MakeupCode:='0000001110011'Else MakeupCode:='011010100';
+  1024:If Black Then MakeupCode:='0000001110100'Else MakeupCode:='011010101';
+  1088:If Black Then MakeupCode:='0000001110101'Else MakeupCode:='011010110';
+  1152:If Black Then MakeupCode:='0000001110110'Else MakeupCode:='011010111';
+  1216:If Black Then MakeupCode:='0000001110111'Else MakeupCode:='011011000';
+  1280:If Black Then MakeupCode:='0000001010010'Else MakeupCode:='011011001';
+  1344:If Black Then MakeupCode:='0000001010011'Else MakeupCode:='011011010';
+  1408:If Black Then MakeupCode:='0000001010100'Else MakeupCode:='011011011';
+  1472:If Black Then MakeupCode:='0000001010101'Else MakeupCode:='010011000';
+  1536:If Black Then MakeupCode:='0000001011010'Else MakeupCode:='010011001';
+  1600:If Black Then MakeupCode:='0000001011011'Else MakeupCode:='010011010';
+  1664:If Black Then MakeupCode:='0000001100100'Else MakeupCode:='011000';
+  1728:If Black Then MakeupCode:='0000001100101'Else MakeupCode:='010011011';
+  1792:MakeupCode:='00000001000'; 1856:MakeupCode:='00000001100';
+  1920:MakeupCode:='00000001101'; 1984:MakeupCode:='000000010010';
+  2048:MakeupCode:='000000010011'; 2112:MakeupCode:='000000010100';
+  2176:MakeupCode:='000000010101'; 2240:MakeupCode:='000000010110';
+  2304:MakeupCode:='000000010111'; 2368:MakeupCode:='000000011100';
+  2432:MakeupCode:='000000011101'; 2496:MakeupCode:='000000011110';
+  Else MakeupCode:='000000011111';
+ End;
+End;
+
+Procedure WriteRun(Run:Word;Black:Boolean);
+Var
+ Makeup:Word;
+Begin
+ While Run>=2560 Do Begin
+  WriteCode(MakeupCode(2560,Black));
+  Dec(Run,2560);
+ End;
+ If Run>=64 Then Begin
+  Makeup:=(Run div 64)*64;
+  WriteCode(MakeupCode(Makeup,Black));
+  Run:=Run mod 64;
+ End;
+ If Black Then WriteCode(BlackTerminatingCode(Byte(Run)))
+          Else WriteCode(WhiteTerminatingCode(Byte(Run)));
+End;
+
+
+Begin
+ SaveFAX:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Used:=0;Failed:=False;OutByte:=0;OutBits:=0;
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;WriteCode(EOLCode);CurrentBlack:=False;Run:=0;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];
+   NewBlack:=LongInt(C.R)*299+LongInt(C.G)*587+LongInt(C.B)*114<128000;
+   If NewBlack=CurrentBlack Then Inc(Run)
+   Else Begin WriteRun(Run,CurrentBlack);CurrentBlack:=NewBlack;Run:=1;End;
+  End;
+  WriteRun(Run,CurrentBlack);
+ End;
+ For I:=1 To 6 Do WriteCode(EOLCode);
+ If OutBits<>0 Then Emit(OutByte Shl (8-OutBits));Flush;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveFAX:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -10386,7 +10591,7 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
@@ -10420,6 +10625,7 @@ Begin
   FMT_DDS: OK:=SaveDDS(Temp);
   FMT_WPG: OK:=SaveWPG(Temp);
   FMT_EXR: OK:=SaveEXR(Temp);
+  FMT_FAX: OK:=SaveFAX(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -11755,7 +11961,7 @@ Begin
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -18207,7 +18413,8 @@ Begin
  14: OFSaveExtension:='.dcm';
  13: OFSaveExtension:='.dds';
  6: OFSaveExtension:='.wpg';
- 10: OFSaveExtension:='.exr'; Else OFSaveExtension:='.bmp'; End;
+ 10: OFSaveExtension:='.exr';
+ 9: OFSaveExtension:='.fax'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -18323,7 +18530,7 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=16;
+ Count:=29; If Saving Then Count:=17;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
@@ -18331,6 +18538,7 @@ Begin
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
    If I=13 Then Order[I]:=13; If I=14 Then Order[I]:=6; If I=15 Then
    Order[I]:=10;
+   If I=16 Then Order[I]:=9;
    If I=10 Then Order[I]:=16; If I=11 Then Order[I]:=17; If I=12 Then
    Order[I]:=14;
   End;
@@ -18423,6 +18631,8 @@ Begin
   OFScan(D);
   If D.SaveMode Then Begin
    D.Notice:='Type choisi : '+OFFilterLabel(D.Filter);
+   If D.Filter=9 Then
+    D.Notice:='FAX Group 3 1D brut : conversion en noir et blanc, seuil 128.';
    If D.Filter=17 Then
     D.Notice:='CR2 synthetique : Bayer 16 bits avec perte, sans RAW Canon.';
    If D.Filter=16 Then
@@ -18480,7 +18690,8 @@ Begin
    Else If SaveFormat=FMT_DCM Then D^.Filter:=14
    Else If SaveFormat=FMT_DDS Then D^.Filter:=13
    Else If SaveFormat=FMT_WPG Then D^.Filter:=6
-   Else If SaveFormat=FMT_EXR Then D^.Filter:=10;
+   Else If SaveFormat=FMT_EXR Then D^.Filter:=10
+   Else If SaveFormat=FMT_FAX Then D^.Filter:=9;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -18517,6 +18728,8 @@ Begin
   ' ouve' +
   'rture' +
   ' seule.';
+  If SaveFormat=FMT_FAX Then
+   D^.Notice:='FAX Group 3 1D brut : conversion en noir et blanc, seuil 128.';
   If SaveFormat=FMT_CR2 Then
    D^.Notice:='CR2 synthetique : Bayer 16 bits avec perte, sans RAW Canon.';
   If SaveFormat=FMT_ARW Then
@@ -18654,7 +18867,8 @@ Begin
    14: SaveFormat:=FMT_DCM;
    13: SaveFormat:=FMT_DDS;
    6: SaveFormat:=FMT_WPG;
-   10: SaveFormat:=FMT_EXR; Else SaveFormat:=FMT_BMP; End;
+   10: SaveFormat:=FMT_EXR;
+   9: SaveFormat:=FMT_FAX; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -18672,7 +18886,7 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -18960,7 +19174,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 16 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 17 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

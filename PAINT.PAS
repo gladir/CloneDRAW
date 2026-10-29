@@ -66,6 +66,8 @@ Const
 
 Function PaintWinOpenClipboard(Owner: TPaintWinHandle): TPaintWinBool;
  stdcall; external 'user32.dll' name 'OpenClipboard';
+Function PaintWinGetClipboardData(Format: TPaintWinUInt): TPaintWinHandle;
+ stdcall; external 'user32.dll' name 'GetClipboardData';
 Function PaintWinCloseClipboard: TPaintWinBool;
  stdcall; external 'user32.dll' name 'CloseClipboard';
 Function PaintWinEmptyClipboard: TPaintWinBool;
@@ -4241,7 +4243,7 @@ Begin
   Exit;
  End;
  R := PromptYesNoCancel('Modifications non enregistrees',
-   'Enregistrer les modifications avant de quitter ?');
+   'Enregistrer les modifications avant de continuer ?');
  Case R of
   1: ConfirmDiscardChanges := SaveCurrentImage;
   2: ConfirmDiscardChanges := True;
@@ -10190,6 +10192,647 @@ Begin
 End;
 
 
+{ Explorateur de fichiers dessine exclusivement avec les primitives BGI.
+  Aucune boite de dialogue du systeme, aucun changement de repertoire global. }
+Const
+ OFMaxFiles = 2048;
+ OFMaxTree = 512;
+Type
+ TOFEntry = Record
+  Name: String;
+  Size: LongInt;
+  Stamp: LongInt;
+ End;
+ TOFTree = Record
+  Path: String;
+  Depth: Integer;
+  Expanded: Boolean;
+ End;
+ TOFState = Record
+  X,Y,W,H,Rows: Integer;
+  Folder,Name,Address,Notice,Clip: String;
+  Files: Array[0..OFMaxFiles-1] Of TOFEntry;
+  Tree: Array[0..OFMaxTree-1] Of TOFTree;
+  Count,TreeCount,Selected,Top,TreeTop,TreeSelected: Integer;
+  Filter,Focus,Cursor,Anchor: Integer;
+  Back: Array[0..31] Of String;
+  BackCount: Integer;
+  LastIndex: Integer;
+  LastClick: LongInt;
+  Truncated,Accepted,Done,Dirty: Boolean;
+ End;
+ POFState = ^TOFState;
+
+Function OFJoin(Const Folder,Name: String): String;
+Begin
+ If (Folder<>'') And (Folder[Length(Folder)]<>'\') And
+    (Folder[Length(Folder)]<>'/') Then OFJoin:=Folder+'\'+Name
+ Else OFJoin:=Folder+Name;
+End;
+
+Function OFParent(Const Folder: String): String;
+Var S: String; I: Integer;
+Begin
+ S:=Folder;
+ While (Length(S)>3) And (S[Length(S)] In ['\','/']) Do Delete(S,Length(S),1);
+ I:=Length(S);
+ While (I>0) And Not (S[I] In ['\','/']) Do Dec(I);
+ If I=3 Then OFParent:=Copy(S,1,3)
+ Else If I>0 Then OFParent:=Copy(S,1,I-1)
+ Else OFParent:=S;
+End;
+
+Function OFBase(Const Path: String): String;
+Var I: Integer;
+Begin
+ I:=Length(Path);
+ While (I>0) And Not (Path[I] In ['\','/']) Do Dec(I);
+ OFBase:=Copy(Path,I+1,255);
+End;
+
+Function OFUpper(S: String): String;
+Var I: Integer;
+Begin
+ For I:=1 To Length(S) Do S[I]:=UpCase(S[I]);
+ OFUpper:=S;
+End;
+
+Function OFMatches(Const Name: String; Filter: Integer): Boolean;
+Var E: String;
+Begin
+ E:=OFUpper(ExtractFileExt(Name));
+ Case Filter Of
+  0: OFMatches:=(E='.BMP') Or (E='.DIB') Or (E='.GIF') Or
+                (E='.PNG') Or (E='.JPG') Or (E='.JPEG');
+  1: OFMatches:=(E='.BMP') Or (E='.DIB');
+  2: OFMatches:=E='.GIF';
+  3: OFMatches:=E='.PNG';
+  4: OFMatches:=(E='.JPG') Or (E='.JPEG');
+  Else OFMatches:=True;
+ End;
+End;
+
+Function OFFilterLabel(N: Integer): String;
+Begin
+ Case N Of
+  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG';
+  1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
+  2: OFFilterLabel:='GIF : *.gif';
+  3: OFFilterLabel:='PNG : *.png';
+  4: OFFilterLabel:='JPEG : *.jpg; *.jpeg';
+  Else OFFilterLabel:='Tous les fichiers : *.*';
+ End;
+End;
+
+Function OFDirectory(Const Path: String): Boolean;
+Var R: SearchRec;
+Begin
+ FindFirst(Path,AnyFile,R);
+ OFDirectory:=(DosError=0) And ((R.Attr And Directory)<>0);
+ {$IFDEF FPC}FindClose(R);{$ENDIF}
+End;
+
+Procedure OFScan(Var D: TOFState);
+Var R: SearchRec; I,J: Integer; E: TOFEntry;
+Begin
+ D.Count:=0; D.Top:=0; D.Selected:=-1; D.Truncated:=False;
+ D.LastIndex:=-1; D.LastClick:=0;
+ FindFirst(OFJoin(D.Folder,'*.*'),AnyFile,R);
+ While DosError=0 Do Begin
+  If ((R.Attr And (Directory+VolumeID))=0) And OFMatches(R.Name,D.Filter) Then Begin
+   If D.Count<OFMaxFiles Then Begin
+    D.Files[D.Count].Name:=R.Name;
+    D.Files[D.Count].Size:=R.Size;
+    D.Files[D.Count].Stamp:=R.Time;
+    Inc(D.Count);
+   End Else D.Truncated:=True;
+  End;
+  FindNext(R);
+ End;
+ {$IFDEF FPC}FindClose(R);{$ENDIF}
+ { Tri insensible a la casse, sans dependance a une unite systeme. }
+ For I:=1 To D.Count-1 Do Begin
+  E:=D.Files[I]; J:=I-1;
+  While J>=0 Do Begin
+   If OFUpper(D.Files[J].Name)<=OFUpper(E.Name) Then Break;
+   D.Files[J+1]:=D.Files[J]; Dec(J);
+  End;
+  D.Files[J+1]:=E;
+ End;
+ Str(D.Count,D.Notice); D.Notice:=D.Notice+' fichier(s)';
+ If D.Truncated Then D.Notice:=D.Notice+' - limite 2048, affinez le filtre';
+ If D.Count=0 Then D.Notice:='Aucun fichier pour ce type. Changez le filtre.';
+ D.Dirty:=True;
+End;
+
+Procedure OFExpand(Var D: TOFState; Index: Integer);
+Var R: SearchRec; I,J,First,Last: Integer; T: TOFTree;
+Begin
+ If (Index<0) Or (Index>=D.TreeCount) Then Exit;
+ If D.Tree[Index].Expanded Then Begin
+  J:=Index+1;
+  While (J<D.TreeCount) And (D.Tree[J].Depth>D.Tree[Index].Depth) Do Inc(J);
+  I:=J-Index-1;
+  For J:=Index+1 To D.TreeCount-I-1 Do D.Tree[J]:=D.Tree[J+I];
+  Dec(D.TreeCount,I); D.Tree[Index].Expanded:=False;
+ End Else Begin
+  First:=Index+1; Last:=First;
+  FindFirst(OFJoin(D.Tree[Index].Path,'*.*'),AnyFile,R);
+  While DosError=0 Do Begin
+   If ((R.Attr And Directory)<>0) And (R.Name<>'.') And (R.Name<>'..') Then Begin
+    If D.TreeCount<OFMaxTree Then Begin
+     For J:=D.TreeCount DownTo Last+1 Do D.Tree[J]:=D.Tree[J-1];
+     D.Tree[Last].Path:=OFJoin(D.Tree[Index].Path,R.Name);
+     D.Tree[Last].Depth:=D.Tree[Index].Depth+1;
+     D.Tree[Last].Expanded:=False;
+     Inc(Last); Inc(D.TreeCount);
+    End Else D.Notice:='Arbre limite a 512 dossiers : repliez une branche.';
+   End;
+   FindNext(R);
+  End;
+  {$IFDEF FPC}FindClose(R);{$ENDIF}
+  For I:=First+1 To Last-1 Do Begin
+   T:=D.Tree[I]; J:=I-1;
+   While J>=First Do Begin
+    If OFUpper(D.Tree[J].Path)<=OFUpper(T.Path) Then Break;
+    D.Tree[J+1]:=D.Tree[J]; Dec(J);
+   End;
+   D.Tree[J+1]:=T;
+  End;
+  D.Tree[Index].Expanded:=True;
+ End;
+ D.TreeSelected:=Index;
+ D.TreeTop:=Min(D.TreeTop,Max(0,D.TreeCount-D.Rows));
+ D.Dirty:=True;
+End;
+
+Procedure OFNavigate(Var D: TOFState; S: String; Remember: Boolean);
+Var I: Integer;
+Begin
+ If S='' Then Exit;
+ S:=FExpand(S);
+ If Not OFDirectory(S) Then Begin D.Notice:='Dossier inexistant ou inaccessible.'; D.Dirty:=True; Exit; End;
+ If Remember And (OFUpper(S)<>OFUpper(D.Folder)) Then Begin
+  If D.BackCount=32 Then Begin
+   For I:=1 To 31 Do D.Back[I-1]:=D.Back[I];
+   Dec(D.BackCount);
+  End;
+  D.Back[D.BackCount]:=D.Folder; Inc(D.BackCount);
+ End;
+ D.Folder:=S; D.Address:=S; D.Name:=''; D.Cursor:=0; D.Anchor:=0;
+ OFScan(D);
+End;
+
+Function OFShort(S: String; Width: Integer): String;
+Begin
+ If Width<24 Then Begin OFShort:=''; Exit; End;
+ If TextWidth(S)>Width Then Begin
+  While (Length(S)>0) And (TextWidth(S+'...')>Width) Do Delete(S,Length(S),1);
+  S:=S+'...';
+ End;
+ OFShort:=S;
+End;
+
+Procedure OFButton(X,Y,W: Integer; Const S: String; Active: Boolean);
+Begin
+ SetFillStyle(SolidFill,LightGray); Bar(X,Y,X+W,Y+22);
+ SetColor(White); Line(X,Y,X+W,Y); Line(X,Y,X,Y+22);
+ SetColor(DarkGray); Line(X+W,Y,X+W,Y+22); Line(X,Y+22,X+W,Y+22);
+ If Active Then SetColor(Blue) Else SetColor(Black);
+ OutTextXY(X+Max(3,(W-TextWidth(S)) Div 2),Y+7,S);
+End;
+
+Procedure OFDraw(Var D: TOFState);
+Var I,N,Y,CX,Lo,Hi: Integer; S: String;
+ Procedure EditBox(X,Y,W: Integer; Const Value: String; Which: Integer);
+ Var V: String; Offset,PosX,PosEnd: Integer;
+ Begin
+  SetFillStyle(SolidFill,White); Bar(X,Y,X+W,Y+22);
+  If D.Focus=Which Then SetColor(Blue) Else SetColor(DarkGray);
+  Rectangle(X,Y,X+W,Y+22);
+  Offset:=0;
+  If D.Focus=Which Then While TextWidth(Copy(Value,Offset+1,D.Cursor-Offset))+12>W Do Inc(Offset);
+  V:=OFShort(Copy(Value,Offset+1,255),W-12);
+  SetColor(Black); OutTextXY(X+5,Y+7,V);
+  If D.Focus=Which Then Begin
+   Lo:=Min(D.Cursor,D.Anchor); Hi:=Max(D.Cursor,D.Anchor);
+   PosX:=X+5+TextWidth(Copy(Value,Offset+1,Max(0,Lo-Offset)));
+   PosEnd:=Min(X+W-4,X+5+TextWidth(Copy(Value,Offset+1,Max(0,Hi-Offset))));
+   If Hi>Lo Then Begin
+    SetFillStyle(SolidFill,LightBlue); Bar(PosX,Y+4,PosEnd,Y+18);
+    SetColor(Black); OutTextXY(PosX,Y+7,OFShort(Copy(Value,Max(Lo,Offset)+1,Hi-Max(Lo,Offset)),PosEnd-PosX));
+   End;
+   PosX:=X+5+TextWidth(Copy(Value,Offset+1,D.Cursor-Offset));
+   SetColor(Black); Line(PosX,Y+4,PosX,Y+18);
+  End;
+ End;
+Begin
+ HideMouse;
+ SetFillStyle(SolidFill,LightGray); Bar(D.X,D.Y,D.X+D.W,D.Y+D.H);
+ SetColor(DarkGray); Rectangle(D.X,D.Y,D.X+D.W,D.Y+D.H);
+ SetFillStyle(SolidFill,Blue); Bar(D.X+1,D.Y+1,D.X+D.W-1,D.Y+23);
+ SetColor(White); OutTextXY(D.X+10,D.Y+8,'Ouvrir une image - explorateur PAINT');
+ OFButton(D.X+8,D.Y+30,62,'Retour',False);
+ OFButton(D.X+76,D.Y+30,62,'Parent',False);
+ OFButton(D.X+144,D.Y+30,90,'Actualiser',False);
+ OFButton(D.X+D.W-70,D.Y+30,60,'Aide',False);
+ EditBox(D.X+8,D.Y+60,D.W-88,D.Address,3);
+ OFButton(D.X+D.W-72,D.Y+60,62,'Aller',D.Focus=3);
+ SetColor(Black); OutTextXY(D.X+10,D.Y+91,'Dossiers (+/-)');
+ OutTextXY(D.X+220,D.Y+91,'Nom du fichier');
+ OutTextXY(D.X+D.W-94,D.Y+91,'Taille');
+ SetFillStyle(SolidFill,White);
+ Bar(D.X+8,D.Y+105,D.X+205,D.Y+105+D.Rows*16);
+ Bar(D.X+216,D.Y+105,D.X+D.W-9,D.Y+105+D.Rows*16);
+ SetColor(DarkGray); Rectangle(D.X+8,D.Y+105,D.X+205,D.Y+105+D.Rows*16);
+ Rectangle(D.X+216,D.Y+105,D.X+D.W-9,D.Y+105+D.Rows*16);
+ For I:=0 To D.Rows-1 Do Begin
+  Y:=D.Y+108+I*16; N:=D.TreeTop+I;
+  If N<D.TreeCount Then Begin
+   If N=D.TreeSelected Then Begin
+    SetFillStyle(SolidFill,LightCyan); Bar(D.X+9,Y-1,D.X+204,Y+12);
+   End;
+   CX:=D.X+12+Min(D.Tree[N].Depth,7)*12;
+   SetColor(Blue);
+   If D.Tree[N].Expanded Then S:='-' Else S:='+';
+   OutTextXY(CX,Y,S);
+   SetColor(Brown); Rectangle(CX+10,Y,CX+21,Y+9);
+   S:=OFBase(D.Tree[N].Path); If S='' Then S:=D.Tree[N].Path;
+   SetColor(Black); OutTextXY(CX+25,Y,OFShort(S,D.X+200-CX-25));
+  End;
+  N:=D.Top+I;
+  If N<D.Count Then Begin
+   If N=D.Selected Then Begin
+    SetFillStyle(SolidFill,LightBlue); Bar(D.X+217,Y-1,D.X+D.W-10,Y+12);
+   End;
+   SetColor(Black); OutTextXY(D.X+222,Y,OFShort(D.Files[N].Name,D.W-322));
+   Str(D.Files[N].Size Div 1024,S); If D.Files[N].Size<1024 Then S:='<1';
+   OutTextXY(D.X+D.W-94,Y,S+' Ko');
+  End;
+ End;
+ Y:=D.Y+109+D.Rows*16;
+ OFButton(D.X+8,Y,44,'Haut',False); OFButton(D.X+58,Y,44,'Bas',False);
+ OFButton(D.X+216,Y,62,'Prec.',False); OFButton(D.X+284,Y,62,'Suiv.',False);
+ S:=D.Notice;
+ SetColor(Black); OutTextXY(D.X+10,Y+30,OFShort(S,D.W-20));
+ Y:=D.Y+D.H-116;
+ OutTextXY(D.X+10,Y+7,'Nom :'); EditBox(D.X+66,Y,D.W-78,D.Name,0);
+ Y:=Y+29; SetColor(Black); OutTextXY(D.X+10,Y+7,'Type :');
+ OFButton(D.X+66,Y,D.W-154,OFFilterLabel(D.Filter),D.Focus=4);
+ OFButton(D.X+D.W-80,Y,68,'Changer',D.Focus=4);
+ Y:=D.Y+D.H-56;
+ OFButton(D.X+10,Y,62,'Copier',False); OFButton(D.X+78,Y,62,'Coller',False);
+ OFButton(D.X+146,Y,72,'Effacer',False);
+ OFButton(D.X+D.W-180,Y,80,'Ouvrir',D.Focus=5);
+ OFButton(D.X+D.W-92,Y,80,'Annuler',D.Focus=6);
+ SetColor(DarkGray); OutTextXY(D.X+10,D.Y+D.H-19,'Tab : focus | Entree : ouvrir | F5 : actualiser | Echap : annuler');
+ ShowMouse; D.Dirty:=False;
+End;
+
+Function OFPaste: String;
+{$IFDEF WINDOWS}
+Var M: TPaintWinHandle; P: PChar; S: String; I: Integer;
+Begin
+ S:='';
+ If PaintWinOpenClipboard(0) Then Begin
+  M:=PaintWinGetClipboardData(PAINT_CF_TEXT);
+  If M<>0 Then Begin
+   P:=PChar(PaintWinGlobalLock(M));
+   If P<>Nil Then Begin
+    I:=0;
+    While (I<255) And (P[I]<>#0) And (P[I]<>#13) And (P[I]<>#10) Do Begin
+     If P[I]>=' ' Then S:=S+P[I]; Inc(I);
+    End;
+    PaintWinGlobalUnlock(M);
+   End;
+  End;
+  PaintWinCloseClipboard;
+ End;
+ OFPaste:=S;
+End;
+{$ELSE}
+Begin OFPaste:=''; End;
+{$ENDIF}
+
+Procedure OFEdit(Var D: TOFState; K,E: Char);
+Var S,T: String; Lo,Hi: Integer;
+Begin
+ If D.Focus=3 Then S:=D.Address Else S:=D.Name;
+ D.Cursor:=Min(D.Cursor,Length(S)); D.Anchor:=Min(D.Anchor,Length(S));
+ Lo:=Min(D.Cursor,D.Anchor); Hi:=Max(D.Cursor,D.Anchor);
+ Case K Of
+  #1: Begin D.Anchor:=0; D.Cursor:=Length(S); End;
+  #3,#24: Begin
+   If Hi>Lo Then T:=Copy(S,Lo+1,Hi-Lo) Else T:=S;
+   D.Clip:=T;
+   If Not PGCopyText(T) Then D.Notice:='Copie interne disponible dans cette boite.';
+   If K=#24 Then Begin
+    If Hi=Lo Then Begin Lo:=0; Hi:=Length(S); End;
+    Delete(S,Lo+1,Hi-Lo); D.Cursor:=Lo; D.Anchor:=Lo;
+   End;
+  End;
+  #22: Begin
+   T:=OFPaste; If T='' Then T:=D.Clip;
+   If Length(S)-(Hi-Lo)+Length(T)<=255 Then Begin
+    Delete(S,Lo+1,Hi-Lo); Insert(T,S,Lo+1);
+    D.Cursor:=Lo+Length(T); D.Anchor:=D.Cursor;
+   End Else D.Notice:='Chemin trop long : maximum 255 caracteres.';
+  End;
+  #8: Begin
+   If Hi>Lo Then Delete(S,Lo+1,Hi-Lo)
+   Else If Lo>0 Then Begin Delete(S,Lo,1); Dec(Lo); End;
+   D.Cursor:=Lo; D.Anchor:=Lo;
+  End;
+  #0: Case E Of
+   #75: Begin D.Cursor:=Max(0,D.Cursor-1); D.Anchor:=D.Cursor; End;
+   #77: Begin D.Cursor:=Min(Length(S),D.Cursor+1); D.Anchor:=D.Cursor; End;
+   #71: Begin D.Cursor:=0; D.Anchor:=0; End;
+   #79: Begin D.Cursor:=Length(S); D.Anchor:=D.Cursor; End;
+   #83: Begin
+    If Hi>Lo Then Delete(S,Lo+1,Hi-Lo) Else Delete(S,Lo+1,1);
+    D.Cursor:=Lo; D.Anchor:=Lo;
+   End;
+  End;
+  Else If K>=' ' Then Begin
+   If Length(S)-(Hi-Lo)<255 Then Begin
+    Delete(S,Lo+1,Hi-Lo); Insert(K,S,Lo+1); D.Cursor:=Lo+1; D.Anchor:=D.Cursor;
+   End;
+  End;
+ End;
+ If D.Focus=3 Then D.Address:=S Else D.Name:=S;
+ D.Dirty:=True;
+End;
+
+Procedure OFSelect(Var D: TOFState; N: Integer);
+Var DT: DateTime; S,T: String;
+Begin
+ If D.Count=0 Then Exit;
+ D.Selected:=Max(0,Min(D.Count-1,N)); D.Name:=D.Files[D.Selected].Name;
+ D.Cursor:=Length(D.Name); D.Anchor:=0;
+ UnpackTime(D.Files[D.Selected].Stamp,DT);
+ Str(DT.Day,S); Str(DT.Month,T); S:=S+'/'+T; Str(DT.Year,T); S:=S+'/'+T;
+ Str(D.Files[D.Selected].Size,T); D.Notice:=T+' octets - modifie le '+S;
+ If D.Selected<D.Top Then D.Top:=D.Selected;
+ If D.Selected>=D.Top+D.Rows Then D.Top:=D.Selected-D.Rows+1;
+ D.Dirty:=True;
+End;
+
+Procedure OFAccept(Var D: TOFState);
+Var S: String; R: SearchRec;
+Begin
+ S:=D.Name;
+ If (Length(S)>=2) And (S[1]='"') And (S[Length(S)]='"') Then S:=Copy(S,2,Length(S)-2);
+ If S='' Then Begin D.Notice:='Selectionnez un fichier ou saisissez son nom.'; D.Dirty:=True; Exit; End;
+ If (Pos('*',S)>0) Or (Pos('?',S)>0) Then Begin
+  D.Notice:='Choisissez un type avec le bouton Changer.'; D.Dirty:=True; Exit;
+ End;
+ If (Pos(':',S)=0) And (S[1]<>'\') And (S[1]<>'/') Then Begin
+  If Length(D.Folder)+Length(S)+1>255 Then Begin D.Notice:='Chemin trop long (255 caracteres).'; D.Dirty:=True; Exit; End;
+  S:=OFJoin(D.Folder,S);
+ End;
+ S:=FExpand(S);
+ If OFDirectory(S) Then Begin OFNavigate(D,S,True); Exit; End;
+ FindFirst(S,AnyFile,R);
+ If DosError<>0 Then Begin D.Notice:='Fichier introuvable ou inaccessible.'; D.Dirty:=True; Exit; End;
+ {$IFDEF FPC}FindClose(R);{$ENDIF}
+ If Not OFMatches(S,0) Then Begin
+  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG.'; D.Dirty:=True; Exit;
+ End;
+ D.Name:=S; D.Accepted:=True; D.Done:=True;
+End;
+
+Procedure OFChooseFilter(Var D: TOFState);
+Var X,Y,W,I,N,MX,MY,B,Prev: Integer; K,E: Char; Done,Accept: Boolean;
+Begin
+ X:=D.X+38; Y:=D.Y+120; W:=D.W-76;
+ N:=D.Filter; Done:=False; Accept:=False;
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  HideMouse;
+  SetFillStyle(SolidFill,LightGray); Bar(X,Y,X+W,Y+176);
+  SetColor(Black); Rectangle(X,Y,X+W,Y+176);
+  OutTextXY(X+10,Y+10,'Choisir le type de fichiers');
+  For I:=0 To 5 Do Begin
+   If I=N Then SetFillStyle(SolidFill,LightBlue)
+   Else SetFillStyle(SolidFill,White);
+   Bar(X+6,Y+30+I*21,X+W-6,Y+49+I*21);
+   SetColor(Black); OutTextXY(X+12,Y+36+I*21,OFFilterLabel(I));
+  End;
+  SetColor(DarkGray); OutTextXY(X+10,Y+163,'Entree : choisir   Echap : annuler'); ShowMouse;
+  Repeat
+   If KeyPressed Then Begin
+    K:=ReadKey; E:=#0; If K=#0 Then E:=ReadKey;
+    Case K Of
+     #27: Done:=True;
+     #13: Begin Accept:=True; Done:=True; End;
+     #0: Case E Of
+      #72: N:=(N+5) Mod 6;
+      #80: N:=(N+1) Mod 6;
+      #71: N:=0;
+      #79: N:=5;
+     End;
+    End;
+    Break;
+   End;
+   GetMouseStateLocal(MX,MY,B);
+   If ((B And 1)<>0) And ((Prev And 1)=0) Then Begin
+    If (MX>=X+6) And (MX<=X+W-6) And (MY>=Y+30) And (MY<Y+156) Then Begin
+     N:=(MY-Y-30) Div 21; Accept:=True;
+    End;
+    Done:=True;
+   End;
+   Prev:=B; Delay(10);
+  Until Done;
+ Until Done;
+ If Accept Then Begin D.Filter:=N; OFScan(D); End;
+ D.Dirty:=True;
+End;
+
+Function OpenImageDialog(Var FileName: String): Boolean;
+Var D: POFState; MX,MY,MB,PrevB,I,N,Y,BX,BY: Integer; K,E: Char;
+    S: String; Ticks: LongInt; HH,MM,SS,HS: Word;
+ Procedure Focus(N: Integer);
+ Begin
+  D^.Focus:=N;
+  If N=3 Then D^.Cursor:=Length(D^.Address) Else D^.Cursor:=Length(D^.Name);
+  D^.Anchor:=0; D^.Dirty:=True;
+ End;
+ Procedure Help;
+ Begin
+  ShowMessage('Ouvrir - aide','Arbre : +/- deplie, nom = naviguer. Liste : double-clic ou Entree.');
+  ShowMessage('Saisie et navigation','Ctrl+A/C/X/V : selectionner/copier/couper/coller. Alt+Haut : parent.');
+  D^.Dirty:=True;
+ End;
+Begin
+ MenuActive:=False;
+ OpenImageDialog:=False; New(D); FillChar(D^,SizeOf(D^),0);
+ D^.W:=Min(760,ScreenWidth-16); D^.H:=Min(540,ScreenHeight-16);
+ D^.X:=(ScreenWidth-D^.W) Div 2; D^.Y:=(ScreenHeight-D^.H) Div 2;
+ D^.Rows:=(D^.H-285) Div 16; D^.Rows:=Max(4,D^.Rows);
+ GetDir(0,S); D^.Folder:=S; D^.Focus:=0; D^.Selected:=-1; D^.LastIndex:=-1;
+ { Les lecteurs sont les racines de l'arbre. Les branches se deploient
+   dans la boite Pascal ; aucune fenetre native n'est creee. }
+ For I:=Ord('A') To Ord('Z') Do Begin
+  S:=Chr(I)+':\';
+  If OFDirectory(S) Then Begin
+   D^.Tree[D^.TreeCount].Path:=S; Inc(D^.TreeCount);
+  End;
+ End;
+ If D^.TreeCount=0 Then Begin D^.Tree[0].Path:=D^.Folder; D^.TreeCount:=1; End;
+ OFNavigate(D^,D^.Folder,False);
+ { Ouvrir automatiquement les ancetres du repertoire courant. }
+ I:=0;
+ While I<D^.TreeCount Do Begin
+  S:=D^.Tree[I].Path;
+  If (OFUpper(S)=OFUpper(D^.Folder)) Or
+     (Pos(OFUpper(OFJoin(S,'')),OFUpper(OFJoin(D^.Folder,'')))=1) Then Begin
+   OFExpand(D^,I);
+   If OFUpper(S)=OFUpper(D^.Folder) Then D^.TreeSelected:=I;
+  End;
+  Inc(I);
+ End;
+ D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
+ GetMouseStateLocal(MX,MY,PrevB);
+ Repeat
+  If D^.Dirty Then OFDraw(D^);
+  If KeyPressed Then Begin
+   K:=ReadKey; E:=#0; If K=#0 Then E:=ReadKey;
+   Case K Of
+    #27: D^.Done:=True;
+    #9: Focus((D^.Focus+1) Mod 7);
+    #13: Case D^.Focus Of
+     3: OFNavigate(D^,D^.Address,True);
+     4: OFChooseFilter(D^);
+     6: D^.Done:=True;
+     1: If D^.TreeSelected<D^.TreeCount Then OFNavigate(D^,D^.Tree[D^.TreeSelected].Path,True);
+     Else OFAccept(D^);
+    End;
+    #0: Begin
+     Case E Of
+      #59: Help;
+      #63: OFScan(D^);
+      #15: Focus((D^.Focus+6) Mod 7);
+      #141: OFNavigate(D^,OFParent(D^.Folder),True);
+      Else Begin
+       If D^.Focus=2 Then Case E Of
+        #72: OFSelect(D^,D^.Selected-1);
+        #80: OFSelect(D^,D^.Selected+1);
+        #73: OFSelect(D^,D^.Selected-D^.Rows);
+        #81: OFSelect(D^,D^.Selected+D^.Rows);
+        #71: OFSelect(D^,0);
+        #79: OFSelect(D^,D^.Count-1);
+       End
+       Else If D^.Focus=1 Then Begin
+        Case E Of
+         #72: D^.TreeSelected:=Max(0,D^.TreeSelected-1);
+         #80: D^.TreeSelected:=Min(D^.TreeCount-1,D^.TreeSelected+1);
+         #77: If Not D^.Tree[D^.TreeSelected].Expanded Then OFExpand(D^,D^.TreeSelected);
+         #75: If D^.Tree[D^.TreeSelected].Expanded Then OFExpand(D^,D^.TreeSelected);
+        End;
+        D^.TreeTop:=Max(0,Min(D^.TreeTop,D^.TreeSelected));
+        If D^.TreeSelected>=D^.TreeTop+D^.Rows Then D^.TreeTop:=D^.TreeSelected-D^.Rows+1;
+        D^.Dirty:=True;
+       End Else If D^.Focus In [0,3] Then OFEdit(D^,K,E);
+      End;
+     End;
+    End;
+    Else If D^.Focus In [0,3] Then OFEdit(D^,K,E);
+   End;
+  End;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((PrevB And 1)=0) Then Begin
+   BX:=MX-D^.X; BY:=MY-D^.Y;
+   If (BY>=30) And (BY<=52) Then Begin
+    If (BX>=8) And (BX<=70) And (D^.BackCount>0) Then Begin
+     Dec(D^.BackCount); OFNavigate(D^,D^.Back[D^.BackCount],False);
+    End;
+    If (BX>=76) And (BX<=138) Then OFNavigate(D^,OFParent(D^.Folder),True);
+    If (BX>=144) And (BX<=234) Then OFScan(D^);
+    If BX>=D^.W-70 Then Help;
+   End;
+   If (BY>=60) And (BY<=82) Then Begin
+    If BX<D^.W-80 Then Focus(3) Else OFNavigate(D^,D^.Address,True);
+   End;
+   If (BY>=105) And (BY<105+D^.Rows*16) Then Begin
+    I:=(BY-105) Div 16;
+    If (BX>=8) And (BX<=205) Then Begin
+     Focus(1); N:=D^.TreeTop+I;
+     If N<D^.TreeCount Then Begin
+      D^.TreeSelected:=N;
+      If BX<36+Min(D^.Tree[N].Depth,7)*12 Then OFExpand(D^,N)
+      Else OFNavigate(D^,D^.Tree[N].Path,True);
+     End;
+    End;
+    If (BX>=216) And (BX<=D^.W-9) Then Begin
+     Focus(2); N:=D^.Top+I;
+     If N<D^.Count Then Begin
+      OFSelect(D^,N); GetTime(HH,MM,SS,HS); Ticks:=((LongInt(HH)*60+MM)*60+SS)*100+HS;
+      If (D^.LastIndex=N) And (Ticks>=D^.LastClick) And (Ticks-D^.LastClick<45) Then OFAccept(D^);
+      D^.LastIndex:=N; D^.LastClick:=Ticks;
+     End;
+    End;
+   End;
+   Y:=109+D^.Rows*16;
+   If (BY>=Y) And (BY<=Y+22) Then Begin
+    If (BX>=8) And (BX<=52) Then D^.TreeTop:=Max(0,D^.TreeTop-D^.Rows);
+    If (BX>=58) And (BX<=102) Then D^.TreeTop:=Min(Max(0,D^.TreeCount-D^.Rows),D^.TreeTop+D^.Rows);
+    If (BX>=216) And (BX<=278) Then OFSelect(D^,D^.Selected-D^.Rows);
+    If (BX>=284) And (BX<=346) Then OFSelect(D^,D^.Selected+D^.Rows);
+    D^.Dirty:=True;
+   End;
+   If (BY>=D^.H-116) And (BY<=D^.H-94) Then Focus(0);
+   If (BY>=D^.H-87) And (BY<=D^.H-65) Then Begin
+    Focus(4); OFChooseFilter(D^);
+   End;
+   If (BY>=D^.H-56) And (BY<=D^.H-34) Then Begin
+    If (BX>=10) And (BX<=72) Then Begin If D^.Focus<>3 Then Focus(0); OFEdit(D^,#3,#0); End;
+    If (BX>=78) And (BX<=140) Then Begin If D^.Focus<>3 Then Focus(0); OFEdit(D^,#22,#0); End;
+    If (BX>=146) And (BX<=218) Then Begin
+     If D^.Focus=3 Then D^.Address:='' Else D^.Name:='';
+     D^.Cursor:=0; D^.Anchor:=0; D^.Dirty:=True;
+    End;
+    If (BX>=D^.W-180) And (BX<=D^.W-100) Then OFAccept(D^);
+    If (BX>=D^.W-92) And (BX<=D^.W-12) Then D^.Done:=True;
+   End;
+  End;
+  PrevB:=MB; Delay(10);
+ Until D^.Done;
+ If D^.Accepted Then Begin FileName:=D^.Name; OpenImageDialog:=True; End;
+ Dispose(D); MenuActive:=False; RedrawInterface;
+End;
+
+Procedure OpenImageCommand;
+Var Name: String; Backup: PHistoryData; Metadata: TImageBuffer;
+    OldZoom,OldX,OldY: Integer; Item: PHistoryItem;
+Begin
+ Name:='';
+ If Not OpenImageDialog(Name) Then Exit;
+ If Not ConfirmDiscardChanges Then Exit;
+ Backup:=SaveFullSnapshot;
+ If Backup=Nil Then Begin ShowMessage('Ouvrir','Impossible de proteger l''image courante.'); Exit; End;
+ Metadata:=ImageBuffer; OldZoom:=ZoomLevel; OldX:=ZOriginX; OldY:=ZOriginY;
+ If LoadImage(Name) Then Begin
+  While UndoList<>Nil Do Begin
+   Item:=UndoList; UndoList:=Item^.Next;
+   FreeHistoryData(PHistoryData(Item^.Data)); Dispose(Item);
+  End;
+  While RedoList<>Nil Do Begin
+   Item:=RedoList; RedoList:=Item^.Next;
+   FreeHistoryData(PHistoryData(Item^.Data)); Dispose(Item);
+  End;
+  UndoCount:=0; RedoCount:=0; ImageBuffer.Modified:=False;
+  ZoomLevel:=100; ZOriginX:=0; ZOriginY:=0;
+  SelectionActive:=False;
+ End Else Begin
+  RestoreFullSnapshot(Backup); ImageBuffer:=Metadata;
+  ZoomLevel:=OldZoom; ZOriginX:=OldX; ZOriginY:=OldY;
+  RedrawInterface;
+  ShowMessage('Ouvrir','Fichier invalide, format non reconnu ou lecture impossible. Image conservee.');
+ End;
+ FreeHistoryData(Backup); RedrawInterface;
+End;
+
+
 Procedure HandleMenuClick(MenuIndex, ItemIndex: Integer);
 Var
  NewName: String;
@@ -10219,17 +10862,7 @@ Begin
      ImageBuffer.Modified := False;
      DrawStatusBar;
     End;
-    1: Begin { Ouvrir }
-     NewName := '';
-     If PromptString('Ouvrir', 'Nom du fichier :', NewName) and (NewName <> '') Then Begin
-      If LoadImage(NewName) Then Begin
-       ImageBuffer.Modified := False;
-       DrawStatusBar;
-      End
-      Else
-       ShowMessage('Erreur', 'Impossible d''ouvrir : ' + NewName);
-     End;
-    End;
+    1: OpenImageCommand; { Ouvrir : explorateur graphique Pascal }
     2: Begin { Enregistrer }
      If ImageBuffer.FileName <> '' Then Begin
       If SaveImage(ImageBuffer.FileName, ImageBuffer.Format) Then Begin
@@ -10878,6 +11511,7 @@ Begin
   { Raccourcis Ctrl+lettre (codes ASCII 1..26) }
   If Not TextInsertMode Then Begin
    Case Key of
+    #15: Begin HandleMenuClick(MENU_FILE,1); Exit; End; { Ctrl+O }
     #23: Begin HandleMenuClick(MENU_IMAGE,4); Exit; End; { Ctrl+W }
     #26: Begin Undo; Exit; End;          { Ctrl+Z }
     #25: Begin Redo; Exit; End;          { Ctrl+Y }

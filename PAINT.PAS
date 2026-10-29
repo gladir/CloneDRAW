@@ -140,6 +140,8 @@ Const
  FMT_HDR = 10;
  FMT_FAX = 11;
  FMT_EXR = 12;
+ FMT_DNG = 13;
+ FMT_BGX = 14;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -571,6 +573,10 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If Ext = '.BGX' Then
+  GetImageFormat := FMT_BGX
+ Else If Ext = '.DNG' Then
+  GetImageFormat := FMT_DNG
  Else If Ext = '.EXR' Then
   GetImageFormat := FMT_EXR
  Else If Ext = '.FAX' Then
@@ -5278,6 +5284,402 @@ End;
 
 
 
+{ DNG TIFF classique CFA Bayer 2x2, 8/16 bits non compresse, bandes,
+  deux ordres d'octets, huit orientations et dematricage bilineaire.
+  Matrice couleur identite seulement : pas de developpement RAW camera general.
+  Compatibilite precise avec l'erreur 30/34 entrees de BMP2DNG.PAS. }
+Type
+ TDNEntry = Record Tag,Kind: Word; Count,Offset: LongInt; End;
+ TDNState = Record
+  Data,Raw,RGB: PPNBytes;
+  Size,RawSize,RGBSize,Fixup,IFD: LongInt;
+  Width,Height,OutWidth,OutHeight,Bits,Orientation,EntryCount: Integer;
+  Little,Bad: Boolean;
+  Black,White: Double;
+  Pattern: Array[0..3] Of Byte;
+  Neutral: Array[0..2] Of Double;
+  Entries: Array[0..255] Of TDNEntry;
+ End;
+ PDNState = ^TDNState;
+
+Function DNWord(Var D: TDNState; P: LongInt): Word;
+Begin
+ DNWord:=0; If D.Bad Then Exit;
+ If (P<0) Or (P>D.Size-2) Then Begin D.Bad:=True; Exit; End;
+ If D.Little Then DNWord:=Word(D.Data^[P]) Or (Word(D.Data^[P+1]) Shl 8)
+ Else DNWord:=(Word(D.Data^[P]) Shl 8) Or D.Data^[P+1];
+End;
+
+Function DNLong(Var D: TDNState; P: LongInt): LongWord;
+Var A,B: LongWord;
+Begin
+ A:=DNWord(D,P); B:=DNWord(D,P+2);
+ If D.Little Then DNLong:=A Or (B Shl 16) Else DNLong:=(A Shl 16) Or B;
+End;
+
+Function DNFind(Var D: TDNState; Tag: Word): Integer;
+Var I: Integer;
+Begin
+ DNFind:=-1; For I:=0 To D.EntryCount-1 Do If D.Entries[I].Tag=Tag Then Begin DNFind:=I; Exit; End;
+End;
+
+Function DNValue(Var D: TDNState; E: Integer; Index: LongInt): Double;
+Var P,Step: LongInt; A,B: LongWord;
+Begin
+ DNValue:=0;
+ If (E<0) Or (E>=D.EntryCount) Then Begin D.Bad:=True; Exit; End;
+ With D.Entries[E] Do Begin
+  If (Index<0) Or (Index>=Count) Then Begin D.Bad:=True; Exit; End;
+  Case Kind Of 1,2,6,7: Step:=1; 3,8: Step:=2; 4,9,11: Step:=4; 5,10,12: Step:=8;
+  Else Begin D.Bad:=True; Exit; End; End;
+  P:=Offset+Index*Step;
+  Case Kind Of
+   1,2,7: DNValue:=D.Data^[P];
+   3: DNValue:=DNWord(D,P);
+   4: DNValue:=DNLong(D,P);
+   5,10: Begin
+    A:=DNLong(D,P); B:=DNLong(D,P+4);
+    If B=0 Then Begin D.Bad:=True; Exit; End;
+    If Kind=10 Then DNValue:=LongInt(A)/(LongInt(B)*1.0) Else DNValue:=A/(B*1.0);
+   End;
+  Else D.Bad:=True;
+  End;
+ End;
+End;
+
+Function DNScalar(Var D: TDNState; Tag: Word; Default: Double): Double;
+Var E: Integer;
+Begin
+ E:=DNFind(D,Tag); DNScalar:=Default;
+ If E>=0 Then Begin
+  If D.Entries[E].Count<>1 Then D.Bad:=True Else DNScalar:=DNValue(D,E,0);
+ End;
+End;
+
+Function DNDirectory(Var D: TDNState): Boolean;
+Var N,I,J,K,Step: Integer; P,Bytes: LongInt; V: LongWord; S: String;
+Begin
+ DNDirectory:=False;
+ If D.Size<8 Then Exit;
+ D.Little:=(D.Data^[0]=73) And (D.Data^[1]=73);
+ If Not D.Little And Not ((D.Data^[0]=77) And (D.Data^[1]=77)) Then Exit;
+ If DNWord(D,2)<>42 Then Exit;
+ V:=DNLong(D,4); If V>LongWord(D.Size-2) Then Exit; D.IFD:=V;
+ N:=DNWord(D,D.IFD); If (N<1) Or (N>256) Or (LongInt(N)*12+6>D.Size-D.IFD) Then Exit;
+ { Reparation limitee a la signature exacte du convertisseur historique. }
+ If D.Little And (D.IFD=8) And (N=30) And (D.Size>=422) Then Begin
+  If (DNWord(D,370)=50721) And (DNWord(D,372)=10) And (DNLong(D,374)=9) And
+     (DNWord(D,382)=50728) And (DNWord(D,384)=5) And (DNLong(D,386)=3) And
+     (DNWord(D,394)=50778) And (DNWord(D,396)=3) And (DNLong(D,398)=1) And
+     (DNWord(D,406)=50827) And (DNWord(D,408)=2) And (DNLong(D,410)=28) And
+     (DNLong(D,418)=0) Then Begin
+   S:='';
+   For I:=0 To 29 Do If DNWord(D,10+LongInt(I)*12)=305 Then Begin
+    P:=DNLong(D,18+LongInt(I)*12)+48;
+    If (P>=0) And (P<=D.Size-18) Then For J:=0 To 17 Do S:=S+Chr(D.Data^[P+J]);
+   End;
+   If S='CloneDRAW BMP2DNG'#0 Then Begin N:=34; D.Fixup:=48; End;
+  End;
+ End;
+ { Cette lecture prend en charge un seul IFD CFA, sans chaine de pages. }
+ If DNLong(D,D.IFD+2+LongInt(N)*12)<>0 Then Exit;
+ D.EntryCount:=N;
+ For I:=0 To N-1 Do Begin
+  P:=D.IFD+2+LongInt(I)*12;
+  With D.Entries[I] Do Begin
+   Tag:=DNWord(D,P); Kind:=DNWord(D,P+2); V:=DNLong(D,P+4);
+   If (V=0) Or (V>LongWord(D.Size)) Then Exit; Count:=V;
+   For J:=0 To I-1 Do If D.Entries[J].Tag=Tag Then Exit;
+   Case Kind Of 1,2,6,7: Step:=1; 3,8: Step:=2; 4,9,11,13: Step:=4; 5,10,12: Step:=8;
+   Else Exit; End;
+   If Count>D.Size Div Step Then Exit; Bytes:=Count*Step;
+   If Bytes<=4 Then Offset:=P+8 Else Begin
+    V:=DNLong(D,P+8); If V>LongWord(D.Size-D.Fixup) Then Exit; Offset:=LongInt(V)+D.Fixup;
+   End;
+   If (Offset<0) Or (Offset>D.Size-Bytes) Then Exit;
+  End;
+ End;
+ K:=DNFind(D,50706); If K<0 Then Exit;
+ If (D.Entries[K].Kind<>1) Or (D.Entries[K].Count<>4) Or (DNValue(D,K,0)<>1) Then Exit;
+ DNDirectory:=Not D.Bad;
+End;
+
+Function DNDecode(Var D: TDNState): Boolean;
+Var E,F,I,J,X,Y,C,DX,DY,N,XX,YY,OX,OY,W,H,Value,Orientation: Integer;
+    Rows,StripCount,Strip,Offset,Count,Needed,Pixel,P,Sum: LongInt;
+    V,A: Double;
+Begin
+ DNDecode:=False;
+ V:=DNScalar(D,256,0); If (V<1) Or (V>4096) Then Exit; D.Width:=Round(V);
+ V:=DNScalar(D,257,0); If (V<1) Or (V>4096) Then Exit; D.Height:=Round(V);
+ V:=DNScalar(D,258,0); If (V<>8) And (V<>16) Then Exit; D.Bits:=Round(V);
+ If (DNScalar(D,259,1)<>1) Or (DNScalar(D,262,0)<>32803) Or
+    (DNScalar(D,277,1)<>1) Or (DNScalar(D,284,1)<>1) Or
+    (DNScalar(D,339,1)<>1) Or (DNScalar(D,50711,1)<>1) Or
+    (DNScalar(D,266,1)<>1) Then Exit;
+ V:=DNScalar(D,274,1); If (V<1) Or (V>8) Then Exit; D.Orientation:=Round(V);
+ E:=DNFind(D,33421); If (E<0) Then Exit;
+ If (D.Entries[E].Count<>2) Or (DNValue(D,E,0)<>2) Or (DNValue(D,E,1)<>2) Then Exit;
+ E:=DNFind(D,33422); If E<0 Then Exit; If D.Entries[E].Count<>4 Then Exit;
+ For I:=0 To 3 Do Begin V:=DNValue(D,E,I); If (V<0) Or (V>2) Then Exit; D.Pattern[I]:=Round(V); End;
+ { Les quatre motifs Bayer RGB : rouge/bleu opposes et deux verts. }
+ For C:=0 To 2 Do Begin
+  N:=0; For I:=0 To 3 Do If D.Pattern[I]=C Then Inc(N);
+  If ((C=1) And (N<>2)) Or ((C<>1) And (N<>1)) Then Exit;
+ End;
+ If D.Pattern[0]=1 Then Begin If D.Pattern[3]<>1 Then Exit; End
+ Else If (D.Pattern[3]=1) Or (D.Pattern[0]=D.Pattern[3]) Then Exit;
+ E:=DNFind(D,50710); If E>=0 Then Begin
+  If D.Entries[E].Count<>3 Then Exit;
+  For I:=0 To 2 Do If DNValue(D,E,I)<>I Then Exit;
+ End;
+ E:=DNFind(D,50721); If E>=0 Then Begin
+  If D.Entries[E].Count<>9 Then Exit;
+  For I:=0 To 8 Do Begin V:=DNValue(D,E,I); If I Mod 4=0 Then A:=1 Else A:=0; If Abs(V-A)>0.000001 Then Exit; End;
+ End;
+ For I:=0 To 2 Do D.Neutral[I]:=1;
+ E:=DNFind(D,50728); If E>=0 Then Begin
+  If D.Entries[E].Count<>3 Then Exit;
+  For I:=0 To 2 Do Begin V:=DNValue(D,E,I); If (V<0.000001) Or (V>1000000) Then Exit; D.Neutral[I]:=V; End;
+ End;
+ D.Black:=DNScalar(D,50714,0); If D.Bits=8 Then V:=255 Else V:=65535;
+ D.White:=DNScalar(D,50717,V);
+ If (D.Black<0) Or (D.White>V) Or (D.White<=D.Black) Then Exit;
+ V:=DNScalar(D,278,D.Height); If (V<1) Or (V>2147483647.0) Then Exit; Rows:=Round(V);
+ StripCount:=(D.Height-1) Div Rows+1;
+ E:=DNFind(D,273); F:=DNFind(D,279); If (E<0) Or (F<0) Then Exit;
+ If (D.Entries[E].Count<>StripCount) Or (D.Entries[F].Count<>StripCount) Or D.Bad Then Exit;
+ D.RawSize:=LongInt(D.Width)*D.Height*2; D.Raw:=PPNBytes(JDAllocate(D.RawSize)); If D.Raw=Nil Then Exit;
+ For Strip:=0 To StripCount-1 Do Begin
+  V:=DNValue(D,E,Strip); If (V<0) Or (V>D.Size-D.Fixup) Then Exit; Offset:=Round(V)+D.Fixup;
+  V:=DNValue(D,F,Strip); If (V<0) Or (V>D.Size-Offset) Then Exit; Count:=Round(V);
+  Needed:=Rows; If Needed>D.Height-Strip*Rows Then Needed:=D.Height-Strip*Rows;
+  Needed:=Needed*D.Width*(D.Bits Div 8); If Count<>Needed Then Exit;
+  For Pixel:=0 To Needed Div (D.Bits Div 8)-1 Do Begin
+   P:=Offset+Pixel*(D.Bits Div 8);
+   If D.Bits=8 Then Value:=D.Data^[P] Else Begin
+    { Word peut depasser Integer (mode TP). Copier les octets directement. }
+    If D.Little Then Begin D.Raw^[(Strip*Rows*D.Width+Pixel)*2]:=D.Data^[P]; D.Raw^[(Strip*Rows*D.Width+Pixel)*2+1]:=D.Data^[P+1]; End
+    Else Begin D.Raw^[(Strip*Rows*D.Width+Pixel)*2]:=D.Data^[P+1]; D.Raw^[(Strip*Rows*D.Width+Pixel)*2+1]:=D.Data^[P]; End;
+   End;
+   If D.Bits=8 Then Begin D.Raw^[(Strip*Rows*D.Width+Pixel)*2]:=Value; D.Raw^[(Strip*Rows*D.Width+Pixel)*2+1]:=0; End;
+  End;
+ End;
+ W:=D.Width; H:=D.Height; Orientation:=D.Orientation;
+ D.OutWidth:=W; D.OutHeight:=H; If Orientation>=5 Then Begin D.OutWidth:=H; D.OutHeight:=W; End;
+ D.RGBSize:=LongInt(W)*H*3; D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ For Y:=0 To H-1 Do For X:=0 To W-1 Do Begin
+  OX:=X; OY:=Y;
+  Case Orientation Of
+   2: OX:=W-1-X; 3: Begin OX:=W-1-X; OY:=H-1-Y; End; 4: OY:=H-1-Y;
+   5: Begin OX:=Y; OY:=X; End; 6: Begin OX:=H-1-Y; OY:=X; End;
+   7: Begin OX:=H-1-Y; OY:=W-1-X; End; 8: Begin OX:=Y; OY:=W-1-X; End;
+  End;
+  For C:=0 To 2 Do Begin
+   Sum:=0; N:=0;
+   If D.Pattern[(Y And 1)*2+(X And 1)]=C Then Begin
+    P:=(LongInt(Y)*W+X)*2; Sum:=LongInt(D.Raw^[P])+LongInt(D.Raw^[P+1])*256; N:=1;
+   End Else For DY:=-1 To 1 Do For DX:=-1 To 1 Do Begin
+    XX:=X+DX; YY:=Y+DY;
+    If (XX>=0) And (XX<W) And (YY>=0) And (YY<H) Then
+     If D.Pattern[(YY And 1)*2+(XX And 1)]=C Then Begin
+      P:=(LongInt(YY)*W+XX)*2; Inc(Sum,LongInt(D.Raw^[P])+LongInt(D.Raw^[P+1])*256); Inc(N);
+     End;
+   End;
+   V:=0; If N>0 Then V:=(Sum/(N*1.0)-D.Black)/(D.White-D.Black)/D.Neutral[C];
+   If V<0 Then V:=0; If V>1 Then V:=1;
+   D.RGB^[(LongInt(OY)*D.OutWidth+OX)*3+C]:=Round(V*255);
+  End;
+ End;
+ DNDecode:=Not D.Bad;
+End;
+
+Function DNRead(Const Name: String; Var D: TDNState): Boolean;
+Var F: File; OldMode: Byte; Bytes: LongInt; Failed: Boolean;
+Begin
+ DNRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=8) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}Failed:=(IOResult<>0) Or (Bytes<>D.Size); End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ If Not DNDirectory(D) Then Exit;
+ DNRead:=DNDecode(D);
+End;
+
+Function LoadDNG(FileName: String): Boolean;
+Var D: PDNState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadDNG:=False; Pixels:=Nil; Q:=Nil;
+ D:=PDNState(JDAllocate(SizeOf(TDNState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If DNRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.OutWidth)*D^.OutHeight; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.OutWidth; Img.Height:=D^.OutHeight; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.OutWidth; CanvasImageH:=D^.OutHeight;
+   ImageBuffer.Width:=D^.OutWidth; ImageBuffer.Height:=D^.OutHeight; ImageBuffer.BitDepth:=24;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_DNG; ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadDNG:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Raw<>Nil Then FreeMem(D^.Raw,D^.RawSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TDNState));
+End;
+
+
+
+{ BGX1 MonsterBook : entete compacte de 9 octets, lignes de haut en bas,
+  sans palette ni padding BMP. Ordre RGB de VIEWBGX / PCX2BGX / XBM2BGX.
+  Les convertisseurs BMP2BGX ne signalent pas leur ordre BGR different.
+  Palette absente : VGA PAINT (0..15), puis gris de niveau egal a l'indice.
+  Les 32 bits sont RGB + octet reserve, sans alpha. 15/16 : RGB555/RGB565. }
+Type
+ TBGState = Record
+  Data,RGB: PPNBytes;
+  Size,RGBSize,RowSize: LongInt;
+  Width,Height,Bits: Integer;
+ End;
+ PBGState = ^TBGState;
+
+Function BGRead(Const Name: String; Var D: TBGState): Boolean;
+Var F: File; OldMode: Byte; Bytes,P,Dest: LongInt;
+    X,Y,Index,Shift,R,G,B: Integer; V: Word; Failed: Boolean;
+Begin
+ BGRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=9) And (D.Size<=67108873) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ If (D.Data^[0]<>Ord('B')) Or (D.Data^[1]<>Ord('G')) Or
+    (D.Data^[2]<>Ord('X')) Or (D.Data^[3]<>Ord('1')) Then Exit;
+ { Lire les dimensions en LongInt avant conversion en Integer 16 bits. }
+ Bytes:=LongInt(D.Data^[4])+LongInt(D.Data^[5])*256;
+ If (Bytes<1) Or (Bytes>MAX_IMAGE_WIDTH) Then Exit; D.Width:=Bytes;
+ Bytes:=LongInt(D.Data^[6])+LongInt(D.Data^[7])*256;
+ If (Bytes<1) Or (Bytes>MAX_IMAGE_HEIGHT) Then Exit; D.Height:=Bytes;
+ D.Bits:=D.Data^[8];
+ Case D.Bits Of
+  1,2,4: D.RowSize:=(LongInt(D.Width)*D.Bits+7) Div 8;
+  8: D.RowSize:=D.Width;
+  15,16: D.RowSize:=LongInt(D.Width)*2;
+  24: D.RowSize:=LongInt(D.Width)*3;
+  32: D.RowSize:=LongInt(D.Width)*4;
+ Else Exit; End;
+ If D.Size<>9+D.RowSize*D.Height Then Exit;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ Dest:=0;
+ For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do Begin
+  P:=9+LongInt(Y)*D.RowSize;
+  R:=0; G:=0; B:=0;
+  Case D.Bits Of
+   1,2,4,8: Begin
+    If D.Bits=8 Then Index:=D.Data^[P+X] Else Begin
+     Shift:=8-D.Bits-((X*D.Bits) And 7);
+     Index:=(D.Data^[P+(X*D.Bits) Div 8] Shr Shift) And ((1 Shl D.Bits)-1);
+    End;
+    If D.Bits=1 Then Begin If Index=1 Then Begin R:=255; G:=255; B:=255; End; End
+    Else If Index<16 Then Begin R:=VGA_R[Index]; G:=VGA_G[Index]; B:=VGA_B[Index]; End
+    Else Begin R:=Index; G:=Index; B:=Index; End;
+   End;
+   15,16: Begin
+    Inc(P,LongInt(X)*2); V:=Word(D.Data^[P]) Or (Word(D.Data^[P+1]) Shl 8);
+    If D.Bits=15 Then Begin R:=((V Shr 10) And 31)*255 Div 31; G:=((V Shr 5) And 31)*255 Div 31; End
+    Else Begin R:=((V Shr 11) And 31)*255 Div 31; G:=((V Shr 5) And 63)*255 Div 63; End;
+    B:=(V And 31)*255 Div 31;
+   End;
+   24,32: Begin Inc(P,LongInt(X)*(D.Bits Div 8)); R:=D.Data^[P]; G:=D.Data^[P+1]; B:=D.Data^[P+2]; End;
+  End;
+  D.RGB^[Dest]:=R; D.RGB^[Dest+1]:=G; D.RGB^[Dest+2]:=B; Inc(Dest,3);
+ End;
+ BGRead:=True;
+End;
+
+Function LoadBGX(FileName: String): Boolean;
+Var D: PBGState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadBGX:=False; Pixels:=Nil; Q:=Nil;
+ D:=PBGState(JDAllocate(SizeOf(TBGState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If BGRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height; ImageBuffer.BitDepth:=D^.Bits;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_BGX; ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadBGX:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TBGState));
+End;
+
+
+
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -5302,7 +5704,7 @@ Begin
     (Ext <> '.GIF') and (Ext <> '.PNG') and
     (Ext <> '.JPG') and (Ext <> '.JPEG') and (Ext <> '.XBM') and (Ext <> '.WPG') and
     (Ext <> '.LBM') and (Ext <> '.ILBM') and (Ext <> '.IFF') and
-    (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR') Then Exit;
+    (Ext <> '.HDR') and (Ext <> '.RGBE') and (Ext <> '.FAX') and (Ext <> '.EXR') and (Ext <> '.DNG') and (Ext <> '.BGX') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -5317,6 +5719,8 @@ Begin
   FMT_HDR: Succeeded := LoadHDR(FileName);
   FMT_FAX: Succeeded := LoadFAX(FileName);
   FMT_EXR: Succeeded := LoadEXR(FileName);
+  FMT_DNG: Succeeded := LoadDNG(FileName);
+  FMT_BGX: Succeeded := LoadBGX(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -12310,6 +12714,8 @@ Begin
   FMT_HDR: APFormatName:='HDR/RGBE';
   FMT_FAX: APFormatName:='FAX G3 1D';
   FMT_EXR: APFormatName:='OpenEXR';
+  FMT_DNG: APFormatName:='DNG Bayer';
+  FMT_BGX: APFormatName:='BGX MonsterBook';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -13008,7 +13414,7 @@ Begin
  E:=OFUpper(ExtractFileExt(Name));
  Case Filter Of
   0: OFMatches:=(E='.BMP') Or (E='.DIB') Or (E='.GIF') Or
-                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF') Or (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR');
+                (E='.PNG') Or (E='.JPG') Or (E='.JPEG') Or (E='.XBM') Or (E='.WPG') Or (E='.LBM') Or (E='.ILBM') Or (E='.IFF') Or (E='.HDR') Or (E='.RGBE') Or (E='.FAX') Or (E='.EXR') Or (E='.DNG') Or (E='.BGX');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -13019,6 +13425,8 @@ Begin
   8: OFMatches:=(E='.HDR') Or (E='.RGBE');
   9: OFMatches:=E='.FAX';
   10: OFMatches:=E='.EXR';
+  11: OFMatches:=E='.DNG';
+  12: OFMatches:=E='.BGX';
   Else OFMatches:=True;
  End;
 End;
@@ -13026,7 +13434,7 @@ End;
 Function OFFilterLabel(N: Integer): String;
 Begin
  Case N Of
-  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR';
+  0: OFFilterLabel:='Images : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR, DNG, BGX';
   1: OFFilterLabel:='Bitmap : *.bmp; *.dib';
   2: OFFilterLabel:='GIF : *.gif';
   3: OFFilterLabel:='PNG : *.png';
@@ -13037,6 +13445,8 @@ Begin
   8: OFFilterLabel:='Radiance HDR : *.hdr; *.rgbe';
   9: OFFilterLabel:='FAX Group 3 1D : *.fax';
   10: OFFilterLabel:='OpenEXR non compresse : *.exr';
+  11: OFFilterLabel:='DNG Bayer non compresse : *.dng';
+  12: OFFilterLabel:='MonsterBook BGX : *.bgx';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -13448,7 +13858,7 @@ Begin
  If DosError<>0 Then Begin D.Notice:='Fichier introuvable ou inaccessible.'; D.Dirty:=True; Exit; End;
  {$IFDEF FPC}FindClose(R);{$ENDIF}
  If Not OFMatches(S,0) Then Begin
-  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR.'; D.Dirty:=True; Exit;
+  D.Notice:='Formats ouvrables : BMP, DIB, GIF, PNG, JPG, JPEG, XBM, WPG, LBM, HDR, FAX, EXR, DNG, BGX.'; D.Dirty:=True; Exit;
  End;
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
@@ -13457,7 +13867,7 @@ Procedure OFChooseFilter(Var D: TOFState);
 Var X,Y,W,I,N,MX,MY,B,Prev: Integer; K,E: Char; Done,Accept: Boolean; MaxFilter: Integer; OldName: String; PopupHeight: Integer;
 Begin
  X:=D.X+38; Y:=D.Y+120; W:=D.W-76;
- N:=D.Filter; MaxFilter:=12; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
+ N:=D.Filter; MaxFilter:=14; If D.SaveMode Then Begin N:=D.Filter-1; MaxFilter:=3; End; Done:=False; Accept:=False;
  PopupHeight:=50+MaxFilter*21;
  GetMouseStateLocal(MX,MY,Prev);
  Repeat
@@ -13566,7 +13976,7 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR : ouverture uniquement.';
+  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG/BGX : ouverture uniquement.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -14706,13 +15116,13 @@ BEGIN
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
-  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr]');
+  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|dng|bgx]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
   WriteLn(' - Support de la souris (Int 33h / PtcMouse)');
   WriteLn(' - Outils de dessin: Crayon, Pinceau, A'+#130+'rographe, Ligne, Rectangle, Ellipse...');
-  WriteLn(' - Formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM), HDR (RGBE), FAX (G3 1D), EXR');
+  WriteLn(' - Formats: BMP, GIF, PNG, JPEG, XBM, WPG, LBM (ILBM/PBM), HDR (RGBE), FAX (G3 1D), EXR, DNG, BGX');
   WriteLn(' - Support de la transparence pour GIF et PNG');
   WriteLn(' - Redimensionnement et rognage d''image');
   WriteLn(' - Support de 2 a 32 bits de profondeur de couleur');

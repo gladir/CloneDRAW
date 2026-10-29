@@ -9993,6 +9993,96 @@ Begin
 End;
 
 
+{ CR2 synthetique : TIFF CFA RGGB 16 bits, suivant BMP2CR2.PAS. }
+Function SaveCR2(FileName:String):Boolean;
+Const MakeText='Canon'#0; ModelText='CloneDRAW synthetic RAW'#0;
+ SoftwareText='CloneDRAW PAINT CR2'#0;
+
+Var F:File;Buffer:Array[0..8191] Of Byte;Used,X,Y,I:Integer;
+ Failed:Boolean;C:TRGBColor;V:Byte;DateText:String;
+ Year,Month,Day,WeekDay,Hour,Minute,Second,Hundredth:Word;
+ XRes,YRes,MakePos,ModelPos,SoftPos,DatePos,MatrixPos,StripPos:LongInt;
+ Procedure Flush;
+ Var Written:LongInt;
+ Begin
+  If Failed Or (Used=0) Then Exit;
+  {$I-}BlockWrite(F,Buffer,Used,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Used);Used:=0;
+ End;
+ Procedure B(Value:Byte);
+ Begin
+  If Failed Then Exit;Buffer[Used]:=Value;Inc(Used);
+  If Used=SizeOf(Buffer) Then Flush;
+ End;
+ Procedure W(Value:Word);
+ Begin B(Value And 255);B(Value Shr 8);End;
+ Procedure L(Value:LongWord);
+ Begin W(Value And 65535);W(Value Shr 16);End;
+ Procedure Entry(Tag,Kind:Word;Count,Value:LongWord);
+ Begin W(Tag);W(Kind);L(Count);L(Value);End;
+ Procedure TextData(Const S:String);
+ Var J:Integer;
+ Begin
+  For J:=1 To Length(S) Do B(Ord(S[J]));
+  If Odd(Length(S)) Then B(0);
+ End;
+Function Two(Value:Word):String;
+ Var T:String;
+ Begin T:=IntToStr(Value);If Length(T)<2 Then T:='0'+T;Two:=T;End;
+Begin
+ SaveCR2:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ GetDate(Year,Month,Day,WeekDay);
+ GetTime(Hour,Minute,Second,Hundredth);
+ DateText:=IntToStr(Year)+':'+Two(Month)+':'+Two(Day)+' '+
+  Two(Hour)+':'+Two(Minute)+':'+Two(Second)+#0;
+ XRes:=322;YRes:=XRes+8;MakePos:=YRes+8;
+ ModelPos:=MakePos+((Length(MakeText)+1) And $FFFE);
+ SoftPos:=ModelPos+((Length(ModelText)+1) And $FFFE);
+ DatePos:=SoftPos+((Length(SoftwareText)+1) And $FFFE);
+ MatrixPos:=DatePos+((Length(DateText)+1) And $FFFE);StripPos:=MatrixPos+72;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Used:=0;Failed:=False;
+ W($4949);W(42);L(16);B(Ord('C'));B(Ord('R'));W(2);L(0);W(25);
+ Entry(256,4,1,CanvasImageW);Entry(257,4,1,CanvasImageH);
+ Entry(258,3,1,16);Entry(259,3,1,1);Entry(262,3,1,32803);
+ Entry(271,2,Length(MakeText),MakePos);
+ Entry(272,2,Length(ModelText),ModelPos);Entry(273,4,1,StripPos);
+ Entry(274,3,1,1);Entry(277,3,1,1);Entry(278,4,1,CanvasImageH);
+ Entry(279,4,1,LongInt(CanvasImageW)*CanvasImageH*2);
+ Entry(282,5,1,XRes);Entry(283,5,1,YRes);Entry(284,3,1,1);Entry(296,3,1,2);
+ Entry(305,2,Length(SoftwareText),SoftPos);
+ Entry(306,2,Length(DateText),DatePos);
+ Entry(33421,3,2,$00020002);Entry(33422,1,4,$02010100);
+
+
+ Entry(50710,1,3,$00020100);Entry(50711,3,1,1);
+ Entry(50714,4,1,0);Entry(50717,4,1,65535);Entry(50721,10,9,MatrixPos);
+ L(0);
+ L(72);L(1);L(72);L(1);
+ TextData(MakeText);TextData(ModelText);TextData(SoftwareText);
+ TextData(DateText);
+ For I:=0 To 8 Do Begin
+  If I In [0,4,8] Then L(1) Else L(0);L(1);
+ End;
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];
+   If (Y And 1)=0 Then Begin
+    If (X And 1)=0 Then V:=C.R Else V:=C.G;
+   End Else Begin
+    If (X And 1)=0 Then V:=C.G Else V:=C.B;
+   End;
+   W(Word(V)*257);
+  End;
+ End;
+ Flush;{$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveCR2:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -10018,7 +10108,7 @@ Begin
  End;
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
- FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW])
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
@@ -10047,6 +10137,7 @@ Begin
   FMT_PPM: OK:=SavePPM(Temp);
   FMT_APNG: OK:=SaveAPNG(Temp);
   FMT_ARW: OK:=SaveARW(Temp);
+  FMT_CR2: OK:=SaveCR2(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -11381,7 +11472,7 @@ Begin
  SaveCurrentImage:=False;
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
- FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW])
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -17828,7 +17919,8 @@ Begin
  5: OFSaveExtension:='.xbm';
  18: OFSaveExtension:='.ppm';
  15: OFSaveExtension:='.apng';
- 16: OFSaveExtension:='.arw'; Else OFSaveExtension:='.bmp'; End;
+ 16: OFSaveExtension:='.arw';
+ 17: OFSaveExtension:='.cr2'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -17944,13 +18036,13 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=11;
+ Count:=29; If Saving Then Count:=12;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
    If I=4 Then Order[I]:=4; If I=5 Then Order[I]:=25; If I=6 Then Order[I]:=12;
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
-   If I=10 Then Order[I]:=16;
+   If I=10 Then Order[I]:=16; If I=11 Then Order[I]:=17;
   End;
  End;
  { Trier uniquement la presentation, sans changer les identifiants des formats. }
@@ -18041,6 +18133,8 @@ Begin
   OFScan(D);
   If D.SaveMode Then Begin
    D.Notice:='Type choisi : '+OFFilterLabel(D.Filter);
+   If D.Filter=17 Then
+    D.Notice:='CR2 synthetique : Bayer 16 bits avec perte, sans RAW Canon.';
    If D.Filter=16 Then
     D.Notice:='ARW synthetique : Bayer 16 bits, perte de couleurs, sans RAW' +
     ' Sony.';
@@ -18091,7 +18185,8 @@ Begin
    Else If SaveFormat=FMT_XBM Then D^.Filter:=5
    Else If SaveFormat=FMT_PPM Then D^.Filter:=18
    Else If SaveFormat=FMT_APNG Then D^.Filter:=15
-   Else If SaveFormat=FMT_ARW Then D^.Filter:=16;
+   Else If SaveFormat=FMT_ARW Then D^.Filter:=16
+   Else If SaveFormat=FMT_CR2 Then D^.Filter:=17;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -18128,6 +18223,8 @@ Begin
   ' ouve' +
   'rture' +
   ' seule.';
+  If SaveFormat=FMT_CR2 Then
+   D^.Notice:='CR2 synthetique : Bayer 16 bits avec perte, sans RAW Canon.';
   If SaveFormat=FMT_ARW Then
    D^.Notice:='ARW synthetique : Bayer 16 bits, perte de couleurs, sans RAW' +
    ' Sony.';
@@ -18258,7 +18355,8 @@ Begin
    5: SaveFormat:=FMT_XBM;
    18: SaveFormat:=FMT_PPM;
    15: SaveFormat:=FMT_APNG;
-   16: SaveFormat:=FMT_ARW; Else SaveFormat:=FMT_BMP; End;
+   16: SaveFormat:=FMT_ARW;
+   17: SaveFormat:=FMT_CR2; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -18275,7 +18373,7 @@ Begin
  SaveAsCurrentImage:=False; Name:=ImageBuffer.FileName; Format:=ImageBuffer.Format;
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
- FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW])
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -18563,7 +18661,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 11 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 12 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

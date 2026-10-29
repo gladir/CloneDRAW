@@ -8482,6 +8482,198 @@ Begin
  If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
  FreeMem(D,SizeOf(TPSState));
 End;
+{ Targa : types 1/2/3 et RLE 9/10/11, origines et palettes incluses. }
+Type
+ TTGState = Record
+  Data,RGB: PPNBytes;
+  Size,RGBSize,Position: LongInt;
+  Width,Height,Bits: Integer;
+ End;
+ PTGState = ^TTGState;
+
+Function TGWord(Var D: TTGState; P: LongInt): LongInt;
+Begin
+ TGWord:=LongInt(D.Data^[P])+LongInt(D.Data^[P+1])*256;
+End;
+
+Function TGColor(Var D: TTGState; Bits,Attributes: Integer;
+                 Var R,G,B,A: Integer): Boolean;
+Var V: LongInt; N: Integer;
+Begin
+ TGColor:=False; N:=(Bits+7) Div 8;
+ If D.Position>D.Size-N Then Exit;
+ V:=D.Position; Inc(D.Position,N); A:=255;
+ If Bits In [15,16] Then Begin
+  V:=TGWord(D,V); B:=(V And 31)*255 Div 31;
+  G:=((V Shr 5) And 31)*255 Div 31;
+  R:=((V Shr 10) And 31)*255 Div 31;
+  If (Bits=16) And (Attributes=1) And (V And 32768=0) Then A:=0;
+ End Else Begin
+  B:=D.Data^[V]; G:=D.Data^[V+1]; R:=D.Data^[V+2];
+  If (Bits=32) And (Attributes=8) Then A:=D.Data^[V+3];
+ End;
+ TGColor:=True;
+End;
+
+Function TGDecode(Var D: TTGState): Boolean;
+Var Kind,Base,Map,Entry,Attributes,Descriptor: Integer;
+    First,Count,I,Total,Done,Run,P,Index,Dest: LongInt;
+    R,G,B,A,X,Y,N: Integer; RepeatPixel: Boolean;
+    Palette: PPNBytes;
+Begin
+ TGDecode:=False; Palette:=Nil;
+ If D.Size<18 Then Exit;
+ Map:=D.Data^[1]; Kind:=D.Data^[2]; Base:=Kind;
+ If Kind In [9,10,11] Then Dec(Base,8);
+ If Not (Base In [1,2,3]) Then Exit;
+ D.Width:=TGWord(D,12); D.Height:=TGWord(D,14);
+ If (TGWord(D,12)>4096) Or (TGWord(D,14)>4096) Or
+    (D.Width<1) Or (D.Height<1) Then Exit;
+ D.Bits:=D.Data^[16]; Descriptor:=D.Data^[17];
+ Attributes:=Descriptor And 15;
+ If Descriptor And 192<>0 Then Exit;
+ If Base=1 Then Begin
+  If (Map<>1) Or Not (D.Bits In [8,16]) Then Exit;
+ End Else If Map<>0 Then Exit;
+ If (Base=2) And Not (D.Bits In [15,16,24,32]) Then Exit;
+ If (Base=3) And Not (D.Bits In [8,16]) Then Exit;
+ If (Base=2) And (((D.Bits In [15,24]) And (Attributes<>0)) Or
+    ((D.Bits=16) And Not (Attributes In [0,1])) Or
+    ((D.Bits=32) And Not (Attributes In [0,8]))) Then Exit;
+ If (Base=3) And (((D.Bits=8) And (Attributes<>0)) Or
+    ((D.Bits=16) And Not (Attributes In [0,8]))) Then Exit;
+ D.Position:=18+LongInt(D.Data^[0]);
+ If D.Position>D.Size Then Exit;
+ First:=TGWord(D,3); Count:=TGWord(D,5); Entry:=D.Data^[7];
+ If Map=1 Then Begin
+  If (Count=0) Or (First+Count>65536) Or
+     Not (Entry In [15,16,24,32]) Then Exit;
+  If ((Entry In [15,24]) And (Attributes<>0)) Or
+     ((Entry=16) And Not (Attributes In [0,1])) Or
+     ((Entry=32) And Not (Attributes In [0,8])) Then Exit;
+  Palette:=PPNBytes(JDAllocate(262144)); If Palette=Nil Then Exit;
+  For I:=First To First+Count-1 Do Begin
+   If Not TGColor(D,Entry,Attributes,R,G,B,A) Then Begin
+    FreeMem(Palette,262144); Exit;
+   End;
+   Palette^[I*4]:=R; Palette^[I*4+1]:=G;
+   Palette^[I*4+2]:=B; Palette^[I*4+3]:=A;
+  End;
+ End;
+ Total:=LongInt(D.Width)*D.Height; D.RGBSize:=Total*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize));
+ If D.RGB=Nil Then Begin
+  If Palette<>Nil Then FreeMem(Palette,262144); Exit;
+ End;
+ Done:=0;
+ While Done<Total Do Begin
+  Run:=1; RepeatPixel:=False;
+  If Kind>=9 Then Begin
+   If D.Position>=D.Size Then Break;
+   N:=D.Data^[D.Position]; Inc(D.Position);
+   Run:=(N And 127)+1; RepeatPixel:=(N And 128)<>0;
+  End;
+  If Run>Total-Done Then Break;
+  For I:=0 To Run-1 Do Begin
+   If (I=0) Or Not RepeatPixel Then Begin
+    N:=(D.Bits+7) Div 8;
+    If D.Position>D.Size-N Then Begin Done:=-1; Break; End;
+    If Base=1 Then Begin
+     Index:=D.Data^[D.Position];
+     If D.Bits=16 Then Index:=TGWord(D,D.Position);
+     Inc(D.Position,N);
+     If (Index<First) Or (Index>=First+Count) Then Begin
+      Done:=-1; Break;
+     End;
+     R:=Palette^[Index*4]; G:=Palette^[Index*4+1];
+     B:=Palette^[Index*4+2]; A:=Palette^[Index*4+3];
+    End Else If Base=3 Then Begin
+     R:=D.Data^[D.Position]; G:=R; B:=R; A:=255;
+     If (D.Bits=16) And (Attributes=8) Then
+      A:=D.Data^[D.Position+1];
+     Inc(D.Position,N);
+    End Else If Not TGColor(D,D.Bits,Attributes,R,G,B,A) Then Begin
+     Done:=-1; Break;
+    End;
+   End;
+   P:=Done+I; X:=P Mod D.Width; Y:=P Div D.Width;
+   If Descriptor And 16<>0 Then X:=D.Width-1-X;
+   If Descriptor And 32=0 Then Y:=D.Height-1-Y;
+   Dest:=(LongInt(Y)*D.Width+X)*3;
+   D.RGB^[Dest]:=(LongInt(R)*A+LongInt(255)*(255-A)+127) Div 255;
+   D.RGB^[Dest+1]:=(LongInt(G)*A+LongInt(255)*(255-A)+127) Div 255;
+   D.RGB^[Dest+2]:=(LongInt(B)*A+LongInt(255)*(255-A)+127) Div 255;
+  End;
+  If Done<0 Then Break; Inc(Done,Run);
+ End;
+ If Palette<>Nil Then FreeMem(Palette,262144);
+ TGDecode:=Done=Total;
+End;
+
+Function TGRead(Const Name: String; Var D: TTGState): Boolean;
+Var F: File; OldMode: Byte; Bytes: LongInt; Failed: Boolean;
+Begin
+ TGRead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=18) And (D.Size<=134217728) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Not Failed Then TGRead:=TGDecode(D);
+End;
+
+Function LoadTGA(FileName: String): Boolean;
+Var D: PTGState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadTGA:=False; Pixels:=Nil; Q:=Nil;
+ D:=PTGState(JDAllocate(SizeOf(TTGState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If TGRead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+   ImageBuffer.BitDepth:=D^.Bits;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_TARGA;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadTGA:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TTGState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -8513,7 +8705,8 @@ Begin
     (Ext <> '.MSP') and
     (Ext <> '.TIF') and (Ext <> '.TIFF') and
     (Ext <> '.MAC') and (Ext <> '.PNTG') and
-    (Ext <> '.PAS') Then Exit;
+    (Ext <> '.PAS') and (Ext <> '.TGA') and
+    (Ext <> '.TARGA') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -8543,6 +8736,7 @@ Begin
   FMT_TIFF: Succeeded := LoadTIFF(FileName);
   FMT_MAC: Succeeded := LoadMAC(FileName);
   FMT_PAS: Succeeded := LoadPAS(FileName);
+  FMT_TARGA: Succeeded := LoadTGA(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -16283,7 +16477,8 @@ Begin
                 (E='.APNG') Or (E='.ARW') Or (E='.CR2') Or (E='.PPM') Or
                 (E='.CUR') Or (E='.PCX') Or (E='.MSP') Or
                 (E='.TIF') Or (E='.TIFF') Or
-                (E='.MAC') Or (E='.PNTG') Or (E='.PAS');
+                (E='.MAC') Or (E='.PNTG') Or (E='.PAS') Or
+                (E='.TGA') Or (E='.TARGA');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -16309,6 +16504,7 @@ Begin
   23: OFMatches:=(E='.TIF') Or (E='.TIFF');
   24: OFMatches:=(E='.MAC') Or (E='.PNTG');
   25: OFMatches:=(E='.PAS');
+  26: OFMatches:=(E='.TGA') Or (E='.TARGA');
   Else OFMatches:=True;
  End;
 End;
@@ -16342,6 +16538,7 @@ Begin
   23: OFFilterLabel:='TIFF : *.tif; *.tiff';
   24: OFFilterLabel:='MacPaint : *.mac; *.pntg';
   25: OFFilterLabel:='Pascal Bitmap : *.pas';
+  26: OFFilterLabel:='Targa : *.tga; *.targa';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -16760,12 +16957,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..26] Of Integer;
+Type TOFFilterOrder = Array[0..27] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=27; If Saving Then Count:=3;
+ Count:=28; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;

@@ -3837,7 +3837,7 @@ Begin
   End;
   { Conserver les couleurs exactes des captures/elements graphiques PNG.
     La quantification n'intervient que si les registres sont tous occupes. }
-  Used:=16; Source:=PByte(D^.RGB); Dest:=Pixels; Exact:=True;
+  Used:=0; Source:=PByte(D^.RGB); Dest:=Pixels; Exact:=True;
   For N:=0 To Size-1 Do Begin
    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
@@ -9036,11 +9036,12 @@ Begin
  SaveGIF:=Not Bad;
 End;
 
-Function SavePNG(FileName: String): Boolean;
+Function SavePNGContainer(FileName: String; Animated: Boolean): Boolean;
 Var F: File; D: PPNState; Data: PPNBytes; RawSize,Size,Pos,Offset,N,I,X,Y: LongInt;
     Header: Array[0..12] Of Byte; Palette: Array[0..767] Of Byte;
     Bytes: Array[0..3] Of Byte; AdlerA,AdlerB,C: LongWord;
     Bad: Boolean; Wrote: LongInt;
+    Animation:Array[0..7] Of Byte; Frame:Array[0..25] Of Byte;
  Procedure WriteData(Var Buffer; Count: LongInt);
  Begin
   If Bad Then Exit;
@@ -9075,7 +9076,7 @@ Var F: File; D: PPNState; Data: PPNBytes; RawSize,Size,Pos,Offset,N,I,X,Y: LongI
  End;
 
 Begin
- SavePNG:=False; Data:=Nil;
+ SavePNGContainer:=False; Data:=Nil;
  If (CanvasImage=Nil) Or (CanvasImageW<>ImageBuffer.Width) Or (CanvasImageH<>ImageBuffer.Height) Then Exit;
  RawSize:=(LongInt(CanvasImageW)+1)*CanvasImageH;
  Size:=2+RawSize+((RawSize+65534) Div 65535)*5+4;
@@ -9108,11 +9109,26 @@ Begin
  If Not Bad Then Begin
   WriteData(PNG_SIGNATURE,8); Chunk('IHDR',@Header,13); Chunk('PLTE',@Palette,768);
   For X:=0 To 5 Do TextChunk(X);
+  If Animated Then Begin
+   FillChar(Animation,SizeOf(Animation),0);Animation[3]:=1;
+   Chunk('acTL',@Animation,8);
+   FillChar(Frame,SizeOf(Frame),0);
+   BE(CanvasImageW);Move(Bytes,Frame[4],4);
+   BE(CanvasImageH);Move(Bytes,Frame[8],4);
+   Frame[21]:=1;Frame[23]:=10;
+   Chunk('fcTL',@Frame,26);
+  End;
   Chunk('IDAT',Data,Pos); Chunk('IEND',Nil,0);
   {$I-}Close(F);{$I+}If IOResult<>0 Then Bad:=True;
  End;
- FreeMem(Data,Size); FreeMem(D,SizeOf(TPNState)); SavePNG:=Not Bad;
+ FreeMem(Data,Size); FreeMem(D,SizeOf(TPNState)); SavePNGContainer:=Not Bad;
 End;
+
+Function SavePNG(FileName: String): Boolean;
+Begin SavePNG:=SavePNGContainer(FileName,False); End;
+
+Function SaveAPNG(FileName: String): Boolean;
+Begin SaveAPNG:=SavePNGContainer(FileName,True); End;
 
 Var PaintSaveError: String;
 
@@ -9909,7 +9925,8 @@ Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
  End;
 Begin
  SaveImage:=False; PaintSaveError:='';
- If ImageBuffer.Metadata.Limited And (Format In [FMT_GIF,FMT_PNG]) Then Begin
+ If ImageBuffer.Metadata.Limited And (Format In [FMT_GIF,FMT_PNG,FMT_APNG]) Then
+ Begin
   PaintSaveError:='Textes longs ou Unicode : validez leur remplacement dans Proprietes avant de sauvegarder.'; Exit;
  End;
  If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
@@ -9918,10 +9935,11 @@ Begin
   PaintSaveError:='Image absente ou dimensions incoherentes.'; Exit;
  End;
  If Not (Format In
- [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,FMT_BGX,FMT_XBM,FMT_PPM])
+ [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG])
  Then
  Begin
- PaintSaveError:='Choisissez BMP, GIF, PNG, PCX, JPEG, PAS, BGX, XBM ou PPM.';
+ PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
  Exit;
  End;
  Old:=ImageBuffer; Exists:=Present(FileName);
@@ -9945,6 +9963,7 @@ Begin
   FMT_BGX: OK:=SaveBGX(Temp);
   FMT_XBM: OK:=SaveXBM(Temp);
   FMT_PPM: OK:=SavePPM(Temp);
+  FMT_APNG: OK:=SaveAPNG(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -11278,7 +11297,8 @@ Function SaveCurrentImage: Boolean;
 Begin
  SaveCurrentImage:=False;
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
- [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,FMT_BGX,FMT_XBM,FMT_PPM])
+ [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -17723,7 +17743,8 @@ Begin
  25: OFSaveExtension:='.pas';
  12: OFSaveExtension:='.bgx';
  5: OFSaveExtension:='.xbm';
- 18: OFSaveExtension:='.ppm'; Else OFSaveExtension:='.bmp'; End;
+ 18: OFSaveExtension:='.ppm';
+ 15: OFSaveExtension:='.apng'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -17839,12 +17860,12 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=9;
+ Count:=29; If Saving Then Count:=10;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
    If I=4 Then Order[I]:=4; If I=5 Then Order[I]:=25; If I=6 Then Order[I]:=12;
-   If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18;
+   If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
   End;
  End;
  { Trier uniquement la presentation, sans changer les identifiants des formats. }
@@ -17935,6 +17956,8 @@ Begin
   OFScan(D);
   If D.SaveMode Then Begin
    D.Notice:='Type choisi : '+OFFilterLabel(D.Filter);
+   If D.Filter=15 Then
+    D.Notice:='APNG : une seule image, sans perte de couleur.';
    If D.Filter=5 Then
     D.Notice:='XBM standard : conversion en noir et blanc, seuil 128.';
    If D.Filter=4 Then
@@ -17978,7 +18001,8 @@ Begin
    Else If SaveFormat=FMT_PAS Then D^.Filter:=25
    Else If SaveFormat=FMT_BGX Then D^.Filter:=12
    Else If SaveFormat=FMT_XBM Then D^.Filter:=5
-   Else If SaveFormat=FMT_PPM Then D^.Filter:=18;
+   Else If SaveFormat=FMT_PPM Then D^.Filter:=18
+   Else If SaveFormat=FMT_APNG Then D^.Filter:=15;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -18008,12 +18032,15 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='Exports : BMP, GIF, PNG, PCX, JPG, PAS, BGX, XBM, PPM. Autres' +
+  D^.Notice:='Exports : APNG, BMP, GIF, PNG, PCX, JPG, PAS, BGX, XBM, PPM. ' +
+  'Autres' +
   ' form' +
   'ats :' +
   ' ouve' +
   'rture' +
   ' seule.';
+  If SaveFormat=FMT_APNG Then
+   D^.Notice:='APNG : une seule image, sans perte de couleur.';
   If SaveFormat=FMT_XBM Then
    D^.Notice:='XBM standard : conversion en noir et blanc, seuil 128.';
   If SaveFormat=FMT_JPEG Then
@@ -18137,7 +18164,8 @@ Begin
    25: SaveFormat:=FMT_PAS;
    12: SaveFormat:=FMT_BGX;
    5: SaveFormat:=FMT_XBM;
-   18: SaveFormat:=FMT_PPM; Else SaveFormat:=FMT_BMP; End;
+   18: SaveFormat:=FMT_PPM;
+   15: SaveFormat:=FMT_APNG; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -18153,7 +18181,8 @@ Var Name: String; Format: Byte;
 Begin
  SaveAsCurrentImage:=False; Name:=ImageBuffer.FileName; Format:=ImageBuffer.Format;
  If Not (Format In
- [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,FMT_BGX,FMT_XBM,FMT_PPM])
+ [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
+ FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -18441,7 +18470,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 9 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 10 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

@@ -151,6 +151,7 @@ Const
  FMT_DIB = 21;
  FMT_CUR = 22;
  FMT_MSP = 23;
+ FMT_MAC = 24;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -591,6 +592,8 @@ Begin
   GetImageFormat := FMT_PCX
  Else If (Ext = '.TGA') or (Ext = '.TARGA') Then
   GetImageFormat := FMT_TARGA
+ Else If (Ext = '.MAC') Or (Ext = '.PNTG') Then
+  GetImageFormat := FMT_MAC
  Else If Ext = '.MSP' Then
   GetImageFormat := FMT_MSP
  Else If Ext = '.CUR' Then
@@ -7845,6 +7848,156 @@ Begin
  If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
  FreeMem(D,SizeOf(TDNState));
 End;
+{ MacPaint : en-tetes 0/2, 576 x 720, 72 octets par ligne PackBits.
+  Bit 1 = noir. Fichier pur ou MacBinary sans en-tete secondaire.
+  Apple Technical Note PT24 : MacPaint Document Format. }
+Type
+ TMAState = Record
+  Data,RGB: PPNBytes;
+  Size,RGBSize: LongInt;
+  Width,Height: Integer;
+  Row: Array[0..71] Of Byte;
+ End;
+ PMAState = ^TMAState;
+
+Function MABE(Const D: TMAState; P: LongInt): LongWord;
+Begin
+ MABE:=(LongWord(D.Data^[P]) Shl 24) Or
+       (LongWord(D.Data^[P+1]) Shl 16) Or
+       (LongWord(D.Data^[P+2]) Shl 8) Or D.Data^[P+3];
+End;
+
+Function MARead(Const Name: String; Var D: TMAState): Boolean;
+Var F: File; OldMode: Byte; Bytes,Base,Position,Limit,Dest,ForkPos: LongInt;
+    V,ForkSize,ResourceSize,CRC,Expected: LongWord;
+    Failed: Boolean; I,J,X,Y,N,Count,Value,Produced: Integer;
+Begin
+ MARead:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=512) And (D.Size<=16777216) Then Begin
+  D.Data:=PPNBytes(JDAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ Base:=0; Limit:=D.Size;
+ If (MABE(D,0)<>0) And (MABE(D,0)<>2) And
+    (D.Data^[65]=Ord('P')) And (D.Data^[66]=Ord('N')) And
+    (D.Data^[67]=Ord('T')) And (D.Data^[68]=Ord('G')) Then Begin
+  If (D.Size<640) Or (D.Data^[0]<>0) Or
+     (D.Data^[1]<1) Or (D.Data^[1]>63) Or
+     (D.Data^[74]<>0) Or (D.Data^[82]<>0) Then Exit;
+  If (D.Data^[120]<>0) Or (D.Data^[121]<>0) Then Exit;
+  Expected:=LongWord(D.Data^[124])*256+D.Data^[125];
+  If Expected<>0 Then Begin
+   CRC:=0;
+   For I:=0 To 123 Do Begin
+    CRC:=CRC Xor (LongWord(D.Data^[I]) Shl 8);
+    For J:=1 To 8 Do Begin
+     If (CRC And $8000)<>0 Then CRC:=(CRC Shl 1) Xor $1021
+     Else CRC:=CRC Shl 1;
+     CRC:=CRC And $FFFF;
+    End;
+   End;
+   If CRC<>Expected Then Exit;
+  End;
+  ForkSize:=MABE(D,83); ResourceSize:=MABE(D,87);
+  If (ForkSize<512) Or (ForkSize>LongWord(D.Size-128)) Then Exit;
+  Base:=128; Limit:=Base+LongInt(ForkSize);
+  If ResourceSize<>0 Then Begin
+   ForkPos:=128+((LongInt(ForkSize)+127) Div 128)*128;
+   If ForkPos>D.Size Then Exit;
+   If ResourceSize>LongWord(D.Size-ForkPos) Then Exit;
+  End;
+ End;
+ V:=MABE(D,Base); If (V<>0) And (V<>2) Then Exit;
+ D.Width:=576; D.Height:=720; D.RGBSize:=LongInt(576)*720*3;
+ D.RGB:=PPNBytes(JDAllocate(D.RGBSize)); If D.RGB=Nil Then Exit;
+ Position:=Base+512; Dest:=0;
+ For Y:=0 To 719 Do Begin
+  Produced:=0;
+  While Produced<72 Do Begin
+   If Position>=Limit Then Exit;
+   N:=D.Data^[Position]; Inc(Position);
+   If N<128 Then Begin
+    Count:=N+1;
+    If (Count>72-Produced) Or (Count>Limit-Position) Then Exit;
+    Move(D.Data^[Position],D.Row[Produced],Count);
+    Inc(Position,Count); Inc(Produced,Count);
+   End Else If N>128 Then Begin
+    Count:=257-N;
+    If (Count>72-Produced) Or (Position>=Limit) Then Exit;
+    Value:=D.Data^[Position]; Inc(Position);
+    While Count>0 Do Begin
+     D.Row[Produced]:=Value; Inc(Produced); Dec(Count);
+    End;
+   End;
+  End;
+  For X:=0 To 575 Do Begin
+   Value:=255;
+   If ((D.Row[X Div 8] Shr (7-(X And 7))) And 1)<>0 Then Value:=0;
+   D.RGB^[Dest]:=Value; D.RGB^[Dest+1]:=Value;
+   D.RGB^[Dest+2]:=Value; Inc(Dest,3);
+  End;
+ End;
+ { PackBits autorise des commandes sans effet, mais pas un autre raster. }
+ While Position<Limit Do Begin
+  If D.Data^[Position]<>128 Then Exit; Inc(Position);
+ End;
+ MARead:=True;
+End;
+
+Function LoadMAC(FileName: String): Boolean;
+Var D: PMAState; Q: PJPQuantizer; Img: TJDImage; Pixels,Source,Dest: PByte;
+    Size,N: LongInt; I,J,Used,Slot: Integer; R,G,B: Byte; Exact: Boolean;
+Begin
+ LoadMAC:=False; Pixels:=Nil; Q:=Nil;
+ D:=PMAState(JDAllocate(SizeOf(TMAState))); If D=Nil Then Exit;
+ FillChar(D^,SizeOf(D^),0);
+ If MARead(FileName,D^) Then Begin
+  Size:=LongInt(D^.Width)*D^.Height; Pixels:=PByte(JDAllocate(Size)); Q:=PJPQuantizer(JDAllocate(SizeOf(TJPQuantizer)));
+  If (Pixels<>Nil) And (Q<>Nil) Then Begin
+   FillChar(Q^,SizeOf(Q^),0);
+   For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
+   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   For N:=0 To Size-1 Do Begin
+    R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
+    For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
+    If Slot<0 Then Begin
+     If Used=256 Then Begin Exact:=False; Break; End;
+     Slot:=Used; Inc(Used); Q^.Palette[Slot].R:=R; Q^.Palette[Slot].G:=G; Q^.Palette[Slot].B:=B; Q^.Palette[Slot].A:=255;
+    End;
+    Dest^:=Slot; Inc(Dest);
+   End;
+   If Not Exact Then Begin
+    Img.Width:=D^.Width; Img.Height:=D^.Height; Img.Pixels:=PByte(D^.RGB); JPBuildPalette(Q^,Img);
+    Source:=Img.Pixels; Dest:=Pixels;
+    For N:=0 To Size-1 Do Begin R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Dest^:=Q^.Map[JPBin(R,G,B)]; Inc(Dest); End;
+   End;
+   If CanvasImage<>Nil Then FreeMem(CanvasImage,LongInt(CanvasImageW)*CanvasImageH);
+   CanvasImage:=Pixels; Pixels:=Nil; CanvasImageW:=D^.Width; CanvasImageH:=D^.Height;
+   ImageBuffer.Width:=D^.Width; ImageBuffer.Height:=D^.Height;
+   ImageBuffer.BitDepth:=1;
+   ImageBuffer.FileName:=FileName; ImageBuffer.Format:=FMT_MAC;
+   ImageBuffer.Modified:=False;
+   ImageBuffer.HasTransparency:=False; FillChar(ImageBuffer.TransparentColor,SizeOf(TRGBColor),0); ImageBuffer.Palette:=Q^.Palette;
+   For I:=0 To 255 Do Begin
+    {$IFDEF FPC}SetRGBPalette(I,Q^.Palette[I].R,Q^.Palette[I].G,Q^.Palette[I].B);
+    {$ELSE}SetRGBPalette(I,Q^.Palette[I].R Shr 2,Q^.Palette[I].G Shr 2,Q^.Palette[I].B Shr 2);{$ENDIF}
+   End;
+   LoadMAC:=True;
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,Size);
+ End;
+ If Q<>Nil Then FreeMem(Q,SizeOf(TJPQuantizer));
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TMAState));
+End;
 Function LoadImage(FileName: String): Boolean;
 Var
  Format,OldFileMode: Byte;
@@ -7874,7 +8027,8 @@ Begin
     '.DCM') and (Ext <> '.APNG') and (Ext <> '.ARW') and (Ext <> '.CR2') and
     (Ext <> '.PPM') and (Ext <> '.CUR') and (Ext <> '.PCX') and
     (Ext <> '.MSP') and
-    (Ext <> '.TIF') and (Ext <> '.TIFF') Then Exit;
+    (Ext <> '.TIF') and (Ext <> '.TIFF') and
+    (Ext <> '.MAC') and (Ext <> '.PNTG') Then Exit;
 
  Format := GetImageFormat(FileName);
 
@@ -7902,6 +8056,7 @@ Begin
   FMT_PCX: Succeeded := LoadPCX(FileName);
   FMT_MSP: Succeeded := LoadMSP(FileName);
   FMT_TIFF: Succeeded := LoadTIFF(FileName);
+  FMT_MAC: Succeeded := LoadMAC(FileName);
   Else Succeeded := False;
  End;
  LoadImage:=Succeeded;
@@ -14935,6 +15090,7 @@ Begin
   FMT_DIB: APFormatName:='DIB';
   FMT_CUR: APFormatName:='CUR Windows';
   FMT_MSP: APFormatName:='MSP Microsoft Paint';
+  FMT_MAC: APFormatName:='MAC MacPaint';
  Else APFormatName:='Non renseigne';
  End;
 End;
@@ -15639,7 +15795,8 @@ Begin
                 (E='.DNG') Or (E='.BGX') Or (E='.DDS') Or (E='.DCM') Or
                 (E='.APNG') Or (E='.ARW') Or (E='.CR2') Or (E='.PPM') Or
                 (E='.CUR') Or (E='.PCX') Or (E='.MSP') Or
-                (E='.TIF') Or (E='.TIFF');
+                (E='.TIF') Or (E='.TIFF') Or
+                (E='.MAC') Or (E='.PNTG');
   1: OFMatches:=(E='.BMP') Or (E='.DIB');
   2: OFMatches:=E='.GIF';
   3: OFMatches:=E='.PNG';
@@ -15663,6 +15820,7 @@ Begin
   21: OFMatches:=E='.PCX';
   22: OFMatches:=E='.MSP';
   23: OFMatches:=(E='.TIF') Or (E='.TIFF');
+  24: OFMatches:=(E='.MAC') Or (E='.PNTG');
   Else OFMatches:=True;
  End;
 End;
@@ -15694,6 +15852,7 @@ Begin
   21: OFFilterLabel:='PCX ZSoft Paintbrush : *.pcx';
   22: OFFilterLabel:='MSP Microsoft Paint : *.msp';
   23: OFFilterLabel:='TIFF : *.tif; *.tiff';
+  24: OFFilterLabel:='MacPaint : *.mac; *.pntg';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -16112,12 +16271,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..24] Of Integer;
+Type TOFFilterOrder = Array[0..25] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=25; If Saving Then Count:=3;
+ Count:=26; If Saving Then Count:=3;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Order[I]:=I+1;
  End;
@@ -16268,8 +16427,7 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='BMP, GIF et PNG disponibles. JPEG/XBM/WPG/LBM/HDR/FAX/EXR/DNG' +
-  '/BGX/DDS/DCM/APNG/ARW/CR2/PPM/DIB/CUR/PCX/MSP/TIFF : ouverture uniquement.';
+  D^.Notice:='Exports : BMP, GIF, PNG. Autres formats : ouverture seule.';
   If ImageBuffer.HasTransparency Then D^.Notice:='Transparence importee : enregistrement sur fond blanc.';
  End;
  D^.TreeTop:=Max(0,D^.TreeSelected-D^.Rows+1);
@@ -17611,7 +17769,7 @@ BEGIN
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
   WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
-  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx|msp|tif]');
+  'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx|msp|tif|mac]');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');

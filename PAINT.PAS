@@ -6083,7 +6083,7 @@ Begin
   If (Pixels<>Nil) And (Q<>Nil) Then Begin
    FillChar(Q^,SizeOf(Q^),0);
    For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
-   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   Used:=0; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
    For N:=0 To Size-1 Do Begin
     R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
     For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
@@ -9774,6 +9774,41 @@ Begin
 End;
 
 
+{ BGX1 MonsterBook : RGB 24 bits, lignes de haut en bas, sans palette. }
+Function SaveBGX(FileName: String): Boolean;
+Var F:File; Header:Array[0..8] Of Byte;
+    Row:Array[0..12287] Of Byte; X,Y:Integer; C:TRGBColor;
+    Written,RowSize:LongInt; Failed:Boolean;
+ Procedure WriteBytes(Var Buffer; Count:LongInt);
+ Begin
+  If Failed Then Exit;
+  {$I-}BlockWrite(F,Buffer,Count,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Count);
+ End;
+Begin
+ SaveBGX:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ Header[0]:=Ord('B');Header[1]:=Ord('G');
+ Header[2]:=Ord('X');Header[3]:=Ord('1');
+ Header[4]:=CanvasImageW And 255;Header[5]:=CanvasImageW Shr 8;
+ Header[6]:=CanvasImageH And 255;Header[7]:=CanvasImageH Shr 8;
+ Header[8]:=24;RowSize:=LongInt(CanvasImageW)*3;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Failed:=False;WriteBytes(Header,SizeOf(Header));
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];
+   Row[X*3]:=C.R;Row[X*3+1]:=C.G;Row[X*3+2]:=C.B;
+  End;
+  WriteBytes(Row,RowSize);
+ End;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveBGX:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -9796,9 +9831,10 @@ Begin
     (CanvasImageW<>ImageBuffer.Width) Or (CanvasImageH<>ImageBuffer.Height) Then Begin
   PaintSaveError:='Image absente ou dimensions incoherentes.'; Exit;
  End;
- If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS]) Then
+ If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,FMT_BGX])
+ Then
  Begin
- PaintSaveError:='Choisissez BMP, GIF, PNG, PCX, JPEG ou PAS.'; Exit; End;
+ PaintSaveError:='Choisissez BMP, GIF, PNG, PCX, JPEG, PAS ou BGX.'; Exit; End;
  Old:=ImageBuffer; Exists:=Present(FileName);
  If Exists And ((R.Attr And (Directory+ReadOnly))<>0) Then Begin PaintSaveError:='Cible en lecture seule ou dossier.'; Exit; End;
  Pos:=Length(FileName); While (Pos>0) And Not (FileName[Pos] In ['\','/']) Do Dec(Pos);
@@ -9817,6 +9853,7 @@ Begin
   FMT_PCX: OK:=SavePCX(Temp);
   FMT_JPEG: OK:=SaveJPEG(Temp);
   FMT_PAS: OK:=SavePAS(Temp);
+  FMT_BGX: OK:=SaveBGX(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -11150,7 +11187,7 @@ Function SaveCurrentImage: Boolean;
 Begin
  SaveCurrentImage:=False;
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
- [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS]) Then Begin
+ [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,FMT_BGX]) Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
  If SaveImage(ImageBuffer.FileName,ImageBuffer.Format) Then Begin SaveCurrentImage:=True; DrawStatusBar; End
@@ -17591,7 +17628,8 @@ Begin
  Case Filter Of 2: OFSaveExtension:='.gif'; 3: OFSaveExtension:='.png';
  21: OFSaveExtension:='.pcx';
  4: OFSaveExtension:='.jpg';
- 25: OFSaveExtension:='.pas'; Else OFSaveExtension:='.bmp'; End;
+ 25: OFSaveExtension:='.pas';
+ 12: OFSaveExtension:='.bgx'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -17707,11 +17745,11 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=6;
+ Count:=29; If Saving Then Count:=7;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
-   If I=4 Then Order[I]:=4; If I=5 Then Order[I]:=25;
+   If I=4 Then Order[I]:=4; If I=5 Then Order[I]:=25; If I=6 Then Order[I]:=12;
   End;
  End;
  { Trier uniquement la presentation, sans changer les identifiants des formats. }
@@ -17840,7 +17878,8 @@ Begin
   SaveFormat=FMT_PNG Then D^.Filter:=3
    Else If SaveFormat=FMT_PCX Then D^.Filter:=21
    Else If SaveFormat=FMT_JPEG Then D^.Filter:=4
-   Else If SaveFormat=FMT_PAS Then D^.Filter:=25;
+   Else If SaveFormat=FMT_PAS Then D^.Filter:=25
+   Else If SaveFormat=FMT_BGX Then D^.Filter:=12;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -17870,7 +17909,8 @@ Begin
  If Saving Then Begin
   D^.Name:=OFBase(FileName); If D^.Name='' Then D^.Name:='Sans titre';
   D^.Name:=OFSaveName(D^.Name,D^.Filter); D^.Cursor:=Length(D^.Name); D^.Anchor:=0;
-  D^.Notice:='Exports : BMP, GIF, PNG, PCX, JPG, PAS. Autres formats : ouve' +
+  D^.Notice:='Exports : BMP, GIF, PNG, PCX, JPG, PAS, BGX. Autres formats :' +
+  ' ouve' +
   'rture' +
   ' seule.';
   If SaveFormat=FMT_JPEG Then
@@ -17991,7 +18031,8 @@ Begin
   SaveFormat:=FMT_PNG;
    21: SaveFormat:=FMT_PCX;
    4: SaveFormat:=FMT_JPEG;
-   25: SaveFormat:=FMT_PAS; Else SaveFormat:=FMT_BMP; End;
+   25: SaveFormat:=FMT_PAS;
+   12: SaveFormat:=FMT_BGX; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -18006,7 +18047,8 @@ Function SaveAsCurrentImage: Boolean;
 Var Name: String; Format: Byte;
 Begin
  SaveAsCurrentImage:=False; Name:=ImageBuffer.FileName; Format:=ImageBuffer.Format;
- If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS]) Then
+ If Not (Format In [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,FMT_BGX])
+ Then
  Format:=FMT_PNG;
  Repeat
   If Not PaintFileDialog(Name,True,Format) Then Exit;
@@ -18293,7 +18335,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : BMP, GIF, PNG, PCX, JPG, PAS');
+   OutTextXY(X+W-198,Y+270,'Exports : BMP, GIF, PNG, PCX, JPG, PAS, BGX');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

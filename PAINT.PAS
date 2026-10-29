@@ -291,6 +291,12 @@ Var
  MouseVisible: Boolean;
  OldMouseX, OldMouseY: Integer;
  OldMouseButtons: Integer;
+ { Survol des icones : infobulle jaune apres une demi-seconde. }
+ ToolTipVisible: Boolean;
+ ToolTipCandidate,ToolTipX,ToolTipY: Integer;
+ ToolTipStarted: LongInt;
+ ToolTipPixels: Array[0..32767] Of Byte;
+
  { Rubber-band XOR pour la selection en cours }
  RubberValid: Boolean;
  RubberL, RubberT, RubberR, RubberB: Integer;
@@ -1271,6 +1277,101 @@ Begin
  End;
 End;
 
+{ Infobulles BGI : chaque icone possede son propre texte. Les pixels de
+  l'ecran sont sauvegardes, sans toucher aux pixels du document/historique. }
+Function ToolTipHit(X,Y: Integer): Integer;
+Var Col,Row,Left,Top,Index: Integer;
+Begin
+ ToolTipHit:=-1;
+ If (X<5) Or (Y<MENUBAR_HEIGHT+5) Then Exit;
+ Col:=(X-5) Div 23; Row:=(Y-MENUBAR_HEIGHT-5) Div 23;
+ If (Col>1) Or (Row>7) Then Exit;
+ Left:=5+Col*23; Top:=MENUBAR_HEIGHT+5+Row*23; Index:=Row*2+Col;
+ If (Index>14) Or (X>Left+20) Or (Y>Top+20) Then Exit;
+ ToolTipHit:=Index;
+End;
+
+Function ToolTipText(Index: Integer): String;
+Begin
+ Case Index Of
+  TOOL_SELECT: ToolTipText:='Selection : delimiter une zone de l''image';
+  TOOL_ERASER: ToolTipText:='Gomme : effacer avec la couleur de fond';
+  TOOL_FILL: ToolTipText:='Remplissage : colorier une zone fermee';
+  TOOL_PICKER: ToolTipText:='Pipette : prelever une couleur de l''image';
+  TOOL_MAGNIFY: ToolTipText:='Loupe : agrandir ou reduire la vue';
+  TOOL_PENCIL: ToolTipText:='Crayon : dessiner un trait fin a main levee';
+  TOOL_BRUSH: ToolTipText:='Pinceau : peindre avec la taille choisie';
+  TOOL_AIRBRUSH: ToolTipText:='Aerographe : pulveriser des points de couleur';
+  TOOL_TEXT: ToolTipText:='Texte : cliquer puis saisir du texte';
+  TOOL_LINE: ToolTipText:='Ligne : tracer un segment droit';
+  TOOL_CURVE: ToolTipText:='Courbe : tracer une ligne courbe';
+  TOOL_POLYGON: ToolTipText:='Polygone : dessiner plusieurs segments relies';
+  TOOL_RECT: ToolTipText:='Rectangle : tracer une forme rectangulaire';
+  TOOL_ELLIPSE: ToolTipText:='Ellipse : dessiner un ovale ou un cercle';
+  TOOL_ROUNDRECT: ToolTipText:='Rectangle arrondi : tracer des coins arrondis';
+  Else ToolTipText:='';
+ End;
+End;
+
+Function ToolTipClock: LongInt;
+Var H,M,S,HS: Word;
+Begin
+ GetTime(H,M,S,HS); ToolTipClock:=((LongInt(H)*60+M)*60+S)*100+HS;
+End;
+
+Procedure HideToolTip;
+Begin
+ If ToolTipVisible Then Begin
+  HideMouse;
+  PutImage(ToolTipX,ToolTipY,ToolTipPixels,CopyPut);
+  ShowMouse;
+  ToolTipVisible:=False;
+ End;
+End;
+
+Procedure ResetToolTip;
+Begin
+ HideToolTip; ToolTipCandidate:=-1;
+End;
+
+Procedure ShowToolTip(Index: Integer);
+Var S: String; W,H,X,Y,PreviousColor: Integer;
+    PreviousFill: FillSettingsType; PreviousLine: LineSettingsType;
+Begin
+ S:=ToolTipText(Index); If S='' Then Exit;
+ W:=TextWidth(S)+16; H:=TextHeight(S)+14;
+ X:=TOOLBAR_WIDTH+8; Y:=MENUBAR_HEIGHT+5+(Index Div 2)*23+22;
+ X:=Max(0,Min(X,ScreenWidth-W-4)); Y:=Max(0,Min(Y,ScreenHeight-H-4));
+ If ImageSize(X,Y,X+W+3,Y+H+3)>SizeOf(ToolTipPixels) Then Exit;
+ HideMouse;
+ GetImage(X,Y,X+W+3,Y+H+3,ToolTipPixels);
+ PreviousColor:=GetColor; GetFillSettings(PreviousFill); GetLineSettings(PreviousLine);
+ SetWriteMode(CopyPut); SetLineStyle(SolidLn,0,NormWidth);
+ SetFillStyle(SolidFill,DarkGray); Bar(X+3,Y+3,X+W+3,Y+H+3);
+ SetFillStyle(SolidFill,Yellow); Bar(X,Y,X+W,Y+H);
+ SetColor(Black); Rectangle(X,Y,X+W,Y+H); OutTextXY(X+8,Y+7,S);
+ SetColor(PreviousColor); SetFillStyle(PreviousFill.Pattern,PreviousFill.Color);
+ SetLineStyle(PreviousLine.LineStyle,PreviousLine.Pattern,PreviousLine.Thickness);
+ ToolTipX:=X; ToolTipY:=Y; ToolTipVisible:=True;
+ ShowMouse;
+End;
+
+Procedure UpdateToolTip;
+Var Index: Integer; Now,Elapsed: LongInt;
+Begin
+ Index:=-1;
+ If Not MenuActive And Not Drawing And Not TextInsertMode And (MouseButtons=0) Then
+  Index:=ToolTipHit(MouseX,MouseY);
+ Now:=ToolTipClock;
+ If Index<>ToolTipCandidate Then Begin
+  HideToolTip; ToolTipCandidate:=Index; ToolTipStarted:=Now;
+ End;
+ If Index<0 Then Exit;
+ Elapsed:=Now-ToolTipStarted; If Elapsed<0 Then Inc(Elapsed,8640000);
+ If Not ToolTipVisible And (Elapsed>=50) Then ShowToolTip(Index);
+End;
+
+
 Procedure DrawToolbar;
 Var
  I: Integer;
@@ -1629,6 +1730,8 @@ End;
 
 Procedure RedrawInterface;
 Begin
+ { Le redessin complet remplace aussi toute infobulle affichee. }
+ ToolTipVisible:=False; ToolTipCandidate:=-1;
  {$IFDEF FPC}
  HideMouse;
  {$ELSE}
@@ -12408,6 +12511,8 @@ Var
  BarHit, ItemHit: Integer;
 Begin
  GetMouseStateLocal(MouseX, MouseY, MouseButtons);
+ If MouseButtons<>0 Then ResetToolTip;
+ UpdateToolTip;
 
  { Detection de front montant du bouton gauche (evite la repetition
    d'action tant que l'utilisateur maintient le bouton enfonce). }
@@ -12499,6 +12604,7 @@ Var
  ExtKey: Char;
 Begin
  If Not KeyPressed Then Exit;
+ ResetToolTip;
 
  Key := ReadKey;
 
@@ -12682,6 +12788,7 @@ Begin
 
  { Variables d'état }
  Running := True;
+ ToolTipVisible:=False; ToolTipCandidate:=-1;
  MenuActive := False;
  ActiveMenu := -1;
  ActiveMenuItem := -1;
@@ -12755,7 +12862,7 @@ Begin
   HandleMouseEvent;
   HandleKeyboardEvent;
   { Animation "marching ants" : ~1 seconde par phase (Delay(10) x 100). }
-  If SelectionActive And (Not Drawing) And (Not MenuActive) Then Begin
+  If SelectionActive And (Not Drawing) And (Not MenuActive) And (Not ToolTipVisible) Then Begin
    Inc(AntsCounter);
    If AntsCounter >= 100 Then Begin
     AntsCounter := 0;

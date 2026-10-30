@@ -5,11 +5,11 @@
   @abstract(Target: Free Pascal 3.2)
   @description(Clone d'Adobe Illustrator en Turbo Pascal/Free Pascal graphique)
 
-  Prototype incomplet : formes, crayon et texte editables.
+  Prototype incomplet : formes, Bezier, crayon et texte editables.
   Les commandes non implementees sont grisees.
   AI10 est un ancien format prive, PAS un format Adobe Illustrator.
   Restent notamment : import/export Adobe, rotation/groupes,
-  Bezier, formatage du texte, calques, historique, SVG et BMP.
+  Formatage du texte, calques, historique, SVG et BMP.
 }
 
 Program AdobeIllustrator;
@@ -86,6 +86,8 @@ Const
  OBJ_LINE = 2;
  OBJ_PATH = 3;
  OBJ_TEXT = 4;
+ OBJ_BEZIER = 5;
+ BEZIER_STEPS = 128;
  MAX_OBJECTS = 100;
  
  MAX_LAYERS = 20;
@@ -228,6 +230,8 @@ Var
  TextActive: Boolean;
  TextObject: TGraphicObject;
  TextEditIndex, TextCursor: Integer;
+ BezierStage: Integer;
+ BezierObject: TGraphicObject;
 
 Procedure InitMouse;
 {$IFNDEF FPC}
@@ -356,9 +360,9 @@ Begin
   TOOL_RECTANGLE: S := 'Rectangle (2) - glisser pour dessiner';
   TOOL_ELLIPSE: S := 'Ellipse / cercle (3) - glisser pour dessiner';
   TOOL_LINE: S := 'Ligne (4) - glisser pour dessiner';
-  TOOL_BEZIER: S := 'Courbe de Bezier - non implementee';
+  TOOL_BEZIER: S := 'Bezier (5 / B) - deux ancrages par cliquer-glisser';
   TOOL_PENCIL: S := 'Crayon (6 / N) - tracer a main levee';
-  TOOL_PEN: S := 'Plume - non implementee';
+  TOOL_PEN: S := 'Plume (7 / P) - courbe par deux cliquer-glisser';
   TOOL_TEXT: S := 'Texte (8 / T) - cliquer puis saisir / modifier';
   TOOL_ZOOM: S := 'Loupe - non implementee';
   TOOL_HAND: S := 'Main - non implementee';
@@ -520,7 +524,7 @@ Begin
   Line(X,B,R,B);
   Line(R,Y,R,B);
   If I = CurrentTool Then SetColor(COLOR_WINDOW)
-  Else If (I > TOOL_LINE) And Not (I In [TOOL_PENCIL,TOOL_TEXT]) Then SetColor(COLOR_BORDER)
+  Else If I > TOOL_TEXT Then SetColor(COLOR_BORDER)
   Else SetColor(COLOR_TEXT);
   DrawToolIcon(X+6,Y+2,I);
  End;
@@ -564,9 +568,50 @@ Begin
  End;
 End;
 
+Function BezierPoint(Obj: TGraphicObject; T: Real): TPoint2D;
+Var P: TPoint2D; U: Real;
+Begin
+ FillChar(P,SizeOf(P),0);
+ U := 1-T;
+ P.X := U*U*U*Obj.Path.Points[0].X+
+        3*U*U*T*Obj.Path.Points[1].X+
+        3*U*T*T*Obj.Path.Points[2].X+T*T*T*Obj.Path.Points[3].X;
+ P.Y := U*U*U*Obj.Path.Points[0].Y+
+        3*U*U*T*Obj.Path.Points[1].Y+
+        3*U*T*T*Obj.Path.Points[2].Y+T*T*T*Obj.Path.Points[3].Y;
+ BezierPoint := P;
+End;
+
+Procedure DrawBezierHandles(Obj: TGraphicObject; Mirrors: Boolean);
+Var I, A, C, AX, AY, CX, CY: Integer;
+Begin
+ SetColor(COLOR_HIGHLIGHT);
+ For I := 0 To 1 Do Begin
+  A := I*3; C := I+1;
+  AX := TOOLBAR_WIDTH+Round(Obj.Path.Points[A].X);
+  AY := MENUBAR_HEIGHT+Round(Obj.Path.Points[A].Y);
+  CX := TOOLBAR_WIDTH+Round(Obj.Path.Points[C].X);
+  CY := MENUBAR_HEIGHT+Round(Obj.Path.Points[C].Y);
+  Line(AX,AY,CX,CY);
+  Rectangle(AX-3,AY-3,AX+3,AY+3);
+  Circle(CX,CY,3);
+  If Mirrors Then Begin
+   CX := 2*AX-CX; CY := 2*AY-CY;
+   If CX < TOOLBAR_WIDTH Then CX := TOOLBAR_WIDTH;
+   If CX >= ScreenWidth Then CX := ScreenWidth-1;
+   If CY < MENUBAR_HEIGHT Then CY := MENUBAR_HEIGHT;
+   If CY >= ScreenHeight-STATUSBAR_HEIGHT Then
+    CY := ScreenHeight-STATUSBAR_HEIGHT-1;
+   Line(AX,AY,CX,CY);
+   Circle(CX,CY,3);
+  End;
+ End;
+End;
+
 Procedure DrawGraphicObject(Obj: TGraphicObject);
 Var
  X1, Y1, X2, Y2, I: Integer;
+ P, Q: TPoint2D;
 Begin
  If Not Obj.Visible Then Exit;
  
@@ -624,6 +669,17 @@ Begin
    End;
   End;
   
+  OBJ_BEZIER:
+  Begin
+   SetColor(Obj.Path.StrokeColor);
+   P := BezierPoint(Obj,0);
+   For I := 1 To BEZIER_STEPS Do Begin
+    Q := BezierPoint(Obj,I/BEZIER_STEPS);
+    Line(TOOLBAR_WIDTH+Round(P.X),MENUBAR_HEIGHT+Round(P.Y),
+         TOOLBAR_WIDTH+Round(Q.X),MENUBAR_HEIGHT+Round(Q.Y));
+    P := Q;
+   End;
+  End;
   OBJ_PATH:
   Begin
    SetColor(Obj.Path.StrokeColor);
@@ -685,7 +741,7 @@ Begin
    B.T := MinReal(Obj.Line.Y1, Obj.Line.Y2);
    B.B := MaxReal(Obj.Line.Y1, Obj.Line.Y2);
   End;
-  OBJ_PATH: If Obj.Path.PointCount > 0 Then Begin
+  OBJ_PATH, OBJ_BEZIER: If Obj.Path.PointCount > 0 Then Begin
    B.L := Obj.Path.Points[0].X; B.R := B.L;
    B.T := Obj.Path.Points[0].Y; B.B := B.T;
    For I := 1 To Obj.Path.PointCount-1 Do Begin
@@ -708,7 +764,10 @@ Procedure HandlePosition(Index, Handle: Integer; Var X, Y: Integer);
 Var B: TBounds;
 Begin
  B := ObjectBounds(Objects[Index]);
- If Objects[Index].ObjType = OBJ_LINE Then Begin
+ If Objects[Index].ObjType = OBJ_BEZIER Then Begin
+  X := Round(Objects[Index].Path.Points[Handle].X);
+  Y := Round(Objects[Index].Path.Points[Handle].Y);
+ End Else If Objects[Index].ObjType = OBJ_LINE Then Begin
   If Handle = 0 Then Begin
    X := Round(Objects[Index].Line.X1); Y := Round(Objects[Index].Line.Y1);
   End Else Begin
@@ -731,6 +790,7 @@ Begin
  If Not Objects[SelectedObject].Visible Then Exit;
  If Objects[SelectedObject].ObjType = OBJ_TEXT Then Exit;
  N := 8;
+ If Objects[SelectedObject].ObjType = OBJ_BEZIER Then N := 4;
  If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
  For I := 0 To N-1 Do Begin
   HandlePosition(SelectedObject,I,HX,HY);
@@ -742,7 +802,7 @@ Begin
 End;
 
 Function ObjectHit(Index, X, Y: Integer): Boolean;
-Var B: TBounds; DX, DY, U, D: Real; I, J: Integer;
+Var B: TBounds; DX, DY, U, D: Real; I, J: Integer; P, Q: TPoint2D;
 Begin
  ObjectHit := False;
  If Not Objects[Index].Visible Then Exit;
@@ -766,6 +826,20 @@ Begin
    U := MaxReal(0,MinReal(1,U));
    ObjectHit := Sqr(X-Objects[Index].Line.X1-U*DX)+
                 Sqr(Y-Objects[Index].Line.Y1-U*DY) <= 25;
+  End;
+  OBJ_BEZIER: Begin
+   P := BezierPoint(Objects[Index],0);
+   For I := 1 To BEZIER_STEPS Do Begin
+    Q := BezierPoint(Objects[Index],I/BEZIER_STEPS);
+    DX := Q.X-P.X; DY := Q.Y-P.Y;
+    D := Sqr(DX)+Sqr(DY); U := 0;
+    If D > 0 Then U := ((X-P.X)*DX+(Y-P.Y)*DY)/D;
+    U := MaxReal(0,MinReal(1,U));
+    If Sqr(X-P.X-U*DX)+Sqr(Y-P.Y-U*DY) <= 25 Then Begin
+     ObjectHit := True; Exit;
+    End;
+    P := Q;
+   End;
   End;
   OBJ_PATH:
    For I := 0 To Objects[Index].Path.PointCount-1 Do Begin
@@ -797,7 +871,10 @@ Begin
  Rectangle(TOOLBAR_WIDTH+Round(B.L),MENUBAR_HEIGHT+Round(B.T),
            TOOLBAR_WIDTH+Round(B.R),MENUBAR_HEIGHT+Round(B.B));
  SetLineStyle(SolidLn,0,NormWidth);
+ If Objects[SelectedObject].ObjType = OBJ_BEZIER Then
+  DrawBezierHandles(Objects[SelectedObject],False);
  N := 8;
+ If Objects[SelectedObject].ObjType = OBJ_BEZIER Then N := 4;
  If Objects[SelectedObject].ObjType = OBJ_TEXT Then N := 0;
  If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
  For I := 0 To N-1 Do Begin
@@ -839,6 +916,25 @@ Begin
    Obj.Line.X1 := Obj.Line.X1+DX; Obj.Line.X2 := Obj.Line.X2+DX;
    Obj.Line.Y1 := Obj.Line.Y1+DY; Obj.Line.Y2 := Obj.Line.Y2+DY;
   End;
+ End Else If Obj.ObjType = OBJ_BEZIER Then Begin
+  If EditHandle In [0,3] Then Begin
+   I := 1; If EditHandle = 3 Then I := 2;
+   DX := X-Obj.Path.Points[EditHandle].X;
+   DY := Y-Obj.Path.Points[EditHandle].Y;
+   DX := MaxReal(-MinReal(Obj.Path.Points[EditHandle].X,Obj.Path.Points[I].X),
+     MinReal(ScreenWidth-TOOLBAR_WIDTH-1-
+       MaxReal(Obj.Path.Points[EditHandle].X,Obj.Path.Points[I].X),DX));
+   DY := MaxReal(-MinReal(Obj.Path.Points[EditHandle].Y,Obj.Path.Points[I].Y),
+     MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1-
+       MaxReal(Obj.Path.Points[EditHandle].Y,Obj.Path.Points[I].Y),DY));
+   Obj.Path.Points[EditHandle].X := Obj.Path.Points[EditHandle].X+DX;
+   Obj.Path.Points[EditHandle].Y := Obj.Path.Points[EditHandle].Y+DY;
+   Obj.Path.Points[I].X := Obj.Path.Points[I].X+DX;
+   Obj.Path.Points[I].Y := Obj.Path.Points[I].Y+DY;
+  End Else Begin
+   Obj.Path.Points[EditHandle].X := X;
+   Obj.Path.Points[EditHandle].Y := Y;
+  End;
  End Else If Obj.ObjType = OBJ_LINE Then Begin
   If EditHandle = 0 Then Begin Obj.Line.X1 := X; Obj.Line.Y1 := Y; End
   Else Begin Obj.Line.X2 := X; Obj.Line.Y2 := Y; End;
@@ -874,6 +970,12 @@ Begin
                              (B.B-B.T)/(EditBounds.B-EditBounds.T);
     End;
    End;
+  OBJ_BEZIER:
+    If EditHandle < 0 Then
+     For I := 0 To 3 Do Begin
+      Obj.Path.Points[I].X := Obj.Path.Points[I].X+DX;
+      Obj.Path.Points[I].Y := Obj.Path.Points[I].Y+DY;
+     End;
   OBJ_TEXT: Begin
    Obj.TextObj.X := B.L; Obj.TextObj.Y := B.T;
   End;
@@ -896,7 +998,7 @@ Begin
   FileModified := EditWasModified Or
    (Obj.TextObj.X <> EditOriginal.TextObj.X) Or
    (Obj.TextObj.Y <> EditOriginal.TextObj.Y);
- If Obj.ObjType = OBJ_PATH Then
+ If Obj.ObjType In [OBJ_PATH,OBJ_BEZIER] Then
   For I := 0 To Obj.Path.PointCount-1 Do
    If (Obj.Path.Points[I].X <> EditOriginal.Path.Points[I].X) Or
       (Obj.Path.Points[I].Y <> EditOriginal.Path.Points[I].Y) Then
@@ -926,6 +1028,46 @@ Begin
  NeedsRedraw := True;
 End;
 
+Procedure CancelBezier;
+Begin
+ BezierStage := 0;
+ DrawingMode := False;
+ StatusMessage := 'Courbe provisoire annulee.';
+ NeedsRedraw := True;
+End;
+
+Procedure UpdateBezier;
+Var X, Y, I: Integer;
+Begin
+ X := Round(MaxReal(0,MinReal(ScreenWidth-TOOLBAR_WIDTH-1,
+                             MouseX-TOOLBAR_WIDTH)));
+ Y := Round(MaxReal(0,MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1,
+                             MouseY-MENUBAR_HEIGHT)));
+ Case BezierStage Of
+  1: Begin
+   BezierObject.Path.Points[1].X := X;
+   BezierObject.Path.Points[1].Y := Y;
+   For I := 2 To 3 Do
+    BezierObject.Path.Points[I] := BezierObject.Path.Points[0];
+  End;
+  2: Begin
+   For I := 2 To 3 Do Begin
+    BezierObject.Path.Points[I].X := X;
+    BezierObject.Path.Points[I].Y := Y;
+   End;
+  End;
+  3: Begin
+   { La poignee entrante est le miroir du glissement a l'arrivee. }
+   BezierObject.Path.Points[2].X := MaxReal(0,MinReal(
+    ScreenWidth-TOOLBAR_WIDTH-1,2*BezierObject.Path.Points[3].X-X));
+   BezierObject.Path.Points[2].Y := MaxReal(0,MinReal(
+    ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1,
+    2*BezierObject.Path.Points[3].Y-Y));
+  End;
+ End;
+ NeedsRedraw := True;
+End;
+
 Procedure BeginTextInput(Index: Integer);
 Begin
  TextEditIndex := Index;
@@ -949,7 +1091,7 @@ Begin
  If MouseX < TOOLBAR_WIDTH Then Begin
   I := ToolHitTest(MouseX, MouseY);
   If I >= 0 Then
-   If (I <= TOOL_LINE) Or (I In [TOOL_PENCIL,TOOL_TEXT]) Then CurrentTool := I
+   If I <= TOOL_TEXT Then CurrentTool := I
    Else StatusMessage := 'Outil non implemente.';
   Exit;
  End;
@@ -958,6 +1100,34 @@ Begin
  CanvasY := MouseY - MENUBAR_HEIGHT;
  
  Case CurrentTool Of
+  TOOL_BEZIER, TOOL_PEN:
+  Begin
+   If BezierStage = 2 Then Begin
+    UpdateBezier;
+    BezierStage := 3;
+   End Else Begin
+    If ObjectCount >= MAX_OBJECTS Then Begin
+     StatusMessage := 'Limite de 100 objets atteinte.';
+     Exit;
+    End;
+    FillChar(BezierObject,SizeOf(BezierObject),0);
+    BezierObject.ObjType := OBJ_BEZIER;
+    BezierObject.Visible := True;
+    BezierObject.LayerIndex := CurrentLayer;
+    BezierObject.Path.PointCount := 4;
+    BezierObject.Path.StrokeColor := StrokeColor;
+    BezierObject.Path.StrokeWidth := 1;
+    For I := 0 To 3 Do Begin
+     BezierObject.Path.Points[I].X := CanvasX;
+     BezierObject.Path.Points[I].Y := CanvasY;
+    End;
+    BezierStage := 1;
+    DrawingMode := True;
+    SelectedObject := -1;
+    ResetToolTip;
+    StatusMessage := 'Glisser au depart, relacher, puis cliquer-glisser a l''arrivee.';
+   End;
+  End;
   TOOL_TEXT:
   Begin
    TextEditIndex := -1;
@@ -1052,6 +1222,21 @@ Var
  CanvasX, CanvasY: Integer;
  NewObj: TGraphicObject;
 Begin
+ If BezierStage <> 0 Then Begin
+  UpdateBezier;
+  If BezierStage = 1 Then Begin
+   BezierStage := 2;
+   StatusMessage := 'Cliquer-glisser a l''arrivee ; Echap annule la courbe.';
+  End Else If BezierStage = 3 Then Begin
+   Objects[ObjectCount] := BezierObject;
+   Inc(ObjectCount);
+   FileModified := True;
+   BezierStage := 0;
+   DrawingMode := False;
+   StatusMessage := 'Courbe creee. Fleche : deplacer ou modifier les quatre poignees.';
+  End;
+  Exit;
+ End;
  If PencilActive Then Begin
   AddPencilPoint;
   Objects[ObjectCount] := PencilObject;
@@ -1345,7 +1530,7 @@ Begin
   CMD_HELP:
    ShowDialog('Aide', 'Prototype incomplet. Les commandes grisees sont indisponibles.');
   CMD_SHORTCUTS:
-   ShowDialog('Raccourcis', '1-4 : outils. F10 : menus. Fleches, Entree, Echap.');
+   ShowDialog('Raccourcis', '1-8 : outils. B : Bezier. P : Plume. F10 : menus.');
   CMD_ABOUT:
    ShowDialog('A propos', 'CloneDRAW AI - prototype Pascal, pas un clone complet.');
   CMD_RESOURCES:
@@ -1385,6 +1570,9 @@ Var BarHit, ItemHit: Integer; Pressed, Released: Boolean;
 Begin
  Pressed := ((MouseButtons And 1) <> 0) And ((OldMouseButtons And 1) = 0);
  Released := ((MouseButtons And 1) = 0) And ((OldMouseButtons And 1) <> 0);
+ If (BezierStage <> 0) And Pressed Then
+  If (MenuBarHitTest(MouseX,MouseY) >= 0) Or
+     (ToolHitTest(MouseX,MouseY) >= 0) Then CancelBezier;
  If TextActive And Pressed Then
   If (MenuBarHitTest(MouseX,MouseY) >= 0) Or
      (ToolHitTest(MouseX,MouseY) >= 0) Then FinishText(True);
@@ -1429,6 +1617,9 @@ Begin
     HandleMouseClick;
     NeedsRedraw := True;
    End;
+  End Else If (BezierStage <> 0) And Not Released And
+              ((MouseX <> OldMouseX) Or (MouseY <> OldMouseY)) Then Begin
+   UpdateBezier;
   End Else If PencilActive And ((MouseButtons And 1) <> 0) Then Begin
    AddPencilPoint;
   End Else If EditingObject And ((MouseButtons And 1) <> 0) Then Begin
@@ -1474,6 +1665,10 @@ Var S: String; Capacity: Integer;
 Begin
  ResetToolTip;
  NeedsRedraw := True;
+ If BezierStage <> 0 Then Begin
+  If Key = #27 Then CancelBezier;
+  Exit;
+ End;
  If Not TextActive And Not MenuActive And (DialogTitle = '') And
     Not DrawingMode And Not EditingObject And (CurrentTool = TOOL_SELECT) And
     (SelectedObject >= 0) And (SelectedObject < ObjectCount) Then
@@ -1562,6 +1757,8 @@ Begin
   '2': CurrentTool := TOOL_RECTANGLE;
   '3': CurrentTool := TOOL_ELLIPSE;
   '4': CurrentTool := TOOL_LINE;
+  '5','b','B': CurrentTool := TOOL_BEZIER;
+  '7','p','P': CurrentTool := TOOL_PEN;
   '6','n','N': CurrentTool := TOOL_PENCIL;
   '8','t','T': CurrentTool := TOOL_TEXT;
   #15, #19: StatusMessage := 'Import/export Adobe Illustrator non implemente.';
@@ -1584,6 +1781,10 @@ Begin
        I,MENUBAR_HEIGHT+Round(TextObject.TextObj.Y)+7);
  End;
  If PencilActive Then DrawGraphicObject(PencilObject);
+ If BezierStage <> 0 Then Begin
+  DrawGraphicObject(BezierObject);
+  DrawBezierHandles(BezierObject,True);
+ End;
  DrawSelection;
  DrawToolbar;
  DrawMenuBar;
@@ -1710,6 +1911,7 @@ Begin
  DrawingMode := False;
  EditingObject := False;
  PencilActive := False;
+ BezierStage := 0;
  TextActive := False;
  TextEditIndex := -1;
  EditHandle := -1;

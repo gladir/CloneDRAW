@@ -18,6 +18,9 @@ Aperçu de Photoshop :
 		<td>Flou :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/f8c26a4d-21c0-45a8-a3be-e3185726f93b" /></td>
 		<td>Netteté :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ff7db611-3799-4f9f-b2ff-d4155dd54d8c" /></td>
 	</tr>
+	<tr>
+		<td>Calque 3D :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/392a660e-edcc-4f13-94e1-363deb53743b" /></td>
+		<td></td>
 </table>
 
 

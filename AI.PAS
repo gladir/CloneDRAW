@@ -282,7 +282,9 @@ Begin
  End;
  ScreenWidth := GetMaxX + 1;
  ScreenHeight := GetMaxY + 1;
- SetBkColor(COLOR_BG);
+ { En mode VGA, SetBkColor remappe la couleur 0 : conserver le noir.
+   Les fonds de l'interface sont peints explicitement avec Bar. }
+ SetBkColor(COLOR_TEXT);
  ClearDevice;
 End;
 
@@ -732,10 +734,12 @@ Begin
     SetFillStyle(SolidFill, COLOR_HIGHLIGHT);
     Bar(X+2, Y, X+Menus[ActiveMenu].Width-2, Y+MENU_ITEM_HEIGHT-1);
     SetColor(COLOR_WINDOW);
-   End Else If Menus[ActiveMenu].Items[I].Command = CMD_NONE Then
-    SetColor(COLOR_BORDER)
-   Else SetColor(COLOR_TEXT);
+   End Else Begin
+    SetColor(COLOR_TEXT);
+   End;
    OutTextXY(X+20, Y+5, Menus[ActiveMenu].Items[I].Caption);
+   If Menus[ActiveMenu].Items[I].Command = CMD_NONE Then
+    OutTextXY(X+5, Y+5, 'x');
    If (Menus[ActiveMenu].Items[I].Command = CMD_GRID) And GridVisible Then
     OutTextXY(X+5, Y+5, '*');
   End;

@@ -7837,7 +7837,7 @@ Begin
   If (Pixels<>Nil) And (Q<>Nil) Then Begin
    FillChar(Q^,SizeOf(Q^),0);
    For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
-   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   Used:=0; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
    For N:=0 To Size-1 Do Begin
     R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
     For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
@@ -10923,6 +10923,59 @@ Begin
 End;
 
 
+{ TIFF classique little-endian, RGB24 non compresse, une bande, sans alpha. }
+Function SaveTIFF(FileName:String):Boolean;
+Const SoftwareText='CloneDRAW PAINT'#0;
+Var F:File;Buffer:Array[0..8191] Of Byte;Used,X,Y:Integer;
+ Failed:Boolean;C:TRGBColor;PixelSize,PixelOffset:LongInt;
+ Procedure Flush;
+ Var Written:LongInt;
+ Begin
+  If Failed Or (Used=0) Then Exit;
+  {$I-}BlockWrite(F,Buffer,Used,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Used);Used:=0;
+ End;
+ Procedure B(V:Byte);
+ Begin
+  If Failed Then Exit;Buffer[Used]:=V;Inc(Used);
+  If Used=SizeOf(Buffer) Then Flush;
+ End;
+ Procedure W(V:Word);
+ Begin B(V And 255);B(V Shr 8);End;
+ Procedure L(V:LongWord);
+ Begin W(V And 65535);W(V Shr 16);End;
+ Procedure Entry(Tag,Kind:Word;Count,Value:LongWord);
+ Begin W(Tag);W(Kind);L(Count);L(Value);End;
+ Procedure TextData(Const S:String);
+ Var I:Integer;
+ Begin For I:=1 To Length(S) Do B(Ord(S[I]));End;
+Begin
+ SaveTIFF:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ PixelSize:=LongInt(CanvasImageW)*CanvasImageH*3;
+ PixelOffset:=216+((Length(SoftwareText)+1) And $FFFE);
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Used:=0;Failed:=False;W($4949);W(42);L(8);W(15);
+ Entry(256,4,1,CanvasImageW);Entry(257,4,1,CanvasImageH);
+ Entry(258,3,3,194);Entry(259,3,1,1);Entry(262,3,1,2);
+ Entry(273,4,1,PixelOffset);Entry(274,3,1,1);Entry(277,3,1,3);
+ Entry(278,4,1,CanvasImageH);Entry(279,4,1,PixelSize);
+ Entry(282,5,1,200);Entry(283,5,1,208);Entry(284,3,1,1);
+ Entry(296,3,1,2);Entry(305,2,Length(SoftwareText),216);L(0);
+ W(8);W(8);W(8);L(72);L(1);L(72);L(1);TextData(SoftwareText);
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];B(C.R);B(C.G);B(C.B);
+  End;
+ End;
+ If Odd(PixelSize) Then B(0);Flush;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveTIFF:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -10950,7 +11003,7 @@ Begin
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
  FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,
- FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA])
+ FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA,FMT_TIFF])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
@@ -10997,6 +11050,7 @@ Begin
   FMT_MSP: OK:=SaveMSP(Temp);
   FMT_PSP: OK:=SavePSP(Temp);
   FMT_TARGA: OK:=SaveTGA(Temp);
+  FMT_TIFF: OK:=SaveTIFF(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -12333,7 +12387,7 @@ Begin
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
  FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,
- FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA])
+ FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA,FMT_TIFF])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -18800,7 +18854,8 @@ Begin
  24: OFSaveExtension:='.mac';
  22: OFSaveExtension:='.msp';
  30: OFSaveExtension:='.psp';
- 26: OFSaveExtension:='.tga'; Else OFSaveExtension:='.bmp'; End;
+ 26: OFSaveExtension:='.tga';
+ 23: OFSaveExtension:='.tif'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -18916,7 +18971,7 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=25;
+ Count:=29; If Saving Then Count:=26;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
@@ -18924,6 +18979,7 @@ Begin
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
    If I=13 Then Order[I]:=13; If I=14 Then Order[I]:=6; If I=15 Then
    Order[I]:=10;
+   If I=25 Then Order[I]:=23;
    If I=22 Then Order[I]:=22; If I=23 Then Order[I]:=30; If I=24 Then
    Order[I]:=26;
    If I=19 Then Order[I]:=27; If I=20 Then Order[I]:=7; If I=21 Then
@@ -19098,7 +19154,8 @@ Begin
    Else If SaveFormat=FMT_MAC Then D^.Filter:=24
    Else If SaveFormat=FMT_MSP Then D^.Filter:=22
    Else If SaveFormat=FMT_PSP Then D^.Filter:=30
-   Else If SaveFormat=FMT_TARGA Then D^.Filter:=26;
+   Else If SaveFormat=FMT_TARGA Then D^.Filter:=26
+   Else If SaveFormat=FMT_TIFF Then D^.Filter:=23;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -19291,7 +19348,8 @@ Begin
    24: SaveFormat:=FMT_MAC;
    22: SaveFormat:=FMT_MSP;
    30: SaveFormat:=FMT_PSP;
-   26: SaveFormat:=FMT_TARGA; Else SaveFormat:=FMT_BMP; End;
+   26: SaveFormat:=FMT_TARGA;
+   23: SaveFormat:=FMT_TIFF; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -19310,7 +19368,7 @@ Begin
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
  FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,
- FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA])
+ FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA,FMT_TIFF])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -19598,7 +19656,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 25 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 26 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

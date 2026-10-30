@@ -167,6 +167,10 @@ Var
  BrushSize: Byte;
  FgColor, BgColor: Byte;
  Tools: Array[0..MAX_TOOLS-1] of TToolDef;
+ ToolTipVisible:Boolean;
+ ToolTipCandidate,ToolTipX,ToolTipY:Integer;
+ ToolTipStarted:LongInt;
+ ToolTipPixels:Array[0..32767] Of Byte;
 
  Menus: Array[0..NUM_MENUS-1] of TMenu;
  MenuActive: Boolean;
@@ -575,6 +579,23 @@ Begin
  Tools[TOOL_ELLIPSE].Name := 'Ellipse';       Tools[TOOL_ELLIPSE].Hint := 'Ellipse';
 End;
 
+{ Infobulles graphiques : fond sauvegarde avant affichage. }
+Function ToolTipClock:LongInt;
+Var H,M,S,HS:Word;
+Begin
+ GetTime(H,M,S,HS);
+ ToolTipClock:=((LongInt(H)*60+M)*60+S)*100+HS;
+End;
+Procedure HideToolTip;
+Begin
+ If Not ToolTipVisible Then Exit;
+ HideMouseCursor;
+ PutImage(ToolTipX,ToolTipY,ToolTipPixels,CopyPut);
+ ToolTipVisible:=False;ShowMouseCursor;
+End;
+Procedure ResetToolTip;
+Begin HideToolTip;ToolTipCandidate:=-1;End;
+
 Procedure InitSwatches;
 Begin
  Swatches[0]  := Black;
@@ -926,6 +947,7 @@ End;
 
 Procedure DrawFullUI;
 Begin
+ ResetToolTip;
  HideMouseCursor;
  FillRect(0, 0, ScreenWidth-1, ScreenHeight-1, UI_BG_DARK);
  DrawCanvasArea;
@@ -5982,6 +6004,48 @@ Begin
  End;
 End;
 
+Procedure ShowToolTip(Index:Integer);
+Var S:String;W,H,X,Y,PreviousColor:Integer;
+ PreviousFill:FillSettingsType;PreviousLine:LineSettingsType;
+Begin
+ If (Index<0) Or (Index>=MAX_TOOLS) Then Exit;
+ S:=Tools[Index].Hint;If S='' Then Exit;
+ W:=TextWidth(S)+14;H:=TextHeight(S)+12;
+ If (W+4>ScreenWidth) Or (H+4>ScreenHeight) Then Exit;
+ X:=2+(Index Mod 2)*26;
+ Y:=MENUBAR_HEIGHT+OPTIONSBAR_H+4+(Index Div 2)*26-H-5;
+ X:=Max(0,Min(X,ScreenWidth-W-4));
+ Y:=Max(0,Min(Y,ScreenHeight-H-4));
+ If ImageSize(X,Y,X+W+3,Y+H+3)>SizeOf(ToolTipPixels) Then Exit;
+ HideMouseCursor;GetImage(X,Y,X+W+3,Y+H+3,ToolTipPixels);
+ PreviousColor:=GetColor;GetFillSettings(PreviousFill);
+ GetLineSettings(PreviousLine);
+ SetWriteMode(CopyPut);SetLineStyle(SolidLn,0,NormWidth);
+ SetFillStyle(SolidFill,DarkGray);Bar(X+3,Y+3,X+W+3,Y+H+3);
+ SetFillStyle(SolidFill,Yellow);Bar(X,Y,X+W,Y+H);
+ SetColor(Black);Rectangle(X,Y,X+W,Y+H);OutTextXY(X+7,Y+6,S);
+ SetColor(PreviousColor);
+ SetFillStyle(PreviousFill.Pattern,PreviousFill.Color);
+ SetLineStyle(PreviousLine.LineStyle,PreviousLine.Pattern,
+  PreviousLine.Thickness);
+ ToolTipX:=X;ToolTipY:=Y;ToolTipVisible:=True;ShowMouseCursor;
+End;
+Procedure UpdateToolTip;
+Var Index:Integer;Now,Elapsed:LongInt;
+Begin
+ Index:=-1;
+ If Not MenuActive And Not Drawing And (MouseButtons=0) Then
+  Index:=ToolHitTest(MouseX,MouseY);
+ Now:=ToolTipClock;
+ If Index<>ToolTipCandidate Then Begin
+  HideToolTip;ToolTipCandidate:=Index;ToolTipStarted:=Now;
+ End;
+ If Index<0 Then Exit;
+ Elapsed:=Now-ToolTipStarted;
+ If Elapsed<0 Then Inc(Elapsed,8640000);
+ If Not ToolTipVisible And (Elapsed>=50) Then ShowToolTip(Index);
+End;
+
 Function SwatchHitTest(MX, MY: Integer): Integer;
 Var PX1, PY1, I, X, Y: Integer;
 Begin
@@ -6248,6 +6312,8 @@ Begin
  OldMouseY := MouseY;
  OldMouseButtons := MouseButtons;
  GetMouseStateLocal(MouseX, MouseY, MouseButtons);
+ If (MouseX<>OldMouseX) Or (MouseY<>OldMouseY) Or
+    (MouseButtons<>0) Then ResetToolTip;
 
  LB := (MouseButtons And 1)<>0;
  OldLB := (OldMouseButtons And 1)<>0;
@@ -6314,6 +6380,7 @@ Procedure HandleKeyboardEvent;
 Var Ch, Ch2: Char;
 Begin
  If Not KeyPressed Then Exit;
+ ResetToolTip;
  Ch := ReadKey;
  If Ch=#0 Then Begin
   Ch2 := ReadKey;
@@ -6376,6 +6443,7 @@ Begin
  InitMouseDriver;
  InitMenus;
  InitTools;
+ ToolTipVisible:=False;ToolTipCandidate:=-1;ToolTipStarted:=0;
  InitSwatches;
  For I:=0 To MAX_LAYERS-1 Do Begin
   Layers[I].Used := False;
@@ -6421,6 +6489,7 @@ Begin
  While Running Do Begin
   HandleMouseEvent;
   HandleKeyboardEvent;
+  UpdateToolTip;
  End;
 End;
 

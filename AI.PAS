@@ -11,7 +11,7 @@
   Import AI classique limite et ancien AI10 prive avec navigateur graphique.
   Enregistrement AI/EPS classique et AI10 prive.
   Restent notamment : AI moderne/PDF, rotation/groupes,
-  formatage du texte, calques, historique, SVG et BMP.
+  formatage du texte, calques et historique.
 }
 
 Program AdobeIllustrator;
@@ -286,6 +286,7 @@ Begin
   2: OutputExtension := '.ai10';
   3: OutputExtension := '.svg';
   4: OutputExtension := '.bmp';
+  7: OutputExtension := '.cdr';
   Else OutputExtension := '';
  End;
 End;
@@ -1808,7 +1809,8 @@ Begin
    0: FileFilterLabel := 'SVG vectoriel (*.svg)';
    1: FileFilterLabel := 'BMP bitmap 24 bits (*.bmp)';
    2: FileFilterLabel := 'PostScript EPS (*.eps)';
-   Else FileFilterLabel := 'Illustrator classique (*.ai)';
+   3: FileFilterLabel := 'Illustrator classique (*.ai)';
+   Else FileFilterLabel := 'CorelDRAW 9 natif (*.cdr)';
   End;
   Exit;
  End;
@@ -1826,6 +1828,18 @@ Begin
   2: FileFilterLabel := 'Prive AI10 (*.ai10;*.cdra)';
   Else FileFilterLabel := 'Tous fichiers (*.*)';
  End;
+End;
+
+Function FileFilterCount: Integer;
+Begin
+ If FileExportMode Then FileFilterCount := 5
+ Else If FileSaveMode Then FileFilterCount := 3
+ Else FileFilterCount := 4;
+End;
+
+Function FileFilterTop: Integer;
+Begin
+ If FileExportMode Then FileFilterTop := 271 Else FileFilterTop := 292;
 End;
 
 Function ScanFileDirectory(NewPath: String): Boolean;
@@ -1968,7 +1982,8 @@ Begin
   FSplit(FileNameInput,D,N,E);
   If (E='') Or (UpperText(E)='.AI') Or (UpperText(E)='.EPS') Or
      (UpperText(E)='.AI10') Or (UpperText(E)='.CDRA') Or
-     (UpperText(E)='.SVG') Or (UpperText(E)='.BMP') Then Begin
+     (UpperText(E)='.SVG') Or (UpperText(E)='.BMP') Or
+     (UpperText(E)='.CDR') Then Begin
    If FileExportMode Then Ext := OutputExtension(FileFilter+3)
    Else Ext := OutputExtension(FileFilter);
    If Length(D)+Length(N)+Length(Ext)<=255 Then FileNameInput := D+N+Ext
@@ -2103,7 +2118,7 @@ Begin
  SetColor(COLOR_BORDER); Rectangle(20,44,620,437);
  SetFillStyle(SolidFill,COLOR_HIGHLIGHT); Bar(22,46,618,66);
  SetColor(COLOR_WINDOW);
- If FileExportMode Then OutTextXY(30,52,'Exporter - SVG / BMP / EPS / AI classique')
+ If FileExportMode Then OutTextXY(30,52,'Exporter - SVG / BMP / EPS / AI / CorelDRAW 9')
  Else If FileSaveMode Then OutTextXY(30,52,'Enregistrer sous - Illustrator / AI10')
  Else OutTextXY(30,52,'Ouvrir un fichier - Illustrator / AI10');
  FileButton(590,47,615,64,'X',False);
@@ -2159,7 +2174,7 @@ Begin
  FileButton(510,382,607,406,'Annuler',FileFocus=6);
  Info := 'Tab : champ | Entree : valider | Echap : annuler';
  If FileExportMode Then
-  Info := 'Page entiere, sans grille. CDR natif non implemente.'
+  Info := 'Page entiere. SVG/CDR9 : texte converti en courbes.'
  Else If FileSaveMode Then
   If FileFilter=2 Then Info := 'AI10 prive : conserve les objets ; pas un format Adobe.'
   Else Info := 'AI/EPS : texte Courier, contours fins ; AI10 pour les objets exacts.';
@@ -2175,11 +2190,10 @@ Begin
   OutTextXY(30,426,Copy(FileDialogError,73,72));
  End Else OutTextXY(30,420,Copy(Info,1,72));
  If FileFilterOpen Then Begin
-  SetFillStyle(SolidFill,COLOR_BG); Bar(100,292,495,380);
-  SetColor(COLOR_TEXT); Rectangle(100,292,495,380);
-  For I := 0 To 3 Do Begin
-   If FileSaveMode And Not FileExportMode And (I=3) Then Break;
-   Y := 294+I*21;
+  SetFillStyle(SolidFill,COLOR_BG); Bar(100,FileFilterTop,495,380);
+  SetColor(COLOR_TEXT); Rectangle(100,FileFilterTop,495,380);
+  For I := 0 To FileFilterCount-1 Do Begin
+   Y := FileFilterTop+2+I*21;
    If I=FileFilter Then Begin
     SetFillStyle(SolidFill,COLOR_HIGHLIGHT); Bar(102,Y,493,Y+20);
     SetColor(COLOR_WINDOW);
@@ -2221,9 +2235,9 @@ Begin
   Exit;
  End;
  If FileFilterOpen Then Begin
-  If (MouseX>=100) And (MouseX<=495) And (MouseY>=294) And
-     (MouseY<378) And (Not FileSaveMode Or FileExportMode Or (MouseY<357)) Then Begin
-   ApplyFileFilter((MouseY-294) Div 21);
+  If (MouseX>=100) And (MouseX<=495) And (MouseY>=FileFilterTop+2) And
+     (MouseY<FileFilterTop+2+FileFilterCount*21) Then Begin
+   ApplyFileFilter((MouseY-FileFilterTop-2) Div 21);
   End Else FileFilter := FileFilterSaved;
   FileFilterOpen := False; Exit;
  End;
@@ -2298,8 +2312,7 @@ Begin
  End;
  If FileFilterOpen Then Begin
   If (Key=#0) And (ExtKey=#72) And (FileFilter>0) Then Dec(FileFilter);
-  If (Key=#0) And (ExtKey=#80) And (FileFilter<3) And
-     (Not FileSaveMode Or FileExportMode Or (FileFilter<2)) Then Inc(FileFilter);
+  If (Key=#0) And (ExtKey=#80) And (FileFilter<FileFilterCount-1) Then Inc(FileFilter);
   If Key=#13 Then Begin
    FileFilterOpen := False;
    ApplyFileFilter(FileFilter);
@@ -3470,6 +3483,357 @@ Begin
  Else WriteBMPDocument := True;
 End;
 
+Function WriteCDR9Document(Name: String): Boolean;
+Const
+ Palette: Array[0..15] Of LongInt =
+  ($000000,$0000AA,$00AA00,$00AAAA,$AA0000,$AA00AA,$AA5500,$AAAAAA,
+   $555555,$5555FF,$55FF55,$55FFFF,$FF5555,$FF55FF,$FFFF55,$FFFFFF);
+ Kappa = 0.552284749830793;
+Var F: File; Good: Boolean; Code, CloseCode, I, J, VisibleCount: Integer;
+ RootPos, DocPos, TablePos, EntryPos, PagePos, GroupPos, LayerPos: LongInt;
+ NumPoints: LongInt; Mode, FillIndex, LineIndex: Integer;
+ Obj: TGraphicObject; Bounds: TBounds; Settings: Array[0..211] Of LongInt;
+
+ Procedure Bytes(Var Data; Count: Word);
+ Var Got: Word; Error: Integer;
+ Begin
+  If Not Good Then Exit;
+  {$I-} BlockWrite(F,Data,Count,Got); Error := IOResult; {$I+}
+  Good := (Error=0) And (Got=Count);
+ End;
+
+ Procedure ByteValue(V: Byte);
+ Begin Bytes(V,1); End;
+
+ Procedure WordValue(V: Word);
+ Var B: Array[0..1] Of Byte;
+ Begin B[0] := V And 255; B[1] := V Shr 8; Bytes(B,2); End;
+
+ Procedure LongValue(V: LongInt);
+ Var B: Array[0..3] Of Byte; K: Integer;
+ Begin
+  For K := 0 To 3 Do B[K] := (V Shr (K*8)) And 255;
+  Bytes(B,4);
+ End;
+
+ Procedure StringBytes(S: String);
+ Begin If S<>'' Then Bytes(S[1],Length(S)); End;
+
+ Function Position: LongInt;
+ Var P: LongInt; Error: Integer;
+ Begin
+  P := 0;
+  If Good Then Begin
+   {$I-} P := FilePos(F); Error := IOResult; {$I+}
+   Good := Error=0;
+  End;
+  Position := P;
+ End;
+
+ Procedure SeekTo(P: LongInt);
+ Var Error: Integer;
+ Begin
+  If Not Good Then Exit;
+  {$I-} Seek(F,P); Error := IOResult; {$I+}
+  Good := Error=0;
+ End;
+
+ Function Chunk(Tag: String): LongInt;
+ Begin
+  Chunk := Position;
+  StringBytes(Tag); LongValue(0);
+ End;
+
+ Function List(Kind: String): LongInt;
+ Begin List := Chunk('LIST'); StringBytes(Kind); End;
+
+ Procedure EndChunk(P: LongInt);
+ Var Last, Size: LongInt;
+ Begin
+  If Not Good Then Exit;
+  Last := Position; Size := Last-P-8;
+  SeekTo(P+4); LongValue(Size); SeekTo(Last);
+  If Odd(Size) Then ByteValue(0);
+ End;
+
+ Procedure NumberChunk(Tag: String; V: LongInt);
+ Var P: LongInt;
+ Begin P := Chunk(Tag); LongValue(V); EndChunk(P); End;
+
+ Procedure ColorValue(Index: Integer);
+ Begin
+  WordValue(5); WordValue(5); LongValue(0); LongValue(Palette[Index]);
+ End;
+
+ Procedure IdentityTransform;
+ Var P, T, D: LongInt; K: Integer;
+ Begin
+  P := List('trfl'); T := Chunk('trfd');
+  LongValue(80); LongValue(1); LongValue(16); LongValue(65535);
+  LongValue(24); LongValue(80); WordValue(8);
+  WordValue(0); LongValue(0);
+  For K := 0 To 5 Do Begin
+   LongValue(0);
+   If (K=0) Or (K=4) Then D := $3FF00000 Else D := 0;
+   LongValue(D);
+  End;
+  EndChunk(T); EndChunk(P);
+ End;
+
+ Procedure Point(X,Y: Real);
+ Begin
+  { CDR9 : 254000 unites/pouce, origine au centre, Y vers le haut. }
+  LongValue(Round((X-(ScreenWidth-TOOLBAR_WIDTH)/2)*2540));
+  LongValue(Round(((ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT)/2-Y)*2540));
+ End;
+
+ Procedure BoundingBox(Tag: String; B: TBounds; Twice: Boolean);
+ Var P: LongInt; K, Count: Integer;
+ Begin
+  P := Chunk(Tag);
+  If Twice Then Count := 2 Else Count := 1;
+  For K := 1 To Count Do Begin Point(B.L,B.T); Point(B.R,B.B); End;
+  EndChunk(P);
+ End;
+
+ Procedure Node(X,Y: Real; Kind: Byte);
+ Begin
+  If Mode=1 Then Point(X,Y)
+  Else If Mode=2 Then ByteValue(Kind)
+  Else Begin
+   If NumPoints=0 Then Begin
+    Bounds.L := X; Bounds.R := X; Bounds.T := Y; Bounds.B := Y;
+   End Else Begin
+    If X<Bounds.L Then Bounds.L := X;
+    If X>Bounds.R Then Bounds.R := X;
+    If Y<Bounds.T Then Bounds.T := Y;
+    If Y>Bounds.B Then Bounds.B := Y;
+   End;
+   Inc(NumPoints);
+  End;
+ End;
+
+ Procedure RectanglePath(X,Y,W,H: Real);
+ Begin
+  Node(X,Y,12); Node(X+W,Y,68); Node(X+W,Y+H,68);
+  Node(X,Y+H,68); Node(X,Y,72);
+ End;
+
+ Procedure Geometry;
+ Var K, Row, Column, Start: Integer; X,Y,RX,RY,CX,CY: Real;
+
+  Procedure Cubic(X1,Y1,X2,Y2,X3,Y3: Real; Last: Boolean);
+  Begin
+   Node(X1,Y1,196); Node(X2,Y2,196);
+   If Last Then Node(X3,Y3,136) Else Node(X3,Y3,132);
+  End;
+
+ Begin
+  Case Obj.ObjType Of
+   OBJ_RECT: With Obj.Rectangle Do RectanglePath(X,Y,Width,Height);
+   OBJ_ELLIPSE: Begin
+    CX := Obj.Ellipse.CX; CY := Obj.Ellipse.CY;
+    RX := Obj.Ellipse.RX; RY := Obj.Ellipse.RY;
+    X := RX*Kappa; Y := RY*Kappa;
+    Node(CX+RX,CY,12);
+    Cubic(CX+RX,CY+Y,CX+X,CY+RY,CX,CY+RY,False);
+    Cubic(CX-X,CY+RY,CX-RX,CY+Y,CX-RX,CY,False);
+    Cubic(CX-RX,CY-Y,CX-X,CY-RY,CX,CY-RY,False);
+    Cubic(CX+X,CY-RY,CX+RX,CY-Y,CX+RX,CY,True);
+   End;
+   OBJ_LINE: With Obj.Line Do Begin Node(X1,Y1,4); Node(X2,Y2,68); End;
+   OBJ_BEZIER: Begin
+    With Obj.Path.Points[0] Do Node(X,Y,4);
+    With Obj.Path.Points[1] Do Node(X,Y,196);
+    With Obj.Path.Points[2] Do Node(X,Y,196);
+    With Obj.Path.Points[3] Do Node(X,Y,132);
+   End;
+   OBJ_PATH, OBJ_FILLED_PATH: Begin
+    If Obj.Path.PointCount=1 Then
+     With Obj.Path.Points[0] Do RectanglePath(X,Y,1,1)
+    Else Begin
+     With Obj.Path.Points[0] Do
+      If Obj.Path.Closed Or (Obj.ObjType=OBJ_FILLED_PATH) Then Node(X,Y,12)
+      Else Node(X,Y,4);
+     For K := 1 To Obj.Path.PointCount-1 Do
+      With Obj.Path.Points[K] Do Node(X,Y,68);
+     If Obj.Path.Closed Or (Obj.ObjType=OBJ_FILLED_PATH) Then
+      With Obj.Path.Points[0] Do Node(X,Y,72);
+    End;
+   End;
+   OBJ_TEXT:
+    For K := 1 To Length(Obj.TextObj.Text) Do
+     For Row := 0 To 7 Do Begin
+      Column := 0;
+      While Column<8 Do Begin
+       If (GlyphRows[Ord(Obj.TextObj.Text[K]),Row] And (1 Shl Column))<>0 Then Begin
+        Start := Column;
+        Repeat Inc(Column);
+        Until (Column=8) Or
+         ((GlyphRows[Ord(Obj.TextObj.Text[K]),Row] And (1 Shl Column))=0);
+        RectanglePath(Obj.TextObj.X+(K-1)*8+Start,Obj.TextObj.Y+Row,Column-Start,1);
+       End Else Inc(Column);
+      End;
+     End;
+  End;
+ End;
+
+ Procedure ObjectColors;
+ Begin
+  FillIndex := 16; LineIndex := 16;
+  Case Obj.ObjType Of
+   OBJ_RECT: LineIndex := Obj.Rectangle.StrokeColor;
+   OBJ_ELLIPSE: LineIndex := Obj.Ellipse.StrokeColor;
+   OBJ_LINE: LineIndex := Obj.Line.StrokeColor;
+   OBJ_BEZIER, OBJ_PATH, OBJ_FILLED_PATH: Begin
+    LineIndex := Obj.Path.StrokeColor;
+    If Obj.ObjType=OBJ_FILLED_PATH Then FillIndex := Obj.Path.FillColor;
+    If Obj.Path.PointCount=1 Then Begin
+     FillIndex := LineIndex; LineIndex := 16;
+    End;
+   End;
+   OBJ_TEXT: FillIndex := Obj.TextObj.Color;
+  End;
+ End;
+
+ Procedure StyleRecord(Id, Parent: LongInt; Fill, Line: Integer; Default: Boolean);
+ Begin
+  LongValue(1); LongValue(Id); LongValue(Parent);
+  If Default Then Begin
+   LongValue(1); LongValue(1); LongValue(16); StringBytes('Default Graphic'+#0);
+  End Else Begin LongValue(0); LongValue(0); LongValue(1); ByteValue(0); End;
+  LongValue(1000+Fill); LongValue(2000+Line);
+ End;
+
+ Procedure LayerHeader(Kind: Integer; Flags: LongInt; Name: String);
+ Var G, L: LongInt; N, Size: Integer;
+ Begin
+  NumberChunk('flgs',Flags);
+  G := List('lgob'); L := Chunk('loda');
+  N := 1; Size := 44;
+  If Name<>'' Then Begin N := 2; Size := 53+Length(Name); End;
+  LongValue(Size); LongValue(N); LongValue(20); LongValue(24+N*4);
+  LongValue(Kind);
+  If N=2 Then Begin
+   LongValue(40); LongValue(52); LongValue(Size); LongValue(1000); LongValue(2000);
+  End Else Begin LongValue(32); LongValue(44); LongValue(2000); End;
+  ColorValue(0);
+  If Name<>'' Then StringBytes(Name+#0);
+  EndChunk(L); EndChunk(G);
+ End;
+
+ Procedure EmptyLayer(Kind: Integer; Flags: LongInt; Name: String);
+ Var P: LongInt;
+ Begin P := List('layr'); LayerHeader(Kind,Flags,Name); EndChunk(P); End;
+
+ Procedure WriteObject(Index: Integer);
+ Var P, G, L: LongInt; Size: LongInt;
+ Begin
+  Obj := Objects[Index]; Mode := 0; NumPoints := 0; Geometry;
+  If NumPoints=0 Then Exit;
+  If NumPoints>65535 Then Begin
+   Good := False; SaveError := 'CDR9 : trop de noeuds dans un objet.'; Exit;
+  End;
+  P := List('obj ');
+  NumberChunk('flgs',$08000A00);
+  BoundingBox('bbox',Bounds,False); BoundingBox('obbx',Bounds,True);
+  NumberChunk('usdn',Index+5);
+  G := List('lgob'); L := Chunk('loda'); Size := 80+12+NumPoints*9;
+  LongValue(Size); LongValue(5); LongValue(20); LongValue(44); LongValue(3);
+  LongValue(64); LongValue(68); LongValue(72); LongValue(76); LongValue(80);
+  LongValue(Size);
+  LongValue(30); LongValue(100); LongValue(200); LongValue(12000); LongValue(12030);
+  LongValue(0); LongValue(0); LongValue(3100+Index); LongValue(Index+5);
+  WordValue(Word(NumPoints)); WordValue(0);
+  Mode := 1; Geometry; Mode := 2; Geometry;
+  LongValue(0); LongValue(0);
+  EndChunk(L); IdentityTransform; EndChunk(G); EndChunk(P);
+ End;
+
+Begin
+ WriteCDR9Document := False;
+ {$I-} Assign(F,Name); Rewrite(F,1); Code := IOResult; {$I+}
+ If Code<>0 Then Begin SaveError := 'Creation CDR9 impossible.'; Exit; End;
+ Good := True; VisibleCount := 0;
+ For I := 0 To ObjectCount-1 Do If Objects[I].Visible Then Inc(VisibleCount);
+ RootPos := Chunk('RIFF'); StringBytes('CDR9');
+ EntryPos := Chunk('vrsn'); WordValue(900); EndChunk(EntryPos);
+ DocPos := List('doc '); EntryPos := Chunk('mcfg');
+ FillChar(Settings,SizeOf(Settings),0);
+ Settings[0] := 8; Settings[1] := (ScreenWidth-TOOLBAR_WIDTH)*2540;
+ Settings[2] := (ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT)*2540;
+ Settings[3] := 3; Settings[4] := 1; Settings[7] := 1; Settings[8] := 1;
+ For I := 0 To 211 Do LongValue(Settings[I]);
+ EndChunk(EntryPos);
+ TablePos := List('filt');
+ For I := 0 To 16 Do Begin
+  GroupPos := List('filc'); EntryPos := Chunk('fild'); LongValue(I+1);
+  If I=16 Then Begin WordValue(0); WordValue(0); End
+  Else Begin
+   WordValue(1); WordValue(0); ColorValue(I);
+   For J := 1 To 4 Do LongValue(0);
+  End;
+  EndChunk(EntryPos); EndChunk(GroupPos);
+ End;
+ EndChunk(TablePos);
+ TablePos := List('otlt');
+ For I := 0 To 16 Do Begin
+  EntryPos := Chunk('outl'); LongValue(I+1);
+  If I=16 Then WordValue(1) Else WordValue(2);
+  WordValue(0); WordValue(0); WordValue(0);
+  LongValue(2540); WordValue(100); WordValue(0); LongValue(0);
+  For J := 1 To 13 Do
+   If (J=3) Or (J=11) Then LongValue($3FF00000) Else LongValue(0);
+  If I=16 Then ColorValue(0) Else ColorValue(I);
+  For J := 1 To 13 Do LongValue(0);
+  EndChunk(EntryPos);
+ End;
+ EndChunk(TablePos);
+ TablePos := List('stlt'); LongValue(VisibleCount+2);
+ LongValue(17);
+ For I := 0 To 16 Do Begin LongValue(1000+I); LongValue(0); LongValue(I+1); End;
+ LongValue(17);
+ For I := 0 To 16 Do Begin LongValue(2000+I); LongValue(0); LongValue(I+1); End;
+ For I := 1 To 10 Do LongValue(0);
+ StyleRecord(3000,0,16,0,True); StyleRecord(3001,3000,16,0,False);
+ For I := 0 To ObjectCount-1 Do If Objects[I].Visible Then Begin
+  Obj := Objects[I]; ObjectColors;
+  StyleRecord(3100+I,3000,FillIndex,LineIndex,False);
+ End;
+ EndChunk(TablePos); EndChunk(DocPos);
+ Bounds.L := (ScreenWidth-TOOLBAR_WIDTH)/2;
+ Bounds.R := Bounds.L; Bounds.T := (ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT)/2;
+ Bounds.B := Bounds.T;
+ PagePos := List('page'); NumberChunk('flgs',LongInt($90010000));
+ BoundingBox('bbox',Bounds,False); GroupPos := List('gobj');
+ EmptyLayer(12,LongInt($9801000A),'Guides');
+ EmptyLayer(17,LongInt($98010008),'Desktop');
+ EmptyLayer(0,LongInt($98000000),'Layer 1');
+ EmptyLayer(11,LongInt($9801011A),'Grid');
+ EndChunk(GroupPos); EndChunk(PagePos);
+ Bounds.L := 0; Bounds.T := 0; Bounds.R := ScreenWidth-TOOLBAR_WIDTH;
+ Bounds.B := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT;
+ PagePos := List('page'); NumberChunk('flgs',LongInt($90000000));
+ BoundingBox('bbox',Bounds,False); BoundingBox('obbx',Bounds,True);
+ GroupPos := List('gobj');
+ EmptyLayer(12,LongInt($9801000A),''); EmptyLayer(17,LongInt($98010008),'');
+ LayerPos := List('layr'); LayerHeader(0,LongInt($98000000),'');
+ { Les objets CDR sont stockes du premier plan vers l'arriere-plan. }
+ For I := ObjectCount-1 DownTo 0 Do
+  If Objects[I].Visible And Good Then WriteObject(I);
+ EndChunk(LayerPos); EmptyLayer(11,LongInt($9801011A),''); EndChunk(GroupPos);
+ GroupPos := List('lgob'); EntryPos := Chunk('loda');
+ LongValue(48); LongValue(2); LongValue(20); LongValue(32); LongValue(0);
+ LongValue(40); LongValue(44); LongValue(48); LongValue(100); LongValue(12000);
+ LongValue(0); LongValue(ObjectCount+5);
+ EndChunk(EntryPos); IdentityTransform; EndChunk(GroupPos); EndChunk(PagePos);
+ EndChunk(RootPos);
+ {$I-} Close(F); CloseCode := IOResult; {$I+}
+ If Not Good Or (CloseCode<>0) Then Begin
+  If SaveError='' Then SaveError := 'Ecriture ou fermeture CDR9 incomplete.';
+ End Else WriteCDR9Document := True;
+End;
+
 Function SaveDocument(Name: String; Format: Integer): Boolean;
 Var TempName, BackupName, S: String; F: File;
  D: DirStr; N: NameStr; E: ExtStr; I, Code: Integer;
@@ -3492,7 +3856,7 @@ Var TempName, BackupName, S: String; F: File;
 
 Begin
  SaveDocument := False; SaveError := '';
- If (Format<0) Or (Format>6) Or (Name='') Or (ObjectCount>MAX_OBJECTS) Then Begin
+ If (Format<0) Or (Format>7) Or (Name='') Or (ObjectCount>MAX_OBJECTS) Then Begin
   SaveError := 'Nom, format ou document invalide.'; Exit;
  End;
  If IsDirectory(Name) Then Begin SaveError := 'La cible est un dossier, pas un fichier.'; Exit; End;
@@ -3516,6 +3880,7 @@ Begin
   2: Good := WriteLegacyDocument(TempName);
   3: Good := WriteSVGDocument(TempName);
   4: Good := WriteBMPDocument(TempName);
+  7: Good := WriteCDR9Document(TempName);
   Else Good := WriteClassicDocument(TempName);
  End;
  If Not Good Then Begin RemoveTemporary; Exit; End;
@@ -3556,14 +3921,15 @@ Function ExportDocument(Name: String; Format: Integer): Boolean;
 Var OldName: String; OldFormat: Integer; OldModified,Good: Boolean;
 Begin
  ExportDocument := False;
- If (Format<0) Or (Format>3) Then Begin
-  SaveError := 'Format d''export non implemente (CDR natif indisponible).'; Exit;
+ If (Format<0) Or (Format>4) Then Begin
+  SaveError := 'Format d''export non implemente.'; Exit;
  End;
  OldName := CurrentFile; OldFormat := CurrentSaveFormat; OldModified := FileModified;
  Good := SaveDocument(Name,Format+3);
  CurrentFile := OldName; CurrentSaveFormat := OldFormat; FileModified := OldModified;
  If Good Then Begin
-  If Format>=2 Then StatusMessage := 'Export AI/EPS termine : texte Courier, contours fins.'
+  If Format=4 Then StatusMessage := 'CDR9 natif exporte : formes et texte convertis en courbes.'
+  Else If Format>=2 Then StatusMessage := 'Export AI/EPS termine : texte Courier, contours fins.'
   Else StatusMessage := 'Export termine : page entiere, document courant inchange.';
  End;
  NeedsRedraw := True;

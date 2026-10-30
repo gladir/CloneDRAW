@@ -4883,7 +4883,8 @@ Begin
  Repeat
   S:=HRLine(D); If D.Bad Or (D.Position>65536) Then Exit;
   If S='' Then Break;
-  If Pos('CloneDRAW BMP2HDR',S)>0 Then D.CloneDRAW:=True;
+  If (Pos('CloneDRAW BMP2HDR',S)>0) Or
+     (S='SOFTWARE=CloneDRAW PAINT_HDR') Then D.CloneDRAW:=True;
   P:=Pos('=',S);
   If P>0 Then Begin
    Key:=HRTrim(Copy(S,1,P-1)); Value:=HRTrim(Copy(S,P+1,255));
@@ -5036,7 +5037,7 @@ Begin
   If (Pixels<>Nil) And (Q<>Nil) Then Begin
    FillChar(Q^,SizeOf(Q^),0);
    For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
-   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   Used:=0; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
    For N:=0 To Size-1 Do Begin
     R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
     For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
@@ -10634,6 +10635,50 @@ Begin
 End;
 
 
+{ Radiance RGBE classique, profil de valeurs 0..255 de BMP2HDR.PAS. }
+Function SaveHDR(FileName:String):Boolean;
+Var F:File;Header:String;Row:Array[0..16383] Of Byte;
+ X,Y,Maximum,Power,Exponent,Scale:Integer;C:TRGBColor;
+ Written,RowSize:LongInt;Failed:Boolean;
+ Procedure WriteBytes(Var Buffer;Count:LongInt);
+ Begin
+  If Failed Then Exit;
+  {$I-}BlockWrite(F,Buffer,Count,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Count);
+ End;
+Begin
+ SaveHDR:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ Header:='#?RADIANCE'#10+'SOFTWARE=CloneDRAW PAINT_HDR'#10+
+  'FORMAT=32-bit_rle_rgbe'#10+'EXPOSURE=1.0000000000000'#10#10+
+  '-Y '+IntToStr(CanvasImageH)+' +X '+IntToStr(CanvasImageW)+#10;
+ RowSize:=LongInt(CanvasImageW)*4;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Failed:=False;WriteBytes(Header[1],Length(Header));
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];Maximum:=C.R;
+   If C.G>Maximum Then Maximum:=C.G;
+   If C.B>Maximum Then Maximum:=C.B;
+   If Maximum=0 Then Begin
+    Row[X*4]:=0;Row[X*4+1]:=0;Row[X*4+2]:=0;Row[X*4+3]:=0;
+   End Else Begin
+    Power:=1;Exponent:=0;
+    While Power<=Maximum Do Begin Power:=Power*2;Inc(Exponent);End;
+    Scale:=256 Div Power;
+    Row[X*4]:=C.R*Scale;Row[X*4+1]:=C.G*Scale;
+    Row[X*4+2]:=C.B*Scale;Row[X*4+3]:=Exponent+128;
+   End;
+  End;
+  WriteBytes(Row,RowSize);
+ End;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveHDR:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -10660,7 +10705,7 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
@@ -10696,6 +10741,7 @@ Begin
   FMT_EXR: OK:=SaveEXR(Temp);
   FMT_FAX: OK:=SaveFAX(Temp);
   FMT_GEM: OK:=SaveGEM(Temp);
+  FMT_HDR: OK:=SaveHDR(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -12031,7 +12077,7 @@ Begin
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -18488,7 +18534,8 @@ Begin
  6: OFSaveExtension:='.wpg';
  10: OFSaveExtension:='.exr';
  9: OFSaveExtension:='.fax';
- 29: OFSaveExtension:='.gem'; Else OFSaveExtension:='.bmp'; End;
+ 29: OFSaveExtension:='.gem';
+ 8: OFSaveExtension:='.hdr'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -18604,7 +18651,7 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=18;
+ Count:=29; If Saving Then Count:=19;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
@@ -18612,7 +18659,8 @@ Begin
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
    If I=13 Then Order[I]:=13; If I=14 Then Order[I]:=6; If I=15 Then
    Order[I]:=10;
-   If I=16 Then Order[I]:=9; If I=17 Then Order[I]:=29;
+   If I=16 Then Order[I]:=9; If I=17 Then Order[I]:=29; If I=18 Then
+   Order[I]:=8;
    If I=10 Then Order[I]:=16; If I=11 Then Order[I]:=17; If I=12 Then
    Order[I]:=14;
   End;
@@ -18766,7 +18814,8 @@ Begin
    Else If SaveFormat=FMT_WPG Then D^.Filter:=6
    Else If SaveFormat=FMT_EXR Then D^.Filter:=10
    Else If SaveFormat=FMT_FAX Then D^.Filter:=9
-   Else If SaveFormat=FMT_GEM Then D^.Filter:=29;
+   Else If SaveFormat=FMT_GEM Then D^.Filter:=29
+   Else If SaveFormat=FMT_HDR Then D^.Filter:=8;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -18944,7 +18993,8 @@ Begin
    6: SaveFormat:=FMT_WPG;
    10: SaveFormat:=FMT_EXR;
    9: SaveFormat:=FMT_FAX;
-   29: SaveFormat:=FMT_GEM; Else SaveFormat:=FMT_BMP; End;
+   29: SaveFormat:=FMT_GEM;
+   8: SaveFormat:=FMT_HDR; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -18962,7 +19012,7 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -19250,7 +19300,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 18 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 19 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

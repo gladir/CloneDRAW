@@ -18,6 +18,9 @@ Aperçu de Photoshop :
 		<td>Flou :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/f8c26a4d-21c0-45a8-a3be-e3185726f93b" /></td>
 		<td>Netteté :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ff7db611-3799-4f9f-b2ff-d4155dd54d8c" /></td>
 	</tr>
+	<tr>
+		<td>Calque 3D :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/392a660e-edcc-4f13-94e1-363deb53743b" /></td>
+		<td></td>
 </table>
 
 
@@ -219,6 +222,34 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
       		<td>Cette commande permet de laner le programme de dessin Bitamp (Paint).</td>
     	</tr>
 		<tr>
+			<td><b>PPM2C.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format PPM (Portable PixMap) en code source C.</td>
+		</tr>
+		<tr>
+			<td><b>PPM2CSP.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format PPM (Portable PixMap) en code source CSP (C Server Pages).</td>
+		</tr>			
+		<tr>
+			<td><b>PPM2PAS.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format PPM (Portable PixMap) en code source Pascal.</td>
+		</tr>
+		<tr>
+			<td><b>PPM2PY.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format PPM (Portable PixMap) en code source Python.</td>
+		</tr>			
+		<tr>
+			<td><b>PPM2PSP.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format PPM (Portable PixMap) en code source PSP (Pascal Server Pages).</td>
+		</tr>			
+		<tr>
+			<td><b>PPM2RUBY.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format PPM (Portable PixMap) en code source Ruby.</td>
+		</tr>			
+		<tr>
+			<td><b>PPM2XBM.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format PPM (Portable PixMap) en XBM (X BitMap).</td>
+		</tr>	
+		<tr>
 			<td><b>PSP.PAS</b></td>
 			<td>Cette commande permet de lancer un clone de Photoshop.</td>
 		</tr>
@@ -226,6 +257,46 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
     		<td><b>VISIO.PAS</b></td>
       		<td>Cette commande permet de lancer un clone de Visio.</td>
     	</tr>
+<tr>
+			<td><b>XBM2ASM.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source assembleur.</td>
+		</tr>
+		<tr>	
+			<td><b>XBM2BAS.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source BASIC.</td>
+		</tr>
+		<tr>
+			<td><b>XBM2BGX.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en format <a href="https://www.gladir.com/LEXIQUE/FICHIERS/bgx.htm">BGX</a> (MonsterBook).</td>
+		</tr>
+		<tr>
+			<td><b>XBM2C.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source C.</td>
+		</tr>
+		<tr>
+			<td><b>XBM2CSP.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source CSP (C Server Pages).</td>
+		</tr>
+		<tr>
+			<td><b>XBM2PAS.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source Pascal.</td>
+		</tr>
+		<tr>
+			<td><b>XBM2PPM.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en format PPM (Portable PixMap).</td>
+		</tr>
+		<tr>
+			<td><b>XBM2PSP.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source PSP (Pascal Server Pages).</td>
+		</tr>
+		<tr>
+			<td><b>XBM2PY.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source Python.</td>
+		</tr>
+		<tr>
+			<td><b>XBM2RUBY.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source Ruby.</td>
+		</tr>	
 </table>
 
 <h2>Compilation</h2>

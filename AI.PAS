@@ -88,6 +88,7 @@ Const
  CMD_OPEN = 12;
  CMD_SAVE = 13;
  CMD_SAVE_AS = 14;
+ CMD_EXPORT = 15;
  FD_MAX_ENTRIES = 512;
  FD_ROWS = 13;
  ZOOM_LEVELS: Array[0..5] Of Integer = (25,50,100,200,400,800);
@@ -270,9 +271,24 @@ Var
  FileSaveMode, FileOverwrite: Boolean;
  PendingSaveName, SaveError: String;
  CurrentSaveFormat: Integer;
+ FileExportMode: Boolean;
 
 Function LoadDocument(Name: String): Boolean; Forward;
  Function SaveDocument(Name: String; Format: Integer): Boolean; Forward;
+ Function ExportDocument(Name: String; Format: Integer): Boolean; Forward;
+ Procedure RedrawInterface; Forward;
+
+Function OutputExtension(Format: Integer): String;
+Begin
+ Case Format Of
+  0,6: OutputExtension := '.ai';
+  1,5: OutputExtension := '.eps';
+  2: OutputExtension := '.ai10';
+  3: OutputExtension := '.svg';
+  4: OutputExtension := '.bmp';
+  Else OutputExtension := '';
+ End;
+End;
 
 Function ZoomScale: Real;
 Begin
@@ -1579,7 +1595,7 @@ Begin
  AddMenuItem(0, 'Ouvrir...', CMD_OPEN);
  AddMenuItem(0, 'Enregistrer', CMD_SAVE);
  AddMenuItem(0, 'Enregistrer sous...', CMD_SAVE_AS);
- AddMenuItem(0, 'Exporter...', CMD_NONE);
+ AddMenuItem(0, 'Exporter...', CMD_EXPORT);
  AddMenuItem(0, '-', CMD_NONE);
  AddMenuItem(0, 'Quitter', CMD_EXIT);
  AddMenuItem(1, 'Annuler', CMD_NONE);
@@ -1765,6 +1781,10 @@ Function FileMatches(Name: String): Boolean;
 Var D: DirStr; N: NameStr; E: ExtStr;
 Begin
  FSplit(Name,D,N,E); E := UpperText(E);
+ If FileExportMode Then Begin
+  FileMatches := E=UpperText(OutputExtension(FileFilter+3));
+  Exit;
+ End;
  If FileSaveMode Then Begin
   Case FileFilter Of
    0: FileMatches := E='.AI';
@@ -1783,6 +1803,15 @@ End;
 
 Function FileFilterLabel(Index: Integer): String;
 Begin
+ If FileExportMode Then Begin
+  Case Index Of
+   0: FileFilterLabel := 'SVG vectoriel (*.svg)';
+   1: FileFilterLabel := 'BMP bitmap 24 bits (*.bmp)';
+   2: FileFilterLabel := 'PostScript EPS (*.eps)';
+   Else FileFilterLabel := 'Illustrator classique (*.ai)';
+  End;
+  Exit;
+ End;
  If FileSaveMode Then Begin
   Case Index Of
    0: FileFilterLabel := 'Illustrator classique (*.ai)';
@@ -1877,6 +1906,7 @@ Begin
  ResetToolTip;
  FileDialogActive := True; FileFilterOpen := False;
  FileSaveMode := False; FileOverwrite := False;
+ FileExportMode := False;
  FileFocus := 1; FileFilter := 0; FileNameInput := ''; FileCursor := 0;
  FileReplace := False; FileDialogError := '';
  GetDir(0,Initial);
@@ -1917,6 +1947,19 @@ Begin
  End;
 End;
 
+Procedure StartExportDialog;
+Var D: DirStr; N: NameStr; E: ExtStr;
+Begin
+ StartFileDialog;
+ FileSaveMode := True; FileExportMode := True; FileFilter := 0;
+ If ScanFileDirectory(FilePath) Then Begin
+  If CurrentFile<>'' Then Begin
+   FSplit(CurrentFile,D,N,E); FileNameInput := N+'.svg';
+  End Else FileNameInput := 'Sans titre.svg';
+  FileFocus := 2; FileCursor := Length(FileNameInput); FileReplace := True;
+ End;
+End;
+
 Procedure ApplyFileFilter(NewFilter: Integer);
 Var D: DirStr; N: NameStr; E: ExtStr; Ext: String;
 Begin
@@ -1924,12 +1967,10 @@ Begin
  If FileSaveMode And (FileNameInput<>'') Then Begin
   FSplit(FileNameInput,D,N,E);
   If (E='') Or (UpperText(E)='.AI') Or (UpperText(E)='.EPS') Or
-     (UpperText(E)='.AI10') Or (UpperText(E)='.CDRA') Then Begin
-   Case FileFilter Of
-    0: Ext := '.ai';
-    1: Ext := '.eps';
-    Else Ext := '.ai10';
-   End;
+     (UpperText(E)='.AI10') Or (UpperText(E)='.CDRA') Or
+     (UpperText(E)='.SVG') Or (UpperText(E)='.BMP') Then Begin
+   If FileExportMode Then Ext := OutputExtension(FileFilter+3)
+   Else Ext := OutputExtension(FileFilter);
    If Length(D)+Length(N)+Length(Ext)<=255 Then FileNameInput := D+N+Ext
    Else FileDialogError := 'Nom trop long pour changer l''extension.';
   End;
@@ -1947,9 +1988,12 @@ Begin
 End;
 
 Procedure CompleteDialogSave;
+Var Good: Boolean;
 Begin
  FileOverwrite := False;
- If SaveDocument(PendingSaveName,FileFilter) Then Begin
+ If FileExportMode Then Good := ExportDocument(PendingSaveName,FileFilter)
+ Else Good := SaveDocument(PendingSaveName,FileFilter);
+ If Good Then Begin
   FileDialogActive := False; FileFilterOpen := False;
  End Else FileDialogError := SaveError;
  NeedsRedraw := True;
@@ -1978,11 +2022,8 @@ Begin
  End;
  If FileSaveMode Then Begin
   FSplit(Name,D,N,E);
-  Case FileFilter Of
-   0: Ext := '.ai';
-   1: Ext := '.eps';
-   Else Ext := '.ai10';
-  End;
+  If FileExportMode Then Ext := OutputExtension(FileFilter+3)
+  Else Ext := OutputExtension(FileFilter);
   If (N='') Or (Pos('*',Name)>0) Or (Pos('?',Name)>0) Then Begin
    FileDialogError := 'Nom de fichier invalide.'; Exit;
   End;
@@ -1992,7 +2033,7 @@ Begin
    End;
    Name := Name+Ext;
   End Else If (UpperText(E)<>UpperText(Ext)) And
-    Not ((FileFilter=2) And (UpperText(E)='.CDRA')) Then Begin
+    Not (Not FileExportMode And (FileFilter=2) And (UpperText(E)='.CDRA')) Then Begin
    FileDialogError := 'Extension incompatible : choisir le bon type ou modifier le nom.';
    Exit;
   End;
@@ -2062,7 +2103,8 @@ Begin
  SetColor(COLOR_BORDER); Rectangle(20,44,620,437);
  SetFillStyle(SolidFill,COLOR_HIGHLIGHT); Bar(22,46,618,66);
  SetColor(COLOR_WINDOW);
- If FileSaveMode Then OutTextXY(30,52,'Enregistrer sous - Illustrator / AI10')
+ If FileExportMode Then OutTextXY(30,52,'Exporter - SVG / BMP / EPS / AI classique')
+ Else If FileSaveMode Then OutTextXY(30,52,'Enregistrer sous - Illustrator / AI10')
  Else OutTextXY(30,52,'Ouvrir un fichier - Illustrator / AI10');
  FileButton(590,47,615,64,'X',False);
  SetColor(COLOR_TEXT); OutTextXY(30,87,'Dossier:');
@@ -2109,13 +2151,16 @@ Begin
  End;
  SetColor(COLOR_TEXT); OutTextXY(32,358,'Nom:');
  Field(100,348,495,372,2,FileNameInput);
- If FileSaveMode Then FileButton(510,348,607,372,'Enregistrer',FileFocus=5)
+ If FileExportMode Then FileButton(510,348,607,372,'Exporter',FileFocus=5)
+ Else If FileSaveMode Then FileButton(510,348,607,372,'Enregistrer',FileFocus=5)
  Else FileButton(510,348,607,372,'Ouvrir',FileFocus=5);
  SetColor(COLOR_TEXT); OutTextXY(32,391,'Type:');
  FileButton(100,382,495,406,Copy(FileFilterLabel(FileFilter),1,46)+' v',FileFocus=4);
  FileButton(510,382,607,406,'Annuler',FileFocus=6);
  Info := 'Tab : champ | Entree : valider | Echap : annuler';
- If FileSaveMode Then
+ If FileExportMode Then
+  Info := 'Page entiere, sans grille. CDR natif non implemente.'
+ Else If FileSaveMode Then
   If FileFilter=2 Then Info := 'AI10 prive : conserve les objets ; pas un format Adobe.'
   Else Info := 'AI/EPS : texte Courier, contours fins ; AI10 pour les objets exacts.';
  If (FileSel>=0) And (FileSel<FileEntryCount) Then Begin
@@ -2133,7 +2178,7 @@ Begin
   SetFillStyle(SolidFill,COLOR_BG); Bar(100,292,495,380);
   SetColor(COLOR_TEXT); Rectangle(100,292,495,380);
   For I := 0 To 3 Do Begin
-   If FileSaveMode And (I=3) Then Break;
+   If FileSaveMode And Not FileExportMode And (I=3) Then Break;
    Y := 294+I*21;
    If I=FileFilter Then Begin
     SetFillStyle(SolidFill,COLOR_HIGHLIGHT); Bar(102,Y,493,Y+20);
@@ -2177,7 +2222,7 @@ Begin
  End;
  If FileFilterOpen Then Begin
   If (MouseX>=100) And (MouseX<=495) And (MouseY>=294) And
-     (MouseY<378) And (Not FileSaveMode Or (MouseY<357)) Then Begin
+     (MouseY<378) And (Not FileSaveMode Or FileExportMode Or (MouseY<357)) Then Begin
    ApplyFileFilter((MouseY-294) Div 21);
   End Else FileFilter := FileFilterSaved;
   FileFilterOpen := False; Exit;
@@ -2254,7 +2299,7 @@ Begin
  If FileFilterOpen Then Begin
   If (Key=#0) And (ExtKey=#72) And (FileFilter>0) Then Dec(FileFilter);
   If (Key=#0) And (ExtKey=#80) And (FileFilter<3) And
-     (Not FileSaveMode Or (FileFilter<2)) Then Inc(FileFilter);
+     (Not FileSaveMode Or FileExportMode Or (FileFilter<2)) Then Inc(FileFilter);
   If Key=#13 Then Begin
    FileFilterOpen := False;
    ApplyFileFilter(FileFilter);
@@ -2336,6 +2381,7 @@ Begin
  End;
  CloseMenu;
  Case Command Of
+  CMD_EXPORT: StartExportDialog;
   CMD_SAVE_AS: StartSaveDialog;
   CMD_SAVE:
    If CurrentFile='' Then StartSaveDialog
@@ -3267,6 +3313,163 @@ Begin
  Else WriteLegacyDocument := True;
 End;
 
+Function WriteSVGDocument(Name: String): Boolean;
+Const Colors: Array[0..15] Of String[7] =
+ ('#000000','#0000AA','#00AA00','#00AAAA','#AA0000','#AA00AA',
+  '#AA5500','#AAAAAA','#555555','#5555FF','#55FF55','#55FFFF',
+  '#FF5555','#FF55FF','#FFFF55','#FFFFFF');
+Var F: Text; I, J, X, Y, Start, Code, CloseCode: Integer; Obj: TGraphicObject;
+
+ Function Num(V: Real): String;
+ Var S: String;
+ Begin
+  Str(V:0:6,S);
+  While (Length(S)>1) And (S[Length(S)]='0') Do Delete(S,Length(S),1);
+  If S[Length(S)]='.' Then Delete(S,Length(S),1);
+  Num := S;
+ End;
+
+ Procedure Point(X,Y: Real);
+ Begin
+  Write(F,Num(X),' ',Num(Y),' ');
+ End;
+
+Begin
+ WriteSVGDocument := False;
+ {$I-} Assign(F,Name); Rewrite(F); Code := IOResult; {$I+}
+ If Code<>0 Then Begin SaveError := 'Creation SVG impossible.'; Exit; End;
+ {$I-}
+ Writeln(F,'<?xml version="1.0" encoding="UTF-8"?>');
+ Writeln(F,'<svg xmlns="http://www.w3.org/2000/svg" width="',
+  ScreenWidth-TOOLBAR_WIDTH,'" height="',ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT,
+  '" viewBox="0 0 ',ScreenWidth-TOOLBAR_WIDTH,' ',
+  ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT,'">');
+ Writeln(F,'<title>CloneDRAW vector export</title>');
+ For I := 0 To ObjectCount-1 Do Begin
+  Obj := Objects[I];
+  If Obj.Visible Then Case Obj.ObjType Of
+   OBJ_RECT:
+    Writeln(F,'<rect x="',Num(Obj.Rectangle.X),'" y="',Num(Obj.Rectangle.Y),
+     '" width="',Num(Obj.Rectangle.Width),'" height="',Num(Obj.Rectangle.Height),
+     '" fill="none" stroke="',Colors[Obj.Rectangle.StrokeColor],'"/>');
+   OBJ_ELLIPSE:
+    Writeln(F,'<ellipse cx="',Num(Obj.Ellipse.CX),'" cy="',Num(Obj.Ellipse.CY),
+     '" rx="',Num(Obj.Ellipse.RX),'" ry="',Num(Obj.Ellipse.RY),
+     '" fill="none" stroke="',Colors[Obj.Ellipse.StrokeColor],'"/>');
+   OBJ_LINE:
+    Writeln(F,'<line x1="',Num(Obj.Line.X1),'" y1="',Num(Obj.Line.Y1),
+     '" x2="',Num(Obj.Line.X2),'" y2="',Num(Obj.Line.Y2),
+     '" stroke="',Colors[Obj.Line.StrokeColor],'"/>');
+   OBJ_BEZIER: Begin
+    Write(F,'<path fill="none" stroke="',Colors[Obj.Path.StrokeColor],'" d="M ');
+    Point(Obj.Path.Points[0].X,Obj.Path.Points[0].Y); Write(F,'C ');
+    For J := 1 To 3 Do Point(Obj.Path.Points[J].X,Obj.Path.Points[J].Y);
+    Writeln(F,'"/>');
+   End;
+   OBJ_PATH, OBJ_FILLED_PATH: Begin
+    If Obj.Path.PointCount=1 Then
+     Writeln(F,'<rect x="',Num(Obj.Path.Points[0].X),'" y="',
+      Num(Obj.Path.Points[0].Y),'" width="1" height="1" fill="',
+      Colors[Obj.Path.StrokeColor],'"/>')
+    Else Begin
+     Write(F,'<path stroke="',Colors[Obj.Path.StrokeColor],'" fill="');
+     If Obj.ObjType=OBJ_FILLED_PATH Then Write(F,Colors[Obj.Path.FillColor])
+     Else Write(F,'none');
+     Write(F,'" d="M '); Point(Obj.Path.Points[0].X,Obj.Path.Points[0].Y);
+     For J := 1 To Obj.Path.PointCount-1 Do Begin
+      Write(F,'L '); Point(Obj.Path.Points[J].X,Obj.Path.Points[J].Y);
+     End;
+     If Obj.Path.Closed Then Write(F,'Z');
+     Writeln(F,'"/>');
+    End;
+   End;
+   OBJ_TEXT: Begin
+    Writeln(F,'<g fill="',Colors[Obj.TextObj.Color],'">');
+    For J := 1 To Length(Obj.TextObj.Text) Do
+     For Y := 0 To 7 Do Begin
+      X := 0;
+      While X<8 Do Begin
+       If (GlyphRows[Ord(Obj.TextObj.Text[J]),Y] And (1 Shl X))<>0 Then Begin
+        Start := X;
+        Repeat Inc(X);
+        Until (X=8) Or ((GlyphRows[Ord(Obj.TextObj.Text[J]),Y] And (1 Shl X))=0);
+        Writeln(F,'<rect x="',Num(Obj.TextObj.X+(J-1)*8+Start),'" y="',
+         Num(Obj.TextObj.Y+Y),'" width="',X-Start,'" height="1"/>');
+       End Else Inc(X);
+      End;
+     End;
+    Writeln(F,'</g>');
+   End;
+  End;
+ End;
+ Writeln(F,'</svg>');
+ Code := IOResult; Close(F); CloseCode := IOResult;
+ {$I+}
+ If (Code<>0) Or (CloseCode<>0) Then SaveError := 'Ecriture SVG incomplete.'
+ Else WriteSVGDocument := True;
+End;
+
+Function WriteBMPDocument(Name: String): Boolean;
+Const RGB: Array[0..15,0..2] Of Byte =
+  ((0,0,0),(0,0,170),(0,170,0),(0,170,170),
+   (170,0,0),(170,0,170),(170,85,0),(170,170,170),
+   (85,85,85),(85,85,255),(85,255,85),(85,255,255),
+   (255,85,85),(255,85,255),(255,255,85),(255,255,255));
+Var F: File; Header: Array[0..53] Of Byte; Row: Array[0..1919] Of Byte;
+ W,H,Stride,X,Y,C,I,Code,CloseCode,OldZoom: Integer; Got: Word;
+ OldX,OldY: Real; OldGrid,Good: Boolean;
+
+ Procedure DWordAt(Index: Integer; Value: LongInt);
+ Var K: Integer;
+ Begin
+  For K := 0 To 3 Do Header[Index+K] := (Value Shr (K*8)) And 255;
+ End;
+
+Begin
+ WriteBMPDocument := False;
+ W := ScreenWidth-TOOLBAR_WIDTH; H := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT;
+ Stride := ((W*3+3) Div 4)*4;
+ If (W<=0) Or (H<=0) Or (Stride>SizeOf(Row)) Then Begin
+  SaveError := 'Dimensions BMP non prises en charge.'; Exit;
+ End;
+ {$I-} Assign(F,Name); Rewrite(F,1); Code := IOResult; {$I+}
+ If Code<>0 Then Begin SaveError := 'Creation BMP impossible.'; Exit; End;
+ FillChar(Header,SizeOf(Header),0);
+ Header[0] := Ord('B'); Header[1] := Ord('M');
+ DWordAt(2,54+LongInt(Stride)*H); DWordAt(10,54); DWordAt(14,40);
+ DWordAt(18,W); DWordAt(22,H); Header[26] := 1; Header[28] := 24;
+ DWordAt(34,LongInt(Stride)*H);
+ {$I-} BlockWrite(F,Header,SizeOf(Header),Got); Code := IOResult; {$I+}
+ Good := (Code=0) And (Got=SizeOf(Header));
+ OldZoom := ZoomIndex; OldX := ViewX; OldY := ViewY; OldGrid := GridVisible;
+ HideMouse;
+ ZoomIndex := 2; ViewX := 0; ViewY := 0; GridVisible := False;
+ SetViewPort(TOOLBAR_WIDTH,MENUBAR_HEIGHT,ScreenWidth-1,
+  ScreenHeight-STATUSBAR_HEIGHT-1,True);
+ DrawCanvas;
+ For I := 0 To ObjectCount-1 Do DrawObject(I);
+ For Y := H-1 DownTo 0 Do Begin
+  If Not Good Then Break;
+  FillChar(Row,SizeOf(Row),0);
+  For X := 0 To W-1 Do Begin
+   C := GetPixel(X,Y);
+   If (C<0) Or (C>15) Then Begin Good := False; Break; End;
+   Row[X*3] := RGB[C,2]; Row[X*3+1] := RGB[C,1]; Row[X*3+2] := RGB[C,0];
+  End;
+  If Good Then Begin
+   {$I-} BlockWrite(F,Row,Stride,Got); Code := IOResult; {$I+}
+   Good := (Code=0) And (Got=Stride);
+  End;
+ End;
+ {$I-} Close(F); CloseCode := IOResult; {$I+}
+ ZoomIndex := OldZoom; ViewX := OldX; ViewY := OldY; GridVisible := OldGrid;
+ SetViewPort(0,0,ScreenWidth-1,ScreenHeight-1,True);
+ ShowMouse;
+ RedrawInterface;
+ If Not Good Or (CloseCode<>0) Then SaveError := 'Ecriture BMP incomplete.'
+ Else WriteBMPDocument := True;
+End;
+
 Function SaveDocument(Name: String; Format: Integer): Boolean;
 Var TempName, BackupName, S: String; F: File;
  D: DirStr; N: NameStr; E: ExtStr; I, Code: Integer;
@@ -3289,7 +3492,7 @@ Var TempName, BackupName, S: String; F: File;
 
 Begin
  SaveDocument := False; SaveError := '';
- If (Format<0) Or (Format>2) Or (Name='') Or (ObjectCount>MAX_OBJECTS) Then Begin
+ If (Format<0) Or (Format>6) Or (Name='') Or (ObjectCount>MAX_OBJECTS) Then Begin
   SaveError := 'Nom, format ou document invalide.'; Exit;
  End;
  If IsDirectory(Name) Then Begin SaveError := 'La cible est un dossier, pas un fichier.'; Exit; End;
@@ -3309,8 +3512,12 @@ Begin
   If Not Exists Then Begin TempName := S; Break; End;
  End;
  If TempName='' Then Begin SaveError := 'Aucun fichier temporaire disponible.'; Exit; End;
- If Format=2 Then Good := WriteLegacyDocument(TempName)
- Else Good := WriteClassicDocument(TempName);
+ Case Format Of
+  2: Good := WriteLegacyDocument(TempName);
+  3: Good := WriteSVGDocument(TempName);
+  4: Good := WriteBMPDocument(TempName);
+  Else Good := WriteClassicDocument(TempName);
+ End;
  If Not Good Then Begin RemoveTemporary; Exit; End;
  BackupName := '';
  If HadFile Then Begin
@@ -3343,6 +3550,24 @@ Begin
  If Format=2 Then StatusMessage := 'AI10 prive enregistre : objets conserves exactement.'
  Else StatusMessage := 'AI/EPS enregistre : texte Courier, palette VGA, contours fins.';
  NeedsRedraw := True; SaveDocument := True;
+End;
+
+Function ExportDocument(Name: String; Format: Integer): Boolean;
+Var OldName: String; OldFormat: Integer; OldModified,Good: Boolean;
+Begin
+ ExportDocument := False;
+ If (Format<0) Or (Format>3) Then Begin
+  SaveError := 'Format d''export non implemente (CDR natif indisponible).'; Exit;
+ End;
+ OldName := CurrentFile; OldFormat := CurrentSaveFormat; OldModified := FileModified;
+ Good := SaveDocument(Name,Format+3);
+ CurrentFile := OldName; CurrentSaveFormat := OldFormat; FileModified := OldModified;
+ If Good Then Begin
+  If Format>=2 Then StatusMessage := 'Export AI/EPS termine : texte Courier, contours fins.'
+  Else StatusMessage := 'Export termine : page entiere, document courant inchange.';
+ End;
+ NeedsRedraw := True;
+ ExportDocument := Good;
 End;
 
 Procedure SaveFile(Filename: String);
@@ -3388,6 +3613,7 @@ Begin
  FileDialogActive := False;
  FileFilterOpen := False;
  FileSaveMode := False; FileOverwrite := False; CurrentSaveFormat := 0;
+ FileExportMode := False;
  ResetZoom;
  ObjectCount := 0;
  SelectedObject := -1;

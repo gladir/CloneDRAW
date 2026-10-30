@@ -10831,6 +10831,46 @@ Begin
 End;
 
 
+{ Microsoft Paint MSP v1 DanM : monochrome, bit 1 blanc, sans compression. }
+Function SaveMSP(FileName:String):Boolean;
+Var F:File;Header:Array[0..31] Of Byte;Row:Array[0..511] Of Byte;
+ X,Y,I,Stride:Integer;Checksum:Word;C:TRGBColor;
+ Written:LongInt;Failed:Boolean;
+ Procedure PutWord(P:Integer;V:Word);
+ Begin Header[P]:=V And 255;Header[P+1]:=V Shr 8;End;
+ Procedure WriteBytes(Var Buffer;Count:LongInt);
+ Begin
+  If Failed Then Exit;
+  {$I-}BlockWrite(F,Buffer,Count,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Count);
+ End;
+Begin
+ SaveMSP:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ FillChar(Header,SizeOf(Header),0);
+ PutWord(0,$6144);PutWord(2,$4D6E);
+ PutWord(4,CanvasImageW);PutWord(6,CanvasImageH);
+ Checksum:=0;
+ For I:=0 To 11 Do Checksum:=Checksum Xor
+  (Word(Header[I*2]) Or (Word(Header[I*2+1]) Shl 8));
+ PutWord(24,Checksum);Stride:=(CanvasImageW+7) Div 8;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Failed:=False;WriteBytes(Header,SizeOf(Header));
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;FillChar(Row,Stride,255);
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];
+   If LongInt(C.R)*299+LongInt(C.G)*587+LongInt(C.B)*114<128000 Then
+    Row[X Div 8]:=Row[X Div 8] And (255 Xor (128 Shr (X And 7)));
+  End;
+  WriteBytes(Row,Stride);
+ End;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveMSP:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -10857,7 +10897,8 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,FMT_LBM,FMT_MAC])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,
+ FMT_LBM,FMT_MAC,FMT_MSP])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
@@ -10901,6 +10942,7 @@ Begin
   FMT_ICO: OK:=SaveICO(Temp);
   FMT_LBM: OK:=SaveLBM(Temp);
   FMT_MAC: OK:=SaveMAC(Temp);
+  FMT_MSP: OK:=SaveMSP(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -12236,7 +12278,8 @@ Begin
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,FMT_LBM,FMT_MAC])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,
+ FMT_LBM,FMT_MAC,FMT_MSP])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -18697,7 +18740,8 @@ Begin
  8: OFSaveExtension:='.hdr';
  27: OFSaveExtension:='.ico';
  7: OFSaveExtension:='.lbm';
- 24: OFSaveExtension:='.mac'; Else OFSaveExtension:='.bmp'; End;
+ 24: OFSaveExtension:='.mac';
+ 22: OFSaveExtension:='.msp'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -18813,7 +18857,7 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=22;
+ Count:=29; If Saving Then Count:=23;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
@@ -18821,6 +18865,7 @@ Begin
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
    If I=13 Then Order[I]:=13; If I=14 Then Order[I]:=6; If I=15 Then
    Order[I]:=10;
+   If I=22 Then Order[I]:=22;
    If I=19 Then Order[I]:=27; If I=20 Then Order[I]:=7; If I=21 Then
    Order[I]:=24;
    If I=16 Then Order[I]:=9; If I=17 Then Order[I]:=29; If I=18 Then
@@ -18917,6 +18962,8 @@ Begin
   OFScan(D);
   If D.SaveMode Then Begin
    D.Notice:='Type choisi : '+OFFilterLabel(D.Filter);
+   If D.Filter=22 Then
+    D.Notice:='MSP DanM : conversion en noir et blanc, seuil 128.';
    If D.Filter=24 Then
     D.Notice:='MAC : noir/blanc 576x720, marge blanche ou rognage droite/bas.';
    If D.Filter=27 Then
@@ -18986,7 +19033,8 @@ Begin
    Else If SaveFormat=FMT_HDR Then D^.Filter:=8
    Else If SaveFormat=FMT_ICO Then D^.Filter:=27
    Else If SaveFormat=FMT_LBM Then D^.Filter:=7
-   Else If SaveFormat=FMT_MAC Then D^.Filter:=24;
+   Else If SaveFormat=FMT_MAC Then D^.Filter:=24
+   Else If SaveFormat=FMT_MSP Then D^.Filter:=22;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -19023,6 +19071,8 @@ Begin
   ' ouve' +
   'rture' +
   ' seule.';
+  If SaveFormat=FMT_MSP Then
+   D^.Notice:='MSP DanM : conversion en noir et blanc, seuil 128.';
   If SaveFormat=FMT_MAC Then
    D^.Notice:='MAC : noir/blanc 576x720, marge blanche ou rognage droite/bas.';
   If SaveFormat=FMT_ICO Then
@@ -19172,7 +19222,8 @@ Begin
    8: SaveFormat:=FMT_HDR;
    27: SaveFormat:=FMT_ICO;
    7: SaveFormat:=FMT_LBM;
-   24: SaveFormat:=FMT_MAC; Else SaveFormat:=FMT_BMP; End;
+   24: SaveFormat:=FMT_MAC;
+   22: SaveFormat:=FMT_MSP; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -19190,7 +19241,8 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,FMT_LBM,FMT_MAC])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,
+ FMT_LBM,FMT_MAC,FMT_MSP])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -19478,7 +19530,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 22 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 23 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

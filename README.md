@@ -229,6 +229,46 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
     		<td><b>VISIO.PAS</b></td>
       		<td>Cette commande permet de lancer un clone de Visio.</td>
     	</tr>
+<tr>
+			<td><b>XBM2ASM.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source assembleur.</td>
+		</tr>
+		<tr>	
+			<td><b>XBM2BAS.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source BASIC.</td>
+		</tr>
+		<tr>
+			<td><b>XBM2BGX.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en format <a href="https://www.gladir.com/LEXIQUE/FICHIERS/bgx.htm">BGX</a> (MonsterBook).</td>
+		</tr>
+		<tr>
+			<td><b>XBM2C.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source C.</td>
+		</tr>
+		<tr>
+			<td><b>XBM2CSP.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source CSP (C Server Pages).</td>
+		</tr>
+		<tr>
+			<td><b>XBM2PAS.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source Pascal.</td>
+		</tr>
+		<tr>
+			<td><b>XBM2PPM.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en format PPM (Portable PixMap).</td>
+		</tr>
+		<tr>
+			<td><b>XBM2PSP.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source PSP (Pascal Server Pages).</td>
+		</tr>
+		<tr>
+			<td><b>XBM2PY.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source Python.</td>
+		</tr>
+		<tr>
+			<td><b>XBM2RUBY.PAS</b></td>
+			<td>Cette commande permet de convertir une image de format XBM (X BitMap) en code source Ruby.</td>
+		</tr>	
 </table>
 
 <h2>Compilation</h2>

@@ -26,7 +26,10 @@ Aperçu de Photoshop :
 		<td>Exporter un calque 3D :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/fcfdb882-fbc4-4722-9066-9692af44cdda" /></td>
 		<td>Panorama sphérique :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/c758d627-dc51-46b9-be53-808c94aa42c3" /></td>
 	</tr>
-
+	<tr>
+		<td>Extrusion 3D du calque :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ae6f3180-a05e-4750-9dc8-27ff0b751845" /></td>
+		<td></td>
+	</tr>
 </table>
 
 

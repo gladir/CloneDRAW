@@ -211,12 +211,16 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td><b>ICO2XBM.PAS</b></td>
 			<td>Cette commande permet de transformer un icône (.ICO) en format XBM (X BitMap).</td>
 		</tr>	
-    <tr>
-      <td><b>PAINT.PAS</b></td>
-      <td>Cette commande permet de laner le programme de dessin Bitamp (Paint).</td>
-    </tr>
-    <tr>
-      <td><b>VISIO.PAS</b></td>
-      <td>Cette commande permet de lancer un clone de Visio.</td>
-    </tr>
+    	<tr>
+      		<td><b>PAINT.PAS</b></td>
+      		<td>Cette commande permet de laner le programme de dessin Bitamp (Paint).</td>
+    	</tr>
+		<tr>
+			<td><b>PSP.PAS</b></td>
+			<td>Cette commande permet de lancer un clone de Photoshop.</td>
+		</tr>
+	    <tr>
+    		<td><b>VISIO.PAS</b></td>
+      		<td>Cette commande permet de lancer un clone de Visio.</td>
+    	</tr>
 </table>

@@ -5,10 +5,10 @@
   @abstract(Target: Free Pascal 3.2)
   @description(Clone d'Adobe Illustrator en Turbo Pascal/Free Pascal graphique)
 
-  Prototype incomplet : rectangles, cercles et lignes.
+  Prototype incomplet : rectangles, ellipses et lignes editables.
   Les commandes non implementees sont grisees.
   AI10 est un ancien format prive, PAS un format Adobe Illustrator.
-  Restent notamment : import/export Adobe, selection/transformations,
+  Restent notamment : import/export Adobe, rotation/groupes,
   Bezier, texte, calques, historique, SVG et BMP.
 }
 
@@ -95,6 +95,9 @@ Const
  AI_VERSION = 100;
 
 Type
+ TBounds = Record
+  L, T, R, B: Real;
+ End;
  TMenuItem = Record
   Caption: String[30];
   Command: Byte;
@@ -215,6 +218,11 @@ Var
  ToolTipVisible: Boolean;
  ToolTipCandidate: Integer;
  ToolTipStarted: LongInt;
+ EditingObject, EditWasModified: Boolean;
+ EditHandle: Integer;
+ EditOriginal: TGraphicObject;
+ EditBounds: TBounds;
+ EditX, EditY: Integer;
 
 Procedure InitMouse;
 {$IFNDEF FPC}
@@ -339,9 +347,9 @@ Var S: String;
 Begin
  S := '';
  Case Index Of
-  TOOL_SELECT: S := 'Selection - non implementee';
+  TOOL_SELECT: S := 'Selection (1) - deplacer / poignees pour agrandir';
   TOOL_RECTANGLE: S := 'Rectangle (2) - glisser pour dessiner';
-  TOOL_ELLIPSE: S := 'Cercle (3) - glisser pour dessiner';
+  TOOL_ELLIPSE: S := 'Ellipse / cercle (3) - glisser pour dessiner';
   TOOL_LINE: S := 'Ligne (4) - glisser pour dessiner';
   TOOL_BEZIER: S := 'Courbe de Bezier - non implementee';
   TOOL_PENCIL: S := 'Crayon - non implemente';
@@ -586,7 +594,7 @@ Begin
    Y1 := Trunc(MENUBAR_HEIGHT + Obj.Ellipse.CY);
    
    SetColor(Obj.Ellipse.StrokeColor);
-   Circle(X1, Y1, Trunc(Obj.Ellipse.RX));
+   Ellipse(X1, Y1, 0, 360, Round(Obj.Ellipse.RX), Round(Obj.Ellipse.RY));
    
    If Obj.Ellipse.Selected Then
    Begin
@@ -624,6 +632,199 @@ Begin
  End;
 End;
 
+Function MinReal(A, B: Real): Real;
+Begin
+ If A < B Then MinReal := A Else MinReal := B;
+End;
+
+Function MaxReal(A, B: Real): Real;
+Begin
+ If A > B Then MaxReal := A Else MaxReal := B;
+End;
+
+Function ObjectBounds(Obj: TGraphicObject): TBounds;
+Var B: TBounds;
+Begin
+ FillChar(B, SizeOf(B), 0);
+ Case Obj.ObjType Of
+  OBJ_RECT: Begin
+   B.L := MinReal(Obj.Rectangle.X, Obj.Rectangle.X+Obj.Rectangle.Width);
+   B.R := MaxReal(Obj.Rectangle.X, Obj.Rectangle.X+Obj.Rectangle.Width);
+   B.T := MinReal(Obj.Rectangle.Y, Obj.Rectangle.Y+Obj.Rectangle.Height);
+   B.B := MaxReal(Obj.Rectangle.Y, Obj.Rectangle.Y+Obj.Rectangle.Height);
+  End;
+  OBJ_ELLIPSE: Begin
+   B.L := Obj.Ellipse.CX-Obj.Ellipse.RX;
+   B.R := Obj.Ellipse.CX+Obj.Ellipse.RX;
+   B.T := Obj.Ellipse.CY-Obj.Ellipse.RY;
+   B.B := Obj.Ellipse.CY+Obj.Ellipse.RY;
+  End;
+  OBJ_LINE: Begin
+   B.L := MinReal(Obj.Line.X1, Obj.Line.X2);
+   B.R := MaxReal(Obj.Line.X1, Obj.Line.X2);
+   B.T := MinReal(Obj.Line.Y1, Obj.Line.Y2);
+   B.B := MaxReal(Obj.Line.Y1, Obj.Line.Y2);
+  End;
+ End;
+ ObjectBounds := B;
+End;
+
+Procedure HandlePosition(Index, Handle: Integer; Var X, Y: Integer);
+Var B: TBounds;
+Begin
+ B := ObjectBounds(Objects[Index]);
+ If Objects[Index].ObjType = OBJ_LINE Then Begin
+  If Handle = 0 Then Begin
+   X := Round(Objects[Index].Line.X1); Y := Round(Objects[Index].Line.Y1);
+  End Else Begin
+   X := Round(Objects[Index].Line.X2); Y := Round(Objects[Index].Line.Y2);
+  End;
+ End Else Begin
+  X := Round((B.L+B.R)/2); Y := Round((B.T+B.B)/2);
+  If Handle In [0,6,7] Then X := Round(B.L);
+  If Handle In [2,3,4] Then X := Round(B.R);
+  If Handle In [0,1,2] Then Y := Round(B.T);
+  If Handle In [4,5,6] Then Y := Round(B.B);
+ End;
+End;
+
+Function SelectionHandleHit(X, Y: Integer): Integer;
+Var I, N, HX, HY: Integer;
+Begin
+ SelectionHandleHit := -1;
+ If SelectedObject < 0 Then Exit;
+ If Not Objects[SelectedObject].Visible Then Exit;
+ N := 8;
+ If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
+ For I := 0 To N-1 Do Begin
+  HandlePosition(SelectedObject,I,HX,HY);
+  If (Abs(X-HX) <= 4) And (Abs(Y-HY) <= 4) Then Begin
+   SelectionHandleHit := I;
+   Exit;
+  End;
+ End;
+End;
+
+Function ObjectHit(Index, X, Y: Integer): Boolean;
+Var B: TBounds; DX, DY, U, D: Real;
+Begin
+ ObjectHit := False;
+ If Not Objects[Index].Visible Then Exit;
+ B := ObjectBounds(Objects[Index]);
+ Case Objects[Index].ObjType Of
+  OBJ_RECT: ObjectHit := (X >= B.L-3) And (X <= B.R+3) And
+                         (Y >= B.T-3) And (Y <= B.B+3);
+  OBJ_ELLIPSE: Begin
+   DX := MaxReal(Objects[Index].Ellipse.RX,1);
+   DY := MaxReal(Objects[Index].Ellipse.RY,1);
+   ObjectHit := Sqr((X-Objects[Index].Ellipse.CX)/(DX+3))+
+                Sqr((Y-Objects[Index].Ellipse.CY)/(DY+3)) <= 1;
+  End;
+  OBJ_LINE: Begin
+   DX := Objects[Index].Line.X2-Objects[Index].Line.X1;
+   DY := Objects[Index].Line.Y2-Objects[Index].Line.Y1;
+   D := Sqr(DX)+Sqr(DY);
+   U := 0;
+   If D > 0 Then U := ((X-Objects[Index].Line.X1)*DX+
+                       (Y-Objects[Index].Line.Y1)*DY)/D;
+   U := MaxReal(0,MinReal(1,U));
+   ObjectHit := Sqr(X-Objects[Index].Line.X1-U*DX)+
+                Sqr(Y-Objects[Index].Line.Y1-U*DY) <= 25;
+  End;
+ End;
+End;
+
+Procedure DrawSelection;
+Var I, N, X, Y: Integer; B: TBounds;
+Begin
+ If (SelectedObject < 0) Or (CurrentTool <> TOOL_SELECT) Then Exit;
+ If Not Objects[SelectedObject].Visible Then Exit;
+ B := ObjectBounds(Objects[SelectedObject]);
+ SetColor(COLOR_HIGHLIGHT);
+ SetLineStyle(DottedLn,0,NormWidth);
+ Rectangle(TOOLBAR_WIDTH+Round(B.L),MENUBAR_HEIGHT+Round(B.T),
+           TOOLBAR_WIDTH+Round(B.R),MENUBAR_HEIGHT+Round(B.B));
+ SetLineStyle(SolidLn,0,NormWidth);
+ N := 8;
+ If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
+ For I := 0 To N-1 Do Begin
+  HandlePosition(SelectedObject,I,X,Y);
+  Inc(X,TOOLBAR_WIDTH); Inc(Y,MENUBAR_HEIGHT);
+  SetFillStyle(SolidFill,COLOR_WINDOW);
+  Bar(X-3,Y-3,X+3,Y+3);
+  Rectangle(X-3,Y-3,X+3,Y+3);
+ End;
+End;
+
+Procedure CancelObjectEdit;
+Begin
+ If Not EditingObject Then Exit;
+ Objects[SelectedObject] := EditOriginal;
+ FileModified := EditWasModified;
+ EditingObject := False;
+ DrawingMode := False;
+ NeedsRedraw := True;
+End;
+
+Procedure UpdateObjectEdit;
+Var X, Y: Integer; DX, DY: Real; B: TBounds; Obj: TGraphicObject;
+Begin
+ If Not EditingObject Then Exit;
+ X := Round(MaxReal(0,MinReal(ScreenWidth-TOOLBAR_WIDTH-1,
+                             MouseX-TOOLBAR_WIDTH)));
+ Y := Round(MaxReal(0,MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1,
+                             MouseY-MENUBAR_HEIGHT)));
+ Obj := EditOriginal;
+ B := EditBounds;
+ DX := X-EditX; DY := Y-EditY;
+ If EditHandle < 0 Then Begin
+  DX := MaxReal(-B.L,MinReal(ScreenWidth-TOOLBAR_WIDTH-1-B.R,DX));
+  DY := MaxReal(-B.T,MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1-B.B,DY));
+  B.L := B.L+DX; B.R := B.R+DX;
+  B.T := B.T+DY; B.B := B.B+DY;
+  If Obj.ObjType = OBJ_LINE Then Begin
+   Obj.Line.X1 := Obj.Line.X1+DX; Obj.Line.X2 := Obj.Line.X2+DX;
+   Obj.Line.Y1 := Obj.Line.Y1+DY; Obj.Line.Y2 := Obj.Line.Y2+DY;
+  End;
+ End Else If Obj.ObjType = OBJ_LINE Then Begin
+  If EditHandle = 0 Then Begin Obj.Line.X1 := X; Obj.Line.Y1 := Y; End
+  Else Begin Obj.Line.X2 := X; Obj.Line.Y2 := Y; End;
+ End Else Begin
+  If EditHandle In [0,6,7] Then B.L := MaxReal(0,MinReal(B.R-1,B.L+DX));
+  If EditHandle In [2,3,4] Then
+   B.R := MinReal(ScreenWidth-TOOLBAR_WIDTH-1,MaxReal(B.L+1,B.R+DX));
+  If EditHandle In [0,1,2] Then B.T := MaxReal(0,MinReal(B.B-1,B.T+DY));
+  If EditHandle In [4,5,6] Then
+   B.B := MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1,
+                  MaxReal(B.T+1,B.B+DY));
+ End;
+ Case Obj.ObjType Of
+  OBJ_RECT: Begin
+   Obj.Rectangle.X := B.L; Obj.Rectangle.Y := B.T;
+   Obj.Rectangle.Width := B.R-B.L; Obj.Rectangle.Height := B.B-B.T;
+  End;
+  OBJ_ELLIPSE: Begin
+   Obj.Ellipse.CX := (B.L+B.R)/2; Obj.Ellipse.CY := (B.T+B.B)/2;
+   Obj.Ellipse.RX := (B.R-B.L)/2; Obj.Ellipse.RY := (B.B-B.T)/2;
+  End;
+ End;
+ Objects[SelectedObject] := Obj;
+ FileModified := EditWasModified Or
+  (Obj.Rectangle.X <> EditOriginal.Rectangle.X) Or
+  (Obj.Rectangle.Y <> EditOriginal.Rectangle.Y) Or
+  (Obj.Rectangle.Width <> EditOriginal.Rectangle.Width) Or
+  (Obj.Rectangle.Height <> EditOriginal.Rectangle.Height) Or
+  (Obj.Ellipse.CX <> EditOriginal.Ellipse.CX) Or
+  (Obj.Ellipse.CY <> EditOriginal.Ellipse.CY) Or
+  (Obj.Ellipse.RX <> EditOriginal.Ellipse.RX) Or
+  (Obj.Ellipse.RY <> EditOriginal.Ellipse.RY) Or
+  (Obj.Line.X1 <> EditOriginal.Line.X1) Or
+  (Obj.Line.Y1 <> EditOriginal.Line.Y1) Or
+  (Obj.Line.X2 <> EditOriginal.Line.X2) Or
+  (Obj.Line.Y2 <> EditOriginal.Line.Y2);
+ NeedsRedraw := True;
+End;
+
 Procedure HandleMouseClick;
 Var
  CanvasX, CanvasY: Integer;
@@ -646,15 +847,24 @@ Begin
  Case CurrentTool Of
   TOOL_SELECT:
   Begin
-   For I := ObjectCount - 1 DownTo 0 Do
-   Begin
-    Objects[I].Rectangle.Selected := False;
-    Objects[I].Ellipse.Selected := False;
-    Objects[I].Line.Selected := False;
-    Objects[I].TextObj.Selected := False;
-   End;
-   If SelectedObject >= 0 Then
+   EditHandle := SelectionHandleHit(CanvasX,CanvasY);
+   If EditHandle < 0 Then Begin
     SelectedObject := -1;
+    For I := ObjectCount-1 DownTo 0 Do
+     If ObjectHit(I,CanvasX,CanvasY) Then Begin
+      SelectedObject := I;
+      Break;
+     End;
+   End;
+   If SelectedObject >= 0 Then Begin
+    EditOriginal := Objects[SelectedObject];
+    EditBounds := ObjectBounds(EditOriginal);
+    EditX := CanvasX; EditY := CanvasY;
+    EditWasModified := FileModified;
+    EditingObject := True;
+    DrawingMode := True;
+    StatusMessage := 'Glisser : deplacer / poignees : taille / Echap : annuler';
+   End Else StatusMessage := 'Aucun objet selectionne.';
   End;
   
   TOOL_RECTANGLE:
@@ -685,6 +895,12 @@ Var
  CanvasX, CanvasY: Integer;
  NewObj: TGraphicObject;
 Begin
+ If EditingObject Then Begin
+  UpdateObjectEdit;
+  EditingObject := False;
+  DrawingMode := False;
+  Exit;
+ End;
  If Not DrawingMode Then Exit;
  
  CanvasX := MouseX - TOOLBAR_WIDTH;
@@ -714,6 +930,14 @@ Begin
    NewObj.Rectangle.Y := StartY;
    NewObj.Rectangle.Width := CanvasX - StartX;
    NewObj.Rectangle.Height := CanvasY - StartY;
+   If NewObj.Rectangle.Width < 0 Then Begin
+    NewObj.Rectangle.X := CanvasX;
+    NewObj.Rectangle.Width := -NewObj.Rectangle.Width;
+   End;
+   If NewObj.Rectangle.Height < 0 Then Begin
+    NewObj.Rectangle.Y := CanvasY;
+    NewObj.Rectangle.Height := -NewObj.Rectangle.Height;
+   End;
    NewObj.Rectangle.StrokeColor := StrokeColor;
    NewObj.Rectangle.FillColor := FillColor;
    NewObj.Rectangle.StrokeWidth := 1.0;
@@ -1006,6 +1230,8 @@ Begin
     HandleMouseClick;
     NeedsRedraw := True;
    End;
+  End Else If EditingObject And ((MouseButtons And 1) <> 0) Then Begin
+   If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then UpdateObjectEdit;
   End Else If Released Then Begin
    If MenuMouseDown Then Begin
     { Autorise aussi appuyer sur le titre, glisser, puis relacher sur un item. }
@@ -1046,6 +1272,10 @@ Procedure HandleKey(Key, ExtKey: Char);
 Begin
  ResetToolTip;
  NeedsRedraw := True;
+ If EditingObject Then Begin
+  If Key = #27 Then CancelObjectEdit;
+  Exit;
+ End;
  If DialogTitle <> '' Then Begin
   If Key = #13 Then Begin
    If DialogTitle = 'Quitter' Then Running := False;
@@ -1078,7 +1308,10 @@ Begin
  End;
  Case Key Of
   #27: ExecuteMenuItem(MENU_FILE, 6);
-  '1': CurrentTool := TOOL_SELECT;
+  '1': Begin
+   CurrentTool := TOOL_SELECT;
+   StatusMessage := 'Cliquer un objet, glisser pour deplacer, poignees pour la taille.';
+  End;
   '2': CurrentTool := TOOL_RECTANGLE;
   '3': CurrentTool := TOOL_ELLIPSE;
   '4': CurrentTool := TOOL_LINE;
@@ -1092,6 +1325,7 @@ Begin
  HideMouse;
  DrawCanvas;
  For I := 0 To ObjectCount-1 Do DrawObject(I);
+ DrawSelection;
  DrawToolbar;
  DrawMenuBar;
  DrawStatusBar;
@@ -1215,6 +1449,8 @@ Begin
  FileModified := False;
  CurrentFile := '';
  DrawingMode := False;
+ EditingObject := False;
+ EditHandle := -1;
  MenuActive := False;
  ActiveMenu := -1;
  ActiveMenuItem := -1;

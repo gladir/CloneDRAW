@@ -34,6 +34,50 @@ Uses
   Crt, Graph, Dos
  {$ENDIF};
 
+{ API HTTPS declaree localement, sans unite Windows. }
+{$IFDEF WINDOWS}{$IFDEF FPC}{$DEFINE SKETCH_NATIVE}{$ENDIF}{$ENDIF}
+{$IFDEF SKETCH_NATIVE}
+{$PUSH}{$PACKRECORDS C}
+Type TSketchInternetBuffer=Record
+ Size:LongWord;Next:Pointer;Header:PChar;HeaderLength,HeaderTotal:LongWord;
+ Buffer:Pointer;BufferLength,BufferTotal,OffsetLow,OffsetHigh:LongWord;
+End;
+{$POP}
+Function SFInternetOpen(Agent:PChar;Access:LongWord;Proxy,Bypass:PChar;
+ Flags:LongWord):Pointer;StdCall;External 'wininet.dll' Name 'InternetOpenA';
+Function SFInternetConnect(H:Pointer;Host:PChar;Port:Word;User,Pass:PChar;
+ Service,Flags:LongWord;Context:PtrUInt):Pointer;StdCall;
+ External 'wininet.dll' Name 'InternetConnectA';
+Function SFHttpOpen(H:Pointer;Verb,Path,Version,Referer:PChar;
+ Accept:Pointer;Flags:LongWord;Context:PtrUInt):Pointer;StdCall;
+ External 'wininet.dll' Name 'HttpOpenRequestA';
+Function SFSetOption(H:Pointer;Option:LongWord;Data:Pointer;
+ Size:LongWord):LongBool;StdCall;
+ External 'wininet.dll' Name 'InternetSetOptionA';
+Function SFSend(H:Pointer;Input,Output:Pointer;Flags:LongWord;
+ Context:PtrUInt):LongBool;StdCall;
+ External 'wininet.dll' Name 'HttpSendRequestExA';
+Function SFWrite(H:Pointer;Data:Pointer;Size:LongWord;
+ Var Written:LongWord):LongBool;StdCall;
+ External 'wininet.dll' Name 'InternetWriteFile';
+Function SFEnd(H:Pointer;Output:Pointer;Flags:LongWord;
+ Context:PtrUInt):LongBool;StdCall;
+ External 'wininet.dll' Name 'HttpEndRequestA';
+Function SFQuery(H:Pointer;Info:LongWord;Data:Pointer;
+ Var Size,Index:LongWord):LongBool;StdCall;
+ External 'wininet.dll' Name 'HttpQueryInfoA';
+Function SFRead(H:Pointer;Data:Pointer;Size:LongWord;
+ Var Count:LongWord):LongBool;StdCall;
+ External 'wininet.dll' Name 'InternetReadFile';
+Function SFClose(H:Pointer):LongBool;StdCall;
+ External 'wininet.dll' Name 'InternetCloseHandle';
+Function SFLastError:LongWord;StdCall;
+ External 'kernel32.dll' Name 'GetLastError';
+Function SFOpenURL(Window:Pointer;Operation,FileName,Parameters,
+ Directory:PChar;Show:LongInt):PtrInt;StdCall;
+ External 'shell32.dll' Name 'ShellExecuteA';
+{$ENDIF}
+
 Const
  VERSION_MAJOR = 1;
  VERSION_MINOR = 0;
@@ -8299,6 +8343,326 @@ Begin
  WriteMeshExport:=True;
 End;
 
+Type TSketchMetadata=Record
+ Title:String[48];Description:Array[0..3] Of String;Tags:String;
+ PrivateModel,Published,AgeRestricted:Boolean;Password:String[64];
+End;
+ TSketchBuffer=Record Data:Array[0..8191] Of Byte;Count:Integer;End;
+ TSketchResponse=Record Data:Array[0..16383] Of Char;Count:Integer;End;
+Procedure ClearSketchSecrets(Var Token:String;Var D:TSketchMetadata);
+Begin
+ FillChar(Token[1],Length(Token),0);Token:='';
+ FillChar(D.Password,SizeOf(D.Password),0);
+End;
+Function SketchTokenValid(Const Token:String):Boolean;
+Var I:Integer;
+Begin
+ SketchTokenValid:=False;If (Length(Token)<8) Or (Length(Token)>128)
+  Then Exit;
+ For I:=1 To Length(Token) Do If Not (Token[I] In
+  ['0'..'9','a'..'z','A'..'Z']) Then Exit;
+ SketchTokenValid:=True;
+End;
+Function SketchUIDValid(Const UID:String):Boolean;
+Var I:Integer;
+Begin
+ SketchUIDValid:=False;If Length(UID)<>32 Then Exit;
+ For I:=1 To Length(UID) Do If Not (UID[I] In ['0'..'9','a'..'f']) Then Exit;
+ SketchUIDValid:=True;
+End;
+Function SketchMetadataValid(Const D:TSketchMetadata;
+ Var Error:String):Boolean;
+Var I,J,N,L:Integer;S:String;NonBlank:Boolean;
+Begin
+ SketchMetadataValid:=False;Error:='';NonBlank:=False;
+ For I:=1 To Length(D.Title) Do If D.Title[I]>' ' Then NonBlank:=True;
+ If Not NonBlank Then Begin Error:='Le titre est obligatoire (48 maximum).';
+  Exit;End;
+ If (D.Password<>'') And Not D.PrivateModel Then Begin
+  Error:='Le mot de passe necessite le mode prive.';Exit;
+ End;
+ N:=0;L:=0;
+ For I:=1 To Length(D.Tags)+1 Do Begin
+  If I<=Length(D.Tags) Then S:=D.Tags[I] Else S:=' ';
+  If S=' ' Then Begin
+   If L>0 Then Inc(N);L:=0;
+  End Else Begin
+   If Not (S[1] In ['a'..'z','A'..'Z','0'..'9','-','_']) Then Begin
+    Error:='Tags : lettres, chiffres, tirets et espaces.';Exit;
+   End;
+   Inc(L);If L>48 Then Begin Error:='Un tag depasse 48 caracteres.';Exit;End;
+  End;
+ End;
+ If N>42 Then Begin Error:='42 tags maximum.';Exit;End;
+ For J:=-2 To 4 Do Begin
+  If J=-2 Then S:=D.Title Else If J=-1 Then S:=D.Tags
+  Else If J=4 Then S:=D.Password Else S:=D.Description[J];
+  For I:=1 To Length(S) Do If Ord(S[I])<32 Then Begin
+   Error:='Les champs contiennent un caractere de controle.';Exit;
+  End;
+ End;
+ SketchMetadataValid:=True;
+End;
+Function SketchBoundary(Const D:TSketchMetadata):String;
+Var H,M,S,C:Word;B:String;I,N:Integer;Collision:Boolean;
+Begin
+ GetTime(H,M,S,C);N:=0;
+ Repeat
+  B:='----CloneDRAWPSP'+IntToStr(H)+IntToStr(M)+IntToStr(S)+
+   IntToStr(C)+'x'+IntToStr(N);Inc(N);
+  Collision:=(Pos(B,D.Title)>0) Or (Pos(B,D.Tags)>0) Or
+   (Pos(B,D.Password)>0);
+  For I:=0 To 3 Do Collision:=Collision Or (Pos(B,D.Description[I])>0);
+ Until Not Collision;SketchBoundary:=B;
+End;
+Function BuildSketchMultipart(Const D:TSketchMetadata;Const Boundary:String;
+ Format:Integer;Var Prefix,Suffix:TSketchBuffer):Boolean;
+Var Good:Boolean;I:Integer;Dummy:String;
+ Procedure Add(Var B:TSketchBuffer;Const S:String);
+ Var I:Integer;
+ Begin
+  If B.Count+Length(S)>SizeOf(B.Data) Then Begin Good:=False;Exit;End;
+  For I:=1 To Length(S) Do Begin B.Data[B.Count]:=Ord(S[I]);Inc(B.Count);End;
+ End;
+ Procedure Field(Const Name,Value:String);
+ Begin
+  Add(Prefix,'--'+Boundary+#13#10);
+  Add(Prefix,'Content-Disposition: form-data; name="'+Name+'"'+#13#10);
+  Add(Prefix,#13#10);Add(Prefix,Value);Add(Prefix,#13#10);
+ End;
+ Function Bool(B:Boolean):String;
+ Begin If B Then Bool:='true' Else Bool:='false';End;
+Begin
+ Prefix.Count:=0;Suffix.Count:=0;Good:=True;BuildSketchMultipart:=False;
+ If Not SketchMetadataValid(D,Dummy) Or (Length(Boundary)<8) Or
+  (Length(Boundary)>70) Or (Format<0) Or (Format>2) Then Exit;
+ For I:=1 To Length(Boundary) Do If Not (Boundary[I] In
+  ['a'..'z','A'..'Z','0'..'9','-']) Then Exit;
+ Field('name',D.Title);Field('tags',D.Tags);
+ Field('private',Bool(D.PrivateModel));Field('isPublished',Bool(D.Published));
+ Field('isAgeRestricted',Bool(D.AgeRestricted));
+ If D.PrivateModel And (D.Password<>'') Then Field('password',D.Password);
+ Add(Prefix,'--'+Boundary+#13#10);
+ Add(Prefix,'Content-Disposition: form-data; name="description"'+#13#10);
+ Add(Prefix,#13#10);
+ For I:=0 To 3 Do Begin
+  Add(Prefix,D.Description[I]);If I<3 Then Add(Prefix,#10);
+ End;
+ Add(Prefix,#13#10+'--'+Boundary+#13#10);
+ Dummy:='model.obj';If Format>0 Then Dummy:='model.stl';
+ Add(Prefix,'Content-Disposition: form-data; name="modelFile"; filename="');
+ Add(Prefix,Dummy+'"'+#13#10+'Content-Type: application/octet-stream');
+ Add(Prefix,#13#10+#13#10);Add(Suffix,#13#10+'--'+Boundary+'--'+#13#10);
+ BuildSketchMultipart:=Good;
+End;
+{ Extraction JSON bornee. Aucun texte serveur n'est affiche comme secret. }
+Function SketchJSON(const R:TSketchResponse;Const Key:String):String;
+Var P,Depth:Integer;Name,Value:String;Escaped:Boolean;
+ Function ReadString:String;
+ Var S:String;C:Char;Closed:Boolean;
+ Begin
+  S:='';Inc(P);Escaped:=False;Closed:=False;
+  While P<R.Count Do Begin
+   C:=R.Data[P];Inc(P);
+   If Escaped Then Begin
+    If C In ['"','\','/'] Then S:=S+C Else S:=S+'?';Escaped:=False;
+   End Else If C='\' Then Escaped:=True
+   Else If C='"' Then Begin Closed:=True;Break;End
+   Else If Length(S)<255 Then S:=S+C;
+  End;If Not Closed Then S:='';ReadString:=S;
+ End;
+Begin
+ SketchJSON:='';P:=0;Depth:=0;
+ While P<R.Count Do Begin
+  If R.Data[P]='"' Then Begin
+   Name:=ReadString;
+   While (P<R.Count) And (R.Data[P]<=' ') Do Inc(P);
+   If (Name=Key) And ((Key<>'uid') Or (Depth=1)) And
+    (P<R.Count) And (R.Data[P]=':') Then Begin
+    Inc(P);While (P<R.Count) And (R.Data[P]<=' ') Do Inc(P);
+    If (P<R.Count) And (R.Data[P]='"') Then SketchJSON:=ReadString;
+    Exit;
+   End;
+  End Else Begin
+   If R.Data[P] In ['{','['] Then Inc(Depth);
+   If R.Data[P] In ['}',']'] Then Dec(Depth);Inc(P);
+  End;
+ End;
+End;
+Function SketchLocationUID(Location:String):String;
+Begin
+ SketchLocationUID:='';
+ While (Length(Location)>0) And (Location[Length(Location)]='/') Do
+  Delete(Location,Length(Location),1);
+ If Copy(Location,1,36)='https://api.sketchfab.com/v3/models/' Then
+  Delete(Location,1,36)
+ Else If Copy(Location,1,11)='/v3/models/' Then Delete(Location,1,11)
+ Else Exit;
+ If SketchUIDValid(Location) Then SketchLocationUID:=Location;
+End;
+Function SketchHTTPError(Code:LongWord):String;
+Begin
+ Case Code Of
+  400:SketchHTTPError:='Champs refuses par Sketchfab. Verifier les options.';
+  401:SketchHTTPError:='Cle API invalide ou expiree.';
+  403:SketchHTTPError:='Acces refuse. Verifier droits et offre du compte.';
+  404:SketchHTTPError:='Modele ou ressource introuvable.';
+  413:SketchHTTPError:='Fichier trop volumineux pour ce compte.';
+  429:SketchHTTPError:='Limite API atteinte. Attendre avant de reessayer.';
+  300..399:SketchHTTPError:=
+   'Redirection refusee. Verifier le service officiel.';
+  500..599:SketchHTTPError:=
+   'Service Sketchfab indisponible. Reessayer plus tard.';
+  Else SketchHTTPError:='Reponse Sketchfab inattendue : HTTP '+IntToStr(Code);
+ End;
+End;
+Function SketchRequest(Const Token,Verb,Path,ModelPath,Boundary:String;
+ Const Prefix,Suffix:TSketchBuffer;Var Code:LongWord;
+ Var Response:TSketchResponse;Var Error:String):Boolean;
+Var ValidateI:Integer;
+{$IFDEF SKETCH_NATIVE}
+ Session,Connection,Request:Pointer;Input:TSketchInternetBuffer;
+ F:File;Opened,Good,Cancelled:Boolean;Target:String;
+ Headers:AnsiString;OldMode:Byte;
+ Count,Written,Size,Index,Timeout,Flags:LongWord;Total,Sent:LongInt;
+ Chunk:Array[0..8191] Of Byte;ReadCount:LongInt;K:Char;
+ Location:Array[0..511] Of Char;LocationText,FoundUID:String;
+ Procedure CloseAll;
+ Begin
+  If Opened Then Begin {$I-}Close(F);{$I+}ReadCount:=IOResult;End;
+  If Request<>Nil Then SFClose(Request);
+  If Connection<>Nil Then SFClose(Connection);
+  If Session<>Nil Then SFClose(Session);
+  If Length(Headers)>0 Then FillChar(Headers[1],Length(Headers),0);
+  Headers:='';
+ End;
+ Procedure Send(Data:Pointer;Length:LongWord);
+ Var P:^Byte;N:LongWord;
+ Begin
+  P:=Data;
+  While Good And (Length>0) Do Begin
+   N:=0;Good:=SFWrite(Request,P,Length,N) And (N>0) And (N<=Length);
+   If Good Then Begin Inc(P,N);Dec(Length,N);Inc(Sent,N);End;
+  End;
+ End;
+{$ENDIF}
+Begin
+ SketchRequest:=False;Code:=0;Response.Count:=0;Error:='';
+ If Not SketchTokenValid(Token) Then Begin Error:='Cle API invalide.';Exit;End;
+ If Verb='POST' Then Begin
+  If (Prefix.Count<1) Or (Prefix.Count>SizeOf(Prefix.Data)) Or
+   (Suffix.Count<4) Or (Suffix.Count>SizeOf(Suffix.Data)) Or
+   (Length(Boundary)<8) Or (Length(Boundary)>70) Then Begin
+   Error:='Donnees multipart invalides.';Exit;
+  End;
+  For ValidateI:=1 To Length(Boundary) Do If Not (Boundary[ValidateI] In
+   ['a'..'z','A'..'Z','0'..'9','-']) Then Begin
+   Error:='Separateur multipart invalide.';Exit;
+  End;
+ End;
+ If (Verb<>'GET') And (Verb<>'POST') Then Begin Error:='Methode invalide.';
+  Exit;End;
+ If (Path<>'/v3/me') And (Path<>'/v3/models') And
+  (Copy(Path,1,11)<>'/v3/models/') Then Begin
+  Error:='Adresse API non autorisee.';Exit;
+ End;
+ If (Copy(Path,1,11)='/v3/models/') And
+  Not SketchUIDValid(Copy(Path,12,255)) Then Begin
+  Error:='Identifiant de modele invalide.';Exit;
+ End;
+{$IFDEF SKETCH_NATIVE}
+ Session:=Nil;Connection:=Nil;Request:=Nil;Opened:=False;
+ Good:=True;Cancelled:=False;Sent:=0;Total:=0;
+ If Verb='POST' Then Begin
+  Assign(F,ModelPath);OldMode:=FileMode;FileMode:=0;{$I-}Reset(F,1);{$I+}
+  FileMode:=OldMode;If IOResult<>0 Then Begin
+   Error:='Fichier prepare inaccessible.';Exit;End;Opened:=True;
+  {$I-}Total:=FileSize(F);{$I+}
+  If (IOResult<>0) Or (Total<1) Or (Total>33554432) Then Begin
+   Error:='Taille du modele invalide.';CloseAll;Exit;
+  End;
+  Inc(Total,Prefix.Count+Suffix.Count);
+ End;
+ Session:=SFInternetOpen('CloneDRAW-PSP/1.0',0,Nil,Nil,0);
+ Timeout:=15000;
+ If Session<>Nil Then Begin
+  SFSetOption(Session,2,@Timeout,4);SFSetOption(Session,5,@Timeout,4);
+  SFSetOption(Session,6,@Timeout,4);
+  Connection:=SFInternetConnect(Session,'api.sketchfab.com',443,
+   Nil,Nil,3,0,0);
+ End;
+ { TLS valide, sans cookies, ni redirection, ni authentification implicite. }
+ Flags:=$80000000 Or $00800000 Or $00200000 Or $04000000 Or
+  $00080000 Or $00040000 Or $00000200;
+ Target:=Path+#0;
+ If Connection<>Nil Then Begin
+  Headers:=Verb+#0;
+  Request:=SFHttpOpen(Connection,@Headers[1],@Target[1],Nil,Nil,Nil,Flags,0);
+ End;
+ If Request=Nil Then Begin Error:='Connexion HTTPS impossible.';
+  CloseAll;Exit;End;
+ Headers:='Authorization: Token '+Token+#13#10+'Accept: application/json';
+ If Verb='POST' Then Headers:=Headers+#13#10+
+  'Content-Type: multipart/form-data; boundary='+Boundary;
+ Headers:=Headers+#13#10+#0;
+ FillChar(Input,SizeOf(Input),0);Input.Size:=SizeOf(Input);
+ Input.Header:=@Headers[1];Input.HeaderLength:=Length(Headers)-1;
+ Input.HeaderTotal:=Input.HeaderLength;Input.BufferTotal:=Total;
+ Good:=SFSend(Request,@Input,Nil,0,0);
+ If Good And (Verb='POST') Then Begin
+  Send(@Prefix.Data[0],Prefix.Count);
+  Repeat
+   {$I-}BlockRead(F,Chunk,SizeOf(Chunk),ReadCount);{$I+}
+   Good:=Good And (IOResult=0);
+   If Good And (ReadCount>0) Then Send(@Chunk[0],ReadCount);
+   HideMouseCursor;
+   FillRect(20,ScreenHeight-45,ScreenWidth-20,ScreenHeight-23,LightGray);
+   SetColor(Black);OutTextXY(28,ScreenHeight-38,
+    'Sketchfab : '+IntToStr(Round(Sent*100.0/Total))+'% - Echap : interrompre');
+   ShowMouseCursor;
+   If KeyPressed Then Begin K:=ReadKey;If K=#27 Then Begin
+    Cancelled:=True;Good:=False;End;End;
+  Until Not Good Or (ReadCount=0);
+  If Good Then Send(@Suffix.Data[0],Suffix.Count);
+ End;
+ If Good Then Good:=SFEnd(Request,Nil,0,0);
+ If Good Then Begin
+  Size:=4;Index:=0;Good:=SFQuery(Request,19 Or $20000000,@Code,Size,Index);
+ End;
+ If Good Then Repeat
+  Count:=0;Size:=SizeOf(Response.Data)-Response.Count;
+  If Size=0 Then Break;
+  Good:=SFRead(Request,@Response.Data[Response.Count],Size,Count);
+  If Count>Size Then Good:=False Else Inc(Response.Count,Count);
+ Until Not Good Or (Count=0);
+ If Good And (Code=201) And (Verb='POST') And
+  Not SketchUIDValid(SketchJSON(Response,'uid')) Then Begin
+  Size:=SizeOf(Location);Index:=0;
+  If SFQuery(Request,33,@Location[0],Size,Index) And
+   (Size>0) And (Size<SizeOf(Location)) Then Begin
+   LocationText:='';
+   For ValidateI:=0 To Min(254,Size-1) Do
+    LocationText:=LocationText+Location[ValidateI];
+   FoundUID:=SketchLocationUID(LocationText);
+   If FoundUID<>'' Then Begin
+    LocationText:='{"uid":"'+FoundUID+'"}';
+    Response.Count:=Length(LocationText);
+    Move(LocationText[1],Response.Data[0],Response.Count);
+   End;
+  End;
+ End;
+ CloseAll;
+ If Cancelled Then
+  Error:='Envoi interrompu. Verifier le compte avant de renvoyer.'
+ Else If Not Good Then
+  Error:='Erreur HTTPS. Envoi incertain : verifier le compte avant renvoi.'
+ Else If (Code<200) Or (Code>=300) Then Error:=SketchHTTPError(Code)
+ Else SketchRequest:=True;
+{$ELSE}
+ Error:='Envoi HTTPS disponible sous Windows avec Free Pascal.';
+{$ENDIF}
+End;
+
 Procedure MeshImportDialog(Target:Integer);
 Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
  X,Y,W,H,MX,MY,MB,Previous,Field,I,Code,OldX,OldY,PreviewW,PreviewH:Integer;
@@ -9297,6 +9661,374 @@ Begin
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
+Function SketchTempName(Var Name:String):Boolean;
+Var I:Integer;H,M,S,C:Word;Base:String;
+Begin
+ SketchTempName:=False;Base:=GetEnv('TEMP');If Base='' Then Base:='.';
+ If Base[Length(Base)]<>'\' Then Base:=Base+'\';
+ GetTime(H,M,S,C);Base:=Base+'psp-sketch-'+IntToStr(H)+IntToStr(M)+
+  IntToStr(S)+IntToStr(C)+'-';
+ For I:=0 To 999 Do Begin
+  Name:=Base+IntToStr(I)+'.obj';
+  If (Length(Name)<=230) And Not MeshExportExists(Name) Then Begin
+   SketchTempName:=True;Exit;
+  End;
+ End;
+End;
+Procedure RemoveSketchTemp(Const Name:String);
+Var F:File;Code:Integer;
+Begin
+ If Name='' Then Exit;Assign(F,Name);{$I-}Erase(F);{$I+}Code:=IOResult;
+End;
+Function SketchOpenPage(Const UID:String;Page:Integer):Boolean;
+Var URL:String;
+Begin
+ SketchOpenPage:=False;
+ If Page=0 Then URL:='https://sketchfab.com/settings/password'
+ Else If Page=1 Then URL:='https://sketchfab.com/models'
+ Else Begin
+  If Not SketchUIDValid(UID) Then Exit;
+  URL:='https://sketchfab.com/3d-models/'+UID;
+ End;
+ {$IFDEF SKETCH_NATIVE}
+ URL:=URL+#0;
+ SketchOpenPage:=SFOpenURL(Nil,'open',@URL[1],Nil,Nil,1)>32;
+ {$ENDIF}
+End;
+
+Procedure SketchfabDialog;
+Var D:TSketchMetadata;M:PMesh;O:TMeshOptions;
+ Prefix,Suffix:TSketchBuffer;Response:TSketchResponse;F:File;
+ Preview:PByteArr;Token,UID,Status,Message,Error,Name,Boundary,S,T:String;
+ X,Y,MX,MY,MB,Previous,Source,Tab,Field,PW,PH,I,J,OldX,OldY:Integer;
+ Code:LongWord;Bytes,LastPoll:LongInt;
+ Dirty,Rebuild,PreviewDirty,Done,Drag,ReplaceText,Info,Transform,
+ Center,SwapAxes,Uncertain,ShowToken:Boolean;
+ K,E:Char;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Changed(Geometry:Boolean);
+ Begin Rebuild:=Rebuild Or Geometry;PreviewDirty:=True;Dirty:=True;End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+23,True);SetColor(Black);
+  OutTextXY(X+L+6,Y+T+8,Caption);
+ End;
+ Procedure Check(L,T:Integer;Value:Boolean;Const Caption:String);
+ Begin
+  SetColor(Black);Rectangle(X+L,Y+T,X+L+12,Y+T+12);
+  If Value Then Begin Line(X+L+2,Y+T+6,X+L+5,Y+T+10);
+   Line(X+L+5,Y+T+10,X+L+11,Y+T+2);End;
+  OutTextXY(X+L+18,Y+T+3,Caption);
+ End;
+ Function FieldText(N:Integer):String;
+ Begin
+  Case N Of 0:FieldText:=D.Title;1:FieldText:=D.Tags;
+   2..5:FieldText:=D.Description[N-2];6:FieldText:=Token;
+   7:FieldText:=D.Password;Else FieldText:='';End;
+ End;
+ Procedure SetField(N:Integer;Const T:String);
+ Begin
+  Case N Of 0:D.Title:=Copy(T,1,48);1:D.Tags:=T;
+   2..5:D.Description[N-2]:=T;6:Token:=Copy(T,1,128);
+   7:D.Password:=Copy(T,1,64);End;
+ End;
+ Procedure Edit(N,L,T,BW:Integer;Masked:Boolean);
+ Var Text:String;J,Limit:Integer;
+ Begin
+  Text:=FieldText(N);
+  If Masked Then For J:=1 To Length(Text) Do Text[J]:='*';
+  Limit:=(BW-12) Div 8;
+  If Length(Text)>Limit Then Text:=Copy(Text,Length(Text)-Limit+1,Limit);
+  FillRect(X+L,Y+T,X+L+BW,Y+T+21,White);
+  If Field=N Then SetColor(Blue) Else SetColor(DarkGray);
+  Rectangle(X+L,Y+T,X+L+BW,Y+T+21);SetColor(Black);
+  OutTextXY(X+L+6,Y+T+7,Text);
+ End;
+ Procedure Draw;
+ Var PX,PY,OX,OY,J:Integer;Color:Byte;
+ Begin
+  If Rebuild Then Begin
+   ReleaseMesh(M);
+   If Not PrepareMeshExport(Layers[Source].Mesh,Layers[Source].MeshOptions,
+    Transform,Center,SwapAxes,False,1,M,Error) Then Message:=Error;
+   Rebuild:=False;
+  End;
+  If PreviewDirty Then Begin
+   If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);Preview:=Nil;
+   If M<>Nil Then Begin
+    If Not RenderMesh(M,O,PW,PH,True,Preview) Then
+     Message:='Apercu annule ou memoire insuffisante.';
+    MeshExportStream(M,0,True,False,False,F,Bytes);
+   End;
+   PreviewDirty:=False;
+  End;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Partager sur Sketchfab - modele et publication');
+  Button(20,40,180,'1. Modele');Button(210,40,180,'2. Publication');
+  Button(400,40,200,'3. Connexion / suivi');
+  SetColor(Blue);Line(X+20+Tab*190,Y+65,X+195+Tab*190,Y+65);
+  For PY:=0 To 195 Do For PX:=0 To 279 Do Begin
+   Color:=White;If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=LightGray;
+   OX:=PX-(280-PW) Div 2;OY:=PY-(196-PH) Div 2;
+   If (Preview<>Nil) And (OX>=0) And (OY>=0) And (OX<PW) And
+    (OY<PH) Then If Preview^[LongInt(OY)*PW+OX]<>255 Then
+     Color:=Preview^[LongInt(OY)*PW+OX];
+   PutPixel(X+20+PX,Y+82+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+19,Y+81,X+300,Y+278);
+  If Info And (M<>Nil) Then Begin
+   FillRect(X+21,Y+83,X+299,Y+276,White);SetColor(Black);
+   OutTextXY(X+28,Y+98,'Geometrie OBJ triangulee');
+   OutTextXY(X+28,Y+126,IntToStr(M^.VertexCount)+' sommets');
+   OutTextXY(X+28,Y+150,IntToStr(M^.TriangleCount)+' triangles');
+   OutTextXY(X+28,Y+174,'Poids OBJ : '+IntToStr(Bytes)+' o');
+   OutTextXY(X+28,Y+198,'Normales par face exportees');
+   OutTextXY(X+28,Y+222,'Sans textures ni couleurs');
+   OutTextXY(X+28,Y+246,'Camera locale non envoyee');
+  End;
+  SetColor(Black);
+  If M<>Nil Then OutTextXY(X+20,Y+292,IntToStr(M^.TriangleCount)+
+   ' triangles / '+IntToStr(Bytes)+' octets');
+  Button(20,312,132,'Informations');Button(168,312,132,'Vue initiale');
+  S:='Orthographique';If O.Perspective Then S:='Perspective';
+  Button(20,343,132,S);Button(168,343,132,'Solide / fil');
+  If Tab=0 Then Begin
+   Button(320,82,280,'Calque : '+Layers[Source].Name);
+   Check(320,125,Transform,'Appliquer transformations');
+   Check(320,150,Center,'Centrer le modele');
+   Check(320,175,SwapAxes,'Echanger Y / Z');
+   SetColor(Black);OutTextXY(X+320,Y+210,'Format : OBJ + normales');
+   OutTextXY(X+320,Y+234,'Geometrie seule. Pas de textures.');
+   OutTextXY(X+320,Y+258,'Glisser l''apercu pour tourner.');
+   OutTextXY(X+320,Y+282,'La vue locale n''est pas publiee.');
+   OutTextXY(X+320,Y+316,'Destination : api.sketchfab.com');
+   OutTextXY(X+320,Y+340,'TLS et proxy du systeme Windows');
+  End Else If Tab=1 Then Begin
+   OutTextXY(X+320,Y+82,'Titre (48)');Edit(0,320,98,280,False);
+   OutTextXY(X+320,Y+126,'Tags (espaces)');Edit(1,320,142,280,False);
+   OutTextXY(X+320,Y+170,'Description (4 lignes, 1023 max)');
+   For J:=0 To 3 Do Edit(2+J,320,188+J*25,280,False);
+   Check(320,300,D.PrivateModel,'Prive (offre compatible)');
+   Check(320,323,D.Published,'Publier apres traitement');
+   Check(320,346,D.AgeRestricted,'Contenu reserve aux adultes');
+  End Else Begin
+   OutTextXY(X+320,Y+82,'Cle API (non enregistree)');
+   Edit(6,320,98,280,Not ShowToken);
+   Check(320,132,ShowToken,'Afficher la cle');
+   Button(320,157,132,'Obtenir cle');Button(468,157,132,'Tester compte');
+   SetColor(Black);OutTextXY(X+320,Y+197,'Mot de passe modele prive');
+   Edit(7,320,214,280,True);
+   OutTextXY(X+320,Y+251,'Etat : '+Copy(Status,1,25));
+   OutTextXY(X+320,Y+274,'UID : '+Copy(UID,1,16));
+   OutTextXY(X+368,Y+288,Copy(UID,17,16));
+   Button(320,300,132,'Verifier etat');Button(468,300,132,'Voir modele');
+   Button(320,335,280,'Ouvrir Sketchfab / mes modeles');
+  End;
+  Button(20,385,180,'Aide');S:='Annuler';If UID<>'' Then S:='Fermer';
+  Button(320,385,132,S);S:='Envoyer';If UID<>'' Then S:='Envoye';
+  Button(468,385,132,S);SetColor(Black);
+  S:='Brouillon';If D.Published Then S:='Publication demandee';
+  If D.PrivateModel Then S:=S+' / prive' Else S:=S+' / non prive';
+  OutTextXY(X+20,Y+413,S);
+  If Message<>'' Then OutTextXY(X+20,Y+429,Copy(Message,1,73));
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure CheckAccount;
+ Begin
+  Prefix.Count:=0;Suffix.Count:=0;
+  If SketchRequest(Token,'GET','/v3/me','','',Prefix,Suffix,
+   Code,Response,Error) Then Begin
+   S:=SketchJSON(Response,'username');
+   If S='' Then S:='Compte authentifie';Message:='Compte : '+S;
+  End Else Message:=Error;Dirty:=True;
+ End;
+ Procedure CheckStatus;
+ Var H,Mn,Sec,Hund:Word;NowValue,Delta:LongInt;
+ Begin
+  GetTime(H,Mn,Sec,Hund);NowValue:=LongInt(H)*3600+Mn*60+Sec;
+  Delta:=NowValue-LastPoll;If Delta<0 Then Inc(Delta,86400);
+  If (LastPoll>=0) And (Delta<5) Then Begin
+   Message:='Attendre cinq secondes avant une nouvelle verification.';
+   Dirty:=True;Exit;
+  End;
+  LastPoll:=NowValue;
+  If Not SketchUIDValid(UID) Then Begin Message:='Aucun modele envoye.';
+   Dirty:=True;Exit;End;
+  Prefix.Count:=0;Suffix.Count:=0;
+  If SketchRequest(Token,'GET','/v3/models/'+UID,'','',Prefix,Suffix,
+   Code,Response,Error) Then Begin
+   S:=UpperStr(SketchJSON(Response,'processing'));
+   If S='' Then S:=UpperStr(SketchJSON(Response,'processingStatus'));
+   If S='SUCCEEDED' Then Status:='Traitement termine'
+   Else If S='FAILED' Then Status:='Traitement echoue'
+   Else If S='PENDING' Then Status:='En attente'
+   Else If S='PROCESSING' Then Status:='Traitement en cours'
+   Else Status:='Etat non disponible';Message:=Status;
+  End Else Message:=Error;Dirty:=True;
+ End;
+ Procedure Share;
+ Begin
+  If Rebuild Then Draw;
+  If UID<>'' Then Begin Message:='Modele deja envoye. Utiliser Verifier etat.';
+   Tab:=2;Dirty:=True;Exit;End;
+  If Not SketchMetadataValid(D,Error) Then Begin
+   Message:=Error;Tab:=1;Dirty:=True;Exit;End;
+  If Not SketchTokenValid(Token) Then Begin
+   Message:='Saisir une cle API valide.';Tab:=2;Field:=6;
+   Dirty:=True;Exit;End;
+  If M=Nil Then Begin Message:='Geometrie indisponible.';Dirty:=True;Exit;End;
+  If Uncertain Then
+   If Not YesNoDialog('Envoi precedent incertain',
+    'Risque de doublon. Renvoyer quand meme ?') Then
+    Begin Dirty:=True;Exit;End;
+  Boundary:=SketchBoundary(D);
+  If Not BuildSketchMultipart(D,Boundary,0,Prefix,Suffix) Then Begin
+   Message:='Impossible de preparer les informations.';Dirty:=True;Exit;End;
+  If Not SketchTempName(Name) Then Begin
+   Message:='Dossier temporaire indisponible.';Dirty:=True;Exit;End;
+  If Not WriteMeshExport(M,Name,0,True,True,Error) Then Begin
+   Message:=Error;Dirty:=True;Exit;End;
+  S:='Envoyer en brouillon';If D.Published Then S:='Publier apres traitement';
+  If D.PrivateModel Then S:=S+' (prive)' Else S:=S+' (non prive)';
+  If Not YesNoDialog(S,
+   'Envoyer modele + infos a Sketchfab ?') Then
+   Begin RemoveSketchTemp(Name);Name:='';Dirty:=True;Exit;End;
+  If SketchRequest(Token,'POST','/v3/models',Name,Boundary,Prefix,Suffix,
+   Code,Response,Error) Then Begin
+   UID:=SketchJSON(Response,'uid');
+   If SketchUIDValid(UID) Then Begin
+    Status:='Envoi accepte';Message:='Verifier ensuite le traitement.';
+    Uncertain:=False;
+   End Else Begin UID:='';Uncertain:=True;
+    Message:='Envoi accepte sans UID lisible. Verifier le compte.';End;
+  End Else Begin
+   Uncertain:=(Code=0) Or (Code>=500) Or
+    ((Code>=200) And (Code<300));Message:=Error;
+  End;
+  RemoveSketchTemp(Name);Name:='';FillChar(Prefix,SizeOf(Prefix),0);
+  FillChar(Suffix,SizeOf(Suffix),0);Tab:=2;Dirty:=True;
+  GetMouseStateLocal(MX,MY,Previous);
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;Source:=ActiveLayer;
+ If Layers[Source].Mesh=Nil Then Begin
+  Source:=-1;For I:=0 To LayerCount-1 Do
+   If (Source<0) And (Layers[I].Mesh<>Nil) Then Source:=I;
+ End;
+ If Source<0 Then Begin
+  ShowDialog('Sketchfab','Importez un modele 3D avant de le partager.');Exit;
+ End;
+ FillChar(D,SizeOf(D),0);D.Title:=Layers[Source].Name;
+ Token:='';UID:='';Status:='Non envoye';Message:='';Name:='';LastPoll:=-1;
+ M:=Nil;Preview:=Nil;Bytes:=0;DefaultMeshOptions(O);
+ Transform:=False;Center:=False;SwapAxes:=False;Uncertain:=False;
+ ShowToken:=False;Info:=False;Tab:=0;Field:=0;ReplaceText:=True;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ If LongInt(ImgW)*196>LongInt(ImgH)*280 Then Begin
+  PW:=280;PH:=Max(1,Round(ImgH*280.0/ImgW));
+ End Else Begin PH:=196;PW:=Max(1,Round(ImgW*196.0/ImgH));End;
+ Done:=False;Dirty:=True;Rebuild:=True;PreviewDirty:=True;Drag:=False;
+ GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(20,40,600,63) Then Begin
+    Tab:=Min(2,(MX-X-20) Div 190);Field:=0;
+    If Tab=2 Then Field:=6;ReplaceText:=True;Dirty:=True;
+   End Else If Hit(20,312,152,335) Then Begin Info:=Not Info;Dirty:=True;
+   End Else If Hit(168,312,300,335) Then Begin
+    DefaultMeshOptions(O);Changed(False);
+   End Else If Hit(20,343,152,366) Then Begin
+    O.Perspective:=Not O.Perspective;Changed(False);
+   End Else If Hit(168,343,300,366) Then Begin
+    O.Mode:=(O.Mode+1) Mod 3;Changed(False);
+   End Else If Hit(20,385,200,408) Then Begin
+    ShowDialog('Partager sur Sketchfab',
+     'Brouillon par defaut. Prive/mot de passe selon votre offre Sketchfab.');
+    Dirty:=True;GetMouseStateLocal(MX,MY,Previous);
+   End Else If Hit(320,385,452,408) Then Done:=True
+   Else If Hit(468,385,600,408) Then Share
+   Else If Hit(20,82,300,278) And Not Info Then Begin
+    Drag:=True;OldX:=MX;OldY:=MY;
+   End Else If Tab=0 Then Begin
+    If Hit(320,82,600,105) And (UID='') Then Begin
+     Repeat Source:=(Source+1) Mod LayerCount;
+     Until Layers[Source].Mesh<>Nil;Changed(True);
+    End Else If Hit(320,125,600,137) Then Begin
+     Transform:=Not Transform;Changed(True);
+    End Else If Hit(320,150,600,162) Then Begin
+     Center:=Not Center;Changed(True);
+    End Else If Hit(320,175,600,187) Then Begin
+     SwapAxes:=Not SwapAxes;Changed(True);
+    End;
+   End Else If Tab=1 Then Begin
+    If Hit(320,98,600,119) Then Field:=0
+    Else If Hit(320,142,600,163) Then Field:=1
+    Else If Hit(320,188,600,284) Then
+     Field:=2+Min(3,(MY-Y-188) Div 25)
+    Else If Hit(320,300,600,312) Then D.PrivateModel:=Not D.PrivateModel
+    Else If Hit(320,323,600,335) Then D.Published:=Not D.Published
+    Else If Hit(320,346,600,358) Then D.AgeRestricted:=Not D.AgeRestricted;
+    ReplaceText:=True;Dirty:=True;
+   End Else Begin
+    If Hit(320,98,600,119) Then Begin Field:=6;ReplaceText:=True;End
+    Else If Hit(320,214,600,235) Then Begin Field:=7;ReplaceText:=True;End
+    Else If Hit(320,132,600,144) Then ShowToken:=Not ShowToken
+    Else If Hit(320,157,452,180) Then SketchOpenPage('',0)
+    Else If Hit(468,157,600,180) Then CheckAccount
+    Else If Hit(320,300,452,323) Then CheckStatus
+    Else If Hit(468,300,600,323) Then Begin
+     If Not SketchOpenPage(UID,2) Then Message:='Aucun lien de modele valide.';
+    End Else If Hit(320,335,600,358) Then SketchOpenPage('',1);
+    Dirty:=True;GetMouseStateLocal(MX,MY,Previous);
+   End;
+  End;
+  If Drag And ((MB And 1)<>0) And
+   ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   O.RY:=Max(-3600,Min(3600,O.RY+(MX-OldX)*5));
+   O.RX:=Max(-3600,Min(3600,O.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Changed(False);
+  End;
+  If (MB And 1)=0 Then Drag:=False;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then E:=ReadKey Else Case K Of
+    #27:Done:=True;
+    #13:If Tab=1 Then Begin
+     If Field<2 Then Inc(Field) Else Field:=2+(Field-1) Mod 4;
+     ReplaceText:=True;Dirty:=True;End;
+    #9:Begin
+     If Tab=1 Then Field:=(Field+1) Mod 6
+     Else If Tab=2 Then Field:=6+(Field+1) Mod 2;
+     ReplaceText:=True;Dirty:=True;
+    End;
+    #1:ReplaceText:=True;
+    #8:If Tab>0 Then Begin
+     S:=FieldText(Field);If ReplaceText Then S:=''
+     Else Delete(S,Length(S),1);SetField(Field,S);
+     ReplaceText:=False;Dirty:=True;
+    End;
+    Else If (K>=' ') And (Tab>0) Then Begin
+     S:=FieldText(Field);If ReplaceText Then S:='';
+     If Length(S)<255 Then S:=S+K;SetField(Field,S);
+     ReplaceText:=False;Dirty:=True;
+    End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);ReleaseMesh(M);
+ ClearSketchSecrets(Token,D);FillChar(Prefix,SizeOf(Prefix),0);
+ FillChar(Response,SizeOf(Response),0);
+ FillChar(S,SizeOf(S),0);FillChar(T,SizeOf(T),0);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
@@ -9358,6 +10090,7 @@ Begin
    1:MeshMergeDialog;
    2:MeshExportDialog;
    3:PanoramaDialog;
+   4:SketchfabDialog;
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

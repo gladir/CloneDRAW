@@ -80,6 +80,10 @@ Const
  CMD_ABOUT = 6;
  CMD_RESOURCES = 7;
  CMD_TIPS = 8;
+ CMD_ZOOM_IN = 9;
+ CMD_ZOOM_OUT = 10;
+ CMD_ZOOM_RESET = 11;
+ ZOOM_LEVELS: Array[0..5] Of Integer = (25,50,100,200,400,800);
  
  OBJ_RECT = 0;
  OBJ_ELLIPSE = 1;
@@ -232,6 +236,78 @@ Var
  TextEditIndex, TextCursor: Integer;
  BezierStage: Integer;
  BezierObject: TGraphicObject;
+ ZoomIndex: Integer;
+ ViewX, ViewY: Real;
+ GlyphRows: Array[0..255,0..7] Of Byte;
+
+Function ZoomScale: Real;
+Begin
+ ZoomScale := ZOOM_LEVELS[ZoomIndex]/100;
+End;
+
+Function ScreenX(X: Real): Integer;
+Begin
+ { Coordonnees locales au viewport de dessin, sans les barres d'interface. }
+ ScreenX := Round((X-ViewX)*ZoomScale);
+End;
+
+Function ScreenY(Y: Real): Integer;
+Begin
+ ScreenY := Round((Y-ViewY)*ZoomScale);
+End;
+
+Function DocumentX(X: Integer): Integer;
+Begin
+ DocumentX := Round(ViewX+(X-TOOLBAR_WIDTH)/ZoomScale);
+End;
+
+Function DocumentY(Y: Integer): Integer;
+Begin
+ DocumentY := Round(ViewY+(Y-MENUBAR_HEIGHT)/ZoomScale);
+End;
+
+Procedure ResetZoom;
+Begin
+ ZoomIndex := 2;
+ ViewX := 0;
+ ViewY := 0;
+ StatusMessage := 'Zoom 100 %.';
+ NeedsRedraw := True;
+End;
+
+Procedure ChangeZoom(Step, X, Y: Integer);
+Var PX, PY, VisibleW, VisibleH: Real; S: String;
+Begin
+ If (ZoomIndex+Step < 0) Or (ZoomIndex+Step > 5) Then Begin
+  StatusMessage := 'Limite de zoom atteinte (25 % a 800 %).';
+  NeedsRedraw := True;
+  Exit;
+ End;
+ PX := ViewX+(X-TOOLBAR_WIDTH)/ZoomScale;
+ PY := ViewY+(Y-MENUBAR_HEIGHT)/ZoomScale;
+ Inc(ZoomIndex,Step);
+ ViewX := PX-(X-TOOLBAR_WIDTH)/ZoomScale;
+ ViewY := PY-(Y-MENUBAR_HEIGHT)/ZoomScale;
+ VisibleW := (ScreenWidth-TOOLBAR_WIDTH)/ZoomScale;
+ VisibleH := (ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT)/ZoomScale;
+ If VisibleW >= ScreenWidth-TOOLBAR_WIDTH Then
+  ViewX := (ScreenWidth-TOOLBAR_WIDTH-VisibleW)/2
+ Else Begin
+  If ViewX < 0 Then ViewX := 0;
+  If ViewX > ScreenWidth-TOOLBAR_WIDTH-VisibleW Then
+   ViewX := ScreenWidth-TOOLBAR_WIDTH-VisibleW;
+ End;
+ If VisibleH >= ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT Then
+  ViewY := (ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-VisibleH)/2
+ Else Begin
+  If ViewY < 0 Then ViewY := 0;
+  If ViewY > ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-VisibleH Then
+   ViewY := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-VisibleH;
+ End;
+ Str(ZOOM_LEVELS[ZoomIndex],S);
+ StatusMessage := 'Zoom '+S+' % : clic gauche = agrandir, droit = reduire.';
+ NeedsRedraw := True;
+End;
 
 Procedure InitMouse;
 {$IFNDEF FPC}
@@ -296,6 +372,7 @@ Begin
 End;
 
 Procedure InitGraphics;
+Var C, X, Y: Integer;
 Begin
  GraphDriver := VGA;
  GraphMode := VGAHi;
@@ -310,6 +387,19 @@ Begin
  { En mode VGA, SetBkColor remappe la couleur 0 : conserver le noir.
    Les fonds de l'interface sont peints explicitement avec Bar. }
  SetBkColor(COLOR_TEXT);
+ ClearDevice;
+ SetTextStyle(DefaultFont,HorizDir,1);
+ FillChar(GlyphRows,SizeOf(GlyphRows),0);
+ For C := 32 To 255 Do Begin
+  SetFillStyle(SolidFill,COLOR_TEXT);
+  Bar(0,0,7,7);
+  SetColor(COLOR_WINDOW);
+  OutTextXY(0,0,Chr(C));
+  For Y := 0 To 7 Do
+   For X := 0 To 7 Do
+    If GetPixel(X,Y)=COLOR_WINDOW Then
+     GlyphRows[C,Y] := GlyphRows[C,Y] Or (1 Shl X);
+ End;
  ClearDevice;
 End;
 
@@ -364,7 +454,7 @@ Begin
   TOOL_PENCIL: S := 'Crayon (6 / N) - tracer a main levee';
   TOOL_PEN: S := 'Plume (7 / P) - courbe par deux cliquer-glisser';
   TOOL_TEXT: S := 'Texte (8 / T) - cliquer puis saisir / modifier';
-  TOOL_ZOOM: S := 'Loupe - non implementee';
+  TOOL_ZOOM: S := 'Loupe (9 / Z) - gauche : agrandir, droit : reduire';
   TOOL_HAND: S := 'Main - non implementee';
  End;
  ToolTipText := S;
@@ -524,14 +614,14 @@ Begin
   Line(X,B,R,B);
   Line(R,Y,R,B);
   If I = CurrentTool Then SetColor(COLOR_WINDOW)
-  Else If I > TOOL_TEXT Then SetColor(COLOR_BORDER)
+  Else If I > TOOL_ZOOM Then SetColor(COLOR_BORDER)
   Else SetColor(COLOR_TEXT);
   DrawToolIcon(X+6,Y+2,I);
  End;
 End;
 
 Procedure DrawStatusBar;
-Var S: String;
+Var S, Z: String;
 Begin
  SetFillStyle(SolidFill, COLOR_BG);
  Bar(0, ScreenHeight - STATUSBAR_HEIGHT, ScreenWidth - 1, ScreenHeight - 1);
@@ -540,30 +630,36 @@ Begin
  
  SetColor(COLOR_TEXT);
  Str(ObjectCount, S);
+ Str(ZOOM_LEVELS[ZoomIndex],Z);
  OutTextXY(5, ScreenHeight - STATUSBAR_HEIGHT + 5,
-           'Objets: '+S+'  '+StatusMessage);
+           'Objets: '+S+'  '+Z+'%  '+StatusMessage);
 End;
 
 Procedure DrawCanvas;
 Var
  X1, Y1: Integer;
 Begin
- SetFillStyle(SolidFill, 15);
- Bar(TOOLBAR_WIDTH, MENUBAR_HEIGHT, ScreenWidth - 1, ScreenHeight - STATUSBAR_HEIGHT - 1);
+ SetFillStyle(SolidFill, COLOR_BORDER);
+ Bar(0,0,ScreenWidth-TOOLBAR_WIDTH-1,
+     ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1);
+ SetFillStyle(SolidFill,COLOR_WINDOW);
+ Bar(ScreenX(0),ScreenY(0),ScreenX(ScreenWidth-TOOLBAR_WIDTH)-1,
+     ScreenY(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT)-1);
  If Not GridVisible Then Exit;
  
  SetColor(14);
- X1 := TOOLBAR_WIDTH + 20;
- While X1 < ScreenWidth Do
+ X1 := 20;
+ While X1 < ScreenWidth-TOOLBAR_WIDTH Do
  Begin
-  Line(X1, MENUBAR_HEIGHT, X1, ScreenHeight - STATUSBAR_HEIGHT - 1);
+  Line(ScreenX(X1),ScreenY(0),ScreenX(X1),
+       ScreenY(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT)-1);
   X1 := X1 + 20;
  End;
  
- Y1 := MENUBAR_HEIGHT + 20;
- While Y1 < ScreenHeight - STATUSBAR_HEIGHT Do
+ Y1 := 20;
+ While Y1 < ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT Do
  Begin
-  Line(TOOLBAR_WIDTH, Y1, ScreenWidth - 1, Y1);
+  Line(ScreenX(0),ScreenY(Y1),ScreenX(ScreenWidth-TOOLBAR_WIDTH)-1,ScreenY(Y1));
   Y1 := Y1 + 20;
  End;
 End;
@@ -588,24 +684,48 @@ Begin
  SetColor(COLOR_HIGHLIGHT);
  For I := 0 To 1 Do Begin
   A := I*3; C := I+1;
-  AX := TOOLBAR_WIDTH+Round(Obj.Path.Points[A].X);
-  AY := MENUBAR_HEIGHT+Round(Obj.Path.Points[A].Y);
-  CX := TOOLBAR_WIDTH+Round(Obj.Path.Points[C].X);
-  CY := MENUBAR_HEIGHT+Round(Obj.Path.Points[C].Y);
+  AX := ScreenX(Obj.Path.Points[A].X);
+  AY := ScreenY(Obj.Path.Points[A].Y);
+  CX := ScreenX(Obj.Path.Points[C].X);
+  CY := ScreenY(Obj.Path.Points[C].Y);
   Line(AX,AY,CX,CY);
   Rectangle(AX-3,AY-3,AX+3,AY+3);
   Circle(CX,CY,3);
   If Mirrors Then Begin
    CX := 2*AX-CX; CY := 2*AY-CY;
-   If CX < TOOLBAR_WIDTH Then CX := TOOLBAR_WIDTH;
-   If CX >= ScreenWidth Then CX := ScreenWidth-1;
-   If CY < MENUBAR_HEIGHT Then CY := MENUBAR_HEIGHT;
-   If CY >= ScreenHeight-STATUSBAR_HEIGHT Then
-    CY := ScreenHeight-STATUSBAR_HEIGHT-1;
+   If CX < 0 Then CX := 0;
+   If CX >= ScreenWidth-TOOLBAR_WIDTH Then CX := ScreenWidth-TOOLBAR_WIDTH-1;
+   If CY < 0 Then CY := 0;
+   If CY >= ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT Then
+    CY := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1;
    Line(AX,AY,CX,CY);
    Circle(CX,CY,3);
   End;
  End;
+End;
+
+Procedure DrawZoomedText(Obj: TGraphicObject);
+Var X, Y, L, T, R, B, SX, SY, C: Integer;
+Begin
+ L := ScreenX(Obj.TextObj.X); T := ScreenY(Obj.TextObj.Y);
+ R := ScreenX(Obj.TextObj.X+Length(Obj.TextObj.Text)*8)-1;
+ B := ScreenY(Obj.TextObj.Y+8)-1;
+ If L < 0 Then L := 0;
+ If T < 0 Then T := 0;
+ If R >= ScreenWidth-TOOLBAR_WIDTH Then R := ScreenWidth-TOOLBAR_WIDTH-1;
+ If B >= ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT Then
+  B := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1;
+ For Y := T To B Do
+  For X := L To R Do Begin
+   SX := Trunc(ViewX+(X+0.5)/ZoomScale-Obj.TextObj.X);
+   SY := Trunc(ViewY+(Y+0.5)/ZoomScale-Obj.TextObj.Y);
+   If (SX >= 0) And (SX < Length(Obj.TextObj.Text)*8) And
+      (SY >= 0) And (SY < 8) Then Begin
+    C := Ord(Obj.TextObj.Text[SX Div 8+1]);
+    If (GlyphRows[C,SY] And (1 Shl (SX Mod 8))) <> 0 Then
+     PutPixel(X,Y,Obj.TextObj.Color);
+   End;
+  End;
 End;
 
 Procedure DrawGraphicObject(Obj: TGraphicObject);
@@ -618,10 +738,10 @@ Begin
  Case Obj.ObjType Of
   OBJ_RECT:
   Begin
-   X1 := Trunc(TOOLBAR_WIDTH + Obj.Rectangle.X);
-   Y1 := Trunc(MENUBAR_HEIGHT + Obj.Rectangle.Y);
-   X2 := Trunc(X1 + Obj.Rectangle.Width);
-   Y2 := Trunc(Y1 + Obj.Rectangle.Height);
+   X1 := ScreenX(Obj.Rectangle.X);
+   Y1 := ScreenY(Obj.Rectangle.Y);
+   X2 := ScreenX(Obj.Rectangle.X+Obj.Rectangle.Width);
+   Y2 := ScreenY(Obj.Rectangle.Y+Obj.Rectangle.Height);
    
    SetColor(Obj.Rectangle.StrokeColor);
    Rectangle(X1, Y1, X2, Y2);
@@ -638,25 +758,26 @@ Begin
 
   OBJ_ELLIPSE:
   Begin
-   X1 := Trunc(TOOLBAR_WIDTH + Obj.Ellipse.CX);
-   Y1 := Trunc(MENUBAR_HEIGHT + Obj.Ellipse.CY);
+   X1 := ScreenX(Obj.Ellipse.CX);
+   Y1 := ScreenY(Obj.Ellipse.CY);
    
    SetColor(Obj.Ellipse.StrokeColor);
-   Ellipse(X1, Y1, 0, 360, Round(Obj.Ellipse.RX), Round(Obj.Ellipse.RY));
+   Ellipse(X1, Y1, 0, 360, Round(Obj.Ellipse.RX*ZoomScale),
+           Round(Obj.Ellipse.RY*ZoomScale));
    
    If Obj.Ellipse.Selected Then
    Begin
     SetColor(COLOR_HIGHLIGHT);
-    Circle(X1, Y1, Trunc(Obj.Ellipse.RX) + 2);
+    Circle(X1, Y1, Round(Obj.Ellipse.RX*ZoomScale) + 2);
    End;
   End;
   
   OBJ_LINE:
   Begin
-   X1 := Trunc(TOOLBAR_WIDTH + Obj.Line.X1);
-   Y1 := Trunc(MENUBAR_HEIGHT + Obj.Line.Y1);
-   X2 := Trunc(TOOLBAR_WIDTH + Obj.Line.X2);
-   Y2 := Trunc(MENUBAR_HEIGHT + Obj.Line.Y2);
+   X1 := ScreenX(Obj.Line.X1);
+   Y1 := ScreenY(Obj.Line.Y1);
+   X2 := ScreenX(Obj.Line.X2);
+   Y2 := ScreenY(Obj.Line.Y2);
    
    SetColor(Obj.Line.StrokeColor);
    Line(X1, Y1, X2, Y2);
@@ -675,8 +796,7 @@ Begin
    P := BezierPoint(Obj,0);
    For I := 1 To BEZIER_STEPS Do Begin
     Q := BezierPoint(Obj,I/BEZIER_STEPS);
-    Line(TOOLBAR_WIDTH+Round(P.X),MENUBAR_HEIGHT+Round(P.Y),
-         TOOLBAR_WIDTH+Round(Q.X),MENUBAR_HEIGHT+Round(Q.Y));
+    Line(ScreenX(P.X),ScreenY(P.Y),ScreenX(Q.X),ScreenY(Q.Y));
     P := Q;
    End;
   End;
@@ -684,21 +804,20 @@ Begin
   Begin
    SetColor(Obj.Path.StrokeColor);
    If Obj.Path.PointCount = 1 Then
-    PutPixel(TOOLBAR_WIDTH+Round(Obj.Path.Points[0].X),
-             MENUBAR_HEIGHT+Round(Obj.Path.Points[0].Y),Obj.Path.StrokeColor);
+    PutPixel(ScreenX(Obj.Path.Points[0].X),
+             ScreenY(Obj.Path.Points[0].Y),Obj.Path.StrokeColor);
    For I := 1 To Obj.Path.PointCount-1 Do
-    Line(TOOLBAR_WIDTH+Round(Obj.Path.Points[I-1].X),
-         MENUBAR_HEIGHT+Round(Obj.Path.Points[I-1].Y),
-         TOOLBAR_WIDTH+Round(Obj.Path.Points[I].X),
-         MENUBAR_HEIGHT+Round(Obj.Path.Points[I].Y));
+    Line(ScreenX(Obj.Path.Points[I-1].X),
+         ScreenY(Obj.Path.Points[I-1].Y),
+         ScreenX(Obj.Path.Points[I].X),
+         ScreenY(Obj.Path.Points[I].Y));
   End;
   OBJ_TEXT:
   Begin
-   X1 := Trunc(TOOLBAR_WIDTH + Obj.TextObj.X);
-   Y1 := Trunc(MENUBAR_HEIGHT + Obj.TextObj.Y);
-   
-   SetColor(Obj.TextObj.Color);
-   OutTextXY(X1, Y1, Obj.TextObj.Text);
+   If ZoomIndex = 2 Then Begin
+    SetColor(Obj.TextObj.Color);
+    OutTextXY(ScreenX(Obj.TextObj.X),ScreenY(Obj.TextObj.Y),Obj.TextObj.Text);
+   End Else DrawZoomedText(Obj);
   End;
  End;
 End;
@@ -794,7 +913,8 @@ Begin
  If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
  For I := 0 To N-1 Do Begin
   HandlePosition(SelectedObject,I,HX,HY);
-  If (Abs(X-HX) <= 4) And (Abs(Y-HY) <= 4) Then Begin
+  If (Abs((X-HX)*ZoomScale) <= 4) And
+     (Abs((Y-HY)*ZoomScale) <= 4) Then Begin
    SelectionHandleHit := I;
    Exit;
   End;
@@ -802,19 +922,20 @@ Begin
 End;
 
 Function ObjectHit(Index, X, Y: Integer): Boolean;
-Var B: TBounds; DX, DY, U, D: Real; I, J: Integer; P, Q: TPoint2D;
+Var B: TBounds; DX, DY, U, D, Margin: Real; I, J: Integer; P, Q: TPoint2D;
 Begin
  ObjectHit := False;
  If Not Objects[Index].Visible Then Exit;
  B := ObjectBounds(Objects[Index]);
+ Margin := 5/ZoomScale;
  Case Objects[Index].ObjType Of
-  OBJ_RECT: ObjectHit := (X >= B.L-3) And (X <= B.R+3) And
-                         (Y >= B.T-3) And (Y <= B.B+3);
+  OBJ_RECT: ObjectHit := (X >= B.L-3/ZoomScale) And (X <= B.R+3/ZoomScale) And
+                         (Y >= B.T-3/ZoomScale) And (Y <= B.B+3/ZoomScale);
   OBJ_ELLIPSE: Begin
    DX := MaxReal(Objects[Index].Ellipse.RX,1);
    DY := MaxReal(Objects[Index].Ellipse.RY,1);
-   ObjectHit := Sqr((X-Objects[Index].Ellipse.CX)/(DX+3))+
-                Sqr((Y-Objects[Index].Ellipse.CY)/(DY+3)) <= 1;
+   ObjectHit := Sqr((X-Objects[Index].Ellipse.CX)/(DX+3/ZoomScale))+
+                Sqr((Y-Objects[Index].Ellipse.CY)/(DY+3/ZoomScale)) <= 1;
   End;
   OBJ_LINE: Begin
    DX := Objects[Index].Line.X2-Objects[Index].Line.X1;
@@ -825,7 +946,7 @@ Begin
                        (Y-Objects[Index].Line.Y1)*DY)/D;
    U := MaxReal(0,MinReal(1,U));
    ObjectHit := Sqr(X-Objects[Index].Line.X1-U*DX)+
-                Sqr(Y-Objects[Index].Line.Y1-U*DY) <= 25;
+                Sqr(Y-Objects[Index].Line.Y1-U*DY) <= Sqr(Margin);
   End;
   OBJ_BEZIER: Begin
    P := BezierPoint(Objects[Index],0);
@@ -835,7 +956,7 @@ Begin
     D := Sqr(DX)+Sqr(DY); U := 0;
     If D > 0 Then U := ((X-P.X)*DX+(Y-P.Y)*DY)/D;
     U := MaxReal(0,MinReal(1,U));
-    If Sqr(X-P.X-U*DX)+Sqr(Y-P.Y-U*DY) <= 25 Then Begin
+    If Sqr(X-P.X-U*DX)+Sqr(Y-P.Y-U*DY) <= Sqr(Margin) Then Begin
      ObjectHit := True; Exit;
     End;
     P := Q;
@@ -851,7 +972,7 @@ Begin
                        (Y-Objects[Index].Path.Points[J].Y)*DY)/D;
     U := MaxReal(0,MinReal(1,U));
     If Sqr(X-Objects[Index].Path.Points[J].X-U*DX)+
-       Sqr(Y-Objects[Index].Path.Points[J].Y-U*DY) <= 25 Then Begin
+       Sqr(Y-Objects[Index].Path.Points[J].Y-U*DY) <= Sqr(Margin) Then Begin
      ObjectHit := True; Exit;
     End;
    End;
@@ -868,8 +989,7 @@ Begin
  B := ObjectBounds(Objects[SelectedObject]);
  SetColor(COLOR_HIGHLIGHT);
  SetLineStyle(DottedLn,0,NormWidth);
- Rectangle(TOOLBAR_WIDTH+Round(B.L),MENUBAR_HEIGHT+Round(B.T),
-           TOOLBAR_WIDTH+Round(B.R),MENUBAR_HEIGHT+Round(B.B));
+ Rectangle(ScreenX(B.L),ScreenY(B.T),ScreenX(B.R),ScreenY(B.B));
  SetLineStyle(SolidLn,0,NormWidth);
  If Objects[SelectedObject].ObjType = OBJ_BEZIER Then
   DrawBezierHandles(Objects[SelectedObject],False);
@@ -879,7 +999,7 @@ Begin
  If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
  For I := 0 To N-1 Do Begin
   HandlePosition(SelectedObject,I,X,Y);
-  Inc(X,TOOLBAR_WIDTH); Inc(Y,MENUBAR_HEIGHT);
+  X := ScreenX(X); Y := ScreenY(Y);
   SetFillStyle(SolidFill,COLOR_WINDOW);
   Bar(X-3,Y-3,X+3,Y+3);
   Rectangle(X-3,Y-3,X+3,Y+3);
@@ -901,9 +1021,9 @@ Var X, Y, I: Integer; DX, DY: Real; B: TBounds; Obj: TGraphicObject;
 Begin
  If Not EditingObject Then Exit;
  X := Round(MaxReal(0,MinReal(ScreenWidth-TOOLBAR_WIDTH-1,
-                             MouseX-TOOLBAR_WIDTH)));
+                             DocumentX(MouseX))));
  Y := Round(MaxReal(0,MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1,
-                             MouseY-MENUBAR_HEIGHT)));
+                             DocumentY(MouseY))));
  Obj := EditOriginal;
  B := EditBounds;
  DX := X-EditX; DY := Y-EditY;
@@ -1010,9 +1130,9 @@ Procedure AddPencilPoint;
 Var X, Y, N: Integer;
 Begin
  X := Round(MaxReal(0,MinReal(ScreenWidth-TOOLBAR_WIDTH-1,
-                             MouseX-TOOLBAR_WIDTH)));
+                             DocumentX(MouseX))));
  Y := Round(MaxReal(0,MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1,
-                             MouseY-MENUBAR_HEIGHT)));
+                             DocumentY(MouseY))));
  N := PencilObject.Path.PointCount;
  If N > 0 Then
   If (PencilObject.Path.Points[N-1].X=X) And
@@ -1040,9 +1160,9 @@ Procedure UpdateBezier;
 Var X, Y, I: Integer;
 Begin
  X := Round(MaxReal(0,MinReal(ScreenWidth-TOOLBAR_WIDTH-1,
-                             MouseX-TOOLBAR_WIDTH)));
+                             DocumentX(MouseX))));
  Y := Round(MaxReal(0,MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1,
-                             MouseY-MENUBAR_HEIGHT)));
+                             DocumentY(MouseY))));
  Case BezierStage Of
   1: Begin
    BezierObject.Path.Points[1].X := X;
@@ -1091,13 +1211,23 @@ Begin
  If MouseX < TOOLBAR_WIDTH Then Begin
   I := ToolHitTest(MouseX, MouseY);
   If I >= 0 Then
-   If I <= TOOL_TEXT Then CurrentTool := I
+   If I <= TOOL_ZOOM Then CurrentTool := I
    Else StatusMessage := 'Outil non implemente.';
   Exit;
  End;
  
- CanvasX := MouseX - TOOLBAR_WIDTH;
- CanvasY := MouseY - MENUBAR_HEIGHT;
+ If CurrentTool = TOOL_ZOOM Then Begin
+  ChangeZoom(1,MouseX,MouseY);
+  Exit;
+ End;
+ CanvasX := DocumentX(MouseX);
+ CanvasY := DocumentY(MouseY);
+ If (CanvasX < 0) Or (CanvasX >= ScreenWidth-TOOLBAR_WIDTH) Or
+    (CanvasY < 0) Or
+    (CanvasY >= ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT) Then Begin
+  StatusMessage := 'Cliquer dans la page pour dessiner.';
+  Exit;
+ End;
  
  Case CurrentTool Of
   TOOL_BEZIER, TOOL_PEN:
@@ -1254,8 +1384,13 @@ Begin
  End;
  If Not DrawingMode Then Exit;
  
- CanvasX := MouseX - TOOLBAR_WIDTH;
- CanvasY := MouseY - MENUBAR_HEIGHT;
+ CanvasX := DocumentX(MouseX);
+ CanvasY := DocumentY(MouseY);
+ If CanvasX < 0 Then CanvasX := 0;
+ If CanvasY < 0 Then CanvasY := 0;
+ If CanvasX >= ScreenWidth-TOOLBAR_WIDTH Then CanvasX := ScreenWidth-TOOLBAR_WIDTH-1;
+ If CanvasY >= ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT Then
+  CanvasY := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1;
  
  If ObjectCount >= MAX_OBJECTS Then Begin
   DrawingMode := False;
@@ -1361,9 +1496,9 @@ Begin
  AddMenuItem(1, 'Couper', CMD_NONE);
  AddMenuItem(1, 'Copier', CMD_NONE);
  AddMenuItem(1, 'Coller', CMD_NONE);
- AddMenuItem(2, 'Zoom avant', CMD_NONE);
- AddMenuItem(2, 'Zoom arriere', CMD_NONE);
- AddMenuItem(2, 'Adapter', CMD_NONE);
+ AddMenuItem(2, 'Zoom avant', CMD_ZOOM_IN);
+ AddMenuItem(2, 'Zoom arriere', CMD_ZOOM_OUT);
+ AddMenuItem(2, 'Adapter (100%)', CMD_ZOOM_RESET);
  AddMenuItem(2, 'Grille', CMD_GRID);
  AddMenuItem(2, 'Regles', CMD_NONE);
  AddMenuItem(2, 'Reperes', CMD_NONE);
@@ -1520,6 +1655,7 @@ Begin
     SelectedObject := -1;
     CurrentFile := '';
     FileModified := False;
+    ResetZoom;
    End;
   CMD_EXIT:
    If FileModified Then
@@ -1527,10 +1663,15 @@ Begin
                'Dessin modifie : Entree = quitter, Echap = annuler.')
    Else Running := False;
   CMD_GRID: GridVisible := Not GridVisible;
+  CMD_ZOOM_IN: ChangeZoom(1,TOOLBAR_WIDTH+(ScreenWidth-TOOLBAR_WIDTH) Div 2,
+                          MENUBAR_HEIGHT+(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT) Div 2);
+  CMD_ZOOM_OUT: ChangeZoom(-1,TOOLBAR_WIDTH+(ScreenWidth-TOOLBAR_WIDTH) Div 2,
+                           MENUBAR_HEIGHT+(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT) Div 2);
+  CMD_ZOOM_RESET: ResetZoom;
   CMD_HELP:
    ShowDialog('Aide', 'Prototype incomplet. Les commandes grisees sont indisponibles.');
   CMD_SHORTCUTS:
-   ShowDialog('Raccourcis', '1-8 : outils. B : Bezier. P : Plume. F10 : menus.');
+   ShowDialog('Raccourcis', '1-9 : outils. Z : Loupe. 0 : 100 %. F10 : menus.');
   CMD_ABOUT:
    ShowDialog('A propos', 'CloneDRAW AI - prototype Pascal, pas un clone complet.');
   CMD_RESOURCES:
@@ -1566,10 +1707,11 @@ Begin
 End;
 
 Procedure HandleMouseEvent;
-Var BarHit, ItemHit: Integer; Pressed, Released: Boolean;
+Var BarHit, ItemHit: Integer; Pressed, Released, RightPressed: Boolean;
 Begin
  Pressed := ((MouseButtons And 1) <> 0) And ((OldMouseButtons And 1) = 0);
  Released := ((MouseButtons And 1) = 0) And ((OldMouseButtons And 1) <> 0);
+ RightPressed := ((MouseButtons And 2) <> 0) And ((OldMouseButtons And 2) = 0);
  If (BezierStage <> 0) And Pressed Then
   If (MenuBarHitTest(MouseX,MouseY) >= 0) Or
      (ToolHitTest(MouseX,MouseY) >= 0) Then CancelBezier;
@@ -1603,7 +1745,13 @@ Begin
     NeedsRedraw := True;
    End;
   End;
-  If Pressed Then Begin
+  If RightPressed And Not Pressed And (CurrentTool = TOOL_ZOOM) And
+     Not MenuActive And Not DrawingMode And
+     (MouseX >= TOOLBAR_WIDTH) And (MouseX < ScreenWidth) And
+     (MouseY >= MENUBAR_HEIGHT) And
+     (MouseY < ScreenHeight-STATUSBAR_HEIGHT) Then Begin
+   ChangeZoom(-1,MouseX,MouseY);
+  End Else If Pressed Then Begin
    If BarHit >= 0 Then Begin
     MenuMouseDown := True;
     If MenuActive And (ActiveMenu = BarHit) Then CloseMenu
@@ -1726,6 +1874,7 @@ Begin
     SelectedObject := -1;
     CurrentFile := '';
     FileModified := False;
+    ResetZoom;
    End;
   End;
   DialogTitle := '';
@@ -1761,6 +1910,11 @@ Begin
   '7','p','P': CurrentTool := TOOL_PEN;
   '6','n','N': CurrentTool := TOOL_PENCIL;
   '8','t','T': CurrentTool := TOOL_TEXT;
+  '9','z','Z': Begin
+   CurrentTool := TOOL_ZOOM;
+   StatusMessage := 'Loupe : clic gauche = agrandir, droit = reduire ; 0 = 100 %.';
+  End;
+  '0': ResetZoom;
   #15, #19: StatusMessage := 'Import/export Adobe Illustrator non implemente.';
  End;
 End;
@@ -1769,16 +1923,16 @@ Procedure RedrawInterface;
 Var I: Integer;
 Begin
  HideMouse;
+ SetViewPort(TOOLBAR_WIDTH,MENUBAR_HEIGHT,ScreenWidth-1,
+             ScreenHeight-STATUSBAR_HEIGHT-1,True);
  DrawCanvas;
  For I := 0 To ObjectCount-1 Do
   If Not TextActive Or (I <> TextEditIndex) Then DrawObject(I);
  If TextActive Then Begin
   DrawGraphicObject(TextObject);
   SetColor(COLOR_TEXT);
-  I := TOOLBAR_WIDTH+Round(TextObject.TextObj.X)+TextCursor*8;
-  If I >= ScreenWidth Then I := ScreenWidth-1;
-  Line(I,MENUBAR_HEIGHT+Round(TextObject.TextObj.Y),
-       I,MENUBAR_HEIGHT+Round(TextObject.TextObj.Y)+7);
+  I := ScreenX(TextObject.TextObj.X+TextCursor*8);
+  Line(I,ScreenY(TextObject.TextObj.Y),I,ScreenY(TextObject.TextObj.Y+8)-1);
  End;
  If PencilActive Then DrawGraphicObject(PencilObject);
  If BezierStage <> 0 Then Begin
@@ -1786,6 +1940,7 @@ Begin
   DrawBezierHandles(BezierObject,True);
  End;
  DrawSelection;
+ SetViewPort(0,0,ScreenWidth-1,ScreenHeight-1,True);
  DrawToolbar;
  DrawMenuBar;
  DrawStatusBar;
@@ -1901,6 +2056,7 @@ Var
  I: Integer;
 Begin
  Running := True;
+ ResetZoom;
  ObjectCount := 0;
  SelectedObject := -1;
  CurrentTool := TOOL_SELECT;

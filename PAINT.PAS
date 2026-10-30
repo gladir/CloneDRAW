@@ -1009,7 +1009,7 @@ Begin
  Menus[MENU_FILE].Items[5].Shortcut := 'Ctrl+P';
  Menus[MENU_FILE].Items[5].Enabled := True;
  Menus[MENU_FILE].Items[6].Separator := True;
- Menus[MENU_FILE].Items[7].Caption := 'Proprietes...';
+ Menus[MENU_FILE].Items[7].Caption := 'Propri'+#130+'t'+#130+'s...';
  Menus[MENU_FILE].Items[7].Shortcut := '';
  Menus[MENU_FILE].Items[7].Enabled := True;
  Menus[MENU_FILE].Items[8].Separator := True;
@@ -1025,7 +1025,7 @@ Begin
  Menus[MENU_EDIT].Items[0].Caption := 'Annuler';
  Menus[MENU_EDIT].Items[0].Shortcut := 'Ctrl+Z';
  Menus[MENU_EDIT].Items[0].Enabled := True;
- Menus[MENU_EDIT].Items[1].Caption := 'Retablir';
+ Menus[MENU_EDIT].Items[1].Caption := 'R'+#130+'tablir';
  Menus[MENU_EDIT].Items[1].Shortcut := 'Ctrl+Y';
  Menus[MENU_EDIT].Items[1].Enabled := True;
  Menus[MENU_EDIT].Items[2].Separator := True;
@@ -1038,11 +1038,11 @@ Begin
  Menus[MENU_EDIT].Items[5].Caption := 'Coller';
  Menus[MENU_EDIT].Items[5].Shortcut := 'Ctrl+V';
  Menus[MENU_EDIT].Items[5].Enabled := True;
- Menus[MENU_EDIT].Items[6].Caption := 'Effacer selection';
+ Menus[MENU_EDIT].Items[6].Caption := 'Effacer s'+#130+'lection';
  Menus[MENU_EDIT].Items[6].Shortcut := 'Suppr';
  Menus[MENU_EDIT].Items[6].Enabled := True;
  Menus[MENU_EDIT].Items[7].Separator := True;
- Menus[MENU_EDIT].Items[8].Caption := 'Tout selectionner';
+ Menus[MENU_EDIT].Items[8].Caption := 'Tout s'+#130+'lectionner';
  Menus[MENU_EDIT].Items[8].Shortcut := 'Ctrl+A';
  Menus[MENU_EDIT].Items[8].Enabled := True;
 
@@ -1059,7 +1059,7 @@ Begin
  Menus[MENU_VIEW].Items[1].Shortcut := '';
  Menus[MENU_VIEW].Items[1].Enabled := True;
  Menus[MENU_VIEW].Items[1].Checked := True;
- Menus[MENU_VIEW].Items[2].Caption := 'Barre d''etat';
+ Menus[MENU_VIEW].Items[2].Caption := 'Barre d'''+#130+'tat';
  Menus[MENU_VIEW].Items[2].Shortcut := '';
  Menus[MENU_VIEW].Items[2].Enabled := True;
  Menus[MENU_VIEW].Items[2].Checked := True;
@@ -1067,11 +1067,11 @@ Begin
  Menus[MENU_VIEW].Items[4].Caption := 'Zoom avant';
  Menus[MENU_VIEW].Items[4].Shortcut := 'Ctrl++';
  Menus[MENU_VIEW].Items[4].Enabled := True;
- Menus[MENU_VIEW].Items[5].Caption := 'Zoom arrire';
+ Menus[MENU_VIEW].Items[5].Caption := 'Zoom arri'+#138+'re';
  Menus[MENU_VIEW].Items[5].Shortcut := 'Ctrl+-';
  Menus[MENU_VIEW].Items[5].Enabled := True;
  Menus[MENU_VIEW].Items[6].Separator := True;
- Menus[MENU_VIEW].Items[7].Caption := 'Plein ecran';
+ Menus[MENU_VIEW].Items[7].Caption := 'Plein '+#130+'cran';
  Menus[MENU_VIEW].Items[7].Shortcut := 'F11';
  Menus[MENU_VIEW].Items[7].Enabled := True;
 
@@ -9204,7 +9204,7 @@ Begin
 End;
 
 
-{ Encodeur JPEG integre,  adapte de BMP2JPEG.PAS : JFIF baseline, 
+{ Encodeur JPEG integre,  adapte de BMP2JPEG.PAS : JFIF baseline,
   qualite 90,  YCbCr 4:4:4,  DCT separable et tables Huffman standard. }
 Function SaveJPEG(FileName: String): Boolean;
 Const
@@ -9217,31 +9217,31 @@ Const
  MarkerSOS=$DA;
  MarkerAPP0=$E0;
  ZigZag:Array[0..63]of Byte=(
-   0,  1,  8, 16,  9,  2,  3, 10, 
-  17, 24, 32, 25, 18, 11,  4,  5, 
-  12, 19, 26, 33, 40, 48, 41, 34, 
-  27, 20, 13,  6,  7, 14, 21, 28, 
-  35, 42, 49, 56, 57, 50, 43, 36, 
-  29, 22, 15, 23, 30, 37, 44, 51, 
-  58, 59, 52, 45, 38, 31, 39, 46, 
+   0,  1,  8, 16,  9,  2,  3, 10,
+  17, 24, 32, 25, 18, 11,  4,  5,
+  12, 19, 26, 33, 40, 48, 41, 34,
+  27, 20, 13,  6,  7, 14, 21, 28,
+  35, 42, 49, 56, 57, 50, 43, 36,
+  29, 22, 15, 23, 30, 37, 44, 51,
+  58, 59, 52, 45, 38, 31, 39, 46,
   53, 60, 61, 54, 47, 55, 62, 63);
  StdQTLuma:Array[0..63]of Byte=(
-  16, 11, 10, 16,  24,  40,  51,  61, 
-  12, 12, 14, 19,  26,  58,  60,  55, 
-  14, 13, 16, 24,  40,  57,  69,  56, 
-  14, 17, 22, 29,  51,  87,  80,  62, 
-  18, 22, 37, 56,  68, 109, 103,  77, 
-  24, 35, 55, 64,  81, 104, 113,  92, 
-  49, 64, 78, 87, 103, 121, 120, 101, 
+  16, 11, 10, 16,  24,  40,  51,  61,
+  12, 12, 14, 19,  26,  58,  60,  55,
+  14, 13, 16, 24,  40,  57,  69,  56,
+  14, 17, 22, 29,  51,  87,  80,  62,
+  18, 22, 37, 56,  68, 109, 103,  77,
+  24, 35, 55, 64,  81, 104, 113,  92,
+  49, 64, 78, 87, 103, 121, 120, 101,
   72, 92, 95, 98, 112, 100, 103,  99);
  StdQTChroma:Array[0..63]of Byte=(
-  17, 18, 24, 47, 99, 99, 99, 99, 
-  18, 21, 26, 66, 99, 99, 99, 99, 
-  24, 26, 56, 99, 99, 99, 99, 99, 
-  47, 66, 99, 99, 99, 99, 99, 99, 
-  99, 99, 99, 99, 99, 99, 99, 99, 
-  99, 99, 99, 99, 99, 99, 99, 99, 
-  99, 99, 99, 99, 99, 99, 99, 99, 
+  17, 18, 24, 47, 99, 99, 99, 99,
+  18, 21, 26, 66, 99, 99, 99, 99,
+  24, 26, 56, 99, 99, 99, 99, 99,
+  47, 66, 99, 99, 99, 99, 99, 99,
+  99, 99, 99, 99, 99, 99, 99, 99,
+  99, 99, 99, 99, 99, 99, 99, 99,
+  99, 99, 99, 99, 99, 99, 99, 99,
   99, 99, 99, 99, 99, 99, 99, 99);
  StdDCLumaCounts:Array[0..15]of Byte=
    (0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
@@ -9255,49 +9255,49 @@ Const
    (0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, $7D);
  StdACLumaValues:Array[0..161]of Byte=(
   $01, $02, $03, $00, $04, $11, $05, $12, $21, $31, $41, $06, $13, $51, $61,
-  $07, 
+  $07,
   $22, $71, $14, $32, $81, $91, $A1, $08, $23, $42, $B1, $C1, $15, $52, $D1,
-  $F0, 
+  $F0,
   $24, $33, $62, $72, $82, $09, $0A, $16, $17, $18, $19, $1A, $25, $26, $27,
-  $28, 
+  $28,
   $29, $2A, $34, $35, $36, $37, $38, $39, $3A, $43, $44, $45, $46, $47, $48,
-  $49, 
+  $49,
   $4A, $53, $54, $55, $56, $57, $58, $59, $5A, $63, $64, $65, $66, $67, $68,
-  $69, 
+  $69,
   $6A, $73, $74, $75, $76, $77, $78, $79, $7A, $83, $84, $85, $86, $87, $88,
-  $89, 
+  $89,
   $8A, $92, $93, $94, $95, $96, $97, $98, $99, $9A, $A2, $A3, $A4, $A5, $A6,
-  $A7, 
+  $A7,
   $A8, $A9, $AA, $B2, $B3, $B4, $B5, $B6, $B7, $B8, $B9, $BA, $C2, $C3, $C4,
-  $C5, 
+  $C5,
   $C6, $C7, $C8, $C9, $CA, $D2, $D3, $D4, $D5, $D6, $D7, $D8, $D9, $DA, $E1,
-  $E2, 
+  $E2,
   $E3, $E4, $E5, $E6, $E7, $E8, $E9, $EA, $F1, $F2, $F3, $F4, $F5, $F6, $F7,
-  $F8, 
+  $F8,
   $F9, $FA);
  StdACChromaCounts:Array[0..15]of Byte=
    (0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, $77);
  StdACChromaValues:Array[0..161]of Byte=(
   $00, $01, $02, $03, $11, $04, $05, $21, $31, $06, $12, $41, $51, $07, $61,
-  $71, 
+  $71,
   $13, $22, $32, $81, $08, $14, $42, $91, $A1, $B1, $C1, $09, $23, $33, $52,
-  $F0, 
+  $F0,
   $15, $62, $72, $D1, $0A, $16, $24, $34, $E1, $25, $F1, $17, $18, $19, $1A,
-  $26, 
+  $26,
   $27, $28, $29, $2A, $35, $36, $37, $38, $39, $3A, $43, $44, $45, $46, $47,
-  $48, 
+  $48,
   $49, $4A, $53, $54, $55, $56, $57, $58, $59, $5A, $63, $64, $65, $66, $67,
-  $68, 
+  $68,
   $69, $6A, $73, $74, $75, $76, $77, $78, $79, $7A, $82, $83, $84, $85, $86,
-  $87, 
+  $87,
   $88, $89, $8A, $92, $93, $94, $95, $96, $97, $98, $99, $9A, $A2, $A3, $A4,
-  $A5, 
+  $A5,
   $A6, $A7, $A8, $A9, $AA, $B2, $B3, $B4, $B5, $B6, $B7, $B8, $B9, $BA, $C2,
-  $C3, 
+  $C3,
   $C4, $C5, $C6, $C7, $C8, $C9, $CA, $D2, $D3, $D4, $D5, $D6, $D7, $D8, $D9,
-  $DA, 
+  $DA,
   $E2, $E3, $E4, $E5, $E6, $E7, $E8, $E9, $EA, $F2, $F3, $F4, $F5, $F6, $F7,
-  $F8, 
+  $F8,
   $F9, $FA);
 Type
  Block64=Array[0..63] Of Real;
@@ -9704,17 +9704,17 @@ Begin
    ExtractBlock(YBuf, MCUCol, ValidRows, BlockY);
    ForwardDCT(BlockY);
    QuantizeAndZigZag(BlockY, QTLuma, ZZBlock);
-   EncodeBlock(ZZBlock, PrevDCY, DCLumaCode, DCLumaSize, 
+   EncodeBlock(ZZBlock, PrevDCY, DCLumaCode, DCLumaSize,
                ACLumaCode, ACLumaSize);
    ExtractBlock(CbBuf, MCUCol, ValidRows, BlockCb);
    ForwardDCT(BlockCb);
    QuantizeAndZigZag(BlockCb, QTChroma, ZZBlock);
-   EncodeBlock(ZZBlock, PrevDCCb, DCChromaCode, DCChromaSize, 
+   EncodeBlock(ZZBlock, PrevDCCb, DCChromaCode, DCChromaSize,
                ACChromaCode, ACChromaSize);
    ExtractBlock(CrBuf, MCUCol, ValidRows, BlockCr);
    ForwardDCT(BlockCr);
    QuantizeAndZigZag(BlockCr, QTChroma, ZZBlock);
-   EncodeBlock(ZZBlock, PrevDCCr, DCChromaCode, DCChromaSize, 
+   EncodeBlock(ZZBlock, PrevDCCr, DCChromaCode, DCChromaSize,
                ACChromaCode, ACChromaSize);
    Inc(MCUCol, 8);
   End;

@@ -8710,7 +8710,7 @@ Begin
   If (Pixels<>Nil) And (Q<>Nil) Then Begin
    FillChar(Q^,SizeOf(Q^),0);
    For I:=0 To 15 Do Begin Q^.Palette[I].R:=VGA_R[I]; Q^.Palette[I].G:=VGA_G[I]; Q^.Palette[I].B:=VGA_B[I]; Q^.Palette[I].A:=255; End;
-   Used:=16; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
+   Used:=0; Exact:=True; Source:=PByte(D^.RGB); Dest:=Pixels;
    For N:=0 To Size-1 Do Begin
     R:=Source^; Inc(Source); G:=Source^; Inc(Source); B:=Source^; Inc(Source); Slot:=-1;
     For J:=0 To Used-1 Do If (Q^.Palette[J].R=R) And (Q^.Palette[J].G=G) And (Q^.Palette[J].B=B) Then Begin Slot:=J; Break; End;
@@ -10679,6 +10679,51 @@ Begin
 End;
 
 
+{ ICO Windows : une ressource DIB 32 bits BGRA et masque AND opaque. }
+Function SaveICO(FileName:String):Boolean;
+Var F:File;Header:Array[0..61] Of Byte;Row:Array[0..1023] Of Byte;
+ X,Y:Integer;C:TRGBColor;MaskRow,ResourceSize,Written:LongInt;
+ Failed:Boolean;
+ Procedure PutWord(P:Integer;V:Word);
+ Begin Header[P]:=V And 255;Header[P+1]:=V Shr 8;End;
+ Procedure PutLong(P:Integer;V:LongWord);
+ Begin PutWord(P,V And 65535);PutWord(P+2,V Shr 16);End;
+ Procedure WriteBytes(Var Buffer;Count:LongInt);
+ Begin
+  If Failed Then Exit;
+  {$I-}BlockWrite(F,Buffer,Count,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Count);
+ End;
+Begin
+ SaveICO:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>256) Or (CanvasImageH>256) Then Exit;
+ MaskRow:=((LongInt(CanvasImageW)+31) Div 32)*4;
+ ResourceSize:=40+(LongInt(CanvasImageW)*4+MaskRow)*CanvasImageH;
+ FillChar(Header,SizeOf(Header),0);PutWord(2,1);PutWord(4,1);
+ If CanvasImageW<256 Then Header[6]:=CanvasImageW;
+ If CanvasImageH<256 Then Header[7]:=CanvasImageH;
+ PutWord(10,1);PutWord(12,32);PutLong(14,ResourceSize);PutLong(18,22);
+ PutLong(22,40);PutLong(26,CanvasImageW);PutLong(30,CanvasImageH*2);
+ PutWord(34,1);PutWord(36,32);
+ PutLong(42,ResourceSize-40);
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Failed:=False;WriteBytes(Header,SizeOf(Header));
+ For Y:=CanvasImageH-1 DownTo 0 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];
+   Row[X*4]:=C.B;Row[X*4+1]:=C.G;Row[X*4+2]:=C.R;Row[X*4+3]:=255;
+  End;
+  WriteBytes(Row,LongInt(CanvasImageW)*4);
+ End;
+ FillChar(Row,SizeOf(Row),0);
+ For Y:=0 To CanvasImageH-1 Do WriteBytes(Row,MaskRow);
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveICO:=Not Failed;
+End;
+
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -10705,11 +10750,15 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
  Exit;
+ End;
+ If (Format=FMT_ICO) And ((CanvasImageW>256) Or (CanvasImageH>256)) Then
+ Begin
+  PaintSaveError:='ICO : dimensions maximales 256 x 256 pixels.';Exit;
  End;
  Old:=ImageBuffer; Exists:=Present(FileName);
  If Exists And ((R.Attr And (Directory+ReadOnly))<>0) Then Begin PaintSaveError:='Cible en lecture seule ou dossier.'; Exit; End;
@@ -10742,6 +10791,7 @@ Begin
   FMT_FAX: OK:=SaveFAX(Temp);
   FMT_GEM: OK:=SaveGEM(Temp);
   FMT_HDR: OK:=SaveHDR(Temp);
+  FMT_ICO: OK:=SaveICO(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -12077,7 +12127,7 @@ Begin
  If (ImageBuffer.FileName='') Or Not (ImageBuffer.Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -18535,7 +18585,8 @@ Begin
  10: OFSaveExtension:='.exr';
  9: OFSaveExtension:='.fax';
  29: OFSaveExtension:='.gem';
- 8: OFSaveExtension:='.hdr'; Else OFSaveExtension:='.bmp'; End;
+ 8: OFSaveExtension:='.hdr';
+ 27: OFSaveExtension:='.ico'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -18651,7 +18702,7 @@ Type TOFFilterOrder = Array[0..28] Of Integer;
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=19;
+ Count:=29; If Saving Then Count:=20;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
@@ -18659,6 +18710,7 @@ Begin
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
    If I=13 Then Order[I]:=13; If I=14 Then Order[I]:=6; If I=15 Then
    Order[I]:=10;
+   If I=19 Then Order[I]:=27;
    If I=16 Then Order[I]:=9; If I=17 Then Order[I]:=29; If I=18 Then
    Order[I]:=8;
    If I=10 Then Order[I]:=16; If I=11 Then Order[I]:=17; If I=12 Then
@@ -18753,6 +18805,8 @@ Begin
   OFScan(D);
   If D.SaveMode Then Begin
    D.Notice:='Type choisi : '+OFFilterLabel(D.Filter);
+   If D.Filter=27 Then
+    D.Notice:='ICO : une image opaque 32 bits, maximum 256 x 256 pixels.';
    If D.Filter=9 Then
     D.Notice:='FAX Group 3 1D brut : conversion en noir et blanc, seuil 128.';
    If D.Filter=17 Then
@@ -18815,7 +18869,8 @@ Begin
    Else If SaveFormat=FMT_EXR Then D^.Filter:=10
    Else If SaveFormat=FMT_FAX Then D^.Filter:=9
    Else If SaveFormat=FMT_GEM Then D^.Filter:=29
-   Else If SaveFormat=FMT_HDR Then D^.Filter:=8;
+   Else If SaveFormat=FMT_HDR Then D^.Filter:=8
+   Else If SaveFormat=FMT_ICO Then D^.Filter:=27;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -18852,6 +18907,8 @@ Begin
   ' ouve' +
   'rture' +
   ' seule.';
+  If SaveFormat=FMT_ICO Then
+   D^.Notice:='ICO : une image opaque 32 bits, maximum 256 x 256 pixels.';
   If SaveFormat=FMT_FAX Then
    D^.Notice:='FAX Group 3 1D brut : conversion en noir et blanc, seuil 128.';
   If SaveFormat=FMT_CR2 Then
@@ -18994,7 +19051,8 @@ Begin
    10: SaveFormat:=FMT_EXR;
    9: SaveFormat:=FMT_FAX;
    29: SaveFormat:=FMT_GEM;
-   8: SaveFormat:=FMT_HDR; Else SaveFormat:=FMT_BMP; End;
+   8: SaveFormat:=FMT_HDR;
+   27: SaveFormat:=FMT_ICO; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -19012,7 +19070,7 @@ Begin
  If Not (Format In
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
- FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR])
+ FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -19300,7 +19358,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 19 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 20 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

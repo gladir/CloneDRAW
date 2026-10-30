@@ -2536,6 +2536,244 @@ Begin
  SelectionActive:=False;ImageModified:=True;ApplyPanorama:=True;
 End;
 
+Type TExtrudeOptions=Record
+ Depth,Resolution,Segments,Taper,Twist,Mode,Threshold,Coverage:Integer;
+ CompositeSource,SelectionOnly,Invert,Caps,NewLayer:Boolean;
+End;
+ TExtrudeStats=Record
+ Width,Height,Cells,Edges,Groups:Integer;
+ Vertices,Triangles:LongInt;
+ Mask:Array[0..4095] Of Byte;
+End;
+ TExtrudeWork=Record
+ Parent:Array[0..16383] Of Integer;
+ Index:Array[0..16383] Of LongInt;
+ Visited:Array[0..4095] Of Byte;
+ Queue:Array[0..4095] Of Integer;
+End;
+ PExtrudeWork=^TExtrudeWork;
+Procedure DefaultExtrudeOptions(Var E:TExtrudeOptions);
+Begin
+ FillChar(E,SizeOf(E),0);E.Depth:=250;E.Resolution:=32;E.Segments:=1;
+ E.Threshold:=128;E.Coverage:=50;E.Caps:=True;E.NewLayer:=True;
+End;
+Function ExtrudeOptionsValid(Const E:TExtrudeOptions):Boolean;
+Begin
+ ExtrudeOptionsValid:=(E.Depth>=1) And (E.Depth<=10000) And
+  (E.Resolution>=8) And (E.Resolution<=64) And
+  (E.Segments>=1) And (E.Segments<=8) And
+  (E.Taper>=-80) And (E.Taper<=200) And
+  (E.Twist>=-1800) And (E.Twist<=1800) And
+  (Abs(E.Twist)<=E.Segments*450) And (E.Mode>=0) And (E.Mode<=3) And
+  (E.Threshold>=0) And (E.Threshold<=255) And
+  (E.Coverage>=1) And (E.Coverage<=100);
+End;
+Function BuildExtrusion(Const E:TExtrudeOptions;Progress:Boolean;
+ Var M:PMesh;Var Stats:TExtrudeStats;Var Error:String):Boolean;
+Const CX:Array[0..3] Of Integer=(0,1,1,0);
+ CY:Array[0..3] Of Integer=(0,0,1,1);
+Var Work:PExtrudeWork;L,T,R,B,SW,SH,GW,GH,X,Y,SX,SY,I,J,N,
+ Matches,RootCount,Head,Tail,Cell,NX,NY,DX,DY:Integer;
+ A0,A1,B0,B1:LongInt;Scale:Double;
+ Color:Byte;Lum:LongInt;Failed:Boolean;Key:Char;
+ Function Solid(X,Y:Integer):Boolean;
+ Begin
+  Solid:=False;If (X<0) Or (Y<0) Or (X>=GW) Or (Y>=GH) Then Exit;
+  Solid:=Stats.Mask[Y*GW+X]<>0;
+ End;
+ Function Root(Node:Integer):Integer;
+ Begin
+  While Work^.Parent[Node]<>Node Do Begin
+   Work^.Parent[Node]:=Work^.Parent[Work^.Parent[Node]];
+   Node:=Work^.Parent[Node];
+  End;Root:=Node;
+ End;
+ Procedure Join(A,B:Integer);
+ Begin A:=Root(A);B:=Root(B);If A<>B Then Work^.Parent[B]:=A;End;
+ Function Cancelled:Boolean;
+ Begin
+  Cancelled:=False;
+  If Progress And KeyPressed Then Begin Key:=ReadKey;
+   Cancelled:=Key=#27;End;
+ End;
+ Function Vertex(Cell,Corner:Integer):LongInt;
+ Var N,J,GX,GY:Integer;Base:LongInt;U,V,Q,A,C,S:Double;
+ Begin
+  N:=Root(Cell*4+Corner);Base:=Work^.Index[N];
+  If Base<0 Then Begin
+   Base:=M^.VertexCount;Work^.Index[N]:=Base;
+   GX:=Cell Mod GW+CX[Corner];GY:=Cell Div GW+CY[Corner];
+   U:=(GX/GW-0.5)*SW/Max(SW,SH);
+   V:=(0.5-GY/GH)*SH/Max(SW,SH);
+   For J:=0 To E.Segments Do Begin
+    Q:=J/E.Segments;A:=E.Twist*3.141592653589793/1800*Q;
+    C:=Cos(A);S:=Sin(A);Scale:=1+E.Taper/100.0*Q;
+    If Not MeshVertex(M,(U*C-V*S)*Scale,(U*S+V*C)*Scale,
+     E.Depth/1000.0*(0.5-Q)) Then Failed:=True;
+   End;
+  End;Vertex:=Base;
+ End;
+ Procedure Triangle(A,B,C:LongInt);
+ Begin If Not MeshFace(M,A,B,C) Then Failed:=True;End;
+ Procedure Enqueue(X,Y:Integer);
+ Var N:Integer;
+ Begin
+  If Not Solid(X,Y) Then Exit;N:=Y*GW+X;
+  If Work^.Visited[N]<>0 Then Exit;
+  Work^.Visited[N]:=1;Work^.Queue[Tail]:=N;Inc(Tail);
+ End;
+Begin
+ BuildExtrusion:=False;M:=Nil;Work:=Nil;Error:='';
+ FillChar(Stats,SizeOf(Stats),0);
+ If Not ExtrudeOptionsValid(E) Then Begin
+  Error:='Parametres invalides (torsion : 45 deg maximum par segment).';Exit;
+ End;
+ If (ImgW<1) Or (ImgH<1) Or (ImgW>4096) Or (ImgH>4096) Then Begin
+  Error:='Dimensions de source invalides.';Exit;End;
+ L:=0;T:=0;R:=ImgW-1;B:=ImgH-1;
+ If E.SelectionOnly Then Begin
+  If Not SelectionActive Then Begin Error:='Aucune selection active.';
+   Exit;End;
+  L:=Max(0,Min(SelectionRect.L,SelectionRect.R));
+  T:=Max(0,Min(SelectionRect.T,SelectionRect.B));
+  R:=Min(ImgW-1,Max(SelectionRect.L,SelectionRect.R));
+  B:=Min(ImgH-1,Max(SelectionRect.T,SelectionRect.B));
+  If (L>R) Or (T>B) Then Begin Error:='Selection hors de l''image.';Exit;End;
+ End;
+ SW:=R-L+1;SH:=B-T+1;
+ GW:=E.Resolution;GH:=Max(1,Round(E.Resolution*1.0*SH/SW));
+ If SH>SW Then Begin GH:=E.Resolution;
+  GW:=Max(1,Round(E.Resolution*1.0*SW/SH));End;
+ Stats.Width:=GW;Stats.Height:=GH;
+ Work:=PExtrudeWork(RotationAllocate(SizeOf(TExtrudeWork)));
+ If Work=Nil Then Begin Error:='Memoire insuffisante.';Exit;End;
+ FillChar(Work^,SizeOf(Work^),0);
+ For I:=0 To GW*GH*4-1 Do Begin Work^.Parent[I]:=I;
+  Work^.Index[I]:=-1;End;
+ Failed:=False;
+ For Y:=0 To GH-1 Do Begin
+  If Cancelled Then Begin Failed:=True;Break;End;
+  For X:=0 To GW-1 Do Begin
+   Matches:=0;
+   For SY:=0 To 2 Do For SX:=0 To 2 Do Begin
+    I:=L+Min(SW-1,Trunc((X+(SX+0.5)/3)*SW/GW));
+    J:=T+Min(SH-1,Trunc((Y+(SY+0.5)/3)*SH/GH));
+    If E.CompositeSource Then Color:=Composite(I,J)
+    Else Color:=GetLayerPixel(ActiveLayer,I,J);
+    If Color<>255 Then Begin
+     Color:=Color And 15;
+     Lum:=LongInt(VGA_R[Color])*299+LongInt(VGA_G[Color])*587+
+      LongInt(VGA_B[Color])*114;
+     If (E.Mode=0) Or ((E.Mode=1) And
+      (Lum>=LongInt(E.Threshold)*1000)) Or ((E.Mode=2) And
+      (Lum<=LongInt(E.Threshold)*1000)) Or
+      ((E.Mode=3) And (Color=(FgColor And 15))) Then Inc(Matches);
+    End;
+   End;
+   If E.Invert Then Matches:=9-Matches;
+   If Matches*100>=E.Coverage*9 Then Begin
+    Stats.Mask[Y*GW+X]:=1;Inc(Stats.Cells);
+   End;
+  End;
+ End;
+ If Not Failed And (Stats.Cells=0) Then Begin
+  Error:='Masque vide : modifier source, seuil ou inversion.';Failed:=True;
+ End;
+ RootCount:=0;
+ If Not Failed Then For Y:=0 To GH-1 Do For X:=0 To GW-1 Do
+  If Solid(X,Y) Then Begin
+   Cell:=Y*GW+X;
+   If Solid(X+1,Y) Then Begin
+    Join(Cell*4+1,(Cell+1)*4);Join(Cell*4+2,(Cell+1)*4+3);
+   End;
+   If Solid(X,Y+1) Then Begin
+    Join(Cell*4+3,(Cell+GW)*4);Join(Cell*4+2,(Cell+GW)*4+1);
+   End;
+   If Not Solid(X,Y-1) Then Inc(Stats.Edges);
+   If Not Solid(X+1,Y) Then Inc(Stats.Edges);
+   If Not Solid(X,Y+1) Then Inc(Stats.Edges);
+   If Not Solid(X-1,Y) Then Inc(Stats.Edges);
+   If Work^.Visited[Cell]=0 Then Begin
+    Inc(Stats.Groups);Head:=0;Tail:=0;Enqueue(X,Y);
+    While Head<Tail Do Begin
+     N:=Work^.Queue[Head];Inc(Head);NX:=N Mod GW;NY:=N Div GW;
+     Enqueue(NX-1,NY);Enqueue(NX+1,NY);Enqueue(NX,NY-1);Enqueue(NX,NY+1);
+    End;
+   End;
+  End;
+ If Not Failed Then Begin
+  { Compter les racines sans fusionner les contacts diagonaux. }
+  For I:=0 To GW*GH-1 Do If Stats.Mask[I]<>0 Then
+   For J:=0 To 3 Do Begin N:=Root(I*4+J);
+    If Work^.Index[N]<0 Then Begin Inc(RootCount);Work^.Index[N]:=0;End;
+   End;
+  For I:=0 To GW*GH*4-1 Do Work^.Index[I]:=-1;
+  Stats.Vertices:=LongInt(RootCount)*(E.Segments+1);
+  Stats.Triangles:=LongInt(Stats.Edges)*E.Segments*2;
+  If E.Caps Then Inc(Stats.Triangles,LongInt(Stats.Cells)*4);
+  If (Stats.Vertices>120000) Or (Stats.Triangles>40000) Then Begin
+   Error:='Maillage trop dense : reduire precision ou segments.';Failed:=True;
+  End;
+ End;
+ If Not Failed Then Begin
+  M:=PMesh(RotationAllocate(SizeOf(TMesh)));
+  If M=Nil Then Failed:=True
+  Else Begin
+   FillChar(M^,SizeOf(TMesh),0);M^.References:=1;
+   M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices)));
+   M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
+   If (M^.Vertices=Nil) Or (M^.Triangles=Nil) Then Failed:=True;
+  End;
+ End;
+ If Not Failed Then For Y:=0 To GH-1 Do Begin
+  If Cancelled Then Begin Failed:=True;Break;End;
+  For X:=0 To GW-1 Do If Solid(X,Y) Then Begin
+   Cell:=Y*GW+X;
+   If E.Caps Then Begin
+    A0:=Vertex(Cell,0);A1:=Vertex(Cell,1);
+    B0:=Vertex(Cell,2);B1:=Vertex(Cell,3);
+    Triangle(A0,B1,B0);Triangle(A0,B0,A1);
+    Triangle(A0+E.Segments,A1+E.Segments,B0+E.Segments);
+    Triangle(A0+E.Segments,B0+E.Segments,B1+E.Segments);
+   End;
+   For I:=0 To 3 Do Begin
+    DX:=0;DY:=0;
+    Case I Of 0:DY:=-1;1:DX:=1;2:DY:=1;3:DX:=-1;End;
+    If Not Solid(X+DX,Y+DY) Then Begin
+     A0:=Vertex(Cell,I);A1:=Vertex(Cell,(I+1) Mod 4);
+     For J:=0 To E.Segments-1 Do Begin
+      Triangle(A0+J,A1+J,A1+J+1);Triangle(A0+J,A1+J+1,A0+J+1);
+     End;
+    End;
+   End;
+  End;
+ End;
+ FreeMem(Work,SizeOf(TExtrudeWork));
+ If Failed Then Begin
+  ReleaseMesh(M);
+  If Error='' Then Error:='Generation annulee ou memoire faible.';
+  Exit;
+ End;
+ M^.Source:='Extrusion '+Layers[ActiveLayer].Name;
+ M^.Format:='Extrusion solide';M^.Groups:=Stats.Groups;M^.Materials:=1;
+ Stats.Vertices:=M^.VertexCount;Stats.Triangles:=M^.TriangleCount;
+ BuildExtrusion:=True;
+End;
+Function ApplyExtrusion(const E:TExtrudeOptions;Const View:TMeshOptions;
+ Var Error:String):Boolean;
+Var M:PMesh;Stats:TExtrudeStats;Target:Integer;Success:Boolean;
+Begin
+ ApplyExtrusion:=False;
+ If E.NewLayer And (LayerCount>=MAX_LAYERS) Then Begin
+  Error:='Huit calques maximum : choisir Remplacer le calque.';Exit;
+ End;
+ If Not BuildExtrusion(E,True,M,Stats,Error) Then Exit;
+ Target:=ActiveLayer;If E.NewLayer Then Target:=-1;
+ Success:=ImportMeshLayer(M,View,Target);ReleaseMesh(M);
+ ApplyExtrusion:=Success;
+ If Not Success Then Error:='Operation annulee ou memoire faible.';
+End;
+
 Procedure RotateLayer90(Clockwise:Boolean);
 Begin
  If ApplyRotation(900,Clockwise,True,True,True) Then;
@@ -10029,6 +10267,326 @@ Begin
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
+Procedure ExtrudeDialog;
+Var E:TExtrudeOptions;View:TMeshOptions;Stats:TExtrudeStats;
+ M:PMesh;Preview:PByteArr;Texts:Array[0..9] Of String;
+ X,Y,MX,MY,MB,Previous,Field,Tab,PW,PH,Display,Code,OldX,OldY:Integer;
+ Target:Integer;V:Double;Message,Error,S,T:String;K,Key:Char;
+ Dirty,Rebuild,PreviewDirty,Done,Drag,ReplaceText,Valid:Boolean;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Function Decimal(V:Double):String;
+ Var T:String;
+ Begin Str(V:0:1,T);Decimal:=T;End;
+ Function Memory(N:LongInt):String;
+ Var T:String;
+ Begin
+  If N>=1048576 Then Begin Str(N/1048576.0:0:2,T);T:=T+' Mo';End
+  Else If N>=1024 Then Begin Str(N/1024.0:0:1,T);T:=T+' Ko';End
+  Else T:=IntToStr(N)+' o';Memory:=T;
+ End;
+ Procedure Sync;
+ Begin
+  Texts[0]:=Decimal(E.Depth/10);Texts[1]:=IntToStr(E.Resolution);
+  Texts[2]:=IntToStr(E.Segments);Texts[3]:=IntToStr(E.Taper);
+  Texts[4]:=Decimal(E.Twist/10);Texts[5]:=IntToStr(E.Threshold);
+  Texts[6]:=IntToStr(E.Coverage);Texts[7]:=Decimal(View.RX/10);
+  Texts[8]:=Decimal(View.RY/10);Texts[9]:=Decimal(View.RZ/10);
+ End;
+ Procedure Changed(Geometry:Boolean);
+ Begin Rebuild:=Rebuild Or Geometry;PreviewDirty:=True;Dirty:=True;
+  Message:='';Valid:=True;End;
+ Procedure Parse;
+ Var I,J,Minimum,Maximum:Integer;Values:Array[0..9] Of Double;
+ Begin
+  Valid:=False;Dirty:=True;
+  For J:=0 To 9 Do Begin
+   T:=Texts[J];For I:=1 To Length(T) Do If T[I]=',' Then T[I]:='.';
+   Val(T,V,Code);
+   Case J Of 0:Begin Minimum:=0;Maximum:=1000;End;
+    1:Begin Minimum:=8;Maximum:=64;End;
+    2:Begin Minimum:=1;Maximum:=8;End;
+    3:Begin Minimum:=-80;Maximum:=200;End;
+    4:Begin Minimum:=-180;Maximum:=180;End;
+    5:Begin Minimum:=0;Maximum:=255;End;
+    6:Begin Minimum:=1;Maximum:=100;End;
+    Else Begin Minimum:=-360;Maximum:=360;End;
+   End;
+   If (Code<>0) Or (V<Minimum) Or (V>Maximum) Or
+    ((J=0) And (V<0.1)) Then Begin
+    Message:='Champ invalide : verifier les valeurs et les limites.';Exit;
+   End;
+   If (J In [1,2,3,5,6]) And (Abs(V-Round(V))>0.000001) Then Begin
+    Message:='Precision, segments, effilement et seuils : nombres entiers.';
+    Exit;
+   End;
+   Values[J]:=V;
+  End;
+  If Abs(Values[4])>Values[2]*45 Then Begin
+   Message:='Torsion : ajouter des segments (45 deg maximum par segment).';
+   Exit;
+  End;
+  E.Depth:=Round(Values[0]*10);E.Resolution:=Round(Values[1]);
+  E.Segments:=Round(Values[2]);E.Taper:=Round(Values[3]);
+  E.Twist:=Round(Values[4]*10);E.Threshold:=Round(Values[5]);
+  E.Coverage:=Round(Values[6]);View.RX:=Round(Values[7]*10);
+  View.RY:=Round(Values[8]*10);View.RZ:=Round(Values[9]*10);
+  Changed(Field<7);
+ End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+23,True);SetColor(Black);
+  OutTextXY(X+L+6,Y+T+8,Caption);
+ End;
+ Procedure Check(L,T:Integer;Value:Boolean;Const Caption:String);
+ Begin
+  SetColor(Black);Rectangle(X+L,Y+T,X+L+12,Y+T+12);
+  If Value Then Begin Line(X+L+2,Y+T+6,X+L+5,Y+T+10);
+   Line(X+L+5,Y+T+10,X+L+11,Y+T+2);End;
+  OutTextXY(X+L+18,Y+T+3,Caption);
+ End;
+ Procedure Edit(N,T:Integer;Const LabelText:String);
+ Begin
+  SetColor(Black);OutTextXY(X+320,Y+T+8,LabelText);
+  FillRect(X+460,Y+T,X+600,Y+T+22,White);
+  If Field=N Then SetColor(Blue) Else SetColor(DarkGray);
+  Rectangle(X+460,Y+T,X+600,Y+T+22);SetColor(Black);
+  OutTextXY(X+468,Y+T+8,Texts[N]);
+ End;
+ Procedure Draw;
+ Var PX,PY,OX,OY,MW,MH,GX,GY:Integer;Color:Byte;
+ Begin
+  If Rebuild And Valid Then Begin
+   ReleaseMesh(M);
+   If Not BuildExtrusion(E,True,M,Stats,Error) Then Message:=Error;
+   Rebuild:=False;
+  End;
+  If PreviewDirty And Valid Then Begin
+   If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);Preview:=Nil;
+   If M<>Nil Then If Not RenderMesh(M,View,PW,PH,True,Preview) Then
+    Message:='Apercu annule ou memoire insuffisante.';
+   PreviewDirty:=False;
+  End;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Extrusion 3D du calque - silhouette et volume');
+  Button(20,40,180,'1. Geometrie');Button(210,40,180,'2. Contour');
+  Button(400,40,200,'3. Rendu');SetColor(Blue);
+  Line(X+20+Tab*190,Y+65,X+195+Tab*190,Y+65);
+  MW:=0;MH:=0;
+  If (Stats.Width>0) And (Stats.Height>0) Then Begin
+   If LongInt(Stats.Width)*196>LongInt(Stats.Height)*280 Then Begin
+    MW:=280;MH:=Max(1,Round(Stats.Height*280.0/Stats.Width));
+   End Else Begin MH:=196;
+    MW:=Max(1,Round(Stats.Width*196.0/Stats.Height));End;
+  End;
+  For PY:=0 To 195 Do For PX:=0 To 279 Do Begin
+   Color:=White;If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=LightGray;
+   OX:=PX-(280-PW) Div 2;OY:=PY-(196-PH) Div 2;
+   If (Display=0) And (Preview<>Nil) And (OX>=0) And (OY>=0) And
+    (OX<PW) And (OY<PH) Then
+    If Preview^[LongInt(OY)*PW+OX]<>255 Then
+     Color:=Preview^[LongInt(OY)*PW+OX];
+   OX:=PX-(280-MW) Div 2;OY:=PY-(196-MH) Div 2;
+   If (Display=1) And (OX>=0) And (OY>=0) And (OX<MW) And
+    (OY<MH) Then Begin
+    GX:=OX*Stats.Width Div MW;GY:=OY*Stats.Height Div MH;
+    If Stats.Mask[GY*Stats.Width+GX]<>0 Then Color:=Blue;
+   End;
+   PutPixel(X+20+PX,Y+82+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+19,Y+81,X+300,Y+278);
+  If Display=2 Then Begin
+   FillRect(X+21,Y+83,X+299,Y+276,White);SetColor(Black);
+   OutTextXY(X+28,Y+94,'Grille : '+IntToStr(Stats.Width)+' x '+
+    IntToStr(Stats.Height));
+   OutTextXY(X+28,Y+116,'Cellules : '+IntToStr(Stats.Cells));
+   OutTextXY(X+28,Y+138,'Objets : '+IntToStr(Stats.Groups));
+   OutTextXY(X+28,Y+160,'Sommets : '+IntToStr(Stats.Vertices));
+   OutTextXY(X+28,Y+182,'Triangles : '+IntToStr(Stats.Triangles));
+   OutTextXY(X+28,Y+204,'Donnees : '+Memory((Stats.Vertices+
+    Stats.Triangles)*12));
+   OutTextXY(X+28,Y+226,'Maillage alloue : '+Memory(
+    SizeOf(TMeshVertices)+SizeOf(TMeshTriangles)+SizeOf(TMesh)));
+   S:='Avant et arriere fermes';If Not E.Caps Then S:='Maillage ouvert';
+   OutTextXY(X+28,Y+248,S);
+  End;
+  SetColor(Black);OutTextXY(X+20,Y+292,IntToStr(Stats.Triangles)+
+   ' triangles / '+IntToStr(Stats.Groups)+' objets');
+  Case Display Of 0:S:='Vue 3D';1:S:='Masque';2:S:='Informations';End;
+  Button(20,312,280,'Apercu : '+S+' >');
+  Button(20,343,132,'Vue de face');Button(168,343,132,'Vue isometrique');
+  If Tab=0 Then Begin
+   Edit(0,82,'Profondeur %');Edit(1,115,'Precision 8-64');
+   Edit(2,148,'Segments 1-8');Edit(3,181,'Effilement %');
+   Edit(4,214,'Torsion deg');
+   Check(320,253,E.Caps,'Fermer avant / arriere');
+   SetColor(Black);OutTextXY(X+320,Y+286,'Profondeur : 0.1 a 1000 %');
+   OutTextXY(X+320,Y+309,'Effilement : -80 a +200 %');
+   OutTextXY(X+320,Y+330,'45 deg max par segment');
+  End Else If Tab=1 Then Begin
+   Case E.Mode Of 0:S:='Pixels opaques';1:S:='Pixels clairs';
+    2:S:='Pixels sombres';3:S:='Couleur premier plan';End;
+   Button(320,82,280,S+' >');Edit(5,124,'Seuil 0-255');
+   Edit(6,167,'Couverture %');
+   Check(320,212,E.SelectionOnly,'Limiter a la selection');
+   Check(320,237,E.CompositeSource,'Calques visibles');
+   Check(320,262,E.Invert,'Inverser le masque');
+   SetColor(Black);OutTextXY(X+320,Y+292,'9 echantillons par cellule.');
+   OutTextXY(X+320,Y+312,'Fond opaque : masque rectangulaire.');
+   OutTextXY(X+320,Y+332,'Pour decouper : transparence/seuil.');
+  End Else Begin
+   Edit(7,82,'Rotation X deg');Edit(8,115,'Rotation Y deg');
+   Edit(9,148,'Rotation Z deg');
+   Button(320,192,280,'Matiere VGA : '+IntToStr(View.Color)+' >');
+   S:='Orthographique';If View.Perspective Then S:='Perspective';
+   Button(320,225,280,S+' >');
+   Case View.Mode Of 0:S:='Solide';1:S:='Fil de fer';2:S:='Solide + fil';End;
+   Button(320,258,280,S+' >');
+   Check(320,295,View.Cull,'Masquer faces arriere');
+   Check(320,320,View.Dither,'Tramage des couleurs');
+  End;
+  S:='Remplacer calque actif';If E.NewLayer Then S:='Nouveau calque 3D';
+  Button(320,349,280,S);
+  Button(20,379,132,'Reinitialiser');Button(168,379,132,'Aide');
+  Button(320,379,132,'Annuler');Button(468,379,132,'Creer');
+  SetColor(Black);OutTextXY(X+20,Y+413,
+   'Contour approche par grille. Trous conserves. Matiere uniforme.');
+  If Message<>'' Then Begin SetColor(Red);
+   OutTextXY(X+20,Y+429,Copy(Message,1,73));End;
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  Parse;If Not Valid Then Exit;
+  If E.NewLayer And (LayerCount>=MAX_LAYERS) Then Begin
+   Message:='Huit calques maximum : choisir Remplacer calque actif.';
+   Dirty:=True;Exit;
+  End;
+  If Rebuild Then Draw;
+  If M=Nil Then Exit;
+  Target:=ActiveLayer;If E.NewLayer Then Target:=-1;
+  If ImportMeshLayer(M,View,Target) Then Done:=True
+  Else Begin Message:='Operation annulee ou memoire insuffisante.';
+   Dirty:=True;End;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;DefaultExtrudeOptions(E);
+ DefaultMeshOptions(View);View.Mode:=0;Sync;FillChar(Stats,SizeOf(Stats),0);
+ M:=Nil;Preview:=Nil;Field:=0;Tab:=0;Display:=0;Message:='';
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ If LongInt(ImgW)*196>LongInt(ImgH)*280 Then Begin
+  PW:=280;PH:=Max(1,Round(ImgH*280.0/ImgW));
+ End Else Begin PH:=196;PW:=Max(1,Round(ImgW*196.0/ImgH));End;
+ Dirty:=True;Rebuild:=True;PreviewDirty:=True;Done:=False;
+ Drag:=False;ReplaceText:=True;Valid:=True;
+ GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(20,40,600,63) Then Begin
+    Tab:=Min(2,(MX-X-20) Div 190);
+    Case Tab Of 0:Field:=0;1:Field:=5;2:Field:=7;End;
+    ReplaceText:=True;Dirty:=True;
+   End Else If Hit(20,312,300,335) Then Begin
+    Display:=(Display+1) Mod 3;Dirty:=True;
+   End Else If Hit(20,343,152,366) Then Begin
+    View.RX:=0;View.RY:=0;View.RZ:=0;Sync;Changed(False);
+   End Else If Hit(168,343,300,366) Then Begin
+    View.RX:=200;View.RY:=-300;View.RZ:=0;Sync;Changed(False);
+   End Else If Hit(320,349,600,372) Then Begin
+    E.NewLayer:=Not E.NewLayer;Dirty:=True;
+   End Else If Hit(20,379,152,402) Then Begin
+    DefaultExtrudeOptions(E);DefaultMeshOptions(View);View.Mode:=0;
+    Sync;Changed(True);
+   End Else If Hit(168,379,300,402) Then Begin
+    ShowDialog('Extrusion du calque',
+     'Transparence ou seuil pour le contour. Export OBJ/STL apres creation.');
+    Dirty:=True;GetMouseStateLocal(MX,MY,Previous);
+   End Else If Hit(320,379,452,402) Then Done:=True
+   Else If Hit(468,379,600,402) Then Apply
+   Else If Hit(20,82,300,278) And (Display=0) Then Begin
+    Drag:=True;OldX:=MX;OldY:=MY;
+   End Else If Tab=0 Then Begin
+    If Hit(460,82,600,236) Then Begin
+     Field:=Min(4,(MY-Y-82) Div 33);ReplaceText:=True;Dirty:=True;
+    End Else If Hit(320,253,600,265) Then Begin
+     E.Caps:=Not E.Caps;Changed(True);
+    End;
+   End Else If Tab=1 Then Begin
+    If Hit(320,82,600,105) Then Begin E.Mode:=(E.Mode+1) Mod 4;
+     Sync;Changed(True);
+    End Else If Hit(460,124,600,146) Then Begin
+     Field:=5;ReplaceText:=True;Dirty:=True;
+    End Else If Hit(460,167,600,189) Then Begin
+     Field:=6;ReplaceText:=True;Dirty:=True;
+    End Else If Hit(320,212,600,224) Then Begin
+     E.SelectionOnly:=Not E.SelectionOnly;Changed(True);
+    End Else If Hit(320,237,600,249) Then Begin
+     E.CompositeSource:=Not E.CompositeSource;Changed(True);
+    End Else If Hit(320,262,600,274) Then Begin
+     E.Invert:=Not E.Invert;Changed(True);
+    End;
+   End Else Begin
+    If Hit(460,82,600,170) Then Begin
+     Field:=7+Min(2,(MY-Y-82) Div 33);ReplaceText:=True;Dirty:=True;
+    End Else If Hit(320,192,600,215) Then Begin
+     View.Color:=(View.Color+1) Mod 16;Changed(False);
+    End Else If Hit(320,225,600,248) Then Begin
+     View.Perspective:=Not View.Perspective;Changed(False);
+    End Else If Hit(320,258,600,281) Then Begin
+     View.Mode:=(View.Mode+1) Mod 3;Changed(False);
+    End Else If Hit(320,295,600,307) Then Begin
+     View.Cull:=Not View.Cull;Changed(False);
+    End Else If Hit(320,320,600,332) Then Begin
+     View.Dither:=Not View.Dither;Changed(False);
+    End;
+   End;
+  End;
+  If Drag And ((MB And 1)<>0) And
+   ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   View.RY:=Max(-3600,Min(3600,View.RY+(MX-OldX)*5));
+   View.RX:=Max(-3600,Min(3600,View.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Sync;Changed(False);
+  End;
+  If (MB And 1)=0 Then Drag:=False;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then Begin
+    Key:=ReadKey;Val(Texts[Field],V,Code);
+    If Code=0 Then Begin
+     If Key=#72 Then V:=V+1 Else If Key=#80 Then V:=V-1;
+     Texts[Field]:=Decimal(V);Parse;ReplaceText:=True;
+    End;
+   End Else Case K Of
+    #27:Done:=True;#13:Apply;
+    #9:Begin
+     Case Tab Of 0:Field:=(Field+1) Mod 5;1:Field:=5+(Field+1) Mod 2;
+      2:Field:=7+(Field-6) Mod 3;End;
+     ReplaceText:=True;Dirty:=True;
+    End;
+    #1:ReplaceText:=True;
+    #8:Begin
+     If ReplaceText Then Texts[Field]:=''
+     Else Delete(Texts[Field],Length(Texts[Field]),1);
+     ReplaceText:=False;Parse;
+    End;
+    Else If K In ['0'..'9','-','+','.',','] Then Begin
+     If ReplaceText Then Texts[Field]:='';
+     If Length(Texts[Field])<8 Then Texts[Field]:=Texts[Field]+K;
+     ReplaceText:=False;Parse;
+    End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);ReleaseMesh(M);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
@@ -10091,6 +10649,7 @@ Begin
    2:MeshExportDialog;
    3:PanoramaDialog;
    4:SketchfabDialog;
+   8:ExtrudeDialog;
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

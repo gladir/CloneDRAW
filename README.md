@@ -20,7 +20,8 @@ Aperçu de Photoshop :
 	</tr>
 	<tr>
 		<td>Calque 3D :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/392a660e-edcc-4f13-94e1-363deb53743b" /></td>
-		<td></td>
+		<td>Fusionner les calques 3D :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/46d26e72-97d0-4a19-89f1-56ce723c3a6b" />
+</td>
 </table>
 
 

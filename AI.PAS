@@ -239,6 +239,9 @@ Var
  ZoomIndex: Integer;
  ViewX, ViewY: Real;
  GlyphRows: Array[0..255,0..7] Of Byte;
+ Panning: Boolean;
+ PanX, PanY: Integer;
+ PanViewX, PanViewY: Real;
 
 Function ZoomScale: Real;
 Begin
@@ -275,19 +278,9 @@ Begin
  NeedsRedraw := True;
 End;
 
-Procedure ChangeZoom(Step, X, Y: Integer);
-Var PX, PY, VisibleW, VisibleH: Real; S: String;
+Procedure ClampView;
+Var VisibleW, VisibleH: Real;
 Begin
- If (ZoomIndex+Step < 0) Or (ZoomIndex+Step > 5) Then Begin
-  StatusMessage := 'Limite de zoom atteinte (25 % a 800 %).';
-  NeedsRedraw := True;
-  Exit;
- End;
- PX := ViewX+(X-TOOLBAR_WIDTH)/ZoomScale;
- PY := ViewY+(Y-MENUBAR_HEIGHT)/ZoomScale;
- Inc(ZoomIndex,Step);
- ViewX := PX-(X-TOOLBAR_WIDTH)/ZoomScale;
- ViewY := PY-(Y-MENUBAR_HEIGHT)/ZoomScale;
  VisibleW := (ScreenWidth-TOOLBAR_WIDTH)/ZoomScale;
  VisibleH := (ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT)/ZoomScale;
  If VisibleW >= ScreenWidth-TOOLBAR_WIDTH Then
@@ -304,8 +297,32 @@ Begin
   If ViewY > ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-VisibleH Then
    ViewY := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-VisibleH;
  End;
+End;
+
+Procedure ChangeZoom(Step, X, Y: Integer);
+Var PX, PY: Real; S: String;
+Begin
+ If (ZoomIndex+Step < 0) Or (ZoomIndex+Step > 5) Then Begin
+  StatusMessage := 'Limite de zoom atteinte (25 % a 800 %).';
+  NeedsRedraw := True;
+  Exit;
+ End;
+ PX := ViewX+(X-TOOLBAR_WIDTH)/ZoomScale;
+ PY := ViewY+(Y-MENUBAR_HEIGHT)/ZoomScale;
+ Inc(ZoomIndex,Step);
+ ViewX := PX-(X-TOOLBAR_WIDTH)/ZoomScale;
+ ViewY := PY-(Y-MENUBAR_HEIGHT)/ZoomScale;
+ ClampView;
  Str(ZOOM_LEVELS[ZoomIndex],S);
  StatusMessage := 'Zoom '+S+' % : clic gauche = agrandir, droit = reduire.';
+ NeedsRedraw := True;
+End;
+
+Procedure UpdatePan;
+Begin
+ ViewX := PanViewX-(MouseX-PanX)/ZoomScale;
+ ViewY := PanViewY-(MouseY-PanY)/ZoomScale;
+ ClampView;
  NeedsRedraw := True;
 End;
 
@@ -455,7 +472,7 @@ Begin
   TOOL_PEN: S := 'Plume (7 / P) - courbe par deux cliquer-glisser';
   TOOL_TEXT: S := 'Texte (8 / T) - cliquer puis saisir / modifier';
   TOOL_ZOOM: S := 'Loupe (9 / Z) - gauche : agrandir, droit : reduire';
-  TOOL_HAND: S := 'Main - non implementee';
+  TOOL_HAND: S := 'Main (H) - glisser pour deplacer la vue';
  End;
  ToolTipText := S;
 End;
@@ -614,7 +631,6 @@ Begin
   Line(X,B,R,B);
   Line(R,Y,R,B);
   If I = CurrentTool Then SetColor(COLOR_WINDOW)
-  Else If I > TOOL_ZOOM Then SetColor(COLOR_BORDER)
   Else SetColor(COLOR_TEXT);
   DrawToolIcon(X+6,Y+2,I);
  End;
@@ -1211,13 +1227,23 @@ Begin
  If MouseX < TOOLBAR_WIDTH Then Begin
   I := ToolHitTest(MouseX, MouseY);
   If I >= 0 Then
-   If I <= TOOL_ZOOM Then CurrentTool := I
-   Else StatusMessage := 'Outil non implemente.';
+   CurrentTool := I;
   Exit;
  End;
  
  If CurrentTool = TOOL_ZOOM Then Begin
   ChangeZoom(1,MouseX,MouseY);
+  Exit;
+ End;
+ If CurrentTool = TOOL_HAND Then Begin
+  PanX := MouseX; PanY := MouseY;
+  PanViewX := ViewX; PanViewY := ViewY;
+  Panning := True;
+  DrawingMode := True;
+  ResetToolTip;
+  If ZoomIndex <= 2 Then
+   StatusMessage := 'Page entiere visible : agrandir avec la Loupe pour la deplacer.'
+  Else StatusMessage := 'Main : glisser la vue, relacher pour terminer, Echap pour annuler.';
   Exit;
  End;
  CanvasX := DocumentX(MouseX);
@@ -1352,6 +1378,12 @@ Var
  CanvasX, CanvasY: Integer;
  NewObj: TGraphicObject;
 Begin
+ If Panning Then Begin
+  UpdatePan;
+  Panning := False;
+  DrawingMode := False;
+  Exit;
+ End;
  If BezierStage <> 0 Then Begin
   UpdateBezier;
   If BezierStage = 1 Then Begin
@@ -1671,7 +1703,7 @@ Begin
   CMD_HELP:
    ShowDialog('Aide', 'Prototype incomplet. Les commandes grisees sont indisponibles.');
   CMD_SHORTCUTS:
-   ShowDialog('Raccourcis', '1-9 : outils. Z : Loupe. 0 : 100 %. F10 : menus.');
+   ShowDialog('Raccourcis', '1-9 : outils. H : Main. Z : Loupe. 0 : 100 %. F10 : menus.');
   CMD_ABOUT:
    ShowDialog('A propos', 'CloneDRAW AI - prototype Pascal, pas un clone complet.');
   CMD_RESOURCES:
@@ -1765,6 +1797,8 @@ Begin
     HandleMouseClick;
     NeedsRedraw := True;
    End;
+  End Else If Panning And ((MouseButtons And 1) <> 0) Then Begin
+   If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then UpdatePan;
   End Else If (BezierStage <> 0) And Not Released And
               ((MouseX <> OldMouseX) Or (MouseY <> OldMouseY)) Then Begin
    UpdateBezier;
@@ -1813,6 +1847,15 @@ Var S: String; Capacity: Integer;
 Begin
  ResetToolTip;
  NeedsRedraw := True;
+ If Panning Then Begin
+  If Key = #27 Then Begin
+   ViewX := PanViewX; ViewY := PanViewY;
+   Panning := False;
+   DrawingMode := False;
+   StatusMessage := 'Deplacement de la vue annule.';
+  End;
+  Exit;
+ End;
  If BezierStage <> 0 Then Begin
   If Key = #27 Then CancelBezier;
   Exit;
@@ -1913,6 +1956,10 @@ Begin
   '9','z','Z': Begin
    CurrentTool := TOOL_ZOOM;
    StatusMessage := 'Loupe : clic gauche = agrandir, droit = reduire ; 0 = 100 %.';
+  End;
+  'h','H': Begin
+   CurrentTool := TOOL_HAND;
+   StatusMessage := 'Main : cliquer-glisser pour deplacer la vue agrandie.';
   End;
   '0': ResetZoom;
   #15, #19: StatusMessage := 'Import/export Adobe Illustrator non implemente.';
@@ -2067,6 +2114,7 @@ Begin
  DrawingMode := False;
  EditingObject := False;
  PencilActive := False;
+ Panning := False;
  BezierStage := 0;
  TextActive := False;
  TextEditIndex := -1;

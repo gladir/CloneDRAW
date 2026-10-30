@@ -6041,6 +6041,7 @@ Const
 
 Var
  FD_SaveFilterIdx: Integer;
+ FD_MeshExportFormat:Integer;
 
 Function FD_Save(Const Title: String; Var FN: String; Var SaveExt: String): Boolean;
 Var
@@ -6059,7 +6060,11 @@ Var
  PathStr, Nm, Candidate, ChosenExt: String;
 
  Function CurFilterLabel: String;
- Begin CurFilterLabel := FD_SAVE_LABELS[FD_SaveFilterIdx]; End;
+ Begin
+  If FD_MeshExportFormat=1 Then CurFilterLabel:='OBJ Wavefront'
+  Else If FD_MeshExportFormat>1 Then CurFilterLabel:='STL 3D'
+  Else CurFilterLabel:=FD_SAVE_LABELS[FD_SaveFilterIdx];
+ End;
 
  Procedure RedrawAll;
  Begin
@@ -6074,7 +6079,7 @@ Var
   DrawBevel(DX1+58, DY1+19, DX2-8, DY1+33, False);
   PathStr := FD_CurDir;
   If Length(PathStr) > 65 Then PathStr := '...'+Copy(PathStr, Length(PathStr)-61, 62);
-  OutTextXY(DX1+62, DY1+22, PathStr);
+  SetColor(UI_TEXT);OutTextXY(DX1+62, DY1+22, PathStr);
   OutTextXY(DirX1, DY1+38, 'Dossiers');
   OutTextXY(FilX1, DY1+38, 'Fichiers existants');
   ShowMouseCursor;
@@ -6088,7 +6093,7 @@ Var
   SetColor(UI_TEXT);
   OutTextXY(NamX1+4, NamY1+4, FD_NameBuf);
   If FD_Focus=2 Then OutTextXY(NamX1+4+Length(FD_NameBuf)*8, NamY1+4, '_');
-  OutTextXY(DX2-220, NamY1+4, 'Format:');
+  OutTextXY(DX2-220, NamY1+4, 'Type:');
   FillRect(TypX1, NamY1, TypX2, NamY2, UI_BG_PANEL);
   DrawBevel(TypX1, NamY1, TypX2, NamY2, True);
   SetColor(UI_TEXT);
@@ -6134,6 +6139,11 @@ Var
     End;
    End;
   ChosenExt := FD_SAVE_EXT[FD_SaveFilterIdx];
+  If FD_MeshExportFormat>0 Then Begin
+   If FD_MeshExportFormat=1 Then ChosenExt:='.OBJ' Else ChosenExt:='.STL';
+   Curr:=ExtractExt(Sel);
+   If Curr<>'' Then Delete(Sel,Length(Sel)-Length(Curr)+1,Length(Curr));
+  End;
   Curr := ExtractExt(Sel);
   If Curr = '' Then Sel := Sel + ChosenExt
   Else If (Curr <> '.BMP') And (Curr <> '.DIB') And (Curr <> '.PSD') And
@@ -6148,7 +6158,7 @@ Var
    If (Length(Candidate) > 0) And (Candidate[Length(Candidate)] <> '\') Then Candidate := Candidate + '\';
    Candidate := Candidate + Sel;
   End;
-  If FileExistsLocal(Candidate) Then
+  If (FD_MeshExportFormat=0) And FileExistsLocal(Candidate) Then
    If Not YesNoDialog('Confirmation', 'Le fichier existe deja. L ecraser ?') Then Begin
     RedrawAll; Exit;
    End;
@@ -6184,6 +6194,7 @@ Var
   End;
 
  Begin
+  If FD_MeshExportFormat>0 Then Exit;
   SelF := FD_SaveFilterIdx;
   VisRows := FD_SAVE_NUM;
   DDX1 := TypX1; DDY1 := NamY2+1;
@@ -7893,6 +7904,241 @@ Else If Hit(20,254,135,278) Then Begin Before:=Not Before;Dirty:=True;End
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
+Function MeshExportExists(Const Name:String):Boolean;
+Var SR:SearchRec;
+Begin
+ FindFirst(Name,AnyFile,SR);MeshExportExists:=DosError=0;
+ {$IFDEF FPC}FindClose(SR);{$ENDIF}
+End;
+
+{ Export de geometrie autonome : les cameras restent dans le document. }
+Function PrepareMeshExport(Source:PMesh;Const O:TMeshOptions;
+ Transform,Center,SwapAxes,Reverse:Boolean;Factor:Double;
+ Var M:PMesh;Var Error:String):Boolean;
+Var I:LongInt;A:LongInt;VX,VY,VZ,T,CX,CY,CZ,Extent:Double;
+ C1,S1,C2,S2,C3,S3:Double;
+Begin
+ PrepareMeshExport:=False;M:=Nil;Error:='';
+ If (Source=Nil) Or (Factor<0.000001) Or (Factor>1000000) Then Begin
+  Error:='Echelle entre 0.000001 et 1000000.';Exit;
+ End;
+ M:=PMesh(RotationAllocate(SizeOf(TMesh)));
+ If M=Nil Then Begin Error:='Memoire insuffisante.';Exit;End;
+ FillChar(M^,SizeOf(TMesh),0);M^.References:=1;
+ M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices)));
+ M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
+ If (M^.Vertices=Nil) Or (M^.Triangles=Nil) Then Begin
+  ReleaseMesh(M);Error:='Memoire insuffisante.';Exit;
+ End;
+ CX:=(Source^.Minimum.X+Source^.Maximum.X)/2;
+ CY:=(Source^.Minimum.Y+Source^.Maximum.Y)/2;
+ CZ:=(Source^.Minimum.Z+Source^.Maximum.Z)/2;
+ Extent:=MeshMax(Source^.Maximum.X-Source^.Minimum.X,
+  MeshMax(Source^.Maximum.Y-Source^.Minimum.Y,
+   Source^.Maximum.Z-Source^.Minimum.Z));
+ If Extent<=0 Then Extent:=1;
+ RotationBasis(O.RX,True,C1,S1);RotationBasis(O.RY,True,C2,S2);
+ RotationBasis(O.RZ,True,C3,S3);
+ For I:=0 To Source^.VertexCount-1 Do Begin
+  VX:=Source^.Vertices^[I].X;VY:=Source^.Vertices^[I].Y;
+  VZ:=Source^.Vertices^[I].Z;
+  If Center Or Transform Then Begin VX:=VX-CX;VY:=VY-CY;VZ:=VZ-CZ;End;
+  If Transform Then Begin
+   VX:=VX/Extent;VY:=VY/Extent;VZ:=VZ/Extent;
+   T:=VY*C1-VZ*S1;VZ:=VY*S1+VZ*C1;VY:=T;
+   T:=VX*C2+VZ*S2;VZ:=-VX*S2+VZ*C2;VX:=T;
+   T:=VX*C3-VY*S3;VY:=VX*S3+VY*C3;VX:=T;
+   VX:=VX*O.Scale/100+O.OffsetX/100;
+   VY:=VY*O.Scale/100-O.OffsetY/100;VZ:=VZ*O.Scale/100;
+  End;
+  If SwapAxes Then Begin T:=VY;VY:=VZ;VZ:=T;End;
+  VX:=VX*Factor;VY:=VY*Factor;VZ:=VZ*Factor;
+  If (Abs(VX)>1E12) Or (Abs(VY)>1E12) Or (Abs(VZ)>1E12) Or
+   ((VX<>0) And (Abs(VX)<1E-30)) Or
+   ((VY<>0) And (Abs(VY)<1E-30)) Or
+   ((VZ<>0) And (Abs(VZ)<1E-30)) Then Begin
+   ReleaseMesh(M);Error:='Coordonnees hors limites apres conversion.';Exit;
+  End;
+  MeshVertex(M,VX,VY,VZ);
+ End;
+ M^.TriangleCount:=Source^.TriangleCount;
+ For I:=0 To M^.TriangleCount-1 Do Begin
+  M^.Triangles^[I]:=Source^.Triangles^[I];
+  { L'echange Y/Z change la parite du repere : corriger les faces. }
+  If SwapAxes<>Reverse Then Begin
+   A:=M^.Triangles^[I].B;M^.Triangles^[I].B:=M^.Triangles^[I].C;
+   M^.Triangles^[I].C:=A;
+  End;
+ End;
+ M^.Source:=Source^.Source;M^.Format:=Source^.Format;
+ M^.Groups:=Source^.Groups;M^.Materials:=0;
+ { Centrage final aussi apres application des decalages du calque. }
+ If Center And Transform Then Begin
+  CX:=(M^.Minimum.X+M^.Maximum.X)/2;
+  CY:=(M^.Minimum.Y+M^.Maximum.Y)/2;
+  CZ:=(M^.Minimum.Z+M^.Maximum.Z)/2;
+  For I:=0 To M^.VertexCount-1 Do Begin
+   M^.Vertices^[I].X:=M^.Vertices^[I].X-CX;
+   M^.Vertices^[I].Y:=M^.Vertices^[I].Y-CY;
+   M^.Vertices^[I].Z:=M^.Vertices^[I].Z-CZ;
+  End;
+  M^.Minimum.X:=M^.Minimum.X-CX;M^.Maximum.X:=M^.Maximum.X-CX;
+  M^.Minimum.Y:=M^.Minimum.Y-CY;M^.Maximum.Y:=M^.Maximum.Y-CY;
+  M^.Minimum.Z:=M^.Minimum.Z-CZ;M^.Maximum.Z:=M^.Maximum.Z-CZ;
+ End;
+ PrepareMeshExport:=True;
+End;
+
+Function MeshExportNumber(V:Double):String;
+Var S:String;
+Begin
+ Str(V:24,S);While (Length(S)>0) And (S[1]=' ') Do Delete(S,1,1);
+ MeshExportNumber:=S;
+End;
+Procedure MeshExportNormal(M:PMesh;I:LongInt;Var N:TMeshVector);
+Var A,B,C:TMeshVector;X,Y,Z,L:Double;
+Begin
+ A:=M^.Vertices^[M^.Triangles^[I].A];
+ B:=M^.Vertices^[M^.Triangles^[I].B];
+ C:=M^.Vertices^[M^.Triangles^[I].C];
+ X:=(Double(B.Y)-A.Y)*(Double(C.Z)-A.Z)-(Double(B.Z)-A.Z)*(Double(C.Y)-A.Y);
+ Y:=(Double(B.Z)-A.Z)*(Double(C.X)-A.X)-(Double(B.X)-A.X)*(Double(C.Z)-A.Z);
+ Z:=(Double(B.X)-A.X)*(Double(C.Y)-A.Y)-(Double(B.Y)-A.Y)*(Double(C.X)-A.X);
+ L:=Sqrt(X*X+Y*Y+Z*Z);If L=0 Then L:=1;
+ N.X:=X/L;N.Y:=Y/L;N.Z:=Z/L;
+End;
+{ Meme encodeur pour mesurer exactement et pour ecrire. }
+Function MeshExportStream(M:PMesh;Format:Integer;Normals,Writing,
+ Progress:Boolean;Var F:File;Var Bytes:LongInt):Boolean;
+Var Failed:Boolean;I,J,Index:LongInt;N,V:TMeshVector;
+ Header:Array[0..83] Of Byte;RecordData:Array[0..49] Of Byte;
+ S:String;K:Char;
+ Procedure Emit(Var Data;Size:LongInt);
+ Var Written:LongInt;
+ Begin
+  If Failed Then Exit;
+  If Writing Then Begin
+   {$I-}BlockWrite(F,Data,Size,Written);{$I+}
+   Failed:=(IOResult<>0) Or (Written<>Size);
+  End;
+  Inc(Bytes,Size);
+ End;
+ Procedure Line(S:String);
+ Begin S:=S+#13#10;Emit(S[1],Length(S));End;
+ Function VectorText(Const V:TMeshVector):String;
+ Begin VectorText:=MeshExportNumber(V.X)+' '+MeshExportNumber(V.Y)+
+  ' '+MeshExportNumber(V.Z);End;
+ Procedure PutLong(Var Data;Position:Integer;Value:LongWord);
+ Var P:^Byte;J:Integer;
+ Begin
+  P:=@Data;Inc(P,Position);
+  For J:=0 To 3 Do Begin P^:=Value And 255;Value:=Value Shr 8;Inc(P);End;
+ End;
+ Procedure PutFloat(Position:Integer;Value:Single);
+ Var Bits:LongWord;
+ Begin Move(Value,Bits,4);PutLong(RecordData,Position,Bits);End;
+Begin
+ MeshExportStream:=False;Bytes:=0;Failed:=False;
+ If (M=Nil) Or (Format<0) Or (Format>2) Then Exit;
+ If Format=0 Then Begin
+  Line('# CloneDRAW PSP - geometry only');Line('o CloneDRAW');
+  For I:=0 To M^.VertexCount-1 Do Line('v '+VectorText(M^.Vertices^[I]));
+ End Else If Format=1 Then Line('solid CloneDRAW')
+ Else Begin
+  FillChar(Header,SizeOf(Header),0);S:='CloneDRAW PSP binary STL';
+  Move(S[1],Header[0],Length(S));
+  PutLong(Header,80,M^.TriangleCount);Emit(Header,SizeOf(Header));
+ End;
+ For I:=0 To M^.TriangleCount-1 Do Begin
+  If Writing And Progress And (I Mod 128=0) Then Begin
+   HideMouseCursor;
+   FillRect(20,ScreenHeight-45,ScreenWidth-20,ScreenHeight-23,LightGray);
+   SetColor(Black);OutTextXY(28,ScreenHeight-38,
+    'Export 3D : '+IntToStr(I*100 Div M^.TriangleCount)+'% - Echap : annuler');
+   ShowMouseCursor;
+   If KeyPressed Then Begin K:=ReadKey;If K=#27 Then Failed:=True;End;
+  End;
+  If Failed Then Break;MeshExportNormal(M,I,N);
+  If Format=0 Then Begin
+   If Normals Then Line('vn '+VectorText(N));S:='f';
+   For J:=0 To 2 Do Begin
+    Case J Of 0:Index:=M^.Triangles^[I].A;1:Index:=M^.Triangles^[I].B;
+     2:Index:=M^.Triangles^[I].C;End;
+    S:=S+' '+IntToStr(Index+1);
+    If Normals Then S:=S+'//'+IntToStr(I+1);
+   End;
+   Line(S);
+  End Else Begin
+   If Format=1 Then Begin Line(' facet normal '+VectorText(N));
+    Line('  outer loop');End
+   Else Begin FillChar(RecordData,SizeOf(RecordData),0);
+    PutFloat(0,N.X);PutFloat(4,N.Y);PutFloat(8,N.Z);End;
+   For J:=0 To 2 Do Begin
+    Case J Of 0:Index:=M^.Triangles^[I].A;1:Index:=M^.Triangles^[I].B;
+     2:Index:=M^.Triangles^[I].C;End;
+    V:=M^.Vertices^[Index];
+    If Format=1 Then Line('   vertex '+VectorText(V))
+    Else Begin PutFloat(12+J*12,V.X);PutFloat(16+J*12,V.Y);
+     PutFloat(20+J*12,V.Z);End;
+   End;
+   If Format=1 Then Begin Line('  endloop');Line(' endfacet');End
+   Else Emit(RecordData,SizeOf(RecordData));
+  End;
+ End;
+ If Format=1 Then Line('endsolid CloneDRAW');
+ MeshExportStream:=Not Failed;
+End;
+
+Function WriteMeshExport(M:PMesh;Const Name:String;Format:Integer;
+ Normals,Progress:Boolean;Var Error:String):Boolean;
+Var F,B:File;SR:SearchRec;Temp,Backup:String;I,Code:Integer;Bytes:LongInt;
+ Good,HadOld:Boolean;
+ Procedure RemoveTemp;
+ Begin Assign(F,Temp);{$I-}Erase(F);{$I+}Code:=IOResult;End;
+Begin
+ WriteMeshExport:=False;Error:='';
+ If (M=Nil) Or (Name='') Or (Length(Name)>230) Then Begin
+  Error:='Nom vide, trop long ou geometrie absente.';Exit;
+ End;
+ If (Format<0) Or (Format>2) Then Begin Error:='Format invalide.';Exit;End;
+ FindFirst(Name,AnyFile,SR);Good:=DosError=0;
+ If Good Then Good:=(SR.Attr And Directory)<>0;
+ {$IFDEF FPC}FindClose(SR);{$ENDIF}
+ If Good Then Begin Error:='La destination est un dossier.';Exit;End;
+ I:=0;
+ Repeat
+  Temp:=Name+'.~3d'+IntToStr(I);Backup:=Temp+'.bak';Inc(I);
+ Until (Not MeshExportExists(Temp) And Not MeshExportExists(Backup)) Or
+  (I=1000);
+ If I=1000 Then Begin Error:='Impossible de creer un fichier temporaire.';
+  Exit;End;
+ Assign(F,Temp);{$I-}Rewrite(F,1);{$I+}
+ If IOResult<>0 Then Begin Error:='Dossier inaccessible en ecriture.';Exit;End;
+ Good:=MeshExportStream(M,Format,Normals,True,Progress,F,Bytes);
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Good:=False;
+ If Not Good Then Begin RemoveTemp;
+  Error:='Export annule ou erreur disque. Original conserve.';Exit;End;
+ HadOld:=MeshExportExists(Name);
+ If HadOld Then Begin
+  Assign(B,Name);{$I-}Rename(B,Backup);{$I+}
+  If IOResult<>0 Then Begin RemoveTemp;
+   Error:='Fichier destination verrouille. Original conserve.';Exit;End;
+ End;
+ Assign(F,Temp);{$I-}Rename(F,Name);{$I+}
+ If IOResult<>0 Then Begin
+  If HadOld Then Begin Assign(B,Backup);{$I-}Rename(B,Name);{$I+}
+   If IOResult<>0 Then Begin
+    Error:='Original preserve dans : '+Backup;RemoveTemp;Exit;
+   End;
+  End;
+  RemoveTemp;Error:='Impossible de finaliser le fichier.';Exit;
+ End;
+ If HadOld Then Begin Assign(B,Backup);{$I-}Erase(B);{$I+}
+  If IOResult<>0 Then Error:='Export termine. Ancien fichier : '+Backup;
+ End;
+ WriteMeshExport:=True;
+End;
+
 Procedure MeshImportDialog(Target:Integer);
 Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
  X,Y,W,H,MX,MY,MB,Previous,Field,I,Code,OldX,OldY,PreviewW,PreviewH:Integer;
@@ -8366,6 +8612,263 @@ Begin
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
+Procedure MeshExportDialog;
+Var M:PMesh;View:TMeshOptions;Preview:PByteArr;F:File;
+ X,Y,MX,MY,MB,Previous,Source,Format,Field,PW,PH,I,J,Code:Integer;
+ OldX,OldY:Integer;Bytes:LongInt;Factor:Double;
+ Transform,Center,SwapAxes,Reverse,Normals,Info,Dirty,Rebuild,
+ PreviewDirty,Done,Drag,ReplaceText,Valid:Boolean;
+ Name,ScaleText,Message,Error,S:String;K,E:Char;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Function Decimal(V:Double):String;
+ Var T:String;
+ Begin
+  If ((V<>0) And (Abs(V)<0.001)) Or (Abs(V)>=1E9) Then
+   T:=MeshExportNumber(V) Else Str(V:0:3,T);
+  Decimal:=T;
+ End;
+ Function Extension:String;
+ Begin If Format=0 Then Extension:='.obj' Else Extension:='.stl';End;
+ Procedure FixExtension;
+ Var Ext:String;
+ Begin
+  Ext:=ExtractExt(Name);
+  If Ext<>'' Then Delete(Name,Length(Name)-Length(Ext)+1,Length(Ext));
+  Name:=Name+Extension;
+ End;
+ Procedure Changed(Geometry:Boolean);
+ Begin Rebuild:=Rebuild Or Geometry;PreviewDirty:=True;Dirty:=True;
+  Message:='';End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+23,True);SetColor(Black);
+  OutTextXY(X+L+6,Y+T+8,Caption);
+ End;
+ Procedure Check(T:Integer;Value:Boolean;Const Caption:String);
+ Begin
+  SetColor(Black);Rectangle(X+320,Y+T,X+332,Y+T+12);
+  If Value Then Begin Line(X+322,Y+T+6,X+325,Y+T+10);
+   Line(X+325,Y+T+10,X+331,Y+T+2);End;
+  OutTextXY(X+340,Y+T+3,Caption);
+ End;
+ Procedure Browse;
+ Var Ext:String;OldFilter,OldSave:Integer;OldModel:Boolean;
+ Begin
+  OldFilter:=FD_FilterIdx;OldSave:=FD_SaveFilterIdx;
+  OldModel:=FD_ModelMode;FD_ModelMode:=True;
+  FD_MeshExportFormat:=Format+1;
+  FD_Save('Destination du modele 3D',Name,Ext);
+  FD_MeshExportFormat:=0;FD_ModelMode:=OldModel;
+  FD_FilterIdx:=OldFilter;FD_SaveFilterIdx:=OldSave;Dirty:=True;
+  GetMouseStateLocal(MX,MY,Previous);
+ End;
+ Procedure Draw;
+ Var PX,PY,OX,OY,J:Integer;Color:Byte;
+ Begin
+  If Rebuild Then Begin
+   ReleaseMesh(M);Valid:=MeshNumber(ScaleText,Factor) And
+    (Factor>=0.000001) And (Factor<=1000000);
+   If Valid Then Begin
+    Valid:=PrepareMeshExport(Layers[Source].Mesh,
+     Layers[Source].MeshOptions,Transform,Center,SwapAxes,Reverse,
+     Factor,M,Error);If Not Valid Then Message:=Error;
+   End Else Message:='Echelle entre 0.000001 et 1000000.';
+   Rebuild:=False;
+  End;
+  If PreviewDirty Then Begin
+   If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);Preview:=Nil;
+   If M<>Nil Then Begin
+    If Not RenderMesh(M,View,PW,PH,True,Preview) Then
+     Message:='Apercu annule ou memoire insuffisante.';
+    MeshExportStream(M,Format,Normals,False,False,F,Bytes);
+   End Else Bytes:=0;
+   PreviewDirty:=False;
+  End;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Exporter un calque 3D - geometrie OBJ / STL');
+  FillRect(X+20,Y+40,X+472,Y+64,White);
+  If Field=0 Then SetColor(Blue) Else SetColor(DarkGray);
+  Rectangle(X+20,Y+40,X+472,Y+64);SetColor(Black);S:=Name;
+  If Length(S)>54 Then S:='...'+Copy(S,Length(S)-50,51);
+  OutTextXY(X+26,Y+48,S);Button(490,40,110,'Parcourir');
+  For PY:=0 To 195 Do For PX:=0 To 279 Do Begin
+   Color:=White;If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=LightGray;
+   OX:=PX-(280-PW) Div 2;OY:=PY-(196-PH) Div 2;
+   If (Preview<>Nil) And (OX>=0) And (OY>=0) And (OX<PW) And
+    (OY<PH) Then If Preview^[LongInt(OY)*PW+OX]<>255 Then
+     Color:=Preview^[LongInt(OY)*PW+OX];
+   PutPixel(X+20+PX,Y+82+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+19,Y+81,X+300,Y+278);
+  If Info And (M<>Nil) Then Begin
+   FillRect(X+21,Y+83,X+299,Y+276,White);SetColor(Black);
+   OutTextXY(X+28,Y+94,'Coordonnees de sortie');
+   OutTextXY(X+28,Y+116,'Largeur X : '+
+    Decimal(M^.Maximum.X-M^.Minimum.X));
+   OutTextXY(X+28,Y+138,'Hauteur Y : '+
+    Decimal(M^.Maximum.Y-M^.Minimum.Y));
+   OutTextXY(X+28,Y+160,'Profondeur Z : '+
+    Decimal(M^.Maximum.Z-M^.Minimum.Z));
+   OutTextXY(X+28,Y+186,'Memoire geometrie : '+
+    IntToStr(SizeOf(TMeshVertices)+SizeOf(TMeshTriangles))+' o');
+   OutTextXY(X+28,Y+208,'Faces triangulees uniquement');
+   OutTextXY(X+28,Y+230,'Normales par face, recalculees');
+   OutTextXY(X+28,Y+252,'Camera d''apercu non exportee');
+  End;
+  Button(320,82,280,'Calque : '+Copy(Layers[Source].Name,1,22));
+  For J:=0 To 2 Do Begin
+   SetColor(Black);Circle(X+326,Y+126+J*22,6);
+   If J=Format Then Begin SetFillStyle(SolidFill,Black);
+    FillEllipse(X+326,Y+126+J*22,3,3);End;
+   Case J Of 0:S:='OBJ Wavefront';1:S:='STL ASCII';2:S:='STL binaire';End;
+   OutTextXY(X+340,Y+123+J*22,S);
+  End;
+  Check(200,Transform,'Appliquer transformations');
+  Check(222,Center,'Centrer la geometrie');
+  Check(244,SwapAxes,'Echanger les axes Y / Z');
+  Check(266,Reverse,'Inverser les faces');
+  Check(288,Normals,'Normales OBJ (STL : oui)');
+  SetColor(Black);
+  If M<>Nil Then Begin
+   OutTextXY(X+20,Y+291,IntToStr(M^.VertexCount)+' sommets / '+
+    IntToStr(M^.TriangleCount)+' triangles');
+   OutTextXY(X+20,Y+309,'Taille exacte : '+IntToStr(Bytes)+' o');
+  End Else OutTextXY(X+20,Y+291,'Parametres invalides');
+  OutTextXY(X+20,Y+331,'Echelle des coordonnees :');
+  FillRect(X+20,Y+348,X+160,Y+371,White);
+  If Field=1 Then SetColor(Blue) Else SetColor(DarkGray);
+  Rectangle(X+20,Y+348,X+160,Y+371);SetColor(Black);
+  OutTextXY(X+26,Y+356,ScaleText);Button(170,348,130,'x1 / x0.001');
+  S:='Orthographique';If View.Perspective Then S:='Perspective';
+  Button(320,318,140,S);Button(468,318,132,'Solide / fil');
+  Button(20,379,130,'Informations');Button(170,379,130,'Vue initiale');
+  Button(320,379,132,'Annuler');Button(468,379,132,'Exporter');
+  OutTextXY(X+20,Y+409,
+   'Geometrie seule : sans textures/couleurs. Glisser : vue 3D.');
+  If Message<>'' Then Begin SetColor(Red);
+   OutTextXY(X+20,Y+425,Copy(Message,1,73));End;
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  If Rebuild Then Draw;
+  If Not Valid Or (M=Nil) Then Exit;
+  If Name='' Then Begin Message:='Choisissez le fichier destination.';
+   Dirty:=True;Exit;End;
+  FixExtension;
+  If MeshExportExists(Name) Then
+   If Not YesNoDialog('Export 3D','Remplacer le fichier existant ?') Then
+    Begin Dirty:=True;Exit;End;
+  If WriteMeshExport(M,Name,Format,Normals,True,Error) Then Begin
+   If Error<>'' Then ShowDialog('Export 3D',Error)
+   Else ShowDialog('Export 3D','Modele 3D exporte avec succes.');
+   Done:=True;
+  End Else Begin Message:=Error;Dirty:=True;End;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;Source:=ActiveLayer;
+ If Layers[Source].Mesh=Nil Then Begin
+  Source:=-1;For I:=0 To LayerCount-1 Do
+   If (Source<0) And (Layers[I].Mesh<>Nil) Then Source:=I;
+ End;
+ If Source<0 Then Begin
+  ShowDialog('Export 3D','Aucun calque ne contient de geometrie 3D.');Exit;
+ End;
+ M:=Nil;Preview:=Nil;Format:=0;Bytes:=0;DefaultMeshOptions(View);
+ Transform:=False;Center:=False;SwapAxes:=False;Reverse:=False;
+ Normals:=True;Info:=False;ScaleText:='1';Factor:=1;
+ Name:=Layers[Source].Mesh^.Source;
+ If (Name='') Or (ExtractExt(Name)='') Then Name:='modele';
+ S:=ExtractExt(Name);
+ If S<>'' Then Delete(Name,Length(Name)-Length(S)+1,Length(S));
+ Name:=Name+'-export.obj';Message:='';Field:=0;ReplaceText:=True;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ If LongInt(ImgW)*196>LongInt(ImgH)*280 Then Begin
+  PW:=280;PH:=Max(1,Round(ImgH*280.0/ImgW));
+ End Else Begin PH:=196;PW:=Max(1,Round(ImgW*196.0/ImgH));End;
+ Dirty:=True;Rebuild:=True;PreviewDirty:=True;Done:=False;Drag:=False;
+ GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(490,40,600,64) Then Browse
+   Else If Hit(20,40,472,64) Or Hit(20,348,160,371) Then Begin
+    Field:=0;If MY>Y+300 Then Field:=1;ReplaceText:=True;Dirty:=True;
+   End Else If Hit(320,82,600,105) Then Begin
+    Repeat Source:=(Source+1) Mod LayerCount;
+    Until Layers[Source].Mesh<>Nil;Changed(True);
+   End Else If Hit(320,118,600,180) Then Begin
+    Format:=Min(2,(MY-Y-118) Div 22);FixExtension;Changed(False);
+   End Else If Hit(320,200,600,212) Then Begin
+    Transform:=Not Transform;Changed(True);
+   End Else If Hit(320,222,600,234) Then Begin
+    Center:=Not Center;Changed(True);
+   End Else If Hit(320,244,600,256) Then Begin
+    SwapAxes:=Not SwapAxes;Changed(True);
+   End Else If Hit(320,266,600,278) Then Begin
+    Reverse:=Not Reverse;Changed(True);
+   End Else If Hit(320,288,600,300) Then Begin
+    Normals:=Not Normals;Changed(False);
+   End Else If Hit(320,318,460,341) Then Begin
+    View.Perspective:=Not View.Perspective;Changed(False);
+   End Else If Hit(468,318,600,341) Then Begin
+    View.Mode:=(View.Mode+1) Mod 3;Changed(False);
+   End Else If Hit(170,348,300,371) Then Begin
+    If ScaleText='1' Then ScaleText:='0.001' Else ScaleText:='1';
+    Changed(True);
+   End Else If Hit(20,379,150,402) Then Begin Info:=Not Info;Dirty:=True;
+   End Else If Hit(170,379,300,402) Then Begin
+    DefaultMeshOptions(View);Changed(False);
+   End Else If Hit(320,379,452,402) Then Done:=True
+   Else If Hit(468,379,600,402) Then Apply
+   Else If Hit(20,82,300,278) And Not Info Then Begin
+    Drag:=True;OldX:=MX;OldY:=MY;
+   End;
+  End;
+  If Drag And ((MB And 1)<>0) And
+   ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   View.RY:=Max(-3600,Min(3600,View.RY+(MX-OldX)*5));
+   View.RX:=Max(-3600,Min(3600,View.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Changed(False);
+  End;
+  If (MB And 1)=0 Then Drag:=False;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then E:=ReadKey Else Case K Of
+    #27:Done:=True;#15:Browse;#13:Apply;
+    #9:Begin Field:=1-Field;ReplaceText:=True;Dirty:=True;End;
+    #1:ReplaceText:=True;
+    #8:Begin
+     If Field=0 Then Begin
+      If ReplaceText Then Name:='' Else Delete(Name,Length(Name),1);
+     End Else Begin
+      If ReplaceText Then ScaleText:=''
+      Else Delete(ScaleText,Length(ScaleText),1);Changed(True);
+     End;
+     ReplaceText:=False;Dirty:=True;
+    End;
+    Else If K>=' ' Then Begin
+     If Field=0 Then Begin
+      If ReplaceText Then Name:='';If Length(Name)<230 Then Name:=Name+K;
+     End Else If K In ['0'..'9','e','E','+','-','.',','] Then Begin
+      If ReplaceText Then ScaleText:='';If K=',' Then K:='.';
+      If Length(ScaleText)<16 Then ScaleText:=ScaleText+K;Changed(True);
+     End;
+     ReplaceText:=False;Dirty:=True;
+    End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);ReleaseMesh(M);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
@@ -8425,6 +8928,7 @@ Begin
   MENU_3D: Case IIdx Of
    0:MeshImportDialog(-1);
    1:MeshMergeDialog;
+   2:MeshExportDialog;
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

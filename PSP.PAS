@@ -3143,6 +3143,284 @@ Begin
  BuildSelectionExtrusion:=True;
 End;
 
+Type TLayerMeshOptions=Record
+ Shape,UCount,VCount,Amount,ZeroLevel,LowLevel,HighLevel,Gamma,
+ Smooth,YScale,Base,Channel:Integer;
+ CompositeSource,SelectionOnly,Invert,Closed,Holes,Alternate,NewLayer:Boolean;
+End;
+ TLayerMeshStats=Record
+ Bounds:TRect;Vertices,Triangles,Missing,Clamped:LongInt;
+ MinHeight,MaxHeight:Double;Closed:Boolean;
+End;
+ TLayerMeshMask=Array[0..16640] Of Byte;PLayerMeshMask=^TLayerMeshMask;
+Procedure DefaultLayerMeshOptions(Var O:TLayerMeshOptions);
+Begin
+ FillChar(O,SizeOf(O),0);O.UCount:=32;O.VCount:=24;O.Amount:=50;
+ O.ZeroLevel:=128;O.HighLevel:=255;O.Gamma:=100;O.YScale:=100;O.Base:=10;
+ O.Closed:=True;O.Alternate:=True;O.NewLayer:=True;
+End;
+Function LayerMeshOptionsValid(Const O:TLayerMeshOptions):Boolean;
+Begin
+ LayerMeshOptionsValid:=(O.Shape>=0) And (O.Shape<=3) And
+  (O.UCount>=8) And (O.UCount<=128) And (O.VCount>=4) And
+  (O.VCount<=128) And (O.Amount>=0) And (O.Amount<=200) And
+  (O.ZeroLevel>=0) And (O.ZeroLevel<=255) And
+  (O.LowLevel>=0) And (O.LowLevel<O.HighLevel) And (O.HighLevel<=255) And
+  (O.Gamma>=25) And (O.Gamma<=400) And (O.Smooth>=0) And (O.Smooth<=8) And
+  (O.Channel>=0) And (O.Channel<=4) And
+  (O.YScale>=10) And (O.YScale<=400) And (O.Base>=1) And (O.Base<=100) And
+  (Not O.Holes Or ((O.Shape=0) And Not O.Closed));
+End;
+Function LayerMeshBounds(Const O:TLayerMeshOptions;Var Bounds:TRect):Boolean;
+Begin
+ Bounds.L:=0;Bounds.T:=0;Bounds.R:=ImgW-1;Bounds.B:=ImgH-1;
+ LayerMeshBounds:=False;
+ If (ImgW<1) Or (ImgH<1) Or (ImgW>4096) Or (ImgH>4096) Then Exit;
+ If O.SelectionOnly Then Begin
+  If Not SelectionActive Then Exit;
+  Bounds.L:=Max(0,Min(SelectionRect.L,SelectionRect.R));
+  Bounds.T:=Max(0,Min(SelectionRect.T,SelectionRect.B));
+  Bounds.R:=Min(ImgW-1,Max(SelectionRect.L,SelectionRect.R));
+  Bounds.B:=Min(ImgH-1,Max(SelectionRect.T,SelectionRect.B));
+ End;
+ LayerMeshBounds:=(Bounds.L<=Bounds.R) And (Bounds.T<=Bounds.B);
+End;
+{ Echantillonnage bilineaire, bouclage adapte a la primitive. }
+Procedure LayerMeshSample(Const O:TLayerMeshOptions;Const Bounds:TRect;
+ U,V:Double;Var Value,Alpha:Double);
+Var SW,SH,IX,IY,X,Y,J,K,N,DX,DY,Samples:Integer;SX,SY,FX,FY,WX,WY,W,
+ Sum,A,Total,LocalValue:Double;Color:Byte;Lum:LongInt;
+Begin
+ SW:=Bounds.R-Bounds.L+1;SH:=Bounds.B-Bounds.T+1;
+ Sum:=0;Total:=0;A:=0;Samples:=1;If O.Smooth>0 Then Samples:=9;
+ For N:=0 To Samples-1 Do Begin
+  DX:=0;DY:=0;If Samples>1 Then Begin
+   DX:=(N Mod 3-1)*O.Smooth;DY:=(N Div 3-1)*O.Smooth;End;
+  SX:=U*SW-0.5+DX;SY:=V*SH-0.5+DY;
+  IX:=Trunc(SX+65536)-65536;IY:=Trunc(SY+65536)-65536;
+  FX:=SX-IX;FY:=SY-IY;
+  For J:=0 To 1 Do For K:=0 To 1 Do Begin
+   X:=IX+K;Y:=IY+J;
+   If O.Shape<>0 Then Begin X:=X Mod SW;If X<0 Then Inc(X,SW);End
+   Else X:=Max(0,Min(SW-1,X));
+   If O.Shape=3 Then Begin Y:=Y Mod SH;If Y<0 Then Inc(Y,SH);End
+   Else Y:=Max(0,Min(SH-1,Y));
+   WX:=1-FX;If K=1 Then WX:=FX;WY:=1-FY;If J=1 Then WY:=FY;W:=WX*WY;
+   If O.CompositeSource Then Color:=Composite(Bounds.L+X,Bounds.T+Y)
+   Else Color:=GetLayerPixel(ActiveLayer,Bounds.L+X,Bounds.T+Y);
+   Total:=Total+W;
+   If Color<>255 Then Begin
+    Color:=Color And 15;A:=A+W;
+    Case O.Channel Of
+     1:LocalValue:=VGA_R[Color]/255.0;
+     2:LocalValue:=VGA_G[Color]/255.0;
+     3:LocalValue:=VGA_B[Color]/255.0;
+     Else Begin
+      Lum:=LongInt(VGA_R[Color])*299+LongInt(VGA_G[Color])*587+
+       LongInt(VGA_B[Color])*114;LocalValue:=Lum/255000.0;
+     End;
+    End;Sum:=Sum+LocalValue*W;
+   End;
+  End;
+ End;
+ Alpha:=0;If Total>0 Then Alpha:=A/Total;
+ Value:=O.ZeroLevel/255.0;
+ If A>0.000001 Then Value:=Sum/A;
+ If O.Channel=4 Then Value:=Alpha;
+End;
+Procedure LayerMeshHeight(Const O:TLayerMeshOptions;Const Bounds:TRect;
+ U,V:Double;Var Height,Alpha:Double);
+Var Value:Double;
+Begin
+ LayerMeshSample(O,Bounds,U,V,Value,Alpha);Height:=0;
+ If (Alpha<0.000001) And (O.Channel<>4) Then Exit;
+ Value:=MeshMax(0,MeshMin(1,(Value*255-O.LowLevel)/
+  (O.HighLevel-O.LowLevel)));
+ If O.Invert Then Value:=1-Value;
+ If Value>0 Then Value:=Exp(Ln(Value)*O.Gamma/100.0);
+ Height:=(Value-O.ZeroLevel/255.0)*O.Amount/100.0;
+End;
+Function BuildLayerMesh(Const O:TLayerMeshOptions;Progress:Boolean;
+ Var M:PMesh;Var Stats:TLayerMeshStats;Var Error:String):Boolean;
+Const PI_VALUE=3.141592653589793;
+Var Mask:PLayerMeshMask;I,J,K,NU,NV,Rows:Integer;
+ A,B,C,D,Count,TopCount,TopPole,BottomPole:LongInt;
+ SW,SH,U,V,H,Alpha,Radius,Theta,Phi,X,Y,Z,BaseLevel,Sum:Double;
+ Failed:Boolean;Key:Char;
+ Function Sample(U,V:Double):Double;
+ Var H,Alpha:Double;
+ Begin
+  LayerMeshHeight(O,Stats.Bounds,U,V,H,Alpha);Sample:=H;
+  If Alpha<0.5 Then Inc(Stats.Missing);
+  Stats.MinHeight:=MeshMin(Stats.MinHeight,H);
+  Stats.MaxHeight:=MeshMax(Stats.MaxHeight,H);
+ End;
+ Function BoundRadius(R,Minimum,Maximum:Double):Double;
+ Begin
+  If (R<Minimum) Or (R>Maximum) Then Inc(Stats.Clamped);
+  BoundRadius:=MeshMax(Minimum,MeshMin(Maximum,R));
+ End;
+ Function Node(I,J:Integer):LongInt;
+ Begin
+  If O.Shape=0 Then Node:=LongInt(J)*(NU+1)+I
+  Else Begin
+   I:=I Mod NU;If O.Shape=3 Then J:=J Mod NV;
+   Node:=LongInt(J)*NU+I;
+  End;
+ End;
+ Procedure Vertex(X,Y,Z:Double);
+ Begin If Not MeshVertex(M,X,Y,Z) Then Failed:=True;End;
+ Procedure Face(A,B,C:LongInt);
+ Begin
+  If Mask<>Nil Then If (Mask^[A]=0) Or (Mask^[B]=0) Or (Mask^[C]=0)
+   Then Exit;
+  If Not MeshFace(M,A,B,C) Then Failed:=True;
+ End;
+ Procedure Quad(A,B,C,D:LongInt;Flip,OtherDiagonal:Boolean);
+ Begin
+  If Flip Then Begin
+   If OtherDiagonal Then Begin Face(A,D,B);Face(B,D,C);End
+   Else Begin Face(A,D,C);Face(A,C,B);End;
+  End Else Begin
+   If OtherDiagonal Then Begin Face(A,B,D);Face(B,C,D);End
+   Else Begin Face(A,B,C);Face(A,C,D);End;
+  End;
+ End;
+ Procedure Side(A,B:LongInt);
+ Begin Face(A,B,B+TopCount);Face(A,B+TopCount,A+TopCount);End;
+ Function Cancelled(Row,Total:Integer):Boolean;
+ Begin
+  Cancelled:=False;If Not Progress Or (Row Mod 8<>0) Then Exit;
+  HideMouseCursor;
+  FillRect(20,ScreenHeight-45,ScreenWidth-20,ScreenHeight-23,LightGray);
+  SetColor(Black);OutTextXY(28,ScreenHeight-38,
+   'Maillage : '+IntToStr(LongInt(Row)*100 Div Total)+'% - Echap : annuler');
+  ShowMouseCursor;
+  If KeyPressed Then Begin Key:=ReadKey;Cancelled:=Key=#27;End;
+ End;
+Begin
+ BuildLayerMesh:=False;M:=Nil;Mask:=Nil;Error:='';
+ FillChar(Stats,SizeOf(Stats),0);
+ If Not LayerMeshOptionsValid(O) Then Begin
+  Error:='Parametres invalides ou socle incompatible avec les trous.';Exit;
+ End;
+ If Not LayerMeshBounds(O,Stats.Bounds) Then Begin
+  Error:='Source invalide ou aucune selection active.';Exit;End;
+ NU:=O.UCount;NV:=O.VCount;
+ Case O.Shape Of
+  0:Begin Stats.Vertices:=LongInt(NU+1)*(NV+1);
+   Stats.Triangles:=LongInt(NU)*NV*2;
+   If O.Closed Then Begin Stats.Vertices:=Stats.Vertices*2;
+    Stats.Triangles:=Stats.Triangles*2+LongInt(NU+NV)*4;End;
+   Stats.Closed:=O.Closed;
+  End;
+  1:Begin Stats.Vertices:=LongInt(NU)*(NV+1);
+   Stats.Triangles:=LongInt(NU)*NV*2;
+   If O.Closed Then Begin Inc(Stats.Vertices,2);
+    Inc(Stats.Triangles,LongInt(NU)*2);End;Stats.Closed:=O.Closed;
+  End;
+  2:Begin Stats.Vertices:=LongInt(NU)*(NV-1)+2;
+   Stats.Triangles:=LongInt(NU)*(NV-1)*2;Stats.Closed:=True;End;
+  3:Begin Stats.Vertices:=LongInt(NU)*NV;
+   Stats.Triangles:=LongInt(NU)*NV*2;Stats.Closed:=True;End;
+ End;
+ If (Stats.Vertices>120000) Or (Stats.Triangles>40000) Then Begin
+  Error:='Maillage trop dense : reduire la grille U ou V.';Exit;
+ End;
+ M:=PMesh(RotationAllocate(SizeOf(TMesh)));
+ If M=Nil Then Begin Error:='Memoire insuffisante.';Exit;End;
+ FillChar(M^,SizeOf(TMesh),0);M^.References:=1;
+ M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices)));
+ M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
+ If (O.Shape=0) And O.Holes Then
+  Mask:=PLayerMeshMask(RotationAllocate(SizeOf(TLayerMeshMask)));
+ Failed:=(M^.Vertices=Nil) Or (M^.Triangles=Nil) Or
+  (((O.Shape=0) And O.Holes) And (Mask=Nil));
+ Stats.MinHeight:=1E30;Stats.MaxHeight:=-1E30;
+ SW:=Stats.Bounds.R-Stats.Bounds.L+1;SH:=Stats.Bounds.B-Stats.Bounds.T+1;
+ Rows:=NV+1;If O.Shape=2 Then Rows:=NV-1;
+ If O.Shape=3 Then Rows:=NV;
+ If Not Failed Then For J:=0 To Rows-1 Do Begin
+  If Cancelled(J,Rows) Then Begin Failed:=True;Break;End;
+  V:=J/NV;If O.Shape=2 Then V:=(J+1)/NV;
+  Count:=NU;If O.Shape=0 Then Inc(Count);
+  For I:=0 To Count-1 Do Begin
+   U:=I/NU;H:=Sample(U,V);Theta:=U*2*PI_VALUE;
+   Case O.Shape Of
+    0:Begin
+     X:=(U-0.5)*SW/MeshMax(SW,SH);
+     Y:=(0.5-V)*SH/MeshMax(SW,SH)*O.YScale/100.0;Z:=H;
+     If Mask<>Nil Then Begin
+      LayerMeshSample(O,Stats.Bounds,U,V,Sum,Alpha);
+      Mask^[M^.VertexCount]:=Ord(Alpha>=0.5);
+     End;
+    End;
+    1:Begin Radius:=BoundRadius(0.5+H*0.25,0.02,1.0);
+     X:=Sin(Theta)*Radius;Z:=Cos(Theta)*Radius;
+     Y:=(0.5-V)*SH/SW*O.YScale/100.0;
+    End;
+    2:Begin Radius:=BoundRadius(0.5+H*0.25,0.02,1.0);Phi:=V*PI_VALUE;
+     X:=Sin(Theta)*Sin(Phi)*Radius;Z:=Cos(Theta)*Sin(Phi)*Radius;
+     Y:=Cos(Phi)*Radius*O.YScale/100.0;
+    End;
+    3:Begin Radius:=BoundRadius(0.15+H*0.15,0.015,0.315);
+     Phi:=V*2*PI_VALUE;X:=(0.35+Radius*Cos(Phi))*Sin(Theta);
+     Z:=(0.35+Radius*Cos(Phi))*Cos(Theta);
+     Y:=Radius*Sin(Phi)*O.YScale/100.0;
+    End;
+   End;Vertex(X,Y,Z);
+  End;
+ End;
+ If Not Failed Then Begin
+  If O.Shape=2 Then Begin
+   Sum:=0;For I:=0 To NU-1 Do Sum:=Sum+Sample(I/NU,0);
+   Radius:=BoundRadius(0.5+Sum/NU*0.25,0.02,1.0);
+   TopPole:=M^.VertexCount;Vertex(0,Radius*O.YScale/100.0,0);
+   Sum:=0;For I:=0 To NU-1 Do Sum:=Sum+Sample(I/NU,1);
+   Radius:=BoundRadius(0.5+Sum/NU*0.25,0.02,1.0);
+   BottomPole:=M^.VertexCount;Vertex(0,-Radius*O.YScale/100.0,0);
+  End;
+  K:=NV;If O.Shape=2 Then K:=NV-2;
+  For J:=0 To K-1 Do For I:=0 To NU-1 Do Begin
+   A:=Node(I,J);B:=Node(I+1,J);C:=Node(I+1,J+1);D:=Node(I,J+1);
+   Quad(A,B,C,D,O.Shape<>3,O.Alternate And ((I+J) Mod 2=1));
+  End;
+  If O.Shape=2 Then For I:=0 To NU-1 Do Begin
+   Face(TopPole,Node(I,0),Node(I+1,0));
+   Face(BottomPole,Node(I+1,NV-2),Node(I,NV-2));
+  End;
+  If (O.Shape=1) And O.Closed Then Begin
+   TopPole:=M^.VertexCount;Vertex(0,SH/SW*O.YScale/200.0,0);
+   BottomPole:=M^.VertexCount;Vertex(0,-SH/SW*O.YScale/200.0,0);
+   For I:=0 To NU-1 Do Begin
+    Face(TopPole,Node(I,0),Node(I+1,0));
+    Face(BottomPole,Node(I+1,NV),Node(I,NV));
+   End;
+  End;
+  If (O.Shape=0) And O.Closed Then Begin
+   TopCount:=M^.VertexCount;BaseLevel:=M^.Minimum.Z-O.Base/100.0;
+   For A:=0 To TopCount-1 Do
+    Vertex(M^.Vertices^[A].X,M^.Vertices^[A].Y,BaseLevel);
+   For J:=0 To NV-1 Do For I:=0 To NU-1 Do
+    Quad(Node(I,J)+TopCount,Node(I+1,J)+TopCount,
+     Node(I+1,J+1)+TopCount,Node(I,J+1)+TopCount,False,
+     O.Alternate And ((I+J) Mod 2=1));
+   For I:=0 To NU-1 Do Begin
+    Side(Node(I,0),Node(I+1,0));Side(Node(I+1,NV),Node(I,NV));End;
+   For J:=0 To NV-1 Do Begin
+    Side(Node(NU,J),Node(NU,J+1));Side(Node(0,J+1),Node(0,J));End;
+  End;
+ End;
+ If Mask<>Nil Then FreeMem(Mask,SizeOf(TLayerMeshMask));
+ If Failed Or (M^.TriangleCount=0) Then Begin
+  ReleaseMesh(M);Error:='Generation annulee, masque vide ou memoire faible.';
+  Exit;
+ End;
+ M^.Source:='Maillage '+Layers[ActiveLayer].Name;M^.Format:='Carte de hauteur';
+ M^.Groups:=1;M^.Materials:=1;Stats.Vertices:=M^.VertexCount;
+ Stats.Triangles:=M^.TriangleCount;BuildLayerMesh:=True;
+End;
+
 Function ApplyExtrusion(const E:TExtrudeOptions;Const View:TMeshOptions;
  Var Error:String):Boolean;
 Var M:PMesh;Stats:TExtrudeStats;Target:Integer;Success:Boolean;
@@ -11343,6 +11621,362 @@ Begin ExtrudeDialogFor(True,False);End;
 Procedure ExtrudeSelectionDialog;
 Begin ExtrudeDialogFor(False,True);End;
 
+Procedure LayerMeshDialog;
+Var O:TLayerMeshOptions;View:TMeshOptions;Stats:TLayerMeshStats;
+ M:PMesh;Preview,Image:PByteArr;Texts:Array[0..12] Of String;
+ X,Y,MX,MY,MB,Previous,Tab,Field,Display,PW,PH,IW,IH,OldX,OldY,
+ Code,Target:Integer;Dirty,GeometryDirty,ViewDirty,ImageDirty,
+ Done,Drag,ReplaceText,Valid:Boolean;
+ Message,Error,S,T:String;K,Key:Char;Value:Double;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Function Decimal(V:Double):String;
+ Var T:String;
+ Begin Str(V:0:3,T);Decimal:=T;End;
+ Function Memory(N:LongInt):String;
+ Var T:String;
+ Begin
+  If N>=1048576 Then Begin Str(N/1048576.0:0:2,T);T:=T+' Mo';End
+  Else If N>=1024 Then Begin Str(N/1024.0:0:1,T);T:=T+' Ko';End
+  Else T:=IntToStr(N)+' o';Memory:=T;
+ End;
+ Procedure Sync;
+ Begin
+  Texts[0]:=IntToStr(O.UCount);Texts[1]:=IntToStr(O.VCount);
+  Texts[2]:=IntToStr(O.Amount);Texts[3]:=IntToStr(O.ZeroLevel);
+  Texts[4]:=IntToStr(O.LowLevel);Texts[5]:=IntToStr(O.HighLevel);
+  Texts[6]:=IntToStr(O.Gamma);Texts[7]:=IntToStr(O.Smooth);
+  Texts[8]:=IntToStr(O.YScale);Texts[9]:=IntToStr(O.Base);
+  Texts[10]:=Decimal(View.RX/10);Texts[11]:=Decimal(View.RY/10);
+  Texts[12]:=Decimal(View.RZ/10);
+ End;
+ Procedure Changed(Geometry:Boolean);
+ Begin
+  GeometryDirty:=GeometryDirty Or Geometry;ImageDirty:=ImageDirty Or Geometry;
+  ViewDirty:=True;Dirty:=True;Valid:=True;Message:='';
+ End;
+ Procedure Parse;
+ Var Values:Array[0..12] Of Double;I,J,Minimum,Maximum:Integer;
+ Begin
+  Valid:=False;Dirty:=True;
+  For J:=0 To 12 Do Begin
+   T:=Texts[J];For I:=1 To Length(T) Do If T[I]=',' Then T[I]:='.';
+   Val(T,Value,Code);
+   Case J Of
+    0:Begin Minimum:=8;Maximum:=128;End;
+    1:Begin Minimum:=4;Maximum:=128;End;
+    2:Begin Minimum:=0;Maximum:=200;End;
+    3:Begin Minimum:=0;Maximum:=255;End;
+    4:Begin Minimum:=0;Maximum:=254;End;
+    5:Begin Minimum:=1;Maximum:=255;End;
+    6:Begin Minimum:=25;Maximum:=400;End;
+    7:Begin Minimum:=0;Maximum:=8;End;
+    8:Begin Minimum:=10;Maximum:=400;End;
+    9:Begin Minimum:=1;Maximum:=100;End;
+    Else Begin Minimum:=-360;Maximum:=360;End;
+   End;
+   If (Code<>0) Or (Value<Minimum) Or (Value>Maximum) Or
+    ((J<10) And (Abs(Value-Round(Value))>0.000001)) Then Begin
+    Message:='Valeur hors limites ou nombre entier attendu.';Exit;
+   End;Values[J]:=Value;
+  End;
+  If Values[4]>=Values[5] Then Begin
+   Message:='Le niveau noir doit etre inferieur au niveau blanc.';Exit;End;
+  O.UCount:=Round(Values[0]);O.VCount:=Round(Values[1]);
+  O.Amount:=Round(Values[2]);O.ZeroLevel:=Round(Values[3]);
+  O.LowLevel:=Round(Values[4]);O.HighLevel:=Round(Values[5]);
+  O.Gamma:=Round(Values[6]);O.Smooth:=Round(Values[7]);
+  O.YScale:=Round(Values[8]);O.Base:=Round(Values[9]);
+  View.RX:=Round(Values[10]*10);View.RY:=Round(Values[11]*10);
+  View.RZ:=Round(Values[12]*10);Changed(Field<10);
+ End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+23,True);SetColor(Black);
+  OutTextXY(X+L+6,Y+T+8,Caption);
+ End;
+ Procedure Check(T:Integer;Value:Boolean;Const Caption:String);
+ Begin
+  SetColor(Black);Rectangle(X+320,Y+T,X+332,Y+T+12);
+  If Value Then Begin Line(X+322,Y+T+6,X+325,Y+T+10);
+   Line(X+325,Y+T+10,X+331,Y+T+2);End;
+  OutTextXY(X+340,Y+T+3,Caption);
+ End;
+ Procedure Edit(N,T:Integer;Const Caption:String);
+ Begin
+  SetColor(Black);OutTextXY(X+320,Y+T+8,Caption);
+  FillRect(X+460,Y+T,X+600,Y+T+22,White);
+  If Field=N Then SetColor(Blue) Else SetColor(DarkGray);
+  Rectangle(X+460,Y+T,X+600,Y+T+22);SetColor(Black);
+  OutTextXY(X+468,Y+T+8,Texts[N]);
+ End;
+ Procedure Draw;
+ Var PX,PY,OX,OY,GX,GY,SW,SH:Integer;Color:Byte;H,A,Gray:Double;
+ Begin
+  If GeometryDirty And Valid Then Begin
+   ReleaseMesh(M);
+   If Not BuildLayerMesh(O,True,M,Stats,Error) Then Message:=Error;
+   GeometryDirty:=False;
+  End;
+  If ViewDirty And Valid Then Begin
+   If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);Preview:=Nil;
+   If M<>Nil Then If Not RenderMesh(M,View,PW,PH,True,Preview) Then
+    Message:='Apercu annule ou memoire insuffisante.';
+   ViewDirty:=False;
+  End;
+  If ImageDirty And Valid And ((Display=1) Or (Display=2)) Then Begin
+   If Image<>Nil Then FreeMem(Image,LongInt(IW)*IH);Image:=Nil;
+   If (M<>Nil) Then Begin
+    SW:=Stats.Bounds.R-Stats.Bounds.L+1;SH:=Stats.Bounds.B-Stats.Bounds.T+1;
+    If LongInt(SW)*196>LongInt(SH)*280 Then Begin
+     IW:=280;IH:=Max(1,Round(SH*280.0/SW));
+    End Else Begin IH:=196;IW:=Max(1,Round(SW*196.0/SH));End;
+    Image:=PByteArr(RotationAllocate(LongInt(IW)*IH));
+    If Image<>Nil Then For PY:=0 To IH-1 Do For PX:=0 To IW-1 Do Begin
+     GX:=Stats.Bounds.L+Min(SW-1,Trunc((PX+0.5)*SW/IW));
+     GY:=Stats.Bounds.T+Min(SH-1,Trunc((PY+0.5)*SH/IH));
+     If O.CompositeSource Then Color:=Composite(GX,GY)
+     Else Color:=GetLayerPixel(ActiveLayer,GX,GY);
+     If Display=2 Then Begin
+      LayerMeshHeight(O,Stats.Bounds,(PX+0.5)/IW,(PY+0.5)/IH,H,A);
+      Gray:=O.ZeroLevel/255.0;
+      If O.Amount>0 Then Gray:=H*100/O.Amount+O.ZeroLevel/255.0;
+      Gray:=MeshMax(0,MeshMin(1,Gray))*255;
+      Color:=255;If A>=0.5 Then Color:=BlurPalette(Gray,Gray,Gray,
+       PX,PY,View.Dither);
+     End;Image^[LongInt(PY)*IW+PX]:=Color;
+    End;
+   End;
+   ImageDirty:=False;
+  End;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Maillage depuis calque - forme et carte de hauteur');
+  Button(20,40,180,'1. Forme');Button(210,40,180,'2. Relief');
+  Button(400,40,200,'3. Rendu');SetColor(Blue);
+  Line(X+20+Tab*190,Y+65,X+195+Tab*190,Y+65);
+  For PY:=0 To 195 Do For PX:=0 To 279 Do Begin
+   Color:=White;If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=LightGray;
+   OX:=PX-(280-PW) Div 2;OY:=PY-(196-PH) Div 2;
+   If (Display=0) And (Preview<>Nil) And (OX>=0) And (OY>=0) And
+    (OX<PW) And (OY<PH) Then If Preview^[LongInt(OY)*PW+OX]<>255 Then
+     Color:=Preview^[LongInt(OY)*PW+OX];
+   OX:=PX-(280-IW) Div 2;OY:=PY-(196-IH) Div 2;
+   If ((Display=1) Or (Display=2)) And (Image<>Nil) And (OX>=0) And
+    (OY>=0) And (OX<IW) And (OY<IH) Then
+     If Image^[LongInt(OY)*IW+OX]<>255 Then Color:=Image^[LongInt(OY)*IW+OX];
+   PutPixel(X+20+PX,Y+82+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+19,Y+81,X+300,Y+278);
+  If Display=3 Then Begin
+   FillRect(X+21,Y+83,X+299,Y+276,White);SetColor(Black);
+   OutTextXY(X+28,Y+94,'Source : '+
+    IntToStr(Stats.Bounds.R-Stats.Bounds.L+1)+' x '+
+    IntToStr(Stats.Bounds.B-Stats.Bounds.T+1));
+   OutTextXY(X+28,Y+116,'Grille : '+Texts[0]+' x '+Texts[1]);
+   OutTextXY(X+28,Y+138,'Sommets : '+IntToStr(Stats.Vertices));
+   OutTextXY(X+28,Y+160,'Triangles : '+IntToStr(Stats.Triangles));
+   OutTextXY(X+28,Y+182,'Relief : '+Decimal(Stats.MinHeight)+' / '+
+    Decimal(Stats.MaxHeight));
+   OutTextXY(X+28,Y+204,'Rayons limites : '+IntToStr(Stats.Clamped));
+   S:='Surface ouverte';If Stats.Closed Then S:='Surface fermee';
+   OutTextXY(X+28,Y+226,S);
+   OutTextXY(X+28,Y+248,'Memoire : '+
+    Memory((Stats.Vertices+Stats.Triangles)*12)+' / '+
+    Memory(SizeOf(TMeshVertices)+SizeOf(TMeshTriangles)+SizeOf(TMesh)));
+  End;
+  SetColor(Black);OutTextXY(X+20,Y+292,IntToStr(Stats.Triangles)+
+   ' triangles / '+IntToStr(Stats.Vertices)+' sommets');
+  Case Display Of 0:S:='Vue 3D';1:S:='Image source';2:S:='Carte des hauteurs';
+   3:S:='Informations';End;
+  Button(20,312,280,'Apercu : '+S+' >');
+  Button(20,343,132,'Vue de face');Button(168,343,132,'Vue adaptee');
+  If Tab=0 Then Begin
+   Case O.Shape Of 0:S:='Relief plan';1:S:='Cylindre';2:S:='Sphere';
+    3:S:='Tore';End;Button(320,82,280,S+' >');
+   Edit(0,115,'Grille U 8-128');Edit(1,148,'Grille V 4-128');
+   Edit(8,181,'Echelle Y %');
+   If (O.Shape=0) And O.Closed Then Edit(9,214,'Socle %');
+   If O.Shape=0 Then Check(253,O.Closed,'Fermer avec un socle')
+   Else If O.Shape=1 Then Check(253,O.Closed,'Fermer les extremites')
+   Else Begin SetColor(Black);
+    OutTextXY(X+320,Y+257,'Surface fermee automatiquement');End;
+   If O.Shape=0 Then Check(278,O.Holes,'Decouper transparence')
+   Else Begin SetColor(Black);
+    OutTextXY(X+320,Y+282,'Rayons positifs et bornes');End;
+   Check(303,O.SelectionOnly,'Limiter a la selection');
+   Check(328,O.CompositeSource,'Source : calques visibles');
+  End Else If Tab=1 Then Begin
+   Edit(2,82,'Relief %');Edit(3,115,'Niveau zero');
+   Edit(4,148,'Niveau noir');Edit(5,181,'Niveau blanc');
+   Edit(6,214,'Gamma %');Edit(7,247,'Lissage px');
+   Case O.Channel Of 0:S:='Luminosite';1:S:='Rouge';2:S:='Vert';
+    3:S:='Bleu';4:S:='Transparence';End;
+   Button(320,282,280,'Canal : '+S+' >');Check(319,O.Invert,'Inverser relief');
+  End Else Begin
+   Edit(10,82,'Rotation X deg');Edit(11,115,'Rotation Y deg');
+   Edit(12,148,'Rotation Z deg');
+   Button(320,192,280,'Matiere VGA : '+IntToStr(View.Color)+' >');
+   S:='Orthographique';If View.Perspective Then S:='Perspective';
+   Button(320,225,280,S+' >');
+   Case View.Mode Of 0:S:='Solide';1:S:='Fil de fer';2:S:='Solide + fil';End;
+   Button(320,258,280,S+' >');
+   Check(295,View.Cull,'Masquer faces arriere');Check(320,View.Dither,
+    'Tramage des couleurs');
+  End;
+  S:='Remplacer calque actif';If O.NewLayer Then S:='Nouveau calque 3D';
+  Button(320,349,280,S);Button(20,379,132,'Reinitialiser');
+  Button(168,379,132,'Aide');Button(320,379,132,'Annuler');
+  Button(468,379,132,'Creer');SetColor(Black);
+  OutTextXY(X+20,Y+413,'Geometrie en memoire. Matiere uniforme, sans texture.');
+  If Message<>'' Then Begin SetColor(Red);
+   OutTextXY(X+20,Y+429,Copy(Message,1,73));End;
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  Parse;If Not Valid Then Exit;
+  If O.NewLayer And (LayerCount>=MAX_LAYERS) Then Begin
+   Message:='Huit calques maximum : choisir Remplacer calque actif.';
+   Dirty:=True;Exit;End;
+  If GeometryDirty Then Draw;
+  If M=Nil Then Exit;Target:=ActiveLayer;If O.NewLayer Then Target:=-1;
+  If ImportMeshLayer(M,View,Target) Then Done:=True
+  Else Begin Message:='Operation annulee ou memoire insuffisante.';
+   Dirty:=True;End;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;DefaultLayerMeshOptions(O);
+ DefaultMeshOptions(View);View.Mode:=0;Sync;FillChar(Stats,SizeOf(Stats),0);
+ M:=Nil;Preview:=Nil;Image:=Nil;IW:=0;IH:=0;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ If LongInt(ImgW)*196>LongInt(ImgH)*280 Then Begin
+  PW:=280;PH:=Max(1,Round(ImgH*280.0/ImgW));
+ End Else Begin PH:=196;PW:=Max(1,Round(ImgW*196.0/ImgH));End;
+ Tab:=0;Field:=0;Display:=0;Message:='';ReplaceText:=True;
+ Done:=False;Dirty:=True;GeometryDirty:=True;ViewDirty:=True;
+ ImageDirty:=True;Drag:=False;Valid:=True;
+ GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(20,40,600,63) Then Begin
+    Tab:=Min(2,(MX-X-20) Div 190);
+    Case Tab Of 0:Field:=0;1:Field:=2;2:Field:=10;End;
+    ReplaceText:=True;Dirty:=True;
+   End Else If Hit(20,312,300,335) Then Begin
+    Display:=(Display+1) Mod 4;ImageDirty:=True;Dirty:=True;
+   End Else If Hit(20,343,152,366) Then Begin
+    View.RX:=0;View.RY:=0;View.RZ:=0;Sync;Changed(False);
+   End Else If Hit(168,343,300,366) Then Begin
+    View.RX:=200;If O.Shape=3 Then View.RX:=600;
+    View.RY:=-300;View.RZ:=0;Sync;Changed(False);
+   End Else If Hit(320,349,600,372) Then Begin
+    O.NewLayer:=Not O.NewLayer;Dirty:=True;
+   End Else If Hit(20,379,152,402) Then Begin
+    DefaultLayerMeshOptions(O);DefaultMeshOptions(View);View.Mode:=0;
+    Sync;Changed(True);
+   End Else If Hit(168,379,300,402) Then Begin
+    ShowDialog('Maillage depuis calque',
+     'Luminosite ou canal pour le relief. Socle et trous sont exclusifs.');
+    Dirty:=True;GetMouseStateLocal(MX,MY,Previous);
+   End Else If Hit(320,379,452,402) Then Done:=True
+   Else If Hit(468,379,600,402) Then Apply
+   Else If Hit(20,82,300,278) And (Display=0) Then Begin
+    Drag:=True;OldX:=MX;OldY:=MY;
+   End Else If Tab=0 Then Begin
+    If Hit(320,82,600,105) Then Begin
+     O.Shape:=(O.Shape+1) Mod 4;If O.Shape<>0 Then O.Holes:=False;
+     View.RX:=200;If O.Shape=3 Then View.RX:=600;
+     Sync;Changed(True);
+    End Else If Hit(460,115,600,203) Then Begin
+     Field:=Min(2,(MY-Y-115) Div 33);If Field=2 Then Field:=8;
+     ReplaceText:=True;Dirty:=True;
+    End Else If Hit(460,214,600,236) And (O.Shape=0) And O.Closed Then Begin
+     Field:=9;ReplaceText:=True;Dirty:=True;
+    End Else If Hit(320,253,600,265) And (O.Shape<2) Then Begin
+     O.Closed:=Not O.Closed;If O.Closed Then O.Holes:=False;Changed(True);
+    End Else If Hit(320,278,600,290) And (O.Shape=0) Then Begin
+     O.Holes:=Not O.Holes;If O.Holes Then O.Closed:=False;Changed(True);
+    End Else If Hit(320,303,600,315) Then Begin
+     O.SelectionOnly:=Not O.SelectionOnly;Changed(True);
+    End Else If Hit(320,328,600,340) Then Begin
+     O.CompositeSource:=Not O.CompositeSource;Changed(True);
+    End;
+   End Else If Tab=1 Then Begin
+    If Hit(460,82,600,269) Then Begin
+     Field:=2+Min(5,(MY-Y-82) Div 33);ReplaceText:=True;Dirty:=True;
+    End Else If Hit(320,282,600,305) Then Begin
+     O.Channel:=(O.Channel+1) Mod 5;Changed(True);
+    End Else If Hit(320,319,600,331) Then Begin
+     O.Invert:=Not O.Invert;Changed(True);
+    End;
+   End Else Begin
+    If Hit(460,82,600,170) Then Begin
+     Field:=10+Min(2,(MY-Y-82) Div 33);ReplaceText:=True;Dirty:=True;
+    End Else If Hit(320,192,600,215) Then Begin
+     View.Color:=(View.Color+1) Mod 16;ImageDirty:=True;Changed(False);
+    End Else If Hit(320,225,600,248) Then Begin
+     View.Perspective:=Not View.Perspective;Changed(False);
+    End Else If Hit(320,258,600,281) Then Begin
+     View.Mode:=(View.Mode+1) Mod 3;Changed(False);
+    End Else If Hit(320,295,600,307) Then Begin
+     View.Cull:=Not View.Cull;Changed(False);
+    End Else If Hit(320,320,600,332) Then Begin
+     View.Dither:=Not View.Dither;ImageDirty:=True;Changed(False);
+    End;
+   End;
+  End;
+  If Drag And ((MB And 1)<>0) And
+   ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   View.RY:=Max(-3600,Min(3600,View.RY+(MX-OldX)*5));
+   View.RX:=Max(-3600,Min(3600,View.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Sync;Changed(False);
+  End;
+  If (MB And 1)=0 Then Drag:=False;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then Begin
+    Key:=ReadKey;Val(Texts[Field],Value,Code);
+    If Code=0 Then Begin
+     If Key=#72 Then Value:=Value+1 Else If Key=#80 Then Value:=Value-1;
+     If Field<10 Then Texts[Field]:=IntToStr(Round(Value))
+     Else Texts[Field]:=Decimal(Value);Parse;ReplaceText:=True;
+    End;
+   End Else Case K Of
+    #27:Done:=True;#13:Apply;
+    #9:Begin
+     Case Tab Of
+      0:Case Field Of 0:Field:=1;1:Field:=8;
+       8:If (O.Shape=0) And O.Closed Then Field:=9 Else Field:=0;
+       Else Field:=0;End;
+      1:Field:=2+(Field-1) Mod 6;
+      2:Field:=10+(Field-9) Mod 3;
+     End;ReplaceText:=True;Dirty:=True;
+    End;
+    #1:ReplaceText:=True;
+    #8:Begin
+     If ReplaceText Then Texts[Field]:=''
+     Else Delete(Texts[Field],Length(Texts[Field]),1);
+     ReplaceText:=False;Parse;
+    End;
+    Else If K In ['0'..'9','-','+','.',','] Then Begin
+     If ReplaceText Then Texts[Field]:='';
+     If Length(Texts[Field])<8 Then Texts[Field]:=Texts[Field]+K;
+     ReplaceText:=False;Parse;
+    End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);
+ If Image<>Nil Then FreeMem(Image,LongInt(IW)*IH);ReleaseMesh(M);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
@@ -11408,6 +12042,7 @@ Begin
    8:ExtrudeDialog;
    9:ExtrudePathDialog;
    10:ExtrudeSelectionDialog;
+   11:LayerMeshDialog;
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');
@@ -12065,7 +12700,7 @@ End;
 Procedure ShowCommandLineHelp;
 Begin
  Assign(Output,'');Rewrite(Output);
- WriteLn(Output,PROGRAM_NAME,' - Cette commande permet de lancer Photoshop.');
+ WriteLn(Output,'PSP - Cette commande permet de lancer Photoshop.');
  WriteLn(Output);
  WriteLn(Output,'Syntaxe : PSP [image]');
  WriteLn(Output,'          PSP /?');

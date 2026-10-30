@@ -9,14 +9,14 @@ Aperçu de Photoshop :
 
 <img width="639" height="475" alt="image" src="https://github.com/user-attachments/assets/3d8e4b14-c858-46b8-9fbf-f0c0d8ef4330" />
 
-<table>
+<table>	
 	<tr>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ab226dc6-fea2-489b-a5bb-dc7eb6a5b462" /></td>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/18f01429-bd6e-4f02-980a-0c309f5adb1c" /></td>
+		<td>Rotation de l'image :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ab226dc6-fea2-489b-a5bb-dc7eb6a5b462" /></td>
+		<td>Taille de l'image :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/18f01429-bd6e-4f02-980a-0c309f5adb1c" /></td>
 	</tr>
 	<tr>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/f8c26a4d-21c0-45a8-a3be-e3185726f93b" /></td>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ff7db611-3799-4f9f-b2ff-d4155dd54d8c" /></td>
+		<td>Flou :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/f8c26a4d-21c0-45a8-a3be-e3185726f93b" /></td>
+		<td>Netteté :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ff7db611-3799-4f9f-b2ff-d4155dd54d8c" /></td>
 	</tr>
 </table>
 
@@ -27,17 +27,16 @@ Apercu de PAINT :
 
 <table>
 	<tr>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/cfbb27cb-5a2a-456d-b422-2ef092acfa99" /></td>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9e46caf0-2dfd-45e3-8c44-88cd0c8554ee" />
-</td>
+		<td>Retourner / Pivoter :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/cfbb27cb-5a2a-456d-b422-2ef092acfa99" /></td>
+		<td>Étirer / Incliner :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9e46caf0-2dfd-45e3-8c44-88cd0c8554ee" /></td>
 	</tr>
 	<tr>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/98414f58-4b96-4ab3-8b91-cea18d8fcfd9" /></td>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ace36e01-3760-4a95-bce8-c8a24827063e" /></td>
+		<td>Modifier les couleurs :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/98414f58-4b96-4ab3-8b91-cea18d8fcfd9" /></td>
+		<td>Obtenir les couleurs :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ace36e01-3760-4a95-bce8-c8a24827063e" /></td>
 	</tr>
 	<tr>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/201c76b2-ef06-411a-b507-1ca8f53f4523" /></td>
-		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9f2fccee-708a-44e8-84e5-7f94ebf691d5" /></td>
+		<td>Attributs de l'image (Couleurs) :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/201c76b2-ef06-411a-b507-1ca8f53f4523" /></td>
+		<td>Attributs de l'image (Mémoire) :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9f2fccee-708a-44e8-84e5-7f94ebf691d5" /></td>
 	</tr>
 </table>
 

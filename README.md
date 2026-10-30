@@ -12,7 +12,7 @@ Aperçu de Photoshop :
 <table>
 	<tr>
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ab226dc6-fea2-489b-a5bb-dc7eb6a5b462" /></td>
-		<td></td>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/18f01429-bd6e-4f02-980a-0c309f5adb1c" /></td>
 	</tr>
 </table>
 

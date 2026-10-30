@@ -2332,6 +2332,166 @@ Begin
  CommitMergedMesh:=True;
 End;
 
+{ Panorama : source equirectangulaire, longitude horizontale et latitude. }
+Type TPanoramaOptions=Record
+ Yaw,Pitch,Roll,FOV,Mode,Method:Integer;
+ CompositeSource,Wrap,Dither,NewLayer:Boolean;
+End;
+Procedure DefaultPanoramaOptions(Var O:TPanoramaOptions);
+Begin
+ FillChar(O,SizeOf(O),0);O.FOV:=900;O.Method:=1;
+ O.Wrap:=True;O.Dither:=True;O.NewLayer:=True;
+End;
+Function PanoramaOptionsValid(Const O:TPanoramaOptions):Boolean;
+Begin
+ PanoramaOptionsValid:=(O.Yaw>=-1800) And (O.Yaw<=1800) And
+  (O.Pitch>=-900) And (O.Pitch<=900) And
+  (O.Roll>=-1800) And (O.Roll<=1800) And
+  (O.Mode>=0) And (O.Mode<=2) And (O.Method>=0) And (O.Method<=2) And
+  (O.FOV>=100) And (O.FOV<=3300) And
+  ((O.Mode<>0) Or (O.FOV<=1500));
+End;
+Function PanoramaAtan2(Y,X:Double):Double;
+Const PI_VALUE=3.141592653589793;
+Begin
+ If Abs(X)<1E-30 Then Begin
+  If Y>0 Then PanoramaAtan2:=PI_VALUE/2
+  Else If Y<0 Then PanoramaAtan2:=-PI_VALUE/2
+  Else PanoramaAtan2:=0;
+ End Else Begin
+  PanoramaAtan2:=ArcTan(Y/X);
+  If X<0 Then Begin
+   If Y>=0 Then PanoramaAtan2:=ArcTan(Y/X)+PI_VALUE
+   Else PanoramaAtan2:=ArcTan(Y/X)-PI_VALUE;
+  End;
+ End;
+End;
+Procedure PanoramaCoordinates(Const O:TPanoramaOptions;X,Y:Double;
+ W,H:Integer;Var SX,SY:Double);
+Const PI_VALUE=3.141592653589793;
+Var VX,VY,VZ,T,R,A,C,S,Longitude,Latitude:Double;
+Begin
+ VX:=2*(X+0.5)/W-1;VY:=(1-2*(Y+0.5)/H)*H/W;
+ If O.Mode=1 Then Begin
+  Longitude:=VX*PI_VALUE;Latitude:=(0.5-(Y+0.5)/H)*PI_VALUE;
+  VX:=Sin(Longitude)*Cos(Latitude);VY:=Sin(Latitude);
+  VZ:=Cos(Longitude)*Cos(Latitude);
+ End Else Begin
+  A:=O.FOV*PI_VALUE/3600;
+  If O.Mode=2 Then A:=A/2;
+  T:=Sin(A)/Cos(A);VX:=VX*T;VY:=VY*T;VZ:=1;
+  If O.Mode=2 Then Begin
+   R:=Sqrt(VX*VX+VY*VY);A:=2*ArcTan(R);VZ:=Cos(A);
+   If R>1E-30 Then Begin T:=Sin(A)/R;VX:=VX*T;VY:=VY*T;End;
+  End;
+ End;
+ { Roulis dans le plan de la camera, puis latitude et longitude. }
+ A:=O.Roll*PI_VALUE/1800;C:=Cos(A);S:=Sin(A);
+ T:=VX*C-VY*S;VY:=VX*S+VY*C;VX:=T;
+ A:=O.Pitch*PI_VALUE/1800;C:=Cos(A);S:=Sin(A);
+ T:=VY*C+VZ*S;VZ:=-VY*S+VZ*C;VY:=T;
+ A:=O.Yaw*PI_VALUE/1800;C:=Cos(A);S:=Sin(A);
+ T:=VX*C+VZ*S;VZ:=-VX*S+VZ*C;VX:=T;
+ Longitude:=PanoramaAtan2(VX,VZ);
+ Latitude:=PanoramaAtan2(VY,Sqrt(VX*VX+VZ*VZ));
+ SX:=(Longitude/(2*PI_VALUE)+0.5)*ImgW-0.5;
+ SY:=(0.5-Latitude/PI_VALUE)*ImgH-0.5;
+End;
+Function PanoramaSample(Const O:TPanoramaOptions;SX,SY:Double;
+ DX,DY:Integer):Byte;
+Var IX,IY,J,K:Integer;FX,FY,WX,WY,Weight,Alpha,R,G,B:Double;
+ Function Pixel(X,Y:Integer):Byte;
+ Begin
+  If O.Wrap Then Begin X:=X Mod ImgW;If X<0 Then Inc(X,ImgW);End
+  Else X:=Max(0,Min(ImgW-1,X));Y:=Max(0,Min(ImgH-1,Y));
+  If O.CompositeSource Then Pixel:=Composite(X,Y)
+  Else Pixel:=GetLayerPixel(ActiveLayer,X,Y);
+ End;
+ Procedure Add(X,Y:Integer;Weight:Double);
+ Var V:Byte;
+ Begin
+  V:=Pixel(X,Y);If V=255 Then Exit;V:=V And 15;
+  Alpha:=Alpha+Weight;R:=R+VGA_R[V]*Weight;
+  G:=G+VGA_G[V]*Weight;B:=B+VGA_B[V]*Weight;
+ End;
+Begin
+ If O.Method=0 Then Begin
+  PanoramaSample:=Pixel(Trunc(SX+65536.5)-65536,
+   Trunc(SY+65536.5)-65536);Exit;
+ End;
+ IX:=Trunc(SX+65536)-65536;IY:=Trunc(SY+65536)-65536;
+ FX:=SX-IX;FY:=SY-IY;Alpha:=0;R:=0;G:=0;B:=0;
+ If O.Method=1 Then Begin
+  For J:=0 To 1 Do For K:=0 To 1 Do Begin
+   WX:=1-FX;If K=1 Then WX:=FX;WY:=1-FY;If J=1 Then WY:=FY;
+   Add(IX+K,IY+J,WX*WY);
+  End;
+ End Else For J:=-1 To 2 Do For K:=-1 To 2 Do Begin
+  Weight:=ResizeWeight(K-FX,2)*ResizeWeight(J-FY,2);
+  Add(IX+K,IY+J,Weight);
+ End;
+ PanoramaSample:=255;If Alpha<0.5 Then Exit;
+ R:=MeshMax(0,MeshMin(255,R/Alpha));
+ G:=MeshMax(0,MeshMin(255,G/Alpha));
+ B:=MeshMax(0,MeshMin(255,B/Alpha));
+ PanoramaSample:=BlurPalette(R,G,B,DX,DY,O.Dither);
+End;
+{ L'apercu echantillonne les memes pixels que le rendu final. }
+Function BuildPanorama(Const O:TPanoramaOptions;W,H:Integer;
+ Progress:Boolean;Var Pixels:PByteArr):Boolean;
+Var X,Y,DX,DY:Integer;SX,SY:Double;K:Char;Failed:Boolean;
+Begin
+ BuildPanorama:=False;Pixels:=Nil;
+ If Not PanoramaOptionsValid(O) Or (W<1) Or (H<1) Or (W>4096) Or
+  (H>4096) Or (ImgW<1) Or (ImgH<1) Or (ImgW>4096) Or (ImgH>4096)
+  Then Exit;
+ Pixels:=PByteArr(RotationAllocate(LongInt(W)*H));If Pixels=Nil Then Exit;
+ Failed:=False;
+ For Y:=0 To H-1 Do Begin
+  If Progress And (Y Mod 16=0) Then Begin
+   HideMouseCursor;
+   FillRect(20,ScreenHeight-45,ScreenWidth-20,ScreenHeight-23,LightGray);
+   SetColor(Black);OutTextXY(28,ScreenHeight-38,
+    'Panorama : '+IntToStr(LongInt(Y)*100 Div H)+'% - Echap : annuler');
+   ShowMouseCursor;
+   If KeyPressed Then Begin K:=ReadKey;If K=#27 Then Failed:=True;End;
+   If Failed Then Break;
+  End;
+  DY:=Min(ImgH-1,Trunc((Y+0.5)*ImgH/H));
+  For X:=0 To W-1 Do Begin
+   DX:=Min(ImgW-1,Trunc((X+0.5)*ImgW/W));
+   PanoramaCoordinates(O,DX,DY,ImgW,ImgH,SX,SY);
+   Pixels^[LongInt(Y)*W+X]:=PanoramaSample(O,SX,SY,DX,DY);
+  End;
+ End;
+ If Failed Then Begin FreeMem(Pixels,LongInt(W)*H);Pixels:=Nil;End
+ Else BuildPanorama:=True;
+End;
+Function ApplyPanorama(Const O:TPanoramaOptions):Boolean;
+Var Pixels:PByteArr;R:PRotationUndo;Target:Integer;
+Begin
+ ApplyPanorama:=False;
+ If O.NewLayer And (LayerCount>=MAX_LAYERS) Then Exit;
+ If Not BuildPanorama(O,ImgW,ImgH,True,Pixels) Then Exit;
+ R:=MeshUndoCopy;
+ If R=Nil Then Begin FreeMem(Pixels,LongInt(ImgW)*ImgH);Exit;End;
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);Target:=ActiveLayer;
+ If O.NewLayer Then Begin
+  Target:=LayerCount;Inc(LayerCount);FillChar(Layers[Target],
+   SizeOf(TLayer),0);Layers[Target].Used:=True;
+  Layers[Target].Visible:=True;Layers[Target].Opacity:=100;
+  Layers[Target].Name:='Panorama spherique';
+ End Else Begin
+  If Layers[Target].Pixels<>Nil Then FreeMem(Layers[Target].Pixels,
+   LongInt(ImgW)*ImgH);
+  ReleaseMesh(Layers[Target].Mesh);
+  FillChar(Layers[Target].MeshOptions,SizeOf(TMeshOptions),0);
+ End;
+ Layers[Target].Pixels:=Pixels;ActiveLayer:=Target;
+ SelectionActive:=False;ImageModified:=True;ApplyPanorama:=True;
+End;
+
 Procedure RotateLayer90(Clockwise:Boolean);
 Begin
  If ApplyRotation(900,Clockwise,True,True,True) Then;
@@ -8869,6 +9029,274 @@ Begin
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
+Procedure PanoramaDialog;
+Var O,Original:TPanoramaOptions;Preview:PByteArr;Texts:Array[0..3] Of String;
+ X,Y,MX,MY,MB,Previous,Field,PW,PH,I,Code,OldX,OldY:Integer;
+ Dirty,PreviewDirty,Done,Drag,Dial,ReplaceText,Valid,Info,Before,
+ Guides:Boolean;Message,S,T:String;K,E:Char;V:Double;A:Double;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Function Decimal(V:Double):String;
+ Var S:String;
+ Begin Str(V:0:1,S);Decimal:=S;End;
+ Procedure Sync;
+ Begin
+  Texts[0]:=Decimal(O.Yaw/10);Texts[1]:=Decimal(O.Pitch/10);
+  Texts[2]:=Decimal(O.Roll/10);Texts[3]:=Decimal(O.FOV/10);
+ End;
+ Procedure Changed;
+ Begin Dirty:=True;PreviewDirty:=True;Message:='';Valid:=True;End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+23,True);SetColor(Black);
+  OutTextXY(X+L+6,Y+T+8,Caption);
+ End;
+ Procedure Check(T:Integer;Value:Boolean;Const Caption:String);
+ Begin
+  SetColor(Black);Rectangle(X+320,Y+T,X+332,Y+T+12);
+  If Value Then Begin Line(X+322,Y+T+6,X+325,Y+T+10);
+   Line(X+325,Y+T+10,X+331,Y+T+2);End;
+  OutTextXY(X+340,Y+T+3,Caption);
+ End;
+ Procedure ChangeField;
+ Var I,J:Integer;
+ Begin
+  Valid:=True;
+  For J:=0 To 3 Do Begin
+   T:=Texts[J];For I:=1 To Length(T) Do If T[I]=',' Then T[I]:='.';
+   Val(T,V,Code);
+   If Code<>0 Then Valid:=False Else Begin
+    If J=1 Then Begin If (V<-90) Or (V>90) Then Valid:=False;End
+    Else If J=3 Then Begin
+     If (V<10) Or (V>330) Or ((O.Mode=0) And (V>150)) Then Valid:=False;
+    End Else If (V<-180) Or (V>180) Then Valid:=False;
+   End;
+  End;
+  Dirty:=True;
+  If Not Valid Then Begin
+   Message:='Angles invalides. Vue : 10-150 deg, planete : 10-330 deg.';
+   Exit;
+  End;
+  For J:=0 To 3 Do Begin
+   T:=Texts[J];For I:=1 To Length(T) Do If T[I]=',' Then T[I]:='.';
+   Val(T,V,Code);
+   Case J Of 0:O.Yaw:=Round(V*10);1:O.Pitch:=Round(V*10);
+    2:O.Roll:=Round(V*10);3:O.FOV:=Round(V*10);End;
+  End;
+  Changed;
+ End;
+ Procedure Draw;
+ Var PX,PY,OX,OY,J,N:Integer;Color:Byte;Size,UndoSize:LongInt;
+ Begin
+  If PreviewDirty And Valid Then Begin
+   If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);Preview:=Nil;
+   Original:=O;
+   If Before Then Begin Original.Mode:=1;Original.Yaw:=0;
+    Original.Pitch:=0;Original.Roll:=0;End;
+   If Not BuildPanorama(Original,PW,PH,True,Preview) Then
+    Message:='Apercu annule ou memoire insuffisante.';
+   PreviewDirty:=False;
+  End;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Panorama spherique - explorer et reprojeter');
+  S:='Source : calque actif';If O.CompositeSource Then
+   S:='Source : calques visibles';Button(20,40,280,S);
+  S:='Voir avant';If Before Then S:='Voir apres';Button(320,40,132,S);
+  Button(468,40,132,'Informations');
+  For PY:=0 To 195 Do For PX:=0 To 279 Do Begin
+   Color:=White;If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=LightGray;
+   OX:=PX-(280-PW) Div 2;OY:=PY-(196-PH) Div 2;
+   If (Preview<>Nil) And (OX>=0) And (OY>=0) And (OX<PW) And
+    (OY<PH) Then If Preview^[LongInt(OY)*PW+OX]<>255 Then
+     Color:=Preview^[LongInt(OY)*PW+OX];
+   PutPixel(X+20+PX,Y+82+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+19,Y+81,X+300,Y+278);
+  If Guides And Not Info Then Begin
+   SetColor(Yellow);Line(X+155,Y+180,X+165,Y+180);
+   Line(X+160,Y+175,X+160,Y+185);
+   SetLineStyle(DottedLn,0,NormWidth);
+   Line(X+113,Y+83,X+113,Y+276);Line(X+206,Y+83,X+206,Y+276);
+   Line(X+21,Y+147,X+298,Y+147);Line(X+21,Y+212,X+298,Y+212);
+   SetLineStyle(SolidLn,0,NormWidth);
+  End;
+  Size:=LongInt(ImgW)*ImgH;N:=0;
+  For J:=0 To MAX_LAYERS-1 Do If Layers[J].Pixels<>Nil Then Inc(N);
+  UndoSize:=Size*N+SizeOf(TRotationUndo);
+  If Info Then Begin
+   FillRect(X+21,Y+83,X+299,Y+276,White);SetColor(Black);
+   OutTextXY(X+28,Y+94,'Source equirectangulaire');
+   OutTextXY(X+28,Y+116,'Couverture : 360 x 180 deg');
+   OutTextXY(X+28,Y+138,'Image : '+IntToStr(ImgW)+' x '+IntToStr(ImgH));
+   OutTextXY(X+28,Y+160,'Sortie indexee : '+IntToStr(Size)+' o');
+   OutTextXY(X+28,Y+182,'Copie annulation : '+IntToStr(UndoSize)+' o');
+   OutTextXY(X+28,Y+204,'Allocation : '+IntToStr(UndoSize+Size)+' o');
+   S:='Horizontal : raccord 360 deg';
+   If Not O.Wrap Then S:='Horizontal : bords limites';
+   OutTextXY(X+28,Y+226,S);
+   OutTextXY(X+28,Y+248,'Vertical : poles limites');
+  End;
+  For J:=0 To 3 Do Begin
+   Case J Of 0:S:='Longitude';1:S:='Latitude';2:S:='Roulis';3:S:='Champ H';End;
+   SetColor(Black);OutTextXY(X+320,Y+90+J*33,S+' deg');
+   FillRect(X+440,Y+82+J*33,X+600,Y+105+J*33,White);
+   If Field=J Then SetColor(Blue) Else SetColor(DarkGray);
+   Rectangle(X+440,Y+82+J*33,X+600,Y+105+J*33);SetColor(Black);
+   S:=Texts[J];If (O.Mode=1) And (J=3) Then S:='360 (fixe)';
+   OutTextXY(X+448,Y+90+J*33,S);
+  End;
+  Check(225,O.Wrap,'Raccord 360 deg');Check(247,O.Dither,'Tramage VGA');
+  Check(269,Guides,'Guides apercu');
+  SetColor(Black);Circle(X+558,Y+255,28);
+  OutTextXY(X+554,Y+216,'N');OutTextXY(X+554,Y+289,'S');
+  OutTextXY(X+594,Y+251,'E');OutTextXY(X+514,Y+251,'O');
+  A:=O.Yaw*3.141592653589793/1800;
+  Line(X+558,Y+255,X+558+Round(Sin(A)*24),Y+255-Round(Cos(A)*24));
+  Case O.Mode Of 0:S:='Vue perspective';1:S:='Sphere 360 x 180';
+   2:S:='Petite planete';End;
+  Button(20,287,280,'Projection : '+S);
+  Case O.Method Of 0:S:='Au plus proche';1:S:='Bilineaire';2:S:='Bicubique';End;
+  Button(20,318,280,'Filtre : '+S);
+  S:='Remplacer calque actif';If O.NewLayer Then S:='Nouveau calque';
+  Button(320,318,280,S);
+  Button(20,349,88,'Face');Button(116,349,88,'Droite');
+  Button(212,349,88,'Arriere');Button(320,349,88,'Zenith');
+  Button(416,349,88,'Nadir');Button(512,349,88,'Reset');
+  Button(20,379,88,'Zoom +');Button(116,379,88,'Zoom -');
+  Button(212,379,88,'Aide');Button(320,379,132,'Annuler');
+  Button(468,379,132,'Appliquer');
+  SetColor(Black);
+  If ImgW=LongInt(ImgH)*2 Then S:='Source 2:1. Glisser : orientation.'
+  Else S:='Source non 2:1 : elle est interpretee sur 360 x 180 deg.';
+  OutTextXY(X+20,Y+409,S);
+  If Message<>'' Then Begin SetColor(Red);
+   OutTextXY(X+20,Y+425,Copy(Message,1,73));End;
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  ChangeField;If Not Valid Then Exit;
+  If O.NewLayer And (LayerCount>=MAX_LAYERS) Then Begin
+   Message:='Huit calques maximum : choisissez Remplacer calque actif.';
+   Dirty:=True;Exit;
+  End;
+  If ApplyPanorama(O) Then Done:=True
+  Else Begin Message:='Operation annulee ou memoire insuffisante.';
+   Dirty:=True;End;
+ End;
+ Procedure Zoom(Delta:Integer);
+ Begin
+  If O.Mode=1 Then Begin
+   Message:='La projection spherique couvre toujours 360 x 180 deg.';
+   Dirty:=True;Exit;
+  End;
+  O.FOV:=Max(100,Min(3300,O.FOV+Delta));
+  If O.Mode=0 Then O.FOV:=Min(1500,O.FOV);Sync;Changed;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;DefaultPanoramaOptions(O);Sync;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ If LongInt(ImgW)*196>LongInt(ImgH)*280 Then Begin
+  PW:=280;PH:=Max(1,Round(ImgH*280.0/ImgW));
+ End Else Begin PH:=196;PW:=Max(1,Round(ImgW*196.0/ImgH));End;
+ Preview:=Nil;Field:=0;ReplaceText:=True;Info:=False;Before:=False;
+ Guides:=False;Done:=False;Dirty:=True;PreviewDirty:=True;Valid:=True;
+ Drag:=False;Dial:=False;Message:='';
+ GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(20,40,300,63) Then Begin
+    O.CompositeSource:=Not O.CompositeSource;Changed;
+   End Else If Hit(320,40,452,63) Then Begin Before:=Not Before;Changed;
+   End Else If Hit(468,40,600,63) Then Begin Info:=Not Info;Dirty:=True;
+   End Else If Hit(440,82,600,204) Then Begin
+    Field:=Min(3,(MY-Y-82) Div 33);
+    If (O.Mode=1) And (Field=3) Then Field:=0;
+    ReplaceText:=True;Dirty:=True;
+   End Else If Hit(320,225,505,237) Then Begin O.Wrap:=Not O.Wrap;Changed;
+   End Else If Hit(320,247,505,259) Then Begin O.Dither:=Not O.Dither;Changed;
+   End Else If Hit(320,269,505,281) Then Begin
+    Guides:=Not Guides;Dirty:=True;
+   End Else If Hit(525,223,590,286) Then Dial:=True
+   Else If Hit(20,287,300,310) Then Begin
+    O.Mode:=(O.Mode+1) Mod 3;
+    If O.Mode=0 Then O.FOV:=900;
+    If O.Mode=2 Then Begin O.Pitch:=-900;O.FOV:=2500;End;
+    If (O.Mode=1) And (Field=3) Then Field:=0;
+    Sync;Changed;
+   End Else If Hit(20,318,300,341) Then Begin
+    O.Method:=(O.Method+1) Mod 3;Changed;
+   End Else If Hit(320,318,600,341) Then Begin
+    O.NewLayer:=Not O.NewLayer;Dirty:=True;
+   End Else If Hit(20,349,600,372) Then Begin
+    If MX<X+110 Then Begin O.Yaw:=0;O.Pitch:=0;O.Roll:=0;End
+    Else If MX<X+206 Then Begin O.Yaw:=900;O.Pitch:=0;O.Roll:=0;End
+    Else If MX<X+310 Then Begin O.Yaw:=1800;O.Pitch:=0;O.Roll:=0;End
+    Else If MX<X+410 Then O.Pitch:=900
+    Else If MX<X+506 Then O.Pitch:=-900
+    Else DefaultPanoramaOptions(O);Sync;Changed;
+   End Else If Hit(20,379,108,402) Then Zoom(-100)
+   Else If Hit(116,379,204,402) Then Zoom(100)
+   Else If Hit(212,379,300,402) Then Begin
+    ShowDialog('Panorama spherique',
+     'Ouvrir une image 360x180. Glisser : vue. Fleches : 1 deg.');
+    Dirty:=True;GetMouseStateLocal(MX,MY,Previous);
+   End Else If Hit(320,379,452,402) Then Done:=True
+   Else If Hit(468,379,600,402) Then Apply
+   Else If Hit(20,82,300,278) And Not Info Then Begin
+    Drag:=True;OldX:=MX;OldY:=MY;Before:=False;
+   End;
+  End;
+  If Drag And ((MB And 1)<>0) And
+   ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   O.Yaw:=O.Yaw-(MX-OldX)*5;
+   While O.Yaw>1800 Do Dec(O.Yaw,3600);
+   While O.Yaw<-1800 Do Inc(O.Yaw,3600);
+   O.Pitch:=Max(-900,Min(900,O.Pitch+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Sync;Changed;
+  End;
+  If Dial And ((MB And 1)<>0) Then Begin
+   I:=Round(PanoramaAtan2(MX-X-558,Y+255-MY)*1800/3.141592653589793);
+   If I<>O.Yaw Then Begin O.Yaw:=I;Sync;Changed;End;
+  End;
+  If (MB And 1)=0 Then Begin Drag:=False;Dial:=False;End;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then Begin
+    E:=ReadKey;
+    If E=#75 Then O.Yaw:=Max(-1800,O.Yaw-10);
+    If E=#77 Then O.Yaw:=Min(1800,O.Yaw+10);
+    If E=#72 Then O.Pitch:=Min(900,O.Pitch+10);
+    If E=#80 Then O.Pitch:=Max(-900,O.Pitch-10);Sync;Changed;
+   End Else Case K Of
+    #27:Done:=True;#13:Apply;
+    #9:Begin Field:=(Field+1) Mod 4;
+     If (O.Mode=1) And (Field=3) Then Field:=0;
+     ReplaceText:=True;Dirty:=True;End;
+    #1:ReplaceText:=True;
+    #8:Begin
+     If ReplaceText Then Texts[Field]:=''
+     Else Delete(Texts[Field],Length(Texts[Field]),1);
+     ReplaceText:=False;ChangeField;
+    End;
+    Else If K In ['0'..'9','-','+','.',','] Then Begin
+     If ReplaceText Then Texts[Field]:='';
+     If Length(Texts[Field])<8 Then Texts[Field]:=Texts[Field]+K;
+     ReplaceText:=False;ChangeField;
+    End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
@@ -8929,6 +9357,7 @@ Begin
    0:MeshImportDialog(-1);
    1:MeshMergeDialog;
    2:MeshExportDialog;
+   3:PanoramaDialog;
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

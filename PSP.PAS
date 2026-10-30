@@ -1048,6 +1048,64 @@ Begin
  End;
 End;
 
+{ Trace polygonal de travail en coordonnees normalisees du document. }
+Type TVectorPoint=Record X,Y:Double;End;
+ TVectorPath=Record
+ Count:Integer;Closed:Boolean;Points:Array[0..127] Of TVectorPoint;
+End;
+Var WorkingPath:TVectorPath;WorkingPathSelected:Integer;
+
+Function PathCross(Const A,B,C:TVectorPoint):Double;
+Begin PathCross:=(B.X-A.X)*(C.Y-A.Y)-(B.Y-A.Y)*(C.X-A.X);End;
+Procedure VectorPathPreset(Var P:TVectorPath;Kind:Integer);
+Var I,N:Integer;A,R:Double;
+Begin
+ FillChar(P,SizeOf(P),0);P.Closed:=True;
+ If Kind=0 Then Begin
+  P.Count:=4;P.Points[0].X:=0.2;P.Points[0].Y:=0.2;
+  P.Points[1].X:=0.8;P.Points[1].Y:=0.2;
+  P.Points[2].X:=0.8;P.Points[2].Y:=0.8;
+  P.Points[3].X:=0.2;P.Points[3].Y:=0.8;
+ End Else Begin
+  N:=32;If Kind=2 Then N:=10;P.Count:=N;
+  For I:=0 To N-1 Do Begin
+   A:=I*2*3.141592653589793/N-3.141592653589793/2;R:=0.4;
+   If (Kind=2) And (I Mod 2=1) Then R:=0.18;
+   P.Points[I].X:=0.5+Cos(A)*R;P.Points[I].Y:=0.5+Sin(A)*R;
+  End;
+ End;
+End;
+
+Procedure DrawWorkingPath;
+Var I,J,X,Y,XX,YY:Integer;
+Begin
+ If Not (CurrentTool In [TOOL_PEN,TOOL_PATHSEL]) Or
+  (WorkingPath.Count<1) Then Exit;
+ SetViewPort(CanvasX,CanvasY,CanvasX+CanvasW-1,CanvasY+CanvasH-1,True);
+ SetColor(Yellow);
+ For I:=0 To WorkingPath.Count-1 Do Begin
+  X:=Round(WorkingPath.Points[I].X*ImgW*ZoomLevel/100);
+  Y:=Round(WorkingPath.Points[I].Y*ImgH*ZoomLevel/100);
+  J:=(I+1) Mod WorkingPath.Count;
+  If (I<WorkingPath.Count-1) Or WorkingPath.Closed Then Begin
+   XX:=Round(WorkingPath.Points[J].X*ImgW*ZoomLevel/100);
+   YY:=Round(WorkingPath.Points[J].Y*ImgH*ZoomLevel/100);Line(X,Y,XX,YY);
+  End;
+  Rectangle(X-2,Y-2,X+2,Y+2);
+ End;
+ SetViewPort(0,0,ScreenWidth-1,ScreenHeight-1,True);
+End;
+Function NearestWorkingPoint(IX,IY:Integer):Integer;
+Var I:Integer;D,Best:Double;
+Begin
+ NearestWorkingPoint:=-1;Best:=Sqr(800.0/ZoomLevel);
+ For I:=0 To WorkingPath.Count-1 Do Begin
+  D:=Sqr(WorkingPath.Points[I].X*ImgW-IX)+
+   Sqr(WorkingPath.Points[I].Y*ImgH-IY);
+  If D<Best Then Begin Best:=D;NearestWorkingPoint:=I;End;
+ End;
+End;
+
 Procedure DrawCanvasArea;
 Var
  X, Y, IX, IY, SCX, SCY: Integer;
@@ -1079,6 +1137,7 @@ Begin
    End Else
     PutPixel(SCX, SCY, UI_BG_DARK);
   End;
+ DrawWorkingPath;
 End;
 
 Procedure DrawFullUI;
@@ -2759,6 +2818,145 @@ Begin
  Stats.Vertices:=M^.VertexCount;Stats.Triangles:=M^.TriangleCount;
  BuildExtrusion:=True;
 End;
+Function BuildPathExtrusion(Const Path:TVectorPath;
+ Const E:TExtrudeOptions;Var M:PMesh;Var Stats:TExtrudeStats;
+ Var Error:String):Boolean;
+Const EPS=1E-10;
+Var P:Array[0..127] Of TVectorPoint;Order:Array[0..127] Of Integer;
+ N,I,J,K,A,B,C,Prev,Next,Remaining,RemoveAt:Integer;
+ Area,MinX,MaxX,MinY,MaxY,Extent,U,V,T,Scale,Angle,CosA,SinA:Double;
+ Temp:TVectorPoint;Failed,Found:Boolean;
+ Function OnLine(Const A,B,C:TVectorPoint):Boolean;
+ Begin OnLine:=(Abs(PathCross(A,B,C))<EPS) And
+  (C.X>=MeshMin(A.X,B.X)-EPS) And (C.X<=MeshMax(A.X,B.X)+EPS) And
+  (C.Y>=MeshMin(A.Y,B.Y)-EPS) And (C.Y<=MeshMax(A.Y,B.Y)+EPS);End;
+ Function Intersects(Const A,B,C,D:TVectorPoint):Boolean;
+ Var X,Y,Z,W:Double;Hit:Boolean;
+ Begin
+  X:=PathCross(A,B,C);Y:=PathCross(A,B,D);
+  Z:=PathCross(C,D,A);W:=PathCross(C,D,B);
+  Hit:=(((X>EPS) And (Y<-EPS)) Or ((X<-EPS) And (Y>EPS))) And
+   (((Z>EPS) And (W<-EPS)) Or ((Z<-EPS) And (W>EPS)));
+  Intersects:=Hit Or OnLine(A,B,C) Or OnLine(A,B,D) Or
+   OnLine(C,D,A) Or OnLine(C,D,B);
+ End;
+ Procedure Face(A,B,C:LongInt);
+ Begin If Not MeshFace(M,A,B,C) Then Failed:=True;End;
+ Procedure Cap(A,B,C:Integer);
+ Var S:LongInt;
+ Begin
+  If Not E.Caps Then Exit;S:=E.Segments+1;
+  Face(A*S,B*S,C*S);
+  Face(A*S+E.Segments,C*S+E.Segments,B*S+E.Segments);
+ End;
+Begin
+ BuildPathExtrusion:=False;M:=Nil;Error:='';
+ FillChar(Stats,SizeOf(Stats),0);N:=Path.Count;
+ If (ImgW<1) Or (ImgH<1) Or (ImgW>4096) Or (ImgH>4096) Then Begin
+  Error:='Dimensions du document invalides.';Exit;End;
+ If Not ExtrudeOptionsValid(E) Then Begin
+  Error:='Parametres invalides (torsion : 45 deg par segment).';Exit;End;
+ If (N<3) Or (N>128) Or Not Path.Closed Then Begin
+  Error:='Un trace ferme de 3 a 128 points est necessaire.';Exit;End;
+ MinX:=1E30;MinY:=1E30;MaxX:=-1E30;MaxY:=-1E30;
+ For I:=0 To N-1 Do Begin
+  If Not ((Path.Points[I].X>=0) And (Path.Points[I].X<=1) And
+   (Path.Points[I].Y>=0) And (Path.Points[I].Y<=1)) Then Begin
+   Error:='Point hors du document.';Exit;
+  End;
+  P[I].X:=Path.Points[I].X*ImgW;P[I].Y:=-Path.Points[I].Y*ImgH;
+  MinX:=MeshMin(MinX,P[I].X);MaxX:=MeshMax(MaxX,P[I].X);
+  MinY:=MeshMin(MinY,P[I].Y);MaxY:=MeshMax(MaxY,P[I].Y);
+ End;
+ Extent:=MeshMax(MaxX-MinX,MaxY-MinY);
+ If Extent<0.000001 Then Begin Error:='Trace trop petit.';Exit;End;
+ For I:=0 To N-1 Do Begin
+  P[I].X:=(P[I].X-(MinX+MaxX)/2)/Extent;
+  P[I].Y:=(P[I].Y-(MinY+MaxY)/2)/Extent;
+ End;
+ For I:=0 To N-1 Do Begin
+  J:=(I+1) Mod N;
+  If Sqr(P[I].X-P[J].X)+Sqr(P[I].Y-P[J].Y)<EPS*EPS Then Begin
+   Error:='Deux points consecutifs sont identiques.';Exit;End;
+ End;
+ For I:=0 To N-1 Do For J:=I+1 To N-1 Do
+  If (J<>((I+1) Mod N)) And (I<>((J+1) Mod N)) Then
+   If Intersects(P[I],P[(I+1) Mod N],P[J],P[(J+1) Mod N]) Then Begin
+    Error:='Le trace se croise ou se touche lui-meme.';Exit;
+   End;
+ { Supprimer les points alignes sans changer le trace de travail. }
+ Repeat
+  RemoveAt:=-1;
+  For I:=0 To N-1 Do Begin
+   Prev:=(I+N-1) Mod N;Next:=(I+1) Mod N;
+   If Abs(PathCross(P[Prev],P[I],P[Next]))<EPS Then Begin
+    If (P[Prev].X-P[I].X)*(P[Next].X-P[I].X)+
+     (P[Prev].Y-P[I].Y)*(P[Next].Y-P[I].Y)>=0 Then Begin
+     Error:='Le trace revient sur un segment.';Exit;
+    End;
+    RemoveAt:=I;Break;
+   End;
+  End;
+  If RemoveAt>=0 Then Begin
+   For I:=RemoveAt To N-2 Do P[I]:=P[I+1];Dec(N);
+  End;
+ Until (RemoveAt<0) Or (N<3);
+ If N<3 Then Begin Error:='Trace aligne : aucune surface.';Exit;End;
+ Area:=0;For I:=0 To N-1 Do Begin J:=(I+1) Mod N;
+  Area:=Area+P[I].X*P[J].Y-P[J].X*P[I].Y;End;
+ If Abs(Area)<EPS Then Begin Error:='Surface du trace nulle.';Exit;End;
+ If Area<0 Then For I:=0 To N Div 2-1 Do Begin
+  Temp:=P[I];P[I]:=P[N-1-I];P[N-1-I]:=Temp;End;
+ M:=PMesh(RotationAllocate(SizeOf(TMesh)));
+ If M=Nil Then Begin Error:='Memoire insuffisante.';Exit;End;
+ FillChar(M^,SizeOf(TMesh),0);M^.References:=1;
+ M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices)));
+ M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
+ If (M^.Vertices=Nil) Or (M^.Triangles=Nil) Then Begin
+  ReleaseMesh(M);Error:='Memoire insuffisante.';Exit;End;
+ Failed:=False;
+ For I:=0 To N-1 Do For J:=0 To E.Segments Do Begin
+  T:=J/E.Segments;Scale:=1+E.Taper/100.0*T;
+  Angle:=E.Twist*3.141592653589793/1800*T;
+  CosA:=Cos(Angle);SinA:=Sin(Angle);U:=P[I].X;V:=P[I].Y;
+  If Not MeshVertex(M,(U*CosA-V*SinA)*Scale,(U*SinA+V*CosA)*Scale,
+   E.Depth/1000.0*(0.5-T)) Then Failed:=True;
+ End;
+ For I:=0 To N-1 Do Order[I]:=I;Remaining:=N;
+ While Remaining>3 Do Begin
+  Found:=False;
+  For I:=0 To Remaining-1 Do Begin
+   A:=Order[(I+Remaining-1) Mod Remaining];B:=Order[I];
+   C:=Order[(I+1) Mod Remaining];
+   If PathCross(P[A],P[B],P[C])>EPS Then Begin
+    Found:=True;
+    For J:=0 To Remaining-1 Do Begin
+     K:=Order[J];If (K=A) Or (K=B) Or (K=C) Then Continue;
+     If (PathCross(P[A],P[B],P[K])>=-EPS) And
+      (PathCross(P[B],P[C],P[K])>=-EPS) And
+      (PathCross(P[C],P[A],P[K])>=-EPS) Then Found:=False;
+    End;
+    If Found Then Begin
+     Cap(A,B,C);For J:=I To Remaining-2 Do Order[J]:=Order[J+1];
+     Dec(Remaining);Break;
+    End;
+   End;
+  End;
+  If Not Found Then Begin Failed:=True;Break;End;
+ End;
+ If Not Failed Then Cap(Order[0],Order[1],Order[2]);
+ For I:=0 To N-1 Do For J:=0 To E.Segments-1 Do Begin
+  A:=I*(E.Segments+1)+J;B:=((I+1) Mod N)*(E.Segments+1)+J;
+  Face(A,B+1,B);Face(A,A+1,B+1);
+ End;
+ If Failed Then Begin ReleaseMesh(M);
+  Error:='Impossible de trianguler ce contour.';Exit;End;
+ M^.Source:='Extrusion trace';M^.Format:='Trace vectoriel';
+ M^.Groups:=1;M^.Materials:=1;Stats.Cells:=N;Stats.Groups:=1;Stats.Edges:=N;
+ Stats.Vertices:=M^.VertexCount;Stats.Triangles:=M^.TriangleCount;
+ BuildPathExtrusion:=True;
+End;
+
 Function ApplyExtrusion(const E:TExtrudeOptions;Const View:TMeshOptions;
  Var Error:String):Boolean;
 Var M:PMesh;Stats:TExtrudeStats;Target:Integer;Success:Boolean;
@@ -5866,6 +6064,7 @@ Procedure NewImage;
 Var I: Integer;
 Begin
  For I:=0 To MAX_LAYERS-1 Do If Layers[I].Used Then FreeLayer(I);
+ WorkingPath.Count:=0;WorkingPath.Closed:=False;
  ImgW := 400; ImgH := 300;ImageDPI:=72;
  AllocLayer(0, 'Arriere-plan', False);
  LayerCount := 1;
@@ -6847,6 +7046,7 @@ Begin
  Else
   ErrMsg := 'Extension '+Ext+' non reconnue.';
  If Loaded And (Ext<>'.BMP') And (Ext<>'.DIB') Then ImageDPI:=72;
+ If Loaded Then Begin WorkingPath.Count:=0;WorkingPath.Closed:=False;End;
  LoadFileByExt:=Loaded;
 End;
 
@@ -10267,8 +10467,194 @@ Begin
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
-Procedure ExtrudeDialog;
-Var E:TExtrudeOptions;View:TMeshOptions;Stats:TExtrudeStats;
+Function EditVectorPath(Var Path:TVectorPath):Boolean;
+Var P,Undo:TVectorPath;X,Y,W,H,OX,OY,MX,MY,MB,Previous,I,J,Selected,
+ Field,Code:Integer;Dirty,Done,Accepted,Drag,ReplaceText:Boolean;
+ TextDirty,TextValid:Boolean;
+ XS,YS,S,Message:String;K:Char;Value,Distance,Best:Double;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Sync;
+ Begin
+  TextDirty:=False;TextValid:=True;
+  XS:='';YS:='';If (Selected<0) Or (Selected>=P.Count) Then Exit;
+  Str(P.Points[Selected].X*ImgW:0:3,XS);
+  Str(P.Points[Selected].Y*ImgH:0:3,YS);
+ End;
+ Procedure SaveUndo;
+ Begin Undo:=P;End;
+ Procedure Button(L,T,BW:Integer;Const Text:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+23,True);SetColor(Black);
+  OutTextXY(X+L+6,Y+T+8,Text);
+ End;
+ Procedure MovePoint;
+ Begin
+  If Selected<0 Then Exit;
+  P.Points[Selected].X:=MeshMax(0,MeshMin(1,(MX-X-OX)/W));
+  P.Points[Selected].Y:=MeshMax(0,MeshMin(1,(MY-Y-OY)/H));
+  Sync;Dirty:=True;
+ End;
+ Procedure Parse;
+ Var TX,TY:Double;I:Integer;T:String;
+ Begin
+  TextValid:=False;
+  If Selected<0 Then Begin Message:='Selectionner un point.';Exit;End;
+  T:=XS;
+  For I:=1 To Length(T) Do If T[I]=',' Then T[I]:='.';
+  Val(T,TX,Code);If Code<>0 Then Begin Message:='Coordonnee X invalide.';
+   Dirty:=True;Exit;End;
+  T:=YS;For I:=1 To Length(T) Do If T[I]=',' Then T[I]:='.';
+  Val(T,TY,Code);
+  If (Code<>0) Or (TX<0) Or (TX>ImgW) Or (TY<0) Or (TY>ImgH) Then Begin
+   Message:='Coordonnees hors du document.';Dirty:=True;Exit;
+  End;
+  SaveUndo;P.Points[Selected].X:=TX/ImgW;P.Points[Selected].Y:=TY/ImgH;
+  Message:='';TextDirty:=False;TextValid:=True;Dirty:=True;
+ End;
+ Procedure Draw;
+ Var I,J,PX,PY,QX,QY:Integer;
+ Begin
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,
+   'Trace vectoriel - ajouter, deplacer et regler les points');
+  FillRect(X+20,Y+45,X+410,Y+345,DarkGray);
+  FillRect(X+OX,Y+OY,X+OX+W,Y+OY+H,White);
+  SetColor(LightGray);
+  For I:=1 To 9 Do Begin
+   Line(X+OX+W*I Div 10,Y+OY,X+OX+W*I Div 10,Y+OY+H);
+   Line(X+OX,Y+OY+H*I Div 10,X+OX+W,Y+OY+H*I Div 10);
+  End;
+  For I:=0 To P.Count-1 Do Begin
+   PX:=X+OX+Round(P.Points[I].X*W);PY:=Y+OY+Round(P.Points[I].Y*H);
+   J:=I+1;If J=P.Count Then J:=0;
+   If (I<P.Count-1) Or P.Closed Then Begin
+    QX:=X+OX+Round(P.Points[J].X*W);QY:=Y+OY+Round(P.Points[J].Y*H);
+    SetColor(Blue);Line(PX,PY,QX,QY);
+   End;
+   SetColor(Blue);If I=Selected Then SetColor(Red);
+   Rectangle(PX-3,PY-3,PX+3,PY+3);
+  End;
+  SetColor(Black);OutTextXY(X+430,Y+48,IntToStr(P.Count)+' / 128 points');
+  Button(430,76,170,'Rectangle');Button(430,107,170,'Ellipse 32 points');
+  Button(430,138,170,'Etoile');Button(430,169,170,'Nouveau trace');
+  S:='Fermer le contour';If P.Closed Then S:='Ouvrir le contour';
+  Button(430,200,170,S);Button(430,231,170,'Supprimer point');
+  OutTextXY(X+430,Y+270,'X en pixels');
+  FillRect(X+430,Y+285,X+600,Y+308,White);
+  If Field=0 Then SetColor(Blue) Else SetColor(DarkGray);
+  Rectangle(X+430,Y+285,X+600,Y+308);SetColor(Black);
+  OutTextXY(X+436,Y+293,XS);
+  OutTextXY(X+430,Y+320,'Y en pixels');
+  FillRect(X+430,Y+335,X+600,Y+358,White);
+  If Field=1 Then SetColor(Blue) Else SetColor(DarkGray);
+  Rectangle(X+430,Y+335,X+600,Y+358);SetColor(Black);
+  OutTextXY(X+436,Y+343,YS);
+  Button(20,367,120,'Annuler point');Button(150,367,120,'Inserer apres');
+  Button(280,367,130,'Appliquer X/Y');Button(430,367,170,'Sens inverse');
+  Button(320,400,132,'Annuler');Button(468,400,132,'Utiliser');
+  OutTextXY(X+20,Y+407,'Clic : ajouter ou glisser.');
+  If Message<>'' Then Begin SetColor(Red);
+   OutTextXY(X+20,Y+430,Copy(Message,1,73));End;
+  ShowMouseCursor;Dirty:=False;
+ End;
+Begin
+ EditVectorPath:=False;P:=Path;Undo:=P;Selected:=-1;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ W:=390;H:=Max(1,Round(ImgH*390.0/ImgW));
+ If H>300 Then Begin H:=300;W:=Max(1,Round(ImgW*300.0/ImgH));End;
+ OX:=20+(390-W) Div 2;OY:=45+(300-H) Div 2;
+ Field:=0;ReplaceText:=True;Message:='';XS:='';YS:='';
+ TextDirty:=False;TextValid:=True;
+ Dirty:=True;Done:=False;Accepted:=False;Drag:=False;
+ GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(OX,OY,OX+W,OY+H) Then Begin
+    Selected:=-1;Best:=64;
+    For I:=0 To P.Count-1 Do Begin
+     Distance:=Sqr(MX-X-OX-P.Points[I].X*W)+
+      Sqr(MY-Y-OY-P.Points[I].Y*H);
+     If Distance<Best Then Begin Best:=Distance;Selected:=I;End;
+    End;
+    SaveUndo;
+    If (Selected<0) And (P.Count<128) Then Begin
+     Selected:=P.Count;Inc(P.Count);MovePoint;
+    End;
+    Drag:=Selected>=0;Sync;Dirty:=True;
+   End Else If Hit(430,76,600,161) Then Begin
+    SaveUndo;I:=Min(2,(MY-Y-76) Div 31);VectorPathPreset(P,I);
+    Selected:=0;Sync;Dirty:=True;
+   End Else If Hit(430,169,600,192) Then Begin
+    SaveUndo;P.Count:=0;P.Closed:=False;Selected:=-1;Sync;Dirty:=True;
+   End Else If Hit(430,200,600,223) Then Begin
+    SaveUndo;P.Closed:=Not P.Closed;Dirty:=True;
+   End Else If Hit(430,231,600,254) Then Begin
+    If Selected>=0 Then Begin SaveUndo;
+     For I:=Selected To P.Count-2 Do P.Points[I]:=P.Points[I+1];
+     Dec(P.Count);Selected:=Min(Selected,P.Count-1);Sync;Dirty:=True;End;
+   End Else If Hit(430,285,600,308) Or Hit(430,335,600,358) Then Begin
+    Field:=0;If MY>Y+320 Then Field:=1;ReplaceText:=True;Dirty:=True;
+   End Else If Hit(20,367,140,390) Then Begin
+    P:=Undo;Selected:=-1;Sync;Dirty:=True;
+   End Else If Hit(150,367,270,390) Then Begin
+    If (Selected>=0) And (P.Count<128) Then Begin
+     SaveUndo;J:=(Selected+1) Mod P.Count;
+     For I:=P.Count DownTo Selected+2 Do P.Points[I]:=P.Points[I-1];
+     P.Points[Selected+1].X:=(P.Points[Selected].X+P.Points[J].X)/2;
+     P.Points[Selected+1].Y:=(P.Points[Selected].Y+P.Points[J].Y)/2;
+     Inc(P.Count);Inc(Selected);Sync;Dirty:=True;
+    End;
+   End Else If Hit(280,367,410,390) Then Parse
+   Else If Hit(430,367,600,390) Then Begin
+    SaveUndo;For I:=0 To P.Count Div 2-1 Do Begin
+     Value:=P.Points[I].X;P.Points[I].X:=P.Points[P.Count-1-I].X;
+     P.Points[P.Count-1-I].X:=Value;
+     Value:=P.Points[I].Y;P.Points[I].Y:=P.Points[P.Count-1-I].Y;
+     P.Points[P.Count-1-I].Y:=Value;
+    End;Selected:=-1;Sync;Dirty:=True;
+   End Else If Hit(320,400,452,423) Then Done:=True
+   Else If Hit(468,400,600,423) Then Begin
+    If TextDirty Then Parse;
+    If Not TextValid Then Dirty:=True
+    Else If P.Count<3 Then Begin
+     Message:='Trois points minimum.';Dirty:=True;End
+    Else If Not P.Closed Then Begin
+     Message:='Fermer le contour avant de l''utiliser.';Dirty:=True;End
+    Else Begin Accepted:=True;Done:=True;End;
+   End;
+  End;
+  If Drag And ((MB And 1)<>0) Then MovePoint;
+  If (MB And 1)=0 Then Drag:=False;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   Case K Of
+    #27:Done:=True;#13:Parse;#9:Begin Field:=1-Field;
+     ReplaceText:=True;Dirty:=True;End;
+    #1:ReplaceText:=True;
+    #0:K:=ReadKey;
+    Else If (K=#8) Or (K In ['0'..'9','.','-',',']) Then Begin
+     S:=XS;If Field=1 Then S:=YS;
+     If ReplaceText Then S:='';
+     If K=#8 Then Delete(S,Length(S),1)
+     Else If Length(S)<15 Then S:=S+K;
+     If Field=0 Then XS:=S Else YS:=S;
+     ReplaceText:=False;TextDirty:=True;Dirty:=True;
+    End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ If Accepted Then Begin Path:=P;EditVectorPath:=True;End;
+End;
+
+Procedure ExtrudeDialogFor(PathMode:Boolean);
+Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
+ Stats:TExtrudeStats;
  M:PMesh;Preview:PByteArr;Texts:Array[0..9] Of String;
  X,Y,MX,MY,MB,Previous,Field,Tab,PW,PH,Display,Code,OldX,OldY:Integer;
  Target:Integer;V:Double;Message,Error,S,T:String;K,Key:Char;
@@ -10359,7 +10745,9 @@ Var E:TExtrudeOptions;View:TMeshOptions;Stats:TExtrudeStats;
  Begin
   If Rebuild And Valid Then Begin
    ReleaseMesh(M);
-   If Not BuildExtrusion(E,True,M,Stats,Error) Then Message:=Error;
+   If PathMode Then Begin
+    If Not BuildPathExtrusion(LocalPath,E,M,Stats,Error) Then Message:=Error;
+   End Else If Not BuildExtrusion(E,True,M,Stats,Error) Then Message:=Error;
    Rebuild:=False;
   End;
   If PreviewDirty And Valid Then Begin
@@ -10371,8 +10759,11 @@ Var E:TExtrudeOptions;View:TMeshOptions;Stats:TExtrudeStats;
   HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
   DrawBevel(X,Y,X+620,Y+440,True);
   FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
-  OutTextXY(X+12,Y+10,'Extrusion 3D du calque - silhouette et volume');
-  Button(20,40,180,'1. Geometrie');Button(210,40,180,'2. Contour');
+  S:='Extrusion 3D du calque - silhouette et volume';
+  If PathMode Then S:='Extrusion 3D du trace - contour vectoriel';
+  OutTextXY(X+12,Y+10,S);
+  Button(20,40,180,'1. Geometrie');S:='2. Contour';
+  If PathMode Then S:='2. Trace';Button(210,40,180,S);
   Button(400,40,200,'3. Rendu');SetColor(Blue);
   Line(X+20+Tab*190,Y+65,X+195+Tab*190,Y+65);
   MW:=0;MH:=0;
@@ -10390,19 +10781,34 @@ Var E:TExtrudeOptions;View:TMeshOptions;Stats:TExtrudeStats;
     If Preview^[LongInt(OY)*PW+OX]<>255 Then
      Color:=Preview^[LongInt(OY)*PW+OX];
    OX:=PX-(280-MW) Div 2;OY:=PY-(196-MH) Div 2;
-   If (Display=1) And (OX>=0) And (OY>=0) And (OX<MW) And
+   If Not PathMode And (Display=1) And (OX>=0) And (OY>=0) And (OX<MW) And
     (OY<MH) Then Begin
     GX:=OX*Stats.Width Div MW;GY:=OY*Stats.Height Div MH;
     If Stats.Mask[GY*Stats.Width+GX]<>0 Then Color:=Blue;
    End;
    PutPixel(X+20+PX,Y+82+PY,Color);
   End;
+  If PathMode And (Display=1) Then Begin
+   SetColor(Blue);
+   For GX:=0 To LocalPath.Count-1 Do Begin
+    GY:=(GX+1) Mod LocalPath.Count;
+    If (GX<LocalPath.Count-1) Or LocalPath.Closed Then
+     Line(X+20+(280-PW) Div 2+Round(LocalPath.Points[GX].X*PW),
+      Y+82+(196-PH) Div 2+Round(LocalPath.Points[GX].Y*PH),
+      X+20+(280-PW) Div 2+Round(LocalPath.Points[GY].X*PW),
+      Y+82+(196-PH) Div 2+Round(LocalPath.Points[GY].Y*PH));
+   End;
+  End;
   SetColor(Black);Rectangle(X+19,Y+81,X+300,Y+278);
   If Display=2 Then Begin
    FillRect(X+21,Y+83,X+299,Y+276,White);SetColor(Black);
-   OutTextXY(X+28,Y+94,'Grille : '+IntToStr(Stats.Width)+' x '+
-    IntToStr(Stats.Height));
-   OutTextXY(X+28,Y+116,'Cellules : '+IntToStr(Stats.Cells));
+   If PathMode Then Begin
+    OutTextXY(X+28,Y+94,'Contour vectoriel exact');
+    OutTextXY(X+28,Y+116,'Points utiles : '+IntToStr(Stats.Cells));
+   End Else Begin
+    OutTextXY(X+28,Y+94,'Grille : '+IntToStr(Stats.Width)+' x '+
+     IntToStr(Stats.Height));
+    OutTextXY(X+28,Y+116,'Cellules : '+IntToStr(Stats.Cells));End;
    OutTextXY(X+28,Y+138,'Objets : '+IntToStr(Stats.Groups));
    OutTextXY(X+28,Y+160,'Sommets : '+IntToStr(Stats.Vertices));
    OutTextXY(X+28,Y+182,'Triangles : '+IntToStr(Stats.Triangles));
@@ -10416,9 +10822,17 @@ Var E:TExtrudeOptions;View:TMeshOptions;Stats:TExtrudeStats;
   SetColor(Black);OutTextXY(X+20,Y+292,IntToStr(Stats.Triangles)+
    ' triangles / '+IntToStr(Stats.Groups)+' objets');
   Case Display Of 0:S:='Vue 3D';1:S:='Masque';2:S:='Informations';End;
+  If PathMode And (Display=1) Then S:='Trace 2D';
   Button(20,312,280,'Apercu : '+S+' >');
   Button(20,343,132,'Vue de face');Button(168,343,132,'Vue isometrique');
-  If Tab=0 Then Begin
+  If (Tab=0) And PathMode Then Begin
+   Edit(0,82,'Profondeur %');Edit(2,115,'Segments 1-8');
+   Edit(3,148,'Effilement %');Edit(4,181,'Torsion deg');
+   Check(320,225,E.Caps,'Fermer avant / arriere');
+   SetColor(Black);OutTextXY(X+320,Y+266,'Profondeur / taille du trace');
+   OutTextXY(X+320,Y+290,'Torsion : 45 deg par segment');
+   OutTextXY(X+320,Y+314,'Triangulation des concavites');
+  End Else If Tab=0 Then Begin
    Edit(0,82,'Profondeur %');Edit(1,115,'Precision 8-64');
    Edit(2,148,'Segments 1-8');Edit(3,181,'Effilement %');
    Edit(4,214,'Torsion deg');
@@ -10426,6 +10840,15 @@ Var E:TExtrudeOptions;View:TMeshOptions;Stats:TExtrudeStats;
    SetColor(Black);OutTextXY(X+320,Y+286,'Profondeur : 0.1 a 1000 %');
    OutTextXY(X+320,Y+309,'Effilement : -80 a +200 %');
    OutTextXY(X+320,Y+330,'45 deg max par segment');
+  End Else If (Tab=1) And PathMode Then Begin
+   Button(320,82,280,'Modifier le trace...');
+   Button(320,115,280,'Rectangle');Button(320,148,280,'Ellipse');
+   Button(320,181,280,'Etoile');Button(320,214,280,'Reprendre trace Plume');
+   SetColor(Black);OutTextXY(X+320,Y+258,
+    IntToStr(LocalPath.Count)+' points (128 maximum)');
+   OutTextXY(X+320,Y+282,'Un seul contour ferme.');
+   OutTextXY(X+320,Y+306,'Croisements et contacts refuses.');
+   OutTextXY(X+320,Y+330,'Trace de travail garde en memoire.');
   End Else If Tab=1 Then Begin
    Case E.Mode Of 0:S:='Pixels opaques';1:S:='Pixels clairs';
     2:S:='Pixels sombres';3:S:='Couleur premier plan';End;
@@ -10452,8 +10875,11 @@ Var E:TExtrudeOptions;View:TMeshOptions;Stats:TExtrudeStats;
   Button(320,349,280,S);
   Button(20,379,132,'Reinitialiser');Button(168,379,132,'Aide');
   Button(320,379,132,'Annuler');Button(468,379,132,'Creer');
-  SetColor(Black);OutTextXY(X+20,Y+413,
-   'Contour approche par grille. Trous conserves. Matiere uniforme.');
+  SetColor(Black);S:=
+   'Contour approche par grille. Trous conserves. Matiere uniforme.';
+  If PathMode Then S:=
+   'Contour vectoriel simple, ferme. Sans trous. Matiere uniforme.';
+  OutTextXY(X+20,Y+413,S);
   If Message<>'' Then Begin SetColor(Red);
    OutTextXY(X+20,Y+429,Copy(Message,1,73));End;
   ShowMouseCursor;Dirty:=False;
@@ -10468,14 +10894,17 @@ Var E:TExtrudeOptions;View:TMeshOptions;Stats:TExtrudeStats;
   If Rebuild Then Draw;
   If M=Nil Then Exit;
   Target:=ActiveLayer;If E.NewLayer Then Target:=-1;
-  If ImportMeshLayer(M,View,Target) Then Done:=True
+  If ImportMeshLayer(M,View,Target) Then Begin
+   If PathMode Then WorkingPath:=LocalPath;Done:=True;End
   Else Begin Message:='Operation annulee ou memoire insuffisante.';
    Dirty:=True;End;
  End;
 Begin
- ResetToolTip;MenuActive:=False;DefaultExtrudeOptions(E);
+ ResetToolTip;MenuActive:=False;LocalPath:=WorkingPath;
+ DefaultExtrudeOptions(E);
  DefaultMeshOptions(View);View.Mode:=0;Sync;FillChar(Stats,SizeOf(Stats),0);
  M:=Nil;Preview:=Nil;Field:=0;Tab:=0;Display:=0;Message:='';
+ If PathMode And (LocalPath.Count<3) Then Begin Tab:=1;Display:=1;End;
  X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
  If LongInt(ImgW)*196>LongInt(ImgH)*280 Then Begin
   PW:=280;PH:=Max(1,Round(ImgH*280.0/ImgW));
@@ -10509,6 +10938,23 @@ Begin
    Else If Hit(468,379,600,402) Then Apply
    Else If Hit(20,82,300,278) And (Display=0) Then Begin
     Drag:=True;OldX:=MX;OldY:=MY;
+   End Else If (Tab=0) And PathMode Then Begin
+    If Hit(460,82,600,203) Then Begin
+     Field:=Min(3,(MY-Y-82) Div 33);
+     If Field>0 Then Inc(Field);ReplaceText:=True;Dirty:=True;
+    End Else If Hit(320,225,600,237) Then Begin
+     E.Caps:=Not E.Caps;Changed(True);
+    End;
+   End Else If (Tab=1) And PathMode Then Begin
+    If Hit(320,82,600,105) Then Begin
+     If EditVectorPath(LocalPath) Then Changed(True);
+     Dirty:=True;GetMouseStateLocal(MX,MY,Previous);
+    End Else If Hit(320,115,600,204) Then Begin
+     Target:=Min(2,(MY-Y-115) Div 33);
+     VectorPathPreset(LocalPath,Target);Changed(True);
+    End Else If Hit(320,214,600,237) Then Begin
+     LocalPath:=WorkingPath;Changed(True);
+    End;
    End Else If Tab=0 Then Begin
     If Hit(460,82,600,236) Then Begin
      Field:=Min(4,(MY-Y-82) Div 33);ReplaceText:=True;Dirty:=True;
@@ -10563,17 +11009,19 @@ Begin
    End Else Case K Of
     #27:Done:=True;#13:Apply;
     #9:Begin
-     Case Tab Of 0:Field:=(Field+1) Mod 5;1:Field:=5+(Field+1) Mod 2;
+     Case Tab Of 0:Begin Field:=(Field+1) Mod 5;
+      If PathMode And (Field=1) Then Field:=2;End;1:Field:=5+(Field+1) Mod 2;
       2:Field:=7+(Field-6) Mod 3;End;
      ReplaceText:=True;Dirty:=True;
     End;
     #1:ReplaceText:=True;
-    #8:Begin
+    #8:If Not (PathMode And (Tab=1)) Then Begin
      If ReplaceText Then Texts[Field]:=''
      Else Delete(Texts[Field],Length(Texts[Field]),1);
      ReplaceText:=False;Parse;
     End;
-    Else If K In ['0'..'9','-','+','.',','] Then Begin
+    Else If (K In ['0'..'9','-','+','.',',']) And
+     Not (PathMode And (Tab=1)) Then Begin
      If ReplaceText Then Texts[Field]:='';
      If Length(Texts[Field])<8 Then Texts[Field]:=Texts[Field]+K;
      ReplaceText:=False;Parse;
@@ -10586,6 +11034,11 @@ Begin
  GetMouseStateLocal(MouseX,MouseY,MouseButtons);
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
+
+Procedure ExtrudeDialog;
+Begin ExtrudeDialogFor(False);End;
+Procedure ExtrudePathDialog;
+Begin ExtrudeDialogFor(True);End;
 
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
@@ -10650,6 +11103,7 @@ Begin
    3:PanoramaDialog;
    4:SketchfabDialog;
    8:ExtrudeDialog;
+   9:ExtrudePathDialog;
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');
@@ -10907,13 +11361,30 @@ Begin
 End;
 
 Procedure HandleCanvasPress(SX, SY: Integer);
-Var IX, IY: Integer;
+Var IX,IY,N:Integer;
 Begin
  If Not ScreenToImg(SX, SY, IX, IY) Then Exit;
  StartX := IX; StartY := IY;
  EndX := IX; EndY := IY;
  Drawing := True;
  Case CurrentTool Of
+  TOOL_PEN:Begin
+   Drawing:=False;
+   If Not WorkingPath.Closed Then Begin
+    N:=NearestWorkingPoint(IX,IY);
+    If (N=0) And (WorkingPath.Count>=3) Then WorkingPath.Closed:=True
+    Else If WorkingPath.Count<128 Then Begin
+     N:=WorkingPath.Count;Inc(WorkingPath.Count);
+     WorkingPath.Points[N].X:=IX/ImgW;
+     WorkingPath.Points[N].Y:=IY/ImgH;
+    End;
+   End;
+   RefreshCanvas;
+  End;
+  TOOL_PATHSEL:Begin
+   WorkingPathSelected:=NearestWorkingPoint(IX,IY);
+   Drawing:=WorkingPathSelected>=0;
+  End;
   TOOL_PENCIL: Begin PushUndo; DrawWithPencil(IX, IY, FgColor); End;
   TOOL_BRUSH: Begin PushUndo; DrawWithBrush(IX, IY, FgColor); End;
   TOOL_ERASER: Begin PushUndo; EraseAt(IX, IY); End;
@@ -10945,6 +11416,11 @@ Begin
  HideMouseCursor;
  BatchDrawing := True;
  Case CurrentTool Of
+  TOOL_PATHSEL:If (WorkingPathSelected>=0) And
+   (WorkingPathSelected<WorkingPath.Count) Then Begin
+   WorkingPath.Points[WorkingPathSelected].X:=IX/ImgW;
+   WorkingPath.Points[WorkingPathSelected].Y:=IY/ImgH;DrawCanvasArea;
+  End;
   TOOL_PENCIL: Begin
    ImgLine(StartX, StartY, IX, IY, FgColor);
    StartX := IX; StartY := IY;
@@ -11004,7 +11480,7 @@ Begin
 End;
 
 Procedure HandleClick(MX, MY: Integer);
-Var MIdx, TIdx, SwIdx, LIdx, IIdx: Integer;
+Var MIdx,TIdx,SwIdx,LIdx,IIdx,OldTool:Integer;
 Begin
  If MenuActive Then Begin
   IIdx := MenuItemHitTest(MX, MY);
@@ -11037,9 +11513,11 @@ Begin
  If MX<TOOLBAR_WIDTH Then Begin
   TIdx := ToolHitTest(MX, MY);
   If TIdx>=0 Then Begin
-   CurrentTool := TIdx;
+   OldTool:=CurrentTool;CurrentTool := TIdx;
    DrawToolbar;
    DrawOptionsBar;
+   If (OldTool In [TOOL_PEN,TOOL_PATHSEL]) Or
+    (CurrentTool In [TOOL_PEN,TOOL_PATHSEL]) Then RefreshCanvas;
    Exit;
   End;
  End;
@@ -11105,8 +11583,9 @@ End;
   ============================================================ }
 
 Procedure HandleKey(Ch: Char);
-Var Tmp: Byte;
+Var Tmp:Byte;OldTool:Integer;
 Begin
+ OldTool:=CurrentTool;
  Case UpCase(Ch) Of
   'V': Begin CurrentTool := TOOL_MOVE;    DrawToolbar; DrawOptionsBar; End;
   'M': Begin CurrentTool := TOOL_MARQUEE; DrawToolbar; DrawOptionsBar; End;
@@ -11136,6 +11615,9 @@ Begin
   'X': Begin Tmp := FgColor; FgColor := BgColor; BgColor := Tmp; DrawColorSwatchBox; End;
   'D': Begin FgColor := Black; BgColor := White; DrawColorSwatchBox; End;
  End;
+ If (OldTool<>CurrentTool) And
+  ((OldTool In [TOOL_PEN,TOOL_PATHSEL]) Or
+   (CurrentTool In [TOOL_PEN,TOOL_PATHSEL])) Then RefreshCanvas;
 End;
 
 Procedure HandleKeyboardEvent;
@@ -11172,7 +11654,15 @@ Begin
    If MenuActive Then Begin MenuActive := False; DrawFullUI; End
    Else Running := False;
   End;
+  #8:If CurrentTool In [TOOL_PEN,TOOL_PATHSEL] Then Begin
+   If WorkingPath.Count>0 Then Dec(WorkingPath.Count);
+   WorkingPath.Closed:=False;RefreshCanvas;
+  End;
   #13: Begin
+   If Not MenuActive And (CurrentTool=TOOL_PEN) And
+    (WorkingPath.Count>=3) Then Begin
+    WorkingPath.Closed:=True;RefreshCanvas;
+   End;
    If MenuActive And (ActiveMenuItem>=0) Then
     If Not Menus[ActiveMenu].Items[ActiveMenuItem].Separator Then
      HandleMenuClick(ActiveMenu, ActiveMenuItem);

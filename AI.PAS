@@ -718,7 +718,7 @@ Begin
  If Not MenuActive Then Exit;
  X := MenuLeft(ActiveMenu);
  H := Menus[ActiveMenu].ItemCount*MENU_ITEM_HEIGHT+4;
- SetFillStyle(SolidFill, COLOR_WINDOW);
+ SetFillStyle(SolidFill, COLOR_BG);
  Bar(X, MENUBAR_HEIGHT, X+Menus[ActiveMenu].Width, MENUBAR_HEIGHT+H);
  SetColor(COLOR_BORDER);
  Rectangle(X, MENUBAR_HEIGHT, X+Menus[ActiveMenu].Width, MENUBAR_HEIGHT+H);

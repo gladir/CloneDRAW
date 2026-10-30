@@ -128,7 +128,26 @@ Type
  PByteArr = ^TByteArr;
  TByteArr = Array[0..16777215] of Byte;
 
+ { Geometrie 3D immutable partagee par les calques et l'historique. }
+ TMeshVector=Record X,Y,Z:Single;End;
+ TMeshTriangle=Record A,B,C:LongInt;End;
+ TMeshVertices=Array[0..119999] Of TMeshVector;
+ TMeshTriangles=Array[0..39999] Of TMeshTriangle;
+ PMeshVertices=^TMeshVertices;PMeshTriangles=^TMeshTriangles;
+ TMeshOptions=Record
+  RX,RY,RZ,Scale,OffsetX,OffsetY,Mode,Color:Integer;
+  Perspective,Cull,Dither:Boolean;
+ End;
+ TMesh=Record
+  References,VertexCount,TriangleCount,SourceSize,Groups,Materials:LongInt;
+  Vertices:PMeshVertices;Triangles:PMeshTriangles;
+  Minimum,Maximum:TMeshVector;
+  Source:String;Format:String[16];
+ End;
+ PMesh=^TMesh;
  TLayer = Record
+  Mesh:PMesh;
+  MeshOptions:TMeshOptions;
   Name: String[20];
   Visible: Boolean;
   Opacity: Byte;
@@ -167,6 +186,7 @@ Var
  GraphDriver, GraphMode: Integer;
  ScreenWidth, ScreenHeight: Integer;
  Running: Boolean;
+ FD_ModelMode:Boolean;
 
  MouseX, MouseY, MouseButtons: Integer;
  OldMouseX, OldMouseY, OldMouseButtons: Integer;
@@ -301,12 +321,27 @@ Begin
  For I:=0 To Sz-1 Do Layers[LIdx].Pixels^[I] := Color;
 End;
 
+Procedure RetainMesh(M:PMesh);
+Begin If M<>Nil Then Inc(M^.References);End;
+Procedure ReleaseMesh(Var M:PMesh);
+Begin
+ If M=Nil Then Exit;Dec(M^.References);
+ If M^.References=0 Then Begin
+  If M^.Vertices<>Nil Then FreeMem(M^.Vertices,SizeOf(TMeshVertices));
+  If M^.Triangles<>Nil Then FreeMem(M^.Triangles,SizeOf(TMeshTriangles));
+  FreeMem(M,SizeOf(TMesh));
+ End;
+ M:=Nil;
+End;
+
 Procedure AllocLayer(LIdx: Integer; Const Nm: String; Transparent: Boolean);
 Var Sz: LongInt;
 Begin
  If (LIdx<0) Or (LIdx>=MAX_LAYERS) Then Exit;
  Sz := LongInt(ImgW) * ImgH;
  GetMem(Layers[LIdx].Pixels, Sz);
+ Layers[LIdx].Mesh:=Nil; FillChar(Layers[LIdx].MeshOptions,
+ SizeOf(TMeshOptions), 0); 
  Layers[LIdx].Name := Nm;
  Layers[LIdx].Visible := True;
  Layers[LIdx].Opacity := 100;
@@ -323,6 +358,7 @@ Begin
   FreeMem(Layers[LIdx].Pixels, Sz);
   Layers[LIdx].Pixels := Nil;
  End;
+ ReleaseMesh(Layers[LIdx].Mesh);
  Layers[LIdx].Used := False;
 End;
 
@@ -376,8 +412,11 @@ Begin
   FreeMem(UndoBuffers[Index],UndoSizes[Index]);
  UndoBuffers[Index]:=Nil;R:=RotationUndo[Index];
  If R<>Nil Then Begin
-  For I:=0 To MAX_LAYERS-1 Do If R^.Saved[I].Pixels<>Nil Then
-   FreeMem(R^.Saved[I].Pixels,LongInt(R^.Width)*R^.Height);
+  For I:=0 To MAX_LAYERS-1 Do Begin
+   If R^.Saved[I].Pixels<>Nil Then
+    FreeMem(R^.Saved[I].Pixels,LongInt(R^.Width)*R^.Height);
+   ReleaseMesh(R^.Saved[I].Mesh);
+  End;
   FreeMem(R,SizeOf(TRotationUndo));
  End;
  RotationUndo[Index]:=Nil;
@@ -420,7 +459,7 @@ Begin
   ImageDPI:=R^.DPI;BrushSize:=R^.Brush;
   SelectionActive:=R^.Selection;SelectionRect:=R^.Rect;
   For I:=0 To MAX_LAYERS-1 Do Begin
-   Layers[I]:=R^.Saved[I];R^.Saved[I].Pixels:=Nil;
+   Layers[I]:=R^.Saved[I];R^.Saved[I].Pixels:=Nil;R^.Saved[I].Mesh:=Nil;
   End;
  End Else Begin
   I:=UndoLayer[UndoCount];
@@ -541,7 +580,7 @@ Begin
  SetMenuItem(MENU_FILTER, 5, 'Nettete...',        '',       False);
 
  Menus[MENU_3D].ItemCount := 39;
- SetMenuItem(MENU_3D, 0,  'Nouv. calque 3D du fichier', '', False);
+ SetMenuItem(MENU_3D, 0,  'Nouveau calque 3D du fichier', '', False);
  SetMenuItem(MENU_3D, 1,  'Fusionner les calques 3D',   '', False);
  SetMenuItem(MENU_3D, 2,  'Exporter calque 3D...',      '', False);
  SetMenuItem(MENU_3D, 3,  'Panorama spherique',         '', False);
@@ -1389,7 +1428,9 @@ Begin
  R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
  R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
  R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
- For I:=0 To MAX_LAYERS-1 Do R^.Saved[I]:=Layers[I];
+ For I:=0 To MAX_LAYERS-1 Do Begin
+  R^.Saved[I]:=Layers[I];RetainMesh(R^.Saved[I].Mesh);
+ End;
  MakeUndoRoom;RotationUndo[UndoCount]:=R;
  UndoBuffers[UndoCount]:=Nil;Inc(UndoCount);
  For I:=0 To MAX_LAYERS-1 Do Layers[I].Pixels:=NewPixels[I];
@@ -1489,7 +1530,9 @@ Begin
  R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
  R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
  R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
- For I:=0 To MAX_LAYERS-1 Do R^.Saved[I]:=Layers[I];
+ For I:=0 To MAX_LAYERS-1 Do Begin
+  R^.Saved[I]:=Layers[I];RetainMesh(R^.Saved[I].Mesh);
+ End;
  MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
  Inc(UndoCount);
  Scale:=Sqrt((W/ImgW)*(H/ImgH));
@@ -1640,7 +1683,9 @@ Begin
  R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
  R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
  R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
- For I:=0 To MAX_LAYERS-1 Do R^.Saved[I]:=Layers[I];
+ For I:=0 To MAX_LAYERS-1 Do Begin
+  R^.Saved[I]:=Layers[I];RetainMesh(R^.Saved[I].Mesh);
+ End;
  MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
  Inc(UndoCount);
  For I:=0 To MAX_LAYERS-1 Do Layers[I].Pixels:=Pixels[I];
@@ -1786,11 +1831,387 @@ Begin
  R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
  R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
  R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
- For I:=0 To MAX_LAYERS-1 Do R^.Saved[I]:=Layers[I];
+ For I:=0 To MAX_LAYERS-1 Do Begin
+  R^.Saved[I]:=Layers[I];RetainMesh(R^.Saved[I].Mesh);
+ End;
  MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
  Inc(UndoCount);
  For I:=0 To MAX_LAYERS-1 Do Layers[I].Pixels:=Pixels[I];
  ImageModified:=True;ApplySharpen:=True;
+End;
+
+Type TMeshBytes=Array[0..33554431] Of Byte;PMeshBytes=^TMeshBytes;
+Function MeshNumber(Const Text:String;Var Value:Double):Boolean;
+Var I,Code:Integer;
+Begin
+ MeshNumber:=False;If Text='' Then Exit;
+ For I:=1 To Length(Text) Do
+  If Not (Text[I] In ['0'..'9','+','-','.','e','E']) Then Exit;
+ Val(Text,Value,Code);If Code<>0 Then Exit;
+ MeshNumber:=(Value>=-1E12) And (Value<=1E12) And
+  ((Value=0) Or (Abs(Value)>=1E-30));
+End;
+Function MeshToken(Var Line:String):String;
+Var I:Integer;
+Begin
+ While Length(Line)>0 Do Begin
+  If Ord(Line[1])>32 Then Break;Delete(Line,1,1);
+ End;
+ I:=1;While I<=Length(Line) Do Begin If Ord(Line[I])<=32 Then Break;Inc(I);End;
+ MeshToken:=Copy(Line,1,I-1);Delete(Line,1,I);
+End;
+Function MeshVertex(M:PMesh;X,Y,Z:Double):Boolean;
+Var I:LongInt;
+Begin
+ MeshVertex:=False;If M^.VertexCount>=120000 Then Exit;
+ I:=M^.VertexCount;M^.Vertices^[I].X:=X;M^.Vertices^[I].Y:=Y;
+ M^.Vertices^[I].Z:=Z;
+ If I=0 Then Begin M^.Minimum:=M^.Vertices^[I];M^.Maximum:=M^.Vertices^[I];End
+ Else Begin
+  If X<M^.Minimum.X Then M^.Minimum.X:=X;
+  If Y<M^.Minimum.Y Then M^.Minimum.Y:=Y;
+  If Z<M^.Minimum.Z Then M^.Minimum.Z:=Z;
+  If X>M^.Maximum.X Then M^.Maximum.X:=X;
+  If Y>M^.Maximum.Y Then M^.Maximum.Y:=Y;
+  If Z>M^.Maximum.Z Then M^.Maximum.Z:=Z;
+ End;
+ Inc(M^.VertexCount);MeshVertex:=True;
+End;
+Function MeshFace(M:PMesh;A,B,C:LongInt):Boolean;
+Var I:LongInt;
+Begin
+ MeshFace:=False;
+ If (M^.TriangleCount>=40000) Or (A<0) Or (B<0) Or (C<0) Or
+  (A>=M^.VertexCount) Or (B>=M^.VertexCount) Or (C>=M^.VertexCount) Then Exit;
+ I:=M^.TriangleCount;M^.Triangles^[I].A:=A;M^.Triangles^[I].B:=B;
+ M^.Triangles^[I].C:=C;Inc(M^.TriangleCount);MeshFace:=True;
+End;
+Function MeshLong(Data:PMeshBytes;P:LongInt):LongWord;
+Begin
+ MeshLong:=LongWord(Data^[P]) Or (LongWord(Data^[P+1]) Shl 8) Or
+  (LongWord(Data^[P+2]) Shl 16) Or (LongWord(Data^[P+3]) Shl 24);
+End;
+Function MeshFloat(Data:PMeshBytes;P:LongInt;Var Value:Double):Boolean;
+Var Bits:LongWord;S:Single;
+Begin
+ MeshFloat:=False;Bits:=MeshLong(Data,P);
+ If Bits And $7F800000=$7F800000 Then Exit;
+ If (Bits And $7F800000=0) And (Bits And $007FFFFF<>0) Then Exit;
+ Move(Bits,S,4);Value:=S;MeshFloat:=(Value>=-1E12) And (Value<=1E12) And
+  ((Value=0) Or (Abs(Value)>=1E-30));
+End;
+Function ReadMesh(Const Name:String;Var Model:PMesh;Var Error:String):Boolean;
+Var F:File;Data:PMeshBytes;Size,Bytes,P,Start,N,FaceIndex,First,Last,
+ Index:LongInt;OldMode:Byte;M:PMesh;Failed,Binary,OBJ,LongLine:Boolean;
+ Line,Key,Token:String;X,Y,Z:Double;I,J,Code,VerticesInFace:Integer;
+ Function Number:Double;
+ Var V:Double;
+ Begin
+  Token:=MeshToken(Line);V:=0;
+  If Not MeshNumber(Token,V) Then Failed:=True;Number:=V;
+ End;
+Begin
+ ReadMesh:=False;Model:=Nil;Data:=Nil;Error:='';M:=Nil;
+ OBJ:=ExtractExt(Name)='.OBJ';
+ If Not OBJ And (ExtractExt(Name)<>'.STL') Then Begin
+  Error:='Formats acceptes : OBJ et STL.';Exit;
+ End;
+ Assign(F,Name);OldMode:=FileMode;FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
+ If IOResult<>0 Then Begin Error:='Fichier inaccessible.';Exit;End;
+ {$I-}Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If (Size<1) Or (Size>33554432) Then Failed:=True;
+ If Not Failed Then Begin
+  Data:=PMeshBytes(RotationAllocate(Size));If Data=Nil Then Failed:=True;
+  If Not Failed Then Begin
+   {$I-}BlockRead(F,Data^,Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>Size);
+  End;
+ End;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Not Failed Then Begin
+  M:=PMesh(RotationAllocate(SizeOf(TMesh)));
+  If M<>Nil Then Begin
+   FillChar(M^,SizeOf(M^),0);M^.References:=1;M^.Source:=Name;
+   M^.SourceSize:=Size;
+   M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices))); 
+   M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
+   Failed:=(M^.Vertices=Nil) Or (M^.Triangles=Nil);
+  End Else Failed:=True;
+ End;
+ If Not Failed Then Begin
+  Binary:=False;N:=0;
+  If Not OBJ And (Size>=84) Then Begin
+   N:=MeshLong(Data,80);
+   If (N>0) And (N<=40000) Then Binary:=Size=84+N*50;
+  End;
+  If Binary Then Begin
+   M^.Format:='STL binaire';P:=84;
+   For FaceIndex:=0 To N-1 Do Begin
+    First:=M^.VertexCount;Inc(P,12);
+    For J:=0 To 2 Do Begin
+     If Not MeshFloat(Data,P,X) Then Failed:=True;
+     If Not MeshFloat(Data,P+4,Y) Then Failed:=True;
+     If Not MeshFloat(Data,P+8,Z) Then Failed:=True;Inc(P,12);
+     If Not Failed Then If Not MeshVertex(M,X,Y,Z) Then Failed:=True;
+    End;
+    If Failed Then Break;
+    If Not MeshFace(M,First,First+1,First+2) Then Begin Failed:=True;Break;End;
+    Inc(P,2);
+   End;
+  End Else Begin
+   If OBJ Then M^.Format:='Wavefront OBJ' Else M^.Format:='STL ASCII';
+   P:=0;VerticesInFace:=0;First:=0;
+   If Size>=3 Then If (Data^[0]=239) And (Data^[1]=187) And
+    (Data^[2]=191) Then P:=3;
+   While (P<Size) And Not Failed Do Begin
+    Line:='';LongLine:=False;
+    While P<Size Do Begin
+     I:=Data^[P];Inc(P);If I In [10,13] Then Break;
+     If Length(Line)<255 Then Line:=Line+Chr(I) Else LongLine:=True;
+    End;
+    I:=Pos('#',Line);If I>0 Then Delete(Line,I,255);
+    Key:=UpperStr(MeshToken(Line));If Key='' Then Continue;
+    If LongLine Then Begin Error:='Ligne geometrique trop longue (255).';
+    Failed:=True; Break; End; 
+    If (OBJ And (Key='V')) Or (Not OBJ And (Key='VERTEX')) Then Begin
+     X:=Number;Y:=Number;Z:=Number;
+     If Not Failed Then If Not MeshVertex(M,X,Y,Z) Then Failed:=True;
+     If Not OBJ Then Begin
+      Inc(VerticesInFace);
+      If VerticesInFace=3 Then Begin
+       First:=M^.VertexCount-3;
+       If Not MeshFace(M,First,First+1,First+2) Then Failed:=True;
+       VerticesInFace:=0;
+      End;
+     End;
+    End Else If OBJ And (Key='F') Then Begin
+     I:=0;First:=-1;Last:=-1;
+     Repeat
+      Token:=MeshToken(Line);If Token='' Then Break;
+      J:=Pos('/',Token);If J>0 Then Delete(Token,J,255);
+      Val(Token,Index,Code);
+      If (Code<>0) Or (Index=0) Then Begin Failed:=True;Break;End;
+      If Index<0 Then Index:=M^.VertexCount+Index Else Dec(Index);
+      If (Index<0) Or (Index>=M^.VertexCount) Then Begin Failed:=True;Break;End;
+      If I=0 Then First:=Index Else If I>1 Then
+       If Not MeshFace(M,First,Last,Index) Then Failed:=True;
+      Last:=Index;Inc(I);
+     Until Failed;
+     If I<3 Then Failed:=True;
+    End Else If OBJ Then Begin
+     If (Key='O') Or (Key='G') Then Inc(M^.Groups);
+     If Key='USEMTL' Then Inc(M^.Materials);
+    End;
+   End;
+   If Not OBJ And (VerticesInFace<>0) Then Failed:=True;
+  End;
+  If (M^.TriangleCount=0) Or (M^.VertexCount<3) Then Failed:=True;
+  If Not Failed Then If (M^.Minimum.X=M^.Maximum.X) And
+   (M^.Minimum.Y=M^.Maximum.Y) And (M^.Minimum.Z=M^.Maximum.Z) Then
+   Failed:=True; 
+ End;
+ If Data<>Nil Then FreeMem(Data,Size);
+ If Failed Then Begin
+  ReleaseMesh(M);If Error='' Then
+   Error:='Modele invalide ou limite : 120000 sommets / 40000 triangles.';
+ End Else Begin Model:=M;ReadMesh:=True;End;
+End;
+
+Type TMeshProjected=Record X,Y,Z,WX,WY,WZ:Single;End;
+ TMeshProjection=Array[0..119999] Of TMeshProjected;
+ PMeshProjection=^TMeshProjection;
+ TMeshDepth=Array[0..16777215] Of Single;PMeshDepth=^TMeshDepth;
+Function MeshMin(A,B:Double):Double;
+Begin If A<B Then MeshMin:=A Else MeshMin:=B;End;
+Function MeshMax(A,B:Double):Double;
+Begin If A>B Then MeshMax:=A Else MeshMax:=B;End;
+Function MeshOptionsValid(Const O:TMeshOptions):Boolean;
+Begin
+ MeshOptionsValid:=(O.RX>=-3600) And (O.RX<=3600) And
+  (O.RY>=-3600) And (O.RY<=3600) And (O.RZ>=-3600) And (O.RZ<=3600)
+  And (O.Scale>=10) And (O.Scale<=400) And
+  (O.OffsetX>=-100) And (O.OffsetX<=100) And
+  (O.OffsetY>=-100) And (O.OffsetY<=100) And
+  (O.Mode>=0) And (O.Mode<=2) And (O.Color>=0) And (O.Color<=15);
+End;
+Procedure DefaultMeshOptions(Var O:TMeshOptions);
+Begin
+ FillChar(O,SizeOf(O),0);O.RX:=200;O.RY:=-300;O.Scale:=100;
+ O.Color:=7;O.Mode:=2;O.Perspective:=True;O.Dither:=True;
+End;
+Function RenderMesh(M:PMesh;Const O:TMeshOptions;W,H:Integer;
+ Progress:Boolean;Var Pixels:PByteArr):Boolean;
+Var P:PMeshProjection;Depth:PMeshDepth;Size,I,J:LongInt;
+ C1,S1,C2,S2,C3,S3,Extent,CX,CY,CZ,VX,VY,VZ,T,Scale,F,
+ NX,NY,NZ,Len,Light,Den,A,B,C,Z,XX,YY,MinX,MaxX,MinY,MaxY:Double;
+ AIndex,BIndex,CIndex:LongInt;PA,PB,PC:TMeshProjected;
+ X,Y,X1,Y1,X2,Y2:Integer;Failed:Boolean;K:Char;
+ Procedure Pixel(PX,PY:Integer;Distance:Double;Color:Byte);
+ Var Offset:LongInt;
+ Begin
+  If (PX<0) Or (PY<0) Or (PX>=W) Or (PY>=H) Then Exit;
+  Offset:=LongInt(PY)*W+PX;
+  If Distance>=Depth^[Offset]-0.000001 Then Begin
+   Depth^[Offset]:=Distance;Pixels^[Offset]:=Color;
+  End;
+ End;
+ Procedure Edge(Const A,B:TMeshProjected;Color:Byte);
+ Var Steps,J,PX,PY:Integer;T:Double;
+ Begin
+  Steps:=Trunc(MeshMax(Abs(B.X-A.X),Abs(B.Y-A.Y)))+1;
+  For J:=0 To Steps Do Begin
+   T:=J/Steps;PX:=Round(A.X+(B.X-A.X)*T);PY:=Round(A.Y+(B.Y-A.Y)*T);
+   Pixel(PX,PY,A.Z+(B.Z-A.Z)*T+0.000002,Color);
+  End;
+ End;
+Begin
+ RenderMesh:=False;Pixels:=Nil;
+ If (M=Nil) Or Not MeshOptionsValid(O) Or (W<1) Or (H<1) Or
+  (W>4096) Or (H>4096) Then Exit;
+ Size:=LongInt(W)*H;
+ Pixels:=PByteArr(RotationAllocate(Size));
+ Depth:=PMeshDepth(RotationAllocate(Size*4));
+ P:=PMeshProjection(RotationAllocate(SizeOf(TMeshProjection)));
+ If (Pixels=Nil) Or (Depth=Nil) Or (P=Nil) Then Begin
+  If Pixels<>Nil Then FreeMem(Pixels,Size);Pixels:=Nil;
+  If Depth<>Nil Then FreeMem(Depth,Size*4);
+  If P<>Nil Then FreeMem(P,SizeOf(TMeshProjection));Exit;
+ End;
+ FillChar(Pixels^,Size,255);For I:=0 To Size-1 Do Depth^[I]:=-1E30;
+ CX:=(M^.Minimum.X+M^.Maximum.X)/2;CY:=(M^.Minimum.Y+M^.Maximum.Y)/2;
+ CZ:=(M^.Minimum.Z+M^.Maximum.Z)/2;
+ Extent:=MeshMax(M^.Maximum.X-M^.Minimum.X,M^.Maximum.Y-M^.Minimum.Y);
+ Extent:=MeshMax(Extent,M^.Maximum.Z-M^.Minimum.Z);
+ If Extent<=0 Then Extent:=1;
+ RotationBasis(O.RX,True,C1,S1);RotationBasis(O.RY,True,C2,S2);
+ RotationBasis(O.RZ,True,C3,S3);Scale:=Min(W,H)*0.75*O.Scale/100;
+ MinX:=1E30;MinY:=1E30;MaxX:=-1E30;MaxY:=-1E30;
+ For I:=0 To M^.VertexCount-1 Do Begin
+  VX:=(M^.Vertices^[I].X-CX)/Extent;
+  VY:=(M^.Vertices^[I].Y-CY)/Extent;VZ:=(M^.Vertices^[I].Z-CZ)/Extent;
+  T:=VY*C1-VZ*S1;VZ:=VY*S1+VZ*C1;VY:=T;
+  T:=VX*C2+VZ*S2;VZ:=-VX*S2+VZ*C2;VX:=T;
+  T:=VX*C3-VY*S3;VY:=VX*S3+VY*C3;VX:=T;
+  P^[I].WX:=VX;P^[I].WY:=VY;P^[I].WZ:=VZ;
+  F:=1;P^[I].Z:=VZ;
+  If O.Perspective Then Begin F:=3/(3-VZ);P^[I].Z:=1/(3-VZ);End;
+  P^[I].X:=VX*F;P^[I].Y:=-VY*F;
+  MinX:=MeshMin(MinX,P^[I].X);MaxX:=MeshMax(MaxX,P^[I].X);
+  MinY:=MeshMin(MinY,P^[I].Y);MaxY:=MeshMax(MaxY,P^[I].Y);
+ End;
+ Scale:=0.9*MeshMin((W-1)/MeshMax(0.000001,MaxX-MinX),
+  (H-1)/MeshMax(0.000001,MaxY-MinY))*O.Scale/100;
+ For I:=0 To M^.VertexCount-1 Do Begin
+  P^[I].X:=(W-1)/2+(P^[I].X-(MinX+MaxX)/2)*Scale+O.OffsetX*W/100;
+  P^[I].Y:=(H-1)/2+(P^[I].Y-(MinY+MaxY)/2)*Scale+O.OffsetY*H/100;
+ End;
+ Failed:=False;
+ For I:=0 To M^.TriangleCount-1 Do Begin
+  If Progress And (I Mod 64=0) Then Begin
+   HideMouseCursor;
+   FillRect(20,ScreenHeight-45,ScreenWidth-20,ScreenHeight-23,LightGray);
+   SetColor(Black);OutTextXY(28,ScreenHeight-38,
+    'Rendu 3D : '+IntToStr(I*100 Div M^.TriangleCount)+'% - Echap : annuler');
+   ShowMouseCursor;
+   If KeyPressed Then Begin K:=ReadKey; If K=#27 Then Begin Failed:=True; Break;
+   End; End; 
+  End;
+  AIndex:=M^.Triangles^[I].A;BIndex:=M^.Triangles^[I].B;
+  CIndex:=M^.Triangles^[I].C;PA:=P^[AIndex];PB:=P^[BIndex];PC:=P^[CIndex];
+  NX:=(PB.WY-PA.WY)*(PC.WZ-PA.WZ)-(PB.WZ-PA.WZ)*(PC.WY-PA.WY);
+  NY:=(PB.WZ-PA.WZ)*(PC.WX-PA.WX)-(PB.WX-PA.WX)*(PC.WZ-PA.WZ);
+  NZ:=(PB.WX-PA.WX)*(PC.WY-PA.WY)-(PB.WY-PA.WY)*(PC.WX-PA.WX);
+  Len:=Sqrt(NX*NX+NY*NY+NZ*NZ);If Len<1E-12 Then Continue;
+  If O.Cull And (NX*(-PA.WX)+NY*(-PA.WY)+NZ*(3-PA.WZ)<=0) Then Continue;
+  Light:=0.2+0.8*Abs((-0.4*NX+0.7*NY+NZ)/(Len*Sqrt(1.65)));
+  Den:=(PB.Y-PC.Y)*(PA.X-PC.X)+(PC.X-PB.X)*(PA.Y-PC.Y);
+  If Abs(Den)<1E-10 Then Begin
+   If O.Mode<>0 Then Begin
+    Edge(PA,PB,Black);Edge(PB,PC,Black);Edge(PC,PA,Black);
+   End;
+   Continue;
+  End;
+  If O.Mode<>1 Then Begin
+   X1:=Max(0,Trunc(MeshMin(PA.X,MeshMin(PB.X,PC.X))));
+   Y1:=Max(0,Trunc(MeshMin(PA.Y,MeshMin(PB.Y,PC.Y))));
+   X2:=Min(W-1,Trunc(MeshMax(PA.X,MeshMax(PB.X,PC.X)))+1);
+   Y2:=Min(H-1,Trunc(MeshMax(PA.Y,MeshMax(PB.Y,PC.Y)))+1);
+   For Y:=Y1 To Y2 Do For X:=X1 To X2 Do Begin
+    XX:=X+0.5;YY:=Y+0.5;
+    A:=((PB.Y-PC.Y)*(XX-PC.X)+(PC.X-PB.X)*(YY-PC.Y))/Den;
+    B:=((PC.Y-PA.Y)*(XX-PC.X)+(PA.X-PC.X)*(YY-PC.Y))/Den;C:=1-A-B;
+    If (A>=-0.000001) And (B>=-0.000001) And (C>=-0.000001) Then Begin
+     Z:=A*PA.Z+B*PB.Z+C*PC.Z;
+     Pixel(X,Y,Z,BlurPalette(VGA_R[O.Color]*Light,VGA_G[O.Color]*Light,
+      VGA_B[O.Color]*Light,X,Y,O.Dither));
+    End;
+   End;
+  End;
+  If O.Mode<>0 Then Begin
+   J:=Black;If O.Color=Black Then J:=White;
+   Edge(PA,PB,J);Edge(PB,PC,J);Edge(PC,PA,J);
+  End;
+ End;
+ FreeMem(Depth,Size*4);FreeMem(P,SizeOf(TMeshProjection));
+ If Failed Then Begin FreeMem(Pixels,Size);Pixels:=Nil;End
+ Else RenderMesh:=True;
+End;
+Function MeshUndoCopy:PRotationUndo;
+Var R:PRotationUndo;I:Integer;Size:LongInt;Failed:Boolean;
+Begin
+ MeshUndoCopy:=Nil;R:=PRotationUndo(RotationAllocate(SizeOf(TRotationUndo)));
+ If R=Nil Then Exit;FillChar(R^,SizeOf(R^),0);
+ R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
+ R^.Active:=ActiveLayer; R^.Modified:=ImageModified;
+ R^.Selection:=SelectionActive; 
+ R^.Rect:=SelectionRect;R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
+ Size:=LongInt(ImgW)*ImgH;Failed:=False;
+ For I:=0 To MAX_LAYERS-1 Do Begin
+  R^.Saved[I]:=Layers[I];R^.Saved[I].Pixels:=Nil;RetainMesh(R^.Saved[I].Mesh);
+  If Layers[I].Pixels<>Nil Then Begin
+   R^.Saved[I].Pixels:=PByteArr(RotationAllocate(Size));
+   If R^.Saved[I].Pixels=Nil Then Begin Failed:=True;Break;End;
+   Move(Layers[I].Pixels^,R^.Saved[I].Pixels^,Size);
+  End;
+ End;
+ If Failed Then Begin
+  For I:=0 To MAX_LAYERS-1 Do Begin
+   If R^.Saved[I].Pixels<>Nil Then FreeMem(R^.Saved[I].Pixels,Size);
+   ReleaseMesh(R^.Saved[I].Mesh);
+  End;
+  FreeMem(R,SizeOf(TRotationUndo));Exit;
+ End;
+ MeshUndoCopy:=R;
+End;
+Function ImportMeshLayer(M:PMesh;Const O:TMeshOptions;Target:Integer):Boolean;
+Var Pixels:PByteArr;R:PRotationUndo;Name:String;I:Integer;
+Begin
+ ImportMeshLayer:=False;
+ If (Target<0) And (LayerCount>=MAX_LAYERS) Then Exit;
+ If Target>=LayerCount Then Exit;
+ If Not RenderMesh(M,O,ImgW,ImgH,True,Pixels) Then Exit;
+ R:=MeshUndoCopy;
+ If R=Nil Then Begin FreeMem(Pixels,LongInt(ImgW)*ImgH);Exit;End;
+ MakeUndoRoom; RotationUndo[UndoCount]:=R; UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount); 
+ If Target<0 Then Begin
+  Target:=LayerCount;Inc(LayerCount);FillChar(Layers[Target],SizeOf(TLayer),0);
+  Layers[Target].Used:=True; Layers[Target].Visible:=True;
+  Layers[Target].Opacity:=100; 
+  Name:=M^.Source;
+  For I:=Length(Name) DownTo 1 Do If Name[I] In ['\','/'] Then Begin
+   Delete(Name,1,I);Break;
+  End;
+  Layers[Target].Name:='3D '+Copy(Name,1,17);
+ End Else Begin
+  If Layers[Target].Pixels<>Nil Then FreeMem(Layers[Target].Pixels,
+  LongInt(ImgW)*ImgH); 
+  ReleaseMesh(Layers[Target].Mesh);
+ End;
+ Layers[Target].Pixels:=Pixels;Layers[Target].Mesh:=M;RetainMesh(M);
+ Layers[Target].MeshOptions:=O;ActiveLayer:=Target;
+ SelectionActive:=False;ImageModified:=True;ImportMeshLayer:=True;
 End;
 
 Procedure RotateLayer90(Clockwise:Boolean);
@@ -4834,6 +5255,9 @@ Begin
  AllocLayer(LayerCount, 'Copie ' + Layers[ActiveLayer].Name, True);
  Sz := LongInt(ImgW) * ImgH;
  Move(Layers[ActiveLayer].Pixels^, Layers[LayerCount].Pixels^, Sz);
+ Layers[LayerCount].Mesh:=Layers[ActiveLayer].Mesh;
+ RetainMesh(Layers[LayerCount].Mesh);
+ Layers[LayerCount].MeshOptions:=Layers[ActiveLayer].MeshOptions;
  ActiveLayer := LayerCount;
  Inc(LayerCount);
  ImageModified := True;
@@ -4850,6 +5274,7 @@ Begin
  For I:=ActiveLayer To LayerCount-2 Do Layers[I] := Layers[I+1];
  Layers[LayerCount-1].Used := False;
  Layers[LayerCount-1].Pixels := Nil;
+ Layers[LayerCount-1].Mesh:=Nil;
  Dec(LayerCount);
  If ActiveLayer>=LayerCount Then ActiveLayer := LayerCount-1;
  ImageModified := True;
@@ -4934,12 +5359,18 @@ Var
  FD_CurDir: String;
 
 Function FD_FilterLabel: String;
-Begin FD_FilterLabel := FD_FILTER_LABELS[FD_FilterIdx]; End;
+Begin
+ If FD_ModelMode Then FD_FilterLabel:='Modeles OBJ / STL'
+ Else FD_FilterLabel:=FD_FILTER_LABELS[FD_FilterIdx];
+End;
 
 Function FD_ExtMatches(Const Nm: String): Boolean;
 Var E: String;
 Begin
  E := ExtractExt(Nm);
+ If FD_ModelMode Then Begin
+  FD_ExtMatches:=(E='.OBJ') Or (E='.STL');Exit;
+ End;
  Case FD_FilterIdx Of
   0: FD_ExtMatches := (E='.BMP') Or (E='.DIB') Or (E='.GIF') Or (E='.PNG') Or
                       (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or
@@ -5213,6 +5644,7 @@ Var
   End;
 
  Begin
+  If FD_ModelMode Then Exit;
   SelF := FD_FilterIdx;
   VisRows := FD_NUM_FILTERS; If VisRows > 6 Then VisRows := 6;
   DDX1 := TypX1; DDY1 := NamY2+1;
@@ -7343,6 +7775,242 @@ Else If Hit(20,254,135,278) Then Begin Before:=Not Before;Dirty:=True;End
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
+Procedure MeshImportDialog(Target:Integer);
+Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
+ X,Y,W,H,MX,MY,MB,Previous,Field,I,Code,OldX,OldY,PreviewW,PreviewH:Integer;
+ Dirty,Done,Drag,ReplaceText,Valid,Info,PreviewDirty:Boolean;
+ Name,Message,Error:String;Texts:Array[0..5] Of String;
+ K,E:Char;V:Double;
+ Function Decimal(Value:Double):String;
+ Var T:String;
+ Begin Str(Value:0:2,T);Decimal:=T;End;
+ Procedure Sync;
+ Begin
+  Texts[0]:=Decimal(O.RX/10);Texts[1]:=Decimal(O.RY/10);
+  Texts[2]:=Decimal(O.RZ/10);Texts[3]:=IntToStr(O.Scale);
+  Texts[4]:=IntToStr(O.OffsetX);Texts[5]:=IntToStr(O.OffsetY);
+ End;
+ Procedure Changed;
+ Begin Dirty:=True;PreviewDirty:=True;Message:='';Valid:=True;End;
+ Procedure Load;
+ Begin
+  If ReadMesh(Name,Loaded,Error) Then Begin
+   ReleaseMesh(M);M:=Loaded;DefaultMeshOptions(O);Sync;Changed;
+   Message:='Geometrie chargee. Textures non importees.';Info:=False;
+  End Else Begin Message:=Error;Dirty:=True;End;
+ End;
+ Procedure Browse;
+ Begin
+  FD_ModelMode:=True;
+  If FD_Open('Modele 3D - OBJ / STL',Name) Then Load;
+  FD_ModelMode:=False;Dirty:=True;
+  GetMouseStateLocal(MX,MY,Previous);
+ End;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+24,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+24,True);SetColor(Black);
+  OutTextXY(X+L+7,Y+T+8,Caption);
+ End;
+ Procedure Option(T:Integer;Checked:Boolean;Const Caption:String);
+ Begin
+  SetColor(Black);Rectangle(X+320,Y+T,X+332,Y+T+12);
+  If Checked Then Begin Line(X+322,Y+T+6,X+325,Y+T+10);
+   Line(X+325,Y+T+10,X+331,Y+T+2);End;
+  OutTextXY(X+340,Y+T+3,Caption);
+ End;
+ Procedure Change;
+ Var T:String;J,N:Integer;
+ Begin
+  T:=Texts[Field-1];For J:=1 To Length(T) Do If T[J]=',' Then T[J]:='.';
+  Val(T,V,Code);Valid:=Code=0;Dirty:=True;
+  If Valid Then Case Field Of
+   1..3:Valid:=(V>=-360) And (V<=360);
+   4:Valid:=(V>=10) And (V<=400);
+   5,6:Valid:=(V>=-100) And (V<=100);
+  End;
+  If Not Valid Then Begin Message:='Valeur hors limites.';Exit;End;
+  N:=Round(V);If Field<=3 Then N:=Round(V*10);
+  Case Field Of 1:O.RX:=N;2:O.RY:=N;3:O.RZ:=N;4:O.Scale:=N;
+   5:O.OffsetX:=N;6:O.OffsetY:=N;End;Changed;
+ End;
+ Procedure Draw;
+ Var PX,PY,T,I,OX,OY:Integer;Color:Byte;S:String;
+ Begin
+  If PreviewDirty And (M<>Nil) And Valid Then Begin
+   If Preview<>Nil Then FreeMem(Preview,LongInt(PreviewW)*PreviewH);
+   Preview:=Nil;
+   If LongInt(ImgW)*214>LongInt(ImgH)*280 Then Begin
+    PreviewW:=280;PreviewH:=Max(1,Round(ImgH*280.0/ImgW));
+   End Else Begin
+    PreviewH:=214;PreviewW:=Max(1,Round(ImgW*214.0/ImgH));
+   End;
+   If Not RenderMesh(M,O,PreviewW,PreviewH,True,Preview) Then
+    Message:='Apercu annule ou memoire insuffisante.';
+   PreviewDirty:=False;
+  End;
+  HideMouseCursor;FillRect(X,Y,X+W,Y+H,LightGray);DrawBevel(X,Y,X+W,Y+H,True);
+  FillRect(X+3,Y+3,X+W-3,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Calque 3D - importer et placer une geometrie');
+  FillRect(X+20,Y+40,X+472,Y+64,White);
+  If Field=0 Then SetColor(Blue) Else SetColor(DarkGray);
+  Rectangle(X+20,Y+40,X+472,Y+64);SetColor(Black);S:=Name;
+  If Length(S)>54 Then S:='...'+Copy(S,Length(S)-50,51);
+  OutTextXY(X+26,Y+48,S);Button(490,40,105,'Choisir...');
+  For PY:=0 To 213 Do For PX:=0 To 279 Do Begin
+   Color:=LightGray;If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=White;
+   OX:=PX-(280-PreviewW) Div 2;OY:=PY-(214-PreviewH) Div 2;
+   If Not Info And (Preview<>Nil) And (OX>=0) And (OY>=0) And
+    (OX<PreviewW) And (OY<PreviewH) Then
+     If Preview^[LongInt(OY)*PreviewW+OX]<>255 Then
+      Color:=Preview^[LongInt(OY)*PreviewW+OX];
+   PutPixel(X+20+PX,Y+82+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+19,Y+81,X+300,Y+296);
+  If Info And (M<>Nil) Then Begin
+   FillRect(X+21,Y+83,X+298,Y+294,White);SetColor(Black);
+   OutTextXY(X+28,Y+94,'Format : '+M^.Format);
+   OutTextXY(X+28,Y+116,'Sommets : '+IntToStr(M^.VertexCount));
+   OutTextXY(X+28,Y+138,'Triangles : '+IntToStr(M^.TriangleCount));
+   OutTextXY(X+28,Y+160,'Taille : '+IntToStr(M^.SourceSize)+' octets');
+   OutTextXY(X+28,Y+182,'X : '+Decimal(M^.Maximum.X-M^.Minimum.X));
+   OutTextXY(X+28,Y+202,'Y : '+Decimal(M^.Maximum.Y-M^.Minimum.Y));
+   OutTextXY(X+28,Y+222,'Z : '+Decimal(M^.Maximum.Z-M^.Minimum.Z));
+   OutTextXY(X+28,Y+244,'Groupes : '+IntToStr(M^.Groups)+
+    ' Mat : '+IntToStr(M^.Materials));
+   OutTextXY(X+28,Y+266,'Unites : celles du fichier');
+  End Else If M=Nil Then Begin
+   OutTextXY(X+35,Y+160,'Choisir un modele OBJ ou STL');
+  End;
+  For I:=0 To 5 Do Begin
+   T:=82+I*33;
+   Case I Of 0:S:='Rotation X';1:S:='Rotation Y';2:S:='Rotation Z';
+    3:S:='Echelle %';4:S:='Decal. X %';5:S:='Decal. Y %';End;
+   SetColor(Black);OutTextXY(X+320,Y+T+8,S);
+   FillRect(X+420,Y+T,X+592,Y+T+23,White);
+   If Field=I+1 Then SetColor(Blue) Else SetColor(DarkGray);
+   Rectangle(X+420,Y+T,X+592,Y+T+23);SetColor(Black);
+   OutTextXY(X+428,Y+T+8,Texts[I]);
+  End;
+  S:='Orthographique';If O.Perspective Then S:='Perspective';
+  Button(20,307,135,S);
+  Case O.Mode Of 0:S:='Solide';1:S:='Fil de fer';2:S:='Solide + fil';End;
+  Button(165, 307, 135, S+' >'); Button(20, 339, 135,
+  'Matiere : '+IntToStr(O.Color)+' >'); 
+  Button(165,339,135,'Informations');
+  Option(287, O.Cull, 'Cacher faces arriere'); Option(310, O.Dither,
+  'Tramage des couleurs'); 
+  OutTextXY(X+320,Y+338,'Glisser l''apercu : orbite');
+  OutTextXY(X+320,Y+356,'Geometrie en memoire');
+  SetColor(Black);S:=Message;
+  If S='' Then S:='OBJ/STL sans textures. Rendu sur calque transparent.';
+  If Length(S)>73 Then S:=Copy(S,1,73);OutTextXY(X+20,Y+378,S);
+  Button(20,399,110,'Reinitialiser');Button(142,399,65,'Face');
+  Button(219,399,81,'Iso 3D');Button(380,399,96,'Annuler');
+  S:='Importer';If Target>=0 Then S:='Appliquer';Button(490,399,105,S);
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  If Not Valid Then Exit;
+  If M=Nil Then Load Else If Name<>M^.Source Then Load;
+  If M=Nil Then Begin Dirty:=True;Exit;End;
+  If Name<>M^.Source Then Begin Dirty:=True;Exit;End;
+  If ImportMeshLayer(M,O,Target) Then Done:=True
+   Else Begin Message:='Import annule, memoire ou limite de calques.';
+   Dirty:=True; End; 
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;M:=Nil;Preview:=Nil;
+ PreviewW:=0;PreviewH:=0;Name:='';Message:='';
+ If (Target>=0) And (Target<LayerCount) Then Begin
+  M:=Layers[Target].Mesh;RetainMesh(M);
+  If M<>Nil Then Begin Name:=M^.Source;O:=Layers[Target].MeshOptions;End;
+ End;
+ If M=Nil Then DefaultMeshOptions(O);
+ W:=620;H:=430;X:=(ScreenWidth-W) Div 2;Y:=(ScreenHeight-H) Div 2;
+ Field:=0;Info:=False;Done:=False;Dirty:=True;Valid:=True;
+ Drag:=False;ReplaceText:=True;PreviewDirty:=True;Sync;
+ GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(490,40,595,64) Then Browse
+   Else If Hit(20, 40, 472, 64) Then Begin Field:=0; ReplaceText:=True;
+   Dirty:=True; End
+   Else If Hit(420,82,592,270) Then Begin
+    Field:=Min(6,1+(MY-Y-82) Div 33);ReplaceText:=True;Dirty:=True;
+   End Else If Hit(20,82,300,296) And Not Info Then Begin
+    Drag:=True;OldX:=MX;OldY:=MY;
+   End Else If Hit(20, 307, 155, 331) Then Begin O.Perspective:=Not
+   O.Perspective; Changed; End
+   Else If Hit(165,307,300,331) Then Begin O.Mode:=(O.Mode+1) Mod 3;Changed;End
+   Else If Hit(20, 339, 155, 363) Then Begin O.Color:=(O.Color+1) Mod 16;
+   Changed; End
+   Else If Hit(165,339,300,363) Then Begin Info:=Not Info;Dirty:=True;End
+   Else If Hit(320,287,600,299) Then Begin O.Cull:=Not O.Cull;Changed;End
+   Else If Hit(320,310,600,322) Then Begin O.Dither:=Not O.Dither;Changed;End
+   Else If Hit(20,399,130,423) Or Hit(219,399,300,423) Then Begin
+    DefaultMeshOptions(O);Sync;Changed;
+   End Else If Hit(142,399,207,423) Then Begin
+    O.RX:=0;O.RY:=0;O.RZ:=0;Sync;Changed;
+   End Else If Hit(380,399,476,423) Then Done:=True
+   Else If Hit(490,399,595,423) Then Apply;
+  End;
+  If Drag And ((MB And 1)<>0) And
+   ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   O.RY:=Max(-3600,Min(3600,O.RY+(MX-OldX)*5));
+   O.RX:=Max(-3600,Min(3600,O.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Sync;Changed;
+  End;
+  If (MB And 1)=0 Then Drag:=False;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then Begin
+    E:=ReadKey;
+    If Field>0 Then Begin
+     Val(Texts[Field-1],V,Code);
+     If Code=0 Then Begin
+      If E=#72 Then V:=V+1 Else If E=#80 Then V:=V-1;
+      Texts[Field-1]:=Decimal(V);Change;ReplaceText:=True;
+     End;
+    End;
+   End Else Case K Of
+    #27:Done:=True; #15:Browse; #9:Begin Field:=(Field+1) Mod 7;
+    ReplaceText:=True; Dirty:=True; End; 
+    #13:If Field=0 Then Load Else Apply;
+    #1:ReplaceText:=True;
+    #8:Begin
+     If Field=0 Then Begin
+      If ReplaceText Then Name:='' Else Delete(Name,Length(Name),1);Dirty:=True;
+     End Else Begin
+      If ReplaceText Then Texts[Field-1]:=''
+       Else Delete(Texts[Field-1],Length(Texts[Field-1]),1);Change;
+     End;
+     ReplaceText:=False;
+    End;
+    Else If K>=' ' Then Begin
+     If Field=0 Then Begin
+      If ReplaceText Then Name:=''; If Length(Name)<255 Then Name:=Name+K;
+      Dirty:=True; 
+     End Else If K In ['0'..'9','+','-','.',','] Then Begin
+      If ReplaceText Then Texts[Field-1]:='';
+      If Length(Texts[Field-1])<9 Then Texts[Field-1]:=Texts[Field-1]+K;Change;
+     End;
+     ReplaceText:=False;
+    End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ If Preview<>Nil Then FreeMem(Preview,LongInt(PreviewW)*PreviewH);
+ ReleaseMesh(M);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
@@ -7399,7 +8067,12 @@ Begin
    4: MotionBlurDialog;
    5: SharpenDialog;
   End;
-  MENU_3D: ShowDialog('3D', 'Fonction 3D non implementee dans cette version.');
+  MENU_3D: Case IIdx Of
+   0:MeshImportDialog(-1);
+   33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
+    Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
+   Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');
+  End;
   MENU_VIEW: Case IIdx Of
    0: Begin If ZoomLevel<400 Then ZoomLevel := ZoomLevel + 50; DrawFullUI; End;
    1: Begin If ZoomLevel>50 Then ZoomLevel := ZoomLevel - 50; DrawFullUI; End;

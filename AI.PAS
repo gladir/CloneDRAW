@@ -5,11 +5,11 @@
   @abstract(Target: Free Pascal 3.2)
   @description(Clone d'Adobe Illustrator en Turbo Pascal/Free Pascal graphique)
 
-  Prototype incomplet : rectangles, ellipses et lignes editables.
+  Prototype incomplet : formes, crayon et texte editables.
   Les commandes non implementees sont grisees.
   AI10 est un ancien format prive, PAS un format Adobe Illustrator.
   Restent notamment : import/export Adobe, rotation/groupes,
-  Bezier, texte, calques, historique, SVG et BMP.
+  Bezier, formatage du texte, calques, historique, SVG et BMP.
 }
 
 Program AdobeIllustrator;
@@ -223,6 +223,11 @@ Var
  EditOriginal: TGraphicObject;
  EditBounds: TBounds;
  EditX, EditY: Integer;
+ PencilActive: Boolean;
+ PencilObject: TGraphicObject;
+ TextActive: Boolean;
+ TextObject: TGraphicObject;
+ TextEditIndex, TextCursor: Integer;
 
 Procedure InitMouse;
 {$IFNDEF FPC}
@@ -352,9 +357,9 @@ Begin
   TOOL_ELLIPSE: S := 'Ellipse / cercle (3) - glisser pour dessiner';
   TOOL_LINE: S := 'Ligne (4) - glisser pour dessiner';
   TOOL_BEZIER: S := 'Courbe de Bezier - non implementee';
-  TOOL_PENCIL: S := 'Crayon - non implemente';
+  TOOL_PENCIL: S := 'Crayon (6 / N) - tracer a main levee';
   TOOL_PEN: S := 'Plume - non implementee';
-  TOOL_TEXT: S := 'Texte - non implemente';
+  TOOL_TEXT: S := 'Texte (8 / T) - cliquer puis saisir / modifier';
   TOOL_ZOOM: S := 'Loupe - non implementee';
   TOOL_HAND: S := 'Main - non implementee';
  End;
@@ -379,7 +384,7 @@ Procedure UpdateToolTipAt(Now: LongInt);
 Var Index: Integer; Elapsed: LongInt;
 Begin
  Index := -1;
- If Not MenuActive And Not DrawingMode And (DialogTitle = '') And
+ If Not MenuActive And Not DrawingMode And Not TextActive And (DialogTitle = '') And
     (MouseButtons = 0) Then Index := ToolHitTest(MouseX, MouseY);
  If (Index <> ToolTipCandidate) Or (MouseX <> OldMouseX) Or
     (MouseY <> OldMouseY) Then Begin
@@ -515,7 +520,7 @@ Begin
   Line(X,B,R,B);
   Line(R,Y,R,B);
   If I = CurrentTool Then SetColor(COLOR_WINDOW)
-  Else If I > TOOL_LINE Then SetColor(COLOR_BORDER)
+  Else If (I > TOOL_LINE) And Not (I In [TOOL_PENCIL,TOOL_TEXT]) Then SetColor(COLOR_BORDER)
   Else SetColor(COLOR_TEXT);
   DrawToolIcon(X+6,Y+2,I);
  End;
@@ -559,12 +564,10 @@ Begin
  End;
 End;
 
-Procedure DrawObject(Index: Integer);
+Procedure DrawGraphicObject(Obj: TGraphicObject);
 Var
- Obj: TGraphicObject;
- X1, Y1, X2, Y2: Integer;
+ X1, Y1, X2, Y2, I: Integer;
 Begin
- Obj := Objects[Index];
  If Not Obj.Visible Then Exit;
  
  Case Obj.ObjType Of
@@ -587,7 +590,7 @@ Begin
     Circle(X2, Y2, 2);
    End;
   End;
-  
+
   OBJ_ELLIPSE:
   Begin
    X1 := Trunc(TOOLBAR_WIDTH + Obj.Ellipse.CX);
@@ -621,6 +624,18 @@ Begin
    End;
   End;
   
+  OBJ_PATH:
+  Begin
+   SetColor(Obj.Path.StrokeColor);
+   If Obj.Path.PointCount = 1 Then
+    PutPixel(TOOLBAR_WIDTH+Round(Obj.Path.Points[0].X),
+             MENUBAR_HEIGHT+Round(Obj.Path.Points[0].Y),Obj.Path.StrokeColor);
+   For I := 1 To Obj.Path.PointCount-1 Do
+    Line(TOOLBAR_WIDTH+Round(Obj.Path.Points[I-1].X),
+         MENUBAR_HEIGHT+Round(Obj.Path.Points[I-1].Y),
+         TOOLBAR_WIDTH+Round(Obj.Path.Points[I].X),
+         MENUBAR_HEIGHT+Round(Obj.Path.Points[I].Y));
+  End;
   OBJ_TEXT:
   Begin
    X1 := Trunc(TOOLBAR_WIDTH + Obj.TextObj.X);
@@ -630,6 +645,11 @@ Begin
    OutTextXY(X1, Y1, Obj.TextObj.Text);
   End;
  End;
+End;
+
+Procedure DrawObject(Index: Integer);
+Begin
+ DrawGraphicObject(Objects[Index]);
 End;
 
 Function MinReal(A, B: Real): Real;
@@ -643,7 +663,7 @@ Begin
 End;
 
 Function ObjectBounds(Obj: TGraphicObject): TBounds;
-Var B: TBounds;
+Var B: TBounds; I: Integer;
 Begin
  FillChar(B, SizeOf(B), 0);
  Case Obj.ObjType Of
@@ -664,6 +684,21 @@ Begin
    B.R := MaxReal(Obj.Line.X1, Obj.Line.X2);
    B.T := MinReal(Obj.Line.Y1, Obj.Line.Y2);
    B.B := MaxReal(Obj.Line.Y1, Obj.Line.Y2);
+  End;
+  OBJ_PATH: If Obj.Path.PointCount > 0 Then Begin
+   B.L := Obj.Path.Points[0].X; B.R := B.L;
+   B.T := Obj.Path.Points[0].Y; B.B := B.T;
+   For I := 1 To Obj.Path.PointCount-1 Do Begin
+    B.L := MinReal(B.L,Obj.Path.Points[I].X);
+    B.R := MaxReal(B.R,Obj.Path.Points[I].X);
+    B.T := MinReal(B.T,Obj.Path.Points[I].Y);
+    B.B := MaxReal(B.B,Obj.Path.Points[I].Y);
+   End;
+  End;
+  OBJ_TEXT: Begin
+   B.L := Obj.TextObj.X; B.T := Obj.TextObj.Y;
+   B.R := B.L+Length(Obj.TextObj.Text)*8-1;
+   B.B := B.T+7;
   End;
  End;
  ObjectBounds := B;
@@ -694,6 +729,7 @@ Begin
  SelectionHandleHit := -1;
  If SelectedObject < 0 Then Exit;
  If Not Objects[SelectedObject].Visible Then Exit;
+ If Objects[SelectedObject].ObjType = OBJ_TEXT Then Exit;
  N := 8;
  If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
  For I := 0 To N-1 Do Begin
@@ -706,7 +742,7 @@ Begin
 End;
 
 Function ObjectHit(Index, X, Y: Integer): Boolean;
-Var B: TBounds; DX, DY, U, D: Real;
+Var B: TBounds; DX, DY, U, D: Real; I, J: Integer;
 Begin
  ObjectHit := False;
  If Not Objects[Index].Visible Then Exit;
@@ -731,6 +767,22 @@ Begin
    ObjectHit := Sqr(X-Objects[Index].Line.X1-U*DX)+
                 Sqr(Y-Objects[Index].Line.Y1-U*DY) <= 25;
   End;
+  OBJ_PATH:
+   For I := 0 To Objects[Index].Path.PointCount-1 Do Begin
+    J := I-1; If J < 0 Then J := 0;
+    DX := Objects[Index].Path.Points[I].X-Objects[Index].Path.Points[J].X;
+    DY := Objects[Index].Path.Points[I].Y-Objects[Index].Path.Points[J].Y;
+    D := Sqr(DX)+Sqr(DY); U := 0;
+    If D > 0 Then U := ((X-Objects[Index].Path.Points[J].X)*DX+
+                       (Y-Objects[Index].Path.Points[J].Y)*DY)/D;
+    U := MaxReal(0,MinReal(1,U));
+    If Sqr(X-Objects[Index].Path.Points[J].X-U*DX)+
+       Sqr(Y-Objects[Index].Path.Points[J].Y-U*DY) <= 25 Then Begin
+     ObjectHit := True; Exit;
+    End;
+   End;
+  OBJ_TEXT: ObjectHit := (X >= B.L) And (X <= B.R) And
+                         (Y >= B.T) And (Y <= B.B);
  End;
 End;
 
@@ -746,6 +798,7 @@ Begin
            TOOLBAR_WIDTH+Round(B.R),MENUBAR_HEIGHT+Round(B.B));
  SetLineStyle(SolidLn,0,NormWidth);
  N := 8;
+ If Objects[SelectedObject].ObjType = OBJ_TEXT Then N := 0;
  If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
  For I := 0 To N-1 Do Begin
   HandlePosition(SelectedObject,I,X,Y);
@@ -767,7 +820,7 @@ Begin
 End;
 
 Procedure UpdateObjectEdit;
-Var X, Y: Integer; DX, DY: Real; B: TBounds; Obj: TGraphicObject;
+Var X, Y, I: Integer; DX, DY: Real; B: TBounds; Obj: TGraphicObject;
 Begin
  If Not EditingObject Then Exit;
  X := Round(MaxReal(0,MinReal(ScreenWidth-TOOLBAR_WIDTH-1,
@@ -807,6 +860,23 @@ Begin
    Obj.Ellipse.CX := (B.L+B.R)/2; Obj.Ellipse.CY := (B.T+B.B)/2;
    Obj.Ellipse.RX := (B.R-B.L)/2; Obj.Ellipse.RY := (B.B-B.T)/2;
   End;
+  OBJ_PATH:
+   For I := 0 To Obj.Path.PointCount-1 Do Begin
+    If EditHandle < 0 Then Begin
+     Obj.Path.Points[I].X := Obj.Path.Points[I].X+DX;
+     Obj.Path.Points[I].Y := Obj.Path.Points[I].Y+DY;
+    End Else Begin
+     If EditBounds.R > EditBounds.L Then
+      Obj.Path.Points[I].X := B.L+(Obj.Path.Points[I].X-EditBounds.L)*
+                             (B.R-B.L)/(EditBounds.R-EditBounds.L);
+     If EditBounds.B > EditBounds.T Then
+      Obj.Path.Points[I].Y := B.T+(Obj.Path.Points[I].Y-EditBounds.T)*
+                             (B.B-B.T)/(EditBounds.B-EditBounds.T);
+    End;
+   End;
+  OBJ_TEXT: Begin
+   Obj.TextObj.X := B.L; Obj.TextObj.Y := B.T;
+  End;
  End;
  Objects[SelectedObject] := Obj;
  FileModified := EditWasModified Or
@@ -822,7 +892,50 @@ Begin
   (Obj.Line.Y1 <> EditOriginal.Line.Y1) Or
   (Obj.Line.X2 <> EditOriginal.Line.X2) Or
   (Obj.Line.Y2 <> EditOriginal.Line.Y2);
+ If Obj.ObjType = OBJ_TEXT Then
+  FileModified := EditWasModified Or
+   (Obj.TextObj.X <> EditOriginal.TextObj.X) Or
+   (Obj.TextObj.Y <> EditOriginal.TextObj.Y);
+ If Obj.ObjType = OBJ_PATH Then
+  For I := 0 To Obj.Path.PointCount-1 Do
+   If (Obj.Path.Points[I].X <> EditOriginal.Path.Points[I].X) Or
+      (Obj.Path.Points[I].Y <> EditOriginal.Path.Points[I].Y) Then
+    FileModified := True;
  NeedsRedraw := True;
+End;
+
+Procedure AddPencilPoint;
+Var X, Y, N: Integer;
+Begin
+ X := Round(MaxReal(0,MinReal(ScreenWidth-TOOLBAR_WIDTH-1,
+                             MouseX-TOOLBAR_WIDTH)));
+ Y := Round(MaxReal(0,MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1,
+                             MouseY-MENUBAR_HEIGHT)));
+ N := PencilObject.Path.PointCount;
+ If N > 0 Then
+  If (PencilObject.Path.Points[N-1].X=X) And
+     (PencilObject.Path.Points[N-1].Y=Y) Then Exit;
+ If N = 100 Then Begin
+  StatusMessage := 'Limite de 100 points : relacher puis commencer un autre trait.';
+  NeedsRedraw := True;
+  Exit;
+ End;
+ PencilObject.Path.Points[N].X := X;
+ PencilObject.Path.Points[N].Y := Y;
+ Inc(PencilObject.Path.PointCount);
+ NeedsRedraw := True;
+End;
+
+Procedure BeginTextInput(Index: Integer);
+Begin
+ TextEditIndex := Index;
+ If Index >= 0 Then TextObject := Objects[Index];
+ TextCursor := Length(TextObject.TextObj.Text);
+ TextActive := True;
+ CurrentTool := TOOL_TEXT;
+ SelectedObject := -1;
+ ResetToolTip;
+ StatusMessage := 'Texte : clic outil/menu ou Entree = valider, Echap = annuler.';
 End;
 
 Procedure HandleMouseClick;
@@ -836,7 +949,7 @@ Begin
  If MouseX < TOOLBAR_WIDTH Then Begin
   I := ToolHitTest(MouseX, MouseY);
   If I >= 0 Then
-   If I <= TOOL_LINE Then CurrentTool := I
+   If (I <= TOOL_LINE) Or (I In [TOOL_PENCIL,TOOL_TEXT]) Then CurrentTool := I
    Else StatusMessage := 'Outil non implemente.';
   Exit;
  End;
@@ -845,6 +958,48 @@ Begin
  CanvasY := MouseY - MENUBAR_HEIGHT;
  
  Case CurrentTool Of
+  TOOL_TEXT:
+  Begin
+   TextEditIndex := -1;
+   For I := ObjectCount-1 DownTo 0 Do
+    If (Objects[I].ObjType = OBJ_TEXT) And ObjectHit(I,CanvasX,CanvasY) Then Begin
+     TextEditIndex := I;
+     Break;
+    End;
+   If TextEditIndex < 0 Then Begin
+    If ObjectCount >= MAX_OBJECTS Then Begin
+     StatusMessage := 'Limite de 100 objets atteinte.';
+     Exit;
+    End;
+    FillChar(TextObject,SizeOf(TextObject),0);
+    TextObject.ObjType := OBJ_TEXT;
+    TextObject.Visible := True;
+    TextObject.LayerIndex := CurrentLayer;
+    TextObject.TextObj.X := MinReal(CanvasX,ScreenWidth-TOOLBAR_WIDTH-8);
+    TextObject.TextObj.Y := MinReal(CanvasY,ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-8);
+    TextObject.TextObj.Color := StrokeColor;
+    TextObject.TextObj.FontSize := 8;
+   End;
+   BeginTextInput(TextEditIndex);
+  End;
+  TOOL_PENCIL:
+  Begin
+   If ObjectCount >= MAX_OBJECTS Then Begin
+    StatusMessage := 'Limite de 100 objets atteinte.';
+    Exit;
+   End;
+   FillChar(PencilObject,SizeOf(PencilObject),0);
+   PencilObject.ObjType := OBJ_PATH;
+   PencilObject.Visible := True;
+   PencilObject.LayerIndex := CurrentLayer;
+   PencilObject.Path.StrokeColor := StrokeColor;
+   PencilObject.Path.StrokeWidth := 1;
+   PencilActive := True;
+   DrawingMode := True;
+   SelectedObject := -1;
+   StatusMessage := 'Crayon : tracer, relacher pour terminer, Echap pour annuler.';
+   AddPencilPoint;
+  End;
   TOOL_SELECT:
   Begin
    EditHandle := SelectionHandleHit(CanvasX,CanvasY);
@@ -863,7 +1018,9 @@ Begin
     EditWasModified := FileModified;
     EditingObject := True;
     DrawingMode := True;
-    StatusMessage := 'Glisser : deplacer / poignees : taille / Echap : annuler';
+    If Objects[SelectedObject].ObjType = OBJ_TEXT Then
+     StatusMessage := 'Texte selectionne : taper pour modifier, glisser pour deplacer.'
+    Else StatusMessage := 'Glisser : deplacer / poignees : taille / Echap : annuler';
    End Else StatusMessage := 'Aucun objet selectionne.';
   End;
   
@@ -895,6 +1052,15 @@ Var
  CanvasX, CanvasY: Integer;
  NewObj: TGraphicObject;
 Begin
+ If PencilActive Then Begin
+  AddPencilPoint;
+  Objects[ObjectCount] := PencilObject;
+  Inc(ObjectCount);
+  FileModified := True;
+  PencilActive := False;
+  DrawingMode := False;
+  Exit;
+ End;
  If EditingObject Then Begin
   UpdateObjectEdit;
   EditingObject := False;
@@ -1189,12 +1355,45 @@ Begin
  End;
 End;
 
+Procedure FinishText(CancelEmpty: Boolean);
+Begin
+ If TextObject.TextObj.Text = '' Then Begin
+  If Not CancelEmpty Then Begin
+   StatusMessage := 'Texte vide : saisir du texte ou Echap pour annuler.';
+   Exit;
+  End;
+  StatusMessage := 'Saisie vide annulee.';
+ End Else Begin
+  If TextEditIndex >= 0 Then Begin
+   If TextObject.TextObj.Text <> Objects[TextEditIndex].TextObj.Text Then Begin
+    Objects[TextEditIndex] := TextObject;
+    FileModified := True;
+   End;
+  End Else Begin
+   Objects[ObjectCount] := TextObject;
+   Inc(ObjectCount);
+   FileModified := True;
+  End;
+  StatusMessage := 'Texte valide. Fleche : deplacer. Outil Texte : modifier.';
+ End;
+ TextActive := False;
+ NeedsRedraw := True;
+End;
+
 Procedure HandleMouseEvent;
 Var BarHit, ItemHit: Integer; Pressed, Released: Boolean;
 Begin
  Pressed := ((MouseButtons And 1) <> 0) And ((OldMouseButtons And 1) = 0);
  Released := ((MouseButtons And 1) = 0) And ((OldMouseButtons And 1) <> 0);
- If DialogTitle <> '' Then Begin
+ If TextActive And Pressed Then
+  If (MenuBarHitTest(MouseX,MouseY) >= 0) Or
+     (ToolHitTest(MouseX,MouseY) >= 0) Then FinishText(True);
+ If TextActive Then Begin
+  If Pressed Then Begin
+   StatusMessage := 'Valider par un clic outil/menu ou Entree ; Echap annule.';
+   NeedsRedraw := True;
+  End;
+ End Else If DialogTitle <> '' Then Begin
   If Pressed Then Begin
    DialogTitle := '';
    NeedsRedraw := True;
@@ -1230,6 +1429,8 @@ Begin
     HandleMouseClick;
     NeedsRedraw := True;
    End;
+  End Else If PencilActive And ((MouseButtons And 1) <> 0) Then Begin
+   AddPencilPoint;
   End Else If EditingObject And ((MouseButtons And 1) <> 0) Then Begin
    If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then UpdateObjectEdit;
   End Else If Released Then Begin
@@ -1269,9 +1470,55 @@ Begin
 End;
 
 Procedure HandleKey(Key, ExtKey: Char);
+Var S: String; Capacity: Integer;
 Begin
  ResetToolTip;
  NeedsRedraw := True;
+ If Not TextActive And Not MenuActive And (DialogTitle = '') And
+    Not DrawingMode And Not EditingObject And (CurrentTool = TOOL_SELECT) And
+    (SelectedObject >= 0) And (SelectedObject < ObjectCount) Then
+  If Objects[SelectedObject].Visible And
+     (Objects[SelectedObject].ObjType = OBJ_TEXT) And
+     ((Key >= #32) Or (Key = #8) Or
+      ((Key = #0) And (ExtKey In [#75,#77,#71,#79,#83]))) Then
+   BeginTextInput(SelectedObject);
+ If TextActive Then Begin
+  S := TextObject.TextObj.Text;
+  Case Key Of
+   #27: Begin
+    TextActive := False;
+    StatusMessage := 'Saisie annulee.';
+   End;
+   #13: FinishText(False);
+   #8: If TextCursor > 0 Then Begin
+    Delete(S,TextCursor,1); Dec(TextCursor);
+   End;
+   #0: Case ExtKey Of
+    #75: If TextCursor > 0 Then Dec(TextCursor);
+    #77: If TextCursor < Length(S) Then Inc(TextCursor);
+    #71: TextCursor := 0;
+    #79: TextCursor := Length(S);
+    #83: If TextCursor < Length(S) Then Delete(S,TextCursor+1,1);
+   End;
+   #32..#255: Begin
+    Capacity := (ScreenWidth-TOOLBAR_WIDTH-Round(TextObject.TextObj.X)) Div 8;
+    If (Length(S) < 255) And (Length(S) < Capacity) Then Begin
+     Insert(Key,S,TextCursor+1);
+     Inc(TextCursor);
+    End Else StatusMessage := 'Limite de texte / bord de page atteint.';
+   End;
+  End;
+  TextObject.TextObj.Text := S;
+  Exit;
+ End;
+ If PencilActive Then Begin
+  If Key = #27 Then Begin
+   PencilActive := False;
+   DrawingMode := False;
+   StatusMessage := 'Trait annule.';
+  End;
+  Exit;
+ End;
  If EditingObject Then Begin
   If Key = #27 Then CancelObjectEdit;
   Exit;
@@ -1315,6 +1562,8 @@ Begin
   '2': CurrentTool := TOOL_RECTANGLE;
   '3': CurrentTool := TOOL_ELLIPSE;
   '4': CurrentTool := TOOL_LINE;
+  '6','n','N': CurrentTool := TOOL_PENCIL;
+  '8','t','T': CurrentTool := TOOL_TEXT;
   #15, #19: StatusMessage := 'Import/export Adobe Illustrator non implemente.';
  End;
 End;
@@ -1324,7 +1573,17 @@ Var I: Integer;
 Begin
  HideMouse;
  DrawCanvas;
- For I := 0 To ObjectCount-1 Do DrawObject(I);
+ For I := 0 To ObjectCount-1 Do
+  If Not TextActive Or (I <> TextEditIndex) Then DrawObject(I);
+ If TextActive Then Begin
+  DrawGraphicObject(TextObject);
+  SetColor(COLOR_TEXT);
+  I := TOOLBAR_WIDTH+Round(TextObject.TextObj.X)+TextCursor*8;
+  If I >= ScreenWidth Then I := ScreenWidth-1;
+  Line(I,MENUBAR_HEIGHT+Round(TextObject.TextObj.Y),
+       I,MENUBAR_HEIGHT+Round(TextObject.TextObj.Y)+7);
+ End;
+ If PencilActive Then DrawGraphicObject(PencilObject);
  DrawSelection;
  DrawToolbar;
  DrawMenuBar;
@@ -1450,6 +1709,9 @@ Begin
  CurrentFile := '';
  DrawingMode := False;
  EditingObject := False;
+ PencilActive := False;
+ TextActive := False;
+ TextEditIndex := -1;
  EditHandle := -1;
  MenuActive := False;
  ActiveMenu := -1;

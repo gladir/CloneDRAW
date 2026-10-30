@@ -2627,7 +2627,8 @@ Begin
   (E.Threshold>=0) And (E.Threshold<=255) And
   (E.Coverage>=1) And (E.Coverage<=100);
 End;
-Function BuildExtrusion(Const E:TExtrudeOptions;Progress:Boolean;
+Function BuildExtrusionBounds(Const E:TExtrudeOptions;Progress:Boolean;
+ UseBounds:Boolean;Const Bounds:TRect;
  Var M:PMesh;Var Stats:TExtrudeStats;Var Error:String):Boolean;
 Const CX:Array[0..3] Of Integer=(0,1,1,0);
  CY:Array[0..3] Of Integer=(0,0,1,1);
@@ -2682,7 +2683,7 @@ Var Work:PExtrudeWork;L,T,R,B,SW,SH,GW,GH,X,Y,SX,SY,I,J,N,
   Work^.Visited[N]:=1;Work^.Queue[Tail]:=N;Inc(Tail);
  End;
 Begin
- BuildExtrusion:=False;M:=Nil;Work:=Nil;Error:='';
+ BuildExtrusionBounds:=False;M:=Nil;Work:=Nil;Error:='';
  FillChar(Stats,SizeOf(Stats),0);
  If Not ExtrudeOptionsValid(E) Then Begin
   Error:='Parametres invalides (torsion : 45 deg maximum par segment).';Exit;
@@ -2690,7 +2691,12 @@ Begin
  If (ImgW<1) Or (ImgH<1) Or (ImgW>4096) Or (ImgH>4096) Then Begin
   Error:='Dimensions de source invalides.';Exit;End;
  L:=0;T:=0;R:=ImgW-1;B:=ImgH-1;
- If E.SelectionOnly Then Begin
+ If UseBounds Then Begin
+  L:=Max(0,Min(Bounds.L,Bounds.R));T:=Max(0,Min(Bounds.T,Bounds.B));
+  R:=Min(ImgW-1,Max(Bounds.L,Bounds.R));
+  B:=Min(ImgH-1,Max(Bounds.T,Bounds.B));
+  If (L>R) Or (T>B) Then Begin Error:='Zone hors de l''image.';Exit;End;
+ End Else If E.SelectionOnly Then Begin
   If Not SelectionActive Then Begin Error:='Aucune selection active.';
    Exit;End;
   L:=Max(0,Min(SelectionRect.L,SelectionRect.R));
@@ -2816,8 +2822,15 @@ Begin
  M^.Source:='Extrusion '+Layers[ActiveLayer].Name;
  M^.Format:='Extrusion solide';M^.Groups:=Stats.Groups;M^.Materials:=1;
  Stats.Vertices:=M^.VertexCount;Stats.Triangles:=M^.TriangleCount;
- BuildExtrusion:=True;
+ BuildExtrusionBounds:=True;
 End;
+Function BuildExtrusion(Const E:TExtrudeOptions;Progress:Boolean;
+ Var M:PMesh;Var Stats:TExtrudeStats;Var Error:String):Boolean;
+Begin
+ BuildExtrusion:=BuildExtrusionBounds(E,Progress,False,SelectionRect,
+  M,Stats,Error);
+End;
+
 Function BuildPathExtrusion(Const Path:TVectorPath;
  Const E:TExtrudeOptions;Var M:PMesh;Var Stats:TExtrudeStats;
  Var Error:String):Boolean;
@@ -2955,6 +2968,176 @@ Begin
  M^.Groups:=1;M^.Materials:=1;Stats.Cells:=N;Stats.Groups:=1;Stats.Edges:=N;
  Stats.Vertices:=M^.VertexCount;Stats.Triangles:=M^.TriangleCount;
  BuildPathExtrusion:=True;
+End;
+
+{ Zone d'extrusion locale : aucune modification de la selection du document. }
+Type TSelectionExtrude=Record
+ Bounds:TRect;Shape,Radius,Border:Integer;
+End;
+Function SelectionExtrudeValid(Const R:TSelectionExtrude):Boolean;
+Begin
+ SelectionExtrudeValid:=(R.Bounds.L>=0) And (R.Bounds.T>=0) And
+  (R.Bounds.R>=R.Bounds.L) And (R.Bounds.B>=R.Bounds.T) And
+  (R.Bounds.R<ImgW) And (R.Bounds.B<ImgH) And
+  (R.Shape>=0) And (R.Shape<=4) And (R.Radius>=1) And
+  (R.Radius<=49) And (R.Border>=1) And (R.Border<=49);
+End;
+Procedure DefaultSelectionExtrude(Var R:TSelectionExtrude);
+Begin
+ FillChar(R,SizeOf(R),0);R.Radius:=20;R.Border:=15;
+ R.Bounds.L:=0;R.Bounds.T:=0;R.Bounds.R:=ImgW-1;R.Bounds.B:=ImgH-1;
+ If SelectionActive Then Begin
+  R.Bounds.L:=Max(0,Min(SelectionRect.L,SelectionRect.R));
+  R.Bounds.T:=Max(0,Min(SelectionRect.T,SelectionRect.B));
+  R.Bounds.R:=Min(ImgW-1,Max(SelectionRect.L,SelectionRect.R));
+  R.Bounds.B:=Min(ImgH-1,Max(SelectionRect.T,SelectionRect.B));
+ End;
+ If Not SelectionExtrudeValid(R) Then Begin
+  R.Bounds.L:=0;R.Bounds.T:=0;R.Bounds.R:=ImgW-1;R.Bounds.B:=ImgH-1;
+ End;
+End;
+Procedure SelectionExtrudePath(Const R:TSelectionExtrude;Precision:Integer;
+ Var P:TVectorPath);
+Var I,J,N,Corner,Steps:Integer;L,T,W,H,Radius,A,CX,CY:Double;
+Begin
+ FillChar(P,SizeOf(P),0);P.Closed:=True;
+ If Not SelectionExtrudeValid(R) Then Exit;
+ L:=R.Bounds.L;T:=R.Bounds.T;W:=R.Bounds.R-L+1;H:=R.Bounds.B-T+1;
+ If R.Shape=1 Then Begin
+  N:=Max(8,Min(64,Precision));P.Count:=N;
+  For I:=0 To N-1 Do Begin
+   A:=I*2*3.141592653589793/N;
+   P.Points[I].X:=(L+W/2+Cos(A)*W/2)/ImgW;
+   P.Points[I].Y:=(T+H/2+Sin(A)*H/2)/ImgH;
+  End;
+ End Else If R.Shape=2 Then Begin
+  Steps:=Max(2,Min(16,Precision Div 4));Radius:=Min(Round(W),Round(H))*
+   R.Radius/100.0;N:=0;
+  For Corner:=0 To 3 Do Begin
+   Case Corner Of
+    0:Begin CX:=L+W-Radius;CY:=T+Radius;End;
+    1:Begin CX:=L+W-Radius;CY:=T+H-Radius;End;
+    2:Begin CX:=L+Radius;CY:=T+H-Radius;End;
+    3:Begin CX:=L+Radius;CY:=T+Radius;End;
+   End;
+   For J:=0 To Steps Do Begin
+    A:=(-90+Corner*90+J*90.0/Steps)*3.141592653589793/180;
+    P.Points[N].X:=(CX+Radius*Cos(A))/ImgW;
+    P.Points[N].Y:=(CY+Radius*Sin(A))/ImgH;Inc(N);
+   End;
+  End;P.Count:=N;
+ End Else Begin
+  P.Count:=4;
+  P.Points[0].X:=L/ImgW;P.Points[0].Y:=T/ImgH;
+  P.Points[1].X:=(L+W)/ImgW;P.Points[1].Y:=T/ImgH;
+  P.Points[2].X:=(L+W)/ImgW;P.Points[2].Y:=(T+H)/ImgH;
+  P.Points[3].X:=L/ImgW;P.Points[3].Y:=(T+H)/ImgH;
+ End;
+ For I:=0 To P.Count-1 Do Begin
+  P.Points[I].X:=MeshMax(0,MeshMin(1,P.Points[I].X));
+  P.Points[I].Y:=MeshMax(0,MeshMin(1,P.Points[I].Y));
+ End;
+End;
+Function BuildSelectionExtrusion(Const R:TSelectionExtrude;
+ Const E:TExtrudeOptions;Progress:Boolean;Var M:PMesh;
+ Var Stats:TExtrudeStats;Var Error:String):Boolean;
+Var P:TVectorPath;I,J,K,N,GW,GH,X,Y:Integer;
+ A,B,C,D:LongInt;U,V,W,H,S,T,Angle,Scale,XX,YY,Inset:Double;
+ Good,Inside:Boolean;Options:TExtrudeOptions;
+ Procedure Face(A,B,C:LongInt);
+ Begin If Not MeshFace(M,A,B,C) Then Good:=False;End;
+ Function Node(Point,Ring:Integer):LongInt;
+ Begin Node:=LongInt(Point)*(E.Segments+1)+Ring;End;
+Begin
+ BuildSelectionExtrusion:=False;M:=Nil;Error:='';
+ FillChar(Stats,SizeOf(Stats),0);
+ If Not SelectionExtrudeValid(R) Or Not ExtrudeOptionsValid(E) Then Begin
+  Error:='Zone ou parametres d''extrusion invalides.';Exit;End;
+ If R.Shape=4 Then Begin
+  Options:=E;Options.SelectionOnly:=False;
+  BuildSelectionExtrusion:=BuildExtrusionBounds(Options,Progress,True,
+   R.Bounds,M,Stats,Error);
+  If M<>Nil Then Begin M^.Source:='Extrusion selection';
+   M^.Format:='Selection 3D';End;Exit;
+ End;
+ SelectionExtrudePath(R,E.Resolution,P);
+ If R.Shape<>3 Then Begin
+  If Not BuildPathExtrusion(P,E,M,Stats,Error) Then Exit;
+ End Else Begin
+  W:=R.Bounds.R-R.Bounds.L+1;H:=R.Bounds.B-R.Bounds.T+1;
+  S:=MeshMax(W,H);Inset:=MeshMin(W,H)*R.Border/100.0;
+  P.Count:=8;
+  P.Points[4].X:=(R.Bounds.L+Inset)/ImgW;
+  P.Points[4].Y:=(R.Bounds.T+Inset)/ImgH;
+  P.Points[5].X:=(R.Bounds.R+1-Inset)/ImgW;
+  P.Points[5].Y:=(R.Bounds.T+Inset)/ImgH;
+  P.Points[6].X:=(R.Bounds.R+1-Inset)/ImgW;
+  P.Points[6].Y:=(R.Bounds.B+1-Inset)/ImgH;
+  P.Points[7].X:=(R.Bounds.L+Inset)/ImgW;
+  P.Points[7].Y:=(R.Bounds.B+1-Inset)/ImgH;
+  M:=PMesh(RotationAllocate(SizeOf(TMesh)));
+  If M=Nil Then Begin Error:='Memoire insuffisante.';Exit;End;
+  FillChar(M^,SizeOf(TMesh),0);M^.References:=1;
+  M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices)));
+  M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
+  If (M^.Vertices=Nil) Or (M^.Triangles=Nil) Then Begin
+   ReleaseMesh(M);Error:='Memoire insuffisante.';Exit;End;
+  Good:=True;
+  For I:=0 To 7 Do For J:=0 To E.Segments Do Begin
+   U:=(P.Points[I].X*ImgW-(R.Bounds.L+W/2))/S;
+   V:=((R.Bounds.T+H/2)-P.Points[I].Y*ImgH)/S;
+   T:=J/E.Segments;Scale:=1+E.Taper/100.0*T;
+   Angle:=E.Twist*3.141592653589793/1800*T;
+   XX:=(U*Cos(Angle)-V*Sin(Angle))*Scale;
+   YY:=(U*Sin(Angle)+V*Cos(Angle))*Scale;
+   If Not MeshVertex(M,XX,YY,E.Depth/1000.0*(0.5-T)) Then Good:=False;
+  End;
+  For I:=0 To 3 Do Begin
+   J:=(I+1) Mod 4;
+   If E.Caps Then Begin
+    A:=Node(I,0);B:=Node(I+4,0);C:=Node(J+4,0);D:=Node(J,0);
+    Face(A,B,C);Face(A,C,D);
+    A:=Node(I,E.Segments);B:=Node(I+4,E.Segments);
+    C:=Node(J+4,E.Segments);D:=Node(J,E.Segments);
+    Face(A,C,B);Face(A,D,C);
+   End;
+   For K:=0 To E.Segments-1 Do Begin
+    A:=Node(I,K);B:=Node(J,K);Face(A,B,B+1);Face(A,B+1,A+1);
+    A:=Node(I+4,K);B:=Node(J+4,K);Face(A,B+1,B);Face(A,A+1,B+1);
+   End;
+  End;
+  If Not Good Then Begin ReleaseMesh(M);
+   Error:='Impossible de construire le cadre.';Exit;End;
+  Stats.Cells:=8;Stats.Groups:=1;Stats.Edges:=8;
+ End;
+ M^.Source:='Extrusion selection';M^.Format:='Selection 3D';
+ M^.Groups:=1;M^.Materials:=1;Stats.Vertices:=M^.VertexCount;
+ Stats.Triangles:=M^.TriangleCount;
+ { Masque de controle seulement : la geometrie reste vectorielle. }
+ W:=R.Bounds.R-R.Bounds.L+1;H:=R.Bounds.B-R.Bounds.T+1;
+ GW:=E.Resolution;GH:=Max(1,Round(E.Resolution*1.0*H/W));
+ If H>W Then Begin GH:=E.Resolution;
+  GW:=Max(1,Round(E.Resolution*1.0*W/H));End;
+ Stats.Width:=GW;Stats.Height:=GH;
+ For Y:=0 To GH-1 Do For X:=0 To GW-1 Do Begin
+  U:=(R.Bounds.L+(X+0.5)*W/GW)/ImgW;
+  V:=(R.Bounds.T+(Y+0.5)*H/GH)/ImgH;Inside:=False;
+  N:=P.Count;If R.Shape=3 Then N:=4;
+  J:=N-1;
+  For I:=0 To N-1 Do Begin
+   If (P.Points[I].Y>V)<>(P.Points[J].Y>V) Then
+    If U<(P.Points[J].X-P.Points[I].X)*(V-P.Points[I].Y)/
+     (P.Points[J].Y-P.Points[I].Y)+P.Points[I].X Then Inside:=Not Inside;
+   J:=I;
+  End;
+  If R.Shape=3 Then Begin
+   XX:=U*ImgW-R.Bounds.L;YY:=V*ImgH-R.Bounds.T;
+   If (XX>Inset) And (XX<W-Inset) And (YY>Inset) And (YY<H-Inset)
+    Then Inside:=False;
+  End;
+  If Inside Then Stats.Mask[Y*GW+X]:=1;
+ End;
+ BuildSelectionExtrusion:=True;
 End;
 
 Function ApplyExtrusion(const E:TExtrudeOptions;Const View:TMeshOptions;
@@ -10652,10 +10835,10 @@ Begin
  If Accepted Then Begin Path:=P;EditVectorPath:=True;End;
 End;
 
-Procedure ExtrudeDialogFor(PathMode:Boolean);
+Procedure ExtrudeDialogFor(PathMode,SelectionMode:Boolean);
 Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
- Stats:TExtrudeStats;
- M:PMesh;Preview:PByteArr;Texts:Array[0..9] Of String;
+ Stats:TExtrudeStats;Region,CapturedRegion:TSelectionExtrude;
+ M:PMesh;Preview:PByteArr;Texts:Array[0..15] Of String;
  X,Y,MX,MY,MB,Previous,Field,Tab,PW,PH,Display,Code,OldX,OldY:Integer;
  Target:Integer;V:Double;Message,Error,S,T:String;K,Key:Char;
  Dirty,Rebuild,PreviewDirty,Done,Drag,ReplaceText,Valid:Boolean;
@@ -10678,15 +10861,19 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
   Texts[4]:=Decimal(E.Twist/10);Texts[5]:=IntToStr(E.Threshold);
   Texts[6]:=IntToStr(E.Coverage);Texts[7]:=Decimal(View.RX/10);
   Texts[8]:=Decimal(View.RY/10);Texts[9]:=Decimal(View.RZ/10);
+  Texts[10]:=IntToStr(Region.Bounds.L);Texts[11]:=IntToStr(Region.Bounds.T);
+  Texts[12]:=IntToStr(Region.Bounds.R-Region.Bounds.L+1);
+  Texts[13]:=IntToStr(Region.Bounds.B-Region.Bounds.T+1);
+  Texts[14]:=IntToStr(Region.Radius);Texts[15]:=IntToStr(Region.Border);
  End;
  Procedure Changed(Geometry:Boolean);
  Begin Rebuild:=Rebuild Or Geometry;PreviewDirty:=True;Dirty:=True;
   Message:='';Valid:=True;End;
  Procedure Parse;
- Var I,J,Minimum,Maximum:Integer;Values:Array[0..9] Of Double;
+ Var I,J,Minimum,Maximum:Integer;Values:Array[0..15] Of Double;
  Begin
   Valid:=False;Dirty:=True;
-  For J:=0 To 9 Do Begin
+  For J:=0 To 15 Do Begin
    T:=Texts[J];For I:=1 To Length(T) Do If T[I]=',' Then T[I]:='.';
    Val(T,V,Code);
    Case J Of 0:Begin Minimum:=0;Maximum:=1000;End;
@@ -10696,13 +10883,18 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
     4:Begin Minimum:=-180;Maximum:=180;End;
     5:Begin Minimum:=0;Maximum:=255;End;
     6:Begin Minimum:=1;Maximum:=100;End;
+    10:Begin Minimum:=0;Maximum:=ImgW-1;End;
+    11:Begin Minimum:=0;Maximum:=ImgH-1;End;
+    12:Begin Minimum:=1;Maximum:=ImgW;End;
+    13:Begin Minimum:=1;Maximum:=ImgH;End;
+    14,15:Begin Minimum:=1;Maximum:=49;End;
     Else Begin Minimum:=-360;Maximum:=360;End;
    End;
    If (Code<>0) Or (V<Minimum) Or (V>Maximum) Or
     ((J=0) And (V<0.1)) Then Begin
     Message:='Champ invalide : verifier les valeurs et les limites.';Exit;
    End;
-   If (J In [1,2,3,5,6]) And (Abs(V-Round(V))>0.000001) Then Begin
+   If (J In [1,2,3,5,6,10..15]) And (Abs(V-Round(V))>0.000001) Then Begin
     Message:='Precision, segments, effilement et seuils : nombres entiers.';
     Exit;
    End;
@@ -10712,12 +10904,20 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
    Message:='Torsion : ajouter des segments (45 deg maximum par segment).';
    Exit;
   End;
+  If (Values[10]+Values[12]>ImgW) Or
+   (Values[11]+Values[13]>ImgH) Then Begin
+   Message:='La zone depasse le document.';Exit;
+  End;
+  Region.Bounds.L:=Round(Values[10]);Region.Bounds.T:=Round(Values[11]);
+  Region.Bounds.R:=Region.Bounds.L+Round(Values[12])-1;
+  Region.Bounds.B:=Region.Bounds.T+Round(Values[13])-1;
+  Region.Radius:=Round(Values[14]);Region.Border:=Round(Values[15]);
   E.Depth:=Round(Values[0]*10);E.Resolution:=Round(Values[1]);
   E.Segments:=Round(Values[2]);E.Taper:=Round(Values[3]);
   E.Twist:=Round(Values[4]*10);E.Threshold:=Round(Values[5]);
   E.Coverage:=Round(Values[6]);View.RX:=Round(Values[7]*10);
   View.RY:=Round(Values[8]*10);View.RZ:=Round(Values[9]*10);
-  Changed(Field<7);
+  Changed((Field<7) Or (Field>=10));
  End;
  Procedure Button(L,T,BW:Integer;Const Caption:String);
  Begin
@@ -10741,11 +10941,17 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
   OutTextXY(X+468,Y+T+8,Texts[N]);
  End;
  Procedure Draw;
- Var PX,PY,OX,OY,MW,MH,GX,GY:Integer;Color:Byte;
+ Var PX,PY,OX,OY,MW,MH,GX,GY,Shown:Integer;Color:Byte;
  Begin
+  Shown:=Display;
+  If SelectionMode Then Case Display Of
+   1:Shown:=3;2:Shown:=1;3:Shown:=2;End;
   If Rebuild And Valid Then Begin
    ReleaseMesh(M);
-   If PathMode Then Begin
+   If SelectionMode Then Begin
+    If Not BuildSelectionExtrusion(Region,E,True,M,Stats,Error) Then
+     Message:=Error;
+   End Else If PathMode Then Begin
     If Not BuildPathExtrusion(LocalPath,E,M,Stats,Error) Then Message:=Error;
    End Else If Not BuildExtrusion(E,True,M,Stats,Error) Then Message:=Error;
    Rebuild:=False;
@@ -10761,9 +10967,11 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
   FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
   S:='Extrusion 3D du calque - silhouette et volume';
   If PathMode Then S:='Extrusion 3D du trace - contour vectoriel';
+  If SelectionMode Then S:='Extrusion 3D selection - zone et volume';
   OutTextXY(X+12,Y+10,S);
   Button(20,40,180,'1. Geometrie');S:='2. Contour';
-  If PathMode Then S:='2. Trace';Button(210,40,180,S);
+  If PathMode Then S:='2. Trace';
+  If SelectionMode Then S:='2. Zone';Button(210,40,180,S);
   Button(400,40,200,'3. Rendu');SetColor(Blue);
   Line(X+20+Tab*190,Y+65,X+195+Tab*190,Y+65);
   MW:=0;MH:=0;
@@ -10776,19 +10984,28 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
   For PY:=0 To 195 Do For PX:=0 To 279 Do Begin
    Color:=White;If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=LightGray;
    OX:=PX-(280-PW) Div 2;OY:=PY-(196-PH) Div 2;
-   If (Display=0) And (Preview<>Nil) And (OX>=0) And (OY>=0) And
+   If (Shown=0) And (Preview<>Nil) And (OX>=0) And (OY>=0) And
     (OX<PW) And (OY<PH) Then
     If Preview^[LongInt(OY)*PW+OX]<>255 Then
      Color:=Preview^[LongInt(OY)*PW+OX];
+   If (Shown=3) And (OX>=0) And (OY>=0) And (OX<PW) And (OY<PH) Then
+   Begin
+    GX:=Min(ImgW-1,Trunc((OX+0.5)*ImgW/PW));
+    GY:=Min(ImgH-1,Trunc((OY+0.5)*ImgH/PH));
+    If E.CompositeSource Then Color:=Composite(GX,GY)
+    Else Color:=GetLayerPixel(ActiveLayer,GX,GY);
+    If Color=255 Then Begin Color:=White;
+     If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=LightGray;End;
+   End;
    OX:=PX-(280-MW) Div 2;OY:=PY-(196-MH) Div 2;
-   If Not PathMode And (Display=1) And (OX>=0) And (OY>=0) And (OX<MW) And
+   If Not PathMode And (Shown=1) And (OX>=0) And (OY>=0) And (OX<MW) And
     (OY<MH) Then Begin
     GX:=OX*Stats.Width Div MW;GY:=OY*Stats.Height Div MH;
     If Stats.Mask[GY*Stats.Width+GX]<>0 Then Color:=Blue;
    End;
    PutPixel(X+20+PX,Y+82+PY,Color);
   End;
-  If PathMode And (Display=1) Then Begin
+  If PathMode And (Shown=1) Then Begin
    SetColor(Blue);
    For GX:=0 To LocalPath.Count-1 Do Begin
     GY:=(GX+1) Mod LocalPath.Count;
@@ -10799,10 +11016,21 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
       Y+82+(196-PH) Div 2+Round(LocalPath.Points[GY].Y*PH));
    End;
   End;
+  If Shown=3 Then Begin
+   SetColor(Yellow);
+   Rectangle(X+20+(280-PW) Div 2+Round(Region.Bounds.L*1.0*PW/ImgW),
+    Y+82+(196-PH) Div 2+Round(Region.Bounds.T*1.0*PH/ImgH),
+    X+20+(280-PW) Div 2+Round((Region.Bounds.R+1.0)*PW/ImgW),
+    Y+82+(196-PH) Div 2+Round((Region.Bounds.B+1.0)*PH/ImgH));
+  End;
   SetColor(Black);Rectangle(X+19,Y+81,X+300,Y+278);
-  If Display=2 Then Begin
+  If Shown=2 Then Begin
    FillRect(X+21,Y+83,X+299,Y+276,White);SetColor(Black);
-   If PathMode Then Begin
+   If SelectionMode Then Begin
+    OutTextXY(X+28,Y+94,'Zone : '+IntToStr(Region.Bounds.L)+', '+
+     IntToStr(Region.Bounds.T));
+    OutTextXY(X+28,Y+116,'Dimensions : '+Texts[12]+' x '+Texts[13]);
+   End Else If PathMode Then Begin
     OutTextXY(X+28,Y+94,'Contour vectoriel exact');
     OutTextXY(X+28,Y+116,'Points utiles : '+IntToStr(Stats.Cells));
    End Else Begin
@@ -10822,7 +11050,9 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
   SetColor(Black);OutTextXY(X+20,Y+292,IntToStr(Stats.Triangles)+
    ' triangles / '+IntToStr(Stats.Groups)+' objets');
   Case Display Of 0:S:='Vue 3D';1:S:='Masque';2:S:='Informations';End;
-  If PathMode And (Display=1) Then S:='Trace 2D';
+  If PathMode And (Shown=1) Then S:='Trace 2D';
+  If SelectionMode Then Case Display Of 1:S:='Source et zone';
+   2:S:='Masque de controle';3:S:='Informations';End;
   Button(20,312,280,'Apercu : '+S+' >');
   Button(20,343,132,'Vue de face');Button(168,343,132,'Vue isometrique');
   If (Tab=0) And PathMode Then Begin
@@ -10840,6 +11070,17 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
    SetColor(Black);OutTextXY(X+320,Y+286,'Profondeur : 0.1 a 1000 %');
    OutTextXY(X+320,Y+309,'Effilement : -80 a +200 %');
    OutTextXY(X+320,Y+330,'45 deg max par segment');
+   If SelectionMode Then Begin
+    If Region.Shape=4 Then Begin
+     Case E.Mode Of 0:S:='Opaques';1:S:='Clairs';2:S:='Sombres';
+      3:S:='Premier plan';End;
+     Button(320,282,280,'Contenu : '+S+' >');Edit(5,313,'Seuil 0-255');
+    End Else Begin
+     FillRect(X+318,Y+280,X+602,Y+344,LightGray);SetColor(Black);
+     OutTextXY(X+320,Y+286,'Selection pleine : pixels ignores.');
+     OutTextXY(X+320,Y+312,'Profondeur / taille de la zone');
+    End;
+   End;
   End Else If (Tab=1) And PathMode Then Begin
    Button(320,82,280,'Modifier le trace...');
    Button(320,115,280,'Rectangle');Button(320,148,280,'Ellipse');
@@ -10849,6 +11090,20 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
    OutTextXY(X+320,Y+282,'Un seul contour ferme.');
    OutTextXY(X+320,Y+306,'Croisements et contacts refuses.');
    OutTextXY(X+320,Y+330,'Trace de travail garde en memoire.');
+  End Else If (Tab=1) And SelectionMode Then Begin
+   Case Region.Shape Of 0:S:='Selection pleine';1:S:='Ellipse';
+    2:S:='Rectangle arrondi';3:S:='Cadre';4:S:='Contenu de la zone';End;
+   Button(320,82,280,S+' >');Edit(10,115,'X en pixels');
+   Edit(11,148,'Y en pixels');Edit(12,181,'Largeur px');
+   Edit(13,214,'Hauteur px');Button(320,247,132,'Selection');
+   Button(468,247,132,'Image entiere');
+   If Region.Shape=2 Then Edit(14,280,'Rayon %')
+   Else If Region.Shape=3 Then Edit(15,280,'Epaisseur %')
+   Else If Region.Shape=1 Then Edit(1,280,'Facettes 8-64')
+   Else If Region.Shape=4 Then Edit(6,280,'Couverture %')
+   Else Begin SetColor(Black);
+    OutTextXY(X+320,Y+288,'Rectangle vectoriel exact.');End;
+   Check(320,318,E.CompositeSource,'Source : calques visibles');
   End Else If Tab=1 Then Begin
    Case E.Mode Of 0:S:='Pixels opaques';1:S:='Pixels clairs';
     2:S:='Pixels sombres';3:S:='Couleur premier plan';End;
@@ -10879,6 +11134,8 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
    'Contour approche par grille. Trous conserves. Matiere uniforme.';
   If PathMode Then S:=
    'Contour vectoriel simple, ferme. Sans trous. Matiere uniforme.';
+  If SelectionMode Then S:=
+   'Selection rectangulaire ou forme derivee. Matiere uniforme.';
   OutTextXY(X+20,Y+413,S);
   If Message<>'' Then Begin SetColor(Red);
    OutTextXY(X+20,Y+429,Copy(Message,1,73));End;
@@ -10901,10 +11158,12 @@ Var LocalPath:TVectorPath;E:TExtrudeOptions;View:TMeshOptions;
  End;
 Begin
  ResetToolTip;MenuActive:=False;LocalPath:=WorkingPath;
- DefaultExtrudeOptions(E);
+ DefaultExtrudeOptions(E);DefaultSelectionExtrude(Region);
  DefaultMeshOptions(View);View.Mode:=0;Sync;FillChar(Stats,SizeOf(Stats),0);
  M:=Nil;Preview:=Nil;Field:=0;Tab:=0;Display:=0;Message:='';
  If PathMode And (LocalPath.Count<3) Then Begin Tab:=1;Display:=1;End;
+ If SelectionMode And Not SelectionActive Then
+  Message:='Aucune selection : image entiere proposee, zone modifiable.';
  X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
  If LongInt(ImgW)*196>LongInt(ImgH)*280 Then Begin
   PW:=280;PH:=Max(1,Round(ImgH*280.0/ImgW));
@@ -10918,9 +11177,11 @@ Begin
    If Hit(20,40,600,63) Then Begin
     Tab:=Min(2,(MX-X-20) Div 190);
     Case Tab Of 0:Field:=0;1:Field:=5;2:Field:=7;End;
+    If SelectionMode And (Tab=1) Then Field:=10;
     ReplaceText:=True;Dirty:=True;
    End Else If Hit(20,312,300,335) Then Begin
-    Display:=(Display+1) Mod 3;Dirty:=True;
+    If SelectionMode Then Display:=(Display+1) Mod 4
+    Else Display:=(Display+1) Mod 3;Dirty:=True;
    End Else If Hit(20,343,152,366) Then Begin
     View.RX:=0;View.RY:=0;View.RZ:=0;Sync;Changed(False);
    End Else If Hit(168,343,300,366) Then Begin
@@ -10929,6 +11190,7 @@ Begin
     E.NewLayer:=Not E.NewLayer;Dirty:=True;
    End Else If Hit(20,379,152,402) Then Begin
     DefaultExtrudeOptions(E);DefaultMeshOptions(View);View.Mode:=0;
+    DefaultSelectionExtrude(Region);
     Sync;Changed(True);
    End Else If Hit(168,379,300,402) Then Begin
     ShowDialog('Extrusion du calque',
@@ -10955,8 +11217,34 @@ Begin
     End Else If Hit(320,214,600,237) Then Begin
      LocalPath:=WorkingPath;Changed(True);
     End;
+   End Else If (Tab=1) And SelectionMode Then Begin
+    If Hit(320,82,600,105) Then Begin
+     Region.Shape:=(Region.Shape+1) Mod 5;Changed(True);
+    End Else If Hit(460,115,600,236) Then Begin
+     Field:=10+Min(3,(MY-Y-115) Div 33);ReplaceText:=True;Dirty:=True;
+    End Else If Hit(320,247,452,270) Then Begin
+     If SelectionActive Then Begin
+      DefaultSelectionExtrude(CapturedRegion);
+      Region.Bounds:=CapturedRegion.Bounds;
+      Sync;Changed(True);End
+     Else Begin Message:='Aucune selection active.';Dirty:=True;End;
+    End Else If Hit(468,247,600,270) Then Begin
+     Region.Bounds.L:=0;Region.Bounds.T:=0;
+     Region.Bounds.R:=ImgW-1;Region.Bounds.B:=ImgH-1;
+     Sync;Changed(True);
+    End Else If (Region.Shape<>0) And Hit(460,280,600,302) Then Begin
+     Field:=6;If Region.Shape=1 Then Field:=1;If Region.Shape=2 Then Field:=14;
+     If Region.Shape=3 Then Field:=15;ReplaceText:=True;Dirty:=True;
+    End Else If Hit(320,318,600,330) Then Begin
+     E.CompositeSource:=Not E.CompositeSource;Changed(True);
+    End;
    End Else If Tab=0 Then Begin
-    If Hit(460,82,600,236) Then Begin
+    If SelectionMode And (Region.Shape=4) And Hit(320,282,600,305) Then
+    Begin E.Mode:=(E.Mode+1) Mod 4;Changed(True);End
+    Else If SelectionMode And (Region.Shape=4) And
+     Hit(460,313,600,335) Then Begin
+     Field:=5;ReplaceText:=True;Dirty:=True;
+    End Else If Hit(460,82,600,236) Then Begin
      Field:=Min(4,(MY-Y-82) Div 33);ReplaceText:=True;Dirty:=True;
     End Else If Hit(320,253,600,265) Then Begin
      E.Caps:=Not E.Caps;Changed(True);
@@ -11010,7 +11298,16 @@ Begin
     #27:Done:=True;#13:Apply;
     #9:Begin
      Case Tab Of 0:Begin Field:=(Field+1) Mod 5;
-      If PathMode And (Field=1) Then Field:=2;End;1:Field:=5+(Field+1) Mod 2;
+      If PathMode And (Field=1) Then Field:=2;End;1:Begin
+       If SelectionMode Then Begin Field:=Field+1;
+        If Field>13 Then Begin Field:=6;
+         If Region.Shape=0 Then Field:=10;
+         If Region.Shape=1 Then Field:=1;
+         If Region.Shape=2 Then Field:=14;
+         If Region.Shape=3 Then Field:=15;End
+        Else If Field<10 Then Field:=10;
+       End Else Field:=5+(Field+1) Mod 2;
+      End;
       2:Field:=7+(Field-6) Mod 3;End;
      ReplaceText:=True;Dirty:=True;
     End;
@@ -11036,9 +11333,12 @@ Begin
 End;
 
 Procedure ExtrudeDialog;
-Begin ExtrudeDialogFor(False);End;
+Begin ExtrudeDialogFor(False,False);End;
 Procedure ExtrudePathDialog;
-Begin ExtrudeDialogFor(True);End;
+Begin ExtrudeDialogFor(True,False);End;
+
+Procedure ExtrudeSelectionDialog;
+Begin ExtrudeDialogFor(False,True);End;
 
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
@@ -11104,6 +11404,7 @@ Begin
    4:SketchfabDialog;
    8:ExtrudeDialog;
    9:ExtrudePathDialog;
+   10:ExtrudeSelectionDialog;
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

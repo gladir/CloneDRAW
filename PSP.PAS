@@ -538,7 +538,7 @@ Begin
  SetMenuItem(MENU_FILTER, 2, 'Lumiere +',      '',       False);
  SetMenuItem(MENU_FILTER, 3, 'Lumiere -',      '',       False);
  SetMenuItem(MENU_FILTER, 4, 'Flou...',           '',       False);
- SetMenuItem(MENU_FILTER, 5, 'Nettete',        '',       False);
+ SetMenuItem(MENU_FILTER, 5, 'Nettete...',        '',       False);
 
  Menus[MENU_3D].ItemCount := 39;
  SetMenuItem(MENU_3D, 0,  'Nouv. calque 3D du fichier', '', False);
@@ -1645,6 +1645,152 @@ Begin
  Inc(UndoCount);
  For I:=0 To MAX_LAYERS-1 Do Layers[I].Pixels:=Pixels[I];
  ImageModified:=True;ApplyMotionBlur:=True;
+End;
+
+Type TSharpenOptions=Record
+ Amount,Radius,Threshold,Halo:Integer;
+ Luminance,AllLayers,Dither:Boolean;
+ End;
+ TSharpValue=Record R,G,B,A:Single;End;
+ TSharpValues=Array[0..16777215] Of TSharpValue;
+ PSharpValues=^TSharpValues;
+Function SharpOptionsValid(Const O:TSharpenOptions):Boolean;
+Begin
+ SharpOptionsValid:=(O.Amount>=0) And (O.Amount<=500) And
+  (O.Radius>=0) And (O.Radius<=200) And (O.Threshold>=0) And
+  (O.Threshold<=255) And (O.Halo>=0) And (O.Halo<=100);
+End;
+Function SharpProgress(Const Phase:String;Row:Integer;Progress:Boolean):Boolean;
+Var K:Char;
+Begin
+ SharpProgress:=True;If Not Progress Then Exit;
+ If Row Mod 16=0 Then Begin
+  HideMouseCursor;
+  FillRect(20,ScreenHeight-45,ScreenWidth-20,ScreenHeight-23,LightGray);
+  SetColor(Black);OutTextXY(28,ScreenHeight-38,
+   'Nettete - '+Phase+' '+IntToStr(LongInt(Row)*100 Div ImgH)+
+   '% - Echap : annuler');ShowMouseCursor;
+ End;
+ If KeyPressed Then Begin K:=ReadKey;SharpProgress:=K<>#27;End;
+End;
+Function BuildSharpLayer(Source:PByteArr;Const O:TSharpenOptions;
+ Progress:Boolean;Var Output:PByteArr):Boolean;
+Var Temp:PSharpValues;Size,TempSize,Index:LongInt;
+ X,Y,J,R,XX,YY,Color:Integer;Kernel:Array[-60..60] Of Double;
+ Sigma,Sum,W,Red,Green,Blue,Alpha,SR,SG,SB,DR,DG,DB,DY,
+ Magnitude,Gain,V:Double;Failed:Boolean;
+ Function Clamp(Value:Double):Double;
+ Begin
+  If Value<0 Then Value:=0 Else If Value>255 Then Value:=255;
+  Clamp:=Value;
+ End;
+Begin
+ BuildSharpLayer:=False;Output:=Nil;Size:=LongInt(ImgW)*ImgH;
+ If (O.Amount=0) Or (O.Radius=0) Then Begin
+  Output:=PByteArr(RotationAllocate(Size));If Output=Nil Then Exit;
+  Move(Source^,Output^,Size);BuildSharpLayer:=True;Exit;
+ End;
+ TempSize:=Size*SizeOf(TSharpValue);
+ Temp:=PSharpValues(RotationAllocate(TempSize));
+ Output:=PByteArr(RotationAllocate(Size));
+ If (Temp=Nil) Or (Output=Nil) Then Begin
+  If Temp<>Nil Then FreeMem(Temp,TempSize);
+  If Output<>Nil Then FreeMem(Output,Size);Output:=Nil;Exit;
+ End;
+ Sigma:=O.Radius/10.0;R:=Trunc(Sigma*3);
+ If R<Sigma*3 Then Inc(R);R:=Min(60,Max(1,R));Sum:=0;
+ For J:=-R To R Do Begin
+  Kernel[J]:=Exp(-(J*1.0*J)/(2*Sigma*Sigma));Sum:=Sum+Kernel[J];
+ End;
+ For J:=-R To R Do Kernel[J]:=Kernel[J]/Sum;
+ Failed:=False;
+ For Y:=0 To ImgH-1 Do Begin
+  If Not SharpProgress('horizontal',Y,Progress) Then Begin
+  Failed:=True;Break;End;
+  For X:=0 To ImgW-1 Do Begin
+   Red:=0;Green:=0;Blue:=0;Alpha:=0;
+   For J:=-R To R Do Begin
+    XX:=Max(0,Min(ImgW-1,X+J));Color:=Source^[LongInt(Y)*ImgW+XX];
+    If Color<>255 Then Begin
+     Color:=Color And 15;W:=Kernel[J];Alpha:=Alpha+W;
+     Red:=Red+VGA_R[Color]*W;Green:=Green+VGA_G[Color]*W;
+     Blue:=Blue+VGA_B[Color]*W;
+    End;
+   End;
+   Index:=LongInt(Y)*ImgW+X;Temp^[Index].R:=Red;Temp^[Index].G:=Green;
+   Temp^[Index].B:=Blue;Temp^[Index].A:=Alpha;
+  End;
+ End;
+ If Not Failed Then For Y:=0 To ImgH-1 Do Begin
+  If Not SharpProgress('vertical',Y,Progress) Then Begin Failed:=True;Break;End;
+  For X:=0 To ImgW-1 Do Begin
+   Index:=LongInt(Y)*ImgW+X;Color:=Source^[Index];Output^[Index]:=Color;
+   If Color=255 Then Continue;
+   Red:=0;Green:=0;Blue:=0;Alpha:=0;
+   For J:=-R To R Do Begin
+    YY:=Max(0,Min(ImgH-1,Y+J));Index:=LongInt(YY)*ImgW+X;W:=Kernel[J];
+    Red:=Red+Temp^[Index].R*W;Green:=Green+Temp^[Index].G*W;
+    Blue:=Blue+Temp^[Index].B*W;Alpha:=Alpha+Temp^[Index].A*W;
+   End;
+   If Alpha<0.000001 Then Continue;
+   Color:=Color And 15;SR:=VGA_R[Color];SG:=VGA_G[Color];SB:=VGA_B[Color];
+   DR:=SR-Red/Alpha;DG:=SG-Green/Alpha;DB:=SB-Blue/Alpha;
+   DY:=0.299*DR+0.587*DG+0.114*DB;
+   If O.Luminance Then Magnitude:=Abs(DY)
+   Else Begin
+    Magnitude:=Abs(DR);If Abs(DG)>Magnitude Then Magnitude:=Abs(DG);
+    If Abs(DB)>Magnitude Then Magnitude:=Abs(DB);
+   End;
+   If Magnitude<=O.Threshold Then Continue;
+   V:=Magnitude/64;If V>1 Then V:=1;
+   Gain:=O.Amount/100.0*(1-O.Halo/100.0*V);
+   If O.Luminance Then Begin DR:=DY;DG:=DY;DB:=DY;End;
+   Output^[LongInt(Y)*ImgW+X]:=BlurPalette(Clamp(SR+Gain*DR),
+    Clamp(SG+Gain*DG),Clamp(SB+Gain*DB),X,Y,O.Dither);
+  End;
+ End;
+ FreeMem(Temp,TempSize);
+ If Failed Then Begin FreeMem(Output,Size);Output:=Nil;End
+ Else BuildSharpLayer:=True;
+End;
+Function BuildSharpPixels(Const O:TSharpenOptions;Progress:Boolean;
+ Var Pixels:TBlurPixels):Boolean;
+Var I:Integer;Size:LongInt;OK:Boolean;
+Begin
+ BuildSharpPixels:=False;FillChar(Pixels,SizeOf(Pixels),0);
+ If Not SharpOptionsValid(O) Or (ImgW<1) Or (ImgH<1) Or
+  (ImgW>4096) Or (ImgH>4096) Then Exit;
+ Size:=LongInt(ImgW)*ImgH;
+ For I:=0 To MAX_LAYERS-1 Do If Layers[I].Used Then Begin
+  If O.AllLayers Or (I=ActiveLayer) Then
+   OK:=BuildSharpLayer(Layers[I].Pixels,O,Progress,Pixels[I])
+  Else Begin
+   Pixels[I]:=PByteArr(RotationAllocate(Size));OK:=Pixels[I]<>Nil;
+   If OK Then Move(Layers[I].Pixels^,Pixels[I]^,Size);
+  End;
+  If Not OK Then Begin FreeBlurPixels(Pixels);Exit;End;
+ End;
+ BuildSharpPixels:=True;
+End;
+Function ApplySharpen(Const O:TSharpenOptions;Progress:Boolean):Boolean;
+Var Pixels:TBlurPixels;R:PRotationUndo;I:Integer;
+Begin
+ ApplySharpen:=False;If Not SharpOptionsValid(O) Then Exit;
+ If (O.Amount=0) Or (O.Radius=0) Then Begin ApplySharpen:=True;Exit;End;
+ R:=PRotationUndo(RotationAllocate(SizeOf(TRotationUndo)));
+ If R=Nil Then Exit;
+ If Not BuildSharpPixels(O,Progress,Pixels) Then Begin
+  FreeMem(R,SizeOf(TRotationUndo));Exit;
+ End;
+ R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
+ R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
+ R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
+ R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
+ For I:=0 To MAX_LAYERS-1 Do R^.Saved[I]:=Layers[I];
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);
+ For I:=0 To MAX_LAYERS-1 Do Layers[I].Pixels:=Pixels[I];
+ ImageModified:=True;ApplySharpen:=True;
 End;
 
 Procedure RotateLayer90(Clockwise:Boolean);
@@ -6962,6 +7108,241 @@ Begin
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
+Procedure SharpenDialog;
+Var O:TSharpenOptions;Cache:TBlurPixels;CacheDirty,CacheReady,Before,
+ AutoPreview,Dirty,Done,Drag,ReplaceText,Valid:Boolean;
+ X,Y,W,H,Field,Preset,MX,MY,MB,Previous,I,Code:Integer;
+ Texts:Array[0..3] Of String;Message:String;LastChange:LongInt;
+ K,E:Char;V:Double;
+ Procedure Sync;
+ Var T:String;
+ Begin
+  Texts[0]:=IntToStr(O.Amount);Str(O.Radius/10:0:1,T);Texts[1]:=T;
+  Texts[2]:=IntToStr(O.Threshold);Texts[3]:=IntToStr(O.Halo);
+ End;
+ Procedure Changed;
+ Begin
+  CacheDirty:=True;Dirty:=True;LastChange:=ToolTipClock;Message:='';Preset:=-1;
+ End;
+ Procedure SetPreset(Value:Integer);
+ Begin
+  O.Luminance:=True;
+  Case Value Of
+   0:Begin O.Amount:=100;O.Radius:=10;O.Threshold:=3;O.Halo:=25;End;
+   1:Begin O.Amount:=60;O.Radius:=8;O.Threshold:=2;O.Halo:=35;End;
+   2:Begin O.Amount:=180;O.Radius:=15;O.Threshold:=5;O.Halo:=15;End;
+   3:Begin O.Amount:=70;O.Radius:=12;O.Threshold:=8;O.Halo:=50;End;
+   4:Begin O.Amount:=160;O.Radius:=5;O.Threshold:=1;O.Halo:=20;End;
+  End;
+  Valid:=True;ReplaceText:=True;Sync;Changed;Preset:=Value;
+ End;
+ Procedure Reset;
+ Begin
+  O.AllLayers:=False;O.Dither:=True;Before:=False;AutoPreview:=True;
+  Field:=0;SetPreset(0);
+ End;
+ Procedure Change;
+ Var T:String;J:Integer;
+ Begin
+  T:=Texts[Field];For J:=1 To Length(T) Do If T[J]=',' Then T[J]:='.';
+  Val(T,V,Code);Valid:=(Code=0);Dirty:=True;
+  If Valid Then Case Field Of
+   0:Valid:=(V>=0) And (V<=500) And (V=Trunc(V));
+   1:Valid:=(V>=0) And (V<=20);
+   2:Valid:=(V>=0) And (V<=255) And (V=Trunc(V));
+   3:Valid:=(V>=0) And (V<=100) And (V=Trunc(V));
+  End;
+  If Not Valid Then Begin Message:='Valeur hors limites.';Exit;End;
+  Case Field Of 0:O.Amount:=Round(V);1:O.Radius:=Round(V*10);
+   2:O.Threshold:=Round(V);3:O.Halo:=Round(V);End;
+  Changed;
+ End;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+24,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+24,True);SetColor(Black);
+  OutTextXY(X+L+7,Y+T+8,Caption);
+ End;
+ Procedure Option(T:Integer;Checked:Boolean;Const Caption:String);
+ Begin
+  SetColor(Black);Rectangle(X+20,Y+T,X+32,Y+T+12);
+  If Checked Then Begin
+   Line(X+22,Y+T+6,X+25,Y+T+10);Line(X+25,Y+T+10,X+31,Y+T+2);
+  End;
+  OutTextXY(X+40,Y+T+3,Caption);
+ End;
+ Function PresetName:String;
+ Begin
+  Case Preset Of 0:PresetName:='Standard';1:PresetName:='Doux';
+   2:PresetName:='Fort';3:PresetName:='Portrait';4:PresetName:='Details';
+   Else PresetName:='Personnalise';End;
+ End;
+ Procedure RefreshPreview;
+ Begin
+  If Not Valid Then Exit;FreeBlurPixels(Cache);CacheReady:=False;
+  CacheReady:=BuildSharpPixels(O,True,Cache);CacheDirty:=False;
+  If Not CacheReady Then Message:='Apercu annule ou memoire insuffisante.';
+  Dirty:=True;
+ End;
+ Procedure Draw;
+ Var PX,PY,SX,SY,J,T:Integer;Scale:Double;
+     Color:Byte;Caption:String;
+ Begin
+  HideMouseCursor;FillRect(X,Y,X+W,Y+H,LightGray);
+  DrawBevel(X,Y,X+W,Y+H,True);
+  FillRect(X+3,Y+3,X+W-3,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Nettete - quantite, rayon et seuil');
+  SetColor(Black);OutTextXY(X+20,Y+40,'Apercu - palette VGA 16 couleurs');
+  Scale:=Min(244000 Div ImgW,182000 Div ImgH)/1000;
+  If Scale<=0 Then Scale:=0.001;
+  For PY:=0 To 193 Do For PX:=0 To 259 Do Begin
+   SX:=Trunc((PX-129.5)/Scale+(ImgW-1)/2+0.5+65536)-65536;
+   SY:=Trunc((PY-96.5)/Scale+(ImgH-1)/2+0.5+65536)-65536;
+   Color:=255;
+   If (SX>=0) And (SY>=0) And (SX<ImgW) And (SY<ImgH) Then Begin
+    If Before Or Not CacheReady Then Color:=Composite(SX,SY)
+    Else For J:=LayerCount-1 DownTo 0 Do
+     If Layers[J].Used And Layers[J].Visible Then Begin
+      Color:=Cache[J]^[LongInt(SY)*ImgW+SX];If Color<>255 Then Break;
+     End;
+   End;
+   If Color=255 Then Begin Color:=LightGray;
+    If ((PX Div 8+PY Div 8) And 1)=0 Then Color:=White;End;
+   PutPixel(X+20+PX,Y+54+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+19,Y+53,X+280,Y+248);
+  If Before Then Caption:='AVANT' Else If CacheDirty Then
+  Caption:='A ACTUALISER'
+   Else Caption:='APRES';OutTextXY(X+28,Y+61,Caption);
+  Button(20,254,115,'Avant / Apres');Button(148,254,132,'Actualiser (P)');
+  Option(286,O.AllLayers,'Tous les calques');
+  Option(308,O.Dither,'Tramage des couleurs');
+  Option(330,AutoPreview,'Apercu automatique');
+  SetColor(Black);OutTextXY(X+302,Y+40,'Masque flou gaussien');
+  For J:=0 To 3 Do Begin
+   T:=64+J*38;SetColor(Black);
+   Case J Of 0:Caption:='Gain (%)';1:Caption:='Rayon (px)';
+    2:Caption:='Seuil';3:Caption:='Anti-halos';End;
+   OutTextXY(X+302,Y+T+8,Caption);
+   FillRect(X+393,Y+T,X+497,Y+T+23,White);
+   If J=Field Then SetColor(Blue) Else SetColor(DarkGray);
+   Rectangle(X+393,Y+T,X+497,Y+T+23);SetColor(Black);
+   OutTextXY(X+400,Y+T+8,Texts[J]);
+   Button(506,T,32,'-');Button(550,T,36,'+');
+  End;
+  SetColor(Black);OutTextXY(X+302,Y+212,'Gain');
+  SetColor(DarkGray);Line(X+393,Y+216,X+594,Y+216);
+  SetFillStyle(SolidFill,Blue);
+  FillEllipse(X+393+Round(O.Amount*201.0/500),Y+216,4,4);
+  Button(302,232,292,'Prereglage : '+PresetName+' >');
+  SetColor(Black);Rectangle(X+302,Y+274,X+314,Y+286);
+  If O.Luminance Then Begin
+   Line(X+304,Y+280,X+307,Y+284);Line(X+307,Y+284,X+313,Y+276);
+  End;
+  OutTextXY(X+322,Y+277,'Luminance uniquement');
+  OutTextXY(X+302,Y+304,'Transparence preservee');
+  OutTextXY(X+302,Y+325,'Rayon : 0..20 pixels');
+  OutTextXY(X+302,Y+346,'Seuil : 0..255, halos : 0..100');
+  Str(LongInt(ImgW)*ImgH*16.0/1048576:0:2,Caption);
+  OutTextXY(X+302,Y+367,'Tampon : '+Caption+' Mo / calque');
+  SetColor(Black);Caption:=Message;
+  If Caption='' Then
+  Caption:='Le seuil protege les details faibles. Echap annule le calcul.';
+  OutTextXY(X+20,Y+383,Caption);
+  Button(20,400,105,'Reinitialiser');Button(136,400,55,'Doux');
+  Button(202,400,65,'Fort');Button(380,400,96,'Annuler');
+  Button(490,400,105,'Appliquer');ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Adjust(Delta:Integer);
+ Begin
+  Case Field Of
+   0:O.Amount:=Max(0,Min(500,O.Amount+Delta));
+   1:O.Radius:=Max(0,Min(200,O.Radius+Delta));
+   2:O.Threshold:=Max(0,Min(255,O.Threshold+Delta));
+   3:O.Halo:=Max(0,Min(100,O.Halo+Delta));
+  End;
+  Valid:=True;Sync;Changed;ReplaceText:=True;
+ End;
+ Procedure Slider;
+ Begin
+  O.Amount:=Max(0,Min(500,Round((MX-X-393)*500.0/201)));
+  Valid:=True;Sync;Changed;
+ End;
+ Procedure Apply;
+ Begin
+  If Not Valid Then Exit;
+  If ApplySharpen(O,True) Then Done:=True
+   Else Begin Message:='Calcul annule ou memoire insuffisante.';Dirty:=True;End;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;FillChar(Cache,SizeOf(Cache),0);
+ CacheReady:=False;W:=620;H:=430;X:=(ScreenWidth-W) Div 2;
+ Y:=(ScreenHeight-H) Div 2;Done:=False;Drag:=False;Reset;
+ GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If AutoPreview And CacheDirty And Valid And Not Before And
+   ((Previous And 1)=0) Then Begin
+   I:=0;V:=ToolTipClock-LastChange;If V<0 Then V:=V+8640000;
+   If V>=30 Then I:=1;
+   If I=1 Then RefreshPreview;
+  End;
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(393,211,595,222) Then Begin Drag:=True;Field:=0;Slider;End
+   Else If Hit(393,64,497,201) Then Begin
+    Field:=Min(3,(MY-Y-64) Div 38);ReplaceText:=True;Dirty:=True;
+   End Else If Hit(506,64,586,201) Then Begin
+    Field:=Min(3,(MY-Y-64) Div 38);I:=1;If MX<X+542 Then I:=-1;
+    If Field=0 Then I:=I*10;Adjust(I);
+   End Else If Hit(302,232,594,256) Then SetPreset((Preset+1) Mod 5)
+   Else If Hit(302,274,600,286) Then Begin
+    O.Luminance:=Not O.Luminance;Changed;
+   End
+Else If Hit(20,254,135,278) Then Begin Before:=Not Before;Dirty:=True;End
+   Else If Hit(148,254,280,278) Then RefreshPreview
+   Else If Hit(20,286,280,298) Then Begin O.AllLayers:=Not
+   O.AllLayers;Changed;End
+   Else If Hit(20,308,280,320) Then Begin O.Dither:=Not O.Dither;Changed;End
+   Else If Hit(20,330,280,342) Then Begin AutoPreview:=Not
+   AutoPreview;Dirty:=True;End
+   Else If Hit(20,400,125,424) Then Reset
+   Else If Hit(136,400,191,424) Then SetPreset(1)
+   Else If Hit(202,400,267,424) Then SetPreset(2)
+   Else If Hit(380,400,476,424) Then Done:=True
+   Else If Hit(490,400,595,424) Then Apply;
+  End;
+  If Drag And ((MB And 1)<>0) Then Slider;
+  If (MB And 1)=0 Then Drag:=False;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then Begin E:=ReadKey;
+    If E=#72 Then Adjust(1) Else If E=#80 Then Adjust(-1);
+    If E=#75 Then Adjust(-1);
+    If E=#77 Then Adjust(1);
+   End Else Case K Of
+    #27:Done:=True;#13:Apply;#9:Begin Field:=(Field+1) Mod
+    4;ReplaceText:=True;Dirty:=True;End;
+    #8:Begin
+     If ReplaceText Then Texts[Field]:=''
+      Else Delete(Texts[Field],Length(Texts[Field]),1);
+     ReplaceText:=False;Change;
+    End;
+    '0'..'9','.',',':Begin
+     If ReplaceText Then Texts[Field]:='';ReplaceText:=False;
+     If Length(Texts[Field])<8 Then Texts[Field]:=Texts[Field]+K;Change;
+    End;
+    'r','R':Reset;'p','P':RefreshPreview;
+    'v','V':Begin Before:=Not Before;Dirty:=True;End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ FreeBlurPixels(Cache);GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
@@ -7016,7 +7397,7 @@ Begin
    2: Begin FilterBrighter; DrawFullUI; End;
    3: Begin FilterDarker; DrawFullUI; End;
    4: MotionBlurDialog;
-   5: Begin FilterSharpen; DrawFullUI; End;
+   5: SharpenDialog;
   End;
   MENU_3D: ShowDialog('3D', 'Fonction 3D non implementee dans cette version.');
   MENU_VIEW: Case IIdx Of

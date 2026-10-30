@@ -385,7 +385,7 @@ Begin
  Sz := LongInt(ImgW) * ImgH;
  GetMem(Layers[LIdx].Pixels, Sz);
  Layers[LIdx].Mesh:=Nil; FillChar(Layers[LIdx].MeshOptions,
- SizeOf(TMeshOptions), 0); 
+ SizeOf(TMeshOptions), 0);
  Layers[LIdx].Name := Nm;
  Layers[LIdx].Visible := True;
  Layers[LIdx].Opacity := 100;
@@ -552,11 +552,11 @@ Begin
  Menus[MENU_EDIT].Title    := 'Edition';
  Menus[MENU_IMAGE].Title   := 'Image';
  Menus[MENU_LAYER].Title   := 'Calque';
- Menus[MENU_SELECT].Title  := 'Selection';
+ Menus[MENU_SELECT].Title  := 'S'+#130+'lection';
  Menus[MENU_FILTER].Title  := 'Filtre';
  Menus[MENU_3D].Title      := '3D';
  Menus[MENU_VIEW].Title    := 'Affichage';
- Menus[MENU_WINDOW].Title  := 'Fenetre';
+ Menus[MENU_WINDOW].Title  := 'Fen'+#136+'tre';
  Menus[MENU_HELP].Title    := 'Aide';
 
  Menus[MENU_FILE].ItemCount := 24;
@@ -570,24 +570,24 @@ Begin
  SetMenuItem(MENU_FILE, 7,  'Revenir',            'F12',            False);
  SetMenuItem(MENU_FILE, 8,  '-',                  '',               True);
  SetMenuItem(MENU_FILE, 9,  'Enregistrer',        'Ctrl+S',         False);
- SetMenuItem(MENU_FILE, 10, 'Enregistrer sous...','Maj+Ctrl+S',     False);
+ SetMenuItem(MENU_FILE, 10, 'Enregistrer sous...','Shift+Ctrl+S',     False);
  SetMenuItem(MENU_FILE, 11, '-',                  '',               True);
  SetMenuItem(MENU_FILE, 12, 'Importer',           '',               False);
  SetMenuItem(MENU_FILE, 13, 'Exporter',           '',               False);
- SetMenuItem(MENU_FILE, 14, 'Generer',            '',               False);
+ SetMenuItem(MENU_FILE, 14, 'G'+#130+'n'+#130+'rer',            '',               False);
  SetMenuItem(MENU_FILE, 15, 'Scripts',            '',               False);
  SetMenuItem(MENU_FILE, 16, 'Automatiser',        '',               False);
  SetMenuItem(MENU_FILE, 17, '-',                  '',               True);
- SetMenuItem(MENU_FILE, 18, 'Info fichier...',    'Alt+Maj+Ctrl+I', False);
+ SetMenuItem(MENU_FILE, 18, 'Information fichier...',    'Alt+Shift+Ctrl+I', False);
  SetMenuItem(MENU_FILE, 19, '-',                  '',               True);
  SetMenuItem(MENU_FILE, 20, 'Imprimer...',        'Ctrl+P',         False);
- SetMenuItem(MENU_FILE, 21, 'Imprimer une copie', 'Alt+Maj+Ctrl+P', False);
+ SetMenuItem(MENU_FILE, 21, 'Imprimer une copie', 'Alt+Shift+Ctrl+P', False);
  SetMenuItem(MENU_FILE, 22, '-',                  '',               True);
  SetMenuItem(MENU_FILE, 23, 'Quitter',            'Ctrl+Q',         False);
 
  Menus[MENU_EDIT].ItemCount := 7;
  SetMenuItem(MENU_EDIT, 0, 'Annuler',          'Ctrl+Z', False);
- SetMenuItem(MENU_EDIT, 1, 'Retablir',         'Ctrl+Y', False);
+ SetMenuItem(MENU_EDIT, 1, 'R'+#130+'tablir',         'Ctrl+Y', False);
  SetMenuItem(MENU_EDIT, 2, '-',                '',       True);
  SetMenuItem(MENU_EDIT, 3, 'Couper',           'Ctrl+X', False);
  SetMenuItem(MENU_EDIT, 4, 'Copier',           'Ctrl+C', False);
@@ -598,8 +598,8 @@ Begin
  SetMenuItem(MENU_IMAGE, 0, 'Taille image...', '',       False);
  SetMenuItem(MENU_IMAGE, 1, 'Rotation 90 H',   '',       False);
  SetMenuItem(MENU_IMAGE, 2, 'Rotation 90 AH',  '',       False);
- SetMenuItem(MENU_IMAGE, 3, 'Sym. horiz.',     '',       False);
- SetMenuItem(MENU_IMAGE, 4, 'Sym. vert.',      '',       False);
+ SetMenuItem(MENU_IMAGE, 3, 'Sym'+#130+'trie horizontale',     '',       False);
+ SetMenuItem(MENU_IMAGE, 4, 'Sym'+#130+'trie verticale',      '',       False);
  SetMenuItem(MENU_IMAGE, 5, 'Rotation...', '', False);
 
  Menus[MENU_LAYER].ItemCount := 5;
@@ -611,50 +611,50 @@ Begin
 
  Menus[MENU_SELECT].ItemCount := 4;
  SetMenuItem(MENU_SELECT, 0, 'Tout',           'Ctrl+A', False);
- SetMenuItem(MENU_SELECT, 1, 'Deselect.',      'Ctrl+D', False);
+ SetMenuItem(MENU_SELECT, 1, 'Des'+#130+'lection',      'Ctrl+D', False);
  SetMenuItem(MENU_SELECT, 2, 'Inverser',       '',       False);
  SetMenuItem(MENU_SELECT, 3, 'Recadrer',       '',       False);
 
  Menus[MENU_FILTER].ItemCount := 6;
  SetMenuItem(MENU_FILTER, 0, 'Inverser',       '',       False);
  SetMenuItem(MENU_FILTER, 1, 'Niveaux gris',   '',       False);
- SetMenuItem(MENU_FILTER, 2, 'Lumiere +',      '',       False);
- SetMenuItem(MENU_FILTER, 3, 'Lumiere -',      '',       False);
+ SetMenuItem(MENU_FILTER, 2, 'Lumi'+#138+'re +',      '',       False);
+ SetMenuItem(MENU_FILTER, 3, 'Lumi'+#138+'re -',      '',       False);
  SetMenuItem(MENU_FILTER, 4, 'Flou...',           '',       False);
- SetMenuItem(MENU_FILTER, 5, 'Nettete...',        '',       False);
+ SetMenuItem(MENU_FILTER, 5, 'Nettet'+#130+'...',        '',       False);
 
  Menus[MENU_3D].ItemCount := 39;
  SetMenuItem(MENU_3D, 0,  'Nouveau calque 3D du fichier', '', False);
  SetMenuItem(MENU_3D, 1,  'Fusionner les calques 3D',   '', False);
  SetMenuItem(MENU_3D, 2,  'Exporter calque 3D...',      '', False);
- SetMenuItem(MENU_3D, 3,  'Panorama spherique',         '', False);
+ SetMenuItem(MENU_3D, 3,  'Panorama sph'+#130+'rique',         '', False);
  SetMenuItem(MENU_3D, 4,  'Partager sur Sketchfab...',  '', False);
  SetMenuItem(MENU_3D, 5,  '-',                          '', True);
  SetMenuItem(MENU_3D, 6,  'Obtenir plus de contenu...', '', False);
  SetMenuItem(MENU_3D, 7,  '-',                          '', True);
  SetMenuItem(MENU_3D, 8,  'Extrusion 3D du calque',     '', False);
  SetMenuItem(MENU_3D, 9,  'Extrusion 3D du trace',      '', False);
- SetMenuItem(MENU_3D, 10, 'Extrusion 3D selection',     '', False);
+ SetMenuItem(MENU_3D, 10, 'Extrusion 3D s'+#130+'lection',     '', False);
  SetMenuItem(MENU_3D, 11, 'Maillage depuis calque',     '', False);
  SetMenuItem(MENU_3D, 12, '-',                          '', True);
  SetMenuItem(MENU_3D, 13, 'Grouper objets',             '', False);
- SetMenuItem(MENU_3D, 14, 'Grouper toute la scene',     '', False);
+ SetMenuItem(MENU_3D, 14, 'Grouper toute la sc'+#138+'ne',     '', False);
  SetMenuItem(MENU_3D, 15, 'Placer sur le sol',          '', False);
  SetMenuItem(MENU_3D, 16, 'Tasser objets au sol',       '', False);
  SetMenuItem(MENU_3D, 17, '-',                          '', True);
  SetMenuItem(MENU_3D, 18, 'Peinture mosaique calque',   '', False);
- SetMenuItem(MENU_3D, 19, 'Generer UV...',              '', False);
- SetMenuItem(MENU_3D, 20, 'Attenuation peinture...',    '', False);
- SetMenuItem(MENU_3D, 21, 'Systeme de peinture',        '', False);
+ SetMenuItem(MENU_3D, 19, 'G'+#130+'n'+#130+'rer UV...',              '', False);
+ SetMenuItem(MENU_3D, 20, 'Att'+#130+'nuation peinture...',    '', False);
+ SetMenuItem(MENU_3D, 21, 'Syst'+#138+'me de peinture',        '', False);
  SetMenuItem(MENU_3D, 22, 'Peindre sur texture cible',  '', False);
- SetMenuItem(MENU_3D, 23, 'Selec. zones peignables',    '', False);
+ SetMenuItem(MENU_3D, 23, 'S'+#130+'lection zones peignables', '', False);
  SetMenuItem(MENU_3D, 24, 'Calque de peinture',         '', False);
  SetMenuItem(MENU_3D, 25, '-',                          '', True);
  SetMenuItem(MENU_3D, 26, 'Diviser extrusion',          '', False);
  SetMenuItem(MENU_3D, 27, 'Coupe sur la scene',         '', False);
  SetMenuItem(MENU_3D, 28, 'Unifier pour impression',    '', False);
  SetMenuItem(MENU_3D, 29, 'Simplifier maillage...',     '', False);
- SetMenuItem(MENU_3D, 30, 'Aff/Masq. polygones',        '', False);
+ SetMenuItem(MENU_3D, 30, 'Affiche/Masque polygones',   '', False);
  SetMenuItem(MENU_3D, 31, 'Trace depuis calque 3D',     '', False);
  SetMenuItem(MENU_3D, 32, '-',                          '', True);
  SetMenuItem(MENU_3D, 33, 'Rendu du calque 3D',         '', False);
@@ -2037,7 +2037,7 @@ Begin
   If M<>Nil Then Begin
    FillChar(M^,SizeOf(M^),0);M^.References:=1;M^.Source:=Name;
    M^.SourceSize:=Size;
-   M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices))); 
+   M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices)));
    M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
    Failed:=(M^.Vertices=Nil) Or (M^.Triangles=Nil);
   End Else Failed:=True;
@@ -2076,7 +2076,7 @@ Begin
     I:=Pos('#',Line);If I>0 Then Delete(Line,I,255);
     Key:=UpperStr(MeshToken(Line));If Key='' Then Continue;
     If LongLine Then Begin Error:='Ligne geometrique trop longue (255).';
-    Failed:=True; Break; End; 
+    Failed:=True; Break; End;
     If (OBJ And (Key='V')) Or (Not OBJ And (Key='VERTEX')) Then Begin
      X:=Number;Y:=Number;Z:=Number;
      If Not Failed Then If Not MeshVertex(M,X,Y,Z) Then Failed:=True;
@@ -2112,7 +2112,7 @@ Begin
   If (M^.TriangleCount=0) Or (M^.VertexCount<3) Then Failed:=True;
   If Not Failed Then If (M^.Minimum.X=M^.Maximum.X) And
    (M^.Minimum.Y=M^.Maximum.Y) And (M^.Minimum.Z=M^.Maximum.Z) Then
-   Failed:=True; 
+   Failed:=True;
  End;
  If Data<>Nil Then FreeMem(Data,Size);
  If Failed Then Begin
@@ -2218,7 +2218,7 @@ Begin
     'Rendu 3D : '+IntToStr(I*100 Div M^.TriangleCount)+'% - Echap : annuler');
    ShowMouseCursor;
    If KeyPressed Then Begin K:=ReadKey; If K=#27 Then Begin Failed:=True; Break;
-   End; End; 
+   End; End;
   End;
   AIndex:=M^.Triangles^[I].A;BIndex:=M^.Triangles^[I].B;
   CIndex:=M^.Triangles^[I].C;PA:=P^[AIndex];PB:=P^[BIndex];PC:=P^[CIndex];
@@ -2267,7 +2267,7 @@ Begin
  If R=Nil Then Exit;FillChar(R^,SizeOf(R^),0);
  R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
  R^.Active:=ActiveLayer; R^.Modified:=ImageModified;
- R^.Selection:=SelectionActive; 
+ R^.Selection:=SelectionActive;
  R^.Rect:=SelectionRect;R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
  Size:=LongInt(ImgW)*ImgH;Failed:=False;
  For I:=0 To MAX_LAYERS-1 Do Begin
@@ -2297,11 +2297,11 @@ Begin
  R:=MeshUndoCopy;
  If R=Nil Then Begin FreeMem(Pixels,LongInt(ImgW)*ImgH);Exit;End;
  MakeUndoRoom; RotationUndo[UndoCount]:=R; UndoBuffers[UndoCount]:=Nil;
- Inc(UndoCount); 
+ Inc(UndoCount);
  If Target<0 Then Begin
   Target:=LayerCount;Inc(LayerCount);FillChar(Layers[Target],SizeOf(TLayer),0);
   Layers[Target].Used:=True; Layers[Target].Visible:=True;
-  Layers[Target].Opacity:=100; 
+  Layers[Target].Opacity:=100;
   Name:=M^.Source;
   For I:=Length(Name) DownTo 1 Do If Name[I] In ['\','/'] Then Begin
    Delete(Name,1,I);Break;
@@ -2309,7 +2309,7 @@ Begin
   Layers[Target].Name:='3D '+Copy(Name,1,17);
  End Else Begin
   If Layers[Target].Pixels<>Nil Then FreeMem(Layers[Target].Pixels,
-  LongInt(ImgW)*ImgH); 
+  LongInt(ImgW)*ImgH);
   ReleaseMesh(Layers[Target].Mesh);
  End;
  Layers[Target].Pixels:=Pixels;Layers[Target].Mesh:=M;RetainMesh(M);
@@ -9407,10 +9407,10 @@ Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
   Button(20,307,135,S);
   Case O.Mode Of 0:S:='Solide';1:S:='Fil de fer';2:S:='Solide + fil';End;
   Button(165, 307, 135, S+' >'); Button(20, 339, 135,
-  'Matiere : '+IntToStr(O.Color)+' >'); 
+  'Matiere : '+IntToStr(O.Color)+' >');
   Button(165,339,135,'Informations');
   Option(287, O.Cull, 'Cacher faces arriere'); Option(310, O.Dither,
-  'Tramage des couleurs'); 
+  'Tramage des couleurs');
   OutTextXY(X+320,Y+338,'Glisser l''apercu : orbite');
   OutTextXY(X+320,Y+356,'Geometrie en memoire');
   SetColor(Black);S:=Message;
@@ -9429,7 +9429,7 @@ Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
   If Name<>M^.Source Then Begin Dirty:=True;Exit;End;
   If ImportMeshLayer(M,O,Target) Then Done:=True
    Else Begin Message:='Import annule, memoire ou limite de calques.';
-   Dirty:=True; End; 
+   Dirty:=True; End;
  End;
 Begin
  ResetToolTip;MenuActive:=False;M:=Nil;Preview:=Nil;
@@ -9488,7 +9488,7 @@ Begin
     End;
    End Else Case K Of
     #27:Done:=True; #15:Browse; #9:Begin Field:=(Field+1) Mod 7;
-    ReplaceText:=True; Dirty:=True; End; 
+    ReplaceText:=True; Dirty:=True; End;
     #13:If Field=0 Then Load Else Apply;
     #1:ReplaceText:=True;
     #8:Begin
@@ -9503,7 +9503,7 @@ Begin
     Else If K>=' ' Then Begin
      If Field=0 Then Begin
       If ReplaceText Then Name:=''; If Length(Name)<255 Then Name:=Name+K;
-      Dirty:=True; 
+      Dirty:=True;
      End Else If K In ['0'..'9','+','-','.',','] Then Begin
       If ReplaceText Then Texts[Field-1]:='';
       If Length(Texts[Field-1])<9 Then Texts[Field-1]:=Texts[Field-1]+K;Change;

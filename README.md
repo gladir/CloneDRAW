@@ -14,6 +14,10 @@ Aperçu de Photoshop :
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ab226dc6-fea2-489b-a5bb-dc7eb6a5b462" /></td>
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/18f01429-bd6e-4f02-980a-0c309f5adb1c" /></td>
 	</tr>
+	<tr>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/f8c26a4d-21c0-45a8-a3be-e3185726f93b" /></td>
+		<td></td>
+	</tr>
 </table>
 
 

@@ -537,7 +537,7 @@ Begin
  SetMenuItem(MENU_FILTER, 1, 'Niveaux gris',   '',       False);
  SetMenuItem(MENU_FILTER, 2, 'Lumiere +',      '',       False);
  SetMenuItem(MENU_FILTER, 3, 'Lumiere -',      '',       False);
- SetMenuItem(MENU_FILTER, 4, 'Flou',           '',       False);
+ SetMenuItem(MENU_FILTER, 4, 'Flou...',           '',       False);
  SetMenuItem(MENU_FILTER, 5, 'Nettete',        '',       False);
 
  Menus[MENU_3D].ItemCount := 39;
@@ -1497,6 +1497,154 @@ Begin
  For I:=0 To MAX_LAYERS-1 Do Layers[I].Pixels:=NewPixels[I];
  ImgW:=W;ImgH:=H;ImageDPI:=DPI;ImageModified:=True;
  SelectionActive:=False;ApplyImageSize:=True;
+End;
+
+Type TBlurPixels=Array[0..MAX_LAYERS-1] Of PByteArr;
+ TBlurOptions=Record
+  Angle,Distance,Amount,Passes,Samples,Edges:Integer;
+  AllLayers,Dither:Boolean;
+ End;
+Function BlurPalette(R,G,B:Double;X,Y:Integer;Dither:Boolean):Byte;
+Const Bayer:Array[0..15] Of Byte=(0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);
+Var I,First,Second:Integer;D,D1,D2,T,Den,DR,DG,DB:Double;
+Begin
+ First:=0;Second:=0;D1:=1E30;D2:=1E30;
+ For I:=0 To 15 Do Begin
+  D:=Sqr(R-VGA_R[I])+Sqr(G-VGA_G[I])+Sqr(B-VGA_B[I]);
+  If D<D1 Then Begin D2:=D1;Second:=First;D1:=D;First:=I;End
+  Else If D<D2 Then Begin D2:=D;Second:=I;End;
+ End;
+ BlurPalette:=First;If Not Dither Or (D1<0.000001) Then Exit;
+ DR:=VGA_R[Second]-VGA_R[First];DG:=VGA_G[Second]-VGA_G[First];
+ DB:=VGA_B[Second]-VGA_B[First];Den:=DR*DR+DG*DG+DB*DB;
+ If Den=0 Then Exit;
+ T:=((R-VGA_R[First])*DR+(G-VGA_G[First])*DG+
+  (B-VGA_B[First])*DB)/Den;
+ If T>(Bayer[(Y And 3)*4+(X And 3)]+0.5)/16 Then BlurPalette:=Second;
+End;
+Function BlurCoordinate(V,Size,Edge:Integer):Integer;
+Begin
+ If Edge=0 Then V:=Max(0,Min(Size-1,V))
+ Else If Edge=1 Then Begin
+  If Size=1 Then V:=0
+  Else Begin
+   V:=V Mod (Size*2);If V<0 Then Inc(V,Size*2);
+   If V>=Size Then V:=Size*2-1-V;
+  End;
+ End;
+ BlurCoordinate:=V;
+End;
+Function BlurPixel(Source:PByteArr;X,Y:Integer;Const O:TBlurOptions;
+ C,S:Double):Byte;
+Var I,SX,SY,Value:Integer;T,R,G,B,A,Weight,OriginWeight:Double;
+ Procedure Accumulate(PX,PY:Integer;W:Double);
+ Var V:Byte;
+ Begin
+  PX:=BlurCoordinate(PX,ImgW,O.Edges);PY:=BlurCoordinate(PY,ImgH,O.Edges);
+  If (PX<0) Or (PY<0) Or (PX>=ImgW) Or (PY>=ImgH) Then Exit;
+  V:=Source^[LongInt(PY)*ImgW+PX];If V=255 Then Exit;
+  V:=V And 15;A:=A+W;R:=R+VGA_R[V]*W;
+  G:=G+VGA_G[V]*W;B:=B+VGA_B[V]*W;
+ End;
+Begin
+ If (O.Distance=0) Or (O.Amount=0) Then Begin
+  BlurPixel:=Source^[LongInt(Y)*ImgW+X];Exit;
+ End;
+ R:=0;G:=0;B:=0;A:=0;Weight:=O.Amount/(100.0*O.Samples);
+ For I:=0 To O.Samples-1 Do Begin
+  T:=(I/(O.Samples-1)-0.5)*O.Distance;
+  SX:=Trunc(X+C*T+0.5+65536)-65536;
+  SY:=Trunc(Y+S*T+0.5+65536)-65536;Accumulate(SX,SY,Weight);
+ End;
+ OriginWeight:=1-O.Amount/100.0;Accumulate(X,Y,OriginWeight);
+ BlurPixel:=255;If A<0.5 Then Exit;
+ BlurPixel:=BlurPalette(R/A,G/A,B/A,X,Y,O.Dither);
+End;
+Function BlurOptionsValid(Const O:TBlurOptions):Boolean;
+Begin
+ BlurOptionsValid:=(O.Angle>=0) And (O.Angle<=3600) And
+  (O.Distance>=0) And (O.Distance<=512) And (O.Amount>=0) And
+  (O.Amount<=100) And (O.Passes>=1) And (O.Passes<=8) And
+  (O.Samples>=3) And (O.Samples<=1025) And (O.Edges>=0) And (O.Edges<=2);
+End;
+Function BuildBlurLayer(Source:PByteArr;Const O:TBlurOptions;
+ Progress:Boolean;Var Output:PByteArr):Boolean;
+Var A,B,Tmp:PByteArr;Size:LongInt;X,Y,Pass:Integer;C,S:Double;K:Char;
+ Failed:Boolean;
+Begin
+ BuildBlurLayer:=False;Output:=Nil;Size:=LongInt(ImgW)*ImgH;
+ A:=PByteArr(RotationAllocate(Size));B:=PByteArr(RotationAllocate(Size));
+ If (A=Nil) Or (B=Nil) Then Begin
+  If A<>Nil Then FreeMem(A,Size);If B<>Nil Then FreeMem(B,Size);Exit;
+ End;
+ Move(Source^,A^,Size);RotationBasis(O.Angle,True,C,S);Failed:=False;
+ For Pass:=1 To O.Passes Do Begin
+  For Y:=0 To ImgH-1 Do Begin
+   If Progress And (Y Mod 16=0) Then Begin
+    HideMouseCursor;
+    FillRect(20,ScreenHeight-45,ScreenWidth-20,ScreenHeight-23,LightGray);
+    SetColor(Black);OutTextXY(28,ScreenHeight-38,
+     'Calcul du flou - passe '+IntToStr(Pass)+'/'+IntToStr(O.Passes)+
+     ' - '+IntToStr(LongInt(Y)*100 Div ImgH)+'% - Echap : annuler');
+    ShowMouseCursor;
+   End;
+   If Progress Then If KeyPressed Then Begin
+    K:=ReadKey;If K=#27 Then Failed:=True;
+   End;
+   If Failed Then Break;
+   For X:=0 To ImgW-1 Do B^[LongInt(Y)*ImgW+X]:=BlurPixel(A,X,Y,O,C,S);
+  End;
+  If Failed Then Break;Tmp:=A;A:=B;B:=Tmp;
+ End;
+ FreeMem(B,Size);
+ If Failed Then FreeMem(A,Size)
+ Else Begin Output:=A;BuildBlurLayer:=True;End;
+End;
+Procedure FreeBlurPixels(Var Pixels:TBlurPixels);
+Var I:Integer;
+Begin
+ For I:=0 To MAX_LAYERS-1 Do If Pixels[I]<>Nil Then Begin
+  FreeMem(Pixels[I],LongInt(ImgW)*ImgH);Pixels[I]:=Nil;
+ End;
+End;
+Function BuildBlurPixels(Const O:TBlurOptions;Progress:Boolean;
+ Var Pixels:TBlurPixels):Boolean;
+Var I:Integer;Size:LongInt;OK:Boolean;
+Begin
+ BuildBlurPixels:=False;FillChar(Pixels,SizeOf(Pixels),0);
+ If Not BlurOptionsValid(O) Or (ImgW<1) Or (ImgH<1) Or
+  (ImgW>4096) Or (ImgH>4096) Then Exit;
+ Size:=LongInt(ImgW)*ImgH;
+ For I:=0 To MAX_LAYERS-1 Do If Layers[I].Used Then Begin
+  If O.AllLayers Or (I=ActiveLayer) Then
+   OK:=BuildBlurLayer(Layers[I].Pixels,O,Progress,Pixels[I])
+  Else Begin
+   Pixels[I]:=PByteArr(RotationAllocate(Size));OK:=Pixels[I]<>Nil;
+   If OK Then Move(Layers[I].Pixels^,Pixels[I]^,Size);
+  End;
+  If Not OK Then Begin FreeBlurPixels(Pixels);Exit;End;
+ End;
+ BuildBlurPixels:=True;
+End;
+Function ApplyMotionBlur(Const O:TBlurOptions;Progress:Boolean):Boolean;
+Var Pixels:TBlurPixels;R:PRotationUndo;I:Integer;
+Begin
+ ApplyMotionBlur:=False;If Not BlurOptionsValid(O) Then Exit;
+ If (O.Amount=0) Or (O.Distance=0) Then Begin ApplyMotionBlur:=True;Exit;End;
+ R:=PRotationUndo(RotationAllocate(SizeOf(TRotationUndo)));
+ If R=Nil Then Exit;
+ If Not BuildBlurPixels(O,Progress,Pixels) Then Begin
+  FreeMem(R,SizeOf(TRotationUndo));Exit;
+ End;
+ R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
+ R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
+ R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
+ R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
+ For I:=0 To MAX_LAYERS-1 Do R^.Saved[I]:=Layers[I];
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);
+ For I:=0 To MAX_LAYERS-1 Do Layers[I].Pixels:=Pixels[I];
+ ImageModified:=True;ApplyMotionBlur:=True;
 End;
 
 Procedure RotateLayer90(Clockwise:Boolean);
@@ -6572,6 +6720,248 @@ Begin
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
+Procedure MotionBlurDialog;
+Var O:TBlurOptions;Cache:TBlurPixels;CacheDirty,CacheReady,Before,
+ AutoPreview,Dirty,Done,ReplaceText,Valid:Boolean;
+ X,Y,W,H,Field,Quality,MX,MY,MB,Previous,I,Code,Drag:Integer;
+ Texts:Array[0..3] Of String;Message:String;LastChange:LongInt;
+ K,E:Char;V,A,DX,DY:Double;
+ Procedure Sync;
+ Var T:String;
+ Begin
+  Str(O.Angle/10:0:1,T);Texts[0]:=T;
+  Texts[1]:=IntToStr(O.Distance);Texts[2]:=IntToStr(O.Amount);
+  Texts[3]:=IntToStr(O.Passes);
+ End;
+ Procedure Changed;
+ Begin
+  CacheDirty:=True;Dirty:=True;LastChange:=ToolTipClock;Message:='';
+  Case Quality Of 0:O.Samples:=17;1:O.Samples:=33;2:O.Samples:=65;
+   3:O.Samples:=129;4:O.Samples:=Min(1025,Max(3,O.Distance*2+1));End;
+ End;
+ Procedure Reset;
+ Begin
+  O.Angle:=0;O.Distance:=10;O.Amount:=100;O.Passes:=1;O.Edges:=0;
+  O.AllLayers:=False;O.Dither:=True;Quality:=0;
+  Before:=False;AutoPreview:=True;Field:=0;ReplaceText:=True;Valid:=True;
+  Sync;Changed;
+ End;
+ Procedure Change;
+ Var T:String;J:Integer;
+ Begin
+  T:=Texts[Field];For J:=1 To Length(T) Do If T[J]=',' Then T[J]:='.';
+  Val(T,V,Code);Valid:=(Code=0);Dirty:=True;
+  If Valid Then Case Field Of
+   0:Valid:=(V>=0) And (V<=360);
+   1:Valid:=(V>=0) And (V<=512) And (V=Trunc(V));
+   2:Valid:=(V>=0) And (V<=100) And (V=Trunc(V));
+   3:Valid:=(V>=1) And (V<=8) And (V=Trunc(V));
+  End;
+  If Not Valid Then Begin Message:='Valeur hors limites.';Exit;End;
+  Case Field Of 0:O.Angle:=Round(V*10);1:O.Distance:=Round(V);
+   2:O.Amount:=Round(V);3:O.Passes:=Round(V);End;
+  Changed;
+ End;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+24,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+24,True);SetColor(Black);
+  OutTextXY(X+L+7,Y+T+8,Caption);
+ End;
+ Procedure Option(T:Integer;Checked:Boolean;Const Caption:String);
+ Begin
+  SetColor(Black);Rectangle(X+20,Y+T,X+32,Y+T+12);
+  If Checked Then Begin
+   Line(X+22,Y+T+6,X+25,Y+T+10);Line(X+25,Y+T+10,X+31,Y+T+2);
+  End;
+  OutTextXY(X+40,Y+T+3,Caption);
+ End;
+ Function QualityName:String;
+ Begin QualityName:=IntToStr(O.Samples)+' echantillons';End;
+ Function EdgeName:String;
+ Begin Case O.Edges Of 0:EdgeName:='Repeter';1:EdgeName:='Miroir';
+   Else EdgeName:='Transparent';End;End;
+ Procedure RefreshPreview;
+ Begin
+  If Not Valid Then Exit;FreeBlurPixels(Cache);CacheReady:=False;
+  CacheReady:=BuildBlurPixels(O,True,Cache);CacheDirty:=False;
+  If Not CacheReady Then Message:='Apercu annule ou memoire insuffisante.';
+  Dirty:=True;
+ End;
+ Procedure Draw;
+ Var PX,PY,SX,SY,J,CX,CY,R,TX,TY,T:Integer;Scale:Double;
+     Color:Byte;Caption:String;
+ Begin
+  HideMouseCursor;FillRect(X,Y,X+W,Y+H,LightGray);
+  DrawBevel(X,Y,X+W,Y+H,True);
+  FillRect(X+3,Y+3,X+W-3,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Flou directionnel - angle, distance et passes');
+  SetColor(Black);OutTextXY(X+20,Y+40,'Apercu - palette VGA 16 couleurs');
+  Scale:=Min(244000 Div ImgW,182000 Div ImgH)/1000;
+  If Scale<=0 Then Scale:=0.001;
+  For PY:=0 To 193 Do For PX:=0 To 259 Do Begin
+   SX:=Trunc((PX-129.5)/Scale+(ImgW-1)/2+0.5+65536)-65536;
+   SY:=Trunc((PY-96.5)/Scale+(ImgH-1)/2+0.5+65536)-65536;
+   Color:=255;
+   If (SX>=0) And (SY>=0) And (SX<ImgW) And (SY<ImgH) Then Begin
+    If Before Or Not CacheReady Then Color:=Composite(SX,SY)
+    Else For J:=LayerCount-1 DownTo 0 Do
+     If Layers[J].Used And Layers[J].Visible Then Begin
+      Color:=Cache[J]^[LongInt(SY)*ImgW+SX];If Color<>255 Then Break;
+     End;
+   End;
+   If Color=255 Then Begin Color:=LightGray;
+    If ((PX Div 8+PY Div 8) And 1)=0 Then Color:=White;End;
+   PutPixel(X+20+PX,Y+54+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+19,Y+53,X+280,Y+248);
+  If Before Then Caption:='AVANT' Else If CacheDirty Then
+  Caption:='A ACTUALISER'
+   Else Caption:='APRES';OutTextXY(X+28,Y+61,Caption);
+  Button(20,254,115,'Avant / Apres');Button(148,254,132,'Actualiser (P)');
+  Option(286,O.AllLayers,'Tous les calques');
+  Option(308,O.Dither,'Tramage des couleurs');
+  Option(330,AutoPreview,'Apercu automatique');
+  Button(20,354,260,'Bords : '+EdgeName+' >');
+  CX:=X+450;CY:=Y+126;R:=62;
+  SetFillStyle(SolidFill,White);FillEllipse(CX,CY,R,R);
+  SetColor(DarkGray);Circle(CX,CY,R);
+  For J:=0 To 35 Do Begin
+   A:=J*Pi/18;Line(CX+Round(Cos(A)*66),CY+Round(Sin(A)*66),
+    CX+Round(Cos(A)*71),CY+Round(Sin(A)*71));
+  End;
+  SetColor(Black);OutTextXY(CX+78,CY-3,'0');
+  OutTextXY(CX-8,CY+79,'90');OutTextXY(CX-104,CY-3,'180');
+  OutTextXY(CX-12,CY-87,'270');
+  A:=O.Angle*Pi/1800;TX:=Round(Cos(A)*52);TY:=Round(Sin(A)*52);
+  SetColor(Blue);SetLineStyle(SolidLn,0,ThickWidth);
+  Line(CX-TX,CY-TY,CX+TX,CY+TY);SetLineStyle(SolidLn,0,NormWidth);
+  SetFillStyle(SolidFill,Blue);FillEllipse(CX+TX,CY+TY,5,5);
+  For J:=0 To 3 Do Begin
+   T:=228+J*32;SetColor(Black);
+   Case J Of 0:Caption:='Angle (deg)';1:Caption:='Distance';
+    2:Caption:='Force (%)';3:Caption:='Passes';End;
+   OutTextXY(X+302,Y+T+8,Caption);
+   FillRect(X+393,Y+T,X+497,Y+T+23,White);
+   If J=Field Then SetColor(Blue) Else SetColor(DarkGray);
+   Rectangle(X+393,Y+T,X+497,Y+T+23);SetColor(Black);
+   OutTextXY(X+400,Y+T+8,Texts[J]);
+   Button(506,T,32,'-');Button(550,T,36,'+');
+  End;
+  SetColor(DarkGray);Line(X+302,Y+287,X+594,Y+287);
+  SetFillStyle(SolidFill,Blue);
+  FillEllipse(X+302+Round(O.Distance*292.0/512),Y+287,4,4);
+  Button(302,356,292,'Qualite : '+QualityName+' >');
+  SetColor(Black);Caption:=Message;
+  If Caption='' Then
+  Caption:='Distance : 0..512 px. Passes : 1..8. Echap annule.';
+  OutTextXY(X+20,Y+383,Caption);
+  Button(20,400,105,'Reinitialiser');Button(136,400,55,'0 deg');
+  Button(202,400,65,'90 deg');Button(380,400,96,'Annuler');
+  Button(490,400,105,'Appliquer');ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Adjust(Delta:Integer);
+ Begin
+  Case Field Of
+   0:O.Angle:=Max(0,Min(3600,O.Angle+Delta));
+   1:O.Distance:=Max(0,Min(512,O.Distance+Delta));
+   2:O.Amount:=Max(0,Min(100,O.Amount+Delta));
+   3:O.Passes:=Max(1,Min(8,O.Passes+Delta));
+  End;
+  Valid:=True;Sync;Changed;ReplaceText:=True;
+ End;
+ Procedure Dial;
+ Begin
+  DX:=MX-(X+450);DY:=MY-(Y+126);If Abs(DX)+Abs(DY)<4 Then Exit;
+  If DX=0 Then Begin If DY>=0 Then A:=90 Else A:=270;End
+  Else Begin A:=ArcTan(DY/DX)*180/Pi;
+   If DX<0 Then A:=A+180;If A<0 Then A:=A+360;End;
+  O.Angle:=Round(A*10);Valid:=True;Sync;Changed;
+ End;
+ Procedure Slider;
+ Begin
+  O.Distance:=Max(0,Min(512,Round((MX-X-302)*512.0/292)));
+  Valid:=True;Sync;Changed;
+ End;
+ Procedure Apply;
+ Begin
+  If Not Valid Then Exit;
+  If ApplyMotionBlur(O,True) Then Done:=True
+   Else Begin Message:='Calcul annule ou memoire insuffisante.';Dirty:=True;End;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;FillChar(Cache,SizeOf(Cache),0);
+ CacheReady:=False;W:=620;H:=430;X:=(ScreenWidth-W) Div 2;
+ Y:=(ScreenHeight-H) Div 2;Done:=False;Drag:=0;Reset;
+ GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If AutoPreview And CacheDirty And Valid And Not Before And
+   ((Previous And 1)=0) Then Begin
+   I:=0;V:=ToolTipClock-LastChange;If V<0 Then V:=V+8640000;
+   If V>=30 Then I:=1;
+   If I=1 Then RefreshPreview;
+  End;
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(373,49,527,204) Then Begin Drag:=1;Dial;End
+   Else If Hit(302,282,595,291) Then Begin Drag:=2;Slider;End
+   Else If Hit(393,228,497,347) Then Begin
+    Field:=(MY-Y-228) Div 32;Field:=Min(3,Field);ReplaceText:=True;
+    Dirty:=True;
+   End Else If Hit(506,228,586,347) Then Begin
+    Field:=Min(3,(MY-Y-228) Div 32);
+    I:=1;If MX<X+542 Then I:=-1;
+    If Field=0 Then I:=I*10;Adjust(I);
+   End Else If Hit(20,254,135,278) Then Begin Before:=Not Before;Dirty:=True;End
+   Else If Hit(148,254,280,278) Then RefreshPreview
+   Else If Hit(20,286,280,298) Then Begin O.AllLayers:=Not
+   O.AllLayers;Changed;End
+   Else If Hit(20,308,280,320) Then Begin O.Dither:=Not O.Dither;Changed;End
+   Else If Hit(20,330,280,342) Then Begin AutoPreview:=Not
+   AutoPreview;Dirty:=True;End
+   Else If Hit(20,354,280,378) Then Begin O.Edges:=(O.Edges+1) Mod 3;Changed;End
+   Else If Hit(302,356,594,380) Then Begin Quality:=(Quality+1) Mod
+   5;Changed;End
+   Else If Hit(20,400,125,424) Then Reset
+   Else If Hit(136,400,191,424) Then Begin O.Angle:=0;Sync;Changed;End
+   Else If Hit(202,400,267,424) Then Begin O.Angle:=900;Sync;Changed;End
+   Else If Hit(380,400,476,424) Then Done:=True
+   Else If Hit(490,400,595,424) Then Apply;
+  End;
+  If (MB And 1)<>0 Then Begin
+   If Drag=1 Then Dial Else If Drag=2 Then Slider;
+  End;
+  If (MB And 1)=0 Then Drag:=0;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then Begin E:=ReadKey;
+    If E=#72 Then Adjust(1) Else If E=#80 Then Adjust(-1);
+    If E=#75 Then Begin Field:=0;Adjust(-10);End;
+    If E=#77 Then Begin Field:=0;Adjust(10);End;
+   End Else Case K Of
+    #27:Done:=True;#13:Apply;#9:Begin Field:=(Field+1) Mod
+    4;ReplaceText:=True;Dirty:=True;End;
+    #8:Begin
+     If ReplaceText Then Texts[Field]:=''
+      Else Delete(Texts[Field],Length(Texts[Field]),1);
+     ReplaceText:=False;Change;
+    End;
+    '0'..'9','.',',':Begin
+     If ReplaceText Then Texts[Field]:='';ReplaceText:=False;
+     If Length(Texts[Field])<8 Then Texts[Field]:=Texts[Field]+K;Change;
+    End;
+    'r','R':Reset;'p','P':RefreshPreview;
+    'v','V':Begin Before:=Not Before;Dirty:=True;End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ FreeBlurPixels(Cache);GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
@@ -6625,7 +7015,7 @@ Begin
    1: Begin FilterGray; DrawFullUI; End;
    2: Begin FilterBrighter; DrawFullUI; End;
    3: Begin FilterDarker; DrawFullUI; End;
-   4: Begin FilterBlur; DrawFullUI; End;
+   4: MotionBlurDialog;
    5: Begin FilterSharpen; DrawFullUI; End;
   End;
   MENU_3D: ShowDialog('3D', 'Fonction 3D non implementee dans cette version.');

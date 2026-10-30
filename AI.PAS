@@ -36,6 +36,11 @@ Const
  
  MENUBAR_HEIGHT = 18;
  TOOLBAR_WIDTH = 48;
+ TOOL_BUTTON_LEFT = 8;
+ TOOL_BUTTON_WIDTH = 30;
+ TOOL_BUTTON_HEIGHT = 23;
+ TOOL_BUTTON_STEP = 25;
+ TOOLTIP_DELAY = 50; { Centiemes de seconde, comme PAINT.PAS. }
  STATUSBAR_HEIGHT = 20;
  
  COLOR_BG = 7;
@@ -207,6 +212,9 @@ Var
  DialogTitle: String[40];
  DialogText: String[65];
  StatusMessage: String[75];
+ ToolTipVisible: Boolean;
+ ToolTipCandidate: Integer;
+ ToolTipStarted: LongInt;
 
 Procedure InitMouse;
 {$IFNDEF FPC}
@@ -309,37 +317,199 @@ Begin
  End;
 End;
 
+Function ToolButtonTop(Index: Integer): Integer;
+Begin
+ ToolButtonTop := MENUBAR_HEIGHT+5+Index*TOOL_BUTTON_STEP;
+End;
+
+Function ToolHitTest(X, Y: Integer): Integer;
+Var I: Integer;
+Begin
+ ToolHitTest := -1;
+ If (X < TOOL_BUTTON_LEFT) Or
+    (X >= TOOL_BUTTON_LEFT+TOOL_BUTTON_WIDTH) Or
+    (Y < ToolButtonTop(0)) Then Exit;
+ I := (Y-ToolButtonTop(0)) Div TOOL_BUTTON_STEP;
+ If I >= MAX_TOOLS Then Exit;
+ If Y < ToolButtonTop(I)+TOOL_BUTTON_HEIGHT Then ToolHitTest := I;
+End;
+
+Function ToolTipText(Index: Integer): String;
+Var S: String;
+Begin
+ S := '';
+ Case Index Of
+  TOOL_SELECT: S := 'Selection - non implementee';
+  TOOL_RECTANGLE: S := 'Rectangle (2) - glisser pour dessiner';
+  TOOL_ELLIPSE: S := 'Cercle (3) - glisser pour dessiner';
+  TOOL_LINE: S := 'Ligne (4) - glisser pour dessiner';
+  TOOL_BEZIER: S := 'Courbe de Bezier - non implementee';
+  TOOL_PENCIL: S := 'Crayon - non implemente';
+  TOOL_PEN: S := 'Plume - non implementee';
+  TOOL_TEXT: S := 'Texte - non implemente';
+  TOOL_ZOOM: S := 'Loupe - non implementee';
+  TOOL_HAND: S := 'Main - non implementee';
+ End;
+ ToolTipText := S;
+End;
+
+Function ToolTipClock: LongInt;
+Var H, M, S, HS: Word;
+Begin
+ GetTime(H, M, S, HS);
+ ToolTipClock := ((LongInt(H)*60+M)*60+S)*100+HS;
+End;
+
+Procedure ResetToolTip;
+Begin
+ If ToolTipVisible Then NeedsRedraw := True;
+ ToolTipVisible := False;
+ ToolTipCandidate := -1;
+End;
+
+Procedure UpdateToolTipAt(Now: LongInt);
+Var Index: Integer; Elapsed: LongInt;
+Begin
+ Index := -1;
+ If Not MenuActive And Not DrawingMode And (DialogTitle = '') And
+    (MouseButtons = 0) Then Index := ToolHitTest(MouseX, MouseY);
+ If (Index <> ToolTipCandidate) Or (MouseX <> OldMouseX) Or
+    (MouseY <> OldMouseY) Then Begin
+  ResetToolTip;
+  ToolTipCandidate := Index;
+  ToolTipStarted := Now;
+ End;
+ If Index < 0 Then Exit;
+ Elapsed := Now-ToolTipStarted;
+ If Elapsed < 0 Then Inc(Elapsed, 8640000);
+ If Not ToolTipVisible And (Elapsed >= TOOLTIP_DELAY) Then Begin
+  ToolTipVisible := True;
+  NeedsRedraw := True;
+ End;
+End;
+
+Procedure DrawToolTip;
+Var S: String; X, Y, W, H: Integer;
+Begin
+ If Not ToolTipVisible Then Exit;
+ S := ToolTipText(ToolTipCandidate);
+ W := TextWidth(S)+16;
+ H := TextHeight(S)+12;
+ X := TOOLBAR_WIDTH+6;
+ Y := ToolButtonTop(ToolTipCandidate)+TOOL_BUTTON_HEIGHT;
+ If X+W+3 >= ScreenWidth Then X := ScreenWidth-W-4;
+ If Y+H+3 >= ScreenHeight-STATUSBAR_HEIGHT Then
+  Y := ScreenHeight-STATUSBAR_HEIGHT-H-4;
+ SetFillStyle(SolidFill, COLOR_BORDER);
+ Bar(X+3, Y+3, X+W+3, Y+H+3);
+ SetFillStyle(SolidFill, Yellow);
+ Bar(X, Y, X+W, Y+H);
+ SetColor(COLOR_TEXT);
+ Rectangle(X, Y, X+W, Y+H);
+ OutTextXY(X+8, Y+6, S);
+End;
+
+Procedure DrawToolIcon(X, Y, Index: Integer);
+Begin
+ Case Index Of
+  TOOL_SELECT: Begin
+   Line(X+3,Y+1,X+3,Y+15);
+   Line(X+3,Y+1,X+13,Y+10);
+   Line(X+3,Y+15,X+7,Y+11);
+   Line(X+7,Y+11,X+10,Y+17);
+   Line(X+10,Y+17,X+13,Y+16);
+   Line(X+13,Y+16,X+10,Y+10);
+   Line(X+10,Y+10,X+13,Y+10);
+  End;
+  TOOL_RECTANGLE: Rectangle(X+1,Y+4,X+16,Y+14);
+  TOOL_ELLIPSE: Ellipse(X+9,Y+9,0,360,8,6);
+  TOOL_LINE: Line(X+1,Y+16,X+17,Y+1);
+  TOOL_BEZIER: Begin
+   Arc(X+8,Y+9,0,180,6);
+   Line(X+2,Y+9,X+2,Y+16);
+   Line(X+14,Y+9,X+14,Y+2);
+   Rectangle(X,Y+14,X+4,Y+18);
+   Rectangle(X+12,Y,X+16,Y+4);
+  End;
+  TOOL_PENCIL: Begin
+   Line(X+2,Y+13,X+13,Y+2);
+   Line(X+13,Y+2,X+16,Y+5);
+   Line(X+16,Y+5,X+5,Y+16);
+   Line(X+5,Y+16,X+1,Y+17);
+   Line(X+1,Y+17,X+2,Y+13);
+   Line(X+11,Y+4,X+14,Y+7);
+  End;
+  TOOL_PEN: Begin
+   Line(X+9,Y+1,X+2,Y+11);
+   Line(X+9,Y+1,X+16,Y+11);
+   Line(X+2,Y+11,X+5,Y+16);
+   Line(X+16,Y+11,X+13,Y+16);
+   Line(X+5,Y+16,X+13,Y+16);
+   Line(X+9,Y+1,X+9,Y+10);
+   Circle(X+9,Y+11,2);
+  End;
+  TOOL_TEXT: Begin
+   Line(X+2,Y+3,X+16,Y+3);
+   Line(X+2,Y+3,X+2,Y+6);
+   Line(X+16,Y+3,X+16,Y+6);
+   Line(X+9,Y+3,X+9,Y+16);
+   Line(X+6,Y+16,X+12,Y+16);
+  End;
+  TOOL_ZOOM: Begin
+   Circle(X+7,Y+7,6);
+   Line(X+11,Y+12,X+17,Y+18);
+   Line(X+12,Y+11,X+18,Y+17);
+  End;
+  TOOL_HAND: Begin
+   Line(X+5,Y+16,X+1,Y+10);
+   Line(X+1,Y+10,X+3,Y+8);
+   Line(X+3,Y+8,X+6,Y+11);
+   Line(X+6,Y+11,X+6,Y+3);
+   Line(X+6,Y+3,X+8,Y+3);
+   Line(X+8,Y+3,X+8,Y+8);
+   Line(X+8,Y+8,X+8,Y+1);
+   Line(X+8,Y+1,X+10,Y+1);
+   Line(X+10,Y+1,X+10,Y+8);
+   Line(X+10,Y+8,X+12,Y+3);
+   Line(X+12,Y+3,X+14,Y+4);
+   Line(X+14,Y+4,X+14,Y+9);
+   Line(X+14,Y+9,X+16,Y+6);
+   Line(X+16,Y+6,X+18,Y+7);
+   Line(X+18,Y+7,X+16,Y+16);
+   Line(X+16,Y+16,X+5,Y+16);
+  End;
+ End;
+End;
+
 Procedure DrawToolbar;
-Var
- ToolNames: Array[0..9] of String[3];
- I, Y: Integer;
+Var I, X, Y, R, B: Integer;
 Begin
  SetFillStyle(SolidFill, COLOR_BG);
  Bar(0, MENUBAR_HEIGHT, TOOLBAR_WIDTH - 1, ScreenHeight - STATUSBAR_HEIGHT - 1);
  SetColor(COLOR_BORDER);
  Line(TOOLBAR_WIDTH - 1, MENUBAR_HEIGHT, TOOLBAR_WIDTH - 1, ScreenHeight - STATUSBAR_HEIGHT - 1);
  
- ToolNames[0] := 'SEL';
- ToolNames[1] := 'REC';
- ToolNames[2] := 'ELL';
- ToolNames[3] := 'LIN';
- ToolNames[4] := 'BEZ';
- ToolNames[5] := 'PNC';
- ToolNames[6] := 'PEN';
- ToolNames[7] := 'TXT';
- ToolNames[8] := 'ZOM';
- ToolNames[9] := 'HND';
- 
- Y := MENUBAR_HEIGHT + 5;
- For I := 0 To 9 Do
- Begin
-  If I = CurrentTool Then
-   SetColor(COLOR_HIGHLIGHT)
-  Else If I <= TOOL_LINE Then
-   SetColor(COLOR_TEXT);
-  If I > TOOL_LINE Then SetColor(COLOR_BORDER);
-  OutTextXY(5, Y, ToolNames[I]);
-  Y := Y + 25;
+ SetLineStyle(SolidLn, 0, NormWidth);
+ X := TOOL_BUTTON_LEFT;
+ For I := 0 To MAX_TOOLS-1 Do Begin
+  Y := ToolButtonTop(I);
+  R := X+TOOL_BUTTON_WIDTH-1;
+  B := Y+TOOL_BUTTON_HEIGHT-1;
+  If I = CurrentTool Then SetFillStyle(SolidFill, COLOR_HIGHLIGHT)
+  Else SetFillStyle(SolidFill, COLOR_BG);
+  Bar(X,Y,R,B);
+  If I = CurrentTool Then SetColor(COLOR_BORDER)
+  Else SetColor(COLOR_WINDOW);
+  Line(X,Y,R,Y);
+  Line(X,Y,X,B);
+  If I = CurrentTool Then SetColor(COLOR_WINDOW)
+  Else SetColor(COLOR_BORDER);
+  Line(X,B,R,B);
+  Line(R,Y,R,B);
+  If I = CurrentTool Then SetColor(COLOR_WINDOW)
+  Else If I > TOOL_LINE Then SetColor(COLOR_BORDER)
+  Else SetColor(COLOR_TEXT);
+  DrawToolIcon(X+6,Y+2,I);
  End;
 End;
 
@@ -463,8 +633,8 @@ Begin
     (MouseY >= ScreenHeight-STATUSBAR_HEIGHT) Or
     (MouseX >= ScreenWidth) Then Exit;
  If MouseX < TOOLBAR_WIDTH Then Begin
-  I := (MouseY-MENUBAR_HEIGHT-5) Div 25;
-  If (MouseY >= MENUBAR_HEIGHT+5) And (I < MAX_TOOLS) Then
+  I := ToolHitTest(MouseX, MouseY);
+  If I >= 0 Then
    If I <= TOOL_LINE Then CurrentTool := I
    Else StatusMessage := 'Outil non implemente.';
   Exit;
@@ -705,6 +875,7 @@ End;
 
 Procedure OpenMenu(M: Integer);
 Begin
+ ResetToolTip;
  MenuActive := True;
  ActiveMenu := M;
  ActiveMenuItem := -1;
@@ -748,6 +919,7 @@ End;
 
 Procedure ShowDialog(Title, MessageText: String);
 Begin
+ ResetToolTip;
  DialogTitle := Title;
  DialogText := MessageText;
  NeedsRedraw := True;
@@ -848,6 +1020,7 @@ Begin
   End;
  End;
  If Released Then MenuMouseDown := False;
+ UpdateToolTipAt(ToolTipClock);
  OldMouseButtons := MouseButtons;
  OldMouseX := MouseX;
  OldMouseY := MouseY;
@@ -871,6 +1044,7 @@ End;
 
 Procedure HandleKey(Key, ExtKey: Char);
 Begin
+ ResetToolTip;
  NeedsRedraw := True;
  If DialogTitle <> '' Then Begin
   If Key = #13 Then Begin
@@ -932,6 +1106,7 @@ Begin
   OutTextXY(58, 205, DialogText);
   OutTextXY(58, 250, 'Entree / Echap. Un clic ferme sans confirmer.');
  End;
+ DrawToolTip;
  ShowMouse;
  NeedsRedraw := False;
 End;
@@ -1052,6 +1227,9 @@ Begin
  OldMouseButtons := 0;
  OldMouseX := -1;
  OldMouseY := -1;
+ ToolTipVisible := False;
+ ToolTipCandidate := -1;
+ ToolTipStarted := 0;
  LayerCount := 1;
  CurrentLayer := 0;
  

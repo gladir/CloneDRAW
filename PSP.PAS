@@ -574,11 +574,13 @@ Begin
  SetMenuItem(MENU_FILE, 11, '-',                  '',               True);
  SetMenuItem(MENU_FILE, 12, 'Importer',           '',               False);
  SetMenuItem(MENU_FILE, 13, 'Exporter',           '',               False);
- SetMenuItem(MENU_FILE, 14, 'G'+#130+'n'+#130+'rer',            '',               False);
+ SetMenuItem(MENU_FILE, 14, 'G'+#130+'n'+#130+'rer',            '',
+  False);
  SetMenuItem(MENU_FILE, 15, 'Scripts',            '',               False);
  SetMenuItem(MENU_FILE, 16, 'Automatiser',        '',               False);
  SetMenuItem(MENU_FILE, 17, '-',                  '',               True);
- SetMenuItem(MENU_FILE, 18, 'Information fichier...',    'Alt+Shift+Ctrl+I', False);
+ SetMenuItem(MENU_FILE, 18, 'Information fichier...',    'Alt+Shift+Ctrl+I',
+  False);
  SetMenuItem(MENU_FILE, 19, '-',                  '',               True);
  SetMenuItem(MENU_FILE, 20, 'Imprimer...',        'Ctrl+P',         False);
  SetMenuItem(MENU_FILE, 21, 'Imprimer une copie', 'Alt+Shift+Ctrl+P', False);
@@ -643,7 +645,8 @@ Begin
  SetMenuItem(MENU_3D, 16, 'Tasser objets au sol',       '', False);
  SetMenuItem(MENU_3D, 17, '-',                          '', True);
  SetMenuItem(MENU_3D, 18, 'Peinture mosaique calque',   '', False);
- SetMenuItem(MENU_3D, 19, 'G'+#130+'n'+#130+'rer UV...',              '', False);
+ SetMenuItem(MENU_3D, 19, 'G'+#130+'n'+#130+'rer UV...',              '',
+  False);
  SetMenuItem(MENU_3D, 20, 'Att'+#130+'nuation peinture...',    '', False);
  SetMenuItem(MENU_3D, 21, 'Syst'+#138+'me de peinture',        '', False);
  SetMenuItem(MENU_3D, 22, 'Peindre sur texture cible',  '', False);
@@ -12047,6 +12050,41 @@ Begin
  End;
 End;
 
+Function CommandLineHelpRequested:Boolean;
+Var I:Integer;Arg:String;
+Begin
+ CommandLineHelpRequested:=False;
+ For I:=1 To ParamCount Do Begin
+  Arg:=UpperStr(ParamStr(I));
+  If (Arg='/?') Or (Arg='-?') Or (Arg='-H') Or (Arg='--HELP') Or
+   (Arg='/H') Or (Arg='/HELP') Then Begin
+   CommandLineHelpRequested:=True;Exit;
+  End;
+ End;
+End;
+Procedure ShowCommandLineHelp;
+Begin
+ Assign(Output,'');Rewrite(Output);
+ WriteLn(Output,PROGRAM_NAME,' - Cette commande permet de lancer Photoshop.');
+ WriteLn(Output);
+ WriteLn(Output,'Syntaxe : PSP [image]');
+ WriteLn(Output,'          PSP /?');
+ WriteLn(Output);
+ WriteLn(Output,'  image    Ouvre une image au demarrage.');
+ WriteLn(Output,'  /?       Affiche cette aide et quitte.');
+ WriteLn(Output,'  -?, -h, --help, /h, /help : autres formes de l''aide.');
+ WriteLn(Output);
+ WriteLn(Output,'L''aide s''affiche sans ouvrir la fenetre graphique.');
+ WriteLn(Output,'Sans argument, PSP ouvre un nouveau document.');
+ WriteLn(Output,'Formats : BMP, DIB, GIF, JPG/JPEG, PNG, PCX, PSD.');
+ WriteLn(Output,'Mettre entre guillemets les noms contenant des espaces.');
+ WriteLn(Output);
+ WriteLn(Output,'Exemples :');
+ WriteLn(Output,'  PSP dessin.bmp');
+ WriteLn(Output,'  PSP "C:\Images\mon dessin.png"');
+ WriteLn(Output,'  PSP /?');
+End;
+
 Procedure HandleCmdLine;
 Var FN, ErrMsg: String;
 Begin
@@ -12063,6 +12101,7 @@ Begin
 End;
 
 BEGIN
+ If CommandLineHelpRequested Then Begin ShowCommandLineHelp;Halt(0);End;
  Initialize;
  HandleCmdLine;
  MainLoop;

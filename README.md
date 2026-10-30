@@ -5,6 +5,16 @@ Apercu de AUTOCAD :
 
 <img width="642" height="482" alt="image" src="https://github.com/user-attachments/assets/2628f44b-b358-4ced-9eb7-591b17ead65c" />
 
+Aperçu de Photoshop :
+
+<table>
+	<tr>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ab226dc6-fea2-489b-a5bb-dc7eb6a5b462" /></td>
+		<td></td>
+	</tr>
+</table>
+
+
 Apercu de PAINT :
 
 <img width="641" height="480" alt="image" src="https://github.com/user-attachments/assets/a9503152-d653-4fd0-9e35-14865e377008" />

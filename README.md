@@ -30,6 +30,10 @@ Aperçu de Photoshop :
 		<td>Extrusion 3D du calque :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ae6f3180-a05e-4750-9dc8-27ff0b751845" /></td>
 		<td>Trace vectoriel : <br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/85830ea7-3223-4fe0-b71a-793887f31e44" /></td>
 	</tr>
+	<tr>
+		<td>Extruction 3D selection : <img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/a9dd589e-fc45-4795-8fbf-1a627ee882a4" /></td>
+		<td></td>
+	</tr>
 </table>
 
 

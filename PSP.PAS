@@ -136,6 +136,15 @@ Type
   Used: Boolean;
  End;
 
+ TRotationUndo = Record
+  Saved:Array[0..MAX_LAYERS-1] Of TLayer;
+  Width,Height,Count,Active:Integer;
+  Modified,Selection:Boolean;
+  DPI:Double;Brush:Byte;
+  Rect:TRect;
+ End;
+ PRotationUndo=^TRotationUndo;
+
  TMenuItem = Record
   Caption: String[28];
   Shortcut: String[16];
@@ -177,6 +186,7 @@ Var
  ActiveMenu, ActiveMenuItem: Integer;
 
  ImgW, ImgH: Integer;
+ ImageDPI:Double;
  CanvasX, CanvasY: Integer;
  CanvasW, CanvasH: Integer;
  ZoomLevel: Integer;
@@ -201,6 +211,9 @@ Var
 
  UndoBuffers: Array[0..MAX_UNDO_LEVELS-1] of PByteArr;
  UndoCount: Integer;
+ UndoSizes:Array[0..MAX_UNDO_LEVELS-1] Of LongInt;
+ UndoLayer:Array[0..MAX_UNDO_LEVELS-1] Of Integer;
+ RotationUndo:Array[0..MAX_UNDO_LEVELS-1] Of PRotationUndo;
 
  Swatches: Array[0..15] of Byte;
 
@@ -350,37 +363,76 @@ End;
    Undo simplifie
   ============================================================ }
 
-Procedure PushUndo;
-Var Sz: LongInt; I: Integer;
+Function RotationAllocate(Size:LongInt):Pointer;
 Begin
- If (ActiveLayer<0) Or (Not Layers[ActiveLayer].Used) Then Exit;
- Sz := LongInt(ImgW) * ImgH;
- If UndoCount=MAX_UNDO_LEVELS Then Begin
-  If UndoBuffers[0]<>Nil Then FreeMem(UndoBuffers[0], Sz);
-  For I:=0 To MAX_UNDO_LEVELS-2 Do UndoBuffers[I] := UndoBuffers[I+1];
-  UndoBuffers[MAX_UNDO_LEVELS-1] := Nil;
-  Dec(UndoCount);
+ RotationAllocate:=Nil;If Size<=0 Then Exit;
+ {$IFDEF FPC}RotationAllocate:=SysGetMem(Size);
+ {$ELSE}If MaxAvail>=Size Then GetMem(RotationAllocate,Size);{$ENDIF}
+End;
+Procedure ReleaseUndoSlot(Index:Integer);
+Var I:Integer;R:PRotationUndo;
+Begin
+ If UndoBuffers[Index]<>Nil Then
+  FreeMem(UndoBuffers[Index],UndoSizes[Index]);
+ UndoBuffers[Index]:=Nil;R:=RotationUndo[Index];
+ If R<>Nil Then Begin
+  For I:=0 To MAX_LAYERS-1 Do If R^.Saved[I].Pixels<>Nil Then
+   FreeMem(R^.Saved[I].Pixels,LongInt(R^.Width)*R^.Height);
+  FreeMem(R,SizeOf(TRotationUndo));
  End;
- GetMem(UndoBuffers[UndoCount], Sz);
- Move(Layers[ActiveLayer].Pixels^, UndoBuffers[UndoCount]^, Sz);
+ RotationUndo[Index]:=Nil;
+End;
+Procedure ClearUndoHistory;
+Var I:Integer;
+Begin
+ For I:=0 To MAX_UNDO_LEVELS-1 Do ReleaseUndoSlot(I);UndoCount:=0;
+End;
+Procedure MakeUndoRoom;
+Var I:Integer;
+Begin
+ If UndoCount<MAX_UNDO_LEVELS Then Exit;ReleaseUndoSlot(0);
+ For I:=0 To MAX_UNDO_LEVELS-2 Do Begin
+  UndoBuffers[I]:=UndoBuffers[I+1];UndoSizes[I]:=UndoSizes[I+1];
+  UndoLayer[I]:=UndoLayer[I+1];RotationUndo[I]:=RotationUndo[I+1];
+ End;
+ Dec(UndoCount);UndoBuffers[UndoCount]:=Nil;
+ RotationUndo[UndoCount]:=Nil;
+End;
+Procedure PushUndo;
+Var Size:LongInt;P:PByteArr;
+Begin
+ If (ActiveLayer<0) Or (ActiveLayer>=MAX_LAYERS) Then Exit;
+ If Not Layers[ActiveLayer].Used Then Exit;
+ Size:=LongInt(ImgW)*ImgH;P:=PByteArr(RotationAllocate(Size));
+ If P=Nil Then Exit;Move(Layers[ActiveLayer].Pixels^,P^,Size);
+ MakeUndoRoom;UndoBuffers[UndoCount]:=P;UndoSizes[UndoCount]:=Size;
+ UndoLayer[UndoCount]:=ActiveLayer;RotationUndo[UndoCount]:=Nil;
  Inc(UndoCount);
 End;
-
 Procedure DoUndo;
-Var Sz: LongInt;
+Var I:Integer;R:PRotationUndo;
 Begin
- If UndoCount<=0 Then Exit;
- If (ActiveLayer<0) Or (Not Layers[ActiveLayer].Used) Then Exit;
- Sz := LongInt(ImgW) * ImgH;
- Dec(UndoCount);
- Move(UndoBuffers[UndoCount]^, Layers[ActiveLayer].Pixels^, Sz);
- FreeMem(UndoBuffers[UndoCount], Sz);
- UndoBuffers[UndoCount] := Nil;
+ If UndoCount<=0 Then Exit;Dec(UndoCount);R:=RotationUndo[UndoCount];
+ If R<>Nil Then Begin
+  For I:=0 To MAX_LAYERS-1 Do FreeLayer(I);
+  ImgW:=R^.Width;ImgH:=R^.Height;LayerCount:=R^.Count;
+  ActiveLayer:=R^.Active;ImageModified:=R^.Modified;
+  ImageDPI:=R^.DPI;BrushSize:=R^.Brush;
+  SelectionActive:=R^.Selection;SelectionRect:=R^.Rect;
+  For I:=0 To MAX_LAYERS-1 Do Begin
+   Layers[I]:=R^.Saved[I];R^.Saved[I].Pixels:=Nil;
+  End;
+ End Else Begin
+  I:=UndoLayer[UndoCount];
+  If (I>=0) And (I<MAX_LAYERS) Then
+   If Layers[I].Used And (LongInt(ImgW)*ImgH=UndoSizes[UndoCount]) Then
+    Begin
+     Move(UndoBuffers[UndoCount]^,Layers[I].Pixels^,UndoSizes[UndoCount]);
+     ImageModified:=True;
+    End;
+ End;
+ ReleaseUndoSlot(UndoCount);
 End;
-
-{ ============================================================
-   Initialisation graphique
-  ============================================================ }
 
 Procedure InitGraphics;
 Begin
@@ -459,12 +511,13 @@ Begin
  SetMenuItem(MENU_EDIT, 5, 'Coller',           'Ctrl+V', False);
  SetMenuItem(MENU_EDIT, 6, 'Effacer',          'Del',    False);
 
- Menus[MENU_IMAGE].ItemCount := 5;
+ Menus[MENU_IMAGE].ItemCount := 6;
  SetMenuItem(MENU_IMAGE, 0, 'Taille image...', '',       False);
  SetMenuItem(MENU_IMAGE, 1, 'Rotation 90 H',   '',       False);
  SetMenuItem(MENU_IMAGE, 2, 'Rotation 90 AH',  '',       False);
  SetMenuItem(MENU_IMAGE, 3, 'Sym. horiz.',     '',       False);
  SetMenuItem(MENU_IMAGE, 4, 'Sym. vert.',      '',       False);
+ SetMenuItem(MENU_IMAGE, 5, 'Rotation...', '', False);
 
  Menus[MENU_LAYER].ItemCount := 5;
  SetMenuItem(MENU_LAYER, 0, 'Nouveau calque',  'Ctrl+N', False);
@@ -1269,29 +1322,186 @@ End;
    Rotation / Symetrie
   ============================================================ }
 
-Procedure RotateLayer90(Clockwise: Boolean);
-Var
- NewBuf: PByteArr;
- Sz: LongInt;
- X, Y, NW, NH, I, ActCount: Integer;
+{ Angles en dixiemes de degre, sens horaire dans les coordonnees ecran. }
+Procedure RotationBasis(Angle:Integer;Clockwise:Boolean;Var C,S:Double);
+Var A:Integer;R:Double;
 Begin
- PushUndo;
- NW := ImgH; NH := ImgW;
- Sz := LongInt(NW)*NH;
- GetMem(NewBuf, Sz);
- For Y:=0 To ImgH-1 Do
-  For X:=0 To ImgW-1 Do Begin
-   If Clockwise Then
-    NewBuf^[LongInt(X)*NW + (NW-1-Y)] := Layers[ActiveLayer].Pixels^[LongInt(Y)*ImgW + X]
-   Else
-    NewBuf^[LongInt(NH-1-X)*NW + Y] := Layers[ActiveLayer].Pixels^[LongInt(Y)*ImgW + X];
+ A:=Angle Mod 3600;If Not Clockwise Then A:=(3600-A) Mod 3600;
+ Case A Of
+  0:Begin C:=1;S:=0;End;900:Begin C:=0;S:=1;End;
+  1800:Begin C:=-1;S:=0;End;2700:Begin C:=0;S:=-1;End;
+  Else Begin R:=A*Pi/1800;C:=Cos(R);S:=Sin(R);End;
+ End;
+End;
+Procedure RotationSize(Angle:Integer;Clockwise,Expand:Boolean;
+ Var W,H:Integer);
+Var C,S,V:Double;N:LongInt;
+Begin
+ W:=ImgW;H:=ImgH;If Not Expand Then Exit;
+ RotationBasis(Angle,Clockwise,C,S);
+ V:=Abs(ImgW*C)+Abs(ImgH*S);N:=Trunc(V);
+ If V-N>0.000001 Then Inc(N);W:=N;
+ V:=Abs(ImgW*S)+Abs(ImgH*C);N:=Trunc(V);
+ If V-N>0.000001 Then Inc(N);H:=N;
+End;
+Procedure RotationSource(X,Y,W,H:Integer;C,S:Double;Var SX,SY:Integer);
+Var DX,DY:Double;
+Begin
+ DX:=X-(W-1)/2;DY:=Y-(H-1)/2;
+ SX:=Trunc(C*DX+S*DY+(ImgW-1)/2+0.5+65536)-65536;
+ SY:=Trunc(-S*DX+C*DY+(ImgH-1)/2+0.5+65536)-65536;
+End;
+Function ApplyRotation(Angle:Integer;Clockwise,Expand,AllLayers,
+ Transparent:Boolean):Boolean;
+Var W,H,I,X,Y,SX,SY:Integer;Size:LongInt;C,S:Double;
+ R:PRotationUndo;NewPixels:Array[0..MAX_LAYERS-1] Of PByteArr;
+ Fill:Byte;Failed:Boolean;
+Begin
+ ApplyRotation:=False;
+ If (Angle<0) Or (Angle>3600) Then Exit;
+ If Angle Mod 3600=0 Then Begin ApplyRotation:=True;Exit;End;
+ RotationSize(Angle,Clockwise,Expand,W,H);
+ If (W<1) Or (H<1) Or (W>4096) Or (H>4096) Then Exit;
+ If (ActiveLayer<0) Or (ActiveLayer>=LayerCount) Then Exit;
+ FillChar(NewPixels,SizeOf(NewPixels),0);Size:=LongInt(W)*H;
+ R:=PRotationUndo(RotationAllocate(SizeOf(TRotationUndo)));
+ If R=Nil Then Exit;Failed:=False;RotationBasis(Angle,Clockwise,C,S);
+ For I:=0 To MAX_LAYERS-1 Do If Layers[I].Used Then Begin
+  NewPixels[I]:=PByteArr(RotationAllocate(Size));
+  If NewPixels[I]=Nil Then Begin Failed:=True;Break;End;
+  Fill:=BgColor;If Transparent Then Fill:=255;
+  FillChar(NewPixels[I]^,Size,Fill);
+  For Y:=0 To H-1 Do For X:=0 To W-1 Do Begin
+   If AllLayers Or (I=ActiveLayer) Then
+    RotationSource(X,Y,W,H,C,S,SX,SY)
+   Else Begin SX:=X-(W-ImgW) Div 2;SY:=Y-(H-ImgH) Div 2;End;
+   If (SX>=0) And (SY>=0) And (SX<ImgW) And (SY<ImgH) Then
+    NewPixels[I]^[LongInt(Y)*W+X]:=
+     Layers[I].Pixels^[LongInt(SY)*ImgW+SX];
   End;
- FreeMem(Layers[ActiveLayer].Pixels, LongInt(ImgW)*ImgH);
- Layers[ActiveLayer].Pixels := NewBuf;
- ActCount := 0;
- For I:=0 To LayerCount-1 Do If Layers[I].Used Then Inc(ActCount);
- If ActCount=1 Then Begin ImgW := NW; ImgH := NH; End;
- ImageModified := True;
+ End;
+ If Failed Then Begin
+  For I:=0 To MAX_LAYERS-1 Do If NewPixels[I]<>Nil Then
+   FreeMem(NewPixels[I],Size);
+  FreeMem(R,SizeOf(TRotationUndo));Exit;
+ End;
+ R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
+ R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
+ R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
+ R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
+ For I:=0 To MAX_LAYERS-1 Do R^.Saved[I]:=Layers[I];
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;
+ UndoBuffers[UndoCount]:=Nil;Inc(UndoCount);
+ For I:=0 To MAX_LAYERS-1 Do Layers[I].Pixels:=NewPixels[I];
+ ImgW:=W;ImgH:=H;SelectionActive:=False;ImageModified:=True;
+ ApplyRotation:=True;
+End;
+{ Reechantillonnage en RGB, transparence premultipliee, retour palette VGA. }
+Function ResizeWeight(T:Double;Method:Integer):Double;
+Var A:Double;
+Begin
+ T:=Abs(T);ResizeWeight:=0;
+ If Method=3 Then Begin
+  If T<1 Then ResizeWeight:=(4-6*T*T+3*T*T*T)/6
+   Else If T<2 Then ResizeWeight:=(2-T)*(2-T)*(2-T)/6;
+ End Else Begin
+  A:=-0.5;If Method=4 Then A:=-0.75;
+  If T<1 Then ResizeWeight:=(A+2)*T*T*T-(A+3)*T*T+1
+  Else If T<2 Then ResizeWeight:=A*T*T*T-5*A*T*T+8*A*T-4*A;
+ End;
+End;
+Function ResizeSample(Layer:Integer;X,Y:Double;Method:Integer):Byte;
+Var IX,IY,J,K,Color,Best:Integer;
+ R,G,B,Alpha,Weight,WX,WY,DX,DY,Dist,BestDist:Double;
+ Function Pixel(PX,PY:Integer):Byte;
+ Begin
+  PX:=Max(0,Min(ImgW-1,PX));PY:=Max(0,Min(ImgH-1,PY));
+  If Layer<0 Then Pixel:=Composite(PX,PY)
+   Else Pixel:=GetLayerPixel(Layer,PX,PY);
+ End;
+ Procedure Accumulate(PX,PY:Integer;Value:Double);
+ Var V:Byte;
+ Begin
+  V:=Pixel(PX,PY);If V=255 Then Exit;V:=V And 15;
+  Alpha:=Alpha+Value;R:=R+VGA_R[V]*Value;
+  G:=G+VGA_G[V]*Value;B:=B+VGA_B[V]*Value;
+ End;
+Begin
+ If Method=0 Then Begin
+  ResizeSample:=Pixel(Trunc(X+0.5+65536)-65536,
+   Trunc(Y+0.5+65536)-65536);Exit;
+ End;
+ IX:=Trunc(X+65536)-65536;IY:=Trunc(Y+65536)-65536;
+ DX:=X-IX;DY:=Y-IY;R:=0;G:=0;B:=0;Alpha:=0;
+ If Method=1 Then Begin
+  For J:=0 To 1 Do For K:=0 To 1 Do Begin
+   WX:=1-DX;If K=1 Then WX:=DX;
+   WY:=1-DY;If J=1 Then WY:=DY;Accumulate(IX+K,IY+J,WX*WY);
+  End;
+ End Else For J:=-1 To 2 Do For K:=-1 To 2 Do Begin
+  Weight:=ResizeWeight(K-DX,Method)*ResizeWeight(J-DY,Method);
+  If Weight<>0 Then Accumulate(IX+K,IY+J,Weight);
+ End;
+ ResizeSample:=255;If Alpha<0.5 Then Exit;
+ R:=R/Alpha;G:=G/Alpha;B:=B/Alpha;
+ If R<0 Then R:=0 Else If R>255 Then R:=255;
+ If G<0 Then G:=0 Else If G>255 Then G:=255;
+ If B<0 Then B:=0 Else If B>255 Then B:=255;
+ Best:=0;BestDist:=1E30;
+ For Color:=0 To 15 Do Begin
+  Dist:=Sqr(R-VGA_R[Color])+Sqr(G-VGA_G[Color])+Sqr(B-VGA_B[Color]);
+  If Dist<BestDist Then Begin BestDist:=Dist;Best:=Color;End;
+ End;
+ ResizeSample:=Best;
+End;
+Function ApplyImageSize(W,H:Integer;DPI:Double;Method:Integer;
+ ScaleBrush:Boolean):Boolean;
+Var I,X,Y:Integer;Size:LongInt;R:PRotationUndo;Failed:Boolean;
+ NewPixels:Array[0..MAX_LAYERS-1] Of PByteArr;SX,SY,Scale:Double;
+Begin
+ ApplyImageSize:=False;
+ If (W<1) Or (H<1) Or (W>4096) Or (H>4096) Or
+    (DPI<1) Or (DPI>9600) Or (Method<0) Or (Method>4) Then Exit;
+ If (W=ImgW) And (H=ImgH) And (Abs(DPI-ImageDPI)<0.0001) Then Begin
+  ApplyImageSize:=True;Exit;
+ End;
+ FillChar(NewPixels,SizeOf(NewPixels),0);Size:=LongInt(W)*H;
+ R:=PRotationUndo(RotationAllocate(SizeOf(TRotationUndo)));
+ If R=Nil Then Exit;Failed:=False;
+ For I:=0 To MAX_LAYERS-1 Do If Layers[I].Used Then Begin
+  NewPixels[I]:=PByteArr(RotationAllocate(Size));
+  If NewPixels[I]=Nil Then Begin Failed:=True;Break;End;
+  If (W=ImgW) And (H=ImgH) Then Move(Layers[I].Pixels^,NewPixels[I]^,Size)
+  Else For Y:=0 To H-1 Do Begin
+   SY:=(Y+0.5)*ImgH/H-0.5;
+   For X:=0 To W-1 Do Begin
+    SX:=(X+0.5)*ImgW/W-0.5;
+    NewPixels[I]^[LongInt(Y)*W+X]:=ResizeSample(I,SX,SY,Method);
+   End;
+  End;
+ End;
+ If Failed Then Begin
+  For I:=0 To MAX_LAYERS-1 Do If NewPixels[I]<>Nil Then
+   FreeMem(NewPixels[I],Size);
+  FreeMem(R,SizeOf(TRotationUndo));Exit;
+ End;
+ R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
+ R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
+ R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
+ R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
+ For I:=0 To MAX_LAYERS-1 Do R^.Saved[I]:=Layers[I];
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);
+ Scale:=Sqrt((W/ImgW)*(H/ImgH));
+ If ScaleBrush Then BrushSize:=Max(1,Min(255,Round(BrushSize*Scale)));
+ For I:=0 To MAX_LAYERS-1 Do Layers[I].Pixels:=NewPixels[I];
+ ImgW:=W;ImgH:=H;ImageDPI:=DPI;ImageModified:=True;
+ SelectionActive:=False;ApplyImageSize:=True;
+End;
+
+Procedure RotateLayer90(Clockwise:Boolean);
+Begin
+ If ApplyRotation(900,Clockwise,True,True,True) Then;
 End;
 
 Procedure FlipH;
@@ -1358,6 +1568,8 @@ Begin
  IH.biBitCount := 24;
  IH.biCompression := 0;
  IH.biSizeImage := LongInt(RowSize)*ImgH;
+ IH.biXPelsPerMeter:=Round(ImageDPI/0.0254);
+ IH.biYPelsPerMeter:=IH.biXPelsPerMeter;
 
  BlockWrite(F, FH, SizeOf(FH));
  BlockWrite(F, IH, SizeOf(IH));
@@ -1636,6 +1848,9 @@ Begin
 
  Close(F);
  CurrentFileName := FileName;
+ ImageDPI:=72;
+ If (IH.biXPelsPerMeter>=39) And (IH.biXPelsPerMeter<=377953) Then
+  ImageDPI:=IH.biXPelsPerMeter*0.0254;
  ImageModified := False;
  LoadBMP := True;
 End;
@@ -3978,7 +4193,7 @@ Begin
  FI_AddField(9, 'Mode couleur',     'Indexe 16 (VGA)',          False);
  FI_AddField(9, 'Profondeur',       '4 bits/pixel',             False);
  FI_AddField(9, 'Calques',          IntToStr(LayerCount),       False);
- FI_AddField(9, 'Resolution',       '72 dpi',                   False);
+ FI_AddField(9, 'Resolution', IntToStr(Round(ImageDPI))+' dpi', False);
 
  Has := False;
  FSize := 0; FYr := 0; FMo := 0; FDy := 0; FHr := 0; FMn := 0;
@@ -4372,13 +4587,13 @@ Procedure NewImage;
 Var I: Integer;
 Begin
  For I:=0 To MAX_LAYERS-1 Do If Layers[I].Used Then FreeLayer(I);
- ImgW := 400; ImgH := 300;
+ ImgW := 400; ImgH := 300;ImageDPI:=72;
  AllocLayer(0, 'Arriere-plan', False);
  LayerCount := 1;
  ActiveLayer := 0;
  CurrentFileName := '';
  ImageModified := False;
- UndoCount := 0;
+ ClearUndoHistory;
  ZoomLevel := 100;
  FI_ResetMetadata;
  FICurCat := 0;
@@ -5319,21 +5534,23 @@ Begin
 End;
 
 Function LoadFileByExt(Const FN: String; Var ErrMsg: String): Boolean;
-Var Ext: String;
+Var Ext: String;Loaded:Boolean;
 Begin
- LoadFileByExt := False;
- ErrMsg := '';
+ Loaded := False;
+ Loaded:=False;ErrMsg := '';
  Ext := ExtractExt(FN);
- If (Ext='.BMP') Or (Ext='.DIB') Then LoadFileByExt := LoadBMP(FN)
- Else If Ext='.GIF' Then LoadFileByExt := LoadGIF(FN)
- Else If (Ext='.JPG') Or (Ext='.JPEG') Then LoadFileByExt := LoadJPEG(FN)
- Else If Ext='.PNG' Then LoadFileByExt := LoadPNG(FN)
- Else If Ext='.PCX' Then LoadFileByExt := LoadPCX(FN)
- Else If Ext='.PSD' Then LoadFileByExt := LoadPSD(FN)
+ If (Ext='.BMP') Or (Ext='.DIB') Then Loaded := LoadBMP(FN)
+ Else If Ext='.GIF' Then Loaded := LoadGIF(FN)
+ Else If (Ext='.JPG') Or (Ext='.JPEG') Then Loaded := LoadJPEG(FN)
+ Else If Ext='.PNG' Then Loaded := LoadPNG(FN)
+ Else If Ext='.PCX' Then Loaded := LoadPCX(FN)
+ Else If Ext='.PSD' Then Loaded := LoadPSD(FN)
  Else If (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then
   ErrMsg := 'Le decodage '+Ext+' n est pas encore implemente.'
  Else
   ErrMsg := 'Extension '+Ext+' non reconnue.';
+ If Loaded And (Ext<>'.BMP') And (Ext<>'.DIB') Then ImageDPI:=72;
+ LoadFileByExt:=Loaded;
 End;
 
 Procedure OpenFileAction;
@@ -5836,6 +6053,525 @@ Begin
  ShowDialog('Imprimer une copie', 'Impression non implementee.');
 End;
 
+Procedure RotationDialog;
+Var X,Y,W,H,Angle,NW,NH,MX,MY,MB,Previous,I,Code:Integer;
+ Clockwise,Expand,AllLayers,Transparent,Dirty,Done,Drag,ReplaceText:Boolean;
+ Edit,Message:String;K,E:Char;C,S,V,DX,DY,A:Double;
+ Procedure SetAngle(Value:Integer);
+ Var T:String;
+ Begin
+  Angle:=Max(0,Min(3600,Value));Str(Angle/10:0:1,T);Edit:=T;
+  ReplaceText:=True;Message:='';Dirty:=True;
+ End;
+ Procedure ResetSettings;
+ Begin
+  Clockwise:=True;Expand:=True;AllLayers:=True;Transparent:=True;
+  SetAngle(0);
+ End;
+ Function ValidAngle:Boolean;
+ Var T:String;J:Integer;
+ Begin
+  T:=Edit;For J:=1 To Length(T) Do If T[J]=',' Then T[J]:='.';
+  Val(T,V,Code);ValidAngle:=(Code=0) And (V>=0) And (V<=360);
+  If ValidAngle Then Angle:=Round(V*10);
+ End;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,BW:Integer;Const Text:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+24,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+24,True);SetColor(Black);
+  OutTextXY(X+L+8,Y+T+8,Text);
+ End;
+ Procedure Option(L,T:Integer;Checked:Boolean;Const Text:String);
+ Begin
+  SetColor(Black);Rectangle(X+L,Y+T,X+L+12,Y+T+12);
+  If Checked Then Begin
+   Line(X+L+2,Y+T+6,X+L+5,Y+T+10);
+   Line(X+L+5,Y+T+10,X+L+11,Y+T+2);
+  End;
+  OutTextXY(X+L+20,Y+T+3,Text);
+ End;
+ Procedure Draw;
+ Var J,PX,PY,SX,SY,CX,CY,TX,TY,Radius:Integer;
+     Scale:Double;Color:Byte;Text:String;
+ Begin
+  HideMouseCursor;FillRect(X,Y,X+W,Y+H,LightGray);
+  DrawBevel(X,Y,X+W,Y+H,True);
+  FillRect(X+3,Y+3,X+W-3,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Rotation de l''image - angle precis');
+  SetColor(Black);
+  CX:=X+126;CY:=Y+139;Radius:=72;
+  SetFillStyle(SolidFill,White);FillEllipse(CX,CY,Radius,Radius);
+  SetColor(DarkGray);Circle(CX,CY,Radius);
+  For J:=0 To 71 Do Begin
+   A:=J*Pi/36;
+   TX:=Round(Sin(A)*(Radius+4));TY:=Round(-Cos(A)*(Radius+4));
+   PX:=Round(Sin(A)*(Radius+8));PY:=Round(-Cos(A)*(Radius+8));
+   If J Mod 3=0 Then Begin PX:=Round(Sin(A)*(Radius+13));
+    PY:=Round(-Cos(A)*(Radius+13));End;
+   Line(CX+TX,CY+TY,CX+PX,CY+PY);
+  End;
+  OutTextXY(CX-4,CY-101,'0');OutTextXY(CX+93,CY-3,'90');
+  OutTextXY(CX-12,CY+94,'180');OutTextXY(CX-111,CY-3,'270');
+  A:=Angle*Pi/1800;PX:=CX+Round(Sin(A)*60);PY:=CY-Round(Cos(A)*60);
+  SetColor(Blue);SetLineStyle(SolidLn,0,ThickWidth);Line(CX,CY,PX,PY);
+  SetLineStyle(SolidLn,0,NormWidth);SetFillStyle(SolidFill,Blue);
+  FillEllipse(PX,PY,6,6);SetColor(Black);
+  OutTextXY(CX-24,CY+20,Edit+' deg');
+  Button(20,244,32,'-');Button(213,244,32,'+');
+  FillRect(X+62,Y+244,X+203,Y+268,White);
+  Rectangle(X+62,Y+244,X+203,Y+268);
+  OutTextXY(X+70,Y+252,Edit+' deg');
+  For J:=0 To 3 Do Button(20+J*58,278,52,IntToStr(J*90));
+  RotationSize(Angle,Clockwise,Expand,NW,NH);
+  RotationBasis(Angle,Clockwise,C,S);
+  Scale:=Min(280000 Div Max(1,NW),184000 Div Max(1,NH))/1000;
+  If Scale<=0 Then Scale:=0.001;
+  For PY:=0 To 199 Do For PX:=0 To 299 Do Begin
+   TX:=Trunc((PX-149.5)/Scale+(NW-1)/2+0.5+65536)-65536;
+   TY:=Trunc((PY-99.5)/Scale+(NH-1)/2+0.5+65536)-65536;
+   Color:=LightGray;If ((PX Div 8+PY Div 8) And 1)=0 Then Color:=White;
+   If (TX>=0) And (TY>=0) And (TX<NW) And (TY<NH) Then Begin
+    RotationSource(TX,TY,NW,NH,C,S,SX,SY);
+    If (SX>=0) And (SY>=0) And (SX<ImgW) And (SY<ImgH) Then Begin
+     If AllLayers Then Color:=Composite(SX,SY)
+      Else Color:=GetLayerPixel(ActiveLayer,SX,SY);
+     If Color=255 Then Begin
+      Color:=LightGray;
+      If ((PX Div 8+PY Div 8) And 1)=0 Then Color:=White;
+     End;
+    End Else If Not Transparent Then Color:=BgColor;
+   End;
+   PutPixel(X+290+PX,Y+58+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+289,Y+57,X+590,Y+258);
+  OutTextXY(X+290,Y+39,'Apercu - pixels au plus proche');
+  If Clockwise Then Option(290,278,True,'Sens horaire (S)')
+   Else Option(290,278,False,'Sens antihoraire (S)');
+  Option(290,300,Expand,'Agrandir le cadre (F)');
+  If AllLayers Then Option(290,322,True,'Tous les calques (L)')
+   Else Option(290,322,False,'Calque actif uniquement (L)');
+  If Transparent Then Option(290,344,True,'Fond transparent (T)')
+   Else Option(290,344,False,'Couleur de fond (T)');
+  OutTextXY(X+20,Y+315,'Source : '+IntToStr(ImgW)+' x '+IntToStr(ImgH));
+  OutTextXY(X+20,Y+333,'Sortie : '+IntToStr(NW)+' x '+IntToStr(NH));
+  Str(LongInt(NW)*NH/1024:0:1,Text);
+  OutTextXY(X+20,Y+351,Text+' Ko par calque');
+  If (NW>4096) Or (NH>4096) Then Message:='Limite : 4096 pixels par axe.';
+  If Message<>'' Then SetColor(Red);
+  If Message<>'' Then OutTextXY(X+20,Y+374,Message)
+  Else OutTextXY(X+20,Y+374,
+   'Fleches : 1 deg. Haut/Bas : 0.1 deg. Entree : appliquer.');
+  Button(20,394,120,'Reinitialiser');Button(350,394,110,'Annuler');
+  Button(480,394,110,'Appliquer');
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  If Not ValidAngle Then Begin
+   Message:='Angle attendu : 0 a 360 degres.';Dirty:=True;Exit;
+  End;
+  If ApplyRotation(Angle,Clockwise,Expand,AllLayers,Transparent) Then
+   Done:=True
+  Else Begin
+  Message:='Rotation impossible : taille ou memoire.';Dirty:=True;End;
+ End;
+ Procedure Dial;
+ Begin
+  DX:=MX-(X+126);DY:=MY-(Y+139);
+  If Abs(DX)+Abs(DY)<4 Then Exit;
+  If DY=0 Then Begin If DX>0 Then A:=90 Else A:=270;End
+  Else Begin
+   A:=ArcTan(DX/-DY)*180/Pi;
+   If DY>0 Then A:=A+180;If A<0 Then A:=A+360;
+  End;
+  SetAngle(Round(A*10));
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;W:=620;H:=428;
+ X:=(ScreenWidth-W) Div 2;Y:=(ScreenHeight-H) Div 2;
+ Angle:=0;Edit:='0.0';Message:='';Clockwise:=True;Expand:=True;
+ AllLayers:=True;Transparent:=True;Dirty:=True;Done:=False;
+ ReplaceText:=True;Drag:=False;GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(35,48,216,230) Then Begin Drag:=True;Dial;End
+   Else If Hit(62,244,203,268) Then ReplaceText:=True
+   Else If Hit(20,244,52,268) Then SetAngle(Angle-10)
+   Else If Hit(213,244,245,268) Then SetAngle(Angle+10)
+   Else If Hit(20,278,245,302) Then Begin
+    I:=(MX-X-20) Div 58;If I<=3 Then SetAngle(I*900);
+   End Else If Hit(290,278,600,290) Then Begin
+    Clockwise:=Not Clockwise;Dirty:=True;
+   End Else If Hit(290,300,600,312) Then Begin
+    Expand:=Not Expand;Message:='';Dirty:=True;
+   End Else If Hit(290,322,600,334) Then Begin
+    AllLayers:=Not AllLayers;Dirty:=True;
+   End Else If Hit(290,344,600,356) Then Begin
+    Transparent:=Not Transparent;Dirty:=True;
+   End Else If Hit(20,394,140,418) Then ResetSettings
+   Else If Hit(350,394,460,418) Then Done:=True
+   Else If Hit(480,394,590,418) Then Apply;
+  End;
+  If Drag And ((MB And 1)<>0) Then Dial;
+  If (MB And 1)=0 Then Drag:=False;Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then Begin
+    E:=ReadKey;
+    Case E Of
+     #75:SetAngle(Angle-10);#77:SetAngle(Angle+10);
+     #72:SetAngle(Angle+1);#80:SetAngle(Angle-1);
+     #71:SetAngle(0);#79:SetAngle(3600);
+     #73:SetAngle(Angle+900);#81:SetAngle(Angle-900);
+    End;
+   End Else Case K Of
+    #27:Done:=True;#13:Apply;
+    #8:Begin
+     If ReplaceText Then Edit:='' Else Delete(Edit,Length(Edit),1);
+     ReplaceText:=False;Dirty:=True;
+    End;
+    '0'..'9','.',',':Begin
+     If ReplaceText Then Edit:='';ReplaceText:=False;
+     If Length(Edit)<8 Then Edit:=Edit+K;
+     If ValidAngle Then Message:='' Else Message:='Angle invalide (0..360).';
+     Dirty:=True;
+    End;
+    'r','R':ResetSettings;
+    's','S':Begin Clockwise:=Not Clockwise;Dirty:=True;End;
+    'f','F':Begin Expand:=Not Expand;Message:='';Dirty:=True;End;
+    'l','L':Begin AllLayers:=Not AllLayers;Dirty:=True;End;
+    't','T':Begin Transparent:=Not Transparent;Dirty:=True;End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
+Procedure ImageSizeDialog;
+Var X,Y,W,H,NW,NH,Field,PixelUnit,DocUnit,Method,MX,MY,MB,Previous,
+ I,Code,BaseW,BaseH:Integer;DPI,BaseDPI,V,TW,TH,TD:Double;
+ LockRatio,Resample,ScaleBrush,Dirty,Done,ReplaceText,Before,Valid:Boolean;
+ Texts:Array[0..4] Of String;Message:String;K,E:Char;
+ Function Decimal(Value:Double):String;
+ Var T:String;
+ Begin Str(Value:0:2,T);Decimal:=T;End;
+ Function UnitFactor:Double;
+ Begin
+  Case DocUnit Of 0:UnitFactor:=2.54;1:UnitFactor:=25.4;
+   Else UnitFactor:=1;End;
+ End;
+ Function UnitName:String;
+ Begin Case DocUnit Of 0:UnitName:='cm';1:UnitName:='mm';Else
+ UnitName:='pouces';End;End;
+ Procedure Sync(Keep:Integer);
+ Begin
+  If PixelUnit=0 Then Begin
+   If Keep<>0 Then Texts[0]:=IntToStr(NW);
+   If Keep<>1 Then Texts[1]:=IntToStr(NH);
+  End Else Begin
+   If Keep<>0 Then Texts[0]:=Decimal(NW*100.0/ImgW);
+   If Keep<>1 Then Texts[1]:=Decimal(NH*100.0/ImgH);
+  End;
+  If Keep<>2 Then Texts[2]:=Decimal(DPI);
+  If Keep<>3 Then Texts[3]:=Decimal(NW/DPI*UnitFactor);
+  If Keep<>4 Then Texts[4]:=Decimal(NH/DPI*UnitFactor);
+  Dirty:=True;
+ End;
+ Procedure Focus(N:Integer);
+ Begin
+  Field:=N;ReplaceText:=True;BaseW:=NW;BaseH:=NH;BaseDPI:=DPI;
+ End;
+ Procedure Reset;
+ Begin
+  NW:=ImgW;NH:=ImgH;DPI:=ImageDPI;LockRatio:=True;Resample:=True;
+  ScaleBrush:=False;Method:=2;PixelUnit:=0;DocUnit:=0;
+  Before:=False;Message:='';Valid:=True;Sync(-1);Focus(0);
+ End;
+ Procedure Change;
+ Var T:String;J:Integer;
+ Begin
+  T:=Texts[Field];For J:=1 To Length(T) Do If T[J]=',' Then T[J]:='.';
+  Val(T,V,Code);Valid:=(Code=0) And (V>0);Dirty:=True;
+  If Not Valid Then Begin Message:='Valeur positive attendue.';Exit;End;
+  TW:=NW;TH:=NH;TD:=DPI;
+  Case Field Of
+   0,1:Begin
+    If Not Resample Then Begin
+    Valid:=False;Message:='Pixels verrouilles.';Exit;End;
+    If Field=0 Then Begin
+     TW:=V;If PixelUnit=1 Then TW:=ImgW*V/100;
+     If LockRatio Then TH:=TW*ImgH/ImgW;
+    End Else Begin
+     TH:=V;If PixelUnit=1 Then TH:=ImgH*V/100;
+     If LockRatio Then TW:=TH*ImgW/ImgH;
+    End;
+   End;
+   2:Begin
+    TD:=V;
+    If Resample Then Begin TW:=BaseW*TD/BaseDPI;TH:=BaseH*TD/BaseDPI;End;
+   End;
+   3,4:Begin
+    If Resample Then Begin
+     If Field=3 Then Begin
+      TW:=V/UnitFactor*DPI;If LockRatio Then TH:=TW*ImgH/ImgW;
+     End Else Begin
+      TH:=V/UnitFactor*DPI;If LockRatio Then TW:=TH*ImgW/ImgH;
+     End;
+    End Else If Field=3 Then TD:=ImgW*UnitFactor/V
+     Else TD:=ImgH*UnitFactor/V;
+   End;
+  End;
+  Valid:=(TW>=0.5) And (TH>=0.5) And (TW<4096.5) And (TH<4096.5)
+   And (TD>=1) And (TD<=9600);
+  If Not Valid Then Begin
+   Message:='Pixels : 1..4096, ppp : 1..9600.';Exit;
+  End;
+  NW:=Max(1,Round(TW));NH:=Max(1,Round(TH));DPI:=TD;
+  Message:='';Sync(Field);
+ End;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+24,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+24,True);SetColor(Black);
+  OutTextXY(X+L+7,Y+T+8,Caption);
+ End;
+ Procedure Option(T:Integer;Checked:Boolean;Const Caption:String);
+ Begin
+  SetColor(Black);Rectangle(X+302,Y+T,X+314,Y+T+12);
+  If Checked Then Begin
+   Line(X+304,Y+T+6,X+307,Y+T+10);Line(X+307,Y+T+10,X+313,Y+T+2);
+  End;
+  OutTextXY(X+322,Y+T+3,Caption);
+ End;
+ Function MethodName:String;
+ Begin
+  Case Method Of
+   0:MethodName:='Au plus proche';1:MethodName:='Bilineaire';
+   2:MethodName:='Bicubique';3:MethodName:='Bicubique plus lisse';
+   Else MethodName:='Bicubique plus net';
+  End;
+ End;
+ Procedure Draw;
+ Var J,T,PX,PY,OX,OY,PW,PH,LCount:Integer;Scale,SX,SY:Double;
+     Color:Byte;S:String;
+ Begin
+  HideMouseCursor;FillRect(X,Y,X+W,Y+H,LightGray);
+  DrawBevel(X,Y,X+W,Y+H,True);
+  FillRect(X+3,Y+3,X+W-3,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Taille de l''image - dimensions et impression');
+  SetColor(Black);OutTextXY(X+20,Y+40,'Apercu - palette VGA 16 couleurs');
+  PW:=NW;PH:=NH;If Before Then Begin PW:=ImgW;PH:=ImgH;End;
+  Scale:=Min(242000 Div PW,200000 Div PH)/1000;
+  If Scale<=0 Then Scale:=0.001;
+  For PY:=0 To 211 Do For PX:=0 To 259 Do Begin
+   OX:=Trunc((PX-129.5)/Scale+(PW-1)/2+0.5+65536)-65536;
+   OY:=Trunc((PY-105.5)/Scale+(PH-1)/2+0.5+65536)-65536;
+   Color:=LightGray;If ((PX Div 8+PY Div 8) And 1)=0 Then Color:=White;
+   If (OX>=0) And (OY>=0) And (OX<PW) And (OY<PH) Then Begin
+    If Before Or ((NW=ImgW) And (NH=ImgH)) Then
+     Color:=Composite(OX,OY)
+    Else Begin
+     SX:=(OX+0.5)*ImgW/NW-0.5;SY:=(OY+0.5)*ImgH/NH-0.5;
+     Color:=ResizeSample(-1,SX,SY,Method);
+    End;
+    If Color=255 Then Begin Color:=LightGray;
+     If ((PX Div 8+PY Div 8) And 1)=0 Then Color:=White;End;
+   End;
+   PutPixel(X+20+PX,Y+59+PY,Color);
+  End;
+  SetColor(Black);Rectangle(X+19,Y+58,X+280,Y+271);
+  If Before Then S:='AVANT' Else S:='APRES';
+  OutTextXY(X+28,Y+65,S);Button(20,279,115,'Avant / Apres');
+  Button(148,279,132,'Unite : '+UnitName);
+  OutTextXY(X+302,Y+40,'Dimensions des pixels');
+  For J:=0 To 4 Do Begin
+   Case J Of
+    0:Begin T:=64;S:='Largeur';End;
+    1:Begin T:=98;S:='Hauteur';End;
+    2:Begin T:=132;S:='Resolution';End;
+    3:Begin T:=204;S:='Largeur';End;
+    4:Begin T:=238;S:='Hauteur';End;
+   End;
+   SetColor(Black);OutTextXY(X+302,Y+T+8,S);
+   Color:=White;If (J<2) And Not Resample Then Color:=LightGray;
+   FillRect(X+392,Y+T,X+494,Y+T+23,Color);
+   If J=Field Then SetColor(Blue) Else SetColor(DarkGray);
+   Rectangle(X+392,Y+T,X+494,Y+T+23);SetColor(Black);
+   OutTextXY(X+399,Y+T+8,Texts[J]);
+   If J<2 Then Begin
+    S:='pixels';If PixelUnit=1 Then S:='%';Button(505,T,90,S+' v');
+   End Else If J=2 Then OutTextXY(X+507,Y+T+8,'px/pouce')
+    Else OutTextXY(X+507,Y+T+8,UnitName);
+  End;
+  SetColor(Black);OutTextXY(X+302,Y+182,'Taille d''impression');
+  Option(277,LockRatio,'Conserver les proportions');
+  Option(299,Resample,'Reechantillonnage');
+  Option(321,ScaleBrush,'Pinceau a l''echelle');
+  Button(302,343,293,MethodName+' v');
+  SetColor(Black);
+  OutTextXY(X+20,Y+318,'Avant : '+IntToStr(ImgW)+' x '+IntToStr(ImgH));
+  OutTextXY(X+20,Y+334,'Apres : '+IntToStr(NW)+' x '+IntToStr(NH));
+  LCount:=0;For J:=0 To MAX_LAYERS-1 Do If Layers[J].Used Then Inc(LCount);
+  S:=Decimal(LongInt(NW)*NH*(LCount*1.0)/1048576);
+  OutTextXY(X+20,Y+350,'Calques : '+S+' Mo ('+IntToStr(LCount)+')');
+  S:=Decimal(LongInt(NW)*NH*3/1048576);
+  OutTextXY(X+20,Y+366,'RGB24 estime : '+S+' Mo');
+  If Message<>'' Then Begin SetColor(Red);OutTextXY(X+302,Y+374,Message);End;
+  Button(20,396,105,'Reinitialiser');Button(136,396,55,'50%');
+  Button(202,396,60,'200%');Button(380,396,96,'Annuler');
+  Button(490,396,105,'Appliquer');ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Choose(Kind:Integer);
+ Var Items:Array[0..4] Of String;Count,Sel,L,T,BW,J,OldB,B,XM,YM:Integer;
+     Finish,Accept:Boolean;Ch,Ext:Char;
+ Begin
+  L:=302;T:=233;BW:=293;Count:=5;Sel:=Method;
+  If Kind=0 Then Begin
+   Items[0]:='pixels';Items[1]:='%';Count:=2;Sel:=PixelUnit;
+   L:=505;T:=166;BW:=90;
+  End Else If Kind=1 Then Begin
+   Items[0]:='cm';Items[1]:='mm';Items[2]:='pouces';
+   Count:=3;Sel:=DocUnit;L:=148;T:=303;BW:=132;
+  End Else Begin
+   Items[0]:='Au plus proche';Items[1]:='Bilineaire';
+   Items[2]:='Bicubique';Items[3]:='Bicubique plus lisse';
+   Items[4]:='Bicubique plus net';
+  End;
+  Finish:=False;Accept:=False;OldB:=MB;
+  Repeat
+   HideMouseCursor;FillRect(X+L,Y+T,X+L+BW,Y+T+Count*22,White);
+   For J:=0 To Count-1 Do Begin
+    If J=Sel Then Begin
+     FillRect(X+L+1,Y+T+J*22+1,X+L+BW-1,Y+T+(J+1)*22,Blue);
+     SetColor(White);
+    End Else SetColor(Black);
+    OutTextXY(X+L+6,Y+T+J*22+7,Items[J]);
+   End;
+   SetColor(Black);Rectangle(X+L,Y+T,X+L+BW,Y+T+Count*22);
+   ShowMouseCursor;
+   Repeat
+    GetMouseStateLocal(XM,YM,B);
+    If ((B And 1)<>0) And ((OldB And 1)=0) Then Begin
+     If (XM>=X+L) And (XM<=X+L+BW) And
+        (YM>=Y+T) And (YM<Y+T+Count*22) Then Begin
+      Sel:=(YM-Y-T) Div 22;Accept:=True;
+     End;
+     Finish:=True;
+    End;
+    OldB:=B;
+    If KeyPressed Then Begin
+     Ch:=ReadKey;
+     If Ch=#0 Then Begin
+      Ext:=ReadKey;
+      If Ext=#72 Then Begin Sel:=(Sel+Count-1) Mod Count;Break;End;
+      If Ext=#80 Then Begin Sel:=(Sel+1) Mod Count;Break;End;
+     End Else If Ch=#27 Then Finish:=True
+      Else If Ch=#13 Then Begin Finish:=True;Accept:=True;End;
+    End;
+    Delay(10);
+   Until Finish;
+  Until Finish;
+  If Accept Then Begin
+   Valid:=True;Message:='';
+   If Kind=0 Then PixelUnit:=Sel
+    Else If Kind=1 Then DocUnit:=Sel Else Method:=Sel;
+   Sync(-1);
+   If Kind=0 Then Begin
+    If Resample Then Focus(0) Else Focus(2);
+   End Else If Kind=1 Then Focus(3);
+  End;
+  GetMouseStateLocal(MX,MY,MB);Dirty:=True;
+ End;
+ Procedure Apply;
+ Begin
+  If Not Valid Then Begin Dirty:=True;Exit;End;
+  If ApplyImageSize(NW,NH,DPI,Method,ScaleBrush And Resample) Then Done:=True
+   Else Begin Message:='Echec : dimensions ou memoire.';Dirty:=True;End;
+ End;
+ Procedure Preset(Percent:Integer);
+ Begin
+  If Not Resample Then Exit;
+  TW:=ImgW*Percent/100;TH:=ImgH*Percent/100;
+  If (TW>4096) Or (TH>4096) Then Begin
+   Message:='Le preset depasse 4096 pixels.';Dirty:=True;Exit;
+  End;
+  NW:=Max(1,Round(TW));NH:=Max(1,Round(TH));Valid:=True;
+  Message:='';Sync(-1);Focus(0);
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;W:=620;H:=430;
+ X:=(ScreenWidth-W) Div 2;Y:=(ScreenHeight-H) Div 2;
+ Done:=False;Reset;GetMouseStateLocal(MX,MY,Previous);
+ Repeat
+  If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
+   If Hit(392,64,494,87) And Resample Then Focus(0)
+   Else If Hit(392,98,494,121) And Resample Then Focus(1)
+   Else If Hit(392,132,494,155) Then Focus(2)
+   Else If Hit(392,204,494,227) Then Focus(3)
+   Else If Hit(392,238,494,261) Then Focus(4)
+   Else If Hit(505,64,595,121) Then Begin
+    Choose(0);
+   End Else If Hit(148,279,280,303) Then Begin
+    Choose(1);
+   End Else If Hit(20,279,135,303) Then Begin Before:=Not Before;Dirty:=True;End
+   Else If Hit(302,277,600,289) And Resample Then Begin
+    LockRatio:=Not LockRatio;Dirty:=True;
+   End Else If Hit(302,299,600,311) Then Begin
+    Resample:=Not Resample;
+    If Not Resample Then Begin NW:=ImgW;NH:=ImgH;LockRatio:=True;End;
+    Valid:=True;Message:='';Sync(-1);Focus(2);
+   End Else If Hit(302,321,600,333) And Resample Then Begin
+    ScaleBrush:=Not ScaleBrush;Dirty:=True;
+   End Else If Hit(302,343,595,367) Then Begin
+    Choose(2);
+   End Else If Hit(20,396,125,420) Then Reset
+   Else If Hit(136,396,191,420) Then Preset(50)
+   Else If Hit(202,396,262,420) Then Preset(200)
+   Else If Hit(380,396,476,420) Then Done:=True
+   Else If Hit(490,396,595,420) Then Apply;
+  End;
+  Previous:=MB;
+  If KeyPressed Then Begin
+   K:=ReadKey;
+   If K=#0 Then Begin
+    E:=ReadKey;
+    If E In [#72,#80] Then Begin
+     Val(Texts[Field],V,Code);If Code=0 Then Begin
+      If E=#72 Then V:=V+1 Else V:=V-1;
+      Texts[Field]:=Decimal(V);Change;ReplaceText:=True;
+     End;
+    End;
+   End Else Case K Of
+    #27:Done:=True;#13:Apply;#9:Begin
+     I:=(Field+1) Mod 5;If Not Resample And (I<2) Then I:=2;Focus(I);
+    End;
+    #8:Begin
+     If ReplaceText Then Texts[Field]:=''
+      Else Delete(Texts[Field],Length(Texts[Field]),1);
+     ReplaceText:=False;Change;
+    End;
+    '0'..'9','.',',':Begin
+     If ReplaceText Then Texts[Field]:='';ReplaceText:=False;
+     If Length(Texts[Field])<9 Then Texts[Field]:=Texts[Field]+K;Change;
+    End;
+    'r','R':Reset;'v','V':Begin Before:=Not Before;Dirty:=True;End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 Procedure HandleMenuClick(MIdx, IIdx: Integer);
 Begin
  MenuActive := False;
@@ -5867,11 +6603,12 @@ Begin
    6: Begin ClearLayer(ActiveLayer, 255); ImageModified:=True; DrawFullUI; End;
   End;
   MENU_IMAGE: Case IIdx Of
-   0: ShowDialog('Taille image', 'Largeur:'+IntToStr(ImgW)+' Hauteur:'+IntToStr(ImgH));
+   0: ImageSizeDialog;
    1: Begin RotateLayer90(True); DrawFullUI; End;
    2: Begin RotateLayer90(False); DrawFullUI; End;
    3: Begin FlipH; DrawFullUI; End;
    4: Begin FlipV; DrawFullUI; End;
+   5: RotationDialog;
   End;
   MENU_LAYER: Case IIdx Of
    0: Begin NewLayerAction; DrawFullUI; End;
@@ -6449,9 +7186,11 @@ Begin
   Layers[I].Used := False;
   Layers[I].Pixels := Nil;
  End;
- For I:=0 To MAX_UNDO_LEVELS-1 Do UndoBuffers[I] := Nil;
+ For I:=0 To MAX_UNDO_LEVELS-1 Do Begin
+  UndoBuffers[I]:=Nil;RotationUndo[I]:=Nil;UndoSizes[I]:=0;
+ End;
  UndoCount := 0;
- ImgW := 400; ImgH := 300;
+ ImgW := 400; ImgH := 300;ImageDPI:=72;
  AllocLayer(0, 'Arriere-plan', False);
  LayerCount := 1;
  ActiveLayer := 0;
@@ -6478,8 +7217,7 @@ Var I: Integer; Sz: LongInt;
 Begin
  Sz := LongInt(ImgW)*ImgH;
  For I:=0 To MAX_LAYERS-1 Do If Layers[I].Used Then FreeLayer(I);
- For I:=0 To MAX_UNDO_LEVELS-1 Do
-  If UndoBuffers[I]<>Nil Then FreeMem(UndoBuffers[I], Sz);
+ ClearUndoHistory;
  HideMouseCursor;
  CloseGraph;
 End;

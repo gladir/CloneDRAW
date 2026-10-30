@@ -5,6 +5,22 @@ Apercu de AUTOCAD :
 
 <img width="642" height="482" alt="image" src="https://github.com/user-attachments/assets/2628f44b-b358-4ced-9eb7-591b17ead65c" />
 
+Aperçu de Photoshop :
+
+<img width="639" height="475" alt="image" src="https://github.com/user-attachments/assets/3d8e4b14-c858-46b8-9fbf-f0c0d8ef4330" />
+
+<table>
+	<tr>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ab226dc6-fea2-489b-a5bb-dc7eb6a5b462" /></td>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/18f01429-bd6e-4f02-980a-0c309f5adb1c" /></td>
+	</tr>
+	<tr>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/f8c26a4d-21c0-45a8-a3be-e3185726f93b" /></td>
+		<td></td>
+	</tr>
+</table>
+
+
 Apercu de PAINT :
 
 <img width="641" height="480" alt="image" src="https://github.com/user-attachments/assets/a9503152-d653-4fd0-9e35-14865e377008" />
@@ -199,12 +215,36 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td><b>ICO2XBM.PAS</b></td>
 			<td>Cette commande permet de transformer un icône (.ICO) en format XBM (X BitMap).</td>
 		</tr>	
-    <tr>
-      <td><b>PAINT.PAS</b></td>
-      <td>Cette commande permet de laner le programme de dessin Bitamp (Paint).</td>
-    </tr>
-    <tr>
-      <td><b>VISIO.PAS</b></td>
-      <td>Cette commande permet de lancer un clone de Visio.</td>
-    </tr>
+    	<tr>
+      		<td><b>PAINT.PAS</b></td>
+      		<td>Cette commande permet de laner le programme de dessin Bitamp (Paint).</td>
+    	</tr>
+		<tr>
+			<td><b>PSP.PAS</b></td>
+			<td>Cette commande permet de lancer un clone de Photoshop.</td>
+		</tr>
+	    <tr>
+    		<td><b>VISIO.PAS</b></td>
+      		<td>Cette commande permet de lancer un clone de Visio.</td>
+    	</tr>
 </table>
+
+<h2>Compilation</h2>
+	
+Les fichiers Pascal n'ont aucune dépendances, il suffit de télécharger le fichier désiré et de le compiler avec Free Pascal avec la syntaxe de commande  :
+
+<pre><b>fpc</b> <i>LEFICHIER.PAS</i></pre>
+	
+Sinon, vous pouvez également le compiler avec le Turbo Pascal à l'aide de la syntaxe de commande suivante :	
+
+<pre><b>tpc</b> <i>LEFICHIER.PAS</i></pre>
+	
+Par exemple, si vous voulez compiler ICO2XBM.PAS, vous devrez tapez la commande suivante :
+
+<pre><b>fpc</b> ICO2XBM.PAS</pre>
+
+<h2>Licence</h2>
+<ul>
+ <li>Le code source est publié sous la licence <a href="https://github.com/gladir/CloneDRAW/blob/main/LICENSE">MIT</a>.</li>
+ <li>Le paquet original est publié sous la licence <a href="https://github.com/gladir/CloneDRAW/blob/main/LICENSE">MIT</a>.</li>
+</ul>

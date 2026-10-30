@@ -16,7 +16,7 @@ Aperçu de Photoshop :
 	</tr>
 	<tr>
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/f8c26a4d-21c0-45a8-a3be-e3185726f93b" /></td>
-		<td></td>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ff7db611-3799-4f9f-b2ff-d4155dd54d8c" /></td>
 	</tr>
 </table>
 

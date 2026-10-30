@@ -9,7 +9,8 @@
   Les commandes non implementees sont grisees.
   AI10 est un ancien format prive, PAS un format Adobe Illustrator.
   Import AI classique limite et ancien AI10 prive avec navigateur graphique.
-  Restent notamment : AI moderne/PDF, export Adobe, rotation/groupes,
+  Enregistrement AI/EPS classique et AI10 prive.
+  Restent notamment : AI moderne/PDF, rotation/groupes,
   formatage du texte, calques, historique, SVG et BMP.
 }
 
@@ -85,6 +86,8 @@ Const
  CMD_ZOOM_OUT = 10;
  CMD_ZOOM_RESET = 11;
  CMD_OPEN = 12;
+ CMD_SAVE = 13;
+ CMD_SAVE_AS = 14;
  FD_MAX_ENTRIES = 512;
  FD_ROWS = 13;
  ZOOM_LEVELS: Array[0..5] Of Integer = (25,50,100,200,400,800);
@@ -264,8 +267,12 @@ Var
  FileLastList, FileLastIndex: Integer;
  FileReplace: Boolean;
  FileFilterSaved: Integer;
+ FileSaveMode, FileOverwrite: Boolean;
+ PendingSaveName, SaveError: String;
+ CurrentSaveFormat: Integer;
 
 Function LoadDocument(Name: String): Boolean; Forward;
+ Function SaveDocument(Name: String; Format: Integer): Boolean; Forward;
 
 Function ZoomScale: Real;
 Begin
@@ -1570,8 +1577,8 @@ Begin
  Menus[6].Title := 'Aide';
  AddMenuItem(0, 'Nouveau', CMD_NEW);
  AddMenuItem(0, 'Ouvrir...', CMD_OPEN);
- AddMenuItem(0, 'Enregistrer', CMD_NONE);
- AddMenuItem(0, 'Enregistrer sous...', CMD_NONE);
+ AddMenuItem(0, 'Enregistrer', CMD_SAVE);
+ AddMenuItem(0, 'Enregistrer sous...', CMD_SAVE_AS);
  AddMenuItem(0, 'Exporter...', CMD_NONE);
  AddMenuItem(0, '-', CMD_NONE);
  AddMenuItem(0, 'Quitter', CMD_EXIT);
@@ -1758,6 +1765,14 @@ Function FileMatches(Name: String): Boolean;
 Var D: DirStr; N: NameStr; E: ExtStr;
 Begin
  FSplit(Name,D,N,E); E := UpperText(E);
+ If FileSaveMode Then Begin
+  Case FileFilter Of
+   0: FileMatches := E='.AI';
+   1: FileMatches := E='.EPS';
+   Else FileMatches := (E='.AI10') Or (E='.CDRA');
+  End;
+  Exit;
+ End;
  Case FileFilter Of
   0: FileMatches := (E='.AI') Or (E='.EPS') Or (E='.AI10') Or (E='.CDRA');
   1: FileMatches := (E='.AI') Or (E='.EPS');
@@ -1768,6 +1783,14 @@ End;
 
 Function FileFilterLabel(Index: Integer): String;
 Begin
+ If FileSaveMode Then Begin
+  Case Index Of
+   0: FileFilterLabel := 'Illustrator classique (*.ai)';
+   1: FileFilterLabel := 'PostScript EPS (*.eps)';
+   Else FileFilterLabel := 'Prive AI10 - objets exacts (*.ai10)';
+  End;
+  Exit;
+ End;
  Case Index Of
   0: FileFilterLabel := 'Illustrator / AI10 (*.ai;*.eps;*.ai10;*.cdra)';
   1: FileFilterLabel := 'Illustrator classique (*.ai;*.eps)';
@@ -1853,6 +1876,7 @@ Var D: DirStr; N: NameStr; E: ExtStr; Initial: String;
 Begin
  ResetToolTip;
  FileDialogActive := True; FileFilterOpen := False;
+ FileSaveMode := False; FileOverwrite := False;
  FileFocus := 1; FileFilter := 0; FileNameInput := ''; FileCursor := 0;
  FileReplace := False; FileDialogError := '';
  GetDir(0,Initial);
@@ -1872,8 +1896,67 @@ Begin
  NeedsRedraw := True;
 End;
 
+Procedure StartSaveDialog;
+Var D: DirStr; N: NameStr; E: ExtStr; Ext: String;
+Begin
+ StartFileDialog;
+ FileSaveMode := True;
+ FileFilter := CurrentSaveFormat;
+ If (FileFilter<0) Or (FileFilter>2) Then FileFilter := 0;
+ If ScanFileDirectory(FilePath) Then Begin
+  If CurrentFile<>'' Then Begin
+   FSplit(CurrentFile,D,N,E);
+   Case FileFilter Of
+    0: Ext := '.ai';
+    1: Ext := '.eps';
+    Else Ext := '.ai10';
+   End;
+   FileNameInput := N+Ext;
+  End Else FileNameInput := 'Sans titre.ai';
+  FileFocus := 2; FileCursor := Length(FileNameInput); FileReplace := True;
+ End;
+End;
+
+Procedure ApplyFileFilter(NewFilter: Integer);
+Var D: DirStr; N: NameStr; E: ExtStr; Ext: String;
+Begin
+ FileFilter := NewFilter;
+ If FileSaveMode And (FileNameInput<>'') Then Begin
+  FSplit(FileNameInput,D,N,E);
+  If (E='') Or (UpperText(E)='.AI') Or (UpperText(E)='.EPS') Or
+     (UpperText(E)='.AI10') Or (UpperText(E)='.CDRA') Then Begin
+   Case FileFilter Of
+    0: Ext := '.ai';
+    1: Ext := '.eps';
+    Else Ext := '.ai10';
+   End;
+   If Length(D)+Length(N)+Length(Ext)<=255 Then FileNameInput := D+N+Ext
+   Else FileDialogError := 'Nom trop long pour changer l''extension.';
+  End;
+ End;
+ If ScanFileDirectory(FilePath) Then
+  If Not FileSaveMode Then FileNameInput := '';
+End;
+
+Function FileExistsChecked(Name: String; Var Exists: Boolean): Boolean;
+Var F: File; Attr: Word; Code: Integer;
+Begin
+ Assign(F,Name); GetFAttr(F,Attr); Code := DosError;
+ Exists := Code=0;
+ FileExistsChecked := (Code=0) Or (Code=2) Or (Code=3);
+End;
+
+Procedure CompleteDialogSave;
+Begin
+ FileOverwrite := False;
+ If SaveDocument(PendingSaveName,FileFilter) Then Begin
+  FileDialogActive := False; FileFilterOpen := False;
+ End Else FileDialogError := SaveError;
+ NeedsRedraw := True;
+End;
+
 Procedure ActivateFileChoice;
-Var Name: String;
+Var Name, Ext: String; D: DirStr; N: NameStr; E: ExtStr; Exists: Boolean;
 Begin
  FileDialogError := '';
  If (FileFocus=0) Or ((FileFocus=5) And (FileNameInput='') And (FileDirSel>=0)) Then Begin
@@ -1892,6 +1975,34 @@ Begin
  End;
  If FileFocus=3 Then Begin
   FileDialogError := 'Le chemin doit designer un dossier.'; Exit;
+ End;
+ If FileSaveMode Then Begin
+  FSplit(Name,D,N,E);
+  Case FileFilter Of
+   0: Ext := '.ai';
+   1: Ext := '.eps';
+   Else Ext := '.ai10';
+  End;
+  If (N='') Or (Pos('*',Name)>0) Or (Pos('?',Name)>0) Then Begin
+   FileDialogError := 'Nom de fichier invalide.'; Exit;
+  End;
+  If E='' Then Begin
+   If Length(Name)+Length(Ext)>255 Then Begin
+    FileDialogError := 'Chemin trop long.'; Exit;
+   End;
+   Name := Name+Ext;
+  End Else If (UpperText(E)<>UpperText(Ext)) And
+    Not ((FileFilter=2) And (UpperText(E)='.CDRA')) Then Begin
+   FileDialogError := 'Extension incompatible : choisir le bon type ou modifier le nom.';
+   Exit;
+  End;
+  If Not FileExistsChecked(Name,Exists) Then Begin
+   FileDialogError := 'Impossible de verifier le fichier cible (acces refuse).'; Exit;
+  End;
+  PendingSaveName := Name;
+  If Exists Then Begin FileOverwrite := True; NeedsRedraw := True; End
+  Else CompleteDialogSave;
+  Exit;
  End;
  If LoadDocument(Name) Then Begin
   FileDialogActive := False; FileFilterOpen := False;
@@ -1950,7 +2061,9 @@ Begin
  SetFillStyle(SolidFill,COLOR_BG); Bar(20,44,620,437);
  SetColor(COLOR_BORDER); Rectangle(20,44,620,437);
  SetFillStyle(SolidFill,COLOR_HIGHLIGHT); Bar(22,46,618,66);
- SetColor(COLOR_WINDOW); OutTextXY(30,52,'Ouvrir un fichier - Illustrator / AI10');
+ SetColor(COLOR_WINDOW);
+ If FileSaveMode Then OutTextXY(30,52,'Enregistrer sous - Illustrator / AI10')
+ Else OutTextXY(30,52,'Ouvrir un fichier - Illustrator / AI10');
  FileButton(590,47,615,64,'X',False);
  SetColor(COLOR_TEXT); OutTextXY(30,87,'Dossier:');
  Field(100,77,478,99,3,FilePathInput);
@@ -1996,11 +2109,15 @@ Begin
  End;
  SetColor(COLOR_TEXT); OutTextXY(32,358,'Nom:');
  Field(100,348,495,372,2,FileNameInput);
- FileButton(510,348,607,372,'Ouvrir',FileFocus=5);
+ If FileSaveMode Then FileButton(510,348,607,372,'Enregistrer',FileFocus=5)
+ Else FileButton(510,348,607,372,'Ouvrir',FileFocus=5);
  SetColor(COLOR_TEXT); OutTextXY(32,391,'Type:');
  FileButton(100,382,495,406,Copy(FileFilterLabel(FileFilter),1,46)+' v',FileFocus=4);
  FileButton(510,382,607,406,'Annuler',FileFocus=6);
- Info := 'Tab : champ | Entree : ouvrir | Echap : annuler';
+ Info := 'Tab : champ | Entree : valider | Echap : annuler';
+ If FileSaveMode Then
+  If FileFilter=2 Then Info := 'AI10 prive : conserve les objets ; pas un format Adobe.'
+  Else Info := 'AI/EPS : texte Courier, contours fins ; AI10 pour les objets exacts.';
  If (FileSel>=0) And (FileSel<FileEntryCount) Then Begin
   UnpackTime(FileEntries[FileSel].Stamp,DT);
   Str(DT.Year,Info); Str(DT.Month,S); Info := Info+'-'+S;
@@ -2016,6 +2133,7 @@ Begin
   SetFillStyle(SolidFill,COLOR_BG); Bar(100,292,495,380);
   SetColor(COLOR_TEXT); Rectangle(100,292,495,380);
   For I := 0 To 3 Do Begin
+   If FileSaveMode And (I=3) Then Break;
    Y := 294+I*21;
    If I=FileFilter Then Begin
     SetFillStyle(SolidFill,COLOR_HIGHLIGHT); Bar(102,Y,493,Y+20);
@@ -2023,6 +2141,14 @@ Begin
    End Else SetColor(COLOR_TEXT);
    OutTextXY(106,Y+6,Copy(FileFilterLabel(I),1,47));
   End;
+ End;
+ If FileOverwrite Then Begin
+   SetFillStyle(SolidFill,COLOR_BG); Bar(90,170,550,290);
+   SetColor(COLOR_TEXT); Rectangle(90,170,550,290);
+   OutTextXY(105,185,'Ce fichier existe. Le remplacer ?');
+   OutTextXY(105,207,Copy(PendingSaveName,1,53));
+   FileButton(140,244,290,274,'Remplacer',True);
+   FileButton(330,244,480,274,'Annuler',False);
  End;
 End;
 
@@ -2043,10 +2169,16 @@ Procedure HandleFileMouse;
 Var List, Index, Count, TopIndex, SX, Delta: Integer; Now: LongInt;
 Begin
  NeedsRedraw := True;
+ If FileOverwrite Then Begin
+  If (MouseY>=244) And (MouseY<=274) Then
+   If (MouseX>=140) And (MouseX<=290) Then CompleteDialogSave
+   Else If (MouseX>=330) And (MouseX<=480) Then FileOverwrite := False;
+  Exit;
+ End;
  If FileFilterOpen Then Begin
-  If (MouseX>=100) And (MouseX<=495) And (MouseY>=294) And (MouseY<378) Then Begin
-   FileFilter := (MouseY-294) Div 21;
-   If ScanFileDirectory(FilePath) Then FileNameInput := '';
+  If (MouseX>=100) And (MouseX<=495) And (MouseY>=294) And
+     (MouseY<378) And (Not FileSaveMode Or (MouseY<357)) Then Begin
+   ApplyFileFilter((MouseY-294) Div 21);
   End Else FileFilter := FileFilterSaved;
   FileFilterOpen := False; Exit;
  End;
@@ -2108,6 +2240,11 @@ Var S: String; Index, Count, Step: Integer;
 Begin
  NeedsRedraw := True;
  FileLastIndex := -1; FileLastList := -1;
+ If FileOverwrite Then Begin
+  If Key=#27 Then FileOverwrite := False
+  Else If Key=#13 Then CompleteDialogSave;
+  Exit;
+ End;
  If Key=#27 Then Begin
   If FileFilterOpen Then Begin
    FileFilter := FileFilterSaved; FileFilterOpen := False;
@@ -2116,10 +2253,11 @@ Begin
  End;
  If FileFilterOpen Then Begin
   If (Key=#0) And (ExtKey=#72) And (FileFilter>0) Then Dec(FileFilter);
-  If (Key=#0) And (ExtKey=#80) And (FileFilter<3) Then Inc(FileFilter);
+  If (Key=#0) And (ExtKey=#80) And (FileFilter<3) And
+     (Not FileSaveMode Or (FileFilter<2)) Then Inc(FileFilter);
   If Key=#13 Then Begin
    FileFilterOpen := False;
-   If ScanFileDirectory(FilePath) Then FileNameInput := '';
+   ApplyFileFilter(FileFilter);
   End;
   Exit;
  End;
@@ -2198,6 +2336,13 @@ Begin
  End;
  CloseMenu;
  Case Command Of
+  CMD_SAVE_AS: StartSaveDialog;
+  CMD_SAVE:
+   If CurrentFile='' Then StartSaveDialog
+   Else If Not SaveDocument(CurrentFile,CurrentSaveFormat) Then Begin
+    StartSaveDialog;
+    FileDialogError := SaveError;
+   End;
   CMD_OPEN:
    If FileModified Then
     ShowDialog('Ouvrir un document',
@@ -2211,6 +2356,7 @@ Begin
     ObjectCount := 0;
     SelectedObject := -1;
     CurrentFile := '';
+    CurrentSaveFormat := 0;
     FileModified := False;
     ResetZoom;
    End;
@@ -2228,7 +2374,7 @@ Begin
   CMD_HELP:
    ShowDialog('Aide', 'Prototype incomplet. Les commandes grisees sont indisponibles.');
   CMD_SHORTCUTS:
-   ShowDialog('Raccourcis', '1-9 : outils. H : Main. Z : Loupe. 0 : 100 %. F10 : menus.');
+   ShowDialog('Raccourcis', 'Ctrl+O/S : ouvrir/sauver. F12 : sauver sous. F10 : menus.');
   CMD_ABOUT:
    ShowDialog('A propos', 'CloneDRAW AI - prototype Pascal, pas un clone complet.');
   CMD_RESOURCES:
@@ -2375,9 +2521,12 @@ Begin
  ResetToolTip;
  NeedsRedraw := True;
  If FileDialogActive Then Begin HandleFileKey(Key,ExtKey); Exit; End;
- If (Key=#15) And Not DrawingMode And (DialogTitle='') Then Begin
+ If ((Key In [#15,#19]) Or ((Key=#0) And (ExtKey=#134))) And
+    Not DrawingMode And (DialogTitle='') Then Begin
   If TextActive Then FinishText(True);
-  ExecuteMenuItem(MENU_FILE,1);
+  If Key=#15 Then ExecuteMenuItem(MENU_FILE,1)
+  Else If Key=#0 Then ExecuteMenuItem(MENU_FILE,3)
+  Else ExecuteMenuItem(MENU_FILE,2);
   Exit;
  End;
  If Panning Then Begin
@@ -2450,6 +2599,7 @@ Begin
     ObjectCount := 0;
     SelectedObject := -1;
     CurrentFile := '';
+    CurrentSaveFormat := 0;
     FileModified := False;
     ResetZoom;
    End;
@@ -2497,7 +2647,7 @@ Begin
   End;
   '0': ResetZoom;
   #15: ExecuteMenuItem(MENU_FILE,1);
-  #19: StatusMessage := 'Enregistrement Adobe Illustrator non implemente.';
+  #19: ExecuteMenuItem(MENU_FILE,2);
  End;
 End;
 
@@ -2561,6 +2711,9 @@ Begin
  End;
  If Obj.ObjType = OBJ_TEXT Then
   If (Obj.TextObj.Text = '') Or (Obj.TextObj.Color > 15) Then Exit;
+ If Obj.ObjType = OBJ_TEXT Then
+  For I := 1 To Length(Obj.TextObj.Text) Do
+   If Obj.TextObj.Text[I]<#32 Then Exit;
  If Obj.ObjType = OBJ_RECT Then
   If Not ((Obj.Rectangle.Width >= 0) And (Obj.Rectangle.Height >= 0)) Or
      (Obj.Rectangle.StrokeColor > 15) Or (Obj.Rectangle.FillColor > 15) Then Exit;
@@ -2637,7 +2790,8 @@ Function ReadIllustratorDocument(Name: String): Boolean;
 Var F: Text; Ch: Char; Token, Comment, Header: String;
  Stack: Array[0..31] Of Real; SP, Code, I, J, SkipDepth: Integer;
  N, Scale, Left, Bottom, Right, Top, R, G, B: Real;
- HaveBox, Done, PageEnded: Boolean; Stroke, Fill: Byte; Width: Real;
+ HaveBox, Done, PageEnded, StringToken: Boolean; Stroke, Fill: Byte; Width: Real;
+ FontStage: Integer;
  Path, Curve: TGraphicObject; P: TPoint2D;
 
  Procedure Fail(S: String);
@@ -2665,7 +2819,7 @@ Var F: Text; Ch: Char; Token, Comment, Header: String;
 
  Function NextToken: Boolean;
  Begin
-  Token := ''; NextToken := False;
+  Token := ''; NextToken := False; StringToken := False;
   While Not Eof(F) And (ImportError='') Do Begin
    Read(F,Ch);
    If IOResult<>0 Then Begin Fail('Erreur de lecture PostScript.'); Exit; End;
@@ -2692,6 +2846,26 @@ Var F: Text; Ch: Char; Token, Comment, Header: String;
     If (Comment='%Trailer') Or (Comment='%EOF') Then Begin
      Done := True; Exit;
     End;
+   End Else If (SkipDepth=0) And (Ch='(') Then Begin
+    StringToken := True;
+    While Not Eof(F) Do Begin
+     Read(F,Ch);
+     If IOResult<>0 Then Begin Fail('Erreur de lecture du texte.'); Exit; End;
+     If Ch=')' Then Begin NextToken := True; Exit; End;
+     If Ch='\' Then Begin
+      If Eof(F) Then Break;
+      Read(F,Ch);
+      If IOResult<>0 Then Begin Fail('Erreur de lecture du texte.'); Exit; End;
+      If Not (Ch In ['(',')','\']) Then Begin
+       Fail('Echappement PostScript non pris en charge.'); Exit;
+      End;
+     End Else If Ch='(' Then Begin Fail('Texte imbrique non pris en charge.'); Exit; End;
+     If (Ch<#32) Or (Length(Token)=255) Then Begin
+      Fail('Texte PostScript invalide ou trop long.'); Exit;
+     End;
+     Token := Token+Ch;
+    End;
+    Fail('Texte PostScript non termine.'); Exit;
    End Else If (SkipDepth=0) And (Ch>' ') Then Begin
     Token := Ch;
     While Not Eof(F) Do Begin
@@ -2757,6 +2931,7 @@ Begin
  {$I-} Assign(F,Name); Reset(F); Code := IOResult; {$I+}
  If Code<>0 Then Begin ImportError := 'Impossible de lire le fichier.'; Exit; End;
  HaveBox := False; Done := False; PageEnded := False; SkipDepth := 0; SP := 0;
+ FontStage := 0;
  Stroke := 0; Fill := 0; Width := 1;
  FillChar(Path,SizeOf(Path),0); Path.Visible := True;
  {$I-}
@@ -2770,13 +2945,45 @@ Begin
   Code := IOResult;
   If Code<>0 Then Begin Fail('Erreur de lecture PostScript.'); Break; End;
   If PageEnded Then Begin Fail('Documents multipages non pris en charge.'); Break; End;
+  If StringToken Then Begin
+   Header := Token;
+   If Not NextToken Or (Token<>'show') Or (FontStage<>3) Or (SP<>0) Or
+      (Path.Path.PointCount<>1) Or (Header='') Then Begin
+    Fail('Texte PostScript non pris en charge.'); Break;
+   End;
+   If ImportCount=MAX_OBJECTS Then Begin Fail('Limite : 100 objets.'); Break; End;
+   FillChar(Curve,SizeOf(Curve),0); Curve.ObjType := OBJ_TEXT; Curve.Visible := True;
+   Curve.TextObj.X := Path.Path.Points[0].X;
+   Curve.TextObj.Y := Path.Path.Points[0].Y-7;
+   Curve.TextObj.Text := Header; Curve.TextObj.Color := Stroke; Curve.TextObj.FontSize := 8;
+   If Not ValidImportObject(Curve) Then Begin
+    Fail('Texte hors de la page ou format non pris en charge.'); Break;
+   End;
+   ImportObjects[ImportCount] := Curve; Inc(ImportCount);
+   Path.Path.PointCount := 0; Path.Path.Closed := False;
+   Continue;
+  End;
   Val(Token,N,Code);
   If Code=0 Then Begin
    If Not ((N>=-1000000) And (N<=1000000)) Then Fail('Nombre hors limites.')
    Else If SP=32 Then Fail('Pile PostScript trop longue.')
    Else Begin Stack[SP] := N; Inc(SP); End;
   End Else Begin
-   If (Token='m') Or (Token='moveto') Then Begin
+   If Token='/Courier' Then Begin
+    If Not Need(0) Then Break;
+    FontStage := 1;
+   End Else If Token='findfont' Then Begin
+    If (FontStage<>1) Or Not Need(0) Then Begin Fail('Police non prise en charge.'); Break; End;
+   End Else If Token='scalefont' Then Begin
+    If (FontStage<>1) Or Not Need(1) Then Begin Fail('Police non prise en charge.'); Break; End;
+    If Abs(Stack[0]-13.333333)>0.00001 Then Begin
+     Fail('Taille de texte non prise en charge.'); Break;
+    End;
+    FontStage := 2;
+   End Else If Token='setfont' Then Begin
+    If (FontStage<>2) Or Not Need(0) Then Begin Fail('Police non prise en charge.'); Break; End;
+    FontStage := 3;
+   End Else If (Token='m') Or (Token='moveto') Then Begin
     If Need(2) Then
      If Path.Path.PointCount<>0 Then Fail('Chemins composes non pris en charge.')
      Else AddPoint(Stack[0],Stack[1]);
@@ -2868,7 +3075,7 @@ Begin
  If Not HaveBox Then Fail('BoundingBox absente.');
  If (SP<>0) Or (SkipDepth<>0) Or (Path.Path.PointCount<>0) Then
   Fail('Fichier PostScript incomplet.');
- If ImportCount=0 Then Fail('Aucun objet vectoriel pris en charge.');
+ If (ImportCount=0) And Not PageEnded Then Fail('Aucun objet vectoriel pris en charge.');
  ReadIllustratorDocument := ImportError='';
 End;
 
@@ -2899,39 +3106,250 @@ Begin
  For I := 0 To ImportCount-1 Do Objects[I] := ImportObjects[I];
  ObjectCount := ImportCount;
  SelectedObject := -1; CurrentFile := Name; FileModified := False;
+ If Legacy Then CurrentSaveFormat := 2
+ Else Begin
+  CurrentSaveFormat := 0;
+  If UpperText(Copy(Name,Length(Name)-3,4))='.EPS' Then CurrentSaveFormat := 1;
+ End;
  ResetZoom; NeedsRedraw := True;
  If Legacy Then StatusMessage := 'Format prive AI10 charge (pas Adobe Illustrator).'
  Else StatusMessage := 'AI classique importe : couleurs VGA, courbes approximees, traits fins.';
  LoadDocument := True;
 End;
 
-Procedure SaveFile(Filename: String);
-Var
- F: File;
- Sig: Array[0..3] of Char;
- Ver: Word;
- I: Integer;
+Function WriteClassicDocument(Name: String): Boolean;
+Var F: Text; I, J, Code: Integer; Obj: TGraphicObject;
+ X, Y, RX, RY: Real; S: String;
+Const
+ RGB: Array[0..15,0..2] Of Byte =
+  ((0,0,0),(0,0,170),(0,170,0),(0,170,170),
+   (170,0,0),(170,0,170),(170,85,0),(170,170,170),
+   (85,85,85),(85,85,255),(85,255,85),(85,255,255),
+   (255,85,85),(255,85,255),(255,255,85),(255,255,255));
+
+ Function Num(V: Real): String;
+ Var T: String;
+ Begin
+  Str(V:0:6,T);
+  While (Length(T)>1) And (T[Length(T)]='0') Do Delete(T,Length(T),1);
+  If T[Length(T)]='.' Then Delete(T,Length(T),1);
+  Num := T;
+ End;
+
+ Procedure Point(X,Y: Real; Op: String);
+ Begin
+  Writeln(F,Num(X),' ',Num(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1-Y),' ',Op);
+ End;
+
+ Procedure Color(C: Byte; Op: String);
+ Begin
+  Writeln(F,Num(RGB[C,0]/255),' ',Num(RGB[C,1]/255),' ',Num(RGB[C,2]/255),' ',Op);
+ End;
+
+ Procedure Cubic(X1,Y1,X2,Y2,X3,Y3: Real);
+ Var H: Integer;
+ Begin
+  H := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1;
+  Writeln(F,Num(X1),' ',Num(H-Y1),' ',Num(X2),' ',Num(H-Y2),' ',
+          Num(X3),' ',Num(H-Y3),' c');
+ End;
+
 Begin
- Assign(F, Filename);
- Rewrite(F, 1);
- 
- Sig[0] := 'A';
- Sig[1] := 'I';
- Sig[2] := '1';
- Sig[3] := '0';
- BlockWrite(F, Sig, 4);
- 
- Ver := AI_VERSION;
- BlockWrite(F, Ver, 2);
- 
- BlockWrite(F, ObjectCount, 2);
- 
- For I := 0 To ObjectCount - 1 Do
-  BlockWrite(F, Objects[I], SizeOf(TGraphicObject));
- 
- Close(F);
- FileModified := False;
- CurrentFile := Filename;
+ WriteClassicDocument := False;
+ {$I-} Assign(F,Name); Rewrite(F); Code := IOResult; {$I+}
+ If Code<>0 Then Begin SaveError := 'Impossible de creer le fichier temporaire.'; Exit; End;
+ {$I-}
+ Writeln(F,'%!PS-Adobe-3.0 EPSF-3.0');
+ Writeln(F,'%%Creator: CloneDRAW AI');
+ Writeln(F,'%%BoundingBox: 0 0 ',ScreenWidth-TOOLBAR_WIDTH-1,' ',
+  ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1);
+ Writeln(F,'%%EndComments');
+ Writeln(F,'%%BeginProlog');
+ Writeln(F,'/m { moveto } bind def /l { lineto } bind def');
+ Writeln(F,'/c { curveto } bind def /h { closepath } bind def');
+ Writeln(F,'/CDStroke [0 0 0] def /CDFill [0 0 0] def');
+ Writeln(F,'/S { CDStroke aload pop setrgbcolor stroke } bind def');
+ Writeln(F,'/s { closepath S } bind def');
+ Writeln(F,'/B { gsave CDFill aload pop setrgbcolor fill grestore S } bind def');
+ Writeln(F,'/RG { 3 array astore /CDStroke exch def CDStroke aload pop setrgbcolor } bind def');
+ Writeln(F,'/rg { 3 array astore /CDFill exch def } bind def');
+ Writeln(F,'%%EndProlog');
+ Writeln(F,'1 setlinewidth');
+ For I := 0 To ObjectCount-1 Do Begin
+  Obj := Objects[I];
+  If Obj.Visible Then Case Obj.ObjType Of
+   OBJ_RECT: Begin
+    Color(Obj.Rectangle.StrokeColor,'RG');
+    X := Obj.Rectangle.X; Y := Obj.Rectangle.Y;
+    Point(X,Y,'m'); Point(X+Obj.Rectangle.Width,Y,'l');
+    Point(X+Obj.Rectangle.Width,Y+Obj.Rectangle.Height,'l');
+    Point(X,Y+Obj.Rectangle.Height,'l'); Writeln(F,'s');
+   End;
+   OBJ_ELLIPSE: Begin
+    Color(Obj.Ellipse.StrokeColor,'RG');
+    X := Obj.Ellipse.CX; Y := Obj.Ellipse.CY;
+    RX := Obj.Ellipse.RX; RY := Obj.Ellipse.RY;
+    Point(X+RX,Y,'m');
+    Cubic(X+RX,Y+RY*0.55228475,X+RX*0.55228475,Y+RY,X,Y+RY);
+    Cubic(X-RX*0.55228475,Y+RY,X-RX,Y+RY*0.55228475,X-RX,Y);
+    Cubic(X-RX,Y-RY*0.55228475,X-RX*0.55228475,Y-RY,X,Y-RY);
+    Cubic(X+RX*0.55228475,Y-RY,X+RX,Y-RY*0.55228475,X+RX,Y);
+    Writeln(F,'s');
+   End;
+   OBJ_LINE: Begin
+    Color(Obj.Line.StrokeColor,'RG');
+    Point(Obj.Line.X1,Obj.Line.Y1,'m'); Point(Obj.Line.X2,Obj.Line.Y2,'l');
+    Writeln(F,'S');
+   End;
+   OBJ_BEZIER: Begin
+    Color(Obj.Path.StrokeColor,'RG');
+    Point(Obj.Path.Points[0].X,Obj.Path.Points[0].Y,'m');
+    Cubic(Obj.Path.Points[1].X,Obj.Path.Points[1].Y,
+          Obj.Path.Points[2].X,Obj.Path.Points[2].Y,
+          Obj.Path.Points[3].X,Obj.Path.Points[3].Y);
+    Writeln(F,'S');
+   End;
+   OBJ_PATH, OBJ_FILLED_PATH: Begin
+    Color(Obj.Path.StrokeColor,'RG');
+    If Obj.ObjType=OBJ_FILLED_PATH Then Color(Obj.Path.FillColor,'rg');
+    Point(Obj.Path.Points[0].X,Obj.Path.Points[0].Y,'m');
+    If Obj.Path.PointCount=1 Then Point(Obj.Path.Points[0].X,Obj.Path.Points[0].Y,'l');
+    For J := 1 To Obj.Path.PointCount-1 Do
+     Point(Obj.Path.Points[J].X,Obj.Path.Points[J].Y,'l');
+    If Obj.Path.Closed Then Writeln(F,'h');
+    If Obj.ObjType=OBJ_FILLED_PATH Then Writeln(F,'B') Else Writeln(F,'S');
+   End;
+   OBJ_TEXT: Begin
+    Color(Obj.TextObj.Color,'RG');
+    Writeln(F,'/Courier findfont 13.333333 scalefont setfont');
+    Point(Obj.TextObj.X,Obj.TextObj.Y+7,'m');
+    S := '(';
+    For J := 1 To Length(Obj.TextObj.Text) Do Begin
+     If Length(S)>235 Then Begin
+      Writeln(F,S,') show');
+      Point(Obj.TextObj.X+(J-1)*8,Obj.TextObj.Y+7,'m');
+      S := '(';
+     End;
+     If Obj.TextObj.Text[J] In ['(',')','\'] Then S := S+'\';
+     S := S+Obj.TextObj.Text[J];
+    End;
+    Writeln(F,S,') show');
+   End;
+  End;
+ End;
+ Writeln(F,'showpage'); Writeln(F,'%%Trailer'); Writeln(F,'%%EOF');
+ Code := IOResult; Close(F); J := IOResult;
+ {$I+}
+ If (Code<>0) Or (J<>0) Then SaveError := 'Erreur pendant l''ecriture ou fermeture.'
+ Else WriteClassicDocument := True;
+End;
+
+Function WriteLegacyDocument(Name: String): Boolean;
+Var F: File; Ver: Word; I, Code, CloseCode: Integer; Got: Word; Good: Boolean;
+ Sig: Array[0..3] Of Char;
+Begin
+ WriteLegacyDocument := False;
+ {$I-} Assign(F,Name); Rewrite(F,1); Code := IOResult; {$I+}
+ If Code<>0 Then Begin SaveError := 'Creation AI10 impossible.'; Exit; End;
+ Sig[0] := 'A'; Sig[1] := 'I'; Sig[2] := '1'; Sig[3] := '0'; Ver := AI_VERSION;
+ {$I-}
+ BlockWrite(F,Sig,4,Got); Code := IOResult; Good := (Code=0) And (Got=4);
+ BlockWrite(F,Ver,2,Got); Code := IOResult; Good := Good And (Code=0) And (Got=2);
+ BlockWrite(F,ObjectCount,2,Got); Code := IOResult; Good := Good And (Code=0) And (Got=2);
+ For I := 0 To ObjectCount-1 Do Begin
+  If Not Good Then Break;
+  BlockWrite(F,Objects[I],SizeOf(TGraphicObject),Got); Code := IOResult;
+  Good := (Code=0) And (Got=SizeOf(TGraphicObject));
+ End;
+ Close(F); CloseCode := IOResult;
+ {$I+}
+ If Not Good Or (CloseCode<>0) Then SaveError := 'Ecriture AI10 incomplete.'
+ Else WriteLegacyDocument := True;
+End;
+
+Function SaveDocument(Name: String; Format: Integer): Boolean;
+Var TempName, BackupName, S: String; F: File;
+ D: DirStr; N: NameStr; E: ExtStr; I, Code: Integer;
+ Exists, HadFile, Good: Boolean;
+
+ Function RenameChecked(FromName, ToName: String): Boolean;
+ Begin
+  Assign(F,FromName);
+  {$I-} Rename(F,ToName); Code := IOResult; {$I+}
+  RenameChecked := Code=0;
+ End;
+
+ Procedure RemoveTemporary;
+ Begin
+  Assign(F,TempName);
+  {$I-} Erase(F); Code := IOResult; {$I+}
+  If (Code<>0) And (Code<>2) And (Code<>3) Then
+   SaveError := SaveError+' Temporaire non supprime : '+TempName;
+ End;
+
+Begin
+ SaveDocument := False; SaveError := '';
+ If (Format<0) Or (Format>2) Or (Name='') Or (ObjectCount>MAX_OBJECTS) Then Begin
+  SaveError := 'Nom, format ou document invalide.'; Exit;
+ End;
+ If IsDirectory(Name) Then Begin SaveError := 'La cible est un dossier, pas un fichier.'; Exit; End;
+ For I := 0 To ObjectCount-1 Do
+  If Not ValidImportObject(Objects[I]) Then Begin
+   SaveError := 'Objet invalide : enregistrement refuse.'; Exit;
+  End;
+ If Not FileExistsChecked(Name,HadFile) Then Begin
+  SaveError := 'Acces refuse au fichier cible.'; Exit;
+ End;
+ Name := FExpand(Name); FSplit(Name,D,N,E);
+ If Length(D)>240 Then Begin SaveError := 'Chemin trop long pour une ecriture sure.'; Exit; End;
+ TempName := '';
+ For I := 0 To 999 Do Begin
+  Str(I,S); S := D+'~AI'+S+'.TMP';
+  If Not FileExistsChecked(S,Exists) Then Break;
+  If Not Exists Then Begin TempName := S; Break; End;
+ End;
+ If TempName='' Then Begin SaveError := 'Aucun fichier temporaire disponible.'; Exit; End;
+ If Format=2 Then Good := WriteLegacyDocument(TempName)
+ Else Good := WriteClassicDocument(TempName);
+ If Not Good Then Begin RemoveTemporary; Exit; End;
+ BackupName := '';
+ If HadFile Then Begin
+  For I := 0 To 999 Do Begin
+   Str(I,S); S := D+'~AI'+S+'.BAK';
+   If Not FileExistsChecked(S,Exists) Then Break;
+   If Not Exists Then Begin BackupName := S; Break; End;
+  End;
+  If (BackupName='') Or Not RenameChecked(Name,BackupName) Then Begin
+   SaveError := 'Remplacement refuse ; fichier original conserve.';
+   RemoveTemporary; Exit;
+  End;
+ End;
+ If Not RenameChecked(TempName,Name) Then Begin
+  SaveError := 'Installation du nouveau fichier impossible.';
+  If HadFile Then
+   If Not RenameChecked(BackupName,Name) Then
+    SaveError := 'Restauration impossible. Original conserve dans '+BackupName;
+  RemoveTemporary; Exit;
+ End;
+ If HadFile Then Begin
+  Assign(F,BackupName);
+  {$I-} Erase(F); Code := IOResult; {$I+}
+  If Code<>0 Then Begin
+   SaveError := 'Fichier ecrit ; ancienne copie non supprimee : '+BackupName;
+   Exit;
+  End;
+ End;
+ CurrentFile := Name; CurrentSaveFormat := Format; FileModified := False;
+ If Format=2 Then StatusMessage := 'AI10 prive enregistre : objets conserves exactement.'
+ Else StatusMessage := 'AI/EPS enregistre : texte Courier, palette VGA, contours fins.';
+ NeedsRedraw := True; SaveDocument := True;
+End;
+
+Procedure SaveFile(Filename: String);
+Begin
+ If Not SaveDocument(Filename,2) Then Begin
+  StatusMessage := Copy(SaveError,1,75); NeedsRedraw := True;
+ End;
 End;
 
 Procedure LoadFile(Filename: String);
@@ -2969,6 +3387,7 @@ Begin
  Running := True;
  FileDialogActive := False;
  FileFilterOpen := False;
+ FileSaveMode := False; FileOverwrite := False; CurrentSaveFormat := 0;
  ResetZoom;
  ObjectCount := 0;
  SelectedObject := -1;

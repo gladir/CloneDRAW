@@ -156,6 +156,12 @@ Const
  FMT_ICO = 26;
  FMT_GEM = 27;
  FMT_PSP = 28;
+ FMT_ASM = 29;
+ FMT_BAS = 30;
+ FMT_C = 31;
+ FMT_CSP = 32;
+ FMT_PY = 33;
+ FMT_RB = 34;
 
  { Profondeurs de couleur supportées }
  DEPTH_2 = 1;
@@ -10976,6 +10982,265 @@ Begin
 End;
 
 
+{ Donnees assembleur MASM/TASM, structure de XBM2ASM.PAS, pixels RGB24. }
+Function SaveASM(FileName:String):Boolean;
+Const HexDigits:String[16]='0123456789ABCDEF';
+Var F:File;Buffer:Array[0..8191] Of Byte;Used,X,Y,Values:Integer;
+ Failed:Boolean;Line:String;C:TRGBColor;
+ Procedure Flush;
+ Var Written:LongInt;
+ Begin
+  If Failed Or (Used=0) Then Exit;
+  {$I-}BlockWrite(F,Buffer,Used,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Used);Used:=0;
+ End;
+ Procedure PutLine(Const S:String);
+ Var T:String;J:Integer;
+ Begin
+  If Failed Then Exit;T:=S+#13+#10;
+  For J:=1 To Length(T) Do Begin
+   Buffer[Used]:=Ord(T[J]);Inc(Used);
+   If Used=SizeOf(Buffer) Then Flush;
+   If Failed Then Exit;
+  End;
+ End;
+ Procedure Value(V:Byte);
+ Begin
+  If Values=12 Then Begin
+   PutLine(Line);Line:='             DB ';Values:=0;
+  End;
+  If Values>0 Then Line:=Line+',';
+  Line:=Line+'0'+HexDigits[(V Shr 4)+1]+HexDigits[(V And 15)+1]+'h';
+  Inc(Values);
+ End;
+Begin
+ SaveASM:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Used:=0;Failed:=False;
+ PutLine('; CloneDRAW PAINT - structure XBM2ASM, donnees RGB 24 bits');
+ PutLine('; Pixels de gauche a droite, lignes de haut en bas, sans bourrage');
+ PutLine('NumXPixels   DW '+IntToStr(CanvasImageW));
+ PutLine('NumYPixels   DW '+IntToStr(CanvasImageH));
+ PutLine('BitsPerPixel DB 24');
+ PutLine('BytesPerLine DW '+IntToStr(LongInt(CanvasImageW)*3));
+ Line:='BitmapData   DB ';Values:=0;
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];Value(C.R);Value(C.G);Value(C.B);
+   If Failed Then Break;
+  End;
+ End;
+ If Values>0 Then PutLine(Line);Flush;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveASM:=Not Failed;
+End;
+
+
+{ BASIC DATA hexadecimal, structure XBM2BAS.PAS, pixels RGB24. }
+Function SaveBAS(FileName:String):Boolean;
+Const HexDigits:String[16]='0123456789ABCDEF';
+Var F:File;Buffer:Array[0..8191] Of Byte;Used,X,Y,Values:Integer;
+ Failed,Numbered:Boolean;Line:String;C:TRGBColor;LineNumber:LongInt;
+ Procedure Flush;
+ Var Written:LongInt;
+ Begin
+  If Failed Or (Used=0) Then Exit;
+  {$I-}BlockWrite(F,Buffer,Used,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Used);Used:=0;
+ End;
+ Procedure PutLine(Const S:String);
+ Var T:String;J:Integer;
+ Begin
+  If Failed Then Exit;T:=S+#13+#10;
+  For J:=1 To Length(T) Do Begin
+   Buffer[Used]:=Ord(T[J]);Inc(Used);
+   If Used=SizeOf(Buffer) Then Flush;
+   If Failed Then Exit;
+  End;
+ End;
+ Function DataPrefix:String;
+ Begin
+  If Numbered Then DataPrefix:=IntToStr(LineNumber)+' DATA '
+   Else DataPrefix:='DATA ';
+  Inc(LineNumber,10);
+ End;
+ Procedure Declaration(Number:Integer;Const Text:String);
+ Begin
+  If Numbered Then PutLine(IntToStr(Number)+' '+Text) Else PutLine(Text);
+ End;
+ Procedure Value(V:Byte);
+ Begin
+  If Values=12 Then Begin
+   PutLine(Line);Line:=DataPrefix;Values:=0;
+  End;
+  If Values>0 Then Line:=Line+',';
+  Line:=Line+'&H'+HexDigits[(V Shr 4)+1]+HexDigits[(V And 15)+1];
+  Inc(Values);
+ End;
+Begin
+ SaveBAS:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Used:=0;Failed:=False;
+ Numbered:=LongInt(CanvasImageW)*CanvasImageH*3<=78564;
+ Declaration(10,'NumXPixels%='+IntToStr(CanvasImageW));
+ Declaration(20,'NumYPixels%='+IntToStr(CanvasImageH));
+ Declaration(30,'BitsPerPixel%=24');
+ Declaration(40,'BytesPerLine%='+IntToStr(LongInt(CanvasImageW)*3));
+ Declaration(50,'''BitmapData RGB24, gauche a droite et haut en bas');
+ LineNumber:=60;Line:=DataPrefix;Values:=0;
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];Value(C.R);Value(C.G);Value(C.B);
+   If Failed Then Break;
+  End;
+ End;
+ If Values>0 Then PutLine(Line);Flush;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveBAS:=Not Failed;
+End;
+
+
+{ Source C, structure de XBM2C.PAS, pixels RGB24. }
+Function SaveCBitmap(FileName:String;CSP:Boolean):Boolean;
+Const HexDigits:String[16]='0123456789ABCDEF';
+Var F:File;Buffer:Array[0..8191] Of Byte;Used,X,Y,Values:Integer;
+ Failed:Boolean;Line:String;C:TRGBColor;
+ Procedure Flush;
+ Var Written:LongInt;
+ Begin
+  If Failed Or (Used=0) Then Exit;
+  {$I-}BlockWrite(F,Buffer,Used,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Used);Used:=0;
+ End;
+ Procedure PutLine(Const S:String);
+ Var T:String;J:Integer;
+ Begin
+  If Failed Then Exit;T:=S+#13+#10;
+  For J:=1 To Length(T) Do Begin
+   Buffer[Used]:=Ord(T[J]);Inc(Used);
+   If Used=SizeOf(Buffer) Then Flush;
+   If Failed Then Exit;
+  End;
+ End;
+ Procedure Value(V:Byte);
+ Begin
+  If Values=12 Then Begin
+   PutLine(Line+',');Line:='  ';Values:=0;
+  End;
+  If Values>0 Then Line:=Line+',';
+  Line:=Line+'0x'+HexDigits[(V Shr 4)+1]+HexDigits[(V And 15)+1];
+  Inc(Values);
+ End;
+Begin
+ SaveCBitmap:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Used:=0;Failed:=False;
+ If CSP Then PutLine('<%');
+ PutLine('/* CloneDRAW PAINT - RGB24, lignes de haut en bas */');
+ PutLine('#define NumXPixels '+IntToStr(CanvasImageW));
+ PutLine('#define NumYPixels '+IntToStr(CanvasImageH));
+ PutLine('#define BitsPerPixel 24');
+ PutLine('#define BytesPerLine '+IntToStr(LongInt(CanvasImageW)*3));
+ PutLine('const unsigned char BitmapData['+
+  IntToStr(LongInt(CanvasImageW)*CanvasImageH*3)+'] = {');
+ Line:='  ';Values:=0;
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];Value(C.R);Value(C.G);Value(C.B);
+   If Failed Then Break;
+  End;
+ End;
+ If Values>0 Then PutLine(Line);PutLine('};');If CSP Then PutLine('%>');Flush;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveCBitmap:=Not Failed;
+End;
+
+
+Function SaveC(FileName:String):Boolean;
+Begin SaveC:=SaveCBitmap(FileName,False);End;
+
+Function SaveCSP(FileName:String):Boolean;
+Begin SaveCSP:=SaveCBitmap(FileName,True);End;
+
+{ Source Python, structure de XBM2PY.PAS, pixels RGB24. }
+Function SaveScriptBitmap(FileName:String;Ruby:Boolean):Boolean;
+Var F:File;Buffer:Array[0..8191] Of Byte;Used,X,Y,Values:Integer;
+ Failed:Boolean;Line:String;C:TRGBColor;
+ Procedure Flush;
+ Var Written:LongInt;
+ Begin
+  If Failed Or (Used=0) Then Exit;
+  {$I-}BlockWrite(F,Buffer,Used,Written);{$I+}
+  Failed:=(IOResult<>0) Or (Written<>Used);Used:=0;
+ End;
+ Procedure PutLine(Const S:String);
+ Var T:String;J:Integer;
+ Begin
+  If Failed Then Exit;T:=S+#13+#10;
+  For J:=1 To Length(T) Do Begin
+   Buffer[Used]:=Ord(T[J]);Inc(Used);
+   If Used=SizeOf(Buffer) Then Flush;
+   If Failed Then Exit;
+  End;
+ End;
+ Procedure Value(V:Byte);
+ Begin
+  If Values=12 Then Begin
+   PutLine(Line+',');Line:='  ';Values:=0;
+  End;
+  If Values>0 Then Line:=Line+',';
+  Line:=Line+IntToStr(V);
+  Inc(Values);
+ End;
+Begin
+ SaveScriptBitmap:=False;
+ If (CanvasImage=Nil) Or (CanvasImageW<1) Or (CanvasImageH<1) Or
+    (CanvasImageW>4096) Or (CanvasImageH>4096) Then Exit;
+ Assign(F,FileName);{$I-}Rewrite(F,1);{$I+}If IOResult<>0 Then Exit;
+ Used:=0;Failed:=False;
+ PutLine('# CloneDRAW PAINT - RGB24, lignes de haut en bas');
+ If Ruby Then Begin
+  PutLine('numxpixels = '+IntToStr(CanvasImageW));
+  PutLine('numypixels = '+IntToStr(CanvasImageH));
+  PutLine('bitsperpixel = 24');
+  PutLine('bytesperline = '+IntToStr(LongInt(CanvasImageW)*3));
+  PutLine('bitmapdata = [');
+ End Else Begin
+ PutLine('NUM_X_PIXELS = '+IntToStr(CanvasImageW));
+ PutLine('NUM_Y_PIXELS = '+IntToStr(CanvasImageH));
+ PutLine('BITS_PER_PIXEL = 24');
+ PutLine('BYTES_PER_LINE = '+IntToStr(LongInt(CanvasImageW)*3));
+ PutLine('BITMAP_DATA = [');
+ End;
+ Line:='  ';Values:=0;
+ For Y:=0 To CanvasImageH-1 Do Begin
+  If Failed Then Break;
+  For X:=0 To CanvasImageW-1 Do Begin
+   C:=ImageBuffer.Palette[ZImagePixel(X,Y)];Value(C.R);Value(C.G);Value(C.B);
+   If Failed Then Break;
+  End;
+ End;
+ If Values>0 Then PutLine(Line);PutLine(']');Flush;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ SaveScriptBitmap:=Not Failed;
+End;
+
+
+Function SavePY(FileName:String):Boolean;
+Begin SavePY:=SaveScriptBitmap(FileName,False);End;
+
+Function SaveRuby(FileName:String):Boolean;
+Begin SaveRuby:=SaveScriptBitmap(FileName,True);End;
+
 Function SaveImage(FileName: String; Format: Byte): Boolean;
 Var Old: TImageBuffer; F,T,B: File; R: SearchRec; Folder,Temp,Backup: String;
     I,Pos,Code: Integer; Exists,OK,MovedOld: Boolean;
@@ -11003,7 +11268,8 @@ Begin
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
  FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,
- FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA,FMT_TIFF])
+ FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA,FMT_TIFF,FMT_ASM,
+ FMT_BAS,FMT_C,FMT_CSP,FMT_PY,FMT_RB])
  Then
  Begin
  PaintSaveError:='Choisissez un format propose dans Enregistrer sous.';
@@ -11051,6 +11317,12 @@ Begin
   FMT_PSP: OK:=SavePSP(Temp);
   FMT_TARGA: OK:=SaveTGA(Temp);
   FMT_TIFF: OK:=SaveTIFF(Temp);
+  FMT_ASM: OK:=SaveASM(Temp);
+  FMT_BAS: OK:=SaveBAS(Temp);
+  FMT_C: OK:=SaveC(Temp);
+  FMT_CSP: OK:=SaveCSP(Temp);
+  FMT_PY: OK:=SavePY(Temp);
+  FMT_RB: OK:=SaveRuby(Temp);
   Else OK:=SavePNG(Temp);
  End;
  ImageBuffer:=Old;
@@ -12387,7 +12659,8 @@ Begin
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
  FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,
- FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA,FMT_TIFF])
+ FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA,FMT_TIFF,FMT_ASM,
+ FMT_BAS,FMT_C,FMT_CSP,FMT_PY,FMT_RB])
  Then Begin
   SaveCurrentImage:=SaveAsCurrentImage; Exit;
  End;
@@ -17749,6 +18022,12 @@ Begin
   FMT_ICO: APFormatName:='ICO Icone Windows';
   FMT_GEM: APFormatName:='GEM / XIMG';
   FMT_PSP: APFormatName:='PSP Pascal Bitmap';
+  FMT_ASM: APFormatName:='ASM Bitmap assembleur';
+  FMT_BAS: APFormatName:='BASIC Bitmap';
+  FMT_C: APFormatName:='C Bitmap';
+  FMT_CSP: APFormatName:='CSP C Bitmap';
+  FMT_PY: APFormatName:='Python Bitmap';
+  FMT_RB: APFormatName:='Ruby Bitmap';
   FMT_MSP: APFormatName:='MSP Microsoft Paint';
   FMT_MAC: APFormatName:='MAC MacPaint';
   FMT_PAS: APFormatName:='PAS constantes Pascal';
@@ -18488,6 +18767,12 @@ Begin
   27: OFMatches:=E='.ICO';
   29: OFMatches:=E='.GEM';
   30: OFMatches:=E='.PSP';
+  31: OFMatches:=E='.ASM';
+  32: OFMatches:=E='.BAS';
+  33: OFMatches:=E='.C';
+  34: OFMatches:=E='.CSP';
+  35: OFMatches:=E='.PY';
+  36: OFMatches:=E='.RB';
   Else OFMatches:=True;
  End;
 End;
@@ -18525,6 +18810,12 @@ Begin
   27: OFFilterLabel:='ICO Icone Windows : *.ico';
   29: OFFilterLabel:='GEM / XIMG : *.gem';
   30: OFFilterLabel:='PSP Pascal Bitmap : *.psp';
+  31: OFFilterLabel:='ASM Bitmap assembleur : *.asm';
+  32: OFFilterLabel:='BASIC Bitmap : *.bas';
+  33: OFFilterLabel:='C Bitmap : *.c';
+  34: OFFilterLabel:='CSP C Bitmap : *.csp';
+  35: OFFilterLabel:='Python Bitmap : *.py';
+  36: OFFilterLabel:='Ruby Bitmap : *.rb';
   Else OFFilterLabel:='Tous les fichiers : *.*';
  End;
 End;
@@ -18855,7 +19146,13 @@ Begin
  22: OFSaveExtension:='.msp';
  30: OFSaveExtension:='.psp';
  26: OFSaveExtension:='.tga';
- 23: OFSaveExtension:='.tif'; Else OFSaveExtension:='.bmp'; End;
+ 23: OFSaveExtension:='.tif';
+ 31: OFSaveExtension:='.asm';
+ 32: OFSaveExtension:='.bas';
+ 33: OFSaveExtension:='.c';
+ 34: OFSaveExtension:='.csp';
+ 35: OFSaveExtension:='.py';
+ 36: OFSaveExtension:='.rb'; Else OFSaveExtension:='.bmp'; End;
 End;
 
 Function OFSaveName(Const Name: String; Filter: Integer): String;
@@ -18966,12 +19263,12 @@ Begin
  D.Name:=S; D.Accepted:=True; D.Done:=True;
 End;
 
-Type TOFFilterOrder = Array[0..28] Of Integer;
+Type TOFFilterOrder = Array[0..31] Of Integer;
 
 Procedure OFSortedFilters(Saving: Boolean; Var Order: TOFFilterOrder; Var Count: Integer);
 Var I,J,T: Integer;
 Begin
- Count:=29; If Saving Then Count:=26;
+ Count:=29; If Saving Then Count:=32;
  For I:=0 To Count-1 Do Begin
   Order[I]:=I; If Saving Then Begin
    Order[I]:=I+1; If I=3 Then Order[I]:=21;
@@ -18979,7 +19276,11 @@ Begin
    If I=7 Then Order[I]:=5; If I=8 Then Order[I]:=18; If I=9 Then Order[I]:=15;
    If I=13 Then Order[I]:=13; If I=14 Then Order[I]:=6; If I=15 Then
    Order[I]:=10;
-   If I=25 Then Order[I]:=23;
+   If I=31 Then Order[I]:=36;
+   If I=28 Then Order[I]:=33; If I=29 Then Order[I]:=34; If I=30 Then
+   Order[I]:=35;
+   If I=25 Then Order[I]:=23; If I=26 Then Order[I]:=31; If I=27 Then
+   Order[I]:=32;
    If I=22 Then Order[I]:=22; If I=23 Then Order[I]:=30; If I=24 Then
    Order[I]:=26;
    If I=19 Then Order[I]:=27; If I=20 Then Order[I]:=7; If I=21 Then
@@ -19155,7 +19456,13 @@ Begin
    Else If SaveFormat=FMT_MSP Then D^.Filter:=22
    Else If SaveFormat=FMT_PSP Then D^.Filter:=30
    Else If SaveFormat=FMT_TARGA Then D^.Filter:=26
-   Else If SaveFormat=FMT_TIFF Then D^.Filter:=23;
+   Else If SaveFormat=FMT_TIFF Then D^.Filter:=23
+   Else If SaveFormat=FMT_ASM Then D^.Filter:=31
+   Else If SaveFormat=FMT_BAS Then D^.Filter:=32
+   Else If SaveFormat=FMT_C Then D^.Filter:=33
+   Else If SaveFormat=FMT_CSP Then D^.Filter:=34
+   Else If SaveFormat=FMT_PY Then D^.Filter:=35
+   Else If SaveFormat=FMT_RB Then D^.Filter:=36;
   If FileName<>'' Then Begin
    S:=OFParent(FExpand(FileName)); If OFDirectory(S) Then D^.Folder:=S;
   End;
@@ -19349,7 +19656,13 @@ Begin
    22: SaveFormat:=FMT_MSP;
    30: SaveFormat:=FMT_PSP;
    26: SaveFormat:=FMT_TARGA;
-   23: SaveFormat:=FMT_TIFF; Else SaveFormat:=FMT_BMP; End;
+   23: SaveFormat:=FMT_TIFF;
+   31: SaveFormat:=FMT_ASM;
+   32: SaveFormat:=FMT_BAS;
+   33: SaveFormat:=FMT_C;
+   34: SaveFormat:=FMT_CSP;
+   35: SaveFormat:=FMT_PY;
+   36: SaveFormat:=FMT_RB; Else SaveFormat:=FMT_BMP; End;
  End;
  Dispose(D); MenuActive:=False; RedrawInterface;
 End;
@@ -19368,7 +19681,8 @@ Begin
  [FMT_BMP,FMT_GIF,FMT_PNG,FMT_PCX,FMT_JPEG,FMT_PAS,
  FMT_BGX,FMT_XBM,FMT_PPM,FMT_APNG,FMT_ARW,FMT_CR2,FMT_DCM,
  FMT_DDS,FMT_WPG,FMT_EXR,FMT_FAX,FMT_GEM,FMT_HDR,FMT_ICO,
- FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA,FMT_TIFF])
+ FMT_LBM,FMT_MAC,FMT_MSP,FMT_PSP,FMT_TARGA,FMT_TIFF,FMT_ASM,
+ FMT_BAS,FMT_C,FMT_CSP,FMT_PY,FMT_RB])
  Then
  Format:=FMT_PNG;
  Repeat
@@ -19656,7 +19970,7 @@ Var Draft: TPaintMetadata; Editor: POFState; X,Y,W,H,Tab,Focus,I,J,MX,MY,B,Prev,
    KeyValue(10,'Date du fichier',Stamp); KeyValue(11,'Acces',Attributes);
    DrawPreview;
    SetColor(Black); OutTextXY(X+W-198,Y+244,'Apercu du document');
-   OutTextXY(X+W-198,Y+270,'Exports : 26 formats disponibles');
+   OutTextXY(X+W-198,Y+270,'Exports : 32 formats disponibles');
    OutTextXY(X+W-198,Y+288,'GIF : note uniquement');
    OutTextXY(X+W-198,Y+306,'PNG : six champs texte');
    If ImageBuffer.HasHotspot Then Begin

@@ -205,6 +205,7 @@ Type
 
 Var
  GraphDriver, GraphMode: Integer;
+ MaxScreen: Boolean;
  ScreenWidth, ScreenHeight: Integer;
  Running: Boolean;
  CurrentTool: Byte;
@@ -436,11 +437,51 @@ Begin
 {$ENDIF}
 End;
 
+{ Mode graphique : VGA 640 x 480, ou, avec -maxscreen sous Free Pascal, la
+  resolution maximale du pilote D8bit (sans effet sous Turbo Pascal). }
+Procedure SelectScreenDriverMode(WantMaxScreen: Boolean;
+ Var Driver, Mode: Integer);
+{$IFDEF FPC}
+Var LoMode, HiMode: SmallInt;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+ Driver := VGA;
+ Mode := VGAHi;
+ If WantMaxScreen Then Begin
+  Driver := D8bit;
+  GetModeRange(Driver, LoMode, HiMode);
+  If HiMode >= LoMode Then Mode := HiMode
+  Else Begin Driver := VGA; Mode := VGAHi; End;
+ End;
+ {$ELSE}
+ Driver := VGA;
+ Mode := VGAHi;
+ {$ENDIF}
+End;
+
+{ Les seize couleurs de l'interface restent identiques dans le pilote D8bit. }
+Procedure InitializeScreenPalette;
+{$IFDEF FPC}
+Const
+ RGB: Array[0..15, 0..2] of Byte = (
+  (0,0,0), (0,0,170), (0,170,0), (0,170,170),
+  (170,0,0), (170,0,170), (170,85,0), (170,170,170),
+  (85,85,85), (85,85,255), (85,255,85), (85,255,255),
+  (255,85,85), (255,85,255), (255,255,85), (255,255,255));
+Var I: Integer;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+ If GetMaxColor > 15 Then
+  For I := 0 To 15 Do SetRGBPalette(I, RGB[I,0], RGB[I,1], RGB[I,2]);
+ {$ENDIF}
+End;
+
 Procedure InitGraphics;
 Var C, X, Y: Integer;
 Begin
- GraphDriver := VGA;
- GraphMode := VGAHi;
+ SelectScreenDriverMode(MaxScreen, GraphDriver, GraphMode);
  InitGraph(GraphDriver, GraphMode, '');
  If GraphResult <> grOk Then
  Begin
@@ -449,6 +490,7 @@ Begin
  End;
  ScreenWidth := GetMaxX + 1;
  ScreenHeight := GetMaxY + 1;
+ InitializeScreenPalette;
  { En mode VGA, SetBkColor remappe la couleur 0 : conserver le noir.
    Les fonds de l'interface sont peints explicitement avec Bar. }
  SetBkColor(COLOR_TEXT);
@@ -4029,7 +4071,30 @@ Begin
  Writeln('Au revoir!');
 End;
 
+Procedure ShowUsage;
 Begin
+ WriteLn(PROGRAM_NAME,' : clone d''Adobe Illustrator (dessin vectoriel).');
+ WriteLn;
+ WriteLn('Syntaxe : AI [-maxscreen]');
+ WriteLn;
+ WriteLn('Options :');
+ WriteLn('  -maxscreen           Utilise la resolution maximale disponible.');
+End;
+
+Var ArgI, C0: Integer;
+    Arg: String;
+
+Begin
+ MaxScreen := False;
+ For ArgI := 1 To ParamCount Do Begin
+  Arg := ParamStr(ArgI);
+  For C0 := 1 To Length(Arg) Do Arg[C0] := UpCase(Arg[C0]);
+  If (Arg = '-MAXSCREEN') Or (Arg = '/MAXSCREEN') Then MaxScreen := True
+  Else If (Arg = '/?') Or (Arg = '-H') Or (Arg = '--HELP') Then Begin
+   ShowUsage;
+   Halt(0);
+  End;
+ End;
  Initialize;
  InitGraphics;
  InitMenus;

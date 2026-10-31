@@ -2582,9 +2582,21 @@ End;
 
 Const
  NEARZ=4;
- LX=-0.30; LY=0.72; LZ=-0.62;      { direction de la lumiere (espace vue) }
+ LX=-0.30; LY=0.72; LZ=-0.62;      { lumiere principale (espace vue) }
+ L2X=0.62; L2Y=0.28; L2Z=-0.73;    { lumiere d'appoint }
+
+Type
+ PHQ=^THQ;
+ THQ=Record
+  Kind,N,Alpha,R,G,B:Byte;       { Kind : 0 face, 1 ligne, 2 ombre, 3 sol }
+  V:Array[0..3] Of TVec;
+  Next:PHQ;
+ End;
 
 Var
+ HQMode:Boolean;                   { capture haute qualite (export d'images) }
+ HQHead,HQTail:PHQ;
+ HQN:LongInt;
  FP:Array[0..3] Of TVec;           { sommets en espace vue de la face courante }
  StudCos,StudSin:Array[0..7] Of Real;
  GhostPiece:PPiece;
@@ -2684,6 +2696,11 @@ Begin
   Else EdgeColor:=GrpIdx[ColGroup(Code,Tr),1];
 End;
 
+Function Clamp8(X:Real):Byte;
+Begin
+ If X<0 Then Clamp8:=0 Else If X>255 Then Clamp8:=255 Else Clamp8:=Round(X);
+End;
+
 Procedure ClipNear(Var PA,PB:TVec;Var Ok:Boolean);
 Var T:Real;
 Begin
@@ -2701,12 +2718,36 @@ Begin
  End;
 End;
 
+Function HQNew(Kind,N:Byte):PHQ;
+Var H:PHQ;
+Begin
+ New(H);
+ H^.Kind:=Kind; H^.N:=N; H^.Alpha:=255; H^.Next:=Nil;
+ If HQTail=Nil Then HQHead:=H Else HQTail^.Next:=H;
+ HQTail:=H; Inc(HQN);
+ HQNew:=H;
+End;
+
+Procedure HQFree;
+Var H,N:PHQ;
+Begin
+ H:=HQHead;
+ While H<>Nil Do Begin N:=H^.Next; Dispose(H); H:=N; End;
+ HQHead:=Nil; HQTail:=Nil; HQN:=0;
+End;
+
 Procedure AddLine(Const A,B:TVec;Code:LongInt;Sel:Boolean;Owner:Integer);
-Var Pl:PPoly; PA,PB:TVec; Z:Real; Ok:Boolean;
+Var Pl:PPoly; PA,PB:TVec; Z:Real; Ok:Boolean; H:PHQ;
 Begin
  PA:=A; PB:=B;
  ClipNear(PA,PB,Ok);
  If Not Ok Then Exit;
+ If HQMode Then Begin
+  H:=HQNew(1,2);
+  H^.V[0]:=PA; H^.V[1]:=PB;
+  H^.R:=30; H^.G:=32; H^.B:=38;
+  Exit;
+ End;
  Pl:=NewPoly;
  If Pl=Nil Then Exit;
  Proj(PA,Pl^.X[0],Pl^.Y[0]);
@@ -2738,8 +2779,8 @@ End;
 Procedure AddFace(N:Integer;Cull:Byte;Sg:Integer;Code:LongInt;Owner:Integer);
 Var
  I,S,G,Sh:Integer;
- NX,NY,NZ,EX,EY,EZ,GX,GY,GZ,D,L,Lm,ZM:Real;
- Pl:PPoly; Tr:Boolean;
+ NX,NY,NZ,EX,EY,EZ,GX,GY,GZ,D,L,Lm,Lm2,ZM,F,Sp:Real;
+ Pl:PPoly; Tr:Boolean; CR,CG,CB,Fin:Byte; H:PHQ; CC:PColor;
 Begin
  If CamPersp Then
   For I:=0 To N-1 Do If FP[I].Z<NEARZ Then Exit;
@@ -2760,6 +2801,25 @@ Begin
  If L<EPS Then Exit;
  Lm:=S*(NX*LX+NY*LY+NZ*LZ)/L;
  If Lm<0 Then Lm:=0;
+ Lm2:=S*(NX*L2X+NY*L2Y+NZ*L2Z)/L;
+ If Lm2<0 Then Lm2:=0;
+ Lm:=0.68*Lm+0.32*Lm2;
+ If Lm>1 Then Lm:=1;
+ If HQMode Then Begin
+  ColInfo(Code,CR,CG,CB,Tr,Fin);
+  F:=0.42+0.62*Lm; Sp:=0;
+  If(Fin And(FN_CHROME Or FN_METAL))<>0 Then Begin F:=0.22+0.95*Lm; Sp:=Lm*Lm*Lm*Lm*0.6; End
+  Else If(Fin And(FN_PEARL Or FN_MATTE))<>0 Then Begin F:=0.5+0.6*Lm; Sp:=Lm*Lm*Lm*0.25; End
+  Else If(Fin And FN_RUBBER)<>0 Then F:=0.55+0.42*Lm;
+  H:=HQNew(0,N);
+  For I:=0 To N-1 Do H^.V[I]:=FP[I];
+  H^.R:=Clamp8(CR*F+255*Sp); H^.G:=Clamp8(CG*F+255*Sp); H^.B:=Clamp8(CB*F+255*Sp);
+  If Tr Then Begin
+   CC:=FindColor(Code);
+   If CC<>Nil Then H^.Alpha:=CC^.Alpha Else H^.Alpha:=128;
+  End;
+  Exit;
+ End;
  G:=ColGroup(Code,Tr);
  Sh:=Trunc((0.10+0.90*Lm)*NSHADE*0.999);
  If Sh<0 Then Sh:=0; If Sh>=NSHADE Then Sh:=NSHADE-1;
@@ -2879,11 +2939,12 @@ Begin
   2:StudEff:=2;
  Else StudEff:=3;
  End;
+ If HQMode And(N<=2500)Then StudEff:=1;
  I:=0;
  Q:=Models[CurModel].First;
  While Q<>Nil Do Begin
   Inc(I);
-  If PieceVisible(Q)Then RenderPiece(Q,CamM,-1,7,I,Q^.Sel,0);
+  If PieceVisible(Q)Then RenderPiece(Q,CamM,-1,7,I,Q^.Sel And(Not HQMode),0);
   Q:=Q^.Next;
  End;
  If WithGhost And(GhostPiece<>Nil)Then RenderPiece(GhostPiece,CamM,-1,7,0,False,0);
@@ -5990,9 +6051,24 @@ Begin
  ConfirmDiscard:=DoSave;
 End;
 
+{ Ouvre un modele ; un fichier .DAT s'ouvre comme un modele d'une seule piece }
 Procedure OpenPath(Const Nm:String);
+Var Mt:TMat; Q:PPiece;
 Begin
  ExtraDir:=DirOf(FExpand(Nm));
+ If ExtOf(Nm)='.DAT' Then Begin
+  ClearHistory;
+  NewDocument;
+  ResetEditState;
+  MatIdent(Mt);
+  Q:=AddPiece(0,LoStr(BaseOf(Nm)),CurColor,Mt,1);
+  Models[0].Name:=Copy(UpStr(BaseOf(Nm)),1,36)+'.LDR';
+  Inc(ModEpoch);
+  FitAllViews;
+  StatusMsg:='';
+  Touch; NeedTools:=True;
+  Exit;
+ End;
  If LoadDoc(Nm)Then Begin
   ResetEditState;
   FitAllViews;
@@ -6075,6 +6151,1518 @@ End;
 
 
 { ====================================================================== }
+{ Rendu haute qualite hors ecran : tampon de profondeur, translucidite   }
+{ reelle, ombres au sol, antialiasing ; images en lignes sur le tas      }
+{ ====================================================================== }
+
+Type
+ PRowTab=^TRowTab;
+ TRowTab=Array[0..4095] Of Pointer;
+ PByteRow=^TByteRow;
+ TByteRow=Array[0..65519] Of Byte;
+ PZRow=^TZRow;
+ TZRow=Array[0..16383] Of LongInt;
+ TImg=Record
+  W,H:Integer;
+  Rows:PRowTab;
+ End;
+
+Const
+ ZS_PERSP=67108864.0;
+ ZS_ORTHO=4096.0;
+
+Var
+ HQZS:Real;
+ HQBg:Array[0..2] Of Byte;
+
+Function ImgNew(Var I:TImg;W,H:Integer;R,G,B:Byte):Boolean;
+Var Y,X:Integer; P:PByteRow;
+Begin
+ ImgNew:=False;
+ I.W:=W; I.H:=H; I.Rows:=Nil;
+ If(W<1)Or(H<1)Or(W>4095)Or(H>4095)Then Exit;
+ If MaxAvail<LongInt(W)*3*H+200000 Then Exit;
+ GetMem(I.Rows,SizeOf(TRowTab));
+ FillChar(I.Rows^,SizeOf(TRowTab),0);
+ For Y:=0 To H-1 Do Begin
+  GetMem(I.Rows^[Y],W*3);
+  P:=I.Rows^[Y];
+  For X:=0 To W-1 Do Begin P^[X*3]:=R; P^[X*3+1]:=G; P^[X*3+2]:=B; End;
+ End;
+ ImgNew:=True;
+End;
+
+Procedure ImgFree(Var I:TImg);
+Var Y:Integer;
+Begin
+ If I.Rows=Nil Then Exit;
+ For Y:=0 To I.H-1 Do If I.Rows^[Y]<>Nil Then FreeMem(I.Rows^[Y],I.W*3);
+ FreeMem(I.Rows,SizeOf(TRowTab));
+ I.Rows:=Nil;
+End;
+
+{ Remplissage d'un triangle avec tampon de profondeur.  Z0..Z2 : profondeur
+  (plus grand = plus proche).  Alpha < 255 : melange ; WZ : ecrit la profondeur }
+Procedure HQTri(Var B:TImg;ZR:PRowTab;X0,Y0,Z0,X1,Y1,Z1,X2,Y2,Z2:Real;R,G,Bl:Byte;Alpha:Integer;WZ:Boolean;Bias:Real);
+Var
+ Den,DZX,DZY,Mn,Mx,XL,XR,T,XA,YA,XB,YB:Real;
+ YS,YE,XS,XE,Y,X,I,J:Integer;
+ PX:Array[0..2] Of Real; PY:Array[0..2] Of Real;
+ Px8:PByteRow; ZRw:PZRow; ZK,BK:LongInt; Zv,Inv:Real;
+Begin
+ Den:=(X1-X0)*(Y2-Y0)-(X2-X0)*(Y1-Y0);
+ If Abs(Den)<0.0000001 Then Exit;
+ DZX:=((Z1-Z0)*(Y2-Y0)-(Z2-Z0)*(Y1-Y0))/Den;
+ DZY:=((Z2-Z0)*(X1-X0)-(Z1-Z0)*(X2-X0))/Den;
+ PX[0]:=X0; PX[1]:=X1; PX[2]:=X2; PY[0]:=Y0; PY[1]:=Y1; PY[2]:=Y2;
+ Mn:=Y0; Mx:=Y0;
+ If Y1<Mn Then Mn:=Y1; If Y2<Mn Then Mn:=Y2;
+ If Y1>Mx Then Mx:=Y1; If Y2>Mx Then Mx:=Y2;
+ YS:=Trunc(Mn-0.5)+1; If YS<0 Then YS:=0;
+ YE:=Trunc(Mx-0.5); If YE>B.H-1 Then YE:=B.H-1;
+ BK:=Round(Bias*HQZS*(Z0+Z1+Z2)/3);
+ Inv:=Alpha/255;
+ For Y:=YS To YE Do Begin
+  T:=Y+0.5;
+  XL:=1E9; XR:=-1E9;
+  For I:=0 To 2 Do Begin
+   J:=(I+1) Mod 3;
+   XA:=PX[I]; YA:=PY[I]; XB:=PX[J]; YB:=PY[J];
+   If((YA<=T)And(YB>T))Or((YB<=T)And(YA>T))Then Begin
+    Mn:=XA+(XB-XA)*(T-YA)/(YB-YA);
+    If Mn<XL Then XL:=Mn; If Mn>XR Then XR:=Mn;
+   End;
+  End;
+  If XL<=XR Then Begin
+  XS:=Trunc(XL-0.5)+1; If XS<0 Then XS:=0;
+  XE:=Trunc(XR-0.5); If XE>B.W-1 Then XE:=B.W-1;
+  Px8:=B.Rows^[Y]; ZRw:=ZR^[Y];
+  For X:=XS To XE Do Begin
+   Zv:=Z0+DZX*(X+0.5-X0)+DZY*(T-Y0);
+   ZK:=Round(Zv*HQZS)+BK;
+   If ZK>ZRw^[X] Then Begin
+    If Alpha>=255 Then Begin
+     Px8^[X*3]:=R; Px8^[X*3+1]:=G; Px8^[X*3+2]:=Bl;
+    End
+     Else Begin
+      Px8^[X*3]:=Round(Px8^[X*3]*(1-Inv)+R*Inv);
+      Px8^[X*3+1]:=Round(Px8^[X*3+1]*(1-Inv)+G*Inv);
+      Px8^[X*3+2]:=Round(Px8^[X*3+2]*(1-Inv)+Bl*Inv);
+     End;
+    If WZ Then ZRw^[X]:=ZK;
+   End;
+  End;
+  End;
+ End;
+End;
+
+Procedure HQLine(Var B:TImg;ZR:PRowTab;X0,Y0,Z0,X1,Y1,Z1:Real;R,G,Bl:Byte;Thick:Integer);
+Var N,I,PX,PY,A,C:Integer; DX,DY,DZ,X,Y,Z:Real; ZRw:PZRow; Px8:PByteRow; ZK:LongInt;
+Begin
+ DX:=X1-X0; DY:=Y1-Y0;
+ N:=Round(Sqrt(DX*DX+DY*DY))+1;
+ If N>20000 Then N:=20000;
+ DZ:=Z1-Z0;
+ For I:=0 To N Do Begin
+  X:=X0+DX*I/N; Y:=Y0+DY*I/N; Z:=Z0+DZ*I/N;
+  ZK:=Round(Z*HQZS*1.0025);
+  PX:=Round(X-0.5); PY:=Round(Y-0.5);
+  For A:=0 To Thick-1 Do
+   For C:=0 To Thick-1 Do Begin
+    If(PX+A>=0)And(PX+A<B.W)And(PY+C>=0)And(PY+C<B.H)Then Begin
+     ZRw:=ZR^[PY+C];
+     If ZK>=ZRw^[PX+A] Then Begin
+      Px8:=B.Rows^[PY+C];
+      Px8^[(PX+A)*3]:=R; Px8^[(PX+A)*3+1]:=G; Px8^[(PX+A)*3+2]:=Bl;
+     End;
+    End;
+   End;
+ End;
+End;
+
+Procedure HQProj(Const V:TVec;Var X,Y,Z:Real);
+Begin
+ If CamPersp Then Begin
+  X:=CamCX+V.X*CamFocal/V.Z; Y:=CamCY-V.Y*CamFocal/V.Z; Z:=1/V.Z;
+ End
+  Else Begin
+   X:=CamCX+V.X*CamOrtho; Y:=CamCY-V.Y*CamOrtho; Z:=(8000-V.Z)/1000;
+  End;
+End;
+
+{ Ajoute les faces du sol (damier de tenons) et les ombres portees }
+Procedure HQFloorShadows(Floor,Shadow:Boolean);
+Var
+ Mn,Mx,A,B:TVec; I:TMat; Q:PPiece; X0,X1,Z0,Z1,Y:Real; K,L,J,M,N:Integer;
+ Pts:Array[0..7] Of TVec; Hx:Array[0..15] Of Integer; Hn:Integer; H:PHQ;
+ Cx:Array[0..7] Of Real; Cz:Array[0..7] Of Real; Used:Array[0..7] Of Boolean;
+ Lx,Ly,Lz,T:Real; V:TVec; O:TVec; Ok:Boolean; Fx0,Fz0:Integer;
+ Procedure Tri(Kind:Byte;Alpha,R,G,Bl:Byte;Const P0,P1,P2:TVec);
+ Var Hh:PHQ; Q0,Q1,Q2:TVec;
+ Begin
+  MatApply(CamM,P0,Q0); MatApply(CamM,P1,Q1); MatApply(CamM,P2,Q2);
+  If CamPersp And((Q0.Z<NEARZ)Or(Q1.Z<NEARZ)Or(Q2.Z<NEARZ))Then Exit;
+  Hh:=HQNew(Kind,3);
+  Hh^.V[0]:=Q0; Hh^.V[1]:=Q1; Hh^.V[2]:=Q2;
+  Hh^.R:=R; Hh^.G:=G; Hh^.B:=Bl; Hh^.Alpha:=Alpha;
+ End;
+Begin
+ MatIdent(I);
+ BoxEmpty(Mn,Mx);
+ ModelBounds(CurModel,I,False,False,Mn,Mx,0);
+ If BoxIsEmpty(Mn,Mx)Then Exit;
+ Y:=GroundY;
+ X0:=Trunc((Mn.X-160)/20)*20; X1:=Trunc((Mx.X+160)/20)*20;
+ Z0:=Trunc((Mn.Z-160)/20)*20; Z1:=Trunc((Mx.Z+160)/20)*20;
+ If Floor Then Begin
+  VSet(A,X0,Y,Z0); VSet(B,X1,Y,Z0);
+  Pts[0]:=A; Pts[1]:=B; VSet(Pts[2],X1,Y,Z1); VSet(Pts[3],X0,Y,Z1);
+  Tri(3,255,232,234,238,Pts[0],Pts[1],Pts[2]);
+  Tri(3,255,232,234,238,Pts[0],Pts[2],Pts[3]);
+  { tenons du sol }
+  Fx0:=Round(X0); Fz0:=Round(Z0);
+  K:=Fx0+10;
+  M:=0;
+  While(K<X1)And(M<70)Do Begin
+   L:=Fz0+10; N:=0;
+   While(L<Z1)And(N<70)Do Begin
+    For J:=0 To 7 Do Begin
+     VSet(V,K,Y-0.4,L);
+     VSet(A,K+6.2*Cos(J*Pi/4),Y-0.4,L+6.2*Sin(J*Pi/4));
+     VSet(B,K+6.2*Cos((J+1)*Pi/4),Y-0.4,L+6.2*Sin((J+1)*Pi/4));
+     Tri(3,255,218,221,227,V,B,A);
+    End;
+    Inc(L,20); Inc(N);
+   End;
+   Inc(K,20); Inc(M);
+  End;
+ End;
+ If Shadow Then Begin
+  Lx:=0.40; Ly:=1; Lz:=0.32;
+  Q:=Models[CurModel].First;
+  While Q<>Nil Do Begin
+   If PieceVisible(Q)Then Begin
+    PieceBounds(Q,False,A,B);
+    For K:=0 To 7 Do Begin
+     If K And 1=0 Then V.X:=A.X Else V.X:=B.X;
+     If K And 2=0 Then V.Y:=A.Y Else V.Y:=B.Y;
+     If K And 4=0 Then V.Z:=A.Z Else V.Z:=B.Z;
+     T:=(Y-V.Y)/Ly;
+     Cx[K]:=V.X+Lx*T; Cz[K]:=V.Z+Lz*T;
+    End;
+    { enveloppe convexe (Jarvis) des 8 points }
+    Hn:=0;
+    M:=0;
+    For K:=1 To 7 Do If(Cx[K]<Cx[M])Or((Cx[K]=Cx[M])And(Cz[K]<Cz[M]))Then M:=K;
+    K:=M;
+    Repeat
+     Hx[Hn]:=K; Inc(Hn);
+     L:=(K+1) Mod 8;
+     For J:=0 To 7 Do Begin
+      If(Cx[L]-Cx[K])*(Cz[J]-Cz[K])-(Cz[L]-Cz[K])*(Cx[J]-Cx[K])<-0.001 Then L:=J;
+     End;
+     K:=L;
+    Until(K=M)Or(Hn>=14);
+    For K:=1 To Hn-2 Do Begin
+     VSet(Pts[0],Cx[Hx[0]],Y-0.2,Cz[Hx[0]]);
+     VSet(Pts[1],Cx[Hx[K]],Y-0.2,Cz[Hx[K]]);
+     VSet(Pts[2],Cx[Hx[K+1]],Y-0.2,Cz[Hx[K+1]]);
+     Tri(2,34,20,20,40,Pts[0],Pts[1],Pts[2]);
+    End;
+   End;
+   Q:=Q^.Next;
+  End;
+ End;
+End;
+
+{ Rend la vue V en W x H pixels (AA x AA sur-echantillons) dans Out }
+Function RenderToImg(Var V:TView;W,H,AA:Integer;Floor,Shadow:Boolean;Var Out:TImg):Boolean;
+Var
+ VV:TView; BW,BH,X,Y,I,J,A,C,SR,SG,SB:Integer;
+ Buf:TImg; ZR:PRowTab; Z:PZRow; P:PHQ; X0,Y0,Z0,X1,Y1,Z1,X2,Y2,Z2,X3,Y3,Z3:Real;
+ Th:Integer; Pass:Integer; PS,PD:PByteRow; N:Integer;
+Begin
+ RenderToImg:=False;
+ If AA<1 Then AA:=1; If AA>4 Then AA:=4;
+ While(W*AA>4090)Or(H*AA>4090)Do Dec(AA);
+ If AA<1 Then Exit;
+ BW:=W*AA; BH:=H*AA;
+ If Not ImgNew(Buf,BW,BH,255,255,255)Then Exit;
+ Out.Rows:=Nil;
+ If Not ImgNew(Out,W,H,255,255,255)Then Begin ImgFree(Buf); Exit; End;
+ GetMem(ZR,SizeOf(TRowTab));
+ FillChar(ZR^,SizeOf(TRowTab),0);
+ For Y:=0 To BH-1 Do Begin
+  GetMem(ZR^[Y],BW*4);
+  Z:=ZR^[Y];
+  For X:=0 To BW-1 Do Z^[X]:=-2147483647;
+ End;
+ VV:=V; VV.X1:=0; VV.Y1:=0; VV.X2:=BW-1; VV.Y2:=BH-1;
+ If Not V.Persp Then VV.Zoom:=V.Zoom*BH/(V.Y2-V.Y1+1);
+ SetupCamera(VV);
+ If CamPersp Then HQZS:=ZS_PERSP Else HQZS:=ZS_ORTHO;
+ If CacheCount>CACHE_MAX Then FlushCache;
+ ComputeGround;
+ HQMode:=True; HQFree;
+ BuildScene(False);
+ HQFloorShadows(Floor,Shadow);
+ HQMode:=False;
+ Th:=AA;
+ For Pass:=0 To 3 Do Begin
+  P:=HQHead; N:=0;
+  While P<>Nil Do Begin
+   Inc(N); If N And 1023=0 Then LatchMouse;
+   If((Pass=0)And(((P^.Kind=0)And(P^.Alpha=255))Or(P^.Kind=3)))
+    Or((Pass=1)And(P^.Kind=2))
+    Or((Pass=2)And(P^.Kind=0)And(P^.Alpha<255))Then Begin
+    HQProj(P^.V[0],X0,Y0,Z0); HQProj(P^.V[1],X1,Y1,Z1); HQProj(P^.V[2],X2,Y2,Z2);
+    If Pass=1 Then Begin
+     HQTri(Buf,ZR,X0,Y0,Z0,X1,Y1,Z1,X2,Y2,Z2,P^.R,P^.G,P^.B,P^.Alpha,False,0.0015);
+    End
+     Else HQTri(Buf,ZR,X0,Y0,Z0,X1,Y1,Z1,X2,Y2,Z2,P^.R,P^.G,P^.B,P^.Alpha,Pass=0,0);
+    If P^.N=4 Then Begin
+     HQProj(P^.V[3],X3,Y3,Z3);
+     HQTri(Buf,ZR,X0,Y0,Z0,X2,Y2,Z2,X3,Y3,Z3,P^.R,P^.G,P^.B,P^.Alpha,Pass=0,0);
+    End;
+   End
+    Else If(Pass=3)And(P^.Kind=1)Then Begin
+     HQProj(P^.V[0],X0,Y0,Z0); HQProj(P^.V[1],X1,Y1,Z1);
+     HQLine(Buf,ZR,X0,Y0,Z0,X1,Y1,Z1,P^.R,P^.G,P^.B,Th);
+    End;
+   P:=P^.Next;
+  End;
+ End;
+ HQFree;
+ { reduction : moyenne des AA x AA sur-echantillons }
+ For Y:=0 To H-1 Do Begin
+  PD:=Out.Rows^[Y];
+  For X:=0 To W-1 Do Begin
+   SR:=0; SG:=0; SB:=0;
+   For A:=0 To AA-1 Do Begin
+    PS:=Buf.Rows^[Y*AA+A];
+    For C:=0 To AA-1 Do Begin
+     Inc(SR,PS^[(X*AA+C)*3]); Inc(SG,PS^[(X*AA+C)*3+1]); Inc(SB,PS^[(X*AA+C)*3+2]);
+    End;
+   End;
+   PD^[X*3]:=SR Div(AA*AA); PD^[X*3+1]:=SG Div(AA*AA); PD^[X*3+2]:=SB Div(AA*AA);
+  End;
+ End;
+ For Y:=0 To BH-1 Do FreeMem(ZR^[Y],BW*4);
+ FreeMem(ZR,SizeOf(TRowTab));
+ ImgFree(Buf);
+ RenderToImg:=True;
+End;
+
+{ ---------------------------- Ecriture d'images -------------------------- }
+
+Procedure PutLong(Var F:File;V:LongInt);
+Begin BlockWrite(F,V,4); End;
+
+Procedure PutWord(Var F:File;V:Word);
+Begin BlockWrite(F,V,2); End;
+
+Function WriteBMP24(Const Path:String;Const I:TImg):Boolean;
+Var F:File; Hd:Array[0..53] Of Byte; Sz:LongInt; Pad,X,Y:Integer; Row:PByteRow; Z:Array[0..3] Of Byte;
+Begin
+ WriteBMP24:=False;
+ Pad:=(4-(I.W*3) Mod 4) Mod 4;
+ Sz:=54+LongInt(I.W*3+Pad)*I.H;
+ FillChar(Hd,SizeOf(Hd),0);
+ Hd[0]:=Ord('B'); Hd[1]:=Ord('M');
+ Move(Sz,Hd[2],4); Hd[10]:=54; Hd[14]:=40;
+ Sz:=I.W; Move(Sz,Hd[18],4); Sz:=I.H; Move(Sz,Hd[22],4);
+ Hd[26]:=1; Hd[28]:=24;
+ {$I-}
+ Assign(F,Path); Rewrite(F,1);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ BlockWrite(F,Hd,54);
+ FillChar(Z,4,0);
+ GetMem(Row,I.W*3+4);
+ For Y:=I.H-1 DownTo 0 Do Begin
+  For X:=0 To I.W-1 Do Begin
+   Row^[X*3]:=PByteRow(I.Rows^[Y])^[X*3+2];
+   Row^[X*3+1]:=PByteRow(I.Rows^[Y])^[X*3+1];
+   Row^[X*3+2]:=PByteRow(I.Rows^[Y])^[X*3];
+  End;
+  BlockWrite(F,Row^,I.W*3);
+  If Pad>0 Then BlockWrite(F,Z,Pad);
+ End;
+ FreeMem(Row,I.W*3+4);
+ Close(F);
+ WriteBMP24:=True;
+End;
+
+{ PNG : flux zlib en blocs "stockes" (sans compression) }
+Var CrcTab:Array[0..255] Of LongInt; CrcReady:Boolean;
+
+Procedure CrcInit;
+Var N,K:Integer; C:LongInt;
+Begin
+ For N:=0 To 255 Do Begin
+  C:=N;
+  For K:=0 To 7 Do
+   If(C And 1)<>0 Then C:=LongInt($EDB88320) Xor((C Shr 1) And $7FFFFFFF) Else C:=(C Shr 1) And $7FFFFFFF;
+  CrcTab[N]:=C;
+ End;
+ CrcReady:=True;
+End;
+
+Function CrcUpd(Crc:LongInt;Var Buf;Len:Integer):LongInt;
+Var I:Integer; P:PByteRow;
+Begin
+ P:=@Buf;
+ For I:=0 To Len-1 Do Crc:=CrcTab[(Crc Xor P^[I]) And 255] Xor((Crc Shr 8) And $FFFFFF);
+ CrcUpd:=Crc;
+End;
+
+Procedure BE32(Var A:Array Of Byte;Pos:Integer;V:LongInt);
+Begin
+ A[Pos]:=(V Shr 24) And 255; A[Pos+1]:=(V Shr 16) And 255; A[Pos+2]:=(V Shr 8) And 255; A[Pos+3]:=V And 255;
+End;
+
+Procedure PngChunk(Var F:File;Const Tp:String;Var Data;Len:Integer);
+Var Hd:Array[0..7] Of Byte; Cr:LongInt; Tl:Array[0..3] Of Byte; I:Integer;
+Begin
+ BE32(Hd,0,Len);
+ For I:=0 To 3 Do Hd[4+I]:=Ord(Tp[I+1]);
+ BlockWrite(F,Hd,8);
+ If Len>0 Then BlockWrite(F,Data,Len);
+ Cr:=CrcUpd(LongInt($FFFFFFFF),Hd[4],4);
+ If Len>0 Then Cr:=CrcUpd(Cr,Data,Len);
+ Cr:=Cr Xor LongInt($FFFFFFFF);
+ BE32(Tl,0,Cr);
+ BlockWrite(F,Tl,4);
+End;
+
+Function WritePNG(Const Path:String;Const I:TImg):Boolean;
+Var
+ F:File; Hd:Array[0..12] Of Byte; Sig:Array[0..7] Of Byte; Raw,Total,Rem:LongInt; Blocks:LongInt;
+ Y,X:Integer; Buf:PByteRow; Fill:Integer; Cr,Ad1,Ad2:LongInt; Lb:Array[0..7] Of Byte; Tl:Array[0..3] Of Byte;
+ Idat:Array[0..7] Of Byte; Row:PByteRow; Pos:Integer; Done:Boolean;
+ Procedure Emit(Var Data;Len:Integer);
+ Begin
+  BlockWrite(F,Data,Len);
+  Cr:=CrcUpd(Cr,Data,Len);
+ End;
+ Procedure Adler(Var Data;Len:Integer);
+ Var K:Integer; P:PByteRow;
+ Begin
+  P:=@Data;
+  For K:=0 To Len-1 Do Begin
+   Ad1:=(Ad1+P^[K]) Mod 65521;
+   Ad2:=(Ad2+Ad1) Mod 65521;
+  End;
+ End;
+ Procedure FlushBlock(Last:Boolean);
+ Var Hb:Array[0..4] Of Byte;
+ Begin
+  If Fill=0 Then Exit;
+  If Last Then Hb[0]:=1 Else Hb[0]:=0;
+  Hb[1]:=Fill And 255; Hb[2]:=(Fill Shr 8) And 255;
+  Hb[3]:=(Not Fill) And 255; Hb[4]:=((Not Fill) Shr 8) And 255;
+  Emit(Hb,5);
+  Emit(Buf^,Fill);
+  Adler(Buf^,Fill);
+  Fill:=0;
+ End;
+ Procedure PutB(B:Byte);
+ Begin
+  Buf^[Fill]:=B; Inc(Fill);
+  Dec(Rem);
+  If Fill=30000 Then FlushBlock(Rem=0);
+ End;
+Begin
+ WritePNG:=False;
+ If Not CrcReady Then CrcInit;
+ {$I-}
+ Assign(F,Path); Rewrite(F,1);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ Sig[0]:=137; Sig[1]:=80; Sig[2]:=78; Sig[3]:=71; Sig[4]:=13; Sig[5]:=10; Sig[6]:=26; Sig[7]:=10;
+ BlockWrite(F,Sig,8);
+ FillChar(Hd,SizeOf(Hd),0);
+ BE32(Hd,0,I.W); BE32(Hd,4,I.H); Hd[8]:=8; Hd[9]:=2;
+ PngChunk(F,'IHDR',Hd,13);
+ Raw:=LongInt(I.H)*(I.W*3+1);
+ Blocks:=(Raw+29999) Div 30000;
+ Total:=2+Raw+5*Blocks+4;
+ BE32(Lb,0,Total);
+ { chunk IDAT : en-tete puis flux }
+ BlockWrite(F,Lb,4);
+ Idat[0]:=Ord('I'); Idat[1]:=Ord('D'); Idat[2]:=Ord('A'); Idat[3]:=Ord('T');
+ Cr:=LongInt($FFFFFFFF);
+ Emit(Idat,4);
+ Idat[0]:=$78; Idat[1]:=$01;
+ Emit(Idat,2);
+ GetMem(Buf,30100);
+ Fill:=0; Rem:=Raw; Ad1:=1; Ad2:=0;
+ For Y:=0 To I.H-1 Do Begin
+  PutB(0);
+  Row:=I.Rows^[Y];
+  For X:=0 To I.W*3-1 Do PutB(Row^[X]);
+ End;
+ FlushBlock(True);
+ FreeMem(Buf,30100);
+ BE32(Idat,0,(Ad2 Shl 16) Or Ad1);
+ Emit(Idat,4);
+ Cr:=Cr Xor LongInt($FFFFFFFF);
+ BE32(Tl,0,Cr);
+ BlockWrite(F,Tl,4);
+ PngChunk(F,'IEND',Idat,0);
+ Close(F);
+ WritePNG:=True;
+End;
+
+{ GIF : palette 6x6x6 + tramage ordonne ; LZW sans compression (code vidage periodique) }
+Const Bayer:Array[0..15] Of Integer=(0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);
+
+Procedure GifPalette(Var F:File);
+Var I,R,G,B:Integer; P:Array[0..767] Of Byte;
+Begin
+ FillChar(P,SizeOf(P),0);
+ For I:=0 To 215 Do Begin
+  R:=I Div 36; G:=(I Div 6) Mod 6; B:=I Mod 6;
+  P[I*3]:=R*51; P[I*3+1]:=G*51; P[I*3+2]:=B*51;
+ End;
+ BlockWrite(F,P,768);
+End;
+
+Procedure GifFrame(Var F:File;Const I:TImg;Delay:Integer;First,Anim:Boolean);
+Var
+ Hd:Array[0..12] Of Byte; Gc:Array[0..7] Of Byte; Id:Array[0..9] Of Byte;
+ X,Y,R,G,B,T,Cnt:Integer; Row:PByteRow;
+ Acc,NBits:LongInt; Blk:Array[0..255] Of Byte; BL:Integer; Zero:Byte;
+ Procedure PutCode(C:Integer);
+ Begin
+  Acc:=Acc Or(LongInt(C) Shl NBits);
+  Inc(NBits,9);
+  While NBits>=8 Do Begin
+   Blk[BL+1]:=Acc And 255; Inc(BL);
+   Acc:=(Acc Shr 8) And $FFFFFF; Dec(NBits,8);
+   If BL=255 Then Begin Blk[0]:=255; BlockWrite(F,Blk,256); BL:=0; End;
+  End;
+ End;
+ Function Qz(V:Integer;Bay:Integer):Integer;
+ Var A,K:Integer;
+ Begin
+  A:=V+(Bay-8)*3;
+  If A<0 Then A:=0; If A>255 Then A:=255;
+  K:=(A+25) Div 51;
+  If K>5 Then K:=5;
+  Qz:=K;
+ End;
+Begin
+ If First Then Begin
+  Hd[0]:=Ord('G'); Hd[1]:=Ord('I'); Hd[2]:=Ord('F'); Hd[3]:=Ord('8'); Hd[4]:=Ord('9'); Hd[5]:=Ord('a');
+  Hd[6]:=I.W And 255; Hd[7]:=I.W Shr 8; Hd[8]:=I.H And 255; Hd[9]:=I.H Shr 8;
+  Hd[10]:=$F7; Hd[11]:=0; Hd[12]:=0;
+  BlockWrite(F,Hd,13);
+  GifPalette(F);
+  If Anim Then Begin
+   Blk[0]:=$21; Blk[1]:=$FF; Blk[2]:=11;
+   Move('NETSCAPE2.0',Blk[3],11);
+   Blk[14]:=3; Blk[15]:=1; Blk[16]:=0; Blk[17]:=0; Blk[18]:=0;
+   BlockWrite(F,Blk,19);
+  End;
+ End;
+ Gc[0]:=$21; Gc[1]:=$F9; Gc[2]:=4; Gc[3]:=0; Gc[4]:=Delay And 255; Gc[5]:=Delay Shr 8; Gc[6]:=0; Gc[7]:=0;
+ BlockWrite(F,Gc,8);
+ Id[0]:=$2C; Id[1]:=0; Id[2]:=0; Id[3]:=0; Id[4]:=0;
+ Id[5]:=I.W And 255; Id[6]:=I.W Shr 8; Id[7]:=I.H And 255; Id[8]:=I.H Shr 8; Id[9]:=0;
+ BlockWrite(F,Id,10);
+ Zero:=8;
+ BlockWrite(F,Zero,1);
+ Acc:=0; NBits:=0; BL:=0; Cnt:=0;
+ PutCode(256);
+ For Y:=0 To I.H-1 Do Begin
+  Row:=I.Rows^[Y];
+  For X:=0 To I.W-1 Do Begin
+   T:=Bayer[(Y And 3)*4+(X And 3)];
+   R:=Qz(Row^[X*3],T); G:=Qz(Row^[X*3+1],T); B:=Qz(Row^[X*3+2],T);
+   PutCode(R*36+G*6+B);
+   Inc(Cnt);
+   If Cnt>=250 Then Begin PutCode(256); Cnt:=0; End;
+  End;
+ End;
+ PutCode(257);
+ If NBits>0 Then Begin Blk[BL+1]:=Acc And 255; Inc(BL); End;
+ If BL>0 Then Begin Blk[0]:=BL; BlockWrite(F,Blk,BL+1); End;
+ Zero:=0;
+ BlockWrite(F,Zero,1);
+End;
+
+Procedure GifEnd(Var F:File);
+Var T:Byte;
+Begin
+ T:=$3B;
+ BlockWrite(F,T,1);
+End;
+
+Function WriteGIF(Const Path:String;Const I:TImg):Boolean;
+Var F:File;
+Begin
+ WriteGIF:=False;
+ {$I-}
+ Assign(F,Path); Rewrite(F,1);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ GifFrame(F,I,0,True,False);
+ GifEnd(F);
+ Close(F);
+ WriteGIF:=True;
+End;
+
+{ Ecrit l'image selon l'extension (.PNG .BMP .GIF) }
+Function WriteImage(Const Path:String;Const I:TImg):Boolean;
+Var E:String;
+Begin
+ E:=ExtOf(Path);
+ If E='.BMP' Then WriteImage:=WriteBMP24(Path,I)
+ Else If E='.GIF' Then WriteImage:=WriteGIF(Path,I)
+ Else WriteImage:=WritePNG(Path,I);
+End;
+
+Procedure ExportImageCmd;
+Var Nm,S:String; V:Array[0..3] Of Real; N:Integer; Img:TImg; W,H,AA:Integer; Vw:TView;
+Begin
+ Nm:=BaseOf(DocFile);
+ If Not FileDialog(2,Nm)Then Exit;
+ If ExtOf(Nm)='' Then Nm:=Nm+'.PNG';
+ S:='800 600 2';
+ If Not InputBox('Image','Largeur hauteur antialiasing (1-4) :',S,24)Then Exit;
+ N:=ParseNums(S,V,3);
+ If N<2 Then Begin AskBox('Image','Format : largeur hauteur [aa]',0); Exit; End;
+ W:=Round(V[0]); H:=Round(V[1]);
+ If N>=3 Then AA:=Round(V[2]) Else AA:=2;
+ If(W<16)Or(H<16)Or(W>2000)Or(H>2000)Then Begin AskBox('Image','Dimensions : 16 a 2000 pixels.',0); Exit; End;
+ If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
+ SetMsg('Rendu en cours...');
+ DrawStatus;
+ Vw:=Views[ActiveView];
+ If RenderToImg(Vw,W,H,AA,True,True,Img)Then Begin
+  If WriteImage(Nm,Img)Then SetMsg('Image enregistr\ee : '+BaseOf(Nm))
+  Else AskBox('Image','Erreur d''\ecriture.',0);
+  ImgFree(Img);
+ End
+  Else AskBox('Image','M\emoire insuffisante pour ce rendu.',0);
+End;
+
+{ ====================================================================== }
+{ Geometrie monde : POV-Ray, Wavefront OBJ, 3D Studio                    }
+{ ====================================================================== }
+
+Type
+ TFace=Array[0..3] Of TVec;
+ TGeoProc=Procedure(N:Integer;Var P:TFace;Code:LongInt);
+
+Var
+ GeoProc:TGeoProc;
+
+Procedure GeoEmit(N,Cull:Integer;Flip:Boolean;Var P:TFace;Code:LongInt);
+Var T:TVec; Rev:Boolean;
+Begin
+ Rev:=(Cull=2)<>Flip;
+ If Rev Then Begin
+  If N=3 Then Begin T:=P[0]; P[0]:=P[2]; P[2]:=T; End
+  Else Begin T:=P[0]; P[0]:=P[3]; P[3]:=T; T:=P[1]; P[1]:=P[2]; P[2]:=T; End;
+ End;
+ GeoProc(N,P,Code);
+End;
+
+Procedure GeoStud(Const M:TMat;Code:LongInt;Flip:Boolean);
+Var I,J:Integer; T,B:Array[0..7] Of TVec; V,C:TVec; F:TFace;
+Begin
+ For I:=0 To 7 Do Begin
+  VSet(V,StudCos[I],-4,StudSin[I]); MatApply(M,V,T[I]);
+  VSet(V,StudCos[I],0,StudSin[I]); MatApply(M,V,B[I]);
+ End;
+ VSet(V,0,-4,0); MatApply(M,V,C);
+ For I:=0 To 7 Do Begin
+  J:=(I+1) And 7;
+  F[0]:=T[I]; F[1]:=B[I]; F[2]:=B[J]; F[3]:=T[J];
+  GeoEmit(4,1,Flip,F,Code);
+ End;
+ I:=0;
+ While I<8 Do Begin
+  F[0]:=C; F[1]:=T[I]; F[2]:=T[(I+1) And 7]; F[3]:=T[(I+2) And 7];
+  GeoEmit(4,1,Flip,F,Code);
+  Inc(I,2);
+ End;
+End;
+
+Procedure GeoPart(P:PPart;Const M:TMat;Code:LongInt);
+Var Q:PPrim; C2:LongInt; I,N:Integer; F:TFace; Flip:Boolean; X:TMat;
+Begin
+ If Not P^.Flattened Then FlattenPart(P);
+ Flip:=MatDet(M)<0;
+ Q:=P^.Flat;
+ While Q<>Nil Do Begin
+  C2:=Q^.Col; If(C2=16)Or(C2=24)Then C2:=Code;
+  Case Q^.Kind Of
+   PK_STUD:Begin
+    MatMul(M,Q^.M,X);
+    GeoStud(X,C2,Flip<>(Q^.Cull=1));
+   End;
+   PK_TRI,PK_QUAD:Begin
+    N:=Q^.Kind;
+    For I:=0 To N-1 Do MatApply(M,Q^.P[I],F[I]);
+    GeoEmit(N,Q^.Cull,Flip,F,C2);
+   End;
+  End;
+  Q:=Q^.Next;
+ End;
+End;
+
+Procedure GeoPiece(Q:PPiece;Const Parent:TMat;PCode:LongInt;Depth:Integer);
+Var T:TMat; C:LongInt; S:Integer; P:PPart; Q2:PPiece;
+Begin
+ MatMul(Parent,Q^.M,T);
+ C:=Q^.Col; If(C=16)Or(C=24)Then C:=PCode;
+ S:=PieceSub(Q);
+ If S>=0 Then Begin
+  If Depth<12 Then Begin
+   Q2:=Models[S].First;
+   While Q2<>Nil Do Begin GeoPiece(Q2,T,C,Depth+1); Q2:=Q2^.Next; End;
+  End;
+ End
+  Else Begin
+   P:=PiecePart(Q);
+   If P<>Nil Then GeoPart(P,T,C);
+  End;
+End;
+
+Procedure GeoWalk(Proc:TGeoProc);
+Var Q:PPiece; I:TMat;
+Begin
+ GeoProc:=Proc;
+ MatIdent(I);
+ Q:=Models[CurModel].First;
+ While Q<>Nil Do Begin
+  If PieceVisible(Q)Then GeoPiece(Q,I,7,0);
+  Q:=Q^.Next;
+ End;
+End;
+
+Function ExportFile(Const Title:String;Const Ext:String;Var Nm:String):Boolean;
+Begin
+ ExportFile:=False;
+ Nm:=BaseOf(DocFile);
+ If Not FileDialog(3,Nm)Then Exit;
+ If ExtOf(Nm)='' Then Nm:=Nm+Ext;
+ If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
+ ExportFile:=True;
+End;
+
+{ ---------------------------- POV-Ray ------------------------------------ }
+
+Var
+ GF:Text;
+ GCount:LongInt;
+ GColors:PAgg;
+
+Procedure PovFace(N:Integer;Var P:TFace;Code:LongInt);
+ Function V(I:Integer):String;
+ Begin
+  V:='<'+RStr(P[I].X,2)+','+RStr(-P[I].Y,2)+','+RStr(P[I].Z,2)+'>';
+ End;
+Begin
+ WriteLn(GF,'triangle{',V(0),',',V(1),',',V(2),' texture{M',Code,'}}');
+ If N=4 Then WriteLn(GF,'triangle{',V(0),',',V(2),',',V(3),' texture{M',Code,'}}');
+ Inc(GCount);
+End;
+
+Procedure PovColors(N:Integer;Var P:TFace;Code:LongInt);
+Var A,T:PAgg;
+Begin
+ A:=Agg; T:=Nil;
+ While A<>Nil Do Begin If A^.C=Code Then Exit; T:=A; A:=A^.Next; End;
+ New(A); A^.C:=Code; A^.Q:=0; A^.N:=''; A^.Next:=Nil;
+ If T=Nil Then Agg:=A Else T^.Next:=A;
+End;
+
+Procedure ExportPOVCmd;
+Var Nm:String; V:TView; C:PAgg; R,G,B,Fin:Byte; Tr:Boolean; Pos:TVec; Ar:Real; CC:PColor;
+Begin
+ If Not ExportFile('POV-Ray','.POV',Nm)Then Exit;
+ FreeAgg;
+ GeoWalk(PovColors);
+ {$I-}
+ Assign(GF,Nm); Rewrite(GF);
+ {$I+}
+ If IOResult<>0 Then Begin FreeAgg; AskBox('POV-Ray','Impossible de cr\eer le fichier.',0); Exit; End;
+ V:=Views[ActiveView];
+ LookFromCamera(V.Yaw,V.Pitch,V.Dist,V.Tgt,Pos);
+ Ar:=(V.X2-V.X1+1)/(V.Y2-V.Y1+1);
+ WriteLn(GF,'// Genere par LEOCAD');
+ WriteLn(GF,'#version 3.6;');
+ WriteLn(GF,'global_settings{assumed_gamma 1.0 max_trace_level 12}');
+ WriteLn(GF,'background{color rgb<1,1,1>}');
+ WriteLn(GF,'camera{location<',RStr(Pos.X,2),',',RStr(-Pos.Y,2),',',RStr(Pos.Z,2),'> look_at<',
+  RStr(V.Tgt.X,2),',',RStr(-V.Tgt.Y,2),',',RStr(V.Tgt.Z,2),'> right x*',RStr(Ar,3),
+  ' angle ',RStr(2*ArcTan(Sin(V.Fov*Pi/360)/Cos(V.Fov*Pi/360)*Ar)*180/Pi,2),'}');
+ WriteLn(GF,'light_source{<',RStr(Pos.X+300,1),',',RStr(-Pos.Y+900,1),',',RStr(Pos.Z-300,1),'> color rgb 1.0}');
+ WriteLn(GF,'light_source{<',RStr(Pos.X-600,1),',',RStr(-Pos.Y+500,1),',',RStr(Pos.Z+400,1),'> color rgb 0.35 shadowless}');
+ ComputeGround;
+ WriteLn(GF,'plane{y,',RStr(-GroundY,2),' pigment{color rgb<0.92,0.93,0.95>} finish{ambient 0.4 diffuse 0.6}}');
+ C:=Agg;
+ While C<>Nil Do Begin
+  ColInfo(C^.C,R,G,B,Tr,Fin);
+  Write(GF,'#declare M',C^.C,'=texture{pigment{rgb<',RStr(R/255,3),',',RStr(G/255,3),',',RStr(B/255,3));
+  If Tr Then Write(GF,' transmit 0.55');
+  Write(GF,'>}finish{phong 0.55 phong_size 40 ambient 0.25 diffuse 0.8');
+  If(Fin And(FN_CHROME Or FN_METAL))<>0 Then Write(GF,' metallic reflection 0.25');
+  WriteLn(GF,'}};');
+  C:=C^.Next;
+ End;
+ GCount:=0;
+ WriteLn(GF,'union{');
+ GeoWalk(PovFace);
+ WriteLn(GF,'}');
+ Close(GF);
+ FreeAgg;
+ SetMsg('POV-Ray : '+IntStr(GCount)+' faces');
+End;
+
+{ ---------------------------- Wavefront OBJ ------------------------------ }
+
+Var
+ ObjV:LongInt; ObjLast:LongInt; MF:Text;
+
+Procedure ObjFace(N:Integer;Var P:TFace;Code:LongInt);
+Var I:Integer;
+Begin
+ If Code<>ObjLast Then Begin WriteLn(GF,'usemtl M',Code); ObjLast:=Code; End;
+ For I:=0 To N-1 Do WriteLn(GF,'v ',RStr(P[I].X,3),' ',RStr(-P[I].Y,3),' ',RStr(-P[I].Z,3));
+ Write(GF,'f');
+ For I:=0 To N-1 Do Write(GF,' ',ObjV+I);
+ WriteLn(GF);
+ Inc(ObjV,N);
+End;
+
+Procedure ExportOBJCmd;
+Var Nm,Mn:String; C:PAgg; R,G,B,Fin:Byte; Tr:Boolean;
+Begin
+ If Not ExportFile('Wavefront OBJ','.OBJ',Nm)Then Exit;
+ FreeAgg;
+ GeoWalk(PovColors);
+ Mn:=ForceExt(Nm,'.MTL');
+ {$I-}
+ Assign(MF,Mn); Rewrite(MF);
+ {$I+}
+ If IOResult<>0 Then Begin FreeAgg; AskBox('OBJ','Impossible de cr\eer le fichier.',0); Exit; End;
+ C:=Agg;
+ While C<>Nil Do Begin
+  ColInfo(C^.C,R,G,B,Tr,Fin);
+  WriteLn(MF,'newmtl M',C^.C);
+  WriteLn(MF,'Kd ',RStr(R/255,3),' ',RStr(G/255,3),' ',RStr(B/255,3));
+  WriteLn(MF,'Ka 0.15 0.15 0.15');
+  WriteLn(MF,'Ks 0.30 0.30 0.30');
+  If Tr Then WriteLn(MF,'d 0.5') Else WriteLn(MF,'d 1.0');
+  C:=C^.Next;
+ End;
+ Close(MF);
+ {$I-}
+ Assign(GF,Nm); Rewrite(GF);
+ {$I+}
+ If IOResult<>0 Then Begin FreeAgg; Exit; End;
+ WriteLn(GF,'# Genere par LEOCAD');
+ WriteLn(GF,'mtllib ',BaseOf(Mn));
+ ObjV:=1; ObjLast:=-1;
+ GeoWalk(ObjFace);
+ Close(GF);
+ FreeAgg;
+ SetMsg('OBJ : '+IntStr(ObjV-1)+' sommets');
+End;
+
+{ ---------------------------- 3D Studio ---------------------------------- }
+
+Var
+ DF:File;
+ SelCode:LongInt;
+ PartSkip,PartLeft:LongInt;
+ TriCnt:LongInt;
+ Pass3:Integer;
+ VBuf:PByteRow;
+ VN:LongInt;
+ TmpV:Array[0..2] Of TVec;
+
+Procedure W16(V:LongInt);
+Var W:Word;
+Begin
+ W:=V;
+ BlockWrite(DF,W,2);
+End;
+
+Procedure W32(V:LongInt);
+Begin
+ BlockWrite(DF,V,4);
+End;
+
+Procedure WF(V:Real);
+Var S:Single;
+Begin
+ S:=V;
+ BlockWrite(DF,S,4);
+End;
+
+Function BeginChunk(Id:LongInt):LongInt;
+Begin
+ BeginChunk:=FilePos(DF);
+ W16(Id);
+ W32(0);
+End;
+
+Procedure EndChunk(Pos:LongInt);
+Var E:LongInt;
+Begin
+ E:=FilePos(DF);
+ Seek(DF,Pos+2);
+ W32(E-Pos);
+ Seek(DF,E);
+End;
+
+Procedure WriteAsciiz(Const S:String);
+Var Z:Byte;
+Begin
+ If Length(S)>0 Then BlockWrite(DF,S[1],Length(S));
+ Z:=0; BlockWrite(DF,Z,1);
+End;
+
+{ Passe 1 : compte les triangles par couleur ; passe 2 : ecrit les sommets ; passe 3 : les faces }
+Procedure TriFace(N:Integer;Var P:TFace;Code:LongInt);
+Var K,I:Integer; A:PAgg; Idx:Array[0..2] Of Integer;
+ Procedure Tri(I0,I1,I2:Integer);
+ Var J:Integer;
+ Begin
+  Case Pass3 Of
+   0:Begin
+    A:=Agg;
+    While(A<>Nil)And(A^.C<>Code)Do A:=A^.Next;
+    If A<>Nil Then Inc(A^.Q);
+   End;
+   1:If Code=SelCode Then Begin
+    If PartSkip>0 Then Dec(PartSkip)
+    Else If PartLeft>0 Then Begin
+     Dec(PartLeft);
+     Idx[0]:=I0; Idx[1]:=I1; Idx[2]:=I2;
+     For J:=0 To 2 Do Begin WF(P[Idx[J]].X); WF(P[Idx[J]].Z); WF(-P[Idx[J]].Y); End;
+     Inc(VN,3);
+    End;
+   End;
+   2:If Code=SelCode Then Begin
+    If PartSkip>0 Then Dec(PartSkip)
+    Else If PartLeft>0 Then Begin
+     Dec(PartLeft);
+     W16(VN); W16(VN+1); W16(VN+2); W16(7);
+     Inc(VN,3);
+    End;
+   End;
+  End;
+ End;
+Begin
+ Tri(0,1,2);
+ If N=4 Then Tri(0,2,3);
+End;
+
+Procedure Export3DSCmd;
+Var Nm:String; Main,Md,M3,Ob,Tr1,Vl,Fl,Mg,Ma,Sub:LongInt; C:PAgg; R,G,B,Fin:Byte; Tr:Boolean; Parts,PI,T0,Cnt,K:LongInt;
+ PName:String; Z:Byte;
+Begin
+ If Not ExportFile('3D Studio','.3DS',Nm)Then Exit;
+ FreeAgg;
+ GeoWalk(PovColors);
+ Pass3:=0;
+ GeoWalk(TriFace);
+ {$I-}
+ Assign(DF,Nm); Rewrite(DF,1);
+ {$I+}
+ If IOResult<>0 Then Begin FreeAgg; AskBox('3DS','Impossible de cr\eer le fichier.',0); Exit; End;
+ Main:=BeginChunk($4D4D);
+ Sub:=BeginChunk($0002); W32(3); EndChunk(Sub);
+ M3:=BeginChunk($3D3D);
+ Sub:=BeginChunk($3D3E); W32(3); EndChunk(Sub);
+ C:=Agg;
+ While C<>Nil Do Begin
+  ColInfo(C^.C,R,G,B,Tr,Fin);
+  Ma:=BeginChunk($AFFF);
+  Sub:=BeginChunk($A000); WriteAsciiz('M'+IntStr(C^.C)); EndChunk(Sub);
+  Sub:=BeginChunk($A020);
+  Md:=BeginChunk($0011); Z:=R; BlockWrite(DF,Z,1); Z:=G; BlockWrite(DF,Z,1); Z:=B; BlockWrite(DF,Z,1); EndChunk(Md);
+  EndChunk(Sub);
+  If Tr Then Begin
+   Sub:=BeginChunk($A050); Md:=BeginChunk($0030); W16(50); EndChunk(Md); EndChunk(Sub);
+  End;
+  EndChunk(Ma);
+  C:=C^.Next;
+ End;
+ C:=Agg;
+ While C<>Nil Do Begin
+  Parts:=(C^.Q+21844) Div 21845;
+  For PI:=0 To Parts-1 Do Begin
+   T0:=PI*21845;
+   Cnt:=C^.Q-T0; If Cnt>21845 Then Cnt:=21845;
+   PName:='O'+IntStr(C^.C)+'_'+IntStr(PI);
+   Ob:=BeginChunk($4000);
+   WriteAsciiz(PName);
+   Tr1:=BeginChunk($4100);
+   Vl:=BeginChunk($4110);
+   W16(Cnt*3);
+   SelCode:=C^.C; PartSkip:=T0; PartLeft:=Cnt; VN:=0; Pass3:=1;
+   GeoWalk(TriFace);
+   EndChunk(Vl);
+   Fl:=BeginChunk($4120);
+   W16(Cnt);
+   SelCode:=C^.C; PartSkip:=T0; PartLeft:=Cnt; VN:=0; Pass3:=2;
+   GeoWalk(TriFace);
+   Mg:=BeginChunk($4130);
+   WriteAsciiz('M'+IntStr(C^.C));
+   W16(Cnt);
+   For K:=0 To Cnt-1 Do W16(K);
+   EndChunk(Mg);
+   EndChunk(Fl);
+   EndChunk(Tr1);
+   EndChunk(Ob);
+  End;
+  C:=C^.Next;
+ End;
+ EndChunk(M3);
+ EndChunk(Main);
+ Close(DF);
+ FreeAgg;
+ SetMsg('3DS enregistr\e : '+BaseOf(Nm));
+End;
+
+{ ====================================================================== }
+{ BrickLink XML, instructions HTML, liste des pieces                     }
+{ ====================================================================== }
+
+Function BLColor(Code:LongInt):Integer;
+Begin
+ Case Code Of
+  0:BLColor:=11; 1:BLColor:=7; 2:BLColor:=6; 3:BLColor:=39; 4:BLColor:=5; 5:BLColor:=47;
+  6:BLColor:=8; 7:BLColor:=9; 8:BLColor:=10; 9:BLColor:=62; 10:BLColor:=36; 11:BLColor:=40;
+  12:BLColor:=26; 13:BLColor:=23; 14:BLColor:=3; 15:BLColor:=1; 19:BLColor:=2; 25:BLColor:=4;
+  26:BLColor:=71; 27:BLColor:=34; 28:BLColor:=69; 33:BLColor:=14; 34:BLColor:=20; 36:BLColor:=17;
+  43:BLColor:=15; 46:BLColor:=19; 47:BLColor:=12; 70:BLColor:=88; 71:BLColor:=86; 72:BLColor:=85;
+  84:BLColor:=150; 272:BLColor:=63; 288:BLColor:=80; 320:BLColor:=59; 484:BLColor:=68;
+ Else BLColor:=0;
+ End;
+End;
+
+Function BLToLDraw(Col:Integer):LongInt;
+Var C:LongInt;
+Begin
+ For C:=0 To 484 Do If BLColor(C)=Col Then Begin BLToLDraw:=C; Exit; End;
+ BLToLDraw:=7;
+End;
+
+Function ItemId(Const Nm:String):String;
+Var S:String; I:Integer;
+Begin
+ S:=UpStr(BaseOf(Nm));
+ I:=Pos('.',S);
+ If I>0 Then S:=Copy(S,1,I-1);
+ ItemId:=S;
+End;
+
+Procedure ExportBLCmd;
+Var Nm:String; F:Text; A:PAgg;
+Begin
+ If Not ExportFile('BrickLink','.XML',Nm)Then Exit;
+ FreeAgg;
+ AggModel(0,1,0);
+ {$I-}
+ Assign(F,Nm); Rewrite(F);
+ {$I+}
+ If IOResult<>0 Then Begin FreeAgg; Exit; End;
+ WriteLn(F,'<INVENTORY>');
+ A:=Agg;
+ While A<>Nil Do Begin
+  WriteLn(F,' <ITEM>');
+  WriteLn(F,'  <ITEMTYPE>P</ITEMTYPE>');
+  WriteLn(F,'  <ITEMID>',ItemId(A^.N),'</ITEMID>');
+  WriteLn(F,'  <COLOR>',BLColor(A^.C),'</COLOR>');
+  WriteLn(F,'  <MINQTY>',A^.Q,'</MINQTY>');
+  WriteLn(F,' </ITEM>');
+  A:=A^.Next;
+ End;
+ WriteLn(F,'</INVENTORY>');
+ Close(F);
+ FreeAgg;
+ SetMsg('BrickLink : '+BaseOf(Nm));
+End;
+
+{ Valeur entre <TAG> et </TAG> dans la ligne }
+Function XmlTag(Const L,Tg:String):String;
+Var A,B:Integer;
+Begin
+ A:=Pos('<'+Tg+'>',L); B:=Pos('</'+Tg+'>',L);
+ If(A>0)And(B>A)Then XmlTag:=Copy(L,A+Length(Tg)+2,B-A-Length(Tg)-2) Else XmlTag:='';
+End;
+
+{ Importe une liste BrickLink : les pieces sont rangees en grille sur le sol }
+Procedure ImportBLCmd;
+Var Nm,L,Id,CS,QS:String; F:Text; Mt:TMat; N,Q,Col,Err,I,X,Z,Row:Integer; Pr:PPart; Mn,Mx:TVec; W:Real; Cnt:Integer; Cx,Cz,Rw:Real;
+Begin
+ Nm:='';
+ If Not FileDialog(0,Nm)Then Exit;
+ {$I-}
+ Assign(F,Nm); Reset(F);
+ {$I+}
+ If IOResult<>0 Then Begin AskBox('BrickLink','Impossible de lire le fichier.',0); Exit; End;
+ PushUndo;
+ MatIdent(Mt);
+ Id:=''; CS:=''; QS:='';
+ Cx:=0; Cz:=0; Rw:=0; Cnt:=0;
+ While Not Eof(F) Do Begin
+  {$I-}ReadLn(F,L);{$I+}
+  If IOResult<>0 Then L:='';
+  If XmlTag(L,'ITEMID')<>'' Then Id:=XmlTag(L,'ITEMID');
+  If XmlTag(L,'COLOR')<>'' Then CS:=XmlTag(L,'COLOR');
+  If XmlTag(L,'MINQTY')<>'' Then QS:=XmlTag(L,'MINQTY');
+  If Pos('</ITEM>',L)>0 Then Begin
+   Val(QS,Q,Err); If(Err<>0)Or(Q<1)Then Q:=1;
+   Val(CS,Col,Err); If Err<>0 Then Col:=0;
+   If Q>50 Then Q:=50;
+   Pr:=GetPart(LoStr(Id)+'.dat',0);
+   If Pr<>Nil Then Begin
+    CalcBBox(Pr);
+    W:=Pr^.BMax.X-Pr^.BMin.X+20;
+    For I:=1 To Q Do Begin
+     If Cx+W>800 Then Begin Cx:=0; Cz:=Cz+Rw+20; Rw:=0; End;
+     Mt.T.X:=Cx+W/2; Mt.T.Z:=Cz+(Pr^.BMax.Z-Pr^.BMin.Z)/2; Mt.T.Y:=-Pr^.BMax.Y;
+     Mt.T.X:=Round(Mt.T.X/10)*10; Mt.T.Z:=Round(Mt.T.Z/10)*10;
+     AddPiece(CurModel,LoStr(Id)+'.dat',BLToLDraw(Col),Mt,Models[CurModel].CurStep);
+     Cx:=Cx+W;
+     If Pr^.BMax.Z-Pr^.BMin.Z>Rw Then Rw:=Pr^.BMax.Z-Pr^.BMin.Z;
+     Inc(Cnt);
+    End;
+   End;
+   Id:=''; CS:=''; QS:='';
+  End;
+ End;
+ Close(F);
+ FitAllViews;
+ Touch;
+ SetMsg(IntStr(Cnt)+Fx(' pi\eces import\ees'));
+End;
+
+Procedure FreeAggList(Var L:PAgg);
+Var A,N:PAgg;
+Begin
+ A:=L;
+ While A<>Nil Do Begin N:=A^.Next; Dispose(A); A:=N; End;
+ L:=Nil;
+End;
+
+{ Pieces d'une etape (modele principal, sous-modeles developpes) }
+Procedure AggStep(M,Step,Depth:Integer);
+Var Q:PPiece; S:Integer;
+Begin
+ If Depth>8 Then Exit;
+ Q:=Models[M].First;
+ While Q<>Nil Do Begin
+  If(Depth>0)Or(Q^.Step=Step)Then Begin
+   S:=PieceSub(Q);
+   If S>=0 Then AggStep(S,Step,Depth+1) Else AggAdd(Q^.Name,Q^.Col,1);
+  End;
+  Q:=Q^.Next;
+ End;
+End;
+
+Function Hex2(V:Integer):String;
+Const H:String='0123456789ABCDEF';
+Begin
+ Hex2:=H[(V Shr 4)+1]+H[(V And 15)+1];
+End;
+
+Procedure ExportHTMLCmd;
+Var
+ Nm,Dir,Base,ImgName:String; F:Text; S,MS,Save,I:Integer; V:TView; Img:TImg; A:PAgg; R,G,B,Fin:Byte; Tr:Boolean; Total:LongInt;
+Begin
+ If Not ExportFile('Instructions','.HTM',Nm)Then Exit;
+ Dir:=DirOf(Nm); Base:=BaseOf(ForceExt(Nm,''));
+ {$I-}
+ Assign(F,Nm); Rewrite(F);
+ {$I+}
+ If IOResult<>0 Then Begin AskBox('Instructions','Impossible de cr\eer le fichier.',0); Exit; End;
+ MS:=MaxStep(0);
+ Save:=Models[0].CurStep;
+ If CurModel<>0 Then Begin AskBox('Instructions','Utiliser le mod\gle principal.',0); Close(F); Exit; End;
+ WriteLn(F,'<!DOCTYPE html><html><head><meta charset="utf-8"><title>',BaseOf(DocFile),'</title>');
+ WriteLn(F,'<style>body{font-family:sans-serif;margin:20px}div.st{border:1px solid #888;margin:12px 0;padding:8px;display:flex;gap:16px}');
+ WriteLn(F,'td{padding:2px 8px}.sw{display:inline-block;width:14px;height:14px;border:1px solid #444}</style></head><body>');
+ WriteLn(F,'<h1>',BaseOf(DocFile),'</h1><p>',MS,' etapes</p>');
+ V:=Views[0];
+ Models[0].CurStep:=MS;
+ V.X1:=0; V.Y1:=0; V.X2:=639; V.Y2:=479;
+ ZoomFit(V);
+ For S:=1 To MS Do Begin
+  Models[0].CurStep:=S;
+  SetMsg('Etape '+IntStr(S)+' / '+IntStr(MS));
+  DrawStatus;
+  ImgName:=Base+'_'+IntStr(S)+'.PNG';
+  If RenderToImg(V,640,480,2,True,True,Img)Then Begin
+   WritePNG(Dir+ImgName,Img);
+   ImgFree(Img);
+  End;
+  WriteLn(F,'<div class="st"><div><h2>Etape ',S,'</h2><img src="',ImgName,'" width="480"></div><div><table>');
+  FreeAgg;
+  AggStep(0,S,0);
+  A:=Agg;
+  While A<>Nil Do Begin
+   ColInfo(A^.C,R,G,B,Tr,Fin);
+   WriteLn(F,'<tr><td>',A^.Q,' x</td><td><span class="sw" style="background:#',Hex2(R),Hex2(G),Hex2(B),'"></span></td><td>',
+    Plain(ColNameOf(A^.C)),'</td><td>',UpStr(ItemId(A^.N)),'</td><td>',Plain(Compact(PartDescByName(A^.N))),'</td></tr>');
+   A:=A^.Next;
+  End;
+  FreeAgg;
+  WriteLn(F,'</table></div></div>');
+ End;
+ Models[0].CurStep:=Save;
+ FreeAgg;
+ AggModel(0,1,0);
+ WriteLn(F,'<h2>Liste complete des pieces</h2><table>');
+ Total:=0;
+ A:=Agg;
+ While A<>Nil Do Begin
+  WriteLn(F,'<tr><td>',A^.Q,' x</td><td>',Plain(ColNameOf(A^.C)),'</td><td>',UpStr(ItemId(A^.N)),'</td><td>',Plain(Compact(PartDescByName(A^.N))),'</td></tr>');
+  Inc(Total,A^.Q);
+  A:=A^.Next;
+ End;
+ WriteLn(F,'</table><p>Total : ',Total,' pieces</p></body></html>');
+ FreeAgg;
+ Close(F);
+ SetMsg('Instructions : '+BaseOf(Nm));
+ NeedViews:=True;
+End;
+
+{ Dialogue : pieces utilisees (quantite, couleur, piece, description) }
+Procedure PartsUsedDialog;
+Var
+ W,H,X,Y,Top,Rows,N,I,K:Integer; Sv:TSave; Done,Ext:Boolean; Kc:Char; A:PAgg; R,G,B,Fin:Byte; Tr:Boolean;
+ Procedure Paint;
+ Var J:Integer; P:PAgg;
+ Begin
+  MouseOff;
+  DrawWin(X,Y,W,H,'Pi\eces utilis\ees');
+  Sunken(X+8,Y+22,X+W-22,Y+24+Rows*13,15);
+  TxtOut(X+12,Y+26,'Qte',UI_SH); TxtOut(X+48,Y+26,'Couleur',UI_SH); TxtOut(X+210,Y+26,'Piece',UI_SH); TxtOut(X+290,Y+26,'Description',UI_SH);
+  P:=Agg;
+  For J:=1 To Top Do If P<>Nil Then P:=P^.Next;
+  For J:=0 To Rows-2 Do
+   If P<>Nil Then Begin
+    ColInfo(P^.C,R,G,B,Tr,Fin);
+    TxtOut(X+12,Y+40+J*13,IntStr(P^.Q),UI_DK);
+    Box(X+48,Y+39+J*13,X+58,Y+47+J*13,UIColor(J,R,G,B));
+    TxtOut(X+62,Y+40+J*13,Copy(ColNameOf(P^.C),1,18),UI_DK);
+    TxtOut(X+210,Y+40+J*13,Copy(UpStr(ItemId(P^.N)),1,9),UI_DK);
+    TxtOut(X+290,Y+40+J*13,Copy(Compact(PartDescByName(P^.N)),1,25),UI_DK);
+    P:=P^.Next;
+   End;
+  DrawVScroll(X+W-21,Y+22,Rows*13+3,Top,N,Rows-1);
+  DrawBtn(X+W Div 2-35,Y+H-28,70,20,'Fermer',False);
+  MouseOn;
+ End;
+Begin
+ FreeAgg;
+ AggModel(0,1,0);
+ N:=AggN;
+ Rows:=14;
+ W:=480; H:=Rows*13+66;
+ X:=(ScreenW-W) Div 2; Y:=(ScreenH-H) Div 2;
+ MouseOff;
+ SaveRect(Sv,X,Y,X+W,Y+H);
+ MouseOn;
+ Top:=0;
+ Paint;
+ WaitMouseUp;
+ Done:=False;
+ Repeat
+  PollMouse;
+  If KeyPressed Then Begin
+   Kc:=ReadKeyEx(Ext);
+   If Ext Then Begin
+    If(Kc=#72)And(Top>0)Then Dec(Top);
+    If(Kc=#80)And(Top<N-Rows+1)Then Inc(Top);
+    If(Kc=#73)Then Begin Top:=Top-Rows; If Top<0 Then Top:=0; End;
+    If(Kc=#81)Then Begin Top:=Top+Rows; If Top>N-Rows+1 Then Top:=N-Rows+1; If Top<0 Then Top:=0; End;
+    Paint;
+   End
+    Else If(Kc=#27)Or(Kc=#13)Then Done:=True;
+  End;
+  If((MB And 1)<>0)And((OldMB And 1)=0)Then Begin
+   If InRect(MX,MY,X+W Div 2-35,Y+H-28,70,20)Then Done:=True;
+   If InRect(MX,MY,X+W-21,Y+22,12,Rows*13+3)Then Begin
+    Top:=VScrollClick(Y+22,Rows*13+3,Top,N,Rows-1,MY); Paint;
+   End;
+  End;
+  OldMB:=MB;
+  Delay(10);
+ Until Done;
+ WaitMouseUp;
+ MouseOff;
+ If Not RestoreRect(Sv)Then FullRedraw:=True;
+ MouseOn;
+ FreeAgg;
+End;
+
+{ ====================================================================== }
+{ Cameras et animation                                                    }
+{ ====================================================================== }
+
+Procedure CamNewCmd;
+Var S:String; C,T:PCamera; V:TView;
+Begin
+ S:='Camera '+IntStr(1);
+ T:=CamHead; While T<>Nil Do Begin S:='Camera '+IntStr(Length(S)+Ord(S[Length(S)])-48+1); T:=T^.Next; End;
+ If Not InputBox('Cam\era','Nom de la cam\era :',S,28)Then Exit;
+ If TrimStr(S)='' Then Exit;
+ V:=Views[ActiveView];
+ New(C);
+ C^.Name:=Copy(TrimStr(S),1,30); C^.Persp:=V.Persp; C^.Yaw:=V.Yaw; C^.Pitch:=V.Pitch;
+ C^.Dist:=V.Dist; C^.Zoom:=V.Zoom; C^.Fov:=V.Fov; C^.Tgt:=V.Tgt; C^.Next:=Nil;
+ If CamHead=Nil Then CamHead:=C Else Begin T:=CamHead; While T^.Next<>Nil Do T:=T^.Next; T^.Next:=C; End;
+ Modified:=True;
+ SetMsg('Cam\era enregistr\ee');
+End;
+
+Function PickCamera(Const Title:String):PCamera;
+Var C:PCamera; N,Sel:Integer;
+Begin
+ PickCamera:=Nil;
+ N:=0; C:=CamHead;
+ While(C<>Nil)And(N<MAXMOD)Do Begin ListItems[N]:=C^.Name; Inc(N); C:=C^.Next; End;
+ If N=0 Then Exit;
+ Sel:=0;
+ If Not ListDialog(Title,N,Sel)Then Exit;
+ C:=CamHead;
+ While(C<>Nil)And(Sel>0)Do Begin C:=C^.Next; Dec(Sel); End;
+ PickCamera:=C;
+End;
+
+Procedure CamGoCmd;
+Var C:PCamera;
+Begin
+ C:=PickCamera('Aller \a une cam\era');
+ If C=Nil Then Exit;
+ With Views[ActiveView] Do Begin
+  Persp:=C^.Persp; Yaw:=C^.Yaw; Pitch:=C^.Pitch; Dist:=C^.Dist; Zoom:=C^.Zoom; Fov:=C^.Fov; Tgt:=C^.Tgt;
+  Name:=Copy(C^.Name,1,12);
+ End;
+ NeedViews:=True;
+End;
+
+Procedure CamDelCmd;
+Var C,P:PCamera;
+Begin
+ C:=PickCamera('Supprimer une cam\era');
+ If C=Nil Then Exit;
+ If C=CamHead Then CamHead:=C^.Next
+ Else Begin P:=CamHead; While P^.Next<>C Do P:=P^.Next; P^.Next:=C^.Next; End;
+ Dispose(C);
+ Modified:=True;
+End;
+
+Procedure FovCmd;
+Var S:String; V:Real; Err:Integer;
+Begin
+ S:=FmtNum(Views[ActiveView].Fov);
+ If Not InputBox('Champ de vision','Angle (5 \a 120 degr\es) :',S,6)Then Exit;
+ Val(S,V,Err);
+ If(Err<>0)Or(V<5)Or(V>120)Then Exit;
+ Views[ActiveView].Fov:=V;
+ NeedViews:=True;
+End;
+
+Procedure KeyAddCmd;
+Var S:String; K,P,T:PKey; Tm,Err:Integer; V:TView; Last:Integer;
+Begin
+ Last:=0; T:=KeyHead;
+ While T<>Nil Do Begin If T^.Time>=Last Then Last:=T^.Time+30; T:=T^.Next; End;
+ S:=IntStr(Last);
+ If Not InputBox('Image cl\e','Num\ero d''image (25 images = 1 s) :',S,6)Then Exit;
+ Val(S,Tm,Err);
+ If(Err<>0)Or(Tm<0)Or(Tm>5000)Then Exit;
+ V:=Views[ActiveView];
+ { remplace une image cle existante au meme temps }
+ K:=KeyHead;
+ While(K<>Nil)And(K^.Time<>Tm)Do K:=K^.Next;
+ If K=Nil Then Begin
+  New(K); K^.Next:=Nil;
+  If(KeyHead=Nil)Or(Tm<KeyHead^.Time)Then Begin K^.Next:=KeyHead; KeyHead:=K; End
+  Else Begin
+   P:=KeyHead;
+   While(P^.Next<>Nil)And(P^.Next^.Time<Tm)Do P:=P^.Next;
+   K^.Next:=P^.Next; P^.Next:=K;
+  End;
+ End;
+ K^.Time:=Tm; K^.Persp:=V.Persp; K^.Yaw:=V.Yaw; K^.Pitch:=V.Pitch; K^.Dist:=V.Dist;
+ K^.Zoom:=V.Zoom; K^.Fov:=V.Fov; K^.Tgt:=V.Tgt; K^.Step:=Models[CurModel].CurStep;
+ Modified:=True;
+ SetMsg('Image cl\e '+IntStr(Tm)+' enregistr\ee');
+End;
+
+Procedure KeyDelCmd;
+Var K,N:PKey;
+Begin
+ If AskBox('Animation','Supprimer toutes les images cl\es ?',1)<>1 Then Exit;
+ K:=KeyHead;
+ While K<>Nil Do Begin N:=K^.Next; Dispose(K); K:=N; End;
+ KeyHead:=Nil;
+ Modified:=True;
+End;
+
+Function AnimLast:Integer;
+Var K:PKey;
+Begin
+ K:=KeyHead;
+ If K=Nil Then Begin AnimLast:=0; Exit; End;
+ While K^.Next<>Nil Do K:=K^.Next;
+ AnimLast:=K^.Time;
+End;
+
+{ Etat interpole de la camera au temps T }
+Procedure AnimAt(T:Integer;Var V:TView;Var Step:Integer);
+Var K,A,B:PKey; F,D:Real;
+Begin
+ A:=Nil; B:=Nil; K:=KeyHead;
+ While K<>Nil Do Begin
+  If K^.Time<=T Then A:=K;
+  If(K^.Time>=T)And(B=Nil)Then B:=K;
+  K:=K^.Next;
+ End;
+ If A=Nil Then A:=B;
+ If B=Nil Then B:=A;
+ If A=Nil Then Exit;
+ If B^.Time=A^.Time Then F:=0 Else F:=(T-A^.Time)/(B^.Time-A^.Time);
+ V.Persp:=A^.Persp;
+ D:=B^.Yaw-A^.Yaw;
+ While D>180 Do D:=D-360;
+ While D<-180 Do D:=D+360;
+ V.Yaw:=A^.Yaw+D*F;
+ V.Pitch:=A^.Pitch+(B^.Pitch-A^.Pitch)*F;
+ V.Dist:=A^.Dist+(B^.Dist-A^.Dist)*F;
+ V.Zoom:=A^.Zoom+(B^.Zoom-A^.Zoom)*F;
+ V.Fov:=A^.Fov+(B^.Fov-A^.Fov)*F;
+ V.Tgt.X:=A^.Tgt.X+(B^.Tgt.X-A^.Tgt.X)*F;
+ V.Tgt.Y:=A^.Tgt.Y+(B^.Tgt.Y-A^.Tgt.Y)*F;
+ V.Tgt.Z:=A^.Tgt.Z+(B^.Tgt.Z-A^.Tgt.Z)*F;
+ Step:=A^.Step;
+End;
+
+Procedure KeyPlayCmd;
+Var T,Last,Step,SaveStep:Integer; Save:TView; Stop:Boolean;
+Begin
+ If KeyHead=Nil Then Exit;
+ Last:=AnimLast;
+ Save:=Views[ActiveView];
+ SaveStep:=Models[CurModel].CurStep;
+ WaitMouseUp;
+ Stop:=False; T:=0;
+ While(T<=Last)And Not Stop Do Begin
+  AnimAt(T,Views[ActiveView],Step);
+  If(Step>=1)Then Models[CurModel].CurStep:=Step;
+  MouseOff; DrawViews; MouseOn;
+  SetMsg('Image '+IntStr(T)+' / '+IntStr(Last));
+  MouseOff; DrawStatus; MouseOn;
+  Delay(35);
+  PollMouse;
+  If KeyPressed Then Begin ReadKey; Stop:=True; End;
+  If(MB And 1)<>0 Then Stop:=True;
+  Inc(T);
+ End;
+ Views[ActiveView]:=Save;
+ Models[CurModel].CurStep:=SaveStep;
+ WaitMouseUp;
+ Touch;
+End;
+
+Procedure StepsPlayCmd;
+Var S,MS,Save,K:Integer; Stop:Boolean;
+Begin
+ MS:=MaxStep(CurModel);
+ Save:=Models[CurModel].CurStep;
+ WaitMouseUp;
+ Stop:=False;
+ S:=1;
+ While(S<=MS)And Not Stop Do Begin
+  Models[CurModel].CurStep:=S;
+  MouseOff; DrawViews; MouseOn;
+  SetMsg('\Etape '+IntStr(S)+' / '+IntStr(MS));
+  MouseOff; DrawStatus; MouseOn;
+  For K:=1 To 40 Do Begin
+   Delay(25);
+   PollMouse;
+   If KeyPressed Then Begin ReadKey; Stop:=True; End;
+   If(MB And 1)<>0 Then Stop:=True;
+   If Stop Then K:=40;
+  End;
+  Inc(S);
+ End;
+ Models[CurModel].CurStep:=Save;
+ WaitMouseUp;
+ Touch;
+End;
+
+{ Exporte l'animation : GIF anime ou suite d'images numerotees }
+Procedure AnimExportCmd;
+Var
+ Nm,S,Pre,Ext:String; V:Array[0..3] Of Real; N,W,H,Fps,T,Last,Step,Fr,SaveStep:Integer; F:File; Img:TImg; Vw:TView; Save:TView; First:Boolean; Gif:Boolean;
+Begin
+ Nm:=BaseOf(DocFile);
+ If Not FileDialog(2,Nm)Then Exit;
+ Ext:=ExtOf(Nm);
+ If Ext='' Then Begin Nm:=Nm+'.GIF'; Ext:='.GIF'; End;
+ Gif:=Ext='.GIF';
+ S:='320 240 12';
+ If Not InputBox('Animation','Largeur hauteur images/seconde :',S,24)Then Exit;
+ N:=ParseNums(S,V,3);
+ If N<3 Then Exit;
+ W:=Round(V[0]); H:=Round(V[1]); Fps:=Round(V[2]);
+ If(W<16)Or(H<16)Or(W>1000)Or(H>1000)Or(Fps<1)Or(Fps>50)Then Exit;
+ If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
+ Save:=Views[ActiveView]; SaveStep:=Models[CurModel].CurStep;
+ If KeyHead<>Nil Then Last:=AnimLast Else Last:=MaxStep(CurModel)*Fps-1;
+ If Last>600 Then Last:=600;
+ If Gif Then Begin
+  {$I-}
+  Assign(F,Nm); Rewrite(F,1);
+  {$I+}
+  If IOResult<>0 Then Exit;
+ End;
+ First:=True; Fr:=0;
+ Pre:=Copy(Nm,1,Length(Nm)-Length(Ext));
+ For T:=0 To Last Do Begin
+  Vw:=Save;
+  If KeyHead<>Nil Then Begin
+   AnimAt(T,Vw,Step);
+   If Step>=1 Then Models[CurModel].CurStep:=Step;
+  End
+   Else Models[CurModel].CurStep:=1+T Div Fps;
+  SetMsg('Image '+IntStr(T+1)+' / '+IntStr(Last+1));
+  DrawStatus;
+  If RenderToImg(Vw,W,H,1,True,True,Img)Then Begin
+   If Gif Then Begin
+    GifFrame(F,Img,100 Div Fps,First,True); First:=False;
+   End
+    Else Begin
+     Inc(Fr);
+     S:=IntStr(10000+Fr);
+     WriteImage(Pre+Copy(S,2,4)+Ext,Img);
+    End;
+   ImgFree(Img);
+  End;
+ End;
+ If Gif Then Begin GifEnd(F); Close(F); End;
+ Views[ActiveView]:=Save;
+ Models[CurModel].CurStep:=SaveStep;
+ SetMsg('Animation enregistr\ee');
+ Touch;
+End;
+
+{ ====================================================================== }
 { Fonctions avancees (cameras, animation, exports, preferences...)      }
 { ====================================================================== }
 
@@ -6094,25 +7682,8 @@ Begin
  NeedViews:=True; NeedTools:=True;
 End;
 
-Procedure ExportImageCmd; Begin NotYet('Exporter l''image'); End;
-Procedure ExportHTMLCmd; Begin NotYet('Instructions HTML'); End;
-Procedure ExportPOVCmd; Begin NotYet('POV-Ray'); End;
-Procedure ExportOBJCmd; Begin NotYet('Wavefront OBJ'); End;
-Procedure Export3DSCmd; Begin NotYet('3D Studio'); End;
-Procedure ExportBLCmd; Begin NotYet('BrickLink XML'); End;
-Procedure ImportBLCmd; Begin NotYet('BrickLink XML'); End;
-Procedure PartsUsedDialog; Begin NotYet('Pieces utilisees'); End;
 Procedure PrefsDialog; Begin NotYet('Preferences'); End;
 Procedure DocsDialog; Begin NotYet('Documents'); End;
-Procedure CamNewCmd; Begin NotYet('Cameras'); End;
-Procedure CamGoCmd; Begin NotYet('Cameras'); End;
-Procedure CamDelCmd; Begin NotYet('Cameras'); End;
-Procedure FovCmd; Begin NotYet('Champ de vision'); End;
-Procedure KeyAddCmd; Begin NotYet('Animation'); End;
-Procedure KeyDelCmd; Begin NotYet('Animation'); End;
-Procedure KeyPlayCmd; Begin NotYet('Animation'); End;
-Procedure StepsPlayCmd; Begin NotYet('Animation'); End;
-Procedure AnimExportCmd; Begin NotYet('Animation'); End;
 Procedure KeysDialog; Begin NotYet('Raccourcis'); End;
 
 { ---------------------------- Commandes ----------------------------- }

@@ -1,0 +1,295 @@
+Noir~~Black
+Bleu~~Blue
+Vert~~Green
+Turquoise fonc\e~~Dark turquoise
+Rouge~~Red
+Rose fonc\e~~Dark pink
+Brun~~Brown
+Gris clair~~Light grey
+Gris fonc\e~~Dark grey
+Bleu clair~~Light blue
+Vert vif~~Bright green
+Turquoise~~Turquoise
+Saumon~~Salmon
+Rose~~Pink
+Jaune~~Yellow
+Blanc~~White
+Beige~~Tan
+Citron vert~~Lime
+Beige fonc\e~~Dark tan
+Brun rouge~~Reddish brown
+Gris bleu clair~~Light bluish grey
+Gris bleu fonc\e~~Dark bluish grey
+Chair~~Flesh
+Bleu fonc\e~~Dark blue
+Vert fonc\e~~Dark green
+Rouge fonc\e~~Dark red
+Orange fonc\e~~Dark orange
+Bleu transp.~~Trans blue
+Vert transp.~~Trans green
+Rouge transp.~~Trans red
+Bleu clair transp.~~Trans light blue
+Jaune transp.~~Trans yellow
+Transparent~~Clear
+Principale~~Main
+Bord~~Edge
+Divers~~Misc
+Toutes les pi\eces~~All parts
+Vue 3D~~3D view
+Avant~~Front
+Arri\ere~~Back
+Gauche~~Left
+Droite~~Right
+Dessus~~Top
+Dessous~~Bottom
+Debut~~Home
+Haut~~Up
+PgHaut~~PgUp
+Fin~~End
+Bas~~Down
+PgBas~~PgDn
+Inser~~Ins
+Suppr~~Del
+Echap~~Esc
+Entree~~Enter
+Fichier~~File
+Nouveau~~New
+Ouvrir...~~Open...
+Enregistrer~~Save
+Enregistrer sous...~~Save as...
+Exporter l'image...~~Export image...
+Exporter instructions HTML...~~Export HTML instructions...
+Exporter liste des pi\eces...~~Export parts list...
+Importer BrickLink XML...~~Import BrickLink XML...
+Exporter BrickLink XML...~~Export BrickLink XML...
+Pi\eces utilis\ees...~~Parts used...
+Informations du mod\gle...~~Model information...
+Pr\ef\erences...~~Preferences...
+R\eindexer la biblioth\gque~~Reindex the library
+Documents ouverts...~~Open documents...
+Fermer le document~~Close document
+Quitter~~Quit
+\Edition~~Edit
+Annuler~~Undo
+R\etablir~~Redo
+Couper~~Cut
+Copier~~Copy
+Coller~~Paste
+Supprimer~~Delete
+Tout s\electionner~~Select all
+Aucune s\election~~Select none
+Inverser la s\election~~Invert selection
+M\eme couleur~~Same color
+M\eme pi\ece~~Same part
+Mode ajout \a la s\election~~Add to selection mode
+Affichage~~View
+Une vue / quatre vues~~One view / four views
+Perspective / ortho~~Perspective / ortho
+Zoom avant~~Zoom in
+Zoom arri\ere~~Zoom out
+Ajuster \a la fen\hetre~~Zoom to fit
+Grille~~Grid
+Ar\etes~~Edges
+Mode filaire~~Wireframe
+D\etail des tenons~~Stud detail
+Panneau Pi\eces~~Parts panel
+Panneau Propri\et\es~~Properties panel
+Panneau Chronologie~~Timeline panel
+Pi\ece~~Piece
+Ins\erer la pi\ece choisie~~Insert the chosen part
+Dupliquer~~Duplicate
+Monter d'une plaque~~Raise one plate
+Descendre d'une plaque~~Lower one plate
+Monter d'une brique~~Raise one brick
+Descendre d'une brique~~Lower one brick
+Pivoter~~Rotate
+Appliquer la couleur courante~~Apply current color
+Masquer la s\election~~Hide selection
+Tout afficher~~Show all
+Grouper~~Group
+Dissocier~~Ungroup
+Verrouiller~~Lock
+D\everrouiller~~Unlock
+Transf.~~Transform
+Aligner \a gauche~~Align left
+Aligner \a droite~~Align right
+Aligner devant~~Align front
+Aligner derri\ere~~Align back
+Aligner en haut~~Align top
+Aligner en bas~~Align bottom
+Centrer en~~Center on
+R\epartir en~~Distribute on
+Miroir~~Mirror
+Tableau (copies)...~~Array (copies)...
+Transformation num\erique...~~Numeric transform...
+Pivot : centre / pi\ece / origine~~Pivot: center / part / origin
+\Etapes~~Steps
+\Etape suivante~~Next step
+\Etape pr\ec\edente~~Previous step
+Premi\ere \etape~~First step
+Derni\ere \etape~~Last step
+Ins\erer une \etape~~Insert a step
+Supprimer l'\etape~~Delete the step
+S\election vers \etape courante~~Selection to current step
+Sous-mod.~~Submodel
+Nouveau sous-mod\gle...~~New submodel...
+Cr\eer depuis la s\election...~~Create from selection...
+Ins\erer un sous-mod\gle...~~Insert a submodel...
+Modifier un sous-mod\gle...~~Edit a submodel...
+Mod\gle principal~~Main model
+Supprimer le sous-mod\gle~~Delete the submodel
+Cam\era~~Camera
+Enregistrer la vue comme cam\era...~~Save view as camera...
+Aller \a une cam\era...~~Go to a camera...
+Supprimer une cam\era...~~Delete a camera...
+Champ de vision...~~Field of view...
+Ajouter une image cl\e~~Add a keyframe
+Supprimer les images cl\es~~Delete keyframes
+Lire l'animation~~Play animation
+Lire les \etapes~~Play steps
+Exporter l'animation...~~Export animation...
+Aide~~Help
+Raccourcis clavier~~Keyboard shortcuts
+Personnaliser les raccourcis...~~Customize shortcuts...
+A propos de LEOCAD~~About LEOCAD
+Nouveau mod\gle~~New model
+Ouvrir un fichier LDR / MPD~~Open an LDR / MPD file
+Enregistrer le mod\gle~~Save the model
+Outil de s\election et d\eplacement~~Select and move tool
+Orbite (rotation de la cam\era)~~Orbit (rotate the camera)
+Panoramique~~Pan
+Zoom (glisser verticalement)~~Zoom (drag vertically)
+Afficher la grille~~Show grid
+Mode filaire / ombr\e~~Wireframe / shaded
+Ajuster le zoom \a la fen\hetre~~Zoom to fit the window
+S\election : clic, glisser = d\eplacer~~Select: click, drag = move
+Poser : ~~Place: 
+Panoramique : glisser~~Pan: drag
+Zoom : glisser haut / bas~~Zoom: drag up / down
+Orbite : glisser = tourner~~Orbit: drag = rotate
+\Etape ~~Step 
+ pi\eces~~ parts
+Rech.~~Find
+Choisir une~~Choose a
+pi\ece~~part
+Position~~Position
+Rotation~~Rotation
+\Etapes visibles~~Visible steps
+Apparence~~Appearance
+Matrice~~Matrix
+Afficher~~Show
+Masquer~~Hide
+Couleur~~Color
+Couleur :~~Color:
+(aucune s\election)~~(no selection)
+ pi\eces s\electionn\ees~~ parts selected
+(verrouill\e)~~(locked)
+ couleurs~~ colors
+Pi\eces~~Parts
+Propr.~~Props
+Chrono.~~Time
+Oui~~Yes
+Non~~No
+Annuler~~Cancel
+Fermer~~Close
+Tous~~All
+Ouvrir~~Open
+Dossier parent~~Parent folder
+Exemples~~Samples
+Nom :~~Name:
+Fichier introuvable.~~File not found.
+Remplacer~~Replace
+Le fichier existe d\ej\a.~~The file already exists.
+Le remplacer ?~~Replace it?
+Ouvrir un mod\gle~~Open a model
+Enregistrer le mod\gle sous~~Save the model as
+Exporter l'image BMP~~Export BMP image
+Exporter la liste des pi\eces~~Export the parts list
+Raccourcis clavier et souris~~Keyboard and mouse shortcuts
+Souris : clic gauche = s\electionner / d\eplacer / poser une pi\ece~~Mouse: left click = select / move / place a part
+Glisser bouton droit = orbite  -  bouton milieu = panoramique~~Right drag = orbit  -  middle drag = pan
+Fl\eches : d\eplacer la s\election (grille de 20)~~Arrows: move the selection (20 grid)
+PgHaut / PgBas : monter / descendre de 8 (plaque)~~PgUp / PgDn: raise / lower by 8 (plate)
+Debut / Fin : monter / descendre de 24 (brique)~~Home / End: raise / lower by 24 (brick)
+x X y Y z Z : pivoter de 90 degr\es   -   Suppr : supprimer~~x X y Y z Z: rotate 90 degrees   -   Del: delete
+Ctrl+Inser / X / V : copier, couper, coller   -   B : dupliquer~~Ctrl+Ins / X / V: copy, cut, paste   -   B: duplicate
+Ctrl+Z / Y : annuler, r\etablir   -   Ctrl+A : tout   -   Ctrl+D : rien~~Ctrl+Z / Y: undo, redo   -   Ctrl+A: all   -   Ctrl+D: none
++ - : zoom   F : ajuster   0..6 : vues   Tab : vue suivante   V : 1/4 vues~~+ - : zoom   F: fit   0..6: views   Tab: next view   V: 1/4 views
+P : perspective   G : grille   E : ar\etes   W : filaire   T : tenons~~P: perspective   G: grid   E: edges   W: wireframe   T: studs
+H : masquer   M : mod\gle principal   Echap : outil de s\election~~H: hide   M: main model   Esc: select tool
+, . : \etape pr\ec\edente / suivante   [ ] : premi\ere / derni\ere~~, . : previous / next step   [ ] : first / last
+F2 F3 F4 : panneaux   Inser : poser la pi\ece   F10 : quitter~~F2 F3 F4: panels   Ins: place the part   F10: quit
+Sous-mod\gle~~Submodel
+S\electionner au moins deux pi\eces.~~Select at least two parts.
+Groupe cr\e\e~~Group created
+Nouveau sous-mod\gle~~New submodel
+Nom du sous-mod\gle :~~Submodel name:
+Impossible de cr\eer le fichier.~~Cannot create the file.
+Informations~~Information
+Biblioth\gque~~Library
+Image~~Image
+Rendu en cours...~~Rendering...
+M\emoire insuffisante pour ce rendu.~~Not enough memory for this render.
+Erreur d'\ecriture du fichier.~~File write error.
+Le mod\gle a \et\e modifi\e.~~The model has been modified.
+Enregistrer les changements ?~~Save the changes?
+Impossible de lire le fichier :~~Cannot read the file:
+Tenons : automatique~~Studs: automatic
+Tenons : complets~~Studs: full
+Tenons : simplifi\es~~Studs: simplified
+Tenons : masqu\es~~Studs: hidden
+Largeur hauteur antialiasing (1-4) :~~Width height antialiasing (1-4):
+Pr\ef\erences~~Preferences
+Afficher les ar\etes~~Show edges
+Automatique~~Automatic
+Complets~~Full
+Simplifi\es~~Simplified
+Masqu\es~~Hidden
+Couleur de fond~~Background color
+Miniatures dans la liste des pi\eces~~Thumbnails in the parts list
+Sauvegarde automatique~~Autosave
+Aucune~~None
+Langue~~Language
+Biblioth\gque LDraw~~LDraw library
+(par d\efaut)~~(default)
+D\efinir la touche~~Set key
+Retirer~~Remove
+Par d\efaut~~Defaults
++ Nouveau document~~+ New document
+Documents ouverts~~Open documents
+Champ de vision~~Field of view
+Cam\era enregistr\ee~~Camera saved
+Nom de la cam\era :~~Camera name:
+Animation enregistr\ee~~Animation saved
+Animation~~Animation
+R\ecup\eration~~Recovery
+Un mod\gle non enregistr\e a \et\e trouv\e.~~An unsaved model was found.
+Le r\ecup\erer ?~~Recover it?
+Sauvegarde automatique~~Autosave
+Appuyer sur la nouvelle touche (Echap = annuler)~~Press the new key (Esc = cancel)
+Fl\eche~~Arrow
+S\election : clic, glisser = d\eplacer~~Select: click, drag = move
+Fichier : ~~File: 
+|Mod\gles : ~~|Models: 
+|Pi\eces (tous mod\gles) : ~~|Parts (all models): 
+|\Etapes : ~~|Steps: 
+|Pi\eces du mod\gle : ~~|Model parts: 
+|Biblioth\gque : ~~|Library: 
+|M\emoire libre : ~~|Free memory: 
+Pivot : centre de la s\election~~Pivot: selection center
+Pivot : origine de chaque pi\ece~~Pivot: each part origin
+Pivot : origine du mod\gle~~Pivot: model origin
+Mode ajout \a la s\election : actif~~Add to selection mode: on
+Mode ajout \a la s\election : inactif~~Add to selection mode: off
+Choisir d'abord une pi\ece.~~Choose a part first.
+Image enregistr\ee : ~~Image saved: 
+Enregistr\e : ~~Saved: 
+Pi\eces utilis\ees~~Parts used
+Qte~~Qty
+Piece~~Part
+Description~~Description
+Exporter POV-Ray...~~Export POV-Ray...
+Exporter Wavefront OBJ...~~Export Wavefront OBJ...
+Exporter 3D Studio...~~Export 3D Studio...
+A : mode ajout   Ctrl+G / U : grouper   Ctrl+L / K : verrouiller   F6 : document~~A: add mode   Ctrl+G / U: group   Ctrl+L / K: lock   F6: document
+Poign\ees : fl\eche = d\eplacer, carr\e = pivoter (15 degr\es)~~Handles: arrow = move, square = rotate (15 degrees)

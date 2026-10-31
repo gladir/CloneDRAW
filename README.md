@@ -242,6 +242,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td><b>ICO2XBM.PAS</b></td>
 			<td>Cette commande permet de transformer un icône (.ICO) en format XBM (X BitMap).</td>
 		</tr>	
+		<tr>
+			<td><b>LEOCAD.PAS</b></td>
+			<td>Cette commande permet de lancer un clone de LeoCAD (CAO de briques Lego en 3D : fichiers LDraw .LDR et .MPD, bibliothèque LDraw, rendu haute qualité, exports PNG/GIF/POV-Ray/OBJ/3DS/BrickLink, instructions HTML).</td>
+		</tr>
     	<tr>
       		<td><b>PAINT.PAS</b></td>
       		<td>Cette commande permet de laner le programme de dessin Bitamp (Paint).</td>

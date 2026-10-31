@@ -89,6 +89,11 @@ Const
  CMD_SAVE = 13;
  CMD_SAVE_AS = 14;
  CMD_EXPORT = 15;
+ CMD_UNDO = 16;
+ CMD_REDO = 17;
+ CMD_CUT = 18;
+ CMD_COPY = 19;
+ CMD_PASTE = 20;
  FD_MAX_ENTRIES = 512;
  FD_ROWS = 13;
  ZOOM_LEVELS: Array[0..5] Of Integer = (25,50,100,200,400,800);
@@ -101,7 +106,6 @@ Const
  OBJ_BEZIER = 5;
  OBJ_FILLED_PATH = 6;
  BEZIER_STEPS = 128;
- MAX_OBJECTS = 100;
  
  MAX_LAYERS = 20;
  MAX_HISTORY = 50;
@@ -192,6 +196,17 @@ Type
   BlendMode: Byte;
  End;
  
+ PGraphicObject = ^TGraphicObject;
+ PObjNode = ^TObjNode;
+ TObjNode = Record
+  Data: TGraphicObject;
+  Prev, Next: PObjNode;
+ End;
+ { liste doublement chainee dans le tas : aucune limite du nombre d'objets }
+ TObjList = Record
+  Head, Tail, Cur: PObjNode;
+  Count, CurIdx: Integer;
+ End;
  THistoryAction = Record
   ActionType: Byte;
   Data: TGraphicObject;
@@ -215,7 +230,8 @@ Var
  MouseButtons: Integer;
  OldMouseX, OldMouseY: Integer;
  OldMouseButtons: Integer;
- Objects: Array[0..MAX_OBJECTS-1] of TGraphicObject;
+ ObjList: TObjList;      { objets du dessin (liste chainee, tas) }
+ DummyObject: TGraphicObject;
  ObjectCount: Integer;
  SelectedObject: Integer;
  DrawingMode: Boolean;
@@ -257,7 +273,7 @@ Var
  Panning: Boolean;
  PanX, PanY: Integer;
  PanViewX, PanViewY: Real;
- ImportObjects: Array[0..MAX_OBJECTS-1] Of TGraphicObject;
+ ImpList: TObjList;      { objets importes en cours de lecture }
  ImportCount: Integer;
  ImportError: String;
  FileDialogActive, FileFilterOpen: Boolean;
@@ -275,6 +291,135 @@ Var
  FileExportMode: Boolean;
 
 Function LoadDocument(Name: String): Boolean; Forward;
+
+{ ------------------------------------------------------------------
+  Liste chainee des objets (tas) : aucune limite du nombre d'objets
+  ------------------------------------------------------------------ }
+Function ListNode(Var L: TObjList; I: Integer): PObjNode;
+Var P: PObjNode; K, D1, D2, D3: Integer;
+Begin
+ ListNode := Nil;
+ If (I < 0) Or (I >= L.Count) Then Exit;
+ D1 := I; D2 := L.Count-1-I;
+ If L.Cur <> Nil Then D3 := Abs(I-L.CurIdx) Else D3 := 32767;
+ If (D3 <= D1) And (D3 <= D2) Then Begin P := L.Cur; K := L.CurIdx; End
+ Else If D1 <= D2 Then Begin P := L.Head; K := 0; End
+ Else Begin P := L.Tail; K := L.Count-1; End;
+ While K < I Do Begin P := P^.Next; Inc(K); End;
+ While K > I Do Begin P := P^.Prev; Dec(K); End;
+ L.Cur := P; L.CurIdx := I;
+ ListNode := P;
+End;
+
+Function ListAt(Var L: TObjList; I: Integer): PGraphicObject;
+Var N: PObjNode;
+Begin
+ N := ListNode(L, I);
+ If N = Nil Then Begin
+  FillChar(DummyObject, SizeOf(DummyObject), 0);
+  ListAt := @DummyObject;
+ End Else ListAt := @N^.Data;
+End;
+
+Function ListAdd(Var L: TObjList; Var O: TGraphicObject): Boolean;
+Var N: PObjNode;
+    {$IFDEF FPC}Previous: Boolean;{$ENDIF}
+Begin
+ ListAdd := False;
+ N := Nil;
+ {$IFDEF FPC}
+ Previous := ReturnNilIfGrowHeapFails;
+ ReturnNilIfGrowHeapFails := True;
+ GetMem(N, SizeOf(TObjNode));
+ ReturnNilIfGrowHeapFails := Previous;
+ {$ELSE}
+ If MaxAvail >= SizeOf(TObjNode)+4096 Then GetMem(N, SizeOf(TObjNode));
+ {$ENDIF}
+ If N = Nil Then Exit;
+ N^.Data := O;
+ N^.Next := Nil;
+ N^.Prev := L.Tail;
+ If L.Tail <> Nil Then L.Tail^.Next := N Else L.Head := N;
+ L.Tail := N;
+ Inc(L.Count);
+ ListAdd := True;
+End;
+
+Procedure ListDelete(Var L: TObjList; I: Integer);
+Var N: PObjNode;
+Begin
+ N := ListNode(L, I);
+ If N = Nil Then Exit;
+ If N^.Prev <> Nil Then N^.Prev^.Next := N^.Next Else L.Head := N^.Next;
+ If N^.Next <> Nil Then N^.Next^.Prev := N^.Prev Else L.Tail := N^.Prev;
+ FreeMem(N, SizeOf(TObjNode));
+ Dec(L.Count);
+ L.Cur := Nil; L.CurIdx := 0;
+End;
+
+Procedure ListClear(Var L: TObjList);
+Var N, M: PObjNode;
+Begin
+ N := L.Head;
+ While N <> Nil Do Begin
+  M := N^.Next;
+  FreeMem(N, SizeOf(TObjNode));
+  N := M;
+ End;
+ L.Head := Nil; L.Tail := Nil; L.Cur := Nil; L.Count := 0; L.CurIdx := 0;
+End;
+
+Function ObjAt(I: Integer): PGraphicObject;
+Begin
+ ObjAt := ListAt(ObjList, I);
+End;
+
+Procedure AppendObject(Var O: TGraphicObject);
+Begin
+ If Not ListAdd(ObjList, O) Then
+  StatusMessage := 'Memoire insuffisante : objet non ajoute.';
+ ObjectCount := ObjList.Count;
+End;
+
+Procedure DeleteObjectAt(I: Integer);
+Begin
+ ListDelete(ObjList, I);
+ ObjectCount := ObjList.Count;
+End;
+
+Procedure ClearObjects;
+Begin
+ ListClear(ObjList);
+ ObjectCount := 0;
+End;
+
+Function ImpAt(I: Integer): PGraphicObject;
+Begin
+ ImpAt := ListAt(ImpList, I);
+End;
+
+Procedure ImpAppend(Var O: TGraphicObject);
+Begin
+ If Not ListAdd(ImpList, O) Then ImportError := 'Memoire insuffisante pendant l''importation.';
+ ImportCount := ImpList.Count;
+End;
+
+Procedure ImpClear;
+Begin
+ ListClear(ImpList);
+ ImportCount := 0;
+End;
+
+{ Les objets importes deviennent le dessin }
+Procedure AdoptImport;
+Begin
+ ClearObjects;
+ ObjList := ImpList;
+ ObjectCount := ObjList.Count;
+ ImpList.Head := Nil; ImpList.Tail := Nil; ImpList.Cur := Nil;
+ ImpList.Count := 0; ImportCount := 0;
+End;
+
  Function SaveDocument(Name: String; Format: Integer): Boolean; Forward;
  Function ExportDocument(Name: String; Format: Integer): Boolean; Forward;
  Procedure RedrawInterface; Forward;
@@ -944,7 +1089,7 @@ End;
 
 Procedure DrawObject(Index: Integer);
 Begin
- DrawGraphicObject(Objects[Index]);
+ DrawGraphicObject(ObjAt(Index)^);
 End;
 
 Function MinReal(A, B: Real): Real;
@@ -1002,15 +1147,15 @@ End;
 Procedure HandlePosition(Index, Handle: Integer; Var X, Y: Integer);
 Var B: TBounds;
 Begin
- B := ObjectBounds(Objects[Index]);
- If Objects[Index].ObjType = OBJ_BEZIER Then Begin
-  X := Round(Objects[Index].Path.Points[Handle].X);
-  Y := Round(Objects[Index].Path.Points[Handle].Y);
- End Else If Objects[Index].ObjType = OBJ_LINE Then Begin
+ B := ObjectBounds(ObjAt(Index)^);
+ If ObjAt(Index)^.ObjType = OBJ_BEZIER Then Begin
+  X := Round(ObjAt(Index)^.Path.Points[Handle].X);
+  Y := Round(ObjAt(Index)^.Path.Points[Handle].Y);
+ End Else If ObjAt(Index)^.ObjType = OBJ_LINE Then Begin
   If Handle = 0 Then Begin
-   X := Round(Objects[Index].Line.X1); Y := Round(Objects[Index].Line.Y1);
+   X := Round(ObjAt(Index)^.Line.X1); Y := Round(ObjAt(Index)^.Line.Y1);
   End Else Begin
-   X := Round(Objects[Index].Line.X2); Y := Round(Objects[Index].Line.Y2);
+   X := Round(ObjAt(Index)^.Line.X2); Y := Round(ObjAt(Index)^.Line.Y2);
   End;
  End Else Begin
   X := Round((B.L+B.R)/2); Y := Round((B.T+B.B)/2);
@@ -1026,11 +1171,11 @@ Var I, N, HX, HY: Integer;
 Begin
  SelectionHandleHit := -1;
  If SelectedObject < 0 Then Exit;
- If Not Objects[SelectedObject].Visible Then Exit;
- If Objects[SelectedObject].ObjType = OBJ_TEXT Then Exit;
+ If Not ObjAt(SelectedObject)^.Visible Then Exit;
+ If ObjAt(SelectedObject)^.ObjType = OBJ_TEXT Then Exit;
  N := 8;
- If Objects[SelectedObject].ObjType = OBJ_BEZIER Then N := 4;
- If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
+ If ObjAt(SelectedObject)^.ObjType = OBJ_BEZIER Then N := 4;
+ If ObjAt(SelectedObject)^.ObjType = OBJ_LINE Then N := 2;
  For I := 0 To N-1 Do Begin
   HandlePosition(SelectedObject,I,HX,HY);
   If (Abs((X-HX)*ZoomScale) <= 4) And
@@ -1046,33 +1191,33 @@ Var B: TBounds; DX, DY, U, D, Margin: Real; I, J: Integer;
  P, Q: TPoint2D; Inside: Boolean;
 Begin
  ObjectHit := False;
- If Not Objects[Index].Visible Then Exit;
- B := ObjectBounds(Objects[Index]);
+ If Not ObjAt(Index)^.Visible Then Exit;
+ B := ObjectBounds(ObjAt(Index)^);
  Margin := 5/ZoomScale;
- Case Objects[Index].ObjType Of
+ Case ObjAt(Index)^.ObjType Of
   OBJ_RECT: ObjectHit := (X >= B.L-3/ZoomScale) And (X <= B.R+3/ZoomScale) And
                          (Y >= B.T-3/ZoomScale) And (Y <= B.B+3/ZoomScale);
   OBJ_ELLIPSE: Begin
-   DX := MaxReal(Objects[Index].Ellipse.RX,1);
-   DY := MaxReal(Objects[Index].Ellipse.RY,1);
-   ObjectHit := Sqr((X-Objects[Index].Ellipse.CX)/(DX+3/ZoomScale))+
-                Sqr((Y-Objects[Index].Ellipse.CY)/(DY+3/ZoomScale)) <= 1;
+   DX := MaxReal(ObjAt(Index)^.Ellipse.RX,1);
+   DY := MaxReal(ObjAt(Index)^.Ellipse.RY,1);
+   ObjectHit := Sqr((X-ObjAt(Index)^.Ellipse.CX)/(DX+3/ZoomScale))+
+                Sqr((Y-ObjAt(Index)^.Ellipse.CY)/(DY+3/ZoomScale)) <= 1;
   End;
   OBJ_LINE: Begin
-   DX := Objects[Index].Line.X2-Objects[Index].Line.X1;
-   DY := Objects[Index].Line.Y2-Objects[Index].Line.Y1;
+   DX := ObjAt(Index)^.Line.X2-ObjAt(Index)^.Line.X1;
+   DY := ObjAt(Index)^.Line.Y2-ObjAt(Index)^.Line.Y1;
    D := Sqr(DX)+Sqr(DY);
    U := 0;
-   If D > 0 Then U := ((X-Objects[Index].Line.X1)*DX+
-                       (Y-Objects[Index].Line.Y1)*DY)/D;
+   If D > 0 Then U := ((X-ObjAt(Index)^.Line.X1)*DX+
+                       (Y-ObjAt(Index)^.Line.Y1)*DY)/D;
    U := MaxReal(0,MinReal(1,U));
-   ObjectHit := Sqr(X-Objects[Index].Line.X1-U*DX)+
-                Sqr(Y-Objects[Index].Line.Y1-U*DY) <= Sqr(Margin);
+   ObjectHit := Sqr(X-ObjAt(Index)^.Line.X1-U*DX)+
+                Sqr(Y-ObjAt(Index)^.Line.Y1-U*DY) <= Sqr(Margin);
   End;
   OBJ_BEZIER: Begin
-   P := BezierPoint(Objects[Index],0);
+   P := BezierPoint(ObjAt(Index)^,0);
    For I := 1 To BEZIER_STEPS Do Begin
-    Q := BezierPoint(Objects[Index],I/BEZIER_STEPS);
+    Q := BezierPoint(ObjAt(Index)^,I/BEZIER_STEPS);
     DX := Q.X-P.X; DY := Q.Y-P.Y;
     D := Sqr(DX)+Sqr(DY); U := 0;
     If D > 0 Then U := ((X-P.X)*DX+(Y-P.Y)*DY)/D;
@@ -1085,27 +1230,27 @@ Begin
   End;
   OBJ_PATH, OBJ_FILLED_PATH: Begin
    Inside := False;
-   For I := 0 To Objects[Index].Path.PointCount-1 Do Begin
+   For I := 0 To ObjAt(Index)^.Path.PointCount-1 Do Begin
     J := I-1;
     If J < 0 Then
-     If Objects[Index].Path.Closed Then J := Objects[Index].Path.PointCount-1
+     If ObjAt(Index)^.Path.Closed Then J := ObjAt(Index)^.Path.PointCount-1
      Else J := 0;
-    If (Objects[Index].ObjType = OBJ_FILLED_PATH) And
-       ((Objects[Index].Path.Points[I].Y > Y) <>
-        (Objects[Index].Path.Points[J].Y > Y)) Then
-     If X < Objects[Index].Path.Points[I].X+
-       (Y-Objects[Index].Path.Points[I].Y)*
-       (Objects[Index].Path.Points[J].X-Objects[Index].Path.Points[I].X)/
-       (Objects[Index].Path.Points[J].Y-Objects[Index].Path.Points[I].Y) Then
+    If (ObjAt(Index)^.ObjType = OBJ_FILLED_PATH) And
+       ((ObjAt(Index)^.Path.Points[I].Y > Y) <>
+        (ObjAt(Index)^.Path.Points[J].Y > Y)) Then
+     If X < ObjAt(Index)^.Path.Points[I].X+
+       (Y-ObjAt(Index)^.Path.Points[I].Y)*
+       (ObjAt(Index)^.Path.Points[J].X-ObjAt(Index)^.Path.Points[I].X)/
+       (ObjAt(Index)^.Path.Points[J].Y-ObjAt(Index)^.Path.Points[I].Y) Then
       Inside := Not Inside;
-    DX := Objects[Index].Path.Points[I].X-Objects[Index].Path.Points[J].X;
-    DY := Objects[Index].Path.Points[I].Y-Objects[Index].Path.Points[J].Y;
+    DX := ObjAt(Index)^.Path.Points[I].X-ObjAt(Index)^.Path.Points[J].X;
+    DY := ObjAt(Index)^.Path.Points[I].Y-ObjAt(Index)^.Path.Points[J].Y;
     D := Sqr(DX)+Sqr(DY); U := 0;
-    If D > 0 Then U := ((X-Objects[Index].Path.Points[J].X)*DX+
-                       (Y-Objects[Index].Path.Points[J].Y)*DY)/D;
+    If D > 0 Then U := ((X-ObjAt(Index)^.Path.Points[J].X)*DX+
+                       (Y-ObjAt(Index)^.Path.Points[J].Y)*DY)/D;
     U := MaxReal(0,MinReal(1,U));
-    If Sqr(X-Objects[Index].Path.Points[J].X-U*DX)+
-       Sqr(Y-Objects[Index].Path.Points[J].Y-U*DY) <= Sqr(Margin) Then Begin
+    If Sqr(X-ObjAt(Index)^.Path.Points[J].X-U*DX)+
+       Sqr(Y-ObjAt(Index)^.Path.Points[J].Y-U*DY) <= Sqr(Margin) Then Begin
      ObjectHit := True; Exit;
     End;
    End;
@@ -1120,18 +1265,18 @@ Procedure DrawSelection;
 Var I, N, X, Y: Integer; B: TBounds;
 Begin
  If (SelectedObject < 0) Or (CurrentTool <> TOOL_SELECT) Then Exit;
- If Not Objects[SelectedObject].Visible Then Exit;
- B := ObjectBounds(Objects[SelectedObject]);
+ If Not ObjAt(SelectedObject)^.Visible Then Exit;
+ B := ObjectBounds(ObjAt(SelectedObject)^);
  SetColor(COLOR_HIGHLIGHT);
  SetLineStyle(DottedLn,0,NormWidth);
  Rectangle(ScreenX(B.L),ScreenY(B.T),ScreenX(B.R),ScreenY(B.B));
  SetLineStyle(SolidLn,0,NormWidth);
- If Objects[SelectedObject].ObjType = OBJ_BEZIER Then
-  DrawBezierHandles(Objects[SelectedObject],False);
+ If ObjAt(SelectedObject)^.ObjType = OBJ_BEZIER Then
+  DrawBezierHandles(ObjAt(SelectedObject)^,False);
  N := 8;
- If Objects[SelectedObject].ObjType = OBJ_BEZIER Then N := 4;
- If Objects[SelectedObject].ObjType = OBJ_TEXT Then N := 0;
- If Objects[SelectedObject].ObjType = OBJ_LINE Then N := 2;
+ If ObjAt(SelectedObject)^.ObjType = OBJ_BEZIER Then N := 4;
+ If ObjAt(SelectedObject)^.ObjType = OBJ_TEXT Then N := 0;
+ If ObjAt(SelectedObject)^.ObjType = OBJ_LINE Then N := 2;
  For I := 0 To N-1 Do Begin
   HandlePosition(SelectedObject,I,X,Y);
   X := ScreenX(X); Y := ScreenY(Y);
@@ -1141,10 +1286,263 @@ Begin
  End;
 End;
 
+{ ------------------------------------------------------------------
+  Annuler / Retablir / Couper / Copier / Coller
+  Chaque etat du dessin (objets, selection) est conserve dans un instantane
+  place sur une pile ; l'instantane est pris AVANT chaque modification.
+  ------------------------------------------------------------------ }
+Type
+ TSnapshot = Record
+  Count, Sel: Integer;
+  Modified: Boolean;
+  Data: Pointer;
+ End;
+
+Const
+ {$IFDEF FPC}
+ MAX_UNDO = 30;
+ {$ELSE}
+ MAX_UNDO = 3;
+ {$ENDIF}
+
+Var
+ UndoStack, RedoStack: Array[0..MAX_UNDO-1] Of TSnapshot;
+ UndoCount, RedoCount: Integer;
+ ClipObject: TGraphicObject;
+ ClipFull: Boolean;
+
+Procedure FreeSnapshot(Var Snap: TSnapshot);
+Begin
+ If Snap.Data <> Nil Then
+  FreeMem(Snap.Data, LongInt(Snap.Count)*SizeOf(TGraphicObject));
+ Snap.Data := Nil;
+ Snap.Count := 0;
+End;
+
+Type
+ TSnapBlock = Array[0..32000] Of Byte;
+ PSnapBlock = ^TSnapBlock;
+
+Function TakeSnapshot(Var Snap: TSnapshot): Boolean;
+Var I: Integer;
+{$IFDEF FPC}
+    Previous: Boolean;
+{$ENDIF}
+Begin
+ TakeSnapshot := False;
+ Snap.Count := ObjectCount;
+ Snap.Sel := SelectedObject;
+ Snap.Modified := FileModified;
+ Snap.Data := Nil;
+ If ObjectCount > 0 Then Begin
+  {$IFDEF FPC}
+  Previous := ReturnNilIfGrowHeapFails;
+  ReturnNilIfGrowHeapFails := True;
+  GetMem(Snap.Data, LongInt(ObjectCount)*SizeOf(TGraphicObject));
+  ReturnNilIfGrowHeapFails := Previous;
+  If Snap.Data = Nil Then Exit;
+  {$ELSE}
+  If MaxAvail < LongInt(ObjectCount)*SizeOf(TGraphicObject)+8192 Then Exit;
+  GetMem(Snap.Data, LongInt(ObjectCount)*SizeOf(TGraphicObject));
+  {$ENDIF}
+  For I := 0 To ObjectCount-1 Do
+   Move(ObjAt(I)^, PSnapBlock(Snap.Data)^[LongInt(I)*SizeOf(TGraphicObject)],
+        SizeOf(TGraphicObject));
+ End;
+ TakeSnapshot := True;
+End;
+
+Procedure RestoreSnapshot(Var Snap: TSnapshot);
+Var I: Integer; O: TGraphicObject;
+Begin
+ ClearObjects;
+ For I := 0 To Snap.Count-1 Do Begin
+  Move(PSnapBlock(Snap.Data)^[LongInt(I)*SizeOf(TGraphicObject)], O, SizeOf(O));
+  AppendObject(O);
+ End;
+ SelectedObject := Snap.Sel;
+ If SelectedObject >= ObjectCount Then SelectedObject := -1;
+ FileModified := True;
+End;
+
+Procedure ClearRedo;
+Var I: Integer;
+Begin
+ For I := 0 To RedoCount-1 Do FreeSnapshot(RedoStack[I]);
+ RedoCount := 0;
+End;
+
+Procedure ClearHistory;
+Var I: Integer;
+Begin
+ For I := 0 To UndoCount-1 Do FreeSnapshot(UndoStack[I]);
+ UndoCount := 0;
+ ClearRedo;
+End;
+
+{ A appeler avant toute modification du dessin }
+Procedure PushUndo;
+Var I: Integer;
+Begin
+ ClearRedo;
+ If UndoCount >= MAX_UNDO Then Begin
+  FreeSnapshot(UndoStack[0]);
+  For I := 1 To MAX_UNDO-1 Do UndoStack[I-1] := UndoStack[I];
+  Dec(UndoCount);
+ End;
+ If TakeSnapshot(UndoStack[UndoCount]) Then Inc(UndoCount)
+ Else StatusMessage := 'Memoire insuffisante : modification non annulable.';
+End;
+
+Function EditingBusy: Boolean;
+Begin
+ EditingBusy := DrawingMode Or EditingObject Or TextActive Or PencilActive Or
+                (BezierStage <> 0);
+End;
+
+Procedure UndoCommand;
+Begin
+ If EditingBusy Then Begin
+  StatusMessage := 'Terminer l''operation en cours avant d''annuler.';
+  Exit;
+ End;
+ If UndoCount = 0 Then Begin
+  StatusMessage := 'Rien a annuler.';
+  Exit;
+ End;
+ If RedoCount >= MAX_UNDO Then Begin
+  FreeSnapshot(RedoStack[0]);
+  Move(RedoStack[1], RedoStack[0], (MAX_UNDO-1)*SizeOf(TSnapshot));
+  Dec(RedoCount);
+ End;
+ If TakeSnapshot(RedoStack[RedoCount]) Then Inc(RedoCount);
+ Dec(UndoCount);
+ RestoreSnapshot(UndoStack[UndoCount]);
+ FreeSnapshot(UndoStack[UndoCount]);
+ StatusMessage := 'Annule.';
+ NeedsRedraw := True;
+End;
+
+Procedure RedoCommand;
+Begin
+ If EditingBusy Then Begin
+  StatusMessage := 'Terminer l''operation en cours avant de retablir.';
+  Exit;
+ End;
+ If RedoCount = 0 Then Begin
+  StatusMessage := 'Rien a retablir.';
+  Exit;
+ End;
+ If UndoCount >= MAX_UNDO Then Begin
+  FreeSnapshot(UndoStack[0]);
+  Move(UndoStack[1], UndoStack[0], (MAX_UNDO-1)*SizeOf(TSnapshot));
+  Dec(UndoCount);
+ End;
+ If TakeSnapshot(UndoStack[UndoCount]) Then Inc(UndoCount);
+ Dec(RedoCount);
+ RestoreSnapshot(RedoStack[RedoCount]);
+ FreeSnapshot(RedoStack[RedoCount]);
+ StatusMessage := 'Retabli.';
+ NeedsRedraw := True;
+End;
+
+Procedure OffsetObject(Var O: TGraphicObject; DX, DY: Real);
+Var I: Integer;
+Begin
+ Case O.ObjType Of
+  OBJ_RECT: Begin O.Rectangle.X := O.Rectangle.X+DX; O.Rectangle.Y := O.Rectangle.Y+DY; End;
+  OBJ_ELLIPSE: Begin O.Ellipse.CX := O.Ellipse.CX+DX; O.Ellipse.CY := O.Ellipse.CY+DY; End;
+  OBJ_LINE: Begin
+   O.Line.X1 := O.Line.X1+DX; O.Line.Y1 := O.Line.Y1+DY;
+   O.Line.X2 := O.Line.X2+DX; O.Line.Y2 := O.Line.Y2+DY;
+  End;
+  OBJ_TEXT: Begin O.TextObj.X := O.TextObj.X+DX; O.TextObj.Y := O.TextObj.Y+DY; End;
+  OBJ_PATH, OBJ_BEZIER, OBJ_FILLED_PATH:
+   For I := 0 To O.Path.PointCount-1 Do Begin
+    O.Path.Points[I].X := O.Path.Points[I].X+DX;
+    O.Path.Points[I].Y := O.Path.Points[I].Y+DY;
+    O.Path.Points[I].CtrlX1 := O.Path.Points[I].CtrlX1+DX;
+    O.Path.Points[I].CtrlY1 := O.Path.Points[I].CtrlY1+DY;
+    O.Path.Points[I].CtrlX2 := O.Path.Points[I].CtrlX2+DX;
+    O.Path.Points[I].CtrlY2 := O.Path.Points[I].CtrlY2+DY;
+   End;
+ End;
+End;
+
+Function HasSelection: Boolean;
+Begin
+ HasSelection := (SelectedObject >= 0) And (SelectedObject < ObjectCount) And
+                 Not EditingBusy;
+End;
+
+Procedure CopyCommand;
+Begin
+ If Not HasSelection Then Begin
+  StatusMessage := 'Selectionner un objet a copier.';
+  Exit;
+ End;
+ ClipObject := ObjAt(SelectedObject)^;
+ ClipFull := True;
+ StatusMessage := 'Objet copie.';
+End;
+
+Procedure CutCommand;
+Var I: Integer;
+Begin
+ If Not HasSelection Then Begin
+  StatusMessage := 'Selectionner un objet a couper.';
+  Exit;
+ End;
+ ClipObject := ObjAt(SelectedObject)^;
+ ClipFull := True;
+ PushUndo;
+ DeleteObjectAt(SelectedObject);
+ SelectedObject := -1;
+ FileModified := True;
+ StatusMessage := 'Objet coupe.';
+ NeedsRedraw := True;
+End;
+
+Procedure PasteCommand;
+Begin
+ If EditingBusy Then Begin
+  StatusMessage := 'Terminer l''operation en cours avant de coller.';
+  Exit;
+ End;
+ If Not ClipFull Then Begin
+  StatusMessage := 'Le presse-papiers est vide.';
+  Exit;
+ End;
+ PushUndo;
+ OffsetObject(ClipObject, 12, 12);
+ ClipObject.LayerIndex := CurrentLayer;
+ ClipObject.Visible := True;
+ AppendObject(ClipObject);
+ SelectedObject := ObjectCount-1;
+ FileModified := True;
+ StatusMessage := 'Objet colle.';
+ NeedsRedraw := True;
+End;
+
+{ Les deux objets sont-ils identiques octet pour octet ? }
+Type
+ TByteBlock = Array[0..32000] Of Byte;
+ PByteBlock = ^TByteBlock;
+
+Function SameObject(Var A, B: TGraphicObject): Boolean;
+Var PA, PB: PByteBlock; I: Integer; R: Boolean;
+Begin
+ R := True;
+ PA := PByteBlock(@A); PB := PByteBlock(@B);
+ For I := 0 To SizeOf(TGraphicObject)-1 Do
+  If PA^[I] <> PB^[I] Then Begin R := False; Break; End;
+ SameObject := R;
+End;
+
 Procedure CancelObjectEdit;
 Begin
  If Not EditingObject Then Exit;
- Objects[SelectedObject] := EditOriginal;
+ ObjAt(SelectedObject)^ := EditOriginal;
  FileModified := EditWasModified;
  EditingObject := False;
  DrawingMode := False;
@@ -1235,7 +1633,7 @@ Begin
    Obj.TextObj.X := B.L; Obj.TextObj.Y := B.T;
   End;
  End;
- Objects[SelectedObject] := Obj;
+ ObjAt(SelectedObject)^ := Obj;
  FileModified := EditWasModified Or
   (Obj.Rectangle.X <> EditOriginal.Rectangle.X) Or
   (Obj.Rectangle.Y <> EditOriginal.Rectangle.Y) Or
@@ -1326,7 +1724,7 @@ End;
 Procedure BeginTextInput(Index: Integer);
 Begin
  TextEditIndex := Index;
- If Index >= 0 Then TextObject := Objects[Index];
+ If Index >= 0 Then TextObject := ObjAt(Index)^;
  TextCursor := Length(TextObject.TextObj.Text);
  TextActive := True;
  CurrentTool := TOOL_TEXT;
@@ -1381,10 +1779,6 @@ Begin
     UpdateBezier;
     BezierStage := 3;
    End Else Begin
-    If ObjectCount >= MAX_OBJECTS Then Begin
-     StatusMessage := 'Limite de 100 objets atteinte.';
-     Exit;
-    End;
     FillChar(BezierObject,SizeOf(BezierObject),0);
     BezierObject.ObjType := OBJ_BEZIER;
     BezierObject.Visible := True;
@@ -1407,15 +1801,11 @@ Begin
   Begin
    TextEditIndex := -1;
    For I := ObjectCount-1 DownTo 0 Do
-    If (Objects[I].ObjType = OBJ_TEXT) And ObjectHit(I,CanvasX,CanvasY) Then Begin
+    If (ObjAt(I)^.ObjType = OBJ_TEXT) And ObjectHit(I,CanvasX,CanvasY) Then Begin
      TextEditIndex := I;
      Break;
     End;
    If TextEditIndex < 0 Then Begin
-    If ObjectCount >= MAX_OBJECTS Then Begin
-     StatusMessage := 'Limite de 100 objets atteinte.';
-     Exit;
-    End;
     FillChar(TextObject,SizeOf(TextObject),0);
     TextObject.ObjType := OBJ_TEXT;
     TextObject.Visible := True;
@@ -1429,10 +1819,6 @@ Begin
   End;
   TOOL_PENCIL:
   Begin
-   If ObjectCount >= MAX_OBJECTS Then Begin
-    StatusMessage := 'Limite de 100 objets atteinte.';
-    Exit;
-   End;
    FillChar(PencilObject,SizeOf(PencilObject),0);
    PencilObject.ObjType := OBJ_PATH;
    PencilObject.Visible := True;
@@ -1457,13 +1843,13 @@ Begin
      End;
    End;
    If SelectedObject >= 0 Then Begin
-    EditOriginal := Objects[SelectedObject];
+    EditOriginal := ObjAt(SelectedObject)^;
     EditBounds := ObjectBounds(EditOriginal);
     EditX := CanvasX; EditY := CanvasY;
     EditWasModified := FileModified;
     EditingObject := True;
     DrawingMode := True;
-    If Objects[SelectedObject].ObjType = OBJ_TEXT Then
+    If ObjAt(SelectedObject)^.ObjType = OBJ_TEXT Then
      StatusMessage := 'Texte selectionne : taper pour modifier, glisser pour deplacer.'
     Else StatusMessage := 'Glisser : deplacer / poignees : taille / Echap : annuler';
    End Else StatusMessage := 'Aucun objet selectionne.';
@@ -1509,8 +1895,8 @@ Begin
    BezierStage := 2;
    StatusMessage := 'Cliquer-glisser a l''arrivee ; Echap annule la courbe.';
   End Else If BezierStage = 3 Then Begin
-   Objects[ObjectCount] := BezierObject;
-   Inc(ObjectCount);
+   PushUndo;
+   AppendObject(BezierObject);
    FileModified := True;
    BezierStage := 0;
    DrawingMode := False;
@@ -1520,8 +1906,8 @@ Begin
  End;
  If PencilActive Then Begin
   AddPencilPoint;
-  Objects[ObjectCount] := PencilObject;
-  Inc(ObjectCount);
+  PushUndo;
+  AppendObject(PencilObject);
   FileModified := True;
   PencilActive := False;
   DrawingMode := False;
@@ -1529,6 +1915,14 @@ Begin
  End;
  If EditingObject Then Begin
   UpdateObjectEdit;
+  { instantane de l'etat d'avant le deplacement ou le redimensionnement }
+  If (SelectedObject >= 0) And (SelectedObject < ObjectCount) And
+     Not SameObject(ObjAt(SelectedObject)^,EditOriginal) Then Begin
+   NewObj := ObjAt(SelectedObject)^;
+   ObjAt(SelectedObject)^ := EditOriginal;
+   PushUndo;
+   ObjAt(SelectedObject)^ := NewObj;
+  End;
   EditingObject := False;
   DrawingMode := False;
   Exit;
@@ -1543,11 +1937,6 @@ Begin
  If CanvasY >= ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT Then
   CanvasY := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1;
  
- If ObjectCount >= MAX_OBJECTS Then Begin
-  DrawingMode := False;
-  StatusMessage := 'Limite de 100 objets atteinte.';
-  Exit;
- End;
  If (MouseX < TOOLBAR_WIDTH) Or (MouseX >= ScreenWidth) Or
     (MouseY < MENUBAR_HEIGHT) Or
     (MouseY >= ScreenHeight-STATUSBAR_HEIGHT) Then Begin
@@ -1555,6 +1944,7 @@ Begin
   Exit;
  End;
  
+ If CurrentTool In [TOOL_RECTANGLE,TOOL_ELLIPSE,TOOL_LINE] Then PushUndo;
  FillChar(NewObj, SizeOf(NewObj), 0);
  NewObj.Visible := True;
  NewObj.LayerIndex := CurrentLayer;
@@ -1578,8 +1968,7 @@ Begin
    NewObj.Rectangle.StrokeColor := StrokeColor;
    NewObj.Rectangle.FillColor := FillColor;
    NewObj.Rectangle.StrokeWidth := 1.0;
-   Objects[ObjectCount] := NewObj;
-   Inc(ObjectCount);
+   AppendObject(NewObj);
   End;
   
   TOOL_ELLIPSE:
@@ -1592,8 +1981,7 @@ Begin
    NewObj.Ellipse.StrokeColor := StrokeColor;
    NewObj.Ellipse.FillColor := FillColor;
    NewObj.Ellipse.StrokeWidth := 1.0;
-   Objects[ObjectCount] := NewObj;
-   Inc(ObjectCount);
+   AppendObject(NewObj);
   End;
   
   TOOL_LINE:
@@ -1605,8 +1993,7 @@ Begin
    NewObj.Line.Y2 := CanvasY;
    NewObj.Line.StrokeColor := StrokeColor;
    NewObj.Line.StrokeWidth := 1.0;
-   Objects[ObjectCount] := NewObj;
-   Inc(ObjectCount);
+   AppendObject(NewObj);
   End;
  End;
  
@@ -1641,12 +2028,12 @@ Begin
  AddMenuItem(0, 'Exporter...', CMD_EXPORT);
  AddMenuItem(0, '-', CMD_NONE);
  AddMenuItem(0, 'Quitter', CMD_EXIT);
- AddMenuItem(1, 'Annuler', CMD_NONE);
- AddMenuItem(1, 'Retablir', CMD_NONE);
+ AddMenuItem(1, 'Annuler      Ctrl+Z', CMD_UNDO);
+ AddMenuItem(1, 'Retablir     Ctrl+Y', CMD_REDO);
  AddMenuItem(1, '-', CMD_NONE);
- AddMenuItem(1, 'Couper', CMD_NONE);
- AddMenuItem(1, 'Copier', CMD_NONE);
- AddMenuItem(1, 'Coller', CMD_NONE);
+ AddMenuItem(1, 'Couper       Ctrl+X', CMD_CUT);
+ AddMenuItem(1, 'Copier       Ctrl+C', CMD_COPY);
+ AddMenuItem(1, 'Coller       Ctrl+V', CMD_PASTE);
  AddMenuItem(2, 'Zoom avant', CMD_ZOOM_IN);
  AddMenuItem(2, 'Zoom arriere', CMD_ZOOM_OUT);
  AddMenuItem(2, 'Adapter (100%)', CMD_ZOOM_RESET);
@@ -2454,13 +2841,19 @@ Begin
     ShowDialog('Nouveau document',
                'Dessin modifie : Entree = effacer, Echap = annuler.')
    Else Begin
-    ObjectCount := 0;
+    ClearObjects;
     SelectedObject := -1;
+    ClearHistory;
     CurrentFile := '';
     CurrentSaveFormat := 0;
     FileModified := False;
     ResetZoom;
    End;
+  CMD_UNDO: UndoCommand;
+  CMD_REDO: RedoCommand;
+  CMD_CUT: CutCommand;
+  CMD_COPY: CopyCommand;
+  CMD_PASTE: PasteCommand;
   CMD_EXIT:
    If FileModified Then
     ShowDialog('Quitter',
@@ -2475,7 +2868,7 @@ Begin
   CMD_HELP:
    ShowDialog('Aide', 'Prototype incomplet. Les commandes grisees sont indisponibles.');
   CMD_SHORTCUTS:
-   ShowDialog('Raccourcis', 'Ctrl+O/S : ouvrir/sauver. F12 : sauver sous. F10 : menus.');
+   ShowDialog('Raccourcis', 'Ctrl+O/S ouvrir/sauver, Z/Y annuler/retablir, X/C/V edition. F10 menus.');
   CMD_ABOUT:
    ShowDialog('A propos', 'CloneDRAW AI - prototype Pascal, pas un clone complet.');
   CMD_RESOURCES:
@@ -2495,13 +2888,14 @@ Begin
   StatusMessage := 'Saisie vide annulee.';
  End Else Begin
   If TextEditIndex >= 0 Then Begin
-   If TextObject.TextObj.Text <> Objects[TextEditIndex].TextObj.Text Then Begin
-    Objects[TextEditIndex] := TextObject;
+   If TextObject.TextObj.Text <> ObjAt(TextEditIndex)^.TextObj.Text Then Begin
+    PushUndo;
+    ObjAt(TextEditIndex)^ := TextObject;
     FileModified := True;
    End;
   End Else Begin
-   Objects[ObjectCount] := TextObject;
-   Inc(ObjectCount);
+   PushUndo;
+   AppendObject(TextObject);
    FileModified := True;
   End;
   StatusMessage := 'Texte valide. Fleche : deplacer. Outil Texte : modifier.';
@@ -2646,8 +3040,8 @@ Begin
  If Not TextActive And Not MenuActive And (DialogTitle = '') And
     Not DrawingMode And Not EditingObject And (CurrentTool = TOOL_SELECT) And
     (SelectedObject >= 0) And (SelectedObject < ObjectCount) Then
-  If Objects[SelectedObject].Visible And
-     (Objects[SelectedObject].ObjType = OBJ_TEXT) And
+  If ObjAt(SelectedObject)^.Visible And
+     (ObjAt(SelectedObject)^.ObjType = OBJ_TEXT) And
      ((Key >= #32) Or (Key = #8) Or
       ((Key = #0) And (ExtKey In [#75,#77,#71,#79,#83]))) Then
    BeginTextInput(SelectedObject);
@@ -2697,8 +3091,9 @@ Begin
    If DialogTitle = 'Ouvrir un document' Then StartFileDialog;
    If DialogTitle = 'Quitter' Then Running := False;
    If DialogTitle = 'Nouveau document' Then Begin
-    ObjectCount := 0;
+    ClearObjects;
     SelectedObject := -1;
+    ClearHistory;
     CurrentFile := '';
     CurrentSaveFormat := 0;
     FileModified := False;
@@ -2749,6 +3144,11 @@ Begin
   '0': ResetZoom;
   #15: ExecuteMenuItem(MENU_FILE,1);
   #19: ExecuteMenuItem(MENU_FILE,2);
+  #26: UndoCommand;
+  #25: RedoCommand;
+  #24: CutCommand;
+  #3: CopyCommand;
+  #22: PasteCommand;
  End;
 End;
 
@@ -2832,7 +3232,7 @@ End;
 
 Function ReadLegacyDocument(Name: String): Boolean;
 Var F: File; Sig: Array[0..3] Of Char; Ver: Word;
- Count, I, Code: Integer; Got: Word; Good: Boolean;
+ Count, I, Code: Integer; Got: Word; Good: Boolean; Tmp0: TGraphicObject;
 Begin
  ReadLegacyDocument := False;
  {$I-}
@@ -2845,7 +3245,7 @@ Begin
  BlockRead(F,Ver,2,Got); Code := IOResult;
  Good := Good And (Code=0) And (Got=2) And (Ver=AI_VERSION);
  BlockRead(F,Count,2,Got); Code := IOResult;
- Good := Good And (Code=0) And (Got=2) And (Count>=0) And (Count<=MAX_OBJECTS);
+ Good := Good And (Code=0) And (Got=2) And (Count>=0) And (Count<=30000);
  If Good Then Begin
   Good := FileSize(F)=8+LongInt(Count)*SizeOf(TGraphicObject);
   Code := IOResult;
@@ -2855,11 +3255,12 @@ Begin
  If Good Then
   For I := 0 To Count-1 Do Begin
    {$I-}
-   BlockRead(F,ImportObjects[I],SizeOf(TGraphicObject),Got);
+   BlockRead(F,Tmp0,SizeOf(TGraphicObject),Got);
    Code := IOResult;
    {$I+}
    If (Code<>0) Or (Got<>SizeOf(TGraphicObject)) Then Good := False
-   Else If Not ValidImportObject(ImportObjects[I]) Then Good := False;
+   Else If Not ValidImportObject(Tmp0) Then Good := False
+   Else ImpAppend(Tmp0);
    If Not Good Then Break;
   End;
  {$I-} Close(F); Code := IOResult; {$I+}
@@ -2867,7 +3268,6 @@ Begin
   ImportError := 'AI10 invalide, tronque ou incompatible avec cette version.';
   Exit;
  End;
- ImportCount := Count;
  ReadLegacyDocument := True;
 End;
 
@@ -3015,15 +3415,13 @@ Var F: Text; Ch: Char; Token, Comment, Header: String;
   IsStroke := Not ((Token='f') Or (Token='F') Or (Token='fill'));
   If (Token='s') Or (Token='b') Or IsFill Then Path.Path.Closed := True;
   If IsFill And (Path.Path.PointCount<3) Then Begin Fail('Remplissage invalide.'); Exit; End;
-  If ImportCount=MAX_OBJECTS Then Begin Fail('Limite : 100 objets par document.'); Exit; End;
   Path.ObjType := OBJ_PATH;
   If IsFill Then Path.ObjType := OBJ_FILLED_PATH;
   Path.Path.FillColor := Fill;
   Path.Path.StrokeColor := Stroke;
   If Not IsStroke Then Path.Path.StrokeColor := Fill;
   Path.Path.StrokeWidth := Width;
-  ImportObjects[ImportCount] := Path;
-  Inc(ImportCount);
+  ImpAppend(Path);
   Path.Path.PointCount := 0; Path.Path.Closed := False;
  End;
 
@@ -3052,7 +3450,6 @@ Begin
       (Path.Path.PointCount<>1) Or (Header='') Then Begin
     Fail('Texte PostScript non pris en charge.'); Break;
    End;
-   If ImportCount=MAX_OBJECTS Then Begin Fail('Limite : 100 objets.'); Break; End;
    FillChar(Curve,SizeOf(Curve),0); Curve.ObjType := OBJ_TEXT; Curve.Visible := True;
    Curve.TextObj.X := Path.Path.Points[0].X;
    Curve.TextObj.Y := Path.Path.Points[0].Y-7;
@@ -3060,7 +3457,7 @@ Begin
    If Not ValidImportObject(Curve) Then Begin
     Fail('Texte hors de la page ou format non pris en charge.'); Break;
    End;
-   ImportObjects[ImportCount] := Curve; Inc(ImportCount);
+   ImpAppend(Curve);
    Path.Path.PointCount := 0; Path.Path.Closed := False;
    Continue;
   End;
@@ -3180,11 +3577,1406 @@ Begin
  ReadIllustratorDocument := ImportError='';
 End;
 
+{ ------------------------------------------------------------------
+  Importation des fichiers Illustrator modernes (PDF) et repli tolerant
+  pour le PostScript classique : les chemins, remplissages, traits, couleurs
+  et textes simples sont lus ; courbes aplaties.
+  ------------------------------------------------------------------ }
+{$IFDEF FPC}
+Const
+ LBase:Array[0..28] of Integer=(3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258);
+ LExt:Array[0..28] of Integer=(0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0);
+ DBase:Array[0..29] of Integer=(1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577);
+ DExt:Array[0..29] of Integer=(0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13);
+ CLOrder:Array[0..18] of Integer=(16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15);
+
+Type
+ TBig = Array[0..1999999999] Of Byte;
+ PBig = ^TBig;
+ THuff = Record
+  Cnt: Array[0..15] Of LongInt;
+  Sym: Array[0..287] Of Integer;
+ End;
+ TLens = Array[0..319] Of Integer;
+
+Var
+ InfIn, InfOut: PBig;
+ InfInLen, InfInPos, InfOutLen, InfOutPos, InfBuf: LongInt;
+ InfCnt: Integer;
+ InfBad: Boolean;
+ FixedLit, FixedDist: THuff;
+ FixedReady: Boolean;
+
+Function InfBits(Need:Integer):LongInt;
+Var V:LongInt;
+Begin
+ V:=InfBuf;
+ While InfCnt<Need Do Begin
+  If InfInPos>=InfInLen Then Begin
+   InfBad:=True;
+   InfBits:=0;
+   Exit;
+  End;
+  V:=V Or (LongInt(InfIn^[InfInPos]) Shl InfCnt);
+  Inc(InfInPos);
+  Inc(InfCnt,8);
+ End;
+ InfBuf:=V Shr Need;
+ Dec(InfCnt,Need);
+ InfBits:=V And ((LongInt(1) Shl Need)-1);
+End;
+
+Function InfBuild(Var H:THuff;Var L:TLens;Off,N:Integer):LongInt;
+Var S,Len:Integer;
+    Left:LongInt;
+    Offs:Array[0..15] of Integer;
+Begin
+ For Len:=0 To 15 Do H.Cnt[Len]:=0;
+ For S:=0 To N-1 Do Inc(H.Cnt[L[Off+S]]);
+ If H.Cnt[0]=N Then Begin
+  InfBuild:=0;
+  Exit;
+ End;
+ Left:=1;
+ For Len:=1 To 15 Do Begin
+  Left:=Left Shl 1;
+  Left:=Left-H.Cnt[Len];
+  If Left<0 Then Begin
+   InfBuild:=Left;
+   Exit;
+  End;
+ End;
+ Offs[1]:=0;
+ For Len:=1 To 14 Do Offs[Len+1]:=Offs[Len]+H.Cnt[Len];
+ For S:=0 To N-1 Do
+  If L[Off+S]<>0 Then Begin
+   H.Sym[Offs[L[Off+S]]]:=S;
+   Inc(Offs[L[Off+S]]);
+  End;
+ InfBuild:=Left;
+End;
+
+Function InfDecode(Var H:THuff):Integer;
+Var Code,First,Index,Count:LongInt;
+    Len:Integer;
+Begin
+ Code:=0; First:=0; Index:=0;
+ For Len:=1 To 15 Do Begin
+  Code:=Code Or InfBits(1);
+  If InfBad Then Break;
+  Count:=H.Cnt[Len];
+  If Code-Count<First Then Begin
+   InfDecode:=H.Sym[Index+(Code-First)];
+   Exit;
+  End;
+  Index:=Index+Count;
+  First:=(First+Count) Shl 1;
+  Code:=Code Shl 1;
+ End;
+ InfBad:=True;
+ InfDecode:=-1;
+End;
+
+Procedure InfCodes(Var Lc,Dc:THuff);
+Var Sym,Len,Dist:LongInt;
+Begin
+ Repeat
+  Sym:=InfDecode(Lc);
+  If InfBad Then Exit;
+  If Sym<256 Then Begin
+   If InfOutPos>=InfOutLen Then Begin InfBad:=True; Exit; End;
+   InfOut^[InfOutPos]:=Sym;
+   Inc(InfOutPos);
+  End
+   Else
+  If Sym>256 Then Begin
+   Sym:=Sym-257;
+   If Sym>=29 Then Begin InfBad:=True; Exit; End;
+   Len:=LBase[Sym]+InfBits(LExt[Sym]);
+   Sym:=InfDecode(Dc);
+   If InfBad or(Sym<0)or(Sym>=30)Then Begin InfBad:=True; Exit; End;
+   Dist:=DBase[Sym]+InfBits(DExt[Sym]);
+   If InfBad or(Dist>InfOutPos)or(InfOutPos+Len>InfOutLen)Then Begin InfBad:=True; Exit; End;
+   While Len>0 Do Begin
+    InfOut^[InfOutPos]:=InfOut^[InfOutPos-Dist];
+    Inc(InfOutPos);
+    Dec(Len);
+   End;
+  End;
+ Until Sym=256;
+End;
+
+Procedure InfStored;
+Var Len,Nlen:LongInt;
+Begin
+ InfBuf:=0;
+ InfCnt:=0;
+ If InfInPos+4>InfInLen Then Begin InfBad:=True; Exit; End;
+ Len:=InfIn^[InfInPos]+256*InfIn^[InfInPos+1];
+ Nlen:=InfIn^[InfInPos+2]+256*InfIn^[InfInPos+3];
+ Inc(InfInPos,4);
+ If(Len<>(Not Nlen)And $FFFF)or(InfInPos+Len>InfInLen)or(InfOutPos+Len>InfOutLen)Then Begin
+  InfBad:=True;
+  Exit;
+ End;
+ Move(InfIn^[InfInPos],InfOut^[InfOutPos],Len);
+ Inc(InfInPos,Len);
+ Inc(InfOutPos,Len);
+End;
+
+Procedure InfFixed;
+Var L:TLens;
+    S:Integer;
+Begin
+ If Not FixedReady Then Begin
+  For S:=0 To 143 Do L[S]:=8;
+  For S:=144 To 255 Do L[S]:=9;
+  For S:=256 To 279 Do L[S]:=7;
+  For S:=280 To 287 Do L[S]:=8;
+  InfBuild(FixedLit,L,0,288);
+  For S:=0 To 29 Do L[S]:=5;
+  InfBuild(FixedDist,L,0,30);
+  FixedReady:=True;
+ End;
+ InfCodes(FixedLit,FixedDist);
+End;
+
+Procedure InfDynamic;
+Var Nlen,Ndist,Ncode,Idx,Sym,Rep,Prev,I:Integer;
+    L:TLens;
+    Lc,Dc:THuff;
+    Err:LongInt;
+Begin
+ Nlen:=InfBits(5)+257;
+ Ndist:=InfBits(5)+1;
+ Ncode:=InfBits(4)+4;
+ If InfBad or(Nlen>286)or(Ndist>30)Then Begin InfBad:=True; Exit; End;
+ FillChar(L,SizeOf(L),0);
+ For Idx:=0 To Ncode-1 Do L[CLOrder[Idx]]:=InfBits(3);
+ Err:=InfBuild(Lc,L,0,19);
+ If InfBad or(Err<>0)Then Begin InfBad:=True; Exit; End;
+ Idx:=0;
+ FillChar(L,SizeOf(L),0);
+ While Idx<Nlen+Ndist Do Begin
+  Sym:=InfDecode(Lc);
+  If InfBad Then Exit;
+  If Sym<16 Then Begin
+   L[Idx]:=Sym;
+   Inc(Idx);
+  End
+   Else Begin
+    Prev:=0;
+    If Sym=16 Then Begin
+     If Idx=0 Then Begin InfBad:=True; Exit; End;
+     Prev:=L[Idx-1];
+     Rep:=3+InfBits(2);
+    End
+     Else
+    If Sym=17 Then Rep:=3+InfBits(3)
+     Else Rep:=11+InfBits(7);
+    If Idx+Rep>Nlen+Ndist Then Begin InfBad:=True; Exit; End;
+    For I:=1 To Rep Do Begin
+     L[Idx]:=Prev;
+     Inc(Idx);
+    End;
+   End;
+ End;
+ Err:=InfBuild(Lc,L,0,Nlen);
+ If(Err<0)or((Err>0)and(Nlen-Lc.Cnt[0]<>1))Then Begin InfBad:=True; Exit; End;
+ Err:=InfBuild(Dc,L,Nlen,Ndist);
+ If(Err<0)or((Err>0)and(Ndist-Dc.Cnt[0]<>1))Then Begin InfBad:=True; Exit; End;
+ InfCodes(Lc,Dc);
+End;
+
+{ Decompresse un flux zlib (2 octets d'en-tete + deflate) }
+Function Inflate(Src:PBig;SrcLen:LongInt;Dst:PBig;DstLen:LongInt):Boolean;
+Var Last,Typ:LongInt;
+Begin
+ InfIn:=Src;
+ InfInLen:=SrcLen;
+ InfInPos:=2;
+ InfOut:=Dst;
+ InfOutLen:=DstLen;
+ InfOutPos:=0;
+ InfBuf:=0;
+ InfCnt:=0;
+ InfBad:=False;
+ If SrcLen<3 Then Begin
+  Inflate:=False;
+  Exit;
+ End;
+ Repeat
+  Last:=InfBits(1);
+  Typ:=InfBits(2);
+  If InfBad Then Break;
+  Case Typ Of
+   0:InfStored;
+   1:InfFixed;
+   2:InfDynamic;
+  Else InfBad:=True;
+  End;
+ Until(Last=1)or InfBad;
+ Inflate:=Not InfBad;
+End;
+
+Const
+ PA_MAXOBJ = 30000;
+ PA_MAXPTS = 40000;
+ PA_MAXSUB = 400;
+
+Var
+ PaBuf: PBig;
+ PaLen: LongInt;
+ PaOff: Array[1..PA_MAXOBJ] Of LongInt;
+ PaSrc: Array[1..PA_MAXOBJ] Of Byte;
+ PaXBuf: Array[1..12] Of PBig;
+ PaXLen: Array[1..12] Of LongInt;
+ PaXN: Integer;
+ PaObjMax: LongInt;
+ { etat de l'interprete }
+ PaCB: PBig;                 { flux en cours d'interpretation }
+ PaCP, PaCE: LongInt;
+ PaStk: Array[0..63] Of Real;
+ PaSN: Integer;
+ PaStr, PaArr: String;
+ PaInArr: Boolean;
+ PaA, PaB, PaC, PaD, PaE, PaF: Real;           { matrice courante }
+ PaGS: Array[0..31] Of Record
+  A, B, C, D, E, F, LW: Real;
+  Fi, St: Byte;
+ End;
+ PaGSP: Integer;
+ PaFill, PaStroke: Byte;
+ PaLW: Real;
+ PaX0, PaY1, PaSc: Real;    { page -> document }
+ PaPX, PaPY: Array[0..PA_MAXPTS-1] Of Real;   { points aplatis (page) }
+ PaPN: LongInt;
+ PaSub: Array[0..PA_MAXSUB] Of LongInt;
+ PaSubCl: Array[0..PA_MAXSUB] Of Boolean;
+ PaSubN: Integer;
+ PaCurX, PaCurY, PaStX, PaStY: Real;
+ PaTM, PaLM: Array[0..5] Of Real;             { matrice de texte et de debut de ligne }
+ PaLead: Real;
+ PaFS: Real;
+ PaFull: Boolean;
+ PaIsPdf: Boolean;
+ PaDepth: Integer;
+ PaRes: LongInt;            { dictionnaire de ressources courant : objet ou -1 }
+ PaResSrc: Byte;
+ PaResPos: LongInt;
+ PaTruncated: Boolean;
+
+Function PaByte(S: PBig; P, L: LongInt): Integer;
+Begin
+ If (P < 0) Or (P >= L) Then PaByte := 0 Else PaByte := S^[P];
+End;
+
+Function PaIsWs(C: Integer): Boolean;
+Begin
+ PaIsWs := (C = 32) Or (C = 9) Or (C = 10) Or (C = 13) Or (C = 12) Or (C = 0);
+End;
+
+Function PaIsDelim(C: Integer): Boolean;
+Begin
+ PaIsDelim := PaIsWs(C) Or (C = Ord('(')) Or (C = Ord(')')) Or (C = Ord('<')) Or
+  (C = Ord('>')) Or (C = Ord('[')) Or (C = Ord(']')) Or (C = Ord('{')) Or
+  (C = Ord('}')) Or (C = Ord('/')) Or (C = Ord('%'));
+End;
+
+{ ------------------------- analyse des objets ------------------------- }
+
+Function PaSrcBuf(Src: Byte): PBig;
+Begin
+ If Src = 0 Then PaSrcBuf := PaBuf Else PaSrcBuf := PaXBuf[Src];
+End;
+
+Function PaSrcLen(Src: Byte): LongInt;
+Begin
+ If Src = 0 Then PaSrcLen := PaLen Else PaSrcLen := PaXLen[Src];
+End;
+
+Function PaSkip(S: PBig; P, L: LongInt): LongInt;
+Begin
+ While P < L Do Begin
+  If PaIsWs(S^[P]) Then Inc(P)
+  Else If S^[P] = Ord('%') Then Begin
+   While (P < L) And (S^[P] <> 10) And (S^[P] <> 13) Do Inc(P);
+  End Else Break;
+ End;
+ PaSkip := P;
+End;
+
+{ Jeton : K = 1 nombre, 2 nom, 3 '<<', 4 '>>', 5 '[', 6 ']', 7 chaine, 8 mot, 0 fin }
+Function PaTok(S: PBig; Var P: LongInt; L: LongInt; Var A, B: LongInt): Integer;
+Var C, D: Integer;
+Begin
+ PaTok := 0;
+ P := PaSkip(S, P, L);
+ If P >= L Then Exit;
+ C := S^[P];
+ A := P;
+ If C = Ord('/') Then Begin
+  Inc(P);
+  A := P;
+  While (P < L) And Not PaIsDelim(S^[P]) Do Inc(P);
+  B := P; PaTok := 2; Exit;
+ End;
+ If (C = Ord('<')) And (PaByte(S, P+1, L) = Ord('<')) Then Begin
+  Inc(P, 2); B := P; PaTok := 3; Exit;
+ End;
+ If (C = Ord('>')) And (PaByte(S, P+1, L) = Ord('>')) Then Begin
+  Inc(P, 2); B := P; PaTok := 4; Exit;
+ End;
+ If C = Ord('[') Then Begin Inc(P); B := P; PaTok := 5; Exit; End;
+ If C = Ord(']') Then Begin Inc(P); B := P; PaTok := 6; Exit; End;
+ If C = Ord('(') Then Begin
+  D := 1; Inc(P);
+  While (P < L) And (D > 0) Do Begin
+   If S^[P] = Ord('\') Then Inc(P)
+   Else If S^[P] = Ord('(') Then Inc(D)
+   Else If S^[P] = Ord(')') Then Dec(D);
+   Inc(P);
+  End;
+  B := P; PaTok := 7; Exit;
+ End;
+ If C = Ord('<') Then Begin
+  While (P < L) And (S^[P] <> Ord('>')) Do Inc(P);
+  Inc(P); B := P; PaTok := 7; Exit;
+ End;
+ If (C = Ord('>')) Or (C = Ord(')')) Or (C = Ord('{')) Or (C = Ord('}')) Then Begin
+  Inc(P); B := P; PaTok := 8; Exit;
+ End;
+ While (P < L) And Not PaIsDelim(S^[P]) Do Inc(P);
+ B := P;
+ If P = A Then Begin Inc(P); B := P; End;
+ C := S^[A];
+ If ((C >= Ord('0')) And (C <= Ord('9'))) Or (C = Ord('-')) Or (C = Ord('+')) Or (C = Ord('.')) Then
+  PaTok := 1
+ Else PaTok := 8;
+End;
+
+Function PaNum(S: PBig; A, B: LongInt): LongInt;
+Var V: LongInt;
+Begin
+ V := 0;
+ While (A < B) And (S^[A] >= Ord('0')) And (S^[A] <= Ord('9')) Do Begin
+  V := V*10+S^[A]-Ord('0');
+  Inc(A);
+ End;
+ PaNum := V;
+End;
+
+{ La valeur en P est-elle une reference "N G R" ? }
+Function PaIsRef(S: PBig; P, L: LongInt; Var N: LongInt): Boolean;
+Var Q, A, B, A2, B2, A3, B3: LongInt;
+Begin
+ PaIsRef := False;
+ Q := P;
+ If PaTok(S, Q, L, A, B) <> 1 Then Exit;
+ If PaTok(S, Q, L, A2, B2) <> 1 Then Exit;
+ If (PaTok(S, Q, L, A3, B3) <> 8) Or (B3-A3 <> 1) Or (S^[A3] <> Ord('R')) Then Exit;
+ N := PaNum(S, A, B);
+ PaIsRef := True;
+End;
+
+{ Saute une valeur complete en P (nombre, nom, dictionnaire, tableau, reference) }
+Procedure PaSkipValue(S: PBig; Var P, L: LongInt);
+Var K, A, B, D, Q, N: LongInt;
+Begin
+ If PaIsRef(S, P, L, N) Then Begin
+  K := PaTok(S, P, L, A, B); K := PaTok(S, P, L, A, B); K := PaTok(S, P, L, A, B);
+  Exit;
+ End;
+ K := PaTok(S, P, L, A, B);
+ If (K = 3) Or (K = 5) Then Begin
+  D := 1;
+  While (D > 0) And (P < L) Do Begin
+   K := PaTok(S, P, L, A, B);
+   If K = 0 Then Break;
+   If (K = 3) Or (K = 5) Then Inc(D)
+   Else If (K = 4) Or (K = 6) Then Dec(D);
+  End;
+ End;
+ Q := 0;
+End;
+
+{ Position de la valeur de la cle Key dans le dictionnaire commencant en P ('<<') }
+Function PaDictFind(S: PBig; P, L: LongInt; Key: String): LongInt;
+Var K, A, B, I: LongInt; Same: Boolean;
+Begin
+ PaDictFind := -1;
+ P := PaSkip(S, P, L);
+ If PaTok(S, P, L, A, B) <> 3 Then Exit;
+ While P < L Do Begin
+  K := PaTok(S, P, L, A, B);
+  If (K = 4) Or (K = 0) Then Exit;
+  If K <> 2 Then Continue;
+  Same := (B-A = Length(Key));
+  If Same Then
+   For I := 1 To Length(Key) Do
+    If S^[A+I-1] <> Ord(Key[I]) Then Same := False;
+  If Same Then Begin
+   PaDictFind := PaSkip(S, P, L);
+   Exit;
+  End;
+  PaSkipValue(S, P, L);
+ End;
+End;
+
+{ Le nom en P est-il egal a Name ? }
+Function PaNameIs(S: PBig; P, L: LongInt; Name: String): Boolean;
+Var K, A, B, I: LongInt; Same: Boolean;
+Begin
+ PaNameIs := False;
+ If P < 0 Then Exit;
+ If PaTok(S, P, L, A, B) <> 2 Then Exit;
+ Same := (B-A = Length(Name));
+ If Same Then
+  For I := 1 To Length(Name) Do
+   If S^[A+I-1] <> Ord(Name[I]) Then Same := False;
+ PaNameIs := Same;
+ K := 0;
+End;
+
+Procedure PaScanObjects;
+Var I, N, G, J: LongInt;
+Begin
+ PaObjMax := 0;
+ I := 0;
+ While I < PaLen-6 Do Begin
+  If (PaBuf^[I] >= Ord('0')) And (PaBuf^[I] <= Ord('9')) And
+     ((I = 0) Or PaIsWs(PaBuf^[I-1])) Then Begin
+   J := I; N := 0;
+   While (J < PaLen) And (PaBuf^[J] >= Ord('0')) And (PaBuf^[J] <= Ord('9')) And (J-I < 9) Do Begin
+    N := N*10+PaBuf^[J]-Ord('0'); Inc(J);
+   End;
+   If (J < PaLen) And (PaBuf^[J] = 32) Then Begin
+    Inc(J);
+    G := 0;
+    While (J < PaLen) And (PaBuf^[J] >= Ord('0')) And (PaBuf^[J] <= Ord('9')) And (G < 100000) Do Begin
+     G := G*10+PaBuf^[J]-Ord('0'); Inc(J);
+    End;
+    If (J+3 < PaLen) And (PaBuf^[J] = 32) And (PaBuf^[J+1] = Ord('o')) And
+       (PaBuf^[J+2] = Ord('b')) And (PaBuf^[J+3] = Ord('j')) And
+       (N >= 1) And (N <= PA_MAXOBJ) Then Begin
+     PaOff[N] := J+4;
+     PaSrc[N] := 0;
+     If N > PaObjMax Then PaObjMax := N;
+     I := J+4;
+     Continue;
+    End;
+   End;
+  End;
+  Inc(I);
+ End;
+End;
+
+{ Debut de la valeur d'un objet : (S,P,L) ; faux si l'objet n'existe pas }
+Function PaBody(N: LongInt; Var S: PBig; Var P, L: LongInt): Boolean;
+Begin
+ PaBody := False;
+ If (N < 1) Or (N > PaObjMax) Or (PaOff[N] = 0) Then Exit;
+ S := PaSrcBuf(PaSrc[N]);
+ L := PaSrcLen(PaSrc[N]);
+ P := PaSkip(S, PaOff[N], L);
+ PaBody := True;
+End;
+
+{ Suit une reference eventuelle : retourne le debut de la vraie valeur }
+Function PaDeref(Var S: PBig; Var P, L: LongInt): Boolean;
+Var N: LongInt; Guard: Integer;
+Begin
+ PaDeref := False;
+ Guard := 0;
+ While PaIsRef(S, P, L, N) And (Guard < 8) Do Begin
+  If Not PaBody(N, S, P, L) Then Exit;
+  Inc(Guard);
+ End;
+ PaDeref := P >= 0;
+End;
+
+{ Donnees decodees du flux de l'objet N (GetMem ; a liberer avec FreeMem(D,DL+16)) }
+Function PaStream(N: LongInt; Var D: PBig; Var DL: LongInt): Boolean;
+Var S: PBig; P, L, Q, A, B, Len, K, Start, E, Cap: LongInt;
+    FV, Flate, Other: Boolean; Src: PBig; Ok: Boolean; T: LongInt;
+Begin
+ PaStream := False;
+ D := Nil; DL := 0;
+ If Not PaBody(N, S, P, L) Then Exit;
+ Q := P;
+ FV := False;
+ If PaTok(S, Q, L, A, B) <> 3 Then Exit;
+ Q := P;
+ Len := -1;
+ K := PaDictFind(S, P, L, 'Length');
+ If K >= 0 Then Begin
+  If PaIsRef(S, K, L, T) Then Begin
+   If PaBody(T, Src, A, B) Then Begin
+    Q := A;
+    Len := 0;
+    While (Q < B) And (Src^[Q] >= Ord('0')) And (Src^[Q] <= Ord('9')) Do Begin
+     Len := Len*10+Src^[Q]-Ord('0'); Inc(Q);
+    End;
+   End;
+  End Else Begin
+   Len := 0; Q := K;
+   While (Q < L) And (S^[Q] >= Ord('0')) And (S^[Q] <= Ord('9')) Do Begin
+    Len := Len*10+S^[Q]-Ord('0'); Inc(Q);
+   End;
+  End;
+ End;
+ { fin du dictionnaire puis mot-cle stream }
+ Q := P;
+ PaSkipValue(S, Q, L);
+ Q := PaSkip(S, Q, L);
+ If Not ((Q+5 < L) And (S^[Q] = Ord('s')) And (S^[Q+1] = Ord('t')) And
+         (S^[Q+2] = Ord('r')) And (S^[Q+3] = Ord('e')) And (S^[Q+4] = Ord('a')) And
+         (S^[Q+5] = Ord('m'))) Then Exit;
+ Start := Q+6;
+ If PaByte(S, Start, L) = 13 Then Inc(Start);
+ If PaByte(S, Start, L) = 10 Then Inc(Start);
+ { verification de Length, sinon recherche de endstream }
+ E := -1;
+ If (Len >= 0) And (Start+Len <= L) Then Begin
+  Q := Start+Len;
+  While (Q < L) And (Q < Start+Len+4) And PaIsWs(S^[Q]) Do Inc(Q);
+  If (Q+8 < L) And (S^[Q] = Ord('e')) And (S^[Q+1] = Ord('n')) And (S^[Q+2] = Ord('d')) And
+     (S^[Q+3] = Ord('s')) Then E := Start+Len;
+ End;
+ If E < 0 Then Begin
+  Q := Start;
+  While Q+9 < L Do Begin
+   If (S^[Q] = Ord('e')) And (S^[Q+1] = Ord('n')) And (S^[Q+2] = Ord('d')) And
+      (S^[Q+3] = Ord('s')) And (S^[Q+4] = Ord('t')) And (S^[Q+5] = Ord('r')) Then Begin
+    E := Q;
+    If (E > Start) And (S^[E-1] = 10) Then Dec(E);
+    If (E > Start) And (S^[E-1] = 13) Then Dec(E);
+    Break;
+   End;
+   Inc(Q);
+  End;
+ End;
+ If E < Start Then Exit;
+ { filtres }
+ Flate := False; Other := False;
+ K := PaDictFind(S, P, L, 'Filter');
+ If K >= 0 Then Begin
+  Q := K;
+  If PaTok(S, Q, L, A, B) = 5 Then Begin
+   Repeat
+    T := PaTok(S, Q, L, A, B);
+    If T = 2 Then Begin
+     If (B-A = 11) And (S^[A] = Ord('F')) Then Flate := True Else Other := True;
+    End;
+   Until (T <> 2);
+  End Else Begin
+   Q := K;
+   If PaNameIs(S, Q, L, 'FlateDecode') Then Flate := True Else Other := True;
+  End;
+ End;
+ If Other Then Exit;
+ If Flate Then Begin
+  If PaDictFind(S, P, L, 'DecodeParms') >= 0 Then Begin
+   { predicteur : non pris en charge pour les contenus }
+   K := PaDictFind(S, P, L, 'DecodeParms');
+   Q := K;
+   If PaDictFind(S, K, L, 'Predictor') >= 0 Then Exit;
+  End;
+  Cap := (E-Start)*40+4096;
+  If Cap > 48000000 Then Cap := 48000000;
+  GetMem(D, Cap+16);
+  Ok := Inflate(PBig(@S^[Start]), E-Start, D, Cap);
+  DL := InfOutPos;
+  If DL <= 0 Then Begin FreeMem(D, Cap+16); D := Nil; Exit; End;
+  If Ok Or (DL > 0) Then Begin
+   { reduit a la taille utile }
+   PaStream := True;
+   D^[DL] := 0;
+   Exit;
+  End;
+ End Else Begin
+  DL := E-Start;
+  GetMem(D, DL+16);
+  Move(S^[Start], D^, DL);
+  D^[DL] := 0;
+  PaStream := True;
+ End;
+End;
+
+Procedure PaFreeStream(D: PBig; DL: LongInt);
+Begin
+ If D <> Nil Then FreeMem(D, DL+16);
+End;
+
+{ Les objets contenus dans un flux d'objets (/Type /ObjStm) deviennent accessibles }
+Procedure PaLoadObjStreams;
+Var N, P, L, K, A, B, T, Cnt, First, I, Num, Off: LongInt;
+    S, D: PBig; DL: LongInt; Q: LongInt;
+Begin
+ For N := 1 To PaObjMax Do
+  If (PaOff[N] <> 0) And (PaSrc[N] = 0) Then Begin
+   If Not PaBody(N, S, P, L) Then Continue;
+   If PaByte(S, P, L) <> Ord('<') Then Continue;
+   K := PaDictFind(S, P, L, 'Type');
+   If Not PaNameIs(S, K, L, 'ObjStm') Then Continue;
+   If PaXN >= 12 Then Break;
+   K := PaDictFind(S, P, L, 'N');
+   If K < 0 Then Continue;
+   Q := K; T := PaTok(S, Q, L, A, B); Cnt := PaNum(S, A, B);
+   K := PaDictFind(S, P, L, 'First');
+   If K < 0 Then Continue;
+   Q := K; T := PaTok(S, Q, L, A, B); First := PaNum(S, A, B);
+   If Not PaStream(N, D, DL) Then Continue;
+   Inc(PaXN);
+   PaXBuf[PaXN] := D;
+   PaXLen[PaXN] := DL;
+   Q := 0;
+   For I := 1 To Cnt Do Begin
+    T := PaTok(D, Q, DL, A, B); Num := PaNum(D, A, B);
+    T := PaTok(D, Q, DL, A, B); Off := PaNum(D, A, B);
+    If (Num >= 1) And (Num <= PA_MAXOBJ) Then Begin
+     PaOff[Num] := First+Off;
+     PaSrc[Num] := PaXN;
+     If Num > PaObjMax Then PaObjMax := Num;
+    End;
+   End;
+  End;
+End;
+
+{ ------------------------- interprete graphique ------------------------- }
+
+Function PaNext(Var Tok: String): Integer;
+Var C, D, H, N: LongInt; V: Real; Cd: Integer;
+ Function HexV(Ch: Integer): Integer;
+ Begin
+  If (Ch >= 48) And (Ch <= 57) Then HexV := Ch-48
+  Else If (Ch >= 65) And (Ch <= 70) Then HexV := Ch-55
+  Else If (Ch >= 97) And (Ch <= 102) Then HexV := Ch-87
+  Else HexV := -1;
+ End;
+Begin
+ Tok := '';
+ PaNext := 0;
+ While PaCP < PaCE Do Begin
+  C := PaCB^[PaCP];
+  If C <= 32 Then Begin Inc(PaCP); Continue; End;
+  If C = Ord('%') Then Begin
+   While (PaCP < PaCE) And (PaCB^[PaCP] <> 10) And (PaCB^[PaCP] <> 13) Do Inc(PaCP);
+   Continue;
+  End;
+  If C = Ord('(') Then Begin
+   Inc(PaCP); D := 1;
+   While (PaCP < PaCE) And (D > 0) Do Begin
+    C := PaCB^[PaCP]; Inc(PaCP);
+    If C = Ord('\') Then Begin
+     C := PaCB^[PaCP]; Inc(PaCP);
+     If C = Ord('n') Then C := 10
+     Else If C = Ord('r') Then C := 13
+     Else If C = Ord('t') Then C := 9
+     Else If (C >= 48) And (C <= 55) Then Begin
+      N := C-48; H := 0;
+      While (H < 2) And (PaCB^[PaCP] >= 48) And (PaCB^[PaCP] <= 55) Do Begin
+       N := N*8+PaCB^[PaCP]-48; Inc(PaCP); Inc(H);
+      End;
+      C := N And 255;
+     End;
+     If Length(Tok) < 255 Then Tok := Tok+Chr(C);
+    End Else Begin
+     If C = Ord('(') Then Inc(D);
+     If C = Ord(')') Then Dec(D);
+     If (D > 0) And (Length(Tok) < 255) Then Tok := Tok+Chr(C);
+    End;
+   End;
+   PaNext := 3; Exit;
+  End;
+  If C = Ord('<') Then Begin
+   If PaCB^[PaCP+1] = Ord('<') Then Begin
+    D := 0;
+    While PaCP < PaCE Do Begin
+     If (PaCB^[PaCP] = Ord('<')) And (PaCB^[PaCP+1] = Ord('<')) Then Begin Inc(D); Inc(PaCP, 2); End
+     Else If (PaCB^[PaCP] = Ord('>')) And (PaCB^[PaCP+1] = Ord('>')) Then Begin
+      Dec(D); Inc(PaCP, 2); If D <= 0 Then Break;
+     End Else Inc(PaCP);
+    End;
+    Continue;
+   End;
+   Inc(PaCP); H := -1;
+   While (PaCP < PaCE) And (PaCB^[PaCP] <> Ord('>')) Do Begin
+    N := HexV(PaCB^[PaCP]);
+    If N >= 0 Then Begin
+     If H < 0 Then H := N Else Begin
+      If Length(Tok) < 255 Then Tok := Tok+Chr(H*16+N);
+      H := -1;
+     End;
+    End;
+    Inc(PaCP);
+   End;
+   Inc(PaCP);
+   PaNext := 3; Exit;
+  End;
+  If (C = Ord('[')) Or (C = Ord(']')) Then Begin
+   Tok := Chr(C); Inc(PaCP); PaNext := 4; Exit;
+  End;
+  If (C = Ord('{')) Or (C = Ord('}')) Or (C = Ord(')')) Or (C = Ord('>')) Then Begin
+   Inc(PaCP); Continue;
+  End;
+  If C = Ord('/') Then Begin
+   Inc(PaCP); Tok := '/';
+   While (PaCP < PaCE) And Not PaIsDelim(PaCB^[PaCP]) Do Begin
+    If Length(Tok) < 60 Then Tok := Tok+Chr(PaCB^[PaCP]);
+    Inc(PaCP);
+   End;
+   PaNext := 6; Exit;
+  End;
+  While (PaCP < PaCE) And Not PaIsDelim(PaCB^[PaCP]) Do Begin
+   If Length(Tok) < 60 Then Tok := Tok+Chr(PaCB^[PaCP]);
+   Inc(PaCP);
+  End;
+  If Tok = '' Then Begin Inc(PaCP); Continue; End;
+  If Tok[1] = '.' Then Tok := '0'+Tok;
+  If (Length(Tok) > 1) And (Tok[1] = '-') And (Tok[2] = '.') Then Tok := '-0'+Copy(Tok, 2, 60);
+  If Tok[1] In ['0'..'9','-','+'] Then Begin
+   Val(Tok, V, Cd);
+   If Cd = 0 Then Begin PaNext := 1; Exit; End;
+  End;
+  PaNext := 2; Exit;
+ End;
+End;
+
+Function PaArg(I: Integer): Real;
+Begin
+ If PaSN-I >= 0 Then PaArg := PaStk[PaSN-I] Else PaArg := 0;
+End;
+
+Procedure PaConcat(MA, MB, MC, MD, ME, MF: Real);
+Var A, B, C, D, E, F: Real;
+Begin
+ A := MA*PaA+MB*PaC; B := MA*PaB+MB*PaD;
+ C := MC*PaA+MD*PaC; D := MC*PaB+MD*PaD;
+ E := ME*PaA+MF*PaC+PaE; F := ME*PaB+MF*PaD+PaF;
+ PaA := A; PaB := B; PaC := C; PaD := D; PaE := E; PaF := F;
+End;
+
+{ page -> document : point (X,Y) du plan utilisateur }
+Procedure PaMap(X, Y: Real; Var DX, DY: Real);
+Var XP, YP: Real;
+Begin
+ XP := PaA*X+PaC*Y+PaE;
+ YP := PaB*X+PaD*Y+PaF;
+ DX := XP; DY := YP;
+End;
+
+Procedure PaPMove(X, Y: Real);
+Begin
+ If (PaSubN < PA_MAXSUB) And (PaPN < PA_MAXPTS) Then Begin
+  PaSub[PaSubN] := PaPN;
+  PaSubCl[PaSubN] := False;
+  Inc(PaSubN);
+  PaMap(X, Y, PaPX[PaPN], PaPY[PaPN]);
+  Inc(PaPN);
+ End;
+ PaCurX := X; PaCurY := Y; PaStX := X; PaStY := Y;
+End;
+
+Procedure PaPLine(X, Y: Real);
+Begin
+ If PaSubN = 0 Then Begin PaPMove(X, Y); Exit; End;
+ If PaPN < PA_MAXPTS Then Begin
+  PaMap(X, Y, PaPX[PaPN], PaPY[PaPN]);
+  Inc(PaPN);
+ End;
+ PaCurX := X; PaCurY := Y;
+End;
+
+Procedure PaPCurve(X1, Y1, X2, Y2, X3, Y3: Real);
+Var I: Integer; T, U, AX, AY: Real; P0X, P0Y, A1X, A1Y, A2X, A2Y, A3X, A3Y: Real;
+Begin
+ If PaSubN = 0 Then PaPMove(X1, Y1);
+ P0X := PaPX[PaPN-1]; P0Y := PaPY[PaPN-1];
+ PaMap(X1, Y1, A1X, A1Y); PaMap(X2, Y2, A2X, A2Y); PaMap(X3, Y3, A3X, A3Y);
+ For I := 1 To 10 Do Begin
+  T := I/10; U := 1-T;
+  If PaPN < PA_MAXPTS Then Begin
+   PaPX[PaPN] := U*U*U*P0X+3*U*U*T*A1X+3*U*T*T*A2X+T*T*T*A3X;
+   PaPY[PaPN] := U*U*U*P0Y+3*U*U*T*A1Y+3*U*T*T*A2Y+T*T*T*A3Y;
+   Inc(PaPN);
+  End;
+ End;
+ PaCurX := X3; PaCurY := Y3;
+ AX := 0; AY := 0;
+End;
+
+Procedure PaPClose;
+Begin
+ If PaSubN = 0 Then Exit;
+ PaSubCl[PaSubN-1] := True;
+ PaCurX := PaStX; PaCurY := PaStY;
+End;
+
+Procedure PaPClear;
+Begin
+ PaPN := 0; PaSubN := 0;
+End;
+
+Procedure PaAdd(Var O: TGraphicObject);
+Begin
+ ImpAppend(O);
+End;
+
+Function PaDocX(X: Real): Real;
+Var V: Real;
+Begin
+ V := (X-PaX0)*PaSc;
+ If V < 0 Then V := 0;
+ If V > ScreenWidth-TOOLBAR_WIDTH-2 Then V := ScreenWidth-TOOLBAR_WIDTH-2;
+ PaDocX := V;
+End;
+
+Function PaDocY(Y: Real): Real;
+Var V: Real;
+Begin
+ V := (PaY1-Y)*PaSc;
+ If V < 0 Then V := 0;
+ If V > ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-2 Then
+  V := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-2;
+ PaDocY := V;
+End;
+
+Procedure PaPaint(DoFill, DoStroke: Boolean);
+Var S, I, K, N, E: LongInt; O: TGraphicObject; Step: Real; W: Real;
+Begin
+ For S := 0 To PaSubN-1 Do Begin
+  If S+1 < PaSubN Then E := PaSub[S+1]-1 Else E := PaPN-1;
+  N := E-PaSub[S]+1;
+  If N < 2 Then Continue;
+  FillChar(O, SizeOf(O), 0);
+  O.Visible := True;
+  O.LayerIndex := 0;
+  If DoFill And (N >= 3) Then O.ObjType := OBJ_FILLED_PATH Else O.ObjType := OBJ_PATH;
+  If O.ObjType = OBJ_PATH Then DoStroke := True;
+  If N > 99 Then Begin
+   For K := 0 To 98 Do Begin
+    I := PaSub[S]+(K*(N-1)) Div 98;
+    O.Path.Points[K].X := PaDocX(PaPX[I]);
+    O.Path.Points[K].Y := PaDocY(PaPY[I]);
+   End;
+   O.Path.PointCount := 99;
+  End Else Begin
+   For K := 0 To N-1 Do Begin
+    O.Path.Points[K].X := PaDocX(PaPX[PaSub[S]+K]);
+    O.Path.Points[K].Y := PaDocY(PaPY[PaSub[S]+K]);
+   End;
+   O.Path.PointCount := N;
+  End;
+  O.Path.Closed := PaSubCl[S] Or (O.ObjType = OBJ_FILLED_PATH);
+  O.Path.FillColor := PaFill;
+  If DoStroke Then O.Path.StrokeColor := PaStroke Else O.Path.StrokeColor := PaFill;
+  W := PaLW*PaSc*Sqrt(Abs(PaA*PaD-PaB*PaC));
+  If W < 1 Then W := 1;
+  If W > 12 Then W := 12;
+  O.Path.StrokeWidth := W;
+  PaAdd(O);
+ End;
+End;
+
+Procedure PaShowText(Const T: String);
+Var O: TGraphicObject; X, Y: Real; I: Integer; S: String;
+Begin
+ S := '';
+ For I := 1 To Length(T) Do
+  If (T[I] >= #32) And (Length(S) < 255) Then S := S+T[I];
+ If S = '' Then Exit;
+ PaMap(PaTM[4], PaTM[5], X, Y);
+ FillChar(O, SizeOf(O), 0);
+ O.ObjType := OBJ_TEXT;
+ O.Visible := True;
+ O.TextObj.X := PaDocX(X);
+ O.TextObj.Y := PaDocY(Y)-7;
+ If O.TextObj.Y < 0 Then O.TextObj.Y := 0;
+ O.TextObj.Text := S;
+ O.TextObj.Color := PaFill;
+ O.TextObj.FontSize := 8;
+ PaAdd(O);
+ PaTM[4] := PaTM[4]+Length(S)*PaFS*0.55*PaTM[0];
+End;
+
+Procedure PaGSave;
+Begin
+ If PaGSP < 32 Then Begin
+  PaGS[PaGSP].A := PaA; PaGS[PaGSP].B := PaB; PaGS[PaGSP].C := PaC; PaGS[PaGSP].D := PaD;
+  PaGS[PaGSP].E := PaE; PaGS[PaGSP].F := PaF; PaGS[PaGSP].LW := PaLW;
+  PaGS[PaGSP].Fi := PaFill; PaGS[PaGSP].St := PaStroke;
+  Inc(PaGSP);
+ End;
+End;
+
+Procedure PaGRestore;
+Begin
+ If PaGSP > 0 Then Begin
+  Dec(PaGSP);
+  PaA := PaGS[PaGSP].A; PaB := PaGS[PaGSP].B; PaC := PaGS[PaGSP].C; PaD := PaGS[PaGSP].D;
+  PaE := PaGS[PaGSP].E; PaF := PaGS[PaGSP].F; PaLW := PaGS[PaGSP].LW;
+  PaFill := PaGS[PaGSP].Fi; PaStroke := PaGS[PaGSP].St;
+ End;
+End;
+
+Function PaCmyk(C, M, Y, K: Real): Byte;
+Begin
+ PaCmyk := ImportPaletteColor(1-MinReal(1, C+K), 1-MinReal(1, M+K), 1-MinReal(1, Y+K));
+End;
+
+Procedure PaRunStream(D: PBig; DL: LongInt; ResS: Byte; ResP: LongInt); Forward;
+
+{ Execute le formulaire XObject Name (ressource courante) }
+Procedure PaDo(Const Name: String);
+Var S: PBig; P, L, K, N, A, B, Q: LongInt; D: PBig; DL: LongInt;
+    SA, SB, SC, SD, SE, SF: Real; Mat: Array[0..5] Of Real; T, I: Integer;
+    FS: PBig; FP, FL: LongInt; RP: LongInt; RS: Byte;
+Begin
+ If (PaDepth > 6) Or (PaResPos < 0) Then Exit;
+ S := PaSrcBuf(PaResSrc); L := PaSrcLen(PaResSrc);
+ P := PaDictFind(S, PaResPos, L, 'XObject');
+ If P < 0 Then Exit;
+ If Not PaDeref(S, P, L) Then Exit;
+ { cle = Name }
+ K := PaDictFind(S, P, L, Copy(Name, 2, 60));
+ If K < 0 Then Exit;
+ If Not PaIsRef(S, K, L, N) Then Exit;
+ If Not PaBody(N, FS, FP, FL) Then Exit;
+ K := PaDictFind(FS, FP, FL, 'Subtype');
+ If Not PaNameIs(FS, K, FL, 'Form') Then Exit;
+ For I := 0 To 5 Do Mat[I] := 0;
+ Mat[0] := 1; Mat[3] := 1;
+ K := PaDictFind(FS, FP, FL, 'Matrix');
+ If K >= 0 Then Begin
+  Q := K;
+  If PaTok(FS, Q, FL, A, B) = 5 Then
+   For I := 0 To 5 Do Begin
+    T := PaTok(FS, Q, FL, A, B);
+    If T = 1 Then Mat[I] := PaNum(FS, A, B) * 1.0;
+   End;
+ End;
+ If Not PaStream(N, D, DL) Then Exit;
+ SA := PaA; SB := PaB; SC := PaC; SD := PaD; SE := PaE; SF := PaF;
+ PaConcat(Mat[0], Mat[1], Mat[2], Mat[3], Mat[4], Mat[5]);
+ RS := PaResSrc; RP := PaResPos;
+ K := PaDictFind(FS, FP, FL, 'Resources');
+ If K >= 0 Then Begin
+  S := FS; P := K; L := FL;
+  If PaDeref(S, P, L) Then Begin
+   If S = PaBuf Then PaResSrc := 0 Else Begin
+    PaResSrc := 0;
+    For I := 1 To PaXN Do If S = PaXBuf[I] Then PaResSrc := I;
+   End;
+   PaResPos := P;
+  End;
+ End;
+ Inc(PaDepth);
+ PaRunStream(D, DL, PaResSrc, PaResPos);
+ Dec(PaDepth);
+ PaResSrc := RS; PaResPos := RP;
+ PaA := SA; PaB := SB; PaC := SC; PaD := SD; PaE := SE; PaF := SF;
+ PaFreeStream(D, DL);
+End;
+
+Procedure PaRunStream(D: PBig; DL: LongInt; ResS: Byte; ResP: LongInt);
+Var Tok: String; K, I, N: Integer; SavB: PBig; SavP, SavE: LongInt; C: Real;
+    LastName: String; Eo: Boolean;
+Begin
+ SavB := PaCB; SavP := PaCP; SavE := PaCE;
+ PaCB := D; PaCP := 0; PaCE := DL;
+ PaSN := 0; PaInArr := False; PaArr := ''; PaStr := ''; LastName := '';
+ While PaCP < PaCE Do Begin
+  K := PaNext(Tok);
+  If K = 0 Then Break;
+  If K = 1 Then Begin
+   If PaSN < 64 Then Begin Val(Tok, PaStk[PaSN], I); Inc(PaSN); End;
+   Continue;
+  End;
+  If K = 3 Then Begin
+   PaStr := Tok;
+   If PaInArr Then PaArr := PaArr+Tok;
+   Continue;
+  End;
+  If K = 4 Then Begin
+   If Tok = '[' Then Begin PaInArr := True; PaArr := ''; End Else PaInArr := False;
+   Continue;
+  End;
+  If K = 6 Then Begin LastName := Tok; Continue; End;
+  If (Tok = 'm') Or (Tok = 'moveto') Then PaPMove(PaArg(2), PaArg(1))
+  Else If (Tok = 'l') Or (Tok = 'lineto') Then PaPLine(PaArg(2), PaArg(1))
+  Else If (Tok = 'rmoveto') Then PaPMove(PaCurX+PaArg(2), PaCurY+PaArg(1))
+  Else If (Tok = 'rlineto') Then PaPLine(PaCurX+PaArg(2), PaCurY+PaArg(1))
+  Else If (Tok = 'c') Or (Tok = 'curveto') Then
+   PaPCurve(PaArg(6), PaArg(5), PaArg(4), PaArg(3), PaArg(2), PaArg(1))
+  Else If Tok = 'v' Then PaPCurve(PaCurX, PaCurY, PaArg(4), PaArg(3), PaArg(2), PaArg(1))
+  Else If Tok = 'y' Then PaPCurve(PaArg(4), PaArg(3), PaArg(2), PaArg(1), PaArg(2), PaArg(1))
+  Else If (Tok = 'h') Or (Tok = 'closepath') Or (Tok = 'H') Then PaPClose
+  Else If Tok = 're' Then Begin
+   PaPMove(PaArg(4), PaArg(3));
+   PaPLine(PaArg(4)+PaArg(2), PaArg(3));
+   PaPLine(PaArg(4)+PaArg(2), PaArg(3)+PaArg(1));
+   PaPLine(PaArg(4), PaArg(3)+PaArg(1));
+   PaPClose;
+  End
+  Else If (Tok = 'n') Or (Tok = 'N') Or (Tok = 'newpath') Then PaPClear
+  Else If (Tok = 'f') Or (Tok = 'F') Or (Tok = 'f*') Or (Tok = 'fill') Or (Tok = 'eofill') Then Begin
+   PaPaint(True, False); PaPClear;
+  End
+  Else If (Tok = 'S') Or (Tok = 'stroke') Then Begin PaPaint(False, True); PaPClear; End
+  Else If (Tok = 's') Then Begin PaPClose; PaPaint(False, True); PaPClear; End
+  Else If (Tok = 'B') Or (Tok = 'B*') Then Begin PaPaint(True, True); PaPClear; End
+  Else If (Tok = 'b') Or (Tok = 'b*') Then Begin PaPClose; PaPaint(True, True); PaPClear; End
+  Else If Tok = 'rg' Then PaFill := ImportPaletteColor(PaArg(3), PaArg(2), PaArg(1))
+  Else If Tok = 'RG' Then PaStroke := ImportPaletteColor(PaArg(3), PaArg(2), PaArg(1))
+  Else If Tok = 'g' Then PaFill := ImportPaletteColor(PaArg(1), PaArg(1), PaArg(1))
+  Else If Tok = 'G' Then PaStroke := ImportPaletteColor(PaArg(1), PaArg(1), PaArg(1))
+  Else If Tok = 'k' Then PaFill := PaCmyk(PaArg(4), PaArg(3), PaArg(2), PaArg(1))
+  Else If Tok = 'K' Then PaStroke := PaCmyk(PaArg(4), PaArg(3), PaArg(2), PaArg(1))
+  Else If (Tok = 'sc') Or (Tok = 'scn') Or (Tok = 'SC') Or (Tok = 'SCN') Then Begin
+   If PaSN >= 4 Then N := PaCmyk(PaArg(4), PaArg(3), PaArg(2), PaArg(1))
+   Else If PaSN = 3 Then N := ImportPaletteColor(PaArg(3), PaArg(2), PaArg(1))
+   Else If PaSN = 1 Then N := ImportPaletteColor(PaArg(1), PaArg(1), PaArg(1))
+   Else N := -1;
+   If N >= 0 Then Begin
+    If (Tok = 'sc') Or (Tok = 'scn') Then PaFill := N Else PaStroke := N;
+   End;
+  End
+  Else If Tok = 'setrgbcolor' Then Begin
+   PaFill := ImportPaletteColor(PaArg(3), PaArg(2), PaArg(1)); PaStroke := PaFill;
+  End
+  Else If Tok = 'setgray' Then Begin
+   PaFill := ImportPaletteColor(PaArg(1), PaArg(1), PaArg(1)); PaStroke := PaFill;
+  End
+  Else If Tok = 'setcmykcolor' Then Begin
+   PaFill := PaCmyk(PaArg(4), PaArg(3), PaArg(2), PaArg(1)); PaStroke := PaFill;
+  End
+  Else If (Tok = 'w') Or (Tok = 'setlinewidth') Then PaLW := PaArg(1)
+  Else If Tok = 'cm' Then PaConcat(PaArg(6), PaArg(5), PaArg(4), PaArg(3), PaArg(2), PaArg(1))
+  Else If Tok = 'translate' Then PaConcat(1, 0, 0, 1, PaArg(2), PaArg(1))
+  Else If Tok = 'scale' Then PaConcat(PaArg(2), 0, 0, PaArg(1), 0, 0)
+  Else If (Tok = 'q') Or (Tok = 'gsave') Then PaGSave
+  Else If (Tok = 'Q') Or (Tok = 'grestore') Then PaGRestore
+  Else If Tok = 'BT' Then Begin
+   PaTM[0] := 1; PaTM[1] := 0; PaTM[2] := 0; PaTM[3] := 1; PaTM[4] := 0; PaTM[5] := 0;
+   PaLM := PaTM;
+  End
+  Else If (Tok = 'Tf') Or (Tok = 'scalefont') Then PaFS := PaArg(1)
+  Else If Tok = 'TL' Then PaLead := PaArg(1)
+  Else If Tok = 'Tm' Then Begin
+   For I := 0 To 5 Do PaTM[I] := PaArg(6-I);
+   PaLM := PaTM;
+  End
+  Else If (Tok = 'Td') Or (Tok = 'TD') Or (Tok = 'T*') Then Begin
+   If Tok = 'T*' Then Begin
+    PaLM[4] := PaLM[4]-PaLead*PaLM[2]; PaLM[5] := PaLM[5]-PaLead*PaLM[3];
+   End Else Begin
+    If Tok = 'TD' Then PaLead := -PaArg(1);
+    PaLM[4] := PaLM[4]+PaArg(2)*PaLM[0]+PaArg(1)*PaLM[2];
+    PaLM[5] := PaLM[5]+PaArg(2)*PaLM[1]+PaArg(1)*PaLM[3];
+   End;
+   PaTM := PaLM;
+  End
+  Else If Tok = '''' Then Begin
+   PaLM[4] := PaLM[4]-PaLead*PaLM[2]; PaLM[5] := PaLM[5]-PaLead*PaLM[3]; PaTM := PaLM;
+   PaShowText(PaStr);
+  End
+  Else If Tok = 'Tj' Then PaShowText(PaStr)
+  Else If Tok = 'TJ' Then PaShowText(PaArr)
+  Else If Tok = 'show' Then Begin
+   PaTM[0] := 1; PaTM[4] := PaCurX; PaTM[5] := PaCurY;
+   PaShowText(PaStr);
+  End
+  Else If Tok = 'Do' Then PaDo(LastName)
+  Else If Tok = 'BI' Then Begin
+   While (PaCP < PaCE-2) And Not ((PaCB^[PaCP] <= 32) And (PaCB^[PaCP+1] = Ord('E')) And
+                                  (PaCB^[PaCP+2] = Ord('I'))) Do Inc(PaCP);
+   Inc(PaCP, 3);
+  End;
+  PaSN := 0;
+  C := 0; Eo := False;
+ End;
+ PaCB := SavB; PaCP := SavP; PaCE := SavE;
+End;
+
+Procedure PaInitState;
+Var I: Integer;
+Begin
+ PaA := 1; PaB := 0; PaC := 0; PaD := 1; PaE := 0; PaF := 0;
+ PaGSP := 0; PaFill := 0; PaStroke := 0; PaLW := 1; PaFS := 12;
+ PaPClear;
+ For I := 0 To 5 Do PaTM[I] := 0;
+ PaTM[0] := 1; PaTM[3] := 1;
+ PaLM := PaTM; PaLead := 12;
+ PaCurX := 0; PaCurY := 0; PaStX := 0; PaStY := 0;
+ PaDepth := 0;
+End;
+
+Procedure PaSetPage(X0, Y0, X1, Y1: Real);
+Begin
+ If (X1-X0 < 1) Or (Y1-Y0 < 1) Then Begin X0 := 0; Y0 := 0; X1 := 612; Y1 := 792; End;
+ PaX0 := X0;
+ PaY1 := Y1;
+ PaSc := MinReal((ScreenWidth-TOOLBAR_WIDTH-2)/(X1-X0),
+                 (ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-2)/(Y1-Y0));
+ If PaSc > 1 Then PaSc := 1;
+End;
+
+{ Lit les 4 nombres du tableau en P (S,L) }
+Function PaFourNums(S: PBig; P, L: LongInt; Var V: Array Of Real): Boolean;
+Var Q, A, B, I, T: LongInt; Sg: Real; Fr, Num: Real; K: LongInt; Neg: Boolean;
+Begin
+ PaFourNums := False;
+ Q := P;
+ If PaTok(S, Q, L, A, B) <> 5 Then Exit;
+ For I := 0 To 3 Do Begin
+  T := PaTok(S, Q, L, A, B);
+  If T <> 1 Then Exit;
+  Neg := S^[A] = Ord('-');
+  Num := 0; Fr := 0; Sg := 1;
+  K := A;
+  If (S^[K] = Ord('-')) Or (S^[K] = Ord('+')) Then Inc(K);
+  While (K < B) And (S^[K] >= Ord('0')) And (S^[K] <= Ord('9')) Do Begin
+   Num := Num*10+S^[K]-Ord('0'); Inc(K);
+  End;
+  If (K < B) And (S^[K] = Ord('.')) Then Begin
+   Inc(K); Sg := 0.1;
+   While (K < B) And (S^[K] >= Ord('0')) And (S^[K] <= Ord('9')) Do Begin
+    Fr := Fr+(S^[K]-Ord('0'))*Sg; Sg := Sg/10; Inc(K);
+   End;
+  End;
+  Num := Num+Fr;
+  If Neg Then Num := -Num;
+  V[I] := Num;
+ End;
+ PaFourNums := True;
+End;
+
+Function PaReadFile(Name: String): Boolean;
+Var F: File; Code: Integer; Got: LongInt;
+Begin
+ PaReadFile := False;
+ PaBuf := Nil; PaLen := 0;
+ {$I-} Assign(F, Name); Reset(F, 1); Code := IOResult; {$I+}
+ If Code <> 0 Then Exit;
+ {$I-} PaLen := FileSize(F); {$I+}
+ If (PaLen < 8) Or (PaLen > 40000000) Then Begin Close(F); Exit; End;
+ GetMem(PaBuf, PaLen+16);
+ FillChar(PaBuf^[PaLen], 16, 0);
+ {$I-} BlockRead(F, PaBuf^, PaLen, Got); {$I+}
+ Close(F);
+ PaReadFile := Got = PaLen;
+End;
+
+Procedure PaFreeAll;
+Var I: Integer;
+Begin
+ If PaBuf <> Nil Then FreeMem(PaBuf, PaLen+16);
+ PaBuf := Nil;
+ For I := 1 To PaXN Do
+  If PaXBuf[I] <> Nil Then FreeMem(PaXBuf[I], PaXLen[I]+16);
+ PaXN := 0;
+End;
+
+{ AI moderne : le fichier est un PDF }
+Function ReadPdfAiDocument(Name: String): Boolean;
+Var N, P, L, K, Root, Pg, I, Guard, A, B: LongInt; S, PS: PBig; V: Array[0..3] Of Real;
+    Pos0, PL: LongInt; Cont: PBig; CL: LongInt; D: PBig; DL: LongInt;
+    HaveBox: Boolean; ResP, ResL: LongInt; ResSv: PBig; T: Integer;
+    MbS: PBig; MbP, MbL: LongInt; Q: LongInt;
+Begin
+ ReadPdfAiDocument := False;
+ PaXN := 0; PaTruncated := False;
+ FillChar(PaOff, SizeOf(PaOff), 0);
+ If Not PaReadFile(Name) Then Begin ImportError := 'Fichier PDF illisible ou trop gros.'; Exit; End;
+ PaScanObjects;
+ PaLoadObjStreams;
+ { racine : derniere occurrence de /Root }
+ Root := 0;
+ I := PaLen-6;
+ While I > 0 Do Begin
+  If (PaBuf^[I] = Ord('/')) And (PaBuf^[I+1] = Ord('R')) And (PaBuf^[I+2] = Ord('o')) And
+     (PaBuf^[I+3] = Ord('o')) And (PaBuf^[I+4] = Ord('t')) Then Begin
+   Q := I+5;
+   If PaIsRef(PaBuf, Q, PaLen, N) Then Begin Root := N; Break; End;
+  End;
+  Dec(I);
+ End;
+ { page : Root -> Pages -> Kids[0] -> ... }
+ Pg := 0;
+ HaveBox := False;
+ MbS := Nil; ResP := -1; ResSv := Nil; ResL := 0;
+ If Root > 0 Then Begin
+  If PaBody(Root, S, P, L) Then Begin
+   K := PaDictFind(S, P, L, 'Pages');
+   Guard := 0;
+   While (K >= 0) And (Guard < 12) Do Begin
+    Inc(Guard);
+    If Not PaIsRef(S, K, L, N) Then Break;
+    If Not PaBody(N, S, P, L) Then Break;
+    Pos0 := PaDictFind(S, P, L, 'MediaBox');
+    If Pos0 >= 0 Then Begin MbS := S; MbP := Pos0; MbL := L; End;
+    Pos0 := PaDictFind(S, P, L, 'Resources');
+    If Pos0 >= 0 Then Begin ResSv := S; ResP := Pos0; ResL := L; End;
+    Pos0 := PaDictFind(S, P, L, 'Kids');
+    If Pos0 < 0 Then Begin Pg := N; Break; End;
+    { premier enfant }
+    Q := Pos0;
+    If PaTok(S, Q, L, A, B) <> 5 Then Break;
+    K := PaSkip(S, Q, L);
+   End;
+  End;
+ End;
+ If Pg = 0 Then Begin
+  { repli : premier objet portant /Type /Page }
+  For N := 1 To PaObjMax Do
+   If PaBody(N, S, P, L) Then
+    If PaByte(S, P, L) = Ord('<') Then Begin
+     K := PaDictFind(S, P, L, 'Type');
+     If PaNameIs(S, K, L, 'Page') Then Begin Pg := N; Break; End;
+    End;
+ End;
+ If Pg = 0 Then Begin
+  ImportError := 'Page PDF introuvable dans ce fichier AI.';
+  PaFreeAll; Exit;
+ End;
+ PaBody(Pg, S, P, L);
+ Pos0 := PaDictFind(S, P, L, 'MediaBox');
+ If Pos0 >= 0 Then Begin MbS := S; MbP := Pos0; MbL := L; End;
+ Pos0 := PaDictFind(S, P, L, 'Resources');
+ If Pos0 >= 0 Then Begin ResSv := S; ResP := Pos0; ResL := L; End;
+ Pos0 := PaDictFind(S, P, L, 'CropBox');
+ If Pos0 >= 0 Then Begin MbS := S; MbP := Pos0; MbL := L; End;
+ PaSetPage(0, 0, 612, 792);
+ If MbS <> Nil Then Begin
+  If PaDeref(MbS, MbP, MbL) Then
+   If PaFourNums(MbS, MbP, MbL, V) Then PaSetPage(V[0], V[1], V[2], V[3]);
+ End;
+ { ressources de la page }
+ PaResSrc := 0; PaResPos := -1;
+ If ResSv <> Nil Then Begin
+  If PaDeref(ResSv, ResP, ResL) Then Begin
+   PaResSrc := 0;
+   For I := 1 To PaXN Do If ResSv = PaXBuf[I] Then PaResSrc := I;
+   PaResPos := ResP;
+  End;
+ End;
+ { contenus }
+ K := PaDictFind(S, P, L, 'Contents');
+ PaInitState;
+ PaFill := 0; PaStroke := 0;
+ If K < 0 Then Begin ImportError := 'Page PDF sans contenu.'; PaFreeAll; Exit; End;
+ If PaIsRef(S, K, L, N) Then Begin
+  If PaBody(N, PS, Q, PL) Then Begin
+   If PaByte(PS, Q, PL) = Ord('[') Then Begin
+    { tableau de flux }
+    PaTok(PS, Q, PL, A, B);
+    While PaTok(PS, Q, PL, A, B) = 1 Do Begin
+     N := PaNum(PS, A, B);
+     PaTok(PS, Q, PL, A, B); PaTok(PS, Q, PL, A, B);
+     If PaStream(N, D, DL) Then Begin
+      PaRunStream(D, DL, PaResSrc, PaResPos);
+      PaFreeStream(D, DL);
+     End;
+    End;
+   End Else If PaStream(N, D, DL) Then Begin
+    PaRunStream(D, DL, PaResSrc, PaResPos);
+    PaFreeStream(D, DL);
+   End;
+  End;
+ End Else Begin
+  Q := K;
+  If PaTok(S, Q, L, A, B) = 5 Then
+   Repeat
+    If Not PaIsRef(S, Q, L, N) Then Break;
+    PaTok(S, Q, L, A, B); PaTok(S, Q, L, A, B); PaTok(S, Q, L, A, B);
+    If PaStream(N, D, DL) Then Begin
+     PaRunStream(D, DL, PaResSrc, PaResPos);
+     PaFreeStream(D, DL);
+    End;
+   Until False;
+ End;
+ PaFreeAll;
+ If ImportCount = 0 Then Begin
+  ImportError := 'Aucun objet vectoriel pris en charge dans ce fichier AI (PDF).';
+  Exit;
+ End;
+ ReadPdfAiDocument := True;
+End;
+
+{ PostScript / EPS classique : repli tolerant quand l'import strict echoue }
+Function ReadPsAiLenient(Name: String): Boolean;
+Var I, Start, E, Cd: LongInt; V: Array[0..3] Of Real; N, K: Integer; Tok: String;
+    HaveBox: Boolean; Cmp: String;
+ Function Find(Const S: String; From: LongInt): LongInt;
+ Var X, Y: LongInt; Same: Boolean;
+ Begin
+  Find := -1;
+  For X := From To PaLen-Length(S) Do Begin
+   Same := True;
+   For Y := 1 To Length(S) Do
+    If PaBuf^[X+Y-1] <> Ord(S[Y]) Then Begin Same := False; Break; End;
+   If Same Then Begin Find := X; Exit; End;
+  End;
+ End;
+Begin
+ ReadPsAiLenient := False;
+ PaXN := 0; PaTruncated := False;
+ If Not PaReadFile(Name) Then Begin ImportError := 'Fichier illisible ou trop gros.'; Exit; End;
+ If Not ((PaBuf^[0] = Ord('%')) And (PaBuf^[1] = Ord('!'))) Then Begin
+  ImportError := 'Format inconnu : AI PostScript/EPS ou AI10 attendu.';
+  PaFreeAll; Exit;
+ End;
+ HaveBox := False;
+ I := Find('%%BoundingBox:', 0);
+ If I >= 0 Then Begin
+  PaCB := PaBuf; PaCP := I+14; PaCE := PaLen;
+  N := 0;
+  While (N < 4) And (PaCP < PaCE) Do Begin
+   K := PaNext(Tok);
+   If K = 1 Then Begin Val(Tok, V[N], Cd); Inc(N); End
+   Else Break;
+  End;
+  If N = 4 Then Begin HaveBox := True; PaSetPage(V[0], V[1], V[2], V[3]); End;
+ End;
+ If Not HaveBox Then Begin
+  ImportError := 'BoundingBox absente ou invalide.';
+  PaFreeAll; Exit;
+ End;
+ { le dessin suit le prologue / la configuration }
+ Start := Find('%%EndSetup', 0);
+ If Start < 0 Then Start := Find('%%EndProlog', 0);
+ If Start < 0 Then Start := 0;
+ E := Find('%%Trailer', Start);
+ If E < 0 Then E := PaLen;
+ PaInitState;
+ PaResSrc := 0; PaResPos := -1;
+ PaRunStream(PBig(@PaBuf^[Start]), E-Start, 0, -1);
+ PaFreeAll;
+ If ImportCount = 0 Then Begin
+  ImportError := 'Aucun objet vectoriel pris en charge dans ce fichier AI/EPS.';
+  Exit;
+ End;
+ ReadPsAiLenient := True;
+End;
+{$ELSE}
+Function ReadPdfAiDocument(Name: String): Boolean;
+Begin
+ ImportError := 'AI base sur PDF non pris en charge sous Turbo Pascal.';
+ ReadPdfAiDocument := False;
+End;
+Function ReadPsAiLenient(Name: String): Boolean;
+Begin
+ ReadPsAiLenient := False;
+End;
+{$ENDIF}
+
+
 Function LoadDocument(Name: String): Boolean;
 Var F: File; Sig: Array[0..3] Of Char; Got: Word; Code, I: Integer;
- Good, Legacy: Boolean; Size: LongInt;
+ Good, Legacy, IsPdfAi: Boolean; Size: LongInt; Err0: String;
 Begin
- LoadDocument := False; ImportError := ''; ImportCount := 0;
+ LoadDocument := False; ImportError := ''; ImpClear; IsPdfAi := False;
  {$I-} Assign(F,Name); Reset(F,1); Code := IOResult; {$I+}
  If Code<>0 Then Begin ImportError := 'Fichier introuvable ou acces refuse.'; Exit; End;
  {$I-}
@@ -3193,19 +4985,27 @@ Begin
  Close(F); Good := IOResult=0;
  {$I+}
  If (Code<>0) Or (I<>0) Or Not Good Or (Got<>4) Or
-    (Size>4194304) Then Begin
-  ImportError := 'Fichier illisible, trop court ou superieur a 4 Mo.'; Exit;
+    (Size>40000000) Then Begin
+  ImportError := 'Fichier illisible, trop court ou superieur a 40 Mo.'; Exit;
  End;
  Legacy := (Sig[0]='A') And (Sig[1]='I') And (Sig[2]='1') And (Sig[3]='0');
  If (Sig[0]='%') And (Sig[1]='P') And (Sig[2]='D') And (Sig[3]='F') Then Begin
-  ImportError := 'AI base sur PDF non pris en charge. Utiliser AI/EPS classique.';
-  Exit;
+  Good := ReadPdfAiDocument(Name);
+  If Not Good Then Exit;
+  IsPdfAi := True;
+ End Else Begin
+  If Legacy Then Good := ReadLegacyDocument(Name)
+  Else Good := ReadIllustratorDocument(Name);
+  If (Not Good) And Not Legacy Then Begin
+   { import strict refuse : on retente avec l'interprete tolerant }
+   Err0 := ImportError; ImportError := ''; ImpClear;
+   Good := ReadPsAiLenient(Name);
+   If Not Good Then ImportError := Err0;
+  End;
  End;
- If Legacy Then Good := ReadLegacyDocument(Name)
- Else Good := ReadIllustratorDocument(Name);
  If Not Good Then Exit;
- For I := 0 To ImportCount-1 Do Objects[I] := ImportObjects[I];
- ObjectCount := ImportCount;
+ AdoptImport;
+ ClearHistory;
  SelectedObject := -1; CurrentFile := Name; FileModified := False;
  If Legacy Then CurrentSaveFormat := 2
  Else Begin
@@ -3214,6 +5014,11 @@ Begin
  End;
  ResetZoom; NeedsRedraw := True;
  If Legacy Then StatusMessage := 'Format prive AI10 charge (pas Adobe Illustrator).'
+ Else If IsPdfAi Then Begin
+  StatusMessage := 'AI/PDF importe : couleurs VGA, courbes aplaties, 1re page.';
+  {$IFDEF FPC}
+  {$ENDIF}
+ End
  Else StatusMessage := 'AI classique importe : couleurs VGA, courbes approximees, traits fins.';
  LoadDocument := True;
 End;
@@ -3277,7 +5082,7 @@ Begin
  Writeln(F,'%%EndProlog');
  Writeln(F,'1 setlinewidth');
  For I := 0 To ObjectCount-1 Do Begin
-  Obj := Objects[I];
+  Obj := ObjAt(I)^;
   If Obj.Visible Then Case Obj.ObjType Of
    OBJ_RECT: Begin
     Color(Obj.Rectangle.StrokeColor,'RG');
@@ -3359,7 +5164,7 @@ Begin
  BlockWrite(F,ObjectCount,2,Got); Code := IOResult; Good := Good And (Code=0) And (Got=2);
  For I := 0 To ObjectCount-1 Do Begin
   If Not Good Then Break;
-  BlockWrite(F,Objects[I],SizeOf(TGraphicObject),Got); Code := IOResult;
+  BlockWrite(F,ObjAt(I)^,SizeOf(TGraphicObject),Got); Code := IOResult;
   Good := (Code=0) And (Got=SizeOf(TGraphicObject));
  End;
  Close(F); CloseCode := IOResult;
@@ -3401,7 +5206,7 @@ Begin
   ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT,'">');
  Writeln(F,'<title>CloneDRAW vector export</title>');
  For I := 0 To ObjectCount-1 Do Begin
-  Obj := Objects[I];
+  Obj := ObjAt(I)^;
   If Obj.Visible Then Case Obj.ObjType Of
    OBJ_RECT:
     Writeln(F,'<rect x="',Num(Obj.Rectangle.X),'" y="',Num(Obj.Rectangle.Y),
@@ -3771,7 +5576,7 @@ Var F: File; Good: Boolean; Code, CloseCode, I, J, VisibleCount: Integer;
  Procedure WriteObject(Index: Integer);
  Var P, G, L: LongInt; Size: LongInt;
  Begin
-  Obj := Objects[Index]; Mode := 0; NumPoints := 0; Geometry;
+  Obj := ObjAt(Index)^; Mode := 0; NumPoints := 0; Geometry;
   If NumPoints=0 Then Exit;
   If NumPoints>65535 Then Begin
    Good := False; SaveError := 'CDR9 : trop de noeuds dans un objet.'; Exit;
@@ -3797,7 +5602,7 @@ Begin
  {$I-} Assign(F,Name); Rewrite(F,1); Code := IOResult; {$I+}
  If Code<>0 Then Begin SaveError := 'Creation CDR9 impossible.'; Exit; End;
  Good := True; VisibleCount := 0;
- For I := 0 To ObjectCount-1 Do If Objects[I].Visible Then Inc(VisibleCount);
+ For I := 0 To ObjectCount-1 Do If ObjAt(I)^.Visible Then Inc(VisibleCount);
  RootPos := Chunk('RIFF'); StringBytes('CDR9');
  EntryPos := Chunk('vrsn'); WordValue(900); EndChunk(EntryPos);
  DocPos := List('doc '); EntryPos := Chunk('mcfg');
@@ -3838,8 +5643,8 @@ Begin
  For I := 0 To 16 Do Begin LongValue(2000+I); LongValue(0); LongValue(I+1); End;
  For I := 1 To 10 Do LongValue(0);
  StyleRecord(3000,0,16,0,True); StyleRecord(3001,3000,16,0,False);
- For I := 0 To ObjectCount-1 Do If Objects[I].Visible Then Begin
-  Obj := Objects[I]; ObjectColors;
+ For I := 0 To ObjectCount-1 Do If ObjAt(I)^.Visible Then Begin
+  Obj := ObjAt(I)^; ObjectColors;
   StyleRecord(3100+I,3000,FillIndex,LineIndex,False);
  End;
  EndChunk(TablePos); EndChunk(DocPos);
@@ -3862,7 +5667,7 @@ Begin
  LayerPos := List('layr'); LayerHeader(0,LongInt($98000000),'');
  { Les objets CDR sont stockes du premier plan vers l'arriere-plan. }
  For I := ObjectCount-1 DownTo 0 Do
-  If Objects[I].Visible And Good Then WriteObject(I);
+  If ObjAt(I)^.Visible And Good Then WriteObject(I);
  EndChunk(LayerPos); EmptyLayer(11,LongInt($9801011A),''); EndChunk(GroupPos);
  GroupPos := List('lgob'); EntryPos := Chunk('loda');
  LongValue(48); LongValue(2); LongValue(20); LongValue(32); LongValue(0);
@@ -3898,12 +5703,12 @@ Var TempName, BackupName, S: String; F: File;
 
 Begin
  SaveDocument := False; SaveError := '';
- If (Format<0) Or (Format>7) Or (Name='') Or (ObjectCount>MAX_OBJECTS) Then Begin
+ If (Format<0) Or (Format>7) Or (Name='') Then Begin
   SaveError := 'Nom, format ou document invalide.'; Exit;
  End;
  If IsDirectory(Name) Then Begin SaveError := 'La cible est un dossier, pas un fichier.'; Exit; End;
  For I := 0 To ObjectCount-1 Do
-  If Not ValidImportObject(Objects[I]) Then Begin
+  If Not ValidImportObject(ObjAt(I)^) Then Begin
    SaveError := 'Objet invalide : enregistrement refuse.'; Exit;
   End;
  If Not FileExistsChecked(Name,HadFile) Then Begin
@@ -4023,7 +5828,7 @@ Begin
  FileSaveMode := False; FileOverwrite := False; CurrentSaveFormat := 0;
  FileExportMode := False;
  ResetZoom;
- ObjectCount := 0;
+ ClearObjects;
  SelectedObject := -1;
  CurrentTool := TOOL_SELECT;
  StrokeColor := 0;
@@ -4061,12 +5866,12 @@ Begin
  Layers[0].Locked := False;
  Layers[0].Opacity := 255;
  
- For I := 0 To MAX_OBJECTS - 1 Do
-  Objects[I].Visible := False;
 End;
 
 Procedure Cleanup;
 Begin
+ ClearObjects;
+ ClearHistory;
  CloseGraph;
  Writeln('Au revoir!');
 End;
@@ -4075,19 +5880,21 @@ Procedure ShowUsage;
 Begin
  WriteLn(PROGRAM_NAME,' : clone d''Adobe Illustrator (dessin vectoriel).');
  WriteLn;
- WriteLn('Syntaxe : AI [-maxscreen]');
+ WriteLn('Syntaxe : AI [-maxscreen] [fichier.ai|fichier.eps]');
  WriteLn;
  WriteLn('Options :');
  WriteLn('  -maxscreen           Utilise la resolution maximale disponible.');
 End;
 
 Var ArgI, C0: Integer;
-    Arg: String;
+    Arg, ArgFile: String;
 
 Begin
  MaxScreen := False;
+ ArgFile := '';
  For ArgI := 1 To ParamCount Do Begin
   Arg := ParamStr(ArgI);
+  If (ArgFile = '') And (Copy(Arg,1,1) <> '-') And (Copy(Arg,1,1) <> '/') Then ArgFile := Arg;
   For C0 := 1 To Length(Arg) Do Arg[C0] := UpCase(Arg[C0]);
   If (Arg = '-MAXSCREEN') Or (Arg = '/MAXSCREEN') Then MaxScreen := True
   Else If (Arg = '/?') Or (Arg = '-H') Or (Arg = '--HELP') Then Begin
@@ -4100,6 +5907,11 @@ Begin
  InitMenus;
  InitMouse;
  ShowMouse;
+ { Document passe en argument de ligne de commande }
+ If ArgFile <> '' Then Begin
+  If Not LoadDocument(ArgFile) Then StatusMessage := Copy(ImportError,1,75);
+  NeedsRedraw := True;
+ End;
  
  MainLoop;
  

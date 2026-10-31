@@ -74,6 +74,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 		<th>Nom</th>
 		<th>Description</th>	
 	</tr>
+	<tr>
+		<td><b>AI.PAS</b></td>
+		<td>Cette commande permet de lancer un clone d'Adobe Illustrator.</td>
+	</tr>
     <tr>
         <td><b>AUTOCAD.PAS</b></td>
         <td>Cette commande permet de lancer un clone de AutoCAD.</td>

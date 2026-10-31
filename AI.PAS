@@ -110,6 +110,12 @@ Const
  CMD_TRANSFORM = 33;
  CMD_OPS = 34;
  CMD_SELALL = 35;
+ CMD_PJOIN = 36;
+ CMD_PSPLIT = 37;
+ CMD_PCORNER = 38;
+ CMD_PSMOOTH = 39;
+ CMD_PSIMPL = 40;
+ CMD_POFFSET = 41;
  PROP_W = 460;
  PROP_H = 240;
  FD_MAX_ENTRIES = 512;
@@ -1309,6 +1315,8 @@ Type
 Var
  MarqueeActive: Boolean;
  MqX0, MqY0: Integer;
+ LastPickX, LastPickY: Real;
+ LastPickOk: Boolean;
 
 {$IFDEF FPC}
 {$IFDEF WIN32}
@@ -2228,6 +2236,7 @@ Begin
     If Hit < 0 Then Begin
      If Not Shift Then Begin ClearSelFlags; SelectedObject := -1; End;
      MarqueeActive := True; MqX0 := CanvasX; MqY0 := CanvasY;
+     LastPickOk := False;
      DrawingMode := True;
      StatusMessage := 'Glisser : selection par rectangle (Maj : ajouter).';
      Exit;
@@ -2242,6 +2251,7 @@ Begin
      SelectGroupOf(Hit);
     End;
     SelectedObject := Hit;
+    LastPickX := CanvasX; LastPickY := CanvasY; LastPickOk := True;
    End;
    If SelectedObject >= 0 Then Begin
     EditOriginal := ObjAt(SelectedObject)^;
@@ -2475,12 +2485,12 @@ Begin
  AddMenuItem(3, 'Distribuer...', CMD_DISTRIB);
  AddMenuItem(3, 'Transformer...', CMD_TRANSFORM);
  AddMenuItem(3, 'Operations...', CMD_OPS);
- AddMenuItem(4, 'Rejoindre', CMD_NONE);
- AddMenuItem(4, 'Scinder', CMD_NONE);
- AddMenuItem(4, 'Cont. Coin', CMD_NONE);
- AddMenuItem(4, 'Cont. Courbe', CMD_NONE);
- AddMenuItem(4, 'Simplifier', CMD_NONE);
- AddMenuItem(4, 'Decalage', CMD_NONE);
+ AddMenuItem(4, 'Rejoindre', CMD_PJOIN);
+ AddMenuItem(4, 'Scinder', CMD_PSPLIT);
+ AddMenuItem(4, 'Cont. Coin', CMD_PCORNER);
+ AddMenuItem(4, 'Cont. Courbe', CMD_PSMOOTH);
+ AddMenuItem(4, 'Simplifier...', CMD_PSIMPL);
+ AddMenuItem(4, 'Decalage...', CMD_POFFSET);
  AddMenuItem(5, 'Glyphes', CMD_NONE);
  AddMenuItem(5, 'Texte a chemin', CMD_NONE);
  AddMenuItem(5, 'Chemin a texte', CMD_NONE);
@@ -3295,6 +3305,693 @@ Begin
  NeedsRedraw := True;
 End;
 
+{ ------------------------------------------------------------------
+  Menu Chemin : Rejoindre, Scinder, Cont. Coin, Cont. Courbe,
+  Simplifier, Decalage
+  ------------------------------------------------------------------ }
+Const
+ CH_SIMPLIFY = 4;
+ CH_OFFSET = 5;
+
+Type
+ TPoly = Record
+  N: Integer;
+  Closed: Boolean;
+  P: Array[0..99] Of TPoint2D;
+ End;
+ TKeep = Array[0..99] Of Boolean;
+
+Function PageW: Integer;
+Begin
+ PageW := ScreenWidth-TOOLBAR_WIDTH;
+End;
+
+Function PageH: Integer;
+Begin
+ PageH := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT;
+End;
+
+Function Dist2(X1, Y1, X2, Y2: Real): Real;
+Begin
+ Dist2 := Sqrt(Sqr(X2-X1)+Sqr(Y2-Y1));
+End;
+
+Function ObjFill(Var O: TGraphicObject): Integer;
+Begin
+ Case O.ObjType Of
+  OBJ_RECT: ObjFill := O.Rectangle.FillColor;
+  OBJ_ELLIPSE: ObjFill := O.Ellipse.FillColor;
+  OBJ_FILLED_PATH: ObjFill := O.Path.FillColor;
+ Else ObjFill := 15;
+ End;
+End;
+
+Function ObjStroke(Var O: TGraphicObject): Integer;
+Begin
+ Case O.ObjType Of
+  OBJ_RECT: ObjStroke := O.Rectangle.StrokeColor;
+  OBJ_ELLIPSE: ObjStroke := O.Ellipse.StrokeColor;
+  OBJ_LINE: ObjStroke := O.Line.StrokeColor;
+  OBJ_TEXT: ObjStroke := O.TextObj.Color;
+ Else ObjStroke := O.Path.StrokeColor;
+ End;
+End;
+
+Function ObjWidthOf(Var O: TGraphicObject): Real;
+Begin
+ Case O.ObjType Of
+  OBJ_RECT: ObjWidthOf := O.Rectangle.StrokeWidth;
+  OBJ_ELLIPSE: ObjWidthOf := O.Ellipse.StrokeWidth;
+  OBJ_LINE: ObjWidthOf := O.Line.StrokeWidth;
+ Else ObjWidthOf := O.Path.StrokeWidth;
+ End;
+End;
+
+{ objet -> suite de points (lignes, chemins, courbes aplaties, rectangles, ellipses) }
+Function ObjToPoly(Var O: TGraphicObject; Var Q: TPoly): Boolean;
+Var T: TGraphicObject; I: Integer; B: TPoint2D;
+Begin
+ ObjToPoly := False;
+ FillChar(Q,SizeOf(Q),0);
+ Case O.ObjType Of
+  OBJ_LINE: Begin
+   Q.N := 2;
+   Q.P[0].X := O.Line.X1; Q.P[0].Y := O.Line.Y1;
+   Q.P[1].X := O.Line.X2; Q.P[1].Y := O.Line.Y2;
+   ObjToPoly := True;
+  End;
+  OBJ_PATH, OBJ_FILLED_PATH: Begin
+   Q.N := O.Path.PointCount;
+   Q.Closed := O.Path.Closed;
+   For I := 0 To Q.N-1 Do Begin
+    Q.P[I].X := O.Path.Points[I].X; Q.P[I].Y := O.Path.Points[I].Y;
+   End;
+   ObjToPoly := Q.N >= 2;
+  End;
+  OBJ_BEZIER: Begin
+   Q.N := 17;
+   For I := 0 To 16 Do Begin
+    B := BezierPoint(O,I/16);
+    Q.P[I].X := Round(B.X*1000)/1000; Q.P[I].Y := Round(B.Y*1000)/1000;
+   End;
+   ObjToPoly := True;
+  End;
+  OBJ_RECT, OBJ_ELLIPSE: Begin
+   T := O;
+   ConvertToPath(T);
+   ObjToPoly := ObjToPoly(T,Q);
+  End;
+ End;
+End;
+
+{ suite de points -> objet, avec les attributs de Proto }
+Procedure PolyToObj(Var Q: TPoly; Var Proto, Dst: TGraphicObject);
+Var I: Integer; Fill: Integer; G: LongInt; Fl: Boolean;
+Begin
+ G := GroupOfObj(Proto);
+ Fl := SelFlagPtr(Proto)^;
+ FillChar(Dst,SizeOf(Dst),0);
+ Dst.Visible := Proto.Visible;
+ Dst.LayerIndex := Proto.LayerIndex;
+ If (Q.N = 2) And Not Q.Closed And (Proto.ObjType = OBJ_LINE) Then Begin
+  Dst.ObjType := OBJ_LINE;
+  Dst.Line.X1 := Q.P[0].X; Dst.Line.Y1 := Q.P[0].Y;
+  Dst.Line.X2 := Q.P[1].X; Dst.Line.Y2 := Q.P[1].Y;
+  Dst.Line.StrokeColor := Proto.Line.StrokeColor;
+  Dst.Line.StrokeWidth := Proto.Line.StrokeWidth;
+ End Else Begin
+  Fill := ObjFill(Proto);
+  If Fill <> 15 Then Dst.ObjType := OBJ_FILLED_PATH Else Dst.ObjType := OBJ_PATH;
+  Dst.Path.PointCount := Q.N;
+  Dst.Path.Closed := Q.Closed;
+  For I := 0 To Q.N-1 Do Begin
+   Dst.Path.Points[I].X := Q.P[I].X; Dst.Path.Points[I].Y := Q.P[I].Y;
+  End;
+  Dst.Path.StrokeColor := ObjStroke(Proto);
+  Dst.Path.FillColor := Fill;
+  Dst.Path.StrokeWidth := ObjWidthOf(Proto);
+ End;
+ SetGroupOfObj(Dst,G);
+ SelFlagPtr(Dst)^ := Fl;
+End;
+
+Procedure ClampPoly(Var Q: TPoly);
+Var I: Integer;
+Begin
+ For I := 0 To Q.N-1 Do Begin
+  Q.P[I].X := Round(MaxReal(0,MinReal(PageW-1,Q.P[I].X))*1000)/1000;
+  Q.P[I].Y := Round(MaxReal(0,MinReal(PageH-1,Q.P[I].Y))*1000)/1000;
+ End;
+End;
+
+Function PolyInPage(Var Q: TPoly): Boolean;
+Var I: Integer; R: Boolean;
+Begin
+ R := True;
+ For I := 0 To Q.N-1 Do
+  If (Q.P[I].X < 0) Or (Q.P[I].Y < 0) Or (Q.P[I].X >= PageW) Or
+     (Q.P[I].Y >= PageH) Then R := False;
+ PolyInPage := R;
+End;
+
+Procedure RevPoly(Var Q: TPoly);
+Var I: Integer; T: TPoint2D;
+Begin
+ For I := 0 To (Q.N Div 2)-1 Do Begin
+  T := Q.P[I]; Q.P[I] := Q.P[Q.N-1-I]; Q.P[Q.N-1-I] := T;
+ End;
+End;
+
+{ memoire des operations : l'etat d'avant est empile en annulation seulement
+  si l'operation a vraiment modifie le dessin }
+Function BeginOp(Var S0: TSnapshot): Boolean;
+Begin
+ BeginOp := TakeSnapshot(S0);
+ If S0.Data = Nil Then S0.Count := S0.Count;
+End;
+
+Procedure EndOp(Var S0: TSnapshot; Changed: Boolean);
+Var S1: TSnapshot;
+Begin
+ If Changed Then Begin
+  If TakeSnapshot(S1) Then Begin
+   RestoreSnapshot(S0);
+   PushUndo;
+   RestoreSnapshot(S1);
+   FreeSnapshot(S1);
+  End;
+  FileModified := True;
+ End;
+ FreeSnapshot(S0);
+ NeedsRedraw := True;
+End;
+
+{ ---- Rejoindre ---- }
+Function MergePoly(Var C, D: TPoly; Mode: Integer): Boolean;
+Var A, B, R: TPoly; I, Skip: Integer;
+Begin
+ MergePoly := False;
+ Case Mode Of
+  0: Begin A := C; B := D; End;
+  1: Begin A := C; B := D; RevPoly(B); End;
+  2: Begin A := D; B := C; End;
+ Else Begin A := D; RevPoly(A); B := C; End;
+ End;
+ Skip := 0;
+ If Dist2(A.P[A.N-1].X,A.P[A.N-1].Y,B.P[0].X,B.P[0].Y) < 0.5 Then Skip := 1;
+ If A.N+B.N-Skip > 100 Then Exit;
+ R := A;
+ R.Closed := False;
+ For I := Skip To B.N-1 Do Begin
+  R.P[R.N] := B.P[I]; Inc(R.N);
+ End;
+ C := R;
+ MergePoly := True;
+End;
+
+Procedure JoinCommand;
+Var Idx, Used: PLongArr; N, J, Target, Best, Mode, Cnt, Moved: LongInt;
+    S0: TSnapshot; C, D: TPoly; Proto, NewO: TGraphicObject; BD, D1, D2, D3, D4, M: Real;
+    Fail, Found: Boolean;
+Begin
+ Idx := CollectSel(N);
+ If Idx = Nil Then Begin
+  StatusMessage := 'Rejoindre : aucun chemin selectionne.';
+  Exit;
+ End;
+ GetMem(Used,N*4);
+ Target := -1;
+ For J := 0 To N-1 Do Begin
+  Used^[J] := 2;
+  If ObjAt(Idx^[J])^.ObjType <> OBJ_TEXT Then
+   If ObjToPoly(ObjAt(Idx^[J])^,D) Then
+    If Not D.Closed Then Begin
+     Used^[J] := 0;
+     If Target < 0 Then Target := J;
+    End;
+ End;
+ If Target < 0 Then Begin
+  FreeMem(Used,N*4); FreeMem(Idx,N*4);
+  StatusMessage := 'Rejoindre : aucun chemin ouvert dans la selection.';
+  Exit;
+ End;
+ Proto := ObjAt(Idx^[Target])^;
+ ObjToPoly(Proto,C);
+ Used^[Target] := 1; Cnt := 1; Fail := False;
+ Repeat
+  Found := False; BD := 1E30; Best := -1; Mode := 0;
+  For J := 0 To N-1 Do
+   If Used^[J] = 0 Then Begin
+    ObjToPoly(ObjAt(Idx^[J])^,D);
+    D1 := Dist2(C.P[C.N-1].X,C.P[C.N-1].Y,D.P[0].X,D.P[0].Y);
+    D2 := Dist2(C.P[C.N-1].X,C.P[C.N-1].Y,D.P[D.N-1].X,D.P[D.N-1].Y);
+    D3 := Dist2(C.P[0].X,C.P[0].Y,D.P[D.N-1].X,D.P[D.N-1].Y);
+    D4 := Dist2(C.P[0].X,C.P[0].Y,D.P[0].X,D.P[0].Y);
+    M := D1; If D2 < M Then M := D2; If D3 < M Then M := D3; If D4 < M Then M := D4;
+    If M < BD Then Begin
+     BD := M; Best := J; Found := True;
+     If M = D1 Then Mode := 0 Else If M = D2 Then Mode := 1
+     Else If M = D3 Then Mode := 2 Else Mode := 3;
+    End;
+   End;
+  If Found Then Begin
+   ObjToPoly(ObjAt(Idx^[Best])^,D);
+   If MergePoly(C,D,Mode) Then Begin Used^[Best] := 1; Inc(Cnt); End
+   Else Fail := True;
+  End;
+ Until Not Found Or Fail;
+ If Fail Then Begin
+  FreeMem(Used,N*4); FreeMem(Idx,N*4);
+  StatusMessage := 'Rejoindre : plus de 100 points au total.';
+  Exit;
+ End;
+ If Cnt = 1 Then Begin
+  If C.N < 3 Then Begin
+   FreeMem(Used,N*4); FreeMem(Idx,N*4);
+   StatusMessage := 'Rejoindre : un chemin a refermer doit avoir trois points.';
+   Exit;
+  End;
+  If Dist2(C.P[0].X,C.P[0].Y,C.P[C.N-1].X,C.P[C.N-1].Y) < 0.5 Then Dec(C.N);
+  C.Closed := True;
+ End;
+ If Not BeginOp(S0) Then Begin
+  FreeMem(Used,N*4); FreeMem(Idx,N*4);
+  StatusMessage := 'Memoire insuffisante.';
+  Exit;
+ End;
+ PolyToObj(C,Proto,NewO);
+ NewO.Visible := True;
+ ObjAt(Idx^[Target])^ := NewO;
+ Moved := 0;
+ For J := N-1 DownTo 0 Do
+  If (Used^[J] = 1) And (J <> Target) Then Begin
+   DeleteObjectAt(Idx^[J]);
+   If J < Target Then Inc(Moved);
+  End;
+ ClearSelFlags;
+ SelectedObject := Idx^[Target]-Moved;
+ SelFlagPtr(ObjAt(SelectedObject)^)^ := True;
+ If Cnt = 1 Then StatusMessage := 'Chemin referme.'
+ Else StatusMessage := 'Chemins rejoints.';
+ FreeMem(Used,N*4); FreeMem(Idx,N*4);
+ EndOp(S0,True);
+End;
+
+{ ---- Scinder ---- }
+Function NearestOnPoly(Var Q: TPoly; PX, PY: Real; Var Seg: Integer; Var U, QX, QY: Real): Boolean;
+Var I, J, Cnt: Integer; DX, DY, D, T, X, Y, BestD: Real;
+Begin
+ NearestOnPoly := False;
+ BestD := 1E30;
+ Cnt := Q.N-1;
+ If Q.Closed Then Cnt := Q.N;
+ For I := 0 To Cnt-1 Do Begin
+  J := (I+1) Mod Q.N;
+  DX := Q.P[J].X-Q.P[I].X; DY := Q.P[J].Y-Q.P[I].Y;
+  D := Sqr(DX)+Sqr(DY);
+  T := 0;
+  If D > 0 Then T := ((PX-Q.P[I].X)*DX+(PY-Q.P[I].Y)*DY)/D;
+  T := MaxReal(0,MinReal(1,T));
+  X := Q.P[I].X+T*DX; Y := Q.P[I].Y+T*DY;
+  If Sqr(PX-X)+Sqr(PY-Y) < BestD Then Begin
+   BestD := Sqr(PX-X)+Sqr(PY-Y);
+   Seg := I; U := T; QX := X; QY := Y;
+   NearestOnPoly := True;
+  End;
+ End;
+End;
+
+Procedure AddPt(Var Q: TPoly; X, Y: Real);
+Begin
+ If Q.N > 0 Then
+  If Dist2(Q.P[Q.N-1].X,Q.P[Q.N-1].Y,X,Y) < 0.5 Then Exit;
+ If Q.N >= 100 Then Exit;
+ FillChar(Q.P[Q.N],SizeOf(TPoint2D),0);
+ Q.P[Q.N].X := Round(X*1000)/1000; Q.P[Q.N].Y := Round(Y*1000)/1000;
+ Inc(Q.N);
+End;
+
+Procedure SplitCommand;
+Var O, A, B, Proto: TGraphicObject; Q, QA, QB: TPoly; Seg, I, K: Integer;
+    U, QX, QY, PX, PY, BT, T, BD, D: Real; S0: TSnapshot; Bz: TBounds;
+    P0, P1, P2, P3, Pa, Pb, Pc, Pd, Pe, Pf: TPoint2D;
+Begin
+ If (SelectedObject < 0) Or (SelectedObject >= ObjectCount) Then Begin
+  StatusMessage := 'Scinder : selectionner un chemin (cliquer pres du point de coupe).';
+  Exit;
+ End;
+ Proto := ObjAt(SelectedObject)^;
+ If Proto.ObjType = OBJ_TEXT Then Begin
+  StatusMessage := 'Scinder : ne s''applique pas au texte.';
+  Exit;
+ End;
+ If LastPickOk Then Begin PX := LastPickX; PY := LastPickY; End
+ Else Begin
+  Bz := ObjectBounds(Proto);
+  PX := (Bz.L+Bz.R)/2; PY := (Bz.T+Bz.B)/2;
+ End;
+ If Proto.ObjType = OBJ_BEZIER Then Begin
+  BT := 0.5; BD := 1E30;
+  For K := 1 To 63 Do Begin
+   T := K/64;
+   Pa := BezierPoint(Proto,T);
+   D := Sqr(Pa.X-PX)+Sqr(Pa.Y-PY);
+   If D < BD Then Begin BD := D; BT := T; End;
+  End;
+  P0 := Proto.Path.Points[0]; P1 := Proto.Path.Points[1];
+  P2 := Proto.Path.Points[2]; P3 := Proto.Path.Points[3];
+  Pa.X := P0.X+(P1.X-P0.X)*BT; Pa.Y := P0.Y+(P1.Y-P0.Y)*BT;
+  Pb.X := P1.X+(P2.X-P1.X)*BT; Pb.Y := P1.Y+(P2.Y-P1.Y)*BT;
+  Pc.X := P2.X+(P3.X-P2.X)*BT; Pc.Y := P2.Y+(P3.Y-P2.Y)*BT;
+  Pd.X := Pa.X+(Pb.X-Pa.X)*BT; Pd.Y := Pa.Y+(Pb.Y-Pa.Y)*BT;
+  Pe.X := Pb.X+(Pc.X-Pb.X)*BT; Pe.Y := Pb.Y+(Pc.Y-Pb.Y)*BT;
+  Pf.X := Pd.X+(Pe.X-Pd.X)*BT; Pf.Y := Pd.Y+(Pe.Y-Pd.Y)*BT;
+  A := Proto; B := Proto;
+  A.Path.Points[1] := Pa; A.Path.Points[2] := Pd; A.Path.Points[3] := Pf;
+  B.Path.Points[0] := Pf; B.Path.Points[1] := Pe; B.Path.Points[2] := Pc;
+  If Not BeginOp(S0) Then Exit;
+  ObjAt(SelectedObject)^ := A;
+  AppendObject(B);
+  StatusMessage := 'Courbe scindee en deux.';
+  EndOp(S0,True);
+  Exit;
+ End;
+ If Not ObjToPoly(Proto,Q) Then Begin
+  StatusMessage := 'Scinder : objet non applicable.';
+  Exit;
+ End;
+ If Not NearestOnPoly(Q,PX,PY,Seg,U,QX,QY) Then Exit;
+ FillChar(QA,SizeOf(QA),0); FillChar(QB,SizeOf(QB),0);
+ If Q.Closed Then Begin
+  { le chemin ferme est ouvert au point de coupe }
+  If Q.N+2 > 100 Then Begin
+   StatusMessage := 'Scinder : trop de points.';
+   Exit;
+  End;
+  AddPt(QA,QX,QY);
+  For I := 1 To Q.N Do AddPt(QA,Q.P[(Seg+I) Mod Q.N].X,Q.P[(Seg+I) Mod Q.N].Y);
+  AddPt(QA,QX,QY);
+  If QA.N < 3 Then Begin StatusMessage := 'Scinder : chemin trop court.'; Exit; End;
+  If Not BeginOp(S0) Then Exit;
+  PolyToObj(QA,Proto,A);
+  ObjAt(SelectedObject)^ := A;
+  StatusMessage := 'Chemin ferme ouvert au point de coupe.';
+  EndOp(S0,True);
+  Exit;
+ End;
+ For I := 0 To Seg Do AddPt(QA,Q.P[I].X,Q.P[I].Y);
+ AddPt(QA,QX,QY);
+ AddPt(QB,QX,QY);
+ For I := Seg+1 To Q.N-1 Do AddPt(QB,Q.P[I].X,Q.P[I].Y);
+ If (QA.N < 2) Or (QB.N < 2) Then Begin
+  StatusMessage := 'Scinder : cliquer sur le chemin, loin de ses extremites.';
+  Exit;
+ End;
+ If Not BeginOp(S0) Then Exit;
+ PolyToObj(QA,Proto,A);
+ PolyToObj(QB,Proto,B);
+ ObjAt(SelectedObject)^ := A;
+ AppendObject(B);
+ StatusMessage := 'Chemin scinde en deux.';
+ EndOp(S0,True);
+End;
+
+{ ---- Cont. Coin / Cont. Courbe ---- }
+Procedure CornerCommand;
+Var I, N: Integer; S0: TSnapshot; S: String;
+Begin
+ N := 0;
+ If Not BeginOp(S0) Then Exit;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And (ObjAt(I)^.ObjType = OBJ_BEZIER) Then Begin
+   ObjAt(I)^.Path.Points[1].X := ObjAt(I)^.Path.Points[0].X;
+   ObjAt(I)^.Path.Points[1].Y := ObjAt(I)^.Path.Points[0].Y;
+   ObjAt(I)^.Path.Points[2].X := ObjAt(I)^.Path.Points[3].X;
+   ObjAt(I)^.Path.Points[2].Y := ObjAt(I)^.Path.Points[3].Y;
+   Inc(N);
+  End;
+ If N = 0 Then Begin
+  StatusMessage := 'Cont. Coin : selectionner une courbe de Bezier (les autres chemins n''ont que des coins).';
+  EndOp(S0,False);
+  Exit;
+ End;
+ Str(N,S);
+ StatusMessage := S+' courbe(s) ramenee(s) a des coins (poignees rentrees).';
+ EndOp(S0,True);
+End;
+
+Procedure SmoothPath(Var Q: TPoly; Var R: TPoly; Var Ok: Boolean);
+Var Segs, Steps, I, J, K: Integer; T, T2, T3, X, Y: Real;
+    A, B, C, D: TPoint2D;
+Begin
+ Ok := False;
+ FillChar(R,SizeOf(R),0);
+ If Q.N < 3 Then Exit;
+ Segs := Q.N-1;
+ If Q.Closed Then Segs := Q.N;
+ Steps := 99 Div Segs;
+ If Steps > 6 Then Steps := 6;
+ If Steps < 2 Then Exit;
+ R.Closed := Q.Closed;
+ For I := 0 To Segs-1 Do Begin
+  If Q.Closed Then Begin
+   A := Q.P[(I+Q.N-1) Mod Q.N]; B := Q.P[I]; C := Q.P[(I+1) Mod Q.N]; D := Q.P[(I+2) Mod Q.N];
+  End Else Begin
+   If I = 0 Then A := Q.P[0] Else A := Q.P[I-1];
+   B := Q.P[I]; C := Q.P[I+1];
+   If I+2 > Q.N-1 Then D := Q.P[Q.N-1] Else D := Q.P[I+2];
+  End;
+  For J := 0 To Steps-1 Do Begin
+   T := J/Steps; T2 := T*T; T3 := T2*T;
+   X := 0.5*((2*B.X)+(-A.X+C.X)*T+(2*A.X-5*B.X+4*C.X-D.X)*T2+(-A.X+3*B.X-3*C.X+D.X)*T3);
+   Y := 0.5*((2*B.Y)+(-A.Y+C.Y)*T+(2*A.Y-5*B.Y+4*C.Y-D.Y)*T2+(-A.Y+3*B.Y-3*C.Y+D.Y)*T3);
+   FillChar(R.P[R.N],SizeOf(TPoint2D),0);
+   R.P[R.N].X := X; R.P[R.N].Y := Y;
+   Inc(R.N);
+  End;
+ End;
+ If Not Q.Closed Then Begin
+  FillChar(R.P[R.N],SizeOf(TPoint2D),0);
+  R.P[R.N].X := Q.P[Q.N-1].X; R.P[R.N].Y := Q.P[Q.N-1].Y;
+  Inc(R.N);
+ End;
+ ClampPoly(R);
+ Ok := True;
+End;
+
+Procedure CurveCommand;
+Var I, N, Skipped: Integer; S0: TSnapshot; S: String; Q, R: TPoly; Ok: Boolean;
+    O, NewO: TGraphicObject; DX, DY, L, NX, NY: Real; P0, P3: TPoint2D;
+Begin
+ N := 0; Skipped := 0;
+ If Not BeginOp(S0) Then Exit;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) Then Begin
+   O := ObjAt(I)^;
+   If O.ObjType = OBJ_BEZIER Then Begin
+    P0 := O.Path.Points[0]; P3 := O.Path.Points[3];
+    DX := P3.X-P0.X; DY := P3.Y-P0.Y;
+    L := Sqrt(Sqr(DX)+Sqr(DY));
+    If L > 1 Then Begin
+     NX := -DY/L; NY := DX/L;
+     O.Path.Points[1].X := P0.X+DX/3+NX*L/4; O.Path.Points[1].Y := P0.Y+DY/3+NY*L/4;
+     O.Path.Points[2].X := P3.X-DX/3+NX*L/4; O.Path.Points[2].Y := P3.Y-DY/3+NY*L/4;
+     R.N := 0;
+     O.Path.Points[1].X := MaxReal(0,MinReal(PageW-1,O.Path.Points[1].X));
+     O.Path.Points[1].Y := MaxReal(0,MinReal(PageH-1,O.Path.Points[1].Y));
+     O.Path.Points[2].X := MaxReal(0,MinReal(PageW-1,O.Path.Points[2].X));
+     O.Path.Points[2].Y := MaxReal(0,MinReal(PageH-1,O.Path.Points[2].Y));
+     ObjAt(I)^ := O;
+     Inc(N);
+    End;
+   End Else If O.ObjType In [OBJ_PATH,OBJ_FILLED_PATH] Then Begin
+    ObjToPoly(O,Q);
+    SmoothPath(Q,R,Ok);
+    If Ok Then Begin
+     PolyToObj(R,O,NewO);
+     NewO.Path.StrokeWidth := O.Path.StrokeWidth;
+     NewO.ObjType := O.ObjType;
+     NewO.Path.FillColor := O.Path.FillColor;
+     ObjAt(I)^ := NewO;
+     Inc(N);
+    End Else Inc(Skipped);
+   End;
+  End;
+ If N = 0 Then Begin
+  If Skipped > 0 Then StatusMessage := 'Cont. Courbe : chemin trop court ou trop de points (max 100).'
+  Else StatusMessage := 'Cont. Courbe : selectionner un chemin ou une courbe.';
+  EndOp(S0,False);
+  Exit;
+ End;
+ Str(N,S);
+ StatusMessage := S+' objet(s) lisse(s) en courbe.';
+ EndOp(S0,True);
+End;
+
+{ ---- Simplifier (Douglas-Peucker) ---- }
+Procedure DPSimplify(Var Q: TPoly; Var Keep: TKeep; Lo, Hi: Integer; Eps: Real);
+Var I, Far: Integer; DX, DY, D, T, X, Y, M, L2: Real;
+Begin
+ If Hi <= Lo+1 Then Exit;
+ DX := Q.P[Hi].X-Q.P[Lo].X; DY := Q.P[Hi].Y-Q.P[Lo].Y;
+ L2 := Sqr(DX)+Sqr(DY);
+ M := -1; Far := Lo;
+ For I := Lo+1 To Hi-1 Do Begin
+  T := 0;
+  If L2 > 0 Then T := ((Q.P[I].X-Q.P[Lo].X)*DX+(Q.P[I].Y-Q.P[Lo].Y)*DY)/L2;
+  T := MaxReal(0,MinReal(1,T));
+  X := Q.P[Lo].X+T*DX; Y := Q.P[Lo].Y+T*DY;
+  D := Sqrt(Sqr(Q.P[I].X-X)+Sqr(Q.P[I].Y-Y));
+  If D > M Then Begin M := D; Far := I; End;
+ End;
+ If M > Eps Then Begin
+  Keep[Far] := True;
+  DPSimplify(Q,Keep,Lo,Far,Eps);
+  DPSimplify(Q,Keep,Far,Hi,Eps);
+ End;
+End;
+
+Procedure SimplifySelection(Index: Integer);
+Var I, J, K, N, Removed: Integer; S0: TSnapshot; S: String; Q, R: TPoly; Keep: TKeep;
+    Eps: Real; O, NewO: TGraphicObject;
+Begin
+ Case Index Of
+  0: Eps := 1; 1: Eps := 2; 2: Eps := 4;
+ Else Eps := 8;
+ End;
+ N := 0; Removed := 0;
+ If Not BeginOp(S0) Then Exit;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And (ObjAt(I)^.ObjType In [OBJ_PATH,OBJ_FILLED_PATH]) Then Begin
+   O := ObjAt(I)^;
+   ObjToPoly(O,Q);
+   If Q.N >= 3 Then Begin
+    FillChar(Keep,SizeOf(Keep),0);
+    Keep[0] := True; Keep[Q.N-1] := True;
+    DPSimplify(Q,Keep,0,Q.N-1,Eps);
+    FillChar(R,SizeOf(R),0);
+    R.Closed := Q.Closed;
+    For J := 0 To Q.N-1 Do
+     If Keep[J] Then Begin R.P[R.N] := Q.P[J]; Inc(R.N); End;
+    If (R.N < Q.N) And (R.N >= 2) And (Not R.Closed Or (R.N >= 3)) Then Begin
+     PolyToObj(R,O,NewO);
+     NewO.ObjType := O.ObjType;
+     NewO.Path.FillColor := O.Path.FillColor;
+     ObjAt(I)^ := NewO;
+     Removed := Removed+(Q.N-R.N);
+     Inc(N);
+    End;
+   End;
+  End;
+ If N = 0 Then Begin
+  StatusMessage := 'Simplifier : aucun point a retirer (ou aucun chemin selectionne).';
+  EndOp(S0,False);
+  Exit;
+ End;
+ Str(Removed,S);
+ StatusMessage := 'Simplification : '+S+' point(s) retire(s).';
+ EndOp(S0,True);
+End;
+
+{ ---- Decalage ---- }
+Function OffsetPoly(Var Q: TPoly; D: Real; Var R: TPoly): Boolean;
+Var I, N: Integer; Area, X0, Y0, X1, Y1, X2, Y2, E1X, E1Y, E2X, E2Y, L1, L2,
+    N1X, N1Y, N2X, N2Y, BX, BY, BL, Cs, Sg, Miter: Real;
+Begin
+ OffsetPoly := False;
+ R := Q;
+ N := Q.N;
+ If N < 3 Then Exit;
+ Area := 0;
+ For I := 0 To N-1 Do
+  Area := Area+Q.P[I].X*Q.P[(I+1) Mod N].Y-Q.P[(I+1) Mod N].X*Q.P[I].Y;
+ If Area = 0 Then Exit;
+ If Area > 0 Then Sg := 1 Else Sg := -1;
+ For I := 0 To N-1 Do Begin
+  X0 := Q.P[(I+N-1) Mod N].X; Y0 := Q.P[(I+N-1) Mod N].Y;
+  X1 := Q.P[I].X; Y1 := Q.P[I].Y;
+  X2 := Q.P[(I+1) Mod N].X; Y2 := Q.P[(I+1) Mod N].Y;
+  E1X := X1-X0; E1Y := Y1-Y0; E2X := X2-X1; E2Y := Y2-Y1;
+  L1 := Sqrt(Sqr(E1X)+Sqr(E1Y)); L2 := Sqrt(Sqr(E2X)+Sqr(E2Y));
+  If L1 = 0 Then Begin E1X := E2X; E1Y := E2Y; L1 := L2; End;
+  If L2 = 0 Then Begin E2X := E1X; E2Y := E1Y; L2 := L1; End;
+  If (L1 = 0) Or (L2 = 0) Then Exit;
+  N1X := Sg*E1Y/L1; N1Y := -Sg*E1X/L1;
+  N2X := Sg*E2Y/L2; N2Y := -Sg*E2X/L2;
+  BX := N1X+N2X; BY := N1Y+N2Y;
+  BL := Sqrt(Sqr(BX)+Sqr(BY));
+  If BL < 0.0001 Then Begin BX := N1X; BY := N1Y; BL := 1; End;
+  BX := BX/BL; BY := BY/BL;
+  Cs := BX*N1X+BY*N1Y;
+  If Cs < 0.3 Then Cs := 0.3;
+  Miter := D/Cs;
+  R.P[I].X := Round((X1+BX*Miter)*1000)/1000;
+  R.P[I].Y := Round((Y1+BY*Miter)*1000)/1000;
+ End;
+ OffsetPoly := True;
+End;
+
+Procedure OffsetSelection(Index: Integer);
+Var I, N: Integer; D: Real; S0: TSnapshot; S: String; O, NewO: TGraphicObject;
+    Q, R: TPoly; Ok, Bad: Boolean; B: TBounds;
+Begin
+ Case Index Of
+  0: D := 4; 1: D := 10; 2: D := -4;
+ Else D := -10;
+ End;
+ N := 0; Bad := False;
+ If Not BeginOp(S0) Then Exit;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) Then Begin
+   O := ObjAt(I)^;
+   Ok := False;
+   Case O.ObjType Of
+    OBJ_RECT: Begin
+     If (O.Rectangle.Width+2*D > 1) And (O.Rectangle.Height+2*D > 1) Then Begin
+      O.Rectangle.X := O.Rectangle.X-D; O.Rectangle.Y := O.Rectangle.Y-D;
+      O.Rectangle.Width := O.Rectangle.Width+2*D;
+      O.Rectangle.Height := O.Rectangle.Height+2*D;
+      Ok := True;
+     End Else Bad := True;
+    End;
+    OBJ_ELLIPSE: Begin
+     If (O.Ellipse.RX+D > 1) And (O.Ellipse.RY+D > 1) Then Begin
+      O.Ellipse.RX := O.Ellipse.RX+D; O.Ellipse.RY := O.Ellipse.RY+D;
+      Ok := True;
+     End Else Bad := True;
+    End;
+    OBJ_PATH, OBJ_FILLED_PATH: Begin
+     If ObjToPoly(O,Q) And (O.Path.Closed Or (O.ObjType = OBJ_FILLED_PATH)) Then Begin
+      Q.Closed := True;
+      If OffsetPoly(Q,D,R) Then Begin
+       PolyToObj(R,O,NewO);
+       NewO.ObjType := O.ObjType;
+       NewO.Path.FillColor := O.Path.FillColor;
+       NewO.Path.Closed := O.Path.Closed;
+       O := NewO;
+       Ok := True;
+      End Else Bad := True;
+     End;
+    End;
+   End;
+   If Ok Then Begin
+    B := ObjectBounds(O);
+    If (B.L < 0) Or (B.T < 0) Or (B.R >= PageW) Or (B.B >= PageH) Then Bad := True
+    Else Begin ObjAt(I)^ := O; Inc(N); End;
+   End;
+  End;
+ If N = 0 Then Begin
+  If Bad Then StatusMessage := 'Decalage : resultat degenere ou hors de la page.'
+  Else StatusMessage := 'Decalage : selectionner un chemin ferme, un rectangle ou une ellipse.';
+  EndOp(S0,False);
+  Exit;
+ End;
+ Str(N,S);
+ StatusMessage := 'Decalage applique a '+S+' objet(s).';
+ If Bad Then StatusMessage := StatusMessage+' (certains ignores)';
+ EndOp(S0,True);
+End;
+
 { ---- boite de choix generique ---- }
 Procedure OpenChoice(Kind: Integer);
 Var N: Integer;
@@ -3309,6 +4006,9 @@ Begin
   End;
   CH_TRANSFORM: If N < 1 Then Begin
    StatusMessage := 'Transformer : aucun objet selectionne.'; Exit;
+  End;
+  CH_SIMPLIFY, CH_OFFSET: If N < 1 Then Begin
+   StatusMessage := 'Chemin : aucun objet selectionne.'; Exit;
   End;
  End;
  ChoiceKind := Kind;
@@ -3331,6 +4031,16 @@ Begin
    ChoiceItems[4] := 'Miroir horizontal'; ChoiceItems[5] := 'Miroir vertical';
    ChoiceItems[6] := 'Echelle 50 %'; ChoiceItems[7] := 'Echelle 200 %';
    ChoiceItems[8] := 'Echelle 90 %'; ChoiceItems[9] := 'Echelle 110 %';
+  End;
+  CH_SIMPLIFY: Begin
+   ChoiceCount := 4;
+   ChoiceItems[0] := 'Tolerance 1 px (faible)'; ChoiceItems[1] := 'Tolerance 2 px';
+   ChoiceItems[2] := 'Tolerance 4 px'; ChoiceItems[3] := 'Tolerance 8 px (forte)';
+  End;
+  CH_OFFSET: Begin
+   ChoiceCount := 4;
+   ChoiceItems[0] := 'Agrandir de 4 px'; ChoiceItems[1] := 'Agrandir de 10 px';
+   ChoiceItems[2] := 'Reduire de 4 px'; ChoiceItems[3] := 'Reduire de 10 px';
   End;
  Else Begin
   ChoiceCount := 6;
@@ -3356,6 +4066,8 @@ Begin
  Case K Of
   CH_ALIGN: AlignSelection(Index);
   CH_DISTRIB: DistributeSelection(Index);
+  CH_SIMPLIFY: SimplifySelection(Index);
+  CH_OFFSET: OffsetSelection(Index);
   CH_TRANSFORM: Case Index Of
    0: TransformSelection(TR_ROT,Pi/2);
    1: TransformSelection(TR_ROT,-Pi/2);
@@ -3402,6 +4114,8 @@ Begin
   CH_ALIGN: S := 'Aligner';
   CH_DISTRIB: S := 'Distribuer';
   CH_TRANSFORM: S := 'Transformer';
+  CH_SIMPLIFY: S := 'Simplifier';
+  CH_OFFSET: S := 'Decalage';
  Else S := 'Operations';
  End;
  OutTextXY(X+12,Y+10,S+' (clic, chiffre ou Echap)');
@@ -4144,6 +4858,12 @@ Begin
   CMD_TRANSFORM: OpenChoice(CH_TRANSFORM);
   CMD_OPS: OpenChoice(CH_OPS);
   CMD_SELALL: SelectAllCommand;
+  CMD_PJOIN: JoinCommand;
+  CMD_PSPLIT: SplitCommand;
+  CMD_PCORNER: CornerCommand;
+  CMD_PSMOOTH: CurveCommand;
+  CMD_PSIMPL: OpenChoice(CH_SIMPLIFY);
+  CMD_POFFSET: OpenChoice(CH_OFFSET);
   CMD_FRONT, CMD_BACK, CMD_FORWARD, CMD_BACKWARD: ArrangeObject(Command);
   CMD_RULERS: Begin
    RulersVisible := Not RulersVisible;

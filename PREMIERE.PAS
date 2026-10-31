@@ -23,21 +23,63 @@ Uses {$IFDEF FPC}
       DOS,Crt,Graph
      {$ENDIF};
 
+Var
+ MaxScreen: Boolean;      { -maxscreen : resolution maximale (Free Pascal seulement) }
+ SW, SH: Integer;         { Dimensions de l'ecran graphique }
+
+{ Meme selection que OUTLOOK.PAS : palette indexee et resolution maximale. }
+Procedure SelectScreenDriverMode(WantMaxScreen: Boolean;
+ Var Driver, Mode: Integer);
+{$IFDEF FPC}
+Var LoMode, HiMode: SmallInt;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+ If WantMaxScreen Then Begin
+  Driver := D8bit;
+  GetModeRange(Driver, LoMode, HiMode);
+  If HiMode >= LoMode Then Mode := HiMode
+  Else Begin Driver := Detect; Mode := 0; End;
+ End Else Begin
+  Driver := VGA;
+  Mode := VGAHi;
+ End;
+ {$ELSE}
+ Driver := Detect;
+ Mode := VGAHi;
+ {$ENDIF}
+End;
+
+{ Les seize couleurs de l'interface restent identiques dans le pilote D8bit. }
+Procedure InitializeScreenPalette;
+{$IFDEF FPC}
+Const
+ RGB: Array[0..15, 0..2] of Byte = (
+  (0,0,0), (0,0,170), (0,170,0), (0,170,170),
+  (170,0,0), (170,0,170), (170,85,0), (170,170,170),
+  (85,85,85), (85,85,255), (85,255,85), (85,255,255),
+  (255,85,85), (255,85,255), (255,255,85), (255,255,255));
+Var I: Integer;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+ If GetMaxColor > 15 Then
+  For I := 0 To 15 Do SetRGBPalette(I, RGB[I,0], RGB[I,1], RGB[I,2]);
+ {$ENDIF}
+End;
+
 Procedure InitializeGraphics;
 Var
  Driver, Mode: Integer;
  ErrCode: Integer;
 Begin
- {$IFDEF FPC}
-  Driver:=VGA;
-  Mode:=VGAHi;
- {$ELSE}
-  Driver:=Detect;
-  Mode:=VGAHi;
- {$ENDIF}
+ SelectScreenDriverMode(MaxScreen, Driver, Mode);
  InitGraph(Driver,Mode,'');
  ErrCode:=GraphResult;
  If ErrCode=grOk Then Begin
+  SW:=GetMaxX+1;
+  SH:=GetMaxY+1;
+  InitializeScreenPalette;
   SetColor(White);
   SetLineStyle(0,0,1);
  End
@@ -106,8 +148,6 @@ End;
 { ====================================================================== }
 
 Const
- SW = 640;            { Largeur de l'ecran }
- SH = 480;            { Hauteur de l'ecran }
  MENUH = 19;          { Hauteur de la barre de menus }
 
  { Dimensions de l'image des moniteurs (16:9) }
@@ -122,29 +162,6 @@ Const
  FRAMESZ = VW * VH;   { Taille d'une image du cache (RGB332) }
  CACHEHDR = 32;       { En-tete d'un fichier cache }
  NTRK = 6;            { V1,V2,V3,A1,A2,A3 }
-
- { Panneau A (Source / Controles des effets) }
- AX1 = 2;   AY1 = 40;  AX2 = 319; AY2 = 250;
- { Panneau B (Moniteur du programme) }
- BX1 = 321; BY1 = 40;  BX2 = 637; BY2 = 250;
- { Panneau C (Projet / Effets / Marqueurs) }
- CX1 = 2;   CY1 = 253; CX2 = 212; CY2 = 461;
- { Outils }
- TX1 = 214; TY1 = 253; TX2 = 235; TY2 = 461;
- { Chronologie }
- LX1 = 237; LY1 = 253; LX2 = 620; LY2 = 461;
- { Vumetres }
- MX1 = 622; MX2 = 637;
-
- { Zones internes de la chronologie }
- TLX0 = 299;          { Debut de la zone des pistes }
- TLX1 = 617;          { Fin de la zone des pistes }
- RULY1 = 273;         { Regle }
- RULY2 = 286;
- TRY0 = 288;          { Premiere piste }
- TRH = 26;            { Hauteur d'une piste }
- HSY1 = 446;          { Barre de defilement }
- HSY2 = 458;
 
  { Outils de montage }
  TL_SELECT = 0;
@@ -372,6 +389,17 @@ Const
   ('Assemblage','Montage','Couleur','Effets','Audio');
 
 Var
+ { Geometrie de l'interface (calculee par InitLayout selon la resolution) }
+ MZ: Integer;
+ AX1, AY1, AX2, AY2: Integer;
+ BX1, BY1, BX2, BY2: Integer;
+ CX1, CY1, CX2, CY2: Integer;
+ TX1, TY1, TX2, TY2: Integer;
+ LX1, LY1, LX2, LY2: Integer;
+ MX1, MX2: Integer;
+ TLX0, TLX1, RULY1, RULY2, TRY0, TRH, HSY1, HSY2: Integer;
+ PROWY0, EROWY0, CTLROWS: Integer;
+
  { Projet et historique }
  P: TProject;
  UndoStk: Array[0..MAXUNDO-1] Of PProject;
@@ -758,6 +786,53 @@ Begin
  A[O + 1] := (V Shr 8) And 255;
  A[O + 2] := (V Shr 16) And 255;
  A[O + 3] := (V Shr 24) And 255;
+End;
+
+{ Calcule la disposition des panneaux pour l'ecran SW x SH (640x480 = disposition de base) }
+Procedure InitLayout;
+Var
+ Z: Integer;
+Begin
+ MZ := 1;
+ For Z := 1 To 4 Do
+  If (VW * Z + 34 <= (SW - 6) Div 2) And
+     ((SH - 19) - (40 + 16 + VH * Z + 34 + 3) >= 208) Then MZ := Z;
+ AX1 := 2;
+ AX2 := SW Div 2 - 1;
+ BX1 := SW Div 2 + 1;
+ BX2 := SW - 3;
+ AY1 := 40;
+ BY1 := 40;
+ AY2 := AY1 + 16 + VH * MZ + 34;
+ BY2 := AY2;
+ CX1 := 2;
+ CX2 := 212;
+ If SW > 640 Then CX2 := 212 + Min(130, (SW - 640) Div 6);
+ CY1 := AY2 + 3;
+ CY2 := SH - 19;
+ TX1 := CX2 + 2;
+ TX2 := TX1 + 21;
+ TY1 := CY1;
+ TY2 := CY2;
+ LX1 := TX2 + 2;
+ LX2 := SW - 20;
+ LY1 := CY1;
+ LY2 := CY2;
+ MX1 := SW - 18;
+ MX2 := SW - 3;
+ TLX0 := LX1 + 62;
+ TLX1 := LX2 - 3;
+ RULY1 := CY1 + 20;
+ RULY2 := RULY1 + 13;
+ TRY0 := RULY2 + 2;
+ TRH := (CY2 - 3 - 12 - 2 - TRY0) Div 6;
+ If TRH < 26 Then TRH := 26;
+ If TRH > 90 Then TRH := 90;
+ HSY1 := TRY0 + 6 * TRH + 2;
+ HSY2 := HSY1 + 12;
+ PROWY0 := CY1 + 26;
+ EROWY0 := CY1 + 41;
+ CTLROWS := (AY2 - 2 - (AY1 + 45)) Div 12;
 End;
 
 { ====================================================================== }
@@ -1690,12 +1765,14 @@ End;
 
 Procedure RenderView(OX, OY, Q: Integer);
 Var
- X, Y: Integer;
+ X, Y, BS, PX, PY: Integer;
  C: Integer;
 Begin
+ BS := Q * MZ;
  Y := 0;
  While Y < VH Do Begin
   X := 0;
+  PY := OY + Y * MZ;
   While X < VW Do Begin
    If NLay = 0 Then Begin
     AR := 0;
@@ -1703,10 +1780,11 @@ Begin
     AB := 0;
    End Else Compose(X, Y);
    C := QuantColor(X, Y);
-   If Q <= 1 Then PutPixel(OX + X, OY + Y, C)
+   PX := OX + X * MZ;
+   If BS <= 1 Then PutPixel(PX, PY, C)
    Else Begin
     SetFillStyle(SolidFill, C);
-    Bar(OX + X, OY + Y, OX + X + Q - 1, OY + Y + Q - 1);
+    Bar(PX, PY, PX + BS - 1, PY + BS - 1);
    End;
    Inc(X, Q);
   End;
@@ -2319,7 +2397,7 @@ End;
 
 Function MonVX(IsProg: Boolean): Integer;
 Begin
- MonVX := MonX1(IsProg) + (MonX2(IsProg) - MonX1(IsProg) + 1 - VW) Div 2;
+ MonVX := MonX1(IsProg) + (MonX2(IsProg) - MonX1(IsProg) + 1 - VW * MZ) Div 2;
 End;
 
 Function MonVY: Integer;
@@ -2351,7 +2429,7 @@ End;
 
 Function MonBtnY: Integer;
 Begin
- MonBtnY := MonVY + VH + 13;
+ MonBtnY := MonVY + VH * MZ + 13;
 End;
 
 Function MonBtnIcon(IsProg: Boolean; I: Integer): Integer;
@@ -2395,21 +2473,21 @@ End;
 
 Function MonScrubHit(IsProg: Boolean; X, Y: LongInt): Boolean;
 Begin
- MonScrubHit := InRect(X, Y, MonVX(IsProg) - 4, MonVY + VH + 2, MonVX(IsProg) + VW + 4,
-                       MonVY + VH + 11);
+ MonScrubHit := InRect(X, Y, MonVX(IsProg) - 4, MonVY + VH * MZ + 2, MonVX(IsProg) + VW * MZ + 4,
+                       MonVY + VH * MZ + 11);
 End;
 
 Function MonScrubFrame(IsProg: Boolean; X: LongInt): LongInt;
 Var
  F: LongInt;
 Begin
- F := ((X - MonVX(IsProg)) * MonLen(IsProg)) Div VW;
+ F := ((X - MonVX(IsProg)) * MonLen(IsProg)) Div (VW * MZ);
  MonScrubFrame := Clamp(F, 0, MonLen(IsProg));
 End;
 
 Procedure DrawMonitor(IsProg: Boolean);
 Var
- X1, X2, VX, VY, I, Q, PX, BY: Integer;
+ X1, X2, VX, VY, I, Q, PX, BY, ZW, ZH: Integer;
  Len, Pos: LongInt;
  Title: String;
 Begin
@@ -2417,6 +2495,8 @@ Begin
  X2 := MonX2(IsProg);
  VX := MonVX(IsProg);
  VY := MonVY;
+ ZW := VW * MZ;
+ ZH := VH * MZ;
  PanelBox(X1, AY1, X2, AY2);
  If IsProg Then Begin
   FillR(X1 + 1, AY1 + 1, X2 - 1, AY1 + 13, DarkGray);
@@ -2436,50 +2516,50 @@ Begin
  Q := 1;
  If Playing Then Q := Quality;
  RenderView(VX, VY, Q);
- Frame(VX - 1, VY - 1, VX + VW, VY + VH, DarkGray);
+ Frame(VX - 1, VY - 1, VX + ZW, VY + ZH, DarkGray);
  If (Not IsProg) And (NLay = 0) Then Begin
   If (SrcMed >= 0) And (SrcMed < P.NM) Then
-   TxtC(VX + VW Div 2, VY + VH Div 2 - 4, '(média audio)', LightGray)
-  Else TxtC(VX + VW Div 2, VY + VH Div 2 - 4, 'Aucun clip source', DarkGray);
+   TxtC(VX + ZW Div 2, VY + ZH Div 2 - 4, '(média audio)', LightGray)
+  Else TxtC(VX + ZW Div 2, VY + ZH Div 2 - 4, 'Aucun clip source', DarkGray);
  End;
  If SafeOn Then Begin
   SetColor(LightGreen);
   SetLineStyle(DottedLn, 0, 1);
-  Rectangle(VX + VW Div 20, VY + VH Div 20, VX + VW - VW Div 20, VY + VH - VH Div 20);
-  Rectangle(VX + VW Div 10, VY + VH Div 10, VX + VW - VW Div 10, VY + VH - VH Div 10);
+  Rectangle(VX + ZW Div 20, VY + ZH Div 20, VX + ZW - ZW Div 20, VY + ZH - ZH Div 20);
+  Rectangle(VX + ZW Div 10, VY + ZH Div 10, VX + ZW - ZW Div 10, VY + ZH - ZH Div 10);
   SetLineStyle(SolidLn, 0, 1);
  End;
  { Barre de defilement }
  Len := MonLen(IsProg);
  Pos := MonPos(IsProg);
- BY := VY + VH + 6;
- FillR(VX, BY - 2, VX + VW - 1, BY + 3, Black);
- HLine(VX, VX + VW - 1, BY, DarkGray);
+ BY := VY + ZH + 6;
+ FillR(VX, BY - 2, VX + ZW - 1, BY + 3, Black);
+ HLine(VX, VX + ZW - 1, BY, DarkGray);
  If IsProg Then Begin
-  If P.InM >= 0 Then FillR(VX + Integer((P.InM * VW) Div Len), BY - 2, VX + VW - 1, BY + 3, 8);
+  If P.InM >= 0 Then FillR(VX + Integer((P.InM * ZW) Div Len), BY - 2, VX + ZW - 1, BY + 3, 8);
  End;
  If IsProg Then Begin
   If (P.InM >= 0) Or (P.OutM >= 0) Then Begin
-   FillR(VX, BY - 2, VX + VW - 1, BY + 3, Black);
-   HLine(VX, VX + VW - 1, BY, DarkGray);
-   If P.InM >= 0 Then I := Integer((P.InM * VW) Div Len) Else I := 0;
-   If P.OutM >= 0 Then PX := Integer((P.OutM * VW) Div Len) Else PX := VW - 1;
-   If PX > VW - 1 Then PX := VW - 1;
+   FillR(VX, BY - 2, VX + ZW - 1, BY + 3, Black);
+   HLine(VX, VX + ZW - 1, BY, DarkGray);
+   If P.InM >= 0 Then I := Integer((P.InM * ZW) Div Len) Else I := 0;
+   If P.OutM >= 0 Then PX := Integer((P.OutM * ZW) Div Len) Else PX := ZW - 1;
+   If PX > ZW - 1 Then PX := ZW - 1;
    If PX >= I Then FillR(VX + I, BY - 2, VX + PX, BY + 3, Blue);
   End;
   For I := 0 To P.NK - 1 Do
    If P.Marks[I].Pos <= Len Then
-    VLine(VX + Integer((P.Marks[I].Pos * VW) Div Len), BY - 3, BY + 4, LightGreen);
+    VLine(VX + Integer((P.Marks[I].Pos * ZW) Div Len), BY - 3, BY + 4, LightGreen);
  End Else Begin
   If (SrcIn >= 0) Or (SrcOut >= 0) Then Begin
-   If SrcIn >= 0 Then I := Integer((SrcIn * VW) Div Len) Else I := 0;
-   If SrcOut >= 0 Then PX := Integer((SrcOut * VW) Div Len) Else PX := VW - 1;
-   If PX > VW - 1 Then PX := VW - 1;
+   If SrcIn >= 0 Then I := Integer((SrcIn * ZW) Div Len) Else I := 0;
+   If SrcOut >= 0 Then PX := Integer((SrcOut * ZW) Div Len) Else PX := ZW - 1;
+   If PX > ZW - 1 Then PX := ZW - 1;
    If PX >= I Then FillR(VX + I, BY - 2, VX + PX, BY + 3, Blue);
   End;
  End;
- PX := VX + Integer((Pos * VW) Div Len);
- If PX > VX + VW - 1 Then PX := VX + VW - 1;
+ PX := VX + Integer((Pos * ZW) Div Len);
+ If PX > VX + ZW - 1 Then PX := VX + ZW - 1;
  IcoTri(PX - 4, BY - 5, PX + 4, BY - 5, PX, BY + 1, LightBlue);
  VLine(PX, BY, BY + 4, LightBlue);
  { Codes temporels et boutons }
@@ -2667,7 +2747,6 @@ End;
 
 Const
  CTLH = 12;
- CTLROWS = 13;
 
 Function CtlRowY(I: Integer): Integer;
 Begin
@@ -2770,7 +2849,6 @@ End;
 
 Const
  PROWH = 20;
- PROWY0 = 279;
 
 Function ProjRows: Integer;
 Begin
@@ -2888,7 +2966,6 @@ End;
 
 Const
  EROWH = 11;
- EROWY0 = 294;
 
 Function EffRows: Integer;
 Begin
@@ -3315,12 +3392,13 @@ Procedure DrawMeterBar(X, Lvl, Peak: Integer);
 Var
  I, N, Y, C, PY: Integer;
 Begin
- N := 36;
+ N := (LY2 - 20 - (LY1 + 14)) Div 5 + 1;
+ If N < 8 Then N := 8;
  For I := 0 To N - 1 Do Begin
   Y := LY2 - 20 - I * 5;
   If I * 100 Div N < Lvl Then Begin
-   If I >= 31 Then C := LightRed
-   Else If I >= 24 Then C := Yellow
+   If I * 100 Div N >= 86 Then C := LightRed
+   Else If I * 100 Div N >= 66 Then C := Yellow
    Else C := LightGreen;
    FillR(X, Y - 3, X + 5, Y, C);
   End Else FillR(X, Y - 3, X + 5, Y, DarkGray);
@@ -24817,6 +24895,7 @@ Var
  I: Integer;
 Begin
  InitTables;
+ InitLayout;
  InitCache;
  AuInit;
  AuActive := False;
@@ -24863,14 +24942,57 @@ Begin
  LastMY := -1;
  PopulateDemo;
  ZoomFit;
- If (ParamCount > 0) And (ExtOf(ParamStr(1)) = '.PRP') Then
-  If LoadProject(ParamStr(1)) Then Begin
-   EnsureCaches;
-   ZoomFit;
-  End;
+ For I := 1 To ParamCount Do
+  If ExtOf(ParamStr(I)) = '.PRP' Then
+   If LoadProject(ParamStr(I)) Then Begin
+    EnsureCaches;
+    ZoomFit;
+   End;
+End;
+
+{ Analyse de la ligne de commande : retourne True si l'aide a ete demandee. }
+Function ParseCommandLine: Boolean;
+Var
+ I: Integer;
+ A: String;
+Begin
+ ParseCommandLine := False;
+ MaxScreen := False;
+ For I := 1 To ParamCount Do Begin
+  A := UpStr(ParamStr(I));
+  If A = '-MAXSCREEN' Then MaxScreen := True
+  Else If (A = '/?') Or (A = '-H') Or (A = '--HELP') Then ParseCommandLine := True;
+ End;
+End;
+
+Procedure ShowCommandLineHelp;
+Var
+ HelpOutput: Text;
+Begin
+ { Un flux distinct conserve la sortie console, meme avec les unites Crt. }
+ Assign(HelpOutput, '');
+ Rewrite(HelpOutput);
+ WriteLn(HelpOutput, 'PREMIERE - Cette commande permet de lancer le clone de Premiere Pro (montage video).');
+ WriteLn(HelpOutput);
+ WriteLn(HelpOutput, 'Syntaxe : PREMIERE [-maxscreen] [<projet.PRP>] [/? | -h | --help]');
+ WriteLn(HelpOutput);
+ WriteLn(HelpOutput, '  Sans option          Lance l''application graphique en 640x480.');
+ WriteLn(HelpOutput, '  -h, --help           Affichent egalement cette aide.');
+ WriteLn(HelpOutput, '  -maxscreen           Utilise la resolution maximale disponible.');
+ WriteLn(HelpOutput, '  /?                   Affiche cette aide et quitte.');
+ WriteLn(HelpOutput, '  <projet.PRP>         Ouvre ce projet au demarrage.');
+ WriteLn(HelpOutput);
+ WriteLn(HelpOutput, 'Avec -maxscreen (Free Pascal seulement), les moniteurs sont agrandis par un');
+ WriteLn(HelpOutput, 'facteur entier et la chronologie occupe tout l''espace disponible.');
+ WriteLn(HelpOutput, 'Sous Turbo Pascal, -maxscreen est ignore (VGA 640x480).');
+ Close(HelpOutput);
 End;
 
 BEGIN
+ If ParseCommandLine Then Begin
+  ShowCommandLineHelp;
+  Halt(0);
+ End;
  InitializeGraphics;
  If Not MouseDriverFound Then Begin
   CloseGraph;

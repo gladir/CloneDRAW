@@ -874,6 +874,7 @@ Var
 
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
+ MaxScreen: Boolean;
  Running: Boolean;
 
  { Variables de la souris }
@@ -1461,21 +1462,57 @@ Begin
  End;
 End;
 
+{ Mode graphique : VGA 640 x 480, ou, avec -maxscreen sous Free Pascal, la
+  resolution maximale du pilote D8bit (sans effet sous Turbo Pascal). }
+Procedure SelectScreenDriverMode(WantMaxScreen: Boolean;
+ Var Driver, Mode: Integer);
+{$IFDEF FPC}
+Var LoMode, HiMode: SmallInt;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+ Driver:=VGA;
+ Mode:=VGAHi;
+ If WantMaxScreen Then Begin
+  Driver:=D8bit;
+  GetModeRange(Driver,LoMode,HiMode);
+  If HiMode>=LoMode Then Mode:=HiMode
+  Else Begin Driver:=VGA; Mode:=VGAHi; End;
+ End;
+ {$ELSE}
+ Driver:=Detect;
+ Mode:=VGAHi;
+ {$ENDIF}
+End;
+
+{ Les seize couleurs de l'interface restent identiques dans le pilote D8bit. }
+Procedure InitializeScreenPalette;
+{$IFDEF FPC}
+Const
+ RGB: Array[0..15, 0..2] of Byte = (
+  (0,0,0), (0,0,170), (0,170,0), (0,170,170),
+  (170,0,0), (170,0,170), (170,85,0), (170,170,170),
+  (85,85,85), (85,85,255), (85,255,85), (85,255,255),
+  (255,85,85), (255,85,255), (255,255,85), (255,255,255));
+Var I: Integer;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+ If GetMaxColor > 15 Then
+  For I := 0 To 15 Do SetRGBPalette(I, RGB[I,0], RGB[I,1], RGB[I,2]);
+ {$ENDIF}
+End;
+
 Procedure InitializeGraphics;
 Var
  Driver, Mode: Integer;
  ErrCode: Integer;
 Begin
- {$IFDEF FPC}
-  Driver:=VGA;
-  Mode:=VGAHi;
- {$ELSE}
-  Driver:=Detect;
-  Mode:=VGAHi;
- {$ENDIF}
+ SelectScreenDriverMode(MaxScreen,Driver,Mode);
  InitGraph(Driver,Mode,'');
  ErrCode:=GraphResult;
  If ErrCode=grOk Then Begin
+  InitializeScreenPalette;
   SetColor(White);
   SetLineStyle(0,0,1);
  End
@@ -19886,10 +19923,20 @@ BEGIN
  If(ParamStr(1)='/?')or(ParamStr(1)='--help')or(ParamStr(1)='-h')Then Begin
   WriteLn('AUTOCAD : Cette commande permet de lancer un clone de AutoCAD.');
   WriteLn;
-  WriteLn('Syntaxe : AUTOCAD [image.DWG]');
+  WriteLn('Syntaxe : AUTOCAD [-maxscreen] [image.DWG]');
   WriteLn;
   WriteLn(' image.DWG       Nom du fichier ".DWG" a editer');
+  WriteLn('  -maxscreen           Utilise la resolution maximale disponible.');
   Halt;
+ End;
+ { Options : -maxscreen, puis premier argument non option = fichier }
+ MaxScreen := False;
+ CmdArg := '';
+ For I := 1 To ParamCount Do Begin
+  If (StrToUpper(ParamStr(I)) = '-MAXSCREEN') Or (StrToUpper(ParamStr(I)) = '/MAXSCREEN') Then
+   MaxScreen := True
+  Else If (CmdArg = '') And (Copy(ParamStr(I),1,1) <> '-') And (Copy(ParamStr(I),1,1) <> '/') Then
+   CmdArg := ParamStr(I);
  End;
  { Initialisation }
  InitializeGraphics;
@@ -19926,8 +19973,7 @@ BEGIN
  LastSavedOLECount := 0;
 
  { Charger un fichier passe en argument de ligne de commande }
- If ParamCount >= 1 Then Begin
-  CmdArg := ParamStr(1);
+ If CmdArg <> '' Then Begin
   ArgExt := '';
   For I := Length(CmdArg) DownTo 1 Do
    If CmdArg[I] = '.' Then Begin

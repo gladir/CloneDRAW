@@ -312,6 +312,7 @@ Var
  { Variables globales de l'application }
  GraphDriver, GraphMode: Integer;
  ScreenWidth, ScreenHeight: Integer;
+ MaxScreen: Boolean;
  Running: Boolean;
  CurrentTool: Byte;
  CurrentColor: Byte;
@@ -925,12 +926,32 @@ Begin
  ZPrepareBuffer:=True;
 End;
 
+{ Mode graphique : 640 x 480 en 256 indices, ou, avec -maxscreen sous Free
+  Pascal, la resolution maximale du pilote D8bit (sans effet sous Turbo
+  Pascal). }
+Procedure SelectScreenDriverMode(WantMaxScreen: Boolean;
+ Var Driver, Mode: Integer);
+{$IFDEF FPC}
+Var LoMode, HiMode: SmallInt;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+ Driver := D8bit;
+ Mode := m640x480;
+ If WantMaxScreen Then Begin
+  GetModeRange(Driver, LoMode, HiMode);
+  If HiMode >= LoMode Then Mode := HiMode;
+ End;
+ {$ELSE}
+ Driver := Detect;
+ {$ENDIF}
+End;
+
 Procedure InitGraphics;
 {$IFDEF FPC}
 Begin
  { 256 indices : couleurs du dessin separees de celles de l interface. }
- GraphDriver := D8bit;
- GraphMode := m640x480;
+ SelectScreenDriverMode(MaxScreen, GraphDriver, GraphMode);
  InitGraph(GraphDriver, GraphMode, '');
  If GraphResult <> grOk Then Begin
   WriteLn('Erreur d''initialisation graphique!');
@@ -941,7 +962,7 @@ Begin
 End;
 {$ELSE}
 Begin
- GraphDriver := Detect;
+ SelectScreenDriverMode(MaxScreen, GraphDriver, GraphMode);
  InitGraph(GraphDriver, GraphMode, '');
  If GraphResult <> grOk Then Begin
   WriteLn('Erreur d''initialisation graphique!');
@@ -20867,6 +20888,10 @@ Begin
  End;
 End;
 
+Var
+ ArgI: Integer;
+ FileArg: String;
+
 { Point d'entrée du programme }
 BEGIN
  {$IFDEF FPC}
@@ -20894,11 +20919,22 @@ BEGIN
   If(StrToUpper(Copy(TmpLanguage,1,2))='JP')or
     (StrToUpper(Copy(TmpLanguage,1,3))='JPN')Then Language:=_Japanese;
  End;
+ MaxScreen := False;
+ FileArg := '';
+ For ArgI := 1 To ParamCount Do Begin
+  If (StrToUpper(ParamStr(ArgI)) = '-MAXSCREEN') Or (StrToUpper(ParamStr(ArgI)) = '/MAXSCREEN') Then
+   MaxScreen := True
+  Else If (FileArg = '') And (Copy(ParamStr(ArgI),1,1) <> '-') And (Copy(ParamStr(ArgI),1,1) <> '/') Then
+   FileArg := ParamStr(ArgI);
+ End;
  If (ParamStr(1) = '/?') or (ParamStr(1) = '--help') or (ParamStr(1) = '-h') Then Begin
   WriteLn('PAINT: Cette commande permet de laner le programme de dessin Bitamp (Paint).');
   WriteLn;
-  WriteLn('Syntaxe: PAINT [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
+  WriteLn('Syntaxe: PAINT [-maxscreen] [fichier.bmp|gif|png|jpg|xbm|wpg|lbm|hdr|fax|exr|' +
   'dng|bgx|dds|dcm|apng|arw|cr2|ppm|dib|cur|pcx|msp|tif|mac|pas]');
+  WriteLn;
+  WriteLn('Options:');
+  WriteLn('  -maxscreen           Utilise la resolution maximale disponible.');
   WriteLn;
   WriteLn('Fonctionnalit'+#130+'s:');
   WriteLn(' - Interface graphique compl'+#138+'te avec menus et barre d''outils');
@@ -20926,15 +20962,15 @@ BEGIN
   Initialize;
 
   { Charger un fichier si spécifié en ligne de commande }
-  If ParamCount > 0 Then Begin
+  If FileArg <> '' Then Begin
    { L'interface est déjà dessinée par Initialize ; LoadImage trace les pixels
      dans le canvas. Ne PAS rappeler RedrawInterface ici, sinon les pixels
      du BMP/GIF/etc. sont effacés avant même d'être visibles. }
-   If LoadImage(ParamStr(1)) Then
+   If LoadImage(FileArg) Then
     DrawStatusBar
    Else
     ShowMessage('Erreur de chargement',
-                'Impossible de charger : ' + ParamStr(1));
+                'Impossible de charger : ' + FileArg);
   End;
 
   MainLoop;

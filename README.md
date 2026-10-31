@@ -283,6 +283,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td>Cette commande permet de convertir une image de format PPM (Portable PixMap) en XBM (X BitMap).</td>
 		</tr>	
 		<tr>
+			<td><b>PREMIERE.PAS</b></td>
+			<td>Cette commande permet de lancer un clone de Premiere Pro (montage vidéo non linéaire). Importe images (BMP, GIF, PNG, JPEG, PCX, TGA, PPM, XBM, LBM, TIFF, BGX, WPG...), vidéos (H.264 en MP4/MOV/FLV/AVI, MPEG-4, MJPEG, AVI brut/RLE/Cinepak, GIF animé, FLI/FLC, Y4M) et audio (WAV, MP3, AAC/M4A, FLAC, MP2, ADPCM...; la piste son des vidéos est importée et liée au clip). Images-clés (position, échelle, rotation, opacité, couleur, volume, panoramique) avec interpolations, rampes de vitesse, pistes vidéo/audio variables, transitions, outils de montage (sélection, ondulation, glissement, rasoir, plume...), éléments imbriqués, dossiers, effets (flou, netteté, recadrage, masques, incrustation chroma, modes de fusion, LUT .CUBE), titres et générateurs, mixeur audio (égaliseur, compresseur, réverbération), oscilloscopes. Exporte en BMP, WAV, EDL, AVI MJPEG et MP4 H.264 avec son AAC/MP2/ALAC/PCM. Options Free Pascal : -maxscreen (résolution maximale) et -maxcolors (couleurs vraies, séquence jusqu'à 1920x1080).</td>
+		</tr>
+		<tr>
 			<td><b>PSP.PAS</b></td>
 			<td>Cette commande permet de lancer un clone de Photoshop.</td>
 		</tr>

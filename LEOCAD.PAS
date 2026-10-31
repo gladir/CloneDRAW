@@ -26,8 +26,9 @@
    - Export : image BMP de la vue active, liste des pieces (texte)
 
   Ligne de commande :
-   LEOCAD [/16] [fichier.ldr|fichier.mpd]
-   /16 : force le mode VGA 16 couleurs (sinon 256 couleurs avec Free Pascal)
+   LEOCAD [/16] [-maxscreen] [fichier.ldr|fichier.mpd]
+   /16        : force le mode VGA 16 couleurs (sinon 256 couleurs avec Free Pascal)
+   -maxscreen : utilise la resolution maximale disponible (Free Pascal)
 
   Notes :
    - Les pieces sont lues dans SAMPLES\LEOCAD\LEGO (une piece LDraw par fichier
@@ -58,7 +59,7 @@ Uses {$IFDEF FPC}
      {$ENDIF};
 
 Var
- Force16:Boolean;
+ Force16,MaxScreen:Boolean;
  I0:Integer;
  ArgFile:String;
 
@@ -66,12 +67,20 @@ Procedure InitializeGraphics;
 Var
  Driver, Mode: Integer;
  ErrCode: Integer;
+ {$IFDEF FPC}
+ LoMode, HiMode: SmallInt;
+ {$ENDIF}
 Begin
  {$IFDEF FPC}
   { 256 couleurs si possible : les teintes des briques sont des rampes de
-    nuances ; sinon retour au VGA 16 couleurs (ou option /16). }
+    nuances ; sinon retour au VGA 16 couleurs (ou option /16).
+    -maxscreen : resolution maximale du pilote D8bit (Free Pascal seulement). }
   Driver:=D8bit;
   Mode:=m640x480;
+  If MaxScreen Then Begin
+   GetModeRange(Driver,LoMode,HiMode);
+   If HiMode>=LoMode Then Mode:=HiMode;
+  End;
   ErrCode:=-1;
   If Not Force16 Then Begin
    InitGraph(Driver,Mode,'');
@@ -5495,16 +5504,18 @@ BEGIN
  If(ParamStr(1)='/?')Or(ParamStr(1)='-h')Or(ParamStr(1)='--help')Then Begin
   WriteLn('LEOCAD : Clone de LeoCAD, CAO de briques Lego en 3D (fichiers LDraw).');
   WriteLn;
-  WriteLn('Syntaxe : LEOCAD [/16] [fichier.ldr|fichier.mpd]');
+  WriteLn('Syntaxe : LEOCAD [/16] [-maxscreen] [fichier.ldr|fichier.mpd]');
   WriteLn;
   WriteLn(' /16        force le mode VGA 16 couleurs');
+  WriteLn(' -maxscreen Utilise la resolution maximale disponible.');
   WriteLn(' Bibliotheque : SAMPLES\LEOCAD\LEGO\*.DAT');
   WriteLn(' Plans       : SAMPLES\LEOCAD\PLAN\*.LDR, *.MPD');
   Halt;
  End;
- Force16:=False; ArgFile:='';
+ Force16:=False; MaxScreen:=False; ArgFile:='';
  For I0:=1 To ParamCount Do
   If(ParamStr(I0)='/16')Or(ParamStr(I0)='-16')Then Force16:=True
+  Else If UpStr(ParamStr(I0))='-MAXSCREEN' Then MaxScreen:=True
   Else If ArgFile='' Then ArgFile:=ParamStr(I0);
  InitializeGraphics;
  ScreenW:=GetMaxX+1; ScreenH:=GetMaxY+1;

@@ -15,7 +15,8 @@
    - Organisation : ordre, groupes, alignement, distribution, rotation,
      miroirs, conversion en courbes
    - Regles, grille, magnetisme, apercu plein ecran, annuler/retablir
-   - Fichiers : CDR de CorelDRAW 6, 7, 8 et 9 (lecture : courbes, formes,
+   - Fichiers : CDR/CDT de CorelDRAW 5, 6, 7, 8 et 9 (lecture, y compris les
+     fichiers xxx.CD_ compresses KWAJ des disquettes d'installation de la 5) : courbes, formes,
      remplissages unis et degrades, contours, groupes, transformations),
      CDR natif de ce clone (RIFF "CDR4", lecture/ecriture sans perte),
      CorelDRAW 9 (RIFF "CDR9", ecriture), WPG (lecture), SVG (ecriture)
@@ -24,9 +25,12 @@
    - Le format "CDR4" ecrit par Enregistrer est propre a ce clone ; il n'est
      pas lisible par CorelDraw. Pour echanger avec CorelDRAW 9, utiliser
      Enregistrer sous... avec le type "CDR 9" ou Fichier > Exporter CorelDRAW 9.
-   - La lecture des fichiers CorelDRAW ne couvre pas le texte, les bitmaps,
-     les effets (mélange, extrusion, lentille...) ni les remplissages
-     a motifs ; ils sont ignorés ou approximés. Necessite Free Pascal.
+   - Les objets sont dans une liste doublement chainee du tas : leur nombre
+     n'est limite que par la memoire (chaque objet garde au plus 7999 noeuds).
+   - Lecture CorelDRAW : le texte est reconstruit de facon approximative
+     (police 8x8, taille estimee), les bitmaps, les remplissages a motifs
+     ou texture et certaines lentilles/transparences ne sont pas relus.
+     Necessite Free Pascal.
    - Un fichier CorelDRAW ouvert n'est jamais ecrase par Enregistrer.
 
   Ligne de commande :
@@ -59,7 +63,6 @@ Const
  T_RECT=7; T_ELLIPSE=8; T_POLYGON=9; T_STAR=10; T_TEXT=11;
  TOOL_COUNT=12;
 
- MAXOBJ=10000;
  MAXPOLY=4000;
  UNDO_MAX=8;
  PAL_COUNT=48;
@@ -92,18 +95,19 @@ Type
   N,Cap:Integer;
   Pts:PPtArr;
   Txt:String[60];
+  Next,Prev:PObj;
  End;
  PSnap=^TSnap;
  TSnap=Record
-  N:Integer;
+  N:LongInt;
   PW,PH:LongInt;
-  O:Array[0..MAXOBJ-1] of PObj;
+  Head,Tail:PObj;
  End;
 
 Var
  { Document }
- Objs:Array[0..MAXOBJ-1] of PObj;
- ObjCount:Integer;
+ ObjHead,ObjTail,CurPtr:PObj;
+ ObjCount,CurIdx:LongInt;
  PageW,PageH:LongInt;
  GridSize:LongInt;
  DocName:String;
@@ -436,6 +440,8 @@ Var C:PObj;
 Begin
  New(C);
  C^:=O^;
+ C^.Next:=NIL;
+ C^.Prev:=NIL;
  GetMem(C^.Pts,O^.Cap*SizeOf(TPt));
  Move(O^.Pts^,C^.Pts^,O^.Cap*SizeOf(TPt));
  CloneObj:=C;
@@ -461,36 +467,138 @@ Begin
  O^.N:=N;
 End;
 
-Procedure ClearDoc;
-Var I:Integer;
+{ Liste doublement chainee des objets (tas) : le dernier est le premier plan }
+Procedure ListUnlink(O:PObj);
 Begin
- For I:=0 To ObjCount-1 Do Begin
-  FreeObj(Objs[I]);
-  Objs[I]:=NIL;
+ If O^.Prev<>NIL Then O^.Prev^.Next:=O^.Next Else ObjHead:=O^.Next;
+ If O^.Next<>NIL Then O^.Next^.Prev:=O^.Prev Else ObjTail:=O^.Prev;
+ O^.Next:=NIL;
+ O^.Prev:=NIL;
+ Dec(ObjCount);
+ CurPtr:=NIL;
+End;
+
+Procedure ListAppend(O:PObj);
+Begin
+ O^.Next:=NIL;
+ O^.Prev:=ObjTail;
+ If ObjTail<>NIL Then ObjTail^.Next:=O Else ObjHead:=O;
+ ObjTail:=O;
+ Inc(ObjCount);
+End;
+
+Procedure ListPrepend(O:PObj);
+Begin
+ O^.Prev:=NIL;
+ O^.Next:=ObjHead;
+ If ObjHead<>NIL Then ObjHead^.Prev:=O Else ObjTail:=O;
+ ObjHead:=O;
+ Inc(ObjCount);
+ CurPtr:=NIL;
+End;
+
+{ Echange P et son suivant }
+Procedure ListSwapNext(P:PObj);
+Var Q,A,B:PObj;
+Begin
+ Q:=P^.Next;
+ If Q=NIL Then Exit;
+ A:=P^.Prev;
+ B:=Q^.Next;
+ If A<>NIL Then A^.Next:=Q Else ObjHead:=Q;
+ Q^.Prev:=A;
+ Q^.Next:=P;
+ P^.Prev:=Q;
+ P^.Next:=B;
+ If B<>NIL Then B^.Prev:=P Else ObjTail:=P;
+ CurPtr:=NIL;
+End;
+
+Procedure ListReverse;
+Var P,Nx,T:PObj;
+Begin
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  Nx:=P^.Next;
+  P^.Next:=P^.Prev;
+  P^.Prev:=Nx;
+  P:=Nx;
  End;
+ T:=ObjHead;
+ ObjHead:=ObjTail;
+ ObjTail:=T;
+ CurPtr:=NIL;
+End;
+
+{ Acces par rang (0 = arriere-plan) ; un curseur rend les balayages O(1) }
+Function ObjAt(I:LongInt):PObj;
+Var P:PObj;
+    K,DC,DH,DT:LongInt;
+Begin
+ ObjAt:=NIL;
+ If(I<0)or(I>=ObjCount)Then Exit;
+ DH:=I;
+ DT:=ObjCount-1-I;
+ If CurPtr<>NIL Then DC:=Abs(I-CurIdx) Else DC:=MaxLongInt;
+ If(DC<=DH)and(DC<=DT)Then Begin
+  P:=CurPtr;
+  K:=CurIdx;
+ End
+  Else
+ If DH<=DT Then Begin
+  P:=ObjHead;
+  K:=0;
+ End
+  Else Begin
+   P:=ObjTail;
+   K:=ObjCount-1;
+  End;
+ While K<I Do Begin
+  P:=P^.Next;
+  Inc(K);
+ End;
+ While K>I Do Begin
+  P:=P^.Prev;
+  Dec(K);
+ End;
+ CurPtr:=P;
+ CurIdx:=I;
+ ObjAt:=P;
+End;
+
+Procedure ClearDoc;
+Var P,Nx:PObj;
+Begin
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  Nx:=P^.Next;
+  FreeObj(P);
+  P:=Nx;
+ End;
+ ObjHead:=NIL;
+ ObjTail:=NIL;
  ObjCount:=0;
+ CurPtr:=NIL;
 End;
 
 Function AddObj(O:PObj):Boolean;
 Begin
- If ObjCount>=MAXOBJ Then Begin
-  FreeObj(O);
-  AddObj:=False;
-  Exit;
- End;
- Objs[ObjCount]:=O;
- Inc(ObjCount);
+ ListAppend(O);
  Modified:=True;
  AddObj:=True;
 End;
 
-Procedure DeleteObjAt(I:Integer);
-Var K:Integer;
+Procedure DeleteObj(O:PObj);
 Begin
- FreeObj(Objs[I]);
- For K:=I To ObjCount-2 Do Objs[K]:=Objs[K+1];
- Objs[ObjCount-1]:=NIL;
- Dec(ObjCount);
+ ListUnlink(O);
+ FreeObj(O);
+End;
+
+Procedure DeleteObjAt(I:LongInt);
+Var P:PObj;
+Begin
+ P:=ObjAt(I);
+ If P<>NIL Then DeleteObj(P);
 End;
 
 Procedure ObjBBox(O:PObj;Var X1,Y1,X2,Y2:LongInt);
@@ -553,35 +661,48 @@ End;
 
 Function TakeSnap(OnlySel:Boolean):PSnap;
 Var S:PSnap;
-    I:Integer;
+    P,C:PObj;
 Begin
  New(S);
  S^.N:=0;
  S^.PW:=PageW;
  S^.PH:=PageH;
- For I:=0 To ObjCount-1 Do
-  If(Not OnlySel)or Objs[I]^.Sel Then Begin
-   S^.O[S^.N]:=CloneObj(Objs[I]);
+ S^.Head:=NIL;
+ S^.Tail:=NIL;
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  If(Not OnlySel)or P^.Sel Then Begin
+   C:=CloneObj(P);
+   C^.Prev:=S^.Tail;
+   If S^.Tail<>NIL Then S^.Tail^.Next:=C Else S^.Head:=C;
+   S^.Tail:=C;
    Inc(S^.N);
   End;
+  P:=P^.Next;
+ End;
  TakeSnap:=S;
 End;
 
 Procedure FreeSnap(Var S:PSnap);
-Var I:Integer;
+Var P,Nx:PObj;
 Begin
  If S=NIL Then Exit;
- For I:=0 To S^.N-1 Do FreeObj(S^.O[I]);
+ P:=S^.Head;
+ While P<>NIL Do Begin
+  Nx:=P^.Next;
+  FreeObj(P);
+  P:=Nx;
+ End;
  Dispose(S);
  S:=NIL;
 End;
 
 { Remplace le document par le contenu de l'instantane (qui est consomme) }
 Procedure RestoreSnap(Var S:PSnap);
-Var I:Integer;
 Begin
  ClearDoc;
- For I:=0 To S^.N-1 Do Objs[I]:=S^.O[I];
+ ObjHead:=S^.Head;
+ ObjTail:=S^.Tail;
  ObjCount:=S^.N;
  PageW:=S^.PW;
  PageH:=S^.PH;
@@ -643,40 +764,57 @@ End;
 { Selection et organisation                                          }
 { ------------------------------------------------------------------ }
 
-Function SelCount:Integer;
-Var I,C:Integer;
+Function SelCount:LongInt;
+Var P:PObj;
+    C:LongInt;
 Begin
  C:=0;
- For I:=0 To ObjCount-1 Do If Objs[I]^.Sel Then Inc(C);
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  If P^.Sel Then Inc(C);
+  P:=P^.Next;
+ End;
  SelCount:=C;
 End;
 
 Procedure DeselectAll;
-Var I:Integer;
+Var P:PObj;
 Begin
- For I:=0 To ObjCount-1 Do Objs[I]^.Sel:=False;
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  P^.Sel:=False;
+  P:=P^.Next;
+ End;
 End;
 
-Procedure SelectIndex(I:Integer);
-Var K:Integer;
+Procedure SelectIndex(I:LongInt);
+Var P,Q:PObj;
     G:Integer;
 Begin
- Objs[I]^.Sel:=True;
- G:=Objs[I]^.Group;
- If G<>0 Then
-  For K:=0 To ObjCount-1 Do If Objs[K]^.Group=G Then Objs[K]^.Sel:=True;
+ P:=ObjAt(I);
+ If P=NIL Then Exit;
+ P^.Sel:=True;
+ G:=P^.Group;
+ If G<>0 Then Begin
+  Q:=ObjHead;
+  While Q<>NIL Do Begin
+   If Q^.Group=G Then Q^.Sel:=True;
+   Q:=Q^.Next;
+  End;
+ End;
 End;
 
 Function SelBBox(Var X1,Y1,X2,Y2:LongInt):Boolean;
-Var I:Integer;
+Var P:PObj;
     A,B,C,D:LongInt;
     First:Boolean;
 Begin
  First:=True;
  X1:=0; Y1:=0; X2:=0; Y2:=0;
- For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel Then Begin
-   ObjBBox(Objs[I],A,B,C,D);
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  If P^.Sel Then Begin
+   ObjBBox(P,A,B,C,D);
    If First Then Begin
     X1:=A; Y1:=B; X2:=C; Y2:=D;
     First:=False;
@@ -689,83 +827,105 @@ Begin
     If D>Y2 Then Y2:=D;
    End;
   End;
+  P:=P^.Next;
+ End;
  SelBBox:=Not First;
 End;
 
 Procedure DeleteSelection;
-Var I:Integer;
+Var P,Nx:PObj;
 Begin
- I:=ObjCount-1;
- While I>=0 Do Begin
-  If Objs[I]^.Sel Then DeleteObjAt(I);
-  Dec(I);
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  Nx:=P^.Next;
+  If P^.Sel Then DeleteObj(P);
+  P:=Nx;
  End;
 End;
 
+{ Les objets selectionnes passent au premier plan en gardant leur ordre }
 Procedure ToFront;
-Var Tmp:Array[0..MAXOBJ-1] of PObj;
-    I,N:Integer;
+Var P,Nx,Last:PObj;
 Begin
- N:=0;
- For I:=0 To ObjCount-1 Do If Not Objs[I]^.Sel Then Begin Tmp[N]:=Objs[I]; Inc(N); End;
- For I:=0 To ObjCount-1 Do If Objs[I]^.Sel Then Begin Tmp[N]:=Objs[I]; Inc(N); End;
- For I:=0 To ObjCount-1 Do Objs[I]:=Tmp[I];
+ If ObjTail=NIL Then Exit;
+ Last:=ObjTail;
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  Nx:=P^.Next;
+  If P^.Sel Then Begin
+   ListUnlink(P);
+   ListAppend(P);
+  End;
+  If P=Last Then Break;
+  P:=Nx;
+ End;
 End;
 
 Procedure ToBack;
-Var Tmp:Array[0..MAXOBJ-1] of PObj;
-    I,N:Integer;
+Var P,Pv,First:PObj;
 Begin
- N:=0;
- For I:=0 To ObjCount-1 Do If Objs[I]^.Sel Then Begin Tmp[N]:=Objs[I]; Inc(N); End;
- For I:=0 To ObjCount-1 Do If Not Objs[I]^.Sel Then Begin Tmp[N]:=Objs[I]; Inc(N); End;
- For I:=0 To ObjCount-1 Do Objs[I]:=Tmp[I];
+ If ObjHead=NIL Then Exit;
+ First:=ObjHead;
+ P:=ObjTail;
+ While P<>NIL Do Begin
+  Pv:=P^.Prev;
+  If P^.Sel Then Begin
+   ListUnlink(P);
+   ListPrepend(P);
+  End;
+  If P=First Then Break;
+  P:=Pv;
+ End;
 End;
 
 Procedure OneForward;
-Var I:Integer;
-    T:PObj;
+Var P,Pv:PObj;
 Begin
- For I:=ObjCount-2 DownTo 0 Do
-  If Objs[I]^.Sel and Not Objs[I+1]^.Sel Then Begin
-   T:=Objs[I]; Objs[I]:=Objs[I+1]; Objs[I+1]:=T;
-  End;
+ If ObjTail=NIL Then Exit;
+ P:=ObjTail^.Prev;
+ While P<>NIL Do Begin
+  Pv:=P^.Prev;
+  If P^.Sel and(P^.Next<>NIL)and Not P^.Next^.Sel Then ListSwapNext(P);
+  P:=Pv;
+ End;
 End;
 
 Procedure OneBackward;
-Var I:Integer;
-    T:PObj;
+Var P,Nx:PObj;
 Begin
- For I:=1 To ObjCount-1 Do
-  If Objs[I]^.Sel and Not Objs[I-1]^.Sel Then Begin
-   T:=Objs[I]; Objs[I]:=Objs[I-1]; Objs[I-1]:=T;
-  End;
+ If ObjHead=NIL Then Exit;
+ P:=ObjHead^.Next;
+ While P<>NIL Do Begin
+  Nx:=P^.Next;
+  If P^.Sel and(P^.Prev<>NIL)and Not P^.Prev^.Sel Then ListSwapNext(P^.Prev);
+  P:=Nx;
+ End;
 End;
 
 Procedure GroupSel;
-Var I:Integer;
+Var I:LongInt;
 Begin
  If SelCount<2 Then Exit;
  Inc(GroupSeq);
- For I:=0 To ObjCount-1 Do If Objs[I]^.Sel Then Objs[I]^.Group:=GroupSeq;
+ For I:=0 To ObjCount-1 Do If ObjAt(I)^.Sel Then ObjAt(I)^.Group:=GroupSeq;
 End;
 
 Procedure UngroupSel;
-Var I:Integer;
+Var I:LongInt;
 Begin
- For I:=0 To ObjCount-1 Do If Objs[I]^.Sel Then Objs[I]^.Group:=0;
+ For I:=0 To ObjCount-1 Do If ObjAt(I)^.Sel Then ObjAt(I)^.Group:=0;
 End;
 
 { Alignement : Mode 0..5 = gauche, centre, droite, haut, milieu, bas }
 Procedure AlignSel(Mode:Integer);
-Var I:Integer;
+Var I:LongInt;
     SX1,SY1,SX2,SY2,A,B,C,D,DX,DY:LongInt;
 Begin
  If SelCount<2 Then Exit;
  SelBBox(SX1,SY1,SX2,SY2);
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel Then Begin
-   ObjBBox(Objs[I],A,B,C,D);
+  If ObjAt(I)^.Sel Then Begin
+   ObjBBox(ObjAt(I),A,B,C,D);
    DX:=0; DY:=0;
    Case Mode Of
     0:DX:=SX1-A;
@@ -775,44 +935,66 @@ Begin
     4:DY:=((SY1+SY2) Div 2)-((B+D) Div 2);
     5:DY:=SY2-D;
    End;
-   ObjMove(Objs[I],DX,DY);
+   ObjMove(ObjAt(I),DX,DY);
   End;
 End;
 
 { Distribution : Horiz=True repartit les centres a intervalles reguliers }
 Procedure DistributeSel(Horiz:Boolean);
-Var Idx:Array[0..MAXOBJ-1] of Integer;
-    Ctr:Array[0..MAXOBJ-1] of LongInt;
-    N,I,J,T:Integer;
-    A,B,C,D,First,Last,Target:LongInt;
+Type
+ TPObjs=Array[0..16777215] of PObj;
+ TCtrs=Array[0..16777215] of LongInt;
+Var Idx:^TPObjs;
+    Ctr:^TCtrs;
+    N,I,J,Gap:LongInt;
+    P,TP:PObj;
+    A,B,C,D,First,Last,Target,TC:LongInt;
 Begin
+ N:=SelCount;
+ If N<3 Then Exit;
+ GetMem(Idx,N*SizeOf(PObj));
+ GetMem(Ctr,N*SizeOf(LongInt));
  N:=0;
- For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel Then Begin
-   ObjBBox(Objs[I],A,B,C,D);
-   Idx[N]:=I;
-   If Horiz Then Ctr[N]:=(A+C) Div 2 Else Ctr[N]:=(B+D) Div 2;
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  If P^.Sel Then Begin
+   ObjBBox(P,A,B,C,D);
+   Idx^[N]:=P;
+   If Horiz Then Ctr^[N]:=(A+C) Div 2 Else Ctr^[N]:=(B+D) Div 2;
    Inc(N);
   End;
- If N<3 Then Exit;
- For I:=0 To N-2 Do
-  For J:=I+1 To N-1 Do
-   If Ctr[J]<Ctr[I] Then Begin
-    T:=Idx[I]; Idx[I]:=Idx[J]; Idx[J]:=T;
-    First:=Ctr[I]; Ctr[I]:=Ctr[J]; Ctr[J]:=First;
+  P:=P^.Next;
+ End;
+ Gap:=N Div 2;
+ While Gap>0 Do Begin
+  For I:=Gap To N-1 Do Begin
+   TP:=Idx^[I];
+   TC:=Ctr^[I];
+   J:=I;
+   While(J>=Gap)and(Ctr^[J-Gap]>TC)Do Begin
+    Idx^[J]:=Idx^[J-Gap];
+    Ctr^[J]:=Ctr^[J-Gap];
+    J:=J-Gap;
    End;
- First:=Ctr[0];
- Last:=Ctr[N-1];
+   Idx^[J]:=TP;
+   Ctr^[J]:=TC;
+  End;
+  Gap:=Gap Div 2;
+ End;
+ First:=Ctr^[0];
+ Last:=Ctr^[N-1];
  For I:=1 To N-2 Do Begin
   Target:=First+((Last-First)*I) Div (N-1);
-  If Horiz Then ObjMove(Objs[Idx[I]],Target-Ctr[I],0)
-           Else ObjMove(Objs[Idx[I]],0,Target-Ctr[I]);
+  If Horiz Then ObjMove(Idx^[I],Target-Ctr^[I],0)
+           Else ObjMove(Idx^[I],0,Target-Ctr^[I]);
  End;
+ FreeMem(Idx,N*SizeOf(PObj));
+ FreeMem(Ctr,N*SizeOf(LongInt));
 End;
 
 { Rotation de 90 degres (sens horaire a l'ecran) ou miroirs }
 Procedure TransformSel(Mode:Integer);
-Var I,K:Integer;
+Var I,K:LongInt;
     X1,Y1,X2,Y2,CX,CY,NX,NY,OX,OY:LongInt;
     O:PObj;
 Begin
@@ -820,8 +1002,8 @@ Begin
  CX:=(X1+X2) Div 2;
  CY:=(Y1+Y2) Div 2;
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel Then Begin
-   O:=Objs[I];
+  If ObjAt(I)^.Sel Then Begin
+   O:=ObjAt(I);
    If O^.Kind=K_TEXT Then Begin
     OX:=O^.Pts^[0].X+(Length(O^.Txt)*O^.TextSize) Div 2;
     OY:=O^.Pts^[0].Y+O^.TextSize Div 2;
@@ -851,13 +1033,13 @@ End;
 
 { Conversion en courbes : rectangle -> polygone, ellipse -> Bezier }
 Procedure ConvertToCurves;
-Var I:Integer;
+Var I:LongInt;
     O,P:PObj;
     X1,Y1,X2,Y2,CX,CY,RX,RY,KX,KY:LongInt;
     Q:Array[0..12] of TPt;
 Begin
  For I:=0 To ObjCount-1 Do Begin
-  O:=Objs[I];
+  O:=ObjAt(I);
   If Not O^.Sel Then Continue;
   If O^.Kind=K_RECT Then Begin
    X1:=O^.Pts^[0].X; Y1:=O^.Pts^[0].Y; X2:=O^.Pts^[1].X; Y2:=O^.Pts^[1].Y;
@@ -1086,7 +1268,7 @@ Begin
 End;
 
 Function SaveCDR(Const Name:String):Boolean;
-Var I,K:Integer;
+Var I,K:LongInt;
     O:PObj;
     Fl:Byte;
 Begin
@@ -1118,7 +1300,7 @@ Begin
  End;
  BeginChunk('LIST','objs');
  For I:=0 To ObjCount-1 Do Begin
-  O:=Objs[I];
+  O:=ObjAt(I);
   BeginChunk('obj ','');
   WrB(O^.Kind);
   Fl:=0;
@@ -1162,6 +1344,7 @@ Var Id,Form:String;
     Old:Byte;
     Tmp:TObj;
     L:Byte;
+    Own:Boolean;
 Begin
  LoadCDR:=False;
  IOBad:=False;
@@ -1176,11 +1359,22 @@ Begin
  Size:=RdL;
  Form:=RdID;
  Form:=UpStr(Form);
+ If Id='KWAJ' Then Begin
+  Close(FF);
+  LoadCDR:=LoadCDR9(Name);
+  Exit;
+ End;
  If(Id<>'RIFF')or(Copy(Form,1,3)<>'CDR')or IOBad Then Begin
   Close(FF);
   Exit;
  End;
- If Form<>'CDR4' Then Begin
+ { le format du clone est un 'CDR4' dont le premier chunk est 'DOCI' }
+ If Form<>'CDR4' Then Own:=False
+  Else Begin
+   {$I-}Seek(FF,22);{$I+}
+   Own:=(IOResult=0)and(RdID='DOCI');
+  End;
+ If Not Own Then Begin
   Close(FF);
   LoadCDR:=LoadCDR9(Name);
   Exit;
@@ -1283,7 +1477,7 @@ End;
 
 Function SaveSVG(Const Name:String):Boolean;
 Var T:Text;
-    I,K:Integer;
+    I,K:LongInt;
     O:PObj;
     S,Fill,Stroke:String;
     X1,Y1,X2,Y2:LongInt;
@@ -1292,7 +1486,7 @@ Var T:Text;
     GradN:Integer;
  Function PointsStr:String;
  Var R:String;
-     J:Integer;
+     J:LongInt;
  Begin
   R:='';
   For J:=0 To O^.N-1 Do Begin
@@ -1313,7 +1507,7 @@ Begin
  WriteLn(T,' <title>',XmlEsc(BaseOf(DocName)),'</title>');
  WriteLn(T,' <rect x="0" y="0" width="',PageW,'" height="',PageH,'" fill="#FFFFFF"/>');
  For I:=0 To ObjCount-1 Do Begin
-  O:=Objs[I];
+  O:=ObjAt(I);
   For Pass:=0 To 1 Do Begin
    If(Pass=0)and Not O^.Shadow Then Continue;
    If Pass=0 Then DX:=60 Else DX:=0;
@@ -1398,61 +1592,195 @@ End;
 { ---------------------------- WPG ---------------------------------- }
 
 Function LoadWPG(Const Name:String;AppendToDoc:Boolean):Boolean;
-Type
- TRaw=Record
-  Kind:Byte;
-  Closed:Boolean;
-  Fill,Line:Integer;
-  FillT,LineT:Byte;
-  W:LongInt;
-  First,Cnt:LongInt;
- End;
 Var
- Raw:Array[0..MAXOBJ-1] of TRaw;
- RawN:Integer;
- Pt:Array[0..11999] of TPt;
- PtN:LongInt;
  Map:Array[0..255] of Integer;
  Old:Byte;
- Total,Pos,Data,Len,V:LongInt;
+ Total,Pos,Data,Len,StartPos:LongInt;
  T,B:Byte;
  W:Word;
- I,K,Cnt,Step:Integer;
+ I,K,Cnt,Step,Kept,Pass:LongInt;
  CurFillT,CurLineT:Byte;
  CurFill,CurLine:Integer;
  CurW:LongInt;
- X1,Y1,X2,Y2,BW,BH,TW,TH,OX,OY:LongInt;
+ X1,Y1,X2,Y2,BW,BH,TW,TH,OX,OY,RX1,RY1,RX2,RY2,TX,TY:LongInt;
  Sc:Real;
+ First,Any:Boolean;
  O:PObj;
- First:Boolean;
- SX,SY:Integer;
-
- Procedure AddRaw(Kind:Byte;Closed:Boolean);
- Begin
-  If RawN>=MAXOBJ Then Exit;
-  Raw[RawN].Kind:=Kind;
-  Raw[RawN].Closed:=Closed;
-  Raw[RawN].Fill:=CurFill;
-  Raw[RawN].Line:=CurLine;
-  Raw[RawN].FillT:=CurFillT;
-  Raw[RawN].LineT:=CurLineT;
-  Raw[RawN].W:=CurW;
-  Raw[RawN].First:=PtN;
-  Raw[RawN].Cnt:=0;
- End;
-
- Procedure AddPt(X,Y:LongInt);
- Begin
-  If(PtN>=12000)or(RawN>=MAXOBJ)Then Exit;
-  Pt[PtN].X:=X;
-  Pt[PtN].Y:=Y;
-  Inc(PtN);
-  Inc(Raw[RawN].Cnt);
- End;
 
  Function SW:LongInt;
  Begin
   SW:=SmallInt(RdW);
+ End;
+
+ { Etendue (passe 1) }
+ Procedure Upd(X,Y:LongInt);
+ Begin
+  If First Then Begin
+   X1:=X; X2:=X; Y1:=Y; Y2:=Y;
+   First:=False;
+  End
+   Else Begin
+    If X<X1 Then X1:=X;
+    If X>X2 Then X2:=X;
+    If Y<Y1 Then Y1:=Y;
+    If Y>Y2 Then Y2:=Y;
+   End;
+ End;
+
+ Function MapX(X:LongInt):LongInt;
+ Begin
+  MapX:=OX+Round((X-X1)*Sc);
+ End;
+
+ Function MapY(Y:LongInt):LongInt;
+ Begin
+  MapY:=OY+Round((Y2-Y)*Sc);
+ End;
+
+ { Cree l'objet avec les attributs courants (passe 2) }
+ Function Make(Kind:Byte;N:Integer;Closed:Boolean):PObj;
+ Var Q:PObj;
+ Begin
+  Q:=NewObj(Kind,N);
+  Q^.Closed:=Closed;
+  If CurLineT=0 Then Q^.OutCol:=-1 Else Q^.OutCol:=Map[CurLine And 255];
+  Q^.OutW:=Max(1,Round(CurW*Sc));
+  If(Kind=K_LINE)or(Kind=K_POLYLINE)Then Begin
+   Q^.FillKind:=FK_NONE;
+   Q^.FillCol:=-1;
+  End
+   Else
+  If CurFillT=0 Then Begin
+   Q^.FillKind:=FK_NONE;
+   Q^.FillCol:=-1;
+  End
+   Else Begin
+    Q^.FillKind:=FK_SOLID;
+    Q^.FillCol:=Map[CurFill And 255];
+    If CurFillT>1 Then Begin
+     Q^.FillKind:=FK_PATTERN;
+     Q^.Pattern:=(CurFillT-2) Mod 8+1;
+     Q^.FillCol2:=-1;
+    End;
+   End;
+  Make:=Q;
+ End;
+
+ { Lit tous les enregistrements ; Pass=1 : etendue, Pass=2 : creation }
+ Procedure Scan;
+ Var I,K:LongInt;
+ Begin
+  Pos:=StartPos;
+  For I:=0 To 255 Do Map[I]:=I And 15;
+  CurFillT:=1; CurLineT:=1; CurFill:=0; CurLine:=0; CurW:=1;
+  While(Pos+2<=Total)and Not IOBad Do Begin
+   {$I-}Seek(FF,Pos);{$I+}
+   T:=RdB;
+   B:=RdB;
+   Len:=B;
+   If B=$FF Then Begin
+    W:=RdW;
+    If W>=$8000 Then Len:=(LongInt(W And $7FFF) Shl 16) Or RdW
+                Else Len:=W;
+   End;
+   Data:=FilePos(FF);
+   If(Len<0)or(Data+Len>Total)Then Break;
+   Case T Of
+    0:Break;
+    1:Begin
+     CurFillT:=RdB;
+     CurFill:=RdB;
+    End;
+    2:Begin
+     CurLineT:=RdB;
+     CurLine:=RdB;
+     CurW:=RdW;
+    End;
+    5:Begin
+     RX1:=SW; RY1:=SW; RX2:=SW; RY2:=SW;
+     If Pass=1 Then Begin
+      Upd(RX1,RY1);
+      Upd(RX2,RY2);
+     End
+      Else Begin
+       O:=Make(K_LINE,2,False);
+       O^.Pts^[0].X:=MapX(RX1); O^.Pts^[0].Y:=MapY(RY1);
+       O^.Pts^[1].X:=MapX(RX2); O^.Pts^[1].Y:=MapY(RY2);
+       AddObj(O);
+      End;
+    End;
+    6,8:Begin
+     Cnt:=RdW;
+     If Cnt*4>Len Then Cnt:=Len Div 4-1;
+     If Cnt>=2 Then Begin
+      If Pass=1 Then Begin
+       For K:=0 To Cnt-1 Do Begin
+        TX:=SW;
+        TY:=SW;
+        Upd(TX,TY);
+       End;
+      End
+       Else Begin
+        { au plus 7900 noeuds par objet }
+        Step:=1;
+        While((Cnt-1) Div Step+2)>7900 Do Inc(Step);
+        Kept:=(Cnt-1) Div Step+1;
+        If(Cnt-1) Mod Step<>0 Then Inc(Kept);
+        O:=Make(K_POLYLINE,Kept,T=8);
+        If T=8 Then O^.Kind:=K_POLY;
+        Kept:=0;
+        For K:=0 To Cnt-1 Do Begin
+         TX:=SW;
+         TY:=SW;
+         If((K Mod Step)=0)or(K=Cnt-1)Then Begin
+          O^.Pts^[Kept].X:=MapX(TX);
+          O^.Pts^[Kept].Y:=MapY(TY);
+          Inc(Kept);
+         End;
+        End;
+        AddObj(O);
+       End;
+     End;
+    End;
+    7:Begin
+     RX1:=SW; RY1:=SW; RX2:=SW; RY2:=SW;
+     If Pass=1 Then Begin
+      Upd(RX1,RY1);
+      Upd(RX1+RX2,RY1+RY2);
+     End
+      Else Begin
+       O:=Make(K_RECT,2,True);
+       O^.Pts^[0].X:=MapX(RX1); O^.Pts^[0].Y:=MapY(RY1);
+       O^.Pts^[1].X:=MapX(RX1+RX2); O^.Pts^[1].Y:=MapY(RY1+RY2);
+       ObjNormalize2(O);
+       AddObj(O);
+      End;
+    End;
+    9:Begin
+     RX1:=SW; RY1:=SW; RX2:=SW; RY2:=SW;
+     If Pass=1 Then Begin
+      Upd(RX1-RX2,RY1-RY2);
+      Upd(RX1+RX2,RY1+RY2);
+     End
+      Else Begin
+       O:=Make(K_ELLIPSE,2,True);
+       O^.Pts^[0].X:=MapX(RX1-RX2); O^.Pts^[0].Y:=MapY(RY1-RY2);
+       O^.Pts^[1].X:=MapX(RX1+RX2); O^.Pts^[1].Y:=MapY(RY1+RY2);
+       ObjNormalize2(O);
+       AddObj(O);
+      End;
+    End;
+    14:Begin
+     RX1:=RdW;
+     Cnt:=RdW;
+     For K:=0 To Cnt-1 Do Begin
+      TW:=RdB; TH:=RdB; BW:=RdB;
+      If(RX1+K>=0)and(RX1+K<=255)Then Map[RX1+K]:=NearestColor(TW,TH,BW);
+     End;
+    End;
+   End;
+   Pos:=Data+Len;
+  End;
  End;
 
 Begin
@@ -1469,96 +1797,16 @@ Begin
   Close(FF);
   Exit;
  End;
- Pos:=RdL;
- If(Pos<16)or(Pos>=Total)Then Pos:=16;
- For I:=0 To 255 Do Map[I]:=I And 15;
- RawN:=0;
- PtN:=0;
- CurFillT:=1; CurLineT:=1; CurFill:=0; CurLine:=0; CurW:=1;
- While(Pos+2<=Total)and Not IOBad Do Begin
-  {$I-}Seek(FF,Pos);{$I+}
-  T:=RdB;
-  B:=RdB;
-  Len:=B;
-  If B=$FF Then Begin
-   W:=RdW;
-   If W>=$8000 Then Len:=(LongInt(W And $7FFF) Shl 16) Or RdW
-               Else Len:=W;
-  End;
-  Data:=FilePos(FF);
-  If(Len<0)or(Data+Len>Total)Then Break;
-  Case T Of
-   0:Break;
-   1:Begin
-    CurFillT:=RdB;
-    CurFill:=RdB;
-   End;
-   2:Begin
-    CurLineT:=RdB;
-    CurLine:=RdB;
-    CurW:=RdW;
-   End;
-   5:Begin
-    AddRaw(K_LINE,False);
-    AddPt(SW,SW);
-    AddPt(SW,SW);
-    Inc(RawN);
-   End;
-   6,8:Begin
-    Cnt:=RdW;
-    If Cnt*4>Len Then Cnt:=Len Div 4 - 1;
-    If Cnt>=2 Then Begin
-     AddRaw(K_POLYLINE,T=8);
-     Step:=1;
-     While Cnt Div Step>1500 Do Inc(Step);
-     For K:=0 To Cnt-1 Do Begin
-      SX:=SW;
-      SY:=SW;
-      If(K Mod Step=0)or(K=Cnt-1)Then AddPt(SX,SY);
-     End;
-     Inc(RawN);
-    End;
-   End;
-   7:Begin
-    AddRaw(K_RECT,True);
-    X1:=SW; Y1:=SW; X2:=SW; Y2:=SW;
-    AddPt(X1,Y1);
-    AddPt(X1+X2,Y1+Y2);
-    Inc(RawN);
-   End;
-   9:Begin
-    AddRaw(K_ELLIPSE,True);
-    X1:=SW; Y1:=SW; X2:=SW; Y2:=SW;
-    AddPt(X1-X2,Y1-Y2);
-    AddPt(X1+X2,Y1+Y2);
-    Inc(RawN);
-   End;
-   14:Begin
-    X1:=RdW;
-    Cnt:=RdW;
-    For K:=0 To Cnt-1 Do Begin
-     TW:=RdB; TH:=RdB; BW:=RdB;
-     If(X1+K>=0)and(X1+K<=255)Then Map[X1+K]:=NearestColor(TW,TH,BW);
-    End;
-   End;
-  End;
-  Pos:=Data+Len;
- End;
- Close(FF);
- If RawN=0 Then Exit;
- { Etendue du dessin }
+ StartPos:=RdL;
+ If(StartPos<16)or(StartPos>=Total)Then StartPos:=16;
  First:=True;
- BW:=0; BH:=0; OX:=0; OY:=0;
  X1:=0; Y1:=0; X2:=0; Y2:=0;
- For I:=0 To RawN-1 Do
-  For K:=0 To Raw[I].Cnt-1 Do
-   With Pt[Raw[I].First+K] Do Begin
-    If First Then Begin X1:=X; X2:=X; Y1:=Y; Y2:=Y; First:=False; End
-    Else Begin
-     If X<X1 Then X1:=X; If X>X2 Then X2:=X;
-     If Y<Y1 Then Y1:=Y; If Y>Y2 Then Y2:=Y;
-    End;
-   End;
+ Pass:=1;
+ Scan;
+ If First Then Begin
+  Close(FF);
+  Exit;
+ End;
  BW:=X2-X1;
  BH:=Y2-Y1;
  If BW<1 Then BW:=1;
@@ -1576,40 +1824,12 @@ Begin
  If TH/BH<Sc Then Sc:=TH/BH;
  OX:=(PageW-Round(BW*Sc)) Div 2;
  OY:=(PageH-Round(BH*Sc)) Div 2;
- For I:=0 To RawN-1 Do Begin
-  O:=NewObj(Raw[I].Kind,Raw[I].Cnt);
-  For K:=0 To Raw[I].Cnt-1 Do Begin
-   O^.Pts^[K].X:=OX+Round((Pt[Raw[I].First+K].X-X1)*Sc);
-   O^.Pts^[K].Y:=OY+Round((Y2-Pt[Raw[I].First+K].Y)*Sc);
-  End;
-  If(Raw[I].Kind=K_RECT)or(Raw[I].Kind=K_ELLIPSE)Then ObjNormalize2(O);
-  O^.Closed:=Raw[I].Closed;
-  If Raw[I].Closed and(Raw[I].Kind=K_POLYLINE)Then O^.Kind:=K_POLY;
-  If Raw[I].LineT=0 Then O^.OutCol:=-1 Else O^.OutCol:=Map[Raw[I].Line And 255];
-  O^.OutW:=Max(1,Round(Raw[I].W*Sc));
-  If(Raw[I].Kind=K_LINE)or(O^.Kind=K_POLYLINE)Then Begin
-   O^.FillKind:=FK_NONE;
-   O^.FillCol:=-1;
-  End
-   Else
-  If Raw[I].FillT=0 Then Begin
-   O^.FillKind:=FK_NONE;
-   O^.FillCol:=-1;
-  End
-   Else
-  Begin
-   O^.FillKind:=FK_SOLID;
-   O^.FillCol:=Map[Raw[I].Fill And 255];
-   If Raw[I].FillT>1 Then Begin
-    O^.FillKind:=FK_PATTERN;
-    O^.Pattern:=(Raw[I].FillT-2) Mod 8+1;
-    O^.FillCol2:=-1;
-   End;
-  End;
-  If Not AddObj(O)Then Break;
- End;
+ Pass:=2;
+ Scan;
+ Close(FF);
+ Any:=ObjCount>0;
  Modified:=False;
- LoadWPG:=True;
+ LoadWPG:=Any;
 End;
 
 { ------------------------------------------------------------------ }
@@ -1642,7 +1862,8 @@ Const
  Kappa=0.552284749830793;
 Var F:File;
     Good:Boolean;
-    Code,CloseCode,I,J,NC:Integer;
+    Code,CloseCode,J,NC:Integer;
+    I:LongInt;
     RootPos,DocPos,TablePos,EntryPos,PagePos,GroupPos,LayerPos:LongInt;
     NumPoints:LongInt;
     Mode,FillIndex,LineIndex:Integer;
@@ -1674,7 +1895,7 @@ Var F:File;
 
  Procedure LongValue(V:LongInt);
  Var B:Array[0..3] of Byte;
-     K:Integer;
+     K:LongInt;
  Begin
   For K:=0 To 3 Do B[K]:=(V Shr (K*8)) And 255;
   Bytes(B,4);
@@ -1751,7 +1972,7 @@ Var F:File;
 
  Procedure IdentityTransform;
  Var P,T,D:LongInt;
-     K:Integer;
+     K:LongInt;
  Begin
   P:=List('trfl');
   T:=Chunk('trfd');
@@ -1776,7 +1997,7 @@ Var F:File;
 
  Procedure BoundingBox(Tag:String;L,T,R,B:Real;Twice:Boolean);
  Var P:LongInt;
-     K,Count:Integer;
+     K,Count:LongInt;
  Begin
   P:=Chunk(Tag);
   If Twice Then Count:=2 Else Count:=1;
@@ -1823,7 +2044,7 @@ Var F:File;
  End;
 
  Procedure Geometry;
- Var K,Row,Column,Start,Ch:Integer;
+ Var K,Row,Column,Start,Ch:LongInt;
      X,Y,RX,RY,CX,CY,Cell:Real;
      X1,Y1,X2,Y2:LongInt;
      T:String;
@@ -1921,7 +2142,7 @@ Var F:File;
 
  Procedure LayerHeader(Kind:Integer;Flags:LongInt;Name:String);
  Var G,L:LongInt;
-     N,Size:Integer;
+     N,Size:LongInt;
  Begin
   NumberChunk('flgs',Flags);
   G:=List('lgob');
@@ -1954,10 +2175,10 @@ Var F:File;
   EndChunk(P);
  End;
 
- Procedure WriteObject(Index:Integer);
+ Procedure WriteObject(Index:LongInt);
  Var P,G,L,Size:LongInt;
  Begin
-  O:=Objs[Index];
+  O:=ObjAt(Index);
   Mode:=0;
   NumPoints:=0;
   Geometry;
@@ -2062,7 +2283,7 @@ Begin
  StyleRecord(3000,0,NC,0,True);
  StyleRecord(3001,3000,NC,0,False);
  For I:=0 To ObjCount-1 Do Begin
-  O:=Objs[I];
+  O:=ObjAt(I);
   ObjectColors;
   StyleRecord(3100+I,3000,FillIndex,LineIndex,False);
  End;
@@ -2117,7 +2338,7 @@ Begin
 End;
 
 { ------------------------------------------------------------------ }
-{ Lecture des fichiers CorelDRAW 6/7/8/9 (conteneur RIFF)           }
+{ Lecture des fichiers CorelDRAW 5/6/7/8/9 (conteneur RIFF)         }
 {                                                                    }
 { Structure observee dans les fichiers de CorelDRAW 9 :              }
 {  RIFF "CDR8"/"CDR9"                                                }
@@ -2135,6 +2356,9 @@ End;
 {          des types, type d'objet) puis les arguments ; la liste de }
 {          points est ( n:Word; 0:Word; (x,y:LongInt)*n; types:n )   }
 {   Unites : 1/254000 de pouce, origine au centre, Y vers le haut.   }
+{ CorelDRAW 5 ('CDR5', unite = 1/1000 pouce) : meme arbre de chunks,   }
+{ mais en-tetes loda/trfd en 16 bits, points en entiers 16 bits,      }
+{ enregistrements de texte de 8 octets (avance, FFFF, caractere, 9).  }
 { CorelDRAW 6 ('cdr6') : meme structure sans compression, tags 'fill'  }
 { (au lieu de 'fild'), dimensions de page en +28/+32 de 'mcfg'.       }
 { Seuls les objets vectoriels sont importes (le texte, les bitmaps   }
@@ -2170,6 +2394,7 @@ Type
  TFillRec=Record
   Id:LongInt;
   Kind:Byte;
+  Special:Boolean;
   C1,C2:Integer;
  End;
  TOutlRec=Record
@@ -2206,8 +2431,10 @@ Var
  PendBody,PendSz:LongInt;
  PendValid,HaveTrf,OwnExport:Boolean;
  C9Ver:Integer;
+ C9Old:Boolean;
+ CoordK:Double;
  Trf:Array[0..5] of Double;
- SkipText,SkipBmp,SkipOther:Integer;
+ SkipText,SkipBmp,SkipOther,SkipFx:Integer;
  { Sous-chemin en cours de construction }
  SubP:Array[0..7999] of TPt;
  SubN:Integer;
@@ -2453,6 +2680,14 @@ Begin
  D16:=LongInt(Dat^[O])Or(LongInt(Dat^[O+1])Shl 8);
 End;
 
+Function D16s(O:LongInt):LongInt;
+Var V:LongInt;
+Begin
+ V:=D16(O);
+ If V>=32768 Then V:=V-65536;
+ D16s:=V;
+End;
+
 Function DDbl(O:LongInt):Double;
 Var R:Double;
 Begin
@@ -2547,6 +2782,7 @@ Begin
  If R.Id=0 Then Exit;
  Typ:=D16(B+4);
  R.Kind:=FK_NONE;
+ R.Special:=D16(B+6)=$F0FF;
  R.C1:=-1;
  R.C2:=15;
  Case Typ Of
@@ -2584,12 +2820,13 @@ Procedure ReadOutl(B,Sz:LongInt);
 Var R:TOutlRec;
     S,N:LongInt;
 Begin
- If Sz<88 Then Exit;
+ If(Not C9Old)and(Sz<88)Then Exit;
+ If C9Old and(Sz<28)Then Exit;
  R.Id:=D32(B);
  If R.Id=0 Then Exit;
- R.W:=D32(B+12);
+ If C9Old Then R.W:=D16(B+10)*254 Else R.W:=D32(B+12);
  If OwnExport and(D16(B+4)=1)Then R.W:=0;
- R.C:=ColorAt(B+76);
+ If C9Old Then R.C:=ColorAt(B+16) Else R.C:=ColorAt(B+76);
  S:=HashSlot(R.Id);
  For N:=1 To HASH_N Do Begin
   If(OutlTab^[S].Id=0)or(OutlTab^[S].Id=R.Id)Then Break;
@@ -2687,6 +2924,17 @@ Var I:LongInt;
     T:Integer;
 Begin
  ValidPoints:=False;
+ If C9Old Then Begin
+  If Len<9 Then Exit;
+  N:=D16(Off);
+  If(N<2)or(N>7900)or(4+5*N>Len)Then Exit;
+  T:=Dat^[Off+4+4*N];
+  If(T And $C0)<>0 Then Exit;
+  For I:=0 To N-1 Do
+   If(Dat^[Off+4+4*N+I] And 3)<>0 Then Exit;
+  ValidPoints:=True;
+  Exit;
+ End;
  If Len<13 Then Exit;
  N:=D16(Off);
  If(N<2)or(N>7900)or(4+9*N>Len)Then Exit;
@@ -2697,134 +2945,257 @@ Begin
  ValidPoints:=True;
 End;
 
-Procedure EmitObject;
-Var Kind,NArg,OffT,TypT,I,Len,Slot,Q:LongInt;
-    Offs:Array[0..63] of LongInt;
-    V,PtsOff,PtsN,FillId,OutlId,Key:LongInt;
-    K,T:Integer;
-    FoundPts:Boolean;
-    X,Y,X2,Y2,CX,CY:Double;
-    PX0,PY0,WX,WY:LongInt;
-    PT:TPt;
-    HalfW,HalfH:Double;
- Procedure ToWorld(Idx:LongInt;Var OX,OY:LongInt);
- Begin
-  X:=D32(PtsOff+4+8*Idx);
-  Y:=D32(PtsOff+8+8*Idx);
-  If HaveTrf Then Begin
-   X2:=Trf[0]*X+Trf[1]*Y+Trf[2];
-   Y2:=Trf[3]*X+Trf[4]*Y+Trf[5];
-  End
-   Else Begin
-    X2:=X;
-    Y2:=Y;
-   End;
-  CX:=X2/1000+PageW/2;
-  CY:=PageH/2-Y2/1000;
-  If CX<-2000000 Then CX:=-2000000;
-  If CX>2000000 Then CX:=2000000;
-  If CY<-2000000 Then CY:=-2000000;
-  If CY>2000000 Then CY:=2000000;
-  OX:=Round(CX);
-  OY:=Round(CY);
- End;
+Var
+ TxsmOff,TxsmSz:LongInt;
+ TxsmOk,BBoxOk:Boolean;
+ BB1X,BB1Y,BB2X,BB2Y:LongInt;
+
+{ Liste de points : n:Word ; 0:Word ; (x,y:LongInt)*n ; types:n.
+  Retourne le nombre d'octets en trop (>=0) ou -1 si la liste est invalide. }
+Function PtsExtra(Off,Len:LongInt;Var N:LongInt):LongInt;
+Var I,X,Y:LongInt;
 Begin
- Kind:=D32(PendBody+16);
- NArg:=D32(PendBody+4);
- OffT:=D32(PendBody+8);
- TypT:=D32(PendBody+12);
- If(NArg<1)or(NArg>60)Then Exit;
- If(Kind=4)or(Kind=6)Then Begin Inc(SkipText); Exit; End;
- If Kind=5 Then Begin Inc(SkipBmp); Exit; End;
- If(Kind=0)or(Kind=7)or(Kind=8)or(Kind=11)or(Kind=12)or(Kind=15)or(Kind=17)or
-   (Kind=23)or(Kind=28)Then Exit;
- For I:=0 To NArg-1 Do Offs[I]:=D32(PendBody+OffT+4*I);
- FoundPts:=False;
- PtsOff:=0; PtsN:=0;
- FillId:=-1;
- OutlId:=-1;
- For I:=0 To NArg-1 Do Begin
-  If I<NArg-1 Then Len:=Offs[I+1]-Offs[I] Else Len:=PendSz-Offs[I];
-  If Len=4 Then Begin
-   V:=D32(PendBody+Offs[I]);
-   If OwnExport Then Slot:=-1 Else Slot:=FindFill(V);
-   If(Slot>=0)and(FillId<0)Then FillId:=Slot
-    Else If OwnExport Then Begin End
-    Else Begin
-     Slot:=FindOutl(V);
-     If(Slot>=0)and(OutlId<0)Then OutlId:=Slot
-      Else Begin
-       { cle de style -> identifiant }
-       For K:=0 To SNF-1 Do
-        If(SKeyF[K]=V)and(FillId<0)Then FillId:=FindFill(SValF[K]);
-       For K:=0 To SNO-1 Do
-        If(SKeyO[K]=V)and(OutlId<0)Then OutlId:=FindOutl(SValO[K]);
-      End;
-    End;
-  End
-   Else
-  If(Not FoundPts)and ValidPoints(PendBody+Offs[I],Len,PtsN)Then Begin
-   FoundPts:=True;
-   PtsOff:=PendBody+Offs[I];
-  End;
- End;
- If Not FoundPts Then Begin
-  Inc(SkipOther);
+ PtsExtra:=-1;
+ If Not ValidPoints(Off,Len,N)Then Exit;
+ If C9Old Then Begin
+  PtsExtra:=Len-(4+5*N);
   Exit;
  End;
- { Styles ecrits par ce programme : arguments de style 3000+ }
- If(FillId<0)and(OutlId<0)and(StyLen>0)Then
-  For I:=0 To NArg-1 Do Begin
-   If I<NArg-1 Then Len:=Offs[I+1]-Offs[I] Else Len:=PendSz-Offs[I];
-   If Len=4 Then Begin
-    V:=D32(PendBody+Offs[I]);
-    If(V>=3100)and(V<3100+MAXOBJ+100)Then Begin
-     Q:=StyOff;
-     While Q+33<=StyOff+StyLen Do Begin
-      If(D32(Q)=1)and(D32(Q+4)=V)and(D32(Q+8)=3000)Then Begin
-       Key:=D32(Q+25);
-       For K:=0 To SNF-1 Do If SKeyF[K]=Key Then FillId:=FindFill(SValF[K]);
-       Key:=D32(Q+29);
-       For K:=0 To SNO-1 Do If SKeyO[K]=Key Then OutlId:=FindOutl(SValO[K]);
-       Break;
+ For I:=0 To N-1 Do Begin
+  X:=D32(Off+4+8*I);
+  Y:=D32(Off+8+8*I);
+  If(Abs(X)>300000000)or(Abs(Y)>300000000)Then Exit;
+ End;
+ PtsExtra:=Len-(4+9*N);
+End;
+
+{ Convertit les coordonnees locales (unites CDR) en unites du document }
+Procedure LocalToWorld(X,Y:Double;Var WX,WY:LongInt);
+Var X2,Y2,CX,CY:Double;
+Begin
+ If HaveTrf Then Begin
+  X2:=Trf[0]*X+Trf[1]*Y+Trf[2];
+  Y2:=Trf[3]*X+Trf[4]*Y+Trf[5];
+ End
+  Else Begin
+   X2:=X;
+   Y2:=Y;
+  End;
+ CX:=X2*CoordK+PageW/2;
+ CY:=PageH/2-Y2*CoordK;
+ If CX<-2000000 Then CX:=-2000000;
+ If CX>2000000 Then CX:=2000000;
+ If CY<-2000000 Then CY:=-2000000;
+ If CY>2000000 Then CY:=2000000;
+ WX:=Round(CX);
+ WY:=Round(CY);
+End;
+
+{ Extrait le texte d'un objet texte : lignes dans TxLines[0..TxN-1] }
+Var
+ TxLines:Array[0..299] of String[60];
+ TxAdv:Array[0..299] of Double;
+ TxN:Integer;
+ TxAcc:Double;
+
+Procedure TextPush(Var Cur:String);
+Begin
+ If TxN<300 Then Begin
+  TxLines[TxN]:=Cur;
+  TxAdv[TxN]:=TxAcc;
+  Inc(TxN);
+ End;
+ Cur:='';
+ TxAcc:=0;
+End;
+
+Procedure EmitText(Kind:LongInt);
+Var B,Sz,O,C,F,Found,I,K,BestS,BestL,RunS,Len,L,CPL,MaxLen:LongInt;
+    Cur:String;
+    Raw:String;
+    X1,Y1,X2,Y2,TX,TY,W,H:LongInt;
+    Cell,CellA,CellP,Em,Size,Scale:Double;
+    Obj:PObj;
+    Wrap:Boolean;
+ Procedure AddLine(Const S:String;X,Y,CellSz:LongInt);
+ Begin
+  If S='' Then Exit;
+  Obj:=NewObj(K_TEXT,1);
+  Obj^.Pts^[0].X:=X;
+  Obj^.Pts^[0].Y:=Y;
+  Obj^.Txt:=S;
+  Obj^.TextSize:=Clamp(CellSz,15,3000);
+  Obj^.OutCol:=-1;
+  Obj^.FillKind:=FK_SOLID;
+  If(tFillKind<>FK_NONE)and(tF1>=0)Then Obj^.FillCol:=tF1 Else Obj^.FillCol:=0;
+  Obj^.Group:=tGroup;
+  If Not AddObj(Obj)Then C9Full:=True;
+ End;
+Begin
+ If Not TxsmOk Then Begin
+  Inc(SkipText);
+  Exit;
+ End;
+ B:=TxsmOff;
+ Sz:=TxsmSz;
+ TxN:=0;
+ TxAcc:=0;
+ Cur:='';
+ Found:=0;
+ Wrap:=False;
+ { methode A : enregistrements (avance, caractere, indicateur) }
+ O:=0;
+ While O+12<=Sz Do Begin
+  C:=D32(B+O+4);
+  F:=D32(B+O+8);
+  If((F=LongInt($80000000))or(F=$10000000))and(C>=9)and(C<=255)Then Begin
+   If C=13 Then TextPush(Cur)
+    Else If C<>10 Then Begin
+     If Length(Cur)>=60 Then TextPush(Cur);
+     Cur:=Cur+Chr(C);
+     TxAcc:=TxAcc+D32(B+O);
+    End;
+   Inc(Found);
+   Inc(O,12);
+  End
+   Else Inc(O,4);
+ End;
+ If Cur<>'' Then TextPush(Cur);
+ { methode C : CorelDRAW 5, enregistrements de 8 octets (avance, FFFF, caractere, indicateur) }
+ If(Found=0)and C9Old Then Begin
+  O:=0;
+  While O+8<=Sz Do Begin
+   C:=D16(B+O+4);
+   If(D16(B+O+2)=$FFFF)and((C=13)or((C>=32)and(C<=255)))Then Begin
+    If C=13 Then TextPush(Cur)
+     Else Begin
+      If Length(Cur)>=60 Then TextPush(Cur);
+      Cur:=Cur+Chr(C);
+      TxAcc:=TxAcc+D16(B+O);
+     End;
+    Inc(Found);
+    Inc(O,8);
+   End
+    Else Inc(O,2);
+  End;
+  If Cur<>'' Then TextPush(Cur);
+ End;
+ { methode B : texte ASCII brut (CorelDRAW 8/9) }
+ If Found=0 Then Begin
+  BestS:=0; BestL:=0; RunS:=-1;
+  For O:=0 To Sz Do Begin
+   If(O<Sz)and(Dat^[B+O]>=32)and(Dat^[B+O]<127)Then Begin
+    If RunS<0 Then RunS:=O;
+   End
+    Else Begin
+     If(RunS>=0)and(O-RunS>BestL)Then Begin
+      BestS:=RunS;
+      BestL:=O-RunS;
+     End;
+     RunS:=-1;
+    End;
+  End;
+  If BestL<3 Then Begin
+   Inc(SkipText);
+   Exit;
+  End;
+  Raw:='';
+  For I:=0 To BestL-1 Do
+   If Length(Raw)<255 Then Raw:=Raw+Chr(Dat^[B+BestS+I]);
+  Wrap:=True;
+ End;
+ { position et taille }
+ If BBoxOk Then Begin
+  LocalToWorld(BB1X,BB1Y,X1,Y1);
+  LocalToWorld(BB2X,BB2Y,X2,Y2);
+  If X1>X2 Then Begin TX:=X1; X1:=X2; X2:=TX; End;
+  If Y1>Y2 Then Begin TY:=Y1; Y1:=Y2; Y2:=TY; End;
+  W:=Max(10,X2-X1);
+  H:=Max(10,Y2-Y1);
+  If Wrap Then Begin
+   Len:=Length(Raw);
+   CellA:=W/Len;
+   If H/1.25<CellA Then CellA:=H/1.25;
+   If H/(CellA*1.25)<1.8 Then Begin
+    Cell:=CellA;
+    TxLines[0]:=Copy(Raw,1,60);
+    TxN:=1;
+   End
+    Else Begin
+     CellP:=Sqrt(W*H/(Len*1.25));
+     If CellP<15 Then CellP:=15;
+     Cell:=CellP;
+     CPL:=Trunc(W/Cell);
+     If CPL<4 Then CPL:=4;
+     If CPL>60 Then CPL:=60;
+     TxN:=0;
+     I:=1;
+     While(I<=Len)and(TxN<300)Do Begin
+      L:=CPL;
+      If I+L-1<Len Then Begin
+       K:=I+L-1;
+       While(K>I)and(Raw[K]<>' ')Do Dec(K);
+       If K>I Then L:=K-I+1;
       End;
-      Inc(Q);
+      TxLines[TxN]:=Copy(Raw,I,L);
+      Inc(TxN);
+      Inc(I,L);
      End;
     End;
+  End
+   Else Begin
+    MaxLen:=1;
+    For I:=0 To TxN-1 Do If Length(TxLines[I])>MaxLen Then MaxLen:=Length(TxLines[I]);
+    Cell:=W/MaxLen;
+    If H/(TxN*1.25)<Cell Then Cell:=H/(TxN*1.25);
    End;
-  End;
- { Style de l'objet }
- tFillKind:=FK_NONE; tF1:=-1; tF2:=15;
- If FillId>=0 Then Begin
-  tFillKind:=FillTab^[FillId].Kind;
-  tF1:=FillTab^[FillId].C1;
-  tF2:=FillTab^[FillId].C2;
-  If tF1<0 Then tFillKind:=FK_NONE;
- End;
- tOut:=-1; tW:=1;
- If OutlId>=0 Then Begin
-  If OutlTab^[OutlId].W>0 Then Begin
-   tOut:=OutlTab^[OutlId].C;
-   tW:=OutlTab^[OutlId].W Div 1000;
-   If tW<1 Then tW:=1;
-   If tW>200 Then tW:=200;
-  End;
+  For I:=0 To TxN-1 Do
+   AddLine(TxLines[I],X1,Y1+Round(I*1.25*Cell),Round(Cell));
  End
-  Else
- If tFillKind=FK_NONE Then tOut:=0;
- tGroup:=CurGroup;
- { Parcours du chemin }
- SubN:=0;
- SubAllLines:=True;
- SubClosed:=False;
- PendCnt:=0;
- For I:=0 To PtsN-1 Do Begin
-  T:=Dat^[PtsOff+4+8*PtsN+I];
-  ToWorld(I,WX,WY);
+  Else Begin
+   If Not HaveTrf Then Begin
+    Inc(SkipText);
+    Exit;
+   End;
+   Scale:=Abs(Trf[0]);
+   If Scale<0.0001 Then Scale:=1;
+   If Wrap Then Begin
+    TxLines[0]:=Copy(Raw,1,60);
+    TxAdv[0]:=0;
+    TxN:=1;
+   End;
+   LocalToWorld(0,0,TX,TY);
+   { taille estimee a partir de la largeur totale (somme des avances) }
+   Cell:=0;
+   For I:=0 To TxN-1 Do
+    If(Length(TxLines[I])>0)and(TxAdv[I]>0)Then Begin
+     Em:=TxAdv[I]*Scale*CoordK/Length(TxLines[I]);
+     If Em>Cell Then Cell:=Em;
+    End;
+   If Cell<15 Then Cell:=Max(15,Round(42333*Scale/1000*0.5));
+   If Kind=6 Then TY:=TY+Round(Cell*1.6);
+   For I:=0 To TxN-1 Do
+    AddLine(TxLines[I],TX,TY-Round(Cell)+Round(I*2.5*Cell),Round(Cell));
+  End;
+End;
+
+Procedure EmitObject;
+Var Kind,NArg,OffT,I,Len,Slot,Q,V,PtsOff,PtsN,FillId,OutlId,Key,Ex,BestEx,RectArg,EllArg:LongInt;
+    Offs:Array[0..63] of LongInt;
+    K,T:Integer;
+    PX0,PY0:LongInt;
+    WX,WY:LongInt;
+    FxSkip:Boolean;
+ { machine a etats du chemin : coordonnees locales X,Y et type de noeud }
+ Procedure PathPt(X,Y:LongInt;T:Integer);
+ Var KK:Integer;
+     PT:TPt;
+ Begin
+  LocalToWorld(X,Y,WX,WY);
   PT.X:=WX;
   PT.Y:=WY;
-  K:=T And $C0;
-  If K=0 Then Begin
+  KK:=T And $C0;
+  If KK=0 Then Begin
    SubFlush;
    SubN:=0;
    SubAllLines:=True;
@@ -2833,7 +3204,7 @@ Begin
    SubAdd(WX,WY);
   End
    Else
-  If K=$40 Then Begin
+  If KK=$40 Then Begin
    If SubN>0 Then Begin
     PX0:=SubP[SubN-1].X;
     PY0:=SubP[SubN-1].Y;
@@ -2844,7 +3215,7 @@ Begin
    PendCnt:=0;
   End
    Else
-  If K=$C0 Then Begin
+  If KK=$C0 Then Begin
    If PendCnt<2 Then Begin
     PendC[PendCnt]:=PT;
     Inc(PendCnt);
@@ -2868,17 +3239,206 @@ Begin
     End;
     PendCnt:=0;
    End;
-  If((T And 8)<>0)and(K<>0)and(SubN>1)Then Begin
+  If((T And 8)<>0)and(KK<>0)and(SubN>1)Then Begin
    SubClosed:=True;
    SubFlush;
    SubN:=0;
    SubAllLines:=True;
    SubClosed:=False;
   End;
-  If C9Full Then Break;
  End;
+
+ { rectangle parametrique CorelDRAW 6 : largeur, hauteur (signees), rayon }
+ Procedure RectPath(W,H,R:LongInt);
+ Var SX,SY,KX,KY:LongInt;
+ Begin
+  If W=0 Then Exit;
+  If H=0 Then Exit;
+  If W<0 Then SX:=-1 Else SX:=1;
+  If H<0 Then SY:=-1 Else SY:=1;
+  R:=Abs(R);
+  If R>Abs(W) Div 2 Then R:=Abs(W) Div 2;
+  If R>Abs(H) Div 2 Then R:=Abs(H) Div 2;
+  If R<=0 Then Begin
+   PathPt(0,0,0);
+   PathPt(W,0,$40);
+   PathPt(W,H,$40);
+   PathPt(0,H,$40);
+   PathPt(0,0,$48);
+  End
+   Else Begin
+    KX:=Round(R*0.4477)*SX;
+    KY:=Round(R*0.4477)*SY;
+    R:=R*1;
+    PathPt(R*SX,0,0);
+    PathPt(W-R*SX,0,$40);
+    PathPt(W-KX,0,$C0); PathPt(W,KY,$C0); PathPt(W,R*SY,$80);
+    PathPt(W,H-R*SY,$40);
+    PathPt(W,H-KY,$C0); PathPt(W-KX,H,$C0); PathPt(W-R*SX,H,$80);
+    PathPt(R*SX,H,$40);
+    PathPt(KX,H,$C0); PathPt(0,H-KY,$C0); PathPt(0,H-R*SY,$80);
+    PathPt(0,R*SY,$40);
+    PathPt(0,KY,$C0); PathPt(KX,0,$C0); PathPt(R*SX,0,$88);
+   End;
+ End;
+
+ { ellipse parametrique : centre a l'origine, rayons RX et RY }
+ Procedure EllipsePath(RX,RY:LongInt);
+ Var KX,KY:LongInt;
+ Begin
+  If(RX=0)or(RY=0)Then Exit;
+  KX:=Round(RX*0.5523);
+  KY:=Round(RY*0.5523);
+  PathPt(RX,0,0);
+  PathPt(RX,KY,$C0); PathPt(KX,RY,$C0); PathPt(0,RY,$80);
+  PathPt(-KX,RY,$C0); PathPt(-RX,KY,$C0); PathPt(-RX,0,$80);
+  PathPt(-RX,-KY,$C0); PathPt(-KX,-RY,$C0); PathPt(0,-RY,$80);
+  PathPt(KX,-RY,$C0); PathPt(RX,-KY,$C0); PathPt(RX,0,$88);
+ End;
+
+Begin
+ If C9Old Then Begin
+  Kind:=D16(PendBody+8);
+  NArg:=D16(PendBody+2);
+  OffT:=D16(PendBody+4);
+ End
+  Else Begin
+   Kind:=D32(PendBody+16);
+   NArg:=D32(PendBody+4);
+   OffT:=D32(PendBody+8);
+  End;
+ If(NArg<1)or(NArg>60)Then Exit;
+ If Kind=5 Then Begin Inc(SkipBmp); Exit; End;
+ If(Kind=0)or(Kind=7)or(Kind=8)or(Kind=11)or(Kind=12)or(Kind=15)or(Kind=17)or
+   (Kind=23)or(Kind=28)Then Exit;
+ For I:=0 To NArg-1 Do
+  If C9Old Then Offs[I]:=D16(PendBody+OffT+2*I) Else Offs[I]:=D32(PendBody+OffT+4*I);
+ PtsOff:=0; PtsN:=0;
+ BestEx:=-1;
+ RectArg:=0; EllArg:=0;
+ FxSkip:=False;
+ FillId:=-1;
+ OutlId:=-1;
+ For I:=0 To NArg-1 Do Begin
+  If I<NArg-1 Then Len:=Offs[I+1]-Offs[I] Else Len:=PendSz-Offs[I];
+  If Len=4 Then Begin
+   V:=D32(PendBody+Offs[I]);
+   If OwnExport Then Slot:=-1 Else Slot:=FindFill(V);
+   If(Slot>=0)and(FillId<0)Then FillId:=Slot
+    Else If OwnExport Then Begin End
+    Else Begin
+     Slot:=FindOutl(V);
+     If(Slot>=0)and(OutlId<0)Then OutlId:=Slot
+      Else Begin
+       { cle de style -> identifiant }
+       For K:=0 To SNF-1 Do
+        If(SKeyF[K]=V)and(FillId<0)Then FillId:=FindFill(SValF[K]);
+       For K:=0 To SNO-1 Do
+        If(SKeyO[K]=V)and(OutlId<0)Then OutlId:=FindOutl(SValO[K]);
+      End;
+    End;
+  End
+   Else Begin
+    Ex:=PtsExtra(PendBody+Offs[I],Len,Q);
+    If(Ex>=0)and((BestEx<0)or(Ex<BestEx))Then Begin
+     BestEx:=Ex;
+     PtsOff:=PendBody+Offs[I];
+     PtsN:=Q;
+    End;
+    If(Len=56)and(D32(PendBody+Offs[I])=4)Then FxSkip:=True;
+    If(Len=6)and C9Old and(Kind=1)and(RectArg=0)Then RectArg:=PendBody+Offs[I];
+    If(Len=10)and C9Old and(Kind=2)and(EllArg=0)Then EllArg:=PendBody+Offs[I];
+    If(Len=12)and(Kind=1)and(RectArg=0)Then RectArg:=PendBody+Offs[I];
+    If(Len=20)and(Kind=2)and(EllArg=0)Then EllArg:=PendBody+Offs[I];
+   End;
+ End;
+ { objets d'effet (lentille, ombre...) : non representes }
+ If FxSkip Then Begin
+  Inc(SkipFx);
+  Exit;
+ End;
+ { Styles ecrits par ce programme : arguments de style 3000+ }
+ If(FillId<0)and(OutlId<0)and(StyLen>0)Then
+  For I:=0 To NArg-1 Do Begin
+   If I<NArg-1 Then Len:=Offs[I+1]-Offs[I] Else Len:=PendSz-Offs[I];
+   If Len=4 Then Begin
+    V:=D32(PendBody+Offs[I]);
+    If OwnExport and(V>=3100)Then Begin
+     Q:=StyOff;
+     While Q+33<=StyOff+StyLen Do Begin
+      If(D32(Q)=1)and(D32(Q+4)=V)and(D32(Q+8)=3000)Then Begin
+       Key:=D32(Q+25);
+       For K:=0 To SNF-1 Do If SKeyF[K]=Key Then FillId:=FindFill(SValF[K]);
+       Key:=D32(Q+29);
+       For K:=0 To SNO-1 Do If SKeyO[K]=Key Then OutlId:=FindOutl(SValO[K]);
+       Break;
+      End;
+      Inc(Q);
+     End;
+    End;
+   End;
+  End;
+ { Style de l'objet }
+ tFillKind:=FK_NONE; tF1:=-1; tF2:=15;
+ If FillId>=0 Then Begin
+  tFillKind:=FillTab^[FillId].Kind;
+  tF1:=FillTab^[FillId].C1;
+  tF2:=FillTab^[FillId].C2;
+  If tF1<0 Then tFillKind:=FK_NONE;
+  { remplissage a transparence / lentille : non represente }
+  If FillTab^[FillId].Special Then Begin
+   tFillKind:=FK_NONE;
+   tF1:=-1;
+   If OutlId<0 Then Begin
+    Inc(SkipFx);
+    Exit;
+   End;
+  End;
+ End;
+ tOut:=-1; tW:=1;
+ If OutlId>=0 Then Begin
+  If OutlTab^[OutlId].W>0 Then Begin
+   tOut:=OutlTab^[OutlId].C;
+   tW:=OutlTab^[OutlId].W Div 1000;
+   If tW<1 Then tW:=1;
+   If tW>200 Then tW:=200;
+  End;
+ End
+  Else
+ If tFillKind=FK_NONE Then tOut:=0;
+ tGroup:=CurGroup;
+ If(Kind=4)or(Kind=6)Then Begin
+  EmitText(Kind);
+  Exit;
+ End;
+ { Parcours du chemin }
+ SubN:=0;
+ SubAllLines:=True;
+ SubClosed:=False;
+ PendCnt:=0;
+ If PtsN>0 Then Begin
+  If C9Old Then Begin
+   For I:=0 To PtsN-1 Do
+    PathPt(D16s(PtsOff+4+4*I),D16s(PtsOff+6+4*I),Dat^[PtsOff+4+4*PtsN+I]);
+  End
+   Else
+  For I:=0 To PtsN-1 Do
+   PathPt(D32(PtsOff+4+8*I),D32(PtsOff+8+8*I),Dat^[PtsOff+4+8*PtsN+I]);
+ End
+  Else
+ If(RectArg>0)and C9Old Then RectPath(D16s(RectArg),D16s(RectArg+2),D16s(RectArg+4))
+  Else
+ If(EllArg>0)and C9Old Then EllipsePath(Abs(D16s(EllArg)),Abs(D16s(EllArg+2)))
+  Else
+ If RectArg>0 Then RectPath(D32(RectArg),D32(RectArg+4),D32(RectArg+8))
+  Else
+ If EllArg>0 Then EllipsePath(Abs(D32(EllArg)),Abs(D32(EllArg+4)))
+  Else Begin
+   Inc(SkipOther);
+   Exit;
+  End;
  SubFlush;
- HalfW:=0; HalfH:=0;
+ T:=0;
 End;
 
 { ------------------------- Parcours des chunks --------------------- }
@@ -2893,6 +3453,13 @@ Begin
   If Tag='mcfg' Then Begin
    OwnExport:=D32(B)=8;
    { CorelDRAW 6 : dimensions de la page en +28/+32 ; versions 7 a 9 : +4/+8 }
+   If C9Old Then Begin
+    If(D16(B)>=1000)and(D16(B+2)>=1000)Then Begin
+     PageW:=Round(D16(B)*0.254);
+     PageH:=Round(D16(B+2)*0.254);
+    End;
+    Exit;
+   End;
    If C9Ver<=6 Then PgOff:=28 Else PgOff:=4;
    If(D32(B+PgOff)>=500000)and(D32(B+PgOff)<=200000000)and
      (D32(B+PgOff+4)>=500000)and(D32(B+PgOff+4)<=200000000)Then Begin
@@ -2910,8 +3477,22 @@ Begin
   If(D32(B) And $10000)<>0 Then CurPageSkip:=True;
  End
   Else
+ If(Tag='txsm')and(Parent='obj ')Then Begin
+  TxsmOff:=B;
+  TxsmSz:=Sz;
+  TxsmOk:=True;
+ End
+  Else
+ If(Tag='bbox')and(Parent='obj ')and(Sz>=16)Then Begin
+  BB1X:=D32(B);
+  BB1Y:=D32(B+4);
+  BB2X:=D32(B+8);
+  BB2Y:=D32(B+12);
+  BBoxOk:=True;
+ End
+  Else
  If(Tag='loda')and(Parent='lgob')Then Begin
-  Kind:=D32(B+16);
+  If C9Old Then Kind:=D16(B+8) Else Kind:=D32(B+16);
   If Grand='layr' Then
    SkipLayer:=(Kind=11)or(Kind=12)or(Kind=17)
   Else
@@ -2925,11 +3506,20 @@ Begin
   Else
  If(Tag='trfd')and(Parent='trfl')and PendValid Then Begin
   { les 6 coefficients suivent 8 octets apres le debut du premier argument }
-  I:=D32(B+16);
-  If(I>=16)and(I+8+48<=Sz)Then Begin
-   For K:=0 To 5 Do Trf[K]:=DDbl(B+I+8+8*K);
-   HaveTrf:=True;
-  End;
+  If C9Old Then Begin
+   I:=D16(B+10);
+   If(I>=12)and(I+2+48<=Sz)Then Begin
+    For K:=0 To 5 Do Trf[K]:=DDbl(B+I+2+8*K);
+    HaveTrf:=True;
+   End;
+  End
+   Else Begin
+    I:=D32(B+16);
+    If(I>=16)and(I+8+48<=Sz)Then Begin
+     For K:=0 To 5 Do Trf[K]:=DDbl(B+I+8+8*K);
+     HaveTrf:=True;
+    End;
+   End;
  End;
 End;
 
@@ -2944,14 +3534,18 @@ Begin
  End
   Else
  Descend:=(LT='page')or(LT='gobj')or(LT='layr')or(LT='lgob')or(LT='obj ')or
-          (LT='grp ')or(LT='trfl');
+          (LT='grp ')or(LT='trfl')or(LT='lnkg');
  If Not Descend Then Exit;
  SaveGroup:=CurGroup;
  If Pass=1 Then Begin
   If LT='page' Then CurPageSkip:=False;
   If LT='layr' Then SkipLayer:=False;
-  If LT='obj ' Then PendValid:=False;
-  If LT='grp ' Then Begin
+  If LT='obj ' Then Begin
+   PendValid:=False;
+   TxsmOk:=False;
+   BBoxOk:=False;
+  End;
+  If(LT='grp ')or(LT='lnkg')Then Begin
    Inc(GroupSeq);
    CurGroup:=GroupSeq;
   End;
@@ -2962,7 +3556,7 @@ Begin
    EmitObject;
    PendValid:=False;
   End;
-  If LT='grp ' Then CurGroup:=SaveGroup;
+  If(LT='grp ')or(LT='lnkg')Then CurGroup:=SaveGroup;
   If(LT='page')Then Begin
    If Not CurPageSkip Then Inc(PagesDone);
   End;
@@ -2998,6 +3592,229 @@ Begin
   CurGroup:=0;
   C9Walk(0,DatLen,'','',Pass);
  End;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Decompression KWAJ (fichiers "xxx.CD_" des disquettes CorelDRAW 5)  }
+{ Methodes 0 (copie), 1 (XOR 0xFF), 2 (SZDD) et 3 (LZ + Huffman).     }
+{ ------------------------------------------------------------------ }
+
+Type
+ TKBuf=Array[0..1999999999] of Byte;
+ PKBuf=^TKBuf;
+ TKHuff=Record
+  Cnt:Array[0..15] of LongInt;
+  Sym:Array[0..255] of Integer;
+ End;
+
+Var
+ KIn:PKBuf;
+ KInLen,KBitPos,KBitEnd:LongInt;
+ KBad,KEnd:Boolean;
+ KOut:PKBuf;
+ KOutLen,KOutCap:LongInt;
+
+Function KBits(N:Integer):LongInt;
+Var V:LongInt;
+    I:Integer;
+    P:LongInt;
+Begin
+ V:=0;
+ For I:=1 To N Do Begin
+  P:=KBitPos;
+  If P>=KBitEnd Then Begin
+   KEnd:=True;
+   V:=V Shl 1;
+  End
+   Else V:=(V Shl 1)Or((KIn^[P Shr 3] Shr (7-(P And 7)))And 1);
+  Inc(KBitPos);
+ End;
+ KBits:=V;
+End;
+
+Procedure KPut(B:Byte);
+Var P:PKBuf;
+Begin
+ If KOutLen>=KOutCap Then Begin
+  GetMem(P,KOutCap*2);
+  Move(KOut^,P^,KOutLen);
+  FreeMem(KOut,KOutCap);
+  KOut:=P;
+  KOutCap:=KOutCap*2;
+ End;
+ KOut^[KOutLen]:=B;
+ Inc(KOutLen);
+End;
+
+{ Table de Huffman canonique : codes croissants par longueur puis par symbole }
+Procedure KBuild(Var H:TKHuff;Var L:Array of Byte;N:Integer);
+Var I,Len:Integer;
+    Offs:Array[0..16] of Integer;
+Begin
+ For I:=0 To 15 Do H.Cnt[I]:=0;
+ For I:=0 To N-1 Do Inc(H.Cnt[L[I]]);
+ H.Cnt[0]:=0;
+ Offs[1]:=0;
+ For Len:=1 To 15 Do Offs[Len+1]:=Offs[Len]+H.Cnt[Len];
+ For I:=0 To N-1 Do
+  If L[I]<>0 Then Begin
+   H.Sym[Offs[L[I]]]:=I;
+   Inc(Offs[L[I]]);
+  End;
+End;
+
+Function KSym(Var H:TKHuff):Integer;
+Var Code,First,Index,Count:LongInt;
+    Len:Integer;
+Begin
+ Code:=0; First:=0; Index:=0;
+ For Len:=1 To 15 Do Begin
+  Code:=Code Or KBits(1);
+  Count:=H.Cnt[Len];
+  If Code-Count<First Then Begin
+   KSym:=H.Sym[Index+(Code-First)];
+   Exit;
+  End;
+  Index:=Index+Count;
+  First:=(First+Count) Shl 1;
+  Code:=Code Shl 1;
+ End;
+ KBad:=True;
+ KSym:=0;
+End;
+
+Procedure KReadLens(TypeV,N:Integer;Var L:Array of Byte);
+Var I,C,Sel:Integer;
+Begin
+ C:=0;
+ Case TypeV Of
+  0:Begin
+   Case N Of
+    16:C:=4;
+    32:C:=5;
+    64:C:=6;
+    256:C:=8;
+   End;
+   For I:=0 To N-1 Do L[I]:=C;
+  End;
+  1:Begin
+   C:=KBits(4);
+   L[0]:=C;
+   For I:=1 To N-1 Do Begin
+    Sel:=KBits(1);
+    If Sel=0 Then L[I]:=C
+     Else Begin
+      Sel:=KBits(1);
+      If Sel=0 Then Begin
+       Inc(C);
+       L[I]:=C;
+      End
+       Else Begin
+        C:=KBits(4);
+        L[I]:=C;
+       End;
+     End;
+   End;
+  End;
+  2:Begin
+   C:=KBits(4);
+   L[0]:=C;
+   For I:=1 To N-1 Do Begin
+    Sel:=KBits(2);
+    If Sel=3 Then C:=KBits(4)
+     Else C:=C+Sel-1;
+    L[I]:=C And 15;
+   End;
+  End;
+ Else
+  For I:=0 To N-1 Do L[I]:=KBits(4);
+ End;
+End;
+
+{ Methode 3 : LZ (fenetre de 4096 octets) + Huffman }
+Procedure KwajLZH;
+Var Win:Array[0..4095] of Byte;
+    Types:Array[0..5] of Integer;
+    L1,L2,L3,L4,L5:Array[0..255] of Byte;
+    H1,H2,H3,H4,H5:TKHuff;
+    I,J,Len,Offset,Pos,Sym,LitRun:Integer;
+Begin
+ FillChar(Win,SizeOf(Win),32);
+ For I:=0 To 5 Do Types[I]:=KBits(4);
+ KReadLens(Types[0],16,L1); KBuild(H1,L1,16);
+ KReadLens(Types[1],16,L2); KBuild(H2,L2,16);
+ KReadLens(Types[2],32,L3); KBuild(H3,L3,32);
+ KReadLens(Types[3],64,L4); KBuild(H4,L4,64);
+ KReadLens(Types[4],256,L5); KBuild(H5,L5,256);
+ Pos:=0;
+ LitRun:=0;
+ While Not KBad Do Begin
+  If LitRun<>0 Then Len:=KSym(H2) Else Len:=KSym(H1);
+  If KEnd Then Exit;
+  If Len>0 Then Begin
+   Inc(Len,2);
+   LitRun:=0;
+   J:=KSym(H4);
+   Offset:=J Shl 6;
+   Offset:=Offset Or KBits(6);
+   If KEnd Then Exit;
+   While Len>0 Do Begin
+    Win[Pos]:=Win[(Pos+4096-Offset)And 4095];
+    KPut(Win[Pos]);
+    Pos:=(Pos+1)And 4095;
+    Dec(Len);
+   End;
+  End
+   Else Begin
+    Len:=KSym(H3)+1;
+    If KEnd Then Exit;
+    If Len=32 Then LitRun:=0 Else LitRun:=1;
+    While Len>0 Do Begin
+     Sym:=KSym(H5);
+     If KEnd Then Exit;
+     Win[Pos]:=Sym;
+     KPut(Sym);
+     Pos:=(Pos+1)And 4095;
+     Dec(Len);
+    End;
+   End;
+ End;
+End;
+
+{ Decompresse un fichier KWAJ place en memoire ; retourne False si le
+  format n'est pas reconnu. Le resultat est dans KOut/KOutLen. }
+Function KwajExpand(Src:PKBuf;SrcLen:LongInt):Boolean;
+Var Method,DataOff,Flags,I:LongInt;
+Begin
+ KwajExpand:=False;
+ If SrcLen<14 Then Exit;
+ If(Src^[0]<>Ord('K'))or(Src^[1]<>Ord('W'))or(Src^[2]<>Ord('A'))or(Src^[3]<>Ord('J'))Then Exit;
+ Method:=Src^[8]+256*Src^[9];
+ DataOff:=Src^[10]+256*Src^[11];
+ Flags:=Src^[12]+256*Src^[13];
+ If DataOff>=SrcLen Then Exit;
+ KOutCap:=65536;
+ GetMem(KOut,KOutCap);
+ KOutLen:=0;
+ KIn:=Src;
+ KBad:=False;
+ KEnd:=False;
+ Case Method Of
+  0:For I:=DataOff To SrcLen-1 Do KPut(Src^[I]);
+  1:For I:=DataOff To SrcLen-1 Do KPut(Src^[I] Xor $FF);
+  3:Begin
+   KBitPos:=DataOff*8;
+   KBitEnd:=SrcLen*8;
+   KwajLZH;
+  End;
+ Else Begin
+  FreeMem(KOut,KOutCap);
+  KOut:=NIL;
+  Exit;
+ End;
+ End;
+ If Flags<>0 Then ;
+ KwajExpand:=KOutLen>0;
 End;
 
 Function LoadCDR9(Const Name:String):Boolean;
@@ -3043,6 +3860,25 @@ Begin
   FreeMem(FileBuf,Total);
   Exit;
  End;
+ { fichier comprime KWAJ (xxx.CD_ des disquettes d'installation) }
+ If(FileBuf^[0]=Ord('K'))and(FileBuf^[1]=Ord('W'))and(FileBuf^[2]=Ord('A'))and(FileBuf^[3]=Ord('J'))Then Begin
+  If KwajExpand(PKBuf(FileBuf),Total)Then Begin
+   FreeMem(FileBuf,Total);
+   Total:=KOutLen;
+   GetMem(FileBuf,Total);
+   Move(KOut^,FileBuf^,Total);
+   FreeMem(KOut,KOutCap);
+   KOut:=NIL;
+  End
+   Else Begin
+    FreeMem(FileBuf,Total);
+    Exit;
+   End;
+ End;
+ If(Total<32)or(Chr(FileBuf^[0])+Chr(FileBuf^[1])+Chr(FileBuf^[2])+Chr(FileBuf^[3])<>'RIFF')Then Begin
+  FreeMem(FileBuf,Total);
+  Exit;
+ End;
  New(FillTab);
  New(OutlTab);
  FillChar(FillTab^,SizeOf(FillTab^),0);
@@ -3051,9 +3887,11 @@ Begin
  OwnExport:=False;
  C9Ver:=9;
  If(Chr(FileBuf^[11])>='4')and(Chr(FileBuf^[11])<='9')Then C9Ver:=Ord(FileBuf^[11])-48;
+ C9Old:=C9Ver<=5;
+ If C9Old Then CoordK:=0.254 Else CoordK:=0.001;
  NewDocument;
  PagesDone:=0; CurPageSkip:=False; SkipLayer:=False; C9Full:=False;
- SkipText:=0; SkipBmp:=0; SkipOther:=0;
+ SkipText:=0; SkipBmp:=0; SkipOther:=0; SkipFx:=0;
  Ok:=False;
  Pos:=12;
  While Pos+8<=Total Do Begin
@@ -3116,15 +3954,11 @@ Begin
  FileBuf:=NIL;
  If Ok Then Begin
   { le fichier range les objets du premier plan vers l'arriere-plan }
-  For Chunk:=0 To ObjCount Div 2-1 Do Begin
-   O1:=Objs[Chunk];
-   Objs[Chunk]:=Objs[ObjCount-1-Chunk];
-   Objs[ObjCount-1-Chunk]:=O1;
-  End;
-  FromCorel:=True;
+  ListReverse;
   C9Info:=IStr(ObjCount)+' objets';
   If SkipText>0 Then C9Info:=C9Info+', '+IStr(SkipText)+' textes ignorés';
   If SkipBmp>0 Then C9Info:=C9Info+', '+IStr(SkipBmp)+' bitmaps ignorés';
+  If SkipFx>0 Then C9Info:=C9Info+', '+IStr(SkipFx)+' effets ignorés';
   If C9Full Then C9Info:=C9Info+' (limite atteinte)';
   Modified:=False;
  End;
@@ -3206,7 +4040,7 @@ End;
 
 Function LastObj:PObj;
 Begin
- LastObj:=Objs[ObjCount-1];
+ LastObj:=ObjTail;
 End;
 
 Procedure SampleLogo;
@@ -4010,12 +4844,12 @@ Begin
 End;
 
 Function HitObject(SX,SY:Integer):Integer;
-Var I:Integer;
+Var I:LongInt;
     O:PObj;
 Begin
  HitObject:=-1;
  For I:=ObjCount-1 DownTo 0 Do Begin
-  O:=Objs[I];
+  O:=ObjAt(I);
   BuildPoly(O,0,0);
   If PN=0 Then Continue;
   If(O^.Kind=K_TEXT)Then Begin
@@ -4124,15 +4958,16 @@ Begin
 End;
 
 Procedure DrawSelection;
-Var X1,Y1,X2,Y2,H,HX,HY,I,K:Integer;
+Var X1,Y1,X2,Y2,H,HX,HY,K:Integer;
+    I:LongInt;
     O:PObj;
     SX,SY,AX,AY:LongInt;
 Begin
  If SelCount=0 Then Exit;
  If CurTool=T_SHAPE Then Begin
   For I:=0 To ObjCount-1 Do
-   If Objs[I]^.Sel Then Begin
-    O:=Objs[I];
+   If ObjAt(I)^.Sel Then Begin
+    O:=ObjAt(I);
     If O^.Kind=K_TEXT Then Continue;
     If O^.Kind=K_BEZIER Then Begin
      SetCol(8);
@@ -4176,13 +5011,13 @@ Begin
 End;
 
 Procedure DrawCanvas;
-Var I:Integer;
+Var I:LongInt;
 Begin
  BeginCanvas;
  Box(0,0,CanvasW-1,CanvasH-1,CANVAS_BG);
  DrawPage;
  If ShowGrid Then DrawGridPoints;
- For I:=0 To ObjCount-1 Do DrawObject(Objs[I]);
+ For I:=0 To ObjCount-1 Do DrawObject(ObjAt(I));
  DrawSelection;
  EndCanvas;
 End;
@@ -4392,12 +5227,12 @@ Begin
 End;
 
 Function FirstSel:PObj;
-Var I:Integer;
+Var I:LongInt;
 Begin
  FirstSel:=NIL;
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel Then Begin
-   FirstSel:=Objs[I];
+  If ObjAt(I)^.Sel Then Begin
+   FirstSel:=ObjAt(I);
    Exit;
   End;
 End;
@@ -5470,7 +6305,7 @@ Begin
    Else
   If(SR.Attr And VolumeID)=0 Then Begin
    E:=ExtOf(SR.Name);
-   If(Ext='*')or(E=Ext)or((Ext='.CD9')and(E='.CDR'))Then Begin
+   If(Ext='*')or(E=Ext)or((Ext='.CD9')and(E='.CDR'))or((Ext='.CDR')and((E='.CDT')or(E='.CD_')))Then Begin
     FEnt[FN].Name:=Copy(SR.Name,1,40);
     FEnt[FN].IsDir:=False;
     Inc(FN);
@@ -5730,7 +6565,7 @@ Begin
 End;
 
 Procedure ApplyFillColor(C:Integer);
-Var I:Integer;
+Var I:LongInt;
 Begin
  If SelCount=0 Then Begin
   DefFill:=C;
@@ -5739,21 +6574,21 @@ Begin
  End;
  PushUndo;
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel Then
-   If CanFill(Objs[I])Then Begin
+  If ObjAt(I)^.Sel Then
+   If CanFill(ObjAt(I))Then Begin
     If C<0 Then Begin
-     If Objs[I]^.Kind=K_TEXT Then Objs[I]^.FillCol:=-1
-      Else Begin Objs[I]^.FillKind:=FK_NONE; Objs[I]^.FillCol:=-1; End;
+     If ObjAt(I)^.Kind=K_TEXT Then ObjAt(I)^.FillCol:=-1
+      Else Begin ObjAt(I)^.FillKind:=FK_NONE; ObjAt(I)^.FillCol:=-1; End;
     End
      Else Begin
-      Objs[I]^.FillCol:=C;
-      If Objs[I]^.FillKind=FK_NONE Then Objs[I]^.FillKind:=FK_SOLID;
+      ObjAt(I)^.FillCol:=C;
+      If ObjAt(I)^.FillKind=FK_NONE Then ObjAt(I)^.FillKind:=FK_SOLID;
      End;
    End;
 End;
 
 Procedure ApplyOutColor(C:Integer);
-Var I:Integer;
+Var I:LongInt;
 Begin
  If SelCount=0 Then Begin
   DefOut:=C;
@@ -5761,11 +6596,11 @@ Begin
  End;
  PushUndo;
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel Then Objs[I]^.OutCol:=C;
+  If ObjAt(I)^.Sel Then ObjAt(I)^.OutCol:=C;
 End;
 
 Procedure ApplyOutWidth(W:LongInt);
-Var I:Integer;
+Var I:LongInt;
 Begin
  If SelCount=0 Then Begin
   DefOutW:=W;
@@ -5773,14 +6608,14 @@ Begin
  End;
  PushUndo;
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel Then Begin
-   Objs[I]^.OutW:=W;
-   If Objs[I]^.OutCol<0 Then Objs[I]^.OutCol:=0;
+  If ObjAt(I)^.Sel Then Begin
+   ObjAt(I)^.OutW:=W;
+   If ObjAt(I)^.OutCol<0 Then ObjAt(I)^.OutCol:=0;
   End;
 End;
 
 Procedure ApplyFillKind(FK:Byte;C1,C2:Integer);
-Var I:Integer;
+Var I:LongInt;
 Begin
  If SelCount=0 Then Begin
   DefFillKind:=FK;
@@ -5790,13 +6625,13 @@ Begin
  End;
  PushUndo;
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel and CanFill(Objs[I])and(Objs[I]^.Kind<>K_TEXT)Then Begin
-   Objs[I]^.FillKind:=FK;
-   If FK=FK_NONE Then Objs[I]^.FillCol:=-1
+  If ObjAt(I)^.Sel and CanFill(ObjAt(I))and(ObjAt(I)^.Kind<>K_TEXT)Then Begin
+   ObjAt(I)^.FillKind:=FK;
+   If FK=FK_NONE Then ObjAt(I)^.FillCol:=-1
     Else Begin
-     If C1>=0 Then Objs[I]^.FillCol:=C1;
-     If Objs[I]^.FillCol<0 Then Objs[I]^.FillCol:=15;
-     Objs[I]^.FillCol2:=C2;
+     If C1>=0 Then ObjAt(I)^.FillCol:=C1;
+     If ObjAt(I)^.FillCol<0 Then ObjAt(I)^.FillCol:=15;
+     ObjAt(I)^.FillCol2:=C2;
     End;
   End;
 End;
@@ -5810,21 +6645,23 @@ Begin
 End;
 
 Procedure AddClones(S:PSnap;DX,DY:LongInt);
-Var I,Base,MaxG:Integer;
-    O:PObj;
+Var Base,MaxG:Integer;
+    O,P:PObj;
 Begin
  DeselectAll;
  Base:=GroupSeq;
  MaxG:=0;
- For I:=0 To S^.N-1 Do Begin
-  O:=CloneObj(S^.O[I]);
+ P:=S^.Head;
+ While P<>NIL Do Begin
+  O:=CloneObj(P);
   ObjMove(O,DX,DY);
   If O^.Group<>0 Then Begin
    If O^.Group>MaxG Then MaxG:=O^.Group;
    O^.Group:=Base+O^.Group;
   End;
   O^.Sel:=True;
-  If Not AddObj(O)Then Break;
+  AddObj(O);
+  P:=P^.Next;
  End;
  GroupSeq:=Base+MaxG;
 End;
@@ -5848,11 +6685,11 @@ Begin
 End;
 
 Procedure SelectNext;
-Var I,F:Integer;
+Var I,F:LongInt;
 Begin
  If ObjCount=0 Then Exit;
  F:=-1;
- For I:=0 To ObjCount-1 Do If Objs[I]^.Sel Then F:=I;
+ For I:=0 To ObjCount-1 Do If ObjAt(I)^.Sel Then F:=I;
  DeselectAll;
  SelectIndex((F+1) Mod ObjCount);
 End;
@@ -5876,15 +6713,15 @@ Begin
 End;
 
 Procedure EditText;
-Var I:Integer;
+Var I:LongInt;
     S:String;
 Begin
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel and(Objs[I]^.Kind=K_TEXT)Then Begin
-   S:=Objs[I]^.Txt;
+  If ObjAt(I)^.Sel and(ObjAt(I)^.Kind=K_TEXT)Then Begin
+   S:=ObjAt(I)^.Txt;
    If InputBox('Modifier le texte','Texte :',S,60)Then Begin
     PushUndo;
-    Objs[I]^.Txt:=S;
+    ObjAt(I)^.Txt:=S;
    End;
    Exit;
   End;
@@ -5892,38 +6729,38 @@ Begin
 End;
 
 Procedure ResizeText(Delta:LongInt);
-Var I:Integer;
+Var I:LongInt;
     Any:Boolean;
 Begin
  Any:=False;
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel and(Objs[I]^.Kind=K_TEXT)Then Any:=True;
+  If ObjAt(I)^.Sel and(ObjAt(I)^.Kind=K_TEXT)Then Any:=True;
  If Not Any Then Begin
   DefTextSize:=Clamp(DefTextSize+Delta,20,1000);
   Exit;
  End;
  PushUndo;
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel and(Objs[I]^.Kind=K_TEXT)Then
-   Objs[I]^.TextSize:=Clamp(Objs[I]^.TextSize+Delta,20,2000);
+  If ObjAt(I)^.Sel and(ObjAt(I)^.Kind=K_TEXT)Then
+   ObjAt(I)^.TextSize:=Clamp(ObjAt(I)^.TextSize+Delta,20,2000);
 End;
 
 Procedure ShowDocInfo(Stats:Boolean);
-Var I,C:Integer;
+Var I,C:LongInt;
     Cnt:Array[1..7] of Integer;
     Pts:LongInt;
 Begin
  FillChar(Cnt,SizeOf(Cnt),0);
  Pts:=0;
  For I:=0 To ObjCount-1 Do Begin
-  Inc(Cnt[Objs[I]^.Kind]);
-  Inc(Pts,Objs[I]^.N);
+  Inc(Cnt[ObjAt(I)^.Kind]);
+  Inc(Pts,ObjAt(I)^.N);
  End;
  TN:=0;
  TLines[TN]:='Fichier : '+DocName; Inc(TN);
  If DocName='' Then TLines[0]:='Fichier : (sans titre)';
  TLines[TN]:='Page : '+IStr(PageW Div 10)+' x '+IStr(PageH Div 10)+' mm'; Inc(TN);
- TLines[TN]:='Objets : '+IStr(ObjCount)+' (maximum '+IStr(MAXOBJ)+')'; Inc(TN);
+ TLines[TN]:='Objets : '+IStr(ObjCount); Inc(TN);
  TLines[TN]:='Noeuds : '+IStr(Pts); Inc(TN);
  TLines[TN]:=''; Inc(TN);
  TLines[TN]:='Lignes : '+IStr(Cnt[K_LINE])+'   Rectangles : '+IStr(Cnt[K_RECT])+
@@ -6002,12 +6839,12 @@ End;
 
 { Zoom sur la page et tous les objets }
 Procedure ZoomAll;
-Var I:Integer;
+Var I:LongInt;
     X1,Y1,X2,Y2,A,B,C,D:LongInt;
 Begin
  X1:=0; Y1:=0; X2:=PageW; Y2:=PageH;
  For I:=0 To ObjCount-1 Do Begin
-  ObjBBox(Objs[I],A,B,C,D);
+  ObjBBox(ObjAt(I),A,B,C,D);
   If A<X1 Then X1:=A;
   If B<Y1 Then Y1:=B;
   If C>X2 Then X2:=C;
@@ -6123,7 +6960,7 @@ Procedure ShowPreviewFull;
 Var SX,SY,SW,SH:Integer;
     SZ,SOX,SOY:LongInt;
     SWire,SGrid:Boolean;
-    I:Integer;
+    I:LongInt;
     Old:Integer;
     K:Char;
     Ext:Boolean;
@@ -6138,7 +6975,7 @@ Begin
  Box(0,0,CanvasW-1,CanvasH-1,15);
  SetCol(0);
  Rectangle(W2SX(0),W2SY(0),W2SX(PageW),W2SY(PageH));
- For I:=0 To ObjCount-1 Do DrawObject(Objs[I]);
+ For I:=0 To ObjCount-1 Do DrawObject(ObjAt(I));
  EndCanvas;
  MouseOn;
  WaitUp;
@@ -6158,7 +6995,7 @@ End;
 { ------------------------------------------------------------------ }
 
 Procedure ToggleFlag(Which:Integer);
-Var I:Integer;
+Var I:LongInt;
     V:Boolean;
     O:PObj;
 Begin
@@ -6170,12 +7007,13 @@ Begin
  If Which=0 Then V:=Not O^.Shadow Else V:=Not O^.Extrude;
  PushUndo;
  For I:=0 To ObjCount-1 Do
-  If Objs[I]^.Sel Then
-   If Which=0 Then Objs[I]^.Shadow:=V Else Objs[I]^.Extrude:=V;
+  If ObjAt(I)^.Sel Then
+   If Which=0 Then ObjAt(I)^.Shadow:=V Else ObjAt(I)^.Extrude:=V;
 End;
 
 Procedure DoCommand(Cmd:Integer);
-Var C,C2,I:Integer;
+Var C,C2:Integer;
+    I:LongInt;
     S:String;
     N:LongInt;
     X1,Y1,X2,Y2:LongInt;
@@ -6202,7 +7040,7 @@ Begin
   CM_DUP:Duplicate;
   CM_DEL:Begin PushUndo; DeleteSelection; End;
   CM_SELALL:Begin
-   For I:=0 To ObjCount-1 Do Objs[I]^.Sel:=True;
+   For I:=0 To ObjCount-1 Do ObjAt(I)^.Sel:=True;
   End;
   CM_SELNONE:DeselectAll;
   CM_SELNEXT:SelectNext;
@@ -6279,7 +7117,7 @@ Begin
       DefPattern:=I+1;
       ApplyFillKind(FK_PATTERN,C,C2);
       For N:=0 To ObjCount-1 Do
-       If Objs[N]^.Sel and(Objs[N]^.FillKind=FK_PATTERN)Then Objs[N]^.Pattern:=I+1;
+       If ObjAt(N)^.Sel and(ObjAt(N)^.FillKind=FK_PATTERN)Then ObjAt(N)^.Pattern:=I+1;
      End;
     End;
    End;
@@ -6317,7 +7155,7 @@ Begin
     If SelCount=0 Then DefLineStyle:=I
      Else Begin
       PushUndo;
-      For N:=0 To ObjCount-1 Do If Objs[N]^.Sel Then Objs[N]^.LineStyle:=I;
+      For N:=0 To ObjCount-1 Do If ObjAt(N)^.Sel Then ObjAt(N)^.LineStyle:=I;
      End;
    End;
   End;
@@ -6446,7 +7284,7 @@ End;
 
 Procedure XorShape(CX,CY:Integer);
 Var DXw,DYw,NX1,NY1,NX2,NY2:LongInt;
-    I:Integer;
+    I:LongInt;
     O:PObj;
     X1,Y1,X2,Y2:Integer;
 Begin
@@ -6459,8 +7297,8 @@ Begin
    MoveDeltaFor(CX,CY,DXw,DYw);
    If SelCount<=12 Then Begin
     For I:=0 To ObjCount-1 Do
-     If Objs[I]^.Sel Then Begin
-      BuildPoly(Objs[I],DXw,DYw);
+     If ObjAt(I)^.Sel Then Begin
+      BuildPoly(ObjAt(I),DXw,DYw);
       PolyOutlineXor;
      End;
    End
@@ -6636,13 +7474,13 @@ End;
 { ------------------------------------------------------------------ }
 
 Function HitNode(SX,SY:Integer;Var OI,NI:Integer):Boolean;
-Var I,K:Integer;
+Var I,K:LongInt;
     O:PObj;
 Begin
  HitNode:=False;
  For I:=ObjCount-1 DownTo 0 Do
-  If Objs[I]^.Sel and(Objs[I]^.Kind<>K_TEXT)Then Begin
-   O:=Objs[I];
+  If ObjAt(I)^.Sel and(ObjAt(I)^.Kind<>K_TEXT)Then Begin
+   O:=ObjAt(I);
    For K:=O^.N-1 DownTo 0 Do
     If(Abs(SX-W2SX(O^.Pts^[K].X))<=5)and(Abs(SY-W2SY(O^.Pts^[K].Y))<=5)Then Begin
      OI:=I; NI:=K;
@@ -6656,7 +7494,7 @@ Procedure MoveNode(OI,NI:Integer;WX,WY:LongInt);
 Var O:PObj;
     DX,DY:LongInt;
 Begin
- O:=Objs[OI];
+ O:=ObjAt(OI);
  DX:=WX-O^.Pts^[NI].X;
  DY:=WY-O^.Pts^[NI].Y;
  O^.Pts^[NI].X:=WX;
@@ -6736,10 +7574,10 @@ End;
 
 Procedure DeleteNode;
 Var O:PObj;
-    I,K,A:Integer;
+    I,K,A:LongInt;
 Begin
  If(NodeObj<0)or(NodeObj>=ObjCount)Then Exit;
- O:=Objs[NodeObj];
+ O:=ObjAt(NodeObj);
  If NodeIdx<0 Then Exit;
  If O^.Kind=K_BEZIER Then Begin
   If(NodeIdx Mod 3<>0)or(O^.N<=4)Then Exit;
@@ -6747,7 +7585,7 @@ Begin
   If NodeIdx=0 Then A:=0
    Else If NodeIdx=O^.N-1 Then A:=O^.N-3;
   PushUndo;
-  O:=Objs[NodeObj];
+  O:=ObjAt(NodeObj);
   For I:=A To O^.N-4 Do O^.Pts^[I]:=O^.Pts^[I+3];
   Dec(O^.N,3);
  End
@@ -6755,7 +7593,7 @@ Begin
  Begin
   If((O^.Kind=K_POLY)and(O^.N<=3))or(O^.N<=2)or(O^.Kind=K_RECT)or(O^.Kind=K_ELLIPSE)Then Exit;
   PushUndo;
-  O:=Objs[NodeObj];
+  O:=ObjAt(NodeObj);
   For I:=NodeIdx To O^.N-2 Do O^.Pts^[I]:=O^.Pts^[I+1];
   Dec(O^.N);
  End;
@@ -6891,7 +7729,7 @@ End;
 
 Procedure EndDrag(CX,CY:Integer);
 Var DXw,DYw,NX1,NY1,NX2,NY2:LongInt;
-    I:Integer;
+    I:LongInt;
     X1,Y1,X2,Y2,T:Integer;
     A,B,C,D:LongInt;
 Begin
@@ -6901,7 +7739,7 @@ Begin
    MoveDeltaFor(CX,CY,DXw,DYw);
    If(DXw<>0)or(DYw<>0)Then Begin
     PushUndo;
-    For I:=0 To ObjCount-1 Do If Objs[I]^.Sel Then ObjMove(Objs[I],DXw,DYw);
+    For I:=0 To ObjCount-1 Do If ObjAt(I)^.Sel Then ObjMove(ObjAt(I),DXw,DYw);
    End;
   End;
   DM_SIZE:Begin
@@ -6909,11 +7747,11 @@ Begin
    If(NX1<>OBX1)or(NY1<>OBY1)or(NX2<>OBX2)or(NY2<>OBY2)Then Begin
     PushUndo;
     For I:=0 To ObjCount-1 Do
-     If Objs[I]^.Sel Then Begin
-      If OBX2-OBX1=0 Then ObjScale(Objs[I],OBX1,OBY1,1,1,NY2-NY1,Max(1,OBY2-OBY1))
-      Else If OBY2-OBY1=0 Then ObjScale(Objs[I],OBX1,OBY1,NX2-NX1,OBX2-OBX1,1,1)
-      Else ObjScale(Objs[I],OBX1,OBY1,NX2-NX1,OBX2-OBX1,NY2-NY1,OBY2-OBY1);
-      ObjMove(Objs[I],NX1-OBX1,NY1-OBY1);
+     If ObjAt(I)^.Sel Then Begin
+      If OBX2-OBX1=0 Then ObjScale(ObjAt(I),OBX1,OBY1,1,1,NY2-NY1,Max(1,OBY2-OBY1))
+      Else If OBY2-OBY1=0 Then ObjScale(ObjAt(I),OBX1,OBY1,NX2-NX1,OBX2-OBX1,1,1)
+      Else ObjScale(ObjAt(I),OBX1,OBY1,NX2-NX1,OBX2-OBX1,NY2-NY1,OBY2-OBY1);
+      ObjMove(ObjAt(I),NX1-OBX1,NY1-OBY1);
      End;
    End;
   End;
@@ -6925,7 +7763,7 @@ Begin
     A:=S2WX(X1); B:=S2WY(Y1); C:=S2WX(X2); D:=S2WY(Y2);
     DeselectAll;
     For I:=0 To ObjCount-1 Do Begin
-     ObjBBox(Objs[I],NX1,NY1,NX2,NY2);
+     ObjBBox(ObjAt(I),NX1,NY1,NX2,NY2);
      If(NX1>=A)and(NX2<=C)and(NY1>=B)and(NY2<=D)Then SelectIndex(I);
     End;
    End;
@@ -7005,14 +7843,14 @@ Begin
    Begin
     I:=HitObject(CX,CY);
     If I>=0 Then Begin
-     If Dbl and(Objs[I]^.Kind=K_TEXT)Then Begin
+     If Dbl and(ObjAt(I)^.Kind=K_TEXT)Then Begin
       DeselectAll;
       SelectIndex(I);
       EditText;
       NeedRedraw:=True;
       Exit;
      End;
-     If Not Objs[I]^.Sel Then Begin
+     If Not ObjAt(I)^.Sel Then Begin
       DeselectAll;
       SelectIndex(I);
       NeedRedraw:=True;
@@ -7043,7 +7881,7 @@ Begin
    Begin
     I:=HitObject(CX,CY);
     If I>=0 Then Begin
-     If Dbl and Objs[I]^.Sel Then Begin
+     If Dbl and ObjAt(I)^.Sel Then Begin
       InsertNodeAt(CX,CY);
       NeedRedraw:=True;
      End
@@ -7150,7 +7988,7 @@ Begin
    Else Begin
     I:=HitObject(CX,CY);
     If I>=0 Then Begin
-     If Not Objs[I]^.Sel Then Begin
+     If Not ObjAt(I)^.Sel Then Begin
       DeselectAll;
       SelectIndex(I);
      End;
@@ -7242,10 +8080,10 @@ End;
 { ------------------------------------------------------------------ }
 
 Procedure Nudge(DX,DY:LongInt);
-Var I:Integer;
+Var I:LongInt;
 Begin
  PushUndo;
- For I:=0 To ObjCount-1 Do If Objs[I]^.Sel Then ObjMove(Objs[I],DX,DY);
+ For I:=0 To ObjCount-1 Do If ObjAt(I)^.Sel Then ObjMove(ObjAt(I),DX,DY);
  NeedRedraw:=True;
 End;
 

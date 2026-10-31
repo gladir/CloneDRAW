@@ -15990,7 +15990,7 @@ End;
 
 Procedure ShowUsage;
 Begin
- WriteLn('CORELDRW : clone de CorelDraw (dessin vectoriel).');
+ WriteLn('CORELDRW : Cette commande permet de lancer un clone de CorelDRAW (dessin vectoriel).');
  WriteLn;
  WriteLn('Syntaxe : CORELDRW [fichier.cdr|fichier.wpg]');
  WriteLn('          CORELDRW /SAMPLES');

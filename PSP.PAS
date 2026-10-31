@@ -34,6 +34,42 @@ Uses
   Crt, Graph, Dos
  {$ENDIF};
 
+Var
+ MaxColors: Boolean;      { -maxcolors : nombre maximal de couleurs (Free Pascal seulement) }
+ TrueMode: Boolean;       { Mode graphique en couleurs directes (RGB) }
+ UiRGB: Array[0..15] Of LongInt;
+
+Const
+ UiPal: Array[0..15, 0..2] Of Byte = (
+  (0,0,0), (0,0,170), (0,170,0), (0,170,170),
+  (170,0,0), (170,0,170), (170,85,0), (170,170,170),
+  (85,85,85), (85,85,255), (85,255,85), (85,255,255),
+  (255,85,85), (255,85,255), (255,255,85), (255,255,255));
+
+{$IFDEF FPC}
+{ En couleurs directes, les 16 couleurs de l'interface et de l'image (indices
+  0 a 15) sont traduites en RGB ; les autres valeurs sont transmises telles quelles. }
+Function MapC(C: LongInt): LongInt;
+Begin
+ If TrueMode And (C >= 0) And (C <= 15) Then MapC := UiRGB[C] Else MapC := C;
+End;
+
+Procedure SetColor(C: LongInt);
+Begin
+ PtcGraph.SetColor(MapC(C));
+End;
+
+Procedure SetFillStyle(Pat: Word; C: LongInt);
+Begin
+ PtcGraph.SetFillStyle(Pat, MapC(C));
+End;
+
+Procedure PutPixel(X, Y: Integer; C: LongInt);
+Begin
+ PtcGraph.PutPixel(X, Y, MapC(C));
+End;
+{$ENDIF}
+
 { API HTTPS declaree localement, sans unite Windows. }
 {$IFDEF WINDOWS}{$IFDEF FPC}{$DEFINE SKETCH_NATIVE}{$ENDIF}{$ENDIF}
 {$IFDEF SKETCH_NATIVE}
@@ -518,49 +554,83 @@ Begin
  ReleaseUndoSlot(UndoCount);
 End;
 
-{ Mode graphique : VGA 640 x 480, ou, avec -maxscreen sous Free Pascal, la
-  resolution maximale du pilote D8bit (sans effet sous Turbo Pascal). }
-Procedure SelectScreenDriverMode(WantMaxScreen: Boolean;
+{ Choix du pilote et du mode graphique : VGA 640 x 480 sans option ;
+  -maxscreen : resolution maximale (pilote D8bit) ; -maxcolors : plus grand
+  nombre de couleurs (couleurs directes 24 bits si disponibles). Sous Turbo
+  Pascal, ces options sont sans effet. }
+Procedure SelectScreenDriverMode(WantMaxScreen, WantMaxColors: Boolean;
  Var Driver, Mode: Integer);
 {$IFDEF FPC}
-Var LoMode, HiMode: SmallInt;
+Var
+ LoMode, HiMode: SmallInt;
+ M, Best: PModeInfo;
+ BestArea, Area: LongInt;
+ Found: Boolean;
 {$ENDIF}
 Begin
  {$IFDEF FPC}
- Driver := VGA;
- Mode := VGAHi;
- If WantMaxScreen Then Begin
-  Driver := D8bit;
-  GetModeRange(Driver, LoMode, HiMode);
-  If HiMode >= LoMode Then Mode := HiMode
-  Else Begin Driver := VGA; Mode := VGAHi; End;
+ Found := False;
+ If WantMaxColors Then Begin
+  M := QueryAdapterInfo;
+  Best := Nil;
+  BestArea := 0;
+  While M <> Nil Do Begin
+   If M^.DirectColor And (M^.MaxColor >= 16777216) Then Begin
+    Area := (M^.MaxX + 1) * (M^.MaxY + 1);
+    If WantMaxScreen Then Begin
+     If Area > BestArea Then Begin
+      Best := M;
+      BestArea := Area;
+     End;
+    End Else If (M^.MaxX + 1 >= 640) And (M^.MaxY + 1 >= 480) Then Begin
+     If (Best = Nil) Or (Area < BestArea) Then Begin
+      Best := M;
+      BestArea := Area;
+     End;
+    End;
+   End;
+   M := M^.Next;
+  End;
+  If Best <> Nil Then Begin
+   Driver := Best^.DriverNumber;
+   Mode := Best^.ModeNumber;
+   Found := True;
+  End;
+ End;
+ If Not Found Then Begin
+  Driver := VGA;
+  Mode := VGAHi;
+  If WantMaxScreen Then Begin
+   Driver := D8bit;
+   GetModeRange(Driver, LoMode, HiMode);
+   If HiMode >= LoMode Then Mode := HiMode
+   Else Begin Driver := VGA; Mode := VGAHi; End;
+  End;
  End;
  {$ELSE}
  Driver := Detect;
  {$ENDIF}
 End;
 
-{ Les seize couleurs de l'interface restent identiques dans le pilote D8bit. }
+{ Les seize couleurs de l'interface restent identiques dans les pilotes indexes ;
+  en couleurs directes, elles sont converties en RGB. }
 Procedure InitializeScreenPalette;
 {$IFDEF FPC}
-Const
- RGB: Array[0..15, 0..2] of Byte = (
-  (0,0,0), (0,0,170), (0,170,0), (0,170,170),
-  (170,0,0), (170,0,170), (170,85,0), (170,170,170),
-  (85,85,85), (85,85,255), (85,255,85), (85,255,255),
-  (255,85,85), (255,85,255), (255,255,85), (255,255,255));
 Var I: Integer;
 {$ENDIF}
 Begin
  {$IFDEF FPC}
- If GetMaxColor > 15 Then
-  For I := 0 To 15 Do SetRGBPalette(I, RGB[I,0], RGB[I,1], RGB[I,2]);
+ TrueMode := GetMaxColor > 255;
+ For I := 0 To 15 Do
+  UiRGB[I] := (LongInt(UiPal[I, 0]) Shl 16) Or (LongInt(UiPal[I, 1]) Shl 8) Or UiPal[I, 2];
+ If (Not TrueMode) And (GetMaxColor > 15) Then
+  For I := 0 To 15 Do SetRGBPalette(I, UiPal[I, 0], UiPal[I, 1], UiPal[I, 2]);
  {$ENDIF}
 End;
 
 Procedure InitGraphics;
 Begin
- SelectScreenDriverMode(MaxScreen, GraphDriver, GraphMode);
+ SelectScreenDriverMode(MaxScreen, MaxColors, GraphDriver, GraphMode);
  InitGraph(GraphDriver, GraphMode, '');
  If GraphResult<>grOk Then Begin
   WriteLn('Erreur d''initialisation graphique!');
@@ -12739,11 +12809,12 @@ Begin
  Assign(Output,'');Rewrite(Output);
  WriteLn(Output,'PSP - Cette commande permet de lancer Photoshop.');
  WriteLn(Output);
- WriteLn(Output,'Syntaxe : PSP [-maxscreen] [image]');
+ WriteLn(Output,'Syntaxe : PSP [-maxscreen] [-maxcolors] [image]');
  WriteLn(Output,'          PSP /?');
  WriteLn(Output);
  WriteLn(Output,'  image    Ouvre une image au demarrage.');
  WriteLn(Output,'  -maxscreen           Utilise la resolution maximale disponible.');
+ WriteLn(Output,'  -maxcolors           Utilise le nombre maximal de couleurs (couleurs vraies).');
  WriteLn(Output,'  /?       Affiche cette aide et quitte.');
  WriteLn(Output,'  -?, -h, --help, /h, /help : autres formes de l''aide.');
  WriteLn(Output);
@@ -12763,9 +12834,11 @@ Procedure ParseCommandLine;
 Var I: Integer; Arg: String;
 Begin
  MaxScreen := False;
+ MaxColors := False;
  For I:=1 To ParamCount Do Begin
   Arg:=UpperStr(ParamStr(I));
-  If (Arg='-MAXSCREEN') Or (Arg='/MAXSCREEN') Then MaxScreen:=True;
+  If (Arg='-MAXSCREEN') Or (Arg='/MAXSCREEN') Then MaxScreen:=True
+  Else If (Arg='-MAXCOLORS') Or (Arg='/MAXCOLORS') Then MaxColors:=True;
  End;
 End;
 

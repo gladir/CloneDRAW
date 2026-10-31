@@ -116,6 +116,11 @@ Const
  CMD_PSMOOTH = 39;
  CMD_PSIMPL = 40;
  CMD_POFFSET = 41;
+ CMD_GLYPHS = 42;
+ CMD_TEXTPATH = 43;
+ CMD_FONTS = 44;
+ CMD_FORMATS = 45;
+ CMD_TEXTVIEW = 46;
  PROP_W = 460;
  PROP_H = 240;
  FD_MAX_ENTRIES = 512;
@@ -1083,28 +1088,66 @@ Begin
  End;
 End;
 
-Procedure DrawZoomedText(Obj: TGraphicObject);
-Var X, Y, L, T, R, B, SX, SY, C: Integer;
+{ Taille du texte : FontSize/8 (1 a 4) ; style : Rectangle.Width (sous-
+  enregistrement inutilise d'un texte) = 1 gras, 2 italique, 4 souligne }
+Var
+ TextFrames, GreekText: Boolean;
+
+Function TextScaleOf(Var O: TGraphicObject): Integer;
+Var R: Real;
 Begin
+ R := O.TextObj.FontSize;
+ If (R < 8) Or (R > 1000) Then TextScaleOf := 1
+ Else If R >= 32 Then TextScaleOf := 4
+ Else TextScaleOf := Round(R/8);
+End;
+
+Function TextStyleOf(Var O: TGraphicObject): Integer;
+Var R: Real;
+Begin
+ R := O.Rectangle.Width;
+ If (R >= 1) And (R < 8) Then TextStyleOf := Round(R) Else TextStyleOf := 0;
+End;
+
+Function GlyphPixel(Var Obj: TGraphicObject; Sc, SXr, Row: Integer): Boolean;
+Var Cell, C: Integer;
+Begin
+ GlyphPixel := False;
+ If (SXr < 0) Or (SXr >= Length(Obj.TextObj.Text)*8*Sc) Then Exit;
+ Cell := SXr Div (8*Sc);
+ C := Ord(Obj.TextObj.Text[Cell+1]);
+ GlyphPixel := (GlyphRows[C,Row] And (1 Shl (((SXr Mod (8*Sc)) Div Sc)))) <> 0;
+End;
+
+Procedure DrawZoomedText(Obj: TGraphicObject);
+Var X, Y, L, T, R, B, SXr, SYr, Sc, St, Shear, W, H, Pad: Integer; On: Boolean;
+Begin
+ Sc := TextScaleOf(Obj); St := TextStyleOf(Obj);
+ W := Length(Obj.TextObj.Text)*8*Sc; H := 8*Sc;
+ Pad := 0;
+ If (St And 2) <> 0 Then Pad := 2*Sc;
  L := ScreenX(Obj.TextObj.X); T := ScreenY(Obj.TextObj.Y);
- R := ScreenX(Obj.TextObj.X+Length(Obj.TextObj.Text)*8)-1;
- B := ScreenY(Obj.TextObj.Y+8)-1;
+ R := ScreenX(Obj.TextObj.X+W+Pad)-1;
+ B := ScreenY(Obj.TextObj.Y+H)-1;
  If L < 0 Then L := 0;
  If T < 0 Then T := 0;
  If R >= ScreenWidth-TOOLBAR_WIDTH Then R := ScreenWidth-TOOLBAR_WIDTH-1;
  If B >= ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT Then
   B := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1;
- For Y := T To B Do
-  For X := L To R Do Begin
-   SX := Trunc(ViewX+(X+0.5)/ZoomScale-Obj.TextObj.X);
-   SY := Trunc(ViewY+(Y+0.5)/ZoomScale-Obj.TextObj.Y);
-   If (SX >= 0) And (SX < Length(Obj.TextObj.Text)*8) And
-      (SY >= 0) And (SY < 8) Then Begin
-    C := Ord(Obj.TextObj.Text[SX Div 8+1]);
-    If (GlyphRows[C,SY] And (1 Shl (SX Mod 8))) <> 0 Then
-     PutPixel(X,Y,Obj.TextObj.Color);
+ For Y := T To B Do Begin
+  SYr := Trunc(ViewY+(Y+0.5)/ZoomScale-Obj.TextObj.Y);
+  If (SYr >= 0) And (SYr < H) Then Begin
+   Shear := 0;
+   If (St And 2) <> 0 Then Shear := (H-1-SYr) Div 4;
+   For X := L To R Do Begin
+    SXr := Trunc(ViewX+(X+0.5)/ZoomScale-Obj.TextObj.X)-Shear;
+    On := GlyphPixel(Obj,Sc,SXr,SYr Div Sc);
+    If Not On And ((St And 1) <> 0) Then On := GlyphPixel(Obj,Sc,SXr-1,SYr Div Sc);
+    If ((St And 4) <> 0) And (SYr = H-1) And (SXr >= 0) And (SXr < W) Then On := True;
+    If On Then PutPixel(X,Y,Obj.TextObj.Color);
    End;
   End;
+ End;
 End;
 
 Procedure DrawGraphicObject(Obj: TGraphicObject);
@@ -1231,10 +1274,26 @@ Begin
   End;
   OBJ_TEXT:
   Begin
-   If ZoomIndex = 2 Then Begin
+   If GreekText Then Begin
+    I := TextScaleOf(Obj);
+    SetFillStyle(SolidFill,Obj.TextObj.Color);
+    Bar(ScreenX(Obj.TextObj.X),ScreenY(Obj.TextObj.Y+3*I),
+        ScreenX(Obj.TextObj.X+Length(Obj.TextObj.Text)*8*I)-1,
+        ScreenY(Obj.TextObj.Y+5*I));
+   End Else If (ZoomIndex = 2) And (TextScaleOf(Obj) = 1) And
+      (TextStyleOf(Obj) = 0) Then Begin
     SetColor(Obj.TextObj.Color);
     OutTextXY(ScreenX(Obj.TextObj.X),ScreenY(Obj.TextObj.Y),Obj.TextObj.Text);
    End Else DrawZoomedText(Obj);
+   If TextFrames Then Begin
+    I := TextScaleOf(Obj);
+    SetColor(8);
+    SetLineStyle(DottedLn,0,NormWidth);
+    Rectangle(ScreenX(Obj.TextObj.X)-1,ScreenY(Obj.TextObj.Y)-1,
+              ScreenX(Obj.TextObj.X+Length(Obj.TextObj.Text)*8*I),
+              ScreenY(Obj.TextObj.Y+8*I));
+    SetLineStyle(SolidLn,0,NormWidth);
+   End;
   End;
  End;
  SetLineStyle(SolidLn,0,NormWidth);
@@ -1290,8 +1349,9 @@ Begin
   End;
   OBJ_TEXT: Begin
    B.L := Obj.TextObj.X; B.T := Obj.TextObj.Y;
-   B.R := B.L+Length(Obj.TextObj.Text)*8-1;
-   B.B := B.T+7;
+   B.R := B.L+Length(Obj.TextObj.Text)*8*TextScaleOf(Obj)-1;
+   If (TextStyleOf(Obj) And 2) <> 0 Then B.R := B.R+2*TextScaleOf(Obj);
+   B.B := B.T+8*TextScaleOf(Obj)-1;
   End;
  End;
  ObjectBounds := B;
@@ -2491,12 +2551,12 @@ Begin
  AddMenuItem(4, 'Cont. Courbe', CMD_PSMOOTH);
  AddMenuItem(4, 'Simplifier...', CMD_PSIMPL);
  AddMenuItem(4, 'Decalage...', CMD_POFFSET);
- AddMenuItem(5, 'Glyphes', CMD_NONE);
- AddMenuItem(5, 'Texte a chemin', CMD_NONE);
+ AddMenuItem(5, 'Glyphes...', CMD_GLYPHS);
+ AddMenuItem(5, 'Texte a chemin', CMD_TEXTPATH);
  AddMenuItem(5, 'Chemin a texte', CMD_NONE);
- AddMenuItem(5, 'Polices', CMD_NONE);
- AddMenuItem(5, 'Formats', CMD_NONE);
- AddMenuItem(5, 'Affichage', CMD_NONE);
+ AddMenuItem(5, 'Polices...', CMD_FONTS);
+ AddMenuItem(5, 'Formats...', CMD_FORMATS);
+ AddMenuItem(5, 'Affichage...', CMD_TEXTVIEW);
  AddMenuItem(6, 'Aide', CMD_HELP);
  AddMenuItem(6, 'Raccourcis', CMD_SHORTCUTS);
  AddMenuItem(6, 'A propos', CMD_ABOUT);
@@ -3992,6 +4052,338 @@ Begin
  EndOp(S0,True);
 End;
 
+{ ------------------------------------------------------------------
+  Menu Texte : Glyphes, Texte a chemin, Polices, Formats, Affichage
+  ------------------------------------------------------------------ }
+Const
+ CH_FONT = 6;
+ CH_FORMAT = 7;
+ CH_TEXTVIEW = 8;
+
+Var
+ GlyphActive, GlyphUndone: Boolean;
+ GlyphHover: Integer;
+
+Procedure TextBoundsFit(Var O: TGraphicObject; Var Ok: Boolean);
+Var B: TBounds; W, H: Real;
+Begin
+ B := ObjectBounds(O);
+ W := B.R-B.L+1; H := B.B-B.T+1;
+ Ok := (W <= PageW) And (H <= PageH);
+ If Not Ok Then Exit;
+ If O.TextObj.X+W > PageW Then O.TextObj.X := PageW-W;
+ If O.TextObj.Y+H > PageH Then O.TextObj.Y := PageH-H;
+ If O.TextObj.X < 0 Then O.TextObj.X := 0;
+ If O.TextObj.Y < 0 Then O.TextObj.Y := 0;
+End;
+
+{ ---- Polices : style et taille des textes selectionnes ---- }
+Procedure FontSelection(Index: Integer);
+Var I, N, St, Bad: Integer; O: TGraphicObject; S0: TSnapshot; Ok: Boolean; S: String;
+Begin
+ N := 0; Bad := 0;
+ If Not BeginOp(S0) Then Exit;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And (ObjAt(I)^.ObjType = OBJ_TEXT) Then Begin
+   O := ObjAt(I)^;
+   St := TextStyleOf(O);
+   Case Index Of
+    0: St := 0;
+    1: St := St Xor 1;
+    2: St := St Xor 2;
+    3: St := St Xor 4;
+   Else O.TextObj.FontSize := 8*(Index-3);
+   End;
+   O.Rectangle.Width := St;
+   TextBoundsFit(O,Ok);
+   If Ok Then Begin ObjAt(I)^ := O; Inc(N); End Else Inc(Bad);
+  End;
+ If N = 0 Then Begin
+  If Bad > 0 Then StatusMessage := 'Polices : le texte serait plus large que la page.'
+  Else StatusMessage := 'Polices : selectionner au moins un texte.';
+  EndOp(S0,False);
+  Exit;
+ End;
+ Str(N,S);
+ StatusMessage := 'Police appliquee a '+S+' texte(s).';
+ EndOp(S0,True);
+End;
+
+{ ---- Formats : casse et espaces ---- }
+Function ChangeCase(T: String; Mode: Integer): String;
+Var I: Integer; C: Char; NewWord: Boolean; R: String;
+Begin
+ R := T; NewWord := True;
+ For I := 1 To Length(R) Do Begin
+  C := R[I];
+  Case Mode Of
+   0: If (C >= 'a') And (C <= 'z') Then C := Chr(Ord(C)-32);
+   1: If (C >= 'A') And (C <= 'Z') Then C := Chr(Ord(C)+32);
+   2: Begin
+    If NewWord Then Begin If (C >= 'a') And (C <= 'z') Then C := Chr(Ord(C)-32); End
+    Else If (C >= 'A') And (C <= 'Z') Then C := Chr(Ord(C)+32);
+   End;
+   3: If (C >= 'a') And (C <= 'z') Then C := Chr(Ord(C)-32)
+      Else If (C >= 'A') And (C <= 'Z') Then C := Chr(Ord(C)+32);
+  End;
+  NewWord := (C = ' ');
+  R[I] := C;
+ End;
+ ChangeCase := R;
+End;
+
+Function TrimSpaces(T: String): String;
+Var I: Integer; R: String; Prev: Boolean;
+Begin
+ R := ''; Prev := True;
+ For I := 1 To Length(T) Do
+  If T[I] = ' ' Then Begin
+   If Not Prev Then R := R+' ';
+   Prev := True;
+  End Else Begin R := R+T[I]; Prev := False; End;
+ If (Length(R) > 0) And (R[Length(R)] = ' ') Then Delete(R,Length(R),1);
+ TrimSpaces := R;
+End;
+
+Procedure FormatSelection(Index: Integer);
+Var I, N: Integer; T: String; S0: TSnapshot; S: String;
+Begin
+ N := 0;
+ If Not BeginOp(S0) Then Exit;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And (ObjAt(I)^.ObjType = OBJ_TEXT) Then Begin
+   If Index <= 3 Then T := ChangeCase(ObjAt(I)^.TextObj.Text,Index)
+   Else T := TrimSpaces(ObjAt(I)^.TextObj.Text);
+   If (T <> '') And (T <> ObjAt(I)^.TextObj.Text) Then Begin
+    ObjAt(I)^.TextObj.Text := T;
+    Inc(N);
+   End;
+  End;
+ If N = 0 Then Begin
+  StatusMessage := 'Formats : aucun texte a modifier dans la selection.';
+  EndOp(S0,False);
+  Exit;
+ End;
+ Str(N,S);
+ StatusMessage := 'Format applique a '+S+' texte(s).';
+ EndOp(S0,True);
+End;
+
+{ ---- Affichage du texte ---- }
+Procedure TextViewChoice(Index: Integer);
+Begin
+ Case Index Of
+  0: TextFrames := Not TextFrames;
+  1: GreekText := Not GreekText;
+ Else Begin TextFrames := False; GreekText := False; End;
+ End;
+ If GreekText Then StatusMessage := 'Texte en barres (apercu rapide).'
+ Else If TextFrames Then StatusMessage := 'Cadres de texte affiches.'
+ Else StatusMessage := 'Affichage du texte normal.';
+ NeedsRedraw := True;
+End;
+
+{ ---- Texte a chemin ---- }
+Procedure TextToPathCommand;
+Var I, TIdx, PIdx, K, Seg, Cnt, Placed: Integer; N: LongInt; Idx: PLongArr;
+    T, Pr: TGraphicObject; Q: TPoly; S0: TSnapshot; MaxG, Sc, J: LongInt;
+    Total, D, SegL, U, X, Y: Real; Cum: Array[0..100] Of Real; C: TGraphicObject;
+    Txt, S: String; Cut: Boolean; B: TBounds;
+Begin
+ TIdx := -1; PIdx := -1;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And ObjAt(I)^.Visible Then Begin
+   If (ObjAt(I)^.ObjType = OBJ_TEXT) Then Begin
+    If (TIdx < 0) Or (I = SelectedObject) Then TIdx := I;
+   End Else If PIdx < 0 Then PIdx := I;
+  End;
+ If (TIdx < 0) Or (PIdx < 0) Then Begin
+  StatusMessage := 'Texte a chemin : selectionner un texte ET un chemin (rectangle de selection).';
+  Exit;
+ End;
+ T := ObjAt(TIdx)^;
+ If Not ObjToPoly(ObjAt(PIdx)^,Q) Then Begin
+  StatusMessage := 'Texte a chemin : chemin non utilisable.';
+  Exit;
+ End;
+ If Q.Closed Then Begin
+  If Q.N >= 100 Then Dec(Q.N);
+  Q.P[Q.N] := Q.P[0]; Inc(Q.N);
+ End;
+ Cum[0] := 0;
+ For K := 1 To Q.N-1 Do
+  Cum[K] := Cum[K-1]+Dist2(Q.P[K-1].X,Q.P[K-1].Y,Q.P[K].X,Q.P[K].Y);
+ Total := Cum[Q.N-1];
+ If Total < 1 Then Begin
+  StatusMessage := 'Texte a chemin : chemin trop court.';
+  Exit;
+ End;
+ Sc := TextScaleOf(T);
+ Txt := T.TextObj.Text;
+ If Not BeginOp(S0) Then Exit;
+ MaxG := 0;
+ For I := 0 To ObjectCount-1 Do
+  If GroupOfObj(ObjAt(I)^) > MaxG Then MaxG := GroupOfObj(ObjAt(I)^);
+ Placed := 0; Cut := False;
+ Pr := T;
+ For J := 1 To Length(Txt) Do Begin
+  D := (J-1)*8*Sc+4*Sc;
+  If D > Total Then Begin Cut := True; Break; End;
+  If Txt[J] <> ' ' Then Begin
+   Seg := 0;
+   While (Seg < Q.N-2) And (Cum[Seg+1] < D) Do Inc(Seg);
+   SegL := Cum[Seg+1]-Cum[Seg];
+   U := 0;
+   If SegL > 0 Then U := (D-Cum[Seg])/SegL;
+   X := Q.P[Seg].X+U*(Q.P[Seg+1].X-Q.P[Seg].X)-4*Sc;
+   Y := Q.P[Seg].Y+U*(Q.P[Seg+1].Y-Q.P[Seg].Y)-4*Sc;
+   C := Pr;
+   C.TextObj.Text := Txt[J];
+   C.TextObj.X := MaxReal(0,MinReal(PageW-8*Sc,Round(X)));
+   C.TextObj.Y := MaxReal(0,MinReal(PageH-8*Sc,Round(Y)));
+   SetGroupOfObj(C,MaxG+1);
+   SelFlagPtr(C)^ := True;
+   AppendObject(C);
+   Inc(Placed);
+  End;
+ End;
+ If Placed = 0 Then Begin
+  EndOp(S0,False);
+  StatusMessage := 'Texte a chemin : rien a placer.';
+  Exit;
+ End;
+ { le texte d'origine est remplace par ses caracteres poses sur le chemin }
+ DeleteObjectAt(TIdx);
+ ClearSelFlags;
+ SelectedObject := ObjectCount-1;
+ SelectGroupOf(SelectedObject);
+ Str(Placed,S);
+ StatusMessage := S+' caractere(s) poses sur le chemin (groupe).';
+ If Cut Then StatusMessage := StatusMessage+' Texte tronque.';
+ EndOp(S0,True);
+End;
+
+{ ---- Glyphes : table des caracteres ---- }
+Function GlyphX0: Integer;
+Begin
+ GlyphX0 := (ScreenWidth-16*18) Div 2;
+End;
+
+Function GlyphY0: Integer;
+Begin
+ GlyphY0 := (ScreenHeight-(14*18+56)) Div 2+30;
+End;
+
+Procedure OpenGlyphs;
+Begin
+ GlyphActive := True; GlyphUndone := False; GlyphHover := -1;
+ StatusMessage := 'Glyphes : cliquer un caractere pour l''ajouter au texte selectionne.';
+ NeedsRedraw := True;
+End;
+
+Procedure CloseGlyphs;
+Begin
+ GlyphActive := False;
+ NeedsRedraw := True;
+End;
+
+Procedure InsertGlyph(Code: Integer);
+Var O: TGraphicObject; Ok: Boolean; B: TBounds;
+Begin
+ If (SelectedObject >= 0) And (SelectedObject < ObjectCount) And
+    (ObjAt(SelectedObject)^.ObjType = OBJ_TEXT) Then Begin
+  O := ObjAt(SelectedObject)^;
+  If Length(O.TextObj.Text) >= 255 Then Begin
+   StatusMessage := 'Glyphes : texte plein (255 caracteres).';
+   Exit;
+  End;
+  O.TextObj.Text := O.TextObj.Text+Chr(Code);
+  B := ObjectBounds(O);
+  If B.R >= PageW Then Begin
+   StatusMessage := 'Glyphes : bord de la page atteint.';
+   Exit;
+  End;
+  If Not GlyphUndone Then Begin PushUndo; GlyphUndone := True; End;
+  ObjAt(SelectedObject)^ := O;
+ End Else Begin
+  FillChar(O,SizeOf(O),0);
+  O.ObjType := OBJ_TEXT;
+  O.Visible := True;
+  O.LayerIndex := CurrentLayer;
+  O.TextObj.X := 100; O.TextObj.Y := 100;
+  O.TextObj.Text := Chr(Code);
+  O.TextObj.Color := StrokeColor;
+  O.TextObj.FontSize := 8;
+  If Not GlyphUndone Then Begin PushUndo; GlyphUndone := True; End;
+  ClearSelFlags;
+  AppendObject(O);
+  SelectedObject := ObjectCount-1;
+ End;
+ FileModified := True;
+ StatusMessage := 'Caractere ajoute.';
+ NeedsRedraw := True;
+End;
+
+Function GlyphAt(X, Y: Integer): Integer;
+Var CX, CY, I: Integer;
+Begin
+ GlyphAt := -1;
+ CX := (X-GlyphX0) Div 18; CY := (Y-GlyphY0) Div 18;
+ If (X < GlyphX0) Or (Y < GlyphY0) Or (CX < 0) Or (CX > 15) Or (CY < 0) Or (CY > 13) Then Exit;
+ I := 33+CY*16+CX;
+ If I <= 255 Then GlyphAt := I;
+End;
+
+Procedure DrawGlyphDialog;
+Var X0, Y0, I, R, C, PX, PY, Code, SY, SX: Integer; S: String;
+Begin
+ If Not GlyphActive Then Exit;
+ X0 := GlyphX0; Y0 := GlyphY0;
+ SetFillStyle(SolidFill,COLOR_WINDOW);
+ Bar(X0-8,Y0-30,X0+16*18+8,Y0+14*18+26);
+ SetColor(COLOR_TEXT);
+ Rectangle(X0-8,Y0-30,X0+16*18+8,Y0+14*18+26);
+ OutTextXY(X0,Y0-22,'Glyphes : clic = ajouter, Echap = fermer');
+ GlyphHover := GlyphAt(MouseX,MouseY);
+ For I := 33 To 255 Do Begin
+  R := (I-33) Div 16; C := (I-33) Mod 16;
+  PX := X0+C*18; PY := Y0+R*18;
+  If I = GlyphHover Then Begin
+   SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
+   Bar(PX,PY,PX+17,PY+17);
+  End;
+  SetColor(COLOR_BORDER);
+  Rectangle(PX,PY,PX+17,PY+17);
+  For SY := 0 To 7 Do
+   For SX := 0 To 7 Do
+    If (GlyphRows[I,SY] And (1 Shl SX)) <> 0 Then Begin
+     If I = GlyphHover Then PutPixel(PX+5+SX,PY+5+SY,COLOR_WINDOW)
+     Else PutPixel(PX+5+SX,PY+5+SY,COLOR_TEXT);
+    End;
+ End;
+ SetColor(COLOR_TEXT);
+ If GlyphHover >= 0 Then Begin
+  Str(GlyphHover,S);
+  OutTextXY(X0,Y0+14*18+8,'Code '+S);
+ End;
+End;
+
+Procedure HandleGlyphMouse;
+Var I: Integer;
+Begin
+ NeedsRedraw := True;
+ I := GlyphAt(MouseX,MouseY);
+ If I >= 0 Then InsertGlyph(I)
+ Else If (MouseX < GlyphX0-8) Or (MouseX > GlyphX0+16*18+8) Or
+         (MouseY < GlyphY0-30) Or (MouseY > GlyphY0+14*18+26) Then CloseGlyphs;
+End;
+
+Procedure HandleGlyphKey(Key: Char);
+Begin
+ NeedsRedraw := True;
+ If Key = #27 Then CloseGlyphs;
+End;
+
 { ---- boite de choix generique ---- }
 Procedure OpenChoice(Kind: Integer);
 Var N: Integer;
@@ -4032,6 +4424,27 @@ Begin
    ChoiceItems[6] := 'Echelle 50 %'; ChoiceItems[7] := 'Echelle 200 %';
    ChoiceItems[8] := 'Echelle 90 %'; ChoiceItems[9] := 'Echelle 110 %';
   End;
+  CH_FONT: Begin
+   ChoiceCount := 8;
+   ChoiceItems[0] := 'Normal (retire les styles)'; ChoiceItems[1] := 'Gras (bascule)';
+   ChoiceItems[2] := 'Italique (bascule)'; ChoiceItems[3] := 'Souligne (bascule)';
+   ChoiceItems[4] := 'Taille x1 (8 px)'; ChoiceItems[5] := 'Taille x2 (16 px)';
+   ChoiceItems[6] := 'Taille x3 (24 px)'; ChoiceItems[7] := 'Taille x4 (32 px)';
+  End;
+  CH_FORMAT: Begin
+   ChoiceCount := 5;
+   ChoiceItems[0] := 'MAJUSCULES'; ChoiceItems[1] := 'minuscules';
+   ChoiceItems[2] := 'Casse de titre'; ChoiceItems[3] := 'Inverser la casse';
+   ChoiceItems[4] := 'Retirer les espaces en trop';
+  End;
+  CH_TEXTVIEW: Begin
+   ChoiceCount := 3;
+   If TextFrames Then ChoiceItems[0] := '[x] Cadres de texte'
+   Else ChoiceItems[0] := '[ ] Cadres de texte';
+   If GreekText Then ChoiceItems[1] := '[x] Texte en barres (apercu)'
+   Else ChoiceItems[1] := '[ ] Texte en barres (apercu)';
+   ChoiceItems[2] := 'Reinitialiser l''affichage';
+  End;
   CH_SIMPLIFY: Begin
    ChoiceCount := 4;
    ChoiceItems[0] := 'Tolerance 1 px (faible)'; ChoiceItems[1] := 'Tolerance 2 px';
@@ -4067,6 +4480,9 @@ Begin
   CH_ALIGN: AlignSelection(Index);
   CH_DISTRIB: DistributeSelection(Index);
   CH_SIMPLIFY: SimplifySelection(Index);
+  CH_FONT: FontSelection(Index);
+  CH_FORMAT: FormatSelection(Index);
+  CH_TEXTVIEW: TextViewChoice(Index);
   CH_OFFSET: OffsetSelection(Index);
   CH_TRANSFORM: Case Index Of
    0: TransformSelection(TR_ROT,Pi/2);
@@ -4115,6 +4531,9 @@ Begin
   CH_DISTRIB: S := 'Distribuer';
   CH_TRANSFORM: S := 'Transformer';
   CH_SIMPLIFY: S := 'Simplifier';
+  CH_FONT: S := 'Polices';
+  CH_FORMAT: S := 'Formats';
+  CH_TEXTVIEW: S := 'Affichage du texte';
   CH_OFFSET: S := 'Decalage';
  Else S := 'Operations';
  End;
@@ -4858,6 +5277,11 @@ Begin
   CMD_TRANSFORM: OpenChoice(CH_TRANSFORM);
   CMD_OPS: OpenChoice(CH_OPS);
   CMD_SELALL: SelectAllCommand;
+  CMD_GLYPHS: OpenGlyphs;
+  CMD_TEXTPATH: TextToPathCommand;
+  CMD_FONTS: OpenChoice(CH_FONT);
+  CMD_FORMATS: OpenChoice(CH_FORMAT);
+  CMD_TEXTVIEW: OpenChoice(CH_TEXTVIEW);
   CMD_PJOIN: JoinCommand;
   CMD_PSPLIT: SplitCommand;
   CMD_PCORNER: CornerCommand;
@@ -5019,7 +5443,9 @@ Begin
  If TextActive And Pressed Then
   If (MenuBarHitTest(MouseX,MouseY) >= 0) Or
      (ToolHitTest(MouseX,MouseY) >= 0) Then FinishText(True);
- If ChoiceActive Then Begin
+ If GlyphActive Then Begin
+  If Pressed Then HandleGlyphMouse;
+ End Else If ChoiceActive Then Begin
   If Pressed Then HandleChoiceMouse;
  End Else If PropActive Then Begin
   If Pressed Then HandlePropMouse;
@@ -5127,6 +5553,7 @@ Var S: String; Capacity: Integer;
 Begin
  ResetToolTip;
  NeedsRedraw := True;
+ If GlyphActive Then Begin HandleGlyphKey(Key); Exit; End;
  If ChoiceActive Then Begin HandleChoiceKey(Key); Exit; End;
  If PropActive Then Begin HandlePropKey(Key); Exit; End;
  If FileDialogActive Then Begin HandleFileKey(Key,ExtKey); Exit; End;
@@ -5186,7 +5613,7 @@ Begin
     #83: If TextCursor < Length(S) Then Delete(S,TextCursor+1,1);
    End;
    #32..#255: Begin
-    Capacity := (ScreenWidth-TOOLBAR_WIDTH-Round(TextObject.TextObj.X)) Div 8;
+    Capacity := (ScreenWidth-TOOLBAR_WIDTH-Round(TextObject.TextObj.X)) Div (8*TextScaleOf(TextObject));
     If (Length(S) < 255) And (Length(S) < Capacity) Then Begin
      Insert(Key,S,TextCursor+1);
      Inc(TextCursor);
@@ -5288,8 +5715,9 @@ Begin
  If TextActive Then Begin
   DrawGraphicObject(TextObject);
   SetColor(COLOR_TEXT);
-  I := ScreenX(TextObject.TextObj.X+TextCursor*8);
-  Line(I,ScreenY(TextObject.TextObj.Y),I,ScreenY(TextObject.TextObj.Y+8)-1);
+  I := ScreenX(TextObject.TextObj.X+TextCursor*8*TextScaleOf(TextObject));
+  Line(I,ScreenY(TextObject.TextObj.Y),I,
+       ScreenY(TextObject.TextObj.Y+8*TextScaleOf(TextObject))-1);
  End;
  If PencilActive Then DrawGraphicObject(PencilObject);
  If BezierStage <> 0 Then Begin
@@ -5307,6 +5735,7 @@ Begin
  DrawMenu;
  DrawPropDialog;
  DrawChoice;
+ DrawGlyphDialog;
  If DialogTitle <> '' Then Begin
   SetFillStyle(SolidFill, COLOR_WINDOW);
   Bar(45, 160, ScreenWidth-45, 280);
@@ -7979,7 +8408,7 @@ Begin
  NeedsRedraw := True;
  GridVisible := True;
  PropActive := False;
- ChoiceActive := False; MarqueeActive := False; EditMulti := False;
+ GlyphActive := False; ChoiceActive := False; MarqueeActive := False; EditMulti := False;
  RulersVisible := True; GuidesVisible := True;
  GuideHead := Nil; GuideCur := Nil; GuideDragging := False;
  DialogTitle := '';

@@ -32505,8 +32505,9 @@ End;
 { Ajoute au bloc d'accumulation le son du clip C pour les echantillons [S0, S0+N) }
 Procedure AuClipBlock(Var C: TClip; Ci: Integer; S0: Int64; N: Integer);
 Var
- CS, CE, Lo, Hi, S, TL, SP, InBase, K, K0, K1: Int64;
+ CS, CE, Lo, Hi, TL, SP, InBase, K, K0, K1: Int64;
  W, I, Bf, Kd, Fi, Fo, Idx: LongInt;
+ S: LongInt; { compteur de boucle : Int64 interdit sous Free Pascal 32 bits }
  L, R, G, G1, Gv, T2, Pn0, Pn1, PnV, GL, GR: LongInt;
  Slot: Integer;
  Got: Word;

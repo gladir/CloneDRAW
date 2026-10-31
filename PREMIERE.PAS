@@ -351,7 +351,7 @@ Const
  { Identifiants de commandes }
  CM_NEW = 100;  CM_OPEN = 101;  CM_SAVE = 102;  CM_SAVEAS = 103;
  CM_IMPORT = 104; CM_NEWITEM = 105; CM_EXPFRAME = 106; CM_EXPSEQ = 107;
- CM_EXPEDL = 108; CM_QUIT = 109;
+ CM_EXPEDL = 108; CM_QUIT = 109; CM_EXPAVI = 110; CM_EXPWAV = 111;
  CM_UNDO = 200; CM_REDO = 201; CM_CUT = 202; CM_COPY = 203; CM_PASTE = 204;
  CM_DELETE = 205; CM_RIPDEL = 206; CM_DUP = 207; CM_SELALL = 208; CM_SELNONE = 209;
  CM_RENAME = 300; CM_SPEED = 301; CM_ENABLE = 302; CM_RESETFX = 303;
@@ -420,6 +420,7 @@ Var
  LevelL, LevelR, PeakL, PeakR: Integer;
  SnapGuide: LongInt;
  LastTone: Integer;
+ AuActive: Boolean;
 
  { Menus }
  Menus: Array[0..7] Of TMenu;
@@ -1533,13 +1534,13 @@ Begin
 End;
 
 { Construit le calque d'un clip a l'image Tm de la sequence }
-Procedure BuildClipLayer(I: Integer; Tm: LongInt);
+Procedure BuildClipLayer(I: Integer; Tf: LongInt);
 Var
  SF, Off, Rem, Prog: LongInt;
  Kind: Integer;
 Begin
  If NLay > 2 Then Exit;
- SF := P.Clips[I].InPt + ((Tm - P.Clips[I].Start) * P.Clips[I].Speed) Div 100;
+ SF := P.Clips[I].InPt + ((Tf - P.Clips[I].Start) * P.Clips[I].Speed) Div 100;
  SetupLayer(NLay, P.Clips[I].Med, SF);
  With Lay[NLay] Do Begin
   Al := (P.Clips[I].Opac * 255) Div 100;
@@ -1554,8 +1555,8 @@ Begin
   Fl := P.Clips[I].Fl;
   Tr := (Sc <> 100) Or (PX <> 0) Or (PY <> 0);
   Fx := (Br <> 0) Or (Co <> 0) Or (Sa <> 100) Or ((Fl And CF_INV) <> 0);
-  Off := Tm - P.Clips[I].Start;
-  Rem := P.Clips[I].Start + P.Clips[I].Dur - 1 - Tm;
+  Off := Tf - P.Clips[I].Start;
+  Rem := P.Clips[I].Start + P.Clips[I].Dur - 1 - Tf;
   Kind := 0;
   Prog := 256;
   If (P.Clips[I].TIn > 0) And (P.Clips[I].TInL > 0) And (Off < P.Clips[I].TInL) Then Begin
@@ -1812,6 +1813,10 @@ End;
 
 Procedure UpdateSound;
 Begin
+ If AuActive Then Begin
+  StopSound;
+  Exit;
+ End;
  If Playing And AudioOn And (AudioFreq > 0) Then Begin
   If AudioFreq <> LastTone Then Begin
    Sound(AudioFreq);
@@ -2049,6 +2054,8 @@ Begin
  MenuAdd(0, 'Exporter l''image (BMP)', '', CM_EXPFRAME);
  MenuAdd(0, 'Exporter la séquence...', '', CM_EXPSEQ);
  MenuAdd(0, 'Exporter la liste EDL...', '', CM_EXPEDL);
+ MenuAdd(0, 'Exporter la vidéo (AVI)...', '', CM_EXPAVI);
+ MenuAdd(0, 'Exporter l''audio (WAV)...', '', CM_EXPWAV);
  MenuSep(0);
  MenuAdd(0, 'Quitter', 'Ctrl+Q', CM_QUIT);
 
@@ -21458,6 +21465,992 @@ Begin
  RecalcMediaDurs;
 End;
 
+Function FileExists(Const FN: String): Boolean;
+Var
+ F: File;
+Begin
+ {$I-}
+ Assign(F, FN);
+ Reset(F, 1);
+ {$I+}
+ If IOResult = 0 Then Begin
+  Close(F);
+  FileExists := True;
+ End Else FileExists := False;
+End;
+
+
+{ ====================================================================== }
+{  Mixeur audio (WAV, tonalites), lecture sonore et exportations         }
+{  WAV mixe et AVI MJPEG. Code FPC seulement (Int64, grands tableaux).   }
+{ ====================================================================== }
+
+{$IFDEF FPC}
+Const
+ AuRate = 22050;
+
+Type
+ TAuWav = Record
+  Key: String[80];
+  Ok: Boolean;
+  DOfs, DLen, Rate: LongInt;
+  Ch, Bits, Fmt: Integer;
+ End;
+ TAuS16 = Array[0..200000000] Of SmallInt;
+ PAuS16 = ^TAuS16;
+ TAuRaw = Array[0..65535] Of Byte;
+ PAuRaw = ^TAuRaw;
+
+Var
+ AuInf: Array[0..5] Of TAuWav;
+ AuInfN: Integer;
+ AuGain: Array[0..52] Of LongInt;
+ AuRaw: PAuRaw;
+ AuAccL, AuAccR: Array[0..511] Of LongInt;
+ AuF: Array[0..2] Of File;
+ AuFName: Array[0..2] Of String[80];
+ AuFNext: Integer;
+ AuWavBuf: PBigBytes;
+ AuWavSize: LongInt;
+ AuVirt: Boolean;
+ AuVClip: TClip;
+
+Procedure PutTag(Var A: Array Of Byte; O: Integer; Const S: String);
+Var
+ I: Integer;
+Begin
+ For I := 1 To Length(S) Do A[O + I - 1] := Ord(S[I]);
+End;
+
+Procedure AuInit;
+Var
+ I: Integer;
+Begin
+ For I := 0 To 52 Do AuGain[I] := Round(256 * Exp((I - 40) * Ln(10) / 20));
+ For I := 0 To 5 Do AuInf[I].Key := '';
+ For I := 0 To 2 Do AuFName[I] := '';
+ AuInfN := 0;
+ AuFNext := 0;
+ AuRaw := Nil;
+ AuWavBuf := Nil;
+ AuVirt := False;
+End;
+
+{ Ouvre (ou retrouve) le fichier WAV et lit son en-tete }
+Function AuGetWav(Const Path: String): Integer;
+Var
+ F: File;
+ H: Array[0..39] Of Byte;
+ C: Array[0..7] Of Byte;
+ I, Slot: Integer;
+ Pos, Size, Sz: LongInt;
+ N: Word;
+ Tag: String[4];
+ Found: Boolean;
+Begin
+ AuGetWav := -1;
+ For I := 0 To 5 Do
+  If AuInf[I].Key = Path Then Begin
+   If AuInf[I].Ok Then AuGetWav := I;
+   Exit;
+  End;
+ Slot := AuInfN;
+ AuInfN := (AuInfN + 1) Mod 6;
+ AuInf[Slot].Key := Path;
+ AuInf[Slot].Ok := False;
+ {$I-}
+ Assign(F, Path);
+ FileMode := 0;
+ Reset(F, 1);
+ FileMode := 2;
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ Size := FileSize(F);
+ BlockRead(F, H, 12, N);
+ If (N < 12) Or (H[0] <> Ord('R')) Or (H[8] <> Ord('W')) Then Begin
+  Close(F);
+  Exit;
+ End;
+ Pos := 12;
+ Found := False;
+ AuInf[Slot].Fmt := 0;
+ While (Pos + 8 <= Size) And Not Found Do Begin
+  Seek(F, Pos);
+  BlockRead(F, C, 8, N);
+  If N < 8 Then Break;
+  Tag := Chr(C[0]) + Chr(C[1]) + Chr(C[2]) + Chr(C[3]);
+  Sz := LE32(C, 4);
+  If Sz < 0 Then Break;
+  If Tag = 'fmt ' Then Begin
+   FillChar(H, SizeOf(H), 0);
+   BlockRead(F, H, Min(Sz, 40), N);
+   AuInf[Slot].Fmt := LE16(H, 0);
+   AuInf[Slot].Ch := LE16(H, 2);
+   AuInf[Slot].Rate := LE32(H, 4);
+   AuInf[Slot].Bits := LE16(H, 14);
+   If (AuInf[Slot].Fmt = $FFFE) And (Sz >= 26) Then AuInf[Slot].Fmt := LE16(H, 24);
+  End Else If Tag = 'data' Then Begin
+   AuInf[Slot].DOfs := Pos + 8;
+   AuInf[Slot].DLen := Min(Sz, Size - Pos - 8);
+   Found := True;
+  End;
+  Pos := Pos + 8 + Sz + (Sz And 1);
+ End;
+ Close(F);
+ If Found And (AuInf[Slot].Rate >= 4000) And (AuInf[Slot].Ch >= 1) And
+    ((AuInf[Slot].Fmt = 1) Or (AuInf[Slot].Fmt = 3)) And
+    ((AuInf[Slot].Bits = 8) Or (AuInf[Slot].Bits = 16) Or (AuInf[Slot].Bits = 24) Or
+     (AuInf[Slot].Bits = 32)) Then Begin
+  AuInf[Slot].Ok := True;
+  AuGetWav := Slot;
+ End;
+End;
+
+Function AuFileSlot(Const Path: String): Integer;
+Var
+ I: Integer;
+Begin
+ For I := 0 To 2 Do
+  If AuFName[I] = Path Then Begin
+   AuFileSlot := I;
+   Exit;
+  End;
+ I := AuFNext;
+ AuFNext := (AuFNext + 1) Mod 3;
+ If AuFName[I] <> '' Then Begin
+  Close(AuF[I]);
+  AuFName[I] := '';
+ End;
+ {$I-}
+ Assign(AuF[I], Path);
+ FileMode := 0;
+ Reset(AuF[I], 1);
+ FileMode := 2;
+ {$I+}
+ If IOResult <> 0 Then Begin
+  AuFileSlot := -1;
+  Exit;
+ End;
+ AuFName[I] := Path;
+ AuFileSlot := I;
+End;
+
+Procedure AuCloseFiles;
+Var
+ I: Integer;
+Begin
+ For I := 0 To 2 Do
+  If AuFName[I] <> '' Then Begin
+   Close(AuF[I]);
+   AuFName[I] := '';
+  End;
+End;
+
+{ Echantillon stereo (-32768..32767) de l'image Off du tampon brut }
+Procedure AuSample(Off: LongInt; Var W: TAuWav; Var L, R: LongInt);
+Var
+ Sg: Single;
+ B, C, C2: LongInt;
+ Fr: Array[0..1] Of LongInt;
+Begin
+ For C := 0 To 1 Do Begin
+  If C < W.Ch Then C2 := C Else C2 := 0;
+  B := Off + C2 * (W.Bits Div 8);
+  Case W.Bits Of
+   8: Fr[C] := (AuRaw^[B] - 128) * 256;
+   16: Fr[C] := SmallInt(AuRaw^[B] Or (AuRaw^[B + 1] Shl 8));
+   24: Fr[C] := SmallInt(AuRaw^[B + 1] Or (AuRaw^[B + 2] Shl 8));
+  Else Begin
+    If W.Fmt = 3 Then Begin
+     Move(AuRaw^[B], Sg, 4);
+     If Sg > 1 Then Sg := 1;
+     If Sg < -1 Then Sg := -1;
+     Fr[C] := Round(Sg * 32767);
+    End Else Fr[C] := SmallInt(AuRaw^[B + 2] Or (AuRaw^[B + 3] Shl 8));
+   End;
+  End;
+ End;
+ L := Fr[0];
+ R := Fr[1];
+End;
+
+Function AuSynth(Kind, Par: Integer; SP: Int64): LongInt;
+Var
+ Beat, Ph, Hz, Env: LongInt;
+Begin
+ AuSynth := 0;
+ Beat := AuRate Div 3;
+ Case Kind Of
+  MK_TONE: Begin
+   Ph := ((SP * Par) Mod AuRate) * 256 Div AuRate;
+   AuSynth := Sn(Ph) * 7000 Div 127;
+  End;
+  MK_PULSE: Begin
+   If ((SP Div Beat) And 1) = 0 Then Begin
+    Ph := ((SP * Par) Mod AuRate) * 256 Div AuRate;
+    AuSynth := Sn(Ph) * 7000 Div 127;
+   End;
+  End;
+  MK_MELODY: Begin
+   Hz := MelodyHz[MelodyIdx[(SP Div Beat) And 7]];
+   Env := 100 - ((SP Mod Beat) * 60) Div Beat;
+   Ph := ((SP * Hz) Mod AuRate) * 256 Div AuRate;
+   AuSynth := (Sn(Ph) * 7000 Div 127) * Env Div 100;
+  End;
+ End;
+End;
+
+{ Ajoute au bloc d'accumulation le son du clip C pour les echantillons [S0, S0+N) }
+Procedure AuClipBlock(Var C: TClip; S0: Int64; N: Integer);
+Var
+ CS, CE, Lo, Hi, S, TL, SP, InBase, K, K0, K1: Int64;
+ W, I, Bf, Kd, Fi, Fo, Idx: LongInt;
+ L, R, G, Gv, T2: LongInt;
+ Slot: Integer;
+ Got: Word;
+ Vol: Integer;
+Begin
+ CS := Int64(C.Start) * AuRate Div P.Fps;
+ CE := Int64(C.Start + C.Dur) * AuRate Div P.Fps;
+ Lo := S0;
+ If CS > Lo Then Lo := CS;
+ Hi := S0 + N;
+ If CE < Hi Then Hi := CE;
+ If Hi <= Lo Then Exit;
+ Kd := P.Media[C.Med].Kind;
+ Vol := C.Vol;
+ If Vol < -40 Then Vol := -40;
+ If Vol > 12 Then Vol := 12;
+ G := AuGain[Vol + 40];
+ InBase := Int64(C.InPt) * AuRate Div P.Fps;
+ Fi := 0;
+ Fo := 0;
+ If (C.TIn > 0) And (C.TInL > 0) Then Fi := (Int64(C.TInL) * AuRate) Div P.Fps;
+ If (C.TOut > 0) And (C.TOutL > 0) Then Fo := (Int64(C.TOutL) * AuRate) Div P.Fps;
+ If Kd = MK_WAV Then Begin
+  W := AuGetWav(P.Media[C.Med].Path);
+  If W < 0 Then Exit;
+  Slot := AuFileSlot(P.Media[C.Med].Path);
+  If Slot < 0 Then Exit;
+  Bf := AuInf[W].Ch * (AuInf[W].Bits Div 8);
+  K0 := (InBase + (Lo - CS) * C.Speed Div 100) * AuInf[W].Rate Div AuRate;
+  K1 := (InBase + (Hi - 1 - CS) * C.Speed Div 100) * AuInf[W].Rate Div AuRate;
+  If (K1 - K0 + 1) * Bf > 65000 Then Exit;
+  If AuRaw = Nil Then New(AuRaw);
+  FillChar(AuRaw^, 65536, 0);
+  If K0 * Bf >= AuInf[W].DLen Then Exit;
+  {$I-}
+  Seek(AuF[Slot], AuInf[W].DOfs + K0 * Bf);
+  BlockRead(AuF[Slot], AuRaw^, (K1 - K0 + 1) * Bf, Got);
+  {$I+}
+  If IOResult <> 0 Then Exit;
+ End;
+ For S := Lo To Hi - 1 Do Begin
+  TL := S - CS;
+  SP := InBase + (TL * C.Speed) Div 100;
+  If Kd = MK_WAV Then Begin
+   K := SP * AuInf[W].Rate Div AuRate - K0;
+   If (K < 0) Or ((K + 1) * Bf > 65536) Then Begin
+    L := 0;
+    R := 0;
+   End Else AuSample(K * Bf, AuInf[W], L, R);
+  End Else Begin
+   L := AuSynth(Kd, P.Media[C.Med].Par, SP);
+   R := L;
+  End;
+  Gv := G;
+  If (Fi > 0) And (TL < Fi) Then Gv := (Gv * TL) Div Fi;
+  T2 := (CE - CS) - 1 - TL;
+  If (Fo > 0) And (T2 < Fo) Then Gv := (Gv * T2) Div Fo;
+  Idx := S - S0;
+  AuAccL[Idx] := AuAccL[Idx] + (L * Gv) Div 256;
+  AuAccR[Idx] := AuAccR[Idx] + (R * Gv) Div 256;
+ End;
+End;
+
+{ Mixe N images stereo a partir de l'echantillon S0 dans Dest (entrelace) }
+Procedure AuMix(S0: Int64; N: LongInt; Dest: PAuS16);
+Var
+ Done, Blk, I, J: LongInt;
+ V: LongInt;
+Begin
+ Done := 0;
+ While Done < N Do Begin
+  Blk := N - Done;
+  If Blk > 512 Then Blk := 512;
+  FillChar(AuAccL, SizeOf(AuAccL), 0);
+  FillChar(AuAccR, SizeOf(AuAccR), 0);
+  If AuVirt Then AuClipBlock(AuVClip, S0 + Done, Blk)
+  Else
+   For I := 0 To P.NC - 1 Do
+    If (P.Clips[I].Trk >= 3) And ((P.TrkF[P.Clips[I].Trk] And TF_HIDE) = 0) And
+       ((P.Clips[I].Fl And CF_OFF) = 0) And (Not P.Clips[I].Mute) And
+       (P.Media[P.Clips[I].Med].Kind >= 20) Then
+     AuClipBlock(P.Clips[I], S0 + Done, Blk);
+  For J := 0 To Blk - 1 Do Begin
+   V := AuAccL[J];
+   If V > 32767 Then V := 32767 Else If V < -32768 Then V := -32768;
+   Dest^[(Done + J) * 2] := V;
+   V := AuAccR[J];
+   If V > 32767 Then V := 32767 Else If V < -32768 Then V := -32768;
+   Dest^[(Done + J) * 2 + 1] := V;
+  End;
+  Done := Done + Blk;
+ End;
+End;
+
+Function AuAnyAudio(F0, F1: LongInt): Boolean;
+Var
+ I: Integer;
+Begin
+ AuAnyAudio := False;
+ If AuVirt Then Begin
+  AuAnyAudio := True;
+  Exit;
+ End;
+ For I := 0 To P.NC - 1 Do
+  If (P.Clips[I].Trk >= 3) And ((P.TrkF[P.Clips[I].Trk] And TF_HIDE) = 0) And
+     ((P.Clips[I].Fl And CF_OFF) = 0) And (Not P.Clips[I].Mute) And
+     (P.Clips[I].Start < F1) And (ClipEnd(I) > F0) Then AuAnyAudio := True;
+End;
+
+Procedure AuWavHeader(Var H: Array Of Byte; N: LongInt);
+Begin
+ FillChar(H, 44, 0);
+ H[0] := Ord('R'); H[1] := Ord('I'); H[2] := Ord('F'); H[3] := Ord('F');
+ PutLE32(H, 4, 36 + N * 4);
+ H[8] := Ord('W'); H[9] := Ord('A'); H[10] := Ord('V'); H[11] := Ord('E');
+ H[12] := Ord('f'); H[13] := Ord('m'); H[14] := Ord('t'); H[15] := Ord(' ');
+ PutLE32(H, 16, 16);
+ H[20] := 1;
+ H[22] := 2;
+ PutLE32(H, 24, AuRate);
+ PutLE32(H, 28, AuRate * 4);
+ H[32] := 4;
+ H[34] := 16;
+ H[36] := Ord('d'); H[37] := Ord('a'); H[38] := Ord('t'); H[39] := Ord('a');
+ PutLE32(H, 40, N * 4);
+End;
+
+{ Construit en memoire l'image d'un fichier WAV stereo 16 bits des images F0..F1 }
+Function AuBuildWav(F0, F1: LongInt): Boolean;
+Var
+ S0, N: Int64;
+Begin
+ AuBuildWav := False;
+ If AuWavBuf <> Nil Then Begin
+  FreeMem(AuWavBuf, AuWavSize);
+  AuWavBuf := Nil;
+ End;
+ S0 := Int64(F0) * AuRate Div P.Fps;
+ N := Int64(F1) * AuRate Div P.Fps - S0;
+ If (N < AuRate Div 20) Or (N > Int64(AuRate) * 600) Then Exit;
+ AuWavSize := 44 + N * 4;
+ GetMem(AuWavBuf, AuWavSize);
+ If AuWavBuf = Nil Then Exit;
+ AuWavHeader(AuWavBuf^, N);
+ AuMix(S0, LongInt(N), PAuS16(@AuWavBuf^[44]));
+ AuCloseFiles;
+ AuBuildWav := True;
+End;
+
+{$IFDEF WINDOWS}
+Function AuPlaySound(Snd: Pointer; Hm: PtrUInt; Fl: LongWord): LongInt;
+ stdcall; external 'winmm.dll' name 'PlaySoundA';
+{$ENDIF}
+
+Procedure AuStopPlay;
+Begin
+ {$IFDEF WINDOWS}
+ If AuWavBuf <> Nil Then AuPlaySound(Nil, 0, 0);
+ {$ENDIF}
+ If AuWavBuf <> Nil Then Begin
+  FreeMem(AuWavBuf, AuWavSize);
+  AuWavBuf := Nil;
+ End;
+ AuVirt := False;
+End;
+
+{ Demarre la lecture sonore reelle (Windows). Retourne False si impossible. }
+Function AuStartPlay(Target: Integer; FromFrame: LongInt): Boolean;
+Var
+ EndF: LongInt;
+ Okp: Boolean;
+Begin
+ AuStartPlay := False;
+ AuStopPlay;
+ {$IFDEF WINDOWS}
+ AuVirt := False;
+ If Target = 1 Then Begin
+  EndF := SeqEnd;
+  If P.OutM >= 0 Then EndF := Min(EndF, P.OutM);
+ End Else Begin
+  If (SrcMed < 0) Or (SrcMed >= P.NM) Or (P.Media[SrcMed].Kind < 20) Then Exit;
+  FillChar(AuVClip, SizeOf(AuVClip), 0);
+  AuVClip.Trk := 3;
+  AuVClip.Med := SrcMed;
+  AuVClip.Start := 0;
+  AuVClip.Dur := P.Media[SrcMed].Dur;
+  AuVClip.InPt := 0;
+  AuVClip.Speed := 100;
+  AuVirt := True;
+  EndF := P.Media[SrcMed].Dur;
+ End;
+ If Not AuAnyAudio(FromFrame, EndF) Then Begin
+  AuVirt := False;
+  Exit;
+ End;
+ If AuBuildWav(FromFrame, EndF) Then Begin
+  Okp := AuPlaySound(AuWavBuf, 0, 1 Or 2 Or 4) <> 0;
+  If Not Okp Then AuStopPlay;
+  AuStartPlay := Okp;
+ End;
+ AuVirt := False;
+ {$ENDIF}
+End;
+
+{ ---------- Exportation WAV ---------- }
+
+Procedure DoExportWav;
+Var
+ FN: String;
+ F0, F1: LongInt;
+ F: File;
+Begin
+ If SeqEnd = 0 Then Begin
+  MsgBox('Exporter l''audio', 'La séquence est vide.');
+  Exit;
+ End;
+ FN := 'AUDIO001.WAV';
+ If Not InputBox('Exporter l''audio', 'Nom du fichier WAV (stéréo 16 bits) :', FN, 40) Then Exit;
+ If ExtOf(FN) = '' Then FN := FN + '.WAV';
+ F0 := 0;
+ F1 := SeqEnd;
+ If P.InM >= 0 Then F0 := P.InM;
+ If (P.OutM >= 0) And (P.OutM > F0) Then F1 := Min(F1, P.OutM);
+ AuVirt := False;
+ If Not AuAnyAudio(F0, F1) Then Begin
+  MsgBox('Exporter l''audio', 'Aucun clip audio dans la zone exportée.');
+  Exit;
+ End;
+ If Not AuBuildWav(F0, F1) Then Begin
+  MsgBox('Exporter l''audio', 'Zone trop courte ou trop longue (10 minutes maximum).');
+  Exit;
+ End;
+ {$I-}
+ Assign(F, FN);
+ Rewrite(F, 1);
+ BlockWrite(F, AuWavBuf^, AuWavSize);
+ Close(F);
+ {$I+}
+ If IOResult = 0 Then
+  MsgBox('Exporter l''audio', 'Audio exporté : ' + FN + '|' + TC(F1 - F0) + ' - 22050 Hz stéréo 16 bits')
+ Else MsgBox('Exporter l''audio', 'Impossible d''écrire le fichier.');
+ FreeMem(AuWavBuf, AuWavSize);
+ AuWavBuf := Nil;
+End;
+
+{ ====================================================================== }
+{  Encodeur JPEG baseline (4:4:4) et ecriture AVI MJPEG + PCM            }
+{ ====================================================================== }
+
+Const
+ ExQLum: Array[0..63] Of Byte =
+  (16,11,10,16,24,40,51,61,12,12,14,19,26,58,60,55,14,13,16,24,40,57,69,56,14,17,22,29,51,87,80,62,
+   18,22,37,56,68,109,103,77,24,35,55,64,81,104,113,92,49,64,78,87,103,121,120,101,72,92,95,98,112,100,103,99);
+ ExQChr: Array[0..63] Of Byte =
+  (17,18,24,47,99,99,99,99,18,21,26,66,99,99,99,99,24,26,56,99,99,99,99,99,47,66,99,99,99,99,99,99,
+   99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99);
+
+Type
+ TExLongs = Array[0..2000000] Of LongInt;
+ PExLongs = ^TExLongs;
+ TExHuff = Record
+  Code: Array[0..255] Of Word;
+  Size: Array[0..255] Of Byte;
+ End;
+
+Var
+ ExQ: Array[0..1, 0..63] Of Integer;
+ ExHuf: Array[0..3] Of TExHuff;
+ ExCos: Array[0..7, 0..7] Of Single;
+ ExOut: PBigBytes;
+ ExPos: LongInt;
+ ExAcc: LongInt;
+ ExNb: LongInt;
+ ExPrev: Array[0..2] Of Integer;
+ Yp, Cbp, Crp: Array[0..VW * VH - 1] Of Single;
+
+Procedure ExBuildHuff(Var H: TExHuff; Const Bits: Array Of Byte; Const Vals: Array Of Byte);
+Var
+ Code, K, Len, I: LongInt;
+Begin
+ FillChar(H, SizeOf(H), 0);
+ Code := 0;
+ K := 0;
+ For Len := 1 To 16 Do Begin
+  For I := 1 To Bits[Len - 1] Do Begin
+   H.Code[Vals[K]] := Code;
+   H.Size[Vals[K]] := Len;
+   Inc(Code);
+   Inc(K);
+  End;
+  Code := Code Shl 1;
+ End;
+End;
+
+Procedure ExInit(Quality: Integer);
+Var
+ I, U, X, Sc, V: Integer;
+Begin
+ If Quality < 1 Then Quality := 1;
+ If Quality > 100 Then Quality := 100;
+ If Quality < 50 Then Sc := 5000 Div Quality Else Sc := 200 - Quality * 2;
+ For I := 0 To 63 Do Begin
+  V := (ExQLum[I] * Sc + 50) Div 100;
+  If V < 1 Then V := 1;
+  If V > 255 Then V := 255;
+  ExQ[0, I] := V;
+  V := (ExQChr[I] * Sc + 50) Div 100;
+  If V < 1 Then V := 1;
+  If V > 255 Then V := 255;
+  ExQ[1, I] := V;
+ End;
+ For U := 0 To 7 Do
+  For X := 0 To 7 Do Begin
+   ExCos[U, X] := Cos((2 * X + 1) * U * Pi / 16) / 2;
+   If U = 0 Then ExCos[U, X] := ExCos[U, X] / Sqrt(2);
+  End;
+ ExBuildHuff(ExHuf[0], V3JStdDCLN, V3JStdDCLV);
+ ExBuildHuff(ExHuf[1], V3JStdACLN, V3JStdACLV);
+ ExBuildHuff(ExHuf[2], V3JStdDCCN, V3JStdDCCV);
+ ExBuildHuff(ExHuf[3], V3JStdACCN, V3JStdACCV);
+End;
+
+Procedure ExPutBits(Code, Len: LongInt);
+Var
+ B: LongInt;
+Begin
+ ExAcc := (ExAcc Shl Len) Or (Code And ((1 Shl Len) - 1));
+ Inc(ExNb, Len);
+ While ExNb >= 8 Do Begin
+  B := (ExAcc Shr (ExNb - 8)) And 255;
+  ExOut^[ExPos] := B;
+  Inc(ExPos);
+  If B = 255 Then Begin
+   ExOut^[ExPos] := 0;
+   Inc(ExPos);
+  End;
+  Dec(ExNb, 8);
+ End;
+ ExAcc := ExAcc And ((1 Shl ExNb) - 1);
+End;
+
+Procedure ExFlushBits;
+Begin
+ If ExNb > 0 Then ExPutBits((1 Shl (8 - ExNb)) - 1, 8 - ExNb);
+End;
+
+Function ExCat(V: LongInt): LongInt;
+Var
+ N: LongInt;
+Begin
+ V := Abs(V);
+ N := 0;
+ While V > 0 Do Begin
+  Inc(N);
+  V := V Shr 1;
+ End;
+ ExCat := N;
+End;
+
+Procedure ExEncodeBlock(Var Blk: Array Of Single; Comp: Integer);
+Var
+ Tmp: Array[0..63] Of Single;
+ Co: Array[0..63] Of LongInt;
+ U, V, X, Y, I, Tbl: Integer;
+ Q, Run, Cat, D: LongInt;
+ S: Single;
+ DcH, AcH: Integer;
+Begin
+ For Y := 0 To 7 Do
+  For U := 0 To 7 Do Begin
+   S := 0;
+   For X := 0 To 7 Do S := S + Blk[Y * 8 + X] * ExCos[U, X];
+   Tmp[Y * 8 + U] := S;
+  End;
+ If Comp = 0 Then Tbl := 0 Else Tbl := 1;
+ For V := 0 To 7 Do
+  For U := 0 To 7 Do Begin
+   S := 0;
+   For Y := 0 To 7 Do S := S + Tmp[Y * 8 + U] * ExCos[V, Y];
+   Q := ExQ[Tbl, V * 8 + U];
+   Co[V * 8 + U] := Round(S / Q);
+  End;
+ If Comp = 0 Then Begin
+  DcH := 0;
+  AcH := 1;
+ End Else Begin
+  DcH := 2;
+  AcH := 3;
+ End;
+ D := Co[0] - ExPrev[Comp];
+ ExPrev[Comp] := Co[0];
+ Cat := ExCat(D);
+ ExPutBits(ExHuf[DcH].Code[Cat], ExHuf[DcH].Size[Cat]);
+ If Cat > 0 Then Begin
+  If D < 0 Then D := D - 1;
+  ExPutBits(D, Cat);
+ End;
+ Run := 0;
+ For I := 1 To 63 Do Begin
+  Q := Co[V3JZig[I]];
+  If Q = 0 Then Inc(Run)
+  Else Begin
+   While Run > 15 Do Begin
+    ExPutBits(ExHuf[AcH].Code[$F0], ExHuf[AcH].Size[$F0]);
+    Dec(Run, 16);
+   End;
+   Cat := ExCat(Q);
+   ExPutBits(ExHuf[AcH].Code[Run * 16 + Cat], ExHuf[AcH].Size[Run * 16 + Cat]);
+   If Q < 0 Then Q := Q - 1;
+   ExPutBits(Q, Cat);
+   Run := 0;
+  End;
+ End;
+ If Run > 0 Then ExPutBits(ExHuf[AcH].Code[0], ExHuf[AcH].Size[0]);
+End;
+
+Procedure ExPut8(V: LongInt);
+Begin
+ ExOut^[ExPos] := V And 255;
+ Inc(ExPos);
+End;
+
+Procedure ExPut16(V: LongInt);
+Begin
+ ExPut8(V Shr 8);
+ ExPut8(V);
+End;
+
+Procedure ExPutDht(Cls, Id: Integer; Const Bits: Array Of Byte; Const Vals: Array Of Byte; NV: Integer);
+Var
+ I: Integer;
+Begin
+ ExPut16($FFC4);
+ ExPut16(2 + 1 + 16 + NV);
+ ExPut8(Cls * 16 + Id);
+ For I := 0 To 15 Do ExPut8(Bits[I]);
+ For I := 0 To NV - 1 Do ExPut8(Vals[I]);
+End;
+
+{ Encode l'image composee de la sequence a l'image Tm ; retourne la taille }
+Function ExEncodeFrame(Tm: LongInt): LongInt;
+Var
+ Bx, By, X, Y, C, I, XX, YY: Integer;
+ Blk: Array[0..63] Of Single;
+ R, G, B: Single;
+Begin
+ ExPos := 0;
+ ExAcc := 0;
+ ExNb := 0;
+ FillChar(ExPrev, SizeOf(ExPrev), 0);
+ ExPut16($FFD8);
+ ExPut16($FFE0);
+ ExPut16(16);
+ ExPut8(Ord('J')); ExPut8(Ord('F')); ExPut8(Ord('I')); ExPut8(Ord('F')); ExPut8(0);
+ ExPut16($0101);
+ ExPut8(0);
+ ExPut16(1);
+ ExPut16(1);
+ ExPut8(0);
+ ExPut8(0);
+ For C := 0 To 1 Do Begin
+  ExPut16($FFDB);
+  ExPut16(67);
+  ExPut8(C);
+  For I := 0 To 63 Do ExPut8(ExQ[C, V3JZig[I]]);
+ End;
+ ExPut16($FFC0);
+ ExPut16(17);
+ ExPut8(8);
+ ExPut16(VH);
+ ExPut16(VW);
+ ExPut8(3);
+ ExPut8(1); ExPut8($11); ExPut8(0);
+ ExPut8(2); ExPut8($11); ExPut8(1);
+ ExPut8(3); ExPut8($11); ExPut8(1);
+ ExPutDht(0, 0, V3JStdDCLN, V3JStdDCLV, 12);
+ ExPutDht(1, 0, V3JStdACLN, V3JStdACLV, 162);
+ ExPutDht(0, 1, V3JStdDCCN, V3JStdDCCV, 12);
+ ExPutDht(1, 1, V3JStdACCN, V3JStdACCV, 162);
+ ExPut16($FFDA);
+ ExPut16(12);
+ ExPut8(3);
+ ExPut8(1); ExPut8($00);
+ ExPut8(2); ExPut8($11);
+ ExPut8(3); ExPut8($11);
+ ExPut8(0); ExPut8(63); ExPut8(0);
+ BuildLayers(Tm);
+ For Y := 0 To VH - 1 Do
+  For X := 0 To VW - 1 Do Begin
+   If NLay = 0 Then Begin
+    AR := 0; AG := 0; AB := 0;
+   End Else Compose(X, Y);
+   R := AR;
+   G := AG;
+   B := AB;
+   Yp[Y * VW + X] := 0.299 * R + 0.587 * G + 0.114 * B - 128;
+   Cbp[Y * VW + X] := -0.168736 * R - 0.331264 * G + 0.5 * B;
+   Crp[Y * VW + X] := 0.5 * R - 0.418688 * G - 0.081312 * B;
+  End;
+ For By := 0 To (VH + 7) Div 8 - 1 Do
+  For Bx := 0 To (VW + 7) Div 8 - 1 Do
+   For C := 0 To 2 Do Begin
+    For YY := 0 To 7 Do
+     For XX := 0 To 7 Do Begin
+      Y := By * 8 + YY;
+      X := Bx * 8 + XX;
+      If Y >= VH Then Y := VH - 1;
+      If X >= VW Then X := VW - 1;
+      Case C Of
+       0: Blk[YY * 8 + XX] := Yp[Y * VW + X];
+       1: Blk[YY * 8 + XX] := Cbp[Y * VW + X];
+      Else Blk[YY * 8 + XX] := Crp[Y * VW + X];
+      End;
+     End;
+    ExEncodeBlock(Blk, C);
+   End;
+ ExFlushBits;
+ ExPut16($FFD9);
+ ExEncodeFrame := ExPos;
+End;
+
+Procedure ExShow(Title: String; Done, Total: LongInt);
+Var
+ X, Y, W, Pc: Integer;
+Begin
+ W := 340;
+ X := (SW - W) Div 2;
+ Y := (SH - 80) Div 2;
+ HideMouse;
+ DlgBox(X, Y, W, 80, Title);
+ Txt(X + 12, Y + 26, IStr(Done) + ' / ' + IStr(Total) + ' images', Black);
+ FillR(X + 12, Y + 42, X + W - 12, Y + 52, White);
+ Frame(X + 12, Y + 42, X + W - 12, Y + 52, DarkGray);
+ Pc := Integer((Done * (W - 26)) Div Max(1, Total));
+ If Pc > 0 Then FillR(X + 13, Y + 43, X + 12 + Pc, Y + 51, Blue);
+ Txt(X + 12, Y + 60, 'Echap : annuler', DarkGray);
+ ShowMouse;
+End;
+
+Procedure DoExportAvi;
+Var
+ FN, S: String;
+ F: File;
+ H: Array[0..323] Of Byte;
+ Q, F0, F1, NFr, I, J: LongInt;
+ JSz, ASz, Pos0, MoviStart, IdxN, MaxJ: LongInt;
+ Cancel: Boolean;
+ Abuf: PAuS16;
+ Ent: Array[0..3] Of LongInt;
+ IdxId, IdxOfs, IdxSz: PExLongs;
+ Sa, Sb, TotSamples: Int64;
+ Pad: Byte;
+ Z: Array[0..3] Of Byte;
+ Chunk: Array[0..7] Of Byte;
+ T0: LongInt;
+ Code: Integer;
+Begin
+ If SeqEnd = 0 Then Begin
+  MsgBox('Exporter la vidéo', 'La séquence est vide.');
+  Exit;
+ End;
+ FN := 'FILM001.AVI';
+ If Not InputBox('Exporter la vidéo (AVI MJPEG)', 'Nom du fichier AVI :', FN, 40) Then Exit;
+ If ExtOf(FN) = '' Then FN := FN + '.AVI';
+ S := '85';
+ If Not InputBox('Exporter la vidéo (AVI MJPEG)', 'Qualité JPEG (1 à 100) :', S, 3) Then Exit;
+ Q := Clamp(StrVal(S, 85), 1, 100);
+ F0 := 0;
+ F1 := SeqEnd;
+ If P.InM >= 0 Then F0 := P.InM;
+ If (P.OutM >= 0) And (P.OutM > F0) Then F1 := Min(F1, P.OutM);
+ NFr := F1 - F0;
+ If NFr < 1 Then Exit;
+ If NFr > 6000 Then Begin
+  MsgBox('Exporter la vidéo', 'Trop d''images (' + IStr(NFr) + ', maximum 6000).|' +
+         'Utilisez les marques d''entrée et de sortie.');
+  Exit;
+ End;
+ If FileExists(FN) Then
+  If Not Confirm('Exporter la vidéo', FN + ' existe déjà.|Le remplacer ?') Then Exit;
+ {$I-}
+ Assign(F, FN);
+ Rewrite(F, 1);
+ {$I+}
+ If IOResult <> 0 Then Begin
+  MsgBox('Exporter la vidéo', 'Impossible d''écrire le fichier.');
+  Exit;
+ End;
+ ExInit(Integer(Q));
+ GetMem(ExOut, 400000);
+ GetMem(Abuf, (AuRate Div 5 + 16) * 4);
+ GetMem(IdxId, NFr * 2 * 4 + 16);
+ GetMem(IdxOfs, NFr * 2 * 4 + 16);
+ GetMem(IdxSz, NFr * 2 * 4 + 16);
+ { En-tete AVI (324 octets) }
+ FillChar(H, SizeOf(H), 0);
+ PutTag(H, 0, 'RIFF'); PutTag(H, 8, 'AVI ');
+ PutTag(H, 12, 'LIST'); PutLE32(H, 16, 292); PutTag(H, 20, 'hdrl');
+ PutTag(H, 24, 'avih'); PutLE32(H, 28, 56);
+ PutLE32(H, 32, 1000000 Div P.Fps);
+ PutLE32(H, 44, $10);
+ PutLE32(H, 48, NFr);
+ PutLE32(H, 56, 2);
+ PutLE32(H, 60, 400000);
+ PutLE32(H, 64, VW);
+ PutLE32(H, 68, VH);
+ PutTag(H, 88, 'LIST'); PutLE32(H, 92, 116); PutTag(H, 96, 'strl');
+ PutTag(H, 100, 'strh'); PutLE32(H, 104, 56);
+ PutTag(H, 108, 'vids'); PutTag(H, 112, 'MJPG');
+ PutLE32(H, 128, 1);
+ PutLE32(H, 132, P.Fps);
+ PutLE32(H, 140, NFr);
+ PutLE32(H, 144, 400000);
+ PutLE32(H, 148, -1);
+ H[160] := VW And 255; H[161] := VW Shr 8;
+ H[162] := VH And 255; H[163] := VH Shr 8;
+ PutTag(H, 164, 'strf'); PutLE32(H, 168, 40);
+ PutLE32(H, 172, 40);
+ PutLE32(H, 176, VW);
+ PutLE32(H, 180, VH);
+ H[184] := 1;
+ H[186] := 24;
+ PutTag(H, 188, 'MJPG');
+ PutLE32(H, 192, VW * VH * 3);
+ PutTag(H, 212, 'LIST'); PutLE32(H, 216, 92); PutTag(H, 220, 'strl');
+ PutTag(H, 224, 'strh'); PutLE32(H, 228, 56);
+ PutTag(H, 232, 'auds');
+ PutLE32(H, 252, 1);
+ PutLE32(H, 256, AuRate);
+ PutLE32(H, 268, 65536);
+ PutLE32(H, 272, -1);
+ PutLE32(H, 276, 4);
+ PutTag(H, 288, 'strf'); PutLE32(H, 292, 16);
+ H[296] := 1;
+ H[298] := 2;
+ PutLE32(H, 300, AuRate);
+ PutLE32(H, 304, AuRate * 4);
+ H[308] := 4;
+ H[310] := 16;
+ PutTag(H, 312, 'LIST'); PutLE32(H, 316, 0); PutTag(H, 320, 'movi');
+ BlockWrite(F, H, 324);
+ Pos0 := 324;
+ MoviStart := 320;
+ IdxN := 0;
+ Cancel := False;
+ TotSamples := 0;
+ FillChar(Z, 4, 0);
+ T0 := 0;
+ AuVirt := False;
+ For I := 0 To NFr - 1 Do Begin
+  If Cancel Then Break;
+  If TickDiff(Ticks, T0) >= 15 Then Begin
+   T0 := Ticks;
+   ExShow('Exportation AVI', I, NFr);
+   Code := ReadKeyCode;
+   If Code = 27 Then Cancel := True;
+  End;
+  JSz := ExEncodeFrame(F0 + I);
+  Chunk[0] := Ord('0'); Chunk[1] := Ord('0'); Chunk[2] := Ord('d'); Chunk[3] := Ord('c');
+  PutLE32(Chunk, 4, JSz);
+  BlockWrite(F, Chunk, 8);
+  BlockWrite(F, ExOut^, JSz);
+  If (JSz And 1) <> 0 Then BlockWrite(F, Z, 1);
+  IdxId^[IdxN] := 0;
+  IdxOfs^[IdxN] := Pos0 - MoviStart;
+  IdxSz^[IdxN] := JSz;
+  Inc(IdxN);
+  Pos0 := Pos0 + 8 + JSz + (JSz And 1);
+  Sa := Int64(F0 + I) * AuRate Div P.Fps;
+  Sb := Int64(F0 + I + 1) * AuRate Div P.Fps;
+  If Sb - Sa > AuRate Div 5 Then Sb := Sa + AuRate Div 5;
+  AuMix(Sa, LongInt(Sb - Sa), Abuf);
+  ASz := (Sb - Sa) * 4;
+  Chunk[0] := Ord('0'); Chunk[1] := Ord('1'); Chunk[2] := Ord('w'); Chunk[3] := Ord('b');
+  PutLE32(Chunk, 4, ASz);
+  BlockWrite(F, Chunk, 8);
+  BlockWrite(F, Abuf^, ASz);
+  IdxId^[IdxN] := 1;
+  IdxOfs^[IdxN] := Pos0 - MoviStart;
+  IdxSz^[IdxN] := ASz;
+  Inc(IdxN);
+  Pos0 := Pos0 + 8 + ASz;
+  TotSamples := TotSamples + (Sb - Sa);
+ End;
+ AuCloseFiles;
+ { Index idx1 }
+ Chunk[0] := Ord('i'); Chunk[1] := Ord('d'); Chunk[2] := Ord('x'); Chunk[3] := Ord('1');
+ PutLE32(Chunk, 4, IdxN * 16);
+ BlockWrite(F, Chunk, 8);
+ For J := 0 To IdxN - 1 Do Begin
+  FillChar(Ent, SizeOf(Ent), 0);
+  If IdxId^[J] = 0 Then Ent[0] := $63643030 Else Ent[0] := $62773130;
+  Ent[1] := $10;
+  Ent[2] := IdxOfs^[J];
+  Ent[3] := IdxSz^[J];
+  BlockWrite(F, Ent, 16);
+ End;
+ { Mise a jour des tailles }
+ If Cancel Then NFr := IdxN Div 2;
+ PutLE32(H, 4, Pos0 + 8 + IdxN * 16 - 8);
+ PutLE32(H, 316, Pos0 - 320);
+ PutLE32(H, 48, NFr);
+ PutLE32(H, 140, NFr);
+ PutLE32(H, 264, TotSamples);
+ Seek(F, 0);
+ BlockWrite(F, H, 324);
+ Close(F);
+ FreeMem(ExOut, 400000);
+ FreeMem(Abuf, (AuRate Div 5 + 16) * 4);
+ FreeMem(IdxId, NFr * 2 * 4 + 16);
+ FreeMem(IdxOfs, NFr * 2 * 4 + 16);
+ FreeMem(IdxSz, NFr * 2 * 4 + 16);
+ DrawAll;
+ If Cancel Then MsgBox('Exporter la vidéo', 'Exportation annulée : ' + IStr(NFr) + ' image(s) écrite(s).')
+ Else MsgBox('Exporter la vidéo', 'Vidéo exportée : ' + FN + '|' + IStr(NFr) + ' images, ' +
+             IStr(VW) + 'x' + IStr(VH) + ', MJPEG qualité ' + IStr(Q) + ' + PCM stéréo');
+End;
+
+{$ELSE}
+Var
+ AuVirt: Boolean;
+
+Procedure AuInit;
+Begin
+End;
+
+Procedure AuStopPlay;
+Begin
+End;
+
+Function AuStartPlay(Target: Integer; FromFrame: LongInt): Boolean;
+Begin
+ AuStartPlay := False;
+End;
+
+Procedure DoExportWav;
+Begin
+ MsgBox('Exporter l''audio', 'Disponible seulement avec Free Pascal.');
+End;
+
+Procedure DoExportAvi;
+Begin
+ MsgBox('Exporter la vidéo', 'Disponible seulement avec Free Pascal.');
+End;
+{$ENDIF}
+
 { ====================================================================== }
 {  Lecture, navigation, operations de montage                            }
 { ====================================================================== }
@@ -21494,6 +22487,8 @@ End;
 
 Procedure StopPlay;
 Begin
+ AuStopPlay;
+ AuActive := False;
  If Playing Then Begin
   Playing := False;
   PlayTarget := 0;
@@ -21517,6 +22512,8 @@ Begin
   If (Speed > 0) And (SrcPos >= MonLen(False)) Then SrcPos := 0;
   PlayF0 := SrcPos;
  End;
+ AuActive := False;
+ If AudioOn And (Speed = 1) Then AuActive := AuStartPlay(Target, PlayF0);
  PlayT0 := Ticks;
  PlaySpeed := Speed;
  PlayTarget := Target;
@@ -21545,6 +22542,8 @@ Begin
    If LoopOn And (Lim > 0) Then Begin
     PlayF0 := 0;
     If P.InM >= 0 Then PlayF0 := P.InM;
+    AuActive := False;
+    If AudioOn Then AuActive := AuStartPlay(1, PlayF0);
     PlayT0 := Ticks;
     NewF := PlayF0;
    End Else Begin
@@ -22241,20 +23240,6 @@ End;
 
 { ---------- Exportations ---------- }
 
-Function FileExists(Const FN: String): Boolean;
-Var
- F: File;
-Begin
- {$I-}
- Assign(F, FN);
- Reset(F, 1);
- {$I+}
- If IOResult = 0 Then Begin
-  Close(F);
-  FileExists := True;
- End Else FileExists := False;
-End;
-
 Procedure DoExportFrame;
 Var
  FN: String;
@@ -22635,6 +23620,8 @@ Begin
   CM_EXPFRAME: DoExportFrame;
   CM_EXPSEQ: DoExportSeq;
   CM_EXPEDL: DoExportEDL;
+  CM_EXPAVI: DoExportAvi;
+  CM_EXPWAV: DoExportWav;
   CM_QUIT: Begin
    If Modified Then Begin
     If Confirm('Quitter', 'Les modifications seront perdues.|Quitter quand même ?') Then Running := False;
@@ -22720,7 +23707,7 @@ Begin
   CM_SAFE: Begin SafeOn := Not SafeOn; NeedAll := True; End;
   CM_WAVE: Begin WaveOn := Not WaveOn; NeedTL := True; End;
   CM_SNAP: Begin SnapOn := Not SnapOn; NeedAll := True; End;
-  CM_AUDIO: Begin AudioOn := Not AudioOn; StopSound; End;
+  CM_AUDIO: Begin AudioOn := Not AudioOn; StopSound; If Not AudioOn Then Begin AuStopPlay; AuActive := False; End; End;
   CM_LOOP: Begin LoopOn := Not LoopOn; End;
   CM_WS0..CM_WS0 + 4: SetWorkspace(Id - CM_WS0);
   CM_TABS: Begin TabA := 0; NeedAll := True; End;
@@ -23688,6 +24675,8 @@ Begin
   PlayF0 := Playhead;
   PlayT0 := Ticks;
   PlaySpeed := Sp * Dir;
+  AuStopPlay;
+  AuActive := False;
  End Else Begin
   StopPlay;
   StartPlay(1, Dir);
@@ -23829,6 +24818,8 @@ Var
 Begin
  InitTables;
  InitCache;
+ AuInit;
+ AuActive := False;
  CnBuf := Nil;
  CnOn := False;
  For I := 0 To MAXUNDO - 1 Do Begin
@@ -23899,6 +24890,7 @@ BEGIN
   Refresh;
   If Not Playing Then Delay(10);
  End;
+ AuStopPlay;
  StopSound;
  FreeHistory;
  CloseGraph;

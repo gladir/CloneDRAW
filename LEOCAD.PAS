@@ -194,8 +194,34 @@ Const
  PN_PARTS=0; PN_PROPS=1; PN_TIME=2;
 
  { Menus }
- MENU_COUNT=7;
- M_FILE=0; M_EDIT=1; M_VIEW=2; M_PIECE=3; M_STEP=4; M_SUB=5; M_HELP=6;
+ MENU_COUNT=9;
+ M_FILE=0; M_EDIT=1; M_VIEW=2; M_PIECE=3; M_XFORM=4; M_STEP=5; M_SUB=6; M_CAM=7; M_HELP=8;
+
+ { Commandes (menus, clavier, barre d'outils) }
+ CM_NONE=0;
+ CM_NEW=1; CM_OPEN=2; CM_SAVE=3; CM_SAVEAS=4; CM_EXP_IMG=5; CM_EXP_HTML=6; CM_EXP_POV=7;
+ CM_EXP_OBJ=8; CM_EXP_3DS=9; CM_EXP_BL=10; CM_EXP_LIST=11; CM_IMP_BL=12; CM_PARTSUSED=13;
+ CM_INFO=14; CM_PREFS=15; CM_REINDEX=16; CM_DOCS=17; CM_QUIT=18;
+ CM_UNDO=20; CM_REDO=21; CM_CUT=22; CM_COPY=23; CM_PASTE=24; CM_DELETE=25; CM_SELALL=26;
+ CM_SELNONE=27; CM_SELINV=28; CM_SELCOL=29; CM_SELPART=30; CM_ADDMODE=31;
+ CM_VIEWS=40; CM_PERSP=41; CM_V_HOME=42; CM_V_FRONT=43; CM_V_BACK=44; CM_V_LEFT=45;
+ CM_V_RIGHT=46; CM_V_TOP=47; CM_V_BOTTOM=48; CM_ZOOMIN=49; CM_ZOOMOUT=50; CM_FIT=51;
+ CM_GRID=52; CM_EDGES=53; CM_WIRE=54; CM_STUDS=55; CM_PN_PARTS=56; CM_PN_PROPS=57;
+ CM_PN_TIME=58; CM_NEXTVIEW=59;
+ CM_INSERT=60; CM_DUP=61; CM_UP8=62; CM_DN8=63; CM_UP24=64; CM_DN24=65; CM_RXP=66;
+ CM_RXM=67; CM_RYP=68; CM_RYM=69; CM_RZP=70; CM_RZM=71; CM_APPLYCOL=72; CM_HIDE=73;
+ CM_SHOWALL=74; CM_GROUP=75; CM_UNGROUP=76; CM_LOCK=77; CM_UNLOCK=78; CM_SELTOOL=79;
+ CM_AL_L=80; CM_AL_R=81; CM_AL_F=82; CM_AL_B=83; CM_AL_T=84; CM_AL_D=85; CM_CEN_X=86;
+ CM_CEN_Z=87; CM_DIST_X=88; CM_DIST_Y=89; CM_DIST_Z=90; CM_MIR_X=91; CM_MIR_Y=92;
+ CM_MIR_Z=93; CM_ARRAY=94; CM_NUMXF=95; CM_PIVOT=96;
+ CM_STEP_NEXT=100; CM_STEP_PREV=101; CM_STEP_FIRST=102; CM_STEP_LAST=103; CM_STEP_INS=104;
+ CM_STEP_DEL=105; CM_STEP_SEL=106;
+ CM_SUB_NEW=110; CM_SUB_FROMSEL=111; CM_SUB_INS=112; CM_SUB_EDIT=113; CM_SUB_MAIN=114;
+ CM_SUB_DEL=115;
+ CM_CAM_NEW=120; CM_CAM_GO=121; CM_CAM_DEL=122; CM_FOV=123; CM_KEY_ADD=124; CM_KEY_DEL=125;
+ CM_KEY_PLAY=126; CM_ANIM_EXP=127; CM_STEPS_PLAY=128;
+ CM_HELP=130; CM_ABOUT=131; CM_KEYS=132;
+ CM_TOOL_SEL=140; CM_TOOL_INS=141; CM_TOOL_ORB=142; CM_TOOL_PAN=143; CM_TOOL_ZOOM=144;
 
  { Interface }
  UI_BG=7; UI_HI=15; UI_SH=8; UI_DK=0; UI_SEL=1;
@@ -341,8 +367,16 @@ Type
 
  TMenuItem=Record
   Caption:String[34];
-  Shortcut:String[10];
+  Shortcut:String[12];
+  Cmd:Integer;
   Enabled,Checked,Separator:Boolean;
+ End;
+
+ PBind=^TBind;
+ TBind=Record
+  Key:Integer;            { code ASCII, ou 256 + code etendu }
+  Cmd:Integer;
+  Next:PBind;
  End;
  TMenu=Record
   Title:String[14];
@@ -398,6 +432,9 @@ Var
  NextGroupId:LongInt;
  CamHead:PCamera;
  KeyHead:PKey;
+ BindHead:PBind;
+ AddMode:Boolean;
+ PivotMode:Integer;
  { annuler / retablir : piles chainees }
  UndoTop,RedoTop:PSnap;
  UndoN,RedoN:Integer;
@@ -3082,10 +3119,14 @@ Var Q:PPiece;
 Begin
  Q:=Models[CurModel].First;
  While Q<>Nil Do Begin
-  If Q^.Sel And PieceVisible(Q)Then DrawPieceBox(Q,12);
+  If Q^.Sel And PieceVisible(Q)Then Begin
+   If Q^.Locked Then DrawPieceBox(Q,9) Else DrawPieceBox(Q,12);
+  End;
   Q:=Q^.Next;
  End;
 End;
+
+Procedure DrawEditGizmo(Var V:TView); Forward;
 
 { Dessine une vue (rectangle ecran de la vue) }
 Procedure RenderView(Var V:TView;Active:Boolean;WithGhost:Boolean);
@@ -3104,6 +3145,7 @@ Begin
  SortScene;
  PaintScene(W,H);
  ViewSelectionBoxes;
+ If Active And(Tool=TL_SELECT)Then DrawEditGizmo(V);
  DrawGizmo(V);
  SetColor(8);
  OutTextXY(4,4,Fx(V.Name));
@@ -3340,17 +3382,134 @@ Begin
 End;
 
 { ====================================================================== }
-{ Menus                                                                  }
+{ Raccourcis clavier (liste chainee) et menus                           }
 { ====================================================================== }
 
-Procedure MI(M,I:Integer;Const Cap,Short:String);
+Procedure BindClear;
+Var B,N:PBind;
+Begin
+ B:=BindHead;
+ While B<>Nil Do Begin N:=B^.Next; Dispose(B); B:=N; End;
+ BindHead:=Nil;
+End;
+
+Procedure BindAdd(Key,Cmd:Integer);
+Var B,T:PBind;
+Begin
+ New(B); B^.Key:=Key; B^.Cmd:=Cmd; B^.Next:=Nil;
+ If BindHead=Nil Then BindHead:=B
+ Else Begin T:=BindHead; While T^.Next<>Nil Do T:=T^.Next; T^.Next:=B; End;
+End;
+
+Function BindCmd(Key:Integer):Integer;
+Var B:PBind;
+Begin
+ B:=BindHead;
+ While B<>Nil Do Begin
+  If B^.Key=Key Then Begin BindCmd:=B^.Cmd; Exit; End;
+  B:=B^.Next;
+ End;
+ BindCmd:=0;
+End;
+
+Function BindKeyOf(Cmd:Integer):Integer;
+Var B:PBind;
+Begin
+ B:=BindHead;
+ While B<>Nil Do Begin
+  If B^.Cmd=Cmd Then Begin BindKeyOf:=B^.Key; Exit; End;
+  B:=B^.Next;
+ End;
+ BindKeyOf:=-1;
+End;
+
+{ Remplace (ou ajoute) la touche d'une commande ; la touche est retiree d'une autre commande }
+Procedure BindSet(Key,Cmd:Integer);
+Var B:PBind;
+Begin
+ B:=BindHead;
+ While B<>Nil Do Begin
+  If B^.Key=Key Then B^.Cmd:=0;
+  B:=B^.Next;
+ End;
+ B:=BindHead;
+ While B<>Nil Do Begin
+  If B^.Cmd=Cmd Then Begin B^.Key:=Key; Exit; End;
+  B:=B^.Next;
+ End;
+ BindAdd(Key,Cmd);
+End;
+
+Function KeyName(Key:Integer):String;
+Begin
+ If Key<0 Then Begin KeyName:=''; Exit; End;
+ If Key>=256 Then Begin
+  Case Key-256 Of
+   59..68:KeyName:='F'+IntStr(Key-256-58);
+   71:KeyName:='Debut'; 72:KeyName:='Haut'; 73:KeyName:='PgHaut'; 75:KeyName:='Gauche';
+   77:KeyName:='Droite'; 79:KeyName:='Fin'; 80:KeyName:='Bas'; 81:KeyName:='PgBas';
+   82:KeyName:='Inser'; 83:KeyName:='Suppr'; 146:KeyName:='Ctrl+Ins';
+   33:KeyName:='Alt+F'; 18:KeyName:='Alt+E'; 30:KeyName:='Alt+A'; 25:KeyName:='Alt+P';
+   20:KeyName:='Alt+T'; 31:KeyName:='Alt+S'; 35:KeyName:='Alt+H';
+  Else KeyName:='#'+IntStr(Key-256);
+  End;
+  Exit;
+ End;
+ Case Key Of
+  1..26:If Key=9 Then KeyName:='Tab' Else If Key=13 Then KeyName:='Entree' Else KeyName:='Ctrl+'+Chr(Key+64);
+  27:KeyName:='Echap';
+  Else KeyName:=Chr(Key);
+ End;
+End;
+
+Procedure InitKeys;
+Begin
+ BindClear;
+ BindAdd(14,CM_NEW); BindAdd(15,CM_OPEN); BindAdd(19,CM_SAVE); BindAdd(256+68,CM_QUIT);
+ BindAdd(3,CM_QUIT); BindAdd(256+107,CM_QUIT);
+ BindAdd(26,CM_UNDO); BindAdd(25,CM_REDO); BindAdd(24,CM_CUT); BindAdd(256+146,CM_COPY);
+ BindAdd(22,CM_PASTE); BindAdd(256+83,CM_DELETE); BindAdd(1,CM_SELALL); BindAdd(4,CM_SELNONE);
+ BindAdd(Ord('a'),CM_ADDMODE);
+ BindAdd(Ord('v'),CM_VIEWS); BindAdd(Ord('p'),CM_PERSP);
+ BindAdd(Ord('0'),CM_V_HOME); BindAdd(Ord('1'),CM_V_FRONT); BindAdd(Ord('2'),CM_V_BACK);
+ BindAdd(Ord('3'),CM_V_LEFT); BindAdd(Ord('4'),CM_V_RIGHT); BindAdd(Ord('5'),CM_V_TOP);
+ BindAdd(Ord('6'),CM_V_BOTTOM); BindAdd(Ord('+'),CM_ZOOMIN); BindAdd(Ord('-'),CM_ZOOMOUT);
+ BindAdd(Ord('f'),CM_FIT); BindAdd(Ord('g'),CM_GRID); BindAdd(Ord('e'),CM_EDGES);
+ BindAdd(Ord('w'),CM_WIRE); BindAdd(Ord('t'),CM_STUDS);
+ BindAdd(256+60,CM_PN_PARTS); BindAdd(256+61,CM_PN_PROPS); BindAdd(256+62,CM_PN_TIME);
+ BindAdd(9,CM_NEXTVIEW);
+ BindAdd(256+82,CM_INSERT); BindAdd(2,CM_DUP); BindAdd(Ord('b'),CM_DUP);
+ BindAdd(256+73,CM_UP8); BindAdd(256+81,CM_DN8); BindAdd(256+71,CM_UP24); BindAdd(256+79,CM_DN24);
+ BindAdd(Ord('x'),CM_RXP); BindAdd(Ord('X'),CM_RXM); BindAdd(Ord('y'),CM_RYP);
+ BindAdd(Ord('Y'),CM_RYM); BindAdd(Ord('z'),CM_RZP); BindAdd(Ord('Z'),CM_RZM);
+ BindAdd(Ord('h'),CM_HIDE); BindAdd(7,CM_GROUP); BindAdd(21,CM_UNGROUP);
+ BindAdd(12,CM_LOCK); BindAdd(11,CM_UNLOCK); BindAdd(27,CM_SELTOOL);
+ BindAdd(Ord('.'),CM_STEP_NEXT); BindAdd(Ord(','),CM_STEP_PREV); BindAdd(Ord('['),CM_STEP_FIRST);
+ BindAdd(Ord(']'),CM_STEP_LAST); BindAdd(Ord('m'),CM_SUB_MAIN);
+ BindAdd(Ord('k'),CM_KEY_ADD); BindAdd(Ord('l'),CM_KEY_PLAY);
+ BindAdd(256+59,CM_HELP); BindAdd(256+63,CM_PN_PARTS);
+End;
+
+Procedure MC(M,I,Cmd:Integer;Const Cap:String);
 Begin
  Menus[M].Items[I].Caption:=Fx(Cap);
- Menus[M].Items[I].Shortcut:=Short;
+ Menus[M].Items[I].Cmd:=Cmd;
+ Menus[M].Items[I].Shortcut:='';
  Menus[M].Items[I].Enabled:=True;
  Menus[M].Items[I].Checked:=False;
  Menus[M].Items[I].Separator:=(Cap='-');
- If M>=0 Then If I>=Menus[M].ItemCount Then Menus[M].ItemCount:=I+1;
+ If I>=Menus[M].ItemCount Then Menus[M].ItemCount:=I+1;
+End;
+
+Procedure UpdateShortcuts;
+Var M,I,K:Integer;
+Begin
+ For M:=0 To MENU_COUNT-1 Do
+  For I:=0 To Menus[M].ItemCount-1 Do
+   If Menus[M].Items[I].Cmd<>0 Then Begin
+    K:=BindKeyOf(Menus[M].Items[I].Cmd);
+    Menus[M].Items[I].Shortcut:=Copy(KeyName(K),1,12);
+   End;
 End;
 
 Procedure InitMenus;
@@ -3359,134 +3518,196 @@ Begin
  For I:=0 To MENU_COUNT-1 Do Begin
   Menus[I].ItemCount:=0;
   For J:=0 To 23 Do Begin
-   Menus[I].Items[J].Caption:=''; Menus[I].Items[J].Shortcut:='';
+   Menus[I].Items[J].Caption:=''; Menus[I].Items[J].Shortcut:=''; Menus[I].Items[J].Cmd:=0;
    Menus[I].Items[J].Enabled:=True; Menus[I].Items[J].Checked:=False;
    Menus[I].Items[J].Separator:=False;
   End;
  End;
  Menus[M_FILE].Title:='Fichier';
- MI(M_FILE,0,'Nouveau','Ctrl+N');
- MI(M_FILE,1,'Ouvrir...','Ctrl+O');
- MI(M_FILE,2,'Enregistrer','Ctrl+S');
- MI(M_FILE,3,'Enregistrer sous...','');
- MI(M_FILE,4,'-','');
- MI(M_FILE,5,'Exporter l''image BMP...','');
- MI(M_FILE,6,'Exporter liste des pi\eces...','');
- MI(M_FILE,7,'-','');
- MI(M_FILE,8,'Informations du mod\gle...','');
- MI(M_FILE,9,'R\eindexer la biblioth\gque','');
- MI(M_FILE,10,'-','');
- MI(M_FILE,11,'Quitter','F10');
+ MC(M_FILE,0,CM_NEW,'Nouveau');
+ MC(M_FILE,1,CM_OPEN,'Ouvrir...');
+ MC(M_FILE,2,CM_SAVE,'Enregistrer');
+ MC(M_FILE,3,CM_SAVEAS,'Enregistrer sous...');
+ MC(M_FILE,4,0,'-');
+ MC(M_FILE,5,CM_EXP_IMG,'Exporter l''image...');
+ MC(M_FILE,6,CM_EXP_HTML,'Exporter instructions HTML...');
+ MC(M_FILE,7,CM_EXP_POV,'Exporter POV-Ray...');
+ MC(M_FILE,8,CM_EXP_OBJ,'Exporter Wavefront OBJ...');
+ MC(M_FILE,9,CM_EXP_3DS,'Exporter 3D Studio...');
+ MC(M_FILE,10,CM_EXP_BL,'Exporter BrickLink XML...');
+ MC(M_FILE,11,CM_EXP_LIST,'Exporter liste des pi\eces...');
+ MC(M_FILE,12,CM_IMP_BL,'Importer BrickLink XML...');
+ MC(M_FILE,13,0,'-');
+ MC(M_FILE,14,CM_PARTSUSED,'Pi\eces utilis\ees...');
+ MC(M_FILE,15,CM_INFO,'Informations du mod\gle...');
+ MC(M_FILE,16,CM_PREFS,'Pr\ef\erences...');
+ MC(M_FILE,17,CM_REINDEX,'R\eindexer la biblioth\gque');
+ MC(M_FILE,18,0,'-');
+ MC(M_FILE,19,CM_DOCS,'Documents ouverts...');
+ MC(M_FILE,20,CM_QUIT,'Quitter');
 
  Menus[M_EDIT].Title:=Fx('\Edition');
- MI(M_EDIT,0,'Annuler','Ctrl+Z');
- MI(M_EDIT,1,'R\etablir','Ctrl+Y');
- MI(M_EDIT,2,'-','');
- MI(M_EDIT,3,'Couper','Ctrl+X');
- MI(M_EDIT,4,'Copier','Ctrl+C');
- MI(M_EDIT,5,'Coller','Ctrl+V');
- MI(M_EDIT,6,'Supprimer','Suppr');
- MI(M_EDIT,7,'-','');
- MI(M_EDIT,8,'Tout s\electionner','Ctrl+A');
- MI(M_EDIT,9,'Aucune s\election','Ctrl+D');
- MI(M_EDIT,10,'Inverser la s\election','');
- MI(M_EDIT,11,'M\eme couleur','');
- MI(M_EDIT,12,'M\eme pi\ece','');
+ MC(M_EDIT,0,CM_UNDO,'Annuler');
+ MC(M_EDIT,1,CM_REDO,'R\etablir');
+ MC(M_EDIT,2,0,'-');
+ MC(M_EDIT,3,CM_CUT,'Couper');
+ MC(M_EDIT,4,CM_COPY,'Copier');
+ MC(M_EDIT,5,CM_PASTE,'Coller');
+ MC(M_EDIT,6,CM_DELETE,'Supprimer');
+ MC(M_EDIT,7,0,'-');
+ MC(M_EDIT,8,CM_SELALL,'Tout s\electionner');
+ MC(M_EDIT,9,CM_SELNONE,'Aucune s\election');
+ MC(M_EDIT,10,CM_SELINV,'Inverser la s\election');
+ MC(M_EDIT,11,CM_SELCOL,'M\eme couleur');
+ MC(M_EDIT,12,CM_SELPART,'M\eme pi\ece');
+ MC(M_EDIT,13,CM_ADDMODE,'Mode ajout \a la s\election');
 
  Menus[M_VIEW].Title:='Affichage';
- MI(M_VIEW,0,'Une vue / quatre vues','V');
- MI(M_VIEW,1,'Perspective / ortho','P');
- MI(M_VIEW,2,'-','');
- MI(M_VIEW,3,'Vue 3D','0');
- MI(M_VIEW,4,'Avant','1');
- MI(M_VIEW,5,'Arri\ere','2');
- MI(M_VIEW,6,'Gauche','3');
- MI(M_VIEW,7,'Droite','4');
- MI(M_VIEW,8,'Dessus','5');
- MI(M_VIEW,9,'Dessous','6');
- MI(M_VIEW,10,'-','');
- MI(M_VIEW,11,'Zoom avant','+');
- MI(M_VIEW,12,'Zoom arri\ere','-');
- MI(M_VIEW,13,'Ajuster \a la fen\hetre','F');
- MI(M_VIEW,14,'-','');
- MI(M_VIEW,15,'Grille','G');
- MI(M_VIEW,16,'Ar\etes','E');
- MI(M_VIEW,17,'Mode filaire','W');
- MI(M_VIEW,18,'D\etail des tenons','T');
- MI(M_VIEW,19,'-','');
- MI(M_VIEW,20,'Panneau Pi\eces','F2');
- MI(M_VIEW,21,'Panneau Propri\et\es','F3');
- MI(M_VIEW,22,'Panneau Chronologie','F4');
+ MC(M_VIEW,0,CM_VIEWS,'Une vue / quatre vues');
+ MC(M_VIEW,1,CM_PERSP,'Perspective / ortho');
+ MC(M_VIEW,2,0,'-');
+ MC(M_VIEW,3,CM_V_HOME,'Vue 3D');
+ MC(M_VIEW,4,CM_V_FRONT,'Avant');
+ MC(M_VIEW,5,CM_V_BACK,'Arri\ere');
+ MC(M_VIEW,6,CM_V_LEFT,'Gauche');
+ MC(M_VIEW,7,CM_V_RIGHT,'Droite');
+ MC(M_VIEW,8,CM_V_TOP,'Dessus');
+ MC(M_VIEW,9,CM_V_BOTTOM,'Dessous');
+ MC(M_VIEW,10,0,'-');
+ MC(M_VIEW,11,CM_ZOOMIN,'Zoom avant');
+ MC(M_VIEW,12,CM_ZOOMOUT,'Zoom arri\ere');
+ MC(M_VIEW,13,CM_FIT,'Ajuster \a la fen\hetre');
+ MC(M_VIEW,14,0,'-');
+ MC(M_VIEW,15,CM_GRID,'Grille');
+ MC(M_VIEW,16,CM_EDGES,'Ar\etes');
+ MC(M_VIEW,17,CM_WIRE,'Mode filaire');
+ MC(M_VIEW,18,CM_STUDS,'D\etail des tenons');
+ MC(M_VIEW,19,0,'-');
+ MC(M_VIEW,20,CM_PN_PARTS,'Panneau Pi\eces');
+ MC(M_VIEW,21,CM_PN_PROPS,'Panneau Propri\et\es');
+ MC(M_VIEW,22,CM_PN_TIME,'Panneau Chronologie');
 
  Menus[M_PIECE].Title:=Fx('Pi\ece');
- MI(M_PIECE,0,'Ins\erer la pi\ece choisie','Ins');
- MI(M_PIECE,1,'Dupliquer','Ctrl+B');
- MI(M_PIECE,2,'-','');
- MI(M_PIECE,3,'Monter d''une plaque','PgUp');
- MI(M_PIECE,4,'Descendre d''une plaque','PgDn');
- MI(M_PIECE,5,'Monter d''une brique','Home');
- MI(M_PIECE,6,'Descendre d''une brique','End');
- MI(M_PIECE,7,'-','');
- MI(M_PIECE,8,'Pivoter X +90','x');
- MI(M_PIECE,9,'Pivoter X -90','X');
- MI(M_PIECE,10,'Pivoter Y +90','y');
- MI(M_PIECE,11,'Pivoter Y -90','Y');
- MI(M_PIECE,12,'Pivoter Z +90','z');
- MI(M_PIECE,13,'Pivoter Z -90','Z');
- MI(M_PIECE,14,'-','');
- MI(M_PIECE,15,'Appliquer la couleur courante','');
- MI(M_PIECE,16,'Masquer la s\election','H');
- MI(M_PIECE,17,'Tout afficher','');
+ MC(M_PIECE,0,CM_INSERT,'Ins\erer la pi\ece choisie');
+ MC(M_PIECE,1,CM_DUP,'Dupliquer');
+ MC(M_PIECE,2,0,'-');
+ MC(M_PIECE,3,CM_UP8,'Monter d''une plaque');
+ MC(M_PIECE,4,CM_DN8,'Descendre d''une plaque');
+ MC(M_PIECE,5,CM_UP24,'Monter d''une brique');
+ MC(M_PIECE,6,CM_DN24,'Descendre d''une brique');
+ MC(M_PIECE,7,0,'-');
+ MC(M_PIECE,8,CM_RXP,'Pivoter X +90');
+ MC(M_PIECE,9,CM_RXM,'Pivoter X -90');
+ MC(M_PIECE,10,CM_RYP,'Pivoter Y +90');
+ MC(M_PIECE,11,CM_RYM,'Pivoter Y -90');
+ MC(M_PIECE,12,CM_RZP,'Pivoter Z +90');
+ MC(M_PIECE,13,CM_RZM,'Pivoter Z -90');
+ MC(M_PIECE,14,0,'-');
+ MC(M_PIECE,15,CM_APPLYCOL,'Appliquer la couleur courante');
+ MC(M_PIECE,16,CM_HIDE,'Masquer la s\election');
+ MC(M_PIECE,17,CM_SHOWALL,'Tout afficher');
+ MC(M_PIECE,18,0,'-');
+ MC(M_PIECE,19,CM_GROUP,'Grouper');
+ MC(M_PIECE,20,CM_UNGROUP,'Dissocier');
+ MC(M_PIECE,21,CM_LOCK,'Verrouiller');
+ MC(M_PIECE,22,CM_UNLOCK,'D\everrouiller');
+
+ Menus[M_XFORM].Title:='Transf.';
+ MC(M_XFORM,0,CM_AL_L,'Aligner \a gauche');
+ MC(M_XFORM,1,CM_AL_R,'Aligner \a droite');
+ MC(M_XFORM,2,CM_AL_F,'Aligner devant');
+ MC(M_XFORM,3,CM_AL_B,'Aligner derri\ere');
+ MC(M_XFORM,4,CM_AL_T,'Aligner en haut');
+ MC(M_XFORM,5,CM_AL_D,'Aligner en bas');
+ MC(M_XFORM,6,CM_CEN_X,'Centrer en X');
+ MC(M_XFORM,7,CM_CEN_Z,'Centrer en Z');
+ MC(M_XFORM,8,0,'-');
+ MC(M_XFORM,9,CM_DIST_X,'R\epartir en X');
+ MC(M_XFORM,10,CM_DIST_Y,'R\epartir en Y');
+ MC(M_XFORM,11,CM_DIST_Z,'R\epartir en Z');
+ MC(M_XFORM,12,0,'-');
+ MC(M_XFORM,13,CM_MIR_X,'Miroir X');
+ MC(M_XFORM,14,CM_MIR_Y,'Miroir Y');
+ MC(M_XFORM,15,CM_MIR_Z,'Miroir Z');
+ MC(M_XFORM,16,0,'-');
+ MC(M_XFORM,17,CM_ARRAY,'Tableau (copies)...');
+ MC(M_XFORM,18,CM_NUMXF,'Transformation num\erique...');
+ MC(M_XFORM,19,CM_PIVOT,'Pivot : centre / pi\ece / origine');
 
  Menus[M_STEP].Title:=Fx('\Etapes');
- MI(M_STEP,0,'\Etape suivante','.');
- MI(M_STEP,1,'\Etape pr\ec\edente',',');
- MI(M_STEP,2,'Premi\ere \etape','[');
- MI(M_STEP,3,'Derni\ere \etape',']');
- MI(M_STEP,4,'-','');
- MI(M_STEP,5,'Ins\erer une \etape','');
- MI(M_STEP,6,'Supprimer l''\etape','');
- MI(M_STEP,7,'S\election vers \etape courante','');
+ MC(M_STEP,0,CM_STEP_NEXT,'\Etape suivante');
+ MC(M_STEP,1,CM_STEP_PREV,'\Etape pr\ec\edente');
+ MC(M_STEP,2,CM_STEP_FIRST,'Premi\ere \etape');
+ MC(M_STEP,3,CM_STEP_LAST,'Derni\ere \etape');
+ MC(M_STEP,4,0,'-');
+ MC(M_STEP,5,CM_STEP_INS,'Ins\erer une \etape');
+ MC(M_STEP,6,CM_STEP_DEL,'Supprimer l''\etape');
+ MC(M_STEP,7,CM_STEP_SEL,'S\election vers \etape courante');
 
- Menus[M_SUB].Title:=Fx('Sous-mod\gle');
- MI(M_SUB,0,'Nouveau sous-mod\gle...','');
- MI(M_SUB,1,'Cr\eer depuis la s\election...','');
- MI(M_SUB,2,'Ins\erer un sous-mod\gle...','');
- MI(M_SUB,3,'-','');
- MI(M_SUB,4,'Modifier un sous-mod\gle...','');
- MI(M_SUB,5,'Mod\gle principal','M');
- MI(M_SUB,6,'Supprimer le sous-mod\gle','');
+ Menus[M_SUB].Title:='Sous-mod.';
+ MC(M_SUB,0,CM_SUB_NEW,'Nouveau sous-mod\gle...');
+ MC(M_SUB,1,CM_SUB_FROMSEL,'Cr\eer depuis la s\election...');
+ MC(M_SUB,2,CM_SUB_INS,'Ins\erer un sous-mod\gle...');
+ MC(M_SUB,3,0,'-');
+ MC(M_SUB,4,CM_SUB_EDIT,'Modifier un sous-mod\gle...');
+ MC(M_SUB,5,CM_SUB_MAIN,'Mod\gle principal');
+ MC(M_SUB,6,CM_SUB_DEL,'Supprimer le sous-mod\gle');
+
+ Menus[M_CAM].Title:=Fx('Cam\era');
+ MC(M_CAM,0,CM_CAM_NEW,'Enregistrer la vue comme cam\era...');
+ MC(M_CAM,1,CM_CAM_GO,'Aller \a une cam\era...');
+ MC(M_CAM,2,CM_CAM_DEL,'Supprimer une cam\era...');
+ MC(M_CAM,3,CM_FOV,'Champ de vision...');
+ MC(M_CAM,4,0,'-');
+ MC(M_CAM,5,CM_KEY_ADD,'Ajouter une image cl\e');
+ MC(M_CAM,6,CM_KEY_DEL,'Supprimer les images cl\es');
+ MC(M_CAM,7,CM_KEY_PLAY,'Lire l''animation');
+ MC(M_CAM,8,CM_STEPS_PLAY,'Lire les \etapes');
+ MC(M_CAM,9,CM_ANIM_EXP,'Exporter l''animation...');
 
  Menus[M_HELP].Title:='Aide';
- MI(M_HELP,0,'Raccourcis clavier','F1');
- MI(M_HELP,1,'A propos de LEOCAD','');
- Menus[M_FILE].Width:=216;
- Menus[M_EDIT].Width:=212;
- Menus[M_VIEW].Width:=228;
+ MC(M_HELP,0,CM_HELP,'Raccourcis clavier');
+ MC(M_HELP,1,CM_KEYS,'Personnaliser les raccourcis...');
+ MC(M_HELP,2,CM_ABOUT,'A propos de LEOCAD');
+ For I:=0 To MENU_COUNT-1 Do Menus[I].Width:=220;
+ Menus[M_FILE].Width:=252;
+ Menus[M_VIEW].Width:=236;
  Menus[M_PIECE].Width:=252;
+ Menus[M_XFORM].Width:=268;
  Menus[M_STEP].Width:=244;
  Menus[M_SUB].Width:=252;
- Menus[M_HELP].Width:=188;
+ Menus[M_CAM].Width:=292;
+ Menus[M_HELP].Width:=268;
+ UpdateShortcuts;
 End;
 
 Procedure UpdateMenuChecks;
+Var M,I:Integer;
+ Procedure Chk(Cmd:Integer;V:Boolean);
+ Var K,J:Integer;
+ Begin
+  For K:=0 To MENU_COUNT-1 Do
+   For J:=0 To Menus[K].ItemCount-1 Do
+    If Menus[K].Items[J].Cmd=Cmd Then Menus[K].Items[J].Checked:=V;
+ End;
+ Procedure Ena(Cmd:Integer;V:Boolean);
+ Var K,J:Integer;
+ Begin
+  For K:=0 To MENU_COUNT-1 Do
+   For J:=0 To Menus[K].ItemCount-1 Do
+    If Menus[K].Items[J].Cmd=Cmd Then Menus[K].Items[J].Enabled:=V;
+ End;
 Begin
- Menus[M_VIEW].Items[0].Checked:=ViewCount=4;
- Menus[M_VIEW].Items[1].Checked:=Views[ActiveView].Persp;
- Menus[M_VIEW].Items[15].Checked:=GridOn;
- Menus[M_VIEW].Items[16].Checked:=EdgesOn;
- Menus[M_VIEW].Items[17].Checked:=WireOn;
- Menus[M_VIEW].Items[18].Checked:=StudMode<>0;
- Menus[M_VIEW].Items[20].Checked:=PanelSel=PN_PARTS;
- Menus[M_VIEW].Items[21].Checked:=PanelSel=PN_PROPS;
- Menus[M_VIEW].Items[22].Checked:=PanelSel=PN_TIME;
- Menus[M_EDIT].Items[0].Enabled:=UndoN>0;
- Menus[M_EDIT].Items[1].Enabled:=RedoN>0;
- Menus[M_EDIT].Items[5].Enabled:=ClipN>0;
- Menus[M_SUB].Items[5].Enabled:=CurModel<>0;
- Menus[M_SUB].Items[6].Enabled:=CurModel<>0;
- Menus[M_SUB].Items[4].Enabled:=ModelCount>1;
- Menus[M_SUB].Items[2].Enabled:=ModelCount>1;
+ Chk(CM_VIEWS,ViewCount=4);
+ Chk(CM_PERSP,Views[ActiveView].Persp);
+ Chk(CM_GRID,GridOn); Chk(CM_EDGES,EdgesOn); Chk(CM_WIRE,WireOn); Chk(CM_STUDS,StudMode<>0);
+ Chk(CM_PN_PARTS,PanelSel=PN_PARTS); Chk(CM_PN_PROPS,PanelSel=PN_PROPS); Chk(CM_PN_TIME,PanelSel=PN_TIME);
+ Chk(CM_ADDMODE,AddMode);
+ Ena(CM_UNDO,UndoN>0); Ena(CM_REDO,RedoN>0); Ena(CM_PASTE,ClipN>0);
+ Ena(CM_SUB_MAIN,CurModel<>0); Ena(CM_SUB_DEL,CurModel<>0);
+ Ena(CM_SUB_EDIT,ModelCount>1); Ena(CM_SUB_INS,ModelCount>1);
+ Ena(CM_CAM_GO,CamHead<>Nil); Ena(CM_CAM_DEL,CamHead<>Nil);
+ Ena(CM_KEY_PLAY,KeyHead<>Nil); Ena(CM_KEY_DEL,KeyHead<>Nil);
 End;
 
 Procedure DrawMenuBar;
@@ -4818,14 +5039,39 @@ Begin
  HX:=(Mx.X-Mn.X)/2; HZ:=(Mx.Z-Mn.Z)/2;
 End;
 
-{ Calcule la position d'insertion (InsX,InsY,InsZ) pour le point monde (X,Z) }
-Procedure ComputeInsert(WX,WZ:Real);
+{ Position relative (rotation seule) du premier tenon d'une piece ; False si aucun }
+Function FirstStud(Const Nm:String;Const R:TMat;Var GX,GZ:Real):Boolean;
+Var P:PPart; Q:PPrim; V,O:TVec; Z:TMat;
+Begin
+ FirstStud:=False;
+ If FindModel(Nm)>=0 Then Exit;
+ P:=GetPart(Nm,0);
+ If P=Nil Then Exit;
+ FlattenPart(P);
+ Q:=P^.Flat;
+ While(Q<>Nil)And(Q^.Kind<>PK_STUD)Do Q:=Q^.Next;
+ If Q=Nil Then Exit;
+ Z:=R; Z.T.X:=0; Z.T.Y:=0; Z.T.Z:=0;
+ V:=Q^.M.T;
+ MatApply(Z,V,O);
+ GX:=O.X; GZ:=O.Z;
+ FirstStud:=True;
+End;
+
+{ Calcule la position d'insertion (InsX,InsY,InsZ) pour le point monde (X,Z).
+  Ref = piece sous le curseur : le tenon de la piece posee s'aligne sur son reseau. }
+Procedure ComputeInsert(WX,WZ:Real;Ref:PPiece);
 Var
- SX,SZ:Integer; MinY,MaxY,HX,HZ,Top,CX,CZ:Real;
+ SX,SZ:Integer; MinY,MaxY,HX,HZ,Top,CX,CZ,GX,GZ,RX,RZ:Real;
  Q:PPiece; Mn,Mx:TVec; Q2:PPiece;
 Begin
  BodyInfo(CurPart,InsM,SX,SZ,MinY,MaxY,HX,HZ);
  InsX:=SnapAxis(WX,SX); InsZ:=SnapAxis(WZ,SZ);
+ If(Ref<>Nil)And(PieceSub(Ref)<0)And FirstStud(CurPart,InsM,GX,GZ)And FirstStud(Ref^.Name,Ref^.M,RX,RZ)Then Begin
+  RX:=RX+Ref^.M.T.X; RZ:=RZ+Ref^.M.T.Z;
+  InsX:=RX-GX+20*Round((WX-(RX-GX))/20);
+  InsZ:=RZ-GZ+20*Round((WZ-(RZ-GZ))/20);
+ End;
  { centre du corps : approximation par l'origine de la piece }
  Top:=GroundY;
  Q:=Models[CurModel].First;
@@ -4873,38 +5119,33 @@ Var Q:PPiece;
 Begin
  Q:=Models[CurModel].First;
  While Q<>Nil Do Begin
-  If Q^.Sel Then Begin
+  If Q^.Sel And(Not Q^.Locked)Then Begin
    Q^.M.T.X:=Q^.M.T.X+DX; Q^.M.T.Y:=Q^.M.T.Y+DY; Q^.M.T.Z:=Q^.M.T.Z+DZ;
   End;
   Q:=Q^.Next;
  End;
 End;
 
-Procedure RotateSel(Axis:Integer;Deg:Real);
+Procedure RotateSelCore(Axis:Integer;Deg:Real);
 Var Q:PPiece; Rt:TMat; P:TVec; N:Integer; Cx,Cy,Cz:Real; T:TVec;
 Begin
- If Tool=TL_INSERT Then Begin
-  MatRotAxis(Axis,Deg,Rt);
-  MatMul(Rt,InsM,InsM); SnapRot(InsM);
-  InsM.T.X:=0; InsM.T.Y:=0; InsM.T.Z:=0;
-  Touch;
-  Exit;
- End;
  N:=SelCount;
  If N=0 Then Exit;
- PushUndo;
  Cx:=0; Cy:=0; Cz:=0;
  Q:=Models[CurModel].First;
  While Q<>Nil Do Begin
   If Q^.Sel Then Begin Cx:=Cx+Q^.M.T.X; Cy:=Cy+Q^.M.T.Y; Cz:=Cz+Q^.M.T.Z; End;
   Q:=Q^.Next;
  End;
- VSet(P,Round(Cx/N/10)*10,Round(Cy/N/4)*4,Round(Cz/N/10)*10);
+ If Abs(Deg-Round(Deg/90)*90)<0.01 Then VSet(P,Round(Cx/N/10)*10,Round(Cy/N/4)*4,Round(Cz/N/10)*10)
+ Else VSet(P,Cx/N,Cy/N,Cz/N);
  If N=1 Then Begin Q:=FirstSel; P:=Q^.M.T; End;
+ If PivotMode=2 Then VSet(P,0,0,0);
  MatRotAxis(Axis,Deg,Rt);
  Q:=Models[CurModel].First;
  While Q<>Nil Do Begin
-  If Q^.Sel Then Begin
+  If Q^.Sel And(Not Q^.Locked)Then Begin
+   If PivotMode=1 Then P:=Q^.M.T;
    T.X:=Q^.M.T.X-P.X; T.Y:=Q^.M.T.Y-P.Y; T.Z:=Q^.M.T.Z-P.Z;
    MatApply(Rt,T,T);
    Q^.M.T.X:=Round((T.X+P.X)*1000)/1000; Q^.M.T.Y:=Round((T.Y+P.Y)*1000)/1000;
@@ -4917,6 +5158,21 @@ Begin
   End;
   Q:=Q^.Next;
  End;
+End;
+
+Procedure RotateSel(Axis:Integer;Deg:Real);
+Var Rt:TMat;
+Begin
+ If Tool=TL_INSERT Then Begin
+  MatRotAxis(Axis,Deg,Rt);
+  MatMul(Rt,InsM,InsM); SnapRot(InsM);
+  InsM.T.X:=0; InsM.T.Y:=0; InsM.T.Z:=0;
+  Touch;
+  Exit;
+ End;
+ If SelCount=0 Then Exit;
+ PushUndo;
+ RotateSelCore(Axis,Deg);
  Touch;
 End;
 
@@ -4928,7 +5184,7 @@ Begin
  Q:=Models[CurModel].First;
  While Q<>Nil Do Begin
   N:=Q^.Next;
-  If Q^.Sel Then RemovePiece(CurModel,Q);
+  If Q^.Sel And(Not Q^.Locked)Then RemovePiece(CurModel,Q);
   Q:=N;
  End;
  Touch;
@@ -5211,6 +5467,327 @@ Begin
  Touch; NeedTools:=True;
 End;
 
+
+{ ====================================================================== }
+{ Groupes, verrouillage, alignement, miroir, tableau, pivot             }
+{ ====================================================================== }
+
+Procedure GroupSel;
+Var Q:PPiece; Id:LongInt; N:Integer;
+Begin
+ N:=SelCount;
+ If N<2 Then Begin SetMsg('S\electionner au moins deux pi\eces.'); Exit; End;
+ PushUndo;
+ Id:=NewGroupId('Groupe '+IntStr(NextGroupId));
+ Q:=Models[CurModel].First;
+ While Q<>Nil Do Begin If Q^.Sel Then Q^.Group:=Id; Q:=Q^.Next; End;
+ SetMsg(Fx('Groupe cr\e\e'));
+ Touch;
+End;
+
+Procedure UngroupSel;
+Var Q:PPiece;
+Begin
+ PushUndo;
+ Q:=Models[CurModel].First;
+ While Q<>Nil Do Begin If Q^.Sel Then Q^.Group:=0; Q:=Q^.Next; End;
+ Touch;
+End;
+
+Procedure LockSel(V:Boolean);
+Var Q:PPiece;
+Begin
+ If SelCount=0 Then Exit;
+ PushUndo;
+ Q:=Models[CurModel].First;
+ While Q<>Nil Do Begin If Q^.Sel Then Q^.Locked:=V; Q:=Q^.Next; End;
+ Touch;
+End;
+
+{ Selectionne toutes les pieces du groupe de Q }
+Procedure SelectGroupOf(Q:PPiece;V:Boolean);
+Var P:PPiece;
+Begin
+ Q^.Sel:=V;
+ If Q^.Group=0 Then Exit;
+ P:=Models[CurModel].First;
+ While P<>Nil Do Begin
+  If P^.Group=Q^.Group Then P^.Sel:=V;
+  P:=P^.Next;
+ End;
+End;
+
+{ Boite englobante des pieces selectionnees }
+Function SelBounds(Var Mn,Mx:TVec):Boolean;
+Var Q:PPiece; A,B:TVec;
+Begin
+ BoxEmpty(Mn,Mx);
+ Q:=Models[CurModel].First;
+ While Q<>Nil Do Begin
+  If Q^.Sel Then Begin
+   PieceBounds(Q,False,A,B);
+   BoxAdd(Mn,Mx,A); BoxAdd(Mn,Mx,B);
+  End;
+  Q:=Q^.Next;
+ End;
+ SelBounds:=Not BoxIsEmpty(Mn,Mx);
+End;
+
+{ Kind : 0 gauche (X min) 1 droite 2 devant (Z min) 3 derriere 4 haut (Y min) 5 bas 6 centre X 7 centre Z }
+Procedure AlignSel(Kind:Integer);
+Var Q:PPiece; SA,SB,A,B:TVec; D:Real; N:Integer;
+Begin
+ If SelCount<2 Then Exit;
+ If Not SelBounds(SA,SB)Then Exit;
+ PushUndo;
+ Q:=Models[CurModel].First;
+ While Q<>Nil Do Begin
+  If Q^.Sel And(Not Q^.Locked)Then Begin
+   PieceBounds(Q,False,A,B);
+   Case Kind Of
+    0:Q^.M.T.X:=Q^.M.T.X+SA.X-A.X;
+    1:Q^.M.T.X:=Q^.M.T.X+SB.X-B.X;
+    2:Q^.M.T.Z:=Q^.M.T.Z+SA.Z-A.Z;
+    3:Q^.M.T.Z:=Q^.M.T.Z+SB.Z-B.Z;
+    4:Q^.M.T.Y:=Q^.M.T.Y+SA.Y-A.Y;
+    5:Q^.M.T.Y:=Q^.M.T.Y+SB.Y-B.Y;
+    6:Q^.M.T.X:=Q^.M.T.X+(SA.X+SB.X)/2-(A.X+B.X)/2;
+    7:Q^.M.T.Z:=Q^.M.T.Z+(SA.Z+SB.Z)/2-(A.Z+B.Z)/2;
+   End;
+  End;
+  Q:=Q^.Next;
+ End;
+ Touch;
+End;
+
+Type
+ PSNode=^TSNode;
+ TSNode=Record Q:PPiece; K:Real; Next:PSNode; End;
+
+{ Repartit les pieces selectionnees regulierement entre la premiere et la derniere (axe 0 X, 1 Y, 2 Z) }
+Procedure DistSel(Axis:Integer);
+Var Q:PPiece; L,N,P:PSNode; I,Cnt:Integer; A,B:TVec; K0,K1,Step,Cur,C:Real;
+Begin
+ Cnt:=SelCount;
+ If Cnt<3 Then Begin SetMsg('Au moins trois pi\eces.'); Exit; End;
+ L:=Nil;
+ Q:=Models[CurModel].First;
+ While Q<>Nil Do Begin
+  If Q^.Sel Then Begin
+   PieceBounds(Q,False,A,B);
+   Case Axis Of 0:C:=(A.X+B.X)/2; 1:C:=(A.Y+B.Y)/2; Else C:=(A.Z+B.Z)/2; End;
+   New(N); N^.Q:=Q; N^.K:=C; N^.Next:=Nil;
+   If(L=Nil)Or(C<L^.K)Then Begin N^.Next:=L; L:=N; End
+   Else Begin
+    P:=L;
+    While(P^.Next<>Nil)And(P^.Next^.K<=C)Do P:=P^.Next;
+    N^.Next:=P^.Next; P^.Next:=N;
+   End;
+  End;
+  Q:=Q^.Next;
+ End;
+ PushUndo;
+ K0:=L^.K;
+ P:=L; While P^.Next<>Nil Do P:=P^.Next;
+ K1:=P^.K;
+ Step:=(K1-K0)/(Cnt-1);
+ N:=L; I:=0;
+ While N<>Nil Do Begin
+  Cur:=K0+Step*I;
+  If Not N^.Q^.Locked Then
+   Case Axis Of
+    0:N^.Q^.M.T.X:=N^.Q^.M.T.X+Cur-N^.K;
+    1:N^.Q^.M.T.Y:=N^.Q^.M.T.Y+Cur-N^.K;
+   Else N^.Q^.M.T.Z:=N^.Q^.M.T.Z+Cur-N^.K;
+   End;
+  Inc(I);
+  P:=N^.Next; Dispose(N); N:=P;
+ End;
+ Touch;
+End;
+
+Procedure MirrorSel(Axis:Integer);
+Var Q:PPiece; Mn,Mx:TVec; C:TVec; I:Integer;
+Begin
+ If SelCount=0 Then Exit;
+ If Not SelBounds(Mn,Mx)Then Exit;
+ C.X:=Round((Mn.X+Mx.X)/40)*20; C.Y:=Round((Mn.Y+Mx.Y)/16)*8; C.Z:=Round((Mn.Z+Mx.Z)/40)*20;
+ PushUndo;
+ Q:=Models[CurModel].First;
+ While Q<>Nil Do Begin
+  If Q^.Sel And(Not Q^.Locked)Then Begin
+   Case Axis Of
+    0:Begin Q^.M.T.X:=2*C.X-Q^.M.T.X; For I:=0 To 2 Do Q^.M.R[0,I]:=-Q^.M.R[0,I]; End;
+    1:Begin Q^.M.T.Y:=2*C.Y-Q^.M.T.Y; For I:=0 To 2 Do Q^.M.R[1,I]:=-Q^.M.R[1,I]; End;
+   Else Begin Q^.M.T.Z:=2*C.Z-Q^.M.T.Z; For I:=0 To 2 Do Q^.M.R[2,I]:=-Q^.M.R[2,I]; End;
+   End;
+  End;
+  Q:=Q^.Next;
+ End;
+ Touch;
+End;
+
+{ Analyse "a b c ..." : nombres separes par des espaces ou des virgules }
+Function ParseNums(S:String;Var V:Array Of Real;Max:Integer):Integer;
+Var I,N:Integer; T:String;
+Begin
+ For I:=1 To Length(S) Do If S[I]=',' Then S[I]:=' ';
+ N:=0;
+ While(N<Max)And(TrimStr(S)<>'')Do Begin
+  If Not NumTok(S,V[N])Then Begin ParseNums:=N; Exit; End;
+  Inc(N);
+ End;
+ ParseNums:=N;
+End;
+
+{ Tableau : "n dx dy dz [ry]" copies de la selection decalees (et pivotees autour de Y) }
+Procedure ArraySel;
+Var S:String; V:Array[0..4] Of Real; N,I,K:Integer; Q,C,Last:PPiece; Rt:TMat; T:TVec; Pv:TVec; Mn,Mx:TVec;
+Begin
+ If SelCount=0 Then Exit;
+ S:='3 40 0 0';
+ If Not InputBox('Tableau','Copies, dx, dy, dz [rotation Y] :',S,40)Then Exit;
+ N:=ParseNums(S,V,5);
+ If N<4 Then Begin AskBox('Tableau','Format : n dx dy dz [ry]',0); Exit; End;
+ If(V[0]<2)Or(V[0]>200)Then Exit;
+ PushUndo;
+ If SelBounds(Mn,Mx)Then Begin Pv.X:=Round((Mn.X+Mx.X)/40)*20; Pv.Y:=0; Pv.Z:=Round((Mn.Z+Mx.Z)/40)*20; End
+ Else VSet(Pv,0,0,0);
+ Last:=Models[CurModel].Last;
+ For K:=1 To Round(V[0])-1 Do Begin
+  Q:=Models[CurModel].First;
+  While Q<>Nil Do Begin
+   If Q^.Sel Then Begin
+    C:=AddPiece(CurModel,Q^.Name,Q^.Col,Q^.M,Q^.Step);
+    C^.Group:=0; C^.Locked:=False;
+    C^.M.T.X:=C^.M.T.X+V[1]*K; C^.M.T.Y:=C^.M.T.Y+V[2]*K; C^.M.T.Z:=C^.M.T.Z+V[3]*K;
+    If(N>=5)And(Abs(V[4])>0.001)Then Begin
+     MatRotAxis(1,V[4]*K,Rt);
+     T.X:=C^.M.T.X-Pv.X; T.Y:=C^.M.T.Y-Pv.Y; T.Z:=C^.M.T.Z-Pv.Z;
+     MatApply(Rt,T,T);
+     MatMul(Rt,C^.M,C^.M);
+     C^.M.T.X:=Round((T.X+Pv.X)*100)/100; C^.M.T.Y:=T.Y+Pv.Y; C^.M.T.Z:=Round((T.Z+Pv.Z)*100)/100;
+     SnapRot(C^.M);
+    End;
+    C^.Sel:=False;
+   End;
+   If Q=Last Then Q:=Nil Else Q:=Q^.Next;
+  End;
+ End;
+ Touch;
+End;
+
+{ Transformation numerique : "dx dy dz rx ry rz" (rotations autour du pivot) }
+Procedure NumXform;
+Var S:String; V:Array[0..5] Of Real; N:Integer;
+Begin
+ If SelCount=0 Then Exit;
+ S:='0 0 0 0 0 0';
+ If Not InputBox('Transformation','dx dy dz rx ry rz (LDU, degres) :',S,50)Then Exit;
+ N:=ParseNums(S,V,6);
+ If N<3 Then Exit;
+ PushUndo;
+ MoveSel(V[0],V[1],V[2]);
+ If(N>=4)And(Abs(V[3])>0.001)Then RotateSelCore(0,V[3]);
+ If(N>=5)And(Abs(V[4])>0.001)Then RotateSelCore(1,V[4]);
+ If(N>=6)And(Abs(V[5])>0.001)Then RotateSelCore(2,V[5]);
+ Touch;
+End;
+
+Procedure CyclePivot;
+Begin
+ PivotMode:=(PivotMode+1) Mod 3;
+ Case PivotMode Of
+  0:SetMsg('Pivot : centre de la s\election');
+  1:SetMsg('Pivot : origine de chaque pi\ece');
+  2:SetMsg('Pivot : origine du mod\gle');
+ End;
+End;
+
+{ ====================================================================== }
+{ Poignees de transformation (gizmo)                                     }
+{ ====================================================================== }
+
+Type
+ TGizHandle=Record
+  Ok:Boolean;
+  TX,TY,RX,RY:Integer;     { pointe de translation, poignee de rotation (relatif a la vue) }
+  UX,UY:Real;              { direction ecran unitaire de l'axe }
+  PxPerLDU:Real;
+ End;
+
+Var
+ Giz:Array[0..2] Of TGizHandle;
+ GizOX,GizOY:Integer;
+ GizOk:Boolean;
+ GizCenter:TVec;
+
+Procedure ComputeGizmo(Var V:TView);
+Var Mn,Mx:TVec; A:Integer; E,P0,P1,O0,O1:TVec; X0,Y0,X1,Y1:Integer; DX,DY,L,Sc:Real;
+Begin
+ GizOk:=False;
+ If Not SelBounds(Mn,Mx)Then Exit;
+ GizCenter.X:=(Mn.X+Mx.X)/2; GizCenter.Y:=(Mn.Y+Mx.Y)/2; GizCenter.Z:=(Mn.Z+Mx.Z)/2;
+ SetupCamera(V);
+ MatApply(CamM,GizCenter,O0);
+ If CamPersp And(O0.Z<NEARZ)Then Exit;
+ Proj(O0,X0,Y0);
+ GizOX:=X0; GizOY:=Y0;
+ For A:=0 To 2 Do Begin
+  VSet(E,0,0,0);
+  If A=0 Then E.X:=10 Else If A=1 Then E.Y:=10 Else E.Z:=10;
+  P1.X:=GizCenter.X+E.X; P1.Y:=GizCenter.Y+E.Y; P1.Z:=GizCenter.Z+E.Z;
+  MatApply(CamM,P1,O1);
+  Proj(O1,X1,Y1);
+  DX:=X1-X0; DY:=Y1-Y0;
+  L:=Sqrt(DX*DX+DY*DY);
+  Giz[A].Ok:=L>1.5;
+  If Giz[A].Ok Then Begin
+   Giz[A].UX:=DX/L; Giz[A].UY:=DY/L;
+   Giz[A].PxPerLDU:=L/10;
+   Giz[A].TX:=X0+Round(Giz[A].UX*46); Giz[A].TY:=Y0+Round(Giz[A].UY*46);
+   Giz[A].RX:=X0+Round(Giz[A].UX*26-Giz[A].UY*12); Giz[A].RY:=Y0+Round(Giz[A].UY*26+Giz[A].UX*12);
+  End;
+ End;
+ GizOk:=True;
+End;
+
+Procedure DrawEditGizmo(Var V:TView);
+Var A,Col:Integer;
+Begin
+ ComputeGizmo(V);
+ If Not GizOk Then Exit;
+ For A:=0 To 2 Do
+  If Giz[A].Ok Then Begin
+   Case A Of 0:Col:=12; 1:Col:=10; Else Col:=9; End;
+   SetColor(Col);
+   SetLineStyle(0,0,3);
+   Line(GizOX,GizOY,Giz[A].TX,Giz[A].TY);
+   SetLineStyle(0,0,1);
+   SetFillStyle(SolidFill,Col);
+   FillEllipse(Giz[A].TX,Giz[A].TY,4,4);
+   SetColor(UI_DK);
+   Rectangle(Giz[A].RX-4,Giz[A].RY-4,Giz[A].RX+4,Giz[A].RY+4);
+   SetFillStyle(SolidFill,Col);
+   Bar(Giz[A].RX-3,Giz[A].RY-3,Giz[A].RX+3,Giz[A].RY+3);
+  End;
+ SetColor(UI_DK);
+ Circle(GizOX,GizOY,3);
+End;
+
+{ Retourne l'axe touche (0..2) et IsRot ; -1 si rien }
+Function GizmoHit(Var V:TView;PX,PY:Integer;Var IsRot:Boolean):Integer;
+Var A:Integer;
+Begin
+ GizmoHit:=-1;
+ ComputeGizmo(V);
+ If Not GizOk Then Exit;
+ For A:=0 To 2 Do
+  If Giz[A].Ok Then Begin
+   If(Abs(PX-Giz[A].TX)<=6)And(Abs(PY-Giz[A].TY)<=6)Then Begin GizmoHit:=A; IsRot:=False; Exit; End;
+   If(Abs(PX-Giz[A].RX)<=6)And(Abs(PY-Giz[A].RY)<=6)Then Begin GizmoHit:=A; IsRot:=True; Exit; End;
+  End;
+End;
 { ---------------------------- Documents ---------------------------- }
 
 Procedure ResetEditState;
@@ -5496,101 +6073,176 @@ Begin
  NeedDock:=True;
 End;
 
-{ ---------------------------- Menus : commandes -------------------- }
 
-Procedure DoMenu(M,I:Integer);
+{ ====================================================================== }
+{ Fonctions avancees (cameras, animation, exports, preferences...)      }
+{ ====================================================================== }
+
+Procedure NotYet(Const S:String);
+Begin
+ AskBox(S,'Cette fonction n''est pas encore disponible.',0);
+End;
+
+Procedure NextViewCmd;
+Begin
+ If ViewCount=1 Then Begin
+  ActiveView:=(ActiveView+1) Mod 4;
+  LayoutViews;
+  ZoomFit(Views[ActiveView]);
+ End
+  Else ActiveView:=(ActiveView+1) Mod 4;
+ NeedViews:=True; NeedTools:=True;
+End;
+
+Procedure ExportImageCmd; Begin NotYet('Exporter l''image'); End;
+Procedure ExportHTMLCmd; Begin NotYet('Instructions HTML'); End;
+Procedure ExportPOVCmd; Begin NotYet('POV-Ray'); End;
+Procedure ExportOBJCmd; Begin NotYet('Wavefront OBJ'); End;
+Procedure Export3DSCmd; Begin NotYet('3D Studio'); End;
+Procedure ExportBLCmd; Begin NotYet('BrickLink XML'); End;
+Procedure ImportBLCmd; Begin NotYet('BrickLink XML'); End;
+Procedure PartsUsedDialog; Begin NotYet('Pieces utilisees'); End;
+Procedure PrefsDialog; Begin NotYet('Preferences'); End;
+Procedure DocsDialog; Begin NotYet('Documents'); End;
+Procedure CamNewCmd; Begin NotYet('Cameras'); End;
+Procedure CamGoCmd; Begin NotYet('Cameras'); End;
+Procedure CamDelCmd; Begin NotYet('Cameras'); End;
+Procedure FovCmd; Begin NotYet('Champ de vision'); End;
+Procedure KeyAddCmd; Begin NotYet('Animation'); End;
+Procedure KeyDelCmd; Begin NotYet('Animation'); End;
+Procedure KeyPlayCmd; Begin NotYet('Animation'); End;
+Procedure StepsPlayCmd; Begin NotYet('Animation'); End;
+Procedure AnimExportCmd; Begin NotYet('Animation'); End;
+Procedure KeysDialog; Begin NotYet('Raccourcis'); End;
+
+{ ---------------------------- Commandes ----------------------------- }
+
+Procedure DoCmd(Cmd:Integer);
 Var Nm:String;
 Begin
- Case M Of
-  M_FILE:Case I Of
-   0:If ConfirmDiscard Then DoNew;
-   1:DoOpen;
-   2:DoSave;
-   3:DoSaveAs;
-   5:Begin
-    Nm:=BaseOf(DocFile);
-    If FileDialog(2,Nm)Then Begin
-     If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
-     ExportBMP(Nm);
-    End;
-   End;
-   6:Begin Nm:=''; If FileDialog(3,Nm)Then ExportParts(Nm); End;
-   8:DoInfo;
-   9:DoReindex;
-   11:DoQuit;
+ Case Cmd Of
+  CM_NEW:If ConfirmDiscard Then DoNew;
+  CM_OPEN:DoOpen;
+  CM_SAVE:DoSave;
+  CM_SAVEAS:DoSaveAs;
+  CM_EXP_IMG:ExportImageCmd;
+  CM_EXP_HTML:ExportHTMLCmd;
+  CM_EXP_POV:ExportPOVCmd;
+  CM_EXP_OBJ:ExportOBJCmd;
+  CM_EXP_3DS:Export3DSCmd;
+  CM_EXP_BL:ExportBLCmd;
+  CM_EXP_LIST:Begin Nm:=''; If FileDialog(3,Nm)Then ExportParts(Nm); End;
+  CM_IMP_BL:ImportBLCmd;
+  CM_PARTSUSED:PartsUsedDialog;
+  CM_INFO:DoInfo;
+  CM_PREFS:PrefsDialog;
+  CM_REINDEX:DoReindex;
+  CM_DOCS:DocsDialog;
+  CM_QUIT:DoQuit;
+  CM_UNDO:Begin DoUndo; ClearSel; Touch; NeedTools:=True; End;
+  CM_REDO:Begin DoRedo; ClearSel; Touch; NeedTools:=True; End;
+  CM_CUT:Begin CopySel; DeleteSel; End;
+  CM_COPY:CopySel;
+  CM_PASTE:PasteClip(20,20);
+  CM_DELETE:DeleteSel;
+  CM_SELALL:SelectAll;
+  CM_SELNONE:Begin ClearSel; Touch; End;
+  CM_SELINV:SelectInvert;
+  CM_SELCOL:SelectSame(True);
+  CM_SELPART:SelectSame(False);
+  CM_ADDMODE:Begin
+   AddMode:=Not AddMode;
+   If AddMode Then SetMsg('Mode ajout \a la s\election : actif') Else SetMsg('Mode ajout \a la s\election : inactif');
   End;
-  M_EDIT:Case I Of
-   0:Begin DoUndo; ClearSel; Touch; NeedTools:=True; End;
-   1:Begin DoRedo; ClearSel; Touch; NeedTools:=True; End;
-   3:Begin CopySel; DeleteSel; End;
-   4:CopySel;
-   5:PasteClip(20,20);
-   6:DeleteSel;
-   8:SelectAll;
-   9:Begin ClearSel; Touch; End;
-   10:SelectInvert;
-   11:SelectSame(True);
-   12:SelectSame(False);
+  CM_VIEWS:ToggleViews;
+  CM_PERSP:Begin Views[ActiveView].Persp:=Not Views[ActiveView].Persp; ZoomFit(Views[ActiveView]); NeedViews:=True; End;
+  CM_V_HOME:SetPreset(0);
+  CM_V_FRONT:SetPreset(1);
+  CM_V_BACK:SetPreset(2);
+  CM_V_LEFT:SetPreset(3);
+  CM_V_RIGHT:SetPreset(4);
+  CM_V_TOP:SetPreset(5);
+  CM_V_BOTTOM:SetPreset(6);
+  CM_ZOOMIN:Begin ZoomView(Views[ActiveView],0.8); NeedViews:=True; End;
+  CM_ZOOMOUT:Begin ZoomView(Views[ActiveView],1.25); NeedViews:=True; End;
+  CM_FIT:Begin ZoomFit(Views[ActiveView]); NeedViews:=True; End;
+  CM_GRID:Begin GridOn:=Not GridOn; NeedViews:=True; NeedTools:=True; End;
+  CM_EDGES:Begin EdgesOn:=Not EdgesOn; NeedViews:=True; End;
+  CM_WIRE:Begin WireOn:=Not WireOn; NeedViews:=True; NeedTools:=True; End;
+  CM_STUDS:CycleStuds;
+  CM_PN_PARTS:SetPanel(PN_PARTS);
+  CM_PN_PROPS:SetPanel(PN_PROPS);
+  CM_PN_TIME:SetPanel(PN_TIME);
+  CM_NEXTVIEW:NextViewCmd;
+  CM_INSERT:Begin If CurPart<>'' Then Begin Tool:=TL_INSERT; NeedTools:=True; Touch; End Else SetMsg('Choisir d''abord une pi\ece.'); End;
+  CM_DUP:Begin CopySel; PasteClip(20,20); End;
+  CM_UP8:Begin If SelCount>0 Then Begin PushUndo; MoveSel(0,-8,0); Touch; End; End;
+  CM_DN8:Begin If SelCount>0 Then Begin PushUndo; MoveSel(0,8,0); Touch; End; End;
+  CM_UP24:Begin If SelCount>0 Then Begin PushUndo; MoveSel(0,-24,0); Touch; End; End;
+  CM_DN24:Begin If SelCount>0 Then Begin PushUndo; MoveSel(0,24,0); Touch; End; End;
+  CM_RXP:RotateSel(0,90);
+  CM_RXM:RotateSel(0,-90);
+  CM_RYP:RotateSel(1,90);
+  CM_RYM:RotateSel(1,-90);
+  CM_RZP:RotateSel(2,90);
+  CM_RZM:RotateSel(2,-90);
+  CM_APPLYCOL:ApplyColorSel(CurColor);
+  CM_HIDE:HideSel;
+  CM_SHOWALL:ShowAllPieces;
+  CM_GROUP:GroupSel;
+  CM_UNGROUP:UngroupSel;
+  CM_LOCK:LockSel(True);
+  CM_UNLOCK:LockSel(False);
+  CM_SELTOOL:Begin
+   If Tool<>TL_SELECT Then Begin Tool:=TL_SELECT; NeedTools:=True; NeedViews:=True; End
+   Else Begin ClearSel; Touch; End;
   End;
-  M_VIEW:Case I Of
-   0:ToggleViews;
-   1:Begin Views[ActiveView].Persp:=Not Views[ActiveView].Persp; ZoomFit(Views[ActiveView]); NeedViews:=True; End;
-   3:SetPreset(0);
-   4:SetPreset(1);
-   5:SetPreset(2);
-   6:SetPreset(3);
-   7:SetPreset(4);
-   8:SetPreset(5);
-   9:SetPreset(6);
-   11:Begin ZoomView(Views[ActiveView],0.8); NeedViews:=True; End;
-   12:Begin ZoomView(Views[ActiveView],1.25); NeedViews:=True; End;
-   13:Begin ZoomFit(Views[ActiveView]); NeedViews:=True; End;
-   15:Begin GridOn:=Not GridOn; NeedViews:=True; NeedTools:=True; End;
-   16:Begin EdgesOn:=Not EdgesOn; NeedViews:=True; End;
-   17:Begin WireOn:=Not WireOn; NeedViews:=True; NeedTools:=True; End;
-   18:CycleStuds;
-   20:SetPanel(PN_PARTS);
-   21:SetPanel(PN_PROPS);
-   22:SetPanel(PN_TIME);
-  End;
-  M_PIECE:Case I Of
-   0:Begin If CurPart<>'' Then Begin Tool:=TL_INSERT; NeedTools:=True; Touch; End Else SetMsg('Choisir d''abord une pi\ece.'); End;
-   1:Begin CopySel; PasteClip(20,20); End;
-   3:Begin If SelCount>0 Then Begin PushUndo; MoveSel(0,-8,0); Touch; End; End;
-   4:Begin If SelCount>0 Then Begin PushUndo; MoveSel(0,8,0); Touch; End; End;
-   5:Begin If SelCount>0 Then Begin PushUndo; MoveSel(0,-24,0); Touch; End; End;
-   6:Begin If SelCount>0 Then Begin PushUndo; MoveSel(0,24,0); Touch; End; End;
-   8:RotateSel(0,90);
-   9:RotateSel(0,-90);
-   10:RotateSel(1,90);
-   11:RotateSel(1,-90);
-   12:RotateSel(2,90);
-   13:RotateSel(2,-90);
-   15:ApplyColorSel(CurColor);
-   16:HideSel;
-   17:ShowAllPieces;
-  End;
-  M_STEP:Case I Of
-   0:SetStep(Models[CurModel].CurStep+1);
-   1:SetStep(Models[CurModel].CurStep-1);
-   2:SetStep(1);
-   3:SetStep(MaxStep(CurModel));
-   5:InsertStep;
-   6:DeleteStep;
-   7:SelToStep;
-  End;
-  M_SUB:Case I Of
-   0:NewSubModel(False);
-   1:NewSubModel(True);
-   2:InsertSubModel;
-   4:EditSubModel;
-   5:SwitchModel(0);
-   6:DeleteSubModel;
-  End;
-  M_HELP:Case I Of
-   0:HelpDialog;
-   1:AskBox('A propos de LEOCAD','LEOCAD 1.00 - clone de LeoCAD|CAO de briques Lego en 3D (LDraw .LDR/.MPD)|Turbo Pascal 7 / Free Pascal|https://www.gladir.com/clonedraw',0);
-  End;
+  CM_AL_L:AlignSel(0);
+  CM_AL_R:AlignSel(1);
+  CM_AL_F:AlignSel(2);
+  CM_AL_B:AlignSel(3);
+  CM_AL_T:AlignSel(4);
+  CM_AL_D:AlignSel(5);
+  CM_CEN_X:AlignSel(6);
+  CM_CEN_Z:AlignSel(7);
+  CM_DIST_X:DistSel(0);
+  CM_DIST_Y:DistSel(1);
+  CM_DIST_Z:DistSel(2);
+  CM_MIR_X:MirrorSel(0);
+  CM_MIR_Y:MirrorSel(1);
+  CM_MIR_Z:MirrorSel(2);
+  CM_ARRAY:ArraySel;
+  CM_NUMXF:NumXform;
+  CM_PIVOT:CyclePivot;
+  CM_STEP_NEXT:SetStep(Models[CurModel].CurStep+1);
+  CM_STEP_PREV:SetStep(Models[CurModel].CurStep-1);
+  CM_STEP_FIRST:SetStep(1);
+  CM_STEP_LAST:SetStep(MaxStep(CurModel));
+  CM_STEP_INS:InsertStep;
+  CM_STEP_DEL:DeleteStep;
+  CM_STEP_SEL:SelToStep;
+  CM_SUB_NEW:NewSubModel(False);
+  CM_SUB_FROMSEL:NewSubModel(True);
+  CM_SUB_INS:InsertSubModel;
+  CM_SUB_EDIT:EditSubModel;
+  CM_SUB_MAIN:SwitchModel(0);
+  CM_SUB_DEL:DeleteSubModel;
+  CM_CAM_NEW:CamNewCmd;
+  CM_CAM_GO:CamGoCmd;
+  CM_CAM_DEL:CamDelCmd;
+  CM_FOV:FovCmd;
+  CM_KEY_ADD:KeyAddCmd;
+  CM_KEY_DEL:KeyDelCmd;
+  CM_KEY_PLAY:KeyPlayCmd;
+  CM_STEPS_PLAY:StepsPlayCmd;
+  CM_ANIM_EXP:AnimExportCmd;
+  CM_HELP:HelpDialog;
+  CM_KEYS:KeysDialog;
+  CM_ABOUT:AskBox('A propos de LEOCAD','LEOCAD 1.00 - clone de LeoCAD|CAO de briques Lego en 3D (LDraw .LDR/.MPD)|Turbo Pascal 7 / Free Pascal|https://www.gladir.com/clonedraw',0);
+  CM_TOOL_SEL:Begin Tool:=TL_SELECT; NeedTools:=True; NeedViews:=True; End;
+  CM_TOOL_ORB:Begin Tool:=TL_ORBIT; NeedTools:=True; NeedViews:=True; End;
+  CM_TOOL_PAN:Begin Tool:=TL_PAN; NeedTools:=True; NeedViews:=True; End;
+  CM_TOOL_ZOOM:Begin Tool:=TL_ZOOM; NeedTools:=True; NeedViews:=True; End;
  End;
  If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
  NeedStatus:=True;
@@ -5599,24 +6251,24 @@ End;
 Procedure ToolbarClick(I:Integer);
 Begin
  Case I Of
-  0:DoMenu(M_FILE,0);
-  1:DoMenu(M_FILE,1);
-  2:DoMenu(M_FILE,2);
-  3:DoMenu(M_EDIT,0);
-  4:DoMenu(M_EDIT,1);
-  5:Begin Tool:=TL_SELECT; NeedTools:=True; NeedViews:=True; End;
-  6:DoMenu(M_PIECE,0);
-  7:Begin Tool:=TL_ORBIT; NeedTools:=True; NeedViews:=True; End;
-  8:Begin Tool:=TL_PAN; NeedTools:=True; NeedViews:=True; End;
-  9:Begin Tool:=TL_ZOOM; NeedTools:=True; NeedViews:=True; End;
-  10:DoMenu(M_VIEW,15);
-  11:DoMenu(M_VIEW,17);
-  12:DoMenu(M_VIEW,0);
-  13:DoMenu(M_VIEW,13);
-  14:DoMenu(M_STEP,2);
-  15:DoMenu(M_STEP,1);
-  16:DoMenu(M_STEP,0);
-  17:DoMenu(M_STEP,3);
+  0:DoCmd(CM_NEW);
+  1:DoCmd(CM_OPEN);
+  2:DoCmd(CM_SAVE);
+  3:DoCmd(CM_UNDO);
+  4:DoCmd(CM_REDO);
+  5:DoCmd(CM_TOOL_SEL);
+  6:DoCmd(CM_INSERT);
+  7:DoCmd(CM_TOOL_ORB);
+  8:DoCmd(CM_TOOL_PAN);
+  9:DoCmd(CM_TOOL_ZOOM);
+  10:DoCmd(CM_GRID);
+  11:DoCmd(CM_WIRE);
+  12:DoCmd(CM_VIEWS);
+  13:DoCmd(CM_FIT);
+  14:DoCmd(CM_STEP_FIRST);
+  15:DoCmd(CM_STEP_PREV);
+  16:DoCmd(CM_STEP_NEXT);
+  17:DoCmd(CM_STEP_LAST);
  End;
  NeedTools:=True;
 End;
@@ -5633,6 +6285,8 @@ Var
  HoverTB:Integer;
  OldMX,OldMY:Integer;
  RubOn:Boolean;
+ GizAxis,GizStartX,GizStartY:Integer;
+ GizApplied,GizUX,GizUY,GizPx:Real;
  RubX1,RubY1,RubX2,RubY2:Integer;
 
 Procedure CloseMenu;
@@ -5676,7 +6330,7 @@ Procedure RunMenuItem(M,I:Integer);
 Begin
  CloseMenu;
  If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
- If Menus[M].Items[I].Enabled Then DoMenu(M,I);
+ If Menus[M].Items[I].Enabled Then DoCmd(Menus[M].Items[I].Cmd);
 End;
 
 { ====================================================================== }
@@ -5706,9 +6360,9 @@ End;
 
 { Met a jour la piece fantome pour la position ecran (vue V) }
 Procedure UpdateInsert(V:Integer;PX,PY:Integer);
-Var O,D:TVec; X,Z,Y0:Real; Own:Integer; Q:PPiece; Mn,Mx:TVec; RX,RY:Integer; Ok:Boolean;
+Var O,D:TVec; X,Z,Y0:Real; Own:Integer; Q:PPiece; Mn,Mx:TVec; RX,RY:Integer; Ok:Boolean; RefQ:PPiece;
 Begin
- InsValid:=False;
+ InsValid:=False; RefQ:=Nil;
  If(CurPart='')Or(V<0)Then Exit;
  RX:=PX-Views[V].X1; RY:=PY-Views[V].Y1;
  ComputeGround;
@@ -5717,19 +6371,19 @@ Begin
   Own:=PickPiece(Views[V],RX,RY);
   If Own>0 Then Begin
    Q:=PieceByIndex(Own);
-   If Q<>Nil Then Begin PieceBounds(Q,True,Mn,Mx); Y0:=Mn.Y; End;
+   If Q<>Nil Then Begin PieceBounds(Q,True,Mn,Mx); Y0:=Mn.Y; RefQ:=Q; End;
   End;
  End;
  ScreenRay(Views[V],RX,RY,O,D);
  Ok:=RayPlaneY(O,D,Y0,X,Z);
  If Not Ok Then Exit;
- ComputeInsert(X,Z);
+ ComputeInsert(X,Z,RefQ);
  UpdateGhost;
  InsValid:=True;
 End;
 
 Procedure ViewPress(V,Btn:Integer);
-Var RX,RY,Own:Integer; Q:PPiece; O,D:TVec; X,Z:Real;
+Var RX,RY,Own:Integer; Q:PPiece; O,D:TVec; X,Z:Real; IsRot:Boolean;
 Begin
  If V<>ActiveView Then Begin ActiveView:=V; NeedViews:=True; NeedTools:=True; End;
  RX:=MX-Views[V].X1; RY:=MY-Views[V].Y1;
@@ -5746,11 +6400,25 @@ Begin
    If InsValid Then DoInsert;
   End;
  Else Begin
+  If SelCount>0 Then Begin
+   GizAxis:=GizmoHit(Views[V],RX,RY,IsRot);
+   If GizAxis>=0 Then Begin
+    GizStartX:=MX; GizStartY:=MY; GizApplied:=0; MoveBegun:=False;
+    GizUX:=Giz[GizAxis].UX; GizUY:=Giz[GizAxis].UY; GizPx:=Giz[GizAxis].PxPerLDU;
+    If IsRot Then DragMode:=8 Else DragMode:=7;
+    Exit;
+   End;
+  End;
   Own:=PickPiece(Views[V],RX,RY);
   If Own>0 Then Begin
    Q:=PieceByIndex(Own);
+   If(Q<>Nil)And AddMode Then Begin
+    SelectGroupOf(Q,Not Q^.Sel);
+    Touch;
+    Exit;
+   End;
    If Q<>Nil Then Begin
-    If Not Q^.Sel Then Begin ClearSel; Q^.Sel:=True; End;
+    If Not Q^.Sel Then Begin ClearSel; SelectGroupOf(Q,True); End;
     DragMode:=4; MoveBegun:=False; MoveAppX:=0; MoveAppZ:=0;
     MovePlaneY:=Q^.M.T.Y;
     ScreenRay(Views[V],RX,RY,O,D);
@@ -5760,7 +6428,7 @@ Begin
    End;
   End
    Else Begin
-    ClearSel;
+    If Not AddMode Then ClearSel;
     DragMode:=5; RubOn:=False;
     RubX1:=MX; RubY1:=MY; RubX2:=MX; RubY2:=MY;
     Touch;
@@ -5790,6 +6458,30 @@ Begin
      MoveAppX:=TX; MoveAppZ:=TZ;
      NeedViews:=True; NeedStatus:=True;
     End;
+   End;
+  End;
+  7:Begin
+   TX:=((MX-GizStartX)*GizUX+(MY-GizStartY)*GizUY)/GizPx;
+   If GizAxis=1 Then TZ:=8 Else TZ:=20;
+   TX:=Round(TX/TZ)*TZ;
+   If TX<>GizApplied Then Begin
+    If Not MoveBegun Then Begin PushUndo; MoveBegun:=True; End;
+    Case GizAxis Of
+     0:MoveSel(TX-GizApplied,0,0);
+     1:MoveSel(0,TX-GizApplied,0);
+    Else MoveSel(0,0,TX-GizApplied);
+    End;
+    GizApplied:=TX;
+    NeedViews:=True; NeedStatus:=True;
+   End;
+  End;
+  8:Begin
+   TX:=Round(((MX-GizStartX)*0.6)/15)*15;
+   If TX<>GizApplied Then Begin
+    If Not MoveBegun Then Begin PushUndo; MoveBegun:=True; End;
+    RotateSelCore(GizAxis,TX-GizApplied);
+    GizApplied:=TX;
+    NeedViews:=True; NeedStatus:=True;
    End;
   End;
   5:Begin
@@ -5822,14 +6514,14 @@ Begin
     If PieceVisible(Q)Then Begin
      WorldToScreen(Q^.M.T,SX,SY,Vis);
      SX:=SX+Views[V].X1; SY:=SY+Views[V].Y1;
-     If Vis And(SX>=X1)And(SX<=X2)And(SY>=Y1)And(SY<=Y2)Then Q^.Sel:=True;
+     If Vis And(SX>=X1)And(SX<=X2)And(SY>=Y1)And(SY<=Y2)Then SelectGroupOf(Q,True);
     End;
     Q:=Q^.Next;
    End;
   End;
   Touch;
  End;
- If(DragMode=4)And MoveBegun Then Begin Touch; NeedTools:=True; End;
+ If((DragMode=4)Or(DragMode=7)Or(DragMode=8))And MoveBegun Then Begin Touch; NeedTools:=True; End;
  DragMode:=0; DragView:=-1;
 End;
 
@@ -6123,19 +6815,8 @@ Begin
   End;
 End;
 
-Procedure NextView;
-Begin
- If ViewCount=1 Then Begin
-  ActiveView:=(ActiveView+1) Mod 4;
-  LayoutViews;
-  ZoomFit(Views[ActiveView]);
- End
-  Else ActiveView:=(ActiveView+1) Mod 4;
- NeedViews:=True; NeedTools:=True;
-End;
-
 Procedure HandleKey;
-Var K:Char; Ext:Boolean;
+Var K:Char; Ext:Boolean; Key,Cmd:Integer;
 Begin
  K:=ReadKeyEx(Ext);
  StatusMsg:='';
@@ -6149,29 +6830,22 @@ Begin
    End;
   End;
   Case K Of
-   #59:HelpDialog;
-   #60:SetPanel(PN_PARTS);
-   #61:SetPanel(PN_PROPS);
-   #62:SetPanel(PN_TIME);
-   #67:OpenMenu(0);
-   #68,#107:DoQuit;
-   #33:OpenMenu(M_FILE);
-   #18:OpenMenu(M_EDIT);
-   #30:OpenMenu(M_VIEW);
-   #25:OpenMenu(M_PIECE);
-   #20:OpenMenu(M_STEP);
-   #31:OpenMenu(M_SUB);
-   #35:OpenMenu(M_HELP);
+   #67:Begin OpenMenu(0); Exit; End;
+   #33:Begin OpenMenu(M_FILE); Exit; End;
+   #18:Begin OpenMenu(M_EDIT); Exit; End;
+   #30:Begin OpenMenu(M_VIEW); Exit; End;
+   #25:Begin OpenMenu(M_PIECE); Exit; End;
+   #20:Begin OpenMenu(M_STEP); Exit; End;
+   #31:Begin OpenMenu(M_SUB); Exit; End;
+   #35:Begin OpenMenu(M_HELP); Exit; End;
+  End;
+  Cmd:=BindCmd(256+Ord(K));
+  If Cmd<>0 Then DoCmd(Cmd)
+  Else Case K Of
    #72:ArrowMove(0);
    #80:ArrowMove(1);
    #75:ArrowMove(2);
    #77:ArrowMove(3);
-   #73:DoMenu(M_PIECE,3);
-   #81:DoMenu(M_PIECE,4);
-   #71:DoMenu(M_PIECE,5);
-   #79:DoMenu(M_PIECE,6);
-   #83:DeleteSel;
-   #82:DoMenu(M_PIECE,0);
   End;
   If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
   Exit;
@@ -6209,47 +6883,12 @@ Begin
   End;
   Exit;
  End;
- Case K Of
-  #14:DoMenu(M_FILE,0);
-  #15:DoMenu(M_FILE,1);
-  #19:DoMenu(M_FILE,2);
-  #26:DoMenu(M_EDIT,0);
-  #25:DoMenu(M_EDIT,1);
-  #1:DoMenu(M_EDIT,8);
-  #4:DoMenu(M_EDIT,9);
-  #24:DoMenu(M_EDIT,3);
-  #3:DoMenu(M_EDIT,4);
-  #22:DoMenu(M_EDIT,5);
-  #2:DoMenu(M_PIECE,1);
-  #9:NextView;
-  #27:Begin
-   If Tool<>TL_SELECT Then Begin Tool:=TL_SELECT; NeedTools:=True; NeedViews:=True; End
-   Else Begin ClearSel; Touch; End;
-  End;
-  'x':RotateSel(0,90);
-  'X':RotateSel(0,-90);
-  'y':RotateSel(1,90);
-  'Y':RotateSel(1,-90);
-  'z':RotateSel(2,90);
-  'Z':RotateSel(2,-90);
-  'v','V':DoMenu(M_VIEW,0);
-  'p','P':DoMenu(M_VIEW,1);
-  'g','G':DoMenu(M_VIEW,15);
-  'e','E':DoMenu(M_VIEW,16);
-  'w','W':DoMenu(M_VIEW,17);
-  't','T':DoMenu(M_VIEW,18);
-  'h','H':HideSel;
-  'f','F':DoMenu(M_VIEW,13);
-  'b','B':DoMenu(M_PIECE,1);
-  'm','M':SwitchModel(0);
-  '0'..'6':SetPreset(Ord(K)-48);
-  '+','=':DoMenu(M_VIEW,11);
-  '-','_':DoMenu(M_VIEW,12);
-  '.':DoMenu(M_STEP,0);
-  ',':DoMenu(M_STEP,1);
-  '[':DoMenu(M_STEP,2);
-  ']':DoMenu(M_STEP,3);
- End;
+ Key:=Ord(K);
+ Cmd:=BindCmd(Key);
+ If(Cmd=0)And(K='=')Then Cmd:=CM_ZOOMIN;
+ If(Cmd=0)And(K='_')Then Cmd:=CM_ZOOMOUT;
+ If(Cmd=0)And(K>='A')And(K<='Z')And(K<>'X')And(K<>'Y')And(K<>'Z')Then Cmd:=BindCmd(Key+32);
+ If Cmd<>0 Then DoCmd(Cmd);
  If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
 End;
 

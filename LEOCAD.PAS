@@ -26,7 +26,19 @@
    - Export : image BMP de la vue active, liste des pieces (texte)
 
   Ligne de commande :
-   LEOCAD [fichier.ldr|fichier.mpd]
+   LEOCAD [/16] [fichier.ldr|fichier.mpd]
+   /16 : force le mode VGA 16 couleurs (sinon 256 couleurs avec Free Pascal)
+
+  Notes :
+   - Les pieces sont lues dans SAMPLES\LEOCAD\LEGO (une piece LDraw par fichier
+     .DAT, sous-pieces dans le dossier P ou S) ; l'index PARTS.LST est recree
+     par Fichier > Reindexer la bibliotheque. Le tenon (STUD.DAT) est integre.
+   - Un fichier .MPD contient plusieurs modeles ("0 FILE nom") : le premier est
+     le modele principal, les autres sont des sous-modeles (onglets).
+   - Les couleurs sont les codes LDraw courants (0 a 484, translucides 33 a 47).
+   - Le programme complet depasse les 64 Ko de code d'un segment Turbo Pascal 7 :
+     la compilation visee est Free Pascal (mode TP), le code reste compatible
+     avec la syntaxe de Turbo Pascal.
 }
 
 Program LEOCAD;
@@ -328,7 +340,7 @@ Var
  Views:Array[0..MAXVIEW-1] Of TView;
  ViewCount,ActiveView:Integer;
  Tool:Integer;
- GridOn,EdgesOn,WireOn,FloorOn:Boolean;
+ GridOn,EdgesOn,WireOn:Boolean;
  StudMode:Integer;            { 0 auto, 1 complets, 2 simples, 3 aucun }
  StudEff:Integer;
  { tampons de rendu }
@@ -354,9 +366,7 @@ Var
  PropText:String[16];
  PropFresh:Boolean;
  TimeTop:Integer;
- ColTop:Integer;
  LastOpenDir:String;
- CatCountDesc:String;
 
 { ====================================================================== }
 { Utilitaires                                                            }
@@ -1820,8 +1830,6 @@ Var
  GhostPiece:PPiece;
  PolyOverflow:Boolean;
  GroundY:Real;
- SceneSel:Boolean;
- BuildTop:Integer;
 
 Function PolyAt(I:Integer):PPoly;
 Begin
@@ -1887,11 +1895,6 @@ Begin
  If X>30000 Then X:=30000; If X<-30000 Then X:=-30000;
  If Y>30000 Then Y:=30000; If Y<-30000 Then Y:=-30000;
  SX:=Round(X); SY:=Round(Y);
-End;
-
-Procedure ToView(Const M:TMat;Const V:TVec;Var O:TVec);
-Begin
- MatApply(M,V,O);
 End;
 
 Function EdgeColor(Code:Integer;Sel:Boolean):Integer;
@@ -2208,11 +2211,6 @@ Begin
  Proj(VA,X1,Y1); Proj(VB,X2,Y2);
  SetColor(Col);
  Line(X1,Y1,X2,Y2);
-End;
-
-Procedure Line3V(Const A,B:TVec;Col:Integer);
-Begin
- Line3(A,B,Col);
 End;
 
 Procedure ComputeGround;
@@ -3009,6 +3007,16 @@ Begin
  End;
 End;
 
+{ Supprime les espaces doubles des descriptions LDraw }
+Function Compact(Const S:String):String;
+Var I:Integer; R:String;
+Begin
+ R:='';
+ For I:=1 To Length(S) Do
+  If Not((S[I]=' ')And(Length(R)>0)And(R[Length(R)]=' '))Then R:=R+S[I];
+ Compact:=R;
+End;
+
 Procedure DrawStatus;
 Var Y,Q,N:Integer; P:PPiece; S,T:String; Mn,Mx:TVec;
 Begin
@@ -3021,7 +3029,7 @@ Begin
  If S='' Then Begin
   Case Tool Of
    TL_SELECT:S:='S\election : clic, glisser = d\eplacer';
-   TL_INSERT:S:='Poser : '+Copy(CurPartDesc,1,24);
+   TL_INSERT:S:='Poser : '+Copy(Compact(CurPartDesc),1,24);
    TL_ORBIT:S:='Orbite : glisser = tourner';
    TL_PAN:S:='Panoramique : glisser';
    TL_ZOOM:S:='Zoom : glisser haut / bas';
@@ -3063,11 +3071,6 @@ End;
 Function PrevY:Integer;
 Begin
  PrevY:=PanY1+170;
-End;
-
-Procedure ColorToScreen(Code:Integer;Shade:Integer;Var C:Integer);
-Begin
- C:=ShadeMap[ColIdx(Code),Shade];
 End;
 
 Procedure DrawThumb(X1,Y1,X2,Y2:Integer;Const Nm:String;Code:Integer);
@@ -3133,7 +3136,7 @@ Begin
   K:=PartTop+I;
   If K<FilN Then Begin
    Y:=ListY+1+I*12;
-   S:=Copy(Catalog^[Filtered^[K]]^.Desc,1,21);
+   S:=Copy(Compact(Catalog^[Filtered^[K]]^.Desc),1,21);
    If K=PartSel Then Begin Box(X0+1,Y,X1-13,Y+11,UI_SEL); TxtOut(X0+4,Y+2,S,15); End
    Else TxtOut(X0+4,Y+2,S,UI_DK);
   End;
@@ -3143,9 +3146,9 @@ Begin
  If CurPart<>'' Then Begin
   DrawThumb(X0,PrevY,X0+66,PanY2-3,CurPart,CurColor);
   TxtOut(X0+70,PrevY+2,Copy(UpStr(CurPart),1,15),UI_DK);
-  TxtOut(X0+70,PrevY+14,Copy(CurPartDesc,1,15),UI_SH);
-  TxtOut(X0+70,PrevY+24,Copy(CurPartDesc,16,15),UI_SH);
-  TxtOut(X0+70,PrevY+34,Copy(CurPartDesc,31,15),UI_SH);
+  TxtOut(X0+70,PrevY+14,Copy(Compact(CurPartDesc),1,15),UI_SH);
+  TxtOut(X0+70,PrevY+24,Copy(Compact(CurPartDesc),16,15),UI_SH);
+  TxtOut(X0+70,PrevY+34,Copy(Compact(CurPartDesc),31,15),UI_SH);
  End
   Else Begin
    Sunken(X0,PrevY,X0+66,PanY2-3,15);
@@ -3278,7 +3281,7 @@ Begin
      If Q^.Sel Then Box(X0+1,Y-1,X1-13,Y+11,UI_SEL);
      SetFillStyle(SolidFill,C); SetColor(UI_DK);
      FillEllipse(X0+22,Y+5,4,4);
-     T:=Copy(PieceDesc(Q),1,19);
+     T:=Copy(Compact(PieceDesc(Q)),1,19);
      If Q^.Sel Then TxtOut(X0+31,Y+2,T,15)
      Else If Q^.Step>Models[CurModel].CurStep Then TxtOut(X0+31,Y+2,T,UI_SH)
      Else TxtOut(X0+31,Y+2,T,UI_DK);
@@ -3902,18 +3905,24 @@ End;
 Procedure HelpDialog;
 Var Ln:Array[0..19] Of String; N,W,H,X,Y,I:Integer; Sv:TSave; Done,Ext:Boolean;
 Begin
- SplitLines(Fx('Souris : clic gauche = s\electionner / d\eplacer / poser|'+
-  'Clic droit glisser = orbite  -  clic milieu glisser = panoramique|'+
-  'Fl\eches = d\eplacer la s\election (grille 20)  -  PgHaut/PgBas = 8 (plaque)|'+
-  'Debut/Fin = 24 (brique)  -  x X y Y z Z = pivoter de 90 degr\es|'+
-  'Suppr = supprimer  -  Ctrl+C/X/V = copier/couper/coller  -  B = dupliquer|'+
-  'Ctrl+Z/Y = annuler/r\etablir  -  Ctrl+A = tout  -  Ctrl+D = rien|'+
-  '+ - = zoom  -  F = ajuster  -  0..6 = vues pr\ed\efinies  -  Tab = vue suivante|'+
-  'V = 1/4 vues  -  P = perspective  -  G = grille  -  E = ar\etes  -  W = filaire|'+
-  'T = d\etail des tenons  -  H = masquer  -  Echap = outil de s\election|'+
-  ', . = \etape pr\ec\edente/suivante  -  [ ] = premi\ere/derni\ere \etape|'+
-  'F2 F3 F4 = panneaux  -  F10 = quitter  -  Ins = ins\erer la pi\ece'),Ln,N);
- W:=560; H:=N*13+64;
+ Ln[0]:=Fx('Souris : clic gauche = s\electionner / d\eplacer / poser une pi\ece');
+ Ln[1]:=Fx('Glisser bouton droit = orbite  -  bouton milieu = panoramique');
+ Ln[2]:=Fx('Fl\eches : d\eplacer la s\election (grille de 20)');
+ Ln[3]:=Fx('PgHaut / PgBas : monter / descendre de 8 (plaque)');
+ Ln[4]:=Fx('Debut / Fin : monter / descendre de 24 (brique)');
+ Ln[5]:=Fx('x X y Y z Z : pivoter de 90 degr\es   -   Suppr : supprimer');
+ Ln[6]:=Fx('Ctrl+C / X / V : copier, couper, coller   -   B : dupliquer');
+ Ln[7]:=Fx('Ctrl+Z / Y : annuler, r\etablir   -   Ctrl+A : tout   -   Ctrl+D : rien');
+ Ln[8]:=Fx('+ - : zoom   F : ajuster   0..6 : vues   Tab : vue suivante   V : 1/4 vues');
+ Ln[9]:=Fx('P : perspective   G : grille   E : ar\etes   W : filaire   T : tenons');
+ Ln[10]:=Fx('H : masquer   M : mod\gle principal   Echap : outil de s\election');
+ Ln[11]:=Fx(', . : \etape pr\ec\edente / suivante   [ ] : premi\ere / derni\ere');
+ Ln[12]:=Fx('F2 F3 F4 : panneaux   Inser : poser la pi\ece   F10 : quitter');
+ N:=13;
+ W:=240;
+ For I:=0 To N-1 Do If Length(Ln[I])*8+30>W Then W:=Length(Ln[I])*8+30;
+ If W>ScreenW-8 Then W:=ScreenW-8;
+ H:=N*13+64;
  X:=(ScreenW-W) Div 2; Y:=(ScreenH-H) Div 2;
  MouseOff;
  SaveRect(Sv,X,Y,X+W,Y+H);
@@ -4584,8 +4593,8 @@ Begin
  Tot:=0;
  For I:=0 To ModelCount-1 Do Inc(Tot,Models[I].Count);
  S:='Fichier : '+BaseOf(DocFile)+'|Mod\gles : '+IntStr(ModelCount)+'|Pi\eces (tous mod\gles) : '+IntStr(Tot)+
-    '|\Etapes du mod\gle courant : '+IntStr(MaxStep(CurModel))+'|Pi\eces du mod\gle courant : '+IntStr(Models[CurModel].Count)+
-    '|Biblioth\gque : '+IntStr(CatCount)+' pi\eces|Polygones affich\es : '+IntStr(PolyN)+
+    '|\Etapes : '+IntStr(MaxStep(CurModel))+'|Pi\eces du mod\gle : '+IntStr(Models[CurModel].Count)+
+    '|Biblioth\gque : '+IntStr(CatCount)+' pi\eces|Polygones : '+IntStr(PolyN)+
     '|M\emoire libre : '+IntStr(MemAvail Div 1024)+' Ko';
  AskBox('Informations',S,0);
 End;
@@ -4765,6 +4774,7 @@ Begin
   16:DoMenu(M_STEP,0);
   17:DoMenu(M_STEP,3);
  End;
+ NeedTools:=True;
 End;
 
 { ====================================================================== }
@@ -4773,11 +4783,9 @@ End;
 
 Var
  MenuSv:TSave;
- DragMode,DragView,DragX,DragY,StartX,StartY,DragScroll:Integer;
+ DragMode,DragView,DragX,DragY,DragScroll:Integer;
  MoveAppX,MoveAppZ,MoveStartX,MoveStartZ,MovePlaneY:Real;
  MoveBegun:Boolean;
- LastClickT:LongInt;
- LastClickPart:Integer;
  HoverTB:Integer;
  OldMX,OldMY:Integer;
  RubOn:Boolean;
@@ -4881,7 +4889,7 @@ Var RX,RY,Own:Integer; Q:PPiece; O,D:TVec; X,Z:Real;
 Begin
  If V<>ActiveView Then Begin ActiveView:=V; NeedViews:=True; NeedTools:=True; End;
  RX:=MX-Views[V].X1; RY:=MY-Views[V].Y1;
- DragView:=V; DragX:=MX; DragY:=MY; StartX:=MX; StartY:=MY;
+ DragView:=V; DragX:=MX; DragY:=MY;
  StatusMsg:='';
  If Btn=2 Then Begin DragMode:=1; Exit; End;
  If Btn=4 Then Begin DragMode:=2; Exit; End;
@@ -5435,7 +5443,7 @@ Begin
  GhostPiece:=Nil;
  CurColor:=4;
  Tool:=TL_SELECT; PanelSel:=PN_PARTS;
- GridOn:=True; EdgesOn:=True; WireOn:=False; FloorOn:=True; StudMode:=0;
+ GridOn:=True; EdgesOn:=True; WireOn:=False; StudMode:=0;
  MenuActive:=False; ActiveMenu:=0; ActiveMenuItem:=-1;
  StatusMsg:=''; PropField:=-1; TimeTop:=0;
  DragMode:=0; DragView:=-1; DragScroll:=0; HoverTB:=-1;

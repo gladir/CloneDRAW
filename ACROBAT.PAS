@@ -7,12 +7,18 @@
 
   Visionneuse / éditeur de documents PDF en mode graphique :
    - Ouverture de fichiers PDF (flux Flate, ASCIIHex, ASCII85, flux d'objets,
-     texte, graphiques vectoriels, annotations simples)
+     texte, graphiques vectoriels, annotations simples, images JPEG / Flate /
+     CCITT G3-G4, images en ligne, polices Type 3, découpe rectangulaire,
+     dégradés axiaux et radiaux, motifs de pavage, transparence constante)
+   - Aucune limite fixe de pages ou d'objets : listes chaînées dans le tas
    - Création de documents, pages, rotation, recadrage, filigrane, numérotation
    - Commentaires : texte, note, surlignage, soulignement, barré, crayon,
      ligne, flèche, rectangle, ovale, tampon, signature, biffure
    - Recherche de texte, vignettes, panneau des commentaires, zoom, défilement
-   - Enregistrement en PDF 1.4, exportation en texte et en image BMP
+   - Enregistrement incrémental (le fichier d'origine, ses polices incorporées,
+     liens, champs de formulaire et signets sont conservés) ou réécriture
+     complète compressée (Flate) ; exportation en texte et en image BMP
+   - Non pris en charge : JPEG 2000 et JBIG2 (cadre gris), PDF chiffrés
    - Annuler / Rétablir
 
   Tout le code est contenu dans ce seul fichier (aucun $I, aucune unité
@@ -72,7 +78,7 @@ Const
  K_TEXT   = 1;  K_LINE   = 2;  K_RECT   = 3;  K_OVAL   = 4;
  K_POLY   = 5;  K_INK    = 6;  K_IMAGE  = 7;  K_STAMP  = 8;
  K_REDACT = 9;  K_HILITE = 10; K_UNDER  = 11; K_STRIKE = 12;
- K_NOTE   = 13; K_ARROW  = 14;
+ K_NOTE   = 13; K_ARROW  = 14; K_GRAD   = 15;
 
  { Outils }
  TL_SELECT = 0; TL_HAND   = 1; TL_ZOOM   = 2; TL_TEXT   = 3;
@@ -134,6 +140,7 @@ Type
   X1, Y1, X2, Y2: Integer;
   Rgb, Rgb2: LongInt;
   Wd, Size, Style, Fill: Byte;
+  Alpha: Byte;              { transparence du remplissage (0 ou 255 : opaque) }
   P0, PN: LongInt;
   Src: Byte;                { 0 nouveau, 1 contenu d'origine, 2 annotation d'origine, 3 aperçu seul }
   SrcNum: LongInt;          { n° d'objet PDF d'origine (annotations) }
@@ -1925,6 +1932,281 @@ Begin
  ImageDrawable := (I > 0) And (I <= ImgCount) And ((ImgP(I)^.Pix <> Nil) Or (ImgP(I)^.Mask And (ImgP(I)^.Alpha <> Nil)));
 End;
 
+
+{ Trace un pixel RVB avec tramage vers la palette courante }
+Procedure PlotRgb(X, Y, R, G, B: LongInt);
+Var
+ Off: LongInt;
+Begin
+ If Not DLutReady Then InitDLut;
+ If Pal256 Then Begin
+  If (Abs(R - G) < 8) And (Abs(G - B) < 8) Then Begin
+   Off := Bayer4[Y And 3, X And 3] - 8;
+   R := (R + G + B) Div 3 + Off;
+   If R < 0 Then R := 0; If R > 255 Then R := 255;
+   PutPixel(X, Y, ScrCol(RGBOf(R, R, R)));
+  End
+  Else Begin
+   Off := Bayer4[Y And 3, X And 3] * 3 - 22;
+   R := R + Off; G := G + Off; B := B + Off;
+   If R < 0 Then R := 0; If R > 255 Then R := 255;
+   If G < 0 Then G := 0; If G > 255 Then G := 255;
+   If B < 0 Then B := 0; If B > 255 Then B := 255;
+   PutPixel(X, Y, 16 + ((R + 25) Div 51) * 36 + ((G + 25) Div 51) * 6 + ((B + 25) Div 51));
+  End;
+ End
+ Else Begin
+  Off := Bayer4[Y And 3, X And 3] * 5 - 38;
+  R := R + Off; G := G + Off; B := B + Off;
+  If R < 0 Then R := 0; If R > 255 Then R := 255;
+  If G < 0 Then G := 0; If G > 255 Then G := 255;
+  If B < 0 Then B := 0; If B > 255 Then B := 255;
+  PutPixel(X, Y, DLut[((R Shr 4) Shl 8) Or ((G Shr 4) Shl 4) Or (B Shr 4)]);
+ End;
+End;
+
+{ Idem avec transparence A (0..255) : mélange réel en 256 couleurs, tramage en 16 couleurs }
+Procedure PlotRgbA(X, Y, R, G, B, A: LongInt);
+Var
+ C: LongInt;
+Begin
+ If A >= 255 Then Begin PlotRgb(X, Y, R, G, B); Exit; End;
+ If A <= 0 Then Exit;
+ If Pal256 Then Begin
+  C := IdxRgb(GetPixel(X, Y));
+  R := (((C Shr 16) And 255) * (255 - A) + R * A) Div 255;
+  G := (((C Shr 8) And 255) * (255 - A) + G * A) Div 255;
+  B := ((C And 255) * (255 - A) + B * A) Div 255;
+  PlotRgb(X, Y, R, G, B);
+ End
+ Else If Bayer4[Y And 3, X And 3] * 16 + 8 < A Then PlotRgb(X, Y, R, G, B);
+End;
+
+{ ---- Dégradés (K_GRAD) : paramètres rangés dans Txt, relatifs à la boîte ---- }
+Const
+ GMAXST = 9;
+
+Var
+ GdType, GdNSt: Integer;
+ GdX0, GdY0, GdX1, GdY1, GdR0, GdR1: Real;
+ GdPos: Array[0..GMAXST - 1] Of Integer;
+ GdR, GdG, GdB: Array[0..GMAXST - 1] Of Integer;
+ GdPW, GdPH: Real;
+ GdSX1, GdSY1, GdDW, GdDH: LongInt;
+ GdDenom: Real;
+ PtMode, PtA: Integer;
+ PtR, PtG, PtB: LongInt;
+
+Function GdInt16(Const S: String; P: Integer): Integer;
+Var
+ V: LongInt;
+Begin
+ V := Ord(S[P]) + Ord(S[P + 1]) * 256;
+ If V >= 32768 Then V := V - 65536;
+ GdInt16 := V;
+End;
+
+Function GdPutInt16(V: LongInt): String;
+Begin
+ If V > 32767 Then V := 32767;
+ If V < -32768 Then V := -32768;
+ If V < 0 Then V := V + 65536;
+ GdPutInt16 := Chr(V And 255) + Chr(V Shr 8);
+End;
+
+{ Lit les paramètres du dégradé de l'objet O (dimensions de la boîte en unités page) }
+Procedure GradParse(Const O: TObjRec);
+Var
+ I, M: Integer;
+ BW, BH, Mx: Real;
+ S: String;
+Begin
+ S := O.Txt;
+ GdNSt := 0;
+ If Length(S) < 18 Then Exit;
+ BW := IAbs(O.X2 - O.X1); If BW < 1 Then BW := 1;
+ BH := IAbs(O.Y2 - O.Y1); If BH < 1 Then BH := 1;
+ GdPW := BW; GdPH := BH;
+ If BW > BH Then Mx := BW Else Mx := BH;
+ GdType := Ord(S[1]);
+ GdX0 := GdInt16(S, 2) * BW / 1024; GdY0 := GdInt16(S, 4) * BH / 1024;
+ GdX1 := GdInt16(S, 6) * BW / 1024; GdY1 := GdInt16(S, 8) * BH / 1024;
+ GdR0 := GdInt16(S, 10) * Mx / 1024; GdR1 := GdInt16(S, 12) * Mx / 1024;
+ M := Ord(S[14]);
+ If M > GMAXST Then M := GMAXST;
+ For I := 0 To M - 1 Do
+  If 14 + I * 4 + 4 <= Length(S) Then Begin
+   GdPos[I] := Ord(S[15 + I * 4]);
+   GdR[I] := Ord(S[16 + I * 4]); GdG[I] := Ord(S[17 + I * 4]); GdB[I] := Ord(S[18 + I * 4]);
+   GdNSt := I + 1;
+  End;
+ GdDenom := (GdX1 - GdX0) * (GdX1 - GdX0) + (GdY1 - GdY0) * (GdY1 - GdY0);
+End;
+
+{ Couleur du dégradé au paramètre T (0..1) }
+Procedure GradColor(T: Real; Var R, G, B: LongInt);
+Var
+ I: Integer;
+ P, F: Real;
+Begin
+ If T < 0 Then T := 0;
+ If T > 1 Then T := 1;
+ P := T * 255;
+ If GdNSt < 1 Then Begin R := 128; G := 128; B := 128; Exit; End;
+ If P <= GdPos[0] Then Begin R := GdR[0]; G := GdG[0]; B := GdB[0]; Exit; End;
+ For I := 1 To GdNSt - 1 Do
+  If P <= GdPos[I] Then Begin
+   If GdPos[I] = GdPos[I - 1] Then F := 1 Else F := (P - GdPos[I - 1]) / (GdPos[I] - GdPos[I - 1]);
+   R := Round(GdR[I - 1] + (GdR[I] - GdR[I - 1]) * F);
+   G := Round(GdG[I - 1] + (GdG[I] - GdG[I - 1]) * F);
+   B := Round(GdB[I - 1] + (GdB[I] - GdB[I - 1]) * F);
+   Exit;
+  End;
+ R := GdR[GdNSt - 1]; G := GdG[GdNSt - 1]; B := GdB[GdNSt - 1];
+End;
+
+{ Paramètre T du dégradé au point (X, Y) de la boîte (unités page) ; faux si hors dégradé }
+Function GradParam(X, Y: Real; Var T: Real): Boolean;
+Var
+ PdX, PdY, CdX, CdY, Dr, A, B, C, Disc, S1, S2, S: Real;
+Begin
+ GradParam := True;
+ If GdType = 0 Then Begin
+  If GdDenom < 0.000001 Then T := 0
+  Else T := ((X - GdX0) * (GdX1 - GdX0) + (Y - GdY0) * (GdY1 - GdY0)) / GdDenom;
+  Exit;
+ End;
+ PdX := X - GdX0; PdY := Y - GdY0;
+ CdX := GdX1 - GdX0; CdY := GdY1 - GdY0; Dr := GdR1 - GdR0;
+ A := CdX * CdX + CdY * CdY - Dr * Dr;
+ B := PdX * CdX + PdY * CdY + GdR0 * Dr;
+ C := PdX * PdX + PdY * PdY - GdR0 * GdR0;
+ If Abs(A) < 0.000001 Then Begin
+  If Abs(B) < 0.000001 Then Begin GradParam := False; Exit; End;
+  S := C / (2 * B);
+ End
+ Else Begin
+  Disc := B * B - A * C;
+  If Disc < 0 Then Begin GradParam := False; Exit; End;
+  Disc := Sqrt(Disc);
+  S1 := (B + Disc) / A; S2 := (B - Disc) / A;
+  If S1 < S2 Then Begin S := S1; S1 := S2; S2 := S; End;
+  If GdR0 + S1 * Dr >= 0 Then S := S1
+  Else If GdR0 + S2 * Dr >= 0 Then S := S2
+  Else Begin GradParam := False; Exit; End;
+ End;
+ T := S;
+End;
+
+Procedure PaintSpan(Y, XA, XB: LongInt);
+Var
+ X, U, V, PU_, PV_, BW, BH: LongInt;
+ T: Real;
+ R, G, B: LongInt;
+Begin
+ If XA < 0 Then XA := 0;
+ If XB > CullW Then XB := CullW;
+ For X := XA To XB Do Begin
+  If PtMode = 0 Then PlotRgbA(X, Y, PtR, PtG, PtB, PtA)
+  Else Begin
+   U := X - GdSX1; V := Y - GdSY1;
+   Case GRot Of
+    0: Begin PU_ := U; PV_ := V; BW := GdDW; BH := GdDH; End;
+    1: Begin PU_ := V; PV_ := GdDW - 1 - U; BW := GdDH; BH := GdDW; End;
+    2: Begin PU_ := GdDW - 1 - U; PV_ := GdDH - 1 - V; BW := GdDW; BH := GdDH; End;
+   Else
+    Begin PU_ := GdDH - 1 - V; PV_ := U; BW := GdDH; BH := GdDW; End;
+   End;
+   If BW < 1 Then BW := 1;
+   If BH < 1 Then BH := 1;
+   If GradParam((PU_ + 0.5) * GdPW / BW, (PV_ + 0.5) * GdPH / BH, T) Then Begin
+    GradColor(T, R, G, B);
+    PlotRgb(X, Y, R, G, B);
+   End;
+  End;
+ End;
+End;
+
+Type
+ TScrPts = Array[0..255] Of LongInt;
+
+{ Remplissage par balayage (parité) d'un polygone en coordonnées écran }
+Procedure ScanPoly(Const Px, Py: TScrPts; N: Integer);
+Var
+ Y, YMin, YMax, NC, K, J, I: LongInt;
+ Xs: Array[0..127] Of LongInt;
+ Tmp: LongInt;
+ Xf: Real;
+Begin
+ If N < 3 Then Exit;
+ YMin := Py[0]; YMax := Py[0];
+ For I := 1 To N - 1 Do Begin
+  If Py[I] < YMin Then YMin := Py[I];
+  If Py[I] > YMax Then YMax := Py[I];
+ End;
+ If YMin < 0 Then YMin := 0;
+ If YMax > CullH Then YMax := CullH;
+ For Y := YMin To YMax Do Begin
+  NC := 0;
+  For I := 0 To N - 1 Do Begin
+   J := I + 1; If J >= N Then J := 0;
+   If (Py[I] <= Y) <> (Py[J] <= Y) Then Begin
+    Xf := Px[I] + (Y - Py[I]) * (Px[J] - Px[I]) / (Py[J] - Py[I]);
+    If NC < 128 Then Begin Xs[NC] := Round(Xf); Inc(NC); End;
+   End;
+  End;
+  For I := 1 To NC - 1 Do Begin
+   Tmp := Xs[I]; K := I - 1;
+   While (K >= 0) And (Xs[K] > Tmp) Do Begin Xs[K + 1] := Xs[K]; Dec(K); End;
+   Xs[K + 1] := Tmp;
+  End;
+  K := 0;
+  While K + 1 < NC Do Begin
+   PaintSpan(Y, Xs[K], Xs[K + 1]);
+   Inc(K, 2);
+  End;
+ End;
+End;
+
+{ Polygone ou ellipse ou rectangle rempli avec transparence A }
+Procedure FillAlphaPts(Const Px, Py: TScrPts; N: Integer; Rgb: LongInt; A: Integer);
+Begin
+ PtMode := 0; PtA := A;
+ PtR := (Rgb Shr 16) And 255; PtG := (Rgb Shr 8) And 255; PtB := Rgb And 255;
+ ScanPoly(Px, Py, N);
+End;
+
+Procedure DrawGradObj(Const O: TObjRec; SX1, SY1, SX2, SY2: LongInt);
+Var
+ Px, Py: TScrPts;
+ N, I, Step: Integer;
+ Base: LongInt;
+Begin
+ GradParse(O);
+ If GdNSt < 2 Then Exit;
+ PtMode := 1;
+ GdSX1 := SX1; GdSY1 := SY1; GdDW := SX2 - SX1 + 1; GdDH := SY2 - SY1 + 1;
+ N := 0;
+ If (O.PN >= 3) And (PoolHead <> Nil) Then Begin
+  Step := 1;
+  If O.PN > 250 Then Step := (O.PN + 249) Div 250;
+  I := 0;
+  While (I < O.PN) And (N < 255) Do Begin
+   Base := O.P0 + I;
+   Px[N] := MXp(PoolXP(Base)^, PoolYP(Base)^);
+   Py[N] := MYp(PoolXP(Base)^, PoolYP(Base)^);
+   Inc(N);
+   Inc(I, Step);
+  End;
+ End
+ Else Begin
+  Px[0] := SX1; Py[0] := SY1; Px[1] := SX2; Py[1] := SY1;
+  Px[2] := SX2; Py[2] := SY2; Px[3] := SX1; Py[3] := SY2;
+  N := 4;
+ End;
+ ScanPoly(Px, Py, N);
+End;
+
 { Dessine l'image réduite dans le rectangle écran (X1,Y1)-(X2,Y2) avec
   tramage ordonné vers les 16 couleurs. }
 Procedure DrawImageData(Const O: TObjRec; X1, Y1, X2, Y2: LongInt);
@@ -1980,31 +2262,7 @@ Begin
     R := ((Vv Shr 11) And 31) * 255 Div 31;
     G := ((Vv Shr 5) And 63) * 255 Div 63;
     B := (Vv And 31) * 255 Div 31;
-    If Pal256 Then Begin
-     If (Abs(R - G) < 8) And (Abs(G - B) < 8) Then Begin
-      { image en niveaux de gris : rampe de 24 gris + tramage léger }
-      Off := Bayer4[Y And 3, X And 3] - 8;
-      R := (R + G + B) Div 3 + Off;
-      If R < 0 Then R := 0; If R > 255 Then R := 255;
-      PutPixel(X, Y, ScrCol(RGBOf(R, R, R)));
-     End
-     Else Begin
-      Off := Bayer4[Y And 3, X And 3] * 3 - 22;
-      R := R + Off; G := G + Off; B := B + Off;
-      If R < 0 Then R := 0; If R > 255 Then R := 255;
-      If G < 0 Then G := 0; If G > 255 Then G := 255;
-      If B < 0 Then B := 0; If B > 255 Then B := 255;
-      PutPixel(X, Y, 16 + ((R + 25) Div 51) * 36 + ((G + 25) Div 51) * 6 + ((B + 25) Div 51));
-     End;
-    End
-    Else Begin
-     Off := Bayer4[Y And 3, X And 3] * 5 - 38;
-     R := R + Off; G := G + Off; B := B + Off;
-     If R < 0 Then R := 0; If R > 255 Then R := 255;
-     If G < 0 Then G := 0; If G > 255 Then G := 255;
-     If B < 0 Then B := 0; If B > 255 Then B := 255;
-     PutPixel(X, Y, DLut[((R Shr 4) Shl 8) Or ((G Shr 4) Shl 4) Or (B Shr 4)]);
-    End;
+    If (O.Alpha > 0) And (O.Alpha < 255) Then PlotRgbA(X, Y, R, G, B, O.Alpha) Else PlotRgb(X, Y, R, G, B);
    End;
   End;
 End;
@@ -2019,6 +2277,8 @@ Var
  Sz: Integer;
  TW_: Real;
  TOx, TOy: Real;
+ PxA, PyA: TScrPts;
+ NA: Integer;
 Begin
  ScrBox(O, SX1, SY1, SX2, SY2);
  If (SX2 < -4) Or (SY2 < -4) Or (SX1 > CullW + 4) Or (SY1 > CullH + 4) Then Exit;
@@ -2043,7 +2303,12 @@ Begin
      SetFillStyle(SolidFill, FCol);
      If (SX2 - SX1 < 1) Then SX2 := SX1;
      If (SY2 - SY1 < 1) Then SY2 := SY1;
-     Bar(C16(SX1), C16(SY1), C16(SX2), C16(SY2));
+     If (O.Alpha > 0) And (O.Alpha < 255) Then Begin
+      PxA[0] := SX1; PyA[0] := SY1; PxA[1] := SX2 + 1; PyA[1] := SY1;
+      PxA[2] := SX2 + 1; PyA[2] := SY2 + 1; PxA[3] := SX1; PyA[3] := SY2 + 1;
+      FillAlphaPts(PxA, PyA, 4, O.Rgb2, O.Alpha);
+     End
+     Else Bar(C16(SX1), C16(SY1), C16(SX2), C16(SY2));
     End;
     If O.Fill <> 1 Then Begin
      ThickLine(SX1, SY1, SX2, SY1, W, Col);
@@ -2059,7 +2324,14 @@ Begin
      If O.Fill <> 0 Then Begin
       SetFillStyle(SolidFill, FCol);
       SetColor(FCol);
-      FillEllipse(C16(CX), C16(CY), C16(RX), C16(RY));
+      If (O.Alpha > 0) And (O.Alpha < 255) Then Begin
+       For I := 0 To 47 Do Begin
+        PxA[I] := CX + Round(RX * Cos(I * Pi / 24));
+        PyA[I] := CY + Round(RY * Sin(I * Pi / 24));
+       End;
+       FillAlphaPts(PxA, PyA, 48, O.Rgb2, O.Alpha);
+      End
+      Else FillEllipse(C16(CX), C16(CY), C16(RX), C16(RY));
      End;
      If O.Fill <> 1 Then Begin
       SetColor(Col);
@@ -2070,7 +2342,21 @@ Begin
     End;
    End;
    K_POLY:
-    DrawPolyObj(O, O.Fill <> 0, O.Fill <> 1, (O.Style And 1) <> 0, Col, FCol, W);
+    If (O.Fill <> 0) And (O.Alpha > 0) And (O.Alpha < 255) And (O.PN >= 3) And (PoolHead <> Nil) Then Begin
+     NA := 0;
+     I := 0;
+     Sz := 1;
+     If O.PN > 250 Then Sz := (O.PN + 249) Div 250;
+     While (I < O.PN) And (NA < 255) Do Begin
+      PxA[NA] := MXp(PoolXP(O.P0 + I)^, PoolYP(O.P0 + I)^);
+      PyA[NA] := MYp(PoolXP(O.P0 + I)^, PoolYP(O.P0 + I)^);
+      Inc(NA); Inc(I, Sz);
+     End;
+     FillAlphaPts(PxA, PyA, NA, O.Rgb2, O.Alpha);
+     If O.Fill <> 1 Then DrawPolyObj(O, False, True, (O.Style And 1) <> 0, Col, FCol, W);
+    End
+    Else DrawPolyObj(O, O.Fill <> 0, O.Fill <> 1, (O.Style And 1) <> 0, Col, FCol, W);
+   K_GRAD: DrawGradObj(O, SX1, SY1, SX2, SY2);
    K_INK:
     DrawPolyObj(O, False, True, False, Col, FCol, W);
    K_IMAGE: If ImageDrawable(O.P0) Then DrawImageData(O, SX1, SY1, SX2, SY2)
@@ -2133,7 +2419,7 @@ End;
 
 Function IsBoxKind(K: Integer): Boolean;
 Begin
- IsBoxKind := K In [K_RECT, K_OVAL, K_IMAGE, K_REDACT, K_HILITE, K_STAMP, K_UNDER, K_STRIKE];
+ IsBoxKind := K In [K_RECT, K_OVAL, K_IMAGE, K_GRAD, K_REDACT, K_HILITE, K_STAMP, K_UNDER, K_STRIKE];
 End;
 
 Procedure DrawTextBoxRot(Const O: TObjRec);
@@ -2395,7 +2681,7 @@ Begin
   A := (A + P^[I]) Mod 65521;
   B := (B + A) Mod 65521;
  End;
- If T.Kind In [K_POLY, K_INK] Then
+ If T.Kind In [K_POLY, K_INK, K_GRAD] Then
   For I := 0 To T.PN - 1 Do Begin
    Add(PoolXP(T.P0 + I)^);
    Add(PoolYP(T.P0 + I)^);
@@ -2450,7 +2736,7 @@ Begin
   TextOrigin(O^, Ox, Oy);
   SetTextBox(O^, Ox, Oy);
  End
- Else If (O^.Kind In [K_POLY, K_INK]) And (O^.PN > 0) Then Begin
+ Else If (O^.Kind In [K_POLY, K_INK, K_GRAD]) And (O^.PN > 0) Then Begin
   MnX := 32000; MnY := 32000; MxX := -32000; MxY := -32000;
   For I := O^.P0 To O^.P0 + O^.PN - 1 Do Begin
    If PoolXP(I)^ < MnX Then MnX := PoolXP(I)^;
@@ -2474,7 +2760,7 @@ Begin
   X1 := X1 + DX; X2 := X2 + DX;
   Y1 := Y1 + DY; Y2 := Y2 + DY;
   If (Kind = K_TEXT) And (PN Mod 3600 <> 0) Then PackOrigin(ObjP(Idx)^, (Rgb2 Div 32768) - 16384 + DX, (Rgb2 Mod 32768) - 16384 + DY);
-  If Kind In [K_POLY, K_INK] Then
+  If Kind In [K_POLY, K_INK, K_GRAD] Then
    For I := P0 To P0 + PN - 1 Do Begin
     PoolXP(I)^ := PoolXP(I)^ + DX;
     PoolYP(I)^ := PoolYP(I)^ + DY;
@@ -2508,7 +2794,7 @@ Var
  OX1, OY1, OW, OH, NW, NH: LongInt;
 Begin
  With ObjP(Idx)^ Do Begin
-  If Kind In [K_POLY, K_INK] Then Begin
+  If (Kind In [K_POLY, K_INK]) Or ((Kind = K_GRAD) And (PN > 0)) Then Begin
    OX1 := X1; OY1 := Y1;
    OW := IMax(1, X2 - X1); OH := IMax(1, Y2 - Y1);
    NW := NX2 - NX1; NH := NY2 - NY1;
@@ -3019,6 +3305,83 @@ Begin
  ObjEmits := True;
 End;
 
+{ Couleur de remplissage tenant compte de la transparence (aplatie sur fond blanc) }
+Function FillTint(Const O: TObjRec): LongInt;
+Var
+ A: Integer;
+ R, G, B: LongInt;
+Begin
+ FillTint := O.Rgb2;
+ If (O.Kind In [K_RECT, K_OVAL, K_POLY]) And (O.Fill <> 0) And (O.Alpha > 0) And (O.Alpha < 255) Then Begin
+  A := O.Alpha;
+  R := (((O.Rgb2 Shr 16) And 255) * A + 255 * (255 - A)) Div 255;
+  G := (((O.Rgb2 Shr 8) And 255) * A + 255 * (255 - A)) Div 255;
+  B := ((O.Rgb2 And 255) * A + 255 * (255 - A)) Div 255;
+  FillTint := RGBOf(R, G, B);
+ End;
+End;
+
+Function CircleStr(CX, CY, R: Real): String;
+Var
+ K: Real;
+Begin
+ K := R * 0.5523;
+ CircleStr := RStr(CX + R) + ' ' + RStr(CY) + ' m ' +
+  RStr(CX + R) + ' ' + RStr(CY + K) + ' ' + RStr(CX + K) + ' ' + RStr(CY + R) + ' ' + RStr(CX) + ' ' + RStr(CY + R) + ' c ' +
+  RStr(CX - K) + ' ' + RStr(CY + R) + ' ' + RStr(CX - R) + ' ' + RStr(CY + K) + ' ' + RStr(CX - R) + ' ' + RStr(CY) + ' c ' +
+  RStr(CX - R) + ' ' + RStr(CY - K) + ' ' + RStr(CX - K) + ' ' + RStr(CY - R) + ' ' + RStr(CX) + ' ' + RStr(CY - R) + ' c ' +
+  RStr(CX + K) + ' ' + RStr(CY - R) + ' ' + RStr(CX + R) + ' ' + RStr(CY - K) + ' ' + RStr(CX + R) + ' ' + RStr(CY) + ' c h f';
+End;
+
+{ Écrit un dégradé sous forme de bandes unies (sans ressource) }
+Procedure WriteGradBands(Const O: TObjRec; X1, Y1, X2, Y2, H: LongInt);
+Const
+ NB = 32;
+Var
+ K: Integer;
+ T0, T1, Dx, Dy, Len, Ax, Ay, Px, Py, L, TT0, TT1, Sx, Sr, Mid: Real;
+ R, G, B: LongInt;
+ CS: String;
+ Function Pt(X, Y: Real): String;
+ Begin
+  Pt := RStr(X1 + X) + ' ' + RStr(H - (Y1 + Y));
+ End;
+Begin
+ GradParse(O);
+ If GdNSt < 2 Then Exit;
+ GradColor(1, R, G, B);
+ WL(RStr4(R / 255) + ' ' + RStr4(G / 255) + ' ' + RStr4(B / 255) + ' rg ' + IStr(X1) + ' ' + IStr(H - Y2) + ' ' + IStr(X2 - X1) + ' ' + IStr(Y2 - Y1) + ' re f');
+ If GdType = 0 Then Begin
+  Dx := GdX1 - GdX0; Dy := GdY1 - GdY0;
+  Len := Sqrt(Dx * Dx + Dy * Dy);
+  If Len < 0.001 Then Exit;
+  L := 4 * (GdPW + GdPH) / Len;
+  Px := -Dy * L; Py := Dx * L;
+  For K := 0 To NB - 1 Do Begin
+   T0 := K / NB; T1 := (K + 1) / NB;
+   TT0 := T0; TT1 := T1 + 0.5 / NB;
+   If K = 0 Then TT0 := -20;
+   If K = NB - 1 Then TT1 := 20;
+   GradColor((T0 + T1) / 2, R, G, B);
+   WL(RStr4(R / 255) + ' ' + RStr4(G / 255) + ' ' + RStr4(B / 255) + ' rg ' +
+      Pt(GdX0 + TT0 * Dx + Px, GdY0 + TT0 * Dy + Py) + ' m ' + Pt(GdX0 + TT1 * Dx + Px, GdY0 + TT1 * Dy + Py) + ' l ' +
+      Pt(GdX0 + TT1 * Dx - Px, GdY0 + TT1 * Dy - Py) + ' l ' + Pt(GdX0 + TT0 * Dx - Px, GdY0 + TT0 * Dy - Py) + ' l h f');
+  End;
+ End
+ Else Begin
+  Dx := GdX1 - GdX0; Dy := GdY1 - GdY0;
+  For K := NB - 1 DownTo 0 Do Begin
+   Sx := (K + 1) / NB;
+   Sr := GdR0 + Sx * (GdR1 - GdR0);
+   If Sr < 0.3 Then Continue;
+   Mid := (K + 0.5) / NB;
+   GradColor(Mid, R, G, B);
+   WL(RStr4(R / 255) + ' ' + RStr4(G / 255) + ' ' + RStr4(B / 255) + ' rg ' +
+      CircleStr(X1 + GdX0 + Sx * Dx, H - (Y1 + GdY0 + Sx * Dy), Sr));
+  End;
+ End;
+End;
+
 Procedure ContentOf(Pg: Integer; Var Cnt: LongInt);
 Var
  I, J: Integer;
@@ -3099,7 +3462,7 @@ Begin
     If O^.Kind = K_IMAGE Then S := S + '0.8 g 0.4 G 1 w '
     Else If O^.Kind = K_REDACT Then S := S + '1 0 0 RG 1.5 w '
     Else Begin
-     S := S + ColStr(O^.Rgb2) + ' rg ' + ColStr(O^.Rgb) + ' RG ' + IStr(O^.Wd) + ' w ';
+     S := S + ColStr(FillTint(O^)) + ' rg ' + ColStr(O^.Rgb) + ' RG ' + IStr(O^.Wd) + ' w ';
      If O^.Kind = K_STAMP Then S := S + '2 w ';
     End;
     S := S + IStr(X1) + ' ' + RStr(H - Y2) + ' ' + IStr(X2 - X1) + ' ' + IStr(Y2 - Y1) + ' re ';
@@ -3119,7 +3482,7 @@ Begin
    K_OVAL: Begin
     CX := (X1 + X2) / 2; CY := H - (Y1 + Y2) / 2;
     RX := (X2 - X1) / 2; RY := (Y2 - Y1) / 2;
-    S := 'q ' + ColStr(O^.Rgb2) + ' rg ' + ColStr(O^.Rgb) + ' RG ' + IStr(O^.Wd) + ' w ' +
+    S := 'q ' + ColStr(FillTint(O^)) + ' rg ' + ColStr(O^.Rgb) + ' RG ' + IStr(O^.Wd) + ' w ' +
          RStr(CX + RX) + ' ' + RStr(CY) + ' m ' +
          RStr(CX + RX) + ' ' + RStr(CY + RY * 0.5523) + ' ' + RStr(CX + RX * 0.5523) + ' ' + RStr(CY + RY) + ' ' + RStr(CX) + ' ' + RStr(CY + RY) + ' c ' +
          RStr(CX - RX * 0.5523) + ' ' + RStr(CY + RY) + ' ' + RStr(CX - RX) + ' ' + RStr(CY + RY * 0.5523) + ' ' + RStr(CX - RX) + ' ' + RStr(CY) + ' c ';
@@ -3133,9 +3496,25 @@ Begin
     End;
     WL(S);
    End;
+   K_GRAD: Begin
+    GradParse(O^);
+    If GdNSt < 2 Then Continue;
+    WS('q ');
+    If O^.PN >= 3 Then Begin
+     For J := 0 To O^.PN - 1 Do Begin
+      If J = 0 Then Op := ' m ' Else Op := ' l ';
+      WS(IStr(PoolXP(O^.P0 + J)^) + ' ' + IStr(H - PoolYP(O^.P0 + J)^) + Op);
+      If (J Mod 8) = 7 Then WL('');
+     End;
+     WL('h W n');
+    End
+    Else WL(IStr(X1) + ' ' + IStr(H - Y2) + ' ' + IStr(X2 - X1) + ' ' + IStr(Y2 - Y1) + ' re W n');
+    WriteGradBands(O^, X1, Y1, X2, Y2, H);
+    WL('Q');
+   End;
    K_POLY, K_INK: Begin
     If O^.PN < 2 Then Continue;
-    WS('q ' + ColStr(O^.Rgb2) + ' rg ' + ColStr(O^.Rgb) + ' RG ' + IStr(O^.Wd) + ' w 1 J 1 j ');
+    WS('q ' + ColStr(FillTint(O^)) + ' rg ' + ColStr(O^.Rgb) + ' RG ' + IStr(O^.Wd) + ' w 1 J 1 j ');
     For J := 0 To O^.PN - 1 Do Begin
      If J = 0 Then Op := ' m ' Else Op := ' l ';
      WS(IStr(PoolXP(O^.P0 + J)^) + ' ' + IStr(H - PoolYP(O^.P0 + J)^) + Op);
@@ -4497,6 +4876,14 @@ Type
  PRangeArr = ^TRangeArr;
  TWdArr = Array[0..255] Of Integer;
  PWdArr = ^TWdArr;
+ TT3 = Record
+  Num: Integer;
+  HasRes: Boolean;
+  FM: Array[0..5] Of Real;
+  Proc: Array[0..255] Of LongInt;
+  Wd: Array[0..255] Of Real;
+ End;
+ PT3 = ^TT3;
  TFontRec = Record
   Name: String[63];
   Fam, Style: Integer;
@@ -4508,6 +4895,7 @@ Type
   NCW: Integer;
   TU: PRangeArr;
   NTU: Integer;
+  T3: PT3;
  End;
  TXObj = Record
   Name: String[63];
@@ -4516,6 +4904,8 @@ Type
  End;
 
 Var
+ ResNodes: Array[0..7] Of Integer;
+ NRes: Integer;
  Fonts: Array[0..FMAX-1] Of TFontRec;
  NFonts: Integer;
  XObjs: Array[0..XMAX-1] Of TXObj;
@@ -4529,7 +4919,8 @@ Begin
    If Wd <> Nil Then FreeMem(Wd, SizeOf(TWdArr));
    If CW <> Nil Then FreeMem(CW, SizeOf(TRangeArr));
    If TU <> Nil Then FreeMem(TU, SizeOf(TRangeArr));
-   Wd := Nil; CW := Nil; TU := Nil;
+   If T3 <> Nil Then FreeMem(T3, SizeOf(TT3));
+   Wd := Nil; CW := Nil; TU := Nil; T3 := Nil;
   End;
  End;
 End;
@@ -4667,6 +5058,91 @@ Begin
  End;
 End;
 
+{ Police Type 3 : procédures de dessin des glyphes (CharProcs) }
+Procedure LoadType3(Var F: TFontRec; Num: Integer);
+Var
+ S: TSrcState;
+ T3: PT3;
+ P, V, Q, E, D: LongInt;
+ Arr: Array[0..255] Of Real;
+ I, N, First, Cnt, T, Code, NPairs: Integer;
+ PCode: Array[0..255] Of Integer;
+ PName: Array[0..255] Of String[31];
+Begin
+ GetMem(T3, SizeOf(TT3));
+ FillChar(T3^, SizeOf(TT3), 0);
+ T3^.Num := Num;
+ T3^.FM[0] := 0.001; T3^.FM[3] := 0.001;
+ SaveSrc(S);
+ SrcMode := 0;
+ P := EnterObj(Num);
+ If P < 0 Then Begin FreeMem(T3, SizeOf(TT3)); RestoreSrc(S); Exit; End;
+ T3^.HasRes := DictFind(P, 'Resources') >= 0;
+ V := DictFind(P, 'FontMatrix');
+ If V >= 0 Then If ReadNums(V, Arr, 6) = 6 Then
+  For I := 0 To 5 Do T3^.FM[I] := Arr[I];
+ First := ValInt(DictFind(P, 'FirstChar'), 0);
+ V := DictFind(P, 'Widths');
+ If V >= 0 Then Begin
+  N := RefAt(V);
+  If N > 0 Then V := EnterObj(N);
+  If V >= 0 Then Begin
+   Cnt := ReadNums(V, Arr, 256);
+   For I := 0 To Cnt - 1 Do
+    If (First + I >= 0) And (First + I <= 255) Then T3^.Wd[First + I] := Arr[I];
+  End;
+  RestoreSrc(S);
+  P := EnterObj(Num);
+ End;
+ NPairs := 0;
+ V := DictFind(P, 'Encoding');
+ If V >= 0 Then Begin
+  N := RefAt(V);
+  If N > 0 Then V := EnterObj(N);
+  If V >= 0 Then Begin
+   D := DictFind(V, 'Differences');
+   If D >= 0 Then Begin
+    N := RefAt(D);
+    If N > 0 Then D := EnterObj(N);
+    If D >= 0 Then Begin
+     Q := D;
+     If NextTok(Q) = T_AB Then Begin
+      Code := 0;
+      While NPairs < 256 Do Begin
+       T := NextTok(Q);
+       If (T = T_AE) Or (T = T_EOF) Then Break;
+       If T = T_NUM Then Code := Round(TokR)
+       Else If T = T_NAME Then Begin
+        If (Code >= 0) And (Code <= 255) Then Begin
+         PCode[NPairs] := Code;
+         PName[NPairs] := TokS;
+         Inc(NPairs);
+        End;
+        Inc(Code);
+       End;
+      End;
+     End;
+    End;
+   End;
+  End;
+ End;
+ RestoreSrc(S);
+ For I := 0 To NPairs - 1 Do Begin
+  SrcMode := 0;
+  P := EnterObj(Num);
+  If P < 0 Then Break;
+  V := DictFind(P, 'CharProcs');
+  If V < 0 Then Break;
+  N := RefAt(V);
+  If N > 0 Then V := EnterObj(N);
+  If V < 0 Then Break;
+  E := DictFind(V, PName[I]);
+  If E >= 0 Then T3^.Proc[PCode[I]] := RefAt(E);
+ End;
+ RestoreSrc(S);
+ F.T3 := T3;
+End;
+
 Procedure LoadFont(Const Name: String; Num: Integer);
 Var
  S: TSrcState;
@@ -4687,6 +5163,12 @@ Begin
   F^.DW := 1000;
   Sub := ValName(DictFind(P, 'Subtype'));
   Base := ValName(DictFind(P, 'BaseFont'));
+  If Sub = 'Type3' Then Begin
+   RestoreSrc(S);
+   LoadType3(F^, Num);
+   Inc(NFonts);
+   Exit;
+  End;
   LB := Base;
   For I := 1 To Length(LB) Do If (LB[I] >= 'A') And (LB[I] <= 'Z') Then LB[I] := Chr(Ord(LB[I]) + 32);
   If (Length(LB) > 7) And (LB[7] = '+') Then Delete(LB, 1, 7);
@@ -4894,7 +5376,40 @@ Begin
   XObjs[NXObjs].IsForm := Sub = 'Form';
   Inc(NXObjs);
  End;
+ If NRes < 8 Then Begin ResNodes[NRes] := Node; Inc(NRes); End;
  LoadResources := True;
+End;
+
+{ Recherche d'une ressource (catégorie, nom) dans les ressources courantes.
+  Retourne la position de la valeur (source positionnée sur son objet) ou -1.
+  L'appelant encadre l'appel par SaveSrc / RestoreSrc. }
+Function FindRes(Const Cat, Name: String; Var Num: LongInt): LongInt;
+Var
+ I: Integer;
+ P, V, D, N: LongInt;
+Begin
+ FindRes := -1;
+ Num := 0;
+ For I := NRes - 1 DownTo 0 Do Begin
+  SrcMode := 0;
+  P := EnterObj(ResNodes[I]);
+  If P < 0 Then Continue;
+  V := DictFind(P, 'Resources');
+  If V < 0 Then Continue;
+  N := RefAt(V);
+  If N > 0 Then V := EnterObj(N);
+  If V < 0 Then Continue;
+  D := DictFind(V, Cat);
+  If D < 0 Then Continue;
+  N := RefAt(D);
+  If N > 0 Then D := EnterObj(N);
+  If D < 0 Then Continue;
+  V := DictFind(D, Name);
+  If V < 0 Then Continue;
+  N := RefAt(V);
+  If N > 0 Then Begin Num := N; V := EnterObj(N); End;
+  If V >= 0 Then Begin FindRes := V; Exit; End;
+ End;
 End;
 {$IFDEF FPC}
 Const
@@ -5457,6 +5972,8 @@ Var
  IPalN: Integer;
  IFlt: Array[0..3] Of String[24];
  INF, IPred, ICols, IClr: Integer;
+ IK, ICCCols: LongInt;
+ IBlackIs1, IByteAlign: Boolean;
 
 { Analyse d'un espace colorimétrique à la position V }
 Function ParseCS(V: LongInt; Depth: Integer; Var CS, Comps, PalBase: LongInt): Boolean;
@@ -5584,6 +6101,7 @@ Var
  T: Integer;
 Begin
  INF := 0; IPred := 1; ICols := 1; IClr := 1;
+ IK := 0; ICCCols := 1728; IBlackIs1 := False; IByteAlign := False;
  SrcMode := 0;
  V := DictFind(P, 'Filter');
  If V < 0 Then V := DictFind(P, 'F');
@@ -5616,6 +6134,12 @@ Begin
    IPred := ValInt(DictFind(DP, 'Predictor'), 1);
    ICols := ValInt(DictFind(DP, 'Columns'), 1);
    IClr := ValInt(DictFind(DP, 'Colors'), 1);
+   IK := ValInt(DictFind(DP, 'K'), 0);
+   ICCCols := ValInt(DictFind(DP, 'Columns'), 1728);
+   Q := DictFind(DP, 'BlackIs1');
+   If Q >= 0 Then If NextTok(Q) = T_OP Then IBlackIs1 := TokS = 'true';
+   Q := DictFind(DP, 'EncodedByteAlign');
+   If Q >= 0 Then If NextTok(Q) = T_OP Then IByteAlign := TokS = 'true';
   End;
  End;
 End;
@@ -5774,6 +6298,253 @@ Begin
 End;
 
  
+{ ---------------------------------------------------------------------- }
+{ Décodeur CCITT : Groupe 3 (1D et 2D) et Groupe 4                         }
+{ ---------------------------------------------------------------------- }
+
+Const
+ CCWhite: Array[0..63] Of String[8] = (
+  '00110101', '000111', '0111', '1000', '1011', '1100', '1110', '1111',
+  '10011', '10100', '00111', '01000', '001000', '000011', '110100', '110101',
+  '101010', '101011', '0100111', '0001100', '0001000', '0010111', '0000011', '0000100',
+  '0101000', '0101011', '0010011', '0100100', '0011000', '00000010', '00000011', '00011010',
+  '00011011', '00010010', '00010011', '00010100', '00010101', '00010110', '00010111', '00101000',
+  '00101001', '00101010', '00101011', '00101100', '00101101', '00000100', '00000101', '00001010',
+  '00001011', '01010010', '01010011', '01010100', '01010101', '00100100', '00100101', '01011000',
+  '01011001', '01011010', '01011011', '01001010', '01001011', '00110010', '00110011', '00110100');
+ CCWhiteMk: Array[1..27] Of String[9] = (
+  '11011', '10010', '010111', '0110111', '00110110', '00110111', '01100100', '01100101',
+  '01101000', '01100111', '011001100', '011001101', '011010010', '011010011', '011010100', '011010101',
+  '011010110', '011010111', '011011000', '011011001', '011011010', '011011011', '010011000', '010011001',
+  '010011010', '011000', '010011011');
+ CCBlack: Array[0..63] Of String[12] = (
+  '0000110111', '010', '11', '10', '011', '0011', '0010', '00011',
+  '000101', '000100', '0000100', '0000101', '0000111', '00000100', '00000111', '000011000',
+  '0000010111', '0000011000', '0000001000', '00001100111', '00001101000', '00001101100', '00000110111', '00000101000',
+  '00000010111', '00000011000', '000011001010', '000011001011', '000011001100', '000011001101', '000001101000', '000001101001',
+  '000001101010', '000001101011', '000011010010', '000011010011', '000011010100', '000011010101', '000011010110', '000011010111',
+  '000001101100', '000001101101', '000011011010', '000011011011', '000001010100', '000001010101', '000001010110', '000001010111',
+  '000001100100', '000001100101', '000001010010', '000001010011', '000000100100', '000000110111', '000000111000', '000000100111',
+  '000000101000', '000001011000', '000001011001', '000000101011', '000000101100', '000001011010', '000001100110', '000001100111');
+ CCBlackMk: Array[1..27] Of String[13] = (
+  '0000001111', '000011001000', '000011001001', '000001011011', '000000110011', '000000110100', '000000110101', '0000001101100',
+  '0000001101101', '0000001001010', '0000001001011', '0000001001100', '0000001001101', '0000001110010', '0000001110011', '0000001110100',
+  '0000001110101', '0000001110110', '0000001110111', '0000001010010', '0000001010011', '0000001010100', '0000001010101', '0000001011010',
+  '0000001011011', '0000001100100', '0000001100101');
+ CCExt: Array[0..12] Of String[12] = (
+  '00000001000', '00000001100', '00000001101', '000000010010', '000000010011', '000000010100', '000000010101',
+  '000000010110', '000000010111', '000000011100', '000000011101', '000000011110', '000000011111');
+
+Type
+ TCCEnt = Record
+  Run: SmallInt;
+  Len: Byte;
+ End;
+
+Var
+ CCTab: Array[0..1, 0..8191] Of TCCEnt;
+ CC2Mode: Array[0..127] Of ShortInt;
+ CC2Len: Array[0..127] Of Byte;
+ CCReady: Boolean;
+ CCSrc: PBigBytes;
+ CCLen: LongInt;
+ CCBit: LongInt;
+
+Procedure CCAdd(Col: Integer; Const Bits: String; Run: Integer);
+Var
+ L, I, V, Base, N: Integer;
+Begin
+ L := Length(Bits);
+ V := 0;
+ For I := 1 To L Do V := V * 2 + (Ord(Bits[I]) - 48);
+ Base := V Shl (13 - L);
+ For N := 0 To (1 Shl (13 - L)) - 1 Do Begin
+  CCTab[Col, Base + N].Run := Run;
+  CCTab[Col, Base + N].Len := L;
+ End;
+End;
+
+Procedure CC2Add(Const Bits: String; Mode: Integer);
+Var
+ L, I, V, Base, N: Integer;
+Begin
+ L := Length(Bits);
+ V := 0;
+ For I := 1 To L Do V := V * 2 + (Ord(Bits[I]) - 48);
+ Base := V Shl (7 - L);
+ For N := 0 To (1 Shl (7 - L)) - 1 Do Begin
+  CC2Mode[Base + N] := Mode;
+  CC2Len[Base + N] := L;
+ End;
+End;
+
+Procedure CCInit;
+Var
+ I: Integer;
+Begin
+ If CCReady Then Exit;
+ FillChar(CCTab, SizeOf(CCTab), 0);
+ FillChar(CC2Len, SizeOf(CC2Len), 0);
+ For I := 0 To 63 Do Begin CCAdd(0, CCWhite[I], I); CCAdd(1, CCBlack[I], I); End;
+ For I := 1 To 27 Do Begin CCAdd(0, CCWhiteMk[I], I * 64); CCAdd(1, CCBlackMk[I], I * 64); End;
+ For I := 0 To 12 Do Begin CCAdd(0, CCExt[I], 1792 + I * 64); CCAdd(1, CCExt[I], 1792 + I * 64); End;
+ { modes 2D : 0 passage, 1 horizontal, 2..8 vertical (delta = mode - 5) }
+ CC2Add('0001', 0); CC2Add('001', 1);
+ CC2Add('0000010', 2); CC2Add('000010', 3); CC2Add('010', 4); CC2Add('1', 5);
+ CC2Add('011', 6); CC2Add('000011', 7); CC2Add('0000011', 8);
+ CCReady := True;
+End;
+
+Function CCPeek(N: Integer): LongInt;
+Var
+ B: LongInt;
+ W: Int64;
+ Sh: Integer;
+ Function G(P: LongInt): Int64;
+ Begin
+  If P < CCLen Then G := CCSrc^[P] Else G := 0;
+ End;
+Begin
+ B := CCBit Shr 3;
+ Sh := CCBit And 7;
+ W := (G(B) Shl 24) Or (G(B + 1) Shl 16) Or (G(B + 2) Shl 8) Or G(B + 3);
+ CCPeek := (W Shr (32 - Sh - N)) And ((Int64(1) Shl N) - 1);
+End;
+
+{ Longueur totale d'une course (0 ou 1 : blanc ou noir), -1 si code invalide }
+Function CCRun(Col: Integer): Integer;
+Var
+ E: TCCEnt;
+ Tot: Integer;
+Begin
+ Tot := 0;
+ Repeat
+  E := CCTab[Col, CCPeek(13)];
+  If E.Len = 0 Then Begin CCRun := -1; Exit; End;
+  Inc(CCBit, E.Len);
+  Tot := Tot + E.Run;
+ Until E.Run < 64;
+ CCRun := Tot;
+End;
+
+{ Décode CCITT vers Dst (1 bit par pixel, lignes alignées sur l'octet).
+  Blanc = 1 sauf si BlackIs1. Retourne le nombre de lignes décodées. }
+Function CCITTDecode(Src: PBigBytes; SLen: LongInt; Cols, Rows, K: LongInt; BlackIs1, ByteAlign: Boolean;
+                     Dst: PBigBytes): LongInt;
+Var
+ RowBytes, Rd, A0, A1, A2, B1, B2, N, Bj, J, X, Xs, Xe, M: LongInt;
+ Col: Integer;
+ Is2D, Err: Boolean;
+ Ref, Cur, Tmp: ^LongInt;
+ RefA, CurA: PBigBytes;
+ R1, R2: Integer;
+ Row: PBigBytes;
+ Function RefAt(I: LongInt): LongInt;
+ Begin
+  RefAt := PLongInt(PByte(RefA) + I * 4)^;
+ End;
+ Procedure CurSet(I, V: LongInt);
+ Begin
+  PLongInt(PByte(CurA) + I * 4)^ := V;
+ End;
+Begin
+ CCInit;
+ CCSrc := Src; CCLen := SLen; CCBit := 0;
+ CCITTDecode := 0;
+ If (Cols < 1) Or (Cols > 65000) Or (Rows < 1) Then Exit;
+ RowBytes := (Cols + 7) Div 8;
+ If BlackIs1 Then FillChar(Dst^, RowBytes * Rows, 0) Else FillChar(Dst^, RowBytes * Rows, 255);
+ GetMem(RefA, (Cols + 8) * 4);
+ GetMem(CurA, (Cols + 8) * 4);
+ For J := 0 To Cols + 7 Do PLongInt(PByte(RefA) + J * 4)^ := Cols;
+ Rd := 0;
+ While (Rd < Rows) And (CCBit < SLen * 8) Do Begin
+  If ByteAlign Then CCBit := (CCBit + 7) And (Not 7);
+  Is2D := K < 0;
+  If K >= 0 Then Begin
+   { remplissage et EOL éventuels }
+   While (CCBit < SLen * 8) And (CCPeek(12) <> 1) And (CCPeek(11) = 0) Do Inc(CCBit);
+   If CCPeek(12) = 1 Then Begin
+    Inc(CCBit, 12);
+    If K > 0 Then Begin Is2D := CCPeek(1) = 0; Inc(CCBit); End;
+    If CCPeek(12) = 1 Then Break;   { RTC }
+   End
+   Else If K > 0 Then Begin Is2D := CCPeek(1) = 0; Inc(CCBit); End;
+  End
+  Else If CCPeek(12) = 1 Then Break;   { EOFB }
+  Err := False;
+  N := 0;
+  If Not Is2D Then Begin
+   A0 := 0; Col := 0;
+   While A0 < Cols Do Begin
+    R1 := CCRun(Col);
+    If R1 < 0 Then Begin Err := True; Break; End;
+    A0 := A0 + R1;
+    If A0 > Cols Then A0 := Cols;
+    CurSet(N, A0); Inc(N);
+    Col := 1 - Col;
+   End;
+  End
+  Else Begin
+   A0 := -1; Col := 0; Bj := 0;
+   While A0 < Cols Do Begin
+    If Bj >= 2 Then Dec(Bj, 2) Else Bj := 0;
+    While (RefAt(Bj) <= A0) And (RefAt(Bj) < Cols) Do Inc(Bj);
+    If (Bj And 1) <> Col Then Inc(Bj);
+    B1 := RefAt(Bj); B2 := RefAt(Bj + 1);
+    M := CCPeek(7);
+    If CC2Len[M] = 0 Then Begin Err := True; Break; End;
+    Inc(CCBit, CC2Len[M]);
+    Case CC2Mode[M] Of
+     0: A0 := B2;
+     1: Begin
+      R1 := CCRun(Col);
+      If R1 >= 0 Then R2 := CCRun(1 - Col) Else R2 := -1;
+      If (R1 < 0) Or (R2 < 0) Then Begin Err := True; Break; End;
+      If A0 < 0 Then A0 := 0;
+      A1 := A0 + R1; If A1 > Cols Then A1 := Cols;
+      A2 := A1 + R2; If A2 > Cols Then A2 := Cols;
+      CurSet(N, A1); Inc(N); CurSet(N, A2); Inc(N);
+      A0 := A2;
+     End;
+    Else Begin
+      A1 := B1 + (CC2Mode[M] - 5);
+      If A1 < 0 Then A1 := 0;
+      If A1 > Cols Then A1 := Cols;
+      CurSet(N, A1); Inc(N);
+      A0 := A1;
+      Col := 1 - Col;
+     End;
+    End;
+    If N > Cols + 2 Then Begin Err := True; Break; End;
+   End;
+  End;
+  { pavage de la ligne }
+  For J := 0 To 3 Do CurSet(N + J, Cols);
+  Row := PBigBytes(PByte(Dst) + Rd * RowBytes);
+  J := 0;
+  While J < N Do Begin
+   Xs := PLongInt(PByte(CurA) + J * 4)^;
+   If J + 1 < N Then Xe := PLongInt(PByte(CurA) + (J + 1) * 4)^ Else Xe := Cols;
+   If Xe > Cols Then Xe := Cols;
+   For X := Xs To Xe - 1 Do
+    If BlackIs1 Then Row^[X Shr 3] := Row^[X Shr 3] Or (128 Shr (X And 7))
+    Else Row^[X Shr 3] := Row^[X Shr 3] And (Not (128 Shr (X And 7)));
+   Inc(J, 2);
+  End;
+  Inc(Rd);
+  If Err Then Begin
+   If K < 0 Then Break;
+   { Groupe 3 : se resynchroniser sur le prochain EOL }
+   While (CCBit < SLen * 8) And (CCPeek(12) <> 1) Do Inc(CCBit);
+  End;
+  Tmp := Pointer(RefA); RefA := CurA; CurA := PBigBytes(Tmp);
+ End;
+ FreeMem(RefA, (Cols + 8) * 4);
+ FreeMem(CurA, (Cols + 8) * 4);
+ CCITTDecode := Rd;
+End;
+
 Function ImportImageObj(Num: Integer; AsSM: Boolean): Integer; Forward;
 Function FinishImage(W, H, Bpc, CS, Comps, PalBase: LongInt; IsMask: Boolean; Const DecStr: String;
                      Raw: Pointer; RawLen: LongInt; Num: Integer; AsSM: Boolean; SMNum: Integer): Integer;
@@ -5819,6 +6590,17 @@ Begin
    If (Not Ok) Or (OutLen < 1) Then Begin FreeMem(Tmp, Exp + 64); Cur := Nil; Owned := False; Unsup := True; Break; End;
    Cur := Tmp; CurLen := Exp; Owned := True;
    { la taille libérée plus tard : on garde CurLen = Exp (+64 à la libération) }
+  End
+  Else If (Nm = 'CCITTFaxDecode') Or (Nm = 'CCF') Then Begin
+   RowBytes := (ICCCols + 7) Div 8;
+   Exp := RowBytes * H;
+   If (ICCCols <> W) Or (Exp > IMGMAXBYTES) Or (Exp < 1) Then Begin Unsup := True; Break; End;
+   GetMem(Tmp, Exp + 64);
+   CCITTDecode(PBigBytes(Cur), CurLen, ICCCols, H, IK, IBlackIs1, IByteAlign, Tmp);
+   If Owned Then FreeMem(Cur, CurLen + 64);
+   Cur := Tmp; CurLen := Exp; Owned := True;
+   If CS = 0 Then Begin CS := 1; Comps := 1; End;
+   Bpc := 1;
   End
   Else If (Nm = 'ASCII85Decode') Or (Nm = 'A85') Or (Nm = 'ASCIIHexDecode') Or (Nm = 'AHx') Then Begin
    GetMem(Tmp, CurLen + 64);
@@ -6048,6 +6830,7 @@ Begin
  If BP >= 0 Then Bpc := ValInt(BP, 8);
  If IsMask Then Bpc := 1;
  INF := 0; IPred := 1; ICols := 1; IClr := 1;
+ IK := 0; ICCCols := 1728; IBlackIs1 := False; IByteAlign := False;
  If FP >= 0 Then Begin
   Q := FP;
   T := NextTok(Q);
@@ -6073,6 +6856,12 @@ Begin
    IPred := ValInt(DictFind(Pos0, 'Predictor'), 1);
    ICols := ValInt(DictFind(Pos0, 'Columns'), 1);
    IClr := ValInt(DictFind(Pos0, 'Colors'), 1);
+   IK := ValInt(DictFind(Pos0, 'K'), 0);
+   ICCCols := ValInt(DictFind(Pos0, 'Columns'), 1728);
+   Q := DictFind(Pos0, 'BlackIs1');
+   If Q >= 0 Then If NextTok(Q) = T_OP Then IBlackIs1 := TokS = 'true';
+   Q := DictFind(Pos0, 'EncodedByteAlign');
+   If Q >= 0 Then If NextTok(Q) = T_OP Then IByteAlign := TokS = 'true';
   End;
  End;
  { fin des données }
@@ -6172,9 +6961,33 @@ Type
   LW: Real;
   Tc, Tw, Th, TL, Ts, TSize: Real;
   TFont, TMode: Integer;
+  ClipOn: Boolean;
+  CX1, CY1, CX2, CY2: LongInt;
+  ClipPoly: Integer;        { 0 : aucun, sinon indice + 1 d'un polygone de découpe }
+  FillA, StrokeA: Real;
+  Blend: Integer;           { 0 normal, 1 produit (Multiply) }
+  CSPat: Boolean;           { espace colorimétrique de remplissage : Pattern }
+  FillPat: LongInt;         { n° d'objet du motif de remplissage (0 : aucun) }
  End;
 
+Const
+ {$IFDEF FPC}
+ CPMAX = 200;
+ CPPTS = 96;
+ CLIPBUF = 3300;
+ {$ELSE}
+ CPMAX = 8;
+ CPPTS = 24;
+ CLIPBUF = 400;
+ {$ENDIF}
+
 Var
+ GDepth: Integer;
+ CPX, CPY: Array[0..CPMAX - 1, 0..CPPTS - 1] Of LongInt;
+ CPN: Array[0..CPMAX - 1] Of Integer;
+ NCP: Integer;
+ TpX, TpY, CcX, CcY: Array[0..CLIPBUF - 1] Of LongInt;
+ ClipPend: Boolean;
  GS: TGS;
  GStack: Array[0..GSMAX-1] Of TGS;
  GSP: Integer;
@@ -6347,12 +7160,439 @@ Begin
  StrokeW := W;
 End;
 
+{ ---------------------------------------------------------------------- }
+{ Découpe rectangulaire, dégradés, motifs                                  }
+{ ---------------------------------------------------------------------- }
+
+Procedure ClipToBox(A, B, C, D: LongInt);
+Begin
+ If Not GS.ClipOn Then Begin
+  GS.ClipOn := True;
+  GS.CX1 := A; GS.CY1 := B; GS.CX2 := C; GS.CY2 := D;
+ End
+ Else Begin
+  If A > GS.CX1 Then GS.CX1 := A;
+  If B > GS.CY1 Then GS.CY1 := B;
+  If C < GS.CX2 Then GS.CX2 := C;
+  If D < GS.CY2 Then GS.CY2 := D;
+ End;
+End;
+
+Function OutsideClip(X1, Y1, X2, Y2: LongInt): Boolean;
+Begin
+ OutsideClip := GS.ClipOn And ((GS.CX2 < GS.CX1) Or (GS.CY2 < GS.CY1) Or
+                (X2 < GS.CX1) Or (X1 > GS.CX2) Or (Y2 < GS.CY1) Or (Y1 > GS.CY2));
+End;
+
+Function InsideClip(X1, Y1, X2, Y2: LongInt): Boolean;
+Begin
+ InsideClip := (Not GS.ClipOn) Or ((X1 >= GS.CX1) And (X2 <= GS.CX2) And (Y1 >= GS.CY1) And (Y2 <= GS.CY2));
+End;
+
+Procedure ClampBox(Var X1, Y1, X2, Y2: LongInt);
+Begin
+ If Not GS.ClipOn Then Exit;
+ If X1 < GS.CX1 Then X1 := GS.CX1;
+ If Y1 < GS.CY1 Then Y1 := GS.CY1;
+ If X2 > GS.CX2 Then X2 := GS.CX2;
+ If Y2 > GS.CY2 Then Y2 := GS.CY2;
+End;
+
+{ Découpe du segment par la boîte de découpe (Liang-Barsky) }
+Function ClipLineBox(Var X1, Y1, X2, Y2: LongInt): Boolean;
+Var
+ T0, T1, Dx, Dy: Real;
+ Ax, Ay: LongInt;
+ Function Edge(P, Q: Real): Boolean;
+ Var
+  R: Real;
+ Begin
+  Edge := True;
+  If P = 0 Then Begin Edge := Q >= 0; Exit; End;
+  R := Q / P;
+  If P < 0 Then Begin
+   If R > T1 Then Begin Edge := False; Exit; End;
+   If R > T0 Then T0 := R;
+  End
+  Else Begin
+   If R < T0 Then Begin Edge := False; Exit; End;
+   If R < T1 Then T1 := R;
+  End;
+ End;
+Begin
+ ClipLineBox := True;
+ If Not GS.ClipOn Then Exit;
+ T0 := 0; T1 := 1;
+ Dx := X2 - X1; Dy := Y2 - Y1;
+ If Not (Edge(-Dx, X1 - GS.CX1) And Edge(Dx, GS.CX2 - X1) And Edge(-Dy, Y1 - GS.CY1) And Edge(Dy, GS.CY2 - Y1)) Then Begin
+  ClipLineBox := False;
+  Exit;
+ End;
+ Ax := X1; Ay := Y1;
+ X1 := Ax + Round(T0 * Dx); Y1 := Ay + Round(T0 * Dy);
+ X2 := Ax + Round(T1 * Dx); Y2 := Ay + Round(T1 * Dy);
+End;
+
+{ Découpe le polygone TpX/TpY (N points) par un rectangle (Sutherland-Hodgman) }
+Function ClipPolyBox(N: Integer; B1, B2, B3, B4: LongInt): Integer;
+ Function Inside(Side: Integer; X, Y: LongInt): Boolean;
+ Begin
+  Case Side Of
+   0: Inside := X >= B1;
+   1: Inside := X <= B3;
+   2: Inside := Y >= B2;
+  Else Inside := Y <= B4;
+  End;
+ End;
+ Procedure Cross(Side: Integer; Ax, Ay, Bx, By: LongInt; Var Rx, Ry: LongInt);
+ Var
+  T: Real;
+ Begin
+  Case Side Of
+   0: Begin Rx := B1; If Bx = Ax Then Ry := Ay Else Ry := Ay + Round((B1 - Ax) * (By - Ay) / (Bx - Ax)); End;
+   1: Begin Rx := B3; If Bx = Ax Then Ry := Ay Else Ry := Ay + Round((B3 - Ax) * (By - Ay) / (Bx - Ax)); End;
+   2: Begin Ry := B2; If By = Ay Then Rx := Ax Else Rx := Ax + Round((B2 - Ay) * (Bx - Ax) / (By - Ay)); End;
+  Else Begin Ry := B4; If By = Ay Then Rx := Ax Else Rx := Ax + Round((B4 - Ay) * (Bx - Ax) / (By - Ay)); End;
+  End;
+ End;
+Var
+ Side, I, M, Pv: Integer;
+ Ax, Ay, Bx, By, Rx, Ry: LongInt;
+ InA, InB: Boolean;
+Begin
+ For Side := 0 To 3 Do Begin
+  If N < 1 Then Break;
+  M := 0;
+  For I := 0 To N - 1 Do Begin
+   Pv := I - 1; If Pv < 0 Then Pv := N - 1;
+   Ax := TpX[Pv]; Ay := TpY[Pv]; Bx := TpX[I]; By := TpY[I];
+   InA := Inside(Side, Ax, Ay); InB := Inside(Side, Bx, By);
+   If InB Then Begin
+    If (Not InA) And (M < CLIPBUF - 2) Then Begin
+     Cross(Side, Ax, Ay, Bx, By, Rx, Ry);
+     CcX[M] := Rx; CcY[M] := Ry; Inc(M);
+    End;
+    If M < CLIPBUF - 1 Then Begin CcX[M] := Bx; CcY[M] := By; Inc(M); End;
+   End
+   Else If InA And (M < CLIPBUF - 1) Then Begin
+    Cross(Side, Ax, Ay, Bx, By, Rx, Ry);
+    CcX[M] := Rx; CcY[M] := Ry; Inc(M);
+   End;
+  End;
+  For I := 0 To M - 1 Do Begin TpX[I] := CcX[I]; TpY[I] := CcY[I]; End;
+  N := M;
+ End;
+ ClipPolyBox := N;
+End;
+
+{ ---- Fonctions PDF de types 2 et 3 ---- }
+Function EvalFn(P: LongInt; T: Real; Var Out: Array Of Real; Depth: Integer): Integer;
+Var
+ S: TSrcState;
+ N, I, K, NO, N2: Integer;
+ Q, Pos0: LongInt;
+ Tok, Typ: Integer;
+ C0, C1, Bn, En, Dm: Array[0..15] Of Real;
+ FPos: Array[0..15] Of LongInt;
+ NC0, NC1, NB, NE, NFn: Integer;
+ Ex, Lo, Hi, E0, E1, R, T2: Real;
+ Sub: Array[0..7] Of Real;
+Begin
+ EvalFn := 0;
+ If (P < 0) Or (Depth > 4) Then Exit;
+ SaveSrc(S);
+ N := RefAt(P);
+ If N > 0 Then P := EnterObj(N);
+ If P < 0 Then Begin RestoreSrc(S); Exit; End;
+ Q := P;
+ Tok := NextTok(Q);
+ If Tok = T_AB Then Begin
+  K := 0;
+  While K <= High(Out) Do Begin
+   Pos0 := Q;
+   Tok := NextTok(Q);
+   If (Tok = T_AE) Or (Tok = T_EOF) Then Break;
+   N2 := EvalFn(Pos0, T, Sub, Depth + 1);
+   If N2 > 0 Then Out[K] := Sub[0] Else Out[K] := 0;
+   Inc(K);
+   Q := Pos0;
+   SkipValue(Q);
+  End;
+  RestoreSrc(S);
+  EvalFn := K;
+  Exit;
+ End;
+ If Tok <> T_DB Then Begin RestoreSrc(S); Exit; End;
+ Typ := ValInt(DictFind(P, 'FunctionType'), -1);
+ NC0 := 0; NB := 0; NE := 0;
+ Dm[0] := 0; Dm[1] := 1;
+ ReadNums(DictFind(P, 'Domain'), Dm, 2);
+ If T < Dm[0] Then T := Dm[0];
+ If T > Dm[1] Then T := Dm[1];
+ If Typ = 2 Then Begin
+  NC0 := ReadNums(DictFind(P, 'C0'), C0, 16);
+  If NC0 < 1 Then Begin C0[0] := 0; NC0 := 1; End;
+  NC1 := ReadNums(DictFind(P, 'C1'), C1, 16);
+  If NC1 < 1 Then Begin C1[0] := 1; NC1 := 1; End;
+  Ex := ValNum(DictFind(P, 'N'), 1);
+  If T <= 0 Then Begin If Ex = 0 Then R := 1 Else R := 0; End
+  Else R := Exp(Ex * Ln(T));
+  NO := NC0;
+  If NC1 < NO Then NO := NC1;
+  If NO > High(Out) + 1 Then NO := High(Out) + 1;
+  For I := 0 To NO - 1 Do Out[I] := C0[I] + R * (C1[I] - C0[I]);
+  RestoreSrc(S);
+  EvalFn := NO;
+  Exit;
+ End;
+ If Typ = 3 Then Begin
+  NFn := 0;
+  Q := DictFind(P, 'Functions');
+  If Q >= 0 Then Begin
+   If NextTok(Q) = T_AB Then
+    While NFn < 16 Do Begin
+     Pos0 := Q;
+     Tok := NextTok(Q);
+     If (Tok = T_AE) Or (Tok = T_EOF) Then Break;
+     FPos[NFn] := Pos0;
+     Inc(NFn);
+     Q := Pos0;
+     SkipValue(Q);
+    End;
+  End;
+  NB := ReadNums(DictFind(P, 'Bounds'), Bn, 15);
+  NE := ReadNums(DictFind(P, 'Encode'), En, 16);
+  If NFn < 1 Then Begin RestoreSrc(S); Exit; End;
+  K := 0;
+  While (K < NB) And (T >= Bn[K]) Do Inc(K);
+  If K >= NFn Then K := NFn - 1;
+  If K = 0 Then Lo := Dm[0] Else Lo := Bn[K - 1];
+  If (K >= NB) Or (K = NFn - 1) Then Hi := Dm[1] Else Hi := Bn[K];
+  E0 := 0; E1 := 1;
+  If 2 * K + 1 < NE Then Begin E0 := En[2 * K]; E1 := En[2 * K + 1]; End;
+  If Hi = Lo Then T2 := E0 Else T2 := E0 + (T - Lo) * (E1 - E0) / (Hi - Lo);
+  N2 := EvalFn(FPos[K], T2, Out, Depth + 1);
+  RestoreSrc(S);
+  EvalFn := N2;
+  Exit;
+ End;
+ RestoreSrc(S);
+End;
+
+Type
+ TGAbs = Record
+  Typ: Integer;
+  X0, Y0, X1, Y1, R0, R1: Real;
+  NSt: Integer;
+  Pos: Array[0..8] Of Integer;
+  R, G, B: Array[0..8] Of Integer;
+ End;
+
+Var
+ GA: TGAbs;
+
+{ Dégradé (types 2 et 3) : coordonnées converties dans l'espace page par la matrice M }
+Function ShadingToAbs(ShPos: LongInt; Const M: TMat): Boolean;
+Var
+ S: TSrcState;
+ ShT, K, NO, NC, I: Integer;
+ Co: Array[0..5] Of Real;
+ Dm: Array[0..1] Of Real;
+ Out: Array[0..7] Of Real;
+ FnPos, Vp: LongInt;
+ CS, Comps, PalBase: LongInt;
+ T, V0, V1, V2, V3, Sc: Real;
+ R, G, B: LongInt;
+ Function Cl(V: Real): LongInt;
+ Begin
+  If V < 0 Then V := 0;
+  If V > 1 Then V := 1;
+  Cl := Round(V * 255);
+ End;
+ Function MX(X, Y: Real): Real;
+ Begin
+  MX := PgX(M[0] * X + M[2] * Y + M[4]);
+ End;
+ Function MY(X, Y: Real): Real;
+ Begin
+  MY := PgY(M[1] * X + M[3] * Y + M[5]);
+ End;
+Begin
+ ShadingToAbs := False;
+ If ShPos < 0 Then Exit;
+ SaveSrc(S);
+ ShT := ValInt(DictFind(ShPos, 'ShadingType'), 0);
+ If (ShT <> 2) And (ShT <> 3) Then Begin RestoreSrc(S); Exit; End;
+ NC := ReadNums(DictFind(ShPos, 'Coords'), Co, 6);
+ If ((ShT = 2) And (NC < 4)) Or ((ShT = 3) And (NC < 6)) Then Begin RestoreSrc(S); Exit; End;
+ Dm[0] := 0; Dm[1] := 1;
+ ReadNums(DictFind(ShPos, 'Domain'), Dm, 2);
+ FnPos := DictFind(ShPos, 'Function');
+ If FnPos < 0 Then Begin RestoreSrc(S); Exit; End;
+ CS := 0; Comps := 0; PalBase := 0;
+ Vp := DictFind(ShPos, 'ColorSpace');
+ If Not ParseCS(Vp, 0, CS, Comps, PalBase) Then CS := 0;
+ { ParseCS a pu modifier la source : replacer l'objet du dégradé }
+ RestoreSrc(S);
+ GA.Typ := ShT - 2;
+ If ShT = 2 Then Begin
+  GA.X0 := MX(Co[0], Co[1]); GA.Y0 := MY(Co[0], Co[1]);
+  GA.X1 := MX(Co[2], Co[3]); GA.Y1 := MY(Co[2], Co[3]);
+  GA.R0 := 0; GA.R1 := 0;
+ End
+ Else Begin
+  Sc := Sqrt(Abs(M[0] * M[3] - M[1] * M[2]));
+  GA.X0 := MX(Co[0], Co[1]); GA.Y0 := MY(Co[0], Co[1]); GA.R0 := Co[2] * Sc;
+  GA.X1 := MX(Co[3], Co[4]); GA.Y1 := MY(Co[3], Co[4]); GA.R1 := Co[5] * Sc;
+ End;
+ GA.NSt := 0;
+ For K := 0 To 8 Do Begin
+  T := Dm[0] + (Dm[1] - Dm[0]) * K / 8;
+  NO := EvalFn(FnPos, T, Out, 0);
+  If NO < 1 Then Exit;
+  If NO = 1 Then Begin
+   If CS = 1 Then Begin R := Cl(Out[0]); G := R; B := R; End
+   Else Begin R := Cl(1 - Out[0]); G := R; B := R; End;
+  End
+  Else If NO = 3 Then Begin R := Cl(Out[0]); G := Cl(Out[1]); B := Cl(Out[2]); End
+  Else If NO >= 4 Then Begin
+   V0 := Out[0]; V1 := Out[1]; V2 := Out[2]; V3 := Out[3];
+   R := Cl((1 - V0) * (1 - V3)); G := Cl((1 - V1) * (1 - V3)); B := Cl((1 - V2) * (1 - V3));
+  End
+  Else Exit;
+  GA.Pos[K] := K * 255 Div 8;
+  GA.R[K] := R; GA.G[K] := G; GA.B[K] := B;
+  Inc(GA.NSt);
+ End;
+ ShadingToAbs := True;
+End;
+
+Function GradTxt(BX1, BY1, BX2, BY2: LongInt): String;
+Var
+ W, H, Mx: Real;
+ S: String;
+ K: Integer;
+Begin
+ W := BX2 - BX1; If W < 1 Then W := 1;
+ H := BY2 - BY1; If H < 1 Then H := 1;
+ If W > H Then Mx := W Else Mx := H;
+ S := Chr(GA.Typ) + GdPutInt16(Round((GA.X0 - BX1) / W * 1024)) + GdPutInt16(Round((GA.Y0 - BY1) / H * 1024)) +
+      GdPutInt16(Round((GA.X1 - BX1) / W * 1024)) + GdPutInt16(Round((GA.Y1 - BY1) / H * 1024)) +
+      GdPutInt16(Round(GA.R0 / Mx * 1024)) + GdPutInt16(Round(GA.R1 / Mx * 1024)) + Chr(GA.NSt);
+ For K := 0 To GA.NSt - 1 Do
+  S := S + Chr(GA.Pos[K]) + Chr(GA.R[K]) + Chr(GA.G[K]) + Chr(GA.B[K]);
+ GradTxt := S;
+End;
+
+{ Crée un objet dégradé : polygone TpX/TpY de N points, ou boîte (N = 0) }
+Procedure EmitGradient(N: Integer; BX1, BY1, BX2, BY2: LongInt);
+Var
+ I, Idx, Pool, Step: Integer;
+ MnX, MnY, MxX, MxY: LongInt;
+Begin
+ If ImpFull Then Exit;
+ If N >= 3 Then Begin
+  Step := 1;
+  If N > 1500 Then Begin
+   Step := (N + 1499) Div 1500;
+   For I := 0 To N Div Step - 1 Do Begin TpX[I] := TpX[I * Step]; TpY[I] := TpY[I * Step]; End;
+   N := N Div Step;
+  End;
+  MnX := TpX[0]; MxX := MnX; MnY := TpY[0]; MxY := MnY;
+  For I := 1 To N - 1 Do Begin
+   If TpX[I] < MnX Then MnX := TpX[I];
+   If TpX[I] > MxX Then MxX := TpX[I];
+   If TpY[I] < MnY Then MnY := TpY[I];
+   If TpY[I] > MxY Then MxY := TpY[I];
+  End;
+  If OutsideClip(MnX, MnY, MxX, MxY) Then Exit;
+  Pool := PoolAlloc(N);
+  If Pool < 0 Then Begin ImpFull := True; LoadNotice := 'Document tronqué : mémoire des tracés pleine.'; Exit; End;
+  Idx := NewImpObj(K_GRAD);
+  If Idx < 0 Then Exit;
+  For I := 0 To N - 1 Do Begin
+   PoolXP(Pool + I)^ := TpX[I];
+   PoolYP(Pool + I)^ := TpY[I];
+  End;
+  With ObjP(Idx)^ Do Begin
+   P0 := Pool; PN := N;
+   X1 := MnX; Y1 := MnY; X2 := MxX; Y2 := MxY;
+   Txt := GradTxt(MnX, MnY, MxX, MxY);
+   Rgb := RGBOf(GA.R[0], GA.G[0], GA.B[0]);
+   Rgb2 := RGBOf(GA.R[GA.NSt - 1], GA.G[GA.NSt - 1], GA.B[GA.NSt - 1]);
+  End;
+ End
+ Else Begin
+  If OutsideClip(BX1, BY1, BX2, BY2) Then Exit;
+  ClampBox(BX1, BY1, BX2, BY2);
+  If (BX2 < BX1) Or (BY2 < BY1) Then Exit;
+  Idx := NewImpObj(K_GRAD);
+  If Idx < 0 Then Exit;
+  With ObjP(Idx)^ Do Begin
+   X1 := BX1; Y1 := BY1; X2 := BX2; Y2 := BY2;
+   Txt := GradTxt(BX1, BY1, BX2, BY2);
+   Rgb := RGBOf(GA.R[0], GA.G[0], GA.B[0]);
+   Rgb2 := RGBOf(GA.R[GA.NSt - 1], GA.G[GA.NSt - 1], GA.B[GA.NSt - 1]);
+  End;
+ End;
+End;
+
+Procedure PaintTiling(Num: LongInt; BX1, BY1, BX2, BY2: LongInt); Forward;
+
+{ Remplit avec le motif courant : polygone TpX/TpY (N points) ou boîte (N = 0) }
+Procedure PatternFill(N: Integer; BX1, BY1, BX2, BY2: LongInt);
+Var
+ S: TSrcState;
+ P, V: LongInt;
+ PT, I, ShNum: Integer;
+ Mat: TMat;
+ Arr: Array[0..5] Of Real;
+ Ok: Boolean;
+Begin
+ SaveSrc(S);
+ SrcMode := 0;
+ P := EnterObj(GS.FillPat);
+ If P < 0 Then Begin RestoreSrc(S); Exit; End;
+ PT := ValInt(DictFind(P, 'PatternType'), 0);
+ If PT = 2 Then Begin
+  MatIdent(Mat);
+  V := DictFind(P, 'Matrix');
+  If V >= 0 Then If ReadNums(V, Arr, 6) = 6 Then
+   For I := 0 To 5 Do Mat[I] := Arr[I];
+  Ok := False;
+  V := DictFind(P, 'Shading');
+  If V >= 0 Then Begin
+   ShNum := RefAt(V);
+   If ShNum > 0 Then V := EnterObj(ShNum);
+   If V >= 0 Then Ok := ShadingToAbs(V, Mat);
+  End;
+  RestoreSrc(S);
+  If Ok Then EmitGradient(N, BX1, BY1, BX2, BY2);
+ End
+ Else Begin
+  RestoreSrc(S);
+  If PT = 1 Then PaintTiling(GS.FillPat, BX1, BY1, BX2, BY2);
+ End;
+End;
+
+Function AlphaByte(A: Real): Integer;
+Var
+ V: Integer;
+Begin
+ V := Round(A * 255);
+ If V < 1 Then V := 1;
+ If V > 254 Then V := 0;
+ AlphaByte := V;
+End;
+
 Procedure EmitPath(DoFill, DoStroke, Close: Boolean);
 Var
- K, S, E, N, I, Idx, Pool: Integer;
+ K, S, E, N, I, Idx, Pool, Step: Integer;
  MnX, MnY, MxX, MxY: Real;
- IsRect, Closed: Boolean;
+ IsRect, Closed, Fl, PatFill: Boolean;
  Tol: Real;
+ BA, BB, BC, BD, LX1, LY1, LX2, LY2: LongInt;
+ RK: Integer;
 Begin
  For K := 0 To NSub - 1 Do Begin
   If ImpFull Then Break;
@@ -6368,6 +7608,8 @@ Begin
    If PathY[I] < MnY Then MnY := PathY[I];
    If PathY[I] > MxY Then MxY := PathY[I];
   End;
+  BA := PgX(MnX); BC := PgX(MxX); BB := PgY(MxY); BD := PgY(MnY);
+  If OutsideClip(BA, BB, BC, BD) Then Continue;
   IsRect := False;
   If SubRect[K] And (N = 4) Then Begin
    Tol := 0.02 * (MxX - MnX + MxY - MnY) + 0.01;
@@ -6376,52 +7618,151 @@ Begin
     If Not (((Abs(PathX[I] - MnX) < Tol) Or (Abs(PathX[I] - MxX) < Tol)) And
             ((Abs(PathY[I] - MnY) < Tol) Or (Abs(PathY[I] - MxY) < Tol))) Then IsRect := False;
   End;
+  PatFill := DoFill And (GS.FillPat > 0);
+  Fl := DoFill And (Not PatFill);
+  If PatFill Then Begin
+   If (GS.ClipPoly > 0) And (GS.FillPat > 0) Then Begin
+    { motif limité par le polygone de découpe courant }
+    N := CPN[GS.ClipPoly - 1];
+    For I := 0 To N - 1 Do Begin TpX[I] := CPX[GS.ClipPoly - 1, I]; TpY[I] := CPY[GS.ClipPoly - 1, I]; End;
+    N := ClipPolyBox(N, BA, BB, BC, BD);
+    If GS.ClipOn Then N := ClipPolyBox(N, GS.CX1, GS.CY1, GS.CX2, GS.CY2);
+    If N >= 3 Then PatternFill(N, BA, BB, BC, BD);
+    N := E - S + 1;
+   End
+   Else If IsRect Then PatternFill(0, BA, BB, BC, BD)
+   Else Begin
+    Step := 1;
+    If N > 1500 Then Step := (N + 1499) Div 1500;
+    N := 0;
+    I := S;
+    While I <= E Do Begin
+     TpX[N] := PgX(PathX[I]); TpY[N] := PgY(PathY[I]);
+     Inc(N); Inc(I, Step);
+    End;
+    If GS.ClipOn And (Not InsideClip(BA, BB, BC, BD)) Then N := ClipPolyBox(N, GS.CX1, GS.CY1, GS.CX2, GS.CY2);
+    If N >= 3 Then PatternFill(N, BA, BB, BC, BD);
+    N := E - S + 1;
+   End;
+   If Not DoStroke Then Continue;
+  End;
+  If (Not Fl) And (Not DoStroke) Then Continue;
   If IsRect Then Begin
-   Idx := NewImpObj(K_RECT);
+   LX1 := BA; LY1 := BB; LX2 := BC; LY2 := BD;
+   If GS.ClipOn Then Begin
+    ClampBox(LX1, LY1, LX2, LY2);
+    If (LX2 < LX1) Or (LY2 < LY1) Then Continue;
+   End;
+   If (GS.Blend = 1) And Fl And (Not DoStroke) Then RK := K_HILITE Else RK := K_RECT;
+   Idx := NewImpObj(RK);
    If Idx < 0 Then Exit;
    With ObjP(Idx)^ Do Begin
-    X1 := PgX(MnX); X2 := PgX(MxX); Y1 := PgY(MxY); Y2 := PgY(MnY);
-    Wd := StrokeW;
-    Rgb := GS.Stroke; Rgb2 := GS.Fill;
-    If DoFill And DoStroke Then Fill := 2
-    Else If DoFill Then Begin Fill := 1; Rgb := GS.Fill; End
-    Else Fill := 0;
+    X1 := LX1; X2 := LX2; Y1 := LY1; Y2 := LY2;
+    If RK = K_HILITE Then Rgb := GS.Fill
+    Else Begin
+     Wd := StrokeW;
+     Rgb := GS.Stroke; Rgb2 := GS.Fill;
+     If Fl And DoStroke Then Fill := 2
+     Else If Fl Then Begin Fill := 1; Rgb := GS.Fill; End
+     Else Fill := 0;
+     If Fl And (GS.FillA < 0.995) Then Alpha := AlphaByte(GS.FillA);
+    End;
    End;
   End
-  Else If (N = 2) And DoStroke And (Not DoFill) Then Begin
+  Else If (N = 2) And DoStroke And (Not Fl) Then Begin
+   LX1 := PgX(PathX[S]); LY1 := PgY(PathY[S]); LX2 := PgX(PathX[E]); LY2 := PgY(PathY[E]);
+   If Not ClipLineBox(LX1, LY1, LX2, LY2) Then Continue;
    Idx := NewImpObj(K_LINE);
    If Idx < 0 Then Exit;
    With ObjP(Idx)^ Do Begin
-    X1 := PgX(PathX[S]); Y1 := PgY(PathY[S]);
-    X2 := PgX(PathX[E]); Y2 := PgY(PathY[E]);
+    X1 := LX1; Y1 := LY1; X2 := LX2; Y2 := LY2;
     Wd := StrokeW;
     Rgb := GS.Stroke;
    End;
   End
-  Else If (DoFill Or DoStroke) Then Begin
+  Else If (Fl Or DoStroke) Then Begin
+   If N > 1500 Then N := 1500;
+   Step := 1;
+   If (E - S + 1) > 1500 Then Step := ((E - S + 1) + 1499) Div 1500;
+   { chemin en coordonnées page, éventuellement découpé (remplissage seul) }
+   I := S;
+   N := 0;
+   While (I <= E) And (N < CLIPBUF Div 2) Do Begin
+    TpX[N] := PgX(PathX[I]); TpY[N] := PgY(PathY[I]);
+    Inc(N); Inc(I, Step);
+   End;
+   If GS.ClipOn And Fl And (Not DoStroke) And (Not InsideClip(BA, BB, BC, BD)) Then Begin
+    N := ClipPolyBox(N, GS.CX1, GS.CY1, GS.CX2, GS.CY2);
+    If N < 3 Then Continue;
+   End;
    If N > 1500 Then N := 1500;
    Pool := PoolAlloc(N);
    If Pool < 0 Then Begin ImpFull := True; LoadNotice := 'Document tronqué : mémoire des tracés pleine.'; Exit; End;
    Idx := NewImpObj(K_POLY);
    If Idx < 0 Then Exit;
    For I := 0 To N - 1 Do Begin
-    PoolXP(Pool + I)^ := PgX(PathX[S + I]);
-    PoolYP(Pool + I)^ := PgY(PathY[S + I]);
+    PoolXP(Pool + I)^ := TpX[I];
+    PoolYP(Pool + I)^ := TpY[I];
    End;
    With ObjP(Idx)^ Do Begin
     P0 := Pool; PN := N;
     Wd := StrokeW;
     Rgb := GS.Stroke; Rgb2 := GS.Fill;
     If Closed Then Style := 1;
-    If DoFill And DoStroke Then Fill := 2
-    Else If DoFill Then Begin Fill := 1; Rgb := GS.Fill; End
+    If Fl And DoStroke Then Fill := 2
+    Else If Fl Then Begin Fill := 1; Rgb := GS.Fill; End
     Else Fill := 0;
+    If Fl And (GS.FillA < 0.995) Then Alpha := AlphaByte(GS.FillA);
    End;
    RecalcBox(Idx);
   End;
  End;
  NPts := 0;
  NSub := 0;
+End;
+
+{ Mémorise la découpe courante : boîte englobante du chemin et polygone éventuel }
+Procedure PathOp(Fl, St, Cl: Boolean);
+Var
+ I, Step, PolyN: Integer;
+ MnX, MnY, MxX, MxY: Real;
+ A, B, C, D: LongInt;
+ Pend, PolyOk: Boolean;
+ PX, PY: Array[0..CPPTS - 1] Of LongInt;
+Begin
+ Pend := ClipPend And (NPts > 0);
+ ClipPend := False;
+ PolyN := 0; PolyOk := False;
+ If Pend Then Begin
+  MnX := PathX[0]; MxX := MnX; MnY := PathY[0]; MxY := MnY;
+  For I := 1 To NPts - 1 Do Begin
+   If PathX[I] < MnX Then MnX := PathX[I];
+   If PathX[I] > MxX Then MxX := PathX[I];
+   If PathY[I] < MnY Then MnY := PathY[I];
+   If PathY[I] > MxY Then MxY := PathY[I];
+  End;
+  A := PgX(MnX); C := PgX(MxX); B := PgY(MxY); D := PgY(MnY);
+  If (NSub = 1) And (NPts >= 3) And (Not (SubRect[0] And (NPts = 4))) And (NCP < CPMAX) Then Begin
+   Step := (NPts + CPPTS - 1) Div CPPTS;
+   I := 0;
+   While (I < NPts) And (PolyN < CPPTS) Do Begin
+    PX[PolyN] := PgX(PathX[I]); PY[PolyN] := PgY(PathY[I]);
+    Inc(PolyN);
+    Inc(I, Step);
+   End;
+   PolyOk := PolyN >= 3;
+  End;
+ End;
+ EmitPath(Fl, St, Cl);
+ If Pend Then Begin
+  ClipToBox(A, B, C, D);
+  If PolyOk Then Begin
+   For I := 0 To PolyN - 1 Do Begin CPX[NCP, I] := PX[I]; CPY[NCP, I] := PY[I]; End;
+   CPN[NCP] := PolyN;
+   Inc(NCP);
+   GS.ClipPoly := NCP;
+  End;
+ End;
 End;
 
 Procedure EmitImage(ImgIdx: Integer);
@@ -6442,10 +7783,12 @@ Begin
   If Y[I] < MnY Then MnY := Y[I];
   If Y[I] > MxY Then MxY := Y[I];
  End;
+ If OutsideClip(PgX(MnX), PgY(MxY), PgX(MxX), PgY(MnY)) Then Exit;
  Idx := NewImpObj(K_IMAGE);
  If Idx < 0 Then Exit;
  With ObjP(Idx)^ Do Begin
   X1 := PgX(MnX); X2 := PgX(MxX); Y1 := PgY(MxY); Y2 := PgY(MnY);
+  If GS.FillA < 0.995 Then Alpha := AlphaByte(GS.FillA);
   If ImgIdx > 0 Then Begin
    P0 := ImgIdx;
    Rgb := GS.Fill;
@@ -6542,16 +7885,76 @@ Begin
  End;
 End;
 
+Var
+ NoColor: Boolean;
+
+Procedure RunContent(Depth: Integer); Forward;
+
+{ Dessine un glyphe Type 3 en rejouant sa procédure de dessin }
+Procedure DrawT3Glyph(Var F: TFontRec; Code: Integer; AdvX: Real);
+Var
+ Num: LongInt;
+ L: LongInt;
+ Depth, FBase, XBase, RBase0: Integer;
+ A, M2, Tr, SvTm, SvTlm: TMat;
+ S: TSrcState;
+ P: LongInt;
+Begin
+ If (Code < 0) Or (Code > 255) Then Exit;
+ Num := F.T3^.Proc[Code];
+ If Num <= 0 Then Exit;
+ Depth := GDepth;
+ If Depth >= 3 Then Exit;
+ If ImpFull Then Exit;
+ SrcMode := 0;
+ If Not LoadStream(Num, CBufs[Depth + 1], L) Then Begin SrcMode := 2; Exit; End;
+ CLens[Depth + 1] := L;
+ FBase := NFonts; XBase := NXObjs; RBase0 := NRes;
+ If F.T3^.HasRes Then LoadResources(F.T3^.Num);
+ SvTm := TmM; SvTlm := TlmM;
+ PushGS;
+ M2[0] := GS.TSize * GS.Th; M2[1] := 0; M2[2] := 0; M2[3] := GS.TSize; M2[4] := 0; M2[5] := GS.Ts;
+ MatMul(F.T3^.FM, M2, A);
+ MatIdent(Tr); Tr[4] := AdvX;
+ MatMul(A, Tr, A);
+ MatMul(A, TmM, A);
+ MatMul(A, GS.CTM, GS.CTM);
+ GS.TFont := -1;
+ NoColor := False;
+ RunContent(Depth + 1);
+ GDepth := Depth;
+ NoColor := False;
+ PopGS;
+ FreeFontsTo(FBase);
+ NXObjs := XBase;
+ NRes := RBase0;
+ TmM := SvTm; TlmM := SvTlm;
+ { retour au flux de contenu appelant }
+ SrcMode := 2;
+ CBuf := CBufs[Depth];
+ CLen := CLens[Depth];
+End;
+
 { Ajoute les caractères de S (octets d'une chaîne PDF) à Out ; avance Adv. }
-Procedure ShowStr(Const S: String; Var Out: String; Var Adv: Real);
+Procedure ShowStr(Const S0: String; Var Out: String; Var Adv: Real);
 Var
  I, Step: Integer;
  Code: LongInt;
  F: ^TFontRec;
  W: Real;
  Mapped: String;
+ S: String;
 Begin
+ S := S0;
  If GS.TFont >= 0 Then F := @Fonts[GS.TFont] Else F := Nil;
+ If (F <> Nil) And (F^.T3 <> Nil) Then Begin
+  For I := 1 To Length(S) Do Begin
+   Code := Ord(S[I]);
+   DrawT3Glyph(F^, Code, Adv);
+   Adv := Adv + (F^.T3^.Wd[Code] * F^.T3^.FM[0] * GS.TSize + GS.Tc + (Ord(Code = 32) * GS.Tw)) * GS.Th;
+  End;
+  Exit;
+ End;
  I := 1;
  While I <= Length(S) Do Begin
   If (F <> Nil) And F^.Wide Then Begin
@@ -6622,7 +8025,7 @@ Begin
  MatMul(M, TmM, TmM);
 End;
 
-Procedure RunContent(Depth: Integer); Forward;
+
 
 Procedure DoXObject(Const Name: String; Depth: Integer);
 Var
@@ -6631,7 +8034,7 @@ Var
  P, V: LongInt;
  Mat: TMat;
  Arr: Array[0..5] Of Real;
- FBase, XBase, Num: Integer;
+ FBase, XBase, Num, RBase0: Integer;
  S: TSrcState;
 Begin
  Idx := -1;
@@ -6641,7 +8044,7 @@ Begin
  If Not XObjs[Idx].IsForm Then Begin EmitImage(ImportImageObj(XObjs[Idx].Num, False)); Exit; End;
  If Depth >= 3 Then Exit;
  Num := XObjs[Idx].Num;
- FBase := NFonts; XBase := NXObjs;
+ FBase := NFonts; XBase := NXObjs; RBase0 := NRes;
  SrcMode := 0;
  If Not LoadStream(Num, CBufs[Depth + 1], L) Then Exit;
  CLens[Depth + 1] := L;
@@ -6660,6 +8063,178 @@ Begin
  PopGS;
  FreeFontsTo(FBase);
  NXObjs := XBase;
+ NRes := RBase0;
+End;
+
+{ Motif de pavage : le contenu de la cellule est rejoué sur la boîte (ou aplat gris si trop de cellules) }
+Procedure PaintTiling(Num: LongInt; BX1, BY1, BX2, BY2: LongInt);
+Var
+ S: TSrcState;
+ P, V: LongInt;
+ Mat, Inv, Tm: TMat;
+ Arr: Array[0..5] Of Real;
+ Bb: Array[0..3] Of Real;
+ XS, YS, Det, Ux, Uy, Px, Py, Mnx, Mxx, Mny, Mxy: Real;
+ PaintType, I, J, K, Depth, FBase, XBase, RBase0, I0, I1, J0, J1: Integer;
+ L: LongInt;
+ Idx: Integer;
+Begin
+ Depth := GDepth;
+ If Depth >= 3 Then Exit;
+ If OutsideClip(BX1, BY1, BX2, BY2) Then Exit;
+ ClampBox(BX1, BY1, BX2, BY2);
+ If (BX2 < BX1) Or (BY2 < BY1) Then Exit;
+ SaveSrc(S);
+ SrcMode := 0;
+ P := EnterObj(Num);
+ If P < 0 Then Begin RestoreSrc(S); Exit; End;
+ PaintType := ValInt(DictFind(P, 'PaintType'), 1);
+ XS := ValNum(DictFind(P, 'XStep'), 0);
+ YS := ValNum(DictFind(P, 'YStep'), 0);
+ Bb[0] := 0; Bb[1] := 0; Bb[2] := 1; Bb[3] := 1;
+ V := DictFind(P, 'BBox');
+ If V >= 0 Then ReadNums(V, Bb, 4);
+ MatIdent(Mat);
+ V := DictFind(P, 'Matrix');
+ If V >= 0 Then If ReadNums(V, Arr, 6) = 6 Then
+  For I := 0 To 5 Do Mat[I] := Arr[I];
+ If XS = 0 Then XS := Bb[2] - Bb[0];
+ If YS = 0 Then YS := Bb[3] - Bb[1];
+ Det := Mat[0] * Mat[3] - Mat[1] * Mat[2];
+ K := 0;
+ If (Abs(XS) < 0.2) Or (Abs(YS) < 0.2) Or (Abs(Det) < 0.0000001) Then K := 1;
+ If K = 0 Then Begin
+  { boîte en espace motif }
+  Mnx := 1E30; Mxx := -1E30; Mny := 1E30; Mxy := -1E30;
+  For I := 0 To 3 Do Begin
+   If I And 1 = 0 Then Ux := BX1 + MbX0 Else Ux := BX2 + MbX0;
+   If I And 2 = 0 Then Uy := MbY1 - BY2 Else Uy := MbY1 - BY1;
+   Px := ((Ux - Mat[4]) * Mat[3] - (Uy - Mat[5]) * Mat[2]) / Det;
+   Py := ((Uy - Mat[5]) * Mat[0] - (Ux - Mat[4]) * Mat[1]) / Det;
+   If Px < Mnx Then Mnx := Px;
+   If Px > Mxx Then Mxx := Px;
+   If Py < Mny Then Mny := Py;
+   If Py > Mxy Then Mxy := Py;
+  End;
+  XS := Abs(XS); YS := Abs(YS);
+  I0 := Trunc((Mnx - Bb[2]) / XS) - 1; I1 := Trunc((Mxx - Bb[0]) / XS) + 1;
+  J0 := Trunc((Mny - Bb[3]) / YS) - 1; J1 := Trunc((Mxy - Bb[1]) / YS) + 1;
+  If (I1 - I0 + 1) * (J1 - J0 + 1) > 300 Then K := 1;
+ End;
+ If K <> 0 Then Begin
+  RestoreSrc(S);
+  { trop de cellules : aplat gris clair }
+  Idx := NewImpObj(K_RECT);
+  If Idx >= 0 Then
+   With ObjP(Idx)^ Do Begin
+    X1 := BX1; Y1 := BY1; X2 := BX2; Y2 := BY2;
+    Fill := 1; Rgb := RGBOf(200, 200, 200); Rgb2 := Rgb; Wd := 1;
+   End;
+  Exit;
+ End;
+ FBase := NFonts; XBase := NXObjs; RBase0 := NRes;
+ SrcMode := 0;
+ If Not LoadStream(Num, CBufs[Depth + 1], L) Then Begin RestoreSrc(S); Exit; End;
+ CLens[Depth + 1] := L;
+ SrcMode := 0;
+ P := EnterObj(Num);
+ If P >= 0 Then If DictFind(P, 'Resources') >= 0 Then LoadResources(Num);
+ RestoreSrc(S);
+ For J := J0 To J1 Do
+  For I := I0 To I1 Do Begin
+   If ImpFull Then Break;
+   PushGS;
+   MatIdent(Tm);
+   Tm[4] := I * XS; Tm[5] := J * YS;
+   MatMul(Tm, Mat, GS.CTM);
+   ClipToBox(BX1, BY1, BX2, BY2);
+   GS.FillPat := 0; GS.CSPat := False;
+   RunContent(Depth + 1);
+   GDepth := Depth;
+   PopGS;
+  End;
+ FreeFontsTo(FBase);
+ NXObjs := XBase;
+ NRes := RBase0;
+End;
+
+Procedure SetPatternByName(Const Name: String);
+Var
+ S: TSrcState;
+ Num: LongInt;
+Begin
+ SaveSrc(S);
+ FindRes('Pattern', Name, Num);
+ RestoreSrc(S);
+ GS.FillPat := Num;
+End;
+
+Procedure SetColorSpaceByName(Const Name: String);
+Var
+ S: TSrcState;
+ Num, P, Q: LongInt;
+Begin
+ GS.CSPat := Name = 'Pattern';
+ GS.FillPat := 0;
+ If Not GS.CSPat Then Begin
+  SaveSrc(S);
+  P := FindRes('ColorSpace', Name, Num);
+  If P >= 0 Then Begin
+   Q := P;
+   If NextTok(Q) = T_AB Then If NextTok(Q) = T_NAME Then GS.CSPat := TokS = 'Pattern';
+  End;
+  RestoreSrc(S);
+ End;
+End;
+
+Procedure DoShading(Const Name: String);
+Var
+ S: TSrcState;
+ P, Num: LongInt;
+ Ok: Boolean;
+ N, I: Integer;
+Begin
+ SaveSrc(S);
+ P := FindRes('Shading', Name, Num);
+ Ok := False;
+ If P >= 0 Then Ok := ShadingToAbs(P, GS.CTM);
+ RestoreSrc(S);
+ If Not Ok Then Exit;
+ If GS.ClipPoly > 0 Then Begin
+  N := CPN[GS.ClipPoly - 1];
+  For I := 0 To N - 1 Do Begin TpX[I] := CPX[GS.ClipPoly - 1, I]; TpY[I] := CPY[GS.ClipPoly - 1, I]; End;
+  If GS.ClipOn Then N := ClipPolyBox(N, GS.CX1, GS.CY1, GS.CX2, GS.CY2);
+  If N >= 3 Then EmitGradient(N, 0, 0, 0, 0);
+ End
+ Else If GS.ClipOn Then EmitGradient(0, GS.CX1, GS.CY1, GS.CX2, GS.CY2)
+ Else EmitGradient(0, 0, 0, PgP(ImpPg)^.W, PgP(ImpPg)^.H);
+End;
+
+Procedure DoExtGState(Const Name: String);
+Var
+ S: TSrcState;
+ P, Num, V, Q: LongInt;
+ R: Real;
+ T: Integer;
+Begin
+ SaveSrc(S);
+ P := FindRes('ExtGState', Name, Num);
+ If P >= 0 Then Begin
+  V := DictFind(P, 'ca');
+  If V >= 0 Then Begin R := ValNum(V, 1); If R < 0 Then R := 0; If R > 1 Then R := 1; GS.FillA := R; End;
+  V := DictFind(P, 'CA');
+  If V >= 0 Then Begin R := ValNum(V, 1); If R < 0 Then R := 0; If R > 1 Then R := 1; GS.StrokeA := R; End;
+  V := DictFind(P, 'BM');
+  If V >= 0 Then Begin
+   Q := V;
+   T := NextTok(Q);
+   If T = T_AB Then T := NextTok(Q);
+   If T = T_NAME Then Begin
+    If TokS = 'Multiply' Then GS.Blend := 1 Else GS.Blend := 0;
+   End;
+  End;
+ End;
+ RestoreSrc(S);
 End;
 
 Procedure ExecOp(Const Op: String; Var P: LongInt; ArrPos: LongInt; Depth: Integer);
@@ -6671,8 +8246,15 @@ Var
  X, Y, W, H: Real;
  Prev: Char;
 Begin
+ GDepth := Depth;
  C := Op[1];
  N := NOpnd;
+ If NoColor Then
+  If (Op = 'g') Or (Op = 'G') Or (Op = 'rg') Or (Op = 'RG') Or (Op = 'k') Or (Op = 'K') Or (Op = 'sc') Or
+     (Op = 'SC') Or (Op = 'scn') Or (Op = 'SCN') Or (Op = 'cs') Or (Op = 'CS') Or (Op = 'gs') Then Begin
+   NOpnd := 0;
+   Exit;
+  End;
  Case Length(Op) Of
   1: Case C Of
    'q': PushGS;
@@ -6689,16 +8271,16 @@ Begin
    'y': If (N >= 4) And (NPts > 0) Then
     CurveTo(Opnd[N - 4], Opnd[N - 3], Opnd[N - 2], Opnd[N - 1], Opnd[N - 2], Opnd[N - 1]);
    'h': If NSub > 0 Then SubClosed[NSub - 1] := True;
-   'S': EmitPath(False, True, False);
-   's': EmitPath(False, True, True);
-   'f', 'F': EmitPath(True, False, False);
-   'B': EmitPath(True, True, False);
-   'b': EmitPath(True, True, True);
-   'n': Begin NPts := 0; NSub := 0; End;
-   'W': ;
-   'g': If N >= 1 Then GS.Fill := GrayRgb(Opnd[N - 1]);
+   'S': PathOp(False, True, False);
+   's': PathOp(False, True, True);
+   'f', 'F': PathOp(True, False, False);
+   'B': PathOp(True, True, False);
+   'b': PathOp(True, True, True);
+   'n': PathOp(False, False, False);
+   'W': ClipPend := True;
+   'g': If N >= 1 Then Begin GS.Fill := GrayRgb(Opnd[N - 1]); GS.FillPat := 0; GS.CSPat := False; End;
    'G': If N >= 1 Then GS.Stroke := GrayRgb(Opnd[N - 1]);
-   'k': If N >= 4 Then GS.Fill := CmykRgb(Opnd[N - 4], Opnd[N - 3], Opnd[N - 2], Opnd[N - 1]);
+   'k': If N >= 4 Then Begin GS.Fill := CmykRgb(Opnd[N - 4], Opnd[N - 3], Opnd[N - 2], Opnd[N - 1]); GS.FillPat := 0; GS.CSPat := False; End;
    'K': If N >= 4 Then GS.Stroke := CmykRgb(Opnd[N - 4], Opnd[N - 3], Opnd[N - 2], Opnd[N - 1]);
    '''': Begin TextMove(0, -GS.TL); ShowAndEmit(LastStr); End;
    '"': Begin
@@ -6723,10 +8305,14 @@ Begin
      If NSub > 0 Then SubClosed[NSub - 1] := True;
     End;
    End
-   Else If Op = 'f*' Then EmitPath(True, False, False)
-   Else If Op = 'B*' Then EmitPath(True, True, False)
-   Else If Op = 'b*' Then EmitPath(True, True, True)
-   Else If Op = 'W*' Then
+   Else If Op = 'f*' Then PathOp(True, False, False)
+   Else If Op = 'B*' Then PathOp(True, True, False)
+   Else If Op = 'b*' Then PathOp(True, True, True)
+   Else If Op = 'W*' Then ClipPend := True
+   Else If Op = 'd1' Then NoColor := True
+   Else If Op = 'sh' Then DoShading(LastName)
+   Else If Op = 'gs' Then DoExtGState(LastName)
+   Else If Op = 'cs' Then SetColorSpaceByName(LastName)
    Else If Op = 'BT' Then Begin MatIdent(TmM); MatIdent(TlmM); End
    Else If Op = 'ET' Then
    Else If Op = 'Tc' Then Begin If N >= 1 Then GS.Tc := Opnd[N - 1]; End
@@ -6752,9 +8338,10 @@ Begin
    Else If Op = 'T*' Then TextMove(0, -GS.TL)
    Else If Op = 'Tj' Then ShowAndEmit(LastStr)
    Else If Op = 'TJ' Then Begin If ArrPos >= 0 Then ShowTJ(ArrPos); End
-   Else If Op = 'rg' Then Begin If N >= 3 Then GS.Fill := RGBOf(RI(Opnd[N - 3] * 255), RI(Opnd[N - 2] * 255), RI(Opnd[N - 1] * 255)); End
+   Else If Op = 'rg' Then Begin If N >= 3 Then Begin GS.Fill := RGBOf(RI(Opnd[N - 3] * 255), RI(Opnd[N - 2] * 255), RI(Opnd[N - 1] * 255)); GS.FillPat := 0; GS.CSPat := False; End; End
    Else If Op = 'RG' Then Begin If N >= 3 Then GS.Stroke := RGBOf(RI(Opnd[N - 3] * 255), RI(Opnd[N - 2] * 255), RI(Opnd[N - 1] * 255)); End
    Else If (Op = 'sc') Or (Op = 'SC') Then Begin
+    If Op = 'sc' Then GS.FillPat := 0;
     If N = 1 Then Begin If Op = 'sc' Then GS.Fill := GrayRgb(Opnd[0]) Else GS.Stroke := GrayRgb(Opnd[0]); End
     Else If N = 3 Then Begin
      If Op = 'sc' Then GS.Fill := RGBOf(RI(Opnd[0] * 255), RI(Opnd[1] * 255), RI(Opnd[2] * 255))
@@ -6774,6 +8361,8 @@ Begin
   End;
  Else
   If (Op = 'scn') Or (Op = 'SCN') Then Begin
+   If (Op = 'scn') And GS.CSPat And (LastName <> '') Then SetPatternByName(LastName)
+   Else If Op = 'scn' Then GS.FillPat := 0;
    If N = 1 Then Begin If Op = 'scn' Then GS.Fill := GrayRgb(Opnd[0]) Else GS.Stroke := GrayRgb(Opnd[0]); End
    Else If N = 3 Then Begin
     If Op = 'scn' Then GS.Fill := RGBOf(RI(Opnd[0] * 255), RI(Opnd[1] * 255), RI(Opnd[2] * 255))
@@ -7103,11 +8692,14 @@ Begin
   End;
  End;
  SrcMode := 0;
+ NRes := 0;
  If UseRes > 0 Then LoadResources(UseRes);
  GS.TFont := -1;
  MatIdent(GS.CTM);
  GS.Stroke := 0; GS.Fill := 0; GS.LW := 1;
  GS.Tc := 0; GS.Tw := 0; GS.Th := 1; GS.TL := 0; GS.Ts := 0; GS.TSize := 12; GS.TMode := 0;
+ GS.ClipOn := False; GS.ClipPoly := 0; GS.FillA := 1; GS.StrokeA := 1; GS.Blend := 0; GS.CSPat := False; GS.FillPat := 0;
+ NCP := 0; ClipPend := False;
  MatIdent(TmM); MatIdent(TlmM);
  GSP := 0; NPts := 0; NSub := 0; NOpnd := 0;
  For I := 0 To NC - 1 Do Begin
@@ -8219,7 +9811,7 @@ Begin
  { polices ajoutées }
  If IncFontBase > 0 Then WriteFontObjs(IncFontBase);
  { informations du document }
- If InfoDirty Then Begin
+ If InfoDirty Or (XCnt = 0) Then Begin
   If IncInfo = 0 Then Begin IncInfo := IncNext; Inc(IncNext); End;
   PdfInfoObj(IncInfo);
  End;
@@ -9242,6 +10834,7 @@ Begin
   K_POLY: KindName := 'Tracé';
   K_INK: KindName := 'Crayon';
   K_IMAGE: KindName := 'Image';
+  K_GRAD: KindName := 'Dégradé';
   K_STAMP: KindName := 'Tampon';
   K_REDACT: KindName := 'Biffure';
   K_HILITE: KindName := 'Surlignage';
@@ -10946,7 +12539,7 @@ Begin
  If (SelObj < 0) Or (SelObj >= ObjCount) Then Exit;
  Clip := ObjP(SelObj)^;
  ClipPtCount := 0;
- If Clip.Kind In [K_POLY, K_INK] Then Begin
+ If (Clip.Kind In [K_POLY, K_INK]) Or ((Clip.Kind = K_GRAD) And (Clip.PN > 0)) Then Begin
   Step := (Clip.PN + 98) Div 99;
   If Step < 1 Then Step := 1;
   K := 0;
@@ -10967,7 +12560,7 @@ Begin
  If Not ClipValid Then Exit;
  PushUndo;
  Pool := 0;
- If Clip.Kind In [K_POLY, K_INK] Then Begin
+ If (Clip.Kind In [K_POLY, K_INK]) Or ((Clip.Kind = K_GRAD) And (Clip.PN > 0)) Then Begin
   Pool := PoolAlloc(ClipPtCount);
   If Pool < 0 Then Begin DropUndo; Exit; End;
  End;
@@ -10975,7 +12568,7 @@ Begin
  If I < 0 Then Begin DropUndo; Exit; End;
  ObjP(I)^ := Clip;
  ObjP(I)^.Page := CurPage;
- If Clip.Kind In [K_POLY, K_INK] Then Begin
+ If (Clip.Kind In [K_POLY, K_INK]) Or ((Clip.Kind = K_GRAD) And (Clip.PN > 0)) Then Begin
   For K := 0 To ClipPtCount - 1 Do Begin
    PoolXP(Pool + K)^ := ClipPts[K * 2];
    PoolYP(Pool + K)^ := ClipPts[K * 2 + 1];
@@ -12331,7 +13924,7 @@ Begin
  UndoTop := 0; RedoTop := 0;
  DragMode := 0; PreviewOn := False;
  Running := True;
- ImgMaxDim := 384;
+ ImgMaxDim := 640;
  DocName := ''; Modified := False; Imported := False;
  HintText := ''; StatusMsg := '';
  SigName := '';

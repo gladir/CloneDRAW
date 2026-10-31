@@ -267,6 +267,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td>Cette commande permet de convertir une image de format PPM (Portable PixMap) en XBM (X BitMap).</td>
 		</tr>	
 		<tr>
+			<td><b>PREMIERE.PAS</b></td>
+			<td>Cette commande permet de lancer un clone de Premiere Pro (montage vidéo non linéaire).</td>
+		</tr>
+		<tr>
 			<td><b>PSP.PAS</b></td>
 			<td>Cette commande permet de lancer un clone de Photoshop.</td>
 		</tr>

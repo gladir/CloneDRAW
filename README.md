@@ -64,6 +64,9 @@ Apercu de PAINT :
 	</tr>
 </table>
 
+Aperçu du clone de Adobe Première :
+
+<img width="639" height="477" alt="image" src="https://github.com/user-attachments/assets/126ecf47-a76b-4feb-961c-0ca2d4a42287" />
 
 Apercu de VISIO :
 

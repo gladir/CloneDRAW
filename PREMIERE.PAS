@@ -27086,6 +27086,11 @@ Begin
  Else Begin AdZPut(AdZEAV0,S); AdZEAPhase:=0; End;
 End;
 
+Function AdZClamp32(V: Int64): LongInt;
+Begin
+ If V>2147483647 Then AdZClamp32:=2147483647 Else If V<0 Then AdZClamp32:=0 Else AdZClamp32:=V;
+End;
+
 Type
  TAdZALLong=Array[0..268435455] Of LongInt;
  PAdZALLong=^TAdZALLong;
@@ -27255,7 +27260,7 @@ Begin
  Bps:=AdZALSampleSize-AdZALExtraBits+Ch-1;
  If (Bps>32) Or (Bps<1) Then Exit;
  Compressed:=AdZALBits(1)=0;
- If HasSize Then Nb:=AdZALBits(32) Else Nb:=AdZALMax;
+ If HasSize Then Nb:=AdZClamp32(AdZALBits(32)) Else Nb:=AdZALMax;
  If (Nb<=0) Or (Nb>AdZALMax) Then Exit;
  If (AdZALCount<>0) And (Nb<>AdZALCount) Then Exit;
  AdZALCount:=Nb; NbOut:=Nb;
@@ -27638,8 +27643,12 @@ Begin
 End;
 
 Procedure AdZSetName(Const S: String);
+Var I: Integer;
 Begin
- If AdZName='' Then AdZName:=Copy(S,1,31);
+ If AdZName='' Then Begin
+  AdZName:=Copy(S,1,31);
+  For I:=1 To Length(AdZName) Do If (AdZName[I]<' ') Or (AdZName[I]>'~') Then AdZName[I]:='?';
+ End;
 End;
 
 { copie la configuration (extradata) dans AdZCfg }
@@ -27961,7 +27970,7 @@ Begin
   End Else Begin
    Sz:=AdZ4SampleSize(AdZ4Sample);
    Off:=AdZ4Cur;
-   If (Sz<0) Or (Sz>AdZSize) Then Exit;
+   If (Sz<0) Or (Sz>AdZSize) Or (AdZ4Cur>AdZSize) Then Exit;
    Inc(AdZ4Cur,Sz); Inc(AdZ4Sample); Dec(AdZ4In);
    If AdZ4In=0 Then Inc(AdZ4Chunk);
    If (Off<0) Or (Off>=AdZSize) Then Exit;
@@ -28027,7 +28036,7 @@ End;
 
 { ---- AVI ---- }
 Function AdZAviOpen: Boolean;
-Var P, Fin, Sz, HdrlEnd, LP, LE, SP, Idx, Cnt, I: LongInt; Tag: String; R: Integer;
+Var P, Fin, Sz, HdrlEnd, LP, LE, SP, Idx, Cnt, I, LSz, Guard: LongInt; Tag: String; R: Integer;
  Found: Boolean;
 Begin
  AdZAviOpen:=False; AdZKind:=AdZkAvi; AdZAviPos:=0; AdZAviStream:=-1;
@@ -28038,8 +28047,10 @@ Begin
   If (Tag='LIST') And (AdZTag(P+8)='hdrl') Then Begin
    HdrlEnd:=P+8+Sz; If HdrlEnd>Fin Then HdrlEnd:=Fin;
    LP:=P+12;
-   While LP+12<=HdrlEnd Do Begin
-    Tag:=AdZTag(LP); Sz:=AdZLE32(LP+4);
+   Guard:=0;
+   While (LP+12<=HdrlEnd) And (Guard<100000) Do Begin
+    Inc(Guard);
+    Tag:=AdZTag(LP); Sz:=AdZLE32(LP+4); LSz:=Sz;
     If (Sz<0) Or (Sz>Fin) Then Break;
     If (Tag='LIST') And (AdZTag(LP+8)='strl') Then Begin
      Inc(Idx);
@@ -28060,7 +28071,7 @@ Begin
       End;
      End;
     End;
-    LP:=LP+8+Sz; If Odd(LP) Then Inc(LP);
+    LP:=LP+8+LSz; If Odd(LP) Then Inc(LP);
    End;
    Break;
   End;

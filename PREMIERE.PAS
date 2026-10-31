@@ -249,6 +249,8 @@ Const
  NSLOT = 5;          { Fichiers cache ouverts simultanement }
  CACHEHDR = 32;       { En-tete d'un fichier cache }
  NTRK = 6;            { V1,V2,V3,A1,A2,A3 }
+ NKP = 10;            { Parametres animables (images-cles) }
+ MAXK = 6;            { Images-cles par parametre }
 
  { Outils de montage }
  TL_SELECT = 0;
@@ -281,6 +283,7 @@ Const
  CF_MIRV = 2;
  CF_INV = 4;
  CF_OFF = 8;
+ CF_MASKINV = 16;
 
  { Indicateurs de piste }
  TF_HIDE = 1;
@@ -334,6 +337,19 @@ Type
   TIn, TOut: Integer;
   TInL, TOutL: Integer;
   Sel: Boolean;
+  Speed2: Integer;                     { vitesse finale (0 = constante) }
+  Rot, Pan, Blend: Integer;
+  CropL, CropT, CropR, CropB: Integer;
+  Blur, Sharp: Integer;
+  KeyOn, KeySim, KeySmo: Integer;      { incrustation chroma }
+  MaskK, MaskX, MaskY, MaskW, MaskH, MaskF: Integer;
+  LutIdx: Integer;
+  EqL, EqM, EqH, Comp, Rev, Gate: Integer;
+  Link: Integer;
+  Kn: Array[0..NKP-1] Of Byte;
+  Kt: Array[0..NKP-1, 0..MAXK-1] Of LongInt;
+  Kv: Array[0..NKP-1, 0..MAXK-1] Of SmallInt;
+  Ki: Array[0..NKP-1, 0..MAXK-1] Of Byte;
  End;
 
  TMarker = Record
@@ -364,9 +380,11 @@ Type
   Ok: Boolean;
   CW, CH: LongInt;
   Al: LongInt;
-  PX, PY, Sc, Br, Co, Sa, Mos: LongInt;
+  PX, PY, Sc, Br, Co, Sa, Mos, Rt: LongInt;
   Fl: Integer;
-  Fx, Tr: Boolean;
+  Fx, Tr, Cp: Boolean;
+  Bl, BlurR, Sharp, CrL, CrR, CrT, CrB, Key, KeyT, KeyS: LongInt;
+  MaskK, MaskX, MaskY, MaskW, MaskH, MaskF, Lut: LongInt;
   WM: Integer;
   WP: LongInt;
   Dim: LongInt;
@@ -539,6 +557,9 @@ Var
  SnapGuide: LongInt;
  LastTone: Integer;
  AuActive: Boolean;
+ DefInterp: Integer;
+ LutNames: Array[1..4] Of String[12];
+ LutCnt: Integer;
 
  { Menus }
  Menus: Array[0..7] Of TMenu;
@@ -1151,6 +1172,182 @@ Begin
  ClipEnd := P.Clips[I].Start + P.Clips[I].Dur;
 End;
 
+{ ---------- Images-cles et rampes de vitesse ---------- }
+
+Type
+ TSL = {$IFDEF FPC}Int64{$ELSE}LongInt{$ENDIF};
+
+{ Images source ecoulees apres Tl images de sequence (vitesse constante ou rampe lineaire) }
+Function SrcOfs(Var C: TClip; Tl: LongInt): LongInt;
+Var
+ S2: LongInt;
+Begin
+ S2 := C.Speed2;
+ If S2 <= 0 Then S2 := C.Speed;
+ If (S2 = C.Speed) Or (C.Dur < 1) Then SrcOfs := (Tl * C.Speed) Div 100
+ Else SrcOfs := LongInt((TSL(C.Speed) * Tl + (TSL(S2 - C.Speed) * Tl * Tl) Div (2 * C.Dur)) Div 100);
+End;
+
+Function SpeedAt(Var C: TClip; Tl: LongInt): LongInt;
+Var
+ S2: LongInt;
+Begin
+ S2 := C.Speed2;
+ If S2 <= 0 Then S2 := C.Speed;
+ If C.Dur < 1 Then SpeedAt := C.Speed
+ Else SpeedAt := C.Speed + ((S2 - C.Speed) * Tl) Div C.Dur;
+End;
+
+Function KfHas(Var C: TClip; KP: Integer): Boolean;
+Begin
+ KfHas := (KP >= 0) And (KP < NKP) And (C.Kn[KP] > 0);
+End;
+
+Function KfEval(Var C: TClip; KP: Integer; Tl: LongInt; Base: LongInt): LongInt;
+Var
+ N, I: Integer;
+ T0, T1, V0, V1, U: LongInt;
+Begin
+ KfEval := Base;
+ If (KP < 0) Or (KP >= NKP) Then Exit;
+ N := C.Kn[KP];
+ If N = 0 Then Exit;
+ If Tl <= C.Kt[KP, 0] Then Begin
+  KfEval := C.Kv[KP, 0];
+  Exit;
+ End;
+ If Tl >= C.Kt[KP, N - 1] Then Begin
+  KfEval := C.Kv[KP, N - 1];
+  Exit;
+ End;
+ I := 0;
+ While (I < N - 2) And (Tl >= C.Kt[KP, I + 1]) Do Inc(I);
+ T0 := C.Kt[KP, I];
+ T1 := C.Kt[KP, I + 1];
+ V0 := C.Kv[KP, I];
+ V1 := C.Kv[KP, I + 1];
+ If T1 <= T0 Then Begin
+  KfEval := V1;
+  Exit;
+ End;
+ Case C.Ki[KP, I] Of
+  1: KfEval := V0;
+  2: Begin
+   U := ((Tl - T0) * 256) Div (T1 - T0);
+   U := (U * U * (3 * 256 - 2 * U)) Div (256 * 256);
+   KfEval := V0 + ((V1 - V0) * U) Div 256;
+  End;
+ Else KfEval := V0 + ((V1 - V0) * (Tl - T0)) Div (T1 - T0);
+ End;
+End;
+
+Function KfFind(Var C: TClip; KP: Integer; Tl: LongInt): Integer;
+Var
+ I: Integer;
+Begin
+ KfFind := -1;
+ For I := 0 To C.Kn[KP] - 1 Do
+  If C.Kt[KP, I] = Tl Then KfFind := I;
+End;
+
+Procedure KfDel(Var C: TClip; KP, Idx: Integer);
+Var
+ J: Integer;
+Begin
+ If (Idx < 0) Or (Idx >= C.Kn[KP]) Then Exit;
+ For J := Idx To C.Kn[KP] - 2 Do Begin
+  C.Kt[KP, J] := C.Kt[KP, J + 1];
+  C.Kv[KP, J] := C.Kv[KP, J + 1];
+  C.Ki[KP, J] := C.Ki[KP, J + 1];
+ End;
+ Dec(C.Kn[KP]);
+End;
+
+{ Insere ou met a jour l'image-cle au temps Tl (relatif au debut du clip) }
+Procedure KfSet(Var C: TClip; KP: Integer; Tl, V: LongInt; Interp: Integer);
+Var
+ I, J, Best: Integer;
+ D, BD: LongInt;
+Begin
+ If (KP < 0) Or (KP >= NKP) Then Exit;
+ If V > 32000 Then V := 32000;
+ If V < -32000 Then V := -32000;
+ I := KfFind(C, KP, Tl);
+ If I >= 0 Then Begin
+  C.Kv[KP, I] := V;
+  Exit;
+ End;
+ If C.Kn[KP] >= MAXK Then Begin
+  Best := 0;
+  BD := 999999999;
+  For J := 0 To C.Kn[KP] - 1 Do Begin
+   D := Abs(C.Kt[KP, J] - Tl);
+   If D < BD Then Begin
+    BD := D;
+    Best := J;
+   End;
+  End;
+  KfDel(C, KP, Best);
+ End;
+ I := C.Kn[KP];
+ While (I > 0) And (C.Kt[KP, I - 1] > Tl) Do Begin
+  C.Kt[KP, I] := C.Kt[KP, I - 1];
+  C.Kv[KP, I] := C.Kv[KP, I - 1];
+  C.Ki[KP, I] := C.Ki[KP, I - 1];
+  Dec(I);
+ End;
+ C.Kt[KP, I] := Tl;
+ C.Kv[KP, I] := V;
+ C.Ki[KP, I] := Interp;
+ Inc(C.Kn[KP]);
+End;
+
+{ Decale toutes les images-cles de -Dt (le debut du clip avance de Dt images) }
+Procedure KfShift(Var C: TClip; Dt: LongInt);
+Var
+ KP, I, N: Integer;
+ V0: LongInt;
+ Dropped: Boolean;
+Begin
+ If Dt = 0 Then Exit;
+ For KP := 0 To NKP - 1 Do
+  If C.Kn[KP] > 0 Then Begin
+   V0 := KfEval(C, KP, Dt, 0);
+   Dropped := False;
+   For I := C.Kn[KP] - 1 Downto 0 Do
+    If C.Kt[KP, I] < Dt Then Begin
+     KfDel(C, KP, I);
+     Dropped := True;
+    End;
+   For I := 0 To C.Kn[KP] - 1 Do C.Kt[KP, I] := C.Kt[KP, I] - Dt;
+   If Dropped And (KfFind(C, KP, 0) < 0) Then KfSet(C, KP, 0, V0, 0);
+   N := C.Kn[KP];
+  End;
+End;
+
+{ Coupe A en A (debut) et B (fin) a l'instant Tcut : images-cles et rampe de vitesse }
+Procedure KfSplit(Var A, B: TClip; Tcut: LongInt);
+Var
+ KP, I: Integer;
+ V: LongInt;
+ S: LongInt;
+Begin
+ S := SpeedAt(A, Tcut);
+ If A.Speed2 > 0 Then Begin
+  B.Speed := Integer(S);
+  B.Speed2 := A.Speed2;
+  A.Speed2 := Integer(S);
+ End;
+ For KP := 0 To NKP - 1 Do
+  If A.Kn[KP] > 0 Then Begin
+   V := KfEval(A, KP, Tcut, 0);
+   KfShift(B, Tcut);
+   For I := A.Kn[KP] - 1 Downto 0 Do
+    If A.Kt[KP, I] > Tcut Then KfDel(A, KP, I);
+   If KfFind(A, KP, Tcut) < 0 Then KfSet(A, KP, Tcut, V, 0);
+  End;
+End;
+
 Function IsVideoTrack(T: Integer): Boolean;
 Begin
  IsVideoTrack := T < 3;
@@ -1229,6 +1426,12 @@ Begin
  C.Sa := 100;
  C.TInL := 15;
  C.TOutL := 15;
+ C.KeySim := 40;
+ C.KeySmo := 20;
+ C.MaskX := 50;
+ C.MaskY := 50;
+ C.MaskW := 50;
+ C.MaskH := 50;
 End;
 
 Function ClipHasFx(Var C: TClip): Boolean;
@@ -1294,9 +1497,10 @@ Begin
      DelClip(J)
     Else If (S < A) And (E > B) Then Begin
      C2 := P.Clips[J];
+     C2.InPt := C2.InPt + SrcOfs(C2, B - S);
+     KfSplit(P.Clips[J], C2, B - S);
      P.Clips[J].Dur := A - S;
      P.Clips[J].TOut := 0;
-     C2.InPt := C2.InPt + ((B - S) * C2.Speed) Div 100;
      C2.Dur := E - B;
      C2.Start := B;
      C2.TIn := 0;
@@ -1307,7 +1511,8 @@ Begin
      P.Clips[J].TOut := 0;
     End
     Else Begin
-     P.Clips[J].InPt := P.Clips[J].InPt + ((B - S) * P.Clips[J].Speed) Div 100;
+     P.Clips[J].InPt := P.Clips[J].InPt + SrcOfs(P.Clips[J], B - S);
+     KfShift(P.Clips[J], B - S);
      P.Clips[J].Dur := E - B;
      P.Clips[J].Start := B;
      P.Clips[J].TIn := 0;
@@ -1341,9 +1546,10 @@ Begin
  E := S + P.Clips[I].Dur;
  If (F <= S) Or (F >= E) Then Exit;
  C2 := P.Clips[I];
+ C2.InPt := C2.InPt + SrcOfs(C2, F - S);
+ KfSplit(P.Clips[I], C2, F - S);
  P.Clips[I].Dur := F - S;
  P.Clips[I].TOut := 0;
- C2.InPt := C2.InPt + ((F - S) * C2.Speed) Div 100;
  C2.Dur := E - F;
  C2.Start := F;
  C2.TIn := 0;
@@ -1735,25 +1941,46 @@ End;
 { Construit le calque d'un clip a l'image Tm de la sequence }
 Procedure BuildClipLayer(I: Integer; Tf: LongInt);
 Var
- SF, Off, Rem, Prog: LongInt;
+ SF, Off, Rem, Prog, Tl: LongInt;
  Kind: Integer;
 Begin
  If NLay > 2 Then Exit;
- SF := P.Clips[I].InPt + ((Tf - P.Clips[I].Start) * P.Clips[I].Speed) Div 100;
+ SF := P.Clips[I].InPt + SrcOfs(P.Clips[I], Tf - P.Clips[I].Start);
  SetupLayer(NLay, P.Clips[I].Med, SF);
  With Lay[NLay] Do Begin
-  Al := (P.Clips[I].Opac * 255) Div 100;
-  PX := (P.Clips[I].PosX * VW) Div BW;
-  PY := (P.Clips[I].PosY * VH) Div BH;
-  Sc := P.Clips[I].Scale;
+  Tl := Tf - P.Clips[I].Start;
+  Al := (Clamp(KfEval(P.Clips[I], 4, Tl, P.Clips[I].Opac), 0, 100) * 255) Div 100;
+  PX := (KfEval(P.Clips[I], 0, Tl, P.Clips[I].PosX) * VW) Div BW;
+  PY := (KfEval(P.Clips[I], 1, Tl, P.Clips[I].PosY) * VH) Div BH;
+  Sc := KfEval(P.Clips[I], 2, Tl, P.Clips[I].Scale);
   If Sc < 1 Then Sc := 1;
-  Br := P.Clips[I].Br;
-  Co := P.Clips[I].Co;
-  Sa := P.Clips[I].Sa;
+  Rt := KfEval(P.Clips[I], 3, Tl, P.Clips[I].Rot);
+  Br := KfEval(P.Clips[I], 5, Tl, P.Clips[I].Br);
+  Co := KfEval(P.Clips[I], 6, Tl, P.Clips[I].Co);
+  Sa := KfEval(P.Clips[I], 7, Tl, P.Clips[I].Sa);
   Mos := (P.Clips[I].Mos * VW) Div BW;
   If (Mos < 2) And (P.Clips[I].Mos > 1) Then Mos := 2;
   Fl := P.Clips[I].Fl;
-  Tr := (Sc <> 100) Or (PX <> 0) Or (PY <> 0);
+  Bl := P.Clips[I].Blend;
+  BlurR := (P.Clips[I].Blur * VW) Div (BW * 8);
+  If (BlurR < 1) And (P.Clips[I].Blur > 0) Then BlurR := 1;
+  Sharp := P.Clips[I].Sharp;
+  Cp := (P.Clips[I].CropL + P.Clips[I].CropT + P.Clips[I].CropR + P.Clips[I].CropB) > 0;
+  CrL := (P.Clips[I].CropL * VW) Div 100;
+  CrR := VW - (P.Clips[I].CropR * VW) Div 100;
+  CrT := (P.Clips[I].CropT * VH) Div 100;
+  CrB := VH - (P.Clips[I].CropB * VH) Div 100;
+  Key := P.Clips[I].KeyOn;
+  KeyT := P.Clips[I].KeySim * 3;
+  KeyS := P.Clips[I].KeySmo * 3;
+  MaskK := P.Clips[I].MaskK;
+  MaskX := P.Clips[I].MaskX;
+  MaskY := P.Clips[I].MaskY;
+  MaskW := P.Clips[I].MaskW;
+  MaskH := P.Clips[I].MaskH;
+  MaskF := (P.Clips[I].MaskF * VW) Div BW;
+  Lut := P.Clips[I].LutIdx;
+  Tr := (Sc <> 100) Or (PX <> 0) Or (PY <> 0) Or (Rt <> 0);
   Fx := (Br <> 0) Or (Co <> 0) Or (Sa <> 100) Or ((Fl And CF_INV) <> 0);
   Off := Tf - P.Clips[I].Start;
   Rem := P.Clips[I].Start + P.Clips[I].Dur - 1 - Tf;
@@ -1798,72 +2025,353 @@ Begin
   End;
 End;
 
+{ ---------- LUT 3D (.CUBE) ---------- }
+
+Var
+ LutSz: Array[1..4] Of Integer;
+ LutData: Array[1..4] Of PBig16;
+ LutPath: Array[1..4] Of String[80];
+
+Function ISqrt(N: LongInt): LongInt;
+Var
+ R, Q: LongInt;
+Begin
+ If N <= 0 Then Begin
+  ISqrt := 0;
+  Exit;
+ End;
+ R := N;
+ Q := (R + 1) Div 2;
+ While Q < R Do Begin
+  R := Q;
+  Q := (R + N Div R) Div 2;
+ End;
+ ISqrt := R;
+End;
+
+{$IFDEF FPC}
+{ Charge un fichier .CUBE (LUT_3D_SIZE N, lignes "r g b" avec r variant le plus vite) }
+Function LutLoad(Const FN: String): Integer;
+Var
+ F: Text;
+ L, T: String;
+ Slot, N, K, Cnt, Code, J: Integer;
+ V: Double;
+ Nm: String;
+ D: PBig16;
+Begin
+ LutLoad := 0;
+ If LutCnt >= 4 Then Exit;
+ {$I-}
+ Assign(F, FN);
+ Reset(F);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ N := 0;
+ D := Nil;
+ Cnt := 0;
+ While Not Eof(F) Do Begin
+  ReadLn(F, L);
+  While (Length(L) > 0) And ((L[1] = ' ') Or (L[1] = #9)) Do Delete(L, 1, 1);
+  If (L = '') Or (L[1] = '#') Then Continue;
+  If UpStr(Copy(L, 1, 11)) = 'LUT_3D_SIZE' Then Begin
+   T := Copy(L, 12, 20);
+   N := Integer(StrVal(T, 0));
+   If (N < 2) Or (N > 33) Then Begin
+    Close(F);
+    Exit;
+   End;
+   GetMem(D, LongInt(N) * N * N * 3 * 2);
+   Continue;
+  End;
+  If ((L[1] >= '0') And (L[1] <= '9')) Or (L[1] = '.') Or (L[1] = '-') Then Begin
+   If (D = Nil) Or (Cnt >= N * N * N) Then Continue;
+   For J := 0 To 2 Do Begin
+    K := Pos(' ', L);
+    If K = 0 Then Begin
+     T := L;
+     L := '';
+    End Else Begin
+     T := Copy(L, 1, K - 1);
+     Delete(L, 1, K);
+     While (Length(L) > 0) And (L[1] = ' ') Do Delete(L, 1, 1);
+    End;
+    Val(T, V, Code);
+    If Code <> 0 Then V := 0;
+    If V < 0 Then V := 0;
+    If V > 1 Then V := 1;
+    D^[Cnt * 3 + J] := Round(V * 65535);
+   End;
+   Inc(Cnt);
+  End;
+ End;
+ Close(F);
+ If (D = Nil) Or (Cnt < N * N * N) Then Begin
+  If D <> Nil Then FreeMem(D, LongInt(N) * N * N * 3 * 2);
+  Exit;
+ End;
+ Inc(LutCnt);
+ Slot := LutCnt;
+ LutSz[Slot] := N;
+ LutData[Slot] := D;
+ LutPath[Slot] := Copy(FN, 1, 80);
+ Nm := FN;
+ K := Length(Nm);
+ While (K > 0) And (Nm[K] <> '\') And (Nm[K] <> '/') Do Dec(K);
+ Delete(Nm, 1, K);
+ LutNames[Slot] := Copy(UpStr(Nm), 1, 12);
+ LutLoad := Slot;
+End;
+{$ELSE}
+Function LutLoad(Const FN: String): Integer;
+Begin
+ LutLoad := 0;
+End;
+{$ENDIF}
+
+Procedure LutApply(Idx: Integer; Var R, G, B: LongInt);
+Var
+ N, R0, G0, B0, R1, G1, B1, FR, FG, FB, Ch, A, Bb: LongInt;
+ D: PBig16;
+ C: Array[0..1, 0..1, 0..1] Of LongInt;
+ X0, X1, Y0, Y1: LongInt;
+Begin
+ If (Idx < 1) Or (Idx > LutCnt) Or (LutData[Idx] = Nil) Then Exit;
+ N := LutSz[Idx];
+ D := LutData[Idx];
+ FR := (R * (N - 1) * 256) Div 255;
+ FG := (G * (N - 1) * 256) Div 255;
+ FB := (B * (N - 1) * 256) Div 255;
+ R0 := FR Shr 8; FR := FR And 255; R1 := Min(R0 + 1, N - 1);
+ G0 := FG Shr 8; FG := FG And 255; G1 := Min(G0 + 1, N - 1);
+ B0 := FB Shr 8; FB := FB And 255; B1 := Min(B0 + 1, N - 1);
+ For Ch := 0 To 2 Do Begin
+  C[0, 0, 0] := D^[((B0 * N + G0) * N + R0) * 3 + Ch];
+  C[1, 0, 0] := D^[((B0 * N + G0) * N + R1) * 3 + Ch];
+  C[0, 1, 0] := D^[((B0 * N + G1) * N + R0) * 3 + Ch];
+  C[1, 1, 0] := D^[((B0 * N + G1) * N + R1) * 3 + Ch];
+  C[0, 0, 1] := D^[((B1 * N + G0) * N + R0) * 3 + Ch];
+  C[1, 0, 1] := D^[((B1 * N + G0) * N + R1) * 3 + Ch];
+  C[0, 1, 1] := D^[((B1 * N + G1) * N + R0) * 3 + Ch];
+  C[1, 1, 1] := D^[((B1 * N + G1) * N + R1) * 3 + Ch];
+  X0 := C[0, 0, 0] + ((C[1, 0, 0] - C[0, 0, 0]) * FR) Div 256;
+  X1 := C[0, 1, 0] + ((C[1, 1, 0] - C[0, 1, 0]) * FR) Div 256;
+  Y0 := C[0, 0, 1] + ((C[1, 0, 1] - C[0, 0, 1]) * FR) Div 256;
+  Y1 := C[0, 1, 1] + ((C[1, 1, 1] - C[0, 1, 1]) * FR) Div 256;
+  A := X0 + ((X1 - X0) * FG) Div 256;
+  Bb := Y0 + ((Y1 - Y0) * FG) Div 256;
+  A := A + ((Bb - A) * FB) Div 256;
+  A := (A * 255 + 32767) Div 65535;
+  If A < 0 Then A := 0;
+  If A > 255 Then A := 255;
+  Case Ch Of
+   0: R := A;
+   1: G := A;
+  Else B := A;
+  End;
+ End;
+End;
+
+{ ---------- Composition des calques ---------- }
+
+{ Echantillon brut du calque I au pixel (X,Y) de la sequence : geometrie, generateur,
+  couleur, LUT, incrustation. Retourne False si le pixel est transparent. }
+Function RawSample(I: Integer; X, Y: LongInt): Boolean;
+Var
+ SX, SY, G, M, RX, RY, RA, RC, RS, RT2, PCb, PCr, KCb, KCr, Dst, T, Sm: LongInt;
+Begin
+ RawSample := False;
+ SX := X;
+ SY := Y;
+ If (Lay[I].Fl And CF_MIRH) <> 0 Then SX := VW - 1 - SX;
+ If (Lay[I].Fl And CF_MIRV) <> 0 Then SY := VH - 1 - SY;
+ If Lay[I].Tr Then Begin
+  RX := SX - VW Div 2 - Lay[I].PX;
+  RY := SY - VH Div 2 - Lay[I].PY;
+  If Lay[I].Rt <> 0 Then Begin
+   RA := ((Lay[I].Rt * 256) Div 360) And 255;
+   RC := Sn(RA + 64);
+   RS := Sn(RA);
+   RT2 := (RC * RX + RS * RY) Div 127;
+   RY := (RC * RY - RS * RX) Div 127;
+   RX := RT2;
+  End;
+  SX := (RX * 100) Div Lay[I].Sc + VW Div 2;
+  SY := (RY * 100) Div Lay[I].Sc + VH Div 2;
+  If (SX < 0) Or (SX >= VW) Or (SY < 0) Or (SY >= VH) Then Exit;
+ End;
+ If Lay[I].Cp Then
+  If (SX < Lay[I].CrL) Or (SX >= Lay[I].CrR) Or (SY < Lay[I].CrT) Or (SY >= Lay[I].CrB) Then Exit;
+ M := Lay[I].Mos;
+ If M > 1 Then Begin
+  SX := Min(VW - 1, (SX Div M) * M + M Div 2);
+  SY := Min(VH - 1, (SY Div M) * M + M Div 2);
+ End;
+ CL := I;
+ Gen(SX, SY);
+ If CA <= 0 Then Exit;
+ If Lay[I].Fx Then Begin
+  If (Lay[I].Fl And CF_INV) <> 0 Then Begin
+   CR := 255 - CR;
+   CG := 255 - CG;
+   CB := 255 - CB;
+  End;
+  If Lay[I].Sa <> 100 Then Begin
+   G := (CR * 30 + CG * 59 + CB * 11) Div 100;
+   CR := G + ((CR - G) * Lay[I].Sa) Div 100;
+   CG := G + ((CG - G) * Lay[I].Sa) Div 100;
+   CB := G + ((CB - G) * Lay[I].Sa) Div 100;
+  End;
+  If (Lay[I].Co <> 0) Or (Lay[I].Br <> 0) Then Begin
+   CR := ((CR - 128) * (100 + Lay[I].Co)) Div 100 + 128 + Lay[I].Br * 2;
+   CG := ((CG - 128) * (100 + Lay[I].Co)) Div 100 + 128 + Lay[I].Br * 2;
+   CB := ((CB - 128) * (100 + Lay[I].Co)) Div 100 + 128 + Lay[I].Br * 2;
+  End;
+  If CR < 0 Then CR := 0 Else If CR > 255 Then CR := 255;
+  If CG < 0 Then CG := 0 Else If CG > 255 Then CG := 255;
+  If CB < 0 Then CB := 0 Else If CB > 255 Then CB := 255;
+ End;
+ If Lay[I].Lut > 0 Then LutApply(Lay[I].Lut, CR, CG, CB);
+ If Lay[I].Key > 0 Then Begin
+  { Distance de chrominance a la couleur-cle (Cb/Cr, echelle 0..255) }
+  PCb := (-43 * CR - 85 * CG + 128 * CB) Div 256;
+  PCr := (128 * CR - 107 * CG - 21 * CB) Div 256;
+  Case Lay[I].Key Of
+   1: Begin KCb := -43 * 0 - 85 * 255 Div 256; KCr := (-107 * 255) Div 256; End;
+   2: Begin KCb := 127; KCr := -21 * 255 Div 256 + 0; End;
+  Else Begin KCb := (-43 * 255) Div 256; KCr := 127; End;
+  End;
+  Dst := Abs(PCb - KCb) + Abs(PCr - KCr);
+  T := Lay[I].KeyT;
+  Sm := Lay[I].KeyS + 1;
+  If Dst <= T Then CA := 0
+  Else If Dst < T + Sm Then CA := (CA * (Dst - T)) Div Sm;
+  If (CA > 0) And (Lay[I].Key = 1) And (CG > Max(CR, CB)) Then CG := Max(CR, CB);
+  If (CA > 0) And (Lay[I].Key = 2) And (CB > Max(CR, CG)) Then CB := Max(CR, CG);
+  If (CA > 0) And (Lay[I].Key = 3) And (CR > Max(CG, CB)) Then CR := Max(CG, CB);
+  If CA <= 0 Then Exit;
+ End;
+ RawSample := True;
+End;
+
+{ Echantillon final : flou / nettete, masque, volet. }
+Function LayerSample(I: Integer; X, Y: LongInt): Boolean;
+Var
+ DX, DY, D, SA, SR, SG, SB, SW0, Dd, Rd, W, CR0, CG0, CB0, CA0, MX0, MY0, HW, HH, Q, A2: LongInt;
+ Ok: Boolean;
+ TX, TY: Integer;
+Begin
+ LayerSample := False;
+ If Lay[I].WM = 1 Then Begin
+  If X >= Lay[I].WP Then Exit;
+ End Else If Lay[I].WM = 2 Then Begin
+  DX := Abs(X - VW Div 2);
+  DY := Abs(Y - VH Div 2);
+  If DX > DY Then D := DX + DY Div 2 Else D := DY + DX Div 2;
+  If D >= Lay[I].WP Then Exit;
+ End;
+ If Lay[I].BlurR > 0 Then Begin
+  Rd := Lay[I].BlurR;
+  SA := 0; SR := 0; SG := 0; SB := 0;
+  For TY := -1 To 1 Do
+   For TX := -1 To 1 Do
+    If RawSample(I, X + TX * Rd, Y + TY * Rd) Then Begin
+     SA := SA + CA;
+     SR := SR + CR * CA;
+     SG := SG + CG * CA;
+     SB := SB + CB * CA;
+    End;
+  If SA <= 0 Then Exit;
+  CR := SR Div SA;
+  CG := SG Div SA;
+  CB := SB Div SA;
+  CA := SA Div 9;
+ End Else Begin
+  If Not RawSample(I, X, Y) Then Exit;
+  If Lay[I].Sharp > 0 Then Begin
+   CR0 := CR; CG0 := CG; CB0 := CB; CA0 := CA;
+   Dd := Max(1, VW Div BW);
+   SR := 0; SG := 0; SB := 0; SW0 := 0;
+   If RawSample(I, X - Dd, Y) Then Begin SR := SR + CR; SG := SG + CG; SB := SB + CB; Inc(SW0); End;
+   If RawSample(I, X + Dd, Y) Then Begin SR := SR + CR; SG := SG + CG; SB := SB + CB; Inc(SW0); End;
+   If RawSample(I, X, Y - Dd) Then Begin SR := SR + CR; SG := SG + CG; SB := SB + CB; Inc(SW0); End;
+   If RawSample(I, X, Y + Dd) Then Begin SR := SR + CR; SG := SG + CG; SB := SB + CB; Inc(SW0); End;
+   If SW0 > 0 Then Begin
+    CR := CR0 + ((CR0 - SR Div SW0) * Lay[I].Sharp) Div 25;
+    CG := CG0 + ((CG0 - SG Div SW0) * Lay[I].Sharp) Div 25;
+    CB := CB0 + ((CB0 - SB Div SW0) * Lay[I].Sharp) Div 25;
+    If CR < 0 Then CR := 0 Else If CR > 255 Then CR := 255;
+    If CG < 0 Then CG := 0 Else If CG > 255 Then CG := 255;
+    If CB < 0 Then CB := 0 Else If CB > 255 Then CB := 255;
+   End Else Begin
+    CR := CR0; CG := CG0; CB := CB0;
+   End;
+   CA := CA0;
+  End;
+ End;
+ { Masque }
+ If Lay[I].MaskK > 0 Then Begin
+  MX0 := (Lay[I].MaskX * VW) Div 100;
+  MY0 := (Lay[I].MaskY * VH) Div 100;
+  HW := Max(1, (Lay[I].MaskW * VW) Div 200);
+  HH := Max(1, (Lay[I].MaskH * VH) Div 200);
+  DX := X - MX0;
+  DY := Y - MY0;
+  If Lay[I].MaskK = 1 Then D := Min(HW - Abs(DX), HH - Abs(DY))
+  Else Begin
+   Q := ISqrt(((DX * HH) * (DX * HH) + (DY * HW) * (DY * HW)) Div Max(1, HW * HH Div 1024)) ;
+   { Q = rayon normalise * 32 * (HW*HH)^0.5 / 1024 ... approximation : distance au bord }
+   Rd := ISqrt(DX * DX * 1024 Div Max(1, HW * HW) + DY * DY * 1024 Div Max(1, HH * HH));
+   D := ((32 - Rd) * Min(HW, HH)) Div 32;
+  End;
+  If Lay[I].MaskF > 0 Then Begin
+   If D <= 0 Then A2 := 0
+   Else If D >= Lay[I].MaskF Then A2 := 255
+   Else A2 := (D * 255) Div Lay[I].MaskF;
+  End Else If D >= 0 Then A2 := 255 Else A2 := 0;
+  If (Lay[I].Fl And CF_MASKINV) <> 0 Then A2 := 255 - A2;
+  CA := (CA * A2) Div 255;
+  If CA <= 0 Then Exit;
+ End;
+ LayerSample := True;
+End;
+
 Procedure Compose(X, Y: LongInt);
 Var
  I: Integer;
- SX, SY, A, G, DX, DY, D, M: LongInt;
- Skip: Boolean;
+ A, BR2, BG2, BB2: LongInt;
 Begin
  AR := 0;
  AG := 0;
  AB := 0;
  For I := 0 To NLay - 1 Do Begin
   CL := I;
-  Skip := False;
-  SX := X;
-  SY := Y;
-  If Lay[I].WM = 1 Then
-   Skip := X >= Lay[I].WP
-  Else If Lay[I].WM = 2 Then Begin
-   DX := Abs(X - VW Div 2);
-   DY := Abs(Y - VH Div 2);
-   If DX > DY Then D := DX + DY Div 2 Else D := DY + DX Div 2;
-   Skip := D >= Lay[I].WP;
-  End;
-  If Not Skip Then Begin
-   If (Lay[I].Fl And CF_MIRH) <> 0 Then SX := VW - 1 - SX;
-   If (Lay[I].Fl And CF_MIRV) <> 0 Then SY := VH - 1 - SY;
-   If Lay[I].Tr Then Begin
-    SX := ((SX - VW Div 2 - Lay[I].PX) * 100) Div Lay[I].Sc + VW Div 2;
-    SY := ((SY - VH Div 2 - Lay[I].PY) * 100) Div Lay[I].Sc + VH Div 2;
-    If (SX < 0) Or (SX >= VW) Or (SY < 0) Or (SY >= VH) Then Skip := True;
-   End;
-  End;
-  If Not Skip Then Begin
-   M := Lay[I].Mos;
-   If M > 1 Then Begin
-    SX := Min(VW - 1, (SX Div M) * M + M Div 2);
-    SY := Min(VH - 1, (SY Div M) * M + M Div 2);
-   End;
-   Gen(SX, SY);
-   If CA > 0 Then Begin
-    If Lay[I].Fx Then Begin
-     If (Lay[I].Fl And CF_INV) <> 0 Then Begin
-      CR := 255 - CR;
-      CG := 255 - CG;
-      CB := 255 - CB;
+  If LayerSample(I, X, Y) Then Begin
+   A := (CA * Lay[I].Al) Div 255;
+   If A > 0 Then Begin
+    BR2 := CR;
+    BG2 := CG;
+    BB2 := CB;
+    Case Lay[I].Bl Of
+     1: Begin BR2 := Min(255, AR + CR); BG2 := Min(255, AG + CG); BB2 := Min(255, AB + CB); End;
+     2: Begin BR2 := (AR * CR) Div 255; BG2 := (AG * CG) Div 255; BB2 := (AB * CB) Div 255; End;
+     3: Begin
+      BR2 := 255 - ((255 - AR) * (255 - CR)) Div 255;
+      BG2 := 255 - ((255 - AG) * (255 - CG)) Div 255;
+      BB2 := 255 - ((255 - AB) * (255 - CB)) Div 255;
      End;
-     If Lay[I].Sa <> 100 Then Begin
-      G := (CR * 30 + CG * 59 + CB * 11) Div 100;
-      CR := G + ((CR - G) * Lay[I].Sa) Div 100;
-      CG := G + ((CG - G) * Lay[I].Sa) Div 100;
-      CB := G + ((CB - G) * Lay[I].Sa) Div 100;
+     4: Begin
+      If AR < 128 Then BR2 := (2 * AR * CR) Div 255 Else BR2 := 255 - (2 * (255 - AR) * (255 - CR)) Div 255;
+      If AG < 128 Then BG2 := (2 * AG * CG) Div 255 Else BG2 := 255 - (2 * (255 - AG) * (255 - CG)) Div 255;
+      If AB < 128 Then BB2 := (2 * AB * CB) Div 255 Else BB2 := 255 - (2 * (255 - AB) * (255 - CB)) Div 255;
      End;
-     If (Lay[I].Co <> 0) Or (Lay[I].Br <> 0) Then Begin
-      CR := ((CR - 128) * (100 + Lay[I].Co)) Div 100 + 128 + Lay[I].Br * 2;
-      CG := ((CG - 128) * (100 + Lay[I].Co)) Div 100 + 128 + Lay[I].Br * 2;
-      CB := ((CB - 128) * (100 + Lay[I].Co)) Div 100 + 128 + Lay[I].Br * 2;
-     End;
-     If CR < 0 Then CR := 0 Else If CR > 255 Then CR := 255;
-     If CG < 0 Then CG := 0 Else If CG > 255 Then CG := 255;
-     If CB < 0 Then CB := 0 Else If CB > 255 Then CB := 255;
+     5: Begin BR2 := Abs(AR - CR); BG2 := Abs(AG - CG); BB2 := Abs(AB - CB); End;
+     6: Begin BR2 := Min(AR, CR); BG2 := Min(AG, CG); BB2 := Min(AB, CB); End;
+     7: Begin BR2 := Max(AR, CR); BG2 := Max(AG, CG); BB2 := Max(AB, CB); End;
     End;
-    A := (CA * Lay[I].Al) Div 255;
-    If A > 0 Then Begin
-     AR := AR + ((CR - AR) * A) Div 255;
-     AG := AG + ((CG - AG) * A) Div 255;
-     AB := AB + ((CB - AB) * A) Div 255;
-    End;
+    AR := AR + ((BR2 - AR) * A) Div 255;
+    AG := AG + ((BG2 - AG) * A) Div 255;
+    AB := AB + ((BB2 - AB) * A) Div 255;
    End;
   End;
   If Lay[I].Dim < 256 Then Begin
@@ -1953,7 +2461,7 @@ Begin
    I := FindClip(T, Tm);
    If (I >= 0) And ((P.Clips[I].Fl And CF_OFF) = 0) And (Not P.Clips[I].Mute) Then Begin
     M := P.Clips[I].Med;
-    SF := P.Clips[I].InPt + ((Tm - P.Clips[I].Start) * P.Clips[I].Speed) Div 100;
+    SF := P.Clips[I].InPt + SrcOfs(P.Clips[I], Tm - P.Clips[I].Start);
     Beat := P.Fps Div 3;
     If Beat < 1 Then Beat := 1;
     AmpR := -1;
@@ -1994,8 +2502,8 @@ Begin
       Amp := (Amp * Rem) Div P.Clips[I].TOutL;
       If AmpR >= 0 Then AmpR := (AmpR * Rem) Div P.Clips[I].TOutL;
      End;
-    Amp := (Amp * (100 + P.Clips[I].Vol * 3)) Div 100;
-    If AmpR >= 0 Then AmpR := Clamp((AmpR * (100 + P.Clips[I].Vol * 3)) Div 100, 0, 100);
+    Amp := (Amp * (100 + Integer(KfEval(P.Clips[I], 8, Off, P.Clips[I].Vol)) * 3)) Div 100;
+    If AmpR >= 0 Then AmpR := Clamp((AmpR * (100 + Integer(KfEval(P.Clips[I], 8, Off, P.Clips[I].Vol)) * 3)) Div 100, 0, 100);
     If Amp < 0 Then Amp := 0;
     If Amp > 100 Then Amp := 100;
     AL := Min(100, AL + Amp);
@@ -2715,12 +3223,18 @@ End;
 { ====================================================================== }
 
 Const
- MAXCTL = 24;
+ MAXCTL = 48;
 
 Var
  CtlN: Integer;
  CtlKind: Array[0..MAXCTL-1] Of Integer;  { 0 curseur, 1 case, 2 type, 3 titre }
  CtlId: Array[0..MAXCTL-1] Of Integer;
+
+Const
+ BlendNames: Array[0..7] Of String[14] =
+  ('Normal','Addition','Multiplier','Ecran','Superposer','Difference','Obscurcir','Eclaircir');
+ KeyNames: Array[0..3] Of String[10] = ('Aucune','Vert','Bleu','Rouge');
+ MaskNames: Array[0..2] Of String[10] = ('Aucun','Rectangle','Ellipse');
 
 Function CtlLabel(Id: Integer): String;
 Begin
@@ -2736,18 +3250,49 @@ Begin
   9: CtlLabel := 'Volume (dB)';
   10: CtlLabel := 'Durée début';
   11: CtlLabel := 'Durée fin';
+  12: CtlLabel := 'Rotation';
+  13: CtlLabel := 'Panoramique';
+  14: CtlLabel := 'Gauche %';
+  15: CtlLabel := 'Haut %';
+  16: CtlLabel := 'Droite %';
+  17: CtlLabel := 'Bas %';
+  18: CtlLabel := 'Flou';
+  19: CtlLabel := 'Netteté';
   20: CtlLabel := 'Miroir horiz.';
   21: CtlLabel := 'Miroir vert.';
   22: CtlLabel := 'Inverser';
   23: CtlLabel := 'Muet';
   24: CtlLabel := 'Désactivé';
+  25: CtlLabel := 'Fusion';
+  26: CtlLabel := 'Clé de teinte';
+  27: CtlLabel := 'Tolérance';
+  28: CtlLabel := 'Adoucir';
   30: CtlLabel := 'Trans. début';
   31: CtlLabel := 'Trans. fin';
+  32: CtlLabel := 'Forme';
+  33: CtlLabel := 'Centre X %';
+  34: CtlLabel := 'Centre Y %';
+  35: CtlLabel := 'Largeur %';
+  36: CtlLabel := 'Hauteur %';
+  37: CtlLabel := 'Contour doux';
+  38: CtlLabel := 'Inverser masque';
+  39: CtlLabel := 'LUT';
+  45: CtlLabel := 'Graves dB';
+  46: CtlLabel := 'Médiums dB';
+  47: CtlLabel := 'Aigus dB';
+  48: CtlLabel := 'Compresseur';
+  49: CtlLabel := 'Réverbération';
+  50: CtlLabel := 'Porte (bruit)';
   40: CtlLabel := 'Mouvement';
   41: CtlLabel := 'Couleur';
   42: CtlLabel := 'Effets';
   43: CtlLabel := 'Transitions';
   44: CtlLabel := 'Audio';
+  51: CtlLabel := 'Recadrage';
+  52: CtlLabel := 'Flou / Netteté';
+  53: CtlLabel := 'Incrustation';
+  54: CtlLabel := 'Masque';
+  55: CtlLabel := 'Effets audio';
  Else CtlLabel := '';
  End;
 End;
@@ -2755,11 +3300,15 @@ End;
 Function CtlMin(Id: Integer): Integer;
 Begin
  Case Id Of
-  1, 2: CtlMin := -200;
+  1, 2: CtlMin := -400;
   3: CtlMin := 10;
   5, 6: CtlMin := -100;
   9: CtlMin := -40;
   10, 11: CtlMin := 1;
+  12: CtlMin := -360;
+  13: CtlMin := -100;
+  35, 36: CtlMin := 1;
+  45, 46, 47: CtlMin := -12;
  Else CtlMin := 0;
  End;
 End;
@@ -2767,7 +3316,7 @@ End;
 Function CtlMax(Id: Integer): Integer;
 Begin
  Case Id Of
-  1, 2: CtlMax := 200;
+  1, 2: CtlMax := 400;
   3: CtlMax := 400;
   4: CtlMax := 100;
   5, 6: CtlMax := 100;
@@ -2775,6 +3324,16 @@ Begin
   8: CtlMax := 30;
   9: CtlMax := 12;
   10, 11: CtlMax := 90;
+  12: CtlMax := 360;
+  13: CtlMax := 100;
+  14, 15, 16, 17: CtlMax := 100;
+  18: CtlMax := 40;
+  19: CtlMax := 100;
+  27, 28: CtlMax := 100;
+  33, 34, 35, 36: CtlMax := 100;
+  37: CtlMax := 50;
+  45, 46, 47: CtlMax := 12;
+  48, 49, 50: CtlMax := 100;
  Else CtlMax := 1;
  End;
 End;
@@ -2784,42 +3343,104 @@ Begin
  Case Id Of
   3, 4, 7: CtlDef := 100;
   10, 11: CtlDef := 15;
+  27: CtlDef := 40;
+  28: CtlDef := 20;
+  33, 34, 35, 36: CtlDef := 50;
  Else CtlDef := 0;
  End;
 End;
 
+{ Parametre animable (index d'images-cles) ou -1 }
+Function CtlKP(Id: Integer): Integer;
+Begin
+ Case Id Of
+  1: CtlKP := 0;
+  2: CtlKP := 1;
+  3: CtlKP := 2;
+  12: CtlKP := 3;
+  4: CtlKP := 4;
+  5: CtlKP := 5;
+  6: CtlKP := 6;
+  7: CtlKP := 7;
+  9: CtlKP := 8;
+  13: CtlKP := 9;
+ Else CtlKP := -1;
+ End;
+End;
+
 Function CtlGet(C: Integer; Id: Integer): Integer;
+Var
+ V: Integer;
+ KP: Integer;
 Begin
  CtlGet := 0;
  If (C < 0) Or (C >= P.NC) Then Exit;
- With P.Clips[C] Do
+ With P.Clips[C] Do Begin
   Case Id Of
-   1: CtlGet := PosX;
-   2: CtlGet := PosY;
-   3: CtlGet := Scale;
-   4: CtlGet := Opac;
-   5: CtlGet := Br;
-   6: CtlGet := Co;
-   7: CtlGet := Sa;
-   8: CtlGet := Mos;
-   9: CtlGet := Vol;
-   10: CtlGet := TInL;
-   11: CtlGet := TOutL;
-   20: CtlGet := Ord((Fl And CF_MIRH) <> 0);
-   21: CtlGet := Ord((Fl And CF_MIRV) <> 0);
-   22: CtlGet := Ord((Fl And CF_INV) <> 0);
-   23: CtlGet := Ord(Mute);
-   24: CtlGet := Ord((Fl And CF_OFF) <> 0);
-   30: CtlGet := TIn;
-   31: CtlGet := TOut;
+   1: V := PosX;
+   2: V := PosY;
+   3: V := Scale;
+   4: V := Opac;
+   5: V := Br;
+   6: V := Co;
+   7: V := Sa;
+   8: V := Mos;
+   9: V := Vol;
+   10: V := TInL;
+   11: V := TOutL;
+   12: V := Rot;
+   13: V := Pan;
+   14: V := CropL;
+   15: V := CropT;
+   16: V := CropR;
+   17: V := CropB;
+   18: V := Blur;
+   19: V := Sharp;
+   20: V := Ord((Fl And CF_MIRH) <> 0);
+   21: V := Ord((Fl And CF_MIRV) <> 0);
+   22: V := Ord((Fl And CF_INV) <> 0);
+   23: V := Ord(Mute);
+   24: V := Ord((Fl And CF_OFF) <> 0);
+   25: V := Blend;
+   26: V := KeyOn;
+   27: V := KeySim;
+   28: V := KeySmo;
+   30: V := TIn;
+   31: V := TOut;
+   32: V := MaskK;
+   33: V := MaskX;
+   34: V := MaskY;
+   35: V := MaskW;
+   36: V := MaskH;
+   37: V := MaskF;
+   38: V := Ord((Fl And CF_MASKINV) <> 0);
+   39: V := LutIdx;
+   45: V := EqL;
+   46: V := EqM;
+   47: V := EqH;
+   48: V := Comp;
+   49: V := Rev;
+   50: V := Gate;
+  Else V := 0;
   End;
+  KP := CtlKP(Id);
+  If KP >= 0 Then V := Integer(KfEval(P.Clips[C], KP, Playhead - Start, V));
+ End;
+ CtlGet := V;
 End;
 
 Procedure CtlSet(C: Integer; Id, V: Integer);
 Var
- Bit: Integer;
+ Bit, KP: Integer;
+ Tl: LongInt;
 Begin
  If (C < 0) Or (C >= P.NC) Then Exit;
+ KP := CtlKP(Id);
+ If (KP >= 0) And KfHas(P.Clips[C], KP) Then Begin
+  Tl := Clamp(Playhead - P.Clips[C].Start, 0, Max(0, P.Clips[C].Dur - 1));
+  KfSet(P.Clips[C], KP, Tl, V, DefInterp);
+  Exit;
+ End;
  With P.Clips[C] Do
   Case Id Of
    1: PosX := V;
@@ -2833,19 +3454,74 @@ Begin
    9: Vol := V;
    10: TInL := V;
    11: TOutL := V;
-   20, 21, 22, 24: Begin
+   12: Rot := V;
+   13: Pan := V;
+   14: CropL := V;
+   15: CropT := V;
+   16: CropR := V;
+   17: CropB := V;
+   18: Blur := V;
+   19: Sharp := V;
+   20, 21, 22, 24, 38: Begin
     Case Id Of
      20: Bit := CF_MIRH;
      21: Bit := CF_MIRV;
      22: Bit := CF_INV;
+     38: Bit := CF_MASKINV;
     Else Bit := CF_OFF;
     End;
     If V <> 0 Then Fl := Fl Or Bit Else Fl := Fl And (Not Bit);
    End;
    23: Mute := V <> 0;
+   25: Blend := V;
+   26: KeyOn := V;
+   27: KeySim := V;
+   28: KeySmo := V;
    30: TIn := V;
    31: TOut := V;
+   32: MaskK := V;
+   33: MaskX := V;
+   34: MaskY := V;
+   35: MaskW := V;
+   36: MaskH := V;
+   37: MaskF := V;
+   39: LutIdx := V;
+   45: EqL := V;
+   46: EqM := V;
+   47: EqH := V;
+   48: Comp := V;
+   49: Rev := V;
+   50: Gate := V;
   End;
+End;
+
+{ Active/desactive l'animation d'un parametre : premiere cle a la tete de lecture,
+  puis ajoute ou retire la cle a cet instant ; desactive quand la derniere cle disparait. }
+Procedure KfToggleKey(C: Integer; Id: Integer; Off: Boolean);
+Var
+ KP, I: Integer;
+ Tl, V: LongInt;
+Begin
+ KP := CtlKP(Id);
+ If (KP < 0) Or (C < 0) Or (C >= P.NC) Then Exit;
+ Tl := Clamp(Playhead - P.Clips[C].Start, 0, Max(0, P.Clips[C].Dur - 1));
+ V := CtlGet(C, Id);
+ If Off Then Begin
+  P.Clips[C].Kn[KP] := 0;
+  CtlSet(C, Id, Integer(V));
+  Exit;
+ End;
+ If Not KfHas(P.Clips[C], KP) Then Begin
+  KfSet(P.Clips[C], KP, Tl, V, DefInterp);
+  Exit;
+ End;
+ I := KfFind(P.Clips[C], KP, Tl);
+ If I >= 0 Then Begin
+  If P.Clips[C].Kn[KP] = 1 Then Begin
+   P.Clips[C].Kn[KP] := 0;
+   CtlSet(C, Id, Integer(V));
+  End Else KfDel(P.Clips[C], KP, I);
+ End Else KfSet(P.Clips[C], KP, Tl, V, DefInterp);
 End;
 
 Procedure CtlAdd(K, Id: Integer);
@@ -2865,12 +3541,20 @@ Begin
  C := FirstSel;
  If C < 0 Then Exit;
  If IsVideoTrack(P.Clips[C].Trk) Then Begin
-  CtlAdd(3, 40); CtlAdd(0, 1); CtlAdd(0, 2); CtlAdd(0, 3); CtlAdd(0, 4);
+  CtlAdd(3, 40); CtlAdd(0, 1); CtlAdd(0, 2); CtlAdd(0, 3); CtlAdd(0, 12); CtlAdd(0, 4);
   CtlAdd(3, 41); CtlAdd(0, 5); CtlAdd(0, 6); CtlAdd(0, 7);
-  CtlAdd(3, 42); CtlAdd(0, 8); CtlAdd(1, 20); CtlAdd(1, 21); CtlAdd(1, 22); CtlAdd(1, 24);
+  CtlAdd(3, 51); CtlAdd(0, 14); CtlAdd(0, 15); CtlAdd(0, 16); CtlAdd(0, 17);
+  CtlAdd(3, 52); CtlAdd(0, 18); CtlAdd(0, 19);
+  CtlAdd(3, 53); CtlAdd(2, 26); CtlAdd(0, 27); CtlAdd(0, 28);
+  CtlAdd(3, 54); CtlAdd(2, 32); CtlAdd(0, 33); CtlAdd(0, 34); CtlAdd(0, 35); CtlAdd(0, 36);
+  CtlAdd(0, 37); CtlAdd(1, 38);
+  CtlAdd(3, 42); CtlAdd(0, 8); CtlAdd(1, 20); CtlAdd(1, 21); CtlAdd(1, 22); CtlAdd(2, 25);
+  CtlAdd(2, 39); CtlAdd(1, 24);
   CtlAdd(3, 43); CtlAdd(2, 30); CtlAdd(0, 10); CtlAdd(2, 31); CtlAdd(0, 11);
  End Else Begin
-  CtlAdd(3, 44); CtlAdd(0, 9); CtlAdd(1, 23); CtlAdd(1, 24);
+  CtlAdd(3, 44); CtlAdd(0, 9); CtlAdd(0, 13); CtlAdd(1, 23); CtlAdd(1, 24);
+  CtlAdd(3, 55); CtlAdd(0, 45); CtlAdd(0, 46); CtlAdd(0, 47); CtlAdd(0, 48); CtlAdd(0, 49);
+  CtlAdd(0, 50);
   CtlAdd(3, 43); CtlAdd(2, 30); CtlAdd(0, 10); CtlAdd(2, 31); CtlAdd(0, 11);
  End;
 End;
@@ -2885,28 +3569,48 @@ End;
 
 Function CtlSliderX1: Integer;
 Begin
- CtlSliderX1 := AX1 + 104;
+ CtlSliderX1 := AX1 + 118;
 End;
 
 Function CtlSliderX2: Integer;
 Begin
- CtlSliderX2 := AX1 + 236;
+ CtlSliderX2 := AX2 - 62;
+End;
+
+Function CtlKindMax(Id: Integer; Vid: Boolean): Integer;
+Begin
+ Case Id Of
+  25: CtlKindMax := 7;
+  26: CtlKindMax := 3;
+  32: CtlKindMax := 2;
+  39: CtlKindMax := LutCnt;
+ Else If Vid Then CtlKindMax := 4 Else CtlKindMax := 1;
+ End;
 End;
 
 Function TransName(Id, V: Integer): String;
 Begin
- If (Id = 30) Or (Id = 31) Then Begin
-  If (FirstSel >= 0) And (Not IsVideoTrack(P.Clips[FirstSel].Trk)) Then Begin
-   If V = 0 Then TransName := 'Aucune' Else TransName := 'Fondu audio';
-   Exit;
+ Case Id Of
+  25: If (V >= 0) And (V <= 7) Then TransName := BlendNames[V] Else TransName := '?';
+  26: If (V >= 0) And (V <= 3) Then TransName := KeyNames[V] Else TransName := '?';
+  32: If (V >= 0) And (V <= 2) Then TransName := MaskNames[V] Else TransName := '?';
+  39: If V = 0 Then TransName := 'Aucune' Else If V <= LutCnt Then TransName := LutNames[V] Else TransName := '?';
+ Else Begin
+   If (Id = 30) Or (Id = 31) Then Begin
+    If (FirstSel >= 0) And (Not IsVideoTrack(P.Clips[FirstSel].Trk)) Then Begin
+     If V = 0 Then TransName := 'Aucune' Else TransName := 'Fondu audio';
+     Exit;
+    End;
+   End;
+   If V <= 4 Then TransName := TrNames[V] Else TransName := '?';
   End;
  End;
- If V <= 4 Then TransName := TrNames[V] Else TransName := '?';
 End;
 
 Procedure DrawControls;
 Var
- I, Y, C, V, X1, X2, T: Integer;
+ I, Y, C, V, X1, X2, T, KP: Integer;
+ Tl: LongInt;
 Begin
  PanelBox(AX1, AY1, AX2, AY2);
  DrawTabs(AX1, AY1, AX2, 2, 1, TabNA);
@@ -2928,6 +3632,7 @@ Begin
  End;
  X1 := CtlSliderX1;
  X2 := CtlSliderX2;
+ Tl := Playhead - P.Clips[C].Start;
  For I := CtlScroll To Min(CtlN - 1, CtlScroll + CTLROWS - 1) Do Begin
   Y := CtlRowY(I);
   V := CtlGet(C, CtlId[I]);
@@ -2937,7 +3642,15 @@ Begin
     Txt(AX1 + 6, Y + 2, CtlLabel(CtlId[I]), White);
    End;
    0: Begin
-    Txt(AX1 + 10, Y + 2, CtlLabel(CtlId[I]), LightGray);
+    KP := CtlKP(CtlId[I]);
+    If KP >= 0 Then Begin
+     Frame(AX1 + 5, Y + 1, AX1 + 13, Y + 9, LightGray);
+     If KfHas(P.Clips[C], KP) Then Begin
+      If KfFind(P.Clips[C], KP, Tl) >= 0 Then FillR(AX1 + 7, Y + 3, AX1 + 11, Y + 7, Yellow)
+      Else FillR(AX1 + 7, Y + 3, AX1 + 11, Y + 7, LightCyan);
+     End;
+    End;
+    Txt(AX1 + 17, Y + 2, CtlLabel(CtlId[I]), LightGray);
     HLine(X1, X2, Y + 5, DarkGray);
     HLine(X1, X2, Y + 6, DarkGray);
     T := X1 + Integer(((V - CtlMin(CtlId[I])) * LongInt(X2 - X1)) Div
@@ -2951,9 +3664,9 @@ Begin
     Txt(AX1 + 24, Y + 2, CtlLabel(CtlId[I]), LightGray);
    End;
    2: Begin
-    Txt(AX1 + 10, Y + 2, CtlLabel(CtlId[I]), LightGray);
-    FillR(X1, Y, X2, Y + CTLH - 3, DarkGray);
-    Txt(X1 + 4, Y + 2, TransName(CtlId[I], V), White);
+    Txt(AX1 + 17, Y + 2, CtlLabel(CtlId[I]), LightGray);
+    FillR(X1, Y, AX2 - 8, Y + CTLH - 3, DarkGray);
+    Txt(X1 + 4, Y + 2, Fit(TransName(CtlId[I], V), AX2 - 8 - X1 - 6), White);
    End;
   End;
  End;
@@ -3319,7 +4032,7 @@ Begin
   While X <= XB Do Begin
    F := XToFrame(X) - P.Clips[I].Start;
    If Env <> Nil Then Begin
-    WI := ((P.Clips[I].InPt + (F * P.Clips[I].Speed) Div 100) * 50) Div P.Fps;
+    WI := ((P.Clips[I].InPt + SrcOfs(P.Clips[I], F)) * 50) Div P.Fps;
     If (WI >= 0) And (WI < EN) Then
      H := (Max(Env^[WI * 2], Env^[WI * 2 + 1]) * 7) Div 255
     Else H := 0;
@@ -4121,7 +4834,7 @@ End;
 Function SaveProject(Const FN: String): Boolean;
 Var
  F: Text;
- I: Integer;
+ I, KPi, KJ: Integer;
 Begin
  SaveProject := False;
  {$I-}
@@ -4138,10 +4851,21 @@ Begin
           P.Media[I].Par, '|', P.Media[I].Txt, '|', P.Media[I].Cache, '|', P.Media[I].NF, '|',
           P.Media[I].Fps100, '|', P.Media[I].CW, '|', P.Media[I].CH, '|', P.Media[I].Path);
  For I := 0 To P.NC - 1 Do
-  With P.Clips[I] Do
+  With P.Clips[I] Do Begin
    WriteLn(F, 'C|', Trk, ' ', Med, ' ', Start, ' ', Dur, ' ', InPt, ' ', Speed, ' ', Opac, ' ',
            PosX, ' ', PosY, ' ', Scale, ' ', Br, ' ', Co, ' ', Sa, ' ', Mos, ' ', Fl, ' ',
            Vol, ' ', Ord(Mute), ' ', TIn, ' ', TInL, ' ', TOut, ' ', TOutL, '|', Name);
+   WriteLn(F, 'X|', Speed2, ' ', Rot, ' ', Pan, ' ', Blend, ' ', CropL, ' ', CropT, ' ', CropR, ' ',
+           CropB, ' ', Blur, ' ', Sharp, ' ', KeyOn, ' ', KeySim, ' ', KeySmo, ' ', MaskK, ' ',
+           MaskX, ' ', MaskY, ' ', MaskW, ' ', MaskH, ' ', MaskF, ' ', LutIdx, ' ', EqL, ' ',
+           EqM, ' ', EqH, ' ', Comp, ' ', Rev, ' ', Gate, ' ', Link);
+   For KPi := 0 To NKP - 1 Do
+    If Kn[KPi] > 0 Then Begin
+     Write(F, 'Y|', KPi, ' ', Kn[KPi]);
+     For KJ := 0 To Kn[KPi] - 1 Do Write(F, ' ', Kt[KPi, KJ], ' ', Kv[KPi, KJ], ' ', Ki[KPi, KJ]);
+     WriteLn(F);
+    End;
+  End;
  For I := 0 To P.NK - 1 Do WriteLn(F, 'K|', P.Marks[I].Pos, '|', P.Marks[I].Name);
  WriteLn(F, 'I|', P.InM, '|', P.OutM);
  WriteLn(F, 'T|', P.TrkF[0], ' ', P.TrkF[1], ' ', P.TrkF[2], ' ', P.TrkF[3], ' ', P.TrkF[4], ' ',
@@ -4191,9 +4915,11 @@ Var
  L, Tag, S: String;
  C: TClip;
  M: Integer;
- Slot: Integer;
+ Slot, KJ: Integer;
+ LastOk: Boolean;
 Begin
  LoadProject := False;
+ LastOk := False;
  {$I-}
  Assign(F, FN);
  Reset(F);
@@ -4263,7 +4989,53 @@ Begin
    C.TOutL := Integer(TakeNum(S));
    C.Name := Copy(L, 1, 20);
    If (C.Trk >= 0) And (C.Trk < NTRK) And (C.Med >= 0) And (C.Med < P.NM) And
-      (C.Dur > 0) And (C.Speed > 0) And (C.Scale > 0) Then AddClipRec(C);
+      (C.Dur > 0) And (C.Speed > 0) And (C.Scale > 0) Then LastOk := AddClipRec(C) >= 0
+   Else LastOk := False;
+  End
+  Else If Tag = 'X' Then Begin
+   If LastOk Then With P.Clips[P.NC - 1] Do Begin
+    Speed2 := Integer(TakeNum(L));
+    Rot := Integer(TakeNum(L));
+    Pan := Integer(TakeNum(L));
+    Blend := Integer(TakeNum(L));
+    CropL := Integer(TakeNum(L));
+    CropT := Integer(TakeNum(L));
+    CropR := Integer(TakeNum(L));
+    CropB := Integer(TakeNum(L));
+    Blur := Integer(TakeNum(L));
+    Sharp := Integer(TakeNum(L));
+    KeyOn := Integer(TakeNum(L));
+    KeySim := Integer(TakeNum(L));
+    KeySmo := Integer(TakeNum(L));
+    MaskK := Integer(TakeNum(L));
+    MaskX := Integer(TakeNum(L));
+    MaskY := Integer(TakeNum(L));
+    MaskW := Integer(TakeNum(L));
+    MaskH := Integer(TakeNum(L));
+    MaskF := Integer(TakeNum(L));
+    LutIdx := Integer(TakeNum(L));
+    EqL := Integer(TakeNum(L));
+    EqM := Integer(TakeNum(L));
+    EqH := Integer(TakeNum(L));
+    Comp := Integer(TakeNum(L));
+    Rev := Integer(TakeNum(L));
+    Gate := Integer(TakeNum(L));
+    Link := Integer(TakeNum(L));
+   End;
+  End
+  Else If Tag = 'Y' Then Begin
+   If LastOk Then With P.Clips[P.NC - 1] Do Begin
+    M := Integer(TakeNum(L));
+    Slot := Integer(TakeNum(L));
+    If (M >= 0) And (M < NKP) And (Slot > 0) And (Slot <= MAXK) Then Begin
+     Kn[M] := Slot;
+     For KJ := 0 To Slot - 1 Do Begin
+      Kt[M, KJ] := TakeNum(L);
+      Kv[M, KJ] := SmallInt(TakeNum(L));
+      Ki[M, KJ] := Byte(TakeNum(L));
+     End;
+    End;
+   End;
   End
   Else If Tag = 'K' Then Begin
    If P.NK < MAXMARK Then Begin
@@ -4385,7 +5157,7 @@ Begin
     If T < 3 Then Ch := 'V' Else Ch := 'A';
     With P.Clips[Best] Do Begin
      WriteLn(F, Pad(N, 3), '  ', EDLName(P.Media[Med].Name), '        ', Ch,
-             '     C        ', TC(InPt), ' ', TC(InPt + (Dur * Speed) Div 100), ' ',
+             '     C        ', TC(InPt), ' ', TC(InPt + SrcOfs(P.Clips[Best], Dur)), ' ',
              TC(Start), ' ', TC(Start + Dur));
      WriteLn(F, '* FROM CLIP NAME: ', Name);
      WriteLn(F, '* TRACK: ', TrackName(T));
@@ -23473,6 +24245,18 @@ Begin
  R := Fr[1];
 End;
 
+{ Position source (en echantillons) apres Tl echantillons de sequence, avec rampe de vitesse }
+Function AuSrc(Var C: TClip; Tl, DurS: Int64): Int64;
+Var
+ S1, S2: Int64;
+Begin
+ S1 := C.Speed;
+ S2 := C.Speed2;
+ If S2 <= 0 Then S2 := S1;
+ If (S1 = S2) Or (DurS < 1) Then AuSrc := (Tl * S1) Div 100
+ Else AuSrc := (S1 * Tl + ((S2 - S1) * Tl * Tl) Div (2 * DurS)) Div 100;
+End;
+
 Function AuSynth(Kind, Par: Integer; SP: Int64): LongInt;
 Var
  Beat, Ph, Hz, Env: LongInt;
@@ -23504,7 +24288,7 @@ Procedure AuClipBlock(Var C: TClip; S0: Int64; N: Integer);
 Var
  CS, CE, Lo, Hi, S, TL, SP, InBase, K, K0, K1: Int64;
  W, I, Bf, Kd, Fi, Fo, Idx: LongInt;
- L, R, G, Gv, T2: LongInt;
+ L, R, G, G1, Gv, T2, Pn0, Pn1, PnV, GL, GR: LongInt;
  Slot: Integer;
  Got: Word;
  Vol: Integer;
@@ -23517,10 +24301,11 @@ Begin
  If CE < Hi Then Hi := CE;
  If Hi <= Lo Then Exit;
  Kd := P.Media[C.Med].Kind;
- Vol := C.Vol;
- If Vol < -40 Then Vol := -40;
- If Vol > 12 Then Vol := 12;
+ Vol := Integer(Clamp(KfEval(C, 8, ((Lo - CS) * P.Fps) Div AuRate, C.Vol), -40, 12));
  G := AuGain[Vol + 40];
+ G1 := AuGain[Integer(Clamp(KfEval(C, 8, ((Hi - CS) * P.Fps) Div AuRate, C.Vol), -40, 12)) + 40];
+ Pn0 := Clamp(KfEval(C, 9, ((Lo - CS) * P.Fps) Div AuRate, C.Pan), -100, 100);
+ Pn1 := Clamp(KfEval(C, 9, ((Hi - CS) * P.Fps) Div AuRate, C.Pan), -100, 100);
  InBase := Int64(C.InPt) * AuRate Div P.Fps;
  Fi := 0;
  Fo := 0;
@@ -23532,8 +24317,8 @@ Begin
   Slot := AuFileSlot(P.Media[C.Med].Path);
   If Slot < 0 Then Exit;
   Bf := AuInf[W].Ch * (AuInf[W].Bits Div 8);
-  K0 := (InBase + (Lo - CS) * C.Speed Div 100) * AuInf[W].Rate Div AuRate;
-  K1 := (InBase + (Hi - 1 - CS) * C.Speed Div 100) * AuInf[W].Rate Div AuRate;
+  K0 := (InBase + AuSrc(C, Lo - CS, CE - CS)) * AuInf[W].Rate Div AuRate;
+  K1 := (InBase + AuSrc(C, Hi - 1 - CS, CE - CS)) * AuInf[W].Rate Div AuRate;
   If (K1 - K0 + 1) * Bf > 65000 Then Exit;
   If AuRaw = Nil Then New(AuRaw);
   FillChar(AuRaw^, 65536, 0);
@@ -23546,7 +24331,7 @@ Begin
  End;
  For S := Lo To Hi - 1 Do Begin
   TL := S - CS;
-  SP := InBase + (TL * C.Speed) Div 100;
+  SP := InBase + AuSrc(C, TL, CE - CS);
   If Kd = MK_WAV Then Begin
    K := SP * AuInf[W].Rate Div AuRate - K0;
    If (K < 0) Or ((K + 1) * Bf > 65536) Then Begin
@@ -23557,13 +24342,16 @@ Begin
    L := AuSynth(Kd, P.Media[C.Med].Par, SP);
    R := L;
   End;
-  Gv := G;
+  Gv := G + ((G1 - G) * (S - Lo)) Div Max(1, Hi - Lo);
+  PnV := Pn0 + ((Pn1 - Pn0) * (S - Lo)) Div Max(1, Hi - Lo);
   If (Fi > 0) And (TL < Fi) Then Gv := (Gv * TL) Div Fi;
   T2 := (CE - CS) - 1 - TL;
   If (Fo > 0) And (T2 < Fo) Then Gv := (Gv * T2) Div Fo;
   Idx := S - S0;
-  AuAccL[Idx] := AuAccL[Idx] + (L * Gv) Div 256;
-  AuAccR[Idx] := AuAccR[Idx] + (R * Gv) Div 256;
+  GL := (Gv * (100 - Max(0, PnV))) Div 100;
+  GR := (Gv * (100 + Min(0, PnV))) Div 100;
+  AuAccL[Idx] := AuAccL[Idx] + (L * GL) Div 256;
+  AuAccR[Idx] := AuAccR[Idx] + (R * GR) Div 256;
  End;
 End;
 
@@ -24876,35 +25664,43 @@ End;
 
 Procedure ChangeSpeed;
 Var
- I: Integer;
- S: String;
- NS, ND, Gap, Lim: LongInt;
- J: Integer;
+ I, J: Integer;
+ S, S2s: String;
+ NS, NS2, ND, Gap, Lim, Span, Avg: LongInt;
 Begin
  I := FirstSel;
  If I < 0 Then Exit;
  S := IStr(P.Clips[I].Speed);
- If Not InputBox('Vitesse/Durée du clip', 'Vitesse en % (25 à 400) :', S, 4) Then Exit;
+ If Not InputBox('Vitesse/Durée du clip', 'Vitesse de début en % (25 à 400) :', S, 4) Then Exit;
  NS := Clamp(StrVal(S, 100), 25, 400);
+ S2s := IStr(Max(0, P.Clips[I].Speed2));
+ If Not InputBox('Rampe de vitesse', 'Vitesse de fin en % (0 = constante) :', S2s, 4) Then Exit;
+ NS2 := StrVal(S2s, 0);
+ If NS2 <> 0 Then NS2 := Clamp(NS2, 25, 400);
+ If NS2 = NS Then NS2 := 0;
  PushUndo;
  For I := 0 To P.NC - 1 Do
   If P.Clips[I].Sel Then Begin
-   ND := Max(1, (P.Clips[I].Dur * P.Clips[I].Speed) Div NS);
+   Span := SrcOfs(P.Clips[I], P.Clips[I].Dur);
+   If NS2 > 0 Then Avg := (NS + NS2) Div 2 Else Avg := NS;
+   ND := Max(1, (Span * 100) Div Avg);
    Gap := 1000000;
    For J := 0 To P.NC - 1 Do
     If (J <> I) And (P.Clips[J].Trk = P.Clips[I].Trk) And (P.Clips[J].Start >= ClipEnd(I)) Then
      Gap := Min(Gap, P.Clips[J].Start - P.Clips[I].Start);
    If ND > Gap Then ND := Gap;
    If Not MediaUnlimited(P.Clips[I].Med) Then Begin
-    Lim := ((MediaMax(P.Clips[I].Med) - P.Clips[I].InPt) * 100) Div NS;
+    Lim := ((MediaMax(P.Clips[I].Med) - P.Clips[I].InPt) * 100) Div Avg;
     If ND > Lim Then ND := Max(1, Lim);
    End;
    P.Clips[I].Speed := Integer(NS);
+   P.Clips[I].Speed2 := Integer(NS2);
    P.Clips[I].Dur := ND;
   End;
  NeedTL := True;
  NeedProg := True;
- Msg('Vitesse : ' + IStr(NS) + ' %');
+ If NS2 > 0 Then Msg('Vitesse : ' + IStr(NS) + ' % vers ' + IStr(NS2) + ' %')
+ Else Msg('Vitesse : ' + IStr(NS) + ' %');
 End;
 
 Procedure RemoveGap;
@@ -25677,6 +26473,17 @@ Var
  MoveA, MoveB: Array[0..MAXCLIPS-1] Of LongInt;
  MoveT: Array[0..MAXCLIPS-1] Of Integer;
 
+Function CtlVideoOnly(Id: Integer): Boolean;
+Begin
+ CtlVideoOnly := ((Id >= 1) And (Id <= 8)) Or (Id = 12) Or ((Id >= 14) And (Id <= 22)) Or
+                 ((Id >= 25) And (Id <= 28)) Or ((Id >= 32) And (Id <= 39));
+End;
+
+Function CtlAudioOnly(Id: Integer): Boolean;
+Begin
+ CtlAudioOnly := (Id = 9) Or (Id = 13) Or (Id = 23) Or ((Id >= 45) And (Id <= 50));
+End;
+
 Procedure CtlApply(Id, V: Integer);
 Var
  I, W: Integer;
@@ -25687,8 +26494,8 @@ Begin
    Vid := IsVideoTrack(P.Clips[I].Trk);
    Ok := True;
    W := V;
-   If (Id = 9) Or (Id = 23) Then Ok := Not Vid
-   Else If ((Id >= 1) And (Id <= 8)) Or ((Id >= 20) And (Id <= 22)) Then Ok := Vid;
+   If CtlAudioOnly(Id) Then Ok := Not Vid
+   Else If CtlVideoOnly(Id) Then Ok := Vid;
    If ((Id = 30) Or (Id = 31)) And (Not Vid) And (W > 1) Then W := 1;
    If Ok Then CtlSet(I, Id, W);
   End;
@@ -25742,7 +26549,13 @@ Begin
  Id := CtlId[R];
  Case CtlKind[R] Of
   0: Begin
-   If MX >= CtlSliderX1 - 4 Then Begin
+   If (CtlKP(Id) >= 0) And (MX >= AX1 + 3) And (MX <= AX1 + 16) Then Begin
+    PushUndo;
+    KfToggleKey(C, Id, False);
+    NeedA := True;
+    NeedProg := True;
+    NeedTL := True;
+   End Else If MX >= CtlSliderX1 - 4 Then Begin
     PushUndo;
     DragMode := DM_SLIDER;
     DragSlider := R;
@@ -25765,9 +26578,7 @@ Begin
   End;
   2: Begin
    V := CtlGet(C, Id) + 1;
-   If IsVideoTrack(P.Clips[C].Trk) Then Begin
-    If V > 4 Then V := 0;
-   End Else If V > 1 Then V := 0;
+   If V > CtlKindMax(Id, IsVideoTrack(P.Clips[C].Trk)) Then V := 0;
    PushUndo;
    CtlApply(Id, V);
    NeedA := True;
@@ -25996,7 +26807,7 @@ Begin
     End;
     If DblClick Then Begin
      OpenInSource(P.Clips[I].Med, P.Clips[I].InPt,
-                  P.Clips[I].InPt + (P.Clips[I].Dur * P.Clips[I].Speed) Div 100);
+                  P.Clips[I].InPt + SrcOfs(P.Clips[I], P.Clips[I].Dur));
      Exit;
     End;
     X1 := FrameToX(P.Clips[I].Start);
@@ -26207,6 +27018,7 @@ Begin
  OE := OS + OD;
  In0 := P.Clips[C].InPt;
  Spd := P.Clips[C].Speed;
+ If P.Clips[C].Speed2 > 0 Then Spd := (Spd + P.Clips[C].Speed2) Div 2;
  Unl := MediaUnlimited(P.Clips[C].Med);
  If IsLeft Then Begin
   Lo := 0;
@@ -26553,11 +27365,20 @@ Begin
   End
   Else If (TabA = 1) And InRect(MX, MY, AX1, AY1 + 14, AX2, AY2) Then Begin
    B := CtlHit(MX, MY);
-   If (B >= 0) And (CtlKind[B] = 2) And (FirstSel >= 0) Then Begin
+   If (B >= 0) And (CtlKind[B] = 0) And (CtlKP(CtlId[B]) >= 0) And (MX <= AX1 + 16) And
+      (FirstSel >= 0) Then Begin
     PushUndo;
-    If IsVideoTrack(P.Clips[FirstSel].Trk) Then
-     CtlApply(CtlId[B], (CtlGet(FirstSel, CtlId[B]) + 4) Mod 5)
-    Else CtlApply(CtlId[B], 1 - CtlGet(FirstSel, CtlId[B]));
+    KfToggleKey(FirstSel, CtlId[B], True);
+    NeedA := True;
+    NeedProg := True;
+    NeedTL := True;
+   End Else If (B >= 0) And (CtlKind[B] = 2) And (FirstSel >= 0) Then Begin
+    PushUndo;
+    If CtlKind[B] = 2 Then Begin
+     If CtlGet(FirstSel, CtlId[B]) = 0 Then
+      CtlApply(CtlId[B], CtlKindMax(CtlId[B], IsVideoTrack(P.Clips[FirstSel].Trk)))
+     Else CtlApply(CtlId[B], CtlGet(FirstSel, CtlId[B]) - 1);
+    End;
     NeedA := True;
     NeedProg := True;
     NeedTL := True;
@@ -26623,6 +27444,8 @@ Begin
   PlaySpeed := Sp * Dir;
   AuStopPlay;
   AuActive := False;
+ DefInterp := 0;
+ LutCnt := 0;
  End Else Begin
   StopPlay;
   StartPlay(1, Dir);

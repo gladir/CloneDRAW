@@ -98,6 +98,9 @@ Const
  CMD_GUIDES = 22;
  CMD_CLEAR_GUIDES = 23;
  RULER_SIZE = 16;
+ CMD_PROPS = 24;
+ PROP_W = 460;
+ PROP_H = 240;
  FD_MAX_ENTRIES = 512;
  FD_ROWS = 13;
  ZOOM_LEVELS: Array[0..5] Of Integer = (25,50,100,200,400,800);
@@ -1092,9 +1095,18 @@ Var
  X1, Y1, X2, Y2, I: Integer;
  P, Q: TPoint2D;
  Polygon: Array[0..99] Of PointType;
+ Wd: Real;
 Begin
  If Not Obj.Visible Then Exit;
- 
+ Case Obj.ObjType Of
+  OBJ_RECT: Wd := Obj.Rectangle.StrokeWidth;
+  OBJ_ELLIPSE: Wd := Obj.Ellipse.StrokeWidth;
+  OBJ_LINE: Wd := Obj.Line.StrokeWidth;
+  OBJ_BEZIER, OBJ_PATH, OBJ_FILLED_PATH: Wd := Obj.Path.StrokeWidth;
+ Else Wd := 1;
+ End;
+ If Wd >= 2 Then SetLineStyle(SolidLn,0,ThickWidth);
+
  Case Obj.ObjType Of
   OBJ_RECT:
   Begin
@@ -1103,6 +1115,15 @@ Begin
    X2 := ScreenX(Obj.Rectangle.X+Obj.Rectangle.Width);
    Y2 := ScreenY(Obj.Rectangle.Y+Obj.Rectangle.Height);
    
+   If Obj.Rectangle.FillColor <> 15 Then Begin
+    Polygon[0].X := X1; Polygon[0].Y := Y1;
+    Polygon[1].X := X2; Polygon[1].Y := Y1;
+    Polygon[2].X := X2; Polygon[2].Y := Y2;
+    Polygon[3].X := X1; Polygon[3].Y := Y2;
+    SetFillStyle(SolidFill,Obj.Rectangle.FillColor);
+    SetColor(Obj.Rectangle.FillColor);
+    FillPoly(4,Polygon);
+   End;
    SetColor(Obj.Rectangle.StrokeColor);
    Rectangle(X1, Y1, X2, Y2);
    
@@ -1121,6 +1142,12 @@ Begin
    X1 := ScreenX(Obj.Ellipse.CX);
    Y1 := ScreenY(Obj.Ellipse.CY);
    
+   If Obj.Ellipse.FillColor <> 15 Then Begin
+    SetFillStyle(SolidFill,Obj.Ellipse.FillColor);
+    SetColor(Obj.Ellipse.FillColor);
+    FillEllipse(X1, Y1, Round(Obj.Ellipse.RX*ZoomScale),
+                Round(Obj.Ellipse.RY*ZoomScale));
+   End;
    SetColor(Obj.Ellipse.StrokeColor);
    Ellipse(X1, Y1, 0, 360, Round(Obj.Ellipse.RX*ZoomScale),
            Round(Obj.Ellipse.RY*ZoomScale));
@@ -1193,6 +1220,7 @@ Begin
    End Else DrawZoomedText(Obj);
   End;
  End;
+ SetLineStyle(SolidLn,0,NormWidth);
 End;
 
 Procedure DrawObject(Index: Integer);
@@ -2149,7 +2177,7 @@ Begin
  AddMenuItem(2, 'Regles       Ctrl+R', CMD_RULERS);
  AddMenuItem(2, 'Reperes', CMD_GUIDES);
  AddMenuItem(2, 'Effacer reperes', CMD_CLEAR_GUIDES);
- AddMenuItem(3, 'Proprietes...', CMD_NONE);
+ AddMenuItem(3, 'Proprietes...', CMD_PROPS);
  AddMenuItem(3, 'Arrangement', CMD_NONE);
  AddMenuItem(3, 'Grouper', CMD_NONE);
  AddMenuItem(3, 'Degrouper', CMD_NONE);
@@ -2273,6 +2301,239 @@ Begin
       ((Menus[ActiveMenu].Items[I].Command = CMD_GUIDES) And GuidesVisible) Then
     OutTextXY(X+5, Y+5, '*');
   End;
+ End;
+End;
+
+{ ------------------------------------------------------------------
+  Boite de dialogue "Proprietes..." de l'objet selectionne
+  ------------------------------------------------------------------ }
+Var
+ PropActive: Boolean;
+ PropObj: TGraphicObject;
+ PropIdx: Integer;
+
+Function PropHasFill: Boolean;
+Begin
+ PropHasFill := PropObj.ObjType In [OBJ_RECT,OBJ_ELLIPSE,OBJ_FILLED_PATH];
+End;
+
+Function PropStroke: Integer;
+Begin
+ Case PropObj.ObjType Of
+  OBJ_RECT: PropStroke := PropObj.Rectangle.StrokeColor;
+  OBJ_ELLIPSE: PropStroke := PropObj.Ellipse.StrokeColor;
+  OBJ_LINE: PropStroke := PropObj.Line.StrokeColor;
+  OBJ_TEXT: PropStroke := PropObj.TextObj.Color;
+ Else PropStroke := PropObj.Path.StrokeColor;
+ End;
+End;
+
+Procedure PropSetStroke(C: Integer);
+Begin
+ Case PropObj.ObjType Of
+  OBJ_RECT: PropObj.Rectangle.StrokeColor := C;
+  OBJ_ELLIPSE: PropObj.Ellipse.StrokeColor := C;
+  OBJ_LINE: PropObj.Line.StrokeColor := C;
+  OBJ_TEXT: PropObj.TextObj.Color := C;
+ Else PropObj.Path.StrokeColor := C;
+ End;
+End;
+
+Function PropFill: Integer;
+Begin
+ Case PropObj.ObjType Of
+  OBJ_RECT: PropFill := PropObj.Rectangle.FillColor;
+  OBJ_ELLIPSE: PropFill := PropObj.Ellipse.FillColor;
+ Else PropFill := PropObj.Path.FillColor;
+ End;
+End;
+
+Procedure PropSetFill(C: Integer);
+Begin
+ Case PropObj.ObjType Of
+  OBJ_RECT: PropObj.Rectangle.FillColor := C;
+  OBJ_ELLIPSE: PropObj.Ellipse.FillColor := C;
+ Else PropObj.Path.FillColor := C;
+ End;
+End;
+
+Function PropWidth: Integer;
+Begin
+ Case PropObj.ObjType Of
+  OBJ_RECT: PropWidth := Round(PropObj.Rectangle.StrokeWidth);
+  OBJ_ELLIPSE: PropWidth := Round(PropObj.Ellipse.StrokeWidth);
+  OBJ_LINE: PropWidth := Round(PropObj.Line.StrokeWidth);
+ Else PropWidth := Round(PropObj.Path.StrokeWidth);
+ End;
+End;
+
+Procedure PropSetWidth(W: Integer);
+Begin
+ If W < 1 Then W := 1;
+ If W > 10 Then W := 10;
+ Case PropObj.ObjType Of
+  OBJ_RECT: PropObj.Rectangle.StrokeWidth := W;
+  OBJ_ELLIPSE: PropObj.Ellipse.StrokeWidth := W;
+  OBJ_LINE: PropObj.Line.StrokeWidth := W;
+ Else PropObj.Path.StrokeWidth := W;
+ End;
+End;
+
+Function PropTypeName: String;
+Begin
+ Case PropObj.ObjType Of
+  OBJ_RECT: PropTypeName := 'Rectangle';
+  OBJ_ELLIPSE: PropTypeName := 'Ellipse';
+  OBJ_LINE: PropTypeName := 'Ligne';
+  OBJ_PATH: PropTypeName := 'Chemin';
+  OBJ_TEXT: PropTypeName := 'Texte';
+  OBJ_BEZIER: PropTypeName := 'Courbe de Bezier';
+  OBJ_FILLED_PATH: PropTypeName := 'Chemin rempli';
+ Else PropTypeName := 'Objet';
+ End;
+End;
+
+Procedure OpenProps;
+Begin
+ If (SelectedObject < 0) Or (SelectedObject >= ObjectCount) Then Begin
+  StatusMessage := 'Proprietes : aucun objet selectionne.';
+  Exit;
+ End;
+ PropIdx := SelectedObject;
+ PropObj := ObjAt(PropIdx)^;
+ PropActive := True;
+ NeedsRedraw := True;
+End;
+
+Procedure ClosePropsDialog(Apply: Boolean);
+Begin
+ PropActive := False;
+ If Apply And (PropIdx < ObjectCount) Then Begin
+  PushUndo;
+  ObjAt(PropIdx)^ := PropObj;
+  FileModified := True;
+  StatusMessage := 'Proprietes appliquees.';
+ End Else StatusMessage := 'Proprietes annulees.';
+ NeedsRedraw := True;
+End;
+
+Function PropX: Integer;
+Begin
+ PropX := (ScreenWidth-PROP_W) Div 2;
+End;
+
+Function PropY: Integer;
+Begin
+ PropY := (ScreenHeight-PROP_H) Div 2;
+End;
+
+Procedure DrawSwatches(X, Y, Selected: Integer);
+Var I: Integer;
+Begin
+ For I := 0 To 15 Do Begin
+  SetFillStyle(SolidFill,I);
+  Bar(X+I*20,Y,X+I*20+17,Y+15);
+  SetColor(COLOR_TEXT);
+  Rectangle(X+I*20,Y,X+I*20+17,Y+15);
+  If I = Selected Then Begin
+   SetColor(COLOR_HIGHLIGHT);
+   Rectangle(X+I*20-2,Y-2,X+I*20+19,Y+17);
+   Rectangle(X+I*20-1,Y-1,X+I*20+18,Y+16);
+  End;
+ End;
+End;
+
+Procedure DrawButton(X1, Y1, X2, Y2: Integer; Caption: String);
+Begin
+ SetFillStyle(SolidFill,COLOR_BG);
+ Bar(X1,Y1,X2,Y2);
+ SetColor(COLOR_TEXT);
+ Rectangle(X1,Y1,X2,Y2);
+ OutTextXY(X1+((X2-X1)-Length(Caption)*8) Div 2,Y1+((Y2-Y1)-8) Div 2,Caption);
+End;
+
+Procedure DrawPropDialog;
+Var X, Y: Integer; B: TBounds; S, T: String;
+Begin
+ If Not PropActive Then Exit;
+ X := PropX; Y := PropY;
+ SetFillStyle(SolidFill,COLOR_WINDOW);
+ Bar(X,Y,X+PROP_W,Y+PROP_H);
+ SetColor(COLOR_TEXT);
+ Rectangle(X,Y,X+PROP_W,Y+PROP_H);
+ Rectangle(X+2,Y+2,X+PROP_W-2,Y+PROP_H-2);
+ OutTextXY(X+12,Y+10,'Proprietes de l''objet');
+ B := ObjectBounds(PropObj);
+ S := PropTypeName+'  X='; Str(Round(B.L),T); S := S+T;
+ S := S+' Y='; Str(Round(B.T),T); S := S+T;
+ S := S+' L='; Str(Round(B.R-B.L),T); S := S+T;
+ S := S+' H='; Str(Round(B.B-B.T),T); S := S+T;
+ OutTextXY(X+12,Y+30,S);
+ If PropObj.ObjType = OBJ_TEXT Then
+  OutTextXY(X+12,Y+44,'"'+Copy(PropObj.TextObj.Text,1,50)+'"');
+ If PropObj.ObjType = OBJ_TEXT Then OutTextXY(X+12,Y+66,'Couleur')
+ Else OutTextXY(X+12,Y+66,'Trait');
+ DrawSwatches(X+120,Y+62,PropStroke);
+ If PropHasFill Then Begin
+  SetColor(COLOR_TEXT);
+  OutTextXY(X+12,Y+96,'Remplissage');
+  DrawSwatches(X+120,Y+92,PropFill);
+  If PropObj.ObjType <> OBJ_FILLED_PATH Then
+   OutTextXY(X+120,Y+112,'(blanc = pas de remplissage)');
+ End;
+ SetColor(COLOR_TEXT);
+ If PropObj.ObjType <> OBJ_TEXT Then Begin
+  OutTextXY(X+12,Y+134,'Epaisseur');
+  DrawButton(X+120,Y+130,X+140,Y+148,'-');
+  Str(PropWidth,S);
+  OutTextXY(X+152,Y+134,S);
+  DrawButton(X+190,Y+130,X+210,Y+148,'+');
+ End;
+ OutTextXY(X+12,Y+164,'Visible');
+ Rectangle(X+120,Y+160,X+136,Y+176);
+ If PropObj.Visible Then Begin
+  Line(X+122,Y+168,X+127,Y+174);
+  Line(X+127,Y+174,X+134,Y+162);
+ End;
+ DrawButton(X+90,Y+200,X+210,Y+224,'OK (Entree)');
+ DrawButton(X+250,Y+200,X+370,Y+224,'Annuler (Esc)');
+End;
+
+Procedure HandlePropMouse;
+Var X, Y, I: Integer;
+Begin
+ X := PropX; Y := PropY;
+ NeedsRedraw := True;
+ If (MouseY >= Y+62) And (MouseY <= Y+77) And
+    (MouseX >= X+120) And (MouseX < X+120+320) Then Begin
+  I := (MouseX-X-120) Div 20;
+  If I <= 15 Then PropSetStroke(I);
+ End Else If PropHasFill And (MouseY >= Y+92) And (MouseY <= Y+107) And
+    (MouseX >= X+120) And (MouseX < X+120+320) Then Begin
+  I := (MouseX-X-120) Div 20;
+  If I <= 15 Then PropSetFill(I);
+ End Else If (PropObj.ObjType <> OBJ_TEXT) And (MouseY >= Y+130) And
+    (MouseY <= Y+148) Then Begin
+  If (MouseX >= X+120) And (MouseX <= X+140) Then PropSetWidth(PropWidth-1);
+  If (MouseX >= X+190) And (MouseX <= X+210) Then PropSetWidth(PropWidth+1);
+ End Else If (MouseX >= X+120) And (MouseX <= X+136) And
+    (MouseY >= Y+160) And (MouseY <= Y+176) Then
+  PropObj.Visible := Not PropObj.Visible
+ Else If (MouseY >= Y+200) And (MouseY <= Y+224) Then Begin
+  If (MouseX >= X+90) And (MouseX <= X+210) Then ClosePropsDialog(True)
+  Else If (MouseX >= X+250) And (MouseX <= X+370) Then ClosePropsDialog(False);
+ End;
+End;
+
+Procedure HandlePropKey(Key: Char);
+Begin
+ NeedsRedraw := True;
+ Case Key Of
+  #13: ClosePropsDialog(True);
+  #27: ClosePropsDialog(False);
+  '+': If PropObj.ObjType <> OBJ_TEXT Then PropSetWidth(PropWidth+1);
+  '-': If PropObj.ObjType <> OBJ_TEXT Then PropSetWidth(PropWidth-1);
+  'v','V': PropObj.Visible := Not PropObj.Visible;
  End;
 End;
 
@@ -2972,6 +3233,7 @@ Begin
                'Dessin modifie : Entree = quitter, Echap = annuler.')
    Else Running := False;
   CMD_GRID: GridVisible := Not GridVisible;
+  CMD_PROPS: OpenProps;
   CMD_RULERS: Begin
    RulersVisible := Not RulersVisible;
    If RulersVisible Then StatusMessage := 'Regles affichees : glisser depuis une regle pour creer un repere.'
@@ -3126,7 +3388,9 @@ Begin
  If TextActive And Pressed Then
   If (MenuBarHitTest(MouseX,MouseY) >= 0) Or
      (ToolHitTest(MouseX,MouseY) >= 0) Then FinishText(True);
- If FileDialogActive Then Begin
+ If PropActive Then Begin
+  If Pressed Then HandlePropMouse;
+ End Else If FileDialogActive Then Begin
   If Pressed Then HandleFileMouse;
  End Else If TextActive Then Begin
   If Pressed Then Begin
@@ -3228,6 +3492,7 @@ Var S: String; Capacity: Integer;
 Begin
  ResetToolTip;
  NeedsRedraw := True;
+ If PropActive Then Begin HandlePropKey(Key); Exit; End;
  If FileDialogActive Then Begin HandleFileKey(Key,ExtKey); Exit; End;
  If ((Key In [#15,#19]) Or ((Key=#0) And (ExtKey=#134))) And
     Not DrawingMode And (DialogTitle='') Then Begin
@@ -3399,6 +3664,7 @@ Begin
  DrawStatusBar;
  { Les menus et dialogues doivent etre dessines APRES le document. }
  DrawMenu;
+ DrawPropDialog;
  If DialogTitle <> '' Then Begin
   SetFillStyle(SolidFill, COLOR_WINDOW);
   Bar(45, 160, ScreenWidth-45, 280);
@@ -6069,6 +6335,7 @@ Begin
  MenuMouseDown := False;
  NeedsRedraw := True;
  GridVisible := True;
+ PropActive := False;
  RulersVisible := True; GuidesVisible := True;
  GuideHead := Nil; GuideCur := Nil; GuideDragging := False;
  DialogTitle := '';

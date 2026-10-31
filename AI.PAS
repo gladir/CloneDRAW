@@ -94,6 +94,10 @@ Const
  CMD_CUT = 18;
  CMD_COPY = 19;
  CMD_PASTE = 20;
+ CMD_RULERS = 21;
+ CMD_GUIDES = 22;
+ CMD_CLEAR_GUIDES = 23;
+ RULER_SIZE = 16;
  FD_MAX_ENTRIES = 512;
  FD_ROWS = 13;
  ZOOM_LEVELS: Array[0..5] Of Integer = (25,50,100,200,400,800);
@@ -913,6 +917,110 @@ Begin
   Line(ScreenX(0),ScreenY(Y1),ScreenX(ScreenWidth-TOOLBAR_WIDTH)-1,ScreenY(Y1));
   Y1 := Y1 + 20;
  End;
+End;
+
+Type
+ PGuide = ^TGuide;
+ TGuide = Record
+  Horiz: Boolean;       { True : repere horizontal (position Y) }
+  Pos: Integer;         { position dans le document }
+  Next: PGuide;
+ End;
+
+Var
+ GuideHead, GuideCur: PGuide;   { liste chainee des reperes (tas) }
+ RulersVisible, GuidesVisible, GuideDragging, GuideNew: Boolean;
+ GuideOldPos: Integer;
+
+Function RulerPx: Integer;
+Begin
+ If RulersVisible Then RulerPx := RULER_SIZE Else RulerPx := 0;
+End;
+
+Procedure ClearGuides;
+Var G, N: PGuide;
+Begin
+ G := GuideHead;
+ While G <> Nil Do Begin
+  N := G^.Next;
+  Dispose(G);
+  G := N;
+ End;
+ GuideHead := Nil; GuideCur := Nil; GuideDragging := False;
+End;
+
+Procedure RemoveGuide(Target: PGuide);
+Var G: PGuide;
+Begin
+ If Target = Nil Then Exit;
+ If GuideHead = Target Then GuideHead := Target^.Next
+ Else Begin
+  G := GuideHead;
+  While (G <> Nil) And (G^.Next <> Target) Do G := G^.Next;
+  If G <> Nil Then G^.Next := Target^.Next;
+ End;
+ Dispose(Target);
+End;
+
+Procedure DrawGuides;
+Var G: PGuide; P: Integer;
+Begin
+ If Not GuidesVisible Then Exit;
+ SetColor(9);
+ G := GuideHead;
+ While G <> Nil Do Begin
+  If G^.Horiz Then Begin
+   P := ScreenY(G^.Pos);
+   Line(0,P,ScreenWidth,P);
+  End Else Begin
+   P := ScreenX(G^.Pos);
+   Line(P,0,P,ScreenHeight);
+  End;
+  G := G^.Next;
+ End;
+End;
+
+Procedure DrawRulers;
+Var W, H, K, V, X, Y, Step: LongInt; S: String;
+Begin
+ If Not RulersVisible Then Exit;
+ W := ScreenWidth-TOOLBAR_WIDTH;
+ H := ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT;
+ SetFillStyle(SolidFill,COLOR_BG);
+ Bar(0,0,W-1,RULER_SIZE-1);
+ Bar(0,0,RULER_SIZE-1,H-1);
+ SetColor(COLOR_BORDER);
+ Line(0,RULER_SIZE,W-1,RULER_SIZE);
+ Line(RULER_SIZE,0,RULER_SIZE,H-1);
+ SetColor(COLOR_TEXT);
+ Step := 10;
+ While Step*ZoomScale < 6 Do Step := Step*2;
+ K := Trunc(ViewX/Step)-1;
+ Repeat
+  V := K*Step;
+  X := ScreenX(V);
+  If X >= RULER_SIZE Then Begin
+   If K Mod 5 = 0 Then Line(X,RULER_SIZE-7,X,RULER_SIZE-1)
+   Else Line(X,RULER_SIZE-4,X,RULER_SIZE-1);
+   If K Mod 10 = 0 Then Begin Str(V,S); OutTextXY(X+2,0,S); End;
+  End;
+  Inc(K);
+ Until X >= W;
+ K := Trunc(ViewY/Step)-1;
+ Repeat
+  V := K*Step;
+  Y := ScreenY(V);
+  If Y >= RULER_SIZE Then Begin
+   If K Mod 5 = 0 Then Line(RULER_SIZE-7,Y,RULER_SIZE-1,Y)
+   Else Line(RULER_SIZE-4,Y,RULER_SIZE-1,Y);
+   If K Mod 10 = 0 Then Begin Str(V Div 100,S); If Length(S) <= 2 Then OutTextXY(0,Y+2,S); End;
+  End;
+  Inc(K);
+ Until Y >= H;
+ SetFillStyle(SolidFill,COLOR_BG);
+ Bar(0,0,RULER_SIZE-1,RULER_SIZE-1);
+ SetColor(COLOR_BORDER);
+ Rectangle(0,0,RULER_SIZE,RULER_SIZE);
 End;
 
 Function BezierPoint(Obj: TGraphicObject; T: Real): TPoint2D;
@@ -2038,8 +2146,9 @@ Begin
  AddMenuItem(2, 'Zoom arriere', CMD_ZOOM_OUT);
  AddMenuItem(2, 'Adapter (100%)', CMD_ZOOM_RESET);
  AddMenuItem(2, 'Grille', CMD_GRID);
- AddMenuItem(2, 'Regles', CMD_NONE);
- AddMenuItem(2, 'Reperes', CMD_NONE);
+ AddMenuItem(2, 'Regles       Ctrl+R', CMD_RULERS);
+ AddMenuItem(2, 'Reperes', CMD_GUIDES);
+ AddMenuItem(2, 'Effacer reperes', CMD_CLEAR_GUIDES);
  AddMenuItem(3, 'Proprietes...', CMD_NONE);
  AddMenuItem(3, 'Arrangement', CMD_NONE);
  AddMenuItem(3, 'Grouper', CMD_NONE);
@@ -2159,7 +2268,9 @@ Begin
    OutTextXY(X+20, Y+5, Menus[ActiveMenu].Items[I].Caption);
    If Menus[ActiveMenu].Items[I].Command = CMD_NONE Then
     OutTextXY(X+5, Y+5, 'x');
-   If (Menus[ActiveMenu].Items[I].Command = CMD_GRID) And GridVisible Then
+   If ((Menus[ActiveMenu].Items[I].Command = CMD_GRID) And GridVisible) Or
+      ((Menus[ActiveMenu].Items[I].Command = CMD_RULERS) And RulersVisible) Or
+      ((Menus[ActiveMenu].Items[I].Command = CMD_GUIDES) And GuidesVisible) Then
     OutTextXY(X+5, Y+5, '*');
   End;
  End;
@@ -2842,6 +2953,7 @@ Begin
                'Dessin modifie : Entree = effacer, Echap = annuler.')
    Else Begin
     ClearObjects;
+    ClearGuides;
     SelectedObject := -1;
     ClearHistory;
     CurrentFile := '';
@@ -2860,6 +2972,20 @@ Begin
                'Dessin modifie : Entree = quitter, Echap = annuler.')
    Else Running := False;
   CMD_GRID: GridVisible := Not GridVisible;
+  CMD_RULERS: Begin
+   RulersVisible := Not RulersVisible;
+   If RulersVisible Then StatusMessage := 'Regles affichees : glisser depuis une regle pour creer un repere.'
+   Else StatusMessage := 'Regles masquees.';
+  End;
+  CMD_GUIDES: Begin
+   GuidesVisible := Not GuidesVisible;
+   If GuidesVisible Then StatusMessage := 'Reperes affiches.'
+   Else StatusMessage := 'Reperes masques.';
+  End;
+  CMD_CLEAR_GUIDES: Begin
+   ClearGuides;
+   StatusMessage := 'Reperes effaces.';
+  End;
   CMD_ZOOM_IN: ChangeZoom(1,TOOLBAR_WIDTH+(ScreenWidth-TOOLBAR_WIDTH) Div 2,
                           MENUBAR_HEIGHT+(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT) Div 2);
   CMD_ZOOM_OUT: ChangeZoom(-1,TOOLBAR_WIDTH+(ScreenWidth-TOOLBAR_WIDTH) Div 2,
@@ -2901,6 +3027,90 @@ Begin
   StatusMessage := 'Texte valide. Fleche : deplacer. Outil Texte : modifier.';
  End;
  TextActive := False;
+ NeedsRedraw := True;
+End;
+
+Function GuideAt: PGuide;
+Var G: PGuide; P: Integer;
+Begin
+ GuideAt := Nil;
+ If Not GuidesVisible Then Exit;
+ G := GuideHead;
+ While G <> Nil Do Begin
+  If G^.Horiz Then Begin
+   P := MENUBAR_HEIGHT+ScreenY(G^.Pos);
+   If (Abs(MouseY-P) <= 3) And (MouseX >= TOOLBAR_WIDTH+RulerPx) Then GuideAt := G;
+  End Else Begin
+   P := TOOLBAR_WIDTH+ScreenX(G^.Pos);
+   If (Abs(MouseX-P) <= 3) And (MouseY >= MENUBAR_HEIGHT+RulerPx) Then GuideAt := G;
+  End;
+  G := G^.Next;
+ End;
+End;
+
+Procedure UpdateGuide;
+Var S: String;
+Begin
+ If GuideCur = Nil Then Exit;
+ If GuideCur^.Horiz Then GuideCur^.Pos := DocumentY(MouseY)
+ Else GuideCur^.Pos := DocumentX(MouseX);
+ Str(GuideCur^.Pos,S);
+ If GuideCur^.Horiz Then StatusMessage := 'Repere horizontal : y = '+S
+ Else StatusMessage := 'Repere vertical : x = '+S;
+ NeedsRedraw := True;
+End;
+
+Function TryStartGuide: Boolean;
+Var LX, LY: Integer; G: PGuide;
+Begin
+ TryStartGuide := False;
+ If DrawingMode Or EditingObject Or TextActive Or (BezierStage <> 0) Then Exit;
+ If (MouseX < TOOLBAR_WIDTH) Or (MouseX >= ScreenWidth) Or
+    (MouseY < MENUBAR_HEIGHT) Or (MouseY >= ScreenHeight-STATUSBAR_HEIGHT) Then Exit;
+ LX := MouseX-TOOLBAR_WIDTH; LY := MouseY-MENUBAR_HEIGHT;
+ If RulersVisible And ((LX < RULER_SIZE) Or (LY < RULER_SIZE)) Then Begin
+  TryStartGuide := True;
+  If (LX < RULER_SIZE) And (LY < RULER_SIZE) Then Exit;
+  New(G);
+  G^.Horiz := LY < RULER_SIZE;
+  G^.Pos := 0;
+  G^.Next := GuideHead;
+  GuideHead := G;
+  GuideCur := G; GuideNew := True; GuideOldPos := 0;
+  GuidesVisible := True;
+  GuideDragging := True;
+  UpdateGuide;
+  Exit;
+ End;
+ If CurrentTool = TOOL_SELECT Then Begin
+  G := GuideAt;
+  If G <> Nil Then Begin
+   TryStartGuide := True;
+   GuideCur := G; GuideNew := False; GuideOldPos := G^.Pos;
+   GuideDragging := True;
+   UpdateGuide;
+  End;
+ End;
+End;
+
+Procedure EndGuide(Cancel: Boolean);
+Var Outside: Boolean;
+Begin
+ If Not GuideDragging Then Exit;
+ GuideDragging := False;
+ If GuideCur = Nil Then Exit;
+ If Not Cancel Then UpdateGuide;
+ If GuideCur^.Horiz Then
+  Outside := (MouseY < MENUBAR_HEIGHT+RulerPx) Or (MouseY >= ScreenHeight-STATUSBAR_HEIGHT)
+ Else Outside := (MouseX < TOOLBAR_WIDTH+RulerPx) Or (MouseX >= ScreenWidth);
+ If Cancel Then Begin
+  If GuideNew Then RemoveGuide(GuideCur) Else GuideCur^.Pos := GuideOldPos;
+  StatusMessage := 'Repere annule.';
+ End Else If Outside Then Begin
+  RemoveGuide(GuideCur);
+  StatusMessage := 'Repere supprime.';
+ End Else StatusMessage := 'Repere place.';
+ GuideCur := Nil;
  NeedsRedraw := True;
 End;
 
@@ -2962,7 +3172,7 @@ Begin
     If ItemHit >= 0 Then ExecuteMenuItem(ActiveMenu, ItemHit)
     Else CloseMenu;
    End Else Begin
-    HandleMouseClick;
+    If Not TryStartGuide Then HandleMouseClick;
     NeedsRedraw := True;
    End;
   End Else If Panning And ((MouseButtons And 1) <> 0) Then Begin
@@ -2974,8 +3184,11 @@ Begin
    AddPencilPoint;
   End Else If EditingObject And ((MouseButtons And 1) <> 0) Then Begin
    If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then UpdateObjectEdit;
+  End Else If GuideDragging And ((MouseButtons And 1) <> 0) Then Begin
+   If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then UpdateGuide;
   End Else If Released Then Begin
-   If MenuMouseDown Then Begin
+   If GuideDragging Then EndGuide(False)
+   Else If MenuMouseDown Then Begin
     { Autorise aussi appuyer sur le titre, glisser, puis relacher sur un item. }
     If MenuActive Then Begin
      ItemHit := MenuItemHitTest(MouseX, MouseY, ActiveMenu);
@@ -3022,6 +3235,10 @@ Begin
   If Key=#15 Then ExecuteMenuItem(MENU_FILE,1)
   Else If Key=#0 Then ExecuteMenuItem(MENU_FILE,3)
   Else ExecuteMenuItem(MENU_FILE,2);
+  Exit;
+ End;
+ If GuideDragging Then Begin
+  If Key = #27 Then EndGuide(True);
   Exit;
  End;
  If Panning Then Begin
@@ -3149,6 +3366,7 @@ Begin
   #24: CutCommand;
   #3: CopyCommand;
   #22: PasteCommand;
+  #18: ExecuteMenuItem(2,4);
  End;
 End;
 
@@ -3173,6 +3391,8 @@ Begin
   DrawBezierHandles(BezierObject,True);
  End;
  DrawSelection;
+ DrawGuides;
+ DrawRulers;
  SetViewPort(0,0,ScreenWidth-1,ScreenHeight-1,True);
  DrawToolbar;
  DrawMenuBar;
@@ -5849,6 +6069,8 @@ Begin
  MenuMouseDown := False;
  NeedsRedraw := True;
  GridVisible := True;
+ RulersVisible := True; GuidesVisible := True;
+ GuideHead := Nil; GuideCur := Nil; GuideDragging := False;
  DialogTitle := '';
  DialogText := '';
  StatusMessage := 'Prototype incomplet - F10 : menus';
@@ -5870,6 +6092,7 @@ End;
 
 Procedure Cleanup;
 Begin
+ ClearGuides;
  ClearObjects;
  ClearHistory;
  CloseGraph;

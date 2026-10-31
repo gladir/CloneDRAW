@@ -9333,7 +9333,8 @@ End;
 
 BEGIN
  If(ParamStr(1)='/?')Or(ParamStr(1)='-h')Or(ParamStr(1)='--help')Then Begin
-  WriteLn('LEOCAD : Clone de LeoCAD, CAO de briques Lego en 3D (fichiers LDraw).');
+  WriteLn('LEOCAD : Cette commande permet de lancer un clone de LeoCAD, CAO ',
+          'de briques Lego en 3D (fichiers LDraw).');
   WriteLn;
   WriteLn('Syntaxe : LEOCAD [/16] [-maxscreen] [fichier.ldr|fichier.mpd]');
   WriteLn;

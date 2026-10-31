@@ -216,6 +216,7 @@ Var
  CanvasX,CanvasY,CanvasW,CanvasH:Integer;
  ScreenW,ScreenH:Integer;
  GfxReady:Boolean;
+ MaxScreen:Boolean;
 
  PalR,PalG,PalB:Array[0..255] of Byte;
  PalUsed:Integer;
@@ -10766,16 +10767,31 @@ Begin
  PalDirty:=False;
 End;
 
-Procedure InitGfx;
-Var Driver,Mode,I:Integer;
+{ Mode graphique : 640 x 480 en palette indexee, ou, avec -maxscreen sous Free
+  Pascal, la resolution maximale offerte par le pilote D8bit (sous Turbo
+  Pascal l'option est sans effet) }
+Procedure SelectScreenDriverMode(WantMaxScreen:Boolean;Var Driver,Mode:Integer);
+{$IFDEF FPC}
+Var LoMode,HiMode:SmallInt;
+{$ENDIF}
 Begin
  {$IFDEF FPC}
  Driver:=D8bit;
  Mode:=m640x480;
+ If WantMaxScreen Then Begin
+  GetModeRange(Driver,LoMode,HiMode);
+  If HiMode>=LoMode Then Mode:=HiMode;
+ End;
  {$ELSE}
  Driver:=Detect;
  Mode:=VGAHi;
  {$ENDIF}
+End;
+
+Procedure InitGfx;
+Var Driver,Mode,I:Integer;
+Begin
+ SelectScreenDriverMode(MaxScreen,Driver,Mode);
  InitGraph(Driver,Mode,'');
  If GraphResult<>grOk Then Begin
   WriteLn('Erreur d''initialisation graphique !');
@@ -15954,6 +15970,8 @@ Begin
 End;
 
 Procedure RunInteractive;
+Var FileArg:String;
+    I:Integer;
 Begin
  InitGfx;
  MouseInit;
@@ -15972,11 +15990,15 @@ Begin
  PasteN:=0;
  Zoom:=100;
  ZoomFit;
- If ParamCount>=1 Then Begin
-  If FileExists(ParamStr(1))Then Begin
-   If LoadAny(ParamStr(1))Then Begin
-    If(ExtOf(ParamStr(1))='.WPG')or FromCorel Then DocName:=''
-                                 Else DocName:=FExpand(ParamStr(1));
+ { premier argument qui n'est pas une option : le fichier a ouvrir }
+ FileArg:='';
+ For I:=1 To ParamCount Do
+  If(FileArg='')and(Copy(ParamStr(I),1,1)<>'-')and(Copy(ParamStr(I),1,1)<>'/')Then FileArg:=ParamStr(I);
+ If FileArg<>'' Then Begin
+  If FileExists(FileArg)Then Begin
+   If LoadAny(FileArg)Then Begin
+    If(ExtOf(FileArg)='.WPG')or FromCorel Then DocName:=''
+                                 Else DocName:=FExpand(FileArg);
     Modified:=False;
     ZoomAll;
    End;
@@ -15992,9 +16014,12 @@ Procedure ShowUsage;
 Begin
  WriteLn('CORELDRW : Cette commande permet de lancer un clone de CorelDRAW (dessin vectoriel).');
  WriteLn;
- WriteLn('Syntaxe : CORELDRW [fichier.cdr|fichier.wpg]');
+ WriteLn('Syntaxe : CORELDRW [-maxscreen] [fichier.cdr|fichier.wpg]');
  WriteLn('          CORELDRW /SAMPLES');
  WriteLn('          CORELDRW /CONVERT entree sortie   (CDR, WPG vers CDR ou SVG)');
+ WriteLn;
+ WriteLn('Options :');
+ WriteLn('  -maxscreen           Utilise la resolution maximale disponible.');
 End;
 
 { /CONVERT ... /DO:op,op : applique des operations d'edition avant
@@ -16147,6 +16172,7 @@ End;
 Var LogF:Text; BI:Integer;
 
 BEGIN
+ MaxScreen:=False;
  InitPaletteTable;
  InitTrig;
  ResetDefaults;
@@ -16160,6 +16186,8 @@ BEGIN
  RedoCnt:=0;
  ObjCount:=0;
  NewDocument;
+ For BI:=1 To ParamCount Do
+  If(UpStr(ParamStr(BI))='-MAXSCREEN')or(UpStr(ParamStr(BI))='/MAXSCREEN')Then MaxScreen:=True;
  If(ParamStr(1)='/?')or(ParamStr(1)='-h')or(ParamStr(1)='--help')Then ShowUsage
   Else
  If UpStr(ParamStr(1))='/SAMPLES' Then MakeSamples

@@ -276,6 +276,9 @@ Var
  MX_, MY_, MB_, OMX, OMY, OMB: LongInt;
  Running: Boolean;
  MaxScreen: Boolean;
+ MaxColors: Boolean;        { -maxcolors : nombre maximal de couleurs (couleurs directes) }
+ TrueMode: Boolean;         { mode graphique en couleurs directes (RVB) }
+ UiRgbTab: Array[0..15] Of LongInt;
  Pal256: Boolean;           { palette indexée de 256 couleurs (mode -maxscreen) }
  ImgMaxDim: LongInt;
  MouseOK: Boolean;
@@ -334,6 +337,82 @@ Const
   (85,85,85), (85,85,255), (85,255,85), (85,255,255),
   (255,85,85), (255,85,255), (255,255,85), (255,255,255));
 
+{$IFDEF FPC}
+{ En couleurs directes, les indices 0..15 de l'interface sont traduits en RVB ;
+  les autres valeurs sont déjà des couleurs RVB. }
+Function MapC(C: LongInt): LongInt;
+Begin
+ If TrueMode And (C >= 0) And (C <= 15) Then MapC := UiRgbTab[C] Else MapC := C;
+End;
+
+Procedure SetColor(C: LongInt);
+Begin
+ PtcGraph.SetColor(MapC(C));
+End;
+
+Procedure SetFillStyle(Pat: Word; C: LongInt);
+Begin
+ PtcGraph.SetFillStyle(Pat, MapC(C));
+End;
+
+Procedure PutPixel(X, Y: Integer; C: LongInt);
+Begin
+ PtcGraph.PutPixel(X, Y, MapC(C));
+End;
+
+Function GetPixel(X, Y: Integer): LongInt;
+Begin
+ If TrueMode Then GetPixel := LongInt(PtcGraph.GetPixel(X, Y)) And $FFFFFF
+ Else GetPixel := PtcGraph.GetPixel(X, Y);
+End;
+
+{ Choix du pilote et du mode : -maxscreen = plus grande résolution,
+  -maxcolors = plus grand nombre de couleurs (couleurs directes 24 bits). }
+Procedure SelectScreenDriverMode(WantMaxScreen, WantMaxColors: Boolean; Var Driver, Mode: SmallInt);
+Var
+ LoMode, HiMode: SmallInt;
+ M, Best: PModeInfo;
+ BestArea, Area: LongInt;
+ Found: Boolean;
+Begin
+ Found := False;
+ If WantMaxColors Then Begin
+  M := QueryAdapterInfo;
+  Best := Nil;
+  BestArea := 0;
+  While M <> Nil Do Begin
+   If M^.DirectColor And (M^.MaxColor >= 16777216) Then Begin
+    Area := (M^.MaxX + 1) * (M^.MaxY + 1);
+    If WantMaxScreen Then Begin
+     If Area > BestArea Then Begin Best := M; BestArea := Area; End;
+    End
+    Else If (M^.MaxX + 1 >= 640) And (M^.MaxY + 1 >= 480) Then Begin
+     If (Best = Nil) Or (Area < BestArea) Then Begin Best := M; BestArea := Area; End;
+    End;
+   End;
+   M := M^.Next;
+  End;
+  If Best <> Nil Then Begin
+   Driver := Best^.DriverNumber;
+   Mode := Best^.ModeNumber;
+   Found := True;
+  End;
+ End;
+ If Not Found Then Begin
+  If WantMaxScreen Then Begin
+   Driver := D8bit;
+   GetModeRange(Driver, LoMode, HiMode);
+   If HiMode >= LoMode Then Mode := HiMode
+   Else Begin Driver := Detect; Mode := 0; End;
+  End
+  Else Begin
+   Driver := VGA;
+   Mode := VGAHi;
+  End;
+ End;
+End;
+{$ENDIF}
+
 { Les seize couleurs de l'interface restent identiques dans le pilote D8bit ;
   les indices 16..231 forment un cube 6x6x6 et 232..255 une rampe de gris. }
 Procedure InitializeScreenPalette;
@@ -343,8 +422,16 @@ Var
 {$ENDIF}
 Begin
  Pal256 := False;
+ TrueMode := False;
  {$IFDEF FPC}
- If GetMaxColor > 15 Then Begin
+ For I := 0 To 15 Do
+  UiRgbTab[I] := (LongInt(ScrVga[I, 0]) Shl 16) Or (LongInt(ScrVga[I, 1]) Shl 8) Or ScrVga[I, 2];
+ If GetMaxColor > 255 Then Begin
+  { couleurs directes : rendu riche (mélanges réels, sans tramage) }
+  TrueMode := True;
+  Pal256 := True;
+ End
+ Else If GetMaxColor > 15 Then Begin
   For I := 0 To 15 Do SetRGBPalette(I, ScrVga[I, 0], ScrVga[I, 1], ScrVga[I, 2]);
   If GetMaxColor >= 255 Then Begin
    For I := 16 To 231 Do
@@ -369,18 +456,7 @@ Var
  {$ENDIF}
 Begin
  {$IFDEF FPC}
-  If MaxScreen Then Begin
-   { Option -maxscreen : palette indexée et résolution maximale disponible }
-   Driver:=D8bit;
-   GetModeRange(Driver,LoMode,HiMode);
-   If HiMode>=LoMode Then Mode:=HiMode
-   Else Begin Driver:=Detect; Mode:=0; End;
-  End
-   Else
-  Begin
-   Driver:=VGA;
-   Mode:=VGAHi;
-  End;
+  SelectScreenDriverMode(MaxScreen, MaxColors, Driver, Mode);
  {$ELSE}
   Driver:=Detect;
   Mode:=VGAHi;
@@ -970,8 +1046,9 @@ Begin
 End;
 
 { RVB d'un indice de la palette écran }
-Function IdxRgb(I: Integer): LongInt;
+Function IdxRgb(I: LongInt): LongInt;
 Begin
+ If TrueMode Then Begin IdxRgb := I And $FFFFFF; Exit; End;
  If I < 16 Then IdxRgb := (LongInt(ScrVga[I, 0]) Shl 16) Or (LongInt(ScrVga[I, 1]) Shl 8) Or ScrVga[I, 2]
  Else If I < 232 Then
   IdxRgb := (LongInt(((I - 16) Div 36) * 51) Shl 16) Or (LongInt((((I - 16) Div 6) Mod 6) * 51) Shl 8) Or (((I - 16) Mod 6) * 51)
@@ -979,10 +1056,17 @@ Begin
 End;
 
 { Indice écran le plus proche d'une couleur RVB (palette 256 si disponible) }
-Function ScrCol(Rgb: LongInt): Integer;
+Function ScrCol(Rgb: LongInt): LongInt;
 Var
  R, G, B, K: Integer;
 Begin
+ If TrueMode Then Begin
+  Rgb := Rgb And $FFFFFF;
+  { les valeurs 1..15 désigneraient les couleurs de l'interface }
+  If (Rgb > 0) And (Rgb < 16) Then Rgb := Rgb Or 16;
+  ScrCol := Rgb;
+  Exit;
+ End;
  If Not Pal256 Then Begin ScrCol := Nearest16(Rgb); Exit; End;
  R := (Rgb Shr 16) And 255; G := (Rgb Shr 8) And 255; B := Rgb And 255;
  If (R = G) And (G = B) Then Begin
@@ -1938,6 +2022,7 @@ Procedure PlotRgb(X, Y, R, G, B: LongInt);
 Var
  Off: LongInt;
 Begin
+ If TrueMode Then Begin PutPixel(X, Y, ScrCol(RGBOf(R, G, B))); Exit; End;
  If Not DLutReady Then InitDLut;
  If Pal256 Then Begin
   If (Abs(R - G) < 8) And (Abs(G - B) < 8) Then Begin
@@ -12249,8 +12334,11 @@ Begin
    FillChar(Line_, SizeOf(Line_), 0);
    X := 0;
    While X < W Do Begin
-    Pix[0] := GetPixel(X, Y) And 15;
-    If X + 1 < W Then Pix[1] := GetPixel(X + 1, Y) And 15 Else Pix[1] := 0;
+    If Pal256 Then Pix[0] := Nearest16(IdxRgb(GetPixel(X, Y))) Else Pix[0] := GetPixel(X, Y) And 15;
+    If X + 1 < W Then Begin
+     If Pal256 Then Pix[1] := Nearest16(IdxRgb(GetPixel(X + 1, Y))) Else Pix[1] := GetPixel(X + 1, Y) And 15;
+    End
+    Else Pix[1] := 0;
     Line_[X Div 2] := (Pix[0] Shl 4) Or Pix[1];
     Inc(X, 2);
    End;
@@ -13950,11 +14038,14 @@ Var
 BEGIN
  StartFile := '';
  MaxScreen := False;
+ MaxColors := False;
+ TrueMode := False;
  WantHelp := False;
  For ArgI := 1 To ParamCount Do Begin
   Arg := ParamStr(ArgI);
   UpArg := UpStr(Arg);
   If UpArg = '-MAXSCREEN' Then MaxScreen := True
+  Else If UpArg = '-MAXCOLORS' Then MaxColors := True
   Else If (UpArg = '/?') Or (UpArg = '--HELP') Or (UpArg = '-H') Then WantHelp := True
   Else If StartFile = '' Then StartFile := Arg;
  End;
@@ -13964,12 +14055,16 @@ BEGIN
   Rewrite(HelpOutput);
   WriteLn(HelpOutput, 'ACROBAT : Visionneuse et éditeur de documents PDF (clone d''Adobe Acrobat).');
   WriteLn(HelpOutput);
-  WriteLn(HelpOutput, 'Syntaxe : ACROBAT [fichier.pdf] [-maxscreen] [/? | -h | --help]');
+  WriteLn(HelpOutput, 'Syntaxe : ACROBAT [fichier.pdf] [-maxscreen] [-maxcolors] [/? | -h | --help]');
   WriteLn(HelpOutput);
   WriteLn(HelpOutput, '  Sans option          Lance l''application graphique en 640x480.');
   WriteLn(HelpOutput, '  -h, --help           Affichent également cette aide.');
   WriteLn(HelpOutput, '  -maxscreen           Utilise la resolution maximale disponible.');
+  WriteLn(HelpOutput, '  -maxcolors           Utilise le nombre maximal de couleurs (couleurs vraies).');
   WriteLn(HelpOutput, '  /?                   Affiche cette aide et quitte.');
+  WriteLn(HelpOutput);
+  WriteLn(HelpOutput, 'Avec -maxcolors (Free Pascal seulement), l''affichage utilise les couleurs vraies :');
+  WriteLn(HelpOutput, 'degrades, transparence et images sans tramage. Sous Turbo Pascal, les options sont ignorees.');
   WriteLn(HelpOutput);
   WriteLn(HelpOutput, 'Raccourcis : Ctrl+O Ouvrir, Ctrl+S Enregistrer, Ctrl+Z Annuler, F1 Aide, Ctrl+Q Quitter');
   Close(HelpOutput);

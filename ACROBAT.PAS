@@ -226,6 +226,7 @@ Var
  { Souris / clavier }
  MX_, MY_, MB_, OMX, OMY, OMB: LongInt;
  Running: Boolean;
+ MaxScreen: Boolean;
  MouseOK: Boolean;
  LastClickT: LongInt;
  LastClickX, LastClickY: LongInt;
@@ -275,14 +276,46 @@ Var
 { Squelette : graphique et souris                                         }
 { ---------------------------------------------------------------------- }
 
+{ Les seize couleurs de l'interface restent identiques dans le pilote D8bit. }
+Procedure InitializeScreenPalette;
+{$IFDEF FPC}
+Const
+ VgaRGB: Array[0..15, 0..2] Of Byte = (
+  (0,0,0), (0,0,170), (0,170,0), (0,170,170),
+  (170,0,0), (170,0,170), (170,85,0), (170,170,170),
+  (85,85,85), (85,85,255), (85,255,85), (85,255,255),
+  (255,85,85), (255,85,255), (255,255,85), (255,255,255));
+Var
+ I: Integer;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+ If GetMaxColor > 15 Then
+  For I := 0 To 15 Do SetRGBPalette(I, VgaRGB[I, 0], VgaRGB[I, 1], VgaRGB[I, 2]);
+ {$ENDIF}
+End;
+
 Procedure InitializeGraphics;
 Var
  Driver, Mode: Integer;
  ErrCode: Integer;
+ {$IFDEF FPC}
+ LoMode, HiMode: SmallInt;
+ {$ENDIF}
 Begin
  {$IFDEF FPC}
-  Driver:=VGA;
-  Mode:=VGAHi;
+  If MaxScreen Then Begin
+   { Option -maxscreen : palette indexée et résolution maximale disponible }
+   Driver:=D8bit;
+   GetModeRange(Driver,LoMode,HiMode);
+   If HiMode>=LoMode Then Mode:=HiMode
+   Else Begin Driver:=Detect; Mode:=0; End;
+  End
+   Else
+  Begin
+   Driver:=VGA;
+   Mode:=VGAHi;
+  End;
  {$ELSE}
   Driver:=Detect;
   Mode:=VGAHi;
@@ -290,6 +323,7 @@ Begin
  InitGraph(Driver,Mode,'');
  ErrCode:=GraphResult;
  If ErrCode=grOk Then Begin
+  InitializeScreenPalette;
   SetColor(White);
   SetLineStyle(0,0,1);
  End
@@ -10410,16 +10444,37 @@ End;
 
 Var
  Dummy: Boolean;
- StartFile: String;
+ StartFile, Arg, UpArg: String;
+ ArgI: Integer;
+ WantHelp: Boolean;
+ HelpOutput: Text;
 
 BEGIN
- StartFile := ParamStr(1);
- If (StartFile = '/?') Or (StartFile = '--help') Or (StartFile = '-h') Then Begin
-  WriteLn('ACROBAT : Visionneuse et éditeur de documents PDF (clone d''Adobe Acrobat).');
-  WriteLn;
-  WriteLn('Syntaxe : ACROBAT [fichier.pdf]');
-  WriteLn;
-  WriteLn('Raccourcis : Ctrl+O Ouvrir, Ctrl+S Enregistrer, Ctrl+Z Annuler, F1 Aide, Ctrl+Q Quitter');
+ StartFile := '';
+ MaxScreen := False;
+ WantHelp := False;
+ For ArgI := 1 To ParamCount Do Begin
+  Arg := ParamStr(ArgI);
+  UpArg := UpStr(Arg);
+  If UpArg = '-MAXSCREEN' Then MaxScreen := True
+  Else If (UpArg = '/?') Or (UpArg = '--HELP') Or (UpArg = '-H') Then WantHelp := True
+  Else If StartFile = '' Then StartFile := Arg;
+ End;
+ If WantHelp Then Begin
+  { Un flux distinct conserve la sortie console, même avec l'unité Crt. }
+  Assign(HelpOutput, '');
+  Rewrite(HelpOutput);
+  WriteLn(HelpOutput, 'ACROBAT : Visionneuse et éditeur de documents PDF (clone d''Adobe Acrobat).');
+  WriteLn(HelpOutput);
+  WriteLn(HelpOutput, 'Syntaxe : ACROBAT [fichier.pdf] [-maxscreen] [/? | -h | --help]');
+  WriteLn(HelpOutput);
+  WriteLn(HelpOutput, '  Sans option          Lance l''application graphique en 640x480.');
+  WriteLn(HelpOutput, '  -h, --help           Affichent également cette aide.');
+  WriteLn(HelpOutput, '  -maxscreen           Utilise la resolution maximale disponible.');
+  WriteLn(HelpOutput, '  /?                   Affiche cette aide et quitte.');
+  WriteLn(HelpOutput);
+  WriteLn(HelpOutput, 'Raccourcis : Ctrl+O Ouvrir, Ctrl+S Enregistrer, Ctrl+Z Annuler, F1 Aide, Ctrl+Q Quitter');
+  Close(HelpOutput);
   Halt;
  End;
  InitVars;

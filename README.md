@@ -195,6 +195,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td>Cette commande permet de convertir une image BitMap (.BMP) en XBM (X BitMap).</td>
 		</tr>	
 		<tr>
+			<td><b>CORELDRW.PAS</b></td>
+			<td>Cette commande permet de lancer un clone de CorelDRAW (dessin vectoriel).</td>
+		</tr>
+		<tr>
 			<td><b>ICO2ASM.PAS</b></td>
 			<td>Cette commande permet de transformer un icône (.ICO) en code source assembleur.</td>
 		</tr>

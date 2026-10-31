@@ -330,7 +330,9 @@ Type
   Fps100: Integer;
   CW, CH: Integer;
   Pair: Integer;
-  Txt: String[22];
+  Bin: Integer;
+  Txt: String[60];
+  TFl, TOutC, TBoxC, TAl, TVp, TSz, TMo, TSp: Integer;
   Path: String[80];
   Cache: String[12];
  End;
@@ -377,6 +379,8 @@ Type
   Clips: Array[0..MAXCLIPS-1] Of TClip;
   Marks: Array[0..MAXMARK-1] Of TMarker;
   NV, NA: Integer;
+  NB: Integer;
+  Bins: Array[0..7] Of String[14];
   InM, OutM: LongInt;
   TrkF: Array[0..NTRK-1] Of Integer;
  End;
@@ -401,7 +405,12 @@ Type
   WP: LongInt;
   Dim: LongInt;
   TS, TX0, TY0: LongInt;
-  TT: String[22];
+  TT: String[60];
+  TNL, TLH, TBW, TBX, TBY: LongInt;
+  TLn: Array[0..5] Of String[40];
+  TLX: Array[0..5] Of LongInt;
+  TLW: Array[0..5] Of LongInt;
+  TCol, TOutCol, TBoxCol, TFl: LongInt;
   Cd: LongInt;
  End;
 
@@ -504,7 +513,7 @@ Const
  CM_QFULL = 600; CM_QHALF = 601; CM_QQUART = 602; CM_SAFE = 603;
  CM_WAVE = 604; CM_SNAP = 605; CM_AUDIO = 606; CM_LOOP = 607;
  CM_WS0 = 700;
- CM_TABS = 710; CM_TABCTL = 711; CM_TABPROJ = 712; CM_TABEFF = 713; CM_TABMARK = 714;
+ CM_TABSCOPE = 715; CM_TABS = 710; CM_TABCTL = 711; CM_TABPROJ = 712; CM_TABEFF = 713; CM_TABMARK = 714;
  CM_HELP = 800; CM_ABOUT = 801;
 
  WsNames: Array[0..4] Of String[12] =
@@ -573,6 +582,9 @@ Var
  LastTone: Integer;
  AuActive: Boolean;
  DefInterp: Integer;
+ CurBin: Integer;
+ ProjVis: Array[0..MAXMEDIA - 1] Of Integer;
+ ProjVN: Integer;
  NextLink: Integer;
  ToolSlot: Array[0..6] Of Integer;
  LutNames: Array[1..4] Of String[12];
@@ -603,6 +615,7 @@ Var
  { Rendu }
  SinTab: Array[0..255] Of Integer;
  Quant: Array[0..511] Of Byte;
+ Glyph8: Array[0..255, 0..7] Of Byte;
  Lay: Array[0..MAXLAY-1] Of TLayer;
  NLay, CL: Integer;
  CR, CG, CB, CA: LongInt;
@@ -1770,20 +1783,35 @@ Begin
  GlyphBit := (Font57[GlyphIdx(Ch), GY] And (16 Shr GX)) <> 0;
 End;
 
-Function TitleBit(Var L: TLayer; X, Y: LongInt): Boolean;
+{ Pixel (X,Y) de la sequence appartient-il a un glyphe du titre du calque L ? }
+Function TitleHit(Var L: TLayer; X, Y: LongInt): Boolean;
 Var
- TX, TY, GX, GY, CI, SB: LongInt;
+ LN, YY, GY, LX, GX, CI, SB, VS, Shift: LongInt;
+ Ch: Byte;
+ B: Boolean;
 Begin
- TitleBit := False;
- TX := X - L.TX0;
- TY := Y - L.TY0;
- If (TX < 0) Or (TY < 0) Then Exit;
- GX := TX Div L.TS;
- GY := TY Div L.TS;
- CI := GX Div 6;
- SB := GX Mod 6;
- If (CI >= Length(L.TT)) Or (SB >= 5) Or (GY >= 7) Then Exit;
- TitleBit := GlyphBit(L.TT[CI + 1], SB, GY);
+ TitleHit := False;
+ If L.TLH < 1 Then Exit;
+ YY := Y - L.TY0;
+ If YY < 0 Then Exit;
+ LN := YY Div L.TLH;
+ If LN >= L.TNL Then Exit;
+ YY := YY - LN * L.TLH;
+ If (L.TFl And 16) <> 0 Then VS := 2 Else VS := 1;
+ If YY >= 8 * L.TS * VS Then Exit;
+ GY := YY Div (L.TS * VS);
+ Shift := 0;
+ If (L.TFl And 2) <> 0 Then Shift := ((7 - GY) * L.TS) Div 3;
+ LX := X - L.TLX[LN] - Shift;
+ If LX < 0 Then Exit;
+ GX := LX Div L.TS;
+ CI := GX Div 8;
+ SB := GX Mod 8;
+ If CI >= Length(L.TLn[LN]) Then Exit;
+ Ch := Ord(L.TLn[LN][CI + 1]);
+ B := (Glyph8[Ch, GY] And (128 Shr SB)) <> 0;
+ If (Not B) And ((L.TFl And 1) <> 0) And (SB > 0) Then B := (Glyph8[Ch, GY] And (128 Shr (SB - 1))) <> 0;
+ TitleHit := B;
 End;
 
 Procedure SetupLayer(Idx: Integer; M: Integer; T: LongInt);
@@ -1804,15 +1832,52 @@ Begin
   Dim := 256;
   TS := 1;
   If K = MK_TITLE Then Begin
-   TT := Copy(Cv(P.Media[M].Txt), 1, 22);
-   N := Length(TT);
-   If N < 1 Then N := 1;
-   S := (VW - VW Div 18) Div (N * 6);
-   If S > (8 * VW) Div BW Then S := (8 * VW) Div BW;
-   If S < 1 Then S := 1;
-   TS := S;
-   TX0 := (VW - (N * 6 - 1) * S) Div 2;
-   TY0 := (VH - 7 * S) Div 2;
+   TT := Cv(P.Media[M].Txt);
+   TFl := P.Media[M].TFl;
+   TNL := 0;
+   TS := Max(1, (Max(1, P.Media[M].TSz) * VW) Div BW);
+   While (TT <> '') And (TNL < 6) Do Begin
+    N := Pos('|', TT);
+    If N = 0 Then Begin
+     TLn[TNL] := Copy(TT, 1, 40);
+     TT := '';
+    End Else Begin
+     TLn[TNL] := Copy(TT, 1, Min(N - 1, 40));
+     Delete(TT, 1, N);
+    End;
+    Inc(TNL);
+   End;
+   If TNL = 0 Then Begin
+    TLn[0] := ' ';
+    TNL := 1;
+   End;
+   TBW := 0;
+   For N := 0 To TNL - 1 Do TBW := Max(TBW, Length(TLn[N]) * 8);
+   While (TBW * TS > VW - VW Div 12) And (TS > 1) Do Dec(TS);
+   If (TFl And 16) <> 0 Then TLH := 18 * TS Else TLH := 10 * TS;
+   TBX := TNL * TLH;
+   Case P.Media[M].TVp Of
+    0: TY0 := VH Div 12;
+    1: TY0 := (VH - TBX) Div 2;
+   Else TY0 := VH - TBX - VH Div 10;
+   End;
+   For N := 0 To TNL - 1 Do Begin
+    TLW[N] := Length(TLn[N]) * 8 * TS;
+    Case P.Media[M].TAl Of
+     0: TLX[N] := VW Div 14;
+     2: TLX[N] := VW - VW Div 14 - TLW[N];
+    Else TLX[N] := (VW - TLW[N]) Div 2;
+    End;
+   End;
+   If (P.Media[M].TMo = 1) And (TNL > 0) Then
+    For N := 0 To TNL - 1 Do
+     TLX[N] := VW - ((T * Max(1, P.Media[M].TSp) * TS) Div 2) Mod (VW + TLW[N] + 1);
+   If P.Media[M].TMo = 2 Then
+    TY0 := VH - ((T * Max(1, P.Media[M].TSp) * TS) Div 2) Mod (VH + TBX + 1);
+   TCol := P.Media[M].Par;
+   TOutCol := P.Media[M].TOutC;
+   TBoxCol := P.Media[M].TBoxC;
+   TBY := TY0;
   End;
   If K = MK_COUNT Then Begin
    Cd := (MDur - T + P.Fps - 1) Div P.Fps;
@@ -1855,27 +1920,44 @@ Begin
  CB := B;
 End;
 
-{ Genere le pixel (X,Y) du calque courant CL dans CR,CG,CB,CA }
+{ Sinus a phase fractionnaire : A en 1/8 d'unite (256 unites = un tour) }
+Function Sn8(A: LongInt): LongInt;
+Var
+ I, F, V0, V1: LongInt;
+Begin
+ I := (A Shr 3) And 255;
+ F := A And 7;
+ V0 := SinTab[I];
+ V1 := SinTab[(I + 1) And 255];
+ Sn8 := V0 + ((V1 - V0) * F) Div 8;
+End;
+
+{ Genere le pixel (X,Y) du calque courant CL dans CR,CG,CB,CA.
+  Les generateurs sont independants de la resolution : leurs coordonnees sont
+  exprimees en huitiemes de pixel d'une grille de base 284x160. }
 Procedure Gen(X, Y: LongInt);
 Var
- I, J, V, DX, DY, D, Q: LongInt;
+ I, J, V, DX, DY, D, Q, XB, YB, Dd, Sh: LongInt;
+ Hit: Boolean;
 Begin
  CA := 255;
  With Lay[CL] Do Begin
   If (K <> MK_IMAGE) And (K <> MK_VIDEO) And (K <> MK_TITLE) Then Begin
-   X := (X * BW) Div VW;
-   Y := (Y * BH) Div VH;
+   X := (X * BW * 8) Div VW;
+   Y := (Y * BH * 8) Div VH;
   End;
+  XB := X Div 8;
+  YB := Y Div 8;
   Case K Of
    MK_BARS: Begin
-    If Y < 107 Then Begin
-     I := X * 7 Div BW;
+    If YB < 107 Then Begin
+     I := XB * 7 Div BW;
      PutRGB(BarR[I], BarG[I], BarB[I]);
-    End Else If Y < 120 Then Begin
-     I := X * 7 Div BW;
+    End Else If YB < 120 Then Begin
+     I := XB * 7 Div BW;
      PutRGB(MidR[I], MidG[I], MidB[I]);
     End Else Begin
-     I := X * 6 Div BW;
+     I := XB * 6 Div BW;
      Case I Of
       0: PutRGB(0, 33, 76);
       1: PutRGB(255, 255, 255);
@@ -1884,41 +1966,41 @@ Begin
       4: PutRGB(0, 0, 0);
      Else PutRGB(38, 38, 38);
      End;
-     If (Y >= 128) And (Y < 150) And (Abs(X - ((Tm * 4) Mod BW)) < 3) Then PutRGB(255, 255, 255);
+     If (YB >= 128) And (YB < 150) And (Abs(X - ((Tm * 4) Mod BW) * 8) < 24) Then PutRGB(255, 255, 255);
     End;
    End;
    MK_GRAD: Begin
-    V := X * 256 Div BW + Tm * 4;
-    I := 255 - Y * 90 Div BH;
+    V := (X * 256) Div (BW * 8) + Tm * 4;
+    I := 255 - (Y * 90) Div (BH * 8);
     PutRGB(Tri(V) * I Div 255, Tri(V + 85) * I Div 255, Tri(V + 170) * I Div 255);
    End;
    MK_PLASMA: Begin
-    V := Sn(X * 2 + Tm * 3) + Sn(Y * 3 - Tm * 2) + Sn(X + Y + Tm * 4) +
-         Sn((X * X + Y * Y) Div 160 + Tm * 3);
+    V := Sn8(X * 2 + Tm * 24) + Sn8(Y * 3 - Tm * 16) + Sn8(X + Y + Tm * 32) +
+         Sn8(((X * X + Y * Y) Div 160) Div 8 + Tm * 24);
     PutRGB(128 + Sn(V + 0) Div 2 + 63, 128 + Sn(V + 85) Div 2 + 63, 128 + Sn(V + 170) Div 2 + 63);
    End;
    MK_CHECK: Begin
-    I := ((X + Tm * 3) Div 20 + (Y + Tm) Div 20) And 1;
+    I := ((XB + Tm * 3) Div 20 + (YB + Tm) Div 20) And 1;
     J := Par;
     If (J < 0) Or (J >= NPRE) Then J := 2;
     If I = 0 Then PutRGB(PreR[J], PreG[J], PreB[J])
     Else PutRGB(PreR[J] Div 4, PreG[J] Div 4, PreB[J] Div 4);
    End;
    MK_COUNT: Begin
-    DX := X - BW Div 2;
-    DY := Y - BH Div 2;
+    DX := X - BW * 4;
+    DY := Y - BH * 4;
     PutRGB(40, 40, 40);
-    If (DX = 0) Or (DY = 0) Then PutRGB(120, 120, 120);
-    D := DX * DX + DY * DY;
+    If (Abs(DX) < 4) Or (Abs(DY) < 4) Then PutRGB(120, 120, 120);
+    D := (DX * DX + DY * DY) Div 64;
     If (D >= 4600) And (D <= 5200) Then PutRGB(220, 220, 220);
     I := ((Tm * 256) Div P.Fps) And 255;
-    DX := X - (BW Div 2 + Sn(I + 64) * 69 Div 127);
-    DY := Y - (BH Div 2 - Sn(I) * 69 Div 127);
-    If DX * DX + DY * DY < 30 Then PutRGB(255, 80, 80);
-    DX := X - (BW Div 2 - 35);
-    DY := Y - (BH Div 2 - 49);
-    If (DX >= 0) And (DY >= 0) And (DX < 70) And (DY < 98) Then
-     If (Font57[26 + Cd, DY Div 14] And (16 Shr (DX Div 14))) <> 0 Then PutRGB(255, 255, 255);
+    DX := X - (BW * 4 + (Sn(I + 64) * 69 * 8) Div 127);
+    DY := Y - (BH * 4 - (Sn(I) * 69 * 8) Div 127);
+    If (DX * DX + DY * DY) Div 64 < 30 Then PutRGB(255, 80, 80);
+    DX := X - (BW * 4 - 35 * 8);
+    DY := Y - (BH * 4 - 49 * 8);
+    If (DX >= 0) And (DY >= 0) And (DX < 70 * 8) And (DY < 98 * 8) Then
+     If (Font57[26 + Cd, DY Div (14 * 8)] And (16 Shr (DX Div (14 * 8)))) <> 0 Then PutRGB(255, 255, 255);
    End;
    MK_SOLID: Begin
     J := Par;
@@ -1926,25 +2008,54 @@ Begin
     PutRGB(PreR[J], PreG[J], PreB[J]);
    End;
    MK_TITLE: Begin
-    J := Par;
+    J := TCol;
     If (J < 0) Or (J >= NPRE) Then J := 1;
-    If TitleBit(Lay[CL], X, Y) Then PutRGB(PreR[J], PreG[J], PreB[J])
-    Else If TitleBit(Lay[CL], X - TS, Y - TS) Then Begin
-     PutRGB(0, 0, 0);
-     CA := 200;
-    End Else CA := 0;
+    If TitleHit(Lay[CL], X, Y) Then PutRGB(PreR[J], PreG[J], PreB[J])
+    Else Begin
+     Hit := False;
+     If (TFl And 8) <> 0 Then Begin
+      Dd := Max(1, TS Div 3);
+      If TitleHit(Lay[CL], X - Dd, Y) Or TitleHit(Lay[CL], X + Dd, Y) Or
+         TitleHit(Lay[CL], X, Y - Dd) Or TitleHit(Lay[CL], X, Y + Dd) Or
+         TitleHit(Lay[CL], X - Dd, Y - Dd) Or TitleHit(Lay[CL], X + Dd, Y + Dd) Or
+         TitleHit(Lay[CL], X - Dd, Y + Dd) Or TitleHit(Lay[CL], X + Dd, Y - Dd) Then Begin
+       Q := TOutCol;
+       If (Q < 0) Or (Q >= NPRE) Then Q := 0;
+       PutRGB(PreR[Q], PreG[Q], PreB[Q]);
+       Hit := True;
+      End;
+     End;
+     If (Not Hit) And ((TFl And 4) <> 0) Then Begin
+      Sh := Max(1, TS Div 2);
+      If TitleHit(Lay[CL], X - Sh, Y - Sh) Then Begin
+       PutRGB(0, 0, 0);
+       CA := 200;
+       Hit := True;
+      End;
+     End;
+     If (Not Hit) And (TBoxCol > 0) Then Begin
+      If (Y >= TY0 - TS * 2) And (Y <= TY0 + TBX + TS * 2) Then Begin
+       Q := TBoxCol - 1;
+       If Q >= NPRE Then Q := 0;
+       PutRGB(PreR[Q] Div 3, PreG[Q] Div 3, PreB[Q] Div 3);
+       CA := 150;
+       Hit := True;
+      End;
+     End;
+     If Not Hit Then CA := 0;
+    End;
    End;
    MK_NOISE: Begin
-    V := Hash3(X, Y, Tm) And 255;
+    V := Hash3(X Div 3, Y Div 3, Tm) And 255;
     PutRGB(V, V, V + (V Shr 3));
     If CB > 255 Then CB := 255;
    End;
    MK_WAVES: Begin
-    DX := Abs(X - BW Div 2);
-    DY := Abs(Y - BH Div 2);
+    DX := Abs(X - BW * 4);
+    DY := Abs(Y - BH * 4);
     If DX > DY Then D := DX + DY Div 2 Else D := DY + DX Div 2;
-    V := D * 3 - Tm * 6;
-    PutRGB(128 + Sn(V), 128 + Sn(V + 85), 128 + Sn(V + 170));
+    V := D * 3 - Tm * 48;
+    PutRGB(128 + Sn8(V), 128 + Sn8(V + 680), 128 + Sn8(V + 1360));
    End;
    MK_IMAGE, MK_VIDEO: Begin
     If Ok Then Begin
@@ -1952,7 +2063,7 @@ Begin
      PutRGB(Exp5[Q Shr 11], Exp6[(Q Shr 5) And 63], Exp5[Q And 31]);
     End Else Begin
      If (((X Shr 4) Xor (Y Shr 4)) And 1) = 0 Then PutRGB(50, 50, 50) Else PutRGB(25, 25, 25);
-     If (Abs(X - Y * BW Div BH) < 2) Or (Abs(BW - 1 - X - Y * BW Div BH) < 2) Then PutRGB(200, 40, 40);
+     If (Abs(X - Y * VW Div VH) < 2) Or (Abs(VW - 1 - X - Y * VW Div VH) < 2) Then PutRGB(200, 40, 40);
     End;
    End;
   Else PutRGB(0, 0, 0);
@@ -2582,7 +2693,7 @@ Type
  TTabs = Array[0..2] Of String[22];
 
 Const
- TabNA: TTabs = ('Source','Contrôles des effets','');
+ TabNA: TTabs = ('Source','Contrôles des effets','Étendues');
  TabNC: TTabs = ('Projet','Effets','Marqueurs');
  ZoomTab: Array[0..13] Of Integer = (1,2,3,5,8,12,18,25,40,60,100,150,220,320);
 
@@ -2778,6 +2889,7 @@ Begin
   CM_WS0..CM_WS0 + 4: CmdChecked := WorkSp = Id - CM_WS0;
   CM_TABS: CmdChecked := TabA = 0;
   CM_TABCTL: CmdChecked := TabA = 1;
+  CM_TABSCOPE: CmdChecked := TabA = 2;
   CM_TABPROJ: CmdChecked := TabC = 0;
   CM_TABEFF: CmdChecked := TabC = 1;
   CM_TABMARK: CmdChecked := TabC = 2;
@@ -2914,6 +3026,7 @@ Begin
  MenuSep(6);
  MenuAdd(6, 'Moniteur source', '', CM_TABS);
  MenuAdd(6, 'Contrôles des effets', '', CM_TABCTL);
+ MenuAdd(6, 'Étendues (forme d''onde)', '', CM_TABSCOPE);
  MenuAdd(6, 'Projet', '', CM_TABPROJ);
  MenuAdd(6, 'Effets', '', CM_TABEFF);
  MenuAdd(6, 'Marqueurs', '', CM_TABMARK);
@@ -3213,7 +3326,7 @@ Begin
   Else TxtR(X2 - 6, AY1 + 4, '1/4', LightCyan);
   End;
  End Else Begin
-  DrawTabs(AX1, AY1, AX2, 2, 0, TabNA);
+  DrawTabs(AX1, AY1, AX2, 3, 0, TabNA);
   If (SrcMed >= 0) And (SrcMed < P.NM) Then
    TxtR(X2 - 6, AY1 + 4, Fit(P.Media[SrcMed].Name, 100), LightCyan);
  End;
@@ -3680,7 +3793,7 @@ Var
  Tl: LongInt;
 Begin
  PanelBox(AX1, AY1, AX2, AY2);
- DrawTabs(AX1, AY1, AX2, 2, 1, TabNA);
+ DrawTabs(AX1, AY1, AX2, 3, 1, TabNA);
  BuildCtl;
  C := FirstSel;
  If C < 0 Then Begin
@@ -3760,6 +3873,24 @@ End;
 Const
  PROWH = 20;
 
+Procedure BuildProjVis;
+Var
+ I: Integer;
+Begin
+ If (CurBin < 0) Or (CurBin > P.NB) Then CurBin := 0;
+ ProjVN := 0;
+ For I := 0 To P.NM - 1 Do
+  If P.Media[I].Bin = CurBin Then Begin
+   ProjVis[ProjVN] := I;
+   Inc(ProjVN);
+  End;
+End;
+
+Function BinName(B: Integer): String;
+Begin
+ If B = 0 Then BinName := 'Racine' Else BinName := P.Bins[B - 1];
+End;
+
 Function ProjRows: Integer;
 Begin
  ProjRows := (CY2 - 24 - PROWY0) Div PROWH;
@@ -3774,7 +3905,8 @@ Begin
  R := (Y - PROWY0) Div PROWH;
  If R >= ProjRows Then Exit;
  R := R + ProjScroll;
- If R < P.NM Then ProjHit := R;
+ BuildProjVis;
+ If R < ProjVN Then ProjHit := ProjVis[R];
 End;
 
 Procedure RenderThumb(OX, OY, TWd, THt: Integer; M: Integer);
@@ -3809,12 +3941,13 @@ Var
 Begin
  PanelBox(CX1, CY1, CX2, CY2);
  DrawTabs(CX1, CY1, CX2, 3, 0, TabNC);
- Txt(CX1 + 6, CY1 + 18, Fit(P.Name, 150), White);
- TxtR(CX2 - 6, CY1 + 18, IStr(P.NM) + ' élém.', DarkGray);
+ BuildProjVis;
+ Txt(CX1 + 6, CY1 + 18, Fit('Dossier : ' + BinName(CurBin), 150), LightCyan);
+ TxtR(CX2 - 6, CY1 + 18, IStr(ProjVN) + ' élém.', DarkGray);
  HLine(CX1 + 1, CX2 - 1, PROWY0 - 3, DarkGray);
  For R := 0 To ProjRows - 1 Do Begin
-  I := R + ProjScroll;
-  If I >= P.NM Then Break;
+  If R + ProjScroll >= ProjVN Then Break;
+  I := ProjVis[R + ProjScroll];
   Y := PROWY0 + R * PROWH;
   If I = ProjSel Then FillR(CX1 + 1, Y, CX2 - 14, Y + PROWH - 1, Blue);
   RenderThumb(CX1 + 3, Y + 1, 32, 18, I);
@@ -3958,9 +4091,50 @@ Begin
  End;
 End;
 
+{ Etendues : forme d'onde (luminance) et vectorscope de l'image du programme }
+Procedure DrawScopes;
+Var
+ WX, WY, WW, WH, VCX, VCY, VR, GX, GY, X, Y, Lm, Cb, Cr, I: Integer;
+Begin
+ PanelBox(AX1, AY1, AX2, AY2);
+ DrawTabs(AX1, AY1, AX2, 3, 2, TabNA);
+ WX := AX1 + 8;
+ WY := AY1 + 30;
+ WW := 150;
+ WH := 130;
+ VR := 60;
+ VCX := AX1 + 180 + VR;
+ VCY := WY + VR + 5;
+ Txt(WX, AY1 + 18, 'Forme d''onde', LightGray);
+ Txt(VCX - 36, AY1 + 18, 'Vectorscope', LightGray);
+ Frame(WX - 1, WY - 1, WX + WW, WY + WH, DarkGray);
+ For I := 0 To 4 Do HLine(WX, WX + WW - 1, WY + WH - 1 - (I * (WH - 1)) Div 4, DarkGray);
+ SetColor(DarkGray);
+ Circle(VCX, VCY, VR);
+ Circle(VCX, VCY, VR Div 2);
+ Line(VCX - VR, VCY, VCX + VR, VCY);
+ Line(VCX, VCY - VR, VCX, VCY + VR);
+ BuildLayers(Playhead);
+ If NLay = 0 Then Begin
+  Txt(WX + 8, WY + WH Div 2, 'Aucune image', DarkGray);
+  Exit;
+ End;
+ For GY := 0 To 59 Do
+  For GX := 0 To 99 Do Begin
+   X := Integer((LongInt(GX) * VW) Div 100);
+   Y := Integer((LongInt(GY) * VH) Div 60);
+   Compose(X, Y);
+   Lm := Integer((AR * 30 + AG * 59 + AB * 11) Div 100);
+   Cb := Integer((-43 * AR - 85 * AG + 128 * AB) Div 256);
+   Cr := Integer((128 * AR - 107 * AG - 21 * AB) Div 256);
+   PutPixel(WX + (GX * WW) Div 100, WY + WH - 1 - (Lm * (WH - 1)) Div 255, LightGreen);
+   PutPixel(VCX + (Cb * VR) Div 128, VCY - (Cr * VR) Div 128, LightCyan);
+  End;
+End;
+
 Procedure DrawPanelA;
 Begin
- If TabA = 1 Then DrawControls Else DrawMonitor(False);
+ If TabA = 1 Then DrawControls Else If TabA = 2 Then DrawScopes Else DrawMonitor(False);
 End;
 
 { ====================================================================== }
@@ -4422,6 +4596,24 @@ Begin
  If Modified Then Txt(SW - 200, SH - 12, '*', Yellow);
 End;
 
+{ Releve les glyphes 8x8 (page de code 437) de la police du pilote graphique : ils servent
+  aux titres (accents, gras, italique, contour, ombre). }
+Procedure BuildGlyphs;
+Var
+ Ch, GX, GY: Integer;
+Begin
+ For Ch := 0 To 255 Do Begin
+  FillR(0, 0, 15, 15, Black);
+  SetColor(White);
+  OutTextXY(0, 0, Chr(Ch));
+  For GY := 0 To 7 Do Begin
+   Glyph8[Ch, GY] := 0;
+   For GX := 0 To 7 Do
+    If GetPixel(GX, GY) <> 0 Then Glyph8[Ch, GY] := Glyph8[Ch, GY] Or (128 Shr GX);
+  End;
+ End;
+End;
+
 Procedure DrawAll;
 Begin
  HideMouse;
@@ -4455,7 +4647,11 @@ Begin
  If NeedProg Or NeedSrc Or NeedTL Or NeedMeters Or NeedA Or NeedC Or NeedStatus Then Begin
   HideMouse;
   If NeedA Or NeedSrc Then Begin DrawPanelA; NeedA := False; NeedSrc := False; End;
-  If NeedProg Then Begin DrawMonitor(True); NeedProg := False; End;
+  If NeedProg Then Begin
+   DrawMonitor(True);
+   NeedProg := False;
+   If TabA = 2 Then DrawPanelA;
+  End;
   If NeedC Then Begin DrawPanelC; NeedC := False; End;
   If NeedTL Then Begin DrawTimeline; NeedTL := False; End;
   If NeedMeters Then Begin DrawMeters; NeedMeters := False; End;
@@ -4973,10 +5169,28 @@ Begin
  P.Media[P.NM].Cache := '';
  P.Media[P.NM].CW := 0;
  P.Media[P.NM].CH := 0;
- P.Media[P.NM].Txt := Copy(Tx, 1, 22);
+ P.Media[P.NM].Pair := -1;
+ P.Media[P.NM].Bin := CurBin;
+ P.Media[P.NM].TSz := 3;
+ P.Media[P.NM].TAl := 1;
+ P.Media[P.NM].TVp := 1;
+ P.Media[P.NM].TSp := 3;
+ P.Media[P.NM].Txt := Copy(Tx, 1, 60);
  P.Media[P.NM].Path := Copy(Path, 1, 80);
  AddMedia := P.NM;
  Inc(P.NM);
+End;
+
+{ Les sauts de ligne des titres ('|') sont enregistres sous la forme '`'. }
+Function PipeEsc(S: String; Enc: Boolean): String;
+Var
+ I: Integer;
+Begin
+ For I := 1 To Length(S) Do
+  If Enc Then Begin
+   If S[I] = '|' Then S[I] := '`';
+  End Else If S[I] = '`' Then S[I] := '|';
+ PipeEsc := S;
 End;
 
 Function SaveProject(Const FN: String): Boolean;
@@ -4995,11 +5209,16 @@ Begin
  WriteLn(F, 'V|2');
  WriteLn(F, 'U|', P.NV, ' ', P.NA);
  WriteLn(F, 'F|', P.Fps);
+ For I := 0 To P.NB - 1 Do WriteLn(F, 'B|', P.Bins[I]);
  WriteLn(F, 'R|', VW, '|', VH);
  For I := 0 To P.NM - 1 Do
   WriteLn(F, 'M|', P.Media[I].Name, '|', P.Media[I].Kind, '|', P.Media[I].Dur, '|',
-          P.Media[I].Par, '|', P.Media[I].Txt, '|', P.Media[I].Cache, '|', P.Media[I].NF, '|',
-          P.Media[I].Fps100, '|', P.Media[I].CW, '|', P.Media[I].CH, '|', P.Media[I].Path);
+          P.Media[I].Par, '|', PipeEsc(P.Media[I].Txt, True), '|', P.Media[I].Cache, '|', P.Media[I].NF, '|',
+          P.Media[I].Fps100, '|', P.Media[I].CW, '|', P.Media[I].CH, '|', P.Media[I].TFl, '|',
+          P.Media[I].TOutC, '|', P.Media[I].TBoxC, '|', P.Media[I].TAl, '|', P.Media[I].TVp, '|',
+          P.Media[I].TSz, '|', P.Media[I].TMo, '|', P.Media[I].TSp, '|', P.Media[I].Pair, '|',
+          P.Media[I].Bin, '|',
+          P.Media[I].Path);
  For I := 0 To P.NC - 1 Do
   With P.Clips[I] Do Begin
    WriteLn(F, 'C|', Trk, ' ', Med, ' ', Start, ' ', Dur, ' ', InPt, ' ', Speed, ' ', Opac, ' ',
@@ -5032,6 +5251,7 @@ Begin
  P.Fps := 25;
  P.NV := 3;
  P.NA := 3;
+ CurBin := 0;
  If TrueMode Then Begin
   VW := 640;
   VH := 360;
@@ -5094,6 +5314,12 @@ Begin
    P.Fps := Integer(StrVal(L, 25));
    If (P.Fps < 10) Or (P.Fps > 60) Then P.Fps := 25;
   End
+  Else If Tag = 'B' Then Begin
+   If P.NB < 8 Then Begin
+    P.Bins[P.NB] := Copy(L, 1, 14);
+    Inc(P.NB);
+   End;
+  End
   Else If Tag = 'V' Then LoadVer := Integer(StrVal(L, 1))
   Else If Tag = 'U' Then Begin
    P.NV := Integer(Clamp(TakeNum(L), 1, 8));
@@ -5112,12 +5338,22 @@ Begin
     P.Media[M].Kind := Integer(StrVal(TakeField(L), 0));
     P.Media[M].Dur := StrVal(TakeField(L), 125);
     P.Media[M].Par := Integer(StrVal(TakeField(L), 0));
-    P.Media[M].Txt := Copy(TakeField(L), 1, 22);
+    P.Media[M].Txt := PipeEsc(Copy(TakeField(L), 1, 60), False);
     P.Media[M].Cache := Copy(TakeField(L), 1, 12);
     P.Media[M].NF := StrVal(TakeField(L), 0);
     P.Media[M].Fps100 := Integer(StrVal(TakeField(L), 0));
     P.Media[M].CW := Integer(StrVal(TakeField(L), 0));
     P.Media[M].CH := Integer(StrVal(TakeField(L), 0));
+    P.Media[M].TFl := Integer(StrVal(TakeField(L), 0));
+    P.Media[M].TOutC := Integer(StrVal(TakeField(L), 0));
+    P.Media[M].TBoxC := Integer(StrVal(TakeField(L), 0));
+    P.Media[M].TAl := Integer(StrVal(TakeField(L), 1));
+    P.Media[M].TVp := Integer(StrVal(TakeField(L), 1));
+    P.Media[M].TSz := Integer(StrVal(TakeField(L), 3));
+    P.Media[M].TMo := Integer(StrVal(TakeField(L), 0));
+    P.Media[M].TSp := Integer(StrVal(TakeField(L), 3));
+    P.Media[M].Pair := Integer(StrVal(TakeField(L), -1));
+    P.Media[M].Bin := Integer(StrVal(TakeField(L), 0));
     P.Media[M].Path := Copy(L, 1, 80);
    End;
   End
@@ -22619,7 +22855,8 @@ Begin
  RecalcMediaDurs;
  ProjSel := M;
  TabC := 0;
- ProjScroll := Max(0, P.NM - ProjRows);
+ BuildProjVis;
+ ProjScroll := Max(0, ProjVN - ProjRows);
  NeedAll := True;
  If CnCapped Then Msg('Importé (limité à ' + IStr(MaxSec) + ' s) : ' + FN)
  Else Msg('Importé : ' + FN);
@@ -26261,6 +26498,76 @@ Begin
  NeedAll := True;
 End;
 
+{ Dialogue de style des titres : texte, couleur, taille, style, position / mouvement }
+Function TitleDialog(Var Md: TMedia): Boolean;
+Var
+ S: String;
+ Sel, Sz: Integer;
+Begin
+ TitleDialog := False;
+ S := Md.Txt;
+ If S = '' Then S := 'TITRE';
+ If Not InputBox('Titre', 'Texte (| = nouvelle ligne, 60 car.) :', S, 60) Then Exit;
+ If S = '' Then S := 'TITRE';
+ DlgCount := NPRE;
+ For Sel := 0 To NPRE - 1 Do DlgItems[Sel] := PreName[Sel];
+ Sel := ListDlg('Couleur du texte', Md.Par);
+ If Sel < 0 Then Exit;
+ Md.Par := Sel;
+ S := S;
+ Md.Txt := Copy(S, 1, 60);
+ S := IStr(Md.TSz);
+ If Not InputBox('Titre', 'Taille (1 à 12) :', S, 2) Then Exit;
+ Sz := Integer(Clamp(StrVal(S, 3), 1, 12));
+ Md.TSz := Sz;
+ DlgCount := 8;
+ DlgItems[0] := 'Simple';
+ DlgItems[1] := 'Gras';
+ DlgItems[2] := 'Gras + ombre';
+ DlgItems[3] := 'Contour noir';
+ DlgItems[4] := 'Contour + ombre';
+ DlgItems[5] := 'Italique';
+ DlgItems[6] := 'Haut (étiré)';
+ DlgItems[7] := 'Boîte semi-transparente';
+ Sel := ListDlg('Style du texte', 0);
+ If Sel < 0 Then Exit;
+ Md.TFl := 0;
+ Md.TOutC := 0;
+ Md.TBoxC := 0;
+ Case Sel Of
+  1: Md.TFl := 1;
+  2: Md.TFl := 1 Or 4;
+  3: Md.TFl := 8;
+  4: Md.TFl := 8 Or 4;
+  5: Md.TFl := 2;
+  6: Md.TFl := 16;
+  7: Md.TBoxC := 1;
+ End;
+ DlgCount := 7;
+ DlgItems[0] := 'Centré en bas (sous-titre)';
+ DlgItems[1] := 'Centré au milieu';
+ DlgItems[2] := 'Centré en haut';
+ DlgItems[3] := 'À gauche en bas';
+ DlgItems[4] := 'À droite en bas';
+ DlgItems[5] := 'Défilement horizontal (bandeau)';
+ DlgItems[6] := 'Défilement vertical (générique)';
+ Sel := ListDlg('Position / mouvement', 1);
+ If Sel < 0 Then Exit;
+ Md.TMo := 0;
+ Md.TAl := 1;
+ Md.TVp := 1;
+ Case Sel Of
+  0: Md.TVp := 2;
+  2: Md.TVp := 0;
+  3: Begin Md.TAl := 0; Md.TVp := 2; End;
+  4: Begin Md.TAl := 2; Md.TVp := 2; End;
+  5: Begin Md.TMo := 1; Md.TVp := 2; End;
+  6: Md.TMo := 2;
+ End;
+ Md.Name := 'Titre : ' + Copy(S, 1, 12);
+ TitleDialog := True;
+End;
+
 Procedure NewItemDlg;
 Const
  Kinds: Array[0..11] Of Integer = (MK_BARS, MK_GRAD, MK_PLASMA, MK_CHECK, MK_COUNT,
@@ -26270,26 +26577,40 @@ Var
  Dur: LongInt;
  Tx, Nm, S: String;
 Begin
- DlgCount := 12;
+ DlgCount := 13;
  For I := 0 To 11 Do DlgItems[I] := KindName(Kinds[I]);
+ DlgItems[12] := 'Dossier...';
  I := ListDlg('Nouvel élément', 0);
  If I < 0 Then Exit;
+ If I = 12 Then Begin
+  Tx := 'Dossier ' + IStr(P.NB + 1);
+  If P.NB >= 8 Then Begin
+   MsgBox('Nouveau dossier', 'Maximum 8 dossiers.');
+   Exit;
+  End;
+  If Not InputBox('Nouveau dossier', 'Nom du dossier :', Tx, 14) Then Exit;
+  PushUndo;
+  P.Bins[P.NB] := Tx;
+  Inc(P.NB);
+  CurBin := P.NB;
+  ProjScroll := 0;
+  NeedAll := True;
+  Exit;
+ End;
  K := Kinds[I];
  Par := 0;
  Tx := '';
  Nm := KindName(K);
  Dur := P.Fps * 10;
  Case K Of
-  MK_SOLID, MK_CHECK, MK_TITLE: Begin
-   If K = MK_TITLE Then Begin
-    Tx := 'TITRE';
-    If Not InputBox('Nouveau titre', 'Texte du titre (22 car. max) :', Tx, 22) Then Exit;
-    If Tx = '' Then Tx := 'TITRE';
-    Nm := 'Titre : ' + Tx;
-   End;
+  MK_TITLE: Begin
+   Tx := 'TITRE';
+   Par := 1;
+  End;
+  MK_SOLID, MK_CHECK: Begin
    DlgCount := NPRE;
    For I := 0 To NPRE - 1 Do DlgItems[I] := PreName[I];
-   If K = MK_TITLE Then Par := 1 Else If K = MK_SOLID Then Par := 2 Else Par := 3;
+   If K = MK_SOLID Then Par := 2 Else Par := 3;
    Par := ListDlg('Couleur', Par);
    If Par < 0 Then Exit;
    If K = MK_SOLID Then Nm := 'Matte ' + PreName[Par];
@@ -26312,9 +26633,18 @@ Begin
   MsgBox('Nouvel élément', 'Le projet contient trop de médias.');
   Exit;
  End;
+ If K = MK_TITLE Then Begin
+  If Not TitleDialog(P.Media[M]) Then Begin
+   DropLastUndo;
+   Dec(P.NM);
+   NeedAll := True;
+   Exit;
+  End;
+ End;
  ProjSel := M;
  TabC := 0;
- ProjScroll := Max(0, M - ProjRows + 1);
+ BuildProjVis;
+ ProjScroll := Max(0, ProjVN - ProjRows);
  NeedAll := True;
  Msg('Élément créé : ' + P.Media[M].Name);
 End;
@@ -26698,12 +27028,11 @@ Begin
  If I < 0 Then Exit;
  M := P.Clips[I].Med;
  If P.Media[M].Kind <> MK_TITLE Then Exit;
- S := P.Media[M].Txt;
- If Not InputBox('Modifier le titre', 'Texte du titre :', S, 22) Then Exit;
- If S = '' Then Exit;
  PushUndo;
- P.Media[M].Txt := S;
- P.Media[M].Name := 'Titre : ' + S;
+ If Not TitleDialog(P.Media[M]) Then Begin
+  DropLastUndo;
+  Exit;
+ End;
  NeedAll := True;
 End;
 
@@ -26858,6 +27187,7 @@ Begin
   CM_WS0..CM_WS0 + 4: SetWorkspace(Id - CM_WS0);
   CM_TABS: Begin TabA := 0; NeedAll := True; End;
   CM_TABCTL: Begin TabA := 1; NeedAll := True; End;
+  CM_TABSCOPE: Begin TabA := 2; NeedAll := True; End;
   CM_TABPROJ: Begin TabC := 0; NeedAll := True; End;
   CM_TABEFF: Begin TabC := 1; NeedAll := True; End;
   CM_TABMARK: Begin TabC := 2; NeedAll := True; End;
@@ -27078,7 +27408,14 @@ Begin
     Exit;
    End;
    If InRect(MX, MY, CX2 - 12, CY2 - 36, CX2 - 2, CY2 - 26) Then Begin
-    If ProjScroll < P.NM - ProjRows Then Inc(ProjScroll);
+    BuildProjVis;
+    If ProjScroll < ProjVN - ProjRows Then Inc(ProjScroll);
+    NeedC := True;
+    Exit;
+   End;
+   If InRect(MX, MY, CX1 + 1, CY1 + 14, CX2 - 1, CY1 + 26) Then Begin
+    CurBin := (CurBin + 1) Mod (P.NB + 1);
+    ProjScroll := 0;
     NeedC := True;
     Exit;
    End;
@@ -27180,12 +27517,16 @@ Begin
  If T >= AUDBASE Then T := Min(1, P.NV - 1);
  If TrackLocked(T) Then Exit;
  S := 'TITRE';
- If Not InputBox('Outil texte', 'Texte du titre (22 car. max) :', S, 22) Then Exit;
- If S = '' Then Exit;
  PushUndo;
  M := AddMedia('Titre : ' + S, MK_TITLE, P.Fps * 5, 1, S, '');
  If M < 0 Then Begin
   DropLastUndo;
+  Exit;
+ End;
+ If Not TitleDialog(P.Media[M]) Then Begin
+  Dec(P.NM);
+  DropLastUndo;
+  NeedAll := True;
   Exit;
  End;
  ClearSel;
@@ -27874,14 +28215,14 @@ Begin
   End
   Else If InRect(MX, MY, AX1, AY1, AX2, AY2) Then Begin
    If MY <= AY1 + 13 Then Begin
-    B := TabAt(AX1, 2, TabNA, MX);
+    B := TabAt(AX1, 3, TabNA, MX);
     If B >= 0 Then Begin
      StopPlay;
      TabA := B;
      NeedA := True;
     End;
    End Else If TabA = 0 Then PressMonitor(False)
-   Else PressControls;
+   Else If TabA = 1 Then PressControls;
   End
   Else If InRect(MX, MY, BX1, BY1, BX2, BY2) Then PressMonitor(True)
   Else If InRect(MX, MY, CX1, CY1, CX2, CY2) Then PressPanelC
@@ -27903,7 +28244,16 @@ Begin
   End;
  End
  Else If PressR Then Begin
-  If InRect(MX, MY, TLX0, TRY0, TLX1, TRY0 + NRows * TRH - 1) Then Begin
+  If (TabC = 0) And InRect(MX, MY, CX1, CY1 + 26, CX2, CY2 - 22) Then Begin
+   B := ProjHit(MX, MY);
+   If (B >= 0) And (P.NB > 0) Then Begin
+    PushUndo;
+    P.Media[B].Bin := (P.Media[B].Bin + 1) Mod (P.NB + 1);
+    Msg('Déplacé vers : ' + BinName(P.Media[B].Bin));
+    NeedC := True;
+   End;
+  End
+  Else If InRect(MX, MY, TLX0, TRY0, TLX1, TRY0 + NRows * TRH - 1) Then Begin
    B := FindClip(RowTrack((MY - TRY0) Div TRH), XToFrame(MX));
    If CurTool = TL_ZOOM Then ZoomBy(-1, MX)
    Else If B >= 0 Then Begin
@@ -28148,6 +28498,7 @@ Begin
  End;
  InitLayout;
  InitCache;
+ BuildGlyphs;
  AuInit;
  AuActive := False;
  DefInterp := 0;

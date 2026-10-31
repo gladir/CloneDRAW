@@ -212,7 +212,7 @@ Var
  FindText: String[79];
  FindCase: Boolean;
  ToolRgb: Array[0..TL_COUNT-1] Of LongInt;
- CurWidth, CurSize, CurFam, CurStyle: Integer;
+ CurWidth, CurSize, CurFam, CurStyle, CurAngle: Integer;
  Clip: TObjRec;
  ClipValid: Boolean;
  ClipPts: Array[0..199] Of Integer;
@@ -433,6 +433,29 @@ Begin
  End;
  If Neg And (S <> '0') Then S := '-' + S;
  RStr := S;
+End;
+
+{ Réel -> texte PDF avec 4 décimales (matrices de rotation) }
+Function RStr4(R: Real): String;
+Var
+ L, F: LongInt;
+ Neg: Boolean;
+ S, T: String;
+Begin
+ Neg := R < 0;
+ If Neg Then R := -R;
+ L := Trunc(R);
+ F := Round((R - L) * 10000);
+ If F >= 10000 Then Begin Inc(L); F := 0; End;
+ S := IStr(L);
+ If F > 0 Then Begin
+  T := IStr(F);
+  While Length(T) < 4 Do T := '0' + T;
+  While T[Length(T)] = '0' Do Delete(T, Length(T), 1);
+  S := S + '.' + T;
+ End;
+ If Neg And (S <> '0') Then S := '-' + S;
+ RStr4 := S;
 End;
 
 Function FileExists(Const Name: String): Boolean;
@@ -1286,11 +1309,112 @@ Begin
   End;
 End;
 
+{ ---- Texte à angle libre -------------------------------------------------
+  Pour un K_TEXT : PN = angle en dixièmes de degré (sens anti-horaire),
+  P0 = longueur de la ligne (points), Rgb2 = origine (coin supérieur gauche
+  de la ligne dans son repère pivoté) emballée, utilisée si PN <> 0.
+  X1..Y2 contiennent toujours la boîte englobante alignée sur les axes. }
+
+Function TextLenOf(Const O: TObjRec): LongInt;
+Begin
+ If (O.Kind = K_TEXT) And (O.P0 > 0) Then TextLenOf := O.P0
+ Else TextLenOf := IAbs(O.X2 - O.X1);
+End;
+
+Function TextLineH(Const O: TObjRec): LongInt;
+Begin
+ TextLineH := (LongInt(O.Size) * 6 + 4) Div 5;
+End;
+
+Function TextAng(Const O: TObjRec): Integer;
+Begin
+ If O.Kind = K_TEXT Then TextAng := O.PN Mod 3600 Else TextAng := 0;
+End;
+
+Procedure TextDirs(Tenths: Integer; Var Dx, Dy, Vx, Vy: Real);
+Var
+ A: Real;
+Begin
+ Tenths := ((Tenths Mod 3600) + 3600) Mod 3600;
+ Case Tenths Of
+  0: Begin Dx := 1; Dy := 0; End;
+  900: Begin Dx := 0; Dy := -1; End;
+  1800: Begin Dx := -1; Dy := 0; End;
+  2700: Begin Dx := 0; Dy := 1; End;
+ Else
+  Begin
+   A := Tenths * Pi / 1800;
+   Dx := Cos(A); Dy := -Sin(A);
+  End;
+ End;
+ { direction "vers le bas" du glyphe : perpendiculaire (rotation de 90° dans le repère page, y vers le bas) }
+ Vx := -Dy; Vy := Dx;
+End;
+
+Procedure PackOrigin(Var O: TObjRec; Ox, Oy: LongInt);
+Begin
+ If Ox < -16384 Then Ox := -16384;
+ If Ox > 16383 Then Ox := 16383;
+ If Oy < -16384 Then Oy := -16384;
+ If Oy > 16383 Then Oy := 16383;
+ O.Rgb2 := (Ox + 16384) * 32768 + (Oy + 16384);
+End;
+
+Procedure TextOrigin(Const O: TObjRec; Var Ox, Oy: Real);
+Begin
+ If TextAng(O) = 0 Then Begin Ox := O.X1; Oy := O.Y1; End
+ Else Begin
+  Ox := (O.Rgb2 Div 32768) - 16384;
+  Oy := (O.Rgb2 Mod 32768) - 16384;
+ End;
+End;
+
+{ Coins de la ligne de texte (espace page) : 0 origine, 1 fin de ligne, 2 fin + bas, 3 bas }
+Procedure TextCorners(Const O: TObjRec; Var CX, CY: Array Of Real);
+Var
+ Ox, Oy, Dx, Dy, Vx, Vy, L, H: Real;
+Begin
+ TextOrigin(O, Ox, Oy);
+ TextDirs(TextAng(O), Dx, Dy, Vx, Vy);
+ L := TextLenOf(O); H := TextLineH(O);
+ CX[0] := Ox; CY[0] := Oy;
+ CX[1] := Ox + L * Dx; CY[1] := Oy + L * Dy;
+ CX[2] := CX[1] + H * Vx; CY[2] := CY[1] + H * Vy;
+ CX[3] := Ox + H * Vx; CY[3] := Oy + H * Vy;
+End;
+
+{ Recalcule la boîte englobante d'un texte à partir de son origine }
+Procedure SetTextBox(Var O: TObjRec; Ox, Oy: Real);
+Var
+ CX, CY: Array[0..3] Of Real;
+ Dx, Dy, Vx, Vy, L, H: Real;
+ I: Integer;
+ MnX, MxX, MnY, MxY: Real;
+Begin
+ TextDirs(TextAng(O), Dx, Dy, Vx, Vy);
+ L := TextLenOf(O); H := TextLineH(O);
+ CX[0] := Ox; CY[0] := Oy;
+ CX[1] := Ox + L * Dx; CY[1] := Oy + L * Dy;
+ CX[2] := CX[1] + H * Vx; CY[2] := CY[1] + H * Vy;
+ CX[3] := Ox + H * Vx; CY[3] := Oy + H * Vy;
+ MnX := CX[0]; MxX := MnX; MnY := CY[0]; MxY := MnY;
+ For I := 1 To 3 Do Begin
+  If CX[I] < MnX Then MnX := CX[I];
+  If CX[I] > MxX Then MxX := CX[I];
+  If CY[I] < MnY Then MnY := CY[I];
+  If CY[I] > MxY Then MxY := CY[I];
+ End;
+ O.X1 := C16(Round(MnX)); O.Y1 := C16(Round(MnY));
+ O.X2 := C16(Round(MxX)); O.Y2 := C16(Round(MxY));
+ If TextAng(O) = 0 Then Begin O.X1 := C16(Round(Ox)); O.Y1 := C16(Round(Oy)); O.X2 := C16(O.X1 + Round(L)); O.Y2 := C16(O.Y1 + Round(H)); End
+ Else PackOrigin(O, Round(Ox), Round(Oy));
+End;
+
 { Dessine une chaîne de document. (XPt, YPt) : coin supérieur gauche de la
   boîte du texte (en points), WPt : longueur imposée le long du texte,
-  TRot : quarts de tour anti-horaires (0 à 3). }
+  AngT : angle en dixièmes de degré (anti-horaire). }
 Procedure DrawRun(Const S: String; XPt, YPt: Real; WPt: Real; Size, Fam, Style: Integer;
-                  Rgb: LongInt; TRot: Integer);
+                  Rgb: LongInt; AngT: Integer);
 Var
  I, N, C, Em, Col: Integer;
  Sum: LongInt;
@@ -1302,7 +1426,6 @@ Var
 Begin
  N := Length(S);
  If N = 0 Then Exit;
- TRot := TRot And 3;
  Col := Nearest16(Rgb);
  Bold := (Style And 1) <> 0;
  Ital := (Style And 2) <> 0;
@@ -1313,14 +1436,8 @@ Begin
  If WPt < 1 Then WPt := Sum * Size / 1000.0;
  H := Size * 1.2;
  Ratio := WPt / (Sum * Size / 1000.0);
- { origine et directions (en points, espace page) selon la rotation du texte }
- Case TRot Of
-  0: Begin PX0 := XPt; PY0 := YPt; DxX := 1; DxY := 0; DyX := 0; DyY := 1; End;
-  1: Begin PX0 := XPt; PY0 := YPt + WPt; DxX := 0; DxY := -1; DyX := 1; DyY := 0; End;
-  2: Begin PX0 := XPt + WPt; PY0 := YPt + H; DxX := -1; DxY := 0; DyX := 0; DyY := -1; End;
- Else
-  Begin PX0 := XPt + H; PY0 := YPt; DxX := 0; DxY := 1; DyX := -1; DyY := 0; End;
- End;
+ TextDirs(AngT, DxX, DxY, DyX, DyY);
+ PX0 := XPt; PY0 := YPt;
  MapF(PX0, PY0, OX, OY);
  MapF(PX0 + DxX, PY0 + DxY, SX0, SY0);
  MapF(PX0 + DyX, PY0 + DyY, SX1, SY1);
@@ -1346,12 +1463,6 @@ Begin
   If C > 32 Then VGlyph(C, Acc, Adv, Size, OX, OY, OAX, OAY, ODX, ODY, Col, Bold, Ital);
   Acc := Acc + Adv;
  End;
-End;
-
-{ Longueur du texte le long de sa direction (boîte pivotée de 90° si Fill est impair) }
-Function TextLenOf(Const O: TObjRec): LongInt;
-Begin
- If (O.Fill And 1) <> 0 Then TextLenOf := IAbs(O.Y2 - O.Y1) Else TextLenOf := IAbs(O.X2 - O.X1);
 End;
 
 Procedure NormBox(Const O: TObjRec; Var X1, Y1, X2, Y2: LongInt);
@@ -1461,6 +1572,7 @@ End;
 Procedure DrawImageData(Const O: TObjRec; X1, Y1, X2, Y2: LongInt);
 Var
  I, DW, DH, X, Y, XA, XB, YA, YB, SX, SY, U, V, IW_, IH_, R, G, B, Off: LongInt;
+ PU_, PV_, BW, BH: LongInt;
  Pw: PWordPix;
  Al: PBytePix;
  HF, VF: Boolean;
@@ -1483,12 +1595,19 @@ Begin
  For Y := YA To YB Do
   For X := XA To XB Do Begin
    U := X - X1; V := Y - Y1;
+   { coordonnées dans l'espace page (compensation de la rotation de la page) }
    Case GRot Of
-    0: Begin SX := (U * IW_) Div DW; SY := (V * IH_) Div DH; End;
-    1: Begin SX := (V * IW_) Div DH; SY := ((DW - 1 - U) * IH_) Div DW; End;
-    2: Begin SX := ((DW - 1 - U) * IW_) Div DW; SY := ((DH - 1 - V) * IH_) Div DH; End;
+    0: Begin PU_ := U; PV_ := V; BW := DW; BH := DH; End;
+    1: Begin PU_ := V; PV_ := DW - 1 - U; BW := DH; BH := DW; End;
+    2: Begin PU_ := DW - 1 - U; PV_ := DH - 1 - V; BW := DW; BH := DH; End;
    Else
-    Begin SX := ((DH - 1 - V) * IW_) Div DH; SY := (U * IH_) Div DW; End;
+    Begin PU_ := DH - 1 - V; PV_ := U; BW := DH; BH := DW; End;
+   End;
+   If (O.Style And 4) = 0 Then Begin
+    SX := (PU_ * IW_) Div BW; SY := (PV_ * IH_) Div BH;
+   End
+   Else Begin
+    SX := (PV_ * IW_) Div BH; SY := (PU_ * IH_) Div BW;
    End;
    If HF Then SX := IW_ - 1 - SX;
    If VF Then SY := IH_ - 1 - SY;
@@ -1522,6 +1641,7 @@ Var
  NX1, NY1, NX2, NY2: LongInt;
  Sz: Integer;
  TW_: Real;
+ TOx, TOy: Real;
 Begin
  ScrBox(O, SX1, SY1, SX2, SY2);
  If (SX2 < -4) Or (SY2 < -4) Or (SX1 > CullW + 4) Or (SY1 > CullH + 4) Then Exit;
@@ -1532,7 +1652,10 @@ Begin
  If Pass = 1 Then Begin
   Case O.Kind Of
    K_TEXT:
-    DrawRun(O.Txt, O.X1, O.Y1, TextLenOf(O), O.Size, O.Style Shr 2, O.Style And 3, O.Rgb, O.Fill);
+    begin
+     TextOrigin(O, TOx, TOy);
+     DrawRun(O.Txt, TOx, TOy, TextLenOf(O), O.Size, O.Style Shr 2, O.Style And 3, O.Rgb, TextAng(O));
+    end;
    K_LINE, K_ARROW: Begin
     ThickLine(MXp(O.X1, O.Y1), MYp(O.X1, O.Y1), MXp(O.X2, O.Y2), MYp(O.X2, O.Y2), W, Col);
     If O.Kind = K_ARROW Then
@@ -1636,6 +1759,20 @@ Begin
  IsBoxKind := K In [K_RECT, K_OVAL, K_IMAGE, K_REDACT, K_HILITE, K_STAMP, K_UNDER, K_STRIKE];
 End;
 
+Procedure DrawTextBoxRot(Const O: TObjRec);
+Var
+ CX, CY: Array[0..3] Of Real;
+ I, J: Integer;
+Begin
+ TextCorners(O, CX, CY);
+ SetLineStyle(DashedLn, 0, 1);
+ For I := 0 To 3 Do Begin
+  J := (I + 1) And 3;
+  Line(C16(MXr(CX[I], CY[I])), C16(MYr(CX[I], CY[I])), C16(MXr(CX[J], CY[J])), C16(MYr(CX[J], CY[J])));
+ End;
+ SetLineStyle(SolidLn, 0, 1);
+End;
+
 Procedure DrawSelectionBox(Const O: TObjRec);
 Var
  SX1, SY1, SX2, SY2, PX, PY, CX, CY: LongInt;
@@ -1643,6 +1780,10 @@ Var
 Begin
  SetFillStyle(SolidFill, LightBlue);
  SetColor(Blue);
+ If (O.Kind = K_TEXT) And (TextAng(O) <> 0) Then Begin
+  DrawTextBoxRot(O);
+  Exit;
+ End;
  If O.Kind In [K_LINE, K_ARROW] Then Begin
   For I := 1 To 2 Do Begin
    If I = 1 Then Begin CX := O.X1; CY := O.Y1; End Else Begin CX := O.X2; CY := O.Y2; End;
@@ -1878,6 +2019,7 @@ Procedure RecalcBox(Idx: Integer);
 Var
  I: Integer;
  Len: LongInt;
+ Ox, Oy: Real;
  MnX, MnY, MxX, MxY: Integer;
  O: ^TObjRec;
 Begin
@@ -1885,14 +2027,9 @@ Begin
  If O^.Kind = K_TEXT Then Begin
   Len := TextLenPts(O^.Txt, O^.Size, O^.Style Shr 2, O^.Style And 3);
   If Len < 1 Then Len := O^.Size Div 2 + 1;
-  If (O^.Fill And 1) <> 0 Then Begin
-   O^.X2 := O^.X1 + (O^.Size * 6 + 4) Div 5;
-   O^.Y2 := O^.Y1 + Len;
-  End
-  Else Begin
-   O^.X2 := O^.X1 + Len;
-   O^.Y2 := O^.Y1 + (O^.Size * 6 + 4) Div 5;
-  End;
+  O^.P0 := Len;
+  TextOrigin(O^, Ox, Oy);
+  SetTextBox(O^, Ox, Oy);
  End
  Else If (O^.Kind In [K_POLY, K_INK]) And (O^.PN > 0) Then Begin
   MnX := 32000; MnY := 32000; MxX := -32000; MxY := -32000;
@@ -1917,12 +2054,32 @@ Begin
  With Objs^[Idx] Do Begin
   X1 := X1 + DX; X2 := X2 + DX;
   Y1 := Y1 + DY; Y2 := Y2 + DY;
+  If (Kind = K_TEXT) And (PN Mod 3600 <> 0) Then PackOrigin(Objs^[Idx], (Rgb2 Div 32768) - 16384 + DX, (Rgb2 Mod 32768) - 16384 + DY);
   If Kind In [K_POLY, K_INK] Then
    For I := P0 To P0 + PN - 1 Do Begin
     PoolX^[I] := PoolX^[I] + DX;
     PoolY^[I] := PoolY^[I] + DY;
    End;
  End;
+End;
+
+{ Change l'angle d'un texte en le faisant pivoter autour du centre de sa ligne }
+Procedure SetTextAngle(Idx: Integer; Tenths: Integer);
+Var
+ Ox, Oy, Dx, Dy, Vx, Vy, L, H, Cx, Cy: Real;
+Begin
+ With Objs^[Idx] Do Begin
+  TextOrigin(Objs^[Idx], Ox, Oy);
+  TextDirs(TextAng(Objs^[Idx]), Dx, Dy, Vx, Vy);
+  L := TextLenOf(Objs^[Idx]); H := TextLineH(Objs^[Idx]);
+  Cx := Ox + (L * Dx + H * Vx) / 2;
+  Cy := Oy + (L * Dy + H * Vy) / 2;
+  PN := ((Tenths Mod 3600) + 3600) Mod 3600;
+  TextDirs(PN, Dx, Dy, Vx, Vy);
+  Ox := Cx - (L * Dx + H * Vx) / 2;
+  Oy := Cy - (L * Dy + H * Vy) / 2;
+ End;
+ SetTextBox(Objs^[Idx], Ox, Oy);
 End;
 
 { Redimensionne un polygone / une encre vers une nouvelle boîte }
@@ -2055,7 +2212,7 @@ Var
  I, J: Integer;
  NX1, NY1, NX2, NY2: LongInt;
  Hit: Boolean;
- CX, CY, RX, RY, V: Real;
+ CX, CY, RX, RY, V, DTmp: Real;
  O: ^TObjRec;
 Begin
  HitObj := -1;
@@ -2065,6 +2222,18 @@ Begin
   NormBox(O^, NX1, NY1, NX2, NY2);
   Hit := False;
   Case O^.Kind Of
+   K_TEXT: Begin
+    If TextAng(O^) = 0 Then
+     Hit := (X >= NX1 - Tol) And (X <= NX2 + Tol) And (Y >= NY1 - Tol) And (Y <= NY2 + Tol)
+    Else Begin
+     TextOrigin(O^, CX, CY);
+     TextDirs(TextAng(O^), RX, RY, V, DTmp);
+     { (RX,RY) direction du texte ; (-RY,RX) vers le bas du glyphe }
+     DTmp := (X - CX) * RX + (Y - CY) * RY;
+     V := (X - CX) * (-RY) + (Y - CY) * RX;
+     Hit := (DTmp >= -Tol) And (DTmp <= TextLenOf(O^) + Tol) And (V >= -Tol) And (V <= TextLineH(O^) + Tol);
+    End;
+   End;
    K_LINE, K_ARROW:
     Hit := DistSeg(X, Y, O^.X1, O^.Y1, O^.X2, O^.Y2) <= Tol + O^.Wd / 2;
    K_RECT:
@@ -2218,8 +2387,9 @@ Var
  X1, Y1, X2, Y2: LongInt;
  Nat, Tz: Real;
  K: Real;
- TX, TY: Real;
- Mt: String[12];
+ TX, TY, TOx, TOy, TDx, TDy, TVx, TVy: Real;
+ BW_, BH_, Sg0, Sg1, Ex, Ey_, Fx, Fy, AX, AY: LongInt;
+ Mt: String[40];
  CX, CY, RX, RY: Real;
  Op: String;
 Begin
@@ -2231,11 +2401,21 @@ Begin
   If (O^.Kind = K_IMAGE) And ImgKept(O^.P0) Then Begin
    S := 'q ';
    If Imgs[O^.P0].Mask Then S := S + ColStr(O^.Rgb) + ' rg ';
-   If (O^.Style And 1) <> 0 Then S := S + IStr(X1 - X2) + ' ' Else S := S + IStr(X2 - X1) + ' ';
-   S := S + '0 0 ';
-   If (O^.Style And 2) <> 0 Then S := S + IStr(Y1 - Y2) + ' ' Else S := S + IStr(Y2 - Y1) + ' ';
-   If (O^.Style And 1) <> 0 Then S := S + IStr(X2) + ' ' Else S := S + IStr(X1) + ' ';
-   If (O^.Style And 2) <> 0 Then S := S + IStr(H - Y1) Else S := S + IStr(H - Y2);
+   BW_ := X2 - X1; BH_ := Y2 - Y1;
+   If (O^.Style And 1) <> 0 Then Sg0 := -1 Else Sg0 := 1;
+   If (O^.Style And 2) <> 0 Then Sg1 := -1 Else Sg1 := 1;
+   If (O^.Style And 4) = 0 Then Begin
+    Ex := Sg0 * BW_; Ey_ := 0; Fx := 0; Fy := Sg1 * BH_;
+   End
+   Else Begin
+    Ex := 0; Ey_ := Sg0 * BH_; Fx := Sg1 * BW_; Fy := 0;
+   End;
+   { coin supérieur gauche de l'image dans la page }
+   AX := X1; AY := Y1;
+   If (Ex < 0) Or (Fx < 0) Then AX := X2;
+   If (Ey_ < 0) Or (Fy < 0) Then AY := Y2;
+   S := S + IStr(Ex) + ' ' + IStr(-Ey_) + ' ' + IStr(-Fx) + ' ' + IStr(Fy) + ' ' +
+        IStr(AX + Fx) + ' ' + IStr(H - (AY + Fy));
    WL(S + ' cm /Im' + IStr(O^.P0) + ' Do Q');
    Continue;
   End;
@@ -2247,12 +2427,11 @@ Begin
     If Nat > 0 Then Tz := TextLenOf(O^) * 100.0 / Nat;
     If (Tz < 60) Or (Tz > 160) Then Tz := 100;
     If Abs(Tz - 100) < 3 Then Tz := 100;
-       TX := O^.X1; TY := O^.Y1 + O^.Size * 4 / 5; Mt := '1 0 0 1';
-    Case O^.Fill And 3 Of
-     1: Begin TX := O^.X1 + O^.Size * 4 / 5; TY := O^.Y2; Mt := '0 1 -1 0'; End;
-     2: Begin TX := O^.X2; TY := O^.Y2 - O^.Size * 4 / 5; Mt := '-1 0 0 -1'; End;
-     3: Begin TX := O^.X2 - O^.Size * 4 / 5; TY := O^.Y1; Mt := '0 -1 1 0'; End;
-    End;
+       TextOrigin(O^, TOx, TOy);
+    TextDirs(TextAng(O^), TDx, TDy, TVx, TVy);
+    TX := TOx + TVx * O^.Size * 4 / 5;
+    TY := TOy + TVy * O^.Size * 4 / 5;
+    Mt := RStr4(TDx) + ' ' + RStr4(-TDy) + ' ' + RStr4(TDy) + ' ' + RStr4(TDx);
     WL('q BT /F' + IStr((O^.Style Shr 2) * 4 + (O^.Style And 3) + 1) + ' ' + IStr(O^.Size) + ' Tf ' +
        ColStr(O^.Rgb) + ' rg ' + RStr(Tz) + ' Tz ' + Mt + ' ' + RStr(TX) + ' ' +
        RStr(H - TY) + ' Tm ' + PdfStr(O^.Txt) + ' Tj ET Q');
@@ -5351,9 +5530,18 @@ Begin
   If ImgIdx > 0 Then Begin
    P0 := ImgIdx;
    Rgb := GS.Fill;
+   { axes de l'image dans la page (y vers le bas) : ex = axe horizontal de l'image,
+     ey = axe vers le bas de l'image. bit 0/1 : axes inversés, bit 2 : image tournée de 90° }
    Style := 0;
-   If GS.CTM[0] < 0 Then Style := Style Or 1;
-   If GS.CTM[3] < 0 Then Style := Style Or 2;
+   If Abs(GS.CTM[0]) >= Abs(GS.CTM[1]) Then Begin
+    If GS.CTM[0] < 0 Then Style := Style Or 1;
+    If GS.CTM[3] < 0 Then Style := Style Or 2;
+   End
+   Else Begin
+    Style := 4;
+    If GS.CTM[1] > 0 Then Style := Style Or 1;
+    If GS.CTM[2] > 0 Then Style := Style Or 2;
+   End;
   End;
  End;
 End;
@@ -5361,15 +5549,15 @@ End;
 Procedure EmitText(Const Txt: String; Adv: Real);
 Var
  M: TMat;
- SY, SXH, PX, PYv, WPt: Real;
- FSz, K, E, L, I, Idx, Sp, R: Integer;
+ SY, SXH, PX, PYv, WPt, Ang: Real;
+ FSz, K, E, L, I, Idx, Sp, Tn: Integer;
  Part: String;
  F0, F1: Real;
  AnyCh: Boolean;
  Fam, Sty: Integer;
- Dx, Dy, Ux, Uy, Asc, Dsc: Real;
- S0X, S0Y, S1X, S1Y, MnX, MxX, MnY, MxY, A: Real;
- Len, LH: LongInt;
+ Dx, Dy, Vx, Vy, Asc: Real;
+ BX, BY: Real;
+ Len: LongInt;
 Begin
  If (Txt = '') Or (GS.TMode = 3) Or (GS.TMode = 7) Then Exit;
  AnyCh := False;
@@ -5378,31 +5566,30 @@ Begin
  MatMul(TmM, GS.CTM, M);
  SXH := Sqrt(M[0] * M[0] + M[1] * M[1]);
  SY := Sqrt(M[2] * M[2] + M[3] * M[3]) * GS.TSize;
- { direction du texte, arrondie au quart de tour le plus proche }
- If Abs(M[0]) >= Abs(M[1]) Then Begin
-  If M[0] >= 0 Then R := 0 Else R := 2;
+ { angle du texte (anti-horaire, en dixièmes de degré) }
+ If M[0] = 0 Then Begin
+  If M[1] >= 0 Then Ang := 90 Else Ang := 270;
  End
  Else Begin
-  If M[1] > 0 Then R := 1 Else R := 3;
+  Ang := ArcTan(M[1] / M[0]) * 180 / Pi;
+  If M[0] < 0 Then Ang := Ang + 180;
  End;
- Case R Of
-  0: Begin Dx := 1; Dy := 0; End;
-  1: Begin Dx := 0; Dy := 1; End;
-  2: Begin Dx := -1; Dy := 0; End;
- Else Begin Dx := 0; Dy := -1; End;
- End;
- Ux := -Dy; Uy := Dx;
+ If Ang < 0 Then Ang := Ang + 360;
+ Tn := Round(Ang * 10) Mod 3600;
+ { accrochage aux angles droits à 0,3° près }
+ For I := 0 To 4 Do
+  If Abs(Tn - I * 900) <= 3 Then Tn := (I * 900) Mod 3600;
+ TextDirs(Tn, Dx, Dy, Vx, Vy);
  FSz := RI(SY);
  If FSz < 1 Then FSz := 1;
  If FSz > 200 Then FSz := 200;
  Asc := FSz * 0.8;
- Dsc := FSz * 0.4;
- LH := (FSz * 6 + 4) Div 5;
  PX := M[4] + GS.Ts * M[2];
  PYv := M[5] + GS.Ts * M[3];
  WPt := Abs(Adv * SXH);
- If (PX - MbX0 < -200) Or (PX - MbX0 > Pages^[ImpPg].W + 200) Or
-    (MbY1 - PYv < -200) Or (MbY1 - PYv > Pages^[ImpPg].H + 200) Then Exit;
+ BX := PX - MbX0;
+ BY := MbY1 - PYv;
+ If (BX < -200) Or (BX > Pages^[ImpPg].W + 200) Or (BY < -200) Or (BY > Pages^[ImpPg].H + 200) Then Exit;
  If GS.TFont >= 0 Then Begin Fam := Fonts[GS.TFont].Fam; Sty := Fonts[GS.TFont].Style; End
  Else Begin Fam := 0; Sty := 0; End;
  L := Length(Txt);
@@ -5418,36 +5605,20 @@ Begin
   Part := Copy(Txt, K, E - K + 1);
   F0 := (K - 1) / L;
   F1 := E / L;
-  S0X := PX + Dx * WPt * F0; S0Y := PYv + Dy * WPt * F0;
-  S1X := PX + Dx * WPt * F1; S1Y := PYv + Dy * WPt * F1;
-  { quatre coins de la boîte }
-  MnX := S0X + Ux * Asc; MxX := MnX;
-  MnY := S0Y + Uy * Asc; MxY := MnY;
-  A := S0X - Ux * Dsc; If A < MnX Then MnX := A; If A > MxX Then MxX := A;
-  A := S1X + Ux * Asc; If A < MnX Then MnX := A; If A > MxX Then MxX := A;
-  A := S1X - Ux * Dsc; If A < MnX Then MnX := A; If A > MxX Then MxX := A;
-  A := S0Y - Uy * Dsc; If A < MnY Then MnY := A; If A > MxY Then MxY := A;
-  A := S1Y + Uy * Asc; If A < MnY Then MnY := A; If A > MxY Then MxY := A;
-  A := S1Y - Uy * Dsc; If A < MnY Then MnY := A; If A > MxY Then MxY := A;
   Len := RI(WPt * (F1 - F0));
   If Len < 1 Then Len := 1;
   Idx := NewImpObj(K_TEXT);
   If Idx < 0 Then Exit;
   With Objs^[Idx] Do Begin
-   X1 := PgX(MnX);
-   Y1 := PgY(MxY);
-   If (R And 1) <> 0 Then Begin
-    X2 := C16(X1 + LH); Y2 := C16(Y1 + Len);
-   End
-   Else Begin
-    X2 := C16(X1 + Len); Y2 := C16(Y1 + LH);
-   End;
    Size := FSz;
    Style := Fam * 4 + Sty;
-   Fill := R;
    Rgb := GS.Fill;
    Txt := Part;
+   P0 := Len;
+   PN := Tn;
   End;
+  { origine = début de la ligne de base, remontée de l'ascendante }
+  SetTextBox(Objs^[Idx], BX + Dx * WPt * F0 - Vx * Asc, BY + Dy * WPt * F0 - Vy * Asc);
   K := E + 1;
  End;
 End;
@@ -7293,10 +7464,9 @@ End;
 Procedure DrawEditCaret;
 Var
  O: ^TObjRec;
- OX, OY, CXp, T: LongInt;
+ OX, OY, T: LongInt;
  Pg: Integer;
- Nat: LongInt;
- Fx, Sx1, Sy1, Sx2, Sy2: LongInt;
+ Ox_, Oy_, Dx, Dy, Vx, Vy, U: Real;
 Begin
  If Not Editing Then Exit;
  If (EditObj < 0) Or (EditObj >= ObjCount) Then Exit;
@@ -7306,18 +7476,16 @@ Begin
  SetViewPort(ViewL, ViewT, ViewR, ViewB, True);
  PageOrigin(Pg, OX, OY);
  SetCtx(Pg, OX, OY, Scale);
- T := TextLenPts(Copy(O^.Txt, 1, EditCaret), O^.Size, O^.Style Shr 2, O^.Style And 3);
- Sx1 := MXp(O^.X1 + T, O^.Y1 + O^.Size Div 10);
- Sy1 := MYp(O^.X1 + T, O^.Y1 + O^.Size Div 10);
- Sx2 := MXp(O^.X1 + T, O^.Y1 + O^.Size * 11 Div 10);
- Sy2 := MYp(O^.X1 + T, O^.Y1 + O^.Size * 11 Div 10);
+ TextOrigin(O^, Ox_, Oy_);
+ TextDirs(TextAng(O^), Dx, Dy, Vx, Vy);
+ U := TextLenPts(Copy(O^.Txt, 1, EditCaret), O^.Size, O^.Style Shr 2, O^.Style And 3);
  SetColor(Blue);
- Line(C16(Sx1), C16(Sy1), C16(Sx2), C16(Sy2));
- Line(C16(Sx1 + 1), C16(Sy1), C16(Sx2 + 1), C16(Sy2));
+ Line(C16(MXr(Ox_ + U * Dx + O^.Size * 0.1 * Vx, Oy_ + U * Dy + O^.Size * 0.1 * Vy)),
+      C16(MYr(Ox_ + U * Dx + O^.Size * 0.1 * Vx, Oy_ + U * Dy + O^.Size * 0.1 * Vy)),
+      C16(MXr(Ox_ + U * Dx + O^.Size * 1.1 * Vx, Oy_ + U * Dy + O^.Size * 1.1 * Vy)),
+      C16(MYr(Ox_ + U * Dx + O^.Size * 1.1 * Vx, Oy_ + U * Dy + O^.Size * 1.1 * Vy)));
  SetColor(LightBlue);
- SetLineStyle(DashedLn, 0, 1);
- Rectangle(C16(MXp(O^.X1, O^.Y1) - 1), C16(MYp(O^.X1, O^.Y1) - 1), C16(MXp(O^.X2, O^.Y2) + 2), C16(MYp(O^.X2, O^.Y2) + 1));
- SetLineStyle(SolidLn, 0, 1);
+ DrawTextBoxRot(O^);
  SetFullView;
 End;
 
@@ -8575,6 +8743,7 @@ End;
 Function CreateText(Pg: Integer; X, Y: LongInt): Integer;
 Var
  I: Integer;
+ Tdx, Tdy, Tvx, Tvy: Real;
 Begin
  PushUndo;
  I := NewObj(K_TEXT, Pg);
@@ -8585,7 +8754,13 @@ Begin
   Style := CurFam * 4 + CurStyle;
   Rgb := ToolRgb[TL_TEXT];
   Txt := '';
+  PN := (CurAngle Mod 360) * 10;
  End;
+ { origine : le point cliqué est au milieu du début de la ligne }
+ TextDirs(Objs^[I].PN, Tdx, Tdy, Tvx, Tvy);
+ Objs^[I].X1 := Round(X - Tvx * TextLineH(Objs^[I]) / 2);
+ Objs^[I].Y1 := Round(Y - Tvy * TextLineH(Objs^[I]) / 2);
+ If Objs^[I].PN <> 0 Then PackOrigin(Objs^[I], Objs^[I].X1, Objs^[I].Y1);
  RecalcBox(I);
  CreateText := I;
 End;
@@ -8687,7 +8862,7 @@ Begin
  Made := 0;
  For I := 0 To N - 1 Do Begin
   O := @Objs^[I];
-  If (O^.Page <> Pg) Or (O^.Kind <> K_TEXT) Or (O^.Fill <> 0) Then Continue;
+  If (O^.Page <> Pg) Or (O^.Kind <> K_TEXT) Or (TextAng(O^) <> 0) Then Continue;
   NormBox(O^, TX1, TY1, TX2, TY2);
   CY := (TY1 + TY2) Div 2;
   If (CY < RY1) Or (CY > RY2) Or (TX2 <= RX1) Or (TX1 >= RX2) Then Continue;
@@ -8963,7 +9138,7 @@ Begin
    FldCheck('Gras', (O^.Style And 1) <> 0);
    FldCheck('Italique', (O^.Style And 2) <> 0);
    FldColor('Couleur', O^.Rgb);
-   FldChoice('Rotation', '0 degrés|90 degrés (haut)|180 degrés|270 degrés (bas)', O^.Fill And 3);
+   FldNum('Angle (degrés)', TextAng(O^) Div 10, 0, 359);
   End;
   K_LINE, K_ARROW, K_INK: Begin
    FldNum('Épaisseur (pt)', O^.Wd, 1, 20);
@@ -8996,8 +9171,8 @@ Begin
     O^.Txt := U2W(Fields[1].Val); O^.Size := FInt(2);
     O^.Style := FInt(3) * 4 + FInt(4) + FInt(5) * 2;
     O^.Rgb := FInt(6);
-    O^.Fill := FInt(7);
     RecalcBox(SelObj);
+    SetTextAngle(SelObj, FInt(7) * 10);
    End;
    K_LINE, K_ARROW, K_INK: Begin O^.Wd := FInt(1); O^.Rgb := FInt(2); End;
    K_RECT, K_OVAL, K_POLY: Begin
@@ -9022,7 +9197,7 @@ Begin
  If (SelObj < 0) Or (SelObj >= ObjCount) Then Exit;
  K := Objs^[SelObj].Kind;
  Case K Of
-  K_TEXT: If Objs^[SelObj].Fill <> 0 Then ObjProperties Else StartEdit(SelObj, False);
+  K_TEXT: StartEdit(SelObj, False);
   K_NOTE, K_HILITE, K_UNDER, K_STRIKE: Begin
    S := Objs^[SelObj].Txt;
    If InputBox('Commentaire', 'Texte', S, 118) Then Begin
@@ -9434,9 +9609,11 @@ Begin
    FldChoice('Police du texte', 'Helvetica|Times|Courier', CurFam);
    FldCheck('Gras', (CurStyle And 1) <> 0);
    FldCheck('Italique', (CurStyle And 2) <> 0);
+   FldNum('Angle du texte (degrés)', CurAngle, 0, 359);
    If FormDialog('Attributs des outils') Then Begin
     CurWidth := FInt(0); CurSize := FInt(1); CurFam := FInt(2);
     CurStyle := FInt(3) + FInt(4) * 2;
+    CurAngle := FInt(5);
    End;
    RedrawAll;
   End;
@@ -9644,7 +9821,7 @@ Begin
   End;
   TL_TEXT: Begin
    I := HitObj(Pg, PX, PY, Tol);
-   If (I >= 0) And (Objs^[I].Kind = K_TEXT) And (Objs^[I].Fill = 0) Then StartEdit(I, False)
+   If (I >= 0) And (Objs^[I].Kind = K_TEXT) Then StartEdit(I, False)
    Else Begin
     I := CreateText(Pg, PX, PY);
     If I >= 0 Then StartEdit(I, True);
@@ -10209,7 +10386,7 @@ Begin
  ToolRgb[TL_NOTE] := $FFFF00;
  ToolRgb[TL_HILITE] := $FFFF00;
  ToolRgb[TL_REDACT] := 0;
- CurWidth := 2; CurSize := 12; CurFam := 0; CurStyle := 0;
+ CurWidth := 2; CurSize := 12; CurFam := 0; CurStyle := 0; CurAngle := 0;
  ClipValid := False;
  Editing := False; EditObj := -1;
  MenuActive := False; ActiveMenu := -1; ActiveItem := -1; UnderValid := False;

@@ -70,8 +70,8 @@ Const
  FK_CONIC=7; FK_SQUARE=8;
  { Outils }
  T_PICK=0; T_SHAPE=1; T_ZOOM=2; T_HAND=3; T_LINE=4; T_POLYLINE=5; T_CURVE=6;
- T_RECT=7; T_ELLIPSE=8; T_POLYGON=9; T_STAR=10; T_TEXT=11;
- TOOL_COUNT=12;
+ T_RECT=7; T_ELLIPSE=8; T_POLYGON=9; T_STAR=10; T_TEXT=11; T_BEZIER=12; T_FILLI=13;
+ TOOL_COUNT=14;
 
  MAXPOLY=4000;
  UNDO_MAX=8;
@@ -121,6 +121,8 @@ Type
   Img:Integer;            { bitmap (K_BITMAP) ou motif (FK_IMAGE) : indice dans Imgs }
   TileW,TileH:Integer;    { taille du motif, en 1/10 mm }
   Layer,Page:Byte;        { calque (1..LAYER_N) ; page (0 = page maitresse) }
+  GradAng:SmallInt;       { angle du degrade lineaire, en degres (sens trigonometrique) }
+  Font:Byte;              { texte : 0 police bitmap ; sinon famille (1 Arial, 2 Times, 3 Courier) + 16 gras + 32 italique }
   OutW,TextSize:LongInt;
   N,Cap:Integer;
   Pts:PPtArr;
@@ -182,6 +184,9 @@ Var
  GuidePos:Array[0..GUIDE_MAX-1] of LongInt;
  ShowGuides,SnapGuides:Boolean;
  NodeObj,NodeIdx:Integer;
+ RotMode,WasSel:Boolean;
+ BzN:Integer;
+ BzP,BzI,BzO:Array[0..99] of TPt;
 
  { Vue }
  Zoom,OrgX,OrgY:LongInt;
@@ -192,6 +197,7 @@ Var
  DefOutW:LongInt;
  DefLineStyle,DefFillKind,DefPattern:Byte;
  DefTextSize:LongInt;
+ DefFont:Byte;
  PolySides:Integer;
  CurTool:Integer;
 
@@ -563,6 +569,7 @@ Begin
  O^.TextSize:=DefTextSize;
  O^.Layer:=ActLayer;
  If EditMaster Then O^.Page:=0 Else O^.Page:=CurPage;
+ If Kind=K_TEXT Then O^.Font:=DefFont;
  If(Kind=K_LINE)or(Kind=K_POLYLINE)or(Kind=K_BEZIER)Then Begin
   O^.FillKind:=FK_NONE;
   O^.FillCol:=-1;
@@ -765,13 +772,552 @@ Begin
  End;
 End;
 
+{ ------------------------------------------------------------------ }
+{ Polices vectorielles : lecture des contours TrueType (Arial, Times,  }
+{ Courier de Windows) ; le texte devient des courbes de Bezier          }
+{ ------------------------------------------------------------------ }
+
+{$IFDEF FPC}
+Type
+ TFBuf=Array[0..99999999] of Byte;
+ PFBuf=^TFBuf;
+ TGlyph=Record
+  N:Integer;
+  Pts:PPtArr;
+ End;
+ PGlyph=^TGlyph;
+ TTFont=Record
+  Tried,Ok:Boolean;
+  D:PFBuf;
+  Len:LongInt;
+  Upem,Asc,Desc,NHM,NGl,LocFmt:Integer;
+  Loca,Glyf,Hmtx,Cmap:LongInt;
+  Adv:Array[0..255] of Integer;
+  Cache:Array[0..255] of PGlyph;
+  Built:Array[0..255] of Boolean;
+ End;
+
+Const
+ Cp437Uni:Array[128..255] of Word=(
+  $00C7,$00FC,$00E9,$00E2,$00E4,$00E0,$00E5,$00E7,$00EA,$00EB,$00E8,$00EF,$00EE,$00EC,$00C4,$00C5,
+  $00C9,$00E6,$00C6,$00F4,$00F6,$00F2,$00FB,$00F9,$00FF,$00D6,$00DC,$00A2,$00A3,$00A5,$20A7,$0192,
+  $00E1,$00ED,$00F3,$00FA,$00F1,$00D1,$00AA,$00BA,$00BF,$2310,$00AC,$00BD,$00BC,$00A1,$00AB,$00BB,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  $03B1,$00DF,$0393,$03C0,$03A3,$03C3,$00B5,$03C4,$03A6,$0398,$03A9,$03B4,$221E,$03C6,$03B5,$2229,
+  $2261,$00B1,$2265,$2264,$2320,$2321,$00F7,$2248,$00B0,$2219,$00B7,$221A,$207F,$00B2,$25A0,$00A0);
+
+Var
+ TTFonts:Array[0..11] of TTFont;
+ TmpGlyph:PObj;
+ GPX,GPY:Array[0..2999] of LongInt;
+ GPOn:Array[0..2999] of Boolean;
+ GPE:Array[0..127] of Integer;
+ GPN,GPC:Integer;
+ GB:Array[0..3999] of TPt;
+ GBN:Integer;
+
+Function FontSlot(Fv:Byte):Integer;
+Begin
+ If(Fv And 3)=0 Then FontSlot:=-1
+  Else FontSlot:=((Fv And 3)-1)*4+((Fv Shr 4) And 3);
+End;
+
+Function FtB(Var F:TTFont;O:LongInt):Integer;
+Begin
+ If(O<0)or(O>=F.Len)Then FtB:=0 Else FtB:=F.D^[O];
+End;
+
+Function FtW(Var F:TTFont;O:LongInt):LongInt;
+Begin
+ FtW:=FtB(F,O)*256+FtB(F,O+1);
+End;
+
+Function FtS(Var F:TTFont;O:LongInt):LongInt;
+Var V:LongInt;
+Begin
+ V:=FtW(F,O);
+ If V>=32768 Then V:=V-65536;
+ FtS:=V;
+End;
+
+Function FtL(Var F:TTFont;O:LongInt):LongInt;
+Begin
+ FtL:=(FtW(F,O) Shl 16)+FtW(F,O+2);
+End;
+
+Function LoadTT(Slot:Integer):Boolean;
+Const Fam:Array[0..2] of String[5]=('arial','times','cour');
+      Sty:Array[0..3] of String[2]=('','bd','i','bi');
+Var Dir,Nm:String;
+    FF2:File;
+    I,Nt,Cm:LongInt;
+    Tag:String[4];
+    Head,Maxp,Hhea:LongInt;
+    Old:Byte;
+Begin
+ With TTFonts[Slot] Do Begin
+  If Tried Then Begin LoadTT:=Ok; Exit; End;
+  Tried:=True;
+  Ok:=False;
+  Dir:=GetEnv('WINDIR');
+  If Dir='' Then Dir:='C:\Windows';
+  Nm:=Dir+'\Fonts\'+Fam[Slot Div 4]+Sty[Slot Mod 4]+'.ttf';
+  Old:=FileMode;
+  FileMode:=0;
+  Assign(FF2,Nm);
+  {$I-}Reset(FF2,1);{$I+}
+  FileMode:=Old;
+  If IOResult<>0 Then Begin LoadTT:=False; Exit; End;
+  Len:=FileSize(FF2);
+  If(Len<1000)or(Len>40000000)Then Begin Close(FF2); LoadTT:=False; Exit; End;
+  GetMem(D,Len+8);
+  BlockRead(FF2,D^,Len);
+  Close(FF2);
+  Head:=0; Maxp:=0; Hhea:=0; Loca:=0; Glyf:=0; Hmtx:=0; Cm:=0;
+  Nt:=FtW(TTFonts[Slot],4);
+  For I:=0 To Nt-1 Do Begin
+   Tag:=Chr(FtB(TTFonts[Slot],12+I*16))+Chr(FtB(TTFonts[Slot],13+I*16))+
+        Chr(FtB(TTFonts[Slot],14+I*16))+Chr(FtB(TTFonts[Slot],15+I*16));
+   If Tag='head' Then Head:=FtL(TTFonts[Slot],12+I*16+8);
+   If Tag='maxp' Then Maxp:=FtL(TTFonts[Slot],12+I*16+8);
+   If Tag='hhea' Then Hhea:=FtL(TTFonts[Slot],12+I*16+8);
+   If Tag='hmtx' Then Hmtx:=FtL(TTFonts[Slot],12+I*16+8);
+   If Tag='loca' Then Loca:=FtL(TTFonts[Slot],12+I*16+8);
+   If Tag='glyf' Then Glyf:=FtL(TTFonts[Slot],12+I*16+8);
+   If Tag='cmap' Then Cm:=FtL(TTFonts[Slot],12+I*16+8);
+  End;
+  If(Head=0)or(Maxp=0)or(Hhea=0)or(Hmtx=0)or(Loca=0)or(Glyf=0)or(Cm=0)Then Begin LoadTT:=False; Exit; End;
+  Upem:=FtW(TTFonts[Slot],Head+18);
+  LocFmt:=FtS(TTFonts[Slot],Head+50);
+  NGl:=FtW(TTFonts[Slot],Maxp+4);
+  Asc:=FtS(TTFonts[Slot],Hhea+4);
+  Desc:=FtS(TTFonts[Slot],Hhea+6);
+  NHM:=FtW(TTFonts[Slot],Hhea+34);
+  Cmap:=0;
+  For I:=0 To FtW(TTFonts[Slot],Cm+2)-1 Do
+   If(FtW(TTFonts[Slot],Cm+4+I*8)=3)and(FtW(TTFonts[Slot],Cm+6+I*8)=1)Then
+    Cmap:=Cm+FtL(TTFonts[Slot],Cm+8+I*8);
+  If(Cmap=0)or(FtW(TTFonts[Slot],Cmap)<>4)or(Upem<16)or(NHM<1)Then Begin LoadTT:=False; Exit; End;
+  For I:=0 To 255 Do Begin Adv[I]:=-1; Cache[I]:=NIL; Built[I]:=False; End;
+  Ok:=True;
+  LoadTT:=True;
+ End;
+End;
+
+Function FontReady(Fv:Byte):Boolean;
+Var S:Integer;
+Begin
+ S:=FontSlot(Fv);
+ If S<0 Then FontReady:=False Else FontReady:=LoadTT(S);
+End;
+
+{ Indice de glyphe d'un code Unicode (table cmap de format 4) }
+Function GlyphIdx(Slot:Integer;Code:LongInt):Integer;
+Var Sub,SegX2,I,Seg,Sc,Ec,Delta,RO,G:LongInt;
+Begin
+ GlyphIdx:=0;
+ With TTFonts[Slot] Do Begin
+  Sub:=Cmap;
+  SegX2:=FtW(TTFonts[Slot],Sub+6);
+  For Seg:=0 To SegX2 Div 2-1 Do Begin
+   Ec:=FtW(TTFonts[Slot],Sub+14+Seg*2);
+   If Ec>=Code Then Begin
+    Sc:=FtW(TTFonts[Slot],Sub+16+SegX2+Seg*2);
+    If Sc>Code Then Exit;
+    Delta:=FtW(TTFonts[Slot],Sub+16+2*SegX2+Seg*2);
+    RO:=FtW(TTFonts[Slot],Sub+16+3*SegX2+Seg*2);
+    If RO=0 Then G:=(Code+Delta) And $FFFF
+     Else Begin
+      G:=FtW(TTFonts[Slot],Sub+16+3*SegX2+Seg*2+RO+2*(Code-Sc));
+      If G<>0 Then G:=(G+Delta) And $FFFF;
+     End;
+    GlyphIdx:=G;
+    Exit;
+   End;
+  End;
+  I:=0;
+ End;
+End;
+
+Function UniOf(Code:Byte):LongInt;
+Begin
+ If Code<128 Then UniOf:=Code Else UniOf:=Cp437Uni[Code];
+End;
+
+Function GlyphAdv(Slot,G:LongInt):Integer;
+Begin
+ With TTFonts[Slot] Do Begin
+  If G<NHM Then GlyphAdv:=FtW(TTFonts[Slot],Hmtx+G*4)
+   Else GlyphAdv:=FtW(TTFonts[Slot],Hmtx+(NHM-1)*4);
+ End;
+End;
+
+Function AdvOf(Slot:Integer;Code:Byte):Integer;
+Var G:LongInt;
+Begin
+ With TTFonts[Slot] Do Begin
+  If Adv[Code]<0 Then Begin
+   If UniOf(Code)=0 Then Adv[Code]:=Upem Div 2
+    Else Begin
+     G:=GlyphIdx(Slot,UniOf(Code));
+     Adv[Code]:=GlyphAdv(Slot,G);
+    End;
+  End;
+  AdvOf:=Adv[Code];
+ End;
+End;
+
+{ Charge les points du glyphe G (transformation A B C D, decalage Dx Dy) }
+Procedure LoadGP(Slot,G:LongInt;A,B,C,D,Dx,Dy:Double;Depth:Integer);
+Var Off,Nxt,P,Nc,I,K,NP,Base,Fl,Rep,Gi,A1,A2,Fc,V,NG,LcA,GfA,LcF:LongInt;
+    Flags:Array[0..2999] of Byte;
+    Xs,Ys:Array[0..2999] of LongInt;
+    Ma,Mb,Mc,Md,F1,F2:Double;
+ Function Loc(Gx:LongInt):LongInt;
+ Begin
+  If LcF=0 Then Loc:=FtW(TTFonts[Slot],LcA+Gx*2)*2 Else Loc:=FtL(TTFonts[Slot],LcA+Gx*4);
+ End;
+Begin
+ NG:=TTFonts[Slot].NGl;
+ LcA:=TTFonts[Slot].Loca;
+ GfA:=TTFonts[Slot].Glyf;
+ LcF:=TTFonts[Slot].LocFmt;
+ Begin
+  If(G<0)or(G>=NG)or(Depth>3)Then Exit;
+  Off:=Loc(G);
+  Nxt:=Loc(G+1);
+  If Nxt<=Off Then Exit;
+  Off:=GfA+Off;
+  Nc:=FtS(TTFonts[Slot],Off);
+  If Nc>=0 Then Begin
+   If(Nc=0)or(Nc>100)Then Exit;
+   NP:=FtW(TTFonts[Slot],Off+10+(Nc-1)*2)+1;
+   If(NP>2900)or(GPN+NP>2999)Then Exit;
+   P:=Off+10+Nc*2;
+   P:=P+2+FtW(TTFonts[Slot],P);
+   K:=0;
+   While K<NP Do Begin
+    Fl:=FtB(TTFonts[Slot],P);
+    Inc(P);
+    Flags[K]:=Fl;
+    Inc(K);
+    If(Fl And 8)<>0 Then Begin
+     Rep:=FtB(TTFonts[Slot],P);
+     Inc(P);
+     While(Rep>0)and(K<NP)Do Begin
+      Flags[K]:=Fl;
+      Inc(K);
+      Dec(Rep);
+     End;
+    End;
+   End;
+   V:=0;
+   For K:=0 To NP-1 Do Begin
+    If(Flags[K] And 2)<>0 Then Begin
+     If(Flags[K] And 16)<>0 Then V:=V+FtB(TTFonts[Slot],P) Else V:=V-FtB(TTFonts[Slot],P);
+     Inc(P);
+    End
+     Else If(Flags[K] And 16)=0 Then Begin
+      V:=V+FtS(TTFonts[Slot],P);
+      Inc(P,2);
+     End;
+    Xs[K]:=V;
+   End;
+   V:=0;
+   For K:=0 To NP-1 Do Begin
+    If(Flags[K] And 4)<>0 Then Begin
+     If(Flags[K] And 32)<>0 Then V:=V+FtB(TTFonts[Slot],P) Else V:=V-FtB(TTFonts[Slot],P);
+     Inc(P);
+    End
+     Else If(Flags[K] And 32)=0 Then Begin
+      V:=V+FtS(TTFonts[Slot],P);
+      Inc(P,2);
+     End;
+    Ys[K]:=V;
+   End;
+   Base:=GPN;
+   For K:=0 To NP-1 Do Begin
+    GPX[Base+K]:=Round(A*Xs[K]+C*Ys[K]+Dx);
+    GPY[Base+K]:=Round(B*Xs[K]+D*Ys[K]+Dy);
+    GPOn[Base+K]:=(Flags[K] And 1)<>0;
+   End;
+   For I:=0 To Nc-1 Do
+    If GPC<127 Then Begin
+     GPE[GPC]:=Base+FtW(TTFonts[Slot],Off+10+I*2);
+     Inc(GPC);
+    End;
+   Inc(GPN,NP);
+  End
+   Else Begin
+    { glyphe compose : composants avec translation / echelle }
+    P:=Off+10;
+    Repeat
+     Fc:=FtW(TTFonts[Slot],P);
+     Gi:=FtW(TTFonts[Slot],P+2);
+     Inc(P,4);
+     If(Fc And 1)<>0 Then Begin
+      A1:=FtS(TTFonts[Slot],P); A2:=FtS(TTFonts[Slot],P+2);
+      Inc(P,4);
+     End
+      Else Begin
+       A1:=FtB(TTFonts[Slot],P); A2:=FtB(TTFonts[Slot],P+1);
+       If A1>127 Then A1:=A1-256;
+       If A2>127 Then A2:=A2-256;
+       Inc(P,2);
+      End;
+     If(Fc And 2)=0 Then Begin A1:=0; A2:=0; End;
+     Ma:=1; Mb:=0; Mc:=0; Md:=1;
+     If(Fc And 8)<>0 Then Begin
+      Ma:=FtS(TTFonts[Slot],P)/16384; Md:=Ma; Inc(P,2);
+     End
+      Else If(Fc And $40)<>0 Then Begin
+       Ma:=FtS(TTFonts[Slot],P)/16384; Md:=FtS(TTFonts[Slot],P+2)/16384; Inc(P,4);
+      End
+      Else If(Fc And $80)<>0 Then Begin
+       Ma:=FtS(TTFonts[Slot],P)/16384; Mb:=FtS(TTFonts[Slot],P+2)/16384;
+       Mc:=FtS(TTFonts[Slot],P+4)/16384; Md:=FtS(TTFonts[Slot],P+6)/16384;
+       Inc(P,8);
+      End;
+     F1:=A*Ma+C*Mb;
+     F2:=B*Ma+D*Mb;
+     LoadGP(Slot,Gi,F1,F2,A*Mc+C*Md,B*Mc+D*Md,A*A1+C*A2+Dx,B*A1+D*A2+Dy,Depth+1);
+    Until(Fc And $20)=0;
+   End;
+ End;
+End;
+
+Procedure GAdd(X,Y:Double);
+Begin
+ If GBN<3999 Then Begin
+  GB[GBN].X:=Round(X);
+  GB[GBN].Y:=Round(Y);
+  Inc(GBN);
+ End;
+End;
+
+{ Contours quadratiques -> noeuds cubiques (format des courbes composees) }
+Function BuildGlyph(Slot:Integer;Code:Byte):PGlyph;
+Var G,S,E,M,C,J,St,I,N:Integer;
+    Gl:PGlyph;
+    Px,Py:Array[0..2999] of Double;
+    Seq:Array[0..2999] of Integer;
+    SX,SY,CX,CY,X2,Y2:Double;
+    FirstC:Boolean;
+ Function Idx(K:Integer):Integer;
+ Begin
+  Idx:=S+(K Mod M);
+ End;
+ Procedure Quad(OX,OY,EX,EY:Double);
+ Begin
+  GAdd(CX+2/3*(OX-CX),CY+2/3*(OY-CY));
+  GAdd(EX+2/3*(OX-EX),EY+2/3*(OY-EY));
+  GAdd(EX,EY);
+  CX:=EX; CY:=EY;
+ End;
+ Procedure Line2(EX,EY:Double);
+ Begin
+  GAdd(CX+(EX-CX)/3,CY+(EY-CY)/3);
+  GAdd(CX+2*(EX-CX)/3,CY+2*(EY-CY)/3);
+  GAdd(EX,EY);
+  CX:=EX; CY:=EY;
+ End;
+Begin
+ BuildGlyph:=NIL;
+ New(Gl);
+ Gl^.N:=0;
+ Gl^.Pts:=NIL;
+ If UniOf(Code)<>0 Then Begin
+  G:=GlyphIdx(Slot,UniOf(Code));
+  GPN:=0; GPC:=0; GBN:=0;
+  LoadGP(Slot,G,1,0,0,1,0,0,0);
+  FirstC:=True;
+  S:=0;
+  For C:=0 To GPC-1 Do Begin
+   E:=GPE[C];
+   M:=E-S+1;
+   If M>=2 Then Begin
+    If Not FirstC Then Begin
+     GB[GBN].X:=BRK; GB[GBN].Y:=0; If GBN<3999 Then Inc(GBN);
+     GB[GBN].X:=BRK; GB[GBN].Y:=0; If GBN<3999 Then Inc(GBN);
+    End;
+    FirstC:=False;
+    For I:=0 To M-1 Do Begin Px[I]:=GPX[S+I]; Py[I]:=GPY[S+I]; End;
+    { point de depart sur la courbe }
+    If GPOn[S] Then Begin St:=0; SX:=Px[0]; SY:=Py[0]; N:=0; For J:=1 To M-1 Do Begin Seq[N]:=J; Inc(N); End; End
+     Else If GPOn[E] Then Begin SX:=Px[M-1]; SY:=Py[M-1]; N:=0; For J:=0 To M-2 Do Begin Seq[N]:=J; Inc(N); End; End
+     Else Begin
+      SX:=(Px[0]+Px[M-1])/2; SY:=(Py[0]+Py[M-1])/2;
+      N:=0; For J:=0 To M-1 Do Begin Seq[N]:=J; Inc(N); End;
+     End;
+    GAdd(SX,SY);
+    CX:=SX; CY:=SY;
+    I:=0;
+    While I<N Do Begin
+     J:=Seq[I];
+     If GPOn[S+J]Then Begin Line2(Px[J],Py[J]); Inc(I); End
+      Else Begin
+       If I+1<N Then Begin
+        If GPOn[S+Seq[I+1]]Then Begin
+         Quad(Px[J],Py[J],Px[Seq[I+1]],Py[Seq[I+1]]);
+         Inc(I,2);
+        End
+         Else Begin
+          X2:=(Px[J]+Px[Seq[I+1]])/2; Y2:=(Py[J]+Py[Seq[I+1]])/2;
+          Quad(Px[J],Py[J],X2,Y2);
+          Inc(I);
+         End;
+       End
+        Else Begin
+         Quad(Px[J],Py[J],SX,SY);
+         Inc(I);
+        End;
+      End;
+    End;
+    If(Abs(CX-SX)>0.5)or(Abs(CY-SY)>0.5)Then Line2(SX,SY);
+   End;
+   S:=E+1;
+  End;
+  If GBN>=4 Then Begin
+   GetMem(Gl^.Pts,GBN*SizeOf(TPt));
+   Move(GB,Gl^.Pts^,GBN*SizeOf(TPt));
+   Gl^.N:=GBN;
+  End;
+ End;
+ BuildGlyph:=Gl;
+ St:=0;
+End;
+
+Function GlyphOf(Slot:Integer;Code:Byte):PGlyph;
+Begin
+ With TTFonts[Slot] Do Begin
+  If Not Built[Code]Then Begin
+   Cache[Code]:=BuildGlyph(Slot,Code);
+   Built[Code]:=True;
+  End;
+  GlyphOf:=Cache[Code];
+ End;
+End;
+
+Function TextCode(O:PObj;I:Integer):Byte;
+Begin
+ TextCode:=Ord(O^.Txt[I]);
+End;
+
+{ Largeur, ligne de base et hauteur d'un texte vectoriel (1/10 mm) }
+Function VecW(O:PObj):LongInt;
+Var Sl,I:Integer;
+    Tot:Double;
+    T:String;
+Begin
+ Sl:=FontSlot(O^.Font);
+ T:=Conv(O^.Txt);
+ Tot:=0;
+ For I:=1 To Length(T) Do Tot:=Tot+AdvOf(Sl,Ord(T[I]));
+ VecW:=Round(Tot*O^.TextSize/TTFonts[Sl].Upem);
+End;
+
+Function VecBase(O:PObj):LongInt;
+Var Sl:Integer;
+Begin
+ Sl:=FontSlot(O^.Font);
+ VecBase:=Round(TTFonts[Sl].Asc*O^.TextSize/TTFonts[Sl].Upem);
+End;
+
+Function VecH(O:PObj):LongInt;
+Var Sl:Integer;
+Begin
+ Sl:=FontSlot(O^.Font);
+ VecH:=Round((TTFonts[Sl].Asc-TTFonts[Sl].Desc)*O^.TextSize/TTFonts[Sl].Upem);
+End;
+
+Function IsVec(O:PObj):Boolean;
+Begin
+ IsVec:=(O^.Kind=K_TEXT)and FontReady(O^.Font);
+End;
+
+Function TextW(O:PObj):LongInt;
+Begin
+ If IsVec(O)Then TextW:=VecW(O) Else TextW:=Length(O^.Txt)*O^.TextSize;
+End;
+
+Function TextH(O:PObj):LongInt;
+Begin
+ If IsVec(O)Then TextH:=VecH(O) Else TextH:=O^.TextSize;
+End;
+
+Function TextBase(O:PObj):LongInt;
+Begin
+ If IsVec(O)Then TextBase:=VecBase(O) Else TextBase:=O^.TextSize-O^.TextSize Div 8;
+End;
+
+{ Contour du I-eme caractere du texte O (courbe composee en coordonnees
+  document) dans TmpGlyph ; Pen = avance cumulee en unites document.
+  Retourne faux si le caractere n'a pas de contour. }
+Function MakeGlyph(O:PObj;T:String;I:Integer;Pen:Double):Boolean;
+Var Sl,K:Integer;
+    Gl:PGlyph;
+    Sc:Double;
+    Bx,By:Double;
+Begin
+ MakeGlyph:=False;
+ Sl:=FontSlot(O^.Font);
+ Gl:=GlyphOf(Sl,Ord(T[I]));
+ If(Gl=NIL)or(Gl^.N<4)Then Exit;
+ If TmpGlyph=NIL Then TmpGlyph:=NewObj(K_BEZIER,4000);
+ Sc:=O^.TextSize/TTFonts[Sl].Upem;
+ Bx:=O^.Pts^[0].X+Pen;
+ By:=O^.Pts^[0].Y+TTFonts[Sl].Asc*Sc;
+ For K:=0 To Gl^.N-1 Do
+  If Gl^.Pts^[K].X=BRK Then Begin
+   TmpGlyph^.Pts^[K].X:=BRK;
+   TmpGlyph^.Pts^[K].Y:=0;
+  End
+   Else Begin
+    TmpGlyph^.Pts^[K].X:=Round(Bx+Gl^.Pts^[K].X*Sc);
+    TmpGlyph^.Pts^[K].Y:=Round(By-Gl^.Pts^[K].Y*Sc);
+   End;
+ TmpGlyph^.N:=Gl^.N;
+ TmpGlyph^.Closed:=True;
+ TmpGlyph^.Kind:=K_BEZIER;
+ MakeGlyph:=True;
+End;
+
+Function PenAfter(O:PObj;T:String;I:Integer):Double;
+Begin
+ PenAfter:=AdvOf(FontSlot(O^.Font),Ord(T[I]))*O^.TextSize/TTFonts[FontSlot(O^.Font)].Upem;
+End;
+{$ELSE}
+Function IsVec(O:PObj):Boolean;
+Begin
+ IsVec:=False;
+End;
+Function FontReady(Fv:Byte):Boolean;
+Begin
+ FontReady:=False;
+End;
+Function TextW(O:PObj):LongInt;
+Begin
+ TextW:=Length(O^.Txt)*O^.TextSize;
+End;
+Function TextH(O:PObj):LongInt;
+Begin
+ TextH:=O^.TextSize;
+End;
+Function TextBase(O:PObj):LongInt;
+Begin
+ TextBase:=O^.TextSize-O^.TextSize Div 8;
+End;
+{$ENDIF}
+
 Procedure ObjBBox(O:PObj;Var X1,Y1,X2,Y2:LongInt);
 Var I:Integer;
 Begin
  X1:=O^.Pts^[0].X; Y1:=O^.Pts^[0].Y;
  If O^.Kind=K_TEXT Then Begin
-  X2:=X1+Length(O^.Txt)*O^.TextSize;
-  Y2:=Y1+O^.TextSize;
+  X2:=X1+TextW(O);
+  Y2:=Y1+TextH(O);
   Exit;
  End;
  X2:=X1; Y2:=Y1;
@@ -1172,15 +1718,15 @@ Begin
   If ObjAt(I)^.Sel Then Begin
    O:=ObjAt(I);
    If O^.Kind=K_TEXT Then Begin
-    OX:=O^.Pts^[0].X+(Length(O^.Txt)*O^.TextSize) Div 2;
-    OY:=O^.Pts^[0].Y+O^.TextSize Div 2;
+    OX:=O^.Pts^[0].X+TextW(O) Div 2;
+    OY:=O^.Pts^[0].Y+TextH(O) Div 2;
     Case Mode Of
      0:Begin NX:=CX-(OY-CY); NY:=CY+(OX-CX); End;
      1:Begin NX:=2*CX-OX; NY:=OY; End;
     Else Begin NX:=OX; NY:=2*CY-OY; End;
     End;
-    O^.Pts^[0].X:=NX-(Length(O^.Txt)*O^.TextSize) Div 2;
-    O^.Pts^[0].Y:=NY-O^.TextSize Div 2;
+    O^.Pts^[0].X:=NX-TextW(O) Div 2;
+    O^.Pts^[0].Y:=NY-TextH(O) Div 2;
    End
     Else
    Begin
@@ -2293,13 +2839,13 @@ Var I:Integer;
  End;
 Begin
  If O^.Kind=K_TEXT Then Begin
-  Q[0].X:=O^.Pts^[0].X+(Length(O^.Txt)*O^.TextSize) Div 2;
-  Q[0].Y:=O^.Pts^[0].Y+O^.TextSize Div 2;
+  Q[0].X:=O^.Pts^[0].X+TextW(O) Div 2;
+  Q[0].Y:=O^.Pts^[0].Y+TextH(O) Div 2;
   Map(Q[0]);
   Sc:=Sqrt(Abs(A*D-B*C));
   O^.TextSize:=Clamp(Round(O^.TextSize*Sc),20,2000);
-  O^.Pts^[0].X:=Q[0].X-(Length(O^.Txt)*O^.TextSize) Div 2;
-  O^.Pts^[0].Y:=Q[0].Y-O^.TextSize Div 2;
+  O^.Pts^[0].X:=Q[0].X-TextW(O) Div 2;
+  O^.Pts^[0].Y:=Q[0].Y-TextH(O) Div 2;
   Exit;
  End;
  If(O^.Kind=K_BITMAP)or(((O^.Kind=K_RECT)or(O^.Kind=K_ELLIPSE))and(B=0)and(C=0))Then Begin
@@ -2803,7 +3349,141 @@ Begin
  ReplaceColor:=Cnt;
 End;
 
+{ Texte vectoriel -> courbes : un objet par caractere, groupes }
+Procedure TextsToCurves;
+Var Sl:TSelArr;
+    N,K,I:Integer;
+    O,G,Pr:PObj;
+    T:String;
+    Pen:Double;
+Begin
+ N:=CollectSel(Sl);
+ For K:=0 To N-1 Do Begin
+  O:=Sl[K];
+  If Not IsVec(O)Then Continue;
+  Inc(GroupSeq);
+  Pr:=O;
+  T:=Conv(O^.Txt);
+  Pen:=0;
+  For I:=1 To Length(T) Do Begin
+   If MakeGlyph(O,T,I,Pen)Then Begin
+    G:=NewObj(K_BEZIER,TmpGlyph^.N);
+    Move(TmpGlyph^.Pts^,G^.Pts^,TmpGlyph^.N*SizeOf(TPt));
+    G^.Closed:=True;
+    G^.FillKind:=FK_SOLID;
+    If O^.FillCol>=0 Then G^.FillCol:=O^.FillCol Else G^.FillCol:=O^.OutCol;
+    If G^.FillCol<0 Then G^.FillCol:=0;
+    G^.OutCol:=-1;
+    G^.Group:=GroupSeq;
+    G^.Layer:=O^.Layer;
+    G^.Page:=O^.Page;
+    G^.Sel:=True;
+    ListInsertAfter(Pr,G);
+    Pr:=G;
+   End;
+   Pen:=Pen+PenAfter(O,T,I);
+  End;
+  DeleteObj(O);
+  Modified:=True;
+ End;
+End;
+
+{ Texte sur un chemin : un texte vectoriel et une forme sont selectionnes }
+Procedure TextOnPath;
+Var Sl:TSelArr;
+    N,I,K,J,Ti,Pi,Sl2,Nc:Integer;
+    F:TFlat;
+    Cl:Boolean;
+    Cum:Array[0..3999] of Double;
+    Tot,Pen,Adv,D,Tx,Ty,Cx,Cy,Sc,Lx,Ly,Fr:Double;
+    T:String;
+    Gl:PGlyph;
+    G,Pr,Tobj:PObj;
+Begin
+ EditMsg:='';
+ N:=CollectSel(Sl);
+ Ti:=-1; Pi:=-1;
+ For I:=0 To N-1 Do Begin
+  If IsVec(Sl[I])and(Ti<0)Then Ti:=I Else If(Sl[I]^.Kind<>K_TEXT)and(Pi<0)Then Pi:=I;
+ End;
+ If(N<>2)or(Ti<0)or(Pi<0)Then Begin
+  EditMsg:='Sélectionnez un texte (police vectorielle) et un chemin.';
+  Exit;
+ End;
+ Tobj:=Sl[Ti];
+ FlatNew(F);
+ FlatObj(Sl[Pi],F,16,Cl);
+ Nc:=FlatEnd(F,0)+1;
+ If Cl and(Nc>=2)and(Nc<3999)Then Begin
+  F.P^[Nc]:=F.P^[0];
+  Inc(Nc);
+ End;
+ If Nc<2 Then Begin FlatFree(F); EditMsg:='Chemin trop court.'; Exit; End;
+ Cum[0]:=0;
+ For I:=1 To Nc-1 Do
+  Cum[I]:=Cum[I-1]+Sqrt(Sqr(1.0*F.P^[I].X-F.P^[I-1].X)+Sqr(1.0*F.P^[I].Y-F.P^[I-1].Y));
+ Tot:=Cum[Nc-1];
+ PushUndo;
+ Sl2:=FontSlot(Tobj^.Font);
+ Sc:=Tobj^.TextSize/TTFonts[Sl2].Upem;
+ T:=Conv(Tobj^.Txt);
+ Pen:=0;
+ Inc(GroupSeq);
+ Pr:=Tobj;
+ For I:=1 To Length(T) Do Begin
+  Adv:=AdvOf(Sl2,Ord(T[I]))*Sc;
+  D:=Pen+Adv/2;
+  If D>Tot Then Break;
+  { segment contenant la distance D }
+  J:=1;
+  While(J<Nc-1)and(Cum[J]<D)Do Inc(J);
+  Tx:=F.P^[J].X-F.P^[J-1].X;
+  Ty:=F.P^[J].Y-F.P^[J-1].Y;
+  Fr:=Sqrt(Tx*Tx+Ty*Ty);
+  If Fr<0.001 Then Begin Pen:=Pen+Adv; Continue; End;
+  Tx:=Tx/Fr; Ty:=Ty/Fr;
+  If Cum[J]>Cum[J-1]Then Fr:=(D-Cum[J-1])/(Cum[J]-Cum[J-1]) Else Fr:=0;
+  Cx:=F.P^[J-1].X+(F.P^[J].X-F.P^[J-1].X)*Fr;
+  Cy:=F.P^[J-1].Y+(F.P^[J].Y-F.P^[J-1].Y)*Fr;
+  Gl:=GlyphOf(Sl2,Ord(T[I]));
+  If(Gl<>NIL)and(Gl^.N>=4)Then Begin
+   G:=NewObj(K_BEZIER,Gl^.N);
+   For K:=0 To Gl^.N-1 Do
+    If Gl^.Pts^[K].X=BRK Then Begin
+     G^.Pts^[K].X:=BRK; G^.Pts^[K].Y:=0;
+    End
+     Else Begin
+      Lx:=(Gl^.Pts^[K].X-AdvOf(Sl2,Ord(T[I]))/2)*Sc;
+      Ly:=Gl^.Pts^[K].Y*Sc;
+      G^.Pts^[K].X:=Round(Cx+Tx*Lx+Ty*Ly);
+      G^.Pts^[K].Y:=Round(Cy+Ty*Lx-Tx*Ly);
+     End;
+   G^.Closed:=True;
+   G^.FillKind:=FK_SOLID;
+   If Tobj^.FillCol>=0 Then G^.FillCol:=Tobj^.FillCol Else G^.FillCol:=Tobj^.OutCol;
+   If G^.FillCol<0 Then G^.FillCol:=0;
+   G^.OutCol:=-1;
+   G^.Group:=GroupSeq;
+   G^.Layer:=Tobj^.Layer;
+   G^.Page:=Tobj^.Page;
+   ListInsertAfter(Pr,G);
+   Pr:=G;
+  End;
+  Pen:=Pen+Adv;
+ End;
+ DeleteObj(Tobj);
+ FlatFree(F);
+ Modified:=True;
+End;
+
 {$ELSE}
+Procedure TextsToCurves;
+Begin
+End;
+Procedure TextOnPath;
+Begin
+ EditMsg:='Non disponible dans cette version.';
+End;
 Procedure BoolSel(Op:Integer);
 Begin
  EditMsg:='Non disponible dans cette version.';
@@ -2938,6 +3618,7 @@ Begin
  DefPattern:=1;
  DefTextSize:=140;
  PolySides:=5;
+ If FontReady(1)Then DefFont:=1 Else DefFont:=0;
 End;
 
 { Calques, pages et reperes : etat initial d'un document }
@@ -3176,6 +3857,8 @@ Begin
   WrW(O^.TileH);
   WrB(O^.Layer);
   WrB(O^.Page);
+  WrB(O^.Font);
+  WrW(Word(O^.GradAng));
   EndChunk;
  End;
  EndChunk;
@@ -3350,6 +4033,8 @@ Begin
       O^.Layer:=RdB;
       O^.Page:=RdB;
      End;
+     If FilePos(FF)+1<=Data+Size Then O^.Font:=RdB;
+     If FilePos(FF)+2<=Data+Size Then O^.GradAng:=SmallInt(RdW);
      If(O^.Layer<1)or(O^.Layer>LAYER_N)Then O^.Layer:=1;
      If(O^.Img<0)or(O^.Img>ImgCount)Then O^.Img:=0;
      If Not AddObj(O)Then Break;
@@ -3380,6 +4065,13 @@ Begin
   Else R:=R+S[I];
   End;
  XmlEsc:=R;
+End;
+
+Function FN2s(V:Double):String;
+Var S:String;
+Begin
+ Str(V:0:3,S);
+ FN2s:=S;
 End;
 
 Function SaveSVG(Const Name:String):Boolean;
@@ -3443,6 +4135,13 @@ Begin
      If O^.FillCol>=0 Then Begin
       Inc(GradN);
       Write(T,' <defs><linearGradient id="g',GradN,'" x1="0" y1="0" x2="');
+      If O^.GradAng<>0 Then Begin
+       Write(T,FN2s(0.5-0.5*Cos((O^.GradAng+Ord(O^.FillKind=FK_GRADV)*(-90))*Pi/180)),'" y1="',
+             FN2s(0.5+0.5*Sin((O^.GradAng+Ord(O^.FillKind=FK_GRADV)*(-90))*Pi/180)),'" x2="',
+             FN2s(0.5+0.5*Cos((O^.GradAng+Ord(O^.FillKind=FK_GRADV)*(-90))*Pi/180)),'" y2="',
+             FN2s(0.5-0.5*Sin((O^.GradAng+Ord(O^.FillKind=FK_GRADV)*(-90))*Pi/180)),'"');
+      End
+       Else
       If O^.FillKind=FK_GRADV Then Write(T,'0" y2="1"') Else Write(T,'1" y2="0"');
       WriteLn(T,'><stop offset="0" stop-color="',ColorHex(O^.FillCol),
               '"/><stop offset="1" stop-color="',ColorHex(O^.FillCol2),'"/></linearGradient></defs>');
@@ -3508,8 +4207,22 @@ Begin
      If O^.Closed Then Write(T,' Z');
      WriteLn(T,'" ',Fill,' ',Stroke,'/>');
     End;
-    K_TEXT:WriteLn(T,' <text x="',O^.Pts^[0].X+DX,'" y="',O^.Pts^[0].Y+O^.TextSize-O^.TextSize Div 8+DX,
-                   '" font-family="monospace" font-size="',O^.TextSize,'" ',Fill,'>',XmlEsc(O^.Txt),'</text>');
+    K_TEXT:Begin
+     If IsVec(O)Then Begin
+      Case O^.Font And 3 Of
+       1:Write(T,' <text font-family="Arial, sans-serif"');
+       2:Write(T,' <text font-family="Times New Roman, serif"');
+      Else Write(T,' <text font-family="Courier New, monospace"');
+      End;
+      If(O^.Font And 16)<>0 Then Write(T,' font-weight="bold"');
+      If(O^.Font And 32)<>0 Then Write(T,' font-style="italic"');
+      WriteLn(T,' x="',O^.Pts^[0].X+DX,'" y="',O^.Pts^[0].Y+TextBase(O)+DX,
+              '" font-size="',O^.TextSize,'" ',Fill,'>',XmlEsc(O^.Txt),'</text>');
+     End
+      Else
+     WriteLn(T,' <text x="',O^.Pts^[0].X+DX,'" y="',O^.Pts^[0].Y+O^.TextSize-O^.TextSize Div 8+DX,
+             '" font-family="monospace" font-size="',O^.TextSize,'" ',Fill,'>',XmlEsc(O^.Txt),'</text>');
+    End;
    End;
   End;
  End;
@@ -4447,12 +5160,22 @@ Begin
  WriteLn(XF,Cl,' ',Fl);
 End;
 
+Procedure XQuad(X1,Y1,X2,Y2,X3,Y3,X4,Y4:Double);
+Begin
+ If XPdf Then
+  WriteLn(XF,XPx(X1),' ',XPy(Y1),' m ',XPx(X2),' ',XPy(Y2),' l ',XPx(X3),' ',XPy(Y3),' l ',
+          XPx(X4),' ',XPy(Y4),' l h f')
+ Else
+  WriteLn(XF,'newpath ',XPx(X1),' ',XPy(Y1),' moveto ',XPx(X2),' ',XPy(Y2),' lineto ',
+          XPx(X3),' ',XPy(Y3),' lineto ',XPx(X4),' ',XPy(Y4),' lineto closepath fill');
+End;
+
 { Degrade : decoupe selon le contour (clip) puis bandes ou anneaux de couleur }
 Procedure XGradFill(O:PObj);
 Const NS=28;
 Var X1,Y1,X2,Y2:LongInt;
     I:Integer;
-    R1,G1,B1,R2,G2,B2,T,W,H,CX,CY,Rd:Double;
+    R1,G1,B1,R2,G2,B2,T,W,H,CX,CY,Rd,Ang,Ux,Uy,Hf:Double;
 Begin
  ObjBBox(O,X1,Y1,X2,Y2);
  W:=X2-X1; H:=Y2-Y1;
@@ -4468,7 +5191,23 @@ Begin
    XPathOf(O,0);
    If HasBrk(O)Then WriteLn(XF,'eoclip newpath') Else WriteLn(XF,'clip newpath');
   End;
- If(O^.FillKind=FK_GRADV)or(O^.FillKind=FK_GRADH)Then Begin
+ If((O^.FillKind=FK_GRADV)or(O^.FillKind=FK_GRADH))and(O^.GradAng<>0)Then Begin
+  Ang:=(O^.GradAng+Ord(O^.FillKind=FK_GRADV)*(-90))*Pi/180;
+  Ux:=Cos(Ang); Uy:=-Sin(Ang);
+  CX:=(X1+X2)/2+W*O^.GradX/100;
+  CY:=(Y1+Y2)/2-H*O^.GradY/100;
+  Hf:=W/2*Abs(Ux)+H/2*Abs(Uy)+1;
+  Rd:=Sqrt(W*W+H*H)+1;
+  For I:=0 To NS-1 Do Begin
+   T:=(I+0.5)/NS;
+   XColRGB(R1+(R2-R1)*T,G1+(G2-G1)*T,B1+(B2-B1)*T,False);
+   XQuad(CX+Ux*(-Hf+2*Hf*I/NS)-Uy*Rd,CY+Uy*(-Hf+2*Hf*I/NS)+Ux*Rd,
+         CX+Ux*(-Hf+2*Hf*I/NS)+Uy*Rd,CY+Uy*(-Hf+2*Hf*I/NS)-Ux*Rd,
+         CX+Ux*(-Hf+2*Hf*(I+1)/NS+1)+Uy*Rd,CY+Uy*(-Hf+2*Hf*(I+1)/NS+1)-Ux*Rd,
+         CX+Ux*(-Hf+2*Hf*(I+1)/NS+1)-Uy*Rd,CY+Uy*(-Hf+2*Hf*(I+1)/NS+1)+Ux*Rd);
+  End;
+ End
+  Else If(O^.FillKind=FK_GRADV)or(O^.FillKind=FK_GRADH)Then Begin
   For I:=0 To NS-1 Do Begin
    T:=(I+0.5)/NS;
    XColRGB(R1+(R2-R1)*T,G1+(G2-G1)*T,B1+(B2-B1)*T,False);
@@ -4541,6 +5280,9 @@ End;
 
 Procedure XDrawObj(O:PObj;Shadow:Boolean);
 Var C:PObj;
+    T:String;
+    I:Integer;
+    Pen:Double;
     DX:LongInt;
     Fill,Strk,EO,Grad:Boolean;
     FC:Integer;
@@ -4557,6 +5299,19 @@ Begin
   If O^.FillCol>=0 Then FC:=O^.FillCol Else FC:=O^.OutCol;
   If FC<0 Then FC:=0;
   XCol(FC,False);
+  If IsVec(O)Then Begin
+   T:=Conv(O^.Txt);
+   Pen:=0;
+   For I:=1 To Length(T) Do Begin
+    If MakeGlyph(O,T,I,Pen)Then Begin
+     If Not XPdf Then WriteLn(XF,'newpath');
+     XPathOf(TmpGlyph,0);
+     If XPdf Then WriteLn(XF,'f*') Else WriteLn(XF,'eofill');
+    End;
+    Pen:=Pen+PenAfter(O,T,I);
+   End;
+   Exit;
+  End;
   If XPdf Then
    WriteLn(XF,'BT /F1 ',FN2(O^.TextSize*72/254),' Tf ',XPx(O^.Pts^[0].X),' ',
            XPy(O^.Pts^[0].Y+O^.TextSize-O^.TextSize Div 8),' Td (',PsEsc(O^.Txt),') Tj ET')
@@ -5158,6 +5913,8 @@ End;
 
 Procedure RenderPage(P:Integer);
 Var O,C:PObj;
+    Tx:String;
+    Pn:Double;
     F:TFlat;
     Cl:Boolean;
     I,K,S,E,Rad,X1,Y1,X2,Y2,X,Y,IX,IY:LongInt;
@@ -5168,6 +5925,22 @@ Begin
  FlatNew(F);
  O:=ObjHead;
  While O<>NIL Do Begin
+  If ObjOnPage(O,P)and(O^.Kind=K_TEXT)and IsVec(O)Then Begin
+   Tx:=Conv(O^.Txt);
+   Pn:=0;
+   If O^.FillCol>=0 Then K:=O^.FillCol Else K:=O^.OutCol;
+   If K<0 Then K:=0;
+   For I:=1 To Length(Tx) Do Begin
+    If MakeGlyph(O,Tx,I,Pn)Then Begin
+     C:=CloneObj(TmpGlyph);
+     FlatObj(C,F,10,Cl);
+     RFill(F,PalR[K],PalG[K],PalB[K]);
+     FreeObj(C);
+    End;
+    Pn:=Pn+PenAfter(O,Tx,I);
+   End;
+  End
+   Else
   If ObjOnPage(O,P)and(O^.Kind<>K_TEXT)Then Begin
    If(O^.Kind=K_BITMAP)and(O^.Img>=1)and(O^.Img<=ImgCount)Then Begin
     Im:=Imgs[O^.Img];
@@ -8645,6 +9418,7 @@ Var B,Sz,O,C,F,Found,I,K,BestS,BestL,RunS,Len,L,CPL,MaxLen:LongInt;
   Obj^.Pts^[0].Y:=Y;
   Obj^.Txt:=S;
   Obj^.TextSize:=Clamp(CellSz,15,3000);
+  Obj^.Font:=0;
   Obj^.OutCol:=-1;
   Obj^.FillKind:=FK_SOLID;
   If(tFillKind<>FK_NONE)and(tF1>=0)Then Obj^.FillCol:=tF1 Else Obj^.FillCol:=0;
@@ -9714,6 +10488,7 @@ Begin
  O:=Mk(K_TEXT,1,Col,Col,1);
  O^.Pts^[0].X:=X; O^.Pts^[0].Y:=Y;
  O^.TextSize:=Size;
+ O^.Font:=0;
  O^.Txt:=Copy(S,1,60);
  AddObj(O);
 End;
@@ -9853,7 +10628,8 @@ Const
  UI_BG=7; UI_HI=15; UI_SH=8; UI_DK=0; UI_SEL=1;
  CANVAS_BG=39;
  DM_NONE=0; DM_MOVE=1; DM_SIZE=2; DM_MARQUEE=3; DM_CREATE=4; DM_NODE=5;
- DM_PAN=6; DM_ZBOX=7; DM_SCROLLH=8; DM_SCROLLV=9; DM_GUIDE=10;
+ DM_PAN=6; DM_ZBOX=7; DM_SCROLLH=8; DM_SCROLLV=9; DM_GUIDE=10; DM_ROT=11; DM_SKEW=12;
+ DM_BEZ=13; DM_GRAD=14;
  EXT_STEPS=8; EXT_STEP=18; SHADOW_OFF=70;
 
 Var
@@ -10351,6 +11127,8 @@ Var
  GOffX,GOffY:Integer;
  GCX,GCY,GRad:LongInt;
  GImg:Integer;
+ GAngle:Integer;
+ GDirX,GDirY,GHalf:Double;
  GTW,GTH,GOX,GOY:LongInt;
 
 { Indice de palette (cube d'images) du point (IX,IY) de l'image P, tramage
@@ -10414,6 +11192,15 @@ Begin
  If XA<0 Then XA:=0;
  If XB>CanvasW-1 Then XB:=CanvasW-1;
  If XA>XB Then Exit;
+ If((GFK=FK_GRADV)or(GFK=FK_GRADH))and(GAngle<>0)Then Begin
+  For X:=XA To XB Do Begin
+   Mix:=Trunc((((X-GCX)*GDirX+(Y-GCY)*GDirY)/(2*GHalf)+0.5)*17);
+   If Mix<0 Then Mix:=0;
+   If Mix>16 Then Mix:=16;
+   DitherPixel(X,Y,Mix);
+  End;
+  Exit;
+ End;
  Case GFK Of
   FK_SOLID:Begin
    SetCol(GC1);
@@ -10552,6 +11339,12 @@ Begin
  GOX:=GMinX;
  GOY:=GMinY;
  GCX:=(GMinX+GMaxX) Div 2+((GMaxX-GMinX)*GOffX) Div 100;
+ GDirX:=1; GDirY:=0;
+ If GAngle<>0 Then Begin
+  GDirX:=Cos((GAngle+Ord(FK=FK_GRADV)*(-90))*Pi/180);
+  GDirY:=-Sin((GAngle+Ord(FK=FK_GRADV)*(-90))*Pi/180);
+  GHalf:=(GMaxX-GMinX)/2*Abs(GDirX)+(GMaxY-GMinY)/2*Abs(GDirY)+0.5;
+ End;
  GCY:=(GMinY+GMaxY) Div 2-((GMaxY-GMinY)*GOffY) Div 100;
  GRad:=Round(Sqrt(Sqr(GMaxX-GMinX)+Sqr(GMaxY-GMinY))*0.5)+1;
  Y1:=Integer(Max(GMinY,0));
@@ -10637,7 +11430,22 @@ End;
 Procedure DrawTextObj(O:PObj;OX,OY:LongInt;Col:Integer);
 Var SX,SY,HS:LongInt;
     Sz:Integer;
+    T:String;
+    I:Integer;
+    Pen:Double;
 Begin
+ If IsVec(O)Then Begin
+  T:=Conv(O^.Txt);
+  Pen:=0;
+  For I:=1 To Length(T) Do Begin
+   If MakeGlyph(O,T,I,Pen)Then Begin
+    BuildPoly(TmpGlyph,OX,OY);
+    ScanFill(FK_SOLID,0,Col,-1);
+   End;
+   Pen:=Pen+PenAfter(O,T,I);
+  End;
+  Exit;
+ End;
  SX:=W2SX(O^.Pts^[0].X+OX);
  SY:=W2SY(O^.Pts^[0].Y+OY);
  HS:=(O^.TextSize*Zoom) Div 1000;
@@ -10741,6 +11549,7 @@ Begin
    GOffX:=O^.GradX;
    GOffY:=O^.GradY;
    GImg:=O^.Img;
+   GAngle:=O^.GradAng;
    GTW:=Max(2,(LongInt(O^.TileW)*Zoom) Div 1000);
    GTH:=Max(2,(LongInt(O^.TileH)*Zoom) Div 1000);
    ScanFill(O^.FillKind,O^.Pattern,O^.FillCol,O^.FillCol2);
@@ -10865,6 +11674,45 @@ Begin
  End;
 End;
 
+Procedure DrawRotHandle(X,Y:Integer;Corner:Boolean);
+Begin
+ Box(X-4,Y-4,X+4,Y+4,15);
+ SetCol(0);
+ If Corner Then Begin
+  Circle(X,Y,4);
+  Box(X-1,Y-1,X+1,Y+1,0);
+ End
+  Else Begin
+   Line(X-4,Y,X,Y-4); Line(X,Y-4,X+4,Y); Line(X+4,Y,X,Y+4); Line(X,Y+4,X-4,Y);
+  End;
+End;
+
+{ Axe du degrade lineaire / centre du degrade radial de l'objet O }
+Procedure DrawGradAxis(O:PObj);
+Var X1,Y1,X2,Y2:LongInt;
+    CX,CY,Dx,Dy,Hf,Th:Double;
+Begin
+ If Not(O^.FillKind in [FK_GRADV,FK_GRADH,FK_RADIAL,FK_CONIC,FK_SQUARE])Then Exit;
+ ObjBBox(O,X1,Y1,X2,Y2);
+ CX:=(W2SX(X1)+W2SX(X2))/2+(W2SX(X2)-W2SX(X1))*O^.GradX/100;
+ CY:=(W2SY(Y1)+W2SY(Y2))/2-(W2SY(Y2)-W2SY(Y1))*O^.GradY/100;
+ SetCol(0);
+ If(O^.FillKind=FK_GRADV)or(O^.FillKind=FK_GRADH)Then Begin
+  Th:=(O^.GradAng+Ord(O^.FillKind=FK_GRADV)*(-90))*Pi/180;
+  Dx:=Cos(Th); Dy:=-Sin(Th);
+  Hf:=(W2SX(X2)-W2SX(X1))/2*Abs(Dx)+(W2SY(Y2)-W2SY(Y1))/2*Abs(Dy);
+  Line(CL(Round(CX-Dx*Hf)),CL(Round(CY-Dy*Hf)),CL(Round(CX+Dx*Hf)),CL(Round(CY+Dy*Hf)));
+  Box(CL(Round(CX-Dx*Hf))-3,CL(Round(CY-Dy*Hf))-3,CL(Round(CX-Dx*Hf))+3,CL(Round(CY-Dy*Hf))+3,Integer(Max(0,O^.FillCol)));
+  Rectangle(CL(Round(CX-Dx*Hf))-3,CL(Round(CY-Dy*Hf))-3,CL(Round(CX-Dx*Hf))+3,CL(Round(CY-Dy*Hf))+3);
+  Box(CL(Round(CX+Dx*Hf))-3,CL(Round(CY+Dy*Hf))-3,CL(Round(CX+Dx*Hf))+3,CL(Round(CY+Dy*Hf))+3,Integer(Max(0,O^.FillCol2)));
+  Rectangle(CL(Round(CX+Dx*Hf))-3,CL(Round(CY+Dy*Hf))-3,CL(Round(CX+Dx*Hf))+3,CL(Round(CY+Dy*Hf))+3);
+ End
+  Else Begin
+   Circle(CL(Round(CX)),CL(Round(CY)),5);
+   Box(CL(Round(CX))-2,CL(Round(CY))-2,CL(Round(CX))+2,CL(Round(CY))+2,Integer(Max(0,O^.FillCol)));
+  End;
+End;
+
 Procedure DrawSelection;
 Var X1,Y1,X2,Y2,H,HX,HY,K:Integer;
     I:LongInt;
@@ -10915,8 +11763,17 @@ Begin
  If CurTool=T_PICK Then
   For H:=1 To 8 Do Begin
    HandlePos(H,X1,Y1,X2,Y2,HX,HY);
-   DrawHandleBox(HX,HY);
+   If RotMode Then DrawRotHandle(HX,HY,H In [1,3,5,7])
+    Else DrawHandleBox(HX,HY);
   End;
+ If RotMode and(CurTool=T_PICK)Then Begin
+  SetCol(0);
+  Line((X1+X2) Div 2-5,(Y1+Y2) Div 2,(X1+X2) Div 2+5,(Y1+Y2) Div 2);
+  Line((X1+X2) Div 2,(Y1+Y2) Div 2-5,(X1+X2) Div 2,(Y1+Y2) Div 2+5);
+ End;
+ If CurTool=T_FILLI Then
+  For I:=0 To ObjCount-1 Do
+   If ObjAt(I)^.Sel Then DrawGradAxis(ObjAt(I));
  AX:=0; AY:=0;
 End;
 
@@ -10999,7 +11856,7 @@ Const
  CM_LAYERS=160; CM_PAGE_NEXT=161; CM_PAGE_PREV=162; CM_PAGE_ADD=163;
  CM_PAGE_DEL=164; CM_PAGE_MASTER=165;
  CM_GUIDE_ADD=170; CM_GUIDE_CLEAR=171; CM_GUIDES=172; CM_GUIDE_SNAP=173;
- CM_EXPORTV=180; CM_TXT_REPL=181; CM_STY_SAVE=182; CM_STY_APPLY=183;
+ CM_EXPORTV=180; CM_FONT=185; CM_TXT_PATH=186; CM_TXT_REPL=181; CM_STY_SAVE=182; CM_STY_APPLY=183;
  CM_SEL_FILL=175; CM_SEL_OUT=176; CM_SEL_TYPE=177; CM_REPLACE=178;
 
  POPUP_IDX=10;
@@ -11182,6 +12039,8 @@ Begin
 
  SetMenuTitle(6,'Texte');
  AddItem(6,'Modifier le texte...','F8',CM_TEXT_EDIT);
+ AddItem(6,'Police et style...','',CM_FONT);
+ AddItem(6,'Texte sur un chemin','',CM_TXT_PATH);
  AddItem(6,'Agrandir','',CM_TEXT_BIG);
  AddItem(6,'Réduire','',CM_TEXT_SMALL);
 
@@ -11286,6 +12145,8 @@ Begin
   CM_BREAK,CM_ROTATE,CM_SKEW,CM_SCALE,CM_WARP,CM_CONTOUR,CM_ROT_L,CM_ROT_R,
   CM_DIM_H,CM_DIM_V,CM_SEL_FILL,CM_SEL_OUT,CM_SEL_TYPE,CM_N_CLOSE,CM_STY_SAVE,
   CM_FILL_CON,CM_FILL_SQ,CM_FILL_CMYK:IsEnabled:=N>0;
+  CM_FONT:IsEnabled:=N>0;
+  CM_TXT_PATH:IsEnabled:=N=2;
   CM_PAGE_PREV:IsEnabled:=CurPage>1;
   CM_PAGE_NEXT:IsEnabled:=CurPage<PageCnt;
   CM_PAGE_DEL:IsEnabled:=(PageCnt>1)and Not EditMaster;
@@ -11646,6 +12507,24 @@ Begin
    TxtOut(X+5,Y+5,'A');
    TxtOut(X+6,Y+5,'A');
   End;
+  T_BEZIER:Begin
+   Line(X+3,Y+14,X+5,Y+8);  Line(X+5,Y+8,X+8,Y+5);  Line(X+8,Y+5,X+11,Y+5);
+   Line(X+11,Y+5,X+14,Y+8); Line(X+14,Y+8,X+15,Y+14);
+   Box(X+2,Y+13,X+5,Y+16,0);
+   Box(X+13,Y+13,X+16,Y+16,0);
+   Rectangle(X+7,Y+3,X+10,Y+6);
+  End;
+  T_FILLI:Begin
+   For I:=0 To 11 Do Begin
+    SetCol(Integer((I Div 3)*5));
+    Line(X+3+I,Y+4,X+3+I,Y+13);
+   End;
+   SetCol(0);
+   Rectangle(X+3,Y+4,X+14,Y+13);
+   Line(X+3,Y+15,X+14,Y+15);
+   Box(X+2,Y+14,X+4,Y+16,0);
+   Box(X+13,Y+14,X+15,Y+16,0);
+  End;
  End;
 End;
 
@@ -11677,6 +12556,8 @@ Begin
   T_POLYGON:ToolName:='Polygone : glisser (côtés dans la barre de propriétés)';
   T_STAR:ToolName:='Étoile : glisser (pointes dans la barre de propriétés)';
   T_TEXT:ToolName:='Texte artistique : cliquer sur la page';
+  T_BEZIER:ToolName:='Bézier : clic = angle, glisser = noeud lisse, Entrée ou clic droit = fin';
+  T_FILLI:ToolName:='Dégradé interactif : glisser sur l''objet (début → fin)';
  Else ToolName:='';
  End;
 End;
@@ -12825,7 +13706,8 @@ End;
 Procedure ShowHelp;
 Begin
  TN:=0;
- TLines[TN]:='Outils : P pointeur  N noeuds  Z zoom  H main  L ligne'; Inc(TN);
+ TLines[TN]:='Outils : P pointeur  N noeuds  Z zoom  H main  L ligne  K bézier  F dégradé'; Inc(TN);
+ TLines[TN]:='Pointeur : un 2e clic sur la sélection = poignées de rotation et d''inclinaison'; Inc(TN);
  TLines[TN]:='         Y polyligne  B courbe  R rectangle  E ellipse'; Inc(TN);
  TLines[TN]:='         G polygone  S étoile  T texte'; Inc(TN);
  TLines[TN]:=''; Inc(TN);
@@ -13445,6 +14327,34 @@ Begin
    End;
   End;
   CM_LAYERS:LayerManager;
+  CM_FONT:Begin
+   ChItems[0]:='Police bitmap (écran)';
+   ChItems[1]:='Arial';
+   ChItems[2]:='Times New Roman';
+   ChItems[3]:='Courier New';
+   K:=ChoiceBox('Police',4,Integer(DefFont And 3));
+   If K>=0 Then Begin
+    ChItems[0]:='Normal';
+    ChItems[1]:='Gras';
+    ChItems[2]:='Italique';
+    ChItems[3]:='Gras italique';
+    C:=0;
+    If K>0 Then C:=ChoiceBox('Style',4,0);
+    If C>=0 Then Begin
+     I:=K;
+     If(C And 1)<>0 Then I:=I+16;
+     If(C And 2)<>0 Then I:=I+32;
+     If(K>0)and Not FontReady(I)Then EditMsg:='Police introuvable dans le dossier Fonts de Windows.'
+      Else Begin
+       PushUndo;
+       DefFont:=I;
+       For N:=0 To ObjCount-1 Do
+        If ObjAt(N)^.Sel and(ObjAt(N)^.Kind=K_TEXT)Then ObjAt(N)^.Font:=I;
+      End;
+    End;
+   End;
+  End;
+  CM_TXT_PATH:TextOnPath;
   CM_TXT_REPL:Begin
    S:='';
    If InputBox('Remplacer le texte','Texte à chercher :',S,40)Then Begin
@@ -13571,7 +14481,7 @@ Begin
   CM_ROT90:Begin PushUndo; TransformSel(0); End;
   CM_FLIPH:Begin PushUndo; TransformSel(1); End;
   CM_FLIPV:Begin PushUndo; TransformSel(2); End;
-  CM_TOCURVE:Begin PushUndo; ConvertToCurves; End;
+  CM_TOCURVE:Begin PushUndo; ConvertToCurves; TextsToCurves; End;
   CM_FILL_NONE:Begin ApplyFillKind(FK_NONE,-1,-1); If SelCount=0 Then DefFill:=-1; End;
   CM_FILL_SOLID:Begin
    C:=ColorBox('Remplissage uniforme',False);
@@ -13764,6 +14674,90 @@ Begin
  DY:=NY-OBY1;
 End;
 
+{ Angle en degres (sens trigonometrique a l'ecran) du vecteur (DX,DY) }
+Function AngleOf(DX,DY:Double):Double;
+Var A:Double;
+Begin
+ If(DX=0)and(DY=0)Then Begin AngleOf:=0; Exit; End;
+ If DX=0 Then Begin
+  If DY<0 Then AngleOf:=90 Else AngleOf:=-90;
+  Exit;
+ End;
+ A:=ArcTan(-DY/DX)*180/Pi;
+ If DX<0 Then Begin
+  If A>0 Then A:=A-180 Else A:=A+180;
+ End;
+ AngleOf:=A;
+End;
+
+Procedure RotCenter(Var CX,CY:Double);
+Begin
+ CX:=W2SX((OBX1+OBX2) Div 2);
+ CY:=W2SY((OBY1+OBY2) Div 2);
+End;
+
+{ Rotation (degres) decrite par la souris en (CX,CY) }
+Function RotDeltaFor(CX,CY:Integer):Double;
+Var RX,RY,D:Double;
+Begin
+ RotCenter(RX,RY);
+ D:=AngleOf(CX-RX,CY-RY)-AngleOf(DX0-RX,DY0-RY);
+ While D>180 Do D:=D-360;
+ While D<-180 Do D:=D+360;
+ RotDeltaFor:=D;
+End;
+
+{ Inclinaison horizontale et verticale (degres) decrite par la souris }
+Procedure SkewDeltaFor(CX,CY:Integer;Var HD,VD:Double);
+Var RX,RY,HW,HH:Double;
+Begin
+ RotCenter(RX,RY);
+ HW:=Abs(W2SX(OBX2)-W2SX(OBX1))/2+1;
+ HH:=Abs(W2SY(OBY2)-W2SY(OBY1))/2+1;
+ HD:=0; VD:=0;
+ Case HandleSel Of
+  2:HD:=ArcTan((CX-DX0)/HH)*180/Pi;
+  6:HD:=-ArcTan((CX-DX0)/HH)*180/Pi;
+  4:VD:=ArcTan(-(CY-DY0)/HW)*180/Pi;
+  8:VD:=-ArcTan(-(CY-DY0)/HW)*180/Pi;
+ End;
+ If HD>85 Then HD:=85;
+ If HD<-85 Then HD:=-85;
+ If VD>85 Then VD:=85;
+ If VD<-85 Then VD:=-85;
+End;
+
+{ Courbe en cours de construction (outil Bezier) vers le curseur }
+Procedure XorBez(CX,CY:Integer);
+Var I,K:Integer;
+    P0,C1,C2,P1:TPt;
+    X0,Y0,X1,Y1,T,U:Double;
+    WX,WY:LongInt;
+Begin
+ If BzN=0 Then Exit;
+ BeginCanvas;
+ SetWriteMode(XORPut);
+ SetColor(15);
+ WX:=S2WX(CX); WY:=S2WY(CY);
+ For I:=0 To BzN-1 Do Begin
+  P0:=BzP[I]; C1:=BzO[I];
+  If I<BzN-1 Then Begin C2:=BzI[I+1]; P1:=BzP[I+1]; End
+   Else Begin C2.X:=WX; C2.Y:=WY; P1.X:=WX; P1.Y:=WY; End;
+  X0:=W2SX(P0.X); Y0:=W2SY(P0.Y);
+  For K:=1 To 16 Do Begin
+   T:=K/16; U:=1-T;
+   X1:=U*U*U*W2SX(P0.X)+3*U*U*T*W2SX(C1.X)+3*U*T*T*W2SX(C2.X)+T*T*T*W2SX(P1.X);
+   Y1:=U*U*U*W2SY(P0.Y)+3*U*U*T*W2SY(C1.Y)+3*U*T*T*W2SY(C2.Y)+T*T*T*W2SY(P1.Y);
+   Line(CL(Round(X0)),CL(Round(Y0)),CL(Round(X1)),CL(Round(Y1)));
+   X0:=X1; Y0:=Y1;
+  End;
+ End;
+ { poignees du dernier noeud }
+ Line(CL(W2SX(BzI[BzN-1].X)),CL(W2SY(BzI[BzN-1].Y)),CL(W2SX(BzO[BzN-1].X)),CL(W2SY(BzO[BzN-1].Y)));
+ SetWriteMode(CopyPut);
+ EndCanvas;
+End;
+
 Procedure PolyOutlineXor;
 Var I:Integer;
 Begin
@@ -13774,6 +14768,8 @@ End;
 
 Procedure XorShape(CX,CY:Integer);
 Var DXw,DYw,NX1,NY1,NX2,NY2:LongInt;
+    RcX,RcY,Th,Ma,Mb,Mc,Md,HD,VD,Qx,Qy:Double;
+    Px4,Py4:Array[0..3] of Integer;
     I:LongInt;
     O:PObj;
     X1,Y1,X2,Y2:Integer;
@@ -13802,6 +14798,29 @@ Begin
   DM_MARQUEE,DM_ZBOX:Begin
    SetLineStyle(DashedLn,0,NormWidth);
    Rectangle(DX0,DY0,CX,CY);
+  End;
+  DM_ROT,DM_SKEW:Begin
+   RotCenter(RcX,RcY);
+   If DragMode=DM_ROT Then Begin
+    Th:=RotDeltaFor(CX,CY)*Pi/180;
+    Ma:=Cos(Th); Mb:=-Sin(Th); Mc:=Sin(Th); Md:=Cos(Th);
+   End
+    Else Begin
+     SkewDeltaFor(CX,CY,HD,VD);
+     Ma:=1; Mb:=-Sin(VD*Pi/180)/Cos(VD*Pi/180); Mc:=-Sin(HD*Pi/180)/Cos(HD*Pi/180); Md:=1;
+    End;
+   For I:=0 To 3 Do Begin
+    If I In [0,3] Then Qx:=W2SX(OBX1) Else Qx:=W2SX(OBX2);
+    If I In [0,1] Then Qy:=W2SY(OBY1) Else Qy:=W2SY(OBY2);
+    Px4[I]:=Round(RcX+Ma*(Qx-RcX)+Mc*(Qy-RcY));
+    Py4[I]:=Round(RcY+Mb*(Qx-RcX)+Md*(Qy-RcY));
+   End;
+   For I:=0 To 3 Do Line(Px4[I],Py4[I],Px4[(I+1) Mod 4],Py4[(I+1) Mod 4]);
+  End;
+  DM_GRAD:Begin
+   Line(DX0,DY0,CX,CY);
+   Circle(DX0,DY0,3);
+   Rectangle(CX-2,CY-2,CX+2,CY+2);
   End;
   DM_CREATE:Begin
    Case CurTool Of
@@ -13849,7 +14868,9 @@ Procedure ErasePreview;
 Begin
  If PreviewOn Then Begin
   MouseOff;
-  If Building Then XorBuild(PrevX,PrevY) Else XorShape(PrevX,PrevY);
+  If Building Then Begin
+   If CurTool=T_BEZIER Then XorBez(PrevX,PrevY) Else XorBuild(PrevX,PrevY);
+  End Else XorShape(PrevX,PrevY);
   MouseOn;
   PreviewOn:=False;
  End;
@@ -13859,7 +14880,9 @@ Procedure ShowPreviewAt(CX,CY:Integer);
 Begin
  ErasePreview;
  MouseOff;
- If Building Then XorBuild(CX,CY) Else XorShape(CX,CY);
+ If Building Then Begin
+  If CurTool=T_BEZIER Then XorBez(CX,CY) Else XorBuild(CX,CY);
+ End Else XorShape(CX,CY);
  MouseOn;
  PrevX:=CX; PrevY:=CY;
  PreviewOn:=True;
@@ -13869,6 +14892,46 @@ End;
 { Creation d'objets                                                  }
 { ------------------------------------------------------------------ }
 
+{ Applique le glisser (DX0,DY0) -> (CX,CY) comme axe du degrade des objets selectionnes }
+Procedure ApplyGradDrag(CX,CY:Integer);
+Var P:PObj;
+    X1,Y1,X2,Y2:LongInt;
+    W,H,MX,MY:Double;
+    Th:Double;
+    Any:Boolean;
+Begin
+ Th:=AngleOf(CX-DX0,CY-DY0);
+ Any:=False;
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  If P^.Sel and CanFill(P)and(P^.Kind<>K_TEXT)Then Begin
+   If Not Any Then Begin PushUndo; Any:=True; End;
+   ObjBBox(P,X1,Y1,X2,Y2);
+   W:=Abs(W2SX(X2)-W2SX(X1))+1;
+   H:=Abs(W2SY(Y2)-W2SY(Y1))+1;
+   If Not(P^.FillKind in [FK_GRADV,FK_GRADH,FK_RADIAL,FK_CONIC,FK_SQUARE])Then Begin
+    P^.FillKind:=FK_GRADH;
+    If P^.FillCol<0 Then P^.FillCol:=DefOut;
+    If P^.FillCol<0 Then P^.FillCol:=0;
+    If P^.FillCol=15 Then P^.FillCol2:=0 Else P^.FillCol2:=15;
+   End;
+   If(P^.FillKind=FK_GRADV)or(P^.FillKind=FK_GRADH)Then Begin
+    P^.FillKind:=FK_GRADH;
+    P^.GradAng:=Round(Th);
+    { centre du degrade = milieu du glisser }
+    MX:=(DX0+CX)/2; MY:=(DY0+CY)/2;
+   End
+    Else Begin
+     MX:=DX0; MY:=DY0;
+    End;
+   P^.GradX:=Clamp(Round((MX-(W2SX(X1)+W2SX(X2))/2)/W*100),-100,100);
+   P^.GradY:=Clamp(Round(-(MY-(W2SY(Y1)+W2SY(Y2))/2)/H*100),-100,100);
+  End;
+  P:=P^.Next;
+ End;
+ If Not Any Then StatusMsg:='Sélectionnez un objet fermé.';
+End;
+
 Procedure CommitObject(O:PObj);
 Begin
  DeselectAll;
@@ -13877,10 +14940,47 @@ Begin
  NeedRedraw:=True;
 End;
 
+{ Cree l'objet courbe a partir des noeuds a poignees (Close : ferme le chemin) }
+Procedure FinishBez(Close:Boolean);
+Var O:PObj;
+    I,N:Integer;
+Begin
+ ErasePreview;
+ If BzN>=2 Then Begin
+  PushUndo;
+  N:=3*(BzN-1)+1;
+  If Close Then N:=3*BzN+1;
+  O:=NewObj(K_BEZIER,N);
+  For I:=0 To BzN-1 Do Begin
+   O^.Pts^[3*I]:=BzP[I];
+   If 3*I+1<N Then O^.Pts^[3*I+1]:=BzO[I];
+   If I>0 Then O^.Pts^[3*I-1]:=BzI[I];
+  End;
+  If Close Then Begin
+   O^.Pts^[3*BzN-1]:=BzI[0];
+   O^.Pts^[3*BzN]:=BzP[0];
+   O^.Closed:=True;
+   O^.FillKind:=DefFillKind;
+   O^.FillCol:=DefFill;
+   O^.FillCol2:=DefFill2;
+   If DefFill<0 Then O^.FillKind:=FK_NONE;
+  End;
+  CommitObject(O);
+ End;
+ Building:=False;
+ BuildN:=0;
+ BzN:=0;
+ NeedRedraw:=True;
+End;
+
 Procedure FinishBuild;
 Var O:PObj;
     I:Integer;
 Begin
+ If CurTool=T_BEZIER Then Begin
+  FinishBez(False);
+  Exit;
+ End;
  ErasePreview;
  If BuildN>=2 Then Begin
   PushUndo;
@@ -13901,6 +15001,7 @@ Begin
  ErasePreview;
  Building:=False;
  BuildN:=0;
+ BzN:=0;
  NeedRedraw:=True;
 End;
 
@@ -14232,12 +15333,29 @@ Procedure EndDrag(CX,CY:Integer);
 Var DXw,DYw,NX1,NY1,NX2,NY2:LongInt;
     I:LongInt;
     X1,Y1,X2,Y2,T:Integer;
+    HDeg,VDeg:Double;
     A,B,C,D:LongInt;
 Begin
  ErasePreview;
  Case DragMode Of
+  DM_ROT:Begin
+   If Abs(RotDeltaFor(CX,CY))>=0.5 Then RotateSel(RotDeltaFor(CX,CY));
+  End;
+  DM_SKEW:Begin
+   SkewDeltaFor(CX,CY,HDeg,VDeg);
+   If(Abs(HDeg)>=0.5)or(Abs(VDeg)>=0.5)Then SkewSel(HDeg,VDeg);
+  End;
+  DM_GRAD:If(Abs(CX-DX0)>=4)or(Abs(CY-DY0)>=4)Then ApplyGradDrag(CX,CY);
+  DM_BEZ:Begin
+   If(BzN>0)and(Abs(CX-DX0)<3)and(Abs(CY-DY0)<3)Then Begin
+    BzO[BzN-1]:=BzP[BzN-1];
+    BzI[BzN-1]:=BzP[BzN-1];
+   End;
+  End;
   DM_MOVE:Begin
-   MoveDeltaFor(CX,CY,DXw,DYw);
+   If(Abs(CX-DX0)<=3)and(Abs(CY-DY0)<=3)Then Begin DXw:=0; DYw:=0; End
+    Else MoveDeltaFor(CX,CY,DXw,DYw);
+   If(DXw=0)and(DYw=0)and WasSel Then RotMode:=Not RotMode;
    If(DXw<>0)or(DYw<>0)Then Begin
     PushUndo;
     For I:=0 To ObjCount-1 Do If ObjAt(I)^.Sel Then ObjMove(ObjAt(I),DXw,DYw);
@@ -14318,6 +15436,16 @@ Begin
     NeedRedraw:=True;
    End;
   End;
+  DM_BEZ:Begin
+   If BzN>0 Then Begin
+    BzO[BzN-1].X:=SnapWX(S2WX(CX));
+    BzO[BzN-1].Y:=SnapWY(S2WY(CY));
+    BzI[BzN-1].X:=2*BzP[BzN-1].X-BzO[BzN-1].X;
+    BzI[BzN-1].Y:=2*BzP[BzN-1].Y-BzO[BzN-1].Y;
+   End;
+   ShowPreviewAt(CX,CY);
+   DCX:=CX; DCY:=CY;
+  End;
   DM_GUIDE:Begin
    GDX:=CX;
    GDY:=CY;
@@ -14373,7 +15501,10 @@ Begin
    H:=HitHandle(CX,CY);
    If H>0 Then Begin
     HandleSel:=H;
-    StartDrag(DM_SIZE,CX,CY);
+    If RotMode Then Begin
+     If H In [1,3,5,7] Then StartDrag(DM_ROT,CX,CY) Else StartDrag(DM_SKEW,CX,CY);
+    End
+     Else StartDrag(DM_SIZE,CX,CY);
    End
     Else
    Begin
@@ -14386,7 +15517,9 @@ Begin
       NeedRedraw:=True;
       Exit;
      End;
-     If Not ObjAt(I)^.Sel Then Begin
+     WasSel:=ObjAt(I)^.Sel;
+     If Not WasSel Then Begin
+      RotMode:=False;
       DeselectAll;
       SelectIndex(I);
       NeedRedraw:=True;
@@ -14409,7 +15542,10 @@ Begin
       GDY:=CY;
       StartDrag(DM_GUIDE,CX,CY);
      End
-      Else StartDrag(DM_MARQUEE,CX,CY);
+      Else Begin
+       RotMode:=False;
+       StartDrag(DM_MARQUEE,CX,CY);
+      End;
     End;
    End;
   End;
@@ -14444,6 +15580,38 @@ Begin
   T_HAND:StartDrag(DM_PAN,CX,CY);
   T_LINE,T_RECT,T_ELLIPSE,T_POLYGON,T_STAR:StartDrag(DM_CREATE,CX,CY);
   T_TEXT:CreateText(CX,CY);
+  T_FILLI:Begin
+   I:=HitObject(CX,CY);
+   If(I>=0)and Not ObjAt(I)^.Sel Then Begin
+    DeselectAll;
+    SelectIndex(I);
+    NeedRedraw:=True;
+    RedrawAll;
+    NeedRedraw:=False;
+   End;
+   StartDrag(DM_GRAD,CX,CY);
+  End;
+  T_BEZIER:Begin
+   If Not Building Then Begin
+    Building:=True;
+    BuildN:=0;
+    BzN:=0;
+   End;
+   ErasePreview;
+   If Dbl and(BzN>=2)Then FinishBez(False)
+    Else
+   If(BzN>=3)and(Abs(CX-W2SX(BzP[0].X))<6)and(Abs(CY-W2SY(BzP[0].Y))<6)Then FinishBez(True)
+    Else
+   If BzN<95 Then Begin
+    BzP[BzN].X:=SnapWX(S2WX(CX));
+    BzP[BzN].Y:=SnapWY(S2WY(CY));
+    BzO[BzN]:=BzP[BzN];
+    BzI[BzN]:=BzP[BzN];
+    Inc(BzN);
+    BuildN:=BzN;
+    StartDrag(DM_BEZ,CX,CY);
+   End;
+  End;
   T_POLYLINE,T_CURVE:Begin
    If Not Building Then Begin
     Building:=True;
@@ -14468,6 +15636,7 @@ End;
 Procedure ChooseTool(T:Integer);
 Begin
  If Building Then CancelBuild;
+ RotMode:=False;
  CurTool:=T;
  NeedRedraw:=True;
 End;
@@ -14520,7 +15689,7 @@ Begin
  If RightBtn Then Begin
   If InCanvas Then Begin
    Case CurTool Of
-    T_POLYLINE,T_CURVE:Begin
+    T_POLYLINE,T_CURVE,T_BEZIER:Begin
      If Building Then FinishBuild;
     End;
     T_ZOOM:Begin
@@ -14696,6 +15865,7 @@ Begin
   If(K=#8)and Not Ext Then Begin
    ErasePreview;
    If BuildN>0 Then Dec(BuildN);
+   If CurTool=T_BEZIER Then BzN:=BuildN;
    If BuildN=0 Then Building:=False;
    Exit;
   End;
@@ -14760,6 +15930,8 @@ Begin
   'g','G':ChooseTool(T_POLYGON);
   's','S':ChooseTool(T_STAR);
   't','T':ChooseTool(T_TEXT);
+  'k','K':ChooseTool(T_BEZIER);
+  'f','F':ChooseTool(T_FILLI);
  End;
 End;
 
@@ -14939,6 +16111,29 @@ Begin
   End
   Else If Nm='CON' Then ApplyFillKind(FK_CONIC,0,15)
   Else If Nm='SQ' Then ApplyFillKind(FK_SQUARE,0,15)
+  Else If Nm='FONT' Then Begin
+   O:=ObjHead;
+   While O<>NIL Do Begin
+    If O^.Sel and(O^.Kind=K_TEXT)Then O^.Font:=Round(A[0]);
+    O:=O^.Next;
+   End;
+  End
+  Else If Nm='SIZE' Then Begin
+   O:=ObjHead;
+   While O<>NIL Do Begin
+    If O^.Sel and(O^.Kind=K_TEXT)Then O^.TextSize:=Round(A[0]);
+    O:=O^.Next;
+   End;
+  End
+  Else If Nm='ANG' Then Begin
+   O:=ObjHead;
+   While O<>NIL Do Begin
+    If O^.Sel Then O^.GradAng:=Round(A[0]);
+    O:=O^.Next;
+   End;
+  End
+  Else If Nm='TXTC' Then TextsToCurves
+  Else If Nm='TXTP' Then TextOnPath
   Else If Nm='CMYK' Then ExpMode:=1
   Else If Nm='GV' Then ApplyFillKind(FK_GRADV,1,12)
   Else If Nm='GH' Then ApplyFillKind(FK_GRADH,4,14)

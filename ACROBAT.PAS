@@ -8,7 +8,8 @@
   Visionneuse / éditeur de documents PDF en mode graphique :
    - Ouverture de fichiers PDF (flux Flate, ASCIIHex, ASCII85, flux d'objets,
      texte, graphiques vectoriels, annotations simples, images JPEG / Flate /
-     CCITT G3-G4, images en ligne, polices Type 3, découpe rectangulaire,
+     CCITT G3-G4, JPEG 2000, JBIG2, images en ligne, calques (OCG),
+     espaces Lab / ICC / Separation / DeviceN (fonctions types 0, 2, 3, 4), polices Type 3, découpe rectangulaire,
      dégradés axiaux et radiaux, motifs de pavage, transparence constante)
    - Aucune limite fixe de pages ou d'objets : listes chaînées dans le tas
    - Création de documents, pages, rotation, recadrage, filigrane, numérotation
@@ -18,7 +19,7 @@
    - Enregistrement incrémental (le fichier d'origine, ses polices incorporées,
      liens, champs de formulaire et signets sont conservés) ou réécriture
      complète compressée (Flate) ; exportation en texte et en image BMP
-   - Non pris en charge : JPEG 2000 et JBIG2 (cadre gris), PDF chiffrés
+   - Non pris en charge : PDF chiffrés, maillages de dégradé (types 4 à 7)
    - Annuler / Rétablir
 
   Tout le code est contenu dans ce seul fichier (aucun $I, aucune unité
@@ -141,6 +142,7 @@ Type
   Rgb, Rgb2: LongInt;
   Wd, Size, Style, Fill: Byte;
   Alpha: Byte;              { transparence du remplissage (0 ou 255 : opaque) }
+  Layer: Word;              { calque (OCG) : 0 aucun, indice + 1, $FFFF toujours masqué }
   P0, PN: LongInt;
   Src: Byte;                { 0 nouveau, 1 contenu d'origine, 2 annotation d'origine, 3 aperçu seul }
   SrcNum: LongInt;          { n° d'objet PDF d'origine (annotations) }
@@ -149,6 +151,16 @@ Type
   Txt: String[119];
  End;
  PObjRec = ^TObjRec;
+
+ { Calques (groupes de contenu optionnel) }
+ TLayer = Record
+  Num: LongInt;
+  Name: String[40];
+  On: Boolean;
+ End;
+ PLayer = ^TLayer;
+ TLayerArr = Array[0..1000000] Of TLayer;
+ PLayerArr = ^TLayerArr;
 
  { Listes chaînées de blocs allouées dans le tas : aucune limite fixe. }
  PObjBlock = ^TObjBlock;
@@ -531,6 +543,48 @@ End;
 { ---------------------------------------------------------------------- }
 { Utilitaires                                                              }
 { ---------------------------------------------------------------------- }
+
+Var
+ Layers: PLayerArr;
+ LayerCount, LayerCap: Integer;
+
+Function LayerOn(L: Integer): Boolean;
+Begin
+ If L = 0 Then LayerOn := True
+ Else If (L = $FFFF) Or (L > LayerCount) Or (Layers = Nil) Then LayerOn := L = 0
+ Else LayerOn := Layers^[L - 1].On;
+End;
+
+Function LayerAdd(Num: LongInt; Const Name: String; On: Boolean): Integer;
+Var
+ P: Pointer;
+ NewCap: Integer;
+Begin
+ LayerAdd := -1;
+ If LayerCount >= LayerCap Then Begin
+  NewCap := LayerCap * 2 + 16;
+  If NewCap > 60000 Then Exit;
+  P := Layers;
+  ReAllocMem(P, NewCap * SizeOf(TLayer));
+  If P = Nil Then Exit;
+  Layers := P;
+  LayerCap := NewCap;
+ End;
+ Layers^[LayerCount].Num := Num;
+ Layers^[LayerCount].Name := Name;
+ Layers^[LayerCount].On := On;
+ Inc(LayerCount);
+ LayerAdd := LayerCount - 1;
+End;
+
+Function LayerFind(Num: LongInt): Integer;
+Var
+ I: Integer;
+Begin
+ LayerFind := -1;
+ For I := 0 To LayerCount - 1 Do
+  If Layers^[I].Num = Num Then Begin LayerFind := I; Exit; End;
+End;
 
 Function IMin(A, B: LongInt): LongInt;
 Begin
@@ -2574,7 +2628,7 @@ Begin
  Rectangle(C16(OX), C16(OY), C16(OX + DW), C16(OY + DH));
  For I := 1 To 3 Do Begin
   For SX1 := 0 To ObjCount - 1 Do
-   If ObjP(SX1)^.Page = Pg Then DrawObj(ObjP(SX1)^, I);
+   If (ObjP(SX1)^.Page = Pg) And LayerOn(ObjP(SX1)^.Layer) Then DrawObj(ObjP(SX1)^, I);
  End;
  If Full Then Begin
   If (FindObj >= 0) And (FindObj < ObjCount) Then
@@ -2595,6 +2649,7 @@ End;
 
 Procedure AllocDoc;
 Begin
+ LayerCount := 0;
  ObjHead := Nil; ObjCurBlk := Nil; ObjBlocks := 0; ObjCount := 0;
  PgHead := Nil; PgCurBlk := Nil; PgBlocks := 0; PageCount := 0;
  PoolHead := Nil; PoolCurBlk := Nil; PoolBlocks := 0; PoolCount := 0;
@@ -3013,6 +3068,7 @@ Begin
  For I := ObjCount - 1 DownTo 0 Do Begin
   O := @ObjP(I)^;
   If O^.Page <> Pg Then Continue;
+  If Not LayerOn(O^.Layer) Then Continue;
   NormBox(O^, NX1, NY1, NX2, NY2);
   Hit := False;
   Case O^.Kind Of
@@ -3382,6 +3438,7 @@ Function ObjEmits(Const O: TObjRec; I: LongInt): Boolean;
 Begin
  ObjEmits := False;
  If O.Src = 3 Then Exit;
+ If Not LayerOn(O.Layer) Then Exit;
  Case CMode Of
   0: If (O.Src = 2) And (Not InDrop(O.SrcNum)) Then Exit;
   1: If (Not ((O.Src = 0) Or ((O.Src = 2) And InDrop(O.SrcNum)))) Or (I >= CFirstOrig) Then Exit;
@@ -6035,42 +6092,779 @@ End;
 
 
 {$ENDIF}
-
 { ---------------------------------------------------------------------- }
-{ Images : décodage (JPEG, Flate brut, palettes, masques)                   }
+{ Fonctions PDF (types 0, 2, 3 et 4) et espaces colorimétriques            }
 { ---------------------------------------------------------------------- }
 
 {$IFDEF FPC}
-Const
- IMGMAXBYTES = 100000000;
-
 Type
  TBigBytes = Array[0..134217727] Of Byte;
  PBigBytes = ^TBigBytes;
 
-Var
- IW, IH, IBpc, ICS, IComps, IPalBase, IRow: LongInt;
- IInv, IMaskImg, IJpeg: Boolean;
- IData: PBigBytes;
- IRGB: PBigBytes;
- IPal: Array[0..767] Of Byte;
- IPalN: Integer;
- IFlt: Array[0..3] Of String[24];
- INF, IPred, ICols, IClr: Integer;
- IK, ICCCols: LongInt;
- IBlackIs1, IByteAlign: Boolean;
+Function FnFloor(X: Real): Real;
+Begin
+ If X >= 0 Then FnFloor := Int(X)
+ Else If Frac(X) = 0 Then FnFloor := X
+ Else FnFloor := Int(X) - 1;
+End;
 
-{ Analyse d'un espace colorimétrique à la position V }
-Function ParseCS(V: LongInt; Depth: Integer; Var CS, Comps, PalBase: LongInt): Boolean;
+Function FnCeil(X: Real): Real;
+Begin
+ FnCeil := -FnFloor(-X);
+End;
+
+Function FnAtan2(Y, X: Real): Real;
+Begin
+ If X > 0 Then FnAtan2 := ArcTan(Y / X)
+ Else If X < 0 Then Begin
+  If Y >= 0 Then FnAtan2 := ArcTan(Y / X) + Pi Else FnAtan2 := ArcTan(Y / X) - Pi;
+ End
+ Else If Y > 0 Then FnAtan2 := Pi / 2
+ Else If Y < 0 Then FnAtan2 := -Pi / 2
+ Else FnAtan2 := 0;
+End;
+
+Const
+ PSMAXCODE = 1500;
+ PSMAXPROG = 6;
+ PSOPS = 'abs add atan ceiling cos cvi cvr div exp floor idiv ln log mod mul neg round sin sqrt sub truncate ' +
+         'and bitshift eq false ge gt le lt ne not or true xor copy dup exch index pop roll ';
+
+Type
+ TPSIns = Record
+  Op: SmallInt;      { 0 empile V, 1.. opérateur, 100 saut si faux, 101 saut, 102 vide }
+  V: Real;
+ End;
+ TPSProg = Record
+  Num: LongInt;
+  N: Integer;
+  Ins: Array[0..PSMAXCODE - 1] Of TPSIns;
+ End;
+ PPSProg = ^TPSProg;
+ TSamp = Record
+  Num: LongInt;
+  Data: PBigBytes;
+  Len: LongInt;
+ End;
+
+Var
+ PSProgs: Array[0..PSMAXPROG - 1] Of PPSProg;
+ PSNProg, PSNext: Integer;
+ SampCache: Array[0..3] Of TSamp;
+ SampNext: Integer;
+ FnBuf: PByteBuf;
+
+{ Lecture d'un tableau de nombres (suit une référence indirecte éventuelle) }
+Function ReadNumsR(P: LongInt; Var A: Array Of Real; Max: Integer): Integer;
+Var
+ N: Integer;
+ S: TSrcState;
+Begin
+ ReadNumsR := 0;
+ If P < 0 Then Exit;
+ N := RefAt(P);
+ If N > 0 Then Begin
+  SaveSrc(S);
+  P := EnterObj(N);
+  If P >= 0 Then ReadNumsR := ReadNums(P, A, Max);
+  RestoreSrc(S);
+ End
+ Else ReadNumsR := ReadNums(P, A, Max);
+End;
+
+Procedure PSFreeAll;
+Var
+ I: Integer;
+Begin
+ For I := 0 To PSNProg - 1 Do
+  If PSProgs[I] <> Nil Then Begin Dispose(PSProgs[I]); PSProgs[I] := Nil; End;
+ PSNProg := 0; PSNext := 0;
+ For I := 0 To 3 Do
+  If SampCache[I].Data <> Nil Then Begin FreeMem(SampCache[I].Data, SampCache[I].Len + 16); SampCache[I].Data := Nil; End;
+ For I := 0 To 3 Do SampCache[I].Num := 0;
+End;
+
+{ Compile le programme PostScript du flux Num (fonction de type 4) }
+Function PSCompile(Num: LongInt): PPSProg;
+Var
+ L: LongInt;
+ Pr: PPSProg;
+ I, Slot, Sp, Cp: Integer;
+ Pos0: LongInt;
+ Tok: String;
+ OpenSt, ClosedSt: Array[0..63] Of Integer;
+ NO, NC, K, Code: Integer;
+ C: Integer;
+ V: Real;
+ Err: Integer;
+ First: Boolean;
+Begin
+ PSCompile := Nil;
+ For I := 0 To PSNProg - 1 Do
+  If (PSProgs[I] <> Nil) And (PSProgs[I]^.Num = Num) Then Begin PSCompile := PSProgs[I]; Exit; End;
+ If FnBuf = Nil Then GetMem(FnBuf, BUFSZ + 16);
+ SrcMode := 0;
+ If Not LoadStream(Num, FnBuf, L) Then Exit;
+ If L > 30000 Then L := 30000;
+ New(Pr);
+ Pr^.Num := Num; Pr^.N := 0;
+ NO := 0; NC := 0; Pos0 := 0; First := True;
+ While Pos0 < L Do Begin
+  C := FnBuf^[Pos0];
+  If (C <= 32) Then Begin Inc(Pos0); Continue; End;
+  If C = 37 Then Begin
+   While (Pos0 < L) And (FnBuf^[Pos0] <> 10) And (FnBuf^[Pos0] <> 13) Do Inc(Pos0);
+   Continue;
+  End;
+  If (C = 123) Or (C = 125) Then Begin
+   Inc(Pos0);
+   If C = 123 Then Begin
+    If First Then Begin First := False; Continue; End;
+    If (NO >= 64) Or (Pr^.N >= PSMAXCODE - 2) Then Begin Dispose(Pr); Exit; End;
+    Pr^.Ins[Pr^.N].Op := 102; OpenSt[NO] := Pr^.N; Inc(NO); Inc(Pr^.N);
+   End
+   Else Begin
+    If NO > 0 Then Begin
+     Dec(NO);
+     If NC < 64 Then Begin ClosedSt[NC] := OpenSt[NO]; Inc(NC); End;
+    End;
+   End;
+   Continue;
+  End;
+  Tok := '';
+  While (Pos0 < L) And (FnBuf^[Pos0] > 32) And (FnBuf^[Pos0] <> 123) And (FnBuf^[Pos0] <> 125) And (FnBuf^[Pos0] <> 37) Do Begin
+   If Length(Tok) < 30 Then Tok := Tok + Chr(FnBuf^[Pos0]);
+   Inc(Pos0);
+  End;
+  If Pr^.N >= PSMAXCODE - 2 Then Begin Dispose(Pr); Exit; End;
+  If (Tok = 'if') Or (Tok = 'ifelse') Then Begin
+   If Tok = 'if' Then Begin
+    If NC < 1 Then Begin Dispose(Pr); Exit; End;
+    Dec(NC);
+    Pr^.Ins[ClosedSt[NC]].Op := 100;
+    Pr^.Ins[ClosedSt[NC]].V := Pr^.N;
+   End
+   Else Begin
+    If NC < 2 Then Begin Dispose(Pr); Exit; End;
+    Dec(NC, 2);
+    Pr^.Ins[ClosedSt[NC]].Op := 100;
+    Pr^.Ins[ClosedSt[NC]].V := ClosedSt[NC + 1] + 1;
+    Pr^.Ins[ClosedSt[NC + 1]].Op := 101;
+    Pr^.Ins[ClosedSt[NC + 1]].V := Pr^.N;
+   End;
+   Continue;
+  End;
+  Code := Pos(' ' + Tok + ' ', ' ' + PSOPS);
+  If (Code > 0) And (Tok <> '') Then Begin
+   { numéro d'ordre de l'opérateur }
+   K := 1;
+   K := 0;
+   For I := 1 To Code Do If PSOPS[I] = ' ' Then Inc(K);
+   Pr^.Ins[Pr^.N].Op := K + 1; Pr^.Ins[Pr^.N].V := 0;
+   Inc(Pr^.N);
+  End
+  Else Begin
+   Val(Tok, V, Err);
+   If Err <> 0 Then V := 0;
+   Pr^.Ins[Pr^.N].Op := 0; Pr^.Ins[Pr^.N].V := V;
+   Inc(Pr^.N);
+  End;
+ End;
+ If PSNProg < PSMAXPROG Then Begin Slot := PSNProg; Inc(PSNProg); End
+ Else Begin
+  Slot := PSNext; PSNext := (PSNext + 1) Mod PSMAXPROG;
+  If PSProgs[Slot] <> Nil Then Dispose(PSProgs[Slot]);
+ End;
+ PSProgs[Slot] := Pr;
+ PSCompile := Pr;
+End;
+
+Function PSIsInt(V: Real): Boolean;
+Begin
+ PSIsInt := Abs(V - Round(V)) < 1E-9;
+End;
+
+{ Exécute le programme : St en entrée = entrées, en sortie = résultats (SP éléments) }
+Function PSRun(Pr: PPSProg; Var St: Array Of Real; Var SP: Integer): Boolean;
+Var
+ PC, Steps, I, J, N, Sh: Integer;
+ A, B, T: Real;
+ IA, IB: LongInt;
+ Cnt: LongInt;
+ Tmp: Array[0..63] Of Real;
+Begin
+ PSRun := False;
+ PC := 0; Steps := 0;
+ While PC < Pr^.N Do Begin
+  Inc(Steps);
+  If Steps > 30000 Then Exit;
+  With Pr^.Ins[PC] Do Begin
+   Case Op Of
+    0: Begin If SP > High(St) Then Exit; St[SP] := V; Inc(SP); End;
+    100: Begin
+     If SP < 1 Then Exit;
+     Dec(SP);
+     If St[SP] = 0 Then Begin PC := Round(V); Continue; End;
+    End;
+    101: Begin PC := Round(V); Continue; End;
+    102: ;
+   Else
+    Begin
+     Case Op Of
+      1: Begin If SP < 1 Then Exit; St[SP - 1] := Abs(St[SP - 1]); End;
+      2: Begin If SP < 2 Then Exit; St[SP - 2] := St[SP - 2] + St[SP - 1]; Dec(SP); End;
+      3: Begin
+       If SP < 2 Then Exit;
+       A := St[SP - 2]; B := St[SP - 1];
+       T := FnAtan2(A, B) * 180 / Pi;
+       If T < 0 Then T := T + 360;
+       St[SP - 2] := T; Dec(SP);
+      End;
+      4: Begin If SP < 1 Then Exit; St[SP - 1] := FnCeil(St[SP - 1]); End;
+      5: Begin If SP < 1 Then Exit; St[SP - 1] := Cos(St[SP - 1] * Pi / 180); End;
+      6: Begin If SP < 1 Then Exit; St[SP - 1] := Trunc(St[SP - 1]); End;
+      7: ;
+      8: Begin
+       If SP < 2 Then Exit;
+       If St[SP - 1] = 0 Then St[SP - 2] := 0 Else St[SP - 2] := St[SP - 2] / St[SP - 1];
+       Dec(SP);
+      End;
+      9: Begin
+       If SP < 2 Then Exit;
+       A := St[SP - 2]; B := St[SP - 1];
+       If A < 0 Then T := 0 Else If A = 0 Then Begin If B = 0 Then T := 1 Else T := 0; End
+       Else T := Exp(B * Ln(A));
+       St[SP - 2] := T; Dec(SP);
+      End;
+      10: Begin If SP < 1 Then Exit; St[SP - 1] := FnFloor(St[SP - 1]); End;
+      11: Begin
+       If SP < 2 Then Exit;
+       IB := Trunc(St[SP - 1]); IA := Trunc(St[SP - 2]);
+       If IB = 0 Then St[SP - 2] := 0 Else St[SP - 2] := IA Div IB;
+       Dec(SP);
+      End;
+      12: Begin If SP < 1 Then Exit; If St[SP - 1] > 0 Then St[SP - 1] := Ln(St[SP - 1]) Else St[SP - 1] := 0; End;
+      13: Begin If SP < 1 Then Exit; If St[SP - 1] > 0 Then St[SP - 1] := Ln(St[SP - 1]) / Ln(10) Else St[SP - 1] := 0; End;
+      14: Begin
+       If SP < 2 Then Exit;
+       IB := Trunc(St[SP - 1]); IA := Trunc(St[SP - 2]);
+       If IB = 0 Then St[SP - 2] := 0 Else St[SP - 2] := IA Mod IB;
+       Dec(SP);
+      End;
+      15: Begin If SP < 2 Then Exit; St[SP - 2] := St[SP - 2] * St[SP - 1]; Dec(SP); End;
+      16: Begin If SP < 1 Then Exit; St[SP - 1] := -St[SP - 1]; End;
+      17: Begin If SP < 1 Then Exit; St[SP - 1] := FnFloor(St[SP - 1] + 0.5); End;
+      18: Begin If SP < 1 Then Exit; St[SP - 1] := Sin(St[SP - 1] * Pi / 180); End;
+      19: Begin If SP < 1 Then Exit; If St[SP - 1] > 0 Then St[SP - 1] := Sqrt(St[SP - 1]) Else St[SP - 1] := 0; End;
+      20: Begin If SP < 2 Then Exit; St[SP - 2] := St[SP - 2] - St[SP - 1]; Dec(SP); End;
+      21: Begin If SP < 1 Then Exit; St[SP - 1] := Trunc(St[SP - 1]); End;
+      22, 32, 34: Begin
+       If SP < 2 Then Exit;
+       A := St[SP - 2]; B := St[SP - 1];
+       If PSIsInt(A) And PSIsInt(B) And ((Abs(A) > 1) Or (Abs(B) > 1)) Then Begin
+        IA := Round(A); IB := Round(B);
+        Case Op Of
+         22: IA := IA And IB;
+         32: IA := IA Or IB;
+        Else IA := IA Xor IB;
+        End;
+        St[SP - 2] := IA;
+       End
+       Else Begin
+        Case Op Of
+         22: If (A <> 0) And (B <> 0) Then T := 1 Else T := 0;
+         32: If (A <> 0) Or (B <> 0) Then T := 1 Else T := 0;
+        Else If (A <> 0) <> (B <> 0) Then T := 1 Else T := 0;
+        End;
+        St[SP - 2] := T;
+       End;
+       Dec(SP);
+      End;
+      23: Begin
+       If SP < 2 Then Exit;
+       IA := Round(St[SP - 2]); Sh := Round(St[SP - 1]);
+       If (Sh > 0) And (Sh < 31) Then IA := IA Shl Sh Else If (Sh < 0) And (Sh > -31) Then IA := IA Shr (-Sh);
+       St[SP - 2] := IA; Dec(SP);
+      End;
+      24: Begin If SP < 2 Then Exit; If St[SP - 2] = St[SP - 1] Then T := 1 Else T := 0; St[SP - 2] := T; Dec(SP); End;
+      25: Begin If SP > High(St) Then Exit; St[SP] := 0; Inc(SP); End;
+      26: Begin If SP < 2 Then Exit; If St[SP - 2] >= St[SP - 1] Then T := 1 Else T := 0; St[SP - 2] := T; Dec(SP); End;
+      27: Begin If SP < 2 Then Exit; If St[SP - 2] > St[SP - 1] Then T := 1 Else T := 0; St[SP - 2] := T; Dec(SP); End;
+      28: Begin If SP < 2 Then Exit; If St[SP - 2] <= St[SP - 1] Then T := 1 Else T := 0; St[SP - 2] := T; Dec(SP); End;
+      29: Begin If SP < 2 Then Exit; If St[SP - 2] < St[SP - 1] Then T := 1 Else T := 0; St[SP - 2] := T; Dec(SP); End;
+      30: Begin If SP < 2 Then Exit; If St[SP - 2] <> St[SP - 1] Then T := 1 Else T := 0; St[SP - 2] := T; Dec(SP); End;
+      31: Begin
+       If SP < 1 Then Exit;
+       A := St[SP - 1];
+       If (A = 0) Or (A = 1) Then St[SP - 1] := 1 - A Else St[SP - 1] := Not Round(A);
+      End;
+      33: Begin If SP > High(St) Then Exit; St[SP] := 1; Inc(SP); End;
+      35: Begin
+       If SP < 1 Then Exit;
+       N := Round(St[SP - 1]); Dec(SP);
+       If (N < 0) Or (N > SP) Or (SP + N > High(St) + 1) Then Exit;
+       For I := 0 To N - 1 Do St[SP + I] := St[SP - N + I];
+       Inc(SP, N);
+      End;
+      36: Begin If (SP < 1) Or (SP > High(St)) Then Exit; St[SP] := St[SP - 1]; Inc(SP); End;
+      37: Begin If SP < 2 Then Exit; T := St[SP - 1]; St[SP - 1] := St[SP - 2]; St[SP - 2] := T; End;
+      38: Begin
+       If SP < 1 Then Exit;
+       N := Round(St[SP - 1]); Dec(SP);
+       If (N < 0) Or (N >= SP) Then Exit;
+       St[SP] := St[SP - 1 - N]; Inc(SP);
+      End;
+      39: Begin If SP < 1 Then Exit; Dec(SP); End;
+      40: Begin
+       If SP < 2 Then Exit;
+       J := Round(St[SP - 1]); N := Round(St[SP - 2]); Dec(SP, 2);
+       If (N < 1) Or (N > SP) Or (N > 64) Then Exit;
+       J := J Mod N; If J < 0 Then J := J + N;
+       For I := 0 To N - 1 Do Tmp[(I + J) Mod N] := St[SP - N + I];
+       For I := 0 To N - 1 Do St[SP - N + I] := Tmp[I];
+      End;
+     Else Exit;
+     End;
+    End;
+   End;
+  End;
+  Inc(PC);
+ End;
+ PSRun := True;
+End;
+
+{ Charge (avec cache) le flux d'échantillons d'une fonction de type 0 }
+Function SampLoad(Num: LongInt; Var Data: PBigBytes; Var Len: LongInt): Boolean;
+Var
+ I, Slot: Integer;
+ L: LongInt;
+ Buf: PBigBytes;
+Begin
+ SampLoad := False;
+ For I := 0 To 3 Do
+  If (SampCache[I].Num = Num) And (SampCache[I].Data <> Nil) Then Begin
+   Data := SampCache[I].Data; Len := SampCache[I].Len; SampLoad := True; Exit;
+  End;
+ If FnBuf = Nil Then GetMem(FnBuf, BUFSZ + 16);
+ SrcMode := 0;
+ If Not LoadStream(Num, FnBuf, L) Then Exit;
+ If L < 1 Then Exit;
+ GetMem(Buf, L + 16);
+ If Buf = Nil Then Exit;
+ Move(FnBuf^[0], Buf^[0], L);
+ Slot := SampNext; SampNext := (SampNext + 1) And 3;
+ If SampCache[Slot].Data <> Nil Then FreeMem(SampCache[Slot].Data, SampCache[Slot].Len + 16);
+ SampCache[Slot].Num := Num; SampCache[Slot].Data := Buf; SampCache[Slot].Len := L;
+ Data := Buf; Len := L;
+ SampLoad := True;
+End;
+
+{ Évalue une fonction PDF (entrées Inp, NIn valeurs) ; retourne le nombre de sorties (0 : échec) }
+Function EvalFnM(P: LongInt; Const Inp: Array Of Real; NIn: Integer; Var Out: Array Of Real; Depth: Integer): Integer;
 Var
  S: TSrcState;
- N, T, Hi, K: Integer;
- Q, Q2, P2: LongInt;
- Nm: String;
- BCS, BC, BP: LongInt;
- L: LongInt;
+ N, I, K, NO, N2, Tok, Typ, NC0, NC1, NB, NE, NFn, M, Bps, Corner, Idx: Integer;
+ Q, Pos0: LongInt;
+ C0, C1, Bn, En, Dm, Rg, Dc, Ec: Array[0..15] Of Real;
+ Sz: Array[0..7] Of Real;
+ FPos: Array[0..15] Of LongInt;
+ Ex, Lo, Hi, E0, E1, R, T2, T, Wt, Acc, Fr: Real;
+ Sub: Array[0..7] Of Real;
+ InA: Array[0..7] Of Real;
+ Pr: PPSProg;
+ St: Array[0..99] Of Real;
+ SP: Integer;
+ Data: PBigBytes;
+ DLen, Off, BitP, Stride: LongInt;
+ Fl: Array[0..7] Of LongInt;
+ Fw: Array[0..7] Of Real;
+ CI: Array[0..3] Of LongInt;
+ NumObj: Integer;
+ Function SampleAt(Const Ix: Array Of LongInt; O: Integer): Real;
+ Var
+  II: Integer;
+  Pos, Mul: LongInt;
+  V, Mx: LongInt;
+  BP: Int64;
+ Begin
+  Pos := 0; Mul := 1;
+  For II := 0 To M - 1 Do Begin Pos := Pos + Ix[II] * Mul; Mul := Mul * Round(Sz[II]); End;
+  BP := (Int64(Pos) * NO + O) * Bps;
+  If (BP Shr 3) + 4 > DLen Then Begin SampleAt := 0; Exit; End;
+  Case Bps Of
+   8: V := Data^[BP Shr 3];
+   16: V := Data^[BP Shr 3] * 256 + Data^[(BP Shr 3) + 1];
+   32: V := ((Data^[BP Shr 3] * 256 + Data^[(BP Shr 3) + 1]) * 256 + Data^[(BP Shr 3) + 2]) * 256 + Data^[(BP Shr 3) + 3];
+  Else
+   V := (Data^[BP Shr 3] Shr (8 - Bps - (BP And 7))) And ((1 Shl Bps) - 1);
+  End;
+  If Bps = 32 Then Mx := 2147483647 Else Mx := (1 Shl Bps) - 1;
+  SampleAt := V / Mx;
+ End;
 Begin
- ParseCS := False;
+ EvalFnM := 0;
+ If (P < 0) Or (Depth > 4) Then Exit;
+ SaveSrc(S);
+ NumObj := RefAt(P);
+ N := NumObj;
+ If N > 0 Then P := EnterObj(N);
+ If P < 0 Then Begin RestoreSrc(S); Exit; End;
+ Q := P;
+ Tok := NextTok(Q);
+ If Tok = T_AB Then Begin
+  K := 0;
+  While K <= High(Out) Do Begin
+   Pos0 := Q;
+   Tok := NextTok(Q);
+   If (Tok = T_AE) Or (Tok = T_EOF) Then Break;
+   N2 := EvalFnM(Pos0, Inp, NIn, Sub, Depth + 1);
+   If N2 > 0 Then Out[K] := Sub[0] Else Out[K] := 0;
+   Inc(K);
+   Q := Pos0;
+   SkipValue(Q);
+  End;
+  RestoreSrc(S);
+  EvalFnM := K;
+  Exit;
+ End;
+ If Tok <> T_DB Then Begin RestoreSrc(S); Exit; End;
+ Typ := ValInt(DictFind(P, 'FunctionType'), -1);
+ NC0 := 0; NB := 0; NE := 0;
+ FillChar(Dm, SizeOf(Dm), 0);
+ NO := ReadNums(DictFind(P, 'Domain'), Dm, 16);
+ M := NO Div 2;
+ If M < 1 Then Begin Dm[0] := 0; Dm[1] := 1; M := 1; End;
+ For I := 0 To NIn - 1 Do
+  If I < 8 Then Begin
+   InA[I] := Inp[I];
+   If I < M Then Begin
+    If InA[I] < Dm[2 * I] Then InA[I] := Dm[2 * I];
+    If InA[I] > Dm[2 * I + 1] Then InA[I] := Dm[2 * I + 1];
+   End;
+  End;
+ T := InA[0];
+ If Typ = 2 Then Begin
+  NC0 := ReadNums(DictFind(P, 'C0'), C0, 16);
+  If NC0 < 1 Then Begin C0[0] := 0; NC0 := 1; End;
+  NC1 := ReadNums(DictFind(P, 'C1'), C1, 16);
+  If NC1 < 1 Then Begin C1[0] := 1; NC1 := 1; End;
+  Ex := ValNum(DictFind(P, 'N'), 1);
+  If T <= 0 Then Begin If Ex = 0 Then R := 1 Else R := 0; End
+  Else R := Exp(Ex * Ln(T));
+  NO := NC0;
+  If NC1 < NO Then NO := NC1;
+  If NO > High(Out) + 1 Then NO := High(Out) + 1;
+  For I := 0 To NO - 1 Do Out[I] := C0[I] + R * (C1[I] - C0[I]);
+  RestoreSrc(S);
+  EvalFnM := NO;
+  Exit;
+ End;
+ If Typ = 3 Then Begin
+  NFn := 0;
+  Q := DictFind(P, 'Functions');
+  If Q >= 0 Then Begin
+   If NextTok(Q) = T_AB Then
+    While NFn < 16 Do Begin
+     Pos0 := Q;
+     Tok := NextTok(Q);
+     If (Tok = T_AE) Or (Tok = T_EOF) Then Break;
+     FPos[NFn] := Pos0;
+     Inc(NFn);
+     Q := Pos0;
+     SkipValue(Q);
+    End;
+  End;
+  NB := ReadNums(DictFind(P, 'Bounds'), Bn, 15);
+  NE := ReadNums(DictFind(P, 'Encode'), En, 16);
+  If NFn < 1 Then Begin RestoreSrc(S); Exit; End;
+  K := 0;
+  While (K < NB) And (T >= Bn[K]) Do Inc(K);
+  If K >= NFn Then K := NFn - 1;
+  If K = 0 Then Lo := Dm[0] Else Lo := Bn[K - 1];
+  If (K >= NB) Or (K = NFn - 1) Then Hi := Dm[1] Else Hi := Bn[K];
+  E0 := 0; E1 := 1;
+  If 2 * K + 1 < NE Then Begin E0 := En[2 * K]; E1 := En[2 * K + 1]; End;
+  If Hi = Lo Then T2 := E0 Else T2 := E0 + (T - Lo) * (E1 - E0) / (Hi - Lo);
+  Sub[0] := T2;
+  N2 := EvalFnM(FPos[K], Sub, 1, Out, Depth + 1);
+  RestoreSrc(S);
+  EvalFnM := N2;
+  Exit;
+ End;
+ If (Typ = 4) Or (Typ = 0) Then Begin
+  FillChar(Rg, SizeOf(Rg), 0);
+  NO := ReadNums(DictFind(P, 'Range'), Rg, 16) Div 2;
+  If (NO < 1) Or (NumObj <= 0) Then Begin RestoreSrc(S); Exit; End;
+  If NO > High(Out) + 1 Then NO := High(Out) + 1;
+  If Typ = 4 Then Begin
+   RestoreSrc(S);
+   Pr := PSCompile(NumObj);
+   RestoreSrc(S);
+   If Pr = Nil Then Exit;
+   SP := 0;
+   For I := 0 To M - 1 Do Begin St[SP] := InA[I]; Inc(SP); End;
+   If Not PSRun(Pr, St, SP) Then Exit;
+   If SP < NO Then Exit;
+   For I := 0 To NO - 1 Do Begin
+    R := St[SP - NO + I];
+    If R < Rg[2 * I] Then R := Rg[2 * I];
+    If R > Rg[2 * I + 1] Then R := Rg[2 * I + 1];
+    Out[I] := R;
+   End;
+   EvalFnM := NO;
+   Exit;
+  End;
+  { type 0 : échantillonnée, interpolation multilinéaire }
+  If M > 4 Then Begin RestoreSrc(S); Exit; End;
+  If ReadNums(DictFind(P, 'Size'), Sz, 8) < M Then Begin RestoreSrc(S); Exit; End;
+  Bps := ValInt(DictFind(P, 'BitsPerSample'), 8);
+  If (Bps <> 1) And (Bps <> 2) And (Bps <> 4) And (Bps <> 8) And (Bps <> 12) And (Bps <> 16) And (Bps <> 24) And (Bps <> 32) Then Begin RestoreSrc(S); Exit; End;
+  If (Bps = 12) Or (Bps = 24) Then Begin RestoreSrc(S); Exit; End;
+  For I := 0 To M - 1 Do Begin Ec[2 * I] := 0; Ec[2 * I + 1] := Sz[I] - 1; End;
+  ReadNums(DictFind(P, 'Encode'), Ec, 2 * M);
+  For I := 0 To NO - 1 Do Begin Dc[2 * I] := Rg[2 * I]; Dc[2 * I + 1] := Rg[2 * I + 1]; End;
+  ReadNums(DictFind(P, 'Decode'), Dc, 2 * NO);
+  RestoreSrc(S);
+  If Not SampLoad(NumObj, Data, DLen) Then Begin RestoreSrc(S); Exit; End;
+  RestoreSrc(S);
+  For I := 0 To M - 1 Do Begin
+   If Dm[2 * I + 1] = Dm[2 * I] Then R := Ec[2 * I]
+   Else R := Ec[2 * I] + (InA[I] - Dm[2 * I]) * (Ec[2 * I + 1] - Ec[2 * I]) / (Dm[2 * I + 1] - Dm[2 * I]);
+   If R < 0 Then R := 0;
+   If R > Sz[I] - 1 Then R := Sz[I] - 1;
+   Fl[I] := Trunc(R);
+   If Fl[I] >= Round(Sz[I]) - 1 Then Fl[I] := IMax(0, Round(Sz[I]) - 2);
+   Fw[I] := R - Fl[I];
+   If Round(Sz[I]) < 2 Then Begin Fl[I] := 0; Fw[I] := 0; End;
+  End;
+  For K := 0 To NO - 1 Do Begin
+   Acc := 0;
+   For Corner := 0 To (1 Shl M) - 1 Do Begin
+    Wt := 1;
+    For I := 0 To 3 Do CI[I] := 0;
+    For I := 0 To M - 1 Do Begin
+     If (Corner Shr I) And 1 = 1 Then Begin Wt := Wt * Fw[I]; CI[I] := IMin(Fl[I] + 1, Round(Sz[I]) - 1); End
+     Else Begin Wt := Wt * (1 - Fw[I]); CI[I] := Fl[I]; End;
+    End;
+    If Wt > 0 Then Acc := Acc + Wt * SampleAt(CI, K);
+   End;
+   R := Dc[2 * K] + Acc * (Dc[2 * K + 1] - Dc[2 * K]);
+   If R < Rg[2 * K] Then R := Rg[2 * K];
+   If R > Rg[2 * K + 1] Then R := Rg[2 * K + 1];
+   Out[K] := R;
+  End;
+  EvalFnM := NO;
+  Exit;
+ End;
+ RestoreSrc(S);
+End;
+
+Function EvalFn(P: LongInt; T: Real; Var Out: Array Of Real; Depth: Integer): Integer;
+Var
+ A: Array[0..0] Of Real;
+Begin
+ A[0] := T;
+ EvalFn := EvalFnM(P, A, 1, Out, Depth);
+End;
+{$ENDIF}
+
+{$IFDEF FPC}
+Const
+ CSMAXC = 40;
+
+Type
+ PLongArr = ^TLongArr2;
+ TLongArr2 = Array[0..33554431] Of LongInt;
+ TCSDesc = Record
+  Kind: Integer;       { 1 gris, 3 RVB, 4 CMJN, 5 indexé, 6 Lab, 7 teinte (Separation / DeviceN), 8 motif }
+  N: Integer;          { nombre de composantes }
+  AltKind: Integer;    { espace de base d'une teinte : 1, 3, 4 ou 6 }
+  Hi: Integer;         { indexé : valeur maximale }
+  PalN: Integer;       { indexé : octets RVB (3 par entrée) }
+  Pal: PBigBytes;
+  Xw, Yw, Zw: Real;    { Lab : point blanc }
+  Amin, Amax, Bmin, Bmax: Real;
+  Lut: PLongArr;       { teinte : table RVB échantillonnée }
+  LutG: Integer;       { pas de la table par composante }
+  NoPaint: Boolean;    { Separation /None }
+ End;
+
+ TCSCacheEnt = Record
+  Key: String[80];
+  D: TCSDesc;
+  Used: Boolean;
+ End;
+
+Var
+ CSCache: Array[0..CSMAXC - 1] Of TCSCacheEnt;
+
+Procedure CSDescFree(Var D: TCSDesc);
+Begin
+ If D.Pal <> Nil Then Begin FreeMem(D.Pal, D.PalN + 16); D.Pal := Nil; End;
+ If D.Lut <> Nil Then Begin FreeMem(D.Lut, LongInt(D.LutG) * 0 + D.PalN + 16); D.Lut := Nil; End;
+End;
+
+Procedure CSCacheFree;
+Var
+ I: Integer;
+Begin
+ For I := 0 To CSMAXC - 1 Do
+  If CSCache[I].Used Then Begin
+   If CSCache[I].D.Pal <> Nil Then FreeMem(CSCache[I].D.Pal, CSCache[I].D.PalN + 16);
+   If CSCache[I].D.Lut <> Nil Then FreeMem(CSCache[I].D.Lut, CSCache[I].D.PalN + 16);
+   CSCache[I].D.Pal := Nil; CSCache[I].D.Lut := Nil;
+   CSCache[I].Used := False;
+  End;
+End;
+
+Function CsClamp01(V: Real): Real;
+Begin
+ If V < 0 Then V := 0;
+ If V > 1 Then V := 1;
+ CsClamp01 := V;
+End;
+
+Function CsToByte(V: Real): LongInt;
+Begin
+ CsToByte := Round(CsClamp01(V) * 255);
+End;
+
+Function CsGamma(V: Real): Real;
+Begin
+ If V <= 0.0031308 Then CsGamma := 12.92 * V
+ Else CsGamma := 1.055 * Exp(Ln(V) / 2.4) - 0.055;
+End;
+
+{ CMJN -> RVB : approximation polynomiale proche du rendu des profils offset (SWOP) }
+Function CmykPoly(C, M, Y, K: Real): LongInt;
+Var
+ R, G, B: Real;
+Begin
+ C := CsClamp01(C); M := CsClamp01(M); Y := CsClamp01(Y); K := CsClamp01(K);
+ R := 255 + C * (-4.387332384609988 * C + 54.48615194189176 * M + 18.82290502165302 * Y + 212.25662451639585 * K - 285.2331026137004) +
+      M * (1.7149763477362134 * M - 5.6096736904047315 * Y - 17.873870861415444 * K - 5.497006427196366) +
+      Y * (-2.5217340131683033 * Y - 21.248923337353073 * K + 17.5119270841813) +
+      K * (-21.86122147463605 * K - 189.48180835922747);
+ G := 255 + C * (8.841041422036149 * C + 60.118027045597366 * M + 6.871425592049007 * Y + 31.159100130055922 * K - 79.2970844816548) +
+      M * (-15.310361306967817 * M + 17.575251261109482 * Y + 131.35250912493976 * K - 190.9453302588951) +
+      Y * (4.444339102852739 * Y + 9.8632861493405 * K - 24.86741582555878) +
+      K * (-20.737325471181034 * K - 187.80453709719578);
+ B := 255 + C * (0.8842522430003296 * C + 8.078677503112928 * M + 30.89978309703729 * Y - 0.23883238689178934 * K - 14.183576799673286) +
+      M * (10.49593273432072 * M + 63.02378494754052 * Y + 50.606957656360734 * K - 112.23884253719248) +
+      Y * (0.03296041114873217 * Y + 115.60384449646641 * K - 193.58209356861505) +
+      K * (-22.33816807309886 * K - 180.12613974708367);
+ If R < 0 Then R := 0; If R > 255 Then R := 255;
+ If G < 0 Then G := 0; If G > 255 Then G := 255;
+ If B < 0 Then B := 0; If B > 255 Then B := 255;
+ CmykPoly := RGBOf(Round(R), Round(G), Round(B));
+End;
+
+Function LabToRgb(L, A, B: Real; Const D: TCSDesc): LongInt;
+Var
+ Fy, Fx, Fz, X, Y, Z, R, G, Bl: Real;
+ Function Gf(T: Real): Real;
+ Begin
+  If T > 6 / 29 Then Gf := T * T * T Else Gf := 3 * (6 / 29) * (6 / 29) * (T - 4 / 29);
+ End;
+Begin
+ If A < D.Amin Then A := D.Amin;
+ If A > D.Amax Then A := D.Amax;
+ If B < D.Bmin Then B := D.Bmin;
+ If B > D.Bmax Then B := D.Bmax;
+ If L < 0 Then L := 0;
+ If L > 100 Then L := 100;
+ Fy := (L + 16) / 116; Fx := Fy + A / 500; Fz := Fy - B / 200;
+ { adaptation vers le blanc D65 par mise à l'échelle }
+ X := Gf(Fx) * 0.9505; Y := Gf(Fy); Z := Gf(Fz) * 1.089;
+ R := 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
+ G := -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
+ Bl := 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
+ LabToRgb := RGBOf(CsToByte(CsGamma(CsClamp01(R))), CsToByte(CsGamma(CsClamp01(G))), CsToByte(CsGamma(CsClamp01(Bl))));
+End;
+
+{ Composantes d'un espace de base (1 gris, 3 RVB, 4 CMJN, 6 Lab) -> RVB }
+Function CompToRgb(Kind: Integer; Const C: Array Of Real; Const D: TCSDesc): LongInt;
+Begin
+ Case Kind Of
+  1: CompToRgb := RGBOf(CsToByte(C[0]), CsToByte(C[0]), CsToByte(C[0]));
+  3: CompToRgb := RGBOf(CsToByte(C[0]), CsToByte(C[1]), CsToByte(C[2]));
+  4: CompToRgb := CmykPoly(C[0], C[1], C[2], C[3]);
+  6: CompToRgb := LabToRgb(C[0], C[1], C[2], D);
+ Else CompToRgb := 0;
+ End;
+End;
+
+{ Couleur RVB d'un jeu de composantes dans l'espace D }
+Function ColorToRgb(Const D: TCSDesc; Const C: Array Of Real; N: Integer): LongInt;
+Var
+ I, Idx, G, Mul: LongInt;
+ Q: Real;
+ Cc: Array[0..3] Of Real;
+Begin
+ ColorToRgb := 0;
+ Case D.Kind Of
+  1, 3, 4, 6: Begin
+   For I := 0 To 3 Do If I < N Then Cc[I] := C[I] Else Cc[I] := 0;
+   ColorToRgb := CompToRgb(D.Kind, Cc, D);
+  End;
+  5: Begin
+   If N < 1 Then Exit;
+   Idx := Round(C[0]);
+   If Idx < 0 Then Idx := 0;
+   If Idx > D.Hi Then Idx := D.Hi;
+   If (D.Pal <> Nil) And (Idx * 3 + 2 < D.PalN) Then
+    ColorToRgb := RGBOf(D.Pal^[Idx * 3], D.Pal^[Idx * 3 + 1], D.Pal^[Idx * 3 + 2]);
+  End;
+  7: Begin
+   If D.Lut = Nil Then Begin
+    { teinte non évaluable : gris proportionnel à la plus forte composante }
+    Q := 0;
+    For I := 0 To N - 1 Do If C[I] > Q Then Q := C[I];
+    ColorToRgb := RGBOf(CsToByte(1 - Q), CsToByte(1 - Q), CsToByte(1 - Q));
+    Exit;
+   End;
+   G := D.LutG; Idx := 0; Mul := 1;
+   For I := 0 To D.N - 1 Do Begin
+    If I < N Then Q := CsClamp01(C[I]) Else Q := 0;
+    Idx := Idx + Round(Q * (G - 1)) * Mul;
+    Mul := Mul * G;
+   End;
+   ColorToRgb := D.Lut^[Idx];
+  End;
+ End;
+End;
+
+{ Lit les paramètres d'un dictionnaire Lab }
+Procedure CSLabParams(P: LongInt; Var D: TCSDesc);
+Var
+ A: Array[0..5] Of Real;
+Begin
+ D.Xw := 0.9642; D.Yw := 1; D.Zw := 0.8249;
+ D.Amin := -100; D.Amax := 100; D.Bmin := -100; D.Bmax := 100;
+ If P < 0 Then Exit;
+ If ReadNums(DictFind(P, 'WhitePoint'), A, 3) = 3 Then Begin D.Xw := A[0]; D.Yw := A[1]; D.Zw := A[2]; End;
+ If ReadNums(DictFind(P, 'Range'), A, 4) = 4 Then Begin D.Amin := A[0]; D.Amax := A[1]; D.Bmin := A[2]; D.Bmax := A[3]; End;
+End;
+
+Function ParseCSDesc(V: LongInt; Depth: Integer; Var D: TCSDesc): Boolean;
+Var
+ S: TSrcState;
+ N, T, I, K, NNames, G, Tot, Mul, J: Integer;
+ Q, Q2, FnPos, AltPos, P2: LongInt;
+ Nm: String;
+ Alt: TCSDesc;
+ L: LongInt;
+ Inp: Array[0..7] Of Real;
+ Out: Array[0..7] Of Real;
+ NO: Integer;
+ Hi: LongInt;
+ Rgb: LongInt;
+ Base: TCSDesc;
+ Idx: LongInt;
+ Comp: Array[0..3] Of Real;
+Begin
+ ParseCSDesc := False;
+ FillChar(D, SizeOf(D), 0);
  If (V < 0) Or (Depth > 3) Then Exit;
  SaveSrc(S);
  N := RefAt(V);
@@ -6080,309 +6874,186 @@ Begin
  T := NextTok(Q);
  If T = T_NAME Then Begin
   Nm := TokS;
-  If (Nm = 'DeviceGray') Or (Nm = 'G') Or (Nm = 'CalGray') Then Begin CS := 1; Comps := 1; ParseCS := True; End
-  Else If (Nm = 'DeviceRGB') Or (Nm = 'RGB') Or (Nm = 'CalRGB') Then Begin CS := 3; Comps := 3; ParseCS := True; End
-  Else If (Nm = 'DeviceCMYK') Or (Nm = 'CMYK') Then Begin CS := 4; Comps := 4; ParseCS := True; End;
+  If (Nm = 'DeviceGray') Or (Nm = 'G') Or (Nm = 'CalGray') Then Begin D.Kind := 1; D.N := 1; ParseCSDesc := True; End
+  Else If (Nm = 'DeviceRGB') Or (Nm = 'RGB') Or (Nm = 'CalRGB') Then Begin D.Kind := 3; D.N := 3; ParseCSDesc := True; End
+  Else If (Nm = 'DeviceCMYK') Or (Nm = 'CMYK') Then Begin D.Kind := 4; D.N := 4; ParseCSDesc := True; End
+  Else If Nm = 'Pattern' Then Begin D.Kind := 8; D.N := 0; ParseCSDesc := True; End;
+  RestoreSrc(S);
+  Exit;
+ End;
+ If T <> T_AB Then Begin RestoreSrc(S); Exit; End;
+ T := NextTok(Q);
+ If T <> T_NAME Then Begin RestoreSrc(S); Exit; End;
+ Nm := TokS;
+ If Nm = 'CalGray' Then Begin D.Kind := 1; D.N := 1; ParseCSDesc := True; End
+ Else If Nm = 'CalRGB' Then Begin D.Kind := 3; D.N := 3; ParseCSDesc := True; End
+ Else If (Nm = 'DeviceGray') Or (Nm = 'G') Then Begin D.Kind := 1; D.N := 1; ParseCSDesc := True; End
+ Else If (Nm = 'DeviceRGB') Or (Nm = 'RGB') Then Begin D.Kind := 3; D.N := 3; ParseCSDesc := True; End
+ Else If (Nm = 'DeviceCMYK') Or (Nm = 'CMYK') Then Begin D.Kind := 4; D.N := 4; ParseCSDesc := True; End
+ Else If Nm = 'Lab' Then Begin
+  D.Kind := 6; D.N := 3;
+  Q2 := Q;
+  CSLabParams(Q2, D);
+  ParseCSDesc := True;
  End
- Else If T = T_AB Then Begin
-  T := NextTok(Q);
-  Nm := TokS;
-  If T = T_NAME Then Begin
-   If (Nm = 'DeviceGray') Or (Nm = 'CalGray') Then Begin CS := 1; Comps := 1; ParseCS := True; End
-   Else If (Nm = 'DeviceRGB') Or (Nm = 'CalRGB') Or (Nm = 'Lab') Then Begin CS := 3; Comps := 3; ParseCS := True; End
-   Else If Nm = 'DeviceCMYK' Then Begin CS := 4; Comps := 4; ParseCS := True; End
-   Else If Nm = 'ICCBased' Then Begin
+ Else If Nm = 'ICCBased' Then Begin
+  N := RefAt(Q);
+  K := 3;
+  If N > 0 Then Begin
+   P2 := EnterObj(N);
+   If P2 >= 0 Then K := ValInt(DictFind(P2, 'N'), 3);
+  End;
+  If K = 1 Then D.Kind := 1 Else If K = 4 Then D.Kind := 4 Else D.Kind := 3;
+  D.N := D.Kind;
+  ParseCSDesc := True;
+ End
+ Else If Nm = 'Pattern' Then Begin D.Kind := 8; D.N := 0; ParseCSDesc := True; End
+ Else If (Nm = 'Indexed') Or (Nm = 'I') Then Begin
+  Q2 := Q;
+  If ParseCSDesc(Q2, Depth + 1, Base) Then Begin
+   If (Base.Kind = 5) Or (Base.Kind = 8) Then Begin CSDescFree(Base); RestoreSrc(S); Exit; End;
+   SkipValue(Q);
+   If NextTok(Q) = T_NUM Then Begin
+    Hi := Round(TokR);
+    If Hi > 255 Then Hi := 255;
+    If Hi < 0 Then Hi := 0;
+    D.Kind := 5; D.N := 1; D.Hi := Hi;
+    D.PalN := (Hi + 1) * 3;
+    GetMem(D.Pal, D.PalN + 16);
+    FillChar(D.Pal^, D.PalN + 16, 0);
+    { table de couleurs : flux ou chaîne }
     N := RefAt(Q);
+    L := 0;
     If N > 0 Then Begin
-     P2 := EnterObj(N);
-     If P2 >= 0 Then Begin
-      K := ValInt(DictFind(P2, 'N'), 3);
-      If K = 1 Then CS := 1 Else If K = 4 Then CS := 4 Else CS := 3;
-      Comps := K;
-      If K = 1 Then Comps := 1 Else If K = 4 Then Comps := 4 Else Comps := 3;
-      ParseCS := True;
+     SrcMode := 0;
+     If LoadStream(N, TuBuf, L) Then Else L := 0;
+    End
+    Else If NextTok(Q) = T_STR Then Begin
+     L := StrLen;
+     If L > 768 Then L := 768;
+     Move(StrBuf[0], TuBuf^[0], L);
+    End;
+    For I := 0 To Hi Do Begin
+     For J := 0 To 3 Do Comp[J] := 0;
+     For J := 0 To Base.N - 1 Do
+      If I * Base.N + J < L Then Comp[J] := TuBuf^[I * Base.N + J] / 255 Else Comp[J] := 0;
+     If Base.Kind = 6 Then Begin
+      Comp[0] := Comp[0] * 100;
+      Comp[1] := Base.Amin + Comp[1] * (Base.Amax - Base.Amin);
+      Comp[2] := Base.Bmin + Comp[2] * (Base.Bmax - Base.Bmin);
+     End;
+     If Base.Kind = 7 Then Rgb := ColorToRgb(Base, Comp, Base.N)
+     Else Rgb := CompToRgb(Base.Kind, Comp, Base);
+     D.Pal^[I * 3] := (Rgb Shr 16) And 255; D.Pal^[I * 3 + 1] := (Rgb Shr 8) And 255; D.Pal^[I * 3 + 2] := Rgb And 255;
+    End;
+    D.AltKind := Base.Kind;
+    CSDescFree(Base);
+    ParseCSDesc := True;
+   End
+   Else CSDescFree(Base);
+  End;
+ End
+ Else If (Nm = 'Separation') Or (Nm = 'DeviceN') Then Begin
+  NNames := 1;
+  If Nm = 'Separation' Then Begin
+   If NextTok(Q) = T_NAME Then If TokS = 'None' Then D.NoPaint := True;
+  End
+  Else Begin
+   NNames := 0;
+   If NextTok(Q) = T_AB Then
+    While NNames < 32 Do Begin
+     T := NextTok(Q);
+     If T <> T_NAME Then Break;
+     Inc(NNames);
+    End;
+  End;
+  If NNames < 1 Then Begin RestoreSrc(S); Exit; End;
+  AltPos := Q;
+  Q2 := Q;
+  SkipValue(Q);
+  FnPos := Q;
+  If ParseCSDesc(Q2, Depth + 1, Alt) Then Begin
+   If Alt.Kind In [1, 3, 4, 6] Then Begin
+    D.Kind := 7; D.N := NNames; D.AltKind := Alt.Kind;
+    D.Xw := Alt.Xw; D.Yw := Alt.Yw; D.Zw := Alt.Zw;
+    D.Amin := Alt.Amin; D.Amax := Alt.Amax; D.Bmin := Alt.Bmin; D.Bmax := Alt.Bmax;
+    CSDescFree(Alt);
+    ParseCSDesc := True;
+    If NNames <= 4 Then Begin
+     Case NNames Of 1: G := 256; 2: G := 64; 3: G := 24; Else G := 12; End;
+     Tot := 1;
+     For I := 1 To NNames Do Tot := Tot * G;
+     D.LutG := G;
+     D.PalN := Tot * 4;
+     GetMem(D.Lut, Tot * 4 + 16);
+     If D.Lut <> Nil Then Begin
+      For K := 0 To Tot - 1 Do Begin
+       Mul := K;
+       For I := 0 To NNames - 1 Do Begin
+        Inp[I] := (Mul Mod G) / (G - 1);
+        Mul := Mul Div G;
+       End;
+       FillChar(Out, SizeOf(Out), 0);
+       NO := EvalFnM(FnPos, Inp, NNames, Out, 0);
+       If NO < 1 Then Begin
+        { fonction non évaluable : gris proportionnel }
+        Out[0] := 1 - Inp[0]; Out[1] := Out[0]; Out[2] := Out[0]; D.AltKind := 3;
+       End;
+       D.Lut^[K] := CompToRgb(D.AltKind, Out, D);
+      End;
      End;
     End;
    End
-   Else If Nm = 'Separation' Then Begin CS := 6; Comps := 1; ParseCS := True; End
-   Else If (Nm = 'Indexed') Or (Nm = 'I') Then Begin
-    Q2 := Q;
-    If ParseCS(Q2, Depth + 1, BCS, BC, BP) And (BCS <> 5) And (BCS <> 6) Then Begin
-     SkipValue(Q);
-     If NextTok(Q) = T_NUM Then Begin
-      Hi := Round(TokR);
-      If Hi > 255 Then Hi := 255;
-      N := RefAt(Q);
-      IPalN := 0;
-      If N > 0 Then Begin
-       SkipValue(Q);
-       SrcMode := 0;
-       If LoadStream(N, TuBuf, L) Then Begin
-        K := L;
-        If K > 768 Then K := 768;
-        Move(TuBuf^[0], IPal[0], K);
-        IPalN := K;
-       End;
-      End
-      Else If NextTok(Q) = T_STR Then Begin
-       K := StrLen;
-       If K > 768 Then K := 768;
-       Move(StrBuf[0], IPal[0], K);
-       IPalN := K;
-      End;
-      If IPalN > 0 Then Begin CS := 5; Comps := 1; PalBase := BC; ParseCS := True; End;
-     End;
-    End;
-   End;
+   Else CSDescFree(Alt);
   End;
  End;
  RestoreSrc(S);
 End;
 
-{ Lecture du flux brut (encore encodé) de l'objet en P }
-Function ReadRawStream(P: LongInt; Var Raw: Pointer; Var RawLen: LongInt): Boolean;
+{ Couleur initiale d'un espace de couleurs }
+Function CSInitialRgb(Const D: TCSDesc): LongInt;
 Var
- V, Q, DStart, Len, Done, ToRead: LongInt;
- LenVal: LongInt;
- Got: Word;
- Buf: PBigBytes;
-Begin
- ReadRawStream := False;
- Raw := Nil;
- RawLen := 0;
- SrcMode := 0;
- V := DictFind(P, 'Length');
- LenVal := -1;
- If V >= 0 Then LenVal := ValInt(V, -1);
- SrcMode := 0;
- Q := P;
- SkipValue(Q);
- If NextTok(Q) <> T_OP Then Exit;
- If TokS <> 'stream' Then Exit;
- DStart := Q;
- If Not FindStreamData(DStart, Len, LenVal) Then Exit;
- If (Len < 1) Or (Len > IMGMAXBYTES) Then Exit;
- GetMem(Buf, Len + 16);
- Seek(PF, DStart);
- Done := 0;
- While Done < Len Do Begin
-  ToRead := Len - Done;
-  If ToRead > 32768 Then ToRead := 32768;
-  Got := 0;
-  BlockRead(PF, Buf^[Done], ToRead, Got);
-  If Got = 0 Then Break;
-  Done := Done + Got;
- End;
- RBase := -1; RLen := 0;
- If Done < 1 Then Begin FreeMem(Buf, Len + 16); Exit; End;
- Raw := Buf;
- RawLen := Done;
- ReadRawStream := True;
-End;
-
-Procedure ReadFiltersAndParms(P: LongInt);
-Var
- V, Q, Pos0, DP: LongInt;
- T: Integer;
-Begin
- INF := 0; IPred := 1; ICols := 1; IClr := 1;
- IK := 0; ICCCols := 1728; IBlackIs1 := False; IByteAlign := False;
- SrcMode := 0;
- V := DictFind(P, 'Filter');
- If V < 0 Then V := DictFind(P, 'F');
- If V >= 0 Then Begin
-  Q := V;
-  T := NextTok(Q);
-  If T = T_NAME Then Begin IFlt[0] := TokS; INF := 1; End
-  Else If T = T_AB Then
-   While INF < 4 Do Begin
-    T := NextTok(Q);
-    If T = T_NAME Then Begin IFlt[INF] := TokS; Inc(INF); End Else Break;
-   End;
- End;
- V := DictFind(P, 'DecodeParms');
- If V < 0 Then V := DictFind(P, 'DP');
- If V >= 0 Then Begin
-  DP := -1;
-  Q := V;
-  Pos0 := Q;
-  T := NextTok(Q);
-  If T = T_DB Then DP := Pos0
-  Else If T = T_AB Then
-   While True Do Begin
-    Pos0 := Q;
-    T := NextTok(Q);
-    If T = T_DB Then Begin DP := Pos0; Q := Pos0; SkipValue(Q); End
-    Else If (T = T_AE) Or (T = T_EOF) Then Break;
-   End;
-  If DP >= 0 Then Begin
-   IPred := ValInt(DictFind(DP, 'Predictor'), 1);
-   ICols := ValInt(DictFind(DP, 'Columns'), 1);
-   IClr := ValInt(DictFind(DP, 'Colors'), 1);
-   IK := ValInt(DictFind(DP, 'K'), 0);
-   ICCCols := ValInt(DictFind(DP, 'Columns'), 1728);
-   Q := DictFind(DP, 'BlackIs1');
-   If Q >= 0 Then If NextTok(Q) = T_OP Then IBlackIs1 := TokS = 'true';
-   Q := DictFind(DP, 'EncodedByteAlign');
-   If Q >= 0 Then If NextTok(Q) = T_OP Then IByteAlign := TokS = 'true';
-  End;
- End;
-End;
-
-{ Annule le filtre de prédiction PNG : retourne un nouveau tampon }
-Function Unpredict(Src: PBigBytes; SLen: LongInt; RowBytes, Rows, Bpp: LongInt): PBigBytes;
-Var
- Dst: PBigBytes;
- Y, X, Pos: LongInt;
- Ft, A, B, C, Pa, Pb, Pc, Px: Integer;
-Begin
- GetMem(Dst, RowBytes * Rows + 16);
- FillChar(Dst^, RowBytes * Rows, 0);
- Pos := 0;
- For Y := 0 To Rows - 1 Do Begin
-  If Pos >= SLen Then Break;
-  Ft := Src^[Pos]; Inc(Pos);
-  For X := 0 To RowBytes - 1 Do Begin
-   If Pos >= SLen Then Break;
-   Px := Src^[Pos]; Inc(Pos);
-   If X >= Bpp Then A := Dst^[Y * RowBytes + X - Bpp] Else A := 0;
-   If Y > 0 Then B := Dst^[(Y - 1) * RowBytes + X] Else B := 0;
-   If (Y > 0) And (X >= Bpp) Then C := Dst^[(Y - 1) * RowBytes + X - Bpp] Else C := 0;
-   Case Ft Of
-    1: Px := Px + A;
-    2: Px := Px + B;
-    3: Px := Px + (A + B) Div 2;
-    4: Begin
-     Pa := Abs(B - C); Pb := Abs(A - C); Pc := Abs(A + B - 2 * C);
-     If (Pa <= Pb) And (Pa <= Pc) Then Px := Px + A
-     Else If Pb <= Pc Then Px := Px + B
-     Else Px := Px + C;
-    End;
-   End;
-   Dst^[Y * RowBytes + X] := Px And 255;
-  End;
- End;
- Unpredict := Dst;
-End;
-
-{ Échantillon brut -> RVB }
-Procedure SampleRaw(X, Y: LongInt; Var R, G, B: Integer);
-Var
- C: Integer;
- V: Array[0..3] Of Integer;
- BitPos, Mx: LongInt;
- Idx: Integer;
-Begin
- For C := 0 To IComps - 1 Do Begin
-  If IBpc = 8 Then V[C] := IData^[Y * IRow + X * IComps + C]
-  Else If IBpc = 16 Then V[C] := IData^[Y * IRow + (X * IComps + C) * 2]
-  Else Begin
-   BitPos := (X * IComps + C) * IBpc;
-   Mx := (1 Shl IBpc) - 1;
-   V[C] := (IData^[Y * IRow + (BitPos Shr 3)] Shr (8 - IBpc - (BitPos And 7))) And Mx;
-   If ICS <> 5 Then V[C] := V[C] * 255 Div Mx;
-  End;
- End;
- If IInv And (ICS <> 5) Then For C := 0 To IComps - 1 Do V[C] := 255 - V[C];
- Case ICS Of
-  1: Begin R := V[0]; G := V[0]; B := V[0]; End;
-  6: Begin R := 255 - V[0]; G := R; B := R; End;
-  3: Begin R := V[0]; G := V[1]; B := V[2]; End;
-  4: Begin
-   R := (255 - V[0]) * (255 - V[3]) Div 255;
-   G := (255 - V[1]) * (255 - V[3]) Div 255;
-   B := (255 - V[2]) * (255 - V[3]) Div 255;
-  End;
- Else
-  Begin
-   Idx := V[0];
-   If (Idx * IPalBase + IPalBase - 1) < IPalN Then Begin
-    If IPalBase = 1 Then Begin R := IPal[Idx]; G := R; B := R; End
-    Else If IPalBase = 3 Then Begin R := IPal[Idx * 3]; G := IPal[Idx * 3 + 1]; B := IPal[Idx * 3 + 2]; End
-    Else Begin
-     R := (255 - IPal[Idx * 4]) * (255 - IPal[Idx * 4 + 3]) Div 255;
-     G := (255 - IPal[Idx * 4 + 1]) * (255 - IPal[Idx * 4 + 3]) Div 255;
-     B := (255 - IPal[Idx * 4 + 2]) * (255 - IPal[Idx * 4 + 3]) Div 255;
-    End;
-   End
-   Else Begin R := 0; G := 0; B := 0; End;
-  End;
- End;
-End;
-
-Procedure SampleJpeg(X, Y: LongInt; Var R, G, B: Integer);
-Var
- O: LongInt;
-Begin
- O := (Y * IW + X) * 3;
- R := IRGB^[O]; G := IRGB^[O + 1]; B := IRGB^[O + 2];
-End;
-
-
-Type
- TWordsBig = Array[0..67108863] Of Word;
- PWordsBig = ^TWordsBig;
-
-Procedure FreeImages;
-Var
+ C: Array[0..7] Of Real;
  I: Integer;
 Begin
- For I := 1 To ImgCount Do Begin
-  If ImgP(I)^.Pix <> Nil Then FreeMem(ImgP(I)^.Pix, LongInt(ImgP(I)^.W) * ImgP(I)^.H * 2);
-  If ImgP(I)^.Alpha <> Nil Then FreeMem(ImgP(I)^.Alpha, LongInt(ImgP(I)^.W) * ImgP(I)^.H);
-  If ImgP(I)^.Raw <> Nil Then FreeMem(ImgP(I)^.Raw, ImgP(I)^.RawLen + 16);
-  If ImgP(I)^.Pal <> Nil Then FreeMem(ImgP(I)^.Pal, ImgP(I)^.PalN);
+ CSInitialRgb := 0;
+ If D.Kind = 7 Then Begin
+  For I := 0 To 7 Do C[I] := 1;
+  CSInitialRgb := ColorToRgb(D, C, D.N);
  End;
- ImgListFree;
 End;
 
-{ Réduit l'image courante (contexte I*) à au plus ImgMaxDim pixels }
-Procedure Downsample(Var TW_, TH_: LongInt; Var Pix: PWordsBig; Var Alpha: PBigBytes);
+{ Espace de couleurs de ressource (ou nom d'appareil) : indice dans CSCache, -1 si échec }
+Function CSByName(Const Name: String): Integer;
 Var
- X, Y, I, J, NX, NY, X0, X1, Y0, Y1, SX, SY, Cnt: LongInt;
- SR, SG, SB: LongInt;
- R, G, B: Integer;
+ I, Free: Integer;
+ Key: String;
+ S: TSrcState;
+ P, Num: LongInt;
+ D: TCSDesc;
 Begin
- If IW >= IH Then Begin
-  TW_ := IMin(IW, ImgMaxDim);
-  TH_ := IMax(1, (IH * TW_) Div IW);
- End
- Else Begin
-  TH_ := IMin(IH, ImgMaxDim);
-  TW_ := IMax(1, (IW * TH_) Div IH);
+ CSByName := -1;
+ If NRes > 0 Then Key := Name + '@' + IStr(ResNodes[NRes - 1]) Else Key := Name;
+ Free := -1;
+ For I := 0 To CSMAXC - 1 Do Begin
+  If CSCache[I].Used And (CSCache[I].Key = Key) Then Begin CSByName := I; Exit; End;
+  If (Not CSCache[I].Used) And (Free < 0) Then Free := I;
  End;
- NX := IMin(3, IMax(1, (IW + TW_ - 1) Div TW_));
- NY := IMin(3, IMax(1, (IH + TH_ - 1) Div TH_));
- Pix := Nil; Alpha := Nil;
- If IMaskImg Then Begin
-  GetMem(Alpha, TW_ * TH_);
- End
- Else GetMem(Pix, TW_ * TH_ * 2);
- For Y := 0 To TH_ - 1 Do Begin
-  Y0 := (Y * IH) Div TH_;
-  Y1 := IMax(Y0, ((Y + 1) * IH) Div TH_ - 1);
-  For X := 0 To TW_ - 1 Do Begin
-   X0 := (X * IW) Div TW_;
-   X1 := IMax(X0, ((X + 1) * IW) Div TW_ - 1);
-   SR := 0; SG := 0; SB := 0; Cnt := 0;
-   For J := 0 To NY - 1 Do Begin
-    SY := Y0 + ((Y1 - Y0 + 1) * J) Div NY;
-    For I := 0 To NX - 1 Do Begin
-     SX := X0 + ((X1 - X0 + 1) * I) Div NX;
-     If IJpeg Then SampleJpeg(SX, SY, R, G, B) Else SampleRaw(SX, SY, R, G, B);
-     SR := SR + R; SG := SG + G; SB := SB + B; Inc(Cnt);
-    End;
-   End;
-   If IMaskImg Then Alpha^[Y * TW_ + X] := 255 - SG Div Cnt
-   Else Begin
-    R := SR Div Cnt; G := SG Div Cnt; B := SB Div Cnt;
-    Pix^[Y * TW_ + X] := ((R And $F8) Shl 8) Or ((G And $FC) Shl 3) Or (B Shr 3);
-   End;
+ If Free < 0 Then Begin CSCacheFree; Free := 0; End;
+ SaveSrc(S);
+ P := FindRes('ColorSpace', Name, Num);
+ If P >= 0 Then Begin
+  If ParseCSDesc(P, 0, D) Then Begin
+   CSCache[Free].Key := Key;
+   CSCache[Free].D := D;
+   CSCache[Free].Used := True;
+   CSByName := Free;
   End;
  End;
+ RestoreSrc(S);
 End;
-
- 
+{$ENDIF}
+{$IFDEF FPC}
 { ---------------------------------------------------------------------- }
 { Décodeur CCITT : Groupe 3 (1D et 2D) et Groupe 4                         }
 { ---------------------------------------------------------------------- }
@@ -6629,13 +7300,5140 @@ Begin
  FreeMem(CurA, (Cols + 8) * 4);
  CCITTDecode := Rd;
 End;
+{ ---------------------------------------------------------------------- }
+{ Décodeur JPEG 2000 (JPX / JP2 / J2K) - ITU-T T.800 / ISO 15444-1        }
+{ Snippet destiné à être inclus dans un bloc IFDEF FPC (pas de unit).     }
+{ Point d'entrée : JPXDecode (en fin de snippet).                          }
+{ Tous les identifiants globaux commencent par Jx / TJx / PJx / JPX.       }
+{                                                                          }
+{ Géré : codestream brut (FF4F) ou JP2 (jp2h : colr, pclr, cmap, cdef),    }
+{  SIZ COD COC QCD QCC RGN POC SOT SOD SOP EPH EOC (TLM PLM PLT CRG COM    }
+{  ignorés), tuiles et parties de tuiles multiples (Psot = 0 inclus),      }
+{  5 ordres de progression + POC, précincts, couches, code-blocks         }
+{  jusqu'à 64x64 (BYPASS RESET TERMALL VSC PTERM SEGSYM), ROI max-shift,   }
+{  quantification (aucune / dérivée / étendue), DWT 5/3 et 9/7, MCT        }
+{  RCT/ICT, composantes sous-échantillonnées, palette, alpha ignoré,       }
+{  réduction de résolution (MaxDim). Non géré : PPM/PPT (en-têtes de      }
+{  paquets déplacés), HTJ2K, précision > 30 bits, plus de 32 composantes.  }
+{ Les flux corrompus ou tronqués donnent un décodage partiel ou False.     }
+{ ---------------------------------------------------------------------- }
+
+Const
+ JxMaxC = 32;            { nombre max de composantes }
+ JxMaxPoc = 64;          { nombre max de changements de progression }
+ JxMaxSamples = 200000000; { limite largeur*hauteur*composantes }
+ JxInf = $3FFFFFFF;
+ { drapeaux Tier-1 }
+ JxFNE = $0001; JxFSE = $0002; JxFSW = $0004; JxFNW = $0008;
+ JxFN = $0010; JxFE = $0020; JxFS = $0040; JxFW = $0080;
+ JxFSN = $0100; JxFSE2 = $0200; JxFSS = $0400; JxFSW2 = $0800;
+ JxFSig = $1000; JxFRef = $2000; JxFVis = $4000; JxFNVis = $BFFF;
+ { styles de code-block }
+ JxCbLazy = 1; JxCbReset = 2; JxCbTermAll = 4; JxCbVsc = 8;
+ JxCbPterm = 16; JxCbSegSym = 32;
+ JxArenaSz = 1048576;
+
+Type
+ PJxLArr = ^TJxLArr;
+ TJxLArr = Array[0..536870910] Of LongInt;
+ PJxSArr = ^TJxSArr;
+ TJxSArr = Array[0..536870910] Of Single;
+ PJxWArr = ^TJxWArr;
+ TJxWArr = Array[0..1073741822] Of Word;
+ PJxBArr = ^TJxBArr;
+ TJxBArr = Array[0..2147483646] Of Byte;
+
+ { paramètres de codage d'une composante (COD / COC) }
+ TJxCod = Record
+  NL, XCB, YCB, Sty, Transf: LongInt;
+  PPx, PPy: Array[0..32] Of Byte;
+ End;
+ { paramètres de quantification d'une composante (QCD / QCC) }
+ TJxQnt = Record
+  Sty, Guard, Cnt: LongInt;
+  Eps: Array[0..96] Of Byte;
+  Mu: Array[0..96] Of Word;
+ End;
+ TJxPoc = Record
+  RS, CS, LYE, RE, CE, Prog: LongInt;
+ End;
+ TJxParams = Record
+  Prog, Layers, MCT, Scod: LongInt;
+  Cod: Array[0..JxMaxC - 1] Of TJxCod;
+  Qnt: Array[0..JxMaxC - 1] Of TJxQnt;
+  Roi: Array[0..JxMaxC - 1] Of LongInt;
+  CodSet, QntSet: Array[0..JxMaxC - 1] Of Boolean;
+  NPoc: LongInt;
+  PocSeen, HasCod, HasQnt: Boolean;
+  Poc: Array[0..JxMaxPoc - 1] Of TJxPoc;
+ End;
+
+ { parties de tuile }
+ TJxTP = Record
+  Tile, Hdr, Data, DEnd, Next: LongInt;
+ End;
+ PJxTPArr = ^TJxTPArr;
+ TJxTPArr = Array[0..4194303] Of TJxTP;
+
+ { structures Tier-2 / Tier-1 }
+ TJxSeg = Record
+  Len, Passes, MaxPasses: LongInt;
+ End;
+ PJxSegArr = ^TJxSegArr;
+ TJxSegArr = Array[0..1023] Of TJxSeg;
+ PJxCblk = ^TJxCblk;
+ TJxCblk = Record
+  X0, Y0, X1, Y1: LongInt;
+  NumBps, NumPasses, LBlock, SegCnt, SegCap, DLen, DCap: LongInt;
+  Data: PBigBytes;
+  Segs: PJxSegArr;
+ End;
+ PJxCblkArr = ^TJxCblkArr;
+ TJxCblkArr = Array[0..4194303] Of TJxCblk;
+ TJxTagNode = Record
+  Value, Low: LongInt;
+ End;
+ PJxTagArr = ^TJxTagArr;
+ TJxTagArr = Array[0..16777215] Of TJxTagNode;
+ PJxTag = ^TJxTag;
+ TJxTag = Record
+  W, H: LongInt;
+  Nodes: PJxTagArr;
+ End;
+ TJxPBand = Record
+  NCw, NCh: LongInt;
+  Cblks: PJxCblkArr;
+  Incl, Zbp: PJxTag;
+ End;
+ TJxPrec = Record
+  Bands: Array[0..2] Of TJxPBand;
+ End;
+ PJxPrecArr = ^TJxPrecArr;
+ TJxPrecArr = Array[0..4194303] Of TJxPrec;
+ TJxBand = Record
+  X0, Y0, X1, Y1, Orient, Mb, OX, OY: LongInt;
+  Step: Single;
+ End;
+ TJxRes = Record
+  X0, Y0, X1, Y1, PW, PH, PPx, PPy, NB, PrecBase, W, H: LongInt;
+  Bands: Array[0..2] Of TJxBand;
+  Precs: PJxPrecArr;
+ End;
+ PJxResArr = ^TJxResArr;
+ TJxResArr = Array[0..32] Of TJxRes;
+ TJxTComp = Record
+  X0, Y0, X1, Y1, NL, Rk, W, H: LongInt;
+  Res: PJxResArr;
+  Buf: Pointer;
+ End;
+ TJxPend = Record
+  Cb: PJxCblk;
+  Seg, Len: LongInt;
+ End;
+ PJxPendArr = ^TJxPendArr;
+ TJxPendArr = Array[0..16777215] Of TJxPend;
+ PJxArena = ^TJxArena;
+ TJxArena = Record
+  Next: PJxArena;
+  Size, Used: PtrInt;
+ End;
+
+Var
+ { flux }
+ JxS: PBigBytes;
+ JxSLen: LongInt;
+ { SIZ }
+ JxXsiz, JxYsiz, JxXOsiz, JxYOsiz, JxXTsiz, JxYTsiz, JxXTOsiz, JxYTOsiz: LongInt;
+ JxNC, JxNTX, JxNTY, JxNT: LongInt;
+ JxPrecC: Array[0..JxMaxC - 1] Of LongInt;
+ JxSgnC: Array[0..JxMaxC - 1] Of Boolean;
+ JxXR, JxYR: Array[0..JxMaxC - 1] Of LongInt;
+ JxHaveSiz: Boolean;
+ { paramètres principaux / de tuile }
+ JxMainP, JxTileP: TJxParams;
+ { parties de tuile }
+ JxTPs: PJxTPArr;
+ JxNTP, JxTPCap: LongInt;
+ JxTileFirst, JxTileLast: PJxLArr;
+ { réduction }
+ JxRed: LongInt;
+ { arène mémoire de tuile }
+ JxAr: PJxArena;
+ { tuile courante }
+ JxTX0, JxTY0, JxTX1, JxTY1: LongInt;
+ JxTC: Array[0..JxMaxC - 1] Of TJxTComp;
+ JxTotCblk, JxTotPrec: Int64;
+ JxCurTile, JxCurTP: LongInt;
+ JxPktPos, JxPktEnd: LongInt;
+ JxStop: Boolean;
+ JxDone: PByte;
+ JxDoneBits: Int64;
+ JxPend: PJxPendArr;
+ JxPendCap: LongInt;
+ { lecteur de bits d'en-tête de paquet }
+ JxHPos, JxHEnd, JxHBuf, JxHCt: LongInt;
+ JxHErr: Boolean;
+ { MQ / Tier-1 }
+ JxMqA, JxMqC: Cardinal;
+ JxMqCt, JxMqI: LongInt;
+ JxMqD: PBigBytes;
+ JxRawC, JxRawCt: LongInt;
+ JxCtx: Array[0..18] Of Byte;
+ JxQe: Array[0..93] Of Word;
+ JxNMps, JxNLps: Array[0..93] Of Byte;
+ JxZC: Array[0..3, 0..255] Of Byte;
+ JxSC: Array[0..255] Of Byte;
+ JxFl: Array[0..6399] Of Word;
+ JxData: Array[0..4095] Of LongInt;
+ JxTabInit: Boolean;
+ { JP2 }
+ JxEnumCS: LongInt;
+ JxHavePal: Boolean;
+ JxPalN, JxPalNC: LongInt;
+ JxPalDepth: Array[0..7] Of LongInt;
+ JxPal: PJxLArr;
+ JxNCmap: LongInt;
+ JxCmapC, JxCmapT, JxCmapP: Array[0..JxMaxC - 1] Of LongInt;
+ JxNCdef: LongInt;
+ JxCdefN, JxCdefT, JxCdefA: Array[0..JxMaxC - 1] Of LongInt;
+ { sortie }
+ JxPlane: Array[0..JxMaxC - 1] Of PJxBArr;
+ JxPlaneW, JxPlaneH, JxPlaneX0, JxPlaneY0: Array[0..JxMaxC - 1] Of LongInt;
+ JxPlaneWord: Array[0..JxMaxC - 1] Of Boolean;
+ JxMemErr: Boolean;
+
+{ ---------------------------------------------------------------------- }
+{ Utilitaires                                                              }
+{ ---------------------------------------------------------------------- }
+
+Function JxMin(A, B: LongInt): LongInt;
+Begin
+ If A < B Then JxMin := A Else JxMin := B;
+End;
+
+Function JxMax(A, B: LongInt): LongInt;
+Begin
+ If A > B Then JxMax := A Else JxMax := B;
+End;
+
+Function JxMin64(A, B: Int64): Int64;
+Begin
+ If A < B Then JxMin64 := A Else JxMin64 := B;
+End;
+
+Function JxMax64(A, B: Int64): Int64;
+Begin
+ If A > B Then JxMax64 := A Else JxMax64 := B;
+End;
+
+{ Division par 2^N arrondie vers le haut / le bas (valeurs signées) }
+Function JxCeilShr(V: Int64; N: LongInt): Int64;
+Begin
+ JxCeilShr := SarInt64(V + (Int64(1) Shl N) - 1, N);
+End;
+
+Function JxFloorShr(V: Int64; N: LongInt): Int64;
+Begin
+ JxFloorShr := SarInt64(V, N);
+End;
+
+Function JxCeilDiv(A, B: Int64): Int64;
+Begin
+ If B <= 0 Then JxCeilDiv := 0
+ Else If A >= 0 Then JxCeilDiv := (A + B - 1) Div B
+ Else JxCeilDiv := -((-A) Div B);
+End;
+
+Function JxBE16(P: LongInt): LongInt;
+Begin
+ JxBE16 := (LongInt(JxS^[P]) Shl 8) Or JxS^[P + 1];
+End;
+
+Function JxBE32(P: LongInt): Int64;
+Begin
+ JxBE32 := (Int64(JxS^[P]) Shl 24) Or (Int64(JxS^[P + 1]) Shl 16) Or
+           (Int64(JxS^[P + 2]) Shl 8) Or Int64(JxS^[P + 3]);
+End;
+
+{ Arène : allocation zéro-initialisée, libérée d'un bloc en fin de tuile }
+Function JxAlloc(Sz: PtrInt): Pointer;
+Var
+ A: PJxArena;
+ Cap: PtrInt;
+Begin
+ JxAlloc := Nil;
+ If (Sz < 0) Or (Sz > 1700000000) Then Begin JxMemErr := True; Exit; End;
+ Sz := (Sz + 15) And (Not PtrInt(15));
+ If (JxAr = Nil) Or (JxAr^.Size - JxAr^.Used < Sz) Then Begin
+  Cap := JxArenaSz;
+  If Sz > Cap Then Cap := Sz;
+  A := Nil;
+  GetMem(A, Cap + 32);
+  If A = Nil Then Begin JxMemErr := True; Exit; End;
+  A^.Next := JxAr;
+  A^.Size := Cap;
+  A^.Used := 0;
+  JxAr := A;
+ End;
+ JxAlloc := Pointer(PtrUInt(JxAr) + 32 + PtrUInt(JxAr^.Used));
+ Inc(JxAr^.Used, Sz);
+ If Sz > 0 Then FillChar(JxAlloc^, Sz, 0);
+End;
+
+Procedure JxFreeArena;
+Var
+ A, B: PJxArena;
+Begin
+ A := JxAr;
+ While A <> Nil Do Begin
+  B := A^.Next;
+  FreeMem(A, A^.Size + 32);
+  A := B;
+ End;
+ JxAr := Nil;
+End;
+
+{ Table MQ et tables de contextes Tier-1 }
+Procedure JxInitTables;
+Const
+ QeV: Array[0..46] Of Word = (
+  $5601, $3401, $1801, $0AC1, $0521, $0221, $5601, $5401, $4801, $3801,
+  $3001, $2401, $1C01, $1601, $5601, $5401, $5101, $4801, $3801, $3401,
+  $3001, $2801, $2401, $2201, $1C01, $1801, $1601, $1401, $1201, $1101,
+  $0AC1, $09C1, $08A1, $0521, $0441, $02A1, $0221, $0141, $0111, $0085,
+  $0049, $0025, $0015, $0009, $0005, $0001, $5601);
+ NM: Array[0..46] Of Byte = (
+  1, 2, 3, 4, 5, 38, 7, 8, 9, 10, 11, 12, 13, 29, 15, 16, 17, 18, 19, 20,
+  21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+  39, 40, 41, 42, 43, 44, 45, 45, 46);
+ NL: Array[0..46] Of Byte = (
+  1, 6, 9, 12, 29, 33, 6, 14, 14, 14, 17, 18, 20, 21, 14, 14, 15, 16, 17,
+  18, 19, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+  35, 36, 37, 38, 39, 40, 41, 42, 43, 46);
+ SW: Array[0..46] Of Byte = (
+  1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+Var
+ S, M, O, F, H, V, D, HV, C, X, HC, VC, T: LongInt;
+Begin
+ If JxTabInit Then Exit;
+ For S := 0 To 46 Do
+  For M := 0 To 1 Do Begin
+   JxQe[S * 2 + M] := QeV[S];
+   JxNMps[S * 2 + M] := NM[S] * 2 + M;
+   JxNLps[S * 2 + M] := NL[S] * 2 + (M Xor SW[S]);
+  End;
+ { contextes de zero-coding }
+ For O := 0 To 3 Do
+  For F := 0 To 255 Do Begin
+   H := ((F Shr 5) And 1) + ((F Shr 7) And 1);
+   V := ((F Shr 4) And 1) + ((F Shr 6) And 1);
+   D := (F And 1) + ((F Shr 1) And 1) + ((F Shr 2) And 1) + ((F Shr 3) And 1);
+   If O = 1 Then Begin T := H; H := V; V := T; End;
+   If O = 3 Then Begin
+    HV := H + V;
+    If D >= 3 Then C := 8
+    Else If D = 2 Then Begin If HV >= 1 Then C := 7 Else C := 6; End
+    Else If D = 1 Then Begin
+     If HV >= 2 Then C := 5 Else If HV = 1 Then C := 4 Else C := 3;
+    End Else Begin
+     If HV >= 2 Then C := 2 Else If HV = 1 Then C := 1 Else C := 0;
+    End;
+   End Else Begin
+    If H = 2 Then C := 8
+    Else If H = 1 Then Begin
+     If V >= 1 Then C := 7 Else If D >= 1 Then C := 6 Else C := 5;
+    End Else Begin
+     If V = 2 Then C := 4
+     Else If V = 1 Then C := 3
+     Else If D >= 2 Then C := 2
+     Else If D = 1 Then C := 1
+     Else C := 0;
+    End;
+   End;
+   JxZC[O, F] := C;
+  End;
+ { contextes de signe : index = bits N,E,S,W de signifiance puis de signe }
+ For X := 0 To 255 Do Begin
+  HC := 0; VC := 0;
+  If (X And 2) <> 0 Then Begin If (X And 32) <> 0 Then Dec(HC) Else Inc(HC); End;
+  If (X And 8) <> 0 Then Begin If (X And 128) <> 0 Then Dec(HC) Else Inc(HC); End;
+  If (X And 1) <> 0 Then Begin If (X And 16) <> 0 Then Dec(VC) Else Inc(VC); End;
+  If (X And 4) <> 0 Then Begin If (X And 64) <> 0 Then Dec(VC) Else Inc(VC); End;
+  If HC > 1 Then HC := 1;
+  If HC < -1 Then HC := -1;
+  If VC > 1 Then VC := 1;
+  If VC < -1 Then VC := -1;
+  C := 9; T := 0;
+  If HC = 1 Then Begin
+   If VC = 1 Then C := 13 Else If VC = 0 Then C := 12 Else C := 11;
+  End Else If HC = 0 Then Begin
+   If VC = 1 Then C := 10 Else If VC = 0 Then C := 9 Else Begin C := 10; T := 1; End;
+  End Else Begin
+   T := 1;
+   If VC = 1 Then C := 11 Else If VC = 0 Then C := 12 Else C := 13;
+  End;
+  JxSC[X] := C + 32 * T;
+ End;
+ JxTabInit := True;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Décodeur arithmétique MQ et décodeur brut (mode BYPASS)                  }
+{ ---------------------------------------------------------------------- }
+
+Procedure JxMqByteIn;
+Var
+ B: LongInt;
+Begin
+ B := JxMqD^[JxMqI];
+ If B = $FF Then Begin
+  If JxMqD^[JxMqI + 1] > $8F Then Begin
+   JxMqC := JxMqC + $FF00;
+   JxMqCt := 8;
+  End Else Begin
+   Inc(JxMqI);
+   JxMqC := JxMqC + (Cardinal(JxMqD^[JxMqI]) Shl 9);
+   JxMqCt := 7;
+  End;
+ End Else Begin
+  Inc(JxMqI);
+  JxMqC := JxMqC + (Cardinal(JxMqD^[JxMqI]) Shl 8);
+  JxMqCt := 8;
+ End;
+End;
+
+{ D pointe sur le segment, suivi de 2 octets sentinelles $FF }
+Procedure JxMqInit(D: PBigBytes);
+Begin
+ JxMqD := D;
+ JxMqI := 0;
+ JxMqC := Cardinal(D^[0]) Shl 16;
+ JxMqByteIn;
+ JxMqC := JxMqC Shl 7;
+ JxMqCt := JxMqCt - 7;
+ JxMqA := $8000;
+End;
+
+Function JxMqDec(Cx: LongInt): LongInt;
+Var
+ V: LongInt;
+ Q: Cardinal;
+ Dd: LongInt;
+Begin
+ V := JxCtx[Cx];
+ Q := JxQe[V];
+ JxMqA := JxMqA - Q;
+ If (JxMqC Shr 16) < Q Then Begin
+  If JxMqA < Q Then Begin
+   Dd := V And 1;
+   JxCtx[Cx] := JxNMps[V];
+  End Else Begin
+   Dd := 1 - (V And 1);
+   JxCtx[Cx] := JxNLps[V];
+  End;
+  JxMqA := Q;
+ End Else Begin
+  JxMqC := JxMqC - (Q Shl 16);
+  If (JxMqA And $8000) <> 0 Then Begin
+   JxMqDec := V And 1;
+   Exit;
+  End;
+  If JxMqA < Q Then Begin
+   Dd := 1 - (V And 1);
+   JxCtx[Cx] := JxNLps[V];
+  End Else Begin
+   Dd := V And 1;
+   JxCtx[Cx] := JxNMps[V];
+  End;
+ End;
+ Repeat
+  If JxMqCt = 0 Then JxMqByteIn;
+  JxMqA := JxMqA Shl 1;
+  JxMqC := JxMqC Shl 1;
+  Dec(JxMqCt);
+ Until (JxMqA And $8000) <> 0;
+ JxMqDec := Dd;
+End;
+
+Procedure JxRawInit(D: PBigBytes);
+Begin
+ JxMqD := D;
+ JxMqI := 0;
+ JxRawC := 0;
+ JxRawCt := 0;
+End;
+
+Function JxRawBit: LongInt;
+Begin
+ If JxRawCt = 0 Then Begin
+  If JxRawC = $FF Then Begin
+   If JxMqD^[JxMqI] > $8F Then Begin
+    JxRawC := $FF;
+    JxRawCt := 8;
+   End Else Begin
+    JxRawC := JxMqD^[JxMqI];
+    Inc(JxMqI);
+    JxRawCt := 7;
+   End;
+  End Else Begin
+   JxRawC := JxMqD^[JxMqI];
+   Inc(JxMqI);
+   JxRawCt := 8;
+  End;
+ End;
+ Dec(JxRawCt);
+ JxRawBit := (JxRawC Shr JxRawCt) And 1;
+End;
+
+Procedure JxResetCtx;
+Begin
+ FillChar(JxCtx, SizeOf(JxCtx), 0);
+ JxCtx[0] := 8;
+ JxCtx[17] := 6;
+ JxCtx[18] := 92;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Tier-1 : passes de codage EBCOT                                          }
+{ ---------------------------------------------------------------------- }
+
+{ met à jour les drapeaux des voisins quand l'échantillon FI devient significatif }
+Procedure JxUpdFlags(FI, S, Stride: LongInt; NoNorth: Boolean);
+Begin
+ If Not NoNorth Then Begin
+  JxFl[FI - Stride - 1] := JxFl[FI - Stride - 1] Or JxFSE;
+  JxFl[FI - Stride] := JxFl[FI - Stride] Or (JxFS Or (S * JxFSS));
+  JxFl[FI - Stride + 1] := JxFl[FI - Stride + 1] Or JxFSW;
+ End;
+ JxFl[FI - 1] := JxFl[FI - 1] Or (JxFE Or (S * JxFSE2));
+ JxFl[FI + 1] := JxFl[FI + 1] Or (JxFW Or (S * JxFSW2));
+ JxFl[FI + Stride - 1] := JxFl[FI + Stride - 1] Or JxFNE;
+ JxFl[FI + Stride] := JxFl[FI + Stride] Or (JxFN Or (S * JxFSN));
+ JxFl[FI + Stride + 1] := JxFl[FI + Stride + 1] Or JxFNW;
+ JxFl[FI] := JxFl[FI] Or JxFSig;
+End;
+
+Procedure JxT1Sig(W, H, Bp1, Orient, Sty: LongInt; Raw: Boolean);
+Var
+ Oph, Stride, K, I, J, JM, FI, F, V, S, T: LongInt;
+ Vsc: Boolean;
+Begin
+ Oph := (1 Shl Bp1) Or (1 Shl (Bp1 - 1));
+ Stride := W + 2;
+ Vsc := (Sty And JxCbVsc) <> 0;
+ K := 0;
+ While K < H Do Begin
+  JM := K + 4;
+  If JM > H Then JM := H;
+  For I := 0 To W - 1 Do Begin
+   FI := (K + 1) * Stride + I + 1;
+   For J := K To JM - 1 Do Begin
+    F := JxFl[FI];
+    If ((F And $FF) <> 0) And ((F And (JxFSig Or JxFVis)) = 0) Then Begin
+     If Raw Then V := JxRawBit Else V := JxMqDec(JxZC[Orient, F And $FF]);
+     If V <> 0 Then Begin
+      T := JxSC[(F Shr 4) And $FF];
+      If Raw Then S := JxRawBit Else S := JxMqDec(T And 31) Xor (T Shr 5);
+      If S <> 0 Then JxData[J * W + I] := -Oph Else JxData[J * W + I] := Oph;
+      JxUpdFlags(FI, S, Stride, Vsc And (J = K));
+     End;
+     JxFl[FI] := JxFl[FI] Or JxFVis;
+    End;
+    Inc(FI, Stride);
+   End;
+  End;
+  Inc(K, 4);
+ End;
+End;
+
+Procedure JxT1Ref(W, H, Bp1: LongInt; Raw: Boolean);
+Var
+ PosHalf, Stride, K, I, J, JM, FI, F, V, T, Cx, DI: LongInt;
+Begin
+ PosHalf := 1 Shl (Bp1 - 1);
+ Stride := W + 2;
+ K := 0;
+ While K < H Do Begin
+  JM := K + 4;
+  If JM > H Then JM := H;
+  For I := 0 To W - 1 Do Begin
+   FI := (K + 1) * Stride + I + 1;
+   For J := K To JM - 1 Do Begin
+    F := JxFl[FI];
+    If (F And (JxFSig Or JxFVis)) = JxFSig Then Begin
+     If Raw Then V := JxRawBit Else Begin
+      If (F And JxFRef) <> 0 Then Cx := 16
+      Else If (F And $FF) <> 0 Then Cx := 15
+      Else Cx := 14;
+      V := JxMqDec(Cx);
+     End;
+     If V <> 0 Then T := PosHalf Else T := -PosHalf;
+     DI := J * W + I;
+     If JxData[DI] < 0 Then JxData[DI] := JxData[DI] - T
+     Else JxData[DI] := JxData[DI] + T;
+     JxFl[FI] := F Or JxFRef;
+    End;
+    Inc(FI, Stride);
+   End;
+  End;
+  Inc(K, 4);
+ End;
+End;
+
+Procedure JxT1Cup(W, H, Bp1, Orient, Sty: LongInt);
+Var
+ Oph, Stride, K, I, J, JM, FI, FI0, F, V, S, T, RunLen, JS: LongInt;
+ Agg, Vsc: Boolean;
+Begin
+ Oph := (1 Shl Bp1) Or (1 Shl (Bp1 - 1));
+ Stride := W + 2;
+ Vsc := (Sty And JxCbVsc) <> 0;
+ K := 0;
+ While K < H Do Begin
+  JM := K + 4;
+  If JM > H Then JM := H;
+  For I := 0 To W - 1 Do Begin
+   FI0 := (K + 1) * Stride + I + 1;
+   Agg := False;
+   RunLen := 0;
+   If K + 3 < H Then
+    Agg := ((JxFl[FI0] Or JxFl[FI0 + Stride] Or JxFl[FI0 + 2 * Stride] Or
+             JxFl[FI0 + 3 * Stride]) And (JxFSig Or JxFVis Or $FF)) = 0;
+   If Agg Then Begin
+    If JxMqDec(17) = 0 Then Continue;
+    RunLen := JxMqDec(18) Shl 1;
+    RunLen := RunLen Or JxMqDec(18);
+   End;
+   FI := FI0 + RunLen * Stride;
+   JS := K + RunLen;
+   For J := JS To JM - 1 Do Begin
+    F := JxFl[FI];
+    V := 0;
+    If Agg And (J = JS) Then V := 1
+    Else If (F And (JxFSig Or JxFVis)) = 0 Then
+     V := JxMqDec(JxZC[Orient, F And $FF]);
+    If V <> 0 Then Begin
+     T := JxSC[(F Shr 4) And $FF];
+     S := JxMqDec(T And 31) Xor (T Shr 5);
+     If S <> 0 Then JxData[J * W + I] := -Oph Else JxData[J * W + I] := Oph;
+     JxUpdFlags(FI, S, Stride, Vsc And (J = K));
+    End;
+    JxFl[FI] := JxFl[FI] And JxFNVis;
+    Inc(FI, Stride);
+   End;
+  End;
+  Inc(K, 4);
+ End;
+ If (Sty And JxCbSegSym) <> 0 Then Begin
+  V := JxMqDec(18);
+  V := JxMqDec(18);
+  V := JxMqDec(18);
+  V := JxMqDec(18);
+ End;
+End;
+
+{ Décode un code-block ; résultat dans JxData (avec bit fractionnaire),
+  retourne False si rien à décoder }
+Function JxDecodeBlock(Cb: PJxCblk; Orient, Sty, RoiShift: LongInt): Boolean;
+Var
+ W, H, Nb, Bp1, Pt, PassIdx, Off, S, P, I, Mag, Thr: LongInt;
+ Raw: Boolean;
+ Sv0, Sv1: Byte;
+ Seg: TJxSeg;
+ D: PBigBytes;
+Begin
+ JxDecodeBlock := False;
+ W := Cb^.X1 - Cb^.X0;
+ H := Cb^.Y1 - Cb^.Y0;
+ If (W <= 0) Or (H <= 0) Or (W * H > 4096) Or (Cb^.NumPasses <= 0) Or (Cb^.Data = Nil) Then Exit;
+ Nb := Cb^.NumBps + RoiShift;
+ If (Nb < 1) Or (Nb > 29) Then Exit;
+ FillChar(JxData, W * H * 4, 0);
+ FillChar(JxFl, (W + 2) * (H + 2) * 2, 0);
+ JxResetCtx;
+ Bp1 := Nb;
+ Pt := 2;
+ PassIdx := 0;
+ Off := 0;
+ For S := 0 To Cb^.SegCnt - 1 Do Begin
+  Seg := Cb^.Segs^[S];
+  If (Seg.Len < 0) Or (Off + Seg.Len + 2 > Cb^.DCap) Then Break;
+  D := PBigBytes(PtrUInt(Cb^.Data) + PtrUInt(Off));
+  Sv0 := D^[Seg.Len];
+  Sv1 := D^[Seg.Len + 1];
+  D^[Seg.Len] := $FF;
+  D^[Seg.Len + 1] := $FF;
+  Raw := ((Sty And JxCbLazy) <> 0) And (PassIdx >= 10) And (Pt < 2);
+  If Raw Then JxRawInit(D) Else JxMqInit(D);
+  For P := 1 To Seg.Passes Do Begin
+   If Bp1 < 1 Then Break;
+   Case Pt Of
+    0: JxT1Sig(W, H, Bp1, Orient, Sty, Raw);
+    1: JxT1Ref(W, H, Bp1, Raw);
+    2: JxT1Cup(W, H, Bp1, Orient, Sty);
+   End;
+   If ((Sty And JxCbReset) <> 0) And (Not Raw) Then JxResetCtx;
+   Inc(Pt);
+   If Pt = 3 Then Begin
+    Pt := 0;
+    Dec(Bp1);
+   End;
+   Inc(PassIdx);
+  End;
+  D^[Seg.Len] := Sv0;
+  D^[Seg.Len + 1] := Sv1;
+  Inc(Off, Seg.Len);
+  If Bp1 < 1 Then Break;
+ End;
+ If RoiShift > 0 Then Begin
+  Thr := 1 Shl RoiShift;
+  For I := 0 To W * H - 1 Do Begin
+   Mag := Abs(JxData[I]);
+   If Mag >= Thr Then Begin
+    Mag := Mag Shr RoiShift;
+    If JxData[I] < 0 Then JxData[I] := -Mag Else JxData[I] := Mag;
+   End;
+  End;
+ End;
+ JxDecodeBlock := True;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Tier-2 : arbres de tags et lecteur de bits d'en-tête de paquet           }
+{ ---------------------------------------------------------------------- }
+
+Procedure JxHByteIn;
+Begin
+ JxHBuf := (JxHBuf Shl 8) And $FFFF;
+ If JxHBuf = $FF00 Then JxHCt := 7 Else JxHCt := 8;
+ If JxHPos >= JxHEnd Then JxHErr := True
+ Else Begin
+  JxHBuf := JxHBuf Or JxS^[JxHPos];
+  Inc(JxHPos);
+ End;
+End;
+
+Function JxHBit: LongInt;
+Begin
+ If JxHCt = 0 Then JxHByteIn;
+ Dec(JxHCt);
+ JxHBit := (JxHBuf Shr JxHCt) And 1;
+End;
+
+Function JxHBits(N: LongInt): LongInt;
+Var
+ V, I: LongInt;
+Begin
+ V := 0;
+ If N > 30 Then Begin JxHErr := True; JxHBits := 0; Exit; End;
+ For I := 1 To N Do V := (V Shl 1) Or JxHBit;
+ JxHBits := V;
+End;
+
+Procedure JxHAlign;
+Begin
+ If (JxHBuf And $FF) = $FF Then JxHByteIn;
+ JxHCt := 0;
+End;
+
+Function JxTagNew(W, H: LongInt): PJxTag;
+Var
+ T: PJxTag;
+ N, Lw, Lh, I: Int64;
+ Nd: PJxTagArr;
+Begin
+ JxTagNew := Nil;
+ T := JxAlloc(SizeOf(TJxTag));
+ If T = Nil Then Exit;
+ N := 0; Lw := W; Lh := H;
+ While True Do Begin
+  N := N + Lw * Lh;
+  If (Lw <= 1) And (Lh <= 1) Then Break;
+  Lw := (Lw + 1) Shr 1;
+  Lh := (Lh + 1) Shr 1;
+ End;
+ If N > 16000000 Then Begin JxMemErr := True; Exit; End;
+ Nd := JxAlloc(N * SizeOf(TJxTagNode));
+ If Nd = Nil Then Exit;
+ For I := 0 To N - 1 Do Nd^[I].Value := JxInf;
+ T^.W := W;
+ T^.H := H;
+ T^.Nodes := Nd;
+ JxTagNew := T;
+End;
+
+{ vrai si la valeur de la feuille (X,Y) est < Thr }
+Function JxTagDec(T: PJxTag; X, Y, Thr: LongInt): Boolean;
+Var
+ Path: Array[0..39] Of LongInt;
+ Np, Lw, Lh, Off, Low, N, Xx, Yy: LongInt;
+ Nd: ^TJxTagNode;
+Begin
+ Np := 0; Lw := T^.W; Lh := T^.H; Off := 0; Xx := X; Yy := Y;
+ While True Do Begin
+  Path[Np] := Off + Yy * Lw + Xx;
+  Inc(Np);
+  If ((Lw <= 1) And (Lh <= 1)) Or (Np >= 38) Then Break;
+  Off := Off + Lw * Lh;
+  Xx := Xx Shr 1; Yy := Yy Shr 1;
+  Lw := (Lw + 1) Shr 1;
+  Lh := (Lh + 1) Shr 1;
+ End;
+ Low := 0;
+ Nd := @T^.Nodes^[Path[0]];
+ For N := Np - 1 DownTo 0 Do Begin
+  Nd := @T^.Nodes^[Path[N]];
+  If Low > Nd^.Low Then Nd^.Low := Low Else Low := Nd^.Low;
+  While (Low < Thr) And (Low < Nd^.Value) And (Not JxHErr) Do Begin
+   If JxHBit <> 0 Then Nd^.Value := Low Else Inc(Low);
+  End;
+  Nd^.Low := Low;
+ End;
+ JxTagDec := Nd^.Value < Thr;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ En-têtes de marqueurs : SIZ, COD, COC, QCD, QCC, RGN, POC                }
+{ ---------------------------------------------------------------------- }
+
+Function JxParseSP(Var Cd: TJxCod; Q, N: LongInt; HasPrec: Boolean): Boolean;
+Var
+ K, B: LongInt;
+Begin
+ JxParseSP := False;
+ If N < 5 Then Exit;
+ Cd.NL := JxS^[Q];
+ If Cd.NL > 32 Then Exit;
+ Cd.XCB := (JxS^[Q + 1] And 15) + 2;
+ Cd.YCB := (JxS^[Q + 2] And 15) + 2;
+ If (Cd.XCB > 10) Or (Cd.YCB > 10) Or (Cd.XCB + Cd.YCB > 12) Then Exit;
+ Cd.Sty := JxS^[Q + 3];
+ If (Cd.Sty And $C0) <> 0 Then Exit;   { HTJ2K non géré }
+ Cd.Transf := JxS^[Q + 4];
+ If Cd.Transf > 1 Then Exit;
+ If HasPrec And (N < 5 + Cd.NL + 1) Then Exit;
+ For K := 0 To 32 Do Begin
+  Cd.PPx[K] := 15;
+  Cd.PPy[K] := 15;
+ End;
+ If HasPrec Then
+  For K := 0 To Cd.NL Do Begin
+   B := JxS^[Q + 5 + K];
+   Cd.PPx[K] := B And 15;
+   Cd.PPy[K] := B Shr 4;
+   If K > 0 Then Begin
+    If Cd.PPx[K] = 0 Then Cd.PPx[K] := 1;
+    If Cd.PPy[K] = 0 Then Cd.PPy[K] := 1;
+   End;
+  End;
+ JxParseSP := True;
+End;
+
+Function JxParseQ(Var Qt: TJxQnt; Sq, Q, N: LongInt): Boolean;
+Var
+ I, V: LongInt;
+Begin
+ JxParseQ := False;
+ Qt.Sty := Sq And 31;
+ Qt.Guard := Sq Shr 5;
+ Qt.Cnt := 0;
+ Case Qt.Sty Of
+  0: Begin
+   If N < 1 Then Exit;
+   Qt.Cnt := JxMin(N, 97);
+   For I := 0 To Qt.Cnt - 1 Do Begin
+    Qt.Eps[I] := JxS^[Q + I] Shr 3;
+    Qt.Mu[I] := 0;
+   End;
+  End;
+  1: Begin
+   If N < 2 Then Exit;
+   V := JxBE16(Q);
+   Qt.Cnt := 1;
+   Qt.Eps[0] := V Shr 11;
+   Qt.Mu[0] := V And $7FF;
+  End;
+  2: Begin
+   If N < 2 Then Exit;
+   Qt.Cnt := JxMin(N Div 2, 97);
+   For I := 0 To Qt.Cnt - 1 Do Begin
+    V := JxBE16(Q + 2 * I);
+    Qt.Eps[I] := V Shr 11;
+    Qt.Mu[I] := V And $7FF;
+   End;
+  End;
+ Else Exit;
+ End;
+ JxParseQ := True;
+End;
+
+{ applique un segment de marqueur (données en Q, longueur N) }
+Function JxApplyMarker(Var P: TJxParams; Mk, Q, N: LongInt): Boolean;
+Var
+ Cd: TJxCod;
+ Qt: TJxQnt;
+ C, I, Ne: LongInt;
+Begin
+ JxApplyMarker := False;
+ Case Mk Of
+  $FF52: Begin
+   If N < 10 Then Exit;
+   P.Scod := JxS^[Q];
+   If JxS^[Q + 1] > 4 Then Exit;
+   P.Prog := JxS^[Q + 1];
+   P.Layers := JxBE16(Q + 2);
+   If P.Layers < 1 Then Exit;
+   P.MCT := JxS^[Q + 4];
+   If Not JxParseSP(Cd, Q + 5, N - 5, (P.Scod And 1) <> 0) Then Exit;
+   For C := 0 To JxNC - 1 Do
+    If Not P.CodSet[C] Then P.Cod[C] := Cd;
+   P.HasCod := True;
+  End;
+  $FF53: Begin
+   If N < 7 Then Exit;
+   C := JxS^[Q];
+   If C >= JxNC Then Begin JxApplyMarker := True; Exit; End;
+   If Not JxParseSP(Cd, Q + 2, N - 2, (JxS^[Q + 1] And 1) <> 0) Then Exit;
+   P.Cod[C] := Cd;
+   P.CodSet[C] := True;
+  End;
+  $FF5C: Begin
+   If N < 2 Then Exit;
+   If Not JxParseQ(Qt, JxS^[Q], Q + 1, N - 1) Then Exit;
+   For C := 0 To JxNC - 1 Do
+    If Not P.QntSet[C] Then P.Qnt[C] := Qt;
+   P.HasQnt := True;
+  End;
+  $FF5D: Begin
+   If N < 3 Then Exit;
+   C := JxS^[Q];
+   If C >= JxNC Then Begin JxApplyMarker := True; Exit; End;
+   If Not JxParseQ(Qt, JxS^[Q + 1], Q + 2, N - 2) Then Exit;
+   P.Qnt[C] := Qt;
+   P.QntSet[C] := True;
+  End;
+  $FF5E: Begin
+   If N < 3 Then Exit;
+   C := JxS^[Q];
+   If C >= JxNC Then Begin JxApplyMarker := True; Exit; End;
+   If JxS^[Q + 1] = 0 Then P.Roi[C] := JxS^[Q + 2];
+  End;
+  $FF5F: Begin
+   If Not P.PocSeen Then Begin
+    P.NPoc := 0;
+    P.PocSeen := True;
+   End;
+   Ne := N Div 7;
+   For I := 0 To Ne - 1 Do
+    If P.NPoc < JxMaxPoc Then Begin
+     P.Poc[P.NPoc].RS := JxS^[Q + 7 * I];
+     P.Poc[P.NPoc].CS := JxS^[Q + 7 * I + 1];
+     P.Poc[P.NPoc].LYE := JxBE16(Q + 7 * I + 2);
+     P.Poc[P.NPoc].RE := JxS^[Q + 7 * I + 4];
+     C := JxS^[Q + 7 * I + 5];
+     If C = 0 Then C := 256;
+     P.Poc[P.NPoc].CE := C;
+     P.Poc[P.NPoc].Prog := JxS^[Q + 7 * I + 6];
+     If P.Poc[P.NPoc].Prog > 4 Then Exit;
+     Inc(P.NPoc);
+    End;
+  End;
+  $FF60, $FF61: Exit;   { PPM / PPT : en-têtes de paquets déplacés, non gérés }
+ End;
+ JxApplyMarker := True;
+End;
+
+Function JxParseSiz(Q, N: LongInt): Boolean;
+Var
+ I, B, Nc: LongInt;
+ Cw, Ch, Tot: Int64;
+ Ntx, Nty: Int64;
+Begin
+ JxParseSiz := False;
+ If N < 36 Then Exit;
+ Nc := JxBE16(Q + 34);
+ If (Nc < 1) Or (Nc > JxMaxC) Or (N < 36 + 3 * Nc) Then Exit;
+ If (JxBE32(Q + 2) > $7FFFFFF0) Or (JxBE32(Q + 6) > $7FFFFFF0) Or
+    (JxBE32(Q + 10) > $7FFFFFF0) Or (JxBE32(Q + 14) > $7FFFFFF0) Or
+    (JxBE32(Q + 18) > $7FFFFFF0) Or (JxBE32(Q + 22) > $7FFFFFF0) Or
+    (JxBE32(Q + 26) > $7FFFFFF0) Or (JxBE32(Q + 30) > $7FFFFFF0) Then Exit;
+ JxXsiz := JxBE32(Q + 2);
+ JxYsiz := JxBE32(Q + 6);
+ JxXOsiz := JxBE32(Q + 10);
+ JxYOsiz := JxBE32(Q + 14);
+ JxXTsiz := JxBE32(Q + 18);
+ JxYTsiz := JxBE32(Q + 22);
+ JxXTOsiz := JxBE32(Q + 26);
+ JxYTOsiz := JxBE32(Q + 30);
+ If (JxXsiz <= JxXOsiz) Or (JxYsiz <= JxYOsiz) Then Exit;
+ If (JxXTsiz < 1) Or (JxYTsiz < 1) Then Exit;
+ If (JxXTOsiz > JxXOsiz) Or (JxYTOsiz > JxYOsiz) Then Exit;
+ If (Int64(JxXTOsiz) + JxXTsiz <= JxXOsiz) Or (Int64(JxYTOsiz) + JxYTsiz <= JxYOsiz) Then Exit;
+ Tot := Int64(JxXsiz - JxXOsiz) * Int64(JxYsiz - JxYOsiz) * Nc;
+ If Tot > JxMaxSamples Then Exit;
+ Ntx := (Int64(JxXsiz) - JxXTOsiz + JxXTsiz - 1) Div JxXTsiz;
+ Nty := (Int64(JxYsiz) - JxYTOsiz + JxYTsiz - 1) Div JxYTsiz;
+ If (Ntx < 1) Or (Nty < 1) Or (Ntx * Nty > 65535) Then Exit;
+ JxNTX := Ntx; JxNTY := Nty; JxNT := Ntx * Nty;
+ For I := 0 To Nc - 1 Do Begin
+  B := JxS^[Q + 36 + 3 * I];
+  JxSgnC[I] := (B And $80) <> 0;
+  JxPrecC[I] := (B And $7F) + 1;
+  If JxPrecC[I] > 30 Then Exit;
+  JxXR[I] := JxS^[Q + 37 + 3 * I];
+  JxYR[I] := JxS^[Q + 38 + 3 * I];
+  If (JxXR[I] < 1) Or (JxYR[I] < 1) Then Exit;
+  Cw := JxCeilDiv(JxXsiz, JxXR[I]) - JxCeilDiv(JxXOsiz, JxXR[I]);
+  Ch := JxCeilDiv(JxYsiz, JxYR[I]) - JxCeilDiv(JxYOsiz, JxYR[I]);
+  If (Cw < 1) Or (Ch < 1) Then Exit;
+ End;
+ JxNC := Nc;
+ JxHaveSiz := True;
+ JxParseSiz := True;
+End;
+
+{ analyse l'en-tête principal ; Pos reçoit la position du premier SOT }
+Function JxParseMain(Var Pos: LongInt): Boolean;
+Var
+ P, Mk, L: LongInt;
+Begin
+ JxParseMain := False;
+ If JxSLen < 4 Then Exit;
+ If JxBE16(0) <> $FF4F Then Exit;
+ FillChar(JxMainP, SizeOf(JxMainP), 0);
+ P := 2;
+ While True Do Begin
+  If P + 2 > JxSLen Then Exit;
+  Mk := JxBE16(P);
+  If (Mk = $FF90) Or (Mk = $FFD9) Then Break;
+  If (Mk < $FF30) Or (Mk > $FFFE) Then Exit;
+  If Mk <= $FF3F Then Begin Inc(P, 2); Continue; End;
+  If P + 4 > JxSLen Then Exit;
+  L := JxBE16(P + 2);
+  If (L < 2) Or (P + 2 + L > JxSLen) Then Exit;
+  If Mk = $FF51 Then Begin
+   If JxHaveSiz Then Exit;
+   If Not JxParseSiz(P + 4, L - 2) Then Exit;
+  End Else Begin
+   If (Not JxHaveSiz) And (Mk >= $FF52) And (Mk <= $FF5F) Then Exit;
+   If JxHaveSiz Then
+    If Not JxApplyMarker(JxMainP, Mk, P + 4, L - 2) Then Exit;
+  End;
+  Inc(P, 2 + L);
+ End;
+ Pos := P;
+ JxParseMain := JxHaveSiz And JxMainP.HasCod And JxMainP.HasQnt;
+End;
+
+{ liste des parties de tuiles }
+Function JxScanTiles(P0: LongInt): Boolean;
+Var
+ P, Isot, Hdr, TEnd, Q, L, NewCap, T: LongInt;
+ Psot: Int64;
+ Found: Boolean;
+ NewTPs: PJxTPArr;
+Begin
+ JxScanTiles := False;
+ P := P0;
+ While P + 12 <= JxSLen Do Begin
+  If (JxS^[P] <> $FF) Or (JxS^[P + 1] <> $90) Then Break;
+  If JxBE16(P + 2) <> 10 Then Break;
+  Isot := JxBE16(P + 4);
+  Psot := JxBE32(P + 6);
+  Hdr := P + 12;
+  If Psot = 0 Then Begin
+   TEnd := JxSLen;
+   If (TEnd - 2 >= Hdr) And (JxS^[TEnd - 2] = $FF) And (JxS^[TEnd - 1] = $D9) Then Dec(TEnd, 2);
+  End Else Begin
+   If Psot < 14 Then Break;
+   If P + Psot > JxSLen Then TEnd := JxSLen Else TEnd := P + Psot;
+  End;
+  If TEnd < Hdr + 2 Then Break;
+  Q := Hdr;
+  Found := False;
+  While Q + 2 <= TEnd Do Begin
+   If JxS^[Q] <> $FF Then Break;
+   If JxS^[Q + 1] = $93 Then Begin Found := True; Break; End;
+   If Q + 4 > TEnd Then Break;
+   L := JxBE16(Q + 2);
+   If L < 2 Then Break;
+   Inc(Q, 2 + L);
+  End;
+  If Not Found Then Break;
+  If Isot < JxNT Then Begin
+   If JxNTP >= JxTPCap Then Begin
+    NewCap := JxTPCap * 2;
+    If NewCap < 64 Then NewCap := 64;
+    If NewCap > 4194304 Then Exit;
+    NewTPs := Nil;
+    GetMem(NewTPs, NewCap * SizeOf(TJxTP));
+    If NewTPs = Nil Then Exit;
+    If JxTPs <> Nil Then Begin
+     Move(JxTPs^, NewTPs^, JxNTP * SizeOf(TJxTP));
+     FreeMem(JxTPs, JxTPCap * SizeOf(TJxTP));
+    End;
+    JxTPs := NewTPs;
+    JxTPCap := NewCap;
+   End;
+   JxTPs^[JxNTP].Tile := Isot;
+   JxTPs^[JxNTP].Hdr := Hdr;
+   JxTPs^[JxNTP].Data := Q + 2;
+   JxTPs^[JxNTP].DEnd := TEnd;
+   JxTPs^[JxNTP].Next := -1;
+   T := JxTileLast^[Isot];
+   If T >= 0 Then JxTPs^[T].Next := JxNTP Else JxTileFirst^[Isot] := JxNTP;
+   JxTileLast^[Isot] := JxNTP;
+   Inc(JxNTP);
+  End;
+  P := TEnd;
+ End;
+ JxScanTiles := True;
+End;
+
+{ charge les paramètres de la tuile T (principaux + en-têtes de ses parties) }
+Function JxLoadTile(T: LongInt): Boolean;
+Var
+ Tp, Q, E, Mk, L: LongInt;
+Begin
+ JxLoadTile := False;
+ JxTileP := JxMainP;
+ FillChar(JxTileP.CodSet, SizeOf(JxTileP.CodSet), 0);
+ FillChar(JxTileP.QntSet, SizeOf(JxTileP.QntSet), 0);
+ JxTileP.PocSeen := False;
+ Tp := JxTileFirst^[T];
+ If Tp < 0 Then Exit;
+ While Tp >= 0 Do Begin
+  Q := JxTPs^[Tp].Hdr;
+  E := JxTPs^[Tp].Data - 2;
+  While Q + 4 <= E Do Begin
+   Mk := JxBE16(Q);
+   L := JxBE16(Q + 2);
+   If (L < 2) Or (Q + 2 + L > E) Then Exit;
+   If Not JxApplyMarker(JxTileP, Mk, Q + 4, L - 2) Then Exit;
+   Inc(Q, 2 + L);
+  End;
+  Tp := JxTPs^[Tp].Next;
+ End;
+ JxLoadTile := True;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Géométrie de tuile : composantes, résolutions, bandes, précincts,        }
+{ code-blocks                                                              }
+{ ---------------------------------------------------------------------- }
+
+Function JxPow2(E: LongInt): Double;
+Var
+ R: Double;
+ I: LongInt;
+Begin
+ R := 1.0;
+ If E >= 0 Then Begin
+  For I := 1 To JxMin(E, 100) Do R := R * 2.0;
+ End Else Begin
+  For I := 1 To JxMin(-E, 100) Do R := R * 0.5;
+ End;
+ JxPow2 := R;
+End;
+
+Function JxBuildPBand(Const Cd: TJxCod; Var Rs: TJxRes; Var Bd: TJxBand; Var Pb: TJxPBand;
+  Px, Py, K: LongInt): Boolean;
+Var
+ Sh, Ppw, Pph, Cbw, Cbh, I, J, Ix0, Ix1, Iy0, Iy1: LongInt;
+ Gx, Gy, Pbx0, Pbx1, Pby0, Pby1, Cx0, Cx1, Cy0, Cy1: Int64;
+ Cb: PJxCblk;
+Begin
+ JxBuildPBand := False;
+ Pb.NCw := 0;
+ Pb.NCh := 0;
+ If K > 0 Then Sh := 1 Else Sh := 0;
+ Ppw := Rs.PPx - Sh;
+ Pph := Rs.PPy - Sh;
+ Gx := JxFloorShr(Rs.X0, Rs.PPx) + Px;
+ Gy := JxFloorShr(Rs.Y0, Rs.PPy) + Py;
+ Pbx0 := Gx Shl Ppw;
+ Pbx1 := (Gx + 1) Shl Ppw;
+ Pby0 := Gy Shl Pph;
+ Pby1 := (Gy + 1) Shl Pph;
+ Cx0 := Pbx0; If Bd.X0 > Cx0 Then Cx0 := Bd.X0;
+ Cx1 := Pbx1; If Bd.X1 < Cx1 Then Cx1 := Bd.X1;
+ Cy0 := Pby0; If Bd.Y0 > Cy0 Then Cy0 := Bd.Y0;
+ Cy1 := Pby1; If Bd.Y1 < Cy1 Then Cy1 := Bd.Y1;
+ If (Cx1 <= Cx0) Or (Cy1 <= Cy0) Then Begin JxBuildPBand := True; Exit; End;
+ Cbw := JxMin(Cd.XCB, Ppw);
+ Cbh := JxMin(Cd.YCB, Pph);
+ Ix0 := JxFloorShr(Cx0, Cbw);
+ Ix1 := JxCeilShr(Cx1, Cbw);
+ Iy0 := JxFloorShr(Cy0, Cbh);
+ Iy1 := JxCeilShr(Cy1, Cbh);
+ Pb.NCw := Ix1 - Ix0;
+ Pb.NCh := Iy1 - Iy0;
+ JxTotCblk := JxTotCblk + Int64(Pb.NCw) * Pb.NCh;
+ If (JxTotCblk > 4000000) Or (Int64(Pb.NCw) * Pb.NCh > 4000000) Then Begin
+  Pb.NCw := 0; Pb.NCh := 0;
+  Exit;
+ End;
+ Pb.Cblks := JxAlloc(Pb.NCw * Pb.NCh * SizeOf(TJxCblk));
+ If Pb.Cblks = Nil Then Exit;
+ Pb.Incl := JxTagNew(Pb.NCw, Pb.NCh);
+ If Pb.Incl = Nil Then Exit;
+ Pb.Zbp := JxTagNew(Pb.NCw, Pb.NCh);
+ If Pb.Zbp = Nil Then Exit;
+ For J := 0 To Pb.NCh - 1 Do
+  For I := 0 To Pb.NCw - 1 Do Begin
+   Cb := @Pb.Cblks^[J * Pb.NCw + I];
+   Cb^.X0 := JxMax64(Cx0, Int64(Ix0 + I) Shl Cbw);
+   Cb^.X1 := JxMin64(Cx1, Int64(Ix0 + I + 1) Shl Cbw);
+   Cb^.Y0 := JxMax64(Cy0, Int64(Iy0 + J) Shl Cbh);
+   Cb^.Y1 := JxMin64(Cy1, Int64(Iy0 + J + 1) Shl Cbh);
+  End;
+ JxBuildPBand := True;
+End;
+
+Function JxBuildRes(C, K: LongInt): Boolean;
+Var
+ Tc: ^TJxTComp;
+ Rs: ^TJxRes;
+ Cd: ^TJxCod;
+ Qn: ^TJxQnt;
+ Lev, B, Orient, BandIdx, Nb, Xob, Yob, Eps, Mu, Gain, Px, Py, Np: LongInt;
+ Rb: LongInt;
+Begin
+ JxBuildRes := False;
+ Tc := @JxTC[C];
+ Rs := @Tc^.Res^[K];
+ Cd := @JxTileP.Cod[C];
+ Qn := @JxTileP.Qnt[C];
+ Lev := Tc^.NL - K;
+ Rs^.X0 := JxCeilShr(Tc^.X0, Lev);
+ Rs^.Y0 := JxCeilShr(Tc^.Y0, Lev);
+ Rs^.X1 := JxCeilShr(Tc^.X1, Lev);
+ Rs^.Y1 := JxCeilShr(Tc^.Y1, Lev);
+ Rs^.W := Rs^.X1 - Rs^.X0;
+ Rs^.H := Rs^.Y1 - Rs^.Y0;
+ Rs^.PPx := Cd^.PPx[K];
+ Rs^.PPy := Cd^.PPy[K];
+ Rs^.PW := 0;
+ Rs^.PH := 0;
+ If (Rs^.X1 > Rs^.X0) And (Rs^.Y1 > Rs^.Y0) Then Begin
+  Rs^.PW := JxCeilShr(Rs^.X1, Rs^.PPx) - JxFloorShr(Rs^.X0, Rs^.PPx);
+  Rs^.PH := JxCeilShr(Rs^.Y1, Rs^.PPy) - JxFloorShr(Rs^.Y0, Rs^.PPy);
+ End;
+ If Int64(Rs^.PW) * Rs^.PH + JxTotPrec > 4000000 Then Exit;
+ Rs^.PrecBase := JxTotPrec;
+ JxTotPrec := JxTotPrec + Int64(Rs^.PW) * Rs^.PH;
+ If K = 0 Then Rs^.NB := 1 Else Rs^.NB := 3;
+ For B := 0 To Rs^.NB - 1 Do Begin
+  If K = 0 Then Begin Orient := 0; BandIdx := 0; End
+  Else Begin Orient := B + 1; BandIdx := 3 * (K - 1) + Orient; End;
+  Rs^.Bands[B].Orient := Orient;
+  If K = 0 Then Begin
+   Rs^.Bands[B].X0 := Rs^.X0; Rs^.Bands[B].Y0 := Rs^.Y0;
+   Rs^.Bands[B].X1 := Rs^.X1; Rs^.Bands[B].Y1 := Rs^.Y1;
+   Rs^.Bands[B].OX := 0; Rs^.Bands[B].OY := 0;
+  End Else Begin
+   Nb := Lev + 1;
+   Xob := Orient And 1;
+   Yob := Orient Shr 1;
+   Rs^.Bands[B].X0 := JxCeilShr(Int64(Tc^.X0) - (Int64(Xob) Shl (Nb - 1)), Nb);
+   Rs^.Bands[B].Y0 := JxCeilShr(Int64(Tc^.Y0) - (Int64(Yob) Shl (Nb - 1)), Nb);
+   Rs^.Bands[B].X1 := JxCeilShr(Int64(Tc^.X1) - (Int64(Xob) Shl (Nb - 1)), Nb);
+   Rs^.Bands[B].Y1 := JxCeilShr(Int64(Tc^.Y1) - (Int64(Yob) Shl (Nb - 1)), Nb);
+   If Xob <> 0 Then Rs^.Bands[B].OX := Tc^.Res^[K - 1].W Else Rs^.Bands[B].OX := 0;
+   If Yob <> 0 Then Rs^.Bands[B].OY := Tc^.Res^[K - 1].H Else Rs^.Bands[B].OY := 0;
+  End;
+  { quantification }
+  If Qn^.Sty = 1 Then Begin
+   Eps := Qn^.Eps[0];
+   Mu := Qn^.Mu[0];
+   If BandIdx > 0 Then Eps := Eps - ((BandIdx - 1) Div 3);
+   If Eps < 0 Then Eps := 0;
+  End Else Begin
+   Np := BandIdx;
+   If Np >= Qn^.Cnt Then Np := Qn^.Cnt - 1;
+   If Np < 0 Then Np := 0;
+   Eps := Qn^.Eps[Np];
+   Mu := Qn^.Mu[Np];
+  End;
+  Rs^.Bands[B].Mb := Qn^.Guard + Eps - 1;
+  If Orient = 3 Then Gain := 2 Else If Orient = 0 Then Gain := 0 Else Gain := 1;
+  Rb := JxPrecC[C] + Gain;
+  Rs^.Bands[B].Step := (1.0 + Mu / 2048.0) * JxPow2(Rb - Eps);
+ End;
+ If Rs^.PW * Rs^.PH > 0 Then Begin
+  Rs^.Precs := JxAlloc(Int64(Rs^.PW) * Rs^.PH * SizeOf(TJxPrec));
+  If Rs^.Precs = Nil Then Exit;
+  For Py := 0 To Rs^.PH - 1 Do
+   For Px := 0 To Rs^.PW - 1 Do
+    For B := 0 To Rs^.NB - 1 Do
+     If Not JxBuildPBand(Cd^, Rs^, Rs^.Bands[B], Rs^.Precs^[Py * Rs^.PW + Px].Bands[B], Px, Py, K) Then Exit;
+ End;
+ JxBuildRes := True;
+End;
+
+Function JxBuildTile(T: LongInt): Boolean;
+Var
+ Tp, Tq, C, K: LongInt;
+ Sz: Int64;
+ Tc: ^TJxTComp;
+Begin
+ JxBuildTile := False;
+ Tp := T Mod JxNTX;
+ Tq := T Div JxNTX;
+ JxTX0 := JxMax64(Int64(JxXTOsiz) + Int64(Tp) * JxXTsiz, JxXOsiz);
+ JxTX1 := JxMin64(Int64(JxXTOsiz) + Int64(Tp + 1) * JxXTsiz, JxXsiz);
+ JxTY0 := JxMax64(Int64(JxYTOsiz) + Int64(Tq) * JxYTsiz, JxYOsiz);
+ JxTY1 := JxMin64(Int64(JxYTOsiz) + Int64(Tq + 1) * JxYTsiz, JxYsiz);
+ If (JxTX1 <= JxTX0) Or (JxTY1 <= JxTY0) Then Exit;
+ JxTotCblk := 0;
+ JxTotPrec := 0;
+ For C := 0 To JxNC - 1 Do Begin
+  Tc := @JxTC[C];
+  Tc^.Buf := Nil;
+  Tc^.Res := Nil;
+ End;
+ For C := 0 To JxNC - 1 Do Begin
+  Tc := @JxTC[C];
+  Tc^.X0 := JxCeilDiv(JxTX0, JxXR[C]);
+  Tc^.Y0 := JxCeilDiv(JxTY0, JxYR[C]);
+  Tc^.X1 := JxCeilDiv(JxTX1, JxXR[C]);
+  Tc^.Y1 := JxCeilDiv(JxTY1, JxYR[C]);
+  Tc^.NL := JxTileP.Cod[C].NL;
+  Tc^.Rk := Tc^.NL - JxRed;
+  If Tc^.Rk < 0 Then Exit;
+  Tc^.Res := JxAlloc(SizeOf(TJxResArr));
+  If Tc^.Res = Nil Then Exit;
+  For K := 0 To Tc^.NL Do
+   If Not JxBuildRes(C, K) Then Exit;
+  Tc^.W := Tc^.Res^[Tc^.Rk].W;
+  Tc^.H := Tc^.Res^[Tc^.Rk].H;
+  Sz := Int64(Tc^.W) * Tc^.H * 4;
+  If Sz > 1900000000 Then Exit;
+  If Sz > 0 Then Begin
+   GetMem(Tc^.Buf, Sz);
+   If Tc^.Buf = Nil Then Exit;
+   FillChar(Tc^.Buf^, Sz, 0);
+  End;
+ End;
+ JxBuildTile := True;
+End;
+
+{ libère les tampons de la tuile courante }
+Procedure JxFreeTile;
+Var
+ C, K, B, P, N: LongInt;
+ Tc: ^TJxTComp;
+ Rs: ^TJxRes;
+ Pb: ^TJxPBand;
+ Cb: PJxCblk;
+Begin
+ For C := 0 To JxNC - 1 Do Begin
+  Tc := @JxTC[C];
+  If Tc^.Res <> Nil Then
+   For K := 0 To Tc^.NL Do Begin
+    Rs := @Tc^.Res^[K];
+    If Rs^.Precs <> Nil Then
+     For P := 0 To Rs^.PW * Rs^.PH - 1 Do
+      For B := 0 To Rs^.NB - 1 Do Begin
+       Pb := @Rs^.Precs^[P].Bands[B];
+       If Pb^.Cblks <> Nil Then
+        For N := 0 To Pb^.NCw * Pb^.NCh - 1 Do Begin
+         Cb := @Pb^.Cblks^[N];
+         If Cb^.Data <> Nil Then Begin FreeMem(Cb^.Data, Cb^.DCap); Cb^.Data := Nil; End;
+         If Cb^.Segs <> Nil Then Begin FreeMem(Cb^.Segs, Cb^.SegCap * SizeOf(TJxSeg)); Cb^.Segs := Nil; End;
+        End;
+      End;
+   End;
+  If Tc^.Buf <> Nil Then Begin
+   FreeMem(Tc^.Buf, Int64(Tc^.W) * Tc^.H * 4);
+   Tc^.Buf := Nil;
+  End;
+  Tc^.Res := Nil;
+ End;
+ JxFreeArena;
+ If JxDone <> Nil Then Begin
+  FreeMem(JxDone, (JxDoneBits + 7) Shr 3);
+  JxDone := Nil;
+ End;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Tier-2 : lecture des paquets et ordres de progression                    }
+{ ---------------------------------------------------------------------- }
+
+Function JxNextTP: Boolean;
+Var
+ Tp: LongInt;
+Begin
+ JxNextTP := False;
+ If JxCurTP = -2 Then Exit;
+ If JxCurTP = -1 Then Tp := JxTileFirst^[JxCurTile]
+ Else Tp := JxTPs^[JxCurTP].Next;
+ If Tp < 0 Then Begin JxCurTP := -2; Exit; End;
+ JxCurTP := Tp;
+ JxPktPos := JxTPs^[Tp].Data;
+ JxPktEnd := JxTPs^[Tp].DEnd;
+ JxNextTP := True;
+End;
+
+Function JxCbAddSeg(Cb: PJxCblk; Sty: LongInt): Boolean;
+Var
+ NewCap, Mx, Pm: LongInt;
+ NS: PJxSegArr;
+ Sg: ^TJxSeg;
+Begin
+ JxCbAddSeg := False;
+ If Cb^.SegCnt >= 200 Then Exit;
+ If Cb^.SegCnt >= Cb^.SegCap Then Begin
+  NewCap := Cb^.SegCap * 2;
+  If NewCap < 4 Then NewCap := 4;
+  NS := Nil;
+  GetMem(NS, NewCap * SizeOf(TJxSeg));
+  If NS = Nil Then Begin JxMemErr := True; Exit; End;
+  If Cb^.Segs <> Nil Then Begin
+   Move(Cb^.Segs^, NS^, Cb^.SegCnt * SizeOf(TJxSeg));
+   FreeMem(Cb^.Segs, Cb^.SegCap * SizeOf(TJxSeg));
+  End;
+  Cb^.Segs := NS;
+  Cb^.SegCap := NewCap;
+ End;
+ If (Sty And JxCbTermAll) <> 0 Then Mx := 1
+ Else If (Sty And JxCbLazy) <> 0 Then Begin
+  If Cb^.SegCnt = 0 Then Mx := 10
+  Else Begin
+   Pm := Cb^.Segs^[Cb^.SegCnt - 1].MaxPasses;
+   If (Pm = 1) Or (Pm = 10) Then Mx := 2 Else Mx := 1;
+  End;
+ End Else Mx := 100000;
+ Sg := @Cb^.Segs^[Cb^.SegCnt];
+ Sg^.Len := 0;
+ Sg^.Passes := 0;
+ Sg^.MaxPasses := Mx;
+ Inc(Cb^.SegCnt);
+ JxCbAddSeg := True;
+End;
+
+Function JxCbAppend(Cb: PJxCblk; Pos, Len: LongInt): Boolean;
+Var
+ NewCap: LongInt;
+ ND: PBigBytes;
+Begin
+ JxCbAppend := False;
+ If Cb^.DLen + Len + 2 > Cb^.DCap Then Begin
+  NewCap := Cb^.DCap * 2;
+  If NewCap < Cb^.DLen + Len + 2 Then NewCap := Cb^.DLen + Len + 2;
+  If NewCap < 64 Then NewCap := 64;
+  ND := Nil;
+  GetMem(ND, NewCap);
+  If ND = Nil Then Begin JxMemErr := True; Exit; End;
+  If Cb^.Data <> Nil Then Begin
+   Move(Cb^.Data^, ND^, Cb^.DLen);
+   FreeMem(Cb^.Data, Cb^.DCap);
+  End;
+  Cb^.Data := ND;
+  Cb^.DCap := NewCap;
+ End;
+ If Len > 0 Then Move(JxS^[Pos], Cb^.Data^[Cb^.DLen], Len);
+ Inc(Cb^.DLen, Len);
+ JxCbAppend := True;
+End;
+
+Function JxFloorLog2(V: LongInt): LongInt;
+Var
+ R: LongInt;
+Begin
+ R := 0;
+ While V > 1 Do Begin V := V Shr 1; Inc(R); End;
+ JxFloorLog2 := R;
+End;
+
+{ lit un paquet ; retourne False si plus de données exploitables }
+Function JxReadPacket(C, R, P, L: LongInt): Boolean;
+Var
+ Rs: ^TJxRes;
+ Pr: ^TJxPrec;
+ Pb: ^TJxPBand;
+ Cb: PJxCblk;
+ Pd: ^TJxPend;
+ Sg: ^TJxSeg;
+ B, X, Y, I, NP, Sty, NewP, Take, Bits, Ln, Pos, N, Avail, Zb, NewCap, Si: LongInt;
+ Incl, Keep, Bad, Trunc: Boolean;
+ NPd: PJxPendArr;
+Begin
+ JxReadPacket := False;
+ While JxPktPos >= JxPktEnd Do
+  If Not JxNextTP Then Exit;
+ Rs := @JxTC[C].Res^[R];
+ Pr := @Rs^.Precs^[P];
+ Sty := JxTileP.Cod[C].Sty;
+ Keep := R <= JxTC[C].Rk;
+ { marqueur SOP éventuel }
+ If (JxPktPos + 6 <= JxPktEnd) And (JxS^[JxPktPos] = $FF) And (JxS^[JxPktPos + 1] = $91) Then
+  Inc(JxPktPos, 6);
+ JxHPos := JxPktPos;
+ JxHEnd := JxPktEnd;
+ JxHBuf := 0;
+ JxHCt := 0;
+ JxHErr := False;
+ Bad := False;
+ NP := 0;
+ If JxHBit <> 0 Then Begin
+  For B := 0 To Rs^.NB - 1 Do Begin
+   If Bad Then Break;
+   Pb := @Pr^.Bands[B];
+   For Y := 0 To Pb^.NCh - 1 Do Begin
+    If Bad Then Break;
+    For X := 0 To Pb^.NCw - 1 Do Begin
+     Cb := @Pb^.Cblks^[Y * Pb^.NCw + X];
+     If Cb^.NumPasses = 0 Then Incl := JxTagDec(Pb^.Incl, X, Y, L + 1)
+     Else Incl := JxHBit <> 0;
+     If JxHErr Then Begin Bad := True; Break; End;
+     If Not Incl Then Continue;
+     If Cb^.NumPasses = 0 Then Begin
+      Zb := 1;
+      While Not JxTagDec(Pb^.Zbp, X, Y, Zb) Do Begin
+       Inc(Zb);
+       If (Zb > 80) Or JxHErr Then Break;
+      End;
+      If (Zb > 80) Or JxHErr Then Begin Bad := True; Break; End;
+      Cb^.NumBps := Rs^.Bands[B].Mb + 1 - Zb;
+      Cb^.LBlock := 3;
+     End;
+     NewP := 1;
+     If JxHBit <> 0 Then Begin
+      NewP := 2;
+      If JxHBit <> 0 Then Begin
+       N := JxHBits(2);
+       If N <> 3 Then NewP := 3 + N
+       Else Begin
+        N := JxHBits(5);
+        If N <> 31 Then NewP := 6 + N
+        Else NewP := 37 + JxHBits(7);
+       End;
+      End;
+     End;
+     While (JxHBit <> 0) And (Not JxHErr) Do Begin
+      Inc(Cb^.LBlock);
+      If Cb^.LBlock > 40 Then Begin JxHErr := True; Break; End;
+     End;
+     If JxHErr Or (Cb^.NumPasses + NewP > 200) Then Begin Bad := True; Break; End;
+     { répartition des passes en segments }
+     If Cb^.SegCnt = 0 Then Begin
+      If Not JxCbAddSeg(Cb, Sty) Then Begin Bad := True; Break; End;
+     End Else If Cb^.Segs^[Cb^.SegCnt - 1].Passes >= Cb^.Segs^[Cb^.SegCnt - 1].MaxPasses Then Begin
+      If Not JxCbAddSeg(Cb, Sty) Then Begin Bad := True; Break; End;
+     End;
+     N := NewP;
+     Repeat
+      Si := Cb^.SegCnt - 1;
+      Sg := @Cb^.Segs^[Si];
+      Take := JxMin(Sg^.MaxPasses - Sg^.Passes, N);
+      Bits := Cb^.LBlock + JxFloorLog2(Take);
+      Ln := JxHBits(Bits);
+      If JxHErr Then Begin Bad := True; Break; End;
+      If NP >= JxPendCap Then Begin
+       NewCap := JxPendCap * 2;
+       If NewCap < 256 Then NewCap := 256;
+       If NewCap > 16000000 Then Begin Bad := True; Break; End;
+       NPd := Nil;
+       GetMem(NPd, NewCap * SizeOf(TJxPend));
+       If NPd = Nil Then Begin JxMemErr := True; Bad := True; Break; End;
+       If JxPend <> Nil Then Begin
+        Move(JxPend^, NPd^, NP * SizeOf(TJxPend));
+        FreeMem(JxPend, JxPendCap * SizeOf(TJxPend));
+       End;
+       JxPend := NPd;
+       JxPendCap := NewCap;
+      End;
+      JxPend^[NP].Cb := Cb;
+      JxPend^[NP].Seg := Si;
+      JxPend^[NP].Len := Ln;
+      Inc(NP);
+      Inc(Sg^.Passes, Take);
+      Dec(N, Take);
+      If N > 0 Then
+       If Not JxCbAddSeg(Cb, Sty) Then Begin Bad := True; Break; End;
+     Until N <= 0;
+     If Bad Then Break;
+     Inc(Cb^.NumPasses, NewP);
+    End;
+   End;
+  End;
+ End;
+ If Bad Or JxHErr Then Begin JxStop := True; Exit; End;
+ JxHAlign;
+ If JxHErr Then Begin JxStop := True; Exit; End;
+ Pos := JxHPos;
+ { marqueur EPH éventuel }
+ If (Pos + 2 <= JxPktEnd) And (JxS^[Pos] = $FF) And (JxS^[Pos + 1] = $92) Then Inc(Pos, 2);
+ { corps du paquet }
+ Trunc := False;
+ For I := 0 To NP - 1 Do Begin
+  Pd := @JxPend^[I];
+  Avail := JxPktEnd - Pos;
+  If Avail < 0 Then Avail := 0;
+  Ln := Pd^.Len;
+  If Ln > Avail Then Begin Ln := Avail; Trunc := True; End;
+  If Keep Then Begin
+   If Not JxCbAppend(Pd^.Cb, Pos, Ln) Then Begin JxStop := True; Exit; End;
+   Inc(Pd^.Cb^.Segs^[Pd^.Seg].Len, Ln);
+  End;
+  Inc(Pos, Ln);
+  If Trunc Then Break;
+ End;
+ JxPktPos := Pos;
+ If Trunc Then JxStop := True;
+ JxReadPacket := True;
+End;
+
+{ lit (une seule fois) le paquet (C,R,P,L) }
+Function JxPkt(C, R, P, L: LongInt): Boolean;
+Var
+ Idx: Int64;
+Begin
+ JxPkt := False;
+ If JxStop Then Exit;
+ If JxDone <> Nil Then Begin
+  Idx := (Int64(JxTC[C].Res^[R].PrecBase) + P) * JxTileP.Layers + L;
+  If Idx >= JxDoneBits Then Exit;
+  If (PByte(PtrUInt(JxDone) + PtrUInt(Idx Shr 3))^ And (1 Shl (Idx And 7))) <> 0 Then Begin
+   JxPkt := True;
+   Exit;
+  End;
+  PByte(PtrUInt(JxDone) + PtrUInt(Idx Shr 3))^ :=
+   PByte(PtrUInt(JxDone) + PtrUInt(Idx Shr 3))^ Or (1 Shl (Idx And 7));
+ End;
+ If Not JxReadPacket(C, R, P, L) Then Begin
+  JxStop := True;
+  Exit;
+ End;
+ JxPkt := Not JxStop;
+End;
+
+{ indice du précinct de (C,R) couvrant la position de référence (X,Y), ou -1 }
+Function JxPrecAt(C, R: LongInt; X, Y: Int64): LongInt;
+Var
+ Rs: ^TJxRes;
+ Lev, Rpx, Rpy: LongInt;
+ Pi, Pj: Int64;
+Begin
+ JxPrecAt := -1;
+ Rs := @JxTC[C].Res^[R];
+ If (Rs^.PW = 0) Or (Rs^.PH = 0) Then Exit;
+ Lev := JxTC[C].NL - R;
+ Rpx := Rs^.PPx + Lev;
+ Rpy := Rs^.PPy + Lev;
+ If Not (((Y Mod (Int64(JxYR[C]) Shl Rpy)) = 0) Or
+         ((Y = JxTY0) And (((Int64(Rs^.Y0) Shl Lev) Mod (Int64(1) Shl Rpy)) <> 0))) Then Exit;
+ If Not (((X Mod (Int64(JxXR[C]) Shl Rpx)) = 0) Or
+         ((X = JxTX0) And (((Int64(Rs^.X0) Shl Lev) Mod (Int64(1) Shl Rpx)) <> 0))) Then Exit;
+ Pi := JxFloorShr(JxCeilDiv(X, Int64(JxXR[C]) Shl Lev), Rs^.PPx) - JxFloorShr(Rs^.X0, Rs^.PPx);
+ Pj := JxFloorShr(JxCeilDiv(Y, Int64(JxYR[C]) Shl Lev), Rs^.PPy) - JxFloorShr(Rs^.Y0, Rs^.PPy);
+ If (Pi < 0) Or (Pi >= Rs^.PW) Or (Pj < 0) Or (Pj >= Rs^.PH) Then Exit;
+ JxPrecAt := Pi + Pj * Rs^.PW;
+End;
+
+{ exécute un volume de progression }
+Procedure JxRunProg(Prog, RS, RE, CS, CE, LE: LongInt);
+Var
+ L, R, C, P, Np, Pi: LongInt;
+ X, Y, Dx, Dy, Sx, Sy: Int64;
+Begin
+ If RE > 33 Then RE := 33;
+ If CE > JxNC Then CE := JxNC;
+ If LE > JxTileP.Layers Then LE := JxTileP.Layers;
+ Case Prog Of
+  0: Begin
+   For L := 0 To LE - 1 Do
+    For R := RS To RE - 1 Do
+     For C := CS To CE - 1 Do
+      If R <= JxTC[C].NL Then Begin
+       Np := JxTC[C].Res^[R].PW * JxTC[C].Res^[R].PH;
+       For P := 0 To Np - 1 Do
+        If Not JxPkt(C, R, P, L) Then Exit;
+      End;
+  End;
+  1: Begin
+   For R := RS To RE - 1 Do
+    For L := 0 To LE - 1 Do
+     For C := CS To CE - 1 Do
+      If R <= JxTC[C].NL Then Begin
+       Np := JxTC[C].Res^[R].PW * JxTC[C].Res^[R].PH;
+       For P := 0 To Np - 1 Do
+        If Not JxPkt(C, R, P, L) Then Exit;
+      End;
+  End;
+ Else
+  { progressions basées sur la position : pas minimal sur la grille de référence }
+  Dx := 0; Dy := 0;
+  For C := CS To CE - 1 Do
+   For R := 0 To JxTC[C].NL Do Begin
+    Sx := Int64(JxXR[C]) Shl (JxTC[C].Res^[R].PPx + JxTC[C].NL - R);
+    Sy := Int64(JxYR[C]) Shl (JxTC[C].Res^[R].PPy + JxTC[C].NL - R);
+    If (Dx = 0) Or (Sx < Dx) Then Dx := Sx;
+    If (Dy = 0) Or (Sy < Dy) Then Dy := Sy;
+   End;
+  If (Dx <= 0) Or (Dy <= 0) Then Exit;
+  Case Prog Of
+   2: Begin   { RPCL }
+    For R := RS To RE - 1 Do Begin
+     Y := JxTY0;
+     While Y < JxTY1 Do Begin
+      X := JxTX0;
+      While X < JxTX1 Do Begin
+       For C := CS To CE - 1 Do
+        If R <= JxTC[C].NL Then Begin
+         Pi := JxPrecAt(C, R, X, Y);
+         If Pi >= 0 Then
+          For L := 0 To LE - 1 Do
+           If Not JxPkt(C, R, Pi, L) Then Exit;
+        End;
+       X := X + (Dx - (X Mod Dx));
+      End;
+      Y := Y + (Dy - (Y Mod Dy));
+     End;
+    End;
+   End;
+   3: Begin   { PCRL }
+    Y := JxTY0;
+    While Y < JxTY1 Do Begin
+     X := JxTX0;
+     While X < JxTX1 Do Begin
+      For C := CS To CE - 1 Do
+       For R := RS To RE - 1 Do
+        If R <= JxTC[C].NL Then Begin
+         Pi := JxPrecAt(C, R, X, Y);
+         If Pi >= 0 Then
+          For L := 0 To LE - 1 Do
+           If Not JxPkt(C, R, Pi, L) Then Exit;
+        End;
+      X := X + (Dx - (X Mod Dx));
+     End;
+     Y := Y + (Dy - (Y Mod Dy));
+    End;
+   End;
+   4: Begin   { CPRL }
+    For C := CS To CE - 1 Do Begin
+     Y := JxTY0;
+     While Y < JxTY1 Do Begin
+      X := JxTX0;
+      While X < JxTX1 Do Begin
+       For R := RS To RE - 1 Do
+        If R <= JxTC[C].NL Then Begin
+         Pi := JxPrecAt(C, R, X, Y);
+         If Pi >= 0 Then
+          For L := 0 To LE - 1 Do
+           If Not JxPkt(C, R, Pi, L) Then Exit;
+        End;
+       X := X + (Dx - (X Mod Dx));
+      End;
+      Y := Y + (Dy - (Y Mod Dy));
+     End;
+    End;
+   End;
+  End;
+ End;
+End;
+
+{ lit tous les paquets de la tuile }
+Procedure JxReadPackets;
+Var
+ I, MaxNL, C: LongInt;
+ Sz: Int64;
+Begin
+ JxCurTP := -1;
+ JxPktPos := 0;
+ JxPktEnd := 0;
+ JxStop := False;
+ MaxNL := 0;
+ For C := 0 To JxNC - 1 Do
+  If JxTC[C].NL > MaxNL Then MaxNL := JxTC[C].NL;
+ If JxTileP.NPoc > 0 Then Begin
+  Sz := JxTotPrec * JxTileP.Layers;
+  If Sz > 400000000 Then Exit;
+  JxDoneBits := Sz;
+  GetMem(JxDone, (Sz + 7) Shr 3);
+  If JxDone = Nil Then Begin JxMemErr := True; Exit; End;
+  FillChar(JxDone^, (Sz + 7) Shr 3, 0);
+  For I := 0 To JxTileP.NPoc - 1 Do Begin
+   JxRunProg(JxTileP.Poc[I].Prog, JxTileP.Poc[I].RS, JxTileP.Poc[I].RE,
+             JxTileP.Poc[I].CS, JxTileP.Poc[I].CE, JxTileP.Poc[I].LYE);
+   If JxStop Then Break;
+  End;
+ End Else
+  JxRunProg(JxTileP.Prog, 0, MaxNL + 1, 0, JxNC, JxTileP.Layers);
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Tier-1 sur toute la tuile, déquantification                             }
+{ ---------------------------------------------------------------------- }
+
+Procedure JxStoreBlock(Tc: Pointer; Cb: PJxCblk; Var Bd: TJxBand; BW, BH: LongInt; Rev: Boolean);
+Var
+ T: ^TJxTComp;
+ W, H, Dx, Dy, X, Y, V: LongInt;
+ Pl: PJxLArr;
+ Ps: PJxSArr;
+ Sc, F: Single;
+Begin
+ T := Tc;
+ W := Cb^.X1 - Cb^.X0;
+ H := Cb^.Y1 - Cb^.Y0;
+ Dx := Bd.OX + (Cb^.X0 - Bd.X0);
+ Dy := Bd.OY + (Cb^.Y0 - Bd.Y0);
+ If (Dx < 0) Or (Dy < 0) Or (Dx + W > T^.W) Or (Dy + H > T^.H) Then Exit;
+ If Rev Then Begin
+  Pl := T^.Buf;
+  For Y := 0 To H - 1 Do
+   For X := 0 To W - 1 Do Begin
+    V := JxData[Y * W + X] Div 2;
+    If V > 67108864 Then V := 67108864 Else If V < -67108864 Then V := -67108864;
+    Pl^[(Dy + Y) * T^.W + Dx + X] := V;
+   End;
+ End Else Begin
+  Ps := T^.Buf;
+  Sc := Bd.Step * 0.5;
+  For Y := 0 To H - 1 Do
+   For X := 0 To W - 1 Do Begin
+    F := JxData[Y * W + X] * Sc;
+    If F > 67108864.0 Then F := 67108864.0 Else If F < -67108864.0 Then F := -67108864.0;
+    Ps^[(Dy + Y) * T^.W + Dx + X] := F;
+   End;
+ End;
+End;
+
+Procedure JxT1Comp(C: LongInt);
+Var
+ Tc: ^TJxTComp;
+ Rs: ^TJxRes;
+ Pb: ^TJxPBand;
+ Cb: PJxCblk;
+ K, B, P, N, Sty, Roi: LongInt;
+ Rev: Boolean;
+Begin
+ Tc := @JxTC[C];
+ If Tc^.Buf = Nil Then Exit;
+ Sty := JxTileP.Cod[C].Sty;
+ Roi := JxTileP.Roi[C];
+ Rev := JxTileP.Cod[C].Transf = 1;
+ For K := 0 To Tc^.Rk Do Begin
+  Rs := @Tc^.Res^[K];
+  If Rs^.Precs <> Nil Then
+   For P := 0 To Rs^.PW * Rs^.PH - 1 Do
+    For B := 0 To Rs^.NB - 1 Do Begin
+     Pb := @Rs^.Precs^[P].Bands[B];
+     If Pb^.Cblks <> Nil Then
+      For N := 0 To Pb^.NCw * Pb^.NCh - 1 Do Begin
+       Cb := @Pb^.Cblks^[N];
+       If JxDecodeBlock(Cb, Rs^.Bands[B].Orient, Sty, Roi) Then
+        JxStoreBlock(Tc, Cb, Rs^.Bands[B], 0, 0, Rev);
+       If Cb^.Data <> Nil Then Begin FreeMem(Cb^.Data, Cb^.DCap); Cb^.Data := Nil; Cb^.DCap := 0; Cb^.DLen := 0; End;
+       If Cb^.Segs <> Nil Then Begin FreeMem(Cb^.Segs, Cb^.SegCap * SizeOf(TJxSeg)); Cb^.Segs := Nil; Cb^.SegCap := 0; Cb^.SegCnt := 0; End;
+      End;
+    End;
+ End;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Transformée en ondelettes inverse 5/3 (entière) et 9/7 (flottante)       }
+{ ---------------------------------------------------------------------- }
+
+Const
+ JxOff = $40000000;
+ JxAlpha = -1.586134342059924;
+ JxBeta = -0.052980118572961;
+ JxGamma = 0.882911075530934;
+ JxDelta = 0.443506852043971;
+ JxK = 1.230174104914001;
+
+{ filtre 5/3, ligne : T de N éléments entrelacés, Odd = parité de la 1ère coordonnée }
+Procedure JxLift53(T: PJxLArr; N, Odd: LongInt);
+Var
+ J: LongInt;
+Begin
+ J := Odd;
+ If J = 0 Then Begin
+  T^[0] := T^[0] - ((T^[1] * 2 + 2 + JxOff) Shr 2 - (JxOff Shr 2));
+  J := 2;
+ End;
+ While J < N - 1 Do Begin
+  T^[J] := T^[J] - ((T^[J - 1] + T^[J + 1] + 2 + JxOff) Shr 2 - (JxOff Shr 2));
+  Inc(J, 2);
+ End;
+ If J = N - 1 Then
+  T^[J] := T^[J] - ((T^[J - 1] * 2 + 2 + JxOff) Shr 2 - (JxOff Shr 2));
+ J := 1 - Odd;
+ If J = 0 Then Begin
+  T^[0] := T^[0] + T^[1];
+  J := 2;
+ End;
+ While J < N - 1 Do Begin
+  T^[J] := T^[J] + ((T^[J - 1] + T^[J + 1] + JxOff) Shr 1 - (JxOff Shr 1));
+  Inc(J, 2);
+ End;
+ If J = N - 1 Then
+  T^[J] := T^[J] + T^[J - 1];
+End;
+
+Procedure JxLiftF(T: PJxSArr; N, Start: LongInt; Cf: Single);
+Var
+ J: LongInt;
+Begin
+ J := Start;
+ If J = 0 Then Begin
+  T^[0] := T^[0] - Cf * (T^[1] * 2);
+  J := 2;
+ End;
+ While J < N - 1 Do Begin
+  T^[J] := T^[J] - Cf * (T^[J - 1] + T^[J + 1]);
+  Inc(J, 2);
+ End;
+ If J = N - 1 Then
+  T^[J] := T^[J] - Cf * (T^[J - 1] * 2);
+End;
+
+{ idem, colonnes : T contient N lignes de Cw éléments }
+Procedure JxLift53C(T: PJxLArr; N, Cw, Odd: LongInt);
+Var
+ J, A, B, X, Ja, Jb, Jj: LongInt;
+Begin
+ J := Odd;
+ While J < N Do Begin
+  A := J - 1; B := J + 1;
+  If A < 0 Then A := B;
+  If B >= N Then B := A;
+  Jj := J * Cw; Ja := A * Cw; Jb := B * Cw;
+  For X := 0 To Cw - 1 Do
+   T^[Jj + X] := T^[Jj + X] - ((T^[Ja + X] + T^[Jb + X] + 2 + JxOff) Shr 2 - (JxOff Shr 2));
+  Inc(J, 2);
+ End;
+ J := 1 - Odd;
+ While J < N Do Begin
+  A := J - 1; B := J + 1;
+  If A < 0 Then A := B;
+  If B >= N Then B := A;
+  Jj := J * Cw; Ja := A * Cw; Jb := B * Cw;
+  For X := 0 To Cw - 1 Do
+   T^[Jj + X] := T^[Jj + X] + ((T^[Ja + X] + T^[Jb + X] + JxOff) Shr 1 - (JxOff Shr 1));
+  Inc(J, 2);
+ End;
+End;
+
+Procedure JxLiftFC(T: PJxSArr; N, Cw, Start: LongInt; Cf: Single);
+Var
+ J, A, B, X, Ja, Jb, Jj: LongInt;
+Begin
+ J := Start;
+ While J < N Do Begin
+  A := J - 1; B := J + 1;
+  If A < 0 Then A := B;
+  If B >= N Then B := A;
+  Jj := J * Cw; Ja := A * Cw; Jb := B * Cw;
+  For X := 0 To Cw - 1 Do
+   T^[Jj + X] := T^[Jj + X] - Cf * (T^[Ja + X] + T^[Jb + X]);
+  Inc(J, 2);
+ End;
+End;
+
+{ IDWT d'un niveau sur le rectangle W x H du tampon (pas Stride) }
+Function JxIdwtLevel(Buf: Pointer; Stride, W, H, Wl, Hl, OddX, OddY: LongInt;
+  Rev: Boolean; Tmp: Pointer; TmpN: LongInt): Boolean;
+Var
+ Y, X, J, Base, Src, Cw, X0, Bw: LongInt;
+ Bi, Ti: PJxLArr;
+ Bf, Tf: PJxSArr;
+ InvK, F: Single;
+Begin
+ JxIdwtLevel := False;
+ If OddX = 0 Then Begin
+  If Wl <> (W + 1) Div 2 Then Exit;
+ End Else If Wl <> W Div 2 Then Exit;
+ If OddY = 0 Then Begin
+  If Hl <> (H + 1) Div 2 Then Exit;
+ End Else If Hl <> H Div 2 Then Exit;
+ Bi := Buf; Ti := Tmp;
+ Bf := Buf; Tf := Tmp;
+ InvK := 1.0 / JxK;
+ { passe horizontale }
+ If W < 2 Then Begin
+  If (W = 1) And (OddX = 1) Then
+   For Y := 0 To H - 1 Do
+    If Rev Then Bi^[Y * Stride] := Bi^[Y * Stride] Div 2
+    Else Bf^[Y * Stride] := Bf^[Y * Stride] * 0.5;
+ End Else Begin
+  For Y := 0 To H - 1 Do Begin
+   Base := Y * Stride;
+   If Rev Then Begin
+    For J := 0 To W - 1 Do Begin
+     If ((J + OddX) And 1) = 0 Then Ti^[J] := Bi^[Base + (J Shr 1)]
+     Else Ti^[J] := Bi^[Base + Wl + (J Shr 1)];
+    End;
+    JxLift53(Ti, W, OddX);
+    For J := 0 To W - 1 Do Begin
+     X := Ti^[J];
+     If X > 134217728 Then X := 134217728 Else If X < -134217728 Then X := -134217728;
+     Bi^[Base + J] := X;
+    End;
+   End Else Begin
+    For J := 0 To W - 1 Do Begin
+     If ((J + OddX) And 1) = 0 Then Tf^[J] := Bf^[Base + (J Shr 1)] * JxK
+     Else Tf^[J] := Bf^[Base + Wl + (J Shr 1)] * InvK;
+    End;
+    JxLiftF(Tf, W, OddX, JxDelta);
+    JxLiftF(Tf, W, 1 - OddX, JxGamma);
+    JxLiftF(Tf, W, OddX, JxBeta);
+    JxLiftF(Tf, W, 1 - OddX, JxAlpha);
+    For J := 0 To W - 1 Do Begin
+     F := Tf^[J];
+     If F > 67108864.0 Then F := 67108864.0 Else If F < -67108864.0 Then F := -67108864.0;
+     Bf^[Base + J] := F;
+    End;
+   End;
+  End;
+ End;
+ { passe verticale par blocs de colonnes }
+ If H < 2 Then Begin
+  If (H = 1) And (OddY = 1) Then
+   For X := 0 To W - 1 Do
+    If Rev Then Bi^[X] := Bi^[X] Div 2 Else Bf^[X] := Bf^[X] * 0.5;
+ End Else Begin
+  Cw := TmpN Div H;
+  If Cw > 16 Then Cw := 16;
+  If Cw < 1 Then Exit;
+  X0 := 0;
+  While X0 < W Do Begin
+   Bw := W - X0;
+   If Bw > Cw Then Bw := Cw;
+   For J := 0 To H - 1 Do Begin
+    If ((J + OddY) And 1) = 0 Then Src := (J Shr 1) Else Src := Hl + (J Shr 1);
+    Base := Src * Stride + X0;
+    If Rev Then
+     For X := 0 To Bw - 1 Do Ti^[J * Bw + X] := Bi^[Base + X]
+    Else Begin
+     If ((J + OddY) And 1) = 0 Then
+      For X := 0 To Bw - 1 Do Tf^[J * Bw + X] := Bf^[Base + X] * JxK
+     Else
+      For X := 0 To Bw - 1 Do Tf^[J * Bw + X] := Bf^[Base + X] * InvK;
+    End;
+   End;
+   If Rev Then JxLift53C(Ti, H, Bw, OddY)
+   Else Begin
+    JxLiftFC(Tf, H, Bw, OddY, JxDelta);
+    JxLiftFC(Tf, H, Bw, 1 - OddY, JxGamma);
+    JxLiftFC(Tf, H, Bw, OddY, JxBeta);
+    JxLiftFC(Tf, H, Bw, 1 - OddY, JxAlpha);
+   End;
+   For J := 0 To H - 1 Do Begin
+    Base := J * Stride + X0;
+    If Rev Then
+     For X := 0 To Bw - 1 Do Begin
+      Src := Ti^[J * Bw + X];
+      If Src > 134217728 Then Src := 134217728 Else If Src < -134217728 Then Src := -134217728;
+      Bi^[Base + X] := Src;
+     End
+    Else
+     For X := 0 To Bw - 1 Do Begin
+      F := Tf^[J * Bw + X];
+      If F > 67108864.0 Then F := 67108864.0 Else If F < -67108864.0 Then F := -67108864.0;
+      Bf^[Base + X] := F;
+     End;
+   End;
+   Inc(X0, Bw);
+  End;
+ End;
+ JxIdwtLevel := True;
+End;
+
+Function JxIdwtComp(C: LongInt): Boolean;
+Var
+ Tc: ^TJxTComp;
+ K, MaxW, MaxH, TmpN: LongInt;
+ Rev: Boolean;
+ Tmp: Pointer;
+ Sz: Int64;
+Begin
+ JxIdwtComp := True;
+ Tc := @JxTC[C];
+ If (Tc^.Buf = Nil) Or (Tc^.Rk < 1) Then Exit;
+ Rev := JxTileP.Cod[C].Transf = 1;
+ MaxW := 1; MaxH := 1;
+ For K := 1 To Tc^.Rk Do Begin
+  MaxW := JxMax(MaxW, Tc^.Res^[K].W);
+  MaxH := JxMax(MaxH, Tc^.Res^[K].H);
+ End;
+ TmpN := 8192 + 16 * MaxH;
+ If TmpN < MaxW Then TmpN := MaxW;
+ If TmpN < MaxH Then TmpN := MaxH;
+ Sz := Int64(TmpN) * 4;
+ Tmp := Nil;
+ GetMem(Tmp, Sz);
+ If Tmp = Nil Then Begin JxIdwtComp := False; JxMemErr := True; Exit; End;
+ For K := 1 To Tc^.Rk Do
+  If (Tc^.Res^[K].W > 0) And (Tc^.Res^[K].H > 0) Then
+   If Not JxIdwtLevel(Tc^.Buf, Tc^.W, Tc^.Res^[K].W, Tc^.Res^[K].H, Tc^.Res^[K - 1].W,
+        Tc^.Res^[K - 1].H, Tc^.Res^[K].X0 And 1, Tc^.Res^[K].Y0 And 1, Rev, Tmp, TmpN) Then Break;
+ FreeMem(Tmp, Sz);
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Transformée de composantes inverse, niveau DC, passage en 8 bits         }
+{ ---------------------------------------------------------------------- }
+
+Procedure JxInvMCT;
+Var
+ I, N, Y0, Y1, Y2, G: LongInt;
+ A, B, C: PJxLArr;
+ Fa, Fb, Fc: PJxSArr;
+ Yv, Cb, Cr: Single;
+Begin
+ If (JxTileP.MCT <> 1) Or (JxNC < 3) Then Exit;
+ If (JxTC[0].W <> JxTC[1].W) Or (JxTC[0].W <> JxTC[2].W) Or (JxTC[0].H <> JxTC[1].H) Or
+    (JxTC[0].H <> JxTC[2].H) Then Exit;
+ If (JxTC[0].Buf = Nil) Or (JxTC[1].Buf = Nil) Or (JxTC[2].Buf = Nil) Then Exit;
+ If (JxTileP.Cod[0].Transf <> JxTileP.Cod[1].Transf) Or
+    (JxTileP.Cod[0].Transf <> JxTileP.Cod[2].Transf) Then Exit;
+ N := JxTC[0].W * JxTC[0].H;
+ If JxTileP.Cod[0].Transf = 1 Then Begin
+  A := JxTC[0].Buf; B := JxTC[1].Buf; C := JxTC[2].Buf;
+  For I := 0 To N - 1 Do Begin
+   Y0 := A^[I]; Y1 := B^[I]; Y2 := C^[I];
+   G := Y0 - ((Y1 + Y2 + JxOff) Shr 2 - (JxOff Shr 2));
+   A^[I] := Y2 + G;
+   B^[I] := G;
+   C^[I] := Y1 + G;
+  End;
+ End Else Begin
+  Fa := JxTC[0].Buf; Fb := JxTC[1].Buf; Fc := JxTC[2].Buf;
+  For I := 0 To N - 1 Do Begin
+   Yv := Fa^[I]; Cb := Fb^[I]; Cr := Fc^[I];
+   Fa^[I] := Yv + 1.402 * Cr;
+   Fb^[I] := Yv - 0.34413 * Cb - 0.71414 * Cr;
+   Fc^[I] := Yv + 1.772 * Cb;
+  End;
+ End;
+End;
+
+{ copie la composante C de la tuile dans son plan 8 bits (ou 16 bits si palette) }
+Procedure JxPutComp(C: LongInt);
+Var
+ Tc: ^TJxTComp;
+ Rev: Boolean;
+ Prec, Shift, MaxV, Px0, Py0, X, Y, V, W, H, Sh8, Pw: LongInt;
+ Lut: Array[0..255] Of Byte;
+ Il: PJxLArr;
+ Fs: PJxSArr;
+ Dst: PJxBArr;
+ Dw: PJxWArr;
+ F, Fsh: Single;
+ Isw: Boolean;
+Begin
+ Tc := @JxTC[C];
+ If (Tc^.Buf = Nil) Or (JxPlane[C] = Nil) Then Exit;
+ W := Tc^.W; H := Tc^.H;
+ Px0 := Tc^.Res^[Tc^.Rk].X0 - JxPlaneX0[C];
+ Py0 := Tc^.Res^[Tc^.Rk].Y0 - JxPlaneY0[C];
+ Pw := JxPlaneW[C];
+ If (Px0 < 0) Or (Py0 < 0) Or (Px0 + W > Pw) Or (Py0 + H > JxPlaneH[C]) Then Exit;
+ Rev := JxTileP.Cod[C].Transf = 1;
+ Prec := JxPrecC[C];
+ Shift := 1 Shl (Prec - 1);
+ MaxV := (1 Shl Prec) - 1;
+ Isw := JxPlaneWord[C];
+ If Prec > 8 Then Sh8 := Prec - 8 Else Sh8 := 0;
+ If Prec < 8 Then
+  For V := 0 To MaxV Do Lut[V] := (V * 255) Div MaxV;
+ Il := Tc^.Buf;
+ Fs := Tc^.Buf;
+ Fsh := Shift + 0.5;
+ For Y := 0 To H - 1 Do Begin
+  Dst := PJxBArr(PtrUInt(JxPlane[C]) + PtrUInt(Int64(Py0 + Y) * Pw + Px0));
+  Dw := PJxWArr(PtrUInt(JxPlane[C]) + PtrUInt((Int64(Py0 + Y) * Pw + Px0) * 2));
+  For X := 0 To W - 1 Do Begin
+   If Rev Then Begin
+    V := Il^[Y * W + X] + Shift;
+    If V < 0 Then V := 0 Else If V > MaxV Then V := MaxV;
+   End Else Begin
+    F := Fs^[Y * W + X] + Fsh;
+    If F <= 0 Then V := 0
+    Else If F >= MaxV + 1 Then V := MaxV
+    Else V := Trunc(F);
+    If V > MaxV Then V := MaxV;
+   End;
+   If Isw Then Dw^[X] := V
+   Else If Prec = 8 Then Dst^[X] := V
+   Else If Prec > 8 Then Dst^[X] := V Shr Sh8
+   Else Dst^[X] := Lut[V];
+  End;
+ End;
+End;
+
+{ décode la tuile T ; retourne False en cas d'erreur fatale (mémoire) }
+Function JxDecodeTile(T: LongInt): Boolean;
+Var
+ C: LongInt;
+ Ok: Boolean;
+Begin
+ JxDecodeTile := True;
+ JxMemErr := False;
+ If Not JxLoadTile(T) Then Exit;
+ JxCurTile := T;
+ Ok := JxBuildTile(T);
+ If Ok Then Begin
+  JxReadPackets;
+  If JxMemErr Then Ok := False;
+ End;
+ If Ok Then Begin
+  For C := 0 To JxNC - 1 Do JxT1Comp(C);
+  For C := 0 To JxNC - 1 Do
+   If Not JxIdwtComp(C) Then Ok := False;
+ End;
+ If Ok Then Begin
+  JxInvMCT;
+  For C := 0 To JxNC - 1 Do JxPutComp(C);
+ End;
+ JxFreeTile;
+ If JxMemErr Then JxDecodeTile := False;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Conteneur JP2                                                            }
+{ ---------------------------------------------------------------------- }
+
+Procedure JxParseJp2h(A, B: LongInt);
+Var
+ Pos, H, Q, N, I, E, Nb, D, Ne, Npc: LongInt;
+ L, Ty: Int64;
+Begin
+ Pos := A;
+ While Pos + 8 <= B Do Begin
+  L := JxBE32(Pos);
+  Ty := JxBE32(Pos + 4);
+  H := 8;
+  If L = 1 Then Begin
+   H := 16;
+   If Pos + 16 > B Then Break;
+   If JxBE32(Pos + 8) <> 0 Then L := B - Pos Else L := JxBE32(Pos + 12);
+  End Else If L = 0 Then L := B - Pos;
+  If (L < H) Or (Pos + L > B) Then L := B - Pos;
+  If L < H Then Break;
+  Q := Pos + H;
+  N := L - H;
+  Case Ty Of
+   $636F6C72: Begin   { colr }
+    If (JxEnumCS < 0) And (N >= 3) Then Begin
+     If (JxS^[Q] = 1) And (N >= 7) Then Begin
+      If JxBE32(Q + 3) < 65536 Then JxEnumCS := JxBE32(Q + 3) Else JxEnumCS := 0;
+     End Else If JxS^[Q] = 2 Then JxEnumCS := 0;
+    End;
+   End;
+   $70636C72: Begin   { pclr }
+    If (Not JxHavePal) And (N >= 4) Then Begin
+     Ne := JxBE16(Q);
+     Npc := JxS^[Q + 2];
+     If (Ne >= 1) And (Ne <= 1024) And (Npc >= 1) And (Npc <= 8) And (N >= 3 + Npc) Then Begin
+      Nb := 0;
+      For I := 0 To Npc - 1 Do Begin
+       JxPalDepth[I] := (JxS^[Q + 3 + I] And $7F) + 1;
+       Inc(Nb, (JxPalDepth[I] + 7) Div 8);
+       If JxPalDepth[I] > 16 Then Nb := 1000000;
+      End;
+      If N >= 3 + Npc + Ne * Nb Then Begin
+       JxPal := Nil;
+       GetMem(JxPal, Ne * Npc * 4);
+       If JxPal <> Nil Then Begin
+        E := Q + 3 + Npc;
+        For I := 0 To Ne - 1 Do
+         For D := 0 To Npc - 1 Do Begin
+          Nb := (JxPalDepth[D] + 7) Div 8;
+          JxPal^[I * Npc + D] := 0;
+          While Nb > 0 Do Begin
+           JxPal^[I * Npc + D] := (JxPal^[I * Npc + D] Shl 8) Or JxS^[E];
+           Inc(E);
+           Dec(Nb);
+          End;
+         End;
+        JxPalN := Ne;
+        JxPalNC := Npc;
+        JxHavePal := True;
+       End;
+      End;
+     End;
+    End;
+   End;
+   $636D6170: Begin   { cmap }
+    JxNCmap := JxMin(N Div 4, JxMaxC);
+    For I := 0 To JxNCmap - 1 Do Begin
+     JxCmapC[I] := JxBE16(Q + 4 * I);
+     JxCmapT[I] := JxS^[Q + 4 * I + 2];
+     JxCmapP[I] := JxS^[Q + 4 * I + 3];
+    End;
+   End;
+   $63646566: Begin   { cdef }
+    If N >= 2 Then Begin
+     JxNCdef := JxMin(JxBE16(Q), JxMaxC);
+     If JxNCdef * 6 + 2 > N Then JxNCdef := (N - 2) Div 6;
+     For I := 0 To JxNCdef - 1 Do Begin
+      JxCdefN[I] := JxBE16(Q + 2 + 6 * I);
+      JxCdefT[I] := JxBE16(Q + 4 + 6 * I);
+      JxCdefA[I] := JxBE16(Q + 6 + 6 * I);
+     End;
+    End;
+   End;
+  End;
+  Inc(Pos, L);
+ End;
+End;
+
+{ localise le codestream : brut (FF4F) ou dans une boîte jp2c }
+Function JxFindCodestream(Var Cs0, CsLen: LongInt): Boolean;
+Var
+ Pos, H, I: LongInt;
+ L, Ty: Int64;
+Begin
+ JxFindCodestream := False;
+ If (JxS^[0] = $FF) And (JxS^[1] = $4F) Then Begin
+  Cs0 := 0; CsLen := JxSLen;
+  JxFindCodestream := True;
+  Exit;
+ End;
+ Pos := 0;
+ While Pos + 8 <= JxSLen Do Begin
+  L := JxBE32(Pos);
+  Ty := JxBE32(Pos + 4);
+  H := 8;
+  If L = 1 Then Begin
+   H := 16;
+   If Pos + 16 > JxSLen Then Break;
+   If JxBE32(Pos + 8) <> 0 Then L := JxSLen - Pos Else L := JxBE32(Pos + 12);
+  End Else If L = 0 Then L := JxSLen - Pos;
+  If (L < H) Or (Pos + L > JxSLen) Then L := JxSLen - Pos;
+  If L < H Then Break;
+  If Ty = $6A703268 Then JxParseJp2h(Pos + H, Pos + L)   { jp2h }
+  Else If Ty = $6A703263 Then Begin                         { jp2c }
+   Cs0 := Pos + H;
+   CsLen := L - H;
+   JxFindCodestream := CsLen >= 4;
+   Exit;
+  End;
+  Inc(Pos, L);
+ End;
+ { dernier recours : chercher SOC + SIZ }
+ For I := 0 To JxSLen - 6 Do
+  If (JxS^[I] = $FF) And (JxS^[I + 1] = $4F) And (JxS^[I + 2] = $FF) And (JxS^[I + 3] = $51) Then Begin
+   Cs0 := I; CsLen := JxSLen - I;
+   JxFindCodestream := True;
+   Exit;
+  End;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Assemblage final : canaux, palette, ré-échantillonnage, entrelacement     }
+{ ---------------------------------------------------------------------- }
+
+Function JxPlaneVal(C, Idx: LongInt): LongInt;
+Begin
+ If JxPlaneWord[C] Then JxPlaneVal := PJxWArr(JxPlane[C])^[Idx]
+ Else JxPlaneVal := JxPlane[C]^[Idx];
+End;
+
+Function JxClamp8(V: LongInt): LongInt;
+Begin
+ If V < 0 Then JxClamp8 := 0 Else If V > 255 Then JxClamp8 := 255 Else JxClamp8 := V;
+End;
+
+Function JxScale8(V, Depth: LongInt): LongInt;
+Begin
+ If Depth = 8 Then JxScale8 := JxClamp8(V)
+ Else If Depth > 8 Then JxScale8 := JxClamp8(V Shr (Depth - 8))
+ Else JxScale8 := JxClamp8((V * 255) Div ((1 Shl Depth) - 1));
+End;
+
+{ construit l'image de sortie 8 bits entrelacée à partir des plans }
+Function JxAssemble(Var OutW, OutH, OutComps, ColSpace: LongInt; Var Pix: PBigBytes): Boolean;
+Var
+ NCh, I, J, K, X, Y, Sy, Nmap, Ncol, Expect: LongInt;
+ ChComp, ChMode, ChCol, ChTyp, ChAsoc, Lst: Array[0..JxMaxC - 1] Of LongInt;
+ Sel: Array[0..3] Of LongInt;
+ XMap: Array[0..3] Of PJxLArr;
+ Tot: Int64;
+ Row: PJxBArr;
+ V, Idx, Dp: LongInt;
+ Ok: Boolean;
+ R, G, B, Yy, Cb, Cr: LongInt;
+Begin
+ JxAssemble := False;
+ { liste des canaux }
+ NCh := 0;
+ If JxHavePal And (JxNCmap > 0) Then Begin
+  For I := 0 To JxNCmap - 1 Do
+   If (JxCmapC[I] < JxNC) And (NCh < JxMaxC) Then Begin
+    ChComp[NCh] := JxCmapC[I];
+    If (JxCmapT[I] = 1) And (JxCmapP[I] < JxPalNC) Then Begin
+     ChMode[NCh] := 1; ChCol[NCh] := JxCmapP[I];
+    End Else Begin
+     ChMode[NCh] := 0; ChCol[NCh] := 0;
+    End;
+    ChTyp[NCh] := 0; ChAsoc[NCh] := NCh + 1;
+    Inc(NCh);
+   End;
+ End Else If JxHavePal Then Begin
+  For I := 0 To JxPalNC - 1 Do Begin
+   ChComp[NCh] := 0; ChMode[NCh] := 1; ChCol[NCh] := I;
+   ChTyp[NCh] := 0; ChAsoc[NCh] := NCh + 1;
+   Inc(NCh);
+  End;
+ End Else Begin
+  For I := 0 To JxNC - 1 Do Begin
+   ChComp[NCh] := I; ChMode[NCh] := 0; ChCol[NCh] := 0;
+   ChTyp[NCh] := 0; ChAsoc[NCh] := NCh + 1;
+   Inc(NCh);
+  End;
+ End;
+ If NCh = 0 Then Exit;
+ { définition des canaux (cdef) }
+ For I := 0 To JxNCdef - 1 Do
+  If JxCdefN[I] < NCh Then Begin
+   ChTyp[JxCdefN[I]] := JxCdefT[I];
+   ChAsoc[JxCdefN[I]] := JxCdefA[I];
+   If ChAsoc[JxCdefN[I]] = 0 Then ChAsoc[JxCdefN[I]] := 65535;
+  End;
+ { canaux de couleur (Typ = 0), triés par association croissante }
+ FillChar(Lst, SizeOf(Lst), 0);
+ Ncol := 0;
+ For I := 0 To NCh - 1 Do
+  If ChTyp[I] = 0 Then Begin
+   J := Ncol;
+   While (J > 0) And (ChAsoc[Lst[J - 1]] > ChAsoc[I]) Do Begin
+    Lst[J] := Lst[J - 1];
+    Dec(J);
+   End;
+   Lst[J] := I;
+   Inc(Ncol);
+  End;
+ If Ncol = 0 Then Exit;
+ { espace couleur attendu }
+ Expect := 0;
+ Case JxEnumCS Of
+  16, 18: Expect := 3;
+  17: Expect := 1;
+  12: Expect := 4;
+ End;
+ If Expect > Ncol Then Expect := 0;
+ If Expect = 0 Then Begin
+  If Ncol >= 4 Then Expect := 4
+  Else If Ncol = 3 Then Expect := 3
+  Else Expect := 1;
+ End;
+ Nmap := Expect;
+ For K := 0 To Nmap - 1 Do Sel[K] := Lst[K];
+ If Nmap < 1 Then Exit;
+ OutComps := Nmap;
+ If JxEnumCS = 16 Then ColSpace := 3
+ Else If JxEnumCS = 18 Then ColSpace := 3
+ Else If JxEnumCS = 17 Then ColSpace := 1
+ Else If JxEnumCS = 12 Then ColSpace := 4
+ Else If OutComps = 1 Then ColSpace := 1
+ Else If OutComps = 3 Then ColSpace := 3
+ Else ColSpace := 0;
+ If ((JxEnumCS = 16) Or (JxEnumCS = 18)) And (OutComps <> 3) Then ColSpace := 0;
+ If (JxEnumCS = 17) And (OutComps <> 1) Then ColSpace := 0;
+ If (JxEnumCS = 12) And (OutComps <> 4) Then ColSpace := 0;
+ { la composante 0 sert de référence de taille }
+ OutW := JxPlaneW[0];
+ OutH := JxPlaneH[0];
+ Tot := Int64(OutW) * OutH * OutComps;
+ If (OutW < 1) Or (OutH < 1) Or (Tot > 2000000000) Then Exit;
+ Pix := Nil;
+ GetMem(Pix, Tot);
+ If Pix = Nil Then Exit;
+ For K := 0 To 3 Do XMap[K] := Nil;
+ Ok := True;
+ For K := 0 To OutComps - 1 Do Begin
+  GetMem(XMap[K], Int64(OutW) * 4);
+  If XMap[K] = Nil Then Ok := False
+  Else Begin
+   I := ChComp[Sel[K]];
+   For X := 0 To OutW - 1 Do Begin
+    J := (Int64(2 * X + 1) * JxPlaneW[I]) Div (2 * Int64(OutW));
+    If J >= JxPlaneW[I] Then J := JxPlaneW[I] - 1;
+    XMap[K]^[X] := J;
+   End;
+  End;
+ End;
+ If Not Ok Then Begin
+  For K := 0 To 3 Do If XMap[K] <> Nil Then FreeMem(XMap[K], Int64(OutW) * 4);
+  FreeMem(Pix, Tot);
+  Pix := Nil;
+  Exit;
+ End;
+ For Y := 0 To OutH - 1 Do Begin
+  Row := PJxBArr(PtrUInt(Pix) + PtrUInt(Int64(Y) * OutW * OutComps));
+  For K := 0 To OutComps - 1 Do Begin
+   I := ChComp[Sel[K]];
+   Sy := (Int64(2 * Y + 1) * JxPlaneH[I]) Div (2 * Int64(OutH));
+   If Sy >= JxPlaneH[I] Then Sy := JxPlaneH[I] - 1;
+   Idx := Sy * JxPlaneW[I];
+   If ChMode[Sel[K]] = 1 Then Begin
+    Dp := JxPalDepth[ChCol[Sel[K]]];
+    For X := 0 To OutW - 1 Do Begin
+     V := JxPlaneVal(I, Idx + XMap[K]^[X]);
+     If V >= JxPalN Then V := JxPalN - 1;
+     Row^[X * OutComps + K] := JxScale8(JxPal^[V * JxPalNC + ChCol[Sel[K]]], Dp);
+    End;
+   End Else If JxPlaneWord[I] Then Begin
+    For X := 0 To OutW - 1 Do
+     Row^[X * OutComps + K] := JxScale8(JxPlaneVal(I, Idx + XMap[K]^[X]), JxPrecC[I]);
+   End Else Begin
+    For X := 0 To OutW - 1 Do
+     Row^[X * OutComps + K] := JxPlane[I]^[Idx + XMap[K]^[X]];
+   End;
+  End;
+  { sYCC -> RGB }
+  If (JxEnumCS = 18) And (OutComps = 3) Then
+   For X := 0 To OutW - 1 Do Begin
+    Yy := Row^[X * 3];
+    Cb := Row^[X * 3 + 1] - 128;
+    Cr := Row^[X * 3 + 2] - 128;
+    R := Yy + SarLongint(91881 * Cr + 32768, 16);
+    G := Yy - SarLongint(22554 * Cb + 46802 * Cr + 32768, 16);
+    B := Yy + SarLongint(116130 * Cb + 32768, 16);
+    Row^[X * 3] := JxClamp8(R);
+    Row^[X * 3 + 1] := JxClamp8(G);
+    Row^[X * 3 + 2] := JxClamp8(B);
+   End;
+ End;
+ For K := 0 To 3 Do If XMap[K] <> Nil Then FreeMem(XMap[K], Int64(OutW) * 4);
+ JxAssemble := True;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Point d'entrée                                                           }
+{ ---------------------------------------------------------------------- }
+
+Procedure JxCleanup;
+Var
+ I: LongInt;
+Begin
+ JxFreeTile;
+ For I := 0 To JxMaxC - 1 Do
+  If JxPlane[I] <> Nil Then Begin
+   If JxPlaneWord[I] Then FreeMem(JxPlane[I], Int64(JxPlaneW[I]) * JxPlaneH[I] * 2)
+   Else FreeMem(JxPlane[I], Int64(JxPlaneW[I]) * JxPlaneH[I]);
+   JxPlane[I] := Nil;
+  End;
+ If JxTPs <> Nil Then Begin FreeMem(JxTPs, JxTPCap * SizeOf(TJxTP)); JxTPs := Nil; End;
+ If JxTileFirst <> Nil Then Begin FreeMem(JxTileFirst, JxNT * 4); JxTileFirst := Nil; End;
+ If JxTileLast <> Nil Then Begin FreeMem(JxTileLast, JxNT * 4); JxTileLast := Nil; End;
+ If JxPend <> Nil Then Begin FreeMem(JxPend, JxPendCap * SizeOf(TJxPend)); JxPend := Nil; End;
+ If JxPal <> Nil Then Begin FreeMem(JxPal, JxPalN * JxPalNC * 4); JxPal := Nil; End;
+ JxTPCap := 0; JxNTP := 0; JxPendCap := 0;
+End;
+
+Function JxDecodeMain(Src: PBigBytes; SLen, MaxDim: LongInt;
+  Var OutW, OutH, OutComps, OrigW, OrigH, ColSpace: LongInt; Var Pix: PBigBytes): Boolean;
+Var
+ Cs0, CsLen, Pos, T, C, MinNL, R, I, NOk: LongInt;
+ Zero, Used: Boolean;
+ Px0, Px1, Py0, Py1: Int64;
+ Sz: Int64;
+ Wd, Ht: LongInt;
+Begin
+ JxDecodeMain := False;
+ JxS := Src;
+ JxSLen := SLen;
+ If (Src = Nil) Or (SLen < 12) Then Exit;
+ If Not JxFindCodestream(Cs0, CsLen) Then Exit;
+ JxS := PBigBytes(PtrUInt(Src) + PtrUInt(Cs0));
+ JxSLen := CsLen;
+ If Not JxParseMain(Pos) Then Exit;
+ { tables de parties de tuiles }
+ GetMem(JxTileFirst, JxNT * 4);
+ GetMem(JxTileLast, JxNT * 4);
+ If (JxTileFirst = Nil) Or (JxTileLast = Nil) Then Exit;
+ For T := 0 To JxNT - 1 Do Begin
+  JxTileFirst^[T] := -1;
+  JxTileLast^[T] := -1;
+ End;
+ If Not JxScanTiles(Pos) Then Exit;
+ If JxNTP = 0 Then Exit;
+ { niveau de décomposition minimal commun à toutes les tuiles }
+ MinNL := 99;
+ NOk := 0;
+ For T := 0 To JxNT - 1 Do
+  If JxTileFirst^[T] >= 0 Then
+   If JxLoadTile(T) Then Begin
+    Inc(NOk);
+    For C := 0 To JxNC - 1 Do
+     If JxTileP.Cod[C].NL < MinNL Then MinNL := JxTileP.Cod[C].NL;
+   End;
+ If (NOk = 0) Or (MinNL > 32) Then Exit;
+ OrigW := JxXsiz - JxXOsiz;
+ OrigH := JxYsiz - JxYOsiz;
+ R := 0;
+ If MaxDim > 0 Then
+  While (R < MinNL) And (JxMax(JxCeilShr(OrigW, R), JxCeilShr(OrigH, R)) > MaxDim) Do Inc(R);
+ { plans de sortie : taille réduite de chaque composante }
+ While True Do Begin
+  Zero := False;
+  For C := 0 To JxNC - 1 Do Begin
+   Px0 := JxCeilShr(JxCeilDiv(JxXOsiz, JxXR[C]), R);
+   Px1 := JxCeilShr(JxCeilDiv(JxXsiz, JxXR[C]), R);
+   Py0 := JxCeilShr(JxCeilDiv(JxYOsiz, JxYR[C]), R);
+   Py1 := JxCeilShr(JxCeilDiv(JxYsiz, JxYR[C]), R);
+   If (Px1 <= Px0) Or (Py1 <= Py0) Then Zero := True;
+  End;
+  If Not Zero Then Break;
+  If R = 0 Then Exit;
+  Dec(R);
+ End;
+ JxRed := R;
+ { composantes passant par la palette : plans 16 bits }
+ If JxHavePal And (JxNCmap > 0) Then
+  For I := 0 To JxNCmap - 1 Do
+   If (JxCmapT[I] = 1) And (JxCmapC[I] < JxNC) Then JxPlaneWord[JxCmapC[I]] := True;
+ If JxHavePal And (JxNCmap = 0) Then JxPlaneWord[0] := True;
+ For C := 0 To JxNC - 1 Do Begin
+  Px0 := JxCeilShr(JxCeilDiv(JxXOsiz, JxXR[C]), R);
+  Px1 := JxCeilShr(JxCeilDiv(JxXsiz, JxXR[C]), R);
+  Py0 := JxCeilShr(JxCeilDiv(JxYOsiz, JxYR[C]), R);
+  Py1 := JxCeilShr(JxCeilDiv(JxYsiz, JxYR[C]), R);
+  JxPlaneX0[C] := Px0;
+  JxPlaneY0[C] := Py0;
+  JxPlaneW[C] := Px1 - Px0;
+  JxPlaneH[C] := Py1 - Py0;
+  Sz := Int64(JxPlaneW[C]) * JxPlaneH[C];
+  If JxPlaneWord[C] Then Sz := Sz * 2;
+  If Sz > 1900000000 Then Exit;
+  GetMem(JxPlane[C], Sz);
+  If JxPlane[C] = Nil Then Exit;
+  FillChar(JxPlane[C]^, Sz, 0);
+ End;
+ { décodage des tuiles }
+ For T := 0 To JxNT - 1 Do
+  If JxTileFirst^[T] >= 0 Then
+   If Not JxDecodeTile(T) Then Exit;
+ JxDecodeMain := JxAssemble(OutW, OutH, OutComps, ColSpace, Pix);
+End;
+
+{ Décode un flux JPEG 2000 (codestream brut ou conteneur JP2).
+  MaxDim : dimension maximale souhaitée (niveau de réduction automatique).
+  Pix : tampon GetMem de OutW*OutH*OutComps octets, entrelacé 8 bits. }
+Function JPXDecode(Src: PBigBytes; SLen: LongInt; MaxDim: LongInt;
+  Var OutW, OutH, OutComps, OrigW, OrigH, ColSpace: LongInt; Var Pix: PBigBytes): Boolean;
+Var
+ Ok: Boolean;
+ I: LongInt;
+Begin
+ Pix := Nil;
+ OutW := 0; OutH := 0; OutComps := 0; OrigW := 0; OrigH := 0; ColSpace := 0;
+ JxInitTables;
+ { remise à zéro de l'état global }
+ JxAr := Nil; JxTPs := Nil; JxTileFirst := Nil; JxTileLast := Nil; JxPend := Nil;
+ JxTPCap := 0; JxNTP := 0; JxPendCap := 0; JxDone := Nil; JxPal := Nil;
+ JxHaveSiz := False; JxHavePal := False; JxEnumCS := -1;
+ JxPalN := 0; JxPalNC := 0; JxNCmap := 0; JxNCdef := 0; JxNT := 0; JxNC := 0;
+ JxMemErr := False; JxRed := 0;
+ For I := 0 To JxMaxC - 1 Do Begin
+  JxPlane[I] := Nil;
+  JxPlaneWord[I] := False;
+  JxPlaneW[I] := 0; JxPlaneH[I] := 0;
+  JxTC[I].Res := Nil;
+  JxTC[I].Buf := Nil;
+  JxTC[I].W := 0; JxTC[I].H := 0; JxTC[I].NL := 0;
+ End;
+ Ok := JxDecodeMain(Src, SLen, MaxDim, OutW, OutH, OutComps, OrigW, OrigH, ColSpace, Pix);
+ JxCleanup;
+ JxEnumCS := -1;
+ If Not Ok Then Begin
+  If Pix <> Nil Then FreeMem(Pix, Int64(OutW) * OutH * OutComps);
+  Pix := Nil;
+  OutW := 0; OutH := 0; OutComps := 0; OrigW := 0; OrigH := 0; ColSpace := 0;
+ End;
+ JPXDecode := Ok;
+End;
+{ ---------------------------------------------------------------------- }
+{ Décodeur JBIG2 (ITU-T T.88 / ISO 14492) pour le filtre PDF JBIG2Decode   }
+{ Flux « intégré PDF » : segments séquentiels sans en-tête de fichier.    }
+{ Dépend de CCITTDecode (MMR) et des types PBigBytes, PByte, PLongInt.    }
+{ Tous les identifiants globaux sont préfixés par Jb / JBIG2.             }
+{ Convention interne : 1 = noir (JBIG2) ; la sortie est inversée (PDF).   }
+{ ---------------------------------------------------------------------- }
+
+Const
+ JbMaxPix = 200000000;          { pixels max d'un bitmap (page comprise) }
+ JbMaxLive = 700000000;         { octets vivants max alloués par le décodeur }
+ JbMaxSyms = 500000;            { symboles max par dictionnaire / région }
+ JbMaxSymPix = 16777216;         { pixels max d'un symbole ou d'un symbole raffiné }
+ JbMaxDictPix = 100000000;      { pixels max cumulés des symboles d'un dictionnaire }
+ JbMaxInst = 20000000;          { instances de symboles max par région de texte }
+ JbMaxSegRes = 30000;           { segments à résultat mémorisés max }
+ JbMaxWork = 8000000000;        { budget de travail (~ ns) : anti-DoS sur flux corrompus }
+ JbSltp: Array[0..3] Of Integer = ($9B25, $0795, $00E5, $0195);
+ JbQeV: Array[0..46] Of Word = (
+  $5601, $3401, $1801, $0AC1, $0521, $0221, $5601, $5401, $4801, $3801, $3001, $2401,
+  $1C01, $1601, $5601, $5401, $5101, $4801, $3801, $3401, $3001, $2801, $2401, $2201,
+  $1C01, $1801, $1601, $1401, $1201, $1101, $0AC1, $09C1, $08A1, $0521, $0441, $02A1,
+  $0221, $0141, $0111, $0085, $0049, $0025, $0015, $0009, $0005, $0001, $5601);
+ JbNMpsV: Array[0..46] Of Byte = (
+  1, 2, 3, 4, 5, 38, 7, 8, 9, 10, 11, 12, 13, 29, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+  25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 45, 46);
+ JbNLpsV: Array[0..46] Of Byte = (
+  1, 6, 9, 12, 29, 33, 6, 14, 14, 14, 17, 18, 20, 21, 14, 14, 15, 16, 17, 18, 19, 19, 20, 21,
+  22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 46);
+ JbSwV: Array[0..46] Of Byte = (
+  1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+ { tables de Huffman standard B.1 à B.15 : (PREFLEN, RANGELEN, RANGELOW, genre)
+   genre : 0 normal, 1 borne inférieure, 2 borne supérieure, 3 OOB }
+ JbStdN: Array[1..15] Of Integer = (5, 8, 9, 7, 8, 14, 15, 21, 22, 21, 14, 15, 14, 7, 13);
+ JbStd1: Array[0..19] Of LongInt = (
+  1, 4, 0, 0, 2, 8, 16, 0, 3, 16, 272, 0,
+  0, 32, -1, 1, 3, 32, 65808, 2);
+ JbStd2: Array[0..31] Of LongInt = (
+  1, 0, 0, 0, 2, 0, 1, 0, 3, 0, 2, 0,
+  4, 3, 3, 0, 5, 6, 11, 0, 0, 32, -1, 1,
+  6, 32, 75, 2, 6, 0, 0, 3);
+ JbStd3: Array[0..35] Of LongInt = (
+  8, 8, -256, 0, 1, 0, 0, 0, 2, 0, 1, 0,
+  3, 0, 2, 0, 4, 3, 3, 0, 5, 6, 11, 0,
+  8, 32, -257, 1, 7, 32, 75, 2, 6, 0, 0, 3);
+ JbStd4: Array[0..27] Of LongInt = (
+  1, 0, 1, 0, 2, 0, 2, 0, 3, 0, 3, 0,
+  4, 3, 4, 0, 5, 6, 12, 0, 0, 32, -1, 1,
+  5, 32, 76, 2);
+ JbStd5: Array[0..31] Of LongInt = (
+  7, 8, -255, 0, 1, 0, 1, 0, 2, 0, 2, 0,
+  3, 0, 3, 0, 4, 3, 4, 0, 5, 6, 12, 0,
+  7, 32, -256, 1, 6, 32, 76, 2);
+ JbStd6: Array[0..55] Of LongInt = (
+  5, 10, -2048, 0, 4, 9, -1024, 0, 4, 8, -512, 0,
+  4, 7, -256, 0, 5, 6, -128, 0, 5, 5, -64, 0,
+  4, 5, -32, 0, 2, 7, 0, 0, 3, 7, 128, 0,
+  3, 8, 256, 0, 4, 9, 512, 0, 4, 10, 1024, 0,
+  6, 32, -2049, 1, 6, 32, 2048, 2);
+ JbStd7: Array[0..59] Of LongInt = (
+  4, 9, -1024, 0, 3, 8, -512, 0, 4, 7, -256, 0,
+  5, 6, -128, 0, 5, 5, -64, 0, 4, 5, -32, 0,
+  4, 5, 0, 0, 5, 5, 32, 0, 5, 6, 64, 0,
+  4, 7, 128, 0, 3, 8, 256, 0, 3, 9, 512, 0,
+  3, 10, 1024, 0, 5, 32, -1025, 1, 5, 32, 2048, 2);
+ JbStd8: Array[0..83] Of LongInt = (
+  8, 3, -15, 0, 9, 1, -7, 0, 8, 1, -5, 0,
+  9, 0, -3, 0, 7, 0, -2, 0, 4, 0, -1, 0,
+  2, 1, 0, 0, 5, 0, 2, 0, 6, 0, 3, 0,
+  3, 4, 4, 0, 6, 1, 20, 0, 4, 4, 22, 0,
+  4, 5, 38, 0, 5, 6, 70, 0, 5, 7, 134, 0,
+  6, 7, 262, 0, 7, 8, 390, 0, 6, 10, 646, 0,
+  9, 32, -16, 1, 9, 32, 1670, 2, 2, 0, 0, 3);
+ JbStd9: Array[0..87] Of LongInt = (
+  8, 4, -31, 0, 9, 2, -15, 0, 8, 2, -11, 0,
+  9, 1, -7, 0, 7, 1, -5, 0, 4, 1, -3, 0,
+  3, 1, -1, 0, 3, 1, 1, 0, 5, 1, 3, 0,
+  6, 1, 5, 0, 3, 5, 7, 0, 6, 2, 39, 0,
+  4, 5, 43, 0, 4, 6, 75, 0, 5, 7, 139, 0,
+  5, 8, 267, 0, 6, 8, 523, 0, 7, 9, 779, 0,
+  6, 11, 1291, 0, 9, 32, -32, 1, 9, 32, 3339, 2,
+  2, 0, 0, 3);
+ JbStd10: Array[0..83] Of LongInt = (
+  7, 4, -21, 0, 8, 0, -5, 0, 7, 0, -4, 0,
+  5, 0, -3, 0, 2, 2, -2, 0, 5, 0, 2, 0,
+  6, 0, 3, 0, 7, 0, 4, 0, 8, 0, 5, 0,
+  2, 6, 6, 0, 5, 5, 70, 0, 6, 5, 102, 0,
+  6, 6, 134, 0, 6, 7, 198, 0, 6, 8, 326, 0,
+  6, 9, 582, 0, 6, 10, 1094, 0, 7, 11, 2118, 0,
+  8, 32, -22, 1, 8, 32, 4166, 2, 2, 0, 0, 3);
+ JbStd11: Array[0..55] Of LongInt = (
+  1, 0, 1, 0, 2, 1, 2, 0, 4, 0, 4, 0,
+  4, 1, 5, 0, 5, 1, 7, 0, 5, 2, 9, 0,
+  6, 2, 13, 0, 7, 2, 17, 0, 7, 3, 21, 0,
+  7, 4, 29, 0, 7, 5, 45, 0, 7, 6, 77, 0,
+  0, 32, -1, 1, 7, 32, 141, 2);
+ JbStd12: Array[0..59] Of LongInt = (
+  1, 0, 1, 0, 2, 0, 2, 0, 3, 1, 3, 0,
+  5, 0, 5, 0, 5, 1, 6, 0, 6, 1, 8, 0,
+  7, 0, 10, 0, 7, 1, 11, 0, 7, 2, 13, 0,
+  7, 3, 17, 0, 7, 4, 25, 0, 8, 5, 41, 0,
+  8, 32, 73, 0, 0, 32, -1, 1, 0, 32, 0, 2);
+ JbStd13: Array[0..55] Of LongInt = (
+  1, 0, 1, 0, 3, 0, 2, 0, 4, 0, 3, 0,
+  5, 0, 4, 0, 4, 1, 5, 0, 3, 3, 7, 0,
+  6, 1, 15, 0, 6, 2, 17, 0, 6, 3, 21, 0,
+  6, 4, 29, 0, 6, 5, 45, 0, 7, 6, 77, 0,
+  0, 32, -1, 1, 7, 32, 141, 2);
+ JbStd14: Array[0..27] Of LongInt = (
+  3, 0, -2, 0, 3, 0, -1, 0, 1, 0, 0, 0,
+  3, 0, 1, 0, 3, 0, 2, 0, 0, 32, -1, 1,
+  0, 32, 3, 2);
+ JbStd15: Array[0..51] Of LongInt = (
+  7, 4, -24, 0, 6, 2, -8, 0, 5, 1, -4, 0,
+  4, 0, -2, 0, 3, 0, -1, 0, 1, 0, 0, 0,
+  3, 0, 1, 0, 4, 0, 2, 0, 5, 1, 3, 0,
+  6, 2, 5, 0, 7, 4, 9, 0, 7, 32, -25, 1,
+  7, 32, 25, 2);
+
+Type
+ PJbBmp = ^TJbBmp;
+ TJbBmp = Record
+  W, H, RB: LongInt;
+  D: PBigBytes;
+ End;
+ TJbBmpArr = Array[0..16777215] Of PJbBmp;
+ PJbBmpArr = ^TJbBmpArr;
+ TJbIntArr = Array[0..16777215] Of LongInt;
+ PJbIntArr = ^TJbIntArr;
+ PJbHdr = ^TJbHdr;
+ TJbHdr = Record
+  Prev, Next: PJbHdr;
+  Sz: Int64;
+ End;
+ TJbHLine = Record
+  PL, RL, Kind: Byte;
+  Low: LongInt;
+ End;
+ TJbHLineArr = Array[0..16777215] Of TJbHLine;
+ PJbHLineArr = ^TJbHLineArr;
+ PJbHT = ^TJbHT;
+ TJbHT = Record
+  N, MaxLen: LongInt;
+  L: PJbHLineArr;
+  Ord: PJbIntArr;
+  First: Array[0..33] Of Int64;
+  Cnt, Ofs: Array[0..33] Of LongInt;
+ End;
+ { contextes des décodeurs d'entiers arithmétiques d'une région de texte }
+ PJbTCtx = ^TJbTCtx;
+ TJbTCtx = Record
+  IADT, IAFS, IADS, IAIT, IARI, IARDW, IARDH, IARDX, IARDY: Array[0..511] Of Byte;
+  IAID: PBigBytes;
+  IDLen: LongInt;
+  GR: Array[0..8191] Of Byte;
+ End;
+ { résultat mémorisé d'un segment }
+ TJbSeg = Record
+  Num, Typ: LongInt;
+  Syms: PJbBmpArr;              { symboles exportés ou motifs }
+  NSyms: LongInt;
+  GB, GR: PBigBytes;            { contextes conservés (dictionnaire de symboles) }
+  Tab: PJbHT;                   { table de Huffman personnalisée }
+  Bmp: PJbBmp;                  { région intermédiaire }
+  PW, PH: LongInt;
+ End;
+ PJbSegArr = ^TJbSegArr;
+ TJbSegArr = Array[0..1000000] Of TJbSeg;
+ { paramètres d'une région générique }
+ TJbGP = Record
+  Templ: LongInt;
+  TPGD: Boolean;
+  Skip: PJbBmp;
+  AT: Array[0..7] Of LongInt;
+ End;
+ { paramètres d'une région de texte }
+ TJbTP = Record
+  Huff, Refine, Transposed, FixedCodes: Boolean;
+  W, H, NInst, Strips, LogStrips, NSyms, CodeLen, DefPix, CombOp, RefCorner, DSOff, RTempl: LongInt;
+  Syms: PJbBmpArr;
+  RAT: Array[0..3] Of LongInt;
+  TFS, TDS, TDT, TRDW, TRDH, TRDX, TRDY, TRSIZE, TSym: PJbHT;
+ End;
+
+Var
+ JbHdrList: PJbHdr;
+ JbLive, JbWork: Int64;
+ JbQe: Array[0..93] Of Word;
+ JbNM, JbNL: Array[0..93] Of Byte;
+ JbTabOK: Boolean;
+ { décodeur arithmétique MQ }
+ JbMA, JbMC: LongWord;
+ JbMCT, JbMPos, JbMEnd, JbMOver: LongInt;
+ JbMBuf: PBigBytes;
+ { lecteur de bits Huffman }
+ JbHBuf: PBigBytes;
+ JbHLen, JbHPos: LongInt;
+ JbHErr: Boolean;
+ { tables de Huffman standard construites }
+ JbStdT: Array[1..15] Of PJbHT;
+ { état du décodage }
+ JbSegs: PJbSegArr;
+ JbNSegs, JbCapSegs: LongInt;
+ JbPage: PJbBmp;
+ JbPageDef: LongInt;
+ JbPageUnk, JbPageHas, JbDone: Boolean;
+ JbPageFinalH: LongInt;
+ JbArgW, JbArgH: LongInt;
+
+{ ---- mémoire : toutes les allocations sont chaînées et libérées en bloc ---- }
+
+Function JbAlloc(Sz: Int64): Pointer;
+Var
+ H: PJbHdr;
+Begin
+ JbAlloc := Nil;
+ If (Sz < 0) Or (Sz > 1500000000) Or (JbLive + Sz > JbMaxLive) Then Exit;
+ H := GetMem(Sz + SizeOf(TJbHdr));
+ If H = Nil Then Exit;
+ FillChar(H^, Sz + SizeOf(TJbHdr), 0);
+ H^.Sz := Sz;
+ H^.Prev := Nil;
+ H^.Next := JbHdrList;
+ If JbHdrList <> Nil Then JbHdrList^.Prev := H;
+ JbHdrList := H;
+ JbLive := JbLive + Sz;
+ JbAlloc := PByte(H) + SizeOf(TJbHdr);
+End;
+
+Procedure JbFree(P: Pointer);
+Var
+ H: PJbHdr;
+Begin
+ If P = Nil Then Exit;
+ H := PJbHdr(PByte(P) - SizeOf(TJbHdr));
+ If H^.Prev <> Nil Then H^.Prev^.Next := H^.Next Else JbHdrList := H^.Next;
+ If H^.Next <> Nil Then H^.Next^.Prev := H^.Prev;
+ JbLive := JbLive - H^.Sz;
+ FreeMem(H);
+End;
+
+Procedure JbFreeAll;
+Begin
+ While JbHdrList <> Nil Do JbFree(PByte(JbHdrList) + SizeOf(TJbHdr));
+ JbLive := 0;
+End;
+
+Function JbNewBmp(W, H: LongInt): PJbBmp;
+Var
+ B: PJbBmp;
+Begin
+ JbNewBmp := Nil;
+ If (W < 0) Or (H < 0) Or (W > JbMaxPix) Or (H > JbMaxPix) Then Exit;
+ If Int64(W) * H > JbMaxPix Then Exit;
+ B := JbAlloc(SizeOf(TJbBmp));
+ If B = Nil Then Exit;
+ B^.W := W; B^.H := H; B^.RB := (W + 7) Shr 3;
+ B^.D := JbAlloc(Int64(B^.RB) * H + 8);
+ If B^.D = Nil Then Begin JbFree(B); Exit; End;
+ JbNewBmp := B;
+End;
+
+Procedure JbFreeBmp(B: PJbBmp);
+Begin
+ If B = Nil Then Exit;
+ JbFree(B^.D);
+ JbFree(B);
+End;
+
+Function JbRow(B: PJbBmp; Y: LongInt): PBigBytes;
+Begin
+ JbRow := PBigBytes(PByte(B^.D) + Int64(Y) * B^.RB);
+End;
+
+Function JbGP(B: PJbBmp; X, Y: LongInt): LongInt;
+Begin
+ If (B = Nil) Or (X < 0) Or (Y < 0) Or (X >= B^.W) Or (Y >= B^.H) Then JbGP := 0
+ Else JbGP := (B^.D^[Y * B^.RB + (X Shr 3)] Shr (7 - (X And 7))) And 1;
+End;
+
+Procedure JbSP(B: PJbBmp; X, Y, V: LongInt);
+Var
+ I: LongInt;
+Begin
+ If (X < 0) Or (Y < 0) Or (X >= B^.W) Or (Y >= B^.H) Then Exit;
+ I := Y * B^.RB + (X Shr 3);
+ If V <> 0 Then B^.D^[I] := B^.D^[I] Or (128 Shr (X And 7))
+ Else B^.D^[I] := B^.D^[I] And (Not (128 Shr (X And 7)));
+End;
+
+Procedure JbFillBmp(B: PJbBmp; V: LongInt);
+Var
+ Y: LongInt;
+ R: PBigBytes;
+ M: Byte;
+Begin
+ If (B = Nil) Or (B^.RB = 0) Then Exit;
+ If V = 0 Then Begin FillChar(B^.D^, Int64(B^.RB) * B^.H, 0); Exit; End;
+ FillChar(B^.D^, Int64(B^.RB) * B^.H, 255);
+ If (B^.W And 7) <> 0 Then Begin
+  M := Byte(($FF00 Shr (B^.W And 7)) And $FF);
+  For Y := 0 To B^.H - 1 Do Begin
+   R := JbRow(B, Y);
+   R^[B^.RB - 1] := R^[B^.RB - 1] And M;
+  End;
+ End;
+End;
+
+{ Composition de Src sur Dst en (X, Y). Op : 0 OR, 1 AND, 2 XOR, 3 XNOR, 4 REPLACE }
+Procedure JbBlit(Dst, Src: PJbBmp; X, Y, Op: LongInt);
+Var
+ X0, X1, Y0, Y1, SY, DY, DB, B0, B1, P, O, Wd: LongInt;
+ SR, DR: PBigBytes;
+ M, S, D, MA, MB: LongInt;
+Begin
+ If (Dst = Nil) Or (Src = Nil) Or (Src^.W = 0) Or (Src^.H = 0) Then Exit;
+ If (X > 1073741823) Or (X < -1073741823) Or (Y > 1073741823) Or (Y < -1073741823) Then Exit;
+ X0 := X; If X0 < 0 Then X0 := 0;
+ X1 := X + Src^.W; If X1 > Dst^.W Then X1 := Dst^.W;
+ Y0 := Y; If Y0 < 0 Then Y0 := 0;
+ Y1 := Y + Src^.H; If Y1 > Dst^.H Then Y1 := Dst^.H;
+ If (X0 >= X1) Or (Y0 >= Y1) Then Exit;
+ JbWork := JbWork + Int64(X1 - X0) * (Y1 - Y0) Div 4 + 60;
+ If JbWork > JbMaxWork Then Exit;
+ B0 := X0 Shr 3;
+ B1 := (X1 - 1) Shr 3;
+ For DY := Y0 To Y1 - 1 Do Begin
+  SY := DY - Y;
+  SR := JbRow(Src, SY);
+  DR := JbRow(Dst, DY);
+  For DB := B0 To B1 Do Begin
+   { 8 pixels source alignés sur l'octet destination DB }
+   P := DB * 8 - X;
+   O := P And 7;
+   Wd := (P - O) Div 8;
+   S := 0;
+   If (Wd >= 0) And (Wd < Src^.RB) Then S := SR^[Wd] Shl 8;
+   If (Wd + 1 >= 0) And (Wd + 1 < Src^.RB) Then S := S Or SR^[Wd + 1];
+   S := (S Shr (8 - O)) And $FF;
+   { masque des pixels destination valides dans cet octet }
+   MA := 255;
+   If DB = B0 Then MA := 255 Shr (X0 And 7);
+   MB := 255;
+   If DB = B1 Then MB := (255 Shl (7 - ((X1 - 1) And 7))) And 255;
+   M := MA And MB;
+   D := DR^[DB];
+   Case Op Of
+    0: D := D Or (S And M);
+    1: D := D And (S Or (255 Xor M));
+    2: D := D Xor (S And M);
+    3: D := (D And (255 Xor M)) Or ((255 Xor (D Xor S)) And M);
+   Else D := (D And (255 Xor M)) Or (S And M);
+   End;
+   DR^[DB] := D;
+  End;
+ End;
+End;
+
+{ ---- décodeur arithmétique MQ (Annexe E) ---- }
+
+Procedure JbInitTab;
+Var
+ I: Integer;
+Begin
+ If JbTabOK Then Exit;
+ For I := 0 To 46 Do Begin
+  JbQe[I * 2] := JbQeV[I]; JbQe[I * 2 + 1] := JbQeV[I];
+  JbNM[I * 2] := JbNMpsV[I] * 2;
+  JbNM[I * 2 + 1] := JbNMpsV[I] * 2 + 1;
+  JbNL[I * 2] := JbNLpsV[I] * 2 + JbSwV[I];
+  JbNL[I * 2 + 1] := JbNLpsV[I] * 2 + (1 - JbSwV[I]);
+ End;
+ JbTabOK := True;
+End;
+
+Function JbBy(P: LongInt): LongWord;
+Begin
+ If (P >= 0) And (P < JbMEnd) Then JbBy := JbMBuf^[P] Else JbBy := $FF;
+End;
+
+Procedure JbMQByteIn;
+Var
+ B, B1: LongWord;
+Begin
+ B := JbBy(JbMPos);
+ If B = $FF Then Begin
+  B1 := JbBy(JbMPos + 1);
+  If B1 > $8F Then Begin
+   JbMC := JbMC + $FF00;
+   JbMCT := 8;
+   Inc(JbMOver);
+  End Else Begin
+   Inc(JbMPos);
+   JbMC := JbMC + (B1 Shl 9);
+   JbMCT := 7;
+  End;
+ End Else Begin
+  Inc(JbMPos);
+  If JbMPos >= JbMEnd Then Inc(JbMOver);
+  JbMC := JbMC + (JbBy(JbMPos) Shl 8);
+  JbMCT := 8;
+ End;
+End;
+
+Procedure JbMQInit(P: PBigBytes; Len: LongInt);
+Begin
+ JbInitTab;
+ If Len < 0 Then Len := 0;
+ JbMBuf := P; JbMEnd := Len; JbMPos := 0; JbMOver := 0;
+ JbMC := JbBy(0) Shl 16;
+ JbMQByteIn;
+ JbMC := JbMC Shl 7;
+ JbMCT := JbMCT - 7;
+ JbMA := $8000;
+End;
+
+{ Décode un bit avec le contexte Cx (octet : 2 * état + MPS) }
+Function JbMQ(Var Cx: Byte): LongInt;
+Var
+ Q: LongWord;
+ I: Byte;
+ D: LongInt;
+Begin
+ I := Cx;
+ Q := JbQe[I];
+ JbMA := JbMA - Q;
+ If (JbMC Shr 16) < Q Then Begin
+  If JbMA < Q Then Begin D := I And 1; Cx := JbNM[I]; End
+  Else Begin D := 1 - (I And 1); Cx := JbNL[I]; End;
+  JbMA := Q;
+ End Else Begin
+  JbMC := JbMC - (Q Shl 16);
+  If (JbMA And $8000) <> 0 Then Begin JbMQ := I And 1; Exit; End;
+  If JbMA < Q Then Begin D := 1 - (I And 1); Cx := JbNL[I]; End
+  Else Begin D := I And 1; Cx := JbNM[I]; End;
+ End;
+ Repeat
+  If JbMCT = 0 Then JbMQByteIn;
+  JbMA := JbMA Shl 1;
+  JbMC := JbMC Shl 1;
+  Dec(JbMCT);
+ Until (JbMA And $8000) <> 0;
+ JbMQ := D;
+End;
+
+{ Décodeur d'entiers arithmétique (Annexe A.2). Retourne False pour OOB. }
+Function JbIntDec(Cx: PBigBytes; Var V: LongInt): Boolean;
+Var
+ Prev, S, N, I, B, Off: LongInt;
+ R: Int64;
+ Function Bit: LongInt;
+ Var
+  D: LongInt;
+ Begin
+  D := JbMQ(Cx^[Prev]);
+  If Prev < 256 Then Prev := (Prev Shl 1) Or D
+  Else Prev := (((Prev Shl 1) Or D) And 511) Or 256;
+  Bit := D;
+ End;
+Begin
+ Prev := 1;
+ S := Bit;
+ If Bit = 0 Then Begin N := 2; Off := 0; End
+ Else If Bit = 0 Then Begin N := 4; Off := 4; End
+ Else If Bit = 0 Then Begin N := 6; Off := 20; End
+ Else If Bit = 0 Then Begin N := 8; Off := 84; End
+ Else If Bit = 0 Then Begin N := 12; Off := 340; End
+ Else Begin N := 32; Off := 4436; End;
+ R := 0;
+ For I := 1 To N Do Begin
+  B := Bit;
+  R := R * 2 + B;
+ End;
+ R := R + Off;
+ If R > 1073741823 Then R := 1073741823;
+ If S = 0 Then Begin V := R; JbIntDec := True; End
+ Else If R > 0 Then Begin V := -R; JbIntDec := True; End
+ Else Begin V := 0; JbIntDec := False; End;
+End;
+
+{ Décodeur IAID : CodeLen bits, contextes Cx de taille 2^(CodeLen+1) }
+Function JbIAID(Cx: PBigBytes; CodeLen: LongInt): LongInt;
+Var
+ Prev, I: LongInt;
+Begin
+ Prev := 1;
+ For I := 1 To CodeLen Do Prev := (Prev Shl 1) Or JbMQ(Cx^[Prev]);
+ JbIAID := Prev - (1 Shl CodeLen);
+End;
+
+{ ---- lecteur de bits (Huffman) ---- }
+
+Procedure JbHInit(P: PBigBytes; Len: LongInt);
+Begin
+ If Len > 250000000 Then Len := 250000000;
+ If Len < 0 Then Len := 0;
+ JbHBuf := P; JbHLen := Len; JbHPos := 0; JbHErr := False;
+End;
+
+Function JbHBit: LongInt;
+Begin
+ If (JbHPos Shr 3) >= JbHLen Then Begin JbHErr := True; JbHBit := 0; Exit; End;
+ JbHBit := (JbHBuf^[JbHPos Shr 3] Shr (7 - (JbHPos And 7))) And 1;
+ Inc(JbHPos);
+End;
+
+Function JbHBits(N: LongInt): Int64;
+Var
+ I: LongInt;
+ R: Int64;
+Begin
+ R := 0;
+ For I := 1 To N Do R := R * 2 + JbHBit;
+ JbHBits := R;
+End;
+
+Procedure JbHAlign;
+Begin
+ JbHPos := (JbHPos + 7) And (Not 7);
+End;
+
+{ ---- tables de Huffman (Annexe B) ---- }
+
+{ Calcule les codes canoniques (B.3). Retourne False si invalide. }
+Function JbHBuild(T: PJbHT): Boolean;
+Var
+ I, Len, K: LongInt;
+ Fc: Int64;
+ Nx: Array[0..33] Of LongInt;
+Begin
+ JbHBuild := False;
+ FillChar(T^.Cnt, SizeOf(T^.Cnt), 0);
+ FillChar(T^.Ofs, SizeOf(T^.Ofs), 0);
+ FillChar(T^.First, SizeOf(T^.First), 0);
+ T^.MaxLen := 0;
+ For I := 0 To T^.N - 1 Do Begin
+  Len := T^.L^[I].PL;
+  If Len > 32 Then Exit;
+  If Len > 0 Then Begin
+   Inc(T^.Cnt[Len]);
+   If Len > T^.MaxLen Then T^.MaxLen := Len;
+  End;
+ End;
+ T^.Ord := JbAlloc(Int64(T^.N + 1) * SizeOf(LongInt));
+ If T^.Ord = Nil Then Exit;
+ K := 0;
+ Fc := 0;
+ For Len := 1 To 32 Do Begin
+  T^.Ofs[Len] := K;
+  Nx[Len] := K;
+  K := K + T^.Cnt[Len];
+  Fc := (Fc + T^.Cnt[Len - 1]) * 2;
+  If Len = 1 Then Fc := 0;
+  T^.First[Len] := Fc;
+ End;
+ For I := 0 To T^.N - 1 Do Begin
+  Len := T^.L^[I].PL;
+  If Len > 0 Then Begin
+   T^.Ord^[Nx[Len]] := I;
+   Inc(Nx[Len]);
+  End;
+ End;
+ JbHBuild := True;
+End;
+
+{ Table standard B.N (1..15) ; Nil si échec }
+Function JbHStd(N: LongInt): PJbHT;
+Var
+ T: PJbHT;
+ I, Cnt: LongInt;
+ Src: ^LongInt;
+Begin
+ JbHStd := Nil;
+ If (N < 1) Or (N > 15) Then Exit;
+ If JbStdT[N] <> Nil Then Begin JbHStd := JbStdT[N]; Exit; End;
+ Cnt := JbStdN[N];
+ Case N Of
+  1: Src := @JbStd1[0]; 2: Src := @JbStd2[0]; 3: Src := @JbStd3[0]; 4: Src := @JbStd4[0];
+  5: Src := @JbStd5[0]; 6: Src := @JbStd6[0]; 7: Src := @JbStd7[0]; 8: Src := @JbStd8[0];
+  9: Src := @JbStd9[0]; 10: Src := @JbStd10[0]; 11: Src := @JbStd11[0]; 12: Src := @JbStd12[0];
+  13: Src := @JbStd13[0]; 14: Src := @JbStd14[0];
+ Else Src := @JbStd15[0];
+ End;
+ T := JbAlloc(SizeOf(TJbHT));
+ If T = Nil Then Exit;
+ T^.N := Cnt;
+ T^.L := JbAlloc(Int64(Cnt) * SizeOf(TJbHLine));
+ If T^.L = Nil Then Exit;
+ For I := 0 To Cnt - 1 Do Begin
+  T^.L^[I].PL := PLongInt(PByte(Src) + I * 16)^;
+  T^.L^[I].RL := PLongInt(PByte(Src) + I * 16 + 4)^;
+  T^.L^[I].Low := PLongInt(PByte(Src) + I * 16 + 8)^;
+  T^.L^[I].Kind := PLongInt(PByte(Src) + I * 16 + 12)^;
+ End;
+ If Not JbHBuild(T) Then Exit;
+ JbStdT[N] := T;
+ JbHStd := T;
+End;
+
+{ Décode une valeur : 0 = ok, 1 = OOB, -1 = erreur }
+Function JbHGet(T: PJbHT; Var V: LongInt): LongInt;
+Var
+ Code, Off, R: Int64;
+ Len, K: LongInt;
+ Ln: ^TJbHLine;
+Begin
+ JbHGet := -1;
+ V := 0;
+ If T = Nil Then Exit;
+ Code := 0;
+ For Len := 1 To T^.MaxLen Do Begin
+  Code := Code * 2 + JbHBit;
+  If JbHErr Then Exit;
+  K := Code - T^.First[Len];
+  If (T^.Cnt[Len] > 0) And (K >= 0) And (K < T^.Cnt[Len]) Then Begin
+   Ln := @T^.L^[T^.Ord^[T^.Ofs[Len] + K]];
+   If Ln^.Kind = 3 Then Begin JbHGet := 1; Exit; End;
+   Off := 0;
+   If Ln^.RL > 0 Then Off := JbHBits(Ln^.RL);
+   If JbHErr Then Exit;
+   If Ln^.Kind = 1 Then R := Int64(Ln^.Low) - Off Else R := Int64(Ln^.Low) + Off;
+   If R > 1073741823 Then R := 1073741823;
+   If R < -1073741823 Then R := -1073741823;
+   V := R;
+   JbHGet := 0;
+   Exit;
+  End;
+ End;
+End;
+
+{ ---- région générique arithmétique (6.2) : modèles 0 à 3 ---- }
+
+{ Décode la région dans B (déjà allouée et mise à zéro) avec le décodeur MQ courant.
+  Cx : 65536 contextes. Une troncature du flux laisse le reste de la région à zéro. }
+Function JbGeneric(B: PJbBmp; Var P: TJbGP; Cx: PBigBytes): Boolean;
+Const
+ N0: Array[0..3] Of Integer = (4, 3, 2, 4);
+ N1: Array[0..3] Of Integer = (7, 6, 5, 6);
+ N2: Array[0..3] Of Integer = (5, 4, 3, 0);
+ R1: Array[0..3] Of Integer = (3, 3, 2, 2);
+ R2: Array[0..3] Of Integer = (2, 2, 1, 0);
+Var
+ T, S1, S2, Keep, Ctx, Cx2, Bit, Acc, XM, Lim, BX, NAT, LTP, Sh1, Sh2: LongInt;
+ X, Y, RB, W, H, I: LongInt;
+ Row0, Row1, Row2, Zero: PBigBytes;
+ Reg1, Reg2: LongWord;
+ AtBit: Array[0..3] Of LongInt;
+ Nom: Array[0..7] Of LongInt;
+ Slow, HasSkip, Has2: Boolean;
+Begin
+ JbGeneric := False;
+ If B = Nil Then Exit;
+ T := P.Templ;
+ If (T < 0) Or (T > 3) Then Exit;
+ W := B^.W; H := B^.H; RB := B^.RB;
+ If (W = 0) Or (H = 0) Then Begin JbGeneric := True; Exit; End;
+ JbWork := JbWork + Int64(W) * H * 30 + 200;
+ If JbWork > JbMaxWork Then Exit;
+ S1 := N0[T]; S2 := S1 + N1[T];
+ Has2 := N2[T] > 0;
+ Keep := (1 Shl (S1 - 1)) Or (1 Shl (S2 - 1));
+ If Has2 Then Keep := Keep Or (1 Shl (S2 + N2[T] - 1));
+ Keep := (Not Keep) And $FFFF;
+ Sh1 := 14 - R1[T]; Sh2 := 14 - R2[T];
+ { pixels adaptatifs : position nominale ou non }
+ FillChar(Nom, SizeOf(Nom), 0);
+ If T = 0 Then Begin
+  Nom[0] := 3; Nom[1] := -1; Nom[2] := -3; Nom[3] := -1; Nom[4] := 2; Nom[5] := -2; Nom[6] := -2; Nom[7] := -2;
+  NAT := 4;
+  AtBit[0] := S1; AtBit[1] := S2 - 1; AtBit[2] := S2; AtBit[3] := S2 + N2[0] - 1;
+ End Else Begin
+  If T = 1 Then Nom[0] := 3 Else Nom[0] := 2;
+  Nom[1] := -1;
+  NAT := 1;
+  AtBit[0] := S1;
+ End;
+ Slow := False;
+ For I := 0 To NAT * 2 - 1 Do If P.AT[I] <> Nom[I] Then Slow := True;
+ HasSkip := P.Skip <> Nil;
+ Zero := JbAlloc(RB + 4);
+ If Zero = Nil Then Exit;
+ LTP := 0;
+ For Y := 0 To H - 1 Do Begin
+  If JbMOver > 300 Then Break;
+  Row0 := JbRow(B, Y);
+  If P.TPGD Then Begin
+   LTP := LTP Xor JbMQ(Cx^[JbSltp[T]]);
+   If LTP <> 0 Then Begin
+    If Y > 0 Then Move(JbRow(B, Y - 1)^, Row0^, RB);
+    Continue;
+   End;
+  End;
+  If Y >= 1 Then Row1 := JbRow(B, Y - 1) Else Row1 := Zero;
+  If Y >= 2 Then Row2 := JbRow(B, Y - 2) Else Row2 := Zero;
+  Ctx := (Row1^[0] Shr (7 - R1[T])) Shl S1;
+  If Has2 Then Ctx := Ctx Or ((Row2^[0] Shr (7 - R2[T])) Shl S2);
+  For BX := 0 To RB - 1 Do Begin
+   Reg1 := LongWord(Row1^[BX]) Shl 8;
+   If BX + 1 < RB Then Reg1 := Reg1 Or Row1^[BX + 1];
+   Reg2 := 0;
+   If Has2 Then Begin
+    Reg2 := LongWord(Row2^[BX]) Shl 8;
+    If BX + 1 < RB Then Reg2 := Reg2 Or Row2^[BX + 1];
+   End;
+   Lim := W - BX * 8;
+   If Lim > 8 Then Lim := 8;
+   Acc := 0;
+   For XM := 0 To Lim - 1 Do Begin
+    X := BX * 8 + XM;
+    If HasSkip And (JbGP(P.Skip, X, Y) <> 0) Then Bit := 0
+    Else If Slow Then Begin
+     Cx2 := Ctx;
+     For I := 0 To NAT - 1 Do
+      Cx2 := (Cx2 And (Not (1 Shl AtBit[I]))) Or (JbGP(B, X + P.AT[I * 2], Y + P.AT[I * 2 + 1]) Shl AtBit[I]);
+     Bit := JbMQ(Cx^[Cx2]);
+    End Else Bit := JbMQ(Cx^[Ctx]);
+    Acc := Acc Or (Bit Shl (7 - XM));
+    If Slow Then Row0^[BX] := Acc;
+    Ctx := ((Ctx And Keep) Shl 1) Or Bit Or (LongInt((Reg1 Shr (Sh1 - XM)) And 1) Shl S1);
+    If Has2 Then Ctx := Ctx Or (LongInt((Reg2 Shr (Sh2 - XM)) And 1) Shl S2);
+   End;
+   Row0^[BX] := Acc;
+  End;
+ End;
+ JbFree(Zero);
+ JbGeneric := True;
+End;
+
+{ ---- MMR (réutilise le décodeur CCITT G4) ---- }
+
+Var
+ JbMMRBits: LongInt;
+
+{ Décode Len octets MMR en un bitmap W x H (1 = noir). JbMMRBits = bits consommés. }
+Function JbMMRDec(Src: PBigBytes; Len, W, H: LongInt): PJbBmp;
+Var
+ B: PJbBmp;
+Begin
+ JbMMRDec := Nil;
+ JbMMRBits := 0;
+ B := JbNewBmp(W, H);
+ If B = Nil Then Exit;
+ If (W > 0) And (H > 0) And (Len > 0) And (W <= 65000) Then Begin
+  JbWork := JbWork + Int64(W) * H * 8 + 200;
+  If JbWork <= JbMaxWork Then Begin
+   CCITTDecode(Src, Len, W, H, -1, True, False, B^.D);
+   JbMMRBits := CCBit;
+   If JbMMRBits > Len * 8 Then JbMMRBits := Len * 8;
+  End;
+ End;
+ JbMMRDec := B;
+End;
+
+{ ---- région de raffinement (6.3) ---- }
+
+{ pixel X d'une ligne P de largeur W (0 hors limites ou ligne absente) }
+Function JbRowBit(P: PBigBytes; X, W: LongInt): LongInt;
+Begin
+ If (P = Nil) Or (X < 0) Or (X >= W) Then JbRowBit := 0
+ Else JbRowBit := (P^[X Shr 3] Shr (7 - (X And 7))) And 1;
+End;
+
+{ Décode B (déjà allouée, à zéro) par raffinement de Ref décalée de (DX, DY).
+  Contexte T0 : 13 pixels, T1 : 10 pixels ; fenêtres 3x3 glissantes de la référence. }
+Function JbRefine(B, Ref: PJbBmp; DX, DY, Templ: LongInt; TPGR: Boolean;
+                  A1X, A1Y, A2X, A2Y: LongInt; Cx: PBigBytes): Boolean;
+Var
+ X, Y, RX, RY, Ctx, Bit, LTP, W, H, WM, W0, WP, WI, Cur, RW, RH: LongInt;
+ RowC, RowU, RM, R0, RP: PBigBytes;
+ Slow1, Slow2: Boolean;
+Begin
+ JbRefine := False;
+ If (B = Nil) Or (Ref = Nil) Or (Templ < 0) Or (Templ > 1) Then Exit;
+ W := B^.W; H := B^.H; RW := Ref^.W; RH := Ref^.H;
+ JbWork := JbWork + Int64(W) * H * 45 + 200;
+ If JbWork > JbMaxWork Then Exit;
+ If (DX > 1073741823) Or (DX < -1073741823) Or (DY > 1073741823) Or (DY < -1073741823) Then Begin
+  JbRefine := True; Exit;
+ End;
+ If Templ = 0 Then Begin
+  If (A1X < -128) Or (A1X > 127) Or (A1Y < -128) Or (A1Y > 127) Or (A2X < -128) Or (A2X > 127) Or
+     (A2Y < -128) Or (A2Y > 127) Then Exit;
+ End;
+ Slow1 := (Templ = 0) And ((A1X <> -1) Or (A1Y <> -1));
+ Slow2 := (Templ = 0) And ((A2X <> -1) Or (A2Y <> -1));
+ LTP := 0;
+ For Y := 0 To H - 1 Do Begin
+  If JbMOver > 300 Then Break;
+  If TPGR Then Begin
+   If Templ = 0 Then LTP := LTP Xor JbMQ(Cx^[$100]) Else LTP := LTP Xor JbMQ(Cx^[$80]);
+  End;
+  RY := Y - DY;
+  RowC := JbRow(B, Y);
+  If Y > 0 Then RowU := JbRow(B, Y - 1) Else RowU := Nil;
+  If (RY - 1 >= 0) And (RY - 1 < RH) Then RM := JbRow(Ref, RY - 1) Else RM := Nil;
+  If (RY >= 0) And (RY < RH) Then R0 := JbRow(Ref, RY) Else R0 := Nil;
+  If (RY + 1 >= 0) And (RY + 1 < RH) Then RP := JbRow(Ref, RY + 1) Else RP := Nil;
+  RX := -DX;
+  { fenêtres initiales (pixels RX-1, RX, RX+1) }
+  WM := (JbRowBit(RM, RX - 1, RW) Shl 2) Or (JbRowBit(RM, RX, RW) Shl 1) Or JbRowBit(RM, RX + 1, RW);
+  W0 := (JbRowBit(R0, RX - 1, RW) Shl 2) Or (JbRowBit(R0, RX, RW) Shl 1) Or JbRowBit(R0, RX + 1, RW);
+  WP := (JbRowBit(RP, RX - 1, RW) Shl 2) Or (JbRowBit(RP, RX, RW) Shl 1) Or JbRowBit(RP, RX + 1, RW);
+  WI := (JbRowBit(RowU, -1, W) Shl 2) Or (JbRowBit(RowU, 0, W) Shl 1) Or JbRowBit(RowU, 1, W);
+  Cur := 0;
+  For X := 0 To W - 1 Do Begin
+   Bit := -1;
+   If LTP <> 0 Then Begin
+    { prédiction typique : voisinage 3x3 de la référence uniforme }
+    If (WM = 0) And (W0 = 0) And (WP = 0) Then Bit := 0
+    Else If (WM = 7) And (W0 = 7) And (WP = 7) Then Bit := 1;
+   End;
+   If Bit < 0 Then Begin
+    If Templ = 0 Then Begin
+     Ctx := (WM Shl 10) Or (W0 Shl 7) Or (WP Shl 4) Or (WI Shl 1) Or Cur;
+     If Slow1 Then Ctx := (Ctx And (Not 8)) Or (JbGP(B, X + A1X, Y + A1Y) Shl 3);
+     If Slow2 Then Ctx := (Ctx And (Not $1000)) Or (JbGP(Ref, RX + A2X, RY + A2Y) Shl 12);
+    End Else
+     Ctx := (((WM Shr 1) And 1) Shl 9) Or (W0 Shl 6) Or ((WP And 3) Shl 4) Or (WI Shl 1) Or Cur;
+    Bit := JbMQ(Cx^[Ctx]);
+   End;
+   If Bit <> 0 Then RowC^[X Shr 3] := RowC^[X Shr 3] Or (128 Shr (X And 7));
+   Cur := Bit;
+   { fenêtres suivantes }
+   Inc(RX);
+   WM := ((WM Shl 1) And 7) Or JbRowBit(RM, RX + 1, RW);
+   W0 := ((W0 Shl 1) And 7) Or JbRowBit(R0, RX + 1, RW);
+   WP := ((WP Shl 1) And 7) Or JbRowBit(RP, RX + 1, RW);
+   WI := ((WI Shl 1) And 7) Or JbRowBit(RowU, X + 2, W);
+  End;
+ End;
+ JbRefine := True;
+End;
+
+{ ---- utilitaires de lecture ---- }
+
+Function JbU32(D: PBigBytes; P: LongInt): LongWord;
+Begin
+ JbU32 := (LongWord(D^[P]) Shl 24) Or (LongWord(D^[P + 1]) Shl 16) Or (LongWord(D^[P + 2]) Shl 8) Or D^[P + 3];
+End;
+
+Function JbS32(D: PBigBytes; P: LongInt): LongInt;
+Begin
+ JbS32 := LongInt(JbU32(D, P));
+End;
+
+Function JbU16(D: PBigBytes; P: LongInt): LongInt;
+Begin
+ JbU16 := (LongInt(D^[P]) Shl 8) Or D^[P + 1];
+End;
+
+Function JbS8(D: PBigBytes; P: LongInt): LongInt;
+Begin
+ If D^[P] > 127 Then JbS8 := LongInt(D^[P]) - 256 Else JbS8 := D^[P];
+End;
+
+{ plancher de V / 2 }
+Function JbHalf(V: LongInt): LongInt;
+Begin
+ JbHalf := (V - (V And 1)) Div 2;
+End;
+
+Function JbClamp(V: Int64): LongInt;
+Begin
+ If V > 1073741823 Then V := 1073741823;
+ If V < -1073741823 Then V := -1073741823;
+ JbClamp := V;
+End;
+
+{ ceil(log2(N)) pour N >= 1 }
+Function JbLog2Up(N: LongInt): LongInt;
+Var
+ R: LongInt;
+Begin
+ R := 0;
+ While (R < 31) And ((Int64(1) Shl R) < N) Do Inc(R);
+ JbLog2Up := R;
+End;
+
+{ Décode un entier : 0 = ok, 1 = OOB, -1 = erreur }
+Function JbDecI(Huff: Boolean; T: PJbHT; Cx: PBigBytes; Var V: LongInt): LongInt;
+Begin
+ If Huff Then JbDecI := JbHGet(T, V)
+ Else If JbIntDec(Cx, V) Then JbDecI := 0
+ Else JbDecI := 1;
+End;
+
+{ ---- région de texte (6.4) ---- }
+
+{ Décode dans Reg (déjà allouée). C : contextes arithmétiques (ignoré en Huffman). }
+Function JbTextDec(Var P: TJbTP; C: PJbTCtx; Reg: PJbBmp): Boolean;
+Var
+ V, Code, ID, RI, RDW, RDH, RDX, RDY, NInst, RSize, WI, HI, Pos, Rem: LongInt;
+ StripT, FirstS, CurS, CurT, T, S, X0, Y0, Lft, Top: Int64;
+ First, Ok: Boolean;
+ IB, Tmp: PJbBmp;
+ Huff: Boolean;
+ Function DecI(Tb: PJbHT; Cx: PBigBytes): LongInt;
+ Begin
+  DecI := JbDecI(Huff, Tb, Cx, V);
+ End;
+Begin
+ JbTextDec := False;
+ Huff := P.Huff;
+ JbFillBmp(Reg, P.DefPix);
+ If DecI(P.TDT, PBigBytes(@C^.IADT[0])) <> 0 Then Exit;
+ StripT := -Int64(V) * P.Strips;
+ FirstS := 0; CurS := 0;
+ NInst := 0;
+ While NInst < P.NInst Do Begin
+  If JbHErr Or (JbMOver > 300) Then Exit;
+  If DecI(P.TDT, PBigBytes(@C^.IADT[0])) <> 0 Then Exit;
+  StripT := StripT + Int64(V) * P.Strips;
+  First := True;
+  Repeat
+   If First Then Begin
+    If DecI(P.TFS, PBigBytes(@C^.IAFS[0])) <> 0 Then Exit;
+    FirstS := FirstS + V;
+    CurS := FirstS;
+    First := False;
+   End Else Begin
+    Code := DecI(P.TDS, PBigBytes(@C^.IADS[0]));
+    If Code = 1 Then Break;
+    If Code < 0 Then Exit;
+    If NInst >= P.NInst Then Exit;
+    CurS := CurS + V + P.DSOff;
+   End;
+   If JbHErr Or (JbMOver > 300) Then Exit;
+   If P.Strips = 1 Then CurT := 0
+   Else If Huff Then CurT := JbHBits(P.LogStrips)
+   Else Begin
+    If DecI(Nil, PBigBytes(@C^.IAIT[0])) <> 0 Then Exit;
+    CurT := V;
+   End;
+   T := StripT + CurT;
+   { identifiant du symbole }
+   If Not Huff Then ID := JbIAID(C^.IAID, P.CodeLen)
+   Else If P.FixedCodes Then ID := JbHBits(P.CodeLen)
+   Else Begin
+    If JbHGet(P.TSym, ID) <> 0 Then Exit;
+   End;
+   If JbHErr Then Exit;
+   RI := 0;
+   If P.Refine Then Begin
+    If Huff Then RI := JbHBit
+    Else Begin
+     If DecI(Nil, PBigBytes(@C^.IARI[0])) <> 0 Then Exit;
+     RI := V;
+    End;
+   End;
+   IB := Nil;
+   If (ID >= 0) And (ID < P.NSyms) Then IB := P.Syms^[ID];
+   Tmp := Nil;
+   If RI <> 0 Then Begin
+    RSize := 0;
+    If Not Huff Then Begin
+     If DecI(Nil, PBigBytes(@C^.IARDW[0])) <> 0 Then Exit; RDW := V;
+     If DecI(Nil, PBigBytes(@C^.IARDH[0])) <> 0 Then Exit; RDH := V;
+     If DecI(Nil, PBigBytes(@C^.IARDX[0])) <> 0 Then Exit; RDX := V;
+     If DecI(Nil, PBigBytes(@C^.IARDY[0])) <> 0 Then Exit; RDY := V;
+    End Else Begin
+     If DecI(P.TRDW, Nil) <> 0 Then Exit; RDW := V;
+     If DecI(P.TRDH, Nil) <> 0 Then Exit; RDH := V;
+     If DecI(P.TRDX, Nil) <> 0 Then Exit; RDX := V;
+     If DecI(P.TRDY, Nil) <> 0 Then Exit; RDY := V;
+     If DecI(P.TRSIZE, Nil) <> 0 Then Exit; RSize := V;
+     JbHAlign;
+    End;
+    If IB <> Nil Then Begin
+     If (Int64(IB^.W) + RDW < 0) Or (Int64(IB^.H) + RDH < 0) Or
+        ((Int64(IB^.W) + RDW) * (Int64(IB^.H) + RDH) > JbMaxSymPix) Then Exit;
+     Tmp := JbNewBmp(IB^.W + RDW, IB^.H + RDH);
+     If Tmp = Nil Then Exit;
+     If Huff Then Begin
+      Pos := JbHPos Shr 3;
+      Rem := JbHLen - Pos;
+      If Rem < 0 Then Rem := 0;
+      If (RSize > 0) And (RSize < Rem) Then Rem := RSize;
+      JbMQInit(PBigBytes(PByte(JbHBuf) + Pos), Rem);
+     End;
+     Ok := JbRefine(Tmp, IB, JbClamp(Int64(JbHalf(RDW)) + RDX), JbClamp(Int64(JbHalf(RDH)) + RDY),
+                    P.RTempl, False, P.RAT[0], P.RAT[1], P.RAT[2], P.RAT[3], PBigBytes(@C^.GR[0]));
+     If Not Ok Then Begin JbFreeBmp(Tmp); Exit; End;
+     IB := Tmp;
+    End;
+    If Huff Then Begin
+     If RSize < 0 Then RSize := 0;
+     If Int64(RSize) + (JbHPos Shr 3) > JbHLen Then JbHErr := True
+     Else JbHPos := JbHPos + RSize * 8;
+    End;
+   End;
+   If IB <> Nil Then Begin WI := IB^.W; HI := IB^.H; End Else Begin WI := 0; HI := 0; End;
+   If IB <> Nil Then Begin
+    If (Not P.Transposed) And (P.RefCorner > 1) Then CurS := CurS + WI - 1
+    Else If P.Transposed And ((P.RefCorner And 1) = 0) Then CurS := CurS + HI - 1;
+   End;
+   S := CurS;
+   If Not P.Transposed Then Begin X0 := S; Y0 := T; End Else Begin X0 := T; Y0 := S; End;
+   Lft := X0; Top := Y0;
+   If (P.RefCorner And 2) <> 0 Then Lft := X0 - WI + 1;
+   If (P.RefCorner And 1) = 0 Then Top := Y0 - HI + 1;
+   If IB <> Nil Then JbBlit(Reg, IB, JbClamp(Lft), JbClamp(Top), P.CombOp);
+   If IB <> Nil Then Begin
+    If (Not P.Transposed) And (P.RefCorner < 2) Then CurS := CurS + WI - 1
+    Else If P.Transposed And ((P.RefCorner And 1) <> 0) Then CurS := CurS + HI - 1;
+   End;
+   If Tmp <> Nil Then JbFreeBmp(Tmp);
+   Inc(NInst);
+   If NInst > JbMaxInst Then Exit;
+   If JbWork > JbMaxWork Then Exit;
+  Until False;
+ End;
+ JbTextDec := True;
+End;
+
+{ ---- table de codes des identifiants de symboles (7.4.3.1.7) ---- }
+
+Function JbBuildSymCodes(NSyms: LongInt): PJbHT;
+Var
+ RT, T: PJbHT;
+ I, Idx, Code, V, Rep, Prev: LongInt;
+ Lens: PBigBytes;
+Begin
+ JbBuildSymCodes := Nil;
+ RT := JbAlloc(SizeOf(TJbHT));
+ If RT = Nil Then Exit;
+ RT^.N := 35;
+ RT^.L := JbAlloc(35 * SizeOf(TJbHLine));
+ If RT^.L = Nil Then Exit;
+ For I := 0 To 34 Do Begin
+  RT^.L^[I].PL := JbHBits(4);
+  RT^.L^[I].RL := 0;
+  RT^.L^[I].Low := I;
+  RT^.L^[I].Kind := 0;
+ End;
+ If JbHErr Or Not JbHBuild(RT) Then Exit;
+ Lens := JbAlloc(Int64(NSyms) + 8);
+ If Lens = Nil Then Exit;
+ Idx := 0; Prev := 0;
+ While Idx < NSyms Do Begin
+  Code := JbHGet(RT, V);
+  If (Code <> 0) Or JbHErr Then Exit;
+  If V < 32 Then Begin
+   Lens^[Idx] := V; Prev := V; Inc(Idx);
+  End Else Begin
+   If V = 32 Then Begin
+    If Idx = 0 Then Exit;
+    Rep := JbHBits(2) + 3;
+    V := Prev;
+   End Else If V = 33 Then Begin
+    Rep := JbHBits(3) + 3;
+    V := 0;
+   End Else Begin
+    Rep := JbHBits(7) + 11;
+    V := 0;
+   End;
+   If JbHErr Then Exit;
+   If Idx + Rep > NSyms Then Rep := NSyms - Idx;
+   For I := 1 To Rep Do Begin Lens^[Idx] := V; Inc(Idx); End;
+  End;
+ End;
+ JbHAlign;
+ T := JbAlloc(SizeOf(TJbHT));
+ If T = Nil Then Exit;
+ T^.N := NSyms;
+ T^.L := JbAlloc(Int64(NSyms + 1) * SizeOf(TJbHLine));
+ If T^.L = Nil Then Exit;
+ For I := 0 To NSyms - 1 Do Begin
+  T^.L^[I].PL := Lens^[I];
+  T^.L^[I].RL := 0;
+  T^.L^[I].Low := I;
+  T^.L^[I].Kind := 0;
+ End;
+ If Not JbHBuild(T) Then Exit;
+ JbFree(Lens);
+ JbBuildSymCodes := T;
+End;
+
+{ ---- état du segment courant ---- }
+
+Var
+ JbSD: PBigBytes;               { données du segment courant }
+ JbSL: LongInt;                 { longueur des données }
+ JbCurNum, JbCurTyp: LongInt;
+ JbRef: PJbIntArr;              { numéros des segments référés }
+ JbNRef: LongInt;
+ JbRW, JbRH, JbRX, JbRY, JbROp: LongInt;   { informations de région }
+ JbCT: Array[0..15] Of PJbHT;   { tables personnalisées référées }
+ JbNCT, JbTI: LongInt;
+ JbUnkRows: Int64;              { nombre de lignes d'une région de longueur inconnue (-1 si inconnu) }
+
+Function JbFindSeg(Num: LongInt): LongInt;
+Var
+ I: LongInt;
+Begin
+ JbFindSeg := -1;
+ For I := JbNSegs - 1 DownTo 0 Do
+  If JbSegs^[I].Num = Num Then Begin JbFindSeg := I; Exit; End;
+End;
+
+{ Réserve un nouveau segment à résultat ; retourne son indice ou -1 }
+Function JbAddSeg: LongInt;
+Var
+ NS: PJbSegArr;
+ NC: LongInt;
+Begin
+ JbAddSeg := -1;
+ If JbNSegs >= JbMaxSegRes Then Exit;
+ If JbNSegs >= JbCapSegs Then Begin
+  NC := JbCapSegs * 2 + 16;
+  NS := JbAlloc(Int64(NC) * SizeOf(TJbSeg));
+  If NS = Nil Then Exit;
+  If JbNSegs > 0 Then Move(JbSegs^, NS^, Int64(JbNSegs) * SizeOf(TJbSeg));
+  JbFree(JbSegs);
+  JbSegs := NS;
+  JbCapSegs := NC;
+ End;
+ FillChar(JbSegs^[JbNSegs], SizeOf(TJbSeg), 0);
+ JbSegs^[JbNSegs].Num := JbCurNum;
+ JbSegs^[JbNSegs].Typ := JbCurTyp;
+ JbAddSeg := JbNSegs;
+ Inc(JbNSegs);
+End;
+
+{ Lit les informations de région (7.4.1) : retourne False si invalide }
+Function JbRegionInfo: Boolean;
+Begin
+ JbRegionInfo := False;
+ If JbSL < 17 Then Exit;
+ JbRW := JbS32(JbSD, 0); JbRH := JbS32(JbSD, 4);
+ JbRX := JbClamp(JbS32(JbSD, 8)); JbRY := JbClamp(JbS32(JbSD, 12));
+ JbROp := JbSD^[16] And 7;
+ If JbROp > 4 Then JbROp := 0;
+ If (JbRW < 0) Or (JbRH < 0) Or (Int64(JbRW) * JbRH > JbMaxPix) Then Exit;
+ JbRegionInfo := True;
+End;
+
+{ ---- page ---- }
+
+Procedure JbMakePage(W, H, Def: LongInt; Unk: Boolean);
+Begin
+ If JbPageHas Then Exit;
+ If (W < 1) Or (H < 1) Or (Int64(W) * H > JbMaxPix) Then Begin
+  { dimensions invalides : on retombe sur celles du dictionnaire d'image PDF }
+  W := JbArgW; H := JbArgH;
+  If (W < 1) Or (H < 1) Then Exit;
+  If Int64(W) * H > JbMaxPix Then H := JbMaxPix Div W;
+  If H < 1 Then Exit;
+ End;
+ JbPage := JbNewBmp(W, H);
+ If JbPage = Nil Then Exit;
+ JbPageDef := Def;
+ If Def <> 0 Then JbFillBmp(JbPage, 1);
+ JbPageHas := True;
+ JbPageUnk := Unk;
+ JbPageFinalH := 0;
+ If Not Unk Then JbPageFinalH := H;
+End;
+
+{ Fait croître une page de hauteur inconnue pour qu'elle contienne NH lignes }
+Procedure JbPageGrow(NH: Int64);
+Var
+ NP: PJbBmp;
+ Y: LongInt;
+Begin
+ If (JbPage = Nil) Or (Not JbPageUnk) Or (NH <= JbPage^.H) Then Exit;
+ If NH * JbPage^.W > JbMaxPix Then NH := JbMaxPix Div JbPage^.W;
+ If NH <= JbPage^.H Then Exit;
+ NP := JbNewBmp(JbPage^.W, NH);
+ If NP = Nil Then Exit;
+ JbFillBmp(NP, JbPageDef);
+ For Y := 0 To JbPage^.H - 1 Do Move(JbRow(JbPage, Y)^, JbRow(NP, Y)^, JbPage^.RB);
+ JbFreeBmp(JbPage);
+ JbPage := NP;
+End;
+
+{ Page implicite si le flux ne contient pas de « page information » }
+Procedure JbEnsurePage;
+Begin
+ If Not JbPageHas Then JbMakePage(JbArgW, JbArgH, 0, False);
+End;
+
+{ Dispose du bitmap B (libéré ensuite) : région intermédiaire ou composition sur la page }
+Procedure JbPutRegion(B: PJbBmp);
+Var
+ S: LongInt;
+Begin
+ If B = Nil Then Exit;
+ If (JbCurTyp = 4) Or (JbCurTyp = 20) Or (JbCurTyp = 36) Or (JbCurTyp = 40) Then Begin
+  S := JbAddSeg;
+  If S < 0 Then Begin JbFreeBmp(B); Exit; End;
+  JbSegs^[S].Bmp := B;
+   Exit;
+ End;
+ JbEnsurePage;
+ If JbPage = Nil Then Begin JbFreeBmp(B); Exit; End;
+ If JbPageUnk Then Begin
+  JbPageGrow(Int64(JbRY) + B^.H);
+  If Int64(JbRY) + B^.H > JbPageFinalH Then JbPageFinalH := JbClamp(Int64(JbRY) + B^.H);
+ End;
+ JbBlit(JbPage, B, JbRX, JbRY, JbROp);
+ JbFreeBmp(B);
+End;
+
+{ Région immédiate sur une page connue : retourne False si elle est entièrement hors page ou
+  démesurément plus large que la page ; sinon ne conserve que les lignes visibles (les lignes
+  suivantes ne peuvent pas influencer les précédentes). }
+Function JbCropRows: Boolean;
+Var
+ NH, PWid, PHei: Int64;
+ Inter: Boolean;
+Begin
+ JbCropRows := True;
+ Inter := (JbCurTyp = 4) Or (JbCurTyp = 20) Or (JbCurTyp = 36) Or (JbCurTyp = 40);
+ If JbPage <> Nil Then Begin PWid := JbPage^.W; PHei := JbPage^.H; End
+ Else Begin PWid := JbArgW; PHei := JbArgH; End;
+ { régions démesurées par rapport à la page : flux corrompu }
+ If Int64(JbRX) + JbRW > 2 * PWid + 64 Then Begin JbCropRows := False; Exit; End;
+ If Inter Then Begin
+  If (Not ((JbPage <> Nil) And JbPageUnk)) And (JbRH > 2 * PHei + 64) Then JbCropRows := False;
+  Exit;
+ End;
+ If (JbPage = Nil) Or JbPageUnk Then Exit;
+ If (JbRX >= JbPage^.W) Or (JbRY >= JbPage^.H) Then Begin JbCropRows := False; Exit; End;
+ If Int64(JbRY) + JbRH > JbPage^.H Then Begin
+  NH := Int64(JbPage^.H) - JbRY;
+  If NH < 0 Then NH := 0;
+  JbRH := NH;
+ End;
+End;
+
+{ ---- région générique (7.4.6) ---- }
+
+Procedure JbSegGeneric;
+Var
+ Fl, Pos, I, K: LongInt;
+ MMR, Ext: Boolean;
+ GP: TJbGP;
+ B: PJbBmp;
+ Cx: PBigBytes;
+ Unk: Boolean;
+Begin
+ If Not JbRegionInfo Then Exit;
+ If JbSL < 18 Then Exit;
+ Fl := JbSD^[17];
+ Pos := 18;
+ MMR := (Fl And 1) <> 0;
+ FillChar(GP, SizeOf(GP), 0);
+ GP.Templ := (Fl Shr 1) And 3;
+ GP.TPGD := (Fl And 8) <> 0;
+ Ext := (Fl And 16) <> 0;
+ If Not MMR Then Begin
+  { EXTTEMPLATE (12 pixels adaptatifs) : seuls les 4 premiers sont pris en compte,
+    les 8 autres sont supposés à leur position nominale }
+  If GP.Templ = 0 Then I := 4 Else I := 1;
+  If (GP.Templ = 0) And Ext Then K := 12 Else K := I;
+  If Pos + K * 2 > JbSL Then Exit;
+  For Pos := 0 To I * 2 - 1 Do GP.AT[Pos] := JbS8(JbSD, 18 + Pos);
+  Pos := 18 + K * 2;
+ End;
+ { longueur inconnue : le nombre de lignes réel suit les données }
+ Unk := JbCurTyp < 0;
+ If Unk And (JbUnkRows >= 0) And (JbUnkRows < JbRH) Then JbRH := JbUnkRows;
+ If Not JbCropRows Then Exit;
+ B := JbNewBmp(JbRW, JbRH);
+ If B = Nil Then Exit;
+ If MMR Then Begin
+  JbFreeBmp(B);
+  B := JbMMRDec(PBigBytes(PByte(JbSD) + Pos), JbSL - Pos, JbRW, JbRH);
+  If B = Nil Then Exit;
+ End Else Begin
+  Cx := JbAlloc(65536);
+  If Cx = Nil Then Begin JbFreeBmp(B); Exit; End;
+  JbMQInit(PBigBytes(PByte(JbSD) + Pos), JbSL - Pos);
+  JbGeneric(B, GP, Cx);
+  JbFree(Cx);
+ End;
+ JbPutRegion(B);
+End;
+
+{ ---- région de raffinement générique (7.4.7) ---- }
+
+Procedure JbSegRefine;
+Var
+ Fl, Pos, S: LongInt;
+ Ref, B: PJbBmp;
+ Cx: PBigBytes;
+ AT: Array[0..3] Of LongInt;
+ OwnRef: Boolean;
+ I: LongInt;
+Begin
+ If Not JbRegionInfo Then Exit;
+ If JbSL < 18 Then Exit;
+ Fl := JbSD^[17];
+ Pos := 18;
+ FillChar(AT, SizeOf(AT), 0);
+ If (Fl And 1) = 0 Then Begin
+  If JbSL < 22 Then Exit;
+  For I := 0 To 3 Do AT[I] := JbS8(JbSD, 18 + I);
+  Pos := 22;
+ End;
+ If Not JbCropRows Then Exit;
+ { bitmap de référence : région intermédiaire référée, sinon la page }
+ Ref := Nil; OwnRef := False;
+ For I := 0 To JbNRef - 1 Do Begin
+  S := JbFindSeg(JbRef^[I]);
+  If (S >= 0) And (JbSegs^[S].Bmp <> Nil) Then Ref := JbSegs^[S].Bmp;
+ End;
+ If Ref = Nil Then Begin
+  JbEnsurePage;
+  If JbPage = Nil Then Exit;
+  Ref := JbNewBmp(JbRW, JbRH);
+  If Ref = Nil Then Exit;
+  OwnRef := True;
+  JbBlit(Ref, JbPage, -JbRX, -JbRY, 4);
+ End;
+ B := JbNewBmp(JbRW, JbRH);
+ Cx := JbAlloc(8192);
+ If (B = Nil) Or (Cx = Nil) Then Begin
+  If OwnRef Then JbFreeBmp(Ref);
+  JbFreeBmp(B); JbFree(Cx);
+  Exit;
+ End;
+ JbMQInit(PBigBytes(PByte(JbSD) + Pos), JbSL - Pos);
+ JbRefine(B, Ref, 0, 0, Fl And 1, (Fl And 2) <> 0, AT[0], AT[1], AT[2], AT[3], Cx);
+ JbFree(Cx);
+ If OwnRef Then JbFreeBmp(Ref);
+ JbPutRegion(B);
+End;
+
+{ ---- tables de Huffman personnalisées (segment 53, Annexe B.2) ---- }
+
+Procedure JbSegTable;
+Var
+ Fl, PS, RS, N, Cap: LongInt;
+ Low, High, Cur: Int64;
+ T: PJbHT;
+ OOB: Boolean;
+ S: LongInt;
+Begin
+ If JbSL < 9 Then Exit;
+ Fl := JbSD^[0];
+ OOB := (Fl And 1) <> 0;
+ PS := ((Fl Shr 1) And 7) + 1;
+ RS := ((Fl Shr 4) And 7) + 1;
+ Low := JbS32(JbSD, 1); High := JbS32(JbSD, 5);
+ If Low > High Then Exit;
+ JbHInit(PBigBytes(PByte(JbSD) + 9), JbSL - 9);
+ Cap := JbSL * 4 + 8;
+ If Cap > 2000000 Then Cap := 2000000;
+ T := JbAlloc(SizeOf(TJbHT));
+ If T = Nil Then Exit;
+ T^.L := JbAlloc(Int64(Cap + 4) * SizeOf(TJbHLine));
+ If T^.L = Nil Then Exit;
+ N := 0;
+ Cur := Low;
+ While Cur < High Do Begin
+  If N >= Cap Then Exit;
+  T^.L^[N].PL := JbHBits(PS);
+  T^.L^[N].RL := JbHBits(RS);
+  If JbHErr Or (T^.L^[N].RL > 32) Then Exit;
+  T^.L^[N].Low := Cur;
+  T^.L^[N].Kind := 0;
+  Cur := Cur + (Int64(1) Shl T^.L^[N].RL);
+  Inc(N);
+ End;
+ T^.L^[N].PL := JbHBits(PS); T^.L^[N].RL := 32; T^.L^[N].Low := JbClamp(Low - 1); T^.L^[N].Kind := 1; Inc(N);
+ T^.L^[N].PL := JbHBits(PS); T^.L^[N].RL := 32; T^.L^[N].Low := JbS32(JbSD, 5); T^.L^[N].Kind := 2; Inc(N);
+ If OOB Then Begin
+  T^.L^[N].PL := JbHBits(PS); T^.L^[N].RL := 0; T^.L^[N].Low := 0; T^.L^[N].Kind := 3; Inc(N);
+ End;
+ If JbHErr Then Exit;
+ T^.N := N;
+ If Not JbHBuild(T) Then Exit;
+ S := JbAddSeg;
+ If S < 0 Then Exit;
+ JbSegs^[S].Tab := T;
+End;
+
+{ ---- sélection des tables de Huffman ---- }
+
+Procedure JbCollectTables;
+Var
+ I, S: LongInt;
+Begin
+ JbNCT := 0; JbTI := 0;
+ For I := 0 To JbNRef - 1 Do Begin
+  S := JbFindSeg(JbRef^[I]);
+  If (S >= 0) And (JbSegs^[S].Tab <> Nil) And (JbNCT < 16) Then Begin
+   JbCT[JbNCT] := JbSegs^[S].Tab;
+   Inc(JbNCT);
+  End;
+ End;
+End;
+
+{ Sel 0 -> table A, 1 -> B, 2 -> C (si > 0), 3 -> table personnalisée suivante }
+Function JbPickTab(Sel, A, B, C: LongInt): PJbHT;
+Begin
+ JbPickTab := Nil;
+ If Sel = 3 Then Begin
+  If JbTI < JbNCT Then Begin JbPickTab := JbCT[JbTI]; Inc(JbTI); End;
+ End Else If Sel = 0 Then JbPickTab := JbHStd(A)
+ Else If (Sel = 1) And (B > 0) Then JbPickTab := JbHStd(B)
+ Else If (Sel = 2) And (C > 0) Then JbPickTab := JbHStd(C);
+End;
+
+{ ---- région de texte (7.4.3) ---- }
+
+Procedure JbSegText;
+Var
+ P: TJbTP;
+ C: PJbTCtx;
+ Reg: PJbBmp;
+ Fl, HF, Pos, I, J, S, Tot: LongInt;
+Begin
+ If Not JbRegionInfo Then Exit;
+ If JbSL < 21 Then Exit;
+ FillChar(P, SizeOf(P), 0);
+ Pos := 17;
+ Fl := JbU16(JbSD, Pos); Inc(Pos, 2);
+ P.Huff := (Fl And 1) <> 0;
+ P.Refine := (Fl And 2) <> 0;
+ P.LogStrips := (Fl Shr 2) And 3;
+ P.Strips := 1 Shl P.LogStrips;
+ P.RefCorner := (Fl Shr 4) And 3;
+ P.Transposed := (Fl And 64) <> 0;
+ P.CombOp := (Fl Shr 7) And 3;
+ P.DefPix := (Fl Shr 9) And 1;
+ P.DSOff := (Fl Shr 10) And 31;
+ If P.DSOff > 15 Then P.DSOff := P.DSOff - 32;
+ P.RTempl := (Fl Shr 15) And 1;
+ P.W := JbRW; P.H := JbRH;
+ HF := 0;
+ If P.Huff Then Begin
+  If Pos + 2 > JbSL Then Exit;
+  HF := JbU16(JbSD, Pos); Inc(Pos, 2);
+ End;
+ If P.Refine And (P.RTempl = 0) Then Begin
+  If Pos + 4 > JbSL Then Exit;
+  For I := 0 To 3 Do P.RAT[I] := JbS8(JbSD, Pos + I);
+  Inc(Pos, 4);
+ End;
+ If Pos + 4 > JbSL Then Exit;
+ P.NInst := JbClamp(JbU32(JbSD, Pos)); Inc(Pos, 4);
+ If P.NInst > JbMaxInst Then Exit;
+ { symboles : concaténation des symboles exportés des dictionnaires référés }
+ Tot := 0;
+ For I := 0 To JbNRef - 1 Do Begin
+  S := JbFindSeg(JbRef^[I]);
+  If (S >= 0) And (JbSegs^[S].Typ = 0) Then Tot := Tot + JbSegs^[S].NSyms;
+  If Tot > JbMaxSyms Then Exit;
+ End;
+ P.NSyms := Tot;
+ P.Syms := JbAlloc(Int64(Tot + 1) * SizeOf(Pointer));
+ If P.Syms = Nil Then Exit;
+ J := 0;
+ For I := 0 To JbNRef - 1 Do Begin
+  S := JbFindSeg(JbRef^[I]);
+  If (S >= 0) And (JbSegs^[S].Typ = 0) And (JbSegs^[S].NSyms > 0) Then Begin
+   Move(JbSegs^[S].Syms^, P.Syms^[J], Int64(JbSegs^[S].NSyms) * SizeOf(Pointer));
+   J := J + JbSegs^[S].NSyms;
+  End;
+ End;
+ P.CodeLen := JbLog2Up(P.NSyms);
+ C := JbAlloc(SizeOf(TJbTCtx));
+ If C = Nil Then Exit;
+ If P.Huff Then Begin
+  JbCollectTables;
+  P.TFS := JbPickTab(HF And 3, 6, 7, 0);
+  P.TDS := JbPickTab((HF Shr 2) And 3, 8, 9, 10);
+  P.TDT := JbPickTab((HF Shr 4) And 3, 11, 12, 13);
+  P.TRDW := JbPickTab((HF Shr 6) And 3, 14, 15, 0);
+  P.TRDH := JbPickTab((HF Shr 8) And 3, 14, 15, 0);
+  P.TRDX := JbPickTab((HF Shr 10) And 3, 14, 15, 0);
+  P.TRDY := JbPickTab((HF Shr 12) And 3, 14, 15, 0);
+  P.TRSIZE := JbPickTab(((HF Shr 14) And 1) * 3, 1, 0, 0);
+  If (P.TFS = Nil) Or (P.TDS = Nil) Or (P.TDT = Nil) Or (P.TRDW = Nil) Or (P.TRDH = Nil) Or (P.TRDX = Nil) Or
+     (P.TRDY = Nil) Or (P.TRSIZE = Nil) Then Exit;
+  JbHInit(PBigBytes(PByte(JbSD) + Pos), JbSL - Pos);
+  P.TSym := JbBuildSymCodes(P.NSyms);
+  If P.TSym = Nil Then Exit;
+ End Else Begin
+  If P.CodeLen > 24 Then Exit;
+  C^.IDLen := P.CodeLen;
+  C^.IAID := JbAlloc(Int64(2) Shl P.CodeLen);
+  If C^.IAID = Nil Then Exit;
+  JbMQInit(PBigBytes(PByte(JbSD) + Pos), JbSL - Pos);
+ End;
+ Reg := JbNewBmp(JbRW, JbRH);
+ If Reg = Nil Then Exit;
+ JbTextDec(P, C, Reg);
+ JbPutRegion(Reg);
+End;
+
+{ ---- dictionnaire de symboles (7.4.2, 6.5) ---- }
+
+Procedure JbSegSymDict;
+Var
+ Fl, Pos, I, J, NIn, NNew, NDec, SymCodeLen, HCH, SymW, FirstSym, Code, V, Seg, X, AggN, ID, BMSize, RDX, RDY: LongInt;
+ TotW, DictPix: Int64;
+ Huff, RefAgg: Boolean;
+ SDT, SDRT, NAT: LongInt;
+ AT: Array[0..7] Of LongInt;
+ RAT: Array[0..3] Of LongInt;
+ TDH, TDW, TBM, TAGG, TEX: PJbHT;
+ All: PJbBmpArr;
+ Wd: PJbIntArr;
+ GB: PBigBytes;
+ C: PJbTCtx;
+ GP: TJbGP;
+ TP: TJbTP;
+ Bmp, Coll: PJbBmp;
+ IADH, IADW, IAEX, IAAI: Array[0..511] Of Byte;
+ ExF: PBigBytes;
+ NEx, Cur, Run, Empty, Rem: LongInt;
+ Syms: PJbBmpArr;
+ Failed: Boolean;
+ SR: LongInt;
+Begin
+ If JbSL < 10 Then Exit;
+ Fl := JbU16(JbSD, 0);
+ Pos := 2;
+ Huff := (Fl And 1) <> 0;
+ RefAgg := (Fl And 2) <> 0;
+ SDT := (Fl Shr 10) And 3;
+ SDRT := (Fl Shr 12) And 1;
+ TDH := Nil; TDW := Nil; TBM := Nil; TAGG := Nil;
+ FillChar(AT, SizeOf(AT), 0);
+ FillChar(RAT, SizeOf(RAT), 0);
+ If Not Huff Then Begin
+  If SDT = 0 Then NAT := 4 Else NAT := 1;
+  If Pos + NAT * 2 > JbSL Then Exit;
+  For I := 0 To NAT * 2 - 1 Do AT[I] := JbS8(JbSD, Pos + I);
+  Inc(Pos, NAT * 2);
+ End;
+ If RefAgg And (SDRT = 0) Then Begin
+  If Pos + 4 > JbSL Then Exit;
+  For I := 0 To 3 Do RAT[I] := JbS8(JbSD, Pos + I);
+  Inc(Pos, 4);
+ End;
+ If Pos + 8 > JbSL Then Exit;
+ NEx := JbClamp(JbU32(JbSD, Pos));
+ NNew := JbClamp(JbU32(JbSD, Pos + 4));
+ Inc(Pos, 8);
+ If (NNew < 0) Or (NNew > JbMaxSyms) Then Exit;
+ { symboles d'entrée }
+ NIn := 0;
+ For I := 0 To JbNRef - 1 Do Begin
+  Seg := JbFindSeg(JbRef^[I]);
+  If (Seg >= 0) And (JbSegs^[Seg].Typ = 0) Then NIn := NIn + JbSegs^[Seg].NSyms;
+  If NIn > JbMaxSyms Then Exit;
+ End;
+ If NIn + NNew > JbMaxSyms Then Exit;
+ All := JbAlloc(Int64(NIn + NNew + 1) * SizeOf(Pointer));
+ If All = Nil Then Exit;
+ J := 0;
+ GB := JbAlloc(65536);
+ C := JbAlloc(SizeOf(TJbTCtx));
+ If (GB = Nil) Or (C = Nil) Then Exit;
+ For I := 0 To JbNRef - 1 Do Begin
+  Seg := JbFindSeg(JbRef^[I]);
+  If (Seg >= 0) And (JbSegs^[Seg].Typ = 0) And (JbSegs^[Seg].NSyms > 0) Then Begin
+   Move(JbSegs^[Seg].Syms^, All^[J], Int64(JbSegs^[Seg].NSyms) * SizeOf(Pointer));
+   J := J + JbSegs^[Seg].NSyms;
+  End;
+ End;
+ { contextes réutilisés du dernier dictionnaire référé qui les a conservés }
+ If (Fl And 256) <> 0 Then
+  For I := 0 To JbNRef - 1 Do Begin
+   Seg := JbFindSeg(JbRef^[I]);
+   If (Seg >= 0) And (JbSegs^[Seg].Typ = 0) And (JbSegs^[Seg].GB <> Nil) Then Begin
+    Move(JbSegs^[Seg].GB^, GB^, 65536);
+    Move(JbSegs^[Seg].GR^, C^.GR, 8192);
+   End;
+  End;
+ SymCodeLen := JbLog2Up(NIn + NNew);
+ Failed := False;
+ DictPix := 0;
+ If Huff Then Begin
+  JbCollectTables;
+  TDH := JbPickTab((Fl Shr 2) And 3, 4, 5, 0);
+  TDW := JbPickTab((Fl Shr 4) And 3, 2, 3, 0);
+  TBM := JbPickTab(((Fl Shr 6) And 1) * 3, 1, 0, 0);
+  TAGG := JbPickTab(((Fl Shr 7) And 1) * 3, 1, 0, 0);
+  TEX := JbHStd(1);
+  If (TDH = Nil) Or (TDW = Nil) Or (TBM = Nil) Or (TAGG = Nil) Or (TEX = Nil) Then Exit;
+  JbHInit(PBigBytes(PByte(JbSD) + Pos), JbSL - Pos);
+  If Not RefAgg Then Begin
+   Wd := JbAlloc(Int64(NNew + 1) * SizeOf(LongInt));
+   If Wd = Nil Then Exit;
+  End;
+ End Else Begin
+  TEX := Nil;
+  JbMQInit(PBigBytes(PByte(JbSD) + Pos), JbSL - Pos);
+ End;
+ If RefAgg Then Begin
+  If Not Huff Then Begin
+   If SymCodeLen > 24 Then Exit;
+   C^.IAID := JbAlloc(Int64(2) Shl SymCodeLen);
+   If C^.IAID = Nil Then Exit;
+  End;
+  FillChar(TP, SizeOf(TP), 0);
+  TP.Huff := Huff; TP.Refine := True; TP.W := 0; TP.H := 0; TP.Strips := 1; TP.LogStrips := 0;
+  TP.NSyms := NIn + NNew; TP.CodeLen := SymCodeLen; TP.DefPix := 0; TP.CombOp := 0;
+  TP.Transposed := False; TP.RefCorner := 1; TP.DSOff := 0; TP.RTempl := SDRT;
+  TP.Syms := All; TP.FixedCodes := True;
+  For I := 0 To 3 Do TP.RAT[I] := RAT[I];
+  If Huff Then Begin
+   TP.TFS := JbHStd(6); TP.TDS := JbHStd(8); TP.TDT := JbHStd(11);
+   TP.TRDW := JbHStd(15); TP.TRDH := JbHStd(15); TP.TRDX := JbHStd(15); TP.TRDY := JbHStd(15);
+   TP.TRSIZE := JbHStd(1);
+   If (TP.TFS = Nil) Or (TP.TDS = Nil) Or (TP.TDT = Nil) Or (TP.TRDW = Nil) Or (TP.TRSIZE = Nil) Then Exit;
+  End;
+ End;
+ FillChar(IADH, SizeOf(IADH), 0); FillChar(IADW, SizeOf(IADW), 0);
+ FillChar(IAEX, SizeOf(IAEX), 0); FillChar(IAAI, SizeOf(IAAI), 0);
+ FillChar(GP, SizeOf(GP), 0);
+ GP.Templ := SDT;
+ For I := 0 To 7 Do GP.AT[I] := AT[I];
+ { boucle principale : classes de hauteur }
+ HCH := 0; NDec := 0;
+ While (NDec < NNew) And Not Failed Do Begin
+  If JbHErr Or (JbMOver > 300) Then Begin Failed := True; Break; End;
+  If JbDecI(Huff, TDH, PBigBytes(@IADH[0]), V) <> 0 Then Begin Failed := True; Break; End;
+  HCH := JbClamp(Int64(HCH) + V);
+  If HCH < 0 Then Begin Failed := True; Break; End;
+  SymW := 0; TotW := 0; FirstSym := NDec;
+  While True Do Begin
+   Code := JbDecI(Huff, TDW, PBigBytes(@IADW[0]), V);
+   If Code = 1 Then Break;
+   If (Code < 0) Or (NDec >= NNew) Or JbHErr Or (JbMOver > 300) Then Begin Failed := True; Break; End;
+   SymW := JbClamp(Int64(SymW) + V);
+   If SymW < 0 Then Begin Failed := True; Break; End;
+   TotW := TotW + SymW;
+   DictPix := DictPix + Int64(SymW) * HCH;
+   If (Int64(SymW) * HCH > JbMaxSymPix) Or (DictPix > JbMaxDictPix) Then Begin Failed := True; Break; End;
+   If (Not Huff) Or RefAgg Then Begin
+    Bmp := JbNewBmp(SymW, HCH);
+    If Bmp = Nil Then Begin Failed := True; Break; End;
+    If Not RefAgg Then Begin
+     JbGeneric(Bmp, GP, GB);
+    End Else Begin
+     If JbDecI(Huff, TAGG, PBigBytes(@IAAI[0]), AggN) <> 0 Then Begin Failed := True; Break; End;
+     If AggN < 1 Then Begin Failed := True; Break; End;
+     If AggN > 1 Then Begin
+      TP.NInst := AggN;
+      TP.W := SymW; TP.H := HCH;
+      If Not JbTextDec(TP, C, Bmp) Then Begin Failed := True; Break; End;
+     End Else Begin
+      BMSize := 0;
+      If Huff Then Begin
+       ID := JbHBits(SymCodeLen);
+       If JbHGet(JbHStd(15), RDX) <> 0 Then Begin Failed := True; Break; End;
+       If JbHGet(JbHStd(15), RDY) <> 0 Then Begin Failed := True; Break; End;
+       If JbHGet(JbHStd(1), BMSize) <> 0 Then Begin Failed := True; Break; End;
+       JbHAlign;
+      End Else Begin
+       ID := JbIAID(C^.IAID, SymCodeLen);
+       If JbIntDec(PBigBytes(@C^.IARDX[0]), RDX) Then Else Begin Failed := True; Break; End;
+       If JbIntDec(PBigBytes(@C^.IARDY[0]), RDY) Then Else Begin Failed := True; Break; End;
+      End;
+      If JbHErr Or (ID < 0) Or (ID >= NIn + NDec) Or (All^[ID] = Nil) Then Begin Failed := True; Break; End;
+      If Huff Then Begin
+       Rem := JbHLen - (JbHPos Shr 3);
+       If Rem < 0 Then Rem := 0;
+       If (BMSize > 0) And (BMSize < Rem) Then Rem := BMSize;
+       JbMQInit(PBigBytes(PByte(JbHBuf) + (JbHPos Shr 3)), Rem);
+      End;
+      If Not JbRefine(Bmp, All^[ID], RDX, RDY, SDRT, False, RAT[0], RAT[1], RAT[2], RAT[3], PBigBytes(@C^.GR[0])) Then Begin
+       Failed := True; Break;
+      End;
+      If Huff Then Begin
+       If BMSize = 0 Then BMSize := Bmp^.H * Bmp^.RB;
+       If Int64(BMSize) + (JbHPos Shr 3) > JbHLen Then Begin Failed := True; Break; End;
+       JbHPos := JbHPos + BMSize * 8;
+      End;
+     End;
+    End;
+    All^[NIn + NDec] := Bmp;
+   End Else Wd^[NDec] := SymW;
+   Inc(NDec);
+  End;
+  If Failed Then Break;
+  { bitmap collectif d'une classe (6.5.9) }
+  If Huff And Not RefAgg Then Begin
+   If JbHGet(TBM, BMSize) <> 0 Then Begin Failed := True; Break; End;
+   JbHAlign;
+   Pos := JbHPos Shr 3;
+   If (JbHErr) Or (BMSize < 0) Or (Pos > JbHLen) Then Begin Failed := True; Break; End;
+   If TotW * HCH > 2 * JbMaxSymPix Then Begin Failed := True; Break; End;
+   If BMSize = 0 Then Begin
+    Coll := JbNewBmp(TotW, HCH);
+    If Coll = Nil Then Begin Failed := True; Break; End;
+    If Int64(Coll^.RB) * HCH > JbHLen - Pos Then Begin Failed := True; Break; End;
+    If Coll^.RB * HCH > 0 Then Move((PByte(JbHBuf) + Pos)^, Coll^.D^, Coll^.RB * HCH);
+    JbHPos := (Pos + Coll^.RB * HCH) * 8;
+   End Else Begin
+    If BMSize > JbHLen - Pos Then Begin Failed := True; Break; End;
+    Coll := JbMMRDec(PBigBytes(PByte(JbHBuf) + Pos), BMSize, TotW, HCH);
+    If Coll = Nil Then Begin Failed := True; Break; End;
+    JbHPos := (Pos + BMSize) * 8;
+   End;
+   X := 0;
+   For I := FirstSym To NDec - 1 Do Begin
+    Bmp := JbNewBmp(Wd^[I], HCH);
+    If Bmp = Nil Then Begin Failed := True; Break; End;
+    JbBlit(Bmp, Coll, -X, 0, 4);
+    X := X + Wd^[I];
+    All^[NIn + I] := Bmp;
+   End;
+   JbFreeBmp(Coll);
+  End;
+ End;
+ { indicateurs d'export (6.5.10) }
+ ExF := JbAlloc(Int64(NIn + NNew) + 8);
+ If ExF = Nil Then Exit;
+ Cur := 0; I := 0; Empty := 0; NEx := 0;
+ If Not Failed Then
+  While I < NIn + NNew Do Begin
+   If JbDecI(Huff, TEX, PBigBytes(@IAEX[0]), Run) <> 0 Then Begin Failed := True; Break; End;
+   If (Run < 0) Or (Run > NIn + NNew - I) Then Begin Failed := True; Break; End;
+   If Run = 0 Then Begin
+    Inc(Empty);
+    If Empty > 1000 Then Begin Failed := True; Break; End;
+   End Else Empty := 0;
+   For J := I To I + Run - 1 Do ExF^[J] := Cur;
+   I := I + Run;
+   Cur := 1 - Cur;
+  End;
+ If Failed Then Begin
+  { flux corrompu : on exporte les symboles nouveaux décodés }
+  FillChar(ExF^, NIn + NNew, 0);
+  For I := NIn To NIn + NNew - 1 Do ExF^[I] := 1;
+ End;
+ NEx := 0;
+ For I := 0 To NIn + NNew - 1 Do If (ExF^[I] <> 0) And (All^[I] <> Nil) Then Inc(NEx);
+ Syms := JbAlloc(Int64(NEx + 1) * SizeOf(Pointer));
+ If Syms = Nil Then Exit;
+ J := 0;
+ For I := 0 To NIn + NNew - 1 Do
+  If (ExF^[I] <> 0) And (All^[I] <> Nil) Then Begin Syms^[J] := All^[I]; Inc(J); End;
+ SR := JbAddSeg;
+ If SR < 0 Then Exit;
+ JbSegs^[SR].Syms := Syms;
+ JbSegs^[SR].NSyms := NEx;
+ If (Fl And 512) <> 0 Then Begin
+  JbSegs^[SR].GB := JbAlloc(65536);
+  JbSegs^[SR].GR := JbAlloc(8192);
+  If (JbSegs^[SR].GB <> Nil) And (JbSegs^[SR].GR <> Nil) Then Begin
+   Move(GB^, JbSegs^[SR].GB^, 65536);
+   Move(C^.GR, JbSegs^[SR].GR^, 8192);
+  End Else Begin
+   JbFree(JbSegs^[SR].GB); JbFree(JbSegs^[SR].GR);
+   JbSegs^[SR].GB := Nil; JbSegs^[SR].GR := Nil;
+  End;
+ End;
+End;
+
+{ ---- dictionnaire de motifs (7.4.4) et région de demi-teintes (7.4.5) ---- }
+
+Procedure JbSegPattern;
+Var
+ Fl, PW, PH, I, N, S: LongInt;
+ GrayMax: LongWord;
+ Coll, Pt: PJbBmp;
+ Cx: PBigBytes;
+ GP: TJbGP;
+ Arr: PJbBmpArr;
+Begin
+ If JbSL < 7 Then Exit;
+ Fl := JbSD^[0];
+ PW := JbSD^[1]; PH := JbSD^[2];
+ GrayMax := JbU32(JbSD, 3);
+ If (PW < 1) Or (PH < 1) Or (GrayMax > 1048575) Then Exit;
+ N := GrayMax + 1;
+ If Int64(N) * PW > JbMaxPix Then Exit;
+ FillChar(GP, SizeOf(GP), 0);
+ GP.Templ := (Fl Shr 1) And 3;
+ GP.AT[0] := -PW; GP.AT[1] := 0; GP.AT[2] := -3; GP.AT[3] := -1;
+ GP.AT[4] := 2; GP.AT[5] := -2; GP.AT[6] := -2; GP.AT[7] := -2;
+ If (Fl And 1) <> 0 Then Begin
+  Coll := JbMMRDec(PBigBytes(PByte(JbSD) + 7), JbSL - 7, N * PW, PH);
+ End Else Begin
+  Coll := JbNewBmp(N * PW, PH);
+  Cx := JbAlloc(65536);
+  If (Coll = Nil) Or (Cx = Nil) Then Exit;
+  JbMQInit(PBigBytes(PByte(JbSD) + 7), JbSL - 7);
+  JbGeneric(Coll, GP, Cx);
+  JbFree(Cx);
+ End;
+ If Coll = Nil Then Exit;
+ Arr := JbAlloc(Int64(N + 1) * SizeOf(Pointer));
+ If Arr = Nil Then Exit;
+ For I := 0 To N - 1 Do Begin
+  Pt := JbNewBmp(PW, PH);
+  If Pt = Nil Then Exit;
+  JbBlit(Pt, Coll, -I * PW, 0, 4);
+  Arr^[I] := Pt;
+ End;
+ JbFreeBmp(Coll);
+ S := JbAddSeg;
+ If S < 0 Then Exit;
+ JbSegs^[S].Syms := Arr;
+ JbSegs^[S].NSyms := N;
+ JbSegs^[S].PW := PW; JbSegs^[S].PH := PH;
+End;
+
+{ division par 256 avec arrondi vers -infini }
+Function JbSar8(V: Int64): Int64;
+Begin
+ If V >= 0 Then JbSar8 := V Div 256 Else JbSar8 := -((-V + 255) Div 256);
+End;
+
+{ vrai si les 24 bits à partir de la position (en bits) Bp valent l'EOFB }
+Function JbIsEOFB(D: PBigBytes; Len, Bp: LongInt): Boolean;
+Var
+ I, V: LongInt;
+ Bit: LongInt;
+Begin
+ JbIsEOFB := False;
+ If Bp + 24 > Len * 8 Then Exit;
+ V := 0;
+ For I := 0 To 23 Do Begin
+  Bit := (D^[(Bp + I) Shr 3] Shr (7 - ((Bp + I) And 7))) And 1;
+  V := (V Shl 1) Or Bit;
+ End;
+ JbIsEOFB := V = $001001;
+End;
+
+Procedure JbSegHalftone;
+Var
+ Fl, Pos, HGW, HGH, HRX, HRY, HBPP, J, MG, NG, I, S, PS, NPats, GI, BPos, Bytes, HTemplate: LongInt;
+ HGX, HGY, PX, PY: Int64;
+ MMR, EnSkip: Boolean;
+ HCOp, HDef: LongInt;
+ Reg, Skip, Plane, PrevPl: PJbBmp;
+ Pats: PJbBmpArr;
+ Vals: PJbIntArr;
+ Cx: PBigBytes;
+ GP: TJbGP;
+ PW, PH: LongInt;
+ R0: PBigBytes;
+Begin
+ If Not JbRegionInfo Then Exit;
+ If JbSL < 38 Then Exit;
+ Fl := JbSD^[17];
+ MMR := (Fl And 1) <> 0;
+ HTemplate := (Fl Shr 1) And 3;
+ EnSkip := (Fl And 8) <> 0;
+ HCOp := (Fl Shr 4) And 7;
+ If HCOp > 4 Then HCOp := 0;
+ HDef := (Fl Shr 7) And 1;
+ HGW := JbClamp(JbU32(JbSD, 18)); HGH := JbClamp(JbU32(JbSD, 22));
+ HGX := JbS32(JbSD, 26); HGY := JbS32(JbSD, 30);
+ HRX := JbU16(JbSD, 34); HRY := JbU16(JbSD, 36);
+ Pos := 38;
+ If (HGW < 1) Or (HGH < 1) Or (Int64(HGW) * HGH > 16000000) Then Exit;
+ { dictionnaire de motifs référé }
+ PS := -1;
+ For I := 0 To JbNRef - 1 Do Begin
+  S := JbFindSeg(JbRef^[I]);
+  If (S >= 0) And (JbSegs^[S].Typ = 16) Then PS := S;
+ End;
+ If PS < 0 Then Exit;
+ Pats := JbSegs^[PS].Syms; NPats := JbSegs^[PS].NSyms;
+ PW := JbSegs^[PS].PW; PH := JbSegs^[PS].PH;
+ If NPats < 1 Then Exit;
+ HBPP := JbLog2Up(NPats);
+ If Int64(HGW) * HGH * (HBPP + 1) > 400000000 Then Exit;
+ Reg := JbNewBmp(JbRW, JbRH);
+ If Reg = Nil Then Exit;
+ JbFillBmp(Reg, HDef);
+ Vals := JbAlloc(Int64(HGW) * HGH * SizeOf(LongInt) + 8);
+ If Vals = Nil Then Begin JbFreeBmp(Reg); Exit; End;
+ { bitmap de saut (6.6.5.1) }
+ Skip := Nil;
+ If EnSkip Then Begin
+  Skip := JbNewBmp(HGW, HGH);
+  If Skip = Nil Then Begin JbFreeBmp(Reg); Exit; End;
+  For MG := 0 To HGH - 1 Do
+   For NG := 0 To HGW - 1 Do Begin
+    PX := JbSar8(HGX + Int64(MG) * HRY + Int64(NG) * HRX);
+    PY := JbSar8(HGY + Int64(MG) * HRX - Int64(NG) * HRY);
+    If (PX + PW <= 0) Or (PX >= JbRW) Or (PY + PH <= 0) Or (PY >= JbRH) Then JbSP(Skip, NG, MG, 1);
+   End;
+ End;
+ { image en niveaux de gris (Annexe C) }
+ Cx := Nil;
+ If Not MMR Then Begin
+  Cx := JbAlloc(65536);
+  If Cx = Nil Then Begin JbFreeBmp(Reg); Exit; End;
+  JbMQInit(PBigBytes(PByte(JbSD) + Pos), JbSL - Pos);
+ End;
+ FillChar(GP, SizeOf(GP), 0);
+ GP.Templ := HTemplate;
+ GP.Skip := Skip;
+ If HTemplate <= 1 Then GP.AT[0] := 3 Else GP.AT[0] := 2;
+ GP.AT[1] := -1; GP.AT[2] := -3; GP.AT[3] := -1; GP.AT[4] := 2; GP.AT[5] := -2; GP.AT[6] := -2; GP.AT[7] := -2;
+ PrevPl := Nil;
+ BPos := Pos;
+ For J := HBPP - 1 DownTo 0 Do Begin
+  If MMR Then Begin
+   If BPos > JbSL Then BPos := JbSL;
+   Plane := JbMMRDec(PBigBytes(PByte(JbSD) + BPos), JbSL - BPos, HGW, HGH);
+   If Plane <> Nil Then Begin
+    I := JbMMRBits;
+    If JbIsEOFB(PBigBytes(PByte(JbSD) + BPos), JbSL - BPos, I) Then I := I + 24;
+    BPos := BPos + ((I + 7) Shr 3);
+   End;
+  End Else Begin
+   Plane := JbNewBmp(HGW, HGH);
+   If Plane <> Nil Then JbGeneric(Plane, GP, Cx);
+  End;
+  If Plane = Nil Then Begin
+   JbFreeBmp(PrevPl); JbFreeBmp(Reg); JbFreeBmp(Skip); JbFree(Cx);
+   Exit;
+  End;
+  If PrevPl <> Nil Then Begin
+   { code de Gray : plan J = plan J+1 xor plan J }
+   Bytes := Plane^.RB * Plane^.H;
+   For I := 0 To Bytes - 1 Do Plane^.D^[I] := Plane^.D^[I] Xor PrevPl^.D^[I];
+   JbFreeBmp(PrevPl);
+  End;
+  For MG := 0 To HGH - 1 Do Begin
+   R0 := JbRow(Plane, MG);
+   For NG := 0 To HGW - 1 Do
+    If ((R0^[NG Shr 3] Shr (7 - (NG And 7))) And 1) <> 0 Then
+     Vals^[MG * HGW + NG] := Vals^[MG * HGW + NG] Or (1 Shl J);
+  End;
+  PrevPl := Plane;
+ End;
+ JbFreeBmp(PrevPl);
+ JbFreeBmp(Skip);
+ JbFree(Cx);
+ { dessin des motifs (6.6.5.2) }
+ For MG := 0 To HGH - 1 Do
+  For NG := 0 To HGW - 1 Do Begin
+   PX := JbSar8(HGX + Int64(MG) * HRY + Int64(NG) * HRX);
+   PY := JbSar8(HGY + Int64(MG) * HRX - Int64(NG) * HRY);
+   GI := Vals^[MG * HGW + NG];
+   If GI >= NPats Then GI := NPats - 1;
+   If (PX + PW > 0) And (PX < JbRW) And (PY + PH > 0) And (PY < JbRH) Then
+    JbBlit(Reg, Pats^[GI], JbClamp(PX), JbClamp(PY), HCOp);
+   If JbWork > JbMaxWork Then Break;
+  End;
+ JbFree(Vals);
+ JbPutRegion(Reg);
+End;
+
+{ ---- page, fin de bande ---- }
+
+Procedure JbSegPage;
+Var
+ W, H, Fl: LongInt;
+ Unk: Boolean;
+Begin
+ If JbPageHas Then Begin JbDone := True; Exit; End;
+ If JbSL < 19 Then Exit;
+ W := JbClamp(JbU32(JbSD, 0));
+ Unk := JbU32(JbSD, 4) = $FFFFFFFF;
+ If Unk Then H := JbArgH Else H := JbClamp(JbU32(JbSD, 4));
+ If Unk And (H < 1) Then H := 1;
+ If Unk And (Int64(W) * H > JbMaxPix) And (W > 0) Then H := JbMaxPix Div W;
+ Fl := JbSD^[16];
+ JbMakePage(W, H, (Fl Shr 2) And 1, Unk);
+End;
+
+Procedure JbSegStripe;
+Var
+ Y: Int64;
+Begin
+ If (JbSL < 4) Or (JbPage = Nil) Then Exit;
+ Y := Int64(JbU32(JbSD, 0)) + 1;
+ If JbPageUnk Then Begin
+  JbPageGrow(Y);
+  If Y > JbPageFinalH Then JbPageFinalH := JbClamp(Y);
+ End;
+End;
+
+{ ---- analyse d'un flux de segments ---- }
+
+Procedure JbParseStream(D: PBigBytes; Len: LongInt);
+Var
+ Pos, P, Cnt, RS, I, PA, Q: LongInt;
+ Num, Typ, Fl, Skip4: LongInt;
+ DL: Int64;
+ Refs: PJbIntArr;
+ Marker: Boolean;
+Begin
+ Pos := 0;
+ While (Pos + 11 <= Len) And Not JbDone Do Begin
+  Num := LongInt(JbU32(D, Pos));
+  Fl := D^[Pos + 4];
+  Typ := Fl And 63;
+  P := Pos + 5;
+  Cnt := D^[P] Shr 5;
+  If Cnt = 7 Then Begin
+   If P + 4 > Len Then Break;
+   Cnt := LongInt(JbU32(D, P) And $1FFFFFFF);
+   If Cnt > 100000 Then Break;
+   P := P + 4 + ((Cnt + 8) Shr 3);
+  End Else Inc(P);
+  If Num <= 256 Then RS := 1 Else If Num <= 65536 Then RS := 2 Else RS := 4;
+  If (Num < 0) Then RS := 4;
+  If Int64(P) + Int64(Cnt) * RS + 5 > Len Then Break;
+  Refs := JbAlloc(Int64(Cnt + 1) * SizeOf(LongInt));
+  If Refs = Nil Then Break;
+  For I := 0 To Cnt - 1 Do Begin
+   If RS = 1 Then Refs^[I] := D^[P]
+   Else If RS = 2 Then Refs^[I] := JbU16(D, P)
+   Else Refs^[I] := LongInt(JbU32(D, P));
+   Inc(P, RS);
+  End;
+  If (Fl And 64) <> 0 Then PA := 4 Else PA := 1;
+  If Int64(P) + PA + 4 > Len Then Begin JbFree(Refs); Break; End;
+  Inc(P, PA);
+  DL := JbU32(D, P);
+  Inc(P, 4);
+  { longueur inconnue (région générique immédiate) : recherche du marqueur de fin }
+  Skip4 := 0;
+  If (DL = $FFFFFFFF) And (Typ = 38) And (P + 19 < Len) Then Begin
+   Marker := (D^[P + 17] And 1) <> 0;
+   Q := P + 18;
+   DL := -1;
+   JbUnkRows := -1;
+   While Q + 1 < Len Do Begin
+    If Marker Then Begin
+     If (D^[Q] = 0) And (D^[Q + 1] = 0) Then Begin DL := Q + 2 - P; Break; End;
+    End Else If (D^[Q] = $FF) And (D^[Q + 1] = $AC) Then Begin DL := Q + 2 - P; Break; End;
+    Inc(Q);
+   End;
+   If DL < 0 Then DL := Len - P
+   Else If Q + 6 <= Len Then Begin JbUnkRows := JbU32(D, Q + 2); Skip4 := 4; End;
+   { signale la longueur inconnue au traitement du segment : Typ négatif }
+   JbCurTyp := -1;
+  End Else Begin
+   If DL > Len - P Then DL := Len - P;
+   JbCurTyp := Typ;
+  End;
+  JbSD := PBigBytes(PByte(D) + P);
+  JbSL := DL;
+  JbCurNum := Num;
+  JbRef := Refs; JbNRef := Cnt;
+   If JbCurTyp < 0 Then Begin
+   JbSegGeneric;
+  End Else
+   Case Typ Of
+    0: JbSegSymDict;
+    4, 6, 7: JbSegText;
+    16: JbSegPattern;
+    20, 22, 23: JbSegHalftone;
+    36, 38, 39: JbSegGeneric;
+    40, 42, 43: JbSegRefine;
+    48: JbSegPage;
+    49, 51: JbDone := True;
+    50: JbSegStripe;
+    53: JbSegTable;
+   End;
+  JbFree(Refs);
+  Pos := P + DL + Skip4;
+ End;
+End;
+
+{ ---- point d'entrée ---- }
+
+{ Décode un flux JBIG2 « intégré PDF » (segments séquentiels sans en-tête de fichier),
+  précédé des segments globaux Glob (ou Nil). Dst : RowBytes * Height octets, 1 bit par pixel,
+  convention PDF (0 = noir, 1 = blanc). Retourne False si rien n'a pu être décodé. }
+Function JBIG2Decode(Src: PBigBytes; SLen: LongInt; Glob: PBigBytes; GLen: LongInt;
+  Width, Height: LongInt; Dst: PBigBytes): Boolean;
+Var
+ OldRN: Boolean;
+ RBD, Y, NR, CB, I: LongInt;
+ PS, PD: PByte;
+Begin
+ JBIG2Decode := False;
+ If (Dst = Nil) Or (Width < 1) Or (Height < 1) Then Exit;
+ OldRN := ReturnNilIfGrowHeapFails;
+ ReturnNilIfGrowHeapFails := True;
+ JbHdrList := Nil; JbLive := 0; JbWork := 0;
+ JbSegs := Nil; JbNSegs := 0; JbCapSegs := 0;
+ JbPage := Nil; JbPageHas := False; JbPageUnk := False; JbPageDef := 0; JbPageFinalH := 0;
+ JbDone := False;
+ JbArgW := Width; JbArgH := Height;
+ JbUnkRows := -1;
+ FillChar(JbStdT, SizeOf(JbStdT), 0);
+ JbInitTab;
+ RBD := (Width + 7) Shr 3;
+ If (Glob <> Nil) And (GLen > 0) Then JbParseStream(Glob, GLen);
+ JbDone := False;
+ If (Src <> Nil) And (SLen > 0) Then JbParseStream(Src, SLen);
+ If JbPage <> Nil Then Begin
+  { sortie : page recopiée / rognée, bits inversés (1 = blanc) ; hors page = blanc }
+  FillChar(Dst^, Int64(RBD) * Height, 255);
+  NR := Height;
+  If NR > JbPage^.H Then NR := JbPage^.H;
+  If NR > JbPageFinalH Then NR := JbPageFinalH;
+  CB := RBD;
+  If CB > JbPage^.RB Then CB := JbPage^.RB;
+  For Y := 0 To NR - 1 Do Begin
+   PS := PByte(JbRow(JbPage, Y));
+   PD := PByte(Dst) + Int64(Y) * RBD;
+   For I := 1 To CB Do Begin
+    PD^ := Not PS^;
+    Inc(PS); Inc(PD);
+   End;
+  End;
+  JBIG2Decode := True;
+ End;
+ JbFreeAll;
+ JbSegs := Nil; JbPage := Nil;
+ ReturnNilIfGrowHeapFails := OldRN;
+End;
+{$ENDIF}
+
+{ ---------------------------------------------------------------------- }
+{ Images : décodage (JPEG, Flate brut, palettes, masques)                   }
+{ ---------------------------------------------------------------------- }
+
+{$IFDEF FPC}
+Const
+ IMGMAXBYTES = 100000000;
+
+Var
+ IW, IH, IBpc, ICS, IComps, IPalBase, IRow: LongInt;
+ IInv, IMaskImg, IJpeg: Boolean;
+ IData: PBigBytes;
+ IRGB: PBigBytes;
+ IPal: Array[0..767] Of Byte;
+ IPalN: Integer;
+ IFlt: Array[0..3] Of String[24];
+ INF, IPred, ICols, IClr: Integer;
+ IK, ICCCols: LongInt;
+ IBlackIs1, IByteAlign: Boolean;
+ IJbGlob: LongInt;
+
+Var
+ IDesc: TCSDesc;
+ IDescOn: Boolean;
+
+Procedure IDescClear;
+Begin
+ If IDescOn Then CSDescFree(IDesc);
+ IDescOn := False;
+ FillChar(IDesc, SizeOf(IDesc), 0);
+End;
+
+{ Convertit un descripteur d'espace en code d'image : 1 gris, 3 RVB, 4 CMJN,
+  5 indexé (palette RVB), 7 teinte, 8 Lab. Own : la table appartient à l'image. }
+Function CSCodeFromDesc(Var D: TCSDesc; Var CS, Comps, PalBase: LongInt; Own: Boolean): Boolean;
+Begin
+ CSCodeFromDesc := False;
+ IPalN := 0;
+ Case D.Kind Of
+  1: Begin CS := 1; Comps := 1; CSCodeFromDesc := True; End;
+  3: Begin CS := 3; Comps := 3; CSCodeFromDesc := True; End;
+  4: Begin CS := 4; Comps := 4; CSCodeFromDesc := True; End;
+  5: Begin
+   If (D.Pal <> Nil) And (D.PalN <= 768) Then Begin
+    Move(D.Pal^[0], IPal[0], D.PalN);
+    IPalN := D.PalN;
+    CS := 5; Comps := 1; PalBase := 3;
+    CSCodeFromDesc := True;
+   End;
+  End;
+  6: Begin
+   IDesc := D; IDescOn := False;
+   CS := 8; Comps := 3; CSCodeFromDesc := True;
+  End;
+  7: Begin
+   If (D.N >= 1) And (D.N <= 4) And (Not D.NoPaint) Then Begin
+    IDesc := D; IDescOn := False;
+    CS := 7; Comps := D.N; CSCodeFromDesc := True;
+    If Own Then Begin IDescOn := True; Own := False; End;
+   End;
+  End;
+ End;
+ If Own Then CSDescFree(D);
+End;
+
+{ Analyse d'un espace colorimétrique à la position V (valeur de dictionnaire) }
+Function ParseCS(V: LongInt; Depth: Integer; Var CS, Comps, PalBase: LongInt): Boolean;
+Var
+ D: TCSDesc;
+Begin
+ IDescClear;
+ ParseCS := False;
+ If Not ParseCSDesc(V, 0, D) Then Exit;
+ ParseCS := CSCodeFromDesc(D, CS, Comps, PalBase, True);
+End;
+
+{ Idem pour un nom d'espace défini dans les ressources (images en ligne) }
+Function ParseCSRes(V: LongInt; Var CS, Comps, PalBase: LongInt): Boolean;
+Var
+ Q: LongInt;
+ K: Integer;
+ Nm: String;
+Begin
+ ParseCSRes := False;
+ If V < 0 Then Exit;
+ Q := V;
+ If NextTok(Q) <> T_NAME Then Exit;
+ Nm := TokS;
+ K := CSByName(Nm);
+ If K < 0 Then Exit;
+ IDescClear;
+ ParseCSRes := CSCodeFromDesc(CSCache[K].D, CS, Comps, PalBase, False);
+End;
+
+{ Lecture du flux brut (encore encodé) de l'objet en P }
+Function ReadRawStream(P: LongInt; Var Raw: Pointer; Var RawLen: LongInt): Boolean;
+Var
+ V, Q, DStart, Len, Done, ToRead: LongInt;
+ LenVal: LongInt;
+ Got: Word;
+ Buf: PBigBytes;
+Begin
+ ReadRawStream := False;
+ Raw := Nil;
+ RawLen := 0;
+ SrcMode := 0;
+ V := DictFind(P, 'Length');
+ LenVal := -1;
+ If V >= 0 Then LenVal := ValInt(V, -1);
+ SrcMode := 0;
+ Q := P;
+ SkipValue(Q);
+ If NextTok(Q) <> T_OP Then Exit;
+ If TokS <> 'stream' Then Exit;
+ DStart := Q;
+ If Not FindStreamData(DStart, Len, LenVal) Then Exit;
+ If (Len < 1) Or (Len > IMGMAXBYTES) Then Exit;
+ GetMem(Buf, Len + 16);
+ Seek(PF, DStart);
+ Done := 0;
+ While Done < Len Do Begin
+  ToRead := Len - Done;
+  If ToRead > 32768 Then ToRead := 32768;
+  Got := 0;
+  BlockRead(PF, Buf^[Done], ToRead, Got);
+  If Got = 0 Then Break;
+  Done := Done + Got;
+ End;
+ RBase := -1; RLen := 0;
+ If Done < 1 Then Begin FreeMem(Buf, Len + 16); Exit; End;
+ Raw := Buf;
+ RawLen := Done;
+ ReadRawStream := True;
+End;
+
+Procedure ReadFiltersAndParms(P: LongInt);
+Var
+ V, Q, Pos0, DP: LongInt;
+ T: Integer;
+Begin
+ INF := 0; IPred := 1; ICols := 1; IClr := 1;
+ IK := 0; ICCCols := 1728; IBlackIs1 := False; IByteAlign := False; IJbGlob := 0;
+ SrcMode := 0;
+ V := DictFind(P, 'Filter');
+ If V < 0 Then V := DictFind(P, 'F');
+ If V >= 0 Then Begin
+  Q := V;
+  T := NextTok(Q);
+  If T = T_NAME Then Begin IFlt[0] := TokS; INF := 1; End
+  Else If T = T_AB Then
+   While INF < 4 Do Begin
+    T := NextTok(Q);
+    If T = T_NAME Then Begin IFlt[INF] := TokS; Inc(INF); End Else Break;
+   End;
+ End;
+ V := DictFind(P, 'DecodeParms');
+ If V < 0 Then V := DictFind(P, 'DP');
+ If V >= 0 Then Begin
+  DP := -1;
+  Q := V;
+  Pos0 := Q;
+  T := NextTok(Q);
+  If T = T_DB Then DP := Pos0
+  Else If T = T_AB Then
+   While True Do Begin
+    Pos0 := Q;
+    T := NextTok(Q);
+    If T = T_DB Then Begin DP := Pos0; Q := Pos0; SkipValue(Q); End
+    Else If (T = T_AE) Or (T = T_EOF) Then Break;
+   End;
+  If DP >= 0 Then Begin
+   IPred := ValInt(DictFind(DP, 'Predictor'), 1);
+   ICols := ValInt(DictFind(DP, 'Columns'), 1);
+   IClr := ValInt(DictFind(DP, 'Colors'), 1);
+   IK := ValInt(DictFind(DP, 'K'), 0);
+   Q := DictFind(DP, 'JBIG2Globals');
+   If Q >= 0 Then IJbGlob := RefAt(Q);
+   ICCCols := ValInt(DictFind(DP, 'Columns'), 1728);
+   Q := DictFind(DP, 'BlackIs1');
+   If Q >= 0 Then If NextTok(Q) = T_OP Then IBlackIs1 := TokS = 'true';
+   Q := DictFind(DP, 'EncodedByteAlign');
+   If Q >= 0 Then If NextTok(Q) = T_OP Then IByteAlign := TokS = 'true';
+  End;
+ End;
+End;
+
+{ Annule le filtre de prédiction PNG : retourne un nouveau tampon }
+Function Unpredict(Src: PBigBytes; SLen: LongInt; RowBytes, Rows, Bpp: LongInt): PBigBytes;
+Var
+ Dst: PBigBytes;
+ Y, X, Pos: LongInt;
+ Ft, A, B, C, Pa, Pb, Pc, Px: Integer;
+Begin
+ GetMem(Dst, RowBytes * Rows + 16);
+ FillChar(Dst^, RowBytes * Rows, 0);
+ Pos := 0;
+ For Y := 0 To Rows - 1 Do Begin
+  If Pos >= SLen Then Break;
+  Ft := Src^[Pos]; Inc(Pos);
+  For X := 0 To RowBytes - 1 Do Begin
+   If Pos >= SLen Then Break;
+   Px := Src^[Pos]; Inc(Pos);
+   If X >= Bpp Then A := Dst^[Y * RowBytes + X - Bpp] Else A := 0;
+   If Y > 0 Then B := Dst^[(Y - 1) * RowBytes + X] Else B := 0;
+   If (Y > 0) And (X >= Bpp) Then C := Dst^[(Y - 1) * RowBytes + X - Bpp] Else C := 0;
+   Case Ft Of
+    1: Px := Px + A;
+    2: Px := Px + B;
+    3: Px := Px + (A + B) Div 2;
+    4: Begin
+     Pa := Abs(B - C); Pb := Abs(A - C); Pc := Abs(A + B - 2 * C);
+     If (Pa <= Pb) And (Pa <= Pc) Then Px := Px + A
+     Else If Pb <= Pc Then Px := Px + B
+     Else Px := Px + C;
+    End;
+   End;
+   Dst^[Y * RowBytes + X] := Px And 255;
+  End;
+ End;
+ Unpredict := Dst;
+End;
+
+{ Échantillon brut -> RVB }
+Procedure SampleRaw(X, Y: LongInt; Var R, G, B: Integer);
+Var
+ C: Integer;
+ Cf: Array[0..3] Of Real;
+ Rg: LongInt;
+ V: Array[0..3] Of Integer;
+ BitPos, Mx: LongInt;
+ Idx: Integer;
+Begin
+ For C := 0 To IComps - 1 Do Begin
+  If IBpc = 8 Then V[C] := IData^[Y * IRow + X * IComps + C]
+  Else If IBpc = 16 Then V[C] := IData^[Y * IRow + (X * IComps + C) * 2]
+  Else Begin
+   BitPos := (X * IComps + C) * IBpc;
+   Mx := (1 Shl IBpc) - 1;
+   V[C] := (IData^[Y * IRow + (BitPos Shr 3)] Shr (8 - IBpc - (BitPos And 7))) And Mx;
+   If ICS <> 5 Then V[C] := V[C] * 255 Div Mx;
+  End;
+ End;
+ If IInv And (ICS <> 5) Then For C := 0 To IComps - 1 Do V[C] := 255 - V[C];
+ Case ICS Of
+  1: Begin R := V[0]; G := V[0]; B := V[0]; End;
+  6: Begin R := 255 - V[0]; G := R; B := R; End;
+  3: Begin R := V[0]; G := V[1]; B := V[2]; End;
+  7: Begin
+   For C := 0 To IComps - 1 Do Cf[C] := V[C] / 255;
+   Rg := ColorToRgb(IDesc, Cf, IComps);
+   R := (Rg Shr 16) And 255; G := (Rg Shr 8) And 255; B := Rg And 255;
+  End;
+  8: Begin
+   Cf[0] := V[0] / 255 * 100;
+   Cf[1] := IDesc.Amin + V[1] / 255 * (IDesc.Amax - IDesc.Amin);
+   Cf[2] := IDesc.Bmin + V[2] / 255 * (IDesc.Bmax - IDesc.Bmin);
+   Rg := LabToRgb(Cf[0], Cf[1], Cf[2], IDesc);
+   R := (Rg Shr 16) And 255; G := (Rg Shr 8) And 255; B := Rg And 255;
+  End;
+  4: Begin
+   Rg := CmykPoly(V[0] / 255, V[1] / 255, V[2] / 255, V[3] / 255);
+   R := (Rg Shr 16) And 255; G := (Rg Shr 8) And 255; B := Rg And 255;
+  End;
+ Else
+  Begin
+   Idx := V[0];
+   If (Idx * IPalBase + IPalBase - 1) < IPalN Then Begin
+    If IPalBase = 1 Then Begin R := IPal[Idx]; G := R; B := R; End
+    Else If IPalBase = 3 Then Begin R := IPal[Idx * 3]; G := IPal[Idx * 3 + 1]; B := IPal[Idx * 3 + 2]; End
+    Else Begin
+     R := (255 - IPal[Idx * 4]) * (255 - IPal[Idx * 4 + 3]) Div 255;
+     G := (255 - IPal[Idx * 4 + 1]) * (255 - IPal[Idx * 4 + 3]) Div 255;
+     B := (255 - IPal[Idx * 4 + 2]) * (255 - IPal[Idx * 4 + 3]) Div 255;
+    End;
+   End
+   Else Begin R := 0; G := 0; B := 0; End;
+  End;
+ End;
+End;
+
+Procedure SampleJpeg(X, Y: LongInt; Var R, G, B: Integer);
+Var
+ O: LongInt;
+Begin
+ O := (Y * IW + X) * 3;
+ R := IRGB^[O]; G := IRGB^[O + 1]; B := IRGB^[O + 2];
+End;
+
+
+Type
+ TWordsBig = Array[0..67108863] Of Word;
+ PWordsBig = ^TWordsBig;
+
+Procedure FreeImages;
+Var
+ I: Integer;
+Begin
+ For I := 1 To ImgCount Do Begin
+  If ImgP(I)^.Pix <> Nil Then FreeMem(ImgP(I)^.Pix, LongInt(ImgP(I)^.W) * ImgP(I)^.H * 2);
+  If ImgP(I)^.Alpha <> Nil Then FreeMem(ImgP(I)^.Alpha, LongInt(ImgP(I)^.W) * ImgP(I)^.H);
+  If ImgP(I)^.Raw <> Nil Then FreeMem(ImgP(I)^.Raw, ImgP(I)^.RawLen + 16);
+  If ImgP(I)^.Pal <> Nil Then FreeMem(ImgP(I)^.Pal, ImgP(I)^.PalN);
+ End;
+ ImgListFree;
+End;
+
+{ Réduit l'image courante (contexte I*) à au plus ImgMaxDim pixels }
+Procedure Downsample(Var TW_, TH_: LongInt; Var Pix: PWordsBig; Var Alpha: PBigBytes);
+Var
+ X, Y, I, J, NX, NY, X0, X1, Y0, Y1, SX, SY, Cnt: LongInt;
+ SR, SG, SB: LongInt;
+ R, G, B: Integer;
+ K: Integer;
+Begin
+ If IW >= IH Then Begin
+  TW_ := IMin(IW, ImgMaxDim);
+  TH_ := IMax(1, (IH * TW_) Div IW);
+ End
+ Else Begin
+  TH_ := IMin(IH, ImgMaxDim);
+  TW_ := IMax(1, (IW * TH_) Div IH);
+ End;
+ If (IBpc = 1) And (Not IJpeg) Then K := 6 Else K := 3;
+ NX := IMin(K, IMax(1, (IW + TW_ - 1) Div TW_));
+ NY := IMin(K, IMax(1, (IH + TH_ - 1) Div TH_));
+ Pix := Nil; Alpha := Nil;
+ If IMaskImg Then Begin
+  GetMem(Alpha, TW_ * TH_);
+ End
+ Else GetMem(Pix, TW_ * TH_ * 2);
+ For Y := 0 To TH_ - 1 Do Begin
+  Y0 := (Y * IH) Div TH_;
+  Y1 := IMax(Y0, ((Y + 1) * IH) Div TH_ - 1);
+  For X := 0 To TW_ - 1 Do Begin
+   X0 := (X * IW) Div TW_;
+   X1 := IMax(X0, ((X + 1) * IW) Div TW_ - 1);
+   SR := 0; SG := 0; SB := 0; Cnt := 0;
+   For J := 0 To NY - 1 Do Begin
+    SY := Y0 + ((Y1 - Y0 + 1) * J) Div NY;
+    For I := 0 To NX - 1 Do Begin
+     SX := X0 + ((X1 - X0 + 1) * I) Div NX;
+     If IJpeg Then SampleJpeg(SX, SY, R, G, B) Else SampleRaw(SX, SY, R, G, B);
+     SR := SR + R; SG := SG + G; SB := SB + B; Inc(Cnt);
+    End;
+   End;
+   If IMaskImg Then Alpha^[Y * TW_ + X] := 255 - SG Div Cnt
+   Else Begin
+    R := SR Div Cnt; G := SG Div Cnt; B := SB Div Cnt;
+    Pix^[Y * TW_ + X] := ((R And $F8) Shl 8) Or ((G And $FC) Shl 3) Or (B Shr 3);
+   End;
+  End;
+ End;
+End;
+
+ 
 
 Function ImportImageObj(Num: Integer; AsSM: Boolean): Integer; Forward;
 Function FinishImage(W, H, Bpc, CS, Comps, PalBase: LongInt; IsMask: Boolean; Const DecStr: String;
                      Raw: Pointer; RawLen: LongInt; Num: Integer; AsSM: Boolean; SMNum: Integer): Integer;
 Var
  RowBytes, Exp, CurLen, OutLen, TW_, TH_: LongInt;
- Ok, Unsup, FinalDCT, Keep, Owned: Boolean;
+ Ok, Unsup, FinalDCT, FinalJPX, Keep, Owned: Boolean;
+ JW, JH, JC, JOW, JOH, JCS: LongInt;
+ JPix: PBigBytes;
+ GBuf: PBigBytes;
+ GLen: LongInt;
+ GS_: TSrcState;
  K, Idx, M: Integer;
  Cur, Tmp, Pred: PBigBytes;
  Pix: PWordsBig;
@@ -6649,16 +12447,39 @@ Begin
  If (Bpc <> 1) And (Bpc <> 2) And (Bpc <> 4) And (Bpc <> 8) And (Bpc <> 16) Then Bpc := 8;
  { chaîne de filtres admise pour la réécriture ? }
  Keep := (CS In [1, 3, 4, 5]) Or IsMask;
+ If (INF = 1) And (IFlt[0] = 'JPXDecode') Then Keep := True;
  For K := 0 To INF - 1 Do Begin
   Nm := IFlt[K];
-  If Not ((Nm = 'FlateDecode') Or (Nm = 'DCTDecode') Or (Nm = 'ASCII85Decode') Or (Nm = 'ASCIIHexDecode')) Then Keep := False;
+  If Not ((Nm = 'FlateDecode') Or (Nm = 'DCTDecode') Or (Nm = 'ASCII85Decode') Or (Nm = 'ASCIIHexDecode') Or (Nm = 'JPXDecode')) Then Keep := False;
  End;
  Cur := PBigBytes(Raw); CurLen := RawLen; Owned := False;
- FinalDCT := False; Unsup := False;
+ FinalDCT := False; FinalJPX := False; Unsup := False;
  Pred := Nil;
  For K := 0 To INF - 1 Do Begin
   Nm := IFlt[K];
   If (Nm = 'DCTDecode') Or (Nm = 'DCT') Then Begin FinalDCT := True; Break; End
+  Else If Nm = 'JPXDecode' Then Begin FinalJPX := True; Break; End
+  Else If Nm = 'JBIG2Decode' Then Begin
+   RowBytes := (W + 7) Div 8;
+   Exp := RowBytes * H;
+   If (Exp > IMGMAXBYTES) Or (Exp < 1) Then Begin Unsup := True; Break; End;
+   GetMem(Tmp, Exp + 64);
+   GBuf := Nil; GLen := 0;
+   If IJbGlob > 0 Then Begin
+    SaveSrc(GS_);
+    SrcMode := 0;
+    GetMem(GBuf, BUFSZ + 16);
+    If Not LoadStream(IJbGlob, PByteBuf(GBuf), GLen) Then GLen := 0;
+    RestoreSrc(GS_);
+   End;
+   Ok := JBIG2Decode(Cur, CurLen, GBuf, GLen, W, H, Tmp);
+   If GBuf <> Nil Then FreeMem(GBuf, BUFSZ + 16);
+   If Owned Then FreeMem(Cur, CurLen + 64);
+   If Not Ok Then Begin FreeMem(Tmp, Exp + 64); Cur := Nil; Owned := False; Unsup := True; Break; End;
+   Cur := Tmp; CurLen := Exp; Owned := True;
+   If CS = 0 Then Begin CS := 1; Comps := 1; End;
+   Bpc := 1;
+  End
   Else If (Nm = 'FlateDecode') Or (Nm = 'Fl') Then Begin
    If CS = 0 Then Exp := W * H * 4 + H Else Begin
     RowBytes := (W * Comps * Bpc + 7) Div 8;
@@ -6713,6 +12534,30 @@ Begin
     Downsample(TW_, TH_, Pix, Alpha);
     FreeMem(Ji.Pixels, LongInt(Ji.Width) * Ji.Height * 3);
     IRGB := Nil;
+   End
+   Else Unsup := True;
+  End
+  Else If FinalJPX Then Begin
+   If JPXDecode(Cur, CurLen, ImgMaxDim, JW, JH, JC, JOW, JOH, JCS, JPix) And (JPix <> Nil) Then Begin
+    GetMem(IRGB, JW * JH * 3);
+    For Y := 0 To JH - 1 Do
+     For X := 0 To JW - 1 Do Begin
+      If JC = 1 Then Begin
+       IRGB^[(Y * JW + X) * 3] := JPix^[Y * JW + X]; IRGB^[(Y * JW + X) * 3 + 1] := JPix^[Y * JW + X]; IRGB^[(Y * JW + X) * 3 + 2] := JPix^[Y * JW + X];
+      End
+      Else If JC >= 4 Then Begin
+       K := CmykPoly(JPix^[(Y * JW + X) * JC] / 255, JPix^[(Y * JW + X) * JC + 1] / 255, JPix^[(Y * JW + X) * JC + 2] / 255, JPix^[(Y * JW + X) * JC + 3] / 255);
+       IRGB^[(Y * JW + X) * 3] := (K Shr 16) And 255; IRGB^[(Y * JW + X) * 3 + 1] := (K Shr 8) And 255; IRGB^[(Y * JW + X) * 3 + 2] := K And 255;
+      End
+      Else Begin
+       IRGB^[(Y * JW + X) * 3] := JPix^[(Y * JW + X) * JC]; IRGB^[(Y * JW + X) * 3 + 1] := JPix^[(Y * JW + X) * JC + 1]; IRGB^[(Y * JW + X) * 3 + 2] := JPix^[(Y * JW + X) * JC + 2];
+      End;
+     End;
+    IW := JW; IH := JH; IJpeg := True; IMaskImg := False;
+    Downsample(TW_, TH_, Pix, Alpha);
+    FreeMem(IRGB, JW * JH * 3);
+    IRGB := Nil;
+    FreeMem(JPix, JW * JH * JC);
    End
    Else Unsup := True;
   End
@@ -6796,6 +12641,7 @@ Begin
   ImgP(Idx)^.PalBase := PalBase;
  End;
  If Num > 0 Then ImgByObj^[Num] := Idx;
+ IDescClear;
  FinishImage := Idx;
 End;
 
@@ -6915,7 +12761,7 @@ Begin
  If BP >= 0 Then Bpc := ValInt(BP, 8);
  If IsMask Then Bpc := 1;
  INF := 0; IPred := 1; ICols := 1; IClr := 1;
- IK := 0; ICCCols := 1728; IBlackIs1 := False; IByteAlign := False;
+ IK := 0; ICCCols := 1728; IBlackIs1 := False; IByteAlign := False; IJbGlob := 0;
  If FP >= 0 Then Begin
   Q := FP;
   T := NextTok(Q);
@@ -6955,7 +12801,7 @@ Begin
   If IsMask Then RowBytes := (W + 7) Div 8
   Else Begin
    CS := 0; Comps := 0; PalBase := 0; IPalN := 0;
-   If CP >= 0 Then If Not ParseCS(CP, 0, CS, Comps, PalBase) Then CS := 0;
+   If CP >= 0 Then If Not ParseCS(CP, 0, CS, Comps, PalBase) Then If Not ParseCSRes(CP, CS, Comps, PalBase) Then CS := 0;
    If CS = 0 Then RowBytes := 0 Else RowBytes := (W * Comps * Bpc + 7) Div 8;
   End;
   If (RowBytes > 0) And (RowBytes * H < IMGMAXBYTES) Then Begin
@@ -6995,7 +12841,7 @@ Begin
  CS := 0; Comps := 0; PalBase := 0; IPalN := 0;
  If IsMask Then Begin CS := 1; Comps := 1; End
  Else If CP >= 0 Then Begin
-  If Not ParseCS(CP, 0, CS, Comps, PalBase) Then CS := 0;
+  If Not ParseCS(CP, 0, CS, Comps, PalBase) Then If Not ParseCSRes(CP, CS, Comps, PalBase) Then CS := 0;
  End;
  ND := 0;
  If DCP >= 0 Then ND := ReadNums(DCP, Dec, 8);
@@ -7051,8 +12897,10 @@ Type
   ClipPoly: Integer;        { 0 : aucun, sinon indice + 1 d'un polygone de découpe }
   FillA, StrokeA: Real;
   Blend: Integer;           { 0 normal, 1 produit (Multiply) }
+  OverP: Boolean;           { surimpression du remplissage (OP / op) }
   CSPat: Boolean;           { espace colorimétrique de remplissage : Pattern }
   FillPat: LongInt;         { n° d'objet du motif de remplissage (0 : aucun) }
+  FillCS, StrokeCS: Integer; { espace colorimétrique courant : indice dans CSCache + 1 (0 : appareil) }
  End;
 
 Const
@@ -7083,7 +12931,10 @@ Var
  SubClosed, SubRect: Array[0..SUBMAX-1] Of Boolean;
  Opnd: Array[0..39] Of Real;
  NOpnd: Integer;
- LastName, LastStr: String;
+ LastName, LastStr, PrevName: String;
+ MCSt: Array[0..63] Of Word;
+ MCSP, MCOver: Integer;
+ CurLayer: Word;
  ImpPg: Integer;
  ImpSrcKind: Integer;
  ImpAnnNum: LongInt;
@@ -7137,7 +12988,11 @@ End;
 
 Function CmykRgb(C, M, Y, K: Real): LongInt;
 Begin
+ {$IFDEF FPC}
+ CmykRgb := CmykPoly(C, M, Y, K);
+ {$ELSE}
  CmykRgb := RGBOf(RI(255 * (1 - C) * (1 - K)), RI(255 * (1 - M) * (1 - K)), RI(255 * (1 - Y) * (1 - K)));
+ {$ENDIF}
 End;
 
 Var
@@ -7177,6 +13032,7 @@ Begin
  Else Begin
   If ImpKeepSrc Then ObjP(I)^.Src := ImpSrcKind Else ObjP(I)^.Src := 0;
   ObjP(I)^.SrcNum := ImpAnnNum;
+  ObjP(I)^.Layer := CurLayer;
  End;
  NewImpObj := I;
 End;
@@ -7370,100 +13226,6 @@ Begin
  ClipPolyBox := N;
 End;
 
-{ ---- Fonctions PDF de types 2 et 3 ---- }
-Function EvalFn(P: LongInt; T: Real; Var Out: Array Of Real; Depth: Integer): Integer;
-Var
- S: TSrcState;
- N, I, K, NO, N2: Integer;
- Q, Pos0: LongInt;
- Tok, Typ: Integer;
- C0, C1, Bn, En, Dm: Array[0..15] Of Real;
- FPos: Array[0..15] Of LongInt;
- NC0, NC1, NB, NE, NFn: Integer;
- Ex, Lo, Hi, E0, E1, R, T2: Real;
- Sub: Array[0..7] Of Real;
-Begin
- EvalFn := 0;
- If (P < 0) Or (Depth > 4) Then Exit;
- SaveSrc(S);
- N := RefAt(P);
- If N > 0 Then P := EnterObj(N);
- If P < 0 Then Begin RestoreSrc(S); Exit; End;
- Q := P;
- Tok := NextTok(Q);
- If Tok = T_AB Then Begin
-  K := 0;
-  While K <= High(Out) Do Begin
-   Pos0 := Q;
-   Tok := NextTok(Q);
-   If (Tok = T_AE) Or (Tok = T_EOF) Then Break;
-   N2 := EvalFn(Pos0, T, Sub, Depth + 1);
-   If N2 > 0 Then Out[K] := Sub[0] Else Out[K] := 0;
-   Inc(K);
-   Q := Pos0;
-   SkipValue(Q);
-  End;
-  RestoreSrc(S);
-  EvalFn := K;
-  Exit;
- End;
- If Tok <> T_DB Then Begin RestoreSrc(S); Exit; End;
- Typ := ValInt(DictFind(P, 'FunctionType'), -1);
- NC0 := 0; NB := 0; NE := 0;
- Dm[0] := 0; Dm[1] := 1;
- ReadNums(DictFind(P, 'Domain'), Dm, 2);
- If T < Dm[0] Then T := Dm[0];
- If T > Dm[1] Then T := Dm[1];
- If Typ = 2 Then Begin
-  NC0 := ReadNums(DictFind(P, 'C0'), C0, 16);
-  If NC0 < 1 Then Begin C0[0] := 0; NC0 := 1; End;
-  NC1 := ReadNums(DictFind(P, 'C1'), C1, 16);
-  If NC1 < 1 Then Begin C1[0] := 1; NC1 := 1; End;
-  Ex := ValNum(DictFind(P, 'N'), 1);
-  If T <= 0 Then Begin If Ex = 0 Then R := 1 Else R := 0; End
-  Else R := Exp(Ex * Ln(T));
-  NO := NC0;
-  If NC1 < NO Then NO := NC1;
-  If NO > High(Out) + 1 Then NO := High(Out) + 1;
-  For I := 0 To NO - 1 Do Out[I] := C0[I] + R * (C1[I] - C0[I]);
-  RestoreSrc(S);
-  EvalFn := NO;
-  Exit;
- End;
- If Typ = 3 Then Begin
-  NFn := 0;
-  Q := DictFind(P, 'Functions');
-  If Q >= 0 Then Begin
-   If NextTok(Q) = T_AB Then
-    While NFn < 16 Do Begin
-     Pos0 := Q;
-     Tok := NextTok(Q);
-     If (Tok = T_AE) Or (Tok = T_EOF) Then Break;
-     FPos[NFn] := Pos0;
-     Inc(NFn);
-     Q := Pos0;
-     SkipValue(Q);
-    End;
-  End;
-  NB := ReadNums(DictFind(P, 'Bounds'), Bn, 15);
-  NE := ReadNums(DictFind(P, 'Encode'), En, 16);
-  If NFn < 1 Then Begin RestoreSrc(S); Exit; End;
-  K := 0;
-  While (K < NB) And (T >= Bn[K]) Do Inc(K);
-  If K >= NFn Then K := NFn - 1;
-  If K = 0 Then Lo := Dm[0] Else Lo := Bn[K - 1];
-  If (K >= NB) Or (K = NFn - 1) Then Hi := Dm[1] Else Hi := Bn[K];
-  E0 := 0; E1 := 1;
-  If 2 * K + 1 < NE Then Begin E0 := En[2 * K]; E1 := En[2 * K + 1]; End;
-  If Hi = Lo Then T2 := E0 Else T2 := E0 + (T - Lo) * (E1 - E0) / (Hi - Lo);
-  N2 := EvalFn(FPos[K], T2, Out, Depth + 1);
-  RestoreSrc(S);
-  EvalFn := N2;
-  Exit;
- End;
- RestoreSrc(S);
-End;
-
 Type
  TGAbs = Record
   Typ: Integer;
@@ -7485,9 +13247,11 @@ Var
  Dm: Array[0..1] Of Real;
  Out: Array[0..7] Of Real;
  FnPos, Vp: LongInt;
- CS, Comps, PalBase: LongInt;
- T, V0, V1, V2, V3, Sc: Real;
+ HaveD: Boolean;
+ ShD: TCSDesc;
+ T, Sc: Real;
  R, G, B: LongInt;
+ Rgb: LongInt;
  Function Cl(V: Real): LongInt;
  Begin
   If V < 0 Then V := 0;
@@ -7514,10 +13278,7 @@ Begin
  ReadNums(DictFind(ShPos, 'Domain'), Dm, 2);
  FnPos := DictFind(ShPos, 'Function');
  If FnPos < 0 Then Begin RestoreSrc(S); Exit; End;
- CS := 0; Comps := 0; PalBase := 0;
- Vp := DictFind(ShPos, 'ColorSpace');
- If Not ParseCS(Vp, 0, CS, Comps, PalBase) Then CS := 0;
- { ParseCS a pu modifier la source : replacer l'objet du dégradé }
+ HaveD := ParseCSDesc(DictFind(ShPos, 'ColorSpace'), 0, ShD);
  RestoreSrc(S);
  GA.Typ := ShT - 2;
  If ShT = 2 Then Begin
@@ -7534,21 +13295,18 @@ Begin
  For K := 0 To 8 Do Begin
   T := Dm[0] + (Dm[1] - Dm[0]) * K / 8;
   NO := EvalFn(FnPos, T, Out, 0);
-  If NO < 1 Then Exit;
-  If NO = 1 Then Begin
-   If CS = 1 Then Begin R := Cl(Out[0]); G := R; B := R; End
-   Else Begin R := Cl(1 - Out[0]); G := R; B := R; End;
-  End
-  Else If NO = 3 Then Begin R := Cl(Out[0]); G := Cl(Out[1]); B := Cl(Out[2]); End
-  Else If NO >= 4 Then Begin
-   V0 := Out[0]; V1 := Out[1]; V2 := Out[2]; V3 := Out[3];
-   R := Cl((1 - V0) * (1 - V3)); G := Cl((1 - V1) * (1 - V3)); B := Cl((1 - V2) * (1 - V3));
-  End
-  Else Exit;
+  If NO < 1 Then Begin CSDescFree(ShD); Exit; End;
+  If HaveD And (ShD.Kind In [1, 3, 4, 6, 7]) Then Rgb := ColorToRgb(ShD, Out, NO)
+  Else If NO = 1 Then Rgb := RGBOf(Cl(1 - Out[0]), Cl(1 - Out[0]), Cl(1 - Out[0]))
+  Else If NO = 3 Then Rgb := RGBOf(Cl(Out[0]), Cl(Out[1]), Cl(Out[2]))
+  Else If NO >= 4 Then Rgb := CompToRgb(4, Out, ShD)
+  Else Begin CSDescFree(ShD); Exit; End;
+  R := (Rgb Shr 16) And 255; G := (Rgb Shr 8) And 255; B := Rgb And 255;
   GA.Pos[K] := K * 255 Div 8;
   GA.R[K] := R; GA.G[K] := G; GA.B[K] := B;
   Inc(GA.NSt);
  End;
+ CSDescFree(ShD);
  ShadingToAbs := True;
 End;
 
@@ -7738,7 +13496,7 @@ Begin
     ClampBox(LX1, LY1, LX2, LY2);
     If (LX2 < LX1) Or (LY2 < LY1) Then Continue;
    End;
-   If (GS.Blend = 1) And Fl And (Not DoStroke) Then RK := K_HILITE Else RK := K_RECT;
+   If ((GS.Blend = 1) Or GS.OverP) And Fl And (Not DoStroke) Then RK := K_HILITE Else RK := K_RECT;
    Idx := NewImpObj(RK);
    If Idx < 0 Then Exit;
    With ObjP(Idx)^ Do Begin
@@ -8112,7 +13870,129 @@ End;
 
 
 
-Procedure DoXObject(Const Name: String; Depth: Integer);
+{ ---- Contenu optionnel (calques) ---- }
+Procedure MCRecalc;
+Var
+ I: Integer;
+Begin
+ CurLayer := 0;
+ For I := MCSP - 1 DownTo 0 Do
+  If MCSt[I] <> 0 Then Begin CurLayer := MCSt[I]; Exit; End;
+End;
+
+Procedure MCPush(Code: Word);
+Begin
+ If MCSP < 64 Then Begin MCSt[MCSP] := Code; Inc(MCSP); End Else Inc(MCOver);
+ MCRecalc;
+End;
+
+Procedure MCPop;
+Begin
+ If MCOver > 0 Then Dec(MCOver) Else If MCSP > 0 Then Dec(MCSP);
+ MCRecalc;
+End;
+
+{ Code de calque d'un OCG ou d'un OCMD : indice + 1, $FFFF masqué en permanence, 0 sans effet }
+Function OCCode(Num: LongInt): Word;
+Var
+ S: TSrcState;
+ P, V, Q, Pos0: LongInt;
+ N, I, Cnt, K, NOn: Integer;
+ Refs: Array[0..31] Of Integer;
+ Pol: String;
+ Vis: Boolean;
+Begin
+ OCCode := 0;
+ K := LayerFind(Num);
+ If K >= 0 Then Begin OCCode := K + 1; Exit; End;
+ SaveSrc(S);
+ SrcMode := 0;
+ P := EnterObj(Num);
+ If P >= 0 Then If ValName(DictFind(P, 'Type')) = 'OCMD' Then Begin
+  V := DictFind(P, 'OCGs');
+  Pol := ValName(DictFind(P, 'P'));
+  If Pol = '' Then Pol := 'AnyOn';
+  Cnt := 0;
+  If V >= 0 Then Begin
+   N := RefAt(V);
+   If N > 0 Then Begin
+    Q := EnterObj(N);
+    Pos0 := Q;
+    If (Q >= 0) And (NextTok(Q) = T_AB) Then Begin
+     While Cnt < 32 Do Begin
+      I := RefAt(Q);
+      If I > 0 Then Begin Refs[Cnt] := I; Inc(Cnt); SkipValue(Q); End Else Break;
+     End;
+    End
+    Else Begin Refs[0] := N; Cnt := 1; End;
+   End
+   Else Begin
+    Q := V;
+    If NextTok(Q) = T_AB Then
+     While Cnt < 32 Do Begin
+      I := RefAt(Q);
+      If I > 0 Then Begin Refs[Cnt] := I; Inc(Cnt); SkipValue(Q); End Else Break;
+     End;
+   End;
+  End;
+  If Cnt = 1 Then Begin
+   K := LayerFind(Refs[0]);
+   If K >= 0 Then OCCode := K + 1;
+  End
+  Else If Cnt > 1 Then Begin
+   NOn := 0;
+   For I := 0 To Cnt - 1 Do Begin
+    K := LayerFind(Refs[I]);
+    If (K < 0) Or Layers^[K].On Then Inc(NOn);
+   End;
+   If Pol = 'AllOn' Then Vis := NOn = Cnt
+   Else If Pol = 'AnyOff' Then Vis := NOn < Cnt
+   Else If Pol = 'AllOff' Then Vis := NOn = 0
+   Else Vis := NOn > 0;
+   If Not Vis Then OCCode := $FFFF;
+  End;
+ End;
+ RestoreSrc(S);
+End;
+
+{ Calque d'un XObject ou d'une annotation (entrée /OC de son dictionnaire) }
+Function XObjLayer(Num: LongInt): Word;
+Var
+ S: TSrcState;
+ P, V: LongInt;
+ N: Integer;
+Begin
+ XObjLayer := 0;
+ If LayerCount = 0 Then Exit;
+ SaveSrc(S);
+ SrcMode := 0;
+ P := EnterObj(Num);
+ N := 0;
+ If P >= 0 Then Begin
+  V := DictFind(P, 'OC');
+  If V >= 0 Then N := RefAt(V);
+ End;
+ RestoreSrc(S);
+ If N > 0 Then XObjLayer := OCCode(N);
+End;
+
+Procedure DoBDC;
+Var
+ S: TSrcState;
+ Num: LongInt;
+ Code: Word;
+Begin
+ Code := 0;
+ If (PrevName = 'OC') And (LayerCount > 0) Then Begin
+  SaveSrc(S);
+  FindRes('Properties', LastName, Num);
+  RestoreSrc(S);
+  If Num > 0 Then Code := OCCode(Num);
+ End;
+ MCPush(Code);
+End;
+
+Procedure DoXObject0(Const Name: String; Depth: Integer);
 Var
  I, Idx: Integer;
  L: LongInt;
@@ -8149,6 +14029,23 @@ Begin
  FreeFontsTo(FBase);
  NXObjs := XBase;
  NRes := RBase0;
+End;
+
+Procedure DoXObject(Const Name: String; Depth: Integer);
+Var
+ I, Idx: Integer;
+ Lc: Word;
+Begin
+ Lc := 0;
+ If LayerCount > 0 Then Begin
+  Idx := -1;
+  For I := NXObjs - 1 DownTo 0 Do
+   If XObjs[I].Name = Name Then Begin Idx := I; Break; End;
+  If Idx >= 0 Then Lc := XObjLayer(XObjs[Idx].Num);
+ End;
+ If Lc <> 0 Then MCPush(Lc);
+ DoXObject0(Name, Depth);
+ If Lc <> 0 Then MCPop;
 End;
 
 { Motif de pavage : le contenu de la cellule est rejoué sur la boîte (ou aplat gris si trop de cellules) }
@@ -8254,22 +14151,51 @@ Begin
  GS.FillPat := Num;
 End;
 
-Procedure SetColorSpaceByName(Const Name: String);
+Procedure SetColorSpaceByName(Const Name: String; Stroke: Boolean);
 Var
- S: TSrcState;
- Num, P, Q: LongInt;
+ K: Integer;
+ Rgb: LongInt;
 Begin
- GS.CSPat := Name = 'Pattern';
- GS.FillPat := 0;
- If Not GS.CSPat Then Begin
-  SaveSrc(S);
-  P := FindRes('ColorSpace', Name, Num);
-  If P >= 0 Then Begin
-   Q := P;
-   If NextTok(Q) = T_AB Then If NextTok(Q) = T_NAME Then GS.CSPat := TokS = 'Pattern';
-  End;
-  RestoreSrc(S);
+ K := -1;
+ If Not Stroke Then Begin GS.CSPat := Name = 'Pattern'; GS.FillPat := 0; GS.FillCS := 0; End
+ Else GS.StrokeCS := 0;
+ If Name = 'Pattern' Then Exit;
+ If (Name = 'DeviceGray') Or (Name = 'DeviceRGB') Or (Name = 'DeviceCMYK') Or (Name = 'G') Or (Name = 'RGB') Or (Name = 'CMYK') Then Begin
+  If Name[1] = 'D' Then K := -2;
+  If Not Stroke Then Begin
+   If (Name = 'DeviceCMYK') Or (Name = 'CMYK') Then GS.Fill := 0 Else GS.Fill := 0;
+  End
+  Else GS.Stroke := 0;
+  Exit;
  End;
+ K := CSByName(Name);
+ If K < 0 Then Exit;
+ If CSCache[K].D.Kind = 8 Then Begin
+  If Not Stroke Then GS.CSPat := True;
+  Exit;
+ End;
+ Rgb := CSInitialRgb(CSCache[K].D);
+ If Stroke Then Begin GS.StrokeCS := K + 1; GS.Stroke := Rgb; End
+ Else Begin GS.FillCS := K + 1; GS.Fill := Rgb; End;
+End;
+
+{ Couleur courante selon l'espace colorimétrique non appareil ; faux si aucun }
+Function TrySetColor(Stroke: Boolean): Boolean;
+Var
+ Idx, N, I: Integer;
+ C: Array[0..7] Of Real;
+ Rgb: LongInt;
+Begin
+ TrySetColor := False;
+ If Stroke Then Idx := GS.StrokeCS - 1 Else Idx := GS.FillCS - 1;
+ If (Idx < 0) Or (Idx >= CSMAXC) Then Exit;
+ If Not CSCache[Idx].Used Then Exit;
+ N := CSCache[Idx].D.N;
+ If (N < 1) Or (N > 8) Or (NOpnd < N) Then Exit;
+ For I := 0 To N - 1 Do C[I] := Opnd[NOpnd - N + I];
+ Rgb := ColorToRgb(CSCache[Idx].D, C, N);
+ If Stroke Then GS.Stroke := Rgb Else GS.Fill := Rgb;
+ TrySetColor := True;
 End;
 
 Procedure DoShading(Const Name: String);
@@ -8309,6 +14235,9 @@ Begin
   If V >= 0 Then Begin R := ValNum(V, 1); If R < 0 Then R := 0; If R > 1 Then R := 1; GS.FillA := R; End;
   V := DictFind(P, 'CA');
   If V >= 0 Then Begin R := ValNum(V, 1); If R < 0 Then R := 0; If R > 1 Then R := 1; GS.StrokeA := R; End;
+  V := DictFind(P, 'op');
+  If V < 0 Then V := DictFind(P, 'OP');
+  If V >= 0 Then Begin Q := V; If NextTok(Q) = T_OP Then GS.OverP := TokS = 'true'; End;
   V := DictFind(P, 'BM');
   If V >= 0 Then Begin
    Q := V;
@@ -8334,12 +14263,23 @@ Begin
  GDepth := Depth;
  C := Op[1];
  N := NOpnd;
+ If Op = 'BDC' Then Begin DoBDC; NOpnd := 0; Exit; End;
+ If Op = 'BMC' Then Begin MCPush(0); NOpnd := 0; Exit; End;
+ If Op = 'EMC' Then Begin MCPop; NOpnd := 0; Exit; End;
  If NoColor Then
   If (Op = 'g') Or (Op = 'G') Or (Op = 'rg') Or (Op = 'RG') Or (Op = 'k') Or (Op = 'K') Or (Op = 'sc') Or
      (Op = 'SC') Or (Op = 'scn') Or (Op = 'SCN') Or (Op = 'cs') Or (Op = 'CS') Or (Op = 'gs') Then Begin
    NOpnd := 0;
    Exit;
   End;
+ If (Op = 'g') Or (Op = 'rg') Or (Op = 'k') Then GS.FillCS := 0;
+ If (Op = 'G') Or (Op = 'RG') Or (Op = 'K') Then GS.StrokeCS := 0;
+ If (Op = 'sc') Or (Op = 'scn') Then Begin
+  If GS.FillCS > 0 Then If TrySetColor(False) Then Begin NOpnd := 0; Exit; End;
+ End
+ Else If (Op = 'SC') Or (Op = 'SCN') Then Begin
+  If GS.StrokeCS > 0 Then If TrySetColor(True) Then Begin NOpnd := 0; Exit; End;
+ End;
  Case Length(Op) Of
   1: Case C Of
    'q': PushGS;
@@ -8397,7 +14337,8 @@ Begin
    Else If Op = 'd1' Then NoColor := True
    Else If Op = 'sh' Then DoShading(LastName)
    Else If Op = 'gs' Then DoExtGState(LastName)
-   Else If Op = 'cs' Then SetColorSpaceByName(LastName)
+   Else If Op = 'cs' Then SetColorSpaceByName(LastName, False)
+   Else If Op = 'CS' Then SetColorSpaceByName(LastName, True)
    Else If Op = 'BT' Then Begin MatIdent(TmM); MatIdent(TlmM); End
    Else If Op = 'ET' Then
    Else If Op = 'Tc' Then Begin If N >= 1 Then GS.Tc := Opnd[N - 1]; End
@@ -8492,7 +14433,7 @@ Begin
     Opnd[NOpnd] := TokR;
     Inc(NOpnd);
    End;
-   T_NAME: LastName := TokS;
+   T_NAME: Begin PrevName := LastName; LastName := TokS; End;
    T_STR: LastStr := TokS;
    T_AB: Begin ArrPos := Q0; P := Q0; SkipValue(P); End;
    T_DB: Begin P := Q0; SkipValue(P); End;
@@ -8675,6 +14616,7 @@ Var
  N, NR, I: Integer;
  Refs: Array[0..1999] Of Integer;
  AStart, J: LongInt;
+ Lc: Word;
 Begin
  SrcMode := 0;
  P := EnterObj(Node);
@@ -8697,7 +14639,10 @@ Begin
   AStart := ObjCount;
   ImpSrcKind := 2;
   ImpAnnNum := Refs[I];
+  Lc := XObjLayer(Refs[I]);
+  If Lc <> 0 Then MCPush(Lc);
   ImportAnnot(Refs[I]);
+  If Lc <> 0 Then MCPop;
   ImpAnnNum := 0;
   For J := AStart To ObjCount - 1 Do ObjP(J)^.SrcCnt := ObjCount - AStart;
   If ImpKeepSrc And (ObjCount > AStart) Then AnnSetMark(Refs[I]);
@@ -8783,8 +14728,10 @@ Begin
  MatIdent(GS.CTM);
  GS.Stroke := 0; GS.Fill := 0; GS.LW := 1;
  GS.Tc := 0; GS.Tw := 0; GS.Th := 1; GS.TL := 0; GS.Ts := 0; GS.TSize := 12; GS.TMode := 0;
- GS.ClipOn := False; GS.ClipPoly := 0; GS.FillA := 1; GS.StrokeA := 1; GS.Blend := 0; GS.CSPat := False; GS.FillPat := 0;
+ GS.FillCS := 0; GS.StrokeCS := 0; CSCacheFree;
+ GS.ClipOn := False; GS.ClipPoly := 0; GS.FillA := 1; GS.StrokeA := 1; GS.Blend := 0; GS.OverP := False; GS.CSPat := False; GS.FillPat := 0;
  NCP := 0; ClipPend := False;
+ MCSP := 0; MCOver := 0; CurLayer := 0; PrevName := '';
  MatIdent(TmM); MatIdent(TlmM);
  GSP := 0; NPts := 0; NSub := 0; NOpnd := 0;
  For I := 0 To NC - 1 Do Begin
@@ -8856,6 +14803,122 @@ Begin
 End;
 
 { Ouvre un fichier PDF. Si Append est vrai, les pages sont ajoutées à la fin. }
+{ Texte PDF (PDFDocEncoding ou UTF-16BE) -> Windows }
+Function PdfTextToWin(Const S: String): String;
+Var
+ I: Integer;
+ R: String;
+Begin
+ If (Length(S) >= 2) And (S[1] = #254) And (S[2] = #255) Then Begin
+  R := '';
+  I := 3;
+  While I + 1 <= Length(S) Do Begin
+   If Ord(S[I]) = 0 Then R := R + S[I + 1] Else R := R + '?';
+   Inc(I, 2);
+  End;
+  PdfTextToWin := R;
+ End
+ Else PdfTextToWin := S;
+End;
+
+{ Position du dictionnaire /OCProperties (ou -1) }
+Function OCPropsPos: LongInt;
+Var
+ P, V: LongInt;
+ N: Integer;
+Begin
+ OCPropsPos := -1;
+ SrcMode := 0;
+ If RootNum <= 0 Then Exit;
+ P := EnterObj(RootNum);
+ If P < 0 Then Exit;
+ V := DictFind(P, 'OCProperties');
+ If V < 0 Then Exit;
+ N := RefAt(V);
+ If N > 0 Then V := EnterObj(N);
+ OCPropsPos := V;
+End;
+
+Function ReadRefList(V: LongInt; Var A: Array Of Integer): Integer;
+Var
+ Q: LongInt;
+ N, I: Integer;
+Begin
+ ReadRefList := 0;
+ If V < 0 Then Exit;
+ N := RefAt(V);
+ If N > 0 Then V := EnterObj(N);
+ If V < 0 Then Exit;
+ Q := V;
+ If NextTok(Q) <> T_AB Then Exit;
+ N := 0;
+ While N <= High(A) Do Begin
+  I := RefAt(Q);
+  If I > 0 Then Begin A[N] := I; Inc(N); SkipValue(Q); End Else Break;
+ End;
+ ReadRefList := N;
+End;
+
+{ Lit les calques (OCG) et leur état initial dans /OCProperties /D }
+Procedure LoadLayers;
+Var
+ Refs: Array[0..1999] Of Integer;
+ Lst: Array[0..1999] Of Integer;
+ N, I, J, K, M: Integer;
+ V, P: LongInt;
+ Base: String;
+ AllOn: Boolean;
+ Nm: String;
+Begin
+ LayerCount := 0;
+ V := OCPropsPos;
+ If V < 0 Then Exit;
+ N := ReadRefList(DictFind(V, 'OCGs'), Refs);
+ If N < 1 Then Exit;
+ For I := 0 To N - 1 Do Begin
+  SrcMode := 0;
+  P := EnterObj(Refs[I]);
+  Nm := '';
+  If P >= 0 Then Nm := PdfTextToWin(StrAtPos(DictFind(P, 'Name')));
+  If Nm = '' Then Nm := 'Calque ' + IStr(I + 1);
+  LayerAdd(Refs[I], Nm, True);
+ End;
+ V := OCPropsPos;
+ If V < 0 Then Exit;
+ V := DictFind(V, 'D');
+ If V < 0 Then Exit;
+ K := RefAt(V);
+ If K > 0 Then V := EnterObj(K);
+ If V < 0 Then Exit;
+ Base := ValName(DictFind(V, 'BaseState'));
+ If Base = 'OFF' Then
+  For I := 0 To LayerCount - 1 Do Layers^[I].On := False;
+ { /ON puis /OFF : on relit le dictionnaire à chaque fois (les positions peuvent changer) }
+ V := OCPropsPos;
+ If V >= 0 Then V := DictFind(V, 'D');
+ If V >= 0 Then Begin
+  K := RefAt(V);
+  If K > 0 Then V := EnterObj(K);
+  M := ReadRefList(DictFind(V, 'ON'), Lst);
+  For J := 0 To M - 1 Do Begin
+   K := LayerFind(Lst[J]);
+   If K >= 0 Then Layers^[K].On := True;
+  End;
+ End;
+ V := OCPropsPos;
+ If V >= 0 Then V := DictFind(V, 'D');
+ If V >= 0 Then Begin
+  K := RefAt(V);
+  If K > 0 Then V := EnterObj(K);
+  M := ReadRefList(DictFind(V, 'OFF'), Lst);
+  For J := 0 To M - 1 Do Begin
+   K := LayerFind(Lst[J]);
+   If K >= 0 Then Layers^[K].On := False;
+  End;
+ End;
+ SrcMode := 0;
+End;
+
 Function ImportPDF(Const Name: String; Append: Boolean; Var Err: String): Boolean;
 Var
  I, N: Integer;
@@ -8914,6 +14977,7 @@ Begin
   FreeImages;
   ObjsFree; PgsFree; PoolFree;
   ObjEnsure(0); PgEnsure(1); PoolEnsure(1);
+  LoadLayers;
  End;
  N := PageCount;
  If PagesNum > 0 Then WalkPages(PagesNum, 0, 0, 0, 612, 792, False, 0, 0)
@@ -10988,15 +17052,27 @@ Begin
  SetFillStyle(SolidFill, LightGray);
  Bar(0, ViewT, NAV_W - 1, GetMaxY - STATUS_H);
  { onglets }
+ If (NavTab = 2) And (LayerCount = 0) Then NavTab := 0;
  If NavTab = 0 Then SetFillStyle(SolidFill, White) Else SetFillStyle(SolidFill, LightGray);
- Bar(0, ViewT, 53, ViewT + 14);
+ If LayerCount > 0 Then Bar(0, ViewT, 42, ViewT + 14) Else Bar(0, ViewT, 53, ViewT + 14);
  If NavTab = 1 Then SetFillStyle(SolidFill, White) Else SetFillStyle(SolidFill, LightGray);
- Bar(54, ViewT, NAV_W - 1, ViewT + 14);
+ If LayerCount > 0 Then Bar(43, ViewT, 85, ViewT + 14) Else Bar(54, ViewT, NAV_W - 1, ViewT + 14);
  SetColor(Black);
- DS(5, ViewT + 4, 'Pages');
- DS(58, ViewT + 4, 'Notes');
+ DS(2, ViewT + 4, 'Pages');
+ If LayerCount > 0 Then Begin
+  DS(45, ViewT + 4, 'Notes');
+  If NavTab = 2 Then SetFillStyle(SolidFill, White) Else SetFillStyle(SolidFill, LightGray);
+  Bar(86, ViewT, NAV_W - 1, ViewT + 14);
+  SetColor(Black);
+  DS(88, ViewT + 4, 'Cal');
+  Line(42, ViewT, 42, ViewT + 15);
+  Line(85, ViewT, 85, ViewT + 15);
+ End
+ Else Begin
+  DS(58, ViewT + 4, 'Notes');
+  Line(53, ViewT, 53, ViewT + 15);
+ End;
  Line(0, ViewT + 15, NAV_W - 1, ViewT + 15);
- Line(53, ViewT, 53, ViewT + 15);
  Y0 := ViewT + 16;
  Y1 := ViewB;
  SetViewPort(0, Y0, NAV_W - SBAR - 1, Y1, True);
@@ -11024,6 +17100,26 @@ Begin
    DS(C16((NAV_W - SBAR) Div 2 - Length(S) * 4), C16(T + DispHOf(I, Sc) + 7), S);
   End;
  End
+ Else If NavTab = 2 Then Begin
+  Rows := (Y1 - Y0 + 1) Div 14;
+  For R := 0 To Rows - 1 Do Begin
+   Idx := NavScroll + R;
+   If Idx >= LayerCount Then Break;
+   TY := R * 14;
+   SetFillStyle(SolidFill, White);
+   Bar(3, C16(TY + 2), 12, C16(TY + 11));
+   SetColor(Black);
+   Rectangle(3, C16(TY + 2), 12, C16(TY + 11));
+   If Layers^[Idx].On Then Begin
+    Line(5, C16(TY + 6), 7, C16(TY + 9));
+    Line(7, C16(TY + 9), 11, C16(TY + 4));
+    Line(5, C16(TY + 7), 7, C16(TY + 10));
+    Line(7, C16(TY + 10), 11, C16(TY + 5));
+   End;
+   SetColor(White);
+   DS(16, C16(TY + 3), Copy(Layers^[Idx].Name, 1, 9));
+  End;
+ End
  Else Begin
   Rows := (Y1 - Y0 + 1) Div 24;
   N := CommentCount;
@@ -11048,6 +17144,7 @@ Begin
  End;
  SetFullView;
  If NavTab = 0 Then DrawSB(NAV_W - SBAR, Y0, NAV_W - 1, Y1, True, NavScroll, NavDocHeight, Y1 - Y0 + 1)
+ Else If NavTab = 2 Then DrawSB(NAV_W - SBAR, Y0, NAV_W - 1, Y1, True, NavScroll, IMax(LayerCount, 1), (Y1 - Y0 + 1) Div 14)
  Else DrawSB(NAV_W - SBAR, Y0, NAV_W - 1, Y1, True, NavScroll, IMax(CommentCount, 1), (Y1 - Y0 + 1) Div 24);
  SetColor(Black);
  Line(NAV_W - 1, ViewT, NAV_W - 1, GetMaxY - STATUS_H);
@@ -13249,7 +19346,7 @@ Begin
   End;
   CM_CONT: Begin Continuous := 1 - Continuous; ScrollX := 0; GotoPage(CurPage); RedrawAll; End;
   CM_NAV: Begin NavVisible := 1 - NavVisible; FullScreen := False; RedrawAll; End;
-  CM_NAVMODE: Begin NavTab := 1 - NavTab; NavScroll := 0; NavVisible := 1; FullScreen := False; RedrawAll; End;
+  CM_NAVMODE: Begin If LayerCount > 0 Then NavTab := (NavTab + 1) Mod 3 Else NavTab := 1 - (NavTab And 1); NavScroll := 0; NavVisible := 1; FullScreen := False; RedrawAll; End;
   CM_FULL: Begin FullScreen := Not FullScreen; RedrawAll; End;
   CM_PREV: Begin GotoPage(CurPage - 1); RedrawAll; End;
   CM_NEXT: Begin GotoPage(CurPage + 1); RedrawAll; End;
@@ -13657,6 +19754,8 @@ Begin
   9: Begin
    If NavTab = 0 Then
     NavScroll := SBDragPos(NAV_W - SBAR, ViewT + 16, NAV_W - 1, ViewB, True, NavDocHeight, ViewB - ViewT - 15, MX_, MY_, SBDragOfs)
+   Else If NavTab = 2 Then
+    NavScroll := SBDragPos(NAV_W - SBAR, ViewT + 16, NAV_W - 1, ViewB, True, IMax(LayerCount, 1), (ViewB - ViewT - 15) Div 14, MX_, MY_, SBDragOfs)
    Else
     NavScroll := SBDragPos(NAV_W - SBAR, ViewT + 16, NAV_W - 1, ViewB, True, IMax(CommentCount, 1), (ViewB - ViewT - 15) Div 24, MX_, MY_, SBDragOfs);
    If Up Then DragMode := 0;
@@ -13679,7 +19778,10 @@ Begin
  Ofs := 0;
  Y0 := ViewT + 16; Y1 := ViewB;
  If MY_ < ViewT + 15 Then Begin
-  If MX_ < 54 Then NavTab := 0 Else NavTab := 1;
+  If LayerCount > 0 Then Begin
+   If MX_ < 43 Then NavTab := 0 Else If MX_ < 86 Then NavTab := 1 Else NavTab := 2;
+  End
+  Else If MX_ < 54 Then NavTab := 0 Else NavTab := 1;
   NavScroll := 0;
   LastNavPage := -1;
   SyncNav;
@@ -13687,6 +19789,7 @@ Begin
   Exit;
  End;
  If NavTab = 0 Then Begin Total := NavDocHeight; PageSz := Y1 - Y0 + 1; End
+ Else If NavTab = 2 Then Begin Total := IMax(LayerCount, 1); PageSz := (Y1 - Y0 + 1) Div 14; End
  Else Begin Total := IMax(CommentCount, 1); PageSz := (Y1 - Y0 + 1) Div 24; End;
  If MX_ >= NAV_W - SBAR Then Begin
   Hit := SBHit(NAV_W - SBAR, Y0, NAV_W - 1, Y1, True, NavScroll, Total, PageSz, MX_, MY_, Ofs);
@@ -13711,6 +19814,14 @@ Begin
     RedrawAll;
     Exit;
    End;
+  End;
+ End
+ Else If NavTab = 2 Then Begin
+  Idx := NavScroll + (MY_ - Y0) Div 14;
+  If (Idx >= 0) And (Idx < LayerCount) Then Begin
+   Layers^[Idx].On := Not Layers^[Idx].On;
+   If SelObj >= 0 Then If Not LayerOn(ObjP(SelObj)^.Layer) Then SelObj := -1;
+   RedrawAll;
   End;
  End
  Else Begin

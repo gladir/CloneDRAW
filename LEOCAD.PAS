@@ -170,23 +170,22 @@ Const
  { Chaines : \e=e aigu \g=e grave \a=a grave \c=c cedille \h=e circonflexe
    \o=o circonflexe \u=u grave \i=i circonflexe \E=E aigu (page 437) }
  PROG_NAME='LEOCAD';
- MAXMOD=16;               { modeles (fichier principal + sous-modeles) }
- MAXCAT=4900;             { pieces du catalogue }
- MAXCATG=48;              { categories }
- MAXSEL=64;
+ MAXMOD=96;               { modeles (fichier principal + sous-modeles) }
  MAXVIEW=4;
- POLYSH=10;               { 1024 polygones par bloc }
- PBSIZE=1024;
- MAXBLK=16;
- MAXPOLY=16384;
+ MAXPOLY=60000;           { polygones d'une scene (liste chainee) }
  UNDO_MAX=12;
- CACHE_MAX=140;           { pieces gardees en memoire }
+ CACHE_MAX=160;           { pieces gardees en memoire }
  NSHADE=6;
- MAXCOL=40;
+ GRP_MAX=32;              { groupes de nuances (6 entrees de palette chacun) }
+ UI_BASE=208;             { entrees de palette reservees a l'interface }
+ UI_SLOTS=48;
  EPS=0.000001;
 
  { Types de primitives LDraw }
- PK_REF=1; PK_LINE=2; PK_TRI=3; PK_QUAD=4; PK_STUD=5;
+ PK_REF=1; PK_LINE=2; PK_TRI=3; PK_QUAD=4; PK_STUD=5; PK_OPT=6;
+
+ { Finitions de couleur }
+ FN_CHROME=1; FN_PEARL=2; FN_RUBBER=4; FN_MATTE=8; FN_METAL=16;
 
  { Outils }
  TL_SELECT=0; TL_INSERT=1; TL_ORBIT=2; TL_PAN=3; TL_ZOOM=4;
@@ -211,7 +210,7 @@ Type
  TPrim=Record
   Next:PPrim;
   Kind,Cull:Byte;       { Cull : 0 aucun, 1 CCW certifie, 2 CW certifie }
-  Col:Integer;
+  Col:LongInt;
   Inv:Boolean;          { INVERTNEXT }
   Case Byte Of
    0:(P:Array[0..3] Of TVec);
@@ -219,8 +218,11 @@ Type
  End;
  TPart=Record
   Name:String[40];
-  Prims:PPrim;
+  Prims:PPrim;          { definition d'origine (avec references) }
   Tail:PPrim;
+  Flat:PPrim;           { geometrie aplatie (sans references), pour le rendu }
+  FlatTail:PPrim;
+  Flattened:Boolean;
   Next:PPart;
   Found:Boolean;
   BBox:Boolean;
@@ -231,12 +233,15 @@ Type
  PPiece=^TPiece;
  TPiece=Record
   Name:String[40];
-  Col:Integer;
+  Col:LongInt;
   M:TMat;
-  Step:Integer;
-  Sel,Hidden:Boolean;
+  Step,HideStep:Integer;
+  Group:LongInt;
+  Sel,Hidden,Locked,Mark:Boolean;
   Part:PPart;
   Epoch:LongInt;
+  SubIdx:Integer;
+  SubEpoch:LongInt;
   Next,Prev:PPiece;
  End;
 
@@ -248,41 +253,87 @@ Type
   CurStep:Integer;
  End;
 
+ PSnapMod=^TSnapMod;
+ TSnapMod=Record
+  Name:String[40];
+  List:PPiece;
+  Step:Integer;
+  Next:PSnapMod;
+ End;
  PSnap=^TSnap;
  TSnap=Record
-  NMod,Cur,Col:Integer;
-  Name:Array[0..MAXMOD-1] Of String[40];
-  List:Array[0..MAXMOD-1] Of PPiece;
-  Step:Array[0..MAXMOD-1] Of Integer;
+  NMod,Cur:Integer;
+  Col:LongInt;
+  Mods:PSnapMod;
+  Next:PSnap;
  End;
 
- TCat=Record
-  FileN:String[12];
-  Desc:String[44];
-  Cat:Byte;
- End;
  PCat=^TCat;
+ TCat=Record
+  FileN:String[20];
+  Desc:String[60];
+  Keys:String[48];
+  CatI:Integer;
+  Next:PCat;
+ End;
+ PFil=^TFil;
+ TFil=Record
+  C:PCat;
+  Next:PFil;
+ End;
+ PCategory=^TCategory;
+ TCategory=Record
+  Name:String[24];
+  Next:PCategory;
+ End;
 
+ PColor=^TColor;
+ TColor=Record
+  Code:LongInt;
+  Name:String[32];
+  R,G,B,ER,EG,EB,Alpha,Fin:Byte;
+  Next:PColor;
+ End;
+
+ PPoly=^TPoly;
  TPoly=Record
+  Next:PPoly;
   Z:LongInt;
   Col:Word;
   N,Fl:Byte;
   Owner:Integer;
   X,Y:Array[0..3] Of Integer;
  End;
- PPoly=^TPoly;
- TPolyBlk=Array[0..PBSIZE-1] Of TPoly;
- PPolyBlk=^TPolyBlk;
- TIdxArr=Array[0..MAXPOLY-1] Of Word;
- PIdxArr=^TIdxArr;
- TCatArr=Array[0..MAXCAT-1] Of PCat;
- PCatArr=^TCatArr;
- TIntArr=Array[0..MAXCAT-1] Of Integer;
- PIntArr=^TIntArr;
+
+ PGroup=^TGroup;
+ TGroup=Record
+  Id:LongInt;
+  Name:String[40];
+  Next:PGroup;
+ End;
+
+ PCamera=^TCamera;
+ TCamera=Record
+  Name:String[30];
+  Persp:Boolean;
+  Yaw,Pitch,Dist,Zoom,Fov:Real;
+  Tgt:TVec;
+  Next:PCamera;
+ End;
+
+ PKey=^TKey;
+ TKey=Record
+  Time:Integer;           { image de l'animation }
+  Persp:Boolean;
+  Yaw,Pitch,Dist,Zoom,Fov:Real;
+  Tgt:TVec;
+  Step:Integer;
+  Next:PKey;
+ End;
 
  TView=Record
   Persp:Boolean;
-  Yaw,Pitch,Dist,Zoom:Real;
+  Yaw,Pitch,Dist,Zoom,Fov:Real;
   Tgt:TVec;
   X1,Y1,X2,Y2:Integer;
   Name:String[12];
@@ -309,39 +360,46 @@ Var
  MX,MY,MB,OldMB:Integer;
  MHid:Integer;
  { repertoires }
- BaseDir,LibDir,PlanDir:String;
+ BaseDir,LibDir,PlanDir,ExtraDir,AltLibDir:String;
  PathSep:Char;
- { couleurs }
+ { couleurs : liste chainee (LDConfig.ldr ou table integree) }
+ ColHead,ColTail:PColor;
  NCol:Integer;
- ColCode:Array[0..MAXCOL-1] Of Integer;
- ColName:Array[0..MAXCOL-1] Of String[22];
- ColR,ColG,ColB:Array[0..MAXCOL-1] Of Byte;
- ColTr:Array[0..MAXCOL-1] Of Boolean;
- ShadeMap:Array[0..MAXCOL-1,0..NSHADE-1] Of Byte;
+ ColCache:Array[0..255] Of PColor;
  VgaR,VgaG,VgaB:Array[0..15] Of Byte;
- CurColor:Integer;             { code LDraw de la couleur courante }
+ CurColor:LongInt;             { code LDraw de la couleur courante }
+ ColTop:Integer;
+ { palette dynamique (256 couleurs) }
+ GrpKey:Array[0..GRP_MAX-1] Of LongInt;
+ GrpR,GrpG,GrpB:Array[0..GRP_MAX-1] Of Byte;
+ GrpN:Integer;
  { bibliotheque }
  Cache:PPart;
  CacheCount:Integer;
  Epoch:LongInt;
- Catalog:PCatArr;
+ CatHead,CatTail:PCat;
  CatCount:Integer;
- CatNames:Array[0..MAXCATG-1] Of String[20];
+ CatList,CatListTail:PCategory;
  CatN:Integer;
- Filtered:PIntArr;
+ FilHead,FilTail:PFil;
  FilN:Integer;
  CatSel,CatTop,PartTop,PartSel:Integer;
  SearchStr:String[20];
  SearchEdit:Boolean;
  CurPart:String[40];
- CurPartDesc:String[44];
+ CurPartDesc:String[60];
  { documents }
  Models:Array[0..MAXMOD-1] Of TModel;
  ModelCount,CurModel:Integer;
+ ModEpoch:LongInt;
  DocFile:String;
  Modified:Boolean;
- { annuler / retablir }
- UndoS,RedoS:Array[0..UNDO_MAX-1] Of PSnap;
+ GroupHead:PGroup;
+ NextGroupId:LongInt;
+ CamHead:PCamera;
+ KeyHead:PKey;
+ { annuler / retablir : piles chainees }
+ UndoTop,RedoTop:PSnap;
  UndoN,RedoN:Integer;
  Clip:PPiece;
  ClipN:Integer;
@@ -352,10 +410,9 @@ Var
  GridOn,EdgesOn,WireOn:Boolean;
  StudMode:Integer;            { 0 auto, 1 complets, 2 simples, 3 aucun }
  StudEff:Integer;
- { tampons de rendu }
- PolyBlk:Array[0..MAXBLK-1] Of PPolyBlk;
- PolyN,PolyMax:Integer;
- PolyIdx:PIdxArr;
+ { scene : liste chainee de polygones }
+ PolyHead,PolyPool:PPoly;
+ PolyN,PolyMax:LongInt;
  { camera courante }
  CamM:TMat;
  CamPos:TVec;
@@ -506,6 +563,40 @@ Begin
  ForceExt:=S+E;
 End;
 
+Function Tok(Var S:String):String;
+Var I:Integer;
+Begin
+ I:=1;
+ While(I<=Length(S))And((S[I]=' ')Or(S[I]=#9))Do Inc(I);
+ Delete(S,1,I-1);
+ I:=1;
+ While(I<=Length(S))And(S[I]<>' ')And(S[I]<>#9)Do Inc(I);
+ Tok:=Copy(S,1,I-1);
+ Delete(S,1,I-1);
+End;
+
+Function NumTok(Var S:String;Var V:Real):Boolean;
+Var T:String; C:Integer; L:LongInt;
+Begin
+ T:=Tok(S);
+ If(Length(T)>2)And(T[1]='0')And((T[2]='x')Or(T[2]='X'))Then Begin
+  Val('$'+Copy(T,3,20),L,C);
+  V:=L;
+ End
+  Else Val(T,V,C);
+ NumTok:=(C=0)And(T<>'');
+End;
+
+Function TrimStr(Const S:String):String;
+Var A,B:Integer;
+Begin
+ A:=1; B:=Length(S);
+ While(A<=B)And((S[A]=' ')Or(S[A]=#9)Or(S[A]=#13)Or(S[A]=#10))Do Inc(A);
+ While(B>=A)And((S[B]=' ')Or(S[B]=#9)Or(S[B]=#13)Or(S[B]=#10))Do Dec(B);
+ TrimStr:=Copy(S,A,B-A+1);
+End;
+
+
 Function LoStr(Const S:String):String;
 Var I:Integer; R:String;
 Begin
@@ -571,11 +662,32 @@ Begin
  If MHid=0 Then ShowMouse;
 End;
 
+Var
+ LatchL,LatchR,LatchM,LatchRel:Boolean;
+ LatchX,LatchY,PrevPoll:Integer;
+
+{ Lecture de la souris ; les fronts montants sont memorises (verrou) pour ne
+  pas perdre un clic bref survenu pendant un rendu long }
 Procedure PollMouse;
 Var X,Y,B:LongInt;
 Begin
  GetMouseState(X,Y,B);
  MX:=X; MY:=Y; MB:=B;
+ If((MB And 1)<>0)And((PrevPoll And 1)=0)Then Begin LatchL:=True; LatchX:=MX; LatchY:=MY; End;
+ If((MB And 2)<>0)And((PrevPoll And 2)=0)Then Begin LatchR:=True; LatchX:=MX; LatchY:=MY; End;
+ If((MB And 4)<>0)And((PrevPoll And 4)=0)Then Begin LatchM:=True; LatchX:=MX; LatchY:=MY; End;
+ If((MB And 7)=0)And((PrevPoll And 7)<>0)Then LatchRel:=True;
+ PrevPoll:=MB;
+End;
+
+Procedure ClearLatch;
+Begin
+ LatchL:=False; LatchR:=False; LatchM:=False; LatchRel:=False;
+End;
+
+Procedure LatchMouse;
+Begin
+ PollMouse;
 End;
 
 { ====================================================================== }
@@ -723,20 +835,46 @@ Begin
 End;
 
 { ====================================================================== }
-{ Couleurs LDraw                                                         }
+{ Couleurs LDraw (liste chainee)                                        }
 { ====================================================================== }
 
-Procedure AddC(Code:Integer;Const Nm:String;R,G,B:Byte;Tr:Boolean);
+Var
+ PalR,PalG,PalB:Array[0..255] Of Byte;
+ GrpIdx:Array[0..GRP_MAX-1,0..NSHADE-1] Of Byte;
+ CGCode:Array[0..255] Of LongInt;
+ CGGrp:Array[0..255] Of Integer;
+ CGTr:Array[0..255] Of Boolean;
+
+Procedure ColFree;
+Var C,N:PColor; I:Integer;
 Begin
- If NCol>=MAXCOL Then Exit;
- ColCode[NCol]:=Code; ColName[NCol]:=Fx(Nm);
- ColR[NCol]:=R; ColG[NCol]:=G; ColB[NCol]:=B; ColTr[NCol]:=Tr;
+ C:=ColHead;
+ While C<>Nil Do Begin N:=C^.Next; Dispose(C); C:=N; End;
+ ColHead:=Nil; ColTail:=Nil; NCol:=0;
+ For I:=0 To 255 Do ColCache[I]:=Nil;
+End;
+
+Procedure AddColor(Code:LongInt;Const Nm:String;R,G,B,ER,EG,EB,Alpha,Fin:Byte);
+Var C:PColor;
+Begin
+ New(C);
+ C^.Code:=Code; C^.Name:=Copy(Nm,1,32);
+ C^.R:=R; C^.G:=G; C^.B:=B; C^.ER:=ER; C^.EG:=EG; C^.EB:=EB;
+ C^.Alpha:=Alpha; C^.Fin:=Fin; C^.Next:=Nil;
+ If ColTail=Nil Then ColHead:=C Else ColTail^.Next:=C;
+ ColTail:=C;
  Inc(NCol);
+End;
+
+Procedure AddC(Code:LongInt;Const Nm:String;R,G,B:Byte;Tr:Boolean);
+Begin
+ If Tr Then AddColor(Code,Fx(Nm),R,G,B,R Div 2,G Div 2,B Div 2,128,0)
+ Else AddColor(Code,Fx(Nm),R,G,B,R Div 2,G Div 2,B Div 2,255,0);
 End;
 
 Procedure InitColors;
 Begin
- NCol:=0;
+ ColFree;
  AddC(0,'Noir',27,42,52,False);
  AddC(1,'Bleu',30,90,168,False);
  AddC(2,'Vert',0,133,43,False);
@@ -774,11 +912,117 @@ Begin
  AddC(47,'Transparent',252,252,252,True);
 End;
 
-Function ColIdx(Code:Integer):Integer;
-Var I:Integer;
+Function HexVal(C:Char):Integer;
 Begin
- For I:=0 To NCol-1 Do If ColCode[I]=Code Then Begin ColIdx:=I; Exit; End;
- ColIdx:=7;
+ If(C>='0')And(C<='9')Then HexVal:=Ord(C)-48
+ Else If(C>='A')And(C<='F')Then HexVal:=Ord(C)-55
+ Else If(C>='a')And(C<='f')Then HexVal:=Ord(C)-87
+ Else HexVal:=0;
+End;
+
+Function ParseRGB(Const S:String;Var R,G,B:Byte):Boolean;
+Begin
+ ParseRGB:=False;
+ If(Length(S)<7)Or(S[1]<>'#')Then Exit;
+ R:=HexVal(S[2])*16+HexVal(S[3]);
+ G:=HexVal(S[4])*16+HexVal(S[5]);
+ B:=HexVal(S[6])*16+HexVal(S[7]);
+ ParseRGB:=True;
+End;
+
+Function FindColor(Code:LongInt):PColor;
+Var C:PColor; H:Integer;
+Begin
+ H:=Code And 255;
+ C:=ColCache[H];
+ If(C<>Nil)And(C^.Code=Code)Then Begin FindColor:=C; Exit; End;
+ C:=ColHead;
+ While C<>Nil Do Begin
+  If C^.Code=Code Then Begin ColCache[H]:=C; FindColor:=C; Exit; End;
+  C:=C^.Next;
+ End;
+ FindColor:=Nil;
+End;
+
+Function ColNameOf(Code:LongInt):String;
+Var C:PColor;
+Begin
+ If Code=16 Then Begin ColNameOf:=Fx('Principale'); Exit; End;
+ If Code=24 Then Begin ColNameOf:=Fx('Bord'); Exit; End;
+ C:=FindColor(Code);
+ If C<>Nil Then ColNameOf:=C^.Name Else ColNameOf:='#'+IntStr(Code);
+End;
+
+Function ColByIndex(I:Integer):PColor;
+Var C:PColor;
+Begin
+ C:=ColHead;
+ While(C<>Nil)And(I>0)Do Begin C:=C^.Next; Dec(I); End;
+ ColByIndex:=C;
+End;
+
+{ Lecture de LDConfig.ldr : 0 !COLOUR nom CODE n VALUE #RRGGBB EDGE #RRGGBB [ALPHA n] [CHROME ...] }
+Function LoadLDConfig(Const Path:String):Boolean;
+Var F:Text; L,T,Nm:String; Code:LongInt; R,G,B,ER,EG,EB,Al,Fin:Byte; V:Real; Cd:Integer; N:Integer;
+Begin
+ LoadLDConfig:=False;
+ {$I-}
+ Assign(F,Path); Reset(F);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ ColFree;
+ While Not Eof(F) Do Begin
+  {$I-}ReadLn(F,L);{$I+}
+  If IOResult<>0 Then L:='';
+  L:=TrimStr(L);
+  If Copy(L,1,1)='0' Then Begin
+   Tok(L);
+   T:=Tok(L);
+   If UpStr(T)='!COLOUR' Then Begin
+    Nm:=Tok(L);
+    Code:=-1; R:=128; G:=128; B:=128; ER:=0; EG:=0; EB:=0; Al:=255; Fin:=0;
+    Repeat
+     T:=UpStr(Tok(L));
+     If T='CODE' Then Begin NumTok(L,V); Code:=Round(V); End
+     Else If T='VALUE' Then ParseRGB(Tok(L),R,G,B)
+     Else If T='EDGE' Then ParseRGB(Tok(L),ER,EG,EB)
+     Else If T='ALPHA' Then Begin NumTok(L,V); Al:=Round(V); End
+     Else If T='CHROME' Then Fin:=Fin Or FN_CHROME
+     Else If T='PEARLESCENT' Then Fin:=Fin Or FN_PEARL
+     Else If T='RUBBER' Then Fin:=Fin Or FN_RUBBER
+     Else If T='MATTE_METALLIC' Then Fin:=Fin Or FN_MATTE
+     Else If T='METAL' Then Fin:=Fin Or FN_METAL;
+    Until T='';
+    If Code>=0 Then Begin
+     For N:=1 To Length(Nm) Do If Nm[N]='_' Then Nm[N]:=' ';
+     AddColor(Code,Nm,R,G,B,ER,EG,EB,Al,Fin);
+    End;
+   End;
+  End;
+ End;
+ Close(F);
+ LoadLDConfig:=NCol>0;
+ If NCol=0 Then InitColors;
+End;
+
+{ Couleur d'un code LDraw (table, ou couleur directe 0x2RRGGBB) }
+Procedure ColInfo(Code:LongInt;Var R,G,B:Byte;Var Tr:Boolean;Var Fin:Byte);
+Var C:PColor; V:LongInt;
+Begin
+ Tr:=False; Fin:=0;
+ If Code>=$2000000 Then Begin
+  V:=Code And $FFFFFF;
+  If Code>=$3000000 Then Begin
+   R:=((V Shr 20) And 15)*17; G:=((V Shr 16) And 15)*17; B:=((V Shr 12) And 15)*17;
+  End
+   Else Begin
+    R:=(V Shr 16) And 255; G:=(V Shr 8) And 255; B:=V And 255;
+   End;
+  Exit;
+ End;
+ C:=FindColor(Code);
+ If C=Nil Then Begin R:=155; G:=161; B:=157; Exit; End;
+ R:=C^.R; G:=C^.G; B:=C^.B; Tr:=C^.Alpha<255; Fin:=C^.Fin;
 End;
 
 Procedure InitVga;
@@ -802,26 +1046,96 @@ Begin
  NearVga:=Best;
 End;
 
-Var PalR,PalG,PalB:Array[0..255] Of Byte;
+{ Palette dynamique : chaque couleur (RVB + finition) utilisee dans une scene
+  recoit 6 entrees (nuances) parmi 32 groupes ; au-dela, le groupe le plus proche. }
+Procedure SlotReset;
+Var I:Integer;
+Begin
+ GrpN:=0;
+ For I:=0 To 255 Do Begin CGCode[I]:=-1; CGGrp[I]:=0; CGTr[I]:=False; End;
+End;
+
+Procedure SetPal(Idx,R,G,B:Integer);
+Begin
+ If R>255 Then R:=255; If G>255 Then G:=255; If B>255 Then B:=255;
+ If R<0 Then R:=0; If G<0 Then G:=0; If B<0 Then B:=0;
+ PalR[Idx]:=R; PalG[Idx]:=G; PalB[Idx]:=B;
+ If Palette256 Then SetRGBPalette(Idx,R,G,B);
+End;
+
+Function GroupFor(R,G,B,Fin:Integer):Integer;
+Const
+ SFN:Array[0..NSHADE-1] Of Real=(0.40,0.56,0.72,0.87,1.0,1.16);
+ SFM:Array[0..NSHADE-1] Of Real=(0.22,0.45,0.72,1.0,1.28,1.6);
+ SFP:Array[0..NSHADE-1] Of Real=(0.50,0.65,0.80,0.95,1.1,1.32);
+ SFR:Array[0..NSHADE-1] Of Real=(0.58,0.68,0.80,0.90,1.0,1.08);
+Var K:LongInt; I,G2,S:Integer; D,BD:LongInt; F:Real;
+Begin
+ K:=(LongInt(Fin) Shl 24) Or (LongInt(R) Shl 16) Or (LongInt(G) Shl 8) Or B;
+ For I:=0 To GrpN-1 Do If GrpKey[I]=K Then Begin GroupFor:=I; Exit; End;
+ If GrpN>=GRP_MAX Then Begin
+  G2:=0; BD:=2000000000;
+  For I:=0 To GrpN-1 Do Begin
+   D:=Sqr(LongInt(R)-GrpR[I])+Sqr(LongInt(G)-GrpG[I])+Sqr(LongInt(B)-GrpB[I]);
+   If D<BD Then Begin BD:=D; G2:=I; End;
+  End;
+  GroupFor:=G2;
+  Exit;
+ End;
+ G2:=GrpN; Inc(GrpN);
+ GrpKey[G2]:=K; GrpR[G2]:=R; GrpG[G2]:=G; GrpB[G2]:=B;
+ For S:=0 To NSHADE-1 Do Begin
+  If(Fin And(FN_CHROME Or FN_METAL))<>0 Then F:=SFM[S]
+  Else If(Fin And(FN_PEARL Or FN_MATTE))<>0 Then F:=SFP[S]
+  Else If(Fin And FN_RUBBER)<>0 Then F:=SFR[S]
+  Else F:=SFN[S];
+  If Palette256 Then Begin
+   SetPal(16+G2*NSHADE+S,Round(R*F),Round(G*F),Round(B*F));
+   GrpIdx[G2,S]:=16+G2*NSHADE+S;
+  End
+   Else GrpIdx[G2,S]:=NearVga(Round(R*F),Round(G*F),Round(B*F));
+ End;
+ GroupFor:=G2;
+End;
+
+{ Groupe de nuances d'un code couleur (avec cache) ; Tr = translucide }
+Function ColGroup(Code:LongInt;Var Tr:Boolean):Integer;
+Var H,G:Integer; R,Gc,B,Fin:Byte; T:Boolean;
+Begin
+ H:=Code And 255;
+ If CGCode[H]=Code Then Begin Tr:=CGTr[H]; ColGroup:=CGGrp[H]; Exit; End;
+ ColInfo(Code,R,Gc,B,T,Fin);
+ G:=GroupFor(R,Gc,B,Fin);
+ CGCode[H]:=Code; CGGrp[H]:=G; CGTr[H]:=T;
+ Tr:=T; ColGroup:=G;
+End;
+
+{ Entree de palette d'interface (apercus de couleurs) }
+Function UIColor(Slot,R,G,B:Integer):Integer;
+Begin
+ If Palette256 Then Begin
+  If Slot>=UI_SLOTS Then Slot:=UI_SLOTS-1;
+  SetPal(UI_BASE+Slot,R,G,B);
+  UIColor:=UI_BASE+Slot;
+ End
+  Else UIColor:=NearVga(R,G,B);
+End;
+
+{ Couleur d'apercu d'un code LDraw (nuance 1.0) dans l'entree d'interface Slot }
+Function UICode(Slot:Integer;Code:LongInt):Integer;
+Var R,G,B,Fin:Byte; Tr:Boolean;
+Begin
+ If Code=16 Then Begin R:=170; G:=170; B:=170; End
+ Else ColInfo(Code,R,G,B,Tr,Fin);
+ UICode:=UIColor(Slot,R,G,B);
+End;
 
 Procedure SetupPalette;
-Const SF:Array[0..NSHADE-1] Of Real=(0.40,0.56,0.72,0.87,1.0,1.16);
-Var C,S,Idx:Integer; R,G,B:LongInt;
+Var C:Integer;
 Begin
  InitVga;
  For C:=0 To 15 Do Begin PalR[C]:=VgaR[C]; PalG[C]:=VgaG[C]; PalB[C]:=VgaB[C]; End;
- For C:=0 To NCol-1 Do
-  For S:=0 To NSHADE-1 Do Begin
-   R:=Round(ColR[C]*SF[S]); G:=Round(ColG[C]*SF[S]); B:=Round(ColB[C]*SF[S]);
-   If R>255 Then R:=255; If G>255 Then G:=255; If B>255 Then B:=255;
-   If Palette256 Then Begin
-    Idx:=16+C*NSHADE+S;
-    SetRGBPalette(Idx,R,G,B);
-    PalR[Idx]:=R; PalG[Idx]:=G; PalB[Idx]:=B;
-    ShadeMap[C,S]:=Idx;
-   End
-    Else ShadeMap[C,S]:=NearVga(R,G,B);
-  End;
+ SlotReset;
 End;
 
 { ====================================================================== }
@@ -968,35 +1282,6 @@ End;
 { Bibliotheque de pieces : lecture des fichiers LDraw (.DAT)             }
 { ====================================================================== }
 
-Function Tok(Var S:String):String;
-Var I:Integer;
-Begin
- I:=1;
- While(I<=Length(S))And((S[I]=' ')Or(S[I]=#9))Do Inc(I);
- Delete(S,1,I-1);
- I:=1;
- While(I<=Length(S))And(S[I]<>' ')And(S[I]<>#9)Do Inc(I);
- Tok:=Copy(S,1,I-1);
- Delete(S,1,I-1);
-End;
-
-Function NumTok(Var S:String;Var V:Real):Boolean;
-Var T:String; C:Integer;
-Begin
- T:=Tok(S);
- Val(T,V,C);
- NumTok:=(C=0)And(T<>'');
-End;
-
-Function TrimStr(Const S:String):String;
-Var A,B:Integer;
-Begin
- A:=1; B:=Length(S);
- While(A<=B)And((S[A]=' ')Or(S[A]=#9)Or(S[A]=#13)Or(S[A]=#10))Do Inc(A);
- While(B>=A)And((S[B]=' ')Or(S[B]=#9)Or(S[B]=#13)Or(S[B]=#10))Do Dec(B);
- TrimStr:=Copy(S,A,B-A+1);
-End;
-
 Procedure FreePrims(Q:PPrim);
 Var N:PPrim;
 Begin
@@ -1010,6 +1295,7 @@ Begin
  While P<>Nil Do Begin
   N:=P^.Next;
   FreePrims(P^.Prims);
+  FreePrims(P^.Flat);
   Dispose(P);
   P:=N;
  End;
@@ -1018,20 +1304,58 @@ Begin
  Inc(Epoch);
 End;
 
+{ Dispositions acceptees : racine a plat, parts\, p\, p\48\, p\8\, parts\s\
+  (bibliotheque LDraw officielle) ; AltLibDir = autre racine LDraw (LDRAWDIR). }
+Type
+ TRootDirs=Record
+  Root,Parts,P,S,Models:String;
+ End;
+
+Var
+ RootDirs:Array[0..1] Of TRootDirs;
+
+{ Sous-dossier existant sans tenir compte de la casse ('' s'il n'existe pas) }
+Function SubDirCI(Const Root,Nm:String):String;
+Begin
+ SubDirCI:='';
+ If DirOK(Root+Nm)Then SubDirCI:=Root+Nm+PathSep
+ Else If DirOK(Root+LoStr(Nm))Then SubDirCI:=Root+LoStr(Nm)+PathSep
+ Else If DirOK(Root+UpStr(Nm))Then SubDirCI:=Root+UpStr(Nm)+PathSep;
+End;
+
+Procedure ResolveRoot(I:Integer;Const Root:String);
+Var P:String;
+Begin
+ RootDirs[I].Root:=Root;
+ RootDirs[I].Parts:=''; RootDirs[I].P:=''; RootDirs[I].S:=''; RootDirs[I].Models:='';
+ If Root='' Then Exit;
+ RootDirs[I].Parts:=SubDirCI(Root,'PARTS');
+ RootDirs[I].P:=SubDirCI(Root,'P');
+ RootDirs[I].Models:=SubDirCI(Root,'MODELS');
+ RootDirs[I].S:=SubDirCI(Root,'S');
+ If(RootDirs[I].S='')And(RootDirs[I].Parts<>'')Then RootDirs[I].S:=SubDirCI(RootDirs[I].Parts,'S');
+End;
+
+Function FindUnder(I:Integer;Const N:String;Var Res:String):Boolean;
+Begin
+ FindUnder:=True;
+ If FindCI(RootDirs[I].Root,N,Res)Then Exit;
+ If(RootDirs[I].Parts<>'')And FindCI(RootDirs[I].Parts,N,Res)Then Exit;
+ If(RootDirs[I].P<>'')And FindCI(RootDirs[I].P,N,Res)Then Exit;
+ If(RootDirs[I].Models<>'')And FindCI(RootDirs[I].Models,N,Res)Then Exit;
+ If(RootDirs[I].S<>'')And(Length(N)>2)And(UpCase(N[1])='S')And(N[2]=PathSep)Then
+  If FindCI(RootDirs[I].S,Copy(N,3,255),Res)Then Exit;
+ FindUnder:=False;
+End;
+
 Function FindPartFile(Const Name:String;Var Res:String):Boolean;
 Var N:String;
 Begin
  N:=ToSep(Name);
  FindPartFile:=True;
- If FindCI(LibDir,N,Res)Then Exit;
- If FindCI(LibDir+'P'+PathSep,N,Res)Then Exit;
- If FindCI(LibDir+'PARTS'+PathSep,N,Res)Then Exit;
- If FindCI(LibDir+'P'+PathSep+'48'+PathSep,N,Res)Then Exit;
- If FindCI(LibDir+'S'+PathSep,N,Res)Then Exit;
- If(Length(N)>2)And((UpCase(N[1])='S')And(N[2]=PathSep))Then
-  If FindCI(LibDir+'PARTS'+PathSep+'S'+PathSep,Copy(N,3,255),Res)Then Exit;
- If(Length(N)>2)And((UpCase(N[1])='S')And(N[2]=PathSep))Then
-  If FindCI(LibDir+'S'+PathSep,Copy(N,3,255),Res)Then Exit;
+ If FindUnder(0,N,Res)Then Exit;
+ If(AltLibDir<>'')And FindUnder(1,N,Res)Then Exit;
+ If(ExtraDir<>'')And FindCI(ExtraDir,N,Res)Then Exit;
  FindPartFile:=False;
 End;
 
@@ -1052,7 +1376,6 @@ Procedure ParseLine(P:PPart;Line:String;Var Cert,CW,InvNext:Boolean;Depth:Intege
 Var
  T,F:String;
  Typ,I:Integer;
- V:Real;
  Q:PPrim;
  Col:Real;
  N:Integer;
@@ -1063,8 +1386,8 @@ Begin
  Line:=TrimStr(Line);
  If Line='' Then Exit;
  T:=Tok(Line);
- Typ:=Ord(T[1])-48;
  If Length(T)<>1 Then Exit;
+ Typ:=Ord(T[1])-48;
  If Typ=0 Then Begin
   T:=UpStr(Tok(Line));
   If T='BFC' Then Begin
@@ -1079,6 +1402,7 @@ Begin
   End;
   Exit;
  End;
+ If(Typ<1)Or(Typ>5)Then Exit;
  If Cert Then Begin If CW Then Cl:=2 Else Cl:=1; End Else Cl:=0;
  If Not NumTok(Line,Col)Then Exit;
  Case Typ Of
@@ -1099,15 +1423,15 @@ Begin
     If Q^.Ref=Nil Then Q^.Kind:=0;
    End;
   End;
-  2,3,4:Begin
+  2,3,4,5:Begin
    N:=Typ;
-   If Typ=2 Then N:=2;
+   If Typ=5 Then N:=4;
    Ok:=True;
    For I:=0 To N-1 Do Begin
     Ok:=Ok And NumTok(Line,Pt[I].X) And NumTok(Line,Pt[I].Y) And NumTok(Line,Pt[I].Z);
    End;
    If Not Ok Then Exit;
-   Q:=NewPrim(P,Typ);
+   If Typ=5 Then Q:=NewPrim(P,PK_OPT) Else Q:=NewPrim(P,Typ);
    Q^.Col:=Round(Col);
    Q^.Cull:=Cl;
    For I:=0 To N-1 Do Q^.P[I]:=Pt[I];
@@ -1158,11 +1482,11 @@ Begin
  Q:=P^.Prims;
  While Q<>Nil Do Begin
   Case Q^.Kind Of
-   PK_LINE,PK_TRI,PK_QUAD:Begin
-    N:=Q^.Kind; If N=PK_LINE Then N:=2;
+   PK_LINE,PK_TRI,PK_QUAD,PK_OPT:Begin
+    N:=Q^.Kind; If(N=PK_LINE)Or(N=PK_OPT)Then N:=2;
     For I:=0 To N-1 Do Begin
      BoxAdd(P^.AMin,P^.AMax,Q^.P[I]);
-     If Q^.Kind<>PK_LINE Then BoxAdd(P^.BMin,P^.BMax,Q^.P[I]);
+     If(Q^.Kind=PK_TRI)Or(Q^.Kind=PK_QUAD)Then BoxAdd(P^.BMin,P^.BMax,Q^.P[I]);
     End;
    End;
    PK_REF:If Q^.Ref<>Nil Then Begin
@@ -1204,7 +1528,7 @@ Begin
   End;
   P:=P^.Next;
  End;
- If Depth>10 Then Exit;
+ If Depth>24 Then Exit;
  New(P);
  FillChar(P^,SizeOf(TPart),0);
  P^.Name:=Copy(N,1,40);
@@ -1226,26 +1550,100 @@ Begin
  GetPart:=P;
 End;
 
-{ ====================================================================== }
-{ Catalogue des pieces                                                   }
-{ ====================================================================== }
-
-Procedure FreeCatalog;
-Var I:Integer;
+{ Aplatit la piece : copie toute la geometrie des sous-fichiers dans P^.Flat,
+  transformee, avec couleur heritee et sens d'enroulement corriges.
+  Le rendu ne parcourt plus que cette liste (aucune recursion). }
+Procedure FlatAppend(P:PPart;G:PPrim);
 Begin
- For I:=0 To CatCount-1 Do If Catalog^[I]<>Nil Then Dispose(Catalog^[I]);
- CatCount:=0;
+ G^.Next:=Nil;
+ If P^.FlatTail=Nil Then P^.Flat:=G Else P^.FlatTail^.Next:=G;
+ P^.FlatTail:=G;
 End;
 
-Procedure AddCatalog(Const Fn,Desc:String);
+Procedure FlattenPart(P:PPart);
+Var Q,F,G:PPrim; Flip:Boolean; I,N:Integer;
+Begin
+ If P^.Flattened Then Exit;
+ P^.Flattened:=True;
+ Q:=P^.Prims;
+ While Q<>Nil Do Begin
+  Case Q^.Kind Of
+   PK_LINE,PK_TRI,PK_QUAD,PK_OPT,PK_STUD:Begin
+    New(G); G^:=Q^;
+    If Q^.Kind=PK_STUD Then Begin
+     G^.Cull:=Ord((Q^.Cull=1)<>Q^.Inv); G^.Inv:=False;
+    End;
+    FlatAppend(P,G);
+   End;
+   PK_REF:If Q^.Ref<>Nil Then Begin
+    FlattenPart(Q^.Ref);
+    Flip:=(Q^.Cull=1)<>Q^.Inv;
+    F:=Q^.Ref^.Flat;
+    While F<>Nil Do Begin
+     New(G); G^:=F^;
+     If F^.Kind=PK_STUD Then Begin
+      MatMul(Q^.M,F^.M,G^.M);
+      G^.Cull:=Ord((F^.Cull=1)<>Flip);
+      G^.Inv:=False;
+     End
+      Else Begin
+       N:=4;
+       If F^.Kind=PK_LINE Then N:=2 Else If F^.Kind=PK_TRI Then N:=3;
+       For I:=0 To N-1 Do MatApply(Q^.M,F^.P[I],G^.P[I]);
+       If Flip Then Begin
+        If F^.Cull=1 Then G^.Cull:=2 Else If F^.Cull=2 Then G^.Cull:=1;
+       End;
+      End;
+     If F^.Col=16 Then G^.Col:=Q^.Col;
+     FlatAppend(P,G);
+     F:=F^.Next;
+    End;
+   End;
+  End;
+  Q:=Q^.Next;
+ End;
+End;
+
+{ ====================================================================== }
+{ Catalogue des pieces (listes chainees)                                 }
+{ ====================================================================== }
+
+Procedure FreeFiltered;
+Var F,N:PFil;
+Begin
+ F:=FilHead;
+ While F<>Nil Do Begin N:=F^.Next; Dispose(F); F:=N; End;
+ FilHead:=Nil; FilTail:=Nil; FilN:=0;
+End;
+
+Procedure FreeCategories;
+Var C,N:PCategory;
+Begin
+ C:=CatList;
+ While C<>Nil Do Begin N:=C^.Next; Dispose(C); C:=N; End;
+ CatList:=Nil; CatListTail:=Nil; CatN:=0;
+End;
+
+Procedure FreeCatalog;
+Var C,N:PCat;
+Begin
+ FreeFiltered;
+ C:=CatHead;
+ While C<>Nil Do Begin N:=C^.Next; Dispose(C); C:=N; End;
+ CatHead:=Nil; CatTail:=Nil; CatCount:=0;
+End;
+
+Procedure AddCatalog(Const Fn,Desc,Cat,Keys:String);
 Var C:PCat;
 Begin
- If CatCount>=MAXCAT Then Exit;
  New(C);
- C^.FileN:=Copy(Fn,1,12);
- C^.Desc:=Copy(TrimStr(Desc),1,44);
- C^.Cat:=0;
- Catalog^[CatCount]:=C;
+ C^.FileN:=Copy(Fn,1,20);
+ C^.Desc:=Copy(TrimStr(Desc),1,60);
+ C^.Keys:=Copy(Cat+' '+Keys,1,48);
+ C^.CatI:=0;
+ C^.Next:=Nil;
+ If CatTail=Nil Then CatHead:=C Else CatTail^.Next:=C;
+ CatTail:=C;
  Inc(CatCount);
 End;
 
@@ -1257,150 +1655,273 @@ Begin
  S:='';
  While(I<=Length(D))And(D[I]<>' ')Do Begin S:=S+D[I]; Inc(I); End;
  If S='' Then S:='Divers';
- FirstWord:=Copy(S,1,16);
+ FirstWord:=Copy(S,1,24);
+End;
+
+{ Tri fusion d'une liste chainee de pieces (ordre des descriptions) }
+Function MergeCat(A,B:PCat):PCat;
+Var H,T:PCat;
+Begin
+ H:=Nil; T:=Nil;
+ While(A<>Nil)And(B<>Nil)Do Begin
+  If A^.Desc<=B^.Desc Then Begin
+   If T=Nil Then H:=A Else T^.Next:=A;
+   T:=A; A:=A^.Next;
+  End
+   Else Begin
+    If T=Nil Then H:=B Else T^.Next:=B;
+    T:=B; B:=B^.Next;
+   End;
+ End;
+ If A<>Nil Then Begin If T=Nil Then H:=A Else T^.Next:=A; End
+ Else If B<>Nil Then Begin If T=Nil Then H:=B Else T^.Next:=B; End;
+ MergeCat:=H;
+End;
+
+Function SortCatList(L:PCat):PCat;
+Var Slow,Fast,B:PCat;
+Begin
+ If(L=Nil)Or(L^.Next=Nil)Then Begin SortCatList:=L; Exit; End;
+ Slow:=L; Fast:=L^.Next;
+ While(Fast<>Nil)And(Fast^.Next<>Nil)Do Begin Slow:=Slow^.Next; Fast:=Fast^.Next^.Next; End;
+ B:=Slow^.Next; Slow^.Next:=Nil;
+ SortCatList:=MergeCat(SortCatList(L),SortCatList(B));
 End;
 
 Procedure SortCatalog;
-Var Gap,I,J:Integer; T:PCat;
+Var C:PCat;
 Begin
- Gap:=CatCount Div 2;
- While Gap>0 Do Begin
-  For I:=Gap To CatCount-1 Do Begin
-   T:=Catalog^[I];
-   J:=I;
-   While(J>=Gap)And(Catalog^[J-Gap]^.Desc>T^.Desc)Do Begin
-    Catalog^[J]:=Catalog^[J-Gap];
-    Dec(J,Gap);
-   End;
-   Catalog^[J]:=T;
-  End;
-  Gap:=Gap Div 2;
- End;
+ CatHead:=SortCatList(CatHead);
+ CatTail:=CatHead;
+ While(CatTail<>Nil)And(CatTail^.Next<>Nil)Do CatTail:=CatTail^.Next;
 End;
 
-Procedure BuildCategories;
-Var I,J,K:Integer; W:String; Found:Boolean; T:String[20];
+Function CatNameAt(I:Integer):String;
+Var C:PCategory;
 Begin
- CatN:=1;
- CatNames[0]:=Fx('Toutes les pi\eces');
- For I:=0 To CatCount-1 Do Begin
-  W:=FirstWord(Catalog^[I]^.Desc);
-  Found:=False;
-  For J:=1 To CatN-1 Do If CatNames[J]=W Then Found:=True;
-  If(Not Found)And(CatN<MAXCATG)Then Begin
-   CatNames[CatN]:=W; Inc(CatN);
-  End;
+ C:=CatList;
+ While(C<>Nil)And(I>0)Do Begin C:=C^.Next; Dec(I); End;
+ If C=Nil Then CatNameAt:='' Else CatNameAt:=C^.Name;
+End;
+
+Function CatIndexOf(Const N:String):Integer;
+Var C:PCategory; I:Integer;
+Begin
+ C:=CatList; I:=0;
+ While C<>Nil Do Begin
+  If C^.Name=N Then Begin CatIndexOf:=I; Exit; End;
+  C:=C^.Next; Inc(I);
  End;
- { tri des categories (0 reste en tete) }
- For I:=2 To CatN-1 Do Begin
-  T:=CatNames[I]; J:=I-1;
-  While(J>=1)And(CatNames[J]>T)Do Begin CatNames[J+1]:=CatNames[J]; Dec(J); End;
-  CatNames[J+1]:=T;
+ CatIndexOf:=-1;
+End;
+
+Procedure AddCategory(Const N:String);
+Var C,P,Q:PCategory;
+Begin
+ New(C); C^.Name:=Copy(N,1,24); C^.Next:=Nil;
+ { insertion triee (la categorie 0 reste en tete) }
+ P:=CatList;
+ If P=Nil Then Begin CatList:=C; CatListTail:=C; Inc(CatN); Exit; End;
+ Q:=P;
+ While(Q^.Next<>Nil)And(Q^.Next^.Name<C^.Name)Do Q:=Q^.Next;
+ C^.Next:=Q^.Next; Q^.Next:=C;
+ Inc(CatN);
+End;
+
+{ Categories : 0 !CATEGORY du fichier, sinon premier mot de la description }
+Procedure BuildCategories;
+Var C:PCat; W:String;
+Begin
+ FreeCategories;
+ AddCategory(Fx('Toutes les pi\eces'));
+ C:=CatHead;
+ While C<>Nil Do Begin
+  W:=Copy(C^.Keys,1,Pos(' ',C^.Keys+' ')-1);
+  If W='' Then W:=FirstWord(C^.Desc);
+  If CatIndexOf(W)<0 Then AddCategory(W);
+  C:=C^.Next;
  End;
- For I:=0 To CatCount-1 Do Begin
-  W:=FirstWord(Catalog^[I]^.Desc);
-  K:=CatN-1;
-  For J:=1 To CatN-1 Do If CatNames[J]=W Then Begin K:=J; J:=CatN; End;
-  Catalog^[I]^.Cat:=K;
+ C:=CatHead;
+ While C<>Nil Do Begin
+  W:=Copy(C^.Keys,1,Pos(' ',C^.Keys+' ')-1);
+  If W='' Then W:=FirstWord(C^.Desc);
+  C^.CatI:=CatIndexOf(W);
+  If C^.CatI<0 Then C^.CatI:=0;
+  C:=C^.Next;
  End;
 End;
 
 Procedure RefilterParts;
-Var I:Integer; S,D:String; Ok:Boolean;
+Var C:PCat; S,D:String; Ok:Boolean; F:PFil;
 Begin
- FilN:=0;
+ FreeFiltered;
  S:=UpStr(SearchStr);
- For I:=0 To CatCount-1 Do Begin
+ C:=CatHead;
+ While C<>Nil Do Begin
   Ok:=True;
-  If(CatSel<>0)And(Catalog^[I]^.Cat<>CatSel)Then Ok:=False;
+  If(CatSel<>0)And(C^.CatI<>CatSel)Then Ok:=False;
   If Ok And(S<>'')Then Begin
-   D:=UpStr(Catalog^[I]^.Desc+' '+Catalog^[I]^.FileN);
+   D:=UpStr(C^.Desc+' '+C^.FileN+' '+C^.Keys);
    If Pos(S,D)=0 Then Ok:=False;
   End;
-  If Ok Then Begin Filtered^[FilN]:=I; Inc(FilN); End;
+  If Ok Then Begin
+   New(F); F^.C:=C; F^.Next:=Nil;
+   If FilTail=Nil Then FilHead:=F Else FilTail^.Next:=F;
+   FilTail:=F; Inc(FilN);
+  End;
+  C:=C^.Next;
  End;
  PartTop:=0;
  PartSel:=-1;
 End;
 
-{ Lit la premiere ligne "0 description" d'un fichier .DAT }
-Function ReadDesc(Const Path:String):String;
-Var F:Text; L:String;
+Function FilAt(I:Integer):PCat;
+Var F:PFil;
 Begin
- ReadDesc:='';
+ F:=FilHead;
+ While(F<>Nil)And(I>0)Do Begin F:=F^.Next; Dec(I); End;
+ If F=Nil Then FilAt:=Nil Else FilAt:=F^.C;
+End;
+
+{ Lit l'en-tete d'un fichier .DAT : description, categorie, mots-cles.
+  Retourne False si c'est une sous-piece / primitive / piece obsolete. }
+Function ReadHeader(Const Path:String;Var Desc,Cat,Keys:String):Boolean;
+Var F:Text; L,T:String; N:Integer; Org:String;
+Begin
+ ReadHeader:=False;
+ Desc:=''; Cat:=''; Keys:=''; Org:='';
  {$I-}
  Assign(F,Path); Reset(F);
  {$I+}
  If IOResult<>0 Then Exit;
- {$I-}ReadLn(F,L);{$I+}
- If IOResult=0 Then Begin
-  L:=TrimStr(L);
-  If(Length(L)>=2)And(L[1]='0')Then ReadDesc:=TrimStr(Copy(L,2,255));
+ N:=0;
+ While(Not Eof(F))And(N<30)Do Begin
+  {$I-}ReadLn(F,L);{$I+}
+  If IOResult<>0 Then L:='';
+  L:=TrimStr(L); Inc(N);
+  If(L<>'')And(L[1]<>'0')Then N:=99;
+  If(Length(L)>=1)And(L[1]='0')Then Begin
+   Tok(L);
+   T:=Tok(L);
+   If(Desc='')And(T<>'')And(T[1]<>'!')And(UpStr(T)<>'BFC')And(UpStr(T)<>'NAME:')Then
+    Desc:=TrimStr(T+' '+L)
+   Else If UpStr(T)='!CATEGORY' Then Cat:=TrimStr(L)
+   Else If UpStr(T)='!KEYWORDS' Then Keys:=TrimStr(L)
+   Else If UpStr(T)='!LDRAW_ORG' Then Org:=UpStr(TrimStr(L));
+  End;
+ End;
+ Close(F);
+ If Desc='' Then Exit;
+ If(Desc[1]='~')Or(Desc[1]='=')Or(Desc[1]='_')Then Exit;
+ If(Pos('SUBPART',Org)>0)Or(Pos('PRIMITIVE',Org)>0)Then Exit;
+ If Cat<>'' Then Cat:=Copy(Cat,1,Pos(' ',Cat+' ')-1);
+ ReadHeader:=True;
+End;
+
+Procedure SaveCatalog(Const Dir:String;From:PCat);
+Var F:Text; C:PCat;
+Begin
+ {$I-}
+ Assign(F,Dir+'PARTS.LST'); Rewrite(F);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ C:=From;
+ While C<>Nil Do Begin
+  WriteLn(F,C^.FileN,'|',C^.Desc,'|',C^.Keys);
+  C:=C^.Next;
  End;
  Close(F);
 End;
 
-Procedure SaveCatalog;
-Var F:Text; I:Integer;
+{ Parcourt un repertoire de pieces (dossier PARTS s'il existe) }
+Procedure ScanDirParts(Const Root:String);
+Var SR:SearchRec; D,Cat,Keys,Dir:String; Pass:Integer; Start:Integer;
 Begin
- {$I-}
- Assign(F,LibDir+'PARTS.LST'); Rewrite(F);
- {$I+}
- If IOResult<>0 Then Exit;
- For I:=0 To CatCount-1 Do WriteLn(F,Catalog^[I]^.FileN,'|',Catalog^[I]^.Desc);
- Close(F);
-End;
-
-{ Parcourt le repertoire des pieces et reconstruit l'index }
-Procedure ScanLibrary;
-Var SR:SearchRec; D:String; Pass:Integer;
-Begin
- FreeCatalog;
+ Start:=CatCount;
+ Dir:=SubDirCI(Root,'PARTS');
+ If Dir='' Then Dir:=Root;
  For Pass:=0 To 1 Do Begin
   {$IFDEF FPC}
-  If Pass=0 Then FindFirst(LibDir+'*.DAT',AnyFile,SR) Else FindFirst(LibDir+'*.dat',AnyFile,SR);
+  If Pass=0 Then FindFirst(Dir+'*.DAT',AnyFile,SR) Else FindFirst(Dir+'*.dat',AnyFile,SR);
   {$ELSE}
-  If Pass=0 Then FindFirst(LibDir+'*.DAT',AnyFile,SR) Else DosError:=18;
+  If Pass=0 Then FindFirst(Dir+'*.DAT',AnyFile,SR) Else DosError:=18;
   {$ENDIF}
-  If(Pass=1)And(CatCount>0)Then DosError:=18;
+  If(Pass=1)And(CatCount>Start)Then DosError:=18;
   While DosError=0 Do Begin
-   If(SR.Attr And Directory)=0 Then Begin
-    D:=ReadDesc(LibDir+SR.Name);
-    If D='' Then D:=SR.Name;
-    AddCatalog(UpStr(SR.Name),D);
-   End;
+   If(SR.Attr And Directory)=0 Then
+    If ReadHeader(Dir+SR.Name,D,Cat,Keys)Then AddCatalog(UpStr(SR.Name),D,Cat,Keys);
    FindNext(SR);
   End;
   {$IFDEF FPC}FindClose(SR);{$ENDIF}
  End;
- SortCatalog;
- SaveCatalog;
 End;
 
-Procedure LoadCatalog;
-Var F:Text; L:String; P:Integer;
+{ Charge le catalogue d'une racine : index PARTS.LST ou parcours }
+Procedure LoadCatalogFrom(Const Root:String);
+Var F:Text; L,A,B,C:String; P:Integer; Before:Integer; Last,NewH:PCat;
 Begin
- FreeCatalog;
+ Before:=CatCount;
+ Last:=CatTail;
  {$I-}
- Assign(F,LibDir+'PARTS.LST'); Reset(F);
+ Assign(F,Root+'PARTS.LST'); Reset(F);
  {$I+}
  If IOResult=0 Then Begin
   While Not Eof(F) Do Begin
    {$I-}ReadLn(F,L);{$I+}
    If IOResult<>0 Then L:='';
    P:=Pos('|',L);
-   If P>1 Then AddCatalog(Copy(L,1,P-1),Copy(L,P+1,255));
+   If P>1 Then Begin
+    A:=Copy(L,1,P-1); L:=Copy(L,P+1,255);
+    P:=Pos('|',L);
+    If P>0 Then Begin B:=Copy(L,1,P-1); C:=Copy(L,P+1,255); End
+    Else Begin B:=L; C:=''; End;
+    AddCatalog(A,B,'',C);
+    If(Length(C)>0)And(CatTail<>Nil)Then CatTail^.Keys:=Copy(C,1,48);
+   End;
   End;
   Close(F);
  End;
- If CatCount=0 Then ScanLibrary;
+ If CatCount=Before Then Begin
+  { les pieces de cette racine sont triees et enregistrees a part }
+  If Last=Nil Then Begin NewH:=Nil; End
+  Else Begin NewH:=Last^.Next; End;
+  ScanDirParts(Root);
+  If Last=Nil Then Begin NewH:=CatHead; CatHead:=Nil; CatTail:=Nil; End
+  Else Begin NewH:=Last^.Next; Last^.Next:=Nil; CatTail:=Last; End;
+  CatCount:=Before;
+  NewH:=SortCatList(NewH);
+  SaveCatalog(Root,NewH);
+  { rattache la liste triee }
+  While NewH<>Nil Do Begin
+   If CatTail=Nil Then CatHead:=NewH Else CatTail^.Next:=NewH;
+   CatTail:=NewH; NewH:=NewH^.Next; CatTail^.Next:=Nil; Inc(CatCount);
+  End;
+ End;
+End;
+
+{ Reconstruit les index PARTS.LST (parcours de tous les fichiers .DAT) }
+Procedure RescanLibrary;
+Begin
+ FreeCatalog;
+ ScanDirParts(LibDir); SortCatalog; SaveCatalog(LibDir,CatHead);
+ If AltLibDir<>'' Then Begin
+  FreeCatalog;
+  ScanDirParts(AltLibDir); SortCatalog; SaveCatalog(AltLibDir,CatHead);
+ End;
+End;
+
+Procedure LoadCatalog;
+Begin
+ FreeCatalog;
+ LoadCatalogFrom(LibDir);
+ If AltLibDir<>'' Then LoadCatalogFrom(AltLibDir);
  BuildCategories;
  CatSel:=0; CatTop:=0; SearchStr:='';
  RefilterParts;
 End;
 
 { ====================================================================== }
-{ Modeles, pieces                                                        }
+{ Modeles, pieces, groupes, cameras                                      }
 { ====================================================================== }
 
 Function FindModel(Const N:String):Integer;
@@ -1408,14 +1929,76 @@ Var I:Integer; U:String;
 Begin
  U:=UpStr(N);
  For I:=0 To ModelCount-1 Do
-  If UpStr(Models[I].Name)=U Then Begin FindModel:=I; Exit; End;
+  If(Length(Models[I].Name)=Length(U))And(UpStr(Models[I].Name)=U)Then Begin FindModel:=I; Exit; End;
  FindModel:=-1;
+End;
+
+{ Sous-modele reference par une piece (resultat memorise) ; -1 si c'est une piece }
+Function PieceSub(Q:PPiece):Integer;
+Begin
+ If Q^.SubEpoch<>ModEpoch Then Begin
+  Q^.SubIdx:=FindModel(Q^.Name);
+  Q^.SubEpoch:=ModEpoch;
+ End;
+ PieceSub:=Q^.SubIdx;
 End;
 
 Procedure FreeList(Q:PPiece);
 Var N:PPiece;
 Begin
  While Q<>Nil Do Begin N:=Q^.Next; Dispose(Q); Q:=N; End;
+End;
+
+Procedure FreeGroups;
+Var G,N:PGroup;
+Begin
+ G:=GroupHead;
+ While G<>Nil Do Begin N:=G^.Next; Dispose(G); G:=N; End;
+ GroupHead:=Nil; NextGroupId:=1;
+End;
+
+Procedure FreeCameras;
+Var C,N:PCamera; K,KN:PKey;
+Begin
+ C:=CamHead;
+ While C<>Nil Do Begin N:=C^.Next; Dispose(C); C:=N; End;
+ CamHead:=Nil;
+ K:=KeyHead;
+ While K<>Nil Do Begin KN:=K^.Next; Dispose(K); K:=KN; End;
+ KeyHead:=Nil;
+End;
+
+Function NewGroupId(Const Nm:String):LongInt;
+Var G:PGroup; T:PGroup;
+Begin
+ New(G);
+ G^.Id:=NextGroupId; Inc(NextGroupId);
+ G^.Name:=Copy(Nm,1,40); G^.Next:=Nil;
+ If GroupHead=Nil Then GroupHead:=G
+ Else Begin T:=GroupHead; While T^.Next<>Nil Do T:=T^.Next; T^.Next:=G; End;
+ NewGroupId:=G^.Id;
+End;
+
+Function GroupIdByName(Const Nm:String):LongInt;
+Var G:PGroup;
+Begin
+ G:=GroupHead;
+ While G<>Nil Do Begin
+  If G^.Name=Nm Then Begin GroupIdByName:=G^.Id; Exit; End;
+  G:=G^.Next;
+ End;
+ GroupIdByName:=0;
+End;
+
+Function GroupName(Id:LongInt):String;
+Var G:PGroup;
+Begin
+ G:=GroupHead;
+ While G<>Nil Do Begin
+  If G^.Id=Id Then Begin GroupName:=G^.Name; Exit; End;
+  G:=G^.Next;
+ End;
+ GroupName:='Groupe '+IntStr(Id);
 End;
 
 Procedure ClearAllModels;
@@ -1427,6 +2010,7 @@ Begin
   Models[I].Used:=False; Models[I].Name:=''; Models[I].CurStep:=1;
  End;
  ModelCount:=0; CurModel:=0;
+ Inc(ModEpoch);
 End;
 
 Function NewModel(Const N:String):Integer;
@@ -1439,15 +2023,17 @@ Begin
  Models[ModelCount].Count:=0; Models[ModelCount].CurStep:=1;
  NewModel:=ModelCount;
  Inc(ModelCount);
+ Inc(ModEpoch);
 End;
 
-Function AddPiece(M:Integer;Const Name:String;Col:Integer;Const Mt:TMat;Step:Integer):PPiece;
+Function AddPiece(M:Integer;Const Name:String;Col:LongInt;Const Mt:TMat;Step:Integer):PPiece;
 Var Q:PPiece;
 Begin
  New(Q);
  FillChar(Q^,SizeOf(TPiece),0);
  Q^.Name:=Copy(Name,1,40);
  Q^.Col:=Col; Q^.M:=Mt; Q^.Step:=Step;
+ Q^.SubEpoch:=-1; Q^.Epoch:=-1;
  Q^.Prev:=Models[M].Last;
  If Models[M].Last<>Nil Then Models[M].Last^.Next:=Q Else Models[M].First:=Q;
  Models[M].Last:=Q;
@@ -1481,6 +2067,12 @@ Begin
  PiecePart:=Q^.Part;
 End;
 
+Function PieceVisible(Q:PPiece):Boolean;
+Begin
+ PieceVisible:=(Q^.Step<=Models[CurModel].CurStep)And(Not Q^.Hidden)
+   And((Q^.HideStep=0)Or(Models[CurModel].CurStep<Q^.HideStep));
+End;
+
 { Boite englobante d'un modele transforme par Xf }
 Procedure ModelBounds(M:Integer;Const Xf:TMat;Body,AllSteps:Boolean;Var Mn,Mx:TVec;Depth:Integer);
 Var Q:PPiece; T:TMat; S:Integer; P:PPart;
@@ -1488,9 +2080,10 @@ Begin
  If Depth>6 Then Exit;
  Q:=Models[M].First;
  While Q<>Nil Do Begin
-  If(AllSteps Or((Q^.Step<=Models[M].CurStep)And(Not Q^.Hidden)))Then Begin
+  If AllSteps Or((Q^.Step<=Models[M].CurStep)And(Not Q^.Hidden)
+    And((Q^.HideStep=0)Or(Models[M].CurStep<Q^.HideStep)))Then Begin
    MatMul(Xf,Q^.M,T);
-   S:=FindModel(Q^.Name);
+   S:=PieceSub(Q);
    If S>=0 Then ModelBounds(S,T,Body,True,Mn,Mx,Depth+1)
    Else Begin
     P:=PiecePart(Q);
@@ -1506,10 +2099,10 @@ Begin
 End;
 
 Procedure PieceBounds(Q:PPiece;Body:Boolean;Var Mn,Mx:TVec);
-Var S:Integer; P:PPart; I:TMat;
+Var S:Integer; P:PPart;
 Begin
  BoxEmpty(Mn,Mx);
- S:=FindModel(Q^.Name);
+ S:=PieceSub(Q);
  If S>=0 Then ModelBounds(S,Q^.M,Body,True,Mn,Mx,1)
  Else Begin
   P:=PiecePart(Q);
@@ -1548,32 +2141,26 @@ Begin
  While Q<>Nil Do Begin Q^.Sel:=False; Q:=Q^.Next; End;
 End;
 
-Function PieceVisible(Q:PPiece):Boolean;
-Begin
- PieceVisible:=(Q^.Step<=Models[CurModel].CurStep)And(Not Q^.Hidden);
-End;
-
-Function PieceDesc(Q:PPiece):String;
-Var I:Integer; U:String;
-Begin
- PieceDesc:=Q^.Name;
- If FindModel(Q^.Name)>=0 Then Begin PieceDesc:=Q^.Name; Exit; End;
- U:=UpStr(Q^.Name);
- For I:=0 To CatCount-1 Do
-  If Catalog^[I]^.FileN=U Then Begin PieceDesc:=Catalog^[I]^.Desc; Exit; End;
-End;
-
 Function PartDescByName(Const Nm:String):String;
-Var I:Integer; U:String;
+Var C:PCat; U:String;
 Begin
  PartDescByName:=Nm;
  U:=UpStr(Nm);
- For I:=0 To CatCount-1 Do
-  If Catalog^[I]^.FileN=U Then Begin PartDescByName:=Catalog^[I]^.Desc; Exit; End;
+ C:=CatHead;
+ While C<>Nil Do Begin
+  If C^.FileN=U Then Begin PartDescByName:=C^.Desc; Exit; End;
+  C:=C^.Next;
+ End;
+End;
+
+Function PieceDesc(Q:PPiece):String;
+Begin
+ If PieceSub(Q)>=0 Then PieceDesc:=Q^.Name
+ Else PieceDesc:=PartDescByName(Q^.Name);
 End;
 
 { ====================================================================== }
-{ Annuler / retablir                                                     }
+{ Annuler / retablir (piles chainees)                                    }
 { ====================================================================== }
 
 Function CopyPiece(Q:PPiece):PPiece;
@@ -1581,7 +2168,7 @@ Var N:PPiece;
 Begin
  New(N);
  N^:=Q^;
- N^.Next:=Nil; N^.Prev:=Nil; N^.Part:=Nil; N^.Epoch:=-1;
+ N^.Next:=Nil; N^.Prev:=Nil; N^.Part:=Nil; N^.Epoch:=-1; N^.SubEpoch:=-1;
  CopyPiece:=N;
 End;
 
@@ -1600,69 +2187,84 @@ Begin
 End;
 
 Function MakeSnap:PSnap;
-Var S:PSnap; I:Integer;
+Var S:PSnap; I:Integer; M,T:PSnapMod;
 Begin
  MakeSnap:=Nil;
  If MaxAvail<LongInt(SizeOf(TSnap))+30000 Then Exit;
  New(S);
- S^.NMod:=ModelCount; S^.Cur:=CurModel; S^.Col:=CurColor;
- For I:=0 To MAXMOD-1 Do Begin
-  S^.List[I]:=Nil; S^.Step[I]:=1; S^.Name[I]:='';
- End;
+ S^.NMod:=ModelCount; S^.Cur:=CurModel; S^.Col:=CurColor; S^.Next:=Nil; S^.Mods:=Nil;
+ T:=Nil;
  For I:=0 To ModelCount-1 Do Begin
-  S^.List[I]:=CopyList(Models[I].First);
-  S^.Step[I]:=Models[I].CurStep;
-  S^.Name[I]:=Models[I].Name;
+  New(M);
+  M^.Name:=Models[I].Name; M^.Step:=Models[I].CurStep;
+  M^.List:=CopyList(Models[I].First); M^.Next:=Nil;
+  If T=Nil Then S^.Mods:=M Else T^.Next:=M;
+  T:=M;
  End;
  MakeSnap:=S;
 End;
 
 Procedure FreeSnap(S:PSnap);
-Var I:Integer;
+Var M,N:PSnapMod;
 Begin
  If S=Nil Then Exit;
- For I:=0 To MAXMOD-1 Do FreeList(S^.List[I]);
+ M:=S^.Mods;
+ While M<>Nil Do Begin N:=M^.Next; FreeList(M^.List); Dispose(M); M:=N; End;
  Dispose(S);
 End;
 
 Procedure ApplySnap(S:PSnap);
-Var I:Integer; Q:PPiece;
+Var I:Integer; Q:PPiece; M,N:PSnapMod;
 Begin
  ClearAllModels;
  ModelCount:=S^.NMod; CurModel:=S^.Cur;
  If CurModel>=ModelCount Then CurModel:=0;
- For I:=0 To ModelCount-1 Do Begin
+ M:=S^.Mods; I:=0;
+ While(M<>Nil)And(I<ModelCount)Do Begin
+  N:=M^.Next;
   Models[I].Used:=True;
-  Models[I].Name:=S^.Name[I];
-  Models[I].First:=S^.List[I];
-  Models[I].CurStep:=S^.Step[I];
+  Models[I].Name:=M^.Name;
+  Models[I].First:=M^.List;
+  Models[I].CurStep:=M^.Step;
   Models[I].Count:=0;
   Models[I].Last:=Nil;
-  Q:=S^.List[I];
+  Q:=M^.List;
   While Q<>Nil Do Begin Inc(Models[I].Count); Models[I].Last:=Q; Q:=Q^.Next; End;
-  S^.List[I]:=Nil;
+  Dispose(M);
+  M:=N; Inc(I);
  End;
  Dispose(S);
+ Inc(ModEpoch);
+End;
+
+Procedure TrimStack(Var Top:PSnap;Var N:Integer);
+Var P,Q:PSnap;
+Begin
+ While N>UNDO_MAX Do Begin
+  P:=Top;
+  If(P=Nil)Or(P^.Next=Nil)Then Begin N:=UNDO_MAX; Exit; End;
+  While P^.Next^.Next<>Nil Do P:=P^.Next;
+  Q:=P^.Next; P^.Next:=Nil;
+  FreeSnap(Q);
+  Dec(N);
+ End;
 End;
 
 Procedure ClearRedo;
-Var I:Integer;
+Var S,N:PSnap;
 Begin
- For I:=0 To RedoN-1 Do FreeSnap(RedoS[I]);
- RedoN:=0;
+ S:=RedoTop;
+ While S<>Nil Do Begin N:=S^.Next; FreeSnap(S); S:=N; End;
+ RedoTop:=Nil; RedoN:=0;
 End;
 
 Procedure PushUndo;
-Var S:PSnap; I:Integer;
+Var S:PSnap;
 Begin
  S:=MakeSnap;
  If S=Nil Then Exit;
- If UndoN>=UNDO_MAX Then Begin
-  FreeSnap(UndoS[0]);
-  For I:=1 To UndoN-1 Do UndoS[I-1]:=UndoS[I];
-  Dec(UndoN);
- End;
- UndoS[UndoN]:=S; Inc(UndoN);
+ S^.Next:=UndoTop; UndoTop:=S; Inc(UndoN);
+ TrimStack(UndoTop,UndoN);
  ClearRedo;
  Modified:=True;
 End;
@@ -1670,18 +2272,11 @@ End;
 Procedure DoUndo;
 Var S,C:PSnap;
 Begin
- If UndoN=0 Then Exit;
+ If UndoTop=Nil Then Exit;
  C:=MakeSnap;
- If C<>Nil Then Begin
-  If RedoN>=UNDO_MAX Then Begin
-   FreeSnap(RedoS[0]);
-   Move(RedoS[1],RedoS[0],(UNDO_MAX-1)*SizeOf(PSnap));
-   Dec(RedoN);
-  End;
-  RedoS[RedoN]:=C; Inc(RedoN);
- End;
- Dec(UndoN);
- S:=UndoS[UndoN];
+ If C<>Nil Then Begin C^.Next:=RedoTop; RedoTop:=C; Inc(RedoN); TrimStack(RedoTop,RedoN); End;
+ S:=UndoTop; UndoTop:=S^.Next; Dec(UndoN);
+ S^.Next:=Nil;
  ApplySnap(S);
  Modified:=True;
 End;
@@ -1689,27 +2284,21 @@ End;
 Procedure DoRedo;
 Var S,C:PSnap;
 Begin
- If RedoN=0 Then Exit;
+ If RedoTop=Nil Then Exit;
  C:=MakeSnap;
- If C<>Nil Then Begin
-  If UndoN>=UNDO_MAX Then Begin
-   FreeSnap(UndoS[0]);
-   Move(UndoS[1],UndoS[0],(UNDO_MAX-1)*SizeOf(PSnap));
-   Dec(UndoN);
-  End;
-  UndoS[UndoN]:=C; Inc(UndoN);
- End;
- Dec(RedoN);
- S:=RedoS[RedoN];
+ If C<>Nil Then Begin C^.Next:=UndoTop; UndoTop:=C; Inc(UndoN); TrimStack(UndoTop,UndoN); End;
+ S:=RedoTop; RedoTop:=S^.Next; Dec(RedoN);
+ S^.Next:=Nil;
  ApplySnap(S);
  Modified:=True;
 End;
 
 Procedure ClearHistory;
-Var I:Integer;
+Var S,N:PSnap;
 Begin
- For I:=0 To UndoN-1 Do FreeSnap(UndoS[I]);
- UndoN:=0;
+ S:=UndoTop;
+ While S<>Nil Do Begin N:=S^.Next; FreeSnap(S); S:=N; End;
+ UndoTop:=Nil; UndoN:=0;
  ClearRedo;
 End;
 
@@ -1722,6 +2311,8 @@ Var I:Integer;
 Begin
  ClearHistory;
  ClearAllModels;
+ FreeGroups;
+ FreeCameras;
  I:=NewModel('MODELE.LDR');
  CurModel:=0;
  DocFile:='';
@@ -1737,8 +2328,34 @@ Begin
  PieceLine:=S+' '+Q^.Name;
 End;
 
+{ Convertit position / cible / vecteur haut en angles de vue }
+Procedure CameraFromLook(Const Pos,Tgt:TVec;Var Yaw,Pitch,Dist:Real);
+Var D:TVec;
+Begin
+ D.X:=Pos.X-Tgt.X; D.Y:=Pos.Y-Tgt.Y; D.Z:=Pos.Z-Tgt.Z;
+ Dist:=Sqrt(D.X*D.X+D.Y*D.Y+D.Z*D.Z);
+ If Dist<1 Then Dist:=1;
+ Pitch:=ArcSin(-D.Y/Dist)*180/Pi;
+ Yaw:=ATan2(D.X,D.Z)*180/Pi;
+ If Yaw<0 Then Yaw:=Yaw+360;
+End;
+
+Procedure LookFromCamera(Yaw,Pitch,Dist:Real;Const Tgt:TVec;Var Pos:TVec);
+Var Y,P:Real;
+Begin
+ Y:=Yaw*Pi/180; P:=Pitch*Pi/180;
+ Pos.X:=Tgt.X+Cos(P)*Sin(Y)*Dist; Pos.Y:=Tgt.Y-Sin(P)*Dist; Pos.Z:=Tgt.Z+Cos(P)*Cos(Y)*Dist;
+End;
+
 Function SaveDoc(Const Path:String):Boolean;
-Var F:Text; I,S,MS:Integer; Q:PPiece; Multi:Boolean;
+Var F:Text; I,S,MS:Integer; Q,R:PPiece; Multi:Boolean; C:PCamera; K:PKey; Pos:TVec;
+ Procedure PieceMeta(P:PPiece);
+ Begin
+  If P^.Hidden Then WriteLn(F,'0 !LEOCAD PIECE HIDDEN');
+  If P^.HideStep>0 Then WriteLn(F,'0 !LEOCAD PIECE STEP_HIDE ',P^.HideStep);
+  If P^.Locked Then WriteLn(F,'0 !LEOCAD PIECE LOCKED');
+  WriteLn(F,PieceLine(P));
+ End;
 Begin
  SaveDoc:=False;
  {$I-}
@@ -1747,19 +2364,47 @@ Begin
  If IOResult<>0 Then Exit;
  Multi:=(ExtOf(Path)='.MPD')Or(ModelCount>1);
  For I:=0 To ModelCount-1 Do Begin
-  If(I=0)And(Not Multi)Then Begin
-   WriteLn(F,'0 ',BaseOf(Path));
-  End
-   Else Begin
-    WriteLn(F,'0 FILE ',Models[I].Name);
-   End;
+  If(I=0)And(Not Multi)Then WriteLn(F,'0 ',BaseOf(Path))
+  Else WriteLn(F,'0 FILE ',Models[I].Name);
   WriteLn(F,'0 Name: ',Models[I].Name);
   WriteLn(F,'0 Author: LEOCAD');
+  If I=0 Then Begin
+   C:=CamHead;
+   While C<>Nil Do Begin
+    LookFromCamera(C^.Yaw,C^.Pitch,C^.Dist,C^.Tgt,Pos);
+    Write(F,'0 !LEOCAD CAMERA FOV ',FmtNum(C^.Fov),' ZNEAR 25 ZFAR 50000 POSITION ',FmtNum(Pos.X),' ',FmtNum(Pos.Y),' ',FmtNum(Pos.Z),
+     ' TARGET_POSITION ',FmtNum(C^.Tgt.X),' ',FmtNum(C^.Tgt.Y),' ',FmtNum(C^.Tgt.Z),' UP_VECTOR 0 -1 0');
+    If Not C^.Persp Then Write(F,' ORTHOGRAPHIC ZOOM ',FmtNum(C^.Zoom*1000));
+    WriteLn(F,' NAME ',C^.Name);
+    C:=C^.Next;
+   End;
+   K:=KeyHead;
+   While K<>Nil Do Begin
+    WriteLn(F,'0 !LEOCAD ANIMATION KEY ',K^.Time,' ',FmtNum(K^.Yaw),' ',FmtNum(K^.Pitch),' ',FmtNum(K^.Dist),' ',
+     FmtNum(K^.Zoom*1000),' ',FmtNum(K^.Fov),' ',Ord(K^.Persp),' ',K^.Step,' ',FmtNum(K^.Tgt.X),' ',FmtNum(K^.Tgt.Y),' ',FmtNum(K^.Tgt.Z));
+    K:=K^.Next;
+   End;
+  End;
   MS:=MaxStep(I);
   For S:=1 To MS Do Begin
    Q:=Models[I].First;
+   While Q<>Nil Do Begin Q^.Mark:=False; Q:=Q^.Next; End;
+   Q:=Models[I].First;
    While Q<>Nil Do Begin
-    If Q^.Step=S Then WriteLn(F,PieceLine(Q));
+    If(Q^.Step=S)And(Q^.Group=0)Then PieceMeta(Q);
+    Q:=Q^.Next;
+   End;
+   Q:=Models[I].First;
+   While Q<>Nil Do Begin
+    If(Q^.Step=S)And(Q^.Group<>0)And(Not Q^.Mark)Then Begin
+     WriteLn(F,'0 !LEOCAD GROUP BEGIN ',GroupName(Q^.Group));
+     R:=Q;
+     While R<>Nil Do Begin
+      If(R^.Step=S)And(R^.Group=Q^.Group)Then Begin PieceMeta(R); R^.Mark:=True; End;
+      R:=R^.Next;
+     End;
+     WriteLn(F,'0 !LEOCAD GROUP END');
+    End;
     Q:=Q^.Next;
    End;
    WriteLn(F,'0 STEP');
@@ -1778,6 +2423,14 @@ Var
  Mt:TMat;
  V,Cl:Real;
  Seen,Ok:Boolean;
+ CurGroup:LongInt;
+ PHidden,PLocked:Boolean; PHide:Integer;
+ Cam:PCamera; Key:PKey; Pos,Up:TVec; Orth:Boolean; Q:PPiece;
+ Function RN:Real;
+ Var X:Real;
+ Begin
+  If NumTok(Line,X)Then RN:=X Else RN:=0;
+ End;
 Begin
  LoadDoc:=False;
  {$I-}
@@ -1786,8 +2439,10 @@ Begin
  If IOResult<>0 Then Exit;
  ClearHistory;
  ClearAllModels;
+ FreeGroups;
+ FreeCameras;
  M:=NewModel(BaseOf(Path));
- Step:=1; Seen:=False;
+ Step:=1; Seen:=False; CurGroup:=0; PHidden:=False; PLocked:=False; PHide:=0;
  While Not Eof(F) Do Begin
   {$I-}ReadLn(F,Line);{$I+}
   If IOResult<>0 Then Line:='';
@@ -1798,14 +2453,69 @@ Begin
     T2:=UpStr(Tok(Line));
     If T2='FILE' Then Begin
      Nm:=TrimStr(Line);
-     If(Not Seen)And(Models[M].Count=0)Then Models[M].Name:=Copy(Nm,1,40)
+     If(Not Seen)And(Models[M].Count=0)Then Begin Models[M].Name:=Copy(Nm,1,40); Inc(ModEpoch); End
      Else Begin
       I:=NewModel(Nm);
       If I>=0 Then M:=I;
      End;
      Seen:=True; Step:=1;
     End
-     Else If T2='STEP' Then Inc(Step);
+     Else If T2='STEP' Then Inc(Step)
+     Else If T2='!LEOCAD' Then Begin
+      T2:=UpStr(Tok(Line));
+      If T2='GROUP' Then Begin
+       T2:=UpStr(Tok(Line));
+       If T2='BEGIN' Then Begin
+        Nm:=TrimStr(Line);
+        CurGroup:=GroupIdByName(Nm);
+        If CurGroup=0 Then CurGroup:=NewGroupId(Nm);
+       End
+        Else If T2='END' Then CurGroup:=0;
+      End
+       Else If T2='PIECE' Then Begin
+        T2:=UpStr(Tok(Line));
+        If T2='HIDDEN' Then PHidden:=True
+        Else If T2='LOCKED' Then PLocked:=True
+        Else If T2='STEP_HIDE' Then PHide:=Round(RN);
+       End
+       Else If T2='CAMERA' Then Begin
+        New(Cam);
+        FillChar(Cam^,SizeOf(TCamera),0);
+        Cam^.Persp:=True; Cam^.Fov:=30; Cam^.Zoom:=1; Cam^.Name:='Camera';
+        VSet(Pos,0,-100,-100); VSet(Cam^.Tgt,0,0,0); VSet(Up,0,-1,0);
+        Orth:=False;
+        Repeat
+         T2:=UpStr(Tok(Line));
+         If T2='FOV' Then Cam^.Fov:=RN
+         Else If T2='POSITION' Then Begin Pos.X:=RN; Pos.Y:=RN; Pos.Z:=RN; End
+         Else If T2='TARGET_POSITION' Then Begin Cam^.Tgt.X:=RN; Cam^.Tgt.Y:=RN; Cam^.Tgt.Z:=RN; End
+         Else If T2='UP_VECTOR' Then Begin Up.X:=RN; Up.Y:=RN; Up.Z:=RN; End
+         Else If T2='ZOOM' Then Cam^.Zoom:=RN/1000
+         Else If T2='ORTHOGRAPHIC' Then Cam^.Persp:=False
+         Else If T2='NAME' Then Begin Cam^.Name:=Copy(TrimStr(Line),1,30); Line:=''; End;
+        Until T2='';
+        CameraFromLook(Pos,Cam^.Tgt,Cam^.Yaw,Cam^.Pitch,Cam^.Dist);
+        If Cam^.Zoom<=0 Then Cam^.Zoom:=1;
+        If Cam^.Fov<5 Then Cam^.Fov:=30;
+        Cam^.Next:=Nil;
+        If CamHead=Nil Then CamHead:=Cam
+        Else Begin
+         Q:=Nil;
+         Cam^.Next:=CamHead; CamHead:=Cam;
+        End;
+       End
+       Else If T2='ANIMATION' Then Begin
+        T2:=UpStr(Tok(Line));
+        If T2='KEY' Then Begin
+         New(Key);
+         FillChar(Key^,SizeOf(TKey),0);
+         Key^.Time:=Round(RN); Key^.Yaw:=RN; Key^.Pitch:=RN; Key^.Dist:=RN; Key^.Zoom:=RN/1000;
+         Key^.Fov:=RN; Key^.Persp:=RN>0; Key^.Step:=Round(RN);
+         Key^.Tgt.X:=RN; Key^.Tgt.Y:=RN; Key^.Tgt.Z:=RN;
+         Key^.Next:=KeyHead; KeyHead:=Key;
+        End;
+       End;
+     End;
    End
     Else If T='1' Then Begin
      Ok:=NumTok(Line,Cl);
@@ -1813,7 +2523,11 @@ Begin
      For I:=0 To 2 Do
       Ok:=Ok And NumTok(Line,Mt.R[I,0]) And NumTok(Line,Mt.R[I,1]) And NumTok(Line,Mt.R[I,2]);
      Nm:=TrimStr(Line);
-     If Ok And(Nm<>'')Then AddPiece(M,Nm,Round(Cl),Mt,Step);
+     If Ok And(Nm<>'')Then Begin
+      Q:=AddPiece(M,Nm,Round(Cl),Mt,Step);
+      Q^.Group:=CurGroup; Q^.Hidden:=PHidden; Q^.Locked:=PLocked; Q^.HideStep:=PHide;
+     End;
+     PHidden:=False; PLocked:=False; PHide:=0;
     End;
   End;
  End;
@@ -1839,37 +2553,52 @@ Var
  GhostPiece:PPiece;
  PolyOverflow:Boolean;
  GroundY:Real;
+ PolyTail:PPoly;
 
-Function PolyAt(I:Integer):PPoly;
+{ La liste des polygones est recyclee : reservoir PolyPool }
+Procedure PolyReset;
 Begin
- PolyAt:=@PolyBlk[I Shr POLYSH]^[I And (PBSIZE-1)];
-End;
-
-Function NewPoly:PPoly;
-Var B:Integer;
-Begin
- NewPoly:=Nil;
- If PolyN>=PolyMax Then Begin PolyOverflow:=True; Exit; End;
- B:=PolyN Shr POLYSH;
- If PolyBlk[B]=Nil Then Begin
-  If MaxAvail<LongInt(SizeOf(TPolyBlk))+24000 Then Begin
-   PolyMax:=PolyN; PolyOverflow:=True; Exit;
-  End;
-  New(PolyBlk[B]);
+ If PolyHead<>Nil Then Begin
+  PolyTail:=PolyHead;
+  While PolyTail^.Next<>Nil Do PolyTail:=PolyTail^.Next;
+  PolyTail^.Next:=PolyPool;
+  PolyPool:=PolyHead;
+  PolyHead:=Nil;
  End;
- NewPoly:=PolyAt(PolyN);
- Inc(PolyN);
-End;
-
-Procedure FreePolyBlocks;
-Var I:Integer;
-Begin
- For I:=0 To MAXBLK-1 Do If PolyBlk[I]<>Nil Then Begin Dispose(PolyBlk[I]); PolyBlk[I]:=Nil; End;
+ PolyTail:=Nil;
  PolyN:=0;
 End;
 
+Function NewPoly:PPoly;
+Var P:PPoly;
+Begin
+ NewPoly:=Nil;
+ If PolyN>=PolyMax Then Begin PolyOverflow:=True; Exit; End;
+ If PolyPool<>Nil Then Begin P:=PolyPool; PolyPool:=P^.Next; End
+ Else Begin
+  If MaxAvail<LongInt(SizeOf(TPoly))+20000 Then Begin
+   PolyMax:=PolyN; PolyOverflow:=True; Exit;
+  End;
+  New(P);
+ End;
+ P^.Next:=Nil;
+ If PolyTail=Nil Then PolyHead:=P Else PolyTail^.Next:=P;
+ PolyTail:=P;
+ Inc(PolyN);
+ NewPoly:=P;
+End;
+
+Procedure FreePolyBlocks;
+Var P,N:PPoly;
+Begin
+ PolyReset;
+ P:=PolyPool;
+ While P<>Nil Do Begin N:=P^.Next; Dispose(P); P:=N; End;
+ PolyPool:=Nil;
+End;
+
 Procedure SetupCamera(Var V:TView);
-Var Dir,F,U,R,Up:TVec; PY,YW,D:Real; W,H:Integer;
+Var Dir,F,U,R,Up:TVec; PY,YW,D,T:Real; W,H:Integer;
 Begin
  W:=V.X2-V.X1+1; H:=V.Y2-V.Y1+1;
  YW:=V.Yaw*Pi/180; PY:=V.Pitch*Pi/180;
@@ -1886,7 +2615,9 @@ Begin
  CamM.R[2,0]:=F.X; CamM.R[2,1]:=F.Y; CamM.R[2,2]:=F.Z;
  CamM.T.X:=-VDot(R,CamPos); CamM.T.Y:=-VDot(U,CamPos); CamM.T.Z:=-VDot(F,CamPos);
  CamPersp:=V.Persp;
- CamFocal:=(H/2)/0.26795;
+ T:=Sin(V.Fov*Pi/360)/Cos(V.Fov*Pi/360);
+ If T<0.05 Then T:=0.05;
+ CamFocal:=(H/2)/T;
  CamOrtho:=V.Zoom;
  CamCX:=W/2; CamCY:=H/2;
 End;
@@ -1906,21 +2637,22 @@ Begin
  SX:=Round(X); SY:=Round(Y);
 End;
 
-Function EdgeColor(Code:Integer;Sel:Boolean):Integer;
+Function EdgeColor(Code:LongInt;Sel:Boolean):Integer;
+Var Tr:Boolean;
 Begin
  If Sel Then Begin EdgeColor:=12; Exit; End;
- If Code=24 Then Begin
+ If(Code=24)Or(Code=16)Then Begin
   EdgeColor:=0;
  End
-  Else EdgeColor:=ShadeMap[ColIdx(Code),1];
+  Else EdgeColor:=GrpIdx[ColGroup(Code,Tr),1];
 End;
 
-Procedure AddLine(Const A,B:TVec;Code:Integer;Sel:Boolean;Owner:Integer);
-Var Pl:PPoly; PA,PB:TVec; T:Real; Z:Real;
+Procedure ClipNear(Var PA,PB:TVec;Var Ok:Boolean);
+Var T:Real;
 Begin
- PA:=A; PB:=B;
+ Ok:=True;
  If CamPersp Then Begin
-  If(PA.Z<NEARZ)And(PB.Z<NEARZ)Then Exit;
+  If(PA.Z<NEARZ)And(PB.Z<NEARZ)Then Begin Ok:=False; Exit; End;
   If PA.Z<NEARZ Then Begin
    T:=(NEARZ-PA.Z)/(PB.Z-PA.Z);
    PA.X:=PA.X+(PB.X-PA.X)*T; PA.Y:=PA.Y+(PB.Y-PA.Y)*T; PA.Z:=NEARZ;
@@ -1930,6 +2662,14 @@ Begin
    PB.X:=PB.X+(PA.X-PB.X)*T; PB.Y:=PB.Y+(PA.Y-PB.Y)*T; PB.Z:=NEARZ;
   End;
  End;
+End;
+
+Procedure AddLine(Const A,B:TVec;Code:LongInt;Sel:Boolean;Owner:Integer);
+Var Pl:PPoly; PA,PB:TVec; Z:Real; Ok:Boolean;
+Begin
+ PA:=A; PB:=B;
+ ClipNear(PA,PB,Ok);
+ If Not Ok Then Exit;
  Pl:=NewPoly;
  If Pl=Nil Then Exit;
  Proj(PA,Pl^.X[0],Pl^.Y[0]);
@@ -1941,12 +2681,28 @@ Begin
  If Sel Then Pl^.Z:=Pl^.Z-6;
 End;
 
+{ Ligne optionnelle (type 5) : tracee seulement si les deux points de controle
+  sont du meme cote de la ligne a l'ecran }
+Procedure AddOptLine(Const P:Array Of TVec;Code:LongInt;Sel:Boolean;Owner:Integer);
+Var X:Array[0..3] Of Integer; Y:Array[0..3] Of Integer; I:Integer; S1,S2:LongInt; A,B:TVec; Ok:Boolean;
+Begin
+ If CamPersp Then
+  For I:=0 To 3 Do If P[I].Z<NEARZ Then Exit;
+ For I:=0 To 3 Do Proj(P[I],X[I],Y[I]);
+ S1:=LongInt(X[1]-X[0])*(Y[2]-Y[0])-LongInt(Y[1]-Y[0])*(X[2]-X[0]);
+ S2:=LongInt(X[1]-X[0])*(Y[3]-Y[0])-LongInt(Y[1]-Y[0])*(X[3]-X[0]);
+ If(S1>0)And(S2>0)Or(S1<0)And(S2<0)Then Begin
+  A:=P[0]; B:=P[1];
+  AddLine(A,B,Code,Sel,Owner);
+ End;
+End;
+
 { Ajoute la face FP[0..N-1] (espace vue) }
-Procedure AddFace(N:Integer;Cull:Byte;Sg:Integer;Code:Integer;Owner:Integer);
+Procedure AddFace(N:Integer;Cull:Byte;Sg:Integer;Code:LongInt;Owner:Integer);
 Var
- I,S,CI:Integer;
+ I,S,G,Sh:Integer;
  NX,NY,NZ,EX,EY,EZ,GX,GY,GZ,D,L,Lm,ZM:Real;
- Pl:PPoly;
+ Pl:PPoly; Tr:Boolean;
 Begin
  If CamPersp Then
   For I:=0 To N-1 Do If FP[I].Z<NEARZ Then Exit;
@@ -1967,9 +2723,9 @@ Begin
  If L<EPS Then Exit;
  Lm:=S*(NX*LX+NY*LY+NZ*LZ)/L;
  If Lm<0 Then Lm:=0;
- CI:=ColIdx(Code);
- S:=Trunc((0.10+0.90*Lm)*NSHADE*0.999);
- If S<0 Then S:=0; If S>=NSHADE Then S:=NSHADE-1;
+ G:=ColGroup(Code,Tr);
+ Sh:=Trunc((0.10+0.90*Lm)*NSHADE*0.999);
+ If Sh<0 Then Sh:=0; If Sh>=NSHADE Then Sh:=NSHADE-1;
  Pl:=NewPoly;
  If Pl=Nil Then Exit;
  ZM:=FP[0].Z;
@@ -1978,20 +2734,19 @@ Begin
   If FP[I].Z>ZM Then ZM:=FP[I].Z;
  End;
  Pl^.Z:=Round(ZM*4);
- Pl^.Col:=ShadeMap[CI,S];
+ Pl^.Col:=GrpIdx[G,Sh];
  Pl^.N:=N;
  Pl^.Fl:=0;
- If ColTr[CI]Then Pl^.Fl:=1;
+ If Tr Then Pl^.Fl:=1;
  If WireOn Then Pl^.Fl:=Pl^.Fl Or 4;
  Pl^.Owner:=Owner;
 End;
 
-Procedure DrawStud(Const M:TMat;Const Q:PPrim;Code:Integer;Sg:Integer;Owner:Integer;Sel:Boolean);
+Procedure DrawStud(Const M:TMat;Const Q:PPrim;Code:LongInt;Sg:Integer;Owner:Integer;Sel:Boolean);
 Var X:TMat; I,J:Integer; T,B:Array[0..7] Of TVec; V:TVec;
 Begin
  MatMul(M,Q^.M,X);
  If Q^.Cull=1 Then Sg:=-Sg;
- If Q^.Inv Then Sg:=-Sg;
  If StudEff=2 Then Begin
   VSet(V,-5,-4,-5); MatApply(X,V,FP[0]);
   VSet(V,5,-4,-5); MatApply(X,V,FP[1]);
@@ -2020,49 +2775,46 @@ Begin
   For I:=0 To 7 Do AddLine(T[I],T[(I+1) And 7],24,Sel,Owner);
 End;
 
-Procedure RenderPart(P:PPart;Const M:TMat;Code:Integer;Sg:Integer;Owner:Integer;Sel:Boolean;Depth:Integer);
-Var Q:PPrim; M2:TMat; C2,S2,I,N,PN:Integer; A,B:TVec;
+{ Rendu d'une piece aplatie : plus aucune recursion de sous-fichiers }
+Procedure RenderPart(P:PPart;Const M:TMat;Code:LongInt;Sg:Integer;Owner:Integer;Sel:Boolean);
+Var Q:PPrim; C2:LongInt; I,N,PN:Integer; A,B:TVec; O:Array[0..3] Of TVec;
 Begin
- Q:=P^.Prims;
+ If Not P^.Flattened Then FlattenPart(P);
+ Q:=P^.Flat;
  While Q<>Nil Do Begin
+  C2:=Q^.Col; If C2=16 Then C2:=Code;
   Case Q^.Kind Of
-   PK_REF:If(Q^.Ref<>Nil)And(Depth<9)Then Begin
-    MatMul(M,Q^.M,M2);
-    C2:=Q^.Col; If(C2=16)Or(C2=24)Then C2:=Code;
-    S2:=Sg;
-    If Q^.Cull=1 Then S2:=-S2;
-    If Q^.Inv Then S2:=-S2;
-    RenderPart(Q^.Ref,M2,C2,S2,Owner,Sel,Depth+1);
-   End;
-   PK_STUD:If StudEff<3 Then DrawStud(M,Q,Code,Sg,Owner,Sel);
+   PK_STUD:If StudEff<3 Then DrawStud(M,Q,C2,Sg,Owner,Sel);
    PK_LINE:If EdgesOn Then Begin
     MatApply(M,Q^.P[0],A); MatApply(M,Q^.P[1],B);
-    AddLine(A,B,Q^.Col,Sel,Owner);
+    AddLine(A,B,C2,Sel,Owner);
+   End;
+   PK_OPT:If EdgesOn Then Begin
+    For I:=0 To 3 Do MatApply(M,Q^.P[I],O[I]);
+    AddOptLine(O,C2,Sel,Owner);
    End;
    PK_TRI,PK_QUAD:Begin
     N:=Q^.Kind;
     For I:=0 To N-1 Do MatApply(M,Q^.P[I],FP[I]);
-    C2:=Q^.Col; If(C2=16)Or(C2=24)Then C2:=Code;
     PN:=PolyN;
     AddFace(N,Q^.Cull,Sg,C2,Owner);
-    If(Q^.Col<>16)And(PolyN>PN)Then
-     PolyAt(PolyN-1)^.Z:=PolyAt(PolyN-1)^.Z-10;
+    If(Q^.Col<>16)And(PolyN>PN)And(PolyTail<>Nil)Then PolyTail^.Z:=PolyTail^.Z-10;
    End;
   End;
   Q:=Q^.Next;
  End;
 End;
 
-Procedure RenderPiece(Q:PPiece;Const Parent:TMat;Sg0,PCode,Owner:Integer;Sel:Boolean;Depth:Integer);
-Var T:TMat; Sg,C,S:Integer; P:PPart; Q2:PPiece;
+Procedure RenderPiece(Q:PPiece;Const Parent:TMat;Sg0:Integer;PCode:LongInt;Owner:Integer;Sel:Boolean;Depth:Integer);
+Var T:TMat; Sg,S:Integer; C:LongInt; P:PPart; Q2:PPiece;
 Begin
  MatMul(Parent,Q^.M,T);
  Sg:=Sg0;
  If MatDet(Q^.M)<0 Then Sg:=-Sg;
  C:=Q^.Col; If(C=16)Or(C=24)Then C:=PCode;
- S:=FindModel(Q^.Name);
+ S:=PieceSub(Q);
  If S>=0 Then Begin
-  If Depth<6 Then Begin
+  If Depth<12 Then Begin
    Q2:=Models[S].First;
    While Q2<>Nil Do Begin
     RenderPiece(Q2,T,Sg,C,Owner,Sel,Depth+1);
@@ -2072,14 +2824,15 @@ Begin
  End
   Else Begin
    P:=PiecePart(Q);
-   If P<>Nil Then RenderPart(P,T,C,Sg,Owner,Sel,0);
+   If P<>Nil Then RenderPart(P,T,C,Sg,Owner,Sel);
   End;
 End;
 
 Procedure BuildScene(WithGhost:Boolean);
 Var Q:PPiece; I,N:Integer;
 Begin
- PolyN:=0; PolyOverflow:=False; PolyMax:=MAXPOLY;
+ PolyReset;
+ PolyOverflow:=False; PolyMax:=MAXPOLY;
  N:=0;
  Q:=Models[CurModel].First;
  While Q<>Nil Do Begin If PieceVisible(Q)Then Inc(N); Q:=Q^.Next; End;
@@ -2089,7 +2842,6 @@ Begin
   2:StudEff:=2;
  Else StudEff:=3;
  End;
- If(StudMode=0)And(CatCount=0)Then StudEff:=1;
  I:=0;
  Q:=Models[CurModel].First;
  While Q<>Nil Do Begin
@@ -2100,30 +2852,41 @@ Begin
  If WithGhost And(GhostPiece<>Nil)Then RenderPiece(GhostPiece,CamM,-1,7,0,False,0);
 End;
 
-Procedure QSortPolys(L,R:Integer);
-Var I,J,T:Integer; Pv:LongInt;
+{ Tri fusion de la liste des polygones : lointain d'abord (Z decroissant) }
+Function MergePoly(A,B:PPoly):PPoly;
+Var H,T:PPoly;
 Begin
- Repeat
-  I:=L; J:=R;
-  Pv:=PolyAt(PolyIdx^[(L+R) Shr 1])^.Z;
-  Repeat
-   While PolyAt(PolyIdx^[I])^.Z>Pv Do Inc(I);
-   While PolyAt(PolyIdx^[J])^.Z<Pv Do Dec(J);
-   If I<=J Then Begin
-    T:=PolyIdx^[I]; PolyIdx^[I]:=PolyIdx^[J]; PolyIdx^[J]:=T;
-    Inc(I); Dec(J);
+ H:=Nil; T:=Nil;
+ While(A<>Nil)And(B<>Nil)Do Begin
+  If A^.Z>=B^.Z Then Begin
+   If T=Nil Then H:=A Else T^.Next:=A;
+   T:=A; A:=A^.Next;
+  End
+   Else Begin
+    If T=Nil Then H:=B Else T^.Next:=B;
+    T:=B; B:=B^.Next;
    End;
-  Until I>J;
-  If L<J Then QSortPolys(L,J);
-  L:=I;
- Until L>=R;
+ End;
+ If A<>Nil Then Begin If T=Nil Then H:=A Else T^.Next:=A; End
+ Else If B<>Nil Then Begin If T=Nil Then H:=B Else T^.Next:=B; End;
+ MergePoly:=H;
+End;
+
+Function SortPolyList(L:PPoly):PPoly;
+Var Slow,Fast,B:PPoly;
+Begin
+ If(L=Nil)Or(L^.Next=Nil)Then Begin SortPolyList:=L; Exit; End;
+ Slow:=L; Fast:=L^.Next;
+ While(Fast<>Nil)And(Fast^.Next<>Nil)Do Begin Slow:=Slow^.Next; Fast:=Fast^.Next^.Next; End;
+ B:=Slow^.Next; Slow^.Next:=Nil;
+ SortPolyList:=MergePoly(SortPolyList(L),SortPolyList(B));
 End;
 
 Procedure SortScene;
-Var I:Integer;
 Begin
- For I:=0 To PolyN-1 Do PolyIdx^[I]:=I;
- If PolyN>1 Then QSortPolys(0,PolyN-1);
+ PolyHead:=SortPolyList(PolyHead);
+ PolyTail:=PolyHead;
+ While(PolyTail<>Nil)And(PolyTail^.Next<>Nil)Do PolyTail:=PolyTail^.Next;
 End;
 
 { Remplissage tramme (translucidite) d'un polygone convexe }
@@ -2169,9 +2932,11 @@ End;
 Procedure PaintScene(W,H:Integer);
 Var K,I,LastCol:Integer; Pl:PPoly; Pts:Array[0..3] Of PointType;
 Begin
- LastCol:=-1;
- For K:=0 To PolyN-1 Do Begin
-  Pl:=PolyAt(PolyIdx^[K]);
+ LastCol:=-1; K:=0;
+ Pl:=PolyHead;
+ While Pl<>Nil Do Begin
+  Inc(K);
+  If K And 255=0 Then LatchMouse;
   If Pl^.N=2 Then Begin
    SetColor(Pl^.Col);
    Line(Pl^.X[0],Pl^.Y[0],Pl^.X[1],Pl^.Y[1]);
@@ -2198,6 +2963,7 @@ Begin
       FillPoly(Pl^.N,Pts);
      End;
    End;
+  Pl:=Pl^.Next;
  End;
 End;
 
@@ -2371,17 +3137,21 @@ End;
 
 { Piece sous le pointeur (coordonnees relatives a la vue) ; 0 si aucune }
 Function PickPiece(Var V:TView;PX,PY:Integer):Integer;
-Var K:Integer; Pl:PPoly;
+Var Pl:PPoly; R:Integer;
 Begin
  PickPiece:=0;
  SetupCamera(V);
  BuildScene(False);
  SortScene;
- For K:=PolyN-1 DownTo 0 Do Begin
-  Pl:=PolyAt(PolyIdx^[K]);
+ R:=0;
+ { ordre de peintre : le dernier polygone touche est le plus proche }
+ Pl:=PolyHead;
+ While Pl<>Nil Do Begin
   If(Pl^.N>=3)And(Pl^.Owner>0)Then
-   If PolyHit(Pl,PX,PY)Then Begin PickPiece:=Pl^.Owner; Exit; End;
+   If PolyHit(Pl,PX,PY)Then R:=Pl^.Owner;
+  Pl:=Pl^.Next;
  End;
+ PickPiece:=R;
 End;
 
 Function PieceByIndex(N:Integer):PPiece;
@@ -2500,7 +3270,7 @@ Begin
    If R<60 Then R:=60;
   End;
  W:=V.X2-V.X1+1; H:=V.Y2-V.Y1+1;
- V.Dist:=R/0.2588*1.08;
+ V.Dist:=R/Sin(V.Fov*Pi/360)*1.08;
  If W<H Then V.Dist:=V.Dist*H/W;
  If Min(W,H)>0 Then V.Zoom:=(Min(W,H)/2)/R*0.92 Else V.Zoom:=1;
 End;
@@ -2509,7 +3279,7 @@ Procedure InitViews;
 Var I:Integer;
 Begin
  For I:=0 To MAXVIEW-1 Do Begin
-  Views[I].Dist:=800; Views[I].Zoom:=1; VSet(Views[I].Tgt,0,-40,0);
+  Views[I].Dist:=800; Views[I].Zoom:=1; Views[I].Fov:=30; VSet(Views[I].Tgt,0,-40,0);
   Views[I].X1:=0; Views[I].Y1:=0; Views[I].X2:=100; Views[I].Y2:=100;
  End;
  ViewPreset(Views[0],0);
@@ -2540,7 +3310,7 @@ Var S:Real; H:Integer;
 Begin
  SetupCamera(V);
  H:=V.Y2-V.Y1+1;
- If V.Persp Then S:=2*V.Dist*0.26795/H Else S:=1/V.Zoom;
+ If V.Persp Then S:=2*V.Dist*Sin(V.Fov*Pi/360)/Cos(V.Fov*Pi/360)/H Else S:=1/V.Zoom;
  V.Tgt.X:=V.Tgt.X-CamM.R[0,0]*DX*S+CamM.R[1,0]*DY*S;
  V.Tgt.Y:=V.Tgt.Y-CamM.R[0,1]*DX*S+CamM.R[1,1]*DY*S;
  V.Tgt.Z:=V.Tgt.Z-CamM.R[0,2]*DX*S+CamM.R[1,2]*DY*S;
@@ -3082,7 +3852,7 @@ Begin
  PrevY:=PanY1+170;
 End;
 
-Procedure DrawThumb(X1,Y1,X2,Y2:Integer;Const Nm:String;Code:Integer);
+Procedure DrawThumb(X1,Y1,X2,Y2:Integer;Const Nm:String;Code:LongInt);
 Var Tmp:PPiece; V:TView; Mn,Mx:TVec; R:Real; Mt:TMat; W,H:Integer; P:PPart; SaveStud:Integer;
 Begin
  Box(X1,Y1,X2,Y2,15);
@@ -3099,14 +3869,14 @@ Begin
   FillChar(Tmp^,SizeOf(TPiece),0);
   Tmp^.Name:=Nm; Tmp^.Col:=Code; Tmp^.M:=Mt; Tmp^.Part:=P; Tmp^.Epoch:=Epoch;
   Mn:=P^.AMin; Mx:=P^.AMax;
-  V.Persp:=True; V.Yaw:=145; V.Pitch:=30; V.X1:=X1; V.Y1:=Y1; V.X2:=X2; V.Y2:=Y2;
+  V.Persp:=True; V.Fov:=30; V.Yaw:=145; V.Pitch:=30; V.X1:=X1; V.Y1:=Y1; V.X2:=X2; V.Y2:=Y2;
   VSet(V.Tgt,(Mn.X+Mx.X)/2,(Mn.Y+Mx.Y)/2,(Mn.Z+Mx.Z)/2);
   R:=Sqrt(Sqr(Mx.X-Mn.X)+Sqr(Mx.Y-Mn.Y)+Sqr(Mx.Z-Mn.Z))/2;
   If R<12 Then R:=12;
   V.Dist:=R/0.2588*1.1; V.Zoom:=1;
   SetViewPort(X1,Y1,X2,Y2,True);
   SetupCamera(V);
-  PolyN:=0; PolyMax:=3000; PolyOverflow:=False;
+  PolyReset; PolyMax:=3000; PolyOverflow:=False;
   SaveStud:=StudEff; StudEff:=2;
   RenderPiece(Tmp,CamM,-1,7,0,False,0);
   StudEff:=SaveStud;
@@ -3119,7 +3889,7 @@ Begin
 End;
 
 Procedure DrawPartsPanel;
-Var I,Y,K,X0,X1:Integer; S:String;
+Var I,Y,K,X0,X1:Integer; S:String; C:PCat; F:PFil;
 Begin
  X0:=DockX+3; X1:=ScreenW-4;
  { categories }
@@ -3128,8 +3898,9 @@ Begin
   K:=CatTop+I;
   If K<CatN Then Begin
    Y:=CatY+1+I*12;
-   If K=CatSel Then Begin Box(X0+1,Y,X1-13,Y+11,UI_SEL); TxtOut(X0+4,Y+2,Copy(CatNames[K],1,21),15); End
-   Else TxtOut(X0+4,Y+2,Copy(CatNames[K],1,21),UI_DK);
+   S:=Copy(CatNameAt(K),1,21);
+   If K=CatSel Then Begin Box(X0+1,Y,X1-13,Y+11,UI_SEL); TxtOut(X0+4,Y+2,S,15); End
+   Else TxtOut(X0+4,Y+2,S,UI_DK);
   End;
  End;
  DrawVScroll(X1-11,CatY,CAT_ROWS*12+2,CatTop,CatN,CAT_ROWS);
@@ -3139,15 +3910,19 @@ Begin
  S:=SearchStr;
  If SearchEdit Then S:=S+'_';
  TxtOut(X0+48,SearchY+3,Copy(S,1,18),UI_DK);
- { liste des pieces }
+ { liste des pieces : parcours de la liste chainee }
  Sunken(X0,ListY,X1-12,ListY+PART_ROWS*12+1,15);
+ F:=FilHead;
+ K:=PartTop;
+ While(F<>Nil)And(K>0)Do Begin F:=F^.Next; Dec(K); End;
  For I:=0 To PART_ROWS-1 Do Begin
-  K:=PartTop+I;
-  If K<FilN Then Begin
+  If F<>Nil Then Begin
+   K:=PartTop+I;
    Y:=ListY+1+I*12;
-   S:=Copy(Compact(Catalog^[Filtered^[K]]^.Desc),1,21);
+   S:=Copy(Compact(F^.C^.Desc),1,21);
    If K=PartSel Then Begin Box(X0+1,Y,X1-13,Y+11,UI_SEL); TxtOut(X0+4,Y+2,S,15); End
    Else TxtOut(X0+4,Y+2,S,UI_DK);
+   F:=F^.Next;
   End;
  End;
  DrawVScroll(X1-11,ListY,PART_ROWS*12+2,PartTop,FilN,PART_ROWS);
@@ -3191,7 +3966,7 @@ Begin
   4:PropValue:=FmtNum(Round(RY));
   5:PropValue:=FmtNum(Round(RZ));
   6:PropValue:=IntStr(Q^.Step);
-  7:If Q^.Col=16 Then PropValue:=Fx('Principale') Else PropValue:=ColName[ColIdx(Q^.Col)];
+  7:PropValue:=ColNameOf(Q^.Col);
   8:PropValue:=UpStr(Q^.Name);
  End;
 End;
@@ -3219,7 +3994,7 @@ Begin
   Sunken(DockX+76,Y,ScreenW-6,Y+12,15);
   If(I=PropField)Then S:=PropText+'_' Else S:=PropValue(I,Q);
   If I=7 Then Begin
-   If Q<>Nil Then Begin Box(DockX+79,Y+2,DockX+87,Y+10,ShadeMap[ColIdx(Q^.Col),4]); End;
+   If Q<>Nil Then Box(DockX+79,Y+2,DockX+87,Y+10,UICode(UI_SLOTS-1,Q^.Col));
    TxtOut(DockX+92,Y+3,Copy(S,1,14),UI_DK);
   End
    Else TxtOut(DockX+80,Y+3,Copy(S,1,15),UI_DK);
@@ -3267,7 +4042,7 @@ Begin
 End;
 
 Procedure DrawTimePanel;
-Var I,Y,K,N,X0,X1,C:Integer; Hdr:Boolean; S:Integer; Q:PPiece; T:String;
+Var I,Y,K,N,X0,X1,C:Integer; Hdr:Boolean; S:Integer; Q:PPiece; T:String; Trn:Boolean;
 Begin
  X0:=DockX+3; X1:=ScreenW-4;
  Sunken(X0,PanY1+2,X1-12,PanY2-2,15);
@@ -3286,7 +4061,7 @@ Begin
     Line(X0+6,Y+3,X0+10,Y+3); Line(X0+7,Y+4,X0+9,Y+4);
    End
     Else If Q<>Nil Then Begin
-     C:=ShadeMap[ColIdx(Q^.Col),4];
+     C:=GrpIdx[ColGroup(Q^.Col,Trn),4];
      If Q^.Sel Then Box(X0+1,Y-1,X1-13,Y+11,UI_SEL);
      SetFillStyle(SolidFill,C); SetColor(UI_DK);
      FillEllipse(X0+22,Y+5,4,4);
@@ -3301,57 +4076,69 @@ Begin
 End;
 
 { ====================================================================== }
-{ Palette de couleurs                                                    }
+{ Palette de couleurs (liste chainee, defilement)                        }
 { ====================================================================== }
 
-Procedure ColPos(I:Integer;Var X,Y:Integer);
-Var Sol,K:Integer;
+Const COL_COLS=10; COL_ROWS=4;
+
+Procedure ColCell(K:Integer;Var X,Y:Integer);
 Begin
- Sol:=0;
- For K:=0 To NCol-1 Do If Not ColTr[K]Then Inc(Sol);
- If Not ColTr[I]Then Begin
-  X:=DockX+4+(I Mod 11)*17; Y:=ColY+18+(I Div 11)*16;
- End
-  Else Begin
-   K:=I-Sol;
-   X:=DockX+4+(K Mod 11)*17; Y:=ColY+18+((Sol+10) Div 11)*16+12+(K Div 11)*16;
-  End;
+ X:=DockX+4+(K Mod COL_COLS)*17;
+ Y:=ColY+18+(K Div COL_COLS)*16;
+End;
+
+Function ColRowsTotal:Integer;
+Begin
+ ColRowsTotal:=(NCol+COL_COLS-1) Div COL_COLS;
 End;
 
 Function ColHit(PX,PY:Integer):Integer;
-Var I,X,Y:Integer;
+Var K,X,Y:Integer;
 Begin
  ColHit:=-1;
- For I:=0 To NCol-1 Do Begin
-  ColPos(I,X,Y);
-  If InRect(PX,PY,X,Y,16,15)Then Begin ColHit:=I; Exit; End;
+ For K:=0 To COL_COLS*COL_ROWS-1 Do Begin
+  ColCell(K,X,Y);
+  If InRect(PX,PY,X,Y,16,15)Then Begin
+   If(ColTop*COL_COLS+K)<NCol Then ColHit:=ColTop*COL_COLS+K;
+   Exit;
+  End;
  End;
 End;
 
 Procedure DrawColors;
-Var I,X,Y,C,SolRows:Integer;
+Var K,X,Y,C:Integer; P:PColor; R,G,B,Fin:Byte; Tr:Boolean;
 Begin
  Raised(DockX,ColY,ScreenW-1,ColY2);
- C:=ColIdx(CurColor);
+ If CurColor=16 Then Begin R:=170; G:=170; B:=170; End Else ColInfo(CurColor,R,G,B,Tr,Fin);
  TxtF(DockX+6,ColY+4,'Couleur :',UI_DK);
- Box(DockX+80,ColY+2,DockX+92,ColY+12,ShadeMap[C,4]);
+ Box(DockX+80,ColY+2,DockX+92,ColY+12,UIColor(UI_SLOTS-2,R,G,B));
  SetColor(UI_DK); Rectangle(DockX+80,ColY+2,DockX+92,ColY+12);
- TxtOut(DockX+96,ColY+4,Copy(ColName[C],1,12),UI_DK);
- For I:=0 To NCol-1 Do Begin
-  ColPos(I,X,Y);
-  Box(X,Y,X+15,Y+14,ShadeMap[I,4]);
-  If ColTr[I]Then Begin
-   SetColor(15);
-   Line(X+2,Y+2,X+13,Y+13); Line(X+13,Y+2,X+2,Y+13);
-  End;
-  If ColCode[I]=CurColor Then Begin
-   SetColor(UI_DK); Rectangle(X-1,Y-1,X+16,Y+15);
-   SetColor(15); Rectangle(X,Y,X+15,Y+14);
+ TxtOut(DockX+96,ColY+4,Copy(ColNameOf(CurColor),1,12),UI_DK);
+ P:=ColByIndex(ColTop*COL_COLS);
+ For K:=0 To COL_COLS*COL_ROWS-1 Do Begin
+  If P=Nil Then Begin
+   ColCell(K,X,Y);
+   Box(X,Y,X+15,Y+14,UI_BG);
   End
    Else Begin
-    SetColor(UI_SH); Rectangle(X,Y,X+15,Y+14);
+    ColCell(K,X,Y);
+    Box(X,Y,X+15,Y+14,UIColor(K,P^.R,P^.G,P^.B));
+    If P^.Alpha<255 Then Begin
+     SetColor(15);
+     Line(X+2,Y+2,X+13,Y+13); Line(X+13,Y+2,X+2,Y+13);
+    End;
+    If P^.Code=CurColor Then Begin
+     SetColor(UI_DK); Rectangle(X-1,Y-1,X+16,Y+15);
+     SetColor(15); Rectangle(X,Y,X+15,Y+14);
+    End
+     Else Begin
+      SetColor(UI_SH); Rectangle(X,Y,X+15,Y+14);
+     End;
+    P:=P^.Next;
    End;
  End;
+ DrawVScroll(ScreenW-15,ColY+16,COL_ROWS*16+4,ColTop,ColRowsTotal,COL_ROWS);
+ TxtOut(DockX+6,ColY+18+COL_ROWS*16+6,IntStr(NCol)+Fx(' couleurs'),UI_SH);
 End;
 
 { ====================================================================== }
@@ -3441,6 +4228,7 @@ Begin
   If MB<>0 Then Delay(10);
  Until MB=0;
  OldMB:=0;
+ ClearLatch;
 End;
 
 Function ReadKeyEx(Var Ext:Boolean):Char;
@@ -3672,22 +4460,60 @@ End;
 { ---------------------------- Fichiers ----------------------------- }
 
 Type
- TEntry=Record Name:String[40]; IsDir:Boolean; End;
+ PEntry=^TEntry;
+ TEntry=Record
+  Name:String[40];
+  IsDir:Boolean;
+  Next:PEntry;
+ End;
 
 Var
- FEnt:Array[0..299] Of TEntry;
+ FHead:PEntry;
  FN:Integer;
 
-Procedure ScanDir(Flt:Integer;Mode:Integer);
-Var SR:SearchRec; E:String; I,J:Integer; T:TEntry; Ok:Boolean;
+Procedure FreeEntries;
+Var E,N:PEntry;
 Begin
- FN:=0;
+ E:=FHead;
+ While E<>Nil Do Begin N:=E^.Next; Dispose(E); E:=N; End;
+ FHead:=Nil; FN:=0;
+End;
+
+Function EntryAt(I:Integer):PEntry;
+Var E:PEntry;
+Begin
+ E:=FHead;
+ While(E<>Nil)And(I>0)Do Begin E:=E^.Next; Dec(I); End;
+ EntryAt:=E;
+End;
+
+{ Insertion triee : dossiers d'abord, puis par nom }
+Procedure AddEntry(Const Nm:String;IsDir:Boolean);
+Var E,P:PEntry;
+ Function Before(A:PEntry):Boolean;
+ Begin
+  If A^.IsDir<>IsDir Then Before:=IsDir
+  Else Before:=UpStr(Nm)<UpStr(A^.Name);
+ End;
+Begin
+ New(E); E^.Name:=Copy(Nm,1,40); E^.IsDir:=IsDir; E^.Next:=Nil;
+ If(FHead=Nil)Or Before(FHead)Then Begin E^.Next:=FHead; FHead:=E; End
+ Else Begin
+  P:=FHead;
+  While(P^.Next<>Nil)And(Not Before(P^.Next))Do P:=P^.Next;
+  E^.Next:=P^.Next; P^.Next:=E;
+ End;
+ Inc(FN);
+End;
+
+Procedure ScanDir(Flt:Integer;Mode:Integer);
+Var SR:SearchRec; E:String; Ok:Boolean;
+Begin
+ FreeEntries;
  {$IFDEF FPC}FindFirst('*',AnyFile,SR);{$ELSE}FindFirst('*.*',AnyFile,SR);{$ENDIF}
- While(DosError=0)And(FN<300)Do Begin
+ While DosError=0 Do Begin
   If(SR.Attr And Directory)<>0 Then Begin
-   If SR.Name<>'.' Then Begin
-    FEnt[FN].Name:=Copy(SR.Name,1,40); FEnt[FN].IsDir:=True; Inc(FN);
-   End;
+   If SR.Name<>'.' Then AddEntry(SR.Name,True);
   End
    Else If(SR.Attr And VolumeID)=0 Then Begin
     E:=ExtOf(SR.Name);
@@ -3701,22 +4527,13 @@ Begin
      Else If Mode=1 Then Begin
       If Flt=0 Then Ok:=E='.LDR' Else Ok:=E='.MPD';
      End
-      Else If Mode=2 Then Ok:=E='.BMP'
-      Else Ok:=E='.TXT';
-    If Ok Then Begin
-     FEnt[FN].Name:=Copy(SR.Name,1,40); FEnt[FN].IsDir:=False; Inc(FN);
-    End;
+      Else If Mode=2 Then Ok:=(E='.BMP')Or(E='.PNG')Or(E='.GIF')
+      Else Ok:=True;
+    If Ok Then AddEntry(SR.Name,False);
    End;
   FindNext(SR);
  End;
  {$IFDEF FPC}FindClose(SR);{$ENDIF}
- For I:=1 To FN-1 Do Begin
-  T:=FEnt[I]; J:=I-1;
-  While(J>=0)And((FEnt[J].IsDir<T.IsDir)Or((FEnt[J].IsDir=T.IsDir)And(UpStr(FEnt[J].Name)>UpStr(T.Name))))Do Begin
-   FEnt[J+1]:=FEnt[J]; Dec(J);
-  End;
-  FEnt[J+1]:=T;
- End;
 End;
 
 Procedure GoDir(Const D:String);
@@ -3769,8 +4586,8 @@ Var
    R:=Top+J;
    If R<FN Then Begin
     If R=Sel Then Begin Box(X+11,Y+37+J*12,X+W-152,Y+37+J*12+11,UI_SEL); SetColor(15); End Else SetColor(UI_DK);
-    If FEnt[R].IsDir Then OutTextXY(X+14,Y+39+J*12,'['+FEnt[R].Name+']')
-    Else OutTextXY(X+14,Y+39+J*12,FEnt[R].Name);
+    If EntryAt(R)^.IsDir Then OutTextXY(X+14,Y+39+J*12,'['+EntryAt(R)^.Name+']')
+    Else OutTextXY(X+14,Y+39+J*12,EntryAt(R)^.Name);
    End;
   End;
   DrawVScroll(X+W-151,Y+36,LR*12+3,Top,FN,LR);
@@ -3792,9 +4609,9 @@ Var
  Var S,E:String; Go:Boolean;
  Begin
   If Fld='' Then Begin
-   If(Sel>=0)And(Sel<FN)Then Fld:=FEnt[Sel].Name Else Exit;
+   If(Sel>=0)And(Sel<FN)Then Fld:=EntryAt(Sel)^.Name Else Exit;
   End;
-  If(Sel>=0)And(Sel<FN)And FEnt[Sel].IsDir And(Fld=FEnt[Sel].Name)Then Begin
+  If(Sel>=0)And(Sel<FN)And EntryAt(Sel)^.IsDir And(Fld=EntryAt(Sel)^.Name)Then Begin
    GoDir(Fld); Fld:=''; Msg:=''; Rescan; Exit;
   End;
   S:=Fld;
@@ -3825,10 +4642,10 @@ Var
  Procedure Activate(N:Integer);
  Begin
   If(N<0)Or(N>=FN)Then Exit;
-  If FEnt[N].IsDir Then Begin
-   GoDir(FEnt[N].Name); Fld:=''; Msg:=''; Rescan;
+  If EntryAt(N)^.IsDir Then Begin
+   GoDir(EntryAt(N)^.Name); Fld:=''; Msg:=''; Rescan;
   End
-   Else Begin Fld:=FEnt[N].Name; Accept; End;
+   Else Begin Fld:=EntryAt(N)^.Name; Accept; End;
  End;
 Begin
  W:=500; H:=LR*12+104;
@@ -3887,7 +4704,7 @@ Begin
     I:=Top+(MY-Y-37) Div 12;
     If I<FN Then Begin
      If(I=LastSel)And(Abs(Ticks-LastT)<45)Then Activate(I)
-     Else Begin Sel:=I; Fld:=''; If Not FEnt[I].IsDir Then Fld:=FEnt[I].Name; End;
+     Else Begin Sel:=I; Fld:=''; If Not EntryAt(I)^.IsDir Then Fld:=EntryAt(I)^.Name; End;
      LastSel:=I; LastT:=Ticks;
      Dirty:=True;
     End;
@@ -4192,14 +5009,14 @@ Begin
  Touch;
 End;
 
-Procedure ApplyColorSel(Code:Integer);
+Procedure ApplyColorSel(Code:LongInt);
 Var Q:PPiece;
 Begin
  If SelCount=0 Then Exit;
  PushUndo;
  Q:=Models[CurModel].First;
  While Q<>Nil Do Begin
-  If Q^.Sel And(FindModel(Q^.Name)<0)Then Q^.Col:=Code;
+  If Q^.Sel And(PieceSub(Q)<0)Then Q^.Col:=Code;
   Q:=Q^.Next;
  End;
  Touch;
@@ -4398,6 +5215,7 @@ End;
 
 Procedure ResetEditState;
 Begin
+ SlotReset;
  ClearSel;
  ClearClip;
  PropField:=-1; TimeTop:=0; SearchEdit:=False;
@@ -4457,31 +5275,47 @@ Begin
 End;
 
 Type
- TAgg=Record N:String[40]; C,Q:Integer; End;
- TAggArr=Array[0..299] Of TAgg;
- PAggArr=^TAggArr;
+ PAgg=^TAgg;
+ TAgg=Record
+  N:String[40];
+  C:LongInt;
+  Q:Integer;
+  Next:PAgg;
+ End;
 
 Var
- Agg:PAggArr;
+ Agg:PAgg;
  AggN:Integer;
 
-Procedure AggAdd(Const Nm:String;Col,Mult:Integer);
-Var I:Integer;
+Procedure FreeAgg;
+Var A,N:PAgg;
 Begin
- For I:=0 To AggN-1 Do
-  If(Agg^[I].C=Col)And(UpStr(Agg^[I].N)=UpStr(Nm))Then Begin Inc(Agg^[I].Q,Mult); Exit; End;
- If AggN<300 Then Begin
-  Agg^[AggN].N:=Nm; Agg^[AggN].C:=Col; Agg^[AggN].Q:=Mult; Inc(AggN);
+ A:=Agg;
+ While A<>Nil Do Begin N:=A^.Next; Dispose(A); A:=N; End;
+ Agg:=Nil; AggN:=0;
+End;
+
+Procedure AggAdd(Const Nm:String;Col:LongInt;Mult:Integer);
+Var A,T:PAgg; U:String;
+Begin
+ U:=UpStr(Nm);
+ A:=Agg; T:=Nil;
+ While A<>Nil Do Begin
+  If(A^.C=Col)And(UpStr(A^.N)=U)Then Begin Inc(A^.Q,Mult); Exit; End;
+  T:=A; A:=A^.Next;
  End;
+ New(A); A^.N:=Copy(Nm,1,40); A^.C:=Col; A^.Q:=Mult; A^.Next:=Nil;
+ If T=Nil Then Agg:=A Else T^.Next:=A;
+ Inc(AggN);
 End;
 
 Procedure AggModel(M:Integer;Mult,Depth:Integer);
 Var Q:PPiece; S:Integer;
 Begin
- If Depth>6 Then Exit;
+ If Depth>12 Then Exit;
  Q:=Models[M].First;
  While Q<>Nil Do Begin
-  S:=FindModel(Q^.Name);
+  S:=PieceSub(Q);
   If S>=0 Then AggModel(S,Mult,Depth+1) Else AggAdd(Q^.Name,Q^.Col,Mult);
   Q:=Q^.Next;
  End;
@@ -4506,27 +5340,29 @@ Begin
 End;
 
 Procedure ExportParts(Const Path:String);
-Var F:Text; I,Tot:Integer;
+Var F:Text; A:PAgg; Tot:LongInt;
 Begin
- New(Agg); AggN:=0;
+ FreeAgg;
  AggModel(0,1,0);
  {$I-}
  Assign(F,Path); Rewrite(F);
  {$I+}
- If IOResult<>0 Then Begin Dispose(Agg); AskBox('Exporter','Impossible de cr\eer le fichier.',0); Exit; End;
+ If IOResult<>0 Then Begin FreeAgg; AskBox('Exporter','Impossible de cr\eer le fichier.',0); Exit; End;
  WriteLn(F,'LISTE DES PIECES - ',BaseOf(DocFile));
  WriteLn(F,'Qte  Couleur                 Piece         Description');
  WriteLn(F,'---------------------------------------------------------------');
  Tot:=0;
- For I:=0 To AggN-1 Do Begin
-  WriteLn(F,PadR(IntStr(Agg^[I].Q),5),PadR(Plain(ColName[ColIdx(Agg^[I].C)]),23),' ',
-          PadR(UpStr(Agg^[I].N),13),' ',PartDescByName(Agg^[I].N));
-  Inc(Tot,Agg^[I].Q);
+ A:=Agg;
+ While A<>Nil Do Begin
+  WriteLn(F,PadR(IntStr(A^.Q),5),PadR(Plain(ColNameOf(A^.C)),23),' ',
+          PadR(UpStr(A^.N),13),' ',PartDescByName(A^.N));
+  Inc(Tot,A^.Q);
+  A:=A^.Next;
  End;
  WriteLn(F,'---------------------------------------------------------------');
  WriteLn(F,'Total : ',Tot,' pieces, ',AggN,' references');
  Close(F);
- Dispose(Agg);
+ FreeAgg;
  SetMsg('Liste enregistr\ee : '+BaseOf(Path));
 End;
 
@@ -4579,6 +5415,7 @@ End;
 
 Procedure OpenPath(Const Nm:String);
 Begin
+ ExtraDir:=DirOf(FExpand(Nm));
  If LoadDoc(Nm)Then Begin
   ResetEditState;
   FitAllViews;
@@ -4612,10 +5449,8 @@ Procedure DoReindex;
 Begin
  If AskBox('Biblioth\gque','Reconstruire l''index de la biblioth\gque ?|(lecture de tous les fichiers .DAT)',1)<>1 Then Exit;
  MouseOff;
- ScanLibrary;
- BuildCategories;
- CatSel:=0; CatTop:=0; SearchStr:='';
- RefilterParts;
+ RescanLibrary;
+ LoadCatalog;
  MouseOn;
  AskBox('Biblioth\gque',IntStr(CatCount)+' pi\eces index\ees.',0);
  Touch;
@@ -5006,7 +5841,8 @@ Procedure SelectPart(K:Integer);
 Var E:PCat;
 Begin
  If(K<0)Or(K>=FilN)Then Exit;
- E:=Catalog^[Filtered^[K]];
+ E:=FilAt(K);
+ If E=Nil Then Exit;
  PartSel:=K;
  CurPart:=LoStr(E^.FileN);
  CurPartDesc:=E^.Desc;
@@ -5119,6 +5955,11 @@ Begin
    N:=VScrollClick(ListY,PART_ROWS*12+2,PartTop,FilN,PART_ROWS,PY);
    If N<>PartTop Then Begin PartTop:=N; NeedDock:=True; End;
   End;
+  4:Begin
+   If PY<ColY+28 Then PY:=ColY+28; If PY>ColY+16+COL_ROWS*16+4-13 Then PY:=ColY+16+COL_ROWS*16+4-13;
+   N:=VScrollClick(ColY+16,COL_ROWS*16+4,ColTop,ColRowsTotal,COL_ROWS,PY);
+   If N<>ColTop Then Begin ColTop:=N; NeedDock:=True; End;
+  End;
   3:Begin
    If PY<PanY1+14 Then PY:=PanY1+14; If PY>PanY2-14 Then PY:=PanY2-14;
    N:=VScrollClick(PanY1+2,PanY2-PanY1-3,TimeTop,TimeRowCount,TIME_ROWS,PY);
@@ -5135,10 +5976,13 @@ Procedure HandleMouse;
 Var LP,RP,MP,LR:Boolean; V,B,I:Integer; HB:Integer;
 Begin
  PollMouse;
- LP:=((MB And 1)<>0)And((OldMB And 1)=0);
- RP:=((MB And 2)<>0)And((OldMB And 2)=0);
- MP:=((MB And 4)<>0)And((OldMB And 4)=0);
- LR:=((MB And 7)=0)And((OldMB And 7)<>0);
+ LP:=(((MB And 1)<>0)And((OldMB And 1)=0))Or LatchL;
+ RP:=(((MB And 2)<>0)And((OldMB And 2)=0))Or LatchR;
+ MP:=(((MB And 4)<>0)And((OldMB And 4)=0))Or LatchM;
+ LR:=(((MB And 7)=0)And((OldMB And 7)<>0))Or LatchRel;
+ { clic bref survenu pendant un rendu : position memorisee a l'appui }
+ If(LP Or RP Or MP)And((MB And 7)=0)Then Begin MX:=LatchX; MY:=LatchY; End;
+ ClearLatch;
 
  { menus ouverts }
  If MenuActive Then Begin
@@ -5226,10 +6070,14 @@ Begin
          PanelPress(MX,MY);
         End
          Else If DockTabHit(MX,MY)>=0 Then SetPanel(DockTabHit(MX,MY))
+         Else If InRect(MX,MY,ScreenW-15,ColY+16,12,COL_ROWS*16+4)Then Begin
+          ColTop:=VScrollClick(ColY+16,COL_ROWS*16+4,ColTop,ColRowsTotal,COL_ROWS,MY);
+          DragScroll:=4; NeedDock:=True;
+         End
          Else If InRect(MX,MY,DockX,ColY,ScreenW-DockX,ColY2-ColY+1)Then Begin
           B:=ColHit(MX,MY);
           If B>=0 Then Begin
-           CurColor:=ColCode[B];
+           CurColor:=ColByIndex(B)^.Code;
            ApplyColorSel(CurColor);
            NeedDock:=True; NeedViews:=True;
           End;
@@ -5238,6 +6086,7 @@ Begin
      End;
    End;
   End;
+ If(DragMode<>0)And((MB And 7)=0)And(LR Or LP Or RP Or MP)Then ViewRelease;
  OldMX:=MX; OldMY:=MY; OldMB:=MB;
 End;
 
@@ -5437,13 +6286,18 @@ Begin
  For I:=0 To 7 Do Begin
   StudCos[I]:=6*Cos(2*Pi*I/8); StudSin[I]:=6*Sin(2*Pi*I/8);
  End;
- For I:=0 To MAXBLK-1 Do PolyBlk[I]:=Nil;
  For I:=0 To MAXMOD-1 Do Begin
   Models[I].First:=Nil; Models[I].Last:=Nil; Models[I].Count:=0; Models[I].Used:=False;
  End;
- GetMem(Catalog,SizeOf(TCatArr)); FillChar(Catalog^,SizeOf(TCatArr),0);
- GetMem(Filtered,SizeOf(TIntArr)); FillChar(Filtered^,SizeOf(TIntArr),0);
- GetMem(PolyIdx,SizeOf(TIdxArr));
+ CatHead:=Nil; CatTail:=Nil; CatList:=Nil; CatListTail:=Nil; FilHead:=Nil; FilTail:=Nil;
+ ColHead:=Nil; ColTail:=Nil; NCol:=0; ColTop:=0;
+ PolyHead:=Nil; PolyPool:=Nil; PolyN:=0;
+ UndoTop:=Nil; RedoTop:=Nil;
+ GroupHead:=Nil; NextGroupId:=1; CamHead:=Nil; KeyHead:=Nil; ModEpoch:=1;
+ ExtraDir:=''; AltLibDir:=GetEnv('LDRAWDIR');
+ If(AltLibDir<>'')And(AltLibDir[Length(AltLibDir)]<>#92)And(AltLibDir[Length(AltLibDir)]<>'/')Then AltLibDir:=AltLibDir+PathSep;
+ If Not DirOK(AltLibDir)Then AltLibDir:='';
+ ClearLatch; PrevPoll:=0; LatchX:=0; LatchY:=0;
  CatCount:=0; FilN:=0; CatN:=1; CatSel:=0; CatTop:=0; PartTop:=0; PartSel:=-1;
  SearchStr:=''; SearchEdit:=False;
  CurPart:=''; CurPartDesc:='';
@@ -5520,14 +6374,19 @@ BEGIN
  InitializeGraphics;
  ScreenW:=GetMaxX+1; ScreenH:=GetMaxY+1;
  Palette256:=GetMaxColor>15;
- InitGlobals;
  InitDirs;
+ InitGlobals;
+ ResolveRoot(0,LibDir); ResolveRoot(1,AltLibDir);
  InitColors;
+ If Not LoadLDConfig(LibDir+'LDCONFIG.LDR')Then
+  If Not LoadLDConfig(LibDir+'..'+PathSep+'LDCONFIG.LDR')Then
+   If(AltLibDir<>'')And Not LoadLDConfig(AltLibDir+'LDConfig.ldr')Then;
  SetupPalette;
  MouseDriverFound;
  LayoutScreen;
  InitMenus;
  LoadCatalog;
+ If AltLibDir<>'' Then StatusMsg:=Copy('LDraw : '+AltLibDir,1,60);
  NewDocument;
  InitViews;
  Running:=True;

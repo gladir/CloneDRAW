@@ -8040,7 +8040,8 @@ End;
 Function JxTagNew(W, H: LongInt): PJxTag;
 Var
  T: PJxTag;
- N, Lw, Lh, I: Int64;
+ N, Lw, Lh: Int64;
+ I: LongInt; { compteur de boucle : Int64 interdit sous Free Pascal 32 bits }
  Nd: PJxTagArr;
 Begin
  JxTagNew := Nil;

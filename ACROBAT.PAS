@@ -269,6 +269,8 @@ Var
  MX_, MY_, MB_, OMX, OMY, OMB: LongInt;
  Running: Boolean;
  MaxScreen: Boolean;
+ Pal256: Boolean;           { palette indexée de 256 couleurs (mode -maxscreen) }
+ ImgMaxDim: LongInt;
  MouseOK: Boolean;
  LastClickT: LongInt;
  LastClickX, LastClickY: LongInt;
@@ -318,22 +320,32 @@ Var
 { Squelette : graphique et souris                                         }
 { ---------------------------------------------------------------------- }
 
-{ Les seize couleurs de l'interface restent identiques dans le pilote D8bit. }
-Procedure InitializeScreenPalette;
-{$IFDEF FPC}
 Const
- VgaRGB: Array[0..15, 0..2] Of Byte = (
+ ScrVga: Array[0..15, 0..2] Of Byte = (
   (0,0,0), (0,0,170), (0,170,0), (0,170,170),
   (170,0,0), (170,0,170), (170,85,0), (170,170,170),
   (85,85,85), (85,85,255), (85,255,85), (85,255,255),
   (255,85,85), (255,85,255), (255,255,85), (255,255,255));
+
+{ Les seize couleurs de l'interface restent identiques dans le pilote D8bit ;
+  les indices 16..231 forment un cube 6x6x6 et 232..255 une rampe de gris. }
+Procedure InitializeScreenPalette;
+{$IFDEF FPC}
 Var
  I: Integer;
 {$ENDIF}
 Begin
+ Pal256 := False;
  {$IFDEF FPC}
- If GetMaxColor > 15 Then
-  For I := 0 To 15 Do SetRGBPalette(I, VgaRGB[I, 0], VgaRGB[I, 1], VgaRGB[I, 2]);
+ If GetMaxColor > 15 Then Begin
+  For I := 0 To 15 Do SetRGBPalette(I, ScrVga[I, 0], ScrVga[I, 1], ScrVga[I, 2]);
+  If GetMaxColor >= 255 Then Begin
+   For I := 16 To 231 Do
+    SetRGBPalette(I, ((I - 16) Div 36) * 51, (((I - 16) Div 6) Mod 6) * 51, ((I - 16) Mod 6) * 51);
+   For I := 232 To 255 Do SetRGBPalette(I, 8 + (I - 232) * 10, 8 + (I - 232) * 10, 8 + (I - 232) * 10);
+   Pal256 := True;
+  End;
+ End;
  {$ENDIF}
 End;
 
@@ -950,6 +962,46 @@ Begin
  Nearest16 := Best;
 End;
 
+{ RVB d'un indice de la palette écran }
+Function IdxRgb(I: Integer): LongInt;
+Begin
+ If I < 16 Then IdxRgb := (LongInt(ScrVga[I, 0]) Shl 16) Or (LongInt(ScrVga[I, 1]) Shl 8) Or ScrVga[I, 2]
+ Else If I < 232 Then
+  IdxRgb := (LongInt(((I - 16) Div 36) * 51) Shl 16) Or (LongInt((((I - 16) Div 6) Mod 6) * 51) Shl 8) Or (((I - 16) Mod 6) * 51)
+ Else IdxRgb := (LongInt(8 + (I - 232) * 10) Shl 16) Or (LongInt(8 + (I - 232) * 10) Shl 8) Or (8 + (I - 232) * 10);
+End;
+
+{ Indice écran le plus proche d'une couleur RVB (palette 256 si disponible) }
+Function ScrCol(Rgb: LongInt): Integer;
+Var
+ R, G, B, K: Integer;
+Begin
+ If Not Pal256 Then Begin ScrCol := Nearest16(Rgb); Exit; End;
+ R := (Rgb Shr 16) And 255; G := (Rgb Shr 8) And 255; B := Rgb And 255;
+ If (R = G) And (G = B) Then Begin
+  If R = 0 Then ScrCol := 0
+  Else If R = 255 Then ScrCol := 15
+  Else Begin
+   K := (R - 3) Div 10;
+   If K < 0 Then K := 0;
+   If K > 23 Then K := 23;
+   ScrCol := 232 + K;
+  End;
+ End
+ Else ScrCol := 16 + ((R + 25) Div 51) * 36 + ((G + 25) Div 51) * 6 + ((B + 25) Div 51);
+End;
+
+Function LerpRgb(A, B: LongInt; T: Real): LongInt;
+Var
+ R, G, Bl: Integer;
+Begin
+ R := Round(((A Shr 16) And 255) + (((B Shr 16) And 255) - ((A Shr 16) And 255)) * T);
+ G := Round(((A Shr 8) And 255) + (((B Shr 8) And 255) - ((A Shr 8) And 255)) * T);
+ Bl := Round((A And 255) + ((B And 255) - (A And 255)) * T);
+ LerpRgb := RGBOf(R, G, Bl);
+End;
+
+
 { ---------------------------------------------------------------------- }
 { Polices : glyphes 8x8 mis à l'échelle + largeurs Helvetica               }
 { ---------------------------------------------------------------------- }
@@ -1341,21 +1393,33 @@ Begin
   For I := O1 To O2 Do Line(C16(X1 + I), C16(Y1), C16(X2 + I), C16(Y2));
 End;
 
-Procedure FillMultiply(X1, Y1, X2, Y2, Col: LongInt);
+Procedure FillMultiply(X1, Y1, X2, Y2, Col, Rgb: LongInt);
 Var
  X, Y: LongInt;
+ Bg, LastBg, LastRes: Integer;
+ C: LongInt;
 Begin
  If X1 < 0 Then X1 := 0;
  If Y1 < 0 Then Y1 := 0;
  If X2 > CullW Then X2 := CullW;
  If Y2 > CullH Then Y2 := CullH;
+ LastBg := -1; LastRes := 0;
  For Y := Y1 To Y2 Do Begin
   X := X1;
   While X <= X2 Do Begin
-   If GetPixel(X, Y) = White Then Begin
-    { Rechercher la fin du segment blanc }
-    PutPixel(X, Y, Col);
-   End;
+   Bg := GetPixel(X, Y);
+   If Pal256 Then Begin
+    { multiplication réelle des couleurs }
+    If Bg <> LastBg Then Begin
+     C := IdxRgb(Bg);
+     LastRes := ScrCol(RGBOf((((C Shr 16) And 255) * ((Rgb Shr 16) And 255)) Div 255,
+                             (((C Shr 8) And 255) * ((Rgb Shr 8) And 255)) Div 255,
+                             ((C And 255) * (Rgb And 255)) Div 255));
+     LastBg := Bg;
+    End;
+    PutPixel(X, Y, LastRes);
+   End
+   Else If Bg = White Then PutPixel(X, Y, Col);
    Inc(X);
   End;
  End;
@@ -1480,7 +1544,7 @@ End;
 { Trace un glyphe. Les points de dessin sont transformés par l'affine
   (écran = O + u*Ax + v*Ay), u et v en points. }
 Procedure VGlyph(Code: Integer; CellU, Adv, Size: Real; OX, OY, AXx, AXy, AYx, AYy: Real;
-                 Col: Integer; Bold, Ital: Boolean);
+                 Col: Integer; TextRgb: LongInt; Bold, Ital: Boolean);
 Const
  MAXP = 220;
 Var
@@ -1579,6 +1643,14 @@ Begin
    VCov[PY, PX] := 0;
    XX := BX0 + PX; YY := BY0 + PY;
    If (XX < 0) Or (YY < 0) Or (XX > CullW) Or (YY > CullH) Then Continue;
+   If Pal256 Then Begin
+    { anti-crénelage en vraies couleurs : mélange avec ce qui est déjà dessiné }
+    Cv := Ci / 255 * 1.2;
+    If Cv < 0.04 Then Continue;
+    If Cv >= 0.96 Then PutPixel(XX, YY, Col)
+    Else PutPixel(XX, YY, ScrCol(LerpRgb(IdxRgb(GetPixel(XX, YY)), TextRgb, Cv)));
+    Continue;
+   End;
    Cv := Ci / 255 * 1.25;
    If Cv >= 0.78 Then PutPixel(XX, YY, Col)
    Else If Cv >= 0.18 Then Begin
@@ -1713,7 +1785,7 @@ Var
 Begin
  N := Length(S);
  If N = 0 Then Exit;
- Col := Nearest16(Rgb);
+ Col := ScrCol(Rgb);
  Bold := (Style And 1) <> 0;
  Ital := (Style And 2) <> 0;
  Em := Round(Size * GSc / 1024.0);
@@ -1747,7 +1819,7 @@ Begin
   C := WinCode(Ord(S[I]));
   If C = 160 Then C := 32;
   Adv := CharW(Fam, Style, Ord(S[I])) * Size / 1000.0 * Ratio;
-  If C > 32 Then VGlyph(C, Acc, Adv, Size, OX, OY, OAX, OAY, ODX, ODY, Col, Bold, Ital);
+  If C > 32 Then VGlyph(C, Acc, Adv, Size, OX, OY, OAX, OAY, ODX, ODY, Col, Rgb, Bold, Ital);
   Acc := Acc + Adv;
  End;
 End;
@@ -1875,7 +1947,7 @@ Begin
  Al := PBytePix(ImgP(I)^.Alpha);
  HF := (O.Style And 1) <> 0;
  VF := (O.Style And 2) <> 0;
- MaskCol := Nearest16(O.Rgb);
+ MaskCol := ScrCol(O.Rgb);
  XA := IMax(X1, 0); XB := IMin(X2, CullW);
  YA := IMax(Y1, 0); YB := IMin(Y2, CullH);
  For Y := YA To YB Do
@@ -1908,12 +1980,31 @@ Begin
     R := ((Vv Shr 11) And 31) * 255 Div 31;
     G := ((Vv Shr 5) And 63) * 255 Div 63;
     B := (Vv And 31) * 255 Div 31;
-    Off := Bayer4[Y And 3, X And 3] * 5 - 38;
-    R := R + Off; G := G + Off; B := B + Off;
-    If R < 0 Then R := 0; If R > 255 Then R := 255;
-    If G < 0 Then G := 0; If G > 255 Then G := 255;
-    If B < 0 Then B := 0; If B > 255 Then B := 255;
-    PutPixel(X, Y, DLut[((R Shr 4) Shl 8) Or ((G Shr 4) Shl 4) Or (B Shr 4)]);
+    If Pal256 Then Begin
+     If (Abs(R - G) < 8) And (Abs(G - B) < 8) Then Begin
+      { image en niveaux de gris : rampe de 24 gris + tramage léger }
+      Off := Bayer4[Y And 3, X And 3] - 8;
+      R := (R + G + B) Div 3 + Off;
+      If R < 0 Then R := 0; If R > 255 Then R := 255;
+      PutPixel(X, Y, ScrCol(RGBOf(R, R, R)));
+     End
+     Else Begin
+      Off := Bayer4[Y And 3, X And 3] * 3 - 22;
+      R := R + Off; G := G + Off; B := B + Off;
+      If R < 0 Then R := 0; If R > 255 Then R := 255;
+      If G < 0 Then G := 0; If G > 255 Then G := 255;
+      If B < 0 Then B := 0; If B > 255 Then B := 255;
+      PutPixel(X, Y, 16 + ((R + 25) Div 51) * 36 + ((G + 25) Div 51) * 6 + ((B + 25) Div 51));
+     End;
+    End
+    Else Begin
+     Off := Bayer4[Y And 3, X And 3] * 5 - 38;
+     R := R + Off; G := G + Off; B := B + Off;
+     If R < 0 Then R := 0; If R > 255 Then R := 255;
+     If G < 0 Then G := 0; If G > 255 Then G := 255;
+     If B < 0 Then B := 0; If B > 255 Then B := 255;
+     PutPixel(X, Y, DLut[((R Shr 4) Shl 8) Or ((G Shr 4) Shl 4) Or (B Shr 4)]);
+    End;
    End;
   End;
 End;
@@ -1931,8 +2022,8 @@ Var
 Begin
  ScrBox(O, SX1, SY1, SX2, SY2);
  If (SX2 < -4) Or (SY2 < -4) Or (SX1 > CullW + 4) Or (SY1 > CullH + 4) Then Exit;
- Col := Nearest16(O.Rgb);
- FCol := Nearest16(O.Rgb2);
+ Col := ScrCol(O.Rgb);
+ FCol := ScrCol(O.Rgb2);
  W := (LongInt(O.Wd) * GSc) Div 1024;
  If W < 1 Then W := 1;
  If Pass = 1 Then Begin
@@ -2003,7 +2094,7 @@ Begin
   End;
  End
  Else If Pass = 2 Then Begin
-  If O.Kind = K_HILITE Then FillMultiply(SX1, SY1, SX2, SY2, Col);
+  If O.Kind = K_HILITE Then FillMultiply(SX1, SY1, SX2, SY2, Col, O.Rgb);
  End
  Else If Pass = 3 Then Begin
   Case O.Kind Of
@@ -5351,7 +5442,6 @@ End;
 
 {$IFDEF FPC}
 Const
- IMGMAXDIM = 384;
  IMGMAXBYTES = 100000000;
 
 Type
@@ -5637,7 +5727,7 @@ Begin
  ImgListFree;
 End;
 
-{ Réduit l'image courante (contexte I*) à au plus IMGMAXDIM pixels }
+{ Réduit l'image courante (contexte I*) à au plus ImgMaxDim pixels }
 Procedure Downsample(Var TW_, TH_: LongInt; Var Pix: PWordsBig; Var Alpha: PBigBytes);
 Var
  X, Y, I, J, NX, NY, X0, X1, Y0, Y1, SX, SY, Cnt: LongInt;
@@ -5645,11 +5735,11 @@ Var
  R, G, B: Integer;
 Begin
  If IW >= IH Then Begin
-  TW_ := IMin(IW, IMGMAXDIM);
+  TW_ := IMin(IW, ImgMaxDim);
   TH_ := IMax(1, (IH * TW_) Div IW);
  End
  Else Begin
-  TH_ := IMin(IH, IMGMAXDIM);
+  TH_ := IMin(IH, ImgMaxDim);
   TW_ := IMax(1, (IW * TH_) Div IH);
  End;
  NX := IMin(3, IMax(1, (IW + TW_ - 1) Div TW_));
@@ -5683,64 +5773,23 @@ Begin
  End;
 End;
 
-Function ImportImageObj(Num: Integer; AsSM: Boolean): Integer;
+ 
+Function ImportImageObj(Num: Integer; AsSM: Boolean): Integer; Forward;
+Function FinishImage(W, H, Bpc, CS, Comps, PalBase: LongInt; IsMask: Boolean; Const DecStr: String;
+                     Raw: Pointer; RawLen: LongInt; Num: Integer; AsSM: Boolean; SMNum: Integer): Integer;
 Var
- S0: TSrcState;
- P, V: LongInt;
- W, H, Bpc, CS, Comps, PalBase, RowBytes, Exp, CurLen, OutLen, TW_, TH_: LongInt;
- IsMask, Ok, Unsup, FinalDCT, Keep, Owned: Boolean;
- Raw: Pointer;
- RawLen: LongInt;
- Dec: Array[0..7] Of Real;
- ND, K, SMNum, Idx, M: Integer;
+ RowBytes, Exp, CurLen, OutLen, TW_, TH_: LongInt;
+ Ok, Unsup, FinalDCT, Keep, Owned: Boolean;
+ K, Idx, M: Integer;
  Cur, Tmp, Pred: PBigBytes;
  Pix: PWordsBig;
  Alpha: PBigBytes;
- DecStr, Nm: String;
+ Nm: String;
  Ji: TJDImage;
  X, Y: LongInt;
- AA: PBigBytes;
  SW, SH: LongInt;
 Begin
- ImportImageObj := 0;
- If (Num < 1) Or (Num > MAXPDFOBJ) Then Exit;
- If ImgByObj^[Num] <> 0 Then Begin
-  If ImgByObj^[Num] <> 65535 Then ImportImageObj := ImgByObj^[Num];
-  Exit;
- End;
- If ImgCount >= MAXIMG Then Exit;
- ImgByObj^[Num] := 65535;
- SaveSrc(S0);
- SrcMode := 0;
- P := EnterObj(Num);
- If (P < 0) Or (SrcMode <> 0) Then Begin RestoreSrc(S0); Exit; End;
- W := ValInt(DictFind(P, 'Width'), 0);
- H := ValInt(DictFind(P, 'Height'), 0);
- If (W < 1) Or (H < 1) Or (W > 30000) Or (H > 30000) Or (W * H > 150000000) Then Begin RestoreSrc(S0); Exit; End;
- IsMask := False;
- V := DictFind(P, 'ImageMask');
- If V >= 0 Then If NextTok(V) = T_OP Then IsMask := TokS = 'true';
- Bpc := ValInt(DictFind(P, 'BitsPerComponent'), 8);
- If IsMask Then Bpc := 1;
- CS := 0; Comps := 0; PalBase := 0; IPalN := 0;
- If IsMask Then Begin CS := 1; Comps := 1; End
- Else If Not ParseCS(DictFind(P, 'ColorSpace'), 0, CS, Comps, PalBase) Then CS := 0;
- SrcMode := 0;
- P := EnterObj(Num);
- ND := ReadNums(DictFind(P, 'Decode'), Dec, 8);
- DecStr := '';
- For K := 0 To ND - 1 Do Begin
-  If K > 0 Then DecStr := DecStr + ' ';
-  DecStr := DecStr + RStr(Dec[K]);
- End;
- IInv := (ND >= 2) And (Dec[0] > Dec[1]);
- ReadFiltersAndParms(P);
- SMNum := 0;
- V := DictFind(P, 'SMask');
- If V >= 0 Then SMNum := RefAt(V);
- Ok := ReadRawStream(P, Raw, RawLen);
- RestoreSrc(S0);
- If Not Ok Then Exit;
+ FinishImage := 0;
  If (Bpc <> 1) And (Bpc <> 2) And (Bpc <> 4) And (Bpc <> 8) And (Bpc <> 16) Then Bpc := 8;
  { chaîne de filtres admise pour la réécriture ? }
  Keep := (CS In [1, 3, 4, 5]) Or IsMask;
@@ -5879,9 +5928,214 @@ Begin
   ImgP(Idx)^.PalN := IPalN;
   ImgP(Idx)^.PalBase := PalBase;
  End;
- ImgByObj^[Num] := Idx;
- ImportImageObj := Idx;
+ If Num > 0 Then ImgByObj^[Num] := Idx;
+ FinishImage := Idx;
 End;
+
+Function ImportImageObj(Num: Integer; AsSM: Boolean): Integer;
+Var
+ S0: TSrcState;
+ P, V: LongInt;
+ W, H, Bpc, CS, Comps, PalBase: LongInt;
+ IsMask, Ok: Boolean;
+ Raw: Pointer;
+ RawLen: LongInt;
+ Dec: Array[0..7] Of Real;
+ ND, K, SMNum: Integer;
+ DecStr, Nm: String;
+Begin
+ ImportImageObj := 0;
+ If (Num < 1) Or (Num > MAXPDFOBJ) Then Exit;
+ If ImgByObj^[Num] <> 0 Then Begin
+  If ImgByObj^[Num] <> 65535 Then ImportImageObj := ImgByObj^[Num];
+  Exit;
+ End;
+ If ImgCount >= MAXIMG Then Exit;
+ ImgByObj^[Num] := 65535;
+ SaveSrc(S0);
+ SrcMode := 0;
+ P := EnterObj(Num);
+ If (P < 0) Or (SrcMode <> 0) Then Begin RestoreSrc(S0); Exit; End;
+ W := ValInt(DictFind(P, 'Width'), 0);
+ H := ValInt(DictFind(P, 'Height'), 0);
+ If (W < 1) Or (H < 1) Or (W > 30000) Or (H > 30000) Or (W * H > 150000000) Then Begin RestoreSrc(S0); Exit; End;
+ IsMask := False;
+ V := DictFind(P, 'ImageMask');
+ If V >= 0 Then If NextTok(V) = T_OP Then IsMask := TokS = 'true';
+ Bpc := ValInt(DictFind(P, 'BitsPerComponent'), 8);
+ If IsMask Then Bpc := 1;
+ CS := 0; Comps := 0; PalBase := 0; IPalN := 0;
+ If IsMask Then Begin CS := 1; Comps := 1; End
+ Else If Not ParseCS(DictFind(P, 'ColorSpace'), 0, CS, Comps, PalBase) Then CS := 0;
+ SrcMode := 0;
+ P := EnterObj(Num);
+ ND := ReadNums(DictFind(P, 'Decode'), Dec, 8);
+ DecStr := '';
+ For K := 0 To ND - 1 Do Begin
+  If K > 0 Then DecStr := DecStr + ' ';
+  DecStr := DecStr + RStr(Dec[K]);
+ End;
+ IInv := (ND >= 2) And (Dec[0] > Dec[1]);
+ ReadFiltersAndParms(P);
+ SMNum := 0;
+ V := DictFind(P, 'SMask');
+ If V >= 0 Then SMNum := RefAt(V);
+ Ok := ReadRawStream(P, Raw, RawLen);
+ RestoreSrc(S0);
+ If Not Ok Then Exit;
+ ImportImageObj := FinishImage(W, H, Bpc, CS, Comps, PalBase, IsMask, DecStr, Raw, RawLen, Num, AsSM, SMNum);
+End;
+
+{ Nom de filtre complet à partir de l'abréviation des images en ligne }
+Function FullFilter(Const N: String): String;
+Begin
+ If N = 'Fl' Then FullFilter := 'FlateDecode'
+ Else If N = 'DCT' Then FullFilter := 'DCTDecode'
+ Else If N = 'A85' Then FullFilter := 'ASCII85Decode'
+ Else If N = 'AHx' Then FullFilter := 'ASCIIHexDecode'
+ Else If N = 'LZW' Then FullFilter := 'LZWDecode'
+ Else If N = 'RL' Then FullFilter := 'RunLengthDecode'
+ Else If N = 'CCF' Then FullFilter := 'CCITTFaxDecode'
+ Else FullFilter := N;
+End;
+
+{ Image en ligne : P est situé juste après BI, retourne l'indice d'image (0 si échec).
+  À la sortie P est placé après EI. }
+Function InlineImage(Var P: LongInt): Integer;
+Var
+ T, K, I: Integer;
+ Q, VP, WP, HP, BP, CP, FP, DPP, IMP, DCP, DS, DL, Pos0, Cnt: LongInt;
+ Key: String;
+ W, H, Bpc, CS, Comps, PalBase, RowBytes, Len, Start, Ei: LongInt;
+ IsMask, Found: Boolean;
+ Raw: PBigBytes;
+ Dec: Array[0..7] Of Real;
+ ND: Integer;
+ DecStr: String;
+ C: Integer;
+Begin
+ InlineImage := 0;
+ WP := -1; HP := -1; BP := -1; CP := -1; FP := -1; DPP := -1; IMP := -1; DCP := -1;
+ Found := False;
+ While True Do Begin
+  T := NextTok(P);
+  If T = T_EOF Then Exit;
+  If (T = T_OP) And (TokS = 'ID') Then Begin Found := True; Break; End;
+  If T = T_NAME Then Begin
+   Key := TokS;
+   VP := P;
+   SkipValue(P);
+   If (Key = 'W') Or (Key = 'Width') Then WP := VP
+   Else If (Key = 'H') Or (Key = 'Height') Then HP := VP
+   Else If (Key = 'BPC') Or (Key = 'BitsPerComponent') Then BP := VP
+   Else If (Key = 'CS') Or (Key = 'ColorSpace') Then CP := VP
+   Else If (Key = 'F') Or (Key = 'Filter') Then FP := VP
+   Else If (Key = 'DP') Or (Key = 'DecodeParms') Then DPP := VP
+   Else If (Key = 'IM') Or (Key = 'ImageMask') Then IMP := VP
+   Else If (Key = 'D') Or (Key = 'Decode') Then DCP := VP;
+  End;
+ End;
+ If Not Found Then Exit;
+ { la donnée commence après un seul blanc }
+ Start := P + 1;
+ If (SB(P) = 13) And (SB(P + 1) = 10) Then Start := P + 2;
+ W := 0; H := 0;
+ If WP >= 0 Then W := ValInt(WP, 0);
+ If HP >= 0 Then H := ValInt(HP, 0);
+ IsMask := False;
+ If IMP >= 0 Then Begin Q := IMP; If NextTok(Q) = T_OP Then IsMask := TokS = 'true'; End;
+ Bpc := 8;
+ If BP >= 0 Then Bpc := ValInt(BP, 8);
+ If IsMask Then Bpc := 1;
+ INF := 0; IPred := 1; ICols := 1; IClr := 1;
+ If FP >= 0 Then Begin
+  Q := FP;
+  T := NextTok(Q);
+  If T = T_NAME Then Begin IFlt[0] := FullFilter(TokS); INF := 1; End
+  Else If T = T_AB Then
+   While INF < 4 Do Begin
+    T := NextTok(Q);
+    If T = T_NAME Then Begin IFlt[INF] := FullFilter(TokS); Inc(INF); End Else Break;
+   End;
+ End;
+ If DPP >= 0 Then Begin
+  Q := DPP;
+  Pos0 := Q;
+  T := NextTok(Q);
+  If T = T_AB Then Begin
+   While True Do Begin
+    Pos0 := Q;
+    T := NextTok(Q);
+    If (T = T_DB) Or (T = T_AE) Or (T = T_EOF) Then Break;
+   End;
+  End;
+  If T = T_DB Then Begin
+   IPred := ValInt(DictFind(Pos0, 'Predictor'), 1);
+   ICols := ValInt(DictFind(Pos0, 'Columns'), 1);
+   IClr := ValInt(DictFind(Pos0, 'Colors'), 1);
+  End;
+ End;
+ { fin des données }
+ Len := -1;
+ If (INF = 0) And (W > 0) And (H > 0) Then Begin
+  If IsMask Then RowBytes := (W + 7) Div 8
+  Else Begin
+   CS := 0; Comps := 0; PalBase := 0; IPalN := 0;
+   If CP >= 0 Then If Not ParseCS(CP, 0, CS, Comps, PalBase) Then CS := 0;
+   If CS = 0 Then RowBytes := 0 Else RowBytes := (W * Comps * Bpc + 7) Div 8;
+  End;
+  If (RowBytes > 0) And (RowBytes * H < IMGMAXBYTES) Then Begin
+   Len := RowBytes * H;
+   Ei := Start + Len;
+   { vérifier qu'EI suit }
+   Q := Ei;
+   While IsWs(SB(Q)) Do Inc(Q);
+   If Not ((SB(Q) = 69) And (SB(Q + 1) = 73)) Then Len := -1
+   Else Begin P := Q + 2; End;
+  End;
+ End;
+ If Len < 0 Then Begin
+  Q := Start;
+  Len := -1;
+  While True Do Begin
+   C := SB(Q);
+   If C = -1 Then Break;
+   If (C = 69) And (SB(Q + 1) = 73) And IsWs(SB(Q - 1)) And (IsWs(SB(Q + 2)) Or (SB(Q + 2) = -1)) Then Begin
+    { les octets qui suivent doivent ressembler à du texte }
+    Cnt := 0;
+    K := 3;
+    While K < 12 Do Begin
+     I := SB(Q + K);
+     If I = -1 Then Break;
+     If (I > 127) Or ((I < 32) And Not IsWs(I)) Then Inc(Cnt);
+     Inc(K);
+    End;
+    If Cnt = 0 Then Begin Len := Q - 1 - Start; P := Q + 2; Break; End;
+   End;
+   Inc(Q);
+  End;
+  If Len < 0 Then Begin P := Q; Exit; End;
+ End;
+ If (W < 1) Or (H < 1) Or (W > 30000) Or (H > 30000) Or (W * H > 150000000) Then Exit;
+ If (Len < 1) Or (Len > IMGMAXBYTES) Then Exit;
+ CS := 0; Comps := 0; PalBase := 0; IPalN := 0;
+ If IsMask Then Begin CS := 1; Comps := 1; End
+ Else If CP >= 0 Then Begin
+  If Not ParseCS(CP, 0, CS, Comps, PalBase) Then CS := 0;
+ End;
+ ND := 0;
+ If DCP >= 0 Then ND := ReadNums(DCP, Dec, 8);
+ DecStr := '';
+ For K := 0 To ND - 1 Do Begin
+  If K > 0 Then DecStr := DecStr + ' ';
+  DecStr := DecStr + RStr(Dec[K]);
+ End;
+ IInv := (ND >= 2) And (Dec[0] > Dec[1]);
+ GetMem(Raw, Len + 16);
+ For K := 0 To Len - 1 Do Raw^[K] := SB(Start + K);
+ InlineImage := FinishImage(W, H, Bpc, CS, Comps, PalBase, IsMask, DecStr, Raw, Len, 0, False, 0);
+End;
+
 {$ELSE}
 Procedure FreeImages;
 Begin
@@ -5890,6 +6144,10 @@ End;
 Function ImportImageObj(Num: Integer; AsSM: Boolean): Integer;
 Begin
  ImportImageObj := 0;
+End;
+Function InlineImage(Var P: LongInt): Integer;
+Begin
+ InlineImage := 0;
 End;
 {$ENDIF}
 
@@ -6509,23 +6767,9 @@ Begin
    End
    Else If Op = 'Do' Then DoXObject(LastName, Depth)
    Else If Op = 'BI' Then Begin
-    { image en ligne : sauter jusqu'à EI }
-    While True Do Begin
-     T2 := NextTok(P);
-     If T2 = T_EOF Then Break;
-     If (T2 = T_OP) And (TokS = 'ID') Then Break;
-    End;
-    Inc(P);
-    While True Do Begin
-     I := SB(P);
-     If I = -1 Then Break;
-     If IsWs(I) And (SB(P + 1) = 69) And (SB(P + 2) = 73) And (IsWs(SB(P + 3)) Or (SB(P + 3) = -1)) Then Begin
-      Inc(P, 3);
-      Break;
-     End;
-     Inc(P);
-    End;
-    EmitImage(0);
+    { image en ligne }
+    I := InlineImage(P);
+    If I > 0 Then EmitImage(I) Else EmitImage(0);
    End;
   End;
  Else
@@ -9581,7 +9825,7 @@ Begin
   End;
   3: Begin
    Field3D(X0, Y + 1, X0 + 46, Y + 19);
-   SetFillStyle(SolidFill, Nearest16(Fields[I].Mn));
+   SetFillStyle(SolidFill, ScrCol(Fields[I].Mn));
    Bar(X0 + 3, Y + 4, X0 + 43, Y + 16);
    SetColor(Black);
    DS(X0 + 54, Y + 7, 'Cliquer pour changer');
@@ -11686,7 +11930,7 @@ Begin
      HideMouse;
      SetViewPort(ViewL, ViewT, ViewR, ViewB, True);
      ThickLine(MXp(InkX[InkN - 1], InkY[InkN - 1]) - ViewL, MYp(InkX[InkN - 1], InkY[InkN - 1]) - ViewT,
-               MXp(PX, PY) - ViewL, MYp(PX, PY) - ViewT, IMax(1, PU(CurWidth)), Nearest16(ToolRgb[TL_PENCIL]));
+               MXp(PX, PY) - ViewL, MYp(PX, PY) - ViewT, IMax(1, PU(CurWidth)), ScrCol(ToolRgb[TL_PENCIL]));
      SetFullView;
      ShowMouse;
      Inc(InkN);
@@ -12087,6 +12331,7 @@ Begin
  UndoTop := 0; RedoTop := 0;
  DragMode := 0; PreviewOn := False;
  Running := True;
+ ImgMaxDim := 384;
  DocName := ''; Modified := False; Imported := False;
  HintText := ''; StatusMsg := '';
  SigName := '';
@@ -12142,6 +12387,7 @@ BEGIN
  {$ENDIF}
  InitVars;
  InitializeGraphics;
+ If Pal256 Then ImgMaxDim := 1024;
  {$IFDEF FPC}
  Dummy := PtcMouse.InitMouse;
  PtcMouse.ShowMouse;

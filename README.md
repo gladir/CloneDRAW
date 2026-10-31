@@ -268,7 +268,7 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 		</tr>	
 		<tr>
 			<td><b>PREMIERE.PAS</b></td>
-			<td>Cette commande permet de lancer un clone de Premiere Pro (montage vidéo non linéaire). Importe images (BMP, GIF, PNG, JPEG, PCX, TGA, PPM, XBM, LBM, TIFF, BGX, WPG...), vidéos (H.264 en MP4/MOV/FLV/AVI, MPEG-4, MJPEG, AVI brut/RLE/Cinepak, GIF animé, FLI/FLC, Y4M) et audio WAV (mixage réel, lecture sonore sous Windows). Exporte en BMP, WAV, EDL et AVI MJPEG avec son. Option -maxscreen : résolution maximale (Free Pascal).</td>
+			<td>Cette commande permet de lancer un clone de Premiere Pro (montage vidéo non linéaire). Importe images (BMP, GIF, PNG, JPEG, PCX, TGA, PPM, XBM, LBM, TIFF, BGX, WPG...), vidéos (H.264 en MP4/MOV/FLV/AVI, MPEG-4, MJPEG, AVI brut/RLE/Cinepak, GIF animé, FLI/FLC, Y4M) et audio WAV (mixage réel, lecture sonore sous Windows). Exporte en BMP, WAV, EDL et AVI MJPEG avec son. Options Free Pascal : -maxscreen (résolution maximale) et -maxcolors (couleurs vraies, séquence jusqu'à 1920x1080, export AVI MJPEG ou MP4 H.264 avec son).</td>
 		</tr>
 		<tr>
 			<td><b>PSP.PAS</b></td>

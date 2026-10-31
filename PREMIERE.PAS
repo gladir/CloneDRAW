@@ -283,6 +283,7 @@ Const
  MK_MELODY = 21;
  MK_PULSE = 22;
  MK_WAV = 23;
+ MK_APCM = 24;
 
  { Indicateurs de clip }
  CF_MIRH = 1;
@@ -503,7 +504,7 @@ Const
  CM_RENAME = 300; CM_SPEED = 301; CM_ENABLE = 302; CM_RESETFX = 303;
  CM_SPLIT = 304; CM_INSERT = 305; CM_OVERWRITE = 306; CM_VTRANS = 307;
  CM_ATRANS = 308; CM_NOTRANS = 309; CM_EDITTITLE = 310;
- CM_LINK = 312; CM_UNLINK = 313; CM_INTERP0 = 320; CM_LUT = 323;
+ CM_NEST = 314; CM_LINK = 312; CM_UNLINK = 313; CM_INTERP0 = 320; CM_LUT = 323;
  CM_ADDV = 412; CM_ADDA = 413; CM_DELV = 414; CM_DELA = 415;
  CM_SEQSET = 400; CM_MARKIN = 401; CM_MARKOUT = 402; CM_CLEARIO = 403;
  CM_REMGAP = 404; CM_ZOOMIN = 405; CM_ZOOMOUT = 406; CM_ZOOMFIT = 407;
@@ -582,6 +583,7 @@ Var
  LastTone: Integer;
  AuActive: Boolean;
  DefInterp: Integer;
+ OnlySel: Boolean;
  CurBin: Integer;
  ProjVis: Array[0..MAXMEDIA - 1] Of Integer;
  ProjVN: Integer;
@@ -998,6 +1000,20 @@ Var
  EnvN: Array[0..5] Of LongInt;
  EnvNext: Integer;
 
+{ Fichier d'enveloppe audio associe a un media (WAV : meme fichier ; PCM en cache : .PVA) }
+Function EnvFile(M: Integer): String;
+Var
+ S: String;
+Begin
+ S := P.Media[M].Cache;
+ If (P.Media[M].Kind = MK_APCM) And (Length(S) > 3) Then Begin
+  S[Length(S) - 2] := 'P';
+  S[Length(S) - 1] := 'V';
+  S[Length(S)] := 'A';
+ End;
+ EnvFile := S;
+End;
+
 Procedure CacheCloseName(Const Name: String);
 Var
  I: Integer;
@@ -1190,6 +1206,7 @@ Begin
   MK_IMAGE: KindName := 'Image';
   MK_VIDEO: KindName := 'Vidéo';
   MK_WAV: KindName := 'Audio WAV';
+  MK_APCM: KindName := 'Audio';
   MK_TONE: KindName := 'Tonalité';
   MK_MELODY: KindName := 'Mélodie';
   MK_PULSE: KindName := 'Impulsions';
@@ -2146,6 +2163,7 @@ Begin
  For T := 0 To P.NV - 1 Do
   If (P.TrkF[T] And TF_HIDE) = 0 Then Begin
    I := FindClip(T, Tm);
+   If (I >= 0) And OnlySel And (Not P.Clips[I].Sel) Then I := -1;
    If (I >= 0) And ((P.Clips[I].Fl And CF_OFF) = 0) Then Begin
     If (P.Clips[I].TIn > 0) And ((P.Clips[I].Fl And CF_TCUT) <> 0) And
        (Tm - P.Clips[I].Start < P.Clips[I].TInL) Then Begin
@@ -2612,8 +2630,8 @@ Begin
       Amp := 70 + Sn(SF * 5) Div 12;
       Q := P.Media[M].Par;
      End;
-     MK_WAV: Begin
-      Env := EnvGet(P.Media[M].Cache, EN);
+     MK_WAV, MK_APCM: Begin
+      Env := EnvGet(EnvFile(M), EN);
       Pr := (SF * 50) Div P.Fps;
       Amp := 0;
       If (Env <> Nil) And (Pr < EN) Then Begin
@@ -2869,7 +2887,7 @@ Begin
   CM_EDITTITLE: CmdEnabled := (FirstSel >= 0) And
                               (P.Media[P.Clips[FirstSel].Med].Kind = MK_TITLE);
   CM_NEXTMARK, CM_PREVMARK, CM_DELMARK, CM_DELMARKS: CmdEnabled := P.NK > 0;
-  CM_LINK, CM_UNLINK: CmdEnabled := SelCount > 0;
+  CM_LINK, CM_UNLINK, CM_NEST: CmdEnabled := SelCount > 0;
  End;
 End;
 
@@ -2976,6 +2994,7 @@ Begin
  MenuSep(2);
  MenuAdd(2, 'Lier vidéo/audio', '', CM_LINK);
  MenuAdd(2, 'Dissocier', '', CM_UNLINK);
+ MenuAdd(2, 'Imbriquer (rendre et remplacer)', '', CM_NEST);
  MenuAdd(2, 'Clés : interpolation linéaire', '', CM_INTERP0);
  MenuAdd(2, 'Clés : maintien', '', CM_INTERP0 + 1);
  MenuAdd(2, 'Clés : lissée', '', CM_INTERP0 + 2);
@@ -4313,7 +4332,8 @@ Begin
   SetColor(Black);
   Env := Nil;
   EN := 0;
-  If P.Media[P.Clips[I].Med].Kind = MK_WAV Then Env := EnvGet(P.Media[P.Clips[I].Med].Cache, EN);
+  If (P.Media[P.Clips[I].Med].Kind = MK_WAV) Or (P.Media[P.Clips[I].Med].Kind = MK_APCM) Then
+   Env := EnvGet(EnvFile(P.Clips[I].Med), EN);
   X := XA;
   While X <= XB Do Begin
    F := XToFrame(X) - P.Clips[I].Start;
@@ -5824,6 +5844,180 @@ Begin
  ConfUI(False);
  If CnFrames >= CnMaxFrames Then CnCancel := True;
  ConfAudioEmit := Not CnCancel;
+End;
+
+{ ---------- Puits PCM : audio decode -> PCM 22050 Hz stereo 16 bits (cache .PCA + enveloppe .PVA) ---------- }
+
+Const
+ PcmRate = 22050;
+
+Type
+ TPcmOut = Array[0..4095] Of SmallInt;
+ TAuS16Local = Array[0..100000000] Of SmallInt;
+ PAuS16Local = ^TAuS16Local;
+
+Var
+ PcmOn: Boolean;
+ PcmF: File;
+ PcmEnvName: String[12];
+ PcmN, PcmIn, PcmMax, PcmWin: LongInt;
+ PcmPkL, PcmPkR: LongInt;
+ PcmEnv: PEnv;
+ PcmOut: TPcmOut;
+ PcmOutN: Integer;
+
+Function ConfBeginPcm(Const Name: String; MaxSec: LongInt): Boolean;
+Var
+ H: Array[0..31] Of Byte;
+ EnvN2: String;
+Begin
+ ConfBeginPcm := False;
+ CacheCloseName(Name);
+ EnvN2 := Name;
+ If Length(EnvN2) > 3 Then Begin
+  EnvN2[Length(EnvN2) - 2] := 'P';
+  EnvN2[Length(EnvN2) - 1] := 'V';
+  EnvN2[Length(EnvN2)] := 'A';
+ End;
+ CacheCloseName(EnvN2);
+ {$I-}
+ Assign(PcmF, Name);
+ Rewrite(PcmF, 1);
+ {$I+}
+ If IOResult <> 0 Then Exit;
+ FillChar(H, SizeOf(H), 0);
+ BlockWrite(PcmF, H, 32);
+ PcmEnvName := EnvN2;
+ PcmN := 0;
+ PcmIn := 0;
+ PcmWin := 0;
+ PcmPkL := 0;
+ PcmPkR := 0;
+ PcmOutN := 0;
+ PcmMax := MaxSec * PcmRate;
+ If PcmMax > 13230000 Then PcmMax := 13230000;
+ If PcmEnv = Nil Then New(PcmEnv);
+ FillChar(PcmEnv^, SizeOf(TEnv), 0);
+ CnCancel := False;
+ CnCapped := False;
+ CnAudio := True;
+ CnFrames := 0;
+ CnMaxFrames := 1;
+ CnProgD := 0;
+ CnProgT := 0;
+ CnTitle := 'Décodage audio';
+ CnLastUI := 0;
+ PcmOn := True;
+ CnOn := True;
+ WaitRelease;
+ ConfUI(True);
+ ConfBeginPcm := True;
+End;
+
+Procedure PcmFlush;
+Begin
+ If PcmOutN > 0 Then Begin
+  {$I-}
+  BlockWrite(PcmF, PcmOut, PcmOutN * 2);
+  {$I+}
+  If IOResult <> 0 Then CnCancel := True;
+  PcmOutN := 0;
+ End;
+End;
+
+{ Recoit N images audio entrelacees (SmallInt) a la frequence Rate ; retourne False pour arreter. }
+Function ConfPcmEmit(Rate, Ch: LongInt; Samples: Pointer; N: LongInt): Boolean;
+Var
+ Src: PAuS16Local;
+ P0, P1, I, L, R, Cnt, SL, SR, V: LongInt;
+Begin
+ ConfPcmEmit := False;
+ If (Not PcmOn) Or CnCancel Or (Rate < 1000) Or (Ch < 1) Or (N < 1) Or (Samples = Nil) Then Exit;
+ Src := PAuS16Local(Samples);
+ While True Do Begin
+  P0 := (PcmN * Rate) Div PcmRate;
+  P1 := ((PcmN + 1) * Rate) Div PcmRate;
+  If P1 <= P0 Then P1 := P0 + 1;
+  If P1 > PcmIn + N Then Break;
+  If P0 < PcmIn Then P0 := PcmIn;
+  SL := 0;
+  SR := 0;
+  Cnt := 0;
+  For I := P0 To P1 - 1 Do Begin
+   V := (I - PcmIn) * Ch;
+   SL := SL + Src^[V];
+   If Ch >= 2 Then SR := SR + Src^[V + 1] Else SR := SR + Src^[V];
+   Inc(Cnt);
+  End;
+  If Cnt < 1 Then Cnt := 1;
+  L := SL Div Cnt;
+  R := SR Div Cnt;
+  PcmOut[PcmOutN] := L;
+  PcmOut[PcmOutN + 1] := R;
+  Inc(PcmOutN, 2);
+  If PcmOutN >= 4096 Then PcmFlush;
+  If Abs(L) > PcmPkL Then PcmPkL := Abs(L);
+  If Abs(R) > PcmPkR Then PcmPkR := Abs(R);
+  Inc(PcmN);
+  If PcmN Mod 441 = 0 Then Begin
+   If PcmWin < 29999 Then Begin
+    PcmEnv^[PcmWin * 2] := Min(255, (PcmPkL * 255) Div 32768);
+    PcmEnv^[PcmWin * 2 + 1] := Min(255, (PcmPkR * 255) Div 32768);
+    Inc(PcmWin);
+   End;
+   PcmPkL := 0;
+   PcmPkR := 0;
+  End;
+  If PcmN >= PcmMax Then Begin
+   CnCapped := True;
+   CnCancel := True;
+   Break;
+  End;
+ End;
+ PcmIn := PcmIn + N;
+ CnFrames := PcmN Div 441;
+ CnMaxFrames := Max(1, PcmMax Div 441);
+ ConfUI(False);
+ ConfPcmEmit := Not CnCancel;
+End;
+
+Procedure ConfEndPcm(Var Samples: LongInt);
+Var
+ H: Array[0..31] Of Byte;
+ F2: File;
+ Name2: String;
+Begin
+ Samples := PcmN;
+ If Not PcmOn Then Exit;
+ PcmOn := False;
+ CnOn := False;
+ PcmFlush;
+ FillChar(H, SizeOf(H), 0);
+ H[0] := Ord('P'); H[1] := Ord('C'); H[2] := Ord('A'); H[3] := Ord('1');
+ PutLE32(H, 8, PcmN);
+ {$I-}
+ Seek(PcmF, 0);
+ BlockWrite(PcmF, H, 32);
+ Close(PcmF);
+ {$I+}
+ If PcmN = 0 Then Begin
+  Erase(PcmF);
+ End Else If PcmWin > 0 Then Begin
+  FillChar(H, SizeOf(H), 0);
+  H[0] := Ord('A'); H[1] := Ord('C'); H[2] := Ord('1');
+  PutLE32(H, 12, PcmWin);
+  {$I-}
+  Assign(F2, PcmEnvName);
+  Rewrite(F2, 1);
+  BlockWrite(F2, H, 32);
+  BlockWrite(F2, PcmEnv^, PcmWin * 2);
+  Close(F2);
+  {$I+}
+  If IOResult <> 0 Then ;
+ End;
+ If IOResult <> 0 Then ;
+ WaitRelease;
+ DrawAll;
 End;
 { ================================================================
   IMGLOAD : lecture d'images pour PREMIERE.
@@ -22677,6 +22871,5769 @@ Begin
  H4IsMpeg4File:=False;
 End;
 {$ENDIF}
+{ ======================================================================
+  auddec.pas - decodeurs AUDIO en Pascal pur (prefixe Ad ; code copie de
+  FFMPEG-0 : prefixe AdZ). Decode la 1re piste audio decodable d'un fichier
+  multimedia vers du PCM 16 bits entrelace et l'envoie au puits de l'hote.
+
+    Function AdProbe(Const FN: String): Boolean;
+    Function AdConformFile(Const FN: String): Boolean;
+    Function AdCodecName(Const FN: String): String;
+
+  Le puits est fourni par l'HOTE (a declarer AVANT ce fragment) :
+    Function ConfPcmEmit(Rate, Ch: LongInt; Samples: Pointer; N: LongInt): Boolean;
+      Samples = N images audio entrelacees SmallInt (Ch = 1 ou 2), blocs
+      d'environ 1 seconde ; False => arret immediat.
+
+  Conteneurs : MP4/MOV/M4A/3GP, AVI, WAV, FLV, MP3/MP2/MP1 brut (ID3v2,
+  Xing/LAME), AAC ADTS brut, FLAC natif.
+  Codecs : MPEG audio couches I/II/III, AAC-LC (mono/stereo), ALAC, FLAC,
+  PCM (u8, s16/24/32 LE/BE, float32/64), A-law, mu-law, ADPCM IMA WAV,
+  ADPCM IMA QuickTime (ima4), ADPCM Microsoft, ADPCM Flash (SWF).
+  Absents de FFMPEG-0 (donc renvoient False) : Vorbis, Opus, WMA, HE-AAC
+  (SBR/PS), AC-3 (non branche), DTS (non branche).
+
+  Mode TP de FPC (Integer = 16 bits) ; sous Turbo Pascal 7 les trois
+  fonctions sont des stubs qui retournent False/''.
+  Les decodeurs MPEG audio, AAC, ALAC, FLAC sont adaptes de FFMPEG-0
+  (FFmpeg, LGPL-2.1-or-later).
+  ====================================================================== }
+{$IFDEF FPC}
+{$PUSH}{$R-}{$Q-}{$I-}{$S-}
+Type
+ TAdZBuf = Array[0..2147483000] Of Byte;
+ PAdZBuf = ^TAdZBuf;
+ TAdZSm = Array[0..1073741000] Of SmallInt;
+ PAdZSm = ^TAdZSm;
+ TAdZD8 = Array[0..7] Of Double;
+
+Const
+ AdZWinSz = 65536;
+ AdZOutMax = 192000;
+
+Var
+ { ---- lecteur de fichier avec fenetre de cache ---- }
+ AdZF: File;
+ AdZIsOpen: Boolean;
+ AdZSize: LongInt;
+ AdZWin: PAdZBuf;
+ AdZWinPos, AdZWinLen: LongInt;
+ { ---- puits ---- }
+ AdZRate, AdZCh, AdZOutN, AdZOutCap: LongInt;
+ AdZOutBuf: PAdZSm;
+ AdZStop, AdZEmitted, AdZLimitHit: Boolean;
+ AdZSkip, AdZMax, AdZNPut: LongInt;   { trames a sauter au debut / a emettre au plus (-1 = illimite) }
+
+Function AdZOpenFile(Const FN: String): Boolean;
+Var Old: Byte; Sz: Int64;
+Begin
+ AdZOpenFile:=False; AdZWin:=Nil; AdZWinPos:=-1; AdZWinLen:=0; AdZSize:=0;
+ If AdZIsOpen Then Exit;
+ Old:=FileMode; FileMode:=0;
+ Assign(AdZF,FN); Reset(AdZF,1);
+ FileMode:=Old;
+ If IOResult<>0 Then Exit;
+ AdZIsOpen:=True;
+ Sz:=FileSize(AdZF);
+ If IOResult<>0 Then Sz:=0;
+ If Sz>2147483000 Then Sz:=2147483000;
+ If Sz<=0 Then Begin Close(AdZF); If IOResult=0 Then ; AdZIsOpen:=False; Exit; End;
+ AdZSize:=Sz;
+ GetMem(AdZWin,AdZWinSz);
+ AdZOpenFile:=True;
+End;
+
+Procedure AdZCloseFile;
+Begin
+ If AdZIsOpen Then Begin Close(AdZF); If IOResult=0 Then ; AdZIsOpen:=False; End;
+ If AdZWin<>Nil Then Begin FreeMem(AdZWin,AdZWinSz); AdZWin:=Nil; End;
+ AdZWinPos:=-1; AdZWinLen:=0;
+End;
+
+{ lit N octets a Pos ; retourne le nombre d'octets lus (0 en cas d'erreur) }
+Function AdZRead(Pos: LongInt; Var Buf; N: LongInt): LongInt;
+Var Got, W: LongInt;
+Begin
+ AdZRead:=0;
+ If (N<=0) Or (Pos<0) Or (Pos>=AdZSize) Or Not AdZIsOpen Then Exit;
+ If N>AdZSize-Pos Then N:=AdZSize-Pos;
+ If N<=32768 Then Begin
+  If (AdZWinPos<0) Or (Pos<AdZWinPos) Or (Pos+N>AdZWinPos+AdZWinLen) Then Begin
+   W:=Pos-(Pos Mod 4096);
+   Seek(AdZF,W);
+   If IOResult<>0 Then Begin AdZWinPos:=-1; Exit; End;
+   Got:=0; BlockRead(AdZF,AdZWin^,AdZWinSz,Got);
+   If IOResult<>0 Then Got:=0;
+   AdZWinPos:=W; AdZWinLen:=Got;
+   If (Pos<AdZWinPos) Or (Pos+N>AdZWinPos+AdZWinLen) Then Begin
+    { fenetre trop courte (lecture partielle) : donne ce qui existe }
+    If (Pos<AdZWinPos) Or (Pos>=AdZWinPos+AdZWinLen) Then Exit;
+    N:=AdZWinPos+AdZWinLen-Pos;
+   End;
+  End;
+  Move(AdZWin^[Pos-AdZWinPos],Buf,N);
+  AdZRead:=N;
+ End Else Begin
+  Seek(AdZF,Pos);
+  If IOResult<>0 Then Exit;
+  Got:=0; BlockRead(AdZF,Buf,N,Got);
+  If IOResult<>0 Then Got:=0;
+  AdZRead:=Got;
+ End;
+End;
+
+Function AdZU8(Pos: LongInt): LongInt;
+Var B: Byte;
+Begin
+ If AdZRead(Pos,B,1)=1 Then AdZU8:=B Else AdZU8:=0;
+End;
+
+Function AdZBE16(Pos: LongInt): LongInt;
+Var B: Array[0..1] Of Byte;
+Begin
+ B[0]:=0; B[1]:=0; AdZRead(Pos,B,2); AdZBE16:=B[0]*256+B[1];
+End;
+
+Function AdZLE16(Pos: LongInt): LongInt;
+Var B: Array[0..1] Of Byte;
+Begin
+ B[0]:=0; B[1]:=0; AdZRead(Pos,B,2); AdZLE16:=B[1]*256+B[0];
+End;
+
+{ 32 bits big-endian, plafonne a 2147483647 si le bit de poids fort est pose }
+Function AdZBE32(Pos: LongInt): LongInt;
+Var B: Array[0..3] Of Byte;
+Begin
+ FillChar(B,4,0); AdZRead(Pos,B,4);
+ If B[0]>=128 Then AdZBE32:=2147483647
+ Else AdZBE32:=LongInt(B[0])*16777216+LongInt(B[1])*65536+LongInt(B[2])*256+B[3];
+End;
+
+{ idem avec signe (valeur 32 bits en complement a deux) }
+Function AdZBE32S(Pos: LongInt): LongInt;
+Var B: Array[0..3] Of Byte; V: Int64;
+Begin
+ FillChar(B,4,0); AdZRead(Pos,B,4);
+ V:=Int64(B[0])*16777216+Int64(B[1])*65536+Int64(B[2])*256+B[3];
+ If V>=2147483648 Then V:=V-4294967296;
+ AdZBE32S:=V;
+End;
+
+Function AdZLE32(Pos: LongInt): LongInt;
+Var B: Array[0..3] Of Byte;
+Begin
+ FillChar(B,4,0); AdZRead(Pos,B,4);
+ If B[3]>=128 Then AdZLE32:=2147483647
+ Else AdZLE32:=LongInt(B[3])*16777216+LongInt(B[2])*65536+LongInt(B[1])*256+B[0];
+End;
+
+{ quatre octets comparables a une chaine de 4 caracteres }
+Function AdZTag(Pos: LongInt): String;
+Var B: Array[0..3] Of Byte; S: String[4]; I: Integer;
+Begin
+ FillChar(B,4,0); AdZRead(Pos,B,4); S:='';
+ For I:=0 To 3 Do S:=S+Chr(B[I]);
+ AdZTag:=S;
+End;
+
+{ ---- exceptions flottantes masquees pendant le decodage (donnees corrompues) ---- }
+Var AdZFpSaved: LongWord;
+Procedure AdZFpMask;
+Begin
+ {$IFDEF CPUX86_64}
+ AdZFpSaved:=GetMXCSR; SetMXCSR(AdZFpSaved Or $1F80);
+ {$ELSE}
+ {$IFDEF CPUI386}
+ AdZFpSaved:=Get8087CW; Set8087CW(Word(AdZFpSaved) Or $3F);
+ {$ENDIF}
+ {$ENDIF}
+End;
+Procedure AdZFpRestore;
+Begin
+ {$IFDEF CPUX86_64}
+ SetMXCSR(AdZFpSaved);
+ {$ELSE}
+ {$IFDEF CPUI386}
+ Set8087CW(Word(AdZFpSaved));
+ {$ENDIF}
+ {$ENDIF}
+End;
+
+{ ---- puits PCM ---- }
+Function AdZSinkOpen(Rate, Ch: LongInt): Boolean;
+Begin
+ AdZSinkOpen:=False;
+ If (Rate<1) Or (Rate>768000) Or (Ch<1) Or (Ch>2) Then Exit;
+ AdZRate:=Rate; AdZCh:=Ch; AdZOutN:=0;
+ AdZOutCap:=Rate; If AdZOutCap<2048 Then AdZOutCap:=2048;
+ If AdZOutCap>AdZOutMax Then AdZOutCap:=AdZOutMax;
+ GetMem(AdZOutBuf,AdZOutCap*Ch*2);
+ AdZSinkOpen:=True;
+End;
+
+Procedure AdZSinkFlush;
+Begin
+ If (AdZOutBuf<>Nil) And (AdZOutN>0) And ((Not AdZStop) Or AdZLimitHit) Then Begin
+  AdZEmitted:=True;
+  If Not ConfPcmEmit(AdZRate,AdZCh,AdZOutBuf,AdZOutN) Then AdZStop:=True;
+ End;
+ AdZOutN:=0;
+End;
+
+Procedure AdZSinkClose;
+Begin
+ If AdZOutBuf<>Nil Then Begin
+  AdZSinkFlush;
+  FreeMem(AdZOutBuf,AdZOutCap*AdZCh*2); AdZOutBuf:=Nil;
+ End;
+End;
+
+{ une image audio : V = valeur 16 bits (deja saturee) du canal gauche, W = droit
+  (ignore en mono) }
+Procedure AdZPut(V, W: LongInt);
+Begin
+ If AdZOutBuf=Nil Then Exit;
+ If AdZSkip>0 Then Begin Dec(AdZSkip); Exit; End;
+ If (AdZMax>=0) And (AdZNPut>=AdZMax) Then Begin AdZLimitHit:=True; AdZStop:=True; Exit; End;
+ If V>32767 Then V:=32767 Else If V<-32768 Then V:=-32768;
+ If AdZCh=1 Then AdZOutBuf^[AdZOutN]:=V
+ Else Begin
+  If W>32767 Then W:=32767 Else If W<-32768 Then W:=-32768;
+  AdZOutBuf^[AdZOutN*2]:=V; AdZOutBuf^[AdZOutN*2+1]:=W;
+ End;
+ Inc(AdZOutN); Inc(AdZNPut);
+ If AdZOutN>=AdZOutCap Then AdZSinkFlush;
+End;
+
+Function AdZRnd(X: Double): LongInt;
+Begin
+ If X<>X Then Begin AdZRnd:=0; Exit; End;
+ If X>=32767.0 Then AdZRnd:=32767
+ Else If X<=-32768.0 Then AdZRnd:=-32768
+ Else AdZRnd:=Round(X);
+End;
+
+{ N canaux (valeurs en echelle 16 bits) -> image stereo/mono selon AdZCh.
+  Dispositions WAV/FLAC : 3 = L R C ; 4 = L R BL BR ; 5 = L R C BL BR ;
+  6 = L R C LFE BL BR ; 7/8 : L R C LFE BL BR (SL SR) }
+Procedure AdZPutN(N: Integer; Var V: TAdZD8);
+Var L, R: Double;
+Begin
+ If N<=1 Then Begin L:=V[0]; R:=V[0]; End
+ Else If N=2 Then Begin L:=V[0]; R:=V[1]; End
+ Else Begin
+  L:=V[0]; R:=V[1];
+  Case N Of
+   3: Begin L:=L+0.7071*V[2]; R:=R+0.7071*V[2]; End;
+   4: Begin L:=L+0.5*V[2]; R:=R+0.5*V[3]; End;
+   5: Begin L:=L+0.7071*V[2]+0.5*V[3]; R:=R+0.7071*V[2]+0.5*V[4]; End;
+   Else Begin
+    L:=L+0.7071*V[2]+0.5*V[4]; R:=R+0.7071*V[2]+0.5*V[5];
+    If N>=8 Then Begin L:=L+0.5*V[6]; R:=R+0.5*V[7]; End;
+   End;
+  End;
+  If N>=3 Then Begin L:=L*0.6; R:=R*0.6; End;
+ End;
+ AdZPut(AdZRnd(L),AdZRnd(R));
+End;
+
+{ ---- Decodeur audio MPEG couches I/II/III (libavcodec/mpegaudiodec_template.c,
+ version flottante, mpegaudiodsp, dct32, mpegaudiodata) ; ADU et MP3onMP4 ;
+  adapte de FFmpeg, LGPL-2.1-or-later ---- }
+Type
+ TAdZMPA32=Array[0..31] Of Single;
+ TAdZMPALongs=Array[0..16777215] Of LongInt; PAdZMPALongs=^TAdZMPALongs;
+ TAdZMPASingles=Array[0..16777215] Of Single; PAdZMPASingles=^TAdZMPASingles;
+ TAdZMPAGB=Record Buf: PAdZBuf; Cap,Size,Idx: LongInt; End;
+ TAdZMPAGran=Record
+  Scfsi,P23,BigValues,GlobalGain,ScalefacCompress,BlockType,SwitchPoint:
+   LongInt;
+  TableSelect,SubblockGain: Array[0..2] Of LongInt;
+  ScalefacScale,Count1Table: LongInt;
+  RegionSize: Array[0..2] Of LongInt;
+  Preflag,ShortStart,LongEnd: LongInt;
+  ScaleFactors: Array[0..39] Of Byte;
+  Hybrid: Array[0..575] Of Single;
+ End;
+ PAdZMPA=^TAdZMPA;
+ TAdZMPA=Record
+  FrameSize,ErrProt,Layer,SampleRate,SRIdx,BitRate,NbCh,Mode,ModeExt,Lsf:
+   LongInt;
+  LastBuf: Array[0..1087] Of Byte; LastBufSize,ExtraSize: LongInt;
+  GB,InGB: TAdZMPAGB;
+  SynthBuf: Array[0..1,0..1023] Of Single; SynthOff: Array[0..1] Of LongInt;
+  Sb: Array[0..1,0..1151] Of Single;
+  Mdct: Array[0..1,0..575] Of Single;
+  Gr: Array[0..1,0..1] Of TAdZMPAGran;
+  SbI: Array[0..1,0..1151] Of LongInt; SynthBufI: Array[0..1,0..1023] Of
+   LongInt; Dither: LongInt; Fixed: Boolean;
+  AduMode: Boolean;
+ End;
+Const
+ AdZMPABackstep=512; AdZMPALastBuf=1048;
+ AdZMPABitrate: Array[0..89] Of Word=(
+  0,32,64,96,128,160,192,224,256,288,320,352,384,416,448,
+  0,32,48,56,64,80,96,112,128,160,192,224,256,320,384,
+  0,32,40,48,56,64,80,96,112,128,160,192,224,256,320,
+  0,32,48,56,64,80,96,112,128,144,160,176,192,224,256,
+  0,8,16,24,32,40,48,56,64,80,96,112,128,144,160,
+  0,8,16,24,32,40,48,56,64,80,96,112,128,144,160);
+ AdZMPAFreqTab: Array[0..2] Of Word=(44100,48000,32000);
+AdZMPAHuffLens: Array[0..1377] Of Byte=(
+ 3,3,2,1,6,6,5,5,5,3,3,3,1,6,6,5,5,5,3,2,
+ 2,2,8,8,7,6,7,7,7,7,6,6,6,6,3,3,3,1,7,7,
+ 6,6,6,5,5,5,5,4,4,4,3,2,3,3,10,10,10,10,9,9,
+ 9,9,8,8,9,9,8,9,9,8,8,7,7,7,8,8,8,8,7,7,
+ 7,7,6,5,6,6,4,3,3,1,11,11,10,9,10,10,9,9,9,8,
+ 8,9,9,9,9,8,8,8,7,8,8,8,8,8,8,8,8,6,6,6,
+ 4,4,2,3,3,2,9,9,8,8,9,9,8,8,8,8,7,7,7,8,
+ 8,7,7,7,7,6,6,6,6,5,5,6,6,5,5,4,4,4,3,3,
+ 3,3,11,11,11,11,11,11,10,10,10,10,10,10,10,11,11,10,9,9,
+ 10,10,9,9,10,10,9,10,10,8,8,9,9,10,10,9,9,10,10,8,
+ 8,8,9,9,9,9,9,9,8,8,8,8,8,8,7,7,7,7,6,6,
+ 6,6,4,3,3,1,10,10,10,10,10,10,10,11,11,10,10,9,9,9,
+ 10,10,10,10,8,8,9,9,7,8,8,8,8,8,9,9,9,9,8,7,
+ 8,8,7,7,8,8,8,9,9,8,8,8,8,8,8,7,7,6,6,7,
+ 7,6,5,4,5,5,3,3,3,2,10,10,9,9,9,9,9,9,9,8,
+ 8,9,9,8,8,8,8,8,8,9,9,8,8,8,8,8,9,9,7,7,
+ 7,8,8,8,8,8,8,7,7,7,7,8,8,7,7,7,6,6,6,6,
+ 7,7,6,5,5,5,4,4,5,5,4,3,3,3,19,19,18,17,16,16,
+ 16,16,16,16,16,16,16,16,17,17,15,15,16,16,15,15,15,15,15,15,
+ 15,15,15,15,16,16,15,16,16,14,14,15,15,15,15,14,14,14,14,14,
+ 14,14,14,14,14,14,15,15,14,13,14,14,13,13,14,14,13,14,14,13,
+ 14,14,13,14,14,13,13,14,14,12,12,12,13,13,13,13,13,13,12,13,
+ 13,12,12,13,13,13,13,13,13,13,13,13,13,13,13,12,12,13,13,12,
+ 12,12,12,13,13,13,13,12,13,13,12,11,12,12,12,12,12,12,12,12,
+ 11,11,11,11,12,12,11,11,12,12,11,12,12,12,12,11,11,12,12,11,
+ 12,12,11,12,12,11,12,12,10,10,10,11,11,11,11,11,11,11,11,10,
+ 10,10,10,11,11,10,11,11,10,11,11,11,11,10,10,11,11,10,10,11,
+ 11,11,11,11,11,9,9,10,10,10,10,10,11,11,9,9,9,10,10,9,
+ 9,10,10,10,10,10,10,10,10,10,10,8,9,9,9,9,9,9,10,10,
+ 9,9,9,8,8,9,9,9,9,9,9,8,7,8,8,8,8,7,7,7,
+ 7,7,6,6,6,6,4,4,3,1,13,13,13,13,12,13,13,13,13,13,
+ 13,12,13,13,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,
+ 12,12,12,12,12,12,12,13,13,11,11,12,12,12,12,11,11,11,11,11,
+ 11,12,12,11,11,11,11,11,11,11,11,12,12,11,11,11,11,11,11,11,
+ 11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,12,12,
+ 11,11,11,11,11,11,10,11,11,11,11,11,11,10,10,11,11,10,10,10,
+ 10,11,11,10,10,10,10,10,10,10,11,11,10,10,10,10,10,11,11,9,
+ 10,10,10,10,10,10,10,10,10,10,10,10,9,10,10,10,10,9,10,10,
+ 9,10,10,10,10,10,10,10,10,9,9,9,9,9,9,9,10,10,9,9,
+ 9,9,9,9,10,10,9,9,9,9,9,9,8,9,9,9,9,9,9,9,
+ 9,9,9,8,8,8,8,9,9,9,9,9,9,9,9,8,8,8,8,8,
+ 8,9,9,8,8,8,8,8,8,8,9,9,8,7,8,8,7,7,7,7,
+ 8,8,7,7,7,7,7,6,7,7,6,6,7,7,6,6,6,5,5,5,
+ 5,5,3,4,4,3,11,11,11,11,11,11,11,11,10,11,11,11,11,10,
+ 10,10,10,10,8,10,10,9,9,9,9,10,16,17,17,15,15,16,16,14,
+ 15,15,14,14,15,15,14,14,15,15,15,15,14,15,15,14,13,8,9,9,
+ 8,8,13,14,14,14,14,14,14,14,14,14,14,13,13,14,14,14,14,13,
+ 14,14,13,13,13,14,14,14,14,13,13,14,14,13,14,14,12,13,13,13,
+ 13,13,13,13,13,13,13,13,13,13,13,12,13,13,13,13,13,13,12,13,
+ 13,12,12,13,13,11,12,12,12,12,12,12,12,13,13,11,12,12,12,12,
+ 11,12,12,12,12,12,12,12,12,11,12,12,11,11,11,11,12,12,12,12,
+ 12,12,12,12,11,12,12,11,12,12,11,12,12,11,12,12,11,10,10,11,
+ 11,11,11,11,11,10,10,11,11,10,10,11,11,11,11,11,11,11,11,10,
+ 11,11,10,10,10,11,11,10,10,11,11,10,10,11,11,10,9,9,10,10,
+ 10,10,10,10,9,9,9,10,10,9,10,10,9,9,8,9,9,9,9,9,
+ 9,9,9,8,8,9,9,8,8,7,7,8,8,7,6,6,6,6,4,4,
+ 3,1,8,8,8,8,8,8,8,8,7,8,8,7,7,8,8,7,7,7,
+ 7,7,7,7,7,7,7,7,7,8,8,9,11,11,11,11,11,11,11,11,
+ 11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,
+ 4,11,11,11,11,12,12,11,10,11,11,10,10,10,10,11,11,10,10,10,
+ 10,11,11,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
+ 10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,
+ 10,10,11,11,10,10,10,10,10,10,10,10,10,10,10,10,10,11,11,10,
+ 11,11,10,9,10,10,10,10,11,11,10,9,9,10,10,9,10,10,10,10,
+ 9,9,10,10,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+ 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+ 10,10,9,9,9,10,10,8,9,9,8,8,8,8,8,8,8,8,8,8,
+ 8,8,8,9,9,8,8,8,8,8,8,9,9,7,8,8,7,7,7,7,
+ 7,8,8,7,7,6,6,7,7,6,5,5,6,6,4,4,4,4);
+AdZMPAHuffSyms: Array[0..1377] Of Byte=(
+ 17,1,16,0,34,2,18,33,32,17,1,16,0,34,2,18,
+ 33,32,16,17,1,0,51,35,50,49,19,3,48,34,18,33,
+ 2,32,17,1,16,0,51,3,35,50,48,19,49,34,2,18,
+ 33,32,1,17,16,0,85,69,84,83,53,68,37,82,21,81,
+ 5,52,80,67,51,36,66,20,65,64,4,35,50,3,19,49,
+ 48,34,18,33,2,32,17,1,16,0,85,84,69,83,53,68,
+ 37,82,5,21,81,52,67,80,51,36,66,20,65,4,64,35,
+ 50,19,49,3,48,34,2,32,18,33,17,1,16,0,85,69,
+ 53,83,84,5,68,37,82,21,81,52,67,80,4,36,66,51,
+ 64,20,65,35,50,19,49,3,48,34,2,18,33,32,17,1,
+ 16,0,119,103,118,87,117,102,71,116,86,101,55,115,70,85,
+ 84,99,39,114,100,7,112,98,69,53,6,83,68,23,113,54,
+ 38,37,82,21,81,52,67,22,97,96,5,80,36,66,51,4,
+ 20,65,64,35,50,3,19,49,48,34,18,33,2,32,17,1,
+ 16,0,119,103,118,117,102,71,116,87,85,86,101,55,115,70,
+ 69,84,53,83,39,114,100,7,113,23,112,54,99,96,68,37,
+ 82,5,21,98,38,6,22,97,81,52,80,67,51,36,66,20,
+ 65,4,64,35,50,19,49,3,48,34,33,18,2,32,17,1,
+ 16,0,119,103,118,87,117,102,71,116,101,86,55,115,85,39,
+ 114,70,100,23,113,7,112,54,99,69,84,68,6,5,38,98,
+ 97,22,96,53,83,37,82,21,81,52,67,80,4,36,66,20,
+ 51,65,35,50,64,3,48,19,49,34,18,33,2,32,0,17,
+ 1,16,254,252,253,237,255,239,223,238,207,222,191,251,206,220,
+ 175,233,236,221,250,205,190,235,159,249,234,189,219,143,248,204,
+ 174,158,142,127,126,247,218,173,188,203,246,111,232,95,157,217,
+ 245,231,172,187,79,244,202,230,243,63,141,216,47,242,110,156,
+ 15,201,94,171,125,215,78,200,214,62,185,155,170,31,241,240,
+ 186,229,228,140,109,227,226,46,14,30,225,224,93,213,124,199,
+ 77,139,184,212,154,169,108,198,61,211,123,45,210,29,183,92,
+ 197,153,122,195,167,151,75,209,13,208,138,168,76,196,107,182,
+ 60,44,194,91,181,137,28,193,152,12,192,180,106,166,121,59,
+ 179,136,90,43,165,105,164,120,135,148,119,118,178,27,177,11,
+ 176,150,74,58,163,89,149,42,162,26,161,10,104,160,134,73,
+ 147,57,88,133,103,41,146,87,117,56,131,102,71,116,86,101,
+ 115,25,145,9,144,72,132,114,70,100,40,130,24,55,39,23,
+ 113,85,7,112,54,99,69,84,38,98,53,129,8,128,22,97,
+ 6,96,83,68,37,82,5,21,81,52,67,80,36,66,51,20,
+ 65,4,64,35,50,19,49,3,48,34,18,33,2,32,17,1,
+ 16,0,255,239,254,223,238,253,207,252,222,237,191,251,206,236,
+ 221,175,250,190,235,205,220,159,249,234,189,219,143,248,204,158,
+ 233,127,247,173,218,188,111,174,15,203,246,142,232,95,157,245,
+ 126,231,172,202,187,217,141,79,244,63,243,216,230,47,242,110,
+ 240,31,241,156,201,94,171,186,229,125,215,78,228,140,200,62,
+ 109,214,227,155,185,46,170,226,30,225,14,224,93,213,124,199,
+ 77,139,212,184,154,169,108,198,61,211,210,45,13,29,123,183,
+ 209,92,208,197,138,168,76,196,107,182,153,12,60,195,122,167,
+ 166,192,11,194,44,91,181,28,137,152,193,75,180,106,59,121,
+ 179,151,136,43,90,178,165,27,177,176,105,150,74,164,120,135,
+ 58,163,89,149,42,162,26,161,10,160,104,134,73,148,57,147,
+ 119,9,88,133,41,103,118,146,145,25,144,72,132,87,117,56,
+ 131,102,71,40,130,24,129,116,8,128,86,101,55,115,70,39,
+ 114,100,23,85,113,7,112,54,99,69,84,38,98,22,6,96,
+ 53,97,83,68,37,82,21,81,5,80,52,67,36,66,51,65,
+ 20,4,35,50,64,3,19,49,48,34,18,33,2,32,17,1,
+ 16,0,239,254,223,253,207,252,191,251,175,250,159,249,248,143,
+ 127,247,111,246,255,95,245,79,244,243,240,63,206,236,221,222,
+ 233,234,217,238,237,235,190,205,220,219,174,204,173,218,126,172,
+ 202,201,125,94,189,242,47,15,31,241,158,188,203,142,232,157,
+ 231,187,141,216,110,230,156,171,186,229,215,78,228,140,200,62,
+ 109,214,155,185,170,225,212,184,169,123,183,208,227,14,224,93,
+ 213,124,199,77,139,154,108,198,61,92,197,13,138,168,153,76,
+ 182,122,60,91,137,28,192,152,121,226,46,30,211,45,210,209,
+ 59,151,136,29,196,107,195,167,44,194,181,193,12,75,180,106,
+ 166,179,90,165,43,178,27,177,11,176,105,150,74,164,120,135,
+ 163,58,89,42,149,104,161,134,119,148,73,87,103,162,26,10,
+ 160,57,147,88,133,41,146,118,9,25,145,144,72,132,117,56,
+ 131,102,40,130,71,116,24,129,128,8,86,55,115,101,70,39,
+ 114,100,85,7,23,113,112,54,99,69,84,38,98,22,97,6,
+ 96,83,53,68,37,82,81,21,5,52,67,80,36,66,51,20,
+ 65,4,64,35,50,19,49,3,48,34,18,33,2,32,17,1,
+ 16,0,239,254,223,253,207,252,191,251,250,175,159,249,248,143,
+ 127,247,111,246,95,245,79,244,63,243,47,242,241,31,240,15,
+ 238,222,237,206,236,221,190,235,205,220,174,234,189,219,204,158,
+ 233,173,218,188,203,142,232,157,217,126,231,172,255,202,187,141,
+ 216,14,224,13,230,110,156,201,94,186,229,171,125,215,228,140,
+ 200,78,46,62,109,214,227,155,185,170,226,30,225,93,213,124,
+ 199,77,139,184,212,154,169,108,198,61,211,45,210,29,123,183,
+ 209,92,197,138,168,153,76,196,107,182,208,12,60,195,122,167,
+ 44,194,91,181,28,137,152,193,75,192,11,59,176,10,26,180,
+ 106,166,121,151,160,9,144,179,136,43,90,178,165,27,177,105,
+ 150,164,74,120,135,58,163,89,149,42,162,161,104,134,119,73,
+ 148,57,147,88,133,41,103,118,146,25,145,72,132,87,117,56,
+ 131,102,40,130,24,71,116,129,8,128,86,101,23,7,112,115,
+ 55,39,114,70,100,85,113,54,99,69,84,38,98,22,97,6,
+ 96,53,83,68,37,82,21,5,80,81,52,67,36,66,51,20,
+ 65,4,64,35,50,19,49,3,48,34,18,33,2,32,17,1,
+ 16,0);
+AdZMPAHuffSizes: Array[0..14] Of Word=(
+ 3,8,8,15,15,35,35,35,63,63,63,255,255,255,255);
+AdZMPAHuffData: Array[0..63] Of Byte=(
+ 0,0,1,0,2,0,3,0,0,0,4,0,5,0,6,0,
+ 7,0,8,0,9,0,10,0,11,0,12,0,0,0,13,0,
+ 14,1,14,2,14,3,14,4,14,6,14,8,14,10,14,13,
+ 15,4,15,5,15,6,15,7,15,8,15,9,15,11,15,13);
+AdZMPAQuadCodes: Array[0..31] Of Byte=(
+ 1,5,4,5,6,5,4,4,7,3,6,0,7,2,3,1,
+ 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0);
+AdZMPAQuadBits: Array[0..31] Of Byte=(
+ 1,4,4,5,4,6,5,6,4,5,5,6,5,6,6,6,
+ 4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4);
+AdZMPABandLong: Array[0..197] Of Byte=(
+ 4,4,4,4,4,4,6,6,8,8,10,12,16,20,24,28,34,42,50,54,76,158,
+ 4,4,4,4,4,4,6,6,6,8,10,12,16,18,22,28,34,40,46,54,54,192,
+ 4,4,4,4,4,4,6,6,8,10,12,16,20,24,30,38,46,56,68,84,102,26,
+ 6,6,6,6,6,6,8,10,12,14,16,20,24,28,32,38,46,52,60,68,58,54,
+ 6,6,6,6,6,6,8,10,12,14,16,18,22,26,32,38,46,54,62,70,76,36,
+ 6,6,6,6,6,6,8,10,12,14,16,20,24,28,32,38,46,52,60,68,58,54,
+ 6,6,6,6,6,6,8,10,12,14,16,20,24,28,32,38,46,52,60,68,58,54,
+ 6,6,6,6,6,6,8,10,12,14,16,20,24,28,32,38,46,52,60,68,58,54,
+ 12,12,12,12,12,12,16,20,24,28,32,40,48,56,64,76,90,2,2,2,2,2);
+AdZMPABandShort: Array[0..116] Of Byte=(
+ 4,4,4,4,6,8,10,12,14,18,22,30,56,
+ 4,4,4,4,6,6,10,12,14,16,20,26,66,
+ 4,4,4,4,6,8,12,16,20,26,34,42,12,
+ 4,4,4,6,6,8,10,14,18,26,32,42,18,
+ 4,4,4,6,8,10,12,14,18,24,32,44,12,
+ 4,4,4,6,8,10,12,14,18,24,30,40,18,
+ 4,4,4,6,8,10,12,14,18,24,30,40,18,
+ 4,4,4,6,8,10,12,14,18,24,30,40,18,
+ 8,8,8,12,16,20,24,28,36,2,2,2,26);
+AdZMPAPretab: Array[0..43] Of Byte=(
+ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+ 0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,2,2,3,3,3,2,0);
+AdZMPASlen: Array[0..31] Of Byte=(
+ 0,0,0,0,3,1,1,1,2,2,2,3,3,3,4,4,
+ 0,1,2,3,0,1,2,3,1,2,3,1,2,3,2,3);
+AdZMPALsfNsf: Array[0..71] Of Byte=(
+ 6,5,5,5,9,9,9,9,6,9,9,9,
+ 6,5,7,3,9,9,12,6,6,9,12,6,
+ 11,10,0,0,18,18,0,0,15,18,0,0,
+ 7,7,7,0,12,12,12,0,6,15,12,0,
+ 6,6,6,3,12,9,9,6,6,12,9,6,
+ 8,8,5,0,15,12,9,0,6,18,9,0);
+AdZMPAalloctable1: Array[0..299] Of Byte=(
+ 4,0,2,4,5,6,7,8,9,10,11,12,13,14,15,16,
+ 4,0,2,4,5,6,7,8,9,10,11,12,13,14,15,16,
+ 4,0,2,4,5,6,7,8,9,10,11,12,13,14,15,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 2,0,1,16,2,0,1,16,2,0,1,16,2,0,1,16,
+ 2,0,1,16,2,0,1,16,2,0,1,16);
+AdZMPAalloctable3: Array[0..111] Of Byte=(
+ 4,0,1,3,4,5,6,7,8,9,10,11,12,13,14,15,
+ 4,0,1,3,4,5,6,7,8,9,10,11,12,13,14,15,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7);
+AdZMPAalloctable4: Array[0..195] Of Byte=(
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,2,0,1,3,2,0,1,3,
+ 2,0,1,3,2,0,1,3,2,0,1,3,2,0,1,3,
+ 2,0,1,3,2,0,1,3,2,0,1,3,2,0,1,3,
+ 2,0,1,3,2,0,1,3,2,0,1,3,2,0,1,3,
+ 2,0,1,3,2,0,1,3,2,0,1,3,2,0,1,3,
+ 2,0,1,3);
+AdZMPAQuantSteps: Array[0..16] Of LongInt=(
+ 3,5,7,9,15,31,63,127,255,511,1023,2047,4095,8191,16383,32767,65535);
+AdZMPAQuantBits: Array[0..16] Of LongInt=(
+ -5,-7,3,-10,4,5,6,7,8,9,10,11,12,13,14,15,16);
+AdZMPASblimit: Array[0..4] Of LongInt=(
+ 27,30,8,12,30);
+AdZMPAEnWindow: Array[0..256] Of LongInt=(
+ 0,-1,-1,-1,-1,-1,-1,-2,-2,-2,-2,-3,-3,-4,-4,-5,
+ -5,-6,-7,-7,-8,-9,-10,-11,-13,-14,-16,-17,-19,-21,-24,-26,
+ -29,-31,-35,-38,-41,-45,-49,-53,-58,-63,-68,-73,-79,-85,-91,-97,
+ -104,-111,-117,-125,-132,-139,-147,-154,-161,-169,-176,-183,-190,-196,-202,-
+  208,
+ 213,218,222,225,227,228,228,227,224,221,215,208,200,189,177,163,
+ 146,127,106,83,57,29,-2,-36,-72,-111,-153,-197,-244,-294,-347,-401,
+ -459,-519,-581,-645,-711,-779,-848,-919,-991,-1064,-1137,-1210,-1283,-1356,-
+  1428,-1498,
+ -1567,-1634,-1698,-1759,-1817,-1870,-1919,-1962,-2001,-2032,-2057,-2075,-2085,-
+  2087,-2080,-2063,
+ 2037,2000,1952,1893,1822,1739,1644,1535,1414,1280,1131,970,794,605,402,185,
+ -45,-288,-545,-814,-1095,-1388,-1692,-2006,-2330,-2663,-3004,-3351,-3705,-4063,
+  -4425,-4788,
+ -5153,-5517,-5879,-6237,-6589,-6935,-7271,-7597,-7910,-8209,-8491,-8755,-8998,-
+  9219,-9416,-9585,
+ -9727,-9838,-9916,-9959,-9966,-9935,-9863,-9750,-9592,-9389,-9139,-8840,-8492,-
+  8092,-7640,-7134,
+ 6574,5959,5288,4561,3776,2935,2037,1082,70,-998,-2122,-3300,-4533,-5818,-7154,-
+  8540,
+ -9975,-11455,-12980,-14548,-16155,-17799,-19478,-21189,-22929,-24694,-26482,-
+  28289,-30112,-31947,-33791,-35640,
+ -37489,-39336,-41176,-43006,-44821,-46617,-48390,-50137,-51853,-53534,-55178,-
+  56778,-58333,-59838,-61289,-62684,
+ -64019,-65290,-66494,-67629,-68692,-69679,-70590,-71420,-72169,-72835,-73415,-
+  73908,-74313,-74630,-74856,-74992,
+ 75038);
+AdZMPACsa: Array[0..31] Of LongWord=(
+ 1062962344,3204691455,1051696466,3215957331,
+ 1063369176,3203499739,1053945045,3215802019,
+ 1064508125,3198186243,1059250523,3215043119,
+ 1065073281,3191490420,1062021284,3214222895,
+ 1065278017,3183587357,1063691326,3213592611,
+ 1065339133,3173501831,1064651844,3213173466,
+ 1065351525,3160973597,1065113312,3212955125,
+ 1065353101,3144842054,1065291026,3212867844);
+AdZMPAIsTab: Array[0..31] Of LongWord=(
+ 0,1045980556,1052469166,1056964608,1059212329,1061807773,1065353216,0,0,0,0,0,
+  0,0,0,0,
+ 1065353216,1061807773,1059212329,1056964608,1052469166,1045980556,0,0,0,0,0,0,
+  0,0,0,0);
+ AdZMPA_COS0_0: Single=0.2503015100955963;
+ AdZMPA_COS0_1: Single=0.2527354657649994;
+ AdZMPA_COS0_2: Single=0.2577236592769623;
+ AdZMPA_COS0_3: Single=0.2655212879180908;
+ AdZMPA_COS0_4: Single=0.2765519618988037;
+ AdZMPA_COS0_5: Single=0.29146748781204224;
+ AdZMPA_COS0_6: Single=0.31125205755233765;
+ AdZMPA_COS0_7: Single=0.33740416169166565;
+ AdZMPA_COS0_8: Single=0.3722681403160095;
+ AdZMPA_COS0_9: Single=0.419674813747406;
+ AdZMPA_COS0_10: Single=0.4862841069698334;
+ AdZMPA_COS0_11: Single=0.29235997796058655;
+ AdZMPA_COS0_12: Single=0.3710411489009857;
+ AdZMPA_COS0_13: Single=0.25722262263298035;
+ AdZMPA_COS0_14: Single=0.4259510636329651;
+ AdZMPA_COS0_15: Single=0.31843775510787964;
+ AdZMPA_COS1_0: Single=0.25120964646339417;
+ AdZMPA_COS1_1: Single=0.261249303817749;
+ AdZMPA_COS1_2: Single=0.2834720313549042;
+ AdZMPA_COS1_3: Single=0.32341089844703674;
+ AdZMPA_COS1_4: Single=0.3940773010253906;
+ AdZMPA_COS1_5: Single=0.2651694118976593;
+ AdZMPA_COS1_6: Single=0.430611789226532;
+ AdZMPA_COS1_7: Single=0.3188217878341675;
+ AdZMPA_COS2_0: Single=0.254897803068161;
+ AdZMPA_COS2_1: Single=0.3006724417209625;
+ AdZMPA_COS2_2: Single=0.44998809695243835;
+ AdZMPA_COS2_3: Single=0.32036444544792175;
+ AdZMPA_COS3_0: Single=0.27059805393218994;
+ AdZMPA_COS3_1: Single=0.3266407549381256;
+ AdZMPA_COS4_0: Single=0.3535533845424652;
+ A12_C3: Single=0.4330126941204071;
+ A12_C4: Single=0.3535533845424652;
+ A12_C5: Single=0.258819043636322;
+ A12_C6: Single=0.4829629063606262;
+ A36_C1: Single=0.49240386486053467;
+ A36_C2: Single=0.46984630823135376;
+ A36_C3: Single=0.4330126941204071;
+ A36_C4: Single=0.3830222189426422;
+ A36_C5: Single=0.32139381766319275;
+ A36_C6: Single=0.25;
+ A36_C7: Single=0.1710100769996643;
+ A36_C8: Single=0.08682408928871155;
+ AdZMPAIcos36: Array[0..8] Of Single=(0.5019099116325378,0.517638087272644,
+  0.5516889691352844,0.6103872656822205,0.7071067690849304,0.8717234134674072,
+  1.1831008195877075,1.9318516254425049,5.736856460571289);
+ AdZMPAIcos36h: Array[0..7] Of Single=(0.2509549558162689,0.258819043636322,
+  0.2758444845676422,0.30519363284111023,0.3535533845424652,0.4358617067337036,
+  0.2957752048969269,0.4829629063606262);
+ AdZMPAISqrt2: Single=0.7071067690849304;
+ AdZMPA_F1: Single=1.0; AdZMPA_F2: Single=2.0; AdZMPA_F4: Single=4.0; AdZMPA_F8: Single=8.0;
+  AdZMPA_F16: Single=16.0; AdZMPA_F32: Single=32.0; AdZMPA_Fhalf: Single=0.5; AdZMPA_Fm2:
+  Single=-2.0;
+Type TAdZMPAWinRow=Array[0..39] Of Single; PAdZMPAWinRow=^TAdZMPAWinRow; TAdZMPAL6=Array[
+ 0..5] Of LongInt; PAdZMPAL6=^TAdZMPAL6;
+Const AdZMPAScalar: Double=1.759; AdZMPAPi: Double=3.14159265358979323846;
+Var
+ AdZMPAReady: Boolean;
+ AdZMPAIsTable: Array[0..1,0..15] Of Single; AdZMPAIsTableLsf: Array[0..1,0..1,0..15]
+  Of Single;
+ AdZMPACsaT: Array[0..7,0..3] Of Single;
+ AdZMPAWin: Array[0..7,0..39] Of Single; AdZMPASynthWin: Array[0..767] Of Single;
+ AdZMPAExpTab: Array[0..511] Of Single; AdZMPAExpvalTab: Array[0..511,0..15] Of
+  Single;
+ AdZMPA43Exp: Array[0..32827] Of ShortInt; AdZMPA43Val: Array[0..32827] Of LongWord;
+ AdZMPAScaleMult: Array[0..14,0..2] Of LongInt; AdZMPAModShift: Array[0..63] Of Word;
+ AdZMPABandIdxLong: Array[0..8,0..22] Of Word;
+ AdZMPAVCode: Array[1..15,0..255] Of LongWord; AdZMPAVLen: Array[1..15,0..255] Of
+  Byte; AdZMPAVN: Array[1..15] Of LongInt; AdZMPAVSym: Array[1..15,0..255] Of Word;
+ AdZMPAScaleMultFix: Array[0..14,0..2] Of LongInt; AdZMPAUseFix: Boolean;
+  AdZMPASynthWinI: Array[0..767] Of LongInt; AdZMPADiv: Array[0..3,0..2047] Of
+  SmallInt; AdZMPAMult2: Array[0..2,0..2] Of LongInt;
+
+Function AdZMPASarL(V: Int64; N: LongInt): Int64;
+Begin If V>=0 Then AdZMPASarL:=V Shr N Else AdZMPASarL:=-((-V-1) Shr N)-1; End;
+Function AdZMPAFlt(B: LongWord): Single;
+Var V: LongWord; S: Single Absolute V;
+Begin V:=B; AdZMPAFlt:=S; End;
+Function AdZMPABits(S: Single): LongWord;
+Var V: Single; W: LongWord Absolute V;
+Begin V:=S; AdZMPABits:=W; End;
+
+{ cbrt de glibc (sysdeps/ieee754/dbl-64/s_cbrt.c) }
+Function AdZMPACbrt(X: Double): Double;
+Const
+ Cbrt2: Double = 1.2599210498948731648; SqrCbrt2: Double =
+  1.5874010519681994748;
+ P0: Double = 0.354895765043919860; P1: Double = 1.50819193781584896; P2: Double
+  = -2.11499494167371287;
+ P3: Double = 2.44693122563534430; P4: Double = -1.83469277483613086; P5: Double
+  = 0.784932344976639262; P6: Double = 0.145263899385486377;
+ Two: Double = 2.0; Half: Double = 0.5;
+Var Xm,Ym,U,T2,A,Fac: Double; Xe,Q,R: LongInt; Neg: Boolean; M: Double; E:
+ LongInt;
+Begin
+ If X=0 Then Begin AdZMPACbrt:=X; Exit; End;
+ Neg:=X<0; If Neg Then X:=-X;
+ M:=X; E:=0;
+ While M>=1.0 Do Begin M:=M*Half; Inc(E); End;
+ While M<0.5 Do Begin M:=M*Two; Dec(E); End;
+ Xm:=M; Xe:=E;
+ A:=P6*Xm; A:=P5-A; A:=A*Xm; A:=P4+A; A:=A*Xm; A:=P3+A; A:=A*Xm; A:=P2+A; A:=A*
+  Xm; A:=P1+A; A:=A*Xm; A:=P0+A;
+ U:=A;
+ T2:=U*U; T2:=T2*U;
+ R:=Xe Mod 3;
+ Case R Of
+  -2: Fac:=1.0/SqrCbrt2; -1: Fac:=1.0/Cbrt2; 0: Fac:=1.0; 1: Fac:=Cbrt2; Else
+   Fac:=SqrCbrt2;
+ End;
+ A:=Two*Xm; A:=T2+A;
+ Ym:=Two*T2; Ym:=Ym+Xm;
+ Ym:=U*A/Ym*Fac;
+ Q:=Xe Div 3;
+ While Q>0 Do Begin Ym:=Ym*Two; Dec(Q); End;
+ While Q<0 Do Begin Ym:=Ym*Half; Inc(Q); End;
+ If Neg Then Ym:=-Ym;
+ AdZMPACbrt:=Ym;
+End;
+
+Procedure AdZMPAInit;
+Var
+ I,J,K,E,N,Off,T,Len,Sym: LongInt; Norm: Int64; F,Pow43,Exp2Base,Exp2Val,D,D2:
+  Double; Code: Int64;
+ Exp2Lut: Array[0..3] Of Double; Pow43Lut: Array[0..15] Of Double; Fm: Double;
+  M: Int64; Val,V1,V2,V3,Steps: LongInt;
+ H,Lo: LongInt; Tmp: LongInt; Ext: Extended; Idx: LongInt; Sn: Single;
+Begin
+ If AdZMPAReady Then Exit;
+ AdZMPAReady:=True;
+ { scale factor multiply for layer 1 (flottant : produit en simple precision,
+  tronque) }
+ For I:=0 To 14 Do Begin
+  N:=I+2; Norm:=((Int64(1) Shl N)*8388608) Div ((Int64(1) Shl N)-1);
+  Sn:=Norm; AdZMPAScaleMult[I,0]:=Trunc(Single(2.0)*Sn);
+  { variante virgule fixe : MULL sans arrondi }
+  AdZMPAScaleMultFix[I,0]:=LongInt((Norm*16777216) Shr 23);
+  D:=1.0; D:=D*0.7937005259; D:=D*2.0; D:=D*8388608.0+0.5; AdZMPAScaleMultFix[I,
+   1]:=LongInt((Norm*Trunc(D)) Shr 23);
+  D:=1.0; D:=D*0.6299605249; D:=D*2.0; D:=D*8388608.0+0.5; AdZMPAScaleMultFix[I,
+   2]:=LongInt((Norm*Trunc(D)) Shr 23);
+  D:=0.7937005259; D:=D*2.0; AdZMPAScaleMult[I,1]:=Trunc(Single(D)*Sn);
+  D:=0.6299605249; D:=D*2.0; AdZMPAScaleMult[I,2]:=Trunc(Single(D)*Sn);
+ End;
+ For I:=0 To 2 Do Begin
+  D:=4.0; Case I Of 0: D:=D/3.0; 1: D:=D/5.0; Else D:=D/9.0; End;
+  D2:=1.0*D; AdZMPAMult2[I,0]:=Trunc(D2*8388608.0+0.5);
+  D2:=0.7937005259*D; AdZMPAMult2[I,1]:=Trunc(D2*8388608.0+0.5);
+  D2:=0.6299605249*D; AdZMPAMult2[I,2]:=Trunc(D2*8388608.0+0.5);
+ End;
+ { exp tables }
+ Exp2Lut[0]:=1.0; Exp2Lut[1]:=1.18920711500272106672; Exp2Lut[2]:=
+  1.4142135623730951; Exp2Lut[3]:=1.68179283050742908606;
+ For I:=0 To 15 Do Pow43Lut[I]:=I*AdZMPACbrt(I);
+ Exp2Base:=2.11758236813575084767080625169910490512847900390625e-22;
+ For E:=0 To 511 Do Begin
+  If (E<>0) And ((E And 3)=0) Then Exp2Base:=Exp2Base*2;
+  Exp2Val:=Exp2Base*Exp2Lut[E And 3]/AdZMPAScalar;
+  For J:=0 To 15 Do Begin
+   F:=Pow43Lut[J]*Exp2Val;
+   AdZMPAExpvalTab[E,J]:=Single(F);
+  End;
+  AdZMPAExpTab[E]:=AdZMPAExpvalTab[E,1];
+ End;
+ { is_table float et lsf }
+ For I:=0 To 1 Do For J:=0 To 15 Do AdZMPAIsTable[I,J]:=AdZMPAFlt(AdZMPAIsTab[I*16+J]);
+ For I:=0 To 15 Do Begin
+  For J:=0 To 1 Do Begin
+   E:=-(J+1)*((I+1) Shr 1);
+   Ext:=Exp(Ln(2.0)*(E/4.0));
+   F:=Ext;
+   K:=I And 1;
+   AdZMPAIsTableLsf[J,K Xor 1,I]:=Single(F);
+   AdZMPAIsTableLsf[J,K,I]:=1.0;
+  End;
+ End;
+ For I:=0 To 7 Do For J:=0 To 3 Do AdZMPACsaT[I,J]:=AdZMPAFlt(AdZMPACsa[I*4+J]);
+ { synth window }
+ For I:=0 To 256 Do Begin
+  F:=AdZMPAEnWindow[I]; F:=F*(1.0/549755813888.0);
+  AdZMPASynthWin[I]:=Single(F);
+  If (I And 63)<>0 Then F:=-F;
+  If I<>0 Then AdZMPASynthWin[512-I]:=Single(F);
+ End;
+ For I:=0 To 7 Do For J:=0 To 15 Do AdZMPASynthWin[512+16*I+J]:=AdZMPASynthWin[64*I+
+  32-J];
+ For I:=0 To 7 Do For J:=0 To 15 Do AdZMPASynthWin[512+128+16*I+J]:=AdZMPASynthWin[64*
+  I+48-J];
+ For I:=0 To 256 Do Begin
+  AdZMPASynthWinI[I]:=AdZMPAEnWindow[I];
+  J:=AdZMPAEnWindow[I];
+  If (I And 63)<>0 Then J:=-J;
+  If I<>0 Then AdZMPASynthWinI[512-I]:=J;
+ End;
+ For I:=0 To 7 Do For J:=0 To 15 Do AdZMPASynthWinI[512+16*I+J]:=AdZMPASynthWinI[64*I+
+  32-J];
+ For I:=0 To 7 Do For J:=0 To 15 Do AdZMPASynthWinI[512+128+16*I+J]:=AdZMPASynthWinI[
+  64*I+48-J];
+ { fenetres MDCT }
+ FillChar(AdZMPAWin,SizeOf(AdZMPAWin),0);
+ For I:=0 To 35 Do For J:=0 To 3 Do Begin
+  If (J=2) And ((I Mod 3)<>1) Then Continue;
+  D:=Sin(AdZMPAPi*(I+0.5)/36.0);
+  If J=1 Then Begin
+   If I>=30 Then D:=0 Else If I>=24 Then D:=Sin(AdZMPAPi*(I-18+0.5)/12.0) Else If
+    I>=18 Then D:=1;
+  End Else If J=3 Then Begin
+   If I<6 Then D:=0 Else If I<12 Then D:=Sin(AdZMPAPi*(I-6+0.5)/12.0) Else If I<18
+    Then D:=1;
+  End;
+  D2:=Cos(AdZMPAPi*(2*I+19)/72); D:=D*(0.5*AdZMPAScalar/D2);
+  If J=2 Then AdZMPAWin[J,I Div 3]:=Single(D/32)
+  Else Begin
+   If I<18 Then Idx:=I Else Idx:=I+2;
+   AdZMPAWin[J,Idx]:=Single(D/32);
+  End;
+ End;
+ For J:=0 To 3 Do Begin
+  I:=0;
+  While I<40 Do Begin
+   AdZMPAWin[J+4,I]:=AdZMPAWin[J,I]; AdZMPAWin[J+4,I+1]:=-AdZMPAWin[J,I+1]; Inc(I,2);
+  End;
+ End;
+ { band index long }
+ For I:=0 To 8 Do Begin
+  K:=0;
+  For J:=0 To 21 Do Begin AdZMPABandIdxLong[I,J]:=K; Inc(K,AdZMPABandLong[I*22+J] Shr
+   1); End;
+  AdZMPABandIdxLong[I,22]:=K;
+ End;
+ { scale factors couches 1/2 }
+ For I:=0 To 63 Do AdZMPAModShift[I]:=(I Mod 3) Or ((I Div 3) Shl 2);
+ { huffman couche 3 }
+ Off:=0;
+ For T:=1 To 15 Do Begin
+  N:=AdZMPAHuffSizes[T-1]+1; Code:=0;
+  AdZMPAVN[T]:=N;
+  For J:=0 To N-1 Do Begin
+   Len:=AdZMPAHuffLens[Off+J]; Sym:=AdZMPAHuffSyms[Off+J];
+   H:=Sym And $F0; Lo:=Sym And $F;
+   Tmp:=(H Shl 1) Or (Ord((H<>0) And (Lo<>0)) Shl 4) Or Lo;
+   AdZMPAVSym[T,J]:=Tmp; AdZMPAVLen[T,J]:=Len; AdZMPAVCode[T,J]:=LongWord(Code And
+    $FFFFFFFF);
+   Code:=Code+(Int64(1) Shl (32-Len));
+  End;
+  Inc(Off,N);
+ End;
+ { tables 4/3 (couche 3, entiers) }
+ Pow43:=0;
+ For I:=1 To 32827 Do Begin
+  D:=I Div 4;
+  If (I And 3)=0 Then Pow43:=D/AdZMPAScalar*AdZMPACbrt(D);
+  F:=Pow43*Exp2Lut[I And 3];
+  { frexp }
+  Fm:=F; E:=0;
+  If Fm<>0 Then Begin
+   While Fm>=1.0 Do Begin Fm:=Fm/2; Inc(E); End;
+   While Fm<0.5 Do Begin Fm:=Fm*2; Dec(E); End;
+  End;
+  M:=Round(Fm*2147483648.0);
+  E:=E+23-31+5-100;
+  AdZMPA43Val[I]:=LongWord(M And $FFFFFFFF); AdZMPA43Exp[I]:=-E;
+ End;
+ { tables de division couche 2 }
+ FillChar(AdZMPADiv,SizeOf(AdZMPADiv),0);
+ For I:=0 To 3 Do If AdZMPAQuantBits[I]<0 Then
+  For J:=0 To (1 Shl (-AdZMPAQuantBits[I]+1))-1 Do Begin
+   Val:=J; Steps:=AdZMPAQuantSteps[I];
+   V1:=Val Mod Steps; Val:=Val Div Steps; V2:=Val Mod Steps; V3:=Val Div Steps;
+   If J<2048 Then AdZMPADiv[I,J]:=V1+(V2 Shl 4)+(V3 Shl 8);
+  End;
+End;
+{ ---- lecture de bits (get_bits.h, avec les bornes de FFmpeg) ---- }
+Procedure AdZMPAGBInit(Var G: TAdZMPAGB; Buf: PAdZBuf; Cap,Bits: LongInt);
+Begin G.Buf:=Buf; G.Cap:=Cap; G.Size:=Bits; G.Idx:=0; End;
+Function AdZMPAGBPeek(Var G: TAdZMPAGB; N: LongInt): LongWord;
+Var P,I: LongInt; V: Int64; B: LongInt;
+Begin
+ P:=G.Idx Shr 3; V:=0;
+ For I:=0 To 4 Do Begin
+  If (P+I>=0) And (P+I<G.Cap) And (G.Buf<>Nil) Then B:=G.Buf^[P+I] Else B:=0;
+  V:=(V Shl 8) Or B;
+ End;
+ AdZMPAGBPeek:=LongWord((V Shr (40-(G.Idx And 7)-N)) And ((Int64(1) Shl N)-1));
+End;
+Function AdZMPAGBGet(Var G: TAdZMPAGB; N: LongInt): LongWord;
+Begin
+ If N=0 Then Begin AdZMPAGBGet:=0; Exit; End;
+ AdZMPAGBGet:=AdZMPAGBPeek(G,N);
+ Inc(G.Idx,N); If G.Idx>G.Size+8 Then G.Idx:=G.Size+8;
+End;
+Function AdZMPAGBBit(Var G: TAdZMPAGB): LongInt;
+Begin AdZMPAGBBit:=LongInt(AdZMPAGBGet(G,1)); End;
+Procedure AdZMPAGBSkip(Var G: TAdZMPAGB; N: LongInt);
+Begin Inc(G.Idx,N); If G.Idx>G.Size+8 Then G.Idx:=G.Size+8; End;
+Procedure AdZMPAGBSkipLong(Var G: TAdZMPAGB; N: LongInt);
+Begin
+ If N<-G.Idx Then N:=-G.Idx;
+ If N>G.Size+8-G.Idx Then N:=G.Size+8-G.Idx;
+ Inc(G.Idx,N);
+End;
+Function AdZMPAGBLeft(Var G: TAdZMPAGB): LongInt;
+Begin AdZMPAGBLeft:=G.Size-G.Idx; End;
+
+{ get_vlc2 sur une table de Huffman de couche III : symbole code comme dans
+ mpegaudiodec_common.c }
+Function AdZMPAHuffGet(Var G: TAdZMPAGB; T: LongInt): LongInt;
+Var W,W32: LongWord; Lo,Hi,Mid,L: LongInt;
+Begin
+ W:=AdZMPAGBPeek(G,19); W32:=W Shl 13;
+ Lo:=0; Hi:=AdZMPAVN[T]-1;
+ While Lo<Hi Do Begin
+  Mid:=(Lo+Hi+1) Shr 1;
+  If AdZMPAVCode[T,Mid]<=W32 Then Lo:=Mid Else Hi:=Mid-1;
+ End;
+ L:=AdZMPAVLen[T,Lo];
+ If (AdZMPAVCode[T,Lo] Shr (32-L))=(W32 Shr (32-L)) Then Begin
+  AdZMPAHuffGet:=AdZMPAVSym[T,Lo]; AdZMPAGBSkip(G,L); Exit;
+ End;
+ AdZMPAGBSkip(G,19);
+ AdZMPAHuffGet:=0;
+End;
+Function AdZMPAQuadGet(Var G: TAdZMPAGB; T: LongInt): LongInt;
+Var W: LongWord; I: LongInt;
+Begin
+ If T=1 Then Begin
+  W:=AdZMPAGBPeek(G,4); AdZMPAGBSkip(G,4); AdZMPAQuadGet:=15-LongInt(W); Exit;
+ End;
+ W:=AdZMPAGBPeek(G,6);
+ For I:=0 To 15 Do
+  If LongInt(W Shr (6-AdZMPAQuadBits[I]))=AdZMPAQuadCodes[I] Then Begin AdZMPAGBSkip(G,
+   AdZMPAQuadBits[I]); AdZMPAQuadGet:=I; Exit; End;
+ AdZMPAGBSkip(G,6); AdZMPAQuadGet:=0;
+End;
+
+{ ---- DSP : dct32, fenetre de synthese, imdct (flottant) ---- }
+Procedure AdZMPADct32(Out: PAdZMPASingles; Tab: PAdZMPASingles);
+Var tmp0,tmp1: Single; V: Array[0..31] Of Single;
+Begin
+ tmp0:=Tab^[0]+Tab^[31]; tmp1:=Tab^[0]-Tab^[31];
+ V[0]:=tmp0; V[31]:=(AdZMPA_F2*(AdZMPA_COS0_0))*tmp1;
+ tmp0:=Tab^[15]+Tab^[16]; tmp1:=Tab^[15]-Tab^[16];
+ V[15]:=tmp0; V[16]:=(AdZMPA_F32*(AdZMPA_COS0_15))*tmp1;
+ tmp0:=V[0]+V[15]; tmp1:=V[0]-V[15];
+ V[0]:=tmp0; V[15]:=(AdZMPA_F2*(AdZMPA_COS1_0))*tmp1;
+ tmp0:=V[16]+V[31]; tmp1:=V[16]-V[31];
+ V[16]:=tmp0; V[31]:=(AdZMPA_F2*(-AdZMPA_COS1_0))*tmp1;
+ tmp0:=Tab^[7]+Tab^[24]; tmp1:=Tab^[7]-Tab^[24];
+ V[7]:=tmp0; V[24]:=(AdZMPA_F2*(AdZMPA_COS0_7))*tmp1;
+ tmp0:=Tab^[8]+Tab^[23]; tmp1:=Tab^[8]-Tab^[23];
+ V[8]:=tmp0; V[23]:=(AdZMPA_F2*(AdZMPA_COS0_8))*tmp1;
+ tmp0:=V[7]+V[8]; tmp1:=V[7]-V[8];
+ V[7]:=tmp0; V[8]:=(AdZMPA_F16*(AdZMPA_COS1_7))*tmp1;
+ tmp0:=V[23]+V[24]; tmp1:=V[23]-V[24];
+ V[23]:=tmp0; V[24]:=(AdZMPA_F16*(-AdZMPA_COS1_7))*tmp1;
+ tmp0:=V[0]+V[7]; tmp1:=V[0]-V[7];
+ V[0]:=tmp0; V[7]:=(AdZMPA_F2*(AdZMPA_COS2_0))*tmp1;
+ tmp0:=V[8]+V[15]; tmp1:=V[8]-V[15];
+ V[8]:=tmp0; V[15]:=(AdZMPA_F2*(-AdZMPA_COS2_0))*tmp1;
+ tmp0:=V[16]+V[23]; tmp1:=V[16]-V[23];
+ V[16]:=tmp0; V[23]:=(AdZMPA_F2*(AdZMPA_COS2_0))*tmp1;
+ tmp0:=V[24]+V[31]; tmp1:=V[24]-V[31];
+ V[24]:=tmp0; V[31]:=(AdZMPA_F2*(-AdZMPA_COS2_0))*tmp1;
+ tmp0:=Tab^[3]+Tab^[28]; tmp1:=Tab^[3]-Tab^[28];
+ V[3]:=tmp0; V[28]:=(AdZMPA_F2*(AdZMPA_COS0_3))*tmp1;
+ tmp0:=Tab^[12]+Tab^[19]; tmp1:=Tab^[12]-Tab^[19];
+ V[12]:=tmp0; V[19]:=(AdZMPA_F4*(AdZMPA_COS0_12))*tmp1;
+ tmp0:=V[3]+V[12]; tmp1:=V[3]-V[12];
+ V[3]:=tmp0; V[12]:=(AdZMPA_F2*(AdZMPA_COS1_3))*tmp1;
+ tmp0:=V[19]+V[28]; tmp1:=V[19]-V[28];
+ V[19]:=tmp0; V[28]:=(AdZMPA_F2*(-AdZMPA_COS1_3))*tmp1;
+ tmp0:=Tab^[4]+Tab^[27]; tmp1:=Tab^[4]-Tab^[27];
+ V[4]:=tmp0; V[27]:=(AdZMPA_F2*(AdZMPA_COS0_4))*tmp1;
+ tmp0:=Tab^[11]+Tab^[20]; tmp1:=Tab^[11]-Tab^[20];
+ V[11]:=tmp0; V[20]:=(AdZMPA_F4*(AdZMPA_COS0_11))*tmp1;
+ tmp0:=V[4]+V[11]; tmp1:=V[4]-V[11];
+ V[4]:=tmp0; V[11]:=(AdZMPA_F2*(AdZMPA_COS1_4))*tmp1;
+ tmp0:=V[20]+V[27]; tmp1:=V[20]-V[27];
+ V[20]:=tmp0; V[27]:=(AdZMPA_F2*(-AdZMPA_COS1_4))*tmp1;
+ tmp0:=V[3]+V[4]; tmp1:=V[3]-V[4];
+ V[3]:=tmp0; V[4]:=(AdZMPA_F8*(AdZMPA_COS2_3))*tmp1;
+ tmp0:=V[11]+V[12]; tmp1:=V[11]-V[12];
+ V[11]:=tmp0; V[12]:=(AdZMPA_F8*(-AdZMPA_COS2_3))*tmp1;
+ tmp0:=V[19]+V[20]; tmp1:=V[19]-V[20];
+ V[19]:=tmp0; V[20]:=(AdZMPA_F8*(AdZMPA_COS2_3))*tmp1;
+ tmp0:=V[27]+V[28]; tmp1:=V[27]-V[28];
+ V[27]:=tmp0; V[28]:=(AdZMPA_F8*(-AdZMPA_COS2_3))*tmp1;
+ tmp0:=V[0]+V[3]; tmp1:=V[0]-V[3];
+ V[0]:=tmp0; V[3]:=(AdZMPA_F2*(AdZMPA_COS3_0))*tmp1;
+ tmp0:=V[4]+V[7]; tmp1:=V[4]-V[7];
+ V[4]:=tmp0; V[7]:=(AdZMPA_F2*(-AdZMPA_COS3_0))*tmp1;
+ tmp0:=V[8]+V[11]; tmp1:=V[8]-V[11];
+ V[8]:=tmp0; V[11]:=(AdZMPA_F2*(AdZMPA_COS3_0))*tmp1;
+ tmp0:=V[12]+V[15]; tmp1:=V[12]-V[15];
+ V[12]:=tmp0; V[15]:=(AdZMPA_F2*(-AdZMPA_COS3_0))*tmp1;
+ tmp0:=V[16]+V[19]; tmp1:=V[16]-V[19];
+ V[16]:=tmp0; V[19]:=(AdZMPA_F2*(AdZMPA_COS3_0))*tmp1;
+ tmp0:=V[20]+V[23]; tmp1:=V[20]-V[23];
+ V[20]:=tmp0; V[23]:=(AdZMPA_F2*(-AdZMPA_COS3_0))*tmp1;
+ tmp0:=V[24]+V[27]; tmp1:=V[24]-V[27];
+ V[24]:=tmp0; V[27]:=(AdZMPA_F2*(AdZMPA_COS3_0))*tmp1;
+ tmp0:=V[28]+V[31]; tmp1:=V[28]-V[31];
+ V[28]:=tmp0; V[31]:=(AdZMPA_F2*(-AdZMPA_COS3_0))*tmp1;
+ tmp0:=Tab^[1]+Tab^[30]; tmp1:=Tab^[1]-Tab^[30];
+ V[1]:=tmp0; V[30]:=(AdZMPA_F2*(AdZMPA_COS0_1))*tmp1;
+ tmp0:=Tab^[14]+Tab^[17]; tmp1:=Tab^[14]-Tab^[17];
+ V[14]:=tmp0; V[17]:=(AdZMPA_F8*(AdZMPA_COS0_14))*tmp1;
+ tmp0:=V[1]+V[14]; tmp1:=V[1]-V[14];
+ V[1]:=tmp0; V[14]:=(AdZMPA_F2*(AdZMPA_COS1_1))*tmp1;
+ tmp0:=V[17]+V[30]; tmp1:=V[17]-V[30];
+ V[17]:=tmp0; V[30]:=(AdZMPA_F2*(-AdZMPA_COS1_1))*tmp1;
+ tmp0:=Tab^[6]+Tab^[25]; tmp1:=Tab^[6]-Tab^[25];
+ V[6]:=tmp0; V[25]:=(AdZMPA_F2*(AdZMPA_COS0_6))*tmp1;
+ tmp0:=Tab^[9]+Tab^[22]; tmp1:=Tab^[9]-Tab^[22];
+ V[9]:=tmp0; V[22]:=(AdZMPA_F2*(AdZMPA_COS0_9))*tmp1;
+ tmp0:=V[6]+V[9]; tmp1:=V[6]-V[9];
+ V[6]:=tmp0; V[9]:=(AdZMPA_F4*(AdZMPA_COS1_6))*tmp1;
+ tmp0:=V[22]+V[25]; tmp1:=V[22]-V[25];
+ V[22]:=tmp0; V[25]:=(AdZMPA_F4*(-AdZMPA_COS1_6))*tmp1;
+ tmp0:=V[1]+V[6]; tmp1:=V[1]-V[6];
+ V[1]:=tmp0; V[6]:=(AdZMPA_F2*(AdZMPA_COS2_1))*tmp1;
+ tmp0:=V[9]+V[14]; tmp1:=V[9]-V[14];
+ V[9]:=tmp0; V[14]:=(AdZMPA_F2*(-AdZMPA_COS2_1))*tmp1;
+ tmp0:=V[17]+V[22]; tmp1:=V[17]-V[22];
+ V[17]:=tmp0; V[22]:=(AdZMPA_F2*(AdZMPA_COS2_1))*tmp1;
+ tmp0:=V[25]+V[30]; tmp1:=V[25]-V[30];
+ V[25]:=tmp0; V[30]:=(AdZMPA_F2*(-AdZMPA_COS2_1))*tmp1;
+ tmp0:=Tab^[2]+Tab^[29]; tmp1:=Tab^[2]-Tab^[29];
+ V[2]:=tmp0; V[29]:=(AdZMPA_F2*(AdZMPA_COS0_2))*tmp1;
+ tmp0:=Tab^[13]+Tab^[18]; tmp1:=Tab^[13]-Tab^[18];
+ V[13]:=tmp0; V[18]:=(AdZMPA_F8*(AdZMPA_COS0_13))*tmp1;
+ tmp0:=V[2]+V[13]; tmp1:=V[2]-V[13];
+ V[2]:=tmp0; V[13]:=(AdZMPA_F2*(AdZMPA_COS1_2))*tmp1;
+ tmp0:=V[18]+V[29]; tmp1:=V[18]-V[29];
+ V[18]:=tmp0; V[29]:=(AdZMPA_F2*(-AdZMPA_COS1_2))*tmp1;
+ tmp0:=Tab^[5]+Tab^[26]; tmp1:=Tab^[5]-Tab^[26];
+ V[5]:=tmp0; V[26]:=(AdZMPA_F2*(AdZMPA_COS0_5))*tmp1;
+ tmp0:=Tab^[10]+Tab^[21]; tmp1:=Tab^[10]-Tab^[21];
+ V[10]:=tmp0; V[21]:=(AdZMPA_F2*(AdZMPA_COS0_10))*tmp1;
+ tmp0:=V[5]+V[10]; tmp1:=V[5]-V[10];
+ V[5]:=tmp0; V[10]:=(AdZMPA_F4*(AdZMPA_COS1_5))*tmp1;
+ tmp0:=V[21]+V[26]; tmp1:=V[21]-V[26];
+ V[21]:=tmp0; V[26]:=(AdZMPA_F4*(-AdZMPA_COS1_5))*tmp1;
+ tmp0:=V[2]+V[5]; tmp1:=V[2]-V[5];
+ V[2]:=tmp0; V[5]:=(AdZMPA_F2*(AdZMPA_COS2_2))*tmp1;
+ tmp0:=V[10]+V[13]; tmp1:=V[10]-V[13];
+ V[10]:=tmp0; V[13]:=(AdZMPA_F2*(-AdZMPA_COS2_2))*tmp1;
+ tmp0:=V[18]+V[21]; tmp1:=V[18]-V[21];
+ V[18]:=tmp0; V[21]:=(AdZMPA_F2*(AdZMPA_COS2_2))*tmp1;
+ tmp0:=V[26]+V[29]; tmp1:=V[26]-V[29];
+ V[26]:=tmp0; V[29]:=(AdZMPA_F2*(-AdZMPA_COS2_2))*tmp1;
+ tmp0:=V[1]+V[2]; tmp1:=V[1]-V[2];
+ V[1]:=tmp0; V[2]:=(AdZMPA_F4*(AdZMPA_COS3_1))*tmp1;
+ tmp0:=V[5]+V[6]; tmp1:=V[5]-V[6];
+ V[5]:=tmp0; V[6]:=(AdZMPA_F4*(-AdZMPA_COS3_1))*tmp1;
+ tmp0:=V[9]+V[10]; tmp1:=V[9]-V[10];
+ V[9]:=tmp0; V[10]:=(AdZMPA_F4*(AdZMPA_COS3_1))*tmp1;
+ tmp0:=V[13]+V[14]; tmp1:=V[13]-V[14];
+ V[13]:=tmp0; V[14]:=(AdZMPA_F4*(-AdZMPA_COS3_1))*tmp1;
+ tmp0:=V[17]+V[18]; tmp1:=V[17]-V[18];
+ V[17]:=tmp0; V[18]:=(AdZMPA_F4*(AdZMPA_COS3_1))*tmp1;
+ tmp0:=V[21]+V[22]; tmp1:=V[21]-V[22];
+ V[21]:=tmp0; V[22]:=(AdZMPA_F4*(-AdZMPA_COS3_1))*tmp1;
+ tmp0:=V[25]+V[26]; tmp1:=V[25]-V[26];
+ V[25]:=tmp0; V[26]:=(AdZMPA_F4*(AdZMPA_COS3_1))*tmp1;
+ tmp0:=V[29]+V[30]; tmp1:=V[29]-V[30];
+ V[29]:=tmp0; V[30]:=(AdZMPA_F4*(-AdZMPA_COS3_1))*tmp1;
+ tmp0:=V[0]+V[1]; tmp1:=V[0]-V[1];
+ V[0]:=tmp0; V[1]:=(AdZMPA_F2*(AdZMPA_COS4_0))*tmp1;
+ tmp0:=V[2]+V[3]; tmp1:=V[2]-V[3];
+ V[2]:=tmp0; V[3]:=(AdZMPA_F2*(-AdZMPA_COS4_0))*tmp1;
+ V[2]:=V[2]+V[3];
+ tmp0:=V[4]+V[5]; tmp1:=V[4]-V[5];
+ V[4]:=tmp0; V[5]:=(AdZMPA_F2*(AdZMPA_COS4_0))*tmp1;
+ tmp0:=V[6]+V[7]; tmp1:=V[6]-V[7];
+ V[6]:=tmp0; V[7]:=(AdZMPA_F2*(-AdZMPA_COS4_0))*tmp1;
+ V[6]:=V[6]+V[7];
+ V[4]:=V[4]+V[6];
+ V[6]:=V[6]+V[5];
+ V[5]:=V[5]+V[7];
+ tmp0:=V[8]+V[9]; tmp1:=V[8]-V[9];
+ V[8]:=tmp0; V[9]:=(AdZMPA_F2*(AdZMPA_COS4_0))*tmp1;
+ tmp0:=V[10]+V[11]; tmp1:=V[10]-V[11];
+ V[10]:=tmp0; V[11]:=(AdZMPA_F2*(-AdZMPA_COS4_0))*tmp1;
+ V[10]:=V[10]+V[11];
+ tmp0:=V[12]+V[13]; tmp1:=V[12]-V[13];
+ V[12]:=tmp0; V[13]:=(AdZMPA_F2*(AdZMPA_COS4_0))*tmp1;
+ tmp0:=V[14]+V[15]; tmp1:=V[14]-V[15];
+ V[14]:=tmp0; V[15]:=(AdZMPA_F2*(-AdZMPA_COS4_0))*tmp1;
+ V[14]:=V[14]+V[15];
+ V[12]:=V[12]+V[14];
+ V[14]:=V[14]+V[13];
+ V[13]:=V[13]+V[15];
+ tmp0:=V[16]+V[17]; tmp1:=V[16]-V[17];
+ V[16]:=tmp0; V[17]:=(AdZMPA_F2*(AdZMPA_COS4_0))*tmp1;
+ tmp0:=V[18]+V[19]; tmp1:=V[18]-V[19];
+ V[18]:=tmp0; V[19]:=(AdZMPA_F2*(-AdZMPA_COS4_0))*tmp1;
+ V[18]:=V[18]+V[19];
+ tmp0:=V[20]+V[21]; tmp1:=V[20]-V[21];
+ V[20]:=tmp0; V[21]:=(AdZMPA_F2*(AdZMPA_COS4_0))*tmp1;
+ tmp0:=V[22]+V[23]; tmp1:=V[22]-V[23];
+ V[22]:=tmp0; V[23]:=(AdZMPA_F2*(-AdZMPA_COS4_0))*tmp1;
+ V[22]:=V[22]+V[23];
+ V[20]:=V[20]+V[22];
+ V[22]:=V[22]+V[21];
+ V[21]:=V[21]+V[23];
+ tmp0:=V[24]+V[25]; tmp1:=V[24]-V[25];
+ V[24]:=tmp0; V[25]:=(AdZMPA_F2*(AdZMPA_COS4_0))*tmp1;
+ tmp0:=V[26]+V[27]; tmp1:=V[26]-V[27];
+ V[26]:=tmp0; V[27]:=(AdZMPA_F2*(-AdZMPA_COS4_0))*tmp1;
+ V[26]:=V[26]+V[27];
+ tmp0:=V[28]+V[29]; tmp1:=V[28]-V[29];
+ V[28]:=tmp0; V[29]:=(AdZMPA_F2*(AdZMPA_COS4_0))*tmp1;
+ tmp0:=V[30]+V[31]; tmp1:=V[30]-V[31];
+ V[30]:=tmp0; V[31]:=(AdZMPA_F2*(-AdZMPA_COS4_0))*tmp1;
+ V[30]:=V[30]+V[31];
+ V[28]:=V[28]+V[30];
+ V[30]:=V[30]+V[29];
+ V[29]:=V[29]+V[31];
+ V[8]:=V[8]+V[12];
+ V[12]:=V[12]+V[10];
+ V[10]:=V[10]+V[14];
+ V[14]:=V[14]+V[9];
+ V[9]:=V[9]+V[13];
+ V[13]:=V[13]+V[11];
+ V[11]:=V[11]+V[15];
+ Out^[0]:=V[0];
+ Out^[16]:=V[1];
+ Out^[8]:=V[2];
+ Out^[24]:=V[3];
+ Out^[4]:=V[4];
+ Out^[20]:=V[5];
+ Out^[12]:=V[6];
+ Out^[28]:=V[7];
+ Out^[2]:=V[8];
+ Out^[18]:=V[9];
+ Out^[10]:=V[10];
+ Out^[26]:=V[11];
+ Out^[6]:=V[12];
+ Out^[22]:=V[13];
+ Out^[14]:=V[14];
+ Out^[30]:=V[15];
+ V[24]:=V[24]+V[28];
+ V[28]:=V[28]+V[26];
+ V[26]:=V[26]+V[30];
+ V[30]:=V[30]+V[25];
+ V[25]:=V[25]+V[29];
+ V[29]:=V[29]+V[27];
+ V[27]:=V[27]+V[31];
+ Out^[1]:=V[16] + V[24];
+ Out^[17]:=V[17] + V[25];
+ Out^[9]:=V[18] + V[26];
+ Out^[25]:=V[19] + V[27];
+ Out^[5]:=V[20] + V[28];
+ Out^[21]:=V[21] + V[29];
+ Out^[13]:=V[22] + V[30];
+ Out^[29]:=V[23] + V[31];
+ Out^[3]:=V[24] + V[20];
+ Out^[19]:=V[25] + V[21];
+ Out^[11]:=V[26] + V[22];
+ Out^[27]:=V[27] + V[23];
+ Out^[7]:=V[28] + V[18];
+ Out^[23]:=V[29] + V[19];
+ Out^[15]:=V[30] + V[17];
+ Out^[31]:=V[31];
+End;
+{ AdZMPAdsp : apply_window_float ; Sb = tampon de synthese du canal, B = decalage ;
+ Smp = sortie }
+Procedure AdZMPAApplyWindow(Sb: PAdZMPASingles; B: LongInt; Smp: PAdZMPASingles; Incr:
+ LongInt);
+Var
+ J,K,W,W2,P,S1,S2: LongInt; Sum,Sum2,Tmp: Single;
+Begin
+ For K:=0 To 31 Do Sb^[B+512+K]:=Sb^[B+K];
+ S1:=0; S2:=31*Incr;
+ W:=0; W2:=31;
+ Sum:=0.0;
+ P:=B+16;
+ For K:=0 To 7 Do Sum:=Sum+AdZMPASynthWin[W+K*64]*Sb^[P+K*64];
+ P:=B+48;
+ For K:=0 To 7 Do Sum:=Sum-AdZMPASynthWin[W+32+K*64]*Sb^[P+K*64];
+ Smp^[S1]:=Sum; Sum:=0.0; Inc(S1,Incr);
+ Inc(W);
+ For J:=1 To 15 Do Begin
+  Sum2:=0.0;
+  P:=B+16+J;
+  For K:=0 To 7 Do Begin
+   Tmp:=Sb^[P+K*64];
+   Sum:=Sum+AdZMPASynthWin[W+K*64]*Tmp;
+   Sum2:=Sum2-AdZMPASynthWin[W2+K*64]*Tmp;
+  End;
+  P:=B+48-J;
+  For K:=0 To 7 Do Begin
+   Tmp:=Sb^[P+K*64];
+   Sum:=Sum-AdZMPASynthWin[W+32+K*64]*Tmp;
+   Sum2:=Sum2-AdZMPASynthWin[W2+32+K*64]*Tmp;
+  End;
+  Smp^[S1]:=Sum; Sum:=0.0; Inc(S1,Incr);
+  Sum:=Sum+Sum2;
+  Smp^[S2]:=Sum; Sum:=0.0; Dec(S2,Incr);
+  Inc(W); Dec(W2);
+ End;
+ P:=B+32;
+ For K:=0 To 7 Do Sum:=Sum-AdZMPASynthWin[W+32+K*64]*Sb^[P+K*64];
+ Smp^[S1]:=Sum;
+End;
+
+Procedure AdZMPASynthFilter(S: PAdZMPA; Ch: LongInt; Smp: PAdZMPASingles; Incr: LongInt;
+ Sbs: PAdZMPASingles; SbOff: LongInt);
+Var Off: LongInt; Tmp: TAdZMPA32; I: LongInt;
+Begin
+ Off:=S^.SynthOff[Ch];
+ For I:=0 To 31 Do Tmp[I]:=Sbs^[SbOff+I];
+ AdZMPADct32(PAdZMPASingles(@S^.SynthBuf[Ch,Off]),PAdZMPASingles(@Tmp));
+ AdZMPAApplyWindow(PAdZMPASingles(@S^.SynthBuf[Ch,0]),Off,Smp,Incr);
+ S^.SynthOff[Ch]:=(Off-32) And 511;
+End;
+
+
+{ ---- version en virgule fixe (decodeurs mp1/mp2 par defaut) ---- }
+Function AdZMPAMulH(A,B: LongInt): LongInt;
+Var P: Int64;
+Begin P:=Int64(A)*B; AdZMPAMulH:=LongInt(AdZMPASarL(P,32)); End;
+Procedure AdZMPADct32Fix(Out: PAdZMPALongs; Tab: PAdZMPALongs);
+Var Tmp0,Tmp1: LongInt; V: Array[0..31] Of LongInt;
+Begin
+ Tmp0:=LongInt(Int64(Tab^[0])+Tab^[31]); Tmp1:=LongInt(Int64(Tab^[0])-Tab^[31]);
+ V[0]:=Tmp0; V[31]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1075036753);
+ Tmp0:=LongInt(Int64(Tab^[15])+Tab^[16]); Tmp1:=LongInt(Int64(Tab^[15])-Tab^[
+  16]);
+ V[15]:=Tmp0; V[16]:=AdZMPAMulH(LongInt(Int64(32)*Tmp1),1367679739);
+ Tmp0:=LongInt(Int64(V[0])+V[15]); Tmp1:=LongInt(Int64(V[0])-V[15]);
+ V[0]:=Tmp0; V[15]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1078937202);
+ Tmp0:=LongInt(Int64(V[16])+V[31]); Tmp1:=LongInt(Int64(V[16])-V[31]);
+ V[16]:=Tmp0; V[31]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1078937202);
+ Tmp0:=LongInt(Int64(Tab^[7])+Tab^[24]); Tmp1:=LongInt(Int64(Tab^[7])-Tab^[24]);
+ V[7]:=Tmp0; V[24]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1449139879);
+ Tmp0:=LongInt(Int64(Tab^[8])+Tab^[23]); Tmp1:=LongInt(Int64(Tab^[8])-Tab^[23]);
+ V[8]:=Tmp0; V[23]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1598879467);
+ Tmp0:=LongInt(Int64(V[7])+V[8]); Tmp1:=LongInt(Int64(V[7])-V[8]);
+ V[7]:=Tmp0; V[8]:=AdZMPAMulH(LongInt(Int64(16)*Tmp1),1369329156);
+ Tmp0:=LongInt(Int64(V[23])+V[24]); Tmp1:=LongInt(Int64(V[23])-V[24]);
+ V[23]:=Tmp0; V[24]:=AdZMPAMulH(LongInt(Int64(16)*Tmp1),-1369329156);
+ Tmp0:=LongInt(Int64(V[0])+V[7]); Tmp1:=LongInt(Int64(V[0])-V[7]);
+ V[0]:=Tmp0; V[7]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1094777670);
+ Tmp0:=LongInt(Int64(V[8])+V[15]); Tmp1:=LongInt(Int64(V[8])-V[15]);
+ V[8]:=Tmp0; V[15]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1094777670);
+ Tmp0:=LongInt(Int64(V[16])+V[23]); Tmp1:=LongInt(Int64(V[16])-V[23]);
+ V[16]:=Tmp0; V[23]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1094777670);
+ Tmp0:=LongInt(Int64(V[24])+V[31]); Tmp1:=LongInt(Int64(V[24])-V[31]);
+ V[24]:=Tmp0; V[31]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1094777670);
+ Tmp0:=LongInt(Int64(Tab^[3])+Tab^[28]); Tmp1:=LongInt(Int64(Tab^[3])-Tab^[28]);
+ V[3]:=Tmp0; V[28]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1140405281);
+ Tmp0:=LongInt(Int64(Tab^[12])+Tab^[19]); Tmp1:=LongInt(Int64(Tab^[12])-Tab^[
+  19]);
+ V[12]:=Tmp0; V[19]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),1593609622);
+ Tmp0:=LongInt(Int64(V[3])+V[12]); Tmp1:=LongInt(Int64(V[3])-V[12]);
+ V[3]:=Tmp0; V[12]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1389039203);
+ Tmp0:=LongInt(Int64(V[19])+V[28]); Tmp1:=LongInt(Int64(V[19])-V[28]);
+ V[19]:=Tmp0; V[28]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1389039203);
+ Tmp0:=LongInt(Int64(Tab^[4])+Tab^[27]); Tmp1:=LongInt(Int64(Tab^[4])-Tab^[27]);
+ V[4]:=Tmp0; V[27]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1187781572);
+ Tmp0:=LongInt(Int64(Tab^[11])+Tab^[20]); Tmp1:=LongInt(Int64(Tab^[11])-Tab^[
+  20]);
+ V[11]:=Tmp0; V[20]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),1255676567);
+ Tmp0:=LongInt(Int64(V[4])+V[11]); Tmp1:=LongInt(Int64(V[4])-V[11]);
+ V[4]:=Tmp0; V[11]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1692549166);
+ Tmp0:=LongInt(Int64(V[20])+V[27]); Tmp1:=LongInt(Int64(V[20])-V[27]);
+ V[20]:=Tmp0; V[27]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1692549166);
+ Tmp0:=LongInt(Int64(V[3])+V[4]); Tmp1:=LongInt(Int64(V[3])-V[4]);
+ V[3]:=Tmp0; V[4]:=AdZMPAMulH(LongInt(Int64(8)*Tmp1),1375954754);
+ Tmp0:=LongInt(Int64(V[11])+V[12]); Tmp1:=LongInt(Int64(V[11])-V[12]);
+ V[11]:=Tmp0; V[12]:=AdZMPAMulH(LongInt(Int64(8)*Tmp1),-1375954754);
+ Tmp0:=LongInt(Int64(V[19])+V[20]); Tmp1:=LongInt(Int64(V[19])-V[20]);
+ V[19]:=Tmp0; V[20]:=AdZMPAMulH(LongInt(Int64(8)*Tmp1),1375954754);
+ Tmp0:=LongInt(Int64(V[27])+V[28]); Tmp1:=LongInt(Int64(V[27])-V[28]);
+ V[27]:=Tmp0; V[28]:=AdZMPAMulH(LongInt(Int64(8)*Tmp1),-1375954754);
+ Tmp0:=LongInt(Int64(V[0])+V[3]); Tmp1:=LongInt(Int64(V[0])-V[3]);
+ V[0]:=Tmp0; V[3]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1162209775);
+ Tmp0:=LongInt(Int64(V[4])+V[7]); Tmp1:=LongInt(Int64(V[4])-V[7]);
+ V[4]:=Tmp0; V[7]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1162209775);
+ Tmp0:=LongInt(Int64(V[8])+V[11]); Tmp1:=LongInt(Int64(V[8])-V[11]);
+ V[8]:=Tmp0; V[11]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1162209775);
+ Tmp0:=LongInt(Int64(V[12])+V[15]); Tmp1:=LongInt(Int64(V[12])-V[15]);
+ V[12]:=Tmp0; V[15]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1162209775);
+ Tmp0:=LongInt(Int64(V[16])+V[19]); Tmp1:=LongInt(Int64(V[16])-V[19]);
+ V[16]:=Tmp0; V[19]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1162209775);
+ Tmp0:=LongInt(Int64(V[20])+V[23]); Tmp1:=LongInt(Int64(V[20])-V[23]);
+ V[20]:=Tmp0; V[23]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1162209775);
+ Tmp0:=LongInt(Int64(V[24])+V[27]); Tmp1:=LongInt(Int64(V[24])-V[27]);
+ V[24]:=Tmp0; V[27]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1162209775);
+ Tmp0:=LongInt(Int64(V[28])+V[31]); Tmp1:=LongInt(Int64(V[28])-V[31]);
+ V[28]:=Tmp0; V[31]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1162209775);
+ Tmp0:=LongInt(Int64(Tab^[1])+Tab^[30]); Tmp1:=LongInt(Int64(Tab^[1])-Tab^[30]);
+ V[1]:=Tmp0; V[30]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1085490621);
+ Tmp0:=LongInt(Int64(Tab^[14])+Tab^[17]); Tmp1:=LongInt(Int64(Tab^[14])-Tab^[
+  17]);
+ V[14]:=Tmp0; V[17]:=AdZMPAMulH(LongInt(Int64(8)*Tmp1),1829445839);
+ Tmp0:=LongInt(Int64(V[1])+V[14]); Tmp1:=LongInt(Int64(V[1])-V[14]);
+ V[1]:=Tmp0; V[14]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1122057232);
+ Tmp0:=LongInt(Int64(V[17])+V[30]); Tmp1:=LongInt(Int64(V[17])-V[30]);
+ V[17]:=Tmp0; V[30]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1122057232);
+ Tmp0:=LongInt(Int64(Tab^[6])+Tab^[25]); Tmp1:=LongInt(Int64(Tab^[6])-Tab^[25]);
+ V[6]:=Tmp0; V[25]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1336817425);
+ Tmp0:=LongInt(Int64(Tab^[9])+Tab^[22]); Tmp1:=LongInt(Int64(Tab^[9])-Tab^[22]);
+ V[9]:=Tmp0; V[22]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1802489638);
+ Tmp0:=LongInt(Int64(V[6])+V[9]); Tmp1:=LongInt(Int64(V[6])-V[9]);
+ V[6]:=Tmp0; V[9]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),1849463489);
+ Tmp0:=LongInt(Int64(V[22])+V[25]); Tmp1:=LongInt(Int64(V[22])-V[25]);
+ V[22]:=Tmp0; V[25]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),-1849463489);
+ Tmp0:=LongInt(Int64(V[1])+V[6]); Tmp1:=LongInt(Int64(V[1])-V[6]);
+ V[1]:=Tmp0; V[6]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1291378312);
+ Tmp0:=LongInt(Int64(V[9])+V[14]); Tmp1:=LongInt(Int64(V[9])-V[14]);
+ V[9]:=Tmp0; V[14]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1291378312);
+ Tmp0:=LongInt(Int64(V[17])+V[22]); Tmp1:=LongInt(Int64(V[17])-V[22]);
+ V[17]:=Tmp0; V[22]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1291378312);
+ Tmp0:=LongInt(Int64(V[25])+V[30]); Tmp1:=LongInt(Int64(V[25])-V[30]);
+ V[25]:=Tmp0; V[30]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1291378312);
+ Tmp0:=LongInt(Int64(Tab^[2])+Tab^[29]); Tmp1:=LongInt(Int64(Tab^[2])-Tab^[29]);
+ V[2]:=Tmp0; V[29]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1106914669);
+ Tmp0:=LongInt(Int64(Tab^[13])+Tab^[18]); Tmp1:=LongInt(Int64(Tab^[13])-Tab^[
+  18]);
+ V[13]:=Tmp0; V[18]:=AdZMPAMulH(LongInt(Int64(8)*Tmp1),1104762768);
+ Tmp0:=LongInt(Int64(V[2])+V[13]); Tmp1:=LongInt(Int64(V[2])-V[13]);
+ V[2]:=Tmp0; V[13]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1217503044);
+ Tmp0:=LongInt(Int64(V[18])+V[29]); Tmp1:=LongInt(Int64(V[18])-V[29]);
+ V[18]:=Tmp0; V[29]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1217503044);
+ Tmp0:=LongInt(Int64(Tab^[5])+Tab^[26]); Tmp1:=LongInt(Int64(Tab^[5])-Tab^[26]);
+ V[5]:=Tmp0; V[26]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1251843312);
+ Tmp0:=LongInt(Int64(Tab^[10])+Tab^[21]); Tmp1:=LongInt(Int64(Tab^[10])-Tab^[
+  21]);
+ V[10]:=Tmp0; V[21]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),2088574387);
+ Tmp0:=LongInt(Int64(V[5])+V[10]); Tmp1:=LongInt(Int64(V[5])-V[10]);
+ V[5]:=Tmp0; V[10]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),1138893993);
+ Tmp0:=LongInt(Int64(V[21])+V[26]); Tmp1:=LongInt(Int64(V[21])-V[26]);
+ V[21]:=Tmp0; V[26]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),-1138893993);
+ Tmp0:=LongInt(Int64(V[2])+V[5]); Tmp1:=LongInt(Int64(V[2])-V[5]);
+ V[2]:=Tmp0; V[5]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1932684223);
+ Tmp0:=LongInt(Int64(V[10])+V[13]); Tmp1:=LongInt(Int64(V[10])-V[13]);
+ V[10]:=Tmp0; V[13]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1932684223);
+ Tmp0:=LongInt(Int64(V[18])+V[21]); Tmp1:=LongInt(Int64(V[18])-V[21]);
+ V[18]:=Tmp0; V[21]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1932684223);
+ Tmp0:=LongInt(Int64(V[26])+V[29]); Tmp1:=LongInt(Int64(V[26])-V[29]);
+ V[26]:=Tmp0; V[29]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1932684223);
+ Tmp0:=LongInt(Int64(V[1])+V[2]); Tmp1:=LongInt(Int64(V[1])-V[2]);
+ V[1]:=Tmp0; V[2]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),1402911301);
+ Tmp0:=LongInt(Int64(V[5])+V[6]); Tmp1:=LongInt(Int64(V[5])-V[6]);
+ V[5]:=Tmp0; V[6]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),-1402911301);
+ Tmp0:=LongInt(Int64(V[9])+V[10]); Tmp1:=LongInt(Int64(V[9])-V[10]);
+ V[9]:=Tmp0; V[10]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),1402911301);
+ Tmp0:=LongInt(Int64(V[13])+V[14]); Tmp1:=LongInt(Int64(V[13])-V[14]);
+ V[13]:=Tmp0; V[14]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),-1402911301);
+ Tmp0:=LongInt(Int64(V[17])+V[18]); Tmp1:=LongInt(Int64(V[17])-V[18]);
+ V[17]:=Tmp0; V[18]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),1402911301);
+ Tmp0:=LongInt(Int64(V[21])+V[22]); Tmp1:=LongInt(Int64(V[21])-V[22]);
+ V[21]:=Tmp0; V[22]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),-1402911301);
+ Tmp0:=LongInt(Int64(V[25])+V[26]); Tmp1:=LongInt(Int64(V[25])-V[26]);
+ V[25]:=Tmp0; V[26]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),1402911301);
+ Tmp0:=LongInt(Int64(V[29])+V[30]); Tmp1:=LongInt(Int64(V[29])-V[30]);
+ V[29]:=Tmp0; V[30]:=AdZMPAMulH(LongInt(Int64(4)*Tmp1),-1402911301);
+ Tmp0:=LongInt(Int64(V[0])+V[1]); Tmp1:=LongInt(Int64(V[0])-V[1]);
+ V[0]:=Tmp0; V[1]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1518500250);
+ Tmp0:=LongInt(Int64(V[2])+V[3]); Tmp1:=LongInt(Int64(V[2])-V[3]);
+ V[2]:=Tmp0; V[3]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1518500250);
+ V[2]:=LongInt(Int64(V[2])+V[3]);
+ Tmp0:=LongInt(Int64(V[4])+V[5]); Tmp1:=LongInt(Int64(V[4])-V[5]);
+ V[4]:=Tmp0; V[5]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1518500250);
+ Tmp0:=LongInt(Int64(V[6])+V[7]); Tmp1:=LongInt(Int64(V[6])-V[7]);
+ V[6]:=Tmp0; V[7]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1518500250);
+ V[6]:=LongInt(Int64(V[6])+V[7]);
+ V[4]:=LongInt(Int64(V[4])+V[6]);
+ V[6]:=LongInt(Int64(V[6])+V[5]);
+ V[5]:=LongInt(Int64(V[5])+V[7]);
+ Tmp0:=LongInt(Int64(V[8])+V[9]); Tmp1:=LongInt(Int64(V[8])-V[9]);
+ V[8]:=Tmp0; V[9]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1518500250);
+ Tmp0:=LongInt(Int64(V[10])+V[11]); Tmp1:=LongInt(Int64(V[10])-V[11]);
+ V[10]:=Tmp0; V[11]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1518500250);
+ V[10]:=LongInt(Int64(V[10])+V[11]);
+ Tmp0:=LongInt(Int64(V[12])+V[13]); Tmp1:=LongInt(Int64(V[12])-V[13]);
+ V[12]:=Tmp0; V[13]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1518500250);
+ Tmp0:=LongInt(Int64(V[14])+V[15]); Tmp1:=LongInt(Int64(V[14])-V[15]);
+ V[14]:=Tmp0; V[15]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1518500250);
+ V[14]:=LongInt(Int64(V[14])+V[15]);
+ V[12]:=LongInt(Int64(V[12])+V[14]);
+ V[14]:=LongInt(Int64(V[14])+V[13]);
+ V[13]:=LongInt(Int64(V[13])+V[15]);
+ Tmp0:=LongInt(Int64(V[16])+V[17]); Tmp1:=LongInt(Int64(V[16])-V[17]);
+ V[16]:=Tmp0; V[17]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1518500250);
+ Tmp0:=LongInt(Int64(V[18])+V[19]); Tmp1:=LongInt(Int64(V[18])-V[19]);
+ V[18]:=Tmp0; V[19]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1518500250);
+ V[18]:=LongInt(Int64(V[18])+V[19]);
+ Tmp0:=LongInt(Int64(V[20])+V[21]); Tmp1:=LongInt(Int64(V[20])-V[21]);
+ V[20]:=Tmp0; V[21]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1518500250);
+ Tmp0:=LongInt(Int64(V[22])+V[23]); Tmp1:=LongInt(Int64(V[22])-V[23]);
+ V[22]:=Tmp0; V[23]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1518500250);
+ V[22]:=LongInt(Int64(V[22])+V[23]);
+ V[20]:=LongInt(Int64(V[20])+V[22]);
+ V[22]:=LongInt(Int64(V[22])+V[21]);
+ V[21]:=LongInt(Int64(V[21])+V[23]);
+ Tmp0:=LongInt(Int64(V[24])+V[25]); Tmp1:=LongInt(Int64(V[24])-V[25]);
+ V[24]:=Tmp0; V[25]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1518500250);
+ Tmp0:=LongInt(Int64(V[26])+V[27]); Tmp1:=LongInt(Int64(V[26])-V[27]);
+ V[26]:=Tmp0; V[27]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1518500250);
+ V[26]:=LongInt(Int64(V[26])+V[27]);
+ Tmp0:=LongInt(Int64(V[28])+V[29]); Tmp1:=LongInt(Int64(V[28])-V[29]);
+ V[28]:=Tmp0; V[29]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),1518500250);
+ Tmp0:=LongInt(Int64(V[30])+V[31]); Tmp1:=LongInt(Int64(V[30])-V[31]);
+ V[30]:=Tmp0; V[31]:=AdZMPAMulH(LongInt(Int64(2)*Tmp1),-1518500250);
+ V[30]:=LongInt(Int64(V[30])+V[31]);
+ V[28]:=LongInt(Int64(V[28])+V[30]);
+ V[30]:=LongInt(Int64(V[30])+V[29]);
+ V[29]:=LongInt(Int64(V[29])+V[31]);
+ V[8]:=LongInt(Int64(V[8])+V[12]);
+ V[12]:=LongInt(Int64(V[12])+V[10]);
+ V[10]:=LongInt(Int64(V[10])+V[14]);
+ V[14]:=LongInt(Int64(V[14])+V[9]);
+ V[9]:=LongInt(Int64(V[9])+V[13]);
+ V[13]:=LongInt(Int64(V[13])+V[11]);
+ V[11]:=LongInt(Int64(V[11])+V[15]);
+ Out^[0]:=V[0];
+ Out^[16]:=V[1];
+ Out^[8]:=V[2];
+ Out^[24]:=V[3];
+ Out^[4]:=V[4];
+ Out^[20]:=V[5];
+ Out^[12]:=V[6];
+ Out^[28]:=V[7];
+ Out^[2]:=V[8];
+ Out^[18]:=V[9];
+ Out^[10]:=V[10];
+ Out^[26]:=V[11];
+ Out^[6]:=V[12];
+ Out^[22]:=V[13];
+ Out^[14]:=V[14];
+ Out^[30]:=V[15];
+ V[24]:=LongInt(Int64(V[24])+V[28]);
+ V[28]:=LongInt(Int64(V[28])+V[26]);
+ V[26]:=LongInt(Int64(V[26])+V[30]);
+ V[30]:=LongInt(Int64(V[30])+V[25]);
+ V[25]:=LongInt(Int64(V[25])+V[29]);
+ V[29]:=LongInt(Int64(V[29])+V[27]);
+ V[27]:=LongInt(Int64(V[27])+V[31]);
+ Out^[1]:=LongInt(Int64(V[16])+V[24]);
+ Out^[17]:=LongInt(Int64(V[17])+V[25]);
+ Out^[9]:=LongInt(Int64(V[18])+V[26]);
+ Out^[25]:=LongInt(Int64(V[19])+V[27]);
+ Out^[5]:=LongInt(Int64(V[20])+V[28]);
+ Out^[21]:=LongInt(Int64(V[21])+V[29]);
+ Out^[13]:=LongInt(Int64(V[22])+V[30]);
+ Out^[29]:=LongInt(Int64(V[23])+V[31]);
+ Out^[3]:=LongInt(Int64(V[24])+V[20]);
+ Out^[19]:=LongInt(Int64(V[25])+V[21]);
+ Out^[11]:=LongInt(Int64(V[26])+V[22]);
+ Out^[27]:=LongInt(Int64(V[27])+V[23]);
+ Out^[7]:=LongInt(Int64(V[28])+V[18]);
+ Out^[23]:=LongInt(Int64(V[29])+V[19]);
+ Out^[15]:=LongInt(Int64(V[30])+V[17]);
+ Out^[31]:=V[31];
+End;
+
+Function AdZMPARndFix(Var Sm: Int64): LongInt;
+Var V: Int64;
+Begin
+ V:=AdZMPASarL(Sm,24); Sm:=Sm And $FFFFFF;
+ V:=LongInt(V And $FFFFFFFF);
+ If V>32767 Then V:=32767 Else If V<-32768 Then V:=-32768;
+ AdZMPARndFix:=LongInt(V);
+End;
+Procedure AdZMPAApplyWindowFix(Sb: PAdZMPALongs; B: LongInt; Smp: PAdZMPASingles; Incr:
+ LongInt; Var Dither: LongInt);
+Var J,K,W,W2,P,S1,S2: LongInt; Sum,Sum2: Int64; Tmp: LongInt;
+Begin
+ For K:=0 To 31 Do Sb^[B+512+K]:=Sb^[B+K];
+ S1:=0; S2:=31*Incr; W:=0; W2:=31;
+ Sum:=Dither;
+ P:=B+16;
+ For K:=0 To 7 Do Sum:=Sum+Int64(AdZMPASynthWinI[W+K*64])*Sb^[P+K*64];
+ P:=B+48;
+ For K:=0 To 7 Do Sum:=Sum-Int64(AdZMPASynthWinI[W+32+K*64])*Sb^[P+K*64];
+ Smp^[S1]:=AdZMPARndFix(Sum); Inc(S1,Incr);
+ Inc(W);
+ For J:=1 To 15 Do Begin
+  Sum2:=0;
+  P:=B+16+J;
+  For K:=0 To 7 Do Begin
+   Tmp:=Sb^[P+K*64];
+   Sum:=Sum+Int64(AdZMPASynthWinI[W+K*64])*Tmp;
+   Sum2:=Sum2-Int64(AdZMPASynthWinI[W2+K*64])*Tmp;
+  End;
+  P:=B+48-J;
+  For K:=0 To 7 Do Begin
+   Tmp:=Sb^[P+K*64];
+   Sum:=Sum-Int64(AdZMPASynthWinI[W+32+K*64])*Tmp;
+   Sum2:=Sum2-Int64(AdZMPASynthWinI[W2+32+K*64])*Tmp;
+  End;
+  Smp^[S1]:=AdZMPARndFix(Sum); Inc(S1,Incr);
+  Sum:=Sum+Sum2;
+  Smp^[S2]:=AdZMPARndFix(Sum); Dec(S2,Incr);
+  Inc(W); Dec(W2);
+ End;
+ P:=B+32;
+ For K:=0 To 7 Do Sum:=Sum-Int64(AdZMPASynthWinI[W+32+K*64])*Sb^[P+K*64];
+ Smp^[S1]:=AdZMPARndFix(Sum);
+ Dither:=LongInt(Sum);
+End;
+Procedure AdZMPASynthFilterFix(S: PAdZMPA; Ch: LongInt; Smp: PAdZMPASingles; Incr:
+ LongInt; SbOff: LongInt);
+Var Off: LongInt;
+Begin
+ Off:=S^.SynthOff[Ch];
+ AdZMPADct32Fix(PAdZMPALongs(@S^.SynthBufI[Ch,Off]),PAdZMPALongs(@S^.SbI[Ch,SbOff]));
+ AdZMPAApplyWindowFix(PAdZMPALongs(@S^.SynthBufI[Ch,0]),Off,Smp,Incr,S^.Dither);
+ S^.SynthOff[Ch]:=(Off-32) And 511;
+End;
+
+{ imdct36 : In[0..17] modifie, Out/Buf avec indices de base }
+Procedure AdZMPAImdct36(Out: PAdZMPASingles; OutB: LongInt; Buf: PAdZMPASingles; BufB:
+ LongInt; In_: PAdZMPASingles; InB,WinRow: LongInt);
+Var
+ I,J: LongInt; T0,T1,T2,T3,S0,S1,S2,S3: Single; Tmp: Array[0..17] Of Single;
+  T1b,In1: LongInt;
+ Win: PAdZMPAWinRow;
+Begin
+ Win:=@AdZMPAWin[WinRow];
+ For I:=17 Downto 1 Do In_^[InB+I]:=In_^[InB+I]+In_^[InB+I-1];
+ I:=17;
+ While I>=3 Do Begin In_^[InB+I]:=In_^[InB+I]+In_^[InB+I-2]; Dec(I,2); End;
+ For J:=0 To 1 Do Begin
+  T1b:=J; In1:=InB+J;
+  T2:=In_^[In1+2*4]+In_^[In1+2*8]-In_^[In1+2*2];
+  T3:=In_^[In1+2*0]+In_^[In1+2*6]*AdZMPA_Fhalf;
+  T1:=In_^[In1+2*0]-In_^[In1+2*6];
+  Tmp[T1b+6]:=T1-T2*AdZMPA_Fhalf;
+  Tmp[T1b+16]:=T1+T2;
+  T0:=(AdZMPA_F2*A36_C2)*(In_^[In1+2*2]+In_^[In1+2*4]);
+  T1:=(AdZMPA_Fm2*A36_C8)*(In_^[In1+2*4]-In_^[In1+2*8]);
+  T2:=(AdZMPA_F2*(-A36_C4))*(In_^[In1+2*2]+In_^[In1+2*8]);
+  Tmp[T1b+10]:=T3-T0-T2;
+  Tmp[T1b+2]:=T3+T0+T1;
+  Tmp[T1b+14]:=T3+T2-T1;
+  Tmp[T1b+4]:=(AdZMPA_F2*(-A36_C3))*(In_^[In1+2*5]+In_^[In1+2*7]-In_^[In1+2*1]);
+  T2:=(AdZMPA_F2*A36_C1)*(In_^[In1+2*1]+In_^[In1+2*5]);
+  T3:=(AdZMPA_Fm2*A36_C7)*(In_^[In1+2*5]-In_^[In1+2*7]);
+  T0:=(AdZMPA_F2*A36_C3)*In_^[In1+2*3];
+  T1:=(AdZMPA_F2*(-A36_C5))*(In_^[In1+2*1]+In_^[In1+2*7]);
+  Tmp[T1b+0]:=T2+T3+T0;
+  Tmp[T1b+12]:=T2+T1-T0;
+  Tmp[T1b+8]:=T3-T1-T0;
+ End;
+ I:=0;
+ For J:=0 To 3 Do Begin
+  T0:=Tmp[I]; T1:=Tmp[I+2];
+  S0:=T1+T0; S2:=T1-T0;
+  T2:=Tmp[I+1]; T3:=Tmp[I+3];
+  S1:=(AdZMPA_F2*AdZMPAIcos36h[J])*(T3+T2);
+  S3:=AdZMPAIcos36[8-J]*(T3-T2);
+  T0:=S0+S1; T1:=S0-S1;
+  Out^[OutB+(9+J)*32]:=Win^[9+J]*T1+Buf^[BufB+4*(9+J)];
+  Out^[OutB+(8-J)*32]:=Win^[8-J]*T1+Buf^[BufB+4*(8-J)];
+  Buf^[BufB+4*(9+J)]:=Win^[20+9+J]*T0;
+  Buf^[BufB+4*(8-J)]:=Win^[20+8-J]*T0;
+  T0:=S2+S3; T1:=S2-S3;
+  Out^[OutB+(9+8-J)*32]:=Win^[9+8-J]*T1+Buf^[BufB+4*(9+8-J)];
+  Out^[OutB+J*32]:=Win^[J]*T1+Buf^[BufB+4*J];
+  Buf^[BufB+4*(9+8-J)]:=Win^[20+9+8-J]*T0;
+  Buf^[BufB+4*J]:=Win^[20+J]*T0;
+  Inc(I,4);
+ End;
+ S0:=Tmp[16];
+ S1:=(AdZMPA_F2*AdZMPAIcos36h[4])*Tmp[17];
+ T0:=S0+S1; T1:=S0-S1;
+ Out^[OutB+(9+4)*32]:=Win^[9+4]*T1+Buf^[BufB+4*(9+4)];
+ Out^[OutB+(8-4)*32]:=Win^[8-4]*T1+Buf^[BufB+4*(8-4)];
+ Buf^[BufB+4*(9+4)]:=Win^[20+9+4]*T0;
+ Buf^[BufB+4*(8-4)]:=Win^[20+8-4]*T0;
+End;
+
+Procedure AdZMPAImdct36Blocks(Out: PAdZMPASingles; OutB: LongInt; Buf: PAdZMPASingles;
+ BufB: LongInt; In_: PAdZMPASingles; InB,Count,SwitchPoint,BlockType: LongInt);
+Var J,WinIdx: LongInt;
+Begin
+ For J:=0 To Count-1 Do Begin
+  If (SwitchPoint<>0) And (J<2) Then WinIdx:=0 Else WinIdx:=BlockType;
+  AdZMPAImdct36(Out,OutB,Buf,BufB,In_,InB,WinIdx+(4 And -(J And 1)));
+  Inc(InB,18);
+  If (J And 3)<>3 Then Inc(BufB,1) Else Inc(BufB,72-3);
+  Inc(OutB);
+ End;
+End;
+
+{ imdct12 }
+Procedure AdZMPAImdct12(Out: PAdZMPASingles; OutB: LongInt; In_: PAdZMPASingles; InB:
+ LongInt);
+Var In0,In1,In2,In3,In4,In5,T1,T2: Single;
+Begin
+ In0:=In_^[InB+0*3];
+ In1:=In_^[InB+1*3]+In_^[InB+0*3];
+ In2:=In_^[InB+2*3]+In_^[InB+1*3];
+ In3:=In_^[InB+3*3]+In_^[InB+2*3];
+ In4:=In_^[InB+4*3]+In_^[InB+3*3];
+ In5:=In_^[InB+5*3]+In_^[InB+4*3];
+ In5:=In5+In3;
+ In3:=In3+In1;
+ In2:=(AdZMPA_F2*A12_C3)*In2;
+ In3:=(AdZMPA_F4*A12_C3)*In3;
+ T1:=In0-In4;
+ T2:=(AdZMPA_F2*A12_C4)*(In1-In5);
+ Out^[OutB+7]:=T1+T2; Out^[OutB+10]:=T1+T2;
+ Out^[OutB+1]:=T1-T2; Out^[OutB+4]:=T1-T2;
+ In0:=In0+In4*AdZMPA_Fhalf;
+ In4:=In0+In2;
+ In5:=In5+AdZMPA_F2*In1;
+ In1:=A12_C5*(In5+In3);
+ Out^[OutB+8]:=In4+In1; Out^[OutB+9]:=In4+In1;
+ Out^[OutB+2]:=In4-In1; Out^[OutB+3]:=In4-In1;
+ In0:=In0-In2;
+ In5:=(AdZMPA_F2*A12_C6)*(In5-In3);
+ Out^[OutB+0]:=In0-In5; Out^[OutB+5]:=In0-In5;
+ Out^[OutB+6]:=In0+In5; Out^[OutB+11]:=In0+In5;
+End;
+Procedure AdZMPAPutSb(S: PAdZMPA; Ch,Idx,V: LongInt);
+Begin
+ If S^.Fixed Then S^.SbI[Ch,Idx]:=V Else S^.Sb[Ch,Idx]:=V;
+End;
+{ ---- en-tete (mpegaudiodecheader.c) ---- }
+{ renvoie 0 si valide, -1 si invalide, 1 si format libre }
+Function AdZMPAHeader(S: PAdZMPA; H: LongWord): LongInt;
+Var Mpeg25,Padding,SRI,BRI,FS,SR: LongInt;
+Begin
+ AdZMPAHeader:=-1;
+ If (H And $FFE00000)<>$FFE00000 Then Exit;
+ If (H And (3 Shl 19))=(1 Shl 19) Then Exit;
+ If (H And (3 Shl 17))=0 Then Exit;
+ If (H And ($F Shl 12))=($F Shl 12) Then Exit;
+ If (H And (3 Shl 10))=(3 Shl 10) Then Exit;
+ If (H And (1 Shl 20))<>0 Then Begin
+  If (H And (1 Shl 19))<>0 Then S^.Lsf:=0 Else S^.Lsf:=1;
+  Mpeg25:=0;
+ End Else Begin S^.Lsf:=1; Mpeg25:=1; End;
+ S^.Layer:=4-LongInt((H Shr 17) And 3);
+ SRI:=LongInt((H Shr 10) And 3);
+ SR:=AdZMPAFreqTab[SRI] Shr (S^.Lsf+Mpeg25);
+ SRI:=SRI+3*(S^.Lsf+Mpeg25);
+ S^.SRIdx:=SRI;
+ S^.ErrProt:=LongInt(((H Shr 16) And 1) Xor 1);
+ S^.SampleRate:=SR;
+ BRI:=LongInt((H Shr 12) And $F);
+ Padding:=LongInt((H Shr 9) And 1);
+ S^.Mode:=LongInt((H Shr 6) And 3);
+ S^.ModeExt:=LongInt((H Shr 4) And 3);
+ If S^.Mode=3 Then S^.NbCh:=1 Else S^.NbCh:=2;
+ If BRI<>0 Then Begin
+  FS:=AdZMPABitrate[(S^.Lsf*3+S^.Layer-1)*15+BRI];
+  S^.BitRate:=FS*1000;
+  Case S^.Layer Of
+   1: Begin FS:=(FS*12000) Div SR; FS:=(FS+Padding)*4; End;
+   2: Begin FS:=(FS*144000) Div SR; Inc(FS,Padding); End;
+   Else Begin FS:=(FS*144000) Div (SR Shl S^.Lsf); Inc(FS,Padding); End;
+  End;
+  S^.FrameSize:=FS;
+  AdZMPAHeader:=0;
+ End Else AdZMPAHeader:=1;
+End;
+
+Function AdZMPAL1Unscale(N,Mant,Sf: LongInt): LongInt;
+Var Shift,Md: LongInt; Val: Int64;
+Begin
+ Shift:=AdZMPAModShift[Sf]; Md:=Shift And 3; Shift:=Shift Shr 2;
+ If AdZMPAUseFix Then Val:=Int64(Mant-(LongInt(1) Shl N)+1)*AdZMPAScaleMultFix[N-1,Md]
+ Else Val:=Int64(Mant-(LongInt(1) Shl N)+1)*AdZMPAScaleMult[N-1,Md];
+ Inc(Shift,N);
+ AdZMPAL1Unscale:=LongInt(AdZMPASarL(Val+(Int64(1) Shl (Shift-1)),Shift));
+End;
+
+Function AdZMPAL2Group(Steps,Mant,Sf: LongInt): LongInt;
+Var Shift,Md,Val: LongInt;
+Begin
+ Shift:=AdZMPAModShift[Sf]; Md:=Shift And 3; Shift:=Shift Shr 2;
+ Val:=(Mant-(Steps Shr 1))*AdZMPAMult2[Steps Shr 2,Md];
+ If Shift>0 Then Val:=LongInt(AdZMPASarL(Int64(Val)+(Int64(1) Shl (Shift-1)),
+  Shift));
+ AdZMPAL2Group:=Val;
+End;
+
+Function AdZMPAL3Unscale(Value,Exponent: LongInt): LongInt;
+Var M: Int64; E: LongInt;
+Begin
+ E:=AdZMPA43Exp[4*Value+(Exponent And 3)];
+ M:=AdZMPA43Val[4*Value+(Exponent And 3)];
+ E:=E-LongInt(AdZMPASarL(Exponent,2));
+ If (E<0) Or (E>31) Then Begin AdZMPAL3Unscale:=0; Exit; End;
+ M:=(M+((Int64(1) Shl E) Shr 1)) Shr E;
+ AdZMPAL3Unscale:=LongInt(M And $FFFFFFFF);
+End;
+
+Function AdZMPAL2Table(Bitrate,Nch,Freq,Lsf: LongInt): LongInt;
+Var Ch: LongInt;
+Begin
+ Ch:=Bitrate Div Nch;
+ If Lsf=0 Then Begin
+  If ((Freq=48000) And (Ch>=56)) Or ((Ch>=56) And (Ch<=80)) Then AdZMPAL2Table:=0
+  Else If (Freq<>48000) And (Ch>=96) Then AdZMPAL2Table:=1
+  Else If (Freq<>32000) And (Ch<=48) Then AdZMPAL2Table:=2
+  Else AdZMPAL2Table:=3;
+ End Else AdZMPAL2Table:=4;
+End;
+
+{ ---- couche I ---- }
+Function AdZMPALayer1(S: PAdZMPA): LongInt;
+Var
+ Bound,I,V,N,Ch,J,Mant: LongInt; Alloc: Array[0..1,0..31] Of Byte; Sf: Array[
+  0..1,0..31] Of Byte;
+Begin
+ If S^.Mode=1 Then Bound:=(S^.ModeExt+1)*4 Else Bound:=32;
+ For I:=0 To Bound-1 Do For Ch:=0 To S^.NbCh-1 Do Alloc[Ch,I]:=AdZMPAGBGet(S^.GB,
+  4);
+ For I:=Bound To 31 Do Alloc[0,I]:=AdZMPAGBGet(S^.GB,4);
+ For I:=0 To Bound-1 Do For Ch:=0 To S^.NbCh-1 Do If Alloc[Ch,I]<>0 Then Sf[Ch,
+  I]:=AdZMPAGBGet(S^.GB,6);
+ For I:=Bound To 31 Do If Alloc[0,I]<>0 Then Begin Sf[0,I]:=AdZMPAGBGet(S^.GB,6);
+  Sf[1,I]:=AdZMPAGBGet(S^.GB,6); End;
+ For J:=0 To 11 Do Begin
+  For I:=0 To Bound-1 Do For Ch:=0 To S^.NbCh-1 Do Begin
+   N:=Alloc[Ch,I];
+   If N<>0 Then Begin Mant:=AdZMPAGBGet(S^.GB,N+1); V:=AdZMPAL1Unscale(N,Mant,Sf[Ch,
+    I]); End Else V:=0;
+   AdZMPAPutSb(S,Ch,J*32+I,V);
+  End;
+  For I:=Bound To 31 Do Begin
+   N:=Alloc[0,I];
+   If N<>0 Then Begin
+    Mant:=AdZMPAGBGet(S^.GB,N+1);
+    AdZMPAPutSb(S,0,J*32+I,AdZMPAL1Unscale(N,Mant,Sf[0,I]));
+    AdZMPAPutSb(S,1,J*32+I,AdZMPAL1Unscale(N,Mant,Sf[1,I]));
+   End Else Begin AdZMPAPutSb(S,0,J*32+I,0); AdZMPAPutSb(S,1,J*32+I,0); End;
+  End;
+ End;
+ AdZMPALayer1:=12;
+End;
+
+{ ---- couche II ---- }
+Function AdZMPALayer2(S: PAdZMPA): LongInt;
+Var
+ SbLimit,Table,BitAllocBits,I,J,Ch,Bound,V,Scale,QIndex,Bits,Steps,K,L,M,B,Base:
+  LongInt;
+ BitAlloc: Array[0..1,0..31] Of Byte; ScaleCode: Array[0..1,0..31] Of Byte; Sf:
+  Array[0..1,0..31,0..2] Of Byte;
+ AT: Integer; V2,Mant,Scale0,Scale1: LongInt;
+ Function AllocB(Idx: LongInt): LongInt;
+ Begin
+  Case AT Of
+   0: AllocB:=AdZMPAalloctable1[Idx];
+   1: AllocB:=AdZMPAalloctable3[Idx];
+   Else AllocB:=AdZMPAalloctable4[Idx];
+  End;
+ End;
+Begin
+ Table:=AdZMPAL2Table(S^.BitRate Div 1000,S^.NbCh,S^.SampleRate,S^.Lsf);
+ SbLimit:=AdZMPASblimit[Table];
+ If Table<2 Then AT:=0 Else If Table<4 Then AT:=1 Else AT:=2;
+ If S^.Mode=1 Then Bound:=(S^.ModeExt+1)*4 Else Bound:=SbLimit;
+ If Bound>SbLimit Then Bound:=SbLimit;
+ FillChar(BitAlloc,SizeOf(BitAlloc),0); FillChar(ScaleCode,SizeOf(ScaleCode),0);
+  FillChar(Sf,SizeOf(Sf),0);
+ J:=0;
+ For I:=0 To Bound-1 Do Begin
+  BitAllocBits:=AllocB(J);
+  For Ch:=0 To S^.NbCh-1 Do BitAlloc[Ch,I]:=AdZMPAGBGet(S^.GB,BitAllocBits);
+  Inc(J,1 Shl BitAllocBits);
+ End;
+ For I:=Bound To SbLimit-1 Do Begin
+  BitAllocBits:=AllocB(J);
+  V:=AdZMPAGBGet(S^.GB,BitAllocBits);
+  BitAlloc[0,I]:=V; BitAlloc[1,I]:=V;
+  Inc(J,1 Shl BitAllocBits);
+ End;
+ For I:=0 To SbLimit-1 Do For Ch:=0 To S^.NbCh-1 Do If BitAlloc[Ch,I]<>0 Then
+  ScaleCode[Ch,I]:=AdZMPAGBGet(S^.GB,2);
+ For I:=0 To SbLimit-1 Do For Ch:=0 To S^.NbCh-1 Do If BitAlloc[Ch,I]<>0 Then
+  Begin
+  Case ScaleCode[Ch,I] Of
+   2: Begin Sf[Ch,I,0]:=AdZMPAGBGet(S^.GB,6); Sf[Ch,I,1]:=Sf[Ch,I,0]; Sf[Ch,I,2]:=
+    Sf[Ch,I,0]; End;
+   1: Begin Sf[Ch,I,0]:=AdZMPAGBGet(S^.GB,6); Sf[Ch,I,2]:=AdZMPAGBGet(S^.GB,6); Sf[Ch,
+    I,1]:=Sf[Ch,I,0]; End;
+   3: Begin Sf[Ch,I,0]:=AdZMPAGBGet(S^.GB,6); Sf[Ch,I,2]:=AdZMPAGBGet(S^.GB,6); Sf[Ch,
+    I,1]:=Sf[Ch,I,2]; End;
+   Else Begin Sf[Ch,I,0]:=AdZMPAGBGet(S^.GB,6); Sf[Ch,I,1]:=AdZMPAGBGet(S^.GB,6); Sf[
+    Ch,I,2]:=AdZMPAGBGet(S^.GB,6); End;
+  End;
+ End;
+ For K:=0 To 2 Do Begin
+  L:=0;
+  While L<12 Do Begin
+   Base:=K*12+L;
+   J:=0;
+   For I:=0 To Bound-1 Do Begin
+    BitAllocBits:=AllocB(J);
+    For Ch:=0 To S^.NbCh-1 Do Begin
+     B:=BitAlloc[Ch,I];
+     If B<>0 Then Begin
+      Scale:=Sf[Ch,I,K];
+      QIndex:=AllocB(J+B);
+      Bits:=AdZMPAQuantBits[QIndex];
+      If Bits<0 Then Begin
+       V:=AdZMPAGBGet(S^.GB,-Bits);
+       V2:=AdZMPADiv[QIndex,V];
+       Steps:=AdZMPAQuantSteps[QIndex];
+       AdZMPAPutSb(S,Ch,(Base+0)*32+I,AdZMPAL2Group(Steps,V2 And 15,Scale));
+       AdZMPAPutSb(S,Ch,(Base+1)*32+I,AdZMPAL2Group(Steps,(V2 Shr 4) And 15,Scale));
+       AdZMPAPutSb(S,Ch,(Base+2)*32+I,AdZMPAL2Group(Steps,V2 Shr 8,Scale));
+      End Else Begin
+       For M:=0 To 2 Do Begin
+        V:=AdZMPAGBGet(S^.GB,Bits);
+        V:=AdZMPAL1Unscale(Bits-1,V,Scale);
+        AdZMPAPutSb(S,Ch,(Base+M)*32+I,V);
+       End;
+      End;
+     End Else Begin
+      AdZMPAPutSb(S,Ch,(Base+0)*32+I,0); AdZMPAPutSb(S,Ch,(Base+1)*32+I,0); AdZMPAPutSb(
+       S,Ch,(Base+2)*32+I,0);
+     End;
+    End;
+    Inc(J,1 Shl BitAllocBits);
+   End;
+   For I:=Bound To SbLimit-1 Do Begin
+    BitAllocBits:=AllocB(J);
+    B:=BitAlloc[0,I];
+    If B<>0 Then Begin
+     Scale0:=Sf[0,I,K]; Scale1:=Sf[1,I,K];
+     QIndex:=AllocB(J+B);
+     Bits:=AdZMPAQuantBits[QIndex];
+     If Bits<0 Then Begin
+      V:=AdZMPAGBGet(S^.GB,-Bits);
+      Steps:=AdZMPAQuantSteps[QIndex];
+      Mant:=V Mod Steps; V:=V Div Steps;
+      AdZMPAPutSb(S,0,(Base+0)*32+I,AdZMPAL2Group(Steps,Mant,Scale0));
+      AdZMPAPutSb(S,1,(Base+0)*32+I,AdZMPAL2Group(Steps,Mant,Scale1));
+      Mant:=V Mod Steps; V:=V Div Steps;
+      AdZMPAPutSb(S,0,(Base+1)*32+I,AdZMPAL2Group(Steps,Mant,Scale0));
+      AdZMPAPutSb(S,1,(Base+1)*32+I,AdZMPAL2Group(Steps,Mant,Scale1));
+      AdZMPAPutSb(S,0,(Base+2)*32+I,AdZMPAL2Group(Steps,V,Scale0));
+      AdZMPAPutSb(S,1,(Base+2)*32+I,AdZMPAL2Group(Steps,V,Scale1));
+     End Else Begin
+      For M:=0 To 2 Do Begin
+       Mant:=AdZMPAGBGet(S^.GB,Bits);
+       AdZMPAPutSb(S,0,(Base+M)*32+I,AdZMPAL1Unscale(Bits-1,Mant,Scale0));
+       AdZMPAPutSb(S,1,(Base+M)*32+I,AdZMPAL1Unscale(Bits-1,Mant,Scale1));
+      End;
+     End;
+    End Else Begin
+     For M:=0 To 2 Do Begin AdZMPAPutSb(S,0,(Base+M)*32+I,0); AdZMPAPutSb(S,1,(Base+
+      M)*32+I,0); End;
+    End;
+    Inc(J,1 Shl BitAllocBits);
+   End;
+   For I:=SbLimit To 31 Do For Ch:=0 To S^.NbCh-1 Do
+    For M:=0 To 2 Do AdZMPAPutSb(S,Ch,(Base+M)*32+I,0);
+   Inc(L,3);
+  End;
+ End;
+ AdZMPALayer2:=36;
+End;
+{ ---- couche III ---- }
+Procedure AdZMPARegionOffset2Size(Var G: TAdZMPAGran);
+Var I,K,J: LongInt;
+Begin
+ J:=0; G.RegionSize[2]:=288;
+ For I:=0 To 2 Do Begin
+  K:=G.RegionSize[I]; If G.BigValues<K Then K:=G.BigValues;
+  G.RegionSize[I]:=K-J; J:=K;
+ End;
+End;
+
+Procedure AdZMPAInitShortRegion(S: PAdZMPA; Var G: TAdZMPAGran);
+Begin
+ If G.BlockType=2 Then Begin
+  If S^.SRIdx<>8 Then G.RegionSize[0]:=18 Else G.RegionSize[0]:=36;
+ End Else Begin
+  If S^.SRIdx<=2 Then G.RegionSize[0]:=18
+  Else If S^.SRIdx<>8 Then G.RegionSize[0]:=27 Else G.RegionSize[0]:=54;
+ End;
+ G.RegionSize[1]:=288;
+End;
+
+Procedure AdZMPAInitLongRegion(S: PAdZMPA; Var G: TAdZMPAGran; Ra1,Ra2: LongInt);
+Var L: LongInt;
+Begin
+ G.RegionSize[0]:=AdZMPABandIdxLong[S^.SRIdx,Ra1+1];
+ L:=Ra1+Ra2+2; If L>22 Then L:=22;
+ G.RegionSize[1]:=AdZMPABandIdxLong[S^.SRIdx,L];
+End;
+
+Procedure AdZMPAComputeBandIndexes(S: PAdZMPA; Var G: TAdZMPAGran);
+Begin
+ If G.BlockType=2 Then Begin
+  If G.SwitchPoint<>0 Then Begin
+   If S^.SRIdx<=2 Then G.LongEnd:=8 Else G.LongEnd:=6;
+   G.ShortStart:=3;
+  End Else Begin G.LongEnd:=0; G.ShortStart:=0; End;
+ End Else Begin G.ShortStart:=13; G.LongEnd:=22; End;
+End;
+
+Procedure AdZMPALsfExpand(Var Slen: Array Of LongInt; Sf,N1,N2,N3: LongInt);
+ Procedure Split(Idx,N: LongInt);
+ Var M: LongInt;
+ Begin
+  If N=3 Then Begin M:=(Sf*171) Shr 9; Slen[Idx]:=Sf-3*M; Sf:=M; End
+  Else If N=4 Then Begin Slen[Idx]:=Sf And 3; Sf:=Sf Shr 2; End
+  Else If N=5 Then Begin M:=(Sf*205) Shr 10; Slen[Idx]:=Sf-5*M; Sf:=M; End
+  Else If N=6 Then Begin M:=(Sf*171) Shr 10; Slen[Idx]:=Sf-6*M; Sf:=M; End
+  Else Slen[Idx]:=0;
+ End;
+Begin
+ Split(3,N3); Split(2,N2); Split(1,N1); Slen[0]:=Sf;
+End;
+
+Procedure AdZMPAExponents(S: PAdZMPA; Var G: TAdZMPAGran; Var Exps: Array Of SmallInt);
+Var
+ Len,I,J,K,L,V0,Shift,Gain,BS,P: LongInt; Gains: Array[0..2] Of LongInt;
+Begin
+ P:=0; Gain:=G.GlobalGain-210; Shift:=G.ScalefacScale+1;
+ For I:=0 To G.LongEnd-1 Do Begin
+  K:=G.ScaleFactors[I]; L:=AdZMPAPretab[G.Preflag*22+I]; K:=K+L; K:=K Shl Shift; V0:=Gain-K+400;
+  Len:=AdZMPABandLong[S^.SRIdx*22+I];
+  For J:=Len Downto 1 Do Begin Exps[P]:=SmallInt(V0); Inc(P); End;
+ End;
+ If G.ShortStart<13 Then Begin
+  Gains[0]:=Gain-(G.SubblockGain[0] Shl 3);
+  Gains[1]:=Gain-(G.SubblockGain[1] Shl 3);
+  Gains[2]:=Gain-(G.SubblockGain[2] Shl 3);
+  K:=G.LongEnd;
+  For I:=G.ShortStart To 12 Do Begin
+   Len:=AdZMPABandShort[S^.SRIdx*13+I];
+   For L:=0 To 2 Do Begin
+    V0:=Gains[L]-(G.ScaleFactors[K] Shl Shift)+400; Inc(K);
+    For J:=Len Downto 1 Do Begin Exps[P]:=SmallInt(V0); Inc(P); End;
+   End;
+  End;
+ End;
+End;
+
+Procedure AdZMPASwitchBuffer(S: PAdZMPA; Var Pos,EndPos,EndPos2: LongInt);
+Begin
+ If (S^.InGB.Buf<>Nil) And (Pos>=S^.GB.Size-S^.ExtraSize*8) Then Begin
+  S^.GB:=S^.InGB; S^.InGB.Buf:=Nil; S^.ExtraSize:=0;
+  AdZMPAGBSkipLong(S^.GB,Pos-EndPos);
+  EndPos2:=EndPos2+S^.GB.Idx-Pos; EndPos:=EndPos2;
+  Pos:=S^.GB.Idx;
+ End;
+End;
+
+Procedure AdZMPAFlipSign(S: PAdZMPA; Var Dst: Single; Src: Single);
+Begin
+ If AdZMPAGBBit(S^.GB)<>0 Then Dst:=-Src Else Dst:=Src;
+End;
+
+Function AdZMPAHuffman(S: PAdZMPA; Var G: TAdZMPAGran; Var Exps: Array Of SmallInt;
+ EndPos2: LongInt): LongInt;
+Var
+ SIndex,I,LastPos,BitsLeft,EndPos,J,K,L,Linbits,Exponent,X,Y,V,Pos,Code,T,Tbl:
+  LongInt;
+Const IdxTab: Array[0..15] Of LongInt=(3,3,2,2,1,1,1,1,0,0,0,0,0,0,0,0);
+Begin
+ EndPos:=S^.GB.Size-S^.ExtraSize*8; If EndPos2<EndPos Then EndPos:=EndPos2;
+ SIndex:=0;
+ For I:=0 To 2 Do Begin
+  J:=G.RegionSize[I];
+  If J=0 Then Continue;
+  K:=G.TableSelect[I];
+  L:=AdZMPAHuffData[K*2]; Linbits:=AdZMPAHuffData[K*2+1];
+  If L=0 Then Begin
+   For T:=0 To 2*J-1 Do G.Hybrid[SIndex+T]:=0;
+   Inc(SIndex,2*J); Continue;
+  End;
+  While J>0 Do Begin
+   Pos:=S^.GB.Idx;
+   If Pos>=EndPos Then Begin
+    AdZMPASwitchBuffer(S,Pos,EndPos,EndPos2);
+    If Pos>=EndPos Then Break;
+   End;
+   Y:=AdZMPAHuffGet(S^.GB,L);
+   If Y=0 Then Begin
+    G.Hybrid[SIndex]:=0; G.Hybrid[SIndex+1]:=0; Inc(SIndex,2); Dec(J); Continue;
+   End;
+   Exponent:=Exps[SIndex];
+   If (Exponent<0) Or (Exponent>511) Then Exponent:=0;
+   If (Y And 16)<>0 Then Begin
+    X:=Y Shr 5; Y:=Y And $F;
+    If X<15 Then AdZMPAFlipSign(S,G.Hybrid[SIndex],AdZMPAExpvalTab[Exponent,X])
+    Else Begin
+     Inc(X,AdZMPAGBGet(S^.GB,Linbits));
+     V:=AdZMPAL3Unscale(X,Exps[SIndex]);
+     If AdZMPAGBBit(S^.GB)<>0 Then V:=-V;
+     G.Hybrid[SIndex]:=V;
+    End;
+    If Y<15 Then AdZMPAFlipSign(S,G.Hybrid[SIndex+1],AdZMPAExpvalTab[Exponent,Y])
+    Else Begin
+     Inc(Y,AdZMPAGBGet(S^.GB,Linbits));
+     V:=AdZMPAL3Unscale(Y,Exps[SIndex]);
+     If AdZMPAGBBit(S^.GB)<>0 Then V:=-V;
+     G.Hybrid[SIndex+1]:=V;
+    End;
+   End Else Begin
+    X:=Y Shr 5; Y:=Y And $F;
+    Inc(X,Y);
+    If X<15 Then AdZMPAFlipSign(S,G.Hybrid[SIndex+Ord(Y<>0)],AdZMPAExpvalTab[Exponent,
+     X])
+    Else Begin
+     Inc(X,AdZMPAGBGet(S^.GB,Linbits));
+     V:=AdZMPAL3Unscale(X,Exps[SIndex]);
+     If AdZMPAGBBit(S^.GB)<>0 Then V:=-V;
+     G.Hybrid[SIndex+Ord(Y<>0)]:=V;
+    End;
+    G.Hybrid[SIndex+Ord(Y=0)]:=0;
+   End;
+   Inc(SIndex,2); Dec(J);
+  End;
+ End;
+ { hautes frequences }
+ Tbl:=G.Count1Table;
+ LastPos:=0;
+ While SIndex<=572 Do Begin
+  Pos:=S^.GB.Idx;
+  If Pos>=EndPos Then Begin
+   If (Pos>EndPos2) And (LastPos<>0) Then Begin
+    Dec(SIndex,4);
+    AdZMPAGBSkipLong(S^.GB,LastPos-Pos);
+    Break;
+   End;
+   AdZMPASwitchBuffer(S,Pos,EndPos,EndPos2);
+   If Pos>=EndPos Then Break;
+  End;
+  LastPos:=Pos;
+  Code:=AdZMPAQuadGet(S^.GB,Tbl);
+  G.Hybrid[SIndex]:=0; G.Hybrid[SIndex+1]:=0; G.Hybrid[SIndex+2]:=0; G.Hybrid[
+   SIndex+3]:=0;
+  While Code<>0 Do Begin
+   Pos:=SIndex+IdxTab[Code];
+   Code:=Code Xor (8 Shr IdxTab[Code]);
+   Exponent:=Exps[Pos]; If (Exponent<0) Or (Exponent>511) Then Exponent:=0;
+   AdZMPAFlipSign(S,G.Hybrid[Pos],AdZMPAExpTab[Exponent]);
+  End;
+  Inc(SIndex,4);
+ End;
+ BitsLeft:=EndPos2-S^.GB.Idx;
+ For T:=SIndex To 575 Do G.Hybrid[T]:=0;
+ AdZMPAGBSkipLong(S^.GB,BitsLeft);
+ I:=S^.GB.Idx;
+ AdZMPASwitchBuffer(S,I,EndPos,EndPos2);
+ AdZMPAHuffman:=0;
+End;
+
+Procedure AdZMPAReorder(S: PAdZMPA; Var G: TAdZMPAGran);
+Var I,J,Len,Ptr,Ptr1,D: LongInt; Tmp: Array[0..575] Of Single;
+Begin
+ If G.BlockType<>2 Then Exit;
+ If G.SwitchPoint<>0 Then Begin
+  If S^.SRIdx<>8 Then Ptr:=36 Else Ptr:=72;
+ End Else Ptr:=0;
+ For I:=G.ShortStart To 12 Do Begin
+  Len:=AdZMPABandShort[S^.SRIdx*13+I];
+  Ptr1:=Ptr; D:=0;
+  For J:=Len Downto 1 Do Begin
+   Tmp[D]:=G.Hybrid[Ptr+0*Len]; Tmp[D+1]:=G.Hybrid[Ptr+1*Len]; Tmp[D+2]:=
+    G.Hybrid[Ptr+2*Len];
+   Inc(D,3); Inc(Ptr);
+  End;
+  Inc(Ptr,2*Len);
+  For J:=0 To Len*3-1 Do G.Hybrid[Ptr1+J]:=Tmp[J];
+ End;
+End;
+
+Procedure AdZMPAStereo(S: PAdZMPA; Var G0,G1: TAdZMPAGran);
+Var
+ I,J,K,L,SfMax,Sf,Len,NonZero,T0,T1p: LongInt; V1,V2,Tmp0,Tmp1: Single; NZS:
+  Array[0..2] Of LongInt; IsLsf: LongInt; Found: Boolean;
+ Function IsTab(Row,Idx: LongInt): Single;
+ Begin
+  If S^.Lsf=0 Then IsTab:=AdZMPAIsTable[Row,Idx] Else IsTab:=AdZMPAIsTableLsf[
+   G1.ScalefacCompress And 1,Row,Idx];
+ End;
+ Procedure DoMS(Base0,Base1,N: LongInt);
+ Var JJ: LongInt; A0,A1: Single;
+ Begin
+  If (S^.ModeExt And 2)<>0 Then
+   For JJ:=0 To N-1 Do Begin
+    A0:=G0.Hybrid[Base0+JJ]; A1:=G1.Hybrid[Base1+JJ];
+    G0.Hybrid[Base0+JJ]:=AdZMPAISqrt2*(A0+A1);
+    G1.Hybrid[Base1+JJ]:=AdZMPAISqrt2*(A0-A1);
+   End;
+ End;
+Var Tab0,Tab1: LongInt;
+Begin
+ If (S^.ModeExt And 1)<>0 Then Begin
+  If S^.Lsf=0 Then SfMax:=7 Else SfMax:=16;
+  Tab0:=576; Tab1:=576;
+  NZS[0]:=0; NZS[1]:=0; NZS[2]:=0;
+  K:=(13-G1.ShortStart)*3+G1.LongEnd-3;
+  For I:=12 Downto G1.ShortStart Do Begin
+   If I<>11 Then Dec(K,3);
+   Len:=AdZMPABandShort[S^.SRIdx*13+I];
+   For L:=2 Downto 0 Do Begin
+    Dec(Tab0,Len); Dec(Tab1,Len);
+    Found:=True;
+    If NZS[L]=0 Then Begin
+     Found:=False;
+     For J:=0 To Len-1 Do If G1.Hybrid[Tab1+J]<>0 Then Begin NZS[L]:=1; Found:=
+      True; Break; End;
+     If Not Found Then Begin
+      Sf:=G1.ScaleFactors[K+L];
+      If Sf>=SfMax Then Found:=True
+      Else Begin
+       V1:=IsTab(0,Sf); V2:=IsTab(1,Sf);
+       For J:=0 To Len-1 Do Begin
+        Tmp0:=G0.Hybrid[Tab0+J];
+        G0.Hybrid[Tab0+J]:=V1*Tmp0;
+        G1.Hybrid[Tab1+J]:=V2*Tmp0;
+       End;
+      End;
+     End;
+    End;
+    If Found Then DoMS(Tab0,Tab1,Len);
+   End;
+  End;
+  NonZero:=NZS[0] Or NZS[1] Or NZS[2];
+  For I:=G1.LongEnd-1 Downto 0 Do Begin
+   Len:=AdZMPABandLong[S^.SRIdx*22+I];
+   Dec(Tab0,Len); Dec(Tab1,Len);
+   Found:=True;
+   If NonZero=0 Then Begin
+    Found:=False;
+    For J:=0 To Len-1 Do If G1.Hybrid[Tab1+J]<>0 Then Begin NonZero:=1; Found:=
+     True; Break; End;
+    If Not Found Then Begin
+     If I=21 Then K:=20 Else K:=I;
+     Sf:=G1.ScaleFactors[K];
+     If Sf>=SfMax Then Found:=True
+     Else Begin
+      V1:=IsTab(0,Sf); V2:=IsTab(1,Sf);
+      For J:=0 To Len-1 Do Begin
+       Tmp0:=G0.Hybrid[Tab0+J];
+       G0.Hybrid[Tab0+J]:=V1*Tmp0;
+       G1.Hybrid[Tab1+J]:=V2*Tmp0;
+      End;
+     End;
+    End;
+   End;
+   If Found Then DoMS(Tab0,Tab1,Len);
+  End;
+ End Else If (S^.ModeExt And 2)<>0 Then Begin
+  For I:=0 To 575 Do Begin
+   Tmp0:=G0.Hybrid[I]; Tmp1:=G1.Hybrid[I];
+   { butterflies_float : t = v1-v2 ; v1 += v2 ; v2 = t }
+   G0.Hybrid[I]:=Tmp0+Tmp1;
+   G1.Hybrid[I]:=Tmp0-Tmp1;
+  End;
+ End;
+End;
+
+Procedure AdZMPAAntialias(Var G: TAdZMPAGran);
+Var Ptr,N,I,J: LongInt; T0,T1: Single;
+Begin
+ If G.BlockType=2 Then Begin
+  If G.SwitchPoint=0 Then Exit;
+  N:=1;
+ End Else N:=31;
+ Ptr:=18;
+ For I:=N Downto 1 Do Begin
+  For J:=0 To 7 Do Begin
+   T0:=G.Hybrid[Ptr-1-J]; T1:=G.Hybrid[Ptr+J];
+   G.Hybrid[Ptr-1-J]:=T0*AdZMPACsaT[J,0]-T1*AdZMPACsaT[J,1];
+   G.Hybrid[Ptr+J]:=T0*AdZMPACsaT[J,1]+T1*AdZMPACsaT[J,0];
+  End;
+  Inc(Ptr,18);
+ End;
+End;
+
+Procedure AdZMPAComputeImdct(S: PAdZMPA; Var G: TAdZMPAGran; Ch,SbBase: LongInt);
+Var
+ Ptr,Ptr1,I,J,MdctLongEnd,SbLimit,Buf,OutPtr,WinRow,Q: LongInt; Out2: Array[
+  0..11] Of Single; P: PAdZMPAL6;
+ Win: PAdZMPAWinRow;
+Begin
+ Ptr:=576; Ptr1:=36;
+ While Ptr>=Ptr1 Do Begin
+  Dec(Ptr,6);
+  P:=PAdZMPAL6(@G.Hybrid[Ptr]);
+  If (P^[0] Or P^[1] Or P^[2] Or P^[3] Or P^[4] Or P^[5])<>0 Then Break;
+ End;
+ SbLimit:=(Ptr Div 18)+1;
+ If G.BlockType=2 Then Begin
+  If G.SwitchPoint<>0 Then MdctLongEnd:=2 Else MdctLongEnd:=0;
+ End Else MdctLongEnd:=SbLimit;
+ AdZMPAImdct36Blocks(PAdZMPASingles(@S^.Sb[Ch,0]),SbBase,PAdZMPASingles(@S^.Mdct[Ch,0]),
+  0,PAdZMPASingles(@G.Hybrid[0]),0,
+  MdctLongEnd,G.SwitchPoint,G.BlockType);
+ Buf:=4*18*(MdctLongEnd Shr 2)+(MdctLongEnd And 3);
+ Ptr:=18*MdctLongEnd;
+ J:=MdctLongEnd;
+ While J<SbLimit Do Begin
+  WinRow:=2+(4 And -(J And 1));
+  Win:=@AdZMPAWin[WinRow];
+  OutPtr:=SbBase+J;
+  For I:=0 To 5 Do Begin S^.Sb[Ch,OutPtr]:=S^.Mdct[Ch,Buf+4*I]; Inc(OutPtr,32);
+   End;
+  AdZMPAImdct12(PAdZMPASingles(@Out2),0,PAdZMPASingles(@G.Hybrid[0]),Ptr+0);
+  For I:=0 To 5 Do Begin
+   S^.Sb[Ch,OutPtr]:=Win^[I]*Out2[I]+S^.Mdct[Ch,Buf+4*(I+6*1)];
+   S^.Mdct[Ch,Buf+4*(I+6*2)]:=Win^[I+6]*Out2[I+6];
+   Inc(OutPtr,32);
+  End;
+  AdZMPAImdct12(PAdZMPASingles(@Out2),0,PAdZMPASingles(@G.Hybrid[0]),Ptr+1);
+  For I:=0 To 5 Do Begin
+   S^.Sb[Ch,OutPtr]:=Win^[I]*Out2[I]+S^.Mdct[Ch,Buf+4*(I+6*2)];
+   S^.Mdct[Ch,Buf+4*(I+6*0)]:=Win^[I+6]*Out2[I+6];
+   Inc(OutPtr,32);
+  End;
+  AdZMPAImdct12(PAdZMPASingles(@Out2),0,PAdZMPASingles(@G.Hybrid[0]),Ptr+2);
+  For I:=0 To 5 Do Begin
+   S^.Mdct[Ch,Buf+4*(I+6*0)]:=Win^[I]*Out2[I]+S^.Mdct[Ch,Buf+4*(I+6*0)];
+   S^.Mdct[Ch,Buf+4*(I+6*1)]:=Win^[I+6]*Out2[I+6];
+   S^.Mdct[Ch,Buf+4*(I+6*2)]:=0;
+  End;
+  Inc(Ptr,18);
+  If (J And 3)<>3 Then Inc(Buf) Else Inc(Buf,4*18-3);
+  Inc(J);
+ End;
+ For J:=SbLimit To 31 Do Begin
+  OutPtr:=SbBase+J;
+  For I:=0 To 17 Do Begin
+   S^.Sb[Ch,OutPtr]:=S^.Mdct[Ch,Buf+4*I];
+   S^.Mdct[Ch,Buf+4*I]:=0;
+   Inc(OutPtr,32);
+  End;
+  If (J And 3)<>3 Then Inc(Buf) Else Inc(Buf,4*18-3);
+ End;
+End;
+Function AdZMPALayer3(S: PAdZMPA): LongInt;
+Var
+ NbGranules,MainDataBegin,Gr,Ch,BlocksplitFlag,I,J,K,N,BitsPos,Skip,Ra1,Ra2,
+  Slen1,Slen2,Slen,Sl,Sf,Tindex,Tindex2,Lim: LongInt;
+ Exps: Array[0..575] Of SmallInt; SlenA: Array[0..3] Of LongInt; Ptr: LongInt;
+Begin
+ If S^.Lsf<>0 Then Begin
+  MainDataBegin:=AdZMPAGBGet(S^.GB,8);
+  AdZMPAGBSkip(S^.GB,S^.NbCh);
+  NbGranules:=1;
+ End Else Begin
+  MainDataBegin:=AdZMPAGBGet(S^.GB,9);
+  If S^.NbCh=2 Then AdZMPAGBSkip(S^.GB,3) Else AdZMPAGBSkip(S^.GB,5);
+  NbGranules:=2;
+  For Ch:=0 To S^.NbCh-1 Do Begin
+   S^.Gr[Ch,0].Scfsi:=0;
+   S^.Gr[Ch,1].Scfsi:=AdZMPAGBGet(S^.GB,4);
+  End;
+ End;
+ For Gr:=0 To NbGranules-1 Do Begin
+  For Ch:=0 To S^.NbCh-1 Do Begin
+   With S^.Gr[Ch,Gr] Do Begin
+    P23:=AdZMPAGBGet(S^.GB,12);
+    BigValues:=AdZMPAGBGet(S^.GB,9);
+    If BigValues>288 Then Begin AdZMPALayer3:=-1; Exit; End;
+    GlobalGain:=AdZMPAGBGet(S^.GB,8);
+    If (S^.ModeExt And 3)=2 Then Dec(GlobalGain,2);
+    If S^.Lsf<>0 Then ScalefacCompress:=AdZMPAGBGet(S^.GB,9) Else
+     ScalefacCompress:=AdZMPAGBGet(S^.GB,4);
+    BlocksplitFlag:=AdZMPAGBGet(S^.GB,1);
+    If BlocksplitFlag<>0 Then Begin
+     BlockType:=AdZMPAGBGet(S^.GB,2);
+     If BlockType=0 Then Begin AdZMPALayer3:=-1; Exit; End;
+     SwitchPoint:=AdZMPAGBGet(S^.GB,1);
+     For I:=0 To 1 Do TableSelect[I]:=AdZMPAGBGet(S^.GB,5);
+     For I:=0 To 2 Do SubblockGain[I]:=AdZMPAGBGet(S^.GB,3);
+     AdZMPAInitShortRegion(S,S^.Gr[Ch,Gr]);
+    End Else Begin
+     BlockType:=0; SwitchPoint:=0;
+     For I:=0 To 2 Do TableSelect[I]:=AdZMPAGBGet(S^.GB,5);
+     Ra1:=AdZMPAGBGet(S^.GB,4); Ra2:=AdZMPAGBGet(S^.GB,3);
+     AdZMPAInitLongRegion(S,S^.Gr[Ch,Gr],Ra1,Ra2);
+    End;
+    AdZMPARegionOffset2Size(S^.Gr[Ch,Gr]);
+    AdZMPAComputeBandIndexes(S,S^.Gr[Ch,Gr]);
+    Preflag:=0;
+    If S^.Lsf=0 Then Preflag:=AdZMPAGBGet(S^.GB,1);
+    ScalefacScale:=AdZMPAGBGet(S^.GB,1);
+    Count1Table:=AdZMPAGBGet(S^.GB,1);
+   End;
+  End;
+ End;
+ If Not S^.AduMode Then Begin
+  Ptr:=S^.GB.Idx Shr 3;
+  S^.ExtraSize:=(AdZMPAGBLeft(S^.GB) Shr 3)-S^.ExtraSize;
+  Lim:=AdZMPALastBuf-S^.LastBufSize; If Lim<0 Then Lim:=0;
+  If S^.ExtraSize<0 Then S^.ExtraSize:=0;
+  If S^.ExtraSize>Lim Then S^.ExtraSize:=Lim;
+  For I:=0 To S^.ExtraSize-1 Do
+   If Ptr+I<S^.GB.Cap Then S^.LastBuf[S^.LastBufSize+I]:=S^.GB.Buf^[Ptr+I] Else
+    S^.LastBuf[S^.LastBufSize+I]:=0;
+  S^.InGB:=S^.GB;
+  AdZMPAGBInit(S^.GB,PAdZBuf(@S^.LastBuf[0]),SizeOf(S^.LastBuf),(S^.LastBufSize+
+   S^.ExtraSize)*8);
+  S^.LastBufSize:=S^.LastBufSize Shl 3;
+  Gr:=0;
+  While (Gr<NbGranules) And ((S^.LastBufSize Shr 3)<MainDataBegin) Do Begin
+   For Ch:=0 To S^.NbCh-1 Do Begin
+    Inc(S^.LastBufSize,S^.Gr[Ch,Gr].P23);
+    FillChar(S^.Gr[Ch,Gr].Hybrid,SizeOf(S^.Gr[Ch,Gr].Hybrid),0);
+    AdZMPAComputeImdct(S,S^.Gr[Ch,Gr],Ch,18*Gr*32);
+   End;
+   Inc(Gr);
+  End;
+  Skip:=S^.LastBufSize-8*MainDataBegin;
+  If (Skip>=S^.GB.Size-S^.ExtraSize*8) And (S^.InGB.Buf<>Nil) Then Begin
+   AdZMPAGBSkipLong(S^.InGB,Skip-S^.GB.Size+S^.ExtraSize*8);
+   S^.GB:=S^.InGB; S^.InGB.Buf:=Nil; S^.ExtraSize:=0;
+  End Else AdZMPAGBSkipLong(S^.GB,Skip);
+ End Else Begin
+  Gr:=0; S^.ExtraSize:=0;
+ End;
+ While Gr<NbGranules Do Begin
+  For Ch:=0 To S^.NbCh-1 Do Begin
+   BitsPos:=S^.GB.Idx;
+   With S^.Gr[Ch,Gr] Do Begin
+    If S^.Lsf=0 Then Begin
+     Slen1:=AdZMPASlen[ScalefacCompress]; Slen2:=AdZMPASlen[16+ScalefacCompress];
+     If BlockType=2 Then Begin
+      If SwitchPoint<>0 Then N:=17 Else N:=18;
+      J:=0;
+      If Slen1<>0 Then Begin For I:=0 To N-1 Do Begin ScaleFactors[J]:=AdZMPAGBGet(
+       S^.GB,Slen1); Inc(J); End; End
+      Else For I:=0 To N-1 Do Begin ScaleFactors[J]:=0; Inc(J); End;
+      If Slen2<>0 Then Begin
+       For I:=0 To 17 Do Begin ScaleFactors[J]:=AdZMPAGBGet(S^.GB,Slen2); Inc(J);
+        End;
+       For I:=0 To 2 Do Begin ScaleFactors[J]:=0; Inc(J); End;
+      End Else For I:=0 To 20 Do Begin ScaleFactors[J]:=0; Inc(J); End;
+     End Else Begin
+      J:=0;
+      For K:=0 To 3 Do Begin
+       If K=0 Then N:=6 Else N:=5;
+       If (Scfsi And (8 Shr K))=0 Then Begin
+        If K<2 Then Slen:=Slen1 Else Slen:=Slen2;
+        If Slen<>0 Then Begin For I:=0 To N-1 Do Begin ScaleFactors[J]:=
+         AdZMPAGBGet(S^.GB,Slen); Inc(J); End; End
+        Else For I:=0 To N-1 Do Begin ScaleFactors[J]:=0; Inc(J); End;
+       End Else Begin
+        For I:=0 To N-1 Do Begin ScaleFactors[J]:=S^.Gr[Ch,0].ScaleFactors[J];
+         Inc(J); End;
+       End;
+      End;
+      ScaleFactors[J]:=0; Inc(J);
+     End;
+    End Else Begin
+     If BlockType=2 Then Begin If SwitchPoint<>0 Then Tindex:=2 Else Tindex:=1;
+      End Else Tindex:=0;
+     Sf:=ScalefacCompress;
+     If ((S^.ModeExt And 1)<>0) And (Ch=1) Then Begin
+      Sf:=Sf Shr 1;
+      If Sf<180 Then Begin AdZMPALsfExpand(SlenA,Sf,6,6,0); Tindex2:=3; End
+      Else If Sf<244 Then Begin AdZMPALsfExpand(SlenA,Sf-180,4,4,0); Tindex2:=4;
+       End
+      Else Begin AdZMPALsfExpand(SlenA,Sf-244,3,0,0); Tindex2:=5; End;
+     End Else Begin
+      If Sf<400 Then Begin AdZMPALsfExpand(SlenA,Sf,5,4,4); Tindex2:=0; End
+      Else If Sf<500 Then Begin AdZMPALsfExpand(SlenA,Sf-400,5,4,0); Tindex2:=1;
+       End
+      Else Begin AdZMPALsfExpand(SlenA,Sf-500,3,0,0); Tindex2:=2; Preflag:=1; End;
+     End;
+     J:=0;
+     For K:=0 To 3 Do Begin
+      N:=AdZMPALsfNsf[(Tindex2*3+Tindex)*4+K];
+      Sl:=SlenA[K];
+      If Sl<>0 Then Begin For I:=0 To N-1 Do Begin ScaleFactors[J]:=AdZMPAGBGet(
+       S^.GB,Sl); Inc(J); End; End
+      Else For I:=0 To N-1 Do Begin ScaleFactors[J]:=0; Inc(J); End;
+     End;
+     While J<40 Do Begin ScaleFactors[J]:=0; Inc(J); End;
+    End;
+   End;
+   AdZMPAExponents(S,S^.Gr[Ch,Gr],Exps);
+   AdZMPAHuffman(S,S^.Gr[Ch,Gr],Exps,BitsPos+S^.Gr[Ch,Gr].P23);
+  End;
+  If S^.Mode=1 Then AdZMPAStereo(S,S^.Gr[0,Gr],S^.Gr[1,Gr]);
+  For Ch:=0 To S^.NbCh-1 Do Begin
+   AdZMPAReorder(S,S^.Gr[Ch,Gr]);
+   AdZMPAAntialias(S^.Gr[Ch,Gr]);
+   AdZMPAComputeImdct(S,S^.Gr[Ch,Gr],Ch,18*Gr*32);
+  End;
+  Inc(Gr);
+ End;
+ If S^.GB.Idx<0 Then AdZMPAGBSkipLong(S^.GB,-S^.GB.Idx);
+ AdZMPALayer3:=NbGranules*18;
+End;
+
+{ decode un paquet deja valide (en-tete dans S) ; renvoie le nombre de blocs de
+ 32 echantillons (>=0) ou <0 ;
+  Smp0/Smp1 : plans de sortie (flottants) }
+Function AdZMPADecodeFrame(S: PAdZMPA; Smp0,Smp1: PAdZMPASingles; Buf: PAdZBuf;
+ BufSize: LongInt): LongInt;
+Var NbFrames,I,Ch,Cnt: LongInt; Sp: PAdZMPASingles; Left: LongInt;
+Begin
+ AdZMPAUseFix:=S^.Fixed;
+ AdZMPAGBInit(S^.GB,PAdZBuf(@Buf^[4]),BufSize-4,(BufSize-4)*8);
+ If S^.ErrProt<>0 Then AdZMPAGBGet(S^.GB,16);
+ Case S^.Layer Of
+  1: NbFrames:=AdZMPALayer1(S);
+  2: NbFrames:=AdZMPALayer2(S);
+  Else Begin
+   NbFrames:=AdZMPALayer3(S);
+   S^.LastBufSize:=0;
+   If S^.InGB.Buf<>Nil Then Begin
+    S^.GB.Idx:=(S^.GB.Idx+7) And Not 7;
+    I:=(AdZMPAGBLeft(S^.GB) Shr 3)-S^.ExtraSize;
+    If (I>=0) And (I<=AdZMPABackstep) Then Begin
+     Move(S^.GB.Buf^[S^.GB.Idx Shr 3],S^.LastBuf[0],I);
+     S^.LastBufSize:=I;
+    End;
+    S^.GB:=S^.InGB; S^.InGB.Buf:=Nil; S^.ExtraSize:=0;
+   End;
+   S^.GB.Idx:=(S^.GB.Idx+7) And Not 7;
+   I:=(AdZMPAGBLeft(S^.GB) Shr 3)-S^.ExtraSize;
+   If (I<0) Or (I>AdZMPABackstep) Or (NbFrames<0) Then Begin
+    I:=BufSize-4; If I>AdZMPABackstep Then I:=AdZMPABackstep;
+   End;
+   If I<0 Then I:=0;
+   Move(Buf^[BufSize-I],S^.LastBuf[S^.LastBufSize],I);
+   Inc(S^.LastBufSize,I);
+  End;
+ End;
+ If NbFrames<0 Then Begin AdZMPADecodeFrame:=NbFrames; Exit; End;
+ For Ch:=0 To S^.NbCh-1 Do Begin
+  If Ch=0 Then Sp:=Smp0 Else Sp:=Smp1;
+  For I:=0 To NbFrames-1 Do
+   If S^.Fixed Then AdZMPASynthFilterFix(S,Ch,PAdZMPASingles(@Sp^[32*I]),1,I*32)
+   Else AdZMPASynthFilter(S,Ch,PAdZMPASingles(@Sp^[32*I]),1,PAdZMPASingles(@S^.Sb[Ch,0]),
+    I*32);
+ End;
+ AdZMPADecodeFrame:=NbFrames;
+End;
+
+{ decode_frame : paquet brut (zeros de tete ignores) ; renvoie <0 en cas d
+ erreur, sinon nombre de blocs ; Used = octets consommes }
+Function AdZMPAPacket(S: PAdZMPA; Buf: PAdZBuf; Size: LongInt; Smp0,Smp1:
+ PAdZMPASingles; Var Blocks: LongInt): LongInt;
+Var Skipped,R: LongInt; H: LongWord; P: PAdZBuf;
+Begin
+ Blocks:=0; Skipped:=0;
+ While (Size>0) And (Buf^[0]=0) Do Begin Buf:=PAdZBuf(@Buf^[1]); Dec(Size);
+  Inc(Skipped); End;
+ If Size<4 Then Begin AdZMPAPacket:=-1; Exit; End;
+ H:=(LongWord(Buf^[0]) Shl 24) Or (LongWord(Buf^[1]) Shl 16) Or (LongWord(Buf^[
+  2]) Shl 8) Or Buf^[3];
+ If (H Shr 8)=$544147 Then Begin AdZMPAPacket:=-2; Exit; End;
+ R:=AdZMPAHeader(S,H);
+ If R<>0 Then Begin AdZMPAPacket:=-1; Exit; End;
+ If S^.FrameSize<=0 Then Begin AdZMPAPacket:=-1; Exit; End;
+ If S^.FrameSize<Size Then Size:=S^.FrameSize;
+ R:=AdZMPADecodeFrame(S,Smp0,Smp1,Buf,Size);
+ If R<0 Then Begin
+  AdZMPAPacket:=-1; Exit;
+ End;
+ Blocks:=R;
+ AdZMPAPacket:=Size+Skipped;
+End;
+
+Procedure AdZMPAFlush(S: PAdZMPA);
+Begin
+ FillChar(S^.SynthBuf,SizeOf(S^.SynthBuf),0); FillChar(S^.Mdct,SizeOf(S^.Mdct),
+  0);
+ S^.LastBufSize:=0;
+End;
+
+Function AdZMPAS16(X: Single): LongInt;
+Begin
+ AdZMPAS16:=AdZRnd(X*32768.0);
+End;
+
+
+
+{ ======== MPEG audio : flux brut (.mp3/.mp2/.mp1) et paquets de conteneurs ======== }
+Var
+ AdZMpS: PAdZMPA;
+ AdZMpL, AdZMpR: PAdZMPASingles;
+ AdZMpFB: PAdZBuf;        { tampon de trame / d'accumulation }
+ AdZMpFBLen: LongInt;
+ AdZMpChans, AdZMpLayer: LongInt;
+ AdZMpFirst: Boolean;
+Const
+ AdZMpFBCap = 65536;
+
+Function AdZMpOpen: Boolean;
+Begin
+ AdZMPAInit;
+ GetMem(AdZMpS,SizeOf(TAdZMPA)); FillChar(AdZMpS^,SizeOf(TAdZMPA),0);
+ GetMem(AdZMpL,2600*SizeOf(Single)); GetMem(AdZMpR,2600*SizeOf(Single));
+ FillChar(AdZMpL^,2600*SizeOf(Single),0); FillChar(AdZMpR^,2600*SizeOf(Single),0);
+ GetMem(AdZMpFB,AdZMpFBCap+128); FillChar(AdZMpFB^,AdZMpFBCap+128,0);
+ AdZMpFBLen:=0; AdZMpChans:=0; AdZMpLayer:=0; AdZMpFirst:=True;
+ AdZMpOpen:=True;
+End;
+
+Procedure AdZMpClose;
+Begin
+ If AdZMpS<>Nil Then Begin FreeMem(AdZMpS,SizeOf(TAdZMPA)); AdZMpS:=Nil; End;
+ If AdZMpL<>Nil Then Begin FreeMem(AdZMpL,2600*SizeOf(Single)); AdZMpL:=Nil; End;
+ If AdZMpR<>Nil Then Begin FreeMem(AdZMpR,2600*SizeOf(Single)); AdZMpR:=Nil; End;
+ If AdZMpFB<>Nil Then Begin FreeMem(AdZMpFB,AdZMpFBCap+128); AdZMpFB:=Nil; End;
+End;
+
+Function AdZMpConv(X: Single): LongInt;
+Begin
+ If AdZMpS^.Fixed Then AdZMpConv:=AdZRnd(X) Else AdZMpConv:=AdZMPAS16(X);
+End;
+
+{ emet Nb echantillons a partir de l'indice Start du dernier paquet decode }
+Procedure AdZMpOutput(Start, Nb: LongInt);
+Var I, V, W: LongInt;
+Begin
+ For I:=Start To Start+Nb-1 Do Begin
+  If (I<0) Or (I>=2600) Then Break;
+  V:=AdZMpConv(AdZMpL^[I]); W:=V;
+  If (AdZCh=2) And (AdZMpS^.NbCh=2) Then W:=AdZMpConv(AdZMpR^[I]);
+  AdZPut(V,W);
+  If AdZStop Then Break;
+ End;
+End;
+
+{ en-tete MPEG audio valide d'apres 4 octets ? (0 = oui) }
+Function AdZMpHdr(Var B: Array Of Byte; At: LongInt): LongInt;
+Var H: LongWord;
+Begin
+ H:=(LongWord(B[At]) Shl 24) Or (LongWord(B[At+1]) Shl 16) Or (LongWord(B[At+2]) Shl 8) Or B[At+3];
+ AdZMpHdr:=AdZMPAHeader(AdZMpS,H);
+End;
+
+{ ---- paquets de conteneur : accumulation puis decodage des trames completes ---- }
+Procedure AdZMpProcess(Final: Boolean);
+Var I, R, FS, Blocks, Nb, Sp: LongInt; H: LongWord; Found: Boolean;
+Begin
+ While (AdZMpFBLen>=4) And Not AdZStop Do Begin
+  { recherche d'un en-tete }
+  I:=0; Found:=False;
+  While I+4<=AdZMpFBLen Do Begin
+   If (AdZMpFB^[I]=$FF) And ((AdZMpFB^[I+1] And $E0)=$E0) Then
+    If AdZMpHdr(AdZMpFB^,I)=0 Then Begin Found:=True; Break; End;
+   Inc(I);
+  End;
+  If Not Found Then Begin
+   { garde les 3 derniers octets (debut possible d'un en-tete) }
+   If AdZMpFBLen>3 Then Begin
+    Move(AdZMpFB^[AdZMpFBLen-3],AdZMpFB^[0],3); AdZMpFBLen:=3;
+   End;
+   Exit;
+  End;
+  If I>0 Then Begin
+   Move(AdZMpFB^[I],AdZMpFB^[0],AdZMpFBLen-I); Dec(AdZMpFBLen,I);
+  End;
+  AdZMpHdr(AdZMpFB^,0);
+  FS:=AdZMpS^.FrameSize;
+  If (FS<=4) Or (FS>4000) Then Begin
+   Move(AdZMpFB^[1],AdZMpFB^[0],AdZMpFBLen-1); Dec(AdZMpFBLen); Continue;
+  End;
+  If FS>AdZMpFBLen Then Begin
+   If Not Final Then Exit;
+   FillChar(AdZMpFB^[AdZMpFBLen],FS-AdZMpFBLen,0);   { derniere trame tronquee }
+   AdZMpFBLen:=FS;
+  End;
+  { trame d'information Xing/Info : pas de son }
+  If AdZMpFirst Then Begin
+   AdZMpFirst:=False;
+   If AdZMpS^.Layer=3 Then Begin
+    If AdZMpS^.Lsf=0 Then Begin If AdZMpS^.NbCh=1 Then Sp:=21 Else Sp:=36; End
+    Else Begin If AdZMpS^.NbCh=1 Then Sp:=13 Else Sp:=21; End;
+    If ((AdZMpFB^[Sp]=Ord('X')) And (AdZMpFB^[Sp+1]=Ord('i')) And (AdZMpFB^[Sp+2]=Ord('n')) And (AdZMpFB^[Sp+3]=Ord('g')))
+    Or ((AdZMpFB^[Sp]=Ord('I')) And (AdZMpFB^[Sp+1]=Ord('n')) And (AdZMpFB^[Sp+2]=Ord('f')) And (AdZMpFB^[Sp+3]=Ord('o'))) Then Begin
+     Move(AdZMpFB^[FS],AdZMpFB^[0],AdZMpFBLen-FS); Dec(AdZMpFBLen,FS);
+     Continue;
+    End;
+   End;
+  End;
+  AdZMpS^.Fixed:=AdZMpS^.Layer<3;
+  If AdZMpChans=0 Then Begin
+   AdZMpChans:=AdZMpS^.NbCh;
+   If Not AdZSinkOpen(AdZMpS^.SampleRate,AdZMpChans) Then Begin AdZStop:=True; Exit; End;
+  End;
+  R:=AdZMPAPacket(AdZMpS,PAdZBuf(AdZMpFB),FS,AdZMpL,AdZMpR,Blocks);
+  If R>=0 Then Begin
+   Nb:=Blocks*32;
+   AdZMpOutput(0,Nb);
+   Move(AdZMpFB^[FS],AdZMpFB^[0],AdZMpFBLen-FS); Dec(AdZMpFBLen,FS);
+  End Else Begin
+   Move(AdZMpFB^[1],AdZMpFB^[0],AdZMpFBLen-1); Dec(AdZMpFBLen);
+  End;
+ End;
+End;
+
+{ ajoute un paquet (Off, Len dans le fichier) au flux MPEG audio }
+Procedure AdZMpFeed(Off, Len: LongInt; Final: Boolean);
+Var N, Got: LongInt;
+Begin
+ While (Len>0) And Not AdZStop Do Begin
+  N:=Len; If N>16384 Then N:=16384;
+  If AdZMpFBLen+N>AdZMpFBCap Then Begin
+   AdZMpProcess(False);
+   If AdZMpFBLen+N>AdZMpFBCap Then AdZMpFBLen:=0;   { debordement : repart a zero }
+  End;
+  Got:=AdZRead(Off,AdZMpFB^[AdZMpFBLen],N);
+  If Got<=0 Then Break;
+  Inc(AdZMpFBLen,Got); Inc(Off,Got); Dec(Len,Got);
+  AdZMpProcess(False);
+ End;
+ If Final Then AdZMpProcess(True);
+End;
+
+
+{ ---- fichier .mp3/.mp2 brut : balises ID3v2, Xing/Info/LAME (lecture sans
+  trou comme libavformat/mp3dec.c), puis decodage de toutes les trames ---- }
+Function AdZMB(At: LongInt): LongInt;
+Begin AdZMB:=AdZU8(At); End;
+
+Function AdZMRB32(At: LongInt): LongWord;
+Var B: Array[0..3] Of Byte;
+Begin
+ FillChar(B,4,0); AdZRead(At,B,4);
+ AdZMRB32:=(LongWord(B[0]) Shl 24) Or (LongWord(B[1]) Shl 16) Or (LongWord(B[2]) Shl 8) Or LongWord(B[3]);
+End;
+
+Function AdZMRB16(At: LongInt): LongInt;
+Begin AdZMRB16:=AdZBE16(At); End;
+
+Function AdZMCheck(S: PAdZMPA; Pos: LongInt; Var Hdr: LongWord): LongInt;
+Var H: LongWord; R: LongInt;
+Begin
+ If (Pos<0) Or (Pos+4>AdZSize) Then Begin AdZMCheck:=-2; Exit; End;
+ H:=AdZMRB32(Pos);
+ R:=AdZMPAHeader(S,H);
+ If R<>0 Then Begin AdZMCheck:=-1; Exit; End;
+ Hdr:=H; AdZMCheck:=S^.FrameSize;
+End;
+
+{ position du debut des donnees apres les balises ID3v2 }
+Function AdZId3Skip(Pos: LongInt): LongInt;
+Var N, Fl: LongInt;
+Begin
+ While (Pos>=0) And (Pos+10<=AdZSize) And (AdZMB(Pos)=73) And (AdZMB(Pos+1)=68) And (AdZMB(Pos+2)=51)
+  And (AdZMB(Pos+3)<>255) And (AdZMB(Pos+4)<>255) Do Begin
+  N:=((AdZMB(Pos+6) And $7F) Shl 21) Or ((AdZMB(Pos+7) And $7F) Shl 14) Or ((AdZMB(Pos+8) And $7F) Shl 7) Or (AdZMB(Pos+9) And $7F);
+  Fl:=AdZMB(Pos+5);
+  Inc(Pos,10+N);
+  If (Fl And $10)<>0 Then Inc(Pos,10);
+ End;
+ AdZId3Skip:=Pos;
+End;
+
+{ cherche le premier en-tete MPEG audio valide (deux trames coherentes) a
+  partir de Off ; retourne la position ou -1 }
+Function AdZMpFind(S: PAdZMPA; Off: LongInt; Var Layer, Rate, Chans: LongInt): LongInt;
+Var I, R, R2: LongInt; H, H2: LongWord;
+Begin
+ AdZMpFind:=-1;
+ I:=0;
+ While (I<131072) And (Off+I+4<=AdZSize) Do Begin
+  R:=AdZMCheck(S,Off+I,H);
+  If R>0 Then Begin
+   Layer:=S^.Layer; Rate:=S^.SampleRate; Chans:=S^.NbCh;
+   R2:=AdZMCheck(S,Off+I+R,H2);
+   If (R2>=0) And ((H And $FFFE0CCF)=(H2 And $FFFE0CCF)) Then Begin
+    AdZMpFind:=Off+I; Exit;
+   End;
+   { derniere trame du fichier : une seule suffit }
+   If (R2=-2) And (Off+I+R>=AdZSize-1) Then Begin AdZMpFind:=Off+I; Exit; End;
+  End;
+  Inc(I);
+ End;
+End;
+
+Function AdZMp3Run(Var Layer: LongInt): Boolean;
+Var
+ S: PAdZMPA; Off, Pos, I, J, K, R, Spf, Blocks, FrameStart, N, Nb, Start, FrameIdx, Rate, Chans,
+  SkipCtr, SkipPkt, PadPkt: LongInt;
+ H, Hd, Vv, Fl, StartPad, EndPad, Frames, HeaderFilesize: LongWord;
+ StartSkip, FirstDiscard, LastDiscard, SampleIdx, EndSample, Fs, Mn, Dl: Int64;
+ TagFound, IsCbr, HaveSide: Boolean; Ver: String;
+ Hdr4: Array[0..3] Of Byte;
+Begin
+ AdZMp3Run:=False;
+ AdZMpOpen; S:=AdZMpS;
+ Off:=AdZId3Skip(0);
+ Layer:=0;
+ StartSkip:=0; FirstDiscard:=0; LastDiscard:=0; Pos:=Off; TagFound:=False;
+ H:=AdZMRB32(Off);
+ R:=AdZMPAHeader(S,H);
+ If (R>=0) And (S^.Layer=3) Then Begin
+  If R=0 Then I:=S^.FrameSize Else I:=0;
+  If S^.Lsf<>0 Then Spf:=576 Else Spf:=1152;
+  Frames:=0; HeaderFilesize:=0; IsCbr:=False;
+  N:=Off+4;
+  If S^.Lsf=1 Then K:=1 Else K:=0;
+  If S^.NbCh=1 Then J:=1 Else J:=0;
+  Case K*2+J Of 0: Inc(N,32); 1: Inc(N,17); 2: Inc(N,17); Else Inc(N,9); End;
+  Vv:=AdZMRB32(N); Inc(N,4);
+  IsCbr:=Vv=$496E666F;
+  If (Vv=$58696E67) Or IsCbr Then Begin
+   Fl:=AdZMRB32(N); Inc(N,4);
+   If (Fl And 1)<>0 Then Begin Frames:=AdZMRB32(N); Inc(N,4); End;
+   If (Fl And 2)<>0 Then Begin HeaderFilesize:=AdZMRB32(N); Inc(N,4); End;
+   If (AdZSize-(Off+4)>0) And (HeaderFilesize<>0) Then Begin
+    Fs:=AdZSize-(Off+4);
+    If Fs<HeaderFilesize Then Mn:=Fs Else Mn:=HeaderFilesize;
+    If Fs>HeaderFilesize Then Dl:=Fs-HeaderFilesize Else Dl:=HeaderFilesize-Fs;
+    If (Fs>HeaderFilesize) And (Dl>(Mn Shr 4)) Then Frames:=0;
+   End;
+   If (Fl And 4)<>0 Then Inc(N,100);
+   If (Fl And 8)<>0 Then Inc(N,4);
+   Ver:='';
+   For K:=0 To 8 Do Ver:=Ver+Chr(AdZMB(N+K));
+   Inc(N,9); Inc(N,2); Inc(N,4); Inc(N,2); Inc(N,2); Inc(N,2);
+   Vv:=(LongWord(AdZMB(N)) Shl 16) Or (LongWord(AdZMB(N+1)) Shl 8) Or LongWord(AdZMB(N+2));
+   If (Copy(Ver,1,4)='LAME') Or (Copy(Ver,1,4)='Lavf') Or (Copy(Ver,1,4)='Lavc') Then Begin
+    StartPad:=Vv Shr 12; EndPad:=Vv And 4095;
+    StartSkip:=StartPad+528+1;
+    If Frames<>0 Then Begin
+     FirstDiscard:=-Int64(EndPad)+528+1+Int64(Frames)*Spf;
+     LastDiscard:=Int64(Frames)*Spf;
+    End;
+   End;
+  End;
+  If AdZMRB32(Off+4+32)=$56425249 Then
+   If AdZMRB16(Off+4+32+4)=1 Then Begin
+    HeaderFilesize:=AdZMRB32(Off+4+32+4+2+4);
+    Frames:=AdZMRB32(Off+4+32+4+2+4+4);
+   End;
+  If (Frames<>0) Or (HeaderFilesize<>0) Then Begin
+   TagFound:=True; Pos:=Off+I;
+  End;
+ End;
+ If Not TagFound Then Begin StartSkip:=0; FirstDiscard:=0; LastDiscard:=0; Pos:=Off; End;
+ { premiere trame valide }
+ Off:=AdZMpFind(S,Pos,Layer,Rate,Chans);
+ If Off<0 Then Begin AdZMpClose; Exit; End;
+ Pos:=Off;
+ AdZMpChans:=Chans;
+ If Not AdZSinkOpen(Rate,Chans) Then Begin AdZMpClose; Exit; End;
+ SampleIdx:=0; SkipCtr:=0; FrameIdx:=0;
+ While (Pos<AdZSize) And Not AdZStop Do Begin
+  { en-tete suivant }
+  FrameStart:=-1; Hd:=0; K:=Pos;
+  While K+4<=AdZSize Do Begin
+   If AdZMB(K)=$FF Then Begin
+    Hd:=AdZMRB32(K);
+    If (Hd And $FFE00000)=$FFE00000 Then Begin
+     R:=AdZMPAHeader(S,Hd);
+     If R=0 Then Begin FrameStart:=K; Break; End;
+    End;
+   End;
+   Inc(K);
+  End;
+  If FrameStart<0 Then Break;
+  AdZMPAHeader(S,Hd);
+  N:=FrameStart+S^.FrameSize;
+  If N>AdZSize Then N:=AdZSize;
+  Case S^.Layer Of 1: Spf:=384; 2: Spf:=1152; Else If S^.Lsf<>0 Then Spf:=576 Else Spf:=1152; End;
+  SkipPkt:=0; PadPkt:=0; HaveSide:=False;
+  If (FrameIdx=0) And (StartSkip>0) Then Begin SkipPkt:=StartSkip; HaveSide:=True; End;
+  If FirstDiscard<>0 Then Begin
+   EndSample:=SampleIdx+Spf;
+   If (EndSample>=FirstDiscard) And (SampleIdx<LastDiscard) Then Begin
+    Dl:=EndSample-FirstDiscard; If Dl>Spf Then Dl:=Spf;
+    PadPkt:=Dl; HaveSide:=True;
+   End;
+  End;
+  S^.Fixed:=S^.Layer<3;
+  I:=N-FrameStart; If I>AdZMpFBCap Then I:=AdZMpFBCap;
+  FillChar(AdZMpFB^[0],I+64,0);
+  I:=AdZRead(FrameStart,AdZMpFB^[0],I);
+  R:=AdZMPAPacket(S,PAdZBuf(AdZMpFB),N-FrameStart,AdZMpL,AdZMpR,Blocks);
+  If R>=0 Then Begin
+   Nb:=Blocks*32;
+   If HaveSide Then SkipCtr:=SkipPkt;
+   Start:=0;
+   If SkipCtr>0 Then Begin
+    If Nb<=SkipCtr Then Begin Dec(SkipCtr,Nb); Nb:=0; End
+    Else Begin Start:=SkipCtr; Dec(Nb,SkipCtr); SkipCtr:=0; End;
+   End;
+   If (Nb>0) And (PadPkt>0) And (PadPkt<=Nb+Start) Then Begin
+    If PadPkt=Nb+Start Then Nb:=0 Else Dec(Nb,PadPkt);
+   End;
+   If Nb>0 Then AdZMpOutput(Start,Nb);
+  End;
+  Inc(SampleIdx,Spf); Inc(FrameIdx);
+  Pos:=N;
+ End;
+ AdZMpClose;
+ AdZMp3Run:=True;
+End;
+
+
+Var AdAErr: Boolean;
+Const
+ AdAAPi=3.14159265358979323846;
+ AdARoots:Array[0..11] Of Integer=(
+ 0,120,200,280,360,440,520,600,663,726,894,1062);
+ AdAHuffLeft:Array[0..1349] Of Integer=(
+ -61,92,90,87,83,79,74,72,67,62,56,52,44,14,18,16,17,-1,42,21,
+ -2,-20,29,24,27,26,-120,28,-11,110,113,32,-119,-8,-9,39,37,-12,-15,40,
+ -17,-21,-24,-91,49,48,-89,-26,-29,51,-27,-87,55,97,-31,-85,60,58,-86,-37,
+ -84,-38,66,65,-83,-82,-81,70,71,-43,-46,-45,73,-75,78,77,-74,-73,-50,82,
+ -52,-71,-53,86,-68,-54,-67,89,-56,-57,-63,-58,-60,-62,95,-77,-78,-88,99,100,
+ -98,-93,103,-95,-97,-99,107,-101,-103,-104,116,119,-111,114,-107,-109,117,-112,
+  -114,-116,
+ -41,158,139,153,148,131,136,145,129,130,-1,132,133,-22,135,-19,143,138,-12,172,
+ 141,142,-5,144,-6,170,152,-73,167,162,151,-8,-81,154,194,-11,157,-13,159,160,
+ -68,-15,192,-26,165,-17,-18,168,169,-74,171,-61,173,174,-59,199,-24,-25,-63,-
+  28,
+ 189,-44,-71,187,-34,186,-35,-48,-77,-42,-39,-40,-66,-65,-53,-62,-55,-60,-76,-
+  70,
+ 238,220,209,216,229,206,207,-21,-57,246,257,261,-16,227,215,-55,235,218,226,-6,
+ 221,222,237,-65,256,-81,-8,245,-9,230,255,-10,242,234,-31,236,-12,-13,239,-41,
+ -68,-14,244,-29,-17,-63,273,275,-20,-74,-60,262,253,-50,-35,-54,-25,278,-72,
+  260,
+ -28,-30,269,-32,268,-69,267,-58,-37,-38,272,-49,-47,-45,-64,-48,-77,-78,-62,-
+  75,
+ -1,282,283,-28,291,286,332,335,-38,-55,-10,292,-37,294,295,296,-6,298,312,-67,
+ -49,-8,314,304,305,336,-9,308,-13,313,-19,-31,-46,-22,324,337,317,-35,328,326,
+ 330,322,-54,-21,347,-23,327,-25,329,-26,331,-27,-29,349,-30,-41,-65,-44,-47,
+  340,
+ -36,342,-39,-68,-45,346,-48,-58,-71,-76,-73,357,354,-57,-72,-62,-75,-66,-70,-
+  81,
+ 361,392,414,-37,365,376,391,-2,374,377,371,382,415,-3,375,-4,-5,394,416,390,
+ -22,-19,397,-30,408,398,405,388,389,-9,-56,-29,393,-41,395,-17,-15,-16,399,400,
+ -18,-21,403,-23,-24,435,439,-25,426,432,433,-70,413,-81,-32,-34,417,-35,419,-
+  36,
+ -38,-47,423,425,-50,-68,434,-71,-58,-48,438,-49,-51,-52,-53,-66,-79,-75,-67,-
+  72,
+ -41,508,506,493,478,474,459,456,453,468,471,470,-81,467,490,-64,472,458,-3,463,
+ 461,462,-4,464,-37,513,-6,-71,469,-8,-73,-74,473,-65,491,476,477,-12,482,480,
+ 481,-13,483,-14,485,-15,518,-16,-17,-18,-19,501,-21,497,495,496,-22,498,-23,
+  500,
+ -24,-25,-26,-76,-69,-30,510,-31,509,-32,-49,-34,-47,-54,-38,-59,-42,-55,-70,-
+  78,
+ 580,567,552,548,535,532,542,597,531,541,-1,-8,533,534,-7,545,537,576,-6,540,
+ -5,-81,594,-45,-10,560,547,-65,556,550,-70,-12,565,558,555,-13,557,-68,559,-15,
+ -16,-17,-63,596,-56,574,-21,568,-31,595,-24,572,573,-23,-57,-75,-28,-47,588,-
+  30,
+ 589,582,-32,-33,-67,593,-36,-38,-52,591,-40,-41,-59,-54,-77,-58,-62,598,-64,-
+  72,
+ -1,602,-9,604,-10,628,-17,608,629,610,-4,612,613,639,-5,616,640,-43,619,641,
+ 636,622,-31,643,625,650,-32,-57,-18,630,-26,632,-13,-14,654,-15,-51,-19,-20,-
+  28,
+ -35,646,-44,648,645,-52,-30,-49,649,-58,-46,652,656,-61,-50,-59,-54,658,-48,-
+  60,
+ 661,-63,-56,664,692,668,-19,-1,-11,670,671,672,-3,674,675,676,-4,698,714,-45,
+ 700,682,683,684,-53,703,687,720,-7,725,722,-8,-10,-18,-12,705,697,-13,707,-14,
+ 708,702,-50,704,-16,-20,-21,-42,718,-23,711,-59,-28,-29,-30,716,-31,-32,-38,-
+  39,
+ -49,-46,-48,-54,-55,-63,-1,728,-14,730,-15,779,-27,734,735,800,-17,-40,780,782,
+ 816,-5,743,744,783,838,-56,-6,785,750,751,-93,753,754,789,756,757,-8,759,-47,
+ 761,762,809,764,765,-10,797,820,769,-148,812,772,773,836,775,-12,847,778,-13,-
+  28,
+ 801,-18,-31,802,-20,786,787,-66,-45,790,-23,806,793,794,-24,832,-111,843,799,-
+  38,
+ -41,-30,-67,804,-46,-107,807,808,-36,845,-110,-134,813,833,815,-39,-55,-48,831,
+  -49,
+ 821,-50,823,853,-51,826,867,-162,829,-106,-58,-61,-158,881,-63,-125,837,-137,-
+  68,-69,
+ 841,-79,-84,878,-73,-74,-101,848,-138,-82,-132,-122,-86,-144,-89,856,857,869,-
+  164,876,
+ -104,-105,863,-95,-98,866,-149,-113,-102,-139,-121,-114,873,874,875,-115,-116,-
+  117,-123,
+ 880,
+ -129,-131,883,884,-141,-142,893,888,-143,-159,-161,-165,-156,-167,900,896,897,
+  898,953,-1,
+ 949,902,903,-2,980,906,-27,996,-4,954,983,1005,-80,914,957,916,917,1015,-93,
+  920,
+ 921,1018,1029,999,-36,926,969,928,929,930,-8,1023,-149,934,1002,1037,937,-158,
+  976,940,
+ 941,942,-11,1060,-12,1048,1053,948,-168,952,-28,-29,-15,-18,982,956,-19,958,
+  959,-20,
+ 961,-106,988,964,-22,966,1009,968,-23,1011,1043,972,-137,993,1013,-25,977,995,-
+  115,-128,
+ -30,-31,-32,1006,-81,1007,987,-47,989,-60,1021,992,-37,994,-148,-163,-44,-42,-
+  69,-49,
+ -50,-136,1024,1058,-162,-82,-70,-59,-109,1045,-62,1035,-63,-138,-65,-95,-71,-
+  72,1019,-73,
+ -74,1042,-75,-76,1051,-150,1027,1059,-103,1030,-120,-84,-85,-98,-87,-88,-102,
+  1038,-90,
+ 1040,
+ -91,-108,-100,-146,-101,-111,-112,-116,1052,-157,-145,-126,-129,1057,-130,-139,
+  -144,-166,
+ -161,-152,
+ -153,-167,1063,1064,1065,-1,1133,-2,1134,1070,1071,-38,1178,1074,-52,1076,1077,
+  1140,1143,
+ 1231,
+ 1081,-5,1083,1084,1085,1237,1264,-6,1089,1090,1253,1155,-174,1094,1095,1129,
+  1097,1098,
+ 1099,-8,
+ 1101,1102,1103,1104,1163,-9,1226,1298,1283,-154,1172,1112,1113,1315,1314,-11,
+  1117,1118,
+ 1331,-222,
+ 1333,1122,-254,-15,1322,1126,-14,1346,-16,1197,1307,1279,-17,-289,1135,-20,
+  1137,-21,-55,-
+ 70,
+ 1141,1180,-23,1144,1212,-24,1147,1184,1274,1285,-34,1152,1153,1154,-221,-128,
+  1157,1292,
+ 1159,-191,
+ 1266,1336,-29,-30,1165,1166,1167,1223,-31,1208,1171,-260,1271,1174,1284,1329,-
+  33,-54,
+ 1179,-71,
+ -40,1211,1233,-41,1185,1348,-281,1234,1189,1190,-43,1192,1193,-127,1241,1196,-
+  45,1198,-
+ 225,1200,
+ 1201,1202,-196,1335,-48,1258,1328,-49,1270,-50,-72,-57,-106,1214,-122,1289,-60,
+  1252,-61,-
+ 62,
+ 1221,1222,-129,-189,1225,-131,1295,1228,-101,1230,-68,1261,-69,-74,1235,1236,-
+  76,1332,-
+ 125,1305,
+ -78,1304,-159,1244,-80,1246,1247,-243,-165,-87,-91,-108,-94,1260,-95,-96,-273,-
+  98,1310,-
+ 180,
+ -103,-107,1303,-109,-110,-224,1267,-147,1269,-116,-206,1311,1319,-215,1275,-
+  119,-120,-
+ 123,-124,-130,
+ 1281,-132,-133,-257,-135,-282,1337,-211,-138,-140,-141,-143,1293,-175,-258,
+  1297,-231,-
+ 246,1338,-263,
+ 1320,1302,-200,-153,-173,-157,-176,-193,-192,-163,-164,1312,-167,-168,-216,
+  1340,-249,-
+ 179,-182,-184,
+ 1321,-185,1325,-186,-187,-188,-194,-195,-197,-199,-232,-203,-287,1345,-237,-
+  226,-241,-
+ 210,-213,-214,
+ -218,1344,-269,-250,-236,-239,-270,-266,-280,-276);
+ AdAHuffRight:Array[0..1349] Of Integer=(
+ 1,2,3,4,5,6,7,8,9,10,11,12,13,22,15,98,106,105,19,20,
+ -3,-4,23,35,25,33,-5,109,-6,30,31,34,-7,-16,-10,36,38,-13,-14,41,
+ -19,-18,43,-22,45,46,47,-23,-25,50,-28,-30,53,54,-32,-33,57,59,-34,-35,
+ 61,-36,63,64,-39,-40,-41,68,69,-42,-44,-80,94,-47,75,76,-48,-49,-72,80,
+ 81,-51,-70,84,85,-69,-55,88,-66,-65,91,-64,93,-59,96,-76,-79,-90,102,101,
+ -92,-94,104,-96,-105,-100,108,-102,-118,-121,111,112,-106,115,-108,-110,118,-
+  113,-115,-
+ 117,
+ 121,122,123,124,125,126,127,128,134,178,-75,175,179,-2,196,-3,137,166,-4,140,
+ 164,193,-29,198,-10,146,147,-7,149,150,197,-30,-9,156,155,-69,161,-67,180,191,
+ -14,-31,163,-16,182,-45,-72,183,195,-20,177,-21,185,190,-23,176,-80,-57,-27,-
+  54,
+ 181,-32,-33,184,-56,188,-43,-36,-37,-38,-47,-50,-46,-49,-51,-52,-79,-58,-64,-
+  78,
+ 201,202,203,204,205,213,224,208,-1,210,211,212,-2,214,279,-3,217,259,219,-4,
+ 232,264,223,-5,225,-7,-18,228,-73,266,231,-52,233,276,-11,249,-56,-59,251,240,
+ 241,-42,243,-15,-51,-19,247,248,-34,250,-22,252,270,254,-23,-24,-27,258,-26,
+  274,
+ -70,-80,263,-44,265,-33,277,-36,-71,-40,271,-39,-43,-67,-46,-66,-53,-61,-76,-
+  79,
+ 281,284,290,-2,285,293,287,288,289,-3,-4,307,-5,302,297,300,-64,309,299,-7,
+ 301,-17,303,318,333,306,-18,311,-11,310,-12,-14,-15,-16,315,316,343,-20,319,
+  320,
+ 321,345,323,-61,325,-43,339,-24,341,350,348,-80,-40,334,-56,-32,-33,338,-34,
+  358,
+ -74,344,-59,-42,-77,351,355,-50,-51,-52,-53,352,353,356,-60,-69,-63,359,-79,-
+  78,
+ 364,362,363,-1,368,366,367,-11,369,370,384,372,373,381,422,-10,-31,378,379,380,
+ -6,-7,383,-8,385,386,387,412,401,-61,-12,-13,420,-14,402,396,-43,-20,418,404,
+ -74,-57,421,-33,-62,406,407,-73,409,410,411,-26,436,-27,-28,-55,428,-64,429,-
+  80,
+ -40,-39,430,424,-42,-44,427,-45,-46,-60,431,-59,-69,-76,-77,-54,437,-63,-65,-
+  78,
+ 441,442,443,444,445,446,447,448,449,450,451,452,-1,454,455,-2,457,517,-79,460,
+ 465,503,-45,519,-5,466,-46,-7,489,-72,-9,-10,488,-11,475,486,502,-66,479,484,
+ 504,-53,514,-68,512,-67,487,-20,-27,-80,-75,492,-57,494,499,505,-60,515,-43,
+  511,
+ -58,-61,-56,-28,-29,-52,507,-51,516,-50,-33,-48,-35,-36,-44,-39,-40,-63,-62,-
+  77,
+ 521,522,523,524,525,526,527,528,529,530,-73,-2,539,562,-3,536,585,538,-4,575,
+ -79,-9,543,544,-18,546,561,-11,549,563,551,-26,553,554,577,-53,587,-14,584,-69,
+ -71,-46,-19,564,-20,566,-61,571,569,570,-22,578,592,-34,-25,-27,-78,-29,579,-
+  43,
+ 581,583,-51,-49,-35,586,-37,-44,-39,590,-42,-50,-48,-76,-55,-60,-66,599,-74,-
+  80,
+ 601,603,-2,607,605,606,-3,611,609,631,638,618,615,614,-33,634,617,-6,623,620,
+ 621,647,-7,624,651,626,627,-8,-11,637,-12,633,-34,-42,635,-36,-16,-25,-27,-21,
+ -22,642,-23,644,659,-24,-29,-37,655,-38,-39,657,653,-40,-41,-45,-47,660,-62,-
+  53,
+ 662,-55,-64,669,665,666,667,-17,-2,673,695,694,-26,680,677,713,-36,678,679,-5,
+ 681,685,710,719,-6,686,689,688,-62,690,691,-64,693,-9,-27,696,706,-35,699,-44,
+ 701,715,-15,717,-47,712,-25,-22,709,-51,723,-24,-34,-43,-37,721,-52,724,-33,-
+  58,
+ -40,-41,-57,-60,-61,-56,727,729,-2,733,731,732,-3,742,738,736,737,-4,739,740,
+ 741,-53,752,748,745,746,747,-33,749,803,805,-7,760,791,755,758,817,-120,850,-9,
+ 770,766,763,795,851,-146,767,768,864,-11,771,855,776,774,854,-163,777,871,-151,
+  -16,
+ 781,-54,-19,784,-44,828,788,-21,-22,840,-94,792,818,842,-96,796,-25,798,889,-
+  26,
+ -29,-42,-32,830,-34,-35,862,861,-71,810,811,-37,822,814,835,-124,-43,-59,819,-
+  145,
+ 852,-75,825,824,-76,865,827,-52,839,-57,-119,-60,-62,834,-87,-64,846,-65,-80,-
+  81,
+ 849,-70,-72,844,-97,-118,-77,868,-78,-108,-83,-85,-112,-88,-157,872,859,858,-
+  90,860,
+ -91,-92,870,-133,-160,890,-99,-100,-126,-103,-109,-127,882,879,877,-140,-152,-
+  128,-135,
+ 885,
+ -130,-136,886,891,-153,-166,887,892,-155,-147,-150,-154,-169,-168,895,913,909,
+  907,899,-
+ 56,
+ 901,904,997,-17,905,981,-3,908,-57,910,911,912,-5,919,915,962,960,918,-6,925,
+ 965,922,923,924,-7,933,927,973,931,1001,-113,932,-9,938,935,936,1014,-10,939,
+  945,
+ 943,1056,-104,944,-155,946,947,1061,-13,950,951,-14,-16,-54,955,998,-67,985,
+  1016,-46,
+ 1041,-21,963,1008,-48,990,967,1046,-99,970,971,1050,-24,974,975,-159,1026,978,
+  979,-26,
+ -43,-55,-68,984,-33,986,1017,-34,1032,-35,991,1000,-132,1036,-38,-39,-40,-41,-
+  45,-119,
+ -124,-51,1003,1004,-52,-53,-58,1031,-61,1010,-133,1012,-92,-64,-127,-66,-83,-
+  107,1020,-
+ 110,
+ 1033,1022,-135,-114,1025,-77,1039,1028,-78,1034,-79,-94,-97,-86,-121,-105,-89,
+  1055,-118,
+ 1047,
+ -140,-96,-134,1044,-147,-122,-123,-165,1049,-117,-125,-160,-142,1054,-156,-131,
+  -141,-143,
+ -151,-164,
+ -154,-169,1075,1068,1066,-19,1067,-36,1069,1072,1138,-3,1073,1249,-4,1082,1146,
+  1078,1079,
+ 1080,
+ 1250,-51,1093,1088,1151,1086,1087,1290,1156,1194,1091,1092,-7,1100,1164,1096,
+  1160,1203,
+ 1326,-65,
+ 1110,1106,1169,1280,1105,-229,1107,1108,1109,-10,1111,1116,1124,1114,1115,-217,
+  1120,1341,
+ 1119,-12,
+ 1121,1127,1123,-13,1125,1347,-251,1128,-271,1130,1131,1132,-82,-18,1136,-37,
+  1177,-53,
+ 1139,-22,
+ 1181,1142,-89,1229,1145,-85,1187,1148,1149,1150,-25,1191,1217,1288,-26,-27,
+  1220,1158,
+ 1276,-28,
+ 1161,1162,-81,-230,1199,1245,1224,1168,-207,1170,1248,-32,1173,1300,1175,1176,-
+  183,-35,
+ 1210,-39,
+ -73,1182,1183,-104,1213,1186,-42,1188,1215,1324,-93,1239,1291,-44,1195,1219,-
+  160,1256,-
+ 46,1205,
+ 1268,1309,-47,1204,-227,1206,1207,-115,1209,-261,-56,-90,-58,1251,-59,1216,-86,
+  1218,-142,
+ -112,
+ 1243,1255,-63,-64,1257,-66,1227,1318,-67,1349,-278,1232,-75,-105,1262,1278,-
+  284,1238,-77,
+ 1240,
+ -111,1242,-79,1265,-190,1286,1327,-83,-84,-88,-102,-92,-238,1254,-144,-172,-97,
+  -99,1259,-
+ 100,
+ -158,-279,1263,-170,-126,-113,1317,-114,1294,-181,-117,1272,1273,-118,1277,-
+  283,-177,-
+ 121,-285,-146,
+ 1282,-212,-259,-134,1313,-136,1287,-137,-255,-139,-288,-156,1306,-145,-148,
+  1296,-149,-
+ 150,1299,-151,
+ 1301,1343,-152,-274,-155,-272,-161,1308,-162,-244,-245,1339,-166,-264,-169,
+  1316,-171,-
+ 178,-198,-248,
+ 1330,-233,1323,-235,-286,-219,-223,-242,-240,-202,-201,-252,-204,1334,-205,-
+  208,-209,-
+ 228,-262,-247,
+ -265,1342,-220,-234,-268,-253,-256,-267,-275,-277);
+ AdALongBands:Array[0..12] Of Integer=(
+ 41,41,47,49,49,51,47,47,43,43,43,40,40);
+ AdALongOffsets:Array[0..12,0..51] Of Integer=(
+ (0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,64,72,80,88,96,108,120,132,144,156,
+  172,188,
+ 212,240,276,320,384,448,512,576,640,704,768,832,896,960,1024,1024,1024,1024,
+  1024,1024,
+ 1024,1024,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,64,72,80,88,96,108,120,132,144,156,
+  172,188,
+ 212,240,276,320,384,448,512,576,640,704,768,832,896,960,1024,1024,1024,1024,
+  1024,1024,
+ 1024,1024,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,64,72,80,88,100,112,124,140,156,172,
+  192,216,
+ 240,268,304,344,384,424,464,504,544,584,624,664,704,744,784,824,864,904,944,
+  984,1024,
+ 1024,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,48,56,64,72,80,88,96,108,120,132,144,160,176,
+  196,216,240,
+ 264,292,320,352,384,416,448,480,512,544,576,608,640,672,704,736,768,800,832,
+  864,896,928,
+ 1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,48,56,64,72,80,88,96,108,120,132,144,160,176,
+  196,216,240,
+ 264,292,320,352,384,416,448,480,512,544,576,608,640,672,704,736,768,800,832,
+  864,896,928,
+ 1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,48,56,64,72,80,88,96,108,120,132,144,160,176,
+  196,216,240,
+ 264,292,320,352,384,416,448,480,512,544,576,608,640,672,704,736,768,800,832,
+  864,896,928,
+ 960,992,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,44,52,60,68,76,84,92,100,108,116,124,136,148,
+  160,172,188,
+ 204,220,240,260,284,308,336,364,396,432,468,508,552,600,652,704,768,832,896,
+  960,1024,
+ 1024,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,44,52,60,68,76,84,92,100,108,116,124,136,148,
+  160,172,188,
+ 204,220,240,260,284,308,336,364,396,432,468,508,552,600,652,704,768,832,896,
+  960,1024,
+ 1024,1024,1024,1024),
+ (0,8,16,24,32,40,48,56,64,72,80,88,100,112,124,136,148,160,172,184,196,212,228,
+  244,260,
+ 280,300,320,344,368,396,424,456,492,532,572,616,664,716,772,832,896,960,1024,
+  1024,1024,
+ 1024,1024,1024,1024,1024,1024),
+ (0,8,16,24,32,40,48,56,64,72,80,88,100,112,124,136,148,160,172,184,196,212,228,
+  244,260,
+ 280,300,320,344,368,396,424,456,492,532,572,616,664,716,772,832,896,960,1024,
+  1024,1024,
+ 1024,1024,1024,1024,1024,1024),
+ (0,8,16,24,32,40,48,56,64,72,80,88,100,112,124,136,148,160,172,184,196,212,228,
+  244,260,
+ 280,300,320,344,368,396,424,456,492,532,572,616,664,716,772,832,896,960,1024,
+  1024,1024,
+ 1024,1024,1024,1024,1024,1024),
+ (0,12,24,36,48,60,72,84,96,108,120,132,144,156,172,188,204,220,236,252,268,288,
+  308,328,
+ 348,372,396,420,448,476,508,544,580,620,664,712,764,820,880,944,1024,1024,1024,
+  1024,1024,
+ 1024,1024,1024,1024,1024,1024,1024),
+ (0,12,24,36,48,60,72,84,96,108,120,132,144,156,172,188,204,220,236,252,268,288,
+  308,328,
+ 348,372,396,420,448,476,508,544,580,620,664,712,764,820,880,944,1024,1024,1024,
+  1024,1024,
+ 1024,1024,1024,1024,1024,1024,1024));
+ AdALongTNS:Array[0..12] Of Integer=(
+ 31,31,34,40,42,51,46,46,42,42,42,39,39);
+ AdAShortBands:Array[0..12] Of Integer=(
+ 12,12,12,14,14,14,15,15,15,15,15,15,15);
+ AdAShortOffsets:Array[0..12,0..51] Of Integer=(
+ (0,4,8,12,16,20,24,32,40,48,64,92,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128),
+ (0,4,8,12,16,20,24,32,40,48,64,92,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128),
+ (0,4,8,12,16,20,24,32,40,48,64,92,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128),
+ (0,4,8,12,16,20,28,36,44,56,68,80,96,112,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128),
+ (0,4,8,12,16,20,28,36,44,56,68,80,96,112,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128),
+ (0,4,8,12,16,20,28,36,44,56,68,80,96,112,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128),
+ (0,4,8,12,16,20,24,28,36,44,52,64,76,92,108,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128),
+ (0,4,8,12,16,20,24,28,36,44,52,64,76,92,108,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128),
+ (0,4,8,12,16,20,24,28,32,40,48,60,72,88,108,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128),
+ (0,4,8,12,16,20,24,28,32,40,48,60,72,88,108,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128),
+ (0,4,8,12,16,20,24,28,32,40,48,60,72,88,108,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128),
+ (0,4,8,12,16,20,24,28,36,44,52,60,72,88,108,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128),
+ (0,4,8,12,16,20,24,28,36,44,52,60,72,88,108,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+  128,128,128,
+ 128,128,128,128));
+ AdAShortTNS:Array[0..12] Of Integer=(
+ 9,9,10,14,14,14,14,14,14,14,14,14,14);
+ AdARates:Array[0..12] Of LongInt=(
+ 96000,88200,64000,48000,44100,32000,24000,22050,16000,12000,11025,8000,7350);
+Type
+ AdATInfo=Record
+  Seq,Shape,MaxBand,Groups,AdAWindows,Bands,TNSMax:Integer;
+  GroupLen:Array[0..7] Of Integer;
+  Off:Array[0..51] Of Integer;
+ End;
+ AdATFilter=Record
+  Len,Order,Direction:Integer;
+  Coef:Array[0..11] Of Double;
+ End;
+ AdATChannel=Record
+  Info:AdATInfo;
+  PrevShape:Integer;
+  Book:Array[0..119] Of Integer;
+  Scale:Array[0..119] Of Double;
+  Spec,Overlap:Array[0..1023] Of Double;
+  Filters:Array[0..7,0..2] Of AdATFilter;
+  NFilter:Array[0..7] Of Integer;
+ End;
+ AdAPChannel=^AdATChannel;
+ AdATWork=Record
+  Data:Array[0..8191] Of Byte;
+  PCM:Array[0..4095] Of Byte;
+  Time:Array[0..2047] Of Double;
+  Block:Array[0..2047] Of Double;
+  WinLong:Array[0..1,0..1023] Of Double;
+  WinShort:Array[0..1,0..127] Of Double;
+  MS:Array[0..119] Of Boolean;
+ End;
+ AdAPWork=^AdATWork;
+Var
+ AdAWork:AdAPWork;
+ AdACh:Array[0..1] Of AdAPChannel;
+ AdAPos,AdALimit,AdABitPos,AdABitLimit,AdAWritten,AdAFrameCount,AdATagSize,AdARate:LongInt;
+ AdAHeader:Array[0..9] Of Byte;
+ AdAChannels,AdARateIndex,AdAFrameSize,AdAHeaderSize,AdAKind,AdAI,AdAJ,AdAC,AdACount,AdAMSPresent:Integer;
+ AdANoiseLo,AdANoiseHi:Word;
+ AdACommon,AdAGotAudio:Boolean;
+
+Procedure AdABad(Const S:String);Begin
+ AdAErr:=True;
+End;
+
+Function AdABits(N:Integer):LongInt;
+Var
+ V:LongInt;
+ B:Integer;
+Begin
+ If AdAErr Or (N<0) Or (N>24) Or (N>AdABitLimit-AdABitPos) Then Begin
+  AdAErr:=True; AdABits:=0; Exit;
+ End;
+ V:=0;
+ While N>0 Do Begin
+  B:=8-(AdABitPos And 7); If B>N Then B:=N;
+  V:=(V Shl B) Or ((AdAWork^.Data[AdABitPos Shr 3] Shr (8-(AdABitPos And 7)-B)) And ((1 Shl B)-1));
+  Inc(AdABitPos,B); Dec(N,B);
+ End;
+ AdABits:=V;
+End;
+
+
+Function AdAHuff(Book:Integer):Integer;
+Var
+ Node,Depth:Integer;
+Begin
+ If AdAErr Then Begin AdAHuff:=0; Exit; End;
+ Node:=AdARoots[Book]; Depth:=0;
+ Repeat
+ If AdABits(1)=0 Then Node:=AdAHuffLeft[Node] Else Node:=AdAHuffRight[Node]; Inc(Depth);
+ If (Depth>20) Or (Node=0) Then AdABad('Code Huffman incorrect.');
+ Until (Node<0) Or AdAErr;
+ AdAHuff:=-Node-1;
+End;
+
+Function AdAPower2(X:Double):Double;Begin
+ AdAPower2:=Exp(X*0.69314718055994530942);
+End;
+
+Function AdADequant(V:Integer):Double;Begin
+ If V=0 Then AdADequant:=0 Else If V<0 Then AdADequant:=-Exp(Ln(-V)*4/3) Else
+  AdADequant:=Exp(Ln(V)
+ *4/3);
+End;
+
+Function AdANoise:Double;
+Var
+ A,B:LongInt;
+Begin
+ { Unsigned LCG modulo 2^32 using 16-bit limbs, also with overflow checks. }
+ A:=LongInt(AdANoiseLo)*26125+62303;
+ B:=((A Shr 16)+LongInt(AdANoiseHi)*26125+LongInt(AdANoiseLo)*25+15470) And 65535;
+ AdANoiseLo:=A And 65535; AdANoiseHi:=B;
+ If B>=32768 Then B:=B-65536;
+ AdANoise:=B*65536.0+AdANoiseLo;
+End;
+
+Procedure AdAReadInfo(Var Q:AdATInfo);
+Var
+ K:Integer;
+Begin
+ FillChar(Q,SizeOf(Q),0);
+ If AdABits(1)<>0 Then AdABad('Bit ICS reserve non nul.');
+ Q.Seq:=AdABits(2); Q.Shape:=AdABits(1); Q.Groups:=1; Q.GroupLen[0]:=1;
+ If Q.Seq=2 Then Begin
+  Q.MaxBand:=AdABits(4); Q.AdAWindows:=8; Q.Bands:=AdAShortBands[AdARateIndex];
+  Q.TNSMax:=AdAShortTNS[AdARateIndex];
+  For K:=0 To 6 Do If AdABits(1)<>0 Then Inc(Q.GroupLen[Q.Groups-1]) Else
+  Begin
+   Inc(Q.Groups); Q.GroupLen[Q.Groups-1]:=1;
+  End;
+  For K:=0 To 51 Do Q.Off[K]:=AdAShortOffsets[AdARateIndex,K];
+ End Else
+ Begin
+  Q.MaxBand:=AdABits(6); Q.AdAWindows:=1; Q.Bands:=AdALongBands[AdARateIndex];
+  Q.TNSMax:=AdALongTNS[AdARateIndex];
+  For K:=0 To 51 Do Q.Off[K]:=AdALongOffsets[AdARateIndex,K];
+  If AdABits(1)<>0 Then AdABad('Prediction interdite en AAC-LC.');
+ End;
+ If Q.MaxBand>Q.Bands Then AdABad('Nombre de bandes ICS incorrect.');
+End;
+
+Procedure AdADecodeChannel(Index:Integer; Shared:Boolean);
+Var
+ P:AdAPChannel;
+ G,B,At,Stop,CB,L,Part,Esc,GlobalGain,SF,NS,ISF,K,W,Base,StartWin,Size:Integer;
+ N,V,Dim,Radix,D,T,Width,Res,Comp,NF,PulseCount,PulseBand:Integer;
+ Values:Array[0..3] Of Integer;
+ PulsePos,PulseAmp:Array[0..3] Of Integer;
+ FirstNoise:Boolean;
+ Energy,Scale,X:Double;
+Begin
+ P:=AdACh[Index]; GlobalGain:=AdABits(8); If Not Shared Then AdAReadInfo(P^.Info); If AdAErr Then Exit;
+ FillChar(P^.Spec,SizeOf(P^.Spec),0); FillChar(P^.Book,SizeOf(P^.Book),0);
+ FillChar(P^.NFilter,SizeOf(P^.NFilter),0);
+ With P^.Info Do Begin
+  If Seq=2 Then L:=3 Else L:=5; Esc:=(1 Shl L)-1;
+  For G:=0 To Groups-1 Do Begin
+   B:=0;
+   While B<MaxBand Do Begin
+    CB:=AdABits(4); If CB=12 Then AdABad('Livre spectral reserve.'); Stop:=B;
+    Repeat Part:=AdABits(L); Inc(Stop,Part);
+    If Stop>MaxBand Then AdABad('Section spectrale hors limites.'); Until (Part<>Esc) Or AdAErr;
+    If Stop=B Then AdABad('Section spectrale vide.'); If AdAErr Then Exit;
+    While B<Stop Do Begin
+     P^.Book[G*MaxBand+B]:=CB; Inc(B);
+    End;
+   End;
+  End;
+  SF:=GlobalGain; NS:=GlobalGain-90; ISF:=0; FirstNoise:=True;
+  For At:=0 To Groups*MaxBand-1 Do Begin
+   CB:=P^.Book[At]; Scale:=0;
+   Case CB Of
+   0: ;
+   14,15:
+   Begin
+    Inc(ISF,AdAHuff(0)-60); If ISF < -155 Then ISF:=-155; If ISF>100 Then ISF:=100;
+    Scale:=AdAPower2(-ISF/4);
+   End;
+   13:
+   Begin
+    If FirstNoise Then Begin
+     Inc(NS,AdABits(9)-256); FirstNoise:=False;
+    End Else Inc(NS,AdAHuff(0)-60);
+    If NS < -100 Then NS:=-100; If NS>155 Then NS:=155; Scale:=AdAPower2(NS/4);
+   End;
+    Else
+   Begin
+    Inc(SF,AdAHuff(0)-60); If (SF<0) Or (SF>255) Then AdABad(
+     'Facteur echelle hors limites.');
+    Scale:=AdAPower2((SF-100)/4);
+   End;
+  End;
+  P^.Scale[At]:=Scale;
+  If AdAErr Then Exit;
+ End;
+ PulseCount:=0;
+ If AdABits(1)<>0 Then Begin
+  If Seq=2 Then AdABad('Impulsions interdites avec fenetres courtes.'); If AdAErr Then Exit;
+  PulseCount:=AdABits(2)+1; PulseBand:=AdABits(6);
+  If PulseBand>=Bands Then AdABad('Bande impulsion incorrecte.'); If AdAErr Then Exit;
+  K:=Off[PulseBand];
+  For B:=0 To PulseCount-1 Do Begin
+   Inc(K,AdABits(5)); If K>=1024 Then AdABad('Impulsion hors limites.'); If AdAErr Then Exit; PulsePos[B]:=
+    K;
+   PulseAmp[B]:=AdABits(4);
+  End;
+ End;
+ If AdABits(1)<>0 Then
+ For W:=0 To AdAWindows-1 Do Begin
+  If Seq=2 Then NF:=AdABits(1) Else NF:=AdABits(2); P^.NFilter[W]:=NF;
+  If NF>0 Then Begin
+   Res:=AdABits(1)+3;
+   For B:=0 To NF-1 Do With P^.Filters[W,B] Do Begin
+    If Seq=2 Then Begin
+     Len:=AdABits(4); Order:=AdABits(3);
+    End Else
+    Begin
+     Len:=AdABits(6); Order:=AdABits(5);
+    End;
+    If (Order>12) Or ((Seq=2) And (Order>7)) Then AdABad('Ordre TNS incorrect.'); If AdAErr Then Exit;
+    If Order>0 Then Begin
+     Direction:=AdABits(1); Comp:=AdABits(1); Width:=Res-Comp;
+     For K:=0 To Order-1 Do Begin
+      V:=AdABits(Width); If V>=(1 Shl (Width-1)) Then Dec(V,1 Shl Width);
+      If V>=0 Then X:=(1 Shl (Res-1))-0.5 Else X:=(1 Shl (Res-1))+0.5;
+      Coef[K]:=-Sin(V*AdAAPi/(2*X));
+     End;
+    End;
+   End;
+  End;
+ End;
+ If AdABits(1)<>0 Then AdABad('Gain control SSR non pris en charge.'); If AdAErr Then Exit;
+ StartWin:=0;
+ For G:=0 To Groups-1 Do Begin
+  For B:=0 To MaxBand-1 Do Begin
+   At:=G*MaxBand+B; CB:=P^.Book[At]; Scale:=P^.Scale[At]; Size:=Off[B+1]-Off[B];
+   For W:=0 To GroupLen[G]-1 Do Begin
+    Base:=(StartWin+W)*128+Off[B];
+    If CB=13 Then Begin
+     Energy:=0;
+     For K:=0 To Size-1 Do Begin
+      X:=AdANoise; P^.Spec[Base+K]:=X; Energy:=Energy+X*X;
+     End;
+     If Energy>0 Then
+     For K:=0 To Size-1 Do P^.Spec[Base+K]:=P^.Spec[Base+K]*Scale/Sqrt(Energy);
+    End Else If (CB>0) And (CB<12) Then Begin
+     If CB<=4 Then Begin
+      Dim:=4; Radix:=3;
+     End Else
+     Begin
+      Dim:=2;
+      If CB<=6 Then Radix:=9 Else If CB<=8 Then Radix:=8 Else If CB<=10 Then
+       Radix:=
+      13 Else Radix:=17;
+     End;
+     If Size Mod Dim<>0 Then AdABad('Largeur bande spectrale incorrecte.'); If AdAErr Then Exit;
+     K:=0;
+     While K<Size Do Begin
+      N:=AdAHuff(CB); If AdAErr Then Exit;
+      For D:=Dim-1 Downto 0 Do Begin
+       Values[D]:=N Mod Radix; N:=N Div Radix;
+      End;
+      If CB<=2 Then
+      For D:=0 To Dim-1 Do Dec(Values[D])
+      Else If CB<=6 Then Begin
+       If CB>=5 Then
+       For D:=0 To Dim-1 Do Dec(Values[D],4)
+        Else
+       For D:=0 To Dim-1 Do If Values[D]<>0 Then If AdABits(1)<>0 Then Values[D]:=-
+        Values[D];
+      End Else
+      For D:=0 To Dim-1 Do If Values[D]<>0 Then If AdABits(1)<>0 Then Values[D]:=-
+       Values[D];
+      If CB=11 Then
+      For D:=0 To Dim-1 Do If Abs(Values[D])=16 Then Begin
+       Width:=4;
+       While AdABits(1)<>0 Do Begin
+        Inc(Width); If Width>12 Then AdABad('Echappement spectral hors limites.');
+       End;
+       V:=(1 Shl Width)+AdABits(Width); If Values[D]<0 Then V:=-V; Values[D]:=V;
+      End;
+      For D:=0 To Dim-1 Do Begin
+       V:=Values[D];
+       For T:=0 To PulseCount-1 Do If Base+K+D=PulsePos[T] Then Begin
+        If V>0 Then Inc(V,PulseAmp[T]) Else Dec(V,PulseAmp[T]);
+       End;
+       P^.Spec[Base+K+D]:=AdADequant(V)*Scale;
+      End;
+      Inc(K,Dim);
+     End;
+    End;
+   End;
+  End;
+  Inc(StartWin,GroupLen[G]);
+ End;
+End;
+End;
+
+Procedure AdAStereo;
+Var
+ G,B,W,K,At,Base,Win:Integer;
+ L,R,Scale:Double;
+Begin
+ Win:=0;
+ With AdACh[1]^.Info Do
+ For G:=0 To Groups-1 Do Begin
+  For B:=0 To MaxBand-1 Do Begin
+   At:=G*MaxBand+B;
+   For W:=0 To GroupLen[G]-1 Do Begin
+    Base:=(Win+W)*128;
+    For K:=Off[B] To Off[B+1]-1 Do Begin
+     L:=AdACh[0]^.Spec[Base+K]; R:=AdACh[1]^.Spec[Base+K];
+     If AdACommon And AdAWork^.MS[At] And (AdACh[0]^.Book[At]<13) And (AdACh[1]^.Book[
+      At]<13)
+     Then Begin
+      AdACh[0]^.Spec[Base+K]:=L+R; AdACh[1]^.Spec[Base+K]:=L-R;
+     End;
+     If AdACh[1]^.Book[At]>=14 Then Begin
+      Scale:=AdACh[1]^.Scale[At]; If AdACh[1]^.Book[At]=14 Then Scale:=-Scale;
+      If (AdAMSPresent<>0) And AdAWork^.MS[At] Then Scale:=-Scale;
+      AdACh[1]^.Spec[Base+K]:=L*Scale;
+     End;
+    End;
+   End;
+  End;
+  Inc(Win,GroupLen[G]);
+ End;
+End;
+
+Procedure AdAApplyTNS(Index:Integer);
+Var
+ P:AdAPChannel;
+ W,F,Top,Bottom,MaxBand,Start,Stop,Step,K,AdAJ,M,N,Order:Integer;
+ LPC,Tmp:Array[0..11] Of Double;
+ X:Double;
+Begin
+ P:=AdACh[Index]; MaxBand:=P^.Info.MaxBand;
+ If MaxBand>P^.Info.TNSMax Then MaxBand:=P^.Info.TNSMax;
+ For W:=0 To P^.Info.AdAWindows-1 Do Begin
+  Bottom:=P^.Info.Bands;
+  For F:=0 To P^.NFilter[W]-1 Do Begin
+   Top:=Bottom; Dec(Bottom,P^.Filters[W,F].Len); If Bottom<0 Then Bottom:=0;
+   Order:=P^.Filters[W,F].Order;
+   If Order>0 Then Begin
+    FillChar(LPC,SizeOf(LPC),0);
+    For M:=0 To Order-1 Do Begin
+     X:=-P^.Filters[W,F].Coef[M];
+     For AdAJ:=0 To M-1 Do Tmp[AdAJ]:=LPC[AdAJ]+X*LPC[M-1-AdAJ];
+     For AdAJ:=0 To M-1 Do LPC[AdAJ]:=Tmp[AdAJ]; LPC[M]:=X;
+    End;
+    K:=Bottom; If K>MaxBand Then K:=MaxBand; Start:=P^.Info.Off[K];
+    K:=Top; If K>MaxBand Then K:=MaxBand; Stop:=P^.Info.Off[K]; N:=Stop-Start;
+     Step:=1;
+    If P^.Filters[W,F].Direction<>0 Then Begin
+     Start:=Stop-1; Step:=-1;
+    End;
+    Inc(Start,W*128);
+    For M:=0 To N-1 Do Begin
+     X:=P^.Spec[Start]; K:=M; If K>Order Then K:=Order;
+     For AdAJ:=1 To K Do X:=X-LPC[AdAJ-1]*P^.Spec[Start-AdAJ*Step];
+     P^.Spec[Start]:=X; Inc(Start,Step);
+    End;
+   End;
+  End;
+ End;
+End;
+
+Function AdABessel(X:Double):Double;
+Var
+ Term,Sum:Double;
+ K:Integer;
+Begin
+ Term:=1; Sum:=1;
+ For K:=1 To 60 Do Begin
+  Term:=Term*X*X/(4.0*K*K); Sum:=Sum+Term; If Term<Sum*1E-16 Then Break;
+ End; AdABessel:=Sum;
+End;
+
+Procedure AdAWindows;
+Var
+ K,N,Which:Integer;
+ Sum,X,Alpha:Double;
+Begin
+ For Which:=0 To 1 Do Begin
+  If Which=0 Then Begin
+   N:=1024; Alpha:=4;
+  End Else
+  Begin
+   N:=128; Alpha:=6;
+  End;
+  Sum:=0;
+  For K:=0 To N Do Begin
+   X:=2.0*K/N-1; AdAWork^.Block[K]:=AdABessel(AdAAPi*Alpha*Sqrt(1-X*X)); Sum:=Sum+
+    AdAWork^.Block[K];
+  End;
+  X:=0;
+  For K:=0 To N-1 Do Begin
+   X:=X+AdAWork^.Block[K];
+   If Which=0 Then Begin
+    AdAWork^.WinLong[0,K]:=Sin(AdAAPi*(K+0.5)/(2*N)); AdAWork^.WinLong[1,K]:=Sqrt(X/Sum);
+   End
+    Else
+   Begin
+    AdAWork^.WinShort[0,K]:=Sin(AdAAPi*(K+0.5)/(2*N)); AdAWork^.WinShort[1,K]:=Sqrt(X/
+     Sum);
+   End;
+  End;
+ End;
+End;
+
+{ IMDCT par DCT-IV via FFT complexe de N/2 points (remplace la version O(N^2)
+  de FFMPEG-0 ; meme resultat : Block[i] = 1/N * sum Spec[k]
+  cos(pi/N (i+1/2+N/2)(k+1/2)), i = 0..2N-1) }
+Type
+ TAdAFft=Record
+  M:Integer;
+  PreRe,PreIm,PostRe,PostIm:Array[0..511] Of Double;
+  TwRe,TwIm:Array[0..255] Of Double;
+  Rev:Array[0..511] Of Integer;
+ End;
+Var
+ AdAFl,AdAFs:TAdAFft;
+
+Procedure AdAFftInit(Var T:TAdAFft; N:Integer);
+Var
+ M,K,Bits,R,J:Integer;
+ A:Double;
+Begin
+ M:=N Div 2; T.M:=M; Bits:=0;
+ While (1 Shl Bits)<M Do Inc(Bits);
+ For K:=0 To M-1 Do Begin
+  A:=-AdAAPi*(4*K+1)/(4.0*N); T.PreRe[K]:=Cos(A); T.PreIm[K]:=Sin(A);
+  A:=-AdAAPi*K/N; T.PostRe[K]:=Cos(A); T.PostIm[K]:=Sin(A);
+  R:=0;
+  For J:=0 To Bits-1 Do If (K And (1 Shl J))<>0 Then R:=R Or (1 Shl (Bits-1-J));
+  T.Rev[K]:=R;
+ End;
+ For K:=0 To (M Div 2)-1 Do Begin
+  A:=-2*AdAAPi*K/M; T.TwRe[K]:=Cos(A); T.TwIm[K]:=Sin(A);
+ End;
+End;
+
+Procedure AdATransform(Index,Base,N:Integer);
+Var
+ T:^TAdAFft;
+ Re,Im:Array[0..511] Of Double;
+ C:Array[0..1023] Of Double;
+ M,I,J,K,Len,Half,Step,P,Q:Integer;
+ A,B,Wr,Wi,Tr,Ti,Sc:Double;
+ Begin
+ If N=1024 Then T:=@AdAFl Else T:=@AdAFs;
+ M:=T^.M;
+ For I:=0 To M-1 Do Begin
+  A:=AdACh[Index]^.Spec[Base+2*I]; B:=AdACh[Index]^.Spec[Base+N-1-2*I]; J:=T^.Rev[I];
+  Re[J]:=A*T^.PreRe[I]-B*T^.PreIm[I]; Im[J]:=A*T^.PreIm[I]+B*T^.PreRe[I];
+ End;
+ Len:=2;
+ While Len<=M Do Begin
+  Half:=Len Shr 1; Step:=M Div Len; I:=0;
+  While I<M Do Begin
+   For J:=0 To Half-1 Do Begin
+    P:=I+J; Q:=P+Half; K:=J*Step; Wr:=T^.TwRe[K]; Wi:=T^.TwIm[K];
+    Tr:=Re[Q]*Wr-Im[Q]*Wi; Ti:=Re[Q]*Wi+Im[Q]*Wr;
+    Re[Q]:=Re[P]-Tr; Im[Q]:=Im[P]-Ti; Re[P]:=Re[P]+Tr; Im[P]:=Im[P]+Ti;
+   End;
+   Inc(I,Len);
+  End;
+  Len:=Len Shl 1;
+ End;
+ For K:=0 To M-1 Do Begin
+  Tr:=Re[K]*T^.PostRe[K]-Im[K]*T^.PostIm[K]; Ti:=Re[K]*T^.PostIm[K]+Im[K]*T^.PostRe[K];
+  C[2*K]:=Tr; C[N-1-2*K]:=-Ti;
+ End;
+ Sc:=1.0/N; Half:=N Shr 1;
+ For I:=0 To Half-1 Do AdAWork^.Block[I]:=C[I+Half]*Sc;
+ For I:=Half To 3*Half-1 Do AdAWork^.Block[I]:=-C[3*Half-1-I]*Sc;
+ For I:=3*Half To 2*N-1 Do AdAWork^.Block[I]:=-C[I-3*Half]*Sc;
+End;
+
+
+Procedure AdASynthesis(Index:Integer);
+Var
+ P:AdAPChannel;
+ AdAI,W,At,Shape,Prev,Seq:Integer;
+ V:LongInt;
+ X,Weight:Double;
+Begin
+ P:=AdACh[Index]; Shape:=P^.Info.Shape; Prev:=P^.PrevShape; Seq:=P^.Info.Seq;
+ FillChar(AdAWork^.Time,SizeOf(AdAWork^.Time),0);
+ If Seq=2 Then Begin
+  For W:=0 To 7 Do Begin
+   AdATransform(Index,W*128,128); At:=448+W*128;
+   For AdAI:=0 To 127 Do Begin
+    If W=0 Then Weight:=AdAWork^.WinShort[Prev,AdAI] Else Weight:=AdAWork^.WinShort[
+     Shape,AdAI];
+    AdAWork^.Time[At+AdAI]:=AdAWork^.Time[At+AdAI]+AdAWork^.Block[AdAI]*Weight;
+    AdAWork^.Time[At+128+AdAI]:=AdAWork^.Time[At+128+AdAI]+AdAWork^.Block[128+AdAI]*
+     AdAWork^.WinShort[Shape,
+    127-AdAI];
+   End;
+  End;
+ End Else
+ Begin
+  AdATransform(Index,0,1024);
+  For AdAI:=0 To 1023 Do Begin
+   If Seq=3 Then Begin
+    If AdAI<448 Then Weight:=0 Else If AdAI<576 Then Weight:=AdAWork^.WinShort[Prev,AdAI-
+    448] Else Weight:=1;
+   End
+   Else Weight:=AdAWork^.WinLong[Prev,AdAI];
+   AdAWork^.Time[AdAI]:=AdAWork^.Block[AdAI]*Weight;
+   If Seq=1 Then Begin
+    If AdAI<448 Then Weight:=1 Else If AdAI<576 Then Weight:=AdAWork^.WinShort[Shape,575-
+    AdAI] Else Weight:=0;
+   End
+   Else Weight:=AdAWork^.WinLong[Shape,1023-AdAI];
+   AdAWork^.Time[AdAI+1024]:=AdAWork^.Block[AdAI+1024]*Weight;
+  End;
+ End;
+ For AdAI:=0 To 1023 Do Begin
+  X:=AdAWork^.Time[AdAI]+P^.Overlap[AdAI]; P^.Overlap[AdAI]:=AdAWork^.Time[AdAI+1024];
+  If X>32767 Then V:=32767 Else If X < -32768 Then V:=-32768 Else V:=Round(X);
+  If V<0 Then Inc(V,65536); At:=(AdAI*AdAChannels+Index)*2; AdAWork^.PCM[At]:=V And 255;
+  AdAWork^.PCM[At+1]:=V Shr 8;
+ End;
+ P^.PrevShape:=Shape;
+End;
+
+
+
+{ ---- AAC-LC : initialisation et decodage d'un raw_data_block ---- }
+Var AdAReady: Boolean;
+
+Procedure AdAStop;
+Var K: Integer;
+Begin
+ If AdAReady Then Begin
+  For K:=0 To 1 Do If AdACh[K]<>Nil Then Begin Dispose(AdACh[K]); AdACh[K]:=Nil; End;
+  If AdAWork<>Nil Then Begin Dispose(AdAWork); AdAWork:=Nil; End;
+ End;
+ AdAReady:=False;
+End;
+
+Function AdAStart(RateIdx, Chans: Integer): Boolean;
+Var K: Integer;
+Begin
+ AdAStart:=False;
+ If (RateIdx<0) Or (RateIdx>12) Or (Chans<1) Or (Chans>2) Then Exit;
+ AdAStop;
+ AdARateIndex:=RateIdx; AdARate:=AdARates[RateIdx]; AdAChannels:=Chans;
+ New(AdAWork); FillChar(AdAWork^,SizeOf(AdAWork^),0);
+ For K:=0 To 1 Do Begin New(AdACh[K]); FillChar(AdACh[K]^,SizeOf(AdATChannel),0); End;
+ AdANoiseLo:=$3D4C; AdANoiseHi:=$1F2E; AdAWindows;
+ AdAFftInit(AdAFl,1024); AdAFftInit(AdAFs,128);
+ AdAReady:=True; AdAErr:=False;
+ AdAStart:=True;
+End;
+
+{ decode un raw_data_block de Len octets lus a Off ; True => 1024 images dans
+  AdAWork^.PCM (entrelacees, 16 bits LE) }
+Function AdADecode(Off, Len: LongInt): Boolean;
+Var K, Ii, Jj, Cc: Integer;
+Begin
+ AdADecode:=False;
+ If Not AdAReady Then Exit;
+ If (Len<1) Or (Len>8190) Then Exit;
+ If AdZRead(Off,AdAWork^.Data,Len)<>Len Then Exit;
+ AdABitPos:=0; AdABitLimit:=Len*8; AdAErr:=False;
+ AdAGotAudio:=False; AdACommon:=False; AdAMSPresent:=0;
+ FillChar(AdAWork^.MS,SizeOf(AdAWork^.MS),0);
+ Repeat
+  AdAKind:=AdABits(3);
+  If AdAErr Then Break;
+  Case AdAKind Of
+   0,1: Begin
+    If AdAGotAudio Then AdABad('plusieurs elements');
+    Ii:=AdABits(4);
+    If ((AdAKind=0) And (AdAChannels<>1)) Or ((AdAKind=1) And (AdAChannels<>2)) Then AdABad('canaux');
+    If AdAErr Then Break;
+    If AdAKind=1 Then Begin
+     AdACommon:=AdABits(1)<>0;
+     If AdACommon Then Begin
+      AdAReadInfo(AdACh[0]^.Info); AdACh[1]^.Info:=AdACh[0]^.Info; AdAMSPresent:=AdABits(2);
+      If AdAMSPresent=3 Then AdABad('ms');
+      If AdAErr Then Break;
+      For Ii:=0 To AdACh[0]^.Info.Groups*AdACh[0]^.Info.MaxBand-1 Do Begin
+       If AdAMSPresent=1 Then AdAWork^.MS[Ii]:=AdABits(1)<>0 Else AdAWork^.MS[Ii]:=AdAMSPresent=2;
+      End;
+     End;
+    End;
+    For Cc:=0 To AdAChannels-1 Do Begin
+     If Not AdAErr Then AdADecodeChannel(Cc,AdACommon);
+    End;
+    If AdAErr Then Break;
+    If AdAChannels=2 Then AdAStereo;
+    AdAGotAudio:=True;
+   End;
+   4: Begin
+    Ii:=AdABits(4); Jj:=AdABits(1); AdACount:=AdABits(8); If AdACount=255 Then Inc(AdACount,AdABits(8));
+    If Jj<>0 Then AdABitPos:=((AdABitPos+7) Div 8)*8;
+    For Ii:=1 To AdACount Do Jj:=AdABits(8);
+   End;
+   6: Begin
+    AdACount:=AdABits(4); If AdACount=15 Then AdACount:=14+AdABits(8);
+    If AdACount>0 Then Begin
+     Ii:=AdABits(4);
+     If (Ii=13) Or (Ii=14) Then AdABad('SBR');
+     If (Ii<>0) And (Ii<>1) Then AdABad('ext');
+     Jj:=AdABits(4);
+     For Ii:=2 To AdACount Do Jj:=AdABits(8);
+    End;
+   End;
+   7: ;
+   Else AdABad('element');
+  End;
+ Until (AdAKind=7) Or AdAErr;
+ If AdAErr Or Not AdAGotAudio Then Exit;
+ For Cc:=0 To AdAChannels-1 Do Begin
+  AdAApplyTNS(Cc); AdASynthesis(Cc);
+ End;
+ AdADecode:=True;
+End;
+
+Procedure AdAEmit;
+Var I, At, V, W: LongInt;
+Begin
+ For I:=0 To 1023 Do Begin
+  At:=I*AdAChannels*2;
+  V:=AdAWork^.PCM[At]+AdAWork^.PCM[At+1]*256; If V>=32768 Then Dec(V,65536);
+  W:=V;
+  If (AdAChannels=2) And (AdZCh=2) Then Begin
+   W:=AdAWork^.PCM[At+2]+AdAWork^.PCM[At+3]*256; If W>=32768 Then Dec(W,65536);
+  End;
+  AdZPut(V,W);
+  If AdZStop Then Break;
+ End;
+End;
+
+{ decode un paquet ; en cas d'erreur emet 1024 images de silence }
+Procedure AdAPacket(Off, Len: LongInt);
+Var I: LongInt;
+Begin
+ If AdADecode(Off,Len) Then AdAEmit
+ Else For I:=1 To 1024 Do Begin AdZPut(0,0); If AdZStop Then Break; End;
+End;
+
+{ ASC : renvoie True si decodable (AAC Main/LC, 1024 echantillons/trame, 1 ou 2 canaux) }
+Function AdAParseASC(Off, Len: LongInt; Var RateIdx, Chans: Integer): Boolean;
+Var B: Array[0..7] Of Byte; Pos, Aot, Sri, Cfg, FL: LongInt;
+ Function Bt(N: Integer): LongInt;
+ Var V: LongInt; K: Integer;
+ Begin
+  V:=0;
+  For K:=1 To N Do Begin
+   If (Pos Shr 3)>7 Then V:=V*2 Else V:=V*2+((B[Pos Shr 3] Shr (7-(Pos And 7))) And 1);
+   Inc(Pos);
+  End;
+  Bt:=V;
+ End;
+Begin
+ AdAParseASC:=False;
+ If Len<2 Then Exit;
+ FillChar(B,SizeOf(B),0); If Len>8 Then Len:=8;
+ If AdZRead(Off,B,Len)<2 Then Exit;
+ Pos:=0; Aot:=Bt(5); If Aot=31 Then Aot:=32+Bt(6);
+ Sri:=Bt(4);
+ If Sri=15 Then Begin Bt(24); Exit; End;
+ Cfg:=Bt(4);
+ If (Aot<>1) And (Aot<>2) Then Exit;
+ If Sri>12 Then Exit;
+ If (Cfg<1) Or (Cfg>2) Then Exit;
+ FL:=Bt(1);
+ If FL<>0 Then Exit;
+ RateIdx:=Sri; Chans:=Cfg;
+ AdAParseASC:=True;
+End;
+
+
+{ ======== paquet courant, PCM, G.711, ADPCM ======== }
+Var
+ AdZPk: PAdZBuf;
+ AdZPkCap: LongInt;
+ { description de la piste retenue }
+ AdZPcmFmt: Integer;      { voir AdZPcmVal }
+ AdZBlkAlign: LongInt;    { taille de bloc ADPCM (0 = paquet entier) }
+ AdZG711A, AdZG711U: Array[0..255] Of SmallInt;
+ AdZG711Ok: Boolean;
+ AdZImaPred, AdZImaIdx: Array[0..1] Of LongInt;
+ AdZMsCo1, AdZMsCo2, AdZMsDelta, AdZMsS1, AdZMsS2: Array[0..1] Of LongInt;
+Const
+ AdZPkMax = 16777216;
+ AdZPcmBps: Array[1..14] Of Byte = (1,1,2,2,3,3,4,4,4,4,8,8,1,1);
+ AdZStep: Array[0..88] Of Integer = (
+  7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,
+  50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,
+  337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,
+  2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,
+  15289,16818,18500,20350,22385,24623,27086,29794,32767);
+ AdZIdxTab: Array[0..15] Of ShortInt = (-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8);
+ AdZMsAdapt: Array[0..15] Of Integer = (230,230,230,230,307,409,512,614,768,614,512,409,307,230,230,230);
+ AdZMsC1: Array[0..6] Of Integer = (64,128,0,48,60,115,98);
+ AdZMsC2: Array[0..6] Of Integer = (0,-64,0,16,0,-52,-58);
+ AdZSwf2: Array[0..1] Of ShortInt = (-1,2);
+ AdZSwf3: Array[0..3] Of ShortInt = (-1,-1,2,4);
+ AdZSwf4: Array[0..7] Of ShortInt = (-1,-1,-1,-1,2,4,6,8);
+ AdZSwf5: Array[0..15] Of ShortInt = (-1,-1,-1,-1,-1,-1,-1,-1,1,2,4,6,8,10,13,16);
+
+{ charge le paquet (Off, Len) dans AdZPk ; False si trop gros ou illisible }
+Function AdZPkLoad(Off, Len: LongInt): Boolean;
+Var Need: LongInt;
+Begin
+ AdZPkLoad:=False;
+ If (Len<=0) Or (Len>AdZPkMax) Then Exit;
+ Need:=Len+128;
+ If (AdZPk=Nil) Or (AdZPkCap<Need) Then Begin
+  If AdZPk<>Nil Then FreeMem(AdZPk,AdZPkCap);
+  AdZPkCap:=Need+(Need Shr 2)+4096; AdZPk:=Nil;
+  GetMem(AdZPk,AdZPkCap);
+ End;
+ If AdZRead(Off,AdZPk^,Len)<>Len Then Exit;
+ FillChar(AdZPk^[Len],64,0);
+ AdZPkLoad:=True;
+End;
+
+Procedure AdZPkFree;
+Begin
+ If AdZPk<>Nil Then Begin FreeMem(AdZPk,AdZPkCap); AdZPk:=Nil; AdZPkCap:=0; End;
+End;
+
+Procedure AdZG711Init;
+Var I, A, T, Seg, U: LongInt;
+Begin
+ If AdZG711Ok Then Exit;
+ AdZG711Ok:=True;
+ For I:=0 To 255 Do Begin
+  A:=I Xor $55; T:=A And $7F;
+  If T<16 Then T:=(T Shl 4)+8
+  Else Begin Seg:=(T Shr 4) And 7; T:=((T And $F) Shl 4)+$108; T:=T Shl (Seg-1); End;
+  If (A And $80)<>0 Then AdZG711A[I]:=T Else AdZG711A[I]:=-T;
+  U:=(Not I) And $FF;
+  T:=((U And $F) Shl 3)+$84; T:=T Shl ((U And $70) Shr 4);
+  If (U And $80)<>0 Then AdZG711U[I]:=$84-T Else AdZG711U[I]:=T-$84;
+ End;
+End;
+
+{ 1 u8, 2 s8, 3 s16le, 4 s16be, 5 s24le, 6 s24be, 7 s32le, 8 s32be, 9 f32le,
+  10 f32be, 11 f64le, 12 f64be, 13 A-law, 14 mu-law ; resultat : echelle 16 bits }
+Function AdZPcmVal(Fmt: Integer; P: PAdZBuf; At: LongInt): LongInt;
+Var V: Int64; S: Single; D: Double; B: Array[0..7] Of Byte; I: Integer;
+Begin
+ Case Fmt Of
+  1: AdZPcmVal:=(LongInt(P^[At])-128) Shl 8;
+  2: Begin V:=P^[At]; If V>=128 Then Dec(V,256); AdZPcmVal:=V Shl 8; End;
+  3: Begin V:=P^[At]+P^[At+1]*256; If V>=32768 Then Dec(V,65536); AdZPcmVal:=V; End;
+  4: Begin V:=P^[At]*256+P^[At+1]; If V>=32768 Then Dec(V,65536); AdZPcmVal:=V; End;
+  5: Begin V:=P^[At]+P^[At+1]*256+Int64(P^[At+2])*65536; If V>=8388608 Then Dec(V,16777216); AdZPcmVal:=V Div 256 - Ord((V Mod 256)<0); End;
+  6: Begin V:=P^[At+2]+P^[At+1]*256+Int64(P^[At])*65536; If V>=8388608 Then Dec(V,16777216); AdZPcmVal:=V Div 256 - Ord((V Mod 256)<0); End;
+  7: Begin
+   V:=P^[At]+P^[At+1]*256+Int64(P^[At+2])*65536+Int64(P^[At+3])*16777216; If V>=2147483648 Then Dec(V,4294967296);
+   AdZPcmVal:=V Div 65536 - Ord((V Mod 65536)<0); End;
+  8: Begin
+   V:=P^[At+3]+P^[At+2]*256+Int64(P^[At+1])*65536+Int64(P^[At])*16777216; If V>=2147483648 Then Dec(V,4294967296);
+   AdZPcmVal:=V Div 65536 - Ord((V Mod 65536)<0); End;
+  9,10: Begin
+   If Fmt=9 Then Move(P^[At],S,4)
+   Else Begin For I:=0 To 3 Do B[I]:=P^[At+3-I]; Move(B,S,4); End;
+   D:=S; AdZPcmVal:=AdZRnd(D*32768.0);
+  End;
+  11,12: Begin
+   If Fmt=11 Then Move(P^[At],D,8)
+   Else Begin For I:=0 To 7 Do B[I]:=P^[At+7-I]; Move(B,D,8); End;
+   AdZPcmVal:=AdZRnd(D*32768.0);
+  End;
+  13: AdZPcmVal:=AdZG711A[P^[At]];
+  14: AdZPcmVal:=AdZG711U[P^[At]];
+  Else AdZPcmVal:=0;
+ End;
+End;
+
+{ PCM brut : paquet (Off, Len), par tranches ; Ch = canaux de la piste }
+Procedure AdZPcmPacket(Off, Len, Ch: LongInt);
+Var Bps, FB, SliceF, N, I, C, At: LongInt; V: TAdZD8;
+Begin
+ If (AdZPcmFmt<1) Or (AdZPcmFmt>14) Or (Ch<1) Or (Ch>8) Then Exit;
+ Bps:=AdZPcmBps[AdZPcmFmt]; FB:=Bps*Ch;
+ SliceF:=32768 Div FB; If SliceF<1 Then SliceF:=1;
+ While (Len>=FB) And Not AdZStop Do Begin
+  N:=Len Div FB; If N>SliceF Then N:=SliceF;
+  If Not AdZPkLoad(Off,N*FB) Then Exit;
+  At:=0;
+  If Ch<=2 Then Begin
+   For I:=1 To N Do Begin
+    If Ch=2 Then AdZPut(AdZPcmVal(AdZPcmFmt,AdZPk,At),AdZPcmVal(AdZPcmFmt,AdZPk,At+Bps))
+    Else AdZPut(AdZPcmVal(AdZPcmFmt,AdZPk,At),0);
+    Inc(At,FB);
+    If AdZStop Then Break;
+   End;
+  End Else Begin
+   For I:=1 To N Do Begin
+    For C:=0 To Ch-1 Do V[C]:=AdZPcmVal(AdZPcmFmt,AdZPk,At+C*Bps);
+    AdZPutN(Ch,V); Inc(At,FB);
+    If AdZStop Then Break;
+   End;
+  End;
+  Inc(Off,N*FB); Dec(Len,N*FB);
+ End;
+End;
+
+{ ---- IMA ADPCM (variante QuickTime/WAV 4 bits) ---- }
+Function AdZImaExp(C: Integer; Nibble: Integer): LongInt;
+Var Step, Diff, NewIndex, P: LongInt;
+Begin
+ Step:=AdZStep[AdZImaIdx[C]];
+ NewIndex:=AdZImaIdx[C]+AdZIdxTab[Nibble];
+ If NewIndex<0 Then NewIndex:=0;
+ If NewIndex>88 Then NewIndex:=88;
+ Diff:=Step Shr 3;
+ If (Nibble And 4)<>0 Then Inc(Diff,Step);
+ If (Nibble And 2)<>0 Then Inc(Diff,Step Shr 1);
+ If (Nibble And 1)<>0 Then Inc(Diff,Step Shr 2);
+ If (Nibble And 8)<>0 Then P:=AdZImaPred[C]-Diff Else P:=AdZImaPred[C]+Diff;
+ If P>32767 Then P:=32767 Else If P<-32768 Then P:=-32768;
+ AdZImaPred[C]:=P; AdZImaIdx[C]:=NewIndex; AdZImaExp:=P;
+End;
+
+{ IMA standard (ima_wav 4 bits) : diff = ((2*delta+1)*step) >> 3 }
+Function AdZImaExpW(C: Integer; Nibble: Integer): LongInt;
+Var Diff, NewIndex, P: LongInt;
+Begin
+ Diff:=((2*LongInt(Nibble And 7)+1)*AdZStep[AdZImaIdx[C]]) Shr 3;
+ NewIndex:=AdZImaIdx[C]+AdZIdxTab[Nibble];
+ If NewIndex<0 Then NewIndex:=0;
+ If NewIndex>88 Then NewIndex:=88;
+ If (Nibble And 8)<>0 Then P:=AdZImaPred[C]-Diff Else P:=AdZImaPred[C]+Diff;
+ If P>32767 Then P:=32767 Else If P<-32768 Then P:=-32768;
+ AdZImaPred[C]:=P; AdZImaIdx[C]:=NewIndex; AdZImaExpW:=P;
+End;
+
+Function AdZLE16S(P: PAdZBuf; At: LongInt): LongInt;
+Var V: LongInt;
+Begin
+ V:=P^[At]+P^[At+1]*256; If V>=32768 Then Dec(V,65536); AdZLE16S:=V;
+End;
+
+Function AdZBE16S(P: PAdZBuf; At: LongInt): LongInt;
+Var V: LongInt;
+Begin
+ V:=P^[At]*256+P^[At+1]; If V>=32768 Then Dec(V,65536); AdZBE16S:=V;
+End;
+
+{ un bloc IMA WAV de Size octets a P^[Base..] }
+Procedure AdZImaWavBlock(Base, Size, Ch: LongInt);
+Var C, N, M, I, Nblk: LongInt; V: LongInt; S: Array[0..1,0..7] Of LongInt;
+Begin
+ If (Size<4*Ch) Or (Ch<1) Or (Ch>2) Then Exit;
+ For C:=0 To Ch-1 Do Begin
+  AdZImaPred[C]:=AdZLE16S(AdZPk,Base+4*C); AdZImaIdx[C]:=AdZPk^[Base+4*C+2];
+  If AdZImaIdx[C]>88 Then Exit;
+ End;
+ If Ch=2 Then AdZPut(AdZImaPred[0],AdZImaPred[1]) Else AdZPut(AdZImaPred[0],0);
+ Nblk:=(Size-4*Ch) Div (4*Ch);
+ For N:=0 To Nblk-1 Do Begin
+  For C:=0 To Ch-1 Do
+   For M:=0 To 3 Do Begin
+    V:=AdZPk^[Base+4*Ch+(N*Ch+C)*4+M];
+    S[C,2*M]:=AdZImaExpW(C,V And 15); S[C,2*M+1]:=AdZImaExpW(C,V Shr 4);
+   End;
+  For I:=0 To 7 Do Begin
+   If Ch=2 Then AdZPut(S[0,I],S[1,I]) Else AdZPut(S[0,I],0);
+   If AdZStop Then Exit;
+  End;
+ End;
+End;
+
+{ un bloc IMA QuickTime (34 octets/canal -> 64 images) }
+Procedure AdZImaQtBlock(Base, Ch: LongInt);
+Var C, M, I: LongInt; V, Idx, Pred, B: LongInt; Keep: Boolean; S: Array[0..1,0..63] Of LongInt;
+Begin
+ For C:=0 To Ch-1 Do Begin
+  V:=AdZBE16S(AdZPk,Base+C*34)+0; If V<0 Then V:=V+65536;
+  Idx:=V And $7F; Pred:=V And (Not LongInt($7F)); If Pred>=32768 Then Dec(Pred,65536);
+  Keep:=False;
+  If AdZImaIdx[C]=Idx Then If Abs(Pred-AdZImaPred[C])<=$7F Then Keep:=True;
+  If Not Keep Then Begin AdZImaIdx[C]:=Idx; AdZImaPred[C]:=Pred; End;
+  If AdZImaIdx[C]>88 Then Exit;
+  For M:=0 To 31 Do Begin
+   B:=AdZPk^[Base+C*34+2+M];
+   S[C,2*M]:=AdZImaExp(C,B And 15); S[C,2*M+1]:=AdZImaExp(C,B Shr 4);
+  End;
+ End;
+ For I:=0 To 63 Do Begin
+  If Ch=2 Then AdZPut(S[0,I],S[1,I]) Else AdZPut(S[0,I],0);
+  If AdZStop Then Exit;
+ End;
+End;
+
+{ ---- ADPCM Microsoft ---- }
+Function AdZMsExp(C: Integer; Nibble: Integer): LongInt;
+Var P, D: LongInt;
+Begin
+ P:=(AdZMsS1[C]*AdZMsCo1[C]+AdZMsS2[C]*AdZMsCo2[C]) Div 64;
+ If Nibble>=8 Then P:=P+(Nibble-16)*AdZMsDelta[C] Else P:=P+Nibble*AdZMsDelta[C];
+ If P>32767 Then P:=32767 Else If P<-32768 Then P:=-32768;
+ AdZMsS2[C]:=AdZMsS1[C]; AdZMsS1[C]:=P;
+ D:=(AdZMsAdapt[Nibble]*AdZMsDelta[C]) Div 256;
+ If D<16 Then D:=16;
+ If D>2147483647 Div 768 Then D:=2147483647 Div 768;
+ AdZMsDelta[C]:=D;
+ AdZMsExp:=P;
+End;
+
+Procedure AdZMsBlock(Base, Size, Ch: LongInt);
+Var At, N, I, V, B, C: LongInt;
+Begin
+ If (Ch<1) Or (Ch>2) Or (Size<7*Ch) Then Exit;
+ At:=Base;
+ For C:=0 To Ch-1 Do Begin
+  B:=AdZPk^[At]; Inc(At);
+  If B>6 Then Exit;
+  AdZMsCo1[C]:=AdZMsC1[B]; AdZMsCo2[C]:=AdZMsC2[B];
+ End;
+ For C:=0 To Ch-1 Do Begin AdZMsDelta[C]:=AdZLE16S(AdZPk,At); Inc(At,2); End;
+ For C:=0 To Ch-1 Do Begin AdZMsS1[C]:=AdZLE16S(AdZPk,At); Inc(At,2); End;
+ For C:=0 To Ch-1 Do Begin AdZMsS2[C]:=AdZLE16S(AdZPk,At); Inc(At,2); End;
+ If Ch=2 Then Begin AdZPut(AdZMsS2[0],AdZMsS2[1]); AdZPut(AdZMsS1[0],AdZMsS1[1]); End
+ Else Begin AdZPut(AdZMsS2[0],0); AdZPut(AdZMsS1[0],0); End;
+ N:=Size-(At-Base);
+ For I:=1 To N Do Begin
+  V:=AdZPk^[At]; Inc(At);
+  If Ch=2 Then Begin
+   B:=AdZMsExp(0,V Shr 4); AdZPut(B,AdZMsExp(1,V And 15));
+  End Else Begin
+   B:=AdZMsExp(0,V Shr 4); AdZPut(B,0); B:=AdZMsExp(0,V And 15); AdZPut(B,0);
+  End;
+  If AdZStop Then Exit;
+ End;
+End;
+
+{ ---- ADPCM Flash (SWF), FLV audio format 1 ---- }
+Procedure AdZSwfPacket(Size, Ch: LongInt);
+Var Pos, Total, NbBits, K0, SignMask, Count, Delta, Step, Vp, K, C, Ix: LongInt;
+ Pred, Idx: Array[0..1] Of LongInt;
+ Function Bt(N: Integer): LongInt;
+ Var V: LongInt; I: Integer;
+ Begin
+  V:=0;
+  For I:=1 To N Do Begin
+   If (Pos Shr 3)<Size Then V:=V*2+((AdZPk^[Pos Shr 3] Shr (7-(Pos And 7))) And 1) Else V:=V*2;
+   Inc(Pos);
+  End;
+  Bt:=V;
+ End;
+ Function SBt(N: Integer): LongInt;
+ Var V: LongInt;
+ Begin
+  V:=Bt(N); If V>=(LongInt(1) Shl (N-1)) Then Dec(V,LongInt(1) Shl N); SBt:=V;
+ End;
+ Function Tb(D: LongInt): LongInt;
+ Begin
+  Case NbBits Of
+   2: Tb:=AdZSwf2[D And 1]; 3: Tb:=AdZSwf3[D And 3]; 4: Tb:=AdZSwf4[D And 7]; Else Tb:=AdZSwf5[D And 15];
+  End;
+ End;
+Begin
+ If (Size<1) Or (Ch<1) Or (Ch>2) Then Exit;
+ Total:=Size*8; Pos:=0;
+ NbBits:=Bt(2)+2; K0:=LongInt(1) Shl (NbBits-2); SignMask:=LongInt(1) Shl (NbBits-1);
+ While (Pos<=Total-22*Ch) And Not AdZStop Do Begin
+  For C:=0 To Ch-1 Do Begin
+   Pred[C]:=SBt(16); Idx[C]:=Bt(6); If Idx[C]>88 Then Idx[C]:=88;
+  End;
+  If Ch=2 Then AdZPut(Pred[0],Pred[1]) Else AdZPut(Pred[0],0);
+  Count:=0;
+  While (Pos<=Total-NbBits*Ch) And (Count<4095) And Not AdZStop Do Begin
+   For C:=0 To Ch-1 Do Begin
+    Delta:=Bt(NbBits); Step:=AdZStep[Idx[C]]; Vp:=0; K:=K0;
+    Repeat
+     If (Delta And K)<>0 Then Inc(Vp,Step);
+     Step:=Step Shr 1; K:=K Shr 1;
+    Until K=0;
+    Inc(Vp,Step);
+    If (Delta And SignMask)<>0 Then Pred[C]:=Pred[C]-Vp Else Pred[C]:=Pred[C]+Vp;
+    Ix:=Idx[C]+Tb(Delta And (Not SignMask));
+    If Ix<0 Then Ix:=0; If Ix>88 Then Ix:=88;
+    Idx[C]:=Ix;
+    If Pred[C]>32767 Then Pred[C]:=32767 Else If Pred[C]<-32768 Then Pred[C]:=-32768;
+   End;
+   If Ch=2 Then AdZPut(Pred[0],Pred[1]) Else AdZPut(Pred[0],0);
+   Inc(Count);
+  End;
+ End;
+End;
+
+
+{ ---- petits utilitaires pour les decodeurs copies de FFMPEG-0 ---- }
+Var AdZEAPhase, AdZEAV0: LongInt;
+
+Function AdZSar(V: LongInt; N: Integer): LongInt;
+Var D: LongInt;
+Begin
+ If N>30 Then N:=30;
+ D:=LongInt(1) Shl N;
+ If V>=0 Then AdZSar:=V Div D Else AdZSar:=-1-((-1-V) Div D);
+End;
+
+Function AdZSar64(V: Int64; N: Integer): Int64;
+Begin
+ If N>62 Then N:=62;
+ If V>=0 Then AdZSar64:=V Shr N Else AdZSar64:=-1-((-1-V) Shr N);
+End;
+
+Function AdZEAByte(P: PAdZBuf; Size, At: LongInt): LongInt;
+Begin
+ If (At<0) Or (At>=Size) Then AdZEAByte:=0 Else AdZEAByte:=P^[At];
+End;
+
+{ echantillons entrelaces (un par appel) -> images pour le puits }
+Procedure AdZEAPut(S: LongInt);
+Begin
+ If AdZCh=1 Then Begin AdZPut(S,0); Exit; End;
+ If AdZEAPhase=0 Then Begin AdZEAV0:=S; AdZEAPhase:=1; End
+ Else Begin AdZPut(AdZEAV0,S); AdZEAPhase:=0; End;
+End;
+
+Type
+ TAdZALLong=Array[0..268435455] Of LongInt;
+ PAdZALLong=^TAdZALLong;
+
+Var
+ AdZALP: PAdZBuf;
+ AdZALSize,AdZALBit: LongInt;
+ AdZALMax,AdZALSampleSize,AdZALHistMult,AdZALInitHist,AdZALLimit,AdZALChannels,AdZALExtraBits,
+  AdZALCount: LongInt;
+ AdZALErr,AdZALOut,AdZALExtra: Array[0..1] Of PAdZALLong;
+
+Function AdZALWrap32(V: Int64): LongInt;Begin
+ V:=V And $FFFFFFFF; If V>=2147483648 Then V:=V-4294967296; AdZALWrap32:=V;
+End;
+
+Function AdZALSignExt(V: Int64; Bps: Integer): LongInt;
+Var
+ M: Int64;
+Begin
+ If Bps>=32 Then Begin
+  AdZALSignExt:=AdZALWrap32(V); Exit;
+ End;
+ M:=Int64(1) Shl (Bps-1); V:=V And ((Int64(1) Shl Bps)-1);
+ If V>=M Then V:=V-2*M; AdZALSignExt:=V;
+End;
+
+Function AdZALLog2(V: Int64): Integer;
+Var
+ N: Integer;
+Begin
+ N:=0;
+ While V>1 Do Begin
+  V:=V Shr 1; Inc(N);
+ End; AdZALLog2:=N;
+End;
+
+Function AdZALBits(N: Integer): Int64;
+Var
+ V: Int64;
+ I: Integer;
+Begin
+ V:=0;
+ For I:=1 To N Do Begin
+  V:=V*2+((AdZEAByte(AdZALP,AdZALSize,AdZALBit Shr 3) Shr (7-(AdZALBit And 7))) And 1); Inc(
+   AdZALBit);
+ End;
+ AdZALBits:=V;
+End;
+
+Function AdZALPeek(N: Integer): Int64;
+Var
+ Save: LongInt;
+Begin
+ Save:=AdZALBit; AdZALPeek:=AdZALBits(N); AdZALBit:=Save;
+End;
+
+Function AdZALScalar(K,Bps: Integer): Int64;
+Var
+ X,Extra: Int64;
+ I: Integer;
+Begin
+ I:=0;
+ While I<9 Do Begin
+  If AdZALBits(1)=0 Then Break; Inc(I);
+ End;
+ X:=I;
+ If X>8 Then X:=AdZALBits(Bps) Else
+ If K<>1 Then Begin
+  Extra:=AdZALPeek(K); X:=(X Shl K)-X;
+  If Extra>1 Then Begin
+   X:=X+Extra-1; Inc(AdZALBit,K);
+  End Else Inc(AdZALBit,K-1);
+ End;
+ AdZALScalar:=X;
+End;
+
+Function AdZALRice(Out: PAdZALLong; Nb,Bps,Mult: LongInt): Boolean;
+Var
+ I,K,BlockSize: LongInt;
+ X,History: Int64;
+ Sign: Integer;
+Begin
+ AdZALRice:=False; History:=AdZALInitHist; Sign:=0; I:=0;
+ While I<Nb Do Begin
+  If AdZALBit>=AdZALSize*8 Then Exit;
+  K:=AdZALLog2((History Shr 9)+3); If K>AdZALLimit Then K:=AdZALLimit;
+  X:=AdZALScalar(K,Bps)+Sign; Sign:=0;
+  If Odd(X) Then Out^[I]:=AdZALWrap32(-(X Shr 1)-1) Else Out^[I]:=AdZALWrap32(X Shr
+   1);
+  If X>$FFFF Then History:=$FFFF
+             Else History:=(History+X*Mult-((History*Mult) Shr 9)) And
+              $FFFFFFFF;
+  If (History<128) And (I+1<Nb) Then Begin
+   K:=7-AdZALLog2(History)+((History+16) Shr 6); If K>AdZALLimit Then K:=AdZALLimit;
+   BlockSize:=AdZALScalar(K,16);
+   If BlockSize>0 Then Begin
+    If BlockSize>=Nb-I Then BlockSize:=Nb-I-1;
+    FillChar(Out^[I+1],BlockSize*4,0); Inc(I,BlockSize);
+   End;
+   If BlockSize<=$FFFF Then Sign:=1;
+   History:=0;
+  End;
+  Inc(I);
+ End;
+ AdZALRice:=True;
+End;
+
+Function AdZALSignOf(V: LongInt): Integer;Begin
+ If V>0 Then AdZALSignOf:=1 Else If V<0 Then AdZALSignOf:=-1 Else AdZALSignOf:=0;
+End;
+
+Procedure AdZALLPC(Err,Out: PAdZALLong; Nb,Bps: LongInt; Var Coef: Array Of LongInt;
+                Order,Quant: LongInt);
+Var
+ I,J,D,B: LongInt;
+ Val: Int64;
+ ErrVal,V,Sg,ES: LongInt;
+Begin
+ Out^[0]:=Err^[0];
+ If Nb<=1 Then Exit;
+ If Order=0 Then Begin
+  For I:=1 To Nb-1 Do Out^[I]:=Err^[I]; Exit;
+ End;
+ If Order=31 Then Begin
+  For I:=1 To Nb-1 Do Out^[I]:=AdZALSignExt(Int64(Out^[I-1])+Err^[I],Bps);
+  Exit;
+ End;
+ I:=1;
+ While (I<=Order) And (I<Nb) Do Begin
+  Out^[I]:=AdZALSignExt(Int64(Out^[I-1])+Err^[I],Bps); Inc(I);
+ End;
+ While I<Nb Do Begin
+  B:=I-Order-1; D:=Out^[B]; ErrVal:=Err^[I]; Val:=0;
+  For J:=0 To Order-1 Do Val:=Val+Int64(Out^[B+1+J]-D)*Coef[J];
+  Val:=AdZALWrap32(Val);
+  Val:=Val+(Int64(1) Shl (Quant-1));
+  If Val<0 Then Val:=-1-((-1-Val) Shr Quant) Else Val:=Val Shr Quant;
+  Val:=AdZALWrap32(Val+D+ErrVal);
+  Out^[I]:=AdZALSignExt(Val,Bps);
+  ES:=AdZALSignOf(ErrVal);
+  If ES<>0 Then Begin
+   J:=0;
+   While (J<Order) And (AdZALWrap32(Int64(ErrVal)*ES)>0) Do Begin
+    V:=AdZALWrap32(Int64(D)-Out^[B+1+J]);
+    Sg:=AdZALSignOf(V)*ES; Coef[J]:=Coef[J]-Sg;
+    V:=AdZALWrap32(Int64(V)*Sg);
+    ErrVal:=AdZALWrap32(Int64(ErrVal)-Int64(AdZSar(V,Quant))*(J+1));
+    Inc(J);
+   End;
+  End;
+  Inc(I);
+ End;
+End;
+{ Un element (SCE: 1 canal, CPE: 2 canaux). Retourne False si invalide. }
+
+Function AdZALElement(Ch: Integer; Var NbOut: LongInt): Boolean;
+Var
+ HasSize,Compressed: Boolean;
+ Bps,DecShift,DecWeight,C,I,J,Nb: LongInt;
+ PType,Quant,Mult,Order: Array[0..1] Of LongInt;
+ Coef: Array[0..1,0..31] Of LongInt;
+ A,B: Int64;
+Begin
+ AdZALElement:=False;
+ AdZALBits(4); AdZALBits(12);
+ HasSize:=AdZALBits(1)=1; AdZALExtraBits:=AdZALBits(2)*8;
+ Bps:=AdZALSampleSize-AdZALExtraBits+Ch-1;
+ If (Bps>32) Or (Bps<1) Then Exit;
+ Compressed:=AdZALBits(1)=0;
+ If HasSize Then Nb:=AdZALBits(32) Else Nb:=AdZALMax;
+ If (Nb<=0) Or (Nb>AdZALMax) Then Exit;
+ If (AdZALCount<>0) And (Nb<>AdZALCount) Then Exit;
+ AdZALCount:=Nb; NbOut:=Nb;
+ If Compressed Then Begin
+  If AdZALLimit=0 Then Exit;
+  DecShift:=AdZALBits(8); DecWeight:=AdZALBits(8);
+  If (Ch=2) And (DecWeight<>0) And (DecShift>31) Then Exit;
+  For C:=0 To Ch-1 Do Begin
+   PType[C]:=AdZALBits(4); Quant[C]:=AdZALBits(4); Mult[C]:=AdZALBits(3); Order[C]:=
+    AdZALBits(5);
+   If (Order[C]>=AdZALMax) Or (Quant[C]=0) Then Exit;
+   For I:=Order[C]-1 Downto 0 Do Coef[C,I]:=AdZALSignExt(AdZALBits(16),16);
+  End;
+  If AdZALExtraBits<>0 Then Begin
+   If AdZALSize*8-AdZALBit<Int64(Nb)*Ch*AdZALExtraBits Then Exit;
+   For I:=0 To Nb-1 Do
+   For C:=0 To Ch-1 Do AdZALExtra[C]^[I]:=AdZALBits(AdZALExtraBits);
+  End;
+  For C:=0 To Ch-1 Do Begin
+   If Not AdZALRice(AdZALErr[C],Nb,Bps,Mult[C]*AdZALHistMult Div 4) Then Exit;
+   If PType[C]=15 Then AdZALLPC(AdZALErr[C],AdZALErr[C],Nb,Bps,Coef[C],31,0);
+   AdZALLPC(AdZALErr[C],AdZALOut[C],Nb,Bps,Coef[C],Order[C],Quant[C]);
+  End;
+ End Else
+ Begin
+  If AdZALSize*8-AdZALBit<Int64(Nb)*Ch*AdZALSampleSize Then Exit;
+  For I:=0 To Nb-1 Do
+  For C:=0 To Ch-1 Do AdZALOut[C]^[I]:=AdZALSignExt(AdZALBits(AdZALSampleSize),
+   AdZALSampleSize);
+  AdZALExtraBits:=0; DecShift:=0; DecWeight:=0;
+ End;
+ If Ch=2 Then Begin
+  If DecWeight<>0 Then
+  For I:=0 To Nb-1 Do Begin
+   A:=AdZALOut[0]^[I]; B:=AdZALOut[1]^[I];
+   A:=AdZALWrap32(A-AdZSar(AdZALWrap32(B*DecWeight),DecShift));
+   B:=AdZALWrap32(B+A);
+   AdZALOut[0]^[I]:=B; AdZALOut[1]^[I]:=A;
+  End;
+  If AdZALExtraBits<>0 Then
+  For C:=0 To 1 Do
+  For I:=0 To Nb-1 Do    AdZALOut[C]^[I]:=AdZALWrap32((Int64(AdZALOut[C]^[I]) Shl
+   AdZALExtraBits)
+  Or AdZALExtra[C]^[I]);
+ End Else If AdZALExtraBits<>0 Then
+ For I:=0 To Nb-1 Do AdZALOut[0]^[I]:=AdZALWrap32((Int64(AdZALOut[0]^[I]) Shl
+  AdZALExtraBits)
+ Or AdZALExtra[0]^[I]);
+ AdZALElement:=True;
+End;
+
+Function AdZALToPCM16(V: LongInt): LongInt;
+Var
+ X: Int64;
+Begin
+ Case AdZALSampleSize Of
+ 16: X:=AdZALSignExt(V,16);
+ 20: X:=(Int64(V)*4096+32768) Div 65536;
+ 24: X:=(Int64(V)*256+32768) Div 65536;
+ Else X:=(Int64(V)+32768) Div 65536;
+End;
+If AdZALSampleSize>16 Then Begin
+ If X>32767 Then X:=32767; If X<-32768 Then X:=-32768;
+End;
+AdZALToPCM16:=X;
+End;
+
+Function AdZALDecodePacket(P: PAdZBuf; Size: LongInt): Boolean;
+Var
+ Element,Ch,Got,Nb,I,C: LongInt;
+ Ok: Boolean;
+Begin
+ AdZALDecodePacket:=False; AdZALP:=P; AdZALSize:=Size; AdZALBit:=0; AdZALCount:=0; Got:=0; Nb:=
+  0;
+ Ok:=False;
+ While Size*8-AdZALBit>=3 Do Begin
+  Element:=AdZALBits(3);
+  If Element=7 Then Begin
+   Ok:=True; Break;
+  End;
+  If (Element>1) Then Exit;
+  If Element=1 Then Ch:=2 Else Ch:=1;
+  If Got+Ch>AdZALChannels Then Exit;
+  If Not AdZALElement(Ch,Nb) Then Exit;
+  Inc(Got,Ch);
+ End;
+ If (Not Ok) Or (Got<>AdZALChannels) Or (AdZALCount=0) Then Exit;
+ For I:=0 To AdZALCount-1 Do
+ For C:=0 To AdZALChannels-1 Do AdZEAPut(AdZALToPCM16(AdZALOut[C]^[I]));
+ AdZALDecodePacket:=True;
+End;
+
+Type TAdZFLChan=Array[0..65535] Of LongInt; PAdZFLChan=^TAdZFLChan;
+Var
+ AdZFLIn: PAdZBuf; AdZFLSize,AdZFLBitPos: LongInt; AdZFLErr: Boolean;
+ AdZFLCh: Array[0..7] Of PAdZFLChan;
+ AdZFLBS,AdZFLChans,AdZFLBps,AdZFLRate,AdZFLAssign,AdZFLStreamRate,AdZFLStreamBps,AdZFLStreamCh,AdZFLMaxBS:
+  LongInt;
+
+Function AdZFLBits(N: LongInt): LongInt;
+Var V: Int64; I,B: LongInt;
+Begin
+ V:=0;
+ For I:=1 To N Do Begin
+  If (AdZFLBitPos Shr 3)>=AdZFLSize Then Begin AdZFLErr:=True; B:=0; End
+  Else B:=(AdZFLIn^[AdZFLBitPos Shr 3] Shr (7-(AdZFLBitPos And 7))) And 1;
+  V:=V*2+B; Inc(AdZFLBitPos);
+ End;
+ AdZFLBits:=LongInt(V And $FFFFFFFF);
+End;
+
+Function AdZFLSBits(N: LongInt): LongInt;
+Var V: Int64;
+Begin
+ If N=0 Then Begin AdZFLSBits:=0; Exit; End;
+ V:=AdZFLBits(N);
+ If V>=(Int64(1) Shl (N-1)) Then V:=V-(Int64(1) Shl N);
+ AdZFLSBits:=LongInt(V);
+End;
+
+Function AdZFLCrc8(P: PAdZBuf; From,Len: LongInt): LongInt;
+Var I,J,C: LongInt;
+Begin
+ C:=0;
+ For I:=From To From+Len-1 Do Begin
+  C:=C Xor P^[I];
+  For J:=1 To 8 Do If (C And $80)<>0 Then C:=((C Shl 1) Xor 7) And 255 Else C:=(
+   C Shl 1) And 255;
+ End;
+ AdZFLCrc8:=C;
+End;
+
+Function AdZFLCrc16(P: PAdZBuf; From,Len: LongInt): LongInt;
+Var I,J,C: LongInt;
+Begin
+ C:=0;
+ For I:=From To From+Len-1 Do Begin
+  C:=C Xor (P^[I] Shl 8);
+  For J:=1 To 8 Do If (C And $8000)<>0 Then C:=((C Shl 1) Xor $8005) And $FFFF
+   Else C:=(C Shl 1) And $FFFF;
+ End;
+ AdZFLCrc16:=C;
+End;
+
+Procedure AdZFLResidual(Ch: PAdZFLChan; Order: LongInt);
+Var Method,PO,NP,PI,Param,PB,Cnt,K,Q,R,I,At,N: LongInt; V: Int64;
+Begin
+ Method:=AdZFLBits(2);
+ If Method>1 Then Begin AdZFLErr:=True; Exit; End;
+ PO:=AdZFLBits(4); NP:=1 Shl PO;
+ If (AdZFLBS Shr PO)<Order Then Begin AdZFLErr:=True; Exit; End;
+ If Method=0 Then PB:=4 Else PB:=5;
+ At:=Order;
+ For PI:=0 To NP-1 Do Begin
+  N:=AdZFLBS Shr PO; If PI=0 Then Dec(N,Order);
+  Param:=AdZFLBits(PB);
+  If AdZFLErr Then Exit;
+  If Param=(1 Shl PB)-1 Then Begin
+   K:=AdZFLBits(5);
+   For I:=1 To N Do Begin Ch^[At]:=AdZFLSBits(K); Inc(At); End;
+  End Else
+   For I:=1 To N Do Begin
+    Q:=0;
+    While AdZFLBits(1)=0 Do Begin Inc(Q); If AdZFLErr Or (Q>(1 Shl 24)) Then Begin
+     AdZFLErr:=True; Exit; End; End;
+    If Param>0 Then R:=AdZFLBits(Param) Else R:=0;
+    V:=(Int64(Q) Shl Param) Or R;
+    If (V And 1)<>0 Then V:=-((V+1) Shr 1) Else V:=V Shr 1;
+    Ch^[At]:=LongInt(V); Inc(At);
+   End;
+  If AdZFLErr Then Exit;
+ End;
+End;
+
+Procedure AdZFLSubframe(C: LongInt);
+Var Typ,Wasted,Bps,I,J,Order,Prec,Shift: LongInt; Coef: Array[0..31] Of LongInt;
+ S: Int64; Ch: PAdZFLChan;
+Begin
+ Ch:=AdZFLCh[C];
+ Bps:=AdZFLBps; If ((AdZFLAssign=8) And (C=1)) Or ((AdZFLAssign=9) And (C=0)) Or ((
+  AdZFLAssign=10) And (C=1)) Then Inc(Bps);
+ If AdZFLBits(1)<>0 Then Begin AdZFLErr:=True; Exit; End;
+ Typ:=AdZFLBits(6);
+ Wasted:=0;
+ If AdZFLBits(1)<>0 Then Begin
+  Wasted:=1; While (AdZFLBits(1)=0) And Not AdZFLErr Do Inc(Wasted);
+  If Wasted>=Bps Then Begin AdZFLErr:=True; Exit; End;
+  Dec(Bps,Wasted);
+ End;
+ If AdZFLErr Then Exit;
+ If Typ=0 Then Begin
+  S:=AdZFLSBits(Bps); For I:=0 To AdZFLBS-1 Do Ch^[I]:=LongInt(S);
+ End Else If Typ=1 Then Begin
+  For I:=0 To AdZFLBS-1 Do Ch^[I]:=AdZFLSBits(Bps);
+ End Else If (Typ>=8) And (Typ<=12) Then Begin
+  Order:=Typ-8;
+  If Order>AdZFLBS Then Begin AdZFLErr:=True; Exit; End;
+  For I:=0 To Order-1 Do Ch^[I]:=AdZFLSBits(Bps);
+  AdZFLResidual(Ch,Order);
+  If AdZFLErr Then Exit;
+  For I:=Order To AdZFLBS-1 Do Begin
+   Case Order Of
+    0: S:=0;
+    1: S:=Ch^[I-1];
+    2: S:=2*Int64(Ch^[I-1])-Ch^[I-2];
+    3: S:=3*Int64(Ch^[I-1])-3*Int64(Ch^[I-2])+Ch^[I-3];
+    Else S:=4*Int64(Ch^[I-1])-6*Int64(Ch^[I-2])+4*Int64(Ch^[I-3])-Ch^[I-4];
+   End;
+   Ch^[I]:=LongInt(Int64(Ch^[I])+S);
+  End;
+ End Else If Typ>=32 Then Begin
+  Order:=Typ-31;
+  If Order>AdZFLBS Then Begin AdZFLErr:=True; Exit; End;
+  For I:=0 To Order-1 Do Ch^[I]:=AdZFLSBits(Bps);
+  Prec:=AdZFLBits(4)+1;
+  If Prec=16 Then Begin AdZFLErr:=True; Exit; End;
+  Shift:=AdZFLSBits(5);
+  If Shift<0 Then Begin AdZFLErr:=True; Exit; End;
+  For I:=0 To Order-1 Do Coef[I]:=AdZFLSBits(Prec);
+  AdZFLResidual(Ch,Order);
+  If AdZFLErr Then Exit;
+  For I:=Order To AdZFLBS-1 Do Begin
+   S:=0;
+   For J:=0 To Order-1 Do S:=S+Int64(Coef[J])*Ch^[I-1-J];
+   S:=AdZSar64(S,Shift);
+   Ch^[I]:=LongInt(Int64(Ch^[I])+S);
+  End;
+ End Else Begin AdZFLErr:=True; Exit; End;
+ If Wasted>0 Then For I:=0 To AdZFLBS-1 Do Ch^[I]:=Ch^[I] Shl Wasted;
+End;
+
+{ Retourne True si une trame valide a ete decodee en P (Len = octets consommes)
+ }
+Function AdZFLFrame(P,Limit: LongInt; Var Len: LongInt): Boolean;
+Var
+ BC,RC,CA,SC,I,J,K,B0,NB,Start,HdrEnd,CrcStored,N,M,Sd,Dd: LongInt; Num: Int64;
+  Sh: LongInt;
+Begin
+ AdZFLFrame:=False; AdZFLErr:=False;
+ AdZFLBitPos:=P*8;
+ If P+6>AdZFLSize Then Exit;
+ If (AdZFLIn^[P]<>$FF) Or ((AdZFLIn^[P+1] And $FE)<>$F8) Then Exit;
+ AdZFLBitPos:=(P+2)*8;
+ BC:=AdZFLBits(4); RC:=AdZFLBits(4); CA:=AdZFLBits(4); SC:=AdZFLBits(3);
+ If AdZFLBits(1)<>0 Then Exit;
+ { numero de trame UTF-8 }
+ B0:=AdZFLBits(8);
+ If B0<$80 Then NB:=0 Else If (B0 And $E0)=$C0 Then NB:=1 Else If (B0 And
+  $F0)=$E0 Then NB:=2 Else If (B0 And $F8)=$F0 Then NB:=3
+ Else If (B0 And $FC)=$F8 Then NB:=4 Else If (B0 And $FE)=$FC Then NB:=5 Else If
+  B0=$FE Then NB:=6 Else Exit;
+ For I:=1 To NB Do If (AdZFLBits(8) And $C0)<>$80 Then Exit;
+ If BC=0 Then Exit;
+ If BC=1 Then AdZFLBS:=192 Else If BC<=5 Then AdZFLBS:=576 Shl (BC-2) Else If BC=6
+  Then AdZFLBS:=AdZFLBits(8)+1
+ Else If BC=7 Then AdZFLBS:=AdZFLBits(16)+1 Else AdZFLBS:=256 Shl (BC-8);
+ Case RC Of
+  0: AdZFLRate:=AdZFLStreamRate;
+  1: AdZFLRate:=88200; 2: AdZFLRate:=176400; 3: AdZFLRate:=192000; 4: AdZFLRate:=8000; 5:
+   AdZFLRate:=16000; 6: AdZFLRate:=22050;
+  7: AdZFLRate:=24000; 8: AdZFLRate:=32000; 9: AdZFLRate:=44100; 10: AdZFLRate:=48000; 11:
+   AdZFLRate:=96000;
+  12: AdZFLRate:=AdZFLBits(8)*1000; 13: AdZFLRate:=AdZFLBits(16); 14: AdZFLRate:=AdZFLBits(16)*10;
+  Else Exit;
+ End;
+ If CA<=7 Then AdZFLChans:=CA+1 Else If CA<=10 Then AdZFLChans:=2 Else Exit;
+ AdZFLAssign:=CA;
+ Case SC Of 0: AdZFLBps:=AdZFLStreamBps; 1: AdZFLBps:=8; 2: AdZFLBps:=12; 4: AdZFLBps:=16; 5:
+  AdZFLBps:=20; 6: AdZFLBps:=24; Else Exit; End;
+ If AdZFLErr Or (AdZFLBS>AdZFLMaxBS) Then Exit;
+ HdrEnd:=AdZFLBitPos Shr 3;
+ If HdrEnd>=AdZFLSize Then Exit;
+ If AdZFLCrc8(AdZFLIn,P,HdrEnd-P)<>AdZFLIn^[HdrEnd] Then Exit;
+ AdZFLBitPos:=(HdrEnd+1)*8;
+ If (AdZFLChans<>AdZFLStreamCh) Or (AdZFLBps<>AdZFLStreamBps) Or (AdZFLRate<>AdZFLStreamRate) Then
+  Exit;
+ For I:=0 To AdZFLChans-1 Do Begin
+  AdZFLSubframe(I);
+  If AdZFLErr Then Exit;
+ End;
+ AdZFLBitPos:=(AdZFLBitPos+7) And Not 7;
+ K:=AdZFLBitPos Shr 3;
+ If K+2>AdZFLSize Then Exit;
+ If AdZFLCrc16(AdZFLIn,P,K-P)<>AdZFLIn^[K]*256+AdZFLIn^[K+1] Then Exit;
+ Len:=K+2-P;
+ Case AdZFLAssign Of
+  8: For I:=0 To AdZFLBS-1 Do AdZFLCh[1]^[I]:=AdZFLCh[0]^[I]-AdZFLCh[1]^[I];
+  9: For I:=0 To AdZFLBS-1 Do AdZFLCh[0]^[I]:=AdZFLCh[0]^[I]+AdZFLCh[1]^[I];
+  10: For I:=0 To AdZFLBS-1 Do Begin
+   M:=AdZFLCh[0]^[I]; Sd:=AdZFLCh[1]^[I];
+   M:=(M Shl 1) Or (Sd And 1);
+   AdZFLCh[0]^[I]:=AdZSar(M+Sd,1); AdZFLCh[1]^[I]:=AdZSar(M-Sd,1);
+  End;
+ End;
+ AdZFLFrame:=True;
+End;
+
+
+{ ======== description de la piste retenue et demultiplexeurs ======== }
+Const
+ AdZkNone = 0; AdZkMp4 = 1; AdZkAvi = 2; AdZkWav = 3; AdZkFlv = 4; AdZkMpa = 5; AdZkAdts = 6; AdZkFlac = 7;
+ AdZcNone = 0; AdZcPcm = 1; AdZcMpa = 2; AdZcAac = 3; AdZcAlac = 4; AdZcFlac = 5; AdZcImaWav = 6;
+ AdZcMs = 7; AdZcImaQt = 8; AdZcSwf = 9;
+ AdZMaxPk = 4000000;
+Var
+ AdZKind, AdZCodec: Integer;
+ AdZName: String[31];
+ AdZTCh, AdZTRate: LongInt;
+ AdZAacRi, AdZAacCh: Integer;
+ AdZCfg: Array[0..63] Of Byte;
+ AdZCfgLen: LongInt;
+ AdZLayer: LongInt;
+ { MP4 }
+ AdZ4Ts, AdZ4MvTs, AdZ4Skip, AdZ4Max: LongInt;
+ AdZ4Stsz, AdZ4StszN, AdZ4StszFix, AdZ4Stsc, AdZ4StscN, AdZ4Stco, AdZ4StcoN: LongInt;
+ AdZ4Co64, AdZ4ChunkMode, AdZ4Units: Boolean;
+ AdZ4Spp: LongInt;
+ AdZ4Chunk, AdZ4Sc, AdZ4In, AdZ4Cur, AdZ4Sample, AdZ4FB: LongInt;
+ { AVI / WAV / FLV }
+ AdZAviStream, AdZAviPos: LongInt;
+ AdZRegPos, AdZRegEnd: LongInt;       { WAV : zone de donnees }
+ AdZFlvPos: LongInt;
+ AdZFlvFmt: Integer;
+
+Procedure AdZTrackClear;
+Begin
+ AdZKind:=AdZkNone; AdZCodec:=AdZcNone; AdZName:=''; AdZTCh:=0; AdZTRate:=0;
+ AdZAacRi:=0; AdZAacCh:=0; AdZCfgLen:=0; AdZPcmFmt:=0; AdZBlkAlign:=0; AdZLayer:=0;
+ AdZ4Skip:=0; AdZ4Max:=-1;
+End;
+
+{ ---- boites ISO / QuickTime ---- }
+Function AdZBoxAt(P, Fin: LongInt; Var Tag: String; Var Sz, HL: LongInt): Boolean;
+Var S: LongInt;
+Begin
+ AdZBoxAt:=False;
+ If (P<0) Or (Fin-P<8) Then Exit;
+ S:=AdZBE32(P); Tag:=AdZTag(P+4); HL:=8;
+ If S=1 Then Begin
+  If Fin-P<16 Then Exit;
+  If AdZBE32(P+8)<>0 Then S:=Fin-P Else S:=AdZBE32(P+12);
+  HL:=16;
+ End Else If S=0 Then S:=Fin-P;
+ If S<HL Then Exit;
+ If S>Fin-P Then S:=Fin-P;
+ Sz:=S; AdZBoxAt:=True;
+End;
+
+Function AdZFind(Start, Fin: LongInt; Const Name: String; Var BP, BS, BH: LongInt): Boolean;
+Var P, Sz, HL, Guard: LongInt; Tag: String;
+Begin
+ AdZFind:=False; P:=Start; Guard:=0;
+ While AdZBoxAt(P,Fin,Tag,Sz,HL) Do Begin
+  If Tag=Name Then Begin BP:=P; BS:=Sz; BH:=HL; AdZFind:=True; Exit; End;
+  Inc(P,Sz); Inc(Guard);
+  If Guard>200000 Then Exit;
+ End;
+End;
+
+Function AdZBeDouble(Pos: LongInt): Double;
+Var B: Array[0..7] Of Byte; T: Array[0..7] Of Byte; I: Integer; D: Double;
+Begin
+ FillChar(B,8,0); AdZRead(Pos,B,8);
+ For I:=0 To 7 Do T[I]:=B[7-I];
+ Move(T,D,8);
+ If (D<>D) Or (D>1.0E9) Or (D<-1.0E9) Then D:=0;
+ AdZBeDouble:=D;
+End;
+
+{ lecture d'un descripteur MPEG-4 (tag, longueur variable) : renvoie la position du contenu }
+Function AdZDescr(At: LongInt; Var Tag, Len: LongInt): LongInt;
+Var N, B: LongInt;
+Begin
+ Tag:=AdZU8(At); Inc(At); Len:=0;
+ For N:=1 To 4 Do Begin
+  B:=AdZU8(At); Inc(At); Len:=(Len Shl 7) Or (B And $7F);
+  If (B And $80)=0 Then Break;
+ End;
+ AdZDescr:=At;
+End;
+
+Procedure AdZSetName(Const S: String);
+Begin
+ If AdZName='' Then AdZName:=Copy(S,1,31);
+End;
+
+{ copie la configuration (extradata) dans AdZCfg }
+Procedure AdZSaveCfg(Off, Len: LongInt);
+Begin
+ If Len>64 Then Len:=64;
+ If Len<0 Then Len:=0;
+ AdZCfgLen:=AdZRead(Off,AdZCfg,Len);
+End;
+
+{ decide le codec d'apres un objectTypeIndication MPEG-4 ; Asc : position/longueur de l'ASC }
+Function AdZOtiCodec(Oti, AscOff, AscLen: LongInt): Boolean;
+Var Ri, Ch: Integer; Aot: LongInt; B: Array[0..1] Of Byte;
+Begin
+ AdZOtiCodec:=False;
+ Case Oti Of
+  $40,$66,$67,$68: Begin
+   AdZSetName('AAC');
+   If AscLen>=2 Then Begin
+    FillChar(B,2,0); AdZRead(AscOff,B,2); Aot:=B[0] Shr 3;
+    If (Aot=5) Or (Aot=29) Then Begin AdZName:='HE-AAC'; Exit; End;
+   End;
+   If AdAParseASC(AscOff,AscLen,Ri,Ch) Then Begin
+    AdZCodec:=AdZcAac; AdZAacRi:=Ri; AdZAacCh:=Ch; AdZTCh:=Ch; AdZTRate:=AdARates[Ri];
+    AdZOtiCodec:=True;
+   End;
+  End;
+  $69,$6B: Begin AdZSetName('MP3'); AdZCodec:=AdZcMpa; AdZOtiCodec:=True; End;
+  $A5: AdZSetName('AC-3');
+  $A6: AdZSetName('E-AC-3');
+  $A9,$AA,$AB,$AC: AdZSetName('DTS');
+  $DD: AdZSetName('Vorbis');
+  $E1: AdZSetName('QCELP');
+  $AD: AdZSetName('Opus');
+  Else AdZSetName('MPEG-4 audio');
+ End;
+End;
+
+{ analyse d'une entree d'echantillon audio (Moov) ; True si decodable }
+Function AdZMp4Entry(E, ESz: LongInt): Boolean;
+Var Fc: String; Ver, Bits, Ch, ChildAt, EEnd, BP, BS, BH, Q, Tag, Len, Oti, AscOff, AscLen, Flags: LongInt;
+ Rate: Double; Ok: Boolean; XBP, XBS, XBH: LongInt;
+Begin
+ AdZMp4Entry:=False;
+ Fc:=AdZTag(E+4); EEnd:=E+ESz;
+ Ver:=AdZBE16(E+16);
+ Ch:=AdZBE16(E+24); Bits:=AdZBE16(E+26); Rate:=AdZBE16(E+32);
+ ChildAt:=E+36;
+ If Ver=1 Then ChildAt:=E+52
+ Else If Ver=2 Then Begin
+  Rate:=AdZBeDouble(E+40); Ch:=AdZBE32(E+48); Bits:=AdZBE32(E+56); ChildAt:=E+72;
+ End;
+ If (Ch<1) Or (Ch>8) Then Ch:=0;
+ If (Rate<1) Or (Rate>768000) Then Rate:=0;
+ AdZTCh:=Ch; AdZTRate:=Round(Rate);
+ { PCM }
+ If (Fc='sowt') Or (Fc='twos') Or (Fc='raw ') Or (Fc='in24') Or (Fc='in32') Or (Fc='fl32') Or (Fc='fl64')
+  Or (Fc='23ni') Or (Fc='23lf') Or (Fc='46lf') Or (Fc='lpcm') Or (Fc='ulaw') Or (Fc='alaw') Then Begin
+  AdZSetName('PCM'); AdZPcmFmt:=0;
+  If Fc='sowt' Then Begin If Bits=8 Then AdZPcmFmt:=2 Else If Bits=24 Then AdZPcmFmt:=5 Else If Bits=32 Then AdZPcmFmt:=7 Else AdZPcmFmt:=3; End
+  Else If Fc='twos' Then Begin
+   Case Bits Of 8: AdZPcmFmt:=2; 16: AdZPcmFmt:=4; 24: AdZPcmFmt:=6; 32: AdZPcmFmt:=8; End;
+  End
+  Else If Fc='raw ' Then Begin If Bits=8 Then AdZPcmFmt:=1 Else If Bits=16 Then AdZPcmFmt:=4 Else If Bits=24 Then AdZPcmFmt:=6; End
+  Else If Fc='in24' Then AdZPcmFmt:=6 Else If Fc='in32' Then AdZPcmFmt:=8
+  Else If Fc='fl32' Then AdZPcmFmt:=10 Else If Fc='fl64' Then AdZPcmFmt:=12
+  Else If Fc='23ni' Then AdZPcmFmt:=7 Else If Fc='23lf' Then AdZPcmFmt:=9 Else If Fc='46lf' Then AdZPcmFmt:=11
+  Else If Fc='ulaw' Then Begin AdZPcmFmt:=14; AdZSetName('mu-law'); End
+  Else If Fc='alaw' Then Begin AdZPcmFmt:=13; AdZSetName('A-law'); End
+  Else If Fc='lpcm' Then Begin
+   If Ver=2 Then Begin
+    Flags:=AdZBE32(E+60);
+    If (Flags And 1)<>0 Then Begin
+     If Bits=32 Then Begin If (Flags And 2)<>0 Then AdZPcmFmt:=10 Else AdZPcmFmt:=9; End
+     Else If Bits=64 Then Begin If (Flags And 2)<>0 Then AdZPcmFmt:=12 Else AdZPcmFmt:=11; End;
+    End Else Begin
+     Case Bits Of
+      8: If (Flags And 4)<>0 Then AdZPcmFmt:=2 Else AdZPcmFmt:=1;
+      16: If (Flags And 2)<>0 Then AdZPcmFmt:=4 Else AdZPcmFmt:=3;
+      24: If (Flags And 2)<>0 Then AdZPcmFmt:=6 Else AdZPcmFmt:=5;
+      32: If (Flags And 2)<>0 Then AdZPcmFmt:=8 Else AdZPcmFmt:=7;
+     End;
+    End;
+   End;
+  End;
+  If (AdZPcmFmt=6) Or (AdZPcmFmt=8) Or (AdZPcmFmt=10) Or (AdZPcmFmt=12) Then
+   If AdZFind(ChildAt,EEnd,'wave',BP,BS,BH) Then
+    If AdZFind(BP+BH,BP+BS,'enda',BP,BS,BH) Then
+     If AdZBE16(BP+BH)<>0 Then Dec(AdZPcmFmt);
+  If (AdZPcmFmt=13) Or (AdZPcmFmt=14) Then Begin
+   If Ch=0 Then AdZTCh:=1;
+   If AdZTRate=0 Then AdZTRate:=8000;
+  End;
+  If (AdZPcmFmt>0) And (AdZTCh>=1) And (AdZTRate>=1) Then Begin
+   AdZCodec:=AdZcPcm; AdZMp4Entry:=True;
+  End;
+  Exit;
+ End;
+ If Fc='ima4' Then Begin
+  AdZSetName('ADPCM IMA');
+  If (AdZTCh<1) Or (AdZTCh>2) Or (AdZTRate<1) Then Exit;
+  AdZCodec:=AdZcImaQt; AdZMp4Entry:=True; Exit;
+ End;
+ If (Fc=#109#115#0#17) Or (Fc=#109#115#0#2) Then Begin
+  If Fc=#109#115#0#17 Then Begin AdZSetName('ADPCM IMA'); AdZCodec:=AdZcImaWav; End
+  Else Begin AdZSetName('ADPCM MS'); AdZCodec:=AdZcMs; End;
+  If (AdZTCh<1) Or (AdZTCh>2) Or (AdZTRate<1) Then Begin AdZCodec:=AdZcNone; Exit; End;
+  AdZBlkAlign:=0; AdZ4Spp:=0;
+  If Ver=1 Then Begin
+   AdZ4Spp:=AdZBE32(E+36);
+   If AdZBE32(E+40)<=65536 Then AdZBlkAlign:=AdZBE32(E+40)*AdZTCh;
+  End;
+  If AdZFind(ChildAt,EEnd,'wave',BP,BS,BH) Then Begin
+   Q:=BP+BH;
+   If AdZFind(Q,BP+BS,Fc,XBP,XBS,XBH) Then
+    If XBS>=XBH+14 Then Begin
+     Q:=AdZLE16(XBP+XBH+12);
+     If (Q>0) And (Q<=65536) Then AdZBlkAlign:=Q;
+    End;
+  End;
+  AdZMp4Entry:=True; Exit;
+ End;
+ If (Fc=#109#115#0#85) Or (Fc='.mp3') Then Begin AdZSetName('MP3'); AdZCodec:=AdZcMpa; AdZMp4Entry:=True; Exit; End;
+ If (Fc=#109#115#0#80) Or (Fc='.mp2') Then Begin AdZSetName('MP2'); AdZCodec:=AdZcMpa; AdZMp4Entry:=True; Exit; End;
+ If Fc='alac' Then Begin
+  AdZSetName('ALAC');
+  If AdZFind(ChildAt,EEnd,'alac',BP,BS,BH) And (BS>=36) Then Begin
+   AdZSaveCfg(BP,36);
+   If AdZCfgLen>=36 Then Begin
+    AdZTCh:=AdZCfg[21]; AdZTRate:=(LongInt(AdZCfg[32]) Shl 24) Or (LongInt(AdZCfg[33]) Shl 16) Or (LongInt(AdZCfg[34]) Shl 8) Or AdZCfg[35];
+    If (AdZTCh>=1) And (AdZTCh<=2) And (AdZTRate>=1000) And (AdZTRate<=768000) And (AdZCfg[17] In [16,20,24,32]) Then Begin
+     AdZCodec:=AdZcAlac; AdZMp4Entry:=True;
+    End;
+   End;
+  End;
+  Exit;
+ End;
+ If Fc='mp4a' Then Begin
+  Ok:=AdZFind(ChildAt,EEnd,'esds',BP,BS,BH);
+  If Not Ok Then Begin
+   If AdZFind(ChildAt,EEnd,'wave',BP,BS,BH) Then Ok:=AdZFind(BP+BH,BP+BS,'esds',BP,BS,BH);
+  End;
+  If Ok Then Begin
+   Q:=AdZDescr(BP+BH+4,Tag,Len);
+   If Tag=3 Then Begin
+    Q:=Q+2; Flags:=AdZU8(Q); Inc(Q);
+    If (Flags And $80)<>0 Then Inc(Q,2);
+    If (Flags And $40)<>0 Then Inc(Q,1+AdZU8(Q));
+    If (Flags And $20)<>0 Then Inc(Q,2);
+    Q:=AdZDescr(Q,Tag,Len);
+    If Tag=4 Then Begin
+     Oti:=AdZU8(Q); AscOff:=0; AscLen:=0;
+     Q:=Q+13;
+     Q:=AdZDescr(Q,Tag,Len);
+     If Tag=5 Then Begin AscOff:=Q; AscLen:=Len; End;
+     AdZMp4Entry:=AdZOtiCodec(Oti,AscOff,AscLen);
+     If AdZCodec=AdZcMpa Then Begin
+      If AdZTCh<1 Then AdZTCh:=1;
+      If AdZTRate<1 Then AdZTRate:=44100;
+     End;
+     Exit;
+    End;
+   End;
+  End;
+  AdZSetName('AAC'); Exit;
+ End;
+ If Fc='ac-3' Then AdZSetName('AC-3') Else If Fc='ec-3' Then AdZSetName('E-AC-3')
+ Else If (Fc='dtsc') Or (Fc='dtsh') Or (Fc='dtsl') Or (Fc='dtse') Then AdZSetName('DTS')
+ Else If Fc='Opus' Then AdZSetName('Opus') Else If Fc='fLaC' Then AdZSetName('FLAC')
+ Else If (Fc='samr') Or (Fc='sawb') Then AdZSetName('AMR')
+ Else If (Fc='MAC3') Or (Fc='MAC6') Then AdZSetName('MACE')
+ Else AdZSetName(Fc);
+End;
+
+{ une piste 'trak' : 0 = pas audio, 1 = audio non decodable, 2 = audio decodable }
+Function AdZMp4Trak(TP, TEnd: LongInt): Integer;
+Var MP, MS, MH, XP, XS, XH, NP, NS, NH, SP, SS, SH, DP, DS, DH, TP2, E, ESz, Ver, N, I, Cnt,
+ EdP, EdS, EdH, ElP, ElS, ElH, MT, SD, NonEmpty, FirstMT, FirstSD: LongInt;
+Begin
+ AdZMp4Trak:=0;
+ If Not AdZFind(TP+8,TEnd,'mdia',MP,MS,MH) Then Exit;
+ If Not AdZFind(MP+MH,MP+MS,'hdlr',XP,XS,XH) Then Exit;
+ If AdZTag(XP+16)<>'soun' Then Exit;
+ AdZMp4Trak:=1;
+ AdZ4Ts:=0;
+ If AdZFind(MP+MH,MP+MS,'mdhd',XP,XS,XH) Then Begin
+  Ver:=AdZU8(XP+8);
+  If Ver=1 Then AdZ4Ts:=AdZBE32(XP+8+4+16) Else AdZ4Ts:=AdZBE32(XP+8+4+8);
+ End;
+ If Not AdZFind(MP+MH,MP+MS,'minf',NP,NS,NH) Then Exit;
+ If Not AdZFind(NP+NH,NP+NS,'stbl',SP,SS,SH) Then Exit;
+ If Not AdZFind(SP+SH,SP+SS,'stsd',DP,DS,DH) Then Exit;
+ If AdZBE32(DP+12)<1 Then Exit;
+ E:=DP+16; ESz:=AdZBE32(E);
+ If (ESz<16) Or (ESz>DS-16) Then Begin ESz:=DS-16; End;
+ If Not AdZMp4Entry(E,ESz) Then Exit;
+ { tables d'echantillons }
+ If Not AdZFind(SP+SH,SP+SS,'stsz',XP,XS,XH) Then Begin AdZCodec:=AdZcNone; Exit; End;
+ AdZ4Stsz:=XP+12; AdZ4StszFix:=AdZBE32(XP+12); AdZ4StszN:=AdZBE32(XP+16);
+ If (AdZ4StszFix=0) And (XS<20+AdZ4StszN*4) Then AdZ4StszN:=(XS-20) Div 4;
+ If Not AdZFind(SP+SH,SP+SS,'stsc',XP,XS,XH) Then Begin AdZCodec:=AdZcNone; Exit; End;
+ AdZ4Stsc:=XP+16; AdZ4StscN:=AdZBE32(XP+12);
+ If AdZ4StscN*12>XS-16 Then AdZ4StscN:=(XS-16) Div 12;
+ AdZ4Co64:=False;
+ If Not AdZFind(SP+SH,SP+SS,'stco',XP,XS,XH) Then Begin
+  If Not AdZFind(SP+SH,SP+SS,'co64',XP,XS,XH) Then Begin AdZCodec:=AdZcNone; Exit; End;
+  AdZ4Co64:=True;
+ End;
+ AdZ4Stco:=XP+16; AdZ4StcoN:=AdZBE32(XP+12);
+ If AdZ4Co64 Then Begin If AdZ4StcoN*8>XS-16 Then AdZ4StcoN:=(XS-16) Div 8; End
+ Else If AdZ4StcoN*4>XS-16 Then AdZ4StcoN:=(XS-16) Div 4;
+ If (AdZ4StscN<1) Or (AdZ4StcoN<1) Then Begin AdZCodec:=AdZcNone; Exit; End;
+ AdZ4ChunkMode:=(AdZCodec=AdZcPcm); AdZ4Units:=False;
+ If ((AdZCodec=AdZcImaWav) Or (AdZCodec=AdZcMs)) And (AdZ4StszFix=1) And (AdZ4Spp>1) And (AdZBlkAlign>0) Then Begin
+  AdZ4ChunkMode:=True; AdZ4Units:=True;
+ End;
+ { liste d'edition : decalage de debut (amorce du codec) et duree }
+ AdZ4Skip:=0; AdZ4Max:=-1;
+ If AdZFind(TP+8,TEnd,'edts',EdP,EdS,EdH) Then
+  If AdZFind(EdP+EdH,EdP+EdS,'elst',ElP,ElS,ElH) Then Begin
+   Ver:=AdZU8(ElP+8); Cnt:=AdZBE32(ElP+12);
+   If Cnt>64 Then Cnt:=64;
+   NonEmpty:=0; FirstMT:=0; FirstSD:=0;
+   For I:=0 To Cnt-1 Do Begin
+    If Ver=1 Then Begin SD:=AdZBE32(ElP+16+I*20+4); MT:=AdZBE32(ElP+16+I*20+12); If AdZBE32S(ElP+16+I*20+8)<0 Then MT:=-1; End
+    Else Begin SD:=AdZBE32(ElP+16+I*12); MT:=AdZBE32S(ElP+16+I*12+4); End;
+    If MT>=0 Then Begin
+     Inc(NonEmpty);
+     If NonEmpty=1 Then Begin FirstMT:=MT; FirstSD:=SD; End;
+    End;
+   End;
+   If (NonEmpty>=1) And (AdZ4Ts>0) And (AdZTRate>0) Then Begin
+    AdZ4Skip:=Round(Int64(FirstMT)*AdZTRate/AdZ4Ts);
+    If (NonEmpty=1) And (AdZ4MvTs>0) And (FirstSD>0) Then AdZ4Max:=Round(Int64(FirstSD)*AdZTRate/AdZ4MvTs);
+   End;
+  End;
+ AdZMp4Trak:=2;
+End;
+
+Function AdZMp4Open: Boolean;
+Var MP, MS, MH, TP, TS, TH, XP, XS, XH, P, Q: LongInt; R: Integer; Ver: LongInt;
+ SaveName: String[31];
+Begin
+ AdZMp4Open:=False;
+ If Not AdZFind(0,AdZSize,'moov',MP,MS,MH) Then Exit;
+ AdZ4MvTs:=0;
+ If AdZFind(MP+MH,MP+MS,'mvhd',XP,XS,XH) Then Begin
+  Ver:=AdZU8(XP+8);
+  If Ver=1 Then AdZ4MvTs:=AdZBE32(XP+8+4+16) Else AdZ4MvTs:=AdZBE32(XP+8+4+8);
+ End;
+ AdZKind:=AdZkMp4;
+ P:=MP+MH; SaveName:='';
+ While AdZFind(P,MP+MS,'trak',TP,TS,TH) Do Begin
+  AdZCodec:=AdZcNone; AdZName:=''; AdZTCh:=0; AdZTRate:=0; AdZPcmFmt:=0; AdZBlkAlign:=0; AdZCfgLen:=0;
+  R:=AdZMp4Trak(TP,TP+TS);
+  If R=2 Then Begin AdZMp4Open:=True; Exit; End;
+  If (R=1) And (SaveName='') Then SaveName:=AdZName;
+  P:=TP+TS;
+ End;
+ AdZCodec:=AdZcNone; AdZName:=SaveName;
+End;
+
+{ ---- iteration des paquets MP4 ---- }
+Procedure AdZ4Reset;
+Begin
+ AdZ4Chunk:=1; AdZ4Sc:=0; AdZ4In:=0; AdZ4Cur:=0; AdZ4Sample:=0;
+ AdZ4FB:=1;
+End;
+
+Function AdZ4SampleSize(I: LongInt): LongInt;
+Begin
+ If AdZ4StszFix>0 Then AdZ4SampleSize:=AdZ4StszFix
+ Else AdZ4SampleSize:=AdZBE32(AdZ4Stsz+8+I*4);
+End;
+
+Function AdZ4Next(Var Off, Len: LongInt): Boolean;
+Var Guard, SpC, K, Sz, Unit1: LongInt; Tot: Int64;
+Begin
+ AdZ4Next:=False; Guard:=0;
+ While Guard<2000000 Do Begin
+  Inc(Guard);
+  If AdZ4In=0 Then Begin
+   If AdZ4Chunk>AdZ4StcoN Then Exit;
+   While (AdZ4Sc+1<AdZ4StscN) And (AdZBE32(AdZ4Stsc+(AdZ4Sc+1)*12)<=AdZ4Chunk) Do Inc(AdZ4Sc);
+   SpC:=AdZBE32(AdZ4Stsc+AdZ4Sc*12+4);
+   If AdZ4Co64 Then Begin
+    If AdZBE32(AdZ4Stco+(AdZ4Chunk-1)*8)<>0 Then Exit;
+    AdZ4Cur:=AdZBE32(AdZ4Stco+(AdZ4Chunk-1)*8+4);
+   End Else AdZ4Cur:=AdZBE32(AdZ4Stco+(AdZ4Chunk-1)*4);
+   If SpC<=0 Then Begin Inc(AdZ4Chunk); Continue; End;
+   AdZ4In:=SpC;
+  End;
+  If AdZ4Sample>=AdZ4StszN Then Exit;
+  If AdZ4ChunkMode Then Begin
+   { chunk entier : somme des tailles }
+   Off:=AdZ4Cur; Sz:=0;
+   If AdZ4Units Then Begin
+    Tot:=Int64(AdZ4In Div AdZ4Spp)*AdZBlkAlign; If Tot>AdZSize Then Exit;
+    Sz:=Tot; Inc(AdZ4Sample,AdZ4In);
+   End Else If AdZ4StszFix>0 Then Begin
+    Unit1:=AdZ4StszFix;
+    If (Unit1<=1) Then Unit1:=AdZ4FB;
+    Tot:=Int64(AdZ4In)*Unit1; If Tot>AdZSize Then Exit;
+    Sz:=Tot; Inc(AdZ4Sample,AdZ4In);
+   End Else Begin
+    K:=AdZ4In; Tot:=0;
+    While (K>0) And (AdZ4Sample<AdZ4StszN) Do Begin
+     Tot:=Tot+AdZ4SampleSize(AdZ4Sample); Inc(AdZ4Sample); Dec(K);
+     If Tot>AdZSize Then Exit;
+    End;
+    Sz:=Tot;
+   End;
+   AdZ4In:=0; Inc(AdZ4Chunk);
+   Len:=Sz;
+   If (Off<0) Or (Off>=AdZSize) Then Exit;
+   If Off+Len>AdZSize Then Len:=AdZSize-Off;
+   If Len<=0 Then Continue;
+   AdZ4Next:=True; Exit;
+  End Else Begin
+   Sz:=AdZ4SampleSize(AdZ4Sample);
+   Off:=AdZ4Cur;
+   If (Sz<0) Or (Sz>AdZSize) Then Exit;
+   Inc(AdZ4Cur,Sz); Inc(AdZ4Sample); Dec(AdZ4In);
+   If AdZ4In=0 Then Inc(AdZ4Chunk);
+   If (Off<0) Or (Off>=AdZSize) Then Exit;
+   If Sz<=0 Then Continue;
+   If Off+Sz>AdZSize Then Exit;    { echantillon tronque : fin }
+   Len:=Sz; AdZ4Next:=True; Exit;
+  End;
+ End;
+End;
+
+
+{ ---- WAVEFORMATEX (AVI strf, WAV fmt) : 0 = rien, 1 = codec non decodable, 2 = ok ---- }
+Function AdZWfx(Off, Len: LongInt): Integer;
+Var Tag, Ch, Rate, Align, Bits, Cb: LongInt; Ri, Cc: Integer;
+Begin
+ AdZWfx:=1;
+ If Len<14 Then Begin AdZWfx:=0; Exit; End;
+ Tag:=AdZLE16(Off); Ch:=AdZLE16(Off+2); Rate:=AdZLE32(Off+4); Align:=AdZLE16(Off+12);
+ Bits:=0; If Len>=16 Then Bits:=AdZLE16(Off+14);
+ Cb:=0; If Len>=18 Then Cb:=AdZLE16(Off+16);
+ If (Tag=$FFFE) And (Len>=40) Then Tag:=AdZLE16(Off+24);
+ AdZTCh:=Ch; AdZTRate:=Rate; AdZBlkAlign:=Align; AdZPcmFmt:=0;
+ If (Ch<1) Or (Ch>8) Or (Rate<1) Or (Rate>768000) Then Begin AdZSetName('?'); Exit; End;
+ Case Tag Of
+  1: Begin
+   AdZSetName('PCM');
+   Case Bits Of 8: AdZPcmFmt:=1; 16: AdZPcmFmt:=3; 24: AdZPcmFmt:=5; 32: AdZPcmFmt:=7; End;
+   If AdZPcmFmt>0 Then Begin AdZCodec:=AdZcPcm; AdZWfx:=2; End;
+  End;
+  3: Begin
+   AdZSetName('PCM');
+   If Bits=32 Then AdZPcmFmt:=9 Else If Bits=64 Then AdZPcmFmt:=11;
+   If AdZPcmFmt>0 Then Begin AdZCodec:=AdZcPcm; AdZWfx:=2; End;
+  End;
+  6: Begin AdZSetName('A-law'); AdZPcmFmt:=13; AdZCodec:=AdZcPcm; AdZWfx:=2; End;
+  7: Begin AdZSetName('mu-law'); AdZPcmFmt:=14; AdZCodec:=AdZcPcm; AdZWfx:=2; End;
+  $11: Begin
+   AdZSetName('ADPCM IMA');
+   If (Ch<=2) And (Align>=4*Ch) Then Begin AdZCodec:=AdZcImaWav; AdZWfx:=2; End;
+  End;
+  2: Begin
+   AdZSetName('ADPCM MS');
+   If (Ch<=2) And (Align>=7*Ch) Then Begin AdZCodec:=AdZcMs; AdZWfx:=2; End;
+  End;
+  $55: Begin AdZSetName('MP3'); AdZCodec:=AdZcMpa; AdZWfx:=2; End;
+  $50: Begin AdZSetName('MP2'); AdZCodec:=AdZcMpa; AdZWfx:=2; End;
+  $FF: Begin
+   AdZSetName('AAC');
+   If (Cb>=2) And (Len>=18+Cb) Then
+    If AdAParseASC(Off+18,Cb,Ri,Cc) Then Begin
+     AdZCodec:=AdZcAac; AdZAacRi:=Ri; AdZAacCh:=Cc; AdZTCh:=Cc; AdZTRate:=AdARates[Ri]; AdZWfx:=2;
+    End;
+  End;
+  $1600,$1602: AdZSetName('AAC');
+  $2000: AdZSetName('AC-3');
+  $160,$161,$162,$163: AdZSetName('WMA');
+  $674F,$6750,$6751,$676F,$6770,$6771: AdZSetName('Vorbis');
+  $1610: AdZSetName('AAC');
+  Else AdZSetName('audio');
+ End;
+ If AdZCodec=AdZcNone Then AdZWfx:=1;
+End;
+
+{ ---- AVI ---- }
+Function AdZAviOpen: Boolean;
+Var P, Fin, Sz, HdrlEnd, LP, LE, SP, Idx, Cnt, I: LongInt; Tag: String; R: Integer;
+ Found: Boolean;
+Begin
+ AdZAviOpen:=False; AdZKind:=AdZkAvi; AdZAviPos:=0; AdZAviStream:=-1;
+ Fin:=AdZSize; P:=12; Found:=False; Idx:=-1;
+ While P+12<=Fin Do Begin
+  Tag:=AdZTag(P); Sz:=AdZLE32(P+4);
+  If (Sz<0) Or (Sz>Fin) Then Break;
+  If (Tag='LIST') And (AdZTag(P+8)='hdrl') Then Begin
+   HdrlEnd:=P+8+Sz; If HdrlEnd>Fin Then HdrlEnd:=Fin;
+   LP:=P+12;
+   While LP+12<=HdrlEnd Do Begin
+    Tag:=AdZTag(LP); Sz:=AdZLE32(LP+4);
+    If (Sz<0) Or (Sz>Fin) Then Break;
+    If (Tag='LIST') And (AdZTag(LP+8)='strl') Then Begin
+     Inc(Idx);
+     LE:=LP+8+Sz; If LE>HdrlEnd Then LE:=HdrlEnd;
+     SP:=LP+12;
+     If (SP+8<=LE) And (AdZTag(SP)='strh') And (AdZTag(SP+8)='auds') And (Not Found) Then Begin
+      I:=SP+8+AdZLE32(SP+4); If Odd(I) Then Inc(I);
+      Cnt:=0;
+      While (I>0) And (I+8<=LE) And (Cnt<16) Do Begin
+       If AdZTag(I)='strf' Then Begin
+        AdZCodec:=AdZcNone; AdZName:=''; AdZCfgLen:=0;
+        R:=AdZWfx(I+8,AdZLE32(I+4));
+        If R=2 Then Begin Found:=True; AdZAviStream:=Idx; End;
+        Break;
+       End;
+       Sz:=AdZLE32(I+4); If (Sz<0) Or (Sz>Fin) Then Break;
+       I:=I+8+Sz; If Odd(I) Then Inc(I); Inc(Cnt);
+      End;
+     End;
+    End;
+    LP:=LP+8+Sz; If Odd(LP) Then Inc(LP);
+   End;
+   Break;
+  End;
+  P:=P+8+Sz; If Odd(P) Then Inc(P);
+ End;
+ If Not Found Then Begin AdZCodec:=AdZcNone; Exit; End;
+ P:=12;
+ While P+12<=Fin Do Begin
+  Tag:=AdZTag(P); Sz:=AdZLE32(P+4);
+  If (Sz<0) Or (Sz>Fin) Then Exit;
+  If (Tag='LIST') And (AdZTag(P+8)='movi') Then Begin AdZAviPos:=P+12; AdZAviOpen:=True; Exit; End;
+  P:=P+8+Sz; If Odd(P) Then Inc(P);
+ End;
+End;
+
+Function AdZAviNext(Var Off, Len: LongInt): Boolean;
+Var Sz, N0, N1, Guard: LongInt; Tag: String;
+Begin
+ AdZAviNext:=False; Guard:=0;
+ While (AdZAviPos+8<=AdZSize) And (Guard<5000000) Do Begin
+  Inc(Guard);
+  Tag:=AdZTag(AdZAviPos); Sz:=AdZLE32(AdZAviPos+4);
+  If (Tag='LIST') Or (Tag='RIFF') Then Begin Inc(AdZAviPos,12); Continue; End;
+  N0:=Ord(Tag[1])-48; N1:=Ord(Tag[2])-48;
+  If (Sz<0) Or (Sz>AdZSize-AdZAviPos-8) Then Begin
+   { chunk tronque : livre ce qui reste puis fin }
+   If (N0>=0) And (N0<=9) And (N1>=0) And (N1<=9) And (N0*10+N1=AdZAviStream) And (Copy(Tag,3,2)='wb') Then Begin
+    Off:=AdZAviPos+8; Len:=AdZSize-Off; AdZAviPos:=AdZSize;
+    If Len>0 Then AdZAviNext:=True;
+   End;
+   Exit;
+  End;
+  If (N0>=0) And (N0<=9) And (N1>=0) And (N1<=9) And (N0*10+N1=AdZAviStream) And (Copy(Tag,3,2)='wb') And (Sz>0) Then Begin
+   Off:=AdZAviPos+8; Len:=Sz;
+   AdZAviPos:=AdZAviPos+8+Sz; If Odd(AdZAviPos) Then Inc(AdZAviPos);
+   AdZAviNext:=True; Exit;
+  End;
+  AdZAviPos:=AdZAviPos+8+Sz; If Odd(AdZAviPos) Then Inc(AdZAviPos);
+ End;
+End;
+
+{ ---- WAV ---- }
+Function AdZWavOpen: Boolean;
+Var P, Sz, FmtOff, FmtLen, DataOff, DataLen: LongInt; Tag: String; R: Integer;
+Begin
+ AdZWavOpen:=False; AdZKind:=AdZkWav; P:=12; FmtOff:=0; FmtLen:=0; DataOff:=0; DataLen:=0;
+ While P+8<=AdZSize Do Begin
+  Tag:=AdZTag(P); Sz:=AdZLE32(P+4);
+  If Tag='fmt ' Then Begin FmtOff:=P+8; FmtLen:=Sz; If FmtLen>AdZSize-FmtOff Then FmtLen:=AdZSize-FmtOff; End;
+  If Tag='data' Then Begin
+   DataOff:=P+8; DataLen:=Sz;
+   If (DataLen<=0) Or (DataLen>AdZSize-DataOff) Then DataLen:=AdZSize-DataOff;
+   Break;
+  End;
+  If (Sz<0) Or (Sz>AdZSize) Then Break;
+  P:=P+8+Sz; If Odd(P) Then Inc(P);
+ End;
+ If (FmtOff=0) Or (DataOff=0) Then Exit;
+ AdZCodec:=AdZcNone; AdZName:='';
+ R:=AdZWfx(FmtOff,FmtLen);
+ If R<>2 Then Begin AdZCodec:=AdZcNone; Exit; End;
+ AdZRegPos:=DataOff; AdZRegEnd:=DataOff+DataLen;
+ AdZWavOpen:=True;
+End;
+
+Function AdZWavNext(Var Off, Len: LongInt): Boolean;
+Var N, Unit1: LongInt;
+Begin
+ AdZWavNext:=False;
+ If AdZRegPos>=AdZRegEnd Then Exit;
+ Unit1:=1;
+ If AdZCodec=AdZcPcm Then Unit1:=AdZPcmBps[AdZPcmFmt]*AdZTCh
+ Else If (AdZCodec=AdZcImaWav) Or (AdZCodec=AdZcMs) Then Unit1:=AdZBlkAlign;
+ If Unit1<1 Then Unit1:=1;
+ N:=AdZRegEnd-AdZRegPos;
+ If N>60000 Then N:=60000;
+ If (N>=Unit1) Then N:=(N Div Unit1)*Unit1 Else If (AdZCodec=AdZcPcm) Then Begin AdZRegPos:=AdZRegEnd; Exit; End;
+ If N<=0 Then Exit;
+ Off:=AdZRegPos; Len:=N; Inc(AdZRegPos,N);
+ AdZWavNext:=True;
+End;
+
+{ ---- FLV ---- }
+Function AdZFlvOpen: Boolean;
+Var P, Sz, Cnt, B0, Fmt, Ri, Bt, Ch, Rate, Pt: LongInt; Cc: Integer; Rr: Integer; Done: Boolean;
+Begin
+ AdZFlvOpen:=False; AdZKind:=AdZkFlv;
+ P:=AdZBE32(5)+4; Cnt:=0; Done:=False;
+ While (P+11<=AdZSize) And (Cnt<20000) And Not Done Do Begin
+  Inc(Cnt);
+  Sz:=(AdZU8(P+1) Shl 16) Or (AdZU8(P+2) Shl 8) Or AdZU8(P+3);
+  If P+11+Sz>AdZSize Then Break;
+  If (AdZU8(P)=8) And (Sz>=1) Then Begin
+   B0:=AdZU8(P+11); Fmt:=B0 Shr 4; Ri:=(B0 Shr 2) And 3; Bt:=(B0 Shr 1) And 1; Ch:=(B0 And 1)+1;
+   Rate:=44100 Shr (3-Ri); If Ri=0 Then Rate:=5512;
+   AdZTCh:=Ch; AdZTRate:=Rate; AdZFlvFmt:=Fmt;
+   Case Fmt Of
+    0,3: Begin
+     AdZSetName('PCM');
+     If Bt=0 Then AdZPcmFmt:=1 Else If Fmt=0 Then AdZPcmFmt:=4 Else AdZPcmFmt:=3;
+     AdZCodec:=AdZcPcm; Done:=True;
+    End;
+    1: Begin AdZSetName('ADPCM Flash'); AdZCodec:=AdZcSwf; Done:=True; End;
+    2,14: Begin AdZSetName('MP3'); AdZCodec:=AdZcMpa; Done:=True; End;
+    7: Begin AdZSetName('A-law'); AdZPcmFmt:=13; AdZCodec:=AdZcPcm; AdZTRate:=8000; Done:=True; End;
+    8: Begin AdZSetName('mu-law'); AdZPcmFmt:=14; AdZCodec:=AdZcPcm; AdZTRate:=8000; Done:=True; End;
+    10: Begin
+     AdZSetName('AAC');
+     Pt:=AdZU8(P+12);
+     If (Pt=0) And (Sz>=4) Then Begin
+      If AdAParseASC(P+13,Sz-2,Rr,Cc) Then Begin
+       AdZCodec:=AdZcAac; AdZAacRi:=Rr; AdZAacCh:=Cc; AdZTCh:=Cc; AdZTRate:=AdARates[Rr];
+      End Else Begin
+       { ASC non supporte : HE-AAC ? }
+       If (AdZU8(P+13) Shr 3=5) Or (AdZU8(P+13) Shr 3=29) Then AdZName:='HE-AAC';
+      End;
+     End;
+     Done:=True;
+    End;
+    4,5,6: Begin AdZSetName('Nellymoser'); Done:=True; End;
+    11: Begin AdZSetName('Speex'); Done:=True; End;
+    Else Begin AdZSetName('audio'); Done:=True; End;
+   End;
+  End;
+  If Not Done Then P:=P+11+Sz+4;
+ End;
+ If AdZCodec=AdZcNone Then Exit;
+ AdZFlvPos:=AdZBE32(5)+4;
+ AdZFlvOpen:=True;
+End;
+
+Function AdZFlvNext(Var Off, Len: LongInt): Boolean;
+Var Sz, Hd, Guard: LongInt;
+Begin
+ AdZFlvNext:=False; Guard:=0;
+ While (AdZFlvPos+11<=AdZSize) And (Guard<5000000) Do Begin
+  Inc(Guard);
+  Sz:=(AdZU8(AdZFlvPos+1) Shl 16) Or (AdZU8(AdZFlvPos+2) Shl 8) Or AdZU8(AdZFlvPos+3);
+  If AdZFlvPos+11+Sz>AdZSize Then Begin AdZFlvPos:=AdZSize; Exit; End;
+  If (AdZU8(AdZFlvPos)=8) And (Sz>=2) And ((AdZU8(AdZFlvPos+11) Shr 4)=AdZFlvFmt) Then Begin
+   Hd:=1;
+   If AdZCodec=AdZcAac Then Begin
+    Hd:=2;
+    If AdZU8(AdZFlvPos+12)<>1 Then Begin AdZFlvPos:=AdZFlvPos+11+Sz+4; Continue; End;
+   End;
+   Off:=AdZFlvPos+11+Hd; Len:=Sz-Hd;
+   AdZFlvPos:=AdZFlvPos+11+Sz+4;
+   If Len>0 Then Begin AdZFlvNext:=True; Exit; End;
+   Continue;
+  End;
+  AdZFlvPos:=AdZFlvPos+11+Sz+4;
+ End;
+End;
+
+
+{ ======== ADTS (.aac brut) ======== }
+Function AdZAdtsCheck(Pos: LongInt; Var Ri, Ch, FLen, HS, Prof: LongInt): Boolean;
+Var B: Array[0..6] Of Byte;
+Begin
+ AdZAdtsCheck:=False;
+ FillChar(B,7,0);
+ If AdZRead(Pos,B,7)<7 Then Exit;
+ If (B[0]<>$FF) Or ((B[1] And $F6)<>$F0) Then Exit;
+ Prof:=B[2] Shr 6; Ri:=(B[2] Shr 2) And 15; Ch:=((B[2] And 1) Shl 2) Or (B[3] Shr 6);
+ FLen:=(LongInt(B[3] And 3) Shl 11) Or (LongInt(B[4]) Shl 3) Or (B[5] Shr 5);
+ If (B[1] And 1)=0 Then HS:=9 Else HS:=7;
+ If Ri>12 Then Exit;
+ If FLen<=HS Then Exit;
+ AdZAdtsCheck:=True;
+End;
+
+{ premiere trame ADTS confirmee par la suivante (a partir de Start) ; -1 sinon }
+Function AdZAdtsFind(Start: LongInt; Var Ri, Ch, Prof: LongInt): LongInt;
+Var I, Ri2, Ch2, FL, HS, Pr2, FL2, HS2: LongInt;
+Begin
+ AdZAdtsFind:=-1;
+ For I:=0 To 65535 Do Begin
+  If Start+I+7>AdZSize Then Exit;
+  If AdZAdtsCheck(Start+I,Ri,Ch,FL,HS,Prof) Then Begin
+   If Start+I+FL+7>AdZSize Then Begin
+    { derniere trame du fichier }
+    If Start+I+FL<=AdZSize Then Begin AdZAdtsFind:=Start+I; Exit; End;
+   End Else If AdZAdtsCheck(Start+I+FL,Ri2,Ch2,FL2,HS2,Pr2) Then
+    If (Ri2=Ri) And (Ch2=Ch) Then Begin AdZAdtsFind:=Start+I; Exit; End;
+  End;
+ End;
+End;
+
+Function AdZAdtsRun: Boolean;
+Var Pos, Off, Ri, Ch, FL, HS, Pr, Ri2, Ch2, Bad: LongInt;
+Begin
+ AdZAdtsRun:=False;
+ Off:=AdZId3Skip(0);
+ Pos:=AdZAdtsFind(Off,Ri,Ch,Pr);
+ If Pos<0 Then Exit;
+ If Not AdAStart(Ri,Ch) Then Exit;
+ If Not AdZSinkOpen(AdARates[Ri],Ch) Then Exit;
+ Bad:=0;
+ While (Pos+7<=AdZSize) And Not AdZStop Do Begin
+  If AdZAdtsCheck(Pos,Ri2,Ch2,FL,HS,Pr) And (Ri2=Ri) And (Ch2=Ch) Then Begin
+   If Pos+FL>AdZSize Then Break;
+   AdAPacket(Pos+HS,FL-HS);
+   Inc(Pos,FL); Bad:=0;
+  End Else Begin
+   Inc(Pos); Inc(Bad);
+   If Bad>4000000 Then Break;
+  End;
+ End;
+ AdZAdtsRun:=True;
+End;
+
+{ ======== ALAC : paquets ======== }
+Var AdZALReady: Boolean;
+Function AdZAlacStart: Boolean;
+Var C: Integer;
+Begin
+ AdZAlacStart:=False;
+ If AdZCfgLen<36 Then Exit;
+ AdZALMax:=(LongInt(AdZCfg[12]) Shl 24) Or (LongInt(AdZCfg[13]) Shl 16) Or (LongInt(AdZCfg[14]) Shl 8) Or AdZCfg[15];
+ AdZALSampleSize:=AdZCfg[17]; AdZALHistMult:=AdZCfg[18]; AdZALInitHist:=AdZCfg[19];
+ AdZALLimit:=AdZCfg[20]; AdZALChannels:=AdZCfg[21];
+ If (AdZALMax<=0) Or (AdZALMax>1048576) Then Exit;
+ If (AdZALChannels<1) Or (AdZALChannels>2) Then Exit;
+ If Not (AdZALSampleSize In [16,20,24,32]) Then Exit;
+ For C:=0 To 1 Do Begin
+  GetMem(AdZALErr[C],AdZALMax*4); GetMem(AdZALOut[C],AdZALMax*4); GetMem(AdZALExtra[C],AdZALMax*4);
+  FillChar(AdZALErr[C]^,AdZALMax*4,0); FillChar(AdZALOut[C]^,AdZALMax*4,0); FillChar(AdZALExtra[C]^,AdZALMax*4,0);
+ End;
+ AdZALReady:=True;
+ AdZAlacStart:=True;
+End;
+
+Procedure AdZAlacStop;
+Var C: Integer;
+Begin
+ If AdZALReady Then Begin
+  For C:=0 To 1 Do Begin
+   FreeMem(AdZALErr[C],AdZALMax*4); FreeMem(AdZALOut[C],AdZALMax*4); FreeMem(AdZALExtra[C],AdZALMax*4);
+  End;
+ End;
+ AdZALReady:=False;
+End;
+
+Procedure AdZAlacPacket(Off, Len: LongInt);
+Begin
+ If Not AdZPkLoad(Off,Len) Then Exit;
+ AdZEAPhase:=0;
+ AdZALDecodePacket(AdZPk,Len);
+End;
+
+{ ======== FLAC natif ======== }
+Var
+ AdZFlData: LongInt;
+ AdZFlBuf: PAdZBuf;
+Const
+ AdZFlBufCap = 2097152;
+
+Function AdZFlacOpen(Off: LongInt): Boolean;
+Var P, BL, Typ, Final, B: LongInt; H: Array[0..37] Of Byte; Ok: Boolean;
+Begin
+ AdZFlacOpen:=False; AdZKind:=AdZkFlac; AdZSetName('FLAC');
+ P:=Off+4; Ok:=False; Final:=0;
+ While (Final=0) And (P+4<=AdZSize) Do Begin
+  B:=AdZU8(P); Final:=B Shr 7; Typ:=B And 127;
+  BL:=(AdZU8(P+1) Shl 16) Or (AdZU8(P+2) Shl 8) Or AdZU8(P+3);
+  If Typ=127 Then Exit;
+  If Typ=0 Then Begin
+   If BL<34 Then Exit;
+   FillChar(H,SizeOf(H),0); AdZRead(P+4,H,34);
+   AdZFLStreamRate:=(LongInt(H[10]) Shl 12) Or (LongInt(H[11]) Shl 4) Or (H[12] Shr 4);
+   AdZFLMaxBS:=H[2]*256+H[3];
+   If AdZFLMaxBS=0 Then AdZFLMaxBS:=65535 Else If AdZFLMaxBS<16 Then AdZFLMaxBS:=16;
+   AdZFLStreamCh:=((H[12] Shr 1) And 7)+1;
+   AdZFLStreamBps:=(((H[12] And 1) Shl 4) Or (H[13] Shr 4))+1;
+   Ok:=True;
+  End;
+  Inc(P,4+BL);
+ End;
+ If Not Ok Then Exit;
+ AdZFlData:=P;
+ AdZTCh:=AdZFLStreamCh; AdZTRate:=AdZFLStreamRate;
+ If (AdZFLStreamRate<1) Or (AdZFLStreamRate>655350) Then Exit;
+ Case AdZFLStreamBps Of 8,12,16,20,24: ; Else Exit; End;
+ If (AdZFLStreamCh<1) Or (AdZFLStreamCh>8) Then Exit;
+ AdZCodec:=AdZcFlac;
+ AdZFlacOpen:=True;
+End;
+
+Procedure AdZFlacFill(From: LongInt; Var Have: LongInt);
+Begin
+ Have:=AdZRead(From,AdZFlBuf^,AdZFlBufCap);
+ If Have<0 Then Have:=0;
+ FillChar(AdZFlBuf^[Have],32,0);
+End;
+
+Function AdZFlacRun: Boolean;
+Var Base, Have, P, Len, I, C, V, Ch: LongInt; Got: Boolean; D: TAdZD8; Sh: LongInt;
+Begin
+ AdZFlacRun:=False; Got:=False;
+ Ch:=AdZFLStreamCh; If Ch>2 Then Ch:=2;
+ GetMem(AdZFlBuf,AdZFlBufCap+64);
+ For I:=0 To AdZFLStreamCh-1 Do GetMem(AdZFLCh[I],SizeOf(TAdZFLChan));
+ If Not AdZSinkOpen(AdZFLStreamRate,Ch) Then Begin
+  For I:=0 To AdZFLStreamCh-1 Do FreeMem(AdZFLCh[I],SizeOf(TAdZFLChan));
+  FreeMem(AdZFlBuf,AdZFlBufCap+64); AdZFlBuf:=Nil; Exit;
+ End;
+ Base:=AdZFlData; P:=0; AdZFlacFill(Base,Have);
+ While Not AdZStop Do Begin
+  If (Have-P<262144) And (Base+Have<AdZSize) Then Begin
+   Base:=Base+P; P:=0; AdZFlacFill(Base,Have);
+  End;
+  If Have-P<6 Then Break;
+  AdZFLIn:=PAdZBuf(AdZFlBuf); AdZFLSize:=Have;
+  If AdZFLFrame(P,Have,Len) Then Begin
+   Got:=True;
+   For I:=0 To AdZFLBS-1 Do Begin
+    For C:=0 To AdZFLChans-1 Do Begin
+     V:=AdZFLCh[C]^[I];
+     If AdZFLBps<16 Then V:=V Shl (16-AdZFLBps)
+     Else If AdZFLBps>16 Then V:=AdZSar(V,AdZFLBps-16);
+     If V>32767 Then V:=32767 Else If V<-32768 Then V:=-32768;
+     If C<8 Then D[C]:=V;
+    End;
+    If AdZFLChans<=2 Then Begin
+     If AdZFLChans=2 Then AdZPut(Round(D[0]),Round(D[1])) Else AdZPut(Round(D[0]),Round(D[0]));
+    End Else AdZPutN(AdZFLChans,D);
+    If AdZStop Then Break;
+   End;
+   Inc(P,Len);
+  End Else Begin
+   Inc(P);
+   While (P<Have-5) And Not ((AdZFlBuf^[P]=$FF) And ((AdZFlBuf^[P+1] And $FE)=$F8)) Do Inc(P);
+  End;
+ End;
+ For I:=0 To AdZFLStreamCh-1 Do FreeMem(AdZFLCh[I],SizeOf(TAdZFLChan));
+ FreeMem(AdZFlBuf,AdZFlBufCap+64); AdZFlBuf:=Nil;
+ AdZFlacRun:=Got;
+End;
+
+
+{ ======== detection du conteneur / de la piste ======== }
+Procedure AdZScanNames(Start, Len: LongInt);
+{ cherche des identifiants de codec connus dans les premiers octets (conteneurs non pris en charge) }
+Var B: PAdZBuf; N, I: LongInt;
+ Function Has(Const S: String): Boolean;
+ Var J, K: LongInt; Ok: Boolean;
+ Begin
+  Has:=False;
+  For J:=0 To N-Length(S) Do Begin
+   Ok:=True;
+   For K:=1 To Length(S) Do If B^[J+K-1]<>Ord(S[K]) Then Begin Ok:=False; Break; End;
+   If Ok Then Begin Has:=True; Exit; End;
+  End;
+ End;
+Begin
+ If Len>65536 Then Len:=65536;
+ If Len<8 Then Exit;
+ GetMem(B,Len+16);
+ N:=AdZRead(Start,B^,Len);
+ If N>8 Then Begin
+  If Has('A_OPUS') Then AdZSetName('Opus')
+  Else If Has('A_VORBIS') Then AdZSetName('Vorbis')
+  Else If Has('A_AAC') Then AdZSetName('AAC')
+  Else If Has('A_MPEG/L3') Then AdZSetName('MP3')
+  Else If Has('A_AC3') Then AdZSetName('AC-3')
+  Else If Has('A_EAC3') Then AdZSetName('E-AC-3')
+  Else If Has('A_DTS') Then AdZSetName('DTS')
+  Else If Has('A_FLAC') Then AdZSetName('FLAC')
+  Else If Has('A_PCM') Then AdZSetName('PCM')
+  Else If Has('vorbis') Then AdZSetName('Vorbis')
+  Else If Has('OpusHead') Then AdZSetName('Opus')
+  Else If Has('Speex') Then AdZSetName('Speex')
+  Else If Has('FLAC') Then AdZSetName('FLAC');
+ End;
+ FreeMem(B,Len+16);
+End;
+
+{ MPEG audio brut a partir de Off ? }
+Function AdZSniffMpa(Off: LongInt): Boolean;
+Var S: PAdZMPA; Ly, Rt, Ch, P: LongInt;
+Begin
+ AdZSniffMpa:=False;
+ GetMem(S,SizeOf(TAdZMPA)); FillChar(S^,SizeOf(TAdZMPA),0);
+ P:=AdZMpFind(S,Off,Ly,Rt,Ch);
+ If P>=0 Then Begin
+  AdZLayer:=Ly; AdZTRate:=Rt; AdZTCh:=Ch;
+  Case Ly Of 1: AdZName:='MP1'; 2: AdZName:='MP2'; Else AdZName:='MP3'; End;
+  AdZCodec:=AdZcMpa; AdZKind:=AdZkMpa; AdZSniffMpa:=True;
+ End;
+ FreeMem(S,SizeOf(TAdZMPA));
+End;
+
+Function AdZContent(Off: LongInt): Boolean;
+Var Ri, Ch, Pr, P: LongInt; T: String;
+Begin
+ AdZContent:=False;
+ T:=AdZTag(Off);
+ If T='fLaC' Then Begin AdZContent:=AdZFlacOpen(Off); Exit; End;
+ If T='OggS' Then Begin AdZKind:=AdZkNone; AdZScanNames(Off,200); If AdZName='' Then AdZName:='Ogg'; Exit; End;
+ P:=AdZAdtsFind(Off,Ri,Ch,Pr);
+ If (P>=0) And (P-Off<8) Then Begin
+  AdZKind:=AdZkAdts; AdZName:='AAC'; AdZTCh:=Ch; AdZTRate:=AdARates[Ri];
+  If ((Pr=0) Or (Pr=1)) And (Ch>=1) And (Ch<=2) Then Begin AdZCodec:=AdZcAac; AdZAacRi:=Ri; AdZAacCh:=Ch; AdZContent:=True; End;
+  Exit;
+ End;
+ AdZContent:=AdZSniffMpa(Off);
+End;
+
+Function AdZDetect: Boolean;
+Var H: Array[0..15] Of Byte; T4, T8: String; Off: LongInt; R: Boolean;
+Begin
+ AdZDetect:=False; AdZTrackClear;
+ FillChar(H,16,0);
+ If AdZRead(0,H,16)<8 Then Exit;
+ T4:=AdZTag(0); T8:=AdZTag(8);
+ If (T4='RIFF') And (T8='AVI ') Then R:=AdZAviOpen
+ Else If (T4='RIFF') And (T8='WAVE') Then R:=AdZWavOpen
+ Else If (T4[1]='F') And (T4[2]='L') And (T4[3]='V') And (H[3]=1) Then R:=AdZFlvOpen
+ Else If (AdZTag(4)='ftyp') Or (AdZTag(4)='moov') Or (AdZTag(4)='mdat') Or (AdZTag(4)='wide') Or (AdZTag(4)='free')
+  Or (AdZTag(4)='skip') Or (AdZTag(4)='pnot') Then R:=AdZMp4Open
+ Else If (H[0]=$1A) And (H[1]=$45) And (H[2]=$DF) And (H[3]=$A3) Then Begin
+  AdZScanNames(0,65536); If AdZName='' Then AdZName:='Matroska'; R:=False;
+ End
+ Else If (H[0]=$30) And (H[1]=$26) And (H[2]=$B2) And (H[3]=$75) Then Begin AdZName:='WMA'; R:=False; End
+ Else Begin
+  Off:=0;
+  If (H[0]=73) And (H[1]=68) And (H[2]=51) Then Off:=AdZId3Skip(0);
+  R:=AdZContent(Off);
+  If (Not R) And (AdZName='') And (Off=0) Then Begin
+   { dernier recours : MPEG audio apres des octets parasites }
+   R:=AdZSniffMpa(0);
+  End;
+ End;
+ If R And (AdZCodec=AdZcNone) Then R:=False;
+ AdZDetect:=R;
+End;
+
+{ ======== lecture et decodage ======== }
+Function AdZNext(Var Off, Len: LongInt): Boolean;
+Begin
+ Case AdZKind Of
+  AdZkMp4: AdZNext:=AdZ4Next(Off,Len);
+  AdZkAvi: AdZNext:=AdZAviNext(Off,Len);
+  AdZkWav: AdZNext:=AdZWavNext(Off,Len);
+  AdZkFlv: AdZNext:=AdZFlvNext(Off,Len);
+  Else AdZNext:=False;
+ End;
+End;
+
+Function AdZRunTrack: Boolean;
+Var Off, Len, SinkCh, B, N, Blk, Ch: LongInt; Ok: Boolean; Cnt: LongInt;
+Begin
+ AdZRunTrack:=False;
+ Ch:=AdZTCh; SinkCh:=Ch; If SinkCh>2 Then SinkCh:=2;
+ Ok:=True;
+ Case AdZCodec Of
+  AdZcPcm: Begin
+   AdZG711Init;
+   If (AdZPcmFmt<1) Or (AdZPcmFmt>14) Then Exit;
+   AdZ4FB:=AdZPcmBps[AdZPcmFmt]*Ch;
+   Ok:=AdZSinkOpen(AdZTRate,SinkCh);
+  End;
+  AdZcMpa: AdZMpOpen;
+  AdZcAac: Ok:=AdAStart(AdZAacRi,AdZAacCh) And AdZSinkOpen(AdARates[AdZAacRi],AdZAacCh);
+  AdZcAlac: Ok:=AdZAlacStart And AdZSinkOpen(AdZTRate,AdZALChannels);
+  AdZcImaWav,AdZcMs,AdZcImaQt,AdZcSwf: Begin
+   FillChar(AdZImaPred,SizeOf(AdZImaPred),0); FillChar(AdZImaIdx,SizeOf(AdZImaIdx),0);
+   Ok:=(Ch>=1) And (Ch<=2) And AdZSinkOpen(AdZTRate,SinkCh);
+  End;
+  Else Ok:=False;
+ End;
+ If Not Ok Then Exit;
+ If AdZKind=AdZkMp4 Then Begin
+  AdZ4Reset;
+  AdZSkip:=AdZ4Skip; AdZMax:=AdZ4Max;
+  If AdZ4Skip>0 Then If AdZ4Skip>2000000000 Then AdZSkip:=0;
+ End;
+ Cnt:=0;
+ While AdZNext(Off,Len) And Not AdZStop Do Begin
+  Inc(Cnt);
+  Case AdZCodec Of
+   AdZcPcm: AdZPcmPacket(Off,Len,Ch);
+   AdZcMpa: AdZMpFeed(Off,Len,False);
+   AdZcAac: AdAPacket(Off,Len);
+   AdZcAlac: AdZAlacPacket(Off,Len);
+   AdZcImaWav,AdZcMs: If AdZPkLoad(Off,Len) Then Begin
+    Blk:=AdZBlkAlign; If (Blk<=0) Or (Blk>Len) Then Blk:=Len;
+    B:=0;
+    While (B+Blk<=Len) And Not AdZStop Do Begin
+     If AdZCodec=AdZcImaWav Then AdZImaWavBlock(B,Blk,Ch) Else AdZMsBlock(B,Blk,Ch);
+     Inc(B,Blk);
+    End;
+   End;
+   AdZcImaQt: If AdZPkLoad(Off,Len) Then Begin
+    N:=0;
+    While (N+34*Ch<=Len) And Not AdZStop Do Begin AdZImaQtBlock(N,Ch); Inc(N,34*Ch); End;
+   End;
+   AdZcSwf: If AdZPkLoad(Off,Len) Then AdZSwfPacket(Len,Ch);
+  End;
+ End;
+ If (AdZCodec=AdZcMpa) And Not AdZStop Then AdZMpFeed(0,0,True);
+ AdZRunTrack:=True;
+End;
+
+Procedure AdZEnd;
+Begin
+ AdZSinkClose;
+ AdZMpClose;
+ AdAStop;
+ AdZAlacStop;
+ AdZPkFree;
+ If AdZFlBuf<>Nil Then Begin FreeMem(AdZFlBuf,AdZFlBufCap+64); AdZFlBuf:=Nil; End;
+ AdZCloseFile;
+End;
+
+Function AdZOpen(Const FN: String): Boolean;
+Begin
+ AdZEmitted:=False; AdZStop:=False; AdZLimitHit:=False; AdZSkip:=0; AdZMax:=-1; AdZNPut:=0; AdZOutBuf:=Nil;
+ AdZEAPhase:=0; AdZALReady:=False; AdZFlBuf:=Nil; AdZPk:=Nil; AdZPkCap:=0;
+ AdZMpS:=Nil; AdZMpL:=Nil; AdZMpR:=Nil; AdZMpFB:=Nil; AdZWin:=Nil; AdAReady:=False; AdAWork:=Nil;
+ AdACh[0]:=Nil; AdACh[1]:=Nil;
+ AdZTrackClear;
+ AdZOpen:=AdZOpenFile(FN);
+End;
+
+Function AdProbe(Const FN: String): Boolean;
+Begin
+ AdProbe:=False;
+ If Not AdZOpen(FN) Then Begin AdZEnd; Exit; End;
+ AdZFpMask;
+ AdProbe:=AdZDetect;
+ AdZFpRestore;
+ AdZEnd;
+End;
+
+Function AdCodecName(Const FN: String): String;
+Begin
+ AdCodecName:='';
+ If Not AdZOpen(FN) Then Begin AdZEnd; Exit; End;
+ AdZFpMask;
+ If AdZDetect Then Begin End;
+ AdCodecName:=AdZName;
+ AdZFpRestore;
+ AdZEnd;
+End;
+
+Function AdConformFile(Const FN: String): Boolean;
+Var Ok: Boolean; L: LongInt;
+Begin
+ AdConformFile:=False;
+ If Not AdZOpen(FN) Then Begin AdZEnd; Exit; End;
+ AdZFpMask;
+ If AdZDetect Then Begin
+  Case AdZKind Of
+   AdZkMpa: Ok:=AdZMp3Run(L);
+   AdZkAdts: Ok:=AdZAdtsRun;
+   AdZkFlac: Ok:=AdZFlacRun;
+   Else Ok:=AdZRunTrack;
+  End;
+ End;
+ AdZFpRestore;
+ AdZEnd;
+ AdConformFile:=AdZEmitted;
+End;
+{$POP}
+{$ELSE}
+Function AdProbe(Const FN: String): Boolean;
+Begin AdProbe:=False; End;
+Function AdConformFile(Const FN: String): Boolean;
+Begin AdConformFile:=False; End;
+Function AdCodecName(Const FN: String): String;
+Begin AdCodecName:=''; End;
+{$ENDIF}
 
 { ====================================================================== }
 {  Importation de medias : repartition des formats et creation du media  }
@@ -22685,7 +28642,7 @@ End;
 Const
  ImportExts = '.BMP;.DIB;.GIF;.PNG;.APNG;.JPG;.JPEG;.PCX;.TGA;.PPM;.PGM;.PBM;.XBM;.LBM;.IFF;' +
               '.ILBM;.TIF;.TIFF;.BGX;.WPG;.MSP;.MAC;.ICO;.CUR;.DDS;.HDR;.AVI;.MP4;.M4V;.MOV;' +
-              '.3GP;.FLV;.FLI;.FLC;.Y4M;.WAV';
+              '.3GP;.FLV;.FLI;.FLC;.Y4M;.WAV;.MP3;.M4A;.AAC;.FLAC;.OGG';
 
 Function HexN(V: LongInt; N: Integer): String;
 Const
@@ -22781,6 +28738,8 @@ Begin
     P.Media[I].Dur := Max(1, (P.Media[I].NF * P.Fps * 100) Div P.Media[I].Fps100);
   End Else If P.Media[I].Kind = MK_WAV Then
    P.Media[I].Dur := Max(1, (P.Media[I].NF * P.Fps) Div 50)
+  Else If P.Media[I].Kind = MK_APCM Then
+   P.Media[I].Dur := Max(1, (P.Media[I].NF * P.Fps) Div PcmRate)
   Else If P.Media[I].Kind = MK_IMAGE Then P.Media[I].Dur := P.Fps * 5;
 End;
 
@@ -22801,12 +28760,41 @@ Begin
  If R Then ConformInto := Nf Else ConformInto := 0;
 End;
 
+Function PcmCacheName(Const FN: String): String;
+Var
+ S: String;
+Begin
+ S := CacheNameFor(FN, True);
+ S[Length(S) - 2] := 'P';
+ S[Length(S) - 1] := 'C';
+ S[Length(S)] := 'A';
+ PcmCacheName := S;
+End;
+
+{ Decode la piste audio de FN en PCM 22050 Hz stereo (cache .PCA) ; retourne le nombre d'echantillons }
+Function ConformPcm(Const FN, Cache: String; MaxSec: LongInt): LongInt;
+Var
+ R: Boolean;
+ N: LongInt;
+Begin
+ ConformPcm := 0;
+ If Not ConfBeginPcm(Cache, MaxSec) Then Exit;
+ R := AdConformFile(FN);
+ ConfEndPcm(N);
+ If R Then ConformPcm := N;
+End;
+
+Function IsAudioOnlyExt(Const E: String): Boolean;
+Begin
+ IsAudioOnlyExt := (E = '.MP3') Or (E = '.M4A') Or (E = '.AAC') Or (E = '.FLAC') Or (E = '.OGG');
+End;
+
 Procedure ImportDlg;
 Var
  FN, S, Nm, Cache: String;
  MaxSec, Fps100, Nf: LongInt;
  IsAud: Boolean;
- M, K: Integer;
+ M, K, A: Integer;
  E: String;
 Begin
  FN := '';
@@ -22818,6 +28806,34 @@ Begin
  End;
  If P.NM >= MAXMEDIA Then Begin
   MsgBox('Importer', 'Le projet contient trop de médias.');
+  Exit;
+ End;
+ If IsAudioOnlyExt(E) Then Begin
+  Cache := PcmCacheName(FN);
+  Nf := ConformPcm(FN, Cache, 600);
+  If Nf < 1 Then Begin
+   MsgBox('Importer', 'Impossible de décoder cet audio :|' + Fit(FN, 400) + '|(codec : ' + AdCodecName(FN) + ')');
+   Exit;
+  End;
+  Nm := FN;
+  K := Length(Nm);
+  While (K > 0) And (Nm[K] <> '\\') And (Nm[K] <> '/') And (Nm[K] <> ':') Do Dec(K);
+  Delete(Nm, 1, K);
+  PushUndo;
+  M := AddMedia(UpStr(Nm), MK_APCM, 1, 0, '', FN);
+  If M < 0 Then Begin
+   DropLastUndo;
+   Exit;
+  End;
+  P.Media[M].Cache := Cache;
+  P.Media[M].NF := Nf;
+  RecalcMediaDurs;
+  ProjSel := M;
+  TabC := 0;
+  BuildProjVis;
+  ProjScroll := Max(0, ProjVN - ProjRows);
+  NeedAll := True;
+  Msg('Audio importé : ' + FN);
   Exit;
  End;
  MaxSec := 30;
@@ -22852,6 +28868,19 @@ Begin
  P.Media[M].Fps100 := Integer(Fps100);
  P.Media[M].CW := Integer(CnCW);
  P.Media[M].CH := Integer(CnCH);
+ If (Not IsAud) And (Nf > 1) And AdProbe(FN) Then Begin
+  Cache := PcmCacheName(FN);
+  Fps100 := ConformPcm(FN, Cache, MaxSec);
+  If (Fps100 > 0) And (P.NM < MAXMEDIA) Then Begin
+   A := AddMedia(UpStr(Nm) + ' (audio)', MK_APCM, 1, 0, '', FN);
+   If A >= 0 Then Begin
+    P.Media[A].Cache := Cache;
+    P.Media[A].NF := Fps100;
+    P.Media[M].Pair := A;
+   End;
+  End;
+  Fps100 := P.Media[M].Fps100;
+ End;
  RecalcMediaDurs;
  ProjSel := M;
  TabC := 0;
@@ -22882,7 +28911,8 @@ Begin
  BlockRead(F, H, 32, N);
  {$I+}
  If (IOResult = 0) And (N = 32) Then Begin
-  If M.Kind = MK_WAV Then CacheUsable := (H[0] = Ord('A')) And (H[2] = Ord('1'))
+  If M.Kind = MK_APCM Then CacheUsable := (H[0] = Ord('P')) And (H[1] = Ord('C')) And (H[2] = Ord('A'))
+  Else If M.Kind = MK_WAV Then CacheUsable := (H[0] = Ord('A')) And (H[2] = Ord('1'))
   Else CacheUsable := (H[0] = Ord('V')) And (H[2] = Ord('2')) And (M.CW > 0) And (M.CH > 0) And
                       (LE16(H, 4) = M.CW) And (LE16(H, 6) = M.CH);
  End;
@@ -22897,6 +28927,10 @@ Var
  IsAud: Boolean;
 Begin
  For I := 0 To P.NM - 1 Do
+  If (P.Media[I].Kind = MK_APCM) And (Force Or (Not CacheUsable(P.Media[I]))) And (P.Media[I].Path <> '') Then Begin
+   Nf := ConformPcm(P.Media[I].Path, P.Media[I].Cache, 600);
+   If Nf > 0 Then P.Media[I].NF := Nf;
+  End Else
   If (P.Media[I].Kind = MK_IMAGE) Or (P.Media[I].Kind = MK_VIDEO) Or (P.Media[I].Kind = MK_WAV) Then
    If Force Or (Not CacheUsable(P.Media[I])) Then
     If P.Media[I].Path <> '' Then Begin
@@ -22932,9 +28966,10 @@ Begin
 End;
 
 (* ======================================================================
-  h264enc.pas : encodeur H.264 (Baseline contraint, CAVLC, Intra16x16 + P,
-  sans deblocage) + muxeur MP4 (avc1 + audio PCM 'sowt'), pilotable image
-  par image.  Extrait/adapte de FFMPEG.PAS (encodeur natif 'libx264').
+  h264enc2.pas : encodeur H.264 (Baseline contraint, CAVLC, Intra16x16 + P,
+  sans deblocage) + muxeur MP4 (avc1 + piste audio PCM 'sowt' ou compressee),
+  pilotable image par image.  Extrait/adapte de FFMPEG.PAS (encodeur natif
+  'libx264' ; encodeurs audio AAC-LC, MPEG audio couche II et ALAC).
   FPC 3.2.2 uniquement (mode TP, Integer = 16 bits) ; stubs sinon.
 
     Function  X4EBegin(Const FN: String; W, H, Fps100, Qp, Gop,
@@ -22942,8 +28977,27 @@ End;
     Function  X4EFrame(Pix: Pointer): Boolean;     { RGB24 haut en bas }
     Function  X4EEnd(Const AudioPcmFile: String): Boolean;
     Procedure X4EAbort;
+    Function  X4EAudSupported(Kind: LongInt): Boolean;
+    Var       X4EAudKind: LongInt;     { codec de la piste audio, voir ci-dessous }
+    Var       X4EAudBitrate: LongInt;  { debit en kb/s (AAC, MP2) ; 0 = auto }
+
+  Codec audio (X4EAudKind, a regler avant X4EEnd ; 0 par defaut) :
+    0 = PCM 16 bits little-endian ('sowt', non compresse, lisible surtout par
+        QuickTime/ffmpeg/VLC)
+    1 = AAC-LC ('mp4a' + esds, 128 kb/s si >= 32 kHz, sinon 96 kb/s) :
+        codec recommande, largement lisible (navigateurs, QuickTime, VLC, ffmpeg)
+    3 = MPEG audio couche II / MP2 ('mp4a', objectTypeIndication 0x6B ;
+        192 kb/s si >= 32 kHz, sinon 128 kb/s) : peu supporte hors VLC/ffmpeg
+    4 = ALAC sans perte ('alac')
+    (2 = MP3 non implemente.)  Un codec non gere (X4EAudSupported = False) ou une
+    frequence refusee par le codec (AAC : 7350..96000 Hz ; MP2 : 16000, 22050,
+    24000, 32000, 44100, 48000 ; ALAC : toutes) fait retomber sur 0 (PCM).
 
   Notes :
+   - AudioPcmFile : PCM brut stereo 16 bits little-endian a AudioRate Hz. Il
+     est lu par blocs (jamais entierement en memoire), jamais modifie ni
+     supprime. Les codecs avec perte ajoutent une edit list qui masque le
+     retard du codec : la duree de la piste est celle du PCM.
    - W et H : 16..4096 ; si impair, la taille codee est arrondie a la valeur
      paire superieure (le cropping H.264 4:2:0 n'a qu'une granularite de 2
      pixels) : la derniere colonne/ligne est dupliquee. X4EOutW/X4EOutH
@@ -22952,7 +29006,8 @@ End;
    - Les tailles non multiples de 16 sont exactes grace au cropping du SPS.
    - Les echantillons sont ecrits au fil de l'eau dans le 'mdat' du fichier
      final (aucun fichier temporaire) ; le 'moov' est ecrit a la fin.
-   - Le fichier AudioPcmFile n'est jamais supprime ni modifie.
+   - Si le fichier PCM est absent ou tronque, la video est quand meme
+     finalisee et X4EEnd retourne False (sans piste audio).
    - Maximum 4 Go de fichier (offsets 32 bits).
   ====================================================================== *)
 {$IFDEF FPC}
@@ -24077,6 +30132,1256 @@ Begin
 End;
 
 
+{ ---- AAC-LC (adapte de FFMPEG.PAS : encodeur AAC-LC, tables aactab.c) ---- }
+Const
+ X4AARoots:Array[0..11] Of Integer=(
+ 0,120,200,280,360,440,520,600,663,726,894,1062);
+
+ X4AAHuffLeft:Array[0..1349] Of Integer=(
+ -61,92,90,87,83,79,74,72,67,62,56,52,44,14,18,16,17,-1,42,21,
+ -2,-20,29,24,27,26,-120,28,-11,110,113,32,-119,-8,-9,39,37,-12,-15,40,
+ -17,-21,-24,-91,49,48,-89,-26,-29,51,-27,-87,55,97,-31,-85,60,58,-86,-37,
+ -84,-38,66,65,-83,-82,-81,70,71,-43,-46,-45,73,-75,78,77,-74,-73,-50,82,
+ -52,-71,-53,86,-68,-54,-67,89,-56,-57,-63,-58,-60,-62,95,-77,-78,-88,99,100,
+ -98,-93,103,-95,-97,-99,107,-101,-103,-104,116,119,-111,114,-107,-109,117,-112,
+  -114,-116,
+ -41,158,139,153,148,131,136,145,129,130,-1,132,133,-22,135,-19,143,138,-12,172,
+ 141,142,-5,144,-6,170,152,-73,167,162,151,-8,-81,154,194,-11,157,-13,159,160,
+ -68,-15,192,-26,165,-17,-18,168,169,-74,171,-61,173,174,-59,199,-24,-25,-63,-
+  28,
+ 189,-44,-71,187,-34,186,-35,-48,-77,-42,-39,-40,-66,-65,-53,-62,-55,-60,-76,-
+  70,
+ 238,220,209,216,229,206,207,-21,-57,246,257,261,-16,227,215,-55,235,218,226,-6,
+ 221,222,237,-65,256,-81,-8,245,-9,230,255,-10,242,234,-31,236,-12,-13,239,-41,
+ -68,-14,244,-29,-17,-63,273,275,-20,-74,-60,262,253,-50,-35,-54,-25,278,-72,
+  260,
+ -28,-30,269,-32,268,-69,267,-58,-37,-38,272,-49,-47,-45,-64,-48,-77,-78,-62,-
+  75,
+ -1,282,283,-28,291,286,332,335,-38,-55,-10,292,-37,294,295,296,-6,298,312,-67,
+ -49,-8,314,304,305,336,-9,308,-13,313,-19,-31,-46,-22,324,337,317,-35,328,326,
+ 330,322,-54,-21,347,-23,327,-25,329,-26,331,-27,-29,349,-30,-41,-65,-44,-47,
+  340,
+ -36,342,-39,-68,-45,346,-48,-58,-71,-76,-73,357,354,-57,-72,-62,-75,-66,-70,-
+  81,
+ 361,392,414,-37,365,376,391,-2,374,377,371,382,415,-3,375,-4,-5,394,416,390,
+ -22,-19,397,-30,408,398,405,388,389,-9,-56,-29,393,-41,395,-17,-15,-16,399,400,
+ -18,-21,403,-23,-24,435,439,-25,426,432,433,-70,413,-81,-32,-34,417,-35,419,-
+  36,
+ -38,-47,423,425,-50,-68,434,-71,-58,-48,438,-49,-51,-52,-53,-66,-79,-75,-67,-
+  72,
+ -41,508,506,493,478,474,459,456,453,468,471,470,-81,467,490,-64,472,458,-3,463,
+ 461,462,-4,464,-37,513,-6,-71,469,-8,-73,-74,473,-65,491,476,477,-12,482,480,
+ 481,-13,483,-14,485,-15,518,-16,-17,-18,-19,501,-21,497,495,496,-22,498,-23,
+  500,
+ -24,-25,-26,-76,-69,-30,510,-31,509,-32,-49,-34,-47,-54,-38,-59,-42,-55,-70,-
+  78,
+ 580,567,552,548,535,532,542,597,531,541,-1,-8,533,534,-7,545,537,576,-6,540,
+ -5,-81,594,-45,-10,560,547,-65,556,550,-70,-12,565,558,555,-13,557,-68,559,-15,
+ -16,-17,-63,596,-56,574,-21,568,-31,595,-24,572,573,-23,-57,-75,-28,-47,588,-
+  30,
+ 589,582,-32,-33,-67,593,-36,-38,-52,591,-40,-41,-59,-54,-77,-58,-62,598,-64,-
+  72,
+ -1,602,-9,604,-10,628,-17,608,629,610,-4,612,613,639,-5,616,640,-43,619,641,
+ 636,622,-31,643,625,650,-32,-57,-18,630,-26,632,-13,-14,654,-15,-51,-19,-20,-
+  28,
+ -35,646,-44,648,645,-52,-30,-49,649,-58,-46,652,656,-61,-50,-59,-54,658,-48,-
+  60,
+ 661,-63,-56,664,692,668,-19,-1,-11,670,671,672,-3,674,675,676,-4,698,714,-45,
+ 700,682,683,684,-53,703,687,720,-7,725,722,-8,-10,-18,-12,705,697,-13,707,-14,
+ 708,702,-50,704,-16,-20,-21,-42,718,-23,711,-59,-28,-29,-30,716,-31,-32,-38,-
+  39,
+ -49,-46,-48,-54,-55,-63,-1,728,-14,730,-15,779,-27,734,735,800,-17,-40,780,782,
+ 816,-5,743,744,783,838,-56,-6,785,750,751,-93,753,754,789,756,757,-8,759,-47,
+ 761,762,809,764,765,-10,797,820,769,-148,812,772,773,836,775,-12,847,778,-13,-
+  28,
+ 801,-18,-31,802,-20,786,787,-66,-45,790,-23,806,793,794,-24,832,-111,843,799,-
+  38,
+ -41,-30,-67,804,-46,-107,807,808,-36,845,-110,-134,813,833,815,-39,-55,-48,831,
+  -49,
+ 821,-50,823,853,-51,826,867,-162,829,-106,-58,-61,-158,881,-63,-125,837,-137,-
+  68,-69,
+ 841,-79,-84,878,-73,-74,-101,848,-138,-82,-132,-122,-86,-144,-89,856,857,869,-
+  164,876,
+ -104,-105,863,-95,-98,866,-149,-113,-102,-139,-121,-114,873,874,875,-115,-116,-
+  117,-123,880,
+ -129,-131,883,884,-141,-142,893,888,-143,-159,-161,-165,-156,-167,900,896,897,
+  898,953,-1,
+ 949,902,903,-2,980,906,-27,996,-4,954,983,1005,-80,914,957,916,917,1015,-93,
+  920,
+ 921,1018,1029,999,-36,926,969,928,929,930,-8,1023,-149,934,1002,1037,937,-158,
+  976,940,
+ 941,942,-11,1060,-12,1048,1053,948,-168,952,-28,-29,-15,-18,982,956,-19,958,
+  959,-20,
+ 961,-106,988,964,-22,966,1009,968,-23,1011,1043,972,-137,993,1013,-25,977,995,-
+  115,-128,
+ -30,-31,-32,1006,-81,1007,987,-47,989,-60,1021,992,-37,994,-148,-163,-44,-42,-
+  69,-49,
+ -50,-136,1024,1058,-162,-82,-70,-59,-109,1045,-62,1035,-63,-138,-65,-95,-71,-
+  72,1019,-73,
+ -74,1042,-75,-76,1051,-150,1027,1059,-103,1030,-120,-84,-85,-98,-87,-88,-102,
+  1038,-90,1040,
+ -91,-108,-100,-146,-101,-111,-112,-116,1052,-157,-145,-126,-129,1057,-130,-139,
+  -144,-166,-161,-152,
+ -153,-167,1063,1064,1065,-1,1133,-2,1134,1070,1071,-38,1178,1074,-52,1076,1077,
+  1140,1143,1231,
+ 1081,-5,1083,1084,1085,1237,1264,-6,1089,1090,1253,1155,-174,1094,1095,1129,
+  1097,1098,1099,-8,
+ 1101,1102,1103,1104,1163,-9,1226,1298,1283,-154,1172,1112,1113,1315,1314,-11,
+  1117,1118,1331,-222,
+ 1333,1122,-254,-15,1322,1126,-14,1346,-16,1197,1307,1279,-17,-289,1135,-20,
+  1137,-21,-55,-70,
+ 1141,1180,-23,1144,1212,-24,1147,1184,1274,1285,-34,1152,1153,1154,-221,-128,
+  1157,1292,1159,-191,
+ 1266,1336,-29,-30,1165,1166,1167,1223,-31,1208,1171,-260,1271,1174,1284,1329,-
+  33,-54,1179,-71,
+ -40,1211,1233,-41,1185,1348,-281,1234,1189,1190,-43,1192,1193,-127,1241,1196,-
+  45,1198,-225,1200,
+ 1201,1202,-196,1335,-48,1258,1328,-49,1270,-50,-72,-57,-106,1214,-122,1289,-60,
+  1252,-61,-62,
+ 1221,1222,-129,-189,1225,-131,1295,1228,-101,1230,-68,1261,-69,-74,1235,1236,-
+  76,1332,-125,1305,
+ -78,1304,-159,1244,-80,1246,1247,-243,-165,-87,-91,-108,-94,1260,-95,-96,-273,-
+  98,1310,-180,
+ -103,-107,1303,-109,-110,-224,1267,-147,1269,-116,-206,1311,1319,-215,1275,-
+  119,-120,-123,-124,-130,
+ 1281,-132,-133,-257,-135,-282,1337,-211,-138,-140,-141,-143,1293,-175,-258,
+  1297,-231,-246,1338,-263,
+ 1320,1302,-200,-153,-173,-157,-176,-193,-192,-163,-164,1312,-167,-168,-216,
+  1340,-249,-179,-182,-184,
+ 1321,-185,1325,-186,-187,-188,-194,-195,-197,-199,-232,-203,-287,1345,-237,-
+  226,-241,-210,-213,-214,
+ -218,1344,-269,-250,-236,-239,-270,-266,-280,-276);
+
+ X4AAHuffRight:Array[0..1349] Of Integer=(
+ 1,2,3,4,5,6,7,8,9,10,11,12,13,22,15,98,106,105,19,20,
+ -3,-4,23,35,25,33,-5,109,-6,30,31,34,-7,-16,-10,36,38,-13,-14,41,
+ -19,-18,43,-22,45,46,47,-23,-25,50,-28,-30,53,54,-32,-33,57,59,-34,-35,
+ 61,-36,63,64,-39,-40,-41,68,69,-42,-44,-80,94,-47,75,76,-48,-49,-72,80,
+ 81,-51,-70,84,85,-69,-55,88,-66,-65,91,-64,93,-59,96,-76,-79,-90,102,101,
+ -92,-94,104,-96,-105,-100,108,-102,-118,-121,111,112,-106,115,-108,-110,118,-
+  113,-115,-117,
+ 121,122,123,124,125,126,127,128,134,178,-75,175,179,-2,196,-3,137,166,-4,140,
+ 164,193,-29,198,-10,146,147,-7,149,150,197,-30,-9,156,155,-69,161,-67,180,191,
+ -14,-31,163,-16,182,-45,-72,183,195,-20,177,-21,185,190,-23,176,-80,-57,-27,-
+  54,
+ 181,-32,-33,184,-56,188,-43,-36,-37,-38,-47,-50,-46,-49,-51,-52,-79,-58,-64,-
+  78,
+ 201,202,203,204,205,213,224,208,-1,210,211,212,-2,214,279,-3,217,259,219,-4,
+ 232,264,223,-5,225,-7,-18,228,-73,266,231,-52,233,276,-11,249,-56,-59,251,240,
+ 241,-42,243,-15,-51,-19,247,248,-34,250,-22,252,270,254,-23,-24,-27,258,-26,
+  274,
+ -70,-80,263,-44,265,-33,277,-36,-71,-40,271,-39,-43,-67,-46,-66,-53,-61,-76,-
+  79,
+ 281,284,290,-2,285,293,287,288,289,-3,-4,307,-5,302,297,300,-64,309,299,-7,
+ 301,-17,303,318,333,306,-18,311,-11,310,-12,-14,-15,-16,315,316,343,-20,319,
+  320,
+ 321,345,323,-61,325,-43,339,-24,341,350,348,-80,-40,334,-56,-32,-33,338,-34,
+  358,
+ -74,344,-59,-42,-77,351,355,-50,-51,-52,-53,352,353,356,-60,-69,-63,359,-79,-
+  78,
+ 364,362,363,-1,368,366,367,-11,369,370,384,372,373,381,422,-10,-31,378,379,380,
+ -6,-7,383,-8,385,386,387,412,401,-61,-12,-13,420,-14,402,396,-43,-20,418,404,
+ -74,-57,421,-33,-62,406,407,-73,409,410,411,-26,436,-27,-28,-55,428,-64,429,-
+  80,
+ -40,-39,430,424,-42,-44,427,-45,-46,-60,431,-59,-69,-76,-77,-54,437,-63,-65,-
+  78,
+ 441,442,443,444,445,446,447,448,449,450,451,452,-1,454,455,-2,457,517,-79,460,
+ 465,503,-45,519,-5,466,-46,-7,489,-72,-9,-10,488,-11,475,486,502,-66,479,484,
+ 504,-53,514,-68,512,-67,487,-20,-27,-80,-75,492,-57,494,499,505,-60,515,-43,
+  511,
+ -58,-61,-56,-28,-29,-52,507,-51,516,-50,-33,-48,-35,-36,-44,-39,-40,-63,-62,-
+  77,
+ 521,522,523,524,525,526,527,528,529,530,-73,-2,539,562,-3,536,585,538,-4,575,
+ -79,-9,543,544,-18,546,561,-11,549,563,551,-26,553,554,577,-53,587,-14,584,-69,
+ -71,-46,-19,564,-20,566,-61,571,569,570,-22,578,592,-34,-25,-27,-78,-29,579,-
+  43,
+ 581,583,-51,-49,-35,586,-37,-44,-39,590,-42,-50,-48,-76,-55,-60,-66,599,-74,-
+  80,
+ 601,603,-2,607,605,606,-3,611,609,631,638,618,615,614,-33,634,617,-6,623,620,
+ 621,647,-7,624,651,626,627,-8,-11,637,-12,633,-34,-42,635,-36,-16,-25,-27,-21,
+ -22,642,-23,644,659,-24,-29,-37,655,-38,-39,657,653,-40,-41,-45,-47,660,-62,-
+  53,
+ 662,-55,-64,669,665,666,667,-17,-2,673,695,694,-26,680,677,713,-36,678,679,-5,
+ 681,685,710,719,-6,686,689,688,-62,690,691,-64,693,-9,-27,696,706,-35,699,-44,
+ 701,715,-15,717,-47,712,-25,-22,709,-51,723,-24,-34,-43,-37,721,-52,724,-33,-
+  58,
+ -40,-41,-57,-60,-61,-56,727,729,-2,733,731,732,-3,742,738,736,737,-4,739,740,
+ 741,-53,752,748,745,746,747,-33,749,803,805,-7,760,791,755,758,817,-120,850,-9,
+ 770,766,763,795,851,-146,767,768,864,-11,771,855,776,774,854,-163,777,871,-151,
+  -16,
+ 781,-54,-19,784,-44,828,788,-21,-22,840,-94,792,818,842,-96,796,-25,798,889,-
+  26,
+ -29,-42,-32,830,-34,-35,862,861,-71,810,811,-37,822,814,835,-124,-43,-59,819,-
+  145,
+ 852,-75,825,824,-76,865,827,-52,839,-57,-119,-60,-62,834,-87,-64,846,-65,-80,-
+  81,
+ 849,-70,-72,844,-97,-118,-77,868,-78,-108,-83,-85,-112,-88,-157,872,859,858,-
+  90,860,
+ -91,-92,870,-133,-160,890,-99,-100,-126,-103,-109,-127,882,879,877,-140,-152,-
+  128,-135,885,
+ -130,-136,886,891,-153,-166,887,892,-155,-147,-150,-154,-169,-168,895,913,909,
+  907,899,-56,
+ 901,904,997,-17,905,981,-3,908,-57,910,911,912,-5,919,915,962,960,918,-6,925,
+ 965,922,923,924,-7,933,927,973,931,1001,-113,932,-9,938,935,936,1014,-10,939,
+  945,
+ 943,1056,-104,944,-155,946,947,1061,-13,950,951,-14,-16,-54,955,998,-67,985,
+  1016,-46,
+ 1041,-21,963,1008,-48,990,967,1046,-99,970,971,1050,-24,974,975,-159,1026,978,
+  979,-26,
+ -43,-55,-68,984,-33,986,1017,-34,1032,-35,991,1000,-132,1036,-38,-39,-40,-41,-
+  45,-119,
+ -124,-51,1003,1004,-52,-53,-58,1031,-61,1010,-133,1012,-92,-64,-127,-66,-83,-
+  107,1020,-110,
+ 1033,1022,-135,-114,1025,-77,1039,1028,-78,1034,-79,-94,-97,-86,-121,-105,-89,
+  1055,-118,1047,
+ -140,-96,-134,1044,-147,-122,-123,-165,1049,-117,-125,-160,-142,1054,-156,-131,
+  -141,-143,-151,-164,
+ -154,-169,1075,1068,1066,-19,1067,-36,1069,1072,1138,-3,1073,1249,-4,1082,1146,
+  1078,1079,1080,
+ 1250,-51,1093,1088,1151,1086,1087,1290,1156,1194,1091,1092,-7,1100,1164,1096,
+  1160,1203,1326,-65,
+ 1110,1106,1169,1280,1105,-229,1107,1108,1109,-10,1111,1116,1124,1114,1115,-217,
+  1120,1341,1119,-12,
+ 1121,1127,1123,-13,1125,1347,-251,1128,-271,1130,1131,1132,-82,-18,1136,-37,
+  1177,-53,1139,-22,
+ 1181,1142,-89,1229,1145,-85,1187,1148,1149,1150,-25,1191,1217,1288,-26,-27,
+  1220,1158,1276,-28,
+ 1161,1162,-81,-230,1199,1245,1224,1168,-207,1170,1248,-32,1173,1300,1175,1176,-
+  183,-35,1210,-39,
+ -73,1182,1183,-104,1213,1186,-42,1188,1215,1324,-93,1239,1291,-44,1195,1219,-
+  160,1256,-46,1205,
+ 1268,1309,-47,1204,-227,1206,1207,-115,1209,-261,-56,-90,-58,1251,-59,1216,-86,
+  1218,-142,-112,
+ 1243,1255,-63,-64,1257,-66,1227,1318,-67,1349,-278,1232,-75,-105,1262,1278,-
+  284,1238,-77,1240,
+ -111,1242,-79,1265,-190,1286,1327,-83,-84,-88,-102,-92,-238,1254,-144,-172,-97,
+  -99,1259,-100,
+ -158,-279,1263,-170,-126,-113,1317,-114,1294,-181,-117,1272,1273,-118,1277,-
+  283,-177,-121,-285,-146,
+ 1282,-212,-259,-134,1313,-136,1287,-137,-255,-139,-288,-156,1306,-145,-148,
+  1296,-149,-150,1299,-151,
+ 1301,1343,-152,-274,-155,-272,-161,1308,-162,-244,-245,1339,-166,-264,-169,
+  1316,-171,-178,-198,-248,
+ 1330,-233,1323,-235,-286,-219,-223,-242,-240,-202,-201,-252,-204,1334,-205,-
+  208,-209,-228,-262,-247,
+ -265,1342,-220,-234,-268,-253,-256,-267,-275,-277);
+
+ X4AALongBands:Array[0..12] Of Integer=(
+ 41,41,47,49,49,51,47,47,43,43,43,40,40);
+
+ X4AALongOffsets:Array[0..12,0..51] Of Integer=(
+ (0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,64,72,80,88,96,108,120,132,144,156,
+  172,188,212,240,276,320,384,448,512,576,640,704,768,832,896,960,1024,1024,
+  1024,1024,1024,1024,1024,1024,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,64,72,80,88,96,108,120,132,144,156,
+  172,188,212,240,276,320,384,448,512,576,640,704,768,832,896,960,1024,1024,
+  1024,1024,1024,1024,1024,1024,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,64,72,80,88,100,112,124,140,156,172,
+  192,216,240,268,304,344,384,424,464,504,544,584,624,664,704,744,784,824,864,
+  904,944,984,1024,1024,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,48,56,64,72,80,88,96,108,120,132,144,160,176,
+  196,216,240,264,292,320,352,384,416,448,480,512,544,576,608,640,672,704,736,
+  768,800,832,864,896,928,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,48,56,64,72,80,88,96,108,120,132,144,160,176,
+  196,216,240,264,292,320,352,384,416,448,480,512,544,576,608,640,672,704,736,
+  768,800,832,864,896,928,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,48,56,64,72,80,88,96,108,120,132,144,160,176,
+  196,216,240,264,292,320,352,384,416,448,480,512,544,576,608,640,672,704,736,
+  768,800,832,864,896,928,960,992,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,44,52,60,68,76,84,92,100,108,116,124,136,148,
+  160,172,188,204,220,240,260,284,308,336,364,396,432,468,508,552,600,652,704,
+  768,832,896,960,1024,1024,1024,1024,1024),
+ (0,4,8,12,16,20,24,28,32,36,40,44,52,60,68,76,84,92,100,108,116,124,136,148,
+  160,172,188,204,220,240,260,284,308,336,364,396,432,468,508,552,600,652,704,
+  768,832,896,960,1024,1024,1024,1024,1024),
+ (0,8,16,24,32,40,48,56,64,72,80,88,100,112,124,136,148,160,172,184,196,212,228,
+  244,260,280,300,320,344,368,396,424,456,492,532,572,616,664,716,772,832,896,
+  960,1024,1024,1024,1024,1024,1024,1024,1024,1024),
+ (0,8,16,24,32,40,48,56,64,72,80,88,100,112,124,136,148,160,172,184,196,212,228,
+  244,260,280,300,320,344,368,396,424,456,492,532,572,616,664,716,772,832,896,
+  960,1024,1024,1024,1024,1024,1024,1024,1024,1024),
+ (0,8,16,24,32,40,48,56,64,72,80,88,100,112,124,136,148,160,172,184,196,212,228,
+  244,260,280,300,320,344,368,396,424,456,492,532,572,616,664,716,772,832,896,
+  960,1024,1024,1024,1024,1024,1024,1024,1024,1024),
+ (0,12,24,36,48,60,72,84,96,108,120,132,144,156,172,188,204,220,236,252,268,288,
+  308,328,348,372,396,420,448,476,508,544,580,620,664,712,764,820,880,944,1024,
+  1024,1024,1024,1024,1024,1024,1024,1024,1024,1024,1024),
+ (0,12,24,36,48,60,72,84,96,108,120,132,144,156,172,188,204,220,236,252,268,288,
+  308,328,348,372,396,420,448,476,508,544,580,620,664,712,764,820,880,944,1024,
+  1024,1024,1024,1024,1024,1024,1024,1024,1024,1024,1024));
+
+
+Type
+ TX4AADArr=Array[0..4095] Of Double;
+ 
+Var
+ X4AAWr,X4AAWi,X4AATwr,X4AATwi,X4AAPwr,X4AAPwi: Array[0..511] Of Double;
+ X4AABitRev: Array[0..511] Of LongInt;
+ X4AAWin: Array[0..2047] Of Double;
+ X4AACode: Array[0..11,0..288] Of LongWord; X4AALen: Array[0..11,0..288] Of Byte;
+ X4AAInv: Array[0..255] Of Double;
+ X4AAQ: Array[0..1,0..1023] Of LongInt; X4AABook,X4AASf: Array[0..1,0..63] Of LongInt;
+  X4AAMs: Array[0..63] Of LongInt;
+ X4AAMaxSfb,X4AAChans,X4AARateIdx,X4AABands: LongInt; X4AAGlobal: Array[0..1] Of LongInt;
+  X4AAOff: Array[0..52] Of LongInt;
+ X4AABuf: Array[0..16383] Of Byte; X4AAPos: LongInt; X4AACounting: Boolean;
+ X4AAX: Array[0..1,0..1023] Of Double;
+Const
+ X4AALimit: Array[0..11] Of LongInt=(0,1,1,2,2,4,4,7,7,12,12,8191);
+ X4AARates: Array[0..12] Of LongInt=(96000,88200,64000,48000,44100,32000,24000,
+  22050,16000,12000,11025,8000,7350);
+
+Procedure X4AAMdctInit;
+Var I,J,B: LongInt; A: Double;
+Begin
+ For I:=0 To 511 Do Begin
+  A:=-2*Pi*I/512; X4AAWr[I]:=Cos(A); X4AAWi[I]:=Sin(A);
+  A:=-Pi*(4*I+1)/(4*1024); X4AATwr[I]:=Cos(A); X4AATwi[I]:=Sin(A);
+  A:=-Pi*I/1024; X4AAPwr[I]:=Cos(A); X4AAPwi[I]:=Sin(A);
+  J:=0; For B:=0 To 8 Do If (I And (1 Shl B))<>0 Then J:=J Or (1 Shl (8-B));
+  X4AABitRev[I]:=J;
+ End;
+ For I:=0 To 2047 Do X4AAWin[I]:=Sin(Pi*(I+0.5)/2048);
+ For I:=0 To 255 Do X4AAInv[I]:=Exp(-(I-100)/4.0*0.69314718055994530942);
+End;
+
+{ MDCT AAC : X[k] = 2 * somme z[n] cos(pi/N (n+1/2+N/2)(k+1/2)), N=1024 }
+Procedure X4AAMdct(Const Z: TX4AADArr; Var X: TX4AADArr);
+Var U: Array[0..1023] Of Double; Tr,Ti: Array[0..511] Of Double; N,H,I,J,K,Len,
+ Half,Step: LongInt; Ar,Ai,Br,Bi,Wr,Wi,Xr,Xi: Double;
+Begin
+ N:=1024; H:=512;
+ For I:=0 To H-1 Do U[I]:=-Z[3*H-1-I]-Z[3*H+I];
+ For I:=H To N-1 Do U[I]:=Z[I-H]-Z[3*H-1-I];
+ For I:=0 To H-1 Do Begin
+  Ar:=U[2*I]; Ai:=U[N-1-2*I];
+  J:=X4AABitRev[I];
+  Tr[J]:=Ar*X4AATwr[I]-Ai*X4AATwi[I]; Ti[J]:=Ar*X4AATwi[I]+Ai*X4AATwr[I];
+ End;
+ Len:=2;
+ While Len<=H Do Begin
+  Half:=Len Div 2; Step:=H Div Len;
+  I:=0;
+  While I<H Do Begin
+   For K:=0 To Half-1 Do Begin
+    Wr:=X4AAWr[K*Step]; Wi:=X4AAWi[K*Step];
+    Br:=Tr[I+K+Half]*Wr-Ti[I+K+Half]*Wi; Bi:=Tr[I+K+Half]*Wi+Ti[I+K+Half]*Wr;
+    Tr[I+K+Half]:=Tr[I+K]-Br; Ti[I+K+Half]:=Ti[I+K]-Bi;
+    Tr[I+K]:=Tr[I+K]+Br; Ti[I+K]:=Ti[I+K]+Bi;
+   End;
+   Inc(I,Len);
+  End;
+  Len:=Len*2;
+ End;
+ For K:=0 To H-1 Do Begin
+  Xr:=Tr[K]*X4AAPwr[K]-Ti[K]*X4AAPwi[K]; Xi:=Tr[K]*X4AAPwi[K]+Ti[K]*X4AAPwr[K];
+  X[2*K]:=2*Xr; X[N-1-2*K]:=-2*Xi;
+ End;
+End;
+
+{ codes Huffman a partir des arbres du decodeur : X4AACode/X4AALen[livre,symbole] ;
+ livre 0 = facteurs d'echelle }
+Procedure X4AAWalk(Book,Node: LongInt; Code: LongWord; Depth: LongInt);
+Var C: LongInt;
+Begin
+ C:=X4AAHuffLeft[Node];
+ If C<0 Then Begin X4AACode[Book,-C-1]:=Code Shl 1; X4AALen[Book,-C-1]:=Depth+1; End
+ Else If C>0 Then X4AAWalk(Book,C,Code Shl 1,Depth+1);
+ C:=X4AAHuffRight[Node];
+ If C<0 Then Begin X4AACode[Book,-C-1]:=(Code Shl 1) Or 1; X4AALen[Book,-C-1]:=
+  Depth+1; End
+ Else If C>0 Then X4AAWalk(Book,C,(Code Shl 1) Or 1,Depth+1);
+End;
+
+Procedure X4AAPut(V: LongWord; N: LongInt);
+Var K: LongInt;
+Begin
+ If N<=0 Then Exit;
+ If X4AACounting Then Begin Inc(X4AAPos,N); Exit; End;
+ For K:=N-1 Downto 0 Do Begin
+  If ((V Shr K) And 1)<>0 Then X4AABuf[X4AAPos Shr 3]:=X4AABuf[X4AAPos Shr 3] Or (1 Shl
+   (7-(X4AAPos And 7)));
+  Inc(X4AAPos);
+ End;
+End;
+
+{ ecrit (Emit) ou compte les bits des valeurs Q[C, Off..Off+W-1] avec le livre
+ Cb }
+Function X4AABand(Cb,C,Off,W: LongInt; Emit: Boolean): LongInt;
+Var Dim,Radix,K,D,Sym,Bits,A,E2: LongInt; V: Array[0..3] Of LongInt; Signed:
+ Boolean;
+Begin
+ Bits:=0;
+ If Cb<=4 Then Begin Dim:=4; Radix:=3; End Else Begin Dim:=2; If Cb<=6 Then
+  Radix:=9 Else If Cb<=8 Then Radix:=8 Else If Cb<=10 Then Radix:=13 Else
+  Radix:=17; End;
+ Signed:=(Cb<=2) Or ((Cb>=5) And (Cb<=6));
+ K:=0;
+ While K<W Do Begin
+  Sym:=0;
+  For D:=0 To Dim-1 Do Begin
+   V[D]:=X4AAQ[C,Off+K+D];
+   If Signed Then Begin
+    If Cb<=2 Then A:=V[D]+1 Else A:=V[D]+4;
+   End Else Begin
+    A:=Abs(V[D]); If (Cb=11) And (A>16) Then A:=16;
+   End;
+   Sym:=Sym*Radix+A;
+  End;
+  Inc(Bits,X4AALen[Cb,Sym]);
+  If Emit Then X4AAPut(X4AACode[Cb,Sym],X4AALen[Cb,Sym]);
+  If Not Signed Then
+   For D:=0 To Dim-1 Do If V[D]<>0 Then Begin
+    Inc(Bits);
+    If Emit Then If V[D]<0 Then X4AAPut(1,1) Else X4AAPut(0,1);
+   End;
+  If Cb=11 Then
+   For D:=0 To Dim-1 Do If Abs(V[D])>=16 Then Begin
+    A:=Abs(V[D]);
+    { N = floor(log2(A)) ; (N-4) uns, un zero, puis N bits }
+    Sym:=0; While (A Shr (Sym+1))>0 Do Inc(Sym);
+    Inc(Bits,(Sym-4)+1+Sym);
+    If Emit Then Begin
+     For E2:=1 To Sym-4 Do X4AAPut(1,1);
+     X4AAPut(0,1);
+     X4AAPut(A-(1 Shl Sym),Sym);
+    End;
+   End;
+  Inc(K,Dim);
+ End;
+ X4AABand:=Bits;
+End;
+
+{ choisit le livre de code d'une bande ; renvoie 0 si nulle }
+Function X4AABestBook(C,Off,W: LongInt): LongInt;
+Var K,Mx,F,Cb,Best,BestBits,B: LongInt;
+Begin
+ Mx:=0; For K:=Off To Off+W-1 Do If Abs(X4AAQ[C,K])>Mx Then Mx:=Abs(X4AAQ[C,K]);
+ If Mx=0 Then Begin X4AABestBook:=0; Exit; End;
+ F:=1; While X4AALimit[F]<Mx Do Inc(F);
+ Best:=F; BestBits:=X4AABand(F,C,Off,W,False);
+ For Cb:=F+1 To 11 Do If (Cb<=F+3) And (X4AALimit[Cb]>=Mx) Then Begin
+  B:=X4AABand(Cb,C,Off,W,False);
+  If B<BestBits Then Begin BestBits:=B; Best:=Cb; End;
+ End;
+ X4AABestBook:=Best;
+End;
+
+Function X4AAQuant(X,Inv: Double): LongInt;
+Var A,Y: Double; Q: LongInt;
+Begin
+ A:=Abs(X)*Inv;
+ If A<=0 Then Begin X4AAQuant:=0; Exit; End;
+ Y:=Sqrt(A*Sqrt(A)); { A^0.75 }
+ If Y>8191 Then Y:=8191.9;
+ Q:=Trunc(Y+0.4054);
+ If Q>8191 Then Q:=8191;
+ If X<0 Then Q:=-Q;
+ X4AAQuant:=Q;
+End;
+
+{ quantifie toutes les bandes pour le gain G (MS = bandes M/S) ; renvoie False
+ si une valeur depasse 8191 }
+Procedure X4AAPrepare(G: LongInt);
+Var B,C,K,Off,W,Cb,Cb2,BitsLR,BitsMS: LongInt; InvLR,InvMS,M,S: Double; QL,QR:
+ Array[0..255] Of LongInt; Mx: LongInt;
+Begin
+ InvLR:=X4AAInv[G]; If G>=2 Then InvMS:=X4AAInv[G-2] Else InvMS:=InvLR;
+ For B:=0 To X4AABands-1 Do Begin
+  Off:=X4AAOff[B]; W:=X4AAOff[B+1]-Off;
+  X4AAMs[B]:=0;
+  If B>=X4AAMaxSfb Then Begin
+   For K:=Off To Off+W-1 Do Begin X4AAQ[0,K]:=0; X4AAQ[1,K]:=0; End;
+   Continue;
+  End;
+  For C:=0 To X4AAChans-1 Do For K:=Off To Off+W-1 Do X4AAQ[C,K]:=X4AAQuant(X4AAX[C,K],
+   InvLR);
+  X4AASf[0,B]:=G; X4AASf[1,B]:=G;
+  If X4AAChans=2 Then Begin
+   { variante M/S }
+   BitsLR:=0;
+   Cb:=X4AABestBook(0,Off,W); If Cb<>0 Then Inc(BitsLR,X4AABand(Cb,0,Off,W,False));
+   Cb:=X4AABestBook(1,Off,W); If Cb<>0 Then Inc(BitsLR,X4AABand(Cb,1,Off,W,False));
+   For K:=0 To W-1 Do Begin QL[K]:=X4AAQ[0,Off+K]; QR[K]:=X4AAQ[1,Off+K]; End;
+   For K:=Off To Off+W-1 Do Begin
+    M:=(X4AAX[0,K]+X4AAX[1,K])*0.5; S:=(X4AAX[0,K]-X4AAX[1,K])*0.5;
+    X4AAQ[0,K]:=X4AAQuant(M,InvMS); X4AAQ[1,K]:=X4AAQuant(S,InvMS);
+   End;
+   BitsMS:=0;
+   Cb:=X4AABestBook(0,Off,W); If Cb<>0 Then Inc(BitsMS,X4AABand(Cb,0,Off,W,False));
+   Cb:=X4AABestBook(1,Off,W); If Cb<>0 Then Inc(BitsMS,X4AABand(Cb,1,Off,W,False));
+   If BitsMS<BitsLR Then Begin
+    X4AAMs[B]:=1; X4AASf[0,B]:=G-2; X4AASf[1,B]:=G-2;
+   End Else Begin
+    For K:=0 To W-1 Do Begin X4AAQ[0,Off+K]:=QL[K]; X4AAQ[1,Off+K]:=QR[K]; End;
+   End;
+  End;
+ End;
+ For C:=0 To X4AAChans-1 Do
+  For B:=0 To X4AAMaxSfb-1 Do X4AABook[C,B]:=X4AABestBook(C,X4AAOff[B],X4AAOff[B+1]-X4AAOff[
+   B]);
+End;
+
+{ ecrit (ou compte) une trame sans en-tete ADTS ; Gain = gain de reference }
+Procedure X4AAWriteFrame(G: LongInt);
+Var C,B,E,Cb,Len,Prev,D,Last,AnyMs,Gg: LongInt;
+Procedure Ics(Ch: LongInt; Info: Boolean);
+Var Bb,Ee,Cb2,L2,Pv,Dd: LongInt;
+Begin
+ Gg:=G; For Bb:=0 To X4AAMaxSfb-1 Do If X4AABook[Ch,Bb]<>0 Then Begin Gg:=X4AASf[Ch,
+  Bb]; Break; End;
+ X4AAGlobal[Ch]:=Gg;
+ X4AAPut(Gg,8);
+ If Info Then Begin X4AAPut(0,1); X4AAPut(0,2); X4AAPut(0,1); X4AAPut(X4AAMaxSfb,6);
+  X4AAPut(0,1); End;
+ Bb:=0;
+ While Bb<X4AAMaxSfb Do Begin
+  Cb2:=X4AABook[Ch,Bb]; Ee:=Bb; While (Ee<X4AAMaxSfb) And (X4AABook[Ch,Ee]=Cb2) Do
+   Inc(Ee);
+  X4AAPut(Cb2,4); L2:=Ee-Bb;
+  While L2>=31 Do Begin X4AAPut(31,5); Dec(L2,31); End;
+  X4AAPut(L2,5); Bb:=Ee;
+ End;
+ Pv:=Gg;
+ For Bb:=0 To X4AAMaxSfb-1 Do If X4AABook[Ch,Bb]<>0 Then Begin
+  Dd:=X4AASf[Ch,Bb]-Pv;
+  X4AAPut(X4AACode[0,Dd+60],X4AALen[0,Dd+60]); Pv:=X4AASf[Ch,Bb];
+ End;
+ X4AAPut(0,1); X4AAPut(0,1); X4AAPut(0,1);
+ For Bb:=0 To X4AAMaxSfb-1 Do If X4AABook[Ch,Bb]<>0 Then X4AABand(X4AABook[Ch,Bb],Ch,
+  X4AAOff[Bb],X4AAOff[Bb+1]-X4AAOff[Bb],True);
+End;
+Begin
+ If X4AAChans=1 Then Begin
+  X4AAPut(0,3); X4AAPut(0,4); Ics(0,True);
+ End Else Begin
+  X4AAPut(1,3); X4AAPut(0,4); X4AAPut(1,1);
+  X4AAPut(0,1); X4AAPut(0,2); X4AAPut(0,1); X4AAPut(X4AAMaxSfb,6); X4AAPut(0,1);
+  AnyMs:=0; For B:=0 To X4AAMaxSfb-1 Do If X4AAMs[B]<>0 Then AnyMs:=1;
+  If AnyMs<>0 Then Begin X4AAPut(1,2); For B:=0 To X4AAMaxSfb-1 Do X4AAPut(X4AAMs[B],1);
+   End Else X4AAPut(0,2);
+  Ics(0,False); Ics(1,False);
+ End;
+ X4AAPut(7,3);
+End;
+
+
+{ ---- MP2 (adapte de FFMPEG.PAS : mpegaudioenc_template.c) ---- }
+Const
+ X4AMPBitrate: Array[0..89] Of Word=(
+  0,32,64,96,128,160,192,224,256,288,320,352,384,416,448,
+  0,32,48,56,64,80,96,112,128,160,192,224,256,320,384,
+  0,32,40,48,56,64,80,96,112,128,160,192,224,256,320,
+  0,32,48,56,64,80,96,112,128,144,160,176,192,224,256,
+  0,8,16,24,32,40,48,56,64,80,96,112,128,144,160,
+  0,8,16,24,32,40,48,56,64,80,96,112,128,144,160);
+ X4AMPFreqTab: Array[0..2] Of Word=(44100,48000,32000);
+X4AMPalloctable1: Array[0..299] Of Byte=(
+ 4,0,2,4,5,6,7,8,9,10,11,12,13,14,15,16,
+ 4,0,2,4,5,6,7,8,9,10,11,12,13,14,15,16,
+ 4,0,2,4,5,6,7,8,9,10,11,12,13,14,15,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 3,0,1,2,3,4,5,16,3,0,1,2,3,4,5,16,
+ 2,0,1,16,2,0,1,16,2,0,1,16,2,0,1,16,
+ 2,0,1,16,2,0,1,16,2,0,1,16);
+X4AMPalloctable3: Array[0..111] Of Byte=(
+ 4,0,1,3,4,5,6,7,8,9,10,11,12,13,14,15,
+ 4,0,1,3,4,5,6,7,8,9,10,11,12,13,14,15,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7);
+X4AMPalloctable4: Array[0..195] Of Byte=(
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+ 4,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,3,0,1,3,4,5,6,7,
+ 3,0,1,3,4,5,6,7,2,0,1,3,2,0,1,3,
+ 2,0,1,3,2,0,1,3,2,0,1,3,2,0,1,3,
+ 2,0,1,3,2,0,1,3,2,0,1,3,2,0,1,3,
+ 2,0,1,3,2,0,1,3,2,0,1,3,2,0,1,3,
+ 2,0,1,3,2,0,1,3,2,0,1,3,2,0,1,3,
+ 2,0,1,3);
+X4AMPQuantSteps: Array[0..16] Of LongInt=(
+ 3,5,7,9,15,31,63,127,255,511,1023,2047,4095,8191,16383,32767,65535);
+X4AMPQuantBits: Array[0..16] Of LongInt=(
+ -5,-7,3,-10,4,5,6,7,8,9,10,11,12,13,14,15,16);
+X4AMPSblimit: Array[0..4] Of LongInt=(
+ 27,30,8,12,30);
+X4AMPEnWindow: Array[0..256] Of LongInt=(
+ 0,-1,-1,-1,-1,-1,-1,-2,-2,-2,-2,-3,-3,-4,-4,-5,
+ -5,-6,-7,-7,-8,-9,-10,-11,-13,-14,-16,-17,-19,-21,-24,-26,
+ -29,-31,-35,-38,-41,-45,-49,-53,-58,-63,-68,-73,-79,-85,-91,-97,
+ -104,-111,-117,-125,-132,-139,-147,-154,-161,-169,-176,-183,-190,-196,-202,-
+  208,
+ 213,218,222,225,227,228,228,227,224,221,215,208,200,189,177,163,
+ 146,127,106,83,57,29,-2,-36,-72,-111,-153,-197,-244,-294,-347,-401,
+ -459,-519,-581,-645,-711,-779,-848,-919,-991,-1064,-1137,-1210,-1283,-1356,-
+  1428,-1498,
+ -1567,-1634,-1698,-1759,-1817,-1870,-1919,-1962,-2001,-2032,-2057,-2075,-2085,-
+  2087,-2080,-2063,
+ 2037,2000,1952,1893,1822,1739,1644,1535,1414,1280,1131,970,794,605,402,185,
+ -45,-288,-545,-814,-1095,-1388,-1692,-2006,-2330,-2663,-3004,-3351,-3705,-4063,
+  -4425,-4788,
+ -5153,-5517,-5879,-6237,-6589,-6935,-7271,-7597,-7910,-8209,-8491,-8755,-8998,-
+  9219,-9416,-9585,
+ -9727,-9838,-9916,-9959,-9966,-9935,-9863,-9750,-9592,-9389,-9139,-8840,-8492,-
+  8092,-7640,-7134,
+ 6574,5959,5288,4561,3776,2935,2037,1082,70,-998,-2122,-3300,-4533,-5818,-7154,-
+  8540,
+ -9975,-11455,-12980,-14548,-16155,-17799,-19478,-21189,-22929,-24694,-26482,-
+  28289,-30112,-31947,-33791,-35640,
+ -37489,-39336,-41176,-43006,-44821,-46617,-48390,-50137,-51853,-53534,-55178,-
+  56778,-58333,-59838,-61289,-62684,
+ -64019,-65290,-66494,-67629,-68692,-69679,-70590,-71420,-72169,-72835,-73415,-
+  73908,-74313,-74630,-74856,-74992,
+ 75038);
+
+Function X4AMPSarL(V: Int64; N: LongInt): Int64;
+Begin If V>=0 Then X4AMPSarL:=V Shr N Else X4AMPSarL:=-((-V-1) Shr N)-1; End;
+Function X4AMPL2Table(Bitrate,Nch,Freq,Lsf: LongInt): LongInt;
+Var Ch: LongInt;
+Begin
+ Ch:=Bitrate Div Nch;
+ If Lsf=0 Then Begin
+  If ((Freq=48000) And (Ch>=56)) Or ((Ch>=56) And (Ch<=80)) Then X4AMPL2Table:=0
+  Else If (Freq<>48000) And (Ch>=96) Then X4AMPL2Table:=1
+  Else If (Freq<>32000) And (Ch<=48) Then X4AMPL2Table:=2
+  Else X4AMPL2Table:=3;
+ End Else X4AMPL2Table:=4;
+End;
+Const
+ X4AM2SFTable: Array[0..63] Of LongInt=(2097152,1664510,1321122,1048576,832255,
+  660561,524288,416127,330280,262144,208063,165140,131072,104031,82570,65536,
+  52015,41285,32768,26007,20642,16384,13003,10321,8192,6501,5160,4096,3250,2580,
+  2048,1625,1290,1024,812,645,512,406,322,256,203,161,128,101,80,64,50,40,32,25,
+  20,16,12,10,8,6,5,4,3,2,2,1,1,1);
+ X4AM2SFInv: Array[0..63] Of LongWord=($35000000,$35214518,$354B2FF5,$35800000,
+  $35A14518,$35CB2FF5,$36000000,$36214518,$364B2FF5,$36800000,$36A14518,
+  $36CB2FF5,$37000000,$37214518,$374B2FF5,$37800000,$37A14518,$37CB2FF5,
+  $38000000,$38214518,$384B2FF5,$38800000,$38A14518,$38CB2FF5,$39000000,
+  $39214518,$394B2FF5,$39800000,$39A14518,$39CB2FF5,$3A000000,$3A214518,
+  $3A4B2FF5,$3A800000,$3AA14518,$3ACB2FF5,$3B000000,$3B214518,$3B4B2FF5,
+  $3B800000,$3BA14518,$3BCB2FF5,$3C000000,$3C214518,$3C4B2FF5,$3C800000,
+  $3CA14518,$3CCB2FF5,$3D000000,$3D214518,$3D4B2FF5,$3D800000,$3DA14518,
+  $3DCB2FF5,$3E000000,$3E214518,$3E4B2FF5,$3E800000,$3EA14518,$3ECB2FF5,
+  $3F000000,$3F214518,$3F4B2FF5,$3F800000);
+ X4AM2Cos32: Array[0..29] Of LongInt=(17733,42813,16704,83981,29490,19704,16463,
+  167154,25826,21195,18577,34756,56441,17121,333906,22112,38320,17401,67429,
+  19101,27503,16563,111660,20398,31869,16890,48633,18124,24396,16403);
+ X4AM2BitInv: Array[0..31] Of Byte=(0,16,8,24,4,20,12,28,2,18,10,26,6,22,14,30,1,
+  17,9,25,5,21,13,29,3,19,11,27,7,23,15,31);
+ X4AM2QuantSnr: Array[0..16] Of Word=(70,110,160,208,253,316,378,439,499,559,620,
+  680,740,800,861,920,980);
+ X4AM2Smr: Array[0..31] Of SmallInt=(300,170,160,100,30,120,80,25,50,50,60,60,50,
+  60,100,60,-40,-100,-210,-300,-420,-550,-680,-750,-750,-750,-750,-750,-910,-
+  1070,-1100,-1080);
+ X4AM2NbSf: Array[0..3] Of Byte=(3,2,1,2);
+Type
+ TX4AM2Tab=Array[0..31] Of LongInt;
+ TX4AM2Ctx=Record
+  Nch,Lsf,BitrateIndex,FreqIndex,FrameSize,FrameFrac,FrameFracIncr,DoPadding,
+   SbLimit,AllocSet: LongInt;
+  SamplesBuf: Array[0..1,0..4095] Of SmallInt; SamplesOffset: Array[0..1] Of
+   LongInt;
+  SbSamples: Array[0..1,0..2,0..11,0..31] Of LongInt;
+  ScaleFactors: Array[0..1,0..31,0..2] Of Byte; ScaleCode: Array[0..1,0..31] Of
+   Byte;
+  FilterBank: Array[0..511] Of SmallInt;
+  TotalQuantBits: Array[0..16] Of Word;
+  Out: Array[0..2047] Of Byte; OutBits: LongInt;
+ End;
+ PX4AM2Ctx=^TX4AM2Ctx;
+
+Function X4AM2Alloc(S: PX4AM2Ctx; Idx: LongInt): LongInt;
+Begin
+ Case S^.AllocSet Of
+  0: X4AM2Alloc:=X4AMPalloctable1[Idx];
+  1: X4AM2Alloc:=X4AMPalloctable3[Idx];
+  Else X4AM2Alloc:=X4AMPalloctable4[Idx];
+ End;
+End;
+
+Function X4AM2Mul(A,B: LongInt): LongInt;
+Begin X4AM2Mul:=LongInt(X4AMPSarL(Int64(A)*Int64(B),15)); End;
+
+Procedure X4AM2Put(S: PX4AM2Ctx; N: LongInt; V: LongWord);
+Var I,P: LongInt;
+Begin
+ For I:=N-1 DownTo 0 Do Begin
+  P:=S^.OutBits Shr 3;
+  If (V Shr I) And 1<>0 Then S^.Out[P]:=S^.Out[P] Or (128 Shr (S^.OutBits And
+   7));
+  Inc(S^.OutBits);
+ End;
+End;
+
+Procedure X4AM2Idct32(Var Out: TX4AM2Tab; Var Tab: TX4AM2Tab);
+Var I,J,T,T1,Xp,X1,X2,X3,X4,Xr: LongInt;
+Begin
+ J:=31; While J>=3 Do Begin Tab[J]:=Tab[J]+Tab[J-2]; Dec(J,2); End;
+ T:=30;
+ Repeat Tab[T]:=Tab[T]+Tab[T-4]; Tab[T+1]:=Tab[T+1]+Tab[T-3]; Dec(T,4); Until
+  T=2;
+ T:=28;
+ Repeat
+  Tab[T]:=Tab[T]+Tab[T-8]; Tab[T+1]:=Tab[T+1]+Tab[T-7]; Tab[T+2]:=Tab[T+2]+Tab[
+   T-6]; Tab[T+3]:=Tab[T+3]+Tab[T-5];
+  Dec(T,8);
+ Until T=4;
+ T:=0;
+ Repeat
+  Tab[T+3]:=-Tab[T+3]; Tab[T+6]:=-Tab[T+6];
+  Tab[T+11]:=-Tab[T+11]; Tab[T+12]:=-Tab[T+12]; Tab[T+13]:=-Tab[T+13]; Tab[T+
+   15]:=-Tab[T+15];
+  Inc(T,16);
+ Until T=32;
+ Xp:=0; T:=0;
+ Repeat
+  X3:=X4AM2Mul(Tab[T+16],23170);
+  X4:=Tab[T]-X3; X3:=Tab[T]+X3;
+  X2:=X4AM2Mul(-(Tab[T+24]+Tab[T+8]),23170);
+  X1:=X4AM2Mul(Tab[T+8]-X2,X4AM2Cos32[Xp]);
+  X2:=X4AM2Mul(Tab[T+8]+X2,X4AM2Cos32[Xp+1]);
+  Tab[T]:=X3+X1; Tab[T+8]:=X4-X2; Tab[T+16]:=X4+X2; Tab[T+24]:=X3-X1;
+  Inc(T);
+ Until T=8;
+ Inc(Xp,2);
+ T:=0;
+ Repeat
+  Xr:=X4AM2Mul(Tab[T+28],X4AM2Cos32[Xp]);
+  Tab[T+28]:=Tab[T]-Xr; Tab[T]:=Tab[T]+Xr;
+  Xr:=X4AM2Mul(Tab[T+4],X4AM2Cos32[Xp+1]);
+  Tab[T+4]:=Tab[T+24]-Xr; Tab[T+24]:=Tab[T+24]+Xr;
+  Xr:=X4AM2Mul(Tab[T+20],X4AM2Cos32[Xp+2]);
+  Tab[T+20]:=Tab[T+8]-Xr; Tab[T+8]:=Tab[T+8]+Xr;
+  Xr:=X4AM2Mul(Tab[T+12],X4AM2Cos32[Xp+3]);
+  Tab[T+12]:=Tab[T+16]-Xr; Tab[T+16]:=Tab[T+16]+Xr;
+  Inc(T);
+ Until T=4;
+ Inc(Xp,4);
+ For I:=0 To 3 Do Begin
+  Xr:=X4AM2Mul(Tab[30-I*4],X4AM2Cos32[Xp]);
+  Tab[30-I*4]:=Tab[I*4]-Xr; Tab[I*4]:=Tab[I*4]+Xr;
+  Xr:=X4AM2Mul(Tab[2+I*4],X4AM2Cos32[Xp+1]);
+  Tab[2+I*4]:=Tab[28-I*4]-Xr; Tab[28-I*4]:=Tab[28-I*4]+Xr;
+  Xr:=X4AM2Mul(Tab[31-I*4],X4AM2Cos32[Xp]);
+  Tab[31-I*4]:=Tab[1+I*4]-Xr; Tab[1+I*4]:=Tab[1+I*4]+Xr;
+  Xr:=X4AM2Mul(Tab[3+I*4],X4AM2Cos32[Xp+1]);
+  Tab[3+I*4]:=Tab[29-I*4]-Xr; Tab[29-I*4]:=Tab[29-I*4]+Xr;
+  Inc(Xp,2);
+ End;
+ T:=30; T1:=1;
+ Repeat
+  Xr:=X4AM2Mul(Tab[T1],X4AM2Cos32[Xp]);
+  Tab[T1]:=Tab[T]-Xr; Tab[T]:=Tab[T]+Xr;
+  Dec(T,2); Inc(T1,2); Inc(Xp);
+ Until T<0;
+ For I:=0 To 31 Do Out[I]:=Tab[X4AM2BitInv[I]];
+End;
+
+Procedure X4AM2Filter(S: PX4AM2Ctx; Ch: LongInt; Const Smp: Array Of SmallInt;
+ Start,Incr: LongInt);
+Var Offset,I,J,K,Sum,P,Q,Pos: LongInt; Tmp: Array[0..63] Of LongInt; Tmp1,Out:
+ TX4AM2Tab;
+Begin
+ Offset:=S^.SamplesOffset[Ch]; Pos:=Start;
+ For J:=0 To 35 Do Begin
+  For I:=0 To 31 Do Begin S^.SamplesBuf[Ch,Offset+(31-I)]:=Smp[Pos]; Inc(Pos,
+   Incr); End;
+  For I:=0 To 63 Do Begin
+   Sum:=0;
+   For K:=0 To 7 Do Sum:=Sum+LongInt(S^.SamplesBuf[Ch,Offset+I+K*64])*LongInt(
+    S^.FilterBank[I+K*64]);
+   Tmp[I]:=Sum;
+  End;
+  Tmp1[0]:=LongInt(X4AMPSarL(Tmp[16],14));
+  For I:=1 To 16 Do Tmp1[I]:=LongInt(X4AMPSarL(Int64(Tmp[I+16])+Tmp[16-I],14));
+  For I:=17 To 31 Do Tmp1[I]:=LongInt(X4AMPSarL(Int64(Tmp[I+16])-Tmp[80-I],14));
+  X4AM2Idct32(Out,Tmp1);
+  For I:=0 To 31 Do S^.SbSamples[Ch,J Div 12,J Mod 12,I]:=Out[I];
+  Dec(Offset,32);
+  If Offset<0 Then Begin
+   Move(S^.SamplesBuf[Ch,0],S^.SamplesBuf[Ch,4096-(512-32)],(512-32)*2);
+   Offset:=4096-512;
+  End;
+ End;
+ S^.SamplesOffset[Ch]:=Offset;
+End;
+
+Procedure X4AM2ScaleFactors(S: PX4AM2Ctx; Ch: LongInt);
+Var J,I,K,Vmax,V,N,Index,D1,D2,Code: LongInt; Sf: Array[0..2] Of Byte;
+Begin
+ For J:=0 To S^.SbLimit-1 Do Begin
+  For I:=0 To 2 Do Begin
+   Vmax:=Abs(S^.SbSamples[Ch,I,0,J]);
+   For K:=1 To 11 Do Begin V:=Abs(S^.SbSamples[Ch,I,K,J]); If V>Vmax Then Vmax:=
+    V; End;
+   If Vmax>1 Then Begin
+    N:=0; V:=Vmax; While V>1 Do Begin V:=V Shr 1; Inc(N); End;
+    Index:=(21-N)*3-3;
+    If Index>=0 Then Begin
+     While Vmax<=X4AM2SFTable[Index+1] Do Inc(Index);
+    End Else Index:=0;
+   End Else Index:=62;
+   Sf[I]:=Index;
+  End;
+  D1:=LongInt(Sf[0])-LongInt(Sf[1])+64; D2:=LongInt(Sf[1])-LongInt(Sf[2])+64;
+  Case D1 Of 0..61: D1:=0; 62..63: D1:=1; 64: D1:=2; 65..66: D1:=3; Else D1:=4;
+   End;
+  Case D2 Of 0..61: D2:=0; 62..63: D2:=1; 64: D2:=2; 65..66: D2:=3; Else D2:=4;
+   End;
+  Code:=0;
+  Case D1*5+D2 Of
+   0*5+0,0*5+4,3*5+4,4*5+0,4*5+4: Code:=0;
+   0*5+1,0*5+2,4*5+1,4*5+2: Begin Code:=3; Sf[2]:=Sf[1]; End;
+   0*5+3,4*5+3: Begin Code:=3; Sf[1]:=Sf[2]; End;
+   1*5+0,1*5+4,2*5+4: Begin Code:=1; Sf[1]:=Sf[0]; End;
+   1*5+1,1*5+2,2*5+0,2*5+1,2*5+2: Begin Code:=2; Sf[1]:=Sf[0]; Sf[2]:=Sf[0];
+    End;
+   2*5+3,3*5+3: Begin Code:=2; Sf[0]:=Sf[2]; Sf[1]:=Sf[2]; End;
+   3*5+0,3*5+1,3*5+2: Begin Code:=2; Sf[0]:=Sf[1]; Sf[2]:=Sf[1]; End;
+   1*5+3: Begin Code:=2; If Sf[0]>Sf[2] Then Sf[0]:=Sf[2]; Sf[1]:=Sf[0]; Sf[2]:=
+    Sf[0]; End;
+  End;
+  For I:=0 To 2 Do S^.ScaleFactors[Ch,J,I]:=Sf[I];
+  S^.ScaleCode[Ch,J]:=Code;
+ End;
+End;
+
+Procedure X4AM2Allocate(S: PX4AM2Ctx; Var BitAlloc: Array Of Byte; Var Padding:
+ LongInt);
+{ BitAlloc : [ch*32+sb] }
+Var
+ I,Ch,B,MaxSmr,MaxCh,MaxSb,Cur,MaxFrame,Incr,J,A0: LongInt;
+ Smr: Array[0..1,0..31] Of LongInt; Status: Array[0..1,0..31] Of Byte;
+Begin
+ For Ch:=0 To S^.Nch-1 Do For I:=0 To 31 Do Begin Smr[Ch,I]:=X4AM2Smr[I]; Status[
+  Ch,I]:=0; BitAlloc[Ch*32+I]:=0; End;
+ MaxFrame:=S^.FrameSize;
+ Inc(S^.FrameFrac,S^.FrameFracIncr);
+ If S^.FrameFrac>=65536 Then Begin Dec(S^.FrameFrac,65536); S^.DoPadding:=1;
+  Inc(MaxFrame,8); End Else S^.DoPadding:=0;
+ Cur:=32; J:=0;
+ For I:=0 To S^.SbLimit-1 Do Begin
+  Incr:=X4AM2Alloc(S,J); Inc(Cur,Incr*S^.Nch); Inc(J,1 Shl Incr);
+ End;
+ While True Do Begin
+  MaxSb:=-1; MaxCh:=-1; MaxSmr:=-2147483647-1;
+  For Ch:=0 To S^.Nch-1 Do For I:=0 To S^.SbLimit-1 Do
+   If (Smr[Ch,I]>MaxSmr) And (Status[Ch,I]<>2) Then Begin MaxSmr:=Smr[Ch,I];
+    MaxSb:=I; MaxCh:=Ch; End;
+  If MaxSb<0 Then Break;
+  J:=0; For I:=0 To MaxSb-1 Do Inc(J,1 Shl X4AM2Alloc(S,J));
+  A0:=X4AM2Alloc(S,J);
+  If Status[MaxCh,MaxSb]=0 Then
+   Incr:=2+X4AM2NbSf[S^.ScaleCode[MaxCh,MaxSb]]*6+S^.TotalQuantBits[X4AM2Alloc(S,J+
+    1)]
+  Else Begin
+   B:=BitAlloc[MaxCh*32+MaxSb];
+   Incr:=LongInt(S^.TotalQuantBits[X4AM2Alloc(S,J+B+1)])-LongInt(
+    S^.TotalQuantBits[X4AM2Alloc(S,J+B)]);
+  End;
+  If Cur+Incr<=MaxFrame Then Begin
+   Inc(BitAlloc[MaxCh*32+MaxSb]); B:=BitAlloc[MaxCh*32+MaxSb];
+   Inc(Cur,Incr);
+   Smr[MaxCh,MaxSb]:=X4AM2Smr[MaxSb]-X4AM2QuantSnr[X4AM2Alloc(S,J+B)];
+   If B=(1 Shl A0)-1 Then Status[MaxCh,MaxSb]:=2 Else Status[MaxCh,MaxSb]:=1;
+  End Else Status[MaxCh,MaxSb]:=2;
+ End;
+ Padding:=MaxFrame-Cur;
+End;
+
+Procedure X4AM2EncodeFrame(S: PX4AM2Ctx; Var BitAlloc: Array Of Byte; Padding:
+ LongInt);
+Var I,J,K,L,Bab,B,Ch,Qindex,Steps,M,Bits,E,Sample: LongInt; Q: Array[0..2] Of
+ LongInt; A: Single; D: Double; Inv: Single;
+Begin
+ FillChar(S^.Out,SizeOf(S^.Out),0); S^.OutBits:=0;
+ X4AM2Put(S,12,$FFF); X4AM2Put(S,1,1-S^.Lsf); X4AM2Put(S,2,2); X4AM2Put(S,1,1);
+ X4AM2Put(S,4,S^.BitrateIndex); X4AM2Put(S,2,S^.FreqIndex); X4AM2Put(S,1,
+  S^.DoPadding); X4AM2Put(S,1,0);
+ If S^.Nch=2 Then X4AM2Put(S,2,0) Else X4AM2Put(S,2,3);
+ X4AM2Put(S,2,0); X4AM2Put(S,1,0); X4AM2Put(S,1,1); X4AM2Put(S,2,0);
+ J:=0;
+ For I:=0 To S^.SbLimit-1 Do Begin
+  Bab:=X4AM2Alloc(S,J);
+  For Ch:=0 To S^.Nch-1 Do X4AM2Put(S,Bab,BitAlloc[Ch*32+I]);
+  Inc(J,1 Shl Bab);
+ End;
+ For I:=0 To S^.SbLimit-1 Do For Ch:=0 To S^.Nch-1 Do If BitAlloc[Ch*32+I]<>0
+  Then X4AM2Put(S,2,S^.ScaleCode[Ch,I]);
+ For I:=0 To S^.SbLimit-1 Do For Ch:=0 To S^.Nch-1 Do If BitAlloc[Ch*32+I]<>0
+  Then
+  Case S^.ScaleCode[Ch,I] Of
+   0: Begin X4AM2Put(S,6,S^.ScaleFactors[Ch,I,0]); X4AM2Put(S,6,S^.ScaleFactors[Ch,
+    I,1]); X4AM2Put(S,6,S^.ScaleFactors[Ch,I,2]); End;
+   3,1: Begin X4AM2Put(S,6,S^.ScaleFactors[Ch,I,0]); X4AM2Put(S,6,S^.ScaleFactors[
+    Ch,I,2]); End;
+   2: X4AM2Put(S,6,S^.ScaleFactors[Ch,I,0]);
+  End;
+ For K:=0 To 2 Do Begin
+  L:=0;
+  While L<12 Do Begin
+   J:=0;
+   For I:=0 To S^.SbLimit-1 Do Begin
+    Bab:=X4AM2Alloc(S,J);
+    For Ch:=0 To S^.Nch-1 Do Begin
+     B:=BitAlloc[Ch*32+I];
+     If B<>0 Then Begin
+      Qindex:=X4AM2Alloc(S,J+B); Steps:=X4AMPQuantSteps[Qindex];
+      For M:=0 To 2 Do Begin
+       Sample:=S^.SbSamples[Ch,K,L+M,I];
+       E:=S^.ScaleFactors[Ch,I,K];
+       Move(X4AM2SFInv[E],Inv,4);
+       A:=Sample; A:=A*Inv;
+       D:=A; D:=D+1.0; D:=D*Steps; D:=D*0.5;
+       Q[M]:=Trunc(D);
+       If Q[M]>=Steps Then Q[M]:=Steps-1;
+       If Q[M]<0 Then Q[M]:=0;
+      End;
+      Bits:=X4AMPQuantBits[Qindex];
+      If Bits<0 Then X4AM2Put(S,-Bits,Q[0]+Steps*(Q[1]+Steps*Q[2]))
+      Else Begin X4AM2Put(S,Bits,Q[0]); X4AM2Put(S,Bits,Q[1]); X4AM2Put(S,Bits,Q[2]);
+       End;
+     End;
+    End;
+    Inc(J,1 Shl Bab);
+   End;
+   Inc(L,3);
+  End;
+ End;
+ Inc(S^.OutBits,Padding);
+End;
+
+
+{ ---- utilitaires ALAC (copies de ADPCMSar / ALSignExt / ALLog2) ---- }
+Function X4ALSar(V: LongInt; N: Integer): LongInt;
+Var D: LongInt;
+Begin
+ D:=LongInt(1) Shl N;
+ If V>=0 Then X4ALSar:=V Div D Else X4ALSar:=-1-((-1-V) Div D);
+End;
+
+Function X4ALSignExt(V: Int64; Bps: Integer): LongInt;
+Var M: Int64;
+Begin
+ If Bps>=32 Then Begin
+  V:=V And $FFFFFFFF; If V>=2147483648 Then V:=V-4294967296;
+  X4ALSignExt:=V; Exit;
+ End;
+ M:=Int64(1) Shl (Bps-1); V:=V And ((Int64(1) Shl Bps)-1);
+ If V>=M Then V:=V-2*M; X4ALSignExt:=V;
+End;
+
+Function X4ALLog2(V: Int64): Integer;
+Var N: Integer;
+Begin
+ N:=0;
+ While V>1 Do Begin V:=V Shr 1; Inc(N); End;
+ X4ALLog2:=N;
+End;
+
+{ ---- ALAC (adapte de FFMPEG.PAS : alacenc.c, niveau 2) ---- }
+Var
+ X4ALPack: Array[0..131071] Of Byte;
+ X4ALPackBits: LongInt;
+ X4ALSmp,X4ALRes,X4ALOrig: Array[0..1,0..4095] Of LongInt;
+ X4ALLpcOrder,X4ALLpcQuant: Array[0..1] Of LongInt;
+ X4ALLpcCoef: Array[0..1,0..31] Of LongInt;
+ X4ALIlShift,X4ALIlWeight,X4ALFrameN: LongInt;
+ X4ALVerb: Boolean;
+
+Procedure X4ALPut(V: Int64; N: Integer);
+Var
+ K: Integer;
+Begin
+ For K:=N-1 Downto 0 Do Begin
+  If ((V Shr K) And 1)<>0 Then X4ALPack[X4ALPackBits Shr 3]:=X4ALPack[X4ALPackBits Shr
+   3] Or (
+  128 Shr (X4ALPackBits And 7));
+  Inc(X4ALPackBits);
+ End;
+End;
+
+Procedure X4ALEncodeScalar(X: LongInt; K,WriteSize: Integer);
+Var
+ Dv,Q,R: LongInt;
+Begin
+ If K>14 Then K:=14;
+ Dv:=(LongInt(1) Shl K)-1; Q:=X Div Dv; R:=X Mod Dv;
+ If Q>8 Then Begin
+  X4ALPut($1FF,9); X4ALPut(X,WriteSize);
+ End
+  Else
+ Begin
+  If Q>0 Then X4ALPut((LongInt(1) Shl Q)-1,Q);
+  X4ALPut(0,1);
+  If K<>1 Then Begin
+   If R>0 Then X4ALPut(R+1,K) Else X4ALPut(0,K-1);
+  End;
+ End;
+End;
+
+Procedure X4ALAnalyze(Ch,N: Integer);
+Const
+ MaxOrder = 6;
+ MinOrder = 4;
+ Precision = 9;
+Var
+ W: Array[0..4097] Of Double;
+ Autoc: Array[0..MaxOrder] Of Double;
+ Lpc: Array[0..MaxOrder-1,0..MaxOrder-1] Of Double;
+ Ref: Array[0..MaxOrder-1] Of Double;
+ Err,R,C,Wt,F,B,CMax,Error,Scale,Sum0,Sum1: Double;
+ I,J,N2,Est,Sh,QMax,Q: LongInt;
+Begin
+ { fenetre de Welch; W[k+1] = donnee k, W[0] = 0 }
+ FillChar(W,SizeOf(W),0);
+ If N=1 Then W[1]:=0
+  Else
+ Begin
+  N2:=N Shr 1; C:=2.0/(N-1.0);
+  If Odd(N) Then Begin
+   For I:=0 To N2-1 Do Begin
+    Wt:=C-I-1.0; Wt:=1.0-Wt*Wt;
+    W[I+1]:=X4ALSmp[Ch,I]*Wt; W[N-1-I+1]:=X4ALSmp[Ch,N-1-I]*Wt;
+   End;
+   W[N2+1]:=0.0;
+  End Else
+  Begin
+   For I:=0 To N2-1 Do Begin
+    Wt:=C-N2+I; Wt:=1.0-Wt*Wt;
+    W[N2-I-1+1]:=X4ALSmp[Ch,N2-I-1]*Wt; W[N2+I+1]:=X4ALSmp[Ch,N2+I]*Wt;
+   End;
+  End;
+ End;
+ J:=0;
+ While J<MaxOrder Do Begin
+  Sum0:=1.0; Sum1:=1.0;
+  For I:=J To N-1 Do Begin
+   Sum0:=Sum0+W[I+1]*W[I-J+1]; Sum1:=Sum1+W[I+1]*W[I-J];
+  End;
+  Autoc[J]:=Sum0; Autoc[J+1]:=Sum1; Inc(J,2);
+ End;
+ If J=MaxOrder Then Begin
+  Sum0:=1.0;
+  For I:=J-1 To N-1 Do Sum0:=Sum0+W[I+1]*W[I-J+1];
+  Autoc[J]:=Sum0;
+ End;
+ { Levinson-Durbin }
+ FillChar(Lpc,SizeOf(Lpc),0); Err:=Autoc[0];
+ For I:=0 To MaxOrder-1 Do Begin
+  R:=-Autoc[I+1];
+  If I>0 Then
+  For J:=0 To I-1 Do R:=R-Lpc[I-1,J]*Autoc[I-J];
+  If Err<>0 Then R:=R/Err;
+  Err:=Err*(1.0-R*R);
+  If I>0 Then Begin
+   For J:=0 To I-1 Do Lpc[I,J]:=Lpc[I-1,J];
+  End;
+  Lpc[I,I]:=R;
+  If I>0 Then Begin
+   For J:=0 To ((I+1) Shr 1)-1 Do Begin
+    F:=Lpc[I-1,J]; B:=Lpc[I-1,I-1-J];
+    Lpc[I,J]:=F+R*B; Lpc[I,I-1-J]:=B+R*F;
+   End;
+  End;
+ End;
+ For I:=0 To MaxOrder-1 Do Ref[I]:=Abs(Lpc[I,I]);
+ Est:=MinOrder;
+ For I:=MaxOrder-1 Downto MinOrder-1 Do If Ref[I]>0.10 Then Begin
+  Est:=I+1; Break;
+ End;
+ { quantification }
+ I:=Est-1; QMax:=(LongInt(1) Shl (Precision-1))-1;
+ CMax:=0.0;
+ For J:=0 To I Do If Abs(Lpc[I,J])>CMax Then CMax:=Abs(Lpc[I,J]);
+ X4ALLpcOrder[Ch]:=Est;
+ If CMax*(LongInt(1) Shl 9)<1.0 Then Begin
+  X4ALLpcQuant[Ch]:=1;
+  For J:=0 To I Do X4ALLpcCoef[Ch,J]:=0; Exit;
+ End;
+ Sh:=9;
+ While (CMax*(LongInt(1) Shl Sh)>QMax) And (Sh>0) Do Dec(Sh);
+ If (Sh=0) And (CMax>QMax) Then Begin
+  Scale:=QMax/CMax;
+  For J:=0 To I Do Lpc[I,J]:=Lpc[I,J]*Scale;
+ End;
+ Error:=0;
+ For J:=0 To I Do Begin
+  Error:=Error-Lpc[I,J]*(LongInt(1) Shl Sh);
+  Q:=Round(Single(Error));
+  If Q<-QMax Then Q:=-QMax; If Q>QMax Then Q:=QMax;
+  X4ALLpcCoef[Ch,J]:=Q; Error:=Error-Q;
+ End;
+ X4ALLpcQuant[Ch]:=Sh;
+End;
+
+Procedure X4ALPredict(Ch,N,WriteSize: Integer);
+Var
+ Coef: Array[0..31] Of LongInt;
+ I,J,Base,Order,Quant,Sum,ResVal,Index,Neg,Sg,Val: LongInt;
+Begin
+ Order:=X4ALLpcOrder[Ch]; Quant:=X4ALLpcQuant[Ch];
+ For J:=0 To 31 Do Coef[J]:=X4ALLpcCoef[Ch,J];
+ X4ALRes[Ch,0]:=X4ALSmp[Ch,0];
+ For I:=1 To Order Do X4ALRes[Ch,I]:=X4ALSignExt(Int64(X4ALSmp[Ch,I])-X4ALSmp[Ch,I-1],
+  WriteSize);
+ For I:=Order+1 To N-1 Do Begin
+  Base:=I-Order-1;
+  Sum:=LongInt(1) Shl (Quant-1);
+  For J:=0 To Order-1 Do Sum:=Sum+(X4ALSmp[Ch,Base+Order-J]-X4ALSmp[Ch,Base])*Coef[
+   J];
+  Sum:=X4ALSar(Sum,Quant)+X4ALSmp[Ch,Base];
+  X4ALRes[Ch,I]:=X4ALSignExt(Int64(X4ALSmp[Ch,Base+Order+1])-Sum,WriteSize);
+  ResVal:=X4ALRes[Ch,I];
+  If ResVal<>0 Then Begin
+   Index:=Order-1; Neg:=Ord(ResVal<0);
+   While (Index>=0) And (((Neg=1) And (ResVal<0)) Or ((Neg=0) And (ResVal>0)))
+    Do Begin
+    Val:=X4ALSmp[Ch,Base]-X4ALSmp[Ch,Base+Order-Index];
+    If Val>0 Then Sg:=1 Else If Val<0 Then Sg:=-1 Else Sg:=0;
+    If Neg=1 Then Sg:=-Sg;
+    Coef[Index]:=Coef[Index]-Sg;
+    Val:=Val*Sg;
+    ResVal:=ResVal-X4ALSar(Val,Quant)*(Order-Index);
+    Dec(Index);
+   End;
+  End;
+ End;
+End;
+
+Procedure X4ALEntropy(Ch,N,WriteSize: Integer);
+Var
+ History,SignMod,I,K,X,BlockSize: LongInt;
+ H64: Int64;
+Begin
+ H64:=10; SignMod:=0; I:=0;
+ While I<N Do Begin
+  K:=X4ALLog2((H64 Shr 9)+3);
+  X:=-2*X4ALRes[Ch,I]-1; If X<0 Then X:=-X-1; { x ^= x>>31 }
+  Inc(I);
+  X4ALEncodeScalar(X-SignMod,K,WriteSize);
+  H64:=(H64+Int64(X)*40-((H64*40) Shr 9)) And $FFFFFFFF;
+  SignMod:=0;
+  If X>$FFFF Then H64:=$FFFF;
+  If (H64<128) And (I<N) Then Begin
+   K:=7-X4ALLog2(H64)+((H64+16) Shr 6); BlockSize:=0;
+   While (I<N) And (X4ALRes[Ch,I]=0) Do Begin
+    Inc(I); Inc(BlockSize);
+   End;
+   X4ALEncodeScalar(BlockSize,K,16);
+   If BlockSize<=$FFFF Then SignMod:=1;
+   H64:=0;
+  End;
+ End;
+End;
+
+Function X4ALEstimateStereo(N: Integer): Integer;
+Var
+ I,Best: Integer;
+ Lt,Rt: LongInt;
+ Sum,Score: Array[0..3] Of Int64;
+Begin
+ For I:=0 To 3 Do Sum[I]:=0;
+ For I:=2 To N-1 Do Begin
+  Lt:=X4ALSmp[0,I]-2*X4ALSmp[0,I-1]+X4ALSmp[0,I-2];
+  Rt:=X4ALSmp[1,I]-2*X4ALSmp[1,I-1]+X4ALSmp[1,I-2];
+  Sum[2]:=Sum[2]+Abs(X4ALSar(Lt+Rt,1)); Sum[3]:=Sum[3]+Abs(Lt-Rt);
+  Sum[0]:=Sum[0]+Abs(Lt); Sum[1]:=Sum[1]+Abs(Rt);
+ End;
+ Score[0]:=Sum[0]+Sum[1]; Score[1]:=Sum[0]+Sum[3]; Score[2]:=Sum[1]+Sum[3];
+ Score[3]:=Sum[2]+Sum[3];
+ Best:=0;
+ For I:=1 To 3 Do If Score[I]<Score[Best] Then Best:=I;
+ X4ALEstimateStereo:=Best;
+End;
+{ Ecrit une trame (tous les canaux) dans X4ALPack; retourne la taille en octets. }
+
+Function X4ALWriteFrame(Channels,N: Integer): LongInt;
+Var
+ Ch,I,J,Mode,WriteSize: LongInt;
+ Tmp: LongInt;
+ EncodeFS: Integer;
+Begin
+ X4ALPackBits:=0; FillChar(X4ALPack,SizeOf(X4ALPack),0);
+ If N<4096 Then EncodeFS:=1 Else EncodeFS:=0;
+ If Channels=2 Then X4ALPut(1,3) Else X4ALPut(0,3);
+ X4ALPut(0,4); X4ALPut(0,12); X4ALPut(EncodeFS,1); X4ALPut(0,2); X4ALPut(Ord(X4ALVerb),1);
+ If EncodeFS=1 Then X4ALPut(N,32);
+ If X4ALVerb Then Begin
+  For I:=0 To N-1 Do
+  For J:=0 To Channels-1 Do X4ALPut(X4ALOrig[J,I] And $FFFF,16);
+ End Else
+ Begin
+  WriteSize:=16+Channels-1;
+  For J:=0 To Channels-1 Do
+  For I:=0 To N-1 Do X4ALSmp[J,I]:=X4ALOrig[J,I];
+  If Channels=2 Then Begin
+   Mode:=X4ALEstimateStereo(N);
+   Case Mode Of
+   0:
+   Begin
+    X4ALIlWeight:=0; X4ALIlShift:=0;
+   End;
+   1:
+   Begin
+    For I:=0 To N-1 Do X4ALSmp[1,I]:=X4ALSmp[0,I]-X4ALSmp[1,I];
+    X4ALIlWeight:=1; X4ALIlShift:=0;
+   End;
+   2:
+   Begin
+    For I:=0 To N-1 Do Begin
+     Tmp:=X4ALSmp[1,I]; X4ALSmp[1,I]:=X4ALSmp[0,I]-X4ALSmp[1,I];
+     X4ALSmp[0,I]:=Tmp+X4ALSar(X4ALSmp[1,I],31);
+    End;
+    X4ALIlWeight:=1; X4ALIlShift:=31;
+   End;
+    Else
+   Begin
+    For I:=0 To N-1 Do Begin
+     Tmp:=X4ALSmp[0,I]; X4ALSmp[0,I]:=X4ALSar(Tmp+X4ALSmp[1,I],1); X4ALSmp[1,I]:=Tmp-
+      X4ALSmp[1,I];
+    End;
+    X4ALIlWeight:=1; X4ALIlShift:=1;
+   End;
+  End;
+ End Else
+ Begin
+  X4ALIlShift:=0; X4ALIlWeight:=0;
+ End;
+ X4ALPut(X4ALIlShift,8); X4ALPut(X4ALIlWeight,8);
+ For Ch:=0 To Channels-1 Do Begin
+  X4ALAnalyze(Ch,N);
+  X4ALPut(0,4); X4ALPut(X4ALLpcQuant[Ch],4); X4ALPut(4,3); X4ALPut(X4ALLpcOrder[Ch],5);
+  For J:=0 To X4ALLpcOrder[Ch]-1 Do X4ALPut(X4ALLpcCoef[Ch,J] And $FFFF,16);
+ End;
+ For Ch:=0 To Channels-1 Do Begin
+  X4ALPredict(Ch,N,WriteSize); X4ALEntropy(Ch,N,WriteSize);
+ End;
+End;
+X4ALPut(7,3);
+X4ALWriteFrame:=(X4ALPackBits+7) Div 8;
+End;
+
+
 { ======================= API image par image + MP4 ======================= }
 Type
  TX4LBig=Array[0..536870000] Of LongInt;
@@ -24095,6 +31400,10 @@ Var
  X4ELvl: LongInt;
  X4EFail: Boolean;
 
+Var
+ X4ASz: PX4LBig;          { taille de chaque trame audio codee }
+ X4ANs,X4ASCap: LongInt;  { nombre de trames codees / capacite de X4ASz }
+
 Procedure X4ERelease;
 Begin
  If X4Src<>Nil Then Begin FreeMem(X4Src); X4Src:=Nil; End;
@@ -24111,6 +31420,8 @@ Begin
  If X4O<>Nil Then Begin FreeMem(X4O); X4O:=Nil; End;
  If X4ESz<>Nil Then Begin FreeMem(X4ESz); X4ESz:=Nil; End;
  If X4EKey<>Nil Then Begin FreeMem(X4EKey); X4EKey:=Nil; End;
+ If X4ASz<>Nil Then Begin FreeMem(X4ASz); X4ASz:=Nil; End;
+ X4ASCap:=0; X4ANs:=0;
  X4ECap:=0; X4OLen:=0; X4OCap:=0;
 End;
 
@@ -24131,6 +31442,289 @@ End;
 Function X4EGcd(A,B: LongInt): LongInt;
 Var T: LongInt;
 Begin While B<>0 Do Begin T:=A Mod B; A:=B; B:=T; End; X4EGcd:=A; End;
+
+
+{ ======================= encodage audio (flux, par trames) =======================
+  Chaque codec lit le PCM stereo 16 bits LE du fichier par blocs (X4ARd),
+  ecrit chaque trame codee dans le 'mdat' (X4AOut) et memorise sa taille
+  (X4ASz) pour les tables stsz/stco du 'moov'. }
+Const
+ X4AMDelay=481;      { retard banc de filtres MPEG audio, en echantillons }
+Var
+ X4EAudKind: LongInt;     { 0 = PCM sowt (defaut), 1 = AAC-LC, 3 = MP2, 4 = ALAC }
+ X4EAudBitrate: LongInt;  { kb/s (AAC, MP2) ; 0 = automatique }
+ X4AEff: LongInt;         { codec effectivement utilise pour cet encodage }
+ X4AFrLen,X4ALastLen: LongInt;   { echantillons PCM par trame / derniere trame }
+ X4APrime: LongInt;       { retard a ignorer au debut (edit list), en echantillons }
+ X4AMaxB: LongInt;
+ X4ASumB: Int64;
+ X4ACfg: Array[0..63] Of Byte; X4ACfgLen: LongInt;
+ X4ARaw: Array[0..16383] Of Byte;
+ X4APcm: Array[0..1,0..4095] Of LongInt;
+ X4AAPrev: Array[0..1,0..1023] Of Double;
+ X4AAZw,X4AAXm: TX4AADArr;
+ X4AMSmp: Array[0..2303] Of SmallInt;
+
+Function X4EAudSupported(Kind: LongInt): Boolean;
+Begin
+ X4EAudSupported:=(Kind=0) Or (Kind=1) Or (Kind=3) Or (Kind=4);
+End;
+
+{ la frequence est-elle acceptee par le codec ? }
+Function X4ARateOk(Kind,Rate: LongInt): Boolean;
+Var I: LongInt;
+Begin
+ X4ARateOk:=False;
+ Case Kind Of
+  0,4: X4ARateOk:=(Rate>=1) And (Rate<=384000);
+  1: For I:=0 To 12 Do If X4AARates[I]=Rate Then X4ARateOk:=True;
+  3: X4ARateOk:=(Rate=16000) Or (Rate=22050) Or (Rate=24000) Or (Rate=32000)
+      Or (Rate=44100) Or (Rate=48000);
+ End;
+End;
+
+{ lit Want images stereo (zero apres la fin) dans X4APcm }
+Function X4ARd(Var Fa: File; Var Left: LongInt; Want: LongInt): Boolean;
+Var Take,I,V,Got: LongInt;
+Begin
+ X4ARd:=False;
+ Take:=Want; If Take>Left Then Take:=Left;
+ If Take>0 Then Begin
+  Got:=0;
+  {$I-}
+  BlockRead(Fa,X4ARaw,Take*4,Got);
+  {$I+}
+  If (IOResult<>0) Or (Got<>Take*4) Then Exit;
+  For I:=0 To Take-1 Do Begin
+   V:=LongInt(X4ARaw[4*I])+LongInt(X4ARaw[4*I+1])*256;
+   If V>=32768 Then Dec(V,65536);
+   X4APcm[0,I]:=V;
+   V:=LongInt(X4ARaw[4*I+2])+LongInt(X4ARaw[4*I+3])*256;
+   If V>=32768 Then Dec(V,65536);
+   X4APcm[1,I]:=V;
+  End;
+  Dec(Left,Take);
+ End;
+ For I:=Take To Want-1 Do Begin X4APcm[0,I]:=0; X4APcm[1,I]:=0; End;
+ X4ARd:=True;
+End;
+
+{ ecrit une trame codee dans le mdat et memorise sa taille }
+Function X4AOut(Const Buf; N: LongInt): Boolean;
+Begin
+ X4AOut:=False;
+ If (N<=0) Or (X4ASz=Nil) Or (X4ANs>=X4ASCap) Then Exit;
+ If Not X4EWr(Buf,N) Then Begin X4EFail:=True; Exit; End;
+ X4ASz^[X4ANs]:=N; Inc(X4ANs);
+ If N>X4AMaxB Then X4AMaxB:=N;
+ Inc(X4ASumB,N);
+ X4AOut:=True;
+End;
+
+{ ---- AAC-LC : trames brutes (raw_data_block), AudioSpecificConfig dans X4ACfg ---- }
+Function X4AEncAac(Var Fa: File; Total, Rate, BitRateK: LongInt): Boolean;
+Var Frames,F,I,K,C,B,G,Lo,Hi,Best,Cut,CutBin,Used,Nz,Target2,AvgBits,Reservoir,
+ BitsPerCh,Left,RateIdx,Bytes: LongInt;
+Begin
+ X4AEncAac:=False;
+ RateIdx:=-1; For I:=0 To 12 Do If X4AARates[I]=Rate Then RateIdx:=I;
+ If RateIdx<0 Then Exit;
+ If BitRateK<8 Then BitRateK:=8; If BitRateK>576 Then BitRateK:=576;
+ X4AAChans:=2; X4AARateIdx:=RateIdx;
+ X4AAMdctInit;
+ FillChar(X4AACode,SizeOf(X4AACode),0); FillChar(X4AALen,SizeOf(X4AALen),0);
+ For I:=0 To 11 Do X4AAWalk(I,X4AARoots[I],0,0);
+ X4AABands:=X4AALongBands[RateIdx];
+ For I:=0 To X4AABands Do X4AAOff[I]:=X4AALongOffsets[RateIdx,I];
+ { bande passante (table de libfaac) }
+ BitsPerCh:=BitRateK*1000 Div 2;
+ If BitsPerCh<=29500 Then Cut:=5000 Else If BitsPerCh<=36000 Then Cut:=9000
+ Else If BitsPerCh<=43000 Then Cut:=12000
+ Else If BitsPerCh<=50000 Then Cut:=14260 Else If BitsPerCh<=58000 Then
+  Cut:=15500 Else If BitsPerCh<=68000 Then Cut:=16000
+ Else If BitsPerCh<=96000 Then Cut:=18000 Else Cut:=Rate Div 2;
+ If Cut>Rate Div 2 Then Cut:=Rate Div 2;
+ CutBin:=Round(Cut*2048.0/Rate); If CutBin>1024 Then CutBin:=1024;
+ Frames:=(Total+1023) Div 1024+1;
+ AvgBits:=Round(BitRateK*1000.0*1024/Rate); Reservoir:=0;
+ FillChar(X4AAPrev,SizeOf(X4AAPrev),0);
+ Left:=Total;
+ For F:=0 To Frames-1 Do Begin
+  If Not X4ARd(Fa,Left,1024) Then Exit;
+  For C:=0 To 1 Do Begin
+   For I:=0 To 1023 Do Begin
+    X4AAZw[I]:=X4AAWin[I]*X4AAPrev[C,I];
+    X4AAZw[1024+I]:=X4AAWin[1024+I]*X4APcm[C,I];
+    X4AAPrev[C,I]:=X4APcm[C,I];
+   End;
+   X4AAMdct(X4AAZw,X4AAXm);
+   For K:=0 To 1023 Do If K<CutBin Then X4AAX[C,K]:=X4AAXm[K] Else X4AAX[C,K]:=0;
+  End;
+  X4AAMaxSfb:=0;
+  For B:=0 To X4AABands-1 Do If X4AAOff[B]<CutBin Then X4AAMaxSfb:=B+1;
+  Nz:=0;
+  For B:=0 To X4AAMaxSfb-1 Do For C:=0 To 1 Do
+   For K:=X4AAOff[B] To X4AAOff[B+1]-1 Do If Abs(X4AAX[C,K])>=0.5 Then Nz:=B+1;
+  X4AAMaxSfb:=Nz;
+  Target2:=AvgBits+Reservoir Div 2; If Target2>12000 Then Target2:=12000;
+  Target2:=Target2-8;
+  Lo:=2; Hi:=255; Best:=255;
+  While Lo<=Hi Do Begin
+   G:=(Lo+Hi) Div 2;
+   X4AAPrepare(G);
+   X4AACounting:=True; X4AAPos:=0; X4AAWriteFrame(G);
+   If X4AAPos<=Target2 Then Begin Best:=G; Hi:=G-1; End Else Lo:=G+1;
+  End;
+  G:=Best; X4AAPrepare(G);
+  Nz:=0;
+  For C:=0 To 1 Do For B:=0 To X4AAMaxSfb-1 Do
+   If X4AABook[C,B]<>0 Then If B+1>Nz Then Nz:=B+1;
+  X4AAMaxSfb:=Nz;
+  X4AACounting:=False; X4AAPos:=0; FillChar(X4AABuf,SizeOf(X4AABuf),0);
+  X4AAWriteFrame(G);
+  Used:=X4AAPos; Bytes:=(Used+7) Div 8;
+  If Bytes>8000 Then Exit;
+  If Not X4AOut(X4AABuf,Bytes) Then Exit;
+  Inc(Reservoir,AvgBits-Bytes*8);
+  If Reservoir>6000 Then Reservoir:=6000; If Reservoir<0 Then Reservoir:=0;
+ End;
+ { AudioSpecificConfig : objet 2 (AAC-LC), frequence, 2 canaux }
+ I:=(2 Shl 11) Or (RateIdx Shl 7) Or (2 Shl 3);
+ X4ACfg[0]:=I Shr 8; X4ACfg[1]:=I And 255; X4ACfgLen:=2;
+ X4AFrLen:=1024; X4ALastLen:=1024; X4APrime:=1024;
+ X4AEncAac:=True;
+End;
+
+{ ---- MPEG audio couche II (MP2) ---- }
+Function X4AEncMp2(Var Fa: File; Total, Rate, BitRateK: LongInt): Boolean;
+Var S: PX4AM2Ctx; I,V,Freq,Table,Bitrate,Frames,Done,Padding,Ch,Left,Row,Best,
+ Bt: LongInt; BitAlloc: Array[0..63] Of Byte; A: Single; Da: Double; Ok: Boolean;
+Begin
+ Ok:=False;
+ GetMem(S,SizeOf(TX4AM2Ctx)); FillChar(S^,SizeOf(TX4AM2Ctx),0);
+ Repeat
+  S^.Nch:=2; S^.Lsf:=0; Freq:=-1;
+  For I:=0 To 2 Do Begin
+   If X4AMPFreqTab[I]=Rate Then Begin Freq:=I; Break; End;
+   If X4AMPFreqTab[I] Div 2=Rate Then Begin Freq:=I; S^.Lsf:=1; Break; End;
+  End;
+  If Freq<0 Then Break;
+  S^.FreqIndex:=Freq;
+  { debit autorise le plus proche (par defaut) ; en stereo MPEG-1 les debits
+    32/48/56/80 sont interdits }
+  Row:=(S^.Lsf*3+1)*15; Best:=0; Bitrate:=BitRateK;
+  For I:=1 To 14 Do Begin
+   Bt:=X4AMPBitrate[Row+I];
+   If (S^.Lsf=0) And ((Bt=32) Or (Bt=48) Or (Bt=56) Or (Bt=80)) Then Continue;
+   If (Best=0) Or (Abs(Bt-BitRateK)<Abs(X4AMPBitrate[Row+Best]-BitRateK)) Then
+    Best:=I;
+  End;
+  If Best=0 Then Break;
+  S^.BitrateIndex:=Best; Bitrate:=X4AMPBitrate[Row+Best];
+  A:=(Bitrate*1000*1152); Da:=A; Da:=Da/(Rate*8.0); A:=Da; Da:=A;
+  S^.FrameSize:=Trunc(Da)*8;
+  S^.FrameFrac:=0; S^.FrameFracIncr:=Trunc((Da-Int(Da))*65536.0);
+  Table:=X4AMPL2Table(Bitrate,2,Rate,S^.Lsf);
+  S^.SbLimit:=X4AMPSblimit[Table];
+  If Table<2 Then S^.AllocSet:=0 Else If Table<4 Then S^.AllocSet:=1 Else
+   S^.AllocSet:=2;
+  For I:=0 To 256 Do Begin
+   V:=LongInt(X4AMPSarL(X4AMPEnWindow[I]+2,2));
+   S^.FilterBank[I]:=V;
+   If I And 63<>0 Then V:=-V;
+   If I<>0 Then S^.FilterBank[512-I]:=V;
+  End;
+  For I:=0 To 16 Do Begin
+   V:=X4AMPQuantBits[I]; If V<0 Then V:=-V Else V:=V*3;
+   S^.TotalQuantBits[I]:=12*V;
+  End;
+  Frames:=(Total+X4AMDelay+1151) Div 1152;
+  Left:=Total; Ok:=True;
+  For Done:=0 To Frames-1 Do Begin
+   If Not X4ARd(Fa,Left,1152) Then Begin Ok:=False; Break; End;
+   For I:=0 To 1151 Do Begin
+    X4AMSmp[2*I]:=X4APcm[0,I]; X4AMSmp[2*I+1]:=X4APcm[1,I];
+   End;
+   For Ch:=0 To 1 Do X4AM2Filter(S,Ch,X4AMSmp,Ch,2);
+   For Ch:=0 To 1 Do X4AM2ScaleFactors(S,Ch);
+   X4AM2Allocate(S,BitAlloc,Padding);
+   X4AM2EncodeFrame(S,BitAlloc,Padding);
+   If Not X4AOut(S^.Out,(S^.OutBits+7) Shr 3) Then Begin Ok:=False; Break; End;
+  End;
+ Until True;
+ FreeMem(S);
+ If Ok Then Begin
+  X4ACfgLen:=0; X4AFrLen:=1152; X4ALastLen:=1152; X4APrime:=X4AMDelay;
+ End;
+ X4AEncMp2:=Ok;
+End;
+
+{ ---- ALAC (sans perte) ---- }
+Function X4AEncAlac(Var Fa: File; Total, Rate: LongInt): Boolean;
+Var Left,N,DataBytes,MaxFrame,HB: LongInt;
+Begin
+ X4AEncAlac:=False;
+ Left:=Total; MaxFrame:=0;
+ While Left>0 Do Begin
+  N:=4096; If Left<N Then N:=Left;
+  If Not X4ARd(Fa,Left,N) Then Exit;
+  Move(X4APcm,X4ALOrig,SizeOf(X4APcm));
+  If N<4096 Then HB:=55 Else HB:=23;
+  MaxFrame:=((HB+16*2*N+3+7) And (Not LongInt(7))) Div 8;
+  X4ALVerb:=False; DataBytes:=X4ALWriteFrame(2,N);
+  If DataBytes>MaxFrame Then Begin
+   X4ALVerb:=True; DataBytes:=X4ALWriteFrame(2,N);
+  End;
+  If Not X4AOut(X4ALPack,DataBytes) Then Exit;
+  X4ALastLen:=N;
+ End;
+ { cookie ALAC de 36 octets (atome 'alac') }
+ FillChar(X4ACfg,SizeOf(X4ACfg),0);
+ X4ACfg[3]:=36; X4ACfg[4]:=97; X4ACfg[5]:=108; X4ACfg[6]:=97; X4ACfg[7]:=99;
+ X4ACfg[14]:=16;                { frameLength = 4096 }
+ X4ACfg[17]:=16; X4ACfg[18]:=40; X4ACfg[19]:=10; X4ACfg[20]:=14; X4ACfg[21]:=2;
+ X4ACfg[23]:=255;               { maxRun }
+ MaxFrame:=((23+16*2*4096+3+7) And (Not LongInt(7))) Div 8;
+ X4ACfg[24]:=(MaxFrame Shr 24) And 255; X4ACfg[25]:=(MaxFrame Shr 16) And 255;
+ X4ACfg[26]:=(MaxFrame Shr 8) And 255; X4ACfg[27]:=MaxFrame And 255;
+ HB:=Rate*2*16;
+ X4ACfg[28]:=(HB Shr 24) And 255; X4ACfg[29]:=(HB Shr 16) And 255;
+ X4ACfg[30]:=(HB Shr 8) And 255; X4ACfg[31]:=HB And 255;
+ X4ACfg[32]:=(Rate Shr 24) And 255; X4ACfg[33]:=(Rate Shr 16) And 255;
+ X4ACfg[34]:=(Rate Shr 8) And 255; X4ACfg[35]:=Rate And 255;
+ X4ACfgLen:=36;
+ X4AFrLen:=4096; X4APrime:=0;
+ X4AEncAlac:=X4ANs>0;
+End;
+
+{ lance le codec X4AEff sur Total images stereo de Fa }
+Function X4ARun(Var Fa: File; Total: LongInt): Boolean;
+Var Ok: Boolean; Br: LongInt;
+Begin
+ X4ARun:=False;
+ If X4ASz<>Nil Then Begin FreeMem(X4ASz); X4ASz:=Nil; End;
+ X4ASCap:=Total Div 1024+4;
+ GetMem(X4ASz,X4ASCap*4);
+ X4ANs:=0; X4AMaxB:=0; X4ASumB:=0; X4ACfgLen:=0;
+ X4AFrLen:=1024; X4ALastLen:=0; X4APrime:=0;
+ Br:=X4EAudBitrate;
+ Ok:=False;
+ Case X4AEff Of
+  1: Begin
+      If Br<=0 Then If X4EArate>=32000 Then Br:=128 Else Br:=96;
+      Ok:=X4AEncAac(Fa,Total,X4EArate,Br);
+     End;
+  3: Begin
+      If Br<=0 Then If X4EArate>=32000 Then Br:=192 Else Br:=128;
+      Ok:=X4AEncMp2(Fa,Total,X4EArate,Br);
+     End;
+  4: Ok:=X4AEncAlac(Fa,Total,X4EArate);
+ End;
+ If Ok And (X4ANs>0) Then Begin
+  If X4ALastLen=0 Then X4ALastLen:=X4AFrLen;
+  X4ARun:=True;
+ End;
+End;
 
 Procedure X4EAbort;
 Begin
@@ -24262,14 +31856,43 @@ End;
 
 { ---- moov ---- }
 
+{ boite 'esds' (ES_Descriptor MPEG-4) : Oti = objectTypeIndication
+  (0x40 AAC, 0x6B MPEG-1 audio) ; X4ACfg = DecoderSpecificInfo eventuel }
+Procedure X4EEsds(Oti: LongInt);
+Var B,Dl,El,I: LongInt; MaxBr,AvgBr: Int64;
+Begin
+ MaxBr:=0; AvgBr:=0;
+ If (X4ANs>0) And (X4AFrLen>0) Then Begin
+  MaxBr:=Int64(X4AMaxB)*8*X4EArate Div X4AFrLen;
+  AvgBr:=X4ASumB*8*X4EArate Div (Int64(X4ANs)*X4AFrLen);
+ End;
+ B:=X4BoxB('esds'); X4O32(0);
+ Dl:=13; If X4ACfgLen>0 Then Inc(Dl,2+X4ACfgLen);
+ El:=3+2+Dl+3;
+ X4OB(3); X4OB(El); X4O16(1); X4OB(0);
+ X4OB(4); X4OB(Dl); X4OB(Oti); X4OB($15);
+ X4OB(0); X4O16(X4AMaxB);
+ X4O32(MaxBr); X4O32(AvgBr);
+ If X4ACfgLen>0 Then Begin
+  X4OB(5); X4OB(X4ACfgLen);
+  For I:=0 To X4ACfgLen-1 Do X4OB(X4ACfg[I]);
+ End;
+ X4OB(6); X4OB(1); X4OB(2);
+ X4BoxE(B);
+End;
+
+
 Procedure X4EWriteMoov(VidOff: Int64; AudOff: Int64; AudFrames: LongInt);
 Const Hv: String='VideoHandler'; Ha: String='SoundHandler';
 Var Moov,Trak,Mdia,Minf,Stbl,Stsd,Avc1,AvcC,B,I,KeyCount,Dc,Dr,Chunks,Rem,
  NextId: LongInt; VidMs,AudMs,TotMs: Int64; Off: Int64; Ent: LongInt;
+ Cn,Kc: LongInt; MdDur: Int64;
 Begin
  VidMs:=Int64(X4EN)*X4Fd*1000 Div X4Fn;
  AudMs:=0;
- If AudFrames>0 Then AudMs:=Int64(AudFrames)*1000 Div X4EArate;
+ If AudFrames>0 Then Begin
+  AudMs:=Int64(AudFrames)*1000 Div X4EArate; If AudMs=0 Then AudMs:=1;
+ End;
  TotMs:=VidMs; If AudMs>TotMs Then TotMs:=AudMs;
  If AudFrames>0 Then NextId:=3 Else NextId:=2;
  X4OLen:=0;
@@ -24324,7 +31947,7 @@ Begin
  For I:=0 To X4EN-1 Do Begin X4O32(Off); Inc(Off,X4ESz^[I]); End;
  X4BoxE(B);
  X4BoxE(Stbl); X4BoxE(Minf); X4BoxE(Mdia); X4BoxE(Trak);
- { ----- piste audio PCM 'sowt' ----- }
+ { ----- piste audio : PCM 'sowt' (X4AEff=0), AAC / MP2 'mp4a', ALAC ----- }
  If AudFrames>0 Then Begin
   Trak:=X4BoxB('trak');
   B:=X4BoxB('tkhd'); X4O32(3); X4O32(0); X4O32(0); X4O32(2); X4O32(0);
@@ -24332,9 +31955,18 @@ Begin
   X4O32($10000); X4O32(0); X4O32(0); X4O32(0); X4O32($10000); X4O32(0);
    X4O32(0); X4O32(0); X4O32($40000000);
   X4O32(0); X4O32(0); X4BoxE(B);
+  If (X4AEff<>0) And (X4APrime>0) Then Begin
+   { edit list : ignore le retard du codec (priming) }
+   B:=X4BoxB('edts'); I:=X4BoxB('elst'); X4O32(0); X4O32(1);
+   X4O32(AudMs); X4O32(X4APrime); X4O16(1); X4O16(0);
+   X4BoxE(I); X4BoxE(B);
+  End;
+  Cn:=X4ANs;
+  If X4AEff=0 Then MdDur:=AudFrames
+  Else MdDur:=Int64(Cn-1)*X4AFrLen+X4ALastLen;
   Mdia:=X4BoxB('mdia');
   B:=X4BoxB('mdhd'); X4O32(0); X4O32(0); X4O32(0); X4O32(X4EArate);
-   X4O32(AudFrames); X4O16($55C4); X4O16(0); X4BoxE(B);
+   X4O32(MdDur); X4O16($55C4); X4O16(0); X4BoxE(B);
   B:=X4BoxB('hdlr'); X4O32(0); X4O32(0); X4OTag('soun'); X4O32(0); X4O32(0);
    X4O32(0);
   For I:=1 To 12 Do X4OB(Ord(Ha[I])); X4OB(0); X4BoxE(B);
@@ -24344,22 +31976,62 @@ Begin
    Stbl:=X4BoxB('url '); X4O32(1); X4BoxE(Stbl); X4BoxE(I); X4BoxE(B);
   Stbl:=X4BoxB('stbl');
   Stsd:=X4BoxB('stsd'); X4O32(0); X4O32(1);
-  Avc1:=X4BoxB('sowt'); X4O32(0); X4O16(0); X4O16(1);
+  Case X4AEff Of
+   1: Avc1:=X4BoxB('mp4a');
+   3: Avc1:=X4BoxB('mp4a');
+   4: Avc1:=X4BoxB('alac');
+   Else Avc1:=X4BoxB('sowt');
+  End;
+  X4O32(0); X4O16(0); X4O16(1);
    X4O16(0); X4O16(0); X4O32(0); X4O16(2); X4O16(16); X4O16(0); X4O16(0);
    If X4EArate<65536 Then X4O32(Int64(X4EArate) Shl 16) Else X4O32(0);
+  Case X4AEff Of
+   1: X4EEsds($40);
+   3: X4EEsds($6B);
+   4: For I:=0 To X4ACfgLen-1 Do X4OB(X4ACfg[I]);
+  End;
   X4BoxE(Avc1); X4BoxE(Stsd);
-  B:=X4BoxB('stts'); X4O32(0); X4O32(1); X4O32(AudFrames); X4O32(1); X4BoxE(B);
-  Dc:=X4EArate; Chunks:=AudFrames Div Dc; Rem:=AudFrames-Chunks*Dc;
-  Ent:=0; If Chunks>0 Then Inc(Ent); If Rem>0 Then Inc(Ent);
-  B:=X4BoxB('stsc'); X4O32(0); X4O32(Ent);
-  If Chunks>0 Then Begin X4O32(1); X4O32(Dc); X4O32(1); End;
-  If Rem>0 Then Begin X4O32(Chunks+1); X4O32(Rem); X4O32(1); End;
-  X4BoxE(B);
-  B:=X4BoxB('stsz'); X4O32(0); X4O32(4); X4O32(AudFrames); X4BoxE(B);
-  If Rem>0 Then Inc(Chunks);
-  B:=X4BoxB('stco'); X4O32(0); X4O32(Chunks); Off:=AudOff;
-  For I:=0 To Chunks-1 Do Begin X4O32(Off); Inc(Off,Int64(Dc)*4); End;
-  X4BoxE(B);
+  If X4AEff=0 Then Begin
+   B:=X4BoxB('stts'); X4O32(0); X4O32(1); X4O32(AudFrames); X4O32(1); X4BoxE(B);
+   Dc:=X4EArate; Chunks:=AudFrames Div Dc; Rem:=AudFrames-Chunks*Dc;
+   Ent:=0; If Chunks>0 Then Inc(Ent); If Rem>0 Then Inc(Ent);
+   B:=X4BoxB('stsc'); X4O32(0); X4O32(Ent);
+   If Chunks>0 Then Begin X4O32(1); X4O32(Dc); X4O32(1); End;
+   If Rem>0 Then Begin X4O32(Chunks+1); X4O32(Rem); X4O32(1); End;
+   X4BoxE(B);
+   B:=X4BoxB('stsz'); X4O32(0); X4O32(4); X4O32(AudFrames); X4BoxE(B);
+   If Rem>0 Then Inc(Chunks);
+   B:=X4BoxB('stco'); X4O32(0); X4O32(Chunks); Off:=AudOff;
+   For I:=0 To Chunks-1 Do Begin X4O32(Off); Inc(Off,Int64(Dc)*4); End;
+   X4BoxE(B);
+  End Else Begin
+   { tables des trames codees : une trame = un echantillon MP4 }
+   B:=X4BoxB('stts'); X4O32(0);
+   If (X4ALastLen=X4AFrLen) Or (Cn=1) Then Begin
+    X4O32(1);
+    If Cn=1 Then Begin X4O32(1); X4O32(X4ALastLen); End
+    Else Begin X4O32(Cn); X4O32(X4AFrLen); End;
+   End Else Begin
+    X4O32(2); X4O32(Cn-1); X4O32(X4AFrLen); X4O32(1); X4O32(X4ALastLen);
+   End;
+   X4BoxE(B);
+   Kc:=X4EArate Div X4AFrLen; If Kc<1 Then Kc:=1;   { ~1 s par bloc }
+   Chunks:=Cn Div Kc; Rem:=Cn-Chunks*Kc;
+   Ent:=0; If Chunks>0 Then Inc(Ent); If Rem>0 Then Inc(Ent);
+   B:=X4BoxB('stsc'); X4O32(0); X4O32(Ent);
+   If Chunks>0 Then Begin X4O32(1); X4O32(Kc); X4O32(1); End;
+   If Rem>0 Then Begin X4O32(Chunks+1); X4O32(Rem); X4O32(1); End;
+   X4BoxE(B);
+   B:=X4BoxB('stsz'); X4O32(0); X4O32(0); X4O32(Cn);
+   For I:=0 To Cn-1 Do X4O32(X4ASz^[I]); X4BoxE(B);
+   If Rem>0 Then Inc(Chunks);
+   B:=X4BoxB('stco'); X4O32(0); X4O32(Chunks); Off:=AudOff;
+   For I:=0 To Cn-1 Do Begin
+    If I Mod Kc=0 Then X4O32(Off);
+    Inc(Off,X4ASz^[I]);
+   End;
+   X4BoxE(B);
+  End;
   X4BoxE(Stbl); X4BoxE(Minf); X4BoxE(Mdia); X4BoxE(Trak);
  End;
  X4BoxE(Moov);
@@ -24373,8 +32045,8 @@ Begin
  X4EEnd:=False;
  If Not X4EOn Then Exit;
  If X4EFail Or (X4EN=0) Then Begin X4EAbort; Exit; End;
- Ok:=True; VidOff:=X4EMdatAt+8; AudOff:=0; AudFrames:=0;
- { audio PCM : copie dans le mdat apres la video }
+ Ok:=True; VidOff:=X4EMdatAt+8; AudOff:=0; AudFrames:=0; X4AEff:=0;
+ { audio : PCM brut copie tel quel, ou encode par blocs (AAC, MP2, ALAC) }
  If (X4EArate>0) And (AudioPcmFile<>'') Then Begin
   Assign(Fa,AudioPcmFile);
   {$I-}
@@ -24388,26 +32060,43 @@ Begin
    {$I+}
    If IOResult<>0 Then Sz:=0;
    AudFrames:=LongInt(Sz Div 4);
-   If X4EPos+Int64(AudFrames)*4>3900000000 Then Begin AudFrames:=0; Ok:=False; End;
+   X4AEff:=X4EAudKind;
+   If (Not X4EAudSupported(X4AEff)) Or (Not X4ARateOk(X4AEff,X4EArate)) Then
+    X4AEff:=0;
+   If (X4AEff=0) And (X4EPos+Int64(AudFrames)*4>3900000000) Then Begin
+    AudFrames:=0; Ok:=False;
+   End;
    If AudFrames>0 Then Begin
-    AudOff:=X4EPos; Left:=Int64(AudFrames)*4;
-    GetMem(Buf,65536);
-    While Left>0 Do Begin
-     If Left>65536 Then Chunk:=65536 Else Chunk:=LongInt(Left);
-     Got:=0;
-     {$I-}
-     BlockRead(Fa,Buf^,Chunk,Got);
-     {$I+}
-     If (IOResult<>0) Or (Got<>Chunk) Then Begin Ok:=False; Break; End;
-     If Not X4EWr(Buf^,Chunk) Then Begin Ok:=False; X4EFail:=True; Break; End;
-     Dec(Left,Chunk);
-    End;
-    FreeMem(Buf);
-    If Left>0 Then Begin
-     { audio tronque : la piste n'est pas declaree }
-     AudFrames:=0; If X4EFail Then Begin
-      {$I-} Close(Fa); {$I+} If IOResult<>0 Then ;
-      X4EAbort; Exit; End;
+    AudOff:=X4EPos;
+    If X4AEff<>0 Then Begin
+     If Not X4ARun(Fa,AudFrames) Then Begin
+      { echec de lecture/encodage : la piste n'est pas declaree }
+      AudFrames:=0; Ok:=False;
+      If X4EFail Then Begin
+       {$I-} Close(Fa); {$I+} If IOResult<>0 Then ;
+       X4EAbort; Exit;
+      End;
+     End;
+    End Else Begin
+     Left:=Int64(AudFrames)*4;
+     GetMem(Buf,65536);
+     While Left>0 Do Begin
+      If Left>65536 Then Chunk:=65536 Else Chunk:=LongInt(Left);
+      Got:=0;
+      {$I-}
+      BlockRead(Fa,Buf^,Chunk,Got);
+      {$I+}
+      If (IOResult<>0) Or (Got<>Chunk) Then Begin Ok:=False; Break; End;
+      If Not X4EWr(Buf^,Chunk) Then Begin Ok:=False; X4EFail:=True; Break; End;
+      Dec(Left,Chunk);
+     End;
+     FreeMem(Buf);
+     If Left>0 Then Begin
+      { audio tronque : la piste n'est pas declaree }
+      AudFrames:=0; If X4EFail Then Begin
+       {$I-} Close(Fa); {$I+} If IOResult<>0 Then ;
+       X4EAbort; Exit; End;
+     End;
     End;
    End;
    {$I-} Close(Fa); {$I+} If IOResult<>0 Then ;
@@ -24446,6 +32135,9 @@ Function X4EEnd(Const AudioPcmFile: String): Boolean;
 Begin X4EEnd:=False; End;
 Procedure X4EAbort;
 Begin End;
+Var X4EAudKind,X4EAudBitrate: LongInt;
+Function X4EAudSupported(Kind: LongInt): Boolean;
+Begin X4EAudSupported:=False; End;
 {$ENDIF}
 
 { ====================================================================== }
@@ -24637,6 +32329,18 @@ Begin
  If IOResult <> 0 Then Exit;
  Size := FileSize(F);
  BlockRead(F, H, 12, N);
+ If (N = 12) And (H[0] = Ord('P')) And (H[1] = Ord('C')) And (H[2] = Ord('A')) Then Begin
+  AuInf[Slot].DOfs := 32;
+  AuInf[Slot].DLen := LE32(H, 8) * 4;
+  AuInf[Slot].Rate := AuRate;
+  AuInf[Slot].Ch := 2;
+  AuInf[Slot].Bits := 16;
+  AuInf[Slot].Fmt := 1;
+  AuInf[Slot].Ok := True;
+  Close(F);
+  AuGetWav := Slot;
+  Exit;
+ End;
  If (N < 12) Or (H[0] <> Ord('R')) Or (H[8] <> Ord('W')) Then Begin
   Close(F);
   Exit;
@@ -24674,6 +32378,11 @@ Begin
   AuInf[Slot].Ok := True;
   AuGetWav := Slot;
  End;
+End;
+
+Function AuSrcPath(M: Integer): String;
+Begin
+ If P.Media[M].Kind = MK_APCM Then AuSrcPath := P.Media[M].Cache Else AuSrcPath := P.Media[M].Path;
 End;
 
 Function AuFileSlot(Const Path: String): Integer;
@@ -24816,10 +32525,10 @@ Begin
  Fo := 0;
  If (C.TIn > 0) And (C.TInL > 0) Then Fi := (Int64(C.TInL) * AuRate) Div P.Fps;
  If (C.TOut > 0) And (C.TOutL > 0) Then Fo := (Int64(C.TOutL) * AuRate) Div P.Fps;
- If Kd = MK_WAV Then Begin
-  W := AuGetWav(P.Media[C.Med].Path);
+ If (Kd = MK_WAV) Or (Kd = MK_APCM) Then Begin
+  W := AuGetWav(AuSrcPath(C.Med));
   If W < 0 Then Exit;
-  Slot := AuFileSlot(P.Media[C.Med].Path);
+  Slot := AuFileSlot(AuSrcPath(C.Med));
   If Slot < 0 Then Exit;
   Bf := AuInf[W].Ch * (AuInf[W].Bits Div 8);
   K0 := (InBase + AuSrc(C, Lo - CS, CE - CS)) * AuInf[W].Rate Div AuRate;
@@ -24837,7 +32546,7 @@ Begin
  For S := Lo To Hi - 1 Do Begin
   TL := S - CS;
   SP := InBase + AuSrc(C, TL, CE - CS);
-  If Kd = MK_WAV Then Begin
+  If (Kd = MK_WAV) Or (Kd = MK_APCM) Then Begin
    K := SP * AuInf[W].Rate Div AuRate - K0;
    If (K < 0) Or ((K + 1) * Bf > 65536) Then Begin
     L := 0;
@@ -25531,6 +33240,7 @@ End;
 Procedure ExportMp4H264;
 Var
  FN, S, Tmp: String;
+ AudName: String;
  F0, F1, NFr, I, Qp, Gop: LongInt;
  Pix: PBigBytes;
  Abuf: PAuS16;
@@ -25553,6 +33263,26 @@ Begin
  If Not InputBox('Exporter la vidéo (MP4 H.264)', 'Quantificateur QP (10 = excellent, 40 = faible) :', S, 3) Then Exit;
  Qp := Clamp(StrVal(S, 24), 10, 45);
  Gop := P.Fps * 2;
+ DlgCount := 4;
+ DlgItems[0] := 'Audio AAC-LC (recommandé)';
+ DlgItems[1] := 'Audio MP2 (MPEG-1 Layer II)';
+ DlgItems[2] := 'Audio ALAC (sans perte)';
+ DlgItems[3] := 'Audio PCM non compressé';
+ Case ListDlg('Exporter la vidéo - codec audio', 0) Of
+  0: X4EAudKind := 1;
+  1: X4EAudKind := 3;
+  2: X4EAudKind := 4;
+  3: X4EAudKind := 0;
+  Else Exit;
+ End;
+ If Not X4EAudSupported(X4EAudKind) Then X4EAudKind := 0;
+ X4EAudBitrate := 0;
+ AudName := 'PCM';
+ Case X4EAudKind Of
+  1: AudName := 'AAC-LC';
+  3: AudName := 'MP2';
+  4: AudName := 'ALAC';
+ End;
  F0 := 0;
  F1 := SeqEnd;
  If P.InM >= 0 Then F0 := P.InM;
@@ -25623,14 +33353,14 @@ Begin
  If Not Ok Then MsgBox('Exporter la vidéo', 'Erreur pendant l''encodage H.264.')
  Else If Cancel Then MsgBox('Exporter la vidéo', 'Exportation arrêtée : le fichier contient les ' + IStr(I) + ' premières images.')
  Else MsgBox('Exporter la vidéo', 'Vidéo exportée : ' + FN + '|' + IStr(NFr) + ' images, ' + IStr(VW) + 'x' +
-             IStr(VH) + ', H.264 QP ' + IStr(Qp) + ' + PCM stéréo');
+             IStr(VH) + ', H.264 QP ' + IStr(Qp) + ' + ' + AudName + ' stéréo');
 End;
 
 Procedure DoExportAvi;
 Begin
  DlgCount := 2;
  DlgItems[0] := 'AVI - MJPEG + PCM (qualité JPEG)';
- DlgItems[1] := 'MP4 - H.264 + PCM (quantificateur QP)';
+ DlgItems[1] := 'MP4 - H.264 + AAC/MP2/ALAC/PCM (quantificateur QP)';
  Case ListDlg('Exporter la vidéo - format', 0) Of
   0: ExportAviMjpeg;
   1: ExportMp4H264;
@@ -26493,6 +34223,9 @@ Begin
   Else If P.Clips[I].Med > M Then Dec(P.Clips[I].Med);
  For J := M To P.NM - 2 Do P.Media[J] := P.Media[J + 1];
  Dec(P.NM);
+ For J := 0 To P.NM - 1 Do
+  If P.Media[J].Pair = M Then P.Media[J].Pair := -1
+  Else If P.Media[J].Pair > M Then Dec(P.Media[J].Pair);
  If SrcMed = M Then SrcMed := -1 Else If SrcMed > M Then Dec(SrcMed);
  ProjSel := -1;
  NeedAll := True;
@@ -26909,15 +34642,18 @@ Begin
 End;
 
 Const
- HelpN = 17;
+ HelpN = 20;
  HelpL: Array[0..HelpN - 1] Of String[72] = (
   'Espace : lecture/pause     J K L : navette arrière / arrêt / avant',
   'Gauche/Droite : image      Ctrl+Gauche/Droite : une seconde',
   'Haut/Bas : coupe précédente/suivante      Début/Fin : début/fin',
   'I / O : marquer entrée/sortie    X : effacer    M : marqueur',
-  'N / P : marqueur suivant / précédent',
+  'N / [ : marqueur suivant / précédent',
   '',
-  'V A B C H Z T : outils de montage         S : magnétisme',
+  'V A Q B Y U C P H Z T : sélection, piste avant/arr., ondulation,',
+  '   glissement int./ext., rasoir, plume (images-clés), main, zoom, titre',
+  'S : magnétisme      Contrôles des effets : losange = image-clé',
+  'Menu Séquence : pistes, liaison, imbriquer      Fichier : exportations',
   'Suppr : supprimer       Retour : supprimer et fermer l''espace',
   'Ctrl+K : couper     Ctrl+J : dupliquer     Ctrl+R : vitesse',
   'Ctrl+Z / Ctrl+Y : annuler / rétablir',
@@ -26964,6 +34700,85 @@ Begin
   'Montage vidéo non linéaire en mode graphique VGA 640x480|' +
   'Turbo Pascal 7 / Free Pascal - Sylvain Maltais (Gladir.com)|' +
   'Licence MIT - https://www.gladir.com/clonedraw');
+End;
+
+{ Imbrique la selection : rend l'image composee des seuls clips selectionnes dans un nouveau
+  media video (cache) et remplace ces clips par un seul clip. }
+Procedure NestSelection;
+Var
+ I, T, Lo, K, M: Integer;
+ S0, S1, F: LongInt;
+ Pix: PBigBytes;
+ X, Y: Integer;
+ Nf, Fps100: LongInt;
+ Cache: String;
+ Any: Boolean;
+Begin
+ S0 := 999999999;
+ S1 := 0;
+ Lo := 99;
+ Any := False;
+ For I := 0 To P.NC - 1 Do
+  If P.Clips[I].Sel And IsVideoTrack(P.Clips[I].Trk) Then Begin
+   Any := True;
+   S0 := Min(S0, P.Clips[I].Start);
+   S1 := Max(S1, ClipEnd(I));
+   Lo := Min(Lo, P.Clips[I].Trk);
+  End;
+ If Not Any Then Begin
+  Msg('Sélectionnez des clips vidéo à imbriquer');
+  Exit;
+ End;
+ If (S1 - S0 > P.Fps * 120) Or (P.NM >= MAXMEDIA) Then Begin
+  Msg('Sélection trop longue (120 s max) ou projet plein');
+  Exit;
+ End;
+ Cache := 'PN' + HexN(Ticks And $FFFFFF, 6) + '.PVC';
+ If Not ConfBegin(Cache, False, 600, 'Imbrication de la sélection', False) Then Exit;
+ ConfSetFps(P.Fps * 100);
+ GetMem(Pix, LongInt(VW) * VH * 3);
+ OnlySel := True;
+ F := S0;
+ While (F < S1) And (Not CnCancel) Do Begin
+  BuildLayers(F);
+  For Y := 0 To VH - 1 Do
+   For X := 0 To VW - 1 Do Begin
+    If NLay = 0 Then Begin
+     AR := 0; AG := 0; AB := 0;
+    End Else Compose(X, Y);
+    Pix^[(Y * VW + X) * 3] := AR;
+    Pix^[(Y * VW + X) * 3 + 1] := AG;
+    Pix^[(Y * VW + X) * 3 + 2] := AB;
+   End;
+  If Not ConfEmit(VW, VH, Pix) Then Break;
+  Inc(F);
+ End;
+ OnlySel := False;
+ FreeMem(Pix, LongInt(VW) * VH * 3);
+ ConfEnd(Nf, Fps100);
+ If Nf < 1 Then Begin
+  Msg('Imbrication impossible');
+  Exit;
+ End;
+ PushUndo;
+ M := AddMedia('Imbriqué ' + HexN(Ticks And $FFF, 3), MK_VIDEO, Nf, 30, '', '');
+ If M < 0 Then Begin
+  DropLastUndo;
+  Exit;
+ End;
+ P.Media[M].Cache := Cache;
+ P.Media[M].NF := Nf;
+ P.Media[M].Fps100 := Integer(Fps100);
+ P.Media[M].CW := Integer(CnCW);
+ P.Media[M].CH := Integer(CnCH);
+ RecalcMediaDurs;
+ For I := P.NC - 1 Downto 0 Do
+  If P.Clips[I].Sel And IsVideoTrack(P.Clips[I].Trk) Then DelClip(I);
+ K := PlaceClip(Lo, M, S0, 0, Nf);
+ ClearSel;
+ If K >= 0 Then P.Clips[K].Sel := True;
+ NeedAll := True;
+ Msg('Sélection imbriquée dans un clip rendu');
 End;
 
 Procedure SetWorkspace(W: Integer);
@@ -27116,6 +34931,7 @@ Begin
   CM_DELV: DelTrack(True);
   CM_DELA: DelTrack(False);
   CM_LINK: LinkSel(True);
+  CM_NEST: NestSelection;
   CM_UNLINK: LinkSel(False);
   CM_INTERP0..CM_INTERP0 + 2: Begin
    DefInterp := Id - CM_INTERP0;

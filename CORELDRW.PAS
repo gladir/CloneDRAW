@@ -2188,7 +2188,7 @@ Begin
   If Not Sl[I]^.Closed Then AllClosed:=False;
  End;
  If Tot>7990 Then Begin
-  EditMsg:='Trop de nœuds.';
+  EditMsg:='Trop de noeuds.';
   Exit;
  End;
  GetMem(P,Tot*SizeOf(TPt));
@@ -2368,8 +2368,10 @@ Begin
 End;
 
 { Etapes intermediaires entre les deux premiers objets selectionnes }
-Procedure BlendSel(Steps:Integer);
+Procedure BlendSel(Steps:Integer;Rot:Double);
 Var Sl:TSelArr;
+    CX,CY:LongInt;
+    Ang:Double;
     N,I,J:Integer;
     A,B,CA,CB,O,Pr:PObj;
     T:Double;
@@ -2424,6 +2426,13 @@ Begin
   O^.OutCol:=LerpCol(A^.OutCol,B^.OutCol,T);
   O^.OutW:=Round(A^.OutW+(B^.OutW-A^.OutW)*T);
   O^.Shadow:=False;
+  If Rot<>0 Then Begin
+   Ang:=Rot*T*Pi/180;
+   ObjBBox(O,AX1,AY1,AX2,AY2);
+   CX:=(AX1+AX2) Div 2;
+   CY:=(AY1+AY2) Div 2;
+   XformObj(O,Cos(Ang),-Sin(Ang),Sin(Ang),Cos(Ang),CX,CY);
+  End;
   ListInsertAfter(Pr,O);
   Pr:=O;
  End;
@@ -2599,7 +2608,7 @@ Begin
   Exit;
  End;
  If Not NodeSet Then Begin
-  EditMsg:='Sélectionnez un nœud avec l''outil Forme.';
+  EditMsg:='Sélectionnez un noeud avec l''outil Forme.';
   Exit;
  End;
  O:=ObjAt(NodeObj);
@@ -2613,7 +2622,7 @@ Begin
   Else If(O^.Kind=K_RECT)or(O^.Kind=K_ELLIPSE)Then Begin
    ToBezier(O);
    NodeIdx:=-1;
-   EditMsg:='Forme convertie en courbe : resélectionnez le nœud.';
+   EditMsg:='Forme convertie en courbe : resélectionnez le noeud.';
    Exit;
   End;
  If(O^.Kind<>K_BEZIER)or(NodeIdx>=O^.N)Then Exit;
@@ -2645,7 +2654,7 @@ Begin
   End;
   3,4,5:Begin
    If Op=5 Then Begin
-    EditMsg:='Nœud anguleux : les poignées sont indépendantes.';
+    EditMsg:='Noeud anguleux : les poignées sont indépendantes.';
     Exit;
    End;
    Case A Mod 3 Of
@@ -2831,7 +2840,7 @@ Procedure AffineSel(A,B,C,D:Double);
 Begin
  EditMsg:='Non disponible dans cette version.';
 End;
-Procedure BlendSel(Steps:Integer);
+Procedure BlendSel(Steps:Integer;Rot:Double);
 Begin
  EditMsg:='Non disponible dans cette version.';
 End;
@@ -3764,7 +3773,8 @@ Function LoadForeign(Const Name:String;Append:Boolean):Boolean;Forward;
 Function IsForeignExt(Const E:String):Boolean;
 Begin
  IsForeignExt:=(E='.DXF')or(E='.EPS')or(E='.PS')or(E='.AI')or(E='.PDF')or(E='.WMF')or
-               (E='.BMP')or(E='.PCX')or(E='.PNG');
+               (E='.BMP')or(E='.PCX')or(E='.PNG')or(E='.GIF')or(E='.TIF')or(E='.TIFF')or
+               (E='.JPG')or(E='.JPEG')or(E='.EMF');
 End;
 
 Function LoadAny(Const Name:String):Boolean;
@@ -4268,6 +4278,7 @@ Begin
 End;
 
 Var ExpMode:Integer;
+ ExpCrop:Boolean;
 
 { ------------------------------------------------------------------ }
 { Exportations : PDF, EPS, DXF, WMF, BMP, PNG                          }
@@ -4311,21 +4322,25 @@ Var
  XPH:LongInt;
  XPage:Integer;
 
-Function XPx(X:LongInt):String;
+Var
+ XCrop:Boolean;
+ XOX,XOY:LongInt;
+ XImgNum:Array[1..IMG_MAX] of Integer;
+
+Function XPx(X:Double):String;
 Begin
- XPx:=FN2(X*72/254);
+ XPx:=FN2((X+XOX)*72/254);
 End;
 
-Function XPy(Y:LongInt):String;
+Function XPy(Y:Double):String;
 Begin
- XPy:=FN2((XPH-Y)*72/254);
+ XPy:=FN2((XPH-Y+XOY)*72/254);
 End;
 
 { Couleur courante (remplissage ou contour) selon le mode }
-Procedure XCol(C:Integer;Stroke:Boolean);
-Var R,G,B,K,Cy,M,Y,V:Double;
+Procedure XColRGB(R,G,B:Double;Stroke:Boolean);
+Var K,Cy,M,Y,V:Double;
 Begin
- RGB01(C,R,G,B);
  If XMode=0 Then Begin
   Write(XF,FN2(R),' ',FN2(G),' ',FN2(B),' ');
   If XPdf Then Begin
@@ -4366,6 +4381,13 @@ Begin
   End;
 End;
 
+Procedure XCol(C:Integer;Stroke:Boolean);
+Var R,G,B:Double;
+Begin
+ RGB01(C,R,G,B);
+ XColRGB(R,G,B,Stroke);
+End;
+
 Procedure XPathOf(O:PObj;DX:LongInt);
 Var K:Integer;
     Mv,Cv,Cl:String;
@@ -4400,15 +4422,136 @@ Begin
  PsEsc:=R;
 End;
 
+Procedure XRectFill(X1,Y1,X2,Y2:Double);
+Begin
+ If XPdf Then
+  WriteLn(XF,XPx(X1),' ',XPy(Y1),' m ',XPx(X2),' ',XPy(Y1),' l ',XPx(X2),' ',XPy(Y2),' l ',
+          XPx(X1),' ',XPy(Y2),' l h f')
+ Else
+  WriteLn(XF,'newpath ',XPx(X1),' ',XPy(Y1),' moveto ',XPx(X2),' ',XPy(Y1),' lineto ',
+          XPx(X2),' ',XPy(Y2),' lineto ',XPx(X1),' ',XPy(Y2),' lineto closepath fill');
+End;
+
+Procedure XEllFill(CX,CY,RX,RY:Double);
+Const K=0.5523;
+Var Mv,Cv,Cl,Fl:String;
+Begin
+ If XPdf Then Begin Mv:='m'; Cv:='c'; Cl:='h'; Fl:='f'; End
+  Else Begin Mv:='moveto'; Cv:='curveto'; Cl:='closepath'; Fl:='fill'; End;
+ If Not XPdf Then WriteLn(XF,'newpath');
+ WriteLn(XF,XPx(CX+RX),' ',XPy(CY),' ',Mv);
+ WriteLn(XF,XPx(CX+RX),' ',XPy(CY+K*RY),' ',XPx(CX+K*RX),' ',XPy(CY+RY),' ',XPx(CX),' ',XPy(CY+RY),' ',Cv);
+ WriteLn(XF,XPx(CX-K*RX),' ',XPy(CY+RY),' ',XPx(CX-RX),' ',XPy(CY+K*RY),' ',XPx(CX-RX),' ',XPy(CY),' ',Cv);
+ WriteLn(XF,XPx(CX-RX),' ',XPy(CY-K*RY),' ',XPx(CX-K*RX),' ',XPy(CY-RY),' ',XPx(CX),' ',XPy(CY-RY),' ',Cv);
+ WriteLn(XF,XPx(CX+K*RX),' ',XPy(CY-RY),' ',XPx(CX+RX),' ',XPy(CY-K*RY),' ',XPx(CX+RX),' ',XPy(CY),' ',Cv);
+ WriteLn(XF,Cl,' ',Fl);
+End;
+
+{ Degrade : decoupe selon le contour (clip) puis bandes ou anneaux de couleur }
+Procedure XGradFill(O:PObj);
+Const NS=28;
+Var X1,Y1,X2,Y2:LongInt;
+    I:Integer;
+    R1,G1,B1,R2,G2,B2,T,W,H,CX,CY,Rd:Double;
+Begin
+ ObjBBox(O,X1,Y1,X2,Y2);
+ W:=X2-X1; H:=Y2-Y1;
+ RGB01(O^.FillCol,R1,G1,B1);
+ RGB01(O^.FillCol2,R2,G2,B2);
+ If XPdf Then Begin
+  WriteLn(XF,'q');
+  XPathOf(O,0);
+  If HasBrk(O)Then WriteLn(XF,'W* n') Else WriteLn(XF,'W n');
+ End
+  Else Begin
+   WriteLn(XF,'gsave newpath');
+   XPathOf(O,0);
+   If HasBrk(O)Then WriteLn(XF,'eoclip newpath') Else WriteLn(XF,'clip newpath');
+  End;
+ If(O^.FillKind=FK_GRADV)or(O^.FillKind=FK_GRADH)Then Begin
+  For I:=0 To NS-1 Do Begin
+   T:=(I+0.5)/NS;
+   XColRGB(R1+(R2-R1)*T,G1+(G2-G1)*T,B1+(B2-B1)*T,False);
+   If O^.FillKind=FK_GRADV Then
+    XRectFill(X1-5,Y1+H*I/NS,X2+5,Y1+H*(I+1)/NS+1)
+   Else
+    XRectFill(X1+W*I/NS,Y1-5,X1+W*(I+1)/NS+1,Y2+5);
+  End;
+ End
+  Else Begin
+   CX:=(X1+X2)/2+W*O^.GradX/100;
+   CY:=(Y1+Y2)/2-H*O^.GradY/100;
+   Rd:=Sqrt(W*W+H*H)/2+Sqrt(Sqr(W*O^.GradX/100)+Sqr(H*O^.GradY/100))+1;
+   For I:=0 To NS-1 Do Begin
+    T:=1-(I+0.5)/NS;
+    XColRGB(R1+(R2-R1)*T,G1+(G2-G1)*T,B1+(B2-B1)*T,False);
+    XEllFill(CX,CY,Rd*(1-I/NS),Rd*(1-I/NS));
+   End;
+  End;
+ If XPdf Then WriteLn(XF,'Q') Else WriteLn(XF,'grestore');
+End;
+
+{ Bitmap : image RVB en hexadecimal (PDF : objet externe ; EPS : colorimage) }
+Procedure XImage(O:PObj);
+Var X1,Y1,X2,Y2:LongInt;
+    Im:PImage;
+    I,N:LongInt;
+    Hx:String;
+Begin
+ Im:=Imgs[O^.Img];
+ ObjBBox(O,X1,Y1,X2,Y2);
+ If XPdf Then Begin
+  WriteLn(XF,'q ',FN2((X2-X1)*72/254),' 0 0 ',FN2((Y2-Y1)*72/254),' ',XPx(X1),' ',XPy(Y2),
+          ' cm /Im',O^.Img,' Do Q');
+  Exit;
+ End;
+ WriteLn(XF,'gsave ',XPx(X1),' ',XPy(Y2),' translate ',FN2((X2-X1)*72/254),' ',
+         FN2((Y2-Y1)*72/254),' scale');
+ WriteLn(XF,'/pic ',Im^.W*3,' string def');
+ WriteLn(XF,Im^.W,' ',Im^.H,' 8 [',Im^.W,' 0 0 -',Im^.H,' 0 ',Im^.H,']');
+ WriteLn(XF,'{currentfile pic readhexstring pop} false 3 colorimage');
+ N:=LongInt(Im^.W)*Im^.H*3;
+ Hx:='';
+ For I:=0 To N-1 Do Begin
+  Hx:=Hx+HexByte(Im^.Pix^[I]);
+  If Length(Hx)>=64 Then Begin WriteLn(XF,Hx); Hx:=''; End;
+ End;
+ If Hx<>'' Then WriteLn(XF,Hx);
+ WriteLn(XF,'grestore');
+End;
+
+Procedure XSeg(X1,Y1,X2,Y2:Double);
+Begin
+ If XPdf Then WriteLn(XF,XPx(X1),' ',XPy(Y1),' m ',XPx(X2),' ',XPy(Y2),' l S')
+  Else WriteLn(XF,'newpath ',XPx(X1),' ',XPy(Y1),' moveto ',XPx(X2),' ',XPy(Y2),' lineto stroke');
+End;
+
+{ Reperes de coupe aux quatre coins de la page }
+Procedure XMarks;
+Var W,H:Double;
+Begin
+ W:=PageW; H:=PageH;
+ XCol(0,True);
+ If XPdf Then WriteLn(XF,'0.5 w') Else WriteLn(XF,'0.5 setlinewidth');
+ XSeg(-130,0,-30,0);       XSeg(0,-130,0,-30);
+ XSeg(W+30,0,W+130,0);     XSeg(W,-130,W,-30);
+ XSeg(-130,H,-30,H);       XSeg(0,H+30,0,H+130);
+ XSeg(W+30,H,W+130,H);     XSeg(W,H+30,W,H+130);
+End;
+
 Procedure XDrawObj(O:PObj;Shadow:Boolean);
 Var C:PObj;
     DX:LongInt;
-    Fill,Strk,EO:Boolean;
+    Fill,Strk,EO,Grad:Boolean;
     FC:Integer;
     W:Double;
     D1,D2:LongInt;
 Begin
  If Shadow Then DX:=60 Else DX:=0;
+ If(O^.Kind=K_BITMAP)and(O^.Img>=1)and(O^.Img<=ImgCount)and(Not XPdf or(XImgNum[O^.Img]>0))Then Begin
+  If Not Shadow Then XImage(O);
+  Exit;
+ End;
  If O^.Kind=K_TEXT Then Begin
   If Shadow Then Exit;
   If O^.FillCol>=0 Then FC:=O^.FillCol Else FC:=O^.OutCol;
@@ -4450,6 +4593,13 @@ Begin
    Strk:=C^.OutCol>=0;
    If Not Fill and Not Strk Then Strk:=True;
   End;
+ Grad:=Fill and Not Shadow and(C^.FillCol2>=0)and
+       (C^.FillKind in [FK_GRADV,FK_GRADH,FK_RADIAL,FK_CONIC,FK_SQUARE]);
+ If Grad Then Begin
+  XGradFill(C);
+  Fill:=False;
+  If Not Strk Then Begin FreeObj(C); Exit; End;
+ End;
  W:=C^.OutW;
  If W<1 Then W:=1;
  W:=W*72/254;
@@ -4504,6 +4654,7 @@ Begin
   End;
   O:=O^.Next;
  End;
+ If XCrop Then XMarks;
 End;
 
 { ---------------------------- EPS ----------------------------------- }
@@ -4517,8 +4668,11 @@ Begin
  XPdf:=False;
  XMode:=Mode;
  XPH:=PageH;
+ XOX:=0; XOY:=0;
+ If ExpCrop Then Begin XOX:=150; XOY:=150; End;
+ XCrop:=ExpCrop;
  WriteLn(XF,'%!PS-Adobe-3.0 EPSF-3.0');
- WriteLn(XF,'%%BoundingBox: 0 0 ',Round(PageW*72/254+0.5),' ',Round(PageH*72/254+0.5));
+ WriteLn(XF,'%%BoundingBox: 0 0 ',Round((PageW+2*XOX)*72/254+0.5),' ',Round((PageH+2*XOY)*72/254+0.5));
  WriteLn(XF,'%%Creator: CORELDRW');
  WriteLn(XF,'%%Title: ',BaseOf(DocName));
  WriteLn(XF,'%%EndComments');
@@ -4543,8 +4697,12 @@ Begin
 End;
 
 Function SavePDF(Const Name:String;Mode:Integer):Boolean;
-Var Offs:Array[0..80] of LongInt;
-    Pg,N,I:Integer;
+Var Offs:Array[0..160] of LongInt;
+    Pg,N,I,NImg,K:Integer;
+    ImgList:Array[0..59] of Integer;
+    Res,Hx:String;
+    O:PObj;
+    J,JI:LongInt;
     Tmp:String;
     TF:File;
     Buf:Array[0..4095] of Byte;
@@ -4558,11 +4716,28 @@ Begin
  If IOResult<>0 Then Exit;
  PPos:=0;
  Tmp:=Name+'.tmp';
- MW:=FN2(PageW*72/254);
- MH:=FN2(PageH*72/254);
+ XOX:=0; XOY:=0;
+ If ExpCrop Then Begin XOX:=150; XOY:=150; End;
+ XCrop:=ExpCrop;
+ MW:=FN2((PageW+2*XOX)*72/254);
+ MH:=FN2((PageH+2*XOY)*72/254);
  XPdf:=True;
  XMode:=Mode;
  XPH:=PageH;
+ { bitmaps employes : un objet image par bitmap (60 au plus) }
+ FillChar(XImgNum,SizeOf(XImgNum),0);
+ NImg:=0;
+ O:=ObjHead;
+ While O<>NIL Do Begin
+  If(O^.Kind=K_BITMAP)and(O^.Img>=1)and(O^.Img<=ImgCount)and(XImgNum[O^.Img]=0)and(NImg<60)Then Begin
+   ImgList[NImg]:=O^.Img;
+   XImgNum[O^.Img]:=4+2*PageCnt+NImg;
+   Inc(NImg);
+  End;
+  O:=O^.Next;
+ End;
+ Res:='';
+ For I:=0 To NImg-1 Do Res:=Res+' /Im'+IStr(ImgList[I])+' '+IStr(XImgNum[ImgList[I]])+' 0 R';
  PW('%PDF-1.4'#10);
  Offs[1]:=PPos;
  PW('1 0 obj'#10'<< /Type /Catalog /Pages 2 0 R >>'#10'endobj'#10);
@@ -4586,7 +4761,7 @@ Begin
   N:=4+2*(Pg-1);
   Offs[N]:=PPos;
   PW(IStr(N)+' 0 obj'#10'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 '+MW+' '+MH+
-     '] /Contents '+IStr(N+1)+' 0 R /Resources << /Font << /F1 3 0 R >> >> >>'#10'endobj'#10);
+     '] /Contents '+IStr(N+1)+' 0 R /Resources << /Font << /F1 3 0 R >> /XObject <<'+Res+' >> >> >>'#10'endobj'#10);
   Offs[N+1]:=PPos;
   PW(IStr(N+1)+' 0 obj'#10'<< /Length '+IStr(L)+' >>'#10'stream'#10);
   Repeat
@@ -4600,7 +4775,21 @@ Begin
   Erase(TF);
   PW(#10'endstream'#10'endobj'#10);
  End;
- N:=3+2*PageCnt;
+ For K:=0 To NImg-1 Do Begin
+  N:=XImgNum[ImgList[K]];
+  Offs[N]:=PPos;
+  J:=LongInt(Imgs[ImgList[K]]^.W)*Imgs[ImgList[K]]^.H*3;
+  PW(IStr(N)+' 0 obj'#10'<< /Type /XObject /Subtype /Image /Width '+IStr(Imgs[ImgList[K]]^.W)+
+     ' /Height '+IStr(Imgs[ImgList[K]]^.H)+' /ColorSpace /DeviceRGB /BitsPerComponent 8'+
+     ' /Filter /ASCIIHexDecode /Length '+IStr(J*2+1)+' >>'#10'stream'#10);
+  Hx:='';
+  For JI:=0 To J-1 Do Begin
+   Hx:=Hx+HexByte(Imgs[ImgList[K]]^.Pix^[JI]);
+   If Length(Hx)>=200 Then Begin PW(Hx); Hx:=''; End;
+  End;
+  PW(Hx+'>'#10'endstream'#10'endobj'#10);
+ End;
+ N:=3+2*PageCnt+NImg;
  XrefAt:=PPos;
  PW('xref'#10'0 '+IStr(N+1)+#10'0000000000 65535 f '#10);
  For I:=1 To N Do Begin
@@ -7102,6 +7291,747 @@ End;
 
 { ------------------------- point d'entree --------------------------- }
 
+{ ------------------------------ GIF --------------------------------- }
+
+Function LoadGIFFile:Boolean;
+Var W,H,P,NCol,Tr,Mn,I,X,Y,Rw,Pass,Step,C,Prev,Code,Sz,Nx,Clr,Eoi,Cnt,Sp,First,Lf,NL:LongInt;
+    Pal:Array[0..767] of Byte;
+    Pre:Array[0..4095] of Integer;
+    Suf:Array[0..4095] of Byte;
+    Stk:Array[0..4096] of Byte;
+    D,Idx,Pix,Alp:PBig;
+    DN,Pos,Bits,Acc,Out:LongInt;
+    Ilace,Ok:Boolean;
+    LocalPal:Boolean;
+Begin
+ LoadGIFFile:=False;
+ If(IB(0)<>Ord('G'))or(IB(1)<>Ord('I'))or(IB(2)<>Ord('F'))Then Exit;
+ P:=10;
+ NCol:=0;
+ FillChar(Pal,SizeOf(Pal),0);
+ If(IB(P) And $80)<>0 Then Begin
+  NCol:=2 Shl (IB(P) And 7);
+  For I:=0 To NCol*3-1 Do Pal[I]:=IB(13+I);
+  P:=13+NCol*3;
+ End
+  Else P:=13;
+ Tr:=-1;
+ While P<ILen Do Begin
+  C:=IB(P);
+  If C=$21 Then Begin
+   If(IB(P+1)=$F9)and((IB(P+3) And 1)<>0)Then Tr:=IB(P+6);
+   Inc(P,2);
+   While(P<ILen)and(IB(P)<>0)Do Inc(P,IB(P)+1);
+   Inc(P);
+   Continue;
+  End;
+  If C<>$2C Then Exit;
+  W:=IW(P+5);
+  H:=IW(P+7);
+  Lf:=IB(P+9);
+  Inc(P,10);
+  If(W<1)or(H<1)or(W>10000)or(H>10000)Then Exit;
+  If(Lf And $80)<>0 Then Begin
+   NL:=2 Shl (Lf And 7);
+   For I:=0 To NL*3-1 Do Pal[I]:=IB(P+I);
+   Inc(P,NL*3);
+  End;
+  Ilace:=(Lf And $40)<>0;
+  Mn:=IB(P);
+  Inc(P);
+  If(Mn<2)or(Mn>11)Then Exit;
+  { regroupe les sous-blocs }
+  GetMem(D,ILen+8);
+  DN:=0;
+  While(P<ILen)and(IB(P)<>0)Do Begin
+   Sz:=IB(P);
+   Move(IBuf^[P+1],D^[DN],Sz);
+   Inc(DN,Sz);
+   Inc(P,Sz+1);
+  End;
+  GetMem(Idx,W*H+8);
+  FillChar(Idx^,W*H,0);
+  Clr:=1 Shl Mn;
+  Eoi:=Clr+1;
+  Nx:=Clr+2;
+  Sz:=Mn+1;
+  Prev:=-1;
+  Out:=0;
+  Pos:=0; Bits:=0; Acc:=0;
+  For I:=0 To Clr-1 Do Begin Pre[I]:=-1; Suf[I]:=I; End;
+  While Out<W*H Do Begin
+   While(Bits<Sz)and(Pos<DN)Do Begin
+    Acc:=Acc Or(LongInt(D^[Pos]) Shl Bits);
+    Inc(Pos);
+    Inc(Bits,8);
+   End;
+   If Bits<Sz Then Break;
+   Code:=Acc And((1 Shl Sz)-1);
+   Acc:=Acc Shr Sz;
+   Dec(Bits,Sz);
+   If Code=Clr Then Begin
+    Nx:=Clr+2; Sz:=Mn+1; Prev:=-1;
+    Continue;
+   End;
+   If Code=Eoi Then Break;
+   Sp:=0;
+   If Code<Nx Then C:=Code
+    Else Begin
+     If Prev<0 Then Break;
+     C:=Prev;
+    End;
+   While C>=0 Do Begin
+    If Sp>4095 Then Break;
+    Stk[Sp]:=Suf[C];
+    Inc(Sp);
+    C:=Pre[C];
+   End;
+   First:=Stk[Sp-1];
+   If Code>=Nx Then Begin
+    { cas KwKwK : on ajoute le premier caractere }
+    Move(Stk[0],Stk[1],Sp);
+    Stk[0]:=First;
+    Inc(Sp);
+    First:=Stk[Sp-1];
+   End;
+   While(Sp>0)and(Out<W*H)Do Begin
+    Dec(Sp);
+    Idx^[Out]:=Stk[Sp];
+    Inc(Out);
+   End;
+   If(Prev>=0)and(Nx<4096)Then Begin
+    Pre[Nx]:=Prev;
+    Suf[Nx]:=First;
+    Inc(Nx);
+    If(Nx=(1 Shl Sz))and(Sz<12)Then Inc(Sz);
+   End;
+   Prev:=Code;
+  End;
+  FreeMem(D,ILen+8);
+  GetMem(Pix,W*H*3);
+  Alp:=NIL;
+  If Tr>=0 Then Begin GetMem(Alp,W*H); End;
+  { desentrelacement }
+  Rw:=0;
+  For Y:=0 To H-1 Do Begin
+   If Ilace Then Begin
+    { ordre des passes : 0,8,.. puis 4,12,.. puis 2,6,.. puis 1,3,.. }
+    If Y<(H+7) Div 8 Then Rw:=Y*8
+     Else If Y<(H+7) Div 8+(H+3) Div 8 Then Rw:=(Y-(H+7) Div 8)*8+4
+     Else If Y<(H+7) Div 8+(H+3) Div 8+(H+1) Div 4 Then Rw:=(Y-(H+7) Div 8-(H+3) Div 8)*4+2
+     Else Rw:=(Y-(H+7) Div 8-(H+3) Div 8-(H+1) Div 4)*2+1;
+   End
+    Else Rw:=Y;
+   If Rw>=H Then Rw:=H-1;
+   For X:=0 To W-1 Do Begin
+    C:=Idx^[Y*W+X];
+    Pix^[(Rw*W+X)*3]:=Pal[C*3];
+    Pix^[(Rw*W+X)*3+1]:=Pal[C*3+1];
+    Pix^[(Rw*W+X)*3+2]:=Pal[C*3+2];
+    If Alp<>NIL Then Begin
+     If C=Tr Then Alp^[Rw*W+X]:=0 Else Alp^[Rw*W+X]:=255;
+    End;
+   End;
+  End;
+  FreeMem(Idx,W*H+8);
+  Ok:=AddImageBuf(W,H,Pix,Alp);
+  FreeMem(Pix,W*H*3);
+  If Alp<>NIL Then FreeMem(Alp,W*H);
+  LoadGIFFile:=Ok;
+  Exit;
+ End;
+End;
+
+{ ------------------------------ TIFF -------------------------------- }
+
+Var TifLE:Boolean;
+
+Function T16(O:LongInt):LongInt;
+Begin
+ If TifLE Then T16:=IW(O) Else T16:=IB(O)*256+IB(O+1);
+End;
+
+Function T32(O:LongInt):LongInt;
+Begin
+ If TifLE Then T32:=IL(O) Else T32:=(T16(O) Shl 16)+T16(O+2);
+End;
+
+Function LoadTIFFFile:Boolean;
+Var Ifd,N,I,Tag,Typ,Cnt,VOff,W,H,Bits,Comp,Phot,Spp,Rps,NStrips,SOff,SCnt,K,J,RB,Pos,Y,X,Cx:LongInt;
+    SOffs,SCnts:Array[0..4095] of LongInt;
+    CmapOff:LongInt;
+    Raw,Pix:PBig;
+    Ok:Boolean;
+    V:LongInt;
+ Function Val1(E:LongInt):LongInt;
+ Begin
+  If T16(E+2)=3 Then Val1:=T16(E+8) Else Val1:=T32(E+8);
+ End;
+ Function ArrAt(E,Idx:LongInt):LongInt;
+ Var Tp,Base,Sz2:LongInt;
+ Begin
+  Tp:=T16(E+2);
+  If Tp=3 Then Sz2:=2 Else Sz2:=4;
+  If T32(E+4)*Sz2<=4 Then Base:=E+8 Else Base:=T32(E+8);
+  If Tp=3 Then ArrAt:=T16(Base+Idx*2) Else ArrAt:=T32(Base+Idx*4);
+ End;
+Begin
+ LoadTIFFFile:=False;
+ If(IB(0)=Ord('I'))and(IB(1)=Ord('I'))Then TifLE:=True
+  Else If(IB(0)=Ord('M'))and(IB(1)=Ord('M'))Then TifLE:=False
+  Else Exit;
+ If T16(2)<>42 Then Exit;
+ Ifd:=T32(4);
+ N:=T16(Ifd);
+ W:=0; H:=0; Bits:=1; Comp:=1; Phot:=1; Spp:=1; Rps:=0; NStrips:=0; CmapOff:=0;
+ For I:=0 To N-1 Do Begin
+  Tag:=T16(Ifd+2+I*12);
+  VOff:=Ifd+2+I*12;
+  Case Tag Of
+   256:W:=Val1(VOff);
+   257:H:=Val1(VOff);
+   258:Bits:=ArrAt(VOff,0);
+   259:Comp:=Val1(VOff);
+   262:Phot:=Val1(VOff);
+   277:Spp:=Val1(VOff);
+   278:Rps:=Val1(VOff);
+   273:Begin
+     NStrips:=T32(VOff+4);
+     If NStrips>4096 Then NStrips:=4096;
+     For K:=0 To NStrips-1 Do SOffs[K]:=ArrAt(VOff,K);
+    End;
+   279:Begin
+     Cnt:=T32(VOff+4);
+     If Cnt>4096 Then Cnt:=4096;
+     For K:=0 To Cnt-1 Do SCnts[K]:=ArrAt(VOff,K);
+    End;
+   320:CmapOff:=T32(VOff+8);
+  End;
+ End;
+ If(W<1)or(H<1)or(W>20000)or(H>20000)or(NStrips<1)Then Exit;
+ If(Comp<>1)and(Comp<>32773)Then Exit;
+ If Not(((Bits=8)and((Spp=1)or(Spp=3)or(Spp=4)))or((Bits=1)and(Spp=1)))Then Exit;
+ If(Phot=3)and(Bits<>8)Then Exit;
+ RB:=(W*Spp*Bits+7) Div 8;
+ If RB*H>200000000 Then Exit;
+ GetMem(Raw,RB*H+16);
+ FillChar(Raw^,RB*H,0);
+ Pos:=0;
+ For K:=0 To NStrips-1 Do Begin
+  SOff:=SOffs[K];
+  SCnt:=SCnts[K];
+  If SOff+SCnt>ILen Then SCnt:=ILen-SOff;
+  If Comp=1 Then Begin
+   If Pos+SCnt>RB*H Then SCnt:=RB*H-Pos;
+   If SCnt>0 Then Move(IBuf^[SOff],Raw^[Pos],SCnt);
+   Inc(Pos,SCnt);
+  End
+   Else Begin
+    J:=0;
+    While(J<SCnt)and(Pos<RB*H)Do Begin
+     V:=IB(SOff+J);
+     Inc(J);
+     If V>=128 Then V:=V-256;
+     If V>=0 Then Begin
+      For Cx:=0 To V Do Begin
+       If Pos<RB*H Then Begin Raw^[Pos]:=IB(SOff+J); Inc(Pos); End;
+       Inc(J);
+      End;
+     End
+      Else If V<>-128 Then Begin
+       For Cx:=0 To -V Do Begin
+        If Pos<RB*H Then Begin Raw^[Pos]:=IB(SOff+J); Inc(Pos); End;
+       End;
+       Inc(J);
+      End;
+    End;
+   End;
+ End;
+ GetMem(Pix,W*H*3);
+ For Y:=0 To H-1 Do
+  For X:=0 To W-1 Do Begin
+   I:=(Y*W+X)*3;
+   If Spp>=3 Then Begin
+    Pix^[I]:=Raw^[Y*RB+X*Spp];
+    Pix^[I+1]:=Raw^[Y*RB+X*Spp+1];
+    Pix^[I+2]:=Raw^[Y*RB+X*Spp+2];
+   End
+    Else If Bits=1 Then Begin
+     V:=(Raw^[Y*RB+X Div 8] Shr (7-(X And 7))) And 1;
+     If Phot=0 Then V:=1-V;
+     V:=V*255;
+     Pix^[I]:=V; Pix^[I+1]:=V; Pix^[I+2]:=V;
+    End
+    Else Begin
+     V:=Raw^[Y*RB+X];
+     If Phot=3 Then Begin
+      Pix^[I]:=T16(CmapOff+V*2) Shr 8;
+      Pix^[I+1]:=T16(CmapOff+(256+V)*2) Shr 8;
+      Pix^[I+2]:=T16(CmapOff+(512+V)*2) Shr 8;
+     End
+      Else Begin
+       If Phot=0 Then V:=255-V;
+       Pix^[I]:=V; Pix^[I+1]:=V; Pix^[I+2]:=V;
+      End;
+    End;
+  End;
+ FreeMem(Raw,RB*H+16);
+ Ok:=AddImageBuf(W,H,Pix,NIL);
+ FreeMem(Pix,W*H*3);
+ Rps:=0;
+ LoadTIFFFile:=Ok;
+End;
+
+{ ------------------------------ JPEG -------------------------------- }
+
+Const
+ ZigZag:Array[0..63] of Byte=(0,1,8,16,9,2,3,10,17,24,32,25,18,11,4,5,12,19,26,33,40,48,41,34,27,20,13,6,
+  7,14,21,28,35,42,49,56,57,50,43,36,29,22,15,23,30,37,44,51,58,59,52,45,38,31,39,46,53,60,61,54,47,55,62,63);
+
+Type
+ TJHuff=Record
+  Cnt:Array[1..16] of Integer;
+  Sym:Array[0..255] of Byte;
+  Ok:Boolean;
+ End;
+ TJComp=Record
+  Id,H,V,Tq,Td,Ta:Integer;
+  Pred:LongInt;
+  PW,PH:LongInt;
+  Plane:PBig;
+ End;
+
+Var
+ JP:LongInt;       { position de lecture }
+ JBits,JAcc:LongInt;
+ JBad:Boolean;
+
+Function JBit:Integer;
+Var B:LongInt;
+Begin
+ If JBits=0 Then Begin
+  If JP>=ILen Then Begin JBad:=True; JBit:=0; Exit; End;
+  B:=IB(JP);
+  Inc(JP);
+  If B=$FF Then Begin
+   If IB(JP)=0 Then Inc(JP)
+    Else Begin Dec(JP); JBad:=True; JBit:=0; Exit; End;
+  End;
+  JAcc:=B;
+  JBits:=8;
+ End;
+ Dec(JBits);
+ JBit:=(JAcc Shr JBits) And 1;
+End;
+
+Function JRecv(N:Integer):LongInt;
+Var V:LongInt;
+    I:Integer;
+Begin
+ V:=0;
+ For I:=1 To N Do V:=(V Shl 1)+JBit;
+ JRecv:=V;
+End;
+
+Function JExt(V:LongInt;N:Integer):LongInt;
+Begin
+ If(N>0)and(V<(1 Shl (N-1)))Then JExt:=V-(1 Shl N)+1 Else JExt:=V;
+End;
+
+Function JDec(Var H:TJHuff):Integer;
+Var Code,First,Index,Count:LongInt;
+    L:Integer;
+Begin
+ Code:=0; First:=0; Index:=0;
+ For L:=1 To 16 Do Begin
+  Code:=(Code Shl 1)+JBit;
+  If JBad Then Begin JDec:=0; Exit; End;
+  Count:=H.Cnt[L];
+  If Code-Count<First Then Begin
+   JDec:=H.Sym[Index+(Code-First)];
+   Exit;
+  End;
+  Inc(Index,Count);
+  First:=(First+Count) Shl 1;
+ End;
+ JBad:=True;
+ JDec:=0;
+End;
+
+Var
+ JCos:Array[0..7,0..7] of Double;
+ JCosReady:Boolean;
+
+Procedure JIdct(Var Cf:Array of Double;Out:PBig;Stride:LongInt);
+Var T:Array[0..63] of Double;
+    X,Y,U,V:Integer;
+    S:Double;
+    R:LongInt;
+Begin
+ If Not JCosReady Then Begin
+  For X:=0 To 7 Do
+   For U:=0 To 7 Do Begin
+    JCos[X,U]:=Cos((2*X+1)*U*Pi/16);
+    If U=0 Then JCos[X,U]:=JCos[X,U]*Sqrt(0.5);
+   End;
+  JCosReady:=True;
+ End;
+ For Y:=0 To 7 Do
+  For X:=0 To 7 Do Begin
+   S:=0;
+   For U:=0 To 7 Do S:=S+Cf[Y*8+U]*JCos[X,U];
+   T[Y*8+X]:=S/2;
+  End;
+ For X:=0 To 7 Do
+  For Y:=0 To 7 Do Begin
+   S:=0;
+   For V:=0 To 7 Do S:=S+T[V*8+X]*JCos[Y,V];
+   R:=Round(S/2+128);
+   If R<0 Then R:=0;
+   If R>255 Then R:=255;
+   Out^[Y*Stride+X]:=R;
+  End;
+End;
+
+Function LoadJPEGFile:Boolean;
+Var P,M,Len,I,J,K,Ri,W,H,Nc,Hm,Vm,McuX,McuY,Mx,My,C,Bx,By,Rst,Cnt,SX,SY,T,Run,Sz:LongInt;
+    Q:Array[0..3,0..63] of Integer;
+    Hdc,Hac:Array[0..3] of TJHuff;
+    Cm:Array[0..2] of TJComp;
+    Cf:Array[0..63] of Double;
+    Pix:PBig;
+    Ok:Boolean;
+    Dc,Rs:Integer;
+    Yv,Cb,Cr,Rr,Gg,Bb:Double;
+    ScanDone:Boolean;
+ Procedure Block(Var Cp:TJComp;Bxx,Byy:LongInt);
+ Var Kk:Integer;
+     Tt,Ss,Rr2:Integer;
+     Diff:LongInt;
+ Begin
+  FillChar(Cf,SizeOf(Cf),0);
+  Tt:=JDec(Hdc[Cp.Td]);
+  Diff:=JExt(JRecv(Tt),Tt);
+  Inc(Cp.Pred,Diff);
+  Cf[0]:=Cp.Pred*Q[Cp.Tq,0];
+  Kk:=1;
+  While Kk<64 Do Begin
+   Rs:=JDec(Hac[Cp.Ta]);
+   If JBad Then Exit;
+   Rr2:=Rs Shr 4;
+   Ss:=Rs And 15;
+   If Ss=0 Then Begin
+    If Rr2=15 Then Begin Inc(Kk,16); Continue; End;
+    Break;
+   End;
+   Inc(Kk,Rr2);
+   If Kk>63 Then Break;
+   Cf[ZigZag[Kk]]:=JExt(JRecv(Ss),Ss)*Q[Cp.Tq,ZigZag[Kk]];
+   Inc(Kk);
+  End;
+  JIdct(Cf,PBig(@Cp.Plane^[Byy*8*Cp.PW+Bxx*8]),Cp.PW);
+ End;
+Begin
+ LoadJPEGFile:=False;
+ If(IB(0)<>$FF)or(IB(1)<>$D8)Then Exit;
+ FillChar(Q,SizeOf(Q),0);
+ FillChar(Hdc,SizeOf(Hdc),0);
+ FillChar(Hac,SizeOf(Hac),0);
+ FillChar(Cm,SizeOf(Cm),0);
+ P:=2;
+ Ri:=0; W:=0; H:=0; Nc:=0;
+ ScanDone:=False;
+ While(P+4<ILen)and Not ScanDone Do Begin
+  If IB(P)<>$FF Then Begin Inc(P); Continue; End;
+  M:=IB(P+1);
+  If(M=$FF)or(M=0)or((M>=$D0)and(M<=$D8))Then Begin Inc(P); Continue; End;
+  Len:=(IB(P+2) Shl 8)+IB(P+3);
+  Case M Of
+   $DB:Begin
+     I:=P+4;
+     While I<P+2+Len Do Begin
+      T:=IB(I);
+      Inc(I);
+      For K:=0 To 63 Do Begin
+       If(T Shr 4)=0 Then Begin Q[T And 3,ZigZag[K]]:=IB(I); Inc(I); End
+        Else Begin Q[T And 3,ZigZag[K]]:=(IB(I) Shl 8)+IB(I+1); Inc(I,2); End;
+      End;
+     End;
+    End;
+   $C0,$C1:Begin
+     W:=(IB(P+7) Shl 8)+IB(P+8);
+     H:=(IB(P+5) Shl 8)+IB(P+6);
+     Nc:=IB(P+9);
+     If(Nc<>1)and(Nc<>3)Then Exit;
+     For I:=0 To Nc-1 Do Begin
+      Cm[I].Id:=IB(P+10+I*3);
+      Cm[I].H:=IB(P+11+I*3) Shr 4;
+      Cm[I].V:=IB(P+11+I*3) And 15;
+      Cm[I].Tq:=IB(P+12+I*3) And 3;
+     End;
+    End;
+   $C2,$C3,$C5,$C6,$C7,$C9,$CA,$CB,$CD,$CE,$CF:Exit;
+   $C4:Begin
+     I:=P+4;
+     While I<P+2+Len Do Begin
+      T:=IB(I);
+      Inc(I);
+      Cnt:=0;
+      If(T Shr 4)=0 Then Begin
+       For K:=1 To 16 Do Begin Hdc[T And 3].Cnt[K]:=IB(I+K-1); Inc(Cnt,IB(I+K-1)); End;
+       Inc(I,16);
+       For K:=0 To Cnt-1 Do If K<256 Then Hdc[T And 3].Sym[K]:=IB(I+K);
+      End
+       Else Begin
+        For K:=1 To 16 Do Begin Hac[T And 3].Cnt[K]:=IB(I+K-1); Inc(Cnt,IB(I+K-1)); End;
+        Inc(I,16);
+        For K:=0 To Cnt-1 Do If K<256 Then Hac[T And 3].Sym[K]:=IB(I+K);
+       End;
+      Inc(I,Cnt);
+     End;
+    End;
+   $DD:Ri:=(IB(P+4) Shl 8)+IB(P+5);
+   $DA:Begin
+     For I:=0 To IB(P+4)-1 Do
+      For K:=0 To Nc-1 Do
+       If Cm[K].Id=IB(P+5+I*2)Then Begin
+        Cm[K].Td:=IB(P+6+I*2) Shr 4;
+        Cm[K].Ta:=IB(P+6+I*2) And 15;
+       End;
+     P:=P+2+Len;
+     ScanDone:=True;
+     Continue;
+    End;
+  End;
+  P:=P+2+Len;
+ End;
+ If(W<1)or(H<1)or(Nc=0)or(W>12000)or(H>12000)Then Exit;
+ Hm:=1; Vm:=1;
+ For I:=0 To Nc-1 Do Begin
+  If Cm[I].H>Hm Then Hm:=Cm[I].H;
+  If Cm[I].V>Vm Then Vm:=Cm[I].V;
+  If(Cm[I].H<1)or(Cm[I].V<1)Then Exit;
+ End;
+ McuX:=(W+8*Hm-1) Div (8*Hm);
+ McuY:=(H+8*Vm-1) Div (8*Vm);
+ For I:=0 To Nc-1 Do Begin
+  Cm[I].PW:=McuX*Cm[I].H*8;
+  Cm[I].PH:=McuY*Cm[I].V*8;
+  GetMem(Cm[I].Plane,Cm[I].PW*Cm[I].PH+8);
+  FillChar(Cm[I].Plane^,Cm[I].PW*Cm[I].PH,128);
+  Cm[I].Pred:=0;
+ End;
+ JP:=P;
+ JBits:=0;
+ JBad:=False;
+ Rst:=0;
+ For My:=0 To McuY-1 Do
+  For Mx:=0 To McuX-1 Do Begin
+   If(Ri>0)and(Rst=Ri)Then Begin
+    { marqueur RSTn }
+    JBits:=0;
+    While(JP<ILen-1)and Not((IB(JP)=$FF)and(IB(JP+1)>=$D0)and(IB(JP+1)<=$D7))Do Inc(JP);
+    Inc(JP,2);
+    For C:=0 To Nc-1 Do Cm[C].Pred:=0;
+    Rst:=0;
+   End;
+   For C:=0 To Nc-1 Do
+    For By:=0 To Cm[C].V-1 Do
+     For Bx:=0 To Cm[C].H-1 Do
+      If Not JBad Then Block(Cm[C],Mx*Cm[C].H+Bx,My*Cm[C].V+By);
+   Inc(Rst);
+  End;
+ GetMem(Pix,W*H*3);
+ For SY:=0 To H-1 Do
+  For SX:=0 To W-1 Do Begin
+   I:=(SY*W+SX)*3;
+   Yv:=Cm[0].Plane^[(SY*Cm[0].V Div Vm)*Cm[0].PW+(SX*Cm[0].H Div Hm)];
+   If Nc=3 Then Begin
+    Cb:=Cm[1].Plane^[(SY*Cm[1].V Div Vm)*Cm[1].PW+(SX*Cm[1].H Div Hm)]-128;
+    Cr:=Cm[2].Plane^[(SY*Cm[2].V Div Vm)*Cm[2].PW+(SX*Cm[2].H Div Hm)]-128;
+    Rr:=Yv+1.402*Cr;
+    Gg:=Yv-0.344136*Cb-0.714136*Cr;
+    Bb:=Yv+1.772*Cb;
+    Pix^[I]:=Clamp(Round(Rr),0,255);
+    Pix^[I+1]:=Clamp(Round(Gg),0,255);
+    Pix^[I+2]:=Clamp(Round(Bb),0,255);
+   End
+    Else Begin
+     Pix^[I]:=Round(Yv); Pix^[I+1]:=Round(Yv); Pix^[I+2]:=Round(Yv);
+    End;
+  End;
+ For I:=0 To Nc-1 Do FreeMem(Cm[I].Plane,Cm[I].PW*Cm[I].PH+8);
+ Ok:=AddImageBuf(W,H,Pix,NIL);
+ FreeMem(Pix,W*H*3);
+ Run:=0; Sz:=0; Dc:=0; Ri:=0;
+ LoadJPEGFile:=Ok;
+End;
+
+{ ------------------------------ EMF --------------------------------- }
+
+Function LoadEMFFile:Boolean;
+Type
+ TEObj=Record
+  Kind:Byte;
+  PStyle:LongInt;
+  PW:LongInt;
+  PCol,BCol:LongInt;
+  BStyle:LongInt;
+ End;
+Var Pos,Sz,Typ,I,K,N,J,BL,BT,BRr,BB,FL,FR:LongInt;
+    Tab:Array[0..255] of TEObj;
+    Pen,Brs:TEObj;
+    HavePen,HaveBrs:Boolean;
+    Sc:Double;
+    TCol,MoveX,MoveY:LongInt;
+    O:PObj;
+ Function Cx(V:LongInt):LongInt;
+ Begin
+  Cx:=Round((V-BL)*Sc);
+ End;
+ Function Cy(V:LongInt):LongInt;
+ Begin
+  Cy:=Round((V-BT)*Sc);
+ End;
+ Procedure Style(O:PObj;Closed:Boolean);
+ Begin
+  If HavePen and(Pen.PStyle<>5)Then Begin
+   O^.OutCol:=ImpColor(Pen.PCol And 255,(Pen.PCol Shr 8) And 255,(Pen.PCol Shr 16) And 255);
+   O^.OutW:=Max(1,Round(Pen.PW*Sc));
+  End
+   Else O^.OutCol:=-1;
+  If Closed and HaveBrs and(Brs.BStyle<>1)Then Begin
+   O^.FillKind:=FK_SOLID;
+   O^.FillCol:=ImpColor(Brs.BCol And 255,(Brs.BCol Shr 8) And 255,(Brs.BCol Shr 16) And 255);
+  End
+   Else Begin
+    O^.FillKind:=FK_NONE;
+    O^.FillCol:=-1;
+   End;
+  If(O^.OutCol<0)and(O^.FillKind=FK_NONE)Then O^.OutCol:=0;
+  O^.Closed:=Closed;
+  AddObj(O);
+ End;
+ { points de l'enregistrement : 16 bits (Short) ou 32 bits }
+ Procedure Poly(At,Cnt:LongInt;Short,Closed:Boolean);
+ Var O:PObj;
+     Q:LongInt;
+ Begin
+  If(Cnt<2)or(Cnt>4000)Then Exit;
+  If Closed and(Cnt>=3)Then O:=NewObj(K_POLY,Cnt)
+   Else If Cnt=2 Then O:=NewObj(K_LINE,2)
+   Else O:=NewObj(K_POLYLINE,Cnt);
+  For Q:=0 To Cnt-1 Do
+   If Short Then Begin
+    O^.Pts^[Q].X:=Cx(IWs(At+Q*4));
+    O^.Pts^[Q].Y:=Cy(IWs(At+Q*4+2));
+   End
+    Else Begin
+     O^.Pts^[Q].X:=Cx(IL(At+Q*8));
+     O^.Pts^[Q].Y:=Cy(IL(At+Q*8+4));
+    End;
+  Style(O,O^.Kind=K_POLY);
+ End;
+ Procedure Box(At:LongInt;Ell:Boolean);
+ Var O:PObj;
+ Begin
+  If Ell Then O:=NewObj(K_ELLIPSE,2) Else O:=NewObj(K_RECT,2);
+  O^.Pts^[0].X:=Cx(IL(At)); O^.Pts^[0].Y:=Cy(IL(At+4));
+  O^.Pts^[1].X:=Cx(IL(At+8)); O^.Pts^[1].Y:=Cy(IL(At+12));
+  ObjNormalize2(O);
+  Style(O,True);
+ End;
+Begin
+ LoadEMFFile:=False;
+ If(IL(0)<>1)or(IL(40)<>$464D4520)Then Exit;
+ BL:=IL(8); BT:=IL(12); BRr:=IL(16); BB:=IL(20);
+ FL:=IL(24); FR:=IL(32);
+ If BRr-BL>0 Then Sc:=(FR-FL)/10/(BRr-BL) Else Sc:=1;
+ If Sc<=0 Then Sc:=1;
+ FillChar(Tab,SizeOf(Tab),0);
+ HavePen:=False; HaveBrs:=False;
+ TCol:=0; MoveX:=0; MoveY:=0;
+ INew:=ObjCount;
+ Pos:=0;
+ While Pos+8<=ILen Do Begin
+  Typ:=IL(Pos);
+  Sz:=IL(Pos+4);
+  If(Sz<8)or(Typ=14)Then Break;
+  Case Typ Of
+   37:Begin
+     K:=IL(Pos+8);
+     If K<0 Then Begin
+      { objets de reserve : bit de poids fort }
+      K:=K And $7FFFFFFF;
+      Case K Of
+       4:Begin Brs.BStyle:=0; Brs.BCol:=0; HaveBrs:=True; End;
+       0:Begin Brs.BStyle:=0; Brs.BCol:=$FFFFFF; HaveBrs:=True; End;
+       5:Begin Brs.BStyle:=1; HaveBrs:=True; End;
+       7:Begin Pen.PStyle:=0; Pen.PW:=1; Pen.PCol:=0; HavePen:=True; End;
+       6:Begin Pen.PStyle:=0; Pen.PW:=1; Pen.PCol:=$FFFFFF; HavePen:=True; End;
+       8:Begin Pen.PStyle:=5; HavePen:=True; End;
+      End;
+     End
+      Else If(K>=0)and(K<=255)Then Begin
+       If Tab[K].Kind=1 Then Begin Pen:=Tab[K]; HavePen:=True; End
+        Else If Tab[K].Kind=2 Then Begin Brs:=Tab[K]; HaveBrs:=True; End;
+      End;
+    End;
+   38:Begin
+     K:=IL(Pos+8);
+     If(K>=0)and(K<=255)Then Begin
+      Tab[K].Kind:=1; Tab[K].PStyle:=IL(Pos+12); Tab[K].PW:=IL(Pos+16); Tab[K].PCol:=IL(Pos+24);
+     End;
+    End;
+   95:Begin
+     K:=IL(Pos+8);
+     If(K>=0)and(K<=255)Then Begin
+      Tab[K].Kind:=1; Tab[K].PStyle:=IL(Pos+28) And 15; Tab[K].PW:=IL(Pos+32); Tab[K].PCol:=IL(Pos+40);
+     End;
+    End;
+   39:Begin
+     K:=IL(Pos+8);
+     If(K>=0)and(K<=255)Then Begin
+      Tab[K].Kind:=2; Tab[K].BStyle:=IL(Pos+12); Tab[K].BCol:=IL(Pos+16);
+     End;
+    End;
+   40:Begin
+     K:=IL(Pos+8);
+     If(K>=0)and(K<=255)Then Tab[K].Kind:=0;
+    End;
+   24:TCol:=IL(Pos+8);
+   86:Poly(Pos+28,IL(Pos+24),True,True);
+   87:Poly(Pos+28,IL(Pos+24),True,False);
+   3:Poly(Pos+28,IL(Pos+24),False,True);
+   4:Poly(Pos+28,IL(Pos+24),False,False);
+   91:Begin
+     N:=IL(Pos+24);
+     If(N>0)and(N<=100)Then Begin
+      J:=Pos+32+N*4;
+      For K:=0 To N-1 Do Begin
+       Poly(J,IL(Pos+32+K*4),True,True);
+       J:=J+IL(Pos+32+K*4)*4;
+      End;
+     End;
+    End;
+   43:Box(Pos+8,False);
+   42:Box(Pos+8,True);
+   27:Begin MoveX:=IL(Pos+8); MoveY:=IL(Pos+12); End;
+   54:Begin
+     O:=NewObj(K_LINE,2);
+     O^.Pts^[0].X:=Cx(MoveX); O^.Pts^[0].Y:=Cy(MoveY);
+     O^.Pts^[1].X:=Cx(IL(Pos+8)); O^.Pts^[1].Y:=Cy(IL(Pos+12));
+     Style(O,False);
+     MoveX:=IL(Pos+8); MoveY:=IL(Pos+12);
+    End;
+  End;
+  Pos:=Pos+Sz;
+ End;
+ If ObjCount<=INew Then Exit;
+ NormalizeNew(1,True);
+ LoadEMFFile:=True;
+End;
+
 Function ExtIs(Const E,List:String):Boolean;
 Begin
  ExtIs:=Pos(E+';',List+';')>0;
@@ -7136,7 +8066,11 @@ Begin
     Else If E='.WMF' Then Ok:=LoadWMFFile
     Else If E='.BMP' Then Ok:=LoadBMPFile
     Else If E='.PCX' Then Ok:=LoadPCXFile
-    Else If E='.PNG' Then Ok:=LoadPNGFile;
+    Else If E='.PNG' Then Ok:=LoadPNGFile
+    Else If E='.GIF' Then Ok:=LoadGIFFile
+    Else If(E='.TIF')or(E='.TIFF')Then Ok:=LoadTIFFFile
+    Else If(E='.JPG')or(E='.JPEG')Then Ok:=LoadJPEGFile
+    Else If E='.EMF' Then Ok:=LoadEMFFile;
    FreeWhole;
   End;
  If Not Append Then FromCorel:=True;
@@ -10065,7 +10999,7 @@ Const
  CM_LAYERS=160; CM_PAGE_NEXT=161; CM_PAGE_PREV=162; CM_PAGE_ADD=163;
  CM_PAGE_DEL=164; CM_PAGE_MASTER=165;
  CM_GUIDE_ADD=170; CM_GUIDE_CLEAR=171; CM_GUIDES=172; CM_GUIDE_SNAP=173;
- CM_EXPORTV=180;
+ CM_EXPORTV=180; CM_TXT_REPL=181; CM_STY_SAVE=182; CM_STY_APPLY=183;
  CM_SEL_FILL=175; CM_SEL_OUT=176; CM_SEL_TYPE=177; CM_REPLACE=178;
 
  POPUP_IDX=10;
@@ -10079,7 +11013,7 @@ Type
  End;
  TMenu=Record
   Title:String[12];
-  X,Y,W,N:Integer;
+  X,Y,W,N,TX:Integer;
   It:Array[0..31] of TMenuItem;
  End;
 
@@ -10123,7 +11057,9 @@ Begin
   If B=0 Then W:=A+34;
   Menus[I].W:=W;
   If I<POPUP_IDX Then Begin
+   Menus[I].TX:=X;
    Menus[I].X:=X;
+   If Menus[I].X+W>ScreenW-2 Then Menus[I].X:=ScreenW-2-W;
    Menus[I].Y:=MENUBAR_H;
    Inc(X,TxtW(Menus[I].Title)+14);
   End;
@@ -10262,6 +11198,10 @@ Begin
  AddItem(7,'Sélectionner même contour','',CM_SEL_OUT);
  AddItem(7,'Sélectionner même type','',CM_SEL_TYPE);
  AddItem(7,'Remplacer une couleur...','',CM_REPLACE);
+ AddItem(7,'Remplacer le texte...','',CM_TXT_REPL);
+ AddSep(7);
+ AddItem(7,'Enregistrer un style...','',CM_STY_SAVE);
+ AddItem(7,'Appliquer un style...','',CM_STY_APPLY);
 
  SetMenuTitle(8,'Formes');
  AddItem(8,'Souder','',CM_B_WELD);
@@ -10280,12 +11220,12 @@ Begin
  AddItem(8,'Mélange...','',CM_BLEND);
  AddItem(8,'Contour...','',CM_CONTOUR);
  AddSep(8);
- AddItem(8,'Nœud : segment en ligne','',CM_N_LINE);
- AddItem(8,'Nœud : segment en courbe','',CM_N_CURVE);
- AddItem(8,'Nœud lisse','',CM_N_SMOOTH);
- AddItem(8,'Nœud symétrique','',CM_N_SYM);
- AddItem(8,'Nœud anguleux','',CM_N_CUSP);
- AddItem(8,'Casser le chemin au nœud','',CM_N_BREAK);
+ AddItem(8,'Noeud : segment en ligne','',CM_N_LINE);
+ AddItem(8,'Noeud : segment en courbe','',CM_N_CURVE);
+ AddItem(8,'Noeud lisse','',CM_N_SMOOTH);
+ AddItem(8,'Noeud symétrique','',CM_N_SYM);
+ AddItem(8,'Noeud anguleux','',CM_N_CUSP);
+ AddItem(8,'Casser le chemin au noeud','',CM_N_BREAK);
  AddItem(8,'Fermer le chemin','',CM_N_CLOSE);
 
  SetMenuTitle(9,'Aide');
@@ -10344,7 +11284,7 @@ Begin
   CM_B_WELD,CM_B_INTER,CM_B_FMB,CM_B_BMF,CM_COMBINE,CM_BLEND,CM_CONNECT:IsEnabled:=N>1;
   CM_B_KNIFE:IsEnabled:=N=2;
   CM_BREAK,CM_ROTATE,CM_SKEW,CM_SCALE,CM_WARP,CM_CONTOUR,CM_ROT_L,CM_ROT_R,
-  CM_DIM_H,CM_DIM_V,CM_SEL_FILL,CM_SEL_OUT,CM_SEL_TYPE,CM_N_CLOSE,
+  CM_DIM_H,CM_DIM_V,CM_SEL_FILL,CM_SEL_OUT,CM_SEL_TYPE,CM_N_CLOSE,CM_STY_SAVE,
   CM_FILL_CON,CM_FILL_SQ,CM_FILL_CMYK:IsEnabled:=N>0;
   CM_PAGE_PREV:IsEnabled:=CurPage>1;
   CM_PAGE_NEXT:IsEnabled:=CurPage<PageCnt;
@@ -10392,7 +11332,7 @@ Begin
  MenuBarAt:=-1;
  If SY>=MENUBAR_H Then Exit;
  For I:=0 To MENU_COUNT-1 Do
-  If(SX>=Menus[I].X-5)and(SX<Menus[I].X+TxtW(Menus[I].Title)+7)Then Begin
+  If(SX>=Menus[I].TX-5)and(SX<Menus[I].TX+TxtW(Menus[I].Title)+7)Then Begin
    MenuBarAt:=I;
    Exit;
   End;
@@ -10404,11 +11344,11 @@ Begin
  Panel(0,0,ScreenW-1,MENUBAR_H-1,True);
  For I:=0 To MENU_COUNT-1 Do Begin
   If MenuIdx=I Then Begin
-   Box(Menus[I].X-5,1,Menus[I].X+TxtW(Menus[I].Title)+6,MENUBAR_H-2,UI_SEL);
+   Box(Menus[I].TX-5,1,Menus[I].TX+TxtW(Menus[I].Title)+6,MENUBAR_H-2,UI_SEL);
    SetCol(15);
   End
    Else SetCol(0);
-  TxtOut(Menus[I].X,5,Menus[I].Title);
+  TxtOut(Menus[I].TX,5,Menus[I].Title);
  End;
 End;
 
@@ -10925,7 +11865,11 @@ Begin
  O:=FirstSel;
  If SelBBox(X1,Y1,X2,Y2)Then
   S:='X'+MMStr(X1)+' Y'+MMStr(Y1)+' L'+MMStr(X2-X1)+' H'+MMStr(Y2-Y1)
- Else S:='Page '+IStr(PageW Div 10)+' x '+IStr(PageH Div 10)+' mm';
+ Else Begin
+  S:='Page '+IStr(PageW Div 10)+' x '+IStr(PageH Div 10)+' mm';
+  If EditMaster Then S:=S+' maitre c'+IStr(ActLayer)
+   Else S:=S+' p'+IStr(CurPage)+'/'+IStr(PageCnt)+' c'+IStr(ActLayer);
+ End;
  TxtOut(4,PROPBAR_TOP+6,S);
  If O<>NIL Then WCur:=O^.OutW Else WCur:=DefOutW;
  For I:=0 To 4 Do Begin
@@ -10999,8 +11943,6 @@ Begin
  TxtOut(4,ScreenH-STATUS_H+4,S);
  TxtOut(392,ScreenH-STATUS_H+4,CursorTxt);
  TxtOut(500,ScreenH-STATUS_H+4,IStr((Zoom*100) Div 378)+'%');
- If EditMaster Then TxtOut(552,ScreenH-STATUS_H+4,'Maître C'+IStr(ActLayer))
-  Else TxtOut(552,ScreenH-STATUS_H+4,'P'+IStr(CurPage)+'/'+IStr(PageCnt)+' C'+IStr(ActLayer));
  { Couleurs courantes }
  O:=FirstSel;
  If O<>NIL Then Begin
@@ -11416,7 +12358,7 @@ End;
 Function FileDialog(Mode:Integer;Var Name:String):Boolean;
 Const LR=12;
 Var X,Y,W,H,Old,I,Top,Sel,Flt,NFlt:Integer;
-    Exts:Array[0..11] of String[6];
+    Exts:Array[0..15] of String[6];
     Dir,Fld,Msg:String;
     Done,OK,Dirty,Dbl:Boolean;
     K:Char;
@@ -11558,8 +12500,9 @@ Begin
   4:Begin Exts[0]:='.CDR'; NFlt:=1; End;
   5:Begin
    Exts[0]:='.WPG'; Exts[1]:='.DXF'; Exts[2]:='.EPS'; Exts[3]:='.PDF'; Exts[4]:='.AI';
-   Exts[5]:='.WMF'; Exts[6]:='.BMP'; Exts[7]:='.PCX'; Exts[8]:='.PNG'; Exts[9]:='*';
-   NFlt:=10;
+   Exts[5]:='.WMF'; Exts[6]:='.BMP'; Exts[7]:='.PCX'; Exts[8]:='.PNG'; Exts[9]:='.GIF'; Exts[10]:='.TIF'; Exts[11]:='.JPG';
+   Exts[12]:='.EMF'; Exts[13]:='*';
+   NFlt:=14;
   End;
   6:Begin
    Exts[0]:='.PDF'; Exts[1]:='.EPS'; Exts[2]:='.DXF'; Exts[3]:='.WMF'; Exts[4]:='.BMP'; Exts[5]:='.PNG';
@@ -11902,7 +12845,7 @@ Begin
  TLines[TN]:='[ ] rotation de 15 degrés   Formes : soudure, intersection, couteau'; Inc(TN);
  TLines[TN]:='Règles : tirer un repère (le ramener sur la règle le supprime)'; Inc(TN);
  TLines[TN]:='Outil noeuds : clic droit = lisse, symétrique, casser, fermer'; Inc(TN);
- TLines[TN]:='Fichier : importer DXF EPS PDF AI WMF BMP PCX PNG ; exporter PDF EPS DXF WMF BMP PNG'; Inc(TN);
+ TLines[TN]:='Fichier : importer DXF EPS PDF AI WMF EMF GIF TIF JPG BMP PCX PNG ; exporter PDF EPS DXF WMF BMP PNG'; Inc(TN);
  TextBox('Raccourcis clavier');
 End;
 
@@ -12058,6 +13001,7 @@ Begin
   E:='.PDF';
  End;
  ExpMode:=0;
+ ExpCrop:=False;
  If(E='.PDF')or(E='.EPS')or(E='.PS')Then Begin
   ChItems[0]:='RVB (écran)';
   ChItems[1]:='CMJN (quadrichromie)';
@@ -12065,6 +13009,7 @@ Begin
   K:=ChoiceBox('Couleurs',3,0);
   If K<0 Then Exit;
   If K=0 Then ExpMode:=0 Else If K=1 Then ExpMode:=1 Else ExpMode:=6;
+  ExpCrop:=Ask3('Repères de coupe','Ajouter des repères de coupe ?',False)=1;
  End;
  If SaveAny(N)Then Begin
   StatusMsg:='Exporté : '+BaseOf(N);
@@ -12154,6 +13099,105 @@ Begin
  For I:=0 To ObjCount-1 Do
   If ObjAt(I)^.Sel Then
    If Which=0 Then ObjAt(I)^.Shadow:=V Else ObjAt(I)^.Extrude:=V;
+End;
+
+{ Styles : six emplacements (remplissage, contour, trame), durée de la session }
+Type
+ TStyle=Record
+  Used:Boolean;
+  Out,Fill,Fill2:Integer;
+  FK,Pat,LS:Byte;
+  OW:LongInt;
+ End;
+Var
+ Styles:Array[1..6] of TStyle;
+
+Procedure StyleSave;
+Var I,K:Integer;
+    O:PObj;
+Begin
+ O:=FirstSel;
+ If O=NIL Then Exit;
+ For I:=1 To 6 Do Begin
+  If Styles[I].Used Then ChItems[I-1]:='Style '+IStr(I)+' (utilisé)' Else ChItems[I-1]:='Style '+IStr(I)+' (libre)';
+ End;
+ K:=ChoiceBox('Enregistrer le style de l''objet sous',6,0);
+ If K<0 Then Exit;
+ Inc(K);
+ Styles[K].Used:=True;
+ Styles[K].Out:=O^.OutCol;
+ Styles[K].Fill:=O^.FillCol;
+ Styles[K].Fill2:=O^.FillCol2;
+ Styles[K].FK:=O^.FillKind;
+ Styles[K].Pat:=O^.Pattern;
+ Styles[K].LS:=O^.LineStyle;
+ Styles[K].OW:=O^.OutW;
+ StatusMsg:='Style '+IStr(K)+' enregistré';
+End;
+
+Procedure StyleApply;
+Var I,K,N:Integer;
+    P:PObj;
+Begin
+ For I:=1 To 6 Do Begin
+  If Styles[I].Used Then ChItems[I-1]:='Style '+IStr(I) Else ChItems[I-1]:='Style '+IStr(I)+' (vide)';
+ End;
+ K:=ChoiceBox('Appliquer le style',6,0);
+ If K<0 Then Exit;
+ Inc(K);
+ If Not Styles[K].Used Then Begin
+  StatusMsg:='Ce style est vide.';
+  Exit;
+ End;
+ PushUndo;
+ N:=0;
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  If P^.Sel and(P^.Kind<>K_TEXT)and(P^.Kind<>K_BITMAP)Then Begin
+   P^.OutCol:=Styles[K].Out;
+   P^.OutW:=Styles[K].OW;
+   P^.LineStyle:=Styles[K].LS;
+   If P^.Closed or(P^.Kind=K_RECT)or(P^.Kind=K_ELLIPSE)or(P^.Kind=K_POLY)Then Begin
+    P^.FillCol:=Styles[K].Fill;
+    P^.FillCol2:=Styles[K].Fill2;
+    P^.FillKind:=Styles[K].FK;
+    P^.Pattern:=Styles[K].Pat;
+   End;
+   Inc(N);
+  End;
+  P:=P^.Next;
+ End;
+ StatusMsg:=IStr(N)+' objet(s) modifié(s).';
+End;
+
+{ Remplace Fnd par Rep dans les textes ; retourne le nombre de remplacements }
+Function ReplaceText(Const Fnd,Rep:String):Integer;
+Var P:PObj;
+    S:String;
+    K,N,Q:Integer;
+Begin
+ N:=0;
+ If Fnd='' Then Begin ReplaceText:=0; Exit; End;
+ P:=ObjHead;
+ While P<>NIL Do Begin
+  If(P^.Kind=K_TEXT)and ObjPickable(P)Then Begin
+   S:=P^.Txt;
+   Q:=1;
+   Repeat
+    K:=Pos(Fnd,Copy(S,Q,255));
+    If K=0 Then Break;
+    K:=K+Q-1;
+    If Length(S)-Length(Fnd)+Length(Rep)>60 Then Break;
+    Delete(S,K,Length(Fnd));
+    Insert(Rep,S,K);
+    Inc(N);
+    Q:=K+Length(Rep);
+   Until False;
+   P^.Txt:=S;
+  End;
+  P:=P^.Next;
+ End;
+ ReplaceText:=N;
 End;
 
 { Saisie d'un nombre reel (virgule ou point) }
@@ -12317,12 +13361,13 @@ Begin
     End;
   End;
   CM_BLEND:Begin
-   If AskReal('Mélange','Nombre d''étapes (1 à 50) :','5',A)Then Begin
-    N:=Round(A);
-    If N<1 Then N:=1;
-    If N>50 Then N:=50;
-    BlendSel(N);
-   End;
+   If AskReal('Mélange','Nombre d''étapes (1 à 50) :','5',A)Then
+    If AskReal('Mélange','Rotation totale des étapes (degrés) :','0',B)Then Begin
+     N:=Round(A);
+     If N<1 Then N:=1;
+     If N>50 Then N:=50;
+     BlendSel(N,B);
+    End;
   End;
   CM_CONTOUR:Begin
    If AskReal('Contour','Nombre de contours (1 à 20) :','3',A)Then
@@ -12400,6 +13445,19 @@ Begin
    End;
   End;
   CM_LAYERS:LayerManager;
+  CM_TXT_REPL:Begin
+   S:='';
+   If InputBox('Remplacer le texte','Texte à chercher :',S,40)Then Begin
+    Nm:='';
+    If InputBox('Remplacer le texte','Remplacer par :',Nm,40)Then Begin
+     PushUndo;
+     N:=ReplaceText(S,Nm);
+     EditMsg:=IStr(N)+' remplacement(s).';
+    End;
+   End;
+  End;
+  CM_STY_SAVE:StyleSave;
+  CM_STY_APPLY:StyleApply;
   CM_PAGE_NEXT:If CurPage<PageCnt Then Begin
    DeselectAll;
    Inc(CurPage);
@@ -13060,9 +14118,9 @@ Begin
    AddSep(POPUP_IDX);
    AddItem(POPUP_IDX,'Segment en ligne','',CM_N_LINE);
    AddItem(POPUP_IDX,'Segment en courbe','',CM_N_CURVE);
-   AddItem(POPUP_IDX,'Nœud lisse','',CM_N_SMOOTH);
-   AddItem(POPUP_IDX,'Nœud symétrique','',CM_N_SYM);
-   AddItem(POPUP_IDX,'Casser au nœud','',CM_N_BREAK);
+   AddItem(POPUP_IDX,'Noeud lisse','',CM_N_SMOOTH);
+   AddItem(POPUP_IDX,'Noeud symétrique','',CM_N_SYM);
+   AddItem(POPUP_IDX,'Casser au noeud','',CM_N_BREAK);
    AddItem(POPUP_IDX,'Fermer le chemin','',CM_N_CLOSE);
   End;
   AddItem(POPUP_IDX,'Ombre portée','',CM_SHADOW);
@@ -13848,7 +14906,8 @@ Begin
   Else If Nm='SKEW' Then SkewSel(A[0],A[1])
   Else If Nm='SCALE' Then AffineSel(A[0],0,0,A[1])
   Else If Nm='WARP' Then WarpSel(Round(A[0]),Round(A[1]))
-  Else If Nm='BLEND' Then BlendSel(Round(A[0]))
+  Else If Nm='BLEND' Then BlendSel(Round(A[0]),A[1])
+  Else If Nm='CROP' Then ExpCrop:=True
   Else If Nm='CONTOUR' Then ContourSel(Round(A[0]),Round(A[1]))
   Else If Nm='DIMH' Then DimensionSel(False)
   Else If Nm='DIMV' Then DimensionSel(True)
@@ -13881,6 +14940,9 @@ Begin
   Else If Nm='CON' Then ApplyFillKind(FK_CONIC,0,15)
   Else If Nm='SQ' Then ApplyFillKind(FK_SQUARE,0,15)
   Else If Nm='CMYK' Then ExpMode:=1
+  Else If Nm='GV' Then ApplyFillKind(FK_GRADV,1,12)
+  Else If Nm='GH' Then ApplyFillKind(FK_GRADH,4,14)
+  Else If Nm='RAD' Then ApplyFillKind(FK_RADIAL,14,1)
   Else If Nm='SEP' Then ExpMode:=6
   Else WriteLn('Operation inconnue : ',Nm);
   If EditMsg<>'' Then WriteLn(Nm,' : ',EditMsg);

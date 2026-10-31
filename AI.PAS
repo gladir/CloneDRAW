@@ -71,7 +71,7 @@ Const
  MENU_TEXT = 5;
  MENU_HELP = 6;
  MAX_MENUS = 7;
- MAX_MENU_ITEMS = 10;
+ MAX_MENU_ITEMS = 16;
  MENU_ITEM_HEIGHT = 18;
  CMD_NONE = 0;
  CMD_NEW = 1;
@@ -99,6 +99,17 @@ Const
  CMD_CLEAR_GUIDES = 23;
  RULER_SIZE = 16;
  CMD_PROPS = 24;
+ CMD_FRONT = 25;
+ CMD_BACK = 26;
+ CMD_FORWARD = 27;
+ CMD_BACKWARD = 28;
+ CMD_GROUP = 29;
+ CMD_UNGROUP = 30;
+ CMD_ALIGN = 31;
+ CMD_DISTRIB = 32;
+ CMD_TRANSFORM = 33;
+ CMD_OPS = 34;
+ CMD_SELALL = 35;
  PROP_W = 460;
  PROP_H = 240;
  FD_MAX_ENTRIES = 512;
@@ -1280,6 +1291,186 @@ Begin
  ObjectBounds := B;
 End;
 
+{ ------------------------------------------------------------------
+  Selection multiple et groupes.
+  Le format des objets ne change pas : chaque objet n'utilise qu'un seul
+  de ses sous-enregistrements (Rectangle, Ellipse, Ligne...). Le
+  sous-enregistrement inutilise sert a ranger l'indicateur de selection
+  et le numero de groupe (0 = hors groupe).
+  ------------------------------------------------------------------ }
+Type
+ PBoolean = ^Boolean;
+ PReal = ^Real;
+ PLongArr = ^TLongArr;
+ TLongArr = Array[0..1000000] Of LongInt;
+ PRealArr = ^TRealArr;
+ TRealArr = Array[0..500000] Of Real;
+
+Var
+ MarqueeActive: Boolean;
+ MqX0, MqY0: Integer;
+
+{$IFDEF FPC}
+{$IFDEF WIN32}
+Function GetAsyncKeyState(vKey: LongInt): SmallInt; stdcall; external 'user32.dll' name 'GetAsyncKeyState';
+{$ENDIF}
+{$ENDIF}
+
+Function ShiftPressed: Boolean;
+Begin
+ ShiftPressed := False;
+ {$IFDEF FPC}
+ {$IFDEF WIN32}
+ ShiftPressed := (GetAsyncKeyState($10) And $8000) <> 0;
+ {$ENDIF}
+ {$ENDIF}
+End;
+
+Function SelFlagPtr(Var O: TGraphicObject): PBoolean;
+Begin
+ If O.ObjType = OBJ_RECT Then SelFlagPtr := PBoolean(@O.Line.Selected)
+ Else SelFlagPtr := PBoolean(@O.Rectangle.Selected);
+End;
+
+Function GroupPtr(Var O: TGraphicObject): PReal;
+Begin
+ If O.ObjType = OBJ_RECT Then GroupPtr := PReal(@O.Line.X1)
+ Else GroupPtr := PReal(@O.Rectangle.X);
+End;
+
+Function GroupOfObj(Var O: TGraphicObject): LongInt;
+Var R: Real;
+Begin
+ R := GroupPtr(O)^;
+ If (R >= 1) And (R < 1000000000.0) Then GroupOfObj := Round(R)
+ Else GroupOfObj := 0;
+End;
+
+Procedure SetGroupOfObj(Var O: TGraphicObject; G: LongInt);
+Begin
+ GroupPtr(O)^ := G;
+End;
+
+Function IsFlagged(I: Integer): Boolean;
+Begin
+ IsFlagged := SelFlagPtr(ObjAt(I)^)^;
+End;
+
+Function IsSel(I: Integer): Boolean;
+Begin
+ IsSel := (I = SelectedObject) Or IsFlagged(I);
+End;
+
+Procedure ClearSelFlags;
+Var I: Integer;
+Begin
+ For I := 0 To ObjectCount-1 Do SelFlagPtr(ObjAt(I)^)^ := False;
+End;
+
+{ Selectionne l'objet et tous les membres de son groupe }
+Procedure SelectGroupOf(I: Integer);
+Var J: Integer; G: LongInt;
+Begin
+ SelFlagPtr(ObjAt(I)^)^ := True;
+ G := GroupOfObj(ObjAt(I)^);
+ If G = 0 Then Exit;
+ For J := 0 To ObjectCount-1 Do
+  If GroupOfObj(ObjAt(J)^) = G Then SelFlagPtr(ObjAt(J)^)^ := True;
+End;
+
+Function SelCount: Integer;
+Var I, N: Integer;
+Begin
+ N := 0;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) Then Inc(N);
+ SelCount := N;
+End;
+
+Function OtherSelCount: Integer;
+Var I, N: Integer;
+Begin
+ N := 0;
+ For I := 0 To ObjectCount-1 Do
+  If (I <> SelectedObject) And IsFlagged(I) Then Inc(N);
+ OtherSelCount := N;
+End;
+
+Procedure ToggleSelection(I: Integer);
+Var J: Integer; G: LongInt;
+Begin
+ G := GroupOfObj(ObjAt(I)^);
+ SelFlagPtr(ObjAt(I)^)^ := False;
+ If G <> 0 Then
+  For J := 0 To ObjectCount-1 Do
+   If GroupOfObj(ObjAt(J)^) = G Then SelFlagPtr(ObjAt(J)^)^ := False;
+ If (SelectedObject >= 0) And Not IsFlagged(SelectedObject) Then Begin
+  SelectedObject := -1;
+  For J := ObjectCount-1 DownTo 0 Do
+   If IsFlagged(J) Then Begin SelectedObject := J; Break; End;
+ End;
+End;
+
+Function SelectionBounds: TBounds;
+Var I: Integer; B, U: TBounds; First: Boolean;
+Begin
+ First := True;
+ FillChar(U,SizeOf(U),0);
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And ObjAt(I)^.Visible Then Begin
+   B := ObjectBounds(ObjAt(I)^);
+   If First Then Begin U := B; First := False; End
+   Else Begin
+    U.L := MinReal(U.L,B.L); U.R := MaxReal(U.R,B.R);
+    U.T := MinReal(U.T,B.T); U.B := MaxReal(U.B,B.B);
+   End;
+  End;
+ SelectionBounds := U;
+End;
+
+Procedure FinishMarquee(Cancel: Boolean);
+Var X0, Y0, X1, Y1, I, N: Integer; B: TBounds; L, T, R, Bt: Real; S: String;
+Begin
+ If Not MarqueeActive Then Exit;
+ MarqueeActive := False;
+ DrawingMode := False;
+ NeedsRedraw := True;
+ If Cancel Then Begin
+  StatusMessage := 'Selection annulee.';
+  Exit;
+ End;
+ X1 := DocumentX(MouseX); Y1 := DocumentY(MouseY);
+ L := MinReal(MqX0,X1); R := MaxReal(MqX0,X1);
+ T := MinReal(MqY0,Y1); Bt := MaxReal(MqY0,Y1);
+ If (R-L < 3) And (Bt-T < 3) Then Begin
+  StatusMessage := 'Aucun objet selectionne.';
+  Exit;
+ End;
+ N := 0;
+ For I := 0 To ObjectCount-1 Do
+  If ObjAt(I)^.Visible Then Begin
+   B := ObjectBounds(ObjAt(I)^);
+   If (B.R >= L) And (B.L <= R) And (B.B >= T) And (B.T <= Bt) Then Begin
+    SelectGroupOf(I);
+    SelectedObject := I;
+    Inc(N);
+   End;
+  End;
+ N := SelCount;
+ Str(N,S);
+ If N = 0 Then StatusMessage := 'Aucun objet selectionne.'
+ Else StatusMessage := S+' objet(s) selectionne(s).';
+End;
+
+Procedure DrawMarquee;
+Begin
+ If Not MarqueeActive Then Exit;
+ SetColor(COLOR_HIGHLIGHT);
+ SetLineStyle(DottedLn,0,NormWidth);
+ Rectangle(ScreenX(MqX0),ScreenY(MqY0),MouseX-TOOLBAR_WIDTH,MouseY-MENUBAR_HEIGHT);
+ SetLineStyle(SolidLn,0,NormWidth);
+End;
+
 Procedure HandlePosition(Index, Handle: Integer; Var X, Y: Integer);
 Var B: TBounds;
 Begin
@@ -1307,6 +1498,7 @@ Var I, N, HX, HY: Integer;
 Begin
  SelectionHandleHit := -1;
  If SelectedObject < 0 Then Exit;
+ If OtherSelCount > 0 Then Exit;
  If Not ObjAt(SelectedObject)^.Visible Then Exit;
  If ObjAt(SelectedObject)^.ObjType = OBJ_TEXT Then Exit;
  N := 8;
@@ -1398,15 +1590,41 @@ Begin
 End;
 
 Procedure DrawSelection;
-Var I, N, X, Y: Integer; B: TBounds;
+Var I, N, X, Y: Integer; B: TBounds; Multi: Boolean;
 Begin
- If (SelectedObject < 0) Or (CurrentTool <> TOOL_SELECT) Then Exit;
+ If CurrentTool <> TOOL_SELECT Then Exit;
+ DrawMarquee;
+ Multi := False;
+ For I := 0 To ObjectCount-1 Do
+  If (I <> SelectedObject) And IsFlagged(I) And ObjAt(I)^.Visible Then Begin
+   Multi := True;
+   B := ObjectBounds(ObjAt(I)^);
+   SetColor(COLOR_HIGHLIGHT);
+   SetLineStyle(DottedLn,0,NormWidth);
+   Rectangle(ScreenX(B.L)-2,ScreenY(B.T)-2,ScreenX(B.R)+2,ScreenY(B.B)+2);
+   SetLineStyle(SolidLn,0,NormWidth);
+   SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
+   Bar(ScreenX(B.L)-3,ScreenY(B.T)-3,ScreenX(B.L)-1,ScreenY(B.T)-1);
+   Bar(ScreenX(B.R)+1,ScreenY(B.T)-3,ScreenX(B.R)+3,ScreenY(B.T)-1);
+   Bar(ScreenX(B.L)-3,ScreenY(B.B)+1,ScreenX(B.L)-1,ScreenY(B.B)+3);
+   Bar(ScreenX(B.R)+1,ScreenY(B.B)+1,ScreenX(B.R)+3,ScreenY(B.B)+3);
+  End;
+ If (SelectedObject < 0) Or (SelectedObject >= ObjectCount) Then Exit;
  If Not ObjAt(SelectedObject)^.Visible Then Exit;
  B := ObjectBounds(ObjAt(SelectedObject)^);
  SetColor(COLOR_HIGHLIGHT);
  SetLineStyle(DottedLn,0,NormWidth);
  Rectangle(ScreenX(B.L),ScreenY(B.T),ScreenX(B.R),ScreenY(B.B));
  SetLineStyle(SolidLn,0,NormWidth);
+ If Multi Then Begin
+  Rectangle(ScreenX(B.L)-2,ScreenY(B.T)-2,ScreenX(B.R)+2,ScreenY(B.B)+2);
+  SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
+  Bar(ScreenX(B.L)-3,ScreenY(B.T)-3,ScreenX(B.L)-1,ScreenY(B.T)-1);
+  Bar(ScreenX(B.R)+1,ScreenY(B.T)-3,ScreenX(B.R)+3,ScreenY(B.T)-1);
+  Bar(ScreenX(B.L)-3,ScreenY(B.B)+1,ScreenX(B.L)-1,ScreenY(B.B)+3);
+  Bar(ScreenX(B.R)+1,ScreenY(B.B)+1,ScreenX(B.R)+3,ScreenY(B.B)+3);
+  Exit;
+ End;
  If ObjAt(SelectedObject)^.ObjType = OBJ_BEZIER Then
   DrawBezierHandles(ObjAt(SelectedObject)^,False);
  N := 8;
@@ -1582,6 +1800,10 @@ Begin
  NeedsRedraw := True;
 End;
 
+Var
+ EditSnap: TSnapshot;
+ EditMulti, EditMoved: Boolean;
+
 Procedure OffsetObject(Var O: TGraphicObject; DX, DY: Real);
 Var I: Integer;
 Begin
@@ -1634,6 +1856,7 @@ Begin
  PushUndo;
  DeleteObjectAt(SelectedObject);
  SelectedObject := -1;
+ ClearSelFlags;
  FileModified := True;
  StatusMessage := 'Objet coupe.';
  NeedsRedraw := True;
@@ -1653,6 +1876,9 @@ Begin
  OffsetObject(ClipObject, 12, 12);
  ClipObject.LayerIndex := CurrentLayer;
  ClipObject.Visible := True;
+ ClearSelFlags;
+ SetGroupOfObj(ClipObject,0);
+ SelFlagPtr(ClipObject)^ := True;
  AppendObject(ClipObject);
  SelectedObject := ObjectCount-1;
  FileModified := True;
@@ -1678,7 +1904,11 @@ End;
 Procedure CancelObjectEdit;
 Begin
  If Not EditingObject Then Exit;
- ObjAt(SelectedObject)^ := EditOriginal;
+ If EditMulti Then Begin
+  RestoreSnapshot(EditSnap);
+  FreeSnapshot(EditSnap);
+  EditMulti := False;
+ End Else ObjAt(SelectedObject)^ := EditOriginal;
  FileModified := EditWasModified;
  EditingObject := False;
  DrawingMode := False;
@@ -1696,6 +1926,20 @@ Begin
  Obj := EditOriginal;
  B := EditBounds;
  DX := X-EditX; DY := Y-EditY;
+ If EditMulti And (EditHandle < 0) Then Begin
+  DX := MaxReal(-B.L,MinReal(ScreenWidth-TOOLBAR_WIDTH-1-B.R,DX));
+  DY := MaxReal(-B.T,MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1-B.B,DY));
+  For I := 0 To ObjectCount-1 Do
+   If IsFlagged(I) Then Begin
+    Move(PSnapBlock(EditSnap.Data)^[LongInt(I)*SizeOf(TGraphicObject)],Obj,SizeOf(Obj));
+    OffsetObject(Obj,DX,DY);
+    ObjAt(I)^ := Obj;
+   End;
+  EditMoved := (DX <> 0) Or (DY <> 0);
+  FileModified := EditWasModified Or EditMoved;
+  NeedsRedraw := True;
+  Exit;
+ End;
  If EditHandle < 0 Then Begin
   DX := MaxReal(-B.L,MinReal(ScreenWidth-TOOLBAR_WIDTH-1-B.R,DX));
   DY := MaxReal(-B.T,MinReal(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT-1-B.B,DY));
@@ -1872,7 +2116,8 @@ End;
 Procedure HandleMouseClick;
 Var
  CanvasX, CanvasY: Integer;
- I: Integer;
+ I, Hit: Integer;
+ Shift: Boolean;
 Begin
  If (MouseX < 0) Or (MouseY < MENUBAR_HEIGHT) Or
     (MouseY >= ScreenHeight-STATUSBAR_HEIGHT) Or
@@ -1908,6 +2153,7 @@ Begin
   Exit;
  End;
  
+ If CurrentTool <> TOOL_SELECT Then ClearSelFlags;
  Case CurrentTool Of
   TOOL_BEZIER, TOOL_PEN:
   Begin
@@ -1970,17 +2216,41 @@ Begin
   TOOL_SELECT:
   Begin
    EditHandle := SelectionHandleHit(CanvasX,CanvasY);
+   EditMulti := False;
    If EditHandle < 0 Then Begin
-    SelectedObject := -1;
+    Hit := -1;
     For I := ObjectCount-1 DownTo 0 Do
      If ObjectHit(I,CanvasX,CanvasY) Then Begin
-      SelectedObject := I;
+      Hit := I;
       Break;
      End;
+    Shift := ShiftPressed;
+    If Hit < 0 Then Begin
+     If Not Shift Then Begin ClearSelFlags; SelectedObject := -1; End;
+     MarqueeActive := True; MqX0 := CanvasX; MqY0 := CanvasY;
+     DrawingMode := True;
+     StatusMessage := 'Glisser : selection par rectangle (Maj : ajouter).';
+     Exit;
+    End;
+    If Shift And IsSel(Hit) Then Begin
+     ToggleSelection(Hit);
+     StatusMessage := 'Objet retire de la selection.';
+     Exit;
+    End;
+    If Not IsSel(Hit) Then Begin
+     If Not Shift Then ClearSelFlags;
+     SelectGroupOf(Hit);
+    End;
+    SelectedObject := Hit;
    End;
    If SelectedObject >= 0 Then Begin
     EditOriginal := ObjAt(SelectedObject)^;
     EditBounds := ObjectBounds(EditOriginal);
+    If (EditHandle < 0) And (OtherSelCount > 0) Then Begin
+     EditBounds := SelectionBounds;
+     EditMulti := TakeSnapshot(EditSnap);
+     EditMoved := False;
+    End;
     EditX := CanvasX; EditY := CanvasY;
     EditWasModified := FileModified;
     EditingObject := True;
@@ -2018,7 +2288,12 @@ Procedure HandleMouseRelease;
 Var
  CanvasX, CanvasY: Integer;
  NewObj: TGraphicObject;
+ NewSnap: TSnapshot;
 Begin
+ If MarqueeActive Then Begin
+  FinishMarquee(False);
+  Exit;
+ End;
  If Panning Then Begin
   UpdatePan;
   Panning := False;
@@ -2051,6 +2326,17 @@ Begin
  End;
  If EditingObject Then Begin
   UpdateObjectEdit;
+  If EditMulti Then Begin
+   EditMulti := False;
+   If EditMoved And TakeSnapshot(NewSnap) Then Begin
+    RestoreSnapshot(EditSnap);
+    PushUndo;
+    RestoreSnapshot(NewSnap);
+    FreeSnapshot(NewSnap);
+   End;
+   FreeSnapshot(EditSnap);
+   FileModified := EditWasModified Or EditMoved;
+  End Else
   { instantane de l'etat d'avant le deplacement ou le redimensionnement }
   If (SelectedObject >= 0) And (SelectedObject < ObjectCount) And
      Not SameObject(ObjAt(SelectedObject)^,EditOriginal) Then Begin
@@ -2170,6 +2456,7 @@ Begin
  AddMenuItem(1, 'Couper       Ctrl+X', CMD_CUT);
  AddMenuItem(1, 'Copier       Ctrl+C', CMD_COPY);
  AddMenuItem(1, 'Coller       Ctrl+V', CMD_PASTE);
+ AddMenuItem(1, 'Tout select.  Ctrl+A', CMD_SELALL);
  AddMenuItem(2, 'Zoom avant', CMD_ZOOM_IN);
  AddMenuItem(2, 'Zoom arriere', CMD_ZOOM_OUT);
  AddMenuItem(2, 'Adapter (100%)', CMD_ZOOM_RESET);
@@ -2178,13 +2465,16 @@ Begin
  AddMenuItem(2, 'Reperes', CMD_GUIDES);
  AddMenuItem(2, 'Effacer reperes', CMD_CLEAR_GUIDES);
  AddMenuItem(3, 'Proprietes...', CMD_PROPS);
- AddMenuItem(3, 'Arrangement', CMD_NONE);
- AddMenuItem(3, 'Grouper', CMD_NONE);
- AddMenuItem(3, 'Degrouper', CMD_NONE);
- AddMenuItem(3, 'Aligner', CMD_NONE);
- AddMenuItem(3, 'Distribuer', CMD_NONE);
- AddMenuItem(3, 'Transformer', CMD_NONE);
- AddMenuItem(3, 'Operations', CMD_NONE);
+ AddMenuItem(3, 'Premier plan', CMD_FRONT);
+ AddMenuItem(3, 'Avancer', CMD_FORWARD);
+ AddMenuItem(3, 'Reculer', CMD_BACKWARD);
+ AddMenuItem(3, 'Arriere-plan', CMD_BACK);
+ AddMenuItem(3, 'Grouper', CMD_GROUP);
+ AddMenuItem(3, 'Degrouper', CMD_UNGROUP);
+ AddMenuItem(3, 'Aligner...', CMD_ALIGN);
+ AddMenuItem(3, 'Distribuer...', CMD_DISTRIB);
+ AddMenuItem(3, 'Transformer...', CMD_TRANSFORM);
+ AddMenuItem(3, 'Operations...', CMD_OPS);
  AddMenuItem(4, 'Rejoindre', CMD_NONE);
  AddMenuItem(4, 'Scinder', CMD_NONE);
  AddMenuItem(4, 'Cont. Coin', CMD_NONE);
@@ -2535,6 +2825,619 @@ Begin
   '-': If PropObj.ObjType <> OBJ_TEXT Then PropSetWidth(PropWidth-1);
   'v','V': PropObj.Visible := Not PropObj.Visible;
  End;
+End;
+
+Procedure MoveSelectionToEnd(Front: Boolean);
+Var N: TObjList; I, Pass, NewSel: Integer; Fail: Boolean;
+Begin
+ FillChar(N,SizeOf(N),0);
+ NewSel := -1; Fail := False;
+ For Pass := 0 To 1 Do
+  For I := 0 To ObjectCount-1 Do
+   If IsSel(I) = (Front = (Pass = 1)) Then Begin
+    If I = SelectedObject Then NewSel := N.Count;
+    If Not ListAdd(N,ObjAt(I)^) Then Fail := True;
+   End;
+ If Fail Then Begin
+  ListClear(N);
+  StatusMessage := 'Memoire insuffisante.';
+  Exit;
+ End;
+ PushUndo;
+ ListClear(ObjList);
+ ObjList := N;
+ ObjectCount := ObjList.Count;
+ SelectedObject := NewSel;
+ FileModified := True;
+ If Front Then StatusMessage := 'Selection placee au premier plan.'
+ Else StatusMessage := 'Selection placee a l''arriere-plan.';
+ NeedsRedraw := True;
+End;
+
+Procedure SwapObjects(I, J: Integer);
+Var T: TGraphicObject;
+Begin
+ T := ObjAt(I)^;
+ ObjAt(I)^ := ObjAt(J)^;
+ ObjAt(J)^ := T;
+End;
+
+{ Arrangement : Cmd = CMD_FRONT, CMD_BACK, CMD_FORWARD ou CMD_BACKWARD }
+Procedure ArrangeObject(Cmd: Integer);
+Var I, Target: Integer;
+Begin
+ If (SelectedObject < 0) Or (SelectedObject >= ObjectCount) Then Begin
+  StatusMessage := 'Arrangement : aucun objet selectionne.';
+  Exit;
+ End;
+ If (Cmd In [CMD_FRONT,CMD_BACK]) And (OtherSelCount > 0) Then Begin
+  MoveSelectionToEnd(Cmd = CMD_FRONT);
+  Exit;
+ End;
+ Case Cmd Of
+  CMD_FRONT: Target := ObjectCount-1;
+  CMD_BACK: Target := 0;
+  CMD_FORWARD: Target := SelectedObject+1;
+ Else Target := SelectedObject-1;
+ End;
+ If (Target < 0) Or (Target >= ObjectCount) Or (Target = SelectedObject) Then Begin
+  If Cmd In [CMD_FRONT,CMD_FORWARD] Then StatusMessage := 'L''objet est deja au premier plan.'
+  Else StatusMessage := 'L''objet est deja a l''arriere-plan.';
+  Exit;
+ End;
+ PushUndo;
+ I := SelectedObject;
+ While I < Target Do Begin SwapObjects(I,I+1); Inc(I); End;
+ While I > Target Do Begin SwapObjects(I,I-1); Dec(I); End;
+ SelectedObject := Target;
+ FileModified := True;
+ StatusMessage := 'Objet deplace dans l''ordre d''empilement.';
+ NeedsRedraw := True;
+End;
+
+{ ------------------------------------------------------------------
+  Objet : Grouper, Degrouper, Aligner, Distribuer, Transformer, Operations
+  ------------------------------------------------------------------ }
+Const
+ CH_ALIGN = 0;
+ CH_DISTRIB = 1;
+ CH_TRANSFORM = 2;
+ CH_OPS = 3;
+ TR_ROT = 0;
+ TR_FLIPH = 1;
+ TR_FLIPV = 2;
+ TR_SCALE = 3;
+
+Var
+ ChoiceActive: Boolean;
+ ChoiceKind, ChoiceCount: Integer;
+ ChoiceItems: Array[0..11] Of String[40];
+
+Function CollectSel(Var N: LongInt): PLongArr;
+Var P: PLongArr; I: Integer;
+Begin
+ N := 0;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And ObjAt(I)^.Visible Then Inc(N);
+ CollectSel := Nil;
+ If N = 0 Then Exit;
+ GetMem(P,N*4);
+ N := 0;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And ObjAt(I)^.Visible Then Begin
+   P^[N] := I; Inc(N);
+  End;
+ CollectSel := P;
+End;
+
+Procedure GroupCommand;
+Var I, N, MaxG: Integer; G: LongInt; S: String;
+Begin
+ N := SelCount;
+ If N < 2 Then Begin
+  StatusMessage := 'Grouper : selectionner au moins deux objets (rectangle de selection).';
+  Exit;
+ End;
+ MaxG := 0;
+ For I := 0 To ObjectCount-1 Do
+  If GroupOfObj(ObjAt(I)^) > MaxG Then MaxG := GroupOfObj(ObjAt(I)^);
+ G := MaxG+1;
+ PushUndo;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) Then SetGroupOfObj(ObjAt(I)^,G);
+ FileModified := True;
+ Str(N,S);
+ StatusMessage := S+' objets groupes.';
+ NeedsRedraw := True;
+End;
+
+Procedure UngroupCommand;
+Var I, N: Integer; S: String;
+Begin
+ N := 0;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And (GroupOfObj(ObjAt(I)^) > 0) Then Inc(N);
+ If N = 0 Then Begin
+  StatusMessage := 'Degrouper : la selection ne contient aucun groupe.';
+  Exit;
+ End;
+ PushUndo;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) Then SetGroupOfObj(ObjAt(I)^,0);
+ FileModified := True;
+ Str(N,S);
+ StatusMessage := 'Groupe(s) defait(s) : '+S+' objets.';
+ NeedsRedraw := True;
+End;
+
+Procedure AlignSelection(K: Integer);
+Var P: PLongArr; N, J: LongInt; U, B: TBounds; DX, DY: Real;
+Begin
+ U := SelectionBounds;
+ P := CollectSel(N);
+ If P = Nil Then Exit;
+ PushUndo;
+ For J := 0 To N-1 Do Begin
+  B := ObjectBounds(ObjAt(P^[J])^);
+  DX := 0; DY := 0;
+  Case K Of
+   0: DX := U.L-B.L;
+   1: DX := (U.L+U.R)/2-(B.L+B.R)/2;
+   2: DX := U.R-B.R;
+   3: DY := U.T-B.T;
+   4: DY := (U.T+U.B)/2-(B.T+B.B)/2;
+   5: DY := U.B-B.B;
+  End;
+  OffsetObject(ObjAt(P^[J])^,DX,DY);
+ End;
+ FreeMem(P,N*4);
+ FileModified := True;
+ StatusMessage := 'Objets alignes.';
+ NeedsRedraw := True;
+End;
+
+Procedure DistributeSelection(K: Integer);
+Var P: PLongArr; Key: PRealArr; N, J, M, H: LongInt; U, B: TBounds;
+    DX, DY, T, C0, CN, SumW, Gap, Pos: Real; TI: LongInt;
+Begin
+ P := CollectSel(N);
+ If P = Nil Then Exit;
+ GetMem(Key,N*SizeOf(Real));
+ For J := 0 To N-1 Do Begin
+  B := ObjectBounds(ObjAt(P^[J])^);
+  Case K Of
+   0: Key^[J] := (B.L+B.R)/2;
+   1: Key^[J] := (B.T+B.B)/2;
+   2: Key^[J] := B.L;
+  Else Key^[J] := B.T;
+  End;
+ End;
+ { tri par insertion (cles croissantes) }
+ For J := 1 To N-1 Do Begin
+  T := Key^[J]; TI := P^[J]; M := J-1;
+  While (M >= 0) And (Key^[M] > T) Do Begin
+   Key^[M+1] := Key^[M]; P^[M+1] := P^[M]; Dec(M);
+  End;
+  Key^[M+1] := T; P^[M+1] := TI;
+ End;
+ PushUndo;
+ If K < 2 Then Begin
+  C0 := Key^[0]; CN := Key^[N-1];
+  For J := 1 To N-2 Do Begin
+   T := C0+J*(CN-C0)/(N-1);
+   If K = 0 Then OffsetObject(ObjAt(P^[J])^,T-Key^[J],0)
+   Else OffsetObject(ObjAt(P^[J])^,0,T-Key^[J]);
+  End;
+ End Else Begin
+  U := SelectionBounds;
+  SumW := 0;
+  For J := 0 To N-1 Do Begin
+   B := ObjectBounds(ObjAt(P^[J])^);
+   If K = 2 Then SumW := SumW+(B.R-B.L) Else SumW := SumW+(B.B-B.T);
+  End;
+  If K = 2 Then Begin Gap := ((U.R-U.L)-SumW)/(N-1); Pos := U.L; End
+  Else Begin Gap := ((U.B-U.T)-SumW)/(N-1); Pos := U.T; End;
+  For J := 0 To N-1 Do Begin
+   B := ObjectBounds(ObjAt(P^[J])^);
+   If K = 2 Then Begin
+    OffsetObject(ObjAt(P^[J])^,Pos-B.L,0);
+    Pos := Pos+(B.R-B.L)+Gap;
+   End Else Begin
+    OffsetObject(ObjAt(P^[J])^,0,Pos-B.T);
+    Pos := Pos+(B.B-B.T)+Gap;
+   End;
+  End;
+ End;
+ FreeMem(Key,N*SizeOf(Real));
+ FreeMem(P,N*4);
+ FileModified := True;
+ StatusMessage := 'Objets distribues.';
+ NeedsRedraw := True;
+End;
+
+{ ---- transformations ---- }
+Procedure MapPoint(Kind: Integer; CX, CY, Par: Real; X, Y: Real; Var NX, NY: Real);
+Var Co, Si: Real;
+Begin
+ Case Kind Of
+  TR_ROT: Begin
+   Co := Cos(Par); Si := Sin(Par);
+   NX := CX+(X-CX)*Co-(Y-CY)*Si;
+   NY := CY+(X-CX)*Si+(Y-CY)*Co;
+  End;
+  TR_FLIPH: Begin NX := 2*CX-X; NY := Y; End;
+  TR_FLIPV: Begin NX := X; NY := 2*CY-Y; End;
+ Else Begin NX := CX+(X-CX)*Par; NY := CY+(Y-CY)*Par; End;
+ End;
+ NX := Round(NX*1000)/1000;
+ NY := Round(NY*1000)/1000;
+End;
+
+{ rectangle ou ellipse -> chemin (pour les rotations quelconques) }
+Procedure ConvertToPath(Var O: TGraphicObject);
+Var N: TGraphicObject; G: LongInt; I: Integer; A: Real; Fill, Stroke: Byte; W: Real;
+    X0, Y0, X1, Y1, CX, CY, RX, RY: Real;
+Begin
+ If Not (O.ObjType In [OBJ_RECT,OBJ_ELLIPSE]) Then Exit;
+ G := GroupOfObj(O);
+ FillChar(N,SizeOf(N),0);
+ N.Visible := O.Visible; N.LayerIndex := O.LayerIndex;
+ If O.ObjType = OBJ_RECT Then Begin
+  Fill := O.Rectangle.FillColor; Stroke := O.Rectangle.StrokeColor;
+  W := O.Rectangle.StrokeWidth;
+  X0 := O.Rectangle.X; Y0 := O.Rectangle.Y;
+  X1 := X0+O.Rectangle.Width; Y1 := Y0+O.Rectangle.Height;
+  N.Path.PointCount := 4;
+  N.Path.Points[0].X := X0; N.Path.Points[0].Y := Y0;
+  N.Path.Points[1].X := X1; N.Path.Points[1].Y := Y0;
+  N.Path.Points[2].X := X1; N.Path.Points[2].Y := Y1;
+  N.Path.Points[3].X := X0; N.Path.Points[3].Y := Y1;
+ End Else Begin
+  Fill := O.Ellipse.FillColor; Stroke := O.Ellipse.StrokeColor;
+  W := O.Ellipse.StrokeWidth;
+  CX := O.Ellipse.CX; CY := O.Ellipse.CY;
+  RX := O.Ellipse.RX; RY := O.Ellipse.RY;
+  N.Path.PointCount := 36;
+  For I := 0 To 35 Do Begin
+   A := I*Pi/18;
+   N.Path.Points[I].X := Round((CX+RX*Cos(A))*1000)/1000;
+   N.Path.Points[I].Y := Round((CY+RY*Sin(A))*1000)/1000;
+  End;
+ End;
+ If Fill <> 15 Then N.ObjType := OBJ_FILLED_PATH Else N.ObjType := OBJ_PATH;
+ N.Path.Closed := True;
+ N.Path.StrokeColor := Stroke;
+ N.Path.FillColor := Fill;
+ N.Path.StrokeWidth := W;
+ SetGroupOfObj(N,G);
+ SelFlagPtr(N)^ := SelFlagPtr(O)^;
+ O := N;
+End;
+
+Procedure TransformObj(Var O: TGraphicObject; Kind: Integer; CX, CY, Par: Real);
+Var I: Integer; X0, Y0, X1, Y1, T: Real; Quarter, Tmp: Real; B: TBounds;
+    Q: LongInt;
+Begin
+ Quarter := 0;
+ If Kind = TR_ROT Then Begin
+  Q := Round(Par/(Pi/2));
+  If Abs(Par-Q*(Pi/2)) < 0.0001 Then Quarter := 1;
+ End;
+ If (O.ObjType In [OBJ_RECT,OBJ_ELLIPSE]) And (Kind = TR_ROT) And (Quarter = 0) Then
+  ConvertToPath(O);
+ Case O.ObjType Of
+  OBJ_RECT: Begin
+   MapPoint(Kind,CX,CY,Par,O.Rectangle.X,O.Rectangle.Y,X0,Y0);
+   MapPoint(Kind,CX,CY,Par,O.Rectangle.X+O.Rectangle.Width,
+            O.Rectangle.Y+O.Rectangle.Height,X1,Y1);
+   O.Rectangle.X := MinReal(X0,X1); O.Rectangle.Y := MinReal(Y0,Y1);
+   O.Rectangle.Width := Abs(X1-X0); O.Rectangle.Height := Abs(Y1-Y0);
+  End;
+  OBJ_ELLIPSE: Begin
+   MapPoint(Kind,CX,CY,Par,O.Ellipse.CX,O.Ellipse.CY,X0,Y0);
+   O.Ellipse.CX := X0; O.Ellipse.CY := Y0;
+   If Kind = TR_ROT Then Begin
+    If Odd(Round(Par/(Pi/2))) Then Begin
+     T := O.Ellipse.RX; O.Ellipse.RX := O.Ellipse.RY; O.Ellipse.RY := T;
+    End;
+   End Else If Kind = TR_SCALE Then Begin
+    O.Ellipse.RX := O.Ellipse.RX*Par; O.Ellipse.RY := O.Ellipse.RY*Par;
+   End;
+  End;
+  OBJ_LINE: Begin
+   MapPoint(Kind,CX,CY,Par,O.Line.X1,O.Line.Y1,X0,Y0);
+   MapPoint(Kind,CX,CY,Par,O.Line.X2,O.Line.Y2,X1,Y1);
+   O.Line.X1 := X0; O.Line.Y1 := Y0; O.Line.X2 := X1; O.Line.Y2 := Y1;
+  End;
+  OBJ_TEXT: Begin
+   B := ObjectBounds(O);
+   MapPoint(Kind,CX,CY,Par,(B.L+B.R)/2,(B.T+B.B)/2,X0,Y0);
+   O.TextObj.X := Round(X0-(B.R-B.L)/2);
+   O.TextObj.Y := Round(Y0-(B.B-B.T)/2);
+  End;
+  OBJ_PATH, OBJ_BEZIER, OBJ_FILLED_PATH:
+   For I := 0 To O.Path.PointCount-1 Do Begin
+    MapPoint(Kind,CX,CY,Par,O.Path.Points[I].X,O.Path.Points[I].Y,X0,Y0);
+    O.Path.Points[I].X := X0; O.Path.Points[I].Y := Y0;
+    MapPoint(Kind,CX,CY,Par,O.Path.Points[I].CtrlX1,O.Path.Points[I].CtrlY1,X0,Y0);
+    O.Path.Points[I].CtrlX1 := X0; O.Path.Points[I].CtrlY1 := Y0;
+    MapPoint(Kind,CX,CY,Par,O.Path.Points[I].CtrlX2,O.Path.Points[I].CtrlY2,X0,Y0);
+    O.Path.Points[I].CtrlX2 := X0; O.Path.Points[I].CtrlY2 := Y0;
+   End;
+ End;
+End;
+
+Procedure TransformSelection(Kind: Integer; Par: Real);
+Var P: PLongArr; N, J: LongInt; U, B: TBounds; CX, CY: Real; O: TGraphicObject;
+    Ok: Boolean;
+Begin
+ U := SelectionBounds;
+ CX := (U.L+U.R)/2; CY := (U.T+U.B)/2;
+ P := CollectSel(N);
+ If P = Nil Then Exit;
+ Ok := True;
+ For J := 0 To N-1 Do Begin
+  O := ObjAt(P^[J])^;
+  TransformObj(O,Kind,CX,CY,Par);
+  B := ObjectBounds(O);
+  If (B.L < 0) Or (B.T < 0) Or (B.R >= ScreenWidth-TOOLBAR_WIDTH) Or
+     (B.B >= ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT) Then Ok := False;
+ End;
+ If Not Ok Then Begin
+  FreeMem(P,N*4);
+  StatusMessage := 'Transformation refusee : le resultat sortirait de la page.';
+  Exit;
+ End;
+ PushUndo;
+ For J := 0 To N-1 Do Begin
+  O := ObjAt(P^[J])^;
+  TransformObj(O,Kind,CX,CY,Par);
+  ObjAt(P^[J])^ := O;
+ End;
+ FreeMem(P,N*4);
+ FileModified := True;
+ StatusMessage := 'Transformation appliquee.';
+ NeedsRedraw := True;
+End;
+
+{ ---- operations sur la selection ---- }
+Procedure SelectAllCommand;
+Var I: Integer; S: String;
+Begin
+ ClearSelFlags;
+ SelectedObject := -1;
+ For I := 0 To ObjectCount-1 Do
+  If ObjAt(I)^.Visible Then Begin
+   SelFlagPtr(ObjAt(I)^)^ := True;
+   SelectedObject := I;
+  End;
+ Str(SelCount,S);
+ StatusMessage := S+' objet(s) selectionne(s).';
+ NeedsRedraw := True;
+End;
+
+Procedure DeleteSelection;
+Var I: Integer; N: Integer; S: String;
+Begin
+ N := SelCount;
+ If N = 0 Then Begin
+  StatusMessage := 'Supprimer : aucun objet selectionne.';
+  Exit;
+ End;
+ PushUndo;
+ For I := ObjectCount-1 DownTo 0 Do
+  If IsSel(I) Then DeleteObjectAt(I);
+ SelectedObject := -1;
+ FileModified := True;
+ Str(N,S);
+ StatusMessage := S+' objet(s) supprime(s).';
+ NeedsRedraw := True;
+End;
+
+Procedure DuplicateSelection;
+Var I, N0, N: Integer; O: TGraphicObject; B: TBounds; U: TBounds; Off, MaxG: LongInt;
+    G: LongInt; S: String;
+Begin
+ If SelCount = 0 Then Begin
+  StatusMessage := 'Dupliquer : aucun objet selectionne.';
+  Exit;
+ End;
+ U := SelectionBounds;
+ Off := 12;
+ If (U.R+12 >= ScreenWidth-TOOLBAR_WIDTH) Or
+    (U.B+12 >= ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT) Then Off := -12;
+ If (U.L+Off < 0) Or (U.T+Off < 0) Then Begin
+  StatusMessage := 'Dupliquer : pas de place dans la page.';
+  Exit;
+ End;
+ PushUndo;
+ MaxG := 0;
+ For I := 0 To ObjectCount-1 Do
+  If GroupOfObj(ObjAt(I)^) > MaxG Then MaxG := GroupOfObj(ObjAt(I)^);
+ N0 := ObjectCount; N := 0;
+ For I := 0 To N0-1 Do
+  If IsSel(I) Then Begin
+   O := ObjAt(I)^;
+   OffsetObject(O,Off,Off);
+   G := GroupOfObj(O);
+   If G > 0 Then SetGroupOfObj(O,G+MaxG);
+   SelFlagPtr(O)^ := True;
+   AppendObject(O);
+   Inc(N);
+  End;
+ For I := 0 To N0-1 Do SelFlagPtr(ObjAt(I)^)^ := False;
+ SelectedObject := ObjectCount-1;
+ FileModified := True;
+ Str(N,S);
+ StatusMessage := S+' objet(s) duplique(s).';
+ NeedsRedraw := True;
+End;
+
+Procedure InvertSelection;
+Var I: Integer; Was: Boolean;
+Begin
+ For I := 0 To ObjectCount-1 Do Begin
+  Was := IsSel(I);
+  SelFlagPtr(ObjAt(I)^)^ := (Not Was) And ObjAt(I)^.Visible;
+ End;
+ SelectedObject := -1;
+ For I := ObjectCount-1 DownTo 0 Do
+  If IsFlagged(I) Then Begin SelectedObject := I; Break; End;
+ StatusMessage := 'Selection inversee.';
+ NeedsRedraw := True;
+End;
+
+Procedure DeselectAll;
+Begin
+ ClearSelFlags;
+ SelectedObject := -1;
+ StatusMessage := 'Selection annulee.';
+ NeedsRedraw := True;
+End;
+
+{ ---- boite de choix generique ---- }
+Procedure OpenChoice(Kind: Integer);
+Var N: Integer;
+Begin
+ N := SelCount;
+ Case Kind Of
+  CH_ALIGN: If N < 2 Then Begin
+   StatusMessage := 'Aligner : selectionner au moins deux objets.'; Exit;
+  End;
+  CH_DISTRIB: If N < 3 Then Begin
+   StatusMessage := 'Distribuer : selectionner au moins trois objets.'; Exit;
+  End;
+  CH_TRANSFORM: If N < 1 Then Begin
+   StatusMessage := 'Transformer : aucun objet selectionne.'; Exit;
+  End;
+ End;
+ ChoiceKind := Kind;
+ Case Kind Of
+  CH_ALIGN: Begin
+   ChoiceCount := 6;
+   ChoiceItems[0] := 'Aligner a gauche'; ChoiceItems[1] := 'Centrer horizontalement';
+   ChoiceItems[2] := 'Aligner a droite'; ChoiceItems[3] := 'Aligner en haut';
+   ChoiceItems[4] := 'Centrer verticalement'; ChoiceItems[5] := 'Aligner en bas';
+  End;
+  CH_DISTRIB: Begin
+   ChoiceCount := 4;
+   ChoiceItems[0] := 'Centres horizontaux egaux'; ChoiceItems[1] := 'Centres verticaux egaux';
+   ChoiceItems[2] := 'Espacement horizontal egal'; ChoiceItems[3] := 'Espacement vertical egal';
+  End;
+  CH_TRANSFORM: Begin
+   ChoiceCount := 10;
+   ChoiceItems[0] := 'Rotation 90 deg. horaire'; ChoiceItems[1] := 'Rotation 90 deg. antihoraire';
+   ChoiceItems[2] := 'Rotation 180 deg.'; ChoiceItems[3] := 'Rotation 45 deg. horaire';
+   ChoiceItems[4] := 'Miroir horizontal'; ChoiceItems[5] := 'Miroir vertical';
+   ChoiceItems[6] := 'Echelle 50 %'; ChoiceItems[7] := 'Echelle 200 %';
+   ChoiceItems[8] := 'Echelle 90 %'; ChoiceItems[9] := 'Echelle 110 %';
+  End;
+ Else Begin
+  ChoiceCount := 6;
+  ChoiceItems[0] := 'Dupliquer'; ChoiceItems[1] := 'Supprimer';
+  ChoiceItems[2] := 'Tout selectionner'; ChoiceItems[3] := 'Inverser la selection';
+  ChoiceItems[4] := 'Deselectionner'; ChoiceItems[5] := 'Annuler';
+ End;
+ End;
+ ChoiceActive := True;
+ NeedsRedraw := True;
+End;
+
+Procedure CloseChoice(Index: Integer);
+Var K: Integer;
+Begin
+ ChoiceActive := False;
+ NeedsRedraw := True;
+ K := ChoiceKind;
+ If (Index < 0) Or (Index >= ChoiceCount) Then Begin
+  StatusMessage := 'Commande annulee.';
+  Exit;
+ End;
+ Case K Of
+  CH_ALIGN: AlignSelection(Index);
+  CH_DISTRIB: DistributeSelection(Index);
+  CH_TRANSFORM: Case Index Of
+   0: TransformSelection(TR_ROT,Pi/2);
+   1: TransformSelection(TR_ROT,-Pi/2);
+   2: TransformSelection(TR_ROT,Pi);
+   3: TransformSelection(TR_ROT,Pi/4);
+   4: TransformSelection(TR_FLIPH,0);
+   5: TransformSelection(TR_FLIPV,0);
+   6: TransformSelection(TR_SCALE,0.5);
+   7: TransformSelection(TR_SCALE,2);
+   8: TransformSelection(TR_SCALE,0.9);
+   9: TransformSelection(TR_SCALE,1.1);
+  End;
+ Else Case Index Of
+   0: DuplicateSelection;
+   1: DeleteSelection;
+   2: SelectAllCommand;
+   3: InvertSelection;
+   4: DeselectAll;
+  End;
+ End;
+End;
+
+Function ChoiceX: Integer;
+Begin
+ ChoiceX := (ScreenWidth-300) Div 2;
+End;
+
+Function ChoiceY: Integer;
+Begin
+ ChoiceY := (ScreenHeight-(50+ChoiceCount*20)) Div 2;
+End;
+
+Procedure DrawChoice;
+Var X, Y, I: Integer; S: String;
+Begin
+ If Not ChoiceActive Then Exit;
+ X := ChoiceX; Y := ChoiceY;
+ SetFillStyle(SolidFill,COLOR_WINDOW);
+ Bar(X,Y,X+300,Y+50+ChoiceCount*20);
+ SetColor(COLOR_TEXT);
+ Rectangle(X,Y,X+300,Y+50+ChoiceCount*20);
+ Rectangle(X+2,Y+2,X+298,Y+48+ChoiceCount*20);
+ Case ChoiceKind Of
+  CH_ALIGN: S := 'Aligner';
+  CH_DISTRIB: S := 'Distribuer';
+  CH_TRANSFORM: S := 'Transformer';
+ Else S := 'Operations';
+ End;
+ OutTextXY(X+12,Y+10,S+' (clic, chiffre ou Echap)');
+ For I := 0 To ChoiceCount-1 Do Begin
+  If (MouseX >= X+10) And (MouseX <= X+290) And
+     (MouseY >= Y+30+I*20) And (MouseY < Y+48+I*20) Then Begin
+   SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
+   Bar(X+10,Y+30+I*20,X+290,Y+47+I*20);
+   SetColor(COLOR_WINDOW);
+  End Else SetColor(COLOR_TEXT);
+  Str((I+1) Mod 10,S);
+  OutTextXY(X+16,Y+34+I*20,S+'  '+ChoiceItems[I]);
+ End;
+End;
+
+Procedure HandleChoiceMouse;
+Var I: Integer;
+Begin
+ NeedsRedraw := True;
+ If (MouseX >= ChoiceX+10) And (MouseX <= ChoiceX+290) And
+    (MouseY >= ChoiceY+30) And (MouseY < ChoiceY+30+ChoiceCount*20) Then Begin
+  I := (MouseY-ChoiceY-30) Div 20;
+  CloseChoice(I);
+ End Else If (MouseX < ChoiceX) Or (MouseX > ChoiceX+300) Or
+    (MouseY < ChoiceY) Or (MouseY > ChoiceY+50+ChoiceCount*20) Then CloseChoice(-1);
+End;
+
+Procedure HandleChoiceKey(Key: Char);
+Var I: Integer;
+Begin
+ NeedsRedraw := True;
+ If Key = #27 Then CloseChoice(-1)
+ Else If (Key >= '1') And (Key <= '9') Then Begin
+  I := Ord(Key)-Ord('1');
+  If I < ChoiceCount Then CloseChoice(I);
+ End Else If (Key = '0') And (ChoiceCount >= 10) Then CloseChoice(9);
 End;
 
 Procedure ShowDialog(Title, MessageText: String);
@@ -3234,6 +4137,14 @@ Begin
    Else Running := False;
   CMD_GRID: GridVisible := Not GridVisible;
   CMD_PROPS: OpenProps;
+  CMD_GROUP: GroupCommand;
+  CMD_UNGROUP: UngroupCommand;
+  CMD_ALIGN: OpenChoice(CH_ALIGN);
+  CMD_DISTRIB: OpenChoice(CH_DISTRIB);
+  CMD_TRANSFORM: OpenChoice(CH_TRANSFORM);
+  CMD_OPS: OpenChoice(CH_OPS);
+  CMD_SELALL: SelectAllCommand;
+  CMD_FRONT, CMD_BACK, CMD_FORWARD, CMD_BACKWARD: ArrangeObject(Command);
   CMD_RULERS: Begin
    RulersVisible := Not RulersVisible;
    If RulersVisible Then StatusMessage := 'Regles affichees : glisser depuis une regle pour creer un repere.'
@@ -3388,7 +4299,9 @@ Begin
  If TextActive And Pressed Then
   If (MenuBarHitTest(MouseX,MouseY) >= 0) Or
      (ToolHitTest(MouseX,MouseY) >= 0) Then FinishText(True);
- If PropActive Then Begin
+ If ChoiceActive Then Begin
+  If Pressed Then HandleChoiceMouse;
+ End Else If PropActive Then Begin
   If Pressed Then HandlePropMouse;
  End Else If FileDialogActive Then Begin
   If Pressed Then HandleFileMouse;
@@ -3448,6 +4361,8 @@ Begin
    AddPencilPoint;
   End Else If EditingObject And ((MouseButtons And 1) <> 0) Then Begin
    If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then UpdateObjectEdit;
+  End Else If MarqueeActive And ((MouseButtons And 1) <> 0) Then Begin
+   If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then NeedsRedraw := True;
   End Else If GuideDragging And ((MouseButtons And 1) <> 0) Then Begin
    If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then UpdateGuide;
   End Else If Released Then Begin
@@ -3492,6 +4407,7 @@ Var S: String; Capacity: Integer;
 Begin
  ResetToolTip;
  NeedsRedraw := True;
+ If ChoiceActive Then Begin HandleChoiceKey(Key); Exit; End;
  If PropActive Then Begin HandlePropKey(Key); Exit; End;
  If FileDialogActive Then Begin HandleFileKey(Key,ExtKey); Exit; End;
  If ((Key In [#15,#19]) Or ((Key=#0) And (ExtKey=#134))) And
@@ -3504,6 +4420,10 @@ Begin
  End;
  If GuideDragging Then Begin
   If Key = #27 Then EndGuide(True);
+  Exit;
+ End;
+ If MarqueeActive Then Begin
+  If Key = #27 Then FinishMarquee(True);
   Exit;
  End;
  If Panning Then Begin
@@ -3632,6 +4552,7 @@ Begin
   #3: CopyCommand;
   #22: PasteCommand;
   #18: ExecuteMenuItem(2,4);
+  #1: SelectAllCommand;
  End;
 End;
 
@@ -3665,6 +4586,7 @@ Begin
  { Les menus et dialogues doivent etre dessines APRES le document. }
  DrawMenu;
  DrawPropDialog;
+ DrawChoice;
  If DialogTitle <> '' Then Begin
   SetFillStyle(SolidFill, COLOR_WINDOW);
   Bar(45, 160, ScreenWidth-45, 280);
@@ -5491,6 +6413,7 @@ Begin
  End;
  If Not Good Then Exit;
  AdoptImport;
+ ClearSelFlags;
  ClearHistory;
  SelectedObject := -1; CurrentFile := Name; FileModified := False;
  If Legacy Then CurrentSaveFormat := 2
@@ -6336,6 +7259,7 @@ Begin
  NeedsRedraw := True;
  GridVisible := True;
  PropActive := False;
+ ChoiceActive := False; MarqueeActive := False; EditMulti := False;
  RulersVisible := True; GuidesVisible := True;
  GuideHead := Nil; GuideCur := Nil; GuideDragging := False;
  DialogTitle := '';

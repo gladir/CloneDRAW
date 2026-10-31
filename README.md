@@ -13,6 +13,25 @@ Aperçu de LeoCAD (editeur de bloc Lego) :
 
 <img width="640" height="484" alt="image" src="https://github.com/user-attachments/assets/dd5411cf-f672-40d9-84fb-7de4ecbdc06a" />
 
+Apercu de PAINT :
+
+<img width="641" height="480" alt="image" src="https://github.com/user-attachments/assets/a9503152-d653-4fd0-9e35-14865e377008" />
+
+<table>
+	<tr>
+		<td>Retourner / Pivoter :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/cfbb27cb-5a2a-456d-b422-2ef092acfa99" /></td>
+		<td>Étirer / Incliner :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9e46caf0-2dfd-45e3-8c44-88cd0c8554ee" /></td>
+	</tr>
+	<tr>
+		<td>Modifier les couleurs :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/98414f58-4b96-4ab3-8b91-cea18d8fcfd9" /></td>
+		<td>Obtenir les couleurs :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ace36e01-3760-4a95-bce8-c8a24827063e" /></td>
+	</tr>
+	<tr>
+		<td>Attributs de l'image (Couleurs) :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/201c76b2-ef06-411a-b507-1ca8f53f4523" /></td>
+		<td>Attributs de l'image (Mémoire) :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9f2fccee-708a-44e8-84e5-7f94ebf691d5" /></td>
+	</tr>
+</table>
+
 Aperçu de Photoshop :
 
 <img width="639" height="475" alt="image" src="https://github.com/user-attachments/assets/3d8e4b14-c858-46b8-9fbf-f0c0d8ef4330" />
@@ -41,26 +60,6 @@ Aperçu de Photoshop :
 	<tr>
 		<td>Extruction 3D selection : <img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/a9dd589e-fc45-4795-8fbf-1a627ee882a4" /></td>
 		<td></td>
-	</tr>
-</table>
-
-
-Apercu de PAINT :
-
-<img width="641" height="480" alt="image" src="https://github.com/user-attachments/assets/a9503152-d653-4fd0-9e35-14865e377008" />
-
-<table>
-	<tr>
-		<td>Retourner / Pivoter :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/cfbb27cb-5a2a-456d-b422-2ef092acfa99" /></td>
-		<td>Étirer / Incliner :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9e46caf0-2dfd-45e3-8c44-88cd0c8554ee" /></td>
-	</tr>
-	<tr>
-		<td>Modifier les couleurs :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/98414f58-4b96-4ab3-8b91-cea18d8fcfd9" /></td>
-		<td>Obtenir les couleurs :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/ace36e01-3760-4a95-bce8-c8a24827063e" /></td>
-	</tr>
-	<tr>
-		<td>Attributs de l'image (Couleurs) :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/201c76b2-ef06-411a-b507-1ca8f53f4523" /></td>
-		<td>Attributs de l'image (Mémoire) :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9f2fccee-708a-44e8-84e5-7f94ebf691d5" /></td>
 	</tr>
 </table>
 

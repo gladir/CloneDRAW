@@ -244,7 +244,7 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 		</tr>	
 		<tr>
 			<td><b>LEOCAD.PAS</b></td>
-			<td>Cette commande permet de lancer un clone de LeoCAD (CAO de briques Lego en 3D, avec lecture et écriture des fichiers LDraw .LDR et .MPD).</td>
+			<td>Cette commande permet de lancer un clone de LeoCAD (CAO de briques Lego en 3D : fichiers LDraw .LDR et .MPD, bibliothèque LDraw, rendu haute qualité, exports PNG/GIF/POV-Ray/OBJ/3DS/BrickLink, instructions HTML).</td>
 		</tr>
     	<tr>
       		<td><b>PAINT.PAS</b></td>

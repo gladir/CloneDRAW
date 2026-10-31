@@ -10,20 +10,32 @@
   aucune unite externe en dehors de DOS, Crt, Graph / PtcGraph).
 
   Fonctionnalites :
-   - Fichiers LDraw : lecture et ecriture de .LDR et .MPD (multi-fichiers avec
-     sous-modeles "0 FILE"), lecture des pieces .DAT (types 1 a 5, BFC)
-   - Bibliotheque de pieces : SAMPLES\LEOCAD\LEGO\*.DAT (index PARTS.LST,
-     reconstruit automatiquement si absent), primitives dans LEGO\P\
+   - Fichiers LDraw : lecture et ecriture de .LDR et .MPD (sous-modeles
+     "0 FILE"), lecture des pieces .DAT (types 1 a 5, BFC, lignes optionnelles,
+     couleurs directes 0x2RRGGBB, !CATEGORY, !KEYWORDS), meta !LEOCAD (CAMERA,
+     GROUP, PIECE HIDDEN / STEP_HIDE / LOCKED), !TEXMAP ignore avec repli
+   - Bibliotheque : SAMPLES\LEOCAD\LEGO\*.DAT (index PARTS.LST reconstruit
+     au besoin) ou bibliotheque officielle LDraw (variable LDRAWDIR, dossiers
+     parts, p, p/48, p/8, parts/s), couleurs de LDCONFIG.LDR (finitions
+     chrome, perle, metal, caoutchouc, translucidite)
    - Plans de montage : SAMPLES\LEOCAD\PLAN\*.LDR et *.MPD
-   - Rendu 3D logiciel : perspective ou orthogonal, faces ombrees, aretes,
-     elimination des faces cachees (BFC), translucidite tramee, grille
-   - 1 ou 4 vues (3D, dessus, droite, avant), orbite, panoramique, zoom
-   - Edition : selection, insertion avec aimantation sur la grille et
-     empilement automatique, deplacement, rotation, couleur, copier/coller,
-     annuler/retablir, chronologie par etapes ("0 STEP"), sous-modeles
-   - Panneaux : Pieces (categories, recherche, apercu), Proprietes (champs
-     modifiables), Chronologie, palette de couleurs LDraw
-   - Export : image BMP de la vue active, liste des pieces (texte)
+   - Rendu 3D logiciel : perspective ou orthogonal, ombrage a deux lumieres,
+     aretes, elimination des faces cachees (BFC), grille, 1 ou 4 vues
+   - Edition : selection (mode ajout), groupes, verrouillage, insertion avec
+     aimantation sur le reseau de tenons, deplacement et rotation par
+     poignees, alignement, repartition, miroir, tableau, pivot, copier/coller,
+     annuler/retablir, etapes ("0 STEP"), sous-modeles, plusieurs documents
+   - Cameras nommees, champ de vision, animation (images cles, lecture, etapes)
+   - Panneaux : Pieces (categories, recherche, miniatures), Proprietes (champs
+     modifiables, matrice), Chronologie, palette de couleurs LDraw defilante
+   - Exports : images PNG/BMP/GIF avec rendu haute qualite (tampon de profondeur,
+     translucidite, ombres, antialiasing), GIF anime, instructions HTML par
+     etape, POV-Ray, Wavefront OBJ, 3D Studio, BrickLink XML (export/import),
+     liste des pieces ; ouverture d'un .DAT comme modele
+   - Preferences (LEOCAD.INI), raccourcis personnalisables (LEOCAD.KEY),
+     sauvegarde automatique avec recuperation, francais et anglais
+     (SAMPLES\LEOCAD\LANG\EN.LNG), molette de la souris sous Turbo Pascal
+     (pilote CuteMouse)
 
   Ligne de commande :
    LEOCAD [/16] [-maxscreen] [fichier.ldr|fichier.mpd]
@@ -36,7 +48,10 @@
      par Fichier > Reindexer la bibliotheque. Le tenon (STUD.DAT) est integre.
    - Un fichier .MPD contient plusieurs modeles ("0 FILE nom") : le premier est
      le modele principal, les autres sont des sous-modeles (onglets).
-   - Les couleurs sont les codes LDraw courants (0 a 484, translucides 33 a 47).
+   - Les structures de donnees volumineuses (catalogue, polygones, annuler,
+     fichiers, couleurs, images) sont des listes chainees sur le tas.
+   - Fermer la fenetre equivaut a Ctrl+C (code 3) : la commande Quitter y est
+     associee ; Copier se fait avec Ctrl+Inser.
    - Le programme complet depasse les 64 Ko de code d'un segment Turbo Pascal 7 :
      la compilation visee est Free Pascal (mode TP), le code reste compatible
      avec la syntaxe de Turbo Pascal.
@@ -59,6 +74,7 @@ Uses {$IFDEF FPC}
      {$ENDIF};
 
 Var
+ WheelDelta:Integer;
  Force16,MaxScreen:Boolean;
  I0:Integer;
  ArgFile:String;
@@ -141,9 +157,14 @@ End;
  Begin
   Regs.AX := $0003;
   Intr($33, Regs);
-  Button := Regs.BX;
+  Button := Regs.BX And 7;
   X := Regs.CX;
   Y := Regs.DX;
+  { molette (CuteMouse) : octet haut de BX, signe }
+  If(Regs.BX Shr 8)<>0 Then Begin
+   If(Regs.BX Shr 8)>127 Then WheelDelta:=WheelDelta+((Regs.BX Shr 8)-256)
+   Else WheelDelta:=WheelDelta+(Regs.BX Shr 8);
+  End;
  End;
 {$ELSE}
  Function MouseDriverFound: Boolean;
@@ -172,7 +193,7 @@ Const
  PROG_NAME='LEOCAD';
  MAXMOD=96;               { modeles (fichier principal + sous-modeles) }
  MAXVIEW=4;
- MAXPOLY=60000;           { polygones d'une scene (liste chainee) }
+ MAXPOLY=300000;          { polygones d'une scene (liste chainee) }
  UNDO_MAX=12;
  CACHE_MAX=160;           { pieces gardees en memoire }
  NSHADE=6;
@@ -220,7 +241,7 @@ Const
  CM_SUB_DEL=115;
  CM_CAM_NEW=120; CM_CAM_GO=121; CM_CAM_DEL=122; CM_FOV=123; CM_KEY_ADD=124; CM_KEY_DEL=125;
  CM_KEY_PLAY=126; CM_ANIM_EXP=127; CM_STEPS_PLAY=128;
- CM_HELP=130; CM_ABOUT=131; CM_KEYS=132;
+ CM_HELP=130; CM_ABOUT=131; CM_KEYS=132; CM_CLOSEDOC=19; CM_NEXTDOC=133;
  CM_TOOL_SEL=140; CM_TOOL_INS=141; CM_TOOL_ORB=142; CM_TOOL_PAN=143; CM_TOOL_ZOOM=144;
 
  { Interface }
@@ -365,6 +386,9 @@ Type
   Name:String[12];
  End;
 
+ TModelArr=Array[0..MAXMOD-1] Of TModel;
+ TViewArr=Array[0..MAXVIEW-1] Of TView;
+
  TMenuItem=Record
   Caption:String[34];
   Shortcut:String[12];
@@ -423,7 +447,7 @@ Var
  CurPart:String[40];
  CurPartDesc:String[60];
  { documents }
- Models:Array[0..MAXMOD-1] Of TModel;
+ Models:TModelArr;
  ModelCount,CurModel:Integer;
  ModEpoch:LongInt;
  DocFile:String;
@@ -433,6 +457,11 @@ Var
  CamHead:PCamera;
  KeyHead:PKey;
  BindHead:PBind;
+ AutoMin,BgIdx:Integer;
+ ListThumbs:Boolean;
+ PrefLib:String;
+ LastAuto:LongInt;
+ DocList,CurDoc:Pointer;
  AddMode:Boolean;
  PivotMode:Integer;
  { annuler / retablir : piles chainees }
@@ -441,7 +470,7 @@ Var
  Clip:PPiece;
  ClipN:Integer;
  { vues }
- Views:Array[0..MAXVIEW-1] Of TView;
+ Views:TViewArr;
  ViewCount,ActiveView:Integer;
  Tool:Integer;
  GridOn,EdgesOn,WireOn:Boolean;
@@ -520,10 +549,50 @@ Begin
  PadR:=R;
 End;
 
-{ Convertit les sequences \e \g \a ... en caracteres accentues (page 437) }
-Function Fx(Const S:String):String;
-Var I:Integer; R:String; C:Char;
+Type
+ PLng=^TLng;
+ TLng=Record
+  K,V:String[100];
+  Next:PLng;
+ End;
+
+Var
+ LngHead:PLng;
+ Lang:Integer;
+
+Function IsLet(C:Char):Boolean;
 Begin
+ IsLet:=((C>='A')And(C<='Z'))Or((C>='a')And(C<='z'))Or(C='\');
+End;
+
+{ Traduction par fragments (dictionnaire LANG\EN.LNG, cles les plus longues d'abord) }
+Function TrLang(Const S:String):String;
+Var I,L:Integer; R:String; P:PLng; Hit:Boolean;
+Begin
+ R:=''; I:=1;
+ While I<=Length(S) Do Begin
+  Hit:=False;
+  P:=LngHead;
+  While(P<>Nil)And Not Hit Do Begin
+   L:=Length(P^.K);
+   If(L>0)And(I+L-1<=Length(S))And(Copy(S,I,L)=P^.K)Then Begin
+    If(Not(IsLet(P^.K[1])And(I>1)And IsLet(S[I-1])))
+      And(Not(IsLet(P^.K[L])And(I+L<=Length(S))And IsLet(S[I+L])))Then Begin
+     R:=R+P^.V; Inc(I,L); Hit:=True;
+    End;
+   End;
+   If Not Hit Then P:=P^.Next;
+  End;
+  If Not Hit Then Begin R:=R+S[I]; Inc(I); End;
+ End;
+ TrLang:=R;
+End;
+
+{ Convertit les sequences \e \g \a ... en caracteres accentues (page 437) }
+Function Fx(Const S0:String):String;
+Var I:Integer; R:String; C:Char; S:String;
+Begin
+ If(Lang=1)And(LngHead<>Nil)Then S:=TrLang(S0) Else S:=S0;
  R:=''; I:=1;
  While I<=Length(S) Do Begin
   If(S[I]='\')And(I<Length(S))Then Begin
@@ -3095,6 +3164,16 @@ Begin
  If BoxIsEmpty(Mn,Mx)Then GroundY:=0 Else GroundY:=Mx.Y;
 End;
 
+Procedure GridCol(K:Integer;Var C:Integer);
+Begin
+ Case BgIdx Of
+  1:If K Mod 200=0 Then C:=0 Else C:=8;
+  2:If K Mod 200=0 Then C:=15 Else C:=7;
+  3:If K Mod 200=0 Then C:=7 Else C:=8;
+ Else If K Mod 200=0 Then C:=8 Else C:=7;
+ End;
+End;
+
 Procedure DrawGrid;
 Var Mn,Mx:TVec; I:TMat; X0,X1,Z0,Z1,K:Integer; A,B:TVec; C:Integer;
 Begin
@@ -3112,14 +3191,14 @@ Begin
  K:=X0;
  While K<=X1 Do Begin
   VSet(A,K,GroundY,Z0); VSet(B,K,GroundY,Z1);
-  If K Mod 200=0 Then C:=8 Else C:=7;
+  GridCol(K,C);
   Line3(A,B,C);
   Inc(K,20);
  End;
  K:=Z0;
  While K<=Z1 Do Begin
   VSet(A,X0,GroundY,K); VSet(B,X1,GroundY,K);
-  If K Mod 200=0 Then C:=8 Else C:=7;
+  GridCol(K,C);
   Line3(A,B,C);
   Inc(K,20);
  End;
@@ -3189,6 +3268,11 @@ End;
 
 Procedure DrawEditGizmo(Var V:TView); Forward;
 
+Function BgColSel:Integer;
+Begin
+ Case BgIdx Of 1:BgColSel:=7; 2:BgColSel:=8; 3:BgColSel:=0; Else BgColSel:=15; End;
+End;
+
 { Dessine une vue (rectangle ecran de la vue) }
 Procedure RenderView(Var V:TView;Active:Boolean;WithGhost:Boolean);
 Var W,H:Integer;
@@ -3197,7 +3281,7 @@ Begin
  If(W<8)Or(H<8)Then Exit;
  If CacheCount>CACHE_MAX Then FlushCache;
  SetViewPort(V.X1,V.Y1,V.X2,V.Y2,True);
- SetFillStyle(SolidFill,15);
+ SetFillStyle(SolidFill,BgColSel);
  Bar(0,0,W-1,H-1);
  SetupCamera(V);
  ComputeGround;
@@ -3548,7 +3632,7 @@ Begin
  BindAdd(Ord('.'),CM_STEP_NEXT); BindAdd(Ord(','),CM_STEP_PREV); BindAdd(Ord('['),CM_STEP_FIRST);
  BindAdd(Ord(']'),CM_STEP_LAST); BindAdd(Ord('m'),CM_SUB_MAIN);
  BindAdd(Ord('k'),CM_KEY_ADD); BindAdd(Ord('l'),CM_KEY_PLAY);
- BindAdd(256+59,CM_HELP); BindAdd(256+63,CM_PN_PARTS);
+ BindAdd(256+59,CM_HELP); BindAdd(256+64,CM_NEXTDOC);
 End;
 
 Procedure MC(M,I,Cmd:Integer;Const Cap:String);
@@ -3584,7 +3668,7 @@ Begin
    Menus[I].Items[J].Separator:=False;
   End;
  End;
- Menus[M_FILE].Title:='Fichier';
+ Menus[M_FILE].Title:=Fx('Fichier');
  MC(M_FILE,0,CM_NEW,'Nouveau');
  MC(M_FILE,1,CM_OPEN,'Ouvrir...');
  MC(M_FILE,2,CM_SAVE,'Enregistrer');
@@ -3605,7 +3689,8 @@ Begin
  MC(M_FILE,17,CM_REINDEX,'R\eindexer la biblioth\gque');
  MC(M_FILE,18,0,'-');
  MC(M_FILE,19,CM_DOCS,'Documents ouverts...');
- MC(M_FILE,20,CM_QUIT,'Quitter');
+ MC(M_FILE,20,CM_CLOSEDOC,'Fermer le document');
+ MC(M_FILE,21,CM_QUIT,'Quitter');
 
  Menus[M_EDIT].Title:=Fx('\Edition');
  MC(M_EDIT,0,CM_UNDO,'Annuler');
@@ -3623,7 +3708,7 @@ Begin
  MC(M_EDIT,12,CM_SELPART,'M\eme pi\ece');
  MC(M_EDIT,13,CM_ADDMODE,'Mode ajout \a la s\election');
 
- Menus[M_VIEW].Title:='Affichage';
+ Menus[M_VIEW].Title:=Fx('Affichage');
  MC(M_VIEW,0,CM_VIEWS,'Une vue / quatre vues');
  MC(M_VIEW,1,CM_PERSP,'Perspective / ortho');
  MC(M_VIEW,2,0,'-');
@@ -3673,7 +3758,7 @@ Begin
  MC(M_PIECE,21,CM_LOCK,'Verrouiller');
  MC(M_PIECE,22,CM_UNLOCK,'D\everrouiller');
 
- Menus[M_XFORM].Title:='Transf.';
+ Menus[M_XFORM].Title:=Fx('Transf.');
  MC(M_XFORM,0,CM_AL_L,'Aligner \a gauche');
  MC(M_XFORM,1,CM_AL_R,'Aligner \a droite');
  MC(M_XFORM,2,CM_AL_F,'Aligner devant');
@@ -3705,7 +3790,7 @@ Begin
  MC(M_STEP,6,CM_STEP_DEL,'Supprimer l''\etape');
  MC(M_STEP,7,CM_STEP_SEL,'S\election vers \etape courante');
 
- Menus[M_SUB].Title:='Sous-mod.';
+ Menus[M_SUB].Title:=Fx('Sous-mod.');
  MC(M_SUB,0,CM_SUB_NEW,'Nouveau sous-mod\gle...');
  MC(M_SUB,1,CM_SUB_FROMSEL,'Cr\eer depuis la s\election...');
  MC(M_SUB,2,CM_SUB_INS,'Ins\erer un sous-mod\gle...');
@@ -3726,7 +3811,7 @@ Begin
  MC(M_CAM,8,CM_STEPS_PLAY,'Lire les \etapes');
  MC(M_CAM,9,CM_ANIM_EXP,'Exporter l''animation...');
 
- Menus[M_HELP].Title:='Aide';
+ Menus[M_HELP].Title:=Fx('Aide');
  MC(M_HELP,0,CM_HELP,'Raccourcis clavier');
  MC(M_HELP,1,CM_KEYS,'Personnaliser les raccourcis...');
  MC(M_HELP,2,CM_ABOUT,'A propos de LEOCAD');
@@ -4112,7 +4197,39 @@ End;
 { ====================================================================== }
 
 Const
- CAT_ROWS=5; PART_ROWS=7;
+ CAT_ROWS=5;
+
+Type
+ PThumb=^TThumb;
+ TThumb=Record
+  Name:String[20];
+  Col:LongInt;
+  Img:Pointer;
+  Sz:LongInt;
+  Next:PThumb;
+ End;
+
+Var
+ ThumbHead:PThumb;
+ ThumbN:Integer;
+
+Function PRows:Integer;
+Begin
+ If ListThumbs Then PRows:=4 Else PRows:=7;
+End;
+
+Function PRowH:Integer;
+Begin
+ If ListThumbs Then PRowH:=22 Else PRowH:=12;
+End;
+
+Procedure FlushThumbs;
+Var T,N:PThumb;
+Begin
+ T:=ThumbHead;
+ While T<>Nil Do Begin N:=T^.Next; If T^.Img<>Nil Then FreeMem(T^.Img,T^.Sz); Dispose(T); T:=N; End;
+ ThumbHead:=Nil; ThumbN:=0;
+End;
 
 Function CatY:Integer;
 Begin
@@ -4170,6 +4287,39 @@ Begin
  Bevel(X1,Y1,X2,Y2,False);
 End;
 
+{ Miniature mise en cache (GetImage) : evite de rendre la piece a chaque affichage }
+Procedure DrawThumbCached(X,Y:Integer;Const Nm:String;Col:LongInt);
+Var T,P:PThumb; Sz:LongInt; U:String;
+Begin
+ U:=UpStr(Nm);
+ T:=ThumbHead;
+ While T<>Nil Do Begin
+  If(T^.Col=Col)And(T^.Name=U)Then Begin
+   If T^.Img<>Nil Then PutImage(X,Y,T^.Img^,NormalPut);
+   Exit;
+  End;
+  T:=T^.Next;
+ End;
+ DrawThumb(X,Y,X+29,Y+19,Nm,Col);
+ Sz:=ImageSize(X,Y,X+29,Y+19);
+ If(Sz<=0)Or(MaxAvail<Sz+30000)Then Exit;
+ If ThumbN>=70 Then Begin
+  { retire la plus ancienne (fin de liste) }
+  P:=ThumbHead;
+  If P<>Nil Then Begin
+   If P^.Next=Nil Then Begin FreeMem(P^.Img,P^.Sz); Dispose(P); ThumbHead:=Nil; End
+   Else Begin
+    While P^.Next^.Next<>Nil Do P:=P^.Next;
+    FreeMem(P^.Next^.Img,P^.Next^.Sz); Dispose(P^.Next); P^.Next:=Nil;
+   End;
+   Dec(ThumbN);
+  End;
+ End;
+ New(T); T^.Name:=U; T^.Col:=Col; T^.Sz:=Sz; GetMem(T^.Img,Sz);
+ GetImage(X,Y,X+29,Y+19,T^.Img^);
+ T^.Next:=ThumbHead; ThumbHead:=T; Inc(ThumbN);
+End;
+
 Procedure DrawPartsPanel;
 Var I,Y,K,X0,X1:Integer; S:String; C:PCat; F:PFil;
 Begin
@@ -4187,27 +4337,36 @@ Begin
  End;
  DrawVScroll(X1-11,CatY,CAT_ROWS*12+2,CatTop,CatN,CAT_ROWS);
  { recherche }
- TxtOut(X0+1,SearchY+3,'Rech.',UI_DK);
+ TxtF(X0+1,SearchY+3,'Rech.',UI_DK);
  Sunken(X0+44,SearchY,X1,SearchY+13,15);
  S:=SearchStr;
  If SearchEdit Then S:=S+'_';
  TxtOut(X0+48,SearchY+3,Copy(S,1,18),UI_DK);
  { liste des pieces : parcours de la liste chainee }
- Sunken(X0,ListY,X1-12,ListY+PART_ROWS*12+1,15);
+ Sunken(X0,ListY,X1-12,ListY+PRows*PRowH+1,15);
  F:=FilHead;
  K:=PartTop;
  While(F<>Nil)And(K>0)Do Begin F:=F^.Next; Dec(K); End;
- For I:=0 To PART_ROWS-1 Do Begin
+ For I:=0 To PRows-1 Do Begin
   If F<>Nil Then Begin
    K:=PartTop+I;
-   Y:=ListY+1+I*12;
-   S:=Copy(Compact(F^.C^.Desc),1,21);
-   If K=PartSel Then Begin Box(X0+1,Y,X1-13,Y+11,UI_SEL); TxtOut(X0+4,Y+2,S,15); End
-   Else TxtOut(X0+4,Y+2,S,UI_DK);
+   Y:=ListY+1+I*PRowH;
+   S:=Compact(F^.C^.Desc);
+   If ListThumbs Then Begin
+    If K=PartSel Then Box(X0+1,Y,X1-13,Y+PRowH-1,UI_SEL) Else Box(X0+1,Y,X1-13,Y+PRowH-1,15);
+    DrawThumbCached(X0+2,Y+1,F^.C^.FileN,CurColor);
+    If K=PartSel Then Begin TxtOut(X0+36,Y+3,Copy(S,1,17),15); TxtOut(X0+36,Y+13,Copy(F^.C^.FileN,1,17),15); End
+    Else Begin TxtOut(X0+36,Y+3,Copy(S,1,17),UI_DK); TxtOut(X0+36,Y+13,Copy(F^.C^.FileN,1,17),UI_SH); End;
+   End
+    Else Begin
+     S:=Copy(S,1,21);
+     If K=PartSel Then Begin Box(X0+1,Y,X1-13,Y+11,UI_SEL); TxtOut(X0+4,Y+2,S,15); End
+     Else TxtOut(X0+4,Y+2,S,UI_DK);
+    End;
    F:=F^.Next;
   End;
  End;
- DrawVScroll(X1-11,ListY,PART_ROWS*12+2,PartTop,FilN,PART_ROWS);
+ DrawVScroll(X1-11,ListY,PRows*PRowH+2,PartTop,FilN,PRows);
  { apercu }
  If CurPart<>'' Then Begin
   DrawThumb(X0,PrevY,X0+66,PanY2-3,CurPart,CurColor);
@@ -4229,7 +4388,7 @@ End;
 { ====================================================================== }
 
 Function PropRow(F:Integer):Integer;
-Const R:Array[0..8] Of Integer=(1,2,3,5,6,7,9,11,12);
+Const R:Array[0..9] Of Integer=(1,2,3,5,6,7,9,10,12,13);
 Begin
  PropRow:=R[F];
 End;
@@ -4248,41 +4407,53 @@ Begin
   4:PropValue:=FmtNum(Round(RY));
   5:PropValue:=FmtNum(Round(RZ));
   6:PropValue:=IntStr(Q^.Step);
-  7:PropValue:=ColNameOf(Q^.Col);
-  8:PropValue:=UpStr(Q^.Name);
+  7:If Q^.HideStep=0 Then PropValue:='0' Else PropValue:=IntStr(Q^.HideStep);
+  8:PropValue:=ColNameOf(Q^.Col);
+  9:PropValue:=UpStr(Q^.Name);
  End;
 End;
 
 Procedure DrawPropsPanel;
-Var Q:PPiece; I,Y:Integer; S:String;
+Var Q:PPiece; I,Y,R:Integer; S:String;
  Procedure Head(R:Integer;Const T:String);
  Begin
-  TxtF(DockX+6,PanY1+6+R*14,T,UI_SEL);
-  SetColor(UI_SH); Line(DockX+6+TextWidth(Fx(T))+4,PanY1+10+R*14,ScreenW-6,PanY1+10+R*14);
+  TxtF(DockX+6,PanY1+4+R*12,T,UI_SEL);
+  SetColor(UI_SH); Line(DockX+6+TextWidth(Fx(T))+4,PanY1+8+R*12,ScreenW-6,PanY1+8+R*12);
  End;
 Begin
  Q:=FirstSel;
- Head(0,'Position'); Head(4,'Rotation'); Head(8,'\Etapes visibles'); Head(10,'Apparence');
- For I:=0 To 8 Do Begin
-  Y:=PanY1+4+PropRow(I)*14;
+ Head(0,'Position'); Head(4,'Rotation'); Head(8,'\Etapes visibles'); Head(11,'Apparence'); Head(14,'Matrice');
+ For I:=0 To 9 Do Begin
+  Y:=PanY1+2+PropRow(I)*12;
   Case I Of
    0,3:TxtOut(DockX+14,Y+3,'X',UI_DK);
    1,4:TxtOut(DockX+14,Y+3,'Y',UI_DK);
    2,5:TxtOut(DockX+14,Y+3,'Z',UI_DK);
    6:TxtF(DockX+14,Y+3,'Afficher',UI_DK);
-   7:TxtF(DockX+14,Y+3,'Couleur',UI_DK);
-   8:TxtF(DockX+14,Y+3,'Pi\ece',UI_DK);
+   7:TxtF(DockX+14,Y+3,'Masquer',UI_DK);
+   8:TxtF(DockX+14,Y+3,'Couleur',UI_DK);
+   9:TxtF(DockX+14,Y+3,'Pi\ece',UI_DK);
   End;
-  Sunken(DockX+76,Y,ScreenW-6,Y+12,15);
+  Sunken(DockX+76,Y,ScreenW-6,Y+11,15);
   If(I=PropField)Then S:=PropText+'_' Else S:=PropValue(I,Q);
-  If I=7 Then Begin
-   If Q<>Nil Then Box(DockX+79,Y+2,DockX+87,Y+10,UICode(UI_SLOTS-1,Q^.Col));
-   TxtOut(DockX+92,Y+3,Copy(S,1,14),UI_DK);
+  If I=8 Then Begin
+   If Q<>Nil Then Box(DockX+79,Y+2,DockX+87,Y+8,UICode(UI_SLOTS-1,Q^.Col));
+   TxtOut(DockX+92,Y+2,Copy(S,1,14),UI_DK);
   End
-   Else TxtOut(DockX+80,Y+3,Copy(S,1,15),UI_DK);
+   Else TxtOut(DockX+80,Y+2,Copy(S,1,15),UI_DK);
  End;
- If Q=Nil Then TxtF(DockX+8,PanY1+4+14*14,'(aucune s\election)',UI_SH)
- Else If SelCount>1 Then TxtOut(DockX+8,PanY1+4+14*14,IntStr(SelCount)+Fx(' pi\eces s\electionn\ees'),UI_SH);
+ If Q<>Nil Then
+  For R:=0 To 2 Do Begin
+   Y:=PanY1+2+(15+R)*12;
+   S:=RStr(Q^.M.R[R,0],2)+' '+RStr(Q^.M.R[R,1],2)+' '+RStr(Q^.M.R[R,2],2);
+   TxtOut(DockX+10,Y+2,Copy(S,1,23),UI_SH);
+  End;
+ If Q=Nil Then TxtF(DockX+8,PanY1+2+18*12+2,'(aucune s\election)',UI_SH)
+ Else Begin
+  If SelCount>1 Then TxtOut(DockX+8,PanY1+2+18*12+2,IntStr(SelCount)+Fx(' pi\eces s\electionn\ees'),UI_SH);
+  If Q^.Group<>0 Then TxtOut(DockX+8,PanY1+2+19*12+2,Copy(GroupName(Q^.Group),1,22),UI_SH);
+  If Q^.Locked Then TxtF(DockX+8,PanY1+2+20*12+2,'(verrouill\e)',UI_SH);
+ End;
 End;
 
 { ====================================================================== }
@@ -5019,14 +5190,16 @@ Begin
  Ln[3]:=Fx('PgHaut / PgBas : monter / descendre de 8 (plaque)');
  Ln[4]:=Fx('Debut / Fin : monter / descendre de 24 (brique)');
  Ln[5]:=Fx('x X y Y z Z : pivoter de 90 degr\es   -   Suppr : supprimer');
- Ln[6]:=Fx('Ctrl+C / X / V : copier, couper, coller   -   B : dupliquer');
+ Ln[6]:=Fx('Ctrl+Inser / X / V : copier, couper, coller   -   B : dupliquer');
  Ln[7]:=Fx('Ctrl+Z / Y : annuler, r\etablir   -   Ctrl+A : tout   -   Ctrl+D : rien');
  Ln[8]:=Fx('+ - : zoom   F : ajuster   0..6 : vues   Tab : vue suivante   V : 1/4 vues');
  Ln[9]:=Fx('P : perspective   G : grille   E : ar\etes   W : filaire   T : tenons');
  Ln[10]:=Fx('H : masquer   M : mod\gle principal   Echap : outil de s\election');
  Ln[11]:=Fx(', . : \etape pr\ec\edente / suivante   [ ] : premi\ere / derni\ere');
  Ln[12]:=Fx('F2 F3 F4 : panneaux   Inser : poser la pi\ece   F10 : quitter');
- N:=13;
+ Ln[13]:=Fx('A : mode ajout   Ctrl+G / U : grouper   Ctrl+L / K : verrouiller   F6 : document');
+ Ln[14]:=Fx('Poign\ees : fl\eche = d\eplacer, carr\e = pivoter (15 degr\es)');
+ N:=15;
  W:=240;
  For I:=0 To N-1 Do If Length(Ln[I])*8+30>W Then W:=Length(Ln[I])*8+30;
  If W>ScreenW-8 Then W:=ScreenW-8;
@@ -6380,16 +6553,17 @@ Function RenderToImg(Var V:TView;W,H,AA:Integer;Floor,Shadow:Boolean;Var Out:TIm
 Var
  VV:TView; BW,BH,X,Y,I,J,A,C,SR,SG,SB:Integer;
  Buf:TImg; ZR:PRowTab; Z:PZRow; P:PHQ; X0,Y0,Z0,X1,Y1,Z1,X2,Y2,Z2,X3,Y3,Z3:Real;
- Th:Integer; Pass:Integer; PS,PD:PByteRow; N:Integer;
+ Th:Integer; Pass:Integer; PS,PD:PByteRow; N:Integer; BgV:Byte;
 Begin
  RenderToImg:=False;
  If AA<1 Then AA:=1; If AA>4 Then AA:=4;
  While(W*AA>4090)Or(H*AA>4090)Do Dec(AA);
  If AA<1 Then Exit;
  BW:=W*AA; BH:=H*AA;
- If Not ImgNew(Buf,BW,BH,255,255,255)Then Exit;
+ Case BgIdx Of 1:BgV:=170; 2:BgV:=85; 3:BgV:=0; Else BgV:=255; End;
+ If Not ImgNew(Buf,BW,BH,BgV,BgV,BgV)Then Exit;
  Out.Rows:=Nil;
- If Not ImgNew(Out,W,H,255,255,255)Then Begin ImgFree(Buf); Exit; End;
+ If Not ImgNew(Out,W,H,BgV,BgV,BgV)Then Begin ImgFree(Buf); Exit; End;
  GetMem(ZR,SizeOf(TRowTab));
  FillChar(ZR^,SizeOf(TRowTab),0);
  For Y:=0 To BH-1 Do Begin
@@ -7663,6 +7837,525 @@ Begin
 End;
 
 { ====================================================================== }
+{ Preferences (LEOCAD.INI), raccourcis (LEOCAD.KEY), sauvegarde auto,    }
+{ documents multiples                                                     }
+{ ====================================================================== }
+
+Procedure FreeLang;
+Var P,N:PLng;
+Begin
+ P:=LngHead;
+ While P<>Nil Do Begin N:=P^.Next; Dispose(P); P:=N; End;
+ LngHead:=Nil;
+End;
+
+{ Charge le dictionnaire francais -> anglais, trie par longueur de cle decroissante }
+Procedure LoadLang;
+Var F:Text; L,Pth:String; P,I:Integer; E,T,Q:PLng;
+Begin
+ FreeLang;
+ If Lang<>1 Then Exit;
+ Pth:=LibDir+'..'+PathSep+'LANG'+PathSep+'EN.LNG';
+ If Not FileOK(Pth)Then Pth:=BaseDir+'EN.LNG';
+ {$I-}
+ Assign(F,Pth); Reset(F);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ While Not Eof(F) Do Begin
+  {$I-}ReadLn(F,L);{$I+}
+  If IOResult<>0 Then L:='';
+  While(Length(L)>0)And((L[Length(L)]=#13)Or(L[Length(L)]=#10))Do Delete(L,Length(L),1);
+  P:=Pos('~~',L);
+  If P>1 Then Begin
+   New(E); E^.K:=Copy(L,1,P-1); E^.V:=Copy(L,P+2,100); E^.Next:=Nil;
+   If(LngHead=Nil)Or(Length(E^.K)>Length(LngHead^.K))Then Begin E^.Next:=LngHead; LngHead:=E; End
+   Else Begin
+    Q:=LngHead;
+    While(Q^.Next<>Nil)And(Length(Q^.Next^.K)>=Length(E^.K))Do Q:=Q^.Next;
+    E^.Next:=Q^.Next; Q^.Next:=E;
+   End;
+  End;
+ End;
+ Close(F);
+End;
+
+Function BgCol:Integer;
+Begin
+ Case BgIdx Of 1:BgCol:=7; 2:BgCol:=8; 3:BgCol:=0; Else BgCol:=15; End;
+End;
+
+Procedure SavePrefs;
+Var F:Text;
+Begin
+ {$I-}
+ Assign(F,BaseDir+'LEOCAD.INI'); Rewrite(F);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ WriteLn(F,'Grid=',Ord(GridOn));
+ WriteLn(F,'Edges=',Ord(EdgesOn));
+ WriteLn(F,'Studs=',StudMode);
+ WriteLn(F,'Background=',BgIdx);
+ WriteLn(F,'Thumbs=',Ord(ListThumbs));
+ WriteLn(F,'AutoSave=',AutoMin);
+ WriteLn(F,'Language=',Lang);
+ WriteLn(F,'Library=',PrefLib);
+ Close(F);
+End;
+
+Procedure LoadPrefs;
+Var F:Text; L,K,V:String; P,N,C:Integer;
+Begin
+ {$I-}
+ Assign(F,BaseDir+'LEOCAD.INI'); Reset(F);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ While Not Eof(F) Do Begin
+  {$I-}ReadLn(F,L);{$I+}
+  If IOResult<>0 Then L:='';
+  P:=Pos('=',L);
+  If P>1 Then Begin
+   K:=UpStr(TrimStr(Copy(L,1,P-1))); V:=TrimStr(Copy(L,P+1,255));
+   Val(V,N,C);
+   If K='GRID' Then GridOn:=N<>0
+   Else If K='EDGES' Then EdgesOn:=N<>0
+   Else If K='STUDS' Then StudMode:=N Mod 4
+   Else If K='BACKGROUND' Then BgIdx:=N Mod 4
+   Else If K='THUMBS' Then ListThumbs:=N<>0
+   Else If K='AUTOSAVE' Then AutoMin:=N
+   Else If K='LANGUAGE' Then Lang:=N Mod 2
+   Else If K='LIBRARY' Then PrefLib:=V;
+  End;
+ End;
+ Close(F);
+End;
+
+Procedure SaveKeys;
+Var F:Text; B:PBind;
+Begin
+ {$I-}
+ Assign(F,BaseDir+'LEOCAD.KEY'); Rewrite(F);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ B:=BindHead;
+ While B<>Nil Do Begin WriteLn(F,B^.Key,'=',B^.Cmd); B:=B^.Next; End;
+ Close(F);
+End;
+
+Procedure LoadKeys;
+Var F:Text; L:String; P,K,C,E1,E2:Integer;
+Begin
+ {$I-}
+ Assign(F,BaseDir+'LEOCAD.KEY'); Reset(F);
+ {$I+}
+ If IOResult<>0 Then Exit;
+ BindClear;
+ While Not Eof(F) Do Begin
+  {$I-}ReadLn(F,L);{$I+}
+  If IOResult<>0 Then L:='';
+  P:=Pos('=',L);
+  If P>1 Then Begin
+   Val(Copy(L,1,P-1),K,E1); Val(TrimStr(Copy(L,P+1,20)),C,E2);
+   If(E1=0)And(E2=0)And(C<>0)Then BindAdd(K,C);
+  End;
+ End;
+ Close(F);
+End;
+
+Const PREF_ROWS=8;
+
+Procedure PrefsDialog;
+Var
+ W,H,X,Y,I,Sv2:Integer; Sv:TSave; Done,OK:Boolean; Kc:Char;
+ G,E,Th:Boolean; St,Bg,Au,Lg:Integer; Lib:String;
+ Function AutoName:String;
+ Begin
+  Case Au Of 0:AutoName:=Fx('Aucune'); 1:AutoName:='1 min'; 2:AutoName:='2 min'; 3:AutoName:='5 min'; Else AutoName:='10 min'; End;
+ End;
+ Procedure Paint;
+ Var J:Integer; S:String;
+  Procedure Chk(R:Integer;V:Boolean;Const T:String);
+  Begin
+   Sunken(X+14,Y+26+R*22,X+26,Y+38+R*22,15);
+   If V Then Begin SetColor(UI_DK); Line(X+16,Y+32+R*22,X+19,Y+36+R*22); Line(X+19,Y+36+R*22,X+24,Y+28+R*22); End;
+   TxtF(X+34,Y+29+R*22,T,UI_DK);
+  End;
+  Procedure Sel(R:Integer;Const T,V:String);
+  Begin
+   TxtF(X+14,Y+29+R*22,T,UI_DK);
+   DrawBtn(X+W-190,Y+24+R*22,176,18,V,False);
+  End;
+ Begin
+  MouseOff;
+  DrawWin(X,Y,W,H,'Pr\ef\erences');
+  Chk(0,G,'Afficher la grille');
+  Chk(1,E,'Afficher les ar\etes');
+  Case St Of 0:S:='Automatique'; 1:S:='Complets'; 2:S:='Simplifi\es'; Else S:='Masqu\es'; End;
+  Sel(2,'D\etail des tenons',S);
+  Case Bg Of 0:S:='Blanc'; 1:S:='Gris clair'; 2:S:='Gris fonc\e'; Else S:='Noir'; End;
+  Sel(3,'Couleur de fond',S);
+  Chk(4,Th,'Miniatures dans la liste des pi\eces');
+  Sel(5,'Sauvegarde automatique',AutoName);
+  If Lg=0 Then S:='Fran\cais' Else S:='English';
+  Sel(6,'Langue',S);
+  TxtF(X+14,Y+29+7*22,'Biblioth\gque LDraw',UI_DK);
+  If Lib='' Then S:='(par d\efaut)' Else S:=Lib;
+  DrawBtn(X+W-190,Y+24+7*22,176,18,Copy(S,1,20),False);
+  DrawBtn(X+W Div 2-76,Y+H-28,70,20,'OK',False);
+  DrawBtn(X+W Div 2+6,Y+H-28,70,20,'Annuler',False);
+  MouseOn;
+ End;
+Begin
+ W:=430; H:=PREF_ROWS*22+66;
+ X:=(ScreenW-W) Div 2; Y:=(ScreenH-H) Div 2;
+ G:=GridOn; E:=EdgesOn; Th:=ListThumbs; St:=StudMode; Bg:=BgIdx; Lg:=Lang; Lib:=PrefLib;
+ Case AutoMin Of 0:Au:=0; 1:Au:=1; 2:Au:=2; 5:Au:=3; Else Au:=4; End;
+ MouseOff;
+ SaveRect(Sv,X,Y,X+W,Y+H);
+ MouseOn;
+ Paint;
+ WaitMouseUp;
+ Done:=False; OK:=False;
+ Repeat
+  PollMouse;
+  If KeyPressed Then Begin
+   Kc:=ReadKey;
+   If Kc=#27 Then Done:=True;
+   If Kc=#13 Then Begin OK:=True; Done:=True; End;
+  End;
+  If((MB And 1)<>0)And((OldMB And 1)=0)Then Begin
+   If InRect(MX,MY,X+W Div 2-76,Y+H-28,70,20)Then Begin OK:=True; Done:=True; End
+   Else If InRect(MX,MY,X+W Div 2+6,Y+H-28,70,20)Then Done:=True
+   Else Begin
+    For I:=0 To PREF_ROWS-1 Do
+     If InRect(MX,MY,X+10,Y+24+I*22,W-20,20)Then Begin
+      Case I Of
+       0:G:=Not G;
+       1:E:=Not E;
+       2:St:=(St+1) Mod 4;
+       3:Bg:=(Bg+1) Mod 4;
+       4:Th:=Not Th;
+       5:Au:=(Au+1) Mod 5;
+       6:Lg:=(Lg+1) Mod 2;
+       7:Begin
+        WaitMouseUp;
+        If InputBox('Biblioth\gque LDraw','Dossier racine (vide = d\efaut) :',Lib,60)Then ;
+        Sv2:=0;
+       End;
+      End;
+      Paint;
+     End;
+   End;
+  End;
+  OldMB:=MB;
+  Delay(10);
+ Until Done;
+ WaitMouseUp;
+ MouseOff;
+ If Not RestoreRect(Sv)Then FullRedraw:=True;
+ MouseOn;
+ If OK Then Begin
+  GridOn:=G; EdgesOn:=E; ListThumbs:=Th; StudMode:=St; BgIdx:=Bg; PrefLib:=Lib;
+  Case Au Of 0:AutoMin:=0; 1:AutoMin:=1; 2:AutoMin:=2; 3:AutoMin:=5; Else AutoMin:=10; End;
+  If Lg<>Lang Then Begin Lang:=Lg; LoadLang; InitMenus; End;
+  SavePrefs;
+  FullRedraw:=True;
+ End;
+End;
+
+{ ---------------------------- Raccourcis ---------------------------------- }
+
+Function CmdRow(N:Integer;Var Cmd:Integer;Var Cap:String):Boolean;
+Var M,I:Integer;
+Begin
+ CmdRow:=False;
+ For M:=0 To MENU_COUNT-1 Do
+  For I:=0 To Menus[M].ItemCount-1 Do
+   If Menus[M].Items[I].Cmd<>0 Then Begin
+    If N=0 Then Begin
+     Cmd:=Menus[M].Items[I].Cmd;
+     Cap:=Copy(Menus[M].Title+' > '+Menus[M].Items[I].Caption,1,40);
+     CmdRow:=True;
+     Exit;
+    End;
+    Dec(N);
+   End;
+End;
+
+Function CmdCount:Integer;
+Var M,I,N:Integer;
+Begin
+ N:=0;
+ For M:=0 To MENU_COUNT-1 Do
+  For I:=0 To Menus[M].ItemCount-1 Do If Menus[M].Items[I].Cmd<>0 Then Inc(N);
+ CmdCount:=N;
+End;
+
+Procedure KeysDialog;
+Var
+ W,H,X,Y,Top,Sel,Rows,N,I:Integer; Sv:TSave; Done,Ext:Boolean; K:Char; Cmd,C2:Integer; Cap:String;
+ Procedure Paint;
+ Var J,R:Integer;
+ Begin
+  MouseOff;
+  DrawWin(X,Y,W,H,'Raccourcis clavier');
+  Sunken(X+8,Y+22,X+W-22,Y+24+Rows*12,15);
+  For J:=0 To Rows-1 Do Begin
+   R:=Top+J;
+   If R<N Then Begin
+    If CmdRow(R,Cmd,Cap)Then Begin
+     If R=Sel Then Begin Box(X+9,Y+24+J*12,X+W-23,Y+24+J*12+11,UI_SEL); SetColor(15); End Else SetColor(UI_DK);
+     OutTextXY(X+12,Y+26+J*12,Cap);
+     OutTextXY(X+W-110,Y+26+J*12,KeyName(BindKeyOf(Cmd)));
+    End;
+   End;
+  End;
+  DrawVScroll(X+W-21,Y+22,Rows*12+3,Top,N,Rows);
+  DrawBtn(X+8,Y+H-28,120,20,'D\efinir la touche',False);
+  DrawBtn(X+134,Y+H-28,80,20,'Retirer',False);
+  DrawBtn(X+220,Y+H-28,110,20,'Par d\efaut',False);
+  DrawBtn(X+W-90,Y+H-28,70,20,'Fermer',False);
+  MouseOn;
+ End;
+ Procedure Capture;
+ Var E2:Boolean; C:Char; Key:Integer;
+ Begin
+  If Not CmdRow(Sel,Cmd,Cap)Then Exit;
+  MouseOff;
+  Box(X+8,Y+H-28,X+W-9,Y+H-9,UI_BG);
+  TxtF(X+10,Y+H-24,'Appuyer sur la nouvelle touche (Echap = annuler)',UI_DK);
+  MouseOn;
+  C:=ReadKeyEx(E2);
+  If(Not E2)And(C=#27)Then Begin Paint; Exit; End;
+  If E2 Then Key:=256+Ord(C) Else Key:=Ord(C);
+  BindSet(Key,Cmd);
+  UpdateShortcuts;
+  SaveKeys;
+  Paint;
+ End;
+Begin
+ N:=CmdCount;
+ Rows:=18;
+ W:=480; H:=Rows*12+62;
+ X:=(ScreenW-W) Div 2; Y:=(ScreenH-H) Div 2;
+ MouseOff;
+ SaveRect(Sv,X,Y,X+W,Y+H);
+ MouseOn;
+ Top:=0; Sel:=0;
+ Paint;
+ WaitMouseUp;
+ Done:=False;
+ Repeat
+  PollMouse;
+  If KeyPressed Then Begin
+   K:=ReadKeyEx(Ext);
+   If Ext Then Begin
+    If(K=#72)And(Sel>0)Then Dec(Sel);
+    If(K=#80)And(Sel<N-1)Then Inc(Sel);
+    If Sel<Top Then Top:=Sel;
+    If Sel>=Top+Rows Then Top:=Sel-Rows+1;
+    Paint;
+   End
+    Else If K=#13 Then Capture
+    Else If K=#27 Then Done:=True;
+  End;
+  If((MB And 1)<>0)And((OldMB And 1)=0)Then Begin
+   If InRect(MX,MY,X+8,Y+H-28,120,20)Then Capture
+   Else If InRect(MX,MY,X+134,Y+H-28,80,20)Then Begin
+    If CmdRow(Sel,Cmd,Cap)Then Begin
+     I:=BindKeyOf(Cmd);
+     If I>=0 Then BindSet(I,0);
+     UpdateShortcuts; SaveKeys; Paint;
+    End;
+   End
+    Else If InRect(MX,MY,X+220,Y+H-28,110,20)Then Begin
+     InitKeys; UpdateShortcuts; SaveKeys; Paint;
+    End
+    Else If InRect(MX,MY,X+W-90,Y+H-28,70,20)Then Done:=True
+    Else If InRect(MX,MY,X+W-21,Y+22,12,Rows*12+3)Then Begin
+     Top:=VScrollClick(Y+22,Rows*12+3,Top,N,Rows,MY); Paint;
+    End
+    Else If InRect(MX,MY,X+9,Y+24,W-32,Rows*12)Then Begin
+     I:=Top+(MY-Y-24) Div 12;
+     If I<N Then Begin Sel:=I; Paint; End;
+    End;
+  End;
+  OldMB:=MB;
+  Delay(10);
+ Until Done;
+ WaitMouseUp;
+ MouseOff;
+ If Not RestoreRect(Sv)Then FullRedraw:=True;
+ MouseOn;
+End;
+
+{ ---------------------------- Sauvegarde automatique ---------------------- }
+
+Function AutoName:String;
+Begin
+ AutoName:=BaseDir+'LEOCAD.AUT';
+End;
+
+Procedure AutoSaveTick;
+Var Now,D:LongInt;
+Begin
+ If(AutoMin<=0)Or Not Modified Then Exit;
+ Now:=Ticks;
+ D:=Now-LastAuto;
+ If D<0 Then D:=D+8640000;
+ If D>=LongInt(AutoMin)*6000 Then Begin
+  LastAuto:=Now;
+  SaveDoc(AutoName);
+  SetMsg('Sauvegarde automatique');
+ End;
+End;
+
+Procedure AutoClear;
+Var F:File;
+Begin
+ {$I-}
+ Assign(F,AutoName); Erase(F);
+ {$I+}
+ If IOResult<>0 Then ;
+End;
+
+{ ---------------------------- Documents multiples ------------------------- }
+
+Type
+ PDoc=^TDoc;
+ TDoc=Record
+  Models:TModelArr;
+  ModelCount,CurModel:Integer;
+  DocFile:String;
+  Modified:Boolean;
+  UndoTop,RedoTop:PSnap;
+  UndoN,RedoN:Integer;
+  GroupHead:PGroup;
+  NextGroupId:LongInt;
+  CamHead:PCamera;
+  KeyHead:PKey;
+  Views:TViewArr;
+  ViewCount,ActiveView:Integer;
+  Next:PDoc;
+ End;
+
+Procedure StoreDoc(D:PDoc);
+Begin
+ D^.Models:=Models; D^.ModelCount:=ModelCount; D^.CurModel:=CurModel;
+ D^.DocFile:=DocFile; D^.Modified:=Modified;
+ D^.UndoTop:=UndoTop; D^.RedoTop:=RedoTop; D^.UndoN:=UndoN; D^.RedoN:=RedoN;
+ D^.GroupHead:=GroupHead; D^.NextGroupId:=NextGroupId; D^.CamHead:=CamHead; D^.KeyHead:=KeyHead;
+ D^.Views:=Views; D^.ViewCount:=ViewCount; D^.ActiveView:=ActiveView;
+End;
+
+Procedure RestoreDoc(D:PDoc);
+Begin
+ Models:=D^.Models; ModelCount:=D^.ModelCount; CurModel:=D^.CurModel;
+ DocFile:=D^.DocFile; Modified:=D^.Modified;
+ UndoTop:=D^.UndoTop; RedoTop:=D^.RedoTop; UndoN:=D^.UndoN; RedoN:=D^.RedoN;
+ GroupHead:=D^.GroupHead; NextGroupId:=D^.NextGroupId; CamHead:=D^.CamHead; KeyHead:=D^.KeyHead;
+ Views:=D^.Views; ViewCount:=D^.ViewCount; ActiveView:=D^.ActiveView;
+ Inc(ModEpoch);
+End;
+
+{ Vide les variables globales sans liberer (le document est range dans son enregistrement) }
+Procedure DetachGlobals;
+Var I:Integer;
+Begin
+ For I:=0 To MAXMOD-1 Do Begin
+  Models[I].First:=Nil; Models[I].Last:=Nil; Models[I].Count:=0; Models[I].Used:=False; Models[I].Name:='';
+ End;
+ ModelCount:=0; CurModel:=0; UndoTop:=Nil; RedoTop:=Nil; UndoN:=0; RedoN:=0;
+ GroupHead:=Nil; NextGroupId:=1; CamHead:=Nil; KeyHead:=Nil;
+End;
+
+Function DocCount:Integer;
+Var D:PDoc; N:Integer;
+Begin
+ N:=0; D:=PDoc(DocList);
+ While D<>Nil Do Begin Inc(N); D:=D^.Next; End;
+ DocCount:=N;
+End;
+
+Procedure InitDocs;
+Var D:PDoc;
+Begin
+ New(D); D^.Next:=Nil; DocList:=D; CurDoc:=D;
+End;
+
+Procedure SwitchDoc(D:PDoc);
+Begin
+ If(D=Nil)Or(D=PDoc(CurDoc))Then Exit;
+ StoreDoc(PDoc(CurDoc));
+ CurDoc:=D;
+ RestoreDoc(D);
+ ClearSel;
+ FitAllViews;
+ Touch; NeedTools:=True;
+End;
+
+Procedure NewDocWindow;
+Var D,T:PDoc;
+Begin
+ StoreDoc(PDoc(CurDoc));
+ New(D); D^.Next:=Nil;
+ T:=PDoc(DocList); While T^.Next<>Nil Do T:=T^.Next; T^.Next:=D;
+ CurDoc:=D;
+ DetachGlobals;
+ NewDocument;
+ InitViews;
+ ResetEditState;
+ FitAllViews;
+ Touch; NeedTools:=True;
+End;
+
+Procedure DocsDialog;
+Var N,Sel,I:Integer; D:PDoc; Nm:String;
+Begin
+ StoreDoc(PDoc(CurDoc));
+ N:=0; D:=PDoc(DocList);
+ While(D<>Nil)And(N<MAXMOD-1)Do Begin
+  Nm:=BaseOf(D^.DocFile);
+  If Nm='' Then Nm:='(sans titre)';
+  If D^.Modified Then Nm:=Nm+' *';
+  If D=PDoc(CurDoc)Then Nm:='> '+Nm;
+  ListItems[N]:=Copy(Nm,1,40); Inc(N); D:=D^.Next;
+ End;
+ ListItems[N]:='+ Nouveau document'; Inc(N);
+ Sel:=0;
+ If Not ListDialog('Documents ouverts',N,Sel)Then Exit;
+ If Sel=N-1 Then Begin NewDocWindow; Exit; End;
+ D:=PDoc(DocList); I:=Sel;
+ While(D<>Nil)And(I>0)Do Begin D:=D^.Next; Dec(I); End;
+ SwitchDoc(D);
+End;
+
+Procedure NextDocCmd;
+Var D:PDoc;
+Begin
+ D:=PDoc(CurDoc)^.Next;
+ If D=Nil Then D:=PDoc(DocList);
+ SwitchDoc(D);
+End;
+
+Procedure CloseDocCmd;
+Var D,P:PDoc;
+Begin
+ If Not ConfirmDiscard Then Exit;
+ ClearHistory; ClearAllModels; FreeGroups; FreeCameras;
+ If DocCount<=1 Then Begin
+  NewDocument; ResetEditState; InitViews; FitAllViews; Touch; NeedTools:=True; Exit;
+ End;
+ D:=PDoc(CurDoc);
+ If D=PDoc(DocList)Then DocList:=D^.Next
+ Else Begin P:=PDoc(DocList); While P^.Next<>D Do P:=P^.Next; P^.Next:=D^.Next; End;
+ P:=D^.Next; If P=Nil Then P:=PDoc(DocList);
+ Dispose(D);
+ CurDoc:=P;
+ RestoreDoc(P);
+ ClearSel; FitAllViews; Touch; NeedTools:=True;
+End;
+
+{ ====================================================================== }
 { Fonctions avancees (cameras, animation, exports, preferences...)      }
 { ====================================================================== }
 
@@ -7682,9 +8375,6 @@ Begin
  NeedViews:=True; NeedTools:=True;
 End;
 
-Procedure PrefsDialog; Begin NotYet('Preferences'); End;
-Procedure DocsDialog; Begin NotYet('Documents'); End;
-Procedure KeysDialog; Begin NotYet('Raccourcis'); End;
 
 { ---------------------------- Commandes ----------------------------- }
 
@@ -7710,6 +8400,8 @@ Begin
   CM_REINDEX:DoReindex;
   CM_DOCS:DocsDialog;
   CM_QUIT:DoQuit;
+  CM_CLOSEDOC:CloseDocCmd;
+  CM_NEXTDOC:NextDocCmd;
   CM_UNDO:Begin DoUndo; ClearSel; Touch; NeedTools:=True; End;
   CM_REDO:Begin DoRedo; ClearSel; Touch; NeedTools:=True; End;
   CM_CUT:Begin CopySel; DeleteSel; End;
@@ -7856,6 +8548,9 @@ Var
  HoverTB:Integer;
  OldMX,OldMY:Integer;
  RubOn:Boolean;
+ TTShown:Boolean;
+ TTSv:TSave;
+ TTStart:LongInt;
  GizAxis,GizStartX,GizStartY:Integer;
  GizApplied,GizUX,GizUY,GizPx:Real;
  RubX1,RubY1,RubX2,RubY2:Integer;
@@ -8143,6 +8838,13 @@ Begin
     Q:=Q^.Next;
    End;
   End;
+  7:Begin
+   Q:=Models[CurModel].First;
+   While Q<>Nil Do Begin
+    If Q^.Sel Then Begin Q^.HideStep:=Round(V); If Q^.HideStep<0 Then Q^.HideStep:=0; End;
+    Q:=Q^.Next;
+   End;
+  End;
  End;
  PropField:=-1;
  Touch;
@@ -8165,19 +8867,19 @@ Begin
      DragScroll:=1; NeedDock:=True;
     End
     Else If InRect(PX,PY,X0+44,SearchY,X1-X0-44,14)Then Begin SearchEdit:=True; NeedDock:=True; End
-    Else If InRect(PX,PY,X0,ListY,X1-X0-12,PART_ROWS*12+2)Then Begin
-     K:=PartTop+(PY-ListY-1) Div 12;
+    Else If InRect(PX,PY,X0,ListY,X1-X0-12,PRows*PRowH+2)Then Begin
+     K:=PartTop+(PY-ListY-1) Div PRowH;
      SelectPart(K);
     End
-    Else If InRect(PX,PY,X1-11,ListY,12,PART_ROWS*12+2)Then Begin
-     PartTop:=VScrollClick(ListY,PART_ROWS*12+2,PartTop,FilN,PART_ROWS,PY);
+    Else If InRect(PX,PY,X1-11,ListY,12,PRows*PRowH+2)Then Begin
+     PartTop:=VScrollClick(ListY,PRows*PRowH+2,PartTop,FilN,PRows,PY);
      DragScroll:=2; NeedDock:=True;
     End;
   End;
   PN_PROPS:Begin
    PropField:=-1;
-   For F:=0 To 6 Do
-    If InRect(PX,PY,DockX+76,PanY1+4+PropRow(F)*14,ScreenW-6-DockX-76,13)Then
+   For F:=0 To 7 Do
+    If InRect(PX,PY,DockX+76,PanY1+2+PropRow(F)*12,ScreenW-6-DockX-76,12)Then
      If FirstSel<>Nil Then Begin PropField:=F; PropText:=PropValue(F,FirstSel); PropFresh:=True; End;
    NeedDock:=True;
   End;
@@ -8214,8 +8916,8 @@ Begin
    If N<>CatTop Then Begin CatTop:=N; NeedDock:=True; End;
   End;
   2:Begin
-   If PY<ListY+12 Then PY:=ListY+12; If PY>ListY+PART_ROWS*12+2-13 Then PY:=ListY+PART_ROWS*12+2-13;
-   N:=VScrollClick(ListY,PART_ROWS*12+2,PartTop,FilN,PART_ROWS,PY);
+   If PY<ListY+12 Then PY:=ListY+12; If PY>ListY+PRows*PRowH+2-13 Then PY:=ListY+PRows*PRowH+2-13;
+   N:=VScrollClick(ListY,PRows*PRowH+2,PartTop,FilN,PRows,PY);
    If N<>PartTop Then Begin PartTop:=N; NeedDock:=True; End;
   End;
   4:Begin
@@ -8235,10 +8937,65 @@ End;
 { Evenements : souris                                                    }
 { ====================================================================== }
 
+Procedure HideTip;
+Begin
+ If TTShown Then Begin
+  MouseOff;
+  If Not RestoreRect(TTSv)Then FullRedraw:=True;
+  MouseOn;
+  TTShown:=False;
+ End;
+End;
+
+Procedure ShowTip(I:Integer);
+Var S:String; W,X,Y:Integer;
+Begin
+ S:=Fx(TBHint(I));
+ W:=Length(S)*8+8;
+ X:=TBX(I);
+ If X+W>ScreenW-2 Then X:=ScreenW-W-2;
+ Y:=MENU_H+TB_H+3;
+ MouseOff;
+ SaveRect(TTSv,X,Y,X+W,Y+14);
+ Box(X,Y,X+W,Y+13,14);
+ SetColor(UI_DK); Rectangle(X,Y,X+W,Y+13);
+ TxtOut(X+4,Y+3,S,UI_DK);
+ MouseOn;
+ TTShown:=True;
+End;
+
+{ Molette (pilote CuteMouse sous Turbo Pascal) : zoom ou defilement }
+Procedure HandleWheel;
+Var V:Integer; F:Real;
+Begin
+ If WheelDelta=0 Then Exit;
+ V:=ViewAt(MX,MY);
+ If V>=0 Then Begin
+  F:=1-0.15*WheelDelta;
+  If F<0.5 Then F:=0.5; If F>1.6 Then F:=1.6;
+  ZoomView(Views[V],F);
+  NeedViews:=True;
+ End
+  Else If(PanelSel=PN_PARTS)And InRect(MX,MY,DockX,ListY,ScreenW-DockX,PRows*PRowH+2)Then Begin
+   PartTop:=PartTop-WheelDelta*3;
+   If PartTop>FilN-PRows Then PartTop:=FilN-PRows;
+   If PartTop<0 Then PartTop:=0;
+   NeedDock:=True;
+  End
+  Else If(PanelSel=PN_TIME)And InRect(MX,MY,DockX,PanY1,ScreenW-DockX,PanY2-PanY1)Then Begin
+   TimeTop:=TimeTop-WheelDelta*3;
+   If TimeTop>TimeRowCount-TIME_ROWS Then TimeTop:=TimeRowCount-TIME_ROWS;
+   If TimeTop<0 Then TimeTop:=0;
+   NeedDock:=True;
+  End;
+ WheelDelta:=0;
+End;
+
 Procedure HandleMouse;
 Var LP,RP,MP,LR:Boolean; V,B,I:Integer; HB:Integer;
 Begin
  PollMouse;
+ If WheelDelta<>0 Then HandleWheel;
  LP:=(((MB And 1)<>0)And((OldMB And 1)=0))Or LatchL;
  RP:=(((MB And 2)<>0)And((OldMB And 2)=0))Or LatchR;
  MP:=(((MB And 4)<>0)And((OldMB And 4)=0))Or LatchM;
@@ -8293,10 +9050,13 @@ Begin
    { survol }
    HB:=TBHit(MX,MY);
    If HB<>HoverTB Then Begin
+    HideTip;
     HoverTB:=HB;
+    TTStart:=Ticks;
     If HB>=0 Then StatusMsg:=TBHint(HB) Else StatusMsg:='';
     NeedStatus:=True;
-   End;
+   End
+    Else If(HB>=0)And Not TTShown And(MB=0)And(Abs(Ticks-TTStart)>50)Then ShowTip(HB);
    If(Tool=TL_INSERT)And((MX<>OldMX)Or(MY<>OldMY))And((MB And 7)=0)Then Begin
     V:=ViewAt(MX,MY);
     If V>=0 Then Begin
@@ -8305,6 +9065,7 @@ Begin
     End;
    End;
    If LP Or RP Or MP Then Begin
+    HideTip;
     If MY<MENU_H Then Begin
      B:=MenuBarHit(MX,MY);
      If B>=0 Then OpenMenu(B);
@@ -8341,6 +9102,7 @@ Begin
           B:=ColHit(MX,MY);
           If B>=0 Then Begin
            CurColor:=ColByIndex(B)^.Code;
+           FlushThumbs;
            ApplyColorSel(CurColor);
            NeedDock:=True; NeedViews:=True;
           End;
@@ -8517,9 +9279,11 @@ Begin
  CurColor:=4;
  Tool:=TL_SELECT; PanelSel:=PN_PARTS;
  GridOn:=True; EdgesOn:=True; WireOn:=False; StudMode:=0;
+ AutoMin:=0; BgIdx:=0; Lang:=0; LngHead:=Nil; ListThumbs:=True; PrefLib:=''; LastAuto:=0; DocList:=Nil; CurDoc:=Nil; WheelDelta:=0;
+ BindHead:=Nil; AddMode:=False; PivotMode:=0; ThumbHead:=Nil; ThumbN:=0;
  MenuActive:=False; ActiveMenu:=0; ActiveMenuItem:=-1;
  StatusMsg:=''; PropField:=-1; TimeTop:=0;
- DragMode:=0; DragView:=-1; DragScroll:=0; HoverTB:=-1;
+ DragMode:=0; DragView:=-1; DragScroll:=0; HoverTB:=-1; TTShown:=False;
  MHid:=0; OldMB:=0; OldMX:=0; OldMY:=0;
  MatIdent(InsM); InsValid:=False; InsX:=0; InsY:=0; InsZ:=0;
  Modified:=False; DocFile:=''; FullRedraw:=False;
@@ -8529,6 +9293,7 @@ End;
 
 Procedure Cleanup;
 Begin
+ AutoClear;
  FreePolyBlocks;
  FlushCache;
  ClearHistory;
@@ -8542,6 +9307,7 @@ Begin
   HandleMouse;
   If KeyPressed Then HandleKey;
   If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
+  If TTShown And(NeedTools Or NeedViews Or NeedDock Or MenuActive Or KeyPressed)Then HideTip;
   If Not MenuActive Then Begin
    If NeedTools Then Begin
     MouseOff; UpdateMenuChecks; DrawToolbar; DrawTabs; MouseOn;
@@ -8560,6 +9326,7 @@ Begin
     MouseOff; DrawStatus; MouseOn;
    End;
   End;
+  AutoSaveTick;
   Delay(8);
  End;
 End;
@@ -8586,7 +9353,13 @@ BEGIN
  Palette256:=GetMaxColor>15;
  InitDirs;
  InitGlobals;
+ LoadPrefs;
+ If(AltLibDir='')And(PrefLib<>'')And DirOK(PrefLib)Then Begin
+  AltLibDir:=PrefLib;
+  If(AltLibDir[Length(AltLibDir)]<>#92)And(AltLibDir[Length(AltLibDir)]<>'/')Then AltLibDir:=AltLibDir+PathSep;
+ End;
  ResolveRoot(0,LibDir); ResolveRoot(1,AltLibDir);
+ LoadLang;
  InitColors;
  If Not LoadLDConfig(LibDir+'LDCONFIG.LDR')Then
   If Not LoadLDConfig(LibDir+'..'+PathSep+'LDCONFIG.LDR')Then
@@ -8594,14 +9367,25 @@ BEGIN
  SetupPalette;
  MouseDriverFound;
  LayoutScreen;
+ InitKeys;
+ LoadKeys;
  InitMenus;
  LoadCatalog;
  If AltLibDir<>'' Then StatusMsg:=Copy('LDraw : '+AltLibDir,1,60);
  NewDocument;
  InitViews;
+ InitDocs;
  Running:=True;
  RedrawAll;
- If ArgFile<>'' Then OpenPath(ArgFile);
+ If ArgFile<>'' Then OpenPath(ArgFile)
+ Else If FileOK(AutoName)Then Begin
+  If AskBox('R\ecup\eration','Un mod\gle non enregistr\e a \et\e trouv\e.|Le r\ecup\erer ?',1)=1 Then Begin
+   OpenPath(AutoName); DocFile:=''; Modified:=True;
+  End
+  Else AutoClear;
+  If FullRedraw Then Begin RedrawAll; FullRedraw:=False; End;
+ End;
+ LastAuto:=Ticks;
  MainLoop;
  Cleanup;
 END.

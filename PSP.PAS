@@ -228,6 +228,7 @@ Type
 
 Var
  GraphDriver, GraphMode: Integer;
+ MaxScreen: Boolean;
  ScreenWidth, ScreenHeight: Integer;
  Running: Boolean;
  FD_ModelMode:Boolean;
@@ -517,14 +518,49 @@ Begin
  ReleaseUndoSlot(UndoCount);
 End;
 
-Procedure InitGraphics;
+{ Mode graphique : VGA 640 x 480, ou, avec -maxscreen sous Free Pascal, la
+  resolution maximale du pilote D8bit (sans effet sous Turbo Pascal). }
+Procedure SelectScreenDriverMode(WantMaxScreen: Boolean;
+ Var Driver, Mode: Integer);
+{$IFDEF FPC}
+Var LoMode, HiMode: SmallInt;
+{$ENDIF}
 Begin
  {$IFDEF FPC}
-  GraphDriver := VGA;
-  GraphMode := VGAHi;
+ Driver := VGA;
+ Mode := VGAHi;
+ If WantMaxScreen Then Begin
+  Driver := D8bit;
+  GetModeRange(Driver, LoMode, HiMode);
+  If HiMode >= LoMode Then Mode := HiMode
+  Else Begin Driver := VGA; Mode := VGAHi; End;
+ End;
  {$ELSE}
-  GraphDriver := Detect;
+ Driver := Detect;
  {$ENDIF}
+End;
+
+{ Les seize couleurs de l'interface restent identiques dans le pilote D8bit. }
+Procedure InitializeScreenPalette;
+{$IFDEF FPC}
+Const
+ RGB: Array[0..15, 0..2] of Byte = (
+  (0,0,0), (0,0,170), (0,170,0), (0,170,170),
+  (170,0,0), (170,0,170), (170,85,0), (170,170,170),
+  (85,85,85), (85,85,255), (85,255,85), (85,255,255),
+  (255,85,85), (255,85,255), (255,255,85), (255,255,255));
+Var I: Integer;
+{$ENDIF}
+Begin
+ {$IFDEF FPC}
+ If GetMaxColor > 15 Then
+  For I := 0 To 15 Do SetRGBPalette(I, RGB[I,0], RGB[I,1], RGB[I,2]);
+ {$ENDIF}
+End;
+
+Procedure InitGraphics;
+Begin
+ SelectScreenDriverMode(MaxScreen, GraphDriver, GraphMode);
  InitGraph(GraphDriver, GraphMode, '');
  If GraphResult<>grOk Then Begin
   WriteLn('Erreur d''initialisation graphique!');
@@ -532,6 +568,7 @@ Begin
  End;
  ScreenWidth := GetMaxX + 1;
  ScreenHeight := GetMaxY + 1;
+ InitializeScreenPalette;
 End;
 
 { ============================================================
@@ -12702,10 +12739,11 @@ Begin
  Assign(Output,'');Rewrite(Output);
  WriteLn(Output,'PSP - Cette commande permet de lancer Photoshop.');
  WriteLn(Output);
- WriteLn(Output,'Syntaxe : PSP [image]');
+ WriteLn(Output,'Syntaxe : PSP [-maxscreen] [image]');
  WriteLn(Output,'          PSP /?');
  WriteLn(Output);
  WriteLn(Output,'  image    Ouvre une image au demarrage.');
+ WriteLn(Output,'  -maxscreen           Utilise la resolution maximale disponible.');
  WriteLn(Output,'  /?       Affiche cette aide et quitte.');
  WriteLn(Output,'  -?, -h, --help, /h, /help : autres formes de l''aide.');
  WriteLn(Output);
@@ -12720,11 +12758,35 @@ Begin
  WriteLn(Output,'  PSP /?');
 End;
 
+{ Option -maxscreen (sans effet sous Turbo Pascal) }
+Procedure ParseCommandLine;
+Var I: Integer; Arg: String;
+Begin
+ MaxScreen := False;
+ For I:=1 To ParamCount Do Begin
+  Arg:=UpperStr(ParamStr(I));
+  If (Arg='-MAXSCREEN') Or (Arg='/MAXSCREEN') Then MaxScreen:=True;
+ End;
+End;
+
+{ Premier argument qui n'est pas une option : le fichier a ouvrir }
+Function ImageArgument: String;
+Var I: Integer; Arg: String;
+Begin
+ ImageArgument:='';
+ For I:=1 To ParamCount Do Begin
+  Arg:=ParamStr(I);
+  If (Arg<>'') And (Arg[1]<>'-') And (Arg[1]<>'/') Then Begin
+   ImageArgument:=Arg;Exit;
+  End;
+ End;
+End;
+
 Procedure HandleCmdLine;
 Var FN, ErrMsg: String;
 Begin
- If ParamCount < 1 Then Exit;
- FN := ParamStr(1);
+ FN := ImageArgument;
+ If FN = '' Then Exit;
  If LoadFileByExt(FN, ErrMsg) Then Begin
   FI_ResetMetadata;
   FI_LoadSidecar(FN);
@@ -12737,6 +12799,7 @@ End;
 
 BEGIN
  If CommandLineHelpRequested Then Begin ShowCommandLineHelp;Halt(0);End;
+ ParseCommandLine;
  Initialize;
  HandleCmdLine;
  MainLoop;

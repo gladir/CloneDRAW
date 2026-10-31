@@ -22,7 +22,8 @@
 Program ACROBAT;
 
 {$IFDEF FPC}
- {$MODE TP}
+ {$MODE OBJFPC}
+ {$H-}
  {$Q-}
  {$R-}
  {$OVERFLOWCHECKS OFF}
@@ -46,20 +47,22 @@ Const
  SBAR     = 16;
 
  {$IFDEF FPC}
- MAXOBJ    = 12000;
- MAXPAGES  = 200;
- MAXPOOL   = 30000;
- MAXPDFOBJ = 12000;
- MAXIMG    = 400;
+ OBLK      = 256;
+ PGBLK     = 64;
+ PLBLK     = 2048;
+ IMBLK     = 16;
+ MAXIMG    = 65000;
+ MAXPDFOBJ = 16000000;
  UNDO_MAX  = 24;
  UNDO_MEM  = 8000000;
  BUFSZ     = 500000;
  {$ELSE}
- MAXOBJ    = 420;
- MAXPAGES  = 99;
- MAXPOOL   = 3000;
- MAXPDFOBJ = 3000;
+ OBLK      = 32;
+ PGBLK     = 16;
+ PLBLK     = 512;
+ IMBLK     = 4;
  MAXIMG    = 1;
+ MAXPDFOBJ = 3000;
  UNDO_MAX  = 6;
  UNDO_MEM  = 150000;
  BUFSZ     = 30000;
@@ -116,29 +119,59 @@ Type
   Mask, IsSM, Keep: Boolean;
   SMIdx: Integer;
   Decode: String[48];
+  SrcObj: LongInt;          { n° d'objet PDF d'origine de l'image }
+ End;
+ PImgRec = ^TImgRec;
+ PImgBlock = ^TImgBlock;
+ TImgBlock = Record
+  Next: PImgBlock;
+  Items: Array[0..IMBLK - 1] Of TImgRec;
  End;
 
  TObjRec = Record
-  Kind, Page: Byte;
+  Kind: Byte;
+  Page: LongInt;
   X1, Y1, X2, Y2: Integer;
   Rgb, Rgb2: LongInt;
   Wd, Size, Style, Fill: Byte;
-  P0, PN: Word;
+  P0, PN: LongInt;
+  Src: Byte;                { 0 nouveau, 1 contenu d'origine, 2 annotation d'origine, 3 aperçu seul }
+  SrcNum: LongInt;          { n° d'objet PDF d'origine (annotations) }
+  SrcCnt: Integer;          { nombre d'éléments issus de la même annotation }
+  Sum: LongInt;             { somme de contrôle à l'import (détection des modifications) }
   Txt: String[119];
  End;
- PObjArr = ^TObjArr;
- TObjArr = Array[0..MAXOBJ-1] Of TObjRec;
+ PObjRec = ^TObjRec;
+
+ { Listes chaînées de blocs allouées dans le tas : aucune limite fixe. }
+ PObjBlock = ^TObjBlock;
+ TObjBlock = Record
+  Next: PObjBlock;
+  Items: Array[0..OBLK - 1] Of TObjRec;
+ End;
 
  TPageRec = Record
   W, H: Integer;
   Rot: Byte;
   Top: LongInt;
+  SrcPage: LongInt;         { n° d'objet de la page d'origine (0 : page nouvelle) }
+  SrcCount: LongInt;        { nombre d'objets de contenu importés }
+  OrigW, OrigH, OrigRot: Integer;
+  MbX0, MbY1: Real;         { origine de la boîte de la page d'origine }
+  SrcAnnObjs: LongInt;      { nombre d'objets issus des annotations d'origine }
  End;
- TPageArr = Array[1..MAXPAGES] Of TPageRec;
- PPageArr = ^TPageArr;
+ PPageRec = ^TPageRec;
+ PPageBlock = ^TPageBlock;
+ TPageBlock = Record
+  Next: PPageBlock;
+  Items: Array[0..PGBLK - 1] Of TPageRec;
+ End;
 
- TPoolArr = Array[0..MAXPOOL-1] Of Integer;
- PPoolArr = ^TPoolArr;
+ PPoolBlock = ^TPoolBlock;
+ TPoolBlock = Record
+  Next: PPoolBlock;
+  X, Y: Array[0..PLBLK - 1] Of SmallInt;
+ End;
 
  TMenuItem = Record
   Caption: String[40];
@@ -172,27 +205,36 @@ Type
 
  TByteBuf = Array[0..{$IFDEF FPC}134217727{$ELSE}BUFSZ+16{$ENDIF}] Of Byte;
  PByteBuf = ^TByteBuf;
- TLArr = Array[0..MAXPDFOBJ+1] Of LongInt;
+ TLArr = Array[0..{$IFDEF FPC}134217727{$ELSE}8000{$ENDIF}] Of LongInt;
  PLArr = ^TLArr;
- TXArr = Array[0..MAXOBJ + MAXPAGES * 3 + 60 + MAXIMG * 2 + MAXPAGES * 0] Of LongInt;
+ TXArr = Array[0..{$IFDEF FPC}134217727{$ELSE}8000{$ENDIF}] Of LongInt;
  PXArr = ^TXArr;
- TWArr = Array[0..MAXPDFOBJ+1] Of Word;
+ TWArr = Array[0..{$IFDEF FPC}134217727{$ELSE}8000{$ENDIF}] Of Word;
  PWArr = ^TWArr;
 
 Var
  { Document }
- Objs: PObjArr;
- Imgs: Array[1..MAXIMG] Of TImgRec;
- ImgCount: Integer;
- ObjCount: Integer;
- Pages: PPageArr;
- PageCount, CurPage: Integer;
- PoolX, PoolY: PPoolArr;
- PoolCount: Integer;
+ ObjHead, ObjCurBlk: PObjBlock;
+ ObjCurNo, ObjBlocks: LongInt;
+ ImgHead, ImgCurBlk: PImgBlock;
+ ImgCurNo, ImgBlocks: LongInt;
+ ImgCount: LongInt;
+ ObjCount: LongInt;
+ PgHead, PgCurBlk: PPageBlock;
+ PgCurNo, PgBlocks: LongInt;
+ PageCount, CurPage: LongInt;
+ PoolHead, PoolCurBlk: PPoolBlock;
+ PoolCurNo, PoolBlocks: LongInt;
+ PoolCount: LongInt;
  DocName: String;
  DocTitle, DocAuthor, DocSubject, DocKeywords, DocCreator: String[79];
  Modified: Boolean;
  DocEncrypted: Boolean;
+ SrcFile: String;           { fichier PDF d'origine (mise à jour incrémentale) }
+ SrcValid, InfoDirty, NeedFullRewrite: Boolean;
+ SrcSize: LongInt;
+ OrigOrder: PLArr;          { n° d'objets des pages d'origine, dans l'ordre }
+ OrigPageCnt: LongInt;
  LoadNotice: String;
 
  { Vue }
@@ -297,7 +339,11 @@ End;
 
 Procedure InitializeGraphics;
 Var
+ {$IFDEF FPC}
+ Driver, Mode: SmallInt;
+ {$ELSE}
  Driver, Mode: Integer;
+ {$ENDIF}
  ErrCode: Integer;
  {$IFDEF FPC}
  LoMode, HiMode: SmallInt;
@@ -664,6 +710,213 @@ Begin
 End;
 
 { ---------------------------------------------------------------------- }
+{ Listes chaînées de blocs (tas) : objets, pages, points de tracé, images  }
+{ L'accès par indice parcourt la chaîne ; un curseur mémorise le dernier   }
+{ bloc atteint, ce qui rend les boucles séquentielles très rapides.        }
+{ ---------------------------------------------------------------------- }
+
+Function NewObjBlock: PObjBlock;
+Var
+ B: PObjBlock;
+Begin
+ GetMem(B, SizeOf(TObjBlock));
+ If B <> Nil Then Begin
+  FillChar(B^, SizeOf(TObjBlock), 0);
+  B^.Next := Nil;
+ End;
+ NewObjBlock := B;
+End;
+
+{ S'assure que l'indice I existe ; retourne False si le tas est épuisé }
+Function ObjEnsure(I: LongInt): Boolean;
+Var
+ B, T: PObjBlock;
+Begin
+ ObjEnsure := True;
+ While I >= ObjBlocks * OBLK Do Begin
+  B := NewObjBlock;
+  If B = Nil Then Begin ObjEnsure := False; Exit; End;
+  If ObjHead = Nil Then ObjHead := B
+  Else Begin
+   T := ObjHead;
+   If ObjCurBlk <> Nil Then If ObjCurNo = ObjBlocks - 1 Then T := ObjCurBlk Else T := ObjHead;
+   While T^.Next <> Nil Do T := T^.Next;
+   T^.Next := B;
+  End;
+  Inc(ObjBlocks);
+ End;
+End;
+
+Function ObjP(I: LongInt): PObjRec;
+Var
+ BNo, K: LongInt;
+ B: PObjBlock;
+Begin
+ BNo := I Div OBLK;
+ If (ObjCurBlk <> Nil) And (BNo >= ObjCurNo) Then Begin B := ObjCurBlk; K := ObjCurNo; End
+ Else Begin B := ObjHead; K := 0; End;
+ While (K < BNo) And (B <> Nil) Do Begin B := B^.Next; Inc(K); End;
+ If B = Nil Then B := ObjHead;
+ ObjCurBlk := B; ObjCurNo := BNo;
+ ObjP := @B^.Items[I Mod OBLK];
+End;
+
+Procedure ObjsFree;
+Var
+ B, N: PObjBlock;
+Begin
+ B := ObjHead;
+ While B <> Nil Do Begin N := B^.Next; FreeMem(B, SizeOf(TObjBlock)); B := N; End;
+ ObjHead := Nil; ObjCurBlk := Nil; ObjCurNo := 0; ObjBlocks := 0; ObjCount := 0;
+End;
+
+Function PgEnsure(I: LongInt): Boolean;
+Var
+ B, T: PPageBlock;
+Begin
+ PgEnsure := True;
+ While I > PgBlocks * PGBLK Do Begin
+  GetMem(B, SizeOf(TPageBlock));
+  If B = Nil Then Begin PgEnsure := False; Exit; End;
+  FillChar(B^, SizeOf(TPageBlock), 0);
+  If PgHead = Nil Then PgHead := B
+  Else Begin
+   T := PgHead;
+   While T^.Next <> Nil Do T := T^.Next;
+   T^.Next := B;
+  End;
+  Inc(PgBlocks);
+ End;
+End;
+
+{ Pages numérotées à partir de 1 }
+Function PgP(I: LongInt): PPageRec;
+Var
+ BNo, K: LongInt;
+ B: PPageBlock;
+Begin
+ BNo := (I - 1) Div PGBLK;
+ If (PgCurBlk <> Nil) And (BNo >= PgCurNo) Then Begin B := PgCurBlk; K := PgCurNo; End
+ Else Begin B := PgHead; K := 0; End;
+ While (K < BNo) And (B <> Nil) Do Begin B := B^.Next; Inc(K); End;
+ If B = Nil Then B := PgHead;
+ PgCurBlk := B; PgCurNo := BNo;
+ PgP := @B^.Items[(I - 1) Mod PGBLK];
+End;
+
+Procedure PgsFree;
+Var
+ B, N: PPageBlock;
+Begin
+ B := PgHead;
+ While B <> Nil Do Begin N := B^.Next; FreeMem(B, SizeOf(TPageBlock)); B := N; End;
+ PgHead := Nil; PgCurBlk := Nil; PgCurNo := 0; PgBlocks := 0; PageCount := 0;
+End;
+
+Function PoolEnsure(I: LongInt): Boolean;
+Var
+ B, T: PPoolBlock;
+Begin
+ PoolEnsure := True;
+ While I > PoolBlocks * PLBLK Do Begin
+  GetMem(B, SizeOf(TPoolBlock));
+  If B = Nil Then Begin PoolEnsure := False; Exit; End;
+  FillChar(B^, SizeOf(TPoolBlock), 0);
+  If PoolHead = Nil Then PoolHead := B
+  Else Begin
+   T := PoolHead;
+   While T^.Next <> Nil Do T := T^.Next;
+   T^.Next := B;
+  End;
+  Inc(PoolBlocks);
+ End;
+End;
+
+Function PoolBlk(I: LongInt): PPoolBlock;
+Var
+ BNo, K: LongInt;
+ B: PPoolBlock;
+Begin
+ BNo := I Div PLBLK;
+ If (PoolCurBlk <> Nil) And (BNo >= PoolCurNo) Then Begin B := PoolCurBlk; K := PoolCurNo; End
+ Else Begin B := PoolHead; K := 0; End;
+ While (K < BNo) And (B <> Nil) Do Begin B := B^.Next; Inc(K); End;
+ If B = Nil Then B := PoolHead;
+ PoolCurBlk := B; PoolCurNo := BNo;
+ PoolBlk := B;
+End;
+
+Function PoolXP(I: LongInt): PSmallInt;
+Begin
+ PoolXP := @PoolBlk(I)^.X[I Mod PLBLK];
+End;
+
+Function PoolYP(I: LongInt): PSmallInt;
+Begin
+ PoolYP := @PoolBlk(I)^.Y[I Mod PLBLK];
+End;
+
+Procedure PoolFree;
+Var
+ B, N: PPoolBlock;
+Begin
+ B := PoolHead;
+ While B <> Nil Do Begin N := B^.Next; FreeMem(B, SizeOf(TPoolBlock)); B := N; End;
+ PoolHead := Nil; PoolCurBlk := Nil; PoolCurNo := 0; PoolBlocks := 0; PoolCount := 0;
+End;
+
+Function ImgEnsure(I: LongInt): Boolean;
+Var
+ B, T: PImgBlock;
+Begin
+ ImgEnsure := True;
+ While I > ImgBlocks * IMBLK Do Begin
+  GetMem(B, SizeOf(TImgBlock));
+  If B = Nil Then Begin ImgEnsure := False; Exit; End;
+  FillChar(B^, SizeOf(TImgBlock), 0);
+  If ImgHead = Nil Then ImgHead := B
+  Else Begin
+   T := ImgHead;
+   While T^.Next <> Nil Do T := T^.Next;
+   T^.Next := B;
+  End;
+  Inc(ImgBlocks);
+ End;
+End;
+
+{ Images numérotées à partir de 1 }
+Function ImgP(I: LongInt): PImgRec;
+Var
+ BNo, K: LongInt;
+ B: PImgBlock;
+Begin
+ BNo := (I - 1) Div IMBLK;
+ If (ImgCurBlk <> Nil) And (BNo >= ImgCurNo) Then Begin B := ImgCurBlk; K := ImgCurNo; End
+ Else Begin B := ImgHead; K := 0; End;
+ While (K < BNo) And (B <> Nil) Do Begin B := B^.Next; Inc(K); End;
+ If B = Nil Then B := ImgHead;
+ ImgCurBlk := B; ImgCurNo := BNo;
+ ImgP := @B^.Items[(I - 1) Mod IMBLK];
+End;
+
+Procedure ImgListFree;
+Var
+ B, N: PImgBlock;
+Begin
+ B := ImgHead;
+ While B <> Nil Do Begin N := B^.Next; FreeMem(B, SizeOf(TImgBlock)); B := N; End;
+ ImgHead := Nil; ImgCurBlk := Nil; ImgCurNo := 0; ImgBlocks := 0; ImgCount := 0;
+End;
+
+{ Tables de la compression deflate (RFC 1951) }
+Const
+ LBase: Array[0..28] Of Word = (3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258);
+ LExtra: Array[0..28] Of Byte = (0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0);
+ DBase: Array[0..29] Of Word = (1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577);
+ DExtra: Array[0..29] Of Byte = (0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13);
+ CLOrder: Array[0..18] Of Byte = (16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15);
+
+{ ---------------------------------------------------------------------- }
 { Couleurs                                                                 }
 { ---------------------------------------------------------------------- }
 
@@ -973,9 +1226,9 @@ Begin
  GOX := OX;
  GOY := OY;
  GSc := Sc;
- GRot := Pages^[Pg].Rot And 3;
- GPW := Pages^[Pg].W;
- GPH := Pages^[Pg].H;
+ GRot := PgP(Pg)^.Rot And 3;
+ GPW := PgP(Pg)^.W;
+ GPH := PgP(Pg)^.H;
 End;
 
 Function PU(U: LongInt): LongInt;
@@ -1054,14 +1307,14 @@ End;
 
 Function DispWOf(Pg: Integer; Sc: LongInt): LongInt;
 Begin
- If (Pages^[Pg].Rot And 1) <> 0 Then DispWOf := (LongInt(Pages^[Pg].H) * Sc) Div 1024
- Else DispWOf := (LongInt(Pages^[Pg].W) * Sc) Div 1024;
+ If (PgP(Pg)^.Rot And 1) <> 0 Then DispWOf := (LongInt(PgP(Pg)^.H) * Sc) Div 1024
+ Else DispWOf := (LongInt(PgP(Pg)^.W) * Sc) Div 1024;
 End;
 
 Function DispHOf(Pg: Integer; Sc: LongInt): LongInt;
 Begin
- If (Pages^[Pg].Rot And 1) <> 0 Then DispHOf := (LongInt(Pages^[Pg].W) * Sc) Div 1024
- Else DispHOf := (LongInt(Pages^[Pg].H) * Sc) Div 1024;
+ If (PgP(Pg)^.Rot And 1) <> 0 Then DispHOf := (LongInt(PgP(Pg)^.W) * Sc) Div 1024
+ Else DispHOf := (LongInt(PgP(Pg)^.H) * Sc) Div 1024;
 End;
 
 { ---------------------------------------------------------------------- }
@@ -1542,16 +1795,15 @@ Var
  PX, PY: LongInt;
  LX, LY: LongInt;
 Begin
- If (O.PN < 2) Or (PoolX = Nil) Then Exit;
+ If (O.PN < 2) Or (PoolHead = Nil) Then Exit;
  Step := 1;
  If O.PN > 250 Then Step := (O.PN + 249) Div 250;
  N := 0;
  I := 0;
  While I < O.PN Do Begin
   Base := O.P0 + I;
-  If Base >= MAXPOOL Then Break;
-  PX := MXp(PoolX^[Base], PoolY^[Base]);
-  PY := MYp(PoolX^[Base], PoolY^[Base]);
+  PX := MXp(PoolXP(Base)^, PoolYP(Base)^);
+  PY := MYp(PoolXP(Base)^, PoolYP(Base)^);
   If N < 255 Then Begin
    Pts[N].X := C16(PX); Pts[N].Y := C16(PY);
    Inc(N);
@@ -1598,7 +1850,7 @@ End;
 
 Function ImageDrawable(I: Integer): Boolean;
 Begin
- ImageDrawable := (I > 0) And (I <= ImgCount) And ((Imgs[I].Pix <> Nil) Or (Imgs[I].Mask And (Imgs[I].Alpha <> Nil)));
+ ImageDrawable := (I > 0) And (I <= ImgCount) And ((ImgP(I)^.Pix <> Nil) Or (ImgP(I)^.Mask And (ImgP(I)^.Alpha <> Nil)));
 End;
 
 { Dessine l'image réduite dans le rectangle écran (X1,Y1)-(X2,Y2) avec
@@ -1618,9 +1870,9 @@ Begin
  DW := X2 - X1 + 1;
  DH := Y2 - Y1 + 1;
  If (DW < 1) Or (DH < 1) Then Exit;
- IW_ := Imgs[I].W; IH_ := Imgs[I].H;
- Pw := PWordPix(Imgs[I].Pix);
- Al := PBytePix(Imgs[I].Alpha);
+ IW_ := ImgP(I)^.W; IH_ := ImgP(I)^.H;
+ Pw := PWordPix(ImgP(I)^.Pix);
+ Al := PBytePix(ImgP(I)^.Alpha);
  HF := (O.Style And 1) <> 0;
  VF := (O.Style And 2) <> 0;
  MaskCol := Nearest16(O.Rgb);
@@ -1860,18 +2112,18 @@ Begin
  Rectangle(C16(OX), C16(OY), C16(OX + DW), C16(OY + DH));
  For I := 1 To 3 Do Begin
   For SX1 := 0 To ObjCount - 1 Do
-   If Objs^[SX1].Page = Pg Then DrawObj(Objs^[SX1], I);
+   If ObjP(SX1)^.Page = Pg Then DrawObj(ObjP(SX1)^, I);
  End;
  If Full Then Begin
   If (FindObj >= 0) And (FindObj < ObjCount) Then
-   If Objs^[FindObj].Page = Pg Then Begin
-    ScrBox(Objs^[FindObj], SX1, SY1, SX2, SY2);
+   If ObjP(FindObj)^.Page = Pg Then Begin
+    ScrBox(ObjP(FindObj)^, SX1, SY1, SX2, SY2);
     SetColor(LightRed);
     Rectangle(C16(SX1 - 2), C16(SY1 - 2), C16(SX2 + 2), C16(SY2 + 2));
     Rectangle(C16(SX1 - 3), C16(SY1 - 3), C16(SX2 + 3), C16(SY2 + 3));
    End;
   If (SelObj >= 0) And (SelObj < ObjCount) Then
-   If Objs^[SelObj].Page = Pg Then DrawSelectionBox(Objs^[SelObj]);
+   If ObjP(SelObj)^.Page = Pg Then DrawSelectionBox(ObjP(SelObj)^);
  End;
 End;
 
@@ -1881,10 +2133,13 @@ End;
 
 Procedure AllocDoc;
 Begin
- GetMem(Objs, SizeOf(TObjArr));
- GetMem(Pages, SizeOf(TPageArr));
- GetMem(PoolX, SizeOf(TPoolArr));
- GetMem(PoolY, SizeOf(TPoolArr));
+ ObjHead := Nil; ObjCurBlk := Nil; ObjBlocks := 0; ObjCount := 0;
+ PgHead := Nil; PgCurBlk := Nil; PgBlocks := 0; PageCount := 0;
+ PoolHead := Nil; PoolCurBlk := Nil; PoolBlocks := 0; PoolCount := 0;
+ ImgHead := Nil; ImgCurBlk := Nil; ImgBlocks := 0; ImgCount := 0;
+ ObjEnsure(0);
+ PgEnsure(1);
+ PoolEnsure(1);
 End;
 
 Procedure FreeUndoRec(Var U: TUndoRec);
@@ -1917,6 +2172,8 @@ Begin
 End;
 
 Procedure MakeSnap(Var U: TUndoRec);
+Var
+ I: LongInt;
 Begin
  U.Cnt := ObjCount;
  U.PgCnt := PageCount;
@@ -1926,12 +2183,12 @@ Begin
  U.Mem := 0;
  If ObjCount > 0 Then Begin
   GetMem(U.Objs, ObjCount * SizeOf(TObjRec));
-  Move(Objs^, U.Objs^, ObjCount * SizeOf(TObjRec));
+  For I := 0 To ObjCount - 1 Do Move(ObjP(I)^, Pointer(PtrUInt(U.Objs) + PtrUInt(I) * SizeOf(TObjRec))^, SizeOf(TObjRec));
   U.Mem := ObjCount * SizeOf(TObjRec);
  End;
  If PageCount > 0 Then Begin
   GetMem(U.Pgs, PageCount * SizeOf(TPageRec));
-  Move(Pages^, U.Pgs^, PageCount * SizeOf(TPageRec));
+  For I := 1 To PageCount Do Move(PgP(I)^, Pointer(PtrUInt(U.Pgs) + PtrUInt(I - 1) * SizeOf(TPageRec))^, SizeOf(TPageRec));
  End;
 End;
 
@@ -1963,11 +2220,17 @@ Begin
 End;
 
 Procedure ApplySnap(Var U: TUndoRec);
+Var
+ I: LongInt;
 Begin
  ObjCount := U.Cnt;
  PageCount := U.PgCnt;
- If U.Cnt > 0 Then Move(U.Objs^, Objs^, U.Cnt * SizeOf(TObjRec));
- If U.PgCnt > 0 Then Move(U.Pgs^, Pages^, U.PgCnt * SizeOf(TPageRec));
+ For I := 0 To U.Cnt - 1 Do Begin
+  ObjEnsure(I);
+  Move(Pointer(PtrUInt(U.Objs) + PtrUInt(I) * SizeOf(TObjRec))^, ObjP(I)^, SizeOf(TObjRec));
+ End;
+ PgEnsure(U.PgCnt);
+ For I := 1 To U.PgCnt Do Move(Pointer(PtrUInt(U.Pgs) + PtrUInt(I - 1) * SizeOf(TPageRec))^, PgP(I)^, SizeOf(TPageRec));
  CurPage := U.Cur;
  If CurPage > PageCount Then CurPage := PageCount;
  If CurPage < 1 Then CurPage := 1;
@@ -2020,21 +2283,52 @@ Begin
  O.Rgb2 := $FFFFFF;
 End;
 
+{ Somme de contrôle d'un objet (détection des modifications depuis l'import) }
+Function ObjSum(Idx: LongInt): LongInt;
+Var
+ T: TObjRec;
+ P: PByteBuf;
+ A, B: LongInt;
+ I, N: LongInt;
+ Procedure Add(V: LongInt);
+ Begin
+  A := (A + (V And 255) + 1) Mod 65521; B := (B + A) Mod 65521;
+  A := (A + ((V Shr 8) And 255)) Mod 65521; B := (B + A) Mod 65521;
+ End;
+Begin
+ T := ObjP(Idx)^;
+ T.Sum := 0;
+ P := PByteBuf(@T);
+ A := 1; B := 0;
+ For I := 0 To SizeOf(TObjRec) - 1 Do Begin
+  A := (A + P^[I]) Mod 65521;
+  B := (B + A) Mod 65521;
+ End;
+ If T.Kind In [K_POLY, K_INK] Then
+  For I := 0 To T.PN - 1 Do Begin
+   Add(PoolXP(T.P0 + I)^);
+   Add(PoolYP(T.P0 + I)^);
+  End;
+ ObjSum := (B Mod 32749) * 65536 + A;
+End;
+
 Function NewObj(Kind, Pg: Integer): Integer;
 Begin
- If ObjCount >= MAXOBJ Then Begin
+ If Not ObjEnsure(ObjCount) Then Begin
   NewObj := -1;
   Exit;
  End;
- InitObj(Objs^[ObjCount], Kind, Pg);
+ InitObj(ObjP(ObjCount)^, Kind, Pg);
  NewObj := ObjCount;
  Inc(ObjCount);
 End;
 
-Procedure DelObj(I: Integer);
+Procedure DelObj(I: LongInt);
+Var
+ J: LongInt;
 Begin
  If (I < 0) Or (I >= ObjCount) Then Exit;
- If I < ObjCount - 1 Then Move(Objs^[I + 1], Objs^[I], (ObjCount - 1 - I) * SizeOf(TObjRec));
+ For J := I To ObjCount - 2 Do ObjP(J)^ := ObjP(J + 1)^;
  Dec(ObjCount);
  If SelObj = I Then SelObj := -1 Else If SelObj > I Then Dec(SelObj);
  If FindObj = I Then FindObj := -1 Else If FindObj > I Then Dec(FindObj);
@@ -2042,7 +2336,7 @@ End;
 
 Function PoolAlloc(N: Integer): Integer;
 Begin
- If PoolCount + N > MAXPOOL Then PoolAlloc := -1
+ If Not PoolEnsure(PoolCount + N) Then PoolAlloc := -1
  Else Begin
   PoolAlloc := PoolCount;
   Inc(PoolCount, N);
@@ -2057,7 +2351,7 @@ Var
  MnX, MnY, MxX, MxY: Integer;
  O: ^TObjRec;
 Begin
- O := @Objs^[Idx];
+ O := @ObjP(Idx)^;
  If O^.Kind = K_TEXT Then Begin
   Len := TextLenPts(O^.Txt, O^.Size, O^.Style Shr 2, O^.Style And 3);
   If Len < 1 Then Len := O^.Size Div 2 + 1;
@@ -2068,10 +2362,10 @@ Begin
  Else If (O^.Kind In [K_POLY, K_INK]) And (O^.PN > 0) Then Begin
   MnX := 32000; MnY := 32000; MxX := -32000; MxY := -32000;
   For I := O^.P0 To O^.P0 + O^.PN - 1 Do Begin
-   If PoolX^[I] < MnX Then MnX := PoolX^[I];
-   If PoolX^[I] > MxX Then MxX := PoolX^[I];
-   If PoolY^[I] < MnY Then MnY := PoolY^[I];
-   If PoolY^[I] > MxY Then MxY := PoolY^[I];
+   If PoolXP(I)^ < MnX Then MnX := PoolXP(I)^;
+   If PoolXP(I)^ > MxX Then MxX := PoolXP(I)^;
+   If PoolYP(I)^ < MnY Then MnY := PoolYP(I)^;
+   If PoolYP(I)^ > MxY Then MxY := PoolYP(I)^;
   End;
   O^.X1 := MnX; O^.Y1 := MnY; O^.X2 := MxX; O^.Y2 := MxY;
  End
@@ -2085,14 +2379,14 @@ Procedure MoveObj(Idx: Integer; DX, DY: LongInt);
 Var
  I: Integer;
 Begin
- With Objs^[Idx] Do Begin
+ With ObjP(Idx)^ Do Begin
   X1 := X1 + DX; X2 := X2 + DX;
   Y1 := Y1 + DY; Y2 := Y2 + DY;
-  If (Kind = K_TEXT) And (PN Mod 3600 <> 0) Then PackOrigin(Objs^[Idx], (Rgb2 Div 32768) - 16384 + DX, (Rgb2 Mod 32768) - 16384 + DY);
+  If (Kind = K_TEXT) And (PN Mod 3600 <> 0) Then PackOrigin(ObjP(Idx)^, (Rgb2 Div 32768) - 16384 + DX, (Rgb2 Mod 32768) - 16384 + DY);
   If Kind In [K_POLY, K_INK] Then
    For I := P0 To P0 + PN - 1 Do Begin
-    PoolX^[I] := PoolX^[I] + DX;
-    PoolY^[I] := PoolY^[I] + DY;
+    PoolXP(I)^ := PoolXP(I)^ + DX;
+    PoolYP(I)^ := PoolYP(I)^ + DY;
    End;
  End;
 End;
@@ -2102,10 +2396,10 @@ Procedure SetTextAngle(Idx: Integer; Tenths: Integer);
 Var
  Ox, Oy, Dx, Dy, Vx, Vy, L, H, Cx, Cy: Real;
 Begin
- With Objs^[Idx] Do Begin
-  TextOrigin(Objs^[Idx], Ox, Oy);
-  TextDirs(TextAng(Objs^[Idx]), Dx, Dy, Vx, Vy);
-  L := TextLenOf(Objs^[Idx]); H := TextLineH(Objs^[Idx]);
+ With ObjP(Idx)^ Do Begin
+  TextOrigin(ObjP(Idx)^, Ox, Oy);
+  TextDirs(TextAng(ObjP(Idx)^), Dx, Dy, Vx, Vy);
+  L := TextLenOf(ObjP(Idx)^); H := TextLineH(ObjP(Idx)^);
   Cx := Ox + (L * Dx + H * Vx) / 2;
   Cy := Oy + (L * Dy + H * Vy) / 2;
   PN := ((Tenths Mod 3600) + 3600) Mod 3600;
@@ -2113,7 +2407,7 @@ Begin
   Ox := Cx - (L * Dx + H * Vx) / 2;
   Oy := Cy - (L * Dy + H * Vy) / 2;
  End;
- SetTextBox(Objs^[Idx], Ox, Oy);
+ SetTextBox(ObjP(Idx)^, Ox, Oy);
 End;
 
 { Redimensionne un polygone / une encre vers une nouvelle boîte }
@@ -2122,14 +2416,14 @@ Var
  I: Integer;
  OX1, OY1, OW, OH, NW, NH: LongInt;
 Begin
- With Objs^[Idx] Do Begin
+ With ObjP(Idx)^ Do Begin
   If Kind In [K_POLY, K_INK] Then Begin
    OX1 := X1; OY1 := Y1;
    OW := IMax(1, X2 - X1); OH := IMax(1, Y2 - Y1);
    NW := NX2 - NX1; NH := NY2 - NY1;
    For I := P0 To P0 + PN - 1 Do Begin
-    PoolX^[I] := NX1 + ((PoolX^[I] - OX1) * NW) Div OW;
-    PoolY^[I] := NY1 + ((PoolY^[I] - OY1) * NH) Div OH;
+    PoolXP(I)^ := NX1 + ((PoolXP(I)^ - OX1) * NW) Div OW;
+    PoolYP(I)^ := NY1 + ((PoolYP(I)^ - OY1) * NH) Div OH;
    End;
   End;
   X1 := NX1; Y1 := NY1; X2 := NX2; Y2 := NY2;
@@ -2144,15 +2438,16 @@ Procedure InsertPageAt(After, W, H: Integer);
 Var
  I: Integer;
 Begin
- If PageCount >= MAXPAGES Then Exit;
+ If Not PgEnsure(PageCount + 1) Then Exit;
  For I := 0 To ObjCount - 1 Do
-  If Objs^[I].Page > After Then Inc(Objs^[I].Page);
- For I := PageCount DownTo After + 1 Do Pages^[I + 1] := Pages^[I];
+  If ObjP(I)^.Page > After Then Inc(ObjP(I)^.Page);
+ For I := PageCount DownTo After + 1 Do PgP(I + 1)^ := PgP(I)^;
  Inc(PageCount);
- Pages^[After + 1].W := W;
- Pages^[After + 1].H := H;
- Pages^[After + 1].Rot := 0;
- Pages^[After + 1].Top := 0;
+ FillChar(PgP(After + 1)^, SizeOf(TPageRec), 0);
+ PgP(After + 1)^.W := W;
+ PgP(After + 1)^.H := H;
+ PgP(After + 1)^.Rot := 0;
+ PgP(After + 1)^.Top := 0;
 End;
 
 Procedure DeletePageAt(P: Integer);
@@ -2162,14 +2457,14 @@ Begin
  If PageCount <= 1 Then Exit;
  J := 0;
  For I := 0 To ObjCount - 1 Do Begin
-  If Objs^[I].Page <> P Then Begin
-   If Objs^[I].Page > P Then Dec(Objs^[I].Page);
-   If I <> J Then Objs^[J] := Objs^[I];
+  If ObjP(I)^.Page <> P Then Begin
+   If ObjP(I)^.Page > P Then Dec(ObjP(I)^.Page);
+   If I <> J Then ObjP(J)^ := ObjP(I)^;
    Inc(J);
   End;
  End;
  ObjCount := J;
- For I := P To PageCount - 1 Do Pages^[I] := Pages^[I + 1];
+ For I := P To PageCount - 1 Do PgP(I)^ := PgP(I + 1)^;
  Dec(PageCount);
  If CurPage > PageCount Then CurPage := PageCount;
  SelObj := -1;
@@ -2180,16 +2475,15 @@ Procedure DupPageAt(P: Integer);
 Var
  I, N, J: Integer;
 Begin
- If PageCount >= MAXPAGES Then Exit;
- InsertPageAt(P, Pages^[P].W, Pages^[P].H);
- Pages^[P + 1].Rot := Pages^[P].Rot;
+ InsertPageAt(P, PgP(P)^.W, PgP(P)^.H);
+ PgP(P + 1)^.Rot := PgP(P)^.Rot;
  N := ObjCount;
  For I := 0 To N - 1 Do
-  If Objs^[I].Page = P Then Begin
+  If ObjP(I)^.Page = P Then Begin
    J := NewObj(1, P + 1);
    If J < 0 Then Break;
-   Objs^[J] := Objs^[I];
-   Objs^[J].Page := P + 1;
+   ObjP(J)^ := ObjP(I)^;
+   ObjP(J)^.Page := P + 1;
   End;
 End;
 
@@ -2198,10 +2492,10 @@ Var
  T: TPageRec;
  I: Integer;
 Begin
- T := Pages^[A]; Pages^[A] := Pages^[B]; Pages^[B] := T;
+ T := PgP(A)^; PgP(A)^ := PgP(B)^; PgP(B)^ := T;
  For I := 0 To ObjCount - 1 Do
-  If Objs^[I].Page = A Then Objs^[I].Page := B
-  Else If Objs^[I].Page = B Then Objs^[I].Page := A;
+  If ObjP(I)^.Page = A Then ObjP(I)^.Page := B
+  Else If ObjP(I)^.Page = B Then ObjP(I)^.Page := A;
 End;
 
 Procedure FreeImages; Forward;
@@ -2209,13 +2503,17 @@ Procedure FreeImages; Forward;
 Procedure NewDocument;
 Begin
  FreeImages;
+ ObjsFree; PgsFree; PoolFree;
+ ObjEnsure(0); PgEnsure(1); PoolEnsure(1);
  ObjCount := 0;
  PoolCount := 0;
  PageCount := 1;
  CurPage := 1;
- Pages^[1].W := 612; Pages^[1].H := 792; Pages^[1].Rot := 0;
+ FillChar(PgP(1)^, SizeOf(TPageRec), 0);
+ PgP(1)^.W := 612; PgP(1)^.H := 792; PgP(1)^.Rot := 0;
  SelObj := -1; FindObj := -1;
  DocName := '';
+ SrcValid := False; InfoDirty := False; NeedFullRewrite := False; SrcFile := '';
  DocTitle := ''; DocAuthor := ''; DocSubject := ''; DocKeywords := ''; DocCreator := '';
  Modified := False;
  DocEncrypted := False;
@@ -2251,7 +2549,7 @@ Var
 Begin
  HitObj := -1;
  For I := ObjCount - 1 DownTo 0 Do Begin
-  O := @Objs^[I];
+  O := @ObjP(I)^;
   If O^.Page <> Pg Then Continue;
   NormBox(O^, NX1, NY1, NX2, NY2);
   Hit := False;
@@ -2291,7 +2589,7 @@ Begin
    K_POLY, K_INK: Begin
     If (X >= NX1 - Tol) And (X <= NX2 + Tol) And (Y >= NY1 - Tol) And (Y <= NY2 + Tol) Then Begin
      For J := O^.P0 To O^.P0 + O^.PN - 2 Do
-      If DistSeg(X, Y, PoolX^[J], PoolY^[J], PoolX^[J + 1], PoolY^[J + 1]) <= Tol + O^.Wd / 2 Then Hit := True;
+      If DistSeg(X, Y, PoolXP(J)^, PoolYP(J)^, PoolXP(J + 1)^, PoolYP(J + 1)^) <= Tol + O^.Wd / 2 Then Hit := True;
      If (O^.Kind = K_POLY) And (O^.Fill <> 0) Then Hit := True;
     End;
    End;
@@ -2313,7 +2611,7 @@ Var
 Begin
  HandleAt := 0;
  If (Idx < 0) Or (Idx >= ObjCount) Then Exit;
- With Objs^[Idx] Do Begin
+ With ObjP(Idx)^ Do Begin
   If Kind In [K_LINE, K_ARROW] Then Begin
    If (IAbs(SX - MXp(X1, Y1)) <= 5) And (IAbs(SY - MYp(X1, Y1)) <= 5) Then HandleAt := 5
    Else If (IAbs(SX - MXp(X2, Y2)) <= 5) And (IAbs(SY - MYp(X2, Y2)) <= 5) Then HandleAt := 6;
@@ -2321,7 +2619,7 @@ Begin
   End;
   If Not IsBoxKind(Kind) Then Exit;
   For K := 1 To 4 Do Begin
-   CornerOf(Objs^[Idx], K, CX, CY);
+   CornerOf(ObjP(Idx)^, K, CX, CY);
    PX := MXp(CX, CY); PY := MYp(CX, CY);
    If (IAbs(SX - PX) <= 5) And (IAbs(SY - PY) <= 5) Then Begin
     HandleAt := K;
@@ -2342,8 +2640,29 @@ Var
  XOfs: Array[0..1] Of LongInt;
  XRef: PXArr;
 
+Var
+ CapOn: Boolean;
+ CapBuf: PByteBuf;
+ CapLen, CapSize: LongInt;
+
+{ Écriture dans un tampon (pour compresser un flux avant de l'écrire) }
+Procedure CapAppend(Const S: String);
+Var
+ P: Pointer;
+Begin
+ If CapLen + Length(S) + 16 > CapSize Then Begin
+  CapSize := CapSize * 2 + Length(S) + 4096;
+  P := CapBuf;
+  ReAllocMem(P, CapSize);
+  CapBuf := P;
+ End;
+ If Length(S) > 0 Then Move(S[1], CapBuf^[CapLen], Length(S));
+ CapLen := CapLen + Length(S);
+End;
+
 Procedure WS(Const S: String);
 Begin
+ If CapOn Then Begin CapAppend(S); Exit; End;
  If OutErr Or (Length(S) = 0) Then Exit;
  {$I-}
  BlockWrite(OutF, S[1], Length(S));
@@ -2382,9 +2701,178 @@ Begin
            RStr((Rgb And 255) / 255);
 End;
 
+{ ---------------------------------------------------------------------- }
+{ Compression Flate (zlib) : LZ77 + codes de Huffman fixes                  }
+{ ---------------------------------------------------------------------- }
+
+{$IFDEF FPC}
+Var
+ DfOut: PByteBuf;
+ DfPos: LongInt;
+ DfBitBuf: LongWord;
+ DfBitCnt: Integer;
+
+Procedure DfPutBits(V: LongWord; N: Integer);
+Begin
+ DfBitBuf := DfBitBuf Or (V Shl DfBitCnt);
+ Inc(DfBitCnt, N);
+ While DfBitCnt >= 8 Do Begin
+  DfOut^[DfPos] := DfBitBuf And 255;
+  Inc(DfPos);
+  DfBitBuf := DfBitBuf Shr 8;
+  Dec(DfBitCnt, 8);
+ End;
+End;
+
+Procedure DfPutCode(Code: LongWord; N: Integer);
+Var
+ R: LongWord;
+ I: Integer;
+Begin
+ R := 0;
+ For I := 1 To N Do Begin
+  R := (R Shl 1) Or (Code And 1);
+  Code := Code Shr 1;
+ End;
+ DfPutBits(R, N);
+End;
+
+Procedure DfLit(Sym: Integer);
+Begin
+ If Sym < 144 Then DfPutCode($30 + Sym, 8)
+ Else If Sym < 256 Then DfPutCode($190 + Sym - 144, 9)
+ Else If Sym < 280 Then DfPutCode(Sym - 256, 7)
+ Else DfPutCode($C0 + Sym - 280, 8);
+End;
+
+{ Compresse Src (SLen octets) ; Dst est alloué ici (à libérer avec FreeMem). }
+Function DeflateBuf(Src: PByteBuf; SLen: LongInt; Var Dst: PByteBuf; Var DLen: LongInt): Boolean;
+Var
+ Head: Array[0..32767] Of LongInt;
+ Prev: Array[0..32767] Of LongInt;
+ Pos, I, K, Best, BestD, Cand, Tries, L, MaxL, Lim: LongInt;
+ A, B: LongWord;
+ H: LongInt;
+ Cap: LongInt;
+ Function Hash3(P: LongInt): LongInt;
+ Begin
+  Hash3 := ((Src^[P] Shl 10) Xor (Src^[P + 1] Shl 5) Xor Src^[P + 2]) And 32767;
+ End;
+ Procedure Insert(P: LongInt);
+ Var
+  HH: LongInt;
+ Begin
+  If P + 2 < SLen Then Begin
+   HH := Hash3(P);
+   Prev[P And 32767] := Head[HH];
+   Head[HH] := P;
+  End;
+ End;
+Begin
+ DeflateBuf := False;
+ Dst := Nil; DLen := 0;
+ If SLen < 1 Then Exit;
+ Cap := SLen + SLen Div 6 + 128;
+ GetMem(Dst, Cap);
+ If Dst = Nil Then Exit;
+ DfOut := Dst; DfPos := 0; DfBitBuf := 0; DfBitCnt := 0;
+ DfOut^[0] := $78; DfOut^[1] := $9C; DfPos := 2;
+ FillChar(Head, SizeOf(Head), $FF);
+ FillChar(Prev, SizeOf(Prev), $FF);
+ DfPutBits(1, 1);      { BFINAL }
+ DfPutBits(1, 2);      { BTYPE = 01 : Huffman fixe }
+ Pos := 0;
+ While Pos < SLen Do Begin
+  Best := 0; BestD := 0;
+  If Pos + 2 < SLen Then Begin
+   H := Hash3(Pos);
+   Cand := Head[H];
+   Tries := 0;
+   MaxL := SLen - Pos;
+   If MaxL > 258 Then MaxL := 258;
+   While (Cand >= 0) And (Pos - Cand <= 32768) And (Tries < 28) Do Begin
+    If Src^[Cand + Best] = Src^[Pos + Best] Then Begin
+     L := 0;
+     While (L < MaxL) And (Src^[Cand + L] = Src^[Pos + L]) Do Inc(L);
+     If L > Best Then Begin Best := L; BestD := Pos - Cand; If L >= MaxL Then Break; End;
+    End;
+    I := Prev[Cand And 32767];
+    If (I >= Cand) Then Break;
+    Cand := I;
+    Inc(Tries);
+   End;
+  End;
+  If Best >= 3 Then Begin
+   K := 28;
+   While LBase[K] > Best Do Dec(K);
+   DfLit(257 + K);
+   If LExtra[K] > 0 Then DfPutBits(Best - LBase[K], LExtra[K]);
+   K := 29;
+   While DBase[K] > BestD Do Dec(K);
+   DfPutCode(K, 5);
+   If DExtra[K] > 0 Then DfPutBits(BestD - DBase[K], DExtra[K]);
+   For I := 0 To Best - 1 Do Insert(Pos + I);
+   Inc(Pos, Best);
+  End
+  Else Begin
+   DfLit(Src^[Pos]);
+   Insert(Pos);
+   Inc(Pos);
+  End;
+  If DfPos > Cap - 64 Then Begin FreeMem(Dst, Cap); Dst := Nil; Exit; End;
+ End;
+ DfLit(256);
+ If DfBitCnt > 0 Then DfPutBits(0, 8 - DfBitCnt);
+ A := 1; B := 0;
+ For I := 0 To SLen - 1 Do Begin
+  A := (A + Src^[I]) Mod 65521;
+  B := (B + A) Mod 65521;
+ End;
+ DfOut^[DfPos] := (B Shr 8) And 255; Inc(DfPos);
+ DfOut^[DfPos] := B And 255; Inc(DfPos);
+ DfOut^[DfPos] := (A Shr 8) And 255; Inc(DfPos);
+ DfOut^[DfPos] := A And 255; Inc(DfPos);
+ DLen := DfPos;
+ DeflateBuf := True;
+End;
+{$ENDIF}
+
+Procedure WriteBytes(P: PByteBuf; N: LongInt);
+Var
+ K, L16: LongInt;
+Begin
+ K := 0;
+ While (K < N) And (Not OutErr) Do Begin
+  If N - K > 16384 Then L16 := 16384 Else L16 := N - K;
+  {$I-}
+  BlockWrite(OutF, P^[K], L16);
+  {$I+}
+  If IOResult <> 0 Then OutErr := True;
+  OutPos := OutPos + L16;
+  Inc(K, L16);
+ End;
+End;
+
+Var
+ IncMode: Boolean;
+ XList: PLArr;
+ XCnt, XCap: LongInt;
+
+Procedure IncAdd(N, Ofs: LongInt);
+Var
+ P: Pointer;
+Begin
+ If XCnt + 2 > XCap Then Begin
+  XCap := XCap * 2 + 1024;
+  P := XList; ReAllocMem(P, XCap * 2 * SizeOf(LongInt)); XList := P;
+ End;
+ XList^[XCnt * 2] := N; XList^[XCnt * 2 + 1] := Ofs;
+ Inc(XCnt);
+End;
+
 Procedure BeginObj(N: Integer);
 Begin
- XRef^[N] := OutPos;
+ If IncMode Then IncAdd(N, OutPos) Else XRef^[N] := OutPos;
  WL(IStr(N) + ' 0 obj');
 End;
 
@@ -2395,7 +2883,7 @@ End;
 
 Function PY_(Pg: Integer; Y: LongInt): String;
 Begin
- PY_ := RStr(Pages^[Pg].H - Y);
+ PY_ := RStr(PgP(Pg)^.H - Y);
 End;
 
 Function PdfDate: String;
@@ -2409,7 +2897,35 @@ End;
 
 Function ImgKept(I: Integer): Boolean;
 Begin
- ImgKept := (I > 0) And (I <= ImgCount) And Imgs[I].Keep And (Imgs[I].Raw <> Nil);
+ ImgKept := (I > 0) And (I <= ImgCount) And ImgP(I)^.Keep And (ImgP(I)^.Raw <> Nil);
+End;
+
+Var
+ CMode: Integer;           { 0 tout, 1 nouveautés avant l'original, 2 nouveautés après }
+ CFirstOrig: LongInt;
+ CDrop: PLArr;
+ CDropN: LongInt;
+ FPre, IPre: String[4];
+
+Function InDrop(N: LongInt): Boolean;
+Var
+ K: LongInt;
+Begin
+ InDrop := False;
+ For K := 0 To CDropN - 1 Do If CDrop^[K] = N Then Begin InDrop := True; Exit; End;
+End;
+
+{ Cet objet est-il écrit dans le flux de contenu selon le mode courant ? }
+Function ObjEmits(Const O: TObjRec; I: LongInt): Boolean;
+Begin
+ ObjEmits := False;
+ If O.Src = 3 Then Exit;
+ Case CMode Of
+  0: If (O.Src = 2) And (Not InDrop(O.SrcNum)) Then Exit;
+  1: If (Not ((O.Src = 0) Or ((O.Src = 2) And InDrop(O.SrcNum)))) Or (I >= CFirstOrig) Then Exit;
+  2: If (Not ((O.Src = 0) Or ((O.Src = 2) And InDrop(O.SrcNum)))) Or (I < CFirstOrig) Then Exit;
+ End;
+ ObjEmits := True;
 End;
 
 Procedure ContentOf(Pg: Integer; Var Cnt: LongInt);
@@ -2427,14 +2943,15 @@ Var
  CX, CY, RX, RY: Real;
  Op: String;
 Begin
- H := Pages^[Pg].H;
+ H := PgP(Pg)^.H;
  For I := 0 To ObjCount - 1 Do Begin
-  O := @Objs^[I];
+  O := @ObjP(I)^;
   If O^.Page <> Pg Then Continue;
+  If Not ObjEmits(O^, I) Then Continue;
   NormBox(O^, X1, Y1, X2, Y2);
   If (O^.Kind = K_IMAGE) And ImgKept(O^.P0) Then Begin
    S := 'q ';
-   If Imgs[O^.P0].Mask Then S := S + ColStr(O^.Rgb) + ' rg ';
+   If ImgP(O^.P0)^.Mask Then S := S + ColStr(O^.Rgb) + ' rg ';
    BW_ := X2 - X1; BH_ := Y2 - Y1;
    If (O^.Style And 1) <> 0 Then Sg0 := -1 Else Sg0 := 1;
    If (O^.Style And 2) <> 0 Then Sg1 := -1 Else Sg1 := 1;
@@ -2450,7 +2967,7 @@ Begin
    If (Ey_ < 0) Or (Fy < 0) Then AY := Y2;
    S := S + IStr(Ex) + ' ' + IStr(-Ey_) + ' ' + IStr(-Fx) + ' ' + IStr(Fy) + ' ' +
         IStr(AX + Fx) + ' ' + IStr(H - (AY + Fy));
-   WL(S + ' cm /Im' + IStr(O^.P0) + ' Do Q');
+   WL(S + ' cm /' + IPre + IStr(O^.P0) + ' Do Q');
    Continue;
   End;
   Case O^.Kind Of
@@ -2466,7 +2983,7 @@ Begin
     TX := TOx + TVx * O^.Size * 4 / 5;
     TY := TOy + TVy * O^.Size * 4 / 5;
     Mt := RStr4(TDx) + ' ' + RStr4(-TDy) + ' ' + RStr4(TDy) + ' ' + RStr4(TDx);
-    WL('q BT /F' + IStr((O^.Style Shr 2) * 4 + (O^.Style And 3) + 1) + ' ' + IStr(O^.Size) + ' Tf ' +
+    WL('q BT /' + FPre + IStr((O^.Style Shr 2) * 4 + (O^.Style And 3) + 1) + ' ' + IStr(O^.Size) + ' Tf ' +
        ColStr(O^.Rgb) + ' rg ' + RStr(Tz) + ' Tz ' + Mt + ' ' + RStr(TX) + ' ' +
        RStr(H - TY) + ' Tm ' + PdfStr(O^.Txt) + ' Tj ET Q');
    End;
@@ -2505,7 +3022,7 @@ Begin
     End;
     WL(S);
     If O^.Kind = K_STAMP Then
-     WL('q BT /F2 ' + IStr(O^.Size) + ' Tf ' + ColStr(O^.Rgb) + ' rg 1 0 0 1 ' + IStr(X1 + 6) + ' ' +
+     WL('q BT /' + FPre + '2 ' + IStr(O^.Size) + ' Tf ' + ColStr(O^.Rgb) + ' rg 1 0 0 1 ' + IStr(X1 + 6) + ' ' +
         RStr(H - Y1 - 4 - O^.Size * 4 / 5) + ' Tm ' + PdfStr(O^.Txt) + ' Tj ET Q');
    End;
    K_OVAL: Begin
@@ -2530,7 +3047,7 @@ Begin
     WS('q ' + ColStr(O^.Rgb2) + ' rg ' + ColStr(O^.Rgb) + ' RG ' + IStr(O^.Wd) + ' w 1 J 1 j ');
     For J := 0 To O^.PN - 1 Do Begin
      If J = 0 Then Op := ' m ' Else Op := ' l ';
-     WS(IStr(PoolX^[O^.P0 + J]) + ' ' + IStr(H - PoolY^[O^.P0 + J]) + Op);
+     WS(IStr(PoolXP(O^.P0 + J)^) + ' ' + IStr(H - PoolYP(O^.P0 + J)^) + Op);
      If (J Mod 8) = 7 Then WL('');
     End;
     If O^.Kind = K_INK Then WL('S Q')
@@ -2554,8 +3071,8 @@ Var
  S, Sub: String;
  YT, YB: String;
 Begin
- O := @Objs^[I];
- H := Pages^[Pg].H;
+ O := @ObjP(I)^;
+ H := PgP(Pg)^.H;
  NormBox(O^, X1, Y1, X2, Y2);
  YT := IStr(H - Y1);
  YB := IStr(H - Y2);
@@ -2580,137 +3097,14 @@ Begin
  IsAnnot := K In [K_HILITE, K_UNDER, K_STRIKE, K_NOTE];
 End;
 
-Function SaveAsPDF(Const FileName: String): Boolean;
-Const
- FontNames: Array[0..11] Of String[24] = ('Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique',
-  'Helvetica-BoldOblique', 'Times-Roman', 'Times-Bold', 'Times-Italic', 'Times-BoldItalic',
-  'Courier', 'Courier-Bold', 'Courier-Oblique', 'Courier-BoldOblique');
+{ Écrit le XObject image Idx sous le numéro No (SMNo : masque doux ou 0) }
+Procedure WriteImageXObj(Idx, No, SMNo: LongInt);
 Var
- I, J, Pg, NObj, FirstPage, AnnBase, AnnNext, NAnn: Integer;
- StartLen, Cnt: LongInt;
- S: String;
- XStart: LongInt;
- PagesOff: Integer;
- HasAnn: Boolean;
- ImgNo: Array[1..MAXIMG] Of Word;
- Used: Array[0..19] Of Integer;
- NUsed: Integer;
+ S, Hx: String;
  K, J2: LongInt;
- Hx: String;
 Begin
- SaveAsPDF := False;
- OutErr := False;
- OutPos := 0;
- NAnn := 0;
- For I := 0 To ObjCount - 1 Do If IsAnnot(Objs^[I].Kind) Then Inc(NAnn);
- FirstPage := 16;
- AnnBase := FirstPage + PageCount * 3;
- NObj := AnnBase + NAnn;
- FillChar(ImgNo, SizeOf(ImgNo), 0);
- FillChar(Used, SizeOf(Used), 0);
- For I := 0 To ObjCount - 1 Do
-  If (Objs^[I].Kind = K_IMAGE) And ImgKept(Objs^[I].P0) Then Begin
-   ImgNo[Objs^[I].P0] := 1;
-   If Imgs[Objs^[I].P0].SMIdx > 0 Then ImgNo[Imgs[Objs^[I].P0].SMIdx] := 1;
-  End;
- For I := 1 To ImgCount Do
-  If ImgNo[I] <> 0 Then Begin ImgNo[I] := NObj; Inc(NObj); End;
- GetMem(XRef, (NObj + 2) * SizeOf(LongInt));
- FillChar(XRef^, (NObj + 2) * SizeOf(LongInt), 0);
- {$I-}
- Assign(OutF, FileName);
- Rewrite(OutF, 1);
- {$I+}
- If IOResult <> 0 Then Begin
-  FreeMem(XRef, (NObj + 2) * SizeOf(LongInt));
-  Exit;
- End;
- WL('%PDF-1.4');
- WL('%' + #226#227#207#211);
- BeginObj(1);
- WL('<< /Type /Catalog /Pages 2 0 R >>');
- EndObj;
- BeginObj(2);
- S := '<< /Type /Pages /Count ' + IStr(PageCount) + ' /Kids [';
- WS(S);
- For Pg := 1 To PageCount Do WS(IStr(FirstPage + (Pg - 1) * 3) + ' 0 R ');
- WL('] >>');
- EndObj;
- BeginObj(3);
- S := '<< /Producer (CloneDRAW ACROBAT) /CreationDate (' + PdfDate + ')';
- If DocTitle <> '' Then S := S + ' /Title ' + PdfStr(DocTitle);
- If DocAuthor <> '' Then S := S + ' /Author ' + PdfStr(DocAuthor);
- If DocSubject <> '' Then S := S + ' /Subject ' + PdfStr(DocSubject);
- If DocKeywords <> '' Then S := S + ' /Keywords ' + PdfStr(DocKeywords);
- If DocCreator <> '' Then S := S + ' /Creator ' + PdfStr(DocCreator);
- WL(S + ' >>');
- EndObj;
- For I := 0 To 11 Do Begin
-  BeginObj(4 + I);
-  WL('<< /Type /Font /Subtype /Type1 /BaseFont /' + FontNames[I] + ' /Encoding /WinAnsiEncoding >>');
-  EndObj;
- End;
- AnnNext := AnnBase;
- For Pg := 1 To PageCount Do Begin
-  BeginObj(FirstPage + (Pg - 1) * 3);
-  S := '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + IStr(Pages^[Pg].W) + ' ' + IStr(Pages^[Pg].H) + ']';
-  If Pages^[Pg].Rot <> 0 Then S := S + ' /Rotate ' + IStr((Pages^[Pg].Rot And 3) * 90);
-  S := S + ' /Resources << /Font <<';
-  For I := 0 To 11 Do S := S + ' /F' + IStr(I + 1) + ' ' + IStr(4 + I) + ' 0 R';
-  S := S + ' >>';
-  NUsed := 0;
-  For I := 0 To ObjCount - 1 Do
-   If (Objs^[I].Page = Pg) And (Objs^[I].Kind = K_IMAGE) And ImgKept(Objs^[I].P0) And (NUsed < 20) Then Begin
-    K := 0;
-    For J2 := 0 To NUsed - 1 Do If Used[J2] = Objs^[I].P0 Then K := 1;
-    If K = 0 Then Begin Used[NUsed] := Objs^[I].P0; Inc(NUsed); End;
-   End;
-  If NUsed > 0 Then Begin
-   WS(S);
-   S := ' /XObject <<';
-   For J2 := 0 To NUsed - 1 Do Begin
-    S := S + ' /Im' + IStr(Used[J2]) + ' ' + IStr(ImgNo[Used[J2]]) + ' 0 R';
-    If Length(S) > 200 Then Begin WS(S); S := ''; End;
-   End;
-   S := S + ' >>';
-  End;
-  S := S + ' >> /Contents ' + IStr(FirstPage + (Pg - 1) * 3 + 1) + ' 0 R';
-  WS(S);
-  HasAnn := False;
-  For I := 0 To ObjCount - 1 Do
-   If (Objs^[I].Page = Pg) And IsAnnot(Objs^[I].Kind) Then Begin
-    If Not HasAnn Then Begin WS(' /Annots ['); HasAnn := True; End;
-    WS(IStr(AnnNext) + ' 0 R ');
-    Inc(AnnNext);
-   End;
-  If HasAnn Then WS(']');
-  WL(' >>');
-  EndObj;
-  BeginObj(FirstPage + (Pg - 1) * 3 + 1);
-  WL('<< /Length ' + IStr(FirstPage + (Pg - 1) * 3 + 2) + ' 0 R >>');
-  WL('stream');
-  XStart := OutPos;
-  Cnt := 0;
-  ContentOf(Pg, Cnt);
-  Cnt := OutPos - XStart;
-  WL('endstream');
-  EndObj;
-  BeginObj(FirstPage + (Pg - 1) * 3 + 2);
-  WL(IStr(Cnt));
-  EndObj;
- End;
- AnnNext := AnnBase;
- For Pg := 1 To PageCount Do
-  For I := 0 To ObjCount - 1 Do
-   If (Objs^[I].Page = Pg) And IsAnnot(Objs^[I].Kind) Then Begin
-    BeginObj(AnnNext);
-    WL(AnnotOf(Pg, I));
-    EndObj;
-    Inc(AnnNext);
-   End;
- For I := 1 To ImgCount Do
-  If ImgNo[I] <> 0 Then With Imgs[I] Do Begin
-   BeginObj(ImgNo[I]);
+ With ImgP(Idx)^ Do Begin
+   BeginObj(No);
    S := '<< /Type /XObject /Subtype /Image /Width ' + IStr(OW) + ' /Height ' + IStr(OH);
    If Mask Then S := S + ' /ImageMask true /BitsPerComponent 1'
    Else Begin
@@ -2750,7 +3144,7 @@ Begin
      Else S := S + 'null ';
     S := S + ']';
    End;
-   If (SMIdx > 0) And (ImgNo[SMIdx] <> 0) Then S := S + ' /SMask ' + IStr(ImgNo[SMIdx]) + ' 0 R';
+   If SMNo > 0 Then S := S + ' /SMask ' + IStr(SMNo) + ' 0 R';
    WL(S + ' /Length ' + IStr(RawLen) + ' >>');
    WL('stream');
    J2 := 0;
@@ -2767,6 +3161,175 @@ Begin
    WL('');
    WL('endstream');
    EndObj;
+  End;
+End;
+
+Const
+ FontNames: Array[0..11] Of String[24] = ('Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique',
+  'Helvetica-BoldOblique', 'Times-Roman', 'Times-Bold', 'Times-Italic', 'Times-BoldItalic',
+  'Courier', 'Courier-Bold', 'Courier-Oblique', 'Courier-BoldOblique');
+
+Procedure WriteFontObjs(Base: Integer);
+Var
+ I: Integer;
+Begin
+ For I := 0 To 11 Do Begin
+  BeginObj(Base + I);
+  WL('<< /Type /Font /Subtype /Type1 /BaseFont /' + FontNames[I] + ' /Encoding /WinAnsiEncoding >>');
+  EndObj;
+ End;
+End;
+
+Function SaveAsPDF(Const FileName: String): Boolean;
+Var
+ I, J, Pg, NObj, FirstPage, AnnBase, AnnNext, NAnn: Integer;
+ StartLen, Cnt: LongInt;
+ S: String;
+ XStart: LongInt;
+ PagesOff: Integer;
+ HasAnn: Boolean;
+ ImgNo: PLArr;
+ Used: Array[0..19] Of Integer;
+ NUsed: Integer;
+ K, J2: LongInt;
+ Hx: String;
+ Comp: PByteBuf;
+ CompLen: LongInt;
+Begin
+ SaveAsPDF := False;
+ OutErr := False;
+ OutPos := 0;
+ IncMode := False; CMode := 0; CDropN := 0; FPre := 'F'; IPre := 'Im';
+ NAnn := 0;
+ For I := 0 To ObjCount - 1 Do If IsAnnot(ObjP(I)^.Kind) Then Inc(NAnn);
+ FirstPage := 16;
+ AnnBase := FirstPage + PageCount * 3;
+ NObj := AnnBase + NAnn;
+ GetMem(ImgNo, (ImgCount + 2) * SizeOf(LongInt));
+ FillChar(ImgNo^, (ImgCount + 2) * SizeOf(LongInt), 0);
+ FillChar(Used, SizeOf(Used), 0);
+ For I := 0 To ObjCount - 1 Do
+  If (ObjP(I)^.Kind = K_IMAGE) And ImgKept(ObjP(I)^.P0) Then Begin
+   ImgNo^[ObjP(I)^.P0] := 1;
+   If ImgP(ObjP(I)^.P0)^.SMIdx > 0 Then ImgNo^[ImgP(ObjP(I)^.P0)^.SMIdx] := 1;
+  End;
+ For I := 1 To ImgCount Do
+  If ImgNo^[I] <> 0 Then Begin ImgNo^[I] := NObj; Inc(NObj); End;
+ GetMem(XRef, (NObj + 2) * SizeOf(LongInt));
+ FillChar(XRef^, (NObj + 2) * SizeOf(LongInt), 0);
+ {$I-}
+ Assign(OutF, FileName);
+ Rewrite(OutF, 1);
+ {$I+}
+ If IOResult <> 0 Then Begin
+  FreeMem(XRef, (NObj + 2) * SizeOf(LongInt));
+  FreeMem(ImgNo, (ImgCount + 2) * SizeOf(LongInt));
+  Exit;
+ End;
+ WL('%PDF-1.4');
+ WL('%' + #226#227#207#211);
+ BeginObj(1);
+ WL('<< /Type /Catalog /Pages 2 0 R >>');
+ EndObj;
+ BeginObj(2);
+ S := '<< /Type /Pages /Count ' + IStr(PageCount) + ' /Kids [';
+ WS(S);
+ For Pg := 1 To PageCount Do WS(IStr(FirstPage + (Pg - 1) * 3) + ' 0 R ');
+ WL('] >>');
+ EndObj;
+ BeginObj(3);
+ S := '<< /Producer (CloneDRAW ACROBAT) /CreationDate (' + PdfDate + ')';
+ If DocTitle <> '' Then S := S + ' /Title ' + PdfStr(DocTitle);
+ If DocAuthor <> '' Then S := S + ' /Author ' + PdfStr(DocAuthor);
+ If DocSubject <> '' Then S := S + ' /Subject ' + PdfStr(DocSubject);
+ If DocKeywords <> '' Then S := S + ' /Keywords ' + PdfStr(DocKeywords);
+ If DocCreator <> '' Then S := S + ' /Creator ' + PdfStr(DocCreator);
+ WL(S + ' >>');
+ EndObj;
+ WriteFontObjs(4);
+ AnnNext := AnnBase;
+ For Pg := 1 To PageCount Do Begin
+  BeginObj(FirstPage + (Pg - 1) * 3);
+  S := '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + IStr(PgP(Pg)^.W) + ' ' + IStr(PgP(Pg)^.H) + ']';
+  If PgP(Pg)^.Rot <> 0 Then S := S + ' /Rotate ' + IStr((PgP(Pg)^.Rot And 3) * 90);
+  S := S + ' /Resources << /Font <<';
+  For I := 0 To 11 Do S := S + ' /F' + IStr(I + 1) + ' ' + IStr(4 + I) + ' 0 R';
+  S := S + ' >>';
+  NUsed := 0;
+  For I := 0 To ObjCount - 1 Do
+   If (ObjP(I)^.Page = Pg) And (ObjP(I)^.Kind = K_IMAGE) And ImgKept(ObjP(I)^.P0) And (NUsed < 20) Then Begin
+    K := 0;
+    For J2 := 0 To NUsed - 1 Do If Used[J2] = ObjP(I)^.P0 Then K := 1;
+    If K = 0 Then Begin Used[NUsed] := ObjP(I)^.P0; Inc(NUsed); End;
+   End;
+  If NUsed > 0 Then Begin
+   WS(S);
+   S := ' /XObject <<';
+   For J2 := 0 To NUsed - 1 Do Begin
+    S := S + ' /Im' + IStr(Used[J2]) + ' ' + IStr(ImgNo^[Used[J2]]) + ' 0 R';
+    If Length(S) > 200 Then Begin WS(S); S := ''; End;
+   End;
+   S := S + ' >>';
+  End;
+  S := S + ' >> /Contents ' + IStr(FirstPage + (Pg - 1) * 3 + 1) + ' 0 R';
+  WS(S);
+  HasAnn := False;
+  For I := 0 To ObjCount - 1 Do
+   If (ObjP(I)^.Page = Pg) And IsAnnot(ObjP(I)^.Kind) Then Begin
+    If Not HasAnn Then Begin WS(' /Annots ['); HasAnn := True; End;
+    WS(IStr(AnnNext) + ' 0 R ');
+    Inc(AnnNext);
+   End;
+  If HasAnn Then WS(']');
+  WL(' >>');
+  EndObj;
+  BeginObj(FirstPage + (Pg - 1) * 3 + 1);
+  { le contenu est d'abord mis en tampon pour être compressé }
+  CapLen := 0;
+  If CapBuf = Nil Then Begin CapSize := 65536; GetMem(CapBuf, CapSize); End;
+  CapOn := True;
+  Cnt := 0;
+  ContentOf(Pg, Cnt);
+  CapOn := False;
+  Comp := Nil; CompLen := 0;
+  {$IFDEF FPC}
+  If CapLen > 64 Then
+   If DeflateBuf(CapBuf, CapLen, Comp, CompLen) Then
+    If CompLen >= CapLen Then Begin FreeMem(Comp, CapLen + CapLen Div 6 + 128); Comp := Nil; End;
+  {$ENDIF}
+  If Comp <> Nil Then Begin
+   WL('<< /Length ' + IStr(FirstPage + (Pg - 1) * 3 + 2) + ' 0 R /Filter /FlateDecode >>');
+   WL('stream');
+   WriteBytes(Comp, CompLen);
+   Cnt := CompLen;
+   FreeMem(Comp, CapLen + CapLen Div 6 + 128);
+  End
+  Else Begin
+   WL('<< /Length ' + IStr(FirstPage + (Pg - 1) * 3 + 2) + ' 0 R >>');
+   WL('stream');
+   WriteBytes(CapBuf, CapLen);
+   Cnt := CapLen;
+  End;
+  WL('');
+  WL('endstream');
+  EndObj;
+  BeginObj(FirstPage + (Pg - 1) * 3 + 2);
+  WL(IStr(Cnt));
+  EndObj;
+ End;
+ AnnNext := AnnBase;
+ For Pg := 1 To PageCount Do
+  For I := 0 To ObjCount - 1 Do
+   If (ObjP(I)^.Page = Pg) And IsAnnot(ObjP(I)^.Kind) Then Begin
+    BeginObj(AnnNext);
+    WL(AnnotOf(Pg, I));
+    EndObj;
+    Inc(AnnNext);
+   End;
+ For I := 1 To ImgCount Do
+  If ImgNo^[I] <> 0 Then Begin
+   If (ImgP(I)^.SMIdx > 0) And (ImgNo^[ImgP(I)^.SMIdx] <> 0) Then WriteImageXObj(I, ImgNo^[I], ImgNo^[ImgP(I)^.SMIdx])
+   Else WriteImageXObj(I, ImgNo^[I], 0);
   End;
  XStart := OutPos;
  WL('xref');
@@ -2787,6 +3350,8 @@ Begin
  {$I+}
  If IOResult <> 0 Then OutErr := True;
  FreeMem(XRef, (NObj + 2) * SizeOf(LongInt));
+ FreeMem(ImgNo, (ImgCount + 2) * SizeOf(LongInt));
+ If CapBuf <> Nil Then Begin FreeMem(CapBuf, CapSize); CapBuf := Nil; End;
  SaveAsPDF := Not OutErr;
 End;
 
@@ -2817,6 +3382,7 @@ Var
  TokInt: Boolean;
  ObjPos: PLArr;
  ObjStmNo, ObjStmOff: PWArr;
+ PdfCap: LongInt;
  MaxObjNum: Integer;
  RootNum, InfoNum: Integer;
  PdfBuffersReady: Boolean;
@@ -3226,12 +3792,6 @@ Var
  IErr: Boolean;
  LTree, DTree: TInflTree;
 
-Const
- LBase: Array[0..28] Of Word = (3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258);
- LExtra: Array[0..28] Of Byte = (0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0);
- DBase: Array[0..29] Of Word = (1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577);
- DExtra: Array[0..29] Of Byte = (0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13);
- CLOrder: Array[0..18] Of Byte = (16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15);
 
 Function GetBit: Integer;
 Begin
@@ -3479,6 +4039,26 @@ Begin
  AllocBuf := P;
 End;
 
+{ Agrandit les tables d'objets PDF (tas) selon le plus grand numéro rencontré }
+Procedure EnsurePdfCap(Need: LongInt);
+Var
+ NewCap, I: LongInt;
+ P: Pointer;
+Begin
+ If Need < PdfCap Then Exit;
+ NewCap := PdfCap * 2;
+ If NewCap < Need + 1 Then NewCap := Need + 1;
+ If NewCap < 4096 Then NewCap := 4096;
+ P := ObjPos; ReAllocMem(P, NewCap * SizeOf(LongInt)); ObjPos := P;
+ P := ObjStmNo; ReAllocMem(P, NewCap * SizeOf(Word)); ObjStmNo := P;
+ P := ObjStmOff; ReAllocMem(P, NewCap * SizeOf(Word)); ObjStmOff := P;
+ P := ImgByObj; ReAllocMem(P, NewCap * SizeOf(Word)); ImgByObj := P;
+ For I := PdfCap To NewCap - 1 Do Begin
+  ObjPos^[I] := -1; ObjStmNo^[I] := 0; ObjStmOff^[I] := 0; ImgByObj^[I] := 0;
+ End;
+ PdfCap := NewCap;
+End;
+
 Procedure InitPdfBuffers;
 Var
  I: Integer;
@@ -3486,10 +4066,9 @@ Begin
  If PdfBuffersReady Then Exit;
  StmBuf := AllocBuf; TuBuf := AllocBuf; RawBuf := AllocBuf; Buf2 := AllocBuf;
  For I := 0 To 3 Do CBufs[I] := AllocBuf;
- GetMem(ObjPos, (MAXPDFOBJ + 2) * SizeOf(LongInt));
- GetMem(ObjStmNo, (MAXPDFOBJ + 2) * SizeOf(Word));
- GetMem(ObjStmOff, (MAXPDFOBJ + 2) * SizeOf(Word));
- GetMem(ImgByObj, (MAXPDFOBJ + 2) * SizeOf(Word));
+ PdfCap := 0;
+ ObjPos := Nil; ObjStmNo := Nil; ObjStmOff := Nil; ImgByObj := Nil;
+ EnsurePdfCap(4096);
  DecCap := BUFSZ;
  PdfBuffersReady := True;
 End;
@@ -3635,7 +4214,7 @@ End;
 Function EnterObj(Num: Integer): LongInt;
 Begin
  EnterObj := -1;
- If (Num <= 0) Or (Num > MaxObjNum) Or (Num > MAXPDFOBJ) Then Exit;
+ If (Num <= 0) Or (Num > MaxObjNum) Or (Num >= PdfCap) Then Exit;
  If ObjPos^[Num] >= 0 Then Begin
   SrcMode := 0;
   EnterObj := ObjPos^[Num];
@@ -3652,6 +4231,8 @@ Procedure ShowProgress(Const Msg: String); Forward;
 { ---------------------------------------------------------------------- }
 
 Var
+ XRefBest: Integer;
+ XRefBestPos: LongInt;
  TrPos: Array[0..7] Of LongInt;
  TrCount: Integer;
  StmList: Array[0..255] Of Word;
@@ -3689,6 +4270,7 @@ Begin
  Num := 0;
  For I := P + 1 To E2 Do Num := Num * 10 + (SB(I) - 48);
  If (Num < 1) Or (Num > MAXPDFOBJ) Then Exit;
+ EnsurePdfCap(Num);
  ObjPos^[Num] := Q + 3;
  ObjStmNo^[Num] := 0;
  If Num > MaxObjNum Then MaxObjNum := Num;
@@ -3725,7 +4307,11 @@ Begin
    Else If Chunk^[I] = 116 Then Begin
     If (Chunk^[I + 1] = 114) And (Chunk^[I + 2] = 97) And (Chunk^[I + 3] = 105) And
        (Chunk^[I + 4] = 108) And (Chunk^[I + 5] = 101) And (Chunk^[I + 6] = 114) Then
-     If TrCount < 8 Then Begin
+     Begin
+      If TrCount >= 8 Then Begin
+       For Q := 0 To 6 Do TrPos[Q] := TrPos[Q + 1];
+       TrCount := 7;
+      End;
       TrPos[TrCount] := Pos + I + 7;
       Inc(TrCount);
      End;
@@ -3747,6 +4333,7 @@ Var
 Begin
  SrcMode := 0;
  StmListN := 0;
+ XRefBest := 0; XRefBestPos := -1;
  For I := 0 To TrCount - 1 Do Begin
   V := DictFind(TrPos[I], 'Root');
   If V >= 0 Then Begin N := RefAt(V); If N > 0 Then RootNum := N; End;
@@ -3762,6 +4349,7 @@ Begin
   Nm := ValName(V);
   If Nm = 'Catalog' Then RootNum := N
   Else If Nm = 'XRef' Then Begin
+   If ObjPos^[N] > XRefBestPos Then Begin XRefBestPos := ObjPos^[N]; XRefBest := N; End;
    V := DictFind(P, 'Root');
    If V >= 0 Then If RefAt(V) > 0 Then RootNum := RefAt(V);
    V := DictFind(P, 'Info');
@@ -3789,12 +4377,14 @@ Begin
    ON := Round(TokR);
    If NextTok(Q) <> T_NUM Then Break;
    OO := Round(TokR);
-   If (ON >= 1) And (ON <= MAXPDFOBJ) And (First + OO < 65000) Then
+   If (ON >= 1) And (ON <= MAXPDFOBJ) And (First + OO < 65000) Then Begin
+    EnsurePdfCap(ON);
     If ObjPos^[ON] < 0 Then Begin
      ObjStmNo^[ON] := N;
      ObjStmOff^[ON] := First + OO;
      If ON > MaxObjNum Then MaxObjNum := ON;
     End;
+   End;
   End;
  End;
  SrcMode := 0;
@@ -5039,13 +5629,12 @@ Var
  I: Integer;
 Begin
  For I := 1 To ImgCount Do Begin
-  If Imgs[I].Pix <> Nil Then FreeMem(Imgs[I].Pix, LongInt(Imgs[I].W) * Imgs[I].H * 2);
-  If Imgs[I].Alpha <> Nil Then FreeMem(Imgs[I].Alpha, LongInt(Imgs[I].W) * Imgs[I].H);
-  If Imgs[I].Raw <> Nil Then FreeMem(Imgs[I].Raw, Imgs[I].RawLen + 16);
-  If Imgs[I].Pal <> Nil Then FreeMem(Imgs[I].Pal, Imgs[I].PalN);
+  If ImgP(I)^.Pix <> Nil Then FreeMem(ImgP(I)^.Pix, LongInt(ImgP(I)^.W) * ImgP(I)^.H * 2);
+  If ImgP(I)^.Alpha <> Nil Then FreeMem(ImgP(I)^.Alpha, LongInt(ImgP(I)^.W) * ImgP(I)^.H);
+  If ImgP(I)^.Raw <> Nil Then FreeMem(ImgP(I)^.Raw, ImgP(I)^.RawLen + 16);
+  If ImgP(I)^.Pal <> Nil Then FreeMem(ImgP(I)^.Pal, ImgP(I)^.PalN);
  End;
- FillChar(Imgs, SizeOf(Imgs), 0);
- ImgCount := 0;
+ ImgListFree;
 End;
 
 { Réduit l'image courante (contexte I*) à au plus IMGMAXDIM pixels }
@@ -5248,12 +5837,12 @@ Begin
  { masque doux }
  If (SMNum > 0) And (Not AsSM) And (Pix <> Nil) Then Begin
   M := ImportImageObj(SMNum, True);
-  If M > 0 Then If Imgs[M].Pix <> Nil Then Begin
+  If M > 0 Then If ImgP(M)^.Pix <> Nil Then Begin
    GetMem(Alpha, TW_ * TH_);
-   SW := Imgs[M].W; SH := Imgs[M].H;
+   SW := ImgP(M)^.W; SH := ImgP(M)^.H;
    For Y := 0 To TH_ - 1 Do
     For X := 0 To TW_ - 1 Do
-     Alpha^[Y * TW_ + X] := ((PWordsBig(Imgs[M].Pix)^[((Y * SH) Div TH_) * SW + (X * SW) Div TW_] Shr 5) And 63) * 4;
+     Alpha^[Y * TW_ + X] := ((PWordsBig(ImgP(M)^.Pix)^[((Y * SH) Div TH_) * SW + (X * SW) Div TW_] Shr 5) And 63) * 4;
   End;
  End
  Else If (SMNum > 0) And (Not AsSM) Then M := ImportImageObj(SMNum, True) Else M := 0;
@@ -5263,26 +5852,32 @@ Begin
   FreeMem(Raw, RawLen + 16);
   Exit;
  End;
+ If Not ImgEnsure(ImgCount + 1) Then Begin
+  If Pix <> Nil Then FreeMem(Pix, TW_ * TH_ * 2);
+  If Alpha <> Nil Then FreeMem(Alpha, TW_ * TH_);
+  FreeMem(Raw, RawLen + 16);
+  Exit;
+ End;
  Inc(ImgCount);
  Idx := ImgCount;
- FillChar(Imgs[Idx], SizeOf(TImgRec), 0);
- Imgs[Idx].W := TW_; Imgs[Idx].H := TH_;
- Imgs[Idx].Pix := Pix; Imgs[Idx].Alpha := Alpha;
- Imgs[Idx].OW := W; Imgs[Idx].OH := H;
- If Keep Then Begin Imgs[Idx].Raw := Raw; Imgs[Idx].RawLen := RawLen; End
+ FillChar(ImgP(Idx)^, SizeOf(TImgRec), 0);
+ ImgP(Idx)^.W := TW_; ImgP(Idx)^.H := TH_;
+ ImgP(Idx)^.Pix := Pix; ImgP(Idx)^.Alpha := Alpha;
+ ImgP(Idx)^.OW := W; ImgP(Idx)^.OH := H;
+ If Keep Then Begin ImgP(Idx)^.Raw := Raw; ImgP(Idx)^.RawLen := RawLen; End
  Else FreeMem(Raw, RawLen + 16);
- Imgs[Idx].Keep := Keep;
- Imgs[Idx].CS := CS; Imgs[Idx].BPC := Bpc; Imgs[Idx].NF := INF;
- For K := 0 To INF - 1 Do Imgs[Idx].Flt[K] := IFlt[K];
- Imgs[Idx].Pred := IPred; Imgs[Idx].Cols := ICols; Imgs[Idx].Clr := IClr;
- Imgs[Idx].Mask := IsMask; Imgs[Idx].IsSM := AsSM;
- Imgs[Idx].SMIdx := M;
- Imgs[Idx].Decode := DecStr;
+ ImgP(Idx)^.Keep := Keep;
+ ImgP(Idx)^.CS := CS; ImgP(Idx)^.BPC := Bpc; ImgP(Idx)^.NF := INF;
+ For K := 0 To INF - 1 Do ImgP(Idx)^.Flt[K] := IFlt[K];
+ ImgP(Idx)^.Pred := IPred; ImgP(Idx)^.Cols := ICols; ImgP(Idx)^.Clr := IClr;
+ ImgP(Idx)^.Mask := IsMask; ImgP(Idx)^.IsSM := AsSM;
+ ImgP(Idx)^.SMIdx := M;
+ ImgP(Idx)^.Decode := DecStr;
  If (CS = 5) And (IPalN > 0) Then Begin
-  GetMem(Imgs[Idx].Pal, IPalN);
-  Move(IPal[0], Imgs[Idx].Pal^, IPalN);
-  Imgs[Idx].PalN := IPalN;
-  Imgs[Idx].PalBase := PalBase;
+  GetMem(ImgP(Idx)^.Pal, IPalN);
+  Move(IPal[0], ImgP(Idx)^.Pal^, IPalN);
+  ImgP(Idx)^.PalN := IPalN;
+  ImgP(Idx)^.PalBase := PalBase;
  End;
  ImgByObj^[Num] := Idx;
  ImportImageObj := Idx;
@@ -5334,11 +5929,14 @@ Var
  NOpnd: Integer;
  LastName, LastStr: String;
  ImpPg: Integer;
+ ImpSrcKind: Integer;
+ ImpAnnNum: LongInt;
+ ImpKeepSrc: Boolean;
  MbX0, MbY1: Real;
  ImpFull: Boolean;
  CLens: Array[0..3] Of LongInt;
  SkippedText: Integer;
- KidStack: Array[0..2047] Of Word;
+ KidStack: Array[0..65535] Of Word;
  KidSP: Integer;
 
 Procedure MatMul(Const A, B: TMat; Var R: TMat);
@@ -5386,6 +5984,31 @@ Begin
  CmykRgb := RGBOf(RI(255 * (1 - C) * (1 - K)), RI(255 * (1 - M) * (1 - K)), RI(255 * (1 - Y) * (1 - K)));
 End;
 
+Var
+ AnnSet: PByteBuf;
+ AnnSetCap: LongInt;
+
+{ Ensemble des numéros d'annotations d'origine importées dans le modèle }
+Procedure AnnSetMark(N: LongInt);
+Var
+ P: Pointer;
+ NewCap: LongInt;
+Begin
+ If N + 1 > AnnSetCap Then Begin
+  NewCap := AnnSetCap * 2;
+  If NewCap < N + 1024 Then NewCap := N + 1024;
+  P := AnnSet; ReAllocMem(P, NewCap); AnnSet := P;
+  FillChar(AnnSet^[AnnSetCap], NewCap - AnnSetCap, 0);
+  AnnSetCap := NewCap;
+ End;
+ AnnSet^[N] := 1;
+End;
+
+Function AnnSetHas(N: LongInt): Boolean;
+Begin
+ AnnSetHas := (N >= 0) And (N < AnnSetCap) And (AnnSet^[N] <> 0);
+End;
+
 Function NewImpObj(Kind: Integer): Integer;
 Var
  I: Integer;
@@ -5393,7 +6016,11 @@ Begin
  I := NewObj(Kind, ImpPg);
  If I < 0 Then Begin
   ImpFull := True;
-  LoadNotice := 'Document tronqué : limite du nombre d''objets atteinte.';
+  LoadNotice := 'Document tronqué : mémoire insuffisante.';
+ End
+ Else Begin
+  If ImpKeepSrc Then ObjP(I)^.Src := ImpSrcKind Else ObjP(I)^.Src := 0;
+  ObjP(I)^.SrcNum := ImpAnnNum;
  End;
  NewImpObj := I;
 End;
@@ -5494,7 +6121,7 @@ Begin
   If IsRect Then Begin
    Idx := NewImpObj(K_RECT);
    If Idx < 0 Then Exit;
-   With Objs^[Idx] Do Begin
+   With ObjP(Idx)^ Do Begin
     X1 := PgX(MnX); X2 := PgX(MxX); Y1 := PgY(MxY); Y2 := PgY(MnY);
     Wd := StrokeW;
     Rgb := GS.Stroke; Rgb2 := GS.Fill;
@@ -5506,7 +6133,7 @@ Begin
   Else If (N = 2) And DoStroke And (Not DoFill) Then Begin
    Idx := NewImpObj(K_LINE);
    If Idx < 0 Then Exit;
-   With Objs^[Idx] Do Begin
+   With ObjP(Idx)^ Do Begin
     X1 := PgX(PathX[S]); Y1 := PgY(PathY[S]);
     X2 := PgX(PathX[E]); Y2 := PgY(PathY[E]);
     Wd := StrokeW;
@@ -5520,10 +6147,10 @@ Begin
    Idx := NewImpObj(K_POLY);
    If Idx < 0 Then Exit;
    For I := 0 To N - 1 Do Begin
-    PoolX^[Pool + I] := PgX(PathX[S + I]);
-    PoolY^[Pool + I] := PgY(PathY[S + I]);
+    PoolXP(Pool + I)^ := PgX(PathX[S + I]);
+    PoolYP(Pool + I)^ := PgY(PathY[S + I]);
    End;
-   With Objs^[Idx] Do Begin
+   With ObjP(Idx)^ Do Begin
     P0 := Pool; PN := N;
     Wd := StrokeW;
     Rgb := GS.Stroke; Rgb2 := GS.Fill;
@@ -5559,7 +6186,7 @@ Begin
  End;
  Idx := NewImpObj(K_IMAGE);
  If Idx < 0 Then Exit;
- With Objs^[Idx] Do Begin
+ With ObjP(Idx)^ Do Begin
   X1 := PgX(MnX); X2 := PgX(MxX); Y1 := PgY(MxY); Y2 := PgY(MnY);
   If ImgIdx > 0 Then Begin
    P0 := ImgIdx;
@@ -5623,7 +6250,7 @@ Begin
  WPt := Abs(Adv * SXH);
  BX := PX - MbX0;
  BY := MbY1 - PYv;
- If (BX < -200) Or (BX > Pages^[ImpPg].W + 200) Or (BY < -200) Or (BY > Pages^[ImpPg].H + 200) Then Exit;
+ If (BX < -200) Or (BX > PgP(ImpPg)^.W + 200) Or (BY < -200) Or (BY > PgP(ImpPg)^.H + 200) Then Exit;
  If GS.TFont >= 0 Then Begin Fam := Fonts[GS.TFont].Fam; Sty := Fonts[GS.TFont].Style; End
  Else Begin Fam := 0; Sty := 0; End;
  L := Length(Txt);
@@ -5643,7 +6270,7 @@ Begin
   If Len < 1 Then Len := 1;
   Idx := NewImpObj(K_TEXT);
   If Idx < 0 Then Exit;
-  With Objs^[Idx] Do Begin
+  With ObjP(Idx)^ Do Begin
    Size := FSz;
    Style := Fam * 4 + Sty;
    Rgb := GS.Fill;
@@ -5652,7 +6279,7 @@ Begin
    PN := Tn;
   End;
   { origine = début de la ligne de base, remontée de l'ascendante }
-  SetTextBox(Objs^[Idx], BX + Dx * WPt * F0 - Vx * Asc, BY + Dy * WPt * F0 - Vy * Asc);
+  SetTextBox(ObjP(Idx)^, BX + Dx * WPt * F0 - Vx * Asc, BY + Dy * WPt * F0 - Vy * Asc);
   K := E + 1;
  End;
 End;
@@ -6047,7 +6674,7 @@ Begin
   If K = 0 Then Begin
    Idx := NewImpObj(Kind);
    If Idx < 0 Then Exit;
-   With Objs^[Idx] Do Begin X1 := AX1; Y1 := AY1; X2 := AX2; Y2 := AY2; Rgb := Col; Txt := ATxt; End;
+   With ObjP(Idx)^ Do Begin X1 := AX1; Y1 := AY1; X2 := AX2; Y2 := AY2; Rgb := Col; Txt := ATxt; End;
   End
   Else For I := 0 To K - 1 Do Begin
    MnX := QA[I * 8]; MxX := MnX; MnY := QA[I * 8 + 1]; MxY := MnY;
@@ -6059,7 +6686,7 @@ Begin
    End;
    Idx := NewImpObj(Kind);
    If Idx < 0 Then Exit;
-   With Objs^[Idx] Do Begin
+   With ObjP(Idx)^ Do Begin
     X1 := PgX(MnX); X2 := PgX(MxX); Y1 := PgY(MxY); Y2 := PgY(MnY);
     Rgb := Col;
     If I = 0 Then Txt := ATxt;
@@ -6069,19 +6696,19 @@ Begin
  Else If Sub = 'Text' Then Begin
   Idx := NewImpObj(K_NOTE);
   If Idx < 0 Then Exit;
-  With Objs^[Idx] Do Begin X1 := AX1; Y1 := AY1; X2 := AX1 + 16; Y2 := AY1 + 16; Rgb := $FFFF00; Txt := ATxt; End;
+  With ObjP(Idx)^ Do Begin X1 := AX1; Y1 := AY1; X2 := AX1 + 16; Y2 := AY1 + 16; Rgb := $FFFF00; Txt := ATxt; End;
  End
  Else If Sub = 'FreeText' Then Begin
   If ATxt = '' Then Exit;
   Idx := NewImpObj(K_TEXT);
   If Idx < 0 Then Exit;
-  With Objs^[Idx] Do Begin X1 := AX1 + 2; Y1 := AY1 + 2; Size := 12; Rgb := 0; Txt := ATxt; End;
+  With ObjP(Idx)^ Do Begin X1 := AX1 + 2; Y1 := AY1 + 2; Size := 12; Rgb := 0; Txt := ATxt; End;
   RecalcBox(Idx);
  End
  Else If (Sub = 'Square') Or (Sub = 'Circle') Then Begin
   If Sub = 'Square' Then Idx := NewImpObj(K_RECT) Else Idx := NewImpObj(K_OVAL);
   If Idx < 0 Then Exit;
-  With Objs^[Idx] Do Begin
+  With ObjP(Idx)^ Do Begin
    X1 := AX1; Y1 := AY1; X2 := AX2; Y2 := AY2;
    If Col < 0 Then Col := $FF0000;
    Rgb := Col; Rgb2 := ICol; Wd := BW;
@@ -6092,7 +6719,7 @@ Begin
   If ReadNums(DictFind(P, 'L'), LA, 4) < 4 Then Exit;
   Idx := NewImpObj(K_LINE);
   If Idx < 0 Then Exit;
-  With Objs^[Idx] Do Begin
+  With ObjP(Idx)^ Do Begin
    X1 := PgX(LA[0]); Y1 := PgY(LA[1]); X2 := PgX(LA[2]); Y2 := PgY(LA[3]);
    If Col < 0 Then Col := $FF0000;
    Rgb := Col; Wd := BW;
@@ -6117,9 +6744,9 @@ Begin
   If Pool < 0 Then Exit;
   Idx := NewImpObj(K_INK);
   If Idx < 0 Then Exit;
-  For I := 0 To Cnt - 1 Do Begin PoolX^[Pool + I] := Px[I]; PoolY^[Pool + I] := Py[I]; End;
+  For I := 0 To Cnt - 1 Do Begin PoolXP(Pool + I)^ := Px[I]; PoolYP(Pool + I)^ := Py[I]; End;
   If Col < 0 Then Col := $FF0000;
-  With Objs^[Idx] Do Begin P0 := Pool; PN := Cnt; Rgb := Col; Wd := BW; End;
+  With ObjP(Idx)^ Do Begin P0 := Pool; PN := Cnt; Rgb := Col; Wd := BW; End;
   RecalcBox(Idx);
  End;
 End;
@@ -6128,7 +6755,8 @@ Procedure ImportAnnots(Node: Integer);
 Var
  P, V, Q: LongInt;
  N, NR, I: Integer;
- Refs: Array[0..119] Of Integer;
+ Refs: Array[0..1999] Of Integer;
+ AStart, J: LongInt;
 Begin
  SrcMode := 0;
  P := EnterObj(Node);
@@ -6141,34 +6769,43 @@ Begin
  Q := V;
  If NextTok(Q) <> T_AB Then Exit;
  NR := 0;
- While NR < 120 Do Begin
+ While NR < 2000 Do Begin
   I := RefAt(Q);
   If I > 0 Then Begin Refs[NR] := I; Inc(NR); SkipValue(Q); End
   Else Break;
  End;
  For I := 0 To NR - 1 Do Begin
   If ImpFull Then Break;
+  AStart := ObjCount;
+  ImpSrcKind := 2;
+  ImpAnnNum := Refs[I];
   ImportAnnot(Refs[I]);
+  ImpAnnNum := 0;
+  For J := AStart To ObjCount - 1 Do ObjP(J)^.SrcCnt := ObjCount - AStart;
+  If ImpKeepSrc And (ObjCount > AStart) Then AnnSetMark(Refs[I]);
  End;
+ ImpSrcKind := 1;
 End;
 
 Procedure ImportPage(Node: Integer; B0, B1, B2, B3: Real; Rot, ResNode: Integer);
 Var
  P, V, Q: LongInt;
  N, I, NC, UseRes, FBase, XBase: Integer;
- Refs: Array[0..39] Of Integer;
+ Refs: Array[0..255] Of Integer;
  L: LongInt;
  W, H: LongInt;
+ PStart, J: LongInt;
  S: TSrcState;
  R: Integer;
 Begin
- If PageCount >= MAXPAGES Then Begin
+ If Not PgEnsure(PageCount + 1) Then Begin
   ImpFull := True;
-  LoadNotice := 'Document tronqué : limite de ' + IStr(MAXPAGES) + ' pages atteinte.';
+  LoadNotice := 'Document tronqué : mémoire insuffisante.';
   Exit;
  End;
  Inc(PageCount);
  ImpPg := PageCount;
+ FillChar(PgP(ImpPg)^, SizeOf(TPageRec), 0);
  W := RI(Abs(B2 - B0)); H := RI(Abs(B3 - B1));
  If W < 20 Then W := 612;
  If H < 20 Then H := 792;
@@ -6177,10 +6814,17 @@ Begin
  R := Rot;
  While R < 0 Do R := R + 360;
  R := (R Div 90) And 3;
- Pages^[ImpPg].W := W; Pages^[ImpPg].H := H; Pages^[ImpPg].Rot := R; Pages^[ImpPg].Top := 0;
+ PgP(ImpPg)^.W := W; PgP(ImpPg)^.H := H; PgP(ImpPg)^.Rot := R; PgP(ImpPg)^.Top := 0;
  If B0 < B2 Then MbX0 := B0 Else MbX0 := B2;
  If B1 > B3 Then MbY1 := B1 Else MbY1 := B3;
  FBase := NFonts; XBase := NXObjs;
+ PStart := ObjCount;
+ ImpSrcKind := 1; ImpAnnNum := 0;
+ If ImpKeepSrc Then Begin
+  PgP(ImpPg)^.SrcPage := Node;
+  PgP(ImpPg)^.OrigW := W; PgP(ImpPg)^.OrigH := H; PgP(ImpPg)^.OrigRot := R;
+  PgP(ImpPg)^.MbX0 := MbX0; PgP(ImpPg)^.MbY1 := MbY1;
+ End;
  SrcMode := 0;
  P := EnterObj(Node);
  If P < 0 Then Exit;
@@ -6195,7 +6839,7 @@ Begin
     V := Q;
     SaveSrc(S);
     If NextTok(Q) = T_AB Then Begin
-     While NC < 40 Do Begin
+     While NC < 256 Do Begin
       I := RefAt(Q);
       If I > 0 Then Begin Refs[NC] := I; Inc(NC); SkipValue(Q); End
       Else Break;
@@ -6207,7 +6851,7 @@ Begin
   Else Begin
    Q := V;
    If NextTok(Q) = T_AB Then
-    While NC < 40 Do Begin
+    While NC < 256 Do Begin
      I := RefAt(Q);
      If I > 0 Then Begin Refs[NC] := I; Inc(NC); SkipValue(Q); End
      Else Break;
@@ -6232,8 +6876,12 @@ Begin
  End;
  FreeFontsTo(FBase);
  NXObjs := XBase;
+ PgP(ImpPg)^.SrcCount := ObjCount - PStart;
  If Not ImpFull Then ImportAnnots(Node);
+ PgP(ImpPg)^.SrcAnnObjs := ObjCount - PStart - PgP(ImpPg)^.SrcCount;
  SrcMode := 0;
+ If ImpKeepSrc Then
+  For J := PStart To ObjCount - 1 Do ObjP(J)^.Sum := ObjSum(J);
 End;
 
 Procedure WalkPages(Node, Depth: Integer; B0, B1, B2, B3: Real; HaveBox: Boolean; Rot, ResNode: Integer);
@@ -6265,7 +6913,7 @@ Begin
   If V >= 0 Then Begin
    Q := V;
    If NextTok(Q) = T_AB Then
-    While KidSP < 2048 Do Begin
+    While KidSP < 65535 Do Begin
      I := RefAt(Q);
      If I > 0 Then Begin KidStack[KidSP] := I; Inc(KidSP); SkipValue(Q); End
      Else Break;
@@ -6303,12 +6951,14 @@ Begin
  {$I+}
  If IOResult <> 0 Then Begin Err := 'Impossible d''ouvrir le fichier.'; Exit; End;
  PFSize := FileSize(PF);
- For I := 0 To MAXPDFOBJ + 1 Do Begin ObjPos^[I] := -1; ObjStmNo^[I] := 0; ObjStmOff^[I] := 0; End;
- FillChar(ImgByObj^, (MAXPDFOBJ + 2) * SizeOf(Word), 0);
+ For I := 0 To PdfCap - 1 Do Begin ObjPos^[I] := -1; ObjStmNo^[I] := 0; ObjStmOff^[I] := 0; ImgByObj^[I] := 0; End;
  DecCap := BUFSZ;
  MaxObjNum := 0; RootNum := 0; InfoNum := 0; StmCacheNum := 0; RBase := -1; RLen := 0; SrcMode := 0;
  NFonts := 0; NXObjs := 0; KidSP := 0; SkippedText := 0;
  ImpFull := False;
+ ImpKeepSrc := Not Append;
+ If (Not Append) And (AnnSet <> Nil) Then FillChar(AnnSet^, AnnSetCap, 0);
+ ImpSrcKind := 1; ImpAnnNum := 0;
  DocEncrypted := False;
  ShowProgress('Analyse du fichier PDF...');
  ScanFile;
@@ -6341,7 +6991,8 @@ Begin
  End;
  If Not Append Then Begin
   FreeImages;
-  ObjCount := 0; PoolCount := 0; PageCount := 0;
+  ObjsFree; PgsFree; PoolFree;
+  ObjEnsure(0); PgEnsure(1); PoolEnsure(1);
  End;
  N := PageCount;
  If PagesNum > 0 Then WalkPages(PagesNum, 0, 0, 0, 612, 792, False, 0, 0)
@@ -6360,6 +7011,17 @@ Begin
   Close(PF);
   Exit;
  End;
+ If Not Append Then Begin
+  SrcFile := FExpand(Name);
+  SrcValid := True;
+  SrcSize := PFSize;
+  InfoDirty := False;
+  NeedFullRewrite := False;
+  If OrigOrder <> Nil Then FreeMem(OrigOrder, (OrigPageCnt + 1) * SizeOf(LongInt));
+  OrigPageCnt := PageCount;
+  GetMem(OrigOrder, (OrigPageCnt + 1) * SizeOf(LongInt));
+  For I := 1 To PageCount Do OrigOrder^[I - 1] := PgP(I)^.SrcPage;
+ End;
  If (Not Append) And (InfoNum > 0) Then Begin
   SrcMode := 0;
   P := EnterObj(InfoNum);
@@ -6376,6 +7038,982 @@ Begin
  Close(PF);
  SrcMode := 0;
  ImportPDF := True;
+End;
+
+{ ---------------------------------------------------------------------- }
+{ Enregistrement incrémental                                                }
+{ Le fichier d'origine est recopié tel quel (polices incorporées, liens,   }
+{ formulaires, signets, signatures...) ; seules les modifications sont     }
+{ ajoutées à la suite, avec une nouvelle table des références.             }
+{ ---------------------------------------------------------------------- }
+
+Type
+ TRawEnt = Record
+  Key: String[63];
+  St: TSrcState;
+  A, B: LongInt;
+  Ref: LongInt;
+ End;
+ PRawEnt = ^TRawEnt;
+ TRawArr = Array[0..4095] Of TRawEnt;
+ PRawArr = ^TRawArr;
+
+Var
+ IncNext: LongInt;               { prochain numéro d'objet libre }
+ IncFontBase: LongInt;           { numéro des 12 polices ajoutées (0 : aucune) }
+ IncImgNo: PLArr;
+ IncRoot, IncPagesRoot, IncInfo, IncSize, IncPrev: LongInt;
+ IncXStream: Boolean;
+ IncTreeChanged: Boolean;
+ IncPgNo: PLArr;                 { n° d'objet de chaque page du modèle }
+ PgFirst, PgIdx: PLArr;          { objets du modèle regroupés par page }
+ IncKeep, IncDrop: Array[0..4095] Of LongInt;
+ IncKeepN, IncDropN: Integer;
+ IncErr: String;
+
+{ Copie brute des octets A..B-1 d'une source }
+Procedure CopyRaw(Const St: TSrcState; A, B: LongInt);
+Var
+ S0: TSrcState;
+ Buf: String;
+ C: Integer;
+ P: LongInt;
+Begin
+ SaveSrc(S0);
+ RestoreSrc(St);
+ Buf := '';
+ P := A;
+ While P < B Do Begin
+  C := SB(P);
+  If C < 0 Then Break;
+  Buf := Buf + Chr(C);
+  Inc(P);
+  If Length(Buf) >= 200 Then Begin WS(Buf); Buf := ''; End;
+ End;
+ If Buf <> '' Then WS(Buf);
+ RestoreSrc(S0);
+End;
+
+{ Entrées de premier niveau d'un dictionnaire (valeur en ValPos, éventuellement indirecte) }
+Function CollectDict(ValPos: LongInt; E: PRawArr; Max: Integer): Integer;
+Var
+ S0: TSrcState;
+ N, Cnt, T: Integer;
+ P, Q: LongInt;
+Begin
+ CollectDict := 0;
+ If ValPos < 0 Then Exit;
+ SaveSrc(S0);
+ N := RefAt(ValPos);
+ If N > 0 Then P := EnterObj(N) Else P := ValPos;
+ Cnt := 0;
+ If P >= 0 Then Begin
+  Q := P;
+  If NextTok(Q) = T_DB Then
+   While Cnt < Max Do Begin
+    T := NextTok(Q);
+    If T <> T_NAME Then Break;
+    E^[Cnt].Key := Copy(TokS, 1, 63);
+    SaveSrc(E^[Cnt].St);
+    E^[Cnt].A := Q;
+    SkipValue(Q);
+    E^[Cnt].B := Q;
+    E^[Cnt].Ref := 0;
+    Inc(Cnt);
+   End;
+ End;
+ RestoreSrc(S0);
+ CollectDict := Cnt;
+End;
+
+{ Éléments d'un tableau (références ou valeurs directes) }
+Function CollectArray(Const St: TSrcState; ValPos: LongInt; E: PRawArr; Max: Integer): Integer;
+Var
+ S0: TSrcState;
+ N, Cnt: Integer;
+ P, Q, R0: LongInt;
+ T: Integer;
+Begin
+ CollectArray := 0;
+ SaveSrc(S0);
+ RestoreSrc(St);
+ N := RefAt(ValPos);
+ If N > 0 Then P := EnterObj(N) Else P := ValPos;
+ Cnt := 0;
+ If P >= 0 Then Begin
+  Q := P;
+  If NextTok(Q) = T_AB Then
+   While Cnt < Max Do Begin
+    R0 := Q;
+    T := NextTok(Q);
+    If (T = T_AE) Or (T = T_EOF) Then Break;
+    Q := R0;
+    E^[Cnt].Key := '';
+    SaveSrc(E^[Cnt].St);
+    E^[Cnt].A := Q;
+    E^[Cnt].Ref := RefAt(Q);
+    SkipValue(Q);
+    E^[Cnt].B := Q;
+    Inc(Cnt);
+   End;
+ End;
+ RestoreSrc(S0);
+ CollectArray := Cnt;
+End;
+
+{ Valeur héritée (MediaBox, Rotate, Resources...) en remontant l'arbre des pages }
+Function FindInh(Node: LongInt; Const Key: String; Var E: TRawEnt): Boolean;
+Var
+ S0: TSrcState;
+ D: Integer;
+ Cur, P, V, Q: LongInt;
+ Par: Integer;
+Begin
+ FindInh := False;
+ SaveSrc(S0);
+ Cur := Node;
+ For D := 0 To 24 Do Begin
+  SrcMode := 0;
+  P := EnterObj(Cur);
+  If P < 0 Then Break;
+  V := DictFind(P, Key);
+  If V >= 0 Then Begin
+   E.Key := Key;
+   SaveSrc(E.St);
+   E.A := V;
+   Q := V;
+   SkipValue(Q);
+   E.B := Q;
+   E.Ref := 0;
+   FindInh := True;
+   Break;
+  End;
+  V := DictFind(P, 'Parent');
+  If V < 0 Then Break;
+  Par := RefAt(V);
+  If Par <= 0 Then Break;
+  Cur := Par;
+ End;
+ RestoreSrc(S0);
+End;
+
+Function ObjSubtypeOf(N: LongInt): String;
+Var
+ S0: TSrcState;
+ P: LongInt;
+Begin
+ ObjSubtypeOf := '';
+ SaveSrc(S0);
+ SrcMode := 0;
+ P := EnterObj(N);
+ If P >= 0 Then ObjSubtypeOf := ValName(DictFind(P, 'Subtype'));
+ RestoreSrc(S0);
+End;
+
+{ Regroupe les objets du modèle par page (tri par comptage) }
+Procedure BuildPageLists;
+Var
+ I, K, Pg: LongInt;
+Begin
+ GetMem(PgFirst, (PageCount + 3) * SizeOf(LongInt));
+ GetMem(PgIdx, (ObjCount + 2) * SizeOf(LongInt));
+ FillChar(PgFirst^, (PageCount + 3) * SizeOf(LongInt), 0);
+ For I := 0 To ObjCount - 1 Do Begin
+  Pg := ObjP(I)^.Page;
+  If (Pg >= 1) And (Pg <= PageCount) Then Inc(PgFirst^[Pg + 1]);
+ End;
+ For I := 1 To PageCount + 1 Do PgFirst^[I] := PgFirst^[I] + PgFirst^[I - 1];
+ { PgFirst[p] = début de la page p (p de 1 à PageCount), PgFirst[p+1] = fin }
+ For I := 0 To ObjCount - 1 Do Begin
+  Pg := ObjP(I)^.Page;
+  If (Pg >= 1) And (Pg <= PageCount) Then Begin
+   K := PgFirst^[Pg];
+   PgIdx^[K] := I;
+   Inc(PgFirst^[Pg]);
+  End;
+ End;
+ { remettre les débuts }
+ For I := PageCount + 1 DownTo 1 Do PgFirst^[I] := PgFirst^[I - 1];
+ PgFirst^[0] := 0;
+End;
+
+Procedure FreePageLists;
+Begin
+ If PgFirst <> Nil Then FreeMem(PgFirst, (PageCount + 3) * SizeOf(LongInt));
+ If PgIdx <> Nil Then FreeMem(PgIdx, (ObjCount + 2) * SizeOf(LongInt));
+ PgFirst := Nil; PgIdx := Nil;
+End;
+
+{ Décision sur les annotations d'origine d'une page : conservées (inchangées)
+  ou à réécrire. Remplit IncKeep / IncDrop. }
+Procedure DecideAnnots(Pg: LongInt);
+Var
+ A, B, K, J, N, C: LongInt;
+ AllOk: Boolean;
+ O, O2: PObjRec;
+Begin
+ IncKeepN := 0; IncDropN := 0;
+ A := PgFirst^[Pg]; B := PgFirst^[Pg + 1];
+ For K := A To B - 1 Do Begin
+  O := ObjP(PgIdx^[K]);
+  If O^.Src <> 2 Then Continue;
+  N := O^.SrcNum;
+  For J := 0 To IncKeepN - 1 Do If IncKeep[J] = N Then Begin N := -1; Break; End;
+  If N < 0 Then Continue;
+  For J := 0 To IncDropN - 1 Do If IncDrop[J] = N Then Begin N := -1; Break; End;
+  If N < 0 Then Continue;
+  C := 0; AllOk := True;
+  For J := A To B - 1 Do Begin
+   O2 := ObjP(PgIdx^[J]);
+   If (O2^.Src = 2) And (O2^.SrcNum = N) Then Begin
+    Inc(C);
+    If ObjSum(PgIdx^[J]) <> O2^.Sum Then AllOk := False;
+   End;
+  End;
+  If AllOk And (C = O^.SrcCnt) Then Begin
+   If IncKeepN < 4096 Then Begin IncKeep[IncKeepN] := N; Inc(IncKeepN); End;
+  End
+  Else If IncDropN < 4096 Then Begin IncDrop[IncDropN] := N; Inc(IncDropN); End;
+ End;
+End;
+
+Function InKeep(N: LongInt): Boolean;
+Var
+ K: Integer;
+Begin
+ InKeep := False;
+ For K := 0 To IncKeepN - 1 Do If IncKeep[K] = N Then Begin InKeep := True; Exit; End;
+End;
+
+{ Image XObject (et son masque doux) écrit à la demande }
+Function EnsureImg(I: LongInt): LongInt;
+Var
+ SM, No: LongInt;
+Begin
+ EnsureImg := 0;
+ If Not ImgKept(I) Then Exit;
+ If IncImgNo^[I] = 0 Then Begin
+  SM := 0;
+  If (ImgP(I)^.SMIdx > 0) And ImgKept(ImgP(I)^.SMIdx) Then SM := EnsureImg(ImgP(I)^.SMIdx);
+  No := IncNext; Inc(IncNext);
+  WriteImageXObj(I, No, SM);
+  IncImgNo^[I] := No;
+ End;
+ EnsureImg := IncImgNo^[I];
+End;
+
+{ Écrit un flux de contenu (compressé) pour la page Pg selon le mode ; 0 si vide }
+Function WriteContentObj(Pg, Mode: Integer): LongInt;
+Var
+ Cnt, CompLen, No: LongInt;
+ Comp: PByteBuf;
+Begin
+ WriteContentObj := 0;
+ CMode := Mode;
+ CapLen := 0;
+ If CapBuf = Nil Then Begin CapSize := 65536; GetMem(CapBuf, CapSize); End;
+ CapOn := True;
+ Cnt := 0;
+ ContentOf(Pg, Cnt);
+ CapOn := False;
+ If CapLen = 0 Then Exit;
+ Comp := Nil; CompLen := 0;
+ {$IFDEF FPC}
+ If CapLen > 64 Then
+  If DeflateBuf(CapBuf, CapLen, Comp, CompLen) Then
+   If CompLen >= CapLen Then Begin FreeMem(Comp, CapLen + CapLen Div 6 + 128); Comp := Nil; End;
+ {$ENDIF}
+ No := IncNext; Inc(IncNext);
+ BeginObj(No);
+ If Comp <> Nil Then Begin
+  WL('<< /Length ' + IStr(CompLen) + ' /Filter /FlateDecode >>');
+  WL('stream');
+  WriteBytes(Comp, CompLen);
+  FreeMem(Comp, CapLen + CapLen Div 6 + 128);
+ End
+ Else Begin
+  WL('<< /Length ' + IStr(CapLen) + ' >>');
+  WL('stream');
+  WriteBytes(CapBuf, CapLen);
+ End;
+ WL('');
+ WL('endstream');
+ EndObj;
+ WriteContentObj := No;
+End;
+
+{ Images utilisées par le contenu émis dans le mode courant : écrit les XObjects }
+Procedure CollectPageImages(Pg: Integer; Mode: Integer; Var L: Array Of LongInt; Var N: Integer);
+Var
+ K, I, J, Idx, Img: LongInt;
+ Dup: Boolean;
+Begin
+ CMode := Mode;
+ For K := PgFirst^[Pg] To PgFirst^[Pg + 1] - 1 Do Begin
+  Idx := PgIdx^[K];
+  If (ObjP(Idx)^.Kind = K_IMAGE) And ObjEmits(ObjP(Idx)^, Idx) Then Begin
+   Img := ObjP(Idx)^.P0;
+   If ImgKept(Img) Then Begin
+    Dup := False;
+    For J := 0 To N - 1 Do If L[J] = Img Then Dup := True;
+    If (Not Dup) And (N <= High(L)) Then Begin L[N] := Img; Inc(N); EnsureImg(Img); End;
+   End;
+  End;
+ End;
+End;
+
+Procedure NeedFonts;
+Begin
+ If IncFontBase = 0 Then Begin IncFontBase := IncNext; Inc(IncNext, 12); End;
+End;
+
+Procedure WriteOurFonts;
+Var
+ I: Integer;
+Begin
+ For I := 0 To 11 Do WS(' /AF' + IStr(I + 1) + ' ' + IStr(IncFontBase + I) + ' 0 R');
+End;
+
+Procedure WriteOurImages(Const L: Array Of LongInt; N: Integer);
+Var
+ I: Integer;
+Begin
+ For I := 0 To N - 1 Do WS(' /AIm' + IStr(L[I]) + ' ' + IStr(IncImgNo^[L[I]]) + ' 0 R');
+End;
+
+{ Contenu d'un tableau /Contents : copie des éléments sans les crochets }
+Procedure CopyArrayInner(Const St: TSrcState; A, B: LongInt);
+Var
+ S0: TSrcState;
+ P, L, R: LongInt;
+ C: Integer;
+ Buf: String;
+Begin
+ SaveSrc(S0);
+ RestoreSrc(St);
+ P := A; L := -1;
+ While P < B Do Begin
+  C := SB(P);
+  If C = 91 Then Begin L := P; Break; End;
+  Inc(P);
+ End;
+ R := B - 1;
+ While R > P Do Begin
+  C := SB(R);
+  If C = 93 Then Break;
+  Dec(R);
+ End;
+ RestoreSrc(S0);
+ If (L >= 0) And (R > L) Then CopyRaw(St, L + 1, R) Else CopyRaw(St, A, B);
+End;
+
+Function EntIndex(E: PRawArr; N: Integer; Const Key: String): Integer;
+Var
+ I: Integer;
+Begin
+ EntIndex := -1;
+ For I := 0 To N - 1 Do If E^[I].Key = Key Then Begin EntIndex := I; Exit; End;
+End;
+
+{ Écrit l'objet page numéro PgNo pour la page Pg du modèle }
+Procedure WriteIncPage(Pg: Integer);
+Var
+ PRec: PPageRec;
+ NE, NR, NA, NF, I, J, K: Integer;
+ PageObj, A, B, FirstOrig, Idx, Cb, Ca, NewAnnCnt: LongInt;
+ Flat, IsNew, GeoCh, RotCh, HasNewContent, Merge: Boolean;
+ Ents, ResE, SubE: PRawArr;
+ Inh: TRawEnt;
+ Imgs: Array[0..63] Of LongInt;
+ NImg: Integer;
+ NewAnn: PLArr;
+ OrigAnn: PRawArr;
+ NOA: Integer;
+ Sub: String;
+ O: PObjRec;
+ Alive, AnnAlive: LongInt;
+ S0: TSrcState;
+ X0, Y1v: Real;
+ Own: Boolean;
+ Skip: Boolean;
+Begin
+ PRec := PgP(Pg);
+ PageObj := IncPgNo^[Pg];
+ IsNew := PRec^.SrcPage = 0;
+ NImg := 0;
+ Cb := 0; Ca := 0;
+ NewAnnCnt := 0;
+ GetMem(Ents, SizeOf(TRawArr));
+ GetMem(ResE, SizeOf(TRawArr));
+ GetMem(SubE, SizeOf(TRawArr));
+ GetMem(OrigAnn, SizeOf(TRawArr));
+ GetMem(NewAnn, (PgFirst^[Pg + 1] - PgFirst^[Pg] + 2) * SizeOf(LongInt));
+ NE := 0;
+ SaveSrc(S0);
+ If Not IsNew Then Begin
+  SrcMode := 0;
+  A := EnterObj(PRec^.SrcPage);
+  NE := CollectDict(A, Ents, 4096);
+ End;
+ { --- état du contenu d'origine --- }
+ CDropN := 0;
+ FirstOrig := 0; Alive := 0; AnnAlive := 0;
+ Flat := IsNew;
+ HasNewContent := False;
+ DecideAnnots(Pg);
+ If Not IsNew Then Begin
+  FirstOrig := -1;
+  For K := PgFirst^[Pg] To PgFirst^[Pg + 1] - 1 Do Begin
+   Idx := PgIdx^[K];
+   O := ObjP(Idx);
+   If O^.Src = 1 Then Begin
+    If FirstOrig < 0 Then FirstOrig := Idx;
+    Inc(Alive);
+    If ObjSum(Idx) <> O^.Sum Then Begin
+     Flat := True;
+    End;
+   End;
+  End;
+  If Alive <> PRec^.SrcCount Then Flat := True;
+  If FirstOrig < 0 Then FirstOrig := 0;
+ End;
+ CFirstOrig := FirstOrig;
+ { annotations d'origine à réécrire comme contenu / nouvelles annotations }
+ If IncDropN > 0 Then For K := 0 To IncDropN - 1 Do If CDropN < 4096 Then Begin
+  If CDrop = Nil Then GetMem(CDrop, 4100 * SizeOf(LongInt));
+  CDrop^[CDropN] := IncDrop[K]; Inc(CDropN);
+ End;
+ If CDrop = Nil Then GetMem(CDrop, 4100 * SizeOf(LongInt));
+ { --- images et flux de contenu --- }
+ If Flat Then Begin
+  CollectPageImages(Pg, 0, Imgs, NImg);
+  Ca := WriteContentObj(Pg, 0);
+ End
+ Else Begin
+  CollectPageImages(Pg, 1, Imgs, NImg);
+  CollectPageImages(Pg, 2, Imgs, NImg);
+  Cb := WriteContentObj(Pg, 1);
+  Ca := WriteContentObj(Pg, 2);
+ End;
+ HasNewContent := (Cb <> 0) Or (Ca <> 0);
+ If Flat Or HasNewContent Then NeedFonts;
+ { --- annotations nouvelles ou réécrites --- }
+ For K := PgFirst^[Pg] To PgFirst^[Pg + 1] - 1 Do Begin
+  Idx := PgIdx^[K];
+  O := ObjP(Idx);
+  If IsAnnot(O^.Kind) Then Begin
+   If (O^.Src = 2) And InKeep(O^.SrcNum) Then Continue;
+   If O^.Src = 3 Then Continue;
+   NewAnn^[NewAnnCnt] := IncNext;
+   BeginObj(IncNext); Inc(IncNext);
+   WL(AnnotOf(Pg, Idx));
+   EndObj;
+   Inc(NewAnnCnt);
+  End;
+ End;
+ { --- géométrie --- }
+ GeoCh := (Not IsNew) And ((PRec^.W <> PRec^.OrigW) Or (PRec^.H <> PRec^.OrigH));
+ RotCh := (Not IsNew) And (PRec^.Rot <> PRec^.OrigRot);
+ { --- dictionnaire de la page --- }
+ BeginObj(PageObj);
+ WS('<< /Type /Page');
+ If IncTreeChanged Or IsNew Then WS(' /Parent ' + IStr(IncPagesRoot) + ' 0 R')
+ Else Begin
+  J := EntIndex(Ents, NE, 'Parent');
+  If J >= 0 Then Begin WS(' /Parent'); CopyRaw(Ents^[J].St, Ents^[J].A, Ents^[J].B); End;
+ End;
+ { MediaBox }
+ If IsNew Or GeoCh Then Begin
+  If IsNew Then Begin X0 := 0; Y1v := PRec^.H; End Else Begin X0 := PRec^.MbX0; Y1v := PRec^.MbY1; End;
+  WS(' /MediaBox [' + RStr(X0) + ' ' + RStr(Y1v - PRec^.H) + ' ' + RStr(X0 + PRec^.W) + ' ' + RStr(Y1v) + ']');
+ End
+ Else Begin
+  J := EntIndex(Ents, NE, 'MediaBox');
+  If J >= 0 Then Begin WS(' /MediaBox'); CopyRaw(Ents^[J].St, Ents^[J].A, Ents^[J].B); End
+  Else If FindInh(PRec^.SrcPage, 'MediaBox', Inh) Then Begin WS(' /MediaBox'); CopyRaw(Inh.St, Inh.A, Inh.B); End;
+ End;
+ { Rotate }
+ If IsNew Or RotCh Then Begin
+  If PRec^.Rot <> 0 Then WS(' /Rotate ' + IStr((PRec^.Rot And 3) * 90));
+  If RotCh And (PRec^.Rot = 0) Then WS(' /Rotate 0');
+ End
+ Else Begin
+  J := EntIndex(Ents, NE, 'Rotate');
+  If J >= 0 Then Begin WS(' /Rotate'); CopyRaw(Ents^[J].St, Ents^[J].A, Ents^[J].B); End
+  Else If FindInh(PRec^.SrcPage, 'Rotate', Inh) Then Begin WS(' /Rotate'); CopyRaw(Inh.St, Inh.A, Inh.B); End;
+ End;
+ { Contents }
+ If Flat Then Begin
+  If Ca <> 0 Then WS(' /Contents ' + IStr(Ca) + ' 0 R');
+ End
+ Else If HasNewContent Then Begin
+  WS(' /Contents [');
+  If Cb <> 0 Then WS(' ' + IStr(Cb) + ' 0 R');
+  J := EntIndex(Ents, NE, 'Contents');
+  If J >= 0 Then Begin
+   WS(' ');
+   CopyArrayInner(Ents^[J].St, Ents^[J].A, Ents^[J].B);
+  End;
+  If Ca <> 0 Then WS(' ' + IStr(Ca) + ' 0 R');
+  WS(' ]');
+ End
+ Else Begin
+  J := EntIndex(Ents, NE, 'Contents');
+  If J >= 0 Then Begin WS(' /Contents'); CopyRaw(Ents^[J].St, Ents^[J].A, Ents^[J].B); End;
+ End;
+ { Resources }
+ If Flat Or IsNew Then Begin
+  WS(' /Resources << /Font <<');
+  WriteOurFonts;
+  WS(' >>');
+  If NImg > 0 Then Begin WS(' /XObject <<'); WriteOurImages(Imgs, NImg); WS(' >>'); End;
+  WS(' >>');
+ End
+ Else If HasNewContent Then Begin
+  Own := EntIndex(Ents, NE, 'Resources') >= 0;
+  NR := 0;
+  If Own Then Begin
+   J := EntIndex(Ents, NE, 'Resources');
+   RestoreSrc(Ents^[J].St);
+   NR := CollectDict(Ents^[J].A, ResE, 4096);
+  End
+  Else If FindInh(PRec^.SrcPage, 'Resources', Inh) Then Begin
+   RestoreSrc(Inh.St);
+   NR := CollectDict(Inh.A, ResE, 4096);
+  End;
+  WS(' /Resources <<');
+  For J := 0 To NR - 1 Do
+   If (ResE^[J].Key <> 'Font') And (ResE^[J].Key <> 'XObject') Then Begin
+    WS(' /' + ResE^[J].Key);
+    CopyRaw(ResE^[J].St, ResE^[J].A, ResE^[J].B);
+   End;
+  WS(' /Font <<');
+  J := EntIndex(ResE, NR, 'Font');
+  If J >= 0 Then Begin
+   RestoreSrc(ResE^[J].St);
+   NF := CollectDict(ResE^[J].A, SubE, 4096);
+   For K := 0 To NF - 1 Do Begin WS(' /' + SubE^[K].Key); CopyRaw(SubE^[K].St, SubE^[K].A, SubE^[K].B); End;
+  End;
+  WriteOurFonts;
+  WS(' >>');
+  J := EntIndex(ResE, NR, 'XObject');
+  If (J >= 0) Or (NImg > 0) Then Begin
+   WS(' /XObject <<');
+   If J >= 0 Then Begin
+    RestoreSrc(ResE^[J].St);
+    NF := CollectDict(ResE^[J].A, SubE, 4096);
+    For K := 0 To NF - 1 Do Begin WS(' /' + SubE^[K].Key); CopyRaw(SubE^[K].St, SubE^[K].A, SubE^[K].B); End;
+   End;
+   WriteOurImages(Imgs, NImg);
+   WS(' >>');
+  End;
+  WS(' >>');
+  RestoreSrc(S0);
+ End
+ Else Begin
+  J := EntIndex(Ents, NE, 'Resources');
+  If J >= 0 Then Begin WS(' /Resources'); CopyRaw(Ents^[J].St, Ents^[J].A, Ents^[J].B); End
+  Else If IncTreeChanged Then
+   If FindInh(PRec^.SrcPage, 'Resources', Inh) Then Begin WS(' /Resources'); CopyRaw(Inh.St, Inh.A, Inh.B); End;
+ End;
+ { Annots }
+ NOA := 0;
+ J := EntIndex(Ents, NE, 'Annots');
+ If J >= 0 Then NOA := CollectArray(Ents^[J].St, Ents^[J].A, OrigAnn, 4096);
+ If (NOA > 0) Or (NewAnnCnt > 0) Then Begin
+  WS(' /Annots [');
+  For K := 0 To NOA - 1 Do Begin
+   Skip := False;
+   If OrigAnn^[K].Ref > 0 Then
+    If AnnSetHas(OrigAnn^[K].Ref) And (Not InKeep(OrigAnn^[K].Ref)) Then Skip := True;
+   If Not Skip Then Begin
+    WS(' ');
+    CopyRaw(OrigAnn^[K].St, OrigAnn^[K].A, OrigAnn^[K].B);
+   End;
+  End;
+  For K := 0 To NewAnnCnt - 1 Do WS(' ' + IStr(NewAnn^[K]) + ' 0 R');
+  WS(' ]');
+ End;
+ { autres entrées d'origine }
+ For J := 0 To NE - 1 Do Begin
+  If (Ents^[J].Key = 'Type') Or (Ents^[J].Key = 'Parent') Or (Ents^[J].Key = 'MediaBox') Or
+     (Ents^[J].Key = 'Rotate') Or (Ents^[J].Key = 'Contents') Or (Ents^[J].Key = 'Resources') Or
+     (Ents^[J].Key = 'Annots') Then Continue;
+  If GeoCh And (Ents^[J].Key = 'CropBox') Then Continue;
+  WS(' /' + Ents^[J].Key);
+  CopyRaw(Ents^[J].St, Ents^[J].A, Ents^[J].B);
+ End;
+ WL(' >>');
+ EndObj;
+ RestoreSrc(S0);
+ FreeMem(Ents, SizeOf(TRawArr));
+ FreeMem(ResE, SizeOf(TRawArr));
+ FreeMem(SubE, SizeOf(TRawArr));
+ FreeMem(OrigAnn, SizeOf(TRawArr));
+ FreeMem(NewAnn, (PgFirst^[Pg + 1] - PgFirst^[Pg] + 2) * SizeOf(LongInt));
+End;
+
+{ La page a-t-elle besoin d'être réécrite ? }
+Function PageNeedsWrite(Pg: Integer): Boolean;
+Var
+ PRec: PPageRec;
+ K, Idx, Alive, AnnAlive: LongInt;
+ O: PObjRec;
+Begin
+ PageNeedsWrite := True;
+ PRec := PgP(Pg);
+ If PRec^.SrcPage = 0 Then Exit;
+ If IncTreeChanged Then Exit;
+ If (PRec^.W <> PRec^.OrigW) Or (PRec^.H <> PRec^.OrigH) Or (PRec^.Rot <> PRec^.OrigRot) Then Exit;
+ Alive := 0; AnnAlive := 0;
+ For K := PgFirst^[Pg] To PgFirst^[Pg + 1] - 1 Do Begin
+  Idx := PgIdx^[K];
+  O := ObjP(Idx);
+  Case O^.Src Of
+   0: Exit;
+   1: Begin
+    Inc(Alive);
+    If ObjSum(Idx) <> O^.Sum Then Exit;
+   End;
+   2: Begin
+    Inc(AnnAlive);
+    If ObjSum(Idx) <> O^.Sum Then Exit;
+   End;
+  End;
+ End;
+ If Alive <> PRec^.SrcCount Then Exit;
+ If AnnAlive <> PRec^.SrcAnnObjs Then Exit;
+ PageNeedsWrite := False;
+End;
+
+Procedure SortXList;
+Var
+ Gap, I, J: LongInt;
+ TN, TO_: LongInt;
+Begin
+ Gap := XCnt Div 2;
+ While Gap > 0 Do Begin
+  For I := Gap To XCnt - 1 Do Begin
+   TN := XList^[I * 2]; TO_ := XList^[I * 2 + 1];
+   J := I;
+   While (J >= Gap) And (XList^[(J - Gap) * 2] > TN) Do Begin
+    XList^[J * 2] := XList^[(J - Gap) * 2];
+    XList^[J * 2 + 1] := XList^[(J - Gap) * 2 + 1];
+    Dec(J, Gap);
+   End;
+   XList^[J * 2] := TN; XList^[J * 2 + 1] := TO_;
+  End;
+  Gap := Gap Div 2;
+ End;
+End;
+
+Procedure WriteBE(Var Buf: PByteBuf; Var Len: LongInt; V: LongInt; N: Integer);
+Var
+ I: Integer;
+Begin
+ For I := N - 1 DownTo 0 Do Begin
+  Buf^[Len] := (V Shr (I * 8)) And 255;
+  Inc(Len);
+ End;
+End;
+
+{ Dernier "startxref" du fichier d'origine ; détecte une table ou un flux de références }
+Function ReadStartXref(Var Prev: LongInt; Var IsStream: Boolean): Boolean;
+Var
+ Buf: Array[0..1499] Of Byte;
+ N: Integer;
+ Got: Word;
+ I, J: Integer;
+ V: LongInt;
+ Sz: LongInt;
+ Found: Boolean;
+Begin
+ ReadStartXref := False;
+ Sz := FileSize(PF);
+ If Sz > 1500 Then Seek(PF, Sz - 1500) Else Seek(PF, 0);
+ Got := 0;
+ BlockRead(PF, Buf, 1500, Got);
+ N := Got;
+ I := N - 9;
+ Found := False;
+ While I >= 0 Do Begin
+  If (Buf[I] = 115) And (Buf[I + 1] = 116) And (Buf[I + 2] = 97) And (Buf[I + 3] = 114) And (Buf[I + 4] = 116) And
+     (Buf[I + 5] = 120) And (Buf[I + 6] = 114) And (Buf[I + 7] = 101) And (Buf[I + 8] = 102) Then Begin Found := True; Break; End;
+  Dec(I);
+ End;
+ If Not Found Then Exit;
+ J := I + 9;
+ While (J < N) And ((Buf[J] < 48) Or (Buf[J] > 57)) Do Inc(J);
+ V := 0;
+ While (J < N) And (Buf[J] >= 48) And (Buf[J] <= 57) Do Begin V := V * 10 + (Buf[J] - 48); Inc(J); End;
+ Prev := V;
+ SrcMode := 0;
+ RBase := -1; RLen := 0;
+ J := V;
+ While IsWs(SB(J)) Do Inc(J);
+ IsStream := Not ((SB(J) = 120) And (SB(J + 1) = 114) And (SB(J + 2) = 101) And (SB(J + 3) = 102));
+ ReadStartXref := True;
+End;
+
+Procedure WriteXrefSection(Var StartPos: LongInt; Const IDRaw: TRawEnt; HasID: Boolean);
+Var
+ I, RunStart, RunN: LongInt;
+ S: String;
+ XNo: LongInt;
+ Buf: PByteBuf;
+ Len: LongInt;
+ Last: LongInt;
+ SzVal: LongInt;
+Begin
+ If IncXStream Then Begin
+  XNo := IncNext; Inc(IncNext);
+  IncAdd(XNo, OutPos);
+ End;
+ SortXList;
+ SzVal := IncNext;
+ If IncXStream Then Begin
+  GetMem(Buf, XCnt * 7 + 64);
+  Len := 0;
+  For I := 0 To XCnt - 1 Do Begin
+   Buf^[Len] := 1; Inc(Len);
+   WriteBE(Buf, Len, XList^[I * 2 + 1], 4);
+   WriteBE(Buf, Len, 0, 2);
+  End;
+  StartPos := OutPos;
+  WL(IStr(XNo) + ' 0 obj');
+  WS('<< /Type /XRef /Size ' + IStr(SzVal) + ' /W [1 4 2] /Index [');
+  I := 0;
+  While I < XCnt Do Begin
+   RunStart := XList^[I * 2];
+   RunN := 1;
+   While (I + RunN < XCnt) And (XList^[(I + RunN) * 2] = RunStart + RunN) Do Inc(RunN);
+   WS(IStr(RunStart) + ' ' + IStr(RunN) + ' ');
+   I := I + RunN;
+  End;
+  S := '] /Root ' + IStr(IncRoot) + ' 0 R /Prev ' + IStr(IncPrev);
+  If IncInfo > 0 Then S := S + ' /Info ' + IStr(IncInfo) + ' 0 R';
+  WS(S);
+  If HasID Then Begin WS(' /ID'); CopyRaw(IDRaw.St, IDRaw.A, IDRaw.B); End;
+  WL(' /Length ' + IStr(Len) + ' >>');
+  WL('stream');
+  WriteBytes(Buf, Len);
+  WL('');
+  WL('endstream');
+  WL('endobj');
+  FreeMem(Buf, XCnt * 7 + 64);
+ End
+ Else Begin
+  StartPos := OutPos;
+  WL('xref');
+  I := 0;
+  While I < XCnt Do Begin
+   RunStart := XList^[I * 2];
+   RunN := 1;
+   While (I + RunN < XCnt) And (XList^[(I + RunN) * 2] = RunStart + RunN) Do Inc(RunN);
+   WL(IStr(RunStart) + ' ' + IStr(RunN));
+   For Last := 0 To RunN - 1 Do Begin
+    S := IStr(XList^[(I + Last) * 2 + 1]);
+    While Length(S) < 10 Do S := '0' + S;
+    WL(S + ' 00000 n ');
+   End;
+   I := I + RunN;
+  End;
+  WL('trailer');
+  S := '<< /Size ' + IStr(SzVal) + ' /Root ' + IStr(IncRoot) + ' 0 R /Prev ' + IStr(IncPrev);
+  If IncInfo > 0 Then S := S + ' /Info ' + IStr(IncInfo) + ' 0 R';
+  WS(S);
+  If HasID Then Begin WS(' /ID'); CopyRaw(IDRaw.St, IDRaw.A, IDRaw.B); End;
+  WL(' >>');
+ End;
+End;
+
+Procedure PdfInfoObj(No: LongInt);
+Var
+ S: String;
+Begin
+ BeginObj(No);
+ S := '<< /Producer (CloneDRAW ACROBAT) /ModDate (' + PdfDate + ')';
+ If DocTitle <> '' Then S := S + ' /Title ' + PdfStr(DocTitle);
+ If DocAuthor <> '' Then S := S + ' /Author ' + PdfStr(DocAuthor);
+ If DocSubject <> '' Then S := S + ' /Subject ' + PdfStr(DocSubject);
+ If DocKeywords <> '' Then S := S + ' /Keywords ' + PdfStr(DocKeywords);
+ If DocCreator <> '' Then S := S + ' /Creator ' + PdfStr(DocCreator);
+ WL(S + ' >>');
+ EndObj;
+End;
+
+Function SaveIncremental(Const OutName: String; Var Err: String): Boolean;
+Var
+ I, Pg: LongInt;
+ TmpName: String;
+ Buf: PByteBuf;
+ Got: Word;
+ Done: LongInt;
+ P, V, Q: LongInt;
+ MaxN: LongInt;
+ TrP: LongInt;
+ IDEnt: TRawEnt;
+ HasID: Boolean;
+ XStart: LongInt;
+ Ok: Boolean;
+ PagesNum: LongInt;
+ SrcSz: LongInt;
+Begin
+ SaveIncremental := False;
+ Err := '';
+ If (Not SrcValid) Or (SrcFile = '') Or (Not FileExists(SrcFile)) Then Begin Err := 'Fichier d''origine introuvable.'; Exit; End;
+ InitPdfBuffers;
+ {$I-}
+ Assign(PF, SrcFile);
+ Reset(PF, 1);
+ {$I+}
+ If IOResult <> 0 Then Begin Err := 'Impossible de relire le fichier d''origine.'; Exit; End;
+ PFSize := FileSize(PF);
+ If PFSize <> SrcSize Then Begin
+  Close(PF);
+  Err := 'Le fichier d''origine a été modifié depuis son ouverture.';
+  Exit;
+ End;
+ For I := 0 To PdfCap - 1 Do Begin ObjPos^[I] := -1; ObjStmNo^[I] := 0; ObjStmOff^[I] := 0; End;
+ MaxObjNum := 0; RootNum := 0; InfoNum := 0; StmCacheNum := 0; RBase := -1; RLen := 0; SrcMode := 0;
+ DocEncrypted := False;
+ NFonts := 0; NXObjs := 0;
+ ScanFile;
+ ProcessObjects;
+ If DocEncrypted Or (RootNum = 0) Then Begin Close(PF); Err := 'Structure du fichier d''origine non exploitable.'; Exit; End;
+ SrcMode := 0;
+ If Not ReadStartXref(IncPrev, IncXStream) Then Begin Close(PF); Err := 'Table des références introuvable.'; Exit; End;
+ IncRoot := RootNum;
+ { arbre des pages }
+ SrcMode := 0;
+ P := EnterObj(RootNum);
+ IncPagesRoot := 0;
+ If P >= 0 Then Begin V := DictFind(P, 'Pages'); If V >= 0 Then IncPagesRoot := RefAt(V); End;
+ If IncPagesRoot = 0 Then Begin Close(PF); Err := 'Arbre des pages introuvable.'; Exit; End;
+ { trailer d'origine : /Size et /ID }
+ HasID := False;
+ IncSize := MaxObjNum + 1;
+ SrcMode := 0;
+ TrP := -1;
+ If IncXStream Then Begin If XRefBest > 0 Then TrP := ObjPos^[XRefBest]; End
+ Else If TrCount > 0 Then TrP := TrPos[TrCount - 1];
+ If TrP >= 0 Then Begin
+  V := DictFind(TrP, 'Size');
+  If V >= 0 Then Begin I := ValInt(V, 0); If I > IncSize Then IncSize := I; End;
+  V := DictFind(TrP, 'ID');
+  If V >= 0 Then Begin
+   HasID := True;
+   IDEnt.Key := 'ID'; SaveSrc(IDEnt.St); IDEnt.A := V; Q := V; SkipValue(Q); IDEnt.B := Q;
+  End;
+ End;
+ IncInfo := InfoNum;
+ { préparation }
+ BuildPageLists;
+ GetMem(IncPgNo, (PageCount + 2) * SizeOf(LongInt));
+ GetMem(IncImgNo, (ImgCount + 2) * SizeOf(LongInt));
+ FillChar(IncImgNo^, (ImgCount + 2) * SizeOf(LongInt), 0);
+ IncNext := IncSize;
+ IncFontBase := 0;
+ IncTreeChanged := PageCount <> OrigPageCnt;
+ For Pg := 1 To PageCount Do
+  If (Pg <= OrigPageCnt) And (PgP(Pg)^.SrcPage <> OrigOrder^[Pg - 1]) Then IncTreeChanged := True;
+ For Pg := 1 To PageCount Do
+  If PgP(Pg)^.SrcPage = 0 Then IncTreeChanged := True;
+ For Pg := 1 To PageCount Do
+  If PgP(Pg)^.SrcPage > 0 Then IncPgNo^[Pg] := PgP(Pg)^.SrcPage
+  Else Begin IncPgNo^[Pg] := IncNext; Inc(IncNext); End;
+ { fichier de sortie : copie de l'original dans un fichier temporaire }
+ TmpName := OutName + '.tmp';
+ {$I-}
+ Assign(OutF, TmpName);
+ Rewrite(OutF, 1);
+ {$I+}
+ If IOResult <> 0 Then Begin
+  Close(PF); FreePageLists; FreeMem(IncPgNo, (PageCount + 2) * SizeOf(LongInt));
+  FreeMem(IncImgNo, (ImgCount + 2) * SizeOf(LongInt));
+  Err := 'Impossible de créer le fichier de sortie.'; Exit;
+ End;
+ OutErr := False; OutPos := 0;
+ GetMem(Buf, 32768);
+ Seek(PF, 0);
+ Done := 0;
+ While Done < PFSize Do Begin
+  Got := 0;
+  BlockRead(PF, Buf^, 32768, Got);
+  If Got = 0 Then Break;
+  {$I-}
+  BlockWrite(OutF, Buf^, Got);
+  {$I+}
+  If IOResult <> 0 Then OutErr := True;
+  Done := Done + Got;
+ End;
+ FreeMem(Buf, 32768);
+ OutPos := Done;
+ RBase := -1; RLen := 0;
+ IncMode := True;
+ XCnt := 0;
+ If XList = Nil Then Begin XCap := 1024; GetMem(XList, XCap * 2 * SizeOf(LongInt)); End;
+ FPre := 'AF'; IPre := 'AIm';
+ If CDrop = Nil Then GetMem(CDrop, 4100 * SizeOf(LongInt));
+ { séparateur }
+ WL('');
+ { pages }
+ For Pg := 1 To PageCount Do Begin
+  If OutErr Then Break;
+  If PageNeedsWrite(Pg) Then WriteIncPage(Pg);
+ End;
+ { racine de l'arbre des pages }
+ If (Not OutErr) And IncTreeChanged Then Begin
+  BeginObj(IncPagesRoot);
+  WS('<< /Type /Pages /Count ' + IStr(PageCount) + ' /Kids [');
+  For Pg := 1 To PageCount Do Begin
+   WS(' ' + IStr(IncPgNo^[Pg]) + ' 0 R');
+  End;
+  WL(' ] >>');
+  EndObj;
+ End;
+ { polices ajoutées }
+ If IncFontBase > 0 Then WriteFontObjs(IncFontBase);
+ { informations du document }
+ If InfoDirty Then Begin
+  If IncInfo = 0 Then Begin IncInfo := IncNext; Inc(IncNext); End;
+  PdfInfoObj(IncInfo);
+ End;
+ WriteXrefSection(XStart, IDEnt, HasID);
+ WL('startxref');
+ WL(IStr(XStart));
+ WL('%%EOF');
+ {$I-}
+ Close(OutF);
+ {$I+}
+ If IOResult <> 0 Then OutErr := True;
+ IncMode := False;
+ FreePageLists;
+ FreeMem(IncPgNo, (PageCount + 2) * SizeOf(LongInt));
+ FreeMem(IncImgNo, (ImgCount + 2) * SizeOf(LongInt));
+ If CapBuf <> Nil Then Begin FreeMem(CapBuf, CapSize); CapBuf := Nil; End;
+ Close(PF);
+ CMode := 0; CDropN := 0; FPre := 'F'; IPre := 'Im';
+ If OutErr Then Begin
+  {$I-} Erase(OutF); {$I+}
+  If IOResult <> 0 Then ;
+  Err := 'Erreur d''écriture.';
+  Exit;
+ End;
+ { remplacement du fichier de destination }
+ If FileExists(OutName) Then Begin
+  {$I-}
+  Assign(OutF, OutName);
+  Erase(OutF);
+  {$I+}
+  If IOResult <> 0 Then Begin Err := 'Impossible de remplacer le fichier de destination.'; Exit; End;
+ End;
+ {$I-}
+ Assign(OutF, TmpName);
+ Rename(OutF, OutName);
+ {$I+}
+ If IOResult <> 0 Then Begin Err := 'Impossible de renommer le fichier enregistré.'; Exit; End;
+ SaveIncremental := True;
 End;
 
 { ---------------------------------------------------------------------- }
@@ -6498,11 +8136,11 @@ Begin
   W := DispWOf(I, Scale);
   If W > MW Then MW := W;
   If Continuous <> 0 Then Begin
-   Pages^[I].Top := Y;
+   PgP(I)^.Top := Y;
    Y := Y + DispHOf(I, Scale) + 8;
   End
   Else Begin
-   Pages^[I].Top := 8;
+   PgP(I)^.Top := 8;
   End;
  End;
  If Continuous = 0 Then Y := DispHOf(CurPage, Scale) + 16;
@@ -6521,8 +8159,8 @@ Var
 Begin
  CalcLayout;
  If (FitMode = 0) Or (PageCount = 0) Then Exit;
- If (Pages^[CurPage].Rot And 1) <> 0 Then Begin PW := Pages^[CurPage].H; PH := Pages^[CurPage].W; End
- Else Begin PW := Pages^[CurPage].W; PH := Pages^[CurPage].H; End;
+ If (PgP(CurPage)^.Rot And 1) <> 0 Then Begin PW := PgP(CurPage)^.H; PH := PgP(CurPage)^.W; End
+ Else Begin PW := PgP(CurPage)^.W; PH := PgP(CurPage)^.H; End;
  ZW := (ViewW - 24) / PW * 75;
  ZP := (ViewH - 20) / PH * 75;
  If FitMode = 1 Then Zoom := Trunc(ZW)
@@ -6547,7 +8185,7 @@ Begin
  W := DispWOf(I, Scale);
  If DocW > ViewW Then OX := (DocW - W) Div 2 - ScrollX
  Else OX := (ViewW - W) Div 2;
- OY := Pages^[I].Top - ScrollY;
+ OY := PgP(I)^.Top - ScrollY;
 End;
 
 Function PageVisible(I: Integer): Boolean;
@@ -6597,7 +8235,7 @@ Begin
  If Continuous = 0 Then Exit;
  Mid := ScrollY + ViewH Div 3;
  For I := PageCount DownTo 1 Do
-  If Pages^[I].Top <= Mid Then Begin
+  If PgP(I)^.Top <= Mid Then Begin
    CurPage := I;
    Exit;
   End;
@@ -6610,7 +8248,7 @@ Begin
  If N > PageCount Then N := PageCount;
  CurPage := N;
  If Continuous <> 0 Then Begin
-  ScrollY := Pages^[N].Top - 8;
+  ScrollY := PgP(N)^.Top - 8;
   Relayout;
  End
  Else Begin
@@ -6630,12 +8268,12 @@ Var
  Pg: Integer;
 Begin
  If (I < 0) Or (I >= ObjCount) Then Exit;
- Pg := Objs^[I].Page;
+ Pg := ObjP(I)^.Page;
  If Continuous = 0 Then CurPage := Pg;
  Relayout;
  PageOrigin(Pg, OX, OY);
  SetCtx(Pg, OX, OY, Scale);
- ScrBox(Objs^[I], SX1, SY1, SX2, SY2);
+ ScrBox(ObjP(I)^, SX1, SY1, SX2, SY2);
  If (SY1 < 20) Or (SY2 > ViewH - 20) Then ScrollY := ScrollY + SY1 - ViewH Div 3;
  If (SX1 < 10) Or (SX2 > ViewW - 10) Then ScrollX := ScrollX + SX1 - ViewW Div 3;
  ClampScroll;
@@ -6786,7 +8424,7 @@ Begin
   CM_UNDO: CmdEnabled := CanUndo;
   CM_REDO: CmdEnabled := CanRedo;
   CM_DELETE, CM_DUP, CM_COPY, CM_CUT, CM_DESEL, CM_OBJPROPS: CmdEnabled := SelObj >= 0;
-  CM_EDITTXT: CmdEnabled := (SelObj >= 0) And (Objs^[SelObj].Kind In [K_TEXT, K_NOTE, K_STAMP, K_HILITE, K_UNDER, K_STRIKE]);
+  CM_EDITTXT: CmdEnabled := (SelObj >= 0) And (ObjP(SelObj)^.Kind In [K_TEXT, K_NOTE, K_STAMP, K_HILITE, K_UNDER, K_STRIKE]);
   CM_PASTE: CmdEnabled := ClipValid;
   CM_PGDEL: CmdEnabled := PageCount > 1;
   CM_PGUP: CmdEnabled := CurPage > 1;
@@ -7312,8 +8950,8 @@ Var
  W, H: LongInt;
  S1, S2: LongInt;
 Begin
- If (Pages^[I].Rot And 1) <> 0 Then Begin W := Pages^[I].H; H := Pages^[I].W; End
- Else Begin W := Pages^[I].W; H := Pages^[I].H; End;
+ If (PgP(I)^.Rot And 1) <> 0 Then Begin W := PgP(I)^.H; H := PgP(I)^.W; End
+ Else Begin W := PgP(I)^.W; H := PgP(I)^.H; End;
  S1 := (74 * 1024) Div W;
  S2 := (92 * 1024) Div H;
  If S1 < S2 Then ThumbScale := S1 Else ThumbScale := S2;
@@ -7380,10 +9018,10 @@ Var
  X1, Y1, X2, Y2: LongInt;
 Begin
  R := '';
- NormBox(Objs^[Idx], Cx1, Cy1, Cx2, Cy2);
+ NormBox(ObjP(Idx)^, Cx1, Cy1, Cx2, Cy2);
  For I := 0 To ObjCount - 1 Do Begin
-  O := @Objs^[I];
-  If (O^.Page = Objs^[Idx].Page) And (O^.Kind = K_TEXT) Then Begin
+  O := @ObjP(I)^;
+  If (O^.Page = ObjP(Idx)^.Page) And (O^.Kind = K_TEXT) Then Begin
    NormBox(O^, X1, Y1, X2, Y2);
    If (X1 < Cx2) And (X2 > Cx1) And ((Y1 + Y2) Div 2 >= Cy1) And ((Y1 + Y2) Div 2 <= Cy2) Then Begin
     If Length(R) + Length(O^.Txt) < 60 Then R := R + O^.Txt + ' ';
@@ -7400,7 +9038,7 @@ Begin
  Idx := -1;
  C := 0;
  For I := 0 To ObjCount - 1 Do
-  If IsCommentKind(Objs^[I].Kind) Then Begin
+  If IsCommentKind(ObjP(I)^.Kind) Then Begin
    If C = N Then Begin Idx := I; Exit; End;
    Inc(C);
   End;
@@ -7411,14 +9049,14 @@ Var
  I, C: Integer;
 Begin
  C := 0;
- For I := 0 To ObjCount - 1 Do If IsCommentKind(Objs^[I].Kind) Then Inc(C);
+ For I := 0 To ObjCount - 1 Do If IsCommentKind(ObjP(I)^.Kind) Then Inc(C);
  CommentCount := C;
 End;
 
 Procedure DrawNav;
 Var
  I, Y0, Y1, R, Idx, Rows, N: Integer;
- T, TY: LongInt;
+ T, TY, TRun: LongInt;
  Sc: LongInt;
  DW, DH, OX: LongInt;
  S: String;
@@ -7444,8 +9082,10 @@ Begin
  Bar(0, 0, NAV_W, Y1 - Y0);
  CullW := NAV_W; CullH := Y1 - Y0;
  If NavTab = 0 Then Begin
+  TRun := 4;
   For I := 1 To PageCount Do Begin
-   T := ThumbTop(I) - NavScroll;
+   T := TRun - NavScroll;
+   TRun := TRun + ThumbCellH(I);
    If T > Y1 - Y0 Then Break;
    If T + ThumbCellH(I) < 0 Then Continue;
    Sc := ThumbScale(I);
@@ -7477,9 +9117,9 @@ Begin
    If Idx = SelObj Then SetFillStyle(SolidFill, Blue) Else SetFillStyle(SolidFill, DarkGray);
    Bar(0, TY, NAV_W - SBAR - 1, TY + 22);
    SetColor(Yellow);
-   DS(3, C16(TY + 2), 'p' + IStr(Objs^[Idx].Page) + ' ' + KindName(Objs^[Idx].Kind));
+   DS(3, C16(TY + 2), 'p' + IStr(ObjP(Idx)^.Page) + ' ' + KindName(ObjP(Idx)^.Kind));
    SetColor(White);
-   S := Objs^[Idx].Txt;
+   S := ObjP(Idx)^.Txt;
    If S = '' Then S := TextUnder(Idx);
    DS(3, C16(TY + 12), Copy(S, 1, 11));
   End;
@@ -7504,7 +9144,7 @@ Var
 Begin
  If Not Editing Then Exit;
  If (EditObj < 0) Or (EditObj >= ObjCount) Then Exit;
- O := @Objs^[EditObj];
+ O := @ObjP(EditObj)^;
  Pg := O^.Page;
  If Not PageVisible(Pg) Then Exit;
  SetViewPort(ViewL, ViewT, ViewR, ViewB, True);
@@ -7572,7 +9212,7 @@ Begin
  End;
  If Length(S) > 52 Then S := Copy(S, 1, 52);
  DS(6, Y + 6, S);
- R := IStr(Pages^[CurPage].W) + ' x ' + IStr(Pages^[CurPage].H) + ' pt   Page ' + IStr(CurPage) + '/' + IStr(PageCount);
+ R := IStr(PgP(CurPage)^.W) + ' x ' + IStr(PgP(CurPage)^.H) + ' pt   Page ' + IStr(CurPage) + '/' + IStr(PageCount);
  DS(GetMaxX - TW(R) - 8, Y + 6, R);
 End;
 
@@ -8481,7 +10121,7 @@ Var
  InkX, InkY: Array[0..399] Of Integer;
  InkN: Integer;
  LastNavPage: Integer;
- SortIdx: PWArr;
+ SortIdx: PLArr;
  LastHintX, LastHintY: LongInt;
  MoveDX, MoveDY: LongInt;
 
@@ -8574,6 +10214,56 @@ Begin
  End;
 End;
 
+{ Enregistre sous Name : mise à jour incrémentale si le document vient d'un
+  PDF (le contenu d'origine est conservé), sinon écriture complète. Le
+  document est ensuite rechargé depuis le fichier enregistré. }
+Function SaveTo(Const Name: String): Boolean;
+Var
+ Err: String;
+ R: Integer;
+ SP, SZ, SF: LongInt;
+ SSY: LongInt;
+ Ok: Boolean;
+Begin
+ SaveTo := False;
+ ShowProgress('Enregistrement...');
+ Ok := False;
+ If SrcValid And NeedFullRewrite Then Begin
+  RedrawAll;
+  If MsgBox('Enregistrer', 'Les biffures doivent supprimer définitivement le contenu : le document va être réécrit complètement (les polices incorporées d''origine seront remplacées).', 1) = 0 Then Exit;
+  ShowProgress('Enregistrement...');
+ End
+ Else If SrcValid Then Begin
+  Ok := SaveIncremental(Name, Err);
+  If Not Ok Then Begin
+   RedrawAll;
+   R := MsgBox('Enregistrer', Err + '|Réécrire le document complet ? Les polices incorporées d''origine seraient alors remplacées.', 1);
+   If R = 0 Then Exit;
+   ShowProgress('Enregistrement...');
+  End;
+ End;
+ If Not Ok Then Begin
+  If Not SaveAsPDF(Name) Then Begin
+   RedrawAll;
+   Notice('Impossible d''enregistrer le fichier.');
+   Exit;
+  End;
+ End;
+ { rechargement du fichier enregistré en conservant la vue }
+ SP := CurPage; SZ := Zoom; SF := FitMode; SSY := ScrollY;
+ OpenFileByName(Name);
+ If PageCount >= 1 Then Begin
+  Zoom := SZ; FitMode := SF;
+  Relayout;
+  GotoPage(SP);
+  If (Continuous <> 0) And (FitMode = 0) Then ScrollY := SSY;
+  ClampScroll;
+  RedrawAll;
+ End;
+ SetStatus('Document enregistré : ' + BaseName(Name));
+ SaveTo := True;
+End;
+
 Function DoSaveAs: Boolean;
 Var
  Name: String;
@@ -8583,47 +10273,13 @@ Begin
  If Name = '' Then Name := 'document.pdf';
  FileMaskAll := False;
  If Not FileDialog('Enregistrer sous', Name, True, '.pdf') Then Begin RedrawAll; Exit; End;
- ShowProgress('Enregistrement...');
- If SaveAsPDF(Name) Then Begin
-  DocName := Name;
-  Modified := False;
-  Imported := False;
-  DoSaveAs := True;
-  RedrawAll;
-  SetStatus('Document enregistré : ' + BaseName(Name));
- End
- Else Begin
-  RedrawAll;
-  Notice('Impossible d''enregistrer le fichier.');
- End;
+ DoSaveAs := SaveTo(Name);
 End;
 
 Function DoSave: Boolean;
-Var
- R: Integer;
 Begin
- DoSave := False;
- If DocName = '' Then Begin DoSave := DoSaveAs; Exit; End;
- If Imported Then Begin
-  R := MsgBox('Enregistrer', 'L''enregistrement réécrit le document : les images et les polices incorporées d''origine ne sont pas conservées (texte, tracés et commentaires le sont).|Remplacer le fichier d''origine ?', 1);
-  If R = 0 Then Begin
-   RedrawAll;
-   DoSave := DoSaveAs;
-   Exit;
-  End;
- End;
- ShowProgress('Enregistrement...');
- If SaveAsPDF(DocName) Then Begin
-  Modified := False;
-  Imported := False;
-  DoSave := True;
-  RedrawAll;
-  SetStatus('Document enregistré : ' + BaseName(DocName));
- End
- Else Begin
-  RedrawAll;
-  Notice('Impossible d''enregistrer le fichier.');
- End;
+ If DocName = '' Then DoSave := DoSaveAs
+ Else DoSave := SaveTo(DocName);
 End;
 
 Function ConfirmDiscard: Boolean;
@@ -8659,21 +10315,21 @@ Var
  PrevX2: LongInt;
  A, B: ^TObjRec;
 Begin
- If SortIdx = Nil Then GetMem(SortIdx, SizeOf(TWArr));
+ GetMem(SortIdx, (ObjCount + 2) * SizeOf(LongInt));
  {$I-}
  Assign(T, Name);
  Rewrite(T);
  {$I+}
- If IOResult <> 0 Then Begin Notice('Impossible de créer le fichier.'); Exit; End;
+ If IOResult <> 0 Then Begin FreeMem(SortIdx, (ObjCount + 2) * SizeOf(LongInt)); Notice('Impossible de créer le fichier.'); Exit; End;
  For Pg := 1 To PageCount Do Begin
   WriteLn(T, '--- Page ', Pg, ' ---');
   N := 0;
   For I := 0 To ObjCount - 1 Do
-   If (Objs^[I].Page = Pg) And (Objs^[I].Kind = K_TEXT) Then Begin
+   If (ObjP(I)^.Page = Pg) And (ObjP(I)^.Kind = K_TEXT) Then Begin
     K := N - 1;
     While K >= 0 Do Begin
-     A := @Objs^[SortIdx^[K]];
-     B := @Objs^[I];
+     A := @ObjP(SortIdx^[K])^;
+     B := @ObjP(I)^;
      If IAbs(A^.Y1 - B^.Y1) <= B^.Size Div 2 Then Lower := B^.X1 < A^.X1 Else Lower := B^.Y1 < A^.Y1;
      If Not Lower Then Break;
      SortIdx^[K + 1] := SortIdx^[K];
@@ -8685,7 +10341,7 @@ Begin
   First := True;
   LastY := 0; PrevX2 := 0;
   For J := 0 To N - 1 Do Begin
-   A := @Objs^[SortIdx^[J]];
+   A := @ObjP(SortIdx^[J])^;
    If Not First Then Begin
     If IAbs(A^.Y1 - LastY) > A^.Size Div 2 + 1 Then WriteLn(T)
     Else If A^.X1 - PrevX2 > 1 Then Write(T, ' ');
@@ -8698,6 +10354,7 @@ Begin
   WriteLn(T);
  End;
  Close(T);
+ FreeMem(SortIdx, (ObjCount + 2) * SizeOf(LongInt));
 End;
 
 Procedure ExportBMP(Const Name: String);
@@ -8782,7 +10439,7 @@ Begin
  PushUndo;
  I := NewObj(K_TEXT, Pg);
  If I < 0 Then Begin DropUndo; Notice('Limite d''objets atteinte.'); CreateText := -1; Exit; End;
- With Objs^[I] Do Begin
+ With ObjP(I)^ Do Begin
   X1 := X; Y1 := Y - CurSize Div 2;
   Size := CurSize;
   Style := CurFam * 4 + CurStyle;
@@ -8791,10 +10448,10 @@ Begin
   PN := (CurAngle Mod 360) * 10;
  End;
  { origine : le point cliqué est au milieu du début de la ligne }
- TextDirs(Objs^[I].PN, Tdx, Tdy, Tvx, Tvy);
- Objs^[I].X1 := Round(X - Tvx * TextLineH(Objs^[I]) / 2);
- Objs^[I].Y1 := Round(Y - Tvy * TextLineH(Objs^[I]) / 2);
- If Objs^[I].PN <> 0 Then PackOrigin(Objs^[I], Objs^[I].X1, Objs^[I].Y1);
+ TextDirs(ObjP(I)^.PN, Tdx, Tdy, Tvx, Tvy);
+ ObjP(I)^.X1 := Round(X - Tvx * TextLineH(ObjP(I)^) / 2);
+ ObjP(I)^.Y1 := Round(Y - Tvy * TextLineH(ObjP(I)^) / 2);
+ If ObjP(I)^.PN <> 0 Then PackOrigin(ObjP(I)^, ObjP(I)^.X1, ObjP(I)^.Y1);
  RecalcBox(I);
  CreateText := I;
 End;
@@ -8804,8 +10461,8 @@ Begin
  Editing := True;
  EditObj := Idx;
  EditNew := IsNew;
- EditBackup := Objs^[Idx].Txt;
- EditCaret := Length(Objs^[Idx].Txt);
+ EditBackup := ObjP(Idx)^.Txt;
+ EditCaret := Length(ObjP(Idx)^.Txt);
  SelObj := Idx;
  If Not IsNew Then PushUndo;
  RedrawView;
@@ -8816,13 +10473,13 @@ Begin
  If Not Editing Then Exit;
  Editing := False;
  If (EditObj >= 0) And (EditObj < ObjCount) Then Begin
-  If (Not Commit) Or (Objs^[EditObj].Txt = '') Then Begin
-   If EditNew Or (Objs^[EditObj].Txt = '') Then Begin
+  If (Not Commit) Or (ObjP(EditObj)^.Txt = '') Then Begin
+   If EditNew Or (ObjP(EditObj)^.Txt = '') Then Begin
     DelObj(EditObj);
     If EditNew Then DropUndo;
    End
    Else Begin
-    Objs^[EditObj].Txt := EditBackup;
+    ObjP(EditObj)^.Txt := EditBackup;
     RecalcBox(EditObj);
     DropUndo;
    End;
@@ -8838,7 +10495,7 @@ Var
  O: ^TObjRec;
 Begin
  If (EditObj < 0) Or (EditObj >= ObjCount) Then Begin Editing := False; Exit; End;
- O := @Objs^[EditObj];
+ O := @ObjP(EditObj)^;
  If Ext Then Begin
   Case K Of
    75: If EditCaret > 0 Then Dec(EditCaret);
@@ -8872,7 +10529,7 @@ Begin
  I := NewObj(Kind, Pg);
  NewShape := I;
  If I < 0 Then Exit;
- With Objs^[I] Do Begin
+ With ObjP(I)^ Do Begin
   X1 := AX1; Y1 := AY1; X2 := AX2; Y2 := AY2;
   Rgb := ToolRgb[Tool];
   Wd := CurWidth;
@@ -8895,7 +10552,7 @@ Begin
  N := ObjCount;
  Made := 0;
  For I := 0 To N - 1 Do Begin
-  O := @Objs^[I];
+  O := @ObjP(I)^;
   If (O^.Page <> Pg) Or (O^.Kind <> K_TEXT) Or (TextAng(O^) <> 0) Then Continue;
   NormBox(O^, TX1, TY1, TX2, TY2);
   CY := (TY1 + TY2) Div 2;
@@ -8953,12 +10610,12 @@ Begin
  If I < 0 Then Begin DropUndo; RedrawAll; Exit; End;
  W := TextLenPts(Txt, 18, 0, 1) + 12;
  H := 32;
- With Objs^[I] Do Begin
+ With ObjP(I)^ Do Begin
   X1 := CX - W Div 2; Y1 := CY - H Div 2; X2 := X1 + W; Y2 := Y1 + H;
   Size := 18; Style := 1; Wd := 2;
   Rgb := StampCols[K]; Rgb2 := $FFFFFF;
  End;
- Objs^[I].Txt := Txt;
+ ObjP(I)^.Txt := Txt;
  SelObj := I;
  RedrawAll;
 End;
@@ -8985,29 +10642,29 @@ Begin
  W := TextLenPts(Nm, 22, 1, 3) + 8;
  If W < 120 Then W := 120;
  I := NewObj(K_TEXT, Pg);
- If I >= 0 Then With Objs^[I] Do Begin
+ If I >= 0 Then With ObjP(I)^ Do Begin
   X1 := CX - W Div 2 + 4; Y1 := CY - 30; Size := 22; Style := 1 * 4 + 3; Rgb := Fields[2].Mn; Txt := Nm;
   RecalcBox(I);
  End;
  I := NewObj(K_LINE, Pg);
- If I >= 0 Then With Objs^[I] Do Begin
+ If I >= 0 Then With ObjP(I)^ Do Begin
   X1 := CX - W Div 2; Y1 := CY + 2; X2 := CX + W Div 2; Y2 := CY + 2; Wd := 1; Rgb := 0;
  End;
  S1 := 'Signé numériquement par ' + SigName;
  S2 := 'Date : ' + IStr(Y) + '.' + Pad2(M) + '.' + Pad2(D) + ' ' + Pad2(H) + ':' + Pad2(Mi) + ':' + Pad2(S);
  I := NewObj(K_TEXT, Pg);
- If I >= 0 Then With Objs^[I] Do Begin
+ If I >= 0 Then With ObjP(I)^ Do Begin
   X1 := CX - W Div 2; Y1 := CY + 4; Size := 7; Style := 0; Rgb := $606060; Txt := U2W(S1);
   RecalcBox(I);
  End;
  I := NewObj(K_TEXT, Pg);
- If I >= 0 Then With Objs^[I] Do Begin
+ If I >= 0 Then With ObjP(I)^ Do Begin
   X1 := CX - W Div 2; Y1 := CY + 12; Size := 7; Style := 0; Rgb := $606060; Txt := S2;
   RecalcBox(I);
  End;
  If Reason <> '' Then Begin
   I := NewObj(K_TEXT, Pg);
-  If I >= 0 Then With Objs^[I] Do Begin
+  If I >= 0 Then With ObjP(I)^ Do Begin
    X1 := CX - W Div 2; Y1 := CY + 20; Size := 7; Style := 0; Rgb := $606060; Txt := 'Motif : ' + Reason;
    RecalcBox(I);
   End;
@@ -9026,8 +10683,8 @@ Begin
  If Pool < 0 Then Begin DropUndo; Notice('Mémoire des tracés pleine.'); Exit; End;
  I := NewObj(K_INK, Pg);
  If I < 0 Then Begin DropUndo; Exit; End;
- For K := 0 To InkN - 1 Do Begin PoolX^[Pool + K] := InkX[K]; PoolY^[Pool + K] := InkY[K]; End;
- With Objs^[I] Do Begin
+ For K := 0 To InkN - 1 Do Begin PoolXP(Pool + K)^ := InkX[K]; PoolYP(Pool + K)^ := InkY[K]; End;
+ With ObjP(I)^ Do Begin
   P0 := Pool; PN := InkN; Wd := CurWidth; Rgb := ToolRgb[TL_PENCIL];
  End;
  RecalcBox(I);
@@ -9043,15 +10700,15 @@ Var
  K, Step: Integer;
 Begin
  If (SelObj < 0) Or (SelObj >= ObjCount) Then Exit;
- Clip := Objs^[SelObj];
+ Clip := ObjP(SelObj)^;
  ClipPtCount := 0;
  If Clip.Kind In [K_POLY, K_INK] Then Begin
   Step := (Clip.PN + 98) Div 99;
   If Step < 1 Then Step := 1;
   K := 0;
   While (K < Clip.PN) And (ClipPtCount < 99) Do Begin
-   ClipPts[ClipPtCount * 2] := PoolX^[Clip.P0 + K];
-   ClipPts[ClipPtCount * 2 + 1] := PoolY^[Clip.P0 + K];
+   ClipPts[ClipPtCount * 2] := PoolXP(Clip.P0 + K)^;
+   ClipPts[ClipPtCount * 2 + 1] := PoolYP(Clip.P0 + K)^;
    Inc(ClipPtCount);
    Inc(K, Step);
   End;
@@ -9072,15 +10729,15 @@ Begin
  End;
  I := NewObj(Clip.Kind, CurPage);
  If I < 0 Then Begin DropUndo; Exit; End;
- Objs^[I] := Clip;
- Objs^[I].Page := CurPage;
+ ObjP(I)^ := Clip;
+ ObjP(I)^.Page := CurPage;
  If Clip.Kind In [K_POLY, K_INK] Then Begin
   For K := 0 To ClipPtCount - 1 Do Begin
-   PoolX^[Pool + K] := ClipPts[K * 2];
-   PoolY^[Pool + K] := ClipPts[K * 2 + 1];
+   PoolXP(Pool + K)^ := ClipPts[K * 2];
+   PoolYP(Pool + K)^ := ClipPts[K * 2 + 1];
   End;
-  Objs^[I].P0 := Pool;
-  Objs^[I].PN := ClipPtCount;
+  ObjP(I)^.P0 := Pool;
+  ObjP(I)^.PN := ClipPtCount;
  End;
  MoveObj(I, DX, DY);
  SelObj := I;
@@ -9104,17 +10761,17 @@ Begin
  If FindText = '' Then Exit;
  Found := -1;
  If (FindObj >= 0) And (FindObj < ObjCount) Then Begin
-  Start := Objs^[FindObj].Page; FirstI := FindObj + 1;
+  Start := ObjP(FindObj)^.Page; FirstI := FindObj + 1;
  End
  Else Begin Start := CurPage; FirstI := 0; End;
  For Pass := 0 To PageCount Do Begin
   P := ((Start - 1 + Pass) Mod PageCount) + 1;
   For I := 0 To ObjCount - 1 Do Begin
-   If Objs^[I].Page <> P Then Continue;
-   If Objs^[I].Kind <> K_TEXT Then Continue;
+   If ObjP(I)^.Page <> P Then Continue;
+   If ObjP(I)^.Kind <> K_TEXT Then Continue;
    If (Pass = 0) And (I < FirstI) Then Continue;
    If (Pass = PageCount) And (I >= FirstI) Then Continue;
-   If ContainsText(Objs^[I].Txt, FindText, FindCase) Then Begin Found := I; Break; End;
+   If ContainsText(ObjP(I)^.Txt, FindText, FindCase) Then Begin Found := I; Break; End;
   End;
   If Found >= 0 Then Break;
  End;
@@ -9149,6 +10806,7 @@ Begin
   DocTitle := Fields[0].Val; DocAuthor := Fields[1].Val; DocSubject := Fields[2].Val;
   DocKeywords := Fields[3].Val; DocCreator := Fields[4].Val;
   Modified := True;
+  InfoDirty := True;
  End;
  RedrawAll;
 End;
@@ -9160,7 +10818,7 @@ Var
  Style: Integer;
 Begin
  If (SelObj < 0) Or (SelObj >= ObjCount) Then Exit;
- O := @Objs^[SelObj];
+ O := @ObjP(SelObj)^;
  K := O^.Kind;
  FldInit;
  FldLabel('Type : ' + KindName(K) + '   Page ' + IStr(O^.Page));
@@ -9199,7 +10857,7 @@ Begin
  End;
  If FormDialog('Propriétés de l''objet') Then Begin
   PushUndo;
-  O := @Objs^[SelObj];
+  O := @ObjP(SelObj)^;
   Case K Of
    K_TEXT: Begin
     O^.Txt := U2W(Fields[1].Val); O^.Size := FInt(2);
@@ -9229,14 +10887,14 @@ Var
  K, I: Integer;
 Begin
  If (SelObj < 0) Or (SelObj >= ObjCount) Then Exit;
- K := Objs^[SelObj].Kind;
+ K := ObjP(SelObj)^.Kind;
  Case K Of
   K_TEXT: StartEdit(SelObj, False);
   K_NOTE, K_HILITE, K_UNDER, K_STRIKE: Begin
-   S := Objs^[SelObj].Txt;
+   S := ObjP(SelObj)^.Txt;
    If InputBox('Commentaire', 'Texte', S, 118) Then Begin
     PushUndo;
-    Objs^[SelObj].Txt := U2W(S);
+    ObjP(SelObj)^.Txt := U2W(S);
    End;
    RedrawAll;
   End;
@@ -9249,12 +10907,14 @@ End;
 { ---------------------------------------------------------------------- }
 
 Procedure InsertObjFirst(Pg: Integer; Var Idx: Integer);
+Var
+ J: LongInt;
 Begin
  Idx := -1;
- If ObjCount >= MAXOBJ Then Exit;
- Move(Objs^[0], Objs^[1], ObjCount * SizeOf(TObjRec));
+ If Not ObjEnsure(ObjCount) Then Exit;
+ For J := ObjCount DownTo 1 Do ObjP(J)^ := ObjP(J - 1)^;
  Inc(ObjCount);
- InitObj(Objs^[0], K_TEXT, Pg);
+ InitObj(ObjP(0)^, K_TEXT, Pg);
  If SelObj >= 0 Then Inc(SelObj);
  If FindObj >= 0 Then Inc(FindObj);
  Idx := 0;
@@ -9288,17 +10948,17 @@ Begin
   If I < 0 Then Break;
   W := TextLenPts(T, Sz, 0, 0);
   Case PosC Mod 3 Of
-   0: PX := (Pages^[Pg].W - W) Div 2;
-   1: PX := Pages^[Pg].W - W - 36;
+   0: PX := (PgP(Pg)^.W - W) Div 2;
+   1: PX := PgP(Pg)^.W - W - 36;
   Else PX := 36;
   End;
-  If PosC < 3 Then PY := Pages^[Pg].H - 36 - Sz Else PY := 28;
-  Objs^[I].X1 := PX;
-  Objs^[I].Y1 := PY;
-  Objs^[I].Size := Sz;
-  Objs^[I].Style := 0;
-  Objs^[I].Rgb := RgbV;
-  Objs^[I].Txt := T;
+  If PosC < 3 Then PY := PgP(Pg)^.H - 36 - Sz Else PY := 28;
+  ObjP(I)^.X1 := PX;
+  ObjP(I)^.Y1 := PY;
+  ObjP(I)^.Size := Sz;
+  ObjP(I)^.Style := 0;
+  ObjP(I)^.Rgb := RgbV;
+  ObjP(I)^.Txt := T;
   RecalcBox(I);
  End;
  RedrawAll;
@@ -9323,14 +10983,14 @@ Begin
  For Pg := 1 To PageCount Do Begin
   InsertObjFirst(Pg, Idx);
   If Idx < 0 Then Break;
-  Objs^[Idx].Kind := K_TEXT;
-  Objs^[Idx].Size := Sz;
-  Objs^[Idx].Style := Fields[3].Cur;
-  Objs^[Idx].Rgb := RgbV;
-  Objs^[Idx].Txt := T;
+  ObjP(Idx)^.Kind := K_TEXT;
+  ObjP(Idx)^.Size := Sz;
+  ObjP(Idx)^.Style := Fields[3].Cur;
+  ObjP(Idx)^.Rgb := RgbV;
+  ObjP(Idx)^.Txt := T;
   W := TextLenPts(T, Sz, 0, Fields[3].Cur);
-  Objs^[Idx].X1 := (Pages^[Pg].W - W) Div 2;
-  Objs^[Idx].Y1 := (Pages^[Pg].H - Sz) Div 2;
+  ObjP(Idx)^.X1 := (PgP(Pg)^.W - W) Div 2;
+  ObjP(Idx)^.Y1 := (PgP(Pg)^.H - Sz) Div 2;
   RecalcBox(Idx);
  End;
  RedrawAll;
@@ -9348,14 +11008,14 @@ Begin
  FldNum('Marge de droite (pt)', 0, 0, 2000);
  If Not FormDialog('Recadrer la page') Then Begin RedrawAll; Exit; End;
  T := FInt(0); B := FInt(1); L := FInt(2); R := FInt(3);
- NW := Pages^[CurPage].W - L - R;
- NH := Pages^[CurPage].H - T - B;
+ NW := PgP(CurPage)^.W - L - R;
+ NH := PgP(CurPage)^.H - T - B;
  If (NW < 36) Or (NH < 36) Then Begin Notice('Les marges sont trop grandes.'); RedrawAll; Exit; End;
  PushUndo;
  For I := 0 To ObjCount - 1 Do
-  If Objs^[I].Page = CurPage Then MoveObj(I, -L, -T);
- Pages^[CurPage].W := NW;
- Pages^[CurPage].H := NH;
+  If ObjP(I)^.Page = CurPage Then MoveObj(I, -L, -T);
+ PgP(CurPage)^.W := NW;
+ PgP(CurPage)^.H := NH;
  FullRefresh;
 End;
 
@@ -9368,8 +11028,8 @@ Var
 Begin
  FldInit;
  FldChoice('Format', 'Lettre (612 x 792)|A4 (595 x 842)|Légal (612 x 1008)|A3 (842 x 1191)|A5 (420 x 595)|Personnalisé', 0);
- FldNum('Largeur perso (pt)', Pages^[CurPage].W, 36, 5000);
- FldNum('Hauteur perso (pt)', Pages^[CurPage].H, 36, 5000);
+ FldNum('Largeur perso (pt)', PgP(CurPage)^.W, 36, 5000);
+ FldNum('Hauteur perso (pt)', PgP(CurPage)^.H, 36, 5000);
  FldChoice('Orientation', 'Portrait|Paysage', 0);
  FldChoice('Appliquer à', 'Cette page|Toutes les pages', 0);
  If Not FormDialog('Taille de la page') Then Begin RedrawAll; Exit; End;
@@ -9380,8 +11040,8 @@ Begin
  PushUndo;
  If Fields[4].Cur = 0 Then Begin Lo := CurPage; Hi := CurPage; End Else Begin Lo := 1; Hi := PageCount; End;
  For P := Lo To Hi Do Begin
-  Pages^[P].W := NW;
-  Pages^[P].H := NH;
+  PgP(P)^.W := NW;
+  PgP(P)^.H := NH;
  End;
  FullRefresh;
 End;
@@ -9452,36 +11112,37 @@ Var
  Pg: Integer;
 Begin
  Cnt := 0;
- For I := 0 To ObjCount - 1 Do If Objs^[I].Kind = K_REDACT Then Inc(Cnt);
+ For I := 0 To ObjCount - 1 Do If ObjP(I)^.Kind = K_REDACT Then Inc(Cnt);
  If Cnt = 0 Then Begin Notice('Aucune biffure à appliquer.'); Exit; End;
  If MsgBox('Biffer', 'Appliquer ' + IStr(Cnt) + ' biffure(s) ? Le contenu situé dessous sera supprimé définitivement.', 1) = 0 Then Begin
   RedrawAll; Exit;
  End;
  PushUndo;
  For I := 0 To ObjCount - 1 Do
-  If Objs^[I].Kind = K_REDACT Then Begin
-   Pg := Objs^[I].Page;
-   NormBox(Objs^[I], RX1, RY1, RX2, RY2);
+  If ObjP(I)^.Kind = K_REDACT Then Begin
+   Pg := ObjP(I)^.Page;
+   NormBox(ObjP(I)^, RX1, RY1, RX2, RY2);
    For J := 0 To ObjCount - 1 Do Begin
-    If (J = I) Or (Objs^[J].Page <> Pg) Or (Objs^[J].Kind = K_REDACT) Then Continue;
-    NormBox(Objs^[J], TX1, TY1, TX2, TY2);
-    If (TX1 < RX2) And (TX2 > RX1) And (TY1 < RY2) And (TY2 > RY1) Then Objs^[J].Page := 0;
+    If (J = I) Or (ObjP(J)^.Page <> Pg) Or (ObjP(J)^.Kind = K_REDACT) Then Continue;
+    NormBox(ObjP(J)^, TX1, TY1, TX2, TY2);
+    If (TX1 < RX2) And (TX2 > RX1) And (TY1 < RY2) And (TY2 > RY1) Then ObjP(J)^.Page := 0;
    End;
   End;
  J := 0;
  For I := 0 To ObjCount - 1 Do
-  If Objs^[I].Page <> 0 Then Begin
-   If I <> J Then Objs^[J] := Objs^[I];
+  If ObjP(I)^.Page <> 0 Then Begin
+   If I <> J Then ObjP(J)^ := ObjP(I)^;
    Inc(J);
   End;
  ObjCount := J;
  SelObj := -1; FindObj := -1;
+ NeedFullRewrite := True;
  For I := 0 To ObjCount - 1 Do
-  If Objs^[I].Kind = K_REDACT Then Begin
-   Objs^[I].Kind := K_RECT;
-   Objs^[I].Fill := 1;
-   Objs^[I].Rgb := 0;
-   Objs^[I].Rgb2 := 0;
+  If ObjP(I)^.Kind = K_REDACT Then Begin
+   ObjP(I)^.Kind := K_RECT;
+   ObjP(I)^.Fill := 1;
+   ObjP(I)^.Rgb := 0;
+   ObjP(I)^.Rgb2 := 0;
   End;
  RedrawAll;
  SetStatus(IStr(Cnt) + ' biffure(s) appliquée(s).');
@@ -9498,8 +11159,8 @@ Begin
  PushUndo;
  J := 0;
  For I := 0 To ObjCount - 1 Do
-  If Not IsCommentKind(Objs^[I].Kind) Then Begin
-   If I <> J Then Objs^[J] := Objs^[I];
+  If Not IsCommentKind(ObjP(I)^.Kind) Then Begin
+   If I <> J Then ObjP(J)^ := ObjP(I)^;
    Inc(J);
   End;
  ObjCount := J;
@@ -9624,13 +11285,13 @@ Begin
   End;
   CM_FINDNEXT: FindNext;
   CM_COLOR: Begin
-   If SelObj >= 0 Then Col := Objs^[SelObj].Rgb Else Col := ToolRgb[CurTool];
+   If SelObj >= 0 Then Col := ObjP(SelObj)^.Rgb Else Col := ToolRgb[CurTool];
    Col := PickColor('Couleur', Col);
    If Col >= 0 Then Begin
     If SelObj >= 0 Then Begin
      PushUndo;
-     Objs^[SelObj].Rgb := Col;
-     If (Objs^[SelObj].Kind In [K_RECT, K_OVAL, K_POLY]) And (Objs^[SelObj].Fill = 1) Then Objs^[SelObj].Rgb2 := Col;
+     ObjP(SelObj)^.Rgb := Col;
+     If (ObjP(SelObj)^.Kind In [K_RECT, K_OVAL, K_POLY]) And (ObjP(SelObj)^.Fill = 1) Then ObjP(SelObj)^.Rgb2 := Col;
     End
     Else ToolRgb[CurTool] := Col;
    End;
@@ -9677,7 +11338,7 @@ Begin
   End;
   CM_PGINS: Begin
    PushUndo;
-   InsertPageAt(CurPage, Pages^[CurPage].W, Pages^[CurPage].H);
+   InsertPageAt(CurPage, PgP(CurPage)^.W, PgP(CurPage)^.H);
    GotoPage(CurPage + 1);
    FullRefresh;
   End;
@@ -9696,8 +11357,8 @@ Begin
     End;
    FullRefresh;
   End;
-  CM_ROTR: Begin PushUndo; Pages^[CurPage].Rot := (Pages^[CurPage].Rot + 1) And 3; FullRefresh; End;
-  CM_ROTL: Begin PushUndo; Pages^[CurPage].Rot := (Pages^[CurPage].Rot + 3) And 3; FullRefresh; End;
+  CM_ROTR: Begin PushUndo; PgP(CurPage)^.Rot := (PgP(CurPage)^.Rot + 1) And 3; FullRefresh; End;
+  CM_ROTL: Begin PushUndo; PgP(CurPage)^.Rot := (PgP(CurPage)^.Rot + 3) And 3; FullRefresh; End;
   CM_PGUP: If CurPage > 1 Then Begin PushUndo; SwapPages(CurPage, CurPage - 1); GotoPage(CurPage - 1); FullRefresh; End;
   CM_PGDOWN: If CurPage < PageCount Then Begin PushUndo; SwapPages(CurPage, CurPage + 1); GotoPage(CurPage + 1); FullRefresh; End;
   CM_CROP: CropPage;
@@ -9800,8 +11461,8 @@ Procedure ClampToPage(Pg: Integer; Var X, Y: LongInt);
 Begin
  If X < 0 Then X := 0;
  If Y < 0 Then Y := 0;
- If X > Pages^[Pg].W Then X := Pages^[Pg].W;
- If Y > Pages^[Pg].H Then Y := Pages^[Pg].H;
+ If X > PgP(Pg)^.W Then X := PgP(Pg)^.W;
+ If Y > PgP(Pg)^.H Then Y := PgP(Pg)^.H;
 End;
 
 Procedure HandleViewDown(Dbl: Boolean);
@@ -9830,7 +11491,7 @@ Begin
  Case CurTool Of
   TL_SELECT: Begin
    If (SelObj >= 0) And (SelObj < ObjCount) Then
-    If Objs^[SelObj].Page = Pg Then Begin
+    If ObjP(SelObj)^.Page = Pg Then Begin
      H := HandleAt(SelObj, MX_, MY_);
      If H <> 0 Then Begin
       DragMode := 3; DragHandle := H; DragObj := SelObj; DragPg := Pg; PreviewOn := False;
@@ -9855,7 +11516,7 @@ Begin
   End;
   TL_TEXT: Begin
    I := HitObj(Pg, PX, PY, Tol);
-   If (I >= 0) And (Objs^[I].Kind = K_TEXT) Then StartEdit(I, False)
+   If (I >= 0) And (ObjP(I)^.Kind = K_TEXT) Then StartEdit(I, False)
    Else Begin
     I := CreateText(Pg, PX, PY);
     If I >= 0 Then StartEdit(I, True);
@@ -9865,11 +11526,11 @@ Begin
    PushUndo;
    I := NewObj(K_NOTE, Pg);
    If I < 0 Then Begin DropUndo; Exit; End;
-   Objs^[I].X1 := PX; Objs^[I].Y1 := PY; Objs^[I].Rgb := ToolRgb[TL_NOTE];
+   ObjP(I)^.X1 := PX; ObjP(I)^.Y1 := PY; ObjP(I)^.Rgb := ToolRgb[TL_NOTE];
    RecalcBox(I);
    S := '';
    If InputBox('Note adhésive', 'Texte de la note', S, 118) And (S <> '') Then Begin
-    Objs^[I].Txt := U2W(S);
+    ObjP(I)^.Txt := U2W(S);
     SelObj := I;
    End
    Else Begin DelObj(I); DropUndo; End;
@@ -9910,7 +11571,7 @@ Begin
    If I < 0 Then DropUndo
    Else Begin
     SelObj := I;
-    If CurTool = TL_REDACT Then Objs^[I].Rgb := $FF4040;
+    If CurTool = TL_REDACT Then ObjP(I)^.Rgb := $FF4040;
    End;
   End;
  End;
@@ -9946,7 +11607,7 @@ Begin
    SetPageCtx(DragPg);
    Unmap(MX_, MY_, PX, PY);
    DX := PX - DragX0; DY := PY - DragY0;
-   O := Objs^[DragObj];
+   O := ObjP(DragObj)^;
    O.X1 := O.X1 + DX; O.X2 := O.X2 + DX; O.Y1 := O.Y1 + DY; O.Y2 := O.Y2 + DY;
    If Not Up Then Begin
     If (DX <> 0) Or (DY <> 0) Or PreviewOn Then Begin
@@ -9972,7 +11633,7 @@ Begin
    SetPageCtx(DragPg);
    Unmap(MX_, MY_, PX, PY);
    ClampToPage(DragPg, PX, PY);
-   O := Objs^[DragObj];
+   O := ObjP(DragObj)^;
    If DragHandle >= 5 Then Begin
     If DragHandle = 5 Then Begin O.X1 := PX; O.Y1 := PY; End Else Begin O.X2 := PX; O.Y2 := PY; End;
     NX1 := O.X1; NY1 := O.Y1; NX2 := O.X2; NY2 := O.Y2;
@@ -9999,7 +11660,7 @@ Begin
     DragMode := 0;
     PushUndo;
     If DragHandle >= 5 Then Begin
-     Objs^[DragObj].X1 := O.X1; Objs^[DragObj].Y1 := O.Y1; Objs^[DragObj].X2 := O.X2; Objs^[DragObj].Y2 := O.Y2;
+     ObjP(DragObj)^.X1 := O.X1; ObjP(DragObj)^.Y1 := O.Y1; ObjP(DragObj)^.X2 := O.X2; ObjP(DragObj)^.Y2 := O.Y2;
     End
     Else ScaleObjTo(DragObj, NX1, NY1, NX2, NY2);
     RedrawAll;
@@ -10408,7 +12069,6 @@ Procedure InitVars;
 Var
  I: Integer;
 Begin
- Objs := Nil; Pages := Nil; PoolX := Nil; PoolY := Nil;
  ObjCount := 0; PageCount := 1; CurPage := 1; PoolCount := 0;
  Zoom := 100; FitMode := 1; Continuous := 1; NavVisible := 1; ToolbarVisible := 1; NavTab := 0;
  FullScreen := False;
@@ -10477,6 +12137,9 @@ BEGIN
   Close(HelpOutput);
   Halt;
  End;
+ {$IFDEF FPC}
+ ReturnNilIfGrowHeapFails := True;
+ {$ENDIF}
  InitVars;
  InitializeGraphics;
  {$IFDEF FPC}

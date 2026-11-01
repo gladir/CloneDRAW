@@ -36,7 +36,9 @@ Const
  VERSION_MINOR = 0;
  PROGRAM_NAME = 'Adobe Illustrator Clone v1.0';
  
- MENUBAR_HEIGHT = 18;
+ MENU_H = 18;
+ TOPBAR_H = 28;
+ MENUBAR_HEIGHT = MENU_H+TOPBAR_H;   { haut de la zone de dessin }
  TOOLBAR_WIDTH = 48;
  TOOL_BUTTON_LEFT = 8;
  TOOL_BUTTON_WIDTH = 30;
@@ -689,16 +691,16 @@ Var
  I: Integer;
 Begin
  SetFillStyle(SolidFill, COLOR_BG);
- Bar(0, 0, ScreenWidth - 1, MENUBAR_HEIGHT - 1);
+ Bar(0, 0, ScreenWidth - 1, MENU_H - 1);
  SetColor(COLOR_BORDER);
- Line(0, MENUBAR_HEIGHT - 1, ScreenWidth - 1, MENUBAR_HEIGHT - 1);
+ Line(0, MENU_H - 1, ScreenWidth - 1, MENU_H - 1);
  
  For I := 0 To MAX_MENUS-1 Do
  Begin
   If MenuActive And (ActiveMenu = I) Then Begin
    SetFillStyle(SolidFill, COLOR_HIGHLIGHT);
    Bar(Menus[I].X, 1, Menus[I].X+Menus[I].TitleWidth-1,
-       MENUBAR_HEIGHT-2);
+       MENU_H-2);
    SetColor(COLOR_WINDOW);
   End Else SetColor(COLOR_TEXT);
   OutTextXY(Menus[I].X+6, 5, Menus[I].Title);
@@ -2588,7 +2590,7 @@ Function MenuBarHitTest(X, Y: Integer): Integer;
 Var I: Integer;
 Begin
  MenuBarHitTest := -1;
- If (Y < 0) Or (Y >= MENUBAR_HEIGHT) Then Exit;
+ If (Y < 0) Or (Y >= MENU_H) Then Exit;
  For I := 0 To MAX_MENUS-1 Do
   If (X >= Menus[I].X) And
      (X < Menus[I].X+Menus[I].TitleWidth) Then Begin
@@ -2604,9 +2606,9 @@ Begin
  If (M < 0) Or (M >= MAX_MENUS) Then Exit;
  If (X < MenuLeft(M)+2) Or
     (X >= MenuLeft(M)+Menus[M].Width-2) Or
-    (Y < MENUBAR_HEIGHT+2) Or
-    (Y >= MENUBAR_HEIGHT+2+Menus[M].ItemCount*MENU_ITEM_HEIGHT) Then Exit;
- I := (Y-MENUBAR_HEIGHT-2) Div MENU_ITEM_HEIGHT;
+    (Y < MENU_H+2) Or
+    (Y >= MENU_H+2+Menus[M].ItemCount*MENU_ITEM_HEIGHT) Then Exit;
+ I := (Y-MENU_H-2) Div MENU_ITEM_HEIGHT;
  If Menus[M].Items[I].Caption <> '-' Then MenuItemHitTest := I;
 End;
 
@@ -2813,6 +2815,292 @@ Begin
  End;
 End;
 
+{ ------------------------------------------------------------------
+  Barre d'outils horizontale (sous la barre de menus)
+  ------------------------------------------------------------------ }
+Const
+ TOPBAR_ITEMS = 25;
+
+Var
+ TopHoverLast: Integer;
+ PropActive, ChoiceActive, GlyphActive: Boolean;
+
+Function TopItemCmd(I: Integer): Integer;
+Begin
+ Case I Of
+  0: TopItemCmd := CMD_NEW;
+  1: TopItemCmd := CMD_OPEN;
+  2: TopItemCmd := CMD_SAVE;
+  4: TopItemCmd := CMD_UNDO;
+  5: TopItemCmd := CMD_REDO;
+  7: TopItemCmd := CMD_CUT;
+  8: TopItemCmd := CMD_COPY;
+  9: TopItemCmd := CMD_PASTE;
+  11: TopItemCmd := CMD_ZOOM_IN;
+  12: TopItemCmd := CMD_ZOOM_OUT;
+  13: TopItemCmd := CMD_ZOOM_RESET;
+  15: TopItemCmd := CMD_GRID;
+  16: TopItemCmd := CMD_RULERS;
+  17: TopItemCmd := CMD_GUIDES;
+  19: TopItemCmd := CMD_GROUP;
+  20: TopItemCmd := CMD_UNGROUP;
+  21: TopItemCmd := CMD_FRONT;
+  22: TopItemCmd := CMD_BACK;
+  23: TopItemCmd := CMD_ALIGN;
+  24: TopItemCmd := CMD_PROPS;
+ Else TopItemCmd := 0;
+ End;
+End;
+
+Function TopItemX(I: Integer): Integer;
+Var K, X: Integer;
+Begin
+ X := 6;
+ For K := 0 To I-1 Do
+  If TopItemCmd(K) = 0 Then Inc(X,10) Else Inc(X,26);
+ TopItemX := X;
+End;
+
+Function TopItemAt(X, Y: Integer): Integer;
+Var I: Integer;
+Begin
+ TopItemAt := -1;
+ If (Y < MENU_H+2) Or (Y >= MENUBAR_HEIGHT-2) Then Exit;
+ For I := 0 To TOPBAR_ITEMS-1 Do
+  If TopItemCmd(I) <> 0 Then
+   If (X >= TopItemX(I)) And (X < TopItemX(I)+24) Then Begin
+    TopItemAt := I;
+    Exit;
+   End;
+End;
+
+Function TopHint(Cmd: Integer): String;
+Begin
+ Case Cmd Of
+  CMD_NEW: TopHint := 'Nouveau document';
+  CMD_OPEN: TopHint := 'Ouvrir... (Ctrl+O)';
+  CMD_SAVE: TopHint := 'Enregistrer (Ctrl+S)';
+  CMD_UNDO: TopHint := 'Annuler (Ctrl+Z)';
+  CMD_REDO: TopHint := 'Retablir (Ctrl+Y)';
+  CMD_CUT: TopHint := 'Couper (Ctrl+X)';
+  CMD_COPY: TopHint := 'Copier (Ctrl+C)';
+  CMD_PASTE: TopHint := 'Coller (Ctrl+V)';
+  CMD_ZOOM_IN: TopHint := 'Zoom avant';
+  CMD_ZOOM_OUT: TopHint := 'Zoom arriere';
+  CMD_ZOOM_RESET: TopHint := 'Zoom 100 %';
+  CMD_GRID: TopHint := 'Afficher la grille';
+  CMD_RULERS: TopHint := 'Afficher les regles (Ctrl+R)';
+  CMD_GUIDES: TopHint := 'Afficher les reperes';
+  CMD_GROUP: TopHint := 'Grouper';
+  CMD_UNGROUP: TopHint := 'Degrouper';
+  CMD_FRONT: TopHint := 'Premier plan';
+  CMD_BACK: TopHint := 'Arriere-plan';
+  CMD_ALIGN: TopHint := 'Aligner...';
+  CMD_PROPS: TopHint := 'Proprietes de l''objet...';
+ Else TopHint := '';
+ End;
+End;
+
+Function TopEnabled(Cmd, Sel: Integer): Boolean;
+Begin
+ Case Cmd Of
+  CMD_UNDO: TopEnabled := UndoCount > 0;
+  CMD_REDO: TopEnabled := RedoCount > 0;
+  CMD_CUT, CMD_COPY: TopEnabled := HasSelection;
+  CMD_PASTE: TopEnabled := ClipFull;
+  CMD_GROUP, CMD_ALIGN: TopEnabled := Sel >= 2;
+  CMD_UNGROUP, CMD_FRONT, CMD_BACK, CMD_PROPS: TopEnabled := Sel >= 1;
+ Else TopEnabled := True;
+ End;
+End;
+
+Function TopChecked(Cmd: Integer): Boolean;
+Begin
+ Case Cmd Of
+  CMD_GRID: TopChecked := GridVisible;
+  CMD_RULERS: TopChecked := RulersVisible;
+  CMD_GUIDES: TopChecked := GuidesVisible;
+ Else TopChecked := False;
+ End;
+End;
+
+{ icones 16 x 16 dessinees au trait }
+Procedure DrawTopIcon(Cmd, X, Y: Integer; En: Boolean);
+Var Ink, Yel, Blu, Wht, Red, Brn, Grn, I: Integer;
+Begin
+ If En Then Begin Ink := 0; Yel := 14; Blu := 1; Wht := 15; Red := 4; Brn := 6; Grn := 2; End
+ Else Begin Ink := 8; Yel := 7; Blu := 7; Wht := 7; Red := 7; Brn := 7; Grn := 7; End;
+ Case Cmd Of
+  CMD_NEW: Begin
+   SetFillStyle(SolidFill,Wht); Bar(X+3,Y+1,X+12,Y+14);
+   SetColor(Ink); Rectangle(X+3,Y+1,X+12,Y+14);
+   Line(X+9,Y+1,X+12,Y+4); Line(X+9,Y+1,X+9,Y+4); Line(X+9,Y+4,X+12,Y+4);
+   Line(X+5,Y+7,X+10,Y+7); Line(X+5,Y+9,X+10,Y+9); Line(X+5,Y+11,X+10,Y+11);
+  End;
+  CMD_OPEN: Begin
+   SetFillStyle(SolidFill,Yel); Bar(X+1,Y+4,X+6,Y+6); Bar(X+1,Y+6,X+14,Y+13);
+   SetColor(Ink); Rectangle(X+1,Y+4,X+6,Y+6); Rectangle(X+1,Y+6,X+14,Y+13);
+   SetFillStyle(SolidFill,Wht); Bar(X+3,Y+8,X+12,Y+11);
+  End;
+  CMD_SAVE: Begin
+   SetFillStyle(SolidFill,Blu); Bar(X+2,Y+2,X+13,Y+13);
+   SetColor(Ink); Rectangle(X+2,Y+2,X+13,Y+13);
+   SetFillStyle(SolidFill,Wht); Bar(X+4,Y+2,X+11,Y+6);
+   SetFillStyle(SolidFill,7); Bar(X+5,Y+9,X+10,Y+13);
+   SetColor(Ink); Rectangle(X+5,Y+9,X+10,Y+13);
+  End;
+  CMD_UNDO, CMD_REDO: Begin
+   SetColor(Ink);
+   If Cmd = CMD_UNDO Then Begin
+    Line(X+2,Y+6,X+6,Y+2); Line(X+2,Y+6,X+6,Y+10); Line(X+2,Y+6,X+9,Y+6);
+    Line(X+3,Y+6,X+6,Y+3); Line(X+3,Y+6,X+6,Y+9);
+    Line(X+9,Y+6,X+13,Y+8); Line(X+13,Y+8,X+13,Y+11); Line(X+13,Y+11,X+10,Y+13);
+    Line(X+9,Y+5,X+13,Y+7); Line(X+12,Y+8,X+12,Y+11);
+   End Else Begin
+    Line(X+13,Y+6,X+9,Y+2); Line(X+13,Y+6,X+9,Y+10); Line(X+13,Y+6,X+6,Y+6);
+    Line(X+12,Y+6,X+9,Y+3); Line(X+12,Y+6,X+9,Y+9);
+    Line(X+6,Y+6,X+2,Y+8); Line(X+2,Y+8,X+2,Y+11); Line(X+2,Y+11,X+5,Y+13);
+    Line(X+6,Y+5,X+2,Y+7); Line(X+3,Y+8,X+3,Y+11);
+   End;
+  End;
+  CMD_CUT: Begin
+   SetColor(Ink);
+   Line(X+4,Y+1,X+10,Y+10); Line(X+11,Y+1,X+5,Y+10);
+   Line(X+5,Y+1,X+11,Y+10); Line(X+10,Y+1,X+4,Y+10);
+   SetColor(Red);
+   Circle(X+4,Y+12,2); Circle(X+11,Y+12,2);
+  End;
+  CMD_COPY: Begin
+   SetFillStyle(SolidFill,Wht); Bar(X+2,Y+1,X+9,Y+10);
+   SetColor(Ink); Rectangle(X+2,Y+1,X+9,Y+10);
+   SetFillStyle(SolidFill,Wht); Bar(X+6,Y+5,X+13,Y+14);
+   SetColor(Ink); Rectangle(X+6,Y+5,X+13,Y+14);
+   Line(X+8,Y+8,X+11,Y+8); Line(X+8,Y+10,X+11,Y+10); Line(X+8,Y+12,X+11,Y+12);
+  End;
+  CMD_PASTE: Begin
+   SetFillStyle(SolidFill,Brn); Bar(X+2,Y+3,X+13,Y+14);
+   SetColor(Ink); Rectangle(X+2,Y+3,X+13,Y+14);
+   SetFillStyle(SolidFill,7); Bar(X+5,Y+1,X+10,Y+4);
+   SetColor(Ink); Rectangle(X+5,Y+1,X+10,Y+4);
+   SetFillStyle(SolidFill,Wht); Bar(X+5,Y+7,X+11,Y+13);
+   SetColor(Ink); Rectangle(X+5,Y+7,X+11,Y+13);
+  End;
+  CMD_ZOOM_IN, CMD_ZOOM_OUT, CMD_ZOOM_RESET: Begin
+   SetFillStyle(SolidFill,Wht); FillEllipse(X+6,Y+6,5,5);
+   SetColor(Ink); Circle(X+6,Y+6,5); Circle(X+6,Y+6,4);
+   Line(X+10,Y+10,X+14,Y+14); Line(X+11,Y+10,X+14,Y+13); Line(X+10,Y+11,X+13,Y+14);
+   SetColor(Blu);
+   If Cmd = CMD_ZOOM_RESET Then Begin
+    Line(X+6,Y+3,X+6,Y+9); Line(X+5,Y+4,X+6,Y+3);
+   End Else Begin
+    Line(X+3,Y+6,X+9,Y+6);
+    If Cmd = CMD_ZOOM_IN Then Line(X+6,Y+3,X+6,Y+9);
+   End;
+  End;
+  CMD_GRID: Begin
+   SetFillStyle(SolidFill,Wht); Bar(X+2,Y+2,X+13,Y+13);
+   SetColor(Ink); Rectangle(X+2,Y+2,X+13,Y+13);
+   SetColor(Blu);
+   Line(X+6,Y+2,X+6,Y+13); Line(X+10,Y+2,X+10,Y+13);
+   Line(X+2,Y+6,X+13,Y+6); Line(X+2,Y+10,X+13,Y+10);
+  End;
+  CMD_RULERS: Begin
+   SetFillStyle(SolidFill,Yel); Bar(X+1,Y+4,X+14,Y+11);
+   SetColor(Ink); Rectangle(X+1,Y+4,X+14,Y+11);
+   For I := 0 To 3 Do Line(X+3+I*3,Y+4,X+3+I*3,Y+7);
+   Line(X+4,Y+4,X+4,Y+8); Line(X+10,Y+4,X+10,Y+8);
+  End;
+  CMD_GUIDES: Begin
+   SetColor(Ink); Rectangle(X+3,Y+3,X+12,Y+12);
+   SetColor(Blu);
+   Line(X+7,Y+0,X+7,Y+15); Line(X+0,Y+7,X+15,Y+7);
+   Line(X+8,Y+0,X+8,Y+15); Line(X+0,Y+8,X+15,Y+8);
+  End;
+  CMD_GROUP: Begin
+   SetColor(Ink); SetLineStyle(DottedLn,0,NormWidth);
+   Rectangle(X+0,Y+0,X+15,Y+15);
+   SetLineStyle(SolidLn,0,NormWidth);
+   SetFillStyle(SolidFill,Blu); Bar(X+2,Y+2,X+7,Y+7);
+   SetFillStyle(SolidFill,Red); Bar(X+8,Y+8,X+13,Y+13);
+   SetColor(Ink); Rectangle(X+2,Y+2,X+7,Y+7); Rectangle(X+8,Y+8,X+13,Y+13);
+  End;
+  CMD_UNGROUP: Begin
+   SetFillStyle(SolidFill,Blu); Bar(X+1,Y+1,X+6,Y+6);
+   SetFillStyle(SolidFill,Red); Bar(X+9,Y+9,X+14,Y+14);
+   SetColor(Ink); Rectangle(X+1,Y+1,X+6,Y+6); Rectangle(X+9,Y+9,X+14,Y+14);
+   Line(X+7,Y+7,X+8,Y+8);
+  End;
+  CMD_FRONT: Begin
+   SetFillStyle(SolidFill,Wht); Bar(X+2,Y+2,X+9,Y+9);
+   SetColor(Ink); Rectangle(X+2,Y+2,X+9,Y+9);
+   SetFillStyle(SolidFill,Blu); Bar(X+6,Y+6,X+13,Y+13);
+   SetColor(Ink); Rectangle(X+6,Y+6,X+13,Y+13);
+  End;
+  CMD_BACK: Begin
+   SetFillStyle(SolidFill,Blu); Bar(X+2,Y+2,X+9,Y+9);
+   SetColor(Ink); Rectangle(X+2,Y+2,X+9,Y+9);
+   SetFillStyle(SolidFill,Wht); Bar(X+6,Y+6,X+13,Y+13);
+   SetColor(Ink); Rectangle(X+6,Y+6,X+13,Y+13);
+  End;
+  CMD_ALIGN: Begin
+   SetColor(Ink); Line(X+1,Y+1,X+1,Y+14);
+   SetFillStyle(SolidFill,Blu);
+   Bar(X+3,Y+2,X+14,Y+4); Bar(X+3,Y+6,X+9,Y+8); Bar(X+3,Y+10,X+12,Y+12);
+  End;
+  CMD_PROPS: Begin
+   SetFillStyle(SolidFill,Wht); Bar(X+1,Y+2,X+14,Y+13);
+   SetFillStyle(SolidFill,Blu); Bar(X+2,Y+3,X+13,Y+5);
+   SetColor(Ink); Rectangle(X+1,Y+2,X+14,Y+13);
+   Line(X+3,Y+8,X+7,Y+8); Line(X+3,Y+10,X+7,Y+10);
+   SetFillStyle(SolidFill,Red); Bar(X+9,Y+7,X+12,Y+11);
+  End;
+ End;
+End;
+
+Procedure DrawTopBar;
+Var I, X, Y, Cmd, Sel, Hover: Integer; En, On: Boolean; Hint: String;
+Begin
+ SetFillStyle(SolidFill,COLOR_BG);
+ Bar(0,MENU_H,ScreenWidth-1,MENUBAR_HEIGHT-1);
+ SetColor(15); Line(0,MENU_H,ScreenWidth-1,MENU_H);
+ SetColor(8); Line(0,MENUBAR_HEIGHT-1,ScreenWidth-1,MENUBAR_HEIGHT-1);
+ Sel := SelCount;
+ Hover := -1;
+ If Not MenuActive And Not PropActive And Not ChoiceActive And Not GlyphActive And
+    Not FileDialogActive And (DialogTitle = '') And Not DrawingMode Then
+  Hover := TopItemAt(MouseX,MouseY);
+ Y := MENU_H+3;
+ For I := 0 To TOPBAR_ITEMS-1 Do Begin
+  Cmd := TopItemCmd(I);
+  X := TopItemX(I);
+  If Cmd = 0 Then Begin
+   SetColor(8); Line(X+4,MENU_H+5,X+4,MENUBAR_HEIGHT-6);
+   SetColor(15); Line(X+5,MENU_H+5,X+5,MENUBAR_HEIGHT-6);
+  End Else Begin
+   En := TopEnabled(Cmd,Sel);
+   On := TopChecked(Cmd);
+   If On Then Begin
+    SetFillStyle(SolidFill,COLOR_BG); Bar(X,Y,X+23,Y+23);
+    UiBevel(X,Y,X+23,Y+23,False);
+    DrawTopIcon(Cmd,X+5,Y+5,En);
+   End Else Begin
+    If (I = Hover) And En Then UiBevel(X,Y,X+23,Y+23,True);
+    DrawTopIcon(Cmd,X+4,Y+4,En);
+   End;
+  End;
+ End;
+ If Hover >= 0 Then Begin
+  Hint := TopHint(TopItemCmd(Hover));
+  X := TopItemX(Hover);
+  If X+Length(Hint)*8+10 > ScreenWidth Then X := ScreenWidth-Length(Hint)*8-10;
+  SetFillStyle(SolidFill,14);
+  Bar(X,MENUBAR_HEIGHT+2,X+Length(Hint)*8+8,MENUBAR_HEIGHT+16);
+  SetColor(0);
+  Rectangle(X,MENUBAR_HEIGHT+2,X+Length(Hint)*8+8,MENUBAR_HEIGHT+16);
+  OutTextXY(X+4,MENUBAR_HEIGHT+6,Hint);
+ End;
+End;
+
 Procedure DrawMenu;
 Var I, X, Y, H: Integer;
 Begin
@@ -2820,10 +3108,10 @@ Begin
  X := MenuLeft(ActiveMenu);
  H := Menus[ActiveMenu].ItemCount*MENU_ITEM_HEIGHT+4;
  SetFillStyle(SolidFill, COLOR_BG);
- Bar(X, MENUBAR_HEIGHT, X+Menus[ActiveMenu].Width, MENUBAR_HEIGHT+H);
- UiBevel(X, MENUBAR_HEIGHT, X+Menus[ActiveMenu].Width, MENUBAR_HEIGHT+H,True);
+ Bar(X, MENU_H, X+Menus[ActiveMenu].Width, MENU_H+H);
+ UiBevel(X, MENU_H, X+Menus[ActiveMenu].Width, MENU_H+H,True);
  For I := 0 To Menus[ActiveMenu].ItemCount-1 Do Begin
-  Y := MENUBAR_HEIGHT+2+I*MENU_ITEM_HEIGHT;
+  Y := MENU_H+2+I*MENU_ITEM_HEIGHT;
   If Menus[ActiveMenu].Items[I].Caption = '-' Then Begin
    SetColor(COLOR_BORDER);
    Line(X+4, Y+MENU_ITEM_HEIGHT Div 2,
@@ -2856,7 +3144,6 @@ End;
   Boite de dialogue "Proprietes..." de l'objet selectionne
   ------------------------------------------------------------------ }
 Var
- PropActive: Boolean;
  PropObj: TGraphicObject;
  PropIdx: Integer;
 
@@ -3173,7 +3460,6 @@ Const
  TR_SCALE = 3;
 
 Var
- ChoiceActive: Boolean;
  ChoiceKind, ChoiceCount: Integer;
  ChoiceItems: Array[0..11] Of String[40];
  ChoiceSel, ChoiceLastIdx: Integer;
@@ -4258,7 +4544,7 @@ Const
  W_GLYPH_BTN = 212;
 
 Var
- GlyphActive, GlyphUndone: Boolean;
+ GlyphUndone: Boolean;
  GlyphHover: Integer;
 
 Procedure TextBoundsFit(Var O: TGraphicObject; Var Ok: Boolean);
@@ -5538,15 +5824,8 @@ Begin
  End Else If UiInside(X+W-100,Y+H-40,X+W-12,Y+H-16) Then CloseMessage(True);
 End;
 
-Procedure ExecuteMenuItem(M, I: Integer);
-Var Command: Byte;
+Procedure RunCommand(Command: Byte);
 Begin
- Command := Menus[M].Items[I].Command;
- If Command = CMD_NONE Then Begin
-  StatusMessage := 'Commande non implementee.';
-  NeedsRedraw := True;
-  Exit;
- End;
  CloseMenu;
  Case Command Of
   CMD_EXPORT: StartExportDialog;
@@ -5637,6 +5916,37 @@ Begin
   CMD_TIPS:
    ShowDialog('Astuces', 'Cliquez un menu, survolez ses lignes, cliquez pour agir.');
  End;
+End;
+
+Procedure ExecuteMenuItem(M, I: Integer);
+Var Command: Byte;
+Begin
+ Command := Menus[M].Items[I].Command;
+ If Command = CMD_NONE Then Begin
+  StatusMessage := 'Commande non implementee.';
+  NeedsRedraw := True;
+  Exit;
+ End;
+ RunCommand(Command);
+End;
+
+{ clic dans la barre d'outils horizontale ; True si le clic lui appartient }
+Function TopBarClick: Boolean;
+Var I, Cmd: Integer;
+Begin
+ TopBarClick := False;
+ If (MouseY < MENU_H) Or (MouseY >= MENUBAR_HEIGHT) Then Exit;
+ TopBarClick := True;
+ I := TopItemAt(MouseX,MouseY);
+ If I < 0 Then Exit;
+ Cmd := TopItemCmd(I);
+ If Cmd = 0 Then Exit;
+ If Not TopEnabled(Cmd,SelCount) Then Begin
+  StatusMessage := TopHint(Cmd)+' : indisponible pour la selection actuelle.';
+  Exit;
+ End;
+ RunCommand(Cmd);
+ NeedsRedraw := True;
 End;
 
 Procedure FinishText(CancelEmpty: Boolean);
@@ -5810,7 +6120,8 @@ Begin
     If ItemHit >= 0 Then ExecuteMenuItem(ActiveMenu, ItemHit)
     Else CloseMenu;
    End Else Begin
-    If Not TryStartGuide Then HandleMouseClick;
+    If Not TopBarClick Then
+     If Not TryStartGuide Then HandleMouseClick;
     NeedsRedraw := True;
    End;
   End Else If Panning And ((MouseButtons And 1) <> 0) Then Begin
@@ -5841,6 +6152,13 @@ Begin
   End;
  End;
  If Released Then MenuMouseDown := False;
+ If Not MenuActive And Not PropActive And Not ChoiceActive And Not GlyphActive And
+    Not FileDialogActive And (DialogTitle = '') And Not DrawingMode Then Begin
+  If TopItemAt(MouseX,MouseY) <> TopHoverLast Then Begin
+   TopHoverLast := TopItemAt(MouseX,MouseY);
+   NeedsRedraw := True;
+  End;
+ End Else TopHoverLast := -1;
  UpdateToolTipAt(ToolTipClock);
  OldMouseButtons := MouseButtons;
  OldMouseX := MouseX;
@@ -6033,6 +6351,7 @@ Begin
  SetViewPort(0,0,ScreenWidth-1,ScreenHeight-1,True);
  DrawToolbar;
  DrawMenuBar;
+ DrawTopBar;
  DrawStatusBar;
  { Les menus et dialogues doivent etre dessines APRES le document. }
  DrawMenu;

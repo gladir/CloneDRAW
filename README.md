@@ -108,6 +108,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 		<td><b>AI.PAS</b></td>
 		<td>Cette commande permet de lancer un clone d'Adobe Illustrator.</td>
 	</tr>
+	<tr>
+		<td><b>ARTWORX.PAS</b></td>
+		<td>Cette commande permet de lancer le clone du programme de dessin vectoriel ArtWorx pour Atari ST.</td>
+	</tr>
     <tr>
         <td><b>AUTOCAD.PAS</b></td>
         <td>Cette commande permet de lancer un clone de AutoCAD.</td>

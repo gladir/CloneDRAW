@@ -2271,21 +2271,46 @@ Begin
  TitleStr:=S;
 End;
 
-Procedure DrawTitleBar;
-Var S: String; I: Integer;
+{ Barre de titre style GEM / Atari ST : fermeture a gauche, rayures, titre
+  centre sur fond blanc, boutons a droite }
+Procedure DrawWinTitle(X1,Y1,X2: Integer; Const T: String; Right: Boolean);
+Var I,TW,TX,RW: Integer;
 Begin
- Box(0,TITLE_Y,SCR_W-1,TITLE_Y+TITLE_H-1,PAPER);
+ Box(X1,Y1,X2,Y1+15,PAPER);
+ SetColor(INK);SetLineStyle(SolidLn,0,1);
+ If Right Then RW:=50 Else RW:=4;
+ I:=Y1+2;
+ While I<=Y1+13 Do Begin
+  Line(X1+20,I,X2-RW,I);
+  Inc(I,2);
+ End;
+ { bouton de fermeture }
+ Box(X1+3,Y1+2,X1+15,Y1+13,PAPER);
+ Frame(X1+3,Y1+2,X1+15,Y1+13);
+ Box(X1+6,Y1+5,X1+12,Y1+10,PAPER);
+ Frame(X1+6,Y1+5,X1+12,Y1+10);
+ { titre }
+ TW:=TextW(T);
+ TX:=X1+(X2-X1-TW) Div 2;
+ Box(TX-6,Y1+1,TX+TW+5,Y1+14,PAPER);
+ PText(TX,Y1+4,T);
+ If Right Then Begin
+  { iconifier, agrandir, plein ecran }
+  Box(X2-47,Y1+2,X2-35,Y1+13,PAPER);Frame(X2-47,Y1+2,X2-35,Y1+13);
+  Box(X2-44,Y1+7,X2-38,Y1+10,INK);
+  Box(X2-32,Y1+2,X2-20,Y1+13,PAPER);Frame(X2-32,Y1+2,X2-20,Y1+13);
+  Line(X2-26,Y1+4,X2-30,Y1+10);Line(X2-26,Y1+4,X2-22,Y1+10);
+  Line(X2-30,Y1+10,X2-22,Y1+10);
+  Box(X2-17,Y1+2,X2-5,Y1+13,PAPER);Frame(X2-17,Y1+2,X2-5,Y1+13);
+  Frame(X2-14,Y1+5,X2-8,Y1+10);
+ End;
+End;
+
+Procedure DrawTitleBar;
+Begin
+ DrawWinTitle(0,TITLE_Y,SCR_W-1,TitleStr,True);
  SetColor(INK);
  Line(0,TITLE_Y+TITLE_H-1,SCR_W-1,TITLE_Y+TITLE_H-1);
- For I:=0 To 2 Do Begin
-  Line(24,TITLE_Y+4+I*3,SCR_W-8,TITLE_Y+4+I*3);
- End;
- Box(2,TITLE_Y+2,TITLE_H-1,TITLE_Y+TITLE_H-3,PAPER);
- Frame(2,TITLE_Y+2,TITLE_H-1,TITLE_Y+TITLE_H-3);
- S:=TitleStr;
- Box((SCR_W-TextW(S)) Div 2-6,TITLE_Y+1,(SCR_W+TextW(S)) Div 2+5,
-   TITLE_Y+TITLE_H-3,PAPER);
- PText((SCR_W-TextW(S)) Div 2,TITLE_Y+4,S);
 End;
 
 Procedure DrawInfoLine;
@@ -2334,48 +2359,77 @@ Begin
  PageMinX:=-30;
 End;
 
-Procedure DrawScrollbars;
-Var Rng,Vis,T1,T2,TL,TH: Double; TrackLen: Integer;
+Procedure DitherBox(X1,Y1,X2,Y2: Integer);
+Var X,Y: Integer;
 Begin
- { vertical }
- Box(CVX2+1,CVY1,SCR_W-1,CVY2,CHROME);
+ Box(X1,Y1,X2,Y2,PAPER);
+ For Y:=Y1 To Y2 Do
+  For X:=X1 To X2 Do
+   If Odd(X+Y) Then PutPixel(X,Y,INK);
+End;
+
+Procedure ScrollArrow(X1,Y1,X2,Y2,Dir: Integer);
+Var P: Array[0..2] Of PointType; CX,CY: Integer;
+Begin
+ Box(X1,Y1,X2,Y2,PAPER);
+ Frame(X1,Y1,X2,Y2);
+ CX:=(X1+X2) Div 2;CY:=(Y1+Y2) Div 2;
+ Case Dir Of
+  1: Begin P[0].X:=CX;P[0].Y:=CY-3;P[1].X:=CX-4;P[1].Y:=CY+3;P[2].X:=CX+4;P[2].Y:=CY+3;End;
+  2: Begin P[0].X:=CX;P[0].Y:=CY+3;P[1].X:=CX-4;P[1].Y:=CY-3;P[2].X:=CX+4;P[2].Y:=CY-3;End;
+  3: Begin P[0].X:=CX-3;P[0].Y:=CY;P[1].X:=CX+3;P[1].Y:=CY-4;P[2].X:=CX+3;P[2].Y:=CY+4;End;
+  Else Begin P[0].X:=CX+3;P[0].Y:=CY;P[1].X:=CX-3;P[1].Y:=CY-4;P[2].X:=CX-3;P[2].Y:=CY+4;End;
+ End;
+ SetFillStyle(SolidFill,INK);
  SetColor(INK);
- Line(CVX2+1,CVY1,CVX2+1,CVY2);
- Rectangle(CVX2+1,CVY1,SCR_W-1,CVY1+SB_W);
- Rectangle(CVX2+1,CVY2-SB_W,SCR_W-1,CVY2);
- DrawGlyph(81,CVX2+1-2,CVY1-2,INK);
- DrawGlyph(82,CVX2+1-2,CVY2-SB_W-2,INK);
- TrackLen:=CVY2-CVY1-2*SB_W-2;
+ FillPoly(3,P);
+End;
+
+Procedure DrawScrollbars;
+Var Rng,Vis,TL,TH: Double; TrackLen,T0: Integer;
+Begin
+ { barre verticale : piste tramee, fleches aux extremites, curseur noir }
+ SetLineStyle(SolidLn,0,1);
+ T0:=CVY1+SB_W+1;
+ TrackLen:=CVY2-CVY1-2*SB_W-1;
+ DitherBox(CVX2+1,T0,SCR_W-1,T0+TrackLen-1);
+ SetColor(INK);Line(CVX2+1,CVY1,CVX2+1,CVY2);
+ ScrollArrow(CVX2+1,CVY1,SCR_W-1,CVY1+SB_W,1);
+ ScrollArrow(CVX2+1,CVY2-SB_W,SCR_W-1,CVY2,2);
  Rng:=PageH+60;Vis:=(CVY2-CVY1+1)/Sc;
  If Vis>=Rng Then Begin TL:=0;TH:=TrackLen;End
  Else Begin
   TL:=(OrgY+30)/Rng*TrackLen;TH:=Vis/Rng*TrackLen;
-  If TH<8 Then TH:=8;
+  If TH<10 Then TH:=10;
  End;
  If TL<0 Then TL:=0;
  If TL+TH>TrackLen Then TL:=TrackLen-TH;
- Box(CVX2+2,CVY1+SB_W+1+Round(TL),SCR_W-2,CVY1+SB_W+1+Round(TL+TH),8);
- { horizontal }
- Box(CVX1,CVY2+1,CVX2,SCR_H-1,CHROME);
- Line(CVX1,CVY2+1,CVX2,CVY2+1);
- Rectangle(CVX1,CVY2+1,CVX1+SB_W,SCR_H-1);
- Rectangle(CVX2-SB_W,CVY2+1,CVX2,SCR_H-1);
- SetColor(INK);
- Line(CVX1+10,CVY2+9,CVX1+5,CVY2+9);
- Line(CVX1+5,CVY2+9,CVX1+8,CVY2+5);Line(CVX1+5,CVY2+9,CVX1+8,CVY2+13);
- Line(CVX2-10,CVY2+9,CVX2-5,CVY2+9);
- Line(CVX2-5,CVY2+9,CVX2-8,CVY2+5);Line(CVX2-5,CVY2+9,CVX2-8,CVY2+13);
- TrackLen:=CVX2-CVX1-2*SB_W-2;
+ Box(CVX2+2,T0+Round(TL),SCR_W-2,T0+Round(TL+TH)-1,INK);
+ Box(CVX2+3,T0+Round(TL)+1,SCR_W-3,T0+Round(TL+TH)-2,PAPER);
+ DitherBox(CVX2+4,T0+Round(TL)+2,SCR_W-4,T0+Round(TL+TH)-3);
+ { barre horizontale }
+ T0:=CVX1+SB_W+1;
+ TrackLen:=CVX2-CVX1-2*SB_W-1;
+ DitherBox(T0,CVY2+2,T0+TrackLen-1,SCR_H-1);
+ SetColor(INK);Line(CVX1,CVY2+1,CVX2,CVY2+1);
+ ScrollArrow(CVX1,CVY2+1,CVX1+SB_W,SCR_H-1,3);
+ ScrollArrow(CVX2-SB_W,CVY2+1,CVX2,SCR_H-1,4);
  Rng:=PageW+60;Vis:=(CVX2-CVX1+1)/Sc;
  If Vis>=Rng Then Begin TL:=0;TH:=TrackLen;End
  Else Begin
   TL:=(OrgX+30)/Rng*TrackLen;TH:=Vis/Rng*TrackLen;
-  If TH<8 Then TH:=8;
+  If TH<10 Then TH:=10;
  End;
  If TL<0 Then TL:=0;
  If TL+TH>TrackLen Then TL:=TrackLen-TH;
- Box(CVX1+SB_W+1+Round(TL),CVY2+2,CVX1+SB_W+1+Round(TL+TH),SCR_H-2,8);
- Box(CVX2+1,CVY2+1,SCR_W-1,SCR_H-1,CHROME);
+ Box(T0+Round(TL),CVY2+2,T0+Round(TL+TH)-1,SCR_H-2,INK);
+ Box(T0+Round(TL)+1,CVY2+3,T0+Round(TL+TH)-2,SCR_H-3,PAPER);
+ DitherBox(T0+Round(TL)+2,CVY2+4,T0+Round(TL+TH)-3,SCR_H-4);
+ { coin de redimensionnement }
+ Box(CVX2+1,CVY2+1,SCR_W-1,SCR_H-1,PAPER);
+ Frame(CVX2+1,CVY2+1,SCR_W-1,SCR_H-1);
+ Frame(CVX2+4,CVY2+4,SCR_W-5,SCR_H-5);
+ Box(CVX2+4,CVY2+4,CVX2+9,CVY2+9,INK);
 End;
 
 { ---- coordonnees ecran <-> monde ---- }
@@ -3100,15 +3154,9 @@ Begin
  Box(DlgX,DlgY,DlgX+DlgW,DlgY+DlgH,CHROME);
  Frame(DlgX,DlgY,DlgX+DlgW,DlgY+DlgH);
  Frame(DlgX+1,DlgY+1,DlgX+DlgW-1,DlgY+DlgH-1);
- Box(DlgX+2,DlgY+2,DlgX+DlgW-2,DlgY+17,PAPER);
+ DrawWinTitle(DlgX+2,DlgY+2,DlgX+DlgW-2,DlgTitle,True);
  SetColor(INK);
  Line(DlgX+2,DlgY+18,DlgX+DlgW-2,DlgY+18);
- For I:=0 To 1 Do Line(DlgX+24,DlgY+6+I*4,DlgX+DlgW-6,DlgY+6+I*4);
- Box(DlgX+4,DlgY+4,DlgX+15,DlgY+15,PAPER);
- Frame(DlgX+4,DlgY+4,DlgX+15,DlgY+15);
- Box(DlgX+(DlgW-TextW(DlgTitle)) Div 2-6,DlgY+3,
-   DlgX+(DlgW+TextW(DlgTitle)) Div 2+5,DlgY+16,PAPER);
- BText(DlgX+(DlgW-TextW(DlgTitle)) Div 2,DlgY+6,DlgTitle);
  For I:=1 To NCtl Do Begin
   C:=Ctl[I];
   X:=DlgX+C.X;Y:=DlgY+C.Y;
@@ -6261,8 +6309,7 @@ Begin
    HideMouse;
    Box(X1+4,Y1+4,X2+4,Y2+4,INK);
    Box(X1,Y1,X2,Y2,CHROME);Frame(X1,Y1,X2,Y2);Frame(X1+1,Y1+1,X2-1,Y2-1);
-   Box(X1+2,Y1+2,X2-2,Y1+17,PAPER);Line(X1+2,Y1+18,X2-2,Y1+18);
-   BText(X1+(X2-X1-TextW(Title)) Div 2,Y1+6,Title);
+   DrawWinTitle(X1+2,Y1+2,X2-2,Title,True);Line(X1+2,Y1+18,X2-2,Y1+18);
    Box(X1+8,Y1+26,X2-8,Y2-30,PAPER);Frame(X1+8,Y1+26,X2-8,Y2-30);
    For I:=1 To N Do Begin
     If Y1+30+(I-1)*10+8>Y2-32 Then Break;

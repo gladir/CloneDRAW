@@ -221,6 +221,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td>Cette commande permet de lancer un clone de CorelDRAW (dessin vectoriel).</td>
 		</tr>
 		<tr>
+			<td><b>DRAWIO.PAS</b></td>
+			<td>Cette commande permet de lancer un clone de draw.io (diagrammes vectoriels) fonctionnant localement : lit et écrit les fichiers .drawio (XML clair ou compressé) et exporte en SVG. Interface en français par défaut, en anglais avec la variable d'environnement LANGUAGE=EN.</td>
+		</tr>
+		<tr>
 			<td><b>ICO2ASM.PAS</b></td>
 			<td>Cette commande permet de transformer un icône (.ICO) en code source assembleur.</td>
 		</tr>

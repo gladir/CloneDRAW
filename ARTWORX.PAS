@@ -47,7 +47,7 @@ Program ARTWORX;
  {$OVERFLOWCHECKS OFF}
 {$ELSE}
  {$N+,E+}
- {$M 32768,0,400000}
+ {$M 49152,0,380000}
  {$R-,S-,I-,Q-}
 {$ENDIF}
 

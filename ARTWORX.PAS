@@ -6811,16 +6811,18 @@ Begin
 End;
 
 Function NextItem(M,From,Dir: Integer): Integer;
-Var I,N: Integer;
+Var I,N,K: Integer;
 Begin
  N:=MCount(M);
  I:=From;
- Repeat
+ { au plus N essais : un menu dont tous les elements sont inactifs (Objet
+   sans selection) ne doit pas faire boucler indefiniment }
+ For K:=1 To N Do Begin
   I:=I+Dir;
   If I<1 Then I:=N;
   If I>N Then I:=1;
   If (Not MSep(M,I)) And MEnabled(M,I) Then Begin NextItem:=I;Exit;End;
- Until I=From;
+ End;
  NextItem:=From;
 End;
 

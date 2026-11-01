@@ -39,6 +39,9 @@ Program Paint;
 
 {$IFDEF FPC}
  {$MODE TP}
+ {$MODESWITCH EXCEPTIONS}
+ {$MODESWITCH CLASS}
+ {$MODESWITCH RESULT}
  {$Q-}
  {$OVERFLOWCHECKS OFF}
 {$ENDIF}
@@ -1146,7 +1149,7 @@ Begin
  Menus[MENU_TOOLS].Title := 'Outils';
  Menus[MENU_TOOLS].X := 325;
  Menus[MENU_TOOLS].Width := 190;
- Menus[MENU_TOOLS].ItemCount := 3;
+ Menus[MENU_TOOLS].ItemCount := 4;
  Menus[MENU_TOOLS].Items[0].Caption := 'Supprimer l''arriere-plan...';
  Menus[MENU_TOOLS].Items[0].Shortcut := '';
  Menus[MENU_TOOLS].Items[0].Enabled := True;
@@ -1162,6 +1165,11 @@ Begin
  Menus[MENU_TOOLS].Items[2].Enabled := True;
  Menus[MENU_TOOLS].Items[2].Separator := False;
  Menus[MENU_TOOLS].Items[2].Checked := False;
+ Menus[MENU_TOOLS].Items[3].Caption := 'Fusionner des v'+#136+'tements...';
+ Menus[MENU_TOOLS].Items[3].Shortcut := '';
+ Menus[MENU_TOOLS].Items[3].Enabled := True;
+ Menus[MENU_TOOLS].Items[3].Separator := False;
+ Menus[MENU_TOOLS].Items[3].Checked := False;
 
  { Menu Aide }
  Menus[MENU_HELP].Title := '?';
@@ -29215,6 +29223,15358 @@ Begin
 End;
 
 
+{ Fusionner des vetements : le moteur ci-dessous est le code complet de
+  VTON.PAS (essayage virtuel pilote par IA : reseau SegFormer, decodeurs
+  JPEG/PNG/BMP/PPM, recoloration, motifs, ajout/retrait d'accessoires,
+  calcul multi-fils et GPU Direct3D 11 optionnel). Les identifiants du moteur
+  portent le prefixe Vt pour ne pas entrer en conflit avec PAINT ; la ligne de
+  commande, l'aide et la console sont remplacees par l'interface de PAINT :
+  la photo vient du canevas et les messages vont dans le journal du dialogue. }
+
+{$IFDEF FPC}{$PUSH}{$ENDIF}
+{$H+}{$I-}{$R-}{$Q-}{$POINTERMATH ON}{$INLINE ON}{$MACRO ON}
+{$NOTES OFF}{$HINTS OFF}{$WARNINGS OFF}
+
+Type
+ TVxErr = Class(TObject)
+ End;
+
+Var
+ VxCancelled: Boolean;
+ VxFails: LongInt;
+ VxMsg, VxLastWarn: AnsiString;
+ VxPrevPx: PByte;
+ VxPrevW, VxPrevH: LongInt;
+ VxLog: Array[0..3] of String;
+ VxLogX, VxLogY: Integer;
+ VxCancelRect: TRect;
+
+Procedure VxPal(Idx: Byte; Var R1, G1, B1: Byte);
+Begin
+ R1 := ImageBuffer.Palette[Idx].R;
+ G1 := ImageBuffer.Palette[Idx].G;
+ B1 := ImageBuffer.Palette[Idx].B;
+End;
+
+Procedure VxDrawLog;
+Var
+ R: TRect;
+ I: Integer;
+Begin
+ PEHideMouse;
+ PERect(R,VxLogX,VxLogY,288,64);
+ PEFill(R,White);
+ PEBevel(R,True);
+ SetColor(Black);
+ For I := 0 To 3 Do
+  OutTextXY(VxLogX+4,VxLogY+4+I*14,Copy(VxLog[I],1,34));
+ PEShowMouse;
+End;
+
+Procedure VxNote(Const S: AnsiString);
+Var
+ I, MX, MY, MB: Integer;
+ T: String;
+Begin
+ T := Copy(S,1,255);
+ If (VxLog[3] <> T) Then Begin
+  For I := 0 To 2 Do
+   VxLog[I] := VxLog[I+1];
+  VxLog[3] := T;
+  VxDrawLog;
+ End;
+ GetMouseStateLocal(MX,MY,MB);
+ If ((MB And 1) <> 0) And PEInside(MX,MY,VxCancelRect) Then
+  VxCancelled := True;
+ If KeyPressed Then
+  If ReadKey = #27 Then
+   VxCancelled := True;
+ If VxCancelled Then Begin
+  VxMsg := 'Operation annulee.';
+  Raise TVxErr.Create;
+ End;
+End;
+
+Procedure VxWarn(Const S: AnsiString);
+Begin
+ VxLastWarn := S;
+ VxNote('Attention : '+S);
+End;
+
+Procedure VxFail(Const S: AnsiString);
+Begin
+ VxMsg := S;
+ Raise TVxErr.Create;
+End;
+
+Const
+ VtVersionStr   = '1.1 (clone Pascal de VTON, essayage virtuel par IA)';
+ VtMaxLabels    = 64;
+
+Type
+ VtPSingleArr = PSingle;
+ VtTSingleArr = Array[0..0]of Single;
+ VtPIntArr = PLongInt;
+ VtTIntArr = Array[0..0]of LongInt;
+ VtPWordArr = PWord;
+ VtTWordArr = Array[0..0]of Word;
+ VtPSmallArr = PSmallInt;
+ VtTSmallArr = Array[0..0]of SmallInt;
+ VtPByteArr = PByte;
+ VtTByteArr = Array[0..0]of Byte;
+ VtTStrArray = Array of AnsiString;
+ VtTIntArray = Array of LongInt;
+ VtTSingleArray = Array of Single;
+ VtTByteArray = Array of Byte;
+
+{ ------------------------------------------------------------------ }
+{ Utilitaires de chaines                                              }
+{ ------------------------------------------------------------------ }
+
+Function VtIStr(VtN:Int64):AnsiString;
+Var
+ VtS:AnsiString;
+Begin
+ Str(VtN,VtS);
+ Result:=VtS;
+End;
+
+Function VtFStr(X:Double;Dec:LongInt):AnsiString;
+Var
+ VtS:AnsiString;
+Begin
+ Str(X:0:Dec,VtS);
+ Result:=VtS;
+End;
+
+Function VtLoStr(VtS:AnsiString):AnsiString;
+Var
+ VtI:LongInt;
+Begin
+ For VtI:=1 to Length(VtS)do If VtS[VtI]in['A'..'Z']Then VtS[VtI]:=Chr(Ord(VtS[VtI])+32);
+ Result:=VtS;
+End;
+
+Function VtUpStr(VtS:AnsiString):AnsiString;
+Var
+ VtI:LongInt;
+Begin
+ For VtI:=1 to Length(VtS)do If VtS[VtI]in['a'..'z']Then VtS[VtI]:=Chr(Ord(VtS[VtI])-32);
+ Result:=VtS;
+End;
+
+Function VtStartsWith(Const VtS,Prefix:AnsiString):Boolean;
+Begin
+ Result:=(Length(VtS)>=Length(Prefix))and(Copy(VtS,1,Length(Prefix))=Prefix);
+End;
+
+Function VtEndsWith(Const VtS,Suffix:AnsiString):Boolean;
+Begin
+ Result:=(Length(VtS)>=Length(Suffix))and
+           (Copy(VtS,Length(VtS)-Length(Suffix)+1,Length(Suffix))=Suffix);
+End;
+
+Function VtTrimS(Const VtS:AnsiString):AnsiString;
+Var
+ A,B:LongInt;
+Begin
+ A:=1;B:=Length(VtS);
+ While(A<=B)and(VtS[A]in[' ',#9,#13,#10])do Inc(A);
+ While(B>=A)and(VtS[B]in[' ',#9,#13,#10])do Dec(B);
+ Result:=Copy(VtS,A,B-A+1);
+End;
+
+Procedure VtAddStr(Var A:VtTStrArray;Const VtS:AnsiString);
+Begin
+ SetLength(A,Length(A)+1);
+ A[High(A)]:=VtS;
+End;
+
+{ decoupe S selon le caractere Sep }
+Function VtSplitStr(Const VtS:AnsiString;Sep:Char):VtTStrArray;
+Var
+ VtI,VtP:LongInt;
+Begin
+ SetLength(Result,0);
+ VtP:=1;
+ For VtI:=1 to Length(VtS)do If VtS[VtI]=Sep Then Begin
+  VtAddStr(Result,Copy(VtS,VtP,VtI-VtP));
+  VtP:=VtI+1;
+ End;
+ VtAddStr(Result,Copy(VtS,VtP,Length(VtS)-VtP+1));
+End;
+
+Function VtParseInt(Const VtS:AnsiString;Var V:Int64):Boolean;
+Var
+ Code:LongInt;
+ VtT:AnsiString;
+Begin
+ VtT:=VtTrimS(VtS);
+ Result:=False;
+ If VtT='' Then Exit;
+ Val(VtT,V,Code);
+ Result:=Code=0;
+End;
+
+Function VtParseFloat(Const VtS:AnsiString;Var V:Double):Boolean;
+Var
+ Code:LongInt;
+ VtT:AnsiString;
+ VtI:LongInt;
+Begin
+ VtT:=VtTrimS(VtS);
+ Result:=False;
+ If VtT='' Then Exit;
+ For VtI:=1 to Length(VtT)do If VtT[VtI]=',' Then VtT[VtI]:='.';
+ Val(VtT,V,Code);
+ Result:=Code=0;
+End;
+
+Function VtHexVal(C:Char):LongInt;
+Begin
+ Case C of
+  '0'..'9':Result:=Ord(C)-48;
+  'a'..'f':Result:=Ord(C)-87;
+  'A'..'F':Result:=Ord(C)-55;
+  Else Result:=-1;
+ End;
+End;
+
+Function VtPadRight(VtS:AnsiString;W:LongInt):AnsiString;
+Begin
+ While Length(VtS)<W do VtS:=VtS+' ';
+ Result:=VtS;
+End;
+
+Function VtHumanBytes(VtN:Int64):AnsiString;
+Begin
+ If VtN<1024 Then Result:=VtIStr(VtN)+' o'
+ Else If VtN<1048576 Then Result:=VtFStr(VtN/1024.0,1)+' Kio'
+ Else If VtN<1073741824 Then Result:=VtFStr(VtN/1048576.0,1)+' Mio'
+ Else Result:=VtFStr(VtN/1073741824.0,2)+' Gio';
+End;
+
+{ ------------------------------------------------------------------ }
+{ Temps, hasard et mathematiques                                      }
+{ ------------------------------------------------------------------ }
+
+Var
+ VtLastHs:Int64;
+ VtDayOfs:Int64;
+ VtStartMs:Double;
+
+{$IFDEF WINDOWS}
+Function QueryPerformanceCounter(Var C:Int64):LongInt;stdcall;external
+  'kernel32.dll' name 'QueryPerformanceCounter';
+Function QueryPerformanceFrequency(Var F:Int64):LongInt;stdcall;external
+  'kernel32.dll' name 'QueryPerformanceFrequency';
+{$ELSE}
+ {$IFDEF UNIX}
+Type
+ VtTTimeSpec=Record
+  Sec:PtrInt;
+  NSec:PtrInt;
+ End;
+Function clock_gettime(Id:LongInt;Var VtT:VtTTimeSpec):LongInt;cdecl;external 'c'
+  name 'clock_gettime';
+ {$ENDIF}
+{$ENDIF}
+
+{ temps ecoule en millisecondes }
+Function VtNowMsF:Double;
+{$IFDEF WINDOWS}
+Var
+ C,F:Int64;
+Begin
+ QueryPerformanceFrequency(F);
+ QueryPerformanceCounter(C);
+ If F<=0 Then Result:=0 Else Result:=C*1000.0/F;
+End;
+{$ELSE}
+ {$IFDEF UNIX}
+Var
+ VtT:VtTTimeSpec;
+Begin
+ clock_gettime(1,VtT);
+ VtNowMsF:=VtT.Sec*1000.0+VtT.NSec/1000000.0;
+End;
+ {$ELSE}
+Var
+ VtH,VtM,VtS,VtS100:Word;
+ VtT:Int64;
+Begin
+ GetTime(VtH,VtM,VtS,VtS100);
+ VtT:=((Int64(VtH)*60+VtM)*60+VtS)*100+VtS100;
+ If VtT<VtLastHs-1000 Then Inc(VtDayOfs,8640000);
+ VtLastHs:=VtT;
+ VtNowMsF:=(VtT+VtDayOfs)*10.0;
+End;
+ {$ENDIF}
+{$ENDIF}
+
+Function VtMakeSeed:LongWord;
+Var
+ VtH,VtM,VtS,VtS100,Y,Mo,D,Dw:Word;
+Begin
+ GetTime(VtH,VtM,VtS,VtS100);
+ GetDate(Y,Mo,D,Dw);
+ Result:=LongWord(((((Int64(VtH)*60+VtM)*60+VtS)*100+VtS100)xor(Int64(D)
+   *2654435761)xor
+   (Int64(Mo)*40503)xor(Int64(Y)*65599))and $7FFFFFFF);
+End;
+
+Const
+ VtRngState:LongWord=2463534242;
+
+Procedure VtRngSeed(Seed:LongWord);
+Begin
+ VtRngState:=Seed xor $9E3779B9;
+ If VtRngState=0 Then VtRngState:=2463534242;
+End;
+
+Function VtRngNext:LongWord;
+Begin
+ VtRngState:=VtRngState xor(VtRngState shl 13);
+ VtRngState:=VtRngState xor(VtRngState shr 17);
+ VtRngState:=VtRngState xor(VtRngState shl 5);
+ Result:=VtRngState;
+End;
+
+{ nombre pseudo-aleatoire dans [0,1[ }
+Function VtRngF:Single;
+Begin
+ Result:=(VtRngNext shr 8)/16777216.0;
+End;
+
+{ nombre pseudo-aleatoire approximativement gaussien (moyenne 0, ecart-type 1) }
+Function VtRngGauss:Single;
+Begin
+ Result:=(VtRngF+VtRngF+VtRngF+VtRngF-2.0)*1.7320508;
+End;
+
+{ decalage arithmetique a droite (shr est logique : faux pour un nombre negatif)
+  }
+Function VtSar(V,VtN:LongInt):LongInt;
+Begin
+ If V>=0 Then Result:=V shr VtN Else Result:=not((not V)shr VtN);
+End;
+
+Function VtFMin(A,B:Double):Double;Begin If A<B Then VtFMin:=A Else VtFMin:=B;End;
+Function VtFMax(A,B:Double):Double;Begin If A>B Then VtFMax:=A Else VtFMax:=B;End;
+Function VtIMin(A,B:Int64):Int64;Begin If A<B Then VtIMin:=A Else VtIMin:=B;End;
+Function VtIMax(A,B:Int64):Int64;Begin If A>B Then VtIMax:=A Else VtIMax:=B;End;
+
+Function VtClamp(X,A,B:Double):Double;
+Begin
+ If X<A Then VtClamp:=A Else If X>B Then VtClamp:=B Else VtClamp:=X;
+End;
+
+Function VtClampI(X,A,B:LongInt):LongInt;
+Begin
+ If X<A Then Result:=A Else If X>B Then Result:=B Else Result:=X;
+End;
+
+Function VtFPow(X,Y:Double):Double;
+Begin
+ If Y=0 Then Result:=1.0
+ Else If X<=0 Then Result:=0.0
+ Else Result:=Exp(Y*Ln(X));
+End;
+
+Function VtFloorI(X:Double):LongInt;
+Begin
+ Result:=Trunc(X);
+ If X<Result Then Result:=Result-1;
+End;
+
+Function VtSmoothStep(A,B,X:Double):Double;
+Var
+ VtT:Double;
+Begin
+ If B=A Then Begin
+  If X>=A Then Result:=1 Else Result:=0;
+  Exit;
+ End;
+ VtT:=(X-A)/(B-A);
+ If VtT<0 Then VtT:=0 Else If VtT>1 Then VtT:=1;
+ Result:=VtT*VtT*(3-2*VtT);
+End;
+
+{ erf(x), erreur absolue < 1,2e-7 (Numerical Recipes, erfc de Chebyshev) }
+Function VtFErf(X:Double):Double;
+Var
+ VtT,Z,R:Double;
+Begin
+ Z:=Abs(X);
+ VtT:=1.0/(1.0+0.5*Z);
+ R:=VtT*Exp(-Z*Z-1.26551223+VtT*(1.00002368+VtT*(0.37409196+VtT*(0.09678418+
+    VtT*(-0.18628806+VtT*(0.27886807+VtT*(-1.13520398+VtT*(1.48851587+
+    VtT*(-0.82215223+VtT*0.17087277)))))))));
+ If X>=0 Then Result:=1.0-R Else Result:=R-1.0;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Sorties : les textes du programme sont ecrits en CP437 (#130, #138,   }
+{ ...) ; la console est en UTF-8 : chaque Write/WriteLn est converti a   }
+{ la volee de CP437 en UTF-8.                                           }
+{ ------------------------------------------------------------------ }
+
+Const
+ VtCp437Tab:Array[128..255]of Word=(
+  $00C7,$00FC,$00E9,$00E2,$00E4,$00E0,$00E5,$00E7,
+  $00EA,$00EB,$00E8,$00EF,$00EE,$00EC,$00C4,$00C5,
+  $00C9,$00E6,$00C6,$00F4,$00F6,$00F2,$00FB,$00F9,
+  $00FF,$00D6,$00DC,$00A2,$00A3,$00A5,$20A7,$0192,
+  $00E1,$00ED,$00F3,$00FA,$00F1,$00D1,$00AA,$00BA,
+  $00BF,$2310,$00AC,$00BD,$00BC,$00A1,$00AB,$00BB,
+  $2591,$2592,$2593,$2502,$2524,$2561,$2562,$2556,
+  $2555,$2563,$2551,$2557,$255D,$255C,$255B,$2510,
+  $2514,$2534,$252C,$251C,$2500,$253C,$255E,$255F,
+  $255A,$2554,$2569,$2566,$2560,$2550,$256C,$2567,
+  $2568,$2564,$2565,$2559,$2558,$2552,$2553,$256B,
+  $256A,$2518,$250C,$2588,$2584,$258C,$2590,$2580,
+  $03B1,$00DF,$0393,$03C0,$03A3,$03C3,$00B5,$03C4,
+  $03A6,$0398,$03A9,$03B4,$221E,$03C6,$03B5,$2229,
+  $2261,$00B1,$2265,$2264,$2320,$2321,$00F7,$2248,
+  $00B0,$2219,$00B7,$221A,$207F,$00B2,$25A0,$00A0
+ );
+
+Function VtCp437ToUtf8(Const VtS:AnsiString):AnsiString;
+Var
+ VtI,VtJ,VtN,W:LongInt;
+ R:AnsiString;
+Begin
+ VtN:=Length(VtS);
+ SetLength(R,VtN*3);
+ VtJ:=0;
+ For VtI:=1 to VtN do Begin
+  W:=Ord(VtS[VtI]);
+  If W<128 Then Begin
+   Inc(VtJ);R[VtJ]:=VtS[VtI];
+  End
+   Else Begin
+    W:=VtCp437Tab[W];
+    If W<$800 Then Begin
+     Inc(VtJ);R[VtJ]:=Chr($C0 or(W shr 6));
+     Inc(VtJ);R[VtJ]:=Chr($80 or(W and $3F));
+    End
+     Else Begin
+      Inc(VtJ);R[VtJ]:=Chr($E0 or(W shr 12));
+      Inc(VtJ);R[VtJ]:=Chr($80 or((W shr 6)and $3F));
+      Inc(VtJ);R[VtJ]:=Chr($80 or(W and $3F));
+     End;
+   End;
+ End;
+ SetLength(R,VtJ);
+ Result:=R;
+End;
+
+Const
+ VtVerbose:Boolean=False;
+ VtQuiet:Boolean=False;
+
+Procedure VtInfo(Const VtS:AnsiString);
+Begin
+ VxNote(VtS);
+End;
+
+Procedure VtDetail(Const VtS:AnsiString);
+Begin
+ VxNote(VtS);
+End;
+
+Procedure VtWarn(Const VtS:AnsiString);
+Begin
+ VxWarn(VtS);
+End;
+
+Procedure VtFatal(Const VtS:AnsiString);
+Begin
+ VxFail(VtS);
+End;
+
+{ ------------------------------------------------------------------ }
+{ Memoire et fichiers                                                 }
+{ ------------------------------------------------------------------ }
+
+Function VtAllocBytes(VtN:Int64):Pointer;
+Var
+ VtP:Pointer;
+Begin
+ If VtN<=0 Then VtN:=1;
+ If VtN>=2000000000 Then VtFatal('m'#130'moire insuffisante (demande de '+
+   VtHumanBytes(VtN)+')');
+ VtP:=Nil;
+ GetMem(VtP,VtN);
+ If VtP=Nil Then VtFatal('m'#130'moire insuffisante (demande de '+VtHumanBytes(VtN)+
+   ')');
+ FillChar(VtP^,VtN,0);
+ Result:=VtP;
+End;
+
+Function VtAllocF(VtN:Int64):PSingle;
+Begin
+ Result:=PSingle(VtAllocBytes(VtN*4));
+End;
+
+Procedure VtFreeP(Var VtP:Pointer);
+Begin
+ If VtP<>Nil Then FreeMem(VtP);
+ VtP:=Nil;
+End;
+
+Function VtFileExistsP(Const Name:AnsiString):Boolean;
+Var
+ SR:SearchRec;
+Begin
+ FindFirst(Name,AnyFile,SR);
+ Result:=(DosError=0)and((SR.Attr and Directory)=0);
+ FindClose(SR);
+End;
+
+Function VtFileSizeP(Const Name:AnsiString):Int64;
+Var
+ SR:SearchRec;
+Begin
+ FindFirst(Name,AnyFile,SR);
+ If DosError=0 Then Result:=SR.Size Else Result:=-1;
+ FindClose(SR);
+End;
+
+{ charge un fichier entier en memoire }
+Function VtReadFileBytes(Const Name:AnsiString;Var VtP:PByte;Var VtN:LongInt):Boolean;
+Var
+ F:File;
+ Sz,Done:Int64;
+ Got,Chunk:LongInt;
+Begin
+ Result:=False;
+ VtP:=Nil;VtN:=0;
+ Sz:=VtFileSizeP(Name);
+ If Sz<0 Then Exit;
+ Assign(F,Name);
+ Reset(F,1);
+ If IOResult<>0 Then Exit;
+ VtP:=PByte(VtAllocBytes(Sz+8));
+ Done:=0;
+ While Done<Sz do Begin
+  Chunk:=1048576;
+  If Sz-Done<Chunk Then Chunk:=Sz-Done;
+  BlockRead(F,(VtP+Done)^,Chunk,Got);
+  If Got<=0 Then Break;
+  Inc(Done,Got);
+ End;
+ Close(F);
+ If IOResult<>0 Then;
+ VtN:=Done;
+ Result:=Done=Sz;
+End;
+
+Function VtWriteFileBytes(Const Name:AnsiString;VtP:PByte;VtN:LongInt):Boolean;
+Var
+ F:File;
+ Done:LongInt;
+ Chunk,Put:LongInt;
+Begin
+ Result:=False;
+ Assign(F,Name);
+ Rewrite(F,1);
+ If IOResult<>0 Then Exit;
+ Done:=0;
+ While Done<VtN do Begin
+  Chunk:=1048576;
+  If VtN-Done<Chunk Then Chunk:=VtN-Done;
+  BlockWrite(F,(VtP+Done)^,Chunk,Put);
+  If Put<=0 Then Break;
+  Inc(Done,Put);
+ End;
+ Close(F);
+ If IOResult<>0 Then;
+ Result:=Done=VtN;
+End;
+
+Function VtPathLastPart(Const VtP:AnsiString):AnsiString;
+Var
+ VtI:LongInt;
+Begin
+ VtI:=Length(VtP);
+ While(VtI>=1)and not(VtP[VtI]in['/','\',':'])do Dec(VtI);
+ Result:=Copy(VtP,VtI+1,Length(VtP)-VtI);
+End;
+
+Function VtPathDir(Const VtP:AnsiString):AnsiString;
+Var
+ VtI:LongInt;
+Begin
+ VtI:=Length(VtP);
+ While(VtI>=1)and not(VtP[VtI]in['/','\',':'])do Dec(VtI);
+ Result:=Copy(VtP,1,VtI);
+End;
+
+Function VtPathExt(Const VtP:AnsiString):AnsiString;
+Var
+ VtI:LongInt;
+ VtN:AnsiString;
+Begin
+ VtN:=VtPathLastPart(VtP);
+ VtI:=Length(VtN);
+ While(VtI>=1)and(VtN[VtI]<>'.')do Dec(VtI);
+ If VtI<1 Then Result:='' Else Result:=VtLoStr(Copy(VtN,VtI,Length(VtN)-VtI+1));
+End;
+
+Function VtPathNoExt(Const VtP:AnsiString):AnsiString;
+Var
+ E:AnsiString;
+Begin
+ E:=VtPathExt(VtP);
+ Result:=Copy(VtP,1,Length(VtP)-Length(E));
+End;
+
+Function VtPathSep:AnsiString;
+Begin
+ {$IFDEF UNIX}
+ Result:='/';
+ {$ELSE}
+ Result:='\';
+ {$ENDIF}
+End;
+
+Function VtDirExistsP(Const Name:AnsiString):Boolean;
+Var
+ SR:SearchRec;
+ VtN:AnsiString;
+Begin
+ VtN:=Name;
+ While(Length(VtN)>1)and(VtN[Length(VtN)]in['/','\'])do Delete(VtN,Length(VtN),1);
+ FindFirst(VtN,Directory or AnyFile,SR);
+ Result:=(DosError=0)and((SR.Attr and Directory)<>0);
+ FindClose(SR);
+End;
+
+Procedure VtMakeDirs(Const Path:AnsiString);
+Var
+ VtI:LongInt;
+ Cur:AnsiString;
+Begin
+ Cur:='';
+ For VtI:=1 to Length(Path)do Begin
+  If(Path[VtI]in['/','\'])and(Cur<>'')and not(Cur[Length(Cur)]in[':','/',
+    '\'])Then Begin
+   If not VtDirExistsP(Cur)Then Begin
+    MkDir(Cur);
+    If IOResult<>0 Then;
+   End;
+  End;
+  Cur:=Cur+Path[VtI];
+ End;
+ If(Cur<>'')and not VtDirExistsP(Cur)Then Begin
+  MkDir(Cur);
+  If IOResult<>0 Then;
+ End;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Images : structure, inflate/deflate, PNG, BMP, PPM                  }
+{ ------------------------------------------------------------------ }
+
+Type
+ { image RGB entrelacee (3 octets par pixel), canal alpha optionnel }
+ VtTImage=Record
+  W,VtH:LongInt;
+  Px:PByte;
+  Alpha:PByte;
+ End;
+
+Procedure VtImgAlloc(Var VtI:VtTImage;W,VtH:LongInt;WithAlpha:Boolean);
+Begin
+ VtI.W:=W;VtI.VtH:=VtH;
+ VtI.Px:=PByte(VtAllocBytes(Int64(W)*VtH*3));
+ VtI.Alpha:=Nil;
+ If WithAlpha Then VtI.Alpha:=PByte(VtAllocBytes(Int64(W)*VtH));
+End;
+
+Procedure VtImgFree(Var VtI:VtTImage);
+Begin
+ If VtI.Px<>Nil Then FreeMem(VtI.Px);
+ If VtI.Alpha<>Nil Then FreeMem(VtI.Alpha);
+ VtI.Px:=Nil;VtI.Alpha:=Nil;VtI.W:=0;VtI.VtH:=0;
+End;
+
+{ Photo de la personne : l'image courante du canevas (palette -> RVB) }
+Function VxPersonImage(Var VtImg:VtTImage;Var VtErr:AnsiString):Boolean;
+Var
+ X,Y:LongInt;
+ Src,Dst:PByte;
+ Rv,Gv,Bv:Byte;
+Begin
+ Result:=False;
+ VtErr:='aucune image dans le canevas';
+ If(CanvasImage=Nil)or(CanvasImageW<1)or(CanvasImageH<1)Then Exit;
+ VtImgAlloc(VtImg,CanvasImageW,CanvasImageH,False);
+ Dst:=VtImg.Px;
+ For Y:=0 to CanvasImageH-1 do Begin
+  Src:=CanvasImage;
+  Inc(Src,Int64(Y)*CanvasImageW);
+  For X:=0 to CanvasImageW-1 do Begin
+   VxPal(Src^,Rv,Gv,Bv);
+   Inc(Src);
+   Dst^:=Rv;Inc(Dst);
+   Dst^:=Gv;Inc(Dst);
+   Dst^:=Bv;Inc(Dst);
+  End;
+ End;
+ VtErr:='';
+ Result:=True;
+End;
+
+{ Resultat conserve en memoire pour l'apercu }
+Procedure VxStoreResult(Const VtImg:VtTImage);
+Begin
+ If VxPrevPx<>Nil Then Begin FreeMem(VxPrevPx);VxPrevPx:=Nil;End;
+ VxPrevW:=0;VxPrevH:=0;
+ VxPrevPx:=PByte(VtAllocBytes(Int64(VtImg.W)*VtImg.VtH*3));
+ Move(VtImg.Px^,VxPrevPx^,Int64(VtImg.W)*VtImg.VtH*3);
+ VxPrevW:=VtImg.W;VxPrevH:=VtImg.VtH;
+End;
+
+
+{ ---- CRC32 et Adler32 ---- }
+
+Const
+ VtCrcReady:Boolean=False;
+Var
+ VtCrcTab:Array[0..255]of LongWord;
+
+Procedure VtCrcInit;
+Var
+ VtN,K:LongInt;
+ C:LongWord;
+Begin
+ If VtCrcReady Then Exit;
+ For VtN:=0 to 255 do Begin
+  C:=VtN;
+  For K:=0 to 7 do If(C and 1)<>0 Then C:=$EDB88320 xor(C shr 1)Else C:=C shr 1;
+  VtCrcTab[VtN]:=C;
+ End;
+ VtCrcReady:=True;
+End;
+
+Function VtCrc32Update(Crc:LongWord;VtP:PByte;VtN:LongInt):LongWord;
+Var
+ VtI:LongInt;
+Begin
+ VtCrcInit;
+ Crc:=Crc xor $FFFFFFFF;
+ For VtI:=0 to VtN-1 do Crc:=VtCrcTab[(Crc xor VtP[VtI])and $FF]xor(Crc shr 8);
+ Result:=Crc xor $FFFFFFFF;
+End;
+
+Function VtAdler32(VtP:PByte;VtN:LongInt):LongWord;
+Var
+ A,B:LongWord;
+ VtI,K:LongInt;
+Begin
+ A:=1;B:=0;
+ VtI:=0;
+ While VtI<VtN do Begin
+  K:=VtN-VtI;
+  If K>5000 Then K:=5000;
+  While K>0 do Begin
+   A:=A+VtP[VtI];B:=B+A;
+   Inc(VtI);Dec(K);
+  End;
+  A:=A mod 65521;B:=B mod 65521;
+ End;
+ Result:=(B shl 16)or A;
+End;
+
+{ ---- inflate (RFC 1951) ---- }
+
+Type
+ VtTHuf=Record
+  Count:Array[0..15]of Word;
+  Sym:Array[0..319]of Word;
+  Fast:Array[0..511]of Word;
+ End;
+ VtTInfl=Record
+  Src:PByte;
+  SrcLen,SrcPos:LongInt;
+  BitBuf:LongWord;
+  BitCnt:LongInt;
+  Dst:PByte;
+  DstCap,DstPos:LongInt;
+  VtErr:Boolean;
+ End;
+
+Const
+ VtLenBase:Array[0..28]of Word=(3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,
+   51,59,67,83,99,115,131,163,195,227,258);
+ VtLenExtra:Array[0..28]of Byte=(0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,
+   5,5,5,5,0);
+ VtDistBase:Array[0..29]of Word=(1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,
+   385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577);
+ VtDistExtra:Array[0..29]of Byte=(0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,
+   10,11,11,12,12,13,13);
+ VtClOrder:Array[0..18]of Byte=(16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15);
+
+Procedure VtIFill(Var VtS:VtTInfl);
+Begin
+ While VtS.BitCnt<=24 do Begin
+  If VtS.SrcPos<VtS.SrcLen Then VtS.BitBuf:=VtS.BitBuf or(LongWord(VtS.Src[VtS.SrcPos])shl
+    VtS.BitCnt);
+  Inc(VtS.SrcPos);
+  Inc(VtS.BitCnt,8);
+ End;
+End;
+
+Function VtIBits(Var VtS:VtTInfl;VtN:LongInt):LongInt;
+Begin
+ If VtN=0 Then Begin Result:=0;Exit;End;
+ If VtS.BitCnt<VtN Then VtIFill(VtS);
+ Result:=VtS.BitBuf and((LongWord(1)shl VtN)-1);
+ VtS.BitBuf:=VtS.BitBuf shr VtN;
+ Dec(VtS.BitCnt,VtN);
+End;
+
+Function VtBuildHuf(Var VtH:VtTHuf;Lens:PByte;VtN:LongInt):Boolean;
+Var
+ Offs:Array[0..15]of Word;
+ NextCode:Array[0..16]of LongWord;
+ VtI,L,K,Left:LongInt;
+ Code:LongWord;
+ Rev:LongWord;
+ VtJ:LongInt;
+Begin
+ Result:=True;
+ FillChar(VtH,SizeOf(VtH),0);
+ For VtI:=0 to VtN-1 do Inc(VtH.Count[Lens[VtI]]);
+ VtH.Count[0]:=0;
+ Left:=1;
+ For L:=1 to 15 do Begin
+  Left:=Left*2-VtH.Count[L];
+  If Left<0 Then Result:=False;
+ End;
+ Offs[1]:=0;
+ For L:=1 to 14 do Offs[L+1]:=Offs[L]+VtH.Count[L];
+ For VtI:=0 to VtN-1 do If Lens[VtI]<>0 Then Begin
+  VtH.Sym[Offs[Lens[VtI]]]:=VtI;
+  Inc(Offs[Lens[VtI]]);
+ End;
+ { table rapide pour les codes de 9 bits ou moins }
+ Code:=0;
+ For L:=1 to 15 do Begin
+  If L>1 Then Code:=(Code+VtH.Count[L-1])shl 1 Else Code:=0;
+  NextCode[L]:=Code;
+ End;
+ For VtI:=0 to VtN-1 do Begin
+  L:=Lens[VtI];
+  If L=0 Then Continue;
+  Code:=NextCode[L];
+  Inc(NextCode[L]);
+  If L<=9 Then Begin
+   Rev:=0;
+   For K:=0 to L-1 do If(Code and(LongWord(1)shl K))<>0 Then Rev:=Rev or(
+     LongWord(1)shl(L-1-K));
+   VtJ:=Rev;
+   While VtJ<512 do Begin
+    VtH.Fast[VtJ]:=(L shl 9)or VtI;
+    Inc(VtJ,1 shl L);
+   End;
+  End;
+ End;
+End;
+
+Function VtIDecode(Var VtS:VtTInfl;Var VtH:VtTHuf):LongInt;
+Var
+ E:Word;
+ L,Code,First,Index,Cnt:LongInt;
+Begin
+ If VtS.BitCnt<16 Then VtIFill(VtS);
+ E:=VtH.Fast[VtS.BitBuf and 511];
+ If E<>0 Then Begin
+  L:=E shr 9;
+  VtS.BitBuf:=VtS.BitBuf shr L;
+  Dec(VtS.BitCnt,L);
+  Result:=E and 511;
+  Exit;
+ End;
+ Code:=0;First:=0;Index:=0;
+ For L:=1 to 15 do Begin
+  Code:=Code or LongInt(VtS.BitBuf and 1);
+  VtS.BitBuf:=VtS.BitBuf shr 1;
+  Dec(VtS.BitCnt);
+  Cnt:=VtH.Count[L];
+  If Code-Cnt<First Then Begin
+   Result:=VtH.Sym[Index+(Code-First)];
+   Exit;
+  End;
+  Inc(Index,Cnt);
+  Inc(First,Cnt);
+  First:=First shl 1;
+  Code:=Code shl 1;
+ End;
+ Result:=-1;
+End;
+
+Function VtInflateCodes(Var VtS:VtTInfl;Var Lit,Dist:VtTHuf):Boolean;
+Var
+ Sym,Len,D,VtI:LongInt;
+Begin
+ Result:=False;
+ While True do Begin
+  Sym:=VtIDecode(VtS,Lit);
+  If Sym<0 Then Exit;
+  If Sym<256 Then Begin
+   If VtS.DstPos>=VtS.DstCap Then Begin Result:=True;VtS.VtErr:=True;Exit;End;
+   VtS.Dst[VtS.DstPos]:=Sym;
+   Inc(VtS.DstPos);
+  End
+   Else If Sym=256 Then Begin
+    Result:=True;
+    Exit;
+   End
+    Else Begin
+     Dec(Sym,257);
+     If Sym>=29 Then Exit;
+     Len:=VtLenBase[Sym]+VtIBits(VtS,VtLenExtra[Sym]);
+     Sym:=VtIDecode(VtS,Dist);
+     If(Sym<0)or(Sym>=30)Then Exit;
+     D:=VtDistBase[Sym]+VtIBits(VtS,VtDistExtra[Sym]);
+     If D>VtS.DstPos Then Exit;
+     If VtS.DstPos+Len>VtS.DstCap Then Begin
+      Len:=VtS.DstCap-VtS.DstPos;
+      VtS.VtErr:=True;
+     End;
+     For VtI:=0 to Len-1 do Begin
+      VtS.Dst[VtS.DstPos]:=VtS.Dst[VtS.DstPos-D];
+      Inc(VtS.DstPos);
+     End;
+     If VtS.VtErr Then Begin Result:=True;Exit;End;
+    End;
+  If VtS.SrcPos>VtS.SrcLen+8 Then Exit;
+ End;
+End;
+
+{ decompresse un flux deflate brut vers un tampon de taille connue }
+Function VtInflateRaw(Src:PByte;SrcLen:LongInt;Dst:PByte;DstCap:LongInt;Var
+  OutLen:LongInt):Boolean;
+Var
+ VtS:VtTInfl;
+ Lit,Dist,Cl:VtTHuf;
+ Lens:Array[0..319]of Byte;
+ Last,BType,VtI,VtN,Len,NLen,HLit,HDist,HClen,Sym,Rep,Prev:LongInt;
+Begin
+ Result:=False;
+ FillChar(VtS,SizeOf(VtS),0);
+ VtS.Src:=Src;VtS.SrcLen:=SrcLen;VtS.Dst:=Dst;VtS.DstCap:=DstCap;
+ Repeat
+  Last:=VtIBits(VtS,1);
+  BType:=VtIBits(VtS,2);
+  If BType=0 Then Begin
+   VtI:=VtS.BitCnt and 7;
+   VtIBits(VtS,VtI);
+   Len:=VtIBits(VtS,16);
+   NLen:=VtIBits(VtS,16);
+   If(Len xor $FFFF)<>NLen Then Exit;
+   For VtI:=1 to Len do Begin
+    If VtS.DstPos>=VtS.DstCap Then Begin VtS.VtErr:=True;Break;End;
+    VtS.Dst[VtS.DstPos]:=VtIBits(VtS,8);
+    Inc(VtS.DstPos);
+   End;
+  End
+   Else If BType=1 Then Begin
+    For VtI:=0 to 143 do Lens[VtI]:=8;
+    For VtI:=144 to 255 do Lens[VtI]:=9;
+    For VtI:=256 to 279 do Lens[VtI]:=7;
+    For VtI:=280 to 287 do Lens[VtI]:=8;
+    VtBuildHuf(Lit,@Lens[0],288);
+    For VtI:=0 to 29 do Lens[VtI]:=5;
+    VtBuildHuf(Dist,@Lens[0],30);
+    If not VtInflateCodes(VtS,Lit,Dist)Then Exit;
+   End
+    Else If BType=2 Then Begin
+     HLit:=VtIBits(VtS,5)+257;
+     HDist:=VtIBits(VtS,5)+1;
+     HClen:=VtIBits(VtS,4)+4;
+     If(HLit>286)or(HDist>30)Then Exit;
+     FillChar(Lens,SizeOf(Lens),0);
+     For VtI:=0 to HClen-1 do Lens[VtClOrder[VtI]]:=VtIBits(VtS,3);
+     If not VtBuildHuf(Cl,@Lens[0],19)Then Exit;
+     VtN:=0;
+     Prev:=0;
+     FillChar(Lens,SizeOf(Lens),0);
+     While VtN<HLit+HDist do Begin
+      Sym:=VtIDecode(VtS,Cl);
+      If Sym<0 Then Exit;
+      If Sym<16 Then Begin
+       Lens[VtN]:=Sym;Prev:=Sym;Inc(VtN);
+      End
+       Else Begin
+        If Sym=16 Then Begin
+         If VtN=0 Then Exit;
+         Rep:=3+VtIBits(VtS,2);
+        End
+         Else If Sym=17 Then Begin Rep:=3+VtIBits(VtS,3);Prev:=0;End
+         Else Begin Rep:=11+VtIBits(VtS,7);Prev:=0;End;
+        If VtN+Rep>HLit+HDist Then Exit;
+        While Rep>0 do Begin
+         Lens[VtN]:=Prev;Inc(VtN);Dec(Rep);
+        End;
+       End;
+     End;
+     If not VtBuildHuf(Lit,@Lens[0],HLit)Then Exit;
+     If not VtBuildHuf(Dist,@Lens[HLit],HDist)Then Exit;
+     If not VtInflateCodes(VtS,Lit,Dist)Then Exit;
+    End
+     Else Exit;
+  If VtS.VtErr Then Break;
+  If VtS.SrcPos>VtS.SrcLen+8 Then Exit;
+ Until Last<>0;
+ OutLen:=VtS.DstPos;
+ Result:=True;
+End;
+
+{ ---- deflate (LZ77 + codes de Huffman fixes) ---- }
+
+Type
+ VtTDefl=Record
+  Dst:PByte;
+  Pos:LongInt;
+  Buf:LongWord;
+  Cnt:LongInt;
+ End;
+
+Procedure VtDPutBits(Var D:VtTDefl;V:LongWord;VtN:LongInt);
+Begin
+ D.Buf:=D.Buf or(V shl D.Cnt);
+ Inc(D.Cnt,VtN);
+ While D.Cnt>=8 do Begin
+  D.Dst[D.Pos]:=D.Buf and $FF;
+  Inc(D.Pos);
+  D.Buf:=D.Buf shr 8;
+  Dec(D.Cnt,8);
+ End;
+End;
+
+Function VtRevBits(V:LongWord;VtN:LongInt):LongWord;
+Var
+ VtI:LongInt;
+ R:LongWord;
+Begin
+ R:=0;
+ For VtI:=1 to VtN do Begin
+  R:=(R shl 1)or(V and 1);
+  V:=V shr 1;
+ End;
+ Result:=R;
+End;
+
+Procedure VtDPutLit(Var D:VtTDefl;Sym:LongInt);
+Begin
+ If Sym<144 Then VtDPutBits(D,VtRevBits($30+Sym,8),8)
+ Else If Sym<256 Then VtDPutBits(D,VtRevBits($190+(Sym-144),9),9)
+ Else If Sym<280 Then VtDPutBits(D,VtRevBits(Sym-256,7),7)
+ Else VtDPutBits(D,VtRevBits($C0+(Sym-280),8),8);
+End;
+
+Const
+ VtDeflReady:Boolean=False;
+Var
+ VtLenSym:Array[3..258]of Byte;
+ VtDistSymTab:Array[0..511]of Byte;
+
+Procedure VtDeflInit;
+Var
+ VtI,VtS:LongInt;
+Begin
+ If VtDeflReady Then Exit;
+ VtDeflReady:=True;
+ For VtS:=0 to 28 do
+  For VtI:=VtLenBase[VtS]to VtLenBase[VtS]+(1 shl VtLenExtra[VtS])-1 do
+   If(VtI>=3)and(VtI<=258)Then VtLenSym[VtI]:=VtS;
+ VtLenSym[258]:=28;
+ For VtS:=0 to 29 do
+  For VtI:=VtDistBase[VtS]to VtDistBase[VtS]+(1 shl VtDistExtra[VtS])-1 do
+   If VtI<=256 Then VtDistSymTab[VtI]:=VtS;
+End;
+
+Function VtDistSym(D:LongInt):LongInt;
+Var
+ VtS:LongInt;
+Begin
+ If D<=256 Then Result:=VtDistSymTab[D]
+ Else Begin
+  VtS:=0;
+  While(VtS<29)and(VtDistBase[VtS+1]<=D)do Inc(VtS);
+  Result:=VtS;
+ End;
+End;
+
+Procedure VtDPutMatch(Var D:VtTDefl;Len,Dist:LongInt);
+Var
+ VtS:LongInt;
+Begin
+ VtS:=VtLenSym[Len];
+ VtDPutLit(D,257+VtS);
+ If VtLenExtra[VtS]>0 Then VtDPutBits(D,Len-VtLenBase[VtS],VtLenExtra[VtS]);
+ VtS:=VtDistSym(Dist);
+ VtDPutBits(D,VtRevBits(VtS,5),5);
+ If VtDistExtra[VtS]>0 Then VtDPutBits(D,Dist-VtDistBase[VtS],VtDistExtra[VtS]);
+End;
+
+{ compresse N octets ; Level 1..9 regle la profondeur de recherche }
+Function VtDeflateRaw(Src:PByte;VtN:LongInt;Level:LongInt;Var OutLen:LongInt):PByte;
+Const
+ HashBits=15;
+ HashSize=1 shl HashBits;
+ Window=32768;
+Var
+ D:VtTDefl;
+ Head:VtPIntArr;
+ Prev:VtPIntArr;
+ VtI,Pos,VtH,Cand,Chain,MaxChain,BestLen,BestDist,L,MaxLen,Lim:LongInt;
+ NextLen,NextDist,K:LongInt;
+
+ Function Hash3(VtP:LongInt):LongInt;
+ Begin
+  Hash3:=((Src[VtP]shl 10)xor(Src[VtP+1]shl 5)xor Src[VtP+2])and(HashSize-1);
+ End;
+
+ Procedure Insert(VtP:LongInt);
+ Var
+  HH:LongInt;
+ Begin
+  If VtP+2>=VtN Then Exit;
+  HH:=Hash3(VtP);
+  Prev[VtP and(Window-1)]:=Head[HH];
+  Head[HH]:=VtP;
+ End;
+
+ Procedure FindMatch(VtP:LongInt;Var BL,BD:LongInt);
+ Var
+  C,Ch,LL,ML:LongInt;
+ Begin
+  BL:=0;BD:=0;
+  If VtP+2>=VtN Then Exit;
+  C:=Head[Hash3(VtP)];
+  Ch:=MaxChain;
+  ML:=VtN-VtP;
+  If ML>258 Then ML:=258;
+  While(C>=0)and(VtP-C<=Window-1)and(Ch>0)do Begin
+   If(Src[C+BL]=Src[VtP+BL])or(BL=0)Then Begin
+    LL:=0;
+    While(LL<ML)and(Src[C+LL]=Src[VtP+LL])do Inc(LL);
+    If LL>BL Then Begin
+     BL:=LL;BD:=VtP-C;
+     If LL>=ML Then Break;
+    End;
+   End;
+   C:=Prev[C and(Window-1)];
+   Dec(Ch);
+  End;
+  If BL<3 Then Begin BL:=0;BD:=0;End;
+ End;
+
+Begin
+ VtDeflInit;
+ Lim:=VtN+VtN div 4+1024;
+ D.Dst:=PByte(VtAllocBytes(Lim));
+ D.Pos:=0;D.Buf:=0;D.Cnt:=0;
+ Head:=VtPIntArr(VtAllocBytes(Int64(HashSize)*4));
+ Prev:=VtPIntArr(VtAllocBytes(Int64(Window)*4));
+ For VtI:=0 to HashSize-1 do Head[VtI]:=-1;
+ MaxChain:=4;
+ If Level>=3 Then MaxChain:=16;
+ If Level>=6 Then MaxChain:=64;
+ If Level>=9 Then MaxChain:=256;
+ VtDPutBits(D,1,1);
+ VtDPutBits(D,1,2);
+ Pos:=0;
+ While Pos<VtN do Begin
+  FindMatch(Pos,BestLen,BestDist);
+  If(BestLen>=3)and(Level>=3)and(Pos+1<VtN)and(BestLen<32)Then Begin
+   { evaluation differee : une meilleure correspondance en Pos+1 ? }
+   Insert(Pos);
+   FindMatch(Pos+1,NextLen,NextDist);
+   If NextLen>BestLen+1 Then Begin
+    VtDPutLit(D,Src[Pos]);
+    Inc(Pos);
+    Continue;
+   End;
+   VtDPutMatch(D,BestLen,BestDist);
+   For K:=1 to BestLen-1 do Insert(Pos+K);
+   Inc(Pos,BestLen);
+   Continue;
+  End;
+  If BestLen>=3 Then Begin
+   VtDPutMatch(D,BestLen,BestDist);
+   For K:=0 to BestLen-1 do Insert(Pos+K);
+   Inc(Pos,BestLen);
+  End
+   Else Begin
+    VtDPutLit(D,Src[Pos]);
+    Insert(Pos);
+    Inc(Pos);
+   End;
+ End;
+ VtDPutLit(D,256);
+ If D.Cnt>0 Then VtDPutBits(D,0,8-D.Cnt);
+ FreeMem(Head);
+ FreeMem(Prev);
+ OutLen:=D.Pos;
+ Result:=D.Dst;
+End;
+
+{ ---- PNG ---- }
+
+Function VtBE32(VtP:PByte):LongWord;
+Begin
+ Result:=(LongWord(VtP[0])shl 24)or(LongWord(VtP[1])shl 16)or(LongWord(VtP[2])shl 8)or
+   VtP[3];
+End;
+
+Function VtPaethPred(A,B,C:LongInt):LongInt;
+Var
+ VtP,PA,PB,PC:LongInt;
+Begin
+ VtP:=A+B-C;
+ PA:=Abs(VtP-A);PB:=Abs(VtP-B);PC:=Abs(VtP-C);
+ If(PA<=PB)and(PA<=PC)Then Result:=A
+ Else If PB<=PC Then Result:=B
+ Else Result:=C;
+End;
+
+{ defiltre un bloc de lignes (Raw : H*(1+Stride) octets) en place }
+Function VtPngUnfilter(Raw:PByte;W,VtH,Bpp,Stride:LongInt):Boolean;
+Var
+ Y,X,F,A,B,C:LongInt;
+ Cur,Up:PByte;
+Begin
+ Result:=False;
+ For Y:=0 to VtH-1 do Begin
+  Cur:=Raw+Int64(Y)*(Stride+1);
+  F:=Cur[0];
+  Inc(Cur);
+  If Y>0 Then Up:=Raw+Int64(Y-1)*(Stride+1)+1 Else Up:=Nil;
+  Case F of
+   0:;
+   1:For X:=Bpp to Stride-1 do Cur[X]:=(Cur[X]+Cur[X-Bpp])and $FF;
+   2:If Up<>Nil Then For X:=0 to Stride-1 do Cur[X]:=(Cur[X]+Up[X])and $FF;
+   3:For X:=0 to Stride-1 do Begin
+      If X>=Bpp Then A:=Cur[X-Bpp]Else A:=0;
+      If Up<>Nil Then B:=Up[X]Else B:=0;
+      Cur[X]:=(Cur[X]+((A+B)shr 1))and $FF;
+     End;
+   4:For X:=0 to Stride-1 do Begin
+      If X>=Bpp Then A:=Cur[X-Bpp]Else A:=0;
+      If Up<>Nil Then B:=Up[X]Else B:=0;
+      If(Up<>Nil)and(X>=Bpp)Then C:=Up[X-Bpp]Else C:=0;
+      Cur[X]:=(Cur[X]+VtPaethPred(A,B,C))and $FF;
+     End;
+   Else Exit;
+  End;
+ End;
+ Result:=True;
+End;
+
+Function VtPngDecode(Buf:PByte;VtN:LongInt;Var VtImg:VtTImage;Var VtErr:AnsiString)
+  :Boolean;
+Const
+ Sig:Array[0..7]of Byte=(137,80,78,71,13,10,26,10);
+ AdamX0:Array[0..6]of Byte=(0,4,0,2,0,1,0);
+ AdamY0:Array[0..6]of Byte=(0,0,4,0,2,0,1);
+ AdamDX:Array[0..6]of Byte=(8,8,4,4,2,2,1);
+ AdamDY:Array[0..6]of Byte=(8,8,8,4,4,2,2);
+Var
+ Pos,Len,VtI,Depth,CType,Interlace,Chans,Bpp,Stride,W,VtH:LongInt;
+ VtKind:Array[0..3]of Char;
+ IData:PByte;
+ ILen,ICap:LongInt;
+ Pal:Array[0..255]of Array[0..3]of Byte;
+ NPal:LongInt;
+ HasTrns:Boolean;
+ TrnsKey:Array[0..2]of LongInt;
+ Raw,Unz:PByte;
+ RawSize:Int64;
+ OutLen:LongInt;
+ Pass,PW,PH,PStride,X,Y,OX,OY,Off,K,V,Shift:LongInt;
+ Src:PByte;
+ R,VtG,B,Al:LongInt;
+ Pad:Int64;
+ HaveAlpha:Boolean;
+
+ Function Sample(Row:PByte;X,Ch:LongInt):LongInt;
+ Var
+  Bit,By:LongInt;
+ Begin
+  Case Depth of
+   8:Sample:=Row[X*Chans+Ch];
+   16:Sample:=(Row[(X*Chans+Ch)*2]shl 8)or Row[(X*Chans+Ch)*2+1];
+   Else Begin
+    Bit:=X*Depth;
+    By:=Row[Bit shr 3];
+    Sample:=(By shr(8-Depth-(Bit and 7)))and((1 shl Depth)-1);
+   End;
+  End;
+ End;
+
+ Procedure PutPixel(Row:PByte;X,DX,DY:LongInt);
+ Var
+  PIdx,Mx:LongInt;
+  Po:Int64;
+ Begin
+  Mx:=(1 shl Depth)-1;
+  Al:=255;
+  Case CType of
+   0:Begin
+      V:=Sample(Row,X,0);
+      R:=V;
+      If Depth=16 Then R:=V shr 8
+      Else If Depth<8 Then R:=V*255 div Mx;
+      VtG:=R;B:=R;
+      If HasTrns and(V=TrnsKey[0])Then Al:=0;
+     End;
+   2:Begin
+      R:=Sample(Row,X,0);VtG:=Sample(Row,X,1);B:=Sample(Row,X,2);
+      If HasTrns and(R=TrnsKey[0])and(VtG=TrnsKey[1])and(B=TrnsKey[2])Then Al:=0;
+      If Depth=16 Then Begin R:=R shr 8;VtG:=VtG shr 8;B:=B shr 8;End;
+     End;
+   3:Begin
+      PIdx:=Sample(Row,X,0);
+      R:=Pal[PIdx][0];VtG:=Pal[PIdx][1];B:=Pal[PIdx][2];Al:=Pal[PIdx][3];
+     End;
+   4:Begin
+      R:=Sample(Row,X,0);Al:=Sample(Row,X,1);
+      If Depth=16 Then Begin R:=R shr 8;Al:=Al shr 8;End;
+      VtG:=R;B:=R;
+     End;
+   6:Begin
+      R:=Sample(Row,X,0);VtG:=Sample(Row,X,1);B:=Sample(Row,X,2);
+      Al:=Sample(Row,X,3);
+      If Depth=16 Then Begin R:=R shr 8;VtG:=VtG shr 8;B:=B shr 8;Al:=Al shr 8;End;
+     End;
+  End;
+  Po:=Int64(DY)*W+DX;
+  VtImg.Px[Po*3]:=R;VtImg.Px[Po*3+1]:=VtG;VtImg.Px[Po*3+2]:=B;
+  If VtImg.Alpha<>Nil Then VtImg.Alpha[Po]:=Al;
+ End;
+
+Begin
+ Result:=False;
+ VtErr:='';
+ VtImg.Px:=Nil;VtImg.Alpha:=Nil;
+ IData:=Nil;
+ For VtI:=0 to 7 do If(VtN<8)or(Buf[VtI]<>Sig[VtI])Then Begin
+   VtErr:='signature PNG invalide';Exit;End;
+ Pos:=8;
+ W:=0;VtH:=0;Depth:=0;CType:=0;Interlace:=0;NPal:=0;HasTrns:=False;
+ ILen:=0;ICap:=0;
+ FillChar(Pal,SizeOf(Pal),0);
+ For VtI:=0 to 255 do Pal[VtI][3]:=255;
+ TrnsKey[0]:=0;TrnsKey[1]:=0;TrnsKey[2]:=0;
+ While Pos+8<=VtN do Begin
+  Len:=VtBE32(Buf+Pos);
+  VtKind[0]:=Chr(Buf[Pos+4]);VtKind[1]:=Chr(Buf[Pos+5]);VtKind[2]:=Chr(Buf[Pos+6]);
+  VtKind[3]:=Chr(Buf[Pos+7]);
+  If(Len<0)or(Int64(Pos)+12+Len>VtN)Then Begin
+   If VtKind='IDAT' Then Len:=VtN-Pos-12 Else Break;
+   If Len<0 Then Break;
+  End;
+  Inc(Pos,8);
+  If VtKind='IHDR' Then Begin
+   W:=VtBE32(Buf+Pos);VtH:=VtBE32(Buf+Pos+4);
+   Depth:=Buf[Pos+8];CType:=Buf[Pos+9];Interlace:=Buf[Pos+12];
+  End
+   Else If VtKind='PLTE' Then Begin
+    NPal:=Len div 3;
+    If NPal>256 Then NPal:=256;
+    For VtI:=0 to NPal-1 do Begin
+     Pal[VtI][0]:=Buf[Pos+VtI*3];Pal[VtI][1]:=Buf[Pos+VtI*3+1];Pal[VtI][2]:=Buf[Pos+VtI*3+
+       2];
+    End;
+   End
+    Else If VtKind='tRNS' Then Begin
+     If CType=3 Then Begin
+      For VtI:=0 to Len-1 do If VtI<256 Then Pal[VtI][3]:=Buf[Pos+VtI];
+      HasTrns:=True;
+     End
+      Else If(CType=0)and(Len>=2)Then Begin
+       TrnsKey[0]:=(Buf[Pos]shl 8)or Buf[Pos+1];
+       HasTrns:=True;
+      End
+       Else If(CType=2)and(Len>=6)Then Begin
+        TrnsKey[0]:=(Buf[Pos]shl 8)or Buf[Pos+1];
+        TrnsKey[1]:=(Buf[Pos+2]shl 8)or Buf[Pos+3];
+        TrnsKey[2]:=(Buf[Pos+4]shl 8)or Buf[Pos+5];
+        HasTrns:=True;
+       End;
+    End
+     Else If VtKind='IDAT' Then Begin
+      If ILen+Len>ICap Then Begin
+       ICap:=(ILen+Len)*2;
+       If IData=Nil Then IData:=PByte(VtAllocBytes(ICap))
+       Else Begin
+        ReallocMem(IData,ICap);
+       End;
+      End;
+      Move(Buf[Pos],IData[ILen],Len);
+      Inc(ILen,Len);
+     End
+      Else If VtKind='IEND' Then Begin
+       Break;
+      End;
+  Inc(Pos,Len+4);
+ End;
+ If(W<=0)or(VtH<=0)or(Int64(W)*VtH>400000000)Then Begin
+   VtErr:='dimensions PNG invalides';
+  If IData<>Nil Then FreeMem(IData);Exit;End;
+ If IData=Nil Then Begin VtErr:='aucune donn'#130'es image dans le PNG';Exit;End;
+ Case CType of
+  0:Chans:=1;
+  2:Chans:=3;
+  3:Chans:=1;
+  4:Chans:=2;
+  6:Chans:=4;
+  Else Begin VtErr:='type de couleur PNG inconnu';FreeMem(IData);Exit;End;
+ End;
+ If not(Depth in[1,2,4,8,16])Then Begin VtErr:='profondeur PNG inconnue';
+   FreeMem(IData);Exit;End;
+ Bpp:=(Chans*Depth+7)div 8;
+ HaveAlpha:=(CType=4)or(CType=6)or HasTrns;
+ VtImgAlloc(VtImg,W,VtH,HaveAlpha);
+ If Interlace=0 Then RawSize:=Int64(VtH)*(1+(Int64(W)*Chans*Depth+7)div 8)
+ Else Begin
+  RawSize:=0;
+  For Pass:=0 to 6 do Begin
+   PW:=(W-AdamX0[Pass]+AdamDX[Pass]-1)div AdamDX[Pass];
+   PH:=(VtH-AdamY0[Pass]+AdamDY[Pass]-1)div AdamDY[Pass];
+   If(PW>0)and(PH>0)Then Inc(RawSize,Int64(PH)*(1+(Int64(PW)*Chans*Depth+7)div
+     8));
+  End;
+ End;
+ Raw:=PByte(VtAllocBytes(RawSize+16));
+ If(ILen<6)or not VtInflateRaw(IData+2,ILen-2,Raw,RawSize,OutLen)Then Begin
+  VtErr:='flux zlib invalide dans le PNG';
+  FreeMem(IData);FreeMem(Raw);VtImgFree(VtImg);Exit;
+ End;
+ FreeMem(IData);
+ Unz:=Raw;
+ If Interlace=0 Then Begin
+  Stride:=(W*Chans*Depth+7)div 8;
+  If not VtPngUnfilter(Raw,W,VtH,Bpp,Stride)Then Begin
+   VtErr:='filtre PNG invalide';FreeMem(Raw);VtImgFree(VtImg);Exit;
+  End;
+  For Y:=0 to VtH-1 do Begin
+   Src:=Raw+Int64(Y)*(Stride+1)+1;
+   For X:=0 to W-1 do PutPixel(Src,X,X,Y);
+  End;
+ End
+  Else Begin
+   Off:=0;
+   For Pass:=0 to 6 do Begin
+    PW:=(W-AdamX0[Pass]+AdamDX[Pass]-1)div AdamDX[Pass];
+    PH:=(VtH-AdamY0[Pass]+AdamDY[Pass]-1)div AdamDY[Pass];
+    If(PW<=0)or(PH<=0)Then Continue;
+    PStride:=(PW*Chans*Depth+7)div 8;
+    If not VtPngUnfilter(Raw+Off,PW,PH,Bpp,PStride)Then Begin
+     VtErr:='filtre PNG invalide';FreeMem(Raw);VtImgFree(VtImg);Exit;
+    End;
+    For Y:=0 to PH-1 do Begin
+     Src:=Raw+Off+Int64(Y)*(PStride+1)+1;
+     For X:=0 to PW-1 do Begin
+      OX:=AdamX0[Pass]+X*AdamDX[Pass];
+      OY:=AdamY0[Pass]+Y*AdamDY[Pass];
+      PutPixel(Src,X,OX,OY);
+     End;
+    End;
+    Inc(Off,PH*(1+PStride));
+   End;
+  End;
+ FreeMem(Raw);
+ Result:=True;
+End;
+
+Procedure VtPutBE32(VtP:PByte;V:LongWord);
+Begin
+ VtP[0]:=V shr 24;VtP[1]:=(V shr 16)and $FF;VtP[2]:=(V shr 8)and $FF;VtP[3]:=V and $FF;
+End;
+
+{ ecrit un fichier PNG RGB 8 bits (Level 1..9 : effort de compression) }
+Function VtPngEncode(Const Name:AnsiString;Const VtImg:VtTImage;Level:LongInt)
+  :Boolean;
+Var
+ Stride,Y,X,F,FLo,FHi,BestF,A,B,C,VtP,V,VtI:LongInt;
+ Raw,Cur,Prv,Z,Out_,VtTmp:PByte;
+ Best,Sum:Int64;
+ Cand:Array[0..4]of PByte;
+ ZLen,Pos:LongInt;
+ Ad:LongWord;
+ Hdr:Array[0..12]of Byte;
+ Bpp:LongInt;
+ Src,Rgba:PByte;
+
+ Procedure Chunk(Const VtKind:AnsiString;Data:PByte;Len:LongInt);
+ Var
+  Cr:LongWord;
+  H8:Array[0..7]of Byte;
+ Begin
+  VtPutBE32(@H8[0],Len);
+  H8[4]:=Ord(VtKind[1]);H8[5]:=Ord(VtKind[2]);H8[6]:=Ord(VtKind[3]);
+    H8[7]:=Ord(VtKind[4]);
+  Move(H8[0],Out_[Pos],8);Inc(Pos,8);
+  Cr:=VtCrc32Update(0,@H8[4],4);
+  If Len>0 Then Begin
+   Move(Data^,Out_[Pos],Len);
+   Cr:=VtCrc32Update(Cr,Data,Len);
+   Inc(Pos,Len);
+  End;
+  VtPutBE32(Out_+Pos,Cr);
+  Inc(Pos,4);
+ End;
+
+Begin
+ Result:=False;
+ Bpp:=3;Src:=VtImg.Px;Rgba:=Nil;
+ If VtImg.Alpha<>Nil Then Begin
+  { avec transparence : RVBA 8 bits }
+  Bpp:=4;
+  Rgba:=PByte(VtAllocBytes(Int64(VtImg.W)*VtImg.VtH*4));
+  For VtI:=0 to VtImg.W*VtImg.VtH-1 do Begin
+   Rgba[VtI*4]:=VtImg.Px[VtI*3];Rgba[VtI*4+1]:=VtImg.Px[VtI*3+1];Rgba[VtI*4+2]:=VtImg.Px[VtI*3+
+     2];Rgba[VtI*4+3]:=VtImg.Alpha[VtI];
+  End;
+  Src:=Rgba;
+ End;
+ Stride:=VtImg.W*Bpp;
+ Raw:=PByte(VtAllocBytes(Int64(VtImg.VtH)*(Stride+1)));
+ For VtI:=0 to 4 do Cand[VtI]:=PByte(VtAllocBytes(Stride+1));
+ FLo:=0;FHi:=4;
+ If Level<=2 Then Begin FLo:=1;FHi:=1;End;
+ For Y:=0 to VtImg.VtH-1 do Begin
+  Cur:=Src+Int64(Y)*Stride;
+  If Y>0 Then Prv:=Src+Int64(Y-1)*Stride Else Prv:=Nil;
+  Best:=-1;BestF:=FLo;
+  For F:=FLo to FHi do Begin
+   Sum:=0;
+   For X:=0 to Stride-1 do Begin
+    If X>=Bpp Then A:=Cur[X-Bpp]Else A:=0;
+    If Prv<>Nil Then B:=Prv[X]Else B:=0;
+    If(Prv<>Nil)and(X>=Bpp)Then C:=Prv[X-Bpp]Else C:=0;
+    Case F of
+     0:VtP:=0;
+     1:VtP:=A;
+     2:VtP:=B;
+     3:VtP:=(A+B)shr 1;
+     Else VtP:=VtPaethPred(A,B,C);
+    End;
+    V:=(Cur[X]-VtP)and $FF;
+    Cand[F][X+1]:=V;
+    If V>=128 Then Sum:=Sum+(256-V)Else Sum:=Sum+V;
+   End;
+   If(Best<0)or(Sum<Best)Then Begin Best:=Sum;BestF:=F;End;
+  End;
+  Cand[BestF][0]:=BestF;
+  Move(Cand[BestF]^,(Raw+Int64(Y)*(Stride+1))^,Stride+1);
+ End;
+ For VtI:=0 to 4 do FreeMem(Cand[VtI]);
+ Z:=VtDeflateRaw(Raw,VtImg.VtH*(Stride+1),Level,ZLen);
+ Ad:=VtAdler32(Raw,VtImg.VtH*(Stride+1));
+ FreeMem(Raw);
+ If Rgba<>Nil Then FreeMem(Rgba);
+ Out_:=PByte(VtAllocBytes(Int64(ZLen)+1024));
+ Out_[0]:=137;Out_[1]:=80;Out_[2]:=78;Out_[3]:=71;Out_[4]:=13;Out_[5]:=10;
+ Out_[6]:=26;Out_[7]:=10;
+ Pos:=8;
+ VtPutBE32(@Hdr[0],VtImg.W);VtPutBE32(@Hdr[4],VtImg.VtH);
+ Hdr[8]:=8;If Bpp=4 Then Hdr[9]:=6 Else Hdr[9]:=2;Hdr[10]:=0;Hdr[11]:=0;
+   Hdr[12]:=0;
+ Chunk('IHDR',@Hdr[0],13);
+ { IDAT : en-tete zlib + flux deflate + Adler32 }
+ VtTmp:=PByte(VtAllocBytes(Int64(ZLen)+16));
+ VtTmp[0]:=$78;VtTmp[1]:=$9C;
+ Move(Z^,VtTmp[2],ZLen);
+ VtPutBE32(VtTmp+2+ZLen,Ad);
+ FreeMem(Z);
+ Chunk('IDAT',VtTmp,ZLen+6);
+ FreeMem(VtTmp);
+ Chunk('IEND',Nil,0);
+ Result:=VtWriteFileBytes(Name,Out_,Pos);
+ FreeMem(Out_);
+End;
+
+{ ---- BMP ---- }
+
+Function VtLE16(VtP:PByte):LongInt;
+Begin
+ Result:=VtP[0]or(VtP[1]shl 8);
+End;
+
+Function VtLE32(VtP:PByte):LongInt;
+Begin
+ Result:=LongInt(LongWord(VtP[0])or(LongWord(VtP[1])shl 8)or(LongWord(VtP[2])shl 16)or
+   (LongWord(VtP[3])shl 24));
+End;
+
+Function VtBmpDecode(Buf:PByte;VtN:LongInt;Var VtImg:VtTImage;Var VtErr:AnsiString)
+  :Boolean;
+Var
+ Off,HSize,W,VtH,Planes,Bits,Comp,NColors,Stride,X,Y,VtI,PIdx:LongInt;
+ TopDown:Boolean;
+ Pal:Array[0..255]of LongWord;
+ Row:PByte;
+ V:LongWord;
+ Po:Int64;
+ MR,MG,MB,MA:LongWord;
+
+ Function Shift(Mask,V:LongWord):LongInt;
+ Var
+  VtS,Bits_:LongInt;
+ Begin
+  If Mask=0 Then Begin Shift:=0;Exit;End;
+  VtS:=0;
+  While(Mask and 1)=0 do Begin Mask:=Mask shr 1;Inc(VtS);End;
+  Bits_:=0;
+  While(Mask and 1)<>0 do Begin Mask:=Mask shr 1;Inc(Bits_);End;
+  V:=V shr VtS;
+  If Bits_>=8 Then Shift:=V shr(Bits_-8)Else Shift:=(V*255)div((1 shl Bits_)-1);
+ End;
+
+Begin
+ Result:=False;
+ VtErr:='';
+ If(VtN<26)or(Buf[0]<>Ord('B'))or(Buf[1]<>Ord('M'))Then Begin
+   VtErr:='BMP invalide';Exit;End;
+ Off:=VtLE32(Buf+10);
+ HSize:=VtLE32(Buf+14);
+ If HSize<40 Then Begin VtErr:='ancien format BMP non g'#130'r'#130;Exit;End;
+ W:=VtLE32(Buf+18);VtH:=VtLE32(Buf+22);
+ Planes:=VtLE16(Buf+26);Bits:=VtLE16(Buf+28);Comp:=VtLE32(Buf+30);
+ NColors:=VtLE32(Buf+46);
+ TopDown:=VtH<0;
+ If TopDown Then VtH:=-VtH;
+ If(W<=0)or(VtH<=0)or(Int64(W)*VtH>400000000)Then Begin
+   VtErr:='dimensions BMP invalides';Exit;End;
+ If not(Comp in[0,3])Then Begin VtErr:='BMP compress'#130' non g'#130'r'#130;
+   Exit;End;
+ If not(Bits in[1,4,8,24,32])Then Begin
+   VtErr:='profondeur BMP non g'#130'r'#130'e';Exit;End;
+ FillChar(Pal,SizeOf(Pal),0);
+ If Bits<=8 Then Begin
+  If NColors=0 Then NColors:=1 shl Bits;
+  If NColors>256 Then NColors:=256;
+  For VtI:=0 to NColors-1 do Pal[VtI]:=LongWord(VtLE32(Buf+14+HSize+VtI*4));
+ End;
+ MR:=$FF0000;MG:=$FF00;MB:=$FF;MA:=0;
+ If(Comp=3)and(HSize>=52)Then Begin
+  MR:=LongWord(VtLE32(Buf+54));MG:=LongWord(VtLE32(Buf+58));MB:=LongWord(VtLE32(Buf+
+    62));
+ End;
+ Stride:=((W*Bits+31)div 32)*4;
+ If Int64(Off)+Int64(Stride)*VtH>VtN Then Begin VtErr:='BMP tronqu'#130;Exit;End;
+ VtImgAlloc(VtImg,W,VtH,False);
+ For Y:=0 to VtH-1 do Begin
+  If TopDown Then Row:=Buf+Off+Int64(Y)*Stride Else Row:=Buf+Off+Int64(VtH-1-Y)
+    *Stride;
+  For X:=0 to W-1 do Begin
+   Po:=(Int64(Y)*W+X)*3;
+   Case Bits of
+    24:Begin VtImg.Px[Po]:=Row[X*3+2];VtImg.Px[Po+1]:=Row[X*3+1];VtImg.Px[Po+
+      2]:=Row[X*3];End;
+    32:Begin
+        V:=LongWord(VtLE32(Row+X*4));
+        If Comp=3 Then Begin
+         VtImg.Px[Po]:=Shift(MR,V);VtImg.Px[Po+1]:=Shift(MG,V);VtImg.Px[Po+
+           2]:=Shift(MB,V);
+        End
+         Else Begin
+          VtImg.Px[Po]:=Row[X*4+2];VtImg.Px[Po+1]:=Row[X*4+1];VtImg.Px[Po+
+            2]:=Row[X*4];
+         End;
+       End;
+    8:Begin V:=Pal[Row[X]];VtImg.Px[Po]:=(V shr 16)and $FF;VtImg.Px[Po+1]:=(V shr
+      8)and $FF;VtImg.Px[Po+2]:=V and $FF;End;
+    4:Begin
+       If(X and 1)=0 Then PIdx:=Row[X shr 1]shr 4 Else PIdx:=Row[X shr 1]and 15;
+       V:=Pal[PIdx];VtImg.Px[Po]:=(V shr 16)and $FF;VtImg.Px[Po+1]:=(V shr 8)and
+         $FF;VtImg.Px[Po+2]:=V and $FF;
+      End;
+    1:Begin
+       PIdx:=(Row[X shr 3]shr(7-(X and 7)))and 1;
+       V:=Pal[PIdx];VtImg.Px[Po]:=(V shr 16)and $FF;VtImg.Px[Po+1]:=(V shr 8)and
+         $FF;VtImg.Px[Po+2]:=V and $FF;
+      End;
+   End;
+  End;
+ End;
+ Result:=True;
+End;
+
+Function VtBmpEncode(Const Name:AnsiString;Const VtImg:VtTImage):Boolean;
+Var
+ Stride,Y,X:LongInt;
+ Sz:Int64;
+ B:PByte;
+ Row:PByte;
+ Po:Int64;
+Begin
+ Stride:=((VtImg.W*3+3)div 4)*4;
+ Sz:=54+Int64(Stride)*VtImg.VtH;
+ B:=PByte(VtAllocBytes(Sz));
+ B[0]:=Ord('B');B[1]:=Ord('M');
+ B[2]:=Sz and $FF;B[3]:=(Sz shr 8)and $FF;B[4]:=(Sz shr 16)and $FF;B[5]:=(Sz shr
+   24)and $FF;
+ B[10]:=54;B[14]:=40;
+ B[18]:=VtImg.W and $FF;B[19]:=(VtImg.W shr 8)and $FF;B[20]:=(VtImg.W shr 16)and $FF;
+ B[22]:=VtImg.VtH and $FF;B[23]:=(VtImg.VtH shr 8)and $FF;B[24]:=(VtImg.VtH shr 16)and $FF;
+ B[26]:=1;B[28]:=24;
+ For Y:=0 to VtImg.VtH-1 do Begin
+  Row:=B+54+Int64(VtImg.VtH-1-Y)*Stride;
+  For X:=0 to VtImg.W-1 do Begin
+   Po:=(Int64(Y)*VtImg.W+X)*3;
+   Row[X*3]:=VtImg.Px[Po+2];Row[X*3+1]:=VtImg.Px[Po+1];Row[X*3+2]:=VtImg.Px[Po];
+  End;
+ End;
+ Result:=VtWriteFileBytes(Name,B,Sz);
+ FreeMem(B);
+End;
+
+{ ---- PPM / PGM binaires (P5, P6) ---- }
+
+Function VtPpmDecode(Buf:PByte;VtN:LongInt;Var VtImg:VtTImage;Var VtErr:AnsiString)
+  :Boolean;
+Var
+ Pos:LongInt;
+ VtKind:Char;
+ W,VtH,Mx,VtI:LongInt;
+ Gray:Boolean;
+
+ Function NextInt:LongInt;
+ Var
+  V:LongInt;
+ Begin
+  V:=0;
+  While Pos<VtN do Begin
+   If Buf[Pos]=Ord('#')Then Begin
+    While(Pos<VtN)and(Buf[Pos]<>10)do Inc(Pos);
+   End
+    Else If Buf[Pos]in[32,9,10,13]Then Inc(Pos)
+    Else Break;
+  End;
+  While(Pos<VtN)and(Buf[Pos]>=48)and(Buf[Pos]<=57)do Begin
+   V:=V*10+Buf[Pos]-48;
+   Inc(Pos);
+  End;
+  NextInt:=V;
+ End;
+
+Begin
+ Result:=False;
+ VtErr:='';
+ If(VtN<3)or(Buf[0]<>Ord('P'))Then Begin VtErr:='PPM invalide';Exit;End;
+ VtKind:=Chr(Buf[1]);
+ If not(VtKind in['5','6'])Then Begin
+   VtErr:='seuls P5 et P6 sont g'#130'r'#130's';Exit;End;
+ Gray:=VtKind='5';
+ Pos:=2;
+ W:=NextInt;VtH:=NextInt;Mx:=NextInt;
+ Inc(Pos);
+ If(W<=0)or(VtH<=0)or(Mx<=0)or(Mx>255)Then Begin
+   VtErr:='PPM invalide (8 bits seulement)';Exit;End;
+ If Gray Then VtI:=W*VtH Else VtI:=W*VtH*3;
+ If Pos+VtI>VtN Then Begin VtErr:='PPM tronqu'#130;Exit;End;
+ VtImgAlloc(VtImg,W,VtH,False);
+ If Gray Then Begin
+  For VtI:=0 to W*VtH-1 do Begin
+   VtImg.Px[VtI*3]:=Buf[Pos+VtI];VtImg.Px[VtI*3+1]:=Buf[Pos+VtI];VtImg.Px[VtI*3+2]:=Buf[Pos+VtI];
+  End;
+ End
+  Else Move(Buf[Pos],VtImg.Px^,W*VtH*3);
+ Result:=True;
+End;
+
+Function VtPpmEncode(Const Name:AnsiString;Const VtImg:VtTImage):Boolean;
+Var
+ Hd:AnsiString;
+ F:File;
+Begin
+ Result:=False;
+ Hd:='P6'#10+VtIStr(VtImg.W)+' '+VtIStr(VtImg.VtH)+#10'255'#10;
+ Assign(F,Name);
+ Rewrite(F,1);
+ If IOResult<>0 Then Exit;
+ BlockWrite(F,Hd[1],Length(Hd));
+ BlockWrite(F,VtImg.Px^,Int64(VtImg.W)*VtImg.VtH*3);
+ Close(F);
+ Result:=IOResult=0;
+End;
+
+{ ------------------------------------------------------------------ }
+{ JPEG : decodeur (de base et progressif) et encodeur (de base)        }
+{ ------------------------------------------------------------------ }
+
+Const
+ VtJZig:Array[0..79]of Byte=(
+  0,1,8,16,9,2,3,10,17,24,32,25,18,11,4,5,12,19,26,33,40,48,41,34,27,20,13,6,
+  7,14,21,28,35,42,49,56,57,50,43,36,29,22,15,23,30,37,44,51,58,59,52,45,38,
+  31,39,46,53,60,61,54,47,55,62,63,
+  63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63);
+
+Const
+ VtJStdQ0:Array[0..63]of Byte=(
+  16,11,12,14,12,10,16,14,13,14,18,17,16,19,24,40,
+  26,24,22,22,24,49,35,37,29,40,58,51,61,60,57,51,
+  56,55,64,72,92,78,64,68,87,69,55,56,80,109,81,87,
+  95,98,103,104,103,62,77,113,121,112,100,120,92,101,103,99
+ );
+ VtJStdQ1:Array[0..63]of Byte=(
+  17,18,18,24,21,24,47,26,26,47,99,66,56,66,99,99,
+  99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,
+  99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,
+  99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99
+ );
+ VtJBitsDcLum:Array[0..15]of Byte=(
+  0,1,5,1,1,1,1,1,1,0,0,0,0,0,0,0
+ );
+ VtJValsDcLum:Array[0..11]of Byte=(
+  0,1,2,3,4,5,6,7,8,9,10,11
+ );
+ VtJBitsDcChr:Array[0..15]of Byte=(
+  0,3,1,1,1,1,1,1,1,1,1,0,0,0,0,0
+ );
+ VtJValsDcChr:Array[0..11]of Byte=(
+  0,1,2,3,4,5,6,7,8,9,10,11
+ );
+ VtJBitsAcLum:Array[0..15]of Byte=(
+  0,2,1,3,3,2,4,3,5,5,4,4,0,0,1,125
+ );
+ VtJValsAcLum:Array[0..161]of Byte=(
+  1,2,3,0,4,17,5,18,33,49,65,6,19,81,97,7,
+  34,113,20,50,129,145,161,8,35,66,177,193,21,82,209,240,
+  36,51,98,114,130,9,10,22,23,24,25,26,37,38,39,40,
+  41,42,52,53,54,55,56,57,58,67,68,69,70,71,72,73,
+  74,83,84,85,86,87,88,89,90,99,100,101,102,103,104,105,
+  106,115,116,117,118,119,120,121,122,131,132,133,134,135,136,137,
+  138,146,147,148,149,150,151,152,153,154,162,163,164,165,166,167,
+  168,169,170,178,179,180,181,182,183,184,185,186,194,195,196,197,
+  198,199,200,201,202,210,211,212,213,214,215,216,217,218,225,226,
+  227,228,229,230,231,232,233,234,241,242,243,244,245,246,247,248,
+  249,250
+ );
+ VtJBitsAcChr:Array[0..15]of Byte=(
+  0,2,1,2,4,4,3,4,7,5,4,4,0,1,2,119
+ );
+ VtJValsAcChr:Array[0..161]of Byte=(
+  0,1,2,3,17,4,5,33,49,6,18,65,81,7,97,113,
+  19,34,50,129,8,20,66,145,161,177,193,9,35,51,82,240,
+  21,98,114,209,10,22,36,52,225,37,241,23,24,25,26,38,
+  39,40,41,42,53,54,55,56,57,58,67,68,69,70,71,72,
+  73,74,83,84,85,86,87,88,89,90,99,100,101,102,103,104,
+  105,106,115,116,117,118,119,120,121,122,130,131,132,133,134,135,
+  136,137,138,146,147,148,149,150,151,152,153,154,162,163,164,165,
+  166,167,168,169,170,178,179,180,181,182,183,184,185,186,194,195,
+  196,197,198,199,200,201,202,210,211,212,213,214,215,216,217,218,
+  226,227,228,229,230,231,232,233,234,242,243,244,245,246,247,248,
+  249,250
+ );
+
+
+Type
+ VtTJHuff=Record
+  MinCode,MaxCode,ValPtr:Array[0..17]of LongInt;
+  Vals:Array[0..255]of Byte;
+  Fast:Array[0..511]of Word;
+  Valid:Boolean;
+ End;
+ VtTJComp=Record
+  Id,VtH,V,Tq,Td,Ta:LongInt;
+  BlocksW,BlocksH:LongInt;
+  NeedBW,NeedBH:LongInt;
+  Coef:PSmallInt;
+  Pred:LongInt;
+  PxW,PxH:LongInt;
+  Plane:PByte;
+  Stride:LongInt;
+ End;
+
+Var
+ VtJD:PByte;
+ VtJN,VtJP:LongInt;
+ VtJBuf:LongWord;
+ VtJCnt:LongInt;
+ VtJHit:Boolean;
+ VtJW,VtJH,VtJNC:LongInt;
+ VtJProg:Boolean;
+ VtJC:Array[0..3]of VtTJComp;
+ VtJQ:Array[0..3]of Array[0..63]of Word;
+ VtJDC,VtJAC:Array[0..3]of VtTJHuff;
+ VtJHmax,VtJVmax,VtJMcuX,VtJMcuY,VtJRst:LongInt;
+ VtJEob:LongInt;
+ VtJAdobe:LongInt;
+ VtJOrient:LongInt;
+ VtJErr:AnsiString;
+ VtJFrame:Boolean;
+
+Procedure VtJFill;
+Var
+ B,C:LongInt;
+Begin
+ While VtJCnt<=24 do Begin
+  B:=0;
+  If not VtJHit Then Begin
+   If VtJP>=VtJN Then VtJHit:=True
+   Else Begin
+    B:=VtJD[VtJP];
+    Inc(VtJP);
+    If B=$FF Then Begin
+     If VtJP<VtJN Then C:=VtJD[VtJP]Else C:=$D9;
+     If C=0 Then Inc(VtJP)
+     Else Begin
+      Dec(VtJP);
+      VtJHit:=True;
+      B:=0;
+     End;
+    End;
+   End;
+  End;
+  VtJBuf:=VtJBuf or(LongWord(B)shl(24-VtJCnt));
+  Inc(VtJCnt,8);
+ End;
+End;
+
+Function VtJGetBits(VtN:LongInt):LongInt;
+Begin
+ If VtN=0 Then Begin Result:=0;Exit;End;
+ If VtJCnt<VtN Then VtJFill;
+ Result:=LongInt(VtJBuf shr(32-VtN));
+ VtJBuf:=VtJBuf shl VtN;
+ Dec(VtJCnt,VtN);
+End;
+
+Function VtJGetBit:LongInt;
+Begin
+ If VtJCnt<1 Then VtJFill;
+ Result:=LongInt(VtJBuf shr 31);
+ VtJBuf:=VtJBuf shl 1;
+ Dec(VtJCnt);
+End;
+
+Function VtJHuffDec(Var VtT:VtTJHuff):LongInt;
+Var
+ F:Word;
+ L,Code:LongInt;
+Begin
+ If VtJCnt<16 Then VtJFill;
+ F:=VtT.Fast[VtJBuf shr 23];
+ If F<>0 Then Begin
+  L:=F shr 8;
+  VtJBuf:=VtJBuf shl L;
+  Dec(VtJCnt,L);
+  Result:=F and 255;
+  Exit;
+ End;
+ For L:=10 to 16 do Begin
+  Code:=LongInt(VtJBuf shr(32-L));
+  If Code<=VtT.MaxCode[L]Then Begin
+   VtJBuf:=VtJBuf shl L;
+   Dec(VtJCnt,L);
+   Result:=VtT.Vals[(VtT.ValPtr[L]+Code-VtT.MinCode[L])and 255];
+   Exit;
+  End;
+ End;
+ Result:=-1;
+ VtJBuf:=VtJBuf shl 16;
+ Dec(VtJCnt,16);
+End;
+
+Function VtJExtend(V,VtT:LongInt):LongInt;
+Begin
+ If V<(1 shl(VtT-1))Then Result:=V+(-1 shl VtT)+1 Else Result:=V;
+End;
+
+Procedure VtJBuildHuff(Var VtT:VtTJHuff;Const Cnt:Array of LongInt;Vals:PByte;
+  NV:LongInt);
+Var
+ L,VtI,K,Code,Sh:LongInt;
+Begin
+ FillChar(VtT,SizeOf(VtT),0);
+ Code:=0;K:=0;
+ For L:=1 to 16 do Begin
+  VtT.ValPtr[L]:=K;
+  VtT.MinCode[L]:=Code;
+  Inc(K,Cnt[L-1]);
+  Inc(Code,Cnt[L-1]);
+  If Cnt[L-1]>0 Then VtT.MaxCode[L]:=Code-1 Else VtT.MaxCode[L]:=-1;
+  Code:=Code shl 1;
+ End;
+ VtT.MaxCode[17]:=$7FFFFFFF;
+ For VtI:=0 to NV-1 do VtT.Vals[VtI]:=Vals[VtI];
+ For L:=1 to 9 do
+  For VtI:=0 to Cnt[L-1]-1 do Begin
+   Code:=VtT.MinCode[L]+VtI;
+   Sh:=9-L;
+   For K:=(Code shl Sh)to((Code shl Sh)+(1 shl Sh)-1)do
+    If K<512 Then VtT.Fast[K]:=(L shl 8)or VtT.Vals[VtT.ValPtr[L]+VtI];
+  End;
+ VtT.Valid:=True;
+End;
+
+{ bloc de base (sequentiel) }
+Procedure VtJBaseBlock(Var C:VtTJComp;Blk:PSmallInt);
+Var
+ VtT,K,RS,VtS,R,Diff:LongInt;
+Begin
+ VtT:=VtJHuffDec(VtJDC[C.Td]);
+ If VtT<0 Then VtT:=0;
+ If VtT>15 Then VtT:=15;
+ If VtT>0 Then Diff:=VtJExtend(VtJGetBits(VtT),VtT)Else Diff:=0;
+ Inc(C.Pred,Diff);
+ Blk[0]:=C.Pred;
+ K:=1;
+ While K<64 do Begin
+  RS:=VtJHuffDec(VtJAC[C.Ta]);
+  If RS<0 Then Break;
+  VtS:=RS and 15;
+  R:=RS shr 4;
+  If VtS=0 Then Begin
+   If R<>15 Then Break;
+   Inc(K,16);
+  End
+   Else Begin
+    Inc(K,R);
+    If K>63 Then Break;
+    Blk[VtJZig[K]]:=VtJExtend(VtJGetBits(VtS),VtS);
+    Inc(K);
+   End;
+ End;
+End;
+
+Procedure VtJProgDCFirst(Var C:VtTJComp;Blk:PSmallInt;Al:LongInt);
+Var
+ VtT,Diff:LongInt;
+Begin
+ VtT:=VtJHuffDec(VtJDC[C.Td]);
+ If VtT<0 Then VtT:=0;
+ If VtT>15 Then VtT:=15;
+ If VtT>0 Then Diff:=VtJExtend(VtJGetBits(VtT),VtT)Else Diff:=0;
+ Inc(C.Pred,Diff);
+ Blk[0]:=C.Pred*(1 shl Al);
+End;
+
+Procedure VtJProgDCRefine(Blk:PSmallInt;Al:LongInt);
+Begin
+ If VtJGetBit<>0 Then Blk[0]:=Blk[0]or(1 shl Al);
+End;
+
+Procedure VtJProgACFirst(Var C:VtTJComp;Blk:PSmallInt;Ss,Se,Al:LongInt);
+Var
+ K,RS,VtS,R:LongInt;
+Begin
+ If VtJEob>0 Then Begin Dec(VtJEob);Exit;End;
+ K:=Ss;
+ Repeat
+  RS:=VtJHuffDec(VtJAC[C.Ta]);
+  If RS<0 Then Exit;
+  VtS:=RS and 15;
+  R:=RS shr 4;
+  If VtS=0 Then Begin
+   If R<15 Then Begin
+    VtJEob:=1 shl R;
+    If R>0 Then Inc(VtJEob,VtJGetBits(R));
+    Dec(VtJEob);
+    Break;
+   End;
+   Inc(K,16);
+  End
+   Else Begin
+    Inc(K,R);
+    If K>63 Then Exit;
+    Blk[VtJZig[K]]:=VtJExtend(VtJGetBits(VtS),VtS)*(1 shl Al);
+    Inc(K);
+   End;
+ Until K>Se;
+End;
+
+Procedure VtJProgACRefine(Var C:VtTJComp;Blk:PSmallInt;Ss,Se,Al:LongInt);
+Var
+ K,RS,VtS,R,Bit:LongInt;
+ VtP:PSmallInt;
+Begin
+ Bit:=1 shl Al;
+ If VtJEob>0 Then Begin
+  Dec(VtJEob);
+  For K:=Ss to Se do Begin
+   VtP:=@Blk[VtJZig[K]];
+   If VtP^<>0 Then
+    If VtJGetBit<>0 Then
+     If(VtP^ and Bit)=0 Then Begin
+      If VtP^>0 Then VtP^:=VtP^+Bit Else VtP^:=VtP^-Bit;
+     End;
+  End;
+  Exit;
+ End;
+ K:=Ss;
+ Repeat
+  RS:=VtJHuffDec(VtJAC[C.Ta]);
+  If RS<0 Then Exit;
+  VtS:=RS and 15;
+  R:=RS shr 4;
+  If VtS=0 Then Begin
+   If R<15 Then Begin
+    VtJEob:=1 shl R;
+    If R>0 Then Inc(VtJEob,VtJGetBits(R));
+    Dec(VtJEob);
+    R:=64;
+   End;
+  End
+   Else Begin
+    If VtJGetBit<>0 Then VtS:=Bit Else VtS:=-Bit;
+   End;
+  While K<=Se do Begin
+   VtP:=@Blk[VtJZig[K]];
+   Inc(K);
+   If VtP^<>0 Then Begin
+    If VtJGetBit<>0 Then
+     If(VtP^ and Bit)=0 Then Begin
+      If VtP^>0 Then VtP^:=VtP^+Bit Else VtP^:=VtP^-Bit;
+     End;
+   End
+    Else Begin
+     If R=0 Then Begin
+      VtP^:=VtS;
+      Break;
+     End;
+     Dec(R);
+    End;
+  End;
+ Until K>Se;
+End;
+
+Procedure VtJDecodeOne(Var C:VtTJComp;Blk:PSmallInt;Ss,Se,Ah,Al:LongInt);
+Begin
+ If not VtJProg Then VtJBaseBlock(C,Blk)
+ Else If Ss=0 Then Begin
+  If Ah=0 Then VtJProgDCFirst(C,Blk,Al)Else VtJProgDCRefine(Blk,Al);
+ End
+  Else Begin
+   If Ah=0 Then VtJProgACFirst(C,Blk,Ss,Se,Al)Else VtJProgACRefine(C,Blk,Ss,Se,Al);
+  End;
+End;
+
+{ saute jusqu'au marqueur de redemarrage suivant }
+Procedure VtJRestart;
+Var
+ VtI:LongInt;
+Begin
+ VtJBuf:=0;VtJCnt:=0;
+ While VtJP<VtJN-1 do Begin
+  If(VtJD[VtJP]=$FF)and(VtJD[VtJP+1]>=$D0)and(VtJD[VtJP+1]<=$D7)Then Begin
+   Inc(VtJP,2);Break;
+  End;
+  If(VtJD[VtJP]=$FF)and(VtJD[VtJP+1]<>0)and(VtJD[VtJP+1]<>$FF)Then Break;
+  Inc(VtJP);
+ End;
+ VtJHit:=False;
+ VtJEob:=0;
+ For VtI:=0 to VtJNC-1 do VtJC[VtI].Pred:=0;
+End;
+
+Function VtJDecodeScan(Ns:LongInt;Const Sel:Array of LongInt;Ss,Se,Ah,Al:LongInt)
+  :Boolean;
+Var
+ VtI,MX,MY,BX,BY,V,VtH,CI,Cnt:LongInt;
+ C:^VtTJComp;
+ Blk:PSmallInt;
+Begin
+ Result:=False;
+ VtJBuf:=0;VtJCnt:=0;VtJHit:=False;VtJEob:=0;
+ For VtI:=0 to VtJNC-1 do VtJC[VtI].Pred:=0;
+ Cnt:=0;
+ If Ns=1 Then Begin
+  C:=@VtJC[Sel[0]];
+  For BY:=0 to C^.NeedBH-1 do
+   For BX:=0 to C^.NeedBW-1 do Begin
+    If(VtJRst>0)and(Cnt=VtJRst)Then Begin VtJRestart;Cnt:=0;End;
+    Blk:=C^.Coef+(Int64(BY)*C^.BlocksW+BX)*64;
+    VtJDecodeOne(C^,Blk,Ss,Se,Ah,Al);
+    Inc(Cnt);
+   End;
+ End
+  Else Begin
+   For MY:=0 to VtJMcuY-1 do
+    For MX:=0 to VtJMcuX-1 do Begin
+     If(VtJRst>0)and(Cnt=VtJRst)Then Begin VtJRestart;Cnt:=0;End;
+     For VtI:=0 to Ns-1 do Begin
+      CI:=Sel[VtI];
+      C:=@VtJC[CI];
+      For V:=0 to C^.V-1 do
+       For VtH:=0 to C^.VtH-1 do Begin
+        Blk:=C^.Coef+(Int64(MY*C^.V+V)*C^.BlocksW+MX*C^.VtH+VtH)*64;
+        VtJDecodeOne(C^,Blk,Ss,Se,Ah,Al);
+       End;
+     End;
+     Inc(Cnt);
+    End;
+  End;
+ { avance jusqu'au marqueur suivant }
+ VtJBuf:=0;VtJCnt:=0;
+ While VtJP<VtJN-1 do Begin
+  If(VtJD[VtJP]=$FF)and(VtJD[VtJP+1]<>0)and(VtJD[VtJP+1]<>$FF)and not((VtJD[VtJP+1]>=$D0)
+    and(VtJD[VtJP+1]<=$D7))Then Break;
+  Inc(VtJP);
+ End;
+ Result:=True;
+End;
+
+Const
+ VtIdctReady:Boolean=False;
+Var
+ VtIdctC:Array[0..7,0..7]of Single;
+
+Procedure VtIdctInit;
+Var
+ X,U:LongInt;
+ C:Double;
+Begin
+ If VtIdctReady Then Exit;
+ VtIdctReady:=True;
+ For X:=0 to 7 do
+  For U:=0 to 7 do Begin
+   If U=0 Then C:=0.35355339059327373 Else C:=0.5;
+   VtIdctC[X,U]:=C*Cos((2*X+1)*U*Pi/16.0);
+  End;
+End;
+
+Procedure VtJIdctComp(Var C:VtTJComp;Const Q:Array of Word);
+Var
+ BX,BY,VtI,X,Y,U,Sh:LongInt;
+ Blk:PSmallInt;
+ InB,VtTmp:Array[0..63]of Single;
+ VtS:Single;
+ Out_:PByte;
+ AcZero:Boolean;
+ DcV:LongInt;
+Begin
+ VtIdctInit;
+ C.Stride:=C.BlocksW*8;
+ C.Plane:=PByte(VtAllocBytes(Int64(C.Stride)*C.BlocksH*8));
+ For BY:=0 to C.BlocksH-1 do
+  For BX:=0 to C.BlocksW-1 do Begin
+   Blk:=C.Coef+(Int64(BY)*C.BlocksW+BX)*64;
+   Out_:=C.Plane+Int64(BY)*8*C.Stride+BX*8;
+   AcZero:=True;
+   For VtI:=1 to 63 do If Blk[VtI]<>0 Then Begin AcZero:=False;Break;End;
+   If AcZero Then Begin
+    DcV:=Round(Blk[0]*Q[0]/8.0)+128;
+    If DcV<0 Then DcV:=0 Else If DcV>255 Then DcV:=255;
+    For Y:=0 to 7 do FillChar((Out_+Y*C.Stride)^,8,DcV);
+    Continue;
+   End;
+   For VtI:=0 to 63 do InB[VtI]:=Blk[VtI]*Q[VtI];
+   For Y:=0 to 7 do
+    For X:=0 to 7 do Begin
+     VtS:=0;
+     For U:=0 to 7 do VtS:=VtS+VtIdctC[X,U]*InB[Y*8+U];
+     VtTmp[Y*8+X]:=VtS;
+    End;
+   For X:=0 to 7 do
+    For Y:=0 to 7 do Begin
+     VtS:=0;
+     For U:=0 to 7 do VtS:=VtS+VtIdctC[Y,U]*VtTmp[U*8+X];
+     Sh:=Round(VtS)+128;
+     If Sh<0 Then Sh:=0 Else If Sh>255 Then Sh:=255;
+     Out_[Y*C.Stride+X]:=Sh;
+    End;
+  End;
+End;
+
+{ plan de composante reechantillonne a la taille de l'image (bilineaire) }
+Function VtJFullPlane(Var C:VtTJComp):PByte;
+Var
+ R:PByte;
+ X,Y,X0,X1,Y0,Y1:LongInt;
+ FX,FY,WX,WY,A,B:Single;
+ IX0,IX1:VtPIntArr;
+ WXs:VtPSingleArr;
+ Row0,Row1:PByte;
+Begin
+ R:=PByte(VtAllocBytes(Int64(VtJW)*VtJH));
+ If(C.PxW=VtJW)and(C.PxH=VtJH)Then Begin
+  For Y:=0 to VtJH-1 do Move((C.Plane+Int64(Y)*C.Stride)^,(R+Int64(Y)*VtJW)^,VtJW);
+  Result:=R;
+  Exit;
+ End;
+ IX0:=VtPIntArr(VtAllocBytes(Int64(VtJW)*4));
+ IX1:=VtPIntArr(VtAllocBytes(Int64(VtJW)*4));
+ WXs:=VtPSingleArr(VtAllocBytes(Int64(VtJW)*4));
+ For X:=0 to VtJW-1 do Begin
+  FX:=(X+0.5)*C.PxW/VtJW-0.5;
+  If FX<0 Then FX:=0;
+  X0:=Trunc(FX);
+  If X0>C.PxW-1 Then X0:=C.PxW-1;
+  X1:=X0+1;
+  If X1>C.PxW-1 Then X1:=C.PxW-1;
+  IX0[X]:=X0;IX1[X]:=X1;WXs[X]:=FX-X0;
+ End;
+ For Y:=0 to VtJH-1 do Begin
+  FY:=(Y+0.5)*C.PxH/VtJH-0.5;
+  If FY<0 Then FY:=0;
+  Y0:=Trunc(FY);
+  If Y0>C.PxH-1 Then Y0:=C.PxH-1;
+  Y1:=Y0+1;
+  If Y1>C.PxH-1 Then Y1:=C.PxH-1;
+  WY:=FY-Y0;
+  Row0:=C.Plane+Int64(Y0)*C.Stride;
+  Row1:=C.Plane+Int64(Y1)*C.Stride;
+  For X:=0 to VtJW-1 do Begin
+   WX:=WXs[X];
+   A:=Row0[IX0[X]]*(1-WX)+Row0[IX1[X]]*WX;
+   B:=Row1[IX0[X]]*(1-WX)+Row1[IX1[X]]*WX;
+   R[Int64(Y)*VtJW+X]:=Trunc(A*(1-WY)+B*WY+0.5);
+  End;
+ End;
+ FreeMem(IX0);FreeMem(IX1);FreeMem(WXs);
+ Result:=R;
+End;
+
+Function VtJClamp(V:LongInt):LongInt;
+Begin
+ If V<0 Then Result:=0 Else If V>255 Then Result:=255 Else Result:=V;
+End;
+
+{ applique l'orientation EXIF (1..8) }
+Procedure VtImgOrient(Var VtI:VtTImage;O:LongInt);
+Var
+ VtN:VtTImage;
+ DX,DY,SX,SY,NW,NH:LongInt;
+ Sp,Dp:Int64;
+Begin
+ If(O<2)or(O>8)Then Exit;
+ If O>=5 Then Begin NW:=VtI.VtH;NH:=VtI.W;End Else Begin NW:=VtI.W;NH:=VtI.VtH;End;
+ VtImgAlloc(VtN,NW,NH,VtI.Alpha<>Nil);
+ For DY:=0 to NH-1 do
+  For DX:=0 to NW-1 do Begin
+   Case O of
+    2:Begin SX:=VtI.W-1-DX;SY:=DY;End;
+    3:Begin SX:=VtI.W-1-DX;SY:=VtI.VtH-1-DY;End;
+    4:Begin SX:=DX;SY:=VtI.VtH-1-DY;End;
+    5:Begin SX:=DY;SY:=DX;End;
+    6:Begin SX:=DY;SY:=VtI.VtH-1-DX;End;
+    7:Begin SX:=VtI.W-1-DY;SY:=VtI.VtH-1-DX;End;
+    Else Begin SX:=VtI.W-1-DY;SY:=DX;End;
+   End;
+   Sp:=Int64(SY)*VtI.W+SX;
+   Dp:=Int64(DY)*NW+DX;
+   VtN.Px[Dp*3]:=VtI.Px[Sp*3];VtN.Px[Dp*3+1]:=VtI.Px[Sp*3+1];VtN.Px[Dp*3+2]:=VtI.Px[Sp*3+2];
+   If VtI.Alpha<>Nil Then VtN.Alpha[Dp]:=VtI.Alpha[Sp];
+  End;
+ VtImgFree(VtI);
+ VtI:=VtN;
+End;
+
+Procedure VtJParseExif(VtP:PByte;Len:LongInt);
+Var
+ Big:Boolean;
+ Off,VtN,VtI,Tag:LongInt;
+
+ Function R16(O:LongInt):LongInt;
+ Begin
+  If(O<0)or(O+2>Len)Then Begin R16:=0;Exit;End;
+  If Big Then R16:=(VtP[O]shl 8)or VtP[O+1]Else R16:=VtP[O]or(VtP[O+1]shl 8);
+ End;
+
+ Function R32(O:LongInt):LongInt;
+ Begin
+  If(O<0)or(O+4>Len)Then Begin R32:=0;Exit;End;
+  If Big Then R32:=(VtP[O]shl 24)or(VtP[O+1]shl 16)or(VtP[O+2]shl 8)or VtP[O+3]
+  Else R32:=VtP[O]or(VtP[O+1]shl 8)or(VtP[O+2]shl 16)or(VtP[O+3]shl 24);
+ End;
+
+Begin
+ If Len<14 Then Exit;
+ If(VtP[0]<>Ord('E'))or(VtP[1]<>Ord('x'))or(VtP[2]<>Ord('i'))or(VtP[3]<>Ord('f'))
+   Then Exit;
+ VtP:=VtP+6;Dec(Len,6);
+ If(VtP[0]=Ord('M'))and(VtP[1]=Ord('M'))Then Big:=True
+ Else If(VtP[0]=Ord('I'))and(VtP[1]=Ord('I'))Then Big:=False
+ Else Exit;
+ Off:=R32(4);
+ VtN:=R16(Off);
+ If VtN>200 Then Exit;
+ For VtI:=0 to VtN-1 do Begin
+  Tag:=R16(Off+2+VtI*12);
+  If Tag=$0112 Then Begin
+   VtJOrient:=R16(Off+2+VtI*12+8);
+   Exit;
+  End;
+ End;
+End;
+
+Function VtJpegDecode(Buf:PByte;VtN:LongInt;Var VtImg:VtTImage;Var VtErr:AnsiString)
+  :Boolean;
+Var
+ VtM,L,VtI,VtJ,K,Seg,Pq,Tq,Tc,Th,Ns,Ss,Se,Ah,Al,Id:LongInt;
+ Cnt:Array[0..15]of LongInt;
+ Sel:Array[0..3]of LongInt;
+ Total:LongInt;
+ Pl:Array[0..3]of PByte;
+ X,Y:LongInt;
+ Po:Int64;
+ Yy,Cb,Cr,Kk:LongInt;
+ RGBMode:Boolean;
+Begin
+ Result:=False;
+ VtErr:='';
+ VtJD:=Buf;VtJN:=VtN;VtJP:=0;VtJProg:=False;VtJRst:=0;VtJAdobe:=-1;VtJOrient:=1;VtJFrame:=False;
+ VtJW:=0;VtJH:=0;VtJNC:=0;
+ FillChar(VtJC,SizeOf(VtJC),0);
+ FillChar(VtJQ,SizeOf(VtJQ),0);
+ FillChar(VtJDC,SizeOf(VtJDC),0);
+ FillChar(VtJAC,SizeOf(VtJAC),0);
+ If(VtN<4)or(Buf[0]<>$FF)or(Buf[1]<>$D8)Then Begin VtErr:='JPEG invalide';Exit;End;
+ VtJP:=2;
+ While VtJP<VtJN do Begin
+  If VtJD[VtJP]<>$FF Then Begin Inc(VtJP);Continue;End;
+  While(VtJP<VtJN)and(VtJD[VtJP]=$FF)do Inc(VtJP);
+  If VtJP>=VtJN Then Break;
+  VtM:=VtJD[VtJP];
+  Inc(VtJP);
+  If(VtM=0)or(VtM=$D8)or((VtM>=$D0)and(VtM<=$D7))or(VtM=1)Then Continue;
+  If VtM=$D9 Then Break;
+  If VtJP+2>VtJN Then Break;
+  L:=(VtJD[VtJP]shl 8)or VtJD[VtJP+1];
+  If(L<2)or(VtJP+L>VtJN)Then Begin
+   If VtM=$DA Then Begin VtErr:='JPEG tronqu'#130;End;
+   Break;
+  End;
+  Seg:=VtJP+2;
+  Case VtM of
+   $C0,$C1,$C2:Begin
+     If VtJD[Seg]<>8 Then Begin
+       VtErr:='JPEG: seule la pr'#130'cision 8 bits est g'#130'r'#130'e';Exit;End;
+     VtJProg:=VtM=$C2;
+     VtJH:=(VtJD[Seg+1]shl 8)or VtJD[Seg+2];
+     VtJW:=(VtJD[Seg+3]shl 8)or VtJD[Seg+4];
+     VtJNC:=VtJD[Seg+5];
+     If(VtJW<=0)or(VtJH<=0)or(Int64(VtJW)*VtJH>150000000)Then Begin
+       VtErr:='dimensions JPEG invalides';Exit;End;
+     If not(VtJNC in[1,3,4])Then Begin
+       VtErr:='JPEG: nombre de composantes non g'#130'r'#130;Exit;End;
+     VtJHmax:=1;VtJVmax:=1;
+     For VtI:=0 to VtJNC-1 do Begin
+      VtJC[VtI].Id:=VtJD[Seg+6+VtI*3];
+      VtJC[VtI].VtH:=VtJD[Seg+7+VtI*3]shr 4;
+      VtJC[VtI].V:=VtJD[Seg+7+VtI*3]and 15;
+      VtJC[VtI].Tq:=VtJD[Seg+8+VtI*3]and 3;
+      If(VtJC[VtI].VtH<1)or(VtJC[VtI].VtH>4)or(VtJC[VtI].V<1)or(VtJC[VtI].V>4)Then Begin
+        VtErr:='JPEG: facteurs d'#130'chantillonnage invalides';Exit;End;
+      If VtJC[VtI].VtH>VtJHmax Then VtJHmax:=VtJC[VtI].VtH;
+      If VtJC[VtI].V>VtJVmax Then VtJVmax:=VtJC[VtI].V;
+     End;
+     VtJMcuX:=(VtJW+8*VtJHmax-1)div(8*VtJHmax);
+     VtJMcuY:=(VtJH+8*VtJVmax-1)div(8*VtJVmax);
+     For VtI:=0 to VtJNC-1 do Begin
+      VtJC[VtI].BlocksW:=VtJMcuX*VtJC[VtI].VtH;
+      VtJC[VtI].BlocksH:=VtJMcuY*VtJC[VtI].V;
+      VtJC[VtI].PxW:=(VtJW*VtJC[VtI].VtH+VtJHmax-1)div VtJHmax;
+      VtJC[VtI].PxH:=(VtJH*VtJC[VtI].V+VtJVmax-1)div VtJVmax;
+      VtJC[VtI].NeedBW:=(VtJC[VtI].PxW+7)div 8;
+      VtJC[VtI].NeedBH:=(VtJC[VtI].PxH+7)div 8;
+      VtJC[VtI].Coef:=PSmallInt(VtAllocBytes(Int64(VtJC[VtI].BlocksW)*VtJC[VtI].BlocksH*128));
+     End;
+     VtJFrame:=True;
+    End;
+   $C3,$C5,$C6,$C7,$C9,$CA,$CB,$CD,$CE,$CF:Begin
+     VtErr:='JPEG: mode non g'#130'r'#130' (sans perte, hi'#130'rarchique ou '+
+       'arithm'#130'tique)';Exit;
+    End;
+   $C4:Begin
+     VtI:=Seg;
+     While VtI<VtJP+L do Begin
+      Tc:=VtJD[VtI]shr 4;Th:=VtJD[VtI]and 15;
+      Inc(VtI);
+      Total:=0;
+      For VtJ:=0 to 15 do Begin Cnt[VtJ]:=VtJD[VtI+VtJ];Inc(Total,Cnt[VtJ]);End;
+      Inc(VtI,16);
+      If(Total>256)or(Th>3)or(VtI+Total>VtJP+L)Then Begin
+        VtErr:='table de Huffman JPEG invalide';Exit;End;
+      If Tc=0 Then VtJBuildHuff(VtJDC[Th],Cnt,VtJD+VtI,Total)
+      Else VtJBuildHuff(VtJAC[Th],Cnt,VtJD+VtI,Total);
+      Inc(VtI,Total);
+     End;
+    End;
+   $DB:Begin
+     VtI:=Seg;
+     While VtI<VtJP+L do Begin
+      Pq:=VtJD[VtI]shr 4;Tq:=VtJD[VtI]and 3;
+      Inc(VtI);
+      For K:=0 to 63 do Begin
+       If Pq=0 Then VtJQ[Tq][VtJZig[K]]:=VtJD[VtI+K]
+       Else VtJQ[Tq][VtJZig[K]]:=(VtJD[VtI+K*2]shl 8)or VtJD[VtI+K*2+1];
+      End;
+      Inc(VtI,64*(Pq+1));
+     End;
+    End;
+   $DD:VtJRst:=(VtJD[Seg]shl 8)or VtJD[Seg+1];
+   $E1:VtJParseExif(VtJD+Seg,L-2);
+   $EE:If(L>=14)and(VtJD[Seg]=Ord('A'))and(VtJD[Seg+1]=Ord('d'))and(VtJD[Seg+
+     2]=Ord('o'))Then
+        VtJAdobe:=VtJD[Seg+11];
+   $DA:Begin
+     If not VtJFrame Then Begin VtErr:='JPEG: SOS avant SOF';Exit;End;
+     Ns:=VtJD[Seg];
+     If(Ns<1)or(Ns>4)Then Begin VtErr:='JPEG: scan invalide';Exit;End;
+     For VtI:=0 to Ns-1 do Begin
+      Id:=VtJD[Seg+1+VtI*2];
+      Sel[VtI]:=-1;
+      For VtJ:=0 to VtJNC-1 do If VtJC[VtJ].Id=Id Then Sel[VtI]:=VtJ;
+      If Sel[VtI]<0 Then Begin VtErr:='JPEG: composante de scan inconnue';Exit;End;
+      VtJC[Sel[VtI]].Td:=VtJD[Seg+2+VtI*2]shr 4;
+      VtJC[Sel[VtI]].Ta:=VtJD[Seg+2+VtI*2]and 15;
+      If(VtJC[Sel[VtI]].Td>3)or(VtJC[Sel[VtI]].Ta>3)Then Begin
+        VtErr:='JPEG: table invalide';Exit;End;
+     End;
+     Ss:=VtJD[Seg+1+Ns*2];Se:=VtJD[Seg+2+Ns*2];
+     Ah:=VtJD[Seg+3+Ns*2]shr 4;Al:=VtJD[Seg+3+Ns*2]and 15;
+     If not VtJProg Then Begin Ss:=0;Se:=63;Ah:=0;Al:=0;End;
+     If Se>63 Then Se:=63;
+     VtJP:=VtJP+L;
+     If not VtJDecodeScan(Ns,Sel,Ss,Se,Ah,Al)Then Begin
+       VtErr:='JPEG: erreur de d'#130'codage';Exit;End;
+     Continue;
+    End;
+  End;
+  VtJP:=VtJP+L;
+ End;
+ If not VtJFrame Then Begin VtErr:='JPEG: aucune image';Exit;End;
+ { IDCT de chaque composante }
+ For VtI:=0 to VtJNC-1 do Begin
+  VtJIdctComp(VtJC[VtI],VtJQ[VtJC[VtI].Tq]);
+  FreeMem(VtJC[VtI].Coef);VtJC[VtI].Coef:=Nil;
+ End;
+ For VtI:=0 to VtJNC-1 do Pl[VtI]:=VtJFullPlane(VtJC[VtI]);
+ For VtI:=0 to VtJNC-1 do Begin FreeMem(VtJC[VtI].Plane);VtJC[VtI].Plane:=Nil;End;
+ VtImgAlloc(VtImg,VtJW,VtJH,False);
+ RGBMode:=False;
+ If(VtJNC=3)and(VtJAdobe=0)Then RGBMode:=True;
+ If(VtJNC=3)and(VtJAdobe<0)and(VtJC[0].Id=Ord('R'))and(VtJC[1].Id=Ord('G'))
+   and(VtJC[2].Id=Ord('B'))Then RGBMode:=True;
+ For Y:=0 to VtJH-1 do
+  For X:=0 to VtJW-1 do Begin
+   Po:=Int64(Y)*VtJW+X;
+   If VtJNC=1 Then Begin
+    VtImg.Px[Po*3]:=Pl[0][Po];VtImg.Px[Po*3+1]:=Pl[0][Po];VtImg.Px[Po*3+2]:=Pl[0][Po];
+   End
+    Else Begin
+     Yy:=Pl[0][Po];Cb:=Pl[1][Po];Cr:=Pl[2][Po];
+     If RGBMode Then Begin
+      VtImg.Px[Po*3]:=Yy;VtImg.Px[Po*3+1]:=Cb;VtImg.Px[Po*3+2]:=Cr;
+     End
+      Else Begin
+       VtI:=VtJClamp(Yy+VtSar(91881*(Cr-128)+32768,16));
+       VtJ:=VtJClamp(Yy-VtSar(22554*(Cb-128)+46802*(Cr-128)+32768,16));
+       K:=VtJClamp(Yy+VtSar(116130*(Cb-128)+32768,16));
+       If VtJNC=4 Then Begin
+        Kk:=Pl[3][Po];
+        If VtJAdobe<0 Then Begin
+         VtI:=(255-VtI)*(255-Kk)div 255;VtJ:=(255-VtJ)*(255-Kk)div 255;K:=(255-K)
+           *(255-Kk)div 255;
+        End
+         Else Begin
+          VtI:=VtI*Kk div 255;VtJ:=VtJ*Kk div 255;K:=K*Kk div 255;
+         End;
+       End;
+       VtImg.Px[Po*3]:=VtI;VtImg.Px[Po*3+1]:=VtJ;VtImg.Px[Po*3+2]:=K;
+      End;
+    End;
+  End;
+ For VtI:=0 to VtJNC-1 do FreeMem(Pl[VtI]);
+ VtImgOrient(VtImg,VtJOrient);
+ Result:=True;
+End;
+
+{ ---- encodeur JPEG de base (4:4:4) ---- }
+
+Type
+ VtTJEnc=Record
+  Buf:PByte;
+  Cap,Pos:LongInt;
+  Acc:LongWord;
+  Cnt:LongInt;
+ End;
+ VtTJCodes=Record
+  Code:Array[0..255]of Word;
+  Size:Array[0..255]of Byte;
+ End;
+
+Procedure VtJEPutByte(Var E:VtTJEnc;B:LongInt);
+Begin
+ If E.Pos>=E.Cap Then Begin
+  E.Cap:=E.Cap*2;
+  ReallocMem(E.Buf,E.Cap);
+ End;
+ E.Buf[E.Pos]:=B;
+ Inc(E.Pos);
+End;
+
+Procedure VtJEPutBits(Var E:VtTJEnc;V,VtN:LongInt);
+Var
+ B:LongInt;
+Begin
+ If VtN=0 Then Exit;
+ E.Acc:=(E.Acc shl VtN)or(LongWord(V)and((LongWord(1)shl VtN)-1));
+ Inc(E.Cnt,VtN);
+ While E.Cnt>=8 do Begin
+  B:=(E.Acc shr(E.Cnt-8))and $FF;
+  VtJEPutByte(E,B);
+  If B=$FF Then VtJEPutByte(E,0);
+  Dec(E.Cnt,8);
+ End;
+End;
+
+Procedure VtJEMakeCodes(Var VtT:VtTJCodes;Const Bits:Array of Byte;Const Vals:Array of
+  Byte);
+Var
+ L,VtI,K:LongInt;
+ Code:LongInt;
+Begin
+ FillChar(VtT,SizeOf(VtT),0);
+ Code:=0;K:=0;
+ For L:=1 to 16 do Begin
+  For VtI:=1 to Bits[L-1]do Begin
+   VtT.Code[Vals[K]]:=Code;
+   VtT.Size[Vals[K]]:=L;
+   Inc(Code);Inc(K);
+  End;
+  Code:=Code shl 1;
+ End;
+End;
+
+Procedure VtJEPutMarker(Var E:VtTJEnc;VtM:LongInt);
+Begin
+ VtJEPutByte(E,$FF);VtJEPutByte(E,VtM);
+End;
+
+Procedure VtJEPutWord(Var E:VtTJEnc;V:LongInt);
+Begin
+ VtJEPutByte(E,V shr 8);VtJEPutByte(E,V and $FF);
+End;
+
+Function VtJpegEncode(Const Name:AnsiString;Const VtImg:VtTImage;Quality:LongInt)
+  :Boolean;
+Var
+ E:VtTJEnc;
+ QZ:Array[0..1]of Array[0..63]of Byte;
+ QN:Array[0..1]of Array[0..63]of Single;
+ DcT,AcT:Array[0..1]of VtTJCodes;
+ FC:Array[0..7,0..7]of Single;
+ Scale,VtI,VtJ,K,VtT,BX,BY,X,Y,Comp,U,V,PX,PY,NbX,NbY:LongInt;
+ Pred:Array[0..2]of LongInt;
+ Blk:Array[0..63]of Single;
+ VtTmp:Array[0..63]of Single;
+ Qv:Array[0..63]of LongInt;
+ VtS:Single;
+ R,VtG,B:LongInt;
+ Po:Int64;
+ Yv,Cbv,Crv:Single;
+ Samples:Array[0..2]of Array[0..63]of Single;
+
+ Procedure PutHuff(Const Tb:VtTJCodes;Sym:LongInt);
+ Begin
+  VtJEPutBits(E,Tb.Code[Sym],Tb.Size[Sym]);
+ End;
+
+ Procedure EncodeBlock(Ci:LongInt);
+ Var
+  Idx,Z,Diff,Cat,Run,A,V_,X,Y,U:LongInt;
+  VtS:Single;
+ Begin
+  { FDCT separable }
+  For Y:=0 to 7 do
+   For U:=0 to 7 do Begin
+    VtS:=0;
+    For X:=0 to 7 do VtS:=VtS+FC[U,X]*Samples[Ci][Y*8+X];
+    VtTmp[Y*8+U]:=VtS;
+   End;
+  For U:=0 to 7 do
+   For V_:=0 to 7 do Begin
+    VtS:=0;
+    For Y:=0 to 7 do VtS:=VtS+FC[V_,Y]*VtTmp[Y*8+U];
+    Blk[V_*8+U]:=VtS;
+   End;
+  Idx:=0;
+  If Ci>0 Then Idx:=1;
+  For Z:=0 to 63 do Begin
+   V_:=VtJZig[Z];
+   VtS:=Blk[V_]*QN[Idx][V_];
+   If VtS>=0 Then Qv[Z]:=Trunc(VtS+0.5)Else Qv[Z]:=-Trunc(-VtS+0.5);
+  End;
+  Diff:=Qv[0]-Pred[Ci];
+  Pred[Ci]:=Qv[0];
+  A:=Abs(Diff);
+  Cat:=0;
+  While A>0 do Begin Inc(Cat);A:=A shr 1;End;
+  PutHuff(DcT[Idx],Cat);
+  If Cat>0 Then Begin
+   If Diff<0 Then Diff:=Diff-1;
+   VtJEPutBits(E,Diff,Cat);
+  End;
+  Run:=0;
+  For Z:=1 to 63 do Begin
+   If Qv[Z]=0 Then Inc(Run)
+   Else Begin
+    While Run>15 do Begin PutHuff(AcT[Idx],$F0);Dec(Run,16);End;
+    A:=Abs(Qv[Z]);
+    Cat:=0;
+    While A>0 do Begin Inc(Cat);A:=A shr 1;End;
+    PutHuff(AcT[Idx],(Run shl 4)or Cat);
+    Diff:=Qv[Z];
+    If Diff<0 Then Diff:=Diff-1;
+    VtJEPutBits(E,Diff,Cat);
+    Run:=0;
+   End;
+  End;
+  If Run>0 Then PutHuff(AcT[Idx],0);
+ End;
+
+Begin
+ Result:=False;
+ If Quality<1 Then Quality:=1;
+ If Quality>100 Then Quality:=100;
+ If Quality<50 Then Scale:=5000 div Quality Else Scale:=200-Quality*2;
+ For VtI:=0 to 63 do Begin
+  VtT:=(VtJStdQ0[VtI]*Scale+50)div 100;
+  If VtT<1 Then VtT:=1;If VtT>255 Then VtT:=255;
+  QZ[0][VtI]:=VtT;
+  VtT:=(VtJStdQ1[VtI]*Scale+50)div 100;
+  If VtT<1 Then VtT:=1;If VtT>255 Then VtT:=255;
+  QZ[1][VtI]:=VtT;
+ End;
+ For VtI:=0 to 63 do Begin
+  QN[0][VtJZig[VtI]]:=1.0/QZ[0][VtI];
+  QN[1][VtJZig[VtI]]:=1.0/QZ[1][VtI];
+ End;
+ VtJEMakeCodes(DcT[0],VtJBitsDcLum,VtJValsDcLum);
+ VtJEMakeCodes(DcT[1],VtJBitsDcChr,VtJValsDcChr);
+ VtJEMakeCodes(AcT[0],VtJBitsAcLum,VtJValsAcLum);
+ VtJEMakeCodes(AcT[1],VtJBitsAcChr,VtJValsAcChr);
+ For U:=0 to 7 do
+  For X:=0 to 7 do Begin
+   If U=0 Then VtS:=0.35355339059327373 Else VtS:=0.5;
+   FC[U,X]:=VtS*Cos((2*X+1)*U*Pi/16.0);
+  End;
+ E.Cap:=VtImg.W*VtImg.VtH+65536;
+ E.Buf:=PByte(VtAllocBytes(E.Cap));
+ E.Pos:=0;E.Acc:=0;E.Cnt:=0;
+ VtJEPutMarker(E,$D8);
+ VtJEPutMarker(E,$E0);VtJEPutWord(E,16);
+ VtJEPutByte(E,Ord('J'));VtJEPutByte(E,Ord('F'));VtJEPutByte(E,Ord('I'));
+   VtJEPutByte(E,Ord('F'));VtJEPutByte(E,0);
+ VtJEPutByte(E,1);VtJEPutByte(E,1);VtJEPutByte(E,0);
+ VtJEPutWord(E,1);VtJEPutWord(E,1);VtJEPutByte(E,0);VtJEPutByte(E,0);
+ For VtI:=0 to 1 do Begin
+  VtJEPutMarker(E,$DB);VtJEPutWord(E,67);VtJEPutByte(E,VtI);
+  For K:=0 to 63 do VtJEPutByte(E,QZ[VtI][K]);
+ End;
+ VtJEPutMarker(E,$C0);VtJEPutWord(E,17);VtJEPutByte(E,8);
+ VtJEPutWord(E,VtImg.VtH);VtJEPutWord(E,VtImg.W);VtJEPutByte(E,3);
+ VtJEPutByte(E,1);VtJEPutByte(E,$11);VtJEPutByte(E,0);
+ VtJEPutByte(E,2);VtJEPutByte(E,$11);VtJEPutByte(E,1);
+ VtJEPutByte(E,3);VtJEPutByte(E,$11);VtJEPutByte(E,1);
+ For VtI:=0 to 3 do Begin
+  VtJEPutMarker(E,$C4);
+  Case VtI of
+   0:Begin VtJEPutWord(E,19+12);VtJEPutByte(E,$00);For K:=0 to 15 do
+     VtJEPutByte(E,VtJBitsDcLum[K]);For K:=0 to 11 do VtJEPutByte(E,VtJValsDcLum[K]);
+     End;
+   1:Begin VtJEPutWord(E,19+162);VtJEPutByte(E,$10);For K:=0 to 15 do
+     VtJEPutByte(E,VtJBitsAcLum[K]);For K:=0 to 161 do VtJEPutByte(E,VtJValsAcLum[K])
+     ;End;
+   2:Begin VtJEPutWord(E,19+12);VtJEPutByte(E,$01);For K:=0 to 15 do
+     VtJEPutByte(E,VtJBitsDcChr[K]);For K:=0 to 11 do VtJEPutByte(E,VtJValsDcChr[K]);
+     End;
+   Else Begin VtJEPutWord(E,19+162);VtJEPutByte(E,$11);For K:=0 to 15 do
+     VtJEPutByte(E,VtJBitsAcChr[K]);For K:=0 to 161 do VtJEPutByte(E,VtJValsAcChr[K])
+     ;End;
+  End;
+ End;
+ VtJEPutMarker(E,$DA);VtJEPutWord(E,12);VtJEPutByte(E,3);
+ VtJEPutByte(E,1);VtJEPutByte(E,$00);
+ VtJEPutByte(E,2);VtJEPutByte(E,$11);
+ VtJEPutByte(E,3);VtJEPutByte(E,$11);
+ VtJEPutByte(E,0);VtJEPutByte(E,63);VtJEPutByte(E,0);
+ Pred[0]:=0;Pred[1]:=0;Pred[2]:=0;
+ NbX:=(VtImg.W+7)div 8;NbY:=(VtImg.VtH+7)div 8;
+ For BY:=0 to NbY-1 do
+  For BX:=0 to NbX-1 do Begin
+   For Y:=0 to 7 do
+    For X:=0 to 7 do Begin
+     PX:=BX*8+X;PY:=BY*8+Y;
+     If PX>=VtImg.W Then PX:=VtImg.W-1;
+     If PY>=VtImg.VtH Then PY:=VtImg.VtH-1;
+     Po:=(Int64(PY)*VtImg.W+PX)*3;
+     R:=VtImg.Px[Po];VtG:=VtImg.Px[Po+1];B:=VtImg.Px[Po+2];
+     Yv:=0.299*R+0.587*VtG+0.114*B;
+     Cbv:=-0.168736*R-0.331264*VtG+0.5*B;
+     Crv:=0.5*R-0.418688*VtG-0.081312*B;
+     Samples[0][Y*8+X]:=Yv-128;
+     Samples[1][Y*8+X]:=Cbv;
+     Samples[2][Y*8+X]:=Crv;
+    End;
+   For Comp:=0 to 2 do EncodeBlock(Comp);
+  End;
+ If E.Cnt>0 Then VtJEPutBits(E,$7F,8-E.Cnt);
+ VtJEPutMarker(E,$D9);
+ Result:=VtWriteFileBytes(Name,E.Buf,E.Pos);
+ FreeMem(E.Buf);
+End;
+
+{ ---- chargement et enregistrement selon le format ---- }
+
+Function VtImgLoad(Const Name:AnsiString;Var VtImg:VtTImage;Var VtErr:AnsiString)
+  :Boolean;
+Var
+ Buf:PByte;
+ VtN:LongInt;
+Begin
+ Result:=False;
+ VtImg.Px:=Nil;VtImg.Alpha:=Nil;VtImg.W:=0;VtImg.VtH:=0;
+ If not VtFileExistsP(Name)Then Begin VtErr:='fichier introuvable : '+Name;Exit;End;
+ If not VtReadFileBytes(Name,Buf,VtN)Then Begin VtErr:='lecture impossible : '+
+   Name;Exit;End;
+ If(VtN>=2)and(Buf[0]=$FF)and(Buf[1]=$D8)Then Result:=VtJpegDecode(Buf,VtN,VtImg,VtErr)
+ Else If(VtN>=8)and(Buf[0]=137)and(Buf[1]=80)Then Result:=VtPngDecode(Buf,VtN,VtImg,
+   VtErr)
+ Else If(VtN>=2)and(Buf[0]=Ord('B'))and(Buf[1]=Ord('M'))Then
+   Result:=VtBmpDecode(Buf,VtN,VtImg,VtErr)
+ Else If(VtN>=2)and(Buf[0]=Ord('P'))and(Buf[1]in[Ord('5'),Ord('6')])Then
+   Result:=VtPpmDecode(Buf,VtN,VtImg,VtErr)
+ Else If(VtN>=12)and(Buf[0]=Ord('R'))and(Buf[8]=Ord('W'))and(Buf[9]=Ord('E'))Then
+  VtErr:='le format WebP n''est pas g'#130'r'#130' (utilisez JPEG, PNG, BMP ou '+
+    'PPM)'
+ Else If(VtN>=3)and(Buf[0]=Ord('G'))and(Buf[1]=Ord('I'))and(Buf[2]=Ord('F'))Then
+  VtErr:='le format GIF n''est pas g'#130'r'#130' (utilisez JPEG, PNG, BMP ou '+
+    'PPM)'
+ Else VtErr:='format d''image inconnu : '+Name;
+ FreeMem(Buf);
+ If(VtErr<>'')Then Result:=False;
+End;
+
+Function VtImgSave(Const Name:AnsiString;Const VtImg:VtTImage;Quality:LongInt)
+  :Boolean;
+Var
+ E:AnsiString;
+Begin
+ E:=VtPathExt(Name);
+ If(E='.jpg')or(E='.jpeg')Then Result:=VtJpegEncode(Name,VtImg,Quality)
+ Else If E='.bmp' Then Result:=VtBmpEncode(Name,VtImg)
+ Else If(E='.ppm')Then Result:=VtPpmEncode(Name,VtImg)
+ Else Begin
+  If Quality>=90 Then Result:=VtPngEncode(Name,VtImg,6)
+  Else Result:=VtPngEncode(Name,VtImg,3);
+ End;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Fils d'execution (Windows : CreateThread, Unix : pthread)           }
+{ ------------------------------------------------------------------ }
+
+{$IFDEF WINDOWS}
+Function
+  CreateThread(Attr:Pointer;Stack:PtrUInt;Start:Pointer;Param:Pointer;
+    Flags:LongWord;Var Tid:LongWord):PtrUInt;
+ stdcall;external 'kernel32.dll' name 'CreateThread';
+Function WaitForSingleObject(VtH:PtrUInt;Ms:LongWord):LongWord;stdcall;external
+  'kernel32.dll' name 'WaitForSingleObject';
+Function CloseHandle(VtH:PtrUInt):LongInt;stdcall;external 'kernel32.dll' name
+  'CloseHandle';
+{$ELSE}
+ {$IFDEF UNIX}
+Function pthread_create(Var
+  Th:PtrUInt;Attr:Pointer;Start:Pointer;Arg:Pointer):LongInt;cdecl;
+ external 'pthread' name 'pthread_create';
+Function pthread_join(Th:PtrUInt;Ret:Pointer):LongInt;cdecl;external 'pthread'
+  name 'pthread_join';
+Function sysconf(Name:LongInt):PtrInt;cdecl;external 'c' name 'sysconf';
+ {$ENDIF}
+{$ENDIF}
+
+Const
+ VtMaxThreads=32;
+
+Type
+ { traitement d'une plage [Lo,Hi[ par le fil Tid }
+ VtTParProc=Procedure(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+
+Const
+ VtGNThreads:LongInt=1;
+Var
+ VtParProc:VtTParProc;
+ VtParCtx:Pointer;
+ VtParCount,VtParChunk,VtParNext:LongInt;
+
+Function VtCpuCount:LongInt;
+Var
+ VtN:Int64;
+Begin
+ Result:=1;
+ {$IFDEF WINDOWS}
+ If VtParseInt(GetEnv('NUMBER_OF_PROCESSORS'),VtN)Then Result:=VtN;
+ {$ELSE}
+  {$IFDEF UNIX}
+ VtN:=sysconf(84);
+ If VtN>0 Then Result:=VtN;
+  {$ENDIF}
+ {$ENDIF}
+ If Result<1 Then Result:=1;
+ If Result>VtMaxThreads Then Result:=VtMaxThreads;
+End;
+
+Procedure VtParWorker(Tid:LongInt);
+Var
+ C,Lo,Hi:LongInt;
+Begin
+ While True do Begin
+  C:=InterLockedIncrement(VtParNext)-1;
+  Lo:=C*VtParChunk;
+  If Lo>=VtParCount Then Break;
+  Hi:=Lo+VtParChunk;
+  If Hi>VtParCount Then Hi:=VtParCount;
+  VtParProc(VtParCtx,Lo,Hi,Tid);
+ End;
+End;
+
+{$IFDEF WINDOWS}
+Function VtParThreadEntry(VtP:Pointer):LongWord;stdcall;
+Begin
+ VtParWorker(PtrInt(VtP));
+ Result:=0;
+End;
+{$ELSE}
+ {$IFDEF UNIX}
+Function VtParThreadEntry(VtP:Pointer):Pointer;cdecl;
+Begin
+ VtParWorker(PtrInt(VtP));
+ Result:=Nil;
+End;
+ {$ENDIF}
+{$ENDIF}
+
+{ execute Proc sur [0,Count[ en parallele, par paquets de Chunk elements ;
+  Proc ne doit utiliser que de la memoire deja allouee (pas de tas, pas d'E/S) }
+Procedure VtParFor(Count,Chunk:LongInt;Proc:VtTParProc;Ctx:Pointer);
+Var
+ VtI,Created,NT:LongInt;
+ {$IFDEF WINDOWS}
+ Hs:Array[0..VtMaxThreads-1]of PtrUInt;
+ Tid:LongWord;
+ {$ELSE}
+ Ths:Array[0..VtMaxThreads-1]of PtrUInt;
+ Okay:Array[0..VtMaxThreads-1]of Boolean;
+ {$ENDIF}
+Begin
+ If Count<=0 Then Exit;
+ If Chunk<1 Then Chunk:=1;
+ NT:=VtGNThreads;
+ If NT>(Count+Chunk-1)div Chunk Then NT:=(Count+Chunk-1)div Chunk;
+ If NT<=1 Then Begin
+  Proc(Ctx,0,Count,0);
+  Exit;
+ End;
+ VtParProc:=Proc;VtParCtx:=Ctx;VtParCount:=Count;VtParChunk:=Chunk;VtParNext:=0;
+ Created:=0;
+ {$IFDEF WINDOWS}
+ For VtI:=1 to NT-1 do Begin
+  Hs[VtI]:=CreateThread(Nil,0,@VtParThreadEntry,Pointer(PtrInt(VtI)),0,Tid);
+  If Hs[VtI]<>0 Then Inc(Created);
+ End;
+ VtParWorker(0);
+ For VtI:=1 to NT-1 do If Hs[VtI]<>0 Then Begin
+  WaitForSingleObject(Hs[VtI],$FFFFFFFF);
+  CloseHandle(Hs[VtI]);
+ End;
+ {$ELSE}
+  {$IFDEF UNIX}
+ For VtI:=1 to NT-1 do Begin
+  Ths[VtI]:=0;
+  Okay[VtI]:=pthread_create(Ths[VtI],Nil,@VtParThreadEntry,Pointer(PtrInt(VtI)))=0;
+  If Okay[VtI]Then Inc(Created);
+ End;
+ VtParWorker(0);
+ For VtI:=1 to NT-1 do If Okay[VtI]Then pthread_join(Ths[VtI],Nil);
+  {$ELSE}
+ VtParWorker(0);
+  {$ENDIF}
+ {$ENDIF}
+End;
+
+{ ------------------------------------------------------------------ }
+{ Produit matriciel (CPU, multi-fils)                                 }
+{   Y[n*M+m] = somme_k X[n*K+k] * W[m*K+k] (+ Bias[m])                 }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTGemmCtx=Record
+  X,W,B,Y:PSingle;
+  VtN,K,VtM:LongInt;
+ End;
+ VtPGemmCtx=^VtTGemmCtx;
+
+Procedure VtGemmBlock(X,W,B,Y:PSingle;K,VtM,N0,N1:LongInt);
+Var
+ VtN,Mm,VtJ:LongInt;
+ X0,X1,W0,W1,W2,W3:PSingle;
+ S00,S01,S02,S03,S10,S11,S12,S13,A0,A1:Single;
+ Bv:Single;
+Begin
+ VtN:=N0;
+ While VtN+1<N1 do Begin
+  X0:=X+Int64(VtN)*K;
+  X1:=X0+K;
+  Mm:=0;
+  While Mm+3<VtM do Begin
+   W0:=W+Int64(Mm)*K;
+   W1:=W0+K;W2:=W1+K;W3:=W2+K;
+   S00:=0;S01:=0;S02:=0;S03:=0;S10:=0;S11:=0;S12:=0;S13:=0;
+   For VtJ:=0 to K-1 do Begin
+    A0:=X0[VtJ];A1:=X1[VtJ];
+    S00:=S00+A0*W0[VtJ];S01:=S01+A0*W1[VtJ];S02:=S02+A0*W2[VtJ];S03:=S03+A0*W3[VtJ];
+    S10:=S10+A1*W0[VtJ];S11:=S11+A1*W1[VtJ];S12:=S12+A1*W2[VtJ];S13:=S13+A1*W3[VtJ];
+   End;
+   If B<>Nil Then Begin
+    S00:=S00+B[Mm];S01:=S01+B[Mm+1];S02:=S02+B[Mm+2];S03:=S03+B[Mm+3];
+    S10:=S10+B[Mm];S11:=S11+B[Mm+1];S12:=S12+B[Mm+2];S13:=S13+B[Mm+3];
+   End;
+   Y[Int64(VtN)*VtM+Mm]:=S00;Y[Int64(VtN)*VtM+Mm+1]:=S01;Y[Int64(VtN)*VtM+Mm+2]:=S02;
+   Y[Int64(VtN)*VtM+Mm+3]:=S03;
+   Y[Int64(VtN+1)*VtM+Mm]:=S10;Y[Int64(VtN+1)*VtM+Mm+1]:=S11;Y[Int64(VtN+1)*VtM+Mm+2]:=S12;
+   Y[Int64(VtN+1)*VtM+Mm+3]:=S13;
+   Inc(Mm,4);
+  End;
+  While Mm<VtM do Begin
+   W0:=W+Int64(Mm)*K;
+   S00:=0;S10:=0;
+   For VtJ:=0 to K-1 do Begin
+    S00:=S00+X0[VtJ]*W0[VtJ];
+    S10:=S10+X1[VtJ]*W0[VtJ];
+   End;
+   If B<>Nil Then Bv:=B[Mm]Else Bv:=0;
+   Y[Int64(VtN)*VtM+Mm]:=S00+Bv;
+   Y[Int64(VtN+1)*VtM+Mm]:=S10+Bv;
+   Inc(Mm);
+  End;
+  Inc(VtN,2);
+ End;
+ If VtN<N1 Then Begin
+  X0:=X+Int64(VtN)*K;
+  Mm:=0;
+  While Mm+3<VtM do Begin
+   W0:=W+Int64(Mm)*K;
+   W1:=W0+K;W2:=W1+K;W3:=W2+K;
+   S00:=0;S01:=0;S02:=0;S03:=0;
+   For VtJ:=0 to K-1 do Begin
+    A0:=X0[VtJ];
+    S00:=S00+A0*W0[VtJ];S01:=S01+A0*W1[VtJ];S02:=S02+A0*W2[VtJ];S03:=S03+A0*W3[VtJ];
+   End;
+   If B<>Nil Then Begin
+    S00:=S00+B[Mm];S01:=S01+B[Mm+1];S02:=S02+B[Mm+2];S03:=S03+B[Mm+3];
+   End;
+   Y[Int64(VtN)*VtM+Mm]:=S00;Y[Int64(VtN)*VtM+Mm+1]:=S01;Y[Int64(VtN)*VtM+Mm+2]:=S02;
+   Y[Int64(VtN)*VtM+Mm+3]:=S03;
+   Inc(Mm,4);
+  End;
+  While Mm<VtM do Begin
+   W0:=W+Int64(Mm)*K;
+   S00:=0;
+   For VtJ:=0 to K-1 do S00:=S00+X0[VtJ]*W0[VtJ];
+   If B<>Nil Then S00:=S00+B[Mm];
+   Y[Int64(VtN)*VtM+Mm]:=S00;
+   Inc(Mm);
+  End;
+ End;
+End;
+
+Procedure VtGemmProc(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+Begin
+ With VtPGemmCtx(Ctx)^ do VtGemmBlock(X,W,B,Y,K,VtM,Lo,Hi);
+End;
+
+Procedure VtGemmCPU(X,W,B,Y:PSingle;VtN,K,VtM:LongInt);
+Var
+ C:VtTGemmCtx;
+Begin
+ C.X:=X;C.W:=W;C.B:=B;C.Y:=Y;C.VtN:=VtN;C.K:=K;C.VtM:=VtM;
+ VtParFor(VtN,8,VtGemmProc,@C);
+End;
+
+{ ------------------------------------------------------------------ }
+{ GPU : shader de calcul Direct3D 11 (HLSL compile a l'execution).     }
+{ Windows seulement ; sans GPU le calcul reste sur le microprocesseur.  }
+{ Le resultat du GPU est verifie au demarrage contre le calcul CPU.    }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTGpuDev=Record
+  Name:AnsiString;
+  Adapter:Pointer;
+  Vendor:LongWord;
+  VRam,Free:Int64;
+ End;
+
+Const
+ VtGpuEnumDone:Boolean=False;
+ VtGpuOn:Boolean=False;
+ VtGpuName:AnsiString='';
+ VtGpuCalls:LongInt=0;
+ VtGpuBytes:Int64=0;
+Var
+ VtGpuDevs:Array of VtTGpuDev;
+
+{$IFDEF WINDOWS}
+Const
+ VtGpuMaxIO=67108864;
+ VtGpuMinWork=262144;
+
+Type
+ VtTGuid4=Record
+  D1:LongWord;D2,D3:Word;D4:Array[0..7]of Byte;
+ End;
+ VtTVTab=Array[0..255]of Pointer;
+ VtPVTab=^VtTVTab;
+ VtTAdapterDesc=Record
+  Descr:Array[0..127]of Word;
+  Vendor,Device,SubSys,Rev:LongWord;
+  DedVid,DedSys,Shared:PtrUInt;
+  LuidLo:LongWord;LuidHi:LongInt;
+  Pad:Array[0..7]of LongWord;
+ End;
+ VtTVideoMemInfo=Record
+  Budget,CurrentUsage,AvailRes,CurrentRes:QWord;
+ End;
+ VtTMapped=Record
+  Data:Pointer;
+  RowPitch,DepthPitch:LongWord;
+ End;
+ VtTBufDesc=Record
+  ByteWidth,Usage,BindFlags,CPUAccess,Misc,Stride:LongWord;
+ End;
+ VtTViewDesc=Record
+  Format,Dim,First,Num,Flags:LongWord;
+  Pad:Array[0..11]of LongWord;
+ End;
+ VtTSubData=Record
+  Mem:Pointer;
+  Pitch,Slice:LongWord;
+ End;
+ VtTBox=Record
+  Left,Top,Front,Right,Bottom,Back:LongWord;
+ End;
+ VtTCBData=Record
+  K,VtM,VtN,Pad:LongWord;
+ End;
+ VtTGpuWeight=Record
+  Ptr:Pointer;
+  Srv:Pointer;
+  Buf:Pointer;
+  Bytes:Int64;
+ End;
+
+ VtTFnCreateDev=Function(Adapter:Pointer;DrvType:LongWord;Soft:PtrUInt;
+   Flags:LongWord;FL:Pointer;NFL:LongWord;
+  Sdk:LongWord;Var Dev:Pointer;Var FLOut:LongWord;Var
+    Ctx:Pointer):LongInt;stdcall;
+ VtTFnCompile=Function(Src:Pointer;SrcLen:PtrUInt;Name:PChar;Defs,
+   Inc:Pointer;Entry,Target:PChar;F1,F2:LongWord;
+  Var Code:Pointer;Var VtErr:Pointer):LongInt;stdcall;
+ VtTFnFactory=Function(Iid:Pointer;Var F:Pointer):LongInt;stdcall;
+ VtTMQuery=Function(Self,Iid:Pointer;Var Obj:Pointer):LongInt;stdcall;
+ VtTMRelease=Function(Self:Pointer):LongWord;stdcall;
+ VtTMEnumAdapters=Function(Self:Pointer;Idx:LongWord;Var
+   Ad:Pointer):LongInt;stdcall;
+ VtTMGetDesc=Function(Self:Pointer;Var D:VtTAdapterDesc):LongInt;stdcall;
+ VtTMQueryMem=Function(Self:Pointer;Node,Seg:LongWord;Var
+   VtInfo:VtTVideoMemInfo):LongInt;stdcall;
+ VtTMCreateBuffer=Function(Self,Desc,Init:Pointer;Var
+   Buf:Pointer):LongInt;stdcall;
+ VtTMCreateView=Function(Self,Res,Desc:Pointer;Var V:Pointer):LongInt;stdcall;
+ VtTMCreateCS=Function(Self,Code:Pointer;Len:PtrUInt;Link:Pointer;Var
+   Sh:Pointer):LongInt;stdcall;
+ VtTMMap=Function(Self,Res:Pointer;Sub,MType,MFlags:LongWord;Var
+   Mapped:VtTMapped):LongInt;stdcall;
+ VtTMUnmap=Procedure(Self,Res:Pointer;Sub:LongWord);stdcall;
+ VtTMDispatch=Procedure(Self:Pointer;X,Y,Z:LongWord);stdcall;
+ VtTMCopyRegion=Procedure(Self,Dst:Pointer;DstSub,DX,DY,DZ:LongWord;Src:Pointer;
+   SrcSub:LongWord;Box:Pointer);stdcall;
+ VtTMUpdate=Procedure(Self,Dst:Pointer;Sub:LongWord;Box,Data:Pointer;RP,
+   DP:LongWord);stdcall;
+ VtTMSetSRV=Procedure(Self:Pointer;Start,Num:LongWord;Views:Pointer);stdcall;
+ VtTMSetUAV=Procedure(Self:Pointer;Start,Num:LongWord;Views,
+   Counts:Pointer);stdcall;
+ VtTMSetShader=Procedure(Self,Sh,Inst:Pointer;VtN:LongWord);stdcall;
+ VtTMSetCB=Procedure(Self:Pointer;Start,Num:LongWord;Bufs:Pointer);stdcall;
+ VtTMBlobPtr=Function(Self:Pointer):Pointer;stdcall;
+ VtTMBlobSize=Function(Self:Pointer):PtrUInt;stdcall;
+
+Function LoadLibraryA(Name:PChar):PtrUInt;stdcall;external 'kernel32.dll' name
+  'LoadLibraryA';
+Function GetProcAddress(VtH:PtrUInt;Name:PChar):Pointer;stdcall;external
+  'kernel32.dll' name 'GetProcAddress';
+
+Const
+ VtGFactory:Pointer=Nil;
+ VtGNW:LongInt=0;
+ VtGWBytes:Int64=0;
+Var
+ VtGDev,VtGCtx:Pointer;
+ VtGShGemm:Pointer;
+ VtGCB,VtGXBuf,VtGXSrv,VtGYBuf,VtGYUav,VtGYStage:Pointer;
+ VtGXCap,VtGYCap:LongInt;
+ VtGWeights:Array of VtTGpuWeight;
+
+Function VtVTab(Obj:Pointer;VtI:LongInt):Pointer;
+Begin
+ Result:=VtPVTab(PPointer(Obj)^)^[VtI];
+End;
+
+Procedure VtComRelease(Obj:Pointer);
+Begin
+ If Obj<>Nil Then VtTMRelease(VtVTab(Obj,2))(Obj);
+End;
+
+Procedure VtGpuEnumDevices;
+Const
+ IID_Factory:VtTGuid4=(D1:$7b7166ec;D2:$21c7;D3:$44ae;D4:($b2,$1a,$c9,$ae,$32,$1a,
+   $e3,$69));
+ IID_Adapter3:VtTGuid4=(D1:$645967A4;D2:$1392;D3:$4310;D4:($A7,$98,$80,$53,$CE,
+   $3E,$93,$FD));
+Var
+ VtH:PtrUInt;
+ Fn:VtTFnFactory;
+ Ad,Ad3:Pointer;
+ VtI:LongInt;
+ D:VtTAdapterDesc;
+ VtInfo:VtTVideoMemInfo;
+ VtN:LongInt;
+ VtS:AnsiString;
+ VtJ:LongInt;
+Begin
+ If VtGpuEnumDone Then Exit;
+ VtGpuEnumDone:=True;
+ SetLength(VtGpuDevs,0);
+ VtH:=LoadLibraryA('dxgi.dll');
+ If VtH=0 Then Exit;
+ Fn:=VtTFnFactory(GetProcAddress(VtH,'CreateDXGIFactory'));
+ If not Assigned(Fn)Then Exit;
+ If Fn(@IID_Factory,VtGFactory)<0 Then Exit;
+ VtI:=0;
+ While VtTMEnumAdapters(VtVTab(VtGFactory,7))(VtGFactory,VtI,Ad)>=0 do Begin
+  FillChar(D,SizeOf(D),0);
+  If VtTMGetDesc(VtVTab(Ad,8))(Ad,D)>=0 Then Begin
+   If D.Vendor<>$1414 Then Begin
+    VtN:=Length(VtGpuDevs);
+    SetLength(VtGpuDevs,VtN+1);
+    VtS:='';
+    For VtJ:=0 to 127 do Begin
+     If D.Descr[VtJ]=0 Then Break;
+     If D.Descr[VtJ]<128 Then VtS:=VtS+Chr(D.Descr[VtJ])Else VtS:=VtS+'?';
+    End;
+    VtGpuDevs[VtN].Name:=VtS;
+    VtGpuDevs[VtN].Adapter:=Ad;
+    VtGpuDevs[VtN].Vendor:=D.Vendor;
+    VtGpuDevs[VtN].VRam:=D.DedVid;
+    VtGpuDevs[VtN].Free:=D.DedVid;
+    Ad3:=Nil;
+    If VtTMQuery(VtVTab(Ad,0))(Ad,@IID_Adapter3,Ad3)>=0 Then Begin
+     FillChar(VtInfo,SizeOf(VtInfo),0);
+     If VtTMQueryMem(VtVTab(Ad3,14))(Ad3,0,0,VtInfo)>=0 Then Begin
+      VtGpuDevs[VtN].Free:=Int64(VtInfo.Budget)-Int64(VtInfo.CurrentUsage);
+      If VtGpuDevs[VtN].Free<0 Then VtGpuDevs[VtN].Free:=0;
+      If Int64(VtInfo.Budget)>VtGpuDevs[VtN].VRam Then VtGpuDevs[VtN].VRam:=VtInfo.Budget;
+     End;
+     VtComRelease(Ad3);
+    End;
+   End;
+  End;
+  Inc(VtI);
+ End;
+End;
+
+Function VtGpuMakeBuffer(ByteWidth,Usage,Bind,CPU,Misc:LongWord;Init:Pointer;Var
+  Buf:Pointer):Boolean;
+Var
+ D:VtTBufDesc;
+ SD:VtTSubData;
+ VtP:Pointer;
+Begin
+ D.ByteWidth:=ByteWidth;D.Usage:=Usage;D.BindFlags:=Bind;D.CPUAccess:=CPU;
+   D.Misc:=Misc;D.Stride:=0;
+ VtP:=Nil;
+ If Init<>Nil Then Begin
+  SD.Mem:=Init;SD.Pitch:=0;SD.Slice:=0;
+  VtP:=@SD;
+ End;
+ Buf:=Nil;
+ Result:=VtTMCreateBuffer(VtVTab(VtGDev,3))(VtGDev,@D,VtP,Buf)>=0;
+End;
+
+Function VtGpuMakeSRV(Buf:Pointer;NumDwords:LongWord;Var V:Pointer):Boolean;
+Var
+ D:VtTViewDesc;
+Begin
+ FillChar(D,SizeOf(D),0);
+ D.Format:=39;D.Dim:=11;D.First:=0;D.Num:=NumDwords;D.Flags:=1;
+ V:=Nil;
+ Result:=VtTMCreateView(VtVTab(VtGDev,7))(VtGDev,Buf,@D,V)>=0;
+End;
+
+Function VtGpuMakeUAV(Buf:Pointer;NumDwords:LongWord;Var V:Pointer):Boolean;
+Var
+ D:VtTViewDesc;
+Begin
+ FillChar(D,SizeOf(D),0);
+ D.Format:=39;D.Dim:=1;D.First:=0;D.Num:=NumDwords;D.Flags:=1;
+ V:=Nil;
+ Result:=VtTMCreateView(VtVTab(VtGDev,8))(VtGDev,Buf,@D,V)>=0;
+End;
+
+Function VtGpuCompile(Const Src,Entry:AnsiString;Var Sh:Pointer;Var
+  VtErr:AnsiString):Boolean;
+Var
+ VtH:PtrUInt;
+ Fn:VtTFnCompile;
+ Code,EMsg:Pointer;
+ R:LongInt;
+Begin
+ Result:=False;
+ Sh:=Nil;
+ VtH:=LoadLibraryA('d3dcompiler_47.dll');
+ If VtH=0 Then Begin VtErr:='d3dcompiler_47.dll introuvable';Exit;End;
+ Fn:=VtTFnCompile(GetProcAddress(VtH,'D3DCompile'));
+ If not Assigned(Fn)Then Begin VtErr:='D3DCompile introuvable';Exit;End;
+ Code:=Nil;EMsg:=Nil;
+ R:=Fn(PChar(Src),Length(Src),'vton',Nil,Nil,PChar(Entry),'cs_5_0',1 shl 15,0,
+   Code,EMsg);
+ If R<0 Then Begin
+  VtErr:='compilation du shader '+Entry+' impossible';
+  If EMsg<>Nil Then VtErr:=VtErr+' : '+AnsiString(PChar(VtTMBlobPtr(VtVTab(EMsg,3))(EMsg)));
+  Exit;
+ End;
+ R:=VtTMCreateCS(VtVTab(VtGDev,18))(VtGDev,VtTMBlobPtr(VtVTab(Code,3))(Code),
+   VtTMBlobSize(VtVTab(Code,4))(Code),Nil,Sh);
+ VtComRelease(Code);
+ If R<0 Then Begin VtErr:='cr'#130'ation du shader '+Entry+' impossible';Exit;End;
+ Result:=True;
+End;
+
+{ Y[n][m] = somme_k X[n][k] * W[m][k] ; tuiles de 16 x 16 }
+Const
+ VtGpuShaderSrc=
+  'cbuffer C : register(b0) { uint K; uint M; uint N; uint Pad; };'#10
++  'ByteAddressBuffer W : register(t0);'#10
++  'ByteAddressBuffer X : register(t1);'#10
++  'RWByteAddressBuffer Y : register(u0);'#10
++  'groupshared float As[16][16];'#10
++  'groupshared float Bs[16][16];'#10
++  '[numthreads(16, 16, 1)]'#10
++  'void CSGemm(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)'#10
++  '{'#10
++  '  uint col = gid.x * 16 + tid.x;'#10
++  '  uint row = gid.y * 16 + tid.y;'#10
++  '  uint wr = gid.x * 16 + tid.y;'#10
++  '  float acc = 0.0f;'#10
++  '  for (uint k0 = 0; k0 < K; k0 += 16)'#10
++  '  {'#10
++  '    uint ka = k0 + tid.x;'#10
++  '    float av = 0.0f;'#10
++  '    float bv = 0.0f;'#10
++  '    if (row < N && ka < K) av = asfloat(X.Load((row * K + ka) * 4));'#10
++  '    if (wr < M && ka < K) bv = asfloat(W.Load((wr * K + ka) * 4));'#10
++  '    As[tid.y][tid.x] = av;'#10
++  '    Bs[tid.y][tid.x] = bv;'#10
++  '    GroupMemoryBarrierWithGroupSync();'#10
++  '    [unroll] for (uint kk = 0; kk < 16; kk++)'#10
++  '      acc += As[tid.y][kk] * Bs[tid.x][kk];'#10
++  '    GroupMemoryBarrierWithGroupSync();'#10
++  '  }'#10
++  '  if (row < N && col < M) Y.Store((row * M + col) * 4, asuint(acc));'#10
++  '}'#10;
+
+Function VtGpuInitDevice(Idx:LongInt;Var VtErr:AnsiString):Boolean;
+Var
+ VtH:PtrUInt;
+ Fn:VtTFnCreateDev;
+ FLv:LongWord;
+ FLs:LongWord;
+Begin
+ Result:=False;
+ VtH:=LoadLibraryA('d3d11.dll');
+ If VtH=0 Then Begin VtErr:='d3d11.dll introuvable';Exit;End;
+ Fn:=VtTFnCreateDev(GetProcAddress(VtH,'D3D11CreateDevice'));
+ If not Assigned(Fn)Then Begin VtErr:='D3D11CreateDevice introuvable';Exit;End;
+ FLv:=$B000;   { D3D_FEATURE_LEVEL_11_0 }
+ VtGDev:=Nil;VtGCtx:=Nil;
+ If Fn(VtGpuDevs[Idx].Adapter,0,0,0,@FLv,1,7,VtGDev,FLs,VtGCtx)<0 Then Begin
+  VtErr:='cr'#130'ation du p'#130'riph'#130'rique Direct3D 11 impossible';Exit;
+ End;
+ If not VtGpuCompile(VtGpuShaderSrc,'CSGemm',VtGShGemm,VtErr)Then Exit;
+ If not VtGpuMakeBuffer(16,0,4,0,0,Nil,VtGCB)Then Begin
+   VtErr:='cr'#130'ation du tampon constant impossible';Exit;End;
+ VtGXCap:=0;VtGYCap:=0;
+ Result:=True;
+End;
+
+Function VtGpuEnsureIO(XBytes,YBytes:LongInt):Boolean;
+Begin
+ Result:=False;
+ If XBytes>VtGXCap Then Begin
+  VtComRelease(VtGXSrv);VtComRelease(VtGXBuf);VtGXSrv:=Nil;VtGXBuf:=Nil;VtGXCap:=0;
+  XBytes:=(XBytes+65535)and(not 65535);
+  If not VtGpuMakeBuffer(XBytes,0,8,0,$20,Nil,VtGXBuf)Then Exit;
+  If not VtGpuMakeSRV(VtGXBuf,XBytes div 4,VtGXSrv)Then Exit;
+  VtGXCap:=XBytes;
+ End;
+ If YBytes>VtGYCap Then Begin
+  VtComRelease(VtGYUav);VtComRelease(VtGYBuf);VtComRelease(VtGYStage);VtGYUav:=Nil;
+    VtGYBuf:=Nil;VtGYStage:=Nil;VtGYCap:=0;
+  YBytes:=(YBytes+65535)and(not 65535);
+  If not VtGpuMakeBuffer(YBytes,0,$80,0,$20,Nil,VtGYBuf)Then Exit;
+  If not VtGpuMakeUAV(VtGYBuf,YBytes div 4,VtGYUav)Then Exit;
+  If not VtGpuMakeBuffer(YBytes,3,0,$20000,0,Nil,VtGYStage)Then Exit;
+  VtGYCap:=YBytes;
+ End;
+ Result:=True;
+End;
+
+{ cherche (ou envoie en memoire video) la matrice de poids W (M lignes de K) }
+Function VtGpuFindWeight(W:PSingle;Bytes:Int64;Var Srv:Pointer):Boolean;
+Var
+ VtI:LongInt;
+ Buf,V:Pointer;
+Begin
+ Result:=False;
+ For VtI:=0 to VtGNW-1 do If VtGWeights[VtI].Ptr=Pointer(W)Then Begin
+  Srv:=VtGWeights[VtI].Srv;
+  Result:=True;
+  Exit;
+ End;
+ If Bytes>=VtGpuMaxIO*2 Then Exit;
+ If VtGWBytes+Bytes>1500000000 Then Exit;
+ If not VtGpuMakeBuffer(Bytes,0,8,0,$20,W,Buf)Then Exit;
+ If not VtGpuMakeSRV(Buf,Bytes div 4,V)Then Begin VtComRelease(Buf);Exit;End;
+ If VtGNW>High(VtGWeights)Then SetLength(VtGWeights,VtGNW+64);
+ VtGWeights[VtGNW].Ptr:=Pointer(W);
+ VtGWeights[VtGNW].Srv:=V;
+ VtGWeights[VtGNW].Buf:=Buf;
+ VtGWeights[VtGNW].Bytes:=Bytes;
+ Inc(VtGNW);
+ Inc(VtGWBytes,Bytes);
+ Srv:=V;
+ Result:=True;
+End;
+
+Function VtGpuGemmRun(X,W,B,Y:PSingle;VtN,K,VtM:LongInt;Force:Boolean):Boolean;
+Var
+ R0,Rows,MaxRows,VtI,VtJ:LongInt;
+ CB:VtTCBData;
+ Box:VtTBox;
+ WSrv,Views,UA,Cbuf:Pointer;
+ Mp:VtTMapped;
+ Src,Dst:PSingle;
+Begin
+ Result:=False;
+ If not VtGpuOn Then Exit;
+ If(not Force)and(Int64(VtN)*K*VtM<VtGpuMinWork*16)Then Exit;
+ If(K<=0)or(VtM<=0)or(VtN<=0)Then Exit;
+ If not VtGpuFindWeight(W,Int64(VtM)*K*4,WSrv)Then Exit;
+ MaxRows:=VtGpuMaxIO div(4*VtIMax(K,VtM));
+ If MaxRows<1 Then Exit;
+ If MaxRows>65535*16 Then MaxRows:=65535*16;
+ R0:=0;
+ While R0<VtN do Begin
+  Rows:=VtN-R0;
+  If Rows>MaxRows Then Rows:=MaxRows;
+  If not VtGpuEnsureIO(Rows*K*4,Rows*VtM*4)Then Begin VtGpuOn:=False;Exit;End;
+  CB.K:=K;CB.VtM:=VtM;CB.VtN:=Rows;CB.Pad:=0;
+  VtTMUpdate(VtVTab(VtGCtx,48))(VtGCtx,VtGCB,0,Nil,@CB,0,0);
+  FillChar(Box,SizeOf(Box),0);
+  Box.Right:=Rows*K*4;Box.Bottom:=1;Box.Back:=1;
+  VtTMUpdate(VtVTab(VtGCtx,48))(VtGCtx,VtGXBuf,0,@Box,X+Int64(R0)*K,0,0);
+  VtTMSetShader(VtVTab(VtGCtx,69))(VtGCtx,VtGShGemm,Nil,0);
+  Cbuf:=VtGCB;
+  VtTMSetCB(VtVTab(VtGCtx,71))(VtGCtx,0,1,@Cbuf);
+  Views:=WSrv;
+  VtTMSetSRV(VtVTab(VtGCtx,67))(VtGCtx,0,1,@Views);
+  Views:=VtGXSrv;
+  VtTMSetSRV(VtVTab(VtGCtx,67))(VtGCtx,1,1,@Views);
+  UA:=VtGYUav;
+  VtTMSetUAV(VtVTab(VtGCtx,68))(VtGCtx,0,1,@UA,Nil);
+  VtTMDispatch(VtVTab(VtGCtx,41))(VtGCtx,(VtM+15)div 16,(Rows+15)div 16,1);
+  Box.Right:=Rows*VtM*4;
+  VtTMCopyRegion(VtVTab(VtGCtx,46))(VtGCtx,VtGYStage,0,0,0,0,VtGYBuf,0,@Box);
+  If VtTMMap(VtVTab(VtGCtx,14))(VtGCtx,VtGYStage,0,1,0,Mp)<0 Then Begin
+   VtGpuOn:=False;
+   Exit;
+  End;
+  Src:=PSingle(Mp.Data);
+  Dst:=Y+Int64(R0)*VtM;
+  If B<>Nil Then Begin
+   For VtI:=0 to Rows-1 do
+    For VtJ:=0 to VtM-1 do Dst[Int64(VtI)*VtM+VtJ]:=Src[Int64(VtI)*VtM+VtJ]+B[VtJ];
+  End
+   Else Move(Src^,Dst^,Int64(Rows)*VtM*4);
+  VtTMUnmap(VtVTab(VtGCtx,15))(VtGCtx,VtGYStage,0);
+  Inc(R0,Rows);
+ End;
+ Inc(VtGpuCalls);
+ Inc(VtGpuBytes,Int64(VtN)*(K+VtM)*4);
+ Result:=True;
+End;
+
+Function VtGpuGemm(X,W,B,Y:PSingle;VtN,K,VtM:LongInt):Boolean;
+Begin
+ Result:=VtGpuGemmRun(X,W,B,Y,VtN,K,VtM,False);
+End;
+
+{ compare le GPU au CPU sur un petit produit matriciel (tailles non multiples de
+  16) }
+Function VtGpuSelfTest:Boolean;
+Const
+ TN=45;TK=70;TM=37;
+Var
+ X,W,B,Yc,Yg:PSingle;
+ VtI:LongInt;
+ Mx,D:Double;
+Begin
+ Result:=False;
+ X:=VtAllocF(TN*TK);W:=VtAllocF(TM*TK);B:=VtAllocF(TM);
+ Yc:=VtAllocF(TN*TM);Yg:=VtAllocF(TN*TM);
+ For VtI:=0 to TN*TK-1 do X[VtI]:=((VtI*7919)mod 2003)/1001.5-1.0;
+ For VtI:=0 to TM*TK-1 do W[VtI]:=((VtI*104729)mod 3001)/1500.5-1.0;
+ For VtI:=0 to TM-1 do B[VtI]:=VtI/37.0-0.5;
+ VtGemmCPU(X,W,B,Yc,TN,TK,TM);
+ If VtGpuGemmRun(X,W,B,Yg,TN,TK,TM,True)Then Begin
+  Mx:=0;
+  For VtI:=0 to TN*TM-1 do Begin
+   D:=Abs(Yc[VtI]-Yg[VtI]);
+   If D>Mx Then Mx:=D;
+  End;
+  Result:=Mx<0.001;
+  If Mx>=0.001 Then VtWarn(
+    'le test du GPU '#133' donn'#130' un r'#130'sultat incorrect (erreur '+
+    VtFStr(Mx,5)+')');
+ End;
+ FreeMem(X);FreeMem(W);FreeMem(B);FreeMem(Yc);FreeMem(Yg);
+ VtGpuCalls:=0;VtGpuBytes:=0;
+End;
+
+{ DevIdx : -1 = automatique (le plus de memoire video) }
+Function VtGpuSetup(DevIdx:LongInt;Var VtErr:AnsiString):Boolean;
+Var
+ VtI,Best:LongInt;
+Begin
+ Result:=False;
+ VtGpuOn:=False;
+ VtGpuEnumDevices;
+ If Length(VtGpuDevs)=0 Then Begin
+   VtErr:='aucun p'#130'riph'#130'rique Direct3D 11 d'#130'tect'#130;Exit;End;
+ If(DevIdx>=0)and(DevIdx<Length(VtGpuDevs))Then Best:=DevIdx
+ Else Begin
+  Best:=0;
+  For VtI:=1 to High(VtGpuDevs)do If VtGpuDevs[VtI].VRam>VtGpuDevs[Best].VRam Then
+    Best:=VtI;
+ End;
+ If not VtGpuInitDevice(Best,VtErr)Then Exit;
+ VtGpuOn:=True;
+ VtGpuName:=VtGpuDevs[Best].Name;
+ If not VtGpuSelfTest Then Begin
+  VtGpuOn:=False;
+  VtErr:='le test de validation du GPU a '#130'chou'#130;
+  Exit;
+ End;
+ Result:=True;
+End;
+
+Procedure VtGpuPrintDevices;
+Var
+ VtI:LongInt;
+Begin
+ VtGpuEnumDevices;
+ WriteLn('P'#130'riph'#130'riques Direct3D 11 :');
+ If Length(VtGpuDevs)=0 Then WriteLn('  (aucun)');
+ For VtI:=0 to High(VtGpuDevs)do
+  WriteLn('  ',VtI,' : ',VtGpuDevs[VtI].Name,' (',VtGpuDevs[VtI].VRam shr 20,' Mio, ',
+    VtGpuDevs[VtI].Free shr 20,' Mio libres)');
+End;
+{$ELSE}
+Function VtGpuGemm(X,W,B,Y:PSingle;VtN,K,VtM:LongInt):Boolean;
+Begin
+ Result:=False;
+End;
+
+Function VtGpuSetup(DevIdx:LongInt;Var VtErr:AnsiString):Boolean;
+Begin
+ VtGpuOn:=False;
+ VtErr:='Direct3D 11 n''est disponible que sous Windows';
+ Result:=False;
+End;
+
+Procedure VtGpuPrintDevices;
+Begin
+ WriteLn('P'#130'riph'#130'riques Direct3D 11 :');
+ WriteLn('  (Direct3D 11 n''est disponible que sous Windows)');
+End;
+{$ENDIF}
+
+{ produit matriciel : GPU si actif et assez gros, sinon CPU }
+Procedure VtGemm(X,W,B,Y:PSingle;VtN,K,VtM:LongInt);
+Begin
+ If VtGpuOn Then
+  If VtGpuGemm(X,W,B,Y,VtN,K,VtM)Then Exit;
+ VtGemmCPU(X,W,B,Y,VtN,K,VtM);
+End;
+
+{ ------------------------------------------------------------------ }
+{ Fichiers .safetensors                                               }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTTensor=Record
+  Name:AnsiString;
+  DType:AnsiString;
+  NDim:LongInt;
+  Dims:Array[0..5]of LongInt;
+  Off0,Off1:Int64;
+  Data:PSingle;
+  Count:Int64;
+ End;
+
+Const
+ VtStN:LongInt=0;
+Var
+ VtStT:Array of VtTTensor;
+
+Function VtHalfToSingle(VtH:Word):Single;
+Var
+ VtS,VtM:LongWord;
+ E:LongInt;
+ R:LongWord;
+ F:Single;
+Begin
+ VtS:=(VtH shr 15)and 1;
+ E:=(VtH shr 10)and 31;
+ VtM:=VtH and 1023;
+ If E=0 Then Begin
+  If VtM=0 Then R:=VtS shl 31
+  Else Begin
+   E:=1;
+   While(VtM and 1024)=0 do Begin VtM:=VtM shl 1;Dec(E);End;
+   VtM:=VtM and 1023;
+   R:=(VtS shl 31)or(LongWord(E+112)shl 23)or(VtM shl 13);
+  End;
+ End
+  Else If E=31 Then R:=(VtS shl 31)or($FF shl 23)or(VtM shl 13)
+  Else R:=(VtS shl 31)or(LongWord(E+112)shl 23)or(VtM shl 13);
+ Move(R,F,4);
+ Result:=F;
+End;
+
+Function VtStFind(Const Name:AnsiString):LongInt;
+Var
+ VtI:LongInt;
+Begin
+ Result:=-1;
+ For VtI:=0 to VtStN-1 do If VtStT[VtI].Name=Name Then Begin Result:=VtI;Exit;End;
+End;
+
+{ analyse de l'en-tete JSON des tenseurs }
+Function VtStParseHeader(Const VtH:AnsiString;Var VtErr:AnsiString):Boolean;
+Var
+ VtP:LongInt;
+
+ Procedure Ws;
+ Begin
+  While(VtP<=Length(VtH))and(VtH[VtP]in[' ',#9,#10,#13])do Inc(VtP);
+ End;
+
+ Function ReadStr:AnsiString;
+ Var
+  R:AnsiString;
+ Begin
+  R:='';
+  If(VtP<=Length(VtH))and(VtH[VtP]='"')Then Inc(VtP);
+  While(VtP<=Length(VtH))and(VtH[VtP]<>'"')do Begin
+   If VtH[VtP]='\' Then Begin
+    Inc(VtP);
+    If(VtP<=Length(VtH))and(VtH[VtP]='u')Then Begin R:=R+'?';Inc(VtP,4);End
+    Else If VtP<=Length(VtH)Then R:=R+VtH[VtP];
+   End
+    Else R:=R+VtH[VtP];
+   Inc(VtP);
+  End;
+  Inc(VtP);
+  ReadStr:=R;
+ End;
+
+ Function ReadNum:Int64;
+ Var
+  V:Int64;
+ Begin
+  V:=0;
+  While(VtP<=Length(VtH))and(VtH[VtP]in['0'..'9'])do Begin
+   V:=V*10+Ord(VtH[VtP])-48;
+   Inc(VtP);
+  End;
+  ReadNum:=V;
+ End;
+
+ Procedure SkipValue;
+ Var
+  Depth:LongInt;
+ Begin
+  Ws;
+  If VtP>Length(VtH)Then Exit;
+  If VtH[VtP]='"' Then Begin ReadStr;Exit;End;
+  If VtH[VtP]in['{','[']Then Begin
+   Depth:=0;
+   Repeat
+    If VtH[VtP]='"' Then ReadStr
+    Else Begin
+     If VtH[VtP]in['{','[']Then Inc(Depth)
+     Else If VtH[VtP]in['}',']']Then Dec(Depth);
+     Inc(VtP);
+    End;
+   Until(Depth=0)or(VtP>Length(VtH));
+   Exit;
+  End;
+  While(VtP<=Length(VtH))and not(VtH[VtP]in[',','}',']'])do Inc(VtP);
+ End;
+
+ Procedure ParseTensor(Const Nm:AnsiString);
+ Var
+  Key:AnsiString;
+  VtT:VtTTensor;
+ Begin
+  FillChar(VtT.Dims,SizeOf(VtT.Dims),0);
+  VtT.Name:=Nm;VtT.DType:='';VtT.NDim:=0;VtT.Off0:=0;VtT.Off1:=0;VtT.Data:=Nil;VtT.Count:=1;
+  Ws;
+  If VtH[VtP]<>'{' Then Begin SkipValue;Exit;End;
+  Inc(VtP);
+  While VtP<=Length(VtH)do Begin
+   Ws;
+   If VtH[VtP]='}' Then Begin Inc(VtP);Break;End;
+   If VtH[VtP]=',' Then Begin Inc(VtP);Continue;End;
+   Key:=ReadStr;
+   Ws;Inc(VtP);Ws;
+   If Key='dtype' Then VtT.DType:=ReadStr
+   Else If Key='shape' Then Begin
+    Inc(VtP);
+    While(VtP<=Length(VtH))and(VtH[VtP]<>']')do Begin
+     Ws;
+     If VtH[VtP]=',' Then Inc(VtP)
+     Else If VtH[VtP]in['0'..'9']Then Begin
+      If VtT.NDim<6 Then Begin VtT.Dims[VtT.NDim]:=ReadNum;
+        VtT.Count:=VtT.Count*VtT.Dims[VtT.NDim];Inc(VtT.NDim);End Else ReadNum;
+     End
+      Else Inc(VtP);
+    End;
+    Inc(VtP);
+   End
+    Else If Key='data_offsets' Then Begin
+     Inc(VtP);Ws;VtT.Off0:=ReadNum;Ws;If VtH[VtP]=',' Then Inc(VtP);Ws;VtT.Off1:=ReadNum;Ws;
+     If VtH[VtP]=']' Then Inc(VtP);
+    End
+     Else SkipValue;
+  End;
+  If VtStN>High(VtStT)Then SetLength(VtStT,VtStN+256);
+  VtStT[VtStN]:=VtT;
+  Inc(VtStN);
+ End;
+
+Var
+ Key:AnsiString;
+Begin
+ Result:=False;
+ VtP:=1;
+ Ws;
+ If(VtP>Length(VtH))or(VtH[VtP]<>'{')Then Begin
+   VtErr:='en-t'#136'te safetensors invalide';Exit;End;
+ Inc(VtP);
+ While VtP<=Length(VtH)do Begin
+  Ws;
+  If VtH[VtP]='}' Then Break;
+  If VtH[VtP]=',' Then Begin Inc(VtP);Continue;End;
+  Key:=ReadStr;
+  Ws;
+  If(VtP<=Length(VtH))and(VtH[VtP]=':')Then Inc(VtP);
+  If Key='__metadata__' Then SkipValue Else ParseTensor(Key);
+ End;
+ Result:=VtStN>0;
+ If VtStN=0 Then VtErr:='aucun tenseur dans le fichier safetensors';
+End;
+
+{ charge tous les tenseurs flottants (F32, F16, BF16) en F32 }
+Function VtStLoad(Const Path:AnsiString;Var VtErr:AnsiString):Boolean;
+Var
+ F:File;
+ Hdr:Array[0..7]of Byte;
+ HLen:Int64;
+ VtH:AnsiString;
+ Got:LongInt;
+ VtI:LongInt;
+ Base,Remain:Int64;
+ VtTmp:PWord;
+ VtN,Chunk,VtJ:LongInt;
+ VtT:^VtTTensor;
+ W:Word;
+ Sf:Single;
+ Bits:LongWord;
+Begin
+ Result:=False;
+ VtErr:='';
+ VtStN:=0;SetLength(VtStT,0);
+ Assign(F,Path);
+ Reset(F,1);
+ If IOResult<>0 Then Begin VtErr:='impossible d''ouvrir '+Path;Exit;End;
+ BlockRead(F,Hdr[0],8,Got);
+ If Got<>8 Then Begin VtErr:='fichier safetensors trop court';Close(F);Exit;End;
+ HLen:=Int64(VtLE32(@Hdr[0]))+(Int64(VtLE32(@Hdr[4]))shl 32);
+ If(HLen<2)or(HLen>100000000)Then Begin
+   VtErr:='en-t'#136'te safetensors invalide';Close(F);Exit;End;
+ SetLength(VtH,HLen);
+ BlockRead(F,VtH[1],HLen,Got);
+ If Got<>HLen Then Begin VtErr:='en-t'#136'te safetensors tronqu'#130;Close(F)
+   ;Exit;End;
+ If not VtStParseHeader(VtH,VtErr)Then Begin Close(F);Exit;End;
+ Base:=8+HLen;
+ VtTmp:=PWord(VtAllocBytes(2*1048576));
+ For VtI:=0 to VtStN-1 do Begin
+  VtT:=@VtStT[VtI];
+  If(VtT^.DType<>'F32')and(VtT^.DType<>'F16')and(VtT^.DType<>'BF16')Then Continue;
+  If VtT^.Count<=0 Then Continue;
+  VtT^.Data:=VtAllocF(VtT^.Count);
+  Seek(F,Base+VtT^.Off0);
+  If VtT^.DType='F32' Then Begin
+   Remain:=VtT^.Count*4;
+   VtN:=0;
+   While Remain>0 do Begin
+    Chunk:=1048576;
+    If Remain<Chunk Then Chunk:=Remain;
+    BlockRead(F,(PByte(VtT^.Data)+VtN)^,Chunk,Got);
+    If Got<=0 Then Begin VtErr:='fichier safetensors tronqu'#130;Close(F);Exit;
+      End;
+    Inc(VtN,Got);Dec(Remain,Got);
+   End;
+  End
+   Else Begin
+    Remain:=VtT^.Count;
+    VtN:=0;
+    While Remain>0 do Begin
+     Chunk:=1048576;
+     If Remain<Chunk Then Chunk:=Remain;
+     BlockRead(F,VtTmp^,Chunk*2,Got);
+     If Got<>Chunk*2 Then Begin VtErr:='fichier safetensors tronqu'#130;Close(F)
+       ;Exit;End;
+     If VtT^.DType='F16' Then
+      For VtJ:=0 to Chunk-1 do VtT^.Data[VtN+VtJ]:=VtHalfToSingle(VtTmp[VtJ])
+     Else
+      For VtJ:=0 to Chunk-1 do Begin
+       Bits:=LongWord(VtTmp[VtJ])shl 16;
+       Move(Bits,Sf,4);
+       VtT^.Data[VtN+VtJ]:=Sf;
+      End;
+     Inc(VtN,Chunk);Dec(Remain,Chunk);
+    End;
+   End;
+ End;
+ FreeMem(VtTmp);
+ Close(F);
+ Result:=True;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Libelles des classes et categories de vetements                      }
+{ ------------------------------------------------------------------ }
+
+Const
+ VtcBg=0;cHat=1;cHair=2;cGlasses=3;cTop=4;cSkirt=5;cPants=6;cDress=7;cBelt=8;
+ VtcShoes=9;cFace=10;cLegs=11;cArms=12;cBag=13;cScarf=14;cSkin=15;cOther=16;
+ VtNumCat=17;
+ VtCatNames:Array[0..VtNumCat-1]of AnsiString=('arri'#138're-plan',
+   'chapeau','cheveux',
+   'lunettes','haut','jupe','pantalon','robe','ceinture','chaussures','visage',
+   'jambes','bras','sac',#130'charpe','peau','autre');
+ { noms des 18 classes du modele segformer_b2_clothes }
+ VtDefaultLabels:Array[0..17]of AnsiString=('Background','Hat','Hair',
+   'Sunglasses',
+   'Upper-clothes','Skirt','Pants','Dress','Belt','Left-shoe',
+     'Right-shoe','Face',
+   'Left-leg','Right-leg','Left-arm','Right-arm','Bag','Scarf');
+
+Var
+ VtLabelNames:Array of AnsiString;
+ VtLabelCat:Array of LongInt;
+
+Function VtHasWord(Const VtS,W:AnsiString):Boolean;
+Begin
+ Result:=Pos(W,VtS)>0;
+End;
+
+{ categorie d'un libelle de classe }
+Function VtCategoryOfLabel(Const Name:AnsiString):LongInt;
+Var
+ VtS:AnsiString;
+Begin
+ VtS:=VtLoStr(Name);
+ If VtHasWord(VtS,'background')or(VtS='bg')or VtHasWord(VtS,'backgr')Then
+   Result:=VtcBg
+ Else If VtHasWord(VtS,'sunglass')or VtHasWord(VtS,'glasses')or(VtS='eyeglasses')
+   Then Result:=cGlasses
+ Else If VtHasWord(VtS,'hat')or VtHasWord(VtS,'cap')or VtHasWord(VtS,'helmet')
+   Then Result:=cHat
+ Else If VtHasWord(VtS,'hair')Then Result:=cHair
+ Else If VtHasWord(VtS,'upper')or VtHasWord(VtS,'coat')or VtHasWord(VtS,'jacket')or
+   VtHasWord(VtS,'shirt')or(VtS='top')Then Result:=cTop
+ Else If VtHasWord(VtS,'skirt')Then Result:=cSkirt
+ Else If VtHasWord(VtS,'pant')or VtHasWord(VtS,'trouser')or VtHasWord(VtS,'jean')or
+   VtHasWord(VtS,'short')or VtHasWord(VtS,'lower')Then Result:=cPants
+ Else If VtHasWord(VtS,'dress')or VtHasWord(VtS,'jumpsuit')or VtHasWord(VtS,'romper')
+   Then Result:=cDress
+ Else If VtHasWord(VtS,'belt')Then Result:=cBelt
+ Else If VtHasWord(VtS,'shoe')or VtHasWord(VtS,'boot')or VtHasWord(VtS,'sneaker')or
+   VtHasWord(VtS,'footwear')Then Result:=VtcShoes
+ Else If VtHasWord(VtS,'face')or VtHasWord(VtS,'head')Then Result:=cFace
+ Else If VtHasWord(VtS,'leg')Then Result:=cLegs
+ Else If VtHasWord(VtS,'arm')or VtHasWord(VtS,'hand')Then Result:=cArms
+ Else If VtHasWord(VtS,'bag')or VtHasWord(VtS,'purse')Then Result:=cBag
+ Else If VtHasWord(VtS,'scarf')or VtHasWord(VtS,'tie')Then Result:=cScarf
+ Else If VtHasWord(VtS,'skin')or VtHasWord(VtS,'neck')or VtHasWord(VtS,'torso')
+   Then Result:=cSkin
+ Else Result:=cOther;
+End;
+
+{ lit id2label dans un config.json (HuggingFace) ; faux si absent }
+Function VtLoadLabelsFromConfig(Const Path:AnsiString;L:LongInt):Boolean;
+Var
+ VtP:PByte;
+ VtN,VtI,VtJ,Id,Code:LongInt;
+ VtS,Num,Nm:AnsiString;
+ Q:LongInt;
+Begin
+ Result:=False;
+ If not VtReadFileBytes(Path,VtP,VtN)Then Exit;
+ SetLength(VtS,VtN);
+ If VtN>0 Then Move(VtP^,VtS[1],VtN);
+ FreeMem(VtP);
+ Q:=Pos('"id2label"',VtS);
+ If Q=0 Then Exit;
+ VtI:=Q+10;
+ While(VtI<=VtN)and(VtS[VtI]<>'{')do Inc(VtI);
+ Inc(VtI);
+ SetLength(VtLabelNames,L);
+ For VtJ:=0 to L-1 do VtLabelNames[VtJ]:='';
+ While VtI<=VtN do Begin
+  While(VtI<=VtN)and(VtS[VtI]<>'"')and(VtS[VtI]<>'}')do Inc(VtI);
+  If(VtI>VtN)or(VtS[VtI]='}')Then Break;
+  Inc(VtI);
+  Num:='';
+  While(VtI<=VtN)and(VtS[VtI]<>'"')do Begin Num:=Num+VtS[VtI];Inc(VtI);End;
+  Inc(VtI);
+  While(VtI<=VtN)and(VtS[VtI]<>'"')do Inc(VtI);
+  Inc(VtI);
+  Nm:='';
+  While(VtI<=VtN)and(VtS[VtI]<>'"')do Begin Nm:=Nm+VtS[VtI];Inc(VtI);End;
+  Inc(VtI);
+  Val(Num,Id,Code);
+  If(Code=0)and(Id>=0)and(Id<L)Then VtLabelNames[Id]:=Nm;
+ End;
+ For VtJ:=0 to L-1 do If VtLabelNames[VtJ]='' Then Exit;
+ Result:=True;
+End;
+
+Procedure VtSetupLabels(L:LongInt;Const VtConfigPath:AnsiString);
+Var
+ VtI:LongInt;
+ Ok:Boolean;
+Begin
+ Ok:=False;
+ If(VtConfigPath<>'')and VtFileExistsP(VtConfigPath)Then
+   Ok:=VtLoadLabelsFromConfig(VtConfigPath,L);
+ If not Ok Then Begin
+  SetLength(VtLabelNames,L);
+  For VtI:=0 to L-1 do
+   If VtI<=High(VtDefaultLabels)Then VtLabelNames[VtI]:=VtDefaultLabels[VtI]
+   Else VtLabelNames[VtI]:='class'+VtIStr(VtI);
+ End;
+ SetLength(VtLabelCat,L);
+ For VtI:=0 to L-1 do VtLabelCat[VtI]:=VtCategoryOfLabel(VtLabelNames[VtI]);
+End;
+
+{ ------------------------------------------------------------------ }
+{ SegFormer : encodeur hierarchique de transformeurs + decodeur MLP    }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTSegBlock=Record
+  LN1W,LN1B,LN2W,LN2B:PSingle;
+  QW,QB,KW,KB,VW,VB,OW,OB:PSingle;
+  SRW,SRB,SRNW,SRNB:PSingle;
+  D1W,D1B,DWT,DWB,D2W,D2B:PSingle;   { DWT : noyau 3x3 transpose [9][4C] }
+ End;
+ VtTSegStage=Record
+  C,Cin,Depth,Heads,SR,Mlp:LongInt;
+  PK,PS,PP:LongInt;                  { noyau, pas et marge du plongement de
+    patchs }
+  PEW,PEB,PENW,PENB,NW,NB:PSingle;
+  Blocks:Array of VtTSegBlock;
+ End;
+ VtTSegModel=Record
+  Stage:Array[0..3]of VtTSegStage;
+  Dec,NumLabels:LongInt;
+  Comp:Array[0..3]of PSingle;        { (Fuse_i x LinC_i) : [Dec][C_i] }
+  BnScale,BnShift:PSingle;
+  ClsW,ClsB:PSingle;
+  Name:AnsiString;
+ End;
+
+Const
+ VtSegHeads:Array[0..3]of LongInt=(1,2,5,8);
+ VtSegSR:Array[0..3]of LongInt=(8,4,2,1);
+
+Var
+ VtSegErr:AnsiString;
+
+Function VtSegNeed(Const Name:AnsiString;Count:Int64):PSingle;
+Var
+ VtI:LongInt;
+Begin
+ Result:=Nil;
+ VtI:=VtStFind(Name);
+ If VtI<0 Then Begin
+  If VtSegErr='' Then VtSegErr:='tenseur absent du mod'#138'le : '+Name;
+  Exit;
+ End;
+ If(VtStT[VtI].Data=Nil)or(VtStT[VtI].Count<>Count)Then Begin
+  If VtSegErr='' Then VtSegErr:='tenseur de taille inattendue : '+Name;
+  Exit;
+ End;
+ Result:=VtStT[VtI].Data;
+End;
+
+{ charge le modele depuis les tenseurs deja lus ; deduit la configuration des
+  formes }
+Function VtSegBuild(Var VtM:VtTSegModel;Const VtConfigPath:AnsiString):Boolean;
+Var
+ Pfx,Nm,Bp:AnsiString;
+ VtI,VtJ,K,Ix,L,C,D,Mlp:LongInt;
+ VtS:^VtTSegStage;
+ B:^VtTSegBlock;
+ Fuse,LinW,LinB,Ct,Blk,Cm,VtG,Bt,Mn,Vr,Tw,Src:PSingle;
+ BSum:PSingle;
+ Sc:Single;
+ VtT,VtTmp:PSingle;
+Begin
+ Result:=False;
+ VtSegErr:='';
+ FillChar(VtM,SizeOf(VtM),0);
+ Pfx:='segformer.';
+ If VtStFind(Pfx+'encoder.patch_embeddings.0.proj.weight')<0 Then Begin
+  Pfx:='';
+  If VtStFind(Pfx+'encoder.patch_embeddings.0.proj.weight')<0 Then Begin
+   VtSegErr:='mod'#138'le non reconnu : un SegFormer au format HuggingFace '+
+     '(.safetensors) est attendu';
+   Exit;
+  End;
+ End;
+ For VtI:=0 to 3 do Begin
+  VtS:=@VtM.Stage[VtI];
+  Ix:=VtStFind(Pfx+'encoder.patch_embeddings.'+VtIStr(VtI)+'.proj.weight');
+  If Ix<0 Then Begin
+    VtSegErr:='mod'#138'le incomplet : plongement de patchs '+VtIStr(VtI);Exit;End;
+  If VtStT[Ix].NDim<>4 Then Begin
+    VtSegErr:='forme inattendue du plongement de patchs';Exit;End;
+  VtS^.C:=VtStT[Ix].Dims[0];VtS^.Cin:=VtStT[Ix].Dims[1];VtS^.PK:=VtStT[Ix].Dims[2];
+  VtS^.PP:=VtS^.PK div 2;
+  If VtI=0 Then VtS^.PS:=4 Else VtS^.PS:=2;
+  VtS^.Heads:=VtSegHeads[VtI];VtS^.SR:=VtSegSR[VtI];
+  If(VtS^.C mod VtS^.Heads)<>0 Then Begin
+    VtSegErr:='nombre de t'#136'tes d''attention incompatible';Exit;End;
+  VtS^.Depth:=0;
+  While VtStFind(Pfx+'encoder.block.'+VtIStr(VtI)+'.'+VtIStr(VtS^.Depth)
+    +'.layer_norm_1.weight')>=0 do Inc(VtS^.Depth);
+  If VtS^.Depth=0 Then Begin
+    VtSegErr:='mod'#138'le incomplet : aucun bloc dans l''.'#130'tage '+VtIStr(VtI)
+    ;Exit;End;
+  C:=VtS^.C;
+  Nm:=Pfx+'encoder.patch_embeddings.'+VtIStr(VtI)+'.';
+  VtS^.PEW:=VtSegNeed(Nm+'proj.weight',Int64(C)*VtS^.Cin*VtS^.PK*VtS^.PK);
+  VtS^.PEB:=VtSegNeed(Nm+'proj.bias',C);
+  VtS^.PENW:=VtSegNeed(Nm+'layer_norm.weight',C);
+  VtS^.PENB:=VtSegNeed(Nm+'layer_norm.bias',C);
+  VtS^.NW:=VtSegNeed(Pfx+'encoder.layer_norm.'+VtIStr(VtI)+'.weight',C);
+  VtS^.NB:=VtSegNeed(Pfx+'encoder.layer_norm.'+VtIStr(VtI)+'.bias',C);
+  Ix:=VtStFind(Pfx+'encoder.block.'+VtIStr(VtI)+'.0.mlp.dense1.weight');
+  If Ix<0 Then Begin VtSegErr:='mod'#138'le incomplet : mlp.dense1';Exit;End;
+  VtS^.Mlp:=VtStT[Ix].Dims[0];
+  Mlp:=VtS^.Mlp;
+  SetLength(VtS^.Blocks,VtS^.Depth);
+  For VtJ:=0 to VtS^.Depth-1 do Begin
+   B:=@VtS^.Blocks[VtJ];
+   Bp:=Pfx+'encoder.block.'+VtIStr(VtI)+'.'+VtIStr(VtJ)+'.';
+   B^.LN1W:=VtSegNeed(Bp+'layer_norm_1.weight',C);
+     B^.LN1B:=VtSegNeed(Bp+'layer_norm_1.bias',C);
+   B^.LN2W:=VtSegNeed(Bp+'layer_norm_2.weight',C);
+     B^.LN2B:=VtSegNeed(Bp+'layer_norm_2.bias',C);
+   B^.QW:=VtSegNeed(Bp+'attention.self.query.weight',Int64(C)*C);
+     B^.QB:=VtSegNeed(Bp+'attention.self.query.bias',C);
+   B^.KW:=VtSegNeed(Bp+'attention.self.key.weight',Int64(C)*C);
+     B^.KB:=VtSegNeed(Bp+'attention.self.key.bias',C);
+   B^.VW:=VtSegNeed(Bp+'attention.self.value.weight',Int64(C)*C);
+     B^.VB:=VtSegNeed(Bp+'attention.self.value.bias',C);
+   B^.OW:=VtSegNeed(Bp+'attention.output.dense.weight',Int64(C)*C);
+     B^.OB:=VtSegNeed(Bp+'attention.output.dense.bias',C);
+   If VtS^.SR>1 Then Begin
+    B^.SRW:=VtSegNeed(Bp+'attention.self.sr.weight',Int64(C)*C*VtS^.SR*VtS^.SR);
+    B^.SRB:=VtSegNeed(Bp+'attention.self.sr.bias',C);
+    B^.SRNW:=VtSegNeed(Bp+'attention.self.layer_norm.weight',C);
+    B^.SRNB:=VtSegNeed(Bp+'attention.self.layer_norm.bias',C);
+   End;
+   B^.D1W:=VtSegNeed(Bp+'mlp.dense1.weight',Int64(Mlp)*C);
+     B^.D1B:=VtSegNeed(Bp+'mlp.dense1.bias',Mlp);
+   B^.D2W:=VtSegNeed(Bp+'mlp.dense2.weight',Int64(C)*Mlp);
+     B^.D2B:=VtSegNeed(Bp+'mlp.dense2.bias',C);
+   Tw:=VtSegNeed(Bp+'mlp.dwconv.dwconv.weight',Int64(Mlp)*9);
+   B^.DWB:=VtSegNeed(Bp+'mlp.dwconv.dwconv.bias',Mlp);
+   If Tw<>Nil Then Begin
+    B^.DWT:=VtAllocF(Int64(Mlp)*9);
+    For K:=0 to Mlp-1 do
+     For L:=0 to 8 do B^.DWT[L*Mlp+K]:=Tw[K*9+L];
+   End;
+   If VtSegErr<>'' Then Begin Exit;End;
+  End;
+  If VtSegErr<>'' Then Exit;
+ End;
+ { decodeur }
+ Ix:=VtStFind('decode_head.classifier.weight');
+ If Ix<0 Then Begin
+   VtSegErr:='mod'#138'le incomplet : decode_head.classifier';Exit;End;
+ VtM.NumLabels:=VtStT[Ix].Dims[0];
+ D:=VtStT[Ix].Dims[1];
+ VtM.Dec:=D;
+ Fuse:=VtSegNeed('decode_head.linear_fuse.weight',Int64(D)*4*D);
+ VtG:=VtSegNeed('decode_head.batch_norm.weight',D);
+ Bt:=VtSegNeed('decode_head.batch_norm.bias',D);
+ Mn:=VtSegNeed('decode_head.batch_norm.running_mean',D);
+ Vr:=VtSegNeed('decode_head.batch_norm.running_var',D);
+ VtM.ClsW:=VtSegNeed('decode_head.classifier.weight',Int64(VtM.NumLabels)*D);
+ VtM.ClsB:=VtSegNeed('decode_head.classifier.bias',VtM.NumLabels);
+ If VtSegErr<>'' Then Exit;
+ { fusion algebrique : linear_fuse(cat(up(linear_c_i(F_i)))) = somme_i
+   up((Fuse_i x LinC_i) F_i) + biais }
+ BSum:=VtAllocF(D);
+ VtT:=VtAllocF(Int64(D)*D);
+ VtTmp:=VtAllocF(Int64(D)*D);
+ For VtI:=0 to 3 do Begin
+  C:=VtM.Stage[VtI].C;
+  LinW:=VtSegNeed('decode_head.linear_c.'+VtIStr(VtI)+'.proj.weight',Int64(D)*C);
+  LinB:=VtSegNeed('decode_head.linear_c.'+VtIStr(VtI)+'.proj.bias',D);
+  If VtSegErr<>'' Then Begin Exit;End;
+  K:=3-VtI;
+  { bloc de colonnes K de linear_fuse, rendu contigu : T[d][e] }
+  For VtJ:=0 to D-1 do Move((Fuse+Int64(VtJ)*4*D+K*D)^,(VtT+Int64(VtJ)*D)^,D*4);
+  { LinC transpose : Tmp[c][e] = LinW[e][c] }
+  For VtJ:=0 to D-1 do
+   For L:=0 to C-1 do VtTmp[Int64(L)*D+VtJ]:=LinW[Int64(VtJ)*C+L];
+  VtM.Comp[VtI]:=VtAllocF(Int64(D)*C);
+  VtGemmCPU(VtT,VtTmp,Nil,VtM.Comp[VtI],D,D,C);
+  { M.Comp[I] est [D][C] : lignes d (n), colonnes c (m) }
+  For VtJ:=0 to D-1 do Begin
+   Sc:=0;
+   For L:=0 to D-1 do Sc:=Sc+VtT[Int64(VtJ)*D+L]*LinB[L];
+   BSum[VtJ]:=BSum[VtJ]+Sc;
+  End;
+ End;
+ VtM.BnScale:=VtAllocF(D);VtM.BnShift:=VtAllocF(D);
+ For VtJ:=0 to D-1 do Begin
+  Sc:=VtG[VtJ]/Sqrt(Vr[VtJ]+1.0e-5);
+  VtM.BnScale[VtJ]:=Sc;
+  VtM.BnShift[VtJ]:=Bt[VtJ]-Mn[VtJ]*Sc+Sc*BSum[VtJ];
+ End;
+ FreeMem(BSum);FreeMem(VtT);FreeMem(VtTmp);
+ VtSetupLabels(VtM.NumLabels,VtConfigPath);
+ Result:=True;
+End;
+
+{ ---- operateurs ---- }
+
+Type
+ VtTLnCtx=Record
+  X,W,B,Y:PSingle;
+  C:LongInt;
+  Eps:Single;
+ End;
+ VtPLnCtx=^VtTLnCtx;
+
+Procedure VtLnProc(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+Var
+ R,VtI:LongInt;
+ Xp,Yp:PSingle;
+ Mean,V,D,Inv:Single;
+Begin
+ With VtPLnCtx(Ctx)^ do
+  For R:=Lo to Hi-1 do Begin
+   Xp:=X+Int64(R)*C;Yp:=Y+Int64(R)*C;
+   Mean:=0;
+   For VtI:=0 to C-1 do Mean:=Mean+Xp[VtI];
+   Mean:=Mean/C;
+   V:=0;
+   For VtI:=0 to C-1 do Begin D:=Xp[VtI]-Mean;V:=V+D*D;End;
+   Inv:=1.0/Sqrt(V/C+Eps);
+   For VtI:=0 to C-1 do Yp[VtI]:=(Xp[VtI]-Mean)*Inv*W[VtI]+B[VtI];
+  End;
+End;
+
+{ normalisation de couche sur N lignes de C elements (X et Y peuvent etre
+  identiques) }
+Procedure VtLayerNorm(X,W,B,Y:PSingle;VtN,C:LongInt);
+Var
+ Cx:VtTLnCtx;
+Begin
+ Cx.X:=X;Cx.W:=W;Cx.B:=B;Cx.Y:=Y;Cx.C:=C;Cx.Eps:=1.0e-6;
+ VtParFor(VtN,32,VtLnProc,@Cx);
+End;
+
+Type
+ VtTGeluCtx=Record
+  X:PSingle;
+ End;
+ VtPGeluCtx=^VtTGeluCtx;
+
+Procedure VtGeluProc(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+Var
+ VtI:LongInt;
+ V:Single;
+ X:PSingle;
+Begin
+ X:=VtPGeluCtx(Ctx)^.X;
+ For VtI:=Lo to Hi-1 do Begin
+  V:=X[VtI];
+  X[VtI]:=0.5*V*(1.0+VtFErf(V*0.70710678118654752));
+ End;
+End;
+
+Procedure VtGelu(X:PSingle;VtN:Int64);
+Var
+ Cx:VtTGeluCtx;
+Begin
+ Cx.X:=X;
+ VtParFor(VtN,65536,VtGeluProc,@Cx);
+End;
+
+Type
+ VtTIm2Ctx=Record
+  Src,Dst:PSingle;
+  SH,SW,Cin,K,VtS,VtP,OH,OW:LongInt;
+ End;
+ VtPIm2Ctx=^VtTIm2Ctx;
+
+{ Src : disposition (y, x, canal) ; Dst : [OH*OW][Cin*K*K] dans l'ordre (canal,
+  ky, kx) }
+Procedure VtIm2ColProc(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+Var
+ Oy,Ox,C,Ky,Kx,Y,X:LongInt;
+ Row:PSingle;
+Begin
+ With VtPIm2Ctx(Ctx)^ do
+  For Oy:=Lo to Hi-1 do
+   For Ox:=0 to OW-1 do Begin
+    Row:=Dst+(Int64(Oy)*OW+Ox)*Cin*K*K;
+    For C:=0 to Cin-1 do
+     For Ky:=0 to K-1 do Begin
+      Y:=Oy*VtS+Ky-VtP;
+      For Kx:=0 to K-1 do Begin
+       X:=Ox*VtS+Kx-VtP;
+       If(Y>=0)and(Y<SH)and(X>=0)and(X<SW)Then
+        Row[(C*K+Ky)*K+Kx]:=Src[(Int64(Y)*SW+X)*Cin+C]
+       Else Row[(C*K+Ky)*K+Kx]:=0;
+      End;
+     End;
+   End;
+End;
+
+Procedure VtIm2Col(Src,Dst:PSingle;SH,SW,Cin,K,VtS,VtP,OH,OW:LongInt);
+Var
+ Cx:VtTIm2Ctx;
+Begin
+ Cx.Src:=Src;Cx.Dst:=Dst;Cx.SH:=SH;Cx.SW:=SW;Cx.Cin:=Cin;Cx.K:=K;Cx.VtS:=VtS;
+   Cx.VtP:=VtP;Cx.OH:=OH;Cx.OW:=OW;
+ VtParFor(OH,4,VtIm2ColProc,@Cx);
+End;
+
+
+Type
+ VtTDwCtx=Record
+  X,W,B,Y:PSingle;
+  VtH,Wd,C:LongInt;
+ End;
+ VtPDwCtx=^VtTDwCtx;
+
+{ convolution 3x3 par canal (marge 1) ; W est transpose : [9][C] }
+Procedure VtDwProc(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+Var
+ Cx:VtPDwCtx;
+ Y,X,Ky,Kx,Yy,Xx,VtI,C:LongInt;
+ Dp,Sp,Wp:PSingle;
+Begin
+ Cx:=VtPDwCtx(Ctx);
+ C:=Cx^.C;
+ For Y:=Lo to Hi-1 do
+  For X:=0 to Cx^.Wd-1 do Begin
+   Dp:=Cx^.Y+(Int64(Y)*Cx^.Wd+X)*C;
+   For VtI:=0 to C-1 do Dp[VtI]:=Cx^.B[VtI];
+   For Ky:=0 to 2 do Begin
+    Yy:=Y+Ky-1;
+    If(Yy<0)or(Yy>=Cx^.VtH)Then Continue;
+    For Kx:=0 to 2 do Begin
+     Xx:=X+Kx-1;
+     If(Xx<0)or(Xx>=Cx^.Wd)Then Continue;
+     Sp:=Cx^.X+(Int64(Yy)*Cx^.Wd+Xx)*C;
+     Wp:=Cx^.W+(Ky*3+Kx)*C;
+     For VtI:=0 to C-1 do Dp[VtI]:=Dp[VtI]+Sp[VtI]*Wp[VtI];
+    End;
+   End;
+  End;
+End;
+
+Procedure VtDwConv(X,WT,B,Y:PSingle;VtH,W,C:LongInt);
+Var
+ Cx:VtTDwCtx;
+Begin
+ Cx.X:=X;Cx.W:=WT;Cx.B:=B;Cx.Y:=Y;Cx.VtH:=VtH;Cx.Wd:=W;Cx.C:=C;
+ VtParFor(VtH,2,VtDwProc,@Cx);
+End;
+
+Type
+ VtTAttCtx=Record
+  Q,K,V,O,Scratch:PSingle;
+  N2,C,Heads:LongInt;
+  Scale:Single;
+ End;
+ VtPAttCtx=^VtTAttCtx;
+
+{ attention multi-tetes : O = softmax(Q K^T * Scale) V }
+Procedure VtAttProc(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+Var
+ Cx:VtPAttCtx;
+ R,Hd,VtM,VtI,D,C,N2:LongInt;
+ VtS,Qp,Kp,Vp,Op:PSingle;
+ Mx,Sum,VtT,VtP:Single;
+Begin
+ Cx:=VtPAttCtx(Ctx);
+ C:=Cx^.C;N2:=Cx^.N2;
+ D:=C div Cx^.Heads;
+ VtS:=Cx^.Scratch+Int64(Tid)*N2;
+ For R:=Lo to Hi-1 do
+  For Hd:=0 to Cx^.Heads-1 do Begin
+   Qp:=Cx^.Q+Int64(R)*C+Hd*D;
+   Mx:=-1.0e30;
+   For VtM:=0 to N2-1 do Begin
+    Kp:=Cx^.K+Int64(VtM)*C+Hd*D;
+    VtT:=0;
+    For VtI:=0 to D-1 do VtT:=VtT+Qp[VtI]*Kp[VtI];
+    VtT:=VtT*Cx^.Scale;
+    VtS[VtM]:=VtT;
+    If VtT>Mx Then Mx:=VtT;
+   End;
+   Sum:=0;
+   For VtM:=0 to N2-1 do Begin
+    VtT:=Exp(VtS[VtM]-Mx);
+    VtS[VtM]:=VtT;
+    Sum:=Sum+VtT;
+   End;
+   Sum:=1.0/Sum;
+   Op:=Cx^.O+Int64(R)*C+Hd*D;
+   For VtI:=0 to D-1 do Op[VtI]:=0;
+   For VtM:=0 to N2-1 do Begin
+    VtP:=VtS[VtM]*Sum;
+    Vp:=Cx^.V+Int64(VtM)*C+Hd*D;
+    For VtI:=0 to D-1 do Op[VtI]:=Op[VtI]+VtP*Vp[VtI];
+   End;
+  End;
+End;
+
+Procedure VtAttention(Q,K,V,O:PSingle;VtN,N2,C,Heads:LongInt);
+Var
+ Cx:VtTAttCtx;
+ Sc:PSingle;
+Begin
+ Sc:=VtAllocF(Int64(VtGNThreads)*N2+16);
+ Cx.Q:=Q;Cx.K:=K;Cx.V:=V;Cx.O:=O;Cx.Scratch:=Sc;Cx.N2:=N2;Cx.C:=C;
+   Cx.Heads:=Heads;
+ Cx.Scale:=1.0/Sqrt(C/Heads);
+ VtParFor(VtN,8,VtAttProc,@Cx);
+ FreeMem(Sc);
+End;
+
+Procedure VtAddInPlace(X,Y:PSingle;VtN:Int64);
+Var
+ VtI:LongInt;
+Begin
+ For VtI:=0 to VtN-1 do X[VtI]:=X[VtI]+Y[VtI];
+End;
+
+Type
+ VtTUpCtx=Record
+  Dst,Src:PSingle;
+  H1,W1,Hj,Wj,D:LongInt;
+ End;
+ VtPUpCtx=^VtTUpCtx;
+
+{ Dst += agrandissement bilineaire (align_corners=False) de Src }
+Procedure VtUpAddProc(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+Var
+ Cx:VtPUpCtx;
+ Oy,Ox,Y0,Y1,X0,X1,VtI,D:LongInt;
+ Sy,Sx,Ly,Lx,W00,W01,W10,W11:Single;
+ Dp,P00,P01,P10,P11:PSingle;
+Begin
+ Cx:=VtPUpCtx(Ctx);
+ D:=Cx^.D;
+ For Oy:=Lo to Hi-1 do Begin
+  Sy:=(Oy+0.5)*Cx^.Hj/Cx^.H1-0.5;
+  If Sy<0 Then Sy:=0;
+  Y0:=Trunc(Sy);
+  If Y0>Cx^.Hj-1 Then Y0:=Cx^.Hj-1;
+  Y1:=Y0+1;
+  If Y1>Cx^.Hj-1 Then Y1:=Cx^.Hj-1;
+  Ly:=Sy-Y0;
+  For Ox:=0 to Cx^.W1-1 do Begin
+   Sx:=(Ox+0.5)*Cx^.Wj/Cx^.W1-0.5;
+   If Sx<0 Then Sx:=0;
+   X0:=Trunc(Sx);
+   If X0>Cx^.Wj-1 Then X0:=Cx^.Wj-1;
+   X1:=X0+1;
+   If X1>Cx^.Wj-1 Then X1:=Cx^.Wj-1;
+   Lx:=Sx-X0;
+   W00:=(1-Ly)*(1-Lx);W01:=(1-Ly)*Lx;W10:=Ly*(1-Lx);W11:=Ly*Lx;
+   Dp:=Cx^.Dst+(Int64(Oy)*Cx^.W1+Ox)*D;
+   P00:=Cx^.Src+(Int64(Y0)*Cx^.Wj+X0)*D;
+   P01:=Cx^.Src+(Int64(Y0)*Cx^.Wj+X1)*D;
+   P10:=Cx^.Src+(Int64(Y1)*Cx^.Wj+X0)*D;
+   P11:=Cx^.Src+(Int64(Y1)*Cx^.Wj+X1)*D;
+   For VtI:=0 to D-1 do
+    Dp[VtI]:=Dp[VtI]+W00*P00[VtI]+W01*P01[VtI]+W10*P10[VtI]+W11*P11[VtI];
+  End;
+ End;
+End;
+
+Procedure VtUpAdd(Dst,Src:PSingle;H1,W1,Hj,Wj,D:LongInt);
+Var
+ Cx:VtTUpCtx;
+Begin
+ Cx.Dst:=Dst;Cx.Src:=Src;Cx.H1:=H1;Cx.W1:=W1;Cx.Hj:=Hj;Cx.Wj:=Wj;Cx.D:=D;
+ VtParFor(H1,2,VtUpAddProc,@Cx);
+End;
+
+Type
+ VtTBnCtx=Record
+  X,Sc,Sh:PSingle;
+  D:LongInt;
+ End;
+ VtPBnCtx=^VtTBnCtx;
+
+Procedure VtBnReluProc(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+Var
+ Cx:VtPBnCtx;
+ R,VtI,D:LongInt;
+ Xp:PSingle;
+ V:Single;
+Begin
+ Cx:=VtPBnCtx(Ctx);
+ D:=Cx^.D;
+ For R:=Lo to Hi-1 do Begin
+  Xp:=Cx^.X+Int64(R)*D;
+  For VtI:=0 to D-1 do Begin
+   V:=Xp[VtI]*Cx^.Sc[VtI]+Cx^.Sh[VtI];
+   If V<0 Then V:=0;
+   Xp[VtI]:=V;
+  End;
+ End;
+End;
+
+{ ---- passe avant ---- }
+
+Var
+ VtSegT0:Double;
+
+Procedure VtSegStep(Const VtS:AnsiString);
+Begin
+ If VtVerbose Then VtDetail(VtS+' ('+VtFStr((VtNowMsF-VtSegT0)/1000.0,1)+' s)');
+End;
+
+{ Img : pixels normalises (y, x, RVB) de H x W (H et W multiples de 32
+  conseilles) ;
+  renvoie les logits [OH*OW][NumLabels] (resolution 1/4) }
+Function VtSegForward(Var VtM:VtTSegModel;VtImg:PSingle;VtH,W:LongInt;Var OH,OW:LongInt)
+  :PSingle;
+Var
+ VtI,VtJ,VtN,N2,Hn,Wn,H2,W2,C,Mlp,Kc,D,L:LongInt;
+ VtS:^VtTSegStage;
+ B:^VtTSegBlock;
+ Feat:Array[0..3]of PSingle;
+ FH,FW:Array[0..3]of LongInt;
+ Cur:PSingle;
+ CurH,CurW,CurC:LongInt;
+ X,VtT,Q,A,Tm,Col,KB,VB,R,Hid,Hid2,Kin:PSingle;
+ ColSize:Int64;
+ Z:Array[0..3]of PSingle;
+ Cx:VtTBnCtx;
+ Lg:PSingle;
+Begin
+ VtSegT0:=VtNowMsF;
+ Cur:=VtImg;CurH:=VtH;CurW:=W;CurC:=3;
+ For VtI:=0 to 3 do Begin
+  VtS:=@VtM.Stage[VtI];
+  C:=VtS^.C;Mlp:=VtS^.Mlp;
+  If CurC<>VtS^.Cin Then VtFatal(
+    'mod'#138'le incoh'#130'rent : canaux d''entr'#130'e de l''.'#130'tage '+
+    VtIStr(VtI));
+  Hn:=(CurH+2*VtS^.PP-VtS^.PK)div VtS^.PS+1;
+  Wn:=(CurW+2*VtS^.PP-VtS^.PK)div VtS^.PS+1;
+  VtN:=Hn*Wn;
+  N2:=VtN;H2:=Hn;W2:=Wn;
+  If VtS^.SR>1 Then Begin
+   H2:=Hn div VtS^.SR;W2:=Wn div VtS^.SR;
+   If(H2<1)or(W2<1)Then VtFatal('image trop petite pour le r'#130'seau');
+   N2:=H2*W2;
+  End;
+  ColSize:=Int64(VtN)*VtS^.Cin*VtS^.PK*VtS^.PK;
+  If VtS^.SR>1 Then If Int64(N2)*C*VtS^.SR*VtS^.SR>ColSize Then ColSize:=Int64(N2)
+    *C*VtS^.SR*VtS^.SR;
+  Col:=VtAllocF(ColSize);
+  X:=VtAllocF(Int64(VtN)*C);VtT:=VtAllocF(Int64(VtN)*C);Q:=VtAllocF(Int64(VtN)*C);
+  A:=VtAllocF(Int64(VtN)*C);Tm:=VtAllocF(Int64(VtN)*C);
+  KB:=VtAllocF(Int64(N2)*C);VB:=VtAllocF(Int64(N2)*C);R:=VtAllocF(Int64(N2)*C);
+  Hid:=VtAllocF(Int64(VtN)*Mlp);Hid2:=VtAllocF(Int64(VtN)*Mlp);
+  { plongement de patchs : convolution + normalisation }
+  VtIm2Col(Cur,Col,CurH,CurW,VtS^.Cin,VtS^.PK,VtS^.PS,VtS^.PP,Hn,Wn);
+  VtGemm(Col,VtS^.PEW,VtS^.PEB,X,VtN,VtS^.Cin*VtS^.PK*VtS^.PK,C);
+  VtLayerNorm(X,VtS^.PENW,VtS^.PENB,X,VtN,C);
+  For VtJ:=0 to VtS^.Depth-1 do Begin
+   B:=@VtS^.Blocks[VtJ];
+   VtLayerNorm(X,B^.LN1W,B^.LN1B,VtT,VtN,C);
+   VtGemm(VtT,B^.QW,B^.QB,Q,VtN,C,C);
+   If VtS^.SR>1 Then Begin
+    VtIm2Col(VtT,Col,Hn,Wn,C,VtS^.SR,VtS^.SR,0,H2,W2);
+    VtGemm(Col,B^.SRW,B^.SRB,R,N2,C*VtS^.SR*VtS^.SR,C);
+    VtLayerNorm(R,B^.SRNW,B^.SRNB,R,N2,C);
+    Kin:=R;
+   End
+    Else Kin:=VtT;
+   VtGemm(Kin,B^.KW,B^.KB,KB,N2,C,C);
+   VtGemm(Kin,B^.VW,B^.VB,VB,N2,C,C);
+   VtAttention(Q,KB,VB,A,VtN,N2,C,VtS^.Heads);
+   VtGemm(A,B^.OW,B^.OB,Tm,VtN,C,C);
+   VtAddInPlace(X,Tm,Int64(VtN)*C);
+   VtLayerNorm(X,B^.LN2W,B^.LN2B,VtT,VtN,C);
+   VtGemm(VtT,B^.D1W,B^.D1B,Hid,VtN,C,Mlp);
+   VtDwConv(Hid,B^.DWT,B^.DWB,Hid2,Hn,Wn,Mlp);
+   VtGelu(Hid2,Int64(VtN)*Mlp);
+   VtGemm(Hid2,B^.D2W,B^.D2B,Tm,VtN,Mlp,C);
+   VtAddInPlace(X,Tm,Int64(VtN)*C);
+  End;
+  Feat[VtI]:=VtAllocF(Int64(VtN)*C);
+  VtLayerNorm(X,VtS^.NW,VtS^.NB,Feat[VtI],VtN,C);
+  FH[VtI]:=Hn;FW[VtI]:=Wn;
+  FreeMem(Col);FreeMem(X);FreeMem(VtT);FreeMem(Q);FreeMem(A);FreeMem(Tm);
+  FreeMem(KB);FreeMem(VB);FreeMem(R);FreeMem(Hid);FreeMem(Hid2);
+  Cur:=Feat[VtI];CurH:=Hn;CurW:=Wn;CurC:=C;
+  VtSegStep('r'#130'seau : '#130'tage '+VtIStr(VtI+1)+'/4 ('+VtIStr(Wn)+'x'+VtIStr(Hn)
+    +', '+VtIStr(C)+' canaux)');
+ End;
+ { decodeur MLP : produit au plus bas niveau puis agrandissement, somme, BN,
+   ReLU }
+ D:=VtM.Dec;L:=VtM.NumLabels;
+ For VtI:=0 to 3 do Begin
+  Z[VtI]:=VtAllocF(Int64(FH[VtI])*FW[VtI]*D);
+  VtGemm(Feat[VtI],VtM.Comp[VtI],Nil,Z[VtI],FH[VtI]*FW[VtI],VtM.Stage[VtI].C,D);
+  FreeMem(Feat[VtI]);
+ End;
+ OH:=FH[0];OW:=FW[0];
+ For VtI:=1 to 3 do Begin
+  VtUpAdd(Z[0],Z[VtI],OH,OW,FH[VtI],FW[VtI],D);
+  FreeMem(Z[VtI]);
+ End;
+ Cx.X:=Z[0];Cx.Sc:=VtM.BnScale;Cx.Sh:=VtM.BnShift;Cx.D:=D;
+ VtParFor(OH*OW,64,VtBnReluProc,@Cx);
+ Lg:=VtAllocF(Int64(OH)*OW*L);
+ VtGemm(Z[0],VtM.ClsW,VtM.ClsB,Lg,OH*OW,D,L);
+ FreeMem(Z[0]);
+ VtSegStep('r'#130'seau : d'#130'codeur');
+ Result:=Lg;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Operations sur les images : couleurs, filtres, redimensionnement,    }
+{ composantes connexes, remplissage                                    }
+{ ------------------------------------------------------------------ }
+
+Const
+ VtLinSize=16384;
+ VtLabSize=4096;
+
+Const
+ VtColReady:Boolean=False;
+Var
+ VtSrgbLin:Array[0..4095]of Single;       { sRGB (0..255 par pas de 1/16) ->
+   lineaire }
+ VtLinSrgb:Array[0..VtLinSize]of Single;    { lineaire (0..1) -> sRGB 0..255 }
+ VtLabF:Array[0..VtLabSize]of Single;       { f(t) de CIE Lab pour t dans [0,1,2] }
+
+Procedure VtColorInit;
+Var
+ VtI:LongInt;
+ V,VtT:Double;
+Begin
+ If VtColReady Then Exit;
+ VtColReady:=True;
+ For VtI:=0 to 4095 do Begin
+  V:=VtI/16.0/255.0;
+  If V<=0.04045 Then VtT:=V/12.92 Else VtT:=Exp(2.4*Ln((V+0.055)/1.055));
+  VtSrgbLin[VtI]:=VtT;
+ End;
+ For VtI:=0 to VtLinSize do Begin
+  V:=VtI/VtLinSize;
+  If V<=0.0031308 Then VtT:=V*12.92 Else VtT:=1.055*Exp(Ln(V)/2.4)-0.055;
+  VtLinSrgb[VtI]:=VtT*255.0;
+ End;
+ For VtI:=0 to VtLabSize do Begin
+  V:=VtI/VtLabSize*2.0;
+  If V>0.008856 Then VtT:=Exp(Ln(V)/3.0) Else VtT:=7.787*V+16.0/116.0;
+  VtLabF[VtI]:=VtT;
+ End;
+End;
+
+Function VtToLin(V:Single):Single;
+Var
+ VtI:LongInt;
+Begin
+ VtI:=Trunc(V*16.0+0.5);
+ If VtI<0 Then VtI:=0 Else If VtI>4095 Then VtI:=4095;
+ Result:=VtSrgbLin[VtI];
+End;
+
+Function VtFromLin(V:Single):Single;
+Var
+ F:Single;
+ VtI:LongInt;
+Begin
+ If V<=0 Then Begin Result:=0;Exit;End;
+ If V>=1 Then Begin Result:=255;Exit;End;
+ F:=V*VtLinSize;
+ VtI:=Trunc(F);
+ Result:=VtLinSrgb[VtI]+(VtLinSrgb[VtI+1]-VtLinSrgb[VtI])*(F-VtI);
+End;
+
+Function VtLabFn(VtT:Single):Single;
+Var
+ F:Single;
+ VtI:LongInt;
+Begin
+ If VtT<=0 Then Begin Result:=16.0/116.0;Exit;End;
+ If VtT>=2 Then VtT:=1.999;
+ F:=VtT/2.0*VtLabSize;
+ VtI:=Trunc(F);
+ Result:=VtLabF[VtI]+(VtLabF[VtI+1]-VtLabF[VtI])*(F-VtI);
+End;
+
+Function VtLabInv(F:Single):Single;
+Var
+ C:Single;
+Begin
+ C:=F*F*F;
+ If C>0.008856 Then Result:=C Else Result:=(F-16.0/116.0)/7.787;
+End;
+
+{ sRGB 0..255 vers CIE Lab (D65) }
+Procedure VtRgbToLab(R,VtG,B:Single;Var L,A,Bb:Single);
+Var
+ Rl,Gl,Bl,X,Y,Z,Fx,Fy,Fz:Single;
+Begin
+ Rl:=VtToLin(R);Gl:=VtToLin(VtG);Bl:=VtToLin(B);
+ X:=(0.4124564*Rl+0.3575761*Gl+0.1804375*Bl)/0.95047;
+ Y:=0.2126729*Rl+0.7151522*Gl+0.0721750*Bl;
+ Z:=(0.0193339*Rl+0.1191920*Gl+0.9503041*Bl)/1.08883;
+ Fx:=VtLabFn(X);Fy:=VtLabFn(Y);Fz:=VtLabFn(Z);
+ L:=116.0*Fy-16.0;
+ A:=500.0*(Fx-Fy);
+ Bb:=200.0*(Fy-Fz);
+End;
+
+Procedure VtLabToRgb(L,A,Bb:Single;Var R,VtG,B:Single);
+Var
+ Fx,Fy,Fz,X,Y,Z,Rl,Gl,Bl:Single;
+Begin
+ Fy:=(L+16.0)/116.0;
+ Fx:=Fy+A/500.0;
+ Fz:=Fy-Bb/200.0;
+ X:=VtLabInv(Fx)*0.95047;Y:=VtLabInv(Fy);Z:=VtLabInv(Fz)*1.08883;
+ Rl:=3.2404542*X-1.5371385*Y-0.4985314*Z;
+ Gl:=-0.9692660*X+1.8760108*Y+0.0415560*Z;
+ Bl:=0.0556434*X-0.2040259*Y+1.0572252*Z;
+ R:=VtFromLin(Rl);VtG:=VtFromLin(Gl);B:=VtFromLin(Bl);
+End;
+
+Function VtLuma(R,VtG,B:Single):Single;
+Begin
+ Result:=0.299*R+0.587*VtG+0.114*B;
+End;
+
+{ ---- filtres sur plans flottants (W x H) ---- }
+
+{ moyenne sur une fenetre carree de rayon R ; Src et Dst peuvent etre identiques
+  }
+Procedure VtBoxBlur(Src,Dst:PSingle;W,VtH,R:LongInt);
+Var
+ X,Y,A,B,Y0,Y1:LongInt;
+ Pre:Array of Double;
+ Col:Array of Double;
+ VtTmp:PSingle;
+ Cnt:Double;
+Begin
+ If R<=0 Then Begin
+  If Src<>Dst Then Move(Src^,Dst^,Int64(W)*VtH*4);
+  Exit;
+ End;
+ SetLength(Pre,W+1);
+ SetLength(Col,W);
+ VtTmp:=VtAllocF(Int64(W)*VtH);
+ For Y:=0 to VtH-1 do Begin
+  Pre[0]:=0;
+  For X:=0 to W-1 do Pre[X+1]:=Pre[X]+Src[Int64(Y)*W+X];
+  For X:=0 to W-1 do Begin
+   A:=X-R;If A<0 Then A:=0;
+   B:=X+R;If B>W-1 Then B:=W-1;
+   VtTmp[Int64(Y)*W+X]:=(Pre[B+1]-Pre[A])/(B-A+1);
+  End;
+ End;
+ For X:=0 to W-1 do Col[X]:=0;
+ Y1:=-1;
+ For Y:=0 to VtH-1 do Begin
+  A:=Y-R;If A<0 Then A:=0;
+  B:=Y+R;If B>VtH-1 Then B:=VtH-1;
+  While Y1<B do Begin
+   Inc(Y1);
+   For X:=0 to W-1 do Col[X]:=Col[X]+VtTmp[Int64(Y1)*W+X];
+  End;
+  If Y-R-1>=0 Then Begin
+   Y0:=Y-R-1;
+   For X:=0 to W-1 do Col[X]:=Col[X]-VtTmp[Int64(Y0)*W+X];
+  End;
+  Cnt:=B-A+1;
+  For X:=0 to W-1 do Dst[Int64(Y)*W+X]:=Col[X]/Cnt;
+ End;
+ FreeMem(VtTmp);
+End;
+
+{ flou approximativement gaussien (3 passes de boite) }
+Procedure VtBlurPlane(VtP:PSingle;W,VtH:LongInt;Sigma:Single);
+Var
+ R:LongInt;
+Begin
+ R:=Round(Sigma*0.9);
+ If R<1 Then R:=1;
+ VtBoxBlur(VtP,VtP,W,VtH,R);
+ VtBoxBlur(VtP,VtP,W,VtH,R);
+ VtBoxBlur(VtP,VtP,W,VtH,R);
+End;
+
+Type
+ VtTGuide=Record
+  W,VtH:LongInt;
+  VtI,MeanI,VarI:PSingle;
+  R:LongInt;
+  Eps:Single;
+ End;
+
+{ filtre guide (He et al.) : lisse un masque P en suivant les contours de
+  l'image guide I (0..1) }
+Procedure VtGuideInit(Var VtG:VtTGuide;Pix:PSingle;W,VtH,R:LongInt;Eps:Single);
+Var
+ VtN:int64;K:LongInt;
+ Ii:PSingle;
+Begin
+ VtG.W:=W;VtG.VtH:=VtH;VtG.R:=R;VtG.Eps:=Eps;
+ VtN:=Int64(W)*VtH;
+ VtG.VtI:=VtAllocF(VtN);VtG.MeanI:=VtAllocF(VtN);VtG.VarI:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do VtG.VtI[K]:=VtLuma(Pix[K*3],Pix[K*3+1],Pix[K*3+2])/255.0;
+ VtBoxBlur(VtG.VtI,VtG.MeanI,W,VtH,R);
+ Ii:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do Ii[K]:=VtG.VtI[K]*VtG.VtI[K];
+ VtBoxBlur(Ii,VtG.VarI,W,VtH,R);
+ For K:=0 to VtN-1 do VtG.VarI[K]:=VtG.VarI[K]-VtG.MeanI[K]*VtG.MeanI[K];
+ FreeMem(Ii);
+End;
+
+Procedure VtGuideFree(Var VtG:VtTGuide);
+Begin
+ FreeMem(VtG.VtI);FreeMem(VtG.MeanI);FreeMem(VtG.VarI);
+End;
+
+Procedure VtGuideApply(Var VtG:VtTGuide;VtP,Q:PSingle);
+Var
+ VtN:int64;K:LongInt;
+ MeanP,Ip,A,B:PSingle;
+ Cov:Single;
+Begin
+ VtN:=Int64(VtG.W)*VtG.VtH;
+ MeanP:=VtAllocF(VtN);Ip:=VtAllocF(VtN);A:=VtAllocF(VtN);B:=VtAllocF(VtN);
+ VtBoxBlur(VtP,MeanP,VtG.W,VtG.VtH,VtG.R);
+ For K:=0 to VtN-1 do Ip[K]:=VtG.VtI[K]*VtP[K];
+ VtBoxBlur(Ip,Ip,VtG.W,VtG.VtH,VtG.R);
+ For K:=0 to VtN-1 do Begin
+  Cov:=Ip[K]-VtG.MeanI[K]*MeanP[K];
+  A[K]:=Cov/(VtG.VarI[K]+VtG.Eps);
+  B[K]:=MeanP[K]-A[K]*VtG.MeanI[K];
+ End;
+ VtBoxBlur(A,A,VtG.W,VtG.VtH,VtG.R);
+ VtBoxBlur(B,B,VtG.W,VtG.VtH,VtG.R);
+ For K:=0 to VtN-1 do Begin
+  Cov:=A[K]*VtG.VtI[K]+B[K];
+  If Cov<0 Then Cov:=0 Else If Cov>1 Then Cov:=1;
+  Q[K]:=Cov;
+ End;
+ FreeMem(MeanP);FreeMem(Ip);FreeMem(A);FreeMem(B);
+End;
+
+{ ---- redimensionnement (filtre triangulaire adapte a l'echelle) ---- }
+
+Type
+ VtTTaps=Record
+  First,Count:LongInt;
+  Off:LongInt;
+ End;
+
+Procedure VtMakeTaps(SrcN,DstN:LongInt;Var Taps:Array of VtTTaps;Var Wt:PSingle);
+Var
+ X,VtI,F,L,K,Tot:LongInt;
+ Scale,Sup,C,W,Sum:Double;
+ VtTmp:Array of Single;
+Begin
+ Scale:=SrcN/DstN;
+ Sup:=Scale;
+ If Sup<1 Then Sup:=1;
+ Tot:=0;
+ For X:=0 to DstN-1 do Begin
+  C:=(X+0.5)*Scale;
+  F:=Trunc(C-Sup);If F<0 Then F:=0;
+  L:=Trunc(C+Sup)+1;If L>SrcN-1 Then L:=SrcN-1;
+  Taps[X].First:=F;Taps[X].Count:=L-F+1;Taps[X].Off:=Tot;
+  Inc(Tot,Taps[X].Count);
+ End;
+ Wt:=VtAllocF(Tot+1);
+ For X:=0 to DstN-1 do Begin
+  C:=(X+0.5)*Scale;
+  Sum:=0;
+  For K:=0 to Taps[X].Count-1 do Begin
+   VtI:=Taps[X].First+K;
+   W:=1.0-Abs(VtI+0.5-C)/Sup;
+   If W<0 Then W:=0;
+   Wt[Taps[X].Off+K]:=W;
+   Sum:=Sum+W;
+  End;
+  If Sum<=0 Then Begin Wt[Taps[X].Off]:=1;Sum:=1;End;
+  For K:=0 to Taps[X].Count-1 do Wt[Taps[X].Off+K]:=Wt[Taps[X].Off+K]/Sum;
+ End;
+End;
+
+{ Src : SW x SH x Ch flottants ; Dst : DW x DH x Ch }
+Procedure VtResizeF(Src:PSingle;SW,SH:LongInt;Dst:PSingle;DW,DH,Ch:LongInt);
+Var
+ TX,TY:Array of VtTTaps;
+ WX,WY,VtTmp:PSingle;
+ X,Y,K,C:LongInt;
+ Acc:Single;
+ Base:Int64;
+Begin
+ If(SW=DW)and(SH=DH)Then Begin
+  Move(Src^,Dst^,Int64(SW)*SH*Ch*4);
+  Exit;
+ End;
+ SetLength(TX,DW);SetLength(TY,DH);
+ VtMakeTaps(SW,DW,TX,WX);
+ VtMakeTaps(SH,DH,TY,WY);
+ VtTmp:=VtAllocF(Int64(DW)*SH*Ch);
+ For Y:=0 to SH-1 do
+  For X:=0 to DW-1 do
+   For C:=0 to Ch-1 do Begin
+    Acc:=0;
+    For K:=0 to TX[X].Count-1 do
+     Acc:=Acc+WX[TX[X].Off+K]*Src[(Int64(Y)*SW+TX[X].First+K)*Ch+C];
+    VtTmp[(Int64(Y)*DW+X)*Ch+C]:=Acc;
+   End;
+ For Y:=0 to DH-1 do
+  For X:=0 to DW-1 do
+   For C:=0 to Ch-1 do Begin
+    Acc:=0;
+    For K:=0 to TY[Y].Count-1 do Begin
+     Base:=(Int64(TY[Y].First+K)*DW+X)*Ch+C;
+     Acc:=Acc+WY[TY[Y].Off+K]*VtTmp[Base];
+    End;
+    Dst[(Int64(Y)*DW+X)*Ch+C]:=Acc;
+   End;
+ FreeMem(WX);FreeMem(WY);FreeMem(VtTmp);
+End;
+
+{ echantillonnage bilineaire d'un plan a Ch canaux (coordonnees de pixels,
+  centres a +0,5) }
+Procedure VtSampleBilinear(Src:PSingle;W,VtH,Ch:LongInt;X,Y:Single;Dst:PSingle);
+Var
+ X0,Y0,X1,Y1,C:LongInt;
+ Fx,Fy:Single;
+Begin
+ X:=X-0.5;Y:=Y-0.5;
+ If X<0 Then X:=0;
+ If Y<0 Then Y:=0;
+ If X>W-1 Then X:=W-1;
+ If Y>VtH-1 Then Y:=VtH-1;
+ X0:=Trunc(X);Y0:=Trunc(Y);
+ X1:=X0+1;If X1>W-1 Then X1:=W-1;
+ Y1:=Y0+1;If Y1>VtH-1 Then Y1:=VtH-1;
+ Fx:=X-X0;Fy:=Y-Y0;
+ For C:=0 to Ch-1 do
+  Dst[C]:=(Src[(Int64(Y0)*W+X0)*Ch+C]*(1-Fx)+Src[(Int64(Y0)*W+X1)*Ch+C]*Fx)
+    *(1-Fy)+
+          (Src[(Int64(Y1)*W+X0)*Ch+C]*(1-Fx)+Src[(Int64(Y1)*W+X1)*Ch+C]*Fx)*Fy;
+End;
+
+{ ---- masques binaires (octets 0/255) ---- }
+
+{ dilatation (ou erosion si Erode) par un carre de rayon R }
+Procedure VtMorphMask(VtM:PByte;W,VtH,R:LongInt;Erode:Boolean);
+Var
+ X,Y,K,A,B:LongInt;
+ VtTmp:PByte;
+ V:Byte;
+Begin
+ If R<=0 Then Exit;
+ VtTmp:=PByte(VtAllocBytes(Int64(W)*VtH));
+ For Y:=0 to VtH-1 do
+  For X:=0 to W-1 do Begin
+   A:=X-R;If A<0 Then A:=0;
+   B:=X+R;If B>W-1 Then B:=W-1;
+   If Erode Then V:=255 Else V:=0;
+   For K:=A to B do
+    If Erode Then Begin If VtM[Int64(Y)*W+K]<V Then V:=VtM[Int64(Y)*W+K];End
+    Else Begin If VtM[Int64(Y)*W+K]>V Then V:=VtM[Int64(Y)*W+K];End;
+   VtTmp[Int64(Y)*W+X]:=V;
+  End;
+ For Y:=0 to VtH-1 do Begin
+  A:=Y-R;If A<0 Then A:=0;
+  B:=Y+R;If B>VtH-1 Then B:=VtH-1;
+  For X:=0 to W-1 do Begin
+   If Erode Then V:=255 Else V:=0;
+   For K:=A to B do
+    If Erode Then Begin If VtTmp[Int64(K)*W+X]<V Then V:=VtTmp[Int64(K)*W+X];End
+    Else Begin If VtTmp[Int64(K)*W+X]>V Then V:=VtTmp[Int64(K)*W+X];End;
+   VtM[Int64(Y)*W+X]:=V;
+  End;
+ End;
+ FreeMem(VtTmp);
+End;
+
+{ etiquette les composantes connexes (4 voisins) des pixels > 0 ;
+  Lab recoit l'etiquette (1..N) ; renvoie N ; Areas[1..N] }
+Function VtComponents(VtM:PByte;W,VtH:LongInt;Lab:VtPIntArr;Var Areas:VtTIntArray)
+  :LongInt;
+Var
+ Stack:VtPIntArr;
+ Sp,VtN,VtP,Q,X,Y,Cnt:LongInt;
+ Tot:Int64;
+Begin
+ Tot:=Int64(W)*VtH;
+ Stack:=VtPIntArr(VtAllocBytes(Tot*4));
+ FillChar(Lab^,Tot*4,0);
+ SetLength(Areas,1);
+ Areas[0]:=0;
+ VtN:=0;
+ For VtP:=0 to Tot-1 do Begin
+  If(VtM[VtP]=0)or(Lab[VtP]<>0)Then Continue;
+  Inc(VtN);
+  SetLength(Areas,VtN+1);
+  Cnt:=0;
+  Sp:=0;
+  Stack[Sp]:=VtP;Inc(Sp);
+  Lab[VtP]:=VtN;
+  While Sp>0 do Begin
+   Dec(Sp);
+   Q:=Stack[Sp];
+   Inc(Cnt);
+   X:=Q mod W;Y:=Q div W;
+   If(X>0)and(VtM[Q-1]<>0)and(Lab[Q-1]=0)Then Begin Lab[Q-1]:=VtN;Stack[Sp]:=Q-1;
+     Inc(Sp);End;
+   If(X<W-1)and(VtM[Q+1]<>0)and(Lab[Q+1]=0)Then Begin Lab[Q+1]:=VtN;Stack[Sp]:=Q+
+     1;Inc(Sp);End;
+   If(Y>0)and(VtM[Q-W]<>0)and(Lab[Q-W]=0)Then Begin Lab[Q-W]:=VtN;Stack[Sp]:=Q-W;
+     Inc(Sp);End;
+   If(Y<VtH-1)and(VtM[Q+W]<>0)and(Lab[Q+W]=0)Then Begin Lab[Q+W]:=VtN;Stack[Sp]:=Q+
+     W;Inc(Sp);End;
+  End;
+  Areas[VtN]:=Cnt;
+ End;
+ FreeMem(Stack);
+ Result:=VtN;
+End;
+
+{ ---- remplissage par propagation multi-echelle (pull-push) ----
+  Pix : RVB flottant W x H ; Known : poids 0..1 (1 = pixel fiable) }
+Procedure VtPushPullFill(Pix:PSingle;Known:PSingle;W,VtH:LongInt);
+Const
+ MaxLev=14;
+Var
+ LW,LH:Array[0..MaxLev]of LongInt;
+ Col:Array[0..MaxLev]of PSingle;
+ Wt:Array[0..MaxLev]of PSingle;
+ NL,L,X,Y,C,Dx,Dy,X2,Y2,X0,X1,Y0,Y1:LongInt;
+ Sw,Sum:Single;
+ Fx,Fy,Sx,Sy,V00,V01,V10,V11,Up:Single;
+ VtN:LongInt;
+ Any:Boolean;
+Begin
+ NL:=0;
+ LW[0]:=W;LH[0]:=VtH;
+ VtN:=Int64(W)*VtH;
+ Col[0]:=VtAllocF(VtN*3);Wt[0]:=VtAllocF(VtN);
+ Any:=False;
+ For VtN:=0 to Int64(W)*VtH-1 do Begin
+  Wt[0][VtN]:=Known[VtN];
+  If Known[VtN]>0 Then Any:=True;
+  For C:=0 to 2 do Col[0][VtN*3+C]:=Pix[VtN*3+C];
+ End;
+ If not Any Then Begin
+  FreeMem(Col[0]);FreeMem(Wt[0]);
+  Exit;
+ End;
+ While(LW[NL]>1)or(LH[NL]>1)do Begin
+  If NL>=MaxLev Then Break;
+  LW[NL+1]:=(LW[NL]+1)div 2;LH[NL+1]:=(LH[NL]+1)div 2;
+  Col[NL+1]:=VtAllocF(Int64(LW[NL+1])*LH[NL+1]*3);
+  Wt[NL+1]:=VtAllocF(Int64(LW[NL+1])*LH[NL+1]);
+  For Y:=0 to LH[NL+1]-1 do
+   For X:=0 to LW[NL+1]-1 do Begin
+    Sw:=0;
+    Sx:=0;Sy:=0;V00:=0;
+    For Dy:=0 to 1 do
+     For Dx:=0 to 1 do Begin
+      X2:=X*2+Dx;Y2:=Y*2+Dy;
+      If(X2<LW[NL])and(Y2<LH[NL])Then Begin
+       Sum:=Wt[NL][Int64(Y2)*LW[NL]+X2];
+       Sw:=Sw+Sum;
+       Sx:=Sx+Sum*Col[NL][(Int64(Y2)*LW[NL]+X2)*3];
+       Sy:=Sy+Sum*Col[NL][(Int64(Y2)*LW[NL]+X2)*3+1];
+       V00:=V00+Sum*Col[NL][(Int64(Y2)*LW[NL]+X2)*3+2];
+      End;
+     End;
+    VtN:=Int64(Y)*LW[NL+1]+X;
+    If Sw>0 Then Begin
+     Col[NL+1][VtN*3]:=Sx/Sw;Col[NL+1][VtN*3+1]:=Sy/Sw;Col[NL+1][VtN*3+2]:=V00/Sw;
+    End;
+    If Sw>1 Then Sw:=1;
+    Wt[NL+1][VtN]:=Sw;
+   End;
+  Inc(NL);
+ End;
+ { poussee : du niveau le plus grossier vers le plus fin }
+ For L:=NL-1 downto 0 do
+  For Y:=0 to LH[L]-1 do
+   For X:=0 to LW[L]-1 do Begin
+    VtN:=Int64(Y)*LW[L]+X;
+    If Wt[L][VtN]>=1 Then Continue;
+    Sx:=(X+0.5)/2-0.5;Sy:=(Y+0.5)/2-0.5;
+    If Sx<0 Then Sx:=0;
+    If Sy<0 Then Sy:=0;
+    X0:=Trunc(Sx);Y0:=Trunc(Sy);
+    X1:=X0+1;If X1>LW[L+1]-1 Then X1:=LW[L+1]-1;
+    Y1:=Y0+1;If Y1>LH[L+1]-1 Then Y1:=LH[L+1]-1;
+    If X0>LW[L+1]-1 Then X0:=LW[L+1]-1;
+    If Y0>LH[L+1]-1 Then Y0:=LH[L+1]-1;
+    Fx:=Sx-X0;Fy:=Sy-Y0;
+    For C:=0 to 2 do Begin
+     V00:=Col[L+1][(Int64(Y0)*LW[L+1]+X0)*3+C];
+     V01:=Col[L+1][(Int64(Y0)*LW[L+1]+X1)*3+C];
+     V10:=Col[L+1][(Int64(Y1)*LW[L+1]+X0)*3+C];
+     V11:=Col[L+1][(Int64(Y1)*LW[L+1]+X1)*3+C];
+     Up:=(V00*(1-Fx)+V01*Fx)*(1-Fy)+(V10*(1-Fx)+V11*Fx)*Fy;
+     Col[L][VtN*3+C]:=Col[L][VtN*3+C]*Wt[L][VtN]+Up*(1-Wt[L][VtN]);
+    End;
+    Wt[L][VtN]:=1;
+   End;
+ For VtN:=0 to Int64(W)*VtH-1 do
+  For C:=0 to 2 do Pix[VtN*3+C]:=Pix[VtN*3+C]*Known[VtN]+Col[0][VtN*3+C]*(1-Known[VtN]);
+ For L:=0 to NL do Begin FreeMem(Col[L]);FreeMem(Wt[L]);End;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Scene : image de travail et cartes de categories (analyse IA)       }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTScene=Record
+  W,VtH:LongInt;
+  Pix:PSingle;                          { RVB 0..255 }
+  Cat:Array[0..VtNumCat-1]of PByte;       { opacite 0..255 de chaque categorie }
+ End;
+
+Const
+ { ensembles de categories (masques de bits) }
+ VtmsTop=1 shl cTop;
+ VtmsSkirt=1 shl cSkirt;
+ VtmsPants=1 shl cPants;
+ VtmsDress=1 shl cDress;
+ VtmsBelt=1 shl cBelt;
+ VtmsShoes=1 shl VtcShoes;
+ VtmsHat=1 shl cHat;
+ VtmsGlasses=1 shl cGlasses;
+ VtmsBag=1 shl cBag;
+ VtmsScarf=1 shl cScarf;
+ VtmsFace=1 shl cFace;
+ VtmsHair=1 shl cHair;
+ VtmsArms=1 shl cArms;
+ VtmsLegs=1 shl cLegs;
+ VtmsSkin=(1 shl cFace)or(1 shl cLegs)or(1 shl cArms)or(1 shl cSkin);
+ VtmsClothes=(1 shl cTop)or(1 shl cSkirt)or(1 shl cPants)or(1 shl cDress);
+
+Procedure VtSceneFree(Var VtS:VtTScene);
+Var
+ C:LongInt;
+Begin
+ If VtS.Pix<>Nil Then FreeMem(VtS.Pix);
+ VtS.Pix:=Nil;
+ For C:=0 to VtNumCat-1 do Begin
+  If VtS.Cat[C]<>Nil Then FreeMem(VtS.Cat[C]);
+  VtS.Cat[C]:=Nil;
+ End;
+End;
+
+{ reduit une image d'octets par moyenne de blocs K x K }
+Procedure VtImgBlockReduce(Var VtI:VtTImage;K:LongInt);
+Var
+ VtN:VtTImage;
+ X,Y,Dx,Dy,C,NW,NH:LongInt;
+ Sum:LongInt;
+Begin
+ NW:=VtI.W div K;NH:=VtI.VtH div K;
+ If(NW<1)or(NH<1)Then Exit;
+ VtImgAlloc(VtN,NW,NH,False);
+ For Y:=0 to NH-1 do
+  For X:=0 to NW-1 do
+   For C:=0 to 2 do Begin
+    Sum:=0;
+    For Dy:=0 to K-1 do
+     For Dx:=0 to K-1 do Inc(Sum,VtI.Px[(Int64(Y*K+Dy)*VtI.W+X*K+Dx)*3+C]);
+    VtN.Px[(Int64(Y)*NW+X)*3+C]:=(Sum+(K*K)div 2)div(K*K);
+   End;
+ VtImgFree(VtI);
+ VtI:=VtN;
+End;
+
+{ cree la scene a partir d'une image ; la grande dimension est limitee a MaxSide
+  }
+Procedure VtSceneFromImage(Var VtImg:VtTImage;MaxSide:LongInt;Var VtS:VtTScene);
+Var
+ VtSide,NW,NH,K,C:LongInt;
+ Src:PSingle;
+ VtN:Int64;
+ Sc:Double;
+Begin
+ FillChar(VtS,SizeOf(VtS),0);
+ VtColorInit;
+ VtSide:=VtImg.W;If VtImg.VtH>VtSide Then VtSide:=VtImg.VtH;
+ If(MaxSide>0)and(VtSide>MaxSide)Then Begin
+  K:=VtSide div MaxSide;
+  If K>=2 Then VtImgBlockReduce(VtImg,K);
+  VtSide:=VtImg.W;If VtImg.VtH>VtSide Then VtSide:=VtImg.VtH;
+ End;
+ NW:=VtImg.W;NH:=VtImg.VtH;
+ If(MaxSide>0)and(VtSide>MaxSide)Then Begin
+  Sc:=MaxSide/VtSide;
+  NW:=Round(VtImg.W*Sc);NH:=Round(VtImg.VtH*Sc);
+  If NW<1 Then NW:=1;
+  If NH<1 Then NH:=1;
+ End;
+ VtN:=Int64(VtImg.W)*VtImg.VtH*3;
+ Src:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do Src[K]:=VtImg.Px[K];
+ VtS.W:=NW;VtS.VtH:=NH;
+ VtS.Pix:=VtAllocF(Int64(NW)*NH*3);
+ VtResizeF(Src,VtImg.W,VtImg.VtH,VtS.Pix,NW,NH,3);
+ FreeMem(Src);
+ For C:=0 to VtNumCat-1 do VtS.Cat[C]:=PByte(VtAllocBytes(Int64(NW)*NH));
+ FillChar(VtS.Cat[VtcBg]^,Int64(NW)*NH,255);
+End;
+
+{ convertit la scene en image 8 bits }
+Procedure VtSceneToImage(Const VtS:VtTScene;Var VtImg:VtTImage);
+Var
+ VtN:int64;K:LongInt;
+ V:Single;
+Begin
+ VtImgAlloc(VtImg,VtS.W,VtS.VtH,False);
+ VtN:=Int64(VtS.W)*VtS.VtH*3;
+ For K:=0 to VtN-1 do Begin
+  V:=VtS.Pix[K];
+  If V<0 Then V:=0 Else If V>255 Then V:=255;
+  VtImg.Px[K]:=Trunc(V+0.5);
+ End;
+End;
+
+{ ---- analyse avec le reseau ---- }
+
+Function VtChooseNetSize(W,VtH,VtSide:LongInt;Var NW,NH:LongInt):Boolean;
+Var
+ Sc:Double;
+Begin
+ Sc:=VtSide/VtIMax(W,VtH);
+ NW:=Round(W*Sc/32.0)*32;
+ NH:=Round(VtH*Sc/32.0)*32;
+ If NW<64 Then NW:=64;
+ If NH<64 Then NH:=64;
+ Result:=True;
+End;
+
+Const
+ VtImgMean:Array[0..2]of Single=(0.485,0.456,0.406);
+ VtImgStd:Array[0..2]of Single=(0.229,0.224,0.225);
+
+{ prepare l'entree du reseau (redimensionnee et normalisee) }
+Function VtNetInput(Const VtS:VtTScene;NW,NH:LongInt):PSingle;
+Var
+ VtTmp:PSingle;
+ VtN:int64;K:LongInt;
+ C:LongInt;
+Begin
+ VtTmp:=VtAllocF(Int64(NW)*NH*3);
+ VtResizeF(VtS.Pix,VtS.W,VtS.VtH,VtTmp,NW,NH,3);
+ For K:=0 to Int64(NW)*NH-1 do
+  For C:=0 to 2 do VtTmp[K*3+C]:=(VtTmp[K*3+C]/255.0-VtImgMean[C])/VtImgStd[C];
+ Result:=VtTmp;
+End;
+
+{ carte d'une categorie a la resolution du reseau -> plan 0..255 de la scene }
+Procedure VtUpsampleCat(Map:PSingle;MW,MH:LongInt;Dst:PSingle;W,VtH:LongInt);
+Var
+ X,Y,X0,X1,Y0,Y1:LongInt;
+ Sx,Sy,Fx,Fy:Single;
+Begin
+ For Y:=0 to VtH-1 do Begin
+  Sy:=(Y+0.5)*MH/VtH-0.5;
+  If Sy<0 Then Sy:=0;
+  Y0:=Trunc(Sy);If Y0>MH-1 Then Y0:=MH-1;
+  Y1:=Y0+1;If Y1>MH-1 Then Y1:=MH-1;
+  Fy:=Sy-Y0;
+  For X:=0 to W-1 do Begin
+   Sx:=(X+0.5)*MW/W-0.5;
+   If Sx<0 Then Sx:=0;
+   X0:=Trunc(Sx);If X0>MW-1 Then X0:=MW-1;
+   X1:=X0+1;If X1>MW-1 Then X1:=MW-1;
+   Fx:=Sx-X0;
+   Dst[Int64(Y)*W+X]:=(Map[Int64(Y0)*MW+X0]*(1-Fx)+Map[Int64(Y0)*MW+X1]*Fx)
+     *(1-Fy)+
+                      (Map[Int64(Y1)*MW+X0]*(1-Fx)+Map[Int64(Y1)*MW+X1]*Fx)*Fy;
+  End;
+ End;
+End;
+
+{ renormalise les categories pour que leur somme vaille 255 en chaque pixel }
+Procedure VtSceneNormalize(Var VtS:VtTScene);
+Var
+ VtN:int64;K:LongInt;
+ C:LongInt;
+ VtT:LongInt;
+ Q:Single;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ For K:=0 to VtN-1 do Begin
+  VtT:=0;
+  For C:=0 to VtNumCat-1 do Inc(VtT,VtS.Cat[C][K]);
+  If VtT=0 Then VtS.Cat[VtcBg][K]:=255
+  Else If VtT<>255 Then Begin
+   Q:=255.0/VtT;
+   For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=Trunc(VtS.Cat[C][K]*Q+0.5);
+  End;
+ End;
+End;
+
+Const
+ VtDumpPath:AnsiString='';
+
+{ ecrit les logits bruts (OH, OW, puis OH*OW*L flottants) pour la mise au point
+  }
+Procedure VtDumpLogits(Lg:PSingle;OH,OW,L:LongInt);
+Var
+ F:File;
+ Hd:Array[0..1]of LongInt;
+Begin
+ Assign(F,VtDumpPath);
+ Rewrite(F,1);
+ If IOResult<>0 Then Exit;
+ Hd[0]:=OH;Hd[1]:=OW;
+ BlockWrite(F,Hd[0],8);
+ BlockWrite(F,Lg^,Int64(OH)*OW*L*4);
+ Close(F);
+End;
+
+{ analyse la scene avec le reseau ; Side : taille de la grande dimension de
+  l'entree }
+Procedure VtParseWithNet(Var VtS:VtTScene;Var VtNet:VtTSegModel;VtSide:LongInt;
+  Refine:Boolean);
+Var
+ NW,NH,OH,OW,L,VtI,C,Rad:LongInt;
+ Inp,Lg:PSingle;
+ Maps:Array[0..VtNumCat-1]of PSingle;
+ Mx,Sum,E:Single;
+ NCell:int64;K:LongInt;
+ Plane,Q:PSingle;
+ VtG:VtTGuide;
+ VtUsed:Array[0..VtNumCat-1]of Boolean;
+ VtN:Int64;
+ V:Single;
+Begin
+ VtChooseNetSize(VtS.W,VtS.VtH,VtSide,NW,NH);
+ VtDetail('entr'#130'e du r'#130'seau : '+VtIStr(NW)+'x'+VtIStr(NH));
+ Inp:=VtNetInput(VtS,NW,NH);
+ Lg:=VtSegForward(VtNet,Inp,NH,NW,OH,OW);
+ FreeMem(Inp);
+ L:=VtNet.NumLabels;
+ If VtDumpPath<>'' Then VtDumpLogits(Lg,OH,OW,L);
+ NCell:=Int64(OH)*OW;
+ For C:=0 to VtNumCat-1 do Begin Maps[C]:=VtAllocF(NCell);VtUsed[C]:=False;End;
+ For K:=0 to NCell-1 do Begin
+  Mx:=Lg[K*L];
+  For VtI:=1 to L-1 do If Lg[K*L+VtI]>Mx Then Mx:=Lg[K*L+VtI];
+  Sum:=0;
+  For VtI:=0 to L-1 do Begin
+   E:=Exp(Lg[K*L+VtI]-Mx);
+   Lg[K*L+VtI]:=E;
+   Sum:=Sum+E;
+  End;
+  For VtI:=0 to L-1 do Begin
+   Maps[VtLabelCat[VtI]][K]:=Maps[VtLabelCat[VtI]][K]+Lg[K*L+VtI]/Sum;
+   VtUsed[VtLabelCat[VtI]]:=True;
+  End;
+ End;
+ FreeMem(Lg);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Plane:=VtAllocF(VtN);
+ Q:=VtAllocF(VtN);
+ If Refine Then Begin
+  Rad:=Round(VtIMin(VtS.W,VtS.VtH)/180.0);
+  If Rad<2 Then Rad:=2;
+  VtGuideInit(VtG,VtS.Pix,VtS.W,VtS.VtH,Rad,0.004);
+ End;
+ For C:=0 to VtNumCat-1 do Begin
+  If not VtUsed[C]Then Continue;
+  VtUpsampleCat(Maps[C],OW,OH,Plane,VtS.W,VtS.VtH);
+  { categories absentes : inutile de filtrer }
+  Mx:=0;
+  For K:=0 to VtN-1 do If Plane[K]>Mx Then Mx:=Plane[K];
+  If Mx<0.02 Then Begin
+   FillChar(VtS.Cat[C]^,VtN,0);
+   Continue;
+  End;
+  If Refine Then Begin
+   VtGuideApply(VtG,Plane,Q);
+   For K:=0 to VtN-1 do Begin
+    V:=Q[K];
+    VtS.Cat[C][K]:=Trunc(V*255.0+0.5);
+   End;
+  End
+   Else For K:=0 to VtN-1 do VtS.Cat[C][K]:=Trunc(Plane[K]*255.0+0.5);
+ End;
+ If Refine Then VtGuideFree(VtG);
+ FreeMem(Plane);FreeMem(Q);
+ For C:=0 to VtNumCat-1 do FreeMem(Maps[C]);
+ VtSceneNormalize(VtS);
+End;
+
+{ analyse issue d'une image d'etiquettes (valeur du pixel = numero de classe) }
+Function VtParseFromLabels(Var VtS:VtTScene;Const FileName:AnsiString;Var
+  VtErr:AnsiString):Boolean;
+Var
+ Im:VtTImage;
+ X,Y,SX,SY,Id,C:LongInt;
+ VtN:Int64;
+Begin
+ Result:=False;
+ If not VtImgLoad(FileName,Im,VtErr)Then Exit;
+ VtSetupLabels(Length(VtDefaultLabels),'');
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ For C:=0 to VtNumCat-1 do FillChar(VtS.Cat[C]^,VtN,0);
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   SX:=X*Im.W div VtS.W;SY:=Y*Im.VtH div VtS.VtH;
+   Id:=Im.Px[(Int64(SY)*Im.W+SX)*3];
+   If Id>=Length(VtLabelCat)Then C:=cOther Else C:=VtLabelCat[Id];
+   VtS.Cat[C][Int64(Y)*VtS.W+X]:=255;
+  End;
+ { adoucit legerement les bords des masques durs }
+ VtDetail('analyse lue depuis '+FileName);
+ VtImgFree(Im);
+ Result:=True;
+End;
+
+{ adoucit les masques durs en suivant les contours de l'image (filtre guide) }
+Procedure VtSceneRefine(Var VtS:VtTScene);
+Var
+ VtN:int64;K:LongInt;
+ C,Rad:LongInt;
+ VtG:VtTGuide;
+ VtP,Q:PSingle;
+ Any:Boolean;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Rad:=Round(VtIMin(VtS.W,VtS.VtH)/180.0);
+ If Rad<2 Then Rad:=2;
+ VtGuideInit(VtG,VtS.Pix,VtS.W,VtS.VtH,Rad,0.004);
+ VtP:=VtAllocF(VtN);Q:=VtAllocF(VtN);
+ For C:=0 to VtNumCat-1 do Begin
+  Any:=False;
+  For K:=0 to VtN-1 do Begin
+   VtP[K]:=VtS.Cat[C][K]/255.0;
+   If VtS.Cat[C][K]<>0 Then Any:=True;
+  End;
+  If not Any Then Continue;
+  VtBoxBlur(VtP,VtP,VtS.W,VtS.VtH,1);
+  VtGuideApply(VtG,VtP,Q);
+  For K:=0 to VtN-1 do VtS.Cat[C][K]:=Trunc(Q[K]*255.0+0.5);
+ End;
+ VtGuideFree(VtG);
+ FreeMem(VtP);FreeMem(Q);
+ VtSceneNormalize(VtS);
+End;
+
+{ ---- requetes sur les categories ---- }
+
+{ opacite cumulee (0..1) des categories de l'ensemble }
+Procedure VtCatMask(Const VtS:VtTScene;Mask:LongWord;Dst:PSingle);
+Var
+ VtN:int64;K:LongInt;
+ C:LongInt;
+ VtT:LongInt;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ For K:=0 to VtN-1 do Begin
+  VtT:=0;
+  For C:=0 to VtNumCat-1 do If(Mask and(LongWord(1)shl C))<>0 Then Inc(VtT,
+    VtS.Cat[C][K]);
+  If VtT>255 Then VtT:=255;
+  Dst[K]:=VtT/255.0;
+ End;
+End;
+
+Function VtCatArea(Const VtS:VtTScene;Mask:LongWord):Int64;
+Var
+ VtN,A:int64;K:LongInt;
+ C:LongInt;
+ VtT:LongInt;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ A:=0;
+ For K:=0 to VtN-1 do Begin
+  VtT:=0;
+  For C:=0 to VtNumCat-1 do If(Mask and(LongWord(1)shl C))<>0 Then Inc(VtT,
+    VtS.Cat[C][K]);
+  If VtT>=128 Then Inc(A);
+ End;
+ Result:=A;
+End;
+
+{ boite englobante des pixels de l'ensemble (opacite >= 128) ; faux si vide }
+Function VtCatBBox(Const VtS:VtTScene;Mask:LongWord;Var X0,Y0,X1,Y1:LongInt):Boolean;
+Var
+ X,Y,C:LongInt;
+ VtT:LongInt;
+ VtP:Int64;
+Begin
+ X0:=VtS.W;Y0:=VtS.VtH;X1:=-1;Y1:=-1;
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   VtP:=Int64(Y)*VtS.W+X;
+   VtT:=0;
+   For C:=0 to VtNumCat-1 do If(Mask and(LongWord(1)shl C))<>0 Then Inc(VtT,
+     VtS.Cat[C][VtP]);
+   If VtT>=128 Then Begin
+    If X<X0 Then X0:=X;
+    If X>X1 Then X1:=X;
+    If Y<Y0 Then Y0:=Y;
+    If Y>Y1 Then Y1:=Y;
+   End;
+  End;
+ Result:=X1>=X0;
+End;
+
+{ nom lisible d'un ensemble de categories }
+Function VtMaskName(Mask:LongWord):AnsiString;
+Var
+ C:LongInt;
+ R:AnsiString;
+Begin
+ R:='';
+ For C:=0 to VtNumCat-1 do If(Mask and(LongWord(1)shl C))<>0 Then Begin
+  If R<>'' Then R:=R+'+';
+  R:=R+VtCatNames[C];
+ End;
+ Result:=R;
+End;
+
+{ colore l'analyse en fausses couleurs (pour -save-parsing) }
+Procedure VtParsingToImage(Const VtS:VtTScene;Var VtImg:VtTImage);
+Const
+ Pal:Array[0..VtNumCat-1]of LongWord=($000000,$FF9500,$7B3F00,$00C8FF,
+   $FF0000,$00B050,
+   $0000FF,$FF00FF,$FFFF00,$800080,$FFC8A0,$C8A06E,$E6B478,$00FFFF,
+     $FF8080,$A0A0A0,
+   $606060);
+Var
+ VtN:int64;K:LongInt;
+ C,Best,V:LongInt;
+Begin
+ VtImgAlloc(VtImg,VtS.W,VtS.VtH,False);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ For K:=0 to VtN-1 do Begin
+  Best:=0;V:=-1;
+  For C:=0 to VtNumCat-1 do If VtS.Cat[C][K]>V Then Begin V:=VtS.Cat[C][K];Best:=C;
+    End;
+  VtImg.Px[K*3]:=(Pal[Best]shr 16)and $FF;
+  VtImg.Px[K*3+1]:=(Pal[Best]shr 8)and $FF;
+  VtImg.Px[K*3+2]:=Pal[Best]and $FF;
+ End;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Langage naturel (francais / anglais) : demande -> liste de retouches   }
+{ ------------------------------------------------------------------ }
+
+Const
+ { genres de vetement }
+ VtgkNone=0;gkTop=1;gkBottom=2;gkDress=3;gkFull=4;gkShoes=5;gkHat=6;gkGlasses=7;
+ VtgkBag=8;gkScarf=9;gkBelt=10;gkSkirt=11;gkAll=12;gkHair=13;gkEyes=14;
+   gkArms=15;gkBody=16;
+ { natures de mots du lexique }
+ VtlkGarment=1;lkColor=2;lkMod=3;lkPattern=4;lkVRecolor=5;lkVRemove=6;lkVTryOn=7;
+ VtlkPrepDst=8;lkAll=9;lkVResult=10;lkSplit=11;lkVLight=12;lkSrcPrep=13;lkVAdd=14;
+ VtlkHairStyle=15;lkJewel=16;lkJewelMod=17;lkStyle=18;lkExpr=19;
+   lkMaterial=20;lkScene=21;lkPose2=22;
+ VtlkSkin=23;lkYears=24;lkNumber=25;lkSpecial=26;lkSkinW=27;lkImgW=28;
+   lkBgW=29;lkImgOp=30;lkBgKind=31;
+ { modificateurs }
+ VtmdDark=1;mdLight=2;mdVivid=3;mdPale=4;mdDull=5;
+ { motifs }
+ VtpkNone=0;pkStripes=1;pkChecks=2;pkDots=3;pkPlain=4;
+ { actions }
+ VteaNone=0;eaRecolor=1;eaRemove=2;eaTryOn=3;eaAdd=4;eaHair=5;eaStyle=6;
+   eaFace=7;eaPose=8;eaMaterial=9;eaScene=10;eaPose2=11;eaSkin=12;
+   eaImage=13;eaBg=14;
+ { poses et situations }
+ VtpcCross=1;pcPeace=2;pcPoint=3;pcFloat=4;pcJump=5;pcArmsOut=6;
+   pcLie=7;pcHeadStraight=8;pcLost=9;
+ VtpcSerious=10;pcSad=11;pcHalo=12;pcSleep=13;pcSit=14;pcKneel=15;pcBike=16;
+   pcLean=17;pcStairs=18;
+ VtpcDoghouse=19;pcTightrope=20;pcBed=21;
+ { poses qui montrent la personne en pied }
+ VtFeetPoses=(1 shl pcFloat)or(1 shl pcJump)or(1 shl pcLie)or(1 shl pcBed)or(1 shl
+   pcTightrope)or(1 shl VtpcDoghouse)or(1 shl pcStairs)or(1 shl pcSleep);
+ { peau, age, teintes speciales }
+ VtsoSmooth=1;soGrain=2;soBaby=3;soSoft=4;soAge=5;soSalt=6;
+ { image entiere et arriere-plan }
+ VtioSmooth=1;ioBlur=2;ioSharp=3;
+ VtboSolid=1;boTransparent=2;boStars=3;boSunny=4;boSunset=5;boBlur=6;
+ VtboTropical=7;boAmazon=8;boQuebec=9;boCanada=10;boConifer=11;boForest=12;
+ { matieres et scenes }
+ VtmtNone=0;mtMetal=1;mtRobot=2;mtStatue=3;mtChain=4;
+ VtscNone=0;scCarousel=1;
+ { coiffures }
+ VthsNone=0;hsLonger=1;hsShorter=2;hsCurly=3;hsBald=4;hsStraight=5;
+ { bijoux (indicateurs) }
+ VtjwNecklace=1;jwEarrings=2;jwBracelet=4;jwWatch=8;jwRing=16;
+ { styles d'image }
+ VtstNone=0;stComic=1;stCartoon=2;stSketch=3;stReal=4;
+
+Const
+ VtmsEyes=LongWord(1)shl 30;
+
+Type
+ VtTLex=Record
+  W:String[24];
+  VtKind:LongInt;
+  V1:LongInt;
+  V2:LongWord;
+ End;
+ VtTEdit=Record
+  Action:LongInt;
+  Target:LongWord;          { ensemble de categories visees (0 = non precise) }
+  VtKind:LongInt;             { genre du vetement vise }
+  HasSrc,HasDst:Boolean;
+  SrcRGB,DstRGB:LongWord;
+  SrcName,DstName:AnsiString;
+  LGain,CGain:Single;       { 1 = inchange }
+  Pattern:LongInt;
+  HasColor2:Boolean;
+  Color2RGB:LongWord;
+  Color2Name:AnsiString;
+  DstGarment:LongInt;       { genre de vetement cite comme resultat }
+  Noun:AnsiString;          { mot designant le vetement vise }
+  HairStyle,Jewel,Style,Expr:LongInt;
+  Pose:Boolean;
+  Material,VtScene:LongInt;
+  Poses:LongWord;
+  ImgOp,BgOp:LongInt;       { operation sur l'image entiere / sur l'arriere-plan
+    }
+  SkinOp,Years:LongInt;     { peau / age (annees, negatif = rajeunir) / teinte
+    speciale }
+  Diamond,Apple:Boolean;
+  Put:Boolean;              { ? mets un chapeau ? : ajout si l'objet est absent
+    }
+  Text:AnsiString;
+ End;
+ VtTEditArray=Array of VtTEdit;
+
+Const
+ VtNLex:LongInt=0;
+ VtNPhrase:LongInt=0;
+ VtLexReady:Boolean=False;
+Var
+ VtLex:Array[0..1023]of VtTLex;
+ VtPhrase:Array[0..127]of VtTLex;
+
+Procedure VtAddLex(Const Words:AnsiString;VtKind,V1:LongInt;V2:LongWord);
+Var
+ VtI,VtP:LongInt;
+ W:AnsiString;
+Begin
+ VtP:=1;
+ For VtI:=1 to Length(Words)+1 do
+  If(VtI>Length(Words))or(Words[VtI]=' ')Then Begin
+   W:=Copy(Words,VtP,VtI-VtP);
+   VtP:=VtI+1;
+   If W<>'' Then Begin
+    VtLex[VtNLex].W:=W;VtLex[VtNLex].VtKind:=VtKind;VtLex[VtNLex].V1:=V1;VtLex[VtNLex].V2:=V2;
+    Inc(VtNLex);
+   End;
+  End;
+End;
+
+Procedure VtAddPhrase(Const Words:AnsiString;RGB:LongWord);
+Begin
+ VtPhrase[VtNPhrase].W:=Words;
+ VtPhrase[VtNPhrase].VtKind:=lkColor;
+ VtPhrase[VtNPhrase].V1:=0;
+ VtPhrase[VtNPhrase].V2:=RGB;
+ Inc(VtNPhrase);
+End;
+
+Function VtRgbOf(R,VtG,B:LongWord):LongWord;
+Begin
+ Result:=(R shl 16)or(VtG shl 8)or B;
+End;
+
+Procedure VtLexInit;
+Begin
+ If VtLexReady Then Exit;
+ VtLexReady:=True;
+ { vetements : genre, ensemble de categories }
+ VtAddLex('chandail pull tricot chemise chemisier tshirt polo veste blouson '+
+   'manteau parka veston blazer cardigan gilet sweat sweatshirt hoodie '+
+   'camisole debardeur top maillot jersey doudoune imper trench tunique '+
+   'shirt sweater jumper jacket coat blouse tank vest turtleneck haut',
+   VtlkGarment,gkTop,VtmsTop);
+ VtAddLex('pantalon jean short bermuda legging pants trousers slacks chinos '+
+   'jogging',VtlkGarment,gkBottom,VtmsPants);
+ VtAddLex('jupe skirt',VtlkGarment,gkSkirt,VtmsSkirt);
+ VtAddLex('robe dress combinaison jumpsuit',VtlkGarment,gkDress,VtmsDress);
+ VtAddLex('chaussure soulier botte basket espadrille sandale escarpin sneaker '+
+   'shoe boot sandal tennis pied pieds feet foot',VtlkGarment,gkShoes,VtmsShoes);
+ VtAddLex('chapeau casquette tuque bonnet beret hat cap beanie',VtlkGarment,
+   gkHat,VtmsHat);
+ VtAddLex('lunette lunettes glasses sunglasses eyeglasses',VtlkGarment,
+   gkGlasses,VtmsGlasses);
+ VtAddLex('sac sacoche bag handbag purse backpack',VtlkGarment,VtgkBag,VtmsBag);
+ VtAddLex('foulard echarpe cravate scarf tie shawl chale',VtlkGarment,
+   gkScarf,VtmsScarf);
+ VtAddLex('ceinture belt',VtlkGarment,gkBelt,VtmsBelt);
+ VtAddLex('vetement habit tenue outfit clothes clothing ensemble costume',
+   VtlkGarment,gkAll,VtmsClothes);
+ VtAddLex('tout tous toute toutes everything all',lkAll,0,0);
+ { poses et situations }
+ VtAddLex('croise croises croisee croisees',lkPose2,VtpcCross,0);
+ VtAddLex('peace paix victoire',lkPose2,pcPeace,0);
+ VtAddLex('pointe pointer pointant doigt',lkPose2,pcPoint,0);
+ VtAddLex('flotte flotter flottant flottante levite levitation float floating',
+   lkPose2,pcFloat,0);
+ VtAddLex('saute sauter saut jump jumping',lkPose2,pcJump,0);
+ VtAddLex('couche coucher couchee couches',lkPose2,pcLie,0);
+ VtAddLex('tete head',lkPose2,pcHeadStraight,0);
+ VtAddLex('perdu perdue lost',lkPose2,pcLost,0);
+ VtAddLex('serieux serieuse serious',lkPose2,VtpcSerious,0);
+ VtAddLex('triste tristes sad',lkPose2,pcSad,0);
+ VtAddLex('aureole halo',lkPose2,pcHalo,0);
+ VtAddLex('somnambule somnambules sleepwalker sleepwalking',lkPose2,pcSleep,0);
+ VtAddLex('assis assise assises assoit asseoir seated sitting sit',lkPose2,pcSit,
+   0);
+ VtAddLex('genou genoux kneeling kneel',lkPose2,pcKneel,0);
+ VtAddLex('bicyclette velo bike bicycle cycling',lkPose2,pcBike,0);
+ VtAddLex('appuie appuye appuyer appuyee appuyant meuble meubles lean leaning',
+   lkPose2,pcLean,0);
+ VtAddLex('escalier escaliers stairs staircase monte monter',lkPose2,pcStairs,0);
+ VtAddLex('niche doghouse',lkPose2,VtpcDoghouse,0);
+ VtAddLex('fer funambule tightrope',lkPose2,pcTightrope,0);
+ VtAddLex('lit bed',lkPose2,pcBed,0);
+ { corps, matieres, scenes }
+ VtAddLex('corps body',VtlkGarment,gkBody,VtmsSkin);
+ VtAddLex('metallique metallic metal chrome chromee chromes',lkMaterial,mtMetal,
+   0);
+ VtAddLex('robot robots robotique robotiques robotic cyborg android',
+   lkMaterial,mtRobot,0);
+ VtAddLex('statue statues marbre marble pierre stone',lkMaterial,mtStatue,0);
+ VtAddLex('maille mailles chainmail',lkMaterial,mtChain,0);
+ VtAddLex('carrousel carroussel carousel manege merry',lkScene,scCarousel,0);
+ VtAddLex('bronze',lkColor,0,VtRgbOf(176,112,52));
+ VtAddLex('cuivre copper',lkColor,0,VtRgbOf(184,115,51));
+ { yeux, bras, expressions }
+ VtAddLex('oeil yeux eye eyes iris',VtlkGarment,gkEyes,VtmsEyes);
+ VtAddLex('bras arm arms',VtlkGarment,gkArms,VtmsArms);
+ VtAddLex(
+   'sourit sourire sourires souriant souriante souriants souriantes smile '+
+   'smiling smiley',lkExpr,1,0);
+ { peau, age, teintes speciales }
+ VtAddLex('peau peaux skin complexion teint',lkSkinW,0,0);
+ VtAddLex('lisse lisses lisser smooth smoother smoothing',VtlkSkin,VtsoSmooth,0);
+ VtAddLex(
+   'granuleux granuleuse granuleuses grain grains grainy rugueux rugueuse '+
+   'rough texturee textured',VtlkSkin,soGrain,0);
+ VtAddLex('bebe baby',VtlkSkin,soBaby,0);
+ VtAddLex('douce douces doux soft softer',VtlkSkin,soSoft,0);
+ VtAddLex('rajeunis rajeunir rajeunie rajeunissez rajeunit jeune jeunes younger '+
+   'rejuvenate',lkYears,-1,0);
+ VtAddLex(
+   'vieillis vieillir vieillie vieillissez vieillit vieux vieille vieilles '+
+   'older',lkYears,1,0);
+ VtAddLex('cinq five',lkNumber,5,0);
+ VtAddLex('dix ten',lkNumber,10,0);
+ VtAddLex('quinze fifteen',lkNumber,15,0);
+ VtAddLex('vingt twenty',lkNumber,20,0);
+ VtAddLex('trente thirty',lkNumber,30,0);
+ VtAddLex('poivresel',lkSpecial,1,0);
+ { image entiere et arriere-plan }
+ VtAddLex('image images picture pictures photo photos photographie',lkImgW,0,0);
+ VtAddLex('fond arriere background backdrop decor',lkBgW,0,0);
+ VtAddLex('lisse lisses lisser smooth smoother',lkImgOp,VtioSmooth,0);
+ VtAddLex('flou floue floues floux flouter floute blur blurry blurred blurrier',
+   lkImgOp,ioBlur,0);
+ VtAddLex('net nette nets nettes nettete sharp sharper sharpen',lkImgOp,ioSharp,
+   0);
+ VtAddLex('transparent transparente transparents transparentes transparence '+
+   'transparency',lkBgKind,boTransparent,0);
+ VtAddLex('etoile etoilee etoilees etoiles star stars starry',lkBgKind,boStars,0);
+ VtAddLex('ensoleille ensoleillee ensoleilles soleil sunny sun sunshine',
+   lkBgKind,boSunny,0);
+ VtAddLex('sunset crepuscule',lkBgKind,boSunset,0);
+ VtAddLex('foret forets forest forests jungle',lkBgW,0,0);
+ VtAddLex('foret forets forest forests',lkBgKind,boForest,0);
+ VtAddLex('tropicale tropicales tropical jungle',lkBgKind,VtboTropical,0);
+ VtAddLex('amazonienne amazoniennes amazonien amazoniens amazonie amazonian '+
+   'amazon amazone',lkBgKind,boAmazon,0);
+ VtAddLex('quebecoise quebecoises quebecois quebec erable erables maple',
+   lkBgKind,boQuebec,0);
+ VtAddLex('canadienne canadiennes canadien canadiens canada canadian boreale '+
+   'boreal',lkBgKind,boCanada,0);
+ VtAddLex('conifere coniferes conifer conifers sapin sapins epinette epinettes '+
+   'pin pins pine pines spruce fir taiga',lkBgKind,boConifer,0);
+ { cheveux et coiffures }
+ VtAddLex('cheveu cheveux chevelure coiffure hair hairstyle',VtlkGarment,
+   gkHair,VtmsHair);
+ VtAddLex(
+   'allonge allonger allongez rallonge rallonger long longs longue longues '+
+   'lengthen longer',VtlkHairStyle,hsLonger,0);
+ VtAddLex(
+   'court courts courte courtes raccourcis raccourcir raccourcit raccourci '+
+   'coupe couper coupez shorter shorten',VtlkHairStyle,hsShorter,0);
+ VtAddLex('frise frises frisee frisees friser curly curls wavy ondule ondules '+
+   'ondulee ondulees boucle boucles bouclee bouclees curl',VtlkHairStyle,hsCurly,
+   0);
+ VtAddLex('chauve bald',VtlkHairStyle,hsBald,0);
+ VtAddLex('raide raides lisse lisses straight',VtlkHairStyle,hsStraight,0);
+ { bijoux }
+ VtAddLex('bijou bijoux jewelry jewellery jewel jewels parure',lkJewel,
+   VtjwNecklace+jwEarrings+jwBracelet,0);
+ VtAddLex('collier colliers necklace pendentif pendant chaine chain',
+   lkJewel,VtjwNecklace,0);
+ VtAddLex('oreille oreilles earring earrings',lkJewel,jwEarrings,0);
+ VtAddLex('bracelet bracelets bangle bangles',lkJewel,jwBracelet,0);
+ VtAddLex('montre montres watch watches',lkJewel,jwWatch,0);
+ VtAddLex('bague bagues ring rings',lkJewel,jwRing,0);
+ VtAddLex('diamant diamants diamond diamonds brillant brillants',lkJewelMod,1,0);
+ VtAddLex('apple',lkJewelMod,2,0);
+ { styles d'image }
+ VtAddLex('bd bande dessinee dessinees comic comics',lkStyle,stComic,0);
+ VtAddLex('cartoon cartoons dessin dessins anime animation animee',
+   lkStyle,stCartoon,0);
+ VtAddLex('croquis sketch crayon',lkStyle,stSketch,0);
+ VtAddLex(
+   'reel reelle reels realiste realistes realistic real photo photographie '+
+   'photorealiste photorealistic',lkStyle,stReal,0);
+ { couleurs }
+ VtAddLex('rouge red',lkColor,0,VtRgbOf(200,30,40));
+ VtAddLex('bleu bleue blue',lkColor,0,VtRgbOf(30,70,200));
+ VtAddLex('vert verte green',lkColor,0,VtRgbOf(40,150,70));
+ VtAddLex('jaune yellow',lkColor,0,VtRgbOf(240,210,40));
+ VtAddLex('orange',lkColor,0,VtRgbOf(240,130,30));
+ VtAddLex('rose pink',lkColor,0,VtRgbOf(245,150,180));
+ VtAddLex('violet violette purple mauve pourpre',lkColor,0,VtRgbOf(130,60,170));
+ VtAddLex('marron brun brune brown',lkColor,0,VtRgbOf(110,70,40));
+ VtAddLex('beige tan',lkColor,0,VtRgbOf(225,205,170));
+ VtAddLex('noir noire black',lkColor,0,VtRgbOf(22,22,25));
+ VtAddLex('blanc blanche white',lkColor,0,VtRgbOf(245,245,245));
+ VtAddLex('blond blonde blondes blonds',lkColor,0,VtRgbOf(222,185,105));
+ VtAddLex('roux rousse rousses auburn',lkColor,0,VtRgbOf(168,70,28));
+ VtAddLex('chatain chatains chataine',lkColor,0,VtRgbOf(98,64,40));
+ VtAddLex('platine platinum',lkColor,0,VtRgbOf(232,228,210));
+ VtAddLex('gris grise gray grey',lkColor,0,VtRgbOf(128,128,128));
+ VtAddLex('turquoise teal',lkColor,0,VtRgbOf(40,185,185));
+ VtAddLex('cyan',lkColor,0,VtRgbOf(0,190,230));
+ VtAddLex('magenta',lkColor,0,VtRgbOf(210,30,150));
+ VtAddLex('fuchsia',lkColor,0,VtRgbOf(230,40,160));
+ VtAddLex('bordeaux burgundy maroon grenat',lkColor,0,VtRgbOf(110,20,40));
+ VtAddLex('kaki khaki',lkColor,0,VtRgbOf(130,130,70));
+ VtAddLex('marine navy',lkColor,0,VtRgbOf(20,35,90));
+ VtAddLex('or dore gold golden',lkColor,0,VtRgbOf(212,175,55));
+ VtAddLex('argent argente silver',lkColor,0,VtRgbOf(190,190,195));
+ VtAddLex('lavande lavender lilas lilac',lkColor,0,VtRgbOf(185,160,220));
+ VtAddLex('saumon salmon',lkColor,0,VtRgbOf(250,130,110));
+ VtAddLex('corail coral',lkColor,0,VtRgbOf(255,110,90));
+ VtAddLex('moutarde mustard',lkColor,0,VtRgbOf(210,170,40));
+ VtAddLex('olive',lkColor,0,VtRgbOf(110,120,40));
+ VtAddLex('creme cream ivoire ivory',lkColor,0,VtRgbOf(255,248,220));
+ VtAddLex('camel',lkColor,0,VtRgbOf(190,140,80));
+ VtAddLex('indigo',lkColor,0,VtRgbOf(50,40,130));
+ VtAddLex('menthe mint',lkColor,0,VtRgbOf(150,225,180));
+ VtAddLex('emeraude emerald',lkColor,0,VtRgbOf(20,140,90));
+ VtAddLex('denim',lkColor,0,VtRgbOf(60,90,140));
+ VtAddLex('anthracite charcoal',lkColor,0,VtRgbOf(55,58,64));
+ VtAddLex('ciel',lkColor,0,VtRgbOf(130,190,235));
+ VtAddLex('paille straw osier wicker',lkColor,0,VtRgbOf(222,190,110));
+ VtAddPhrase('bleu marine',VtRgbOf(20,35,90));
+ VtAddPhrase('bleu ciel',VtRgbOf(130,190,235));
+ VtAddPhrase('bleu roi',VtRgbOf(40,70,210));
+ VtAddPhrase('bleu royal',VtRgbOf(40,70,210));
+ VtAddPhrase('royal blue',VtRgbOf(40,70,210));
+ VtAddPhrase('bleu nuit',VtRgbOf(15,20,70));
+ VtAddPhrase('bleu turquoise',VtRgbOf(40,185,185));
+ VtAddPhrase('sky blue',VtRgbOf(130,190,235));
+ VtAddPhrase('navy blue',VtRgbOf(20,35,90));
+ VtAddPhrase('vert pomme',VtRgbOf(130,200,50));
+ VtAddPhrase('vert bouteille',VtRgbOf(10,70,40));
+ VtAddPhrase('vert olive',VtRgbOf(110,120,40));
+ VtAddPhrase('vert menthe',VtRgbOf(150,225,180));
+ VtAddPhrase('vert emeraude',VtRgbOf(20,140,90));
+ VtAddPhrase('vert sapin',VtRgbOf(20,80,50));
+ VtAddPhrase('lime green',VtRgbOf(130,200,50));
+ VtAddPhrase('forest green',VtRgbOf(25,90,45));
+ VtAddPhrase('hot pink',VtRgbOf(240,60,150));
+ VtAddPhrase('rose bonbon',VtRgbOf(240,100,170));
+ VtAddPhrase('rose pale',VtRgbOf(250,205,215));
+ VtAddPhrase('rouge vif',VtRgbOf(230,20,30));
+ VtAddPhrase('jaune moutarde',VtRgbOf(210,170,40));
+ VtAddPhrase('gris anthracite',VtRgbOf(55,58,64));
+ VtAddPhrase('gris perle',VtRgbOf(200,200,205));
+ VtAddPhrase('gris souris',VtRgbOf(120,120,125));
+ { modificateurs de teinte }
+ VtAddLex('fonce foncee sombre dark deep',lkMod,VtmdDark,0);
+ VtAddLex('clair claire light lighter pale pales pastel',lkMod,mdLight,0);
+ VtAddLex('vif vive vives vifs vivid bright saturated sature saturee',
+   lkMod,mdVivid,0);
+ VtAddLex('terne ternes dull muted delave delavee faded desature',lkMod,mdDull,0);
+ VtAddLex('eclaircis eclaircir lighten brighten',lkVLight,mdLight,0);
+ VtAddLex('assombris assombrir darken fonce',lkVLight,VtmdDark,0);
+ { motifs }
+ VtAddLex('rayure rayures raye raye rayee rayees stripe stripes striped',
+   lkPattern,pkStripes,0);
+ VtAddLex('carreau carreaux carre carres plaid tartan ecossais ecossaise '+
+   'checkered checked gingham vichy',lkPattern,pkChecks,0);
+ VtAddLex('pois polka dots dotted',lkPattern,pkDots,0);
+ VtAddLex('uni unie unis unies solid plain',lkPattern,pkPlain,0);
+ { verbes }
+ VtAddLex('change changer changez modifie modifier modifiez transforme '+
+   'transformer colorie colorier colorer teinte teindre peins peindre '+
+   'repeins repeindre recolor recolorer convertis convertir change switch '+
+   'swap remplace remplacer replace',lkVRecolor,0,0);
+ VtAddLex('rends rendre mets met mettre passe passer make turn paint dye color '+
+   'colour',lkVResult,0,0);
+ VtAddLex('enleve enlever enlevez retire retirer retirez supprime supprimer '+
+   'supprimez efface effacer effacez ote oter remove delete erase sans '+
+   'without',lkVRemove,0,0);
+ VtAddLex('essaie essaye essayer essayez porte porter habille habiller try wear',
+   lkVTryOn,0,0);
+ VtAddLex(
+   'ajoute ajouter ajoutez rajoute rajouter add append equipe equiper give '+
+   'donne donner voir montre montrer montrez show see display',lkVAdd,0,0);
+ { prepositions de destination }
+ VtAddLex('en in into to par by as vers pour for',VtlkPrepDst,0,0);
+ VtAddLex('de from',lkSrcPrep,0,0);
+ VtAddLex('et and puis then ensuite afterwards also aussi',lkSplit,0,0);
+End;
+
+{ ---- normalisation du texte : UTF-8 -> minuscules ASCII ---- }
+
+{ remplace toutes les occurrences }
+Function VtStrReplace(Const VtS,A,B:AnsiString):AnsiString;
+Var
+ R:AnsiString;
+ VtP:LongInt;
+Begin
+ R:=VtS;
+ VtP:=Pos(A,R);
+ While VtP>0 do Begin
+  R:=Copy(R,1,VtP-1)+B+Copy(R,VtP+Length(A),Length(R));
+  VtP:=Pos(A,R);
+ End;
+ Result:=R;
+End;
+
+Function VtFoldText(Const VtS:AnsiString):AnsiString;
+Var
+ R:AnsiString;
+ VtI,VtN,B,B2,B3,Code:LongInt;
+ C:Char;
+ Function Fold1(Code:LongInt):AnsiString;
+ Begin
+  Fold1:=' ';
+  Case Code of
+   192..197,224..229:Fold1:='a';
+   199,231:Fold1:='c';
+   200..203,232..235:Fold1:='e';
+   204..207,236..239:Fold1:='i';
+   209,241:Fold1:='n';
+   210..214,242..246:Fold1:='o';
+   217..220,249..252:Fold1:='u';
+   221,253,255:Fold1:='y';
+   338,339:Fold1:='oe';
+   198,230:Fold1:='ae';
+   8217,8216,180,96:Fold1:=' ';
+  End;
+ End;
+Begin
+ R:='';
+ VtN:=Length(VtS);
+ VtI:=1;
+ While VtI<=VtN do Begin
+  B:=Ord(VtS[VtI]);
+  Code:=B;
+  If B<$80 Then Inc(VtI)
+  Else If(B and $E0)=$C0 Then Begin
+   If VtI+1<=VtN Then Code:=((B and $1F)shl 6)or(Ord(VtS[VtI+1])and $3F);
+   Inc(VtI,2);
+  End
+   Else If(B and $F0)=$E0 Then Begin
+    If VtI+2<=VtN Then Code:=((B and $0F)shl 12)or((Ord(VtS[VtI+1])and $3F)shl 6)
+      or(Ord(VtS[VtI+2])and $3F);
+    Inc(VtI,3);
+   End
+    Else If(B and $F8)=$F0 Then Begin Code:=0;Inc(VtI,4);End
+    Else Begin
+     { octet isole : page ANSI (Latin-1) }
+     Inc(VtI);
+    End;
+  If Code<128 Then Begin
+   C:=Chr(Code);
+   If C in['A'..'Z']Then C:=Chr(Ord(C)+32);
+   If C in['a'..'z','0'..'9','#',',',';','.','-']Then R:=R+C
+   Else If C in['!','?']Then R:=R+'.'
+   Else R:=R+' ';
+  End
+   Else R:=R+Fold1(Code);
+ End;
+ { t-shirt et consorts }
+ B:=Pos('t-shirt',R);
+ While B>0 do Begin Delete(R,B+1,1);B:=Pos('t-shirt',R);End;
+ B:=Pos('tee-shirt',R);
+ While B>0 do Begin Delete(R,B+3,1);B:=Pos('tee-shirt',R);End;
+ B:=Pos('tee shirt',R);
+ While B>0 do Begin Delete(R,B+3,1);B:=Pos('tee shirt',R);End;
+ B:=Pos('teeshirt',R);
+ While B>0 do Begin Delete(R,B,3);B:=Pos('teeshirt',R);End;
+ For VtI:=1 to Length(R)do If R[VtI]='-' Then R[VtI]:=' ';
+ { poivre et sel : un seul mot (sinon ? et ? couperait la demande) }
+ R:=' '+R+' ';
+ R:=VtStrReplace(R,' poivre et sel ',' poivresel ');
+ R:=VtStrReplace(R,' poivre sel ',' poivresel ');
+ R:=VtStrReplace(R,' sel et poivre ',' poivresel ');
+ R:=VtStrReplace(R,' sel poivre ',' poivresel ');
+ R:=VtStrReplace(R,' salt and pepper ',' poivresel ');
+ R:=VtStrReplace(R,' salt pepper ',' poivresel ');
+ R:=VtStrReplace(R,' coucher de soleil ',' sunset ');
+ R:=VtStrReplace(R,' coucher du soleil ',' sunset ');
+ R:=VtStrReplace(R,' coucher de soliel ',' sunset ');
+ Result:=VtTrimS(R);
+End;
+
+{ decoupe en mots ; ',', ';' et '.' deviennent des mots a part }
+Procedure VtTokenize(Const VtS:AnsiString;Var VtT:VtTStrArray);
+Var
+ VtI:LongInt;
+ Cur:AnsiString;
+Begin
+ SetLength(VtT,0);
+ Cur:='';
+ For VtI:=1 to Length(VtS)do Begin
+  If VtS[VtI]in[',',';','.']Then Begin
+   If Cur<>'' Then VtAddStr(VtT,Cur);
+   Cur:='';
+   VtAddStr(VtT,VtS[VtI]);
+  End
+   Else If VtS[VtI]=' ' Then Begin
+    If Cur<>'' Then VtAddStr(VtT,Cur);
+    Cur:='';
+   End
+   Else Cur:=Cur+VtS[VtI];
+ End;
+ If Cur<>'' Then VtAddStr(VtT,Cur);
+End;
+
+{ cherche un mot du lexique (avec variantes de pluriel) ; renvoie l'indice ou -1
+  }
+Function VtLexFind(Const W:AnsiString;VtKind:LongInt):LongInt;
+Var
+ VtI,L:LongInt;
+ V1,V2,V3:AnsiString;
+Begin
+ Result:=-1;
+ L:=Length(W);
+ V1:=W;V2:='';V3:='';
+ If(L>3)and(W[L]='s')Then V2:=Copy(W,1,L-1);
+ If(L>4)and(Copy(W,L-1,2)='es')Then V3:=Copy(W,1,L-2);
+ If(L>3)and(W[L]='x')Then V3:=Copy(W,1,L-1);
+ For VtI:=0 to VtNLex-1 do
+  If(VtLex[VtI].VtKind=VtKind)or(VtKind=0)Then
+   If(VtLex[VtI].W=V1)or((V2<>'')and(VtLex[VtI].W=V2))or((V3<>'')and(VtLex[VtI].W=V3))
+     Then Begin
+    Result:=VtI;Exit;
+   End;
+End;
+
+Function VtIsHexColor(Const W:AnsiString;Var RGB:LongWord):Boolean;
+Var
+ VtI,V:LongInt;
+ D:Array[0..5]of LongInt;
+Begin
+ Result:=False;
+ If(Length(W)<>4)and(Length(W)<>7)Then Exit;
+ If W[1]<>'#' Then Exit;
+ For VtI:=2 to Length(W)do If VtHexVal(W[VtI])<0 Then Exit;
+ If Length(W)=4 Then Begin
+  For VtI:=0 to 2 do D[VtI*2]:=VtHexVal(W[VtI+2])*17;
+  RGB:=(D[0]shl 16)or(D[2]shl 8)or D[4];
+ End
+  Else Begin
+   V:=0;
+   For VtI:=2 to 7 do V:=V*16+VtHexVal(W[VtI]);
+   RGB:=V;
+  End;
+ Result:=True;
+End;
+
+{ lit une couleur a la position I (mots composes, modificateurs adjacents) ;
+  Used : nombre de mots consommes ; renvoie faux si ce n'est pas une couleur }
+Function VtReadColor(Const VtT:VtTStrArray;VtI:LongInt;Var RGB:LongWord;Var
+  Name:AnsiString;
+  Var VtUsed:LongInt;Var Mod_:LongInt):Boolean;
+Var
+ K,X:LongInt;
+ VtJ:LongInt;
+Begin
+ Result:=False;
+ Mod_:=0;VtUsed:=1;
+ If VtIsHexColor(VtT[VtI],RGB)Then Begin Name:=VtT[VtI];Result:=True;Exit;End;
+ If VtI+1<=High(VtT)Then
+  For K:=0 to VtNPhrase-1 do If VtPhrase[K].W=VtT[VtI]+' '+VtT[VtI+1]Then Begin
+   RGB:=VtPhrase[K].V2;Name:=VtT[VtI]+' '+VtT[VtI+1];VtUsed:=2;Result:=True;Exit;
+  End;
+ K:=VtLexFind(VtT[VtI],lkColor);
+ If K<0 Then Exit;
+ RGB:=VtLex[K].V2;Name:=VtT[VtI];
+ { modificateur juste apres : ? bleu fonce ? }
+ If VtI+1<=High(VtT)Then Begin
+  X:=VtLexFind(VtT[VtI+1],lkMod);
+  If X>=0 Then Begin Mod_:=VtLex[X].V1;VtUsed:=2;Name:=Name+' '+VtT[VtI+1];End;
+ End;
+ { modificateur juste avant : ? dark blue ? (deja consomme par l'appelant) }
+ Result:=True;
+End;
+
+{ applique un modificateur de teinte a une couleur RVB }
+Function VtApplyShade(RGB:LongWord;Md:LongInt):LongWord;
+Var
+ R,VtG,B,L,A,Bb:Single;
+ Cc:Single;
+Begin
+ VtColorInit;
+ If Md=0 Then Begin Result:=RGB;Exit;End;
+ R:=(RGB shr 16)and $FF;VtG:=(RGB shr 8)and $FF;B:=RGB and $FF;
+ VtRgbToLab(R,VtG,B,L,A,Bb);
+ Case Md of
+  VtmdDark:Begin L:=L*0.62;A:=A*0.95;Bb:=Bb*0.95;End;
+  mdLight:Begin L:=L+(100-L)*0.45;A:=A*0.7;Bb:=Bb*0.7;End;
+  mdVivid:Begin A:=A*1.3;Bb:=Bb*1.3;End;
+  mdPale:Begin L:=L+(100-L)*0.35;A:=A*0.5;Bb:=Bb*0.5;End;
+  mdDull:Begin A:=A*0.5;Bb:=Bb*0.5;End;
+ End;
+ VtLabToRgb(L,A,Bb,R,VtG,B);
+ Result:=(Round(R)shl 16)or(Round(VtG)shl 8)or Round(B);
+End;
+
+Procedure VtClearEdit(Var E:VtTEdit);
+Begin
+ FillChar(E,SizeOf(E),0);
+ E.LGain:=1;E.CGain:=1;
+ E.SrcName:='';E.DstName:='';E.Color2Name:='';E.Text:='';E.Noun:='';
+End;
+
+{ interprete une clause (mots T[A..B]) ; faux si elle ne contient rien
+  d'exploitable }
+Function VtParseClause(Const VtT:VtTStrArray;A,B:LongInt;Var E:VtTEdit;Var
+  HasChange:Boolean;
+  Var HasVerb:Boolean):Boolean;
+Var
+ VtI,K,X,VtUsed,Md,NCol,PrepPos,NTargets:LongInt;
+ RGB:LongWord;
+ Nm:AnsiString;
+ Cols:Array[0..7]of LongWord;
+ ColNames:Array[0..7]of AnsiString;
+ ColPos:Array[0..7]of LongInt;
+ ColMd:Array[0..7]of LongInt;
+ Consumed:Array of Boolean;
+ Remove,Result_,Recolor,TryOn,AllWord,AddV:Boolean;
+ GarmNoun:Array[0..7]of AnsiString;
+ FirstPrep:LongInt;
+ SrcIdx,DstIdx,VtJ:LongInt;
+ GarmPos:Array[0..7]of LongInt;
+ GarmKind:Array[0..7]of LongInt;
+ GarmMask:Array[0..7]of LongWord;
+ NG:LongInt;
+ MdWord:LongInt;
+ Gx:LongInt;
+ HasPat:Boolean;
+ HStyle,VtJw,Sty:LongInt;
+ HStrong,HairNoun,Dia,App,PoseWord,ChainCtx,MetalCol:Boolean;
+ Expr,Mat,Scn:LongInt;
+ Pz:LongWord;
+ SkinW:Boolean;
+ SkOp,Yrs,Num,Spec,Nv:LongInt;
+ ImgW,BgW,ImgOpPresent,Demo:Boolean;
+ IOp,BOp:LongInt;
+Begin
+ Result:=False;
+ VtClearEdit(E);
+ HasChange:=False;HasVerb:=False;
+ SetLength(Consumed,High(VtT)+2);
+ NCol:=0;NG:=0;
+ Remove:=False;Result_:=False;Recolor:=False;TryOn:=False;AllWord:=False;
+   AddV:=False;
+ FirstPrep:=-1;
+ HasPat:=False;
+ HStyle:=0;VtJw:=0;Sty:=0;HStrong:=False;Dia:=False;App:=False;
+ HairNoun:=False;PoseWord:=False;Expr:=0;Mat:=0;Scn:=0;ChainCtx:=False;
+   MetalCol:=False;Pz:=0;
+ SkinW:=False;SkOp:=0;Yrs:=0;Num:=0;Spec:=0;
+ ImgW:=False;BgW:=False;ImgOpPresent:=False;Demo:=False;IOp:=0;BOp:=0;
+ For VtI:=A to B do Begin
+  If VtLexFind(VtT[VtI],lkImgW)>=0 Then ImgW:=True;
+  If VtLexFind(VtT[VtI],lkBgW)>=0 Then BgW:=True;
+  If VtLexFind(VtT[VtI],lkImgOp)>=0 Then ImgOpPresent:=True;
+  { ? cette tenue ?, ? ce chandail ? : le vetement de l'image fournie }
+  If(VtT[VtI]='cette')or(VtT[VtI]='ce')or(VtT[VtI]='ces')or(VtT[VtI]='this')or(VtT[VtI]='these')
+    or(VtT[VtI]='celle')or(VtT[VtI]='celui')or(VtT[VtI]='ceux')Then Demo:=True;
+ End;
+ For VtI:=A to B do If VtLexFind(VtT[VtI],lkSkinW)>=0 Then SkinW:=True;
+ { ? vetement de chaine d'or ? : chaine + vetement = cotte de mailles, pas un
+   collier }
+ For VtI:=A to B do If VtLexFind(VtT[VtI],VtlkGarment)>=0 Then
+  If VtLex[VtLexFind(VtT[VtI],VtlkGarment)].V1 in[gkTop,gkBottom,gkDress,gkSkirt,
+    gkAll,gkFull]Then ChainCtx:=True;
+ For VtI:=A to B do If(VtT[VtI]='aligne')or(VtT[VtI]='aligner')or(VtT[VtI]='alignes')
+   or(VtT[VtI]='alignee')or(VtT[VtI]='alignees')or
+   (VtT[VtI]='alignez')or(VtT[VtI]='baisse')or(VtT[VtI]='baisser')or(VtT[VtI]='baissez')
+     or(VtT[VtI]='cote')or(VtT[VtI]='cotes')or
+   (VtT[VtI]='long')or(VtT[VtI]='droit')or(VtT[VtI]='droits')or(VtT[VtI]='droite')
+     or(VtT[VtI]='droites')or(VtT[VtI]='descend')or
+   (VtT[VtI]='descendre')or(VtT[VtI]='straight')or(VtT[VtI]='down')Then PoseWord:=True;
+ For VtI:=A to B do If VtLexFind(VtT[VtI],VtlkGarment)>=0 Then
+  If VtLex[VtLexFind(VtT[VtI],VtlkGarment)].V1=gkHair Then HairNoun:=True;
+ For VtI:=A to B do Begin
+  If Consumed[VtI]Then Continue;
+  { verbes }
+  If VtLexFind(VtT[VtI],lkVRemove)>=0 Then Begin Remove:=True;HasVerb:=True;
+    Continue;End;
+  If(VtLexFind(VtT[VtI],lkVAdd)>=0)and not((VtI>A)and((VtT[VtI]='montre')or(VtT[VtI]='montres')
+    ))Then Begin AddV:=True;HasVerb:=True;Continue;End;
+  If VtLexFind(VtT[VtI],lkVTryOn)>=0 Then Begin TryOn:=True;HasVerb:=True;Continue;
+    End;
+  If VtLexFind(VtT[VtI],lkVResult)>=0 Then Begin Result_:=True;HasVerb:=True;
+    Continue;End;
+  If VtLexFind(VtT[VtI],lkAll)>=0 Then Begin AllWord:=True;Continue;End;
+  { couleur (avec modificateur precedent eventuel) }
+  Md:=0;
+  If VtReadColor(VtT,VtI,RGB,Nm,VtUsed,Md)Then Begin
+   If(Md=0)and(VtI>A)Then Begin
+    X:=VtLexFind(VtT[VtI-1],lkMod);
+    If(X>=0)and not Consumed[VtI-1]Then Begin Md:=VtLex[X].V1;Consumed[VtI-1]:=True;
+      Nm:=VtT[VtI-1]+' '+Nm;End;
+   End;
+   If NCol<8 Then Begin
+    Cols[NCol]:=VtApplyShade(RGB,Md);ColNames[NCol]:=Nm;ColPos[NCol]:=VtI;
+      ColMd[NCol]:=Md;
+    Inc(NCol);
+   End;
+   For K:=1 to VtUsed-1 do Consumed[VtI+K]:=True;
+   Continue;
+  End;
+  { image entiere et arriere-plan }
+  If BgW Then Begin
+   K:=VtLexFind(VtT[VtI],lkBgKind);
+   If K>=0 Then Begin
+    { ? foret ? seul ne remplace pas un type de foret deja precise }
+    If VtLex[K].V1=boForest Then Begin If BOp=0 Then BOp:=boForest;End Else
+      BOp:=VtLex[K].V1;
+    Continue;
+   End;
+   K:=VtLexFind(VtT[VtI],lkImgOp);
+   If(K>=0)and(VtLex[K].V1=ioBlur)Then Begin BOp:=boBlur;Continue;End;
+  End
+  Else If ImgW Then Begin
+   K:=VtLexFind(VtT[VtI],lkImgOp);
+   If K>=0 Then Begin IOp:=VtLex[K].V1;Continue;End;
+   If ImgOpPresent and((VtT[VtI]='photo')or(VtT[VtI]='photos')or(VtT[VtI]='photographie')
+     )Then Continue;
+  End;
+  { nombres (annees), peau, age, teintes speciales }
+  If(VtT[VtI]<>'')and(VtT[VtI][1]in['0'..'9'])Then Begin
+   Nv:=0;
+   For K:=1 to Length(VtT[VtI])do If VtT[VtI][K]in['0'..'9']Then Nv:=Nv*10+Ord(VtT[VtI][K])
+     -48;
+   If Nv>0 Then Num:=Nv;
+   Continue;
+  End;
+  K:=VtLexFind(VtT[VtI],lkNumber);
+  If K>=0 Then Begin Num:=VtLex[K].V1;Continue;End;
+  K:=VtLexFind(VtT[VtI],lkYears);
+  If K>=0 Then Begin Yrs:=VtLex[K].V1;HasVerb:=True;Continue;End;
+  K:=VtLexFind(VtT[VtI],lkSpecial);
+  If K>=0 Then Begin Spec:=VtLex[K].V1;Continue;End;
+  If SkinW Then Begin
+   K:=VtLexFind(VtT[VtI],VtlkSkin);
+   If K>=0 Then Begin SkOp:=VtLex[K].V1;Continue;End;
+  End;
+  { bijoux, styles d'image, coiffures }
+  K:=VtLexFind(VtT[VtI],lkPose2);
+  If K>=0 Then Begin
+   { ? tete ? compte seulement dans ? tete droite ? }
+   If(VtLex[K].V1<>pcHeadStraight)or PoseWord Then Pz:=Pz or(LongWord(1)shl
+     VtLex[K].V1);
+   Continue;
+  End;
+  K:=VtLexFind(VtT[VtI],lkMaterial);
+  If K>=0 Then Begin Mat:=VtLex[K].V1;Continue;End;
+  K:=VtLexFind(VtT[VtI],lkScene);
+  If K>=0 Then Begin Scn:=VtLex[K].V1;Continue;End;
+  K:=VtLexFind(VtT[VtI],lkJewel);
+  If K>=0 Then Begin
+   If ChainCtx and((VtT[VtI]='chaine')or(VtT[VtI]='chaines')or(VtT[VtI]='chain'))Then
+     Mat:=mtChain
+   Else VtJw:=VtJw or VtLex[K].V1;
+   Continue;
+  End;
+  K:=VtLexFind(VtT[VtI],lkJewelMod);
+  If K>=0 Then Begin If VtLex[K].V1=1 Then Dia:=True Else App:=True;Continue;End;
+  K:=VtLexFind(VtT[VtI],lkStyle);
+  If K>=0 Then Begin Sty:=VtLex[K].V1;Continue;End;
+  K:=VtLexFind(VtT[VtI],lkExpr);
+  If K>=0 Then Begin Expr:=VtLex[K].V1;Continue;End;
+  If HairNoun and(VtT[VtI]='short')Then Begin HStyle:=hsShorter;Continue;End;
+  K:=VtLexFind(VtT[VtI],VtlkHairStyle);
+  If K>=0 Then Begin
+   { ? boucles ? seul est ambigu (boucles d'oreilles) : il faut le mot cheveux }
+   If(VtLex[K].V1<>hsCurly)or HairNoun or(Pos('boucle',VtT[VtI])=0)Then Begin
+    HStyle:=VtLex[K].V1;
+    If HairNoun Then HStrong:=True Else If VtLex[K].V1 in[hsBald,
+      hsLonger,hsShorter]Then HStrong:=True;
+   End;
+   Continue;
+  End;
+  { motifs }
+  K:=VtLexFind(VtT[VtI],lkPattern);
+  If K>=0 Then Begin E.Pattern:=VtLex[K].V1;HasPat:=True;Continue;End;
+  { vetements }
+  K:=VtLexFind(VtT[VtI],VtlkGarment);
+  If K>=0 Then Begin
+   If NG<8 Then Begin GarmPos[NG]:=VtI;GarmKind[NG]:=VtLex[K].V1;
+     GarmMask[NG]:=VtLex[K].V2;GarmNoun[NG]:=VtT[VtI];Inc(NG);End;
+   Continue;
+  End;
+  { clair/fonce hors d'une couleur : reglage de luminosite }
+  K:=VtLexFind(VtT[VtI],lkMod);
+  If K<0 Then Begin
+   K:=VtLexFind(VtT[VtI],lkVLight);
+   If K>=0 Then Begin MdWord:=VtLex[K].V1;HasVerb:=True;End Else MdWord:=0;
+  End
+   Else MdWord:=VtLex[K].V1;
+  If MdWord<>0 Then Begin
+   Case MdWord of
+    VtmdDark:E.LGain:=E.LGain*0.62;
+    mdLight:Begin E.LGain:=E.LGain*1.3;E.CGain:=E.CGain*0.85;End;
+    mdVivid:E.CGain:=E.CGain*1.4;
+    mdPale,mdDull:E.CGain:=E.CGain*0.6;
+   End;
+   Continue;
+  End;
+  If(FirstPrep<0)and(VtLexFind(VtT[VtI],VtlkPrepDst)>=0)Then FirstPrep:=VtI;
+  If VtLexFind(VtT[VtI],lkVRecolor)>=0 Then Begin Recolor:=True;HasVerb:=True;End;
+ End;
+ { vetements cibles : ceux situes avant la preposition de destination, sinon
+   tous }
+ NTargets:=0;
+ E.Target:=0;E.VtKind:=VtgkNone;
+ For VtI:=0 to NG-1 do
+  If(FirstPrep<0)or(GarmPos[VtI]<FirstPrep)Then Begin
+   E.Target:=E.Target or GarmMask[VtI];
+   If E.VtKind=VtgkNone Then Begin E.VtKind:=GarmKind[VtI];E.Noun:=GarmNoun[VtI];End;
+   Inc(NTargets);
+  End;
+ If(NTargets=0)and(NG>0)Then Begin
+  { ? en chemise bleue ? sans cible : la cible reste a determiner, le genre est
+    un resultat }
+  E.DstGarment:=GarmKind[0];
+ End
+  Else If(FirstPrep>=0)Then
+   For VtI:=0 to NG-1 do If GarmPos[VtI]>FirstPrep Then Begin
+     E.DstGarment:=GarmKind[VtI];Break;End;
+ If AllWord and(E.Target=0)Then Begin E.Target:=VtmsClothes;E.VtKind:=gkAll;End;
+ { couleurs : source / destination }
+ SrcIdx:=-1;DstIdx:=-1;
+ If NCol>0 Then Begin
+  If FirstPrep>=0 Then Begin
+   For VtI:=0 to NCol-1 do
+    If ColPos[VtI]>FirstPrep Then Begin
+     If DstIdx<0 Then DstIdx:=VtI
+     Else If(E.Pattern<>VtpkNone)and not E.HasColor2 Then Begin
+      E.HasColor2:=True;E.Color2RGB:=Cols[VtI];E.Color2Name:=ColNames[VtI];
+     End;
+    End
+    Else If SrcIdx<0 Then SrcIdx:=VtI;
+   If DstIdx<0 Then Begin
+    { ? change le rouge en motif... ? ou couleur avant la preposition seule }
+    If SrcIdx>=0 Then Begin
+     If NCol=1 Then Begin DstIdx:=SrcIdx;SrcIdx:=-1;End;
+    End;
+   End;
+  End
+   Else Begin
+    If NCol>=2 Then Begin
+     If E.Pattern<>VtpkNone Then Begin
+      DstIdx:=0;E.HasColor2:=True;E.Color2RGB:=Cols[1];
+        E.Color2Name:=ColNames[1];
+     End
+      Else Begin
+       { sans preposition : ? change le rouge bleu ? ou ? rends le pull rouge et
+         noir ? }
+       If Recolor and not Result_ Then Begin SrcIdx:=0;DstIdx:=1;End
+       Else Begin DstIdx:=0;E.HasColor2:=True;E.Color2RGB:=Cols[1];
+         E.Color2Name:=ColNames[1];End;
+      End;
+    End
+     Else DstIdx:=0;
+   End;
+ End;
+ If SrcIdx>=0 Then Begin E.HasSrc:=True;E.SrcRGB:=Cols[SrcIdx];
+   E.SrcName:=ColNames[SrcIdx];End;
+ If DstIdx>=0 Then Begin E.HasDst:=True;E.DstRGB:=Cols[DstIdx];
+   E.DstName:=ColNames[DstIdx];End;
+ { le motif sans couleur de fond : second ton blanc (ou noir sur couleur claire)
+   }
+ If(E.Pattern in[pkStripes,pkChecks,pkDots])and E.HasDst and not
+   E.HasColor2 Then Begin
+  E.HasColor2:=True;E.Color2Name:='';
+  If VtLuma((E.DstRGB shr 16)and $FF,(E.DstRGB shr 8)and $FF,E.DstRGB and $FF)>150
+    Then Begin E.Color2RGB:=VtRgbOf(30,30,35);E.Color2Name:='noir';End
+  Else Begin E.Color2RGB:=VtRgbOf(245,245,245);E.Color2Name:='blanc';End;
+ End;
+ { action }
+ E.Put:=Result_ or TryOn;
+ { coiffure : valable avec le mot cheveux, ou sans autre vetement cite }
+ If(HStyle<>0)and(HairNoun or(NG=0))Then Begin
+  E.HairStyle:=HStyle;E.Target:=E.Target or VtmsHair;E.VtKind:=gkHair;
+ End;
+ If Sty<>0 Then E.Style:=Sty;
+ E.Material:=Mat;E.VtScene:=Scn;E.Poses:=Pz;
+ If Yrs<>0 Then Begin
+  If Num<=0 Then Num:=10;
+  If Num>40 Then Num:=40;
+  E.SkinOp:=soAge;E.Years:=Yrs*Num;
+ End
+ Else If SkOp<>0 Then E.SkinOp:=SkOp
+ Else If(Spec<>0)and(HairNoun or(NG=0))Then Begin E.SkinOp:=soSalt;
+   E.Target:=E.Target or VtmsHair;E.VtKind:=gkHair;End;
+ E.Expr:=Expr;
+ If((E.Target and VtmsArms)<>0)and PoseWord and not E.HasDst Then E.Pose:=True;
+ If Dia and(VtJw=0)and(NG=0)Then VtJw:=VtjwNecklace+jwEarrings+jwBracelet;
+ E.Jewel:=VtJw;E.Diamond:=Dia;E.Apple:=App;
+ If App and(VtJw=0)Then E.Jewel:=jwWatch;
+ If Remove Then E.Action:=eaRemove
+ Else If E.Poses<>0 Then E.Action:=eaPose2
+ Else If E.SkinOp<>0 Then E.Action:=eaSkin
+ Else If BgW and((BOp<>0)or E.HasDst)Then Begin
+  If BOp=0 Then BOp:=VtboSolid;
+  E.BgOp:=BOp;E.Action:=eaBg;
+ End
+ Else If IOp<>0 Then Begin E.ImgOp:=IOp;E.Action:=eaImage;End
+ Else If(E.Jewel<>0)and(AddV or Result_ or TryOn)Then E.Action:=eaAdd
+ Else If E.Pose Then E.Action:=eaPose
+ Else If E.VtScene<>0 Then E.Action:=eaScene
+ Else If E.Material<>0 Then E.Action:=eaMaterial
+ Else If E.HairStyle<>0 Then E.Action:=eaHair
+ Else If E.Expr<>0 Then E.Action:=eaFace
+ Else If E.Style<>0 Then E.Action:=eaStyle
+ Else If AddV Then E.Action:=eaAdd
+ Else If Result_ and Demo and(NG>0)and not E.HasDst and(E.Pattern=VtpkNone)Then
+   E.Action:=eaTryOn
+ Else If E.HasDst or(E.Pattern<>VtpkNone)or(Abs(E.LGain-1)>0.01)or(Abs(E.CGain-1)
+   >0.01)Then E.Action:=eaRecolor
+ Else If TryOn Then E.Action:=eaTryOn;
+ { couleur metallique (or, argent, bronze, cuivre) sur un vetement ou le corps :
+   rendu metal }
+ If(E.Action=eaRecolor)and E.HasDst and(E.Target<>0)and(E.Jewel=0)
+   and((E.Target and(VtmsHair or VtmsEyes))=0)Then Begin
+  Nm:=VtLoStr(E.DstName);
+  If(Pos('or',Nm)=1)and((Length(Nm)=2)or(Pos(' ',Nm)=3))or(Pos('dore',Nm)>0)
+    or(Pos('gold',Nm)>0)or(Pos('argent',Nm)>0)or
+    (Pos('silver',Nm)>0)or(Pos('bronze',Nm)>0)or(Pos('cuivre',Nm)>0)
+      or(Pos('copper',Nm)>0)or(Pos('platine',Nm)>0)Then Begin
+   E.Material:=mtMetal;E.Action:=eaMaterial;
+  End;
+ End;
+ HasChange:=E.Action in[eaRecolor,eaRemove,eaAdd,eaHair,eaStyle,eaFace,
+   eaPose,eaMaterial,eaScene,eaPose2,eaSkin,eaImage,eaBg];
+ Result:=(E.Action<>VteaNone)or(E.Target<>0)or(NG>0)or(E.Jewel<>0);
+End;
+
+{ interprete la demande complete ; renvoie la liste des retouches }
+Function VtInterpret(Const Prompt:AnsiString;Var VtEdits:VtTEditArray;Var
+  VtErr:AnsiString):Boolean;
+Var
+ VtT:VtTStrArray;
+ Bounds:Array of LongInt;
+ S0,VtI,VtJ,K,A,B,VtN:LongInt;
+ E:VtTEdit;
+ HasChange,HasVerb:Boolean;
+ Pending:LongWord;
+ PendKind:LongInt;
+ Segs:Array of LongInt;
+ NSeg:LongInt;
+ HasG:Boolean;
+ Cut:Boolean;
+Begin
+ Result:=False;
+ VtErr:='';
+ SetLength(VtEdits,0);
+ VtLexInit;
+ VtTokenize(VtFoldText(Prompt),VtT);
+ If Length(VtT)=0 Then Begin VtErr:='la demande est vide';Exit;End;
+ { decoupage en clauses : separateurs durs, puis ? et ? devant un nouveau
+   vetement }
+ SetLength(Segs,0);
+ S0:=0;
+ For VtI:=0 to High(VtT)do Begin
+  Cut:=False;
+  If(VtT[VtI]=',')or(VtT[VtI]=';')or(VtT[VtI]='.')Then Cut:=True
+  Else If VtLexFind(VtT[VtI],lkSplit)>=0 Then Begin
+   { ? et ? coupe seulement s'il introduit un autre vetement ou un autre verbe }
+   HasG:=False;
+   For VtJ:=VtI+1 to High(VtT)do Begin
+    If(VtT[VtJ]=',')or(VtT[VtJ]=';')or(VtT[VtJ]='.')or(VtLexFind(VtT[VtJ],lkSplit)>=0)Then Break;
+    If(VtLexFind(VtT[VtJ],VtlkGarment)>=0)or(VtLexFind(VtT[VtJ],lkVRemove)>=0)
+      or(VtLexFind(VtT[VtJ],lkVRecolor)>=0)or
+      (VtLexFind(VtT[VtJ],lkVResult)>=0)or(VtLexFind(VtT[VtJ],lkExpr)>=0)
+        or(VtLexFind(VtT[VtJ],lkStyle)>=0)or(VtLexFind(VtT[VtJ],lkPose2)>=0)
+        or(VtLexFind(VtT[VtJ],lkYears)>=0)or(VtLexFind(VtT[VtJ],lkSkinW)>=0)
+        or(VtLexFind(VtT[VtJ],lkImgW)>=0)or(VtLexFind(VtT[VtJ],lkBgW)>=0)Then HasG:=True;
+   End;
+   Cut:=HasG;
+  End;
+  If Cut Then Begin
+   SetLength(Segs,Length(Segs)+2);
+   Segs[High(Segs)-1]:=S0;Segs[High(Segs)]:=VtI-1;
+   S0:=VtI+1;
+  End;
+ End;
+ SetLength(Segs,Length(Segs)+2);
+ Segs[High(Segs)-1]:=S0;Segs[High(Segs)]:=High(VtT);
+ Pending:=0;PendKind:=VtgkNone;
+ K:=0;
+ While K<Length(Segs)do Begin
+  A:=Segs[K];B:=Segs[K+1];
+  Inc(K,2);
+  If A>B Then Continue;
+  If not VtParseClause(VtT,A,B,E,HasChange,HasVerb)Then Continue;
+  { clause sans changement mais avec un vetement : cible reportee sur la clause
+    suivante }
+  If(not HasChange)and(E.Jewel<>0)and(E.Action=VteaNone)and(not HasVerb)
+    and(Length(VtEdits)>0)and
+    (VtEdits[High(VtEdits)].Action=eaAdd)and(VtEdits[High(VtEdits)].Jewel<>0)Then Begin
+   { ? ajoute un collier et un bracelet ? }
+   SetLength(VtEdits,Length(VtEdits)+1);
+   VtEdits[High(VtEdits)]:=VtEdits[High(VtEdits)-1];
+   VtEdits[High(VtEdits)].Jewel:=E.Jewel;
+   If E.Diamond Then VtEdits[High(VtEdits)].Diamond:=True;
+   If E.Apple Then VtEdits[High(VtEdits)].Apple:=True;
+   Continue;
+  End;
+  If(not HasChange)and(E.Jewel=0)and(E.Target<>0)and(E.Action=VteaNone)Then Begin
+   { ? enleve le chapeau et les lunettes ? : la retouche precedente s'applique
+     aussi }
+   If(not HasVerb)and(Length(VtEdits)>0)and(VtEdits[High(VtEdits)].Action
+     in[eaRemove,eaAdd])Then Begin
+    SetLength(VtEdits,Length(VtEdits)+1);
+    VtEdits[High(VtEdits)]:=VtEdits[High(VtEdits)-1];
+    VtEdits[High(VtEdits)].Target:=E.Target;
+    VtEdits[High(VtEdits)].VtKind:=E.VtKind;
+    VtEdits[High(VtEdits)].Noun:=E.Noun;
+    Continue;
+   End;
+   Pending:=Pending or E.Target;
+   If PendKind=VtgkNone Then PendKind:=E.VtKind;
+   Continue;
+  End;
+  { ? ajoute un bonnet bleu et un foulard a rayures ? : le second objet est
+    aussi ajoute }
+  If(E.Action=eaRecolor)and(not HasVerb)and(E.Target<>0)and(Length(VtEdits)>0)and
+    (VtEdits[High(VtEdits)].Action=eaAdd)Then E.Action:=eaAdd;
+  If HasChange or(E.Action=eaTryOn)Then Begin
+   If Pending<>0 Then Begin
+    E.Target:=E.Target or Pending;
+    If E.VtKind=VtgkNone Then E.VtKind:=PendKind;
+    Pending:=0;PendKind:=VtgkNone;
+   End;
+   E.Text:='';
+   For VtI:=A to B do E.Text:=E.Text+VtT[VtI]+' ';
+   SetLength(VtEdits,Length(VtEdits)+1);
+   VtEdits[High(VtEdits)]:=E;
+  End;
+ End;
+ If Length(VtEdits)=0 Then Begin
+  VtErr:='je n''ai pas compris la demande (exemple : "Change le chandail rouge '+
+    'en bleu")';
+  Exit;
+ End;
+ Result:=True;
+End;
+
+Function VtColorHex(RGB:LongWord):AnsiString;
+Const
+ Hx:AnsiString='0123456789abcdef';
+Var
+ VtI:LongInt;
+ R:AnsiString;
+Begin
+ R:='#';
+ For VtI:=5 downto 0 do R:=R+Hx[((RGB shr(VtI*4))and 15)+1];
+ Result:=R;
+End;
+
+Function VtGarmentKindName(K:LongInt):AnsiString;
+Begin
+ Case K of
+  gkTop:Result:='haut';
+  gkBottom:Result:='pantalon';
+  gkSkirt:Result:='jupe';
+  gkDress:Result:='robe';
+  gkFull:Result:='tenue compl'#138'te';
+  gkShoes:Result:='chaussures';
+  gkHat:Result:='chapeau';
+  gkGlasses:Result:='lunettes';
+  VtgkBag:Result:='sac';
+  gkScarf:Result:=#130'charpe';
+  gkBelt:Result:='ceinture';
+  gkAll:Result:='v'#136'tements';
+  Else Result:='?';
+ End;
+End;
+
+{ noms des poses d'un ensemble (pour -verbose) }
+Function VtPoseNames(VtP:LongWord):AnsiString;
+Const
+ Names:Array[1..21]of AnsiString=('bras crois'#130's',
+   'main V (peace & love)','doigt point'#130,'flotte','saute',
+  'bras '#130'cart'#130's','couch'#130,'t'#136'te droite',
+    'regard perdu','s'#130'rieux','triste','aur'#130'ole','somnambule','assis',
+  #133' genoux','v'#130'lo','appuy'#130' sur un meuble',
+    'escalier','toit de niche','fil de fer','dans un lit');
+Var
+ VtI:LongInt;
+ R:AnsiString;
+Begin
+ R:='';
+ For VtI:=1 to 21 do
+  If(VtP and(LongWord(1)shl VtI))<>0 Then Begin
+   If R<>'' Then R:=R+' + ';
+   R:=R+Names[VtI];
+  End;
+ Result:=R;
+End;
+
+{ decrit une retouche pour -verbose }
+Function VtDescribeEdit(Const E:VtTEdit):AnsiString;
+Var
+ R:AnsiString;
+Begin
+ Case E.Action of
+  eaRecolor:R:='recolorer';
+  eaRemove:R:='retirer';
+  eaAdd:R:='ajouter';
+  eaHair:R:='coiffure';
+  eaFace:R:='expression du visage';
+  eaMaterial:R:='mati'#138're '+VtIStr(E.Material);
+  eaScene:R:='sc'#138'ne';
+  eaPose2:R:='pose : '+VtPoseNames(E.Poses);
+  eaImage:R:='image enti'#138're '+VtIStr(E.ImgOp);
+  eaBg:R:='arri'#138're-plan '+VtIStr(E.BgOp)+' '+VtColorHex(E.DstRGB);
+  eaSkin:R:='peau/'#131'ge/teinte sp'#130'ciale '+VtIStr(E.SkinOp)+' ('+
+    VtIStr(E.Years)+' ans)';
+  eaPose:R:='bras le long du corps';
+  eaStyle:R:='style de l''image';
+  eaTryOn:R:='essayer';
+  Else R:='?';
+ End;
+ If(E.Target<>0)and(E.Action<>eaPose2)Then R:=R+' '+VtMaskName(E.Target)
+ Else If(E.Jewel=0)and(E.Style=0)and(E.Action<>eaPose2)and(E.Action<>eaSkin)
+   and(E.Action<>eaImage)and(E.Action<>eaBg)Then
+   R:=R+' (cible '#133' d'#130'terminer)';
+ If E.HasSrc Then R:=R+', de '+E.SrcName;
+ If E.HasDst Then R:=R+', vers '+E.DstName+' '+VtColorHex(E.DstRGB);
+ Case E.Pattern of
+  pkStripes:R:=R+', motif rayures';
+  pkChecks:R:=R+', motif carreaux';
+  pkDots:R:=R+', motif pois';
+  pkPlain:R:=R+', uni';
+ End;
+ If E.HasColor2 Then R:=R+' + '+E.Color2Name;
+ If E.HairStyle<>0 Then R:=R+', coiffure '+VtIStr(E.HairStyle);
+ If E.Jewel<>0 Then R:=R+', bijoux '+VtIStr(E.Jewel);
+ If E.Style<>0 Then R:=R+', style '+VtIStr(E.Style);
+ If E.Expr<>0 Then R:=R+', sourire';
+ If Abs(E.LGain-1)>0.01 Then R:=R+', luminosit'#130' x'+VtFStr(E.LGain,2);
+ If Abs(E.CGain-1)>0.01 Then R:=R+', saturation x'+VtFStr(E.CGain,2);
+ Result:=R;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Retouches : recoloration, motifs, retrait d'accessoires              }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTRecolor=Record
+  HasDst:Boolean;
+  DstL,DstA,DstB:Single;
+  Pattern:LongInt;
+  C2L,C2A,C2B:Single;
+  LGain,CGain:Single;
+  Vertical:Boolean;
+  BX0,BY0,BW,BH:Single;
+ End;
+
+Procedure VtRgbIntToLab(RGB:LongWord;Var L,A,B:Single);
+Begin
+ VtColorInit;
+ VtRgbToLab((RGB shr 16)and $FF,(RGB shr 8)and $FF,RGB and $FF,L,A,B);
+End;
+
+{ onde triangulaire douce : 0 au centre d'une bande, 1 a la frontiere }
+Function VtBandWave(VtT,U:Single):Single;
+Var
+ F,Wv,E:Single;
+Begin
+ F:=VtT/(2*U);
+ F:=F-Trunc(F);
+ If F<0 Then F:=F+1;
+ Wv:=Abs(F*2-1);
+ E:=0.7/U;
+ Result:=VtSmoothStep(0.5-E,0.5+E,Wv);
+End;
+
+{ 0 = couleur 1, 1 = couleur 2 }
+Function VtPatternMix(Const VtP:VtTRecolor;X,Y:Single):Single;
+Var
+ U,VtT,Gx,Gy,Fx,Fy,D,R,Px,Py,Pitch:Single;
+ Row:LongInt;
+Begin
+ U:=VtFMax(5,VtFMax(VtP.BW,VtP.BH)/13.0);
+ X:=X-VtP.BX0;Y:=Y-VtP.BY0;
+ Case VtP.Pattern of
+  pkStripes:Begin
+    If VtP.Vertical Then VtT:=X Else VtT:=Y;
+    Result:=VtBandWave(VtT,U);
+   End;
+  pkChecks:Begin
+    Px:=VtBandWave(X,U);Py:=VtBandWave(Y,U);
+    Result:=(Px+Py)*0.5;
+   End;
+  pkDots:Begin
+    Pitch:=2*U;
+    Gy:=Y/Pitch;
+    Row:=VtFloorI(Gy);
+    Gx:=X/Pitch;
+    If Odd(Row)Then Gx:=Gx+0.5;
+    Fx:=Gx-VtFloorI(Gx)-0.5;
+    Fy:=Gy-Row-0.5;
+    D:=Sqrt(Fx*Fx+Fy*Fy)*Pitch;
+    R:=0.27*Pitch;
+    Result:=1-VtSmoothStep(R-0.8,R+0.8,D);
+   End;
+  Else Result:=0;
+ End;
+End;
+
+{ recolore les pixels de l'opacite Alpha (0..1) en conservant l'ombrage et la
+  texture ;
+  renvoie faux si la region est trop petite }
+Function VtRecolorRegion(Pix:PSingle;W,VtH:LongInt;Alpha:PSingle;Const VtP:VtTRecolor)
+  :Boolean;
+Var
+ VtN:int64;K:LongInt;
+ X,Y:LongInt;
+ SumL,SumW,Lm:Double;
+ L,A,B,Lt,At,Bt,Mx,L2,A2,B2,Mix,F,Wgt,R,VtG,Bl,Q:Single;
+Begin
+ Result:=False;
+ VtColorInit;
+ VtN:=Int64(W)*VtH;
+ SumL:=0;SumW:=0;
+ For K:=0 to VtN-1 do If Alpha[K]>0.5 Then Begin
+  VtRgbToLab(Pix[K*3],Pix[K*3+1],Pix[K*3+2],L,A,B);
+  SumL:=SumL+L;SumW:=SumW+1;
+ End;
+ If SumW<30 Then Exit;
+ Lm:=SumL/SumW;
+ If Lm<3 Then Lm:=3;
+ If Lm>97 Then Lm:=97;
+ For Y:=0 to VtH-1 do
+  For X:=0 to W-1 do Begin
+   K:=Int64(Y)*W+X;
+   Wgt:=Alpha[K];
+   If Wgt<=0.004 Then Continue;
+   VtRgbToLab(Pix[K*3],Pix[K*3+1],Pix[K*3+2],L,A,B);
+   If VtP.HasDst Then Begin
+    Lt:=VtP.DstL;At:=VtP.DstA;Bt:=VtP.DstB;
+    If VtP.Pattern<>VtpkNone Then Begin
+     Mix:=VtPatternMix(VtP,X+0.5,Y+0.5);
+     Lt:=Lt+(VtP.C2L-Lt)*Mix;At:=At+(VtP.C2A-At)*Mix;Bt:=Bt+(VtP.C2B-Bt)*Mix;
+    End;
+    { courbe de tons : moyenne de la region -> luminosite cible, 0 et 100 fixes
+      }
+    If L<=Lm Then L2:=L*Lt/Lm
+    Else L2:=Lt+(L-Lm)*(100-Lt)/(100-Lm);
+    If L2<0 Then L2:=0 Else If L2>100 Then L2:=100;
+    If VtP.LGain>1 Then L2:=L2+(100-L2)*(1-1/VtP.LGain)
+    Else L2:=L2*VtP.LGain;
+    { la chroma decroit vers le noir et le blanc }
+    F:=1;
+    If(L2<Lt)and(Lt>1)Then F:=Sqrt(L2/Lt)
+    Else If(L2>Lt)and(Lt<99)Then F:=Sqrt((100-L2)/(100-Lt));
+    If F<0 Then F:=0 Else If F>1 Then F:=1;
+    A2:=At*F*VtP.CGain;B2:=Bt*F*VtP.CGain;
+   End
+    Else Begin
+     L2:=L;
+     If VtP.LGain>1 Then L2:=L+(100-L)*(1-1/VtP.LGain)Else L2:=L*VtP.LGain;
+     A2:=A*VtP.CGain;B2:=B*VtP.CGain;
+    End;
+   VtLabToRgb(L2,A2,B2,R,VtG,Bl);
+   If Wgt>1 Then Wgt:=1;
+   Pix[K*3]:=Pix[K*3]+(R-Pix[K*3])*Wgt;
+   Pix[K*3+1]:=Pix[K*3+1]+(VtG-Pix[K*3+1])*Wgt;
+   Pix[K*3+2]:=Pix[K*3+2]+(Bl-Pix[K*3+2])*Wgt;
+  End;
+ Result:=True;
+End;
+
+{ durcit un masque flou : supprime les halos de faible opacite }
+Procedure VtSharpenAlpha(VtM:PSingle;VtN:Int64);
+Var
+ K:LongInt;
+Begin
+ For K:=0 to VtN-1 do VtM[K]:=VtSmoothStep(0.25,0.75,VtM[K]);
+End;
+
+{ couleur moyenne (Lab) d'un ensemble ; faux si trop petit }
+Function VtMeanLabOf(Const VtS:VtTScene;Mask:LongWord;Var L,A,B:Single;Var
+  Area:Int64):Boolean;
+Var
+ VtM:PSingle;
+ VtN:int64;K:LongInt;
+ SL,SA,SB:Double;
+ Cnt:Int64;
+ Ll,Aa,Bb:Single;
+Begin
+ VtColorInit;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ VtM:=VtAllocF(VtN);
+ VtCatMask(VtS,Mask,VtM);
+ SL:=0;SA:=0;SB:=0;Cnt:=0;
+ For K:=0 to VtN-1 do If VtM[K]>=0.5 Then Begin
+  VtRgbToLab(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2],Ll,Aa,Bb);
+  SL:=SL+Ll;SA:=SA+Aa;SB:=SB+Bb;Inc(Cnt);
+ End;
+ FreeMem(VtM);
+ Area:=Cnt;
+ Result:=Cnt>0;
+ If Cnt>0 Then Begin L:=SL/Cnt;A:=SA/Cnt;B:=SB/Cnt;End;
+End;
+
+{ ecart de couleur (distance euclidienne dans Lab) }
+Function VtDeltaE(L1,A1,B1,L2,A2,B2:Single):Single;
+Begin
+ Result:=Sqrt((L1-L2)*(L1-L2)+(A1-A2)*(A1-A2)+(B1-B2)*(B1-B2));
+End;
+
+{ choisit, parmi les vetements visibles, la categorie dont la couleur moyenne
+  est la plus proche de SrcRGB ; 0 si aucune }
+Function VtFindRegionByColor(Const VtS:VtTScene;SrcRGB:LongWord;Var Dist:Single)
+  :LongWord;
+Const
+ Cands:Array[0..7]of LongInt=(cTop,cPants,cSkirt,cDress,VtcShoes,cHat,cBag,
+   cScarf);
+Var
+ VtI:LongInt;
+ L,A,B,Ls,As_,Bs,D,Best:Single;
+ Area:Int64;
+ BestMask:LongWord;
+Begin
+ VtRgbIntToLab(SrcRGB,Ls,As_,Bs);
+ Best:=1.0e9;BestMask:=0;
+ For VtI:=0 to 7 do
+  If VtMeanLabOf(VtS,LongWord(1)shl Cands[VtI],L,A,B,Area)Then
+   If Area>=Int64(VtS.W)*VtS.VtH div 800 Then Begin
+    D:=VtDeltaE(L,A,B,Ls,As_,Bs);
+    If D<Best Then Begin Best:=D;BestMask:=LongWord(1)shl Cands[VtI];End;
+   End;
+ Dist:=Best;
+ Result:=BestMask;
+End;
+
+{ remplit les parties marquees par propagation multi-echelle, avec un grain }
+Procedure VtInpaintHoles(Var VtS:VtTScene;Hole:PSingle);
+Var
+ VtN:int64;K:LongInt;
+ Known:PSingle;
+ Sigma:Single;
+ C:LongInt;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Known:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do Known[K]:=1-Hole[K];
+ VtPushPullFill(VtS.Pix,Known,VtS.W,VtS.VtH);
+ Sigma:=1.6;
+ For K:=0 to VtN-1 do If Hole[K]>0.05 Then
+  For C:=0 to 2 do
+   VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]+VtRngGauss*Sigma*Hole[K];
+ FreeMem(Known);
+End;
+
+{ retire un accessoire : le masque est dilate puis rempli ; renvoie le nombre de
+  pixels }
+Function VtRemoveCategory(Var VtS:VtTScene;Mask:LongWord):Int64;
+Var
+ VtN:int64;K:LongInt;
+ VtM:PSingle;
+ B:PByte;
+ C,R:LongInt;
+ Cnt:Int64;
+ Mv:LongInt;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ VtM:=VtAllocF(VtN);
+ VtCatMask(VtS,Mask,VtM);
+ B:=PByte(VtAllocBytes(VtN));
+ Cnt:=0;
+ For K:=0 to VtN-1 do If VtM[K]>=0.3 Then Begin B[K]:=255;Inc(Cnt);End;
+ If Cnt=0 Then Begin FreeMem(VtM);FreeMem(B);Result:=0;Exit;End;
+ R:=VtIMax(2,VtIMin(VtS.W,VtS.VtH)div 250);
+ VtMorphMask(B,VtS.W,VtS.VtH,R,False);
+ For K:=0 to VtN-1 do VtM[K]:=B[K]/255.0;
+ VtBoxBlur(VtM,VtM,VtS.W,VtS.VtH,1);
+ For K:=0 to VtN-1 do If B[K]<>0 Then If VtM[K]<0.99 Then VtM[K]:=0.99;
+ VtInpaintHoles(VtS,VtM);
+ { les categories retirees deviennent de l'arriere-plan }
+ For K:=0 to VtN-1 do If VtM[K]>0.5 Then Begin
+  For C:=0 to VtNumCat-1 do If C<>VtcBg Then
+   If(Mask and(LongWord(1)shl C))<>0 Then Begin
+    Mv:=VtS.Cat[C][K];
+    VtS.Cat[C][K]:=0;
+    Mv:=Mv+VtS.Cat[VtcBg][K];
+    If Mv>255 Then Mv:=255;
+    VtS.Cat[VtcBg][K]:=Mv;
+   End;
+ End;
+ FreeMem(VtM);FreeMem(B);
+ Result:=Cnt;
+End;
+
+{ remplit les parametres de recoloration d'une retouche ; la boite du motif
+  vient de Mask }
+Procedure VtBuildRecolor(Const E:VtTEdit;Var VtP:VtTRecolor;BX0,BY0,BW,
+  BH:Single;Vertical:Boolean);
+Begin
+ FillChar(VtP,SizeOf(VtP),0);
+ VtP.LGain:=E.LGain;VtP.CGain:=E.CGain;
+ VtP.Pattern:=E.Pattern;
+ If VtP.Pattern=pkPlain Then VtP.Pattern:=VtpkNone;
+ VtP.HasDst:=E.HasDst;
+ If E.HasDst Then VtRgbIntToLab(E.DstRGB,VtP.DstL,VtP.DstA,VtP.DstB)
+ Else If E.Pattern in[pkStripes,pkChecks,pkDots]Then Begin
+  { motif sans couleur : ton neutre sombre sur fond clair }
+  VtP.HasDst:=True;
+  VtRgbIntToLab(VtRgbOf(40,60,140),VtP.DstL,VtP.DstA,VtP.DstB);
+ End;
+ If E.HasColor2 Then VtRgbIntToLab(E.Color2RGB,VtP.C2L,VtP.C2A,VtP.C2B)
+ Else VtRgbIntToLab(VtRgbOf(245,245,245),VtP.C2L,VtP.C2A,VtP.C2B);
+ VtP.BX0:=BX0;VtP.BY0:=BY0;VtP.BW:=BW;VtP.BH:=BH;
+ VtP.Vertical:=Vertical;
+End;
+
+Function VtApplyHair(Var VtS:VtTScene;Style:LongInt;Const E:VtTEdit;Var VtMsg:AnsiString)
+  :Boolean;forward;
+Function VtApplyEyes(Var VtS:VtTScene;Const E:VtTEdit;Var VtMsg:AnsiString)
+  :Boolean;forward;
+
+{ applique une retouche de recoloration / de retrait sur la scene }
+Function VtApplyEdit(Var VtS:VtTScene;Const E:VtTEdit;Var VtMsg:AnsiString):Boolean;
+Var
+ Mask:LongWord;
+ D:Single;
+ VtN,K:Int64;
+ VtM:PSingle;
+ X0,Y0,X1,Y1:LongInt;
+ VtP:VtTRecolor;
+ L,A,B:Single;
+ Area:Int64;
+ Vert:Boolean;
+ Cnt:Int64;
+Begin
+ Result:=False;
+ VtMsg:='';
+ Mask:=E.Target;
+ If(Mask and VtmsEyes)<>0 Then Begin
+  Result:=VtApplyEyes(VtS,E,VtMsg);
+  Exit;
+ End;
+ If Mask=0 Then Begin
+  If E.HasSrc Then Begin
+   Mask:=VtFindRegionByColor(VtS,E.SrcRGB,D);
+   If Mask=0 Then Begin VtMsg:='aucun v'#136'tement de couleur '+
+     E.SrcName+' trouv'#130;Exit;End;
+   VtDetail('cible d'#130'duite de la couleur '+E.SrcName+' : '+VtMaskName(Mask)
+     +' ('#130'cart '+VtFStr(D,0)+')');
+  End
+   Else Begin
+     VtMsg:='la demande ne pr'#130'cise pas quel v'#136'tement modifier';Exit;End;
+ End;
+ If E.Action=eaRemove Then Begin
+  If(Mask and VtmsHair)<>0 Then Begin
+   Result:=VtApplyHair(VtS,hsBald,E,VtMsg);
+   If VtMsg='' Then VtInfo('  cheveux retir'#130's');
+   Exit;
+  End;
+  If(Mask and(VtmsTop or VtmsPants or VtmsSkirt or VtmsDress))<>0 Then Begin
+   VtMsg:='le retrait d''un v'#136'tement principal ('+VtMaskName(Mask)+
+     ') n''est pas pris en charge : indiquez plut'#147't un v'#136'tement '+
+     #133' essayer';
+   Exit;
+  End;
+  If(Mask and VtmsShoes)<>0 Then Begin
+   VtMsg:='le retrait des chaussures n''est pas pris en charge';
+   Exit;
+  End;
+  Cnt:=VtRemoveCategory(VtS,Mask);
+  If Cnt=0 Then Begin VtMsg:='aucun '+VtMaskName(Mask)
+    +' d'#130'tect'#130' sur la photo';Exit;End;
+  VtInfo('  '+VtMaskName(Mask)+' retir'#130+' ('+VtIStr(Cnt)+' pixels remplis)');
+  Result:=True;
+  Exit;
+ End;
+ { recoloration : plusieurs categories visees se traitent ensemble }
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ VtM:=VtAllocF(VtN);
+ VtCatMask(VtS,Mask,VtM);
+ VtSharpenAlpha(VtM,VtN);
+ If not VtCatBBox(VtS,Mask,X0,Y0,X1,Y1)Then Begin
+  FreeMem(VtM);
+  VtMsg:='aucun '+VtMaskName(Mask)+' d'#130'tect'#130' sur la photo';
+  Exit;
+ End;
+ If E.HasSrc and(E.Target<>0)Then
+  If VtMeanLabOf(VtS,Mask,L,A,B,Area)Then Begin
+   VtRgbIntToLab(E.SrcRGB,VtP.DstL,VtP.DstA,VtP.DstB);
+   D:=VtDeltaE(L,A,B,VtP.DstL,VtP.DstA,VtP.DstB);
+   If D>48 Then VtWarn('la couleur '+E.SrcName+
+     ' ne correspond pas bien au '+VtMaskName(Mask)
+     +' d'#130'tect'#130' ('#130'cart '+VtFStr(D,0)+')');
+  End;
+ Vert:=(Mask and(VtmsPants or VtmsSkirt))<>0;
+ VtBuildRecolor(E,VtP,X0,Y0,X1-X0+1,Y1-Y0+1,Vert);
+ If VtRecolorRegion(VtS.Pix,VtS.W,VtS.VtH,VtM,VtP)Then Begin
+  Result:=True;
+  VtInfo('  '+VtMaskName(Mask)+' recolor'#130);
+ End
+  Else VtMsg:='la r'#130'gion '+VtMaskName(Mask)
+    +' est trop petite pour '#136'tre retouch'#130'e';
+ FreeMem(VtM);
+End;
+
+{ ------------------------------------------------------------------ }
+{ Essayage : extraction du vetement et pose sur la personne           }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTGarment=Record
+  W,VtH:LongInt;
+  Rgb:PSingle;       { RVB 0..255, W x H }
+  Mask:PSingle;      { opacite 0..1, W x H }
+  Skin:PSingle;      { peau d'un mannequin (0..1) ; Nil si aucun mannequin }
+  PlasticL:Single;   { luminosite moyenne de la peau du mannequin }
+  Note:AnsiString;
+ End;
+
+Const
+ VtNoMannequin:Boolean=False;
+
+{ defini plus loin (poses) : agrandit l'image en prolongeant le fond }
+Procedure VtGrowEdges(Var VtS:VtTScene;L,VtT,R,B:LongInt);forward;
+
+Procedure VtGarmentFree(Var VtG:VtTGarment);
+Begin
+ If VtG.Rgb<>Nil Then FreeMem(VtG.Rgb);
+ If VtG.Mask<>Nil Then FreeMem(VtG.Mask);
+ If VtG.Skin<>Nil Then FreeMem(VtG.Skin);
+ VtG.Rgb:=Nil;VtG.Mask:=Nil;VtG.Skin:=Nil;
+End;
+
+{ seuil d'Otsu d'un histogramme de 256 classes }
+Function VtOtsuThreshold(Const Hist:Array of Int64):LongInt;
+Var
+ VtI,VtT,Best:LongInt;
+ Tot,SumAll,SumB,WB,WF:Double;
+ MB,MF,Between,BestV:Double;
+Begin
+ Tot:=0;SumAll:=0;
+ For VtI:=0 to 255 do Begin Tot:=Tot+Hist[VtI];SumAll:=SumAll+VtI*Hist[VtI];End;
+ SumB:=0;WB:=0;BestV:=-1;Best:=20;
+ For VtT:=0 to 255 do Begin
+  WB:=WB+Hist[VtT];
+  If WB=0 Then Continue;
+  WF:=Tot-WB;
+  If WF=0 Then Break;
+  SumB:=SumB+VtT*Hist[VtT];
+  MB:=SumB/WB;MF:=(SumAll-SumB)/WF;
+  Between:=WB*WF*(MB-MF)*(MB-MF);
+  If Between>BestV Then Begin BestV:=Between;Best:=VtT;End;
+ End;
+ Result:=Best;
+End;
+
+{ vrai si la couleur ne saute pas entre deux pixels voisins }
+Function VtBgStep(Rgb:PSingle;A,B:LongInt):Boolean;
+Var
+ D:Single;
+Begin
+ D:=Abs(Rgb[Int64(A)*3]-Rgb[Int64(B)*3]);
+ If Abs(Rgb[Int64(A)*3+1]-Rgb[Int64(B)*3+1])>D Then D:=Abs(Rgb[Int64(A)*3+
+   1]-Rgb[Int64(B)*3+1]);
+ If Abs(Rgb[Int64(A)*3+2]-Rgb[Int64(B)*3+2])>D Then D:=Abs(Rgb[Int64(A)*3+
+   2]-Rgb[Int64(B)*3+2]);
+ Result:=D<=7;
+End;
+
+{ vetement photographie sur un mannequin : la peau du mannequin (plastique
+  clair, peu colore) est reperee
+  pour etre remplacee par la peau de la personne ; le tissu garde ses couleurs }
+Function VtDetectMannequin(Var VtG:VtTGarment):Boolean;
+Var
+ W,VtH,X,NC,VtJ:LongInt;
+ VtN,Area,PArea:int64;K:LongInt;
+ Seed,Weak,VtM,Cand,VtTmp:PByte;
+ Lab:VtPIntArr;
+ Areas:VtTIntArray;
+ HasSeed,Keep:Array of Boolean;
+ L,A,B,C,Cx,Wd:Single;
+ X0,X1:LongInt;
+ Sw:PSingle;
+ SumL:Double;
+Begin
+ Result:=False;
+ VtG.Skin:=Nil;
+ W:=VtG.W;VtH:=VtG.VtH;VtN:=Int64(W)*VtH;
+ X0:=W;X1:=-1;Area:=0;
+ For K:=0 to VtN-1 do If VtG.Mask[K]>=0.5 Then Begin
+  X:=K mod W;
+  If X<X0 Then X0:=X;
+  If X>X1 Then X1:=X;
+  Inc(Area);
+ End;
+ If Area<500 Then Exit;
+ Cx:=(X0+X1+1)/2;Wd:=X1-X0+1;
+ Seed:=PByte(VtAllocBytes(VtN));Weak:=PByte(VtAllocBytes(VtN));
+ For K:=0 to VtN-1 do Begin
+  If VtG.Mask[K]<0.5 Then Continue;
+  X:=K mod W;
+  If Abs(X+0.5-Cx)>0.33*Wd Then Continue;
+  VtRgbToLab(VtG.Rgb[K*3],VtG.Rgb[K*3+1],VtG.Rgb[K*3+2],L,A,B);
+  C:=Sqrt(A*A+B*B);
+  If(L>70)and(C<10.5)Then Seed[K]:=255;
+  If(L>58)and(C<15)Then Weak[K]:=255;
+ End;
+ VtMorphMask(Seed,W,VtH,1,True);VtMorphMask(Seed,W,VtH,1,False);
+ Lab:=VtPIntArr(VtAllocBytes(VtN*4));
+ NC:=VtComponents(Weak,W,VtH,Lab,Areas);
+ SetLength(HasSeed,NC+1);
+ For K:=0 to VtN-1 do If(Seed[K]<>0)and(Lab[K]>0)Then HasSeed[Lab[K]]:=True;
+ VtM:=PByte(VtAllocBytes(VtN));
+ For K:=0 to VtN-1 do If(Lab[K]>0)and HasSeed[Lab[K]]Then VtM[K]:=255;
+ FreeMem(Lab);FreeMem(Seed);FreeMem(Weak);
+ VtMorphMask(VtM,W,VtH,2,False);VtMorphMask(VtM,W,VtH,2,True);
+ VtMorphMask(VtM,W,VtH,1,True);VtMorphMask(VtM,W,VtH,1,False);
+ { la peau ombree ou en bordure : croissance de quelques pixels dans les zones
+   claires peu colorees }
+ Cand:=PByte(VtAllocBytes(VtN));
+ For K:=0 to VtN-1 do Begin
+  If VtG.Mask[K]<0.5 Then Continue;
+  VtRgbToLab(VtG.Rgb[K*3],VtG.Rgb[K*3+1],VtG.Rgb[K*3+2],L,A,B);
+  If(L>46)and(Sqrt(A*A+B*B)<20)and(Abs((K mod W)+0.5-Cx)<=0.36*Wd)Then
+    Cand[K]:=255;
+ End;
+ VtTmp:=PByte(VtAllocBytes(VtN));
+ For VtJ:=1 to 10 do Begin
+  Move(VtM^,VtTmp^,VtN);
+  VtMorphMask(VtTmp,W,VtH,1,False);
+  For K:=0 to VtN-1 do If(VtTmp[K]<>0)and(Cand[K]<>0)Then VtM[K]:=255;
+ End;
+ { fermeture : les zones ombrees ou sous la gaze, entourees de peau, sont
+   ajoutees ; les pieces dorees
+   (bracelets, collier) restent du tissu car trop colorees }
+ Move(VtM^,VtTmp^,VtN);
+ VtMorphMask(VtTmp,W,VtH,7,False);VtMorphMask(VtTmp,W,VtH,7,True);
+ For K:=0 to VtN-1 do Begin
+  If(VtTmp[K]=0)or(VtM[K]<>0)or(VtG.Mask[K]<0.5)Then Continue;
+  If Abs((K mod W)+0.5-Cx)>0.36*Wd Then Continue;
+  VtRgbToLab(VtG.Rgb[K*3],VtG.Rgb[K*3+1],VtG.Rgb[K*3+2],L,A,B);
+  If(L>38)and(Sqrt(A*A+B*B)<17)and(B<16)Then VtM[K]:=255;
+ End;
+ FreeMem(VtTmp);FreeMem(Cand);
+ Lab:=VtPIntArr(VtAllocBytes(VtN*4));
+ NC:=VtComponents(VtM,W,VtH,Lab,Areas);
+ SetLength(Keep,NC+1);
+ For VtJ:=1 to NC do Keep[VtJ]:=Areas[VtJ]>=VtIMax(60,Area div 400);
+ PArea:=0;
+ For K:=0 to VtN-1 do If(Lab[K]>0)and Keep[Lab[K]]Then Inc(PArea);
+ { trop peu : pas de mannequin ; trop : vetement blanc ou clair, qui n'est pas
+   de la peau }
+ If(PArea<Area*12 div 1000)or(PArea>Area*45 div 100)Then Begin
+  FreeMem(Lab);FreeMem(VtM);
+  Exit;
+ End;
+ Sw:=VtAllocF(VtN);
+ SumL:=0;
+ For K:=0 to VtN-1 do If(Lab[K]>0)and Keep[Lab[K]]Then Begin
+  Sw[K]:=1;
+  SumL:=SumL+VtLuma(VtG.Rgb[K*3],VtG.Rgb[K*3+1],VtG.Rgb[K*3+2]);
+ End;
+ FreeMem(Lab);FreeMem(VtM);
+ VtBoxBlur(Sw,Sw,W,VtH,1);
+ For K:=0 to VtN-1 do Sw[K]:=Sw[K]*VtG.Mask[K];
+ VtG.Skin:=Sw;
+ VtG.PlasticL:=VtFMax(40,SumL/PArea);
+ VtG.Note:=VtG.Note+', mannequin d'#130'tect'#130' ('+VtFStr(100.0*PArea/Area,0)+
+   ' % du v'#136'tement) : sa peau est remplac'#130'e par celle de la '+
+   'personne';
+ Result:=True;
+End;
+
+{ extrait le vetement d'une photo (canal alpha, sinon suppression du fond uni) }
+Function VtGarmentFromImage(Var VtImg:VtTImage;Var VtG:VtTGarment;Var VtErr:AnsiString)
+  :Boolean;
+Var
+ W,VtH,K0,X,Y,VtI,C,VtSide,NW,NH:LongInt;
+ VtN:int64;K:LongInt;
+ Src:PSingle;
+ Hist:Array[0..2]of Array[0..255]of LongInt;
+ Bg:Array[0..2]of Single;
+ Cnt,Close_:Int64;
+ Cum,Half:Int64;
+ D:PSingle;
+ Dh:Array[0..255]of Int64;
+ Thr,Dv:LongInt;
+ Fg,Seen:PByte;
+ Stack:VtPIntArr;
+ Sp,Q:LongInt;
+ UseAlpha:Boolean;
+ NLow:Int64;
+ Lab:VtPIntArr;
+ Areas:VtTIntArray;
+ NC,Mx,VtJ:LongInt;
+ Keep:Array of Boolean;
+ X0,Y0,X1,Y1:LongInt;
+ Area:Int64;
+ M2,Rg2:PSingle;
+ Sc:Double;
+Begin
+ Result:=False;
+ VtErr:='';
+ FillChar(VtG,SizeOf(VtG),0);
+ VtColorInit;
+ W:=VtImg.W;VtH:=VtImg.VtH;
+ { reduction prealable des tres grandes photos }
+ VtSide:=VtIMax(W,VtH);
+ If VtSide>1400 Then Begin
+  Sc:=1400/VtSide;
+  NW:=Round(W*Sc);NH:=Round(VtH*Sc);
+ End
+  Else Begin NW:=W;NH:=VtH;End;
+ VtN:=Int64(W)*VtH;
+ Src:=VtAllocF(VtN*3);
+ For K:=0 to VtN*3-1 do Src[K]:=VtImg.Px[K];
+ VtG.Rgb:=VtAllocF(Int64(NW)*NH*3);
+ VtResizeF(Src,W,VtH,VtG.Rgb,NW,NH,3);
+ FreeMem(Src);
+ VtG.Mask:=VtAllocF(Int64(NW)*NH);
+ UseAlpha:=False;
+ If VtImg.Alpha<>Nil Then Begin
+  NLow:=0;
+  For K:=0 to VtN-1 do If VtImg.Alpha[K]<250 Then Inc(NLow);
+  If NLow>VtN div 200 Then UseAlpha:=True;
+ End;
+ W:=NW;VtH:=NH;
+ VtN:=Int64(W)*VtH;
+ If UseAlpha Then Begin
+  Src:=VtAllocF(Int64(VtImg.W)*VtImg.VtH);
+  For K:=0 to Int64(VtImg.W)*VtImg.VtH-1 do Src[K]:=VtImg.Alpha[K]/255.0;
+  VtResizeF(Src,VtImg.W,VtImg.VtH,VtG.Mask,W,VtH,1);
+  FreeMem(Src);
+  VtG.Note:='canal alpha de l''image utilis'#130;
+ End
+  Else Begin
+   { couleur du fond : mediane des bords }
+   FillChar(Hist,SizeOf(Hist),0);
+   Cnt:=0;
+   For Y:=0 to VtH-1 do
+    For X:=0 to W-1 do
+     If(X<3)or(Y<3)or(X>=W-3)or(Y>=VtH-3)Then Begin
+      For C:=0 to 2 do Inc(Hist[C][VtClampI(Trunc(VtG.Rgb[(Int64(Y)*W+X)*3+C]+0.5),
+        0,255)]);
+      Inc(Cnt);
+     End;
+   For C:=0 to 2 do Begin
+    Cum:=0;Half:=Cnt div 2;
+    Bg[C]:=0;
+    For VtI:=0 to 255 do Begin
+     Inc(Cum,Hist[C][VtI]);
+     If Cum>Half Then Begin Bg[C]:=VtI;Break;End;
+    End;
+   End;
+   D:=VtAllocF(VtN);
+   FillChar(Dh,SizeOf(Dh),0);
+   Close_:=0;
+   For K:=0 to VtN-1 do Begin
+    D[K]:=VtFMax(Abs(VtG.Rgb[K*3]-Bg[0]),VtFMax(Abs(VtG.Rgb[K*3+1]-Bg[1]),
+      Abs(VtG.Rgb[K*3+2]-Bg[2])));
+    Inc(Dh[VtClampI(Trunc(D[K]),0,255)]);
+   End;
+   For Y:=0 to VtH-1 do
+    For X:=0 to W-1 do
+     If(X<3)or(Y<3)or(X>=W-3)or(Y>=VtH-3)Then
+      If D[Int64(Y)*W+X]<=28 Then Inc(Close_);
+   If Close_<Cnt*6 div 10 Then Begin
+    For K:=0 to VtN-1 do VtG.Mask[K]:=1;
+    VtG.Note:='fond non uniforme : toute l''image est utilis'#130'e comme v'#136+
+      'tement';
+    FreeMem(D);
+   End
+    Else Begin
+     { propagation depuis les bords : on avance tant que la couleur reste proche
+       du fond
+       ET qu'elle ne saute pas d'un pixel a l'autre (un vetement blanc sur fond
+         blanc
+       garde ainsi son contour) }
+     Thr:=Round(VtOtsuThreshold(Dh)*0.8);
+     If Thr<22 Then Thr:=22;
+     If Thr>70 Then Thr:=70;
+     Seen:=PByte(VtAllocBytes(VtN));
+     Fg:=PByte(VtAllocBytes(VtN));
+     Stack:=VtPIntArr(VtAllocBytes(VtN*4));
+     Sp:=0;
+     For Y:=0 to VtH-1 do
+      For X:=0 to W-1 do
+       If(X=0)or(Y=0)or(X=W-1)or(Y=VtH-1)Then Begin
+        K:=Int64(Y)*W+X;
+        If(Seen[K]=0)and(D[K]<Thr)Then Begin Seen[K]:=1;Stack[Sp]:=K;Inc(Sp);
+          End;
+       End;
+     While Sp>0 do Begin
+      Dec(Sp);
+      Q:=Stack[Sp];
+      X:=Q mod W;Y:=Q div W;
+      If(X>0)and(Seen[Q-1]=0)and(D[Q-1]<Thr)and VtBgStep(VtG.Rgb,Q,Q-1)Then
+        Begin Seen[Q-1]:=1;Stack[Sp]:=Q-1;Inc(Sp);End;
+      If(X<W-1)and(Seen[Q+1]=0)and(D[Q+1]<Thr)and VtBgStep(VtG.Rgb,Q,Q+1)Then
+        Begin Seen[Q+1]:=1;Stack[Sp]:=Q+1;Inc(Sp);End;
+      If(Y>0)and(Seen[Q-W]=0)and(D[Q-W]<Thr)and VtBgStep(VtG.Rgb,Q,Q-W)Then
+        Begin Seen[Q-W]:=1;Stack[Sp]:=Q-W;Inc(Sp);End;
+      If(Y<VtH-1)and(Seen[Q+W]=0)and(D[Q+W]<Thr)and VtBgStep(VtG.Rgb,Q,Q+W)Then
+        Begin Seen[Q+W]:=1;Stack[Sp]:=Q+W;Inc(Sp);End;
+     End;
+     FreeMem(Stack);FreeMem(D);
+     For K:=0 to VtN-1 do If Seen[K]=0 Then Fg[K]:=255;
+     FreeMem(Seen);
+     { ouverture legere puis suppression des petits ilots }
+     VtMorphMask(Fg,W,VtH,1,True);
+     Lab:=VtPIntArr(VtAllocBytes(VtN*4));
+     NC:=VtComponents(Fg,W,VtH,Lab,Areas);
+     Mx:=0;
+     For VtJ:=1 to NC do If Areas[VtJ]>Mx Then Mx:=Areas[VtJ];
+     SetLength(Keep,NC+1);
+     For VtJ:=1 to NC do Keep[VtJ]:=Areas[VtJ]*100>=Int64(Mx)*8;
+     For K:=0 to VtN-1 do
+      If(Lab[K]>0)and Keep[Lab[K]]Then Fg[K]:=255 Else Fg[K]:=0;
+     FreeMem(Lab);
+     VtMorphMask(Fg,W,VtH,1,False);
+     For K:=0 to VtN-1 do VtG.Mask[K]:=Fg[K]/255.0;
+     VtBlurPlane(VtG.Mask,W,VtH,1.0);
+     For K:=0 to VtN-1 do VtG.Mask[K]:=VtSmoothStep(0.3,0.8,VtG.Mask[K]);
+     FreeMem(Fg);
+     VtG.Note:='fond supprim'#130' (seuil '+VtIStr(Thr)+')';
+    End;
+  End;
+ VtG.W:=W;VtG.VtH:=VtH;
+ { rognage sur la boite du vetement }
+ X0:=W;Y0:=VtH;X1:=-1;Y1:=-1;Area:=0;
+ For Y:=0 to VtH-1 do
+  For X:=0 to W-1 do If VtG.Mask[Int64(Y)*W+X]>=0.5 Then Begin
+   If X<X0 Then X0:=X;
+   If X>X1 Then X1:=X;
+   If Y<Y0 Then Y0:=Y;
+   If Y>Y1 Then Y1:=Y;
+   Inc(Area);
+  End;
+ If(X1<X0)or(Area<VtN div 40)Then Begin
+  VtErr:='impossible de trouver le v'#136'tement dans l''image (fond trop '+
+    'complexe ?)';
+  VtGarmentFree(VtG);
+  Exit;
+ End;
+ NW:=X1-X0+1;NH:=Y1-Y0+1;
+ M2:=VtAllocF(Int64(NW)*NH);Rg2:=VtAllocF(Int64(NW)*NH*3);
+ For Y:=0 to NH-1 do Begin
+  Move(VtG.Mask[Int64(Y+Y0)*W+X0],M2[Int64(Y)*NW],NW*4);
+  Move(VtG.Rgb[(Int64(Y+Y0)*W+X0)*3],Rg2[Int64(Y)*NW*3],NW*12);
+ End;
+ FreeMem(VtG.Mask);FreeMem(VtG.Rgb);
+ VtG.Mask:=M2;VtG.Rgb:=Rg2;VtG.W:=NW;VtG.VtH:=NH;
+ { decontamination des bords : les couleurs proches du contour (melangees au
+   fond)
+   sont remplacees par celles de l'interieur du tissu }
+ Fg:=PByte(VtAllocBytes(Int64(NW)*NH));
+ For K:=0 to Int64(NW)*NH-1 do If VtG.Mask[K]>=0.5 Then Fg[K]:=255;
+ VtMorphMask(Fg,NW,NH,VtIMax(1,VtIMin(NW,NH)div 250),True);
+ M2:=VtAllocF(Int64(NW)*NH);
+ For K:=0 to Int64(NW)*NH-1 do If Fg[K]<>0 Then M2[K]:=1;
+ VtPushPullFill(VtG.Rgb,M2,NW,NH);
+ FreeMem(M2);FreeMem(Fg);
+ Result:=True;
+ If not VtNoMannequin Then VtDetectMannequin(VtG);
+End;
+
+{ extremites gauche/droite (premier/dernier pixel > 0,5) de chaque rangee ; -1
+  si vide }
+Procedure VtRowExtents(VtM:PSingle;W,VtH:LongInt;L,R:PSingle);
+Var
+ X,Y,A,B:LongInt;
+Begin
+ For Y:=0 to VtH-1 do Begin
+  A:=-1;B:=-1;
+  For X:=0 to W-1 do If VtM[Int64(Y)*W+X]>=0.5 Then Begin
+   If A<0 Then A:=X;
+   B:=X;
+  End;
+  If A<0 Then Begin L[Y]:=-1;R[Y]:=-1;End
+  Else Begin L[Y]:=A;R[Y]:=B+1;End;
+ End;
+End;
+
+{ comble les rangees vides par la plus proche et lisse sur une fenetre de rayon
+  Rad }
+Procedure VtFillSmoothExtents(L,R:PSingle;VtH,Rad:LongInt);
+Var
+ Y,K,Last:LongInt;
+ TmpL,TmpR:PSingle;
+ SL,SR_:Double;
+ Cnt:LongInt;
+Begin
+ Last:=-1;
+ For Y:=0 to VtH-1 do Begin
+  If L[Y]>=0 Then Last:=Y
+  Else If Last>=0 Then Begin L[Y]:=L[Last];R[Y]:=R[Last];End;
+ End;
+ Last:=-1;
+ For Y:=VtH-1 downto 0 do Begin
+  If(L[Y]>=0)and(Y<VtH)Then Last:=Y
+  Else If(Last>=0)and(L[Y]<0)Then Begin L[Y]:=L[Last];R[Y]:=R[Last];End;
+ End;
+ TmpL:=VtAllocF(VtH);TmpR:=VtAllocF(VtH);
+ For Y:=0 to VtH-1 do Begin
+  SL:=0;SR_:=0;Cnt:=0;
+  For K:=Y-Rad to Y+Rad do If(K>=0)and(K<VtH)Then Begin SL:=SL+L[K];SR_:=SR_+
+    R[K];Inc(Cnt);End;
+  TmpL[Y]:=SL/Cnt;TmpR[Y]:=SR_/Cnt;
+ End;
+ Move(TmpL^,L^,VtH*4);Move(TmpR^,R^,VtH*4);
+ FreeMem(TmpL);FreeMem(TmpR);
+End;
+
+{ comble les trous entre les manches et le corps d'un vetement photographie a
+  plat
+  (a partir de la rangee FromRow), le tissu manquant etant prolonge par
+    propagation }
+Procedure VtCloseRowGaps(Var VtG:VtTGarment;FromRow:LongInt);
+Var
+ X,Y,A,B:LongInt;
+ Known,Fill:PSingle;
+ VtN:int64;K:LongInt;
+ Any:Boolean;
+Begin
+ VtN:=Int64(VtG.W)*VtG.VtH;
+ Known:=VtAllocF(VtN);Fill:=VtAllocF(VtN);
+ Any:=False;
+ For K:=0 to VtN-1 do If VtG.Mask[K]>=0.5 Then Known[K]:=1;
+ For Y:=FromRow to VtG.VtH-1 do Begin
+  A:=-1;B:=-1;
+  For X:=0 to VtG.W-1 do If Known[Int64(Y)*VtG.W+X]>0 Then Begin
+   If A<0 Then A:=X;
+   B:=X;
+  End;
+  If A>=0 Then
+   For X:=A to B do If Known[Int64(Y)*VtG.W+X]=0 Then Begin Fill[Int64(Y)*VtG.W+
+     X]:=1;Any:=True;End;
+ End;
+ If Any Then Begin
+  VtPushPullFill(VtG.Rgb,Known,VtG.W,VtG.VtH);
+  For K:=0 to VtN-1 do If Fill[K]>0 Then VtG.Mask[K]:=1;
+ End;
+ FreeMem(Known);FreeMem(Fill);
+End;
+
+{ categories remplacees / protegees selon le genre de vetement }
+Procedure VtKindSets(VtKind:LongInt;Var Repl,Alt,Prot:LongWord);
+Const
+ Always=VtmsFace or VtmsHair or VtmsHat or VtmsGlasses;
+Begin
+ Alt:=0;
+ Case VtKind of
+  gkTop:Begin Repl:=VtmsTop;Alt:=VtmsDress;Prot:=Always or VtmsScarf or VtmsBag
+    or VtmsBelt or VtmsPants or VtmsSkirt or VtmsShoes or VtmsLegs;End;
+  gkBottom,gkSkirt:Begin Repl:=VtmsPants or VtmsSkirt;Prot:=Always or VtmsTop or VtmsBag
+    or VtmsBelt or VtmsShoes or VtmsScarf;End;
+  gkDress:Begin Repl:=VtmsDress or VtmsTop or VtmsSkirt or VtmsPants;Prot:=Always
+    or VtmsShoes or VtmsBag or VtmsScarf;End;
+  gkFull:Begin Repl:=VtmsDress or VtmsTop or VtmsSkirt or VtmsPants or VtmsBelt;
+    Prot:=Always or VtmsShoes or VtmsBag or VtmsScarf;End;
+  gkShoes:Begin Repl:=VtmsShoes;Prot:=Always or VtmsTop or VtmsPants or VtmsSkirt
+    or VtmsDress or VtmsBag;End;
+  gkHat:Begin Repl:=VtmsHat;Prot:=VtmsFace or VtmsGlasses;End;
+  gkGlasses:Begin Repl:=VtmsGlasses;Prot:=VtmsHair or VtmsHat;End;
+  VtgkBag:Begin Repl:=VtmsBag;Prot:=Always;End;
+  gkScarf:Begin Repl:=VtmsScarf;Prot:=Always;End;
+  gkBelt:Begin Repl:=VtmsBelt;Prot:=Always;End;
+  Else Begin Repl:=VtmsTop;Prot:=Always;End;
+ End;
+End;
+
+Function VtKindCategory(VtKind:LongInt):LongInt;
+Begin
+ Case VtKind of
+  gkTop:Result:=cTop;
+  gkBottom:Result:=cPants;
+  gkSkirt:Result:=cSkirt;
+  gkDress,gkFull:Result:=cDress;
+  gkShoes:Result:=VtcShoes;
+  gkHat:Result:=cHat;
+  gkGlasses:Result:=cGlasses;
+  VtgkBag:Result:=cBag;
+  gkScarf:Result:=cScarf;
+  gkBelt:Result:=cBelt;
+  Else Result:=cTop;
+ End;
+End;
+
+Const
+ VtGAnkleY:Single=-1;
+ VtGHemY:Single=-1;
+
+{ rangee la plus basse ou l'ensemble de categories apparait entre les colonnes
+  X0 et X1 ; -1 si absent }
+Function VtCatBottomIn(Const VtS:VtTScene;Mask:LongWord;X0,X1:LongInt):LongInt;
+Var
+ X,Y,C,VtT:LongInt;
+ VtP:Int64;
+Begin
+ Result:=-1;
+ If X0<0 Then X0:=0;
+ If X1>=VtS.W Then X1:=VtS.W-1;
+ For Y:=VtS.VtH-1 downto 0 do
+  For X:=X0 to X1 do Begin
+   VtP:=Int64(Y)*VtS.W+X;
+   VtT:=0;
+   For C:=0 to VtNumCat-1 do If(Mask and(LongWord(1)shl C))<>0 Then Inc(VtT,
+     VtS.Cat[C][VtP]);
+   If VtT>=128 Then Begin Result:=Y;Exit;End;
+  End;
+End;
+
+{ boite cible deduite du visage lorsque la personne ne porte pas ce genre de
+  vetement }
+Function VtLandmarkBox(Const VtS:VtTScene;VtKind:LongInt;Var Bx0,By0,Bx1,By1:Single)
+  :Boolean;
+Var
+ Fx0,Fy0,Fx1,Fy1,Lx0,Ly0,Lx1,Ly1,Tx0,Ty0,Tx1,Ty1,Hx0,Hy0,Hx1,Hy1:LongInt;
+ Fw,Fh,Cx,U:Single;
+Begin
+ Result:=False;
+ If not VtCatBBox(VtS,VtmsFace,Fx0,Fy0,Fx1,Fy1)Then Exit;
+ Fw:=Fx1-Fx0+1;Fh:=Fy1-Fy0+1;
+ Cx:=(Fx0+Fx1+1)/2;
+ Case VtKind of
+  gkTop,gkDress,gkFull:Begin
+    Bx0:=Cx-1.4*Fw;Bx1:=Cx+1.4*Fw;By0:=Fy1+0.25*Fh;
+    Case VtKind of
+     gkTop:By1:=By0+2.5*Fh;
+     gkDress:By1:=By0+5.0*Fh;
+     Else By1:=By0+6.2*Fh;
+    End;
+    Result:=True;
+   End;
+  gkHat:Begin Bx0:=Fx0-0.2*Fw;Bx1:=Fx1+0.2*Fw;By1:=Fy0+0.25*Fh;
+    By0:=By1-0.9*Fh;Result:=True;End;
+  gkGlasses:Begin Bx0:=Fx0-0.05*Fw;Bx1:=Fx1+0.05*Fw;By0:=Fy0+0.30*Fh;
+    By1:=Fy0+0.57*Fh;Result:=True;End;
+  gkScarf:Begin Bx0:=Cx-0.62*Fw;Bx1:=Cx+0.62*Fw;By0:=Fy1-0.12*Fh;By1:=By0+
+    0.9*Fh;Result:=True;End;
+  gkBelt:
+   If VtCatBBox(VtS,VtmsPants or VtmsSkirt,Lx0,Ly0,Lx1,Ly1)and VtCatBBox(VtS,VtmsTop
+     or VtmsDress,Tx0,Ty0,Tx1,Ty1)Then Begin
+    Bx0:=Lx0;Bx1:=Lx1;
+    By1:=Ty1-0.02*(Ty1-Ty0);By0:=By1-0.07*(Ly1-Ty0);
+    Result:=True;
+   End;
+  gkBottom,gkSkirt,gkShoes:Begin
+    If VtCatBBox(VtS,VtmsFace or VtmsHair or VtmsHat,Hx0,Hy0,Hx1,Hy1)Then U:=Fy1+
+      1-Hy0 Else U:=Fh*1.3;
+    If VtCatBBox(VtS,VtmsLegs or VtmsShoes,Lx0,Ly0,Lx1,Ly1)Then Begin
+     If VtKind=gkShoes Then Begin
+      Bx0:=Lx0-0.12*U;Bx1:=Lx1+0.12*U;By1:=Ly1+0.1*U;By0:=By1-0.55*U;
+      Result:=True;
+     End
+      Else If VtCatBBox(VtS,VtmsTop or VtmsDress,Tx0,Ty0,Tx1,Ty1)Then Begin
+       Bx0:=Lx0-0.01*U;Bx1:=Lx1+0.01*U;
+       If VtGHemY>0 Then By0:=VtGHemY-0.12*U
+       Else Begin
+        Ly0:=VtCatBottomIn(VtS,VtmsTop or VtmsDress,Lx0,Lx1);
+        If Ly0>=0 Then By0:=Ly0-0.15*U Else By0:=Ty1-0.15*U;
+       End;
+       If VtKind=gkBottom Then Begin
+        If VtGAnkleY>0 Then By1:=VtGAnkleY Else By1:=Ly1+1;
+       End
+        Else By1:=By0+2.0*U;
+       Result:=True;
+      End;
+    End;
+   End;
+ End;
+End;
+
+{ couleur de peau moyenne (RVB) : jambes, sinon bras, sinon visage }
+Function VtSkinColor(Const VtS:VtTScene;ArmsFirst:Boolean;Var R,VtG,B:Single):Boolean;
+Const
+ SetsLow:Array[0..2]of LongWord=(VtmsLegs,VtmsArms,VtmsFace);
+ SetsTop:Array[0..2]of LongWord=(VtmsArms,VtmsFace,VtmsLegs);
+Var
+ VtI:LongInt;
+ Sets:Array[0..2]of LongWord;
+ VtN,Cnt:int64;K:LongInt;
+ VtM:PSingle;
+ Sr,Sg,Sb:Double;
+Begin
+ Result:=False;
+ For VtI:=0 to 2 do If ArmsFirst Then Sets[VtI]:=SetsTop[VtI]Else Sets[VtI]:=SetsLow[VtI];
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ VtM:=VtAllocF(VtN);
+ For VtI:=0 to 2 do Begin
+  VtCatMask(VtS,Sets[VtI],VtM);
+  Sr:=0;Sg:=0;Sb:=0;Cnt:=0;
+  For K:=0 to VtN-1 do If VtM[K]>=0.8 Then Begin
+   Sr:=Sr+VtS.Pix[K*3];Sg:=Sg+VtS.Pix[K*3+1];Sb:=Sb+VtS.Pix[K*3+2];Inc(Cnt);
+  End;
+  If Cnt>=VtN div 3000 Then Begin
+   R:=Sr/Cnt;VtG:=Sg/Cnt;B:=Sb/Cnt;
+   Result:=True;
+   Break;
+  End;
+ End;
+ FreeMem(VtM);
+End;
+
+{ mesures robustes du visage : si le cou ou la poitrine sont classes dans le
+  visage, la boite
+  englobante est trop grande. La largeur du visage est celle de son premier
+    maximum (joues) ;
+  le menton est la premiere ligne dont la largeur tombe sous 62 % de ce maximum,
+    ou qui
+  s'elargit de nouveau (epaules) apres avoir diminue }
+Procedure VtFaceMetrics(Const VtS:VtTScene;Var Fx0,Fy0,Fx1,Fy1:LongInt);
+Var
+ X,Y,A,B,Wd,MaxW,YMax,Xa,Xb,Y1,Chin,MinW:LongInt;
+ Function RowW(R:LongInt;Var Ra,Rb:LongInt):LongInt;
+ Var
+  Xx:LongInt;
+ Begin
+  Ra:=-1;Rb:=-1;
+  For Xx:=Fx0 to Fx1 do If VtS.Cat[cFace][Int64(R)*VtS.W+Xx]>=128 Then Begin
+   If Ra<0 Then Ra:=Xx;
+   Rb:=Xx;
+  End;
+  If Ra<0 Then RowW:=0 Else RowW:=Rb-Ra+1;
+ End;
+Begin
+ MaxW:=0;YMax:=Fy0;Xa:=Fx0;Xb:=Fx1;Y1:=Fy1;
+ For Y:=Fy0 to Fy1 do Begin
+  Wd:=RowW(Y,A,B);
+  If Wd>MaxW Then Begin MaxW:=Wd;YMax:=Y;Xa:=A;Xb:=B;End
+  Else If(MaxW>=8)and(Wd<0.80*MaxW)Then Begin Y1:=Y;Break;End;
+ End;
+ If MaxW<8 Then Exit;
+ Chin:=Fy1;
+ MinW:=MaxW;
+ For Y:=Y1 to Fy1 do Begin
+  Wd:=RowW(Y,A,B);
+  If Wd<MinW Then MinW:=Wd;
+  If(Wd<0.62*MaxW)or((MinW<0.90*MaxW)and(Wd>1.12*MinW+2))Then Begin
+   Chin:=Y;
+   Break;
+  End;
+ End;
+ Fx0:=Xa;Fx1:=Xb;Fy1:=Chin;
+ If Fy1<YMax Then Fy1:=YMax;
+End;
+
+{ ligne des epaules du mannequin : sous le menton, ou a la hauteur des epaules
+  de l'ancien haut
+  quand celui-ci est plus haut }
+Function VtShoulderY(Const VtS:VtTScene;Fy0,Fy1:LongInt):Single;
+Var
+ Tx0,Ty0,Tx1,Ty1:LongInt;
+ Fh,V:Single;
+Begin
+ Fh:=Fy1-Fy0+1;
+ V:=Fy1+1+0.25*Fh;
+ If VtCatBBox(VtS,VtmsTop or VtmsDress,Tx0,Ty0,Tx1,Ty1)Then
+  If(Ty0>Fy0+0.5*Fh)and(Ty0+0.12*Fh<V)Then V:=Ty0+0.12*Fh;
+ Result:=V;
+End;
+
+{ marges a ajouter (gauche, droite, bas) pour voir la tenue sur mannequin en
+  entier, jusqu'aux pieds ; 0 si inutile }
+Procedure VtMannequinNeed(Const VtS:VtTScene;Const VtG:VtTGarment;VtKind:LongInt;Var NL,
+  NR,NB:LongInt);
+Var
+ GL,GRr:PSingle;
+ Fx0,Fy0,Fx1,Fy1,Y,Ysh:LongInt;
+ Wg,Sc,Ty0,Bottom,Cx,Gcx,Le,Re:Single;
+Begin
+ NL:=0;NR:=0;NB:=0;
+ If(VtG.Skin=Nil)or not(VtKind in[gkDress,gkFull])Then Exit;
+ If not VtCatBBox(VtS,VtmsFace,Fx0,Fy0,Fx1,Fy1)Then Exit;
+ VtFaceMetrics(VtS,Fx0,Fy0,Fx1,Fy1);
+ GL:=VtAllocF(VtG.VtH);GRr:=VtAllocF(VtG.VtH);
+ VtRowExtents(VtG.Mask,VtG.W,VtG.VtH,GL,GRr);
+ VtFillSmoothExtents(GL,GRr,VtG.VtH,VtIMax(1,VtG.VtH div 50));
+ Wg:=0;
+ For Y:=(VtG.VtH*5)div 100 to(VtG.VtH*13)div 100 do If GRr[Y]-GL[Y]>Wg Then
+   Wg:=GRr[Y]-GL[Y];
+ Ysh:=0;
+ For Y:=0 to VtG.VtH-1 do If GRr[Y]-GL[Y]>=0.75*Wg Then Begin Ysh:=Y;Break;End;
+ Gcx:=(GL[Ysh]+GRr[Ysh])/2;
+ FreeMem(GL);FreeMem(GRr);
+ If Wg<8 Then Exit;
+ Sc:=2.55*(Fx1-Fx0+1)/Wg;
+ Cx:=(Fx0+Fx1+1)/2;
+ Ty0:=VtShoulderY(VtS,Fy0,Fy1)-Sc*Ysh;
+ Bottom:=Ty0+Sc*VtG.VtH;
+ If Bottom>VtS.VtH Then NB:=Trunc(Bottom-VtS.VtH)+2;
+ Le:=Cx+(0-Gcx)*Sc;
+ Re:=Cx+(VtG.W-Gcx)*Sc;
+ If Le<0 Then NL:=Trunc(-Le)+Trunc(0.02*VtG.W*Sc)+2;
+ If Re>VtS.W Then NR:=Trunc(Re-VtS.W)+Trunc(0.02*VtG.W*Sc)+2;
+End;
+
+{ pose le vetement sur la personne }
+Function VtTryOnGarment(Var VtS:VtTScene;Var VtG:VtTGarment;VtKind,Quality:LongInt;Var
+  VtMsg:AnsiString):Boolean;
+Var
+ Repl,Alt,Prot:LongWord;
+ W,VtH,X,Y,C,R0,GR:LongInt;
+ VtN:int64;K:LongInt;
+ Ro,Prot_,Cov,Left,Lrw,Lr:PSingle;
+ GRgb,GA:PSingle;
+ X0,Y0,X1,Y1:LongInt;
+ Have:Boolean;
+ Tx0,Ty0,Tx1,Ty1,Cx,Gcx,Sx,Sy,SyFit,Lam:Single;
+ UsedLandmarks:Boolean;
+ GL,GRr,SL,SR_:PSingle;
+ Gx0,Gx1:LongInt;
+ Lt,Rt,Ls,Rs,Lf,Rf,Gy,U,Gxx,Sc:Single;
+ VtTmp:Array[0..3]of Single;
+ Yb,Ye:LongInt;
+ UniformScale:Boolean;
+ Area:Int64;
+ MeanL:Double;
+ CntL:Int64;
+ Rad:LongInt;
+ F,Cvg,Lef:Double;
+ Bw,Bh:Single;
+ MaxCat:LongInt;
+ Mv:LongInt;
+ AnchorBottom:Boolean;
+ ArmMask:PSingle;
+ M_:Single;
+ RoArea:Double;
+ SA,SB:PSingle;
+ SkR,SkG,SkB,Sv:Single;
+ Sleeveless:Boolean;
+ RowL,RowR:PSingle;
+ LeftSkin:PSingle;
+ Sum1,Sum2:Double;
+ N1,N2:LongInt;
+ GS,GSh,SkE,Fb,Bl:PSingle;
+ Gw,Gain,Sig,Shd:Single;
+ LgSum,LsSum,Sd:Double;
+ Cg,Cs:Int64;
+ Mc:LongInt;
+ VtSkinBase,MannequinFit:Boolean;
+ YshRow,NeckX0,NeckX1,NeckY1:Single;
+ ChinY:LongInt;
+ YshAll,FaceH:Single;
+ RemoveOld,NeckHas:Boolean;
+ Rm,Kn2,Fl2:PSingle;
+ Mk2:PByte;
+ Fx0,Fy0,Fx1,Fy1,Ysh,Cnt1,Cnt2:LongInt;
+ Wg:Single;
+
+ Procedure FillSkin(Wt:PSingle);
+ Var
+  Kk:LongInt;
+  Cc,CntOld,RadS:LongInt;
+  Nn:Int64;
+  V,Sh2:Single;
+  MeanOld:Double;
+  Lb,Wb:PSingle;
+ Begin
+  { seules les variations lentes de lumiere de l'ancien vetement (forme du bras,
+    ombres) servent
+    de relief ; ses plis et ses bords ne sont pas repris }
+  Nn:=Int64(VtS.W)*VtS.VtH;
+  Lb:=VtAllocF(Nn);Wb:=VtAllocF(Nn);
+  MeanOld:=0;CntOld:=0;
+  For Kk:=0 to Nn-1 do If Wt[Kk]>0.02 Then Begin
+   Lb[Kk]:=Wt[Kk]*VtLuma(VtS.Pix[Kk*3],VtS.Pix[Kk*3+1],VtS.Pix[Kk*3+2]);Wb[Kk]:=Wt[Kk];
+   If Wt[Kk]>0.5 Then Begin MeanOld:=MeanOld+VtLuma(VtS.Pix[Kk*3],VtS.Pix[Kk*3+1],
+     VtS.Pix[Kk*3+2]);Inc(CntOld);End;
+  End;
+  If CntOld>0 Then MeanOld:=MeanOld/CntOld;
+  If MeanOld<20 Then MeanOld:=20;
+  RadS:=VtIMax(3,VtS.W div 40);
+  VtBoxBlur(Lb,Lb,VtS.W,VtS.VtH,RadS);VtBoxBlur(Lb,Lb,VtS.W,VtS.VtH,RadS);
+  VtBoxBlur(Wb,Wb,VtS.W,VtS.VtH,RadS);VtBoxBlur(Wb,Wb,VtS.W,VtS.VtH,RadS);
+  For Kk:=0 to Nn-1 do If Wt[Kk]>0.02 Then Begin
+   If Wb[Kk]>0.001 Then Sh2:=Lb[Kk]/Wb[Kk]/MeanOld Else Sh2:=1;
+   Sh2:=VtClamp(Exp(0.8*Ln(VtClamp(Sh2,0.5,1.35))),0.72,1.18);
+   { bords de la zone plus sombres : volume arrondi d'un membre }
+   Sh2:=Sh2*(0.74+0.30*VtSmoothStep(0.30,0.95,Wb[Kk]));
+   For Cc:=0 to 2 do Begin
+    V:=SkR;
+    If Cc=1 Then V:=SkG Else If Cc=2 Then V:=SkB;
+    VtS.Pix[Kk*3+Cc]:=VtS.Pix[Kk*3+Cc]*(1-Wt[Kk])+(V*Sh2+VtRngGauss*1.6)*Wt[Kk];
+   End;
+  End;
+  FreeMem(Lb);FreeMem(Wb);
+ End;
+
+Begin
+ Result:=False;
+ VtMsg:='';
+ W:=VtS.W;VtH:=VtS.VtH;VtN:=Int64(W)*VtH;
+ VtKindSets(VtKind,Repl,Alt,Prot);
+ Ro:=VtAllocF(VtN);
+ VtCatMask(VtS,Repl,Ro);
+ Have:=VtCatBBox(VtS,Repl,X0,Y0,X1,Y1);
+ If Have Then Begin
+  Area:=VtCatArea(VtS,Repl);
+  If Area<VtN div 600 Then Have:=False;
+ End;
+ If(not Have)and(Alt<>0)Then Begin
+  VtCatMask(VtS,Alt,Ro);
+  Have:=VtCatBBox(VtS,Alt,X0,Y0,X1,Y1);
+  If Have Then Repl:=Alt;
+ End;
+ UsedLandmarks:=False;
+ If Have Then Begin
+  Tx0:=X0;Tx1:=X1+1;Ty0:=Y0;Ty1:=Y1+1;
+  { robe / tenue : la longueur depend du genre, pas de l'ancien vetement }
+  If(VtKind=gkDress)or(VtKind=gkFull)Then Begin
+   Ye:=Y1;
+   If VtCatBBox(VtS,VtmsPants or VtmsSkirt or VtmsDress or VtmsLegs,X0,R0,X1,Ye)Then Begin
+    If VtKind=gkDress Then Ty1:=Ty0+0.62*(Ye-Ty0+1)Else Ty1:=Ye+1;
+   End;
+   If Ty1<Y1+1 Then Ty1:=Y1+1;
+  End;
+ End
+  Else Begin
+   FillChar(Ro^,VtN*4,0);
+   If not VtLandmarkBox(VtS,VtKind,Tx0,Ty0,Tx1,Ty1)Then Begin
+    VtMsg:='impossible de situer o'#151' poser ce v'#136'tement sur la personne '+
+      '(aucun visage ni '+
+         'v'#136'tement de ce type d'#130'tect'#130')';
+    FreeMem(Ro);
+    Exit;
+   End;
+   UsedLandmarks:=True;
+   VtDetail('position estim'#130'e '#133' partir du visage : '+VtIStr(Trunc(Tx0))
+     +','+VtIStr(Trunc(Ty0))+' - '+VtIStr(Trunc(Tx1))+','+VtIStr(Trunc(Ty1)));
+  End;
+ If Tx0<0 Then Tx0:=0;If Ty0<0 Then Ty0:=0;
+ If Tx1>W Then Tx1:=W;If Ty1>VtH Then Ty1:=VtH;
+ Bw:=Tx1-Tx0;Bh:=Ty1-Ty0;
+ If(Bw<8)or(Bh<8)Then Begin VtMsg:='zone cible trop petite';FreeMem(Ro);Exit;End;
+ { echelle : largeur ajustee, hauteur bornee pour limiter la deformation }
+ Sx:=Bw/VtG.W;
+ SyFit:=Bh/VtG.VtH;
+ UniformScale:=VtKind in[gkShoes,gkHat,gkGlasses,VtgkBag,gkScarf,gkBelt];
+ If UniformScale Then Sy:=Sx
+ Else If(VtKind=gkTop)and Have and not UsedLandmarks Then Sy:=VtClamp(SyFit,
+   0.6*Sx,3.0*Sx)
+ Else If UsedLandmarks and(VtKind in[gkBottom,gkSkirt])Then Sy:=VtClamp(SyFit,
+   0.5*Sx,3.4*Sx)
+ Else Sy:=VtClamp(SyFit,0.8*Sx,1.25*Sx);
+ AnchorBottom:=VtKind in[gkShoes,gkHat];
+ If AnchorBottom Then Ty0:=Ty1-Sy*VtG.VtH
+ Else If UniformScale and(VtKind<>gkScarf)Then Ty0:=(Ty0+Ty1)/2-Sy*VtG.VtH/2;
+ Cx:=(Tx0+Tx1)/2;
+ Gcx:=VtG.W/2;
+ Lam:=0;
+ If(VtKind=gkTop)and Have and not UsedLandmarks Then Lam:=0.8;
+ If VtKind=gkTop Then VtCloseRowGaps(VtG,VtG.VtH div 4);
+ { etendues du vetement et de l'ancien vetement, rangee par rangee }
+ GL:=VtAllocF(VtG.VtH);GRr:=VtAllocF(VtG.VtH);
+ VtRowExtents(VtG.Mask,VtG.W,VtG.VtH,GL,GRr);
+ VtFillSmoothExtents(GL,GRr,VtG.VtH,VtIMax(1,VtG.VtH div 50));
+ Sleeveless:=False;
+ If VtKind=gkTop Then Begin
+  { vetement sans manches : largeur maximale en haut comparable a celle du corps
+    }
+  Sum1:=0;N1:=0;Sum2:=0;N2:=0;
+  For Y:=0 to VtG.VtH-1 do Begin
+   If(Y>=VtG.VtH*55 div 100)and(Y<=VtG.VtH*90 div 100)Then Begin Sum1:=Sum1+
+     (GRr[Y]-GL[Y]);Inc(N1);End;
+   If(Y>=VtG.VtH*12 div 100)and(Y<=VtG.VtH*50 div 100)Then If GRr[Y]-GL[Y]>Sum2
+     Then Sum2:=GRr[Y]-GL[Y];
+  End;
+  If(N1>0)and(Sum1>0)Then Sleeveless:=Sum2/(Sum1/N1)<1.2;
+  If Sleeveless Then Begin
+   Lam:=0.1;
+   VtDetail('v'#136'tement sans manches d'#130'tect'#130);
+  End;
+ End;
+
+ { vetement photographie sur un mannequin : l'echelle vient de la tete de la
+   personne
+   (largeur des epaules d'environ 2,55 fois la largeur du visage), le corps
+     n'est pas ecrase
+   pour tenir dans l'ancienne zone ; ce qui depasse du cadre est simplement
+     coupe }
+ MannequinFit:=False;YshAll:=0;YshRow:=0;RemoveOld:=False;NeckHas:=False;
+   ChinY:=0;
+ If(VtG.Skin<>Nil)and(VtKind in[gkTop,gkDress,gkFull])and VtCatBBox(VtS,VtmsFace,Fx0,
+   Fy0,Fx1,Fy1)Then Begin
+  VtFaceMetrics(VtS,Fx0,Fy0,Fx1,Fy1);
+  Wg:=0;
+  For Y:=(VtG.VtH*5)div 100 to(VtG.VtH*13)div 100 do If GRr[Y]-GL[Y]>Wg Then
+    Wg:=GRr[Y]-GL[Y];
+  Ysh:=0;
+  For Y:=0 to VtG.VtH-1 do If GRr[Y]-GL[Y]>=0.75*Wg Then Begin Ysh:=Y;Break;End;
+  If Wg>=8 Then Begin
+   Sc:=2.55*(Fx1-Fx0+1)/Wg;
+   Sx:=Sc;Sy:=Sc;
+   Gcx:=(GL[Ysh]+GRr[Ysh])/2;
+   Cx:=(Fx0+Fx1+1)/2;
+   Ty0:=VtShoulderY(VtS,Fy0,Fy1)-Sc*Ysh;
+   Lam:=0;
+   MannequinFit:=True;
+   YshRow:=Ysh;
+   YshAll:=Ysh;
+   ChinY:=Fy1;
+   FaceH:=Fy1-Fy0+1;
+   { cou de la personne : conserve s'il est visible (le mannequin garde sinon le
+     sien) }
+   NeckX0:=Cx-0.60*(Fx1-Fx0+1);NeckX1:=Cx+0.60*(Fx1-Fx0+1);NeckY1:=Fy1+1+
+     0.30*(Fy1-Fy0+1);
+   Cnt1:=0;Cnt2:=0;
+   For Y:=Fy1+1 to Trunc(NeckY1)do
+    For X:=Trunc(NeckX0)to Trunc(NeckX1)do
+     If(X>=0)and(X<W)and(Y>=0)and(Y<VtH)Then Begin
+      Inc(Cnt2);
+      If(VtS.Cat[cArms][Int64(Y)*W+X]+VtS.Cat[cSkin][Int64(Y)*W+X]+
+        VtS.Cat[cFace][Int64(Y)*W+X])>=128 Then Inc(Cnt1);
+     End;
+   NeckHas:=(Cnt2>0)and(Cnt1*4>=Cnt2);
+   If not NeckHas Then YshRow:=0;
+   RemoveOld:=VtKind in[gkDress,gkFull];
+   VtDetail('mannequin : '#130'chelle d'#130'duite de la t'#136'te (x'+VtFStr(Sc,2)
+     +'), le corps garde ses proportions');
+  End;
+ End;
+ SL:=VtAllocF(VtH);SR_:=VtAllocF(VtH);
+ For Y:=0 to VtH-1 do Begin SL[Y]:=-1;SR_[Y]:=-1;End;
+ If Lam>0 Then Begin
+  Cov:=VtAllocF(VtN);
+  For K:=0 to VtN-1 do If Ro[K]>=0.5 Then Cov[K]:=1;
+  VtRowExtents(Cov,W,VtH,SL,SR_);
+  FreeMem(Cov);
+  VtFillSmoothExtents(SL,SR_,VtH,VtIMax(2,VtH div 120));
+ End;
+ GRgb:=VtAllocF(VtN*3);GA:=VtAllocF(VtN);
+ GS:=VtAllocF(VtN);GSh:=VtAllocF(VtN);
+ RowL:=VtAllocF(VtH);RowR:=VtAllocF(VtH);
+ For Y:=0 to VtH-1 do Begin RowL[Y]:=-1000;RowR[Y]:=-1000;End;
+ RoArea:=0;
+ For K:=0 to VtN-1 do If Ro[K]>=0.5 Then RoArea:=RoArea+1;
+ Yb:=Trunc(Ty0);If Yb<0 Then Yb:=0;
+ Ye:=Trunc(Ty0+Sy*VtG.VtH)+1;If Ye>VtH-1 Then Ye:=VtH-1;
+ For Y:=Yb to Ye do Begin
+  Gy:=(Y+0.5-Ty0)/Sy;
+  If(Gy<0)or(Gy>=VtG.VtH)Then Continue;
+  GR:=Trunc(Gy);
+  If GR>VtG.VtH-1 Then GR:=VtG.VtH-1;
+  Ls:=Cx+(GL[GR]-Gcx)*Sx;
+  Rs:=Cx+(GRr[GR]-Gcx)*Sx;
+  Lf:=Ls;Rf:=Rs;
+  If(Lam>0)and(SL[Y]>=0)Then Begin
+   Lf:=(1-Lam)*Ls+Lam*SL[Y];
+   Rf:=(1-Lam)*Rs+Lam*SR_[Y];
+  End;
+  If Rf-Lf<2 Then Continue;
+  RowL[Y]:=Lf;RowR[Y]:=Rf;
+  For X:=Trunc(Lf)-1 to Trunc(Rf)+1 do Begin
+   If(X<0)or(X>=W)Then Continue;
+   U:=(X+0.5-Lf)/(Rf-Lf);
+   If(U<-0.02)or(U>1.02)Then Continue;
+   Gxx:=GL[GR]+U*(GRr[GR]-GL[GR]);
+   VtSampleBilinear(VtG.Mask,VtG.W,VtG.VtH,1,Gxx,Gy,@VtTmp[0]);
+   If VtTmp[0]<=0.003 Then Continue;
+   K:=Int64(Y)*W+X;
+   GA[K]:=VtTmp[0];
+   VtSampleBilinear(VtG.Rgb,VtG.W,VtG.VtH,3,Gxx,Gy,@GRgb[K*3]);
+   If VtG.Skin<>Nil Then VtSampleBilinear(VtG.Skin,VtG.W,VtG.VtH,1,Gxx,Gy,@GS[K]);
+   GSh[K]:=VtLuma(GRgb[K*3],GRgb[K*3+1],GRgb[K*3+2]);
+  End;
+ End;
+ FreeMem(GL);FreeMem(GRr);
+ { ombrage : variations lentes de la luminosite de l'ancien vetement }
+ If(Quality>=2)and Have and not UsedLandmarks Then Begin
+  Lrw:=VtAllocF(VtN);Lr:=VtAllocF(VtN);
+  MeanL:=0;CntL:=0;
+  For K:=0 to VtN-1 do Begin
+   Lrw[K]:=Ro[K];
+   Lr[K]:=Ro[K]*VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2]);
+   If Ro[K]>=0.5 Then Begin MeanL:=MeanL+VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],
+     VtS.Pix[K*3+2]);Inc(CntL);End;
+  End;
+  If CntL>0 Then Begin
+   MeanL:=MeanL/CntL;
+   If MeanL<20 Then MeanL:=20;
+   Rad:=VtIMax(3,Trunc(Bw/14));
+   VtBoxBlur(Lrw,Lrw,W,VtH,Rad);VtBoxBlur(Lrw,Lrw,W,VtH,Rad);
+   VtBoxBlur(Lr,Lr,W,VtH,Rad);VtBoxBlur(Lr,Lr,W,VtH,Rad);
+   For K:=0 to VtN-1 do Begin
+    If Lrw[K]>0.05 Then Begin
+     F:=(Lr[K]/Lrw[K])/MeanL;
+     If F<0.7 Then F:=0.7 Else If F>1.3 Then F:=1.3;
+     F:=Exp(0.65*Ln(F));
+    End
+     Else F:=1;
+    If GA[K]>0 Then Begin
+     GRgb[K*3]:=GRgb[K*3]*F;GRgb[K*3+1]:=GRgb[K*3+1]*F;GRgb[K*3+2]:=GRgb[K*3+
+       2]*F;
+    End;
+   End;
+  End;
+  FreeMem(Lrw);FreeMem(Lr);
+ End;
+
+ { mannequin : peau de la personne avec l'ombrage du plastique }
+ SkE:=Nil;
+ If VtG.Skin<>Nil Then Begin
+  If not VtSkinColor(VtS,True,SkR,SkG,SkB)Then Begin SkR:=214;SkG:=168;SkB:=140;End;
+  SkE:=VtAllocF(VtN);
+  VtCatMask(VtS,VtmsSkin,SkE);
+  For K:=0 to VtN-1 do If(GA[K]>0)and(GS[K]>0.01)Then Begin
+   Shd:=VtClamp(GSh[K]/VtG.PlasticL,0.55,1.25);
+   Shd:=Exp(1.15*Ln(Shd));
+   Gw:=GS[K];
+   GRgb[K*3]:=GRgb[K*3]*(1-Gw)+(SkR*Shd+VtRngGauss*1.5)*Gw;
+   GRgb[K*3+1]:=GRgb[K*3+1]*(1-Gw)+(SkG*Shd+VtRngGauss*1.5)*Gw;
+   GRgb[K*3+2]:=GRgb[K*3+2]*(1-Gw)+(SkB*Shd+VtRngGauss*1.5)*Gw;
+  End;
+  VtDetail('peau du mannequin remplac'#130'e par celle de la personne');
+ End;
+ { exposition et grain du tissu accordes a la photo }
+ LgSum:=0;LsSum:=0;Cg:=0;Cs:=0;
+ For K:=0 to VtN-1 do Begin
+  If(GA[K]>0.5)and(GS[K]<0.3)Then Begin LgSum:=LgSum+VtLuma(GRgb[K*3],GRgb[K*3+
+    1],GRgb[K*3+2]);Inc(Cg);End;
+  If VtS.Cat[VtcBg][K]<128 Then Begin LsSum:=LsSum+VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],
+    VtS.Pix[K*3+2]);Inc(Cs);End;
+ End;
+ Gain:=1;Sig:=0;
+ If(Cg>0)and(Cs>0)and(LgSum>0)and(LsSum>0)Then
+   Gain:=VtClamp(Exp(0.35*Ln((LsSum/Cs)/(LgSum/Cg))),0.82,1.12);
+ If Cs>0 Then Begin
+  { bruit de la photo : ecart moyen a la version floue, sur les zones peu
+    contrastees }
+  Bl:=VtAllocF(VtN);
+  For K:=0 to VtN-1 do Bl[K]:=VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2]);
+  Fb:=VtAllocF(VtN);
+  Move(Bl^,Fb^,VtN*4);
+  VtBoxBlur(Bl,Bl,W,VtH,2);
+  Sd:=0;Cg:=0;
+  For K:=0 to VtN-1 do If VtS.Cat[VtcBg][K]<128 Then Begin
+   Shd:=Abs(Fb[K]-Bl[K]);
+   If Shd<10 Then Begin Sd:=Sd+Shd;Inc(Cg);End;
+  End;
+  If Cg>0 Then Sig:=VtClamp(1.25*Sd/Cg,0,2.5);
+  FreeMem(Bl);FreeMem(Fb);
+ End;
+ For K:=0 to VtN-1 do If(GA[K]>0)and(GS[K]<0.3)Then Begin
+  Gw:=VtRngGauss*Sig*0.7;
+  GRgb[K*3]:=GRgb[K*3]*Gain+Gw;GRgb[K*3+1]:=GRgb[K*3+1]*Gain+Gw;GRgb[K*3+
+    2]:=GRgb[K*3+2]*Gain+Gw;
+ End;
+ If Abs(Gain-1)>0.02 Then
+   VtDetail('exposition du v'#136'tement ajust'#130'e (x'+VtFStr(Gain,2)+
+   '), grain '+VtFStr(Sig,1));
+ { objets au premier plan qui ne doivent pas etre recouverts }
+ Prot_:=VtAllocF(VtN);
+ VtCatMask(VtS,Prot,Prot_);
+ { mannequin : sous le menton, le collier et les bijoux du mannequin passent
+   devant le cou de la
+   personne (seuls les cheveux, chapeau et lunettes restent proteges) }
+ If MannequinFit Then Begin
+  Fb:=VtAllocF(VtN);
+  VtCatMask(VtS,VtmsHair or VtmsHat or VtmsGlasses,Fb);
+  For K:=0 to VtN-1 do Begin
+   Shd:=VtSmoothStep(ChinY-0.05*FaceH,ChinY+0.15*FaceH,(K div W)+0.5);
+   Prot_[K]:=Prot_[K]*(1-Shd)+Fb[K]*Shd;
+  End;
+  FreeMem(Fb);
+ End;
+ If VtKind=gkTop Then Begin
+  ArmMask:=VtAllocF(VtN);
+  VtCatMask(VtS,VtmsArms,ArmMask);
+  If Have Then Begin
+   Cov:=VtAllocF(VtN);
+   For K:=0 to VtN-1 do If Ro[K]>=0.5 Then Cov[K]:=1;
+   SA:=VtAllocF(VtH);SB:=VtAllocF(VtH);
+   VtRowExtents(Cov,W,VtH,SA,SB);
+   FreeMem(Cov);
+   For Y:=0 to VtH-1 do If SA[Y]>=0 Then Begin
+    M_:=(SB[Y]-SA[Y])*0.08;
+    For X:=Trunc(SA[Y]+M_) to Trunc(SB[Y]-M_) do
+     If(X>=0)and(X<W)Then Begin
+      K:=Int64(Y)*W+X;
+      If ArmMask[K]>Prot_[K]Then Prot_[K]:=ArmMask[K];
+     End;
+   End;
+   FreeMem(SA);FreeMem(SB);
+  End;
+  FreeMem(ArmMask);
+ End;
+ { composition }
+ { mannequin : tout ce qui est sous la tete de la personne (corps, bras, ancien
+   vetement) est supprime
+   et remplace par le fond ; le corps du mannequin le remplace }
+ If MannequinFit and RemoveOld Then Begin
+  Rm:=VtAllocF(VtN);Kn2:=VtAllocF(VtN);Fl2:=VtAllocF(VtN*3);
+  For K:=0 to VtN-1 do Begin
+   Rm[K]:=(1-VtS.Cat[VtcBg][K]/255.0)*(1-VtSmoothStep(0.15,0.85,Prot_[K]));
+   If NeckHas Then Begin
+    Y:=K div W;X:=K mod W;
+    If(X>=NeckX0)and(X<=NeckX1)and(Y<=NeckY1)and((VtS.Cat[cArms][K]+
+      VtS.Cat[cSkin][K]+VtS.Cat[cFace][K])>=128)Then Rm[K]:=0;
+   End;
+  End;
+  { le fond connu exclut le bord de l'ancien corps (pixels melanges) }
+  Mk2:=PByte(VtAllocBytes(VtN));
+  For K:=0 to VtN-1 do If Rm[K]>0.02 Then Mk2[K]:=255;
+  VtMorphMask(Mk2,W,VtH,4,False);
+  For K:=0 to VtN-1 do If(VtS.Cat[VtcBg][K]>=250)and(Prot_[K]<0.05)and(Mk2[K]=0)
+    Then Kn2[K]:=1;
+  FreeMem(Mk2);
+  Move(VtS.Pix^,Fl2^,VtN*12);
+  VtPushPullFill(Fl2,Kn2,W,VtH);
+  For K:=0 to VtN-1 do If Rm[K]>0.02 Then Begin
+   For C:=0 to 2 do VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Rm[K])+Fl2[K*3+C]*Rm[K];
+   If Rm[K]>0.5 Then Begin
+    For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=0;
+    VtS.Cat[VtcBg][K]:=255;
+   End;
+  End;
+  FreeMem(Rm);FreeMem(Kn2);FreeMem(Fl2);
+  FillChar(Ro^,VtN*4,0);
+  VtDetail(
+    'ancien corps supprim'#130' sous la t'#136'te : le corps du mannequin '+
+    'le remplace');
+ End;
+ { peau encore visible apres la suppression : seule celle-la est conservee ; le
+   cou du mannequin n'est retire que la }
+ If SkE<>Nil Then Begin
+  VtCatMask(VtS,VtmsSkin,SkE);
+  If MannequinFit and(YshRow>0)Then
+   For K:=0 to VtN-1 do If(GA[K]>0)and(GS[K]>0.3)and(SkE[K]>=0.5)Then
+    GA[K]:=GA[K]*VtSmoothStep(0.80*YshRow,1.12*YshRow,((K div W)+0.5-Ty0)/Sy);
+  { sans cou de la personne : le haut du cou du mannequin s'estompe (pas de bord
+    net sous le menton) }
+  If MannequinFit and(YshRow=0)and(YshAll>0)Then
+   For K:=0 to VtN-1 do If(GA[K]>0)and(GS[K]>0.3)Then
+    GA[K]:=GA[K]*VtSmoothStep(0.40*YshAll,0.85*YshAll,((K div W)+0.5-Ty0)/Sy);
+ End;
+ { robe, tenue, bas : l'ancien vetement est d'abord remplace par de la peau (le
+   tissu leger ou fendu la laisse voir) }
+ VtSkinBase:=False;
+ If Have and not(MannequinFit and RemoveOld)and(VtKind in[gkDress,gkFull,
+   gkBottom,gkSkirt])and VtSkinColor(VtS,False,SkR,SkG,SkB)Then Begin
+  Fb:=VtAllocF(VtN);
+  For K:=0 to VtN-1 do If Ro[K]>0.02 Then Fb[K]:=Ro[K]*(1-VtSmoothStep(0.15,
+    0.85,Prot_[K]));
+  FillSkin(Fb);
+  FreeMem(Fb);
+  VtSkinBase:=True;
+  VtDetail('ancien v'#136'tement remplac'#130' par de la peau avant la pose');
+ End;
+ Cov:=VtAllocF(VtN);
+ Cvg:=0;
+ For K:=0 to VtN-1 do Begin
+  Cov[K]:=GA[K]*(1-VtSmoothStep(0.15,0.85,Prot_[K]));
+  { la vraie peau de la personne est conservee la ou le mannequin montrait la
+    sienne }
+  If(SkE<>Nil)and(GS[K]>0.02)Then Cov[K]:=Cov[K]*(1-GS[K]*VtSmoothStep(0.3,0.9,
+    SkE[K]));
+  Cvg:=Cvg+Cov[K];
+ End;
+ Left:=VtAllocF(VtN);
+ Lef:=0;
+ If Have Then Begin
+  For K:=0 to VtN-1 do If Ro[K]>=0.5 Then Begin
+   Left[K]:=1-Cov[K];
+   If Left[K]<0.3 Then Left[K]:=0;
+   Lef:=Lef+Left[K];
+  End;
+ End;
+ For K:=0 to VtN-1 do If Cov[K]>0 Then
+  For C:=0 to 2 do
+   VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Cov[K])+GRgb[K*3+C]*Cov[K];
+ { ombre de contact du tissu sur la peau voisine }
+ If VtG.Skin<>Nil Then Begin
+  Fb:=VtAllocF(VtN);
+  For K:=0 to VtN-1 do Fb[K]:=Cov[K]*(1-GS[K]);
+  VtBoxBlur(Fb,Fb,W,VtH,VtIMax(2,Trunc(Bw*0.02)));
+  For K:=0 to VtN-1 do If(GS[K]>0.2)and(Cov[K]>0.3)Then Begin
+   Shd:=VtClamp(Fb[K]*1.7-0.15,0,0.6)*0.30*GS[K];
+   VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Shd);VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Shd);VtS.Pix[K*3+
+     2]:=VtS.Pix[K*3+2]*(1-Shd);
+  End;
+  FreeMem(Fb);
+ End;
+ If Lef>0 Then Begin
+  VtBoxBlur(Left,Left,W,VtH,1);
+  For K:=0 to VtN-1 do If Left[K]>0.02 Then Begin
+   Left[K]:=Left[K]*2;If Left[K]>1 Then Left[K]:=1;
+   If Cov[K]>0.9 Then Left[K]:=0;
+  End;
+  If VtSkinBase Then
+    VtDetail('zone d'#130'couverte d'#130'j'#133' remplie avec la peau')
+   Else Begin
+    If Sleeveless and VtSkinColor(VtS,True,SkR,SkG,SkB)Then Begin
+     { bras nus : ce qui depasse sur les cotes du vetement sans manches }
+     LeftSkin:=VtAllocF(VtN);
+     For K:=0 to VtN-1 do If Left[K]>0.02 Then Begin
+      Y:=K div W;X:=K mod W;
+      If(RowL[Y]>-999)and((X<RowL[Y]-1)or(X>RowR[Y]+1))Then Begin
+        LeftSkin[K]:=Left[K];Left[K]:=0;End;
+     End;
+     FillSkin(LeftSkin);
+     FreeMem(LeftSkin);
+     VtDetail('bras d'#130'couverts remplis avec la couleur de la peau');
+    End;
+    VtInpaintHoles(VtS,Left);
+   End;
+ End;
+ { mise a jour des categories }
+ MaxCat:=VtKindCategory(VtKind);
+ For K:=0 to VtN-1 do Begin
+  If Cov[K]>0.004 Then Begin
+   Mv:=Trunc(Cov[K]*255+0.5);
+   Mc:=MaxCat;
+   If GS[K]>0.5 Then Mc:=cSkin;
+   For C:=0 to VtNumCat-1 do
+    VtS.Cat[C][K]:=Trunc(VtS.Cat[C][K]*(1-Cov[K])+0.5);
+   Mv:=Mv+VtS.Cat[Mc][K];
+   If Mv>255 Then Mv:=255;
+   VtS.Cat[Mc][K]:=Mv;
+  End;
+  If Left[K]>0.5 Then
+   For C:=0 to VtNumCat-1 do If VtSkinBase and((Repl and(LongWord(1)shl C))<>0)
+     Then Begin
+    Mv:=VtS.Cat[C][K]+VtS.Cat[cSkin][K];
+    If Mv>255 Then Mv:=255;
+    VtS.Cat[cSkin][K]:=Mv;
+    VtS.Cat[C][K]:=0;
+   End
+   Else If(Repl and(LongWord(1)shl C))<>0 Then Begin
+    Mv:=VtS.Cat[C][K]+VtS.Cat[VtcBg][K];
+    If Mv>255 Then Mv:=255;
+    VtS.Cat[VtcBg][K]:=Mv;
+    VtS.Cat[C][K]:=0;
+   End;
+ End;
+ VtMsg:='v'#136'tement pos'#130;
+ If RoArea>0 Then VtMsg:=VtMsg+' ('+VtFStr(100.0*VtFMin(1,Cvg/RoArea),0)
+   +' % de l''ancienne zone couverts)';
+ If Lef>VtN*0.0005 Then VtMsg:=VtMsg+', '+VtIStr(Trunc(Lef))
+   +' pixels de l''ancien v'#136'tement remplis par interpolation';
+ FreeMem(Ro);FreeMem(Prot_);FreeMem(Cov);FreeMem(Left);FreeMem(GRgb);
+   FreeMem(GA);
+ FreeMem(GS);FreeMem(GSh);If SkE<>Nil Then FreeMem(SkE);
+ FreeMem(SL);FreeMem(SR_);FreeMem(RowL);FreeMem(RowR);
+ Result:=True;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Accessoires generes (foulard, chapeau, lunettes, ceinture) :        }
+{ dessines par le programme, puis poses comme un vetement            }
+{ ------------------------------------------------------------------ }
+
+Function VtCoverD(D:Single):Single;
+Begin
+ If D<=-0.5 Then Result:=1
+ Else If D>=0.5 Then Result:=0
+ Else Result:=0.5-D;
+End;
+
+{ distance signee d'un rectangle arrondi centre en (Cx,Cy) }
+Function VtRoundRectD(X,Y,Cx,Cy,Hw,Hh,R:Single):Single;
+Var
+ Qx,Qy,Ox,Oy:Single;
+Begin
+ Qx:=Abs(X-Cx)-Hw+R;Qy:=Abs(Y-Cy)-Hh+R;
+ If Qx>0 Then Ox:=Qx Else Ox:=0;
+ If Qy>0 Then Oy:=Qy Else Oy:=0;
+ If Qx>Qy Then Result:=Sqrt(Ox*Ox+Oy*Oy)+VtFMin(0,Qx)-R+0*Qy
+ Else Result:=Sqrt(Ox*Ox+Oy*Oy)+VtFMin(0,Qy)-R;
+End;
+
+Function VtEllipseD(X,Y,Cx,Cy,Rx,Ry:Single):Single;
+Var
+ Nx,Ny,L:Single;
+Begin
+ Nx:=(X-Cx)/Rx;Ny:=(Y-Cy)/Ry;
+ L:=Sqrt(Nx*Nx+Ny*Ny);
+ Result:=(L-1)*VtFMin(Rx,Ry);
+End;
+
+Procedure VtMixRgb(A,B:LongWord;VtT:Single;Var R,VtG,Bl:Single);
+Begin
+ R:=((A shr 16)and $FF)*(1-VtT)+((B shr 16)and $FF)*VtT;
+ VtG:=((A shr 8)and $FF)*(1-VtT)+((B shr 8)and $FF)*VtT;
+ Bl:=(A and $FF)*(1-VtT)+(B and $FF)*VtT;
+End;
+
+{ couleur du tissu au point (X,Y) : couleur de base, motif eventuel, grain }
+Procedure VtFabricColor(Const E:VtTEdit;Base:LongWord;X,Y,W,VtH:Single;Var R,VtG,
+  B:Single);
+Var
+ VtP:VtTRecolor;
+ VtT:Single;
+ C1,C2:LongWord;
+Begin
+ C1:=Base;
+ If E.HasDst Then C1:=E.DstRGB;
+ C2:=VtRgbOf(245,245,245);
+ If E.HasColor2 Then C2:=E.Color2RGB;
+ If(E.Pattern in[pkStripes,pkChecks,pkDots])Then Begin
+  FillChar(VtP,SizeOf(VtP),0);
+  VtP.Pattern:=E.Pattern;VtP.BX0:=0;VtP.BY0:=0;VtP.BW:=W;VtP.BH:=VtH;
+  VtT:=VtPatternMix(VtP,X,Y);
+  VtMixRgb(C1,C2,VtT,R,VtG,B);
+ End
+  Else VtMixRgb(C1,C1,0,R,VtG,B);
+End;
+
+Procedure VtAccAlloc(Var VtG:VtTGarment;W,VtH:LongInt);
+Begin
+ FillChar(VtG,SizeOf(VtG),0);
+ VtG.W:=W;VtG.VtH:=VtH;
+ VtG.Rgb:=VtAllocF(Int64(W)*VtH*3);
+ VtG.Mask:=VtAllocF(Int64(W)*VtH);
+End;
+
+Procedure VtAccPut(Var VtG:VtTGarment;X,Y:LongInt;Cov,R,Gc,B,Shade:Single);
+Var
+ K:Int64;
+Begin
+ K:=Int64(Y)*VtG.W+X;
+ If Cov>VtG.Mask[K]Then Begin
+  VtG.Mask[K]:=Cov;
+  VtG.Rgb[K*3]:=VtClamp(R*Shade+VtRngGauss*1.5,0,255);
+  VtG.Rgb[K*3+1]:=VtClamp(Gc*Shade+VtRngGauss*1.5,0,255);
+  VtG.Rgb[K*3+2]:=VtClamp(B*Shade+VtRngGauss*1.5,0,255);
+ End;
+End;
+
+{ foulard : bande autour du cou, noeud et pan qui pend }
+Procedure VtMakeScarf(Var VtG:VtTGarment;Const E:VtTEdit);
+Var
+ X,Y:LongInt;
+ U,YT,Th,YB,Dd,Cb,Ct,Hw,Xc,Dk,Cov,R,Gc,B,Sh,VtT:Single;
+Begin
+ VtAccAlloc(VtG,480,300);
+ For Y:=0 to 299 do
+  For X:=0 to 479 do Begin
+   U:=(X-240)/230.0;
+   Cov:=0;Sh:=1;
+   If Abs(U)<=1 Then Begin
+    YT:=70-55*U*U;Th:=85-25*U*U;YB:=YT+Th;
+    Dd:=VtFMax(YT-Y,Y-YB);
+    Cb:=VtCoverD(Dd);
+    If Cb>0 Then Begin
+     VtT:=(Y-YT)/Th;
+     Cov:=Cb;
+     Sh:=0.72+0.34*Sin(Pi*VtClamp(VtT,0,1))*(0.88+0.12*(1-U*U))+0.03*Sin(X*0.9);
+    End;
+   End;
+   { pan }
+   Xc:=300+12*Sin((Y-90)/40.0);
+   Hw:=38-0.06*(Y-90);
+   Dd:=VtFMax(Abs(X-Xc)-Hw,VtFMax(Y-(290+(X-300)*0.15),80-Y));
+   Ct:=VtCoverD(Dd);
+   If Ct>Cov Then Begin
+    Cov:=Ct;
+    Dk:=VtClamp((Y-100)/22.0,0,1);
+    Sh:=(0.62+0.3*Dk)*(0.9+0.1*Cos((X-Xc)/Hw*1.3))+0.03*Sin(X*0.9);
+   End;
+   { noeud }
+   Dd:=VtEllipseD(X,Y,300,100,42,38);
+   Ct:=VtCoverD(Dd);
+   If Ct>0 Then Begin
+    Cov:=VtFMax(Cov,Ct);
+    Sh:=0.95+0.12*Cos((Y-100)/38.0*1.4)-0.1*Sin((X-300)/42.0);
+   End;
+   If Cov>0 Then Begin
+    VtFabricColor(E,VtRgbOf(170,35,50),X,Y,480,300,R,Gc,B);
+    VtAccPut(VtG,X,Y,Cov,R,Gc,B,Sh);
+   End;
+  End;
+End;
+
+{ forme : 0 = chapeau a bord, 1 = bonnet, 2 = casquette }
+Procedure VtMakeHat(Var VtG:VtTGarment;Const E:VtTEdit;Shape:LongInt;Straw:Boolean);
+Var
+ X,Y:LongInt;
+ Cov,Dd,R,Gc,B,Sh,Wv,Dist:Single;
+ Base:LongWord;
+Begin
+ VtAccAlloc(VtG,480,300);
+ If Straw Then Base:=VtRgbOf(222,190,110)Else Base:=VtRgbOf(70,70,82);
+ For Y:=0 to 299 do
+  For X:=0 to 479 do Begin
+   Cov:=0;Sh:=1;
+   Case Shape of
+    1:Begin
+      { bonnet : dome tricote et revers cotele }
+      Dd:=VtFMax(VtEllipseD(X,Y,240,150,200,135),Y-235);
+      Cov:=VtCoverD(Dd);
+      Sh:=0.7+0.4*(1-VtClamp(Sqrt(Sqr((X-210)/200.0)+Sqr((Y-110)/140.0)),0,1.3))
+        +0.05*Sin(X*0.5+Y*0.2);
+      Dd:=VtRoundRectD(X,Y,240,245,215,40,26);
+      If VtCoverD(Dd)>Cov Then Begin
+       Cov:=VtCoverD(Dd);
+       Sh:=0.82+0.18*Sin(X*0.75)+0.1*Sin(Pi*VtClamp((Y-205)/80.0,0,1));
+      End;
+     End;
+    2:Begin
+      { casquette : dome et visiere }
+      Dd:=VtFMax(VtEllipseD(X,Y,200,150,165,125),Y-228);
+      Cov:=VtCoverD(Dd);
+      Sh:=0.68+0.45*(1-VtClamp(Sqrt(Sqr((X-170)/170.0)+Sqr((Y-110)/130.0)),0,1.3)
+        );
+      Dd:=VtEllipseD(X,Y,335,238,140,30);
+      If VtCoverD(Dd)>Cov Then Begin
+       Cov:=VtCoverD(Dd);
+       Sh:=0.55+0.3*Sin(Pi*VtClamp((Y-208)/60.0,0,1));
+      End;
+     End;
+    Else Begin
+      { chapeau a large bord }
+      Dd:=VtEllipseD(X,Y,240,222,228,48);
+      Cov:=VtCoverD(Dd);
+      Sh:=0.72+0.3*VtClamp(1-Abs(Y-222)/48.0,0,1)+0.08*Sin(X*0.12);
+      Dd:=VtFMax(VtFMin(VtEllipseD(X,Y,240,110,118,92),VtRoundRectD(X,Y,240,160,118,
+        50,10)),Y-215);
+      If VtCoverD(Dd)>Cov Then Begin
+       Cov:=VtCoverD(Dd);
+       Sh:=0.78+0.32*(1-VtClamp(Abs(X-240)/118.0,0,1))*(1-VtClamp((Y-60)/160.0,0,1)
+         *0.4);
+       If(Y>165)and(Y<200)Then Sh:=Sh*0.62;
+      End;
+     End;
+   End;
+   If Cov>0 Then Begin
+    VtFabricColor(E,Base,X,Y,480,300,R,Gc,B);
+    If Straw Then Begin
+     { tressage de la paille }
+     Wv:=0.5+0.5*Sin(X*0.55+Sin(Y*0.35)*1.8);
+     Dist:=0.5+0.5*Sin(Y*0.9+Sin(X*0.2)*1.2);
+     Sh:=Sh*(0.84+0.16*(Wv*0.6+Dist*0.4));
+    End;
+    VtAccPut(VtG,X,Y,Cov,R,Gc,B,Sh);
+   End;
+  End;
+End;
+
+Procedure VtMakeGlasses(Var VtG:VtTGarment;Const E:VtTEdit;Sun:Boolean);
+Var
+ X,Y:LongInt;
+ Cov,Dl,Dr,Df,Br,Fr,Lens:Single;
+ R,Gc,B:Single;
+ Base:LongWord;
+Begin
+ VtAccAlloc(VtG,480,170);
+ Base:=VtRgbOf(25,25,28);
+ For Y:=0 to 169 do
+  For X:=0 to 479 do Begin
+   Dl:=VtRoundRectD(X,Y,125,85,95,60,44);
+   Dr:=VtRoundRectD(X,Y,355,85,95,60,44);
+   Df:=VtFMin(Dl,Dr);
+   Fr:=VtCoverD(Abs(Df+5.5)-5.5);
+   Br:=0;
+   If Abs(X-240)<=40 Then Br:=VtCoverD(Abs(Y-(52+28*Sqr((X-240)/40.0)))-4.5);
+   Cov:=VtFMax(Fr,Br);
+   If(X<24)and(Abs(Y-60)<6)Then Cov:=VtFMax(Cov,0.9);
+   If(X>455)and(Abs(Y-60)<6)Then Cov:=VtFMax(Cov,0.9);
+   If Cov>0 Then Begin
+    VtFabricColor(E,Base,X,Y,480,170,R,Gc,B);
+    VtAccPut(VtG,X,Y,Cov,R,Gc,B,0.85+0.25*VtClamp(1-Y/170.0,0,1));
+   End;
+   { verres }
+   If(Df<-5.5)and(Cov<0.5)Then Begin
+    If Sun Then Lens:=0.88 Else Lens:=0.10;
+    If Sun Then Begin R:=22;Gc:=24;B:=32;End Else Begin R:=200;Gc:=220;
+      B:=240;End;
+    VtAccPut(VtG,X,Y,Lens,R,Gc,B,0.9+0.2*VtClamp(1-Y/170.0,0,1));
+   End;
+  End;
+End;
+
+Procedure VtMakeBelt(Var VtG:VtTGarment;Const E:VtTEdit);
+Var
+ X,Y:LongInt;
+ Cov,Dd,Df,R,Gc,B,Sh:Single;
+Begin
+ VtAccAlloc(VtG,560,90);
+ For Y:=0 to 89 do
+  For X:=0 to 559 do Begin
+   Dd:=VtRoundRectD(X,Y,280,45,280,27,6);
+   Cov:=VtCoverD(Dd);
+   Sh:=0.8+0.3*Sin(Pi*VtClamp((Y-18)/54.0,0,1));
+   If Cov>0 Then Begin
+    VtFabricColor(E,VtRgbOf(70,45,30),X,Y,560,90,R,Gc,B);
+    If(Abs(Y-24)<1.2)or(Abs(Y-66)<1.2)Then Sh:=Sh*0.75;
+    VtAccPut(VtG,X,Y,Cov,R,Gc,B,Sh);
+   End;
+   Df:=VtRoundRectD(X,Y,280,45,42,38,6);
+   If VtCoverD(Abs(Df+5)-5)>0 Then VtAccPut(VtG,X,Y,VtCoverD(Abs(Df+5)-5),212,175,55,
+     0.8+0.35*Sin(Pi*VtClamp((Y-8)/76.0,0,1)));
+  End;
+End;
+
+{ pantalon : deux jambes, ceinture, braguette, plis }
+Procedure VtMakePants(Var VtG:VtTGarment;Const E:VtTEdit);
+Var
+ X,Y:LongInt;
+ Xl,Xr,Dl,Dr,Cov,Xm,Hw,Cc,Ux,R,Gc,B,Sh,Gp,Wb:Single;
+ VtSide:LongInt;
+Begin
+ VtAccAlloc(VtG,480,720);
+ For Y:=0 to 719 do
+  For X:=0 to 479 do Begin
+   Cov:=0;Sh:=1;
+   Xm:=X;
+   VtSide:=0;
+   If X>240 Then Begin Xm:=479-X;VtSide:=1;End;
+   Xl:=0+16*(Y/720.0);
+   If Y<260 Then Gp:=0 Else Gp:=8+14*Sqrt((Y-260)/460.0);
+   Xr:=240-Gp;
+   Dl:=VtFMax(Xl-Xm,VtFMax(Xm-Xr,Y-717.5));
+   Cov:=VtCoverD(Dl);
+   If Y<38 Then Begin
+    Wb:=VtCoverD(VtFMax(0-X,VtFMax(X-479,Y-37.5)));
+    If Wb>Cov Then Cov:=Wb;
+   End;
+   If Cov>0 Then Begin
+    Cc:=(Xl+Xr)/2;Hw:=(Xr-Xl)/2;
+    If Hw<1 Then Hw:=1;
+    Ux:=VtClamp((Xm-Cc)/Hw,-1,1);
+    Sh:=0.7+0.32*Sqrt(1-Ux*Ux)+0.04*Sin(Y*0.11+Xm*0.05)*VtClamp((Y-300)/200.0,0,
+      1);
+    If Y<38 Then Sh:=Sh*0.88;
+    If(Abs(X-240)<1.3)and(Y>38)and(Y<170)Then Sh:=Sh*0.7;
+    If(Y>690)and(Y<696)Then Sh:=Sh*0.78;
+    VtFabricColor(E,VtRgbOf(45,60,95),X,Y,480,720,R,Gc,B);
+    VtAccPut(VtG,X,Y,Cov,R,Gc,B,Sh);
+   End;
+  End;
+End;
+
+{ jupe evasee avec ceinture et plis }
+Procedure VtMakeSkirt(Var VtG:VtTGarment;const E:VtTEdit);
+Var
+ X,Y:LongInt;
+ Xl,Xr,Yb,Cov,R,Gc,B,Sh,VtT:Single;
+Begin
+ VtAccAlloc(VtG,480,360);
+ For Y:=0 to 359 do
+  For X:=0 to 479 do Begin
+   VtT:=Y/360.0;
+   Xl:=100-92*VtT;Xr:=380+92*VtT;
+   Yb:=355+4*Sin(X*0.05);
+   Cov:=VtCoverD(VtFMax(Xl-X,VtFMax(X-Xr,Y-Yb)));
+   If Cov>0 Then Begin
+    Sh:=0.8+0.2*Sin((X-240)*0.09*(1+VtT))+0.08*(1-VtT);
+    If Y<28 Then Sh:=0.82;
+    If(Y>=28)and(Y<32)Then Sh:=Sh*0.7;
+    Sh:=Sh*(1-0.18*VtClamp((Abs(X-240)/(140+92*VtT)),0,1));
+    VtFabricColor(E,VtRgbOf(60,60,78),X,Y,480,360,R,Gc,B);
+    VtAccPut(VtG,X,Y,Cov,R,Gc,B,Sh);
+   End;
+  End;
+End;
+
+{ paire de souliers vue de face ; baskets = semelle blanche epaisse }
+Procedure VtMakeShoes(Var VtG:VtTGarment;Const E:VtTEdit;Sneaker:Boolean);
+Var
+ X,Y,VtI:LongInt;
+ Cx,Cov,Du,Ds,R,Gc,B,Sh:Single;
+Begin
+ VtAccAlloc(VtG,520,150);
+ For Y:=0 to 149 do
+  For X:=0 to 519 do
+   For VtI:=0 to 1 do Begin
+    If VtI=0 Then Cx:=135 Else Cx:=385;
+    Ds:=VtEllipseD(X,Y,Cx,95,102,50);
+    Cov:=VtCoverD(Ds);
+    If Cov>0 Then Begin
+     If Sneaker Then VtAccPut(VtG,X,Y,Cov,235,232,225,0.8+0.2*VtClamp(1-(Y-60)/80.0,
+       0,1))
+     Else VtAccPut(VtG,X,Y,Cov,28,22,20,1);
+    End;
+    Du:=VtEllipseD(X,Y,Cx,70,92,52);
+    Cov:=VtCoverD(Du);
+    If Cov>0 Then Begin
+     Sh:=0.62+0.5*VtClamp(1-Abs(Y-45)/60.0,0,1)*(1-0.4*Abs(X-Cx)/92.0);
+     VtFabricColor(E,VtRgbOf(60,42,32),X,Y,520,150,R,Gc,B);
+     If(Y>28)and(Y<60)and(Abs(X-Cx)<30)and((Y-X)mod 14<3)Then Begin R:=235;
+       Gc:=235;B:=235;End;
+     VtAccPut(VtG,X,Y,Cov,R,Gc,B,Sh);
+    End;
+   End;
+End;
+
+{ ajoute un accessoire dessine par le programme }
+Function VtAddAccessory(Var VtS:VtTScene;Const E:VtTEdit;Quality:LongInt;Var
+  VtMsg:AnsiString):Boolean;
+Var
+ VtG:VtTGarment;
+ VtKind:LongInt;
+ VtT:AnsiString;
+ Shape:LongInt;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If(E.Target and VtmsScarf)<>0 Then VtKind:=gkScarf
+ Else If(E.Target and VtmsHat)<>0 Then VtKind:=gkHat
+ Else If(E.Target and VtmsGlasses)<>0 Then VtKind:=gkGlasses
+ Else If(E.Target and VtmsBelt)<>0 Then VtKind:=gkBelt
+ Else If(E.Target and VtmsPants)<>0 Then VtKind:=gkBottom
+ Else If(E.Target and VtmsSkirt)<>0 Then VtKind:=gkSkirt
+ Else If(E.Target and VtmsShoes)<>0 Then VtKind:=gkShoes
+ Else Begin
+  VtMsg:='je ne sais ajouter que foulard, chapeau, bonnet, casquette, lunettes, '+
+    'ceinture, pantalon, jupe et souliers ; '+
+       'pour un autre v'#136'tement, fournissez sa photo : VTON '+
+         'personne.jpg vetement.jpg -type TYPE';
+  Exit;
+ End;
+ VtT:=E.Noun+' '+E.Text;
+ FillChar(VtG,SizeOf(VtG),0);
+ Case VtKind of
+  gkScarf:VtMakeScarf(VtG,E);
+  gkHat:Begin
+    Shape:=0;
+    If(Pos('bonnet',VtT)>0)or(Pos('tuque',VtT)>0)or(Pos('beanie',VtT)>0)Then Shape:=1
+    Else If(Pos('casquette',VtT)>0)or(Pos('cap',E.Noun)>0)Then Shape:=2;
+    VtMakeHat(VtG,E,Shape,Pos('paille',VtT)+Pos('straw',VtT)>0);
+   End;
+  gkGlasses:VtMakeGlasses(VtG,E,(Pos('soleil',VtT)>0)or(Pos('sun',VtT)>0));
+  gkBelt:VtMakeBelt(VtG,E);
+  gkBottom:VtMakePants(VtG,E);
+  gkSkirt:VtMakeSkirt(VtG,E);
+  gkShoes:VtMakeShoes(VtG,E,(Pos('basket',VtT)>0)or(Pos('sneaker',VtT)>0)
+    or(Pos('tennis',VtT)>0));
+ End;
+ Result:=VtTryOnGarment(VtS,VtG,VtKind,Quality,VtMsg);
+ VtGarmentFree(VtG);
+End;
+
+{ ------------------------------------------------------------------ }
+{ Prolongement de l'image vers le bas (corps coupe par le cadre)      }
+{ Les proportions viennent de la hauteur de la tete (environ 7,5 tetes }
+{ de la tete aux pieds) ; le fond est prolonge, le torse et les bras    }
+{ continuent, des jambes et des pieds sont ajoutes.                    }
+{ ------------------------------------------------------------------ }
+
+Function VtExtendBody(Var VtS:VtTScene;VtNeedFeet,VtNeedPants,VtNeedSkirt:Boolean;Var
+  VtMsg:AnsiString):Boolean;
+Var
+ Fx0,Fy0,Fx1,Fy1,Hx0,Hy0,Hx1,Hy1,Tx0,Ty0,Tx1,Ty1:LongInt;
+ U,Ytop,Yneed,Cx,HipW,EW,YE,Ex0,Ex1:Single;
+ H1,H2,W,Band,X,Y,K0,C,Src,Dom,Best,Sd,VtM:LongInt;
+ N1,N2,Ks,Kr:int64;K:LongInt;
+ Pix2,Fill,Known:PSingle;
+ S2:VtTScene;
+ Drop:PByte;
+ SkR,SkG,SkB,VtT,Hw,Xc,D,Cov,Ux,Sh,Yleg0,Yank,Yfeet:Single;
+ VtSide:LongInt;
+ Dl,Df:Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ W:=VtS.W;H1:=VtS.VtH;
+ If not VtCatBBox(VtS,VtmsFace,Fx0,Fy0,Fx1,Fy1)Then Begin
+  VtMsg:='aucun visage d'#130'tect'#130' : impossible d''estimer les '+
+    'proportions du corps pour prolonger l''image';
+  Exit;
+ End;
+ If not VtCatBBox(VtS,VtmsFace or VtmsHair or VtmsHat,Hx0,Hy0,Hx1,Hy1)Then Begin
+   Hy0:=Fy0;End;
+ Ytop:=Hy0;
+ U:=Fy1+1-Ytop;
+ If U<10 Then Begin
+   VtMsg:='la t'#136'te est trop petite pour prolonger l''image';Exit;End;
+ If not VtCatBBox(VtS,VtmsTop or VtmsDress or VtmsSkirt or VtmsPants or VtmsLegs,Tx0,Ty0,
+   Tx1,Ty1)Then Begin
+  VtMsg:='aucun haut ni corps d'#130'tect'#130' sous le visage : impossible de '+
+    'prolonger l''image';
+  Exit;
+ End;
+ If VtNeedFeet Then Yneed:=Ytop+7.75*U
+ Else If VtNeedPants Then Yneed:=Ytop+7.45*U
+ Else If VtNeedSkirt Then Yneed:=Ytop+6.2*U
+ Else Begin Result:=True;Exit;End;
+ H2:=Trunc(Yneed)+1;
+ If H2<=H1+4 Then Begin Result:=True;Exit;End;
+ { le corps doit toucher le bas du cadre (sinon il est entier : rien a
+   prolonger) }
+ EW:=0;
+ For Y:=VtIMax(0,H1-VtIMax(2,H1 div 50))to H1-1 do
+  For X:=0 to W-1 do If VtS.Cat[VtcBg][Int64(Y)*W+X]<128 Then EW:=EW+1;
+ If EW<W*0.02 Then Begin Result:=True;Exit;End;
+ If(H2>4*H1)or(H2>8000)or(Int64(W)*H2>20000000)Then Begin
+  VtMsg:='l''image est trop petite ou le corps trop cadr'#130' pour '#136'tre '+
+    'prolong'#130' ('+VtIStr(H2)
+    +' pixels de haut n'#130'cessaires) ; essayez -maxsize';
+  Exit;
+ End;
+ { axe du corps et largeur des hanches }
+ If VtCatBBox(VtS,VtmsTop or VtmsDress,Tx0,Ty0,Tx1,Ty1)Then Cx:=(Tx0+Tx1+1)/2 Else
+   Cx:=(Fx0+Fx1+1)/2;
+ Ex0:=W;Ex1:=-1;
+ For Y:=VtIMax(0,H1-4)to H1-1 do
+  For X:=0 to W-1 do Begin
+   K:=Int64(Y)*W+X;
+   If(VtS.Cat[cTop][K]+VtS.Cat[cDress][K])>=128 Then Begin
+    If X<Ex0 Then Ex0:=X;
+    If X>Ex1 Then Ex1:=X;
+   End;
+  End;
+ If Ex1>=Ex0 Then EW:=Ex1-Ex0+1 Else EW:=2.0*U;
+ HipW:=VtClamp(0.8*EW,1.2*U,1.75*U);
+ N1:=Int64(W)*H1;N2:=Int64(W)*H2;
+ Pix2:=VtAllocF(N2*3);
+ FillChar(S2,SizeOf(S2),0);
+ For C:=0 to VtNumCat-1 do S2.Cat[C]:=PByte(VtAllocBytes(N2));
+ Move(VtS.Pix^,Pix2^,N1*12);
+ For C:=0 to VtNumCat-1 do Move(VtS.Cat[C]^,S2.Cat[C]^,N1);
+ Drop:=PByte(VtAllocBytes(N2));
+ { nouvelles rangees : reflet de la bande du bas, coupe selon les proportions }
+ Band:=VtIMax(6,VtIMin(40,H1 div 12));
+ For Y:=H1 to H2-1 do Begin
+  VtM:=(Y-H1)mod(2*Band);
+  If VtM<Band Then Src:=H1-1-VtM Else Src:=H1-Band+(VtM-Band);
+  For X:=0 to W-1 do Begin
+   K:=Int64(Y)*W+X;
+   { dominante de la derniere rangee de la colonne }
+   Dom:=VtcBg;
+   If VtS.Cat[VtcBg][Int64(H1-1)*W+X]<252 Then Begin
+    { pixel de bord compris : la colonne est prolongee comme le corps voisin }
+    Best:=-1;
+    For C:=0 to VtNumCat-1 do If C<>VtcBg Then
+     If VtS.Cat[C][Int64(H1-1)*W+X]>Best Then Begin Best:=VtS.Cat[C][Int64(H1-1)*W+
+       X];Dom:=C;End;
+   End;
+   If Dom=VtcBg Then Begin
+    { colonne de fond : remplie plus bas par propagation (evite les motifs en
+      miroir) }
+    Drop[K]:=1;
+    Continue;
+   End;
+   { colonne de corps : la derniere rangee est prolongee vers le bas }
+   Ks:=Int64(H1-1)*W+X;
+   { texture : pixel reflete s'il est de la meme classe, sinon derniere rangee }
+   Kr:=Int64(Src)*W+X;
+   Best:=-1;Sd:=0;
+   For C:=0 to VtNumCat-1 do If C<>VtcBg Then If VtS.Cat[C][Kr]>Best Then Begin
+     Best:=VtS.Cat[C][Kr];Sd:=C;End;
+   If(Sd=Dom)and(VtS.Cat[VtcBg][Kr]<252)Then Begin
+    Pix2[K*3]:=Pix2[Kr*3];Pix2[K*3+1]:=Pix2[Kr*3+1];Pix2[K*3+2]:=Pix2[Kr*3+2];
+   End
+    Else Begin
+     Pix2[K*3]:=Pix2[Ks*3]+VtRngGauss*1.4;Pix2[K*3+1]:=Pix2[Ks*3+1]+
+       VtRngGauss*1.4;Pix2[K*3+2]:=Pix2[Ks*3+2]+VtRngGauss*1.4;
+    End;
+   For C:=0 to VtNumCat-1 do S2.Cat[C][K]:=VtS.Cat[C][Ks];
+   Case Dom of
+    cTop:If Abs(X-Cx)<=HipW/2+0.12*U Then YE:=Ytop+3.45*U Else YE:=Ytop+4.4*U;
+    cDress:If Abs(X-Cx)<=HipW/2+0.12*U Then YE:=Ytop+5.4*U Else YE:=Ytop+4.4*U;
+    cSkirt:YE:=Ytop+5.4*U;
+    cPants,cLegs:YE:=Ytop+7.2*U;
+    VtcShoes:YE:=Ytop+7.7*U;
+    cArms:YE:=Ytop+4.5*U;
+    cBelt:YE:=Ytop+3.5*U;
+    cBag,cScarf,cOther,cSkin:YE:=Ytop+4.0*U;
+    Else YE:=0;
+   End;
+   If Y>YE Then Drop[K]:=1;
+  End;
+ End;
+ { fond : prolonge par propagation depuis les pixels d'arriere-plan surs }
+ Known:=VtAllocF(N2);
+ Fill:=VtAllocF(N2*3);
+ Move(Pix2^,Fill^,N2*12);
+ For K:=0 to N2-1 do
+  If(Drop[K]=0)and(S2.Cat[VtcBg][K]>=252)Then Known[K]:=1;
+ VtPushPullFill(Fill,Known,W,H2);
+ For K:=Int64(H1)*W to N2-1 do If Drop[K]<>0 Then Begin
+  For C:=0 to 2 do Pix2[K*3+C]:=Fill[K*3+C]+VtRngGauss*1.6;
+  For C:=0 to VtNumCat-1 do S2.Cat[C][K]:=0;
+  S2.Cat[VtcBg][K]:=255;
+ End;
+ FreeMem(Known);FreeMem(Fill);FreeMem(Drop);
+ { jambes (peau) et pieds : reperes pour poser pantalon, jupe ou souliers }
+ S2.W:=W;S2.VtH:=H2;S2.Pix:=Pix2;
+ If not VtSkinColor(S2,False,SkR,SkG,SkB)Then Begin SkR:=224;SkG:=172;SkB:=140;
+   End;
+ Yleg0:=Ytop+3.3*U;Yank:=Ytop+7.15*U;Yfeet:=Ytop+7.7*U;
+ For Y:=H1 to H2-1 do Begin
+  If Y<Yleg0 Then Continue;
+  VtT:=VtClamp((Y-Yleg0)/(Yank-Yleg0),0,1);
+  If VtT>0 Then Hw:=HipW*0.235-(HipW*0.235-0.15*U)*Exp(0.8*Ln(VtT))Else
+    Hw:=HipW*0.235;
+  For X:=0 to W-1 do Begin
+   K:=Int64(Y)*W+X;
+   If S2.Cat[VtcBg][K]<128 Then Continue;
+   Cov:=0;Ux:=0;
+   For VtSide:=-1 to 1 do Begin
+    If VtSide=0 Then Continue;
+    Xc:=Cx+VtSide*HipW*0.25;
+    If Y<=Yank+0.05*U Then Begin
+     D:=Abs(X-Xc)-Hw;
+     If VtCoverD(D)>Cov Then Begin Cov:=VtCoverD(D);Ux:=(X-Xc)/Hw;End;
+    End;
+    If VtNeedFeet and(Y>Yank-0.05*U)Then Begin
+     Df:=VtEllipseD(X,Y,Xc,Yank+0.1*U,0.2*U,0.2*U);
+     If VtCoverD(Df)>Cov Then Begin Cov:=VtCoverD(Df);Ux:=(X-Xc)/(0.2*U);End;
+    End;
+   End;
+   If Cov>0 Then Begin
+    Ux:=VtClamp(Ux,-1,1);
+    Sh:=0.78+0.3*Sqrt(1-Ux*Ux);
+    Pix2[K*3]:=Pix2[K*3]*(1-Cov)+(SkR*Sh+VtRngGauss*1.5)*Cov;
+    Pix2[K*3+1]:=Pix2[K*3+1]*(1-Cov)+(SkG*Sh+VtRngGauss*1.5)*Cov;
+    Pix2[K*3+2]:=Pix2[K*3+2]*(1-Cov)+(SkB*Sh+VtRngGauss*1.5)*Cov;
+    VtM:=Trunc(Cov*255+0.5);
+    S2.Cat[cLegs][K]:=VtM;
+    S2.Cat[VtcBg][K]:=255-VtM;
+   End;
+  End;
+ End;
+ VtGAnkleY:=Yank;
+ VtGHemY:=Ytop+3.45*U;
+ { remplace la scene }
+ FreeMem(VtS.Pix);
+ For C:=0 to VtNumCat-1 do FreeMem(VtS.Cat[C]);
+ VtS:=S2;
+ VtMsg:='image prolong'#130'e de '+VtIStr(H1)+' '#133' '+VtIStr(H2)
+   +' pixels de haut (proportions d'#130'duites de la t'#136'te)';
+ Result:=True;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Cheveux : couleur, longueur, boucles, calvitie                      }
+{ ------------------------------------------------------------------ }
+
+Function VtHash2(X,Y:LongInt):Single;
+Var
+ VtH:Int64;
+Begin
+ VtH:=(Int64(X)*374761393+Int64(Y)*668265263)and $FFFFFFFF;
+ VtH:=((VtH xor(VtH shr 13))*1274126177)and $FFFFFFFF;
+ VtH:=VtH xor(VtH shr 16);
+ Result:=(VtH and $FFFFFF)/16777216.0;
+End;
+
+{ bruit de valeur lisse dans [0,1] }
+Function VtVNoise(X,Y:Single):Single;
+Var
+ X0,Y0:LongInt;
+ Fx,Fy,A,B,C,D:Single;
+Begin
+ X0:=VtFloorI(X);Y0:=VtFloorI(Y);
+ Fx:=X-X0;Fy:=Y-Y0;
+ Fx:=Fx*Fx*(3-2*Fx);Fy:=Fy*Fy*(3-2*Fy);
+ A:=VtHash2(X0,Y0);B:=VtHash2(X0+1,Y0);C:=VtHash2(X0,Y0+1);D:=VtHash2(X0+1,Y0+1);
+ Result:=(A*(1-Fx)+B*Fx)*(1-Fy)+(C*(1-Fx)+D*Fx)*Fy;
+End;
+
+Type
+ VtTHeadInfo=Record
+  Fx0,Fy0,Fx1,Fy1:LongInt;
+  Cx,Fw,Fh:Single;
+  HairR,HairG,HairB:Single;
+  HasHair:Boolean;
+ End;
+
+{ visage et couleur moyenne des cheveux }
+Function VtHeadInfo(Const VtS:VtTScene;Var VtH:VtTHeadInfo):Boolean;
+Var
+ VtN,Cnt:int64;K:LongInt;
+ VtM:PSingle;
+ Sr,Sg,Sb:Double;
+Begin
+ Result:=False;
+ If not VtCatBBox(VtS,VtmsFace,VtH.Fx0,VtH.Fy0,VtH.Fx1,VtH.Fy1)Then Exit;
+ VtH.Fw:=VtH.Fx1-VtH.Fx0+1;VtH.Fh:=VtH.Fy1-VtH.Fy0+1;
+ VtH.Cx:=(VtH.Fx0+VtH.Fx1+1)/2;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ VtM:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsHair,VtM);
+ Sr:=0;Sg:=0;Sb:=0;Cnt:=0;
+ For K:=0 to VtN-1 do If VtM[K]>=0.8 Then Begin
+  Sr:=Sr+VtS.Pix[K*3];Sg:=Sg+VtS.Pix[K*3+1];Sb:=Sb+VtS.Pix[K*3+2];Inc(Cnt);
+ End;
+ FreeMem(VtM);
+ VtH.HasHair:=Cnt>=VtN div 4000;
+ If VtH.HasHair Then Begin VtH.HairR:=Sr/Cnt;VtH.HairG:=Sg/Cnt;VtH.HairB:=Sb/Cnt;End
+ Else Begin VtH.HairR:=60;VtH.HairG:=40;VtH.HairB:=30;End;
+ Result:=True;
+End;
+
+{ remplace les pixels ponderes par Rm (retrait) : la partie SkinW devient de la
+  peau
+  (prolongement du visage), le reste du fond (propagation) }
+Procedure VtFillRemoved(Var VtS:VtTScene;Rm,SkinW:PSingle;Const VtH:VtTHeadInfo);
+Var
+ VtN:int64;K:LongInt;
+ Known1,Known2,F:PSingle;
+ VtT1,T2:PSingle;
+ W1,W2:Single;
+ C,Mv:LongInt;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Known1:=VtAllocF(VtN);Known2:=VtAllocF(VtN);F:=VtAllocF(VtN);
+ VtT1:=VtAllocF(VtN*3);T2:=VtAllocF(VtN*3);
+ Move(VtS.Pix^,VtT1^,VtN*12);Move(VtS.Pix^,T2^,VtN*12);
+ VtCatMask(VtS,VtmsFace,F);
+ For K:=0 to VtN-1 do Begin
+  Known1[K]:=1-Rm[K];
+  If(F[K]>=0.9)and(Rm[K]<0.1)Then Known2[K]:=1;
+ End;
+ VtPushPullFill(VtT1,Known1,VtS.W,VtS.VtH);
+ VtPushPullFill(T2,Known2,VtS.W,VtS.VtH);
+ For K:=0 to VtN-1 do If Rm[K]>0.02 Then Begin
+  W2:=Rm[K]*SkinW[K];
+  W1:=Rm[K]-W2;
+  For C:=0 to 2 do
+   VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Rm[K])+(VtT1[K*3+C]+VtRngGauss*1.5)*W1+(T2[K*3+
+     C]+VtRngGauss*1.2)*W2;
+  If Rm[K]>0.5 Then Begin
+   For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=0;
+   If SkinW[K]>=0.5 Then VtS.Cat[cFace][K]:=255 Else VtS.Cat[VtcBg][K]:=255;
+  End;
+ End;
+ FreeMem(Known1);FreeMem(Known2);FreeMem(F);FreeMem(VtT1);FreeMem(T2);
+ { le reste du visage n'a pas change }
+End;
+
+{ crane : ellipse au-dessus du visage }
+Function VtDomeCover(Const VtH:VtTHeadInfo;X,Y:Single;Scale:Single):Single;
+Var
+ Cy,Rx,Ry:Single;
+Begin
+ Cy:=VtH.Fy0+0.25*VtH.Fh;
+ Rx:=0.5*VtH.Fw*Scale;
+ Ry:=Cy-(VtH.Fy0-0.33*VtH.Fh);
+ Result:=VtCoverD(VtEllipseD(X,Y,VtH.Cx,Cy,Rx,Ry*Scale));
+End;
+
+Function VtHairBald(Var VtS:VtTScene;Const VtH:VtTHeadInfo;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN:int64;K:LongInt;
+ Rm,Sk,Hm:PSingle;
+ B:PByte;
+ X,Y:LongInt;
+ Cnt:Int64;
+Begin
+ Result:=False;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Hm:=VtAllocF(VtN);Rm:=VtAllocF(VtN);Sk:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsHair,Hm);
+ B:=PByte(VtAllocBytes(VtN));
+ Cnt:=0;
+ For K:=0 to VtN-1 do If Hm[K]>=0.3 Then Begin B[K]:=255;Inc(Cnt);End;
+ If Cnt=0 Then Begin
+  VtMsg:='aucun cheveu d'#130'tect'#130' sur la photo';
+  FreeMem(Hm);FreeMem(Rm);FreeMem(Sk);FreeMem(B);Exit;
+ End;
+ VtMorphMask(B,VtS.W,VtS.VtH,2,False);
+ For K:=0 to VtN-1 do Rm[K]:=B[K]/255.0;
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If Rm[K]>0 Then Sk[K]:=VtDomeCover(VtH,X+0.5,Y+0.5,1.0);
+  End;
+ VtFillRemoved(VtS,Rm,Sk,VtH);
+ FreeMem(Hm);FreeMem(Rm);FreeMem(Sk);FreeMem(B);
+ Result:=True;
+End;
+
+Function VtHairShorter(Var VtS:VtTScene;Const VtH:VtTHeadInfo;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN,K:Int64;
+ Hm,Rm,Sk:PSingle;
+ X,Y:LongInt;
+ Keep,D,Cy,Rx,Ry,YEar,NeckW:Single;
+ Cnt:Int64;
+ Hy0,Hy1,Hx0,Hx1:LongInt;
+Begin
+ Result:=False;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ If not VtCatBBox(VtS,VtmsHair,Hx0,Hy0,Hx1,Hy1)Then Begin
+   VtMsg:='aucun cheveu d'#130'tect'#130' sur la photo';Exit;End;
+ Hm:=VtAllocF(VtN);Rm:=VtAllocF(VtN);Sk:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsHair,Hm);
+ Cy:=VtH.Fy0+0.2*VtH.Fh;
+ Rx:=0.5*VtH.Fw*1.22;
+ Ry:=VtFMin(Cy-Hy0+1,0.8*VtH.Fh);
+ YEar:=VtH.Fy0+0.6*VtH.Fh;
+ NeckW:=0.36*VtH.Fw;
+ Cnt:=0;
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If Hm[K]<0.05 Then Continue;
+   { zone conservee : dome elargi + cotes jusqu'aux oreilles }
+   Keep:=VtCoverD(VtEllipseD(X+0.5,Y+0.5,VtH.Cx,Cy,Rx,Ry));
+   If(Y<=YEar)and(X>=VtH.Fx0-0.16*VtH.Fw)and(X<=VtH.Fx1+0.16*VtH.Fw)Then Begin
+    D:=VtCoverD(Y-YEar);
+    If D>Keep Then Keep:=D;
+   End;
+   Rm[K]:=Hm[K]*(1-Keep);
+   If Rm[K]>0.3 Then Inc(Cnt);
+   { le cou apparait sous le menton a la place des cheveux retires }
+   If(Abs(X-VtH.Cx)<NeckW)and(Y>=VtH.Fy1-0.05*VtH.Fh)and(Y<=VtH.Fy1+0.9*VtH.Fh)Then
+     Sk[K]:=1;
+  End;
+ If Cnt<20 Then Begin
+  VtMsg:='les cheveux sont d'#130'j'#133' courts';
+  FreeMem(Hm);FreeMem(Rm);FreeMem(Sk);Exit;
+ End;
+ VtFillRemoved(VtS,Rm,Sk,VtH);
+ FreeMem(Hm);FreeMem(Rm);FreeMem(Sk);
+ Result:=True;
+End;
+
+Function VtHairLonger(Var VtS:VtTScene;Const VtH:VtTHeadInfo;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN,K:Int64;
+ Hm,Fm:PSingle;
+ X,Y,VtSide,Hx0,Hy0,Hx1,Hy1,C:LongInt;
+ YEar,YEnd,VtT,Xin,Xout,Wd,Cov,D,Cyf,Ex,Strand,Shade,Tip,Edge,Cs,Mid,Hw:Single;
+ YbSide,XbaseL,XbaseR,Xb:Single;
+ Sg:Array[0..1]of Single;
+ R,VtG,B,V,V2,Sx:Single;
+ Mv:LongInt;
+Begin
+ Result:=False;
+ If not VtH.HasHair Then Begin
+   VtMsg:='aucun cheveu d'#130'tect'#130' sur la photo';Exit;End;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Hm:=VtAllocF(VtN);Fm:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsHair,Hm);VtCatMask(VtS,VtmsFace,Fm);
+ VtCatBBox(VtS,VtmsHair,Hx0,Hy0,Hx1,Hy1);
+ YEar:=VtH.Fy0+0.55*VtH.Fh;
+ Cyf:=(VtH.Fy0+VtH.Fy1)/2;
+ { rangee la plus basse des cheveux de chaque cote }
+ Sg[0]:=YEar;Sg[1]:=YEar;
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do If Hm[Int64(Y)*VtS.W+X]>=0.5 Then Begin
+   If X<VtH.Cx Then Begin If Y>Sg[0]Then Sg[0]:=Y;End
+   Else Begin If Y>Sg[1]Then Sg[1]:=Y;End;
+  End;
+ For VtSide:=0 to 1 do Begin
+  YbSide:=Sg[VtSide];
+  YEnd:=VtFMax(YbSide,VtH.Fy1+0.2*VtH.Fh)+0.9*VtH.Fh;
+  If YEnd>VtS.VtH-2 Then YEnd:=VtS.VtH-2;
+  { bord exterieur des cheveux existants a hauteur des oreilles }
+  XbaseL:=VtH.Fx0-0.22*VtH.Fw;XbaseR:=VtH.Fx1+0.22*VtH.Fw;
+  Xb:=-1;
+  For Y:=Trunc(YEar-0.1*VtH.Fh)to Trunc(YEar+0.1*VtH.Fh)do
+   For X:=0 to VtS.W-1 do If Hm[Int64(Y)*VtS.W+X]>=0.5 Then Begin
+    If(VtSide=0)and(X<VtH.Cx)and((Xb<0)or(X<Xb))Then Xb:=X;
+    If(VtSide=1)and(X>VtH.Cx)and(X>Xb)Then Xb:=X;
+   End;
+  If Xb>=0 Then Begin
+   If VtSide=0 Then XbaseL:=VtFMin(Xb,VtH.Fx0-0.05*VtH.Fw)Else XbaseR:=VtFMax(Xb,
+     VtH.Fx1+0.05*VtH.Fw);
+  End;
+  For Y:=Trunc(YEar-0.25*VtH.Fh)to Trunc(YEnd)do Begin
+   VtT:=(Y-YEar)/(YEnd-YEar);
+   If VtT<0 Then VtT:=0;
+   If Y<VtH.Fy1 Then Begin
+    Ex:=(Y-Cyf)/(VtH.Fh/2);
+    If Abs(Ex)>1 Then Ex:=1;
+    Xin:=0.5*VtH.Fw*Sqrt(1-Ex*Ex)-0.02*VtH.Fw;
+   End
+    Else Xin:=0.34*VtH.Fw;
+   Wd:=0.12*VtH.Fw*VtSmoothStep(0.0,0.8,VtT);
+   For X:=0 to VtS.W-1 do Begin
+    If VtSide=0 Then Begin
+     Xout:=XbaseL-Wd;Cs:=VtH.Cx-Xin;
+     D:=VtFMax(Xout-X,X-Cs);
+    End
+     Else Begin
+      Xout:=XbaseR+Wd;Cs:=VtH.Cx+Xin;
+      D:=VtFMax(Cs-X,X-Xout);
+     End;
+    Cov:=VtCoverD(D);
+    If Cov<=0 Then Continue;
+    K:=Int64(Y)*VtS.W+X;
+    { l'ensemble s'effile en bas : bord interieur rabattu vers l'exterieur }
+    Tip:=1-VtSmoothStep(0.78+0.14*VtVNoise(X*0.35,3.0),1.0,VtT);
+    Cov:=Cov*Tip;
+    If Y<YEar Then Cov:=Cov*VtSmoothStep(YEar-0.25*VtH.Fh,YEar,Y);
+    Cov:=Cov*(1-VtSmoothStep(0.2,0.8,Fm[K]));
+    If Cov<=0.01 Then Continue;
+    Mid:=(Xout+Cs)/2;Hw:=Abs(Xout-Cs)/2+0.001;
+    Edge:=(X-Mid)/Hw;
+    Strand:=0.78+0.44*VtVNoise(X*0.75,Y*0.045+VtSide*7);
+    Shade:=(0.78+0.3*(1-Edge*Edge))*(1-0.22*VtT);
+    V:=Strand*Shade;
+    R:=VtH.HairR*V;VtG:=VtH.HairG*V;B:=VtH.HairB*V;
+    VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Cov)+R*Cov;
+    VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Cov)+VtG*Cov;
+    VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Cov)+B*Cov;
+    Mv:=Trunc(Cov*255+0.5);
+    For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=Trunc(VtS.Cat[C][K]*(1-Cov)+0.5);
+    Mv:=Mv+VtS.Cat[cHair][K];
+    If Mv>255 Then Mv:=255;
+    VtS.Cat[cHair][K]:=Mv;
+   End;
+  End;
+ End;
+ FreeMem(Hm);FreeMem(Fm);
+ Result:=True;
+End;
+
+Function VtHairCurly(Var VtS:VtTScene;Const VtH:VtTHeadInfo;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN,K:Int64;
+ Hm,Bl,Fm:PSingle;
+ X,Y,C,Mv:LongInt;
+ Rr,Nz,Ex,Cov,Kk,Tx,F,V:Single;
+ R,VtG,B,Pr,Pg,Pb:Single;
+Begin
+ Result:=False;
+ If not VtH.HasHair Then Begin
+   VtMsg:='aucun cheveu d'#130'tect'#130' sur la photo';Exit;End;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Hm:=VtAllocF(VtN);Bl:=VtAllocF(VtN);Fm:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsHair,Hm);VtCatMask(VtS,VtmsFace,Fm);
+ Move(Hm^,Bl^,VtN*4);
+ Rr:=0.16*VtH.Fw;
+ VtBlurPlane(Bl,VtS.W,VtS.VtH,Rr);
+ Kk:=2*Pi/(0.13*VtH.Fw);
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If(Bl[K]<0.02)and(Hm[K]<0.02)Then Continue;
+   { silhouette gonflee et festonnee }
+   Nz:=VtVNoise(X/(0.10*VtH.Fw),Y/(0.10*VtH.Fw))*1.3+VtVNoise(X/(0.05*VtH.Fw)+9,
+     Y/(0.05*VtH.Fw)+4)*0.7-1.0;
+   Ex:=VtSmoothStep(0.24,0.32,Bl[K]+0.16*Nz);
+   Cov:=VtFMax(Hm[K],Ex);
+   Cov:=Cov*(1-VtSmoothStep(0.2,0.8,Fm[K]));
+   If Cov<=0.01 Then Continue;
+   { boucles : anneaux de lumiere et d'ombre }
+   Tx:=0.5+0.5*Sin(Kk*(X+2.4*Sin(Kk*Y*0.7)))*Cos(Kk*(Y+2.4*Sin(Kk*X*0.7)));
+   F:=0.62+0.62*Tx;
+   If Hm[K]>=0.5 Then Begin
+    VtS.Pix[K*3]:=VtS.Pix[K*3]*(0.45+0.55*F)*1.04;
+    VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(0.45+0.55*F)*1.04;
+    VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(0.45+0.55*F)*1.04;
+   End
+    Else Begin
+     V:=F*(0.85+0.3*VtVNoise(X*0.5,Y*0.5));
+     R:=VtH.HairR*V;VtG:=VtH.HairG*V;B:=VtH.HairB*V;
+     VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Cov)+R*Cov;
+     VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Cov)+VtG*Cov;
+     VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Cov)+B*Cov;
+     If Cov>0.3 Then Begin
+      Mv:=Trunc(Cov*255+0.5);
+      For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=Trunc(VtS.Cat[C][K]*(1-Cov)+0.5);
+      Mv:=Mv+VtS.Cat[cHair][K];
+      If Mv>255 Then Mv:=255;
+      VtS.Cat[cHair][K]:=Mv;
+     End;
+    End;
+  End;
+ FreeMem(Hm);FreeMem(Bl);FreeMem(Fm);
+ Result:=True;
+End;
+
+{ applique une retouche de coiffure (et la couleur eventuelle) }
+Function VtApplyHair(Var VtS:VtTScene;Style:LongInt;Const E:VtTEdit;Var VtMsg:AnsiString)
+  :Boolean;
+Var
+ VtH:VtTHeadInfo;
+ Ok:Boolean;
+ VtM:PSingle;
+ VtP:VtTRecolor;
+ X0,Y0,X1,Y1:LongInt;
+ VtN:Int64;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtHeadInfo(VtS,VtH)Then Begin
+  VtMsg:='aucun visage d'#130'tect'#130' : impossible de modifier la coiffure';
+  Exit;
+ End;
+ Ok:=True;
+ Case Style of
+  hsBald:Ok:=VtHairBald(VtS,VtH,VtMsg);
+  hsShorter:Ok:=VtHairShorter(VtS,VtH,VtMsg);
+  hsLonger:Ok:=VtHairLonger(VtS,VtH,VtMsg);
+  hsCurly:Ok:=VtHairCurly(VtS,VtH,VtMsg);
+  hsStraight:Begin VtMsg:='les cheveux lisses ne sont pas pris en charge';
+    Ok:=False;End;
+ End;
+ If not Ok Then Exit;
+ { couleur demandee en plus du style }
+ If(E.HasDst or(E.Pattern<>VtpkNone))and(Style<>hsBald)Then Begin
+  VtN:=Int64(VtS.W)*VtS.VtH;
+  VtM:=VtAllocF(VtN);
+  VtCatMask(VtS,VtmsHair,VtM);
+  VtSharpenAlpha(VtM,VtN);
+  If VtCatBBox(VtS,VtmsHair,X0,Y0,X1,Y1)Then Begin
+   VtBuildRecolor(E,VtP,X0,Y0,X1-X0+1,Y1-Y0+1,False);
+   VtRecolorRegion(VtS.Pix,VtS.W,VtS.VtH,VtM,VtP);
+  End;
+  FreeMem(VtM);
+ End;
+ Result:=True;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Bijoux : collier, boucles d'oreilles, bracelet, montre, diamants      }
+{ (dessines par le programme, poses selon le visage et les poignets)    }
+{ ------------------------------------------------------------------ }
+
+Function VtATan2F(Y,X:Single):Single;
+Begin
+ If X>0 Then Result:=ArcTan(Y/X)
+ Else If X<0 Then Begin
+  If Y>=0 Then Result:=ArcTan(Y/X)+Pi Else Result:=ArcTan(Y/X)-Pi;
+ End
+  Else Begin
+   If Y>0 Then Result:=Pi/2 Else If Y<0 Then Result:=-Pi/2 Else Result:=0;
+  End;
+End;
+
+{ ombrage d'un metal : T de 0 a 1 en travers de la piece }
+Function VtMetalV(VtT:Single):Single;
+Var
+ A,B:Single;
+Begin
+ A:=(VtT-0.30)/0.16;B:=(VtT-0.78)/0.09;
+ Result:=0.52+0.62*Exp(-A*A)+0.32*Exp(-B*B)+0.10*Sin(VtT*Pi);
+End;
+
+Procedure VtPutJewel(Var VtS:VtTScene;X,Y:LongInt;Cov,R,VtG,B:Single;Prot:PSingle);
+Var
+ K:Int64;
+ VtP:Single;
+Begin
+ If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Exit;
+ K:=Int64(Y)*VtS.W+X;
+ If Prot<>Nil Then Begin
+  VtP:=Prot[K];
+  If VtP>0.15 Then Cov:=Cov*(1-VtSmoothStep(0.15,0.85,VtP));
+ End;
+ If Cov<=0.004 Then Exit;
+ If R>255 Then R:=255;If VtG>255 Then VtG:=255;If B>255 Then B:=255;
+ VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Cov)+R*Cov;
+ VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Cov)+VtG*Cov;
+ VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Cov)+B*Cov;
+End;
+
+{ pierre taillee en brillant : facettes, table et eclats }
+Procedure VtDrawGem(Var VtS:VtTScene;Cx,Cy,R:Single;Metal:LongWord;Tint:LongWord;
+  Prot:PSingle);
+Var
+ X,Y,X0,X1,Y0,Y1,Sec:LongInt;
+ Dx,Dy,Dp,A,Rr,Cov,V,Br,Sp,Mr,Mg,Mb,Rd,Gr,Bl,Ring:Single;
+Begin
+ If R<1.2 Then R:=1.2;
+ X0:=Trunc(Cx-R*2.4);X1:=Trunc(Cx+R*2.4)+1;Y0:=Trunc(Cy-R*2.4);Y1:=Trunc(Cy+
+   R*2.4)+1;
+ Mr:=(Metal shr 16)and $FF;Mg:=(Metal shr 8)and $FF;Mb:=Metal and $FF;
+ For Y:=Y0 to Y1 do
+  For X:=X0 to X1 do Begin
+   Dx:=X+0.5-Cx;Dy:=Y+0.5-Cy;
+   Dp:=VtFMax(Abs(Dx),VtFMax(Abs(Dy),(Abs(Dx)+Abs(Dy))*0.7071));
+   { monture }
+   Ring:=VtCoverD(Dp-1.22*R);
+   If Ring>0 Then Begin
+    V:=VtMetalV(VtClamp(0.5+(Dy/(2.4*R)),0,1));
+    VtPutJewel(VtS,X,Y,Ring,Mr*V,Mg*V,Mb*V,Prot);
+   End;
+   Cov:=VtCoverD(Dp-0.93*R);
+   If Cov>0 Then Begin
+    A:=VtATan2F(Dy,Dx);
+    Sec:=VtFloorI((A+Pi)/(Pi/4));
+    Rr:=Sqrt(Dx*Dx+Dy*Dy)/R;
+    If Rr<0.46 Then Br:=0.97
+    Else Br:=0.58+0.42*(((Sec*3+Ord(Rr>0.75))mod 4)/3.0);
+    Br:=Br*(0.9+0.1*Cos(A*2-0.6));
+    Rd:=((Tint shr 16)and $FF)*Br;Gr:=((Tint shr 8)and $FF)*Br;Bl:=(Tint and
+      $FF)*Br;
+    VtPutJewel(VtS,X,Y,Cov,Rd,Gr,Bl,Prot);
+   End;
+   { eclat en croix }
+   Sp:=Exp(-Abs(Dx)/(0.10*R+0.3))*Exp(-Abs(Dy)/(1.9*R))+Exp(-Abs(Dy)/(0.10*R+
+     0.3))*Exp(-Abs(Dx)/(1.9*R));
+   Sp:=Sp*0.55;
+   If Sp>0.03 Then VtPutJewel(VtS,X,Y,VtFMin(Sp,0.8),255,255,255,Prot);
+  End;
+End;
+
+Procedure VtDrawNecklace(Var VtS:VtTScene;Const VtH:VtTHeadInfo;Metal,
+  Tint:LongWord;Diamond:Boolean;Prot:PSingle);
+Var
+ X,Y,X0,X1,Y0,Y1:LongInt;
+ YA,YB,Half,Wc,VtT,Yc,Slope,D,Cov,V,Lk,Mr,Mg,Mb,Rg:Single;
+Begin
+ YA:=VtH.Fy1+0.02*VtH.Fh;
+ YB:=VtH.Fy1+0.72*VtH.Fh;
+ Half:=0.30*VtH.Fw;
+ Wc:=VtFMax(1.7,0.032*VtH.Fw);
+ Mr:=(Metal shr 16)and $FF;Mg:=(Metal shr 8)and $FF;Mb:=Metal and $FF;
+ X0:=Trunc(VtH.Cx-Half)-2;X1:=Trunc(VtH.Cx+Half)+2;
+ Y0:=Trunc(YA)-3;Y1:=Trunc(YB)+3;
+ For Y:=Y0 to Y1 do
+  For X:=X0 to X1 do Begin
+   VtT:=(X+0.5-VtH.Cx)/Half;
+   If Abs(VtT)>1.04 Then Continue;
+   Yc:=YA+(YB-YA)*(1-VtT*VtT);
+   Slope:=-2*VtT*(YB-YA)/Half;
+   D:=Abs(Y+0.5-Yc)/Sqrt(1+Slope*Slope);
+   Cov:=VtCoverD(D-Wc/2);
+   If Cov>0 Then Begin
+    Lk:=0.72+0.28*Sin((X+0.5)*Sqrt(1+Slope*Slope)*2*Pi/(1.8*Wc));
+    V:=VtMetalV(VtClamp(0.5+(Y+0.5-Yc)/Wc/1.3,0,1))*Lk;
+    VtPutJewel(VtS,X,Y,Cov,Mr*V,Mg*V,Mb*V,Prot);
+   End;
+  End;
+ { pendentif }
+ Rg:=0.062*VtH.Fw;
+ If Diamond Then VtDrawGem(VtS,VtH.Cx,YB+Rg*1.7,Rg,Metal,VtRgbOf(232,242,255),Prot)
+ Else VtDrawGem(VtS,VtH.Cx,YB+Rg*1.6,Rg*0.8,Metal,Metal,Prot);
+End;
+
+Procedure VtDrawEarrings(Var VtS:VtTScene;Const VtH:VtTHeadInfo;Metal:LongWord;
+  Diamond:Boolean;Prot:PSingle);
+Var
+ VtSide:LongInt;
+ Ex,Ey,Rg,Y:Single;
+ X,YY:LongInt;
+ Cov,V,Mr,Mg,Mb:Single;
+Begin
+ Mr:=(Metal shr 16)and $FF;Mg:=(Metal shr 8)and $FF;Mb:=Metal and $FF;
+ Rg:=0.040*VtH.Fw;
+ For VtSide:=-1 to 1 do Begin
+  If VtSide=0 Then Continue;
+  If VtSide<0 Then Ex:=VtH.Fx0-0.035*VtH.Fw Else Ex:=VtH.Fx1+0.035*VtH.Fw;
+  Ey:=VtH.Fy0+0.62*VtH.Fh;
+  { petite tige et pierre qui pend }
+  For YY:=Trunc(Ey)to Trunc(Ey+0.14*VtH.Fh)do
+   For X:=Trunc(Ex)-2 to Trunc(Ex)+2 do Begin
+    Cov:=VtCoverD(Abs(X+0.5-Ex)-0.7);
+    If Cov>0 Then VtPutJewel(VtS,X,YY,Cov,Mr*0.9,Mg*0.9,Mb*0.9,Nil);
+   End;
+  If Diamond Then VtDrawGem(VtS,Ex,Ey+0.14*VtH.Fh+Rg*1.3,Rg,Metal,VtRgbOf(232,242,255)
+    ,Nil)
+  Else VtDrawGem(VtS,Ex,Ey+0.14*VtH.Fh+Rg*1.2,Rg*0.85,Metal,Metal,Nil);
+ End;
+End;
+
+Type
+ VtTWrist=Record
+  X,Y,Ax,Ay,W:Single;     { centre, direction vers la main, largeur du poignet }
+ End;
+
+{ poignets : composantes connexes de la categorie bras, extremite cote main }
+Function VtFindWrists(Const VtS:VtTScene;Var Wr:Array of VtTWrist):LongInt;
+Var
+ VtN:Int64;
+ B:PByte;
+ Lab:VtPIntArr;
+ Areas:VtTIntArray;
+ NC,VtI,VtJ,Cnt,X,Y,Best:LongInt;
+ VtP:LongInt;
+ Mx,My,Sxx,Sxy,Syy,Cs,Sn,Th,Ax,Ay,Pj,Pmin,Pmax,Vend,Pw,Uc,Umin,Umax,Sx,Sy,Cn,
+   L,Px,Py:Double;
+ Take:Boolean;
+Begin
+ Result:=0;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ B:=PByte(VtAllocBytes(VtN));
+ For VtP:=0 to VtN-1 do If VtS.Cat[cArms][VtP]>=128 Then B[VtP]:=255;
+ Lab:=VtPIntArr(VtAllocBytes(VtN*4));
+ NC:=VtComponents(B,VtS.W,VtS.VtH,Lab,Areas);
+ Cnt:=0;
+ For VtI:=1 to NC do Begin
+  If(Areas[VtI]<VtN div 7000)or(Cnt>High(Wr))Then Continue;
+  { axe principal }
+  Mx:=0;My:=0;
+  For Y:=0 to VtS.VtH-1 do For X:=0 to VtS.W-1 do If Lab[Int64(Y)*VtS.W+X]=VtI Then
+    Begin Mx:=Mx+X;My:=My+Y;End;
+  Mx:=Mx/Areas[VtI];My:=My/Areas[VtI];
+  Sxx:=0;Sxy:=0;Syy:=0;
+  For Y:=0 to VtS.VtH-1 do For X:=0 to VtS.W-1 do If Lab[Int64(Y)*VtS.W+X]=VtI Then Begin
+   Sxx:=Sxx+(X-Mx)*(X-Mx);Sxy:=Sxy+(X-Mx)*(Y-My);Syy:=Syy+(Y-My)*(Y-My);
+  End;
+  Th:=0.5*VtATan2F(2*Sxy,Sxx-Syy);
+  Ax:=Cos(Th);Ay:=Sin(Th);
+  If Ay<0 Then Begin Ax:=-Ax;Ay:=-Ay;End;     { vers le bas : cote main }
+  Pmin:=1.0e9;Pmax:=-1.0e9;
+  For Y:=0 to VtS.VtH-1 do For X:=0 to VtS.W-1 do If Lab[Int64(Y)*VtS.W+X]=VtI Then Begin
+   Pj:=(X-Mx)*Ax+(Y-My)*Ay;
+   If Pj<Pmin Then Pmin:=Pj;
+   If Pj>Pmax Then Pmax:=Pj;
+  End;
+  L:=Pmax-Pmin;
+  If L<12 Then Continue;
+  Pw:=Pmax-0.22*L;
+  { largeur et centre du poignet }
+  Umin:=1.0e9;Umax:=-1.0e9;Sx:=0;Sy:=0;Cn:=0;
+  For Y:=0 to VtS.VtH-1 do For X:=0 to VtS.W-1 do If Lab[Int64(Y)*VtS.W+X]=VtI Then Begin
+   Pj:=(X-Mx)*Ax+(Y-My)*Ay;
+   If Abs(Pj-Pw)<=1.6 Then Begin
+    Uc:=-(X-Mx)*Ay+(Y-My)*Ax;
+    If Uc<Umin Then Umin:=Uc;
+    If Uc>Umax Then Umax:=Uc;
+    Sx:=Sx+X;Sy:=Sy+Y;Cn:=Cn+1;
+   End;
+  End;
+  If(Cn<2)or(Umax-Umin<5)Then Continue;
+  Wr[Cnt].X:=Sx/Cn+0.5;Wr[Cnt].Y:=Sy/Cn+0.5;
+  Wr[Cnt].Ax:=Ax;Wr[Cnt].Ay:=Ay;Wr[Cnt].W:=Umax-Umin+1;
+  Inc(Cnt);
+ End;
+ FreeMem(B);FreeMem(Lab);
+ Result:=Cnt;
+End;
+
+{ bracelet ou bracelet de montre autour d'un poignet }
+Procedure VtDrawBand(Var VtS:VtTScene;Const Wr:VtTWrist;Thick:Single;
+  Colr:LongWord;Metallic,Diamond:Boolean;Prot:PSingle);
+Var
+ X,Y,X0,X1,Y0,Y1,VtI:LongInt;
+ Dx,Dy,V,U,Vc,Hw,Hl,D,Cov,Sh,Mr,Mg,Mb,Gc:Single;
+Begin
+ Hw:=0.60*Wr.W;Hl:=Thick*Wr.W/2;
+ X0:=Trunc(Wr.X-Wr.W*1.6);X1:=Trunc(Wr.X+Wr.W*1.6);Y0:=Trunc(Wr.Y-Wr.W*1.6);
+   Y1:=Trunc(Wr.Y+Wr.W*1.6);
+ Mr:=(Colr shr 16)and $FF;Mg:=(Colr shr 8)and $FF;Mb:=Colr and $FF;
+ For Y:=Y0 to Y1 do
+  For X:=X0 to X1 do Begin
+   Dx:=X+0.5-Wr.X;Dy:=Y+0.5-Wr.Y;
+   V:=Dx*Wr.Ax+Dy*Wr.Ay;
+   U:=-Dx*Wr.Ay+Dy*Wr.Ax;
+   Vc:=V-0.10*Wr.W*Sqr(U/Hw);
+   D:=VtRoundRectD(U,Vc,0,0,Hw,Hl,Hl*0.9);
+   Cov:=VtCoverD(D);
+   If Cov>0 Then Begin
+    If Metallic Then Sh:=VtMetalV(VtClamp(0.5+Vc/(2*Hl),0,1))*(1-0.25*Sqr(U/Hw))
+    Else Sh:=0.7+0.3*Sin(Pi*VtClamp(0.5+Vc/(2*Hl),0,1))-0.15*Sqr(U/Hw);
+    VtPutJewel(VtS,X,Y,Cov,Mr*Sh,Mg*Sh,Mb*Sh,Prot);
+   End;
+  End;
+ If Diamond Then
+  For VtI:=-2 to 2 do Begin
+   Gc:=VtI*0.22*Wr.W;
+   VtDrawGem(VtS,Wr.X-Gc*Wr.Ay+(0.10*Wr.W*Sqr(Gc/Hw))*Wr.Ax,Wr.Y+Gc*Wr.Ax+
+     (0.10*Wr.W*Sqr(Gc/Hw))*Wr.Ay,0.075*Wr.W,Colr,VtRgbOf(232,242,255),Prot);
+  End;
+End;
+
+Procedure VtDrawWatch(Var VtS:VtTScene;Const Wr:VtTWrist;Const E:VtTEdit;
+  Metal:LongWord;Prot:PSingle);
+Var
+ X,Y,X0,X1,Y0,Y1:LongInt;
+ Dx,Dy,V,U,Cov,Cu,Cv,R,VtG,B,Rr,Ang,Hh,Mm,D1,D2,Ln:Single;
+ BandC:LongWord;
+ Hw,Hh2:Single;
+Begin
+ If E.HasDst Then BandC:=E.DstRGB Else BandC:=VtRgbOf(28,28,32);
+ VtDrawBand(VtS,Wr,0.50,BandC,False,False,Prot);
+ X0:=Trunc(Wr.X-Wr.W);X1:=Trunc(Wr.X+Wr.W);Y0:=Trunc(Wr.Y-Wr.W);
+   Y1:=Trunc(Wr.Y+Wr.W);
+ For Y:=Y0 to Y1 do
+  For X:=X0 to X1 do Begin
+   Dx:=X+0.5-Wr.X;Dy:=Y+0.5-Wr.Y;
+   V:=Dx*Wr.Ax+Dy*Wr.Ay;
+   U:=-Dx*Wr.Ay+Dy*Wr.Ax;
+   If E.Apple Then Begin
+    { boitier carre arrondi, ecran noir, anneaux d'activite, couronne }
+    Hw:=0.40*Wr.W;Hh2:=0.46*Wr.W;
+    Cov:=VtCoverD(VtRoundRectD(U,V,0,0,Hw,Hh2,0.17*Wr.W));
+    If Cov>0 Then Begin
+     R:=185;VtG:=186;B:=192;
+     Rr:=VtMetalV(VtClamp(0.5+V/(2*Hh2),0,1));R:=R*Rr;VtG:=VtG*Rr;B:=B*Rr;
+     VtPutJewel(VtS,X,Y,Cov,R,VtG,B,Prot);
+    End;
+    Cov:=VtCoverD(VtRoundRectD(U,V,0,0,Hw*0.88,Hh2*0.88,0.14*Wr.W));
+    If Cov>0 Then Begin
+     R:=6;VtG:=6;B:=9;
+     Rr:=Sqrt(U*U+V*V)/Wr.W;
+     { trois anneaux concentriques }
+     Ang:=VtATan2F(V,U);
+     If(Abs(Rr-0.24)<0.032)and(Ang>-2.2)Then Begin R:=255;VtG:=45;B:=85;End;
+     If(Abs(Rr-0.17)<0.032)and(Ang>-1.5)Then Begin R:=165;VtG:=255;B:=0;End;
+     If(Abs(Rr-0.10)<0.032)and(Ang>-0.8)Then Begin R:=0;VtG:=225;B:=255;End;
+     { reflet de la vitre }
+     Rr:=VtClamp((U+V)/(2*Wr.W)+0.1,-0.5,0.5);
+     If Rr>0 Then Begin R:=R+30*Rr;VtG:=VtG+30*Rr;B:=B+34*Rr;End;
+     VtPutJewel(VtS,X,Y,Cov,R,VtG,B,Prot);
+    End;
+    Cov:=VtCoverD(VtRoundRectD(U-Hw-0.03*Wr.W,V+0.12*Wr.W,0,0,0.05*Wr.W,
+      0.12*Wr.W,0.03*Wr.W));
+    If Cov>0 Then VtPutJewel(VtS,X,Y,Cov,175,176,182,Prot);
+   End
+    Else Begin
+     { montre ronde : boitier metal, cadran clair, aiguilles }
+     Rr:=Sqrt(U*U+V*V);
+     Cov:=VtCoverD(Rr-0.43*Wr.W);
+     If Cov>0 Then Begin
+      Cu:=((Metal shr 16)and $FF)*VtMetalV(VtClamp(0.5+V/(0.86*Wr.W),0,1));
+      Cv:=((Metal shr 8)and $FF)*VtMetalV(VtClamp(0.5+V/(0.86*Wr.W),0,1));
+      R:=((Metal and $FF))*VtMetalV(VtClamp(0.5+V/(0.86*Wr.W),0,1));
+      VtPutJewel(VtS,X,Y,Cov,Cu,Cv,R,Prot);
+     End;
+     Cov:=VtCoverD(Rr-0.36*Wr.W);
+     If Cov>0 Then Begin
+      R:=242;VtG:=240;B:=232;
+      Ang:=VtATan2F(V,U);
+      Mm:=Abs(Sin(Ang*6));
+      If(Rr>0.30*Wr.W)and(Mm>0.97)Then Begin R:=40;VtG:=40;B:=44;End;
+      { aiguilles : 10 h 10 }
+      D1:=Abs(-U*Cos(-1.0)+V*Sin(-1.0));Ln:=U*Sin(-1.0)*(-1)+V*Cos(-1.0);
+      If(D1<0.012*Wr.W+0.4)and(U*Cos(-1.0)+V*Sin(-1.0)>0)and(Rr<0.22*Wr.W)
+        Then Begin R:=30;VtG:=30;B:=34;End;
+      D2:=Abs(-U*Cos(-2.2)+V*Sin(-2.2));
+      If(D2<0.010*Wr.W+0.4)and(U*Cos(-2.2)+V*Sin(-2.2)>0)and(Rr<0.30*Wr.W)
+        Then Begin R:=30;VtG:=30;B:=34;End;
+      If Rr<0.025*Wr.W Then Begin R:=30;VtG:=30;B:=34;End;
+      VtPutJewel(VtS,X,Y,Cov,R,VtG,B,Prot);
+     End;
+    End;
+  End;
+End;
+
+{ ajoute les bijoux demandes ; renvoie faux si rien n'a pu etre pose }
+Function VtAddJewelry(Var VtS:VtTScene;Const E:VtTEdit;Var VtMsg:AnsiString):Boolean;
+Var
+ VtH:VtTHeadInfo;
+ Metal,Tint:LongWord;
+ Prot,Fm,Hm,Am:PSingle;
+ VtN:Int64;
+ Wr:Array[0..3]of VtTWrist;
+ NW,VtI,WatchIdx:LongInt;
+ Done:Boolean;
+ Note:AnsiString;
+ B:PByte;
+ K:LongInt;
+Begin
+ Result:=False;
+ VtMsg:='';Note:='';
+ Done:=False;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ If E.HasDst Then Metal:=E.DstRGB
+ Else If E.Diamond Then Metal:=VtRgbOf(196,196,205)
+ Else Metal:=VtRgbOf(212,175,55);
+ Tint:=VtRgbOf(232,242,255);
+ Fm:=VtAllocF(VtN);Hm:=VtAllocF(VtN);Prot:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsFace,Fm);VtCatMask(VtS,VtmsHair,Hm);
+ For K:=0 to VtN-1 do Prot[K]:=VtFMax(Fm[K],Hm[K]);
+ If(E.Jewel and(VtjwNecklace or jwEarrings))<>0 Then Begin
+  If VtHeadInfo(VtS,VtH)Then Begin
+   If(E.Jewel and VtjwNecklace)<>0 Then Begin VtDrawNecklace(VtS,VtH,Metal,Tint,
+     E.Diamond,Prot);Done:=True;End;
+   If(E.Jewel and jwEarrings)<>0 Then Begin VtDrawEarrings(VtS,VtH,Metal,E.Diamond,
+     Fm);Done:=True;End;
+  End
+   Else Note:=
+     'aucun visage d'#130'tect'#130' : collier et boucles d''oreilles non '+
+     'ajout'#130's';
+ End;
+ If(E.Jewel and(jwBracelet or jwWatch))<>0 Then Begin
+  NW:=VtFindWrists(VtS,Wr);
+  If NW=0 Then Begin
+   If Note<>'' Then Note:=Note+' ; ';
+   Note:=Note+'aucun poignet visible : bracelet et montre non ajout'#130's';
+  End
+   Else Begin
+    { masque des bras legerement dilate : le bijou ne deborde pas sur le fond }
+    B:=PByte(VtAllocBytes(VtN));
+    For K:=0 to VtN-1 do If VtS.Cat[cArms][K]>=64 Then B[K]:=255;
+    VtMorphMask(B,VtS.W,VtS.VtH,2,False);
+    Am:=VtAllocF(VtN);
+    For K:=0 to VtN-1 do Am[K]:=1-B[K]/255.0;
+    FreeMem(B);
+    { montre sur le poignet le plus a droite de l'image (poignet gauche de la
+      personne) }
+    WatchIdx:=0;
+    For VtI:=1 to NW-1 do If Wr[VtI].X>Wr[WatchIdx].X Then WatchIdx:=VtI;
+    For VtI:=0 to NW-1 do Begin
+     If((E.Jewel and jwWatch)<>0)and(VtI=WatchIdx)Then Begin VtDrawWatch(VtS,Wr[VtI],
+       E,Metal,Am);Done:=True;End
+     Else If(E.Jewel and jwBracelet)<>0 Then Begin VtDrawBand(VtS,Wr[VtI],0.28,
+       Metal,True,E.Diamond,Am);Done:=True;End;
+    End;
+    FreeMem(Am);
+   End;
+ End;
+ If(E.Jewel and jwRing)<>0 Then Begin
+  If Note<>'' Then Note:=Note+' ; ';
+  Note:=Note+'les bagues ne sont pas prises en charge (doigts trop petits)';
+ End;
+ FreeMem(Fm);FreeMem(Hm);FreeMem(Prot);
+ If Note<>'' Then Begin
+  If Done Then VtWarn(Note) Else VtMsg:=Note;
+ End;
+ Result:=Done;
+ If Done Then VtInfo('  bijoux ajout'#130's');
+End;
+{ ------------------------------------------------------------------ }
+{ ? Plus reel ? sur une vraie photo : amelioration legere            }
+{ ------------------------------------------------------------------ }
+
+{ une photo utilise beaucoup de couleurs differentes ; un dessin, tres peu }
+Function VtLooksLikePhoto(Const VtS:VtTScene):Boolean;
+Var
+ Seen:PByte;
+ VtN,K,Step,Cnt:Int64;
+ Idx:LongInt;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Seen:=PByte(VtAllocBytes(32768));
+ Step:=VtN div 400000;
+ If Step<1 Then Step:=1;
+ Cnt:=0;
+ K:=0;
+ While K<VtN do Begin
+  Idx:=(VtClampI(Trunc(VtS.Pix[K*3]),0,255)shr 3)shl 10 or
+   ((VtClampI(Trunc(VtS.Pix[K*3+1]),0,255)shr 3)shl 5)or
+   (VtClampI(Trunc(VtS.Pix[K*3+2]),0,255)shr 3);
+  If Seen[Idx]=0 Then Begin Seen[Idx]:=1;Inc(Cnt);End;
+  Inc(K,Step);
+ End;
+ FreeMem(Seen);
+ Result:=Cnt>=2500;
+End;
+
+{ nettete locale, saturation, grain fin et vignettage leger }
+Procedure VtPhotoEnhance(Var VtS:VtTScene);
+Var
+ VtN:int64;K:LongInt;
+ VtP:Array[0..2]of PSingle;
+ X,Y,C,R:LongInt;
+ V,L,Vig,Nz:Single;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ R:=VtIMax(1,VtIMax(VtS.W,VtS.VtH)div 500);
+ For C:=0 to 2 do Begin
+  VtP[C]:=VtAllocF(VtN);
+  For K:=0 to VtN-1 do VtP[C][K]:=VtS.Pix[K*3+C];
+  VtBoxBlur(VtP[C],VtP[C],VtS.W,VtS.VtH,R);
+ End;
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   L:=VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2]);
+   Vig:=1-0.10*Sqr(Sqrt(Sqr(X/VtS.W-0.5)+Sqr(Y/VtS.VtH-0.5))*1.4);
+   Nz:=VtRngGauss*1.6;
+   For C:=0 to 2 do Begin
+    V:=VtS.Pix[K*3+C]+(VtS.Pix[K*3+C]-VtP[C][K])*0.55;
+    V:=L+(V-L)*1.07;
+    VtS.Pix[K*3+C]:=(V*Vig)+Nz;
+   End;
+  End;
+ For C:=0 to 2 do FreeMem(VtP[C]);
+End;
+
+
+{ ------------------------------------------------------------------ }
+{ Styles d'image : photo -> BD / dessin anime / croquis,              }
+{ et dessin -> rendu ? realiste ? approximatif                         }
+{ ------------------------------------------------------------------ }
+
+{ lisse l'image en gardant les contours (filtre guide applique a chaque canal) }
+Procedure VtEdgeSmooth(Pix:PSingle;W,VtH,Rad:LongInt;Eps:Single);
+Var
+ VtG:VtTGuide;
+ VtP,Q:PSingle;
+ VtN:int64;K:LongInt;
+ C:LongInt;
+Begin
+ VtN:=Int64(W)*VtH;
+ VtGuideInit(VtG,Pix,W,VtH,Rad,Eps);
+ VtP:=VtAllocF(VtN);Q:=VtAllocF(VtN);
+ For C:=0 to 2 do Begin
+  For K:=0 to VtN-1 do VtP[K]:=Pix[K*3+C]/255.0;
+  VtGuideApply(VtG,VtP,Q);
+  For K:=0 to VtN-1 do Pix[K*3+C]:=Q[K]*255.0;
+ End;
+ VtGuideFree(VtG);
+ FreeMem(VtP);FreeMem(Q);
+End;
+
+{ categorie dominante de chaque pixel }
+Procedure VtDominantMap(Const VtS:VtTScene;D:PByte);
+Var
+ K:LongInt;
+ C,Best,Bv:LongInt;
+Begin
+ For K:=0 to Int64(VtS.W)*VtS.VtH-1 do Begin
+  Best:=0;Bv:=-1;
+  For C:=0 to VtNumCat-1 do If VtS.Cat[C][K]>Bv Then Begin Bv:=VtS.Cat[C][K];
+    Best:=C;End;
+  D[K]:=Best;
+ End;
+End;
+
+{ contours : gradient de luminosite et frontieres entre categories ; renvoie un
+  plan 0..1 }
+Procedure VtInkLines(Const VtS:VtTScene;Lines:PSingle;Strong:Single;Width:LongInt);
+Var
+ VtN:int64;K:LongInt;
+ X,Y:LongInt;
+ Yl:PSingle;
+ Dom,Bd:PByte;
+ Gx,Gy,Gm,VtT0,VtT1:Single;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Yl:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do Yl[K]:=VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2])/255.0;
+ VtBlurPlane(Yl,VtS.W,VtS.VtH,1.1);
+ VtT0:=0.05/Strong;VtT1:=0.20/Strong;
+ For Y:=1 to VtS.VtH-2 do
+  For X:=1 to VtS.W-2 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   Gx:=(Yl[K+1]-Yl[K-1])*2+(Yl[K+1-VtS.W]-Yl[K-1-VtS.W])+(Yl[K+1+VtS.W]-Yl[K-1+VtS.W]);
+   Gy:=(Yl[K+VtS.W]-Yl[K-VtS.W])*2+(Yl[K+VtS.W-1]-Yl[K-VtS.W-1])+(Yl[K+VtS.W+1]-Yl[K-VtS.W+
+     1]);
+   Gm:=Sqrt(Gx*Gx+Gy*Gy)/4.0;
+   If VtS.Cat[cFace][K]>=128 Then Lines[K]:=0.75*VtSmoothStep(VtT0*1.0,VtT1*1.25,Gm)
+   Else Lines[K]:=VtSmoothStep(VtT0,VtT1,Gm);
+  End;
+ FreeMem(Yl);
+ { frontieres entre categories }
+ Dom:=PByte(VtAllocBytes(VtN));Bd:=PByte(VtAllocBytes(VtN));
+ VtDominantMap(VtS,Dom);
+ For Y:=0 to VtS.VtH-2 do
+  For X:=0 to VtS.W-2 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If(Dom[K]<>Dom[K+1])or(Dom[K]<>Dom[K+VtS.W])Then Bd[K]:=255;
+  End;
+ If Width>1 Then VtMorphMask(Bd,VtS.W,VtS.VtH,Width-1,False);
+ For K:=0 to VtN-1 do If Bd[K]<>0 Then Lines[K]:=1;
+ FreeMem(Dom);FreeMem(Bd);
+ VtBlurPlane(Lines,VtS.W,VtS.VtH,0.9);
+ For K:=0 to VtN-1 do Begin
+  Lines[K]:=Lines[K]*1.7;
+  If Lines[K]>1 Then Lines[K]:=1;
+ End;
+End;
+
+{ BD (Comic=True : encre epaisse et trames) ou dessin anime }
+Procedure VtStyleCartoon(Var VtS:VtTScene;Comic:Boolean);
+Var
+ VtN:int64;K:LongInt;
+ X,Y:LongInt;
+ Md,Lv,Wd:LongInt;
+ L,A,B,Step,VtT,F,Lq,R,VtG,Bl,Ln,Pitch,Rd,Dx,Dy,U,V,Dist:Single;
+ Lines,FaceKeep,Fm:PSingle;
+ C:LongInt;
+Begin
+ VtColorInit;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Md:=VtIMin(VtS.W,VtS.VtH);
+ Lines:=VtAllocF(VtN);
+ { contours calcules sur l'image d'origine (legerement lissee) }
+ If Comic Then Begin Wd:=VtIMax(2,Md div 380);VtInkLines(VtS,Lines,0.8,Wd);End
+ Else Begin Wd:=VtIMax(1,Md div 600);VtInkLines(VtS,Lines,1.15,Wd);End;
+ { aplats : lissage fort puis quantification de la luminosite }
+ FaceKeep:=VtAllocF(VtN*3);
+ Move(VtS.Pix^,FaceKeep^,VtN*12);
+ VtEdgeSmooth(FaceKeep,VtS.W,VtS.VtH,VtIMax(2,Md div 300),0.004);
+ VtEdgeSmooth(VtS.Pix,VtS.W,VtS.VtH,VtIMax(3,Md div 110),0.03);
+ VtEdgeSmooth(VtS.Pix,VtS.W,VtS.VtH,VtIMax(2,Md div 220),0.015);
+ Fm:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsFace,Fm);
+ VtBlurPlane(Fm,VtS.W,VtS.VtH,2.0);
+ For K:=0 to VtN-1 do If Fm[K]>0.01 Then
+  For C:=0 to 2 do VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Fm[K])+FaceKeep[K*3+C]*Fm[K];
+ FreeMem(FaceKeep);FreeMem(Fm);
+ If Comic Then Lv:=5 Else Lv:=7;
+ Step:=100.0/Lv;
+ Pitch:=VtFMax(4,Md/170.0);
+ For K:=0 to VtN-1 do Begin
+  VtRgbToLab(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2],L,A,B);
+  VtT:=L/Step;
+  F:=VtT-Trunc(VtT);
+  Lq:=(Trunc(VtT)+VtSmoothStep(0.40,0.60,F))*Step;
+  If Comic Then Lq:=Lq*0.96;
+  A:=A*1.22;B:=B*1.22;
+  VtLabToRgb(Lq,A,B,R,VtG,Bl);
+  { trame de points dans les ombres (BD) }
+  If Comic and(L<34)Then Begin
+   Y:=K div VtS.W;X:=K mod VtS.W;
+   U:=(X+Y)/1.4142;V:=(X-Y)/1.4142;
+   Dx:=U-Trunc(U/Pitch)*Pitch-Pitch/2;
+   Dy:=V-Trunc(V/Pitch)*Pitch-Pitch/2;
+   Dist:=Sqrt(Dx*Dx+Dy*Dy);
+   Rd:=0.5*Pitch*Sqrt(VtClamp((34-L)/34.0,0,1));
+   If Dist<Rd Then Begin R:=R*0.62;VtG:=VtG*0.62;Bl:=Bl*0.62;End;
+  End;
+  Ln:=Lines[K];
+  VtS.Pix[K*3]:=R*(1-Ln)+18*Ln;
+  VtS.Pix[K*3+1]:=VtG*(1-Ln)+16*Ln;
+  VtS.Pix[K*3+2]:=Bl*(1-Ln)+22*Ln;
+ End;
+ FreeMem(Lines);
+End;
+
+{ croquis au crayon }
+Procedure VtStyleSketch(Var VtS:VtTScene);
+Var
+ VtN:int64;K:LongInt;
+ Gray,Inv:PSingle;
+ Md:LongInt;
+ V,Pp:Single;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Md:=VtIMin(VtS.W,VtS.VtH);
+ Gray:=VtAllocF(VtN);Inv:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do Begin
+  Gray[K]:=VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2]);
+  Inv[K]:=255-Gray[K];
+ End;
+ VtBlurPlane(Inv,VtS.W,VtS.VtH,VtFMax(3,Md/90.0));
+ For K:=0 to VtN-1 do Begin
+  V:=Gray[K]*255.0/(255.0-Inv[K]+4.0);
+  If V>255 Then V:=255;
+  V:=255*VtFPow(V/255.0,1.7);
+  { grain du papier }
+  Pp:=VtVNoise((K mod VtS.W)*0.8,(K div VtS.W)*0.8)*10-5+VtRngGauss*1.3;
+  V:=VtClamp(V*0.97+Pp+5,0,255);
+  VtS.Pix[K*3]:=V;VtS.Pix[K*3+1]:=V*0.995;VtS.Pix[K*3+2]:=V*0.97;
+ End;
+ FreeMem(Gray);FreeMem(Inv);
+End;
+
+{ dessin -> rendu realiste (approximation : suppression de l'encre, lumiere,
+  textures de peau, de tissu et de cheveux, grain) ; ce n'est pas une photo }
+Procedure VtStyleReal(Var VtS:VtTScene);
+Var
+ VtN:int64;K:LongInt;
+ X,Y,C,R0:LongInt;
+ Yl,Dk,Op,Known:PSingle;
+ Bd,Bo:PByte;
+ Md:LongInt;
+ L,A,B,Gr,Sk,Fb,Hr,Bg,Light,Vig,Tex,Nz,Dx,Dy,Wv:Single;
+ Gm,Mn:Single;
+Begin
+ VtColorInit;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Md:=VtIMin(VtS.W,VtS.VtH);
+ { 1. encre : pixels sombres et fins, retires puis remplis par propagation }
+ Yl:=VtAllocF(VtN);Known:=VtAllocF(VtN);
+ Bd:=PByte(VtAllocBytes(VtN));Bo:=PByte(VtAllocBytes(VtN));
+ For K:=0 to VtN-1 do Begin
+  Yl[K]:=VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2]);
+  If Yl[K]<75 Then Begin Bd[K]:=255;Bo[K]:=255;End;
+ End;
+ R0:=VtIMax(1,Md div 300);
+ VtMorphMask(Bo,VtS.W,VtS.VtH,R0,True);
+ VtMorphMask(Bo,VtS.W,VtS.VtH,R0,False);
+ For K:=0 to VtN-1 do Begin
+  If(Bd[K]<>0)and(Bo[K]=0)Then Bd[K]:=255 Else Bd[K]:=0;
+ End;
+ VtMorphMask(Bd,VtS.W,VtS.VtH,1,False);
+ For K:=0 to VtN-1 do If Bd[K]=0 Then Known[K]:=1;
+ VtPushPullFill(VtS.Pix,Known,VtS.W,VtS.VtH);
+ FreeMem(Yl);FreeMem(Known);FreeMem(Bd);FreeMem(Bo);
+ { 2. aplats -> degrades doux }
+ VtEdgeSmooth(VtS.Pix,VtS.W,VtS.VtH,VtIMax(2,Md div 160),0.004);
+ { 3. lumiere, textures par region, grain }
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   Sk:=(VtS.Cat[cFace][K]+VtS.Cat[cArms][K]+VtS.Cat[cLegs][K]+VtS.Cat[cSkin][K])/255.0;
+   Hr:=VtS.Cat[cHair][K]/255.0;
+   Bg:=VtS.Cat[VtcBg][K]/255.0;
+   Fb:=1-Sk-Hr-Bg;
+   If Fb<0 Then Fb:=0;
+   VtRgbToLab(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2],L,A,B);
+   { eclairage doux venant du haut a gauche et vignettage }
+   Dx:=X/VtS.W-0.35;Dy:=Y/VtS.VtH-0.25;
+   Light:=1.06-0.16*Sqrt(Dx*Dx+Dy*Dy);
+   Vig:=1-0.20*Sqr(Sqrt(Sqr(X/VtS.W-0.5)+Sqr(Y/VtS.VtH-0.5))*1.4);
+   L:=L*Light*Vig;
+   { desaturation naturelle }
+   A:=A*0.84;B:=B*0.84;
+   { peau : pores, rougeurs, leger eclat }
+   If Sk>0.02 Then Begin
+    Nz:=VtVNoise(X*1.15,Y*1.15)-0.5;
+    L:=L+Sk*(Nz*7.0+(VtVNoise(X/(0.02*VtS.W+1),Y/(0.02*VtS.W+1))-0.5)*3.0);
+    A:=A+Sk*(VtVNoise(X/(0.035*VtS.W+1),Y/(0.035*VtS.W+1))-0.5)*5.0;
+   End;
+   { cheveux : meches fines }
+   If Hr>0.02 Then Begin
+    Nz:=VtVNoise(X*0.9,Y*0.06)-0.5;
+    L:=L+Hr*(Nz*22.0+(VtVNoise(X*0.3,Y*0.02)-0.5)*10.0);
+   End;
+   { tissu : trame }
+   If Fb>0.02 Then Begin
+    Wv:=Sin(X*1.7)*Sin(Y*1.7);
+    L:=L+Fb*(Wv*2.2+(VtVNoise(X*0.45,Y*0.45)-0.5)*5.0);
+   End;
+   { fond : flou de profondeur simule par un leger bruit }
+   If Bg>0.02 Then L:=L+Bg*(VtVNoise(X*0.05,Y*0.05)-0.5)*5.0;
+   L:=L+VtRngGauss*1.7;
+   If L<0 Then L:=0 Else If L>100 Then L:=100;
+   VtLabToRgb(L,A,B,Gm,Mn,Light);
+   VtS.Pix[K*3]:=Gm;VtS.Pix[K*3+1]:=Mn;VtS.Pix[K*3+2]:=Light;
+  End;
+ { 4. adoucit legerement les aretes vectorielles }
+ VtEdgeSmooth(VtS.Pix,VtS.W,VtS.VtH,1,0.002);
+End;
+
+{ applique un changement de style sur toute l'image }
+Function VtApplyStyle(Var VtS:VtTScene;Style:LongInt;Var VtMsg:AnsiString):Boolean;
+Begin
+ Result:=True;
+ VtMsg:='';
+ Case Style of
+  stComic:Begin VtStyleCartoon(VtS,True);VtInfo('  style BD appliqu'#130);End;
+  stCartoon:Begin VtStyleCartoon(VtS,False);
+    VtInfo('  style dessin anim'#130' appliqu'#130);End;
+  stSketch:Begin VtStyleSketch(VtS);VtInfo('  style croquis appliqu'#130);End;
+  stReal:If VtLooksLikePhoto(VtS)Then Begin
+    VtPhotoEnhance(VtS);
+    VtInfo('  l''image est d'#130'j'#133' une photo : r'#130'alisme renforc'#130+
+      ' l'#130'g'#138'rement (nettet'#130', saturation, grain, vignettage)');
+   End
+   Else Begin
+    VtStyleReal(VtS);
+    VtInfo('  rendu r'#130'aliste approximatif appliqu'#130' (ce n''est pas une '+
+      'photo : un vrai passage dessin -> photo demande un mod'#138'le g'#130+
+      'n'#130'ratif)');
+   End;
+  Else Begin VtMsg:='style inconnu';Result:=False;End;
+ End;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Visage et posture : couleur des yeux, sourire, bras le long du corps }
+{ ------------------------------------------------------------------ }
+
+{ ---- couleur des yeux ---- }
+
+{ cherche l'iris d'un oeil dans une fenetre : disque sombre entoure d'un anneau
+  plus clair }
+Function VtFindIris(Const VtS:VtTScene;Yl:PSingle;Ex,Ey,Wx,Wy,R:Single;Var Cx,Cy,
+  Score:Single):Boolean;
+Var
+ X,Y,Dx,Dy,Ri:LongInt;
+ Sd,Sr,Dd,Rr:Double;
+ Nd,Nr:LongInt;
+ D2:Single;
+ Best:Single;
+Begin
+ Result:=False;
+ Best:=-1;
+ Ri:=Trunc(R*1.95)+1;
+ For Y:=Trunc(Ey-Wy)to Trunc(Ey+Wy)do
+  For X:=Trunc(Ex-Wx)to Trunc(Ex+Wx)do Begin
+   Sd:=0;Sr:=0;Nd:=0;Nr:=0;
+   For Dy:=-Ri to Ri do
+    For Dx:=-Ri to Ri do Begin
+     If(X+Dx<0)or(X+Dx>=VtS.W)or(Y+Dy<0)or(Y+Dy>=VtS.VtH)Then Continue;
+     D2:=Sqrt(Dx*Dx+Dy*Dy);
+     If D2<=R*0.9 Then Begin Sd:=Sd+Yl[Int64(Y+Dy)*VtS.W+X+Dx];Inc(Nd);End
+     Else If(D2>=R*1.3)and(D2<=R*1.95)Then Begin Sr:=Sr+Yl[Int64(Y+Dy)*VtS.W+X+
+       Dx];Inc(Nr);End;
+    End;
+   If(Nd<4)or(Nr<8)Then Continue;
+   Dd:=Sd/Nd;Rr:=Sr/Nr;
+   If Rr-Dd>Best Then Begin Best:=Rr-Dd;Cx:=X+0.5;Cy:=Y+0.5;End;
+  End;
+ Score:=Best;
+ Result:=Best>0;
+End;
+
+Function VtApplyEyes(Var VtS:VtTScene;Const E:VtTEdit;Var VtMsg:AnsiString):Boolean;
+Var
+ VtH:VtTHeadInfo;
+ VtN:int64;K:LongInt;
+ Yl,Al:PSingle;
+ VtSide,X,Y,Found:LongInt;
+ Ex,Ey,R,Cx,Cy,Sc,Lskin,Dd,W1,Lcur,Sum,Cnt:Single;
+ SkinSum:Double;
+ SkinCnt:Int64;
+ VtP:VtTRecolor;
+ Fm:PSingle;
+ L,A,B:Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtHeadInfo(VtS,VtH)Then Begin VtMsg:=
+   'aucun visage d'#130'tect'#130' : impossible de changer la couleur des '+
+   'yeux';Exit;End;
+ If VtH.Fw<40 Then Begin VtMsg:=
+   'le visage est trop petit pour modifier les yeux (40 pixels de large '+
+   'minimum)';Exit;End;
+ If(not E.HasDst)Then Begin
+   VtMsg:='indiquez la couleur des yeux (par exemple : yeux verts)';Exit;End;
+ VtColorInit;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Yl:=VtAllocF(VtN);Al:=VtAllocF(VtN);Fm:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsFace,Fm);
+ SkinSum:=0;SkinCnt:=0;
+ For K:=0 to VtN-1 do Begin
+  Yl[K]:=VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2]);
+  If Fm[K]>=0.9 Then Begin SkinSum:=SkinSum+Yl[K];Inc(SkinCnt);End;
+ End;
+ If SkinCnt=0 Then Lskin:=150 Else Lskin:=SkinSum/SkinCnt;
+ R:=VtFMax(2.5,0.046*VtH.Fw);
+ Found:=0;
+ For VtSide:=-1 to 1 do Begin
+  If VtSide=0 Then Continue;
+  Ex:=VtH.Cx+VtSide*0.225*VtH.Fw;
+  Ey:=VtH.Fy0+0.42*VtH.Fh;
+  If VtFindIris(VtS,Yl,Ex,Ey,0.12*VtH.Fw,0.17*VtH.Fh,R,Cx,Cy,Sc)and(Sc>=9)Then Begin
+   Inc(Found);
+   { poids : anneau de l'iris sans la pupille, sans paupiere ni reflet }
+   For Y:=Trunc(Cy-R*1.2)to Trunc(Cy+R*1.2)do
+    For X:=Trunc(Cx-R*1.2)to Trunc(Cx+R*1.2)do Begin
+     If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+     Dd:=Sqrt(Sqr(X+0.5-Cx)+Sqr(Y+0.5-Cy));
+     W1:=VtSmoothStep(0.26*R,0.40*R,Dd)*(1-VtSmoothStep(0.92*R,1.08*R,Dd));
+     K:=Int64(Y)*VtS.W+X;
+     { pixels clairs : paupiere, sclerotique ou reflet }
+     W1:=W1*(1-VtSmoothStep(0.78*Lskin,1.0*Lskin,Yl[K]));
+     If W1>Al[K]Then Al[K]:=W1;
+    End;
+  End;
+ End;
+ If Found=0 Then Begin
+  VtMsg:='yeux non d'#130'tect'#130's (photo trop petite, trop sombre ou yeux '+
+    'ferm'#130's)';
+  FreeMem(Yl);FreeMem(Al);FreeMem(Fm);Exit;
+ End;
+ VtBuildRecolor(E,VtP,0,0,1,1,False);
+ VtP.Pattern:=VtpkNone;VtP.LGain:=1;VtP.CGain:=0.8;
+ Result:=VtRecolorRegion(VtS.Pix,VtS.W,VtS.VtH,Al,VtP);
+ If not Result Then
+   VtMsg:='les yeux sont trop petits pour '#136'tre recolor'#130's'
+ Else VtInfo('  yeux recolor'#130's ('+VtIStr(Found)+' sur 2 d'#130'tect'#130's)');
+ FreeMem(Yl);FreeMem(Al);FreeMem(Fm);
+End;
+
+{ ---- sourire : les coins de la bouche remontent ---- }
+
+Function VtMouthWarp(Var VtS:VtTScene;AmpF:Single;Close:Boolean;Const
+  What:AnsiString;Var VtMsg:AnsiString):Boolean;
+Var
+ VtH:VtTHeadInfo;
+ VtN,K:Int64;
+ Orig:PSingle;
+ X,Y,X0,X1,Y0,Y1,Cnt,Rx0,Rx1:LongInt;
+ L,A,B,SumA,SumA2,Mean,Sd,Thr,Mx,My,Sx,Sy,Cn,Hw,Hy,U,V,D,Sy2,Amp:Single;
+ Reds:Array of Single;
+ Ex0,Ex1:Single;
+ Lr,Lg,Lb,Lw,Cr,Wt:Single;
+ Fm:PSingle;
+ C:LongInt;
+ Px:Array[0..2]of Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtHeadInfo(VtS,VtH)Then Begin VtMsg:=
+   'aucun visage d'#130'tect'#130' : impossible de modifier l''expression';
+   Exit;End;
+ If VtH.Fw<40 Then Begin VtMsg:=
+   'le visage est trop petit pour modifier l''expression (40 pixels de '+
+   'large minimum)';Exit;End;
+ VtColorInit;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Fm:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsFace,Fm);
+ { levres : pixels les plus rouges (a* de Lab) dans la zone attendue de la
+   bouche }
+ X0:=Trunc(VtH.Cx-0.32*VtH.Fw);X1:=Trunc(VtH.Cx+0.32*VtH.Fw);
+ Y0:=Trunc(VtH.Fy0+0.60*VtH.Fh);Y1:=Trunc(VtH.Fy0+0.96*VtH.Fh);
+ SumA:=0;SumA2:=0;Cnt:=0;
+ For Y:=Y0 to Y1 do
+  For X:=X0 to X1 do Begin
+   If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   If Fm[K]<0.8 Then Continue;
+   VtRgbToLab(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2],L,A,B);
+   SumA:=SumA+A;SumA2:=SumA2+A*A;Inc(Cnt);
+  End;
+ If Cnt<30 Then Begin VtMsg:='bouche non d'#130'tect'#130'e';FreeMem(Fm);Exit;End;
+ Mean:=SumA/Cnt;Sd:=Sqrt(VtFMax(0,SumA2/Cnt-Mean*Mean));
+ Thr:=Mean+1.1*Sd;
+ Sx:=0;Sy:=0;Cn:=0;Rx0:=VtS.W;Rx1:=-1;Lr:=0;Lg:=0;Lb:=0;
+ For Y:=Y0 to Y1 do
+  For X:=X0 to X1 do Begin
+   If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   If Fm[K]<0.8 Then Continue;
+   VtRgbToLab(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2],L,A,B);
+   If A>=Thr Then Begin
+    Sx:=Sx+X;Sy:=Sy+Y;Cn:=Cn+1;
+    Lr:=Lr+VtS.Pix[K*3];Lg:=Lg+VtS.Pix[K*3+1];Lb:=Lb+VtS.Pix[K*3+2];
+    If X<Rx0 Then Rx0:=X;
+    If X>Rx1 Then Rx1:=X;
+   End;
+  End;
+ If(Cn>=12)and(Rx1-Rx0>=0.15*VtH.Fw)Then Begin
+  Mx:=Sx/Cn+0.5;My:=Sy/Cn+0.5;Hw:=(Rx1-Rx0+1)/2;
+  Mx:=(Rx0+Rx1+1)/2;
+ End
+  Else Begin
+   Mx:=VtH.Cx;My:=VtH.Fy0+0.78*VtH.Fh;Hw:=0.19*VtH.Fw;
+   VtDetail('bouche estim'#130'e (l'#138'vres non distingu'#130'es)');
+  End;
+ If Hw<0.12*VtH.Fw Then Hw:=0.12*VtH.Fw;
+ If Hw>0.28*VtH.Fw Then Hw:=0.28*VtH.Fw;
+ Hy:=0.11*VtH.Fh;
+ Amp:=AmpF*VtH.Fh;
+ If Close Then Begin
+  { bouche fermee : dents (clair, peu colore) repeintes de la couleur des
+    levres, trait de fermeture }
+  If Cn>=12 Then Begin Lr:=Lr/Cn;Lg:=Lg/Cn;Lb:=Lb/Cn;End
+  Else Begin Lr:=175;Lg:=95;Lb:=95;End;
+  Ex0:=0;Ex1:=0;
+  For Y:=Trunc(My-0.13*VtH.Fh)to Trunc(My+0.09*VtH.Fh)do
+   For X:=Trunc(Mx-1.25*Hw)to Trunc(Mx+1.25*Hw)do Begin
+    If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+    K:=Int64(Y)*VtS.W+X;
+    If Fm[K]<0.5 Then Continue;
+    VtRgbToLab(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2],L,A,B);
+    Cr:=Sqrt(A*A+B*B);
+    Wt:=VtSmoothStep(40,58,L)*(1-VtSmoothStep(7,15,Cr));
+    Wt:=VtFMax(Wt,1-VtSmoothStep(20,36,L));
+    Wt:=Wt*(1-VtSmoothStep(1.0,1.25,Abs(X+0.5-Mx)/Hw));
+    If Wt<=0.01 Then Continue;
+    Ex0:=Ex0+Wt*(Y+0.5);Ex1:=Ex1+Wt;
+    VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Wt)+Lr*0.96*Wt;
+    VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Wt)+Lg*0.96*Wt;
+    VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Wt)+Lb*0.96*Wt;
+   End;
+  If Ex1>=20 Then My:=Ex0/Ex1;
+  For Y:=Trunc(My-3)to Trunc(My+3)do
+   For X:=Trunc(Mx-1.1*Hw)to Trunc(Mx+1.1*Hw)do Begin
+    If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+    K:=Int64(Y)*VtS.W+X;
+    If Fm[K]<0.5 Then Continue;
+    Lw:=VtCoverD(Abs(Y+0.5-My)-VtFMax(0.6,0.012*VtH.Fh))*(1-VtSmoothStep(0.6,1.0,
+      Abs(X+0.5-Mx)/(1.1*Hw)));
+    If Lw<=0.01 Then Continue;
+    VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Lw)+Lr*0.45*Lw;
+    VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Lw)+Lg*0.40*Lw;
+    VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Lw)+Lb*0.42*Lw;
+   End;
+ End;
+ { deplacement : le contenu des coins monte, le centre reste en place }
+ Orig:=VtAllocF(VtN*3);
+ Move(VtS.Pix^,Orig^,VtN*12);
+ For Y:=Trunc(My-0.5*VtH.Fh)to Trunc(My+0.5*VtH.Fh)do
+  For X:=Trunc(Mx-2.2*Hw)to Trunc(Mx+2.2*Hw)do Begin
+   If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   If Fm[K]<0.5 Then Continue;
+   U:=(X+0.5-Mx)/Hw;V:=(Y+0.5-My)/Hy;
+   D:=Amp*U*U*Exp(-U*U/2.4)*Exp(-V*V/2.0);
+   If Abs(D)<0.05 Then Continue;
+   VtSampleBilinear(Orig,VtS.W,VtS.VtH,3,X+0.5,Y+0.5+D,@Px[0]);
+   For C:=0 to 2 do VtS.Pix[K*3+C]:=Px[C];
+  End;
+ FreeMem(Orig);FreeMem(Fm);
+ Result:=True;
+ VtInfo('  '+What);
+End;
+
+Function VtApplySmile(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Begin
+ Result:=VtMouthWarp(VtS,0.065,False,'sourire ajout'#130,VtMsg);
+End;
+
+{ ---- bras le long du corps ---- }
+
+Function VtArmsDown(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN:int64;K:LongInt;
+ Tx0,Ty0,Tx1,Ty1,VtSide,X,Y,Done,Skipped,Ix,Iy,C,Mv,Tl,Tr:LongInt;
+ Tp,Ppx,Ppy,Ext:Double;
+ Cnt:Int64;
+ Cx,Mx,My,Sxx,Sxy,Syy,Th,Ax,Ay,Pj,Pmin,Pmax,L,Hw,Uc,Pvx,Pvy,Delta,Cd,Sd,Rx,Ry,
+   Sx,Sy,TorsoHalf:Double;
+ Cap,Known:PSingle;
+ Orig:PSingle;
+ Mk,CapCat:PByte;
+ Wc:Single;
+ Px:Array[0..2]of Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ If not VtCatBBox(VtS,VtmsTop or VtmsDress,Tx0,Ty0,Tx1,Ty1)Then Begin
+   VtMsg:='aucun haut d'#130'tect'#130' : impossible de situer le corps';Exit;End;
+ Cx:=(Tx0+Tx1+1)/2;
+ TorsoHalf:=(Tx1-Tx0+1)/2;
+ { largeur du torse mesuree en bas (sous les manches) }
+ Y:=Ty0+((Ty1-Ty0)*80)div 100;
+ Tl:=VtS.W;Tr:=-1;
+ For X:=0 to VtS.W-1 do If(VtS.Cat[cTop][Int64(Y)*VtS.W+X]+VtS.Cat[cDress][Int64(Y)
+   *VtS.W+X])>=128 Then Begin
+  If X<Tl Then Tl:=X;
+  If X>Tr Then Tr:=X;
+ End;
+ If Tr>Tl Then Begin Cx:=(Tl+Tr+1)/2;TorsoHalf:=(Tr-Tl+1)/2;End;
+ Orig:=VtAllocF(VtN*3);
+ Mk:=PByte(VtAllocBytes(VtN));CapCat:=PByte(VtAllocBytes(VtN));
+ Cap:=VtAllocF(VtN);
+ Done:=0;Skipped:=0;
+ For VtSide:=0 to 1 do Begin
+  Mx:=0;My:=0;Cnt:=0;
+  For Y:=0 to VtS.VtH-1 do For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If(VtS.Cat[cArms][K]>=128)and((X<Cx)=(VtSide=0))Then Begin Mx:=Mx+X;My:=My+Y;
+     Inc(Cnt);End;
+  End;
+  If Cnt<VtN div 9000 Then Continue;
+  Mx:=Mx/Cnt;My:=My/Cnt;
+  Sxx:=0;Sxy:=0;Syy:=0;
+  For Y:=0 to VtS.VtH-1 do For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If(VtS.Cat[cArms][K]>=128)and((X<Cx)=(VtSide=0))Then Begin
+    Sxx:=Sxx+(X-Mx)*(X-Mx);Sxy:=Sxy+(X-Mx)*(Y-My);Syy:=Syy+(Y-My)*(Y-My);
+   End;
+  End;
+  Th:=0.5*VtATan2F(2*Sxy,Sxx-Syy);
+  Ax:=Cos(Th);Ay:=Sin(Th);
+  If Ay<0 Then Begin Ax:=-Ax;Ay:=-Ay;End;
+  If Abs(VtATan2F(Ax,Ay))*180/Pi<5 Then Begin
+    VtDetail('bras d'#130'j'#133' align'#130's');Continue;End;
+  If Abs(Mx-Cx)<0.45*TorsoHalf Then Begin Inc(Skipped);Continue;End;
+  Pmin:=1.0e9;Pmax:=-1.0e9;Hw:=0;
+  For Y:=0 to VtS.VtH-1 do For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If(VtS.Cat[cArms][K]>=128)and((X<Cx)=(VtSide=0))Then Begin
+    Pj:=(X-Mx)*Ax+(Y-My)*Ay;
+    Uc:=Abs(-(X-Mx)*Ay+(Y-My)*Ax);
+    If Pj<Pmin Then Pmin:=Pj;
+    If Pj>Pmax Then Pmax:=Pj;
+    If Uc>Hw Then Hw:=Uc;
+   End;
+  End;
+  L:=Pmax-Pmin;
+  If L<10 Then Continue;
+  { epaule : point de l'axe, en amont, ou il entre dans la colonne du torse }
+  Ext:=0.30*L;
+  Tp:=0;
+  While Tp<=2.5*L do Begin
+   Ppx:=Mx+Ax*(Pmin-Tp);Ppy:=My+Ay*(Pmin-Tp);
+   If Abs(Ppx-Cx)<=TorsoHalf*1.02 Then Begin Ext:=Tp;Break;End;
+   Tp:=Tp+1;
+  End;
+  Pvx:=Mx+Ax*(Pmin-Ext);Pvy:=My+Ay*(Pmin-Ext);
+  { capsule du bras : peau visible et manche attenante }
+  FillChar(Mk^,VtN,0);FillChar(Cap^,VtN*4,0);FillChar(CapCat^,VtN,0);
+  For Y:=0 to VtS.VtH-1 do For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   Pj:=(X+0.5-Mx)*Ax+(Y+0.5-My)*Ay;
+   Uc:=Abs(-(X+0.5-Mx)*Ay+(Y+0.5-My)*Ax);
+   If(Pj<Pmin-Ext-2)or(Pj>Pmax+2)or(Uc>Hw*2.4+4)Then Continue;
+   If(VtS.Cat[cArms][K]>=128)and(Uc<=Hw*1.3+2)Then Begin Mk[K]:=255;
+     Cap[K]:=1;CapCat[K]:=cArms;End
+   Else If(VtS.Cat[cTop][K]>=128)and(Pj<Pmin+0.10*L)and(Abs(X+0.5-Cx)
+     >TorsoHalf*0.98)Then Begin Mk[K]:=255;Cap[K]:=1;CapCat[K]:=cTop;End;
+  End;
+  VtBoxBlur(Cap,Cap,VtS.W,VtS.VtH,1);
+  Move(VtS.Pix^,Orig^,VtN*12);
+  { zone liberee : remplie par propagation depuis ce qui l'entoure }
+  VtMorphMask(Mk,VtS.W,VtS.VtH,2,False);
+  Known:=VtAllocF(VtN);
+  For K:=0 to VtN-1 do If Mk[K]=0 Then Known[K]:=1;
+  VtPushPullFill(VtS.Pix,Known,VtS.W,VtS.VtH);
+  FreeMem(Known);
+  For K:=0 to VtN-1 do If Mk[K]<>0 Then Begin
+   For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=0;
+   VtS.Cat[VtcBg][K]:=255;
+  End;
+  { rotation autour de l'epaule : le bras pend a la verticale }
+  Delta:=Pi/2-VtATan2F(Ay,Ax);
+  Cd:=Cos(-Delta);Sd:=Sin(-Delta);
+  For Y:=0 to VtS.VtH-1 do For X:=0 to VtS.W-1 do Begin
+   Rx:=X+0.5-Pvx;Ry:=Y+0.5-Pvy;
+   Sx:=Pvx+Rx*Cd-Ry*Sd;Sy:=Pvy+Rx*Sd+Ry*Cd;
+   If(Sx<0)or(Sy<0)or(Sx>=VtS.W)or(Sy>=VtS.VtH)Then Continue;
+   Ix:=Trunc(Sx);Iy:=Trunc(Sy);
+   Wc:=Cap[Int64(Iy)*VtS.W+Ix];
+   If Wc<=0.02 Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   VtSampleBilinear(Orig,VtS.W,VtS.VtH,3,Sx,Sy,@Px[0]);
+   For C:=0 to 2 do VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Wc)+Px[C]*Wc;
+   For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=Trunc(VtS.Cat[C][K]*(1-Wc)+0.5);
+   C:=CapCat[Int64(Iy)*VtS.W+Ix];
+   If C=0 Then C:=cArms;
+   Mv:=VtS.Cat[C][K]+Trunc(Wc*255+0.5);
+   If Mv>255 Then Mv:=255;
+   VtS.Cat[C][K]:=Mv;
+  End;
+  Inc(Done);
+ End;
+ FreeMem(Orig);FreeMem(Mk);FreeMem(CapCat);FreeMem(Cap);
+ If Skipped>0 Then
+   VtWarn('bras crois'#130's devant le corps : non modifi'#130's');
+ If Done=0 Then Begin
+  VtMsg:='aucun bras '#133' redresser (d'#130'j'#133' le long du corps, non '+
+    'visibles ou crois'#130's)';
+  Exit;
+ End;
+ Result:=True;
+ VtInfo('  bras redress'#130's ('+VtIStr(Done)+')');
+End;
+
+{ ------------------------------------------------------------------ }
+{ Matieres : metal (or, argent, bronze...), cotte de mailles, robot,    }
+{ statue. L'ombrage de la photo est conserve pour garder le volume.    }
+{ ------------------------------------------------------------------ }
+
+{ rampe de couleur d'un metal : V de 0 (ombre) a 1 (reflet eclatant) }
+Procedure VtMetalRamp(Base:LongWord;V:Single;Var R,VtG,B:Single);
+Var
+ Br,Bg,Bb,VtT:Single;
+ Function Lr(A,Bv,Tt:Single):Single;
+ Begin
+  Lr:=A+(Bv-A)*Tt;
+ End;
+Begin
+ Br:=(Base shr 16)and $FF;Bg:=(Base shr 8)and $FF;Bb:=Base and $FF;
+ If V<0 Then V:=0 Else If V>1 Then V:=1;
+ If V<0.30 Then Begin
+  VtT:=V/0.30;
+  R:=Lr(Br*0.12,Br*0.42,VtT);VtG:=Lr(Bg*0.12,Bg*0.42,VtT);B:=Lr(Bb*0.14,Bb*0.45,VtT);
+ End
+  Else If V<0.58 Then Begin
+   VtT:=(V-0.30)/0.28;
+   R:=Lr(Br*0.42,Br*0.95,VtT);VtG:=Lr(Bg*0.42,Bg*0.95,VtT);B:=Lr(Bb*0.45,Bb*0.92,VtT);
+  End
+   Else If V<0.84 Then Begin
+    VtT:=(V-0.58)/0.26;
+    R:=Lr(Br*0.95,Br+(255-Br)*0.62,VtT);VtG:=Lr(Bg*0.95,Bg+(255-Bg)*0.62,VtT);
+      B:=Lr(Bb*0.92,Bb+(255-Bb)*0.62,VtT);
+   End
+    Else Begin
+     VtT:=(V-0.84)/0.16;
+     R:=Lr(Br+(255-Br)*0.62,255,VtT);VtG:=Lr(Bg+(255-Bg)*0.62,255,VtT);B:=Lr(Bb+
+       (255-Bb)*0.62,252,VtT);
+    End;
+End;
+
+{ valeur de reflexion d'un metal a partir de l'ombrage de la photo }
+Function VtMetalValue(L,Lsm,Lbig:Single):Single;
+Var
+ V0,Bnd,V:Single;
+Begin
+ V0:=0.45*L+0.32*Lsm+0.23*Lbig;
+ Bnd:=0.5+0.5*Cos(2*Pi*(V0*2.1+0.05));
+ V:=0.30*V0+0.70*Bnd;
+ If V0>0.82 Then V:=V+0.30*(V0-0.82)/0.18;
+ If V0<0.12 Then V:=V*(0.5+4*V0);
+ Result:=VtClamp(V,0,1);
+End;
+
+{ bruit cellulaire : distance aux deux points les plus proches, indice du plus
+  proche }
+Procedure VtWorley(X,Y,Cs:Single;Var D1,D2:Single;Var Id:LongInt;Var Fx,
+  Fy:Single);
+Var
+ Ix,Iy,Dx,Dy,Cx,Cy:LongInt;
+ Px,Py,D:Single;
+Begin
+ Ix:=VtFloorI(X/Cs);Iy:=VtFloorI(Y/Cs);
+ D1:=1.0e9;D2:=1.0e9;Id:=0;Fx:=0;Fy:=0;
+ For Dy:=-1 to 1 do
+  For Dx:=-1 to 1 do Begin
+   Cx:=Ix+Dx;Cy:=Iy+Dy;
+   Px:=(Cx+0.15+0.7*VtHash2(Cx,Cy))*Cs;
+   Py:=(Cy+0.15+0.7*VtHash2(Cx+57,Cy+91))*Cs;
+   D:=Sqrt(Sqr(X-Px)+Sqr(Y-Py));
+   If D<D1 Then Begin
+    D2:=D1;D1:=D;Id:=(Cx and $FFFF)*65536+(Cy and $FFFF);Fx:=Px;Fy:=Py;
+   End
+    Else If D<D2 Then D2:=D;
+  End;
+End;
+
+{ anneaux entrelaces de la cotte de mailles : hauteur 0..1 et eclairage }
+Procedure VtChainRing(X,Y,VtP:Single;Var VtH,Light:Single);
+Var
+ Dx,Dy,Ro,Wd,Off,Cx,Cy,D,VtT,Hh,Ln:Single;
+ J0,VtJ,VtI,I0:LongInt;
+Begin
+ Dx:=0.62*VtP;Dy:=0.45*VtP;
+ Ro:=0.50*VtP;Wd:=0.095*VtP;
+ VtH:=0;Light:=0.5;
+ J0:=VtFloorI(Y/Dy);
+ For VtJ:=J0-2 to J0+2 do Begin
+  If Odd(VtJ)Then Off:=0.5*Dx Else Off:=0;
+  I0:=VtFloorI((X-Off)/Dx+0.5);
+  For VtI:=I0-1 to I0+1 do Begin
+   Cx:=Off+VtI*Dx;Cy:=(VtJ+0.5)*Dy;
+   D:=Sqrt(Sqr(X-Cx)+Sqr(Y-Cy));
+   VtT:=(D-Ro)/Wd;
+   If Abs(VtT)<1 Then Begin
+    Hh:=Sqrt(1-VtT*VtT);
+    If Hh>VtH Then Begin
+     VtH:=Hh;
+     If D>0.001 Then Ln:=((X-Cx)*(-0.55)+(Y-Cy)*(-0.83))/D Else Ln:=0;
+     Light:=0.5+0.5*Ln*VtT;
+    End;
+   End;
+  End;
+ End;
+End;
+
+{ lueur d'un disque (yeux de robot) }
+Procedure VtGlowDisc(Var VtS:VtTScene;Cx,Cy,R:Single;Cr,Cg,Cb:Single);
+Var
+ X,Y:LongInt;
+ D,Core,Halo,A:Single;
+ K:Int64;
+Begin
+ For Y:=Trunc(Cy-R*3.5)to Trunc(Cy+R*3.5)do
+  For X:=Trunc(Cx-R*3.5)to Trunc(Cx+R*3.5)do Begin
+   If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+   D:=Sqrt(Sqr(X+0.5-Cx)+Sqr(Y+0.5-Cy));
+   Core:=1-VtSmoothStep(R*0.8,R*1.15,D);
+   Halo:=Exp(-Sqr(D/(R*1.9)))*0.7;
+   K:=Int64(Y)*VtS.W+X;
+   A:=VtFMax(Core,Halo*0.6);
+   VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-A)+(Cr+(255-Cr)*Core*0.8)*A+Halo*0.15*Cr;
+   VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-A)+(Cg+(255-Cg)*Core*0.8)*A+Halo*0.15*Cg;
+   VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-A)+(Cb+(255-Cb)*Core*0.8)*A+Halo*0.15*Cb;
+  End;
+End;
+
+{ applique une matiere aux pixels d'opacite Al }
+Function VtApplyMaterial(Var VtS:VtTScene;Const E:VtTEdit;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN:int64;K:LongInt;
+ X,Y,Md,VtSide,Id,C:LongInt;
+ Mt:LongInt;
+ Mask:LongWord;
+ L01,Lsm,Lbig,Al,Yl:PSingle;
+ Base:LongWord;
+ R,VtG,B,V,Lm,Pp,Cs,D1,D2,Fx,Fy,Edge,Sw,Dk,Glow,VtH,Lg,Q,Sd,Vein:Single;
+ Cnt:Int64;
+ Hd:VtTHeadInfo;
+ Ex,Ey,Rr,Cx,Cy,Sc,Lskin:Single;
+ SkinSum:Double;
+ SkinCnt:Int64;
+ Fm:PSingle;
+ Mn:Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ VtColorInit;
+ Mt:=E.Material;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Md:=VtIMin(VtS.W,VtS.VtH);
+ Al:=VtAllocF(VtN);
+ Case Mt of
+  mtStatue:For K:=0 to VtN-1 do Al[K]:=1-VtS.Cat[VtcBg][K]/255.0;
+  mtRobot:VtCatMask(VtS,VtmsSkin or VtmsHair,Al);
+  mtChain:Begin
+    Mask:=E.Target;
+    If(Mask=0)or((Mask and VtmsClothes)=0)Then Mask:=VtmsClothes;
+    VtCatMask(VtS,Mask,Al);
+   End;
+  Else Begin
+    Mask:=E.Target;
+    If Mask=0 Then Mask:=VtmsSkin;
+    VtCatMask(VtS,Mask and(not VtmsEyes),Al);
+   End;
+ End;
+ Cnt:=0;
+ For K:=0 to VtN-1 do If Al[K]>=0.5 Then Inc(Cnt);
+ If Cnt<VtN div 3000 Then Begin
+  VtMsg:='aucune zone '#133' transformer d'#130'tect'#130'e pour cette mati'#138+
+    're';
+  FreeMem(Al);Exit;
+ End;
+ VtSharpenAlpha(Al,VtN);
+ { couleur du metal }
+ If E.HasDst Then Base:=E.DstRGB
+ Else Case Mt of
+  mtChain:Base:=VtRgbOf(224,182,64);
+  mtRobot:Base:=VtRgbOf(168,176,190);
+  mtStatue:Base:=VtRgbOf(238,235,228);
+  Else Base:=VtRgbOf(204,209,220);
+ End;
+ L01:=VtAllocF(VtN);Lsm:=VtAllocF(VtN);Lbig:=VtAllocF(VtN);Yl:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do Begin
+  L01[K]:=VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2])/255.0;
+  Yl[K]:=L01[K]*255;
+ End;
+ Move(L01^,Lsm^,VtN*4);Move(L01^,Lbig^,VtN*4);
+ VtBlurPlane(Lsm,VtS.W,VtS.VtH,VtFMax(1.5,Md/300.0));
+ VtBlurPlane(Lbig,VtS.W,VtS.VtH,VtFMax(4,Md/80.0));
+ { moyenne de luminosite de la region : normalise l'ombrage }
+ Lm:=0;
+ For K:=0 to VtN-1 do If Al[K]>=0.5 Then Lm:=Lm+Lsm[K];
+ Lm:=Lm/Cnt;
+ If Lm<0.05 Then Lm:=0.05;
+ Cs:=VtFMax(14,Md/15.0);
+ Pp:=VtClamp(Md/30.0,12,26);
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If Al[K]<=0.004 Then Continue;
+   { l'ombrage relatif : le visage sombre et la peau claire donnent le meme
+     volume }
+   Q:=VtClamp(0.5+(L01[K]-Lm)*2.1,0,1);
+   Mn:=VtClamp(0.5+(Lsm[K]-Lm)*2.1,0,1);
+   Lg:=VtClamp(0.5+(Lbig[K]-Lm)*2.1,0,1);
+   Case Mt of
+    mtChain:Begin
+      VtChainRing(X+0.5,Y+0.5,Pp,VtH,Lg);
+      V:=0.04+0.96*VtClamp(VtH*(0.10+1.05*Lg),0,1);
+      V:=V*(0.40+1.3*Mn)+0.10*(Q-Mn);
+      VtMetalRamp(Base,VtClamp(V,0,1),R,VtG,B);
+     End;
+    mtRobot:Begin
+      V:=VtMetalValue(Q,Mn,Lg);
+      VtWorley(X+0.5,Y+0.5,Cs,D1,D2,Id,Fx,Fy);
+      Edge:=D2-D1;Sw:=0.05*Cs;
+      Dk:=1-VtSmoothStep(0,Sw,Edge);
+      V:=V*(1-0.82*Dk);
+      If(Edge>Sw)and(Edge<2.2*Sw)Then V:=V*1.10+0.04;
+      VtMetalRamp(Base,VtClamp(V,0,1),R,VtG,B);
+      { rivets }
+      If D1<0.075*Cs Then Begin
+       Glow:=1-VtSmoothStep(0.04*Cs,0.075*Cs,D1);
+       R:=R*(1-Glow)+255*Glow*0.9;VtG:=VtG*(1-Glow)+255*Glow*0.9;B:=B*(1-Glow)+
+         255*Glow*0.95;
+      End;
+      { quelques joints lumineux }
+      If(VtHash2(Id and $FFFF,Id shr 16)<0.14)Then Begin
+       Glow:=Dk*0.9;
+       R:=R*(1-Glow)+30*Glow;VtG:=VtG*(1-Glow)+(215)*Glow;B:=B*(1-Glow)+255*Glow;
+      End;
+     End;
+    mtStatue:Begin
+      If E.HasDst Then Begin
+       V:=VtMetalValue(Q,Mn,Lg);
+       VtMetalRamp(Base,V,R,VtG,B);
+      End
+       Else Begin
+        V:=VtClamp(0.56+1.7*(L01[K]-Lbig[K])+0.9*(Lbig[K]-Lm),0,1);
+        R:=108+(250-108)*V;VtG:=104+(248-104)*V;B:=100+(242-100)*V;
+        { veines du marbre }
+        Sd:=VtVNoise(X/(Md/9.0),Y/(Md/9.0))*2+VtVNoise(X/(Md/24.0)+5,Y/(Md/24.0)+3);
+        Vein:=1-VtSmoothStep(0.025,0.10,Abs(Sin(Sd*5.5)));
+        Vein:=Vein*(0.10+0.32*VtVNoise(X/(Md/40.0),Y/(Md/40.0)));
+        R:=R*(1-Vein)+96*Vein;VtG:=VtG*(1-Vein)+102*Vein;B:=B*(1-Vein)+114*Vein;
+        R:=R+VtRngGauss*1.2;VtG:=VtG+VtRngGauss*1.2;B:=B+VtRngGauss*1.2;
+       End;
+     End;
+    Else Begin
+      V:=VtMetalValue(Q,Mn,Lg);
+      VtMetalRamp(Base,V,R,VtG,B);
+     End;
+   End;
+   VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Al[K])+R*Al[K];
+   VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Al[K])+VtG*Al[K];
+   VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Al[K])+B*Al[K];
+  End;
+ { yeux : lumiere bleue pour le robot, orbites vides pour la statue }
+ If(Mt=mtRobot)or(Mt=mtStatue)Then Begin
+  If VtHeadInfo(VtS,Hd)and(Hd.Fw>=40)Then Begin
+   Rr:=VtFMax(2.5,0.046*Hd.Fw);
+   For VtSide:=-1 to 1 do Begin
+    If VtSide=0 Then Continue;
+    Ex:=Hd.Cx+VtSide*0.225*Hd.Fw;Ey:=Hd.Fy0+0.42*Hd.Fh;
+    If VtFindIris(VtS,Yl,Ex,Ey,0.12*Hd.Fw,0.17*Hd.Fh,Rr,Cx,Cy,Sc)and(Sc>=9)
+      Then Begin
+     If Mt=mtRobot Then VtGlowDisc(VtS,Cx,Cy,Rr*0.85,40,215,255)
+     Else VtGlowDisc(VtS,Cx,Cy,Rr*0.85,225,222,215);
+    End;
+   End;
+  End;
+ End;
+ FreeMem(L01);FreeMem(Lsm);FreeMem(Lbig);FreeMem(Yl);FreeMem(Al);
+ Result:=True;
+ Case Mt of
+  mtChain:VtInfo('  cotte de mailles appliqu'#130'e');
+  mtRobot:VtInfo('  corps de robot appliqu'#130);
+  mtStatue:VtInfo('  style statue appliqu'#130);
+  Else VtInfo('  rendu m'#130'tallique appliqu'#130);
+ End;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Scenes : decor genere autour de la personne (carrousel)            }
+{ ------------------------------------------------------------------ }
+
+{ agrandit l'image vers le bas (lignes d'arriere-plan) }
+Procedure VtGrowCanvas(Var VtS:VtTScene;Extra:LongInt);
+Var
+ H2,Y,X,C:LongInt;
+ P2:PSingle;
+ Cat2:Array[0..VtNumCat-1]of PByte;
+ N1,N2:Int64;
+Begin
+ H2:=VtS.VtH+Extra;
+ N1:=Int64(VtS.W)*VtS.VtH;N2:=Int64(VtS.W)*H2;
+ P2:=VtAllocF(N2*3);
+ Move(VtS.Pix^,P2^,N1*12);
+ For Y:=VtS.VtH to H2-1 do Move((VtS.Pix+Int64(VtS.VtH-1)*VtS.W*3)^,(P2+Int64(Y)*VtS.W*3)^,
+   VtS.W*12);
+ For C:=0 to VtNumCat-1 do Begin
+  Cat2[C]:=PByte(VtAllocBytes(N2));
+  Move(VtS.Cat[C]^,Cat2[C]^,N1);
+  FreeMem(VtS.Cat[C]);
+  VtS.Cat[C]:=Cat2[C];
+ End;
+ FillChar((VtS.Cat[VtcBg]+N1)^,N2-N1,255);
+ FreeMem(VtS.Pix);
+ VtS.Pix:=P2;
+ VtS.VtH:=H2;
+End;
+
+Procedure VtPutBg(Bg:PSingle;W,VtH,X,Y:LongInt;Cov,R,VtG,B:Single);
+Var
+ K:Int64;
+Begin
+ If(X<0)or(Y<0)or(X>=W)or(Y>=VtH)Then Exit;
+ If Cov<=0.003 Then Exit;
+ If Cov>1 Then Cov:=1;
+ K:=Int64(Y)*W+X;
+ Bg[K*3]:=Bg[K*3]*(1-Cov)+R*Cov;
+ Bg[K*3+1]:=Bg[K*3+1]*(1-Cov)+VtG*Cov;
+ Bg[K*3+2]:=Bg[K*3+2]*(1-Cov)+B*Cov;
+End;
+
+{ poteau de laiton vertical }
+Procedure VtBrassPole(Bg:PSingle;W,VtH:LongInt;Px,Y0,Y1,Pw:Single);
+Var
+ X,Y:LongInt;
+ U,V,Cov:Single;
+ R,VtG,B:Single;
+Begin
+ For Y:=Trunc(Y0)to Trunc(Y1)do
+  For X:=Trunc(Px-Pw-2)to Trunc(Px+Pw+2)do Begin
+   U:=(X+0.5-Px)/Pw;
+   Cov:=VtCoverD(Abs(U)*Pw-Pw);
+   If Cov<=0 Then Continue;
+   V:=VtMetalV(VtClamp(0.5+U*0.5,0,1));
+   VtMetalRamp(VtRgbOf(224,176,70),V*0.95,R,VtG,B);
+   VtPutBg(Bg,W,VtH,X,Y,Cov,R,VtG,B);
+  End;
+End;
+
+Procedure VtBulb(Bg:PSingle;W,VtH:LongInt;Cx,Cy,R:Single);
+Var
+ X,Y:LongInt;
+ D,Core,Halo:Single;
+Begin
+ For Y:=Trunc(Cy-R*4)to Trunc(Cy+R*4)do
+  For X:=Trunc(Cx-R*4)to Trunc(Cx+R*4)do Begin
+   D:=Sqrt(Sqr(X+0.5-Cx)+Sqr(Y+0.5-Cy));
+   Core:=1-VtSmoothStep(R*0.7,R*1.1,D);
+   Halo:=Exp(-Sqr(D/(R*2.2)))*0.55;
+   If Core>0.01 Then VtPutBg(Bg,W,VtH,X,Y,Core,255,246,200);
+   If Halo>0.01 Then VtPutBg(Bg,W,VtH,X,Y,Halo*0.6,255,214,130);
+  End;
+End;
+
+Function VtApplyCarousel(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN:int64;K:LongInt;
+ X,Y,VtI,X0,Y0,X1,Y1,Cnt,Rows,VtSide:LongInt;
+ Bg,Al,Sh:PSingle;
+ YFeet,Xc,BodyW,BodyH,Rx,Ry,Thick,Sw,Hc,YPl,E,U,Cov,V,R,VtG,B,Sx,Sy,Dd,VtT,Px,
+   Rr:Single;
+ YLast:Array[0..0]of LongInt;
+ Fx0,Fx1,Fx2:LongInt;
+ Sumx:Double;
+ Nx:Int64;
+Begin
+ Result:=False;
+ VtMsg:='';
+ VtColorInit;
+ { silhouette de la personne }
+ X0:=VtS.W;Y0:=VtS.VtH;X1:=-1;Y1:=-1;Cnt:=0;
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do If VtS.Cat[VtcBg][Int64(Y)*VtS.W+X]<128 Then Begin
+   If X<X0 Then X0:=X;If X>X1 Then X1:=X;
+   If Y<Y0 Then Y0:=Y;If Y>Y1 Then Y1:=Y;
+   Inc(Cnt);
+  End;
+ If Cnt<Int64(VtS.W)*VtS.VtH div 100 Then Begin VtMsg:=
+   'aucune personne d'#130'tect'#130'e : impossible de la placer sur un '+
+   'carrousel';Exit;End;
+ YFeet:=Y1+1;BodyH:=Y1-Y0+1;BodyW:=X1-X0+1;
+ { centre horizontal des pieds : bas de la silhouette }
+ Sumx:=0;Nx:=0;
+ For Y:=VtIMax(Y0,Y1-VtIMax(3,Y1-Y0 div 12))to Y1 do
+  For X:=0 to VtS.W-1 do If VtS.Cat[VtcBg][Int64(Y)*VtS.W+X]<128 Then Begin Sumx:=Sumx+
+    X;Inc(Nx);End;
+ If Nx>0 Then Xc:=Sumx/Nx+0.5 Else Xc:=(X0+X1+1)/2;
+ { place pour la plateforme sous les pieds }
+ Rows:=Trunc(0.11*VtFMax(0.55*VtS.W,1.55*BodyW)+0.055*VtS.VtH)-(VtS.VtH-Y1-1);
+ If Rows>0 Then VtGrowCanvas(VtS,Rows);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Bg:=VtAllocF(VtN*3);
+ { ciel nocturne de fete }
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   VtT:=Y/VtS.VtH;
+   Dd:=Sqrt(Sqr(X/VtS.W-0.5)*1.2+Sqr(VtT-0.45)*0.9);
+   R:=(28+110*VtSmoothStep(0.0,0.9,VtT)+20*Exp(-Dd*4))*(1-0.35*Dd);
+   VtG:=(16+46*VtSmoothStep(0.0,0.9,VtT)+10*Exp(-Dd*4))*(1-0.35*Dd);
+   B:=(56+44*VtSmoothStep(0.0,0.7,VtT)-10*VtT)*(1-0.30*Dd);
+   Bg[K*3]:=R;Bg[K*3+1]:=VtG;Bg[K*3+2]:=B;
+  End;
+ { lumieres floues du fond }
+ For VtI:=1 to 46 do Begin
+  Sx:=VtRngF*VtS.W;Sy:=VtRngF*VtS.VtH*0.72+0.10*VtS.VtH;
+  Rr:=(0.012+0.03*VtRngF)*VtS.VtH;
+  VtT:=VtRngF;
+  If VtT<0.5 Then Begin R:=255;VtG:=190;B:=110;End
+  Else If VtT<0.8 Then Begin R:=255;VtG:=120;B:=150;End
+  Else Begin R:=140;VtG:=190;B:=255;End;
+  For Y:=Trunc(Sy-Rr)to Trunc(Sy+Rr)do
+   For X:=Trunc(Sx-Rr)to Trunc(Sx+Rr)do Begin
+    Dd:=Sqrt(Sqr(X+0.5-Sx)+Sqr(Y+0.5-Sy))/Rr;
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,(0.10+0.16*VtRngF*0)*(1-VtSmoothStep(0.78,1.0,Dd))+
+      0.16*Exp(-Dd*Dd*2.5)*0.3,R,VtG,B);
+   End;
+ End;
+ { plateforme tournante : bois, rebord de laiton, flanc rouge }
+ Rx:=VtFMax(0.55*VtS.W,1.55*BodyW);
+ If Rx>0.92*VtS.W Then Rx:=0.92*VtS.W;
+ Ry:=0.11*Rx;
+ YPl:=YFeet-0.012*VtS.VtH;
+ Thick:=0.04*VtS.VtH;
+ Hc:=0.17*VtS.VtH;
+ { poteaux derriere la personne }
+ For VtI:=0 to 6 do Begin
+  Px:=VtS.W*(VtI+0.5)/7;
+  VtBrassPole(Bg,VtS.W,VtS.VtH,Px,Hc,YPl+Ry*Sqrt(VtFMax(0,1-Sqr((Px-Xc)/Rx))),0.0075*VtS.W);
+ End;
+ { dessus de la plateforme }
+ For Y:=Trunc(YPl-Ry-2)to Trunc(YPl+Ry+Thick+2)do
+  For X:=Trunc(Xc-Rx-2)to Trunc(Xc+Rx+2)do Begin
+   U:=(X+0.5-Xc)/Rx;
+   Dd:=(Y+0.5-YPl)/Ry;
+   E:=Sqrt(U*U+Dd*Dd);
+   { dessus }
+   Cov:=VtCoverD((E-1.0)*Ry*0.9);
+   If Cov>0 Then Begin
+    V:=0.55+0.30*Cos(E*Pi*5.0)*0.5+0.12*(0.5-Dd*0.5);
+    If Frac(E*7.0)<0.5 Then V:=V*0.86;
+    V:=V*(0.8+0.25*(1-E));
+    R:=176*V+VtRngGauss*1.2;VtG:=118*V+VtRngGauss*1.2;B:=68*V+VtRngGauss*1.2;
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,R,VtG,B);
+   End;
+   { rebord de laiton }
+   Cov:=VtCoverD(Abs(E-1.035)*Ry*0.9-0.018*Ry*3);
+   If Cov>0 Then Begin
+    VtMetalRamp(VtRgbOf(226,178,72),VtMetalV(VtClamp(0.5+(Dd-U*0)*0.25,0,1))*0.95,R,VtG,
+      B);
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,R,VtG,B);
+   End;
+   { flanc avant }
+   If(Dd>0)and(Abs(U)<1.0)Then Begin
+    Sy:=Ry*Sqrt(VtFMax(0,1-U*U));
+    Cov:=VtCoverD(VtFMax(YPl+Sy-(Y+0.5),(Y+0.5)-(YPl+Sy+Thick)));
+    If Cov>0 Then Begin
+     V:=0.55+0.45*Sqrt(VtFMax(0,1-U*U));
+     R:=128*V;VtG:=26*V;B:=38*V;
+     If Abs((Y+0.5)-(YPl+Sy+Thick*0.5))<0.04*Thick Then Begin R:=226*V;
+       VtG:=178*V;B:=72*V;End;
+     VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,R,VtG,B);
+    End;
+   End;
+  End;
+ { ampoules sur le rebord avant }
+ For VtI:=0 to 24 do Begin
+  U:=-0.96+VtI*0.08;
+  VtBulb(Bg,VtS.W,VtS.VtH,Xc+U*Rx,YPl+Ry*Sqrt(VtFMax(0,1-U*U))+0.003*VtS.VtH,0.0045*VtS.VtH);
+ End;
+ { ombre portee aux pieds }
+ For Y:=Trunc(YFeet-0.05*BodyW)to Trunc(YFeet+0.07*BodyW)do
+  For X:=Trunc(Xc-0.7*BodyW)to Trunc(Xc+0.7*BodyW)do Begin
+   Dd:=Sqrt(Sqr((X+0.5-Xc)/(0.6*BodyW))+Sqr((Y+0.5-YFeet-0.01*BodyW)
+     /(0.045*BodyW)));
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,0.55*Exp(-Dd*Dd*1.6),10,6,14);
+  End;
+ { dessous de la plateforme : sol sombre }
+ For Y:=Trunc(YPl+Ry+Thick)to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,1,16,10,22);
+ { toit raye a festons }
+ Sw:=VtS.W/12.0;
+ For Y:=0 to Trunc(Hc+Sw)do
+  For X:=0 to VtS.W-1 do Begin
+   Px:=Frac(X/Sw);
+   Dd:=Hc+Sqrt(VtFMax(0,Sqr(Sw/2)-Sqr((Px-0.5)*Sw)))*0.9;
+   Cov:=VtCoverD(Y+0.5-Dd);
+   If Cov<=0 Then Continue;
+   If Odd(Trunc(X/Sw))Then Begin R:=196;VtG:=32;B:=44;End Else Begin R:=242;
+     VtG:=232;B:=212;End;
+   V:=0.55+0.30*Cos((Px-0.5)*Pi)+0.15*(1-Y/Hc*0.5);
+   V:=V*(0.75+0.25*(1-Y/(Hc+Sw)));
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,R*V,VtG*V,B*V);
+   { galon dore en bas des festons }
+   If Abs(Y+0.5-Dd)<0.006*VtS.VtH Then VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,0.9,230,182,76);
+  End;
+ For VtI:=0 to 11 do VtBulb(Bg,VtS.W,VtS.VtH,(VtI+0.5)*Sw,Hc+Sw*0.45*0.9+0.004*VtS.VtH,
+   0.0055*VtS.VtH);
+ { poteaux de premier plan, aux bords }
+ VtBrassPole(Bg,VtS.W,VtS.VtH,0.035*VtS.W,Hc,YPl+Ry*0.3,0.012*VtS.W);
+ VtBrassPole(Bg,VtS.W,VtS.VtH,0.965*VtS.W,Hc,YPl+Ry*0.3,0.012*VtS.W);
+ { personne par-dessus le decor }
+ Al:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do Begin
+  Al[K]:=1-VtS.Cat[VtcBg][K]/255.0;
+  Al[K]:=VtSmoothStep(0.30,0.85,Al[K]);
+ End;
+ For K:=0 to VtN-1 do Begin
+  { lumiere chaude du manege sur la personne }
+  For VtI:=0 to 2 do Begin
+   V:=VtS.Pix[K*3+VtI];
+   If VtI=0 Then V:=V*1.04 Else If VtI=2 Then V:=V*0.94;
+   Bg[K*3+VtI]:=Bg[K*3+VtI]*(1-Al[K])+V*Al[K];
+  End;
+ End;
+ Move(Bg^,VtS.Pix^,VtN*12);
+ FreeMem(Bg);FreeMem(Al);
+ Result:=True;
+ VtInfo('  sc'#138'ne de carrousel g'#130'n'#130'r'#130'e');
+End;
+{ ------------------------------------------------------------------ }
+{ Poses et expressions : humeur, regard, yeux fermes, tete droite,   }
+{ aureole (le tout dessine ou deforme par le programme)              }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTIris=Record
+  Ok:Boolean;
+  Cx,Cy,R:Single;
+ End;
+
+{ agrandit l'image sur les quatre cotes : le fond est prolonge par propagation }
+Procedure VtGrowEdges(Var VtS:VtTScene;L,VtT,R,B:LongInt);
+Var
+ W2,H2,X,Y,C,Sx,Sy:LongInt;
+ N2,K,K1:Int64;
+ P2,Kn,VtTmp:PSingle;
+ Cat2:Array[0..VtNumCat-1]of PByte;
+ Inside:Boolean;
+Begin
+ If L<0 Then L:=0;If VtT<0 Then VtT:=0;If R<0 Then R:=0;If B<0 Then B:=0;
+ If(L=0)and(VtT=0)and(R=0)and(B=0)Then Exit;
+ W2:=VtS.W+L+R;H2:=VtS.VtH+VtT+B;
+ N2:=Int64(W2)*H2;
+ P2:=VtAllocF(N2*3);Kn:=VtAllocF(N2);
+ For C:=0 to VtNumCat-1 do Cat2[C]:=PByte(VtAllocBytes(N2));
+ For Y:=0 to H2-1 do
+  For X:=0 to W2-1 do Begin
+   Sx:=VtClampI(X-L,0,VtS.W-1);Sy:=VtClampI(Y-VtT,0,VtS.VtH-1);
+   K:=Int64(Y)*W2+X;K1:=Int64(Sy)*VtS.W+Sx;
+   Inside:=(X>=L)and(X<L+VtS.W)and(Y>=VtT)and(Y<VtT+VtS.VtH);
+   For C:=0 to 2 do P2[K*3+C]:=VtS.Pix[K1*3+C];
+   If Inside Then Begin
+    For C:=0 to VtNumCat-1 do Cat2[C][K]:=VtS.Cat[C][K1];
+    If VtS.Cat[VtcBg][K1]>=200 Then Kn[K]:=1;
+   End
+    Else Cat2[VtcBg][K]:=255;
+  End;
+ VtTmp:=VtAllocF(N2*3);
+ Move(P2^,VtTmp^,N2*12);
+ VtPushPullFill(VtTmp,Kn,W2,H2);
+ For Y:=0 to H2-1 do
+  For X:=0 to W2-1 do
+   If(X<L)or(X>=L+VtS.W)or(Y<VtT)or(Y>=VtT+VtS.VtH)Then Begin
+    K:=Int64(Y)*W2+X;
+    For C:=0 to 2 do P2[K*3+C]:=VtTmp[K*3+C];
+   End;
+ FreeMem(VtTmp);FreeMem(Kn);
+ FreeMem(VtS.Pix);VtS.Pix:=P2;
+ For C:=0 to VtNumCat-1 do Begin
+  FreeMem(VtS.Cat[C]);
+  VtS.Cat[C]:=Cat2[C];
+ End;
+ VtS.W:=W2;VtS.VtH:=H2;
+End;
+
+{ plan de luminance }
+Function VtLumaPlane(Const VtS:VtTScene):PSingle;
+Var
+ VtN:int64;K:LongInt;
+ Yl:PSingle;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Yl:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do Yl[K]:=VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2]);
+ Result:=Yl;
+End;
+
+{ couleur moyenne du visage (joues et nez) }
+Procedure VtFaceSkin(Const VtS:VtTScene;Const VtH:VtTHeadInfo;Var R,VtG,B:Single);
+Var
+ X,Y,Cnt:LongInt;
+ K:Int64;
+ Sr,Sg,Sb:Double;
+Begin
+ Sr:=0;Sg:=0;Sb:=0;Cnt:=0;
+ For Y:=Trunc(VtH.Fy0+0.50*VtH.Fh)to Trunc(VtH.Fy0+0.64*VtH.Fh)do
+  For X:=Trunc(VtH.Cx-0.30*VtH.Fw)to Trunc(VtH.Cx+0.30*VtH.Fw)do Begin
+   If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   If VtS.Cat[cFace][K]<200 Then Continue;
+   Sr:=Sr+VtS.Pix[K*3];Sg:=Sg+VtS.Pix[K*3+1];Sb:=Sb+VtS.Pix[K*3+2];Inc(Cnt);
+  End;
+ If Cnt>0 Then Begin R:=Sr/Cnt;VtG:=Sg/Cnt;B:=Sb/Cnt;End
+ Else Begin R:=205;VtG:=160;B:=135;End;
+End;
+
+{ les deux iris (0 = a gauche de l'image, 1 = a droite) }
+Function VtFindIrises(Const VtS:VtTScene;Const VtH:VtTHeadInfo;Yl:PSingle;Var Ir:Array
+  of VtTIris;Var Lskin:Single):LongInt;
+Var
+ VtN:int64;K:LongInt;
+ VtSide,Cnt:LongInt;
+ Sd:Double;
+ R,Ex,Ey,Cx,Cy,Sc:Single;
+Begin
+ Sd:=0;Cnt:=0;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ For K:=0 to VtN-1 do If VtS.Cat[cFace][K]>=230 Then Begin Sd:=Sd+Yl[K];Inc(Cnt);
+   End;
+ If Cnt>0 Then Lskin:=Sd/Cnt Else Lskin:=150;
+ R:=VtFMax(2.5,0.046*VtH.Fw);
+ Result:=0;
+ Cnt:=0;
+ For VtSide:=0 to 1 do Begin
+  Ir[VtSide].Ok:=False;
+  Ex:=VtH.Cx+(VtSide*2-1)*0.225*VtH.Fw;
+  Ey:=VtH.Fy0+0.42*VtH.Fh;
+  If VtFindIris(VtS,Yl,Ex,Ey,0.12*VtH.Fw,0.17*VtH.Fh,R,Cx,Cy,Sc)and(Sc>=9)Then Begin
+   Ir[VtSide].Ok:=True;Ir[VtSide].Cx:=Cx;Ir[VtSide].Cy:=Cy;Ir[VtSide].R:=R;
+   Inc(Cnt);
+  End;
+ End;
+ Result:=Cnt;
+End;
+
+{ expression : serieuse ou triste (les coins de la bouche descendent) }
+Function VtApplyMood(Var VtS:VtTScene;Sad:Boolean;Var VtMsg:AnsiString):Boolean;
+Begin
+ If Sad Then Result:=VtMouthWarp(VtS,-0.115,
+   True,'expression triste (coins de la bouche abaiss'#130's)',VtMsg)
+ Else Result:=VtMouthWarp(VtS,-0.06,
+   True,'expression s'#130'rieuse (bouche neutre)',VtMsg);
+End;
+
+{ poids de l'iris (pixels sombres du disque) }
+Function VtIrisW(L,Lskin,D,R:Single):Single;
+Begin
+ Result:=(1-VtSmoothStep(0.62*Lskin,0.86*Lskin,L))*(1-VtSmoothStep(1.0*R,1.18*R,D));
+End;
+
+{ regard : les iris glissent vers (Dx,Dy) dans l'ouverture de l'oeil }
+Function VtApplyGaze(Var VtS:VtTScene;Dx,Dy:Single;Var VtMsg:AnsiString):Boolean;
+Var
+ VtH:VtTHeadInfo;
+ VtN,K:Int64;
+ Yl,Orig:PSingle;
+ Ir:Array[0..1]of VtTIris;
+ VtSide,X,Y,C,Cnt,Found:LongInt;
+ Lskin,Cx,Cy,R,Sx,Sy,Sr,Sg,Sb,Mean,Open,Wi,D,Lm:Single;
+ Sam:Array of Single;
+ SamC:Array of Single;
+ Ns:LongInt;
+ Px:Array[0..2]of Single;
+ Sc:Array[0..2]of Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtHeadInfo(VtS,VtH)Then Begin VtMsg:=
+   'aucun visage d'#130'tect'#130' : impossible de d'#130'placer le regard';
+   Exit;End;
+ If VtH.Fw<60 Then Begin VtMsg:=
+   'le visage est trop petit pour modifier le regard (60 pixels de large '+
+   'minimum)';Exit;End;
+ VtColorInit;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Yl:=VtLumaPlane(VtS);
+ Found:=VtFindIrises(VtS,VtH,Yl,Ir,Lskin);
+ If Found=0 Then Begin
+  VtMsg:='yeux non d'#130'tect'#130's (photo trop petite, trop sombre ou yeux '+
+    'ferm'#130's)';
+  FreeMem(Yl);Exit;
+ End;
+ Orig:=VtAllocF(VtN*3);
+ Move(VtS.Pix^,Orig^,VtN*12);
+ For VtSide:=0 to 1 do Begin
+  If not Ir[VtSide].Ok Then Continue;
+  Cx:=Ir[VtSide].Cx;Cy:=Ir[VtSide].Cy;R:=Ir[VtSide].R;
+  { couleur de la sclerotique : pixels clairs de part et d'autre de l'iris }
+  SetLength(Sam,0);
+  For Y:=Trunc(Cy-0.5*R)to Trunc(Cy+0.5*R)do
+   For X:=Trunc(Cx-2.1*R)to Trunc(Cx+2.1*R)do Begin
+    If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+    If Abs(X+0.5-Cx)<1.3*R Then Continue;
+    Ns:=Length(Sam);SetLength(Sam,Ns+1);
+    Sam[Ns]:=Int64(Y)*VtS.W+X;
+   End;
+  Mean:=0;
+  For Ns:=0 to High(Sam)do Mean:=Mean+Yl[Trunc(Sam[Ns])];
+  If Length(Sam)>0 Then Mean:=Mean/Length(Sam);
+  Sr:=0;Sg:=0;Sb:=0;Cnt:=0;
+  For Ns:=0 to High(Sam)do Begin
+   K:=Trunc(Sam[Ns]);
+   If Yl[K]>=Mean Then Begin Sr:=Sr+VtS.Pix[K*3];Sg:=Sg+VtS.Pix[K*3+1];Sb:=Sb+
+     VtS.Pix[K*3+2];Inc(Cnt);End;
+  End;
+  If Cnt>0 Then Begin Sc[0]:=Sr/Cnt;Sc[1]:=Sg/Cnt;Sc[2]:=Sb/Cnt;End
+  Else Begin Sc[0]:=225;Sc[1]:=222;Sc[2]:=218;End;
+  Sx:=Dx*0.72*R;Sy:=Dy*0.30*R;
+  { l'ancien iris est efface }
+  For Y:=Trunc(Cy-1.3*R)to Trunc(Cy+1.3*R)do
+   For X:=Trunc(Cx-1.3*R)to Trunc(Cx+1.3*R)do Begin
+    If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+    K:=Int64(Y)*VtS.W+X;
+    D:=Sqrt(Sqr(X+0.5-Cx)+Sqr(Y+0.5-Cy));
+    Open:=VtCoverD(VtEllipseD(X+0.5,Y+0.5,Cx,Cy,1.95*R,1.0*R));
+    Wi:=VtIrisW(Yl[K],Lskin,D,R)*Open;
+    If Wi<=0.003 Then Continue;
+    For C:=0 to 2 do VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Wi)+Sc[C]*Wi;
+   End;
+  { et repeint plus loin, rogne par les paupieres }
+  For Y:=Trunc(Cy+Sy-1.3*R)to Trunc(Cy+Sy+1.3*R)do
+   For X:=Trunc(Cx+Sx-1.3*R)to Trunc(Cx+Sx+1.3*R)do Begin
+    If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+    K:=Int64(Y)*VtS.W+X;
+    Open:=VtCoverD(VtEllipseD(X+0.5,Y+0.5,Cx,Cy,1.95*R,1.0*R));
+    If Open<=0 Then Continue;
+    VtSampleBilinear(Orig,VtS.W,VtS.VtH,3,X+0.5-Sx,Y+0.5-Sy,@Px[0]);
+    Lm:=VtLuma(Px[0],Px[1],Px[2]);
+    D:=Sqrt(Sqr(X+0.5-Sx-Cx)+Sqr(Y+0.5-Sy-Cy));
+    Wi:=VtIrisW(Lm,Lskin,D,R)*Open;
+    If Wi<=0.003 Then Continue;
+    For C:=0 to 2 do VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Wi)+Px[C]*Wi;
+   End;
+ End;
+ FreeMem(Yl);FreeMem(Orig);
+ Result:=True;
+ VtInfo('  regard d'#130'plac'#130' ('+VtIStr(Found)+' oeil(s))');
+End;
+
+{ yeux fermes : paupiere de la couleur de la peau et ligne des cils }
+Function VtCloseEyes(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ VtH:VtTHeadInfo;
+ Yl:PSingle;
+ Ir:Array[0..1]of VtTIris;
+ VtSide,X,Y,C,Found:LongInt;
+ K:Int64;
+ Lskin,Cx,Cy,R,Sr,Sg,Sb,Nd,Wf,Dxn,Yl2,Cov,Shade,Th:Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtHeadInfo(VtS,VtH)Then Begin
+   VtMsg:='aucun visage d'#130'tect'#130' : impossible de fermer les yeux';
+   Exit;End;
+ If VtH.Fw<60 Then Begin VtMsg:=
+   'le visage est trop petit pour fermer les yeux (60 pixels de large '+
+   'minimum)';Exit;End;
+ VtColorInit;
+ Yl:=VtLumaPlane(VtS);
+ Found:=VtFindIrises(VtS,VtH,Yl,Ir,Lskin);
+ FreeMem(Yl);
+ If Found=0 Then Begin VtMsg:=
+   'yeux non d'#130'tect'#130's (d'#130'j'#133' ferm'#130's ou photo trop '+
+   'sombre)';Exit;End;
+ VtFaceSkin(VtS,VtH,Sr,Sg,Sb);
+ For VtSide:=0 to 1 do Begin
+  If not Ir[VtSide].Ok Then Continue;
+  Cx:=Ir[VtSide].Cx;Cy:=Ir[VtSide].Cy;R:=Ir[VtSide].R;
+  For Y:=Trunc(Cy-1.8*R)to Trunc(Cy+1.8*R)do
+   For X:=Trunc(Cx-2.6*R)to Trunc(Cx+2.6*R)do Begin
+    If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+    K:=Int64(Y)*VtS.W+X;
+    Nd:=Sqrt(Sqr((X+0.5-Cx)/(2.25*R))+Sqr((Y+0.5-Cy+0.05*R)/(1.35*R)));
+    Wf:=1-VtSmoothStep(0.72,1.05,Nd);
+    If Wf>0.003 Then Begin
+     Shade:=1-0.05*(Y+0.5-Cy)/(1.35*R);
+     VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Wf)+Sr*Shade*Wf;
+     VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Wf)+Sg*Shade*Wf;
+     VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Wf)+Sb*Shade*Wf;
+    End;
+    { ligne des cils : arc qui descend au centre }
+    Dxn:=(X+0.5-Cx)/(2.05*R);
+    If Abs(Dxn)<1 Then Begin
+     Yl2:=Cy+0.12*R+0.42*R*(1-Dxn*Dxn);
+     Th:=VtFMax(0.10*R,0.8);
+     Cov:=VtCoverD(Abs(Y+0.5-Yl2)-Th)*(1-VtSmoothStep(0.80,1.0,Abs(Dxn)));
+     If Cov>0.003 Then Begin
+      VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Cov)+(0.30*Sr)*Cov;
+      VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Cov)+(0.22*Sg)*Cov;
+      VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Cov)+(0.20*Sb)*Cov;
+     End;
+     { ombre de la paupiere au-dessus de la ligne }
+     Cov:=0.30*Exp(-Sqr((Y+0.5-(Yl2-0.55*R))/(0.55*R)))*(1-VtSmoothStep(0.55,
+       1.0,Abs(Dxn)));
+     If(Cov>0.003)and(Y+0.5<Yl2)Then Begin
+      VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Cov)+(0.74*Sr)*Cov;
+      VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Cov)+(0.70*Sg)*Cov;
+      VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Cov)+(0.70*Sb)*Cov;
+     End;
+    End;
+   End;
+ End;
+ Result:=True;
+ VtInfo('  yeux ferm'#130's ('+VtIStr(Found)+' sur 2 d'#130'tect'#130's)');
+End;
+
+{ tete droite : la ligne des yeux est remise a l'horizontale (rotation autour du
+  cou) }
+Function VtHeadStraight(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ VtH:VtTHeadInfo;
+ VtN:int64;K:LongInt;
+ Yl,Wm,Known,Orig:PSingle;
+ Ir:Array[0..1]of VtTIris;
+ Mk:PByte;
+ CatO:Array[0..VtNumCat-1]of PByte;
+ X,Y,C,Ix,Iy,Mv:LongInt;
+ Th,Cd,Sd,Pvx,Pvy,Rx,Ry,Sx,Sy,Wc,Wv:Double;
+ Lskin:Single;
+ Px:Array[0..2]of Single;
+ HeadSet:LongWord;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtHeadInfo(VtS,VtH)Then Begin VtMsg:=
+   'aucun visage d'#130'tect'#130' : impossible de redresser la t'#136'te';
+   Exit;End;
+ If VtH.Fw<60 Then Begin VtMsg:=
+   'le visage est trop petit pour redresser la t'#136'te (60 pixels de '+
+   'large minimum)';Exit;End;
+ VtColorInit;
+ Yl:=VtLumaPlane(VtS);
+ VtFindIrises(VtS,VtH,Yl,Ir,Lskin);
+ FreeMem(Yl);
+ If not(Ir[0].Ok and Ir[1].Ok)Then Begin VtMsg:=
+   'les deux yeux sont n'#130'cessaires pour mesurer l''inclinaison de la t'+
+   #136'te';Exit;End;
+ Th:=VtATan2F(Ir[1].Cy-Ir[0].Cy,Ir[1].Cx-Ir[0].Cx);
+ If Abs(Th)*180/Pi<1.5 Then Begin VtMsg:=
+   'la t'#136'te est d'#130'j'#133' droite (inclinaison de moins de 1,5 '+
+   'degr'#130's)';Exit;End;
+ If Abs(Th)*180/Pi>35 Then Begin
+   VtMsg:='inclinaison de la t'#136'te trop forte pour '#136'tre corrig'#130'e';
+   Exit;End;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ HeadSet:=VtmsFace or VtmsHair or VtmsHat or VtmsGlasses;
+ Pvx:=VtH.Cx;Pvy:=VtH.Fy1+0.05*VtH.Fh;
+ Wm:=VtAllocF(VtN);
+ VtCatMask(VtS,HeadSet,Wm);
+ For Y:=0 to VtS.VtH-1 do Begin
+  Wv:=1-VtSmoothStep(Pvy-0.18*VtH.Fh,Pvy+0.05*VtH.Fh,Y+0.5);
+  For X:=0 to VtS.W-1 do Wm[Int64(Y)*VtS.W+X]:=Wm[Int64(Y)*VtS.W+X]*Wv;
+ End;
+ Orig:=VtAllocF(VtN*3);
+ Move(VtS.Pix^,Orig^,VtN*12);
+ For C:=0 to VtNumCat-1 do Begin
+  CatO[C]:=PByte(VtAllocBytes(VtN));
+  Move(VtS.Cat[C]^,CatO[C]^,VtN);
+ End;
+ { la tete est retiree, la zone liberee est comblee par propagation }
+ Mk:=PByte(VtAllocBytes(VtN));Known:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do If Wm[K]>0.3 Then Mk[K]:=255;
+ VtMorphMask(Mk,VtS.W,VtS.VtH,2,False);
+ For K:=0 to VtN-1 do If Mk[K]=0 Then Known[K]:=1;
+ VtPushPullFill(VtS.Pix,Known,VtS.W,VtS.VtH);
+ For K:=0 to VtN-1 do If Mk[K]<>0 Then Begin
+  For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=0;
+  VtS.Cat[VtcBg][K]:=255;
+ End;
+ FreeMem(Known);FreeMem(Mk);
+ { la tete tourne autour du cou }
+ Cd:=Cos(Th);Sd:=Sin(Th);
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   Rx:=X+0.5-Pvx;Ry:=Y+0.5-Pvy;
+   Sx:=Pvx+Rx*Cd-Ry*Sd;Sy:=Pvy+Rx*Sd+Ry*Cd;
+   If(Sx<0)or(Sy<0)or(Sx>=VtS.W)or(Sy>=VtS.VtH)Then Continue;
+   Ix:=Trunc(Sx);Iy:=Trunc(Sy);
+   Wc:=Wm[Int64(Iy)*VtS.W+Ix];
+   If Wc<=0.02 Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   VtSampleBilinear(Orig,VtS.W,VtS.VtH,3,Sx,Sy,@Px[0]);
+   For C:=0 to 2 do VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Wc)+Px[C]*Wc;
+   For C:=0 to VtNumCat-1 do Begin
+    Mv:=Trunc(VtS.Cat[C][K]*(1-Wc)+0.5);
+    If(HeadSet and(LongWord(1)shl C))<>0 Then
+     Mv:=Mv+Trunc(CatO[C][Int64(Iy)*VtS.W+Ix]*(1-VtSmoothStep(Pvy-0.18*VtH.Fh,Pvy+
+       0.05*VtH.Fh,Sy))+0.5);
+    If Mv>255 Then Mv:=255;
+    VtS.Cat[C][K]:=Mv;
+   End;
+  End;
+ FreeMem(Orig);FreeMem(Wm);
+ For C:=0 to VtNumCat-1 do FreeMem(CatO[C]);
+ Result:=True;
+ VtInfo('  t'#136'te redress'#130'e ('+VtFStr(Th*180/Pi,1)+' degr'#130's)');
+End;
+
+{ aureole : anneau dore lumineux au-dessus de la tete }
+Function VtApplyHalo(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ VtH:VtTHeadInfo;
+ X,Y,C,Ytop,Need,X0,X1,Y0,Y1:LongInt;
+ K:Int64;
+ Cx,Cy,Rx,Ry,Th,E,VtEd,V,Cov,Glow,R,VtG,B,Al:Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtHeadInfo(VtS,VtH)Then Begin VtMsg:=
+   'aucun visage d'#130'tect'#130' : impossible de placer une aur'#130'ole';
+   Exit;End;
+ If not VtCatBBox(VtS,VtmsFace or VtmsHair or VtmsHat,X0,Y0,X1,Y1)Then Begin
+   VtMsg:='t'#136'te non d'#130'tect'#130'e';Exit;End;
+ VtColorInit;
+ Ytop:=Y0;
+ Rx:=0.60*VtFMax(VtH.Fw,0.6*(X1-X0+1));
+ Ry:=0.22*Rx;
+ Th:=VtFMax(0.060*Rx,1.8);
+ Cx:=VtH.Cx;
+ Cy:=Ytop-0.30*Ry-0.02*VtH.Fh;
+ Need:=Trunc(Ry+Th*2+0.45*Rx+4-Cy);
+ If Need>0 Then Begin
+  VtGrowEdges(VtS,0,Need,0,0);
+  Cy:=Cy+Need;
+ End;
+ VtColorInit;
+ VtEd:=0;
+ For Y:=Trunc(Cy-Ry-0.75*Rx)to Trunc(Cy+Ry+0.75*Rx)do
+  For X:=Trunc(Cx-Rx-0.75*Rx)to Trunc(Cx+Rx+0.75*Rx)do Begin
+   If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   { distance au contour de l'ellipse (approx.) }
+   E:=Sqrt(Sqr((X+0.5-Cx)/Rx)+Sqr((Y+0.5-Cy)/Ry));
+   VtEd:=Abs(E-1)*Ry;
+   { lueur autour de l'anneau }
+   Glow:=0.85*Exp(-Sqr(VtEd/(0.17*Rx)));
+   If Glow>0.01 Then Begin
+    VtS.Pix[K*3]:=VtS.Pix[K*3]+(255-VtS.Pix[K*3])*Glow*0.75;
+    VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]+(236-VtS.Pix[K*3+1])*Glow*0.75;
+    VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]+(150-VtS.Pix[K*3+2])*Glow*0.55;
+   End;
+   { anneau : le dessus est cache par la tete, le devant ne l'est pas }
+   Cov:=VtCoverD(VtEd-Th);
+   If Cov>0.003 Then Begin
+    V:=VtMetalV(VtClamp(0.5+(Y+0.5-Cy)/(2*Ry)*0.8+(X+0.5-Cx)/Rx*0.12,0,1));
+    VtMetalRamp(VtRgbOf(255,214,96),VtClamp(V*0.95+0.12,0,1),R,VtG,B);
+    Al:=1-VtS.Cat[VtcBg][K]/255.0;
+    If Y+0.5<Cy Then Cov:=Cov*(1-VtSmoothStep(0.15,0.85,Al));
+    VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Cov)+R*Cov;
+    VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Cov)+VtG*Cov;
+    VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Cov)+B*Cov;
+    For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=Trunc(VtS.Cat[C][K]*(1-Cov)+0.5);
+    VtS.Cat[cOther][K]:=VtClampI(VtS.Cat[cOther][K]+Trunc(Cov*255+0.5),0,255);
+   End;
+  End;
+ Result:=True;
+ VtInfo('  aur'#130'ole ajout'#130'e');
+End;
+{ ------------------------------------------------------------------ }
+{ Bras et mains dessines par le programme : croises, main en V,       }
+{ doigt pointe, bras ecartes ou leves, bras tendus                    }
+{ ------------------------------------------------------------------ }
+
+Const
+ VthkFist=0;hkPeace=1;hkPoint=2;hkOpen=3;hkFlat=4;
+ VtapCross=1;apPeace=2;apPoint=3;apOut=4;apUp=5;apForward=6;apLean=7;
+
+Type
+ VtTBody=Record
+  Cx,Half,Sy,Hem,U,Sho:Single;
+  Ty0,Ty1:LongInt;
+  HasFace:Boolean;
+  Hd:VtTHeadInfo;
+  Sk,Sl:Array[0..2]of Single;
+  SleeveEnd:Single;
+ End;
+ VtTPaint=Record
+  Sk,Sl:Array[0..2]of Single;
+  SEnd,VtT0,VtT1:Single;
+ End;
+ VtTArm=Record
+  VtUsed,Keep:Boolean;               { Keep : le haut du bras d'origine est
+    conserve }
+  Sg:LongInt;
+  Sx,Sy,Ex,Ey,Wx,Wy:Single;
+  Hand:LongInt;
+  Hdx,Hdy,Hsz:Single;
+  R0,R1,R2:Single;                 { rayons : epaule, coude, poignet }
+  PadX:Single;                     { place supplementaire a prevoir du cote Sg }
+ End;
+ VtTArmSet=Array[0..1]of VtTArm;
+
+{ situe le corps : axe, epaules, unite de longueur (hauteur du visage), couleurs
+  }
+Function VtGetBody(Var VtS:VtTScene;Var B:VtTBody;Var VtMsg:AnsiString):Boolean;
+Var
+ Tx0,Ty0,Tx1,Ty1,X,Y,Tl,Tr,Cn:LongInt;
+ VtN,Na,Ns:int64;K:LongInt;
+ Sr,Sg,Sb:Double;
+ Fr,Fg,Fb:Single;
+ Ys:LongInt;
+ Hy:Array of LongInt;
+Begin
+ Result:=False;
+ VtMsg:='';
+ VtColorInit;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ B.HasFace:=VtHeadInfo(VtS,B.Hd)and(B.Hd.Fw>=24);
+ If VtCatBBox(VtS,VtmsTop or VtmsDress,Tx0,Ty0,Tx1,Ty1)Then Begin
+  B.Cx:=(Tx0+Tx1+1)/2;B.Half:=(Tx1-Tx0+1)/2;
+  Y:=Ty0+((Ty1-Ty0)*80)div 100;
+  Tl:=VtS.W;Tr:=-1;
+  For X:=0 to VtS.W-1 do If(VtS.Cat[cTop][Int64(Y)*VtS.W+X]+VtS.Cat[cDress][Int64(Y)
+    *VtS.W+X])>=128 Then Begin
+   If X<Tl Then Tl:=X;
+   If X>Tr Then Tr:=X;
+  End;
+  If Tr>Tl Then Begin B.Cx:=(Tl+Tr+1)/2;B.Half:=(Tr-Tl+1)/2;End;
+ End
+  Else If B.HasFace Then Begin
+   B.Cx:=B.Hd.Cx;B.Half:=1.15*B.Hd.Fh;
+   Ty0:=Trunc(B.Hd.Fy1+0.40*B.Hd.Fh);Ty1:=Ty0+Trunc(3.0*B.Hd.Fh);
+  End
+   Else Begin VtMsg:=
+     'aucun haut ni visage d'#130'tect'#130' : impossible de situer le '+
+     'corps';Exit;End;
+ If B.HasFace Then Begin
+  B.U:=B.Hd.Fh;
+  If(B.Half<0.7*B.U)or(B.Half>2.2*B.U)Then B.U:=B.Half/1.15;
+ End
+  Else B.U:=B.Half/1.15;
+ { l'axe du visage est plus fiable que celui du bas du haut (objets devant le
+   torse) }
+ If B.HasFace and((Abs(B.Hd.Cx-B.Cx)>0.45*B.U)or(B.Half<0.7*B.U))Then Begin
+  If(B.Hd.Cx>Tx0)and(B.Hd.Cx<Tx1)Then Begin
+   B.Cx:=B.Hd.Cx;
+   B.Half:=0.80*VtFMin(B.Cx-Tx0,Tx1-B.Cx);
+   If B.Half<0.9*B.U Then B.Half:=0.9*B.U;
+   If B.Half>1.5*B.U Then B.Half:=1.5*B.U;
+  End;
+ End;
+ If B.U<12 Then Begin VtMsg:=
+   'personne trop petite pour dessiner les bras (visage de moins de 12 '+
+   'pixels)';Exit;End;
+ B.Ty0:=Ty0;B.Ty1:=Ty1;
+ B.Sy:=Ty0+0.45*B.U;
+ If B.HasFace Then B.Sy:=VtFMax(B.Sy,B.Hd.Fy1+0.65*B.U);
+ B.Hem:=Ty1;
+ B.Sho:=VtClamp(B.Half*0.88,0.85*B.U,1.25*B.U);
+ { couleurs : peau (bras, sinon visage) et manche (haut hors du torse) }
+ If VtSkinColor(VtS,True,Fr,Fg,Fb)Then Begin B.Sk[0]:=Fr;B.Sk[1]:=Fg;B.Sk[2]:=Fb;End
+ Else If B.HasFace Then VtFaceSkin(VtS,B.Hd,B.Sk[0],B.Sk[1],B.Sk[2])
+ Else Begin B.Sk[0]:=205;B.Sk[1]:=160;B.Sk[2]:=135;End;
+ Sr:=0;Sg:=0;Sb:=0;Cn:=0;Ns:=0;
+ For Y:=Ty0 to Ty1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If(VtS.Cat[cTop][K]+VtS.Cat[cDress][K])<200 Then Continue;
+   If Abs(X+0.5-B.Cx)>0.8*B.Half Then Begin Sr:=Sr+VtS.Pix[K*3];Sg:=Sg+VtS.Pix[K*3+
+     1];Sb:=Sb+VtS.Pix[K*3+2];Inc(Cn);End;
+  End;
+ If Cn<30 Then Begin
+  Cn:=0;Sr:=0;Sg:=0;Sb:=0;
+  For K:=0 to VtN-1 do If(VtS.Cat[cTop][K]+VtS.Cat[cDress][K])>=200 Then Begin
+    Sr:=Sr+VtS.Pix[K*3];Sg:=Sg+VtS.Pix[K*3+1];Sb:=Sb+VtS.Pix[K*3+2];Inc(Cn);End;
+ End;
+ If Cn>=30 Then Begin B.Sl[0]:=Sr/Cn;B.Sl[1]:=Sg/Cn;B.Sl[2]:=Sb/Cn;End
+ Else Begin B.Sl[0]:=B.Sk[0];B.Sl[1]:=B.Sk[1];B.Sl[2]:=B.Sk[2];End;
+ { longueur des manches : la peau des bras commence plus ou moins bas (hors cou
+   et torse) }
+ Na:=0;Ns:=0;
+ SetLength(Hy,VtS.VtH);
+ For Y:=0 to VtS.VtH-1 do Hy[Y]:=0;
+ For Y:=Trunc(B.Sy+0.3*B.U)to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If(VtS.Cat[cArms][K]>=128)and(Abs(X+0.5-B.Cx)>0.55*B.Half)Then Begin
+     Inc(Hy[Y]);Inc(Na);End
+   Else If(VtS.Cat[cTop][K]>=128)and(Abs(X+0.5-B.Cx)>B.Half*1.0)Then Inc(Ns);
+  End;
+ If Na<Trunc(B.U*B.U*0.15)Then Begin
+  { aucune peau de bras visible : manches longues, ou bras hors cadre }
+  B.SleeveEnd:=0.92;
+ End
+  Else Begin
+   Ns:=0;Ys:=0;
+   For Y:=0 to VtS.VtH-1 do Begin
+    Ns:=Ns+Hy[Y];
+    If Ns>=Na*4 div 100 Then Begin Ys:=Y;Break;End;
+   End;
+   B.SleeveEnd:=VtClamp((Ys-B.Sy)/(3.1*B.U),0,0.95);
+  End;
+ VtDetail('  corps : axe '+VtFStr(B.Cx,0)+', demi-largeur '+VtFStr(B.Half,0)
+   +', unit'#130' '+VtFStr(B.U,0)+', '#130'paules y='+VtFStr(B.Sy,0)+
+   ', manches '+VtFStr(B.SleeveEnd,2));
+ Result:=True;
+End;
+
+{ ---- dessin ---- }
+
+Procedure VtPaintPix(Var VtS:VtTScene;X,Y:LongInt;Cov,R,VtG,B:Single;CatIdx:LongInt);
+Var
+ K:Int64;
+ C,Mv:LongInt;
+Begin
+ If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Exit;
+ If Cov<=0.003 Then Exit;
+ If Cov>1 Then Cov:=1;
+ K:=Int64(Y)*VtS.W+X;
+ If R>255 Then R:=255;If VtG>255 Then VtG:=255;If B>255 Then B:=255;
+ VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-Cov)+R*Cov;
+ VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-Cov)+VtG*Cov;
+ VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-Cov)+B*Cov;
+ If CatIdx>=0 Then Begin
+  For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=Trunc(VtS.Cat[C][K]*(1-Cov)+0.5);
+  Mv:=VtS.Cat[CatIdx][K]+Trunc(Cov*255+0.5);
+  If Mv>255 Then Mv:=255;
+  VtS.Cat[CatIdx][K]:=Mv;
+ End;
+End;
+
+{ membre en forme de capsule, eclaire en haut a gauche ; manche puis peau selon
+  le parametre T }
+Procedure VtDrawCapsule(Var VtS:VtTScene;X0,Y0,X1,Y1,R0,R1:Single;Const VtP:VtTPaint);
+Var
+ X,Y,Xa,Xb,Ya,Yb,CatIdx:LongInt;
+ Dx,Dy,L,Nx,Ny,Vx,Vy,VtT,Qx,Qy,D,Rr,Cov,U,Nz,Dt,Sh,Tt,Mixs,R,VtG,B,Cuff:Single;
+Begin
+ Dx:=X1-X0;Dy:=Y1-Y0;
+ L:=Sqrt(Dx*Dx+Dy*Dy);
+ If L<0.001 Then Begin Dx:=0;Dy:=1;L:=0.001;End Else Begin Dx:=Dx/L;Dy:=Dy/L;
+   End;
+ Nx:=-Dy;Ny:=Dx;
+ Rr:=VtFMax(R0,R1);
+ Xa:=Trunc(VtFMin(X0,X1)-Rr-2);Xb:=Trunc(VtFMax(X0,X1)+Rr+2);
+ Ya:=Trunc(VtFMin(Y0,Y1)-Rr-2);Yb:=Trunc(VtFMax(Y0,Y1)+Rr+2);
+ For Y:=Ya to Yb do
+  For X:=Xa to Xb do Begin
+   Vx:=X+0.5-X0;Vy:=Y+0.5-Y0;
+   VtT:=Vx*Dx+Vy*Dy;
+   If L>0.002 Then VtT:=VtT/L Else VtT:=0;
+   If VtT<0 Then VtT:=0 Else If VtT>1 Then VtT:=1;
+   Qx:=X0+Dx*L*VtT;Qy:=Y0+Dy*L*VtT;
+   Rr:=R0+(R1-R0)*VtT;
+   D:=Sqrt(Sqr(X+0.5-Qx)+Sqr(Y+0.5-Qy));
+   Cov:=VtCoverD(D-Rr);
+   If Cov<=0.003 Then Continue;
+   U:=((X+0.5-Qx)*Nx+(Y+0.5-Qy)*Ny)/Rr;
+   If U>1 Then U:=1 Else If U<-1 Then U:=-1;
+   Nz:=Sqrt(1-U*U);
+   { normale (U*N, Nz) ; lumiere (-0,5 ; -0,6 ; 0,62) }
+   Dt:=-0.5*U*Nx-0.6*U*Ny+0.62*Nz;
+   If Dt<0 Then Dt:=0;
+   Sh:=(0.50+0.62*Dt)/0.90;
+   Tt:=VtP.VtT0+(VtP.VtT1-VtP.VtT0)*VtT;
+   Mixs:=VtSmoothStep(VtP.SEnd-0.015,VtP.SEnd+0.015,Tt);
+   Sh:=Sh*(1+0.045*(VtVNoise(X*0.45,Y*0.45)-0.5)*(1-Mixs)+0.02*(VtVNoise(X*0.9+9,
+     Y*0.9)-0.5));
+   R:=(VtP.Sl[0]*(1-Mixs)+VtP.Sk[0]*Mixs)*Sh;
+   VtG:=(VtP.Sl[1]*(1-Mixs)+VtP.Sk[1]*Mixs)*Sh;
+   B:=(VtP.Sl[2]*(1-Mixs)+VtP.Sk[2]*Mixs)*Sh;
+   { poignet de manche : leger trait sombre }
+   If(VtP.SEnd>0.02)and(VtP.SEnd<0.99)Then Begin
+    Cuff:=0.22*Exp(-Sqr((Tt-VtP.SEnd)/0.018));
+    R:=R*(1-Cuff);VtG:=VtG*(1-Cuff);B:=B*(1-Cuff);
+   End;
+   If Mixs<0.5 Then CatIdx:=cTop Else CatIdx:=cArms;
+   VtPaintPix(VtS,X,Y,Cov,R,VtG,B,CatIdx);
+  End;
+End;
+
+{ main : le poignet est en (Hx,Hy), les doigts vont dans la direction (Dx,Dy),
+  Sz = longueur de la main }
+Procedure VtDrawHand(Var VtS:VtTScene;VtKind:LongInt;Hx,Hy,Dx,Dy,Sz:Single;Const
+  Base:VtTPaint);
+Var
+ VtP:VtTPaint;
+ Px,Py:Single;
+ Procedure Seg(A0,B0,A1,B1,R0,R1:Single);
+ Var
+  X0,Y0,X1,Y1:Single;
+ Begin
+  X0:=Hx+A0*Sz*Dx-B0*Sz*Dy;Y0:=Hy+A0*Sz*Dy+B0*Sz*Dx;
+  X1:=Hx+A1*Sz*Dx-B1*Sz*Dy;Y1:=Hy+A1*Sz*Dy+B1*Sz*Dx;
+  VtDrawCapsule(VtS,X0,Y0,X1,Y1,R0*Sz,R1*Sz,VtP);
+ End;
+Begin
+ VtP:=Base;VtP.SEnd:=0;VtP.VtT0:=0;VtP.VtT1:=1;
+ Px:=0;Py:=0;
+ Case VtKind of
+  VthkFist:Begin
+   Seg(0.04,0,0.38,0,0.20,0.23);
+   Seg(0.40,-0.15,0.50,-0.15,0.075,0.075);
+   Seg(0.42,-0.05,0.53,-0.05,0.075,0.075);
+   Seg(0.42,0.05,0.53,0.05,0.075,0.075);
+   Seg(0.40,0.15,0.49,0.15,0.07,0.07);
+   Seg(0.20,-0.20,0.46,-0.12,0.07,0.07);
+  End;
+  hkPeace:Begin
+   Seg(0.04,0,0.36,0,0.21,0.23);
+   Seg(0.38,0.15,0.46,0.15,0.07,0.07);
+   Seg(0.37,0.23,0.43,0.23,0.06,0.06);
+   Seg(0.36,-0.07,0.70,-0.19,0.066,0.060);
+   Seg(0.36,0.07,0.70,0.19,0.066,0.060);
+   Seg(0.14,-0.22,0.38,0.10,0.07,0.065);
+  End;
+  hkPoint:Begin
+   Seg(0.04,0,0.36,0,0.20,0.22);
+   Seg(0.38,0.00,0.52,0.00,0.07,0.07);
+   Seg(0.38,0.10,0.48,0.10,0.07,0.07);
+   Seg(0.37,0.19,0.46,0.19,0.06,0.06);
+   Seg(0.36,-0.09,0.96,-0.09,0.068,0.058);
+   Seg(0.16,-0.20,0.42,-0.14,0.07,0.065);
+  End;
+  hkOpen:Begin
+   Seg(0.04,0,0.38,0,0.21,0.23);
+   Seg(0.38,-0.15,0.70,-0.26,0.063,0.055);
+   Seg(0.40,-0.05,0.80,-0.09,0.066,0.056);
+   Seg(0.40,0.05,0.82,0.09,0.066,0.056);
+   Seg(0.38,0.14,0.70,0.26,0.060,0.052);
+   Seg(0.10,-0.21,0.40,-0.48,0.075,0.062);
+  End;
+  Else Begin
+   { main vue de face, a plat : plus large, les doigts serres }
+   Seg(0.04,0,0.42,0,0.26,0.28);
+   Seg(0.44,-0.17,0.64,-0.17,0.075,0.07);
+   Seg(0.45,-0.06,0.68,-0.06,0.078,0.072);
+   Seg(0.45,0.06,0.68,0.06,0.078,0.072);
+   Seg(0.44,0.17,0.62,0.17,0.07,0.065);
+   Seg(0.16,-0.27,0.40,-0.30,0.08,0.07);
+  End;
+ End;
+End;
+
+{ ---- retrait des bras d'origine ---- }
+
+{ le bras du cote Side (-1 gauche de l'image, 1 droite, 0 les deux) est efface
+  sous la ligne YKeep }
+Procedure VtRemoveArm(Var VtS:VtTScene;Const B:VtTBody;VtSide:LongInt;YKeep:Single);
+Var
+ VtN:int64;K:LongInt;
+ X,Y,C,Sd:LongInt;
+ Mk:PByte;
+ Kn,Pt,Kt:PSingle;
+ Inb:Boolean;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Mk:=PByte(VtAllocBytes(VtN));Kn:=VtAllocF(VtN);
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   If Y+0.5<=YKeep Then Continue;
+   If Y+0.5<B.Sy-0.30*B.U Then Continue;
+   If X+0.5<B.Cx Then Sd:=-1 Else Sd:=1;
+   If(VtSide<>0)and(Sd<>VtSide)Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   If(VtS.Cat[cArms][K]>=128)or((VtS.Cat[cTop][K]>=128)and(Abs(X+0.5-B.Cx)
+     >B.Half*0.98))Then Mk[K]:=255;
+  End;
+ VtMorphMask(Mk,VtS.W,VtS.VtH,2,False);
+ For K:=0 to VtN-1 do If Mk[K]=0 Then Kn[K]:=1;
+ { la zone du torse est comblee avec la matiere du haut, le reste avec le fond }
+ Pt:=VtAllocF(VtN*3);Kt:=VtAllocF(VtN);
+ Move(VtS.Pix^,Pt^,VtN*12);
+ For K:=0 to VtN-1 do If(Mk[K]=0)and((VtS.Cat[cTop][K]+VtS.Cat[cDress][K])>=200)
+   Then Kt[K]:=1;
+ VtPushPullFill(VtS.Pix,Kn,VtS.W,VtS.VtH);
+ VtPushPullFill(Pt,Kt,VtS.W,VtS.VtH);
+ For Y:=Trunc(B.Ty0)to VtIMin(VtS.VtH-1,B.Ty1)do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If(Mk[K]<>0)and(Abs(X+0.5-B.Cx)<=B.Half)Then For C:=0 to 2 do VtS.Pix[K*3+
+     C]:=Pt[K*3+C];
+  End;
+ FreeMem(Pt);FreeMem(Kt);
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If Mk[K]=0 Then Continue;
+   Inb:=(Abs(X+0.5-B.Cx)<=B.Half)and(Y>=B.Ty0)and(Y<=B.Ty1);
+   For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=0;
+   If Inb Then VtS.Cat[cTop][K]:=255 Else VtS.Cat[VtcBg][K]:=255;
+  End;
+ FreeMem(Mk);FreeMem(Kn);
+End;
+
+{ les bras pendent-ils le long du corps (cote Side) ? axe moyen presque
+  vertical, hors du torse }
+Function VtArmHangs(Const VtS:VtTScene;Const B:VtTBody;VtSide:LongInt):Boolean;
+Var
+ X,Y:LongInt;
+ K,Cnt:Int64;
+ Mx,My,Sxx,Sxy,Syy,Th:Double;
+Begin
+ Result:=False;
+ Mx:=0;My:=0;Cnt:=0;
+ For Y:=Trunc(B.Sy)to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   If(X+0.5<B.Cx)<>(VtSide<0)Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   If(VtS.Cat[cArms][K]>=128)or((VtS.Cat[cTop][K]>=128)and(Abs(X+0.5-B.Cx)
+     >B.Half*0.98))Then Begin Mx:=Mx+X;My:=My+Y;Inc(Cnt);End;
+  End;
+ If Cnt<Trunc(B.U*B.U*0.8)Then Exit;
+ Mx:=Mx/Cnt;My:=My/Cnt;
+ Sxx:=0;Sxy:=0;Syy:=0;
+ For Y:=Trunc(B.Sy)to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   If(X+0.5<B.Cx)<>(VtSide<0)Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   If(VtS.Cat[cArms][K]>=128)or((VtS.Cat[cTop][K]>=128)and(Abs(X+0.5-B.Cx)
+     >B.Half*0.98))Then Begin
+    Sxx:=Sxx+(X-Mx)*(X-Mx);Sxy:=Sxy+(X-Mx)*(Y-My);Syy:=Syy+(Y-My)*(Y-My);
+   End;
+  End;
+ Th:=0.5*VtATan2F(2*Sxy,Sxx-Syy);
+ Result:=(Abs(Abs(Th)-Pi/2)*180/Pi<22)and(Abs(Mx-B.Cx)>0.6*B.Half);
+End;
+
+{ ---- plans de bras ---- }
+
+Procedure VtSetArm(Var A:VtTArm;Const B:VtTBody;Sg:LongInt;Ex,Ey,Wx,Wy:Single;
+  Hand:LongInt;Hsz:Single);
+Var
+ L:Single;
+Begin
+ A.VtUsed:=True;A.Keep:=False;A.Sg:=Sg;A.PadX:=0;
+ A.Sx:=B.Cx+Sg*B.Sho;A.Sy:=B.Sy;
+ A.Ex:=Ex;A.Ey:=Ey;A.Wx:=Wx;A.Wy:=Wy;
+ A.Hand:=Hand;
+ L:=Sqrt(Sqr(Wx-Ex)+Sqr(Wy-Ey));
+ If L<0.001 Then Begin A.Hdx:=0;A.Hdy:=-1;End Else Begin A.Hdx:=(Wx-Ex)/L;
+   A.Hdy:=(Wy-Ey)/L;End;
+ A.Hsz:=Hsz;
+ A.R0:=0.23*B.U;A.R1:=0.19*B.U;A.R2:=0.135*B.U;
+End;
+
+{ ajoute (Ang) degres au vecteur (Vx,Vy) }
+Procedure VtPolarDir(Sg:LongInt;AngDeg:Single;Var Dx,Dy:Single);
+Begin
+ Dx:=Sg*Cos(AngDeg*Pi/180);
+ Dy:=-Sin(AngDeg*Pi/180);
+End;
+
+Procedure VtPlanArms(Pose:LongInt;Const B:VtTBody;VtSide:LongInt;Var VtP:VtTArmSet);
+Var
+ VtI,Sg:LongInt;
+ U,Dx,Dy,Ex,Ey,Wx,Wy,Tx,Ty,Vl,Vx,Vy:Single;
+Begin
+ U:=B.U;
+ VtP[0].VtUsed:=False;VtP[1].VtUsed:=False;
+ Case Pose of
+  VtapCross:
+   For VtI:=0 to 1 do Begin
+    Sg:=VtI*2-1;
+    Ex:=B.Cx+Sg*(B.Sho+0.05*U);Ey:=B.Sy+1.65*U-0.10*U*(1-VtI);
+    { le poignet se rapproche du cote oppose : la main s'arrete au bord du torse
+      }
+    Tx:=B.Cx-Sg*0.78*B.Half;Ty:=Ey-0.50*U;
+    Vx:=Tx-Ex;Vy:=Ty-Ey;Vl:=Sqrt(Vx*Vx+Vy*Vy);
+    Wx:=Tx-Vx/Vl*0.55*U;Wy:=Ty-Vy/Vl*0.55*U;
+    VtSetArm(VtP[VtI],B,Sg,Ex,Ey,Wx,Wy,VthkFist,0.95*U);
+    VtP[VtI].Keep:=True;
+   End;
+  apPeace:Begin
+   Sg:=VtSide;
+   Ex:=B.Cx+Sg*(B.Sho+0.80*U);Ey:=B.Sy+1.42*U;
+   Wx:=Ex+Sg*0.25*U;Wy:=Ey-1.42*U;
+   VtSetArm(VtP[0],B,Sg,Ex,Ey,Wx,Wy,hkPeace,1.0*U);
+  End;
+  apPoint:Begin
+   Sg:=VtSide;
+   VtPolarDir(Sg,16,Dx,Dy);
+   Ex:=B.Cx+Sg*B.Sho+Dx*1.65*U;Ey:=B.Sy+Dy*1.65*U;
+   VtPolarDir(Sg,10,Dx,Dy);
+   Wx:=Ex+Dx*1.45*U;Wy:=Ey+Dy*1.45*U;
+   VtSetArm(VtP[0],B,Sg,Ex,Ey,Wx,Wy,hkPoint,1.0*U);
+  End;
+  apOut:
+   For VtI:=0 to 1 do Begin
+    Sg:=VtI*2-1;
+    VtPolarDir(Sg,-6,Dx,Dy);
+    Ex:=B.Cx+Sg*B.Sho+Dx*1.65*U;Ey:=B.Sy+Dy*1.65*U;
+    VtPolarDir(Sg,-9,Dx,Dy);
+    Wx:=Ex+Dx*1.45*U;Wy:=Ey+Dy*1.45*U;
+    VtSetArm(VtP[VtI],B,Sg,Ex,Ey,Wx,Wy,VthkFist,0.95*U);
+   End;
+  apUp:
+   For VtI:=0 to 1 do Begin
+    Sg:=VtI*2-1;
+    VtPolarDir(Sg,62,Dx,Dy);
+    Ex:=B.Cx+Sg*B.Sho+Dx*1.65*U;Ey:=B.Sy+Dy*1.65*U;
+    VtPolarDir(Sg,72,Dx,Dy);
+    Wx:=Ex+Dx*1.45*U;Wy:=Ey+Dy*1.45*U;
+    VtSetArm(VtP[VtI],B,Sg,Ex,Ey,Wx,Wy,hkOpen,1.0*U);
+   End;
+  apForward:
+   For VtI:=0 to 1 do Begin
+    Sg:=VtI*2-1;
+    Ex:=B.Cx+Sg*(B.Sho+0.12*U);Ey:=B.Sy+1.05*U;
+    Wx:=B.Cx+Sg*0.52*B.Sho;Wy:=B.Sy+0.95*U;
+    VtSetArm(VtP[VtI],B,Sg,Ex,Ey,Wx,Wy,hkFlat,1.05*U);
+    VtP[VtI].R0:=0.23*U;VtP[VtI].R1:=0.23*U;VtP[VtI].R2:=0.21*U;
+    VtP[VtI].Hdx:=-Sg*0.35;VtP[VtI].Hdy:=-0.94;
+   End;
+  Else Begin
+   { appui sur un meuble : le coude repose sur le meuble, la main pres du menton
+     }
+   Sg:=VtSide;
+   Ex:=B.Cx+Sg*(B.Sho+1.25*U);Ey:=B.Sy+1.30*U;
+   Wx:=B.Cx+Sg*0.62*U;Wy:=B.Sy-0.55*U;
+   If B.HasFace Then Begin Wx:=B.Cx+Sg*0.46*B.Hd.Fw;Wy:=B.Hd.Fy1+
+     0.05*B.Hd.Fh+0.15*U;End;
+   VtSetArm(VtP[0],B,Sg,Ex,Ey,Wx,Wy,VthkFist,0.85*U);
+   VtP[0].PadX:=2.1*U;
+  End;
+ End;
+End;
+
+{ marges necessaires pour contenir les bras et mains (par rapport a l'image) }
+Procedure VtArmMargins(Const VtS:VtTScene;Const B:VtTBody;Const VtP:VtTArmSet;Var L,VtT,R,
+  Bt:LongInt);
+Var
+ VtI:LongInt;
+ X0,X1,Y0,Y1,Pad:Single;
+Begin
+ L:=0;VtT:=0;R:=0;Bt:=0;
+ Pad:=0.40*B.U;
+ For VtI:=0 to 1 do If VtP[VtI].VtUsed Then Begin
+  X0:=VtFMin(VtP[VtI].Ex,VtP[VtI].Wx)-Pad;X1:=VtFMax(VtP[VtI].Ex,VtP[VtI].Wx)+Pad;
+  Y0:=VtFMin(VtP[VtI].Ey,VtP[VtI].Wy)-Pad;Y1:=VtFMax(VtP[VtI].Ey,VtP[VtI].Wy)+Pad;
+  X0:=VtFMin(X0,VtP[VtI].Wx+VtP[VtI].Hdx*VtP[VtI].Hsz*0.98-Pad);X1:=VtFMax(X1,VtP[VtI].Wx+
+    VtP[VtI].Hdx*VtP[VtI].Hsz*0.98+Pad);
+  Y0:=VtFMin(Y0,VtP[VtI].Wy+VtP[VtI].Hdy*VtP[VtI].Hsz*0.98-Pad);Y1:=VtFMax(Y1,VtP[VtI].Wy+
+    VtP[VtI].Hdy*VtP[VtI].Hsz*0.98+Pad);
+  If VtP[VtI].Sg>0 Then X1:=VtFMax(X1,VtP[VtI].Ex+VtP[VtI].PadX) Else If VtP[VtI].PadX>0 Then
+    X0:=VtFMin(X0,VtP[VtI].Ex-VtP[VtI].PadX);
+  If-X0>L Then L:=Trunc(-X0)+1;
+  If X1-VtS.W>R Then R:=Trunc(X1-VtS.W)+1;
+  If-Y0>VtT Then VtT:=Trunc(-Y0)+1;
+  Bt:=0;
+ End;
+End;
+
+{ dessine un bras du plan (haut du bras, avant-bras, main) }
+Procedure VtDrawArm(Var VtS:VtTScene;Const B:VtTBody;Const A:VtTArm);
+Var
+ Pt:VtTPaint;
+ Lu,Lf,Tm:Single;
+Begin
+ Move(B.Sk,Pt.Sk,SizeOf(Pt.Sk));Move(B.Sl,Pt.Sl,SizeOf(Pt.Sl));Pt.SEnd:=B.SleeveEnd;
+ Lu:=Sqrt(Sqr(A.Ex-A.Sx)+Sqr(A.Ey-A.Sy));
+ Lf:=Sqrt(Sqr(A.Wx-A.Ex)+Sqr(A.Wy-A.Ey));
+ If Lu+Lf<1 Then Exit;
+ Tm:=Lu/(Lu+Lf);
+ If not A.Keep Then Begin
+  Pt.VtT0:=0;Pt.VtT1:=Tm;
+  VtDrawCapsule(VtS,A.Sx,A.Sy,A.Ex,A.Ey,A.R0,A.R1,Pt);
+ End;
+ Pt.VtT0:=Tm;Pt.VtT1:=1;
+ VtDrawCapsule(VtS,A.Ex,A.Ey,A.Wx,A.Wy,A.R1,A.R2,Pt);
+ If A.Hand>=0 Then VtDrawHand(VtS,A.Hand,A.Wx,A.Wy,A.Hdx,A.Hdy,A.Hsz,Pt);
+End;
+
+Var
+ VtLastB:VtTBody;
+ VtLastP:VtTArmSet;
+
+{ pose des bras ; Pose = ap... ; Side = cote de l'unique bras (-1 gauche de
+  l'image, 1 droite) }
+Function VtArmPose(Var VtS:VtTScene;Pose,VtSide:LongInt;Const What:AnsiString;Var
+  VtMsg:AnsiString):Boolean;
+Var
+ B:VtTBody;
+ VtP:VtTArmSet;
+ L,VtT,R,Bt,VtI,Gr:LongInt;
+ L2,T2,R2,B2:LongInt;
+ Bm:Boolean;
+ YK:Single;
+Begin
+ Result:=False;
+ If not VtGetBody(VtS,B,VtMsg)Then Exit;
+ VtPlanArms(Pose,B,VtSide,VtP);
+ { image trop etroite d'un cote : le fond est prolonge }
+ VtArmMargins(VtS,B,VtP,L,VtT,R,Bt);
+ If(L>0)or(VtT>0)or(R>0)or(Bt>0)Then Begin
+  If(L>VtS.W)or(R>VtS.W)or(VtT>VtS.VtH)or(Bt>VtS.VtH)Then Begin
+   VtMsg:='image trop petite par rapport '#133' la pose demand'#130'e';
+   Exit;
+  End;
+  VtGrowEdges(VtS,L,VtT,R,Bt);
+  If not VtGetBody(VtS,B,VtMsg)Then Exit;
+  VtPlanArms(Pose,B,VtSide,VtP);
+  VtDetail('  image agrandie ('+VtIStr(L)+' g, '+VtIStr(R)+' d, '+VtIStr(VtT)+' h, '+
+    VtIStr(Bt)+' b)');
+ End;
+ { l'ordre de dessin : le bras de droite (image) d'abord }
+ For VtI:=1 downto 0 do If VtP[VtI].VtUsed Then Begin
+  If VtP[VtI].Keep Then Begin
+   If VtArmHangs(VtS,B,VtP[VtI].Sg)Then YK:=VtP[VtI].Ey Else Begin VtP[VtI].Keep:=False;
+     YK:=-1;End;
+  End
+   Else YK:=-1;
+  VtRemoveArm(VtS,B,VtP[VtI].Sg,YK);
+ End;
+ For VtI:=1 downto 0 do If VtP[VtI].VtUsed Then VtDrawArm(VtS,B,VtP[VtI]);
+ VtLastB:=B;VtLastP:=VtP;
+ Result:=True;
+ VtInfo('  '+What);
+End;
+{ ------------------------------------------------------------------ }
+{ Situations : decors dessines par le programme autour de la personne }
+{ (levitation, saut, couchee, dans un lit, assise a une table...)    }
+{ ------------------------------------------------------------------ }
+
+{ silhouette de la personne (arriere-plan < 128) ; faux si trop petite }
+Function VtPersonBounds(Const VtS:VtTScene;Var X0,Y0,X1,Y1:LongInt):Boolean;
+Var
+ X,Y:LongInt;
+ Cnt:Int64;
+Begin
+ X0:=VtS.W;Y0:=VtS.VtH;X1:=-1;Y1:=-1;Cnt:=0;
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do If VtS.Cat[VtcBg][Int64(Y)*VtS.W+X]<128 Then Begin
+   If X<X0 Then X0:=X;If X>X1 Then X1:=X;
+   If Y<Y0 Then Y0:=Y;If Y>Y1 Then Y1:=Y;
+   Inc(Cnt);
+  End;
+ Result:=Cnt>=Int64(VtS.W)*VtS.VtH div 100;
+End;
+
+{ centre horizontal des pieds (bas de la silhouette) }
+Function VtFeetCenter(Const VtS:VtTScene;Y1,X0,X1:LongInt):Single;
+Var
+ X,Y:LongInt;
+ Sx:Double;
+ Nx:Int64;
+Begin
+ Sx:=0;Nx:=0;
+ For Y:=VtIMax(0,Y1-VtIMax(3,(Y1+1)div 40))to Y1 do
+  For X:=0 to VtS.W-1 do If VtS.Cat[VtcBg][Int64(Y)*VtS.W+X]<128 Then Begin Sx:=Sx+X;
+    Inc(Nx);End;
+ If Nx>0 Then Result:=Sx/Nx+0.5 Else Result:=(X0+X1+1)/2;
+End;
+
+{ echantillon d'un plan d'octets, interpolation bilineaire (pixels centres en
+  +0,5) }
+Function VtByteBilinear(VtP:PByte;W,VtH:LongInt;X,Y:Single):Single;
+Var
+ X0,Y0,X1,Y1:LongInt;
+ Fx,Fy:Single;
+Begin
+ X:=X-0.5;Y:=Y-0.5;
+ If X<0 Then X:=0;If Y<0 Then Y:=0;
+ If X>W-1 Then X:=W-1;If Y>VtH-1 Then Y:=VtH-1;
+ X0:=Trunc(X);Y0:=Trunc(Y);
+ X1:=X0+1;If X1>W-1 Then X1:=W-1;
+ Y1:=Y0+1;If Y1>VtH-1 Then Y1:=VtH-1;
+ Fx:=X-X0;Fy:=Y-Y0;
+ Result:=(VtP[Int64(Y0)*W+X0]*(1-Fx)+VtP[Int64(Y0)*W+X1]*Fx)*(1-Fy)+
+   (VtP[Int64(Y1)*W+X0]*(1-Fx)+VtP[Int64(Y1)*W+X1]*Fx)*Fy;
+End;
+
+{ nouvelle image NW x NH : la personne est mise a l'echelle Sc, tournee (Rot=1 :
+  90 degres a gauche)
+  et placee (Ox,Oy) ; le reste est de l'arriere-plan (couleur noire, a remplacer
+    par CompositeBg) }
+Procedure VtTransformScene(Var VtS:VtTScene;NW,NH:LongInt;Sc:Double;Rot:LongInt;Ox,
+  Oy:Double);
+Var
+ N2:Int64;
+ NP:PSingle;
+ NC:Array[0..VtNumCat-1]of PByte;
+ X,Y,C,A,B,Ss,Cnt:LongInt;
+ K:Int64;
+ U,V,Sx,Sy,Al,AlSum,Wn:Double;
+ Px:Array[0..2]of Single;
+ Col:Array[0..2]of Double;
+ Cs:Array[0..VtNumCat-1]of Double;
+Begin
+ N2:=Int64(NW)*NH;
+ NP:=VtAllocF(N2*3);
+ For C:=0 to VtNumCat-1 do NC[C]:=PByte(VtAllocBytes(N2));
+ If Sc<0.8 Then Ss:=2 Else Ss:=1;
+ Wn:=1.0/(Ss*Ss);
+ For Y:=0 to NH-1 do
+  For X:=0 to NW-1 do Begin
+   K:=Int64(Y)*NW+X;
+   AlSum:=0;Cnt:=0;
+   Col[0]:=0;Col[1]:=0;Col[2]:=0;
+   For C:=0 to VtNumCat-1 do Cs[C]:=0;
+   For A:=0 to Ss-1 do
+    For B:=0 to Ss-1 do Begin
+     U:=X+(A+0.5)/Ss;V:=Y+(B+0.5)/Ss;
+     If Rot=0 Then Begin Sx:=(U-Ox)/Sc;Sy:=(V-Oy)/Sc;End
+     Else Begin Sy:=(U-Ox)/Sc;Sx:=VtS.W-(V-Oy)/Sc;End;
+     If(Sx<0)or(Sy<0)or(Sx>=VtS.W)or(Sy>=VtS.VtH)Then Continue;
+     Al:=1-VtByteBilinear(VtS.Cat[VtcBg],VtS.W,VtS.VtH,Sx,Sy)/255.0;
+     If Al<=0.004 Then Continue;
+     VtSampleBilinear(VtS.Pix,VtS.W,VtS.VtH,3,Sx,Sy,@Px[0]);
+     For C:=0 to 2 do Col[C]:=Col[C]+Px[C]*Al;
+     AlSum:=AlSum+Al;
+     For C:=1 to VtNumCat-1 do Cs[C]:=Cs[C]+VtByteBilinear(VtS.Cat[C],VtS.W,VtS.VtH,Sx,Sy);
+     Inc(Cnt);
+    End;
+   If AlSum>0.004 Then Begin
+    For C:=0 to 2 do NP[K*3+C]:=Col[C]/AlSum;
+    For C:=1 to VtNumCat-1 do NC[C][K]:=Trunc(VtClamp(Cs[C]*Wn+0.5,0,255));
+    NC[VtcBg][K]:=255-Trunc(VtClamp(AlSum*Wn*255+0.5,0,255));
+   End
+    Else NC[VtcBg][K]:=255;
+  End;
+ VtSceneFree(VtS);
+ VtS.Pix:=NP;
+ For C:=0 to VtNumCat-1 do VtS.Cat[C]:=NC[C];
+ VtS.W:=NW;VtS.VtH:=NH;
+End;
+
+{ la personne est posee sur Bg (meme taille) d'apres la carte d'arriere-plan }
+Procedure VtCompositeBg(Var VtS:VtTScene;Bg:PSingle);
+Var
+ VtN:int64;K:LongInt;
+ C:LongInt;
+ A:Single;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ For K:=0 to VtN-1 do Begin
+  A:=VtSmoothStep(0.18,0.92,1-VtS.Cat[VtcBg][K]/255.0);
+  For C:=0 to 2 do VtS.Pix[K*3+C]:=Bg[K*3+C]*(1-A)+VtS.Pix[K*3+C]*A;
+ End;
+ FreeMem(Bg);
+End;
+
+{ opacite de la personne }
+Function VtPersonAlpha(Const VtS:VtTScene):PSingle;
+Var
+ VtN:int64;K:LongInt;
+ VtP:PSingle;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ VtP:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do VtP[K]:=1-VtS.Cat[VtcBg][K]/255.0;
+ Result:=VtP;
+End;
+
+{ ombre portee douce de la personne sur le decor }
+Procedure VtCastShadow(Const VtS:VtTScene;Bg:PSingle;Dx,Dy,Blur,Dark:Single);
+Var
+ VtN,K:Int64;
+ Al,Bl:PSingle;
+ X,Y,Sx,Sy,C:LongInt;
+ Sh,A:Single;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Al:=VtPersonAlpha(VtS);
+ Bl:=VtAllocF(VtN);
+ VtBoxBlur(Al,Bl,VtS.W,VtS.VtH,VtIMax(1,Trunc(Blur)));
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   Sx:=X-Trunc(Dx);Sy:=Y-Trunc(Dy);
+   If(Sx<0)or(Sy<0)or(Sx>=VtS.W)or(Sy>=VtS.VtH)Then Continue;
+   Sh:=Bl[Int64(Sy)*VtS.W+Sx]*Dark;
+   A:=Al[Int64(Y)*VtS.W+X];
+   Sh:=Sh*(1-A);
+   If Sh<=0.003 Then Continue;
+   K:=Int64(Y)*VtS.W+X;
+   For C:=0 to 2 do Bg[K*3+C]:=Bg[K*3+C]*(1-Sh);
+  End;
+ FreeMem(Al);FreeMem(Bl);
+End;
+
+{ bruit a plusieurs echelles, de 0 a 1 }
+Function VtFBm(X,Y:Single):Single;
+Begin
+ Result:=0.55*VtVNoise(X,Y)+0.30*VtVNoise(X*2.1+17,Y*2.1+5)+0.15*VtVNoise(X*4.3+3,
+   Y*4.3+29);
+End;
+
+{ parquet : lames horizontales (ou verticales) avec joints et fil du bois }
+Procedure VtWoodFloor(Bg:PSingle;W,VtH,X0,Y0,X1,Y1:LongInt;Plank,Len:Single;
+  Base:LongWord);
+Var
+ X,Y,Idx:LongInt;
+ K:Int64;
+ Br,Bgn,Bb,Tone,Gr,Edge,Fy,Jx,V,Off:Single;
+Begin
+ Br:=(Base shr 16)and $FF;Bgn:=(Base shr 8)and $FF;Bb:=Base and $FF;
+ For Y:=Y0 to Y1 do
+  For X:=X0 to X1 do Begin
+   If(X<0)or(Y<0)or(X>=W)or(Y>=VtH)Then Continue;
+   K:=Int64(Y)*W+X;
+   Idx:=Trunc((Y+0.5)/Plank);
+   Fy:=(Y+0.5)/Plank-Idx;
+   Tone:=0.80+0.34*VtHash2(Idx,7);
+   Off:=VtHash2(Idx,3)*Len;
+   Jx:=Frac((X+Off)/Len);
+   { joint de bout }
+   Edge:=0;
+   If(Jx*Len<1.6)Then Edge:=0.5;
+   If Fy<0.045 Then Edge:=VtFMax(Edge,0.6);
+   If Fy>0.965 Then Edge:=VtFMax(Edge,0.18);
+   Gr:=0.5+0.5*Sin((VtFBm((X+Off)*0.012,Idx*11.0+Fy*3.0)*9.0+Fy*3.0)*Pi*2);
+   V:=Tone*(0.92+0.10*Gr)*(0.94+0.12*VtFBm((X+Off)*0.05,Y*0.25))*(1-Edge*0.55);
+   Bg[K*3]:=Br*V;Bg[K*3+1]:=Bgn*V;Bg[K*3+2]:=Bb*V;
+  End;
+End;
+
+{ ---- levitation et saut : le sol et l'ombre restent plus bas que les pieds
+  ---- }
+
+Function VtSceneLift(Var VtS:VtTScene;LiftF:Single;Const What:AnsiString;Var
+  VtMsg:AnsiString):Boolean;
+Var
+ X0,Y0,X1,Y1,X,Y,Need,C:LongInt;
+ VtN,K:Int64;
+ BodyH,BodyW,Lift,YFeet,Xc,Yg,Yh,Rx,Ry,Fl,Sh,A,Dd:Single;
+ Sr,Sg,Sb:Double;
+ Cnt:LongInt;
+ Fr,Fg,Fb:Single;
+ Fv:Array[0..2]of Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtPersonBounds(VtS,X0,Y0,X1,Y1)Then Begin
+   VtMsg:='aucune personne d'#130'tect'#130'e';Exit;End;
+ BodyH:=Y1-Y0+1;BodyW:=X1-X0+1;
+ Lift:=LiftF*BodyH;
+ YFeet:=Y1+1;
+ Yg:=YFeet+Lift;
+ Need:=Trunc(Yg+0.09*BodyH+4)-VtS.VtH;
+ If Need>0 Then VtGrowEdges(VtS,0,0,0,Need);
+ Xc:=VtFeetCenter(VtS,Y1,X0,X1);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Yh:=YFeet-0.02*BodyH;
+ { couleur du sol : le fond au-dessus de l'horizon, assombri }
+ Sr:=0;Sg:=0;Sb:=0;Cnt:=0;
+ For Y:=VtIMax(0,Trunc(Yh)-8)to VtIMax(0,Trunc(Yh)-2)do
+  For X:=0 to VtS.W-1 do If VtS.Cat[VtcBg][Int64(Y)*VtS.W+X]>=240 Then Begin
+   K:=Int64(Y)*VtS.W+X;
+   Sr:=Sr+VtS.Pix[K*3];Sg:=Sg+VtS.Pix[K*3+1];Sb:=Sb+VtS.Pix[K*3+2];Inc(Cnt);
+  End;
+ If Cnt>0 Then Begin Fr:=Sr/Cnt;Fg:=Sg/Cnt;Fb:=Sb/Cnt;End Else Begin Fr:=150;
+   Fg:=150;Fb:=155;End;
+ Rx:=0.30*VtFMax(BodyW,0.30*BodyH);Ry:=0.026*BodyH+0.012*Lift;
+ For Y:=VtIMax(0,Trunc(Yh)-6)to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   A:=VtS.Cat[VtcBg][K]/255.0;
+   If A<=0.004 Then Continue;
+   Fl:=VtSmoothStep(Yh-3,Yh+3,Y+0.5);
+   If Fl>0.003 Then Begin
+    Dd:=(1-0.18*VtSmoothStep(Yh,VtS.VtH,Y+0.5))*0.74;
+    Fv[0]:=Fr*Dd*1.02;Fv[1]:=Fg*Dd;Fv[2]:=Fb*Dd*0.97;
+    For C:=0 to 2 do VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Fl*A)+Fv[C]*Fl*A;
+   End;
+   { ombre sous le corps }
+   Dd:=Sqr((X+0.5-Xc)/Rx)+Sqr((Y+0.5-Yg-0.01*BodyH)/Ry);
+   Sh:=0.58*Exp(-Dd*1.7);
+   If Sh>0.004 Then For C:=0 to 2 do VtS.Pix[K*3+C]:=VtS.Pix[K*3+C]*(1-Sh*A);
+  End;
+ Result:=True;
+ VtInfo('  '+What);
+End;
+
+{ ---- couchee au sol, ou dans un lit (vue de dessus) ---- }
+
+Function VtSceneLie(Var VtS:VtTScene;Bed:Boolean;Const What:AnsiString;Var
+  VtMsg:AnsiString):Boolean;
+Var
+ X0,Y0,X1,Y1,NW,NH,X,Y,C,VtI:LongInt;
+ VtN,K:Int64;
+ Bw,Bh,Sc,Lh,Lw,Mh,Xl,Yt,Yc,Ox,Oy,Fx0,Fx1,Fy0,Fy1,Mx0,Mx1,Hx0,Hx1,Xb,V,Cov,Dd,
+   Lg,Bump,Sdx,Sdy:Single;
+ Bg,Al,Bl:PSingle;
+ R,VtG,B,Cn:Single;
+ Fr,Fg,Fb:Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtPersonBounds(VtS,X0,Y0,X1,Y1)Then Begin
+   VtMsg:='aucune personne d'#130'tect'#130'e';Exit;End;
+ VtColorInit;
+ Bw:=X1-X0+1;Bh:=Y1-Y0+1;
+ If Bh<0.9*Bw Then Begin VtMsg:=
+   'la personne doit '#136'tre debout et enti'#138're pour '#136'tre couch'+
+   #130'e';Exit;End;
+ Sc:=1;
+ Mh:=VtFMax(2.0*Bw,0.50*Bh);
+ If Bed Then Begin NW:=Trunc(Bh*1.36);NH:=Trunc(Mh*1.30);End
+ Else Begin NW:=Trunc(Bh*1.30);NH:=Trunc(VtFMax(Bw*2.0,Bh*0.55));End;
+ If VtFMax(NW,NH)>2600 Then Begin Sc:=2600/VtFMax(NW,NH);NW:=Trunc(NW*Sc);
+   NH:=Trunc(NH*Sc);End;
+ Lh:=Bh*Sc;Lw:=Bw*Sc;Mh:=Mh*Sc;
+ Xl:=(NW-Lh)*0.5;
+ Yt:=(NH-Lw)*0.5;
+ Ox:=Xl-Y0*Sc;
+ Oy:=Yt-(VtS.W-X1-1)*Sc;
+ VtTransformScene(VtS,NW,NH,Sc,1,Ox,Oy);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Yc:=NH*0.5;
+ Bg:=VtAllocF(VtN*3);
+ If not Bed Then Begin
+  VtWoodFloor(Bg,NW,NH,0,0,NW-1,NH-1,0.075*NH,0.55*NW,VtRgbOf(168,118,74));
+  { vignette }
+  For Y:=0 to NH-1 do
+   For X:=0 to NW-1 do Begin
+    K:=Int64(Y)*NW+X;
+    Dd:=Sqrt(Sqr((X+0.5)/NW-0.5)*0.9+Sqr((Y+0.5)/NH-0.5)*1.2);
+    V:=1-0.45*VtSmoothStep(0.25,0.75,Dd);
+    For C:=0 to 2 do Bg[K*3+C]:=Bg[K*3+C]*V;
+   End;
+  VtCastShadow(VtS,Bg,0.012*Lw,0.025*Lw,0.03*Lw,0.55);
+  VtCompositeBg(VtS,Bg);
+  Result:=True;
+  VtInfo('  '+What);
+  Exit;
+ End;
+ { sol }
+ VtWoodFloor(Bg,NW,NH,0,0,NW-1,NH-1,0.06*NH,0.45*NW,VtRgbOf(150,104,66));
+ { cadre de lit }
+ Fx0:=Xl-0.115*Lh;Fx1:=Xl+Lh+0.075*Lh;
+ Fy0:=Yc-Mh*0.5-0.045*Mh;Fy1:=Yc+Mh*0.5+0.045*Mh;
+ Mx0:=Xl-0.085*Lh;Mx1:=Xl+Lh+0.055*Lh;
+ { ombre du lit sur le sol }
+ For Y:=Trunc(Fy0-0.08*Mh)to Trunc(Fy1+0.10*Mh)do
+  For X:=Trunc(Fx0-0.08*Lh)to Trunc(Fx1+0.08*Lh)do Begin
+   If(X<0)or(Y<0)or(X>=NW)or(Y>=NH)Then Continue;
+   Cov:=0.55*(1-VtSmoothStep(0,0.07*Mh,VtRoundRectD(X+0.5,Y+0.5-0.025*Mh,(Fx0+Fx1)
+     /2,(Fy0+Fy1)/2,(Fx1-Fx0)/2,(Fy1-Fy0)/2,0.03*Mh)));
+   VtPutBg(Bg,NW,NH,X,Y,Cov,6,4,3);
+  End;
+ For Y:=Trunc(Fy0)-1 to Trunc(Fy1)+1 do
+  For X:=Trunc(Fx0)-1 to Trunc(Fx1)+1 do Begin
+   Cov:=VtCoverD(VtRoundRectD(X+0.5,Y+0.5,(Fx0+Fx1)/2,(Fy0+Fy1)/2,(Fx1-Fx0)/2,
+     (Fy1-Fy0)/2,0.03*Mh));
+   If Cov<=0 Then Continue;
+   V:=0.78+0.30*VtFBm(X*0.02,Y*0.2)+0.12*(1-VtSmoothStep(0,0.05*Mh,-VtRoundRectD(X+
+     0.5,Y+0.5,(Fx0+Fx1)/2,(Fy0+Fy1)/2,(Fx1-Fx0)/2,(Fy1-Fy0)/2,0.03*Mh)));
+   VtPutBg(Bg,NW,NH,X,Y,Cov,98*V,60*V,38*V);
+  End;
+ { tete de lit }
+ Hx0:=Xl-0.165*Lh;Hx1:=Xl-0.105*Lh;
+ For Y:=Trunc(Fy0-0.05*Mh)to Trunc(Fy1+0.05*Mh)do
+  For X:=Trunc(Hx0)-1 to Trunc(Hx1)+1 do Begin
+   Cov:=VtCoverD(VtRoundRectD(X+0.5,Y+0.5,(Hx0+Hx1)/2,(Fy0+Fy1)/2,(Hx1-Hx0)/2,
+     (Fy1-Fy0)/2+0.05*Mh,0.35*(Hx1-Hx0)));
+   If Cov<=0 Then Continue;
+   V:=0.62+0.55*Sin((X+0.5-Hx0)/(Hx1-Hx0)*Pi)*0.6+0.18*VtFBm(X*0.04,Y*0.15);
+   VtPutBg(Bg,NW,NH,X,Y,Cov,92*V,56*V,34*V);
+  End;
+ { matelas }
+ For Y:=Trunc(Yc-Mh*0.5)-2 to Trunc(Yc+Mh*0.5)+2 do
+  For X:=Trunc(Mx0)-2 to Trunc(Mx1)+2 do Begin
+   Dd:=VtRoundRectD(X+0.5,Y+0.5,(Mx0+Mx1)/2,Yc,(Mx1-Mx0)/2,Mh*0.5,0.025*Mh);
+   Cov:=VtCoverD(Dd);
+   If Cov<=0 Then Continue;
+   V:=0.93+0.07*VtFBm(X*0.03,Y*0.03)-0.16*Exp(Dd/(0.04*Mh));
+   VtPutBg(Bg,NW,NH,X,Y,Cov,242*V,238*V,230*V);
+  End;
+ { oreiller sous la tete }
+ Fx0:=Xl-0.06*Lh;Fx1:=Xl+0.21*Lh;
+ For Y:=Trunc(Yc-0.33*Mh)-6 to Trunc(Yc+0.33*Mh)+6 do
+  For X:=Trunc(Fx0)-8 to Trunc(Fx1)+8 do Begin
+   Dd:=VtRoundRectD(X+0.5,Y+0.5,(Fx0+Fx1)/2,Yc,(Fx1-Fx0)/2,0.31*Mh,0.10*Mh);
+   Cov:=0.30*(1-VtSmoothStep(0,0.035*Mh,VtRoundRectD(X+0.5,Y+0.5-0.012*Mh,(Fx0+Fx1)
+     /2,Yc,(Fx1-Fx0)/2,0.31*Mh,0.10*Mh)));
+   VtPutBg(Bg,NW,NH,X,Y,Cov,40,36,32);
+   Cov:=VtCoverD(Dd);
+   If Cov<=0 Then Continue;
+   V:=0.97-0.20*Exp(Dd/(0.05*Mh))+0.06*VtFBm(X*0.05,Y*0.05)+0.05*Cos((X-Fx0)
+     /(Fx1-Fx0)*Pi*2);
+   VtPutBg(Bg,NW,NH,X,Y,Cov,248*V,246*V,240*V);
+  End;
+ VtCastShadow(VtS,Bg,0.006*Lw,0.012*Lw,0.015*Lw,0.40);
+ VtCompositeBg(VtS,Bg);
+ { couverture par-dessus le bas du corps, avec le relief du corps dessous }
+ Al:=VtPersonAlpha(VtS);
+ Bl:=VtAllocF(VtN);
+ VtBoxBlur(Al,Bl,NW,NH,VtIMax(2,Trunc(0.05*Lw)));
+ Xb:=Xl+0.37*Lh;
+ Sdx:=0.03*Lw;Sdy:=0.03*Lw;
+ For Y:=Trunc(Yc-Mh*0.5-0.02*Mh)to Trunc(Yc+Mh*0.5+0.02*Mh)do
+  For X:=Trunc(Xb-0.05*Lh)to Trunc(Mx1+0.01*Lh)do Begin
+   If(X<0)or(Y<0)or(X>=NW)or(Y>=NH)Then Continue;
+   K:=Int64(Y)*NW+X;
+   { bord de la couverture : leger debordement sur les cotes }
+   Dd:=VtRoundRectD(X+0.5,Y+0.5,(Xb-0.05*Lh+Mx1+0.01*Lh)/2,Yc,(Mx1+0.01*Lh-Xb+
+     0.05*Lh)/2,Mh*0.5+0.02*Mh,0.02*Mh);
+   Cov:=VtCoverD(Dd);
+   If Cov<=0 Then Continue;
+   If X+0.5<Xb Then Begin
+    { drap replie : bande claire }
+    V:=0.88+0.12*Cos((X+0.5-(Xb-0.05*Lh))/(0.05*Lh)*Pi)*0.5+0.04*VtFBm(X*0.04,
+      Y*0.04);
+    If X+0.5>Xb-0.012*Lh Then V:=V*0.80;
+    R:=248*V;VtG:=244*V;B:=236*V;
+   End
+    Else Begin
+     Bump:=Bl[K];
+     If(X+Trunc(Sdx)>=0)and(Y+Trunc(Sdy)>=0)and(X+Trunc(Sdx)<NW)and(Y+
+       Trunc(Sdy)<NH)and(X-Trunc(Sdx)>=0)and(Y-Trunc(Sdy)>=0)Then
+      Lg:=Bl[Int64(Y+Trunc(Sdy))*NW+X+Trunc(Sdx)]-Bl[Int64(Y-Trunc(Sdy))*NW+
+        X-Trunc(Sdx)]
+     Else Lg:=0;
+     V:=VtClamp(0.94+0.08*VtFBm(X*0.02,Y*0.02)-0.55*Lg+0.05*Bump,0.72,1.10);
+     V:=V*(0.94+0.06*Sin(X*0.35+VtFBm(X*0.03,Y*0.03)*5)*Sin(Y*0.35));
+     R:=70*V;VtG:=102*V;B:=158*V;
+     { ombre portee par le drap replie }
+     V:=1-0.30*Exp(-Sqr((X+0.5-Xb)/(0.03*Lh)));
+     R:=R*V;VtG:=VtG*V;B:=B*V;
+    End;
+   V:=1-0.22*Exp(Dd/(0.05*Mh));
+   VtPutBg(VtS.Pix,NW,NH,X,Y,Cov,R*V,VtG*V,B*V);
+   For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=0;
+   VtS.Cat[cOther][K]:=255;
+  End;
+ FreeMem(Al);FreeMem(Bl);
+ Result:=True;
+ VtInfo('  '+What);
+End;
+{ ------------------------------------------------------------------ }
+{ Situations (suite) : assise a une table, funambule, toit de niche, }
+{ escalier, somnambule, appuyee sur un meuble                         }
+{ ------------------------------------------------------------------ }
+
+{ degrade vertical dans un rectangle du decor }
+Procedure VtVGradient(Bg:PSingle;W,VtH,Y0,Y1:LongInt;R0,G0,B0,R1,G1,B1:Single);
+Var
+ X,Y:LongInt;
+ K:Int64;
+ VtT:Single;
+Begin
+ For Y:=Y0 to Y1 do Begin
+  If(Y<0)or(Y>=VtH)Then Continue;
+  If Y1>Y0 Then VtT:=(Y-Y0)/(Y1-Y0) Else VtT:=0;
+  For X:=0 to W-1 do Begin
+   K:=Int64(Y)*W+X;
+   Bg[K*3]:=R0+(R1-R0)*VtT;Bg[K*3+1]:=G0+(G1-G0)*VtT;Bg[K*3+2]:=B0+(B1-B0)*VtT;
+  End;
+ End;
+End;
+
+{ nuages doux sur une zone de ciel }
+Procedure VtClouds(Bg:PSingle;W,VtH,Y0,Y1:LongInt;Scale,Amount:Single);
+Var
+ X,Y:LongInt;
+ V,VtT:Single;
+Begin
+ For Y:=VtIMax(0,Y0)to VtIMin(VtH-1,Y1)do
+  For X:=0 to W-1 do Begin
+   V:=VtFBm(X*Scale,Y*Scale*1.8+50);
+   VtT:=VtSmoothStep(0.52,0.78,V)*Amount*(1-0.5*(Y-Y0)/VtFMax(1,Y1-Y0));
+   VtPutBg(Bg,W,VtH,X,Y,VtT,255,255,255);
+  End;
+End;
+
+{ ---- assise : a une table, les jambes cachees ---- }
+
+Function VtSceneSit(Var VtS:VtTScene;Const What:AnsiString;Var VtMsg:AnsiString)
+  :Boolean;
+Var
+ B:VtTBody;
+ X0,Y0,X1,Y1,X,Y,Need,C,VtSide:LongInt;
+ VtN,K:Int64;
+ BodyH,Yt,Tb,U,Cx,V,Cov,A,Px,Ytop,Wp,Sd:Single;
+ Bg:PSingle;
+ Feet:Boolean;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtPersonBounds(VtS,X0,Y0,X1,Y1)Then Begin
+   VtMsg:='aucune personne d'#130'tect'#130'e';Exit;End;
+ If not VtGetBody(VtS,B,VtMsg)Then Exit;
+ VtMsg:='';
+ U:=B.U;Cx:=B.Cx;
+ BodyH:=Y1-Y0+1;
+ Feet:=VtCatArea(VtS,VtmsShoes)>=Int64(VtS.W)*VtS.VtH div 2000;
+ If Feet Then Yt:=Y0+0.52*BodyH Else Yt:=Y0+0.66*BodyH;
+ { la table doit commencer sous les epaules }
+ If Yt<B.Sy+1.1*U Then Yt:=B.Sy+1.1*U;
+ Tb:=0.05*VtFMax(BodyH,6*U);
+ Need:=Trunc(Yt+Tb+0.20*U)-VtS.VtH;
+ If Need>0 Then VtGrowEdges(VtS,0,0,0,Need);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Bg:=VtAllocF(VtN*3);
+ Move(VtS.Pix^,Bg^,VtN*12);
+ { dossier de la chaise, derriere les epaules }
+ Ytop:=B.Sy-0.35*U;
+ For VtSide:=-1 to 1 do Begin
+  If VtSide=0 Then Continue;
+  Px:=Cx+VtSide*(B.Half+0.55*U);
+  For Y:=Trunc(Ytop)to Trunc(Yt)do
+   For X:=Trunc(Px-0.12*U)-2 to Trunc(Px+0.12*U)+2 do Begin
+    Cov:=VtCoverD(Abs(X+0.5-Px)-0.085*U);
+    If Y<Ytop+0.085*U Then Cov:=Cov*VtCoverD(Sqrt(Sqr(X+0.5-Px)+Sqr(Y+
+      0.5-Ytop-0.085*U))-0.085*U)*0+Cov;
+    If Cov<=0 Then Continue;
+    V:=0.55+0.55*Sin((X+0.5-Px+0.085*U)/(0.17*U)*Pi);
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,112*V,70*V,42*V);
+   End;
+ End;
+ For Y:=Trunc(Ytop)to Trunc(Ytop+0.30*U)do
+  For X:=Trunc(Cx-B.Half-0.65*U)to Trunc(Cx+B.Half+0.65*U)do Begin
+   Cov:=VtCoverD(VtRoundRectD(X+0.5,Y+0.5,Cx,Ytop+0.15*U,B.Half+0.60*U,0.15*U,
+     0.10*U));
+   If Cov<=0 Then Continue;
+   V:=0.60+0.60*Sin((Y+0.5-Ytop)/(0.30*U)*Pi);
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,118*V,74*V,44*V);
+  End;
+ VtCompositeBg(VtS,Bg);
+ { table : plateau clair avec reflet, tablier sombre ; tout ce qui est dessous
+   est cache }
+ For Y:=Trunc(Yt)-6 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   If Y+0.5<Yt Then Begin
+    { ombre du corps sur le plateau, juste au-dessus }
+    Sd:=0.22*Exp(-Sqr((Y+0.5-Yt)/(0.05*U)))*VtS.Cat[VtcBg][K]/255.0*0;
+    Continue;
+   End;
+   If Y+0.5<Yt+Tb Then Begin
+    A:=(Y+0.5-Yt)/Tb;
+    V:=0.88+0.22*(1-A)+0.12*VtFBm(X*0.02,Y*0.4)-0.06*Sin(X*0.05+VtFBm(X*0.01,Y*0.1)
+      *6);
+    If A>0.90 Then V:=V*0.78;
+    If A<0.06 Then V:=V*1.18;
+    VtS.Pix[K*3]:=170*V;VtS.Pix[K*3+1]:=112*V;VtS.Pix[K*3+2]:=70*V;
+   End
+    Else Begin
+     V:=0.46+0.10*VtFBm(X*0.015,Y*0.3)*(1-0.4*(Y-Yt-Tb)/VtFMax(1,VtS.VtH-Yt-Tb));
+     VtS.Pix[K*3]:=118*V;VtS.Pix[K*3+1]:=74*V;VtS.Pix[K*3+2]:=46*V;
+    End;
+   For C:=0 to VtNumCat-1 do VtS.Cat[C][K]:=0;
+   VtS.Cat[VtcBg][K]:=255;
+  End;
+ Result:=True;
+ VtInfo('  '+What);
+End;
+
+{ ---- funambule : decor de ciel, rope tendue, balancier dans les mains ---- }
+
+Function VtSceneTightrope(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ X0,Y0,X1,Y1,X,Y,VtI,Need,C:LongInt;
+ VtN,K:Int64;
+ BodyH,YFeet,Xc,U,Yr,Ry,VtT,V,Cov,Rr,Ux,Pyl,Pyr,Pxl,Pxr,Hx,Hy,Dd,Sx,Sh,Hb,Bx,By,
+   Bw:Single;
+ Bg:PSingle;
+ VtTmp:Single;
+ Hxs:Array[0..1]of Single;
+ Hys:Array[0..1]of Single;
+ Haz:Boolean;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtPersonBounds(VtS,X0,Y0,X1,Y1)Then Begin
+   VtMsg:='aucune personne d'#130'tect'#130'e';Exit;End;
+ BodyH:=Y1-Y0+1;YFeet:=Y1+1;
+ Need:=Trunc(YFeet+0.22*BodyH)-VtS.VtH;
+ If Need>0 Then VtGrowEdges(VtS,0,0,0,Need);
+ Xc:=VtFeetCenter(VtS,Y1,X0,X1);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Bg:=VtAllocF(VtN*3);
+ { ciel du matin et nuages }
+ VtVGradient(Bg,VtS.W,VtS.VtH,0,VtS.VtH-1,70,124,200,222,232,244);
+ VtClouds(Bg,VtS.W,VtS.VtH,0,VtS.VtH-1,0.5/VtFMax(40,0.12*VtS.W),0.85);
+ { ville lointaine dans la brume, sous la corde }
+ For VtI:=0 to 2 do Begin
+  Yr:=YFeet+0.04*BodyH+VtI*0.045*BodyH;
+  For X:=0 to VtS.W-1 do Begin
+   Ux:=X/(0.035*VtS.W+VtI*7);
+   Hb:=Yr-(0.02+0.05*VtHash2(Trunc(Ux)+VtI*31,5))*BodyH*(1.0+0.4*VtHash2(Trunc(Ux),9)
+     );
+   For Y:=Trunc(Hb)to VtS.VtH-1 do Begin
+    VtT:=0.62+VtI*0.13;
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,1,150*VtT+60*(1-VtT)*0+VtI*18,165*VtT+VtI*14,190*VtT+VtI*10);
+   End;
+  End;
+ End;
+ For Y:=Trunc(YFeet+0.04*BodyH)to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,0.35*VtSmoothStep(YFeet,VtS.VtH,Y),210,
+    220,235);
+ { mats d'ancrage de part et d'autre }
+ For VtI:=0 to 1 do Begin
+  Bx:=VtI*(VtS.W-1)*1.0;
+  If VtI=0 Then Bx:=0.035*VtS.W Else Bx:=0.965*VtS.W;
+  Bw:=0.012*VtS.W;
+  For Y:=Trunc(YFeet-0.30*BodyH)to VtS.VtH-1 do
+   For X:=Trunc(Bx-Bw-2)to Trunc(Bx+Bw+2)do Begin
+    Cov:=VtCoverD(Abs(X+0.5-Bx)-Bw);
+    V:=0.55+0.45*Sin((X+0.5-Bx+Bw)/(2*Bw)*Pi);
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,58*V,62*V,72*V);
+   End;
+ End;
+ { corde : plus haute aux ancrages qu'au centre }
+ For X:=0 to VtS.W-1 do Begin
+  Ux:=(X+0.5-Xc)/VtFMax(Xc,VtS.W-Xc);
+  Ry:=YFeet-0.045*BodyH*Ux*Ux+0.004*BodyH;
+  For Y:=Trunc(Ry-4)to Trunc(Ry+6)do Begin
+   Cov:=VtCoverD(Abs(Y+0.5-Ry)-VtFMax(0.8,0.006*BodyH));
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,36,30,28);
+   Cov:=0.30*VtCoverD(Abs(Y+0.5-(Ry-0.004*BodyH))-0.4);
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,150,140,128);
+  End;
+ End;
+ { balancier : barre horizontale qui passe par les poings }
+ Haz:=VtLastP[0].VtUsed and VtLastP[1].VtUsed;
+ If Haz Then Begin
+  For VtI:=0 to 1 do Begin
+   Hxs[VtI]:=VtLastP[VtI].Wx+VtLastP[VtI].Hdx*VtLastP[VtI].Hsz*0.22;
+   Hys[VtI]:=VtLastP[VtI].Wy+VtLastP[VtI].Hdy*VtLastP[VtI].Hsz*0.22;
+  End;
+  Pxl:=VtFMin(Hxs[0],Hxs[1])-0.9*VtLastB.U;Pxr:=VtFMax(Hxs[0],Hxs[1])+0.9*VtLastB.U;
+  Hy:=(Hys[0]+Hys[1])/2;
+  Rr:=VtFMax(1.2,0.055*VtLastB.U);
+  For X:=Trunc(Pxl)to Trunc(Pxr)do Begin
+   VtT:=(X+0.5-(Pxl+Pxr)/2)/((Pxr-Pxl)/2);
+   Sh:=Hy+0.02*(Pxr-Pxl)*VtT*VtT*0.5;
+   For Y:=Trunc(Sh-Rr-3)to Trunc(Sh+Rr+3)do Begin
+    Cov:=VtCoverD(Abs(Y+0.5-Sh)-Rr);
+    V:=0.55+0.55*Sin(VtClamp((Y+0.5-Sh+Rr)/(2*Rr),0,1)*Pi);
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,150*V,150*V,158*V);
+   End;
+  End;
+  { poids aux extremites }
+  For VtI:=0 to 1 do Begin
+   If VtI=0 Then Sx:=Pxl Else Sx:=Pxr;
+   VtTmp:=Hy+0.02*(Pxr-Pxl)*0.5;
+   For Y:=Trunc(VtTmp-0.25*VtLastB.U)to Trunc(VtTmp+0.25*VtLastB.U)do
+    For X:=Trunc(Sx-0.14*VtLastB.U)-1 to Trunc(Sx+0.14*VtLastB.U)+1 do
+     VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,VtCoverD(VtRoundRectD(X+0.5,Y+0.5,Sx,VtTmp,0.12*VtLastB.U,
+       0.22*VtLastB.U,0.05*VtLastB.U)),70,72,80);
+  End;
+ End;
+ VtCompositeBg(VtS,Bg);
+ Result:=True;
+ VtInfo('  funambule sur un fil (balancier tenu par les deux mains)');
+End;
+
+{ ---- sur le toit d'une niche a chien ---- }
+
+Function VtSceneDoghouse(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ X0,Y0,X1,Y1,NW,NH,X,Y,VtI:LongInt;
+ VtN,K:Int64;
+ BodyH,BodyW,Sc,Ph,Xc,Yr,Dw,Dx0,Dx1,Ry,Wh,Dd,Cov,V,VtT,Rx,Ax,Px,Rh,Y2,Y3,Fy,
+   Door0,Door1,Dh,Dr,Ox,Oy,Rw,L0,L1,Rowh:Single;
+ Bg:PSingle;
+ Row,Col:LongInt;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtPersonBounds(VtS,X0,Y0,X1,Y1)Then Begin
+   VtMsg:='aucune personne d'#130'tect'#130'e';Exit;End;
+ VtColorInit;
+ BodyH:=Y1-Y0+1;BodyW:=X1-X0+1;
+ Xc:=VtFeetCenter(VtS,Y1,X0,X1);
+ Sc:=0.62;
+ If 1.58*BodyH*Sc>2300 Then Sc:=2300/(1.58*BodyH);
+ Ph:=BodyH*Sc;
+ NW:=Trunc(VtFMax(1.18*Ph,1.30*BodyW*Sc));NH:=Trunc(1.58*Ph);
+ Yr:=NH-0.52*Ph;
+ Ox:=NW*0.5-Xc*Sc;
+ Oy:=Yr-(Y1+1)*Sc+0.004*Ph;
+ VtTransformScene(VtS,NW,NH,Sc,0,Ox,Oy);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Bg:=VtAllocF(VtN*3);
+ VtVGradient(Bg,NW,NH,0,NH-1,96,158,226,214,232,246);
+ VtClouds(Bg,NW,NH,0,Trunc(Yr),0.8/VtFMax(40,0.15*NW),0.9);
+ { haie et pelouse }
+ Rh:=NH-0.075*Ph;
+ For Y:=Trunc(Rh-0.05*Ph)to NH-1 do
+  For X:=0 to NW-1 do Begin
+   VtT:=VtFBm(X*0.05,Y*0.05);
+   If Y<Rh Then VtPutBg(Bg,NW,NH,X,Y,1,52+30*VtT,100+34*VtT,48+20*VtT)
+   Else VtPutBg(Bg,NW,NH,X,Y,1,(78+30*VtT)*(1-0.25*(Y-Rh)/(NH-Rh)),(142+40*VtT)
+     *(1-0.25*(Y-Rh)/(NH-Rh)),(58+22*VtT)*(1-0.25*(Y-Rh)/(NH-Rh)));
+  End;
+ Dw:=0.94*NW;Dx0:=(NW-Dw)/2;Dx1:=Dx0+Dw;
+ Rh:=0.15*Ph;            { hauteur du toit visible }
+ Wh:=0.30*Ph;            { hauteur du mur }
+ Y2:=Yr+Rh;Y3:=Y2+Wh;
+ { mur : planches verticales bleu-vert }
+ For Y:=Trunc(Y2)to Trunc(Y3)do
+  For X:=Trunc(Dx0+0.02*Dw)to Trunc(Dx1-0.02*Dw)do Begin
+   Col:=Trunc((X-Dx0)/(0.06*Dw));
+   Fy:=Frac((X-Dx0)/(0.06*Dw));
+   V:=0.78+0.28*VtHash2(Col,11)+0.08*VtFBm(X*0.02,Y*0.2);
+   If Fy<0.05 Then V:=V*0.45;
+   VtPutBg(Bg,NW,NH,X,Y,1,74*V,126*V,150*V);
+  End;
+ { ombre de l'avant-toit sur le mur }
+ For Y:=Trunc(Y2)to Trunc(Y2+0.07*Ph)do
+  For X:=Trunc(Dx0+0.02*Dw)to Trunc(Dx1-0.02*Dw)do VtPutBg(Bg,NW,NH,X,Y,
+    0.55*(1-(Y-Y2)/(0.07*Ph)),10,18,26);
+ { porte en arche }
+ Door0:=NW/2-0.15*Dw;Door1:=NW/2+0.15*Dw;Dh:=0.62*Wh;
+ For Y:=Trunc(Y3-Dh)-2 to Trunc(Y3)do
+  For X:=Trunc(Door0)-6 to Trunc(Door1)+6 do Begin
+   Rx:=Door1-Door0;
+   If Y+0.5<Y3-Dh+Rx/2 Then Dd:=Sqrt(Sqr(X+0.5-NW/2)+Sqr(Y+0.5-(Y3-Dh+Rx/2)))
+     -Rx/2
+   Else Dd:=Abs(X+0.5-NW/2)-Rx/2;
+   If Y+0.5>Y3 Then Continue;
+   Cov:=VtCoverD(Dd);
+   If Cov>0 Then Begin
+    V:=0.10+0.12*(1-(Y+0.5-(Y3-Dh))/Dh);
+    VtPutBg(Bg,NW,NH,X,Y,Cov,34*V*3,26*V*3,22*V*3);
+   End;
+   Cov:=VtCoverD(Abs(Dd-0.022*Dw)-0.018*Dw)*(1-VtCoverD(Dd));
+   If Cov>0 Then VtPutBg(Bg,NW,NH,X,Y,Cov,226,214,190);
+  End;
+ { gamelle devant la porte }
+ For Y:=Trunc(Y3-0.045*Ph)to Trunc(Y3+0.02*Ph)do
+  For X:=Trunc(Door1+0.03*Dw)to Trunc(Door1+0.14*Dw)do Begin
+   Cov:=VtCoverD(VtEllipseD(X+0.5,Y+0.5,Door1+0.085*Dw,Y3-0.012*Ph,0.055*Dw,
+     0.032*Ph));
+   V:=0.7+0.5*Sin(VtClamp((Y+0.5-(Y3-0.044*Ph))/(0.065*Ph),0,1)*Pi);
+   VtPutBg(Bg,NW,NH,X,Y,Cov,200*V,60*V,52*V);
+  End;
+ { ombre au sol sous la niche }
+ For Y:=Trunc(Y3-0.01*Ph)to Trunc(Y3+0.04*Ph)do
+  For X:=Trunc(Dx0)to Trunc(Dx1)do VtPutBg(Bg,NW,NH,X,Y,0.5*(1-VtSmoothStep(0,
+    0.04*Ph,Y-Y3))*0+0.45*Exp(-Sqr((Y-Y3)/(0.018*Ph))),12,28,12);
+ { toit : trapeze de bardeaux rouges, faitage en haut }
+ L0:=Dx0+0.12*Dw;L1:=Dx1-0.12*Dw;
+ For Y:=Trunc(Yr)to Trunc(Y2)+1 do Begin
+  VtT:=(Y+0.5-Yr)/Rh;
+  Ax:=L0+(Dx0-0.015*Dw-L0)*VtT;
+  Rw:=L1+(Dx1+0.015*Dw-L1)*VtT;
+  For X:=Trunc(Ax)-1 to Trunc(Rw)+1 do Begin
+   Cov:=VtCoverD(Ax-(X+0.5))*0+1;
+   If(X+0.5<Ax-0.5)or(X+0.5>Rw+0.5)Then Continue;
+   Rowh:=0.032*Ph;
+   Row:=Trunc((Y+0.5-Yr)/Rowh);
+   Fy:=Frac((Y+0.5-Yr)/Rowh);
+   Col:=Trunc((X+0.5+Row*0.5*0.07*Dw)/(0.07*Dw));
+   V:=0.70+0.45*VtHash2(Col,Row+13)+0.10*VtFBm(X*0.03,Y*0.15)+0.20*(1-VtT);
+   If Fy>0.85 Then V:=V*0.55;
+   If Frac((X+0.5+Row*0.5*0.07*Dw)/(0.07*Dw))<0.03 Then V:=V*0.6;
+   VtPutBg(Bg,NW,NH,X,Y,1,164*V,62*V,44*V);
+  End;
+ End;
+ { faitage }
+ For Y:=Trunc(Yr-0.012*Ph)to Trunc(Yr+0.012*Ph)do
+  For X:=Trunc(L0)-2 to Trunc(L1)+2 do
+   VtPutBg(Bg,NW,NH,X,Y,VtCoverD(VtRoundRectD(X+0.5,Y+0.5,(L0+L1)/2,Yr,(L1-L0)/2,
+     0.012*Ph,0.012*Ph)),110,36,28);
+ { ombre de la personne sur le toit }
+ For Y:=Trunc(Yr-0.01*Ph)to Trunc(Yr+0.05*Ph)do
+  For X:=Trunc(NW/2-0.25*Ph)to Trunc(NW/2+0.25*Ph)do
+   VtPutBg(Bg,NW,NH,X,Y,0.55*Exp(-Sqr((X+0.5-NW/2)/(0.14*Ph))-Sqr((Y+
+     0.5-Yr-0.012*Ph)/(0.022*Ph))),20,8,6);
+ VtCompositeBg(VtS,Bg);
+ Result:=True;
+ VtInfo('  personne debout sur le toit d''une niche (r'#130'duite pour para'#140+
+   'tre sur le toit)');
+End;
+{ ------------------------------------------------------------------ }
+{ Situations (fin) : escalier, chambre de somnambule, meuble         }
+{ ------------------------------------------------------------------ }
+
+{ ---- sur un escalier : les marches montent derriere la personne ---- }
+
+Function VtSceneStairs(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ X0,Y0,X1,Y1,X,Y,VtJ,Need:LongInt;
+ VtN,K:Int64;
+ BodyH,YFeet,Xc,VtP,Yn,Wj,Xa,Xb,V,VtT,Fy,Sh,Cov,Up,Rx,Dd:Single;
+ Bg:PSingle;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtPersonBounds(VtS,X0,Y0,X1,Y1)Then Begin
+   VtMsg:='aucune personne d'#130'tect'#130'e';Exit;End;
+ BodyH:=Y1-Y0+1;YFeet:=Y1+1;
+ Need:=Trunc(YFeet+0.30*BodyH)-VtS.VtH;
+ If Need>0 Then VtGrowEdges(VtS,0,0,0,Need);
+ Xc:=VtFeetCenter(VtS,Y1,X0,X1);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Bg:=VtAllocF(VtN*3);
+ VtP:=0.085*BodyH;
+ { murs : crepi sombre degrade }
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   VtT:=Y/VtS.VtH;
+   V:=(0.62-0.30*VtT)*(0.92+0.16*VtFBm(X*0.01,Y*0.01))*(1-0.35*Sqr((X+0.5)/VtS.W-0.5)
+     *2);
+   Bg[K*3]:=150*V;Bg[K*3+1]:=138*V;Bg[K*3+2]:=124*V;
+  End;
+ { marches : numerotees de J=0 (sous les pieds) ; J<0 = plus haut (plus
+   etroites) }
+ For VtJ:=-Trunc(YFeet/VtP)-2 to Trunc((VtS.VtH-YFeet)/VtP)+2 do Begin
+  Yn:=YFeet+0.25*VtP+VtJ*VtP;                    { arete de la marche }
+  Wj:=0.99-0.030*(-VtJ);                     { largeur relative : decroit en
+    montant }
+  If VtJ>=0 Then Wj:=0.99+0.01*VtJ;
+  If Wj<0.42 Then Wj:=0.42;
+  If Wj>1.5 Then Wj:=1.5;
+  Xa:=VtS.W*0.5-VtS.W*Wj*0.5;Xb:=VtS.W*0.5+VtS.W*Wj*0.5;
+  Up:=VtClamp((YFeet-Yn)/VtFMax(YFeet,1),0,1);
+  For Y:=Trunc(Yn-0.45*VtP)-1 to Trunc(Yn+0.55*VtP)+1 do Begin
+   If(Y<0)or(Y>=VtS.VtH)Then Continue;
+   For X:=Trunc(Xa)to Trunc(Xb)do Begin
+    If(X<0)or(X>=VtS.W)Then Continue;
+    If Y+0.5<Yn-0.45*VtP Then Continue;
+    If Y+0.5<Yn Then Begin
+     { dessus de la marche }
+     Fy:=(Y+0.5-(Yn-0.45*VtP))/(0.45*VtP);
+     V:=(0.98-0.20*Up)*(0.93+0.12*VtFBm(X*0.03,Y*0.03))*(0.93+0.07*Fy);
+     If Fy<0.08 Then V:=V*0.78;
+     VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,1,186*V,178*V,164*V);
+    End
+     Else Begin
+      { contremarche }
+      Fy:=(Y+0.5-Yn)/(0.55*VtP);
+      V:=(0.64-0.18*Up)*(0.93+0.12*VtFBm(X*0.03,Y*0.05))*(1-0.30*Fy);
+      If Fy<0.07 Then V:=V*1.35;
+      VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,1,172*V,160*V,146*V);
+     End;
+    { cotes : ombre le long des murs }
+    Rx:=VtFMin(X-Xa,Xb-X)/VtFMax(1,VtS.W*0.05);
+    If Rx<1 Then VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,0.45*(1-Rx),10,8,8);
+   End;
+  End;
+ End;
+ { ombre sous les pieds }
+ For Y:=Trunc(YFeet-0.03*BodyH)to Trunc(YFeet+0.05*BodyH)do
+  For X:=Trunc(Xc-0.35*BodyH*0.45)to Trunc(Xc+0.35*BodyH*0.45)do Begin
+   Dd:=Sqr((X+0.5-Xc)/(0.26*VtFMax(X1-X0+1,0.25*BodyH)))+Sqr((Y+0.5-YFeet)
+     /(0.02*BodyH));
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,0.55*Exp(-Dd*1.5),8,6,6);
+  End;
+ VtCompositeBg(VtS,Bg);
+ Result:=True;
+ VtInfo('  personne debout sur un escalier (jambes non pli'#130'es : la mont'#130+
+   'e n''est pas anim'#130'e)');
+End;
+
+{ ---- somnambule : chambre la nuit, clair de lune, teinte nocturne ---- }
+
+Function VtSceneNight(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ X0,Y0,X1,Y1,X,Y,VtI,Need,C:LongInt;
+ VtN:int64;K:LongInt;
+ BodyH,YFeet,Xc,Yh,V,VtT,Cov,Wx0,Wx1,Wy0,Wy1,Mx,My,Mr,D,A,Fw:Single;
+ Bg:PSingle;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtPersonBounds(VtS,X0,Y0,X1,Y1)Then Begin
+   VtMsg:='aucune personne d'#130'tect'#130'e';Exit;End;
+ BodyH:=Y1-Y0+1;YFeet:=Y1+1;
+ Need:=Trunc(YFeet+0.10*BodyH)-VtS.VtH;
+ If Need>0 Then VtGrowEdges(VtS,0,0,0,Need);
+ Xc:=VtFeetCenter(VtS,Y1,X0,X1);
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Bg:=VtAllocF(VtN*3);
+ Yh:=YFeet-0.10*BodyH;
+ { mur }
+ VtVGradient(Bg,VtS.W,VtS.VtH,0,Trunc(Yh),22,28,62,40,48,92);
+ For Y:=0 to Trunc(Yh)do
+  For X:=0 to VtS.W-1 do VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,0.10*VtFBm(X*0.015,Y*0.015),120,
+    130,190);
+ { fenetre cote oppose a la personne }
+ If Xc>VtS.W*0.5 Then Wx0:=0.07*VtS.W Else Wx0:=0.60*VtS.W;
+ Wx1:=Wx0+0.33*VtS.W;
+ Wy0:=0.10*Yh;Wy1:=0.78*Yh;
+ For Y:=Trunc(Wy0)-3 to Trunc(Wy1)+3 do
+  For X:=Trunc(Wx0)-3 to Trunc(Wx1)+3 do Begin
+   Cov:=VtCoverD(VtRoundRectD(X+0.5,Y+0.5,(Wx0+Wx1)/2,(Wy0+Wy1)/2,(Wx1-Wx0)/2+
+     0.012*VtS.W,(Wy1-Wy0)/2+0.012*VtS.W,0.01*VtS.W));
+   If Cov>0 Then VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,200,205,225);
+   Cov:=VtCoverD(VtRoundRectD(X+0.5,Y+0.5,(Wx0+Wx1)/2,(Wy0+Wy1)/2,(Wx1-Wx0)/2,
+     (Wy1-Wy0)/2,0.004*VtS.W));
+   If Cov<=0 Then Continue;
+   VtT:=(Y+0.5-Wy0)/(Wy1-Wy0);
+   V:=1-0.45*VtT;
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,14*V+10,26*V+14,64*V+22);
+   { etoiles }
+   A:=VtHash2(Trunc((X+0.5)/2.5)+11,Trunc((Y+0.5)/2.5)+5);
+   If A>0.992 Then VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov*(A-0.99)*90,255,255,240);
+  End;
+ { lune et halo }
+ Mx:=Wx0+0.68*(Wx1-Wx0);My:=Wy0+0.30*(Wy1-Wy0);Mr:=0.09*(Wx1-Wx0)*1.4;
+ For Y:=Trunc(Wy0)to Trunc(Wy1)do
+  For X:=Trunc(Wx0)to Trunc(Wx1)do Begin
+   D:=Sqrt(Sqr(X+0.5-Mx)+Sqr(Y+0.5-My));
+   Cov:=0.35*Exp(-Sqr(D/(Mr*2.6)));
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,170,190,255);
+   Cov:=VtCoverD(D-Mr);
+   If Cov>0 Then VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,(244-14*VtFBm(X*0.08,Y*0.08)),
+     (242-16*VtFBm(X*0.08,Y*0.08)),(222-10*VtFBm(X*0.08,Y*0.08)));
+  End;
+ { croisillons }
+ Fw:=0.007*VtS.W;
+ For Y:=Trunc(Wy0)to Trunc(Wy1)do
+  For X:=Trunc(Wx0)to Trunc(Wx1)do Begin
+   Cov:=VtFMax(VtCoverD(Abs(X+0.5-(Wx0+Wx1)/2)-Fw/2),VtCoverD(Abs(Y+0.5-((Wy0+Wy1)
+     /2-0.06*(Wy1-Wy0)))-Fw/2));
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,190,196,215);
+  End;
+ { rideaux }
+ For Y:=Trunc(Wy0)-4 to Trunc(Wy1)+10 do
+  For X:=Trunc(Wx0-0.06*VtS.W)to Trunc(Wx1+0.06*VtS.W)do Begin
+   If(X+0.5>Wx0+0.03*VtS.W)and(X+0.5<Wx1-0.03*VtS.W)Then Continue;
+   If(X<0)or(X>=VtS.W)Then Continue;
+   If(Y+0.5<Wy0-0.02*VtS.VtH)or(Y+0.5>Yh)Then Continue;
+   V:=0.55+0.45*Sin(X*0.22+VtFBm(X*0.02,Y*0.01)*4);
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,0.92,40*V,48*V,92*V);
+  End;
+ { plancher bleute, plinthe, tache de lune }
+ VtWoodFloor(Bg,VtS.W,VtS.VtH,0,Trunc(Yh),VtS.W-1,VtS.VtH-1,0.05*VtS.VtH,0.5*VtS.W,VtRgbOf(92,70,66));
+ For Y:=Trunc(Yh)to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   K:=Int64(Y)*VtS.W+X;
+   Bg[K*3]:=Bg[K*3]*0.46;Bg[K*3+1]:=Bg[K*3+1]*0.56;Bg[K*3+2]:=Bg[K*3+2]*0.88;
+   VtT:=(Y-Yh)/VtFMax(1,VtS.VtH-Yh);
+   Cov:=0.30*Exp(-Sqr((X+0.5-(Wx0+Wx1)/2-0.15*(X-Wx0))/(0.22*VtS.W)))*(1-VtT)
+     *VtSmoothStep(Yh,Yh+0.02*VtS.VtH,Y);
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,150,170,235);
+  End;
+ For Y:=Trunc(Yh)-Trunc(0.025*BodyH)to Trunc(Yh)do
+  For X:=0 to VtS.W-1 do VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,1,70,76,112);
+ { ombre au sol }
+ For Y:=Trunc(YFeet-0.02*BodyH)to Trunc(YFeet+0.06*BodyH)do
+  For X:=0 to VtS.W-1 do Begin
+   D:=Sqr((X+0.5-Xc)/(0.20*VtFMax(X1-X0+1,0.30*BodyH)))+Sqr((Y+
+     0.5-YFeet-0.01*BodyH)/(0.025*BodyH));
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,0.55*Exp(-D*1.6),4,4,10);
+  End;
+ { la personne recoit la teinte de la nuit }
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ For K:=0 to VtN-1 do Begin
+  VtS.Pix[K*3]:=VtS.Pix[K*3]*0.66;VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*0.74;VtS.Pix[K*3+
+    2]:=VtS.Pix[K*3+2]*0.98+8;
+ End;
+ VtCompositeBg(VtS,Bg);
+ Result:=True;
+ VtInfo('  chambre de nuit, teinte de clair de lune');
+End;
+
+{ ---- appuyee sur un meuble (commode) : le coude repose dessus ---- }
+
+Function VtSceneLean(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN,K:Int64;
+ X,Y,Sg,VtI,VtJ,Row:LongInt;
+ Xa,Xb,Yt,U,Ex,Th,V,Cov,Dd,Dx,Dy,Cxm,Lh,Wd,VtT:Single;
+ Bg:PSingle;
+Begin
+ Result:=False;
+ VtMsg:='';
+ If not VtLastP[0].VtUsed Then Begin VtMsg:='la position du bras est inconnue';
+   Exit;End;
+ Sg:=VtLastP[0].Sg;U:=VtLastB.U;
+ Ex:=VtLastP[0].Ex;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Bg:=VtAllocF(VtN*3);
+ Move(VtS.Pix^,Bg^,VtN*12);
+ Yt:=VtLastP[0].Ey+0.17*U;
+ Th:=0.16*U;
+ If Sg>0 Then Begin Xa:=Ex-0.55*U;Xb:=VtS.W-1+0.0;End
+ Else Begin Xb:=Ex+0.55*U;Xa:=0;End;
+ If Yt+0.6*U>VtS.VtH Then Begin VtMsg:='le meuble sortirait du cadre';FreeMem(Bg);
+   Exit;End;
+ { dessus du meuble }
+ For Y:=Trunc(Yt-0.02*U)to Trunc(Yt+Th)+1 do
+  For X:=Trunc(Xa)to Trunc(Xb)do Begin
+   Cov:=VtCoverD(VtRoundRectD(X+0.5,Y+0.5,(Xa+Xb)/2,Yt+Th/2-0.01*U,(Xb-Xa)/2+
+     0.2*U,Th/2,0.03*U));
+   If Cov<=0 Then Continue;
+   V:=0.78+0.40*(1-(Y+0.5-Yt)/Th)+0.10*VtFBm(X*0.03,Y*0.4);
+   If(Y+0.5-Yt)<0.1*Th Then V:=V*1.25;
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,Cov,150*V,98*V,62*V);
+  End;
+ { corps : tiroirs }
+ Lh:=VtS.VtH-(Yt+Th);
+ For Y:=Trunc(Yt+Th)to VtS.VtH-1 do
+  For X:=Trunc(Xa+0.05*U*0)to Trunc(Xb)do Begin
+   V:=0.52+0.10*VtFBm(X*0.02,Y*0.3);
+   VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,1,112*V,70*V,44*V);
+   Dx:=Frac((X-Xa)/(1.05*U));
+   Row:=Trunc((Y-(Yt+Th))/(0.62*U));
+   Dy:=Frac((Y-(Yt+Th))/(0.62*U));
+   If(Dx>0.04)and(Dx<0.96)and(Dy>0.07)and(Dy<0.93)Then Begin
+    V:=0.58+0.10*VtFBm(X*0.02,Y*0.3);
+    If(Dx<0.07)or(Dx>0.93)or(Dy<0.10)or(Dy>0.90)Then V:=V*0.78;
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,1,128*V,80*V,50*V);
+   End;
+  End;
+ { poignees }
+ VtI:=0;
+ For VtJ:=0 to Trunc((Xb-Xa)/(1.05*U)) do
+  For Row:=0 to Trunc(Lh/(0.62*U)) do Begin
+   Cxm:=Xa+(VtJ+0.5)*1.05*U;
+   Dy:=Yt+Th+(Row+0.5)*0.62*U;
+   If(Dy>VtS.VtH)or(Cxm>Xb+0.2*U)Then Continue;
+   For Y:=Trunc(Dy-0.06*U)to Trunc(Dy+0.06*U)do
+    For X:=Trunc(Cxm-0.14*U)to Trunc(Cxm+0.14*U)do
+     VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,VtCoverD(VtRoundRectD(X+0.5,Y+0.5,Cxm,Dy,0.13*U,
+       0.035*U,0.03*U)),214,176,96);
+  End;
+ { lampe de chevet a l'extremite }
+ If Sg>0 Then Cxm:=Xb-0.60*U Else Cxm:=Xa+0.60*U;
+ If(Cxm>0.3*U)and(Cxm<VtS.W-0.3*U)Then Begin
+  For Y:=Trunc(Yt-1.4*U)to Trunc(Yt)do
+   For X:=Trunc(Cxm-0.7*U)to Trunc(Cxm+0.7*U)do Begin
+    Dx:=Abs(X+0.5-Cxm);
+    Dd:=Sqrt(Sqr(X+0.5-Cxm)+Sqr(Y+0.5-(Yt-0.95*U)));
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,0.30*Exp(-Sqr(Dd/(0.55*U))),255,226,160);
+    { pied }
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,VtCoverD(VtRoundRectD(X+0.5,Y+0.5,Cxm,Yt-0.30*U,
+      0.035*U,0.30*U,0.02*U)),196,160,90);
+    VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,VtCoverD(VtEllipseD(X+0.5,Y+0.5,Cxm,Yt-0.02*U,0.20*U,
+      0.05*U)),196,160,90);
+    { abat-jour }
+    If(Y+0.5>Yt-1.22*U)and(Y+0.5<Yt-0.68*U)Then Begin
+     VtT:=(Y+0.5-(Yt-1.22*U))/(0.54*U);
+     Wd:=(0.18+0.20*VtT)*U;
+     VtPutBg(Bg,VtS.W,VtS.VtH,X,Y,VtCoverD(Dx-Wd),255*(0.8+0.2*VtT),228*(0.8+0.2*VtT),
+       170*(0.8+0.2*VtT));
+    End;
+   End;
+ End;
+ VtCompositeBg(VtS,Bg);
+ Result:=True;
+ VtInfo('  appuy'#130'e sur un meuble (commode)');
+End;
+{ ------------------------------------------------------------------ }
+{ Repartiteur des poses et situations (? assis ?, ? bras croises ?...) }
+{ ------------------------------------------------------------------ }
+
+{ cote (image) qui offre le plus de place pour un bras tendu }
+Function VtBestSide(Var VtS:VtTScene):LongInt;
+Var
+ B:VtTBody;
+ VtMsg:AnsiString;
+Begin
+ Result:=1;
+ If VtGetBody(VtS,B,VtMsg)Then
+  If(B.Cx-B.Sho)>(VtS.W-(B.Cx+B.Sho))Then Result:=-1;
+End;
+
+{ Phase 0 : visage, bras, aureole (avant les autres retouches) ; Phase 1 :
+  decors et situations }
+Procedure VtApplyPoses(Var VtS:VtTScene;Poses:LongWord;Phase:LongInt;Var VtNOk,
+  VtNFail:LongInt);
+Var
+ VtMsg:AnsiString;
+ Procedure Run(Ok:Boolean);
+ Begin
+  If Ok Then Inc(VtNOk)
+  Else Begin
+   If VtMsg<>'' Then VtWarn(VtMsg);
+   Inc(VtNFail);
+  End;
+  VtMsg:='';
+ End;
+ Function Has(Code:LongInt):Boolean;
+ Begin
+  Has:=(Poses and(LongWord(1)shl Code))<>0;
+ End;
+Begin
+ VtMsg:='';
+ If Phase=0 Then Begin
+ VtLastP[0].VtUsed:=False;VtLastP[1].VtUsed:=False;
+ { visage }
+ If Has(pcHeadStraight)Then Run(VtHeadStraight(VtS,VtMsg));
+ If Has(VtpcSerious)Then Run(VtApplyMood(VtS,False,VtMsg));
+ If Has(pcSad)Then Run(VtApplyMood(VtS,True,VtMsg));
+ If Has(pcLost)Then Run(VtApplyGaze(VtS,-1,-1,VtMsg));
+ If Has(pcSleep)Then Run(VtCloseEyes(VtS,VtMsg));
+ { bras }
+ If Has(VtpcCross)Then Run(VtArmPose(VtS,VtapCross,0,'bras crois'#130's',VtMsg));
+ If Has(pcPeace)Then Run(VtArmPose(VtS,apPeace,VtBestSide(VtS)
+   ,'main lev'#130'e en V (peace & love)',VtMsg));
+ If Has(pcPoint)Then Run(VtArmPose(VtS,apPoint,VtBestSide(VtS)
+   ,'bras tendu, doigt point'#130,VtMsg));
+ If Has(pcJump)Then Run(VtArmPose(VtS,apUp,0,'bras lev'#130's',VtMsg));
+ If Has(pcTightrope)Then Run(VtArmPose(VtS,apOut,0,'bras '#130'cart'#130's',VtMsg));
+ If Has(pcSleep)Then Run(VtArmPose(VtS,apForward,0,'bras tendus devant',VtMsg));
+ If Has(pcLean)Then Run(VtArmPose(VtS,apLean,VtBestSide(VtS)
+   ,'coude pos'#130' sur le meuble',VtMsg));
+ { aureole : dessinee avec la personne pour suivre ses deplacements }
+ If Has(pcHalo)Then Run(VtApplyHalo(VtS,VtMsg));
+ End
+ Else Begin
+ { situations }
+ If Has(pcFloat)Then Run(VtSceneLift(VtS,
+   0.13,'personne en l'#130'vitation (ombre au sol)',VtMsg));
+ If Has(pcJump)Then Run(VtSceneLift(VtS,
+   0.07,'saut (jambes non pli'#130'es, ombre au sol)',VtMsg));
+ If Has(pcLie)or Has(pcBed)Then Begin
+  If Has(pcBed)Then Run(VtSceneLie(VtS,
+    True,'personne couch'#130'e dans un lit (vue de dessus)',VtMsg))
+  Else Run(VtSceneLie(VtS,False,'personne couch'#130'e au sol (vue de dessus)',VtMsg)
+    );
+ End;
+ If Has(pcSit)Then
+   Run(VtSceneSit(VtS,
+   'assise '#133' une table (jambes cach'#130'es par la table)',VtMsg));
+ If Has(pcTightrope)Then Run(VtSceneTightrope(VtS,VtMsg));
+ If Has(VtpcDoghouse)Then Run(VtSceneDoghouse(VtS,VtMsg));
+ If Has(pcStairs)Then Run(VtSceneStairs(VtS,VtMsg));
+ If Has(pcSleep)Then Run(VtSceneNight(VtS,VtMsg));
+ If Has(pcLean)Then Run(VtSceneLean(VtS,VtMsg));
+ End;
+ If(Phase=0)and Has(pcKneel)Then Begin
+  VtWarn('"'#133' genoux" n''est pas pris en charge : les jambes devraient '#136+
+    'tre repli'#130'es, ce qu''une retouche de l''image ne peut pas '+
+    'inventer');
+  Inc(VtNFail);
+ End;
+ If(Phase=0)and Has(pcBike)Then Begin
+  VtWarn('"v'#130'lo" n''est pas pris en charge : il faudrait redessiner les '+
+    'jambes sur les p'#130'dales et un v'#130'lo complet');
+  Inc(VtNFail);
+ End;
+End;
+{ ------------------------------------------------------------------ }
+{ Peau, age et teintes speciales : lissage, grain, peau de bebe,      }
+{ rajeunir / vieillir (rides, cernes, taches, cheveux gris),          }
+{ cheveux poivre et sel                                              }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTBilCtx=Record
+  W,VtH,R:LongInt;
+  Src,Dst,VtM:PSingle;
+  Sw:Array[0..224]of Single;      { poids spatial (fenetre 15 x 15 au plus) }
+  Rw:Array[0..255]of Single;      { poids de la difference de couleur }
+ End;
+ VtPBilCtx=^VtTBilCtx;
+
+{ filtre bilateral limite aux pixels de peau (le contraste fort est conserve) }
+Procedure VtBilProc(Ctx:Pointer;Lo,Hi,Tid:LongInt);
+Var
+ C:VtPBilCtx;
+ X,Y,Dx,Dy,Nx,Ny,Ch,Wd:LongInt;
+ K,Kn:Int64;
+ Acc:Array[0..2]of Single;
+ Sum,Wt,D:Single;
+Begin
+ C:=VtPBilCtx(Ctx);
+ Wd:=2*C^.R+1;
+ For Y:=Lo to Hi-1 do
+  For X:=0 to C^.W-1 do Begin
+   K:=Int64(Y)*C^.W+X;
+   If C^.VtM[K]<0.02 Then Begin
+    For Ch:=0 to 2 do C^.Dst[K*3+Ch]:=C^.Src[K*3+Ch];
+    Continue;
+   End;
+   Acc[0]:=0;Acc[1]:=0;Acc[2]:=0;Sum:=0;
+   For Dy:=-C^.R to C^.R do Begin
+    Ny:=Y+Dy;
+    If(Ny<0)or(Ny>=C^.VtH)Then Continue;
+    For Dx:=-C^.R to C^.R do Begin
+     Nx:=X+Dx;
+     If(Nx<0)or(Nx>=C^.W)Then Continue;
+     Kn:=Int64(Ny)*C^.W+Nx;
+     If C^.VtM[Kn]<0.5 Then Continue;
+     D:=(Abs(C^.Src[Kn*3]-C^.Src[K*3])+Abs(C^.Src[Kn*3+1]-C^.Src[K*3+1])+
+       Abs(C^.Src[Kn*3+2]-C^.Src[K*3+2]))*0.3333;
+     If D>255 Then D:=255;
+     Wt:=C^.Sw[(Dy+C^.R)*Wd+Dx+C^.R]*C^.Rw[Trunc(D)];
+     Acc[0]:=Acc[0]+Wt*C^.Src[Kn*3];Acc[1]:=Acc[1]+Wt*C^.Src[Kn*3+1];
+       Acc[2]:=Acc[2]+Wt*C^.Src[Kn*3+2];
+     Sum:=Sum+Wt;
+    End;
+   End;
+   If Sum<=0 Then Sum:=1;
+   For Ch:=0 to 2 do C^.Dst[K*3+Ch]:=Acc[Ch]/Sum;
+  End;
+End;
+
+{ version lissee de la peau : fond (Base) pour la separation frequentielle }
+Procedure VtSkinBase(Const VtS:VtTScene;VtM:PSingle;R:LongInt;Sigma:Single;
+  Base:PSingle);
+Var
+ C:VtTBilCtx;
+ Dx,Dy,VtI:LongInt;
+Begin
+ If R<1 Then R:=1;
+ If R>7 Then R:=7;
+ C.W:=VtS.W;C.VtH:=VtS.VtH;C.R:=R;C.Src:=VtS.Pix;C.Dst:=Base;C.VtM:=VtM;
+ For Dy:=-R to R do
+  For Dx:=-R to R do C.Sw[(Dy+R)*(2*R+1)+Dx+R]:=Exp(-(Dx*Dx+Dy*Dy)
+    /(2.0*Sqr(R*0.55+0.5)));
+ For VtI:=0 to 255 do C.Rw[VtI]:=Exp(-VtI*VtI/(2.0*Sigma*Sigma));
+ VtParFor(VtS.VtH,8,VtBilProc,@C);
+End;
+
+{ masque de la peau (visage, bras, jambes) ; faux si trop petit }
+Function VtSkinMaskOf(Const VtS:VtTScene;Var VtM:PSingle):Boolean;
+Var
+ VtN:int64;K:LongInt;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ VtM:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsSkin,VtM);
+ For K:=0 to VtN-1 do VtM[K]:=VtSmoothStep(0.25,0.8,VtM[K]);
+ Result:=VtCatArea(VtS,VtmsSkin)>=VtN div 4000;
+End;
+
+{ rayon du filtre : proportionnel au visage (ou a l'image si aucun visage) }
+Function VtSkinRadius(Const VtS:VtTScene):LongInt;
+Var
+ VtH:VtTHeadInfo;
+Begin
+ If VtHeadInfo(VtS,VtH)Then Result:=VtClampI(Round(0.014*VtH.Fw),2,7)
+ Else Result:=VtClampI(Round(0.004*VtS.W),2,7);
+End;
+
+{ lissage de la peau : K = part de detail conservee (1 = aucun lissage) ;
+  Bright = eclaircissement, Blush = rose (bebe) }
+Function VtSkinSmooth(Var VtS:VtTScene;K:Single;Sigma,Bright,Blush:Single;Const
+  What:AnsiString;Var VtMsg:AnsiString):Boolean;
+Var
+ VtM,Base:PSingle;
+ VtN:int64;VtI:LongInt;
+ C:LongInt;
+ Dl,Keep,V,Mw,Dt:Single;
+ VtH:VtTHeadInfo;
+ X,Y:LongInt;
+ Ch:Array[0..2]of Single;
+ Cheek:Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ VtColorInit;
+ If not VtSkinMaskOf(VtS,VtM)Then Begin FreeMem(VtM);
+   VtMsg:='aucune peau d'#130'tect'#130'e';Exit;End;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Base:=VtAllocF(VtN*3);
+ VtSkinBase(VtS,VtM,VtSkinRadius(VtS),Sigma,Base);
+ For VtI:=0 to VtN-1 do Begin
+  Mw:=VtM[VtI];
+  If Mw<0.02 Then Continue;
+  Dl:=(Abs(VtS.Pix[VtI*3]-Base[VtI*3])+Abs(VtS.Pix[VtI*3+1]-Base[VtI*3+1])+Abs(VtS.Pix[VtI*3+
+    2]-Base[VtI*3+2]))*0.3333;
+  { les traits marques (yeux, sourcils, levres) gardent leur detail }
+  Keep:=K+(1-K)*VtSmoothStep(9,26,Dl);
+  For C:=0 to 2 do Begin
+   V:=Base[VtI*3+C]+(VtS.Pix[VtI*3+C]-Base[VtI*3+C])*Keep;
+   V:=V*(1+Bright);
+   VtS.Pix[VtI*3+C]:=VtS.Pix[VtI*3+C]*(1-Mw)+V*Mw;
+  End;
+ End;
+ { peau de bebe : joues roses }
+ If Blush>0 Then Begin
+  If VtHeadInfo(VtS,VtH)Then Begin
+   For Y:=Trunc(VtH.Fy0)to Trunc(VtH.Fy1)do
+    For X:=Trunc(VtH.Fx0)to Trunc(VtH.Fx1)do Begin
+     VtI:=Int64(Y)*VtS.W+X;
+     If VtM[VtI]<0.02 Then Continue;
+     Cheek:=Exp(-Sqr((Abs(X+0.5-VtH.Cx)-0.24*VtH.Fw)/(0.10*VtH.Fw))-Sqr((Y+
+       0.5-(VtH.Fy0+0.62*VtH.Fh))/(0.10*VtH.Fh)));
+     Dt:=(0.05+0.16*Cheek)*Blush*VtM[VtI];
+     VtS.Pix[VtI*3]:=VtS.Pix[VtI*3]+(255-VtS.Pix[VtI*3])*Dt*0.55;
+     VtS.Pix[VtI*3+1]:=VtS.Pix[VtI*3+1]+(150-VtS.Pix[VtI*3+1])*Dt*0.40;
+     VtS.Pix[VtI*3+2]:=VtS.Pix[VtI*3+2]+(160-VtS.Pix[VtI*3+2])*Dt*0.40;
+    End;
+  End
+   Else For VtI:=0 to VtN-1 do If VtM[VtI]>=0.02 Then Begin
+    Dt:=0.05*Blush*VtM[VtI];
+    VtS.Pix[VtI*3]:=VtS.Pix[VtI*3]+(255-VtS.Pix[VtI*3])*Dt*0.55;
+    VtS.Pix[VtI*3+1]:=VtS.Pix[VtI*3+1]+(150-VtS.Pix[VtI*3+1])*Dt*0.40;
+    VtS.Pix[VtI*3+2]:=VtS.Pix[VtI*3+2]+(160-VtS.Pix[VtI*3+2])*Dt*0.40;
+   End;
+ End;
+ FreeMem(VtM);FreeMem(Base);
+ Result:=True;
+ VtInfo('  '+What);
+End;
+
+{ grain de peau : contraste des pores accentue et bruit fin }
+Procedure VtSkinGrainPass(Var VtS:VtTScene;VtM:PSingle;Amount:Single;Boost:Single);
+Var
+ Base:PSingle;
+ VtN,VtI:Int64;
+ X,Y,C:LongInt;
+ Nz,Mw,Pore:Single;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Base:=VtAllocF(VtN*3);
+ VtSkinBase(VtS,VtM,2,30,Base);
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   VtI:=Int64(Y)*VtS.W+X;
+   Mw:=VtM[VtI];
+   If Mw<0.02 Then Continue;
+   Nz:=(VtRngGauss*0.55+(VtVNoise(X*0.8,Y*0.8)-0.5)*1.7)*Amount*6.5;
+   Pore:=0;
+   If VtHash2(X,Y)>0.94 Then Pore:=-Amount*9*(0.5+0.5*VtHash2(Y,X));
+   For C:=0 to 2 do
+    VtS.Pix[VtI*3+C]:=VtS.Pix[VtI*3+C]+Mw*((VtS.Pix[VtI*3+C]-Base[VtI*3+C])*Boost+Nz*(0.8+
+      0.2*C*0.5)+Pore);
+  End;
+ FreeMem(Base);
+End;
+
+Function VtSkinGrain(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ VtM:PSingle;
+Begin
+ Result:=False;
+ VtMsg:='';
+ VtColorInit;
+ If not VtSkinMaskOf(VtS,VtM)Then Begin FreeMem(VtM);
+   VtMsg:='aucune peau d'#130'tect'#130'e';Exit;End;
+ VtSkinGrainPass(VtS,VtM,0.8,0.9);
+ FreeMem(VtM);
+ Result:=True;
+ VtInfo('  peau granuleuse (pores accentu'#130's, grain ajout'#130')');
+End;
+
+{ ---- cheveux : poivre et sel, ou gris partiel ---- }
+
+Function VtHairSalt(Var VtS:VtTScene;Fraction:Single;SaltPepper:Boolean;Var
+  VtMsg:AnsiString):Boolean;
+Var
+ VtM:PSingle;
+ VtN:int64;VtI:LongInt;
+ X,Y:LongInt;
+ Lm,Sum,Rel,Nn,VtG,Salt,Pep,L:Single;
+ Cnt:Int64;
+ R,Gc,B,Mw:Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ VtM:=VtAllocF(VtN);
+ VtCatMask(VtS,VtmsHair,VtM);
+ VtSharpenAlpha(VtM,VtN);
+ Sum:=0;Cnt:=0;
+ For VtI:=0 to VtN-1 do If VtM[VtI]>=0.8 Then Begin Sum:=Sum+VtLuma(VtS.Pix[VtI*3],VtS.Pix[VtI*3+
+   1],VtS.Pix[VtI*3+2]);Inc(Cnt);End;
+ If Cnt<VtN div 4000 Then Begin FreeMem(VtM);
+   VtMsg:='aucun cheveu d'#130'tect'#130' : impossible de les teindre';Exit;End;
+ Lm:=Sum/Cnt;
+ If Lm<1 Then Lm:=1;
+ For Y:=0 to VtS.VtH-1 do
+  For X:=0 to VtS.W-1 do Begin
+   VtI:=Int64(Y)*VtS.W+X;
+   Mw:=VtM[VtI];
+   If Mw<0.02 Then Continue;
+   L:=VtLuma(VtS.Pix[VtI*3],VtS.Pix[VtI*3+1],VtS.Pix[VtI*3+2]);
+   Rel:=VtClamp(L/Lm,0.35,1.6);
+   Nn:=0.50*VtVNoise(X*0.70,Y*0.16)+0.30*VtVNoise(X*1.5+11,Y*0.35+5)+
+     0.20*VtVNoise(X*0.25,Y*0.08+9);
+   Nn:=VtClamp((Nn-0.5)*2.4+0.5+0.30*(Rel-1),0,1);
+   VtG:=VtSmoothStep(1-Fraction-0.16,1-Fraction+0.16,Nn);
+   Salt:=VtClamp(Rel*150+30,100,225);
+   If SaltPepper Then Begin
+    Pep:=22+48*VtClamp(Rel,0,1.3);
+    L:=Pep*(1-VtG)+Salt*VtG;
+    R:=L*0.99;Gc:=L;B:=L*1.03;
+   End
+    Else Begin
+     { gris partiel : les meches grises remplacent la couleur d'origine, le
+       reste est a peine eteint }
+     R:=VtS.Pix[VtI*3];Gc:=VtS.Pix[VtI*3+1];B:=VtS.Pix[VtI*3+2];
+     L:=VtLuma(R,Gc,B);
+     R:=L+(R-L)*0.88;Gc:=L+(Gc-L)*0.88;B:=L+(B-L)*0.88;
+     VtG:=VtG*0.8;
+     Salt:=L+(Salt-L)*0.75;
+     R:=R*(1-VtG)+Salt*0.99*VtG;Gc:=Gc*(1-VtG)+Salt*VtG;B:=B*(1-VtG)+Salt*1.03*VtG;
+    End;
+   VtS.Pix[VtI*3]:=VtS.Pix[VtI*3]*(1-Mw)+R*Mw;
+   VtS.Pix[VtI*3+1]:=VtS.Pix[VtI*3+1]*(1-Mw)+Gc*Mw;
+   VtS.Pix[VtI*3+2]:=VtS.Pix[VtI*3+2]*(1-Mw)+B*Mw;
+  End;
+ FreeMem(VtM);
+ Result:=True;
+ If SaltPepper Then VtInfo('  cheveux poivre et sel')
+ Else VtInfo('  cheveux grisonnants ('+VtIStr(Round(Fraction*100))
+   +' % de m'#138'ches grises)');
+End;
+
+{ ---- vieillissement : rides, cernes, taches, cheveux gris ---- }
+
+{ ride : courbe douce de (X0,Y0) a (X1,Y1), Bend = fleche perpendiculaire }
+Procedure VtCrease(Wr:PSingle;W,VtH:LongInt;X0,Y0,X1,Y1,Bend,Wd,Amp:Single;
+  Seed:LongInt);
+Var
+ Len,Nx,Ny,VtT,Px,Py,A,D2,R:Single;
+ VtI,Steps,X,Y,Rr:LongInt;
+ K:Int64;
+Begin
+ Len:=Sqrt(Sqr(X1-X0)+Sqr(Y1-Y0));
+ If Len<2 Then Exit;
+ Nx:=-(Y1-Y0)/Len;Ny:=(X1-X0)/Len;
+ Steps:=Trunc(Len*1.5)+2;
+ Rr:=Trunc(2.6*Wd)+1;
+ For VtI:=0 to Steps do Begin
+  VtT:=VtI/Steps;
+  Px:=X0+(X1-X0)*VtT+Nx*Bend*4*VtT*(1-VtT);
+  Py:=Y0+(Y1-Y0)*VtT+Ny*Bend*4*VtT*(1-VtT);
+  A:=Amp*Exp(0.6*Ln(VtFMax(Sin(Pi*VtT),0.001)))*(0.55+0.45*VtVNoise(VtT*Len*0.08+
+    Seed*3.7,Seed*1.3));
+  For Y:=Trunc(Py)-Rr to Trunc(Py)+Rr do
+   For X:=Trunc(Px)-Rr to Trunc(Px)+Rr do Begin
+    If(X<0)or(Y<0)or(X>=W)or(Y>=VtH)Then Continue;
+    D2:=Sqr(X+0.5-Px)+Sqr(Y+0.5-Py);
+    R:=A*Exp(-D2/(2*Wd*Wd));
+    K:=Int64(Y)*W+X;
+    If R>Wr[K]Then Wr[K]:=R;
+   End;
+ End;
+End;
+
+Function VtSkinAge(Var VtS:VtTScene;Years:LongInt;Var VtMsg:AnsiString):Boolean;
+Var
+ VtH:VtTHeadInfo;
+ VtM,Wr,Bag,Fm,Yl:PSingle;
+ Ir:Array[0..1]of VtTIris;
+ VtN:int64;K:LongInt;
+ VtI,VtSide,Found,X,Y,Sp:LongInt;
+ Sc,Fw,Fh,Cx,Fy0,Wd,Amp,Ex,Ey,Ox,Mw,Lskin,V,Sx,Sy,Rs,D,Dk:Single;
+ Done:Boolean;
+ Sg:LongInt;
+Begin
+ Result:=False;
+ VtMsg:='';
+ VtColorInit;
+ Sc:=Years/10.0;
+ If not VtSkinMaskOf(VtS,VtM)Then Begin FreeMem(VtM);
+   VtMsg:='aucune peau d'#130'tect'#130'e';Exit;End;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Done:=False;
+ { peau plus terne et plus granuleuse }
+ VtSkinGrainPass(VtS,VtM,0.30*Sc,0.30*Sc);
+ For K:=0 to VtN-1 do If VtM[K]>=0.02 Then Begin
+  Mw:=VtM[K]*0.07*Sc;
+  V:=VtLuma(VtS.Pix[K*3],VtS.Pix[K*3+1],VtS.Pix[K*3+2]);
+  For VtI:=0 to 2 do VtS.Pix[K*3+VtI]:=(VtS.Pix[K*3+VtI]+(V-VtS.Pix[K*3+VtI])*Mw)
+    *(1-0.02*Sc*VtM[K]);
+ End;
+ If VtHeadInfo(VtS,VtH)and(VtH.Fw>=60)Then Begin
+  Fw:=VtH.Fw;Fh:=VtH.Fh;Cx:=VtH.Cx;Fy0:=VtH.Fy0;
+  Fm:=VtAllocF(VtN);
+  VtCatMask(VtS,VtmsFace,Fm);
+  Yl:=VtLumaPlane(VtS);
+  Found:=VtFindIrises(VtS,VtH,Yl,Ir,Lskin);
+  FreeMem(Yl);
+  Wr:=VtAllocF(VtN);Bag:=VtAllocF(VtN);
+  Wd:=VtFMax(1.0,0.0065*Fh);
+  Amp:=VtClamp(0.75*Sc,0.30,1.0);
+  { front : lignes horizontales }
+  For VtI:=0 to 3 do
+   VtCrease(Wr,VtS.W,VtS.VtH,Cx-0.30*Fw,Fy0+(0.08+0.050*VtI)*Fh,Cx+0.30*Fw,Fy0+(0.08+
+     0.050*VtI)*Fh,(VtRngF-0.5)*0.03*Fh,Wd,Amp*(1-0.12*VtI),VtI+1);
+  { entre les sourcils }
+  If Sc>=0.9 Then Begin
+   VtCrease(Wr,VtS.W,VtS.VtH,Cx-0.035*Fw,Fy0+0.29*Fh,Cx-0.030*Fw,Fy0+0.38*Fh,0.004*Fh,
+     Wd,Amp*0.8,7);
+   VtCrease(Wr,VtS.W,VtS.VtH,Cx+0.035*Fw,Fy0+0.29*Fh,Cx+0.030*Fw,Fy0+0.38*Fh,
+     -0.004*Fh,Wd,Amp*0.8,8);
+  End;
+  For VtSide:=0 to 1 do Begin
+   Sg:=VtSide*2-1;
+   If Ir[VtSide].Ok Then Begin Ex:=Ir[VtSide].Cx;Ey:=Ir[VtSide].Cy;End
+   Else Begin Ex:=Cx+Sg*0.225*Fw;Ey:=Fy0+0.42*Fh;End;
+   Ox:=Ex+Sg*0.13*Fw;
+   { pattes d'oie }
+   VtCrease(Wr,VtS.W,VtS.VtH,Ox,Ey-0.01*Fh,Ox+Sg*0.095*Fw,Ey-0.055*Fh,Sg*0.006*Fh,
+     Wd*0.9,Amp*0.9,10+VtSide);
+   VtCrease(Wr,VtS.W,VtS.VtH,Ox,Ey+0.01*Fh,Ox+Sg*0.105*Fw,Ey+0.005*Fh,Sg*0.004*Fh,
+     Wd*0.9,Amp,12+VtSide);
+   VtCrease(Wr,VtS.W,VtS.VtH,Ox,Ey+0.03*Fh,Ox+Sg*0.095*Fw,Ey+0.060*Fh,-Sg*0.006*Fh,
+     Wd*0.9,Amp*0.9,14+VtSide);
+   { sillon nasogenien }
+   VtCrease(Wr,VtS.W,VtS.VtH,Cx+Sg*0.15*Fw,Fy0+0.57*Fh,Cx+Sg*0.235*Fw,Fy0+0.81*Fh,
+     Sg*0.025*Fw,Wd*1.3,Amp*0.55,20+VtSide);
+   { cerne sous l'oeil : croissant sombre et flou }
+   For Y:=Trunc(Ey+0.01*Fh)to Trunc(Ey+0.13*Fh)do
+    For X:=Trunc(Ex-0.14*Fw)to Trunc(Ex+0.14*Fw)do Begin
+     If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+     D:=Sqr((X+0.5-Ex)/(0.10*Fw))+Sqr((Y+0.5-(Ey+0.075*Fh))/(0.032*Fh));
+     K:=Int64(Y)*VtS.W+X;
+     Dk:=Exp(-D)*0.34*VtClamp(Sc,0.4,1.1);
+     If Dk>Bag[K]Then Bag[K]:=Dk;
+    End;
+  End;
+  VtBoxBlur(Wr,Wr,VtS.W,VtS.VtH,1);
+  For K:=0 to VtN-1 do Begin
+   Mw:=Fm[K];
+   If Mw<0.1 Then Continue;
+   V:=Wr[K];If V>1 Then V:=1;
+   VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-0.48*V*Mw);
+   VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-0.60*V*Mw);
+   VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-0.60*V*Mw);
+   V:=Bag[K];
+   VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-0.55*V*Mw);
+   VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-0.80*V*Mw);
+   VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-0.70*V*Mw);
+  End;
+  { taches de vieillesse sur le front et les joues }
+  For Sp:=1 to Trunc(7*Sc)+1 do Begin
+   Sx:=Cx+(VtRngF-0.5)*0.62*Fw;Sy:=Fy0+(0.10+VtRngF*0.62)*Fh;
+   Rs:=(0.010+0.012*VtRngF)*Fw;
+   For Y:=Trunc(Sy-2*Rs)to Trunc(Sy+2*Rs)do
+    For X:=Trunc(Sx-2*Rs)to Trunc(Sx+2*Rs)do Begin
+     If(X<0)or(Y<0)or(X>=VtS.W)or(Y>=VtS.VtH)Then Continue;
+     K:=Int64(Y)*VtS.W+X;
+     If Fm[K]<0.9 Then Continue;
+     V:=0.32*VtClamp(Sc,0.3,1.3)*Exp(-(Sqr(X+0.5-Sx)+Sqr(Y+0.5-Sy))/(2*Rs*Rs));
+     VtS.Pix[K*3]:=VtS.Pix[K*3]*(1-0.22*V);
+     VtS.Pix[K*3+1]:=VtS.Pix[K*3+1]*(1-0.42*V);
+     VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*(1-0.62*V);
+    End;
+  End;
+  FreeMem(Wr);FreeMem(Bag);FreeMem(Fm);
+  Done:=True;
+  VtInfo('  rides, cernes et taches dessin'#130's (+'+VtIStr(Years)+' ans)');
+ End
+  Else VtWarn(
+    'visage non d'#130'tect'#130' ou trop petit : rides non dessin'#130'es '+
+    '(texture seulement)');
+ FreeMem(VtM);
+ { cheveux : meches grises }
+ If VtHairSalt(VtS,VtClamp(0.22*Sc,0.05,0.6),False,VtMsg)Then Done:=True;
+ VtMsg:='';
+ Result:=True;
+End;
+
+{ ---- repartiteur ---- }
+
+Function VtApplySkin(Var VtS:VtTScene;Const E:VtTEdit;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN:LongInt;
+Begin
+ VtMsg:='';
+ Result:=False;
+ Case E.SkinOp of
+  VtsoSmooth:Result:=VtSkinSmooth(VtS,0.28,18,0.0,0.0,'peau liss'#130'e',VtMsg);
+  soSoft:Result:=VtSkinSmooth(VtS,0.45,22,0.02,0.2,'peau plus douce',VtMsg);
+  soBaby:Result:=VtSkinSmooth(VtS,0.08,26,0.05,
+    1.0,'peau de b'#130'b'#130' (liss'#130'e, claire, joues ros'#130'es)',VtMsg);
+  soGrain:Result:=VtSkinGrain(VtS,VtMsg);
+  soAge:Begin
+   VtN:=Abs(E.Years);
+   If E.Years<0 Then
+    Result:=VtSkinSmooth(VtS,VtClamp(1-0.065*VtN,0.15,0.95),20,0.004*VtN,
+      0.1*VtN/10.0,'rajeunissement de '+VtIStr(VtN)
+      +' ans (peau liss'#130'e et plus claire)',VtMsg)
+   Else Result:=VtSkinAge(VtS,VtN,VtMsg);
+  End;
+  soSalt:Result:=VtHairSalt(VtS,0.5,True,VtMsg);
+ End;
+End;
+{ ------------------------------------------------------------------ }
+{ Forets dessinees par le programme : tropicale, amazonienne,        }
+{ quebecoise (automne), canadienne, de coniferes                       }
+{ ------------------------------------------------------------------ }
+
+Type
+ VtTRgb=Array[0..2]of Single;
+ VtTFPal=Record
+  SkyT,SkyB,Fog,VtTrunk,Ground,Ground2,Light:VtTRgb;
+  Leaf:Array[0..2]of VtTRgb;
+  Conif:Array[0..1]of VtTRgb;
+  Lit:Array[0..1]of VtTRgb;
+  Mist,Shafts,Fr,Fb,Fp:Single;
+  Giant,VtLianas,Flowers,Mount:Boolean;
+ End;
+
+Const
+ VtFogAmt:Single=0;
+Var
+ VtFogC:VtTRgb;
+
+Procedure VtC3(Var C:VtTRgb;R,VtG,B:Single);
+Begin
+ C[0]:=R;C[1]:=VtG;C[2]:=B;
+End;
+
+{ pose un pixel avec la brume de la profondeur courante }
+Procedure VtPutF(Bg:PSingle;W,VtH,X,Y:LongInt;Cov,R,VtG,B:Single);
+Begin
+ If VtFogAmt>0 Then Begin
+  R:=R*(1-VtFogAmt)+VtFogC[0]*VtFogAmt;
+  VtG:=VtG*(1-VtFogAmt)+VtFogC[1]*VtFogAmt;
+  B:=B*(1-VtFogAmt)+VtFogC[2]*VtFogAmt;
+ End;
+ VtPutBg(Bg,W,VtH,X,Y,Cov,R,VtG,B);
+End;
+
+{ masse de feuillage : disque ebouriffe, eclaire en haut a gauche, texture de
+  feuilles }
+Procedure VtBlob(Bg:PSingle;W,VtH:LongInt;Cx,Cy,R:Single;Const C:VtTRgb;Leaf:Single);
+Var
+ X,Y:LongInt;
+ D,Cov,Nx,Ny,Lt,Tx,V,Rr:Single;
+Begin
+ For Y:=Trunc(Cy-R*1.2)to Trunc(Cy+R*1.2)do
+  For X:=Trunc(Cx-R*1.2)to Trunc(Cx+R*1.2)do Begin
+   If(X<0)or(Y<0)or(X>=W)or(Y>=VtH)Then Continue;
+   Rr:=R*(1+0.20*(VtVNoise(X*Leaf*0.7,Y*Leaf*0.7)-0.5));
+   D:=Sqrt(Sqr(X+0.5-Cx)+Sqr(Y+0.5-Cy))-Rr;
+   Cov:=VtCoverD(D);
+   If Cov<=0 Then Continue;
+   Nx:=(X+0.5-Cx)/R;Ny:=(Y+0.5-Cy)/R;
+   Lt:=VtClamp(0.78+0.50*(-0.45*Nx-0.70*Ny),0.35,1.3);
+   Tx:=VtFBm(X*Leaf,Y*Leaf);
+   V:=Lt*(0.66+0.70*Tx);
+   VtPutF(Bg,W,VtH,X,Y,Cov,C[0]*V,C[1]*V,C[2]*V);
+  End;
+End;
+
+Procedure VtCrown(Bg:PSingle;W,VtH:LongInt;X,Y,R:Single;Const VtP:VtTFPal;
+  Autumn:Boolean);
+Var
+ VtI,K:LongInt;
+ A,Rr,Lf:Single;
+Begin
+ Lf:=0.55/VtFMax(1,R/22);
+ For VtI:=0 to 8 do Begin
+  A:=VtRngF*2*Pi;Rr:=R*0.55*VtRngF;
+  K:=Trunc(VtRngF*2.99);
+  VtBlob(Bg,W,VtH,X+Cos(A)*Rr*1.15,Y+Sin(A)*Rr*0.8,R*(0.42+0.26*VtRngF),VtP.Leaf[K],Lf);
+ End;
+ For VtI:=0 to 24 do Begin
+  A:=VtRngF*2*Pi;Rr:=R*(0.55+0.35*VtRngF);
+  K:=Trunc(VtRngF*2.99);
+  VtBlob(Bg,W,VtH,X+Cos(A)*Rr*1.1,Y+Sin(A)*Rr*0.78,R*0.14,VtP.Leaf[K],Lf*1.8);
+ End;
+End;
+
+{ tronc effile, eclaire a gauche, ecorce en stries verticales ; Birch : tronc
+  blanc marque de noir }
+Procedure VtTrunk(Bg:PSingle;W,VtH:LongInt;X,YTop,YBot,W0,W1,Lean:Single;Const
+  C:VtTRgb;Seed:LongInt;Birch:Boolean);
+Var
+ Y,Xi:LongInt;
+ VtT,Wd,Xc,U,Sh,Bk,Cov,V:Single;
+ Mark:Boolean;
+Begin
+ For Y:=Trunc(YTop)to Trunc(YBot)do Begin
+  If(Y<0)or(Y>=VtH)Then Continue;
+  VtT:=(Y+0.5-YTop)/VtFMax(1,YBot-YTop);
+  Wd:=W0+(W1-W0)*VtT;
+  If VtT>0.93 Then Wd:=Wd*(1+0.9*(VtT-0.93)/0.07);
+  Xc:=X+Lean*(1-VtT);
+  Mark:=Birch and(VtHash2(Trunc((Y+0.5)/VtFMax(2,VtH*0.005)),Seed)>0.88);
+  For Xi:=Trunc(Xc-Wd)-1 to Trunc(Xc+Wd)+1 do Begin
+   If(Xi<0)or(Xi>=W)Then Continue;
+   U:=(Xi+0.5-Xc)/Wd;
+   Cov:=VtCoverD(Abs(Xi+0.5-Xc)-Wd);
+   If Cov<=0 Then Continue;
+   If U>1 Then U:=1 Else If U<-1 Then U:=-1;
+   Sh:=0.42+0.62*(Sqrt(1-U*U)*0.7+0.3*(-U)*0.6+0.25);
+   Bk:=0.72+0.55*VtVNoise(Xi*0.9+Seed*3.1,Y*0.045);
+   V:=Sh*Bk;
+   If Mark and(Abs(U)<0.80)Then V:=V*0.40;
+   VtPutF(Bg,W,VtH,Xi,Y,Cov,C[0]*V,C[1]*V,C[2]*V);
+  End;
+ End;
+End;
+
+{ conifere : etages de branches en dents de scie, plus sombres dessous }
+Procedure VtConifer(Bg:PSingle;W,VtH:LongInt;X,YBase,Ht,Wd:Single;Const VtP:VtTFPal;
+  Seed:LongInt);
+Var
+ VtI,VtN,Y,Xi,K:LongInt;
+ Y0,Th,Hw,VtT,Hy,Cov,V,U,Sh:Single;
+Begin
+ VtTrunk(Bg,W,VtH,X,YBase-Ht*0.25,YBase,Wd*0.045,Wd*0.06,0,VtP.Conif[1],Seed,False);
+ VtN:=8+Trunc(Ht/VtH*6);
+ For VtI:=0 to VtN-1 do Begin
+  Y0:=YBase-Ht+VtI*(Ht*0.80/VtN);
+  Th:=Ht*0.30;
+  Hw:=Wd/2*(0.22+0.78*VtI/(VtN-1));
+  K:=VtI and 1;
+  For Y:=Trunc(Y0)to Trunc(Y0+Th)do Begin
+   If(Y<0)or(Y>=VtH)Then Continue;
+   VtT:=(Y+0.5-Y0)/Th;
+   Hy:=Hw*Exp(0.85*Ln(VtFMax(VtT,0.001)))*(1+0.16*Sin(Y*1.1+VtI*2.3)+
+     0.14*(VtVNoise(Y*0.9+Seed,VtI*5.0)-0.5));
+   For Xi:=Trunc(X-Hy)-1 to Trunc(X+Hy)+1 do Begin
+    If(Xi<0)or(Xi>=W)Then Continue;
+    Cov:=VtCoverD(Abs(Xi+0.5-X)-Hy);
+    If Cov<=0 Then Continue;
+    U:=(Xi+0.5-X)/VtFMax(Hy,1);
+    Sh:=0.50+0.62*(1-VtT*0.65)+0.22*(-U);
+    V:=Sh*(0.70+0.62*VtFBm(Xi*0.45+Seed,Y*0.60));
+    VtPutF(Bg,W,VtH,Xi,Y,Cov,VtP.Conif[K][0]*V,VtP.Conif[K][1]*V,VtP.Conif[K][2]*V);
+   End;
+  End;
+ End;
+End;
+
+{ palme : fronde arquee aux folioles dentelees }
+Procedure VtFrond(Bg:PSingle;W,VtH:LongInt;X0,Y0,Ang,Len,Droop,Wd:Single;Const
+  C:VtTRgb);
+Var
+ VtI,Steps,X,Y,Rr:LongInt;
+ VtT,Px,Py,R,Cov,V,D:Single;
+Begin
+ Steps:=Trunc(Len/1.1)+4;
+ For VtI:=0 to Steps do Begin
+  VtT:=VtI/Steps;
+  Px:=X0+Cos(Ang)*Len*VtT;
+  Py:=Y0+Sin(Ang)*Len*VtT+Droop*Len*VtT*VtT;
+  R:=Wd*(0.30+0.70*Sin(Pi*VtFMin(1,VtT*1.05+0.02)))*(0.70+0.30*Sin(VtT*Len*0.42));
+  If R<0.6 Then R:=0.6;
+  V:=0.55+0.55*(1-VtT)*0.6+0.28*Sin(VtT*Len*0.42+1)*0.5+0.25;
+  Rr:=Trunc(R)+1;
+  For Y:=Trunc(Py)-Rr to Trunc(Py)+Rr do
+   For X:=Trunc(Px)-Rr to Trunc(Px)+Rr do Begin
+    If(X<0)or(Y<0)or(X>=W)or(Y>=VtH)Then Continue;
+    D:=Sqrt(Sqr(X+0.5-Px)+Sqr(Y+0.5-Py));
+    Cov:=VtCoverD(D-R);
+    If Cov<=0 Then Continue;
+    VtPutF(Bg,W,VtH,X,Y,Cov,C[0]*V,C[1]*V,C[2]*V);
+   End;
+ End;
+End;
+
+Procedure VtPalm(Bg:PSingle;W,VtH:LongInt;X,YBase,Ht:Single;Const VtP:VtTFPal;
+  Seed:LongInt);
+Var
+ VtI:LongInt;
+ Lean,A,Xt,Yt:Single;
+Begin
+ Lean:=(VtRngF-0.5)*Ht*0.35;
+ Xt:=X+Lean;Yt:=YBase-Ht*0.88;
+ VtTrunk(Bg,W,VtH,X,Yt,YBase,Ht*0.020,Ht*0.032,Lean,VtP.VtTrunk,Seed,False);
+ For VtI:=0 to 10 do Begin
+  A:=-Pi*(0.08+0.84*VtI/10)+(VtRngF-0.5)*0.15;
+  VtFrond(Bg,W,VtH,Xt,Yt,A,Ht*(0.30+0.12*VtRngF),0.55,Ht*0.030,VtP.Leaf[VtI mod 3]);
+ End;
+End;
+
+{ grande feuille (monstera, bananier) : ellipse inclinee, nervure claire }
+Procedure VtBigLeaf(Bg:PSingle;W,VtH:LongInt;Cx,Cy,Rx,Ry,Ang:Single;Const C:VtTRgb);
+Var
+ X,Y:LongInt;
+ Dx,Dy,Uu,Vv,L,Cov,V,Vein:Single;
+ R:Single;
+Begin
+ R:=VtFMax(Rx,Ry);
+ For Y:=Trunc(Cy-R)-1 to Trunc(Cy+R)+1 do
+  For X:=Trunc(Cx-R)-1 to Trunc(Cx+R)+1 do Begin
+   If(X<0)or(Y<0)or(X>=W)or(Y>=VtH)Then Continue;
+   Dx:=X+0.5-Cx;Dy:=Y+0.5-Cy;
+   Uu:=Dx*Cos(Ang)+Dy*Sin(Ang);Vv:=-Dx*Sin(Ang)+Dy*Cos(Ang);
+   { forme de feuille : pointue aux deux bouts }
+   L:=Sqrt(Sqr(Uu/Rx)+Sqr(Vv/(Ry*VtFMax(0.15,1-0.55*Sqr(Uu/Rx)))));
+   Cov:=VtCoverD((L-1)*VtFMin(Rx,Ry));
+   If Cov<=0 Then Continue;
+   Vein:=Exp(-Sqr(Vv/(0.04*Ry+0.5)))*0.55+0.14*Exp(-Sqr(Frac(Uu/(0.22*Rx)+
+     Abs(Vv)/(0.5*Ry)*0.6)-0.5)*40);
+   V:=(0.62+0.42*(1-L)+0.20*VtFBm(X*0.04,Y*0.04))*(0.9+0.2*(-Vv/Ry));
+   VtPutF(Bg,W,VtH,X,Y,Cov,C[0]*V+Vein*70,C[1]*V+Vein*80,C[2]*V+Vein*40);
+  End;
+End;
+
+{ lianes pendantes }
+Procedure VtLianas(Bg:PSingle;W,VtH:LongInt;X0,Y1,Len:Single;Const C:VtTRgb;
+  Seed:LongInt);
+Var
+ Y,Xi:LongInt;
+ Px,VtT,Cov,V:Single;
+Begin
+ For Y:=0 to Trunc(Y1+Len)do Begin
+  If Y>=VtH Then Break;
+  VtT:=Y/VtFMax(1,Y1+Len);
+  Px:=X0+Sin(Y*0.012+Seed)*VtH*0.006+Sin(Y*0.05+Seed*2)*VtH*0.0015;
+  For Xi:=Trunc(Px)-2 to Trunc(Px)+2 do Begin
+   If(Xi<0)or(Xi>=W)Then Continue;
+   Cov:=VtCoverD(Abs(Xi+0.5-Px)-VtFMax(0.8,VtH*0.0025));
+   V:=0.7+0.5*VtVNoise(Y*0.3,Seed*1.7);
+   VtPutF(Bg,W,VtH,Xi,Y,Cov,C[0]*V,C[1]*V,C[2]*V);
+  End;
+ End;
+End;
+
+{ fougere au sol }
+Procedure VtFern(Bg:PSingle;W,VtH:LongInt;X,Y,Sz:Single;Const C:VtTRgb);
+Var
+ VtI:LongInt;
+Begin
+ For VtI:=0 to 7 do
+  VtFrond(Bg,W,VtH,X,Y,-Pi*(0.10+0.80*VtI/7),Sz*(0.7+0.4*VtRngF),0.55,Sz*0.07,C);
+End;
+
+Procedure VtForestPalette(VtKind:LongInt;Var VtP:VtTFPal);
+Begin
+ VtP.Giant:=False;VtP.VtLianas:=False;VtP.Flowers:=False;VtP.Mount:=False;
+ VtP.Fr:=0;VtP.Fb:=0;VtP.Fp:=0;VtP.Mist:=0.3;VtP.Shafts:=0.7;
+ VtC3(VtP.Lit[0],150,92,48);VtC3(VtP.Lit[1],110,70,38);
+ VtC3(VtP.Conif[0],26,72,54);VtC3(VtP.Conif[1],18,56,46);
+ Case VtKind of
+  VtboTropical:Begin
+   VtC3(VtP.SkyT,120,190,232);VtC3(VtP.SkyB,214,238,228);VtC3(VtP.Fog,190,226,206);
+   VtC3(VtP.VtTrunk,128,100,76);VtC3(VtP.Ground,50,92,36);VtC3(VtP.Ground2,20,46,24);
+     VtC3(VtP.Light,255,246,196);
+   VtC3(VtP.Leaf[0],36,138,44);VtC3(VtP.Leaf[1],84,184,60);VtC3(VtP.Leaf[2],22,104,52);
+   VtP.Fp:=0.40;VtP.VtLianas:=True;VtP.Flowers:=True;VtP.Mist:=0.35;VtP.Shafts:=0.85;
+  End;
+  boAmazon:Begin
+   VtC3(VtP.SkyT,150,184,186);VtC3(VtP.SkyB,186,212,202);VtC3(VtP.Fog,150,186,170);
+   VtC3(VtP.VtTrunk,108,86,68);VtC3(VtP.Ground,36,60,30);VtC3(VtP.Ground2,12,28,18);
+     VtC3(VtP.Light,236,240,190);
+   VtC3(VtP.Leaf[0],22,92,46);VtC3(VtP.Leaf[1],36,120,60);VtC3(VtP.Leaf[2],12,66,42);
+   VtP.Fp:=0.25;VtP.Giant:=True;VtP.VtLianas:=True;VtP.Mist:=0.65;VtP.Shafts:=0.75;
+  End;
+  boConifer:Begin
+   VtC3(VtP.SkyT,126,158,186);VtC3(VtP.SkyB,198,216,224);VtC3(VtP.Fog,176,198,208);
+   VtC3(VtP.VtTrunk,92,70,56);VtC3(VtP.Ground,92,64,38);VtC3(VtP.Ground2,42,34,26);
+     VtC3(VtP.Light,242,242,222);
+   VtC3(VtP.Leaf[0],34,86,56);VtC3(VtP.Leaf[1],26,70,50);VtC3(VtP.Leaf[2],40,100,64);
+   VtC3(VtP.Conif[0],24,76,60);VtC3(VtP.Conif[1],14,54,46);
+   VtP.Fr:=1.0;VtP.Mist:=0.5;VtP.Shafts:=0.6;
+  End;
+  boCanada:Begin
+   VtC3(VtP.SkyT,92,148,216);VtC3(VtP.SkyB,204,226,242);VtC3(VtP.Fog,192,212,228);
+   VtC3(VtP.VtTrunk,100,78,62);VtC3(VtP.Ground,66,96,44);VtC3(VtP.Ground2,32,54,30);
+     VtC3(VtP.Light,255,244,208);
+   VtC3(VtP.Leaf[0],56,128,42);VtC3(VtP.Leaf[1],92,160,54);VtC3(VtP.Leaf[2],36,98,42);
+   VtP.Fr:=0.5;VtP.Fb:=0.15;VtP.Mount:=True;VtP.Mist:=0.3;VtP.Shafts:=0.55;
+   VtC3(VtP.Lit[0],130,150,70);VtC3(VtP.Lit[1],100,80,44);
+  End;
+  Else Begin
+   { foret quebecoise : erables d'automne, bouleaux, quelques sapins }
+   VtC3(VtP.SkyT,150,184,218);VtC3(VtP.SkyB,238,226,204);VtC3(VtP.Fog,230,212,190);
+   VtC3(VtP.VtTrunk,104,82,64);VtC3(VtP.Ground,128,78,34);VtC3(VtP.Ground2,72,46,26);
+     VtC3(VtP.Light,255,228,162);
+   VtC3(VtP.Leaf[0],200,58,28);VtC3(VtP.Leaf[1],236,136,32);VtC3(VtP.Leaf[2],240,194,50);
+   VtP.Fr:=0.20;VtP.Fb:=0.25;VtP.Mist:=0.25;VtP.Shafts:=0.7;
+   VtC3(VtP.Lit[0],216,100,30);VtC3(VtP.Lit[1],238,178,52);
+  End;
+ End;
+End;
+
+Procedure VtSkyForest(Bg:PSingle;W,VtH:LongInt;VtKind:LongInt;Hor:Single);
+Const
+ Scl:Array[0..4]of Single=(0.30,0.45,0.65,0.90,1.25);
+ OffY:Array[0..4]of Single=(0.0,0.012,0.035,0.075,0.13);
+ FogK:Array[0..4]of Single=(0.72,0.52,0.33,0.15,0.0);
+ NTree:Array[0..4]of LongInt=(10,8,6,4,2);
+Var
+ VtP:VtTFPal;
+ X,Y,D,VtI,VtN,Seed:LongInt;
+ VtT,Sc,Yb,Ht,Xt,R,Tw,V,Gx,Gt,Nz,Dist,Fade,Al,S0,Px,Ang,Ln:Single;
+ K:LongInt;
+ KK:Int64;
+ BirchC:VtTRgb;
+ Autumn:Boolean;
+Begin
+ VtC3(BirchC,228,226,216);
+ If VtKind=boForest Then VtKind:=boQuebec;
+ VtForestPalette(VtKind,VtP);
+ Autumn:=VtKind=boQuebec;
+ VtFogAmt:=0;
+ { ciel }
+ VtVGradient(Bg,W,VtH,0,VtH-1,VtP.SkyT[0],VtP.SkyT[1],VtP.SkyT[2],VtP.SkyB[0],VtP.SkyB[1],
+   VtP.SkyB[2]);
+ VtClouds(Bg,W,VtH,0,Trunc(Hor),0.8/VtFMax(40,0.16*W),0.55);
+ { montagnes lointaines (Canada) }
+ If VtP.Mount Then
+  For X:=0 to W-1 do Begin
+   Yb:=Hor-VtH*(0.10+0.16*VtFBm(X*2.2/W,5.0)+0.08*Sin(X*3.0/W));
+   For Y:=Trunc(Yb)to Trunc(Hor)do Begin
+    V:=1-0.35*(Y-Yb)/VtFMax(1,Hor-Yb);
+    VtPutBg(Bg,W,VtH,X,Y,1,(112+30*(Y-Yb)/VtH*3)*V,(134+20*(Y-Yb)/VtH*3)*V,(168+
+      10*(Y-Yb)/VtH*3)*V);
+    If Y-Yb<VtH*0.02 Then VtPutBg(Bg,W,VtH,X,Y,0.7*(1-(Y-Yb)/(VtH*0.02)),238,242,248);
+   End;
+  End;
+ { sol : degrade, feuilles mortes ou sous-bois }
+ For Y:=Trunc(Hor)to VtH-1 do Begin
+  VtT:=(Y-Hor)/VtFMax(1,VtH-Hor);
+  For X:=0 to W-1 do Begin
+   Nz:=VtFBm(X*7.0/W,Y*7.0/W*1.8);
+   V:=0.55+0.55*Nz;
+   Bg[(Int64(Y)*W+X)*3]:=(VtP.Ground2[0]*(1-VtT)+VtP.Ground[0]*VtT)*V;
+   Bg[(Int64(Y)*W+X)*3+1]:=(VtP.Ground2[1]*(1-VtT)+VtP.Ground[1]*VtT)*V;
+   Bg[(Int64(Y)*W+X)*3+2]:=(VtP.Ground2[2]*(1-VtT)+VtP.Ground[2]*VtT)*V;
+   { feuilles mortes, aiguilles }
+   If(VtHash2(X div 3,Y div 2)>0.90-0.04*VtT)and(VtKind<>VtboTropical)
+     and(VtKind<>boAmazon)Then Begin
+    K:=Trunc(VtHash2(X div 3+9,Y div 2+4)*1.99);
+    VtPutBg(Bg,W,VtH,X,Y,0.65,VtP.Lit[K][0]*(0.7+0.5*Nz),VtP.Lit[K][1]*(0.7+0.5*Nz),
+      VtP.Lit[K][2]*(0.7+0.5*Nz));
+   End;
+  End;
+ End;
+ { couches d'arbres, du lointain au premier plan }
+ For D:=0 to 4 do Begin
+  VtFogAmt:=VtClamp(FogK[D]*(0.55+VtP.Mist*1.2),0,0.92);
+  VtFogC:=VtP.Fog;
+  Sc:=Scl[D];
+  Yb:=Hor+OffY[D]*VtH;
+  VtN:=NTree[D];
+  If VtP.Giant and(D>=2)Then VtN:=VtN+1;
+  For VtI:=0 to VtN-1 do Begin
+   Seed:=D*37+VtI*11+VtKind;
+   If D=4 Then Begin
+    If VtI=0 Then Xt:=W*(0.03+0.07*VtRngF) Else Xt:=W*(0.90+0.07*VtRngF);
+   End
+   Else Xt:=W*(-0.04+1.08*(VtI+VtRngF)/VtN);
+   Ht:=VtH*(0.50+0.12*VtRngF)*Sc*(1.0+0.1*VtKind*0);
+   Tw:=W*0.012*Sc*(0.8+0.5*VtRngF);
+   VtT:=VtRngF;
+   If VtP.Giant and(D>=2)Then Begin
+    { fut immense dont la couronne depasse du cadre, lianes }
+    VtTrunk(Bg,W,VtH,Xt,-0.2*VtH,Yb,W*0.012*Sc*(1.0+0.6*VtRngF),W*0.022*Sc*(1.0+
+      0.6*VtRngF),(VtRngF-0.5)*W*0.03,VtP.VtTrunk,Seed,False);
+    If VtP.VtLianas Then VtLianas(Bg,W,VtH,Xt+(VtRngF-0.5)*W*0.05*Sc,0,VtH*(0.35+0.4*VtRngF)
+      *Sc,VtP.Leaf[1],Seed);
+   End
+   Else If VtT<VtP.Fr Then VtConifer(Bg,W,VtH,Xt,Yb,Ht*1.05*(1+0.2*Ord(VtP.Fr>=1)),
+     Ht*0.45,VtP,Seed)
+   Else If VtT<VtP.Fr+VtP.Fb Then Begin
+    VtTrunk(Bg,W,VtH,Xt,Yb-Ht*0.80,Yb,Tw*0.8,Tw*1.05,(VtRngF-0.5)*Ht*0.06,BirchC,
+      Seed,True);
+    VtCrown(Bg,W,VtH,Xt,Yb-Ht*0.86,Ht*0.15,VtP,Autumn);
+   End
+   Else If VtT<VtP.Fr+VtP.Fb+VtP.Fp Then VtPalm(Bg,W,VtH,Xt,Yb,Ht,VtP,Seed)
+   Else Begin
+    VtTrunk(Bg,W,VtH,Xt,Yb-Ht*0.62,Yb,Tw,Tw*1.35,(VtRngF-0.5)*Ht*0.08,VtP.VtTrunk,
+      Seed,False);
+    VtCrown(Bg,W,VtH,Xt+(VtRngF-0.5)*Ht*0.06,Yb-Ht*0.72,Ht*0.30,VtP,Autumn);
+    If VtP.VtLianas and(D>=3)Then VtLianas(Bg,W,VtH,Xt+Tw*3,Yb-Ht*0.6,Ht*0.4,
+      VtP.Leaf[2],Seed);
+   End;
+  End;
+ End;
+ VtFogAmt:=0;
+ { premier plan : grandes feuilles, fougeres, fleurs, branches de coniferes }
+ If(VtKind=VtboTropical)or(VtKind=boAmazon)Then Begin
+  For VtI:=0 to 5 do Begin
+   If VtI<3 Then Px:=W*(0.01+0.12*VtRngF) Else Px:=W*(0.87+0.12*VtRngF);
+   R:=VtH*(0.10+0.07*VtRngF);
+   VtBigLeaf(Bg,W,VtH,Px,VtH*(0.80+0.18*VtRngF),R*1.5,R*0.62,-Pi*(0.15+0.7*VtRngF),
+     VtP.Leaf[VtI mod 3]);
+  End;
+  For VtI:=0 to 9 do VtFern(Bg,W,VtH,W*VtRngF,VtH*(0.80+0.18*VtRngF),VtH*0.11,VtP.Leaf[VtI mod
+    3]);
+  If VtP.Flowers Then
+   For VtI:=0 to 16 do Begin
+    Px:=W*VtRngF;Gx:=VtH*(0.68+0.30*VtRngF);R:=VtH*(0.006+0.006*VtRngF);
+    For Y:=Trunc(Gx-R*2)to Trunc(Gx+R*2)do
+     For X:=Trunc(Px-R*2)to Trunc(Px+R*2)do Begin
+      Dist:=Sqrt(Sqr(X+0.5-Px)+Sqr(Y+0.5-Gx));
+      If Dist<R*2 Then Begin
+       Ang:=VtATan2F(Y+0.5-Gx,X+0.5-Px);
+       Al:=VtCoverD(Dist-R*(1.0+0.5*Cos(Ang*5)));
+       VtPutBg(Bg,W,VtH,X,Y,Al,236,(50+60*VtHash2(VtI,3)),(40+40*VtHash2(VtI,7)));
+       VtPutBg(Bg,W,VtH,X,Y,VtCoverD(Dist-R*0.35),255,214,70);
+      End;
+     End;
+   End;
+ End
+ Else If VtKind=boConifer Then Begin
+  For VtI:=0 to 6 do Begin
+   If VtI<3 Then Px:=W*(0.0+0.15*VtRngF) Else Px:=W*(0.85+0.15*VtRngF);
+   Ang:=Pi*(0.20+0.35*VtRngF);
+   If Px>W*0.5 Then Ang:=Pi-Ang;
+   VtFrond(Bg,W,VtH,Px,-VtH*0.02,Ang,VtH*(0.28+0.14*VtRngF),0.0,VtH*0.030,VtP.Conif[VtI and 1]);
+  End;
+ End
+ Else Begin
+  { feuillage flou en haut des coins }
+  For VtI:=0 to 7 do Begin
+   Px:=W*(0.05+0.9*VtRngF);
+   If(Px>W*0.25)and(Px<W*0.75)Then Px:=Px+W*0.4*(1-2*Ord(Px<W*0.5));
+   VtBlob(Bg,W,VtH,Px,-VtH*0.01+VtH*0.05*VtRngF,VtH*(0.06+0.05*VtRngF),VtP.Leaf[VtI mod 3],0.2);
+  End;
+ End;
+ { rayons de lumiere dans la brume }
+ For K:=0 to 5 do Begin
+  S0:=W*(0.05+0.9*(K+VtRngF*0.6)/6);
+  Ang:=0.30+0.1*VtRngF;
+  Gt:=0.025*W*(0.7+0.8*VtRngF);
+  For Y:=0 to VtH-1 do Begin
+   Fade:=(1-0.8*Y/VtH);
+   For X:=0 to W-1 do Begin
+    Dist:=(X+0.5-S0-Y*Ang)*Cos(Ang*0.9);
+    Al:=Exp(-Sqr(Dist/Gt))*Fade*VtP.Shafts*0.22*(0.55+0.45*VtFBm(X*0.004,Y*0.012+
+      K*3));
+    If Al>0.004 Then VtPutBg(Bg,W,VtH,X,Y,Al,VtP.Light[0],VtP.Light[1],VtP.Light[2]);
+   End;
+  End;
+ End;
+ { brume au sol, vignettage }
+ For Y:=0 to VtH-1 do
+  For X:=0 to W-1 do Begin
+   Al:=VtP.Mist*0.55*Exp(-Sqr((Y-Hor)/(0.09*VtH)));
+   If Al>0.004 Then VtPutBg(Bg,W,VtH,X,Y,Al,VtP.Fog[0],VtP.Fog[1],VtP.Fog[2]);
+   V:=1-0.30*Sqr(Sqrt(Sqr(X/W-0.5)+Sqr(Y/VtH-0.5))*1.35);
+   KK:=(Int64(Y)*W+X)*3;
+   Bg[KK]:=Bg[KK]*V;Bg[KK+1]:=Bg[KK+1]*V;Bg[KK+2]:=Bg[KK+2]*V;
+  End;
+End;
+{ ------------------------------------------------------------------ }
+{ Image entiere (lisse, floue, nette) et arriere-plan (uni, ciel       }
+{ etoile, ciel ensoleille, coucher de soleil, flou, transparent)        }
+{ ------------------------------------------------------------------ }
+
+Const
+ VtOutAlpha:PByte=Nil;          { transparence a ecrire dans le PNG (fond
+   transparent) }
+ VtOutAlphaN:Int64=0;
+
+{ flou gaussien approximatif de la photo entiere }
+Procedure VtBlurRgb(Pix:PSingle;W,VtH:LongInt;Sigma:Single);
+Var
+ VtP:PSingle;
+ VtN:int64;K:LongInt;
+ C:LongInt;
+Begin
+ VtN:=Int64(W)*VtH;
+ VtP:=VtAllocF(VtN);
+ For C:=0 to 2 do Begin
+  For K:=0 to VtN-1 do VtP[K]:=Pix[K*3+C];
+  VtBlurPlane(VtP,W,VtH,Sigma);
+  For K:=0 to VtN-1 do Pix[K*3+C]:=VtP[K];
+ End;
+ FreeMem(VtP);
+End;
+
+Function VtImageSmooth(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ VtM,Base:PSingle;
+ VtN:int64;K:LongInt;
+ C,R:LongInt;
+ Dl,Keep:Single;
+Begin
+ VtMsg:='';
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ VtM:=VtAllocF(VtN);
+ For K:=0 to VtN-1 do VtM[K]:=1;
+ Base:=VtAllocF(VtN*3);
+ R:=VtClampI(Round(0.004*VtIMax(VtS.W,VtS.VtH)),2,7);
+ VtSkinBase(VtS,VtM,R,20,Base);
+ For K:=0 to VtN-1 do Begin
+  Dl:=(Abs(VtS.Pix[K*3]-Base[K*3])+Abs(VtS.Pix[K*3+1]-Base[K*3+1])+Abs(VtS.Pix[K*3+
+    2]-Base[K*3+2]))*0.3333;
+  Keep:=0.22+0.78*VtSmoothStep(10,28,Dl);
+  For C:=0 to 2 do VtS.Pix[K*3+C]:=Base[K*3+C]+(VtS.Pix[K*3+C]-Base[K*3+C])*Keep;
+ End;
+ FreeMem(VtM);FreeMem(Base);
+ VtInfo('  image liss'#130'e (grain et textures fines att'#130'nu'#130's, '+
+   'contours conserv'#130's)');
+ Result:=True;
+End;
+
+Function VtImageBlur(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Begin
+ VtMsg:='';
+ VtBlurRgb(VtS.Pix,VtS.W,VtS.VtH,VtFMax(1.5,0.008*VtIMax(VtS.W,VtS.VtH)));
+ VtInfo('  image floue');
+ Result:=True;
+End;
+
+Function VtImageSharpen(Var VtS:VtTScene;Var VtMsg:AnsiString):Boolean;
+Var
+ B:PSingle;
+ VtN:int64;K:LongInt;
+ Sg:Single;
+Begin
+ VtMsg:='';
+ VtN:=Int64(VtS.W)*VtS.VtH*3;
+ B:=VtAllocF(VtN);
+ Move(VtS.Pix^,B^,VtN*4);
+ Sg:=VtFMax(1.0,0.0025*VtIMax(VtS.W,VtS.VtH));
+ VtBlurRgb(B,VtS.W,VtS.VtH,Sg);
+ For K:=0 to VtN-1 do VtS.Pix[K]:=VtS.Pix[K]+(VtS.Pix[K]-B[K])*0.9;
+ FreeMem(B);
+ VtInfo('  image plus nette');
+ Result:=True;
+End;
+
+{ ---- arriere-plan ---- }
+
+{ opacite de la personne (0..1), bords adoucis }
+Procedure VtMatteAlpha(Const VtS:VtTScene;A:PSingle);
+Var
+ VtN:int64;K:LongInt;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ For K:=0 to VtN-1 do A[K]:=VtSmoothStep(0.15,0.90,1-VtS.Cat[VtcBg][K]/255.0);
+End;
+
+{ retire la couleur de l'ancien fond sur les bords : la couleur de la personne y
+  est propagee depuis l'interieur }
+Procedure VtDecontam(Var VtS:VtTScene;A:PSingle);
+Var
+ VtN:int64;K:LongInt;
+ C:LongInt;
+ Fg,Kn:PSingle;
+ Ap:Single;
+Begin
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ Fg:=VtAllocF(VtN*3);Kn:=VtAllocF(VtN);
+ Move(VtS.Pix^,Fg^,VtN*12);
+ For K:=0 to VtN-1 do If A[K]>=0.92 Then Kn[K]:=1;
+ VtPushPullFill(Fg,Kn,VtS.W,VtS.VtH);
+ For K:=0 to VtN-1 do If(A[K]>0.003)and(A[K]<0.92)Then Begin
+  Ap:=VtSmoothStep(0.55,0.95,A[K]);
+  For C:=0 to 2 do VtS.Pix[K*3+C]:=Fg[K*3+C]*(1-Ap)+VtS.Pix[K*3+C]*Ap;
+ End;
+ FreeMem(Fg);FreeMem(Kn);
+End;
+
+{ ciel etoile : voie lactee en diagonale, etoiles de tailles et de teintes
+  variees }
+Procedure VtSkyStars(Bg:PSingle;W,VtH:LongInt);
+Var
+ X,Y,Cs,Cx,Cy:LongInt;
+ K:Int64;
+ VtT,Dist,Haze,V,Px,Py,D2,B,Rr,Tint,Th:Single;
+ R,VtG,Bl:Single;
+Begin
+ Cs:=VtIMax(3,VtIMax(W,VtH)div 170);
+ For Y:=0 to VtH-1 do
+  For X:=0 to W-1 do Begin
+   K:=Int64(Y)*W+X;
+   VtT:=Y/VtH;
+   R:=3+22*VtT*VtT;VtG:=6+22*VtT*VtT;Bl:=22+46*VtT;
+   Dist:=(X/W+Y/VtH-1.0);
+   Haze:=Exp(-Sqr(Dist/0.17))*(0.30+0.70*VtFBm(X*8.0/VtIMax(W,VtH),Y*8.0/VtIMax(W,VtH)));
+   R:=R+Haze*70;VtG:=VtG+Haze*78;Bl:=Bl+Haze*128;
+   Haze:=Exp(-Sqr((Dist-0.05)/0.05))*VtFBm(X*22.0/VtIMax(W,VtH)+9,Y*22.0/VtIMax(W,VtH));
+   R:=R-Haze*14;VtG:=VtG-Haze*16;Bl:=Bl-Haze*20;
+   { etoile de la cellule }
+   Cx:=X div Cs;Cy:=Y div Cs;
+   Th:=0.80-0.10*Exp(-Sqr(Dist/0.2));
+   If VtHash2(Cx,Cy)>Th Then Begin
+    Px:=(Cx+0.2+0.6*VtHash2(Cx+7,Cy+3))*Cs;
+    Py:=(Cy+0.2+0.6*VtHash2(Cx+13,Cy+9))*Cs;
+    B:=VtHash2(Cx+3,Cy+29);B:=B*B*B;
+    Rr:=0.45+0.25*Cs*0.18*(1+2.2*B);
+    If VtHash2(Cx+5,Cy+41)>0.97 Then Begin Rr:=Rr*2.0;B:=0.6+0.4*B;End;
+    D2:=Sqr(X+0.5-Px)+Sqr(Y+0.5-Py);
+    V:=(0.25+0.75*B)*Exp(-D2/(2*Rr*Rr))*1.5;
+    Tint:=VtHash2(Cx+17,Cy+23);
+    R:=R+V*(205+50*Tint);VtG:=VtG+V*(215+20*Tint);Bl:=Bl+V*(255-45*Tint);
+   End;
+   Bg[K*3]:=R;Bg[K*3+1]:=VtG;Bg[K*3+2]:=Bl;
+  End;
+End;
+
+{ ciel ensoleille : degrade bleu, soleil et halo, nuages }
+Procedure VtSkyClear(Bg:PSingle;W,VtH:LongInt);
+Var
+ X,Y:LongInt;
+ K:Int64;
+ VtT,D,Rs,Sx,Sy,Gl,Hz:Single;
+Begin
+ Rs:=0.045*VtIMax(W,VtH);
+ Sx:=0.78*W;Sy:=0.17*VtH;
+ VtVGradient(Bg,W,VtH,0,VtH-1,44,112,214,168,212,248);
+ VtClouds(Bg,W,VtH,0,VtH-1,0.9/VtFMax(40,0.16*W),0.95);
+ For Y:=0 to VtH-1 do
+  For X:=0 to W-1 do Begin
+   D:=Sqrt(Sqr(X+0.5-Sx)+Sqr(Y+0.5-Sy));
+   Gl:=0.55*Exp(-Sqr(D/(Rs*5.5)))+0.35*Exp(-Sqr(D/(Rs*1.9)));
+   VtPutBg(Bg,W,VtH,X,Y,Gl,255,248,214);
+   VtPutBg(Bg,W,VtH,X,Y,VtCoverD(D-Rs),255,252,236);
+  End;
+End;
+
+{ coucher de soleil : degrade violet - orange, soleil bas, nuages colores }
+Procedure VtSkySunset(Bg:PSingle;W,VtH:LongInt);
+Var
+ X,Y:LongInt;
+ K:Int64;
+ VtT,D,Rs,Sx,Sy,Gl,Cl:Single;
+ R,VtG,B:Single;
+Begin
+ Rs:=0.06*VtIMax(W,VtH);
+ Sx:=0.5*W;Sy:=0.78*VtH;
+ For Y:=0 to VtH-1 do Begin
+  VtT:=Y/VtH;
+  If VtT<0.45 Then Begin
+   R:=28+(120-28)*VtT/0.45;VtG:=36+(62-36)*VtT/0.45;B:=92+(120-92)*VtT/0.45;
+  End
+  Else If VtT<0.75 Then Begin
+   R:=120+(238-120)*(VtT-0.45)/0.30;VtG:=62+(112-62)*(VtT-0.45)/0.30;B:=120+(84-120)
+     *(VtT-0.45)/0.30;
+  End
+  Else Begin
+   R:=238+(255-238)*(VtT-0.75)/0.25;VtG:=112+(196-112)*(VtT-0.75)/0.25;B:=84+(112-84)
+     *(VtT-0.75)/0.25;
+  End;
+  For X:=0 to W-1 do Begin
+   K:=Int64(Y)*W+X;
+   Bg[K*3]:=R;Bg[K*3+1]:=VtG;Bg[K*3+2]:=B;
+  End;
+ End;
+ For Y:=0 to VtH-1 do
+  For X:=0 to W-1 do Begin
+   Cl:=VtSmoothStep(0.55,0.80,VtFBm(X*5.0/VtIMax(W,VtH),Y*11.0/VtIMax(W,VtH)+3))
+     *0.55*(1-VtSmoothStep(0.55,0.9,Y/VtH));
+   VtPutBg(Bg,W,VtH,X,Y,Cl,250,150,130);
+   D:=Sqrt(Sqr(X+0.5-Sx)+Sqr(Y+0.5-Sy));
+   Gl:=0.60*Exp(-Sqr(D/(Rs*4.5)))+0.40*Exp(-Sqr(D/(Rs*1.6)));
+   VtPutBg(Bg,W,VtH,X,Y,Gl,255,214,140);
+   VtPutBg(Bg,W,VtH,X,Y,VtCoverD(D-Rs),255,240,200);
+  End;
+End;
+
+Function VtApplyBackground(Var VtS:VtTScene;Const E:VtTEdit;Var VtMsg:AnsiString):Boolean;
+Var
+ VtN:int64;K:LongInt;
+ A,Bg,Kn:PSingle;
+ C,Cnt:LongInt;
+ R,VtG,B:Single;
+ Rgb:LongWord;
+ X0,Y0,X1,Y1:LongInt;
+ Hor:Single;
+Begin
+ Result:=False;
+ VtMsg:='';
+ VtColorInit;
+ VtN:=Int64(VtS.W)*VtS.VtH;
+ A:=VtAllocF(VtN);
+ VtMatteAlpha(VtS,A);
+ Cnt:=0;
+ For K:=0 to VtN-1 do If A[K]>0.5 Then Inc(Cnt);
+ If Cnt<VtN div 100 Then Begin FreeMem(A);VtMsg:=
+   'aucune personne d'#130'tect'#130'e : impossible de s'#130'parer l''arri'+
+   #138're-plan';Exit;End;
+ VtDecontam(VtS,A);
+ If E.BgOp=boTransparent Then Begin
+  If VtOutAlpha<>Nil Then FreeMem(VtOutAlpha);
+  VtOutAlpha:=PByte(VtAllocBytes(VtN));VtOutAlphaN:=VtN;
+  For K:=0 to VtN-1 do VtOutAlpha[K]:=Trunc(A[K]*255+0.5);
+  FreeMem(A);
+  VtInfo('  arri'#138're-plan transparent (fichier PNG avec canal alpha)');
+  Result:=True;
+  Exit;
+ End;
+ Bg:=VtAllocF(VtN*3);
+ Case E.BgOp of
+  VtboSolid:Begin
+   Rgb:=E.DstRGB;
+   R:=(Rgb shr 16)and $FF;VtG:=(Rgb shr 8)and $FF;B:=Rgb and $FF;
+   { noir et blanc du lexique : noir et blanc purs }
+   If(R<=34)and(VtG<=34)and(B<=34)Then Begin R:=0;VtG:=0;B:=0;End;
+   If(R>=240)and(VtG>=240)and(B>=240)Then Begin R:=255;VtG:=255;B:=255;End;
+   For K:=0 to VtN-1 do Begin Bg[K*3]:=R;Bg[K*3+1]:=VtG;Bg[K*3+2]:=B;End;
+   VtInfo('  arri'#138're-plan uni '+E.DstName);
+  End;
+  boStars:Begin VtSkyStars(Bg,VtS.W,VtS.VtH);
+    VtInfo('  arri'#138're-plan : ciel '#130'toil'#130);End;
+  boSunny:Begin VtSkyClear(Bg,VtS.W,VtS.VtH);
+    VtInfo('  arri'#138're-plan : ciel ensoleill'#130);End;
+  boSunset:Begin
+   VtSkySunset(Bg,VtS.W,VtS.VtH);
+   For K:=0 to VtN-1 do If A[K]>0 Then Begin VtS.Pix[K*3]:=VtS.Pix[K*3]*1.04;
+     VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*0.92;End;
+   VtInfo('  arri'#138're-plan : coucher de soleil');
+  End;
+  VtboTropical,boAmazon,boQuebec,boCanada,boConifer,boForest:Begin
+   If VtPersonBounds(VtS,X0,Y0,X1,Y1)and(Y1<0.95*VtS.VtH)Then Hor:=VtClamp(Y1+
+     1-0.07*(Y1-Y0+1),0.5*VtS.VtH,0.8*VtS.VtH)
+   Else Hor:=0.62*VtS.VtH;
+   VtSkyForest(Bg,VtS.W,VtS.VtH,E.BgOp,Hor);
+   For K:=0 to VtN-1 do If A[K]>0 Then Begin VtS.Pix[K*3]:=VtS.Pix[K*3]*1.02;
+     VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*0.96;End;
+   Case E.BgOp of
+    VtboTropical:VtInfo('  arri'#138're-plan : for'#136't tropicale');
+    boAmazon:VtInfo('  arri'#138're-plan : for'#136't amazonienne');
+    boCanada:VtInfo('  arri'#138're-plan : for'#136't canadienne');
+    boConifer:VtInfo('  arri'#138're-plan : for'#136't de conif'#138'res');
+    Else
+      VtInfo('  arri'#138're-plan : for'#136't qu'#130'b'#130'coise (automne)');
+   End;
+  End;
+  boBlur:Begin
+   { le fond est reconstitue sous la personne, puis floute }
+   Move(VtS.Pix^,Bg^,VtN*12);
+   Kn:=VtAllocF(VtN);
+   For K:=0 to VtN-1 do If A[K]<0.04 Then Kn[K]:=1;
+   VtPushPullFill(Bg,Kn,VtS.W,VtS.VtH);
+   FreeMem(Kn);
+   VtBlurRgb(Bg,VtS.W,VtS.VtH,VtFMax(2.0,0.016*VtIMax(VtS.W,VtS.VtH)));
+   VtInfo('  arri'#138're-plan flou (effet portrait)');
+  End;
+  Else Begin FreeMem(A);FreeMem(Bg);
+    VtMsg:='arri'#138're-plan non pris en charge';Exit;End;
+ End;
+ If E.BgOp=boSunny Then
+  For K:=0 to VtN-1 do If A[K]>0 Then Begin VtS.Pix[K*3]:=VtS.Pix[K*3]*1.02;
+    VtS.Pix[K*3+2]:=VtS.Pix[K*3+2]*0.97;End;
+ For K:=0 to VtN-1 do
+  For C:=0 to 2 do VtS.Pix[K*3+C]:=Bg[K*3+C]*(1-A[K])+VtS.Pix[K*3+C]*A[K];
+ FreeMem(A);FreeMem(Bg);
+ Result:=True;
+End;
+
+Function VtApplyImageOp(Var VtS:VtTScene;Const E:VtTEdit;Var VtMsg:AnsiString):Boolean;
+Begin
+ VtMsg:='';
+ Case E.ImgOp of
+  VtioSmooth:Result:=VtImageSmooth(VtS,VtMsg);
+  ioBlur:Result:=VtImageBlur(VtS,VtMsg);
+  ioSharp:Result:=VtImageSharpen(VtS,VtMsg);
+  Else Begin VtMsg:='op'#130'ration sur l''image non reconnue';
+    Result:=False;End;
+ End;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Couche systeme : console, repertoires, telechargement (Windows)      }
+{ ------------------------------------------------------------------ }
+
+{$IFDEF WINDOWS}
+Function GetConsoleOutputCP:LongWord;stdcall;external 'kernel32.dll' name
+  'GetConsoleOutputCP';
+Function GetConsoleCP:LongWord;stdcall;external 'kernel32.dll' name
+  'GetConsoleCP';
+Function SetConsoleOutputCP(CP:LongWord):LongInt;stdcall;external
+  'kernel32.dll' name 'SetConsoleOutputCP';
+Function SetConsoleCP(CP:LongWord):LongInt;stdcall;external 'kernel32.dll' name
+  'SetConsoleCP';
+Function MultiByteToWideChar(CP,
+  Flags:LongWord;VtS:PChar;VtN:LongInt;W:PWideChar;WN:LongInt):LongInt;
+ stdcall;external 'kernel32.dll' name 'MultiByteToWideChar';
+Function WideCharToMultiByte(CP,
+  Flags:LongWord;W:PWideChar;WN:LongInt;VtS:PChar;VtN:LongInt;Def:PChar;
+    VtUsed:Pointer):LongInt;
+ stdcall;external 'kernel32.dll' name 'WideCharToMultiByte';
+Procedure WinSleep(Ms:LongWord);stdcall;external 'kernel32.dll' name 'Sleep';
+
+Function InternetOpenA(Agent:PChar;AccessType:LongWord;Proxy,
+  Bypass:PChar;Flags:LongWord):Pointer;
+ stdcall;external 'wininet.dll' name 'InternetOpenA';
+Function InternetOpenUrlA(VtH:Pointer;Url,
+  Headers:PChar;HeadersLen:LongWord;Flags:LongWord;Ctx:PtrUInt):Pointer;
+ stdcall;external 'wininet.dll' name 'InternetOpenUrlA';
+Function InternetReadFile(VtH:Pointer;Buf:Pointer;ToRead:LongWord;Var
+  Got:LongWord):LongInt;
+ stdcall;external 'wininet.dll' name 'InternetReadFile';
+Function InternetCloseHandle(VtH:Pointer):LongInt;stdcall;external 'wininet.dll'
+  name 'InternetCloseHandle';
+Function HttpQueryInfoA(VtH:Pointer;InfoLevel:LongWord;Buf:Pointer;Var
+  BufLen:LongWord;Index:Pointer):LongInt;
+ stdcall;external 'wininet.dll' name 'HttpQueryInfoA';
+Function
+  InternetSetOptionA(VtH:Pointer;Opt:LongWord;Buf:Pointer;BufLen:LongWord)
+    :LongInt;
+ stdcall;external 'wininet.dll' name 'InternetSetOptionA';
+
+{$ENDIF}
+
+Function VtHomeDir:AnsiString;
+Begin
+ Result:=GetEnv('HOME');
+ If Result='' Then Result:=GetEnv('USERPROFILE');
+End;
+
+{ repertoire ou sont ranges les modeles telecharges }
+Function VtCacheDir:AnsiString;
+Var
+ D:AnsiString;
+Begin
+ D:=GetEnv('VTON_CACHE');
+ If D='' Then Begin
+  {$IFDEF WINDOWS}
+  D:=GetEnv('LOCALAPPDATA');
+  If D='' Then D:='.';
+  D:=D+'\vton';
+  {$ELSE}
+  D:=GetEnv('XDG_CACHE_HOME');
+  If D='' Then Begin
+   D:=VtHomeDir;
+   If D='' Then D:='.';
+   D:=D+'/.cache';
+  End;
+  D:=D+'/vton';
+  {$ENDIF}
+ End;
+ While(Length(D)>1)and(D[Length(D)]in['/','\'])do Delete(D,Length(D),1);
+ Result:=D;
+End;
+
+Function VtNetSupported:Boolean;
+Begin
+ {$IFDEF WINDOWS}
+ Result:=True;
+ {$ELSE}
+ Result:=False;
+ {$ENDIF}
+End;
+
+Function VtHttpDownload(Const Url,Dest:AnsiString;Var VtErr:AnsiString):Boolean;
+{$IFDEF WINDOWS}
+Const
+ MaxTries=3;
+Var
+ Sess,VtH:Pointer;
+ Flags,Tmo,L,Buf:LongWord;
+ Status,Code,Try_,Pc,LastPc:LongInt;
+ Cl,Done:Int64;
+ SBuf:Array[0..63]of AnsiChar;
+ Got:LongWord;
+ Chunk:Array[0..65535]of Byte;
+ F:File;
+ VtTmp:AnsiString;
+ Fin:Boolean;
+Begin
+ Result:=False;
+ VtErr:='';
+ VtMakeDirs(VtPathDir(Dest));
+ VtTmp:=Dest+'.part';
+ Fin:=False;
+ Try_:=0;
+ While(not Fin)and(Try_<MaxTries)do Begin
+  Inc(Try_);
+  If Try_>1 Then Begin
+   Write(StdErr,'nouvelle tentative ',Try_,'/',MaxTries,' (',VtErr,')',#10);
+   WinSleep(3000);
+  End;
+  VtErr:='';
+  Sess:=InternetOpenA('vton',0,Nil,Nil,0);
+  If Sess=Nil Then Begin VtErr:='InternetOpen a '#130'chou'#130;Continue;End;
+  Tmo:=30000;
+  InternetSetOptionA(Sess,2,@Tmo,4);
+  InternetSetOptionA(Sess,6,@Tmo,4);
+  Flags:=$80000000 or $04000000;
+  If Copy(VtLoStr(Url),1,8)='https://' Then Flags:=Flags or $00800000;
+  VtH:=InternetOpenUrlA(Sess,PChar(Url),PChar('Accept: */*'#13#10),11,Flags,0);
+  If VtH=Nil Then Begin InternetCloseHandle(Sess);
+    VtErr:='connexion impossible '#133' '+Url;Continue;End;
+  Status:=0;L:=4;Buf:=0;
+  If HttpQueryInfoA(VtH,19 or $20000000,@Buf,L,Nil)<>0 Then Status:=Buf;
+  Cl:=-1;
+  FillChar(SBuf,SizeOf(SBuf),0);
+  L:=SizeOf(SBuf)-1;
+  If HttpQueryInfoA(VtH,5,@SBuf[0],L,Nil)<>0 Then Val(AnsiString(PChar(@SBuf[0]))
+    ,Cl,Code);
+  If(Status<200)or(Status>=300)Then Begin
+   VtErr:='le serveur a r'#130'pondu HTTP '+VtIStr(Status);
+   InternetCloseHandle(VtH);InternetCloseHandle(Sess);
+   If(Status>=400)and(Status<500)Then Break;
+   Continue;
+  End;
+  Assign(F,VtTmp);
+  Rewrite(F,1);
+  If IOResult<>0 Then Begin VtErr:='impossible de cr'#130'er '+
+    VtTmp;InternetCloseHandle(VtH);InternetCloseHandle(Sess);Break;End;
+  Done:=0;LastPc:=-1;
+  Repeat
+   Got:=0;
+   If InternetReadFile(VtH,@Chunk[0],SizeOf(Chunk),Got)=0 Then Begin
+     VtErr:='erreur de lecture r'#130'seau';Break;End;
+   If Got>0 Then Begin
+    BlockWrite(F,Chunk[0],Got);
+    Inc(Done,Got);
+    If Cl>0 Then Begin
+     Pc:=(Done*100)div Cl;
+     If Pc<>LastPc Then Begin
+      LastPc:=Pc;
+      Write(StdErr,#13'T'#130'l'#130'chargement de ',VtPathLastPart(Dest),' : ',
+        Pc,'% (',VtHumanBytes(Done),')');
+      Flush(StdErr);
+     End;
+    End;
+   End;
+  Until Got=0;
+  Close(F);
+  If IOResult<>0 Then;
+  InternetCloseHandle(VtH);InternetCloseHandle(Sess);
+  Write(StdErr,#10);
+  If VtErr='' Then Begin
+   If(Cl>0)and(Done<>Cl)Then VtErr:='t'#130'l'#130'chargement incomplet' Else
+     Fin:=True;
+  End;
+ End;
+ If not Fin Then Begin
+  If VtErr='' Then VtErr:=#130'chec du t'#130'l'#130'chargement';
+  Exit;
+ End;
+ If VtFileExistsP(Dest)Then Begin Assign(F,Dest);Erase(F);If IOResult<>0 Then;End;
+ Assign(F,VtTmp);
+ Rename(F,Dest);
+ If IOResult<>0 Then Begin
+   VtErr:='impossible de renommer le fichier t'#130'l'#130'charg'#130;Exit;End;
+ Result:=True;
+End;
+{$ELSE}
+Begin
+ VtErr:='le t'#130'l'#130'chargement n''est disponible que sous Windows';
+ VtHttpDownload:=False;
+End;
+{$ENDIF}
+
+{ ------------------------------------------------------------------ }
+{ Resolution du modele                                                 }
+{ ------------------------------------------------------------------ }
+
+Const
+ VtDefaultModelName='segformer_b2_clothes';
+ VtDefaultModelUrl=
+   'https://huggingface.co/mattmdjaga/segformer_b2_clothes/resolve/main/';
+
+Function VtSafeName(Const VtS:AnsiString):AnsiString;
+Var
+ VtI:LongInt;
+ R:AnsiString;
+Begin
+ R:=VtS;
+ For VtI:=1 to Length(R)do If R[VtI]in['/','\',':','*','?','"','<','>','|']Then
+   R[VtI]:='_';
+ Result:=R;
+End;
+
+{ cherche le modele dans les emplacements habituels }
+Function VtFindDefaultModel(Const Name:AnsiString;Var Path,Config:AnsiString)
+  :Boolean;
+Var
+ Dirs:VtTStrArray;
+ VtI:LongInt;
+ D,Exe:AnsiString;
+ Found:Boolean;
+ Procedure Try_(Const VtP:AnsiString;Const Cfg:AnsiString);
+ Begin
+  If(not Found)and VtFileExistsP(VtP)Then Begin
+   Path:=VtP;Config:='';
+   If VtFileExistsP(Cfg)Then Config:=Cfg;
+   Found:=True;
+  End;
+ End;
+Begin
+ Found:=False;
+ SetLength(Dirs,0);
+ VtAddStr(Dirs,'');
+ Exe:=VtPathDir(ParamStr(0));
+ If Exe<>'' Then Begin VtAddStr(Dirs,Exe);VtAddStr(Dirs,Exe+'models'+VtPathSep);End;
+ VtAddStr(Dirs,'models'+VtPathSep);
+ VtAddStr(Dirs,VtCacheDir+VtPathSep);
+ For VtI:=0 to High(Dirs)do Begin
+  D:=Dirs[VtI];
+  Try_(D+Name+'.safetensors',D+Name+'.json');
+  Try_(D+Name+VtPathSep+'model.safetensors',D+Name+VtPathSep+'config.json');
+ End;
+ Result:=Found;
+End;
+
+Function VtResolveModel(Const Spec:AnsiString;Var Path,Config,VtErr:AnsiString)
+  :Boolean;
+Var
+ VtS,L,Name,Dir,BaseUrl,E2:AnsiString;
+ Repo:AnsiString;
+Begin
+ Result:=False;
+ VtErr:='';Path:='';Config:='';
+ VtS:=Spec;
+ L:=VtLoStr(VtS);
+ If(VtS='')or(L='default')or(L='segformer-clothes')or(L='clothes')
+   or(L=VtDefaultModelName)Then Begin
+  If VtFindDefaultModel(VtDefaultModelName,Path,Config)Then Begin
+    Result:=True;Exit;End;
+  Dir:=VtCacheDir+VtPathSep+VtDefaultModelName;
+  BaseUrl:=VtDefaultModelUrl;
+  Name:=VtDefaultModelName;
+ End
+  Else If VtStartsWith(L,'hf:')Then Begin
+   Repo:=Copy(VtS,4,Length(VtS));
+   If Pos('/',Repo)=0 Then Begin
+     VtErr:='-model hf: doit '#136'tre de la forme hf:utilisateur/mod'#138'le';
+     Exit;End;
+   Dir:=VtCacheDir+VtPathSep+VtSafeName(Repo);
+   BaseUrl:='https://huggingface.co/'+Repo+'/resolve/main/';
+   Name:=Repo;
+  End
+  Else If VtStartsWith(L,'http://')or VtStartsWith(L,'https://')Then Begin
+   Path:=VtCacheDir+VtPathSep+VtSafeName(VtPathLastPart(VtS));
+   If VtFileExistsP(Path)Then Begin Result:=True;Exit;End;
+   If not VtNetSupported Then Begin
+    VtErr:='le t'#130'l'#130'chargement n''est disponible que sous Windows ; t'+
+      #130'l'#130'chargez '+VtS+' puis utilisez -model FICHIER';
+    Exit;
+   End;
+   VtInfo('t'#130'l'#130'chargement du mod'#138'le depuis '+VtS);
+   If not VtHttpDownload(VtS,Path,E2)Then Begin VtErr:=E2;Exit;End;
+   Result:=True;
+   Exit;
+  End
+  Else Begin
+   If VtDirExistsP(VtS)Then Begin
+    Path:=VtS+VtPathSep+'model.safetensors';
+    Config:=VtS+VtPathSep+'config.json';
+    If not VtFileExistsP(Path)Then Begin
+      VtErr:='model.safetensors introuvable dans '+VtS;Exit;End;
+    If not VtFileExistsP(Config)Then Config:='';
+    Result:=True;
+    Exit;
+   End;
+   If not VtFileExistsP(VtS)Then Begin VtErr:='mod'#138'le introuvable : '+VtS;Exit;End;
+   Path:=VtS;
+   Config:=VtPathNoExt(VtS)+'.json';
+   If not VtFileExistsP(Config)Then Config:=VtPathDir(VtS)+'config.json';
+   If not VtFileExistsP(Config)Then Config:='';
+   Result:=True;
+   Exit;
+  End;
+ { telechargement du modele par defaut ou d'un depot Hugging Face }
+ Path:=Dir+VtPathSep+'model.safetensors';
+ Config:=Dir+VtPathSep+'config.json';
+ If VtFileExistsP(Path)Then Begin
+  If not VtFileExistsP(Config)Then Config:='';
+  Result:=True;
+  Exit;
+ End;
+ If not VtNetSupported Then Begin
+  VtErr:='mod'#138'le "'+Name+
+    '" absent. T'#130'l'#130'chargez-le (110 Mio) puis indiquez-le avec '+
+    '-model :'#10+
+      '  '+BaseUrl+'model.safetensors'#10+
+      '  '+BaseUrl+'config.json  (facultatif : noms des classes)';
+  Exit;
+ End;
+ VtInfo('mod'#138'le "'+Name+'" absent : t'#130'l'#130'chargement vers '+Dir);
+ If not VtHttpDownload(BaseUrl+'model.safetensors',Path,E2)Then Begin VtErr:=E2;
+   Exit;End;
+ If not VtHttpDownload(BaseUrl+'config.json',Config,E2)Then Config:='';
+ Result:=True;
+End;
+
+{ ------------------------------------------------------------------ }
+{ Ligne de commande                                                    }
+{ ------------------------------------------------------------------ }
+
+Const
+ VtOptQuality:LongInt=3;
+ VtOptSeed:Int64=-1;
+ VtOptThreads:LongInt=0;
+ VtOptDevice:LongInt=-1;
+ VtOptMaxSize:LongInt=2048;
+ VtOptSize:LongInt=0;
+Var
+ VtOptOut,VtOptType,VtOptModel,VtOptPrompt,VtOptParsing,VtOptSaveParsing,VtOptDump:AnsiString;
+ VtOptCpu,VtOptGpu,VtOptHelp,VtOptList:Boolean;
+ VtPos_:VtTStrArray;
+
+Function VtParseQuality(Const VtS:AnsiString;Var Q:LongInt):Boolean;
+Var
+ L:AnsiString;
+ V:Int64;
+Begin
+ Result:=True;
+ L:=VtFoldText(VtS);
+ L:=VtTrimS(L);
+ If VtParseInt(L,V)and(V>=1)and(V<=4)Then Begin Q:=V;Exit;End;
+ If(L='low')or(L='rapide')or(L='fast')or(L='draft')or(L='faible')or(L='bas')Then
+   Q:=1
+ Else If(L='medium')or(L='moyen')or(L='normal')or(L='standard')Then Q:=2
+ Else If(L='high')or(L='eleve')or(L='haute')or(L='haut')or(L='best')Then Q:=3
+ Else If(L='ultra')or(L='max')or(L='maximal')or(L='maximum')Then Q:=4
+ Else Result:=False;
+End;
+
+{ genre de vetement demande par -type }
+Function VtParseKind(Const VtS:AnsiString):LongInt;
+Var
+ L:AnsiString;
+ K:LongInt;
+Begin
+ VtLexInit;
+ L:=VtTrimS(VtFoldText(VtS));
+ Result:=-1;
+ If(L='')or(L='auto')Then Begin Result:=VtgkNone;Exit;End;
+ If(L='bas')or(L='bottom')or(L='bottoms')or(L='lower')Then Begin
+   Result:=gkBottom;Exit;End;
+ If(L='tout')or(L='full')or(L='complet')or(L='ensemble')or(L='outfit')
+   or(L='fullbody')or(L='body')Then Begin Result:=gkFull;Exit;End;
+ K:=VtLexFind(L,VtlkGarment);
+ If K>=0 Then Begin
+  If VtLex[K].V1=gkAll Then Result:=gkFull Else Result:=VtLex[K].V1;
+ End;
+End;
+
+Function VtIsImageName(Const VtS:AnsiString):Boolean;
+Var
+ E:AnsiString;
+Begin
+ E:=VtPathExt(VtS);
+ Result:=(E='.jpg')or(E='.jpeg')or(E='.png')or(E='.bmp')or(E='.ppm')
+   or(E='.pgm')or(E='.gif')or(E='.webp');
+End;
+
+{ ------------------------------------------------------------------ }
+{ Programme principal                                                  }
+{ ------------------------------------------------------------------ }
+
+Const
+ VtLoadedModel:AnsiString='';
+Var
+ VtPerson,VtGarmentFile,VtPromptText:AnsiString;
+ VtGarment:Boolean;
+ VtScene:VtTScene;
+ VtNet:VtTSegModel;
+ VtImg,VtGImg:VtTImage;
+ VtErr,VtModelPath,VtConfigPath,VtMsg:AnsiString;
+ VtEdits:VtTEditArray;
+ VtGarmentEdits:Array of LongInt;
+ VtGKind,VtI,VtJ,VtJpegQ,VtNOk,VtNFail,VtSide:LongInt;
+ VtT0,VtT1:Double;
+ VtG:VtTGarment;
+ VtP:VtTRecolor;
+ VtKind:LongInt;
+ VtEd:^VtTEdit;
+ VtTmp:PSingle;
+ VtOutName:AnsiString;
+ VtKindMask:LongWord;
+ VtToG:Boolean;
+ VtParsed:Boolean;
+ VtN:LongInt;
+ VtUsed:Boolean;
+ VtDummy:LongWord;
+ VtNeedFeet,VtNeedPants,VtNeedSkirt:Boolean;
+ VtCnt0,VtNeedL,VtNeedR,VtNeedB:LongInt;
+
+Procedure VtDie(Const VtS:AnsiString);
+Begin
+ VtFatal(VtS);
+End;
+
+Procedure VtProcessScene;
+Begin
+ VxCancelled:=False;
+ ReturnNilIfGrowHeapFails:=True;
+ VtStartMs:=VtNowMsF;
+ VtPerson:=VtPos_[0];
+ VtGarmentFile:='';VtGarment:=False;
+ VtPromptText:=VtOptPrompt;
+ VtI:=1;
+ If(Length(VtPos_)>1)Then Begin
+  If VtFileExistsP(VtPos_[1])or(VtIsImageName(VtPos_[1])and(Pos(' ',VtPos_[1])=0))
+    Then Begin
+   VtGarmentFile:=VtPos_[1];VtGarment:=True;VtI:=2;
+  End;
+ End;
+ { les mots restants forment la demande en langage naturel }
+ If VtPromptText='' Then Begin
+  For VtJ:=VtI to High(VtPos_)do Begin
+   If VtPromptText<>'' Then VtPromptText:=VtPromptText+' ';
+   VtPromptText:=VtPromptText+VtPos_[VtJ];
+  End;
+ End;
+ If(not VtGarment)and(VtPromptText='')Then
+   VtDie('indiquez une image de v'#136'tement ou une demande avec -prompt');
+ VtGKind:=VtParseKind(VtOptType);
+ If VtGKind<0 Then VtDie('type de v'#136'tement inconnu : '+VtOptType+
+   ' (haut, bas, jupe, robe, tout, chaussures, chapeau, lunettes, sac, '#130+
+   'charpe, ceinture)');
+ If VtOptSeed<0 Then VtOptSeed:=VtMakeSeed and $7FFFFFFF;
+ VtRngSeed(LongWord(VtOptSeed));
+ VtOutName:=VtOptOut;
+ If VtOutName='' Then VtOutName:=VtPathNoExt(VtPerson)+'_vton.png';
+ Case VtOptQuality of
+  1:VtJpegQ:=80;
+  2:VtJpegQ:=88;
+  3:VtJpegQ:=92;
+  Else VtJpegQ:=96;
+ End;
+ VtGNThreads:=VtCpuCount;
+ If VtOptThreads>0 Then VtGNThreads:=VtOptThreads;
+ If VtGNThreads>VtMaxThreads Then VtGNThreads:=VtMaxThreads;
+ If VtVerbose Then Begin
+  VtDetail('VTON '+VtVersionStr);
+  VtDetail('personne : '+VtPerson);
+  If VtGarment Then VtDetail('v'#136'tement : '+VtGarmentFile);
+  If VtPromptText<>'' Then VtDetail('demande : '+VtPromptText);
+  VtDetail('qualit'#130' '+VtIStr(VtOptQuality)+', graine '+VtIStr(VtOptSeed)
+    +', fils de calcul '+VtIStr(VtGNThreads));
+ End;
+ { demande en langage naturel }
+ SetLength(VtEdits,0);
+ If VtPromptText<>'' Then Begin
+  If not VtInterpret(VtPromptText,VtEdits,VtErr)Then VtDie(VtErr);
+  For VtI:=0 to High(VtEdits)do VtDetail('interpr'#130'tation : '+
+    VtDescribeEdit(VtEdits[VtI]));
+ End;
+ { photo de la personne }
+ If not VxPersonImage(VtImg,VtErr)Then VtDie(VtErr);
+ VtDetail('photo '+VtIStr(VtImg.W)+'x'+VtIStr(VtImg.VtH));
+ VtSceneFromImage(VtImg,VtOptMaxSize,VtScene);
+ VtImgFree(VtImg);
+ If (VtScene.W<64)or(VtScene.VtH<64)Then
+   VtDie('la photo est trop petite (64 pixels minimum)');
+ If VtVerbose Then VtDetail('image de travail '+VtIStr(VtScene.W)+'x'+VtIStr(VtScene.VtH));
+ { GPU }
+ If not VtOptCpu Then Begin
+  VtErr:='';
+  If VtGpuSetup(VtOptDevice,VtErr)Then VtInfo('GPU : '+VtGpuName+' (Direct3D 11)')
+  Else Begin
+   If VtOptGpu Then VtWarn('GPU indisponible ('+VtErr+') : calcul sur le processeur');
+   If(not VtOptGpu)and VtVerbose Then VtDetail('GPU non utilis'#130' : '+VtErr);
+  End;
+ End;
+ { analyse de la personne }
+ VtT0:=VtNowMsF;
+ If VtOptParsing<>'' Then Begin
+  If not VtParseFromLabels(VtScene,VtOptParsing,VtErr)Then VtDie(VtErr);
+  If VtOptQuality>=2 Then VtSceneRefine(VtScene);
+ End
+  Else Begin
+   If not VtResolveModel(VtOptModel,VtModelPath,VtConfigPath,VtErr)Then VtDie(VtErr);
+   If VtModelPath<>VtLoadedModel Then Begin
+    VtInfo('Chargement du mod'#138'le '+VtPathLastPart(VtModelPath)+' ...');
+    If not VtStLoad(VtModelPath,VtErr)Then VtDie(VtErr);
+    If not VtSegBuild(VtNet,VtConfigPath)Then VtDie(VtSegErr);
+    VtLoadedModel:=VtModelPath;
+   End;
+   VtDetail(VtIStr(VtStN)+' tenseurs, '+VtIStr(VtNet.NumLabels)+
+     ' classes, d'#130'codeur '+VtIStr(VtNet.Dec));
+   Case VtOptQuality of
+    1:VtSide:=256;
+    2:VtSide:=384;
+    3:VtSide:=512;
+    Else VtSide:=768;
+   End;
+   If VtOptSize>0 Then VtSide:=VtOptSize;
+   VtDumpPath:=VtOptDump;
+   VtInfo('Analyse de la personne ...');
+   VtParseWithNet(VtScene,VtNet,VtSide,VtOptQuality>=2);
+    End;
+ VtDetail('analyse termin'#130'e en '+VtFStr((VtNowMsF-VtT0)/1000.0,1)+' s');
+ For VtI:=0 to VtNumCat-1 do Begin
+  VtN:=VtCatArea(VtScene,LongWord(1)shl VtI);
+  If(VtN>0)and VtVerbose and(VtI<>VtcBg)Then VtDetail('  '+VtPadRight(VtCatNames[VtI],12)+
+    VtFStr(100.0*VtN/(Int64(VtScene.W)*VtScene.VtH),1)+' %');
+ End;
+ If VtOptSaveParsing<>'' Then Begin
+  VtParsingToImage(VtScene,VtImg);
+  If not VtImgSave(VtOptSaveParsing,VtImg,90)Then
+    VtWarn('impossible d''enregistrer '+VtOptSaveParsing);
+  VtImgFree(VtImg);
+ End;
+ { scene : le corps coupe doit montrer ses pieds pour se tenir sur la plateforme
+   }
+ For VtI:=0 to High(VtEdits)do If(VtEdits[VtI].Action=eaScene)
+   or((VtEdits[VtI].Action=eaPose2)and((VtEdits[VtI].Poses and VtFeetPoses)<>0))Then Begin
+  VtCnt0:=0;
+  For VtJ:=0 to VtScene.W-1 do If VtScene.Cat[VtcBg][Int64(VtScene.VtH-1)*VtScene.W+
+    VtJ]<128 Then Inc(VtCnt0);
+  If(VtCnt0>=VtScene.W div 50)and(VtCatArea(VtScene,VtmsShoes)<Int64(VtScene.W)*VtScene.VtH
+    div 2000)Then Begin
+   SetLength(VtEdits,Length(VtEdits)+1);
+   For VtJ:=High(VtEdits)downto 1 do VtEdits[VtJ]:=VtEdits[VtJ-1];
+   VtClearEdit(VtEdits[0]);
+   VtEdits[0].Action:=eaAdd;VtEdits[0].Target:=VtmsShoes;VtEdits[0].VtKind:=gkShoes;
+     VtEdits[0].Noun:='souliers';
+   VtInfo('corps coup'#130' : pantalon et souliers ajout'#130's pour poser la '+
+     'personne sur la plateforme');
+  End;
+  Break;
+ End;
+ { bas du corps : prolongement de l'image si le corps est coupe par le cadre }
+ VtNeedFeet:=False;VtNeedPants:=False;VtNeedSkirt:=False;
+ For VtI:=0 to High(VtEdits)do Begin
+  If(VtEdits[VtI].Action=eaRecolor)and VtEdits[VtI].Put and((VtEdits[VtI].Target and(VtmsPants
+    or VtmsSkirt or VtmsShoes))<>0)and
+    (VtCatArea(VtScene,VtEdits[VtI].Target)<Int64(VtScene.W)*VtScene.VtH div 2000)Then
+      VtEdits[VtI].Action:=eaAdd;
+  If VtEdits[VtI].Action=eaAdd Then Begin
+   If(VtEdits[VtI].Target and VtmsShoes)<>0 Then VtNeedFeet:=True;
+   If(VtEdits[VtI].Target and VtmsPants)<>0 Then VtNeedPants:=True;
+   If(VtEdits[VtI].Target and VtmsSkirt)<>0 Then VtNeedSkirt:=True;
+  End;
+ End;
+ If VtNeedFeet or VtNeedPants or VtNeedSkirt Then Begin
+  { des souliers sans pantalon ni jupe : un pantalon neutre est ajoute }
+  If VtNeedFeet and not VtNeedPants and not VtNeedSkirt and
+    (VtCatArea(VtScene,VtmsPants or VtmsSkirt or VtmsDress)<Int64(VtScene.W)*VtScene.VtH
+      div 2000)Then Begin
+   SetLength(VtEdits,Length(VtEdits)+1);
+   For VtJ:=High(VtEdits)downto 1 do VtEdits[VtJ]:=VtEdits[VtJ-1];
+   VtClearEdit(VtEdits[0]);
+   VtEdits[0].Action:=eaAdd;VtEdits[0].Target:=VtmsPants;VtEdits[0].VtKind:=gkBottom;
+     VtEdits[0].Noun:='pantalon';
+   VtNeedPants:=True;
+   VtInfo('pantalon neutre ajout'#130' pour accompagner les chaussures');
+  End;
+  If VtExtendBody(VtScene,VtNeedFeet,VtNeedPants,VtNeedSkirt,VtMsg)Then Begin
+   If VtMsg<>'' Then VtInfo(VtMsg);
+  End
+   Else Begin
+    VtWarn(VtMsg);
+    For VtI:=0 to High(VtEdits)do
+     If(VtEdits[VtI].Action=eaAdd)and((VtEdits[VtI].Target and(VtmsPants or VtmsSkirt
+       or VtmsShoes))<>0)Then VtEdits[VtI].Action:=VteaNone;
+   End;
+ End;
+ VtNOk:=0;VtNFail:=0;
+ SetLength(VtGarmentEdits,Length(VtEdits));
+ For VtI:=0 to High(VtEdits)do Begin
+  VtGarmentEdits[VtI]:=0;
+  If VtGarment and(VtEdits[VtI].Action=eaTryOn)Then VtGarmentEdits[VtI]:=1;
+  { -type designe la cible quand la demande ne la precise pas }
+  If(not VtGarment)and(VtGKind<>VtgkNone)and(VtEdits[VtI].Target=0)and(not
+    VtEdits[VtI].HasSrc)Then Begin
+   VtKindSets(VtGKind,VtKindMask,VtDummy,VtDummy);
+   VtEdits[VtI].Target:=VtKindMask;VtEdits[VtI].VtKind:=VtGKind;
+  End;
+ End;
+ { essayage d'un vetement fourni }
+ If VtGarment Then Begin
+  VtKind:=VtGKind;
+  If VtKind=VtgkNone Then
+   For VtI:=0 to High(VtEdits)do
+    If(VtKind=VtgkNone)and(VtEdits[VtI].VtKind in[gkTop,gkBottom,gkSkirt,gkDress,
+      gkShoes,gkHat,gkGlasses,VtgkBag,gkScarf,gkBelt,gkFull])Then
+      VtKind:=VtEdits[VtI].VtKind
+    Else If(VtKind=VtgkNone)and(VtEdits[VtI].VtKind=gkAll)Then VtKind:=gkFull;
+  If not VtImgLoad(VtGarmentFile,VtGImg,VtErr)Then VtDie(VtErr);
+  If not VtGarmentFromImage(VtGImg,VtG,VtErr)Then VtDie(VtErr);
+  VtImgFree(VtGImg);
+  If VtKind=VtgkNone Then Begin
+   If VtG.VtH>1.25*VtG.W Then Begin
+    VtKind:=gkFull;
+    VtInfo('type de v'#136'tement d'#130'duit de la forme : tenue compl'#138'te '+
+      '(utilisez -type pour pr'#130'ciser)');
+   End
+    Else Begin
+     VtKind:=gkTop;
+     VtInfo('type de v'#136'tement non pr'#130'cis'#130' : "haut" suppos'#130' '+
+       '(utilisez -type)');
+    End;
+  End;
+  VtDetail('v'#136'tement '+VtIStr(VtG.W)+'x'+VtIStr(VtG.VtH)+' : '+VtG.Note);
+  { retouches de la demande qui concernent le vetement lui-meme }
+  VtKindSets(VtKind,VtKindMask,VtDummy,VtDummy);
+  For VtI:=0 to High(VtEdits)do Begin
+   VtEd:=@VtEdits[VtI];
+   VtToG:=(VtEd^.Action=eaRecolor)and((VtEd^.Target=0)or((VtEd^.Target and VtKindMask)
+     <>0)or(VtEd^.VtKind=VtKind));
+   If VtToG Then Begin
+    VtGarmentEdits[VtI]:=1;
+    VtBuildRecolor(VtEd^,VtP,0,0,VtG.W,VtG.VtH,VtKind in[gkBottom,gkSkirt]);
+    VtTmp:=VtAllocF(Int64(VtG.W)*VtG.VtH);
+    For VtN:=0 to Int64(VtG.W)*VtG.VtH-1 do VtTmp[VtN]:=VtSmoothStep(0.25,0.75,VtG.Mask[VtN]);
+    If VtRecolorRegion(VtG.Rgb,VtG.W,VtG.VtH,VtTmp,VtP)Then
+      VtInfo('  v'#136'tement recolor'#130+' ('+VtEd^.DstName+')')
+    Else VtWarn('v'#136'tement trop petit pour '#136'tre recolor'#130);
+    FreeMem(VtTmp);
+   End;
+  End;
+  { mannequin : l'image est agrandie (cotes et bas) pour montrer toute la tenue,
+    jusqu'aux pieds }
+  VtMannequinNeed(VtScene,VtG,VtKind,VtNeedL,VtNeedR,VtNeedB);
+  If VtNeedL>3*VtScene.W Then VtNeedL:=3*VtScene.W;
+  If VtNeedR>3*VtScene.W Then VtNeedR:=3*VtScene.W;
+  If VtNeedB>3*VtScene.VtH Then VtNeedB:=3*VtScene.VtH;
+  If(VtNeedL>0)or(VtNeedR>0)or(VtNeedB>0)Then Begin
+   VtGrowEdges(VtScene,VtNeedL,0,VtNeedR,VtNeedB);
+   VtInfo('image agrandie ('+VtIStr(VtNeedL)+' px '#133' gauche, '+VtIStr(VtNeedR)
+     +' '#133' droite, '+VtIStr(VtNeedB)+' en bas) pour voir la tenue en entier');
+  End;
+  VtInfo('Pose du v'#136'tement ('+VtGarmentKindName(VtKind)+') ...');
+  If VtTryOnGarment(VtScene,VtG,VtKind,VtOptQuality,VtMsg)Then Begin
+   VtInfo('  '+VtMsg);
+   Inc(VtNOk);
+  End
+   Else Begin
+    VtWarn(VtMsg);
+    Inc(VtNFail);
+   End;
+  VtGarmentFree(VtG);
+ End;
+ { poses et situations (expression, bras, decor) }
+ For VtI:=0 to High(VtEdits)do
+  If VtEdits[VtI].Action=eaPose2 Then Begin
+   VtInfo('Pose : '+VtDescribeEdit(VtEdits[VtI]));
+   VtApplyPoses(VtScene,VtEdits[VtI].Poses,0,VtNOk,VtNFail);
+  End;
+ { retouches sur la scene }
+ For VtI:=0 to High(VtEdits)do Begin
+  If VtGarmentEdits[VtI]<>0 Then Continue;
+  If VtEdits[VtI].Action=VteaNone Then Begin Inc(VtNFail);Continue;End;
+  If VtEdits[VtI].Action=eaTryOn Then Begin
+   VtWarn('"essayer" demande une image de v'#136'tement (deuxi'#138'me argument)')
+     ;
+   Inc(VtNFail);
+   Continue;
+  End;
+  { ? mettre un chapeau ? alors qu'il n'y en a pas : on l'ajoute }
+  If(VtEdits[VtI].Action=eaRecolor)and VtEdits[VtI].Put and((VtEdits[VtI].Target
+    and(VtmsHat or VtmsScarf or VtmsGlasses or VtmsBelt))<>0)and
+    (VtCatArea(VtScene,VtEdits[VtI].Target)<Int64(VtScene.W)*VtScene.VtH div 2000)Then
+      VtEdits[VtI].Action:=eaAdd;
+  If(VtEdits[VtI].Action=eaPose2)or(VtEdits[VtI].Action=eaImage)
+    or(VtEdits[VtI].Action=eaBg)Then Continue;
+  VtInfo('Retouche : '+VtDescribeEdit(VtEdits[VtI]));
+  If(VtEdits[VtI].Action=eaRemove)and(VtEdits[VtI].Jewel<>0)Then Begin
+   VtWarn('le retrait de bijoux n''est pas pris en charge');Inc(VtNFail);Continue;
+  End;
+  If(VtEdits[VtI].Action=eaAdd)and(VtEdits[VtI].Jewel<>0)Then Begin
+   VtInfo('Ajout de bijoux ...');
+   If VtAddJewelry(VtScene,VtEdits[VtI],VtMsg)Then Inc(VtNOk)Else Begin VtWarn(VtMsg);
+     Inc(VtNFail);End;
+   Continue;
+  End;
+  If VtEdits[VtI].Action=eaStyle Then Continue;
+  If VtEdits[VtI].Action=eaScene Then Continue;
+  If VtEdits[VtI].Action=eaMaterial Then Begin
+   VtInfo('Mati'#138're : '+VtDescribeEdit(VtEdits[VtI]));
+   If VtApplyMaterial(VtScene,VtEdits[VtI],VtMsg)Then Inc(VtNOk)Else Begin VtWarn(VtMsg);
+     Inc(VtNFail);End;
+   Continue;
+  End;
+  If VtEdits[VtI].Action=eaSkin Then Begin
+   VtInfo('Peau : '+VtDescribeEdit(VtEdits[VtI]));
+   If VtApplySkin(VtScene,VtEdits[VtI],VtMsg)Then Inc(VtNOk)Else Begin VtWarn(VtMsg);Inc(VtNFail)
+     ;End;
+   Continue;
+  End;
+  { sourire demande (seul ou avec d'autres retouches dans la meme clause) }
+  If VtEdits[VtI].Expr<>0 Then Begin
+   If VtApplySmile(VtScene,VtMsg)Then Inc(VtNOk)Else Begin VtWarn(VtMsg);Inc(VtNFail);End;
+   If VtEdits[VtI].Action=eaFace Then Continue;
+  End;
+  If VtEdits[VtI].Action=eaPose Then Begin
+   If VtArmsDown(VtScene,VtMsg)Then Inc(VtNOk)Else Begin VtWarn(VtMsg);Inc(VtNFail);End;
+   Continue;
+  End;
+  If VtEdits[VtI].Action=eaHair Then Begin
+   If VtApplyHair(VtScene,VtEdits[VtI].HairStyle,VtEdits[VtI],VtMsg)Then Begin
+     VtInfo('  coiffure modifi'#130'e');Inc(VtNOk);End
+   Else Begin VtWarn(VtMsg);Inc(VtNFail);End;
+  End
+  Else If VtEdits[VtI].Action=eaAdd Then Begin
+   If VtAddAccessory(VtScene,VtEdits[VtI],VtOptQuality,VtMsg)Then Begin VtInfo('  '+VtMsg);
+     Inc(VtNOk);End
+   Else Begin VtWarn(VtMsg);Inc(VtNFail);End;
+  End
+  Else If VtApplyEdit(VtScene,VtEdits[VtI],VtMsg)Then Inc(VtNOk)
+  Else Begin VtWarn(VtMsg);Inc(VtNFail);End;
+ End;
+ { situations : decors dessines autour de la personne }
+ For VtI:=0 to High(VtEdits)do
+  If VtEdits[VtI].Action=eaPose2 Then VtApplyPoses(VtScene,VtEdits[VtI].Poses,1,VtNOk,VtNFail);
+ { scene : decor genere autour de la personne }
+ For VtI:=0 to High(VtEdits)do
+  If VtEdits[VtI].Action=eaScene Then Begin
+   VtInfo('Sc'#138'ne : carrousel');
+   If VtApplyCarousel(VtScene,VtMsg)Then Inc(VtNOk)Else Begin VtWarn(VtMsg);Inc(VtNFail);End;
+  End;
+ { image entiere et arriere-plan, dans l'ordre de la demande }
+ For VtI:=0 to High(VtEdits)do Begin
+  If VtEdits[VtI].Action=eaBg Then Begin
+   VtInfo('Arri'#138're-plan : '+VtDescribeEdit(VtEdits[VtI]));
+   If VtApplyBackground(VtScene,VtEdits[VtI],VtMsg)Then Inc(VtNOk)Else Begin VtWarn(VtMsg);
+     Inc(VtNFail);End;
+  End
+  Else If VtEdits[VtI].Action=eaImage Then Begin
+   VtInfo('Image : '+VtDescribeEdit(VtEdits[VtI]));
+   If VtApplyImageOp(VtScene,VtEdits[VtI],VtMsg)Then Inc(VtNOk)Else Begin VtWarn(VtMsg);
+     Inc(VtNFail);End;
+  End;
+ End;
+ { le style de l'image s'applique en dernier, sur le resultat des autres
+   retouches }
+ For VtI:=0 to High(VtEdits)do
+  If VtEdits[VtI].Action=eaStyle Then Begin
+   VtInfo('Style : '+VtDescribeEdit(VtEdits[VtI]));
+   If VtApplyStyle(VtScene,VtEdits[VtI].Style,VtMsg)Then Inc(VtNOk)Else Begin VtWarn(VtMsg);
+     Inc(VtNFail);End;
+  End;
+ If VtNOk=0 Then VtDie('aucune retouche n''a pu '#136'tre appliqu'#130'e');
+ VtSceneToImage(VtScene,VtImg);
+ VxStoreResult(VtImg);
+ If VtOutAlpha<>Nil Then Begin
+  If VtOutAlphaN=Int64(VtScene.W)*VtScene.VtH Then Begin
+   VtImg.Alpha:=PByte(VtAllocBytes(VtOutAlphaN));
+   Move(VtOutAlpha^,VtImg.Alpha^,VtOutAlphaN);
+   If VtPathExt(VtOutName)<>'.png' Then Begin
+    VtWarn('la transparence demande un fichier PNG : '+VtOutName+
+      ' devient '+VtPathNoExt(VtOutName)+'.png');
+    VtOutName:=VtPathNoExt(VtOutName)+'.png';
+   End;
+  End;
+  FreeMem(VtOutAlpha);VtOutAlpha:=Nil;
+ End;
+ If not VtImgSave(VtOutName,VtImg,VtJpegQ)Then VtDie('impossible d''enregistrer '+
+   VtOutName);
+ VtImgFree(VtImg);
+ VtInfo('R'#130'sultat : '+VtOutName+' ('+VtIStr(VtScene.W)+'x'+VtIStr(VtScene.VtH)+', '+
+   VtFStr((VtNowMsF-VtStartMs)/1000.0,1)+' s)');
+ If VtVerbose and(VtGpuCalls>0)Then VtDetail('GPU : '+VtIStr(VtGpuCalls)
+   +' produits matriciels, '+VtHumanBytes(VtGpuBytes)+' transf'#130'r'#130's');
+ VxFails:=VtNFail;
+ VtSceneFree(VtScene);
+End;
+
+
+{ Execution du moteur : les erreurs (Fatal, annulation) sont des exceptions }
+Function VxRun(Var Err: AnsiString): Boolean;
+Var Err2: String;
+Begin
+ VxRun := False;
+ Err := '';
+ VxMsg := '';
+ Try
+  VtProcessScene;
+  VxRun := True;
+ Except
+  Err := VxMsg;
+  If Err = '' Then Begin
+   Err := 'Erreur interne du moteur.';
+   If RaiseList <> Nil Then Begin
+    Str(PtrUInt(RaiseList^.Addr),Err2);
+    Err := Err+' '+RaiseList^.FObject.ClassName+' @'+Err2;
+   End;
+  End;
+ End;
+End;
+
+{$MODESWITCH EXCEPTIONS-}{$MODESWITCH CLASS-}
+{$IFDEF FPC}{$POP}{$ENDIF}
+
+Const
+ VU_KINDS = 12;
+ VU_KIND: Array[0..VU_KINDS-1] of String[12] = ('auto','haut','bas','jupe','robe',
+  'tout','chaussures','chapeau','lunettes','sac','echarpe','ceinture');
+ VU_KINDNAME: Array[0..VU_KINDS-1] of String[28] = ('Automatique','Haut (chandail...)',
+  'Bas (pantalon)','Jupe','Robe','Tenue complete','Chaussures','Chapeau','Lunettes',
+  'Sac','Echarpe','Ceinture');
+
+Type
+ TVuState = Record
+  X, Y: Integer;
+  Garment, Prompt: String[200];
+  Kind, Quality, Focus: Integer;
+  UseGpu, HasResult, ShowAfter: Boolean;
+  Done, Dirty, Run, Apply: Boolean;
+  Status: String[80];
+  GarmEdit, Browse, KindM, KindLabel, KindP, PromptEdit: TRect;
+  QualM, QualTrack, QualP, GpuBox, PrevBox: TRect;
+  GenButton, ApplyButton, CloseButton: TRect;
+  PaletteData: TPEState;
+  MX, MY, MB, PreviousButtons: Integer;
+ End;
+
+Function VuOutFile: String;
+Var
+ N: String;
+Begin
+ N := ScTempFile;
+ VuOutFile := Copy(N,1,Length(N)-12)+'PAINTVTN.PNG';
+End;
+
+Procedure VuLayout(Var D: TVuState);
+Begin
+ D.X := (ScreenWidth-BR_W) Div 2;
+ D.Y := (ScreenHeight-BR_H) Div 2;
+ PERect(D.GarmEdit,D.X+12,D.Y+70,196,20);
+ PERect(D.Browse,D.X+216,D.Y+68,84,24);
+ PERect(D.KindM,D.X+12,D.Y+116,24,22);
+ PERect(D.KindLabel,D.X+42,D.Y+116,216,22);
+ PERect(D.KindP,D.X+264,D.Y+116,24,22);
+ PERect(D.PromptEdit,D.X+12,D.Y+164,288,20);
+ PERect(D.QualM,D.X+12,D.Y+270,24,20);
+ PERect(D.QualTrack,D.X+42,D.Y+270,216,20);
+ PERect(D.QualP,D.X+264,D.Y+270,24,20);
+ PERect(D.GpuBox,D.X+12,D.Y+298,288,20);
+ PERect(D.PrevBox,D.X+316,D.Y+50,288,200);
+ PERect(D.GenButton,D.X+12,D.Y+340,160,25);
+ PERect(D.ApplyButton,D.X+184,D.Y+340,120,25);
+ PERect(D.CloseButton,D.X+316,D.Y+340,108,25);
+End;
+
+Procedure VuEdit(Const R: TRect; Const S: String; Focused: Boolean);
+Var
+ T: String;
+ Max: Integer;
+Begin
+ PEFill(R,White);
+ PEBevel(R,True);
+ Max := (R.Right-R.Left-8) Div 8;
+ T := S;
+ If Focused Then T := T+'_';
+ If Length(T) > Max Then T := Copy(T,Length(T)-Max+1,Max);
+ SetColor(Black);
+ OutTextXY(R.Left+4,R.Top+6,T);
+End;
+
+Procedure VuDrawPreview(Const D: TVuState);
+Var
+ R: TRect;
+ W, H, DW, DH, X, Y, SX, SY, L, T: Integer;
+ C: TRGBColor;
+ P: PByte;
+ UseRes: Boolean;
+Begin
+ R := D.PrevBox;
+ PEFill(R,LightGray);
+ PEBevel(R,True);
+ UseRes := D.ShowAfter And (VxPrevPx <> Nil);
+ If UseRes Then Begin
+  W := VxPrevW;
+  H := VxPrevH;
+ End
+ Else Begin
+  If Not PGHasImage Then Exit;
+  W := CanvasImageW;
+  H := CanvasImageH;
+ End;
+ RFFitSize(W,H,280,192,DW,DH);
+ L := R.Left+(R.Right-R.Left+1-DW) Div 2;
+ T := R.Top+(R.Bottom-R.Top+1-DH) Div 2;
+ For Y := 0 To DH-1 Do Begin
+  SY := Min(H-1,(LongInt(Y)*H+H Div 2) Div DH);
+  For X := 0 To DW-1 Do Begin
+   SX := Min(W-1,(LongInt(X)*W+W Div 2) Div DW);
+   If UseRes Then Begin
+    P := VxPrevPx;
+    Inc(P,(LongInt(SY)*W+SX)*3);
+    C := PERGB(P^,PByte(PtrUInt(P)+1)^,PByte(PtrUInt(P)+2)^);
+    PutPixel(L+X,T+Y,PEDisplayColor(C));
+   End
+   Else If PGReadRGB(SX,SY,C) Then
+    PutPixel(L+X,T+Y,PEDisplayColor(C));
+  End;
+ End;
+ SetColor(DarkGray);
+ Rectangle(L-1,T-1,L+DW,T+DH);
+End;
+
+Procedure VuDraw(Var D: TVuState);
+Var
+ R: TRect;
+ S: String;
+ I: Integer;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut);
+ SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,BR_W,BR_H);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.X+3,D.Y+3,D.X+BR_W-4,D.Y+21);
+ SetColor(White);
+ OutTextXY(D.X+9,D.Y+7,'Fusionner des vetements - PAINT');
+ OutTextXY(D.X+BR_W-18,D.Y+7,'X');
+ PELabel(D.X+12,D.Y+33,'Photo : l''image courante du canevas');
+ PELabel(D.X+12,D.Y+52,'Vetement a essayer (facultatif) :');
+ VuEdit(D.GarmEdit,D.Garment,D.Focus = 0);
+ PEButton(D.Browse,'Parcourir',False);
+ PELabel(D.X+12,D.Y+98,'Type de vetement :');
+ PEButton(D.KindM,'<',False);
+ PEButton(D.KindP,'>',False);
+ PEFill(D.KindLabel,White);
+ PEBevel(D.KindLabel,True);
+ PELabel(D.KindLabel.Left+6,D.KindLabel.Top+7,VU_KINDNAME[D.Kind]);
+ PELabel(D.X+12,D.Y+146,'Demande (prompt) :');
+ VuEdit(D.PromptEdit,D.Prompt,D.Focus = 1);
+ SetColor(DarkGray);
+ OutTextXY(D.X+12,D.Y+190,'Ex. : Change le chandail en bleu');
+ OutTextXY(D.X+12,D.Y+206,'Mets une robe a pois');
+ OutTextXY(D.X+12,D.Y+222,'Enleve le chapeau');
+ OutTextXY(D.X+12,D.Y+238,'Ou en anglais : make it red');
+ Case D.Quality Of
+  1: S := 'Rapide';
+  2: S := 'Normal';
+  3: S := 'Eleve';
+ Else S := 'Maximal'; End;
+ PELabel(D.X+12,D.Y+252,'Qualite : '+S);
+ BLSlider(D.QualM,D.QualTrack,D.QualP,D.Quality-1,3);
+ BRCheckBox(D.GpuBox,D.UseGpu,'Utiliser le GPU (Direct3D 11)');
+ If D.HasResult Then
+  PELabel(D.X+316,D.Y+33,'APERCU (clic = comparer)')
+ Else
+  PELabel(D.X+316,D.Y+33,'APERCU (photo courante)');
+ If D.HasResult Then Begin
+  If D.ShowAfter Then PELabel(D.X+560,D.Y+33,'APRES')
+  Else PELabel(D.X+560,D.Y+33,'AVANT');
+ End;
+ VuDrawPreview(D);
+ VxLogX := D.X+316;
+ VxLogY := D.Y+262;
+ VxDrawLog;
+ PEButton(D.GenButton,'Generer l''apercu',False);
+ PEButton(D.ApplyButton,'Appliquer',False);
+ If Not D.HasResult Then Begin
+  PEFill(D.ApplyButton,LightGray);
+  PEBevel(D.ApplyButton,False);
+  SetColor(DarkGray);
+  OutTextXY(D.ApplyButton.Left+(120-TextWidth('Appliquer')) Div 2,
+            D.ApplyButton.Top+8,'Appliquer');
+ End;
+ PEButton(D.CloseButton,'Fermer',False);
+ If D.Status <> '' Then Begin
+  SetColor(DarkGray);
+  OutTextXY(D.X+316,D.Y+329,Copy(D.Status,1,36));
+ End;
+ PEShowMouse;
+ D.Dirty := False;
+End;
+
+Procedure VuKey(Var D: TVuState; K: Char);
+Var
+ L: Integer;
+Begin
+ If D.Focus = 0 Then Begin
+  If K = #8 Then Begin
+   L := Length(D.Garment);
+   If L > 0 Then D.Garment := Copy(D.Garment,1,L-1);
+  End
+  Else If (K >= ' ') And (Length(D.Garment) < 199) Then
+   D.Garment := D.Garment+K;
+ End
+ Else Begin
+  If K = #8 Then Begin
+   L := Length(D.Prompt);
+   If L > 0 Then D.Prompt := Copy(D.Prompt,1,L-1);
+  End
+  Else If (K >= ' ') And (Length(D.Prompt) < 199) Then
+   D.Prompt := D.Prompt+K;
+ End;
+ D.Dirty := True;
+End;
+
+Procedure VuKeyboard(Var D: TVuState);
+Var
+ K: Char;
+Begin
+ K := ReadKey;
+ If K = #0 Then Begin
+  K := ReadKey;
+  Exit;
+ End;
+ Case K Of
+  #27: D.Done := True;
+  #9: Begin D.Focus := 1-D.Focus; D.Dirty := True; End;
+  #13: If D.Focus = 0 Then Begin D.Focus := 1; D.Dirty := True; End
+       Else D.Run := True;
+ Else VuKey(D,K); End;
+End;
+
+Procedure VuMouse(Var D: TVuState);
+Var
+ Pressed: Boolean;
+ Name: String;
+Begin
+ GetMouseStateLocal(D.MX,D.MY,D.MB);
+ Pressed := ((D.MB And 1) <> 0) And ((D.PreviousButtons And 1) = 0);
+ If (D.MB And 1) <> 0 Then
+  If PEInside(D.MX,D.MY,D.QualTrack) Then Begin
+   D.Quality := PEClamp(1+((D.MX-D.QualTrack.Left-2)*3*2+
+                (D.QualTrack.Right-D.QualTrack.Left-4)) Div
+                (2*(D.QualTrack.Right-D.QualTrack.Left-4)),1,4);
+   D.Dirty := True;
+  End;
+ If Pressed Then Begin
+  D.Status := '';
+  If (D.MX >= D.X+BR_W-24) And (D.MX <= D.X+BR_W-4) And
+     (D.MY >= D.Y+3) And (D.MY <= D.Y+21) Then
+   D.Done := True
+  Else If PEInside(D.MX,D.MY,D.CloseButton) Then
+   D.Done := True
+  Else If PEInside(D.MX,D.MY,D.GenButton) Then
+   D.Run := True
+  Else If PEInside(D.MX,D.MY,D.ApplyButton) Then Begin
+   If D.HasResult Then Begin
+    D.Apply := True;
+    D.Done := True;
+   End;
+  End
+  Else If PEInside(D.MX,D.MY,D.GarmEdit) Then Begin
+   D.Focus := 0; D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.PromptEdit) Then Begin
+   D.Focus := 1; D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.Browse) Then Begin
+   PEShowMouse;
+   Name := '';
+   If OpenImageDialog(Name) Then
+    D.Garment := Copy(Name,1,200);
+   D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.KindM) Then Begin
+   D.Kind := (D.Kind+VU_KINDS-1) Mod VU_KINDS; D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.KindP) Then Begin
+   D.Kind := (D.Kind+1) Mod VU_KINDS; D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.QualM) Then Begin
+   D.Quality := PEClamp(D.Quality-1,1,4); D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.QualP) Then Begin
+   D.Quality := PEClamp(D.Quality+1,1,4); D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.GpuBox) Then Begin
+   D.UseGpu := Not D.UseGpu; D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.PrevBox) Then Begin
+   If D.HasResult Then Begin
+    D.ShowAfter := Not D.ShowAfter; D.Dirty := True;
+   End;
+  End;
+ End;
+ D.PreviousButtons := D.MB;
+End;
+
+Procedure VuGenerate(Var D: TVuState);
+Var
+ Err: AnsiString;
+ I: Integer;
+ Ok: Boolean;
+Begin
+ For I := 0 To 3 Do VxLog[I] := '';
+ VxLogX := D.X+316;
+ VxLogY := D.Y+262;
+ VxDrawLog;
+ VxCancelRect := D.GenButton;
+ PEHideMouse;
+ PEButton(D.GenButton,'Annuler (Echap)',False);
+ PEShowMouse;
+ VtOptOut := VuOutFile;
+ VtOptType := VU_KIND[D.Kind];
+ VtOptModel := '';
+ VtOptPrompt := VtCp437ToUtf8(D.Prompt);
+ VtOptParsing := '';
+ VtOptSaveParsing := '';
+ VtOptDump := '';
+ VtOptQuality := D.Quality;
+ VtOptCpu := Not D.UseGpu;
+ VtOptGpu := D.UseGpu;
+ VtOptSeed := -1;
+ VtOptThreads := 0;
+ VtOptDevice := -1;
+ VtOptMaxSize := 1024;
+ VtOptSize := 0;
+ VtVerbose := True;
+ VtQuiet := False;
+ SetLength(VtPos_,1);
+ VtPos_[0] := 'canevas';
+ If D.Garment <> '' Then Begin
+  SetLength(VtPos_,2);
+  VtPos_[1] := D.Garment;
+ End;
+ VxFails := 0;
+ VxLastWarn := '';
+ Ok := VxRun(Err);
+ If Ok Then Begin
+  D.HasResult := True;
+  D.ShowAfter := True;
+  If VxFails > 0 Then
+   D.Status := 'Apercu pret (certaines retouches ont echoue).'
+  Else
+   D.Status := 'Apercu pret : Appliquer pour l''importer.';
+ End
+ Else Begin
+  D.Status := Copy(Err,1,76);
+ End;
+ D.PreviousButtons := 1;
+ D.Dirty := True;
+End;
+
+Procedure VtonDialog;
+Var
+ D: TVuState;
+ Name, Msg: String;
+ Backup: PHistoryData;
+ Metadata: TImageBuffer;
+ OldZoom, OldX, OldY: Integer;
+ F: File;
+Begin
+ If Not PGHasImage Then Begin
+  ShowMessage('Fusionner des vetements','Aucune image a traiter.');
+  Exit;
+ End;
+ MenuActive := False;
+ RedrawInterface;
+ FillChar(D,SizeOf(D),0);
+ D.Quality := 2;
+ D.Focus := 1;
+ D.Kind := 0;
+ D.Garment := '';
+ D.Prompt := '';
+ VuLayout(D);
+ PEInitialize(D.PaletteData);
+ PEHideMouse;
+ PEBuildDisplayPalette;
+ PEShowMouse;
+ GetMouseStateLocal(D.MX,D.MY,D.PreviousButtons);
+ D.Dirty := True;
+ While Not D.Done Do Begin
+  If D.Dirty Then VuDraw(D);
+  If KeyPressed Then VuKeyboard(D);
+  If Not D.Done Then VuMouse(D);
+  If D.Run Then Begin
+   D.Run := False;
+   VuGenerate(D);
+  End;
+  Delay(10);
+ End;
+ If VxPrevPx <> Nil Then Begin
+  FreeMem(VxPrevPx);
+  VxPrevPx := Nil;
+ End;
+ Repeat
+  GetMouseStateLocal(D.MX,D.MY,D.MB);
+  If (D.MB And 1) <> 0 Then Delay(10);
+ Until (D.MB And 1) = 0;
+ OldMouseButtons := 0;
+ MouseButtons := 0;
+ Name := VuOutFile;
+ PEHideMouse;
+ PERestoreHardware(D.PaletteData);
+ PEShowMouse;
+ RedrawInterface;
+ If D.Apply Then Begin
+  AddSnapshotToHistory(TOOL_PICKER);
+  Backup := SaveFullSnapshot;
+  If Backup = Nil Then
+   ShowMessage('Fusionner des vetements','Impossible de proteger l''image courante.')
+  Else Begin
+   Metadata := ImageBuffer;
+   OldZoom := ZoomLevel; OldX := ZOriginX; OldY := ZOriginY;
+   If LoadImage(Name) Then Begin
+    ZoomLevel := 100; ZOriginX := 0; ZOriginY := 0;
+    SelectionActive := False;
+    ImageBuffer.FileName := '';
+    ImageBuffer.Modified := True;
+   End
+   Else Begin
+    RestoreFullSnapshot(Backup); ImageBuffer := Metadata;
+    ZoomLevel := OldZoom; ZOriginX := OldX; ZOriginY := OldY;
+    ShowMessage('Fusionner des vetements','Le resultat n''a pas pu etre charge.');
+   End;
+   FreeHistoryData(Backup);
+  End;
+  RedrawInterface;
+ End;
+ Assign(F,Name);
+ {$I-} Erase(F); {$I+}
+ If IOResult <> 0 Then;
+End;
+
+
 Procedure OpenImageCommand;
 Var Name: String; Backup: PHistoryData; Metadata: TImageBuffer;
     OldZoom,OldX,OldY: Integer; Item: PHistoryItem;
@@ -29691,6 +45051,7 @@ Begin
     0: RemoveBackgroundDialog;
     1: BlurBackgroundDialog;
     2: OcrDialog;
+    3: VtonDialog;
    End;
   End;
   MENU_HELP: Begin

@@ -77,7 +77,7 @@ Aperçu du clone de Adobe Première :
 
 Apercu de VISIO :
 
-<img width="640" height="481" alt="image" src="https://github.com/user-attachments/assets/c626c543-6380-4c46-8035-a4d8a92014f7" />
+<img width="640" height="481" alt="image" src="https://github.com/user-attachments/assets/82c303ab-0a34-4390-a8b2-bec1bcb5931a" />
 
 <h2>Liste des fichiers</h2>
 

@@ -71,7 +71,7 @@ Const
  { Constantes pour la barre d'outils (verticale, a gauche) }
  TOOLBAR_COUNT = 19;
  CLASSIC_TOOLBAR_TOP = 43;        { Juste en dessous de la barre d'icones }
- CLASSIC_TOOLBAR_WIDTH = 56;      { Largeur de la barre d'outils verticale }
+ CLASSIC_TOOLBAR_WIDTH = 0;      { Largeur de la barre d'outils verticale }
  TOOLBAR_HEIGHT = 26;     { Conserve pour compatibilite (hauteur d'un bouton) }
  TOOLBAR_BUTTON_SIZE = 24; { Taille d'un bouton }
  TOOLBAR_PADDING = 2;     { Espacement entre les boutons }
@@ -85,7 +85,7 @@ Const
  ICONBAR_HEIGHT = 24;     { Hauteur de la barre d'icones }
  ICONBAR_BUTTON_SIZE = 20; { Taille d'un bouton }
  ICONBAR_PADDING = 2;
- ICONBAR_COUNT = 8;       { 6 icones + 2 separateurs }
+ ICONBAR_COUNT = 28;      { 6 icones + 3 separateurs + 19 outils }
  ICONBAR_COLOR = 7;       { Gris clair }
 
  { Constantes pour la zone de travail et les objets }
@@ -14601,18 +14601,8 @@ End;
 Procedure DrawShapePanel; Forward;
 
 Procedure DrawToolbar;
-Var
- I: Integer;
- ToolIndex: Integer;
 Begin
- SetFillStyle(SolidFill, TOOLBAR_COLOR);
- Bar(0, TOOLBAR_TOP, CLASSIC_TOOLBAR_WIDTH, ScreenHeight);
- SetColor(DarkGray);
- Line(CLASSIC_TOOLBAR_WIDTH, TOOLBAR_TOP, CLASSIC_TOOLBAR_WIDTH, ScreenHeight);
  DrawShapePanel;
-
- ToolIndex := Ord(CurrentTool) + 1;
- For I := 1 to TOOLBAR_COUNT do DrawToolButton(I, I = ToolIndex);
 End;
 
 { Fonction pour obtenir l'outil a une position donnee (0 = aucun) }
@@ -14843,6 +14833,8 @@ Begin
  End;
 End;
 
+Function GetIconBarButtonX(Index: Integer): Integer; Forward;
+Function GetIconBarButtonAtPosition(MouseX, MouseY: Integer): Integer; Forward;
 Function RibbonHitAt(X, Y: Integer): Integer; Forward;
 Procedure RibbonItemBox(I: Integer; Var X, Y, W, H: Integer); Forward;
 Procedure RibbonTipInfo(I: Integer; Var Title, Desc: String); Forward;
@@ -14853,6 +14845,24 @@ Var EN: Boolean;
 Begin
  EN := Language <> _French;
  Title := ''; Desc := '';
+ If Tool >= 3000 Then Begin
+  If Tool - 3000 >= 10 Then ToolTipInfo(ToolOrder[Tool - 3000 - 9], Title, Desc)
+  Else Case Tool - 3000 of
+   1: If EN Then Begin Title := 'New'; Desc := 'Create a new drawing'; End
+      Else Begin Title := 'Nouveau'; Desc := 'Creer un nouveau dessin'; End;
+   2: If EN Then Begin Title := 'Open'; Desc := 'Open an existing drawing'; End
+      Else Begin Title := 'Ouvrir'; Desc := 'Ouvrir un dessin existant'; End;
+   3: If EN Then Begin Title := 'Save'; Desc := 'Save the drawing'; End
+      Else Begin Title := 'Enregistrer'; Desc := 'Enregistrer le dessin'; End;
+   5: If EN Then Begin Title := 'Print'; Desc := 'Print the drawing'; End
+      Else Begin Title := 'Imprimer'; Desc := 'Imprimer le dessin'; End;
+   7: If EN Then Begin Title := 'Undo'; Desc := 'Undo the last action'; End
+      Else Begin Title := 'Annuler'; Desc := 'Annuler la derniere action'; End;
+   8: If EN Then Begin Title := 'Redo'; Desc := 'Redo the undone action'; End
+      Else Begin Title := 'Retablir'; Desc := 'Retablir l''action annulee'; End;
+  End;
+  Exit;
+ End;
  If Tool >= 2000 Then Begin
   RibbonTipInfo(Tool - 2000, Title, Desc);
   Exit;
@@ -14922,7 +14932,11 @@ Begin
  W := Length(Desc);
  If Length(Title) > W Then W := Length(Title);
  W := W * 8 + 10;
- If TipTool >= 2000 Then Begin
+ If TipTool >= 3000 Then Begin
+  X := GetIconBarButtonX(TipTool - 3000);
+  Y := ICONBAR_TOP + ICONBAR_HEIGHT + 4;
+ End
+ Else If TipTool >= 2000 Then Begin
   RibbonItemBox(TipTool - 2000, X, Y, BW, BH);
   Y := Y + BH + 2;
  End
@@ -14964,6 +14978,10 @@ Begin
   If (T = 0) and RibbonMode Then Begin
    T := RibbonHitAt(MX, MY);
    If T > 0 Then T := T + 2000;
+  End;
+  If T = 0 Then Begin
+   T := GetIconBarButtonAtPosition(MX, MY);
+   If T > 0 Then T := T + 3000;
   End;
  End;
  If T <> TipTool Then Begin
@@ -15010,9 +15028,14 @@ End;
 { 1: Nouveau, 2: Ouvrir, 3: Enregistrer, 4: separateur,
   5: Imprimer, 6: separateur, 7: Annuler, 8: Retablir. }
 
+Function IconBarLast: Integer;
+Begin
+ If RibbonMode Then IconBarLast := 8 Else IconBarLast := ICONBAR_COUNT;
+End;
+
 Function IsIconBarSeparator(Index: Integer): Boolean;
 Begin
- IsIconBarSeparator := (Index = 4) or (Index = 6);
+ IsIconBarSeparator := (Index = 4) or (Index = 6) or (Index = 9);
 End;
 
 Function GetIconBarButtonX(Index: Integer): Integer;
@@ -15133,7 +15156,8 @@ Begin
   Line(X, Y + ICONBAR_BUTTON_SIZE - 1, X + ICONBAR_BUTTON_SIZE - 1, Y + ICONBAR_BUTTON_SIZE - 1);
  End;
 
- DrawIconBarIcon(X, Y, Index);
+ If Index >= 10 Then DrawToolIcon(X - 2, Y - 2, ToolOrder[Index - 9])
+ Else DrawIconBarIcon(X, Y, Index);
 End;
 
 Procedure DrawIconBar;
@@ -15147,8 +15171,8 @@ Begin
  SetColor(DarkGray);
  Line(0, ICONBAR_TOP + ICONBAR_HEIGHT, ScreenWidth, ICONBAR_TOP + ICONBAR_HEIGHT);
 
- For I := 1 to ICONBAR_COUNT Do
-  DrawIconBarButton(I, False);
+ For I := 1 to IconBarLast Do
+  DrawIconBarButton(I, (I >= 10) and (Ord(CurrentTool) + 1 = ToolOrder[I - 9]));
 End;
 
 Function GetIconBarButtonAtPosition(MouseX, MouseY: Integer): Integer;
@@ -15158,7 +15182,7 @@ Begin
  GetIconBarButtonAtPosition := 0;
  If (MouseY < ICONBAR_TOP + 2) or
     (MouseY > ICONBAR_TOP + 2 + ICONBAR_BUTTON_SIZE) Then Exit;
- For I := 1 to ICONBAR_COUNT Do Begin
+ For I := 1 to IconBarLast Do Begin
   If IsIconBarSeparator(I) Then Continue;
   X := GetIconBarButtonX(I);
   If (MouseX >= X) and (MouseX <= X + ICONBAR_BUTTON_SIZE) Then Begin
@@ -19803,6 +19827,10 @@ End;
 { Action declenchee par un clic sur un bouton de la barre d'icones }
 Procedure ExecuteIconBarAction(Index: Integer);
 Begin
+ If Index >= 10 Then Begin
+  SelectTool(ToolOrder[Index - 9]);
+  Exit;
+ End;
  Case Index of
   1: FileNew;       { Nouveau }
   2: FileOpen;      { Ouvrir }

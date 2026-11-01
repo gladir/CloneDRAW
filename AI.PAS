@@ -279,7 +279,7 @@ Var
  Menus: Array[0..MAX_MENUS-1] Of TMenu;
  MenuMouseDown, NeedsRedraw, GridVisible: Boolean;
  DialogTitle: String[40];
- DialogText: String[65];
+ DialogText: String[255];
  StatusMessage: String[75];
  ToolTipVisible: Boolean;
  ToolTipCandidate: Integer;
@@ -2628,6 +2628,191 @@ Begin
  NeedsRedraw := True;
 End;
 
+{ ------------------------------------------------------------------
+  Boite a outils des dialogues : aspect Windows classique
+  (face grise, relief 3D, barre de titre bleue, boutons, cases a cocher)
+  ------------------------------------------------------------------ }
+Type
+ TLines = Array[0..7] Of String[60];
+
+Procedure UiBevel(X1, Y1, X2, Y2: Integer; Raised: Boolean);
+Begin
+ If Raised Then Begin
+  SetColor(15); Line(X1,Y1,X2-1,Y1); Line(X1,Y1,X1,Y2-1);
+  SetColor(0); Line(X1,Y2,X2,Y2); Line(X2,Y1,X2,Y2);
+  SetColor(8); Line(X1+1,Y2-1,X2-1,Y2-1); Line(X2-1,Y1+1,X2-1,Y2-1);
+ End Else Begin
+  SetColor(8); Line(X1,Y1,X2-1,Y1); Line(X1,Y1,X1,Y2-1);
+  SetColor(15); Line(X1,Y2,X2,Y2); Line(X2,Y1,X2,Y2);
+  SetColor(0); Line(X1+1,Y1+1,X2-2,Y1+1); Line(X1+1,Y1+1,X1+1,Y2-2);
+ End;
+End;
+
+Procedure UiRaised(X1, Y1, X2, Y2: Integer);
+Begin
+ SetFillStyle(SolidFill,COLOR_BG);
+ Bar(X1,Y1,X2,Y2);
+ UiBevel(X1,Y1,X2,Y2,True);
+End;
+
+Procedure UiSunken(X1, Y1, X2, Y2: Integer);
+Begin
+ SetFillStyle(SolidFill,COLOR_WINDOW);
+ Bar(X1,Y1,X2,Y2);
+ UiBevel(X1,Y1,X2,Y2,False);
+End;
+
+{ cadre grave avec titre (groupe) }
+Procedure UiGroup(X1, Y1, X2, Y2: Integer; Caption: String);
+Begin
+ SetColor(8); Rectangle(X1,Y1+6,X2-1,Y2-1);
+ SetColor(15); Rectangle(X1+1,Y1+7,X2,Y2);
+ If Caption <> '' Then Begin
+  SetFillStyle(SolidFill,COLOR_BG);
+  Bar(X1+8,Y1,X1+16+Length(Caption)*8,Y1+12);
+  SetColor(COLOR_TEXT);
+  OutTextXY(X1+12,Y1+2,Caption);
+ End;
+End;
+
+Procedure UiText(X, Y: Integer; S: String);
+Begin
+ SetColor(COLOR_TEXT);
+ OutTextXY(X,Y,S);
+End;
+
+Procedure UiCross(CX, CY, R: Integer);
+Begin
+ Line(CX-R,CY-R,CX+R,CY+R); Line(CX-R,CY+R,CX+R,CY-R);
+ Line(CX-R+1,CY-R,CX+R+1,CY+R); Line(CX-R+1,CY+R,CX+R+1,CY-R);
+End;
+
+{ fenetre : relief, barre de titre bleue et bouton de fermeture }
+Procedure UiWindow(X1, Y1, X2, Y2: Integer; Title: String);
+Begin
+ SetFillStyle(SolidFill,0);
+ Bar(X1+4,Y1+4,X2+4,Y2+4);
+ UiRaised(X1,Y1,X2,Y2);
+ SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
+ Bar(X1+3,Y1+3,X2-3,Y1+20);
+ SetColor(15);
+ OutTextXY(X1+8,Y1+8,Title);
+ OutTextXY(X1+9,Y1+8,Title);
+ UiRaised(X2-19,Y1+5,X2-5,Y1+18);
+ SetColor(0);
+ UiCross(X2-12,Y1+11,3);
+End;
+
+Function UiInside(X1, Y1, X2, Y2: Integer): Boolean;
+Begin
+ UiInside := (MouseX >= X1) And (MouseX <= X2) And (MouseY >= Y1) And (MouseY <= Y2);
+End;
+
+Function UiCloseHit(X2, Y1: Integer): Boolean;
+Begin
+ UiCloseHit := UiInside(X2-19,Y1+5,X2-5,Y1+18);
+End;
+
+Procedure UiButton(X1, Y1, X2, Y2: Integer; Caption: String; Default, Enabled: Boolean);
+Var Down: Boolean; TX, TY: Integer;
+Begin
+ Down := Enabled And ((MouseButtons And 1) <> 0) And UiInside(X1,Y1,X2,Y2);
+ If Default Then Begin
+  SetFillStyle(SolidFill,COLOR_BG);
+  Bar(X1,Y1,X2,Y2);
+  SetColor(0); Rectangle(X1,Y1,X2,Y2);
+  UiBevel(X1+1,Y1+1,X2-1,Y2-1,Not Down);
+ End Else Begin
+  If Down Then Begin
+   SetFillStyle(SolidFill,COLOR_BG); Bar(X1,Y1,X2,Y2);
+   SetColor(0); Rectangle(X1,Y1,X2,Y2);
+   SetColor(8); Rectangle(X1+1,Y1+1,X2-1,Y2-1);
+  End Else UiRaised(X1,Y1,X2,Y2);
+ End;
+ TX := X1+((X2-X1)-Length(Caption)*8) Div 2;
+ TY := Y1+((Y2-Y1)-7) Div 2;
+ If Down Then Begin Inc(TX); Inc(TY); End;
+ If Enabled Then Begin
+  SetColor(COLOR_TEXT);
+  OutTextXY(TX,TY,Caption);
+ End Else Begin
+  SetColor(15); OutTextXY(TX+1,TY+1,Caption);
+  SetColor(8); OutTextXY(TX,TY,Caption);
+ End;
+ If Default And Enabled Then Begin
+  SetColor(0);
+  SetLineStyle(DottedLn,0,NormWidth);
+  Rectangle(X1+4,Y1+4,X2-4,Y2-4);
+  SetLineStyle(SolidLn,0,NormWidth);
+ End;
+End;
+
+Procedure UiCheck(X, Y: Integer; Checked: Boolean; Caption: String);
+Begin
+ UiSunken(X,Y,X+12,Y+12);
+ If Checked Then Begin
+  SetColor(0);
+  UiCross(X+5,Y+5,2);
+ End;
+ UiText(X+20,Y+3,Caption);
+End;
+
+Procedure UiArrow(CX, CY: Integer; Up: Boolean);
+Var I: Integer;
+Begin
+ SetColor(0);
+ For I := 0 To 3 Do
+  If Up Then Line(CX-I,CY-2+I,CX+I,CY-2+I)
+  Else Line(CX-I,CY+2-I,CX+I,CY+2-I);
+End;
+
+{ coupe un texte en lignes de Max caracteres au plus }
+Function WrapLines(S: String; Max: Integer; Var L: TLines): Integer;
+Var N, P, Cut: Integer;
+Begin
+ N := 0;
+ While (S <> '') And (N < 8) Do Begin
+  If Length(S) <= Max Then Begin L[N] := S; S := ''; Inc(N); End
+  Else Begin
+   Cut := Max;
+   P := Max;
+   While (P > 1) And (S[P] <> ' ') Do Dec(P);
+   If P > 1 Then Cut := P;
+   L[N] := Copy(S,1,Cut);
+   Delete(S,1,Cut);
+   While (S <> '') And (S[1] = ' ') Do Delete(S,1,1);
+   Inc(N);
+  End;
+ End;
+ WrapLines := N;
+End;
+
+Procedure UiIcon(X, Y: Integer; Warn: Boolean);
+Var I: Integer;
+Begin
+ If Warn Then Begin
+  SetFillStyle(SolidFill,14);
+  For I := 0 To 27 Do Begin
+   SetColor(14);
+   Line(X+16-I Div 2,Y+3+I,X+16+I Div 2,Y+3+I);
+  End;
+  SetColor(0);
+  Line(X+16,Y+3,X,Y+31); Line(X+16,Y+3,X+32,Y+31); Line(X,Y+31,X+32,Y+31);
+  Bar(X+15,Y+12,X+17,Y+22);
+  Bar(X+15,Y+25,X+17,Y+27);
+ End Else Begin
+  SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
+  FillEllipse(X+16,Y+16,15,15);
+  SetColor(15);
+  Ellipse(X+16,Y+16,0,360,15,15);
+  SetFillStyle(SolidFill,15);
+  Bar(X+14,Y+7,X+17,Y+10);
+  Bar(X+14,Y+13,X+17,Y+25);
+  Bar(X+12,Y+13,X+17,Y+15);
+  Bar(X+12,Y+23,X+19,Y+25);
+ End;
+End;
+
 Procedure DrawMenu;
 Var I, X, Y, H: Integer;
 Begin
@@ -2636,8 +2821,7 @@ Begin
  H := Menus[ActiveMenu].ItemCount*MENU_ITEM_HEIGHT+4;
  SetFillStyle(SolidFill, COLOR_BG);
  Bar(X, MENUBAR_HEIGHT, X+Menus[ActiveMenu].Width, MENUBAR_HEIGHT+H);
- SetColor(COLOR_BORDER);
- Rectangle(X, MENUBAR_HEIGHT, X+Menus[ActiveMenu].Width, MENUBAR_HEIGHT+H);
+ UiBevel(X, MENUBAR_HEIGHT, X+Menus[ActiveMenu].Width, MENUBAR_HEIGHT+H,True);
  For I := 0 To Menus[ActiveMenu].ItemCount-1 Do Begin
   Y := MENUBAR_HEIGHT+2+I*MENU_ITEM_HEIGHT;
   If Menus[ActiveMenu].Items[I].Caption = '-' Then Begin
@@ -2648,18 +2832,22 @@ Begin
    If (I = ActiveMenuItem) And
       (Menus[ActiveMenu].Items[I].Command <> CMD_NONE) Then Begin
     SetFillStyle(SolidFill, COLOR_HIGHLIGHT);
-    Bar(X+2, Y, X+Menus[ActiveMenu].Width-2, Y+MENU_ITEM_HEIGHT-1);
+    Bar(X+3, Y, X+Menus[ActiveMenu].Width-3, Y+MENU_ITEM_HEIGHT-1);
     SetColor(COLOR_WINDOW);
    End Else Begin
     SetColor(COLOR_TEXT);
    End;
+   If Menus[ActiveMenu].Items[I].Command = CMD_NONE Then Begin
+    SetColor(15); OutTextXY(X+21, Y+6, Menus[ActiveMenu].Items[I].Caption);
+    SetColor(8);
+   End;
    OutTextXY(X+20, Y+5, Menus[ActiveMenu].Items[I].Caption);
-   If Menus[ActiveMenu].Items[I].Command = CMD_NONE Then
-    OutTextXY(X+5, Y+5, 'x');
    If ((Menus[ActiveMenu].Items[I].Command = CMD_GRID) And GridVisible) Or
       ((Menus[ActiveMenu].Items[I].Command = CMD_RULERS) And RulersVisible) Or
-      ((Menus[ActiveMenu].Items[I].Command = CMD_GUIDES) And GuidesVisible) Then
-    OutTextXY(X+5, Y+5, '*');
+      ((Menus[ActiveMenu].Items[I].Command = CMD_GUIDES) And GuidesVisible) Then Begin
+    Line(X+6,Y+9,X+8,Y+12); Line(X+8,Y+12,X+14,Y+5);
+    Line(X+6,Y+10,X+8,Y+13); Line(X+8,Y+13,X+14,Y+6);
+   End;
   End;
  End;
 End;
@@ -2790,99 +2978,105 @@ End;
 Procedure DrawSwatches(X, Y, Selected: Integer);
 Var I: Integer;
 Begin
+ UiSunken(X-3,Y-3,X+16*19+1,Y+19);
  For I := 0 To 15 Do Begin
   SetFillStyle(SolidFill,I);
-  Bar(X+I*20,Y,X+I*20+17,Y+15);
-  SetColor(COLOR_TEXT);
-  Rectangle(X+I*20,Y,X+I*20+17,Y+15);
+  Bar(X+I*19,Y,X+I*19+15,Y+15);
+  SetColor(8);
+  Rectangle(X+I*19,Y,X+I*19+15,Y+15);
   If I = Selected Then Begin
-   SetColor(COLOR_HIGHLIGHT);
-   Rectangle(X+I*20-2,Y-2,X+I*20+19,Y+17);
-   Rectangle(X+I*20-1,Y-1,X+I*20+18,Y+16);
+   SetColor(0);
+   Rectangle(X+I*19-2,Y-2,X+I*19+17,Y+17);
+   SetColor(15);
+   Rectangle(X+I*19-1,Y-1,X+I*19+16,Y+16);
   End;
  End;
 End;
 
 Procedure DrawButton(X1, Y1, X2, Y2: Integer; Caption: String);
 Begin
- SetFillStyle(SolidFill,COLOR_BG);
- Bar(X1,Y1,X2,Y2);
- SetColor(COLOR_TEXT);
- Rectangle(X1,Y1,X2,Y2);
- OutTextXY(X1+((X2-X1)-Length(Caption)*8) Div 2,Y1+((Y2-Y1)-8) Div 2,Caption);
+ UiButton(X1,Y1,X2,Y2,Caption,False,True);
+End;
+
+{ positions relatives a la fenetre : hauteur, groupe Contour, case Visible, boutons }
+Procedure PropMetrics(Var HRel, CTop, VY, BY: Integer);
+Begin
+ If PropHasFill Then CTop := 186 Else CTop := 148;
+ If PropObj.ObjType = OBJ_TEXT Then VY := CTop Else VY := CTop+54;
+ BY := VY+30;
+ HRel := BY+24+14;
 End;
 
 Procedure DrawPropDialog;
-Var X, Y: Integer; B: TBounds; S, T: String;
+Var X, Y, HR, CT, VY, BY, W: Integer; B: TBounds; S, T: String;
 Begin
  If Not PropActive Then Exit;
- X := PropX; Y := PropY;
- SetFillStyle(SolidFill,COLOR_WINDOW);
- Bar(X,Y,X+PROP_W,Y+PROP_H);
- SetColor(COLOR_TEXT);
- Rectangle(X,Y,X+PROP_W,Y+PROP_H);
- Rectangle(X+2,Y+2,X+PROP_W-2,Y+PROP_H-2);
- OutTextXY(X+12,Y+10,'Proprietes de l''objet');
+ PropMetrics(HR,CT,VY,BY);
+ W := PROP_W;
+ X := PropX; Y := (ScreenHeight-HR) Div 2;
+ UiWindow(X,Y,X+W,Y+HR,'Proprietes de l''objet');
+ UiGroup(X+12,Y+30,X+W-12,Y+82,'Objet');
  B := ObjectBounds(PropObj);
- S := PropTypeName+'  X='; Str(Round(B.L),T); S := S+T;
- S := S+' Y='; Str(Round(B.T),T); S := S+T;
- S := S+' L='; Str(Round(B.R-B.L),T); S := S+T;
- S := S+' H='; Str(Round(B.B-B.T),T); S := S+T;
- OutTextXY(X+12,Y+30,S);
- If PropObj.ObjType = OBJ_TEXT Then
-  OutTextXY(X+12,Y+44,'"'+Copy(PropObj.TextObj.Text,1,50)+'"');
- If PropObj.ObjType = OBJ_TEXT Then OutTextXY(X+12,Y+66,'Couleur')
- Else OutTextXY(X+12,Y+66,'Trait');
- DrawSwatches(X+120,Y+62,PropStroke);
+ S := PropTypeName;
+ If PropObj.ObjType = OBJ_TEXT Then S := S+'  "'+Copy(PropObj.TextObj.Text,1,32)+'"';
+ UiText(X+24,Y+48,S);
+ S := 'X = '; Str(Round(B.L),T); S := S+T;
+ S := S+'   Y = '; Str(Round(B.T),T); S := S+T;
+ S := S+'   Largeur = '; Str(Round(B.R-B.L),T); S := S+T;
+ S := S+'   Hauteur = '; Str(Round(B.B-B.T),T); S := S+T;
+ UiText(X+24,Y+64,S);
+ If PropHasFill Then UiGroup(X+12,Y+92,X+W-12,Y+176,'Couleurs')
+ Else UiGroup(X+12,Y+92,X+W-12,Y+138,'Couleurs');
+ If PropObj.ObjType = OBJ_TEXT Then UiText(X+24,Y+114,'Couleur')
+ Else UiText(X+24,Y+114,'Trait');
+ DrawSwatches(X+124,Y+108,PropStroke);
  If PropHasFill Then Begin
-  SetColor(COLOR_TEXT);
-  OutTextXY(X+12,Y+96,'Remplissage');
-  DrawSwatches(X+120,Y+92,PropFill);
-  If PropObj.ObjType <> OBJ_FILLED_PATH Then
-   OutTextXY(X+120,Y+112,'(blanc = pas de remplissage)');
+  UiText(X+24,Y+142,'Remplissage');
+  DrawSwatches(X+124,Y+136,PropFill);
+  If PropObj.ObjType <> OBJ_FILLED_PATH Then Begin
+   SetColor(8);
+   OutTextXY(X+124,Y+158,'Blanc = pas de remplissage');
+  End;
  End;
- SetColor(COLOR_TEXT);
  If PropObj.ObjType <> OBJ_TEXT Then Begin
-  OutTextXY(X+12,Y+134,'Epaisseur');
-  DrawButton(X+120,Y+130,X+140,Y+148,'-');
+  UiGroup(X+12,Y+CT,X+W-12,Y+CT+46,'Contour');
+  UiText(X+24,Y+CT+25,'Epaisseur');
+  UiSunken(X+108,Y+CT+16,X+150,Y+CT+36);
   Str(PropWidth,S);
-  OutTextXY(X+152,Y+134,S);
-  DrawButton(X+190,Y+130,X+210,Y+148,'+');
+  UiText(X+129-Length(S)*4,Y+CT+22,S);
+  UiRaised(X+152,Y+CT+16,X+166,Y+CT+25);
+  UiArrow(X+159,Y+CT+20,True);
+  UiRaised(X+152,Y+CT+26,X+166,Y+CT+36);
+  UiArrow(X+159,Y+CT+31,False);
+  UiText(X+176,Y+CT+25,'pixels (1 a 10)');
  End;
- OutTextXY(X+12,Y+164,'Visible');
- Rectangle(X+120,Y+160,X+136,Y+176);
- If PropObj.Visible Then Begin
-  Line(X+122,Y+168,X+127,Y+174);
-  Line(X+127,Y+174,X+134,Y+162);
- End;
- DrawButton(X+90,Y+200,X+210,Y+224,'OK (Entree)');
- DrawButton(X+250,Y+200,X+370,Y+224,'Annuler (Esc)');
+ UiCheck(X+24,Y+VY,PropObj.Visible,'Objet visible');
+ UiButton(X+W-196,Y+BY,X+W-108,Y+BY+24,'OK',True,True);
+ UiButton(X+W-100,Y+BY,X+W-12,Y+BY+24,'Annuler',False,True);
 End;
 
 Procedure HandlePropMouse;
-Var X, Y, I: Integer;
+Var X, Y, I, HR, CT, VY, BY, W: Integer;
 Begin
- X := PropX; Y := PropY;
  NeedsRedraw := True;
- If (MouseY >= Y+62) And (MouseY <= Y+77) And
-    (MouseX >= X+120) And (MouseX < X+120+320) Then Begin
-  I := (MouseX-X-120) Div 20;
+ PropMetrics(HR,CT,VY,BY);
+ W := PROP_W;
+ X := PropX; Y := (ScreenHeight-HR) Div 2;
+ If UiCloseHit(X+W,Y) Then Begin ClosePropsDialog(False); Exit; End;
+ If UiInside(X+W-196,Y+BY,X+W-108,Y+BY+24) Then Begin ClosePropsDialog(True); Exit; End;
+ If UiInside(X+W-100,Y+BY,X+W-12,Y+BY+24) Then Begin ClosePropsDialog(False); Exit; End;
+ If UiInside(X+124,Y+106,X+124+303,Y+123) Then Begin
+  I := (MouseX-X-124) Div 19;
   If I <= 15 Then PropSetStroke(I);
- End Else If PropHasFill And (MouseY >= Y+92) And (MouseY <= Y+107) And
-    (MouseX >= X+120) And (MouseX < X+120+320) Then Begin
-  I := (MouseX-X-120) Div 20;
+ End Else If PropHasFill And UiInside(X+124,Y+134,X+124+303,Y+151) Then Begin
+  I := (MouseX-X-124) Div 19;
   If I <= 15 Then PropSetFill(I);
- End Else If (PropObj.ObjType <> OBJ_TEXT) And (MouseY >= Y+130) And
-    (MouseY <= Y+148) Then Begin
-  If (MouseX >= X+120) And (MouseX <= X+140) Then PropSetWidth(PropWidth-1);
-  If (MouseX >= X+190) And (MouseX <= X+210) Then PropSetWidth(PropWidth+1);
- End Else If (MouseX >= X+120) And (MouseX <= X+136) And
-    (MouseY >= Y+160) And (MouseY <= Y+176) Then
-  PropObj.Visible := Not PropObj.Visible
- Else If (MouseY >= Y+200) And (MouseY <= Y+224) Then Begin
-  If (MouseX >= X+90) And (MouseX <= X+210) Then ClosePropsDialog(True)
-  Else If (MouseX >= X+250) And (MouseX <= X+370) Then ClosePropsDialog(False);
- End;
+ End Else If (PropObj.ObjType <> OBJ_TEXT) And UiInside(X+152,Y+CT+16,X+166,Y+CT+25) Then
+  PropSetWidth(PropWidth+1)
+ Else If (PropObj.ObjType <> OBJ_TEXT) And UiInside(X+152,Y+CT+26,X+166,Y+CT+36) Then
+  PropSetWidth(PropWidth-1)
+ Else If UiInside(X+24,Y+VY-2,X+170,Y+VY+14) Then
+  PropObj.Visible := Not PropObj.Visible;
 End;
 
 Procedure HandlePropKey(Key: Char);
@@ -2982,6 +3176,8 @@ Var
  ChoiceActive: Boolean;
  ChoiceKind, ChoiceCount: Integer;
  ChoiceItems: Array[0..11] Of String[40];
+ ChoiceSel, ChoiceLastIdx: Integer;
+ ChoiceLastClock: LongInt;
 
 Function CollectSel(Var N: LongInt): PLongArr;
 Var P: PLongArr; I: Integer;
@@ -4059,6 +4255,7 @@ Const
  CH_FONT = 6;
  CH_FORMAT = 7;
  CH_TEXTVIEW = 8;
+ W_GLYPH_BTN = 212;
 
 Var
  GlyphActive, GlyphUndone: Boolean;
@@ -4264,14 +4461,24 @@ Begin
 End;
 
 { ---- Glyphes : table des caracteres ---- }
+Function GlyphWX: Integer;
+Begin
+ GlyphWX := (ScreenWidth-312) Div 2;
+End;
+
+Function GlyphWY: Integer;
+Begin
+ GlyphWY := (ScreenHeight-372) Div 2;
+End;
+
 Function GlyphX0: Integer;
 Begin
- GlyphX0 := (ScreenWidth-16*18) Div 2;
+ GlyphX0 := GlyphWX+12;
 End;
 
 Function GlyphY0: Integer;
 Begin
- GlyphY0 := (ScreenHeight-(14*18+56)) Div 2+30;
+ GlyphY0 := GlyphWY+34;
 End;
 
 Procedure OpenGlyphs;
@@ -4335,15 +4542,12 @@ Begin
 End;
 
 Procedure DrawGlyphDialog;
-Var X0, Y0, I, R, C, PX, PY, Code, SY, SX: Integer; S: String;
+Var WX, WY, X0, Y0, I, R, C, PX, PY, SY, SX: Integer; S: String;
 Begin
  If Not GlyphActive Then Exit;
- X0 := GlyphX0; Y0 := GlyphY0;
- SetFillStyle(SolidFill,COLOR_WINDOW);
- Bar(X0-8,Y0-30,X0+16*18+8,Y0+14*18+26);
- SetColor(COLOR_TEXT);
- Rectangle(X0-8,Y0-30,X0+16*18+8,Y0+14*18+26);
- OutTextXY(X0,Y0-22,'Glyphes : clic = ajouter, Echap = fermer');
+ WX := GlyphWX; WY := GlyphWY; X0 := GlyphX0; Y0 := GlyphY0;
+ UiWindow(WX,WY,WX+312,WY+372,'Glyphes');
+ UiSunken(X0-2,Y0-2,X0+16*18+1,Y0+14*18+1);
  GlyphHover := GlyphAt(MouseX,MouseY);
  For I := 33 To 255 Do Begin
   R := (I-33) Div 16; C := (I-33) Mod 16;
@@ -4352,8 +4556,6 @@ Begin
    SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
    Bar(PX,PY,PX+17,PY+17);
   End;
-  SetColor(COLOR_BORDER);
-  Rectangle(PX,PY,PX+17,PY+17);
   For SY := 0 To 7 Do
    For SX := 0 To 7 Do
     If (GlyphRows[I,SY] And (1 Shl SX)) <> 0 Then Begin
@@ -4361,27 +4563,37 @@ Begin
      Else PutPixel(PX+5+SX,PY+5+SY,COLOR_TEXT);
     End;
  End;
- SetColor(COLOR_TEXT);
+ UiGroup(WX+12,WY+296,WX+200,WY+342,'Caractere');
  If GlyphHover >= 0 Then Begin
   Str(GlyphHover,S);
-  OutTextXY(X0,Y0+14*18+8,'Code '+S);
- End;
+  UiText(WX+24,WY+318,'Code '+S);
+  UiSunken(WX+130,WY+310,WX+170,WY+334);
+  For SY := 0 To 7 Do
+   For SX := 0 To 7 Do
+    If (GlyphRows[GlyphHover,SY] And (1 Shl SX)) <> 0 Then Begin
+     SetFillStyle(SolidFill,COLOR_TEXT);
+     Bar(WX+136+SX*3,WY+312+SY*3,WX+138+SX*3,WY+314+SY*3);
+    End;
+ End Else UiText(WX+24,WY+318,'Survoler un signe');
+ UiButton(WX+W_GLYPH_BTN,WY+310,WX+W_GLYPH_BTN+88,WY+334,'Fermer',True,True);
 End;
 
 Procedure HandleGlyphMouse;
 Var I: Integer;
 Begin
  NeedsRedraw := True;
+ If UiCloseHit(GlyphWX+312,GlyphWY) Then Begin CloseGlyphs; Exit; End;
+ If UiInside(GlyphWX+W_GLYPH_BTN,GlyphWY+310,GlyphWX+W_GLYPH_BTN+88,GlyphWY+334) Then Begin
+  CloseGlyphs; Exit;
+ End;
  I := GlyphAt(MouseX,MouseY);
- If I >= 0 Then InsertGlyph(I)
- Else If (MouseX < GlyphX0-8) Or (MouseX > GlyphX0+16*18+8) Or
-         (MouseY < GlyphY0-30) Or (MouseY > GlyphY0+14*18+26) Then CloseGlyphs;
+ If I >= 0 Then InsertGlyph(I);
 End;
 
 Procedure HandleGlyphKey(Key: Char);
 Begin
  NeedsRedraw := True;
- If Key = #27 Then CloseGlyphs;
+ If (Key = #27) Or (Key = #13) Then CloseGlyphs;
 End;
 
 { ---- boite de choix generique ---- }
@@ -4404,6 +4616,7 @@ Begin
   End;
  End;
  ChoiceKind := Kind;
+ ChoiceSel := 0; ChoiceLastIdx := -1;
  Case Kind Of
   CH_ALIGN: Begin
    ChoiceCount := 6;
@@ -4473,7 +4686,7 @@ Begin
  NeedsRedraw := True;
  K := ChoiceKind;
  If (Index < 0) Or (Index >= ChoiceCount) Then Begin
-  StatusMessage := 'Commande annulee.';
+  If K <> CH_TEXTVIEW Then StatusMessage := 'Commande annulee.';
   Exit;
  End;
  Case K Of
@@ -4516,57 +4729,105 @@ Begin
  ChoiceY := (ScreenHeight-(50+ChoiceCount*20)) Div 2;
 End;
 
+{ geometrie de la boite de choix }
+Procedure ChoiceGeom(Var X, Y, W, H, LH: Integer);
+Begin
+ W := 330;
+ If ChoiceKind = CH_TEXTVIEW Then Begin
+  LH := 0; H := 150;
+ End Else Begin
+  LH := ChoiceCount*18+6;
+  H := 34+LH+14+24+14;
+ End;
+ X := (ScreenWidth-W) Div 2;
+ Y := (ScreenHeight-H) Div 2;
+End;
+
+Function ChoiceTitle: String;
+Begin
+ Case ChoiceKind Of
+  CH_ALIGN: ChoiceTitle := 'Aligner';
+  CH_DISTRIB: ChoiceTitle := 'Distribuer';
+  CH_TRANSFORM: ChoiceTitle := 'Transformer';
+  CH_SIMPLIFY: ChoiceTitle := 'Simplifier le chemin';
+  CH_OFFSET: ChoiceTitle := 'Decalage du chemin';
+  CH_FONT: ChoiceTitle := 'Polices';
+  CH_FORMAT: ChoiceTitle := 'Formats de texte';
+  CH_TEXTVIEW: ChoiceTitle := 'Affichage du texte';
+ Else ChoiceTitle := 'Operations';
+ End;
+End;
+
 Procedure DrawChoice;
-Var X, Y, I: Integer; S: String;
+Var X, Y, W, H, LH, I: Integer;
 Begin
  If Not ChoiceActive Then Exit;
- X := ChoiceX; Y := ChoiceY;
- SetFillStyle(SolidFill,COLOR_WINDOW);
- Bar(X,Y,X+300,Y+50+ChoiceCount*20);
- SetColor(COLOR_TEXT);
- Rectangle(X,Y,X+300,Y+50+ChoiceCount*20);
- Rectangle(X+2,Y+2,X+298,Y+48+ChoiceCount*20);
- Case ChoiceKind Of
-  CH_ALIGN: S := 'Aligner';
-  CH_DISTRIB: S := 'Distribuer';
-  CH_TRANSFORM: S := 'Transformer';
-  CH_SIMPLIFY: S := 'Simplifier';
-  CH_FONT: S := 'Polices';
-  CH_FORMAT: S := 'Formats';
-  CH_TEXTVIEW: S := 'Affichage du texte';
-  CH_OFFSET: S := 'Decalage';
- Else S := 'Operations';
+ ChoiceGeom(X,Y,W,H,LH);
+ UiWindow(X,Y,X+W,Y+H,ChoiceTitle);
+ If ChoiceKind = CH_TEXTVIEW Then Begin
+  UiGroup(X+12,Y+30,X+W-12,Y+92,'Afficher');
+  UiCheck(X+28,Y+50,TextFrames,'Cadres autour des textes');
+  UiCheck(X+28,Y+70,GreekText,'Texte en barres (apercu rapide)');
+  UiButton(X+12,Y+108,X+148,Y+132,'Reinitialiser',False,True);
+  UiButton(X+W-100,Y+108,X+W-12,Y+132,'Fermer',True,True);
+  Exit;
  End;
- OutTextXY(X+12,Y+10,S+' (clic, chiffre ou Echap)');
+ UiSunken(X+12,Y+34,X+W-12,Y+34+LH);
  For I := 0 To ChoiceCount-1 Do Begin
-  If (MouseX >= X+10) And (MouseX <= X+290) And
-     (MouseY >= Y+30+I*20) And (MouseY < Y+48+I*20) Then Begin
+  If I = ChoiceSel Then Begin
    SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
-   Bar(X+10,Y+30+I*20,X+290,Y+47+I*20);
+   Bar(X+15,Y+37+I*18,X+W-15,Y+37+I*18+17);
    SetColor(COLOR_WINDOW);
   End Else SetColor(COLOR_TEXT);
-  Str((I+1) Mod 10,S);
-  OutTextXY(X+16,Y+34+I*20,S+'  '+ChoiceItems[I]);
+  OutTextXY(X+22,Y+37+I*18+5,ChoiceItems[I]);
  End;
+ UiButton(X+W-196,Y+34+LH+14,X+W-108,Y+34+LH+38,'OK',True,True);
+ UiButton(X+W-100,Y+34+LH+14,X+W-12,Y+34+LH+38,'Annuler',False,True);
 End;
 
 Procedure HandleChoiceMouse;
-Var I: Integer;
+Var X, Y, W, H, LH, I: Integer; Now: LongInt;
 Begin
  NeedsRedraw := True;
- If (MouseX >= ChoiceX+10) And (MouseX <= ChoiceX+290) And
-    (MouseY >= ChoiceY+30) And (MouseY < ChoiceY+30+ChoiceCount*20) Then Begin
-  I := (MouseY-ChoiceY-30) Div 20;
-  CloseChoice(I);
- End Else If (MouseX < ChoiceX) Or (MouseX > ChoiceX+300) Or
-    (MouseY < ChoiceY) Or (MouseY > ChoiceY+50+ChoiceCount*20) Then CloseChoice(-1);
+ ChoiceGeom(X,Y,W,H,LH);
+ If UiCloseHit(X+W,Y) Then Begin CloseChoice(-1); Exit; End;
+ If ChoiceKind = CH_TEXTVIEW Then Begin
+  If UiInside(X+28,Y+48,X+W-20,Y+64) Then TextViewChoice(0)
+  Else If UiInside(X+28,Y+68,X+W-20,Y+84) Then TextViewChoice(1)
+  Else If UiInside(X+12,Y+108,X+148,Y+132) Then TextViewChoice(2)
+  Else If UiInside(X+W-100,Y+108,X+W-12,Y+132) Then CloseChoice(-1);
+  Exit;
+ End;
+ If UiInside(X+W-196,Y+34+LH+14,X+W-108,Y+34+LH+38) Then Begin
+  CloseChoice(ChoiceSel); Exit;
+ End;
+ If UiInside(X+W-100,Y+34+LH+14,X+W-12,Y+34+LH+38) Then Begin
+  CloseChoice(-1); Exit;
+ End;
+ If UiInside(X+15,Y+37,X+W-15,Y+37+ChoiceCount*18-1) Then Begin
+  I := (MouseY-Y-37) Div 18;
+  Now := ToolTipClock;
+  If (I = ChoiceLastIdx) And (Now >= ChoiceLastClock) And (Now-ChoiceLastClock <= 50) Then
+   CloseChoice(I)
+  Else Begin
+   ChoiceSel := I; ChoiceLastIdx := I; ChoiceLastClock := Now;
+  End;
+ End;
 End;
 
-Procedure HandleChoiceKey(Key: Char);
+Procedure HandleChoiceKey(Key, ExtKey: Char);
 Var I: Integer;
 Begin
  NeedsRedraw := True;
  If Key = #27 Then CloseChoice(-1)
+ Else If ChoiceKind = CH_TEXTVIEW Then Begin
+  If Key = #13 Then CloseChoice(-1)
+  Else If Key = '1' Then TextViewChoice(0)
+  Else If Key = '2' Then TextViewChoice(1);
+ End
+ Else If Key = #13 Then CloseChoice(ChoiceSel)
+ Else If (Key = #0) And (ExtKey = #72) And (ChoiceSel > 0) Then Dec(ChoiceSel)
+ Else If (Key = #0) And (ExtKey = #80) And (ChoiceSel < ChoiceCount-1) Then Inc(ChoiceSel)
  Else If (Key >= '1') And (Key <= '9') Then Begin
   I := Ord(Key)-Ord('1');
   If I < ChoiceCount Then CloseChoice(I);
@@ -4915,12 +5176,7 @@ End;
 
 Procedure FileButton(X1,Y1,X2,Y2: Integer; Caption: String; Focused: Boolean);
 Begin
- SetFillStyle(SolidFill,COLOR_BG); Bar(X1,Y1,X2,Y2);
- SetColor(COLOR_WINDOW); Line(X1,Y1,X2,Y1); Line(X1,Y1,X1,Y2);
- SetColor(COLOR_BORDER); Line(X1,Y2,X2,Y2); Line(X2,Y1,X2,Y2);
- SetColor(COLOR_TEXT);
- If Focused Then Rectangle(X1+2,Y1+2,X2-2,Y2-2);
- OutTextXY(X1+(X2-X1-TextWidth(Caption)) Div 2,Y1+(Y2-Y1-8) Div 2,Caption);
+ UiButton(X1,Y1,X2,Y2,Caption,Focused,True);
 End;
 
 Procedure DrawFileDialog;
@@ -4930,8 +5186,7 @@ Var I, K, Y, X1, X2, Count, TopIndex, Selected, ScrollX, ThumbY: Integer;
  Procedure Field(X1,Y1,X2,Y2,Focus: Integer; Value: String);
  Var Start, Caret: Integer; Visible: String;
  Begin
-  SetFillStyle(SolidFill,COLOR_WINDOW); Bar(X1,Y1,X2,Y2);
-  SetColor(COLOR_BORDER); Rectangle(X1,Y1,X2,Y2);
+  UiSunken(X1,Y1,X2,Y2);
   Start := 1;
   If FileFocus=Focus Then Begin
    Start := FileCursor-(X2-X1-12) Div 8+1;
@@ -4951,9 +5206,9 @@ Var I, K, Y, X1, X2, Count, TopIndex, Selected, ScrollX, ThumbY: Integer;
  End;
 
 Begin
- SetFillStyle(SolidFill,COLOR_BG); Bar(20,44,620,437);
- SetColor(COLOR_BORDER); Rectangle(20,44,620,437);
- SetFillStyle(SolidFill,COLOR_HIGHLIGHT); Bar(22,46,618,66);
+ SetFillStyle(SolidFill,0); Bar(24,48,624,441);
+ UiRaised(20,44,620,437);
+ SetFillStyle(SolidFill,COLOR_HIGHLIGHT); Bar(23,47,617,66);
  SetColor(COLOR_WINDOW);
  If FileExportMode Then OutTextXY(30,52,'Exporter - SVG / BMP / EPS / AI / CorelDRAW 9')
  Else If FileSaveMode Then OutTextXY(30,52,'Enregistrer sous - Illustrator / AI10')
@@ -4972,8 +5227,7 @@ Begin
    X1 := 222; X2 := 607; Count := FileEntryCount; TopIndex := FileTop; Selected := FileSel;
   End;
   ScrollX := X2-14;
-  SetFillStyle(SolidFill,COLOR_WINDOW); Bar(X1,128,X2,338);
-  SetColor(COLOR_BORDER); Rectangle(X1,128,X2,338);
+  UiSunken(X1,128,X2,338);
   For I := 0 To FD_ROWS-1 Do Begin
    If TopIndex+I>=Count Then Break;
    Y := 131+I*16;
@@ -4991,7 +5245,7 @@ Begin
    End;
   End;
   If FileFocus=K Then Begin
-   SetColor(COLOR_HIGHLIGHT); Rectangle(X1-1,127,X2+1,339);
+   SetColor(COLOR_HIGHLIGHT); Rectangle(X1-2,126,X2+2,340);
   End;
   FileButton(ScrollX,129,X2-1,145,'^',False);
   FileButton(ScrollX,321,X2-1,337,'v',False);
@@ -5027,8 +5281,7 @@ Begin
   OutTextXY(30,426,Copy(FileDialogError,73,72));
  End Else OutTextXY(30,420,Copy(Info,1,72));
  If FileFilterOpen Then Begin
-  SetFillStyle(SolidFill,COLOR_BG); Bar(100,FileFilterTop,495,380);
-  SetColor(COLOR_TEXT); Rectangle(100,FileFilterTop,495,380);
+  UiSunken(100,FileFilterTop,495,380);
   For I := 0 To FileFilterCount-1 Do Begin
    Y := FileFilterTop+2+I*21;
    If I=FileFilter Then Begin
@@ -5039,12 +5292,12 @@ Begin
   End;
  End;
  If FileOverwrite Then Begin
-   SetFillStyle(SolidFill,COLOR_BG); Bar(90,170,550,290);
-   SetColor(COLOR_TEXT); Rectangle(90,170,550,290);
-   OutTextXY(105,185,'Ce fichier existe. Le remplacer ?');
-   OutTextXY(105,207,Copy(PendingSaveName,1,53));
-   FileButton(140,244,290,274,'Remplacer',True);
-   FileButton(330,244,480,274,'Annuler',False);
+   UiWindow(90,170,550,290,'Confirmer le remplacement');
+   UiIcon(110,204,True);
+   UiText(160,206,'Ce fichier existe deja. Le remplacer ?');
+   UiText(160,226,Copy(PendingSaveName,1,45));
+   FileButton(140,252,290,278,'Remplacer',True);
+   FileButton(330,252,480,278,'Annuler',False);
  End;
 End;
 
@@ -5066,7 +5319,7 @@ Var List, Index, Count, TopIndex, SX, Delta: Integer; Now: LongInt;
 Begin
  NeedsRedraw := True;
  If FileOverwrite Then Begin
-  If (MouseY>=244) And (MouseY<=274) Then
+  If (MouseY>=252) And (MouseY<=278) Then
    If (MouseX>=140) And (MouseX<=290) Then CompleteDialogSave
    Else If (MouseX>=330) And (MouseX<=480) Then FileOverwrite := False;
   Exit;
@@ -5220,6 +5473,71 @@ Begin
  End;
 End;
 
+{ ---- boite de message ---- }
+Function IsConfirmDialog: Boolean;
+Begin
+ IsConfirmDialog := (DialogTitle = 'Ouvrir un document') Or (DialogTitle = 'Quitter') Or
+                    (DialogTitle = 'Nouveau document');
+End;
+
+Procedure MsgGeometry(Var X, Y, W, H, TextH, N: Integer; Var L: TLines);
+Begin
+ W := 440;
+ N := WrapLines(DialogText,44,L);
+ TextH := N*12;
+ If TextH < 36 Then TextH := 36;
+ H := 34+TextH+22+24+16;
+ X := (ScreenWidth-W) Div 2;
+ Y := (ScreenHeight-H) Div 2;
+End;
+
+Procedure DrawMessage;
+Var X, Y, W, H, TH, N, I: Integer; L: TLines;
+Begin
+ If DialogTitle = '' Then Exit;
+ MsgGeometry(X,Y,W,H,TH,N,L);
+ UiWindow(X,Y,X+W,Y+H,DialogTitle);
+ UiIcon(X+20,Y+34,IsConfirmDialog);
+ For I := 0 To N-1 Do UiText(X+68,Y+38+I*12,L[I]);
+ If IsConfirmDialog Then Begin
+  UiButton(X+W-196,Y+H-40,X+W-108,Y+H-16,'OK',True,True);
+  UiButton(X+W-100,Y+H-40,X+W-12,Y+H-16,'Annuler',False,True);
+ End Else UiButton(X+W-100,Y+H-40,X+W-12,Y+H-16,'OK',True,True);
+End;
+
+Procedure CloseMessage(Accept: Boolean);
+Var T: String;
+Begin
+ T := DialogTitle;
+ DialogTitle := '';
+ NeedsRedraw := True;
+ If Not Accept Then Exit;
+ If T = 'Ouvrir un document' Then StartFileDialog;
+ If T = 'Quitter' Then Running := False;
+ If T = 'Nouveau document' Then Begin
+  ClearObjects;
+  ClearGuides;
+  SelectedObject := -1;
+  ClearHistory;
+  CurrentFile := '';
+  CurrentSaveFormat := 0;
+  FileModified := False;
+  ResetZoom;
+ End;
+End;
+
+Procedure HandleMessageMouse;
+Var X, Y, W, H, TH, N: Integer; L: TLines;
+Begin
+ NeedsRedraw := True;
+ MsgGeometry(X,Y,W,H,TH,N,L);
+ If UiCloseHit(X+W,Y) Then CloseMessage(False)
+ Else If IsConfirmDialog Then Begin
+  If UiInside(X+W-196,Y+H-40,X+W-108,Y+H-16) Then CloseMessage(True)
+  Else If UiInside(X+W-100,Y+H-40,X+W-12,Y+H-16) Then CloseMessage(False);
+ End Else If UiInside(X+W-100,Y+H-40,X+W-12,Y+H-16) Then CloseMessage(True);
+End;
+
 Procedure ExecuteMenuItem(M, I: Integer);
 Var Command: Byte;
 Begin
@@ -5242,12 +5560,12 @@ Begin
   CMD_OPEN:
    If FileModified Then
     ShowDialog('Ouvrir un document',
-     'Dessin modifie : Entree = ouvrir sans enregistrer, Echap = annuler.')
+     'Le dessin a ete modifie. Les changements non enregistres seront perdus. Ouvrir un autre document ?')
    Else StartFileDialog;
   CMD_NEW:
    If FileModified Then
     ShowDialog('Nouveau document',
-               'Dessin modifie : Entree = effacer, Echap = annuler.')
+               'Le dessin a ete modifie. Les changements non enregistres seront perdus. Creer un nouveau document ?')
    Else Begin
     ClearObjects;
     ClearGuides;
@@ -5266,7 +5584,7 @@ Begin
   CMD_EXIT:
    If FileModified Then
     ShowDialog('Quitter',
-               'Dessin modifie : Entree = quitter, Echap = annuler.')
+               'Le dessin a ete modifie. Les changements non enregistres seront perdus. Quitter le programme ?')
    Else Running := False;
   CMD_GRID: GridVisible := Not GridVisible;
   CMD_PROPS: OpenProps;
@@ -5309,11 +5627,11 @@ Begin
                            MENUBAR_HEIGHT+(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT) Div 2);
   CMD_ZOOM_RESET: ResetZoom;
   CMD_HELP:
-   ShowDialog('Aide', 'Prototype incomplet. Les commandes grisees sont indisponibles.');
+   ShowDialog('Aide', 'CloneDRAW AI : dessin vectoriel inspire d''Adobe Illustrator. Les commandes grisees ne sont pas encore disponibles.');
   CMD_SHORTCUTS:
-   ShowDialog('Raccourcis', 'Ctrl+O/S ouvrir/sauver, Z/Y annuler/retablir, X/C/V edition. F10 menus.');
+   ShowDialog('Raccourcis', 'Ctrl+O ouvrir, Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+Y retablir, Ctrl+X/C/V couper-copier-coller, Ctrl+A tout selectionner, Ctrl+R regles, F10 menus.');
   CMD_ABOUT:
-   ShowDialog('A propos', 'CloneDRAW AI - prototype Pascal, pas un clone complet.');
+   ShowDialog('A propos', 'CloneDRAW AI - editeur vectoriel ecrit en Pascal (Free Pascal). Ce n''est pas un clone complet d''Adobe Illustrator.');
   CMD_RESOURCES:
    ShowDialog('Ressources', 'https://www.gladir.com/clonedraw');
   CMD_TIPS:
@@ -5457,10 +5775,7 @@ Begin
    NeedsRedraw := True;
   End;
  End Else If DialogTitle <> '' Then Begin
-  If Pressed Then Begin
-   DialogTitle := '';
-   NeedsRedraw := True;
-  End;
+  If Pressed Then HandleMessageMouse;
  End Else Begin
   BarHit := MenuBarHitTest(MouseX, MouseY);
   If MenuActive And
@@ -5554,7 +5869,7 @@ Begin
  ResetToolTip;
  NeedsRedraw := True;
  If GlyphActive Then Begin HandleGlyphKey(Key); Exit; End;
- If ChoiceActive Then Begin HandleChoiceKey(Key); Exit; End;
+ If ChoiceActive Then Begin HandleChoiceKey(Key,ExtKey); Exit; End;
  If PropActive Then Begin HandlePropKey(Key); Exit; End;
  If FileDialogActive Then Begin HandleFileKey(Key,ExtKey); Exit; End;
  If ((Key In [#15,#19]) Or ((Key=#0) And (ExtKey=#134))) And
@@ -5636,20 +5951,8 @@ Begin
   Exit;
  End;
  If DialogTitle <> '' Then Begin
-  If Key = #13 Then Begin
-   If DialogTitle = 'Ouvrir un document' Then StartFileDialog;
-   If DialogTitle = 'Quitter' Then Running := False;
-   If DialogTitle = 'Nouveau document' Then Begin
-    ClearObjects;
-    SelectedObject := -1;
-    ClearHistory;
-    CurrentFile := '';
-    CurrentSaveFormat := 0;
-    FileModified := False;
-    ResetZoom;
-   End;
-  End;
-  DialogTitle := '';
+  If Key = #13 Then CloseMessage(True)
+  Else If (Key = #27) Or (Key = ' ') Then CloseMessage(False);
   Exit;
  End;
  If (Key = #0) And (ExtKey = #68) Then Begin
@@ -5736,15 +6039,7 @@ Begin
  DrawPropDialog;
  DrawChoice;
  DrawGlyphDialog;
- If DialogTitle <> '' Then Begin
-  SetFillStyle(SolidFill, COLOR_WINDOW);
-  Bar(45, 160, ScreenWidth-45, 280);
-  SetColor(COLOR_TEXT);
-  Rectangle(45, 160, ScreenWidth-45, 280);
-  OutTextXY(58, 175, DialogTitle);
-  OutTextXY(58, 205, DialogText);
-  OutTextXY(58, 250, 'Entree / Echap. Un clic ferme sans confirmer.');
- End;
+ DrawMessage;
  If FileDialogActive Then DrawFileDialog;
  DrawToolTip;
  ShowMouse;

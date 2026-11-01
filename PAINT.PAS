@@ -1013,7 +1013,7 @@ Begin
  Menus[MENU_FILE].Title := 'Fichier';
  Menus[MENU_FILE].X := 5;
  Menus[MENU_FILE].Width := 120;
- Menus[MENU_FILE].ItemCount := 10;
+ Menus[MENU_FILE].ItemCount := 11;
  Menus[MENU_FILE].Items[0].Caption := 'Nouveau';
  Menus[MENU_FILE].Items[0].Shortcut := 'Ctrl+N';
  Menus[MENU_FILE].Items[0].Enabled := True;
@@ -1027,17 +1027,20 @@ Begin
  Menus[MENU_FILE].Items[3].Shortcut := '';
  Menus[MENU_FILE].Items[3].Enabled := True;
  Menus[MENU_FILE].Items[4].Separator := True;
- Menus[MENU_FILE].Items[5].Caption := 'Imprimer...';
- Menus[MENU_FILE].Items[5].Shortcut := 'Ctrl+P';
+ Menus[MENU_FILE].Items[5].Caption := 'Importer depuis un scanner...';
+ Menus[MENU_FILE].Items[5].Shortcut := '';
  Menus[MENU_FILE].Items[5].Enabled := True;
- Menus[MENU_FILE].Items[6].Separator := True;
- Menus[MENU_FILE].Items[7].Caption := 'Propri'+#130+'t'+#130+'s...';
- Menus[MENU_FILE].Items[7].Shortcut := '';
- Menus[MENU_FILE].Items[7].Enabled := True;
- Menus[MENU_FILE].Items[8].Separator := True;
- Menus[MENU_FILE].Items[9].Caption := 'Quitter';
- Menus[MENU_FILE].Items[9].Shortcut := 'Alt+F4';
- Menus[MENU_FILE].Items[9].Enabled := True;
+ Menus[MENU_FILE].Items[6].Caption := 'Imprimer...';
+ Menus[MENU_FILE].Items[6].Shortcut := 'Ctrl+P';
+ Menus[MENU_FILE].Items[6].Enabled := True;
+ Menus[MENU_FILE].Items[7].Separator := True;
+ Menus[MENU_FILE].Items[8].Caption := 'Propri'+#130+'t'+#130+'s...';
+ Menus[MENU_FILE].Items[8].Shortcut := '';
+ Menus[MENU_FILE].Items[8].Enabled := True;
+ Menus[MENU_FILE].Items[9].Separator := True;
+ Menus[MENU_FILE].Items[10].Caption := 'Quitter';
+ Menus[MENU_FILE].Items[10].Shortcut := 'Alt+F4';
+ Menus[MENU_FILE].Items[10].Enabled := True;
 
  { Menu Modifier }
  Menus[MENU_EDIT].Title := 'Modifier';
@@ -20791,6 +20794,1119 @@ Begin
 End;
 
 
+{ Importer depuis un scanner : sous Windows, numerisation par WIA (Windows
+  Image Acquisition) en appelant directement les interfaces COM par leur
+  table de methodes virtuelles (IWiaDevMgr, IWiaItem, IWiaPropertyStorage et
+  IWiaDataTransfer), sans unite supplementaire. L'image est numerisee dans un
+  fichier BMP temporaire, puis chargee comme un fichier ouvert. }
+
+Const
+ SC_MAXDEV = 8;
+ SC_DPI_COUNT = 8;
+ SC_DPI: Array[0..SC_DPI_COUNT-1] of Integer = (75,100,150,200,300,400,600,1200);
+
+Type
+ TScDevice = Record
+  Name: String[60];
+  DevID: String[255];
+ End;
+ TScState = Record
+  X, Y: Integer;
+  DevCount, Sel: Integer;
+  Devs: Array[0..SC_MAXDEV-1] of TScDevice;
+  Source, ColorMode, DpiIdx, Zone: Integer;
+  Bright, Contr: Integer;
+  Preview: Boolean;
+  Done, Accepted, DriverUI, Dirty: Boolean;
+  Status: String[80];
+  DevRows: Array[0..5] of TRect;
+  SrcRect, ModeRect, ZoneRect: Array[0..3] of TRect;
+  DpiM, DpiTrack, DpiP: TRect;
+  BriM, BriTrack, BriP: TRect;
+  ConM, ConTrack, ConP: TRect;
+  PrevBox: TRect;
+  ScanButton, CancelButton, DriverButton, RefreshButton: TRect;
+  MX, MY, MB, PreviousButtons: Integer;
+ End;
+
+{$IFDEF WINDOWS}
+Const
+ SC_CLSCTX_LOCAL_SERVER = 4;
+ SC_CP_ACP = 0;
+ SC_CP_OEMCP = 1;
+ SC_VT_I4 = 3;
+ SC_VT_BSTR = 8;
+ SC_VT_UI4 = 19;
+ SC_VT_LPWSTR = 31;
+ SC_VT_CLSID = 72;
+ SC_VT_VECTOR = $1000;
+ SC_PRSPEC_PROPID = 1;
+ SC_TYMED_FILE = 2;
+ SC_ENUM_LOCAL = $10;
+ SC_ITEM_IMAGE = 1;
+ SC_DEVTYPE_SCANNER = 1;
+ SC_FIRST = 4098;
+ SC_DIP_DEV_ID = 2;
+ SC_DIP_VEND_DESC = 3;
+ SC_DIP_DEV_DESC = 4;
+ SC_DIP_DEV_TYPE = 5;
+ SC_DIP_DEV_NAME = 7;
+ SC_DPS_HBED = 3074;
+ SC_DPS_VBED = 3075;
+ SC_DPS_HFEED = 3076;
+ SC_DPS_VFEED = 3077;
+ SC_DPS_DOCCAPS = 3086;
+ SC_DPS_DOCSELECT = 3088;
+ SC_DPS_PAGES = 3096;
+ SC_DPS_PREVIEW = 3100;
+ SC_IPA_ITEM_NAME = 4098;
+ SC_IPA_DATATYPE = 4103;
+ SC_IPA_DEPTH = 4104;
+ SC_IPA_FORMAT = 4106;
+ SC_IPA_TYMED = 4108;
+ SC_IPS_XRES = 6147;
+ SC_IPS_YRES = 6148;
+ SC_IPS_XPOS = 6149;
+ SC_IPS_YPOS = 6150;
+ SC_IPS_XEXTENT = 6151;
+ SC_IPS_YEXTENT = 6152;
+ SC_IPS_BRIGHTNESS = 6154;
+ SC_IPS_CONTRAST = 6155;
+ SC_DATA_THRESHOLD = 0;
+ SC_DATA_GRAYSCALE = 2;
+ SC_DATA_COLOR = 3;
+ SC_INTENT_COLOR = 1;
+ SC_INTENT_GRAY = 2;
+ SC_INTENT_TEXT = 4;
+ SC_DOC_FEEDER = 1;
+ SC_DOC_FLATBED = 2;
+ SC_ATTR_RANGE = $10;
+
+Type
+ TScGuid = Record
+  D1: LongWord;
+  D2, D3: Word;
+  D4: Array[0..7] of Byte;
+ End;
+ PScGuid = ^TScGuid;
+ TScVTable = Array[0..63] of Pointer;
+ PScVTable = ^TScVTable;
+ PScObjHdr = ^TScObjHdr;
+ TScObjHdr = Record
+  Vtbl: PScVTable;
+ End;
+ TScPropSpec = Record
+  ulKind: LongWord;
+  Case Byte of
+   0: (propid: LongWord);
+   1: (lpwstr: PWideChar);
+ End;
+ TScPropVariant = Record
+  vt: Word;
+  wReserved1, wReserved2, wReserved3: Word;
+  Case Byte of
+   0: (lVal: LongInt);
+   1: (pVal: Pointer; pVal2: Pointer);
+ End;
+ TScStgMedium = Record
+  tymed: LongWord;
+  lpszFileName: PWideChar;
+  pUnkForRelease: Pointer;
+ End;
+ TScWBuf = Array[0..511] of WideChar;
+ TScLongs = Array[0..15] of LongInt;
+ PScLongs = ^TScLongs;
+
+Const
+ SC_CLSID_DEVMGR: TScGuid = (D1:$A1F4E726; D2:$8CF1; D3:$11D1;
+                    D4:($BF,$92,$00,$60,$08,$1E,$D8,$11));
+ SC_IID_DEVMGR: TScGuid = (D1:$5EB2502A; D2:$8CF1; D3:$11D1;
+                    D4:($BF,$92,$00,$60,$08,$1E,$D8,$11));
+ SC_IID_PROPSTG: TScGuid = (D1:$98B5E8A0; D2:$29CC; D3:$491A;
+                    D4:($AA,$C0,$E6,$DB,$4F,$DC,$CE,$B6));
+ SC_IID_DATAXFER: TScGuid = (D1:$A6CEF998; D2:$A5B0; D3:$11D2;
+                    D4:($A0,$8F,$00,$C0,$4F,$72,$DC,$3C));
+ SC_FMT_BMP: TScGuid = (D1:$B96B3CAB; D2:$0728; D3:$11D3;
+                    D4:($9D,$7B,$00,$00,$F8,$1E,$F3,$2E));
+
+Function ScCoInitialize(Reserved: Pointer): LongInt;
+ stdcall; external 'ole32.dll' name 'CoInitialize';
+Procedure ScCoUninitialize;
+ stdcall; external 'ole32.dll' name 'CoUninitialize';
+Function ScCoCreateInstance(ClsID: PScGuid; Outer: Pointer; ClsCtx: LongWord;
+                            IID: PScGuid; Var Obj: Pointer): LongInt;
+ stdcall; external 'ole32.dll' name 'CoCreateInstance';
+Function ScCoTaskMemAlloc(Size: PtrUInt): Pointer;
+ stdcall; external 'ole32.dll' name 'CoTaskMemAlloc';
+Procedure ScCoTaskMemFree(P: Pointer);
+ stdcall; external 'ole32.dll' name 'CoTaskMemFree';
+Function ScPropVariantClear(Var PV: TScPropVariant): LongInt;
+ stdcall; external 'ole32.dll' name 'PropVariantClear';
+Function ScSysAllocString(S: PWideChar): Pointer;
+ stdcall; external 'oleaut32.dll' name 'SysAllocString';
+Procedure ScSysFreeString(S: Pointer);
+ stdcall; external 'oleaut32.dll' name 'SysFreeString';
+Function ScMultiByteToWideChar(CodePage, Flags: LongWord; MBStr: PChar;
+                               CBMultiByte: LongInt; WideStr: PWideChar;
+                               CCHWide: LongInt): LongInt;
+ stdcall; external 'kernel32.dll' name 'MultiByteToWideChar';
+Function ScWideCharToMultiByte(CodePage, Flags: LongWord; WideStr: PWideChar;
+                               CCHWide: LongInt; MBStr: PChar;
+                               CBMultiByte: LongInt; DefChar: PChar;
+                               UsedDef: Pointer): LongInt;
+ stdcall; external 'kernel32.dll' name 'WideCharToMultiByte';
+
+Var
+ ScMgr: Pointer;
+ ScComReady: Boolean;
+
+Function ScHex(V: LongWord): String;
+Const
+ Digits: String[16] = '0123456789ABCDEF';
+Var
+ I: Integer;
+ S: String;
+Begin
+ S := '';
+ For I := 7 DownTo 0 Do
+  S := S + Digits[((V Shr (I*4)) And $F)+1];
+ ScHex := '0x'+S;
+End;
+
+Function ScVT(Obj: Pointer; Index: Integer): Pointer;
+Begin
+ ScVT := PScObjHdr(Obj)^.Vtbl^[Index];
+End;
+
+Procedure ScRelease(Var Obj: Pointer);
+Type
+ TRelease = Function(This: Pointer): LongWord; stdcall;
+Begin
+ If Obj <> Nil Then Begin
+  TRelease(ScVT(Obj,2))(Obj);
+  Obj := Nil;
+ End;
+End;
+
+Function ScQI(Obj: Pointer; IID: PScGuid; Var Res: Pointer): LongInt;
+Type
+ TQI = Function(This: Pointer; RIID: PScGuid; Var R: Pointer): LongInt; stdcall;
+Begin
+ Res := Nil;
+ ScQI := TQI(ScVT(Obj,0))(Obj,IID,Res);
+End;
+
+Function ScWideToStr(W: PWideChar; CodePage: LongWord): String;
+Var
+ Buf: Array[0..511] of Char;
+ N, I: Integer;
+ S: String;
+Begin
+ ScWideToStr := '';
+ If W = Nil Then Exit;
+ N := ScWideCharToMultiByte(CodePage,0,W,-1,@Buf,SizeOf(Buf)-1,Nil,Nil);
+ If N <= 0 Then Exit;
+ Buf[SizeOf(Buf)-1] := #0;
+ S := '';
+ I := 0;
+ While (Buf[I] <> #0) And (I < 250) Do Begin
+  S := S + Buf[I];
+  Inc(I);
+ End;
+ ScWideToStr := S;
+End;
+
+Procedure ScStrToWide(Const S: String; Var W: TScWBuf);
+Var
+ Z: Array[0..256] of Char;
+ I: Integer;
+Begin
+ For I := 1 To Length(S) Do
+  Z[I-1] := S[I];
+ Z[Length(S)] := #0;
+ If ScMultiByteToWideChar(SC_CP_ACP,0,@Z,-1,@W,511) <= 0 Then
+  W[0] := #0;
+End;
+
+Function ScStrToBStr(Const S: String): Pointer;
+Var
+ W: TScWBuf;
+Begin
+ ScStrToWide(S,W);
+ ScStrToBStr := ScSysAllocString(@W);
+End;
+
+Function ScReadVar(Stg: Pointer; PropID: LongWord; Var PV: TScPropVariant): Boolean;
+Type
+ TReadMultiple = Function(This: Pointer; CPSpec: LongWord;
+                          Spec, Vars: Pointer): LongInt; stdcall;
+Var
+ Spec: TScPropSpec;
+Begin
+ FillChar(PV,SizeOf(PV),0);
+ Spec.ulKind := SC_PRSPEC_PROPID;
+ Spec.propid := PropID;
+ ScReadVar := (TReadMultiple(ScVT(Stg,3))(Stg,1,@Spec,@PV) = 0) And (PV.vt <> 0);
+End;
+
+Function ScReadLong(Stg: Pointer; PropID: LongWord; Var Value: LongInt): Boolean;
+Var
+ PV: TScPropVariant;
+Begin
+ ScReadLong := False;
+ If ScReadVar(Stg,PropID,PV) Then Begin
+  If (PV.vt = SC_VT_I4) Or (PV.vt = SC_VT_UI4) Then Begin
+   Value := PV.lVal;
+   ScReadLong := True;
+  End;
+  ScPropVariantClear(PV);
+ End;
+End;
+
+Function ScReadStr(Stg: Pointer; PropID: LongWord): String;
+Var
+ PV: TScPropVariant;
+Begin
+ ScReadStr := '';
+ If ScReadVar(Stg,PropID,PV) Then Begin
+  If (PV.vt = SC_VT_BSTR) Or (PV.vt = SC_VT_LPWSTR) Then
+   ScReadStr := ScWideToStr(PV.pVal,SC_CP_OEMCP);
+  ScPropVariantClear(PV);
+ End;
+End;
+
+Function ScWriteVar(Stg: Pointer; PropID: LongWord; Var PV: TScPropVariant): Boolean;
+Type
+ TWriteMultiple = Function(This: Pointer; CPSpec: LongWord; Spec, Vars: Pointer;
+                           NameFirst: LongWord): LongInt; stdcall;
+Var
+ Spec: TScPropSpec;
+Begin
+ Spec.ulKind := SC_PRSPEC_PROPID;
+ Spec.propid := PropID;
+ ScWriteVar := TWriteMultiple(ScVT(Stg,4))(Stg,1,@Spec,@PV,SC_FIRST) = 0;
+End;
+
+Function ScWriteLong(Stg: Pointer; PropID: LongWord; Value: LongInt): Boolean;
+Var
+ PV: TScPropVariant;
+Begin
+ FillChar(PV,SizeOf(PV),0);
+ PV.vt := SC_VT_I4;
+ PV.lVal := Value;
+ ScWriteLong := ScWriteVar(Stg,PropID,PV);
+End;
+
+Function ScWriteGuid(Stg: Pointer; PropID: LongWord; G: PScGuid): Boolean;
+Var
+ PV: TScPropVariant;
+Begin
+ FillChar(PV,SizeOf(PV),0);
+ PV.vt := SC_VT_CLSID;
+ PV.pVal := G;
+ ScWriteGuid := ScWriteVar(Stg,PropID,PV);
+End;
+
+{ Plage valide d'une propriete (IWiaPropertyStorage.GetPropertyAttributes) :
+  vecteur d'entiers MIN, NOM, MAX, STEP. }
+Function ScReadRange(Stg: Pointer; PropID: LongWord; Var Lo, Hi: LongInt): Boolean;
+Type
+ TGetAttr = Function(This: Pointer; CPSpec: LongWord; Spec, Flags,
+                     Vars: Pointer): LongInt; stdcall;
+Var
+ Spec: TScPropSpec;
+ Flags: LongWord;
+ PV: TScPropVariant;
+ P: PScLongs;
+Begin
+ ScReadRange := False;
+ FillChar(PV,SizeOf(PV),0);
+ Flags := 0;
+ Spec.ulKind := SC_PRSPEC_PROPID;
+ Spec.propid := PropID;
+ If TGetAttr(ScVT(Stg,15))(Stg,1,@Spec,@Flags,@PV) <> 0 Then Exit;
+ If ((Flags And SC_ATTR_RANGE) <> 0) And
+    (PV.vt = (SC_VT_VECTOR Or SC_VT_I4)) And (PV.lVal >= 3) And
+    (PV.pVal2 <> Nil) Then Begin
+  P := PScLongs(PV.pVal2);
+  Lo := P^[0];
+  Hi := P^[2];
+  ScReadRange := Hi > Lo;
+ End;
+ ScPropVariantClear(PV);
+End;
+
+Procedure ScShutdown;
+Begin
+ ScRelease(ScMgr);
+ If ScComReady Then Begin
+  ScCoUninitialize;
+  ScComReady := False;
+ End;
+End;
+
+Function ScInit: Boolean;
+Begin
+ ScMgr := Nil;
+ ScComReady := ScCoInitialize(Nil) >= 0;
+ ScInit := ScComReady And (ScCoCreateInstance(@SC_CLSID_DEVMGR,Nil,
+           SC_CLSCTX_LOCAL_SERVER,@SC_IID_DEVMGR,ScMgr) >= 0) And (ScMgr <> Nil);
+End;
+
+Procedure ScEnumDevices(Var D: TScState);
+Type
+ TEnumDeviceInfo = Function(This: Pointer; Flag: LongInt;
+                            Var Enum: Pointer): LongInt; stdcall;
+ TNext = Function(This: Pointer; Celt: LongWord; Var Stg: Pointer;
+                  Var Fetched: LongWord): LongInt; stdcall;
+Var
+ Enum, Stg: Pointer;
+ Fetched: LongWord;
+ DevType: LongInt;
+ Name: String;
+Begin
+ D.DevCount := 0;
+ Enum := Nil;
+ If ScMgr = Nil Then Exit;
+ If TEnumDeviceInfo(ScVT(ScMgr,3))(ScMgr,SC_ENUM_LOCAL,Enum) < 0 Then Exit;
+ While D.DevCount < SC_MAXDEV Do Begin
+  Stg := Nil;
+  Fetched := 0;
+  If (TNext(ScVT(Enum,3))(Enum,1,Stg,Fetched) <> 0) Or (Fetched = 0) Or
+     (Stg = Nil) Then Break;
+  If ScReadLong(Stg,SC_DIP_DEV_TYPE,DevType) And
+     ((DevType And $FFFF) = SC_DEVTYPE_SCANNER) Then Begin
+   Name := ScReadStr(Stg,SC_DIP_DEV_NAME);
+   If Name = '' Then
+    Name := ScReadStr(Stg,SC_DIP_DEV_DESC);
+   D.Devs[D.DevCount].Name := Name;
+   D.Devs[D.DevCount].DevID := ScReadStr(Stg,SC_DIP_DEV_ID);
+   Inc(D.DevCount);
+  End;
+  ScRelease(Stg);
+ End;
+ ScRelease(Enum);
+ If D.Sel >= D.DevCount Then
+  D.Sel := 0;
+End;
+
+Function ScOpenDevice(Const DevID: String; Var Root: Pointer): LongInt;
+Type
+ TCreateDevice = Function(This: Pointer; DevID: Pointer;
+                          Var Root: Pointer): LongInt; stdcall;
+Var
+ B: Pointer;
+ Hr: LongInt;
+Begin
+ Root := Nil;
+ B := ScStrToBStr(DevID);
+ Hr := TCreateDevice(ScVT(ScMgr,4))(ScMgr,B,Root);
+ ScSysFreeString(B);
+ If (Hr >= 0) And (Root = Nil) Then
+  Hr := LongInt($80004005);
+ ScOpenDevice := Hr;
+End;
+
+Function ScFindItem(Root: Pointer; Feeder: Boolean): Pointer;
+Type
+ TEnumChildItems = Function(This: Pointer; Var Enum: Pointer): LongInt; stdcall;
+ TNextItem = Function(This: Pointer; Celt: LongWord; Var Item: Pointer;
+                      Var Fetched: LongWord): LongInt; stdcall;
+ TGetItemType = Function(This: Pointer; Var T: LongInt): LongInt; stdcall;
+Var
+ Enum, Item, Stg, First: Pointer;
+ Fetched: LongWord;
+ ItemType: LongInt;
+ Name, Wanted: String;
+ Count, I: Integer;
+Begin
+ ScFindItem := Nil;
+ First := Nil;
+ Enum := Nil;
+ If Feeder Then Wanted := 'FEEDER' Else Wanted := 'FLATBED';
+ If TEnumChildItems(ScVT(Root,5))(Root,Enum) < 0 Then Exit;
+ Count := 0;
+ While Count < 32 Do Begin
+  Item := Nil;
+  Fetched := 0;
+  If (TNextItem(ScVT(Enum,3))(Enum,1,Item,Fetched) <> 0) Or (Fetched = 0) Or
+     (Item = Nil) Then Break;
+  Inc(Count);
+  ItemType := 0;
+  TGetItemType(ScVT(Item,3))(Item,ItemType);
+  If (ItemType And SC_ITEM_IMAGE) = 0 Then
+   ScRelease(Item)
+  Else Begin
+   Name := '';
+   If ScQI(Item,@SC_IID_PROPSTG,Stg) >= 0 Then Begin
+    Name := ScReadStr(Stg,SC_IPA_ITEM_NAME);
+    ScRelease(Stg);
+   End;
+   For I := 1 To Length(Name) Do
+    Name[I] := UpCase(Name[I]);
+   If Pos(Wanted,Name) > 0 Then Begin
+    ScRelease(First);
+    ScFindItem := Item;
+    ScRelease(Enum);
+    Exit;
+   End;
+   If First = Nil Then First := Item Else ScRelease(Item);
+  End;
+ End;
+ ScRelease(Enum);
+ ScFindItem := First;
+End;
+
+{ Progression et annulation : IWiaDataTransfer.idtGetData accepte une
+  interface IWiaDataCallback meme avec un transfert vers un fichier. Le
+  pilote appelle BandedDataCallback avec des messages d'etat (pourcentage) ;
+  retourner S_FALSE annule la numerisation. L'objet COM est une simple
+  table de methodes virtuelles construite ici. }
+Const
+ SC_MSG_STATUS = 2;
+
+Type
+ TScCbObj = Record
+  Vtbl: Pointer;
+ End;
+
+Var
+ ScProgX, ScProgY: Integer;
+ ScPercent: LongInt;
+ ScCancelled, ScCbActive: Boolean;
+ ScCancelRect: TRect;
+ ScCbVtbl: Array[0..3] of Pointer;
+ ScCbObj: TScCbObj;
+
+Procedure ScProgressDraw(Pct: Integer);
+Var
+ R, T: TRect;
+ S: String;
+Begin
+ PEHideMouse;
+ PERect(R,ScProgX+110,ScProgY+120,396,130);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ PELabel(ScProgX+130,ScProgY+134,'Numerisation en cours...');
+ PERect(T,ScProgX+130,ScProgY+160,356,22);
+ PEFill(T,White);
+ PEBevel(T,True);
+ If Pct > 0 Then Begin
+  SetFillStyle(SolidFill,Blue);
+  Bar(T.Left+2,T.Top+2,T.Left+2+(T.Right-T.Left-4)*Pct Div 100,T.Bottom-2);
+ End;
+ Str(Pct,S);
+ S := S+' %';
+ PELabel(ScProgX+308-TextWidth(S) Div 2,ScProgY+188,S);
+ PERect(ScCancelRect,ScProgX+256,ScProgY+212,104,25);
+ PEButton(ScCancelRect,'Annuler',False);
+ PEShowMouse;
+End;
+
+Function ScCbQueryInterface(This: Pointer; IID: Pointer;
+                            Var Obj: Pointer): LongInt; stdcall;
+Begin
+ Obj := This;
+ ScCbQueryInterface := 0;
+End;
+
+Function ScCbAddRef(This: Pointer): LongWord; stdcall;
+Begin
+ ScCbAddRef := 1;
+End;
+
+Function ScCbRelease(This: Pointer): LongWord; stdcall;
+Begin
+ ScCbRelease := 1;
+End;
+
+Function ScCbBanded(This: Pointer; Msg, Status, Pct, Offset, Length,
+                    Reserved, ResLength: LongInt; Buf: Pointer): LongInt; stdcall;
+Var
+ MX, MY, MB: Integer;
+Begin
+ ScCbBanded := 0;
+ If Msg = SC_MSG_STATUS Then Begin
+  If (Pct >= 0) And (Pct <= 100) And (Pct <> ScPercent) Then Begin
+   ScPercent := Pct;
+   ScProgressDraw(Pct);
+  End;
+ End;
+ If ScCbActive Then Begin
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1) <> 0) And PEInside(MX,MY,ScCancelRect) Then
+   ScCancelled := True;
+  If KeyPressed Then
+   If ReadKey = #27 Then
+    ScCancelled := True;
+ End;
+ If ScCancelled Then
+  ScCbBanded := 1; { S_FALSE : annule le transfert }
+End;
+
+Procedure ScProgressStart(X, Y: Integer);
+Begin
+ ScProgX := X;
+ ScProgY := Y;
+ ScPercent := -1;
+ ScCancelled := False;
+ ScCbActive := True;
+ ScCbVtbl[0] := @ScCbQueryInterface;
+ ScCbVtbl[1] := @ScCbAddRef;
+ ScCbVtbl[2] := @ScCbRelease;
+ ScCbVtbl[3] := @ScCbBanded;
+ ScCbObj.Vtbl := @ScCbVtbl;
+ ScProgressDraw(0);
+End;
+
+Function ScTransfer(Xfer: Pointer; Const FileName: String): LongInt;
+Type
+ TGetData = Function(This: Pointer; Var Med: TScStgMedium;
+                     Callback: Pointer): LongInt; stdcall;
+Var
+ Med: TScStgMedium;
+ W: TScWBuf;
+ Full, Got: String;
+ F: File;
+ Hr: LongInt;
+Begin
+ Full := FExpand(FileName);
+ ScStrToWide(Full,W);
+ FillChar(Med,SizeOf(Med),0);
+ Med.tymed := SC_TYMED_FILE;
+ Med.lpszFileName := ScCoTaskMemAlloc((Length(Full)+2)*SizeOf(WideChar));
+ Move(W,Med.lpszFileName^,(Length(Full)+1)*SizeOf(WideChar));
+ If ScCbActive Then
+  Hr := TGetData(ScVT(Xfer,3))(Xfer,Med,@ScCbObj)
+ Else
+  Hr := TGetData(ScVT(Xfer,3))(Xfer,Med,Nil);
+ If (Hr >= 0) And (Med.lpszFileName <> Nil) Then Begin
+  { certains pilotes choisissent eux-memes le nom du fichier }
+  Got := ScWideToStr(Med.lpszFileName,SC_CP_ACP);
+  If (Got <> '') And (Got <> Full) Then Begin
+   {$I-}
+   Assign(F,Full);
+   Erase(F);
+   If IOResult <> 0 Then;
+   Assign(F,Got);
+   Rename(F,Full);
+   If IOResult <> 0 Then;
+   {$I+}
+  End;
+ End;
+ If Med.lpszFileName <> Nil Then
+  ScCoTaskMemFree(Med.lpszFileName);
+ ScTransfer := Hr;
+End;
+
+{ Boite de dialogue du pilote (IWiaDevMgr.GetImageDlg) : le pilote ecrit le
+  fichier lui-meme. }
+Function ScDriverDialog(Const DevID, FileName: String; ColorMode: Integer): LongInt;
+Type
+ TGetImageDlg = Function(This: Pointer; Parent: PtrUInt; DevType, Flags,
+                         Intent: LongInt; Root: Pointer; FileName: Pointer;
+                         Fmt: PScGuid): LongInt; stdcall;
+Var
+ Root, B: Pointer;
+ Fmt: TScGuid;
+ Intent, Hr: LongInt;
+Begin
+ Hr := ScOpenDevice(DevID,Root);
+ If Hr < 0 Then Begin
+  ScDriverDialog := Hr;
+  Exit;
+ End;
+ Case ColorMode Of
+  1: Intent := SC_INTENT_GRAY;
+  2: Intent := SC_INTENT_TEXT;
+ Else Intent := SC_INTENT_COLOR; End;
+ Fmt := SC_FMT_BMP;
+ B := ScStrToBStr(FExpand(FileName));
+ Hr := TGetImageDlg(ScVT(ScMgr,7))(ScMgr,0,SC_DEVTYPE_SCANNER,0,Intent,Root,B,@Fmt);
+ ScSysFreeString(B);
+ ScRelease(Root);
+ ScDriverDialog := Hr;
+End;
+
+{ Numerisation avec les parametres du dialogue. Retourne '' si tout va bien,
+  sinon un message d'erreur. Resultat : fichier BMP. }
+Function ScScan(Const D: TScState; Const FileName: String): String;
+Var
+ Root, RootStg, Item, ItemStg, Xfer: Pointer;
+ Caps, BedW, BedH, DPI, Depth, DataType, Actual, Hr, ExtW, ExtH: LongInt;
+ Lo, Hi, Mid: LongInt;
+ Feeder: Boolean;
+ Msg: String;
+ Fmt: TScGuid;
+Begin
+ ScScan := '';
+ If (D.DevCount <= 0) Or (ScMgr = Nil) Then Begin
+  ScScan := 'Aucun scanner disponible.';
+  Exit;
+ End;
+ Hr := ScOpenDevice(D.Devs[D.Sel].DevID,Root);
+ If Hr < 0 Then Begin
+  ScScan := 'Impossible d''ouvrir le scanner ('+ScHex(LongWord(Hr))+').';
+  Exit;
+ End;
+ If ScQI(Root,@SC_IID_PROPSTG,RootStg) < 0 Then Begin
+  ScRelease(Root);
+  ScScan := 'Proprietes du scanner inaccessibles.';
+  Exit;
+ End;
+ Feeder := D.Source = 2;
+ DPI := SC_DPI[D.DpiIdx];
+ If D.Preview Then
+  DPI := 75;
+ Msg := '';
+ If Feeder Then Begin
+  If (Not ScReadLong(RootStg,SC_DPS_DOCCAPS,Caps)) Or
+     ((Caps And SC_DOC_FEEDER) = 0) Then
+   Msg := 'Le chargeur automatique n''est pas disponible sur ce scanner.'
+  Else Begin
+   ScWriteLong(RootStg,SC_DPS_DOCSELECT,SC_DOC_FEEDER);
+   ScWriteLong(RootStg,SC_DPS_PAGES,1);
+  End;
+ End
+ Else If D.Source = 1 Then
+  ScWriteLong(RootStg,SC_DPS_DOCSELECT,SC_DOC_FLATBED);
+ If D.Preview Then
+  ScWriteLong(RootStg,SC_DPS_PREVIEW,1)
+ Else
+  ScWriteLong(RootStg,SC_DPS_PREVIEW,0);
+ Item := Nil;
+ ItemStg := Nil;
+ Xfer := Nil;
+ If Msg = '' Then Begin
+  Item := ScFindItem(Root,Feeder);
+  If Item = Nil Then
+   Msg := 'Aucun element de numerisation trouve sur ce scanner.'
+  Else If (ScQI(Item,@SC_IID_PROPSTG,ItemStg) < 0) Or
+          (ScQI(Item,@SC_IID_DATAXFER,Xfer) < 0) Then
+   Msg := 'Le scanner ne permet pas le transfert de donnees.';
+ End;
+ If Msg = '' Then Begin
+  Fmt := SC_FMT_BMP;
+  ScWriteLong(ItemStg,SC_IPA_TYMED,SC_TYMED_FILE);
+  If Not ScWriteGuid(ItemStg,SC_IPA_FORMAT,@Fmt) Then
+   Msg := 'Le pilote n''accepte pas le format BMP.'
+  Else Begin
+   Case D.ColorMode Of
+    1: Begin DataType := SC_DATA_GRAYSCALE; Depth := 8; End;
+    2: Begin DataType := SC_DATA_THRESHOLD; Depth := 1; End;
+   Else Begin DataType := SC_DATA_COLOR; Depth := 24; End; End;
+   ScWriteLong(ItemStg,SC_IPA_DATATYPE,DataType);
+   ScWriteLong(ItemStg,SC_IPA_DEPTH,Depth);
+   ScWriteLong(ItemStg,SC_IPS_XRES,DPI);
+   ScWriteLong(ItemStg,SC_IPS_YRES,DPI);
+   If ScReadLong(ItemStg,SC_IPS_XRES,Actual) Then
+    DPI := Actual;
+   { luminosite et contraste : decalage en % de la plage du pilote }
+   If D.Bright <> 0 Then
+    If ScReadRange(ItemStg,SC_IPS_BRIGHTNESS,Lo,Hi) Then Begin
+     Mid := (Lo+Hi) Div 2;
+     ScWriteLong(ItemStg,SC_IPS_BRIGHTNESS,Mid+LongInt(D.Bright)*(Hi-Lo) Div 200);
+    End;
+   If D.Contr <> 0 Then
+    If ScReadRange(ItemStg,SC_IPS_CONTRAST,Lo,Hi) Then Begin
+     Mid := (Lo+Hi) Div 2;
+     ScWriteLong(ItemStg,SC_IPS_CONTRAST,Mid+LongInt(D.Contr)*(Hi-Lo) Div 200);
+    End;
+   { zone de numerisation (milliemes de pouce) }
+   BedW := 0;
+   BedH := 0;
+   If Feeder Then
+    If Not (ScReadLong(RootStg,SC_DPS_HFEED,BedW) And
+            ScReadLong(RootStg,SC_DPS_VFEED,BedH)) Then Begin
+     BedW := 0;
+     BedH := 0;
+    End;
+   If (BedW <= 0) Or (BedH <= 0) Then
+    If Not (ScReadLong(RootStg,SC_DPS_HBED,BedW) And
+            ScReadLong(RootStg,SC_DPS_VBED,BedH)) Then Begin
+     BedW := 0;
+     BedH := 0;
+    End;
+   ExtW := BedW;
+   ExtH := BedH;
+   Case D.Zone Of
+    1: Begin ExtW := 8268; ExtH := 11693; End;
+    2: Begin ExtW := 8500; ExtH := 11000; End;
+    3: Begin ExtW := 3937; ExtH := 5906; End;
+   End;
+   If (BedW > 0) And (BedH > 0) Then Begin
+    If ExtW > BedW Then ExtW := BedW;
+    If ExtH > BedH Then ExtH := BedH;
+   End;
+   If (ExtW > 0) And (ExtH > 0) Then Begin
+    ScWriteLong(ItemStg,SC_IPS_XPOS,0);
+    ScWriteLong(ItemStg,SC_IPS_YPOS,0);
+    ScWriteLong(ItemStg,SC_IPS_XEXTENT,(ExtW*DPI) Div 1000);
+    ScWriteLong(ItemStg,SC_IPS_YEXTENT,(ExtH*DPI) Div 1000);
+   End;
+   { certains pilotes reinitialisent le format : on le redemande }
+   ScWriteLong(ItemStg,SC_IPA_TYMED,SC_TYMED_FILE);
+   ScWriteGuid(ItemStg,SC_IPA_FORMAT,@Fmt);
+   Hr := ScTransfer(Xfer,FileName);
+   If ScCancelled Then
+    Msg := 'CANCEL'
+   Else If Hr < 0 Then
+    Msg := 'La numerisation a echoue ('+ScHex(LongWord(Hr))+').';
+  End;
+ End;
+ ScRelease(Xfer);
+ ScRelease(ItemStg);
+ ScRelease(Item);
+ ScRelease(RootStg);
+ ScRelease(Root);
+ ScScan := Msg;
+End;
+{$ENDIF}
+
+Function ScTempFile: String;
+Var
+ T: String;
+Begin
+ T := GetEnv('TEMP');
+ If T = '' Then T := GetEnv('TMP');
+ If T = '' Then T := '.';
+ If T[Length(T)] <> '\' Then T := T+'\';
+ ScTempFile := T+'PAINTSCN.BMP';
+End;
+
+Procedure ScLayout(Var D: TScState);
+Var
+ I: Integer;
+Begin
+ D.X := (ScreenWidth-BR_W) Div 2;
+ D.Y := (ScreenHeight-BR_H) Div 2;
+ For I := 0 To 5 Do
+  PERect(D.DevRows[I],D.X+12,D.Y+52+I*20,292,20);
+ PERect(D.DpiM,D.X+12,D.Y+200,24,20);
+ PERect(D.DpiTrack,D.X+42,D.Y+200,220,20);
+ PERect(D.DpiP,D.X+268,D.Y+200,24,20);
+ PERect(D.BriM,D.X+12,D.Y+250,24,20);
+ PERect(D.BriTrack,D.X+42,D.Y+250,220,20);
+ PERect(D.BriP,D.X+268,D.Y+250,24,20);
+ PERect(D.ConM,D.X+12,D.Y+300,24,20);
+ PERect(D.ConTrack,D.X+42,D.Y+300,220,20);
+ PERect(D.ConP,D.X+268,D.Y+300,24,20);
+ For I := 0 To 2 Do Begin
+  PERect(D.SrcRect[I],D.X+324,D.Y+50+I*20,270,20);
+  PERect(D.ModeRect[I],D.X+324,D.Y+130+I*20,270,20);
+ End;
+ For I := 0 To 3 Do
+  PERect(D.ZoneRect[I],D.X+324,D.Y+210+I*20,270,20);
+ PERect(D.PrevBox,D.X+324,D.Y+300,270,20);
+ PERect(D.ScanButton,D.X+12,D.Y+340,120,25);
+ PERect(D.CancelButton,D.X+144,D.Y+340,108,25);
+ PERect(D.DriverButton,D.X+264,D.Y+340,150,25);
+ PERect(D.RefreshButton,D.X+426,D.Y+340,168,25);
+End;
+
+Procedure ScDraw(Var D: TScState);
+Var
+ R: TRect;
+ I: Integer;
+ S: String;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut);
+ SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,BR_W,BR_H);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.X+3,D.Y+3,D.X+BR_W-4,D.Y+21);
+ SetColor(White);
+ OutTextXY(D.X+9,D.Y+7,'Importer depuis un scanner - PAINT');
+ OutTextXY(D.X+BR_W-18,D.Y+7,'X');
+ PELabel(D.X+12,D.Y+33,'Scanner :');
+ PERect(R,D.X+12,D.Y+52,292,120);
+ PEFill(R,White);
+ PEBevel(R,True);
+ If D.DevCount = 0 Then Begin
+  SetColor(DarkGray);
+  OutTextXY(D.X+18,D.Y+58,'Aucun scanner detecte.');
+  OutTextXY(D.X+18,D.Y+78,'Branchez-le puis Actualiser.');
+ End
+ Else
+  For I := 0 To D.DevCount-1 Do Begin
+   If I = D.Sel Then Begin
+    SetFillStyle(SolidFill,Blue);
+    Bar(D.DevRows[I].Left+2,D.DevRows[I].Top+1,D.DevRows[I].Right-2,D.DevRows[I].Bottom-1);
+    SetColor(White);
+   End
+   Else
+    SetColor(Black);
+   S := D.Devs[I].Name;
+   If Length(S) > 34 Then S := Copy(S,1,34);
+   OutTextXY(D.DevRows[I].Left+6,D.DevRows[I].Top+6,S);
+  End;
+ Str(SC_DPI[D.DpiIdx],S);
+ PELabel(D.X+12,D.Y+180,'Resolution : '+S+' dpi');
+ BLSlider(D.DpiM,D.DpiTrack,D.DpiP,D.DpiIdx,SC_DPI_COUNT-1);
+ Str(D.Bright,S);
+ PELabel(D.X+12,D.Y+230,'Luminosite : '+S);
+ BLSlider(D.BriM,D.BriTrack,D.BriP,D.Bright+100,200);
+ Str(D.Contr,S);
+ PELabel(D.X+12,D.Y+280,'Contraste : '+S);
+ BLSlider(D.ConM,D.ConTrack,D.ConP,D.Contr+100,200);
+ PELabel(D.X+324,D.Y+33,'Source :');
+ BRRadio(D.SrcRect[0],D.Source = 0,'Automatique');
+ BRRadio(D.SrcRect[1],D.Source = 1,'Vitre (a plat)');
+ BRRadio(D.SrcRect[2],D.Source = 2,'Chargeur de documents');
+ PELabel(D.X+324,D.Y+113,'Mode de couleur :');
+ BRRadio(D.ModeRect[0],D.ColorMode = 0,'Couleur');
+ BRRadio(D.ModeRect[1],D.ColorMode = 1,'Niveaux de gris');
+ BRRadio(D.ModeRect[2],D.ColorMode = 2,'Noir et blanc');
+ PELabel(D.X+324,D.Y+193,'Zone de numerisation :');
+ BRRadio(D.ZoneRect[0],D.Zone = 0,'Toute la surface');
+ BRRadio(D.ZoneRect[1],D.Zone = 1,'A4 (210 x 297 mm)');
+ BRRadio(D.ZoneRect[2],D.Zone = 2,'Lettre (8,5 x 11 po)');
+ BRRadio(D.ZoneRect[3],D.Zone = 3,'Photo (10 x 15 cm)');
+ BRCheckBox(D.PrevBox,D.Preview,'Apercu rapide (75 dpi)');
+ PEButton(D.ScanButton,'Numeriser',False);
+ If D.DevCount = 0 Then Begin
+  PEFill(D.ScanButton,LightGray);
+  PEBevel(D.ScanButton,False);
+  SetColor(DarkGray);
+  OutTextXY(D.ScanButton.Left+(120-TextWidth('Numeriser')) Div 2,
+            D.ScanButton.Top+8,'Numeriser');
+ End;
+ PEButton(D.CancelButton,'Annuler',False);
+ PEButton(D.DriverButton,'Pilote...',False);
+ PEButton(D.RefreshButton,'Actualiser la liste',False);
+ SetColor(DarkGray);
+ OutTextXY(D.X+12,D.Y+322,D.Status);
+ PEShowMouse;
+ D.Dirty := False;
+End;
+
+Procedure ScClampDpi(Var D: TScState; V: Integer);
+Begin
+ D.DpiIdx := PEClamp(V,0,SC_DPI_COUNT-1);
+ D.Dirty := True;
+End;
+
+Procedure ScMouse(Var D: TScState);
+Var
+ I: Integer;
+ Pressed: Boolean;
+Begin
+ GetMouseStateLocal(D.MX,D.MY,D.MB);
+ Pressed := ((D.MB And 1) <> 0) And ((D.PreviousButtons And 1) = 0);
+ If (D.MB And 1) <> 0 Then Begin
+  If PEInside(D.MX,D.MY,D.DpiTrack) Then
+   ScClampDpi(D,((D.MX-D.DpiTrack.Left-2)*(SC_DPI_COUNT-1)*2+
+              (D.DpiTrack.Right-D.DpiTrack.Left-4)) Div
+              (2*(D.DpiTrack.Right-D.DpiTrack.Left-4)));
+  If PEInside(D.MX,D.MY,D.BriTrack) Then Begin
+   D.Bright := PEClamp((D.MX-D.BriTrack.Left-2)*200 Div (D.BriTrack.Right-D.BriTrack.Left-4)-100,-100,100);
+   D.Dirty := True;
+  End;
+  If PEInside(D.MX,D.MY,D.ConTrack) Then Begin
+   D.Contr := PEClamp((D.MX-D.ConTrack.Left-2)*200 Div (D.ConTrack.Right-D.ConTrack.Left-4)-100,-100,100);
+   D.Dirty := True;
+  End;
+ End;
+ If Pressed Then Begin
+  If (D.MX >= D.X+BR_W-24) And (D.MX <= D.X+BR_W-4) And
+     (D.MY >= D.Y+3) And (D.MY <= D.Y+21) Then
+   D.Done := True
+  Else If PEInside(D.MX,D.MY,D.CancelButton) Then
+   D.Done := True
+  Else If PEInside(D.MX,D.MY,D.ScanButton) Then Begin
+   If D.DevCount > 0 Then Begin
+    D.Accepted := True;
+    D.Done := True;
+   End;
+  End
+  Else If PEInside(D.MX,D.MY,D.DriverButton) Then Begin
+   If D.DevCount > 0 Then Begin
+    D.Accepted := True;
+    D.DriverUI := True;
+    D.Done := True;
+   End;
+  End
+  Else If PEInside(D.MX,D.MY,D.RefreshButton) Then Begin
+   {$IFDEF WINDOWS}
+   ScEnumDevices(D);
+   {$ENDIF}
+   D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.DpiM) Then ScClampDpi(D,D.DpiIdx-1)
+  Else If PEInside(D.MX,D.MY,D.DpiP) Then ScClampDpi(D,D.DpiIdx+1)
+  Else If PEInside(D.MX,D.MY,D.BriM) Then Begin D.Bright := PEClamp(D.Bright-10,-100,100); D.Dirty := True; End
+  Else If PEInside(D.MX,D.MY,D.BriP) Then Begin D.Bright := PEClamp(D.Bright+10,-100,100); D.Dirty := True; End
+  Else If PEInside(D.MX,D.MY,D.ConM) Then Begin D.Contr := PEClamp(D.Contr-10,-100,100); D.Dirty := True; End
+  Else If PEInside(D.MX,D.MY,D.ConP) Then Begin D.Contr := PEClamp(D.Contr+10,-100,100); D.Dirty := True; End
+  Else If PEInside(D.MX,D.MY,D.PrevBox) Then Begin
+   D.Preview := Not D.Preview;
+   D.Dirty := True;
+  End
+  Else Begin
+   For I := 0 To D.DevCount-1 Do
+    If PEInside(D.MX,D.MY,D.DevRows[I]) Then Begin
+     D.Sel := I;
+     D.Dirty := True;
+    End;
+   For I := 0 To 2 Do Begin
+    If PEInside(D.MX,D.MY,D.SrcRect[I]) Then Begin D.Source := I; D.Dirty := True; End;
+    If PEInside(D.MX,D.MY,D.ModeRect[I]) Then Begin D.ColorMode := I; D.Dirty := True; End;
+   End;
+   For I := 0 To 3 Do
+    If PEInside(D.MX,D.MY,D.ZoneRect[I]) Then Begin D.Zone := I; D.Dirty := True; End;
+  End;
+ End;
+ D.PreviousButtons := D.MB;
+End;
+
+Procedure ScKeyboard(Var D: TScState);
+Var
+ K: Char;
+Begin
+ K := ReadKey;
+ If K = #0 Then Begin
+  K := ReadKey;
+  Case Ord(K) Of
+   72: If D.Sel > 0 Then Begin Dec(D.Sel); D.Dirty := True; End;
+   80: If D.Sel < D.DevCount-1 Then Begin Inc(D.Sel); D.Dirty := True; End;
+   75: ScClampDpi(D,D.DpiIdx-1);
+   77: ScClampDpi(D,D.DpiIdx+1);
+  End;
+  Exit;
+ End;
+ Case K Of
+  #27: D.Done := True;
+  #13: If D.DevCount > 0 Then Begin D.Accepted := True; D.Done := True; End;
+ End;
+End;
+
+Procedure ScanImportCommand;
+{$IFDEF WINDOWS}
+Var
+ D: TScState;
+ Name, Msg: String;
+ Backup: PHistoryData;
+ Metadata: TImageBuffer;
+ OldZoom, OldX, OldY: Integer;
+ Item: PHistoryItem;
+ F: File;
+ Hr: LongInt;
+Begin
+ MenuActive := False;
+ RedrawInterface;
+ FillChar(D,SizeOf(D),0);
+ D.Source := 0;
+ D.ColorMode := 0;
+ D.DpiIdx := 3;
+ D.Zone := 0;
+ D.Status := '';
+ If Not ScInit Then Begin
+  ScShutdown;
+  ShowMessage('Importer depuis un scanner',
+   'WIA est indisponible (service "Acquisition d''images Windows" arrete ?).');
+  Exit;
+ End;
+ ScEnumDevices(D);
+ ScLayout(D);
+ GetMouseStateLocal(D.MX,D.MY,D.PreviousButtons);
+ D.Dirty := True;
+ While Not D.Done Do Begin
+  If D.Dirty Then ScDraw(D);
+  If KeyPressed Then ScKeyboard(D);
+  If Not D.Done Then ScMouse(D);
+  Delay(10);
+ End;
+ If Not D.Accepted Then Begin
+  ScShutdown;
+  RedrawInterface;
+  Exit;
+ End;
+ If Not ConfirmDiscardChanges Then Begin
+  ScShutdown;
+  RedrawInterface;
+  Exit;
+ End;
+ Name := ScTempFile;
+ Assign(F,Name);
+ {$I-} Erase(F); {$I+}
+ If IOResult <> 0 Then;
+ RedrawInterface;
+ ScCbActive := False;
+ If D.DriverUI Then Begin
+  Hr := ScDriverDialog(D.Devs[D.Sel].DevID,Name,D.ColorMode);
+  If Hr < 0 Then
+   Msg := 'Le pilote n''a pas pu numeriser ('+ScHex(LongWord(Hr))+').'
+  Else If Hr = 1 Then
+   Msg := 'CANCEL'
+  Else
+   Msg := '';
+ End
+ Else Begin
+  ScProgressStart(D.X,D.Y);
+  Msg := ScScan(D,Name);
+  ScCbActive := False;
+ End;
+ ScShutdown;
+ If Msg = 'CANCEL' Then Begin
+  Assign(F,Name);
+  {$I-} Erase(F); {$I+}
+  If IOResult <> 0 Then;
+  RedrawInterface;
+  Exit;
+ End;
+ If Msg <> '' Then Begin
+  RedrawInterface;
+  ShowMessage('Importer depuis un scanner',Msg);
+  Exit;
+ End;
+ Backup := SaveFullSnapshot;
+ If Backup = Nil Then Begin
+  RedrawInterface;
+  ShowMessage('Importer depuis un scanner','Impossible de proteger l''image courante.');
+  Exit;
+ End;
+ Metadata := ImageBuffer;
+ OldZoom := ZoomLevel; OldX := ZOriginX; OldY := ZOriginY;
+ If LoadImage(Name) Then Begin
+  While UndoList <> Nil Do Begin
+   Item := UndoList; UndoList := Item^.Next;
+   FreeHistoryData(PHistoryData(Item^.Data)); Dispose(Item);
+  End;
+  While RedoList <> Nil Do Begin
+   Item := RedoList; RedoList := Item^.Next;
+   FreeHistoryData(PHistoryData(Item^.Data)); Dispose(Item);
+  End;
+  UndoCount := 0; RedoCount := 0;
+  ZoomLevel := 100; ZOriginX := 0; ZOriginY := 0;
+  SelectionActive := False;
+  ImageBuffer.FileName := '';
+  ImageBuffer.Modified := True;
+  Msg := '';
+ End
+ Else Begin
+  RestoreFullSnapshot(Backup); ImageBuffer := Metadata;
+  ZoomLevel := OldZoom; ZOriginX := OldX; ZOriginY := OldY;
+  Msg := 'L''image numerisee n''a pas pu etre chargee (trop grande ?). Essayez une resolution plus basse.';
+ End;
+ FreeHistoryData(Backup);
+ Assign(F,Name);
+ {$I-} Erase(F); {$I+}
+ If IOResult <> 0 Then;
+ RedrawInterface;
+ If Msg <> '' Then
+  ShowMessage('Importer depuis un scanner',Msg);
+End;
+{$ELSE}
+Begin
+ ShowMessage('Importer depuis un scanner',
+  'Disponible uniquement sous Windows (WIA).');
+End;
+{$ENDIF}
+
+
 Procedure OpenImageCommand;
 Var Name: String; Backup: PHistoryData; Metadata: TImageBuffer;
     OldZoom,OldX,OldY: Integer; Item: PHistoryItem;
@@ -21171,11 +22287,12 @@ Begin
     1: OpenImageCommand; { Ouvrir : explorateur graphique Pascal }
     2: Begin SaveCurrentImage; End;
     3: Begin SaveAsCurrentImage; End;
-    5: Begin { Imprimer }
+    5: ScanImportCommand; { Importer depuis un scanner (WIA) }
+    6: Begin { Imprimer }
      ShowMessage('Imprimer', 'Impression non disponible.');
     End;
-    7: ImagePropertiesDialog; { Proprietes detaillees et textes persistants }
-    9: If ConfirmDiscardChanges Then Running := False; { Quitter }
+    8: ImagePropertiesDialog; { Proprietes detaillees et textes persistants }
+    10: If ConfirmDiscardChanges Then Running := False; { Quitter }
    End;
   End;
   MENU_EDIT: Begin

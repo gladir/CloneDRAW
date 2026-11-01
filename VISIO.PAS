@@ -15164,6 +15164,7 @@ Procedure DrawIconBar;
 Var
  I: Integer;
 Begin
+ If RibbonMode Then Exit;
  { Fond }
  SetFillStyle(SolidFill, ICONBAR_COLOR);
  Bar(0, ICONBAR_TOP, ScreenWidth, ICONBAR_TOP + ICONBAR_HEIGHT);
@@ -15180,6 +15181,7 @@ Var
  I, X: Integer;
 Begin
  GetIconBarButtonAtPosition := 0;
+ If RibbonMode Then Exit;
  If (MouseY < ICONBAR_TOP + 2) or
     (MouseY > ICONBAR_TOP + 2 + ICONBAR_BUTTON_SIZE) Then Exit;
  For I := 1 to IconBarLast Do Begin
@@ -17465,7 +17467,7 @@ Begin
   End;
  End;
  FinishTextEdit(False);
- If RibbonMode and (Y <= WORK_AREA_TOP) and ((Y <= MENU_HEIGHT) or (Y > CLASSIC_WORK_AREA_TOP)) Then Begin
+ If RibbonMode and (Y <= WORK_AREA_TOP) Then Begin
   RibbonKeyboard := False; RibbonFocus := 0;
   MenuIdx := GetMenuAtPosition(X,Y);
   If MenuIdx > 0 Then Begin RibbonTab := MenuIdx; RibbonHover := 0; End
@@ -20318,7 +20320,7 @@ End;
 { ---- construction de la disposition ---- }
 Function RibTop: Integer;
 Begin
- RibTop := CLASSIC_WORK_AREA_TOP + 3;
+ RibTop := MENU_HEIGHT + 3;
 End;
 
 Procedure RibFlushCol;
@@ -20592,7 +20594,7 @@ Var I: Integer;
 Begin
  RibbonHitAt := 0;
  If Not RibbonMode Then Exit;
- If (Y <= CLASSIC_WORK_AREA_TOP) or (Y > WORK_AREA_TOP) Then Exit;
+ If (Y <= MENU_HEIGHT) or (Y > WORK_AREA_TOP) Then Exit;
  EnsureRibbon;
  For I := 1 to RibCount do
   If (X >= RibItems[I].X) and (X < RibItems[I].X + RibItems[I].W) and
@@ -20633,11 +20635,11 @@ Begin
  If Not RibbonMode Then Exit;
  EnsureRibbon;
  SetFillStyle(SolidFill, LightGray);
- Bar(0, CLASSIC_WORK_AREA_TOP + 1, ScreenWidth, WORK_AREA_TOP);
- SetColor(White); Line(0, CLASSIC_WORK_AREA_TOP + 1, ScreenWidth, CLASSIC_WORK_AREA_TOP + 1);
+ Bar(0, MENU_HEIGHT + 1, ScreenWidth, WORK_AREA_TOP);
+ SetColor(White); Line(0, MENU_HEIGHT + 1, ScreenWidth, MENU_HEIGHT + 1);
  For G := 1 to RibGroupCount do Begin
   SetColor(DarkGray);
-  Line(RibGroups[G].X2 + 2, CLASSIC_WORK_AREA_TOP + 5, RibGroups[G].X2 + 2, WORK_AREA_TOP - 4);
+  Line(RibGroups[G].X2 + 2, MENU_HEIGHT + 5, RibGroups[G].X2 + 2, WORK_AREA_TOP - 4);
   OutTextXY((RibGroups[G].X1 + RibGroups[G].X2) div 2 - Length(RibGroups[G].Title) * 4,
             WORK_AREA_TOP - 12, RibGroups[G].Title);
  End;
@@ -20817,7 +20819,7 @@ Begin
  End;
  PanelOpen:=True;PanelCat:=1;PanelScroll:=0;PressKind:=0;ArmedKind:=0;
  TOOLBAR_WIDTH:=CLASSIC_TOOLBAR_WIDTH+PANEL_W;WORK_AREA_TOP:=CLASSIC_WORK_AREA_TOP;
- If RibbonMode Then WORK_AREA_TOP:=CLASSIC_WORK_AREA_TOP+98;
+ If RibbonMode Then WORK_AREA_TOP:=MENU_HEIGHT+99;
  TOOLBAR_TOP:=WORK_AREA_TOP;
 End;
 

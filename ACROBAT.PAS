@@ -2,6 +2,7 @@
   @created: 2026
   @version: 1.00
   @website(https://www.gladir.com/clonedraw)
+  @website(https://www.gladir.com/office-0)
   @abstract(Target: Turbo Pascal 7, Free Pascal
   @description: Clone de l'application ACROBAT
 

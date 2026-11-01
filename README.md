@@ -42,6 +42,10 @@ Apercu de PAINT :
 		<td>Attributs de l'image (Couleurs) :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/201c76b2-ef06-411a-b507-1ca8f53f4523" /></td>
 		<td>Attributs de l'image (Mémoire) :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/9f2fccee-708a-44e8-84e5-7f94ebf691d5" /></td>
 	</tr>
+	<tr>
+		<td>Fusionner des vêtements :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/c7fe223d-ed68-45c7-9f62-f7522e1a0363" /></td>
+		<td>Flou de l'arrière-plan :<br /><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/e33f04ab-7daf-4341-a300-76528b44bd68" /></td>
+	</tr>
 </table>
 
 Aperçu de Photoshop :

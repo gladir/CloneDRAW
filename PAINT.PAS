@@ -124,7 +124,8 @@ Const
  MENU_VIEW = 2;
  MENU_IMAGE = 3;
  MENU_COLORS = 4;
- MENU_HELP = 5;
+ MENU_TOOLS = 5;
+ MENU_HELP = 6;
 
  { Constantes pour les formats d'image }
  FMT_BMP = 0;
@@ -358,7 +359,7 @@ Var
  CropActive: Boolean;
 
  { Variables pour les menus }
- Menus: Array[0..5] of TMenu;
+ Menus: Array[0..6] of TMenu;
  MenuActive: Boolean;
  ActiveMenu: Integer;
  ActiveMenuItem: Integer;
@@ -1138,9 +1139,25 @@ Begin
  Menus[MENU_COLORS].Items[1].Shortcut := '';
  Menus[MENU_COLORS].Items[1].Enabled := True;
 
+ { Menu Outils }
+ Menus[MENU_TOOLS].Title := 'Outils';
+ Menus[MENU_TOOLS].X := 325;
+ Menus[MENU_TOOLS].Width := 190;
+ Menus[MENU_TOOLS].ItemCount := 2;
+ Menus[MENU_TOOLS].Items[0].Caption := 'Supprimer l''arriere-plan...';
+ Menus[MENU_TOOLS].Items[0].Shortcut := '';
+ Menus[MENU_TOOLS].Items[0].Enabled := True;
+ Menus[MENU_TOOLS].Items[0].Separator := False;
+ Menus[MENU_TOOLS].Items[0].Checked := False;
+ Menus[MENU_TOOLS].Items[1].Caption := 'Flou de l''arriere-plan...';
+ Menus[MENU_TOOLS].Items[1].Shortcut := '';
+ Menus[MENU_TOOLS].Items[1].Enabled := True;
+ Menus[MENU_TOOLS].Items[1].Separator := False;
+ Menus[MENU_TOOLS].Items[1].Checked := False;
+
  { Menu Aide }
  Menus[MENU_HELP].Title := '?';
- Menus[MENU_HELP].X := 325;
+ Menus[MENU_HELP].X := 390;
  Menus[MENU_HELP].Width := 100;
  Menus[MENU_HELP].ItemCount := 2;
  Menus[MENU_HELP].Items[0].Caption := 'Aide';
@@ -1153,7 +1170,7 @@ Begin
  { Ajuster dynamiquement la largeur de chaque menu déroulant pour que le
    raccourci ne chevauche pas la légende. Layout d'une ligne :
      [coche/20px] + Caption + [16px d'espace] + Shortcut + [10px marge] }
- For MI := 0 to 5 do Begin
+ For MI := 0 to 6 do Begin
   For II := 0 to Menus[MI].ItemCount - 1 do Begin
    If Not Menus[MI].Items[II].Separator Then Begin
     Need := 20 + TextWidth(Menus[MI].Items[II].Caption) + 10;
@@ -1266,7 +1283,7 @@ Begin
  { Dessiner les titres des menus }
  SetColor(Black);
  X := 5;
- For I := 0 to 5 do Begin
+ For I := 0 to 6 do Begin
   Menus[I].X := X;
   If (MenuActive) and (ActiveMenu = I) Then Begin
    SetFillStyle(SolidFill, Blue);
@@ -16551,6 +16568,1066 @@ Begin
 End;
 
 
+{ Supprimer l'arriere-plan : segmentation fond / premier plan.
+  1) la couleur du fond est estimee sur le pourtour de l'image (couleurs
+     dominantes des bords, jusqu'a 4 graines) ;
+  2) le fond est propage depuis les bords, par voisinage, tant que la couleur
+     reste proche d'une graine ou varie peu d'un pixel au suivant (degrades) ;
+  3) les zones fermees de meme couleur peuvent etre retirees (option) ;
+  4) les petits ilots parasites sont elimines et les bords lisses.
+  Le resultat est soit un fond transparent (couleur de transparence dediee),
+  soit un fond rempli avec une couleur choisie. }
+
+Const
+ BR_W = 616;
+ BR_H = 384;
+
+Type
+ PBRQueue = ^TBRQueue;
+ TBRQueue = Array[0..100000000] of LongInt;
+ TBRState = Record
+  X, Y: Integer;
+  Mode: Integer;
+  ColorIndex: Integer;
+  Tolerance: Integer;
+  Holes, Smooth: Boolean;
+  Mask: PByte;
+  MaskSize: LongInt;
+  BRPercent: Integer;
+  Radius: Integer;
+  Minus2, Track2, Plus2: TRect;
+  Done, Accepted, Dirty: Boolean;
+  RadioT, RadioC, Track, MinusB, PlusB, HolesBox, SmoothBox: TRect;
+  Swatches: Array[0..15] of TRect;
+  BeforeBox, AfterBox, ApplyButton, CancelButton, HelpButton: TRect;
+  PaletteData: TPEState;
+  MX, MY, MB, PreviousButtons: Integer;
+ End;
+
+Var
+ BRSeeds: Array[0..3] of TRGBColor;
+ BRSeedCount: Integer;
+ BRThr: LongInt;
+
+Function BRSeedDistance(Const C: TRGBColor): LongInt;
+Var
+ I: Integer;
+ Best, Dist: LongInt;
+Begin
+ Best := 1000000;
+ For I := 0 To BRSeedCount-1 Do Begin
+  Dist := PGDistance(C,BRSeeds[I]);
+  If Dist < Best Then
+   Best := Dist;
+ End;
+ BRSeedDistance := Best;
+End;
+
+Procedure BRComputeMask(Var D: TBRState);
+Var
+ W, H, I, J, K: Integer;
+ Size, P, Q0, N, Head, Tail, Total, BgCount, MinKeep, Comp: LongInt;
+ Queue: PBRQueue;
+ Hist: Array[0..255] of LongInt;
+ Tmp: PByte;
+ M: PByte;
+ Idx: Byte;
+ Best: Integer;
+ CurC, NbC: TRGBColor;
+ Step: LongInt;
+ NX, NY, Dir, Neigh: Integer;
+
+ Procedure CountBorder(X, Y: Integer);
+ Var
+  B: Byte;
+ Begin
+  If PGReadIndex(X,Y,B) Then Begin
+   Inc(Hist[B]);
+   Inc(Total);
+  End;
+ End;
+
+ Procedure Seed(X, Y: Integer);
+ Var
+  Pos: LongInt;
+  C: TRGBColor;
+ Begin
+  Pos := LongInt(Y)*W+X;
+  If M[Pos] = 0 Then
+   Exit;
+  If PGReadRGB(X,Y,C) Then
+   If BRSeedDistance(C) <= BRThr Then Begin
+    M[Pos] := 0;
+    Queue^[Tail] := Pos;
+    Inc(Tail);
+   End;
+ End;
+
+Begin
+ W := CanvasImageW;
+ H := CanvasImageH;
+ Size := LongInt(W)*H;
+ If D.Mask <> Nil Then
+  FreeMem(D.Mask,D.MaskSize);
+ D.Mask := Nil;
+ D.BRPercent := 0;
+ If Not PGHasImage Or (Size <= 0) Then
+  Exit;
+ GetMem(D.Mask,Size);
+ D.MaskSize := Size;
+ M := D.Mask;
+ FillChar(M^,Size,1);
+ GetMem(Queue,Size*SizeOf(LongInt));
+
+ { 1) couleurs dominantes du pourtour = graines de fond }
+ FillChar(Hist,SizeOf(Hist),0);
+ Total := 0;
+ For I := 0 To W-1 Do Begin
+  CountBorder(I,0);
+  CountBorder(I,H-1);
+ End;
+ For J := 1 To H-2 Do Begin
+  CountBorder(0,J);
+  CountBorder(W-1,J);
+ End;
+ BRSeedCount := 0;
+ For K := 0 To 3 Do Begin
+  Best := -1;
+  For I := 0 To 255 Do
+   If (Hist[I] > 0) And ((Best < 0) Or (Hist[I] > Hist[Best])) Then
+    Best := I;
+  If Best < 0 Then
+   Break;
+  If (K > 0) And (Hist[Best]*100 < Total*8) Then
+   Break;
+  BRSeeds[BRSeedCount] := ImageBuffer.Palette[Best];
+  Inc(BRSeedCount);
+  Hist[Best] := 0;
+ End;
+ { seuil quadratique : 0..100 % -> distance RVB 0..250 }
+ Step := LongInt(D.Tolerance)*5 Div 2;
+ BRThr := Step*Step;
+
+ { 2) propagation du fond depuis les bords }
+ Head := 0;
+ Tail := 0;
+ For I := 0 To W-1 Do Begin
+  Seed(I,0);
+  Seed(I,H-1);
+ End;
+ For J := 1 To H-2 Do Begin
+  Seed(0,J);
+  Seed(W-1,J);
+ End;
+ While Head < Tail Do Begin
+  P := Queue^[Head];
+  Inc(Head);
+  NX := Integer(P Mod W);
+  NY := Integer(P Div W);
+  PGReadRGB(NX,NY,CurC);
+  For Dir := 0 To 3 Do Begin
+   I := NX;
+   J := NY;
+   Case Dir Of
+    0: Dec(I);
+    1: Inc(I);
+    2: Dec(J);
+    3: Inc(J);
+   End;
+   If (I < 0) Or (J < 0) Or (I >= W) Or (J >= H) Then
+    Continue;
+   Q0 := LongInt(J)*W+I;
+   If M[Q0] = 0 Then
+    Continue;
+   PGReadRGB(I,J,NbC);
+   N := BRSeedDistance(NbC);
+   { proche d'une graine, ou degrade doux pas trop loin du fond }
+   If (N <= BRThr) Or ((PGDistance(CurC,NbC) <= BRThr Div 16) And
+                        (N <= BRThr*4)) Then Begin
+    M[Q0] := 0;
+    Queue^[Tail] := Q0;
+    Inc(Tail);
+   End;
+  End;
+ End;
+
+ { 3) zones fermees de meme couleur que le fond }
+ If D.Holes Then
+  For J := 0 To H-1 Do
+   For I := 0 To W-1 Do
+    If M[LongInt(J)*W+I] <> 0 Then Begin
+     PGReadRGB(I,J,CurC);
+     If BRSeedDistance(CurC) <= BRThr Then
+      M[LongInt(J)*W+I] := 0;
+    End;
+
+ { 4a) elimination des petits ilots de premier plan }
+ MinKeep := Size Div 800;
+ If MinKeep < 3 Then
+  MinKeep := 3;
+ For P := 0 To Size-1 Do Begin
+  If M[P] <> 1 Then
+   Continue;
+  Head := 0;
+  Tail := 1;
+  Queue^[0] := P;
+  M[P] := 2;
+  While Head < Tail Do Begin
+   Q0 := Queue^[Head];
+   Inc(Head);
+   NX := Integer(Q0 Mod W);
+   NY := Integer(Q0 Div W);
+   For Dir := 0 To 3 Do Begin
+    I := NX;
+    J := NY;
+    Case Dir Of
+     0: Dec(I);
+     1: Inc(I);
+     2: Dec(J);
+     3: Inc(J);
+    End;
+    If (I < 0) Or (J < 0) Or (I >= W) Or (J >= H) Then
+     Continue;
+    Comp := LongInt(J)*W+I;
+    If M[Comp] = 1 Then Begin
+     M[Comp] := 2;
+     Queue^[Tail] := Comp;
+     Inc(Tail);
+    End;
+   End;
+  End;
+  If Tail < MinKeep Then
+   For Head := 0 To Tail-1 Do
+    M[Queue^[Head]] := 0;
+ End;
+ For P := 0 To Size-1 Do
+  If M[P] = 2 Then
+   M[P] := 1;
+
+ { 4b) lissage des bords : un pixel isole prend la valeur majoritaire }
+ If D.Smooth And (W > 2) And (H > 2) Then Begin
+  GetMem(Tmp,Size);
+  Move(M^,Tmp^,Size);
+  For J := 1 To H-2 Do
+   For I := 1 To W-2 Do Begin
+    P := LongInt(J)*W+I;
+    Neigh := 0;
+    For K := -1 To 1 Do Begin
+     Inc(Neigh,Tmp[P-W+K]);
+     Inc(Neigh,Tmp[P+W+K]);
+    End;
+    Inc(Neigh,Tmp[P-1]);
+    Inc(Neigh,Tmp[P+1]);
+    If (Tmp[P] = 1) And (Neigh <= 2) Then
+     M[P] := 0
+    Else If (Tmp[P] = 0) And (Neigh >= 7) Then
+     M[P] := 1;
+   End;
+  FreeMem(Tmp,Size);
+ End;
+
+ BgCount := 0;
+ For P := 0 To Size-1 Do
+  If M[P] = 0 Then
+   Inc(BgCount);
+ D.BRPercent := Integer((BgCount*100) Div Size);
+ FreeMem(Queue,Size*SizeOf(LongInt));
+End;
+
+Procedure BRLayout(Var D: TBRState);
+Var
+ I: Integer;
+Begin
+ D.X := (ScreenWidth-BR_W) Div 2;
+ D.Y := (ScreenHeight-BR_H) Div 2;
+ PERect(D.RadioT,D.X+12,D.Y+52,236,20);
+ PERect(D.RadioC,D.X+12,D.Y+74,236,20);
+ For I := 0 To 15 Do
+  PERect(D.Swatches[I],D.X+16+(I Mod 8)*28,D.Y+102+(I Div 8)*26,24,20);
+ PERect(D.MinusB,D.X+12,D.Y+178,24,20);
+ PERect(D.Track,D.X+42,D.Y+178,160,20);
+ PERect(D.PlusB,D.X+208,D.Y+178,24,20);
+ PERect(D.HolesBox,D.X+12,D.Y+212,236,18);
+ PERect(D.SmoothBox,D.X+12,D.Y+234,236,18);
+ PERect(D.BeforeBox,D.X+300,D.Y+65,140,140);
+ PERect(D.AfterBox,D.X+454,D.Y+65,140,140);
+ PERect(D.ApplyButton,D.X+12,D.Y+340,120,25);
+ PERect(D.CancelButton,D.X+144,D.Y+340,108,25);
+ PERect(D.HelpButton,D.X+300,D.Y+340,150,25);
+End;
+
+Procedure BRDrawPreview(Const D: TBRState; Const R: TRect; After: Boolean);
+Var
+ W, H, DrawW, DrawH, X, Y, DX, DY, Left, Top, Disp: Integer;
+ C: TRGBColor;
+Begin
+ PEFill(R,LightGray);
+ PEBevel(R,True);
+ If Not PGHasImage Then
+  Exit;
+ W := CanvasImageW;
+ H := CanvasImageH;
+ RFFitSize(W,H,132,132,DrawW,DrawH);
+ Left := R.Left+(R.Right-R.Left+1-DrawW) Div 2;
+ Top := R.Top+(R.Bottom-R.Top+1-DrawH) Div 2;
+ For Y := 0 To DrawH-1 Do Begin
+  DY := Min(H-1,(LongInt(Y)*H+H Div 2) Div DrawH);
+  For X := 0 To DrawW-1 Do Begin
+   DX := Min(W-1,(LongInt(X)*W+W Div 2) Div DrawW);
+   If After And (D.Mask <> Nil) And (D.Mask[LongInt(DY)*W+DX] = 0) Then Begin
+    If D.Mode = 0 Then Begin
+     If (((X Div 4)+(Y Div 4)) And 1) = 0 Then
+      Disp := LightGray
+     Else
+      Disp := White;
+    End
+    Else
+     Disp := PEDisplayColor(ImageBuffer.Palette[D.ColorIndex]);
+    PutPixel(Left+X,Top+Y,Disp);
+   End
+   Else If PGReadRGB(DX,DY,C) Then
+    PutPixel(Left+X,Top+Y,PEDisplayColor(C));
+  End;
+ End;
+ SetColor(DarkGray);
+ Rectangle(Left-1,Top-1,Left+DrawW,Top+DrawH);
+End;
+
+Procedure BRCheckBox(Const R: TRect; Checked: Boolean; Const Caption: String);
+Begin
+ SetColor(Black);
+ Rectangle(R.Left,R.Top+3,R.Left+11,R.Top+14);
+ If Checked Then Begin
+  Line(R.Left+2,R.Top+8,R.Left+4,R.Top+11);
+  Line(R.Left+4,R.Top+11,R.Left+9,R.Top+5);
+ End;
+ PELabel(R.Left+18,R.Top+4,Caption);
+End;
+
+Procedure BRRadio(Const R: TRect; Checked: Boolean; Const Caption: String);
+Begin
+ SetColor(Black);
+ Circle(R.Left+6,R.Top+10,5);
+ If Checked Then Begin
+  SetFillStyle(SolidFill,Black);
+  FillEllipse(R.Left+6,R.Top+10,2,2);
+ End;
+ PELabel(R.Left+18,R.Top+6,Caption);
+End;
+
+Procedure BRDraw(Var D: TBRState);
+Var
+ R: TRect;
+ I, Fill: Integer;
+ S: String;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut);
+ SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,BR_W,BR_H);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.X+3,D.Y+3,D.X+BR_W-4,D.Y+21);
+ SetColor(White);
+ OutTextXY(D.X+9,D.Y+7,'Supprimer l''arriere-plan - PAINT');
+ OutTextXY(D.X+BR_W-18,D.Y+7,'X');
+ PELabel(D.X+12,D.Y+33,'Remplacer le fond par :');
+ BRRadio(D.RadioT,D.Mode = 0,'Un fond transparent');
+ BRRadio(D.RadioC,D.Mode = 1,'Une couleur :');
+ For I := 0 To 15 Do Begin
+  If D.Mode = 1 Then
+   PESwatch(D.Swatches[I],ImageBuffer.Palette[I],D.ColorIndex = I)
+  Else Begin
+   PEFill(D.Swatches[I],LightGray);
+   PEBevel(D.Swatches[I],True);
+  End;
+ End;
+ Str(D.Tolerance,S);
+ PELabel(D.X+12,D.Y+160,'Sensibilite de detection : '+S+' %');
+ PEButton(D.MinusB,'-',False);
+ PEButton(D.PlusB,'+',False);
+ PEFill(D.Track,White);
+ PEBevel(D.Track,True);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.Track.Left+2,D.Track.Top+2,
+     D.Track.Left+2+(D.Track.Right-D.Track.Left-4)*D.Tolerance Div 100,
+     D.Track.Bottom-2);
+ BRCheckBox(D.HolesBox,D.Holes,'Retirer aussi les zones fermees');
+ BRCheckBox(D.SmoothBox,D.Smooth,'Lisser les bords');
+ PELabel(D.X+12,D.Y+266,'Le fond est estime sur les bords,');
+ PELabel(D.X+12,D.Y+282,'puis propage vers l''interieur');
+ PELabel(D.X+12,D.Y+298,'jusqu''aux contours de l''objet.');
+ PELabel(D.X+12,D.Y+314,'Les petits ilots sont elimines.');
+ PELabel(D.X+300,D.Y+49,'AVANT');
+ PELabel(D.X+454,D.Y+49,'APRES');
+ BRDrawPreview(D,D.BeforeBox,False);
+ BRDrawPreview(D,D.AfterBox,True);
+ Str(D.BRPercent,S);
+ PELabel(D.X+300,D.Y+215,'Fond detecte : '+S+' % de l''image');
+ If PGHasImage Then Begin
+  Str(CanvasImageW,S);
+  PELabel(D.X+300,D.Y+231,'Image : '+S+' x '+PENumber(CanvasImageH)+' px');
+ End;
+ If D.Mode = 0 Then Begin
+  PELabel(D.X+300,D.Y+251,'Le damier indique la transparence.');
+  PELabel(D.X+300,D.Y+267,'Une couleur de transparence est');
+  PELabel(D.X+300,D.Y+283,'reservee (PNG, GIF, ICO).');
+ End
+ Else Begin
+  PELabel(D.X+300,D.Y+251,'Le fond est rempli avec la couleur');
+  PELabel(D.X+300,D.Y+267,'choisie, sans transparence.');
+ End;
+ PEButton(D.ApplyButton,'Appliquer',False);
+ If D.BRPercent = 0 Then Begin
+  PEFill(D.ApplyButton,LightGray);
+  PEBevel(D.ApplyButton,False);
+  SetColor(DarkGray);
+  OutTextXY(D.ApplyButton.Left+(120-TextWidth('Appliquer')) Div 2,
+            D.ApplyButton.Top+8,'Appliquer');
+ End;
+ PEButton(D.CancelButton,'Annuler',False);
+ PEButton(D.HelpButton,'Aide (F1)',False);
+ PEShowMouse;
+ D.Dirty := False;
+End;
+
+Procedure BRHelp;
+Begin
+ ShowMessage('Aide - Supprimer l''arriere-plan',
+  'Le fond est detecte a partir des bords de l''image.'+#10+
+  'Augmentez la sensibilite si du fond reste visible,'+#10+
+  'diminuez-la si l''objet est entame.'+#10+
+  'T : transparent   C : couleur   +/- : sensibilite'+#10+
+  'Z : zones fermees   L : lissage   Entree : appliquer');
+End;
+
+Procedure BRRecompute(Var D: TBRState);
+Begin
+ BRComputeMask(D);
+ D.Dirty := True;
+End;
+
+Function BRApply(Var D: TBRState): Boolean;
+Var
+ P: PByte;
+ I, Free: Integer;
+ Size, N: LongInt;
+ Used: Array[0..255] of LongInt;
+ Magenta: TRGBColor;
+ Mk: PByte;
+ Fill: Byte;
+Begin
+ BRApply := False;
+ If (D.Mask = Nil) Or (D.BRPercent = 0) Or Not PGHasImage Then
+  Exit;
+ Size := LongInt(CanvasImageW)*CanvasImageH;
+ If Size <> D.MaskSize Then
+  Exit;
+ Mk := D.Mask;
+ P := CanvasImage;
+ If D.Mode = 1 Then Begin
+  AddSnapshotToHistory(TOOL_PENCIL);
+  Fill := D.ColorIndex;
+  ImageBuffer.HasTransparency := False;
+ End
+ Else Begin
+  AddSnapshotToHistory(TOOL_PICKER);
+  FillChar(Used,SizeOf(Used),0);
+  For N := 0 To Size-1 Do
+   If Mk[N] <> 0 Then
+    Inc(Used[P[N]]);
+  { indice de palette libre, de preference hors des 16 couleurs de base }
+  Free := -1;
+  For I := 255 DownTo 16 Do
+   If Used[I] = 0 Then Begin
+    Free := I;
+    Break;
+   End;
+  If Free < 0 Then
+   For I := 15 DownTo 0 Do
+    If Used[I] = 0 Then Begin
+     Free := I;
+     Break;
+    End;
+  If Free < 0 Then
+   Free := 255;
+  Magenta := PERGB(255,0,255);
+  ImageBuffer.Palette[Free] := Magenta;
+  If GetMaxColor >= 255 Then
+   PESetHardwareColor(Free,Magenta);
+  Magenta.A := 0;
+  ImageBuffer.TransparentColor := Magenta;
+  ImageBuffer.HasTransparency := True;
+  If (Free >= 16) And (ImageBuffer.BitDepth < 8) Then
+   ImageBuffer.BitDepth := 8;
+  Fill := Free;
+ End;
+ For N := 0 To Size-1 Do
+  If Mk[N] = 0 Then
+   P[N] := Fill;
+ AntsValid := False;
+ RubberValid := False;
+ PreviewValid := False;
+ ImageBuffer.Modified := True;
+ BRApply := True;
+End;
+
+Procedure BRSetTolerance(Var D: TBRState; Value: Integer);
+Begin
+ Value := PEClamp(Value,0,100);
+ If Value <> D.Tolerance Then Begin
+  D.Tolerance := Value;
+  BRRecompute(D);
+ End;
+End;
+
+Procedure BRKeyboard(Var D: TBRState);
+Var
+ K: Char;
+Begin
+ K := ReadKey;
+ If K = #0 Then Begin
+  K := ReadKey;
+  Case Ord(K) Of
+   59: BRHelp;
+   75: BRSetTolerance(D,D.Tolerance-5);
+   77: BRSetTolerance(D,D.Tolerance+5);
+  End;
+  D.Dirty := True;
+  Exit;
+ End;
+ Case K Of
+  #27: Begin D.Accepted := False; D.Done := True; End;
+  #13: If D.BRPercent > 0 Then Begin D.Accepted := True; D.Done := True; End;
+  '+','=': BRSetTolerance(D,D.Tolerance+5);
+  '-': BRSetTolerance(D,D.Tolerance-5);
+ Else
+  Case UpCase(K) Of
+   'T': Begin D.Mode := 0; D.Dirty := True; End;
+   'C': Begin D.Mode := 1; D.Dirty := True; End;
+   'Z': Begin D.Holes := Not D.Holes; BRRecompute(D); End;
+   'L': Begin D.Smooth := Not D.Smooth; BRRecompute(D); End;
+  End;
+ End;
+End;
+
+Procedure BRMouse(Var D: TBRState);
+Var
+ I: Integer;
+ Pressed: Boolean;
+Begin
+ GetMouseStateLocal(D.MX,D.MY,D.MB);
+ Pressed := ((D.MB And 1) <> 0) And ((D.PreviousButtons And 1) = 0);
+ If (D.MB And 1) <> 0 Then
+  If PEInside(D.MX,D.MY,D.Track) Then
+   BRSetTolerance(D,(D.MX-D.Track.Left-2)*100 Div (D.Track.Right-D.Track.Left-4));
+ If Pressed Then Begin
+  If (D.MX >= D.X+BR_W-24) And (D.MX <= D.X+BR_W-4) And
+     (D.MY >= D.Y+3) And (D.MY <= D.Y+21) Then Begin
+   D.Accepted := False;
+   D.Done := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.ApplyButton) Then Begin
+   If D.BRPercent > 0 Then Begin
+    D.Accepted := True;
+    D.Done := True;
+   End;
+  End
+  Else If PEInside(D.MX,D.MY,D.CancelButton) Then Begin
+   D.Accepted := False;
+   D.Done := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.HelpButton) Then Begin
+   PEShowMouse;
+   BRHelp;
+   D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.RadioT) Then Begin
+   D.Mode := 0;
+   D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.RadioC) Then Begin
+   D.Mode := 1;
+   D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.MinusB) Then
+   BRSetTolerance(D,D.Tolerance-5)
+  Else If PEInside(D.MX,D.MY,D.PlusB) Then
+   BRSetTolerance(D,D.Tolerance+5)
+  Else If PEInside(D.MX,D.MY,D.HolesBox) Then Begin
+   D.Holes := Not D.Holes;
+   BRRecompute(D);
+  End
+  Else If PEInside(D.MX,D.MY,D.SmoothBox) Then Begin
+   D.Smooth := Not D.Smooth;
+   BRRecompute(D);
+  End
+  Else
+   For I := 0 To 15 Do
+    If PEInside(D.MX,D.MY,D.Swatches[I]) Then Begin
+     D.Mode := 1;
+     D.ColorIndex := I;
+     D.Dirty := True;
+    End;
+ End;
+ D.PreviousButtons := D.MB;
+End;
+
+Procedure RemoveBackgroundDialog;
+Var
+ D: TBRState;
+ Applied: Boolean;
+Begin
+ If Not PGHasImage Then Begin
+  ShowMessage('Supprimer l''arriere-plan','Aucune image a traiter.');
+  Exit;
+ End;
+ MenuActive := False;
+ RedrawInterface;
+ FillChar(D,SizeOf(D),0);
+ PEInitialize(D.PaletteData);
+ D.Mode := 0;
+ D.ColorIndex := White;
+ D.Tolerance := 30;
+ D.Holes := True;
+ D.Smooth := True;
+ BRLayout(D);
+ GetMouseStateLocal(D.MX,D.MY,D.PreviousButtons);
+ PEHideMouse;
+ PEBuildDisplayPalette;
+ PEShowMouse;
+ BRComputeMask(D);
+ D.Dirty := True;
+ While Not D.Done Do Begin
+  If D.Dirty Then
+   BRDraw(D);
+  If KeyPressed Then
+   BRKeyboard(D);
+  If Not D.Done Then
+   BRMouse(D);
+  Delay(10);
+ End;
+ PEHideMouse;
+ PERestoreHardware(D.PaletteData);
+ Applied := False;
+ If D.Accepted Then
+  Applied := BRApply(D);
+ If D.Mask <> Nil Then
+  FreeMem(D.Mask,D.MaskSize);
+ PEShowMouse;
+ Repeat
+  GetMouseStateLocal(D.MX,D.MY,D.MB);
+  If (D.MB And 1) <> 0 Then
+   Delay(10);
+ Until (D.MB And 1) = 0;
+ OldMouseButtons := 0;
+ MouseButtons := 0;
+ RedrawInterface;
+ If D.Accepted And Not Applied Then
+  ShowMessage('Supprimer l''arriere-plan','Aucun arriere-plan n''a ete detecte.');
+End;
+
+
+{ Flou de l'arriere-plan : le fond est detecte comme pour la suppression
+  d'arriere-plan, puis flou par une moyenne locale qui ne tient compte que
+  des pixels de fond (la couleur de l'objet ne deborde pas sur le fond).
+  Les couleurs obtenues sont ramenees aux couleurs de la palette utilisees
+  par l'image. }
+
+Procedure BLLayout(Var D: TBRState);
+Begin
+ D.X := (ScreenWidth-BR_W) Div 2;
+ D.Y := (ScreenHeight-BR_H) Div 2;
+ PERect(D.MinusB,D.X+12,D.Y+78,24,20);
+ PERect(D.Track,D.X+42,D.Y+78,160,20);
+ PERect(D.PlusB,D.X+208,D.Y+78,24,20);
+ PERect(D.Minus2,D.X+12,D.Y+138,24,20);
+ PERect(D.Track2,D.X+42,D.Y+138,160,20);
+ PERect(D.Plus2,D.X+208,D.Y+138,24,20);
+ PERect(D.HolesBox,D.X+12,D.Y+182,236,18);
+ PERect(D.SmoothBox,D.X+12,D.Y+204,236,18);
+ PERect(D.BeforeBox,D.X+300,D.Y+65,140,140);
+ PERect(D.AfterBox,D.X+454,D.Y+65,140,140);
+ PERect(D.ApplyButton,D.X+12,D.Y+340,120,25);
+ PERect(D.CancelButton,D.X+144,D.Y+340,108,25);
+ PERect(D.HelpButton,D.X+300,D.Y+340,150,25);
+End;
+
+Procedure BLPreviewPixel(Const D: TBRState; DX, DY: Integer; Var C: TRGBColor);
+Var
+ I, J, SX, SY, Count: Integer;
+ SR, SG, SB: LongInt;
+ T: TRGBColor;
+ Mk: PByte;
+Begin
+ SR := 0; SG := 0; SB := 0; Count := 0;
+ Mk := D.Mask;
+ For J := -2 To 2 Do
+  For I := -2 To 2 Do Begin
+   SX := DX+I*D.Radius Div 2;
+   SY := DY+J*D.Radius Div 2;
+   If (SX >= 0) And (SY >= 0) And (SX < CanvasImageW) And (SY < CanvasImageH) Then
+    If Mk[LongInt(SY)*CanvasImageW+SX] = 0 Then
+     If PGReadRGB(SX,SY,T) Then Begin
+      Inc(SR,T.R); Inc(SG,T.G); Inc(SB,T.B);
+      Inc(Count);
+     End;
+  End;
+ If Count > 0 Then Begin
+  C.R := SR Div Count;
+  C.G := SG Div Count;
+  C.B := SB Div Count;
+  C.A := 255;
+ End;
+End;
+
+Procedure BLDrawPreview(Const D: TBRState; Const R: TRect; After: Boolean);
+Var
+ W, H, DrawW, DrawH, X, Y, DX, DY, Left, Top: Integer;
+ C: TRGBColor;
+Begin
+ PEFill(R,LightGray);
+ PEBevel(R,True);
+ If Not PGHasImage Then
+  Exit;
+ W := CanvasImageW;
+ H := CanvasImageH;
+ RFFitSize(W,H,132,132,DrawW,DrawH);
+ Left := R.Left+(R.Right-R.Left+1-DrawW) Div 2;
+ Top := R.Top+(R.Bottom-R.Top+1-DrawH) Div 2;
+ For Y := 0 To DrawH-1 Do Begin
+  DY := Min(H-1,(LongInt(Y)*H+H Div 2) Div DrawH);
+  For X := 0 To DrawW-1 Do Begin
+   DX := Min(W-1,(LongInt(X)*W+W Div 2) Div DrawW);
+   If PGReadRGB(DX,DY,C) Then Begin
+    If After And (D.Mask <> Nil) Then
+     If D.Mask[LongInt(DY)*W+DX] = 0 Then
+      BLPreviewPixel(D,DX,DY,C);
+    PutPixel(Left+X,Top+Y,PEDisplayColor(C));
+   End;
+  End;
+ End;
+ SetColor(DarkGray);
+ Rectangle(Left-1,Top-1,Left+DrawW,Top+DrawH);
+End;
+
+Procedure BLSlider(Const M, T, P: TRect; Value, Max100: Integer);
+Begin
+ PEButton(M,'-',False);
+ PEButton(P,'+',False);
+ PEFill(T,White);
+ PEBevel(T,True);
+ SetFillStyle(SolidFill,Blue);
+ Bar(T.Left+2,T.Top+2,T.Left+2+(T.Right-T.Left-4)*Value Div Max100,T.Bottom-2);
+End;
+
+Procedure BLDraw(Var D: TBRState);
+Var
+ R: TRect;
+ S: String;
+Begin
+ PEHideMouse;
+ SetWriteMode(CopyPut);
+ SetLineStyle(SolidLn,0,NormWidth);
+ PERect(R,D.X,D.Y,BR_W,BR_H);
+ PEFill(R,LightGray);
+ PEBevel(R,False);
+ SetFillStyle(SolidFill,Blue);
+ Bar(D.X+3,D.Y+3,D.X+BR_W-4,D.Y+21);
+ SetColor(White);
+ OutTextXY(D.X+9,D.Y+7,'Flou de l''arriere-plan - PAINT');
+ OutTextXY(D.X+BR_W-18,D.Y+7,'X');
+ PELabel(D.X+12,D.Y+33,'Rendre flou le fond de l''image :');
+ Str(D.Radius,S);
+ PELabel(D.X+12,D.Y+58,'Intensite du flou : '+S+' px');
+ BLSlider(D.MinusB,D.Track,D.PlusB,D.Radius-1,29);
+ Str(D.Tolerance,S);
+ PELabel(D.X+12,D.Y+118,'Sensibilite de detection : '+S+' %');
+ BLSlider(D.Minus2,D.Track2,D.Plus2,D.Tolerance,100);
+ BRCheckBox(D.HolesBox,D.Holes,'Inclure les zones fermees');
+ BRCheckBox(D.SmoothBox,D.Smooth,'Lisser les bords');
+ PELabel(D.X+12,D.Y+246,'Le fond est estime sur les bords,');
+ PELabel(D.X+12,D.Y+262,'puis flou sans toucher a l''objet.');
+ PELabel(D.X+12,D.Y+278,'Les couleurs restent celles de la');
+ PELabel(D.X+12,D.Y+294,'palette de l''image.');
+ PELabel(D.X+300,D.Y+49,'AVANT');
+ PELabel(D.X+454,D.Y+49,'APRES');
+ BLDrawPreview(D,D.BeforeBox,False);
+ BLDrawPreview(D,D.AfterBox,True);
+ Str(D.BRPercent,S);
+ PELabel(D.X+300,D.Y+215,'Fond detecte : '+S+' % de l''image');
+ PEButton(D.ApplyButton,'Appliquer',False);
+ If D.BRPercent = 0 Then Begin
+  PEFill(D.ApplyButton,LightGray);
+  PEBevel(D.ApplyButton,False);
+  SetColor(DarkGray);
+  OutTextXY(D.ApplyButton.Left+(120-TextWidth('Appliquer')) Div 2,
+            D.ApplyButton.Top+8,'Appliquer');
+ End;
+ PEButton(D.CancelButton,'Annuler',False);
+ PEButton(D.HelpButton,'Aide (F1)',False);
+ PEShowMouse;
+ D.Dirty := False;
+End;
+
+Procedure BLHelp;
+Begin
+ ShowMessage('Aide - Flou de l''arriere-plan',
+  'Le fond est detecte a partir des bords de l''image.'+#10+
+  'Seul le fond est flou, l''objet reste net.'+#10+
+  '+/- : intensite   Gauche/Droite : sensibilite'+#10+
+  'Z : zones fermees   L : lissage'+#10+
+  'Entree : appliquer   Echap : annuler');
+End;
+
+Function BLApply(Var D: TBRState): Boolean;
+Var
+ W, H, X, Y, C, NUsed, I, Best, Radius: Integer;
+ Size, N, Lo, Hi, Dist, BestD, Key, LastKey: LongInt;
+ Acc: Array[0..3] of PBRQueue;
+ Pre: PBRQueue;
+ Used: Array[0..255] of Boolean;
+ UsedList: Array[0..255] of Byte;
+ Pix, Mk: PByte;
+ Col: TRGBColor;
+ R, G, B: LongInt;
+ LastIdx: Byte;
+ Pos: LongInt;
+Begin
+ BLApply := False;
+ If (D.Mask = Nil) Or (D.BRPercent = 0) Or Not PGHasImage Then
+  Exit;
+ W := CanvasImageW;
+ H := CanvasImageH;
+ Size := LongInt(W)*H;
+ If Size <> D.MaskSize Then
+  Exit;
+ Mk := D.Mask;
+ Pix := CanvasImage;
+ Radius := D.Radius;
+ FillChar(Used,SizeOf(Used),False);
+ For N := 0 To Size-1 Do
+  Used[Pix[N]] := True;
+ NUsed := 0;
+ For I := 0 To 255 Do
+  If Used[I] Then Begin
+   UsedList[NUsed] := I;
+   Inc(NUsed);
+  End;
+ For C := 0 To 3 Do
+  GetMem(Acc[C],Size*SizeOf(LongInt));
+ GetMem(Pre,(Max(W,H)+1)*SizeOf(LongInt));
+ { passe horizontale : sommes ponderees par le fond }
+ For Y := 0 To H-1 Do
+  For C := 0 To 3 Do Begin
+   Pre^[0] := 0;
+   For X := 0 To W-1 Do Begin
+    Pos := LongInt(Y)*W+X;
+    N := 0;
+    If Mk[Pos] = 0 Then Begin
+     Col := ImageBuffer.Palette[Pix[Pos]];
+     Case C Of
+      0: N := Col.R;
+      1: N := Col.G;
+      2: N := Col.B;
+     Else N := 1; End;
+    End;
+    Pre^[X+1] := Pre^[X]+N;
+   End;
+   For X := 0 To W-1 Do Begin
+    Lo := Max(0,X-Radius);
+    Hi := Min(W-1,X+Radius);
+    Acc[C]^[LongInt(Y)*W+X] := Pre^[Hi+1]-Pre^[Lo];
+   End;
+  End;
+ { passe verticale }
+ For X := 0 To W-1 Do
+  For C := 0 To 3 Do Begin
+   Pre^[0] := 0;
+   For Y := 0 To H-1 Do
+    Pre^[Y+1] := Pre^[Y]+Acc[C]^[LongInt(Y)*W+X];
+   For Y := 0 To H-1 Do Begin
+    Lo := Max(0,Y-Radius);
+    Hi := Min(H-1,Y+Radius);
+    Acc[C]^[LongInt(Y)*W+X] := Pre^[Hi+1]-Pre^[Lo];
+   End;
+  End;
+ AddSnapshotToHistory(TOOL_PENCIL);
+ LastKey := -1;
+ LastIdx := 0;
+ For N := 0 To Size-1 Do
+  If (Mk[N] = 0) And (Acc[3]^[N] > 0) Then Begin
+   R := Acc[0]^[N] Div Acc[3]^[N];
+   G := Acc[1]^[N] Div Acc[3]^[N];
+   B := Acc[2]^[N] Div Acc[3]^[N];
+   Key := (R Shl 16) Or (G Shl 8) Or B;
+   If Key <> LastKey Then Begin
+    BestD := MaxLongInt;
+    Best := 0;
+    For I := 0 To NUsed-1 Do Begin
+     Col := ImageBuffer.Palette[UsedList[I]];
+     Dist := (R-Col.R)*(R-Col.R)+(G-Col.G)*(G-Col.G)+(B-Col.B)*(B-Col.B);
+     If Dist < BestD Then Begin
+      BestD := Dist;
+      Best := UsedList[I];
+     End;
+    End;
+    LastKey := Key;
+    LastIdx := Best;
+   End;
+   Pix[N] := LastIdx;
+  End;
+ FreeMem(Pre,(Max(W,H)+1)*SizeOf(LongInt));
+ For C := 0 To 3 Do
+  FreeMem(Acc[C],Size*SizeOf(LongInt));
+ AntsValid := False;
+ RubberValid := False;
+ PreviewValid := False;
+ ImageBuffer.Modified := True;
+ BLApply := True;
+End;
+
+Procedure BLSet(Var D: TBRState; Value: Integer);
+Begin
+ Value := PEClamp(Value,1,30);
+ If Value <> D.Radius Then Begin
+  D.Radius := Value;
+  D.Dirty := True;
+ End;
+End;
+
+Procedure BLKeyboard(Var D: TBRState);
+Var
+ K: Char;
+Begin
+ K := ReadKey;
+ If K = #0 Then Begin
+  K := ReadKey;
+  Case Ord(K) Of
+   59: BLHelp;
+   75: BRSetTolerance(D,D.Tolerance-5);
+   77: BRSetTolerance(D,D.Tolerance+5);
+  End;
+  D.Dirty := True;
+  Exit;
+ End;
+ Case K Of
+  #27: Begin D.Accepted := False; D.Done := True; End;
+  #13: If D.BRPercent > 0 Then Begin D.Accepted := True; D.Done := True; End;
+  '+','=': BLSet(D,D.Radius+1);
+  '-': BLSet(D,D.Radius-1);
+ Else
+  Case UpCase(K) Of
+   'Z': Begin D.Holes := Not D.Holes; BRRecompute(D); End;
+   'L': Begin D.Smooth := Not D.Smooth; BRRecompute(D); End;
+  End;
+ End;
+End;
+
+Procedure BLMouse(Var D: TBRState);
+Var
+ Pressed: Boolean;
+Begin
+ GetMouseStateLocal(D.MX,D.MY,D.MB);
+ Pressed := ((D.MB And 1) <> 0) And ((D.PreviousButtons And 1) = 0);
+ If (D.MB And 1) <> 0 Then Begin
+  If PEInside(D.MX,D.MY,D.Track) Then
+   BLSet(D,1+(D.MX-D.Track.Left-2)*29 Div (D.Track.Right-D.Track.Left-4));
+  If PEInside(D.MX,D.MY,D.Track2) Then
+   BRSetTolerance(D,(D.MX-D.Track2.Left-2)*100 Div (D.Track2.Right-D.Track2.Left-4));
+ End;
+ If Pressed Then Begin
+  If (D.MX >= D.X+BR_W-24) And (D.MX <= D.X+BR_W-4) And
+     (D.MY >= D.Y+3) And (D.MY <= D.Y+21) Then Begin
+   D.Accepted := False;
+   D.Done := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.ApplyButton) Then Begin
+   If D.BRPercent > 0 Then Begin
+    D.Accepted := True;
+    D.Done := True;
+   End;
+  End
+  Else If PEInside(D.MX,D.MY,D.CancelButton) Then Begin
+   D.Accepted := False;
+   D.Done := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.HelpButton) Then Begin
+   PEShowMouse;
+   BLHelp;
+   D.Dirty := True;
+  End
+  Else If PEInside(D.MX,D.MY,D.MinusB) Then BLSet(D,D.Radius-1)
+  Else If PEInside(D.MX,D.MY,D.PlusB) Then BLSet(D,D.Radius+1)
+  Else If PEInside(D.MX,D.MY,D.Minus2) Then BRSetTolerance(D,D.Tolerance-5)
+  Else If PEInside(D.MX,D.MY,D.Plus2) Then BRSetTolerance(D,D.Tolerance+5)
+  Else If PEInside(D.MX,D.MY,D.HolesBox) Then Begin
+   D.Holes := Not D.Holes;
+   BRRecompute(D);
+  End
+  Else If PEInside(D.MX,D.MY,D.SmoothBox) Then Begin
+   D.Smooth := Not D.Smooth;
+   BRRecompute(D);
+  End;
+ End;
+ D.PreviousButtons := D.MB;
+End;
+
+Procedure BlurBackgroundDialog;
+Var
+ D: TBRState;
+ Applied: Boolean;
+Begin
+ If Not PGHasImage Then Begin
+  ShowMessage('Flou de l''arriere-plan','Aucune image a traiter.');
+  Exit;
+ End;
+ MenuActive := False;
+ RedrawInterface;
+ FillChar(D,SizeOf(D),0);
+ PEInitialize(D.PaletteData);
+ D.Radius := 8;
+ D.Tolerance := 30;
+ D.Holes := False;
+ D.Smooth := True;
+ BLLayout(D);
+ GetMouseStateLocal(D.MX,D.MY,D.PreviousButtons);
+ PEHideMouse;
+ PEBuildDisplayPalette;
+ PEShowMouse;
+ BRComputeMask(D);
+ D.Dirty := True;
+ While Not D.Done Do Begin
+  If D.Dirty Then
+   BLDraw(D);
+  If KeyPressed Then
+   BLKeyboard(D);
+  If Not D.Done Then
+   BLMouse(D);
+  Delay(10);
+ End;
+ PEHideMouse;
+ PERestoreHardware(D.PaletteData);
+ Applied := False;
+ If D.Accepted Then
+  Applied := BLApply(D);
+ If D.Mask <> Nil Then
+  FreeMem(D.Mask,D.MaskSize);
+ PEShowMouse;
+ Repeat
+  GetMouseStateLocal(D.MX,D.MY,D.MB);
+  If (D.MB And 1) <> 0 Then
+   Delay(10);
+ Until (D.MB And 1) = 0;
+ OldMouseButtons := 0;
+ MouseButtons := 0;
+ RedrawInterface;
+ If D.Accepted And Not Applied Then
+  ShowMessage('Flou de l''arriere-plan','Aucun arriere-plan n''a ete detecte.');
+End;
+
+
 { Etirer/Incliner : geometrie inverse, reechantillonnage RVB et palette
   adaptee. Le document indexe reste intact jusqu'a la fin du calcul.
   Les apercus interrogent exactement les memes filtres que le rendu final. }
@@ -20184,6 +21261,12 @@ Begin
     End;
    End;
   End;
+  MENU_TOOLS: Begin
+   Case ItemIndex of
+    0: RemoveBackgroundDialog;
+    1: BlurBackgroundDialog;
+   End;
+  End;
   MENU_HELP: Begin
    Case ItemIndex of
     0: Begin { Aide }
@@ -20444,7 +21527,7 @@ Var
 Begin
  MenuBarHitTest := -1;
  If MY >= MENUBAR_HEIGHT Then Exit;
- For I := 0 to 5 do Begin
+ For I := 0 to 6 do Begin
   X1 := Menus[I].X - 2;
   X2 := Menus[I].X + TextWidth(Menus[I].Title) + 2;
   If (MX >= X1) and (MX <= X2) Then Begin
@@ -20475,7 +21558,7 @@ Procedure MenuNextItem(Step: Integer);
 Var
  N, I: Integer;
 Begin
- If (ActiveMenu < 0) or (ActiveMenu > 5) Then Exit;
+ If (ActiveMenu < 0) or (ActiveMenu > 6) Then Exit;
  N := Menus[ActiveMenu].ItemCount;
  If N <= 0 Then Exit;
  If ActiveMenuItem < 0 Then Begin
@@ -20492,7 +21575,7 @@ End;
 
 Procedure MenuSwitch(NewMenu: Integer);
 Begin
- If (NewMenu < 0) or (NewMenu > 5) then Exit;
+ If (NewMenu < 0) or (NewMenu > 6) then Exit;
  ActiveMenu := NewMenu;
  ActiveMenuItem := -1;
  RedrawInterface;
@@ -20638,11 +21721,11 @@ Begin
      Exit;
     End;
     #75: Begin { Fleche gauche : menu precedent }
-     MenuSwitch((ActiveMenu + 5) mod 6);
+     MenuSwitch((ActiveMenu + 6) mod 7);
      Exit;
     End;
     #77: Begin { Fleche droite : menu suivant }
-     MenuSwitch((ActiveMenu + 1) mod 6);
+     MenuSwitch((ActiveMenu + 1) mod 7);
      Exit;
     End;
    End;
@@ -20681,6 +21764,12 @@ Begin
    #46: Begin { Alt+C - Menu Couleurs }
     MenuActive := True;
     ActiveMenu := MENU_COLORS;
+    ActiveMenuItem := -1;
+    RedrawInterface;
+   End;
+   #24: Begin { Alt+O - Menu Outils }
+    MenuActive := True;
+    ActiveMenu := MENU_TOOLS;
     ActiveMenuItem := -1;
     RedrawInterface;
    End;

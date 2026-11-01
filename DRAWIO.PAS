@@ -33,6 +33,8 @@
   12. Fichiers draw.io : lecture de mxfile (plusieurs pages), XML non compresse
       et compresse (Base64 + Deflate + URL), ecriture (clair ou compresse)
   13. Export SVG, import (fusion) d'un autre fichier draw.io
+  14. Interface en francais par defaut, en anglais si la variable
+      d'environnement LANGUAGE=EN
 }
 
 Program DRAWIO;
@@ -342,6 +344,7 @@ Var
  LastClickT: LongInt;
  LastClickX, LastClickY: Integer;
  Names0, StyleTmp: String;
+ EditRaw: Boolean;        { Champ de nom de fichier : octets bruts (pas d'UTF-8) }
  EditFresh: Boolean;      { Texte initial d'un champ : remplace a la premiere frappe }
  GhostOn, HoverOn: Boolean;   { Ghost XOR et fleches de survol affiches }
  Editing: Boolean;          { Edition d'etiquette en cours }
@@ -496,7 +499,7 @@ Begin
  While I<=Length(S) Do Begin
   B:=Ord(S[I]);
   If B<128 Then Begin
-   If B>=32 Then R:=R+S[I] Else If B=10 Then R:=R+S[I];
+   If (B<>0) And (B<>13) Then R:=R+S[I];
    Inc(I);
   End Else Begin
    U:=0;
@@ -563,6 +566,254 @@ Var H, M, S, S100: Word;
 Begin
  GetTime(H,M,S,S100);
  Ticks:=((LongInt(H)*60+M)*60+S)*100+S100;
+End;
+
+{ ========================================================================== }
+{               LANGUE : francais par defaut, anglais si LANGUAGE=EN         }
+{ ========================================================================== }
+
+Type
+ TTrEntry = Record
+  E: String[40];
+  F: String[44];
+ End;
+
+Const
+ NTR = 194;
+ TrTable: Array[0..NTR-1] Of TTrEntry = (
+  (E:'File'; F:'Fichier'),
+  (E:'Edit'; F:'Edition'),
+  (E:'View'; F:'Affichage'),
+  (E:'Arrange'; F:'Organiser'),
+  (E:'Extras'; F:'Extras'),
+  (E:'Help'; F:'Aide'),
+  (E:'New'; F:'Nouveau'),
+  (E:'Open...'; F:'Ouvrir...'),
+  (E:'Save'; F:'Enreg.'),
+  (E:'Save as...'; F:'Enregistrer sous...'),
+  (E:'Import from file...'; F:'Importer un fichier...'),
+  (E:'Export as SVG...'; F:'Exporter en SVG...'),
+  (E:'Export as XML...'; F:'Exporter en XML...'),
+  (E:'Exit'; F:'Quitter'),
+  (E:'Undo'; F:'Annuler'),
+  (E:'Redo'; F:'Rétablir'),
+  (E:'Cut'; F:'Couper'),
+  (E:'Copy'; F:'Copier'),
+  (E:'Paste'; F:'Coller'),
+  (E:'Delete'; F:'Supprimer'),
+  (E:'Duplicate'; F:'Dupliquer'),
+  (E:'Edit Style...'; F:'Modifier le style...'),
+  (E:'Edit Label'; F:'Modifier le texte'),
+  (E:'Copy Style'; F:'Copier le style'),
+  (E:'Paste Style'; F:'Coller le style'),
+  (E:'Select All'; F:'Tout sélectionner'),
+  (E:'Select None'; F:'Rien sélectionner'),
+  (E:'Select Vertices'; F:'Sélect. les formes'),
+  (E:'Select Edges'; F:'Sélect. les liens'),
+  (E:'Shapes'; F:'Formes'),
+  (E:'Format'; F:'Format'),
+  (E:'Grid'; F:'Grille'),
+  (E:'Snap to Grid'; F:'Aimanter à la grille'),
+  (E:'Zoom In'; F:'Zoom avant'),
+  (E:'Zoom Out'; F:'Zoom arrière'),
+  (E:'Reset Zoom (100%)'; F:'Zoom 100 %'),
+  (E:'Fit to Window'; F:'Ajuster à la fenêtre'),
+  (E:'To Front'; F:'Premier plan'),
+  (E:'To Back'; F:'Arrière-plan'),
+  (E:'Bring Forward'; F:'Avancer'),
+  (E:'Send Backward'; F:'Reculer'),
+  (E:'Group'; F:'Grouper'),
+  (E:'Ungroup'; F:'Dégrouper'),
+  (E:'Align Left'; F:'Aligner à gauche'),
+  (E:'Align Center'; F:'Aligner au centre'),
+  (E:'Align Right'; F:'Aligner à droite'),
+  (E:'Align Top'; F:'Aligner en haut'),
+  (E:'Align Middle'; F:'Aligner au milieu'),
+  (E:'Align Bottom'; F:'Aligner en bas'),
+  (E:'Distribute Horizontally'; F:'Répartir horizontalement'),
+  (E:'Distribute Vertically'; F:'Répartir verticalement'),
+  (E:'Clear Waypoints'; F:'Effacer les points'),
+  (E:'Compressed XML'; F:'XML compressé'),
+  (E:'Grid Size...'; F:'Taille de la grille...'),
+  (E:'Background Color...'; F:'Couleur de fond...'),
+  (E:'New edges: Straight'; F:'Nouveaux liens : droits'),
+  (E:'New edges: Orthogonal'; F:'Nouveaux liens : orthogonaux'),
+  (E:'New edges: Curved'; F:'Nouveaux liens : courbes'),
+  (E:'Add Page'; F:'Ajouter une page'),
+  (E:'Delete Page'; F:'Supprimer la page'),
+  (E:'Rename Page...'; F:'Renommer la page...'),
+  (E:'Previous Page'; F:'Page précédente'),
+  (E:'Next Page'; F:'Page suivante'),
+  (E:'Keyboard Shortcuts'; F:'Raccourcis clavier'),
+  (E:'About DRAWIO'; F:'À propos de DRAWIO'),
+  (E:'Del'; F:'Suppr'),
+  (E:'Search Shapes'; F:'Rechercher'),
+  (E:'General'; F:'Général'),
+  (E:'Flowchart'; F:'Organigr.'),
+  (E:'Arrows'; F:'Flèches'),
+  (E:'Lines'; F:'Lignes'),
+  (E:'Misc'; F:'Divers'),
+  (E:'Diagram'; F:'Diagramme'),
+  (E:'Snap to grid'; F:'Aimanter'),
+  (E:'Background'; F:'Fond'),
+  (E:'Reset View'; F:'Réinit. vue'),
+  (E:'Page: '; F:'Page : '),
+  (E:'Objects: '; F:'Objets : '),
+  (E:'Zoom: '; F:'Zoom : '),
+  (E:'Fill'; F:'Remplir'),
+  (E:'Gradient'; F:'Dégradé'),
+  (E:'Line'; F:'Trait'),
+  (E:'Solid'; F:'Plein'),
+  (E:'Dashed'; F:'Tirets'),
+  (E:'Dotted'; F:'Points'),
+  (E:'Opacity'; F:'Opacité'),
+  (E:'Rounded'; F:'Arrondi'),
+  (E:'Shadow'; F:'Ombre'),
+  (E:'Glass'; F:'Verre'),
+  (E:'Comic'; F:'Comique'),
+  (E:'Edit Style'; F:'Modifier le style'),
+  (E:'Set as Default'; F:'Défaut du style'),
+  (E:'Connection'; F:'Connexion'),
+  (E:'Start'; F:'Début'),
+  (E:'End'; F:'Fin'),
+  (E:'Size '; F:'Taille '),
+  (E:'Align'; F:'Aligner'),
+  (E:'Vert.'; F:'Vert.'),
+  (E:'Word wrap'; F:'Retour auto'),
+  (E:'Font color'; F:'Coul. texte'),
+  (E:'Label bg'; F:'Fond texte'),
+  (E:'Position'; F:'Position'),
+  (E:'Size'; F:'Taille'),
+  (E:'Forward'; F:'Avancer'),
+  (E:'Backward'; F:'Reculer'),
+  (E:'Straight'; F:'Droit'),
+  (E:'Orthogonal'; F:'Orthogonal'),
+  (E:'Elbow'; F:'Coudé'),
+  (E:'Curved'; F:'Courbe'),
+  (E:'Entity Relation'; F:'Entité-relation'),
+  (E:'Style'; F:'Style'),
+  (E:'Text'; F:'Texte'),
+  (E:'Arrange*'; F:'Ordre'),
+  (E:'DistH'; F:'EspH'),
+  (E:'DistV'; F:'EspV'),
+  (E:'Untitled'; F:'Sans titre'),
+  (E:'Rectangle'; F:'Rectangle'),
+  (E:'Rounded Rectangle'; F:'Rectangle arrondi'),
+  (E:'Ellipse'; F:'Ellipse'),
+  (E:'Diamond'; F:'Losange'),
+  (E:'Swimlane'; F:'Couloir'),
+  (E:'Arrow'; F:'Flèche'),
+  (E:'OK'; F:'OK'),
+  (E:'Yes'; F:'Oui'),
+  (E:'No'; F:'Non'),
+  (E:'Cancel'; F:'Annuler'),
+  (E:'None'; F:'Aucune'),
+  (E:'All files'; F:'Tous'),
+  (E:'File name:'; F:'Nom :'),
+  (E:'Confirm'; F:'Confirmation'),
+  (E:'Palette colors:'; F:'Couleurs de la palette :'),
+  (E:'Other colors:'; F:'Autres couleurs :'),
+  (E:'Hex value (#RRGGBB, none):'; F:'Valeur hexa (#RRGGBB, none) :'),
+  (E:'Color'; F:'Couleur'),
+  (E:'Background color'; F:'Couleur de fond'),
+  (E:'New value:'; F:'Nouvelle valeur :'),
+  (E:'Value'; F:'Valeur'),
+  (E:'Grid size'; F:'Taille de la grille'),
+  (E:'Grid size (pixels):'; F:'Taille de la grille (pixels) :'),
+  (E:'Style (key=value;...):'; F:'Style (clé=valeur;...) :'),
+  (E:'Open'; F:'Ouvrir'),
+  (E:'Save as'; F:'Enregistrer sous'),
+  (E:'Import from file'; F:'Importer un fichier'),
+  (E:'Export as SVG'; F:'Exporter en SVG'),
+  (E:'Export as XML'; F:'Exporter en XML'),
+  (E:'Rename page'; F:'Renommer la page'),
+  (E:'Page name:'; F:'Nom de la page :'),
+  (E:'Pages'; F:'Pages'),
+  (E:'Import'; F:'Importer'),
+  (E:'Export'; F:'Exporter'),
+  (E:'Unsaved changes'; F:'Modifications non enregistrées'),
+  (E:'Nothing to undo'; F:'Rien à annuler'),
+  (E:'Nothing to redo'; F:'Rien à rétablir'),
+  (E:'Too many objects'; F:'Trop d''objets'),
+  (E:'Corrupt compressed data'; F:'Données compressées corrompues'),
+  (E:'Cannot open file'; F:'Ouverture du fichier impossible'),
+  (E:'Cannot create file'; F:'Création du fichier impossible'),
+  (E:'Nothing to copy'; F:'Rien à copier'),
+  (E:' object(s) copied'; F:' objet(s) copié(s)'),
+  (E:'Clipboard is empty'; F:'Le presse-papiers est vide'),
+  (E:'Nothing pasted'; F:'Rien n''a été collé'),
+  (E:'Select a group to ungroup'; F:'Sélectionnez un groupe à dégrouper'),
+  (E:'Select two or more shapes'; F:'Sélectionnez au moins deux formes'),
+  (E:'Too many pages'; F:'Trop de pages'),
+  (E:'A diagram needs at least one page'; F:'Un diagramme doit avoir au moins une page'),
+  (E:'File '; F:'Le fichier '),
+  (E:' exists. Overwrite?'; F:' existe. Remplacer ?'),
+  (E:'Saved '; F:'Enregistré : '),
+  (E:'Cannot save the file. '; F:'Enregistrement impossible. '),
+  (E:'File not found: '; F:'Fichier introuvable : '),
+  (E:'This file is not a draw.io diagram.'; F:'Ce fichier n''est pas un diagramme draw.io.'),
+  (E:'Cannot read the diagram. '; F:'Lecture du diagramme impossible. '),
+  (E:'Opened '; F:'Ouvert : '),
+  (E:' object(s) imported'; F:' objet(s) importé(s)'),
+  (E:'Exported '; F:'Exporté : '),
+  (E:'Cannot write the SVG file.'; F:'Écriture du fichier SVG impossible.'),
+  (E:'Cannot write the file.'; F:'Écriture du fichier impossible.'),
+  (E:'Select a shape first'; F:'Sélectionnez d''abord une forme'),
+  (E:'Style copied'; F:'Style copié'),
+  (E:'No style copied'; F:'Aucun style copié'),
+  (E:'Default style updated'; F:'Style par défaut mis à jour'),
+  (E:'Connection: straight'; F:'Connexion : droite'),
+  (E:'Connection: orthogonal'; F:'Connexion : orthogonale'),
+  (E:'Connection: curved'; F:'Connexion : courbe'),
+  (E:'Select a connector'; F:'Sélectionnez un lien'),
+  (E:'Connection to the same shape cancelled'; F:'Connexion à la même forme annulée'),
+  (E:'Multi-select ON'; F:'Sélection multiple activée'),
+  (E:'Multi-select OFF'; F:'Sélection multiple désactivée'),
+  (E:' selected'; F:' sélectionné(s)'),
+  (E:'Fit window'; F:'Ajuster'),
+  (E:'Reset Zoom'; F:'Zoom 100 %'),
+  (E:'Erreur'; F:'Erreur'),
+  (E:'Rename Page'; F:'Renommer la page'),
+  (E:'Home'; F:'Début'));
+
+Var
+ LangFr: Boolean;     { Vrai : interface en francais }
+
+{ Choisit la langue d'apres la variable d'environnement LANGUAGE (EN = anglais) }
+Procedure InitLanguage;
+Var L: String; I: Integer;
+Begin
+ L:=GetEnv('LANGUAGE');
+ For I:=1 To Length(L) Do If (L[I]>='a') And (L[I]<='z') Then L[I]:=Chr(Ord(L[I])-32);
+ LangFr:=Not ((Length(L)>=2) And (Copy(L,1,2)='EN'));
+End;
+
+{ Traduit un libelle (liste d'elements separes par '|' acceptee) }
+Function Tr(Const S: String): String;
+Var I, P: Integer; R, Part: String; Found: Boolean;
+ Function One(Const K: String): String;
+ Var J: Integer;
+ Begin
+  One:=K;
+  For J:=0 To NTR-1 Do If TrTable[J].E=K Then Begin One:=TrTable[J].F; Exit; End;
+ End;
+Begin
+ If Not LangFr Then Begin Tr:=S; Exit; End;
+ If Pos('|',S)=0 Then Begin Tr:=One(S); Exit; End;
+ R:=''; Part:='';
+ For I:=1 To Length(S)+1 Do Begin
+  If (I>Length(S)) Or (S[I]='|') Then Begin
+   If R<>'' Then R:=R+'|';
+   R:=R+One(Part); Part:='';
+  End Else Part:=Part+S[I];
+ End;
+ Tr:=R;
+End;
+
+{ Texte long : version anglaise ou francaise }
+Function Fr(Const En, Fre: String): String;
+Begin
+ If LangFr Then Fr:=Fre Else Fr:=En;
 End;
 
 { ========================================================================== }
@@ -971,10 +1222,23 @@ Begin
  Rectangle(Cl(X1),Cl(Y1),Cl(X2),Cl(Y2));
 End;
 
-Procedure DText(X, Y: LongInt; Const S: String; Col: Integer);
+{ Texte deja en CP437 }
+Procedure DTextRaw(X, Y: LongInt; Const S: String; Col: Integer);
 Begin
  SetColor(Col);
  OutTextXY(Cl(X),Cl(Y),S);
+End;
+
+{ Texte UTF-8 (converti pour la police CP437) }
+Procedure DText(X, Y: LongInt; Const S: String; Col: Integer);
+Begin
+ SetColor(Col);
+ OutTextXY(Cl(X),Cl(Y),U8ToCP(S));
+End;
+
+Function ULen(Const S: String): Integer;
+Begin
+ ULen:=Length(U8ToCP(S));
 End;
 
 Procedure Pen(Dashed: Byte; Width: Integer);
@@ -1074,7 +1338,7 @@ Procedure TextC(X1, X2, Y: Integer; Const S: String; Col: Integer);
 Var T: String;
 Begin
  T:=U8ToCP(S);
- DText((X1+X2-TextWidth(T)) Div 2,Y,T,Col);
+ DTextRaw((X1+X2-TextWidth(T)) Div 2,Y,T,Col);
 End;
 
 { ========================================================================== }
@@ -1359,8 +1623,8 @@ Begin
   Else Px:=(X0+X1-Tw) Div 2;
   End;
   If BgCol>=0 Then DBar(Px-1,Py-1,Px+Tw,Py+Lh-3,BgCol);
-  DText(Px,Py,L.S[I],Col);
-  If (FStyle And 1)<>0 Then DText(Px+1,Py,L.S[I],Col);
+  DTextRaw(Px,Py,L.S[I],Col);
+  If (FStyle And 1)<>0 Then DTextRaw(Px+1,Py,L.S[I],Col);
   If (FStyle And 4)<>0 Then Begin SetColor(Col); DLine(Px,Py+Lh-3,Px+Tw,Py+Lh-3); End;
   Py:=Py+Lh;
  End;
@@ -2389,7 +2653,7 @@ End;
 
 Procedure DoUndo;
 Begin
- If UCount=0 Then Begin StatusMsg:='Nothing to undo'; Exit; End;
+ If UCount=0 Then Begin StatusMsg:=Tr('Nothing to undo'); Exit; End;
  SnapSave(TmpName('R',RHead));
  RHead:=(RHead+1) Mod UNDO_N;
  If RCount<UNDO_N Then Inc(RCount);
@@ -2401,7 +2665,7 @@ End;
 
 Procedure DoRedo;
 Begin
- If RCount=0 Then Begin StatusMsg:='Nothing to redo'; Exit; End;
+ If RCount=0 Then Begin StatusMsg:=Tr('Nothing to redo'); Exit; End;
  SnapSave(TmpName('U',UHead));
  UHead:=(UHead+1) Mod UNDO_N;
  If UCount<UNDO_N Then Inc(UCount);
@@ -3097,7 +3361,7 @@ Begin
    If XAttr(X,'edge')='1' Then Idx:=NewCell(K_EDGE)
    Else If (XAttr(X,'vertex')='1') Or (XAttr(X,'parent')<>'0') Then Idx:=NewCell(K_VERTEX)
    Else Idx:=NewCell(K_LAYER);
-   If Idx=0 Then Begin LastError:='Too many objects'; Continue; End;
+   If Idx=0 Then Begin LastError:=Tr('Too many objects'); Continue; End;
    C:=Cells[Idx];
    C^.Id:=V;
    C^.Parent:=XAttr(X,'parent');
@@ -3169,7 +3433,7 @@ Var X2: PXml;
 Begin
  ParseCompressed:=False;
  XTextToBase64(X,TmpName('A',0));
- If Not InflateFile(TmpName('A',0),TmpName('A',1)) Then Begin LastError:='Corrupt compressed data'; Exit; End;
+ If Not InflateFile(TmpName('A',0),TmpName('A',1)) Then Begin LastError:=Tr('Corrupt compressed data'); Exit; End;
  UrlDecodeFile(TmpName('A',1),TmpName('A',2));
  X2:=XOpen(TmpName('A',2));
  If X2=Nil Then Exit;
@@ -3202,7 +3466,7 @@ Begin
  ReadDrawio:=False;
  NPg:=0; LastError:='';
  X:=XOpen(Name);
- If X=Nil Then Begin LastError:='Cannot open file'; Exit; End;
+ If X=Nil Then Begin LastError:=Tr('Cannot open file'); Exit; End;
  ClearDoc; ResetDocSettings;
  InDiag:=False; Got:=False; PgName:='';
  While XTag(X) Do Begin
@@ -3442,7 +3706,7 @@ Begin
  SnapSave(PageSnap(CurPage));
  Assign(T,Name);
  {$I-} Rewrite(T); {$I+}
- If IOResult<>0 Then Begin LastError:='Cannot create file'; Exit; End;
+ If IOResult<>0 Then Begin LastError:=Tr('Cannot create file'); Exit; End;
  WriteLn(T,'<mxfile host="CloneDRAW" modified="',DateStamp,'" agent="CloneDRAW DRAWIO.PAS 1.0" version="1.0" type="device">');
  For I:=0 To NPages-1 Do Begin
   If Not SnapLoad(PageSnap(I)) Then Continue;
@@ -3461,7 +3725,7 @@ Begin
  SaveModelXml:=False;
  Assign(T,Name);
  {$I-} Rewrite(T); {$I+}
- If IOResult<>0 Then Begin LastError:='Cannot create file'; Exit; End;
+ If IOResult<>0 Then Begin LastError:=Tr('Cannot create file'); Exit; End;
  WriteModel(T);
  Close(T);
  SaveModelXml:=IOResult=0;
@@ -3834,7 +4098,7 @@ Type
   Checked: Boolean;
  End;
  TMenu = Record
-  Title: String[8];
+  Title: String[12];
   X, W: Integer;
   N: Integer;
   Items: Array[0..MaxItems-1] Of TMenuItem;
@@ -3855,6 +4119,7 @@ Const
 
 Var
  Menus: Array[0..NMENUS-1] Of TMenu;
+ AltKeys: Array[0..NMENUS-1] Of Byte;   { Codes Alt+lettre de chaque menu }
 
 Procedure AddItem(M: Integer; Const Cap, Sc: String; Id: Integer);
 Begin
@@ -3880,97 +4145,103 @@ Procedure InitMenus;
 Var M, I, X, W, L: Integer;
 Begin
  FillChar(Menus,SizeOf(Menus),0);
- Menus[0].Title:='File'; Menus[1].Title:='Edit'; Menus[2].Title:='View';
- Menus[3].Title:='Arrange'; Menus[4].Title:='Extras'; Menus[5].Title:='Help';
+ Menus[0].Title:=Tr('File'); Menus[1].Title:=Tr('Edit'); Menus[2].Title:=Tr('View');
+ Menus[3].Title:=Tr('Arrange'); Menus[4].Title:=Tr('Extras'); Menus[5].Title:=Tr('Help');
 
- AddItem(0,'New','Ctrl+N',CM_NEW);
- AddItem(0,'Open...','Ctrl+O',CM_OPEN);
+ AddItem(0,Tr('New'),'Ctrl+N',CM_NEW);
+ AddItem(0,Tr('Open...'),'Ctrl+O',CM_OPEN);
  AddSep(0);
- AddItem(0,'Save','Ctrl+S',CM_SAVE);
- AddItem(0,'Save as...','',CM_SAVEAS);
+ AddItem(0,Tr('Save'),'Ctrl+S',CM_SAVE);
+ AddItem(0,Tr('Save as...'),'',CM_SAVEAS);
  AddSep(0);
- AddItem(0,'Import from file...','',CM_IMPORT);
- AddItem(0,'Export as SVG...','',CM_EXPSVG);
- AddItem(0,'Export as XML...','',CM_EXPXML);
+ AddItem(0,Tr('Import from file...'),'',CM_IMPORT);
+ AddItem(0,Tr('Export as SVG...'),'',CM_EXPSVG);
+ AddItem(0,Tr('Export as XML...'),'',CM_EXPXML);
  AddSep(0);
- AddItem(0,'Exit','Ctrl+Q',CM_QUIT);
+ AddItem(0,Tr('Exit'),'Ctrl+Q',CM_QUIT);
 
- AddItem(1,'Undo','Ctrl+Z',CM_UNDO);
- AddItem(1,'Redo','Ctrl+Y',CM_REDO);
+ AddItem(1,Tr('Undo'),'Ctrl+Z',CM_UNDO);
+ AddItem(1,Tr('Redo'),'Ctrl+Y',CM_REDO);
  AddSep(1);
- AddItem(1,'Cut','Ctrl+X',CM_CUT);
- AddItem(1,'Copy','Ctrl+C',CM_COPY);
- AddItem(1,'Paste','Ctrl+V',CM_PASTE);
- AddItem(1,'Delete','Del',CM_DELETE);
- AddItem(1,'Duplicate','Ctrl+D',CM_DUP);
+ AddItem(1,Tr('Cut'),'Ctrl+X',CM_CUT);
+ AddItem(1,Tr('Copy'),'Ctrl+C',CM_COPY);
+ AddItem(1,Tr('Paste'),'Ctrl+V',CM_PASTE);
+ AddItem(1,Tr('Delete'),Tr('Del'),CM_DELETE);
+ AddItem(1,Tr('Duplicate'),'Ctrl+D',CM_DUP);
  AddSep(1);
- AddItem(1,'Edit Style...','Ctrl+E',CM_EDITSTYLE);
- AddItem(1,'Edit Label','F2',CM_EDITLABEL);
- AddItem(1,'Copy Style','',CM_COPYSTYLE);
- AddItem(1,'Paste Style','',CM_PASTESTYLE);
+ AddItem(1,Tr('Edit Style...'),'Ctrl+E',CM_EDITSTYLE);
+ AddItem(1,Tr('Edit Label'),'F2',CM_EDITLABEL);
+ AddItem(1,Tr('Copy Style'),'',CM_COPYSTYLE);
+ AddItem(1,Tr('Paste Style'),'',CM_PASTESTYLE);
  AddSep(1);
- AddItem(1,'Select All','Ctrl+A',CM_SELALL);
- AddItem(1,'Select None','',CM_SELNONE);
- AddItem(1,'Select Vertices','',CM_SELV);
- AddItem(1,'Select Edges','',CM_SELE);
+ AddItem(1,Tr('Select All'),'Ctrl+A',CM_SELALL);
+ AddItem(1,Tr('Select None'),'',CM_SELNONE);
+ AddItem(1,Tr('Select Vertices'),'',CM_SELV);
+ AddItem(1,Tr('Select Edges'),'',CM_SELE);
 
- AddItem(2,'Shapes','',CM_SHAPES);
- AddItem(2,'Format','',CM_FORMAT);
+ AddItem(2,Tr('Shapes'),'',CM_SHAPES);
+ AddItem(2,Tr('Format'),'',CM_FORMAT);
  AddSep(2);
- AddItem(2,'Grid','F9',CM_GRID);
- AddItem(2,'Snap to Grid','F8',CM_SNAP);
+ AddItem(2,Tr('Grid'),'F9',CM_GRID);
+ AddItem(2,Tr('Snap to Grid'),'F8',CM_SNAP);
  AddSep(2);
- AddItem(2,'Zoom In','+',CM_ZIN);
- AddItem(2,'Zoom Out','-',CM_ZOUT);
- AddItem(2,'Reset Zoom (100%)','Home',CM_Z100);
- AddItem(2,'Fit to Window','End',CM_ZFIT);
+ AddItem(2,Tr('Zoom In'),'+',CM_ZIN);
+ AddItem(2,Tr('Zoom Out'),'-',CM_ZOUT);
+ AddItem(2,Tr('Reset Zoom (100%)'),'Home',CM_Z100);
+ AddItem(2,Tr('Fit to Window'),Tr('End'),CM_ZFIT);
 
- AddItem(3,'To Front','Ctrl+F',CM_FRONT);
- AddItem(3,'To Back','Ctrl+B',CM_BACK);
- AddItem(3,'Bring Forward','',CM_FWD);
- AddItem(3,'Send Backward','',CM_BWD);
+ AddItem(3,Tr('To Front'),'Ctrl+F',CM_FRONT);
+ AddItem(3,Tr('To Back'),'Ctrl+B',CM_BACK);
+ AddItem(3,Tr('Bring Forward'),'',CM_FWD);
+ AddItem(3,Tr('Send Backward'),'',CM_BWD);
  AddSep(3);
- AddItem(3,'Group','Ctrl+G',CM_GROUP);
- AddItem(3,'Ungroup','Ctrl+U',CM_UNGROUP);
+ AddItem(3,Tr('Group'),'Ctrl+G',CM_GROUP);
+ AddItem(3,Tr('Ungroup'),'Ctrl+U',CM_UNGROUP);
  AddSep(3);
- AddItem(3,'Align Left','',CM_AL);
- AddItem(3,'Align Center','',CM_AC);
- AddItem(3,'Align Right','',CM_AR);
- AddItem(3,'Align Top','',CM_AT);
- AddItem(3,'Align Middle','',CM_AM);
- AddItem(3,'Align Bottom','',CM_AB);
- AddItem(3,'Distribute Horizontally','',CM_DH);
- AddItem(3,'Distribute Vertically','',CM_DV);
+ AddItem(3,Tr('Align Left'),'',CM_AL);
+ AddItem(3,Tr('Align Center'),'',CM_AC);
+ AddItem(3,Tr('Align Right'),'',CM_AR);
+ AddItem(3,Tr('Align Top'),'',CM_AT);
+ AddItem(3,Tr('Align Middle'),'',CM_AM);
+ AddItem(3,Tr('Align Bottom'),'',CM_AB);
+ AddItem(3,Tr('Distribute Horizontally'),'',CM_DH);
+ AddItem(3,Tr('Distribute Vertically'),'',CM_DV);
  AddSep(3);
- AddItem(3,'Clear Waypoints','',CM_CLRPTS);
+ AddItem(3,Tr('Clear Waypoints'),'',CM_CLRPTS);
 
- AddItem(4,'Compressed XML','',CM_COMPR);
- AddItem(4,'Grid Size...','',CM_GRIDSZ);
- AddItem(4,'Background Color...','',CM_BGCOL);
+ AddItem(4,Tr('Compressed XML'),'',CM_COMPR);
+ AddItem(4,Tr('Grid Size...'),'',CM_GRIDSZ);
+ AddItem(4,Tr('Background Color...'),'',CM_BGCOL);
  AddSep(4);
- AddItem(4,'New edges: Straight','',CM_ESTR);
- AddItem(4,'New edges: Orthogonal','',CM_EORT);
- AddItem(4,'New edges: Curved','',CM_ECUR);
+ AddItem(4,Tr('New edges: Straight'),'',CM_ESTR);
+ AddItem(4,Tr('New edges: Orthogonal'),'',CM_EORT);
+ AddItem(4,Tr('New edges: Curved'),'',CM_ECUR);
  AddSep(4);
- AddItem(4,'Add Page','',CM_ADDPAGE);
- AddItem(4,'Delete Page','',CM_DELPAGE);
- AddItem(4,'Rename Page...','',CM_RENPAGE);
- AddItem(4,'Previous Page','PgUp',CM_PREVPAGE);
- AddItem(4,'Next Page','PgDn',CM_NEXTPAGE);
+ AddItem(4,Tr('Add Page'),'',CM_ADDPAGE);
+ AddItem(4,Tr('Delete Page'),'',CM_DELPAGE);
+ AddItem(4,Tr('Rename Page...'),'',CM_RENPAGE);
+ AddItem(4,Tr('Previous Page'),'PgUp',CM_PREVPAGE);
+ AddItem(4,Tr('Next Page'),'PgDn',CM_NEXTPAGE);
 
- AddItem(5,'Keyboard Shortcuts','F1',CM_KEYS);
- AddItem(5,'About DRAWIO','',CM_ABOUT);
+ AddItem(5,Tr('Keyboard Shortcuts'),'F1',CM_KEYS);
+ AddItem(5,Tr('About DRAWIO'),'',CM_ABOUT);
 
  X:=6;
  For M:=0 To NMENUS-1 Do Begin
   Menus[M].X:=X;
   W:=0;
   For I:=0 To Menus[M].N-1 Do Begin
-   L:=Length(Menus[M].Items[I].Caption)*8+Length(Menus[M].Items[I].Shortcut)*8+44;
+   L:=ULen(Menus[M].Items[I].Caption)*8+ULen(Menus[M].Items[I].Shortcut)*8+44;
    If L>W Then W:=L;
   End;
   Menus[M].W:=W;
-  X:=X+Length(Menus[M].Title)*8+16;
+  X:=X+ULen(Menus[M].Title)*8+16;
+ End;
+ { Alt+lettre : codes de balayage }
+ If LangFr Then Begin
+  AltKeys[0]:=33; AltKeys[1]:=18; AltKeys[2]:=30; AltKeys[3]:=24; AltKeys[4]:=45; AltKeys[5]:=23;
+ End Else Begin
+  AltKeys[0]:=33; AltKeys[1]:=18; AltKeys[2]:=47; AltKeys[3]:=30; AltKeys[4]:=45; AltKeys[5]:=35;
  End;
 End;
 
@@ -3998,13 +4269,13 @@ Begin
  For M:=0 To NMENUS-1 Do Begin
   X:=Menus[M].X;
   If MenuOpen And (ActiveMenu=M) Then Begin
-   DBar(X-5,0,X+Length(Menus[M].Title)*8+4,MENU_H-2,C_ACCENT);
+   DBar(X-5,0,X+ULen(Menus[M].Title)*8+4,MENU_H-2,C_ACCENT);
    DText(X,4,Menus[M].Title,C_WHITE);
   End Else DText(X,4,Menus[M].Title,C_BLACK);
-  AddHit(X-5,0,X+Length(Menus[M].Title)*8+4,MENU_H-1,A_MENU,M,0);
+  AddHit(X-5,0,X+ULen(Menus[M].Title)*8+4,MENU_H-1,A_MENU,M,0);
  End;
  { Nom du fichier a droite }
- If FileName='' Then T:='Untitled' Else T:=FileName;
+ If FileName='' Then T:=Tr('Untitled') Else T:=FileName;
  If Length(T)>26 Then T:='...'+Copy(T,Length(T)-22,23);
  If Modified Then T:=T+' *';
  DText(SCR_W-Length(T)*8-6,4,T,C_DARK);
@@ -4031,11 +4302,11 @@ Begin
     DBar(X+2,Y+2+I*16,X+W-2,Y+2+I*16+15,C_ACCENT);
     DText(X+22,Y+2+I*16+4,It^.Caption,C_WHITE);
     DText(X+W-Length(It^.Shortcut)*8-8,Y+2+I*16+4,It^.Shortcut,C_WHITE);
-    If MenuChecked(It^.Id) Then DText(X+7,Y+2+I*16+4,#251,C_WHITE);
+    If MenuChecked(It^.Id) Then DTextRaw(X+7,Y+2+I*16+4,#251,C_WHITE);
    End Else Begin
     DText(X+22,Y+2+I*16+4,It^.Caption,C_BLACK);
     DText(X+W-Length(It^.Shortcut)*8-8,Y+2+I*16+4,It^.Shortcut,C_DARK);
-    If MenuChecked(It^.Id) Then DText(X+7,Y+2+I*16+4,#251,C_BLACK);
+    If MenuChecked(It^.Id) Then DTextRaw(X+7,Y+2+I*16+4,#251,C_BLACK);
    End;
   End;
  End;
@@ -4189,7 +4460,7 @@ Begin
  DBar(X,TOOL_Y+3,X+46,TOOL_Y+TOOL_H-4,C_WHITE);
  DRect(X,TOOL_Y+3,X+46,TOOL_Y+TOOL_H-4,C_BORDER);
  DText(X+4,TOOL_Y+9,Z,C_BLACK);
- DText(X+36,TOOL_Y+9,#31,C_DARK);
+ DTextRaw(X+36,TOOL_Y+9,#31,C_DARK);
  AddHit(X,TOOL_Y+2,X+46,TOOL_Y+TOOL_H-3,A_TOOL,3,0);
  X:=X+50; Sep;
  Btn(4,22); Btn(2,22); Sep;
@@ -4207,11 +4478,11 @@ Begin
  Btn(13,22); Btn(14,22); Sep;
  Btn(15,22);
  { Boutons Save / Exit a droite }
- DBar(SCR_W-92,TOOL_Y+3,SCR_W-52,TOOL_Y+TOOL_H-4,C_ACCENT);
- TextC(SCR_W-92,SCR_W-52,TOOL_Y+9,'Save',C_WHITE);
- AddHit(SCR_W-92,TOOL_Y+3,SCR_W-52,TOOL_Y+TOOL_H-4,A_TOOL,20,0);
- TextC(SCR_W-48,SCR_W-6,TOOL_Y+9,'Exit',C_BLACK);
- AddHit(SCR_W-48,TOOL_Y+3,SCR_W-6,TOOL_Y+TOOL_H-4,A_TOOL,21,0);
+ DBar(SCR_W-132,TOOL_Y+3,SCR_W-72,TOOL_Y+TOOL_H-4,C_ACCENT);
+ TextC(SCR_W-132,SCR_W-72,TOOL_Y+9,Tr('Save'),C_WHITE);
+ AddHit(SCR_W-132,TOOL_Y+3,SCR_W-72,TOOL_Y+TOOL_H-4,A_TOOL,20,0);
+ TextC(SCR_W-68,SCR_W-6,TOOL_Y+9,Tr('Exit'),C_BLACK);
+ AddHit(SCR_W-68,TOOL_Y+3,SCR_W-6,TOOL_Y+TOOL_H-4,A_TOOL,21,0);
 End;
 
 { ========================================================================== }
@@ -4221,7 +4492,8 @@ End;
 Function MatchDef(D: Integer): Boolean;
 Begin
  If SearchText='' Then MatchDef:=True
- Else MatchDef:=Pos(UpStr(SearchText),UpStr(ShapeDefs[D].Name))>0;
+ Else MatchDef:=(Pos(UpStr(SearchText),UpStr(ShapeDefs[D].Name))>0) Or
+                 (Pos(UpStr(SearchText),UpStr(Tr(ShapeDefs[D].Name)))>0);
 End;
 
 Function CellShapeOfDef(D: Integer): Byte;
@@ -4238,7 +4510,7 @@ Begin
  { Zone de recherche }
  DBar(4,PANEL_Y+4,LeftW-8,PANEL_Y+19,C_WHITE);
  If SearchFocus Then DRect(4,PANEL_Y+4,LeftW-8,PANEL_Y+19,C_ACCENT) Else DRect(4,PANEL_Y+4,LeftW-8,PANEL_Y+19,C_BORDER);
- If SearchText='' Then DText(8,PANEL_Y+9,'Search Shapes',C_BORDER)
+ If SearchText='' Then DText(8,PANEL_Y+9,Tr('Search Shapes'),C_BORDER)
  Else DText(8,PANEL_Y+9,Copy(SearchText,1,12)+Chr(95),C_BLACK);
  AddHit(4,PANEL_Y+4,LeftW-8,PANEL_Y+19,A_SEARCH,0,0);
  Top:=PANEL_Y+24;
@@ -4265,8 +4537,8 @@ Begin
  For S:=0 To NSEC-1 Do Begin
   If (Y>=Top) And (Y+15<=Bottom) Then Begin
    DBar(0,Y,LeftW-2,Y+15,C_PANEL);
-   If PalOpen[S] Then DText(4,Y+4,#31,C_DARK) Else DText(4,Y+4,#16,C_DARK);
-   DText(16,Y+4,SecNames[S],C_BLACK);
+   If PalOpen[S] Then DTextRaw(4,Y+4,#31,C_DARK) Else DTextRaw(4,Y+4,#16,C_DARK);
+   DText(16,Y+4,Tr(SecNames[S]),C_BLACK);
    SetColor(C_BORDER); DLine(0,Y+15,LeftW-2,Y+15);
    AddHit(0,Y,LeftW-2,Y+15,A_PALHEAD,S,0);
   End;
@@ -4294,10 +4566,10 @@ Begin
  { Boutons de defilement }
  If PalTotal>Bottom-Top Then Begin
   DBar(LeftW-16,Bottom-26,LeftW-3,Bottom-14,C_PANEL); DRect(LeftW-16,Bottom-26,LeftW-3,Bottom-14,C_DARK);
-  DText(LeftW-13,Bottom-23,#30,C_BLACK);
+  DTextRaw(LeftW-13,Bottom-23,#30,C_BLACK);
   AddHit(LeftW-16,Bottom-26,LeftW-3,Bottom-14,A_PALSCROLL,-1,0);
   DBar(LeftW-16,Bottom-12,LeftW-3,Bottom,C_PANEL); DRect(LeftW-16,Bottom-12,LeftW-3,Bottom,C_DARK);
-  DText(LeftW-13,Bottom-10,#31,C_BLACK);
+  DTextRaw(LeftW-13,Bottom-10,#31,C_BLACK);
   AddHit(LeftW-16,Bottom-12,LeftW-3,Bottom,A_PALSCROLL,1,0);
  End;
 End;
@@ -4322,7 +4594,16 @@ Const
  BT_AL = 30; BT_AC = 31; BT_AR = 32; BT_VT = 33; BT_VM = 34; BT_VB = 35;
  BT_ALIGN0 = 40;
 
-Const TabNames: Array[0..2] Of String[8] = ('Style','Text','Arrange');
+Const TabNames: Array[0..2] Of String[9] = ('Style','Text','Arrange*');
+
+{ Libelle d'onglet (le '*' ne sert qu'a distinguer le menu Arrange) }
+Function TabLabel(I: Integer): String;
+Var T: String;
+Begin
+ T:=Tr(TabNames[I]);
+ If (T<>'') And (T[Length(T)]='*') Then Delete(T,Length(T),1);
+ TabLabel:=T;
+End;
 
 Function SelHasEdge: Boolean;
 Var I: Integer;
@@ -4347,18 +4628,18 @@ Function ConnName(Const Sty: String): String;
 Var Es: String;
 Begin
  Es:=StyStr(Sty,'edgeStyle','');
- If StyBool(Sty,'curved',False) Then ConnName:='Curved'
- Else If Pos('orthogonal',Es)>0 Then ConnName:='Orthogonal'
- Else If Pos('lbow',Es)>0 Then ConnName:='Elbow'
- Else If Pos('ntityRelation',Es)>0 Then ConnName:='Entity Relation'
- Else ConnName:='Straight';
+ If StyBool(Sty,'curved',False) Then ConnName:=Tr('Curved')
+ Else If Pos('orthogonal',Es)>0 Then ConnName:=Tr('Orthogonal')
+ Else If Pos('lbow',Es)>0 Then ConnName:=Tr('Elbow')
+ Else If Pos('ntityRelation',Es)>0 Then ConnName:=Tr('Entity Relation')
+ Else ConnName:=Tr('Straight');
 End;
 
 Function DashName(Const Sty: String): String;
 Begin
  If StyBool(Sty,'dashed',False) Then Begin
-  If Copy(StyStr(Sty,'dashPattern',''),1,2)='1 ' Then DashName:='Dotted' Else DashName:='Dashed';
- End Else DashName:='Solid';
+  If Copy(StyStr(Sty,'dashPattern',''),1,2)='1 ' Then DashName:=Tr('Dotted') Else DashName:=Tr('Dashed');
+ End Else DashName:=Tr('Solid');
 End;
 
 
@@ -4401,22 +4682,22 @@ Begin
  If N=0 Then Begin
   { Onglet Diagram }
   DBar(RX+1,PANEL_Y,SCR_W-1,PANEL_Y+16,C_WHITE);
-  TextC(RX,SCR_W-1,PANEL_Y+5,'Diagram',C_BLACK);
+  TextC(RX,SCR_W-1,PANEL_Y+5,Tr('Diagram'),C_BLACK);
   SetColor(C_BORDER); DLine(RX+1,PANEL_Y+16,SCR_W-1,PANEL_Y+16);
   Y:=PANEL_Y+24;
-  DrawCheck(RX+8,Y,GridOn,'Grid',CK_GRID,True);
+  DrawCheck(RX+8,Y,GridOn,Tr('Grid'),CK_GRID,True);
   DrawSpin(RX+RightW-62,Y-3,'',IStr(GridSize)+' pt',F_GRIDSZ,54);
   Inc(Y,20);
-  DrawCheck(RX+8,Y,SnapOn,'Snap to grid',CK_SNAP,True);
+  DrawCheck(RX+8,Y,SnapOn,Tr('Snap to grid'),CK_SNAP,True);
   Inc(Y,20);
-  DrawCheck(RX+8,Y,BgColor>=0,'Background',CK_BG,True);
+  DrawCheck(RX+8,Y,BgColor>=0,Tr('Background'),CK_BG,True);
   DrawSwatch(RX+RightW-48,Y-2,RX+RightW-8,Y+11,BgColor,A_COLOR,CO_BG);
   Inc(Y,22); Sep;
-  Btn('Reset View',BT_RESETVIEW);
+  Btn(Tr('Reset View'),BT_RESETVIEW);
   Inc(Y,6); Sep;
-  DText(RX+8,Y,'Page: '+Copy(PageName,1,12),C_DARK); Inc(Y,14);
-  DText(RX+8,Y,'Objects: '+IStr(NCells),C_DARK); Inc(Y,14);
-  DText(RX+8,Y,'Zoom: '+IStr(Zoom)+'%',C_DARK);
+  DText(RX+8,Y,Tr('Page: ')+Copy(PageName,1,12),C_DARK); Inc(Y,14);
+  DText(RX+8,Y,Tr('Objects: ')+IStr(NCells),C_DARK); Inc(Y,14);
+  DText(RX+8,Y,Tr('Zoom: ')+IStr(Zoom)+'%',C_DARK);
   Exit;
  End;
  { Onglets }
@@ -4426,10 +4707,10 @@ Begin
   X2:=X1+Tb-1;
   If I=FmtTab Then Begin
    DBar(X1,PANEL_Y,X2,PANEL_Y+16,C_PANEL);
-   DText(X1+(Tb-8*Length(TabNames[I])) Div 2,PANEL_Y+5,TabNames[I],C_BLACK);
+   TextC(X1,X2,PANEL_Y+5,TabLabel(I),C_BLACK);
   End Else Begin
    DBar(X1,PANEL_Y,X2,PANEL_Y+16,C_BORDER);
-   DText(X1+(Tb-8*Length(TabNames[I])) Div 2,PANEL_Y+5,TabNames[I],C_DARK);
+   TextC(X1,X2,PANEL_Y+5,TabLabel(I),C_DARK);
   End;
   SetColor(C_BORDER); DLine(X2,PANEL_Y,X2,PANEL_Y+16);
   AddHit(X1,PANEL_Y,X2,PANEL_Y+16,A_TAB,I,0);
@@ -4451,16 +4732,16 @@ Begin
    End;
    Inc(Y,44); Sep;
    Rgb:=CellFill(FirstSel);
-   DrawCheck(RX+8,Y,Rgb>=0,'Fill',CK_FILL,True);
+   DrawCheck(RX+8,Y,Rgb>=0,Tr('Fill'),CK_FILL,True);
    DrawSwatch(RX+RightW-48,Y-2,RX+RightW-8,Y+11,Rgb,A_COLOR,CO_FILL);
    Inc(Y,17);
    Rgb:=ParseColor(StyStr(Sty,'gradientColor',''),-1);
-   DrawCheck(RX+8,Y,Rgb>=0,'Gradient',CK_GRAD,True);
+   DrawCheck(RX+8,Y,Rgb>=0,Tr('Gradient'),CK_GRAD,True);
    DrawSwatch(RX+RightW-48,Y-2,RX+RightW-8,Y+11,Rgb,A_COLOR,CO_GRAD);
    Inc(Y,18); Sep;
   End;
   Rgb:=CellStroke(FirstSel);
-  DrawCheck(RX+8,Y,Rgb>=0,'Line',CK_LINE,True);
+  DrawCheck(RX+8,Y,Rgb>=0,Tr('Line'),CK_LINE,True);
   DrawSwatch(RX+RightW-48,Y-2,RX+RightW-8,Y+11,Rgb,A_COLOR,CO_STROKE);
   Inc(Y,18);
   DrawDrop(RX+8,Y,RX+84,Y+14,DashName(Sty),DD_DASH);
@@ -4468,85 +4749,85 @@ Begin
   Inc(Y,20);
   If IsEdge Then Begin
    Sep;
-   DText(RX+8,Y+3,'Connection',C_BLACK);
+   DText(RX+8,Y+3,Tr('Connection'),C_BLACK);
    Inc(Y,15);
    DrawDrop(RX+8,Y,SCR_W-8,Y+14,ConnName(Sty),DD_CONN);
    Inc(Y,20);
-   DText(RX+8,Y+3,'Start',C_BLACK);
+   DText(RX+8,Y+3,Tr('Start'),C_BLACK);
    DrawDrop(RX+52,Y,SCR_W-8,Y+14,StyStr(Sty,'startArrow','none'),DD_START);
    Inc(Y,18);
-   DText(RX+8,Y+3,'End',C_BLACK);
+   DText(RX+8,Y+3,Tr('End'),C_BLACK);
    DrawDrop(RX+52,Y,SCR_W-8,Y+14,StyStr(Sty,'endArrow','classic'),DD_END);
    Inc(Y,22);
   End;
   Sep;
   If IsV Then Begin
-   DText(RX+8,Y+3,'Opacity',C_BLACK);
+   DText(RX+8,Y+3,Tr('Opacity'),C_BLACK);
    DrawSpin(RX+RightW-70,Y,'',IStr(StyInt(Sty,'opacity',100))+' %',F_OPACITY,62);
    Inc(Y,20); Sep;
   End;
-  DrawCheck(RX+8,Y,StyBool(Sty,'rounded',False),'Rounded',CK_ROUND,True);
-  DrawCheck(RX+RightW Div 2+4,Y,StyBool(Sty,'shadow',False),'Shadow',CK_SHADOW,True);
+  DrawCheck(RX+8,Y,StyBool(Sty,'rounded',False),Tr('Rounded'),CK_ROUND,True);
+  DrawCheck(RX+RightW Div 2+4,Y,StyBool(Sty,'shadow',False),Tr('Shadow'),CK_SHADOW,True);
   Inc(Y,15);
   If IsV Then Begin
-   DrawCheck(RX+8,Y,StyBool(Sty,'glass',False),'Glass',CK_GLASS,True);
-   DrawCheck(RX+RightW Div 2+4,Y,StyBool(Sty,'comic',False),'Comic',CK_COMIC,True);
+   DrawCheck(RX+8,Y,StyBool(Sty,'glass',False),Tr('Glass'),CK_GLASS,True);
+   DrawCheck(RX+RightW Div 2+4,Y,StyBool(Sty,'comic',False),Tr('Comic'),CK_COMIC,True);
    Inc(Y,15);
   End;
   Inc(Y,2); Sep;
-  Btn('Edit Style',BT_EDITSTYLE);
-  Btn('Copy Style',BT_COPYSTYLE);
-  Btn('Paste Style',BT_PASTESTYLE);
-  Btn('Set as Default',BT_SETDEFAULT);
-  If IsEdge And (C^.NPts>0) Then Btn('Clear Waypoints',BT_CLRPTS);
+  Btn(Tr('Edit Style'),BT_EDITSTYLE);
+  Btn(Tr('Copy Style'),BT_COPYSTYLE);
+  Btn(Tr('Paste Style'),BT_PASTESTYLE);
+  Btn(Tr('Set as Default'),BT_SETDEFAULT);
+  If IsEdge And (C^.NPts>0) Then Btn(Tr('Clear Waypoints'),BT_CLRPTS);
  End Else If FmtTab=1 Then Begin
   { -------- Onglet Text -------- }
   Fs:=Integer(StyInt(Sty,'fontSize',12));
   Fst:=Integer(StyInt(Sty,'fontStyle',0));
-  DrawSpin(RX+8,Y,'Size ',IStr(Fs)+' pt',F_FSIZE,RightW-24-40);
+  DrawSpin(RX+8,Y,Tr('Size '),IStr(Fs)+' pt',F_FSIZE,RightW-24-40);
   Inc(Y,22);
   Tgl(RX+8,28,'B',(Fst And 1)<>0,CK_BOLD);
   Tgl(RX+40,28,'I',(Fst And 2)<>0,CK_ITAL);
   Tgl(RX+72,28,'U',(Fst And 4)<>0,CK_UNDER);
   Inc(Y,22); Sep;
-  DText(RX+8,Y+3,'Align',C_BLACK);
+  DText(RX+8,Y+3,Tr('Align'),C_BLACK);
   ABtn(RX+56,26,'L',BT_AL); ABtn(RX+84,26,'C',BT_AC); ABtn(RX+112,26,'R',BT_AR);
   Inc(Y,20);
-  DText(RX+8,Y+3,'Vert.',C_BLACK);
+  DText(RX+8,Y+3,Tr('Vert.'),C_BLACK);
   ABtn(RX+56,26,'T',BT_VT); ABtn(RX+84,26,'M',BT_VM); ABtn(RX+112,26,'B',BT_VB);
   Inc(Y,22); Sep;
-  DrawCheck(RX+8,Y,StyStr(Sty,'whiteSpace','')='wrap','Word wrap',CK_WRAP,True);
+  DrawCheck(RX+8,Y,StyStr(Sty,'whiteSpace','')='wrap',Tr('Word wrap'),CK_WRAP,True);
   Inc(Y,20); Sep;
-  DText(RX+8,Y+2,'Font color',C_BLACK);
+  DText(RX+8,Y+2,Tr('Font color'),C_BLACK);
   DrawSwatch(RX+RightW-48,Y-2,RX+RightW-8,Y+11,CellFontColor(FirstSel),A_COLOR,CO_FONT);
   Inc(Y,20);
-  DText(RX+8,Y+2,'Label bg',C_BLACK);
+  DText(RX+8,Y+2,Tr('Label bg'),C_BLACK);
   DrawSwatch(RX+RightW-48,Y-2,RX+RightW-8,Y+11,ParseColor(StyStr(Sty,'labelBackgroundColor',''),-1),A_COLOR,CO_LBLBG);
   Inc(Y,24);
-  Btn('Edit Label',BT_EDITSTYLE+100);
+  Btn(Tr('Edit Label'),BT_EDITSTYLE+100);
  End Else Begin
   { -------- Onglet Arrange -------- }
   If IsV Then Begin
-   DText(RX+8,Y,'Position',C_DARK); Inc(Y,12);
+   DText(RX+8,Y,Tr('Position'),C_DARK); Inc(Y,12);
    DrawSpin(RX+8,Y,'X ',IStr(C^.X),F_X,RightW Div 2-34);
    DrawSpin(RX+RightW Div 2+2,Y,'Y ',IStr(C^.Y),F_Y,RightW Div 2-34);
    Inc(Y,20);
-   DText(RX+8,Y,'Size',C_DARK); Inc(Y,12);
+   DText(RX+8,Y,Tr('Size'),C_DARK); Inc(Y,12);
    DrawSpin(RX+8,Y,'W ',IStr(C^.W),F_W,RightW Div 2-34);
    DrawSpin(RX+RightW Div 2+2,Y,'H ',IStr(C^.H),F_H,RightW Div 2-34);
    Inc(Y,22); Sep;
   End;
-  Btn2('To Front',BT_FRONT,'To Back',BT_BACK);
-  Btn2('Forward',BT_FWD,'Backward',BT_BWD);
+  Btn2(Tr('To Front'),BT_FRONT,Tr('To Back'),BT_BACK);
+  Btn2(Tr('Forward'),BT_FWD,Tr('Backward'),BT_BWD);
   Sep;
-  Btn2('Group',BT_GROUP,'Ungroup',BT_UNGROUP);
+  Btn2(Tr('Group'),BT_GROUP,Tr('Ungroup'),BT_UNGROUP);
   Sep;
   If N>=2 Then Begin
-   DText(RX+8,Y,'Align',C_DARK); Inc(Y,12);
+   DText(RX+8,Y,Tr('Align'),C_DARK); Inc(Y,12);
    ABtn(RX+8,22,'L',BT_ALIGN0); ABtn(RX+34,22,'C',BT_ALIGN0+1); ABtn(RX+60,22,'R',BT_ALIGN0+2);
    ABtn(RX+86,22,'T',BT_ALIGN0+3); ABtn(RX+112,22,'M',BT_ALIGN0+4);
    Inc(Y,18);
-   ABtn(RX+8,22,'B',BT_ALIGN0+5); ABtn(RX+34,50,'DistH',BT_ALIGN0+6); ABtn(RX+88,50,'DistV',BT_ALIGN0+7);
+   ABtn(RX+8,22,'B',BT_ALIGN0+5); ABtn(RX+34,50,Tr('DistH'),BT_ALIGN0+6); ABtn(RX+88,50,Tr('DistV'),BT_ALIGN0+7);
   End;
  End;
 End;
@@ -4592,8 +4873,8 @@ Begin
  SetText(1);
  T:=StatusMsg;
  If T='' Then Begin
-  If SelCount=0 Then T:='Click a shape to insert it. Right button: pan.'
-  Else T:=IStr(SelCount)+' selected';
+  If SelCount=0 Then T:=Fr('Click a shape to insert it. Right button: pan.','Cliquez une forme pour l''insérer')
+  Else T:=IStr(SelCount)+Tr(' selected');
  End;
  DText(4,Y1+4,Copy(T,1,58),C_BLACK);
  T:=IStr(Zoom)+'%';
@@ -4752,7 +5033,7 @@ Begin
    End;
   End;
   #32..#126,#128..#254: Begin
-   U:=CPToU8(EvKey);
+   If EditRaw Then U:=EvKey Else U:=CPToU8(EvKey);
    If Length(S)+Length(U)<=MaxLen Then Begin Insert(U,S,P+1); Inc(P,Length(U)); End;
   End;
  Else LineEditKey:=False;
@@ -4765,11 +5046,12 @@ Var T, Pre: String; Off, Cx, Vw: Integer;
 Begin
  DBar(X1,Y1,X2,Y2,C_WHITE);
  If Focus Then DRect(X1,Y1,X2,Y2,C_ACCENT) Else DRect(X1,Y1,X2,Y2,C_DARK);
- T:=U8ToCP(S); Pre:=U8ToCP(Copy(S,1,P));
+ If EditRaw Then Begin T:=S; Pre:=Copy(S,1,P); End
+ Else Begin T:=U8ToCP(S); Pre:=U8ToCP(Copy(S,1,P)); End;
  Vw:=(X2-X1-8) Div 8;
  Off:=0;
  If Length(Pre)>Vw-1 Then Off:=Length(Pre)-(Vw-1);
- DText(X1+4,Y1+(Y2-Y1) Div 2-3,Copy(T,Off+1,Vw),C_BLACK);
+ DTextRaw(X1+4,Y1+(Y2-Y1) Div 2-3,Copy(T,Off+1,Vw),C_BLACK);
  If Focus Then Begin
   Cx:=X1+4+(Length(Pre)-Off)*8;
   SetColor(C_BLACK); DLine(Cx,Y1+2,Cx,Y2-2);
@@ -4826,10 +5108,10 @@ Begin
   SetText(1);
   For I:=0 To N-1 Do DText(X+12,Y+26+I*12,Lines[I],C_BLACK);
   Case Mode Of
-   0: DrawButton(B1,Y+H-26,B1+80,Y+H-8,'OK',A_NONE,0,0);
-   1: Begin DrawButton(B1,Y+H-26,B1+80,Y+H-8,'Yes',A_NONE,0,0); DrawButton(B2,Y+H-26,B2+80,Y+H-8,'No',A_NONE,0,0); End;
-   2: Begin DrawButton(B1,Y+H-26,B1+80,Y+H-8,'Yes',A_NONE,0,0); DrawButton(B2,Y+H-26,B2+80,Y+H-8,'No',A_NONE,0,0);
-        DrawButton(B3,Y+H-26,B3+80,Y+H-8,'Cancel',A_NONE,0,0); End;
+   0: DrawButton(B1,Y+H-26,B1+80,Y+H-8,Tr('OK'),A_NONE,0,0);
+   1: Begin DrawButton(B1,Y+H-26,B1+80,Y+H-8,Tr('Yes'),A_NONE,0,0); DrawButton(B2,Y+H-26,B2+80,Y+H-8,Tr('No'),A_NONE,0,0); End;
+   2: Begin DrawButton(B1,Y+H-26,B1+80,Y+H-8,Tr('Yes'),A_NONE,0,0); DrawButton(B2,Y+H-26,B2+80,Y+H-8,Tr('No'),A_NONE,0,0);
+        DrawButton(B3,Y+H-26,B3+80,Y+H-8,Tr('Cancel'),A_NONE,0,0); End;
   End;
   Repeat
    Ev:=PollEvent;
@@ -4837,7 +5119,7 @@ Begin
     If Not EvExt Then Begin
      If EvKey=#13 Then Begin Res:=1; Done:=True; End
      Else If EvKey=#27 Then Begin If Mode=2 Then Res:=0 Else If Mode=1 Then Res:=2 Else Res:=1; Done:=True; End
-     Else If (UpCase(EvKey)='Y') And (Mode>0) Then Begin Res:=1; Done:=True; End
+     Else If ((UpCase(EvKey)='Y') Or (UpCase(EvKey)='O')) And (Mode>0) Then Begin Res:=1; Done:=True; End
      Else If (UpCase(EvKey)='N') And (Mode>0) Then Begin Res:=2; Done:=True; End;
     End;
    End Else If Ev=EV_LDOWN Then Begin
@@ -4858,7 +5140,7 @@ End;
 
 Function Confirm(Const Msg: String): Boolean;
 Begin
- Confirm:=MessageBox('Confirm',Msg,1)=1;
+ Confirm:=MessageBox(Tr('Confirm'),Msg,1)=1;
 End;
 
 { Saisie d'une ligne de texte }
@@ -4872,8 +5154,8 @@ Begin
   SetText(1);
   DText(X+10,Y+24,Prompt,C_BLACK);
   DrawEditField(X+10,Y+38,X+W-10,Y+54,T,P,True);
-  DrawButton(X+W-176,Y+H-26,X+W-96,Y+H-8,'OK',A_NONE,0,0);
-  DrawButton(X+W-90,Y+H-26,X+W-10,Y+H-8,'Cancel',A_NONE,0,0);
+  DrawButton(X+W-176,Y+H-26,X+W-96,Y+H-8,Tr('OK'),A_NONE,0,0);
+  DrawButton(X+W-90,Y+H-26,X+W-10,Y+H-8,Tr('Cancel'),A_NONE,0,0);
   Repeat
    Ev:=PollEvent;
    If Ev=EV_KEY Then Begin
@@ -4959,25 +5241,25 @@ Begin
  Repeat
   DlgBox(X,Y,W,H,Title);
   SetText(1);
-  DText(X+10,Y+24,'Palette colors:',C_BLACK);
+  DText(X+10,Y+24,Tr('Palette colors:'),C_BLACK);
   For I:=0 To 15 Do Begin
    Cx:=X+10+(I Mod 8)*34; Cy:=Y+36+(I Div 8)*24;
    DBar(Cx,Cy,Cx+30,Cy+20,I);
    DRect(Cx,Cy,Cx+30,Cy+20,C_BLACK);
   End;
-  DText(X+10,Y+86,'Other colors:',C_BLACK);
+  DText(X+10,Y+86,Tr('Other colors:'),C_BLACK);
   For I:=0 To 11 Do Begin
    Cx:=X+10+(I Mod 12)*22; Cy:=Y+98;
    DBar(Cx,Cy,Cx+19,Cy+16,PalOf(Extra[I]));
    DRect(Cx,Cy,Cx+19,Cy+16,C_BLACK);
   End;
-  DText(X+10,Y+124,'Hex value (#RRGGBB, none):',C_BLACK);
+  DText(X+10,Y+124,Tr('Hex value (#RRGGBB, none):'),C_BLACK);
   DrawEditField(X+10,Y+136,X+130,Y+152,T,P,True);
   If HexToRGB(T,V) Then DBar(X+138,Y+136,X+170,Y+152,PalOf(V)) Else DBar(X+138,Y+136,X+170,Y+152,C_PANEL);
   DRect(X+138,Y+136,X+170,Y+152,C_BLACK);
-  DrawButton(X+W-176,Y+H-26,X+W-96,Y+H-8,'OK',A_NONE,0,0);
-  DrawButton(X+W-90,Y+H-26,X+W-10,Y+H-8,'Cancel',A_NONE,0,0);
-  DrawButton(X+10,Y+H-26,X+90,Y+H-8,'None',A_NONE,0,0);
+  DrawButton(X+W-176,Y+H-26,X+W-96,Y+H-8,Tr('OK'),A_NONE,0,0);
+  DrawButton(X+W-90,Y+H-26,X+W-10,Y+H-8,Tr('Cancel'),A_NONE,0,0);
+  DrawButton(X+10,Y+H-26,X+90,Y+H-8,Tr('None'),A_NONE,0,0);
   Repeat
    Ev:=PollEvent;
    If Ev=EV_KEY Then Begin
@@ -5071,14 +5353,14 @@ Begin
  If HeapFree<SizeOf(TNameList)+1024 Then Exit;
  New(Lst);
  W:=420; H:=300; X:=(SCR_W-W) Div 2; Y:=(SCR_H-H) Div 2; Rows:=12;
- T:=Name; P:=Length(T); Done:=False; Ok:=False; All:=False; LastSel:=-2; LastT:=0; EditFresh:=True;
+ T:=Name; P:=Length(T); Done:=False; Ok:=False; All:=False; LastSel:=-2; LastT:=0; EditFresh:=True; EditRaw:=True;
  Scan;
  Redo:=True;
  Repeat
   If Redo Then Begin
    DlgBox(X,Y,W,H,Title);
    SetText(1);
-   DText(X+10,Y+22,Copy(Path,1,48),C_DARK);
+   DTextRaw(X+10,Y+22,Copy(Path,1,48),C_DARK);
    DBar(X+10,Y+36,X+W-26,Y+36+Rows*14+2,C_WHITE);
    DRect(X+10,Y+36,X+W-26,Y+36+Rows*14+2,C_DARK);
    For I:=0 To Rows-1 Do Begin
@@ -5086,18 +5368,18 @@ Begin
     If J>=N Then Break;
     If J=Sel Then DBar(X+11,Y+37+I*14,X+W-27,Y+37+I*14+13,C_ACCENT);
     If J=Sel Then K:=C_WHITE Else K:=C_BLACK;
-    If IsDir[J] Then DText(X+14,Y+40+I*14,'['+Lst^[J]+']',K) Else DText(X+14,Y+40+I*14,Lst^[J],K);
+    If IsDir[J] Then DTextRaw(X+14,Y+40+I*14,'['+Lst^[J]+']',K) Else DTextRaw(X+14,Y+40+I*14,Lst^[J],K);
    End;
    { Barre de defilement }
    DBar(X+W-24,Y+36,X+W-10,Y+36+Rows*14+2,C_PANEL);
    DrawButton(X+W-24,Y+36,X+W-10,Y+50,#30,A_NONE,0,0);
    DrawButton(X+W-24,Y+36+Rows*14-12,X+W-10,Y+36+Rows*14+2,#31,A_NONE,0,0);
-   DText(X+10,Y+Rows*14+44,'File name:',C_BLACK);
+   DText(X+10,Y+Rows*14+44,Tr('File name:'),C_BLACK);
    DrawEditField(X+90,Y+Rows*14+40,X+W-10,Y+Rows*14+56,T,P,True);
-   DrawButton(X+10,Y+H-26,X+90,Y+H-8,'All files',A_NONE,0,0);
-   If All Then DText(X+96,Y+H-21,#251,C_BLACK);
-   DrawButton(X+W-176,Y+H-26,X+W-96,Y+H-8,'OK',A_NONE,0,0);
-   DrawButton(X+W-90,Y+H-26,X+W-10,Y+H-8,'Cancel',A_NONE,0,0);
+   DrawButton(X+10,Y+H-26,X+90,Y+H-8,Tr('All files'),A_NONE,0,0);
+   If All Then DTextRaw(X+96,Y+H-21,#251,C_BLACK);
+   DrawButton(X+W-176,Y+H-26,X+W-96,Y+H-8,Tr('OK'),A_NONE,0,0);
+   DrawButton(X+W-90,Y+H-26,X+W-10,Y+H-8,Tr('Cancel'),A_NONE,0,0);
    Redo:=False;
   End;
   Ev:=PollEvent;
@@ -5162,6 +5444,7 @@ Begin
   End;
  Until Done;
  Dispose(Lst);
+ EditRaw:=False;
  FileDialog:=Ok;
  RedrawAll;
 End;
@@ -5170,21 +5453,36 @@ End;
 
 Procedure ShowKeys;
 Begin
- ShowMsg('Keyboard shortcuts',
-  'Ctrl+N/O/S  new / open / save'#10'Ctrl+Z / Ctrl+Y  undo / redo'#10+
-  'Ctrl+X/C/V  cut / copy / paste'#10'Ctrl+D  duplicate    Ctrl+A  select all'#10+
-  'Del  delete    Tab  next shape'#10'Enter / F2 / double-click  edit label'#10+
-  'Arrows  move (Shift: grid step)'#10'+ / -  zoom    Home  100%    End  fit'#10+
-  'Ctrl+G / Ctrl+U  group / ungroup'#10'Ctrl+F / Ctrl+B  to front / back'#10+
-  'Ctrl+E  edit style    F8 snap    F9 grid'#10'Right button drag  pan'#10+
-  'Ins  multi-select mode (no Shift key)');
+ If LangFr Then Begin
+  ShowMsg('Raccourcis clavier (1/2)',
+   'Ctrl+N/O/S  nouveau / ouvrir / enreg.'#10'Ctrl+Z / Ctrl+Y  annuler / rétablir'#10+
+   'Ctrl+X/C/V  couper / copier / coller'#10'Ctrl+D  dupliquer   Ctrl+A  tout sélect.'#10+
+   'Suppr  supprimer    Tab  forme suivante'#10'Entrée / F2 / double-clic  modifier texte');
+  ShowMsg('Raccourcis clavier (2/2)',
+   'Flèches  déplacer (Maj : pas de grille)'#10'+ / -  zoom   Début  100 %   Fin  ajuster'#10+
+   'Ctrl+G / Ctrl+U  grouper / dégrouper'#10'Ctrl+F / Ctrl+B  avant / arrière-plan'#10+
+   'Ctrl+E  style   F8  aimanter   F9  grille'#10'Bouton droit + glisser  déplacer la vue'#10+
+   'Inser  sélection multiple (sans Maj)');
+ End Else Begin
+  ShowMsg('Keyboard shortcuts (1/2)',
+   'Ctrl+N/O/S  new / open / save'#10'Ctrl+Z / Ctrl+Y  undo / redo'#10+
+   'Ctrl+X/C/V  cut / copy / paste'#10'Ctrl+D  duplicate    Ctrl+A  select all'#10+
+   'Del  delete    Tab  next shape'#10'Enter / F2 / double-click  edit label');
+  ShowMsg('Keyboard shortcuts (2/2)',
+   'Arrows  move (Shift: grid step)'#10'+ / -  zoom    Home  100%    End  fit'#10+
+   'Ctrl+G / Ctrl+U  group / ungroup'#10'Ctrl+F / Ctrl+B  to front / back'#10+
+   'Ctrl+E  edit style    F8 snap    F9 grid'#10'Right button drag  pan'#10+
+   'Ins  multi-select mode (no Shift key)');
+ End;
 End;
 
 Procedure ShowAbout;
 Begin
- ShowMsg('About DRAWIO',
-  'DRAWIO - clone of draw.io (diagrams.net)'#10'Turbo Pascal 7 / Free Pascal'#10+
-  'Reads and writes .drawio files (plain and compressed XML),'#10'exports SVG.'#10+
+ ShowMsg(Tr('About DRAWIO'),
+  Fr('DRAWIO - clone of draw.io (diagrams.net)','DRAWIO - clone de draw.io (diagrams.net)')+#10+
+  'Turbo Pascal 7 / Free Pascal'#10+
+  Fr('Reads and writes .drawio files (plain and compressed XML),'#10'exports SVG.',
+     'Lit et écrit les fichiers .drawio (XML clair et compressé),'#10'exporte en SVG.')+#10+
   'CloneDRAW - https://www.gladir.com/clonedraw');
 End;
 
@@ -5390,7 +5688,7 @@ Begin
   If (Cells[I]^.Kind=K_EDGE) And (Not Inc_[I]) Then
    If (Cells[I]^.SrcIdx>0) And (Cells[I]^.TgtIdx>0) And Inc_[Cells[I]^.SrcIdx] And Inc_[Cells[I]^.TgtIdx] Then Inc_[I]:=True;
  For I:=1 To NCells Do If Inc_[I] Then Inc(N);
- If N=0 Then Begin StatusMsg:='Nothing to copy'; Exit; End;
+ If N=0 Then Begin StatusMsg:=Tr('Nothing to copy'); Exit; End;
  FillChar(H,SizeOf(H),0);
  H.Sig:=SNAP_SIG; H.N:=N; H.GridOn:=GridOn; H.SnapOn:=SnapOn; H.GridSize:=GridSize; H.Bg:=BgColor;
  Assign(F,TmpName('C',0));
@@ -5415,18 +5713,18 @@ Begin
   End;
  Close(F);
  PasteCount:=0;
- StatusMsg:=IStr(N)+' object(s) copied';
+ StatusMsg:=IStr(N)+Tr(' object(s) copied');
 End;
 
 Procedure PasteClip(Off: LongInt);
 Var N: Integer;
 Begin
- If Not FileExists(TmpName('C',0)) Then Begin StatusMsg:='Clipboard is empty'; Exit; End;
+ If Not FileExists(TmpName('C',0)) Then Begin StatusMsg:=Tr('Clipboard is empty'); Exit; End;
  UndoPush;
  Inc(PasteCount);
  N:=MergeSnap(TmpName('C',0),Off*PasteCount,Off*PasteCount);
  Touch;
- If N=0 Then StatusMsg:='Nothing pasted';
+ If N=0 Then StatusMsg:=Tr('Nothing pasted');
 End;
 
 { ------------------------------------------------------------------------- }
@@ -5497,7 +5795,7 @@ Begin
   If Cells[I]^.Sel And (Cells[I]^.Kind=K_VERTEX) Then
    For K:=1 To NCells Do If Cells[K]^.ParIdx=I Then Any:=True;
  End;
- If Not Any Then Begin StatusMsg:='Select a group to ungroup'; Exit; End;
+ If Not Any Then Begin StatusMsg:=Tr('Select a group to ungroup'); Exit; End;
  UndoPush;
  For I:=1 To NCells Do
   If Cells[I]^.Sel And (Cells[I]^.Kind=K_VERTEX) Then Begin
@@ -5531,7 +5829,7 @@ Begin
  N:=0;
  For I:=1 To NCells Do
   If Cells[I]^.Sel And (Cells[I]^.Kind=K_VERTEX) And (Not IsEdgeLabel(I)) Then Begin Inc(N); L[N]:=I; End;
- If N<2 Then Begin StatusMsg:='Select two or more shapes'; Exit; End;
+ If N<2 Then Begin StatusMsg:=Tr('Select two or more shapes'); Exit; End;
  UndoPush;
  X1:=Cells[L[1]]^.X; Y1:=Cells[L[1]]^.Y; X2:=X1+Cells[L[1]]^.W; Y2:=Y1+Cells[L[1]]^.H;
  For I:=2 To N Do Begin
@@ -5657,14 +5955,14 @@ Begin
  W:=ShapeDefs[D].W; H:=ShapeDefs[D].H;
  If ShapeDefs[D].Sec=3 Then Begin
   Idx:=NewCell(K_EDGE);
-  If Idx=0 Then Begin StatusMsg:='Too many objects'; Exit; End;
+  If Idx=0 Then Begin StatusMsg:=Tr('Too many objects'); Exit; End;
   C:=Cells[Idx];
   C^.Id:=MakeId; C^.Style:=ShapeDefs[D].Sty;
   C^.SrcPt.X:=X; C^.SrcPt.Y:=Y+H; C^.TgtPt.X:=X+W; C^.TgtPt.Y:=Y;
   C^.HasSrc:=True; C^.HasTgt:=True;
  End Else Begin
   Idx:=NewCell(K_VERTEX);
-  If Idx=0 Then Begin StatusMsg:='Too many objects'; Exit; End;
+  If Idx=0 Then Begin StatusMsg:=Tr('Too many objects'); Exit; End;
   C:=Cells[Idx];
   C^.Id:=MakeId;
   S:=ShapeDefs[D].Sty;
@@ -5693,7 +5991,7 @@ Begin
  CreateEdge:=0;
  UndoPush;
  Idx:=NewCell(K_EDGE);
- If Idx=0 Then Begin StatusMsg:='Too many objects'; Exit; End;
+ If Idx=0 Then Begin StatusMsg:=Tr('Too many objects'); Exit; End;
  C:=Cells[Idx];
  C^.Id:=MakeId;
  S:=DefaultEStyle;
@@ -5846,7 +6144,7 @@ Begin
  SetText(1);
  Py:=Integer(Y1)+4;
  For I:=0 To N Do Begin
-  DText(X1+4,Py+I*10,U8ToCP(Lines[I]),C_BLACK);
+  DTextRaw(X1+4,Py+I*10,U8ToCP(Lines[I]),C_BLACK);
   If I=Ln Then Begin
    Pre:=U8ToCP(Copy(Lines[I],1,Cc));
    Px:=Integer(X1)+4+TextWidth(Pre);
@@ -5879,7 +6177,7 @@ End;
 
 Procedure AddPage;
 Begin
- If NPages>=MAX_PAGES Then Begin ShowMsg('Pages','Too many pages'); Exit; End;
+ If NPages>=MAX_PAGES Then Begin ShowMsg(Tr('Pages'),Tr('Too many pages')); Exit; End;
  Pages[CurPage].Name:=PageName;
  SnapSave(PageSnap(CurPage));
  ClearDoc;
@@ -5894,8 +6192,8 @@ End;
 Procedure DeletePage;
 Var I: Integer;
 Begin
- If NPages<=1 Then Begin ShowMsg('Pages','A diagram needs at least one page'); Exit; End;
- If Not Confirm('Delete page "'+PageName+'" ?') Then Exit;
+ If NPages<=1 Then Begin ShowMsg(Tr('Pages'),Tr('A diagram needs at least one page')); Exit; End;
+ If Not Confirm(Tr('Delete Page')+' "'+PageName+'" ?') Then Exit;
  Pages[CurPage].Name:=PageName;
  SnapSave(PageSnap(CurPage));
  For I:=CurPage To NPages-2 Do Begin
@@ -5916,7 +6214,7 @@ Procedure RenamePage;
 Var S: String;
 Begin
  S:=PageName;
- If InputBox('Rename page','Page name:',S,40) Then Begin
+ If InputBox(Tr('Rename page'),Tr('Page name:'),S,40) Then Begin
   If S<>'' Then Begin PageName:=Copy(S,1,40); Pages[CurPage].Name:=PageName; Touch; End;
  End;
 End;
@@ -5958,13 +6256,13 @@ Begin
  Nm:=FileName;
  If AsNew Or (Nm='') Then Begin
   If Nm='' Then Nm:='diagram.drawio';
-  If Not FileDialog('Save as',Nm,True,'.drawio;.xml;.dio','.drawio') Then Exit;
+  If Not FileDialog(Tr('Save as'),Nm,True,'.drawio;.xml;.dio','.drawio') Then Exit;
   If FileExists(Nm) And (Nm<>FileName) Then
-   If Not Confirm('File '+Nm+' exists. Overwrite?') Then Exit;
+   If Not Confirm(Tr('File ')+Nm+Tr(' exists. Overwrite?')) Then Exit;
  End;
  If SaveDrawio(Nm,CompressedSave) Then Begin
-  FileName:=Nm; Modified:=False; StatusMsg:='Saved '+Nm;
- End Else ShowMsg('Save','Cannot save the file. '+LastError);
+  FileName:=Nm; Modified:=False; StatusMsg:=Tr('Saved ')+Nm;
+ End Else ShowMsg(Tr('Save'),Tr('Cannot save the file. ')+LastError);
  RedrawAll;
 End;
 
@@ -5973,7 +6271,7 @@ Var R: Integer;
 Begin
  ConfirmDiscard:=True;
  If Not Modified Then Exit;
- R:=MessageBox('Unsaved changes','The diagram has been modified. Save changes?',2);
+ R:=MessageBox(Tr('Unsaved changes'),Fr('The diagram has been modified. Save changes?','Le diagramme a été modifié. Enregistrer les modifications ?'),2);
  If R=1 Then Begin
   DoSave(False);
   ConfirmDiscard:=Not Modified;
@@ -5993,13 +6291,13 @@ Function DoLoad(Const Nm: String): Boolean;
 Var N: Integer;
 Begin
  DoLoad:=False;
- If Not FileExists(Nm) Then Begin ShowMsg('Open','File not found: '+Nm); Exit; End;
- If Not LooksLikeDrawio(Nm) Then Begin ShowMsg('Open','This file is not a draw.io diagram.'); Exit; End;
+ If Not FileExists(Nm) Then Begin ShowMsg(Tr('Open'),Tr('File not found: ')+Nm); Exit; End;
+ If Not LooksLikeDrawio(Nm) Then Begin ShowMsg(Tr('Open'),Tr('This file is not a draw.io diagram.')); Exit; End;
  PageTag:='P';
  If Not ReadDrawio(Nm,N) Then Begin
   ClearDoc; ResetDocSettings; NPages:=1; CurPage:=0; Pages[0].Name:='Page-1'; PageName:='Page-1';
   FileName:=''; ResetUndo;
-  ShowMsg('Open','Cannot read the diagram. '+LastError);
+  ShowMsg(Tr('Open'),Tr('Cannot read the diagram. ')+LastError);
   Exit;
  End;
  NPages:=N; CurPage:=0;
@@ -6009,7 +6307,7 @@ Begin
  Layout;
  FitView;
  If Zoom>100 Then ResetView;
- StatusMsg:='Opened '+Nm;
+ StatusMsg:=Tr('Opened ')+Nm;
  DoLoad:=True;
 End;
 
@@ -6018,7 +6316,7 @@ Var Nm: String;
 Begin
  If Not ConfirmDiscard Then Exit;
  Nm:='';
- If Not FileDialog('Open',Nm,False,'.drawio;.xml;.dio','') Then Exit;
+ If Not FileDialog(Tr('Open'),Nm,False,'.drawio;.xml;.dio','') Then Exit;
  DoLoad(Nm);
  RedrawAll;
 End;
@@ -6027,8 +6325,8 @@ Procedure DoImport;
 Var Nm: String; N, K: Integer; SavedPages: TPageArr; SvN, SvCur: Integer; Cnt: Integer;
 Begin
  Nm:='';
- If Not FileDialog('Import from file',Nm,False,'.drawio;.xml;.dio','') Then Exit;
- If Not LooksLikeDrawio(Nm) Then Begin ShowMsg('Import','This file is not a draw.io diagram.'); Exit; End;
+ If Not FileDialog(Tr('Import from file'),Nm,False,'.drawio;.xml;.dio','') Then Exit;
+ If Not LooksLikeDrawio(Nm) Then Begin ShowMsg(Tr('Import'),Tr('This file is not a draw.io diagram.')); Exit; End;
  Pages[CurPage].Name:=PageName;
  SnapSave(TmpName('B',0));
  SavedPages:=Pages; SvN:=NPages; SvCur:=CurPage;
@@ -6039,12 +6337,12 @@ Begin
  Pages:=SavedPages; NPages:=SvN; CurPage:=SvCur;
  SnapLoad(TmpName('B',0));
  EraseFile(TmpName('B',0));
- If K=0 Then Begin ShowMsg('Import','Cannot read the diagram. '+LastError); Exit; End;
+ If K=0 Then Begin ShowMsg(Tr('Import'),Tr('Cannot read the diagram. ')+LastError); Exit; End;
  UndoPush;
  Cnt:=MergeSnap(TmpName('I',0),30,30);
  For K:=0 To MAX_PAGES-1 Do EraseFile(TmpName('I',K));
  Touch;
- StatusMsg:=IStr(Cnt)+' object(s) imported';
+ StatusMsg:=IStr(Cnt)+Tr(' object(s) imported');
  RedrawAll;
 End;
 
@@ -6056,8 +6354,8 @@ Begin
   If (Length(Nm)>7) And (LoStr(Copy(Nm,Length(Nm)-6,7))='.drawio') Then Nm:=Copy(Nm,1,Length(Nm)-7);
  End;
  Nm:=Nm+'.svg';
- If Not FileDialog('Export as SVG',Nm,True,'.svg','.svg') Then Exit;
- If ExportSvg(Nm) Then StatusMsg:='Exported '+Nm Else ShowMsg('Export','Cannot write the SVG file.');
+ If Not FileDialog(Tr('Export as SVG'),Nm,True,'.svg','.svg') Then Exit;
+ If ExportSvg(Nm) Then StatusMsg:=Tr('Exported ')+Nm Else ShowMsg(Tr('Export'),Tr('Cannot write the SVG file.'));
  RedrawAll;
 End;
 
@@ -6065,8 +6363,8 @@ Procedure DoExportXml;
 Var Nm: String;
 Begin
  Nm:='diagram.xml';
- If Not FileDialog('Export as XML',Nm,True,'.xml','.xml') Then Exit;
- If SaveModelXml(Nm) Then StatusMsg:='Exported '+Nm Else ShowMsg('Export','Cannot write the file.');
+ If Not FileDialog(Tr('Export as XML'),Nm,True,'.xml','.xml') Then Exit;
+ If SaveModelXml(Nm) Then StatusMsg:=Tr('Exported ')+Nm Else ShowMsg(Tr('Export'),Tr('Cannot write the file.'));
  RedrawAll;
 End;
 
@@ -6083,9 +6381,9 @@ Procedure DoEditStyle;
 Var I: Integer; S: String; K: Integer;
 Begin
  I:=FirstSel;
- If I=0 Then Begin StatusMsg:='Select a shape first'; Exit; End;
+ If I=0 Then Begin StatusMsg:=Tr('Select a shape first'); Exit; End;
  S:=Cells[I]^.Style;
- If InputBox('Edit Style','Style (key=value;...):',S,255) Then Begin
+ If InputBox(Tr('Edit Style'),Tr('Style (key=value;...):'),S,255) Then Begin
   UndoPush;
   For K:=1 To NCells Do If Cells[K]^.Sel And (Cells[K]^.Kind<>K_LAYER) Then Cells[K]^.Style:=S;
   Touch;
@@ -6111,11 +6409,11 @@ Begin
  End;
  If Which=CO_BG Then Begin
   Rgb:=BgColor;
-  If ColorDialog('Background color',Rgb) Then Begin UndoPush; BgColor:=Rgb; Touch; End;
+  If ColorDialog(Tr('Background color'),Rgb) Then Begin UndoPush; BgColor:=Rgb; Touch; End;
   Exit;
  End;
  If (Key='') Or (I=0) Then Exit;
- If ColorDialog('Color',Rgb) Then ApplyStyle(Key,ColorStyleVal(Rgb));
+ If ColorDialog(Tr('Color'),Rgb) Then ApplyStyle(Key,ColorStyleVal(Rgb));
 End;
 
 Procedure ToggleCheck(Id: Integer);
@@ -6217,7 +6515,7 @@ Procedure SpinEdit(Field: Integer);
 Var S: String;
 Begin
  S:=IStr(SpinValue(Field));
- If InputBox('Value','New value:',S,8) Then SpinSet(Field,IVal(S,SpinValue(Field)));
+ If InputBox(Tr('Value'),Tr('New value:'),S,8) Then SpinSet(Field,IVal(S,SpinValue(Field)));
 End;
 
 Procedure DropAction(Id: Integer; X, Y: Integer);
@@ -6225,7 +6523,7 @@ Var R: Integer;
 Begin
  Case Id Of
   DD_DASH: Begin
-   R:=PopupList(X,Y,'Solid|Dashed|Dotted',0);
+   R:=PopupList(X,Y,Tr('Solid|Dashed|Dotted'),0);
    Case R Of
     0: Begin ApplyStyle('dashed','0'); ApplyStyle('dashPattern',''); End;
     1: Begin ApplyStyle('dashed','1'); ApplyStyle('dashPattern',''); End;
@@ -6233,7 +6531,7 @@ Begin
    End;
   End;
   DD_CONN: Begin
-   R:=PopupList(X,Y,'Straight|Orthogonal|Elbow|Curved',0);
+   R:=PopupList(X,Y,Tr('Straight|Orthogonal|Elbow|Curved'),0);
    Case R Of
     0: Begin ApplyStyle('edgeStyle',''); ApplyStyle('curved',''); End;
     1: Begin ApplyStyle('edgeStyle','orthogonalEdgeStyle'); ApplyStyle('curved',''); End;
@@ -6274,13 +6572,13 @@ Procedure CopyStyle;
 Var I: Integer;
 Begin
  I:=FirstSel;
- If I>0 Then Begin StyleClip:=Cells[I]^.Style; StatusMsg:='Style copied'; End;
+ If I>0 Then Begin StyleClip:=Cells[I]^.Style; StatusMsg:=Tr('Style copied'); End;
 End;
 
 Procedure PasteStyle;
 Var K: Integer;
 Begin
- If (StyleClip='') Or (FirstSel=0) Then Begin StatusMsg:='No style copied'; Exit; End;
+ If (StyleClip='') Or (FirstSel=0) Then Begin StatusMsg:=Tr('No style copied'); Exit; End;
  UndoPush;
  For K:=1 To NCells Do If Cells[K]^.Sel And (Cells[K]^.Kind<>K_LAYER) Then Cells[K]^.Style:=StyleClip;
  Touch;
@@ -6300,7 +6598,7 @@ Begin
   If StyGet(S,'fontColor',Names0) Then DefaultVStyle:=DefaultVStyle+'fontColor='+Names0+';';
   If StyGet(S,'fontSize',Names0) Then DefaultVStyle:=DefaultVStyle+'fontSize='+Names0+';';
  End;
- StatusMsg:='Default style updated';
+ StatusMsg:=Tr('Default style updated');
 End;
 
 Procedure SelectAll;
@@ -6379,7 +6677,7 @@ Begin
   CM_COMPR: CompressedSave:=Not CompressedSave;
   CM_GRIDSZ: Begin
    StyleTmp:=IStr(GridSize);
-   If InputBox('Grid size','Grid size (pixels):',StyleTmp,4) Then GridSize:=Integer(Clamp(IVal(StyleTmp,10),2,200));
+   If InputBox(Tr('Grid size'),Tr('Grid size (pixels):'),StyleTmp,4) Then GridSize:=Integer(Clamp(IVal(StyleTmp,10),2,200));
   End;
   CM_BGCOL: PickColor(CO_BG);
   CM_ESTR: Begin DefaultEdgeStyle:=0; BuildDefaultEdgeStyle; End;
@@ -6406,7 +6704,7 @@ End;
 Procedure InsertQuick;
 Var R, D: Integer; X, Y: LongInt;
 Begin
- R:=PopupList(150,TOOL_Y+TOOL_H,'Rectangle|Rounded Rectangle|Ellipse|Diamond|Text|Swimlane|Arrow',0);
+ R:=PopupList(150,TOOL_Y+TOOL_H,Tr('Rectangle|Rounded Rectangle|Ellipse|Diamond|Text|Swimlane|Arrow'),0);
  Case R Of
   0: D:=FindDef('Rectangle'); 1: D:=FindDef('Rounded Rectangle'); 2: D:=FindDef('Ellipse');
   3: D:=FindDef('Diamond'); 4: D:=FindDef('Text'); 5: D:=FindDef('Swimlane'); 6: D:=FindDef('Arrow');
@@ -6457,11 +6755,11 @@ Begin
     End;
    End;
    Case DefaultEdgeStyle Of
-    0: StatusMsg:='Connection: straight'; 1: StatusMsg:='Connection: orthogonal'; 2: StatusMsg:='Connection: curved';
+    0: StatusMsg:=Tr('Connection: straight'); 1: StatusMsg:=Tr('Connection: orthogonal'); 2: StatusMsg:=Tr('Connection: curved');
    End;
   End;
   14: Begin
-   If SelHasEdge Then ToggleStyle('rounded') Else StatusMsg:='Select a connector';
+   If SelHasEdge Then ToggleStyle('rounded') Else StatusMsg:=Tr('Select a connector');
   End;
   15: Begin InsertQuick; Exit; End;
   20: DoSave(False);
@@ -6761,7 +7059,7 @@ Var T: Integer; Dxd, Dyd: LongInt;
 Begin
  Dxd:=DX(X); Dyd:=DY(Y);
  T:=HitCellAt(Dxd,Dyd,True);
- If T=DragIdx Then Begin StatusMsg:='Connection to the same shape cancelled'; Exit; End;
+ If T=DragIdx Then Begin StatusMsg:=Tr('Connection to the same shape cancelled'); Exit; End;
  If (T=0) And (Not InCanvas(X,Y)) Then Exit;
  CreateEdge(DragIdx,T,ConnDir,SnapV(Dxd),SnapV(Dyd));
 End;
@@ -7096,20 +7394,18 @@ Begin
   Exit;
  End;
  If EvExt Then Begin
+  For I:=0 To NMENUS-1 Do
+   If K=Chr(AltKeys[I]) Then Begin
+    MenuOpen:=True; ActiveMenu:=I; ActiveItem:=-1; RedrawAll; Exit;
+   End;
   Case K Of
-   #33: Begin MenuOpen:=True; ActiveMenu:=MENU_FILE; ActiveItem:=-1; RedrawAll; End;
-   #18: Begin MenuOpen:=True; ActiveMenu:=MENU_EDIT; ActiveItem:=-1; RedrawAll; End;
-   #47: Begin MenuOpen:=True; ActiveMenu:=MENU_VIEW; ActiveItem:=-1; RedrawAll; End;
-   #30: Begin MenuOpen:=True; ActiveMenu:=MENU_ARRANGE; ActiveItem:=-1; RedrawAll; End;
-   #45: Begin MenuOpen:=True; ActiveMenu:=MENU_EXTRAS; ActiveItem:=-1; RedrawAll; End;
-   #35: Begin MenuOpen:=True; ActiveMenu:=MENU_HELP; ActiveItem:=-1; RedrawAll; End;
    #68: Begin MenuOpen:=True; ActiveMenu:=MENU_FILE; ActiveItem:=-1; RedrawAll; End;
       #59: DoCommand(CM_KEYS);
    #60: DoCommand(CM_EDITLABEL);
    #66: DoCommand(CM_SNAP);
    #67: DoCommand(CM_GRID);
    #83: DoCommand(CM_DELETE);
-   #82: Begin MultiMode:=Not MultiMode; If MultiMode Then StatusMsg:='Multi-select ON' Else StatusMsg:='Multi-select OFF'; RedrawAll; End;
+   #82: Begin MultiMode:=Not MultiMode; If MultiMode Then StatusMsg:=Tr('Multi-select ON') Else StatusMsg:=Tr('Multi-select OFF'); RedrawAll; End;
    #71: DoCommand(CM_Z100);
    #79: DoCommand(CM_ZFIT);
    #73: If NPages>1 Then DoCommand(CM_PREVPAGE) Else Begin ViewY:=ViewY-((CY2-CY1)*100 Div Zoom) Div 2; RedrawAll; End;
@@ -7186,13 +7482,13 @@ Begin
  End;
  Id:=0;
  If SelCount>0 Then Begin
-  R:=PopupList(X,Y,'Edit Label|Edit Style...|Copy|Cut|Duplicate|Delete|To Front|To Back|Group|Ungroup',-1);
+  R:=PopupList(X,Y,Tr('Edit Label|Edit Style...|Copy|Cut|Duplicate|Delete|To Front|To Back|Group|Ungroup'),-1);
   Case R Of
    0: Id:=CM_EDITLABEL; 1: Id:=CM_EDITSTYLE; 2: Id:=CM_COPY; 3: Id:=CM_CUT; 4: Id:=CM_DUP;
    5: Id:=CM_DELETE; 6: Id:=CM_FRONT; 7: Id:=CM_BACK; 8: Id:=CM_GROUP; 9: Id:=CM_UNGROUP;
   End;
  End Else Begin
-  R:=PopupList(X,Y,'Paste|Select All|Fit to Window|Reset Zoom|Add Page',-1);
+  R:=PopupList(X,Y,Tr('Paste|Select All|Fit to Window|Reset Zoom|Add Page'),-1);
   Case R Of
    0: Id:=CM_PASTE; 1: Id:=CM_SELALL; 2: Id:=CM_ZFIT; 3: Id:=CM_Z100; 4: Id:=CM_ADDPAGE;
   End;
@@ -7228,6 +7524,7 @@ Begin
  DragMode:=DM_NONE; GhostOn:=False; HoverOn:=False; HoverIdx:=0; MultiMode:=False;
  OldMX:=-1; OldMY:=-1; OldMB:=0; LastClickT:=-10000;
  ResetUndo;
+ InitLanguage;
  InitTempDir; InitTmp; InitMenus;
 End;
 

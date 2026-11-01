@@ -385,3 +385,5 @@ Par exemple, si vous voulez compiler ICO2XBM.PAS, vous devrez tapez la commande 
  <li>Le code source est publié sous la licence <a href="https://github.com/gladir/CloneDRAW/blob/main/LICENSE">MIT</a>.</li>
  <li>Le paquet original est publié sous la licence <a href="https://github.com/gladir/CloneDRAW/blob/main/LICENSE">MIT</a>.</li>
 </ul>
+
+Clone d'ArtWorx (ARTWORX.PAS) : editeur de dessin vectoriel oriente objet (Atari ST), avec menus deroulants, boites a outils de dessin / chemin / image / texte, rotation libre, groupes, calques, pages, annuler, fichiers .CWG, exports EPS / SVG / ASCII et import BMP.

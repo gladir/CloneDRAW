@@ -312,6 +312,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td><b>PSP.PAS</b></td>
 			<td>Cette commande permet de lancer un clone de Photoshop.</td>
 		</tr>
+		<tr>
+			<td><b>SCAN.PAS</b></td>
+			<td>Cette commande permet de numériser un document avec un scanner (Windows : WIA, Linux : SANE) et d'enregistrer l'image en BMP, PNG, JPEG, TIFF, PNM ou GIF. Elle supporte les options /LIST, /DEVICE, /PREVIEW, /DPI, /COLOR, /SOURCE, /FORMAT, /OUTPUT et /UI.</td>
+		</tr>
 	    <tr>
     		<td><b>VISIO.PAS</b></td>
       		<td>Cette commande permet de lancer un clone de Visio.</td>

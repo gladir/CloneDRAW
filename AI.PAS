@@ -62,8 +62,36 @@ Const
  TOOL_PEN = 6;
  TOOL_TEXT = 7;
  TOOL_ZOOM = 8;
+
  TOOL_HAND = 9;
- MAX_TOOLS = 10;
+ TOOL_DIRECT = 10;
+ TOOL_WAND = 11;
+ TOOL_LASSO = 12;
+ TOOL_POLYGON = 13;
+ TOOL_STAR = 14;
+ TOOL_BRUSH = 15;
+ TOOL_ERASER = 16;
+ TOOL_SCISSORS = 17;
+ TOOL_ADDPT = 18;
+ TOOL_DELPT = 19;
+ TOOL_ROTATE = 20;
+ TOOL_REFLECT = 21;
+ TOOL_SCALE = 22;
+ TOOL_SHEAR = 23;
+ TOOL_WARP = 24;
+ TOOL_FREEXF = 25;
+ TOOL_GRADIENT = 26;
+ TOOL_EYEDROP = 27;
+ TOOL_BLEND = 28;
+ TOOL_SPRAY = 29;
+ TOOL_GRAPH = 30;
+ TOOL_MEASURE = 31;
+ MAX_TOOLS = 32;
+ TOOL_BTN = 22;
+ { ordre d'affichage : deux colonnes, comme la boite a outils d'Illustrator }
+ TOOL_ORDER: Array[0..31] Of Byte =
+  (0,10, 11,12, 6,4, 18,19, 7,3, 1,2, 13,14, 15,5, 16,17, 20,21, 22,23,
+   24,25, 26,27, 28,29, 30,31, 9,8);
  
  MENU_FILE = 0;
  MENU_EDIT = 1;
@@ -707,21 +735,35 @@ Begin
  End;
 End;
 
+Function ToolSlot(Id: Integer): Integer;
+Var I: Integer;
+Begin
+ ToolSlot := 0;
+ For I := 0 To MAX_TOOLS-1 Do
+  If TOOL_ORDER[I] = Id Then ToolSlot := I;
+End;
+
 Function ToolButtonTop(Index: Integer): Integer;
 Begin
- ToolButtonTop := MENUBAR_HEIGHT+5+Index*TOOL_BUTTON_STEP;
+ ToolButtonTop := MENUBAR_HEIGHT+4+(ToolSlot(Index) Div 2)*TOOL_BTN;
+End;
+
+Function ToolButtonLeft(Index: Integer): Integer;
+Begin
+ ToolButtonLeft := 2+(ToolSlot(Index) Mod 2)*23;
 End;
 
 Function ToolHitTest(X, Y: Integer): Integer;
-Var I: Integer;
+Var Col, Row, Slot: Integer;
 Begin
  ToolHitTest := -1;
- If (X < TOOL_BUTTON_LEFT) Or
-    (X >= TOOL_BUTTON_LEFT+TOOL_BUTTON_WIDTH) Or
-    (Y < ToolButtonTop(0)) Then Exit;
- I := (Y-ToolButtonTop(0)) Div TOOL_BUTTON_STEP;
- If I >= MAX_TOOLS Then Exit;
- If Y < ToolButtonTop(I)+TOOL_BUTTON_HEIGHT Then ToolHitTest := I;
+ If (X < 2) Or (X >= 47) Or (Y < MENUBAR_HEIGHT+4) Then Exit;
+ If (X-2) Mod 23 >= 22 Then Exit;
+ Col := (X-2) Div 23;
+ Row := (Y-MENUBAR_HEIGHT-4) Div TOOL_BTN;
+ Slot := Row*2+Col;
+ If (Slot < 0) Or (Slot >= MAX_TOOLS) Then Exit;
+ ToolHitTest := TOOL_ORDER[Slot];
 End;
 
 Function ToolTipText(Index: Integer): String;
@@ -729,16 +771,38 @@ Var S: String;
 Begin
  S := '';
  Case Index Of
-  TOOL_SELECT: S := 'Selection (1) - deplacer / poignees pour agrandir';
-  TOOL_RECTANGLE: S := 'Rectangle (2) - glisser pour dessiner';
-  TOOL_ELLIPSE: S := 'Ellipse / cercle (3) - glisser pour dessiner';
-  TOOL_LINE: S := 'Ligne (4) - glisser pour dessiner';
-  TOOL_BEZIER: S := 'Bezier (5 / B) - deux ancrages par cliquer-glisser';
-  TOOL_PENCIL: S := 'Crayon (6 / N) - tracer a main levee';
-  TOOL_PEN: S := 'Plume (7 / P) - courbe par deux cliquer-glisser';
-  TOOL_TEXT: S := 'Texte (8 / T) - cliquer puis saisir / modifier';
-  TOOL_ZOOM: S := 'Loupe (9 / Z) - gauche : agrandir, droit : reduire';
+  TOOL_SELECT: S := 'Selection (V) - deplacer, poignees pour la taille';
+  TOOL_DIRECT: S := 'Selection directe (A) - deplacer un point d''ancrage';
+  TOOL_WAND: S := 'Baguette magique (Y) - meme trait et meme remplissage';
+  TOOL_LASSO: S := 'Lasso (Q) - encercler les objets a selectionner';
+  TOOL_PEN: S := 'Plume (P) - courbe par deux cliquer-glisser';
+  TOOL_BEZIER: S := 'Courbe de Bezier (B) - deux ancrages';
+  TOOL_ADDPT: S := 'Ajout de point d''ancrage (+) - cliquer sur un chemin';
+  TOOL_DELPT: S := 'Suppression de point d''ancrage (-) - cliquer un point';
+  TOOL_TEXT: S := 'Texte (T) - cliquer puis saisir / modifier';
+  TOOL_LINE: S := 'Segment de droite (4) - glisser pour dessiner';
+  TOOL_RECTANGLE: S := 'Rectangle (M) - glisser pour dessiner';
+  TOOL_ELLIPSE: S := 'Ellipse (L) - glisser pour dessiner';
+  TOOL_POLYGON: S := 'Polygone (U) - glisser du centre ; [ ] = cotes';
+  TOOL_STAR: S := 'Etoile - glisser du centre ; [ ] = branches';
+  TOOL_BRUSH: S := 'Pinceau - tracer a main levee, trait epais';
+  TOOL_PENCIL: S := 'Crayon (N) - tracer a main levee';
+  TOOL_ERASER: S := 'Gomme (X) - glisser pour effacer des parties';
+  TOOL_SCISSORS: S := 'Ciseaux (C) - cliquer sur un chemin pour le couper';
+  TOOL_ROTATE: S := 'Rotation (R) - glisser autour de la selection';
+  TOOL_REFLECT: S := 'Reflexion (O) - clic : miroir ; glisser : axe 45 deg.';
+  TOOL_SCALE: S := 'Mise a l''echelle (S) - glisser depuis le centre';
+  TOOL_SHEAR: S := 'Inclinaison (D) - glisser horizontalement';
+  TOOL_WARP: S := 'Deformation (F) - pousser les points du chemin';
+  TOOL_FREEXF: S := 'Transformation manuelle (E) - deplacer, redimensionner, tourner';
+  TOOL_GRADIENT: S := 'Degrade (G) - glisser sur un rectangle';
+  TOOL_EYEDROP: S := 'Pipette (I) - copier trait et remplissage';
+  TOOL_BLEND: S := 'Fondu (W) - cliquer deux objets pour creer 5 etapes';
+  TOOL_SPRAY: S := 'Pulverisateur de symboles - glisser pour pulveriser';
+  TOOL_GRAPH: S := 'Graphique en colonnes (J) - glisser le cadre';
+  TOOL_MEASURE: S := 'Mesure (K) - glisser : distance et angle';
   TOOL_HAND: S := 'Main (H) - glisser pour deplacer la vue';
+  TOOL_ZOOM: S := 'Zoom (Z) - gauche : agrandir, droit : reduire';
  End;
  ToolTipText := S;
 End;
@@ -786,7 +850,7 @@ Begin
  W := TextWidth(S)+16;
  H := TextHeight(S)+12;
  X := TOOLBAR_WIDTH+6;
- Y := ToolButtonTop(ToolTipCandidate)+TOOL_BUTTON_HEIGHT;
+ Y := ToolButtonTop(ToolTipCandidate)+TOOL_BTN;
  If X+W+3 >= ScreenWidth Then X := ScreenWidth-W-4;
  If Y+H+3 >= ScreenHeight-STATUSBAR_HEIGHT Then
   Y := ScreenHeight-STATUSBAR_HEIGHT-H-4;
@@ -800,9 +864,10 @@ Begin
 End;
 
 Procedure DrawToolIcon(X, Y, Index: Integer);
+Var I: Integer;
 Begin
  Case Index Of
-  TOOL_SELECT: Begin
+  TOOL_SELECT, TOOL_DIRECT, TOOL_FREEXF: Begin
    Line(X+3,Y+1,X+3,Y+15);
    Line(X+3,Y+1,X+13,Y+10);
    Line(X+3,Y+15,X+7,Y+11);
@@ -810,6 +875,103 @@ Begin
    Line(X+10,Y+17,X+13,Y+16);
    Line(X+13,Y+16,X+10,Y+10);
    Line(X+10,Y+10,X+13,Y+10);
+   If Index = TOOL_DIRECT Then Rectangle(X+11,Y+12,X+16,Y+17);
+   If Index = TOOL_FREEXF Then Begin
+    Rectangle(X+11,Y+2,X+16,Y+7); Rectangle(X+1,Y+12,X+6,Y+17);
+   End;
+  End;
+  TOOL_WAND: Begin
+   Line(X+1,Y+16,X+10,Y+7); Line(X+2,Y+16,X+11,Y+7);
+   Line(X+13,Y+1,X+13,Y+8); Line(X+10,Y+4,X+17,Y+4);
+   Line(X+11,Y+2,X+15,Y+6); Line(X+15,Y+2,X+11,Y+6);
+  End;
+  TOOL_LASSO: Begin
+   Ellipse(X+9,Y+7,0,360,7,5);
+   Line(X+4,Y+10,X+3,Y+14); Line(X+3,Y+14,X+6,Y+16); Line(X+6,Y+16,X+6,Y+13);
+  End;
+  TOOL_POLYGON: Begin
+   Line(X+5,Y+2,X+13,Y+2); Line(X+13,Y+2,X+17,Y+9); Line(X+17,Y+9,X+13,Y+16);
+   Line(X+13,Y+16,X+5,Y+16); Line(X+5,Y+16,X+1,Y+9); Line(X+1,Y+9,X+5,Y+2);
+  End;
+  TOOL_STAR: Begin
+   Line(X+9,Y+1,X+11,Y+7); Line(X+11,Y+7,X+17,Y+7); Line(X+17,Y+7,X+12,Y+11);
+   Line(X+12,Y+11,X+14,Y+17); Line(X+14,Y+17,X+9,Y+13); Line(X+9,Y+13,X+4,Y+17);
+   Line(X+4,Y+17,X+6,Y+11); Line(X+6,Y+11,X+1,Y+7); Line(X+1,Y+7,X+7,Y+7);
+   Line(X+7,Y+7,X+9,Y+1);
+  End;
+  TOOL_BRUSH: Begin
+   Line(X+4,Y+14,X+13,Y+5); Line(X+5,Y+15,X+14,Y+6); Line(X+13,Y+5,X+16,Y+2);
+   Line(X+14,Y+6,X+17,Y+3);
+   Bar(X+1,Y+12,X+5,Y+17);
+  End;
+  TOOL_ERASER: Begin
+   Line(X+2,Y+11,X+9,Y+3); Line(X+9,Y+3,X+16,Y+10); Line(X+16,Y+10,X+9,Y+16);
+   Line(X+9,Y+16,X+2,Y+11); Line(X+6,Y+7,X+13,Y+14);
+   Line(X+1,Y+17,X+17,Y+17);
+  End;
+  TOOL_SCISSORS: Begin
+   Line(X+3,Y+1,X+11,Y+11); Line(X+14,Y+1,X+6,Y+11);
+   Circle(X+4,Y+14,2); Circle(X+13,Y+14,2);
+  End;
+  TOOL_ADDPT, TOOL_DELPT: Begin
+   Line(X+2,Y+15,X+9,Y+5); Line(X+9,Y+5,X+13,Y+9);
+   Rectangle(X+1,Y+13,X+5,Y+17);
+   Line(X+11,Y+13,X+17,Y+13);
+   If Index = TOOL_ADDPT Then Line(X+14,Y+10,X+14,Y+16);
+  End;
+  TOOL_ROTATE: Begin
+   Arc(X+9,Y+9,40,330,7);
+   Line(X+14,Y+3,X+17,Y+4); Line(X+17,Y+4,X+15,Y+8); Line(X+14,Y+3,X+15,Y+8);
+  End;
+  TOOL_REFLECT: Begin
+   SetLineStyle(DottedLn,0,NormWidth); Line(X+9,Y+0,X+9,Y+18);
+   SetLineStyle(SolidLn,0,NormWidth);
+   Line(X+1,Y+16,X+7,Y+16); Line(X+7,Y+16,X+1,Y+4); Line(X+1,Y+4,X+1,Y+16);
+   Line(X+17,Y+16,X+11,Y+16); Line(X+11,Y+16,X+17,Y+4); Line(X+17,Y+4,X+17,Y+16);
+  End;
+  TOOL_SCALE: Begin
+   Rectangle(X+1,Y+9,X+8,Y+16); Rectangle(X+5,Y+5,X+16,Y+16);
+   Line(X+9,Y+9,X+16,Y+2); Line(X+12,Y+2,X+16,Y+2); Line(X+16,Y+2,X+16,Y+6);
+  End;
+  TOOL_SHEAR: Begin
+   Line(X+5,Y+4,X+17,Y+4); Line(X+17,Y+4,X+13,Y+15);
+   Line(X+13,Y+15,X+1,Y+15); Line(X+1,Y+15,X+5,Y+4);
+  End;
+  TOOL_WARP: Begin
+   Line(X+1,Y+5,X+5,Y+2); Line(X+5,Y+2,X+9,Y+6); Line(X+9,Y+6,X+13,Y+2);
+   Line(X+13,Y+2,X+17,Y+5); Line(X+1,Y+5,X+1,Y+13); Line(X+17,Y+5,X+17,Y+13);
+   Line(X+1,Y+13,X+5,Y+16); Line(X+5,Y+16,X+9,Y+12); Line(X+9,Y+12,X+13,Y+16);
+   Line(X+13,Y+16,X+17,Y+13);
+  End;
+  TOOL_GRADIENT: Begin
+   Rectangle(X+1,Y+3,X+17,Y+15);
+   For I := 0 To 6 Do Line(X+3+I*2,Y+4,X+3+I*2,Y+14);
+   Line(X+3,Y+4,X+3,Y+14); Line(X+4,Y+4,X+4,Y+14);
+  End;
+  TOOL_EYEDROP: Begin
+   Line(X+2,Y+16,X+9,Y+9); Line(X+3,Y+17,X+10,Y+10);
+   Line(X+8,Y+6,X+13,Y+11); Line(X+11,Y+3,X+16,Y+8);
+   Line(X+8,Y+6,X+11,Y+3); Line(X+13,Y+11,X+16,Y+8);
+  End;
+  TOOL_BLEND: Begin
+   Rectangle(X+1,Y+2,X+6,Y+7); Rectangle(X+12,Y+11,X+17,Y+16);
+   Rectangle(X+5,Y+6,X+9,Y+10); Rectangle(X+9,Y+9,X+13,Y+13);
+  End;
+  TOOL_SPRAY: Begin
+   Rectangle(X+2,Y+8,X+8,Y+17); Rectangle(X+3,Y+4,X+7,Y+8);
+   Rectangle(X+11,Y+12,X+12,Y+13); Rectangle(X+14,Y+13,X+15,Y+14);
+   Rectangle(X+11,Y+4,X+12,Y+5); Rectangle(X+14,Y+6,X+15,Y+7);
+   Rectangle(X+12,Y+8,X+13,Y+9); Rectangle(X+16,Y+9,X+17,Y+10);
+  End;
+  TOOL_GRAPH: Begin
+   Line(X+2,Y+1,X+2,Y+16); Line(X+2,Y+16,X+17,Y+16);
+   Rectangle(X+4,Y+9,X+7,Y+15); Rectangle(X+9,Y+4,X+12,Y+15);
+   Rectangle(X+14,Y+7,X+17,Y+15);
+  End;
+  TOOL_MEASURE: Begin
+   Line(X+2,Y+16,X+16,Y+3); Line(X+2,Y+16,X+16,Y+16);
+   Arc(X+2,Y+16,0,45,9);
+   Line(X+8,Y+16,X+8,Y+14); Line(X+12,Y+16,X+12,Y+14); Line(X+16,Y+16,X+16,Y+14);
   End;
   TOOL_RECTANGLE: Rectangle(X+1,Y+4,X+16,Y+14);
   TOOL_ELLIPSE: Ellipse(X+9,Y+9,0,360,8,6);
@@ -871,35 +1033,79 @@ Begin
  End;
 End;
 
+Procedure ToolBevel(X1, Y1, X2, Y2: Integer; Raised: Boolean);
+Begin
+ If Raised Then Begin
+  SetColor(15); Line(X1,Y1,X2-1,Y1); Line(X1,Y1,X1,Y2-1);
+  SetColor(8); Line(X1,Y2,X2,Y2); Line(X2,Y1,X2,Y2);
+ End Else Begin
+  SetColor(8); Line(X1,Y1,X2-1,Y1); Line(X1,Y1,X1,Y2-1);
+  SetColor(15); Line(X1,Y2,X2,Y2); Line(X2,Y1,X2,Y2);
+ End;
+End;
+
+Function WidgetTop: Integer;
+Begin
+ WidgetTop := MENUBAR_HEIGHT+4+(MAX_TOOLS Div 2)*TOOL_BTN+4;
+End;
+
+{ pastilles trait / remplissage, couleurs par defaut et inversion }
+Procedure DrawColorWidget;
+Var Y: Integer;
+Begin
+ Y := WidgetTop;
+ { trait : cadre de la couleur }
+ SetFillStyle(SolidFill,StrokeColor);
+ Bar(14,Y+14,34,Y+34);
+ SetFillStyle(SolidFill,COLOR_BG);
+ Bar(19,Y+19,29,Y+29);
+ SetColor(0); Rectangle(14,Y+14,34,Y+34); Rectangle(19,Y+19,29,Y+29);
+ { remplissage }
+ SetFillStyle(SolidFill,FillColor);
+ Bar(4,Y+4,24,Y+24);
+ SetColor(0); Rectangle(4,Y+4,24,Y+24);
+ If FillColor = 15 Then Begin
+  SetColor(4); Line(5,Y+23,23,Y+5);
+ End;
+ { couleurs par defaut }
+ SetFillStyle(SolidFill,15); Bar(6,Y+40,12,Y+46);
+ SetColor(0); Rectangle(6,Y+40,12,Y+46);
+ SetFillStyle(SolidFill,0); Bar(3,Y+37,8,Y+42);
+ { inversion }
+ SetColor(0);
+ Line(30,Y+8,40,Y+8); Line(30,Y+8,33,Y+5); Line(30,Y+8,33,Y+11);
+ Line(40,Y+8,37,Y+5); Line(40,Y+8,37,Y+11);
+End;
+
 Procedure DrawToolbar;
-Var I, X, Y, R, B: Integer;
+Var I, X, Y, R, B, Id: Integer;
 Begin
  SetFillStyle(SolidFill, COLOR_BG);
  Bar(0, MENUBAR_HEIGHT, TOOLBAR_WIDTH - 1, ScreenHeight - STATUSBAR_HEIGHT - 1);
  SetColor(COLOR_BORDER);
  Line(TOOLBAR_WIDTH - 1, MENUBAR_HEIGHT, TOOLBAR_WIDTH - 1, ScreenHeight - STATUSBAR_HEIGHT - 1);
- 
  SetLineStyle(SolidLn, 0, NormWidth);
- X := TOOL_BUTTON_LEFT;
  For I := 0 To MAX_TOOLS-1 Do Begin
-  Y := ToolButtonTop(I);
-  R := X+TOOL_BUTTON_WIDTH-1;
-  B := Y+TOOL_BUTTON_HEIGHT-1;
-  If I = CurrentTool Then SetFillStyle(SolidFill, COLOR_HIGHLIGHT)
-  Else SetFillStyle(SolidFill, COLOR_BG);
-  Bar(X,Y,R,B);
-  If I = CurrentTool Then SetColor(COLOR_BORDER)
-  Else SetColor(COLOR_WINDOW);
-  Line(X,Y,R,Y);
-  Line(X,Y,X,B);
-  If I = CurrentTool Then SetColor(COLOR_WINDOW)
-  Else SetColor(COLOR_BORDER);
-  Line(X,B,R,B);
-  Line(R,Y,R,B);
-  If I = CurrentTool Then SetColor(COLOR_WINDOW)
-  Else SetColor(COLOR_TEXT);
-  DrawToolIcon(X+6,Y+2,I);
+  Id := TOOL_ORDER[I];
+  X := ToolButtonLeft(Id);
+  Y := ToolButtonTop(Id);
+  R := X+TOOL_BTN-1;
+  B := Y+TOOL_BTN-1;
+  If Id = CurrentTool Then Begin
+   SetFillStyle(SolidFill, COLOR_HIGHLIGHT);
+   Bar(X,Y,R,B);
+   ToolBevel(X,Y,R,B,False);
+   SetColor(COLOR_WINDOW);
+   DrawToolIcon(X+3,Y+3,Id);
+  End Else Begin
+   SetFillStyle(SolidFill, COLOR_BG);
+   Bar(X,Y,R,B);
+   ToolBevel(X,Y,R,B,True);
+   SetColor(COLOR_TEXT);
+   DrawToolIcon(X+2,Y+2,Id);
+  End;
  End;
+ DrawColorWidget;
 End;
 
 Procedure DrawStatusBar;
@@ -1662,7 +1868,10 @@ End;
 Procedure DrawSelection;
 Var I, N, X, Y: Integer; B: TBounds; Multi: Boolean;
 Begin
- If CurrentTool <> TOOL_SELECT Then Exit;
+ If Not (CurrentTool In [TOOL_SELECT,TOOL_DIRECT,TOOL_WAND,TOOL_LASSO,TOOL_ERASER,
+    TOOL_SCISSORS,TOOL_ADDPT,TOOL_DELPT,TOOL_ROTATE,TOOL_REFLECT,TOOL_SCALE,
+    TOOL_SHEAR,TOOL_WARP,TOOL_FREEXF,TOOL_GRADIENT,TOOL_EYEDROP,TOOL_BLEND,
+    TOOL_MEASURE]) Then Exit;
  DrawMarquee;
  Multi := False;
  For I := 0 To ObjectCount-1 Do
@@ -1695,6 +1904,7 @@ Begin
   Bar(ScreenX(B.R)+1,ScreenY(B.B)+1,ScreenX(B.R)+3,ScreenY(B.B)+3);
   Exit;
  End;
+ If Not (CurrentTool In [TOOL_SELECT,TOOL_FREEXF]) Then Exit;
  If ObjAt(SelectedObject)^.ObjType = OBJ_BEZIER Then
   DrawBezierHandles(ObjAt(SelectedObject)^,False);
  N := 8;
@@ -2183,6 +2393,14 @@ Begin
  StatusMessage := 'Texte : clic outil/menu ou Entree = valider, Echap = annuler.';
 End;
 
+Var
+ ToolDrag: Boolean;
+
+Procedure ToolPress(CX, CY: Integer); Forward;
+Procedure ToolRelease; Forward;
+Function ToolbarWidgetClick: Boolean; Forward;
+Function FreeXfRotateStart(CX, CY: Integer): Boolean; Forward;
+
 Procedure HandleMouseClick;
 Var
  CanvasX, CanvasY: Integer;
@@ -2194,8 +2412,10 @@ Begin
     (MouseX >= ScreenWidth) Then Exit;
  If MouseX < TOOLBAR_WIDTH Then Begin
   I := ToolHitTest(MouseX, MouseY);
-  If I >= 0 Then
+  If I >= 0 Then Begin
    CurrentTool := I;
+   StatusMessage := ToolTipText(I);
+  End Else ToolbarWidgetClick;
   Exit;
  End;
  
@@ -2223,8 +2443,14 @@ Begin
   Exit;
  End;
  
- If CurrentTool <> TOOL_SELECT Then ClearSelFlags;
+ If CurrentTool In [TOOL_RECTANGLE,TOOL_ELLIPSE,TOOL_LINE,TOOL_BEZIER,TOOL_PENCIL,
+                    TOOL_PEN,TOOL_TEXT,TOOL_POLYGON,TOOL_STAR,TOOL_BRUSH,
+                    TOOL_SPRAY,TOOL_GRAPH] Then ClearSelFlags;
  Case CurrentTool Of
+  TOOL_DIRECT, TOOL_WAND, TOOL_LASSO, TOOL_POLYGON, TOOL_STAR, TOOL_ERASER,
+  TOOL_SCISSORS, TOOL_ADDPT, TOOL_DELPT, TOOL_ROTATE, TOOL_REFLECT,
+  TOOL_SCALE, TOOL_SHEAR, TOOL_WARP, TOOL_GRADIENT, TOOL_EYEDROP,
+  TOOL_BLEND, TOOL_SPRAY, TOOL_GRAPH, TOOL_MEASURE: ToolPress(CanvasX,CanvasY);
   TOOL_BEZIER, TOOL_PEN:
   Begin
    If BezierStage = 2 Then Begin
@@ -2269,22 +2495,24 @@ Begin
    End;
    BeginTextInput(TextEditIndex);
   End;
-  TOOL_PENCIL:
+  TOOL_PENCIL, TOOL_BRUSH:
   Begin
    FillChar(PencilObject,SizeOf(PencilObject),0);
    PencilObject.ObjType := OBJ_PATH;
    PencilObject.Visible := True;
    PencilObject.LayerIndex := CurrentLayer;
    PencilObject.Path.StrokeColor := StrokeColor;
-   PencilObject.Path.StrokeWidth := 1;
+   If CurrentTool = TOOL_BRUSH Then PencilObject.Path.StrokeWidth := 4
+   Else PencilObject.Path.StrokeWidth := 1;
    PencilActive := True;
    DrawingMode := True;
    SelectedObject := -1;
    StatusMessage := 'Crayon : tracer, relacher pour terminer, Echap pour annuler.';
    AddPencilPoint;
   End;
-  TOOL_SELECT:
+  TOOL_SELECT, TOOL_FREEXF:
   Begin
+   If (CurrentTool = TOOL_FREEXF) And FreeXfRotateStart(CanvasX,CanvasY) Then Exit;
    EditHandle := SelectionHandleHit(CanvasX,CanvasY);
    EditMulti := False;
    If EditHandle < 0 Then Begin
@@ -2362,6 +2590,10 @@ Var
  NewObj: TGraphicObject;
  NewSnap: TSnapshot;
 Begin
+ If ToolDrag Then Begin
+  ToolRelease;
+  Exit;
+ End;
  If MarqueeActive Then Begin
   FinishMarquee(False);
   Exit;
@@ -3458,6 +3690,8 @@ Const
  TR_FLIPH = 1;
  TR_FLIPV = 2;
  TR_SCALE = 3;
+ TR_REFLECT = 4;
+ TR_SHEAR = 5;
 
 Var
  ChoiceKind, ChoiceCount: Integer;
@@ -3619,6 +3853,12 @@ Begin
   End;
   TR_FLIPH: Begin NX := 2*CX-X; NY := Y; End;
   TR_FLIPV: Begin NX := X; NY := 2*CY-Y; End;
+  TR_REFLECT: Begin
+   Co := Cos(Par); Si := Sin(Par);
+   NX := CX+(X-CX)*(Co*Co-Si*Si)+(Y-CY)*(2*Co*Si);
+   NY := CY+(X-CX)*(2*Co*Si)+(Y-CY)*(Si*Si-Co*Co);
+  End;
+  TR_SHEAR: Begin NX := X+Par*(Y-CY); NY := Y; End;
  Else Begin NX := CX+(X-CX)*Par; NY := CY+(Y-CY)*Par; End;
  End;
  NX := Round(NX*1000)/1000;
@@ -3675,7 +3915,8 @@ Begin
   Q := Round(Par/(Pi/2));
   If Abs(Par-Q*(Pi/2)) < 0.0001 Then Quarter := 1;
  End;
- If (O.ObjType In [OBJ_RECT,OBJ_ELLIPSE]) And (Kind = TR_ROT) And (Quarter = 0) Then
+ If (O.ObjType In [OBJ_RECT,OBJ_ELLIPSE]) And
+    (((Kind = TR_ROT) And (Quarter = 0)) Or (Kind = TR_SHEAR)) Then
   ConvertToPath(O);
  Case O.ObjType Of
   OBJ_RECT: Begin
@@ -3694,6 +3935,8 @@ Begin
     End;
    End Else If Kind = TR_SCALE Then Begin
     O.Ellipse.RX := O.Ellipse.RX*Par; O.Ellipse.RY := O.Ellipse.RY*Par;
+   End Else If (Kind = TR_REFLECT) And Odd(Round(Par/(Pi/4))) Then Begin
+    T := O.Ellipse.RX; O.Ellipse.RX := O.Ellipse.RY; O.Ellipse.RY := T;
    End;
   End;
   OBJ_LINE: Begin
@@ -4880,6 +5123,1108 @@ Procedure HandleGlyphKey(Key: Char);
 Begin
  NeedsRedraw := True;
  If (Key = #27) Or (Key = #13) Then CloseGlyphs;
+End;
+
+{ ------------------------------------------------------------------
+  Outils de la boite a outils verticale
+  ------------------------------------------------------------------ }
+Const
+ SPRAY_RADIUS = 16;
+ GRAPH_VALS: Array[0..4] Of Integer = (60,85,45,95,70);
+ GRAPH_COLORS: Array[0..4] Of Integer = (9,10,12,14,11);
+ TOOL_RGB: Array[0..15,0..2] Of Byte = (
+  (0,0,0),(0,0,170),(0,170,0),(0,170,170),(170,0,0),(170,0,170),(170,85,0),
+  (170,170,170),(85,85,85),(85,85,255),(85,255,85),(85,255,255),(255,85,85),
+  (255,85,255),(255,255,85),(255,255,255));
+
+Type
+ TCum = Array[0..100] Of Real;
+
+Var
+ ToolKind, DragObj, DragPt, LassoN, BlendFirst, PolyN, StarN: Integer;
+ TX0, TY0, TXc, TYc, TLX, TLY: Real;
+ ToolChanged, ToolHasSnap: Boolean;
+ ToolS0: TSnapshot;
+ SprayGrp: LongInt;
+ LassoX, LassoY: Array[0..399] Of Real;
+
+Function AtanTwo(Y, X: Real): Real;
+Begin
+ If X > 0 Then AtanTwo := ArcTan(Y/X)
+ Else If X < 0 Then Begin
+  If Y >= 0 Then AtanTwo := ArcTan(Y/X)+Pi Else AtanTwo := ArcTan(Y/X)-Pi;
+ End Else If Y > 0 Then AtanTwo := Pi/2
+ Else If Y < 0 Then AtanTwo := -Pi/2
+ Else AtanTwo := 0;
+End;
+
+Function MouseDocX: Real;
+Begin
+ MouseDocX := MaxReal(0,MinReal(PageW-1,DocumentX(MouseX)));
+End;
+
+Function MouseDocY: Real;
+Begin
+ MouseDocY := MaxReal(0,MinReal(PageH-1,DocumentY(MouseY)));
+End;
+
+Function NextGroupId: LongInt;
+Var I: Integer; M: LongInt;
+Begin
+ M := 0;
+ For I := 0 To ObjectCount-1 Do
+  If GroupOfObj(ObjAt(I)^) > M Then M := GroupOfObj(ObjAt(I)^);
+ NextGroupId := M+1;
+End;
+
+Function NearestColor(R, G, B: Real): Integer;
+Var I, Best: Integer; D, BD: Real;
+Begin
+ Best := 0; BD := 1E30;
+ For I := 0 To 15 Do Begin
+  D := Sqr(R-TOOL_RGB[I,0])+Sqr(G-TOOL_RGB[I,1])+Sqr(B-TOOL_RGB[I,2]);
+  If D < BD Then Begin BD := D; Best := I; End;
+ End;
+ NearestColor := Best;
+End;
+
+Function LerpColor(C0, C1: Integer; T: Real): Integer;
+Begin
+ LerpColor := NearestColor(TOOL_RGB[C0,0]+(TOOL_RGB[C1,0]-TOOL_RGB[C0,0])*T,
+                           TOOL_RGB[C0,1]+(TOOL_RGB[C1,1]-TOOL_RGB[C0,1])*T,
+                           TOOL_RGB[C0,2]+(TOOL_RGB[C1,2]-TOOL_RGB[C0,2])*T);
+End;
+
+Procedure SetObjStroke(Var O: TGraphicObject; C: Integer);
+Begin
+ Case O.ObjType Of
+  OBJ_RECT: O.Rectangle.StrokeColor := C;
+  OBJ_ELLIPSE: O.Ellipse.StrokeColor := C;
+  OBJ_LINE: O.Line.StrokeColor := C;
+  OBJ_PATH, OBJ_BEZIER, OBJ_FILLED_PATH: O.Path.StrokeColor := C;
+ End;
+End;
+
+Procedure SetObjFill(Var O: TGraphicObject; C: Integer);
+Begin
+ Case O.ObjType Of
+  OBJ_RECT: O.Rectangle.FillColor := C;
+  OBJ_ELLIPSE: O.Ellipse.FillColor := C;
+  OBJ_TEXT: If C <> 15 Then O.TextObj.Color := C;
+  OBJ_PATH, OBJ_FILLED_PATH: Begin
+   O.Path.FillColor := C;
+   If (C <> 15) And (O.Path.PointCount >= 3) Then O.ObjType := OBJ_FILLED_PATH
+   Else O.ObjType := OBJ_PATH;
+  End;
+ End;
+End;
+
+Procedure SetObjWidth(Var O: TGraphicObject; W: Real);
+Begin
+ Case O.ObjType Of
+  OBJ_RECT: O.Rectangle.StrokeWidth := W;
+  OBJ_ELLIPSE: O.Ellipse.StrokeWidth := W;
+  OBJ_LINE: O.Line.StrokeWidth := W;
+  OBJ_PATH, OBJ_BEZIER, OBJ_FILLED_PATH: O.Path.StrokeWidth := W;
+ End;
+End;
+
+Procedure StartDrag;
+Begin
+ ToolDrag := True;
+ DrawingMode := True;
+ ResetToolTip;
+End;
+
+Function TopHitObject(CX, CY: Integer): Integer;
+Var I: Integer;
+Begin
+ TopHitObject := -1;
+ For I := ObjectCount-1 DownTo 0 Do
+  If ObjectHit(I,CX,CY) Then Begin TopHitObject := I; Exit; End;
+End;
+
+Procedure SelectOnly(I: Integer);
+Begin
+ ClearSelFlags;
+ SelectedObject := I;
+ If I >= 0 Then SelectGroupOf(I);
+End;
+
+{ ---- selection directe ---- }
+Function AnchorCount(Var O: TGraphicObject): Integer;
+Var Q: TPoly;
+Begin
+ Case O.ObjType Of
+  OBJ_LINE: AnchorCount := 2;
+  OBJ_BEZIER: AnchorCount := 4;
+  OBJ_PATH, OBJ_FILLED_PATH: AnchorCount := O.Path.PointCount;
+  OBJ_RECT: AnchorCount := 4;
+  OBJ_ELLIPSE: AnchorCount := 36;
+ Else AnchorCount := 0;
+ End;
+End;
+
+Procedure AnchorPos(Var O: TGraphicObject; K: Integer; Var X, Y: Real);
+Var Q: TPoly;
+Begin
+ Case O.ObjType Of
+  OBJ_LINE: If K = 0 Then Begin X := O.Line.X1; Y := O.Line.Y1; End
+            Else Begin X := O.Line.X2; Y := O.Line.Y2; End;
+  OBJ_BEZIER, OBJ_PATH, OBJ_FILLED_PATH: Begin
+   X := O.Path.Points[K].X; Y := O.Path.Points[K].Y;
+  End;
+ Else Begin
+  If ObjToPoly(O,Q) And (K < Q.N) Then Begin X := Q.P[K].X; Y := Q.P[K].Y; End
+  Else Begin X := -1000; Y := -1000; End;
+ End;
+ End;
+End;
+
+Procedure DirectPress(CX, CY: Integer);
+Var I, K, N, BI, BK: Integer; PO: PGraphicObject; B: TBounds; X, Y, D, BD, Tol: Real;
+Begin
+ Tol := 6/ZoomScale;
+ If Tol < 3 Then Tol := 3;
+ BD := 1E30; BI := -1; BK := 0;
+ For I := ObjectCount-1 DownTo 0 Do Begin
+  PO := ObjAt(I);
+  If PO^.Visible And (PO^.ObjType <> OBJ_TEXT) Then Begin
+   B := ObjectBounds(PO^);
+   If (CX >= B.L-Tol) And (CX <= B.R+Tol) And (CY >= B.T-Tol) And (CY <= B.B+Tol) Then Begin
+    N := AnchorCount(PO^);
+    For K := 0 To N-1 Do Begin
+     AnchorPos(PO^,K,X,Y);
+     D := Dist2(CX,CY,X,Y);
+     If (D <= Tol) And (D < BD) Then Begin BD := D; BI := I; BK := K; End;
+    End;
+   End;
+  End;
+ End;
+ If BI < 0 Then Begin
+  I := TopHitObject(CX,CY);
+  SelectOnly(I);
+  If I >= 0 Then StatusMessage := 'Chemin selectionne : cliquer un point d''ancrage pour le deplacer.'
+  Else StatusMessage := 'Aucun objet selectionne.';
+  Exit;
+ End;
+ If Not BeginOp(ToolS0) Then Exit;
+ ToolHasSnap := True;
+ SelectOnly(BI);
+ If ObjAt(BI)^.ObjType In [OBJ_RECT,OBJ_ELLIPSE] Then ConvertToPath(ObjAt(BI)^);
+ DragObj := BI; DragPt := BK;
+ StartDrag;
+ StatusMessage := 'Glisser pour deplacer le point d''ancrage.';
+End;
+
+Procedure DirectMove;
+Var X, Y: Real; PO: PGraphicObject;
+Begin
+ If (DragObj < 0) Or (DragObj >= ObjectCount) Then Exit;
+ X := MouseDocX; Y := MouseDocY;
+ PO := ObjAt(DragObj);
+ Case PO^.ObjType Of
+  OBJ_LINE: If DragPt = 0 Then Begin PO^.Line.X1 := X; PO^.Line.Y1 := Y; End
+            Else Begin PO^.Line.X2 := X; PO^.Line.Y2 := Y; End;
+  OBJ_BEZIER, OBJ_PATH, OBJ_FILLED_PATH: Begin
+   PO^.Path.Points[DragPt].X := X; PO^.Path.Points[DragPt].Y := Y;
+  End;
+ End;
+ ToolChanged := True;
+ NeedsRedraw := True;
+End;
+
+{ ---- baguette magique ---- }
+Procedure WandPress(CX, CY: Integer);
+Var I, Hit, N: Integer; S0, F0: Integer; Shift: Boolean;
+Begin
+ Hit := TopHitObject(CX,CY);
+ Shift := ShiftPressed;
+ If Hit < 0 Then Begin
+  If Not Shift Then Begin ClearSelFlags; SelectedObject := -1; End;
+  StatusMessage := 'Baguette magique : cliquer un objet.';
+  Exit;
+ End;
+ S0 := ObjStroke(ObjAt(Hit)^); F0 := ObjFill(ObjAt(Hit)^);
+ If Not Shift Then ClearSelFlags;
+ N := 0;
+ For I := 0 To ObjectCount-1 Do
+  If ObjAt(I)^.Visible And (ObjStroke(ObjAt(I)^) = S0) And
+     (ObjFill(ObjAt(I)^) = F0) Then Begin
+   SelFlagPtr(ObjAt(I)^)^ := True; Inc(N);
+  End;
+ SelectedObject := Hit;
+ SelFlagPtr(ObjAt(Hit)^)^ := True;
+ Str(N,StatusMessage);
+ StatusMessage := 'Baguette magique : '+StatusMessage+' objet(s) de meme apparence.';
+End;
+
+{ ---- lasso ---- }
+Procedure LassoAdd(X, Y: Real);
+Begin
+ If LassoN >= 400 Then Exit;
+ If LassoN > 0 Then
+  If Dist2(LassoX[LassoN-1],LassoY[LassoN-1],X,Y) < 2 Then Exit;
+ LassoX[LassoN] := X; LassoY[LassoN] := Y; Inc(LassoN);
+End;
+
+Function InLasso(X, Y: Real): Boolean;
+Var I, J: Integer; R: Boolean;
+Begin
+ R := False; J := LassoN-1;
+ For I := 0 To LassoN-1 Do Begin
+  If (LassoY[I] > Y) <> (LassoY[J] > Y) Then
+   If X < (LassoX[J]-LassoX[I])*(Y-LassoY[I])/(LassoY[J]-LassoY[I])+LassoX[I] Then
+    R := Not R;
+  J := I;
+ End;
+ InLasso := R;
+End;
+
+Procedure LassoFinish;
+Var I, K, N: Integer; B: TBounds; Q: TPoly; Inside: Boolean; S: String;
+Begin
+ If LassoN < 3 Then Begin StatusMessage := 'Lasso : tracer une boucle.'; Exit; End;
+ If Not ShiftPressed Then ClearSelFlags;
+ SelectedObject := -1;
+ N := 0;
+ For I := 0 To ObjectCount-1 Do
+  If ObjAt(I)^.Visible Then Begin
+   B := ObjectBounds(ObjAt(I)^);
+   Inside := InLasso((B.L+B.R)/2,(B.T+B.B)/2);
+   If Not Inside And (ObjAt(I)^.ObjType <> OBJ_TEXT) Then
+    If ObjToPoly(ObjAt(I)^,Q) Then
+     For K := 0 To Q.N-1 Do
+      If InLasso(Q.P[K].X,Q.P[K].Y) Then Inside := True;
+   If Inside Then Begin
+    SelectGroupOf(I); SelectedObject := I; Inc(N);
+   End;
+  End;
+ Str(SelCount,S);
+ StatusMessage := 'Lasso : '+S+' objet(s) selectionne(s).';
+End;
+
+{ ---- polygone et etoile ---- }
+Procedure ShapePoints(Star: Boolean; CX, CY, R, A0: Real; Var Q: TPoly);
+Var I, N: Integer; A, Rad: Real;
+Begin
+ FillChar(Q,SizeOf(Q),0);
+ If Star Then N := StarN*2 Else N := PolyN;
+ Q.N := N; Q.Closed := True;
+ For I := 0 To N-1 Do Begin
+  A := A0+I*2*Pi/N;
+  Rad := R;
+  If Star And Odd(I) Then Rad := R*0.4;
+  Q.P[I].X := CX+Rad*Cos(A);
+  Q.P[I].Y := CY+Rad*Sin(A);
+ End;
+End;
+
+Procedure ShapeFinish(Star: Boolean);
+Var Q: TPoly; R, A0: Real; O, Proto: TGraphicObject; I: Integer; S: String;
+Begin
+ R := Dist2(TX0,TY0,MouseDocX,MouseDocY);
+ If R < 4 Then Begin StatusMessage := 'Forme : glisser depuis le centre.'; Exit; End;
+ A0 := AtanTwo(MouseDocY-TY0,MouseDocX-TX0);
+ ShapePoints(Star,TX0,TY0,R,A0,Q);
+ ClampPoly(Q);
+ FillChar(Proto,SizeOf(Proto),0);
+ Proto.ObjType := OBJ_PATH; Proto.Visible := True;
+ Proto.Path.StrokeColor := StrokeColor; Proto.Path.FillColor := FillColor;
+ Proto.Path.StrokeWidth := 1;
+ If FillColor <> 15 Then Proto.ObjType := OBJ_FILLED_PATH;
+ PolyToObj(Q,Proto,O);
+ O.Path.Closed := True;
+ PushUndo;
+ ClearSelFlags;
+ AppendObject(O);
+ SelectedObject := ObjectCount-1;
+ SelFlagPtr(ObjAt(SelectedObject)^)^ := True;
+ FileModified := True;
+ If Star Then Str(StarN,S) Else Str(PolyN,S);
+ If Star Then StatusMessage := 'Etoile a '+S+' branches creee.'
+ Else StatusMessage := 'Polygone a '+S+' cotes cree.';
+End;
+
+{ ---- graphique en colonnes ---- }
+Procedure GraphFinish;
+Var X0, Y0, X1, Y1, SW, BW, H, Base: Real; I: Integer; O: TGraphicObject; G: LongInt;
+Begin
+ X0 := MinReal(TX0,MouseDocX); X1 := MaxReal(TX0,MouseDocX);
+ Y0 := MinReal(TY0,MouseDocY); Y1 := MaxReal(TY0,MouseDocY);
+ If (X1-X0 < 60) Or (Y1-Y0 < 50) Then Begin
+  StatusMessage := 'Graphique : glisser un cadre d''au moins 60 x 50.';
+  Exit;
+ End;
+ PushUndo;
+ G := NextGroupId;
+ ClearSelFlags;
+ SW := (X1-X0-24)/5; BW := SW*0.7;
+ Base := Round(Y1-12);
+ For I := 0 To 4 Do Begin
+  H := (Y1-Y0-28)*GRAPH_VALS[I]/100;
+  FillChar(O,SizeOf(O),0);
+  O.ObjType := OBJ_RECT; O.Visible := True; O.LayerIndex := CurrentLayer;
+  O.Rectangle.X := Round(X0+16+I*SW); O.Rectangle.Y := Round(Base-H);
+  O.Rectangle.Width := Round(BW); O.Rectangle.Height := Round(H);
+  O.Rectangle.StrokeColor := 0; O.Rectangle.FillColor := GRAPH_COLORS[I];
+  O.Rectangle.StrokeWidth := 1;
+  SetGroupOfObj(O,G);
+  AppendObject(O);
+ End;
+ FillChar(O,SizeOf(O),0);
+ O.ObjType := OBJ_LINE; O.Visible := True; O.LayerIndex := CurrentLayer;
+ O.Line.X1 := Round(X0+10); O.Line.Y1 := Round(Y0+6);
+ O.Line.X2 := Round(X0+10); O.Line.Y2 := Base+1;
+ O.Line.StrokeColor := 0; O.Line.StrokeWidth := 1;
+ SetGroupOfObj(O,G);
+ AppendObject(O);
+ O.Line.X1 := Round(X0+10); O.Line.Y1 := Base+1;
+ O.Line.X2 := Round(X1-6); O.Line.Y2 := Base+1;
+ AppendObject(O);
+ SelectedObject := ObjectCount-1;
+ SelectGroupOf(SelectedObject);
+ FileModified := True;
+ StatusMessage := 'Graphique en colonnes cree (valeurs d''exemple).';
+End;
+
+{ ---- transformations a la souris ---- }
+Procedure TransformFinish;
+Var X, Y, A0, A1, D0, D1, F, DX, DY, Th: Real;
+Begin
+ X := MouseDocX; Y := MouseDocY;
+ Case ToolKind Of
+  TOOL_ROTATE: Begin
+   A0 := AtanTwo(TY0-TYc,TX0-TXc); A1 := AtanTwo(Y-TYc,X-TXc);
+   If Abs(A1-A0) < 0.01 Then Begin StatusMessage := 'Rotation : glisser autour de la selection.'; Exit; End;
+   TransformSelection(TR_ROT,A1-A0);
+  End;
+  TOOL_SCALE: Begin
+   D0 := Dist2(TX0,TY0,TXc,TYc); D1 := Dist2(X,Y,TXc,TYc);
+   If D0 < 4 Then D0 := 40;
+   F := D1/D0;
+   If F < 0.1 Then F := 0.1;
+   If F > 8 Then F := 8;
+   If Abs(F-1) < 0.01 Then Begin StatusMessage := 'Echelle : glisser depuis le centre.'; Exit; End;
+   TransformSelection(TR_SCALE,F);
+  End;
+  TOOL_SHEAR: Begin
+   DX := X-TX0;
+   If Abs(DX) < 2 Then Begin StatusMessage := 'Inclinaison : glisser horizontalement.'; Exit; End;
+   TransformSelection(TR_SHEAR,DX/100);
+  End;
+  TOOL_REFLECT: Begin
+   DX := X-TX0; DY := Y-TY0;
+   If Sqrt(DX*DX+DY*DY) < 4 Then TransformSelection(TR_FLIPH,0)
+   Else Begin
+    Th := Round(AtanTwo(DY,DX)/(Pi/4))*(Pi/4);
+    TransformSelection(TR_REFLECT,Th);
+   End;
+  End;
+ End;
+End;
+
+{ ---- degrade ---- }
+Procedure GradientFinish;
+Var T, I, K: Integer; O: TGraphicObject; X, Y, W, H: Real; C0, C1, C: Integer;
+    Horiz: Boolean; S0: TSnapshot; G: LongInt; P0, P1: Real; N: TGraphicObject;
+Begin
+ T := -1;
+ For I := ObjectCount-1 DownTo 0 Do
+  If (ObjAt(I)^.ObjType = OBJ_RECT) And ObjectHit(I,Round(TX0),Round(TY0)) Then Begin T := I; Break; End;
+ If (T < 0) And (SelectedObject >= 0) And (SelectedObject < ObjectCount) Then
+  If ObjAt(SelectedObject)^.ObjType = OBJ_RECT Then T := SelectedObject;
+ If T < 0 Then Begin
+  StatusMessage := 'Degrade : le rectangle doit etre pointe ou selectionne (autres formes non gerees).';
+  Exit;
+ End;
+ If Dist2(TX0,TY0,MouseDocX,MouseDocY) < 6 Then Begin
+  StatusMessage := 'Degrade : glisser pour fixer la direction.';
+  Exit;
+ End;
+ O := ObjAt(T)^;
+ X := O.Rectangle.X; Y := O.Rectangle.Y; W := O.Rectangle.Width; H := O.Rectangle.Height;
+ Horiz := Abs(MouseDocX-TX0) >= Abs(MouseDocY-TY0);
+ C0 := O.Rectangle.FillColor;
+ If StrokeColor <> C0 Then C1 := StrokeColor Else C1 := 0;
+ If Horiz Then Begin P0 := TX0; P1 := MouseDocX; End Else Begin P0 := TY0; P1 := MouseDocY; End;
+ If P1 < P0 Then Begin C := C0; C0 := C1; C1 := C; End;
+ If Not BeginOp(S0) Then Exit;
+ G := NextGroupId;
+ ClearSelFlags;
+ DeleteObjectAt(T);
+ K := 8;
+ For I := 0 To K-1 Do Begin
+  C := LerpColor(C0,C1,I/(K-1));
+  FillChar(N,SizeOf(N),0);
+  N.ObjType := OBJ_RECT; N.Visible := True; N.LayerIndex := O.LayerIndex;
+  If Horiz Then Begin
+   N.Rectangle.X := Round(X+I*W/K); N.Rectangle.Y := Y;
+   N.Rectangle.Width := Round(X+(I+1)*W/K)-Round(X+I*W/K); N.Rectangle.Height := H;
+  End Else Begin
+   N.Rectangle.X := X; N.Rectangle.Y := Round(Y+I*H/K);
+   N.Rectangle.Width := W; N.Rectangle.Height := Round(Y+(I+1)*H/K)-Round(Y+I*H/K);
+  End;
+  N.Rectangle.StrokeColor := C; N.Rectangle.FillColor := C; N.Rectangle.StrokeWidth := 1;
+  SetGroupOfObj(N,G);
+  If (N.Rectangle.Width >= 1) And (N.Rectangle.Height >= 1) Then AppendObject(N);
+ End;
+ SelectedObject := ObjectCount-1;
+ SelectGroupOf(SelectedObject);
+ StatusMessage := 'Degrade applique (8 bandes, palette 16 couleurs).';
+ EndOp(S0,True);
+End;
+
+{ ---- pipette ---- }
+Procedure EyedropPress(CX, CY: Integer);
+Var I, Hit, S, F, N: Integer; W: Real; S0: TSnapshot; Txt: String;
+Begin
+ Hit := TopHitObject(CX,CY);
+ If Hit < 0 Then Begin StatusMessage := 'Pipette : cliquer un objet.'; Exit; End;
+ S := ObjStroke(ObjAt(Hit)^); F := ObjFill(ObjAt(Hit)^); W := ObjWidthOf(ObjAt(Hit)^);
+ If ObjAt(Hit)^.ObjType = OBJ_TEXT Then F := S;
+ N := 0;
+ If (SelCount > 0) And Not IsSel(Hit) Then Begin
+  If BeginOp(S0) Then Begin
+   For I := 0 To ObjectCount-1 Do
+    If IsSel(I) Then Begin
+     If ObjAt(I)^.ObjType <> OBJ_TEXT Then Begin
+      SetObjStroke(ObjAt(I)^,S);
+      SetObjWidth(ObjAt(I)^,W);
+     End;
+     If ObjAt(I)^.ObjType In [OBJ_RECT,OBJ_ELLIPSE,OBJ_FILLED_PATH,OBJ_PATH,OBJ_TEXT] Then
+      SetObjFill(ObjAt(I)^,F);
+     Inc(N);
+    End;
+   EndOp(S0,N > 0);
+  End;
+ End;
+ StrokeColor := S;
+ If F <> 15 Then FillColor := F Else If ObjAt(Hit)^.ObjType In [OBJ_RECT,OBJ_ELLIPSE,OBJ_FILLED_PATH] Then FillColor := 15;
+ Str(N,Txt);
+ If N > 0 Then StatusMessage := 'Pipette : apparence appliquee a '+Txt+' objet(s).'
+ Else StatusMessage := 'Pipette : couleurs courantes mises a jour.';
+End;
+
+{ ---- fondu ---- }
+Procedure BuildBlend(A, B: Integer);
+Var OA, OB, NO, Proto: TGraphicObject; QA, QB, QN: TPoly; I, J, Steps: Integer; T: Real;
+    G: LongInt; S0: TSnapshot; Ok: Boolean; SA, SB, FA, FB: Integer;
+Begin
+ OA := ObjAt(A)^; OB := ObjAt(B)^;
+ Steps := 5;
+ If (OA.ObjType = OB.ObjType) And (OA.ObjType In [OBJ_RECT,OBJ_ELLIPSE,OBJ_LINE]) Then Ok := True
+ Else Begin
+  Ok := ObjToPoly(OA,QA) And ObjToPoly(OB,QB) And (QA.N = QB.N) And
+        (OA.ObjType <> OBJ_TEXT) And (OB.ObjType <> OBJ_TEXT);
+ End;
+ If Not Ok Then Begin
+  StatusMessage := 'Fondu : memes formes, ou chemins de meme nombre de points requis.';
+  Exit;
+ End;
+ If Not BeginOp(S0) Then Exit;
+ G := NextGroupId;
+ ClearSelFlags;
+ SA := ObjStroke(OA); SB := ObjStroke(OB); FA := ObjFill(OA); FB := ObjFill(OB);
+ For I := 1 To Steps Do Begin
+  T := I/(Steps+1);
+  FillChar(NO,SizeOf(NO),0);
+  NO.Visible := True; NO.LayerIndex := OA.LayerIndex;
+  If (OA.ObjType = OB.ObjType) And (OA.ObjType = OBJ_RECT) Then Begin
+   NO.ObjType := OBJ_RECT;
+   NO.Rectangle.X := OA.Rectangle.X+(OB.Rectangle.X-OA.Rectangle.X)*T;
+   NO.Rectangle.Y := OA.Rectangle.Y+(OB.Rectangle.Y-OA.Rectangle.Y)*T;
+   NO.Rectangle.Width := OA.Rectangle.Width+(OB.Rectangle.Width-OA.Rectangle.Width)*T;
+   NO.Rectangle.Height := OA.Rectangle.Height+(OB.Rectangle.Height-OA.Rectangle.Height)*T;
+   NO.Rectangle.StrokeWidth := 1;
+  End Else If (OA.ObjType = OB.ObjType) And (OA.ObjType = OBJ_ELLIPSE) Then Begin
+   NO.ObjType := OBJ_ELLIPSE;
+   NO.Ellipse.CX := OA.Ellipse.CX+(OB.Ellipse.CX-OA.Ellipse.CX)*T;
+   NO.Ellipse.CY := OA.Ellipse.CY+(OB.Ellipse.CY-OA.Ellipse.CY)*T;
+   NO.Ellipse.RX := OA.Ellipse.RX+(OB.Ellipse.RX-OA.Ellipse.RX)*T;
+   NO.Ellipse.RY := OA.Ellipse.RY+(OB.Ellipse.RY-OA.Ellipse.RY)*T;
+   NO.Ellipse.StrokeWidth := 1;
+  End Else If (OA.ObjType = OB.ObjType) And (OA.ObjType = OBJ_LINE) Then Begin
+   NO.ObjType := OBJ_LINE;
+   NO.Line.X1 := OA.Line.X1+(OB.Line.X1-OA.Line.X1)*T;
+   NO.Line.Y1 := OA.Line.Y1+(OB.Line.Y1-OA.Line.Y1)*T;
+   NO.Line.X2 := OA.Line.X2+(OB.Line.X2-OA.Line.X2)*T;
+   NO.Line.Y2 := OA.Line.Y2+(OB.Line.Y2-OA.Line.Y2)*T;
+   NO.Line.StrokeWidth := 1;
+  End Else Begin
+   QN := QA;
+   For J := 0 To QA.N-1 Do Begin
+    QN.P[J].X := QA.P[J].X+(QB.P[J].X-QA.P[J].X)*T;
+    QN.P[J].Y := QA.P[J].Y+(QB.P[J].Y-QA.P[J].Y)*T;
+   End;
+   Proto := OA;
+   PolyToObj(QN,Proto,NO);
+   NO.Path.StrokeWidth := 1;
+  End;
+  SetObjStroke(NO,LerpColor(SA,SB,T));
+  If (FA <> 15) And (FB <> 15) Then SetObjFill(NO,LerpColor(FA,FB,T))
+  Else If FA <> 15 Then SetObjFill(NO,FA);
+  SetGroupOfObj(NO,G);
+  SelFlagPtr(NO)^ := False;
+  AppendObject(NO);
+ End;
+ SelectedObject := ObjectCount-1;
+ SelectGroupOf(SelectedObject);
+ StatusMessage := '5 etapes de fondu creees.';
+ EndOp(S0,True);
+End;
+
+Procedure BlendPress(CX, CY: Integer);
+Var Hit: Integer;
+Begin
+ Hit := TopHitObject(CX,CY);
+ If Hit < 0 Then Begin
+  BlendFirst := -1;
+  StatusMessage := 'Fondu : cliquer le premier objet, puis le second.';
+  Exit;
+ End;
+ If (BlendFirst < 0) Or (BlendFirst >= ObjectCount) Or (BlendFirst = Hit) Then Begin
+  BlendFirst := Hit;
+  SelectOnly(Hit);
+  StatusMessage := 'Fondu : premier objet choisi, cliquer le second.';
+  Exit;
+ End;
+ BuildBlend(BlendFirst,Hit);
+ BlendFirst := -1;
+End;
+
+{ ---- pulverisateur ---- }
+Procedure SprayAt(X, Y: Real);
+Var K: Integer; A, R, RX, EX, EY: Real; O: TGraphicObject;
+Begin
+ For K := 1 To 3 Do Begin
+  A := Random*2*Pi; R := Random*SPRAY_RADIUS;
+  RX := 2+Random(3);
+  EX := MaxReal(RX,MinReal(PageW-1-RX,X+R*Cos(A)));
+  EY := MaxReal(RX,MinReal(PageH-1-RX,Y+R*Sin(A)));
+  FillChar(O,SizeOf(O),0);
+  O.ObjType := OBJ_ELLIPSE; O.Visible := True; O.LayerIndex := CurrentLayer;
+  O.Ellipse.CX := Round(EX); O.Ellipse.CY := Round(EY);
+  O.Ellipse.RX := RX; O.Ellipse.RY := RX;
+  O.Ellipse.StrokeColor := StrokeColor;
+  If FillColor <> 15 Then O.Ellipse.FillColor := FillColor
+  Else O.Ellipse.FillColor := StrokeColor;
+  O.Ellipse.StrokeWidth := 1;
+  SetGroupOfObj(O,SprayGrp);
+  AppendObject(O);
+ End;
+ ToolChanged := True;
+ NeedsRedraw := True;
+End;
+
+{ ---- gomme ---- }
+Procedure PolyCum(Var Q: TPoly; Var Cum: TCum);
+Var K: Integer;
+Begin
+ Cum[0] := 0;
+ For K := 1 To Q.N-1 Do
+  Cum[K] := Cum[K-1]+Dist2(Q.P[K-1].X,Q.P[K-1].Y,Q.P[K].X,Q.P[K].Y);
+End;
+
+Procedure PolyPointAt(Var Q: TPoly; Var Cum: TCum; D: Real; Var X, Y: Real);
+Var Seg: Integer; L, U: Real;
+Begin
+ Seg := 0;
+ While (Seg < Q.N-2) And (Cum[Seg+1] < D) Do Inc(Seg);
+ L := Cum[Seg+1]-Cum[Seg];
+ U := 0;
+ If L > 0 Then U := (D-Cum[Seg])/L;
+ If U < 0 Then U := 0;
+ If U > 1 Then U := 1;
+ X := Q.P[Seg].X+U*(Q.P[Seg+1].X-Q.P[Seg].X);
+ Y := Q.P[Seg].Y+U*(Q.P[Seg+1].Y-Q.P[Seg].Y);
+End;
+
+Procedure SubPoly(Var Q: TPoly; Var Cum: TCum; D0, D1: Real; Var R: TPoly);
+Var K: Integer; X, Y: Real;
+Begin
+ FillChar(R,SizeOf(R),0);
+ PolyPointAt(Q,Cum,D0,X,Y); AddPt(R,X,Y);
+ For K := 1 To Q.N-2 Do
+  If (Cum[K] > D0) And (Cum[K] < D1) Then AddPt(R,Q.P[K].X,Q.P[K].Y);
+ PolyPointAt(Q,Cum,D1,X,Y); AddPt(R,X,Y);
+End;
+
+Procedure EraseAt(PX, PY: Real);
+Var I, Seg: Integer; R, U, QX, QY, T, Total: Real; PO: PGraphicObject; B: TBounds;
+    Q, A, C: TPoly; Cum: TCum; Proto, NO: TGraphicObject; Hit: Boolean;
+Begin
+ R := 6/ZoomScale;
+ If R < 3 Then R := 3;
+ For I := ObjectCount-1 DownTo 0 Do Begin
+  PO := ObjAt(I);
+  If PO^.Visible Then Begin
+   B := ObjectBounds(PO^);
+   If (PX >= B.L-R) And (PX <= B.R+R) And (PY >= B.T-R) And (PY <= B.B+R) Then Begin
+    If PO^.ObjType = OBJ_TEXT Then Begin
+     DeleteObjectAt(I); ToolChanged := True;
+    End Else If ObjToPoly(PO^,Q) Then Begin
+     Proto := PO^;
+     If Q.Closed Then Begin
+      If Q.N >= 100 Then Dec(Q.N);
+      Q.P[Q.N] := Q.P[0]; Inc(Q.N); Q.Closed := False;
+     End;
+     If NearestOnPoly(Q,PX,PY,Seg,U,QX,QY) Then
+      If Dist2(PX,PY,QX,QY) <= R Then Begin
+       PolyCum(Q,Cum);
+       Total := Cum[Q.N-1];
+       T := Cum[Seg]+U*(Cum[Seg+1]-Cum[Seg]);
+       DeleteObjectAt(I);
+       If T-R > 1.5 Then Begin
+        SubPoly(Q,Cum,0,T-R,A);
+        If A.N >= 2 Then Begin PolyToObj(A,Proto,NO); NO.Visible := True; AppendObject(NO); End;
+       End;
+       If Total-(T+R) > 1.5 Then Begin
+        SubPoly(Q,Cum,T+R,Total,C);
+        If C.N >= 2 Then Begin PolyToObj(C,Proto,NO); NO.Visible := True; AppendObject(NO); End;
+       End;
+       ToolChanged := True;
+      End;
+    End;
+   End;
+  End;
+ End;
+ If ToolChanged Then Begin
+  ClearSelFlags; SelectedObject := -1; NeedsRedraw := True;
+ End;
+End;
+
+{ ---- ciseaux, ajout et suppression de points ---- }
+Procedure ScissorsPress(CX, CY: Integer);
+Var Hit: Integer;
+Begin
+ Hit := TopHitObject(CX,CY);
+ If Hit < 0 Then Begin StatusMessage := 'Ciseaux : cliquer sur un chemin.'; Exit; End;
+ SelectOnly(Hit);
+ LastPickX := CX; LastPickY := CY; LastPickOk := True;
+ SplitCommand;
+End;
+
+Procedure AddPointPress(CX, CY: Integer);
+Var Hit, Seg: Integer; Q: TPoly; U, QX, QY: Real; O, NO: TGraphicObject; S0: TSnapshot;
+Begin
+ Hit := TopHitObject(CX,CY);
+ If Hit < 0 Then Begin StatusMessage := 'Ajout de point : cliquer sur un chemin.'; Exit; End;
+ O := ObjAt(Hit)^;
+ If (O.ObjType = OBJ_TEXT) Or (O.ObjType = OBJ_BEZIER) Then Begin
+  StatusMessage := 'Ajout de point : non disponible sur ce type d''objet.';
+  Exit;
+ End;
+ If Not ObjToPoly(O,Q) Then Exit;
+ If Q.N >= 100 Then Begin StatusMessage := 'Ajout de point : 100 points au maximum.'; Exit; End;
+ If Not NearestOnPoly(Q,CX,CY,Seg,U,QX,QY) Then Exit;
+ If BeginOp(S0) Then Begin
+  Move(Q.P[Seg+1],Q.P[Seg+2],(Q.N-Seg-1)*SizeOf(TPoint2D));
+  FillChar(Q.P[Seg+1],SizeOf(TPoint2D),0);
+  Q.P[Seg+1].X := Round(QX*1000)/1000; Q.P[Seg+1].Y := Round(QY*1000)/1000;
+  Inc(Q.N);
+  PolyToObj(Q,O,NO);
+  If NO.ObjType = OBJ_LINE Then NO.ObjType := NO.ObjType;
+  ObjAt(Hit)^ := NO;
+  SelectOnly(Hit);
+  StatusMessage := 'Point d''ancrage ajoute.';
+  EndOp(S0,True);
+ End;
+End;
+
+Procedure DelPointPress(CX, CY: Integer);
+Var Hit, K, Best, MinN: Integer; PO: PGraphicObject; D, BD, Tol: Real; Q: TPoly; NO: TGraphicObject;
+    S0: TSnapshot;
+Begin
+ Hit := TopHitObject(CX,CY);
+ Tol := 7/ZoomScale;
+ If Tol < 4 Then Tol := 4;
+ Best := -1; BD := 1E30;
+ If Hit >= 0 Then Begin
+  PO := ObjAt(Hit);
+  If PO^.ObjType In [OBJ_PATH,OBJ_FILLED_PATH] Then
+   For K := 0 To PO^.Path.PointCount-1 Do Begin
+    D := Dist2(CX,CY,PO^.Path.Points[K].X,PO^.Path.Points[K].Y);
+    If (D <= Tol) And (D < BD) Then Begin BD := D; Best := K; End;
+   End;
+ End;
+ If Best < 0 Then Begin
+  StatusMessage := 'Suppression de point : cliquer un point d''un chemin.';
+  Exit;
+ End;
+ PO := ObjAt(Hit);
+ If PO^.Path.Closed Or (PO^.ObjType = OBJ_FILLED_PATH) Then MinN := 3 Else MinN := 2;
+ If PO^.Path.PointCount <= MinN Then Begin
+  StatusMessage := 'Suppression de point : le chemin n''aurait plus assez de points.';
+  Exit;
+ End;
+ If BeginOp(S0) Then Begin
+  PO := ObjAt(Hit);
+  For K := Best To PO^.Path.PointCount-2 Do PO^.Path.Points[K] := PO^.Path.Points[K+1];
+  Dec(PO^.Path.PointCount);
+  SelectOnly(Hit);
+  StatusMessage := 'Point d''ancrage supprime.';
+  EndOp(S0,True);
+ End;
+End;
+
+{ ---- deformation ---- }
+Procedure Densify(Var Q: TPoly);
+Var K, Best: Integer; L, BL: Real; Done: Boolean;
+Begin
+ Done := False;
+ While Not Done And (Q.N < 100) Do Begin
+  BL := 12; Best := -1;
+  For K := 0 To Q.N-2 Do Begin
+   L := Dist2(Q.P[K].X,Q.P[K].Y,Q.P[K+1].X,Q.P[K+1].Y);
+   If L > BL Then Begin BL := L; Best := K; End;
+  End;
+  If Best < 0 Then Done := True
+  Else Begin
+   Move(Q.P[Best+1],Q.P[Best+2],(Q.N-Best-1)*SizeOf(TPoint2D));
+   FillChar(Q.P[Best+1],SizeOf(TPoint2D),0);
+   Q.P[Best+1].X := (Q.P[Best].X+Q.P[Best+2].X)/2;
+   Q.P[Best+1].Y := (Q.P[Best].Y+Q.P[Best+2].Y)/2;
+   Inc(Q.N);
+  End;
+ End;
+End;
+
+Procedure WarpPrepare;
+Var I: Integer; Q: TPoly; NO, O: TGraphicObject;
+Begin
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And (ObjAt(I)^.ObjType <> OBJ_TEXT) Then Begin
+   O := ObjAt(I)^;
+   If ObjToPoly(O,Q) Then Begin
+    If (O.ObjType In [OBJ_RECT,OBJ_ELLIPSE]) And (Q.N < 40) Then Q.Closed := True;
+    If Q.Closed And (Q.N < 100) Then Begin Q.P[Q.N] := Q.P[0]; Inc(Q.N); End;
+    Densify(Q);
+    PolyToObj(Q,O,NO);
+    ObjAt(I)^ := NO;
+   End;
+  End;
+ ToolChanged := True;
+End;
+
+Procedure WarpMove;
+Var I, K: Integer; DX, DY, D, W, RW, X, Y: Real; PO: PGraphicObject;
+Begin
+ X := MouseDocX; Y := MouseDocY;
+ DX := X-TLX; DY := Y-TLY;
+ RW := 40;
+ For I := 0 To ObjectCount-1 Do
+  If IsSel(I) And (ObjAt(I)^.ObjType In [OBJ_PATH,OBJ_FILLED_PATH,OBJ_BEZIER]) Then Begin
+   PO := ObjAt(I);
+   For K := 0 To PO^.Path.PointCount-1 Do Begin
+    D := Dist2(TLX,TLY,PO^.Path.Points[K].X,PO^.Path.Points[K].Y);
+    If D < RW Then Begin
+     W := Sqr(1-D/RW);
+     PO^.Path.Points[K].X := MaxReal(0,MinReal(PageW-1,PO^.Path.Points[K].X+DX*W));
+     PO^.Path.Points[K].Y := MaxReal(0,MinReal(PageH-1,PO^.Path.Points[K].Y+DY*W));
+    End;
+   End;
+  End;
+ TLX := X; TLY := Y;
+ NeedsRedraw := True;
+End;
+
+{ ---- transformation manuelle : rotation hors de la boite ---- }
+Function FreeXfRotateStart(CX, CY: Integer): Boolean;
+Var U: TBounds; M: Real;
+Begin
+ FreeXfRotateStart := False;
+ If SelCount = 0 Then Exit;
+ If SelectionHandleHit(CX,CY) >= 0 Then Exit;
+ U := SelectionBounds;
+ M := 40/ZoomScale;
+ If (CX >= U.L) And (CX <= U.R) And (CY >= U.T) And (CY <= U.B) Then Exit;
+ If (CX < U.L-M) Or (CX > U.R+M) Or (CY < U.T-M) Or (CY > U.B+M) Then Exit;
+ ToolKind := TOOL_ROTATE;
+ TXc := (U.L+U.R)/2; TYc := (U.T+U.B)/2;
+ TX0 := CX; TY0 := CY;
+ StartDrag;
+ StatusMessage := 'Transformation manuelle : tourner la selection.';
+ FreeXfRotateStart := True;
+End;
+
+Procedure ShowSides;
+Var A, B: String;
+Begin
+ Str(PolyN,A); Str(StarN,B);
+ StatusMessage := 'Polygone : '+A+' cotes ; etoile : '+B+' branches ([ ] pour changer).';
+End;
+
+{ ---- distribution des evenements ---- }
+Procedure ToolPress(CX, CY: Integer);
+Var U: TBounds;
+Begin
+ TX0 := CX; TY0 := CY; TLX := CX; TLY := CY;
+ ToolKind := CurrentTool; ToolChanged := False; ToolHasSnap := False; ToolDrag := False;
+ DragObj := -1;
+ Case CurrentTool Of
+  TOOL_DIRECT: DirectPress(CX,CY);
+  TOOL_WAND: WandPress(CX,CY);
+  TOOL_SCISSORS: ScissorsPress(CX,CY);
+  TOOL_ADDPT: AddPointPress(CX,CY);
+  TOOL_DELPT: DelPointPress(CX,CY);
+  TOOL_EYEDROP: EyedropPress(CX,CY);
+  TOOL_BLEND: BlendPress(CX,CY);
+  TOOL_LASSO: Begin
+   LassoN := 0; LassoAdd(CX,CY); StartDrag;
+   StatusMessage := 'Lasso : tracer une boucle autour des objets.';
+  End;
+  TOOL_POLYGON, TOOL_STAR, TOOL_GRAPH, TOOL_MEASURE, TOOL_GRADIENT: StartDrag;
+  TOOL_ROTATE, TOOL_SCALE, TOOL_SHEAR, TOOL_REFLECT: Begin
+   If SelCount = 0 Then Begin
+    StatusMessage := 'Selectionner d''abord un ou plusieurs objets.';
+    Exit;
+   End;
+   U := SelectionBounds;
+   TXc := (U.L+U.R)/2; TYc := (U.T+U.B)/2;
+   StartDrag;
+  End;
+  TOOL_ERASER: If BeginOp(ToolS0) Then Begin
+   ToolHasSnap := True; StartDrag; EraseAt(CX,CY);
+   StatusMessage := 'Gomme : glisser sur les chemins a effacer.';
+  End;
+  TOOL_SPRAY: If BeginOp(ToolS0) Then Begin
+   ToolHasSnap := True; SprayGrp := NextGroupId; StartDrag; SprayAt(CX,CY);
+  End;
+  TOOL_WARP: Begin
+   If SelCount = 0 Then Begin
+    StatusMessage := 'Deformation : selectionner d''abord un chemin.';
+    Exit;
+   End;
+   If BeginOp(ToolS0) Then Begin
+    ToolHasSnap := True; WarpPrepare; StartDrag;
+    StatusMessage := 'Deformation : glisser pour pousser les points.';
+   End;
+  End;
+ End;
+End;
+
+Procedure ToolMove;
+Var X, Y: Real; S, T: String;
+Begin
+ X := MouseDocX; Y := MouseDocY;
+ Case ToolKind Of
+  TOOL_DIRECT: DirectMove;
+  TOOL_LASSO: LassoAdd(X,Y);
+  TOOL_ERASER: EraseAt(X,Y);
+  TOOL_SPRAY: If Dist2(TLX,TLY,X,Y) >= 4 Then Begin SprayAt(X,Y); TLX := X; TLY := Y; End;
+  TOOL_WARP: WarpMove;
+  TOOL_MEASURE: Begin
+   Str(Round(Dist2(TX0,TY0,X,Y)),S);
+   Str(Round(-AtanTwo(Y-TY0,X-TX0)*180/Pi),T);
+   StatusMessage := 'Mesure : distance '+S+' px, angle '+T+' deg.';
+  End;
+ End;
+ NeedsRedraw := True;
+End;
+
+Procedure ToolRelease;
+Begin
+ ToolDrag := False;
+ DrawingMode := False;
+ Case ToolKind Of
+  TOOL_DIRECT, TOOL_ERASER, TOOL_SPRAY, TOOL_WARP: Begin
+   If ToolHasSnap Then EndOp(ToolS0,ToolChanged);
+   If ToolKind = TOOL_ERASER Then StatusMessage := 'Gomme : parties effacees.';
+  End;
+  TOOL_LASSO: LassoFinish;
+  TOOL_POLYGON: ShapeFinish(False);
+  TOOL_STAR: ShapeFinish(True);
+  TOOL_GRAPH: GraphFinish;
+  TOOL_GRADIENT: GradientFinish;
+  TOOL_ROTATE, TOOL_SCALE, TOOL_SHEAR, TOOL_REFLECT: TransformFinish;
+ End;
+ ToolHasSnap := False;
+ NeedsRedraw := True;
+End;
+
+Procedure ToolCancel;
+Begin
+ If ToolHasSnap Then Begin
+  RestoreSnapshot(ToolS0);
+  FreeSnapshot(ToolS0);
+  ToolHasSnap := False;
+ End;
+ ToolDrag := False;
+ DrawingMode := False;
+ StatusMessage := 'Operation annulee.';
+ NeedsRedraw := True;
+End;
+
+Procedure DrawToolPreview;
+Var I, MX, MY: Integer; Q: TPoly; X, Y, R, A0: Real; PO: PGraphicObject;
+Begin
+ MX := MouseX-TOOLBAR_WIDTH; MY := MouseY-MENUBAR_HEIGHT;
+ SetColor(COLOR_HIGHLIGHT);
+ If (CurrentTool = TOOL_DIRECT) And (SelectedObject >= 0) And (SelectedObject < ObjectCount) Then Begin
+  PO := ObjAt(SelectedObject);
+  If PO^.ObjType <> OBJ_TEXT Then
+   For I := 0 To AnchorCount(PO^)-1 Do Begin
+    AnchorPos(PO^,I,X,Y);
+    SetFillStyle(SolidFill,COLOR_WINDOW);
+    Bar(ScreenX(X)-2,ScreenY(Y)-2,ScreenX(X)+2,ScreenY(Y)+2);
+    Rectangle(ScreenX(X)-2,ScreenY(Y)-2,ScreenX(X)+2,ScreenY(Y)+2);
+   End;
+ End;
+ If Not ToolDrag Then Exit;
+ SetColor(COLOR_HIGHLIGHT);
+ SetLineStyle(DottedLn,0,NormWidth);
+ Case ToolKind Of
+  TOOL_LASSO:
+   For I := 1 To LassoN-1 Do
+    Line(ScreenX(LassoX[I-1]),ScreenY(LassoY[I-1]),ScreenX(LassoX[I]),ScreenY(LassoY[I]));
+  TOOL_POLYGON, TOOL_STAR: Begin
+   R := Dist2(TX0,TY0,MouseDocX,MouseDocY);
+   If R >= 2 Then Begin
+    A0 := AtanTwo(MouseDocY-TY0,MouseDocX-TX0);
+    ShapePoints(ToolKind = TOOL_STAR,TX0,TY0,R,A0,Q);
+    For I := 0 To Q.N-1 Do
+     Line(ScreenX(Q.P[I].X),ScreenY(Q.P[I].Y),
+          ScreenX(Q.P[(I+1) Mod Q.N].X),ScreenY(Q.P[(I+1) Mod Q.N].Y));
+   End;
+  End;
+  TOOL_GRAPH: Rectangle(ScreenX(TX0),ScreenY(TY0),MX,MY);
+  TOOL_ROTATE, TOOL_SCALE: Begin
+   Line(ScreenX(TXc),ScreenY(TYc),MX,MY);
+   Circle(ScreenX(TXc),ScreenY(TYc),3);
+   Line(ScreenX(TXc),ScreenY(TYc),ScreenX(TX0),ScreenY(TY0));
+  End;
+  TOOL_SHEAR, TOOL_REFLECT, TOOL_GRADIENT, TOOL_MEASURE:
+   Line(ScreenX(TX0),ScreenY(TY0),MX,MY);
+ End;
+ SetLineStyle(SolidLn,0,NormWidth);
+End;
+
+{ ------------------------------------------------------------------
+  Couleurs de trait et de remplissage (boite a outils)
+  ------------------------------------------------------------------ }
+Var
+ ColorActive: Boolean;
+ ColorTarget, ColorSel, ColorLastIdx: Integer;
+ ColorLastClock: LongInt;
+
+Procedure OpenColorDialog(Target: Integer);
+Begin
+ ColorTarget := Target;
+ If Target = 0 Then ColorSel := FillColor Else ColorSel := StrokeColor;
+ ColorLastIdx := -1;
+ ColorActive := True;
+ NeedsRedraw := True;
+End;
+
+Procedure CloseColorDialog(Apply: Boolean);
+Var I, N: Integer; S0: TSnapshot;
+Begin
+ ColorActive := False;
+ NeedsRedraw := True;
+ If Not Apply Then Exit;
+ If ColorTarget = 0 Then FillColor := ColorSel Else StrokeColor := ColorSel;
+ If SelCount > 0 Then Begin
+  N := 0;
+  If BeginOp(S0) Then Begin
+   For I := 0 To ObjectCount-1 Do
+    If IsSel(I) Then Begin
+     If ColorTarget = 0 Then SetObjFill(ObjAt(I)^,ColorSel)
+     Else SetObjStroke(ObjAt(I)^,ColorSel);
+     Inc(N);
+    End;
+   EndOp(S0,N > 0);
+  End;
+  StatusMessage := 'Couleur appliquee a la selection.';
+ End Else StatusMessage := 'Couleur courante modifiee.';
+End;
+
+Function ColorX: Integer;
+Begin
+ ColorX := (ScreenWidth-344) Div 2;
+End;
+
+Function ColorY: Integer;
+Begin
+ ColorY := (ScreenHeight-176) Div 2;
+End;
+
+Procedure DrawColorDialog;
+Var X, Y, I, PX, PY: Integer;
+Begin
+ If Not ColorActive Then Exit;
+ X := ColorX; Y := ColorY;
+ If ColorTarget = 0 Then UiWindow(X,Y,X+344,Y+176,'Couleur du remplissage')
+ Else UiWindow(X,Y,X+344,Y+176,'Couleur du contour');
+ UiGroup(X+12,Y+30,X+332,Y+114,'Palette');
+ For I := 0 To 15 Do Begin
+  PX := X+24+(I Mod 8)*36; PY := Y+46+(I Div 8)*32;
+  UiSunken(PX-2,PY-2,PX+32,PY+26);
+  SetFillStyle(SolidFill,I);
+  Bar(PX,PY,PX+30,PY+24);
+  If I = ColorSel Then Begin
+   SetColor(0); Rectangle(PX-1,PY-1,PX+31,PY+25);
+   SetColor(15); Rectangle(PX,PY,PX+30,PY+24);
+  End;
+ End;
+ If ColorTarget = 0 Then Begin
+  SetColor(8);
+  OutTextXY(X+24,Y+120,'Blanc = aucun remplissage');
+ End;
+ UiButton(X+344-196,Y+176-40,X+344-108,Y+176-16,'OK',True,True);
+ UiButton(X+344-100,Y+176-40,X+344-12,Y+176-16,'Annuler',False,True);
+End;
+
+Procedure HandleColorMouse;
+Var X, Y, I, PX, PY: Integer; Now: LongInt;
+Begin
+ NeedsRedraw := True;
+ X := ColorX; Y := ColorY;
+ If UiCloseHit(X+344,Y) Then Begin CloseColorDialog(False); Exit; End;
+ If UiInside(X+344-196,Y+176-40,X+344-108,Y+176-16) Then Begin CloseColorDialog(True); Exit; End;
+ If UiInside(X+344-100,Y+176-40,X+344-12,Y+176-16) Then Begin CloseColorDialog(False); Exit; End;
+ For I := 0 To 15 Do Begin
+  PX := X+24+(I Mod 8)*36; PY := Y+46+(I Div 8)*32;
+  If UiInside(PX,PY,PX+30,PY+24) Then Begin
+   Now := ToolTipClock;
+   If (I = ColorLastIdx) And (Now >= ColorLastClock) And (Now-ColorLastClock <= 50) Then Begin
+    ColorSel := I; CloseColorDialog(True);
+   End Else Begin
+    ColorSel := I; ColorLastIdx := I; ColorLastClock := Now;
+   End;
+   Exit;
+  End;
+ End;
+End;
+
+Procedure HandleColorKey(Key, ExtKey: Char);
+Begin
+ NeedsRedraw := True;
+ If Key = #27 Then CloseColorDialog(False)
+ Else If Key = #13 Then CloseColorDialog(True)
+ Else If (Key = #0) And (ExtKey = #75) And (ColorSel > 0) Then Dec(ColorSel)
+ Else If (Key = #0) And (ExtKey = #77) And (ColorSel < 15) Then Inc(ColorSel)
+ Else If (Key = #0) And (ExtKey = #72) And (ColorSel >= 8) Then Dec(ColorSel,8)
+ Else If (Key = #0) And (ExtKey = #80) And (ColorSel < 8) Then Inc(ColorSel,8);
+End;
+
+Function ToolbarWidgetClick: Boolean;
+Var Y, T: Integer;
+Begin
+ ToolbarWidgetClick := False;
+ Y := WidgetTop;
+ If UiInside(4,Y+4,24,Y+24) Then Begin OpenColorDialog(0); ToolbarWidgetClick := True; End
+ Else If UiInside(14,Y+14,34,Y+34) Then Begin OpenColorDialog(1); ToolbarWidgetClick := True; End
+ Else If UiInside(3,Y+37,12,Y+46) Then Begin
+  StrokeColor := 0; FillColor := 15;
+  StatusMessage := 'Couleurs par defaut : trait noir, sans remplissage.';
+  ToolbarWidgetClick := True;
+ End Else If UiInside(28,Y+2,44,Y+14) Then Begin
+  T := StrokeColor; StrokeColor := FillColor; FillColor := T;
+  StatusMessage := 'Trait et remplissage intervertis.';
+  ToolbarWidgetClick := True;
+ End;
+ NeedsRedraw := True;
 End;
 
 { ---- boite de choix generique ---- }
@@ -6071,7 +7416,9 @@ Begin
  If TextActive And Pressed Then
   If (MenuBarHitTest(MouseX,MouseY) >= 0) Or
      (ToolHitTest(MouseX,MouseY) >= 0) Then FinishText(True);
- If GlyphActive Then Begin
+ If ColorActive Then Begin
+  If Pressed Then HandleColorMouse;
+ End Else If GlyphActive Then Begin
   If Pressed Then HandleGlyphMouse;
  End Else If ChoiceActive Then Begin
   If Pressed Then HandleChoiceMouse;
@@ -6133,6 +7480,8 @@ Begin
    AddPencilPoint;
   End Else If EditingObject And ((MouseButtons And 1) <> 0) Then Begin
    If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then UpdateObjectEdit;
+  End Else If ToolDrag And ((MouseButtons And 1) <> 0) Then Begin
+   If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then ToolMove;
   End Else If MarqueeActive And ((MouseButtons And 1) <> 0) Then Begin
    If (MouseX <> OldMouseX) Or (MouseY <> OldMouseY) Then NeedsRedraw := True;
   End Else If GuideDragging And ((MouseButtons And 1) <> 0) Then Begin
@@ -6186,6 +7535,7 @@ Var S: String; Capacity: Integer;
 Begin
  ResetToolTip;
  NeedsRedraw := True;
+ If ColorActive Then Begin HandleColorKey(Key,ExtKey); Exit; End;
  If GlyphActive Then Begin HandleGlyphKey(Key); Exit; End;
  If ChoiceActive Then Begin HandleChoiceKey(Key,ExtKey); Exit; End;
  If PropActive Then Begin HandlePropKey(Key); Exit; End;
@@ -6200,6 +7550,10 @@ Begin
  End;
  If GuideDragging Then Begin
   If Key = #27 Then EndGuide(True);
+  Exit;
+ End;
+ If ToolDrag Then Begin
+  If Key = #27 Then ToolCancel;
   Exit;
  End;
  If MarqueeActive Then Begin
@@ -6296,8 +7650,38 @@ Begin
    CurrentTool := TOOL_SELECT;
    StatusMessage := 'Cliquer un objet, glisser pour deplacer, poignees pour la taille.';
   End;
-  '2': CurrentTool := TOOL_RECTANGLE;
-  '3': CurrentTool := TOOL_ELLIPSE;
+  '2','m','M': CurrentTool := TOOL_RECTANGLE;
+  'v','V': CurrentTool := TOOL_SELECT;
+  'a','A': CurrentTool := TOOL_DIRECT;
+  'y','Y': CurrentTool := TOOL_WAND;
+  'q','Q': CurrentTool := TOOL_LASSO;
+  'u','U': CurrentTool := TOOL_POLYGON;
+  'x','X': CurrentTool := TOOL_ERASER;
+  'c','C': CurrentTool := TOOL_SCISSORS;
+  'r','R': CurrentTool := TOOL_ROTATE;
+  'o','O': CurrentTool := TOOL_REFLECT;
+  's','S': CurrentTool := TOOL_SCALE;
+  'd','D': CurrentTool := TOOL_SHEAR;
+  'f','F': CurrentTool := TOOL_WARP;
+  'e','E': CurrentTool := TOOL_FREEXF;
+  'g','G': CurrentTool := TOOL_GRADIENT;
+  'i','I': CurrentTool := TOOL_EYEDROP;
+  'w','W': CurrentTool := TOOL_BLEND;
+  'j','J': CurrentTool := TOOL_GRAPH;
+  'k','K': CurrentTool := TOOL_MEASURE;
+  '+': CurrentTool := TOOL_ADDPT;
+  '-': CurrentTool := TOOL_DELPT;
+  '[': Begin
+   If CurrentTool = TOOL_STAR Then Begin If StarN > 3 Then Dec(StarN); End
+   Else If PolyN > 3 Then Dec(PolyN);
+   ShowSides;
+  End;
+  ']': Begin
+   If CurrentTool = TOOL_STAR Then Begin If StarN < 20 Then Inc(StarN); End
+   Else If PolyN < 20 Then Inc(PolyN);
+   ShowSides;
+  End;
+  '3','l','L': CurrentTool := TOOL_ELLIPSE;
   '4': CurrentTool := TOOL_LINE;
   '5','b','B': CurrentTool := TOOL_BEZIER;
   '7','p','P': CurrentTool := TOOL_PEN;
@@ -6346,6 +7730,7 @@ Begin
   DrawBezierHandles(BezierObject,True);
  End;
  DrawSelection;
+ DrawToolPreview;
  DrawGuides;
  DrawRulers;
  SetViewPort(0,0,ScreenWidth-1,ScreenHeight-1,True);
@@ -6358,6 +7743,7 @@ Begin
  DrawPropDialog;
  DrawChoice;
  DrawGlyphDialog;
+ DrawColorDialog;
  DrawMessage;
  If FileDialogActive Then DrawFileDialog;
  DrawToolTip;
@@ -9022,6 +10408,7 @@ Begin
  NeedsRedraw := True;
  GridVisible := True;
  PropActive := False;
+ ColorActive := False; ToolDrag := False; BlendFirst := -1; PolyN := 6; StarN := 5;
  GlyphActive := False; ChoiceActive := False; MarqueeActive := False; EditMulti := False;
  RulersVisible := True; GuidesVisible := True;
  GuideHead := Nil; GuideCur := Nil; GuideDragging := False;

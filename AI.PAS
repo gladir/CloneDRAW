@@ -9454,10 +9454,7 @@ Begin
    Until False;
  End;
  PaFreeAll;
- If ImportCount = 0 Then Begin
-  ImportError := 'Aucun objet vectoriel pris en charge dans ce fichier AI (PDF).';
-  Exit;
- End;
+ { document sans vecteur (profil vide ou images raster seulement) : page vide }
  ReadPdfAiDocument := True;
 End;
 
@@ -9573,7 +9570,10 @@ Begin
  ResetZoom; NeedsRedraw := True;
  If Legacy Then StatusMessage := 'Format prive AI10 charge (pas Adobe Illustrator).'
  Else If IsPdfAi Then Begin
-  StatusMessage := 'AI/PDF importe : couleurs VGA, courbes aplaties, 1re page.';
+  If ObjectCount=0 Then
+   StatusMessage := 'AI/PDF sans vecteur (page vide ou images raster non gerees).'
+  Else
+   StatusMessage := 'AI/PDF importe : couleurs VGA, courbes aplaties, 1re page.';
   {$IFDEF FPC}
   {$ENDIF}
  End
@@ -10451,13 +10451,38 @@ Begin
 End;
 
 Var ArgI, C0: Integer;
-    Arg, ArgFile: String;
+    Arg, ArgFile, CheckList: String;
+
+Procedure BatchCheck(ListName: String);
+Var L, R: Text; Line, Path: String; P, Ok, Bad: Integer;
+Begin
+ Ok := 0; Bad := 0;
+ {$I-} Assign(L,ListName); Reset(L); {$I+}
+ If IOResult<>0 Then Exit;
+ Assign(R,ListName+'.out'); Rewrite(R);
+ While Not Eof(L) Do Begin
+  ReadLn(L,Line);
+  P := Pos(#9,Line);
+  If P>0 Then Path := Copy(Line,P+1,255) Else Path := Line;
+  If Path='' Then Continue;
+  If LoadDocument(Path) Then Begin
+   Inc(Ok); WriteLn(R,'OK',#9,ObjectCount,#9,Path);
+  End Else Begin
+   Inc(Bad); WriteLn(R,'ERR',#9,ImportError,#9,Path);
+  End;
+  Flush(R);
+ End;
+ WriteLn(R,'TOTAL ok=',Ok,' err=',Bad);
+ Close(R); Close(L);
+End;
 
 Begin
  MaxScreen := False;
- ArgFile := '';
+ ArgFile := ''; CheckList := '';
  For ArgI := 1 To ParamCount Do Begin
   Arg := ParamStr(ArgI);
+  If (UpperText(Arg)='-CHECK') And (ArgI<ParamCount) Then CheckList := ParamStr(ArgI+1);
+  If (ArgFile = '') And (ArgI>1) And (UpperText(ParamStr(ArgI-1))='-CHECK') Then Continue;
   If (ArgFile = '') And (Copy(Arg,1,1) <> '-') And (Copy(Arg,1,1) <> '/') Then ArgFile := Arg;
   For C0 := 1 To Length(Arg) Do Arg[C0] := UpCase(Arg[C0]);
   If (Arg = '-MAXSCREEN') Or (Arg = '/MAXSCREEN') Then MaxScreen := True
@@ -10471,6 +10496,12 @@ Begin
  InitMenus;
  InitMouse;
  ShowMouse;
+ { Mode test : -check liste.txt  -> rapport liste.txt.out }
+ If CheckList <> '' Then Begin
+  BatchCheck(CheckList);
+  Cleanup;
+  Halt(0);
+ End;
  { Document passe en argument de ligne de commande }
  If ArgFile <> '' Then Begin
   If Not LoadDocument(ArgFile) Then StatusMessage := Copy(ImportError,1,75);

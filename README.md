@@ -89,6 +89,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 		<th>Description</th>	
 	</tr>
 	<tr>
+		<td><b>ACROBAT.PAS</b></td>
+		<td>Cette commande permet de lancer un clone d'Acrobat.</td>
+	</tr>
+	<tr>
 		<td><b>AI.PAS</b></td>
 		<td>Cette commande permet de lancer un clone d'Adobe Illustrator.</td>
 	</tr>

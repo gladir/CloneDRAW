@@ -4768,8 +4768,8 @@ Var I: Integer;
 Begin
  DlgInit('CALAMUS',420,296);
  AddLabel(140,28,'CLONE  -  VERSION 1.00');
- AddLabel(114,40,'(c) CloneDRAW - www.gladir.com');
- AddFrameBox(14,66,164,190,L3('Authors:','Auteurs :','Autoren:'));
+ AddLabel(114,40,'Auteur Sylvain Maltais');
+ AddFrameBox(14,66,164,190,L3('Authors:','Auteurs original :','Autoren:'));
  For I:=1 To 12 Do AddLabel(20,76+(I-1)*14,Names[I]);
  AddLabel(196,80,L3('Original program:','Programme original :','Originalprogramm:'));
  AddLabel(196,94,'Calamus - DMC GmbH');

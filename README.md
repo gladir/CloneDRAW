@@ -233,6 +233,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td>Cette commande permet de convertir une image BitMap (.BMP) en XBM (X BitMap).</td>
 		</tr>	
 		<tr>
+			<td><b>CALAMUS.PAS</b></td>
+			<td>Cette commande permet de lancer le clone du programme de PAO (publication assistée par ordinateur) Calamus pour Atari ST.</td>
+		</tr>
+		<tr>
 			<td><b>CORELDRW.PAS</b></td>
 			<td>Cette commande permet de lancer un clone de CorelDRAW (dessin vectoriel).</td>
 		</tr>
@@ -395,3 +399,5 @@ Par exemple, si vous voulez compiler ICO2XBM.PAS, vous devrez tapez la commande 
 </ul>
 
 Clone d'ArtWorx (ARTWORX.PAS) : editeur de dessin vectoriel oriente objet (Atari ST), avec menus deroulants, boites a outils de dessin / chemin / image / texte, rotation libre, groupes, calques, pages, annuler, fichiers .CWG, exports EPS / SVG / ASCII et import BMP.
+
+Clone de Calamus (CALAMUS.PAS) : logiciel de PAO (publication assistee par ordinateur) pour Atari ST, avec menus deroulants (Fichier, Page, Texte, Vue, Extras), boite a outils hierarchique a icones, cadres de texte / graphiques / raster, 15 formes, rotation libre du texte, polices simulees, styles et alignements, pages multiples, format de page et numerotation, reperes et grille, annuler, fichiers .CDK, import BMP, export de texte et sortie PostScript. Interface en francais, en anglais (LANGUAGE=EN) ou en allemand (LANGUAGE=GR).

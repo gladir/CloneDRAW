@@ -10325,6 +10325,624 @@ Begin
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
+Type TGroundShifts=Array[0..MAX_LAYERS-1] Of Double;
+ TGroundMeshes=Array[0..MAX_LAYERS-1] Of PMesh;
+
+Procedure PlanGround(Scope:Integer;FloorY:Double;Together:Boolean;
+ Var Selected:TMeshSelection;Var Shift:TGroundShifts);
+Var I,G:Integer;Bottom:Double;
+Begin
+ G:=Layers[ActiveLayer].Group3D;Bottom:=1E30;
+ For I:=0 To MAX_LAYERS-1 Do Begin
+  Selected[I]:=False;Shift[I]:=0;
+  If I<LayerCount Then If Layers[I].Mesh<>Nil Then Begin
+   Case Scope Of
+    0:Selected[I]:=I=ActiveLayer;
+    1:Selected[I]:=(G<>0) And (Layers[I].Group3D=G);
+    2:Selected[I]:=Layers[I].Visible;
+    3:Selected[I]:=True;
+   End;
+   If Selected[I] Then Bottom:=MeshMin(Bottom,Layers[I].Mesh^.Minimum.Y);
+  End;
+ End;
+ For I:=0 To LayerCount-1 Do If Selected[I] Then Begin
+  If Together Then Shift[I]:=FloorY-Bottom
+  Else Shift[I]:=FloorY-Layers[I].Mesh^.Minimum.Y;
+ End;
+End;
+
+{ Tester toutes les longueurs de rangee. Le calque le plus bas
+  dans la pile est place en premier, sans rotation ni mise a l'echelle. }
+Procedure PlanGroundPacking(Const Selected:TMeshSelection;Gap:Double;
+ RowOnly:Boolean;Var DX,DZ:TGroundShifts;Var Width,Depth:Double);
+Var I,N,Cols,Col,Last:Integer;M:PMesh;
+ OriginX,OriginZ,X,Z,W,D,RowDepth,TotalW,TotalD,Score,Best:Double;
+ TrialX,TrialZ:TGroundShifts;
+Begin
+ FillChar(DX,SizeOf(DX),0);FillChar(DZ,SizeOf(DZ),0);
+ FillChar(TrialX,SizeOf(TrialX),0);FillChar(TrialZ,SizeOf(TrialZ),0);
+ Width:=0;Depth:=0;N:=0;OriginX:=1E30;OriginZ:=1E30;
+ For I:=0 To LayerCount-1 Do If Selected[I] Then Begin
+  M:=Layers[I].Mesh;Inc(N);
+  OriginX:=MeshMin(OriginX,M^.Minimum.X);
+  OriginZ:=MeshMin(OriginZ,M^.Minimum.Z);
+ End;
+ If N=0 Then Exit;
+ Last:=1;If RowOnly Then Last:=N;
+ Best:=1E100;
+ For Cols:=Last To N Do Begin
+  X:=0;Z:=0;RowDepth:=0;TotalW:=0;Col:=0;
+  For I:=0 To LayerCount-1 Do If Selected[I] Then Begin
+   M:=Layers[I].Mesh;
+   If Col=Cols Then Begin
+    X:=0;Z:=Z+RowDepth+Gap;RowDepth:=0;Col:=0;
+   End;
+   W:=Double(M^.Maximum.X)-M^.Minimum.X;
+   D:=Double(M^.Maximum.Z)-M^.Minimum.Z;
+   TrialX[I]:=OriginX+X-M^.Minimum.X;
+   TrialZ[I]:=OriginZ+Z-M^.Minimum.Z;
+   TotalW:=MeshMax(TotalW,X+W);RowDepth:=MeshMax(RowDepth,D);
+   X:=X+W+Gap;Inc(Col);
+  End;
+  TotalD:=Z+RowDepth;
+  Score:=MeshMax(TotalW,TotalD)+0.01*MeshMin(TotalW,TotalD);
+  If Score<Best Then Begin
+   Best:=Score;Width:=TotalW;Depth:=TotalD;DX:=TrialX;DZ:=TrialZ;
+  End;
+ End;
+End;
+
+Function CommitGroundTranslation(Const Selected:TMeshSelection;
+ Const DX,Shift,DZ:TGroundShifts;Var Error:String):Boolean;
+Var Pending:TGroundMeshes;S,M:PMesh;R:PRotationUndo;
+ I:Integer;J:LongInt;TX,DY,TZ:Double;Changed:Boolean;
+Begin
+ CommitGroundTranslation:=False;Error:='';Changed:=False;
+ FillChar(Pending,SizeOf(Pending),0);
+ For I:=0 To LayerCount-1 Do If Selected[I] And
+  ((DX[I]<>0) Or (Shift[I]<>0) Or (DZ[I]<>0)) Then Begin
+  S:=Layers[I].Mesh;TX:=DX[I];DY:=Shift[I];TZ:=DZ[I];
+  If (Abs(S^.Minimum.X+TX)>1E12) Or (Abs(S^.Maximum.X+TX)>1E12) Or
+   (Abs(S^.Minimum.Y+DY)>1E12) Or (Abs(S^.Maximum.Y+DY)>1E12) Or
+   (Abs(S^.Minimum.Z+TZ)>1E12) Or (Abs(S^.Maximum.Z+TZ)>1E12) Then Begin
+   Error:='Coordonnees hors limites.';Break;
+  End;
+  M:=PMesh(RotationAllocate(SizeOf(TMesh)));
+  If M<>Nil Then Begin
+   M^:=S^;M^.References:=1;Pending[I]:=M;
+   M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices)));
+   M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
+  End;
+  If M=Nil Then Error:='Memoire insuffisante.'
+  Else If (M^.Vertices=Nil) Or (M^.Triangles=Nil) Then
+   Error:='Memoire insuffisante.';
+  If Error<>'' Then Break;
+  Move(S^.Vertices^,M^.Vertices^,S^.VertexCount*SizeOf(TMeshVector));
+  Move(S^.Triangles^,M^.Triangles^,S^.TriangleCount*SizeOf(TMeshTriangle));
+  For J:=0 To S^.VertexCount-1 Do Begin
+   M^.Vertices^[J].X:=S^.Vertices^[J].X+TX;
+   M^.Vertices^[J].Y:=S^.Vertices^[J].Y+DY;
+   M^.Vertices^[J].Z:=S^.Vertices^[J].Z+TZ;
+  End;
+  M^.Minimum.X:=S^.Minimum.X+TX;M^.Maximum.X:=S^.Maximum.X+TX;
+  M^.Minimum.Y:=S^.Minimum.Y+DY;M^.Maximum.Y:=S^.Maximum.Y+DY;
+  M^.Minimum.Z:=S^.Minimum.Z+TZ;M^.Maximum.Z:=S^.Maximum.Z+TZ;
+  Changed:=True;
+ End;
+ If (Error='') And Changed Then Begin
+  R:=MeshUndoCopy;
+  If R=Nil Then Error:='Memoire insuffisante pour annuler.'
+  Else Begin
+   MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+   Inc(UndoCount);
+   For I:=0 To LayerCount-1 Do If Pending[I]<>Nil Then Begin
+    ReleaseMesh(Layers[I].Mesh);Layers[I].Mesh:=Pending[I];Pending[I]:=Nil;
+   End;
+   ImageModified:=True;
+  End;
+ End;
+ For I:=0 To MAX_LAYERS-1 Do ReleaseMesh(Pending[I]);
+ CommitGroundTranslation:=Error='';
+End;
+
+Procedure GroundDialog(Packing:Boolean);
+Const ScopeNames:Array[0..3] Of String[14]=
+ ('Calque actif','Groupe actif','3D visibles','Tous les 3D');
+Var X,Y,MX,MY,MB,Prev,Scope,View,Count,Focus,Code:Integer;
+ Selected:TMeshSelection;Shift,DX,DZ:TGroundShifts;
+ FloorY,Gap,PackedW,PackedD:Double;
+ Together,Valid,Done,Dirty,Editing,EditGap,ReplaceText:Boolean;
+ K:Char;Input,GapText,Error,S:String;
+ Function Num(V:Double):String;
+ Var T:String;
+ Begin Str(V:0:4,T);Num:=T;End;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,W:Integer;Const Caption:String;On:Boolean);
+ Begin
+  FillRect(X+L,Y+T,X+L+W,Y+T+22,LightGray);
+  DrawBevel(X+L,Y+T,X+L+W,Y+T+22,Not On);
+  If On Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(X+L+5,Y+T+8,Caption);
+ End;
+ Procedure Preview;
+ Var L,PX,PY,I,C,Base,BottomLine,PW,PH:Integer;
+  J,Step:LongInt;M:PMesh;A:TMeshTriangle;
+  Lo,Hi,MinY,MaxY,Scale,CX,CY,DY,TX:Double;
+  Function Vertical(Const V:TMeshVector):Double;
+  Begin If View=3 Then Vertical:=V.Z Else Vertical:=V.Y;End;
+  Function Horizontal(Const V:TMeshVector):Double;
+  Begin If View=1 Then Horizontal:=V.Z Else Horizontal:=V.X;End;
+  Procedure Edge(U,V:LongInt);
+  Var A,B:TMeshVector;
+  Begin
+   A:=M^.Vertices^[U];B:=M^.Vertices^[V];
+   Line(Base+Round((Horizontal(A)+TX-CX)*Scale),
+    Y+202-Round((Vertical(A)+DY-CY)*Scale),
+    Base+Round((Horizontal(B)+TX-CX)*Scale),
+    Y+202-Round((Vertical(B)+DY-CY)*Scale));
+  End;
+ Begin
+  If View=2 Then Begin
+   Scale:=MeshMin(586.0/ImgW,160.0/ImgH);
+   PW:=Max(1,Round(ImgW*Scale));PH:=Max(1,Round(ImgH*Scale));
+   For PY:=0 To PH-1 Do For PX:=0 To PW-1 Do Begin
+    C:=Composite(LongInt(PX)*ImgW Div PW,LongInt(PY)*ImgH Div PH);
+    If C=255 Then C:=LightGray;
+    PutPixel(X+17+(586-PW) Div 2+PX,Y+122+(160-PH) Div 2+PY,C);
+   End;
+   Exit;
+  End;
+  Lo:=1E30;Hi:=-1E30;MinY:=FloorY;MaxY:=FloorY;
+  If View=3 Then Begin MinY:=1E30;MaxY:=-1E30;End;
+  For I:=0 To LayerCount-1 Do If Selected[I] Then Begin
+   M:=Layers[I].Mesh;
+   TX:=DX[I];If View=1 Then TX:=DZ[I];
+   DY:=Shift[I];If View=3 Then DY:=DZ[I];
+   Lo:=MeshMin(Lo,Horizontal(M^.Minimum)+MeshMin(0,TX));
+   Hi:=MeshMax(Hi,Horizontal(M^.Maximum)+MeshMax(0,TX));
+   MinY:=MeshMin(MinY,Vertical(M^.Minimum)+MeshMin(0,DY));
+   MaxY:=MeshMax(MaxY,Vertical(M^.Maximum)+MeshMax(0,DY));
+  End;
+  If Count=0 Then Exit;
+  CX:=(Lo+Hi)/2;CY:=(MinY+MaxY)/2;
+  Scale:=MeshMin(274/MeshMax(Hi-Lo,1E-12),
+   142/MeshMax(MaxY-MinY,1E-12));
+  BottomLine:=0;
+  If View<>3 Then BottomLine:=Y+202-Round((FloorY-CY)*Scale);
+  For L:=0 To 1 Do Begin
+   Base:=X+160+L*300;
+   SetColor(Blue);
+   If View<>3 Then Line(Base-142,BottomLine,Base+142,BottomLine);
+   For I:=0 To LayerCount-1 Do If Selected[I] Then Begin
+    M:=Layers[I].Mesh;DY:=0;TX:=0;
+    If L=1 Then Begin
+     TX:=DX[I];If View=1 Then TX:=DZ[I];
+     DY:=Shift[I];If View=3 Then DY:=DZ[I];
+    End;
+    SetColor(1+(I*3) Mod 14);
+    If View=3 Then Rectangle(
+     Base+Round((M^.Minimum.X+TX-CX)*Scale),
+     Y+202-Round((M^.Maximum.Z+DY-CY)*Scale),
+     Base+Round((M^.Maximum.X+TX-CX)*Scale),
+     Y+202-Round((M^.Minimum.Z+DY-CY)*Scale));
+    Step:=1+M^.TriangleCount Div 1800;J:=0;
+    While J<M^.TriangleCount Do Begin
+     A:=M^.Triangles^[J];Edge(A.A,A.B);Edge(A.B,A.C);Edge(A.C,A.A);
+     Inc(J,Step);
+    End;
+   End;
+  End;
+ End;
+ Procedure Draw;
+ Var I,C:Integer;VC,TC:LongInt;
+ Begin
+  Val(Input,FloorY,Code);Valid:=Code=0;
+  If Valid Then Valid:=(FloorY>=-1E9) And (FloorY<=1E9);
+  If Not Valid Then FloorY:=0;
+  Gap:=0;
+  If Packing Then Begin
+   Val(GapText,Gap,Code);
+   If (Code<>0) Or (Gap<0) Or (Gap>1E9) Then Begin
+    Gap:=0;Valid:=False;
+   End;
+  End;
+  PlanGround(Scope,FloorY,Together And Not Packing,Selected,Shift);
+  If Packing Then
+   PlanGroundPacking(Selected,Gap,Together,DX,DZ,PackedW,PackedD);
+  Count:=0;VC:=0;TC:=0;
+  For I:=0 To LayerCount-1 Do If Selected[I] Then Begin
+   Inc(Count);Inc(VC,Layers[I].Mesh^.VertexCount);
+   Inc(TC,Layers[I].Mesh^.TriangleCount);
+  End;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  If Packing Then S:='Tasser objets au sol - rangement sur le plan X/Z'
+  Else S:='Placer sur le sol - plan horizontal Y';
+  OutTextXY(X+12,Y+10,S);
+  For I:=0 To 3 Do Button(16+I*150,36,142,ScopeNames[I],I=Scope);
+  If Packing Then Begin
+   Button(16,67,142,'Dessus (X/Z)',View=3);
+   Button(166,67,142,'Face (X/Y)',View=0);
+   If Together Then S:='Une rangee' Else S:='Bloc compact';
+  End Else Begin
+   Button(16,67,142,'Face (X/Y)',View=0);
+   Button(166,67,142,'Profil (Z/Y)',View=1);
+   If Together Then S:='Bloc solidaire' Else S:='Objet par objet';
+  End;
+  Button(316,67,142,'Document',View=2);
+  Button(466,67,142,S,Together);
+  SetColor(Black);
+  If View=2 Then S:='Image du document - cadrage actuel des calques'
+  Else S:='Avant                                 Apres';
+  OutTextXY(X+18,Y+105,S);
+  FillRect(X+16,Y+121,X+603,Y+282,White);
+  SetColor(DarkGray);Rectangle(X+16,Y+121,X+603,Y+282);
+  If View<>2 Then Line(X+310,Y+121,X+310,Y+282);
+  Preview;
+  SetColor(Black);
+  OutTextXY(X+16,Y+293,'Sol Y :');
+  FillRect(X+80,Y+287,X+222,Y+306,White);
+  If Editing And Not EditGap Then SetColor(Blue)
+  Else SetColor(Black);
+  Rectangle(X+80,Y+287,X+222,Y+306);
+  OutTextXY(X+85,Y+293,Input);
+  SetColor(Black);
+  If Packing Then Begin
+   OutTextXY(X+238,Y+293,'Ecart X/Z :');
+   FillRect(X+329,Y+287,X+470,Y+306,White);
+   If Editing And EditGap Then SetColor(Blue) Else SetColor(Black);
+   Rectangle(X+329,Y+287,X+470,Y+306);
+   OutTextXY(X+334,Y+293,GapText);
+   SetColor(Black);OutTextXY(X+485,Y+293,IntToStr(Count)+' objets');
+  End Else
+   OutTextXY(X+240,Y+293,IntToStr(Count)+' objets / '+IntToStr(VC)+
+    ' sommets / '+IntToStr(TC)+' triangles');
+  For I:=0 To MAX_LAYERS-1 Do If Selected[I] Then Begin
+   C:=I Mod 4;SetColor(1+(I*3) Mod 14);
+   S:=Copy(Layers[I].Name,1,15)+'  dY '+Num(Shift[I]);
+   If Packing And (View=3) Then S:=Copy(Layers[I].Name,1,10)+
+    ' X '+Num(DX[I])+' Z '+Num(DZ[I]);
+   OutTextXY(X+16+(I Div 4)*300,Y+318+C*15,Copy(S,1,36));
+  End;
+  If (Focus>=0) And Selected[Focus] Then Begin
+   SetColor(Black);
+   OutTextXY(X+16,Y+382,'Y min '+Num(Layers[Focus].Mesh^.Minimum.Y)+
+    ' -> '+Num(Layers[Focus].Mesh^.Minimum.Y+Shift[Focus]));
+  End Else Begin
+   SetColor(Black);
+   If Packing Then
+    OutTextXY(X+16,Y+382,'Emprise X/Z : '+Num(PackedW)+' x '+Num(PackedD))
+   Else OutTextXY(X+16,Y+382,'Y positif vers le haut. Apercu filaire.');
+  End;
+  Button(326,373,132,'Annuler',False);
+  Button(470,373,132,'Appliquer',False);
+  SetColor(Black);
+  If Packing Then
+   S:='Emprises des objets choisis, sans rotation. Camera conservee.'
+  Else S:='Translation Y de la geometrie. Camera conservee.';
+  OutTextXY(X+16,Y+404,S);
+  If Not Valid Then S:='Sol : -1e9 a 1e9. Ecart : 0 a 1e9.'
+  Else If Count=0 Then S:='Aucun objet 3D dans cette portee.'
+  Else S:=Error;
+  SetColor(Red);OutTextXY(X+16,Y+422,Copy(S,1,73));
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  If Valid And (Count>0) Then
+   Done:=CommitGroundTranslation(Selected,DX,Shift,DZ,Error);
+  Dirty:=True;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ Scope:=0;If Layers[ActiveLayer].Mesh=Nil Then Scope:=2;
+ View:=0;Input:='0';GapText:='0';Error:='';Focus:=-1;EditGap:=False;
+ FillChar(DX,SizeOf(DX),0);FillChar(DZ,SizeOf(DZ),0);
+ If Packing Then Begin View:=3;Scope:=3;End;
+ Together:=False;Done:=False;Dirty:=True;Editing:=False;ReplaceText:=True;
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Prev And 1)=0) Then Begin
+   If Hit(16,36,608,58) Then Scope:=Min(3,(MX-X-16) Div 150)
+   Else If Hit(16,67,458,89) Then Begin
+    View:=Min(2,(MX-X-16) Div 150);
+    If Packing Then Case View Of 0:View:=3;1:View:=0;End;
+   End
+   Else If Hit(466,67,608,89) Then Together:=Not Together
+   Else If Hit(80,287,222,306) Then Begin
+    Editing:=True;EditGap:=False;ReplaceText:=True;
+   End Else If Packing And Hit(329,287,470,306) Then Begin
+    Editing:=True;EditGap:=True;ReplaceText:=True;
+   End Else If Hit(16,316,608,372) Then Begin
+    Focus:=Min(3,(MY-Y-316) Div 15);
+    If MX>=X+316 Then Inc(Focus,4);
+   End Else If Hit(326,373,458,395) Then Done:=True
+   Else If Hit(470,373,602,395) Then Apply;
+   Dirty:=True;
+  End;
+  Prev:=MB;
+  If Not Done And KeyPressed Then Begin
+   K:=ReadKey;
+   If EditGap Then S:=GapText Else S:=Input;
+   Case K Of
+    #0:Begin K:=ReadKey;K:=#0;End;
+    #27:Done:=True;
+    #13:Begin If Dirty Then Draw;Apply;End;
+    #9:Begin
+     If Packing And Editing Then EditGap:=Not EditGap
+     Else Editing:=Not Editing;
+     ReplaceText:=True;
+    End;
+    #8:If Editing Then Begin
+     If ReplaceText Then S:='' Else Delete(S,Length(S),1);
+     ReplaceText:=False;
+    End;
+    '0'..'9','+','-','.',',','e','E':If Editing Then Begin
+     If ReplaceText Then S:='';
+     If K=',' Then K:='.';
+     If Length(S)<16 Then S:=S+K;
+     ReplaceText:=False;
+    End;
+   End;
+   If (K=#8) Or (K In ['0'..'9','+','-','.',',','e','E']) Then
+    If Editing Then Begin
+     If EditGap Then GapText:=S Else Input:=S;
+    End;
+   Dirty:=True;
+  End;
+  Delay(10);
+ Until Done;
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
+
+Function TileWrap(V,N:LongInt):LongInt;
+Begin
+ V:=V Mod N;If V<0 Then Inc(V,N);TileWrap:=V;
+End;
+
+Procedure TileBrush(P:PByteArr;W,H,X,Y,Radius:Integer;Color:Byte);
+Var I,J:Integer;Row:LongInt;
+Begin
+ For J:=-Radius To Radius Do Begin
+  Row:=TileWrap(LongInt(Y)+J,H)*W;
+  For I:=-Radius To Radius Do If I*I+J*J<=Radius*Radius Then
+   P^[Row+TileWrap(LongInt(X)+I,W)]:=Color;
+ End;
+End;
+
+Function CommitTile(P:PByteArr;W,H,NX,NY,OffsetX,OffsetY:Integer;
+ SingleTile:Boolean;Var Error:String):Boolean;
+Var Q:PByteArr;R:PRotationUndo;I,X,Y,U,V:Integer;Size:LongInt;
+Begin
+ CommitTile:=False;
+ If LayerCount>=MAX_LAYERS Then Begin Error:='Huit calques maximum.';Exit;End;
+ Size:=LongInt(ImgW)*ImgH;Q:=PByteArr(RotationAllocate(Size));
+ If Q=Nil Then Begin Error:='Memoire insuffisante.';Exit;End;
+ R:=MeshUndoCopy;
+ If R=Nil Then Begin
+  FreeMem(Q,Size);Error:='Memoire insuffisante pour annuler.';Exit;
+ End;
+ If SingleTile Then Begin NX:=1;NY:=1;OffsetX:=0;OffsetY:=0;End;
+ For Y:=0 To ImgH-1 Do Begin
+  V:=TileWrap(Trunc(Y*1.0*NY*H/ImgH)+OffsetY,H);
+  For X:=0 To ImgW-1 Do Begin
+   U:=TileWrap(Trunc(X*1.0*NX*W/ImgW)+OffsetX,W);
+   Q^[LongInt(Y)*ImgW+X]:=P^[LongInt(V)*W+U];
+  End;
+ End;
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);
+ I:=LayerCount;Inc(LayerCount);FillChar(Layers[I],SizeOf(TLayer),0);
+ Layers[I].Used:=True;Layers[I].Visible:=True;Layers[I].Opacity:=100;
+ Layers[I].Pixels:=Q;Layers[I].Name:='Mosaique';
+ If SingleTile Then Layers[I].Name:='Tuile unique';
+ ActiveLayer:=I;SelectionActive:=False;ImageModified:=True;
+ CommitTile:=True;
+End;
+
+Procedure TilePaintingDialog;
+Var P,Backup:PByteArr;Bounds:TRect;Size:LongInt;
+ W,H,X,Y,PW,PH,Left,Top,MX,MY,MB,Prev,NX,NY,OX,OY:Integer;
+ U,V,LastU,LastV,Steps,Step:LongInt;
+ Radius,Focus,Source:Integer;
+ SingleView,SingleOutput,Grid,Seams,Dirty,Done,Drag,Edited:Boolean;
+ Ink:Byte;K:Char;Message,S:String;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,BW:Integer;Const Caption:String;On:Boolean);
+ Begin
+  FillRect(X+L,Y+T,X+L+BW,Y+T+22,LightGray);
+  DrawBevel(X+L,Y+T,X+L+BW,Y+T+22,Not On);
+  If On Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(X+L+5,Y+T+8,Caption);
+ End;
+ Procedure LoadSource;
+ Var I,J:Integer;C:Byte;
+ Begin
+  For J:=0 To H-1 Do For I:=0 To W-1 Do Begin
+   If Source=0 Then C:=GetLayerPixel(ActiveLayer,Bounds.L+I,Bounds.T+J)
+   Else C:=Composite(Bounds.L+I,Bounds.T+J);
+   P^[LongInt(J)*W+I]:=C;
+  End;
+  Edited:=False;
+ End;
+ Procedure MapPreview(PX,PY:Integer;Var A,B:LongInt);
+ Var RX,RY:Integer;
+ Begin
+  RX:=NX;RY:=NY;If SingleView Then Begin RX:=1;RY:=1;End;
+  A:=LongInt(PX)*RX*W Div PW+OX;
+  B:=LongInt(PY)*RY*H Div PH+OY;
+ End;
+ Procedure Draw;
+ Var I,J,RX,RY:Integer;A,B:LongInt;C:Byte;
+ Begin
+  OX:=0;OY:=0;If Seams Then Begin OX:=W Div 2;OY:=H Div 2;End;
+  RX:=NX;RY:=NY;If SingleView Then Begin RX:=1;RY:=1;End;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Peinture mosa'+#139+'que - atelier de texture');
+  Button(15,36,115,'Mosaique',Not SingleView);
+  Button(137,36,115,'Tuile seule',SingleView);
+  Button(259,36,115,'Grille',Grid);
+  Button(381,36,115,'Centrer joints',Seams);
+  Button(503,36,100,'Undo trait',Edited);
+  FillRect(X+15,Y+67,X+410,Y+344,DarkGray);
+  For J:=0 To PH-1 Do For I:=0 To PW-1 Do Begin
+   MapPreview(I,J,A,B);
+   C:=P^[TileWrap(B,H)*W+TileWrap(A,W)];
+   If C=255 Then Begin
+    C:=White;If ((I Div 8+J Div 8) And 1)<>0 Then C:=LightGray;
+   End;
+   PutPixel(X+Left+I,Y+Top+J,C);
+  End;
+  If Grid Then Begin
+   SetColor(DarkGray);
+   For I:=1 To RX-1 Do
+    Line(X+Left+I*PW Div RX,Y+Top,
+     X+Left+I*PW Div RX,Y+Top+PH-1);
+   For J:=1 To RY-1 Do
+    Line(X+Left,Y+Top+J*PH Div RY,
+     X+Left+PW-1,Y+Top+J*PH Div RY);
+  End;
+  SetColor(Black);
+  OutTextXY(X+425,Y+73,'Repetitions');
+  Button(425,88,84,'X '+IntToStr(NX),Focus=0);
+  Button(518,88,84,'Y '+IntToStr(NY),Focus=1);
+  Button(425,117,84,'- Moins',False);
+  Button(518,117,84,'+ Plus',False);
+  Button(425,148,177,'Rayon : '+IntToStr(Radius)+' px',Focus=2);
+  Button(425,178,177,'Gomme transparente',Ink=255);
+  For I:=0 To 15 Do Begin
+   A:=425+(I Mod 8)*22;B:=210+(I Div 8)*22;
+   FillRect(X+A,Y+B,X+A+17,Y+B+17,I);
+   If Ink=I Then Begin
+    SetColor(White);Rectangle(X+A,Y+B,X+A+17,Y+B+17);
+   End;
+  End;
+  S:='Source : calque';If Source=1 Then S:='Source : visible';
+  Button(425,260,177,S,False);
+  Button(425,289,177,'Recharger source',False);
+  S:='Sortie : mosaique';If SingleOutput Then S:='Sortie : tuile';
+  Button(425,319,177,S,SingleOutput);
+  SetColor(Black);
+  OutTextXY(X+15,Y+357,'Tuile source '+IntToStr(W)+' x '+IntToStr(H)+
+   ' px / '+IntToStr(Size)+' octets');
+  OutTextXY(X+15,Y+373,'Sortie '+IntToStr(ImgW)+' x '+IntToStr(ImgH)+
+   ' px / '+IntToStr(LongInt(ImgW)*ImgH)+' octets');
+  OutTextXY(X+15,Y+389,'Peindre sur une tuile met a jour toutes ses copies.');
+  Button(326,403,132,'Annuler',False);
+  Button(470,403,132,'Creer calque',False);
+  SetColor(Red);OutTextXY(X+15,Y+421,Copy(Message,1,37));
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Adjust(D:Integer);
+ Begin
+  Case Focus Of
+   0:NX:=Max(1,Min(8,NX+D));
+   1:NY:=Max(1,Min(8,NY+D));
+   2:Radius:=Max(0,Min(16,Radius+D));
+  End;
+ End;
+ Procedure Apply;
+ Begin Done:=CommitTile(P,W,H,NX,NY,OX,OY,SingleOutput,Message);End;
+Begin
+ ResetToolTip;MenuActive:=False;
+ Bounds.L:=0;Bounds.T:=0;Bounds.R:=ImgW-1;Bounds.B:=ImgH-1;
+ If SelectionActive Then Begin
+  Bounds.L:=Max(0,SelectionRect.L);Bounds.T:=Max(0,SelectionRect.T);
+  Bounds.R:=Min(ImgW-1,SelectionRect.R);
+  Bounds.B:=Min(ImgH-1,SelectionRect.B);
+ End;
+ W:=Bounds.R-Bounds.L+1;H:=Bounds.B-Bounds.T+1;
+ If (W<1) Or (H<1) Then Exit;
+ Size:=LongInt(W)*H;
+ P:=PByteArr(RotationAllocate(Size));
+ Backup:=PByteArr(RotationAllocate(Size));
+ If (P=Nil) Or (Backup=Nil) Then Begin
+  If P<>Nil Then FreeMem(P,Size);
+  If Backup<>Nil Then FreeMem(Backup,Size);
+  ShowDialog('Peinture mosaique','Memoire insuffisante.');Exit;
+ End;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ If LongInt(W)*276>=LongInt(H)*394 Then Begin
+  PW:=394;PH:=Max(1,Round(394.0*H/W));
+ End Else Begin PH:=276;PW:=Max(1,Round(276.0*W/H));End;
+ Left:=16+(394-PW) Div 2;Top:=68+(276-PH) Div 2;
+ NX:=3;NY:=3;Radius:=1;Ink:=FgColor;Focus:=0;Source:=0;
+ SingleView:=False;SingleOutput:=False;Grid:=True;Seams:=False;
+ Done:=False;Dirty:=True;Drag:=False;Message:='';LoadSource;
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Prev And 1)=0) Then Begin
+   If Hit(Left,Top,Left+PW-1,Top+PH-1) Then Begin
+    Move(P^,Backup^,Size);Edited:=True;Drag:=True;
+    MapPreview(MX-X-Left,MY-Y-Top,LastU,LastV);
+    TileBrush(P,W,H,TileWrap(LastU,W),TileWrap(LastV,H),Radius,Ink);
+   End Else If Hit(15,36,130,58) Then SingleView:=False
+   Else If Hit(137,36,252,58) Then SingleView:=True
+   Else If Hit(259,36,374,58) Then Grid:=Not Grid
+   Else If Hit(381,36,496,58) Then Seams:=Not Seams
+   Else If Hit(503,36,603,58) And Edited Then Begin
+    Move(Backup^,P^,Size);Edited:=False;
+   End Else If Hit(425,88,509,110) Then Focus:=0
+   Else If Hit(518,88,602,110) Then Focus:=1
+   Else If Hit(425,117,509,139) Then Adjust(-1)
+   Else If Hit(518,117,602,139) Then Adjust(1)
+   Else If Hit(425,148,602,170) Then Focus:=2
+   Else If Hit(425,178,602,200) Then Ink:=255
+   Else If Hit(425,210,600,253) Then
+    Ink:=(MX-X-425) Div 22+8*((MY-Y-210) Div 22)
+   Else If Hit(425,260,602,282) Then Source:=1-Source
+   Else If Hit(425,289,602,311) Then LoadSource
+   Else If Hit(425,319,602,341) Then SingleOutput:=Not SingleOutput
+   Else If Hit(326,403,458,425) Then Done:=True
+   Else If Hit(470,403,602,425) Then Apply;
+   Dirty:=True;
+  End;
+  If (MB And 1)=0 Then Drag:=False;
+  If Drag And Hit(Left,Top,Left+PW-1,Top+PH-1) Then Begin
+   MapPreview(MX-X-Left,MY-Y-Top,U,V);
+   If (U<>LastU) Or (V<>LastV) Then Begin
+    Steps:=Abs(U-LastU);
+    If Abs(V-LastV)>Steps Then Steps:=Abs(V-LastV);
+    For Step:=1 To Steps Do
+     TileBrush(P,W,H,TileWrap(LastU+Round((U-LastU)*1.0*Step/Steps),W),
+      TileWrap(LastV+Round((V-LastV)*1.0*Step/Steps),H),Radius,Ink);
+    Dirty:=True;LastU:=U;LastV:=V;
+   End;
+  End;
+  Prev:=MB;
+  If Not Done And KeyPressed Then Begin
+   K:=ReadKey;
+   Case K Of
+    #0:K:=ReadKey;
+    #27:Done:=True;
+    #13:Apply;
+    #9:Focus:=(Focus+1) Mod 3;
+    '+':Adjust(1);
+    '-':Adjust(-1);
+    #26:If Edited Then Begin Move(Backup^,P^,Size);Edited:=False;End;
+   End;
+   Dirty:=True;
+  End;
+  Delay(10);
+ Until Done;
+ FreeMem(Backup,Size);FreeMem(P,Size);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
+
 Procedure MeshExportDialog;
 Var M:PMesh;View:TMeshOptions;Preview:PByteArr;F:File;
  X,Y,MX,MY,MB,Previous,Source,Format,Field,PW,PH,I,J,Code:Integer;
@@ -12332,6 +12950,9 @@ Begin
    11:LayerMeshDialog;
    13:MeshMergeDialog(True,False);
    14:MeshMergeDialog(True,True);
+   15:GroundDialog(False);
+   16:GroundDialog(True);
+   18:TilePaintingDialog;
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

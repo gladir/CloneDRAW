@@ -218,14 +218,23 @@ Type
   RX,RY,RZ,Scale,OffsetX,OffsetY,Mode,Color:Integer;
   Perspective,Cull,Dither:Boolean;
  End;
+ TUVPoint=Record U,V:Single;End;
+ TUVMap=Array[0..119999] Of TUVPoint;
+ PUVMap=^TUVMap;
  TMesh=Record
   References,VertexCount,TriangleCount,SourceSize,Groups,Materials:LongInt;
   Vertices:PMeshVertices;Triangles:PMeshTriangles;
+  UV:PUVMap;
   Minimum,Maximum:TMeshVector;
   Source:String;Format:String[16];
  End;
  PMesh=^TMesh;
+ TPaintFalloff=Record
+  Configured,Smooth:Boolean;
+  LowAngle,HighAngle,Opacity,Ink:Byte;
+ End;
  TLayer = Record
+  Falloff:TPaintFalloff;
   Mesh:PMesh;
   MeshOptions:TMeshOptions;
   Group3D:Byte;
@@ -412,6 +421,7 @@ Begin
  If M^.References=0 Then Begin
   If M^.Vertices<>Nil Then FreeMem(M^.Vertices,SizeOf(TMeshVertices));
   If M^.Triangles<>Nil Then FreeMem(M^.Triangles,SizeOf(TMeshTriangles));
+  If M^.UV<>Nil Then FreeMem(M^.UV,SizeOf(TUVMap));
   FreeMem(M,SizeOf(TMesh));
  End;
  M:=Nil;
@@ -425,6 +435,7 @@ Begin
  GetMem(Layers[LIdx].Pixels, Sz);
  Layers[LIdx].Mesh:=Nil; FillChar(Layers[LIdx].MeshOptions,
  SizeOf(TMeshOptions), 0);
+ FillChar(Layers[LIdx].Falloff,SizeOf(TPaintFalloff),0);
  Layers[LIdx].Group3D:=0;Layers[LIdx].Group3DName:='';
  Layers[LIdx].Name := Nm;
  Layers[LIdx].Visible := True;
@@ -2261,9 +2272,27 @@ Begin
  FillChar(O,SizeOf(O),0);O.RX:=200;O.RY:=-300;O.Scale:=100;
  O.Color:=7;O.Mode:=2;O.Perspective:=True;O.Dither:=True;
 End;
-Function RenderMesh(M:PMesh;Const O:TMeshOptions;W,H:Integer;
- Progress:Boolean;Var Pixels:PByteArr):Boolean;
-Var P:PMeshProjection;Depth:PMeshDepth;Size,I,J:LongInt;
+Function PaintWeight(Angle:Double;Const F:TPaintFalloff):Double;
+Var T:Double;
+Begin
+ T:=0;
+ If Angle<=F.LowAngle Then T:=1
+ Else If Angle<F.HighAngle Then
+  T:=(F.HighAngle-Angle)/(F.HighAngle-F.LowAngle);
+ If F.Smooth Then T:=T*T*(3-2*T);
+ PaintWeight:=T*F.Opacity/100;
+End;
+
+Type TPaintHits=Array[0..65535] Of LongInt;
+ PPaintHits=^TPaintHits;
+
+Function RenderMeshSurface(M:PMesh;Const O:TMeshOptions;W,H:Integer;
+ Progress:Boolean;Var Pixels:PByteArr;PaintMode:Integer;
+ Const Falloff:TPaintFalloff;Texture:PByteArr;Hits:PPaintHits;
+ Unlit:Boolean):Boolean;
+Var Paint,Dot,Dist,EyeX,EyeY,EyeZ,RR,GG,BB,U,V,QA,QB,QC:Double;
+ Texel,Slot:LongInt;Ink:Byte;
+ P:PMeshProjection;Depth:PMeshDepth;Size,I,J:LongInt;
  C1,S1,C2,S2,C3,S3,Extent,CX,CY,CZ,VX,VY,VZ,T,Scale,F,
  NX,NY,NZ,Len,Light,Den,A,B,C,Z,XX,YY,MinX,MaxX,MinY,MaxY:Double;
  AIndex,BIndex,CIndex:LongInt;PA,PB,PC:TMeshProjected;
@@ -2287,7 +2316,7 @@ Var P:PMeshProjection;Depth:PMeshDepth;Size,I,J:LongInt;
   End;
  End;
 Begin
- RenderMesh:=False;Pixels:=Nil;
+ RenderMeshSurface:=False;Pixels:=Nil;
  If (M=Nil) Or Not MeshOptionsValid(O) Or (W<1) Or (H<1) Or
   (W>4096) Or (H>4096) Then Exit;
  Size:=LongInt(W)*H;
@@ -2327,6 +2356,7 @@ Begin
   P^[I].X:=(W-1)/2+(P^[I].X-(MinX+MaxX)/2)*Scale+O.OffsetX*W/100;
   P^[I].Y:=(H-1)/2+(P^[I].Y-(MinY+MaxY)/2)*Scale+O.OffsetY*H/100;
  End;
+ If Hits<>Nil Then FillChar(Hits^,SizeOf(TPaintHits),255);
  Failed:=False;
  For I:=0 To M^.TriangleCount-1 Do Begin
   If Progress And (I Mod 64=0) Then Begin
@@ -2346,6 +2376,32 @@ Begin
   Len:=Sqrt(NX*NX+NY*NY+NZ*NZ);If Len<1E-12 Then Continue;
   If O.Cull And (NX*(-PA.WX)+NY*(-PA.WY)+NZ*(3-PA.WZ)<=0) Then Continue;
   Light:=0.2+0.8*Abs((-0.4*NX+0.7*NY+NZ)/(Len*Sqrt(1.65)));
+  RR:=VGA_R[O.Color]*Light;GG:=VGA_G[O.Color]*Light;
+  BB:=VGA_B[O.Color]*Light;
+  Paint:=1;
+  If (PaintMode<>0) Or ((Hits<>Nil) And Falloff.Configured) Then Begin
+   EyeX:=0;EyeY:=0;EyeZ:=1;
+   If O.Perspective Then Begin
+    EyeX:=-(PA.WX+PB.WX+PC.WX)/3;
+    EyeY:=-(PA.WY+PB.WY+PC.WY)/3;
+    EyeZ:=3-(PA.WZ+PB.WZ+PC.WZ)/3;
+   End;
+   Dist:=Sqrt(EyeX*EyeX+EyeY*EyeY+EyeZ*EyeZ);
+   Dot:=(NX*EyeX+NY*EyeY+NZ*EyeZ)/(Len*Dist);
+   Paint:=0;
+   If Dot>0 Then Begin
+    Dot:=MeshMin(1,Dot);
+    If Dot=1 Then Paint:=PaintWeight(0,Falloff)
+    Else Paint:=PaintWeight(ArcTan(Sqrt(1-Dot*Dot)/Dot)*180/Pi,Falloff);
+   End;
+   If PaintMode=1 Then Begin
+    RR:=252*Paint;GG:=RR;BB:=RR;
+   End Else If PaintMode=2 Then Begin
+    RR:=RR*(1-Paint)+VGA_R[Falloff.Ink]*Paint;
+    GG:=GG*(1-Paint)+VGA_G[Falloff.Ink]*Paint;
+    BB:=BB*(1-Paint)+VGA_B[Falloff.Ink]*Paint;
+   End;
+  End;
   Den:=(PB.Y-PC.Y)*(PA.X-PC.X)+(PC.X-PB.X)*(PA.Y-PC.Y);
   If Abs(Den)<1E-10 Then Begin
    If O.Mode<>0 Then Begin
@@ -2364,8 +2420,28 @@ Begin
     B:=((PC.Y-PA.Y)*(XX-PC.X)+(PA.X-PC.X)*(YY-PC.Y))/Den;C:=1-A-B;
     If (A>=-0.000001) And (B>=-0.000001) And (C>=-0.000001) Then Begin
      Z:=A*PA.Z+B*PB.Z+C*PC.Z;
-     Pixel(X,Y,Z,BlurPalette(VGA_R[O.Color]*Light,VGA_G[O.Color]*Light,
-      VGA_B[O.Color]*Light,X,Y,O.Dither));
+     If Texture=Nil Then Pixel(X,Y,Z,BlurPalette(RR,GG,BB,X,Y,O.Dither))
+     Else Begin
+      Slot:=LongInt(Y)*W+X;
+      If Z>Depth^[Slot] Then Begin
+       QA:=A;QB:=B;QC:=C;
+       If O.Perspective Then Begin QA:=A*PA.Z/Z;QB:=B*PB.Z/Z;
+        QC:=C*PC.Z/Z;End;
+       Texel:=I*3;
+       U:=QA*M^.UV^[Texel].U+QB*M^.UV^[Texel+1].U+
+        QC*M^.UV^[Texel+2].U;
+       V:=QA*M^.UV^[Texel].V+QB*M^.UV^[Texel+1].V+
+        QC*M^.UV^[Texel+2].V;
+       Texel:=LongInt(Max(0,Min(255,Trunc((1-V)*256))))*256+
+        Max(0,Min(255,Trunc(U*256)));
+       If Hits<>Nil Then Hits^[Slot]:=Texel+65536*LongInt(Round(Paint*100));
+       Ink:=Texture^[Texel];
+       If Ink=255 Then Ink:=O.Color;
+       If Unlit Then Pixel(X,Y,Z,Ink)
+       Else Pixel(X,Y,Z,BlurPalette(VGA_R[Ink]*Light,VGA_G[Ink]*Light,
+        VGA_B[Ink]*Light,X,Y,O.Dither));
+      End;
+     End;
     End;
    End;
   End;
@@ -2376,7 +2452,21 @@ Begin
  End;
  FreeMem(Depth,Size*4);FreeMem(P,SizeOf(TMeshProjection));
  If Failed Then Begin FreeMem(Pixels,Size);Pixels:=Nil;End
- Else RenderMesh:=True;
+ Else RenderMeshSurface:=True;
+End;
+Function RenderMeshPaint(M:PMesh;Const O:TMeshOptions;W,H:Integer;
+ Progress:Boolean;Var Pixels:PByteArr;PaintMode:Integer;
+ Const Falloff:TPaintFalloff):Boolean;
+Begin
+ RenderMeshPaint:=RenderMeshSurface(M,O,W,H,Progress,Pixels,PaintMode,
+  Falloff,Nil,Nil,False);
+End;
+Function RenderMesh(M:PMesh;Const O:TMeshOptions;W,H:Integer;
+ Progress:Boolean;Var Pixels:PByteArr):Boolean;
+Var F:TPaintFalloff;
+Begin
+ FillChar(F,SizeOf(F),0);
+ RenderMesh:=RenderMeshPaint(M,O,W,H,Progress,Pixels,0,F);
 End;
 Function MeshUndoCopy:PRotationUndo;
 Var R:PRotationUndo;I:Integer;Size:LongInt;Failed:Boolean;
@@ -9191,6 +9281,20 @@ Begin
    M^.Triangles^[I].C:=A;
   End;
  End;
+ If Source^.UV<>Nil Then Begin
+  M^.UV:=PUVMap(RotationAllocate(SizeOf(TUVMap)));
+  If M^.UV=Nil Then Begin
+   ReleaseMesh(M);Error:='Memoire insuffisante pour les UV.';Exit;
+  End;
+  For I:=0 To M^.TriangleCount-1 Do Begin
+   A:=I*3;M^.UV^[A]:=Source^.UV^[A];
+   If SwapAxes<>Reverse Then Begin
+    M^.UV^[A+1]:=Source^.UV^[A+2];M^.UV^[A+2]:=Source^.UV^[A+1];
+   End Else Begin
+    M^.UV^[A+1]:=Source^.UV^[A+1];M^.UV^[A+2]:=Source^.UV^[A+2];
+   End;
+  End;
+ End;
  M^.Source:=Source^.Source;M^.Format:=Source^.Format;
  M^.Groups:=Source^.Groups;M^.Materials:=0;
  { Centrage final aussi apres application des decalages du calque. }
@@ -9262,8 +9366,11 @@ Begin
  MeshExportStream:=False;Bytes:=0;Failed:=False;
  If (M=Nil) Or (Format<0) Or (Format>2) Then Exit;
  If Format=0 Then Begin
-  Line('# CloneDRAW PSP - geometry only');Line('o CloneDRAW');
+  Line('# CloneDRAW PSP');Line('o CloneDRAW');
   For I:=0 To M^.VertexCount-1 Do Line('v '+VectorText(M^.Vertices^[I]));
+  If M^.UV<>Nil Then For I:=0 To M^.TriangleCount*3-1 Do
+   Line('vt '+MeshExportNumber(M^.UV^[I].U)+' '+
+    MeshExportNumber(M^.UV^[I].V));
  End Else If Format=1 Then Line('solid CloneDRAW')
  Else Begin
   FillChar(Header,SizeOf(Header),0);S:='CloneDRAW PSP binary STL';
@@ -9286,7 +9393,9 @@ Begin
     Case J Of 0:Index:=M^.Triangles^[I].A;1:Index:=M^.Triangles^[I].B;
      2:Index:=M^.Triangles^[I].C;End;
     S:=S+' '+IntToStr(Index+1);
-    If Normals Then S:=S+'//'+IntToStr(I+1);
+    If M^.UV<>Nil Then S:=S+'/'+IntToStr(I*3+J+1)
+    Else If Normals Then S:=S+'/';
+    If Normals Then S:=S+'/'+IntToStr(I+1);
    End;
    Line(S);
   End Else Begin
@@ -10409,7 +10518,7 @@ Begin
   End;
   M:=PMesh(RotationAllocate(SizeOf(TMesh)));
   If M<>Nil Then Begin
-   M^:=S^;M^.References:=1;Pending[I]:=M;
+   M^:=S^;M^.References:=1;M^.UV:=Nil;Pending[I]:=M;
    M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices)));
    M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
   End;
@@ -10417,6 +10526,11 @@ Begin
   Else If (M^.Vertices=Nil) Or (M^.Triangles=Nil) Then
    Error:='Memoire insuffisante.';
   If Error<>'' Then Break;
+  If S^.UV<>Nil Then Begin
+   M^.UV:=PUVMap(RotationAllocate(SizeOf(TUVMap)));
+   If M^.UV=Nil Then Begin Error:='Memoire insuffisante.';Break;End;
+   Move(S^.UV^,M^.UV^,S^.TriangleCount*3*SizeOf(TUVPoint));
+  End;
   Move(S^.Vertices^,M^.Vertices^,S^.VertexCount*SizeOf(TMeshVector));
   Move(S^.Triangles^,M^.Triangles^,S^.TriangleCount*SizeOf(TMeshTriangle));
   For J:=0 To S^.VertexCount-1 Do Begin
@@ -10941,6 +11055,774 @@ Begin
  GetMouseStateLocal(MouseX,MouseY,MouseButtons);
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
+
+
+Procedure GenerateUV(M:PMesh;Mode,Margin:Integer;Map:PUVMap;
+ Var Cells:Integer;Var Flat:LongInt;Var Coverage:Double);
+Var I,J,K:LongInt;T:TMeshTriangle;P: Array[0..2] Of TMeshVector;
+ U,V:Array[0..2] Of Double;
+ A,B,C,D,E,F,Len,MinU,MinV,Scale,X,Y,W,H,Pad,Area:Double;
+ Procedure Project(Const P:TMeshVector;Var U,V:Double);
+ Begin
+  Case Mode Of
+   1:Begin U:=P.X;V:=P.Y;End;
+   2:Begin U:=P.X;V:=P.Z;End;
+   3:Begin U:=P.Z;V:=P.Y;End;
+  End;
+ End;
+Begin
+ Cells:=1;Flat:=0;Coverage:=0;Pad:=Margin/100;
+ MinU:=0;MinV:=0;Scale:=0;W:=0;H:=0;
+ If Mode=0 Then Begin
+  While LongInt(Cells)*Cells<M^.TriangleCount Do Inc(Cells);
+ End Else Begin
+  Project(M^.Minimum,MinU,MinV);Project(M^.Maximum,W,H);
+  W:=W-MinU;H:=H-MinV;
+  Scale:=(1-2*Pad)/MeshMax(1E-30,MeshMax(W,H));
+ End;
+ For I:=0 To M^.TriangleCount-1 Do Begin
+  T:=M^.Triangles^[I];P[0]:=M^.Vertices^[T.A];
+  P[1]:=M^.Vertices^[T.B];P[2]:=M^.Vertices^[T.C];
+  If Mode=0 Then Begin
+   A:=Double(P[1].X)-P[0].X;B:=Double(P[1].Y)-P[0].Y;
+   C:=Double(P[1].Z)-P[0].Z;
+   D:=Double(P[2].X)-P[0].X;E:=Double(P[2].Y)-P[0].Y;
+   F:=Double(P[2].Z)-P[0].Z;
+   Len:=Sqrt(A*A+B*B+C*C);U[0]:=0;V[0]:=0;U[1]:=Len;V[1]:=0;
+   U[2]:=0;V[2]:=0;
+   If Len>0 Then Begin
+    U[2]:=(A*D+B*E+C*F)/Len;
+    V[2]:=Sqrt(Sqr(B*F-C*E)+Sqr(C*D-A*F)+Sqr(A*E-B*D))/Len;
+   End;
+   MinU:=MeshMin(0,U[2]);W:=MeshMax(Len,U[2])-MinU;H:=V[2];
+   Scale:=(1-2*Pad)/MeshMax(1E-30,MeshMax(W,H));
+   X:=I Mod Cells;Y:=I Div Cells;
+   For J:=0 To 2 Do Begin
+    U[J]:=(X+0.5+(U[J]-MinU-W/2)*Scale)/Cells;
+    V[J]:=(Y+0.5+(V[J]-H/2)*Scale)/Cells;
+   End;
+  End Else For J:=0 To 2 Do Begin
+   Project(P[J],X,Y);
+   U[J]:=0.5+(X-MinU-W/2)*Scale;
+   V[J]:=0.5+(Y-MinV-H/2)*Scale;
+  End;
+  Area:=Abs((U[1]-U[0])*(V[2]-V[0])-(U[2]-U[0])*(V[1]-V[0]))/2;
+  If Area<=1E-15 Then Inc(Flat);
+  Coverage:=Coverage+Area;
+  For J:=0 To 2 Do Begin
+   K:=I*3+J;Map^[K].U:=U[J];Map^[K].V:=V[J];
+  End;
+ End;
+End;
+
+Function ApplyUV(Index:Integer;Map:PUVMap):Boolean;
+Var S,M:PMesh;R:PRotationUndo;O:TMeshOptions;Error:String;
+Begin
+ ApplyUV:=False;S:=Layers[Index].Mesh;DefaultMeshOptions(O);
+ If Not PrepareMeshExport(S,O,False,False,False,False,1,M,Error) Then
+  Exit;
+ If M^.UV<>Nil Then FreeMem(M^.UV,SizeOf(TUVMap));
+ M^.UV:=Map;M^.SourceSize:=S^.SourceSize;M^.Materials:=S^.Materials;
+ R:=MeshUndoCopy;
+ If R=Nil Then Begin M^.UV:=Nil;ReleaseMesh(M);Exit;End;
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);ReleaseMesh(Layers[Index].Mesh);Layers[Index].Mesh:=M;
+ ImageModified:=True;ApplyUV:=True;
+End;
+
+Procedure UVDialog;
+Const Modes:Array[0..3] Of String[16]=
+ ('Atlas par face','Plan X/Y','Plan X/Z','Plan Z/Y');
+Var M:PMesh;Map:PUVMap;Pixels:PByteArr;O:TMeshOptions;
+ X,Y,MX,MY,MB,Prev,Mode,Margin,View,Cells,OldX,OldY:Integer;
+ Flat:LongInt;Coverage:Double;K:Char;
+ Dirty,Done,Rebuild,Drag:Boolean;S,Message:String;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,W:Integer;Const Caption:String;On:Boolean);
+ Begin
+  FillRect(X+L,Y+T,X+L+W,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+W,Y+T+23,Not On);SetColor(Black);
+  OutTextXY(X+L+5,Y+T+8,Caption);
+ End;
+ Procedure UVEdge(A,B:LongInt);
+ Begin
+  Line(X+16+Round(Map^[A].U*319),Y+389-Round(Map^[A].V*319),
+   X+16+Round(Map^[B].U*319),Y+389-Round(Map^[B].V*319));
+ End;
+ Procedure Draw;
+ Var PX,PY,I:Integer;J:LongInt;C:Byte;
+ Begin
+  If Rebuild Then Begin
+   GenerateUV(M,Mode,Margin,Map,Cells,Flat,Coverage);Rebuild:=False;
+  End;
+  Pixels:=Nil;
+  If View=2 Then RenderMesh(M,O,320,320,False,Pixels);
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'G'+#130+'n'+#130+'rer UV - carte de texture');
+  Button(16,36,100,'Carte UV',View=0);
+  Button(125,36,100,'Sur image',View=1);
+  Button(234,36,101,'Modele 3D',View=2);
+  For PY:=0 To 319 Do For PX:=0 To 319 Do Begin
+   C:=White;If ((PX Div 20+PY Div 20) And 1)<>0 Then C:=LightGray;
+   If View=1 Then Begin
+    I:=Composite(LongInt(PX)*ImgW Div 320,LongInt(PY)*ImgH Div 320);
+    If I<>255 Then C:=I;
+   End;
+   If Pixels<>Nil Then If Pixels^[LongInt(PY)*320+PX]<>255 Then
+    C:=Pixels^[LongInt(PY)*320+PX];
+   PutPixel(X+16+PX,Y+70+PY,C);
+  End;
+  If Pixels<>Nil Then FreeMem(Pixels,LongInt(320)*320);
+  If View<>2 Then Begin
+   J:=0;
+   While J<M^.TriangleCount Do Begin
+    If View=1 Then SetColor(Yellow) Else SetColor(Blue);
+    UVEdge(J*3,J*3+1);UVEdge(J*3+1,J*3+2);UVEdge(J*3+2,J*3);
+    Inc(J);
+   End;
+  End;
+  SetColor(Black);Rectangle(X+15,Y+69,X+336,Y+390);
+  OutTextXY(X+353,Y+41,'Calque : '+Copy(Layers[ActiveLayer].Name,1,22));
+  For I:=0 To 3 Do Button(352,65+I*28,250,Modes[I],Mode=I);
+  Button(352,181,62,'- Marge',False);Button(539,181,63,'+ Marge',False);
+  SetColor(Black);OutTextXY(X+428,Y+189,IntToStr(Margin)+' %');
+  OutTextXY(X+353,Y+218,IntToStr(M^.VertexCount)+' sommets');
+  OutTextXY(X+353,Y+235,IntToStr(M^.TriangleCount)+' triangles');
+  OutTextXY(X+353,Y+252,IntToStr(M^.TriangleCount*3)+' coordonnees UV');
+  OutTextXY(X+353,Y+269,IntToStr(Flat)+' faces aplaties');
+  If Mode=0 Then S:='Atlas : '+IntToStr(Cells)+' x '+IntToStr(Cells)
+  Else S:='Chevauchements possibles';
+  OutTextXY(X+353,Y+286,S);
+  Str(Coverage*100:0:1,S);
+  OutTextXY(X+353,Y+303,'Aire UV cumulee : '+S+' %');
+  OutTextXY(X+353,Y+320,'Memoire : '+IntToStr(SizeOf(TUVMap))+' o');
+  S:='UV existants : aucun';If M^.UV<>Nil Then S:='UV existants : remplaces';
+  OutTextXY(X+353,Y+337,S);
+  OutTextXY(X+353,Y+355,'OBJ : exporte les UV');
+  If View=2 Then S:='Glisser pour pivoter le modele'
+  Else S:='U vers la droite, V vers le haut';
+  OutTextXY(X+16,Y+401,S);
+  Button(352,380,115,'Annuler',False);
+  Button(478,380,124,'Appliquer',False);
+  SetColor(Red);OutTextXY(X+16,Y+421,Message);
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  If Rebuild Then Draw;
+  If ApplyUV(ActiveLayer,Map) Then Begin Map:=Nil;Done:=True;End
+  Else Begin Message:='Impossible de conserver les UV en memoire.';
+   Dirty:=True;End;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;M:=Layers[ActiveLayer].Mesh;
+ If M=Nil Then Begin
+  ShowDialog('Generer UV','Selectionnez un calque contenant un modele 3D.');
+  Exit;
+ End;
+ Map:=PUVMap(RotationAllocate(SizeOf(TUVMap)));
+ If Map=Nil Then Begin
+  ShowDialog('Generer UV','Memoire insuffisante.');Exit;
+ End;
+ O:=Layers[ActiveLayer].MeshOptions;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ Mode:=0;Margin:=5;View:=0;Done:=False;Dirty:=True;Rebuild:=True;
+ Drag:=False;Message:='';GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Prev And 1)=0) Then Begin
+   If Hit(16,36,335,59) Then View:=Min(2,(MX-X-16) Div 109)
+   Else If Hit(352,65,602,172) Then Begin
+    Mode:=(MY-Y-65) Div 28;Rebuild:=True;
+   End Else If Hit(352,181,414,204) Then Begin
+    Margin:=Max(0,Margin-1);Rebuild:=True;
+   End Else If Hit(539,181,602,204) Then Begin
+    Margin:=Min(25,Margin+1);Rebuild:=True;
+   End Else If Hit(352,380,467,403) Then Done:=True
+   Else If Hit(478,380,602,403) Then Apply
+   Else If (View=2) And Hit(16,70,335,389) Then Begin
+    Drag:=True;OldX:=MX;OldY:=MY;
+   End;
+   Dirty:=True;
+  End;
+  If (MB And 1)=0 Then Drag:=False;
+  If Drag And ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   O.RY:=Max(-3600,Min(3600,O.RY+(MX-OldX)*5));
+   O.RX:=Max(-3600,Min(3600,O.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Dirty:=True;
+  End;
+  Prev:=MB;
+  If Not Done And KeyPressed Then Begin
+   K:=ReadKey;
+   Case K Of
+    #0:K:=ReadKey;
+    #27:Done:=True;
+    #13:Apply;
+    #9:Begin View:=(View+1) Mod 3;Dirty:=True;End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ If Map<>Nil Then FreeMem(Map,SizeOf(TUVMap));
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
+
+Function CommitPaintFalloff(Const F:TPaintFalloff;
+ Const Camera:TMeshOptions;Bake:Integer):Boolean;
+Var R:PRotationUndo;P:PByteArr;O:TMeshOptions;I,Source:Integer;
+Begin
+ CommitPaintFalloff:=False;P:=Nil;Source:=ActiveLayer;
+ If Bake<>0 Then Begin
+  If LayerCount>=MAX_LAYERS Then Exit;
+  O:=Camera;O.Mode:=0;O.Cull:=False;
+  If Not RenderMeshPaint(Layers[Source].Mesh,O,ImgW,ImgH,True,
+   P,Bake,F) Then Exit;
+ End;
+ R:=MeshUndoCopy;
+ If R=Nil Then Begin
+  If P<>Nil Then FreeMem(P,LongInt(ImgW)*ImgH);
+  Exit;
+ End;
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);Layers[Source].Falloff:=F;
+ If P<>Nil Then Begin
+  I:=LayerCount;Inc(LayerCount);FillChar(Layers[I],SizeOf(TLayer),0);
+  Layers[I].Used:=True;Layers[I].Visible:=True;Layers[I].Opacity:=100;
+  Layers[I].Pixels:=P;Layers[I].Name:='Projection peinture';
+  If Bake=1 Then Layers[I].Name:='Masque peinture';
+  ActiveLayer:=I;SelectionActive:=False;
+ End;
+ ImageModified:=True;CommitPaintFalloff:=True;
+End;
+
+Procedure PaintFalloffDialog;
+Const Fields:Array[0..2] Of String[16]=
+ ('Angle initial','Angle limite','Opacite max.');
+Var M:PMesh;P:PByteArr;O,Camera:TMeshOptions;F:TPaintFalloff;
+ X,Y,MX,MY,MB,Prev,View,Output,Field,Slider,OldX,OldY:Integer;
+ PW,PH,L,T:Integer;
+ Dirty,Done,Orbit:Boolean;K:Char;Message,S:String;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,W:Integer;Const Caption:String;On:Boolean);
+ Begin
+  FillRect(X+L,Y+T,X+L+W,Y+T+22,LightGray);
+  DrawBevel(X+L,Y+T,X+L+W,Y+T+22,Not On);
+  If On Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(X+L+5,Y+T+8,Caption);
+ End;
+ Function Value(I:Integer):Integer;
+ Begin
+  Case I Of 0:Value:=F.LowAngle;1:Value:=F.HighAngle;2:Value:=F.Opacity;End;
+ End;
+ Procedure SetValue(I,V:Integer);
+ Var Limit:Integer;
+ Begin
+  Limit:=90;If I=2 Then Limit:=100;
+  V:=Max(0,Min(Limit,V));
+  If V=Value(I) Then Exit;
+  Case I Of
+   0:Begin F.LowAngle:=V;
+    If F.LowAngle>F.HighAngle Then F.HighAngle:=F.LowAngle;End;
+   1:Begin F.HighAngle:=V;
+    If F.HighAngle<F.LowAngle Then F.LowAngle:=F.HighAngle;End;
+   2:F.Opacity:=V;
+  End;
+  Dirty:=True;
+ End;
+ Procedure Preset(A,B:Byte);
+ Begin F.LowAngle:=A;F.HighAngle:=B;Dirty:=True;End;
+ Procedure Draw;
+ Var I,J,V,Limit,PX,PY,Last:Integer;C:Byte;LabelText:String;
+ Begin
+  P:=Nil;RenderMeshPaint(M,O,PW,PH,False,P,View,F);
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Att'+#130+'nuation peinture - incidence 3D');
+  Button(16,36,96,'Original',View=0);
+  Button(120,36,96,'Masque',View=1);
+  Button(224,36,106,'Projection',View=2);
+  FillRect(X+16,Y+66,X+330,Y+317,DarkGray);
+  For PY:=0 To PH-1 Do For PX:=0 To PW-1 Do Begin
+   C:=White;If ((PX Div 12+PY Div 12) And 1)<>0 Then C:=LightGray;
+   If P<>Nil Then If P^[LongInt(PY)*PW+PX]<>255 Then
+    C:=P^[LongInt(PY)*PW+PX];
+   PutPixel(X+L+PX,Y+T+PY,C);
+  End;
+  If P<>Nil Then FreeMem(P,LongInt(PW)*PH);
+  SetColor(Black);
+  OutTextXY(X+16,Y+324,'Glisser : orbite de l''apercu');
+  OutTextXY(X+16,Y+340,'Blanc : opacite max. / noir : aucune');
+  OutTextXY(X+16,Y+356,'Incidence calculee par face');
+  For I:=0 To 2 Do Begin
+   J:=67+I*41;V:=Value(I);Limit:=90;If I=2 Then Limit:=100;
+   If I=Field Then SetColor(Blue) Else SetColor(Black);
+   LabelText:=' deg';If I=2 Then LabelText:=' %';
+   OutTextXY(X+351,Y+J,Fields[I]+'  '+IntToStr(V)+LabelText);
+   Line(X+353,Y+J+19,X+600,Y+J+19);
+   PX:=353+Round(V*247.0/Limit);
+   FillRect(X+PX-3,Y+J+14,X+PX+3,Y+J+24,Blue);
+  End;
+  Button(351,189,79,'30 / 45',False);
+  Button(437,189,79,'45 / 75',False);
+  Button(523,189,79,'60 / 90',False);
+  LabelText:='Courbe lineaire';If F.Smooth Then LabelText:='Courbe douce';
+  Button(351,219,145,LabelText,F.Smooth);
+  Button(503,219,99,'Vue initiale',False);
+  FillRect(X+353,Y+256,X+601,Y+309,White);
+  SetColor(Black);Rectangle(X+353,Y+256,X+601,Y+309);
+  Last:=308-Round(PaintWeight(0,F)*51);
+  For I:=1 To 247 Do Begin
+   J:=308-Round(PaintWeight(I*90.0/247,F)*51);
+   SetColor(Blue);Line(X+352+I,Y+Last,X+353+I,Y+J);Last:=J;
+  End;
+  SetColor(Black);OutTextXY(X+353,Y+313,'0 deg                       90 deg');
+  For I:=0 To 15 Do Begin
+   J:=351+I*15;
+   FillRect(X+J,Y+331,X+J+13,Y+344,I);
+   If F.Ink=I Then Begin SetColor(Black);
+    Rectangle(X+J-1,Y+330,X+J+14,Y+345);
+   End;
+  End;
+  Case Output Of
+   0:LabelText:='Sortie : reglages du calque';
+   1:LabelText:='Sortie : nouveau masque';
+   2:LabelText:='Sortie : nouveau calque peint';
+  End;
+  Button(351,353,251,LabelText,False);
+  SetColor(Black);
+  OutTextXY(X+16,Y+378,'Tab : curseur, +/- : 1 unite');
+  OutTextXY(X+16,Y+398,Copy(Layers[ActiveLayer].Name,1,20)+' / '+
+   IntToStr(M^.TriangleCount)+' faces');
+  Button(351,385,115,'Annuler',False);
+  Button(478,385,124,'Appliquer',False);
+  SetColor(Red);OutTextXY(X+16,Y+421,Message);
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  If (Output<>0) And (LayerCount>=MAX_LAYERS) Then
+   Message:='Huit calques maximum. Choisissez la sortie Reglages.'
+  Else If CommitPaintFalloff(F,O,Output) Then Done:=True
+  Else Message:='Application annulee ou memoire insuffisante.';
+  Dirty:=True;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;M:=Layers[ActiveLayer].Mesh;
+ If M=Nil Then Begin
+  ShowDialog('Attenuation peinture','Selectionnez un calque 3D.');Exit;
+ End;
+ F:=Layers[ActiveLayer].Falloff;
+ If Not F.Configured Then Begin
+  F.Configured:=True;F.LowAngle:=30;F.HighAngle:=60;
+  F.Opacity:=100;F.Ink:=FgColor;F.Smooth:=False;
+ End;
+ Camera:=Layers[ActiveLayer].MeshOptions;Camera.Mode:=0;Camera.Cull:=False;
+ O:=Camera;X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ If LongInt(ImgW)*250>=LongInt(ImgH)*314 Then Begin
+  PW:=314;PH:=Max(1,Round(314.0*ImgH/ImgW));
+ End Else Begin PH:=250;PW:=Max(1,Round(250.0*ImgW/ImgH));End;
+ L:=17+(314-PW) Div 2;T:=67+(250-PH) Div 2;
+ View:=1;Output:=0;Field:=0;Slider:=-1;
+ Done:=False;Dirty:=True;Orbit:=False;Message:='';
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Prev And 1)=0) Then Begin
+   If Hit(16,36,330,58) Then View:=Min(2,(MX-X-16) Div 104)
+   Else If Hit(16,66,330,317) Then Begin
+    Orbit:=True;OldX:=MX;OldY:=MY;
+   End Else If Hit(351,67,602,174) Then Begin
+    Slider:=(MY-Y-67) Div 41;Field:=Slider;
+   End Else If Hit(351,189,430,211) Then Preset(30,45)
+   Else If Hit(437,189,516,211) Then Preset(45,75)
+   Else If Hit(523,189,602,211) Then Preset(60,90)
+   Else If Hit(351,219,496,241) Then F.Smooth:=Not F.Smooth
+   Else If Hit(503,219,602,241) Then O:=Camera
+   Else If Hit(351,331,590,344) Then F.Ink:=(MX-X-351) Div 15
+   Else If Hit(351,353,602,375) Then Output:=(Output+1) Mod 3
+   Else If Hit(351,385,466,407) Then Done:=True
+   Else If Hit(478,385,602,407) Then Apply;
+   Dirty:=True;
+  End;
+  If (MB And 1)=0 Then Begin Orbit:=False;Slider:=-1;End;
+  If Slider>=0 Then Begin
+   If Slider=2 Then SetValue(Slider,Round((MX-X-353)*100.0/247))
+   Else SetValue(Slider,Round((MX-X-353)*90.0/247));
+  End;
+  If Orbit And ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   O.RY:=Max(-3600,Min(3600,O.RY+(MX-OldX)*5));
+   O.RX:=Max(-3600,Min(3600,O.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Dirty:=True;
+  End;
+  Prev:=MB;
+  If Not Done And KeyPressed Then Begin
+   K:=ReadKey;
+   Case K Of
+    #0:K:=ReadKey;
+    #27:Done:=True;
+    #13:Apply;
+    #9:Field:=(Field+1) Mod 3;
+    '+':SetValue(Field,Value(Field)+1);
+    '-':SetValue(Field,Value(Field)-1);
+   End;
+   Dirty:=True;
+  End;
+  Delay(10);
+ Until Done;
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
+
+Function CommitPaintSurface(Texture:PByteArr;Const Camera:TMeshOptions;
+ Rendered,Unlit:Boolean):Boolean;
+Var R:PRotationUndo;P:PByteArr;F:TPaintFalloff;I,X,Y:Integer;
+ Size:LongInt;
+Begin
+ CommitPaintSurface:=False;
+ If LayerCount>=MAX_LAYERS Then Exit;
+ Size:=LongInt(ImgW)*ImgH;
+ If Rendered Then Begin
+  F:=Layers[ActiveLayer].Falloff;
+  If Not RenderMeshSurface(Layers[ActiveLayer].Mesh,Camera,ImgW,ImgH,
+   True,P,0,F,Texture,Nil,Unlit) Then Exit;
+ End Else Begin
+  P:=PByteArr(RotationAllocate(Size));If P=Nil Then Exit;
+  For Y:=0 To ImgH-1 Do For X:=0 To ImgW-1 Do
+   P^[LongInt(Y)*ImgW+X]:=Texture^[
+    (LongInt(Y)*256 Div ImgH)*256+LongInt(X)*256 Div ImgW];
+ End;
+ R:=MeshUndoCopy;
+ If R=Nil Then Begin FreeMem(P,Size);Exit;End;
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);
+ I:=LayerCount;Inc(LayerCount);FillChar(Layers[I],SizeOf(TLayer),0);
+ Layers[I].Used:=True;Layers[I].Visible:=True;Layers[I].Opacity:=100;
+ Layers[I].Pixels:=P;Layers[I].Name:='Texture UV';
+ If Rendered Then Layers[I].Name:='Peinture 3D';
+ ActiveLayer:=I;SelectionActive:=False;ImageModified:=True;
+ CommitPaintSurface:=True;
+End;
+
+Function CommitPaintTarget(Target:Integer;Texture,Base:PByteArr):Boolean;
+Var R:PRotationUndo;X,Y:Integer;U,Row,Index,Offset:LongInt;
+Begin
+ CommitPaintTarget:=False;
+ If (Target<0) Or (Target>=LayerCount) Then Exit;
+ If (Layers[Target].Mesh<>Nil) Or (Layers[Target].Pixels=Nil) Then Exit;
+ R:=MeshUndoCopy;If R=Nil Then Exit;
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);
+ For Y:=0 To ImgH-1 Do Begin
+  Row:=(LongInt(Y)*256 Div ImgH)*256;Offset:=LongInt(Y)*ImgW;
+  For X:=0 To ImgW-1 Do Begin
+   U:=LongInt(X)*256 Div ImgW;Index:=Row+U;
+   If Texture^[Index]<>Base^[Index] Then
+    Layers[Target].Pixels^[Offset+X]:=Texture^[Index];
+  End;
+ End;
+ ImageModified:=True;CommitPaintTarget:=True;
+End;
+
+Procedure PaintSystemDialog(TargetMode:Boolean);
+Var M:PMesh;P,Texture,Backup,Base,Shown:PByteArr;Hits:PPaintHits;
+ Camera,Original:TMeshOptions;F:TPaintFalloff;
+ X,Y,MX,MY,MB,Prev,LastX,LastY,DX,DY,I,Radius,Opacity:Integer;
+ L,T,PW,PH,SizeChoice,Step,Target:Integer;
+ Changes:LongInt;Compare:Boolean;
+ Ink:Byte;K:Char;Dirty,Done,Drag,Orbit,Unlit,Rendered,Edited:Boolean;
+ UseFalloff,HasPreview:Boolean;Message,S:String;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,W:Integer;Const Caption:String;On:Boolean);
+ Begin
+  FillRect(X+L,Y+T,X+L+W,Y+T+22,LightGray);
+  DrawBevel(X+L,Y+T,X+L+W,Y+T+22,Not On);
+  If On Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(X+L+5,Y+T+8,Caption);
+ End;
+ Procedure Source(CompositeSource:Boolean);
+ Var I,J:Integer;
+ Begin
+  For J:=0 To 255 Do For I:=0 To 255 Do
+   If CompositeSource Then Texture^[LongInt(J)*256+I]:=
+    Composite(LongInt(I)*ImgW Div 256,LongInt(J)*ImgH Div 256)
+   Else Texture^[LongInt(J)*256+I]:=255;
+ End;
+ Procedure LoadTarget;
+ Var U,V:Integer;
+ Begin
+  For V:=0 To 255 Do For U:=0 To 255 Do
+   Base^[LongInt(V)*256+U]:=GetLayerPixel(Target,
+    Min(ImgW-1,(LongInt(U)*ImgW+255) Div 256),
+    Min(ImgH-1,(LongInt(V)*ImgH+255) Div 256));
+  Move(Base^,Texture^,65536);Edited:=False;Compare:=False;
+ End;
+ Procedure NextTarget(Direction:Integer);
+ Var I,N:Integer;
+ Begin
+  If Changes<>0 Then Begin
+   Message:='Retablissez la cible avant de changer de calque.';Exit;
+  End;
+  N:=Target;
+  For I:=1 To LayerCount Do Begin
+   N:=(N+Direction+LayerCount) Mod LayerCount;
+   If (Layers[N].Mesh=Nil) And (Layers[N].Pixels<>Nil) Then Begin
+    Target:=N;LoadTarget;Message:='';Exit;
+   End;
+  End;
+ End;
+ Procedure SaveStroke;
+ Begin Move(Texture^,Backup^,65536);Edited:=True;End;
+ Procedure Stamp(PX,PY:Integer);
+ Var U,V,I,J,Weight,Amount:Integer;Entry,Index:LongInt;
+  Old:Byte;A:Double;
+ Begin
+  If Compare Then Exit;
+  Weight:=100;
+  If (PX>=350) And (PX<606) And (PY>=68) And (PY<324) Then Begin
+   U:=PX-350;V:=PY-68;
+  End Else If HasPreview And (PX>=L) And (PX<L+PW) And
+   (PY>=T) And (PY<T+PH) Then Begin
+   Entry:=Hits^[LongInt(PY-T)*PW+PX-L];If Entry<0 Then Exit;
+   Weight:=Entry Shr 16;U:=Entry And 255;V:=(Entry Shr 8) And 255;
+  End Else Exit;
+  Amount:=Weight*Opacity Div 100;
+  If Amount=0 Then Exit;
+  A:=Amount/100;
+  For J:=Max(0,V-Radius) To Min(255,V+Radius) Do
+   For I:=Max(0,U-Radius) To Min(255,U+Radius) Do
+    If Sqr(I-U)+Sqr(J-V)<=Sqr(Radius) Then Begin
+     Index:=LongInt(J)*256+I;Old:=Texture^[Index];
+     If Amount=100 Then Texture^[Index]:=Ink
+     Else If Old=255 Then Begin
+      If Amount*16>100*((I Mod 4)*4+(J Mod 4)) Then
+       Texture^[Index]:=Ink;
+     End Else Texture^[Index]:=BlurPalette(
+      VGA_R[Old]*(1-A)+VGA_R[Ink]*A,VGA_G[Old]*(1-A)+VGA_G[Ink]*A,
+      VGA_B[Old]*(1-A)+VGA_B[Ink]*A,I,J,False);
+    End;
+  Dirty:=True;
+ End;
+ Procedure Draw;
+ Var I,J,C,B:Integer;N:LongInt;
+ Begin
+  F:=Layers[ActiveLayer].Falloff;
+  F.Configured:=F.Configured And UseFalloff;
+  Shown:=Texture;Changes:=0;
+  If TargetMode Then Begin
+   For N:=0 To 65535 Do If Base^[N]<>Texture^[N] Then Inc(Changes);
+   If Compare Then Shown:=Base;
+  End;
+  HasPreview:=RenderMeshSurface(M,Camera,PW,PH,False,P,0,F,Shown,
+   Hits,Unlit);
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  If TargetMode Then S:='Peindre sur texture cible - modele et carte UV'
+  Else S:='Syst'+#138+'me de peinture - modele et texture UV';
+  OutTextXY(X+12,Y+10,S);
+  Button(16,35,111,'Sans lumiere',Unlit);
+  Button(135,35,105,'Vue initiale',False);
+  Button(248,35,94,'Attenuation',UseFalloff);
+  If TargetMode Then Begin
+   Button(350,35,35,'<',False);Button(570,35,35,'>',False);
+   Button(393,35,169,Copy(Layers[Target].Name,1,19),True);
+  End Else Begin
+   Button(350,35,122,'Image source',False);
+   Button(480,35,125,'Vider texture',False);
+  End;
+  FillRect(X+16,Y+68,X+271,Y+323,DarkGray);
+  For J:=0 To 255 Do For I:=0 To 255 Do Begin
+   B:=White;If ((I Div 12+J Div 12) And 1)<>0 Then B:=LightGray;
+   C:=Shown^[LongInt(J)*256+I];If C=255 Then C:=B;
+   PutPixel(X+350+I,Y+68+J,C);
+  End;
+  If HasPreview Then Begin
+   For J:=0 To PH-1 Do For I:=0 To PW-1 Do Begin
+    C:=P^[LongInt(J)*PW+I];
+    If C=255 Then Begin C:=White;
+     If ((I Div 12+J Div 12) And 1)<>0 Then C:=LightGray;End;
+    PutPixel(X+L+I,Y+T+J,C);
+   End;
+   FreeMem(P,LongInt(PW)*PH);
+  End;
+  For I:=0 To 15 Do Begin
+   J:=285+(I Mod 4)*14;B:=81+(I Div 4)*17;
+   FillRect(X+J,Y+B,X+J+11,Y+B+12,I);
+   If Ink=I Then Begin SetColor(Black);
+    Rectangle(X+J-1,Y+B-1,X+J+12,Y+B+13);End;
+  End;
+  Button(279,159,65,'Undo',Edited);
+  Button(279,187,65,'Rayon',SizeChoice=0);
+  Button(279,215,65,'Opac.',SizeChoice=1);
+  Button(279,243,30,'-',False);Button(314,243,30,'+',False);
+  SetColor(Black);
+  OutTextXY(X+280,Y+277,IntToStr(Radius)+' px');
+  OutTextXY(X+280,Y+294,IntToStr(Opacity)+' %');
+  OutTextXY(X+16,Y+332,'Modele : bouton droit pour pivoter');
+  OutTextXY(X+350,Y+332,'Texture diffuse : 256 x 256');
+  OutTextXY(X+16,Y+350,'Bouton gauche : peindre dans les deux vues');
+  OutTextXY(X+16,Y+367,IntToStr(M^.TriangleCount)+' faces / 64 Kio UV');
+  If TargetMode Then Begin
+   S:='Comparer : apres';If Compare Then S:='Comparer : avant';
+   Button(350,351,145,S,Compare);
+   Button(503,351,102,'Retablir',False);
+   SetColor(Black);OutTextXY(X+16,Y+385,
+    IntToStr(Changes)+' texels modifies / cible '+IntToStr(ImgW)+' x '+
+    IntToStr(ImgH));
+  End Else Begin
+   S:='Sortie : texture UV';If Rendered Then S:='Sortie : rendu 3D';
+   Button(350,351,255,S,Rendered);
+  End;
+  Button(350,385,119,'Annuler',False);
+  S:='Creer calque';If TargetMode Then S:='Appliquer';
+  Button(480,385,125,S,False);
+  SetColor(Red);OutTextXY(X+16,Y+421,Message);
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Adjust(D:Integer);
+ Begin
+  If SizeChoice=0 Then Radius:=Max(0,Min(16,Radius+D))
+  Else Opacity:=Max(0,Min(100,Opacity+D*5));
+ End;
+ Procedure UndoStroke;
+ Begin
+  If Edited Then Begin Move(Backup^,Texture^,65536);Edited:=False;End;
+ End;
+ Procedure Apply;
+ Begin
+  If TargetMode Then Begin
+   If Changes=0 Then Done:=True
+   Else If CommitPaintTarget(Target,Texture,Base) Then Done:=True
+   Else Message:='Impossible de modifier la cible.';
+   Exit;
+  End;
+  If CommitPaintSurface(Texture,Camera,Rendered,Unlit) Then Done:=True
+  Else If LayerCount>=MAX_LAYERS Then Message:='Huit calques maximum.'
+  Else Message:='Operation annulee ou memoire insuffisante.';
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;M:=Layers[ActiveLayer].Mesh;
+ If (M=Nil) Or (M^.UV=Nil) Then Begin
+  ShowDialog('Systeme de peinture','Choisissez un calque 3D avec des UV.');
+  Exit;
+ End;
+ Target:=-1;Base:=Nil;Changes:=0;Compare:=False;
+ If TargetMode Then Begin
+  For I:=LayerCount-1 DownTo 0 Do
+   If (Layers[I].Mesh=Nil) And (Layers[I].Pixels<>Nil) Then Begin
+    Target:=I;Break;
+   End;
+  If Target<0 Then Begin
+   ShowDialog('Texture cible','Ajoutez un calque raster pour la texture.');
+   Exit;
+  End;
+  Base:=PByteArr(RotationAllocate(65536));
+ End;
+ Texture:=PByteArr(RotationAllocate(65536));
+ Backup:=PByteArr(RotationAllocate(65536));
+ Hits:=PPaintHits(RotationAllocate(SizeOf(TPaintHits)));
+ If (Texture=Nil) Or (Backup=Nil) Or (Hits=Nil) Or
+  (TargetMode And (Base=Nil)) Then Begin
+  If Base<>Nil Then FreeMem(Base,65536);
+  If Texture<>Nil Then FreeMem(Texture,65536);
+  If Backup<>Nil Then FreeMem(Backup,65536);
+  If Hits<>Nil Then FreeMem(Hits,SizeOf(TPaintHits));
+  ShowDialog('Systeme de peinture','Memoire insuffisante.');Exit;
+ End;
+ If TargetMode Then LoadTarget Else Source(False);
+ Original:=Layers[ActiveLayer].MeshOptions;
+ Original.Mode:=0;Camera:=Original;
+ If ImgW>=ImgH Then Begin PW:=256;PH:=Max(1,Round(256.0*ImgH/ImgW));End
+ Else Begin PH:=256;PW:=Max(1,Round(256.0*ImgW/ImgH));End;
+ L:=16+(256-PW) Div 2;T:=68+(256-PH) Div 2;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ Ink:=FgColor;Radius:=2;Opacity:=100;SizeChoice:=0;Message:='';
+ Done:=False;Dirty:=True;Drag:=False;Orbit:=False;Edited:=False;
+ Unlit:=False;Rendered:=True;UseFalloff:=Layers[ActiveLayer].Falloff.Configured;
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 2)<>0) And ((Prev And 2)=0) And
+   Hit(16,68,271,323) Then Begin Orbit:=True;LastX:=MX;LastY:=MY;End;
+  If (MB And 2)=0 Then Orbit:=False;
+  If Orbit And ((LastX<>MX) Or (LastY<>MY)) Then Begin
+   Camera.RY:=Max(-3600,Min(3600,Camera.RY+(MX-LastX)*5));
+   Camera.RX:=Max(-3600,Min(3600,Camera.RX+(MY-LastY)*5));
+   LastX:=MX;LastY:=MY;Dirty:=True;
+  End;
+  If ((MB And 1)<>0) And ((Prev And 1)=0) And Not Orbit Then Begin
+   If Not Compare And
+    (Hit(16,68,271,323) Or Hit(350,68,605,323)) Then Begin
+    SaveStroke;Drag:=True;LastX:=MX;LastY:=MY;Stamp(MX-X,MY-Y);
+   End Else If Hit(16,35,127,57) Then Unlit:=Not Unlit
+   Else If Hit(135,35,240,57) Then Camera:=Original
+   Else If Hit(248,35,342,57) Then Begin
+    If Layers[ActiveLayer].Falloff.Configured Then UseFalloff:=Not UseFalloff
+    Else Message:='Reglez d''abord Attenuation peinture.';
+   End Else If TargetMode And Hit(350,35,385,57) Then NextTarget(-1)
+   Else If TargetMode And Hit(570,35,605,57) Then NextTarget(1)
+   Else If Not TargetMode And Hit(350,35,472,57) Then Begin
+    SaveStroke;Source(True);
+   End Else If Not TargetMode And Hit(480,35,605,57) Then Begin
+    SaveStroke;Source(False);
+   End
+   Else If Hit(285,81,340,147) Then
+    Ink:=Min(15,(MX-X-285) Div 14+4*((MY-Y-81) Div 17))
+   Else If Hit(279,159,344,181) Then UndoStroke
+   Else If Hit(279,187,344,209) Then SizeChoice:=0
+   Else If Hit(279,215,344,237) Then SizeChoice:=1
+   Else If Hit(279,243,309,265) Then Adjust(-1)
+   Else If Hit(314,243,344,265) Then Adjust(1)
+   Else If TargetMode And Hit(350,351,495,373) Then Compare:=Not Compare
+   Else If TargetMode And Hit(503,351,605,373) Then Begin
+    SaveStroke;Move(Base^,Texture^,65536);Compare:=False;Message:='';
+   End Else If Not TargetMode And Hit(350,351,605,373) Then
+    Rendered:=Not Rendered
+   Else If Hit(350,385,469,407) Then Done:=True
+   Else If Hit(480,385,605,407) Then Apply;
+   Dirty:=True;
+  End;
+  If ((MB And 1)=0) Or Orbit Then Drag:=False;
+  If Drag And ((MX<>LastX) Or (MY<>LastY)) Then Begin
+   DX:=MX-LastX;DY:=MY-LastY;I:=Max(Abs(DX),Abs(DY));
+   For Step:=1 To I Do
+    Stamp(LastX-X+Round(DX*1.0*Step/I),
+     LastY-Y+Round(DY*1.0*Step/I));
+   LastX:=MX;LastY:=MY;
+  End;
+  Prev:=MB;
+  If Not Done And KeyPressed Then Begin
+   K:=ReadKey;
+   Case K Of
+    #0:K:=ReadKey;
+    #27:Done:=True;
+    #13:Apply;
+    #26:UndoStroke;
+    '+':Adjust(1);
+    '-':Adjust(-1);
+   End;
+   Dirty:=True;
+  End;
+  Delay(10);
+ Until Done;
+ FreeMem(Hits,SizeOf(TPaintHits));FreeMem(Backup,65536);
+ FreeMem(Texture,65536);If Base<>Nil Then FreeMem(Base,65536);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
 
 
 Procedure MeshExportDialog;
@@ -12953,6 +13835,10 @@ Begin
    15:GroundDialog(False);
    16:GroundDialog(True);
    18:TilePaintingDialog;
+   19:UVDialog;
+   20:PaintFalloffDialog;
+   21:PaintSystemDialog(False);
+   22:PaintSystemDialog(True);
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

@@ -14326,14 +14326,45 @@ Begin
  M^.Maximum.X:=A.X+A.W;M^.Maximum.Y:=A.Y+A.D;M^.Maximum.Z:=A.H;
 End;
 
-Procedure PrintConfigDialog;
+Procedure PrintMeshReport(M:PMesh;Var Surface:Double;
+ Var Degenerate:LongInt);
+Var I:LongInt;T:TMeshTriangle;A,B,C:TMeshVector;
+ UX,UY,UZ,VX,VY,VZ,X,Y,Z,D:Double;
+Begin
+ Surface:=0;Degenerate:=0;
+ If M=Nil Then Exit;
+ For I:=0 To M^.TriangleCount-1 Do Begin
+  T:=M^.Triangles^[I];A:=M^.Vertices^[T.A];
+  B:=M^.Vertices^[T.B];C:=M^.Vertices^[T.C];
+  UX:=Double(B.X)-A.X;UY:=Double(B.Y)-A.Y;UZ:=Double(B.Z)-A.Z;
+  VX:=Double(C.X)-A.X;VY:=Double(C.Y)-A.Y;VZ:=Double(C.Z)-A.Z;
+  X:=UY*VZ-UZ*VY;Y:=UZ*VX-UX*VZ;Z:=UX*VY-UY*VX;
+  D:=X*X+Y*Y+Z*Z;
+  If D=0 Then Inc(Degenerate) Else Surface:=Surface+Sqrt(D)/2;
+ End;
+End;
+
+Function OpenPreparedSTL(Const Name:String):Boolean;
+{$IFDEF SKETCH_NATIVE}
+Var Path:String;
+{$ENDIF}
+Begin
+ {$IFDEF SKETCH_NATIVE}
+ Path:=Name+#0;
+ OpenPreparedSTL:=SFOpenURL(Nil,'open',@Path[1],Nil,Nil,1)>32;
+ {$ELSE}
+ OpenPreparedSTL:=False;
+ {$ENDIF}
+End;
+
+Procedure PrintConfigDialog(PrintJob:Boolean);
 Const Labels:Array[0..4] Of String[14]=
  ('Largeur mm','Profondeur mm','Hauteur mm','Marge mm','mm par unite');
 Var M,Output:PMesh;C:TPrintProfile;A:TPrintLayout;O:TMeshOptions;
  P:PByteArr;X,Y,MX,MY,MB,Prev,Field,View,Code,OldX,OldY:Integer;
- Defects:LongInt;
- Dirty,Done,Valid,ReplaceText,Drag,Choose:Boolean;K:Char;
- Texts:Array[0..4] Of String;S,Message,Name,Ext,Error:String;
+ Defects,Degenerate:LongInt;Surface:Double;
+ Dirty,Done,Valid,ReplaceText,Drag,Choose,Report:Boolean;K:Char;
+ Texts:Array[0..4] Of String;S,Message,Name,Ext,Error,LastSTL:String;
  Function Hit(L,T,R,B:Integer):Boolean;
  Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
  Procedure Button(L,T,W:Integer;Const Caption:String;On:Boolean);
@@ -14400,16 +14431,34 @@ Var M,Output:PMesh;C:TPrintProfile;A:TPrintLayout;O:TMeshOptions;
  Var I,J:Integer;D:Byte;
  Begin
   Parse;P:=Nil;
-  If (View=2) And (M<>Nil) Then RenderMesh(M,O,340,254,False,P);
+  If Not Report And (View=2) And (M<>Nil) Then
+   RenderMesh(M,O,340,254,False,P);
   HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
   DrawBevel(X,Y,X+620,Y+440,True);
   FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
-  OutTextXY(X+12,Y+10,'Config. impression 3D - plateau et echelle');
+  If PrintJob Then S:='Imprimer en 3D - preparation du fichier'
+  Else S:='Config. impression 3D - plateau et echelle';
+  OutTextXY(X+12,Y+10,S);
   Button(16,36,105,'Dessus',View=0);
   Button(133,36,105,'Face',View=1);
   Button(250,36,105,'Modele 3D',View=2);
   FillRect(X+16,Y+68,X+355,Y+321,DarkGray);
-  If View<>2 Then Bed
+  If Report Then Begin
+   FillRect(X+17,Y+69,X+354,Y+320,White);SetColor(Black);
+   OutTextXY(X+26,Y+82,'Bilan du modele a imprimer');
+   OutTextXY(X+26,Y+104,'Sommets : '+IntToStr(M^.VertexCount));
+   OutTextXY(X+26,Y+124,'Triangles : '+IntToStr(M^.TriangleCount));
+   OutTextXY(X+26,Y+144,'Faces sans aire : '+IntToStr(Degenerate));
+   S:=IntToStr(Defects);If Defects<0 Then S:='indisponible';
+   OutTextXY(X+26,Y+164,'Aretes indexees anormales : '+S);
+   OutTextXY(X+26,Y+184,'Aire : '+Dec(Surface*C.Scale*C.Scale)+' mm2');
+   OutTextXY(X+26,Y+204,'STL binaire : '+
+    IntToStr(84+M^.TriangleCount*50)+' octets');
+   OutTextXY(X+26,Y+224,'X / Y : '+Dec(A.X)+' / '+Dec(A.Y)+' mm');
+   OutTextXY(X+26,Y+244,'Z de depart : 0 mm');
+   OutTextXY(X+26,Y+269,'Un STL peut dupliquer ses sommets.');
+   OutTextXY(X+26,Y+289,'Verifiez le resultat dans le trancheur.');
+  End Else If View<>2 Then Bed
   Else If P<>Nil Then Begin
    For J:=0 To 253 Do For I:=0 To 339 Do Begin
     D:=P^[LongInt(J)*340+I];
@@ -14443,11 +14492,19 @@ Var M,Output:PMesh;C:TPrintProfile;A:TPrintLayout;O:TMeshOptions;
   End Else OutTextXY(X+371,Y+268,'Aucun modele actif.');
   SetColor(Black);
   OutTextXY(X+16,Y+338,'Plateau : emprise centree et posee a Z = 0.');
-  OutTextXY(X+16,Y+356,'Tab : champ suivant. Vue 3D : glisser.');
+  If PrintJob Then
+   OutTextXY(X+16,Y+356,'Le trancheur genere les couches et le G-code.')
+  Else OutTextXY(X+16,Y+356,'Tab : champ suivant. Vue 3D : glisser.');
   OutTextXY(X+16,Y+374,'Le STL est prepare en millimetres, axe Z haut.');
   Button(16,391,148,'Exporter STL',False);
-  Button(371,391,112,'Annuler',False);
-  Button(490,391,112,'Conserver',False);
+  If PrintJob Then Begin
+   Button(174,391,146,'Ouvrir le STL',LastSTL<>'');
+   Button(371,391,112,'Bilan',Report);
+   Button(490,391,112,'Fermer',False);
+  End Else Begin
+   Button(371,391,112,'Annuler',False);
+   Button(490,391,112,'Conserver',False);
+  End;
   S:=Message;
   If Not Valid Then S:='Dimensions, marge ou facteur invalides.';
   SetColor(Red);OutTextXY(X+16,Y+422,Copy(S,1,73));
@@ -14470,6 +14527,9 @@ Var M,Output:PMesh;C:TPrintProfile;A:TPrintLayout;O:TMeshOptions;
   Parse;If Not Valid Then Exit;
   If M=Nil Then Message:='Selectionnez un calque 3D pour exporter.'
   Else If Not A.Fits Then Message:='Le modele depasse le volume utile.'
+  Else If PrintJob And (Degenerate>0) And
+   Not YesNoDialog('Controle du modele','Faces sans aire. Continuer ?')
+   Then Message:='Export annule.'
   Else Begin
    PreviousFormat:=FD_MeshExportFormat;FD_MeshExportFormat:=3;
    Choose:=FD_Save('Exporter le modele prepare',Name,Ext);
@@ -14481,6 +14541,7 @@ Var M,Output:PMesh;C:TPrintProfile;A:TPrintLayout;O:TMeshOptions;
     If Choose Then Begin
      If PreparePrintSTL(M,C,A,Output,Error) Then Begin
       If WriteMeshExport(Output,Name,2,True,True,Error) Then Begin
+       LastSTL:=Name;
        If Error='' Then Error:='STL enregistre : '+Name;
        ShowDialog('Impression 3D',Error);
       End;
@@ -14494,6 +14555,9 @@ Var M,Output:PMesh;C:TPrintProfile;A:TPrintLayout;O:TMeshOptions;
  End;
 Begin
  ResetToolTip;MenuActive:=False;M:=Layers[ActiveLayer].Mesh;
+ If PrintJob And (M=Nil) Then Begin
+  ShowDialog('Imprimer en 3D','Selectionnez un calque 3D.');Exit;
+ End;
  C:=PrintProfile;
  If C.Width=0 Then Begin
   C.Width:=220;C.Depth:=220;C.Height:=250;C.Margin:=5;C.Scale:=1;C.Up:=0;
@@ -14501,16 +14565,22 @@ Begin
  DefaultMeshOptions(O);O.Mode:=0;Defects:=-1;
  If M<>Nil Then Begin
   O:=Layers[ActiveLayer].MeshOptions;Defects:=PrintEdgeDefects(M);
+  If PrintJob Then O.FaceFilter:=0;
  End;
+ PrintMeshReport(M,Surface,Degenerate);
+ Report:=False;LastSTL:='';
  FillChar(A,SizeOf(A),0);Sync;
  X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
- View:=0;Field:=0;Done:=False;Drag:=False;ReplaceText:=True;
+ View:=0;If PrintJob Then View:=2;
+ Field:=0;Done:=False;Drag:=False;ReplaceText:=True;
  Message:='';Name:='impression.stl';GetMouseStateLocal(MX,MY,Prev);
  Repeat
   If Dirty Then Draw;
   GetMouseStateLocal(MX,MY,MB);
   If ((MB And 1)<>0) And ((Prev And 1)=0) Then Begin
-   If Hit(16,36,355,59) Then View:=Min(2,(MX-X-16) Div 117)
+   If Hit(16,36,355,59) Then Begin
+    View:=Min(2,(MX-X-16) Div 117);Report:=False;
+   End
    Else If Hit(490,36,602,175) Then Begin
     Field:=Min(4,(MY-Y-36) Div 29);ReplaceText:=True;
    End Else If Hit(371,185,483,208) Then Begin
@@ -14520,10 +14590,16 @@ Begin
    End Else If Hit(371,215,483,238) Then C.Up:=1-C.Up
    Else If Hit(490,215,602,238) Then Fit
    Else If Hit(16,391,164,414) Then ExportSTL
-   Else If Hit(371,391,483,414) Then Done:=True
-   Else If Hit(490,391,602,414) Then Begin
-    Parse;If Valid Then Begin PrintProfile:=C;Done:=True;End;
-   End Else If (View=2) And Hit(16,68,355,321) Then Begin
+   Else If PrintJob And Hit(174,391,320,414) Then Begin
+    If LastSTL='' Then Message:='Exportez d''abord le STL.'
+    Else If OpenPreparedSTL(LastSTL) Then Message:='Fichier ouvert.'
+    Else Message:='Ouvrez le STL manuellement dans votre trancheur.';
+   End Else If Hit(371,391,483,414) Then Begin
+    If PrintJob Then Report:=Not Report Else Done:=True;
+   End Else If Hit(490,391,602,414) Then Begin
+    If PrintJob Then Done:=True
+    Else Begin Parse;If Valid Then Begin PrintProfile:=C;Done:=True;End;End;
+   End Else If Not Report And (View=2) And Hit(16,68,355,321) Then Begin
     Drag:=True;OldX:=MX;OldY:=MY;
    End;
    Dirty:=True;
@@ -14540,7 +14616,9 @@ Begin
    Case K Of
     #0:K:=ReadKey;
     #27:Done:=True;
-    #13:Begin Parse;If Valid Then Begin PrintProfile:=C;Done:=True;End;End;
+    #13:If PrintJob Then ExportSTL Else Begin
+     Parse;If Valid Then Begin PrintProfile:=C;Done:=True;End;
+    End;
     #9:Begin Field:=(Field+1) Mod 5;ReplaceText:=True;End;
     #8:Begin Delete(Texts[Field],Length(Texts[Field]),1);
      ReplaceText:=False;End;
@@ -16586,7 +16664,8 @@ Begin
    31:TraceMeshDialog;
    34:RenderFileDialog;
    35:SketchBrushDialog;
-   37:PrintConfigDialog;
+   37:PrintConfigDialog(False);
+   38:PrintConfigDialog(True);
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

@@ -6877,13 +6877,14 @@ End;
 Const
  FD_MAXENT = 256;
  FD_ROWH   = 10;
- FD_NUM_FILTERS = 14;
+ FD_NUM_FILTERS = 15;
  FD_FILTER_LABELS: Array[0..FD_NUM_FILTERS-1] of String[36] = (
   'Tous formats images',
   'APNG (*.APNG)',
   'ARW Bayer (*.ARW)',
   'BGX MonsterBook (*.BGX)',
   'BMP (*.BMP;*.DIB)',
+  'CR2 Bayer (*.CR2)',
   'GIF (*.GIF)',
   'JPEG (*.JPG;*.JPEG)',
   'PCX (*.PCX)',
@@ -6930,20 +6931,22 @@ Begin
   0: FD_ExtMatches := (E='.BMP') Or (E='.DIB') Or (E='.GIF') Or (E='.PNG') Or
                       (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or
                       (E='.TIF') Or (E='.TIFF') Or (E='.PSD') Or
-                      (E='.PPM') Or (E='.BGX') Or (E='.APNG') Or (E='.ARW');
+                      (E='.PPM') Or (E='.BGX') Or (E='.APNG') Or (E='.ARW') Or
+                      (E='.CR2');
   1: FD_ExtMatches := E='.APNG';
   2: FD_ExtMatches := E='.ARW';
   3: FD_ExtMatches := E='.BGX';
   4: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
-  5: FD_ExtMatches := E='.GIF';
-  6: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
-  7: FD_ExtMatches := E='.PCX';
-  8: FD_ExtMatches := E='.PNG';
-  9: FD_ExtMatches := E='.PPM';
-  10: FD_ExtMatches := E='.PSD';
-  11: FD_ExtMatches := E='.TGA';
-  12: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
-  13: FD_ExtMatches := True;
+  5: FD_ExtMatches := E='.CR2';
+  6: FD_ExtMatches := E='.GIF';
+  7: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
+  8: FD_ExtMatches := E='.PCX';
+  9: FD_ExtMatches := E='.PNG';
+  10: FD_ExtMatches := E='.PPM';
+  11: FD_ExtMatches := E='.PSD';
+  12: FD_ExtMatches := E='.TGA';
+  13: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
+  14: FD_ExtMatches := True;
  Else FD_ExtMatches := False; End;
 End;
 
@@ -7487,7 +7490,7 @@ Const
   'Portable Pixmap (*.PPM)' );
  FD_SAVE_EXT: Array[0..FD_SAVE_NUM-1] of String[4] = (
   '.BMP', '.PSD', '.TGA', '.PPM' );
- FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (4, 10, 11, 9);
+ FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (4, 11, 12, 10);
 
 Var
  FD_SaveFilterIdx: Integer;
@@ -7937,7 +7940,7 @@ Type
   Data,Raw,RGB: PARBytes;
   Size,RawSize,RGBSize,IFD: LongInt;
   Width,Height,OutWidth,OutHeight,Bits,Orientation,EntryCount: Integer;
-  Little,Bad:Boolean;
+  Little,Bad,CR2:Boolean;
   Black,White: Double;
   Pattern: Array[0..3] Of Byte;
   Neutral: Array[0..2] Of Double;
@@ -8011,6 +8014,13 @@ Begin
  If Not D.Little And Not ((D.Data^[0]=77) And (D.Data^[1]=77)) Then Exit;
  If DNWord(D,2)<>42 Then Exit;
  V:=DNLong(D,4); If V>LongWord(D.Size-2) Then Exit; D.IFD:=V;
+ If D.CR2 Then Begin
+  If (D.Size<16) Or (D.IFD<16) Then Exit;
+  If (D.Data^[8]<>Ord('C')) Or (D.Data^[9]<>Ord('R')) Or
+   (D.Data^[10]<>2) Or (D.Data^[11]<>0) Then Exit;
+  V:=DNLong(D,12);
+  If (V<>0) And (V<>LongWord(D.IFD)) Then Exit;
+ End;
  N:=DNWord(D,D.IFD);
  If (N<1) Or (N>256) Or (LongInt(N)*12+6>D.Size-D.IFD) Then Exit;
  If DNLong(D,D.IFD+2+LongInt(N)*12)<>0 Then Exit;
@@ -8031,9 +8041,11 @@ Begin
    If (Offset<0) Or (Offset>D.Size-Bytes) Then Exit;
   End;
  End;
- K:=DNFind(D,50706);If K<0 Then Exit;
- If (D.Entries[K].Kind<>1) Or (D.Entries[K].Count<>4) Or
-  (DNValue(D,K,0)<>1) Then Exit;
+ If Not D.CR2 Then Begin
+  K:=DNFind(D,50706);If K<0 Then Exit;
+  If (D.Entries[K].Kind<>1) Or (D.Entries[K].Count<>4) Or
+   (DNValue(D,K,0)<>1) Then Exit;
+ End;
  DNDirectory:=Not D.Bad;
 End;
 
@@ -8078,7 +8090,8 @@ Begin
  If D.Pattern[0]=1 Then Begin If D.Pattern[3]<>1 Then Exit; End
  Else If (D.Pattern[3]=1) Or (D.Pattern[0]=D.Pattern[3]) Then Exit;
  If ((D.Height And 1)=0) And
-    DNCloneRaw(D,'BMP2ARW') Then Begin
+    ((D.CR2 And DNCloneRaw(D,'BMP2CR2')) Or
+     (Not D.CR2 And DNCloneRaw(D,'BMP2ARW'))) Then Begin
   I:=D.Pattern[0]; D.Pattern[0]:=D.Pattern[2]; D.Pattern[2]:=I;
   I:=D.Pattern[1]; D.Pattern[1]:=D.Pattern[3]; D.Pattern[3]:=I;
  End;
@@ -8184,12 +8197,12 @@ Begin
 End;
 
 
-Function LoadARW(Const Name:String):Boolean;
+Function LoadBayerRAW(Const Name:String;CR2:Boolean):Boolean;
 Var D:PDNState;Pixels:PByteArr;Size,I,J:LongInt;K:Integer;
 Begin
- LoadARW:=False;Pixels:=Nil;
+ LoadBayerRAW:=False;Pixels:=Nil;
  D:=PDNState(RotationAllocate(SizeOf(TDNState)));If D=Nil Then Exit;
- FillChar(D^,SizeOf(TDNState),0);
+ FillChar(D^,SizeOf(TDNState),0);D^.CR2:=CR2;
  If DNRead(Name,D^) Then Begin
   Size:=LongInt(D^.OutWidth)*D^.OutHeight;
   Pixels:=PByteArr(RotationAllocate(Size));
@@ -8206,7 +8219,7 @@ Begin
    Layers[0].Used:=True;Layers[0].Visible:=True;Layers[0].Opacity:=100;
    Layers[0].Name:='Arriere-plan';Layers[0].Pixels:=Pixels;
    CurrentFileName:=Name;ImageModified:=False;SelectionActive:=False;
-   ZoomLevel:=100;LoadARW:=True;
+   ZoomLevel:=100;LoadBayerRAW:=True;
   End;
  End;
  If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
@@ -8226,7 +8239,8 @@ Begin
  Else If (Ext='.JPG') Or (Ext='.JPEG') Then Loaded := LoadJPEG(FN)
  Else If Ext='.PNG' Then Loaded := LoadPNG(FN)
  Else If Ext='.APNG' Then Loaded := LoadAPNG(FN)
- Else If Ext='.ARW' Then Loaded := LoadARW(FN)
+ Else If Ext='.ARW' Then Loaded:=LoadBayerRAW(FN,False)
+ Else If Ext='.CR2' Then Loaded:=LoadBayerRAW(FN,True)
  Else If Ext='.BGX' Then Loaded := LoadBGX(FN)
  Else If Ext='.PCX' Then Loaded := LoadPCX(FN)
  Else If Ext='.PSD' Then Loaded := LoadPSD(FN)

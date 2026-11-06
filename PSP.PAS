@@ -228,6 +228,8 @@ Type
  TLayer = Record
   Mesh:PMesh;
   MeshOptions:TMeshOptions;
+  Group3D:Byte;
+  Group3DName:String[20];
   Name: String[20];
   Visible: Boolean;
   Opacity: Byte;
@@ -423,6 +425,7 @@ Begin
  GetMem(Layers[LIdx].Pixels, Sz);
  Layers[LIdx].Mesh:=Nil; FillChar(Layers[LIdx].MeshOptions,
  SizeOf(TMeshOptions), 0);
+ Layers[LIdx].Group3D:=0;Layers[LIdx].Group3DName:='';
  Layers[LIdx].Name := Nm;
  Layers[LIdx].Visible := True;
  Layers[LIdx].Opacity := 100;
@@ -1110,6 +1113,11 @@ Begin
   End;
   SetColor(UI_TEXT);
   S := Layers[I].Name;
+  If (Layers[I].Mesh<>Nil) And (Layers[I].Group3D<>0) Then Begin
+   SetColor(Blue);
+   OutTextXY(PX1+7,Y+5,Chr(Ord('0')+Layers[I].Group3D));
+   SetColor(UI_TEXT);
+  End;
   OutTextXY(PX1+38, Y+5, S);
   Y := Y + 20;
   If Y > PY2-44 Then Break;
@@ -9908,12 +9916,50 @@ Begin
  OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
 End;
 
-Procedure MeshMergeDialog;
+{ Groupes logiques : chaque membre conserve son calque et sa geometrie. }
+Function CommitMeshGroup(Const Selected:TMeshSelection;
+ Remove:Boolean;Const Name:String):Boolean;
+Var I,N,G:Integer;Used:Array[1..MAX_LAYERS] Of Boolean;
+ R:PRotationUndo;
+Begin
+ CommitMeshGroup:=False;N:=0;
+ FillChar(Used,SizeOf(Used),0);
+ For I:=0 To LayerCount-1 Do If Layers[I].Mesh<>Nil Then Begin
+  G:=Layers[I].Group3D;
+  If Selected[I] Then Begin
+   If Not Remove Or (G<>0) Then Inc(N);
+  End Else If G<>0 Then Used[G]:=True;
+ End;
+ If Remove Then Begin
+  If N=0 Then Exit;
+  G:=0;
+ End Else Begin
+  If (N<2) Or (Name='') Then Exit;
+  G:=1;
+  While (G<MAX_LAYERS) And Used[G] Do Inc(G);
+ End;
+ R:=MeshUndoCopy;
+ If R=Nil Then Exit;
+ MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+ Inc(UndoCount);
+ For I:=0 To LayerCount-1 Do If Layers[I].Mesh<>Nil Then Begin
+  If Selected[I] Then Begin
+   Layers[I].Group3D:=G;
+   Layers[I].Group3DName:='';
+   If G<>0 Then Layers[I].Group3DName:=Copy(Name,1,20);
+  End;
+ End;
+ ImageModified:=True;CommitMeshGroup:=True;
+End;
+
+Procedure MeshMergeDialog(GroupMode,WholeScene:Boolean);
 Var Selected:TMeshSelection;M:PMesh;O:TMeshOptions;Preview:PByteArr;
  X,Y,MX,MY,MB,Previous,I,J,PW,PH,OX,OY,Focus,Count:Integer;
  OldX,OldY:Integer;VC,TC,Bytes:LongInt;Color:Byte;K,E:Char;
  Dirty,Rebuild,Done,Keep,Transform,Spread,Drag,ReplaceText,Info:Boolean;
  Name,Message,Error,S:String;
+ SceneView,HiddenCount,GroupCount:Integer;
+ GroupsSeen:Array[1..MAX_LAYERS] Of Boolean;
  Function Decimal(V:Double):String;
  Var T:String;
  Begin Str(V:0:3,T);Decimal:=T;End;
@@ -9935,26 +9981,38 @@ Var Selected:TMeshSelection;M:PMesh;O:TMeshOptions;Preview:PByteArr;
   OutTextXY(X+L+18,Y+T+3,Caption);
  End;
  Procedure Draw;
- Var PX,PY,I,OutputCount:Integer;
+ Var PX,PY,I,G,OutputCount:Integer;
  Begin
   If Rebuild Then Begin
    ReleaseMesh(M);BuildMergedMesh(Selected,Transform,Spread,M,Error);
    Message:=Error;Rebuild:=False;
   End;
   If Preview<>Nil Then FreeMem(Preview,LongInt(PW)*PH);Preview:=Nil;
-  If M<>Nil Then If Not RenderMesh(M,O,PW,PH,True,Preview) Then
+  If (Not WholeScene Or (SceneView=0)) And (M<>Nil) Then
+   If Not RenderMesh(M,O,PW,PH,True,Preview) Then
    Message:='Apercu annule ou memoire insuffisante.';
-  Count:=0;VC:=0;TC:=0;
+  Count:=0;VC:=0;TC:=0;HiddenCount:=0;GroupCount:=0;
+  FillChar(GroupsSeen,SizeOf(GroupsSeen),0);
   For I:=0 To LayerCount-1 Do If Selected[I] Then Begin
    Inc(Count);Inc(VC,Layers[I].Mesh^.VertexCount);
+   If Not Layers[I].Visible Then Inc(HiddenCount);
+   G:=Layers[I].Group3D;
+   If G<>0 Then If Not GroupsSeen[G] Then Begin
+    GroupsSeen[G]:=True;Inc(GroupCount);
+   End;
    Inc(TC,Layers[I].Mesh^.TriangleCount);
   End;
   Bytes:=VC*SizeOf(TMeshVector)+TC*SizeOf(TMeshTriangle);
   HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
   DrawBevel(X,Y,X+620,Y+440,True);
   FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
-  OutTextXY(X+12,Y+10,'Fusionner les calques 3D - assemblage de scene');
-  SetColor(Black);OutTextXY(X+16,Y+39,'Sources 3D (Espace : choisir)');
+  If WholeScene Then S:='Grouper toute la sc'+#138+'ne 3D'
+  Else If GroupMode Then S:='Grouper objets 3D - organisation des calques'
+  Else S:='Fusionner les calques 3D - assemblage de scene';
+  OutTextXY(X+12,Y+10,S);
+  S:='Sources 3D (Espace : choisir)';
+  If WholeScene Then S:='Tous les objets 3D, m'+#136+'me masqu'+#130+'s';
+  SetColor(Black);OutTextXY(X+16,Y+39,S);
   For I:=0 To MAX_LAYERS-1 Do Begin
    FillRect(X+14,Y+57+I*22,X+302,Y+77+I*22,White);
    If I<LayerCount Then Begin
@@ -9962,26 +10020,75 @@ Var Selected:TMeshSelection;M:PMesh;O:TMeshOptions;Preview:PByteArr;
      Rectangle(X+14,Y+57+I*22,X+302,Y+77+I*22);End;
     If Layers[I].Mesh<>Nil Then Begin
      S:=Copy(Layers[I].Name,1,20);
+     If Layers[I].Group3D<>0 Then
+      S:=S+' [G'+IntToStr(Layers[I].Group3D)+']';
      If Not Layers[I].Visible Then S:=S+' (M)';
      Check(20,61+I*22,Selected[I],S);
     End Else Begin SetColor(DarkGray);
      OutTextXY(X+22,Y+64+I*22,Copy(Layers[I].Name,1,20)+' [2D]');End;
    End;
   End;
-  Button(14,239,88,'Tous 3D');Button(110,239,88,'Visibles');
-  Button(206,239,96,'Aucun');
+  If WholeScene Then Begin
+   Button(14,239,88,'Vue 3D');
+   Button(110,239,88,'Document');
+   Button(206,239,96,'Bilan');
+   SetColor(Blue);
+   Rectangle(X+14+SceneView*96,Y+239,X+102+SceneView*96,Y+262);
+  End Else Begin
+   Button(14,239,88,'Tous 3D');Button(110,239,88,'Visibles');
+   Button(206,239,96,'Aucun');
+  End;
   For PY:=0 To 169 Do For PX:=0 To 279 Do Begin
    Color:=White;If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=LightGray;
    OX:=PX-(280-PW) Div 2;OY:=PY-(170-PH) Div 2;
    If (Preview<>Nil) And (OX>=0) And (OY>=0) And (OX<PW) And
     (OY<PH) Then If Preview^[LongInt(OY)*PW+OX]<>255 Then
      Color:=Preview^[LongInt(OY)*PW+OX];
+   If WholeScene And (SceneView=1) And (OX>=0) And (OY>=0) And
+    (OX<PW) And (OY<PH) Then
+    Color:=Composite(LongInt(OX)*ImgW Div PW,LongInt(OY)*ImgH Div PH);
    PutPixel(X+320+PX,Y+57+PY,Color);
   End;
   SetColor(Black);Rectangle(X+319,Y+56,X+600,Y+227);
-  OutTextXY(X+320,Y+39,'Apercu / infos (I) - glisser');
-  If Info And (M<>Nil) Then Begin
+  S:='Apercu / infos (I) - glisser';
+  If WholeScene Then Case SceneView Of
+   0:S:='Apercu 3D - glisser pour pivoter';
+   1:S:='Image composee - calques visibles';
+   2:S:='Bilan de la scene';
+  End;
+  OutTextXY(X+320,Y+39,S);
+  If WholeScene And (SceneView=2) Then Begin
    FillRect(X+321,Y+58,X+599,Y+225,White);SetColor(Black);
+   OutTextXY(X+328,Y+68,'Objets visibles : '+IntToStr(Count-HiddenCount));
+   OutTextXY(X+328,Y+86,'Objets masques : '+IntToStr(HiddenCount));
+   OutTextXY(X+328,Y+104,'Calques 2D hors groupe : '+
+    IntToStr(LayerCount-Count));
+   OutTextXY(X+328,Y+122,'Groupes 3D remplaces : '+IntToStr(GroupCount));
+   OutTextXY(X+328,Y+140,'Image : '+IntToStr(ImgW)+' x '+IntToStr(ImgH));
+   If M<>Nil Then Begin
+    OutTextXY(X+328,Y+158,'Etendue de la vue 3D (unites)');
+    OutTextXY(X+328,Y+176,'X : '+Decimal(M^.Maximum.X-M^.Minimum.X));
+    OutTextXY(X+328,Y+194,'Y : '+Decimal(M^.Maximum.Y-M^.Minimum.Y));
+    OutTextXY(X+328,Y+212,'Z : '+Decimal(M^.Maximum.Z-M^.Minimum.Z));
+   End;
+  End Else If Info And Not WholeScene Then Begin
+   FillRect(X+321,Y+58,X+599,Y+225,White);SetColor(Black);
+   If GroupMode And (Focus<LayerCount) Then Begin
+    OutTextXY(X+328,Y+68,'Calque : '+Layers[Focus].Name);
+    S:=Layers[Focus].Group3DName;
+    If S='' Then S:='Aucun';
+    OutTextXY(X+328,Y+88,'Groupe : '+S);
+    If Layers[Focus].Mesh<>Nil Then Begin
+     OutTextXY(X+328,Y+108,'Source : '+
+      Copy(Layers[Focus].Mesh^.Source,1,23));
+     OutTextXY(X+328,Y+128,'Sommets : '+
+      IntToStr(Layers[Focus].Mesh^.VertexCount));
+     OutTextXY(X+328,Y+148,'Triangles : '+
+      IntToStr(Layers[Focus].Mesh^.TriangleCount));
+    End;
+    OutTextXY(X+328,Y+168,'Opacite : '+
+     IntToStr(Layers[Focus].Opacity)+' %');
+   End Else If M<>Nil Then Begin
    OutTextXY(X+328,Y+68,'Etendue de la scene (unites)');
    OutTextXY(X+328,Y+88,'X : '+Decimal(M^.Maximum.X-M^.Minimum.X));
    OutTextXY(X+328,Y+106,'Y : '+Decimal(M^.Maximum.Y-M^.Minimum.Y));
@@ -9992,18 +10099,32 @@ Var Selected:TMeshSelection;M:PMesh;O:TMeshOptions;Preview:PByteArr;
     IntToStr(LongInt(ImgW)*ImgH)+' o');
    OutTextXY(X+328,Y+198,'Maillage alloue : '+
     IntToStr(SizeOf(TMeshVertices)+SizeOf(TMeshTriangles))+' o');
-   OutTextXY(X+328,Y+214,'Sortie visible / opacite 100%');
+   If Not GroupMode Then
+    OutTextXY(X+328,Y+214,'Sortie visible / opacite 100%');
+   End;
   End;
   OutputCount:=LayerCount-Count+1;
   If Keep Then OutputCount:=LayerCount+1;
+  If GroupMode Then OutputCount:=LayerCount;
   OutTextXY(X+320,Y+240,'Sources : '+IntToStr(Count)+' / sortie : '+
    IntToStr(OutputCount)+' calques');
   OutTextXY(X+320,Y+256,IntToStr(VC)+' sommets / '+
    IntToStr(TC)+' triangles');
   OutTextXY(X+320,Y+272,'Geometrie utile : '+IntToStr(Bytes)+' o');
-  Check(16,278,Keep,'Conserver les sources');
-  Check(16,300,Transform,'Appliquer les transformations');
-  Check(16,322,Spread,'Disposer cote a cote');
+  If WholeScene Then Begin
+   OutTextXY(X+16,Y+278,'Sortie : un groupe, objets independants');
+   Check(16,300,Transform,'Apercu : poses des calques');
+   Check(16,322,Spread,'Apercu : cote a cote');
+  End Else If GroupMode Then Begin
+   Button(14,272,132,'Degrouper');
+   Button(158,272,144,'Groupe actif');
+   Check(16,300,Transform,'Apercu : poses des calques');
+   Check(16,322,Spread,'Apercu : cote a cote');
+  End Else Begin
+   Check(16,278,Keep,'Conserver les sources');
+   Check(16,300,Transform,'Appliquer les transformations');
+   Check(16,322,Spread,'Disposer cote a cote');
+  End;
   Check(320,294,O.Cull,'Masquer faces arriere');
   Check(320,316,O.Dither,'Tramage des couleurs');
   S:='Orthographique';If O.Perspective Then S:='Perspective';
@@ -10017,15 +10138,31 @@ Var Selected:TMeshSelection;M:PMesh;O:TMeshOptions;Preview:PByteArr;
   If Focus=MAX_LAYERS Then SetColor(Blue) Else SetColor(DarkGray);
   Rectangle(X+64,Y+379,X+302,Y+400);SetColor(Black);
   OutTextXY(X+70,Y+386,Name);
-  Button(320,379,132,'Annuler');Button(468,379,132,'Fusionner');
-  SetColor(Black);OutTextXY(X+16,Y+409,
-   'Camera/couleur communes. Sans soudure. Geometrie en memoire.');
+  Button(320,379,132,'Annuler');
+  If GroupMode Then Begin
+   Button(468,379,132,'Grouper');
+   SetColor(Black);OutTextXY(X+16,Y+409,
+    'Objets independants. Groupe en memoire, reperable dans Calques.');
+  End Else Begin
+   Button(468,379,132,'Fusionner');
+   SetColor(Black);OutTextXY(X+16,Y+409,
+    'Camera/couleur communes. Sans soudure. Geometrie en memoire.');
+  End;
   If Message<>'' Then Begin SetColor(Red);
    OutTextXY(X+16,Y+425,Copy(Message,1,74));End;
   ShowMouseCursor;Dirty:=False;
  End;
  Procedure Apply;
  Begin
+  If GroupMode Then Begin
+   If WholeScene And (Count<2) Then
+    Message:='La scene doit contenir au moins deux objets 3D.'
+   Else If Count<2 Then Message:='Cochez au moins deux objets 3D.'
+   Else If Name='' Then Message:='Saisissez un nom de groupe.'
+   Else If CommitMeshGroup(Selected,False,Name) Then Done:=True
+   Else Message:='Memoire insuffisante pour enregistrer le groupe.';
+   Dirty:=True;Exit;
+  End;
   If Rebuild Then Draw;
   If M=Nil Then Begin Dirty:=True;Exit;End;
   If Name='' Then Begin Message:='Saisissez un nom de calque.';
@@ -10038,13 +10175,33 @@ Var Selected:TMeshSelection;M:PMesh;O:TMeshOptions;Preview:PByteArr;
   Else Begin Message:='Fusion annulee ou memoire insuffisante.';
    Dirty:=True;End;
  End;
+ Procedure SelectActiveGroup;
+ Var I,G:Integer;
+ Begin
+  G:=Layers[ActiveLayer].Group3D;
+  If G=0 Then Begin
+   Message:='Le calque actif ne fait partie d''aucun groupe.';
+   Dirty:=True;Exit;
+  End;
+  For I:=0 To LayerCount-1 Do
+   Selected[I]:=(Layers[I].Mesh<>Nil) And (Layers[I].Group3D=G);
+  Name:=Layers[ActiveLayer].Group3DName;Changed(True);
+ End;
 Begin
  ResetToolTip;MenuActive:=False;FillChar(Selected,SizeOf(Selected),0);
  Count:=0;
  For I:=0 To LayerCount-1 Do If Layers[I].Mesh<>Nil Then Begin
-  Inc(Count);Selected[I]:=Layers[I].Visible;
+  Inc(Count);Selected[I]:=WholeScene Or Layers[I].Visible;
  End;
- If Count<2 Then Begin
+ If WholeScene And (Count<2) Then Begin
+  ShowDialog('Grouper toute la scene','Importez au moins deux objets 3D.');
+  Exit;
+ End;
+ If GroupMode And (Count=0) Then Begin
+  ShowDialog('Grouper objets','Importez des objets dans des calques 3D.');
+  Exit;
+ End;
+ If (Count<2) And Not GroupMode Then Begin
   ShowDialog('Fusion 3D','Importez au moins deux calques 3D.');Exit;
  End;
  M:=Nil;Preview:=Nil;DefaultMeshOptions(O);O.RX:=0;O.RY:=0;
@@ -10054,22 +10211,40 @@ Begin
  If LongInt(ImgW)*170>LongInt(ImgH)*280 Then Begin
   PW:=280;PH:=Max(1,Round(ImgH*280.0/ImgW));
  End Else Begin PH:=170;PW:=Max(1,Round(ImgW*170.0/ImgH));End;
- Focus:=0;ReplaceText:=True;Done:=False;Dirty:=True;Drag:=False;
+ Focus:=0;SceneView:=0;
+ If GroupMode Then Begin
+  Focus:=ActiveLayer;Name:='Groupe 3D';Spread:=True;
+  If WholeScene Then Name:='Scene 3D'
+  Else If Layers[ActiveLayer].Group3D<>0 Then SelectActiveGroup;
+ End;
+ ReplaceText:=True;Done:=False;Dirty:=True;Drag:=False;
  GetMouseStateLocal(MX,MY,Previous);
  Repeat
   If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
   If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
    If Hit(14,57,302,232) Then Begin
     J:=(MY-Y-57) Div 22;Focus:=J;
-    If (J<LayerCount) And (Layers[J].Mesh<>Nil) Then Begin
+    Dirty:=True;
+    If Not WholeScene And (J<LayerCount) And
+     (Layers[J].Mesh<>Nil) Then Begin
      Selected[J]:=Not Selected[J];Changed(True);
     End;
+   End Else If WholeScene And Hit(14,239,302,262) Then Begin
+    SceneView:=Min(2,(MX-X-14) Div 96);Dirty:=True;
    End Else If Hit(14,239,302,262) Then Begin
     For J:=0 To LayerCount-1 Do
      Selected[J]:=(Layers[J].Mesh<>Nil) And (MX<X+206) And
       ((MX<X+110) Or Layers[J].Visible);
     Changed(True);
-   End Else If Hit(16,278,302,292) Then Begin
+   End Else If GroupMode And Not WholeScene And Hit(14,272,146,295) Then Begin
+    If CommitMeshGroup(Selected,True,'') Then Done:=True
+    Else Begin
+     Message:='Cochez des membres de groupe ou verifiez la memoire.';
+     Dirty:=True;
+    End;
+   End Else If GroupMode And Not WholeScene And Hit(158,272,302,295) Then
+    SelectActiveGroup
+   Else If Not GroupMode And Hit(16,278,302,292) Then Begin
     Keep:=Not Keep;Changed(False);
    End Else If Hit(16,300,302,314) Then Begin
     Transform:=Not Transform;Changed(True);
@@ -10092,8 +10267,11 @@ Begin
    End Else If Hit(320,379,452,402) Then Done:=True
    Else If Hit(468,379,600,402) Then Apply
    Else If Hit(320,32,600,51) Then Begin
-    Info:=Not Info;Dirty:=True;
-   End Else If Hit(320,57,600,227) And Not Info Then Begin
+    If WholeScene Then SceneView:=(SceneView+1) Mod 3
+    Else Info:=Not Info;
+    Dirty:=True;
+   End Else If Hit(320,57,600,227) And Not Info And
+    (Not WholeScene Or (SceneView=0)) Then Begin
     Drag:=True;OldX:=MX;OldY:=MY;
    End;
   End;
@@ -10118,7 +10296,9 @@ Begin
      ReplaceText:=True;Dirty:=True;End;
     #1:ReplaceText:=True;
     'i','I':If Focus<>MAX_LAYERS Then Begin
-     Info:=Not Info;Dirty:=True;
+     If WholeScene Then SceneView:=(SceneView+1) Mod 3
+    Else Info:=Not Info;
+    Dirty:=True;
     End Else Begin
      If ReplaceText Then Name:='';If Length(Name)<20 Then Name:=Name+K;
      ReplaceText:=False;Dirty:=True;
@@ -10132,7 +10312,7 @@ Begin
       If ReplaceText Then Name:='';If Length(Name)<20 Then Name:=Name+K;
       ReplaceText:=False;Dirty:=True;
      End;
-    End Else If (K=' ') And (Focus<LayerCount) Then
+    End Else If Not WholeScene And (K=' ') And (Focus<LayerCount) Then
      If Layers[Focus].Mesh<>Nil Then Begin
       Selected[Focus]:=Not Selected[Focus];Changed(True);
      End;
@@ -12142,7 +12322,7 @@ Begin
   End;
   MENU_3D: Case IIdx Of
    0:MeshImportDialog(-1);
-   1:MeshMergeDialog;
+   1:MeshMergeDialog(False,False);
    2:MeshExportDialog;
    3:PanoramaDialog;
    4:SketchfabDialog;
@@ -12150,6 +12330,8 @@ Begin
    9:ExtrudePathDialog;
    10:ExtrudeSelectionDialog;
    11:LayerMeshDialog;
+   13:MeshMergeDialog(True,False);
+   14:MeshMergeDialog(True,True);
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

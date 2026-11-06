@@ -31,10 +31,10 @@
       fusion, scission, arbre des processus, parent du processus racine,
       mise a jour de l'environnement, renumerotation, options
   10. Fenetres multiples : cascade, mosaique, fermer tout, icones
-  11. Fichiers : enregistrement/lecture au format natif .SRD, detection des
-      fichiers .DFD de SilverRun (format binaire non encore decode : refus
-      avec message explicite), export SVG / CSV, import de processus (texte),
-      rapport, impression texte
+  11. Fichiers : lecture des fichiers .DFD de SilverRun (versions 3.1 et
+      2.2.4 : processus, hierarchie, entites, magasins, flux ; positions
+      recalculees), enregistrement/lecture au format natif .SRD, export
+      SVG / CSV, import de processus (texte), rapport, impression texte
   12. Langues : francais par defaut, LANGUAGE=EN (anglais), LANGUAGE=GR
       (allemand), LANGUAGE=SP (espagnol), LANGUAGE=IT (italien)
 }
@@ -3637,6 +3637,8 @@ Begin
  TreeOpen:=False;
 End;
 
+Var ImpStats: String[120];
+
 Function ConfirmSave: Integer;     { 1 oui, 2 non, 3 annuler }
 Begin
  If Not Modified Then Begin ConfirmSave:=2;Exit;End;
@@ -3740,13 +3742,15 @@ Begin
   FileN:=FN;Named:=True;Modified:=False;FromDFD:=IsDFDFile(FN);
   TreeOpen:=False;
   ResetWindows;
-  If False Then Msg(T5('Fichier SilverRun (.DFD) import@e. Utilisez Enregistrer sous pour le format .SRD.','SilverRun (.DFD) file imported. Use Save As for the .SRD format.','SilverRun-Datei (.DFD) importiert. Zum Speichern im .SRD-Format "Speichern unter" verwenden.','Archivo SilverRun (.DFD) importado. Use Guardar como para el formato .SRD.','File SilverRun (.DFD) importato. Usare Salva con nome per il formato .SRD.'));
+  If FromDFD Then Msg(T5('Fichier SilverRun (.DFD) import@e : ','SilverRun (.DFD) file imported: ','SilverRun-Datei (.DFD) importiert: ','Archivo SilverRun (.DFD) importado: ','File SilverRun (.DFD) importato: ')+ImpStats+'~'+T5('Les positions sont recalcul@ees automatiquement. Utilisez Enregistrer sous (.SRD).','Positions are recomputed automatically. Use Save As (.SRD).','Positionen werden automatisch berechnet. Zum Speichern Speichern unter (.SRD) verwenden.','Las posiciones se recalculan autom@rticamente. Use Guardar como (.SRD).','Le posizioni vengono ricalcolate automaticamente. Usare Salva con nome (.SRD).'));
  End Else If Res=1 Then
   Msg(T5('Erreur de lecture du fichier.','File read error.','Fehler beim Lesen der Datei.','Error al leer el archivo.','Errore di lettura del file.'))
  Else If Res=2 Then
   Msg(T5('Format de fichier invalide.','Invalid file format.','Ung@3ltiges Dateiformat.','Formato de archivo no v@rlido.','Formato di file non valido.'))
+ Else If Res=4 Then
+  Msg(T5('Fichier .DFD reconnu, mais aucun diagramme exploitable n''a @et@e trouv@e.','DFD file recognised, but no usable diagram was found.','DFD-Datei erkannt, aber kein verwendbares Diagramm gefunden.','Archivo DFD reconocido, pero no se encontr@p ning@vn diagrama utilizable.','File DFD riconosciuto, ma nessun diagramma utilizzabile trovato.'))
  Else If Res=5 Then
-  Msg(T5('Le format binaire .DFD natif de SilverRun n''est pas encore pris en charge. Utilisez le format .SRD de ce programme.','The native SilverRun binary .DFD format is not supported yet. Use this program''s .SRD format.','Das native bin@1re SilverRun-.DFD-Format wird noch nicht unterst@3tzt. Bitte das .SRD-Format dieses Programms verwenden.','El formato binario .DFD nativo de SilverRun a@vn no es compatible. Use el formato .SRD de este programa.','Il formato binario .DFD nativo di SilverRun non @a ancora supportato. Usare il formato .SRD di questo programma.'));
+  Msg(T5('Fichier .DFD trop volumineux pour cette version (maximum 64 Ko).','DFD file too large for this version (64 KB maximum).','DFD-Datei zu gro@7 f@3r diese Version (maximal 64 KB).','Archivo DFD demasiado grande para esta versi@pn (m@rximo 64 KB).','File DFD troppo grande per questa versione (massimo 64 KB).'));
  Dispose(TD);Dispose(T);
  DrawAll;
 End;
@@ -4445,7 +4449,7 @@ Begin
     TLAdd('');
     TLAdd('1.00');
     TLAdd(T5('- Premi@gre version du clone SILVERRUN-BPM.','- First version of the SILVERRUN-BPM clone.','- Erste Version des SILVERRUN-BPM-Klons.','- Primera versi@pn del clon de SILVERRUN-BPM.','- Prima versione del clone SILVERRUN-BPM.'));
-    TLAdd(T5('- Les fichiers .DFD natifs de SilverRun sont d@etect@es mais pas encore lus.','- Native SilverRun .DFD files are detected but not read yet.','- Native SilverRun-.DFD-Dateien werden erkannt, aber noch nicht gelesen.','- Los archivos .DFD nativos de SilverRun se detectan pero a@vn no se leen.','- I file .DFD nativi di SilverRun vengono rilevati ma non ancora letti.'));
+    TLAdd(T5('- Lecture des fichiers .DFD de SilverRun (3.1 et 2.2.4), positions recalcul@ees.','- Reading SilverRun .DFD files (3.1 and 2.2.4), positions recomputed.','- Lesen von SilverRun-.DFD-Dateien (3.1 und 2.2.4), Positionen neu berechnet.','- Lectura de archivos .DFD de SilverRun (3.1 y 2.2.4), posiciones recalculadas.','- Lettura di file .DFD di SilverRun (3.1 e 2.2.4), posizioni ricalcolate.'));
     TLAdd(T5('- Enregistrement au format natif .SRD.','- Saving in the native .SRD format.','- Speichern im nativen .SRD-Format.','- Guardado en el formato nativo .SRD.','- Salvataggio nel formato nativo .SRD.'));
    End;
   Else Begin
@@ -5233,12 +5237,581 @@ Begin
 End;
 
 { ====================================================================== }
-{       FICHIERS .DFD NATIFS DE SILVERRUN (NON PRIS EN CHARGE)          }
+{          IMPORTATION DES FICHIERS .DFD DE SILVERRUN (3.1 / 2.2.4)      }
 { ====================================================================== }
 
-Function ImportDFD(Const FN: String; P: PModel; D: PDict; Var C: TCfg): Integer;
+{ Le fichier .DFD est une base d'objets binaire : enregistrements d'entites,
+  de magasins, de processus (numerotes .1, .1.2 ...) et de flux. Les noms,
+  les numeros, la hierarchie et les liens des flux sont reconstitues ; les
+  positions sont recalculees automatiquement (disposition en grille). }
+
+Const
+ IMAXE = 80;
+ IMAXP = 120;
+ IMAXF = 220;
+ IMAXK = 300;
+
+Type
+ TFBuf = Array[0..65000] Of Byte;
+ PFBuf = ^TFBuf;
+ TIObj = Record
+  Kind: Byte;                 { 1 entite, 2 magasin, 3 table unique }
+  Idx: Integer;
+  Name: String[40];
+ End;
+ TIProc = Record
+  Num: String[14];
+  Diag: Word;
+  Name: String[40];
+  Depth: Integer;
+  El,Child: Integer;
+ End;
+ TIFlow = Record
+  Num: String[8];
+  Name: String[30];
+  NR: Integer;
+  R: Array[1..6] Of Word;
+ End;
+ TIKey = Record
+  Diag,Key,El: Integer;
+ End;
+ TImp = Record
+  O: Array[1..IMAXE] Of TIObj;
+  P: Array[1..IMAXP] Of TIProc;
+  F: Array[1..IMAXF] Of TIFlow;
+  K: Array[1..IMAXK] Of TIKey;
+  NO,NP,NF,NK: Integer;
+ End;
+ PImp = ^TImp;
+
+Var
+ IB   : PFBuf;
+ IBN  : LongInt;
+ ITag : Word;
+ ImPtrM   : PModel;
+ ImPtrD   : PDict;
+ ImCfgOut : TCfg;
+
+Function U16(O: LongInt): Word;
 Begin
- ImportDFD:=5;
+ If (O<0) Or (O+1>=IBN) Then U16:=0 Else U16:=IB^[O]+IB^[O+1]*256;
+End;
+
+Function U32(O: LongInt): LongInt;
+Begin
+ If (O<0) Or (O+3>=IBN) Then U32:=0
+ Else U32:=LongInt(IB^[O])+LongInt(IB^[O+1])*256+LongInt(IB^[O+2])*65536
+      +LongInt(IB^[O+3] And $7F)*16777216;
+End;
+
+{ Latin-1 / Windows-1252 vers page de codes 437 }
+Function L2D(C: Byte): Char;
+Begin
+ Case C Of
+  $E9: L2D:=#130; $E8: L2D:=#138; $EA: L2D:=#136; $EB: L2D:=#137;
+  $E0: L2D:=#133; $E2: L2D:=#131; $E4: L2D:=#132; $EE: L2D:=#140;
+  $EF: L2D:=#139; $F4: L2D:=#147; $F6: L2D:=#148; $F9: L2D:=#151;
+  $FB: L2D:=#150; $FC: L2D:=#129; $E7: L2D:=#135; $C9: L2D:=#144;
+  $C4: L2D:=#142; $D6: L2D:=#153; $DC: L2D:=#154; $F1: L2D:=#164;
+  $E1: L2D:=#160; $ED: L2D:=#161; $F3: L2D:=#162; $FA: L2D:=#163;
+  $DF: L2D:=#225; $C0,$C1,$C2,$C3,$C5: L2D:='A'; $C8,$CA,$CB: L2D:='E';
+  $CE,$CF: L2D:='I'; $D4: L2D:='O'; $D9,$DB: L2D:='U'; $C7: L2D:=#128;
+  $92,$91: L2D:=#39;
+  Else If C<128 Then L2D:=Chr(C) Else If C>=160 Then L2D:=Chr(C) Else L2D:=' ';
+ End;
+End;
+
+{ lit une chaine a longueur 16 ou 32 bits terminee par 0 }
+Function ReadStr(O: LongInt; Var S: String; Var Nx: LongInt): Boolean;
+Var N: LongInt; F,I: Integer; C: Byte;
+Begin
+ ReadStr:=False;S:='';
+ If (O<0) Or (O+6>=IBN) Then Exit;
+ N:=U16(O);
+ If (N>0) And (U16(O+2)=0) Then F:=4 Else F:=2;
+ If (N<1) Or (N>80) Or (O+F+N>IBN) Then Exit;
+ If IB^[O+F+N-1]<>0 Then Exit;
+ For I:=0 To N-2 Do Begin
+  C:=IB^[O+F+I];
+  If C<32 Then Exit;
+  S:=S+L2D(C);
+ End;
+ Nx:=O+F+N;
+ ReadStr:=True;
+End;
+
+Function ReadNum(O: LongInt; Var S: String; Var Nx: LongInt): Boolean;
+Var N: LongInt; F,I: Integer; C: Byte;
+Begin
+ ReadNum:=False;S:='';
+ If (O<0) Or (O+8>=IBN) Then Exit;
+ N:=U16(O);
+ If (N>0) And (U16(O+2)=0) Then F:=4 Else F:=2;
+ If (N<3) Or (N>14) Or (O+F+N>IBN) Then Exit;
+ If (IB^[O+F]<>46) Or (IB^[O+F+N-1]<>0) Then Exit;
+ For I:=0 To N-2 Do Begin
+  C:=IB^[O+F+I];
+  If Not (C In [46,48..57]) Then Exit;
+  S:=S+Chr(C);
+ End;
+ Nx:=O+F+N;
+ ReadNum:=True;
+End;
+
+Function PlausibleName(Const S: String): Boolean;
+Var I,L: Integer;
+Begin
+ PlausibleName:=False;
+ If (Length(S)<1) Then Exit;
+ L:=0;
+ For I:=1 To Length(S) Do If UpCase(S[I]) In ['A'..'Z'] Then Inc(L);
+ PlausibleName:=L>0;
+End;
+
+Procedure ScanObjects(M: PImp);
+Var I,J: LongInt; Sg,K: Byte; Idx: Word; Tg: Word; S: String; Nx: LongInt;
+Begin
+ I:=0;
+ While I<IBN-40 Do Begin
+  K:=0;
+  If (IB^[I]=$A1) And (IB^[I+1]=$80) Then K:=1
+  Else If (IB^[I]=$81) And (IB^[I+1]=$60) Then K:=2
+  Else If (IB^[I]=$90) And (IB^[I+1]=$58) Then K:=3;
+  If K>0 Then Begin
+   J:=I+6;
+   While J<I+34 Do Begin
+    If (IB^[J]=0) And (IB^[J+1]=0) Then Begin
+     Idx:=U16(J+2);Tg:=U16(J+4);
+     If (Idx>=1) And (Idx<=300) And ((ITag=0) Or (Tg=ITag)) Then
+      If ReadStr(J+6,S,Nx) And PlausibleName(S) Then Begin
+       If ITag=0 Then ITag:=Tg;
+       If M^.NO<IMAXE Then Begin
+        Inc(M^.NO);
+        M^.O[M^.NO].Kind:=K;M^.O[M^.NO].Idx:=Idx;M^.O[M^.NO].Name:=Copy(S,1,40);
+       End;
+       I:=Nx-1;J:=I+100;
+      End;
+    End;
+    Inc(J);
+   End;
+  End;
+  Inc(I);
+ End;
+End;
+
+Procedure ScanProcesses(M: PImp);
+Var O,P: LongInt; Num,Num2,Nm: String; Nx,Nx2: LongInt; Dg,Skip: Integer; Sk: Array[1..5] Of Integer;
+    Ok: Boolean; K,Dp,I: Integer;
+Begin
+ Sk[1]:=2;Sk[2]:=4;Sk[3]:=0;Sk[4]:=6;Sk[5]:=8;
+ O:=0;
+ While O<IBN-30 Do Begin
+  If ReadNum(O,Num,Nx) Then Begin
+   P:=Nx+2;
+   If ReadNum(P,Num2,Nx2) And (Num2=Num) Then Begin
+    Dg:=U16(Nx2);
+    If U16(Nx2+2)=ITag Then Begin
+     P:=Nx2+4;
+     Ok:=False;Nm:='';
+     For K:=1 To 5 Do
+      If Not Ok Then
+       If ReadStr(P+Sk[K],Nm,Nx) And (Length(Nm)>0) Then Ok:=True;
+     If Ok And (M^.NP<IMAXP) Then Begin
+      Inc(M^.NP);
+      M^.P[M^.NP].Num:=Num;M^.P[M^.NP].Diag:=Dg;M^.P[M^.NP].Name:=Copy(Nm,1,40);
+      Dp:=0;
+      For I:=1 To Length(Num) Do If Num[I]='.' Then Inc(Dp);
+      M^.P[M^.NP].Depth:=Dp;M^.P[M^.NP].El:=0;M^.P[M^.NP].Child:=0;
+      O:=Nx-1;
+     End;
+    End;
+   End;
+  End;
+  Inc(O);
+ End;
+End;
+
+Procedure ScanFlows(M: PImp);
+Const Pat: Array[0..11] Of Byte = (1,0,0,0,0,0,1,0,0,0,0,0);
+Var I: LongInt; J: Integer; Hit: Boolean; Num,Nm: String; Nx,P: LongInt; NR: Integer; R: Array[1..6] Of Word;
+    Ok: Boolean;
+Begin
+ I:=0;
+ While I<IBN-60 Do Begin
+  Hit:=True;
+  For J:=0 To 11 Do If IB^[I+J]<>Pat[J] Then Hit:=False;
+  If Hit Then Begin
+   If ReadStr(I+12,Num,Nx) And (Length(Num)>0) And (Length(Num)<=8) And (Num[1]<>'.') Then Begin
+    P:=Nx;NR:=0;
+    While (U16(P)<>ITag) And (NR<6) Do Begin Inc(NR);R[NR]:=U16(P);Inc(P,2);End;
+    If (U16(P)=ITag) And (NR>=1) And (M^.NF<IMAXF) Then Begin
+     Inc(P,2);
+     Nm:='';
+     If U16(P)=$FFFF Then Inc(P,4)
+     Else If (IB^[P+3] And $80)<>0 Then Inc(P,4);
+     Ok:=ReadStr(P,Nm,Nx);
+     If Not Ok Then Nm:='';
+     Inc(M^.NF);
+     M^.F[M^.NF].Num:=Num;M^.F[M^.NF].Name:=Copy(Nm,1,30);M^.F[M^.NF].NR:=NR;
+     For J:=1 To NR Do M^.F[M^.NF].R[J]:=R[J];
+     I:=Nx-1;
+    End;
+   End;
+  End;
+  Inc(I);
+ End;
+End;
+
+Function ObjName(M: PImp; Kind,Idx: Integer; Var Real_: Integer): String;
+Var I: Integer;
+Begin
+ ObjName:='';Real_:=0;
+ For I:=1 To M^.NO Do
+  If (M^.O[I].Kind=Kind) And (M^.O[I].Idx=Idx) Then Begin ObjName:=M^.O[I].Name;Real_:=I;Exit;End;
+End;
+
+Function IsStoreName(Const S: String): Boolean;
+Var U: String; I: Integer;
+Const W: Array[1..12] Of String[10] = ('JOURNAL','FICHIER','DOSSIER','CLASSEUR','ARCHIVE','REGISTRE','LISTE','INVENTAIRE','RETENUE','EMPLOYE','STOCK','COMPTE');
+Begin
+ U:=Upper(S);IsStoreName:=False;
+ For I:=1 To 12 Do If Pos(W[I],U)>0 Then IsStoreName:=True;
+End;
+
+{ ---- construction du modele ---- }
+
+Var
+ ImM    : PImp;
+ ImD0   : Integer;       { identifiant du diagramme de contexte }
+ ImRoot : Integer;
+ ImSB,ImEB : Integer;    { bases des identifiants magasins / entites }
+ ImSingle  : Boolean;
+
+Function ProcByNum(Const Num: String): Integer;
+Var I: Integer;
+Begin
+ ProcByNum:=0;
+ For I:=1 To ImM^.NP Do If ImM^.P[I].Num=Num Then Begin ProcByNum:=I;Exit;End;
+End;
+
+Function ChildDiagOf(K: Integer): Integer;
+Var E,D: Integer;
+Begin
+ ChildDiagOf:=0;
+ If (K<1) Or (K>ImM^.NP) Then Exit;
+ If ImM^.P[K].Child>0 Then Begin ChildDiagOf:=ImM^.P[K].Child;Exit;End;
+ E:=ImM^.P[K].El;
+ If E=0 Then Exit;
+ D:=NewDiag(Mdl^.El[E].Id,Mdl^.El[E].Name);
+ If D=0 Then Exit;
+ If Mdl^.El[E].Name='' Then Mdl^.Dg[D].Title:=Mdl^.El[E].Num;
+ Mdl^.El[E].Child:=D;
+ ImM^.P[K].Child:=D;
+ ChildDiagOf:=D;
+End;
+
+Function DiagOfId(Id: Integer): Integer;
+Begin
+ If Id=ImD0 Then DiagOfId:=ImRoot
+ Else If (Id>ImD0) And (Id<=ImD0+ImM^.NP) Then DiagOfId:=ChildDiagOf(Id-ImD0)
+ Else DiagOfId:=0;
+End;
+
+Function KeyEl(D,Key: Integer): Integer;
+Var I: Integer;
+Begin
+ KeyEl:=0;
+ For I:=1 To ImM^.NK Do If (ImM^.K[I].Diag=D) And (ImM^.K[I].Key=Key) Then Begin KeyEl:=ImM^.K[I].El;Exit;End;
+End;
+
+Procedure AddKey(D,Key,E: Integer);
+Begin
+ If ImM^.NK<IMAXK Then Begin
+  Inc(ImM^.NK);ImM^.K[ImM^.NK].Diag:=D;ImM^.K[ImM^.NK].Key:=Key;ImM^.K[ImM^.NK].El:=E;
+ End;
+End;
+
+{ renvoie l'element (dans le diagramme D) qui represente l'identifiant logique Id ; 0 si inconnu }
+Function ResolveEl(D,Id: Integer): Integer;
+Var K,I,E,RI,Kd,Ix: Integer; Nm: String; Own: Integer;
+Begin
+ ResolveEl:=0;
+ If Id>ImD0 Then Begin
+  K:=Id-ImD0;
+  If K>ImM^.NP Then Exit;
+  E:=ImM^.P[K].El;
+  If E=0 Then Exit;
+  If Mdl^.El[E].Diag=D Then Begin ResolveEl:=E;Exit;End;
+  I:=KeyEl(D,5000+K);
+  If I=0 Then Begin
+   I:=NewEl(ekEnt,D,0,0);
+   If I=0 Then Exit;
+   Mdl^.El[I].Name:=Copy(Mdl^.El[E].Num+' '+Mdl^.El[E].Name,1,40);
+   Mdl^.El[I].Num:='';
+   AddKey(D,5000+K,I);
+  End;
+  ResolveEl:=I;Exit;
+ End;
+ If Id=ImD0 Then Exit;
+ { entite / magasin }
+ Kd:=0;Ix:=0;
+ If ImSingle Then Begin
+  Ix:=Id-ImSB;
+  Nm:=ObjName(ImM,3,Ix,RI);
+  If RI>0 Then Begin If IsStoreName(Nm) Then Kd:=ekStore Else Kd:=ekEnt;End;
+ End Else Begin
+  Ix:=Id-ImSB;Nm:=ObjName(ImM,2,Ix,RI);
+  If RI>0 Then Kd:=ekStore Else Begin
+   Ix:=Id-ImEB;Nm:=ObjName(ImM,1,Ix,RI);
+   If RI>0 Then Kd:=ekEnt;
+  End;
+ End;
+ If Kd=0 Then Exit;
+ I:=KeyEl(D,Kd*1000+Ix);
+ If I=0 Then Begin
+  I:=NewEl(Kd,D,0,0);
+  If I=0 Then Exit;
+  Mdl^.El[I].Name:=Nm;
+  If Kd=ekStore Then Mdl^.El[I].Num:='S-'+IntStr(Ix) Else Mdl^.El[I].Num:='E-'+IntStr(Ix);
+  AddKey(D,Kd*1000+Ix,I);
+ End;
+ ResolveEl:=I;
+ Own:=0;
+End;
+
+Procedure SolveBases;
+Var Ends: Array[1..120] Of Word; Cn: Array[1..120] Of Integer; NE,I,J,F,SB,EB,Smax,X,RI: Integer;
+    Sc,Best: LongInt; Dup: Boolean; S: String;
+Begin
+ NE:=0;
+ For F:=1 To ImM^.NF Do
+  If ImM^.F[F].NR>=3 Then
+   For J:=1 To 2 Do Begin
+    X:=ImM^.F[F].R[J];
+    If (X<ImD0) And (X>0) Then Begin
+     Dup:=False;
+     For I:=1 To NE Do If Ends[I]=X Then Begin Dup:=True;Inc(Cn[I]);End;
+     If Not Dup And (NE<120) Then Begin Inc(NE);Ends[NE]:=X;Cn[NE]:=1;End;
+    End;
+   End;
+ Smax:=0;
+ For I:=1 To ImM^.NO Do If (ImM^.O[I].Kind=2) And (ImM^.O[I].Idx>Smax) Then Smax:=ImM^.O[I].Idx;
+ Best:=-1;ImSB:=0;ImEB:=0;
+ If ImSingle Then Begin
+  For SB:=0 To 400 Do Begin
+   Sc:=0;
+   For I:=1 To NE Do Begin S:=ObjName(ImM,3,Ends[I]-SB,RI);If RI>0 Then Inc(Sc,Cn[I]);End;
+   If Sc*100>Best Then Begin Best:=Sc*100;ImSB:=SB;End;
+  End;
+ End Else Begin
+  For SB:=0 To 400 Do
+   For EB:=SB+Smax+13 To SB+Smax+26 Do Begin
+    Sc:=0;
+    For I:=1 To NE Do Begin
+     S:=ObjName(ImM,2,Ends[I]-SB,RI);
+     If RI>0 Then Inc(Sc,Cn[I]) Else Begin S:=ObjName(ImM,1,Ends[I]-EB,RI);If RI>0 Then Inc(Sc,Cn[I]);End;
+    End;
+    Sc:=Sc*100-Abs(EB-SB-Smax-13)*10;
+    If Sc>Best Then Begin Best:=Sc;ImSB:=SB;ImEB:=EB;End;
+   End;
+ End;
+End;
+
+Function NumPart(Const S: String; K: Integer): LongInt;
+Var I,C: Integer; V: LongInt;
+Begin
+ C:=0;V:=0;
+ For I:=1 To Length(S) Do Begin
+  If S[I]='.' Then Begin Inc(C);If C=K Then Begin NumPart:=V;Exit;End;V:=0;End
+  Else If S[I] In ['0'..'9'] Then V:=V*10+Ord(S[I])-48;
+ End;
+ If C+1=K Then NumPart:=V Else NumPart:=-1;
+End;
+
+Function NumLess(Const A,B: String): Boolean;
+Var K: Integer; X,Y: LongInt;
+Begin
+ For K:=1 To 8 Do Begin
+  X:=NumPart(A,K);Y:=NumPart(B,K);
+  If X<>Y Then Begin NumLess:=X<Y;Exit;End;
+ End;
+ NumLess:=False;
+End;
+
+Procedure LayoutImported(D: Integer);
+Var I,J,NPr,NEn,NSt,Cols,Rows,K,X,Y,Wd,Ht: Integer; NEL,NSR: Integer;
+Begin
+ NPr:=0;NEn:=0;NSt:=0;
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) Then
+   Case Mdl^.El[I].Kind Of
+    ekProc: Inc(NPr);
+    ekStore: Inc(NSt);
+    Else Inc(NEn);
+   End;
+ If NPr=0 Then Cols:=1 Else Cols:=Integer(Min2(4,NPr));
+ If Cols>=3 Then Begin If NPr>6 Then Cols:=4 Else Cols:=3;End;
+ If NPr<=3 Then Cols:=NPr;If Cols<1 Then Cols:=1;
+ Rows:=(NPr+Cols-1) Div Cols;If Rows<1 Then Rows:=1;
+ Wd:=420+Cols*160;If Wd<760 Then Wd:=760;
+ Ht:=70+Rows*150+(NSt+3) Div 4*60;
+ If Mdl^.Dg[D].Parent=0 Then Ht:=Ht+130;
+ If Ht<480 Then Ht:=480;
+ If NEn>8 Then Begin If 70+NEn Div 2*62>Ht Then Ht:=70+NEn Div 2*62;End;
+ Mdl^.Dg[D].W:=Wd;Mdl^.Dg[D].H:=Ht;
+ K:=0;NEL:=0;NSR:=0;
+ { rang des processus par numero }
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc) Then Begin
+   K:=0;
+   For J:=1 To MAXEL Do
+    If Mdl^.El[J].Used And (Mdl^.El[J].Diag=D) And (Mdl^.El[J].Kind=ekProc) And (J<>I) Then
+     If NumLess(Mdl^.El[J].Num,Mdl^.El[I].Num) Then Inc(K);
+   Mdl^.El[I].Z:=K;
+  End;
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) Then
+   Case Mdl^.El[I].Kind Of
+    ekProc: Begin
+      K:=Mdl^.El[I].Z;
+      X:=280+(K Mod Cols)*160+(160-Mdl^.El[I].W) Div 2;
+      Y:=40+(K Div Cols)*150;
+      Mdl^.El[I].X:=X;Mdl^.El[I].Y:=Y;
+     End;
+    ekStore: Begin
+      X:=280+(NSR Mod 4)*170;Y:=50+Rows*150+(NSR Div 4)*60;
+      Mdl^.El[I].X:=X;Mdl^.El[I].Y:=Y;Inc(NSR);
+     End;
+    Else Begin
+      If Odd(NEL) Then X:=Wd-Mdl^.El[I].W-14 Else X:=120;
+      Y:=44+(NEL Div 2)*62;
+      Mdl^.El[I].X:=X;Mdl^.El[I].Y:=Y;Inc(NEL);
+     End;
+   End;
+End;
+
+Function BuildFromImp(M: PImp; Const FN: String): Integer;
+Var I,J,K,D,E,A,B,F,Dp,Par,Dgm,NSk,NOk: Integer; Num: String; PN: String; Pos2: Integer;
+    SaveCfg: TCfg; SaveM: PModel; SaveD: PDict; NProcBad: Integer;
+Begin
+ BuildFromImp:=4;
+ If M^.NP=0 Then Exit;
+ ImM:=M;
+ ImD0:=0;
+ For I:=1 To M^.NP Do
+  If M^.P[I].Depth=1 Then Begin
+   If (ImD0=0) Or (M^.P[I].Diag<ImD0) Then ImD0:=M^.P[I].Diag;
+  End;
+ If ImD0=0 Then Exit;
+ ImSingle:=False;
+ For I:=1 To M^.NO Do If M^.O[I].Kind=3 Then ImSingle:=True;
+ SolveBases;
+ { remplace le modele global le temps de la construction }
+ SaveM:=Mdl;SaveD:=Dict;SaveCfg:=Cfg;
+ Mdl:=ImPtrM;Dict:=ImPtrD;
+ FillChar(Mdl^,SizeOf(TModel),0);
+ Mdl^.NextId:=1;Mdl^.NextZ:=1;
+ DefaultDict;DefaultCfg;
+ Cfg.MName:=ShortName(FN);
+ If Pos('.',Cfg.MName)>0 Then Cfg.MName:=Copy(Cfg.MName,1,Pos('.',Cfg.MName)-1);
+ Cfg.MName:=Copy(Cfg.MName,1,30);
+ Cfg.ProjName:=Cfg.MName;
+ M^.NK:=0;
+ ImRoot:=NewDiag(0,T5('Contexte','Context','Kontext','Contexto','Contesto'));
+ NOk:=0;NSk:=0;NProcBad:=0;
+ { processus, du niveau le plus haut au plus bas }
+ For Dp:=1 To 8 Do
+  For I:=1 To M^.NP Do
+   If M^.P[I].Depth=Dp Then Begin
+    PN:=M^.P[I].Num;
+    If Dp=1 Then Dgm:=ImRoot
+    Else Begin
+     Pos2:=Length(PN);
+     While (Pos2>1) And (PN[Pos2]<>'.') Do Dec(Pos2);
+     Par:=ProcByNum(Copy(PN,1,Pos2-1));
+     If Par>0 Then Dgm:=ChildDiagOf(Par) Else Dgm:=0;
+    End;
+    If Dgm>0 Then Begin
+     E:=NewEl(ekProc,Dgm,0,0);
+     If E>0 Then Begin
+      Mdl^.El[E].Num:=Copy(PN,2,20);
+      Mdl^.El[E].Name:=M^.P[I].Name;
+      M^.P[I].El:=E;
+      Inc(NOk);
+     End Else Inc(NProcBad);
+    End;
+   End;
+ { flux }
+ For F:=1 To M^.NF Do Begin
+  J:=M^.F[F].NR;
+  If J>=3 Then Begin
+   D:=DiagOfId(M^.F[F].R[J]);
+   If D>0 Then Begin
+    A:=ResolveEl(D,M^.F[F].R[1]);
+    B:=ResolveEl(D,M^.F[F].R[2]);
+    If (A>0) And (B>0) And (A<>B) And FlowOK(Mdl^.El[A].Kind,Mdl^.El[B].Kind) Then Begin
+     K:=NewFl(D,Mdl^.El[A].Id,Mdl^.El[B].Id);
+     If K>0 Then Begin
+      Mdl^.Fl[K].Name:=M^.F[F].Name;Mdl^.Fl[K].Num:=Copy(M^.F[F].Num,1,8);
+      Inc(NOk);
+     End Else Inc(NSk);
+    End Else Inc(NSk);
+   End Else Inc(NSk);
+  End Else Inc(NSk);
+ End;
+ For D:=1 To MAXDG Do
+  If Mdl^.Dg[D].Used Then Begin
+   LayoutImported(D);
+   K:=0;
+   For I:=1 To MAXEL Do If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc) Then Inc(K);
+   Mdl^.Dg[D].NP:=K+1;
+  End;
+ ImpStats:=IntStr(M^.NP)+' '+T5('processus','processes','Prozesse','procesos','processi')+', '+
+   IntStr(M^.NF)+' '+T5('flux','flows','Fl@3sse','flujos','flussi')+' ('+IntStr(NSk)+' '+
+   T5('non reli@es ignor@es','unlinked skipped','nicht verbunden','sin enlace omitidos','non collegati ignorati')+')';
+ ImpStats:=Dc(ImpStats);
+ Cfg.Created:=TodayStr;Cfg.Modified:=Cfg.Created;
+ ImCfgOut:=Cfg;
+ Mdl:=SaveM;Dict:=SaveD;Cfg:=SaveCfg;
+ BuildFromImp:=0;
+End;
+
+Function ImportDFD(Const FN: String; P: PModel; D: PDict; Var C: TCfg): Integer;
+Var F: File; Rd: Word; Sz: LongInt; M: PImp; Res: Integer;
+Begin
+ ImportDFD:=4;
+ {$I-}
+ Assign(F,FN);Reset(F,1);
+ {$I+}
+ If IOResult<>0 Then Begin ImportDFD:=1;Exit;End;
+ Sz:=FileSize(F);
+ If Sz>64000 Then Begin Close(F);ImportDFD:=5;Exit;End;
+ GetMem(IB,Sz+64);
+ FillChar(IB^,Sz+64,0);
+ {$I-}
+ BlockRead(F,IB^,Sz,Rd);
+ Close(F);
+ {$I+}
+ IBN:=Sz;
+ If IOResult<>0 Then Begin FreeMem(IB,Sz+64);ImportDFD:=1;Exit;End;
+ New(M);
+ FillChar(M^,SizeOf(TImp),0);
+ ITag:=0;
+ ScanObjects(M);
+ If ITag=0 Then Begin
+  { pas d'entite ni de magasin : etiquette a partir d'un processus }
+  ITag:=0;
+ End;
+ If ITag<>0 Then Begin
+  ScanProcesses(M);
+  ScanFlows(M);
+ End;
+ ImPtrM:=P;ImPtrD:=D;
+ If ITag=0 Then Res:=4 Else Res:=BuildFromImp(M,FN);
+ If Res=0 Then C:=ImCfgOut;
+ Dispose(M);
+ FreeMem(IB,Sz+64);
+ ImportDFD:=Res;
 End;
 
 { ====================================================================== }

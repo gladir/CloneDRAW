@@ -216,6 +216,8 @@ Type
  PMeshVertices=^TMeshVertices;PMeshTriangles=^TMeshTriangles;
  TMeshOptions=Record
   RX,RY,RZ,Scale,OffsetX,OffsetY,Mode,Color:Integer;
+  FaceFilter,Lighting:Byte;
+  FaceFirst,FaceLast,FaceTotal:LongInt;
   Perspective,Cull,Dither:Boolean;
  End;
  TUVPoint=Record U,V:Single;End;
@@ -246,7 +248,12 @@ Type
   Used: Boolean;
  End;
 
+ TVectorPoint=Record X,Y:Double;End;
+ TVectorPath=Record
+  Count:Integer;Closed:Boolean;Points:Array[0..127] Of TVectorPoint;
+ End;
  TRotationUndo = Record
+  Path:TVectorPath;PathPoint:Integer;
   Saved:Array[0..MAX_LAYERS-1] Of TLayer;
   Width,Height,Count,Active:Integer;
   Modified,Selection:Boolean;
@@ -306,6 +313,7 @@ Var
  CurrentFileName: String;
 
  Layers: Array[0..MAX_LAYERS-1] of TLayer;
+ WorkingPath:TVectorPath;WorkingPathSelected:Integer;
  LayerCount: Integer;
  ActiveLayer: Integer;
 
@@ -553,6 +561,7 @@ Begin
   ActiveLayer:=R^.Active;ImageModified:=R^.Modified;
   ImageDPI:=R^.DPI;BrushSize:=R^.Brush;
   SelectionActive:=R^.Selection;SelectionRect:=R^.Rect;
+  WorkingPath:=R^.Path;WorkingPathSelected:=R^.PathPoint;
   For I:=0 To MAX_LAYERS-1 Do Begin
    Layers[I]:=R^.Saved[I];R^.Saved[I].Pixels:=Nil;R^.Saved[I].Mesh:=Nil;
   End;
@@ -1177,13 +1186,6 @@ Begin
  End;
 End;
 
-{ Trace polygonal de travail en coordonnees normalisees du document. }
-Type TVectorPoint=Record X,Y:Double;End;
- TVectorPath=Record
- Count:Integer;Closed:Boolean;Points:Array[0..127] Of TVectorPoint;
-End;
-Var WorkingPath:TVectorPath;WorkingPathSelected:Integer;
-
 Function PathCross(Const A,B,C:TVectorPoint):Double;
 Begin PathCross:=(B.X-A.X)*(C.Y-A.Y)-(B.Y-A.Y)*(C.X-A.X);End;
 Procedure VectorPathPreset(Var P:TVectorPath;Kind:Integer);
@@ -1659,6 +1661,7 @@ Begin
  R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
  R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
  R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
+ R^.Path:=WorkingPath;R^.PathPoint:=WorkingPathSelected;
  R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
  For I:=0 To MAX_LAYERS-1 Do Begin
   R^.Saved[I]:=Layers[I];RetainMesh(R^.Saved[I].Mesh);
@@ -1761,6 +1764,7 @@ Begin
  R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
  R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
  R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
+ R^.Path:=WorkingPath;R^.PathPoint:=WorkingPathSelected;
  R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
  For I:=0 To MAX_LAYERS-1 Do Begin
   R^.Saved[I]:=Layers[I];RetainMesh(R^.Saved[I].Mesh);
@@ -1914,6 +1918,7 @@ Begin
  R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
  R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
  R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
+ R^.Path:=WorkingPath;R^.PathPoint:=WorkingPathSelected;
  R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
  For I:=0 To MAX_LAYERS-1 Do Begin
   R^.Saved[I]:=Layers[I];RetainMesh(R^.Saved[I].Mesh);
@@ -2062,6 +2067,7 @@ Begin
  R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
  R^.Active:=ActiveLayer;R^.Modified:=ImageModified;
  R^.Selection:=SelectionActive;R^.Rect:=SelectionRect;
+ R^.Path:=WorkingPath;R^.PathPoint:=WorkingPathSelected;
  R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
  For I:=0 To MAX_LAYERS-1 Do Begin
   R^.Saved[I]:=Layers[I];RetainMesh(R^.Saved[I].Mesh);
@@ -2286,6 +2292,16 @@ End;
 Type TPaintHits=Array[0..65535] Of LongInt;
  PPaintHits=^TPaintHits;
 
+Function MeshFaceVisible(Const O:TMeshOptions;Index,Count:LongInt):Boolean;
+Var InRange:Boolean;
+Begin
+ MeshFaceVisible:=True;
+ If (O.FaceFilter=0) Or (Count<>O.FaceTotal) Then Exit;
+ InRange:=(Index>=O.FaceFirst) And (Index<=O.FaceLast);
+ If O.FaceFilter=1 Then MeshFaceVisible:=InRange
+ Else If O.FaceFilter=2 Then MeshFaceVisible:=Not InRange;
+End;
+
 Function RenderMeshSurface(M:PMesh;Const O:TMeshOptions;W,H:Integer;
  Progress:Boolean;Var Pixels:PByteArr;PaintMode:Integer;
  Const Falloff:TPaintFalloff;Texture:PByteArr;Hits:PPaintHits;
@@ -2368,6 +2384,7 @@ Begin
    If KeyPressed Then Begin K:=ReadKey; If K=#27 Then Begin Failed:=True; Break;
    End; End;
   End;
+  If Not MeshFaceVisible(O,I,M^.TriangleCount) Then Continue;
   AIndex:=M^.Triangles^[I].A;BIndex:=M^.Triangles^[I].B;
   CIndex:=M^.Triangles^[I].C;PA:=P^[AIndex];PB:=P^[BIndex];PC:=P^[CIndex];
   NX:=(PB.WY-PA.WY)*(PC.WZ-PA.WZ)-(PB.WZ-PA.WZ)*(PC.WY-PA.WY);
@@ -2375,11 +2392,17 @@ Begin
   NZ:=(PB.WX-PA.WX)*(PC.WY-PA.WY)-(PB.WY-PA.WY)*(PC.WX-PA.WX);
   Len:=Sqrt(NX*NX+NY*NY+NZ*NZ);If Len<1E-12 Then Continue;
   If O.Cull And (NX*(-PA.WX)+NY*(-PA.WY)+NZ*(3-PA.WZ)<=0) Then Continue;
-  Light:=0.2+0.8*Abs((-0.4*NX+0.7*NY+NZ)/(Len*Sqrt(1.65)));
+  Case O.Lighting Of
+   1:Light:=0.25+0.75*Abs(NZ)/Len;
+   2:Light:=0.15+0.85*Abs((NX+0.3*NY+0.3*NZ)/(Len*Sqrt(1.18)));
+   3:Light:=1;
+   Else Light:=0.2+0.8*Abs((-0.4*NX+0.7*NY+NZ)/(Len*Sqrt(1.65)));
+  End;
   RR:=VGA_R[O.Color]*Light;GG:=VGA_G[O.Color]*Light;
   BB:=VGA_B[O.Color]*Light;
   Paint:=1;
-  If (PaintMode<>0) Or ((Hits<>Nil) And Falloff.Configured) Then Begin
+  If ((PaintMode>0) And (PaintMode<4)) Or
+   ((Texture<>Nil) And (Hits<>Nil) And Falloff.Configured) Then Begin
    EyeX:=0;EyeY:=0;EyeZ:=1;
    If O.Perspective Then Begin
     EyeX:=-(PA.WX+PB.WX+PC.WX)/3;
@@ -2420,7 +2443,11 @@ Begin
     B:=((PC.Y-PA.Y)*(XX-PC.X)+(PA.X-PC.X)*(YY-PC.Y))/Den;C:=1-A-B;
     If (A>=-0.000001) And (B>=-0.000001) And (C>=-0.000001) Then Begin
      Z:=A*PA.Z+B*PB.Z+C*PC.Z;
-     If PaintMode=3 Then Pixel(X,Y,Z,Round(Paint*100))
+     If PaintMode=4 Then Begin
+      Slot:=LongInt(Y)*W+X;
+      If Z>Depth^[Slot] Then Hits^[Slot]:=I;
+      Pixel(X,Y,Z,BlurPalette(RR,GG,BB,X,Y,O.Dither));
+     End Else If PaintMode=3 Then Pixel(X,Y,Z,Round(Paint*100))
      Else If Texture=Nil Then
       Pixel(X,Y,Z,BlurPalette(RR,GG,BB,X,Y,O.Dither))
      Else Begin
@@ -2478,7 +2505,9 @@ Begin
  R^.Width:=ImgW;R^.Height:=ImgH;R^.Count:=LayerCount;
  R^.Active:=ActiveLayer; R^.Modified:=ImageModified;
  R^.Selection:=SelectionActive;
- R^.Rect:=SelectionRect;R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
+ R^.Rect:=SelectionRect;
+ R^.Path:=WorkingPath;R^.PathPoint:=WorkingPathSelected;
+ R^.DPI:=ImageDPI;R^.Brush:=BrushSize;
  Size:=LongInt(ImgW)*ImgH;Failed:=False;
  For I:=0 To MAX_LAYERS-1 Do Begin
   R^.Saved[I]:=Layers[I];R^.Saved[I].Pixels:=Nil;RetainMesh(R^.Saved[I].Mesh);
@@ -7374,6 +7403,9 @@ Var
  Function CurFilterLabel: String;
  Begin
   If FD_MeshExportFormat=1 Then CurFilterLabel:='OBJ Wavefront'
+  Else If FD_MeshExportFormat=4 Then CurFilterLabel:='BMP 24 bits'
+  Else If FD_MeshExportFormat=5 Then CurFilterLabel:='TGA 24 / 32 bits'
+  Else If FD_MeshExportFormat=6 Then CurFilterLabel:='PPM RGB'
   Else If FD_MeshExportFormat>1 Then CurFilterLabel:='STL 3D'
   Else CurFilterLabel:=FD_SAVE_LABELS[FD_SaveFilterIdx];
  End;
@@ -7452,7 +7484,10 @@ Var
    End;
   ChosenExt := FD_SAVE_EXT[FD_SaveFilterIdx];
   If FD_MeshExportFormat>0 Then Begin
-   If FD_MeshExportFormat=1 Then ChosenExt:='.OBJ' Else ChosenExt:='.STL';
+   Case FD_MeshExportFormat Of
+    1:ChosenExt:='.OBJ';2,3:ChosenExt:='.STL';4:ChosenExt:='.BMP';
+    5:ChosenExt:='.TGA';6:ChosenExt:='.PPM';
+   End;
    Curr:=ExtractExt(Sel);
    If Curr<>'' Then Delete(Sel,Length(Sel)-Length(Curr)+1,Length(Curr));
   End;
@@ -7470,7 +7505,8 @@ Var
    If (Length(Candidate) > 0) And (Candidate[Length(Candidate)] <> '\') Then Candidate := Candidate + '\';
    Candidate := Candidate + Sel;
   End;
-  If (FD_MeshExportFormat=0) And FileExistsLocal(Candidate) Then
+  If ((FD_MeshExportFormat=0) Or (FD_MeshExportFormat>=4)) And
+   FileExistsLocal(Candidate) Then
    If Not YesNoDialog('Confirmation', 'Le fichier existe deja. L ecraser ?') Then Begin
     RedrawAll; Exit;
    End;
@@ -9421,15 +9457,93 @@ Begin
  MeshExportStream:=Not Failed;
 End;
 
-Function WriteMeshExport(M:PMesh;Const Name:String;Format:Integer;
- Normals,Progress:Boolean;Var Error:String):Boolean;
+Function RenderImageRow(W,Format,Bg:Integer):LongInt;
+Begin
+ Case Format Of
+  0:RenderImageRow:=(LongInt(W)*3+3) And Not LongInt(3);
+  1:If Bg<0 Then RenderImageRow:=LongInt(W)*4
+    Else RenderImageRow:=LongInt(W)*3;
+  2:RenderImageRow:=LongInt(W)*3;
+ End;
+End;
+
+Function RenderImageStream(Var F:File;Pixels:PByteArr;
+ W,H,Format,Bg:Integer):Boolean;
+Var FH:TBMPFileHeader;IH:TBMPInfoHeader;
+ Header:Array[0..17] Of Byte;Row:PByteArr;S:String;
+ RowSize,Offset,Written:LongInt;X,Y,PY,Stride:Integer;
+ C,Alpha:Byte;OK:Boolean;
+ Procedure Emit(Var Data;Count:LongInt);
+ Begin
+  If Not OK Then Exit;
+  {$I-}BlockWrite(F,Data,Count,Written);{$I+}
+  OK:=(IOResult=0) And (Written=Count);
+ End;
+Begin
+ RenderImageStream:=False;
+ If (Pixels=Nil) Or (W<1) Or (W>4096) Or (H<1) Or (H>4096) Or
+  (Format<0) Or (Format>2) Then Exit;
+ RowSize:=RenderImageRow(W,Format,Bg);
+ Stride:=3;If (Format=1) And (Bg<0) Then Stride:=4;
+ Row:=PByteArr(RotationAllocate(RowSize));If Row=Nil Then Exit;
+ OK:=True;FillChar(Row^,RowSize,0);
+ Case Format Of
+  0:Begin
+   FillChar(FH,SizeOf(FH),0);FillChar(IH,SizeOf(IH),0);
+   FH.bfType:=BMP_SIGNATURE;FH.bfOffBits:=SizeOf(FH)+SizeOf(IH);
+   FH.bfSize:=FH.bfOffBits+RowSize*H;
+   IH.biSize:=SizeOf(IH);IH.biWidth:=W;IH.biHeight:=H;
+   IH.biPlanes:=1;IH.biBitCount:=24;IH.biSizeImage:=RowSize*H;
+   IH.biXPelsPerMeter:=Round(ImageDPI/0.0254);
+   IH.biYPelsPerMeter:=IH.biXPelsPerMeter;
+   Emit(FH,SizeOf(FH));Emit(IH,SizeOf(IH));
+  End;
+  1:Begin
+   FillChar(Header,SizeOf(Header),0);Header[2]:=2;
+   Header[12]:=W And 255;Header[13]:=W Shr 8;
+   Header[14]:=H And 255;Header[15]:=H Shr 8;
+   Header[16]:=Stride*8;Header[17]:=$20;
+   If Stride=4 Then Header[17]:=$28;
+   Emit(Header,SizeOf(Header));
+  End;
+  2:Begin
+   S:='P6'+#10+IntToStr(W)+' '+IntToStr(H)+#10+'255'+#10;
+   Emit(S[1],Length(S));
+  End;
+ End;
+ For Y:=0 To H-1 Do Begin
+  If Not OK Then Break;
+  PY:=Y;If Format=0 Then PY:=H-1-Y;
+  For X:=0 To W-1 Do Begin
+   C:=Pixels^[LongInt(PY)*W+X];Alpha:=255;
+   If C>15 Then Begin
+    If Bg<0 Then Begin Alpha:=0;C:=Black;End Else C:=Bg;
+   End;
+   Offset:=LongInt(X)*Stride;
+   Row^[Offset+1]:=VGA_G[C];
+   If Format=2 Then Begin
+    Row^[Offset]:=VGA_R[C];Row^[Offset+2]:=VGA_B[C];
+   End Else Begin
+    Row^[Offset]:=VGA_B[C];Row^[Offset+2]:=VGA_R[C];
+   End;
+   If Stride=4 Then Row^[Offset+3]:=Alpha;
+  End;
+  Emit(Row^,RowSize);
+ End;
+ FreeMem(Row,RowSize);RenderImageStream:=OK;
+End;
+
+
+Function WriteRenderExport(M:PMesh;Const Name:String;Format:Integer;
+ Normals,Progress:Boolean;Pixels:PByteArr;W,H,Bg:Integer;
+ Var Error:String):Boolean;
 Var F,B:File;SR:SearchRec;Temp,Backup:String;I,Code:Integer;Bytes:LongInt;
  Good,HadOld:Boolean;
  Procedure RemoveTemp;
  Begin Assign(F,Temp);{$I-}Erase(F);{$I+}Code:=IOResult;End;
 Begin
- WriteMeshExport:=False;Error:='';
- If (M=Nil) Or (Name='') Or (Length(Name)>230) Then Begin
+ WriteRenderExport:=False;Error:='';
+ If ((M=Nil) And (Pixels=Nil)) Or (Name='') Or (Length(Name)>230) Then Begin
   Error:='Nom vide, trop long ou geometrie absente.';Exit;
  End;
  If (Format<0) Or (Format>2) Then Begin Error:='Format invalide.';Exit;End;
@@ -9446,7 +9560,9 @@ Begin
   Exit;End;
  Assign(F,Temp);{$I-}Rewrite(F,1);{$I+}
  If IOResult<>0 Then Begin Error:='Dossier inaccessible en ecriture.';Exit;End;
- Good:=MeshExportStream(M,Format,Normals,True,Progress,F,Bytes);
+ If Pixels=Nil Then
+  Good:=MeshExportStream(M,Format,Normals,True,Progress,F,Bytes)
+ Else Good:=RenderImageStream(F,Pixels,W,H,Format,Bg);
  {$I-}Close(F);{$I+}If IOResult<>0 Then Good:=False;
  If Not Good Then Begin RemoveTemp;
   Error:='Export annule ou erreur disque. Original conserve.';Exit;End;
@@ -9468,7 +9584,14 @@ Begin
  If HadOld Then Begin Assign(B,Backup);{$I-}Erase(B);{$I+}
   If IOResult<>0 Then Error:='Export termine. Ancien fichier : '+Backup;
  End;
- WriteMeshExport:=True;
+ WriteRenderExport:=True;
+End;
+
+Function WriteMeshExport(M:PMesh;Const Name:String;Format:Integer;
+ Normals,Progress:Boolean;Var Error:String):Boolean;
+Begin
+ WriteMeshExport:=WriteRenderExport(M,Name,Format,Normals,Progress,
+  Nil,0,0,0,Error);
 End;
 
 Type TSketchMetadata=Record
@@ -9795,6 +9918,7 @@ Procedure MeshImportDialog(Target:Integer);
 Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
  X,Y,W,H,MX,MY,MB,Previous,Field,I,Code,OldX,OldY,PreviewW,PreviewH:Integer;
  Dirty,Done,Drag,ReplaceText,Valid,Info,PreviewDirty:Boolean;
+ Before,CopyLayer:Boolean;
  Name,Message,Error:String;Texts:Array[0..5] Of String;
  K,E:Char;V:Double;
  Function Decimal(Value:Double):String;
@@ -9817,6 +9941,7 @@ Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
  End;
  Procedure Browse;
  Begin
+  If Target>=0 Then Exit;
   FD_ModelMode:=True;
   If FD_Open('Modele 3D - OBJ / STL',Name) Then Load;
   FD_ModelMode:=False;Dirty:=True;
@@ -9853,7 +9978,7 @@ Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
    5:O.OffsetX:=N;6:O.OffsetY:=N;End;Changed;
  End;
  Procedure Draw;
- Var PX,PY,T,I,OX,OY:Integer;Color:Byte;S:String;
+ Var PX,PY,T,I,OX,OY:Integer;Color,OldColor:Byte;S:String;
  Begin
   If PreviewDirty And (M<>Nil) And Valid Then Begin
    If Preview<>Nil Then FreeMem(Preview,LongInt(PreviewW)*PreviewH);
@@ -9869,19 +9994,34 @@ Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
   End;
   HideMouseCursor;FillRect(X,Y,X+W,Y+H,LightGray);DrawBevel(X,Y,X+W,Y+H,True);
   FillRect(X+3,Y+3,X+W-3,Y+26,Blue);SetColor(White);
-  OutTextXY(X+12,Y+10,'Calque 3D - importer et placer une geometrie');
+  If Target>=0 Then S:='Rendu du calque 3D - camera et eclairage'
+  Else S:='Calque 3D - importer et placer une geometrie';
+  OutTextXY(X+12,Y+10,S);
+  If Target>=0 Then Begin
+   SetColor(Black);
+   OutTextXY(X+20,Y+48,'Calque : '+Layers[Target].Name);
+   If Before Then S:='Voir le rendu' Else S:='Voir l''original';
+   Button(320,40,152,S);
+   Button(490,40,105,'Eclairage >');
+  End Else Begin
   FillRect(X+20,Y+40,X+472,Y+64,White);
   If Field=0 Then SetColor(Blue) Else SetColor(DarkGray);
   Rectangle(X+20,Y+40,X+472,Y+64);SetColor(Black);S:=Name;
   If Length(S)>54 Then S:='...'+Copy(S,Length(S)-50,51);
-  OutTextXY(X+26,Y+48,S);Button(490,40,105,'Choisir...');
+   OutTextXY(X+26,Y+48,S);Button(490,40,105,'Choisir...');
+  End;
   For PY:=0 To 213 Do For PX:=0 To 279 Do Begin
    Color:=LightGray;If ((PX Div 10+PY Div 10) And 1)=0 Then Color:=White;
    OX:=PX-(280-PreviewW) Div 2;OY:=PY-(214-PreviewH) Div 2;
-   If Not Info And (Preview<>Nil) And (OX>=0) And (OY>=0) And
-    (OX<PreviewW) And (OY<PreviewH) Then
-     If Preview^[LongInt(OY)*PreviewW+OX]<>255 Then
-      Color:=Preview^[LongInt(OY)*PreviewW+OX];
+   If Not Info And (OX>=0) And (OY>=0) And
+    (OX<PreviewW) And (OY<PreviewH) Then Begin
+    OldColor:=255;
+    If (Target>=0) And Before Then
+     OldColor:=GetLayerPixel(Target,LongInt(OX)*ImgW Div PreviewW,
+      LongInt(OY)*ImgH Div PreviewH)
+    Else If Preview<>Nil Then OldColor:=Preview^[LongInt(OY)*PreviewW+OX];
+    If OldColor<>255 Then Color:=OldColor;
+   End;
    PutPixel(X+20+PX,Y+82+PY,Color);
   End;
   SetColor(Black);Rectangle(X+19,Y+81,X+300,Y+296);
@@ -9896,7 +10036,11 @@ Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
    OutTextXY(X+28,Y+222,'Z : '+Decimal(M^.Maximum.Z-M^.Minimum.Z));
    OutTextXY(X+28,Y+244,'Groupes : '+IntToStr(M^.Groups)+
     ' Mat : '+IntToStr(M^.Materials));
-   OutTextXY(X+28,Y+266,'Unites : celles du fichier');
+   If Target>=0 Then Begin
+    OutTextXY(X+28,Y+266,IntToStr(ImgW)+' x '+IntToStr(ImgH)+' px');
+    OutTextXY(X+28,Y+282,'Buffers : '+
+     IntToStr(LongInt(ImgW)*ImgH*5+SizeOf(TMeshProjection))+' o');
+   End Else OutTextXY(X+28,Y+266,'Unites : celles du fichier');
   End Else If M=Nil Then Begin
    OutTextXY(X+35,Y+160,'Choisir un modele OBJ ou STL');
   End;
@@ -9918,10 +10062,25 @@ Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
   Button(165,339,135,'Informations');
   Option(287, O.Cull, 'Cacher faces arriere'); Option(310, O.Dither,
   'Tramage des couleurs');
-  OutTextXY(X+320,Y+338,'Glisser l''apercu : orbite');
-  OutTextXY(X+320,Y+356,'Geometrie en memoire');
+  If Target>=0 Then Begin
+   Case O.Lighting Of
+    1:S:='Frontal';2:S:='Lateral';3:S:='Sans ombrage';
+    Else S:='Studio';
+   End;
+   OutTextXY(X+320,Y+338,'Eclairage : '+S);
+   Option(351,CopyLayer,'Rendre dans un nouveau calque');
+  End Else Begin
+   OutTextXY(X+320,Y+338,'Glisser l''apercu : orbite');
+   OutTextXY(X+320,Y+356,'Geometrie en memoire');
+  End;
   SetColor(Black);S:=Message;
-  If S='' Then S:='OBJ/STL sans textures. Rendu sur calque transparent.';
+  If S='' Then Begin
+   If Target>=0 Then Begin
+    If Info Then S:='Informations du modele et memoire estimee.'
+    Else If Before Then S:='Original : image actuelle du calque.'
+    Else S:='Rendu : glissez pour pivoter. Fond transparent.';
+   End Else S:='OBJ/STL sans textures. Rendu sur calque transparent.';
+  End;
   If Length(S)>73 Then S:=Copy(S,1,73);OutTextXY(X+20,Y+378,S);
   Button(20,399,110,'Reinitialiser');Button(142,399,65,'Face');
   Button(219,399,81,'Iso 3D');Button(380,399,96,'Annuler');
@@ -9929,8 +10088,22 @@ Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
   ShowMouseCursor;Dirty:=False;
  End;
  Procedure Apply;
+ Var Destination:Integer;
  Begin
   If Not Valid Then Exit;
+  If Target>=0 Then Begin
+   Destination:=Target;If CopyLayer Then Destination:=-1;
+   If CopyLayer And (LayerCount>=MAX_LAYERS) Then
+    Message:='Huit calques maximum. Decochez le nouveau calque.'
+   Else If ImportMeshLayer(M,O,Destination) Then Begin
+    If CopyLayer Then Begin
+     Layers[ActiveLayer].Name:=Copy(Layers[Target].Name,1,14)+' rendu';
+     Layers[ActiveLayer].Falloff:=Layers[Target].Falloff;
+    End;
+    Done:=True;
+   End Else Message:='Rendu annule ou memoire insuffisante.';
+   Dirty:=True;Exit;
+  End;
   If M=Nil Then Load Else If Name<>M^.Source Then Load;
   If M=Nil Then Begin Dirty:=True;Exit;End;
   If Name<>M^.Source Then Begin Dirty:=True;Exit;End;
@@ -9940,10 +10113,13 @@ Var M,Loaded:PMesh;O:TMeshOptions;Preview:PByteArr;
  End;
 Begin
  ResetToolTip;MenuActive:=False;M:=Nil;Preview:=Nil;
- PreviewW:=0;PreviewH:=0;Name:='';Message:='';
+ PreviewW:=0;PreviewH:=0;Name:='';Message:='';Before:=False;CopyLayer:=False;
  If (Target>=0) And (Target<LayerCount) Then Begin
   M:=Layers[Target].Mesh;RetainMesh(M);
   If M<>Nil Then Begin Name:=M^.Source;O:=Layers[Target].MeshOptions;End;
+ End;
+ If (Target>=0) And (M=Nil) Then Begin
+  ShowDialog('Rendu du calque 3D','Selectionnez un calque 3D.');Exit;
  End;
  If M=Nil Then DefaultMeshOptions(O);
  W:=620;H:=430;X:=(ScreenWidth-W) Div 2;Y:=(ScreenHeight-H) Div 2;
@@ -9953,12 +10129,17 @@ Begin
  Repeat
   If Dirty Then Draw;GetMouseStateLocal(MX,MY,MB);
   If ((MB And 1)<>0) And ((Previous And 1)=0) Then Begin
-   If Hit(490,40,595,64) Then Browse
-   Else If Hit(20, 40, 472, 64) Then Begin Field:=0; ReplaceText:=True;
+   If Hit(490,40,595,64) Then Begin
+    If Target<0 Then Browse
+    Else Begin O.Lighting:=(O.Lighting+1) Mod 4;Changed;End;
+   End Else If (Target>=0) And Hit(320,40,472,64) Then Begin
+    Before:=Not Before;Info:=False;Dirty:=True;
+   End Else If (Target<0) And Hit(20,40,472,64) Then Begin
+    Field:=0;ReplaceText:=True;
    Dirty:=True; End
    Else If Hit(420,82,592,270) Then Begin
     Field:=Min(6,1+(MY-Y-82) Div 33);ReplaceText:=True;Dirty:=True;
-   End Else If Hit(20,82,300,296) And Not Info Then Begin
+   End Else If Hit(20,82,300,296) And Not Info And Not Before Then Begin
     Drag:=True;OldX:=MX;OldY:=MY;
    End Else If Hit(20, 307, 155, 331) Then Begin O.Perspective:=Not
    O.Perspective; Changed; End
@@ -9968,8 +10149,18 @@ Begin
    Else If Hit(165,339,300,363) Then Begin Info:=Not Info;Dirty:=True;End
    Else If Hit(320,287,600,299) Then Begin O.Cull:=Not O.Cull;Changed;End
    Else If Hit(320,310,600,322) Then Begin O.Dither:=Not O.Dither;Changed;End
+   Else If (Target>=0) And Hit(320,351,600,365) Then Begin
+    CopyLayer:=Not CopyLayer;Dirty:=True;
+   End
    Else If Hit(20,399,130,423) Or Hit(219,399,300,423) Then Begin
-    DefaultMeshOptions(O);Sync;Changed;
+    DefaultMeshOptions(O);
+    If Target>=0 Then Begin
+     O.FaceFilter:=Layers[Target].MeshOptions.FaceFilter;
+     O.FaceFirst:=Layers[Target].MeshOptions.FaceFirst;
+     O.FaceLast:=Layers[Target].MeshOptions.FaceLast;
+     O.FaceTotal:=Layers[Target].MeshOptions.FaceTotal;
+    End;
+    Sync;Changed;
    End Else If Hit(142,399,207,423) Then Begin
     O.RX:=0;O.RY:=0;O.RZ:=0;Sync;Changed;
    End Else If Hit(380,399,476,423) Then Done:=True
@@ -9996,11 +10187,14 @@ Begin
    End Else Case K Of
     #27:Done:=True; #15:Browse; #9:Begin Field:=(Field+1) Mod 7;
     ReplaceText:=True; Dirty:=True; End;
-    #13:If Field=0 Then Load Else Apply;
+    #13:If (Target<0) And (Field=0) Then Load Else Apply;
     #1:ReplaceText:=True;
     #8:Begin
      If Field=0 Then Begin
-      If ReplaceText Then Name:='' Else Delete(Name,Length(Name),1);Dirty:=True;
+      If Target<0 Then Begin
+       If ReplaceText Then Name:='' Else Delete(Name,Length(Name),1);
+       Dirty:=True;
+      End;
      End Else Begin
       If ReplaceText Then Texts[Field-1]:=''
        Else Delete(Texts[Field-1],Length(Texts[Field-1]),1);Change;
@@ -10009,8 +10203,11 @@ Begin
     End;
     Else If K>=' ' Then Begin
      If Field=0 Then Begin
-      If ReplaceText Then Name:=''; If Length(Name)<255 Then Name:=Name+K;
-      Dirty:=True;
+      If Target<0 Then Begin
+       If ReplaceText Then Name:='';
+       If Length(Name)<255 Then Name:=Name+K;
+       Dirty:=True;
+      End;
      End Else If K In ['0'..'9','+','-','.',','] Then Begin
       If ReplaceText Then Texts[Field-1]:='';
       If Length(Texts[Field-1])<9 Then Texts[Field-1]:=Texts[Field-1]+K;Change;
@@ -12941,6 +13138,910 @@ Begin
 End;
 
 
+Type TSimplifyCell=Record
+ Key,Index,Count:LongInt;
+ X,Y,Z:Double;
+ End;
+ TSimplifyCells=Array[0..262143] Of TSimplifyCell;
+ PSimplifyCells=^TSimplifyCells;
+ TSimplifyStats=Record
+  Collapsed,Duplicates,Protected:LongInt;
+  Pitch,MaxMove:Double;
+ End;
+
+Function BuildSimplifiedMesh(S:PMesh;Resolution:Integer;Protect:Boolean;
+ Var M:PMesh;Var Stats:TSimplifyStats;Var Error:String):Boolean;
+Var Grid:PSimplifyCells;Map:PSplitIndex;Edges:PPrintEdges;Seen:PCutEdges;
+ I,J,K,H,A,B,C,T,Key,Base:LongInt;F,OutFace:TMeshTriangle;
+ V,W:TMeshVector;X,Y,Z,D,Extent:Double;Failed:Boolean;
+ Function HashEdge(A,B:LongInt):LongInt;
+ Var H,T:LongInt;
+ Begin
+  If A>B Then Begin T:=A;A:=B;B:=T;End;
+  H:=(A*131+B*257) And 131071;
+  While Edges^[H].Count<>0 Do Begin
+   If (Edges^[H].A=A) And (Edges^[H].B=B) Then Break;
+   H:=(H+1) And 131071;
+  End;
+  Edges^[H].A:=A;Edges^[H].B:=B;HashEdge:=H;
+ End;
+Begin
+ BuildSimplifiedMesh:=False;M:=Nil;Error:='';
+ FillChar(Stats,SizeOf(Stats),0);
+ Extent:=MeshMax(S^.Maximum.X-S^.Minimum.X,
+  MeshMax(S^.Maximum.Y-S^.Minimum.Y,S^.Maximum.Z-S^.Minimum.Z));
+ If Extent<=0 Then Begin Error:='Maillage sans etendue.';Exit;End;
+ Stats.Pitch:=Extent/Resolution;
+ Grid:=PSimplifyCells(RotationAllocate(SizeOf(TSimplifyCells)));
+ Map:=PSplitIndex(RotationAllocate(SizeOf(TSplitIndex)));
+ Seen:=PCutEdges(RotationAllocate(SizeOf(TCutEdges)));
+ Edges:=Nil;
+ If Protect Then Edges:=PPrintEdges(RotationAllocate(SizeOf(TPrintEdges)));
+ M:=PMesh(RotationAllocate(SizeOf(TMesh)));
+ If M<>Nil Then Begin
+  FillChar(M^,SizeOf(TMesh),0);M^.References:=1;
+  M^.Vertices:=PMeshVertices(RotationAllocate(SizeOf(TMeshVertices)));
+  M^.Triangles:=PMeshTriangles(RotationAllocate(SizeOf(TMeshTriangles)));
+  If S^.UV<>Nil Then M^.UV:=PUVMap(RotationAllocate(SizeOf(TUVMap)));
+ End;
+ Failed:=(Grid=Nil) Or (Map=Nil) Or (Seen=Nil) Or
+  (Protect And (Edges=Nil)) Or (M=Nil);
+ If Not Failed Then Failed:=(M^.Vertices=Nil) Or (M^.Triangles=Nil) Or
+  ((S^.UV<>Nil) And (M^.UV=Nil));
+ If Failed Then Error:='Memoire insuffisante.'
+ Else Begin
+  FillChar(Grid^,SizeOf(TSimplifyCells),0);
+  FillChar(Map^,SizeOf(TSplitIndex),0);
+  FillChar(Seen^,SizeOf(TCutEdges),255);
+  If Protect Then Begin
+   FillChar(Edges^,SizeOf(TPrintEdges),0);
+   For I:=0 To S^.TriangleCount-1 Do Begin
+    F:=S^.Triangles^[I];
+    H:=HashEdge(F.A,F.B);Inc(Edges^[H].Count);
+    H:=HashEdge(F.B,F.C);Inc(Edges^[H].Count);
+    H:=HashEdge(F.C,F.A);Inc(Edges^[H].Count);
+   End;
+   For I:=0 To 131071 Do
+    If (Edges^[I].Count<>0) And (Edges^[I].Count<>2) Then Begin
+     Map^[Edges^[I].A]:=-1;Map^[Edges^[I].B]:=-1;
+    End;
+  End;
+  For I:=0 To S^.VertexCount-1 Do Begin
+   V:=S^.Vertices^[I];
+   If Map^[I]<0 Then Begin Key:=-I-1;Inc(Stats.Protected);End
+   Else Begin
+    A:=Trunc((Double(V.X)-S^.Minimum.X)/Stats.Pitch);
+    B:=Trunc((Double(V.Y)-S^.Minimum.Y)/Stats.Pitch);
+    C:=Trunc((Double(V.Z)-S^.Minimum.Z)/Stats.Pitch);
+    Key:=(A*257+B)*257+C;
+   End;
+   H:=((Key Xor (Key Shr 11))*LongInt(31)) And 262143;
+   While Grid^[H].Count<>0 Do Begin
+    If Grid^[H].Key=Key Then Break;
+    H:=(H+1) And 262143;
+   End;
+   Grid^[H].Key:=Key;Inc(Grid^[H].Count);
+   Grid^[H].X:=Grid^[H].X+V.X;Grid^[H].Y:=Grid^[H].Y+V.Y;
+   Grid^[H].Z:=Grid^[H].Z+V.Z;Grid^[H].Index:=-1;Map^[I]:=H;
+  End;
+  For I:=0 To S^.TriangleCount-1 Do Begin
+   F:=S^.Triangles^[I];
+   A:=Map^[F.A];B:=Map^[F.B];C:=Map^[F.C];
+   If (A=B) Or (B=C) Or (C=A) Then Begin Inc(Stats.Collapsed);Continue;End;
+   If A>B Then Begin T:=A;A:=B;B:=T;End;
+   If B>C Then Begin T:=B;B:=C;C:=T;End;
+   If A>B Then Begin T:=A;A:=B;B:=T;End;
+   H:=(A*131+B*257+C*31) And 262143;
+   While Seen^[H].Index>=0 Do Begin
+    If (Seen^[H].A=A) And (Seen^[H].B=B) And (Seen^[H].Index=C) Then Break;
+    H:=(H+1) And 262143;
+   End;
+   If Seen^[H].Index>=0 Then Begin Inc(Stats.Duplicates);Continue;End;
+   Seen^[H].A:=A;Seen^[H].B:=B;Seen^[H].Index:=C;
+   For J:=0 To 2 Do Begin
+    Case J Of 0:K:=Map^[F.A];1:K:=Map^[F.B];2:K:=Map^[F.C];End;
+    If Grid^[K].Index<0 Then Begin
+     D:=Grid^[K].Count;Grid^[K].Index:=M^.VertexCount;
+     MeshVertex(M,Grid^[K].X/D,Grid^[K].Y/D,Grid^[K].Z/D);
+    End;
+    Case J Of
+     0:OutFace.A:=Grid^[K].Index;
+     1:OutFace.B:=Grid^[K].Index;
+     2:OutFace.C:=Grid^[K].Index;
+    End;
+   End;
+   Base:=M^.TriangleCount*3;
+   MeshFace(M,OutFace.A,OutFace.B,OutFace.C);
+   If M^.UV<>Nil Then For J:=0 To 2 Do M^.UV^[Base+J]:=S^.UV^[I*3+J];
+  End;
+  For I:=0 To S^.VertexCount-1 Do Begin
+   K:=Grid^[Map^[I]].Index;
+   If K>=0 Then Begin
+    V:=S^.Vertices^[I];W:=M^.Vertices^[K];
+    X:=Double(V.X)-W.X;Y:=Double(V.Y)-W.Y;Z:=Double(V.Z)-W.Z;
+    Stats.MaxMove:=MeshMax(Stats.MaxMove,Sqrt(X*X+Y*Y+Z*Z));
+   End;
+  End;
+  If M^.TriangleCount=0 Then Error:='Toutes les faces ont disparu.'
+  Else Begin
+   M^.Source:='Maillage simplifie';M^.Format:=S^.Format;
+   M^.Groups:=S^.Groups;M^.Materials:=S^.Materials;
+   BuildSimplifiedMesh:=True;
+  End;
+ End;
+ If Grid<>Nil Then FreeMem(Grid,SizeOf(TSimplifyCells));
+ If Map<>Nil Then FreeMem(Map,SizeOf(TSplitIndex));
+ If Seen<>Nil Then FreeMem(Seen,SizeOf(TCutEdges));
+ If Edges<>Nil Then FreeMem(Edges,SizeOf(TPrintEdges));
+ If Error<>'' Then ReleaseMesh(M);
+End;
+
+Procedure SimplifyMeshDialog;
+Var S,M,Shown:PMesh;O,Camera:TMeshOptions;P:PByteArr;Stats:TSimplifyStats;
+ X,Y,MX,MY,MB,Prev,Res,OldX,OldY,Target:Integer;
+ Before,Protect,ReplaceLayer,Dirty,Rebuild,Done,Drag:Boolean;
+ K:Char;Text,Message:String;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,W:Integer;Const Caption:String;On:Boolean);
+ Begin
+  FillRect(X+L,Y+T,X+L+W,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+W,Y+T+23,Not On);
+  If On Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(X+L+5,Y+T+8,Caption);
+ End;
+ Procedure Draw;
+ Var I,J:Integer;C:Byte;
+ Begin
+  If Rebuild Then Begin
+   ReleaseMesh(M);BuildSimplifiedMesh(S,Res,Protect,M,Stats,Message);
+   Rebuild:=False;
+  End;
+  Shown:=M;If Before Then Shown:=S;
+  P:=Nil;If Shown<>Nil Then RenderMesh(Shown,O,340,275,False,P);
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Simplifier maillage - regroupement des sommets');
+  Button(16,36,164,'Source',Before);
+  Button(192,36,164,'Maillage simplifie',Not Before);
+  For J:=0 To 274 Do For I:=0 To 339 Do Begin
+   C:=White;If ((I Div 12+J Div 12) And 1)<>0 Then C:=LightGray;
+   If P<>Nil Then If P^[LongInt(J)*340+I]<>255 Then
+    C:=P^[LongInt(J)*340+I];
+   PutPixel(X+16+I,Y+69+J,C);
+  End;
+  If P<>Nil Then FreeMem(P,LongInt(340)*275);
+  Button(371,36,42,'-',False);Button(558,36,44,'+',False);
+  SetColor(Black);
+  OutTextXY(X+422,Y+44,IntToStr(Res)+' divisions');
+  Button(371,68,72,'8',Res=8);Button(450,68,72,'32',Res=32);
+  Button(529,68,73,'128',Res=128);
+  Button(371,101,231,'Proteger bords ouverts',Protect);
+  SetColor(Black);
+  Str(Stats.Pitch:0:5,Text);
+  OutTextXY(X+371,Y+135,'Pas de la grille : '+Text);
+  OutTextXY(X+371,Y+153,'Proteges : '+IntToStr(Stats.Protected));
+  If M<>Nil Then Begin
+   OutTextXY(X+371,Y+174,'Sommets : '+IntToStr(S^.VertexCount)+' > '+
+    IntToStr(M^.VertexCount));
+   OutTextXY(X+371,Y+193,'Faces : '+IntToStr(S^.TriangleCount)+' > '+
+    IntToStr(M^.TriangleCount));
+   OutTextXY(X+371,Y+212,'Reduction : '+
+    IntToStr(100-(M^.TriangleCount*100 Div S^.TriangleCount))+' %');
+   OutTextXY(X+371,Y+231,'Effondrees : '+IntToStr(Stats.Collapsed));
+   OutTextXY(X+371,Y+250,'Doublons : '+IntToStr(Stats.Duplicates));
+   Str(Stats.MaxMove:0:5,Text);
+   OutTextXY(X+371,Y+269,'Deplacement max. : '+Text);
+  End;
+  Button(371,291,109,'Filaire',O.Mode=1);
+  Button(490,291,112,'Vue initiale',False);
+  Text:='Sortie : nouveau calque';
+  If ReplaceLayer Then Text:='Sortie : remplacer le calque';
+  Button(371,323,231,Text,ReplaceLayer);
+  SetColor(Black);
+  OutTextXY(X+16,Y+359,'Glisser : pivoter. +/- : finesse de la grille.');
+  OutTextXY(X+16,Y+378,'Les UV des faces conservees restent disponibles.');
+  OutTextXY(X+16,Y+396,'La simplification peut modifier la topologie.');
+  Button(371,383,109,'Annuler',False);Button(490,383,112,'Appliquer',False);
+  SetColor(Red);OutTextXY(X+16,Y+421,Copy(Message,1,73));
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Change(N:Integer);
+ Begin Res:=Max(2,Min(256,N));Rebuild:=True;Dirty:=True;End;
+ Procedure Apply;
+ Begin
+  If Rebuild Then Draw;
+  If M=Nil Then Exit;
+  Target:=-1;If ReplaceLayer Then Target:=ActiveLayer;
+  If (Target<0) And (LayerCount>=MAX_LAYERS) Then
+   Message:='Huit calques maximum. Choisissez Remplacer.'
+  Else If ImportMeshLayer(M,Camera,Target) Then Done:=True
+  Else Message:='Application annulee ou memoire insuffisante.';
+  Dirty:=True;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;S:=Layers[ActiveLayer].Mesh;
+ If S=Nil Then Begin
+  ShowDialog('Simplifier maillage','Selectionnez un calque 3D.');Exit;
+ End;
+ M:=Nil;Camera:=Layers[ActiveLayer].MeshOptions;O:=Camera;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ Res:=32;Protect:=True;ReplaceLayer:=False;Before:=False;
+ Dirty:=True;Rebuild:=True;Done:=False;Drag:=False;Message:='';
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Prev And 1)=0) Then Begin
+   If Hit(16,36,180,59) Then Before:=True
+   Else If Hit(192,36,356,59) Then Before:=False
+   Else If Hit(371,36,413,59) Then Change(Res-1)
+   Else If Hit(558,36,602,59) Then Change(Res+1)
+   Else If Hit(371,68,443,91) Then Change(8)
+   Else If Hit(450,68,522,91) Then Change(32)
+   Else If Hit(529,68,602,91) Then Change(128)
+   Else If Hit(371,101,602,124) Then Begin
+    Protect:=Not Protect;Rebuild:=True;
+   End Else If Hit(371,291,480,314) Then Begin
+    If O.Mode=1 Then O.Mode:=0 Else O.Mode:=1;
+   End Else If Hit(490,291,602,314) Then O:=Camera
+   Else If Hit(371,323,602,346) Then ReplaceLayer:=Not ReplaceLayer
+   Else If Hit(371,383,480,406) Then Done:=True
+   Else If Hit(490,383,602,406) Then Apply
+   Else If Hit(16,69,355,343) Then Begin Drag:=True;OldX:=MX;OldY:=MY;End;
+   Dirty:=True;
+  End;
+  If (MB And 1)=0 Then Drag:=False;
+  If Drag And ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   O.RY:=Max(-3600,Min(3600,O.RY+(MX-OldX)*5));
+   O.RX:=Max(-3600,Min(3600,O.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Dirty:=True;
+  End;
+  Prev:=MB;
+  If Not Done And KeyPressed Then Begin
+   K:=ReadKey;
+   Case K Of
+    #0:K:=ReadKey;
+    #27:Done:=True;
+    #13:Apply;
+    #9:Begin Before:=Not Before;Dirty:=True;End;
+    '+':Change(Res+1);
+    '-':Change(Res-1);
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ ReleaseMesh(M);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
+
+Procedure MeshFaceDialog;
+Var M:PMesh;O,Camera,Preview:TMeshOptions;P:PByteArr;Hits:PPaintHits;
+ F:TPaintFalloff;
+ X,Y,MX,MY,MB,Prev,OldX,OldY,Field,PW,PH,L,T,Code:Integer;
+ N,Picked,A,B,Visible:LongInt;
+ Before,Dirty,Done,Drag,Wire,Valid,ReplaceText,HasPreview:Boolean;
+ K:Char;FirstText,LastText,S,Message:String;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,W:Integer;Const Caption:String;On:Boolean);
+ Begin
+  FillRect(X+L,Y+T,X+L+W,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+W,Y+T+23,Not On);
+  If On Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(X+L+6,Y+T+8,Caption);
+ End;
+ Procedure ReadRange;
+ Begin
+  Val(FirstText,A,Code);Valid:=Code=0;
+  Val(LastText,B,Code);
+  Valid:=Valid And (Code=0) And (A>=1) And (B>=A) And (B<=N);
+  If Valid Then Begin O.FaceFirst:=A-1;O.FaceLast:=B-1;End;
+ End;
+ Procedure Draw;
+ Var I,J:Integer;Index:LongInt;C:Byte;
+ Begin
+  ReadRange;Preview:=O;Preview.Mode:=0;
+  If Before Or Not Valid Then Preview.FaceFilter:=0;
+  If Wire Then Preview.Mode:=2;
+  HasPreview:=RenderMeshSurface(M,Preview,PW,PH,False,P,4,F,Nil,
+   Hits,False);
+  Visible:=N;
+  If Valid Then Case O.FaceFilter Of
+   1:Visible:=B-A+1;
+   2:Visible:=N-(B-A+1);
+  End;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Affichage / Masque polygones');
+  Button(16,36,162,'Toutes les faces',Before);
+  Button(193,36,163,'Apercu filtre',Not Before);
+  FillRect(X+16,Y+68,X+356,Y+325,DarkGray);
+  If HasPreview Then Begin
+   For J:=0 To PH-1 Do For I:=0 To PW-1 Do Begin
+    Index:=LongInt(J)*PW+I;C:=P^[Index];
+    If C=255 Then Begin
+     C:=White;If ((I Div 10+J Div 10) And 1)<>0 Then C:=LightGray;
+    End Else If (Picked>=0) And (Hits^[Index]=Picked) And
+     ((I+J) Mod 4<2) Then C:=LightGreen;
+    PutPixel(X+L+I,Y+T+J,C);
+   End;
+   FreeMem(P,LongInt(PW)*PH);
+  End;
+  Button(371,36,231,'Afficher tout',O.FaceFilter=0);
+  Button(371,68,231,'Isoler la plage',O.FaceFilter=1);
+  Button(371,100,231,'Masquer la plage',O.FaceFilter=2);
+  SetColor(Black);
+  OutTextXY(X+371,Y+140,'Indices de faces (1 a '+IntToStr(N)+')');
+  Button(371,157,110,'Debut '+FirstText,Field=0);
+  Button(491,157,111,'Fin '+LastText,Field=1);
+  Button(371,190,231,'Toute la plage',False);
+  SetColor(Black);
+  S:='Face pointee : aucune';
+  If Picked>=0 Then S:='Face pointee : '+IntToStr(Picked+1);
+  OutTextXY(X+371,Y+225,S);
+  OutTextXY(X+371,Y+245,'Admises : '+IntToStr(Visible));
+  OutTextXY(X+371,Y+265,'Masquees : '+IntToStr(N-Visible));
+  Button(371,288,110,'Filaire',Wire);
+  Button(491,288,111,'Vue initiale',False);
+  SetColor(Black);
+  OutTextXY(X+16,Y+340,'Clic gauche : definir la borne active.');
+  OutTextXY(X+16,Y+358,'Clic droit : pivoter. Tab : changer de borne.');
+  OutTextXY(X+16,Y+376,'Le maillage entier reste disponible a l''export.');
+  Button(371,389,110,'Annuler',False);
+  Button(491,389,111,'Appliquer',False);
+  S:=Message;
+  If Not Valid Then S:='Saisissez une plage valide.';
+  SetColor(Red);OutTextXY(X+16,Y+421,Copy(S,1,73));
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Begin
+  ReadRange;
+  If (O.FaceFilter<>0) And Not Valid Then Exit;
+  Camera.FaceFilter:=O.FaceFilter;Camera.FaceFirst:=O.FaceFirst;
+  Camera.FaceLast:=O.FaceLast;Camera.FaceTotal:=N;
+  If ImportMeshLayer(M,Camera,ActiveLayer) Then Done:=True
+  Else Message:='Application annulee ou memoire insuffisante.';
+  Dirty:=True;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;M:=Layers[ActiveLayer].Mesh;
+ If M=Nil Then Begin
+  ShowDialog('Masque polygones','Selectionnez un calque 3D.');Exit;
+ End;
+ Hits:=PPaintHits(RotationAllocate(SizeOf(TPaintHits)));
+ If Hits=Nil Then Begin
+  ShowDialog('Masque polygones','Memoire insuffisante.');Exit;
+ End;
+ Camera:=Layers[ActiveLayer].MeshOptions;O:=Camera;N:=M^.TriangleCount;
+ If O.FaceTotal<>N Then O.FaceFilter:=0;
+ O.FaceTotal:=N;
+ FirstText:='1';LastText:=IntToStr(N);
+ If O.FaceFilter<>0 Then Begin
+  FirstText:=IntToStr(O.FaceFirst+1);LastText:=IntToStr(O.FaceLast+1);
+ End;
+ FillChar(F,SizeOf(F),0);
+ If ImgW>=ImgH Then Begin PW:=256;PH:=Max(1,Round(256.0*ImgH/ImgW));End
+ Else Begin PH:=256;PW:=Max(1,Round(256.0*ImgW/ImgH));End;
+ L:=16+(340-PW) Div 2;T:=68+(256-PH) Div 2;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ Picked:=-1;Field:=0;Before:=False;Wire:=False;Drag:=False;
+ Done:=False;Dirty:=True;ReplaceText:=True;Message:='';
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 2)<>0) And ((Prev And 2)=0) And
+   Hit(16,68,356,325) Then Begin Drag:=True;OldX:=MX;OldY:=MY;End;
+  If (MB And 2)=0 Then Drag:=False;
+  If Drag And ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   O.RY:=Max(-3600,Min(3600,O.RY+(MX-OldX)*5));
+   O.RX:=Max(-3600,Min(3600,O.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Dirty:=True;
+  End;
+  If ((MB And 1)<>0) And ((Prev And 1)=0) And Not Drag Then Begin
+   If Hit(16,36,178,59) Then Before:=True
+   Else If Hit(193,36,356,59) Then Before:=False
+   Else If HasPreview And Hit(L,T,L+PW-1,T+PH-1) Then Begin
+    Picked:=Hits^[LongInt(MY-Y-T)*PW+MX-X-L];
+    If Picked>=0 Then Begin
+     S:=IntToStr(Picked+1);
+     If Field=0 Then FirstText:=S Else LastText:=S;
+     ReplaceText:=True;
+    End;
+   End Else If Hit(371,36,602,59) Then O.FaceFilter:=0
+   Else If Hit(371,68,602,91) Then O.FaceFilter:=1
+   Else If Hit(371,100,602,123) Then O.FaceFilter:=2
+   Else If Hit(371,157,481,180) Then Begin Field:=0;ReplaceText:=True;End
+   Else If Hit(491,157,602,180) Then Begin Field:=1;ReplaceText:=True;End
+   Else If Hit(371,190,602,213) Then Begin
+    FirstText:='1';LastText:=IntToStr(N);ReplaceText:=True;
+   End Else If Hit(371,288,481,311) Then Wire:=Not Wire
+   Else If Hit(491,288,602,311) Then Begin
+    O.RX:=Camera.RX;O.RY:=Camera.RY;O.RZ:=Camera.RZ;
+   End Else If Hit(371,389,481,412) Then Done:=True
+   Else If Hit(491,389,602,412) Then Apply;
+   Dirty:=True;
+  End;
+  Prev:=MB;
+  If Not Done And KeyPressed Then Begin
+   K:=ReadKey;
+   If Field=0 Then S:=FirstText Else S:=LastText;
+   Case K Of
+    #0:Begin K:=ReadKey;K:=#0;End;
+    #27:Done:=True;
+    #13:Apply;
+    #9:Begin Field:=1-Field;ReplaceText:=True;End;
+    #8:Begin Delete(S,Length(S),1);ReplaceText:=False;End;
+    '0'..'9':Begin
+     If ReplaceText Then S:='';
+     If Length(S)<5 Then S:=S+K;
+     ReplaceText:=False;
+    End;
+   End;
+   If (K=#8) Or (K In ['0'..'9']) Then
+    If Field=0 Then FirstText:=S Else LastText:=S;
+   Dirty:=True;
+  End;
+  Delay(10);
+ Until Done;
+ FreeMem(Hits,SizeOf(TPaintHits));
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
+
+
+
+Type TTracePixel=Record X,Y:Integer;End;
+ TTraceLoop=Array[0..262143] Of TTracePixel;
+ PTraceLoop=^TTraceLoop;
+
+Function TraceMeshSilhouette(P:PByteArr;W,H,Budget:Integer;
+ Tolerance:Double;Var Path:TVectorPath;Var Loops:LongInt;
+ Var Area:Double):Boolean;
+Const DX:Array[0..3] Of Integer=(1,0,-1,0);
+ DY:Array[0..3] Of Integer=(0,1,0,-1);
+ SX:Array[0..3] Of Integer=(0,1,1,0);
+ SY:Array[0..3] Of Integer=(0,0,1,1);
+Var Seen:PByteArr;Run,Best:PTraceLoop;
+ X,Y,D,CX,CY,CD,NX,NY,ND,K:Integer;
+ N,BestN,I,J,Prev,Next,Offset:LongInt;Bit:Byte;
+ A,Cross,Len2,AX,AY,BX,BY:Double;
+ Found,Closed,Reduced:Boolean;
+ Function Solid(X,Y:Integer):Boolean;
+ Begin
+  Solid:=False;
+  If (X>=0) And (X<W) And (Y>=0) And (Y<H) Then
+   Solid:=P^[LongInt(Y)*W+X]<>255;
+ End;
+ Function Boundary(X,Y,D:Integer;Var Index:LongInt;Var Bit:Byte):Boolean;
+ Var U,V:Integer;
+ Begin
+  U:=X-SX[D];V:=Y-SY[D];Boundary:=False;
+  If Not Solid(U,V) Then Exit;
+  If Solid(U+DY[D],V-DX[D]) Then Exit;
+  Index:=LongInt(V)*W+U;Bit:=1 Shl D;
+  Boundary:=True;
+ End;
+Begin
+ TraceMeshSilhouette:=False;Path.Count:=0;Path.Closed:=False;
+ Loops:=0;Area:=0;BestN:=0;
+ Seen:=PByteArr(RotationAllocate(LongInt(W)*H));
+ Run:=PTraceLoop(RotationAllocate(SizeOf(TTraceLoop)));
+ Best:=PTraceLoop(RotationAllocate(SizeOf(TTraceLoop)));
+ If (Seen<>Nil) And (Run<>Nil) And (Best<>Nil) Then Begin
+  FillChar(Seen^,LongInt(W)*H,0);
+  For Y:=0 To H-1 Do For X:=0 To W-1 Do If Solid(X,Y) Then
+   For D:=0 To 3 Do Begin
+    CX:=X+SX[D];CY:=Y+SY[D];CD:=D;
+    If Not Boundary(CX,CY,CD,Offset,Bit) Then Continue;
+    If (Seen^[Offset] And Bit)<>0 Then Continue;
+    A:=0;N:=0;Closed:=False;
+    Repeat
+     If Not Boundary(CX,CY,CD,Offset,Bit) Then Break;
+     If (Seen^[Offset] And Bit)<>0 Then Break;
+     Seen^[Offset]:=Seen^[Offset] Or Bit;
+     Run^[N].X:=CX;Run^[N].Y:=CY;Inc(N);
+     NX:=CX+DX[CD];NY:=CY+DY[CD];
+     A:=A+LongInt(CX)*NY-LongInt(NX)*CY;
+     Found:=False;
+     For K:=1 DownTo -1 Do Begin
+      ND:=(CD+K+4) Mod 4;
+      If Boundary(NX,NY,ND,Offset,Bit) Then Begin Found:=True;Break;End;
+     End;
+     If Not Found Then Break;
+     CX:=NX;CY:=NY;CD:=ND;
+     Closed:=(CX=X+SX[D]) And (CY=Y+SY[D]) And (CD=D);
+    Until Closed Or (N>=262144);
+    If Closed And (N>=3) Then Begin
+     Inc(Loops);
+     If A>Area Then Begin
+      Area:=A;BestN:=N;Move(Run^,Best^,N*SizeOf(TTracePixel));
+     End;
+    End;
+   End;
+  If BestN>=3 Then Begin
+   Area:=Area/2;
+   Repeat
+    Reduced:=False;J:=0;
+    For I:=0 To BestN-1 Do Begin
+     Prev:=(I+BestN-1) Mod BestN;Next:=(I+1) Mod BestN;
+     AX:=Best^[Next].X-Best^[Prev].X;
+     AY:=Best^[Next].Y-Best^[Prev].Y;
+     BX:=Best^[I].X-Best^[Prev].X;BY:=Best^[I].Y-Best^[Prev].Y;
+     Cross:=AX*BY-AY*BX;Len2:=AX*AX+AY*AY;
+     If ((I And 1)<>0) And (BestN>3) And (Len2>0) And
+      (Cross*Cross<=Tolerance*Tolerance*Len2) Then Reduced:=True
+     Else Begin Run^[J]:=Best^[I];Inc(J);End;
+    End;
+    If J<3 Then Break;
+    BestN:=J;Move(Run^,Best^,J*SizeOf(TTracePixel));
+   Until Not Reduced;
+   Path.Count:=Budget;If BestN<Budget Then Path.Count:=BestN;
+   For I:=0 To Path.Count-1 Do Begin
+    J:=I*BestN Div Path.Count;
+    Path.Points[I].X:=Best^[J].X/W;Path.Points[I].Y:=Best^[J].Y/H;
+   End;
+   Path.Closed:=True;TraceMeshSilhouette:=True;
+  End;
+ End;
+ If Seen<>Nil Then FreeMem(Seen,LongInt(W)*H);
+ If Run<>Nil Then FreeMem(Run,SizeOf(TTraceLoop));
+ If Best<>Nil Then FreeMem(Best,SizeOf(TTraceLoop));
+End;
+
+Procedure TraceMeshDialog;
+Var M:PMesh;O,Camera:TMeshOptions;P:PByteArr;Path:TVectorPath;
+ X,Y,MX,MY,MB,Prev,PW,PH,L,T,OldX,OldY,Budget,View,Detail:Integer;
+ Loops:LongInt;Area:Double;Dirty,Rebuild,Reproject,Done,Drag:Boolean;
+ K:Char;S,Message:String;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,W:Integer;Const Caption:String;On:Boolean);
+ Begin
+  FillRect(X+L,Y+T,X+L+W,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+W,Y+T+23,Not On);
+  If On Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(X+L+5,Y+T+8,Caption);
+ End;
+ Procedure Calculate;
+ Begin
+  If Reproject Then Begin
+   If P<>Nil Then FreeMem(P,LongInt(PW)*PH);
+   RenderMesh(M,O,PW,PH,False,P);Reproject:=False;
+  End;
+  Path.Count:=0;Loops:=0;Area:=0;Message:='';
+  If P=nil Then Message:='Rendu indisponible.'
+  Else If Not TraceMeshSilhouette(P,PW,PH,Budget,Detail/4,
+   Path,Loops,Area) Then Message:='Aucun contour exploitable.';
+  Rebuild:=False;
+ End;
+ Procedure Draw;
+ Var I,J,A,B:Integer;C:Byte;
+ Begin
+  If Rebuild Then Calculate;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Trace depuis calque 3D - contour editable');
+  Button(16,36,103,'Modele',View=0);
+  Button(133,36,103,'Contour seul',View=1);
+  Button(250,36,106,'Silhouette',View=2);
+  FillRect(X+16,Y+67,X+356,Y+336,DarkGray);
+  For J:=0 To PH-1 Do For I:=0 To PW-1 Do Begin
+   C:=White;
+   If (View<>1) And (P<>Nil) Then Begin
+    C:=P^[LongInt(J)*PW+I];
+    If C=255 Then C:=White Else If View=2 Then C:=Black;
+   End;
+   PutPixel(X+L+I,Y+T+J,C);
+  End;
+  For I:=0 To Path.Count-1 Do Begin
+   J:=(I+1) Mod Path.Count;
+   A:=X+L+Round(Path.Points[I].X*PW);
+   B:=Y+T+Round(Path.Points[I].Y*PH);
+   SetColor(LightRed);Line(A,B,X+L+Round(Path.Points[J].X*PW),
+    Y+T+Round(Path.Points[J].Y*PH));
+   SetColor(Blue);PutPixel(A,B,Blue);
+  End;
+  SetColor(Black);
+  OutTextXY(X+373,Y+43,'Budget de points');
+  Button(372,61,70,'32',Budget=32);Button(450,61,70,'64',Budget=64);
+  Button(528,61,74,'128',Budget=128);
+  Button(372,102,44,'-',False);Button(558,102,44,'+',False);
+  SetColor(Black);Str(Detail/4:0:2,S);
+  OutTextXY(X+427,Y+110,S+' px');
+  OutTextXY(X+373,Y+139,'Tolerance de simplification');
+  OutTextXY(X+373,Y+166,'Boucles detectees : '+IntToStr(Loops));
+  OutTextXY(X+373,Y+186,'Points retenus : '+IntToStr(Path.Count));
+  OutTextXY(X+373,Y+206,'Surface : '+IntToStr(Round(Area))+' px');
+  OutTextXY(X+373,Y+226,'Analyse : '+IntToStr(PW)+' x '+IntToStr(PH));
+  Button(372,250,230,'Revenir a la vue du calque',False);
+  If WorkingPath.Count>0 Then Begin
+   SetColor(Red);OutTextXY(X+373,Y+286,'Remplace le trace de travail.');
+  End;
+  SetColor(Black);
+  OutTextXY(X+16,Y+354,'Glisser : pivoter. La vue choisie determine la forme.');
+  OutTextXY(X+16,Y+373,'Seul le plus grand contour exterieur est conserve.');
+  OutTextXY(X+16,Y+392,'Le trace se modifie avec Plume / Selection de trace.');
+  Button(372,384,107,'Annuler',False);Button(490,384,112,'Creer trace',False);
+  SetColor(Red);OutTextXY(X+16,Y+420,Copy(Message,1,73));
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Var R:PRotationUndo;
+ Begin
+  If Rebuild Then Calculate;
+  If Path.Count<3 Then Exit;
+  R:=MeshUndoCopy;
+  If R=Nil Then Begin Message:='Memoire insuffisante.';Dirty:=True;Exit;End;
+  MakeUndoRoom;RotationUndo[UndoCount]:=R;UndoBuffers[UndoCount]:=Nil;
+  Inc(UndoCount);WorkingPath:=Path;WorkingPathSelected:=-1;
+  CurrentTool:=TOOL_PATHSEL;Done:=True;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;M:=Layers[ActiveLayer].Mesh;
+ If M=Nil Then Begin ShowDialog('Trace 3D','Selectionnez un calque 3D.');
+  Exit;End;
+ Camera:=Layers[ActiveLayer].MeshOptions;Camera.Mode:=0;O:=Camera;
+ If ImgW>=ImgH Then Begin PW:=256;PH:=Max(1,Round(256.0*ImgH/ImgW));End
+ Else Begin PH:=256;PW:=Max(1,Round(256.0*ImgW/ImgH));End;
+ L:=17+(338-PW) Div 2;T:=68+(267-PH) Div 2;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ P:=Nil;Budget:=128;Detail:=2;View:=0;Message:='';
+ Dirty:=True;Rebuild:=True;Reproject:=True;Done:=False;Drag:=False;
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Prev And 1)=0) Then Begin
+   If Hit(16,36,356,59) Then View:=Min(2,(MX-X-16) Div 117)
+   Else If Hit(372,61,602,84) Then Begin
+    Case (MX-X-372) Div 78 Of 0:Budget:=32;1:Budget:=64;2:Budget:=128;End;
+    Rebuild:=True;
+   End Else If Hit(372,102,416,125) Then Begin
+    Detail:=Max(0,Detail-1);Rebuild:=True;
+   End Else If Hit(558,102,602,125) Then Begin
+    Detail:=Min(16,Detail+1);Rebuild:=True;
+   End Else If Hit(372,250,602,273) Then Begin
+    O:=Camera;Rebuild:=True;Reproject:=True;
+   End Else If Hit(372,384,479,407) Then Done:=True
+   Else If Hit(490,384,602,407) Then Apply
+   Else If Hit(16,67,356,336) Then Begin Drag:=True;OldX:=MX;OldY:=MY;End;
+   Dirty:=True;
+  End;
+  If (MB And 1)=0 Then Drag:=False;
+  If Drag And ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   O.RY:=Max(-3600,Min(3600,O.RY+(MX-OldX)*5));
+   O.RX:=Max(-3600,Min(3600,O.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Dirty:=True;Rebuild:=True;Reproject:=True;
+  End;
+  Prev:=MB;
+  If Not Done And KeyPressed Then Begin
+   K:=ReadKey;
+   Case K Of
+    #0:K:=ReadKey;
+    #27:Done:=True;
+    #13:Apply;
+    #9:Begin View:=(View+1) Mod 3;Dirty:=True;End;
+   End;
+  End;
+  Delay(10);
+ Until Done;
+ If P<>Nil Then FreeMem(P,LongInt(PW)*PH);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
+
+
+Procedure RenderFileDialog;
+Var M:PMesh;O,Camera:TMeshOptions;P,Full:PByteArr;
+ X,Y,MX,MY,MB,Prev,W,H,PW,PH,L,T,Format,Bg,Field,Code,OldX,OldY:Integer;
+ Valid,Dirty,Rebuild,Done,Drag,ReplaceText,Link:Boolean;
+ K:Char;WT,HT,Name,Ext,Message,S:String;
+ Function Hit(L,T,R,B:Integer):Boolean;
+ Begin Hit:=(MX>=X+L) And (MX<=X+R) And (MY>=Y+T) And (MY<=Y+B);End;
+ Procedure Button(L,T,W:Integer;Const Caption:String;On:Boolean);
+ Begin
+  FillRect(X+L,Y+T,X+L+W,Y+T+23,LightGray);
+  DrawBevel(X+L,Y+T,X+L+W,Y+T+23,Not On);
+  If On Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(X+L+5,Y+T+8,Caption);
+ End;
+ Procedure Parse;
+ Var A,B:LongInt;
+ Begin
+  Val(WT,A,Code);Valid:=Code=0;
+  Val(HT,B,Code);
+  Valid:=Valid And (Code=0) And (A>=1) And (A<=4096) And
+   (B>=1) And (B<=4096);
+  If Valid Then Begin W:=A;H:=B;End;
+ End;
+ Procedure SetDimensions(A,B:Integer);
+ Begin
+  WT:=IntToStr(A);HT:=IntToStr(B);Rebuild:=True;Dirty:=True;
+ End;
+ Procedure Draw;
+ Var I,J:Integer;C:Byte;Bytes:LongInt;Caption:String;
+ Begin
+  Parse;
+  If Rebuild And Valid Then Begin
+   If P<>Nil Then FreeMem(P,LongInt(PW)*PH);
+   If LongInt(W)*268>=LongInt(H)*340 Then Begin
+    PW:=340;PH:=Max(1,Round(340.0*H/W));
+   End Else Begin PH:=268;PW:=Max(1,Round(268.0*W/H));End;
+   L:=16+(340-PW) Div 2;T:=68+(268-PH) Div 2;
+   If Not RenderMesh(M,O,PW,PH,False,P) Then
+    Message:='Apercu indisponible.';
+   Rebuild:=False;
+  End;
+  HideMouseCursor;FillRect(X,Y,X+620,Y+440,LightGray);
+  DrawBevel(X,Y,X+620,Y+440,True);
+  FillRect(X+3,Y+3,X+617,Y+26,Blue);SetColor(White);
+  OutTextXY(X+12,Y+10,'Rendu vers fichier - export image 3D');
+  SetColor(Black);
+  OutTextXY(X+16,Y+43,'Calque : '+Layers[ActiveLayer].Name);
+  FillRect(X+16,Y+68,X+355,Y+335,DarkGray);
+  If P<>Nil Then For J:=0 To PH-1 Do For I:=0 To PW-1 Do Begin
+   C:=P^[LongInt(J)*PW+I];
+   If C=255 Then Begin
+    If Bg>=0 Then C:=Bg Else Begin C:=White;
+     If ((I Div 12+J Div 12) And 1)<>0 Then C:=LightGray;End;
+   End;
+   PutPixel(X+L+I,Y+T+J,C);
+  End;
+  Button(370,36,71,'BMP',Format=0);
+  Button(450,36,71,'TGA',Format=1);
+  Button(530,36,72,'PPM',Format=2);
+  Button(370,68,112,'L '+WT+' px',Field=0);
+  Button(490,68,112,'H '+HT+' px',Field=1);
+  Button(370,101,112,'Document',False);
+  Button(490,101,112,'Proportions',Link);
+  Button(370,133,112,'1024 x 1024',False);
+  Button(490,133,112,'1920 x 1080',False);
+  Caption:='Fond blanc';If Bg=Black Then Caption:='Fond noir';
+  If Bg<0 Then Caption:='Fond transparent';
+  Button(370,165,232,Caption,False);
+  Case O.Mode Of 0:Caption:='Solide';1:Caption:='Filaire';
+   2:Caption:='Solide + fil';End;
+  Button(370,197,112,Caption,False);
+  Caption:='Ortho.';If O.Perspective Then Caption:='Perspective';
+  Button(490,197,112,Caption,False);
+  Button(370,229,112,'Vue initiale',False);
+  Button(490,229,112,'Tramage',O.Dither);
+  SetColor(Black);
+  If Valid Then Begin
+   Bytes:=RenderImageRow(W,Format,Bg)*H;
+   Case Format Of
+    0:Inc(Bytes,SizeOf(TBMPFileHeader)+SizeOf(TBMPInfoHeader));
+    1:Inc(Bytes,18);
+    2:Inc(Bytes,9+Length(IntToStr(W))+Length(IntToStr(H)));
+   End;
+   OutTextXY(X+370,Y+271,'Fichier : '+IntToStr(Bytes)+' octets');
+   OutTextXY(X+370,Y+291,'Rendu : '+IntToStr(LongInt(W)*H)+' pixels');
+   OutTextXY(X+370,Y+311,'Memoire : '+
+    IntToStr(LongInt(W)*H*5+SizeOf(TMeshProjection))+' o');
+  End;
+  OutTextXY(X+16,Y+351,'Glisser : pivoter. Tab : largeur / hauteur.');
+  OutTextXY(X+16,Y+370,'La sortie reprend le cadrage et les faces visibles.');
+  OutTextXY(X+16,Y+389,'TGA 32 bits pour un fond transparent.');
+  Button(370,381,112,'Annuler',False);
+  Button(490,381,112,'Enregistrer',False);
+  S:=Message;If Not Valid Then S:='Dimensions : de 1 a 4096 pixels.';
+  SetColor(Red);OutTextXY(X+16,Y+420,Copy(S,1,73));
+  ShowMouseCursor;Dirty:=False;
+ End;
+ Procedure Apply;
+ Var PreviousFormat:Integer;Chosen:Boolean;Error:String;
+ Begin
+  Parse;If Not Valid Then Exit;
+  PreviousFormat:=FD_MeshExportFormat;FD_MeshExportFormat:=Format+4;
+  Chosen:=FD_Save('Enregistrer le rendu 3D',Name,Ext);
+  FD_MeshExportFormat:=PreviousFormat;
+  GetMouseStateLocal(MX,MY,MB);
+  If Chosen Then Begin
+   If RenderMesh(M,O,W,H,True,Full) Then Begin
+    If WriteRenderExport(Nil,Name,Format,False,False,Full,W,H,Bg,Error)
+     Then Begin
+      If Error='' Then Error:='Image enregistree : '+Name;
+      ShowDialog('Rendu vers fichier',Error);Done:=True;
+     End Else Message:=Error;
+    FreeMem(Full,LongInt(W)*H);
+   End Else Message:='Rendu annule ou memoire insuffisante.';
+  End;
+  Dirty:=True;
+ End;
+ Procedure EditSize;
+ Var V:LongInt;
+ Begin
+  If Field=0 Then WT:=S Else HT:=S;
+  If Link Then Begin
+   Val(S,V,Code);
+   If (Code=0) And (V>=1) And (V<=4096) Then Begin
+    If Field=0 Then HT:=IntToStr(Max(1,Round(V*1.0*ImgH/ImgW)))
+    Else WT:=IntToStr(Max(1,Round(V*1.0*ImgW/ImgH)));
+   End;
+  End;
+  Rebuild:=True;
+ End;
+Begin
+ ResetToolTip;MenuActive:=False;M:=Layers[ActiveLayer].Mesh;
+ If M=Nil Then Begin
+  ShowDialog('Rendu vers fichier','Selectionnez un calque 3D.');Exit;
+ End;
+ Camera:=Layers[ActiveLayer].MeshOptions;O:=Camera;P:=Nil;
+ X:=(ScreenWidth-620) Div 2;Y:=(ScreenHeight-440) Div 2;
+ SetDimensions(ImgW,ImgH);
+ Format:=1;Bg:=-1;Field:=0;Link:=True;
+ Name:='rendu.tga';Message:='';Done:=False;Drag:=False;ReplaceText:=True;
+ GetMouseStateLocal(MX,MY,Prev);
+ Repeat
+  If Dirty Then Draw;
+  GetMouseStateLocal(MX,MY,MB);
+  If ((MB And 1)<>0) And ((Prev And 1)=0) Then Begin
+   If Hit(370,36,602,59) Then Begin
+    Format:=Min(2,(MX-X-370) Div 80);
+    If (Format<>1) And (Bg<0) Then Bg:=White;
+   End Else If Hit(370,68,602,91) Then Begin
+    Field:=Ord(MX>=X+490);ReplaceText:=True;
+   End Else If Hit(370,101,482,124) Then SetDimensions(ImgW,ImgH)
+   Else If Hit(490,101,602,124) Then Link:=Not Link
+   Else If Hit(370,133,482,156) Then SetDimensions(1024,1024)
+   Else If Hit(490,133,602,156) Then SetDimensions(1920,1080)
+   Else If Hit(370,165,602,188) Then Begin
+    If Bg<0 Then Bg:=White Else If Bg=White Then Bg:=Black
+    Else If Format=1 Then Bg:=-1 Else Bg:=White;
+   End Else If Hit(370,197,482,220) Then Begin
+    O.Mode:=(O.Mode+1) Mod 3;Rebuild:=True;
+   End Else If Hit(490,197,602,220) Then Begin
+    O.Perspective:=Not O.Perspective;Rebuild:=True;
+   End Else If Hit(370,229,482,252) Then Begin O:=Camera;Rebuild:=True;End
+   Else If Hit(490,229,602,252) Then Begin
+    O.Dither:=Not O.Dither;Rebuild:=True;
+   End Else If Hit(370,381,482,404) Then Done:=True
+   Else If Hit(490,381,602,404) Then Apply
+   Else If Hit(16,68,355,335) Then Begin Drag:=True;OldX:=MX;OldY:=MY;End;
+   Dirty:=True;
+  End;
+  If (MB And 1)=0 Then Drag:=False;
+  If Drag And ((MX<>OldX) Or (MY<>OldY)) Then Begin
+   O.RY:=Max(-3600,Min(3600,O.RY+(MX-OldX)*5));
+   O.RX:=Max(-3600,Min(3600,O.RX+(MY-OldY)*5));
+   OldX:=MX;OldY:=MY;Dirty:=True;Rebuild:=True;
+  End;
+  Prev:=MB;
+  If Not Done And KeyPressed Then Begin
+   K:=ReadKey;
+   If Field=0 Then S:=WT Else S:=HT;
+   Case K Of
+    #0:K:=ReadKey;
+    #27:Done:=True;
+    #13:Apply;
+    #9:Begin Field:=1-Field;ReplaceText:=True;End;
+    #8:Begin Delete(S,Length(S),1);ReplaceText:=False;EditSize;End;
+    '0'..'9':Begin
+     If ReplaceText Then S:='';
+     If Length(S)<4 Then S:=S+K;
+     ReplaceText:=False;EditSize;
+    End;
+   End;
+   Dirty:=True;
+  End;
+  Delay(10);
+ Until Done;
+ If P<>Nil Then FreeMem(P,LongInt(PW)*PH);
+ GetMouseStateLocal(MouseX,MouseY,MouseButtons);
+ OldMouseButtons:=MouseButtons;Drawing:=False;DrawFullUI;
+End;
+
+
 Procedure MeshExportDialog;
 Var M:PMesh;View:TMeshOptions;Preview:PByteArr;F:File;
  X,Y,MX,MY,MB,Previous,Source,Format,Field,PW,PH,I,J,Code:Integer;
@@ -14960,6 +16061,10 @@ Begin
    26:SplitExtrusionDialog;
    27:SceneCutDialog;
    28:PrintUnionDialog;
+   29:SimplifyMeshDialog;
+   30:MeshFaceDialog;
+   31:TraceMeshDialog;
+   34:RenderFileDialog;
    33:If Layers[ActiveLayer].Mesh<>Nil Then MeshImportDialog(ActiveLayer)
     Else ShowDialog('3D','Le calque actif ne contient pas de geometrie 3D.');
    Else ShowDialog('3D','Cette autre commande 3D n''est pas implementee.');

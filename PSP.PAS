@@ -6793,19 +6793,20 @@ End;
 Const
  FD_MAXENT = 256;
  FD_ROWH   = 10;
- FD_NUM_FILTERS = 11;
+ FD_NUM_FILTERS = 12;
  FD_FILTER_LABELS: Array[0..FD_NUM_FILTERS-1] of String[36] = (
   'Tous formats images',
+  'BGX MonsterBook (*.BGX)',
   'BMP (*.BMP;*.DIB)',
   'GIF (*.GIF)',
-  'PNG (*.PNG)',
   'JPEG (*.JPG;*.JPEG)',
   'PCX (*.PCX)',
+  'PNG (*.PNG)',
+  'PPM Portable Pixmap (*.PPM)',
+  'PSD (*.PSD)',
   'TGA (*.TGA)',
   'TIFF (*.TIF;*.TIFF)',
-  'PSD (*.PSD)',
-  'Tous fichiers (*.*)',
-  'PPM Portable Pixmap (*.PPM)' );
+  'Tous fichiers (*.*)' );
 
 Type
  TFDEntry = Record
@@ -6842,17 +6843,19 @@ Begin
  Case FD_FilterIdx Of
   0: FD_ExtMatches := (E='.BMP') Or (E='.DIB') Or (E='.GIF') Or (E='.PNG') Or
                       (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or
-                      (E='.TIF') Or (E='.TIFF') Or (E='.PSD') Or (E='.PPM');
-  1: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
-  2: FD_ExtMatches := E='.GIF';
-  3: FD_ExtMatches := E='.PNG';
+                      (E='.TIF') Or (E='.TIFF') Or (E='.PSD') Or
+                      (E='.PPM') Or (E='.BGX');
+  1: FD_ExtMatches := E='.BGX';
+  2: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
+  3: FD_ExtMatches := E='.GIF';
   4: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
   5: FD_ExtMatches := E='.PCX';
-  6: FD_ExtMatches := E='.TGA';
-  7: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
+  6: FD_ExtMatches := E='.PNG';
+  7: FD_ExtMatches := E='.PPM';
   8: FD_ExtMatches := E='.PSD';
-  9: FD_ExtMatches := True;
-  10: FD_ExtMatches := E='.PPM';
+  9: FD_ExtMatches := E='.TGA';
+  10: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
+  11: FD_ExtMatches := True;
  Else FD_ExtMatches := False; End;
 End;
 
@@ -6992,6 +6995,7 @@ Var
  PathStr, Nm: String;
 
  Procedure RedrawAll;
+ Var S:String;
  Begin
   HideMouseCursor;
   FillRect(DX1, DY1, DX2, DY2, UI_BG_PANEL);
@@ -7016,9 +7020,11 @@ Var
   FillRect(NamX1, NamY1, NamX2, NamY2, White);
   DrawBevel(NamX1, NamY1, NamX2, NamY2, False);
   SetColor(UI_TEXT);
-  OutTextXY(NamX1+4, NamY1+4, FD_NameBuf);
-  If FD_Focus=2 Then OutTextXY(NamX1+4+Length(FD_NameBuf)*8, NamY1+4, '_');
-  OutTextXY(DX2-220, NamY1+4, 'Type:');
+  S:=FD_NameBuf;
+  While TextWidth(S)+8>NamX2-NamX1-8 Do Delete(S,1,1);
+  OutTextXY(NamX1+4,NamY1+4,S);
+  If FD_Focus=2 Then OutTextXY(NamX1+4+TextWidth(S),NamY1+4,'_');
+  OutTextXY(NamX2+4,NamY1+4,'Type:');
   FillRect(TypX1, NamY1, TypX2, NamY2, UI_BG_PANEL);
   DrawBevel(TypX1, NamY1, TypX2, NamY2, True);
   SetColor(UI_TEXT);
@@ -7117,6 +7123,9 @@ Var
   VisRows := FD_NUM_FILTERS; If VisRows > 6 Then VisRows := 6;
   DDX1 := TypX1; DDY1 := NamY2+1;
   DDX2 := TypX2; DDY2 := DDY1 + VisRows*FD_ROWH + 4;
+  If DDY2>DY2-2 Then Begin
+   DDY2:=NamY1-1;DDY1:=DDY2-VisRows*FD_ROWH-4;
+  End;
   SbX2 := DDX2-2; SbX1 := SbX2-10;
   UpX1 := SbX1; UpY1 := DDY1+1; UpX2 := SbX2; UpY2 := UpY1+11;
   DnX1 := SbX1; DnY2 := DDY2-1; DnX2 := SbX2; DnY1 := DnY2-11;
@@ -7183,8 +7192,11 @@ Begin
  DX2 := DX1 + 600; DY2 := DY1 + 420;
  DirX1:=DX1+5;   DirY1:=DY1+50; DirX2:=DX1+165; DirY2:=DY2-82;
  FilX1:=DX1+170; FilY1:=DY1+50; FilX2:=DX2-5;   FilY2:=DY2-82;
- NamX1:=DX1+50;  NamY1:=DY2-76; NamX2:=DX2-220; NamY2:=DY2-60;
- TypX1:=DX2-175; TypX2:=DX2-10;
+ NamX1:=DX1+50;  NamY1:=DY2-76; NamY2:=DY2-60;
+ TypX2:=DX2-10;TypX1:=TypX2-221;
+ For Idx:=0 To FD_NUM_FILTERS-1 Do
+  TypX1:=Min(TypX1,TypX2-TextWidth(FD_FILTER_LABELS[Idx])-20);
+ NamX2:=TypX1-TextWidth('Type:')-12;
  OkX1:=DX2-180; OkY1:=DY2-50; OkX2:=DX2-100; OkY2:=DY2-32;
  CcX1:=DX2-90;  CcY1:=DY2-50; CcX2:=DX2-10;  CcY2:=DY2-32;
  DirRows  := (DirY2 - DirY1 - 2) Div FD_ROWH;
@@ -7387,7 +7399,7 @@ Const
   'Portable Pixmap (*.PPM)' );
  FD_SAVE_EXT: Array[0..FD_SAVE_NUM-1] of String[4] = (
   '.BMP', '.PSD', '.TGA', '.PPM' );
- FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (1, 8, 6, 10);
+ FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (2, 8, 9, 7);
 
 Var
  FD_SaveFilterIdx: Integer;
@@ -7745,6 +7757,89 @@ Begin
  FD_Save := ResultVal;
 End;
 
+{ BGX1 MonsterBook : lignes descendantes, sans palette ni bourrage.
+  Meme ordre RGB que PAINT.PAS. Le quatrieme octet est reserve. }
+Function LoadBGX(Const Name:String):Boolean;
+Var F:File;Header:Array[0..8] Of Byte;Row,Pixels:PByteArr;
+ W,H,Bits,X,Y,I,Shift,R,G,B:Integer;V:Word;OldMode:Byte;
+ RowSize,Size,Expected,Got,Offset,BitPos:LongInt;OK:Boolean;
+Begin
+ LoadBGX:=False;Row:=Nil;Pixels:=Nil;
+ Assign(F,Name);OldMode:=FileMode;FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode;
+ If IOResult<>0 Then Exit;
+ {$I-}BlockRead(F,Header,SizeOf(Header),Got);{$I+}
+ OK:=(IOResult=0) And (Got=SizeOf(Header));
+ If OK Then OK:=(Header[0]=Ord('B')) And (Header[1]=Ord('G')) And
+  (Header[2]=Ord('X')) And (Header[3]=Ord('1'));
+ If OK Then Begin
+  Expected:=LongInt(Header[4])+LongInt(Header[5])*256;
+  Size:=LongInt(Header[6])+LongInt(Header[7])*256;
+  OK:=(Expected>=1) And (Expected<=4096) And (Size>=1) And (Size<=4096);
+  If OK Then Begin W:=Expected;H:=Size;End;
+ End;
+ If OK Then Begin
+  Bits:=Header[8];RowSize:=0;
+  Case Bits Of
+   1,2,4,8:RowSize:=(LongInt(W)*Bits+7) Div 8;
+   15,16:RowSize:=LongInt(W)*2;
+   24,32:RowSize:=LongInt(W)*(Bits Div 8);
+  End;
+  {$I-}Expected:=FileSize(F);{$I+}
+  OK:=(IOResult=0) And (RowSize>0) And (Expected=9+RowSize*H);
+ End;
+ If OK Then Begin
+  Size:=LongInt(W)*H;Row:=PByteArr(RotationAllocate(RowSize));
+  Pixels:=PByteArr(RotationAllocate(Size));
+  OK:=(Row<>Nil) And (Pixels<>Nil);
+ End;
+ If OK Then For Y:=0 To H-1 Do Begin
+  {$I-}BlockRead(F,Row^,RowSize,Got);{$I+}
+  OK:=(IOResult=0) And (Got=RowSize);
+  If Not OK Then Break;
+  For X:=0 To W-1 Do Begin
+   Offset:=LongInt(Y)*W+X;
+   Case Bits Of
+    1,2,4,8:Begin
+     BitPos:=LongInt(X)*Bits;Shift:=8-Bits-(BitPos And 7);
+     I:=(Row^[BitPos Div 8] Shr Shift) And ((1 Shl Bits)-1);
+     If Bits=1 Then Begin
+      If I=1 Then I:=White Else I:=Black;
+     End Else If I>=16 Then I:=BlurPalette(I,I,I,X,Y,False);
+     Pixels^[Offset]:=I;
+    End;
+    15,16:Begin
+     V:=Word(Row^[X*2]) Or (Word(Row^[X*2+1]) Shl 8);
+     If Bits=15 Then Begin
+      R:=((V Shr 10) And 31)*255 Div 31;
+      G:=((V Shr 5) And 31)*255 Div 31;
+     End Else Begin
+      R:=((V Shr 11) And 31)*255 Div 31;
+      G:=((V Shr 5) And 63)*255 Div 63;
+     End;
+     B:=(V And 31)*255 Div 31;
+     Pixels^[Offset]:=BlurPalette(R,G,B,X,Y,False);
+    End;
+    24,32:Begin
+     I:=X*(Bits Div 8);
+     Pixels^[Offset]:=BlurPalette(Row^[I],Row^[I+1],Row^[I+2],X,Y,False);
+    End;
+   End;
+  End;
+ End;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then OK:=False;
+ If Row<>Nil Then FreeMem(Row,RowSize);
+ If Not OK Then Begin If Pixels<>Nil Then FreeMem(Pixels,Size);Exit;End;
+ ClearUndoHistory;
+ For I:=0 To MAX_LAYERS-1 Do FreeLayer(I);
+ ImgW:=W;ImgH:=H;LayerCount:=1;ActiveLayer:=0;
+ FillChar(Layers[0],SizeOf(TLayer),0);
+ Layers[0].Used:=True;Layers[0].Visible:=True;Layers[0].Opacity:=100;
+ Layers[0].Name:='Arriere-plan';Layers[0].Pixels:=Pixels;
+ CurrentFileName:=Name;ImageModified:=False;SelectionActive:=False;
+ ZoomLevel:=100;LoadBGX:=True;
+End;
+
 Function LoadFileByExt(Const FN: String; Var ErrMsg: String): Boolean;
 Var Ext: String;Loaded:Boolean;
 Begin
@@ -7755,6 +7850,7 @@ Begin
  Else If Ext='.GIF' Then Loaded := LoadGIF(FN)
  Else If (Ext='.JPG') Or (Ext='.JPEG') Then Loaded := LoadJPEG(FN)
  Else If Ext='.PNG' Then Loaded := LoadPNG(FN)
+ Else If Ext='.BGX' Then Loaded := LoadBGX(FN)
  Else If Ext='.PCX' Then Loaded := LoadPCX(FN)
  Else If Ext='.PSD' Then Loaded := LoadPSD(FN)
  Else If (Ext='.TGA') Or (Ext='.TIF') Or (Ext='.TIFF') Then

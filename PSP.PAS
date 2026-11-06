@@ -4772,7 +4772,7 @@ End;
    LoadPNG : signature + chunks + DEFLATE + filtres
   ------------------------------------------------------------ }
 
-Function LoadPNG(Const FileName: String): Boolean;
+Function LoadPNGImage(Const FileName:String;Animated:Boolean):Boolean;
 Type
  PByteArr = ^TByteArr;
  TByteArr = Array[0..0] of Byte;
@@ -4801,7 +4801,11 @@ Var
  FEOF: Boolean;
  Got: Word;
  Sig: Array[0..7] of Byte;
- PngW, PngH: LongInt;
+ PngW,PngH,CanvasW,CanvasH,FrameW,FrameH,FrameX,FrameY:LongInt;
+ FW,FH,FX,FY,Sequence,Frames,Expected,FileBytes,DataStart:LongInt;
+ HaveHeader,HaveControl,HaveIDAT,FrameData,DefaultFrame:Boolean;
+ FirstDefault,CopyData,Valid:Boolean;
+ AlphaTable:Array[0..255] Of Byte;
  Depth, ColorT, IntlcM: Integer;
  Channels, BPP: Integer;
  BytesPerScan: LongInt;
@@ -4850,7 +4854,9 @@ Var
  Begin
   ChunkLen := R4;
   For I := 0 To 3 Do ChunkType[I] := Chr(R1 And $FF);
-  ReadChunkHdr := Not FEOF;
+  DataStart:=FilePos(F)-(FLen-FPos);
+  ReadChunkHdr:=Not FEOF And (ChunkLen>=0) And
+   (ChunkLen<=FileBytes-DataStart-4);
  End;
 
  Function CT(A, B, C, D: Char): Boolean;
@@ -5131,15 +5137,16 @@ Var
  Procedure EmitPixels;
  Var Y, X: LongInt; RowOff: LongInt;
      R, G, B, Idx, Sv: Integer;
-     S0, S1, S2, S3: Integer; ByteOff: LongInt;
+     Alpha:Integer;ByteOff:LongInt;
      PixIdx: Byte;
  Begin
   For Y := 0 To PngH-1 Do Begin
-   If Y >= ImgH Then Break;
+   If Y+FrameY>=ImgH Then Break;
    RowOff := Y * (BytesPerScan + 1);
    If RowOff >= DecSize Then Break;
    For X := 0 To PngW-1 Do Begin
-    If X >= ImgW Then Break;
+    If X+FrameX>=ImgW Then Break;
+    Alpha:=255;
     Case ColorT Of
      0: Begin
          Sv := GetSample(RowOff, X);
@@ -5169,14 +5176,17 @@ Var
          Idx := GetSample(RowOff, X);
          If Idx >= PalCount Then Idx := 0;
          PixIdx := PalRemap[Idx];
+         If Animated And (Idx<PalCount) Then Begin
+          Alpha:=AlphaTable[Idx];R:=PalR[Idx];G:=PalG[Idx];B:=PalB[Idx];
+         End;
         End;
      4: Begin
          If Depth = 8 Then Begin
           ByteOff := RowOff + 1 + X*2;
-          Sv := DecBuf^[ByteOff];
+          Sv := DecBuf^[ByteOff];Alpha:=DecBuf^[ByteOff+1];
          End Else Begin
           ByteOff := RowOff + 1 + X*4;
-          Sv := DecBuf^[ByteOff];
+          Sv := DecBuf^[ByteOff];Alpha:=DecBuf^[ByteOff+2];
          End;
          R := Sv; G := Sv; B := Sv;
          PixIdx := NearestVGA(R, G, B);
@@ -5186,18 +5196,22 @@ Var
           ByteOff := RowOff + 1 + X*4;
           R := DecBuf^[ByteOff];
           G := DecBuf^[ByteOff+1];
-          B := DecBuf^[ByteOff+2];
+          B := DecBuf^[ByteOff+2];Alpha:=DecBuf^[ByteOff+3];
          End Else Begin
           ByteOff := RowOff + 1 + X*8;
           R := DecBuf^[ByteOff];
           G := DecBuf^[ByteOff+2];
-          B := DecBuf^[ByteOff+4];
+          B := DecBuf^[ByteOff+4];Alpha:=DecBuf^[ByteOff+6];
          End;
          PixIdx := NearestVGA(R, G, B);
         End;
      Else PixIdx := 0;
     End;
-    SetLayerPixel(ActiveLayer, X, Y, PixIdx);
+    If Animated And (Alpha<255) Then
+     PixIdx:=NearestVGA((LongInt(R)*Alpha+255*(255-LongInt(Alpha))) Div 255,
+      (LongInt(G)*Alpha+255*(255-LongInt(Alpha))) Div 255,
+      (LongInt(B)*Alpha+255*(255-LongInt(Alpha))) Div 255);
+    SetLayerPixel(ActiveLayer,X+FrameX,Y+FrameY,PixIdx);
    End;
   End;
  End;
@@ -5220,15 +5234,21 @@ Var
  End;
 
 Begin
- LoadPNG := False;
+ LoadPNGImage := False;
  IDATBuf := Nil; DecBuf := Nil;
  FLen := 0; FPos := 0; FEOF := False;
- IDATTotal := 0; PalCount := 0; HasPal := False;
+ IDATTotal:=0;PalCount:=0;HasPal:=False;
+ HaveHeader:=False;HaveControl:=False;HaveIDAT:=False;FrameData:=False;
+ DefaultFrame:=False;FirstDefault:=False;Frames:=0;Expected:=0;Sequence:=0;
+ FrameX:=0;FrameY:=0;FrameW:=0;FrameH:=0;
+ FillChar(AlphaTable,SizeOf(AlphaTable),255);
 
  Assign(F, FileName);
  {$I-} Reset(F, 1); {$I+}
  If IOResult <> 0 Then Exit;
 
+ {$I-}FileBytes:=FileSize(F);{$I+}
+ If IOResult<>0 Then Begin Close(F);Exit;End;
  { lire signature }
  For K := 0 To 7 Do Sig[K] := R1 And $FF;
  OkSig := True;
@@ -5240,7 +5260,8 @@ Begin
  Repeat
   If Not ReadChunkHdr Then Begin Close(F); Exit; End;
   If CT('I','H','D','R') Then Begin
-   If ChunkLen < 13 Then Begin Close(F); Exit; End;
+   If HaveHeader Or (ChunkLen<>13) Then Begin Close(F);Exit;End;
+   HaveHeader:=True;
    PngW := R4; PngH := R4;
    Depth := R1; ColorT := R1;
    R1; { compression method, doit etre 0 }
@@ -5248,7 +5269,10 @@ Begin
    IntlcM := R1;
    For K := 14 To ChunkLen Do R1;
    R4; { CRC }
-   If (PngW <= 0) Or (PngH <= 0) Then Begin Close(F); Exit; End;
+   If (PngW<1) Or (PngH<1) Or (PngW>4096) Or (PngH>4096) Then Begin
+    Close(F);Exit;
+   End;
+   CanvasW:=PngW;CanvasH:=PngH;
    If IntlcM <> 0 Then Begin Close(F); Exit; End;     { Adam7 non gere }
   End Else If CT('P','L','T','E') Then Begin
    PalCount := Integer(ChunkLen Div 3);
@@ -5259,8 +5283,54 @@ Begin
    For K := LongInt(PalCount)*3 To ChunkLen-1 Do R1;
    R4;
    HasPal := True;
+  End Else If Animated And CT('t','R','N','S') And (ColorT=3) Then Begin
+   If ChunkLen>256 Then Begin Close(F);Exit;End;
+   For K:=0 To ChunkLen-1 Do AlphaTable[K]:=R1;
+   R4;
+  End Else If Animated And CT('a','c','T','L') Then Begin
+   If Not HaveHeader Or HaveControl Or HaveIDAT Or (ChunkLen<>8) Then
+    Begin Close(F);Exit;End;
+   Expected:=R4;R4;R4;
+   If (Expected<1) Or (Expected>10000) Then Begin Close(F);Exit;End;
+   HaveControl:=True;
+  End Else If Animated And CT('f','c','T','L') Then Begin
+   If Not HaveControl Or (ChunkLen<>26) Or
+    ((Frames>0) And Not FrameData) Then Begin Close(F);Exit;End;
+   If R4<>Sequence Then Begin Close(F);Exit;End;
+   Inc(Sequence);FW:=R4;FH:=R4;FX:=R4;FY:=R4;
+   R4;K:=R1;K2:=R1;R4;
+   If (FW<1) Or (FH<1) Or (FW>CanvasW) Or (FH>CanvasH) Or
+    (FX<0) Or (FY<0) Or (FX>CanvasW-FW) Or (FY>CanvasH-FH) Or
+    (K>2) Or (K2>1) Then Begin Close(F);Exit;End;
+   Inc(Frames);DefaultFrame:=Not HaveIDAT;FrameData:=False;
+   If (Frames>Expected) Or (DefaultFrame And
+    ((Frames<>1) Or (FW<>CanvasW) Or (FH<>CanvasH))) Then Begin
+    Close(F);Exit;
+   End;
+   If Frames=1 Then Begin
+    FirstDefault:=DefaultFrame;FrameW:=FW;FrameH:=FH;
+    FrameX:=FX;FrameY:=FY;
+   End;
+  End Else If Animated And CT('f','d','A','T') Then Begin
+   If Not HaveControl Or Not HaveIDAT Or DefaultFrame Or
+    (Frames=0) Or (ChunkLen<4) Then Begin Close(F);Exit;End;
+   If R4<>Sequence Then Begin Close(F);Exit;End;
+   Inc(Sequence);Dec(ChunkLen,4);
+   If ChunkLen>0 Then FrameData:=True;
+   If Frames=1 Then Begin
+    If ChunkLen>16777216-IDATTotal Then Begin Close(F);Exit;End;
+    Inc(IDATTotal,ChunkLen);
+   End;
+   SkipChunkData;
   End Else If CT('I','D','A','T') Then Begin
-   Inc(IDATTotal, ChunkLen);
+   If Not HaveHeader Or (Animated And (Frames>0) And Not DefaultFrame)
+    Then Begin Close(F);Exit;End;
+   HaveIDAT:=True;
+   If DefaultFrame And (ChunkLen>0) Then FrameData:=True;
+   If Not Animated Or DefaultFrame Then Begin
+    If ChunkLen>16777216-IDATTotal Then Begin Close(F);Exit;End;
+    Inc(IDATTotal,ChunkLen);
+   End;
    SkipChunkData;
   End Else If CT('I','E','N','D') Then Begin
    SkipChunkData;
@@ -5268,6 +5338,13 @@ Begin
   End Else SkipChunkData;
  Until False;
 
+ If Not HaveHeader Or Not HaveIDAT Then Begin Close(F);Exit;End;
+ If Animated Then Begin
+  If Not HaveControl Or (Frames<>Expected) Or Not FrameData Then Begin
+   Close(F);Exit;
+  End;
+  PngW:=FrameW;PngH:=FrameH;
+ End;
  { valider color type / depth }
  Case ColorT Of
   0: Channels := 1;
@@ -5291,8 +5368,8 @@ Begin
  If DecSize > 16777216 Then Begin Close(F); Exit; End;     { > 16 MB : refus }
  If IDATTotal > 16777216 Then Begin Close(F); Exit; End;
 
- GetMem(IDATBuf, IDATTotal);
- GetMem(DecBuf, DecSize);
+ IDATBuf:=PByteArr(RotationAllocate(IDATTotal));
+ DecBuf:=PByteArr(RotationAllocate(DecSize));
  If (IDATBuf = Nil) Or (DecBuf = Nil) Then Begin
   If IDATBuf <> Nil Then FreeMem(IDATBuf, IDATTotal);
   If DecBuf  <> Nil Then FreeMem(DecBuf, DecSize);
@@ -5307,10 +5384,16 @@ Begin
  FLen := 0; FPos := 0; FEOF := False;
  For K := 0 To 7 Do R1;     { signature }
 
- IDATIdx := 0;
+ IDATIdx:=0;Frames:=0;
  Repeat
   If Not ReadChunkHdr Then Break;
-  If CT('I','D','A','T') Then Begin
+  If Animated And CT('f','c','T','L') Then Inc(Frames);
+  CopyData:=CT('I','D','A','T') And (Not Animated Or FirstDefault);
+  If Animated And Not FirstDefault And (Frames=1) And
+   CT('f','d','A','T') And (ChunkLen>=4) Then Begin
+   R4;Dec(ChunkLen,4);CopyData:=True;
+  End;
+  If CopyData Then Begin
    For K := 1 To ChunkLen Do Begin
     K2 := R1;
     If (IDATIdx < IDATTotal) And (K2 >= 0) Then Begin
@@ -5324,28 +5407,12 @@ Begin
  Until False;
  Close(F);
 
- { redimensionner le calque }
- If (PngW <> ImgW) Or (PngH <> ImgH) Then Begin
-  For K := 0 To MAX_LAYERS-1 Do If Layers[K].Used Then FreeLayer(K);
-  ImgW := PngW; ImgH := PngH;
-  If ImgW > 1024 Then ImgW := 1024;
-  If ImgH > 1024 Then ImgH := 1024;
-  AllocLayer(0, 'Arriere-plan', False);
-  LayerCount := 1;
-  ActiveLayer := 0;
- End Else Begin
-  For K := 0 To ImgW-1 Do
-   For K2 := 0 To ImgH-1 Do
-    SetLayerPixel(ActiveLayer, K, K2, 0);
+ Valid:=IDATIdx=IDATTotal;
+ IDATIdx:=0;DecWP:=0;
+ If Valid Then Valid:=Inflate And (DecWP=DecSize);
+ If Not Valid Then Begin
+  FreeMem(IDATBuf,IDATTotal);FreeMem(DecBuf,DecSize);Exit;
  End;
-
- IDATIdx := 0;
- DecWP := 0;
- If Not Inflate Then Begin
-  FreeMem(IDATBuf, IDATTotal); FreeMem(DecBuf, DecSize);
-  Exit;
- End;
-
  UnfilterAll;
 
  If ColorT = 3 Then Begin
@@ -5353,6 +5420,17 @@ Begin
   BuildPalRemap;
  End;
 
+ If Animated Then Begin
+  ClearUndoHistory;
+  For K:=0 To MAX_LAYERS-1 Do FreeLayer(K);
+  ImgW:=CanvasW;ImgH:=CanvasH;
+  AllocLayer(0,'Arriere-plan',False);
+  LayerCount:=1;ActiveLayer:=0;SelectionActive:=False;ZoomLevel:=100;
+ End Else If (PngW<>ImgW) Or (PngH<>ImgH) Then Begin
+  For K:=0 To MAX_LAYERS-1 Do If Layers[K].Used Then FreeLayer(K);
+  ImgW:=Min(1024,PngW);ImgH:=Min(1024,PngH);
+  AllocLayer(0,'Arriere-plan',False);LayerCount:=1;ActiveLayer:=0;
+ End;
  EmitPixels;
 
  FreeMem(IDATBuf, IDATTotal);
@@ -5360,8 +5438,14 @@ Begin
 
  CurrentFileName := FileName;
  ImageModified := False;
- LoadPNG := True;
+ LoadPNGImage := True;
 End;
+
+Function LoadPNG(Const FileName:String):Boolean;
+Begin LoadPNG:=LoadPNGImage(FileName,False);End;
+
+Function LoadAPNG(Const FileName:String):Boolean;
+Begin LoadAPNG:=LoadPNGImage(FileName,True);End;
 
 { ------------------------------------------------------------
    LoadPCX : PCX ZSoft, RLE par plan
@@ -6793,9 +6877,10 @@ End;
 Const
  FD_MAXENT = 256;
  FD_ROWH   = 10;
- FD_NUM_FILTERS = 12;
+ FD_NUM_FILTERS = 13;
  FD_FILTER_LABELS: Array[0..FD_NUM_FILTERS-1] of String[36] = (
   'Tous formats images',
+  'APNG (*.APNG)',
   'BGX MonsterBook (*.BGX)',
   'BMP (*.BMP;*.DIB)',
   'GIF (*.GIF)',
@@ -6844,18 +6929,19 @@ Begin
   0: FD_ExtMatches := (E='.BMP') Or (E='.DIB') Or (E='.GIF') Or (E='.PNG') Or
                       (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or
                       (E='.TIF') Or (E='.TIFF') Or (E='.PSD') Or
-                      (E='.PPM') Or (E='.BGX');
-  1: FD_ExtMatches := E='.BGX';
-  2: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
-  3: FD_ExtMatches := E='.GIF';
-  4: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
-  5: FD_ExtMatches := E='.PCX';
-  6: FD_ExtMatches := E='.PNG';
-  7: FD_ExtMatches := E='.PPM';
-  8: FD_ExtMatches := E='.PSD';
-  9: FD_ExtMatches := E='.TGA';
-  10: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
-  11: FD_ExtMatches := True;
+                      (E='.PPM') Or (E='.BGX') Or (E='.APNG');
+  1: FD_ExtMatches := E='.APNG';
+  2: FD_ExtMatches := E='.BGX';
+  3: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
+  4: FD_ExtMatches := E='.GIF';
+  5: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
+  6: FD_ExtMatches := E='.PCX';
+  7: FD_ExtMatches := E='.PNG';
+  8: FD_ExtMatches := E='.PPM';
+  9: FD_ExtMatches := E='.PSD';
+  10: FD_ExtMatches := E='.TGA';
+  11: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
+  12: FD_ExtMatches := True;
  Else FD_ExtMatches := False; End;
 End;
 
@@ -7399,7 +7485,7 @@ Const
   'Portable Pixmap (*.PPM)' );
  FD_SAVE_EXT: Array[0..FD_SAVE_NUM-1] of String[4] = (
   '.BMP', '.PSD', '.TGA', '.PPM' );
- FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (2, 8, 9, 7);
+ FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (3, 9, 10, 8);
 
 Var
  FD_SaveFilterIdx: Integer;
@@ -7850,6 +7936,7 @@ Begin
  Else If Ext='.GIF' Then Loaded := LoadGIF(FN)
  Else If (Ext='.JPG') Or (Ext='.JPEG') Then Loaded := LoadJPEG(FN)
  Else If Ext='.PNG' Then Loaded := LoadPNG(FN)
+ Else If Ext='.APNG' Then Loaded := LoadAPNG(FN)
  Else If Ext='.BGX' Then Loaded := LoadBGX(FN)
  Else If Ext='.PCX' Then Loaded := LoadPCX(FN)
  Else If Ext='.PSD' Then Loaded := LoadPSD(FN)

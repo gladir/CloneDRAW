@@ -6877,10 +6877,11 @@ End;
 Const
  FD_MAXENT = 256;
  FD_ROWH   = 10;
- FD_NUM_FILTERS = 13;
+ FD_NUM_FILTERS = 14;
  FD_FILTER_LABELS: Array[0..FD_NUM_FILTERS-1] of String[36] = (
   'Tous formats images',
   'APNG (*.APNG)',
+  'ARW Bayer (*.ARW)',
   'BGX MonsterBook (*.BGX)',
   'BMP (*.BMP;*.DIB)',
   'GIF (*.GIF)',
@@ -6929,19 +6930,20 @@ Begin
   0: FD_ExtMatches := (E='.BMP') Or (E='.DIB') Or (E='.GIF') Or (E='.PNG') Or
                       (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or
                       (E='.TIF') Or (E='.TIFF') Or (E='.PSD') Or
-                      (E='.PPM') Or (E='.BGX') Or (E='.APNG');
+                      (E='.PPM') Or (E='.BGX') Or (E='.APNG') Or (E='.ARW');
   1: FD_ExtMatches := E='.APNG';
-  2: FD_ExtMatches := E='.BGX';
-  3: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
-  4: FD_ExtMatches := E='.GIF';
-  5: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
-  6: FD_ExtMatches := E='.PCX';
-  7: FD_ExtMatches := E='.PNG';
-  8: FD_ExtMatches := E='.PPM';
-  9: FD_ExtMatches := E='.PSD';
-  10: FD_ExtMatches := E='.TGA';
-  11: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
-  12: FD_ExtMatches := True;
+  2: FD_ExtMatches := E='.ARW';
+  3: FD_ExtMatches := E='.BGX';
+  4: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
+  5: FD_ExtMatches := E='.GIF';
+  6: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
+  7: FD_ExtMatches := E='.PCX';
+  8: FD_ExtMatches := E='.PNG';
+  9: FD_ExtMatches := E='.PPM';
+  10: FD_ExtMatches := E='.PSD';
+  11: FD_ExtMatches := E='.TGA';
+  12: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
+  13: FD_ExtMatches := True;
  Else FD_ExtMatches := False; End;
 End;
 
@@ -7485,7 +7487,7 @@ Const
   'Portable Pixmap (*.PPM)' );
  FD_SAVE_EXT: Array[0..FD_SAVE_NUM-1] of String[4] = (
   '.BMP', '.PSD', '.TGA', '.PPM' );
- FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (3, 9, 10, 8);
+ FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (4, 10, 11, 9);
 
 Var
  FD_SaveFilterIdx: Integer;
@@ -7926,6 +7928,293 @@ Begin
  ZoomLevel:=100;LoadBGX:=True;
 End;
 
+{ ARW TIFF CFA Bayer 2 x 2, bandes 8/16 bits non compressees. }
+Type
+ TARBytes=Array[0..134217727] Of Byte;
+ PARBytes=^TARBytes;
+ TDNEntry = Record Tag,Kind: Word; Count,Offset: LongInt; End;
+ TDNState = Record
+  Data,Raw,RGB: PARBytes;
+  Size,RawSize,RGBSize,IFD: LongInt;
+  Width,Height,OutWidth,OutHeight,Bits,Orientation,EntryCount: Integer;
+  Little,Bad:Boolean;
+  Black,White: Double;
+  Pattern: Array[0..3] Of Byte;
+  Neutral: Array[0..2] Of Double;
+  Entries: Array[0..255] Of TDNEntry;
+ End;
+ PDNState = ^TDNState;
+
+Function DNWord(Var D: TDNState; P: LongInt): Word;
+Begin
+ DNWord:=0; If D.Bad Then Exit;
+ If (P<0) Or (P>D.Size-2) Then Begin D.Bad:=True; Exit; End;
+ If D.Little Then DNWord:=Word(D.Data^[P]) Or (Word(D.Data^[P+1]) Shl 8)
+ Else DNWord:=(Word(D.Data^[P]) Shl 8) Or D.Data^[P+1];
+End;
+
+Function DNLong(Var D: TDNState; P: LongInt): LongWord;
+Var A,B: LongWord;
+Begin
+ A:=DNWord(D,P); B:=DNWord(D,P+2);
+ If D.Little Then DNLong:=A Or (B Shl 16) Else DNLong:=(A Shl 16) Or B;
+End;
+
+Function DNFind(Var D: TDNState; Tag: Word): Integer;
+Var I: Integer;
+Begin
+ DNFind:=-1; For I:=0 To D.EntryCount-1 Do If D.Entries[I].Tag=Tag Then Begin
+   DNFind:=I; Exit; End;
+End;
+
+Function DNValue(Var D: TDNState; E: Integer; Index: LongInt): Double;
+Var P,Step: LongInt; A,B: LongWord;
+Begin
+ DNValue:=0;
+ If (E<0) Or (E>=D.EntryCount) Then Begin D.Bad:=True; Exit; End;
+ With D.Entries[E] Do Begin
+  If (Index<0) Or (Index>=Count) Then Begin D.Bad:=True; Exit; End;
+  Case Kind Of 1,2,6,7: Step:=1; 3,8: Step:=2; 4,9,11: Step:=4; 5,10,12:
+   Step:=8;
+  Else Begin D.Bad:=True; Exit; End; End;
+  P:=Offset+Index*Step;
+  Case Kind Of
+   1,2,7: DNValue:=D.Data^[P];
+   3: DNValue:=DNWord(D,P);
+   4: DNValue:=DNLong(D,P);
+   5,10: Begin
+    A:=DNLong(D,P); B:=DNLong(D,P+4);
+    If B=0 Then Begin D.Bad:=True; Exit; End;
+    If Kind=10 Then DNValue:=LongInt(A)/(LongInt(B)*1.0) Else
+   DNValue:=A/(B*1.0);
+   End;
+  Else D.Bad:=True;
+  End;
+ End;
+End;
+
+Function DNScalar(Var D: TDNState; Tag: Word; Default: Double): Double;
+Var E: Integer;
+Begin
+ E:=DNFind(D,Tag); DNScalar:=Default;
+ If E>=0 Then Begin
+  If D.Entries[E].Count<>1 Then D.Bad:=True Else DNScalar:=DNValue(D,E,0);
+ End;
+End;
+
+Function DNDirectory(Var D: TDNState): Boolean;
+Var N,I,J,K,Step: Integer; P,Bytes: LongInt; V: LongWord;
+Begin
+ DNDirectory:=False;
+ If D.Size<8 Then Exit;
+ D.Little:=(D.Data^[0]=73) And (D.Data^[1]=73);
+ If Not D.Little And Not ((D.Data^[0]=77) And (D.Data^[1]=77)) Then Exit;
+ If DNWord(D,2)<>42 Then Exit;
+ V:=DNLong(D,4); If V>LongWord(D.Size-2) Then Exit; D.IFD:=V;
+ N:=DNWord(D,D.IFD);
+ If (N<1) Or (N>256) Or (LongInt(N)*12+6>D.Size-D.IFD) Then Exit;
+ If DNLong(D,D.IFD+2+LongInt(N)*12)<>0 Then Exit;
+ D.EntryCount:=N;
+ For I:=0 To N-1 Do Begin
+  P:=D.IFD+2+LongInt(I)*12;
+  With D.Entries[I] Do Begin
+   Tag:=DNWord(D,P); Kind:=DNWord(D,P+2); V:=DNLong(D,P+4);
+   If (V=0) Or (V>LongWord(D.Size)) Then Exit; Count:=V;
+   For J:=0 To I-1 Do If D.Entries[J].Tag=Tag Then Exit;
+   Case Kind Of 1,2,6,7: Step:=1; 3,8: Step:=2; 4,9,11,13: Step:=4; 5,10,12:
+   Step:=8;
+   Else Exit; End;
+   If Count>D.Size Div Step Then Exit; Bytes:=Count*Step;
+   If Bytes<=4 Then Offset:=P+8 Else Begin
+    V:=DNLong(D,P+8); If V>LongWord(D.Size) Then Exit; Offset:=LongInt(V);
+   End;
+   If (Offset<0) Or (Offset>D.Size-Bytes) Then Exit;
+  End;
+ End;
+ K:=DNFind(D,50706);If K<0 Then Exit;
+ If (D.Entries[K].Kind<>1) Or (D.Entries[K].Count<>4) Or
+  (DNValue(D,K,0)<>1) Then Exit;
+ DNDirectory:=Not D.Bad;
+End;
+
+{ BMP2ARW.PAS choisit la couleur CFA avec l'indice de ligne BMP,
+  dont la parite est opposee a la ligne de sortie lorsque la hauteur est paire.
+  Ne corriger que le producteur identifie ; respecter les tags des autres TIFF.
+   }
+Function DNCloneRaw(Var D: TDNState; Const Producer: String): Boolean;
+Var E,I: Integer; S: String;
+Begin
+ DNCloneRaw:=False; E:=DNFind(D,305); If E<0 Then Exit;
+ If (D.Entries[E].Kind<>2) Or (D.Entries[E].Count<>18) Then Exit;
+ S:=''; For I:=0 To 17 Do S:=S+Chr(D.Data^[D.Entries[E].Offset+I]);
+ DNCloneRaw:=S='CloneDRAW '+Producer+#0;
+End;
+
+Function DNDecode(Var D: TDNState): Boolean;
+Var E,F,I,J,X,Y,C,DX,DY,N,XX,YY,OX,OY,W,H,Value,Orientation: Integer;
+    Rows,StripCount,Strip,Offset,Count,Needed,Pixel,P,Sum: LongInt;
+    V,A: Double;
+Begin
+ DNDecode:=False;
+ V:=DNScalar(D,256,0); If (V<1) Or (V>4096) Then Exit; D.Width:=Round(V);
+ V:=DNScalar(D,257,0); If (V<1) Or (V>4096) Then Exit; D.Height:=Round(V);
+ V:=DNScalar(D,258,0); If (V<>8) And (V<>16) Then Exit; D.Bits:=Round(V);
+ If (DNScalar(D,259,1)<>1) Or (DNScalar(D,262,0)<>32803) Or
+    (DNScalar(D,277,1)<>1) Or (DNScalar(D,284,1)<>1) Or
+    (DNScalar(D,339,1)<>1) Or (DNScalar(D,50711,1)<>1) Or
+    (DNScalar(D,266,1)<>1) Then Exit;
+ V:=DNScalar(D,274,1); If (V<1) Or (V>8) Then Exit; D.Orientation:=Round(V);
+ E:=DNFind(D,33421); If (E<0) Then Exit;
+ If (D.Entries[E].Count<>2) Or (DNValue(D,E,0)<>2) Or (DNValue(D,E,1)<>2) Then
+   Exit;
+ E:=DNFind(D,33422); If E<0 Then Exit; If D.Entries[E].Count<>4 Then Exit;
+ For I:=0 To 3 Do Begin V:=DNValue(D,E,I); If (V<0) Or (V>2) Then Exit;
+   D.Pattern[I]:=Round(V); End;
+ { Les quatre motifs Bayer RGB : rouge/bleu opposes et deux verts. }
+ For C:=0 To 2 Do Begin
+  N:=0; For I:=0 To 3 Do If D.Pattern[I]=C Then Inc(N);
+  If ((C=1) And (N<>2)) Or ((C<>1) And (N<>1)) Then Exit;
+ End;
+ If D.Pattern[0]=1 Then Begin If D.Pattern[3]<>1 Then Exit; End
+ Else If (D.Pattern[3]=1) Or (D.Pattern[0]=D.Pattern[3]) Then Exit;
+ If ((D.Height And 1)=0) And
+    DNCloneRaw(D,'BMP2ARW') Then Begin
+  I:=D.Pattern[0]; D.Pattern[0]:=D.Pattern[2]; D.Pattern[2]:=I;
+  I:=D.Pattern[1]; D.Pattern[1]:=D.Pattern[3]; D.Pattern[3]:=I;
+ End;
+ E:=DNFind(D,50710); If E>=0 Then Begin
+  If D.Entries[E].Count<>3 Then Exit;
+  For I:=0 To 2 Do If DNValue(D,E,I)<>I Then Exit;
+ End;
+ E:=DNFind(D,50721); If E>=0 Then Begin
+  If D.Entries[E].Count<>9 Then Exit;
+  For I:=0 To 8 Do Begin V:=DNValue(D,E,I); If I Mod 4=0 Then A:=1 Else A:=0; If
+   Abs(V-A)>0.000001 Then Exit; End;
+ End;
+ For I:=0 To 2 Do D.Neutral[I]:=1;
+ E:=DNFind(D,50728); If E>=0 Then Begin
+  If D.Entries[E].Count<>3 Then Exit;
+  For I:=0 To 2 Do Begin V:=DNValue(D,E,I); If (V<0.000001) Or (V>1000000) Then
+   Exit; D.Neutral[I]:=V; End;
+ End;
+ D.Black:=DNScalar(D,50714,0); If D.Bits=8 Then V:=255 Else V:=65535;
+ D.White:=DNScalar(D,50717,V);
+ If (D.Black<0) Or (D.White>V) Or (D.White<=D.Black) Then Exit;
+ V:=DNScalar(D,278,D.Height); If (V<1) Or (V>2147483647.0) Then Exit;
+   Rows:=Round(V);
+ StripCount:=(D.Height-1) Div Rows+1;
+ E:=DNFind(D,273); F:=DNFind(D,279); If (E<0) Or (F<0) Then Exit;
+ If (D.Entries[E].Count<>StripCount) Or (D.Entries[F].Count<>StripCount) Or
+   D.Bad Then Exit;
+ D.RawSize:=LongInt(D.Width)*D.Height*2;
+   D.Raw:=PARBytes(RotationAllocate(D.RawSize)); If D.Raw=Nil Then Exit;
+ For Strip:=0 To StripCount-1 Do Begin
+  V:=DNValue(D,E,Strip); If (V<0) Or (V>D.Size) Then Exit; Offset:=Round(V);
+  V:=DNValue(D,F,Strip); If (V<0) Or (V>D.Size-Offset) Then Exit;
+   Count:=Round(V);
+  Needed:=Rows; If Needed>D.Height-Strip*Rows Then Needed:=D.Height-Strip*Rows;
+  Needed:=Needed*D.Width*(D.Bits Div 8); If Count<>Needed Then Exit;
+  For Pixel:=0 To Needed Div (D.Bits Div 8)-1 Do Begin
+   P:=Offset+Pixel*(D.Bits Div 8);
+   If D.Bits=8 Then Value:=D.Data^[P] Else Begin
+    { Word peut depasser Integer (mode TP). Copier les octets directement. }
+    If D.Little Then Begin D.Raw^[(Strip*Rows*D.Width+Pixel)*2]:=D.Data^[P];
+   D.Raw^[(Strip*Rows*D.Width+Pixel)*2+1]:=D.Data^[P+1]; End
+    Else Begin D.Raw^[(Strip*Rows*D.Width+Pixel)*2]:=D.Data^[P+1];
+   D.Raw^[(Strip*Rows*D.Width+Pixel)*2+1]:=D.Data^[P]; End;
+   End;
+   If D.Bits=8 Then Begin D.Raw^[(Strip*Rows*D.Width+Pixel)*2]:=Value;
+   D.Raw^[(Strip*Rows*D.Width+Pixel)*2+1]:=0; End;
+  End;
+ End;
+ W:=D.Width; H:=D.Height; Orientation:=D.Orientation;
+ D.OutWidth:=W; D.OutHeight:=H; If Orientation>=5 Then Begin D.OutWidth:=H;
+   D.OutHeight:=W; End;
+ D.RGBSize:=LongInt(W)*H*3; D.RGB:=PARBytes(RotationAllocate(D.RGBSize)); If
+   D.RGB=Nil Then Exit;
+ For Y:=0 To H-1 Do For X:=0 To W-1 Do Begin
+  OX:=X; OY:=Y;
+  Case Orientation Of
+   2: OX:=W-1-X; 3: Begin OX:=W-1-X; OY:=H-1-Y; End; 4: OY:=H-1-Y;
+   5: Begin OX:=Y; OY:=X; End; 6: Begin OX:=H-1-Y; OY:=X; End;
+   7: Begin OX:=H-1-Y; OY:=W-1-X; End; 8: Begin OX:=Y; OY:=W-1-X; End;
+  End;
+  For C:=0 To 2 Do Begin
+   Sum:=0; N:=0;
+   If D.Pattern[(Y And 1)*2+(X And 1)]=C Then Begin
+    P:=(LongInt(Y)*W+X)*2; Sum:=LongInt(D.Raw^[P])+LongInt(D.Raw^[P+1])*256;
+   N:=1;
+   End Else For DY:=-1 To 1 Do For DX:=-1 To 1 Do Begin
+    XX:=X+DX; YY:=Y+DY;
+    If (XX>=0) And (XX<W) And (YY>=0) And (YY<H) Then
+     If D.Pattern[(YY And 1)*2+(XX And 1)]=C Then Begin
+      P:=(LongInt(YY)*W+XX)*2;
+   Inc(Sum,LongInt(D.Raw^[P])+LongInt(D.Raw^[P+1])*256); Inc(N);
+     End;
+   End;
+   V:=0; If N>0 Then V:=(Sum/(N*1.0)-D.Black)/(D.White-D.Black)/D.Neutral[C];
+   If V<0 Then V:=0; If V>1 Then V:=1;
+   D.RGB^[(LongInt(OY)*D.OutWidth+OX)*3+C]:=Round(V*255);
+  End;
+ End;
+ DNDecode:=Not D.Bad;
+End;
+
+Function DNReadDirectory(Const Name: String; Var D: TDNState): Boolean;
+Var F: File; OldMode: Byte; Bytes: LongInt; Failed: Boolean;
+Begin
+ DNReadDirectory:=False; Assign(F,Name); OldMode:=FileMode; FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=8) And (D.Size<=134217728) Then Begin
+  D.Data:=PARBytes(RotationAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}Failed:=(IOResult<>0) Or
+   (Bytes<>D.Size); End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ DNReadDirectory:=DNDirectory(D);
+End;
+
+Function DNRead(Const Name: String; Var D: TDNState): Boolean;
+Begin
+ DNRead:=False;
+ If DNReadDirectory(Name,D) Then DNRead:=DNDecode(D);
+End;
+
+
+Function LoadARW(Const Name:String):Boolean;
+Var D:PDNState;Pixels:PByteArr;Size,I,J:LongInt;K:Integer;
+Begin
+ LoadARW:=False;Pixels:=Nil;
+ D:=PDNState(RotationAllocate(SizeOf(TDNState)));If D=Nil Then Exit;
+ FillChar(D^,SizeOf(TDNState),0);
+ If DNRead(Name,D^) Then Begin
+  Size:=LongInt(D^.OutWidth)*D^.OutHeight;
+  Pixels:=PByteArr(RotationAllocate(Size));
+  If Pixels<>Nil Then Begin
+   For I:=0 To Size-1 Do Begin
+    J:=I*3;
+    Pixels^[I]:=BlurPalette(D^.RGB^[J],D^.RGB^[J+1],D^.RGB^[J+2],
+     0,0,False);
+   End;
+   ClearUndoHistory;
+   For K:=0 To MAX_LAYERS-1 Do FreeLayer(K);
+   ImgW:=D^.OutWidth;ImgH:=D^.OutHeight;LayerCount:=1;ActiveLayer:=0;
+   FillChar(Layers[0],SizeOf(TLayer),0);
+   Layers[0].Used:=True;Layers[0].Visible:=True;Layers[0].Opacity:=100;
+   Layers[0].Name:='Arriere-plan';Layers[0].Pixels:=Pixels;
+   CurrentFileName:=Name;ImageModified:=False;SelectionActive:=False;
+   ZoomLevel:=100;LoadARW:=True;
+  End;
+ End;
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Raw<>Nil Then FreeMem(D^.Raw,D^.RawSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TDNState));
+End;
+
 Function LoadFileByExt(Const FN: String; Var ErrMsg: String): Boolean;
 Var Ext: String;Loaded:Boolean;
 Begin
@@ -7937,6 +8226,7 @@ Begin
  Else If (Ext='.JPG') Or (Ext='.JPEG') Then Loaded := LoadJPEG(FN)
  Else If Ext='.PNG' Then Loaded := LoadPNG(FN)
  Else If Ext='.APNG' Then Loaded := LoadAPNG(FN)
+ Else If Ext='.ARW' Then Loaded := LoadARW(FN)
  Else If Ext='.BGX' Then Loaded := LoadBGX(FN)
  Else If Ext='.PCX' Then Loaded := LoadPCX(FN)
  Else If Ext='.PSD' Then Loaded := LoadPSD(FN)

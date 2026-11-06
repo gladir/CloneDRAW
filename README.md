@@ -336,6 +336,10 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 			<td><b>SCAN.PAS</b></td>
 			<td>Cette commande permet de numériser un document avec un scanner (Windows : WIA, Linux : SANE) et d'enregistrer l'image en BMP, PNG, JPEG, TIFF, PNM ou GIF. Elle supporte les options /LIST, /DEVICE, /PREVIEW, /DPI, /COLOR, /SOURCE, /FORMAT, /OUTPUT et /UI.</td>
 		</tr>
+		<tr>
+			<td><b>SR.PAS</b></td>
+			<td>Cette commande permet de lancer un clone de SilverRun (SILVERRUN-BPM), éditeur de diagrammes de flux de données (DFD) hiérarchiques : processus, magasins, entités externes, flux, décomposition, vérification d'intégrité, fichiers .SRD, export SVG/CSV. Langue : français par défaut, LANGUAGE=EN, GR, SP ou IT.</td>
+		</tr>
 	    <tr>
     		<td><b>VISIO.PAS</b></td>
       		<td>Cette commande permet de lancer un clone de Visio.</td>
@@ -405,3 +409,5 @@ Par exemple, si vous voulez compiler ICO2XBM.PAS, vous devrez tapez la commande 
 Clone d'ArtWorx (ARTWORX.PAS) : editeur de dessin vectoriel oriente objet (Atari ST), avec menus deroulants, boites a outils de dessin / chemin / image / texte, rotation libre, groupes, calques, pages, annuler, fichiers .CWG, exports EPS / SVG / ASCII et import BMP.
 
 Clone de Calamus (CALAMUS.PAS) : logiciel de PAO (publication assistee par ordinateur) pour Atari ST, avec menus deroulants (Fichier, Page, Texte, Vue, Extras), boite a outils hierarchique a icones, cadres de texte / graphiques / raster, 15 formes, rotation libre du texte, polices simulees, styles et alignements, pages multiples, format de page et numerotation, reperes et grille, annuler, fichiers .CDK, import BMP, export de texte et sortie PostScript. Interface en francais, en anglais (LANGUAGE=EN) ou en allemand (LANGUAGE=GR).
+
+Clone de SilverRun (SR.PAS) : editeur de diagrammes de flux de donnees (DFD) hierarchiques, avec menus deroulants et sous-menus (Fichier, Edition, Affichage, Modele, Projet, Outils, Fenetre, Aide), barre d'outils, palette flottante, fenetres multiples, processus / magasins / entites externes / flux, decomposition en diagrammes enfants, annuler/refaire, dictionnaires, verification d'integrite, rapports, export SVG/CSV et fichiers .SRD. Les fichiers .DFD natifs de SilverRun sont detectes mais pas encore lus. Interface en francais, en anglais (LANGUAGE=EN), en allemand (LANGUAGE=GR), en espagnol (LANGUAGE=SP) ou en italien (LANGUAGE=IT).

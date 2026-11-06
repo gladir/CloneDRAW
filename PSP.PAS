@@ -123,6 +123,8 @@ Const
  OPTIONSBAR_H    = 22;
  TOOLBAR_WIDTH   = 56;
  LAYERS_WIDTH    = 110;
+ SWATCHES_HEIGHT = 24;
+ LAYER_FOOTER_H  = 18;
  STATUSBAR_HEIGHT= 16;
 
  UI_BG_DARK   = 8;
@@ -924,7 +926,7 @@ Begin
 End;
 
 Procedure DrawOptionsBar;
-Var Y: Integer; S: String;
+Var Y, SizeX, BoxX: Integer; S: String;
 Begin
  Y := MENUBAR_HEIGHT;
  FillRect(0, Y, ScreenWidth-1, Y+OPTIONSBAR_H-1, UI_BG_PANEL);
@@ -933,13 +935,18 @@ Begin
  SetColor(UI_TEXT);
  OutTextXY(6, Y+6, 'Outil:');
  SetColor(UI_ACCENT);
- If (CurrentTool<MAX_TOOLS) Then OutTextXY(50, Y+6, Tools[CurrentTool].Name);
+ SizeX:=164;
+ If CurrentTool<MAX_TOOLS Then Begin
+  OutTextXY(58,Y+6,Tools[CurrentTool].Name);
+  SizeX:=Max(SizeX,58+TextWidth(Tools[CurrentTool].Name)+8);
+ End;
  SetColor(UI_TEXT);
- S := 'Taille:';
- OutTextXY(180, Y+6, S);
- DrawBevel(220, Y+4, 268, Y+OPTIONSBAR_H-5, False);
+ S:='Taille:';
+ OutTextXY(SizeX,Y+6,S);
+ BoxX:=Max(220,SizeX+TextWidth(S)+8);
+ DrawBevel(BoxX,Y+4,BoxX+48,Y+OPTIONSBAR_H-5,False);
  SetColor(UI_TEXT);
- OutTextXY(225, Y+6, IntToStr(BrushSize) + ' px');
+ OutTextXY(BoxX+5,Y+6,IntToStr(BrushSize)+' px');
  OutTextXY(300, Y+6, 'Zoom:'+IntToStr(ZoomLevel)+'%');
  If (CurrentTool<MAX_TOOLS) Then Begin
   SetColor(DarkGray);
@@ -1115,7 +1122,7 @@ Begin
  PX1 := ScreenWidth - LAYERS_WIDTH;
  PY1 := MENUBAR_HEIGHT + OPTIONSBAR_H;
  PX2 := ScreenWidth - 1;
- PY2 := ScreenHeight - STATUSBAR_HEIGHT - 1;
+ PY2 := ScreenHeight - STATUSBAR_HEIGHT - SWATCHES_HEIGHT - 1;
  FillRect(PX1, PY1, PX2, PY2, UI_BG_PANEL);
  SetColor(UI_SHADOW);
  Line(PX1, PY1, PX1, PY2);
@@ -1124,6 +1131,7 @@ Begin
  OutTextXY(PX1+6, PY1+4, 'Calques');
  Y := PY1 + 20;
  For I:=LayerCount-1 DownTo 0 Do Begin
+  If Y+18>=PY2-LAYER_FOOTER_H Then Break;
   If I=ActiveLayer Then FillRect(PX1+2, Y, PX2-2, Y+18, UI_ACCENT);
   SetColor(UI_SHADOW);
   Rectangle(PX1+4, Y+2, PX1+22, Y+16);
@@ -1140,10 +1148,9 @@ Begin
   End;
   OutTextXY(PX1+38, Y+5, S);
   Y := Y + 20;
-  If Y > PY2-44 Then Break;
  End;
  SetColor(UI_SHADOW);
- Line(PX1, PY2-18, PX2, PY2-18);
+ Line(PX1, PY2-LAYER_FOOTER_H, PX2, PY2-LAYER_FOOTER_H);
  SetColor(UI_TEXT);
  OutTextXY(PX1+4,  PY2-14, '[+]');
  OutTextXY(PX1+28, PY2-14, '[D]');
@@ -1155,7 +1162,9 @@ Procedure DrawSwatchesBar;
 Var PX1, PY1, X, I: Integer;
 Begin
  PX1 := ScreenWidth - LAYERS_WIDTH;
- PY1 := ScreenHeight - STATUSBAR_HEIGHT - 32;
+ PY1 := ScreenHeight - STATUSBAR_HEIGHT - SWATCHES_HEIGHT;
+ FillRect(PX1,PY1,ScreenWidth-1,ScreenHeight-STATUSBAR_HEIGHT-1,UI_BG_PANEL);
+ Inc(PY1,3);
  SetColor(UI_SHADOW);
  Line(PX1, PY1-1, ScreenWidth-1, PY1-1);
  For I:=0 To 15 Do Begin
@@ -16829,26 +16838,28 @@ Var PX1, PY1, I, X, Y: Integer;
 Begin
  SwatchHitTest := -1;
  PX1 := ScreenWidth - LAYERS_WIDTH;
- PY1 := ScreenHeight - STATUSBAR_HEIGHT - 32;
+ PY1 := ScreenHeight - STATUSBAR_HEIGHT - SWATCHES_HEIGHT + 3;
  For I:=0 To 15 Do Begin
   X := PX1 + 4 + (I Mod 8)*12;
   Y := PY1 + (I Div 8)*10;
-  If (MX>=X) And (MX<X+10) And (MY>=Y) And (MY<Y+8) Then Begin
+  If (MX>=X) And (MX<=X+10) And (MY>=Y) And (MY<=Y+8) Then Begin
    SwatchHitTest := I; Exit;
   End;
  End;
 End;
 
 Function LayerHitTest(MX, MY: Integer): Integer;
-Var PX1, PY1, PX2, Y, I: Integer;
+Var PX1, PY1, PX2, PY2, Y, I: Integer;
 Begin
  LayerHitTest := -1;
  PX1 := ScreenWidth - LAYERS_WIDTH;
  PY1 := MENUBAR_HEIGHT + OPTIONSBAR_H;
  PX2 := ScreenWidth - 1;
  If (MX<PX1) Or (MX>PX2) Then Exit;
+ PY2:=ScreenHeight-STATUSBAR_HEIGHT-SWATCHES_HEIGHT-1;
  Y := PY1 + 20;
  For I:=LayerCount-1 DownTo 0 Do Begin
+  If Y+18>=PY2-LAYER_FOOTER_H Then Break;
   If (MY>=Y) And (MY<Y+18) Then Begin
    LayerHitTest := I; Exit;
   End;

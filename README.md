@@ -91,7 +91,7 @@ Aperçu du clone de Adobe Première :
 
 <img width="639" height="477" alt="image" src="https://github.com/user-attachments/assets/126ecf47-a76b-4feb-961c-0ca2d4a42287" />
 
-Apercu de VISIO :
+Apercu de Visior :
 
 <img width="640" height="481" alt="image" src="https://github.com/user-attachments/assets/82c303ab-0a34-4390-a8b2-bec1bcb5931a" />
 
@@ -342,7 +342,7 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 		</tr>
 	    <tr>
     		<td><b>VISIO.PAS</b></td>
-      		<td>Cette commande permet de lancer un clone de Visio.</td>
+      		<td>Cette commande permet de lancer Visior.</td>
     	</tr>
 <tr>
 			<td><b>XBM2ASM.PAS</b></td>

@@ -4772,7 +4772,8 @@ End;
    LoadPNG : signature + chunks + DEFLATE + filtres
   ------------------------------------------------------------ }
 
-Function LoadPNGImage(Const FileName:String;Animated:Boolean):Boolean;
+Function LoadPNGImage(Const FileName:String;Animated:Boolean;
+ Start,ResourceSize:LongInt):Boolean;
 Type
  PByteArr = ^TByteArr;
  TByteArr = Array[0..0] of Byte;
@@ -4829,10 +4830,15 @@ Var
  SeekOrigPos: LongInt;
 
  Function R1: Integer;
+ Var Wanted:LongInt;
  Begin
   If FPos >= FLen Then Begin
    If FEOF Then Begin R1 := -1; Exit; End;
-   BlockRead(F, FBuf, 16384, Got);
+   Wanted:=FileBytes-FilePos(F);
+   If Wanted<=0 Then Begin FEOF:=True;R1:=-1;Exit;End;
+   If Wanted>16384 Then Wanted:=16384;
+   {$I-}BlockRead(F,FBuf,Wanted,Got);{$I+}
+   If IOResult<>0 Then Got:=0;
    FLen := Got; FPos := 0;
    If Got = 0 Then Begin FEOF := True; R1 := -1; Exit; End;
   End;
@@ -5176,7 +5182,7 @@ Var
          Idx := GetSample(RowOff, X);
          If Idx >= PalCount Then Idx := 0;
          PixIdx := PalRemap[Idx];
-         If Animated And (Idx<PalCount) Then Begin
+         If (Animated Or (Start>0)) And (Idx<PalCount) Then Begin
           Alpha:=AlphaTable[Idx];R:=PalR[Idx];G:=PalG[Idx];B:=PalB[Idx];
          End;
         End;
@@ -5207,7 +5213,7 @@ Var
         End;
      Else PixIdx := 0;
     End;
-    If Animated And (Alpha<255) Then
+    If (Animated Or (Start>0)) And (Alpha<255) Then
      PixIdx:=NearestVGA((LongInt(R)*Alpha+255*(255-LongInt(Alpha))) Div 255,
       (LongInt(G)*Alpha+255*(255-LongInt(Alpha))) Div 255,
       (LongInt(B)*Alpha+255*(255-LongInt(Alpha))) Div 255);
@@ -5249,6 +5255,13 @@ Begin
 
  {$I-}FileBytes:=FileSize(F);{$I+}
  If IOResult<>0 Then Begin Close(F);Exit;End;
+ If Start>0 Then Begin
+  If (Start>FileBytes) Or (ResourceSize>FileBytes-Start) Then
+   Begin Close(F);Exit;End;
+  FileBytes:=Start+ResourceSize;
+  {$I-}Seek(F,Start);{$I+}
+  If IOResult<>0 Then Begin Close(F);Exit;End;
+ End;
  { lire signature }
  For K := 0 To 7 Do Sig[K] := R1 And $FF;
  OkSig := True;
@@ -5283,7 +5296,7 @@ Begin
    For K := LongInt(PalCount)*3 To ChunkLen-1 Do R1;
    R4;
    HasPal := True;
-  End Else If Animated And CT('t','R','N','S') And (ColorT=3) Then Begin
+  End Else If (Animated Or (Start>0)) And CT('t','R','N','S') And (ColorT=3) Then Begin
    If ChunkLen>256 Then Begin Close(F);Exit;End;
    For K:=0 To ChunkLen-1 Do AlphaTable[K]:=R1;
    R4;
@@ -5381,6 +5394,10 @@ Begin
  Assign(F, FileName);
  {$I-} Reset(F, 1); {$I+}
  If IOResult <> 0 Then Begin FreeMem(IDATBuf, IDATTotal); FreeMem(DecBuf, DecSize); Exit; End;
+ {$I-}Seek(F,Start);{$I+}
+ If IOResult<>0 Then Begin
+  Close(F);FreeMem(IDATBuf,IDATTotal);FreeMem(DecBuf,DecSize);Exit;
+ End;
  FLen := 0; FPos := 0; FEOF := False;
  For K := 0 To 7 Do R1;     { signature }
 
@@ -5420,7 +5437,7 @@ Begin
   BuildPalRemap;
  End;
 
- If Animated Then Begin
+ If Animated Or (Start>0) Then Begin
   ClearUndoHistory;
   For K:=0 To MAX_LAYERS-1 Do FreeLayer(K);
   ImgW:=CanvasW;ImgH:=CanvasH;
@@ -5442,10 +5459,10 @@ Begin
 End;
 
 Function LoadPNG(Const FileName:String):Boolean;
-Begin LoadPNG:=LoadPNGImage(FileName,False);End;
+Begin LoadPNG:=LoadPNGImage(FileName,False,0,0);End;
 
 Function LoadAPNG(Const FileName:String):Boolean;
-Begin LoadAPNG:=LoadPNGImage(FileName,True);End;
+Begin LoadAPNG:=LoadPNGImage(FileName,True,0,0);End;
 
 { ------------------------------------------------------------
    LoadPCX : PCX ZSoft, RLE par plan
@@ -6877,7 +6894,7 @@ End;
 Const
  FD_MAXENT = 256;
  FD_ROWH   = 10;
- FD_NUM_FILTERS = 15;
+ FD_NUM_FILTERS = 16;
  FD_FILTER_LABELS: Array[0..FD_NUM_FILTERS-1] of String[36] = (
   'Tous formats images',
   'APNG (*.APNG)',
@@ -6885,6 +6902,7 @@ Const
   'BGX MonsterBook (*.BGX)',
   'BMP (*.BMP;*.DIB)',
   'CR2 Bayer (*.CR2)',
+  'CUR Curseur Windows (*.CUR)',
   'GIF (*.GIF)',
   'JPEG (*.JPG;*.JPEG)',
   'PCX (*.PCX)',
@@ -6932,21 +6950,22 @@ Begin
                       (E='.JPG') Or (E='.JPEG') Or (E='.PCX') Or (E='.TGA') Or
                       (E='.TIF') Or (E='.TIFF') Or (E='.PSD') Or
                       (E='.PPM') Or (E='.BGX') Or (E='.APNG') Or (E='.ARW') Or
-                      (E='.CR2');
+                      (E='.CR2') Or (E='.CUR');
   1: FD_ExtMatches := E='.APNG';
   2: FD_ExtMatches := E='.ARW';
   3: FD_ExtMatches := E='.BGX';
   4: FD_ExtMatches := (E='.BMP') Or (E='.DIB');
   5: FD_ExtMatches := E='.CR2';
-  6: FD_ExtMatches := E='.GIF';
-  7: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
-  8: FD_ExtMatches := E='.PCX';
-  9: FD_ExtMatches := E='.PNG';
-  10: FD_ExtMatches := E='.PPM';
-  11: FD_ExtMatches := E='.PSD';
-  12: FD_ExtMatches := E='.TGA';
-  13: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
-  14: FD_ExtMatches := True;
+  6: FD_ExtMatches := E='.CUR';
+  7: FD_ExtMatches := E='.GIF';
+  8: FD_ExtMatches := (E='.JPG') Or (E='.JPEG');
+  9: FD_ExtMatches := E='.PCX';
+  10: FD_ExtMatches := E='.PNG';
+  11: FD_ExtMatches := E='.PPM';
+  12: FD_ExtMatches := E='.PSD';
+  13: FD_ExtMatches := E='.TGA';
+  14: FD_ExtMatches := (E='.TIF') Or (E='.TIFF');
+  15: FD_ExtMatches := True;
  Else FD_ExtMatches := False; End;
 End;
 
@@ -7490,7 +7509,7 @@ Const
   'Portable Pixmap (*.PPM)' );
  FD_SAVE_EXT: Array[0..FD_SAVE_NUM-1] of String[4] = (
   '.BMP', '.PSD', '.TGA', '.PPM' );
- FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (4, 11, 12, 10);
+ FD_SAVE_FILTERMAP: Array[0..FD_SAVE_NUM-1] of Integer = (4, 12, 13, 11);
 
 Var
  FD_SaveFilterIdx: Integer;
@@ -8228,6 +8247,443 @@ Begin
  FreeMem(D,SizeOf(TDNState));
 End;
 
+Type
+ TIBState = Record
+  Data,RGB: PARBytes;
+  Size,RGBSize,Position,Limit,RowSize,PixelStart: LongInt;
+  Width,Height,Bits,Compression,PaletteCount: Integer;
+  Palette:Array[0..255] Of Record R,G,B:Byte;End;
+  Masks,Maximum: Array[0..3] Of LongWord;
+  Shifts: Array[0..3] Of Integer;
+  TopDown,Bad: Boolean;
+ End;
+ PIBState = ^TIBState;
+
+Function IBWord(Var D: TIBState; P: LongInt): Word;
+Begin
+ IBWord:=0; If D.Bad Then Exit;
+ If (P<0) Or (P>D.Size-2) Then Begin D.Bad:=True; Exit; End;
+ IBWord:=Word(D.Data^[P]) Or (Word(D.Data^[P+1]) Shl 8);
+End;
+
+Function IBLong(Var D: TIBState; P: LongInt): LongWord;
+Var A,B: LongWord;
+Begin
+ A:=IBWord(D,P); B:=IBWord(D,P+2); IBLong:=A Or (B Shl 16);
+End;
+
+Function IBByte(Var D: TIBState): Integer;
+Begin
+ IBByte:=0; If D.Bad Then Exit;
+ If D.Position>=D.Limit Then Begin D.Bad:=True; Exit; End;
+ IBByte:=D.Data^[D.Position]; Inc(D.Position);
+End;
+
+Procedure IBIndex(Var D: TIBState; X,Y,Index: Integer);
+Var P: LongInt;
+Begin
+ If D.Bad Then Exit;
+ If (X<0) Or (X>=D.Width) Or (Y<0) Or (Y>=D.Height) Or
+    (Index<0) Or (Index>=D.PaletteCount) Then Begin
+  D.Bad:=True; Exit;
+ End;
+ If Not D.TopDown Then Y:=D.Height-1-Y;
+ P:=(LongInt(Y)*D.Width+X)*3;
+ D.RGB^[P]:=D.Palette[Index].R;
+ D.RGB^[P+1]:=D.Palette[Index].G;
+ D.RGB^[P+2]:=D.Palette[Index].B;
+End;
+
+Function IBHeader(Var D: TIBState): Boolean;
+Var Base,H,P,Offset,ImageSize,Height: LongInt;
+    V,Mask,Used: LongWord; I,J,EntrySize: Integer; Wrapped: Boolean;
+Begin
+ IBHeader:=False; Base:=0; Offset:=0; Wrapped:=False;
+ If D.Size<12 Then Exit;
+ If IBWord(D,0)=$4D42 Then Begin
+  If D.Size<26 Then Exit;
+  Wrapped:=True; Base:=14; V:=IBLong(D,10);
+  If V>LongWord(D.Size) Then Exit; Offset:=V;
+ End;
+ V:=IBLong(D,Base);
+ If Not (V In [12,40,52,56,108,124]) Then Exit; H:=V;
+ If H>D.Size-Base Then Exit;
+ EntrySize:=4; ImageSize:=0;
+ If H=12 Then Begin
+  D.Width:=0; V:=IBWord(D,Base+4); If (V=0) Or (V>4096) Then Exit;
+  D.Width:=V; V:=IBWord(D,Base+6); If (V=0) Or (V>4096) Then Exit;
+  D.Height:=V; If IBWord(D,Base+8)<>1 Then Exit;
+  D.Bits:=IBWord(D,Base+10); EntrySize:=3;
+ End Else Begin
+  V:=IBLong(D,Base+4); If (V=0) Or (V>4096) Then Exit;
+  D.Width:=V; Height:=LongInt(IBLong(D,Base+8));
+  If (Height=0) Or (Height< -4096) Or (Height>4096) Then Exit;
+  D.TopDown:=Height<0; D.Height:=Abs(Height);
+  If IBWord(D,Base+12)<>1 Then Exit;
+  V:=IBWord(D,Base+14); If V>32 Then Exit; D.Bits:=V;
+  V:=IBLong(D,Base+16); If V>6 Then Exit; D.Compression:=V;
+  V:=IBLong(D,Base+20); If V>LongWord(D.Size) Then Exit;
+  ImageSize:=V;
+  If H=124 Then
+   If (IBLong(D,Base+112)<>0) Or (IBLong(D,Base+116)<>0) Then Exit;
+ End;
+ If Not (D.Bits In [1,4,8,16,24,32]) Then Exit;
+ Case D.Compression Of
+  0: ;
+  1: If (D.Bits<>8) Or D.TopDown Then Exit;
+  2: If (D.Bits<>4) Or D.TopDown Then Exit;
+  3,6: If Not (D.Bits In [16,32]) Then Exit;
+ Else Exit; End;
+ P:=Base+H;
+ If D.Bits>=16 Then Begin
+  If D.Bits=16 Then Begin
+   D.Masks[0]:=$7C00; D.Masks[1]:=$03E0; D.Masks[2]:=$001F;
+  End Else Begin
+   D.Masks[0]:=$FF0000; D.Masks[1]:=$00FF00; D.Masks[2]:=$0000FF;
+  End;
+  If D.Compression In [3,6] Then Begin
+   If H=40 Then Begin
+    J:=3; If D.Compression=6 Then J:=4;
+    If D.Size-P<J*4 Then Exit;
+    For I:=0 To J-1 Do D.Masks[I]:=IBLong(D,P+I*4);
+    Inc(P,J*4);
+   End Else Begin
+    For I:=0 To 2 Do D.Masks[I]:=IBLong(D,Base+40+I*4);
+    If H>=56 Then D.Masks[3]:=IBLong(D,Base+52);
+   End;
+  End;
+  If (D.Compression=6) And (D.Masks[3]=0) Then Exit;
+  Used:=0;
+  For I:=0 To 3 Do Begin
+   Mask:=D.Masks[I]; If (I<3) And (Mask=0) Then Exit;
+   If (D.Bits<32) And ((Mask Shr D.Bits)<>0) Then Exit;
+   If (Used And Mask)<>0 Then Exit; Used:=Used Or Mask;
+   If Mask<>0 Then Begin
+    While (Mask And 1)=0 Do Begin
+     Mask:=Mask Shr 1; Inc(D.Shifts[I]);
+    End;
+    D.Maximum[I]:=Mask;
+    While (Mask And 1)<>0 Do Mask:=Mask Shr 1;
+    If Mask<>0 Then Exit;
+   End;
+  End;
+ End;
+ If D.Bits<=8 Then Begin
+  V:=0; If H<>12 Then V:=IBLong(D,Base+32);
+  If V=0 Then V:=LongWord(1) Shl D.Bits;
+  If V>LongWord(1 Shl D.Bits) Then Exit; D.PaletteCount:=V;
+  If D.Size-P<D.PaletteCount*EntrySize Then Exit;
+  For I:=0 To D.PaletteCount-1 Do Begin
+   D.Palette[I].B:=D.Data^[P]; D.Palette[I].G:=D.Data^[P+1];
+   D.Palette[I].R:=D.Data^[P+2]; Inc(P,EntrySize);
+  End;
+ End Else If H<>12 Then Begin
+  V:=IBLong(D,Base+32); If V>256 Then Exit;
+  If V>LongWord((D.Size-P) Div 4) Then Exit; Inc(P,LongInt(V)*4);
+ End;
+ If Wrapped Then Begin If Offset<P Then Exit; P:=Offset; End;
+ D.PixelStart:=P; D.Position:=P; D.Limit:=D.Size;
+ If ImageSize>0 Then Begin
+  If ImageSize>D.Size-P Then Exit; D.Limit:=P+ImageSize;
+ End;
+ D.RowSize:=((LongInt(D.Width)*D.Bits+31) Div 32)*4;
+ If D.Compression In [0,3,6] Then
+  If D.RowSize>(D.Limit-P) Div D.Height Then Exit;
+ If D.Bad Then Exit;
+ D.RGBSize:=LongInt(D.Width)*D.Height*3;
+ D.RGB:=PARBytes(RotationAllocate(D.RGBSize)); IBHeader:=D.RGB<>Nil;
+End;
+
+Function IBRLE(Var D: TIBState): Boolean;
+Var X,Y,N,V,I,Index,Count,DX,DY: Integer; P: LongInt;
+Begin
+ IBRLE:=False; X:=0; Y:=0;
+ For P:=0 To LongInt(D.Width)*D.Height-1 Do Begin
+  D.RGB^[P*3]:=D.Palette[0].R;
+  D.RGB^[P*3+1]:=D.Palette[0].G;
+  D.RGB^[P*3+2]:=D.Palette[0].B;
+ End;
+ While Not D.Bad Do Begin
+  N:=IBByte(D); V:=IBByte(D); If D.Bad Then Exit;
+  If N>0 Then Begin
+   If N>D.Width-X Then Exit;
+   For I:=0 To N-1 Do Begin
+    Index:=V;
+    If D.Bits=4 Then Index:=(V Shr (4-((I And 1)*4))) And 15;
+    IBIndex(D,X,Y,Index); Inc(X);
+   End;
+  End Else Case V Of
+   0: Begin X:=0; Inc(Y); If Y>D.Height Then Exit; End;
+   1: Begin IBRLE:=Not D.Bad; Exit; End;
+   2: Begin
+    DX:=IBByte(D); DY:=IBByte(D);
+    If (DX>=D.Width-X) Or (DY>=D.Height-Y) Then Exit;
+    Inc(X,DX); Inc(Y,DY);
+   End;
+  Else
+   N:=V; If N>D.Width-X Then Exit;
+   Count:=N; If D.Bits=4 Then Count:=(N+1) Div 2;
+   For I:=0 To N-1 Do Begin
+    If (D.Bits=8) Or ((I And 1)=0) Then V:=IBByte(D);
+    Index:=V;
+    If D.Bits=4 Then Index:=(V Shr (4-((I And 1)*4))) And 15;
+    IBIndex(D,X,Y,Index); Inc(X);
+   End;
+   If Odd(Count) Then IBByte(D);
+  End;
+ End;
+End;
+
+Function IBRaster(Var D: TIBState): Boolean;
+Var P,N,Dest: LongInt; X,Y,YY,I,Index,A: Integer; V: LongWord;
+    Color: Array[0..2] Of Integer;
+Begin
+ IBRaster:=False;
+ If D.Compression In [1,2] Then Begin IBRaster:=IBRLE(D); Exit; End;
+ For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do Begin
+  P:=D.PixelStart+LongInt(Y)*D.RowSize;
+  If D.Bits<=8 Then Begin
+   If D.Bits=8 Then Index:=D.Data^[P+X]
+   Else Index:=(D.Data^[P+(LongInt(X)*D.Bits) Div 8] Shr
+    (8-D.Bits-((X*D.Bits) And 7))) And ((1 Shl D.Bits)-1);
+   IBIndex(D,X,Y,Index); If D.Bad Then Exit;
+  End Else Begin
+   Inc(P,LongInt(X)*(D.Bits Div 8)); V:=0;
+   For I:=0 To D.Bits Div 8-1 Do
+    V:=V Or (LongWord(D.Data^[P+I]) Shl (I*8));
+   For I:=0 To 2 Do
+    Color[I]:=Round(((V And D.Masks[I]) Shr D.Shifts[I])/
+     (D.Maximum[I]*1.0)*255);
+   A:=255;
+   If D.Masks[3]<>0 Then
+    A:=Round(((V And D.Masks[3]) Shr D.Shifts[3])/
+     (D.Maximum[3]*1.0)*255);
+   YY:=Y; If Not D.TopDown Then YY:=D.Height-1-Y;
+   Dest:=(LongInt(YY)*D.Width+X)*3;
+   For I:=0 To 2 Do Begin
+    N:=LongInt(Color[I])*A+LongInt(255)*(255-A)+127;
+    D.RGB^[Dest+I]:=N Div 255;
+   End;
+  End;
+ End;
+ IBRaster:=Not D.Bad;
+End;
+
+Type
+ TCUState = Record
+  Data,RGB: PARBytes;
+  Size,RGBSize: LongInt;
+  Width,Height,Bits,HotX,HotY,Count: Integer;
+  Transparent,Icon,PNG:Boolean;
+  Offset,ResourceSize:LongInt;
+ End;
+ PCUState = ^TCUState;
+
+Function CUWord(Const D: TCUState; P: LongInt): Word;
+Begin
+ CUWord:=Word(D.Data^[P]) Or (Word(D.Data^[P+1]) Shl 8);
+End;
+
+Function CULong(Const D: TCUState; P: LongInt): LongWord;
+Begin
+ CULong:=LongWord(CUWord(D,P)) Or (LongWord(CUWord(D,P+2)) Shl 16);
+End;
+
+Function CUDIB(Var D: TCUState; Offset,Size: LongInt): Boolean;
+Var B: PIBState; H,MaskStart,MaskRow,P,Dest: LongInt;
+    X,Y,YY,I: Integer; Alpha,HaveMask: Boolean;
+Begin
+ CUDIB:=False; B:=PIBState(RotationAllocate(SizeOf(TIBState)));
+ If B=Nil Then Exit; FillChar(B^,SizeOf(B^),0);
+ B^.Size:=Size; B^.Data:=PARBytes(RotationAllocate(Size));
+ If B^.Data<>Nil Then Begin
+  Move(D.Data^[Offset],B^.Data^,Size); H:=IBLong(B^,0);
+  If H=12 Then Begin
+   B^.Data^[6]:=(D.Height And 255);
+   B^.Data^[7]:=(D.Height Shr 8);
+  End Else Begin
+   H:=LongInt(IBLong(B^,8));
+   If H<0 Then H:=-D.Height Else H:=D.Height;
+   Move(H,B^.Data^[8],4);
+   H:=0; Move(H,B^.Data^[20],4);
+  End;
+  If IBHeader(B^) Then Begin
+   MaskStart:=B^.PixelStart+B^.RowSize*B^.Height;
+   MaskRow:=((LongInt(D.Width)+31) Div 32)*4;
+   HaveMask:=MaskRow*D.Height<=Size-MaskStart;
+   Alpha:=B^.Masks[3]<>0;
+   If (B^.Bits=32) And (B^.Compression=0) Then Begin
+    For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do
+     If B^.Data^[B^.PixelStart+LongInt(Y)*B^.RowSize+X*4+3]<>0
+      Then Alpha:=True;
+    If Not HaveMask Then Alpha:=True;
+    If Alpha Then Begin
+     B^.Masks[3]:=$FF000000; B^.Shifts[3]:=24;
+     B^.Maximum[3]:=255;
+    End;
+   End;
+   If (HaveMask Or Alpha) And (HaveMask Or (Size=MaskStart)) And
+      IBRaster(B^) Then Begin
+    D.Transparent:=False;
+    If Alpha Then Begin
+     For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do Begin
+      P:=B^.PixelStart+LongInt(Y)*B^.RowSize+
+       LongInt(X)*(B^.Bits Div 8); H:=0;
+      For I:=0 To B^.Bits Div 8-1 Do
+       H:=H Or (LongInt(B^.Data^[P+I]) Shl (I*8));
+      If (LongWord(H) And B^.Masks[3])<>B^.Masks[3] Then
+       D.Transparent:=True;
+     End;
+    End Else For Y:=0 To D.Height-1 Do For X:=0 To D.Width-1 Do
+     If ((B^.Data^[MaskStart+LongInt(Y)*MaskRow+X Div 8] Shr
+         (7-(X And 7))) And 1)<>0 Then Begin
+      YY:=Y; If Not B^.TopDown Then YY:=D.Height-1-Y;
+      Dest:=(LongInt(YY)*D.Width+X)*3;
+      For I:=0 To 2 Do
+       If D.Icon Then B^.RGB^[Dest+I]:=255
+       Else B^.RGB^[Dest+I]:=255-B^.RGB^[Dest+I];
+      D.Transparent:=True;
+     End;
+    D.RGB:=B^.RGB; D.RGBSize:=B^.RGBSize; B^.RGB:=Nil;
+    CUDIB:=True;
+   End;
+  End;
+ End;
+ If B^.RGB<>Nil Then FreeMem(B^.RGB,B^.RGBSize);
+ If B^.Data<>Nil Then FreeMem(B^.Data,B^.Size);
+ FreeMem(B,SizeOf(TIBState));
+End;
+
+Function CUBE(Const D:TCUState;P:LongInt):LongWord;
+Var I:Integer;V:LongWord;
+Begin
+ V:=0;For I:=0 To 3 Do V:=(V Shl 8) Or D.Data^[P+I];CUBE:=V;
+End;
+
+Function CUContainer(Const Name: String; Var D: TCUState;
+                     Icon: Boolean): Boolean;
+Const PNG_SIGNATURE:Array[0..7] Of Byte=($89,$50,$4E,$47,$0D,$0A,$1A,$0A);
+Var F: File; OldMode: Byte; Bytes,P,Offset,Size,BestOffset,BestSize: LongInt;
+    W,H,Bits,HX,HY,I,J: Integer; V,Header,Area,BestArea: LongWord;
+    Failed,PNG,BestPNG,Usable: Boolean;
+Begin
+ CUContainer:=False; D.Icon:=Icon; Assign(F,Name); OldMode:=FileMode;
+ FileMode:=0;
+ {$I-}Reset(F,1);{$I+}FileMode:=OldMode; If IOResult<>0 Then Exit;
+ {$I-}D.Size:=FileSize(F);{$I+}Failed:=IOResult<>0;
+ If Not Failed And (D.Size>=22) And (D.Size<=134217728) Then Begin
+  D.Data:=PARBytes(RotationAllocate(D.Size));
+  If D.Data<>Nil Then Begin
+   {$I-}BlockRead(F,D.Data^,D.Size,Bytes);{$I+}
+   Failed:=(IOResult<>0) Or (Bytes<>D.Size);
+  End Else Failed:=True;
+ End Else Failed:=True;
+ {$I-}Close(F);{$I+}If IOResult<>0 Then Failed:=True;
+ If Failed Then Exit;
+ If CUWord(D,0)<>0 Then Exit;
+ If Icon Then Begin If CUWord(D,2)<>1 Then Exit; End
+ Else If CUWord(D,2)<>2 Then Exit;
+ D.Count:=CUWord(D,4);
+ If (D.Count<1) Or (D.Count>256) Then Exit;
+ If LongInt(D.Count)*16>D.Size-6 Then Exit;
+ BestOffset:=0; BestSize:=0; BestArea:=0; BestPNG:=False;
+ For I:=0 To D.Count-1 Do Begin
+  P:=6+LongInt(I)*16; If D.Data^[P+3]<>0 Then Exit;
+  HX:=0; HY:=0;
+  If Icon Then Begin
+   If CUWord(D,P+4)>1 Then Exit;
+   V:=CUWord(D,P+6);
+   If Not (V In [0,1,4,8,16,24,32]) Then Exit;
+  End Else Begin
+   V:=CUWord(D,P+4); If V>4095 Then Exit; HX:=V;
+   V:=CUWord(D,P+6); If V>4095 Then Exit; HY:=V;
+  End;
+  V:=CULong(D,P+8); If (V<12) Or (V>LongWord(D.Size)) Then Exit;
+  Size:=V; V:=CULong(D,P+12);
+  If (V<LongWord(6+D.Count*16)) Or
+     (V>LongWord(D.Size-Size)) Then Exit; Offset:=V;
+  PNG:=True;
+  For J:=0 To 7 Do If D.Data^[Offset+J]<>PNG_SIGNATURE[J]
+   Then PNG:=False;
+  Usable:=True; Bits:=0; W:=0; H:=0;
+  If PNG Then Begin
+   If (Size<33) Or (CUBE(D,Offset+12)<>$49484452) Then Exit;
+   V:=CUBE(D,Offset+16); If (V=0) Or (V>4096) Then Exit;
+   W:=V; V:=CUBE(D,Offset+20);
+   If (V=0) Or (V>4096) Then Exit; H:=V; Bits:=32;
+  End Else Begin
+   Header:=CULong(D,Offset);
+   If Header=12 Then Begin
+    W:=CUWord(D,Offset+4); V:=CUWord(D,Offset+6);
+    Bits:=CUWord(D,Offset+10);
+   End Else If Header In [40,52,56,108,124] Then Begin
+    If Header>LongWord(Size) Then Exit;
+    V:=CULong(D,Offset+4); If (V=0) Or (V>4096) Then Exit;
+    W:=V; Bits:=CUWord(D,Offset+14);
+    Usable:=CULong(D,Offset+16) In [0,3,6];
+    V:=CULong(D,Offset+8);
+    If LongInt(V)<0 Then V:=LongWord(-LongInt(V));
+   End Else Begin Usable:=False; V:=0; End;
+   If Usable Then Begin
+    If (W<1) Or (W>4096) Or (V=0) Or (V>8192) Or
+       ((V And 1)<>0) Then Exit; H:=V Div 2;
+    If Not (Bits In [1,4,8,16,24,32]) Then Usable:=False;
+   End;
+  End;
+  If Usable Then Begin
+   If (D.Data^[P]<>0) And (D.Data^[P]<>W) Then Exit;
+   If (D.Data^[P+1]<>0) And (D.Data^[P+1]<>H) Then Exit;
+   If ((D.Data^[P]=0) And (W<256)) Or
+      ((D.Data^[P+1]=0) And (H<256)) Then Exit;
+   If (HX>=W) Or (HY>=H) Then Exit;
+   Area:=LongWord(W)*H;
+   If (Area>BestArea) Or ((Area=BestArea) And (Bits>D.Bits)) Then
+   Begin
+    BestArea:=Area; BestOffset:=Offset; BestSize:=Size; BestPNG:=PNG;
+    D.Width:=W; D.Height:=H; D.Bits:=Bits; D.HotX:=HX; D.HotY:=HY;
+   End;
+  End;
+ End;
+ If BestOffset=0 Then Exit;
+ D.PNG:=BestPNG;D.Offset:=BestOffset;D.ResourceSize:=BestSize;
+ If BestPNG Then CUContainer:=True
+ Else CUContainer:=CUDIB(D,BestOffset,BestSize);
+End;
+
+Function LoadCUR(Const Name:String):Boolean;
+Var D:PCUState;Pixels:PByteArr;Size,I,J:LongInt;K:Integer;
+Begin
+ LoadCUR:=False;Pixels:=Nil;
+ D:=PCUState(RotationAllocate(SizeOf(TCUState)));If D=Nil Then Exit;
+ FillChar(D^,SizeOf(TCUState),0);
+ If CUContainer(Name,D^,False) Then Begin
+  If D^.PNG Then LoadCUR:=LoadPNGImage(Name,False,D^.Offset,D^.ResourceSize)
+  Else Begin
+  Size:=LongInt(D^.Width)*D^.Height;
+  Pixels:=PByteArr(RotationAllocate(Size));
+  If Pixels<>Nil Then Begin
+   For I:=0 To Size-1 Do Begin
+    J:=I*3;
+    Pixels^[I]:=BlurPalette(D^.RGB^[J],D^.RGB^[J+1],D^.RGB^[J+2],
+     0,0,False);
+   End;
+   ClearUndoHistory;
+   For K:=0 To MAX_LAYERS-1 Do FreeLayer(K);
+   ImgW:=D^.Width;ImgH:=D^.Height;LayerCount:=1;ActiveLayer:=0;
+   FillChar(Layers[0],SizeOf(TLayer),0);
+   Layers[0].Used:=True;Layers[0].Visible:=True;Layers[0].Opacity:=100;
+   Layers[0].Name:='Arriere-plan';Layers[0].Pixels:=Pixels;
+   CurrentFileName:=Name;ImageModified:=False;SelectionActive:=False;
+   ZoomLevel:=100;LoadCUR:=True;
+  End;
+ End;
+ End;
+ If D^.RGB<>Nil Then FreeMem(D^.RGB,D^.RGBSize);
+ If D^.Data<>Nil Then FreeMem(D^.Data,D^.Size);
+ FreeMem(D,SizeOf(TCUState));
+End;
+
+
 Function LoadFileByExt(Const FN: String; Var ErrMsg: String): Boolean;
 Var Ext: String;Loaded:Boolean;
 Begin
@@ -8241,6 +8697,7 @@ Begin
  Else If Ext='.APNG' Then Loaded := LoadAPNG(FN)
  Else If Ext='.ARW' Then Loaded:=LoadBayerRAW(FN,False)
  Else If Ext='.CR2' Then Loaded:=LoadBayerRAW(FN,True)
+ Else If Ext='.CUR' Then Loaded:=LoadCUR(FN)
  Else If Ext='.BGX' Then Loaded := LoadBGX(FN)
  Else If Ext='.PCX' Then Loaded := LoadPCX(FN)
  Else If Ext='.PSD' Then Loaded := LoadPSD(FN)

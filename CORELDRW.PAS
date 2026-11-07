@@ -12186,20 +12186,21 @@ Begin
 End;
 
 Function MenuItemAt(Idx,SX,SY:Integer):Integer;
-Var I,Y:Integer;
+Var I,IY:Integer;
 Begin
  MenuItemAt:=-1;
  If Idx<0 Then Exit;
- With Menus[Idx] Do Begin
-  If(SX<X)or(SX>=X+W)or(SY<Y)or(SY>=Y+MenuHeight(Menus[Idx]))Then Exit;
-  For I:=0 To N-1 Do Begin
-   Y:=Menus[Idx].Y+ItemTop(Menus[Idx],I);
-   If It[I].Cmd<>0 Then
-    If(SY>=Y)and(SY<Y+ITEM_H)Then Begin
-     MenuItemAt:=I;
-     Exit;
-    End;
-  End;
+ { Attention : dans With, Y designerait le champ Menus[Idx].Y (et non une
+   variable locale) et deplacerait le menu a chaque survol : IY est local. }
+ If(SX<Menus[Idx].X)or(SX>=Menus[Idx].X+Menus[Idx].W)or(SY<Menus[Idx].Y)or
+   (SY>=Menus[Idx].Y+MenuHeight(Menus[Idx]))Then Exit;
+ For I:=0 To Menus[Idx].N-1 Do Begin
+  IY:=Menus[Idx].Y+ItemTop(Menus[Idx],I);
+  If Menus[Idx].It[I].Cmd<>0 Then
+   If(SY>=IY)and(SY<IY+ITEM_H)Then Begin
+    MenuItemAt:=I;
+    Exit;
+   End;
  End;
 End;
 
@@ -13750,7 +13751,7 @@ End;
 Procedure ShowAbout;
 Begin
  TN:=0;
- TLines[TN]:='CorelDraw clone pour Turbo Pascal / Free Pascal'; Inc(TN);
+ TLines[TN]:='CorailDRW clone pour Turbo Pascal / Free Pascal'; Inc(TN);
  TLines[TN]:='Dessin vectoriel : courbes, formes, texte, remplissages.'; Inc(TN);
  TLines[TN]:=''; Inc(TN);
  TLines[TN]:='Formats : CDR (RIFF CDR4, objets propres à ce clone),'; Inc(TN);
@@ -13770,7 +13771,7 @@ Var R:Integer;
 Begin
  ConfirmDiscard:=True;
  If Not Modified Then Exit;
- R:=Ask3('CorelDraw','Enregistrer les modifications ?',True);
+ R:=Ask3('CorailDRW','Enregistrer les modifications ?',True);
  If R=0 Then ConfirmDiscard:=False
   Else
  If R=1 Then Begin
@@ -15674,7 +15675,9 @@ Begin
  End;
  If LP or RP Then Begin
   If I>=0 Then RunMenuItem
-   Else If(B=MenuIdx)and(MenuIdx<POPUP_IDX)Then CloseMenu
+   Else If(B=MenuIdx)and(MenuIdx<POPUP_IDX)Then Begin
+    { clic sur le titre du menu ouvert (le survol l'a deja ouvert) : il reste ouvert }
+   End
    Else CloseMenu;
   WaitUp;
  End;
@@ -16012,7 +16015,7 @@ End;
 
 Procedure ShowUsage;
 Begin
- WriteLn('CORELDRW : Cette commande permet de lancer un clone de CorelDRAW (dessin vectoriel).');
+ WriteLn('CORELDRW : Cette commande permet de lancer CorailDRW, un clone de CorelDRAW (dessin vectoriel).');
  WriteLn;
  WriteLn('Syntaxe : CORELDRW [-maxscreen] [fichier.cdr|fichier.wpg]');
  WriteLn('          CORELDRW /SAMPLES');

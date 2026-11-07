@@ -30,7 +30,9 @@
    9. Outils : verification d'integrite, nettoyage, generation de rapports,
       fusion, scission, arbre des processus, parent du processus racine,
       mise a jour de l'environnement, renumerotation, options
-  10. Fenetres multiples : cascade, mosaique, fermer tout, icones
+  10. Interface MDI : plusieurs modeles ouverts en meme temps (4 au maximum),
+      chacun avec ses fenetres de diagrammes, son fichier, son historique
+      d'annulation ; cascade, mosaique, fermer tout, icones
   11. Fichiers : lecture des fichiers .DFD de SilverRun (versions 3.1 et
       2.2.4 : processus, hierarchie, entites, magasins, flux, positions
       des processus), enregistrement/lecture au format natif .SRD, export
@@ -104,7 +106,8 @@ Const
  MAXEL    = 150;
  MAXFL    = 200;
  MAXDG    = 50;
- MAXWIN   = 6;
+ MAXWIN   = 12;
+ MAXDOC   = 4;
  MAXDE    = 40;
  NCAT     = 10;
  UNDOMAX  = 6;
@@ -145,7 +148,7 @@ Const
  cmEnv=211; cmEnvFlow=212; cmRenum=213; cmWRM=214; cmOptions=216;
  cmAddIns=217;
  cmCascade=230; cmTileH=231; cmTileV=232; cmCloseAll=233; cmArrange=234;
- cmWin1=240;
+ cmWin1=280;
  cmHelp=250; cmGuide=251; cmRelNotes=252; cmLicenses=253; cmAbout=254;
  cmProps=260; cmDecomp=261; cmParentUp=262; cmEnvUp=263; cmRename=264;
  cmCenter=265; cmNextObj=266;
@@ -232,10 +235,22 @@ Type
 
  TWin = Record
   Used: Boolean;
+  Doc: Integer;
   Diag,Zoom: Integer;
   SX,SY: LongInt;
   X,Y,W,H: Integer;
   Iconic: Boolean;
+ End;
+
+ TDoc = Record
+  Used: Boolean;
+  M: PModel;
+  D: PDict;
+  Cfg: TCfg;
+  US,RS: Array[1..UNDOMAX] Of PModel;
+  UN,RN: Integer;
+  FileN: String[79];
+  Named,Modified,FromDFD,TreeOpen: Boolean;
  End;
 
  TEvent = Record
@@ -284,6 +299,8 @@ Var
  FileN     : String[79];
  Named,Modified,FromDFD : Boolean;
  Quit      : Boolean;
+ Docs      : Array[1..MAXDOC] Of TDoc;
+ CurDoc    : Integer;
  Wn        : Array[1..MAXWIN] Of TWin;
  WZo      : Array[1..MAXWIN] Of Integer;   { ordre : dernier = actif }
  WCnt      : Integer;
@@ -589,7 +606,9 @@ Procedure DrawAll; Forward;
 Procedure AllocData;
 Var I: Integer;
 Begin
- New(Mdl);New(Dict);New(CBEl);New(CBFl);New(TL);
+ New(CBEl);New(CBFl);New(TL);
+ Mdl:=Nil;Dict:=Nil;CurDoc:=0;
+ For I:=1 To MAXDOC Do Docs[I].Used:=False;
  For I:=1 To UNDOMAX Do Begin UStk[I]:=Nil;RStk[I]:=Nil;End;
  UN:=0;RN:=0;CBN:=0;CBFN:=0;TLN:=0;
 End;
@@ -1086,6 +1105,74 @@ Begin
  Cfg.Ver:='1.0';
 End;
 
+
+{ ---- documents (modeles) multiples : MDI ---- }
+
+Procedure SaveDoc;
+Var I: Integer;
+Begin
+ If CurDoc<1 Then Exit;
+ With Docs[CurDoc] Do Begin
+  M:=Mdl;D:=Dict;
+ End;
+ Docs[CurDoc].Cfg:=Cfg;
+ For I:=1 To UNDOMAX Do Begin
+  Docs[CurDoc].US[I]:=UStk[I];Docs[CurDoc].RS[I]:=RStk[I];
+ End;
+ Docs[CurDoc].UN:=UN;Docs[CurDoc].RN:=RN;
+ Docs[CurDoc].FileN:=FileN;Docs[CurDoc].Named:=Named;
+ Docs[CurDoc].Modified:=Modified;Docs[CurDoc].FromDFD:=FromDFD;
+ Docs[CurDoc].TreeOpen:=TreeOpen;
+End;
+
+Procedure LoadDocState(N: Integer);
+Var I: Integer;
+Begin
+ CurDoc:=N;
+ Mdl:=Docs[N].M;Dict:=Docs[N].D;Cfg:=Docs[N].Cfg;
+ For I:=1 To UNDOMAX Do Begin UStk[I]:=Docs[N].US[I];RStk[I]:=Docs[N].RS[I];End;
+ UN:=Docs[N].UN;RN:=Docs[N].RN;
+ FileN:=Docs[N].FileN;Named:=Docs[N].Named;Modified:=Docs[N].Modified;
+ FromDFD:=Docs[N].FromDFD;TreeOpen:=Docs[N].TreeOpen;
+End;
+
+Procedure SelectDoc(N: Integer);
+Begin
+ If (N<1) Or (N>MAXDOC) Or (N=CurDoc) Then Exit;
+ If Not Docs[N].Used Then Exit;
+ SaveDoc;
+ LoadDocState(N);
+End;
+
+{ cree un document vide et le rend courant ; 0 si impossible }
+Function NewDocSlot: Integer;
+Var I,F: Integer;
+Begin
+ NewDocSlot:=0;
+ F:=0;
+ For I:=1 To MAXDOC Do If (F=0) And Not Docs[I].Used Then F:=I;
+ If F=0 Then Exit;
+ {$IFNDEF FPC}
+ If MaxAvail<LongInt(SizeOf(TModel))+LongInt(SizeOf(TDict))+20000 Then Exit;
+ {$ENDIF}
+ SaveDoc;
+ FillChar(Docs[F],SizeOf(TDoc),0);
+ New(Docs[F].M);New(Docs[F].D);
+ Docs[F].Used:=True;
+ LoadDocState(F);
+ NewDocSlot:=F;
+End;
+
+{ libere le document courant (ses fenetres doivent etre deja fermees) }
+Procedure FreeCurDoc;
+Begin
+ If CurDoc<1 Then Exit;
+ FlushUndo;
+ Dispose(Mdl);Dispose(Dict);
+ Docs[CurDoc].Used:=False;
+ Mdl:=Nil;Dict:=Nil;CurDoc:=0;
+End;
+
 { ---- fenetres ---- }
 
 Procedure WinToFront(W: Integer);
@@ -1096,6 +1183,7 @@ Begin
  If P=0 Then Exit;
  For I:=P To WCnt-1 Do WZo[I]:=WZo[I+1];
  WZo[WCnt]:=W;
+ SelectDoc(Wn[W].Doc);
 End;
 
 Function ActiveWin: Integer;
@@ -1115,7 +1203,7 @@ Var I,F: Integer;
 Begin
  OpenWin:=0;
  For I:=1 To MAXWIN Do
-  If Wn[I].Used And (Wn[I].Diag=D) Then Begin
+  If Wn[I].Used And (Wn[I].Diag=D) And (Wn[I].Doc=CurDoc) Then Begin
    Wn[I].Iconic:=False;
    WinToFront(I);OpenWin:=I;Exit;
   End;
@@ -1124,11 +1212,12 @@ Begin
  If F=0 Then Begin
   F:=ActiveWin;
   If F=0 Then Exit;
-  Wn[F].Diag:=D;
+  Wn[F].Diag:=D;Wn[F].Doc:=CurDoc;
  End Else Begin
   FillChar(Wn[F],SizeOf(TWin),0);
-  Wn[F].Used:=True;Wn[F].Diag:=D;Wn[F].Zoom:=100;
-  Wn[F].X:=20+WCnt*20;Wn[F].Y:=10+WCnt*20;Wn[F].W:=480;Wn[F].H:=300;
+  Wn[F].Used:=True;Wn[F].Diag:=D;Wn[F].Doc:=CurDoc;Wn[F].Zoom:=100;
+  Wn[F].X:=20+(WCnt Mod 8)*20;Wn[F].Y:=10+(WCnt Mod 8)*20;Wn[F].W:=480;
+    Wn[F].H:=300;
   Inc(WCnt);WZo[WCnt]:=F;
  End;
  Wn[F].SX:=0;Wn[F].SY:=0;Wn[F].Iconic:=False;
@@ -1150,15 +1239,19 @@ Begin
 End;
 
 Procedure FixWindows;
-Var I: Integer;
+Var I,K,Top: Integer;
 Begin
  For I:=1 To MAXWIN Do
-  If Wn[I].Used Then
-   If (Wn[I].Diag<1) Or (Wn[I].Diag>MAXDG) Or Not Mdl^.Dg[Wn[I].Diag].Used Then
-     CloseWin(I);
- If (WCnt=0) And (RootDiag>0) Then OpenWin(RootDiag);
+  If Wn[I].Used And (Wn[I].Doc=CurDoc) Then
+   If (Wn[I].Diag<1) Or (Wn[I].Diag>MAXDG) Or
+      Not Mdl^.Dg[Wn[I].Diag].Used Then CloseWin(I);
+ K:=0;
+ For I:=1 To MAXWIN Do If Wn[I].Used And (Wn[I].Doc=CurDoc) Then Inc(K);
+ If (K=0) And (RootDiag>0) Then OpenWin(RootDiag);
+ Top:=0;
+ For I:=1 To WCnt Do If Wn[WZo[I]].Doc=CurDoc Then Top:=WZo[I];
+ If Top>0 Then WinToFront(Top);
 End;
-
 
 { ====================================================================== }
 {                  PRIMITIVES DE DESSIN (style Windows)                  }
@@ -1839,18 +1932,21 @@ End;
 
 Function FileTitle: String;
 Begin
- If FileN='' Then FileTitle:=T5('SansTitre1','Untitled1','Unbenannt1',
-   'SinTitulo1','SenzaTitolo1')
+ If FileN='' Then FileTitle:=T5('SansTitre','Untitled','Unbenannt','SinTitulo',
+   'SenzaTitolo')+IntStr(CurDoc)
  Else FileTitle:=ShortName(FileN);
 End;
 
 Function WinTitle(W: Integer): String;
-Var P: Integer; T: String;
+Var P,Old: Integer; T: String;
 Begin
+ Old:=CurDoc;
+ SelectDoc(Wn[W].Doc);
  T:=DiagTitle(Wn[W].Diag);
  P:=FindEl(Mdl^.Dg[Wn[W].Diag].Parent);
  If P>0 Then T:=Mdl^.El[P].Num;
- WinTitle:='(1) '+FileTitle+' - '+T;
+ WinTitle:='('+IntStr(Wn[W].Doc)+') '+FileTitle+' - '+T;
+ SelectDoc(Old);
 End;
 
 Procedure BuildWindowMenu;
@@ -3248,9 +3344,13 @@ Begin
  DrawMenuBar;
  If ToolBarOn Then DrawToolbar;
  For I:=1 To WCnt Do
-  If Not Wn[WZo[I]].Iconic Then DrawWindow(WZo[I],I=WCnt);
+  If Not Wn[WZo[I]].Iconic Then Begin
+   SelectDoc(Wn[WZo[I]].Doc);
+   DrawWindow(WZo[I],I=WCnt);
+  End;
  For I:=1 To WCnt Do
   If Wn[WZo[I]].Iconic Then DrawWindow(WZo[I],False);
+ If WCnt>0 Then SelectDoc(Wn[WZo[WCnt]].Doc);
  DrawToolBox;
  DrawStatus;
  If MenuOpen>0 Then Begin
@@ -3941,23 +4041,41 @@ End;
 
 { ---- nouveau modele ---- }
 
-Procedure NewModel;
-Var D,E,I,W: Integer;
+Procedure InitDocContent;
+Var D,E,W: Integer;
 Begin
  FlushUndo;
  FillChar(Mdl^,SizeOf(TModel),0);
  Mdl^.NextId:=1;Mdl^.NextZ:=1;
  DefaultDict;
  DefaultCfg;
- For I:=1 To MAXWIN Do Wn[I].Used:=False;
- WCnt:=0;
  D:=NewDiag(0,T5('Contexte','Context','Kontext','Contexto','Contesto'));
  E:=NewEl(ekInfo,D,360,414);
+ FileN:='';Named:=False;Modified:=False;FromDFD:=False;
+ TreeOpen:=False;
  WMax:=True;
  W:=OpenWin(D);
  If W>0 Then FitWin(W);
- FileN:='';Named:=False;Modified:=False;FromDFD:=False;
- TreeOpen:=False;
+End;
+
+Procedure TooManyDocs;
+Begin
+ Msg(T5('Nombre maximal de mod@gles ouverts atteint.',
+  'Maximum number of open models reached.',
+  'Maximale Anzahl offener Modelle erreicht.',
+  'N@vmero m@rximo de modelos abiertos alcanzado.',
+  'Numero massimo di modelli aperti raggiunto.'));
+End;
+
+Function NewDocument: Boolean;
+Begin
+ NewDocument:=False;
+ If NewDocSlot=0 Then Begin
+  If CurDoc>0 Then TooManyDocs;
+  Exit;
+ End;
+ InitDocContent;
+ NewDocument:=True;
 End;
 
 Var ImpStats: String[120];
@@ -4004,16 +4122,25 @@ Begin
  End;
 End;
 
-Procedure ResetWindows;
-Var I,W,R: Integer;
+Procedure CloseDocWindows(N: Integer);
+Var I: Integer;
 Begin
- For I:=1 To MAXWIN Do Wn[I].Used:=False;
- WCnt:=0;WMax:=True;
+ For I:=1 To MAXWIN Do
+  If Wn[I].Used And (Wn[I].Doc=N) Then CloseWin(I);
+End;
+
+Procedure ResetWindows;
+Var W,R: Integer;
+Begin
+ CloseDocWindows(CurDoc);
+ WMax:=True;
  R:=RootDiag;
  If R>0 Then Begin
   W:=OpenFit(R);
   If W>0 Then FitWin(W);
-  If (W>0) And (Wn[W].Zoom>100) Then Begin Wn[W].Zoom:=100;ClampScroll(W);End;
+  If (W>0) And (Wn[W].Zoom>100) Then Begin
+   Wn[W].Zoom:=100;ClampScroll(W);
+  End;
   If (W>0) And (Wn[W].Zoom<50) Then SetZoom(W,50);
  End;
 End;
@@ -4084,7 +4211,14 @@ Begin
   End;
  End;
  If Res=0 Then Begin
-  FlushUndo;
+  If (CurDoc>0) And (FileN='') And Not Modified Then Begin
+   CloseDocWindows(CurDoc);
+   FlushUndo;
+  End Else If NewDocSlot=0 Then Begin
+   TooManyDocs;Res:=3;
+  End;
+ End;
+ If Res=0 Then Begin
   Mdl^:=T^;Dict^:=TD^;Cfg:=TC;
   FileN:=FN;Named:=True;Modified:=False;FromDFD:=IsDFDFile(FN);
   TreeOpen:=False;
@@ -4128,39 +4262,72 @@ End;
 
 Procedure CmdNew;
 Begin
- Case ConfirmSave Of
-  1: If Not DoSave Then Exit;
-  3: Exit;
- End;
- NewModel;
- WMax:=True;
- DrawAll;
+ If NewDocument Then DrawAll;
 End;
 
 Procedure CmdOpen;
 Var FN: String;
 Begin
- Case ConfirmSave Of
-  1: If Not DoSave Then Exit;
-  3: Exit;
- End;
  If PickFile(FN) Then LoadFile(FN);
  DrawAll;
 End;
 
-Procedure CmdQuit;
+{ ferme le modele N (demande l'enregistrement) ; False si annule }
+Function CloseDoc(N: Integer): Boolean;
+Var I,Top: Integer; R: Integer;
 Begin
- Case ConfirmSave Of
-  1: If Not DoSave Then Exit;
-  3: Exit;
- End;
- Quit:=True;
+ CloseDoc:=False;
+ Top:=0;
+ For I:=1 To WCnt Do If Wn[WZo[I]].Doc=N Then Top:=WZo[I];
+ If Top>0 Then WinToFront(Top) Else SelectDoc(N);
+ R:=ConfirmSave;
+ If R=1 Then Begin If Not DoSave Then Exit;End
+ Else If R=3 Then Exit;
+ CloseDocWindows(N);
+ FreeCurDoc;
+ If WCnt>0 Then WinToFront(WZo[WCnt])
+ Else If Not NewDocument Then Begin End;
+ CloseDoc:=True;
+End;
+
+Procedure CmdQuit;
+Var I: Integer; Ok: Boolean;
+Begin
+ Ok:=True;
+ For I:=1 To MAXDOC Do
+  If Ok And Docs[I].Used Then Ok:=CloseDoc(I);
+ If Ok Then Quit:=True Else DrawAll;
+End;
+
+Function DocWinCount(N: Integer): Integer;
+Var I,K: Integer;
+Begin
+ K:=0;
+ For I:=1 To MAXWIN Do If Wn[I].Used And (Wn[I].Doc=N) Then Inc(K);
+ DocWinCount:=K;
 End;
 
 Procedure CmdCloseWin;
+Var W: Integer;
 Begin
- If WCnt>1 Then Begin CloseWin(ActiveWin);DrawAll;End
- Else CmdNew;
+ W:=ActiveWin;
+ If W=0 Then Exit;
+ If DocWinCount(Wn[W].Doc)>1 Then Begin
+  CloseWin(W);
+  If WCnt>0 Then WinToFront(WZo[WCnt]);
+ End Else Begin
+  If Not CloseDoc(Wn[W].Doc) Then Exit;
+ End;
+ DrawAll;
+End;
+
+Procedure CmdCloseAll;
+Var I: Integer; Ok: Boolean;
+Begin
+ Ok:=True;
+ For I:=1 To MAXDOC Do
+  If Ok And Docs[I].Used Then Ok:=CloseDoc(I);
+ DrawAll;
 End;
 
 { ---- edition ---- }
@@ -4896,11 +5063,13 @@ Begin
     2: Begin Wn[W].X:=0;Wn[W].W:=W0;Wn[W].H:=H0 Div N;Wn[W].Y:=K*Wn[W].H;End;
     Else Begin Wn[W].Y:=0;Wn[W].H:=H0;Wn[W].W:=W0 Div N;Wn[W].X:=K*Wn[W].W;End;
    End;
+   SelectDoc(Wn[W].Doc);
    FitWin(W);
    Inc(K);
   End;
  End;
  X:=0;Y:=0;
+ If WCnt>0 Then SelectDoc(Wn[WZo[WCnt]].Doc);
 End;
 
 Procedure ZoomCmd(Z: Integer);
@@ -5032,6 +5201,11 @@ Begin
       '- Speichern im nativen .SRD-Format.',
       '- Guardado en el formato nativo .SRD.',
       '- Salvataggio nel formato nativo .SRD.'));
+    TLAdd(T5('- Interface MDI : plusieurs mod@gles ouverts simultan@ement.',
+      '- MDI interface: several models open at the same time.',
+      '- MDI-Oberfl@1che: mehrere Modelle gleichzeitig ge@2ffnet.',
+      '- Interfaz MDI: varios modelos abiertos a la vez.',
+      '- Interfaccia MDI: pi@m modelli aperti contemporaneamente.'));
    End;
   Else Begin
     TLAdd(T5('LICENCES','LICENSES','LIZENZEN','LICENCIAS','LICENZE'));
@@ -5744,9 +5918,7 @@ Begin
   cmCascade: ArrangeWins(1);
   cmTileH: ArrangeWins(2);
   cmTileV: ArrangeWins(3);
-  cmCloseAll: Begin
-      For I:=1 To MAXWIN Do If Wn[I].Used Then CloseWin(I);
-     End;
+  cmCloseAll: CmdCloseAll;
   cmArrange: Begin
       For I:=1 To MAXWIN Do If Wn[I].Used And Wn[I].Iconic Then
         Wn[I].Iconic:=True;
@@ -6650,7 +6822,7 @@ BEGIN
  TbX:=10;TbY:=100;CurTool:=tlSelect;StatMsg:='';
  MX:=0;MY:=0;MB:=0;LastB:=0;LastClickT:=0;LastClickX:=0;LastClickY:=0;
  MenuOpen:=0;MenuHi:=0;SubOpen:=0;SubHi:=0;
- NewModel;
+ NewDocument;
  BuildMenus;
  InitToolbar;
  InitBox;

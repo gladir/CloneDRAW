@@ -338,7 +338,7 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 		</tr>
 		<tr>
 			<td><b>SR.PAS</b></td>
-			<td>Cette commande permet de lancer un clone de SilverRun (SILVERRUN-BPM), éditeur de diagrammes de flux de données (DFD) hiérarchiques : processus, magasins, entités externes, flux, décomposition, vérification d'intégrité, fichiers .SRD, lecture des fichiers .DFD de SilverRun (3.1 et 2.2.4, avec positions des objets), export SVG/CSV. Langue : français par défaut, LANGUAGE=EN, GR, SP ou IT.</td>
+			<td>Cette commande permet de lancer un clone de SilverRun (SILVERRUN-BPM), éditeur MDI (plusieurs modèles ouverts, chacun avec ses fenêtres) de diagrammes de flux de données (DFD) hiérarchiques : processus, magasins, entités externes, flux, décomposition, vérification d'intégrité, fichiers .SRD, lecture des fichiers .DFD de SilverRun (3.1 et 2.2.4, avec positions des objets), export SVG/CSV. Langue : français par défaut, LANGUAGE=EN, GR, SP ou IT.</td>
 		</tr>
 	    <tr>
     		<td><b>VISIO.PAS</b></td>

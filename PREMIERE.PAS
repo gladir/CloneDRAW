@@ -3052,7 +3052,7 @@ Begin
 
  MenuBegin(7, 'Aide');
  MenuAdd(7, 'Raccourcis clavier...', 'F1', CM_HELP);
- MenuAdd(7, 'À propos de Premiere...', '', CM_ABOUT);
+ MenuAdd(7, 'À propos d''About Premiere...', '', CM_ABOUT);
 
  For I := 0 To 7 Do Begin
   W := 100;
@@ -34707,8 +34707,8 @@ End;
 
 Procedure ShowAbout;
 Begin
- MsgBox('À propos de Premiere',
-  'PREMIERE - Clone de Adobe Premiere Pro|' +
+ MsgBox('À propos d''About Premiere',
+  'About Premiere - Montage vidéo non linéaire|' +
   'Montage vidéo non linéaire en mode graphique VGA 640x480|' +
   'Turbo Pascal 7 / Free Pascal - Sylvain Maltais (Gladir.com)|' +
   'Licence MIT - https://www.gladir.com/clonedraw');
@@ -36414,7 +36414,7 @@ Begin
  { Un flux distinct conserve la sortie console, meme avec les unites Crt. }
  Assign(HelpOutput, '');
  Rewrite(HelpOutput);
- WriteLn(HelpOutput, 'PREMIERE - Cette commande permet de lancer le clone de Premiere Pro (montage video).');
+ WriteLn(HelpOutput, 'PREMIERE - Cette commande permet de lancer About Premiere (montage video).');
  WriteLn(HelpOutput);
  WriteLn(HelpOutput, 'Syntaxe : PREMIERE [-maxscreen] [-maxcolors] [<projet.PRP>] [/? | -h | --help]');
  WriteLn(HelpOutput);

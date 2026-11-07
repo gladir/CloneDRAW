@@ -5,7 +5,7 @@ Aperçu du clone de l'éditeur PDF :
 
 <img width="638" height="479" alt="image" src="https://github.com/user-attachments/assets/9e855450-30b5-443b-89df-b36cc21f9c6a" />
 
-Aperçu du clone d'Illustrator :
+Aperçu du clone d'About Illustrator :
 
 <img width="639" height="482" alt="image" src="https://github.com/user-attachments/assets/0b23fc66-abcf-4f21-87bf-8904a308eacb" />
 

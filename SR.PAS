@@ -3,7 +3,7 @@
   @version: 1.00
   @website(https://www.gladir.com/office-0)
   @abstract(Target: Turbo Pascal 7, Free Pascal
-  @description: Clone de l'application SilverRun (SILVERRUN-BPM) : editeur
+  @description: Clone de l'application SolderRun (SOLDERRUN-BPM) : editeur
                 de diagrammes de flux de donnees (DFD) hierarchiques.
 }
 
@@ -33,7 +33,7 @@
   10. Interface MDI : plusieurs modeles ouverts en meme temps (4 au maximum),
       chacun avec ses fenetres de diagrammes, son fichier, son historique
       d'annulation ; cascade, mosaique, fermer tout, icones
-  11. Fichiers : lecture des fichiers .DFD de SilverRun (versions 3.1 et
+  11. Fichiers : lecture des fichiers .DFD de SolderRun (versions 3.1 et
       2.2.4 : processus, hierarchie, entites, magasins, flux, positions
       des processus), enregistrement/lecture au format natif .SRD, export
       SVG / CSV, import de processus (texte), rapport, impression texte
@@ -103,28 +103,30 @@ Const
  K_CF4    = 353;
 
  { Limites des donnees }
- MAXEL    = 150;
- MAXFL    = 200;
+ MAXEL    = 130;
+ MAXFL    = 180;
  MAXDG    = 50;
  MAXWIN   = 12;
  MAXDOC   = 4;
  MAXDE    = 40;
- NCAT     = 10;
+ NCAT     = 12;
  UNDOMAX  = 6;
  CBMAX    = 40;
  CBFMAX   = 60;
  MAXTL    = 400;
 
  { Genres d'objets }
- ekProc=1; ekStore=2; ekEnt=3; ekText=4; ekInfo=5;
+ ekProc=1; ekStore=2; ekEnt=3; ekText=4; ekInfo=5; ekRect=6; ekRRect=7;
+ ekEll=8; ekLine=9;
 
  { Outils de la palette }
  tlSelect=1; tlProc=2; tlEnt=3; tlStore=4; tlFlow=5; tlText=6;
- tlQual=7; tlRes=8;
+ tlQual=7; tlRes=8; tlRect=9; tlRRect=10; tlEll=11; tlLineA=12; tlLineB=13;
+ tlLineC=14; tlFuse=15; tlMove=16; tlNote=17;
 
  { Categories des dictionnaires }
  dcRes=1; dcQual=2; dcDom=3; dcType=4; dcComm=5; dcStruct=6; dcTarget=7;
- dcRule=8; dcEvent=9; dcLoc=10;
+ dcRule=8; dcEvent=9; dcLoc=10; dcCarac=11; dcCorr=12;
 
  { Commandes }
  cmNew=101; cmOpen=102; cmClose=103; cmSave=104; cmSaveAs=105; cmPass=106;
@@ -151,7 +153,12 @@ Const
  cmWin1=280;
  cmHelp=250; cmGuide=251; cmRelNotes=252; cmLicenses=253; cmAbout=254;
  cmProps=260; cmDecomp=261; cmParentUp=262; cmEnvUp=263; cmRename=264;
- cmCenter=265; cmNextObj=266;
+ cmCenter=265; cmNextObj=266; cmNote=267; cmFuse=268; cmMove=269;
+ cmFitObj=300; cmLabShow=301; cmLabPlace=302; cmZoomNorm=303; cmZoomPan=304;
+ cmGenCode=305; cmGenItems=306; cmGenHtml=307; cmGenTpl=308; cmPalettes=309;
+ cmCtx=310; cmFlowSty0=311; cmFlowSty1=312; cmFlowSty2=313; cmFlowDash=314;
+ cmRecent1=320; cmGuide2=330; cmGuide3=331; cmSelComp=332; cmShowSel=333;
+ cmRenumAuto=334; cmRenumSel=335; cmEpurer=336; cmCompl=337;
 
 { ====================================================================== }
 {                                TYPES                                   }
@@ -173,6 +180,10 @@ Type
   Hid,Hi,Sel: Boolean;
   FS: Byte;
   U1,U2,U3: String[10];
+  Qual,Str: Integer;
+  Col,Fil: Byte;
+  Code: String[20];
+  Note: String[60];
  End;
 
  TFlow = Record
@@ -186,6 +197,9 @@ Type
   BX,BY: Integer;
   Sel,Hid,Hi: Boolean;
   Num: String[8];
+  Str: Integer;
+  Col,Dir,Sty,Dsh: Byte;
+  LOX,LOY: Integer;
  End;
 
  TDiag = Record
@@ -225,7 +239,8 @@ Type
   ShName,ShQual,ShNum,ShRes: Boolean;
   Landscape: Boolean;
   Margin: Integer;
-  WRM,AutoOpen: Boolean;
+  WRM,AutoOpen,AutoFit: Boolean;
+  DefSty: Byte;
   Created,Modified: String[10];
   PW,PH: Integer;
   Notation: Byte;
@@ -726,6 +741,9 @@ Begin
     ekInfo: Begin
       Mdl^.El[I].W:=260;Mdl^.El[I].H:=112;
      End;
+    ekRect,ekRRect: Begin Mdl^.El[I].W:=120;Mdl^.El[I].H:=64;End;
+    ekEll: Begin Mdl^.El[I].W:=110;Mdl^.El[I].H:=64;End;
+    ekLine: Begin Mdl^.El[I].W:=120;Mdl^.El[I].H:=40;Mdl^.El[I].FS:=1;End;
    End;
    Mdl^.El[I].X:=X-Mdl^.El[I].W Div 2;
    Mdl^.El[I].Y:=Y-Mdl^.El[I].H Div 2;
@@ -746,6 +764,7 @@ Begin
    Mdl^.Fl[I].A:=A;Mdl^.Fl[I].B:=B;
    Inc(Mdl^.NF);
    Mdl^.Fl[I].Num:='F-'+IntStr(Mdl^.NF);
+   Mdl^.Fl[I].Sty:=Cfg.DefSty;
    NewFl:=I;
    Exit;
   End;
@@ -827,8 +846,7 @@ End;
 
 Function FlowOK(KA,KB: Integer): Boolean;
 Begin
- FlowOK:=((KA=ekProc) And (KB<>ekText) And (KB<>ekInfo)) Or
-         ((KB=ekProc) And (KA<>ekText) And (KA<>ekInfo));
+ FlowOK:=((KA=ekProc) And (KB<=ekEnt)) Or ((KB=ekProc) And (KA<=ekEnt));
 End;
 
 Function SnapV(V: LongInt): Integer;
@@ -1496,7 +1514,7 @@ Begin
  BX1:=X1+(W-(NB*BW+(NB-1)*10)) Div 2;
  Foc:=1;Done:=False;Res:=Ret[NB];
  HideMouse;
- DlgFrame(X1,Y1,X2,Y2,'SILVERRUN-BPM');
+ DlgFrame(X1,Y1,X2,Y2,'SOLDERRUN-BPM');
  For I:=1 To NL Do Tx(X1+20,Y1+34+(I-1)*12,Lines[I],cBlk);
  ShowMouse;
  Repeat
@@ -2156,9 +2174,9 @@ Begin
  { Fenetre : dynamique }
  BuildWindowMenu;
  { Aide }
- MAdd(8,T5('Aide Silverrun-BPM|F1','Silverrun-BPM Help|F1',
-   'Silverrun-BPM-Hilfe|F1','Ayuda de Silverrun-BPM|F1',
-   'Guida di Silverrun-BPM|F1'),cmHelp);
+ MAdd(8,T5('Aide Solderrun-BPM|F1','Solderrun-BPM Help|F1',
+   'Solderrun-BPM-Hilfe|F1','Ayuda de Solderrun-BPM|F1',
+   'Guida di Solderrun-BPM|F1'),cmHelp);
  MAdd(8,'-',0);
  MAdd(8,T5('Guide de l''utilisateur BPM','BPM User''s Guide',
    'BPM-Benutzerhandbuch','Gu@ja del usuario BPM','Guida utente BPM'),cmGuide);
@@ -2167,9 +2185,9 @@ Begin
  MAdd(8,'-',0);
  MAdd(8,T5('Licences','Licenses','Lizenzen','Licencias','Licenze'),cmLicenses);
  MAdd(8,'-',0);
- MAdd(8,T5('A propos de SILVERRUN-BPM...','About SILVERRUN-BPM...',
-   '@6ber SILVERRUN-BPM...','Acerca de SILVERRUN-BPM...',
-   'Informazioni su SILVERRUN-BPM...'),cmAbout);
+ MAdd(8,T5('A propos de SOLDERRUN-BPM...','About SOLDERRUN-BPM...',
+   '@6ber SOLDERRUN-BPM...','Acerca de SOLDERRUN-BPM...',
+   'Informazioni su SOLDERRUN-BPM...'),cmAbout);
  { Sous-menus }
  MAdd(9,T5('Noms des flux','Flow Names','Flussnamen','Nombres de flujos',
    'Nomi dei flussi'),cmLabName);
@@ -2756,7 +2774,14 @@ End;
 
 Function ElColor(I: Integer): Integer;
 Begin
- If Mdl^.El[I].Hi Then ElColor:=cLRd Else ElColor:=cBlk;
+ If Mdl^.El[I].Hi Then ElColor:=cLRd
+ Else If Mdl^.El[I].Col>0 Then ElColor:=Mdl^.El[I].Col-1
+ Else ElColor:=cBlk;
+End;
+
+Function FillC(I: Integer): Integer;
+Begin
+ If Mdl^.El[I].Fil>0 Then FillC:=Mdl^.El[I].Fil-1 Else FillC:=cWht;
 End;
 
 Function ZoneText(I,Z: Integer): String;
@@ -2787,29 +2812,44 @@ Begin
  End;
 End;
 
+Procedure CurveSeg(X1,Y1,CX,CY,X2,Y2: Integer);
+Var T: Integer; PX,PY,QX,QY,U: LongInt;
+Begin
+ PX:=X1;PY:=Y1;
+ For T:=1 To 10 Do Begin
+  U:=T*100 Div 10;
+  QX:=((100-U)*(100-U)*X1+2*U*(100-U)*CX+U*U*X2) Div 10000;
+  QY:=((100-U)*(100-U)*Y1+2*U*(100-U)*CY+U*U*Y2) Div 10000;
+  Line(PX,PY,QX,QY);PX:=QX;PY:=QY;
+ End;
+End;
+
 Procedure DrawElem(I: Integer);
-Var X1,Y1,X2,Y2,B,R,C,DX,TY1,TY2,Z: Integer; TC: Integer;
+Var X1,Y1,X2,Y2,B,R,C,DX,TY1,TY2,Z,TC,F,Nt: Integer;
 Begin
  If Mdl^.El[I].Hid Then Exit;
  X1:=SXc(Mdl^.El[I].X);Y1:=SYc(Mdl^.El[I].Y);
  X2:=SXc(Mdl^.El[I].X+Mdl^.El[I].W);Y2:=SYc(Mdl^.El[I].Y+Mdl^.El[I].H);
  If (X2<0) Or (Y2<0) Or (X1>VW) Or (Y1>VH) Then Exit;
- C:=ElColor(I);
+ C:=ElColor(I);F:=FillC(I);Nt:=Cfg.Notation;
+ R:=8*VZ Div 100;If R<3 Then R:=3;
+ B:=16*VZ Div 100;If B<4 Then B:=4;
+ SetLineStyle(SolidLn,0,1);
  Case Mdl^.El[I].Kind Of
   ekProc: Begin
-    R:=8*VZ Div 100;If R<3 Then R:=3;
-    B:=16*VZ Div 100;If B<4 Then B:=4;
-    Bx(X1,Y1,X2,Y2,cWht);
+    Bx(X1,Y1,X2,Y2,F);
     TY1:=Y1+2;TY2:=Y2-2;
-    If Cfg.Notation=2 Then Begin
-     SetColor(C);SetLineStyle(SolidLn,0,1);
-     Ellipse((X1+X2) Div 2,(Y1+Y2) Div 2,0,360,(X2-X1) Div 2,(Y2-Y1) Div 2);
+    If (Nt=2) Or (Nt=4) Then Begin
+     SetColor(C);SetFillStyle(SolidFill,F);
+     FillEllipse((X1+X2) Div 2,(Y1+Y2) Div 2,(X2-X1) Div 2,(Y2-Y1) Div 2);
      If VZ>=50 Then Begin
-      If Cfg.ZDesc[1]>1 Then CenterTx(X1,X2,Y1+(Y2-Y1) Div 5,ZoneText(I,1),
-        cMag);
-      If Cfg.ZDesc[2]>1 Then DrawWrap(X1+8,Y1+(Y2-Y1) Div 3,X2-8,Y2-(Y2-Y1) Div
-        4,ZoneText(I,2),C,2);
-      If Cfg.ZDesc[3]>1 Then CenterTx(X1,X2,Y2-(Y2-Y1) Div 5-6,ZoneText(I,3),C);
+      If Cfg.ZDesc[1]>1 Then
+       CenterTx(X1,X2,Y1+(Y2-Y1) Div 5,ZoneText(I,1),cMag);
+      If Cfg.ZDesc[2]>1 Then
+       DrawWrap(X1+8,Y1+(Y2-Y1) Div 3,X2-8,Y2-(Y2-Y1) Div 4,
+          ZoneText(I,2),C,2);
+      If Cfg.ZDesc[3]>1 Then
+       CenterTx(X1,X2,Y2-(Y2-Y1) Div 5-6,ZoneText(I,3),C);
      End;
     End Else Begin
      RoundBox(X1,Y1,X2,Y2,R,C);
@@ -2830,27 +2870,64 @@ Begin
    End;
   ekStore: Begin
     DX:=(X2-X1)*3 Div 10;If DX<6 Then DX:=6;
-    Bx(X1,Y1,X2,Y2,cWht);
-    Ln(X1,Y1,X2,Y1,C);Ln(X1,Y2,X2,Y2,C);Ln(X1,Y1,X1,Y2,C);
-    Ln(X1+DX,Y1,X1+DX,Y2,C);
-    If VZ>=50 Then Begin
-     DrawWrap(X1+1,Y1+2,X1+DX-1,Y2-2,Mdl^.El[I].Num,C,1);
-     DrawWrap(X1+DX+3,Y1+2,X2-3,Y2-2,Mdl^.El[I].Name,C,1);
+    Bx(X1,Y1,X2,Y2,F);
+    If (Nt=2) Or (Nt=4) Then Begin
+     Ln(X1,Y1,X2,Y1,C);Ln(X1,Y2,X2,Y2,C);
+     If VZ>=50 Then DrawWrap(X1+4,Y1+2,X2-4,Y2-2,Mdl^.El[I].Name,C,2);
+    End Else If Nt=3 Then Begin
+     Ln(X1,Y1,X2,Y1,C);Ln(X1,Y2,X2,Y2,C);Ln(X1,Y1,X1,Y2,C);
+     Ln(X1,(Y1+Y2) Div 2,X2,(Y1+Y2) Div 2,C);
+     If VZ>=50 Then
+      DrawWrap(X1+3,Y1+2,X2-3,(Y1+Y2) Div 2-2,Mdl^.El[I].Name,C,2);
+    End Else Begin
+     Ln(X1,Y1,X2,Y1,C);Ln(X1,Y2,X2,Y2,C);Ln(X1,Y1,X1,Y2,C);
+     Ln(X1+DX,Y1,X1+DX,Y2,C);
+     If VZ>=50 Then Begin
+      DrawWrap(X1+1,Y1+2,X1+DX-1,Y2-2,Mdl^.El[I].Num,C,1);
+      DrawWrap(X1+DX+3,Y1+2,X2-3,Y2-2,Mdl^.El[I].Name,C,1);
+     End;
     End;
    End;
   ekEnt: Begin
-    Bx(X1,Y1,X2,Y2,cWht);Frame(X1,Y1,X2,Y2,C);
-    Frame(X1+2,Y1+2,X2-2,Y2-2,C);
+    Bx(X1,Y1,X2,Y2,F);
+    If Nt=3 Then RoundBox(X1,Y1,X2,Y2,R,C)
+    Else Begin Frame(X1,Y1,X2,Y2,C);Frame(X1+2,Y1+2,X2-2,Y2-2,C);End;
     If VZ>=50 Then DrawWrap(X1+5,Y1+5,X2-5,Y2-5,ElName(I),C,2);
    End;
   ekInfo: DrawInfoBox(X1,Y1,X2,Y2,C);
   ekText: Begin
     If VZ>=50 Then Begin
-     Tx(X1+2,Y1+(Y2-Y1-7) Div 2,Copy(Mdl^.El[I].Name,1,(X2-X1) Div 8+4),C);
-     If Mdl^.El[I].FS=2 Then Tx(X1+3,Y1+(Y2-Y1-7) Div 2,Copy(Mdl^.El[I].Name,1,
-       (X2-X1) Div 8+4),C);
+     Tx(X1+2,Y1+(Y2-Y1-7) Div 2,
+        Copy(Mdl^.El[I].Name,1,(X2-X1) Div 8+4),C);
+     If Mdl^.El[I].FS=2 Then
+      Tx(X1+3,Y1+(Y2-Y1-7) Div 2,
+         Copy(Mdl^.El[I].Name,1,(X2-X1) Div 8+4),C);
     End;
     If Mdl^.El[I].Sel Then Frame(X1,Y1,X2,Y2,cDGr);
+   End;
+  ekRect: Begin
+    If Mdl^.El[I].Fil>0 Then Bx(X1,Y1,X2,Y2,F);
+    Frame(X1,Y1,X2,Y2,C);
+   End;
+  ekRRect: Begin
+    If Mdl^.El[I].Fil>0 Then Bx(X1+2,Y1+2,X2-2,Y2-2,F);
+    RoundBox(X1,Y1,X2,Y2,R,C);
+   End;
+  ekEll: Begin
+    SetColor(C);SetLineStyle(SolidLn,0,1);
+    If Mdl^.El[I].Fil>0 Then Begin
+     SetFillStyle(SolidFill,F);
+     FillEllipse((X1+X2) Div 2,(Y1+Y2) Div 2,(X2-X1) Div 2,(Y2-Y1) Div 2);
+    End Else
+     Ellipse((X1+X2) Div 2,(Y1+Y2) Div 2,0,360,(X2-X1) Div 2,(Y2-Y1) Div 2);
+   End;
+  ekLine: Begin
+    SetColor(C);SetLineStyle(SolidLn,0,1);
+    Case Mdl^.El[I].FS Of
+     2: Begin Line(X1,Y1,X1,Y2);Line(X1,Y2,X2,Y2);End;
+     3: CurveSeg(X1,Y2,X2,Y1,X2,Y2);
+     Else Line(X1,Y1,X2,Y2);
+    End;
    End;
  End;
 End;
@@ -2870,21 +2947,71 @@ Begin
  OX:=CX+DX*T Div 1000;OY:=CY+DY*T Div 1000;
 End;
 
-{ geometrie d'un flux en coordonnees modele }
-Function FlowGeom(F: Integer; Var X1,Y1,X2,Y2: LongInt): Boolean;
-Var A,B: Integer; TX,TY,UX,UY: LongInt;
+Const MAXPT = 12;
+
+Var
+ FPX,FPY : Array[1..MAXPT] Of LongInt;
+ FPN     : Integer;
+
+{ chemin du flux en coordonnees modele (apres decoupe sur les objets) }
+Function FlowPath(F: Integer): Boolean;
+Var A,B,K: Integer; CAx,CAy,CBx,CBy,MX,MY,SX,SY,EX,EY,CPX,CPY,U: LongInt;
 Begin
- FlowGeom:=False;
+ FlowPath:=False;
  A:=FindEl(Mdl^.Fl[F].A);B:=FindEl(Mdl^.Fl[F].B);
  If (A=0) Or (B=0) Then Exit;
- If Mdl^.Fl[F].Bend Then Begin
-  TX:=Mdl^.Fl[F].BX;TY:=Mdl^.Fl[F].BY;UX:=TX;UY:=TY;
- End Else Begin
-  TX:=Mdl^.El[B].X+Mdl^.El[B].W Div 2;TY:=Mdl^.El[B].Y+Mdl^.El[B].H Div 2;
-  UX:=Mdl^.El[A].X+Mdl^.El[A].W Div 2;UY:=Mdl^.El[A].Y+Mdl^.El[A].H Div 2;
+ CAx:=Mdl^.El[A].X+Mdl^.El[A].W Div 2;CAy:=Mdl^.El[A].Y+Mdl^.El[A].H Div 2;
+ CBx:=Mdl^.El[B].X+Mdl^.El[B].W Div 2;CBy:=Mdl^.El[B].Y+Mdl^.El[B].H Div 2;
+ Case Mdl^.Fl[F].Sty Of
+  1: Begin
+    If Mdl^.Fl[F].Bend Then Begin MX:=Mdl^.Fl[F].BX;MY:=Mdl^.Fl[F].BY;End
+    Else Begin MX:=(CAx+CBx) Div 2;MY:=(CAy+CBy) Div 2;End;
+    If Abs(CBx-CAx)>=Abs(CBy-CAy) Then Begin
+     ClipRect(A,MX,CAy,SX,SY);ClipRect(B,MX,CBy,EX,EY);
+     FPN:=4;
+     FPX[1]:=SX;FPY[1]:=CAy;FPX[2]:=MX;FPY[2]:=CAy;
+     FPX[3]:=MX;FPY[3]:=CBy;FPX[4]:=EX;FPY[4]:=CBy;
+    End Else Begin
+     ClipRect(A,CAx,MY,SX,SY);ClipRect(B,CBx,MY,EX,EY);
+     FPN:=4;
+     FPX[1]:=CAx;FPY[1]:=SY;FPX[2]:=CAx;FPY[2]:=MY;
+     FPX[3]:=CBx;FPY[3]:=MY;FPX[4]:=CBx;FPY[4]:=EY;
+    End;
+   End;
+  2: Begin
+    If Mdl^.Fl[F].Bend Then Begin CPX:=Mdl^.Fl[F].BX;CPY:=Mdl^.Fl[F].BY;End
+    Else Begin
+     CPX:=(CAx+CBx) Div 2+(CBy-CAy) Div 4;CPY:=(CAy+CBy) Div 2-(CBx-CAx) Div 4;
+    End;
+    ClipRect(A,CPX,CPY,SX,SY);ClipRect(B,CPX,CPY,EX,EY);
+    FPN:=9;
+    For K:=0 To 8 Do Begin
+     U:=K*100 Div 8;
+     FPX[K+1]:=((100-U)*(100-U)*SX+2*U*(100-U)*CPX+U*U*EX) Div 10000;
+     FPY[K+1]:=((100-U)*(100-U)*SY+2*U*(100-U)*CPY+U*U*EY) Div 10000;
+    End;
+   End;
+  Else Begin
+    If Mdl^.Fl[F].Bend Then Begin
+     ClipRect(A,Mdl^.Fl[F].BX,Mdl^.Fl[F].BY,SX,SY);
+     ClipRect(B,Mdl^.Fl[F].BX,Mdl^.Fl[F].BY,EX,EY);
+     FPN:=3;FPX[2]:=Mdl^.Fl[F].BX;FPY[2]:=Mdl^.Fl[F].BY;
+     FPX[1]:=SX;FPY[1]:=SY;FPX[3]:=EX;FPY[3]:=EY;
+    End Else Begin
+     ClipRect(A,CBx,CBy,SX,SY);ClipRect(B,CAx,CAy,EX,EY);
+     FPN:=2;FPX[1]:=SX;FPY[1]:=SY;FPX[2]:=EX;FPY[2]:=EY;
+    End;
+   End;
  End;
- ClipRect(A,TX,TY,X1,Y1);
- ClipRect(B,UX,UY,X2,Y2);
+ FlowPath:=True;
+End;
+
+{ extremites du flux (premier et dernier point du chemin) }
+Function FlowGeom(F: Integer; Var X1,Y1,X2,Y2: LongInt): Boolean;
+Begin
+ FlowGeom:=False;
+ If Not FlowPath(F) Then Exit;
+ X1:=FPX[1];Y1:=FPY[1];X2:=FPX[FPN];Y2:=FPY[FPN];
  FlowGeom:=True;
 End;
 
@@ -2915,27 +3042,36 @@ Begin
  FlowLabel:=S;
 End;
 
+Procedure FlowLabelPos(F: Integer; Var LX,LY: Integer);
+Var M1,M2: Integer;
+Begin
+ M1:=(FPN+1) Div 2;M2:=FPN Div 2+1;
+ LX:=SXc((FPX[M1]+FPX[M2]) Div 2+Mdl^.Fl[F].LOX);
+ LY:=SYc((FPY[M1]+FPY[M2]) Div 2+Mdl^.Fl[F].LOY);
+End;
+
 Procedure DrawFlow(F: Integer);
-Var X1,Y1,X2,Y2: LongInt; SX1,SY1,SX2,SY2,FBX,FBY,C,LX,LY: Integer; S: String;
+Var K,C,LX,LY: Integer; S: String;
 Begin
  If Mdl^.Fl[F].Hid Then Exit;
- If Not FlowGeom(F,X1,Y1,X2,Y2) Then Exit;
- SX1:=SXc(X1);SY1:=SYc(Y1);SX2:=SXc(X2);SY2:=SYc(Y2);
- If Mdl^.Fl[F].Sel Then C:=cLBl Else If Mdl^.Fl[F].Hi Then C:=cLRd Else C:=cBlk;
- If Mdl^.Fl[F].Bend Then Begin
-  FBX:=SXc(Mdl^.Fl[F].BX);FBY:=SYc(Mdl^.Fl[F].BY);
-  Ln(SX1,SY1,FBX,FBY,C);Ln(FBX,FBY,SX2,SY2,C);
-  ArrowHead(FBX,FBY,SX2,SY2,C);
-  LX:=FBX;LY:=FBY;
-  If Mdl^.Fl[F].Sel Then Begin Bx(FBX-2,FBY-2,FBX+2,FBY+2,cBlk);End;
- End Else Begin
-  Ln(SX1,SY1,SX2,SY2,C);
-  ArrowHead(SX1,SY1,SX2,SY2,C);
-  LX:=(SX1+SX2) Div 2;LY:=(SY1+SY2) Div 2;
-  If Mdl^.Fl[F].Sel Then Bx(LX-2,LY-2,LX+2,LY+2,cBlk);
- End;
+ If Not FlowPath(F) Then Exit;
+ If Mdl^.Fl[F].Sel Then C:=cLBl Else If Mdl^.Fl[F].Hi Then C:=cLRd
+ Else If Mdl^.Fl[F].Col>0 Then C:=Mdl^.Fl[F].Col-1 Else C:=cBlk;
+ SetColor(C);
+ If Mdl^.Fl[F].Dsh=1 Then SetLineStyle(DashedLn,0,1)
+ Else SetLineStyle(SolidLn,0,1);
+ For K:=1 To FPN-1 Do
+  Line(SXc(FPX[K]),SYc(FPY[K]),SXc(FPX[K+1]),SYc(FPY[K+1]));
+ SetLineStyle(SolidLn,0,1);
+ If Mdl^.Fl[F].Dir In [0,2] Then
+  ArrowHead(SXc(FPX[FPN-1]),SYc(FPY[FPN-1]),SXc(FPX[FPN]),SYc(FPY[FPN]),C);
+ If Mdl^.Fl[F].Dir In [1,2] Then
+  ArrowHead(SXc(FPX[2]),SYc(FPY[2]),SXc(FPX[1]),SYc(FPY[1]),C);
+ FlowLabelPos(F,LX,LY);
  If Mdl^.Fl[F].Sel Then Begin
-  Bx(SX1-2,SY1-2,SX1+2,SY1+2,cBlk);Bx(SX2-2,SY2-2,SX2+2,SY2+2,cBlk);
+  Bx(SXc(FPX[1])-2,SYc(FPY[1])-2,SXc(FPX[1])+2,SYc(FPY[1])+2,cBlk);
+  Bx(SXc(FPX[FPN])-2,SYc(FPY[FPN])-2,SXc(FPX[FPN])+2,SYc(FPY[FPN])+2,cBlk);
+  Bx(LX-2,LY-2,LX+2,LY+2,cBlk);
  End;
  If VZ>=50 Then Begin
   S:=FlowLabel(F);
@@ -3336,7 +3472,7 @@ Begin
  { barre de titre de l'application }
  Bx(0,0,SCR_W-1,TITLE_H-1,cLBl);
  Bx(4,3,14,14,cNavy);Bx(5,4,13,8,cLRd);Bx(5,10,13,13,cWht);
- TxB(22,5,'SILVERRUN-BPM',cWht);
+ TxB(22,5,'SOLDERRUN-BPM',cWht);
  Raised(SCR_W-52,2,SCR_W-38,15);Raised(SCR_W-37,2,SCR_W-23,15);
  Bx(SCR_W-20,2,SCR_W-4,15,cLRd);Frame(SCR_W-20,2,SCR_W-4,15,cWht);
  Bx(SCR_W-49,12,SCR_W-42,13,cBlk);Frame(SCR_W-34,5,SCR_W-27,12,cBlk);
@@ -3373,7 +3509,7 @@ End;
 { ====================================================================== }
 
 Const
- SRMAGIC = 'SRCLONE2';
+ SRMAGIC = 'SRCLONE3';
 
 Function ImportDFD(Const FN: String; P: PModel; D: PDict; Var C: TCfg): Integer;
   Forward;
@@ -4223,10 +4359,10 @@ Begin
   FileN:=FN;Named:=True;Modified:=False;FromDFD:=IsDFDFile(FN);
   TreeOpen:=False;
   ResetWindows;
-  If FromDFD Then Msg(T5('Fichier SilverRun (.DFD) import@e : ',
-    'SilverRun (.DFD) file imported: ','SilverRun-Datei (.DFD) importiert: ',
-    'Archivo SilverRun (.DFD) importado: ',
-    'File SilverRun (.DFD) importato: ')+ImpStats+'~'+T5('Positions des '+
+  If FromDFD Then Msg(T5('Fichier SolderRun (.DFD) import@e : ',
+    'SolderRun (.DFD) file imported: ','SolderRun-Datei (.DFD) importiert: ',
+    'Archivo SolderRun (.DFD) importado: ',
+    'File SolderRun (.DFD) importato: ')+ImpStats+'~'+T5('Positions des '+
     'processus lues ; autres objets plac@es automatiquement. Utilisez '+
     'Enregistrer sous (.SRD).',
     'Process positions read; other objects placed automatically. Use Save As '+
@@ -4615,7 +4751,7 @@ Begin
  If IOResult<>0 Then Begin Msg(T5('Impression impossible.','Cannot print.',
    'Drucken nicht m@2glich.','No se puede imprimir.','Impossibile stampare.'));
    Exit;End;
- WriteLn(F,'SILVERRUN-BPM - ',FileTitle);
+ WriteLn(F,'SOLDERRUN-BPM - ',FileTitle);
  WriteLn(F);
  For K:=1 To 5 Do Begin
   GenReport(K);
@@ -5098,9 +5234,9 @@ Begin
  TLClear;
  Case K Of
   1: Begin
-    TLAdd(T5('AIDE DE SILVERRUN-BPM (clone)','SILVERRUN-BPM HELP (clone)',
-      'SILVERRUN-BPM-HILFE (Klon)','AYUDA DE SILVERRUN-BPM (clon)',
-      'GUIDA DI SILVERRUN-BPM (clone)'));
+    TLAdd(T5('AIDE DE SOLDERRUN-BPM (clone)','SOLDERRUN-BPM HELP (clone)',
+      'SOLDERRUN-BPM-HILFE (Klon)','AYUDA DE SOLDERRUN-BPM (clon)',
+      'GUIDA DI SOLDERRUN-BPM (clone)'));
     TLAdd('');
     TLAdd(T5('Palette d''outils (colonne de droite) :',
       'Tool box (right column):','Werkzeugpalette (rechte Spalte):',
@@ -5183,18 +5319,18 @@ Begin
       'NOTAS DE LA VERSI@pN','NOTE DI RILASCIO'));
     TLAdd('');
     TLAdd('1.00');
-    TLAdd(T5('- Premi@gre version du clone SILVERRUN-BPM.',
-      '- First version of the SILVERRUN-BPM clone.',
-      '- Erste Version des SILVERRUN-BPM-Klons.',
-      '- Primera versi@pn del clon de SILVERRUN-BPM.',
-      '- Prima versione del clone SILVERRUN-BPM.'));
-    TLAdd(T5('- Lecture des fichiers .DFD de SilverRun (3.1 et 2.2.4), '+
+    TLAdd(T5('- Premi@gre version du clone SOLDERRUN-BPM.',
+      '- First version of the SOLDERRUN-BPM clone.',
+      '- Erste Version des SOLDERRUN-BPM-Klons.',
+      '- Primera versi@pn del clon de SOLDERRUN-BPM.',
+      '- Prima versione del clone SOLDERRUN-BPM.'));
+    TLAdd(T5('- Lecture des fichiers .DFD de SolderRun (3.1 et 2.2.4), '+
       'positions des processus lues.',
-      '- Reading SilverRun .DFD files (3.1 and 2.2.4), process positions read.',
-      '- Lesen von SilverRun-.DFD-Dateien (3.1 und 2.2.4), Prozesspositionen '+
-      'gelesen.','- Lectura de archivos .DFD de SilverRun (3.1 y 2.2.4), '+
+      '- Reading SolderRun .DFD files (3.1 and 2.2.4), process positions read.',
+      '- Lesen von SolderRun-.DFD-Dateien (3.1 und 2.2.4), Prozesspositionen '+
+      'gelesen.','- Lectura de archivos .DFD de SolderRun (3.1 y 2.2.4), '+
       'posiciones de procesos le@jdas.',
-      '- Lettura di file .DFD di SilverRun (3.1 e 2.2.4), posizioni dei '+
+      '- Lettura di file .DFD di SolderRun (3.1 e 2.2.4), posizioni dei '+
       'processi lette.'));
     TLAdd(T5('- Enregistrement au format natif .SRD.',
       '- Saving in the native .SRD format.',
@@ -5215,11 +5351,11 @@ Begin
       'Unabh@1ngiger Klon einer Datenflussdiagramm-Anwendung.',
       'Clon independiente de una aplicaci@pn de diagramas de flujo.',
       'Clone indipendente di un''applicazione di diagrammi di flusso.'));
-    TLAdd(T5('SilverRun est une marque de ses propri@etaires.',
-      'SilverRun is a trademark of its owners.',
-      'SilverRun ist eine Marke seiner Eigent@3mer.',
-      'SilverRun es una marca de sus propietarios.',
-      'SilverRun @a un marchio dei suoi proprietari.'));
+    TLAdd(T5('SolderRun est une marque de ses propri@etaires.',
+      'SolderRun is a trademark of its owners.',
+      'SolderRun ist eine Marke seiner Eigent@3mer.',
+      'SolderRun es una marca de sus propietarios.',
+      'SolderRun @a un marchio dei suoi proprietari.'));
     TLAdd('Sylvain Maltais - support@@gladir.com - '+
       'https://www.gladir.com/office-0');
    End;
@@ -5931,7 +6067,7 @@ Begin
   cmGuide: ShowHelp(2);
   cmRelNotes: ShowHelp(3);
   cmLicenses: ShowHelp(4);
-  cmAbout: Msg('SILVERRUN-BPM (clone)~'+T5('Version 1.00 - Clone Turbo Pascal'+
+  cmAbout: Msg('SOLDERRUN-BPM (clone)~'+T5('Version 1.00 - Clone Turbo Pascal'+
     ' / Free Pascal','Version 1.00 - Turbo Pascal / Free Pascal clone',
     'Version 1.00 - Turbo-Pascal-/Free-Pascal-Klon',
     'Versi@pn 1.00 - Clon en Turbo Pascal / Free Pascal',
@@ -6047,7 +6183,7 @@ End;
 
 Procedure ShowHelpLine;
 Begin
- WriteLn('SR - Clone de SilverRun (SILVERRUN-BPM), diagrammes de flux de '+
+ WriteLn('SR - Clone de SolderRun (SOLDERRUN-BPM), diagrammes de flux de '+
    'donnees.');
  WriteLn;
  WriteLn('Utilisation : SR [fichier.SRD|fichier.DFD] [/?]');
@@ -6061,7 +6197,7 @@ Begin
 End;
 
 { ====================================================================== }
-{          IMPORTATION DES FICHIERS .DFD DE SILVERRUN (3.1 / 2.2.4)      }
+{          IMPORTATION DES FICHIERS .DFD DE SOLDERRUN (3.1 / 2.2.4)      }
 { ====================================================================== }
 
 { Le fichier .DFD est une base d'objets binaire : enregistrements d'entites,

@@ -1,15 +1,15 @@
 # CloneDRAW
 Suite de programme de dessin en Pascal (Turbo Pascal/Free Pascal)
 
-Aperçu du clone de l'éditeur PDF :
+Aperçu d'Acrodoc :
 
 <img width="638" height="479" alt="image" src="https://github.com/user-attachments/assets/9e855450-30b5-443b-89df-b36cc21f9c6a" />
 
-Aperçu du clone d'About Illustrator :
+Aperçu d'About Illustrator :
 
 <img width="639" height="482" alt="image" src="https://github.com/user-attachments/assets/0b23fc66-abcf-4f21-87bf-8904a308eacb" />
 
-Aperçu de ArtWorx :
+Aperçu d'ArtWorx :
 
 <img width="641" height="483" alt="image" src="https://github.com/user-attachments/assets/b09280c3-7877-4e96-8091-c65c36b197a9" />
 

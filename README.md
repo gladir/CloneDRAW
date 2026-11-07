@@ -1,11 +1,11 @@
 # CloneDRAW
 Suite de programme de dessin en Pascal (Turbo Pascal/Free Pascal)
 
-Aperçu d'Acrobat :
+Aperçu du clone de l'éditeur PDF :
 
 <img width="638" height="479" alt="image" src="https://github.com/user-attachments/assets/9e855450-30b5-443b-89df-b36cc21f9c6a" />
 
-Aperçu d'Adobe Illustrator :
+Aperçu du clone d'Illustrator :
 
 <img width="639" height="482" alt="image" src="https://github.com/user-attachments/assets/0b23fc66-abcf-4f21-87bf-8904a308eacb" />
 
@@ -13,19 +13,19 @@ Aperçu de ArtWorx :
 
 <img width="641" height="483" alt="image" src="https://github.com/user-attachments/assets/b09280c3-7877-4e96-8091-c65c36b197a9" />
 
-Apercu de AUTOCAD :
+Apercu de style AUTOCAD :
 
 <img width="642" height="482" alt="image" src="https://github.com/user-attachments/assets/2628f44b-b358-4ced-9eb7-591b17ead65c" />
 
-Aperçu du clone Calamus
+Aperçu du clone Calamus :
 
 <img width="641" height="485" alt="image" src="https://github.com/user-attachments/assets/4dc50fe7-0437-4045-9c49-bca581390d9c" />
 
-Aperçu du clone CorelDRAW :
+Aperçu du clone CorailDRAW :
 
 <img width="640" height="479" alt="image" src="https://github.com/user-attachments/assets/b0398e08-7fc0-4c83-a46c-9e04927b64d8" />
 
-Aperçu du clone draw.io :
+Aperçu du clone d'un genre de draw.io :
 
 <img width="639" height="481" alt="image" src="https://github.com/user-attachments/assets/05f0ced2-ef3f-4428-9152-45401c9a1ef0" />
 

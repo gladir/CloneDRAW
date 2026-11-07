@@ -32,8 +32,8 @@
       mise a jour de l'environnement, renumerotation, options
   10. Fenetres multiples : cascade, mosaique, fermer tout, icones
   11. Fichiers : lecture des fichiers .DFD de SilverRun (versions 3.1 et
-      2.2.4 : processus, hierarchie, entites, magasins, flux ; positions
-      recalculees), enregistrement/lecture au format natif .SRD, export
+      2.2.4 : processus, hierarchie, entites, magasins, flux, positions
+      des processus), enregistrement/lecture au format natif .SRD, export
       SVG / CSV, import de processus (texte), rapport, impression texte
   12. Langues : francais par defaut, LANGUAGE=EN (anglais), LANGUAGE=GR
       (allemand), LANGUAGE=SP (espagnol), LANGUAGE=IT (italien)
@@ -113,7 +113,7 @@ Const
  MAXTL    = 400;
 
  { Genres d'objets }
- ekProc=1; ekStore=2; ekEnt=3; ekText=4;
+ ekProc=1; ekStore=2; ekEnt=3; ekText=4; ekInfo=5;
 
  { Outils de la palette }
  tlSelect=1; tlProc=2; tlEnt=3; tlStore=4; tlFlow=5; tlText=6;
@@ -605,7 +605,8 @@ End;
 
 Function ElName(I: Integer): String;
 Begin
- If Mdl^.El[I].Name<>'' Then ElName:=Mdl^.El[I].Name Else ElName:=Mdl^.El[I].Num;
+ If Mdl^.El[I].Name<>'' Then ElName:=Mdl^.El[I].Name Else
+   ElName:=Mdl^.El[I].Num;
 End;
 
 Function DictName(Cat,I: Integer): String;
@@ -702,6 +703,9 @@ Begin
     ekText: Begin
       Mdl^.El[I].W:=90;Mdl^.El[I].H:=18;
       Mdl^.El[I].Name:=T5('Texte','Text','Text','Texto','Testo');
+     End;
+    ekInfo: Begin
+      Mdl^.El[I].W:=260;Mdl^.El[I].H:=112;
      End;
    End;
    Mdl^.El[I].X:=X-Mdl^.El[I].W Div 2;
@@ -804,7 +808,8 @@ End;
 
 Function FlowOK(KA,KB: Integer): Boolean;
 Begin
- FlowOK:=((KA=ekProc) And (KB<>ekText)) Or ((KB=ekProc) And (KA<>ekText));
+ FlowOK:=((KA=ekProc) And (KB<>ekText) And (KB<>ekInfo)) Or
+         ((KB=ekProc) And (KA<>ekText) And (KA<>ekInfo));
 End;
 
 Function SnapV(V: LongInt): Integer;
@@ -812,7 +817,8 @@ Var G: Integer;
 Begin
  G:=Cfg.Grid;
  If Cfg.Snap And (G>1) Then Begin
-  If V>=0 Then SnapV:=((V+G Div 2) Div G)*G Else SnapV:=-(((-V+G Div 2) Div G)*G);
+  If V>=0 Then SnapV:=((V+G Div 2) Div G)*G Else SnapV:=-(((-V+G Div 2) Div
+    G)*G);
  End Else SnapV:=V;
 End;
 
@@ -909,7 +915,8 @@ Var Idx: Array[1..MAXEL] Of Integer; N,I,J,T,P: Integer; S: String;
 Begin
  N:=0;
  For I:=1 To MAXEL Do
-  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc) Then Begin
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc) Then
+    Begin
    Inc(N);Idx[N]:=I;
   End;
  For I:=1 To N-1 Do
@@ -951,7 +958,8 @@ Var I,J,K: Integer;
 Begin
  CBN:=0;CBFN:=0;
  For I:=1 To MAXEL Do
-  If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) And (CBN<CBMAX) Then Begin
+  If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) And (CBN<CBMAX)
+    Then Begin
    Inc(CBN);CBEl^[CBN]:=Mdl^.El[I];
    CBEl^[CBN].Child:=0;
   End;
@@ -1059,7 +1067,8 @@ Begin
  GetDate(Y,M,D,W);
  A:=IntStr(M);If Length(A)<2 Then A:='0'+A;
  B:=IntStr(D);If Length(B)<2 Then B:='0'+B;
- If Lang=2 Then TodayStr:=A+'/'+B+'/'+IntStr(Y) Else TodayStr:=B+'/'+A+'/'+IntStr(Y);
+ If Lang=2 Then TodayStr:=A+'/'+B+'/'+IntStr(Y) Else
+   TodayStr:=B+'/'+A+'/'+IntStr(Y);
 End;
 
 Procedure DefaultCfg;
@@ -1371,13 +1380,14 @@ Var X1,Y1,X2,Y2,W,H,NB,I,Foc,BX1,BW,BY: Integer;
     E: TEvent; Done: Boolean; Res: Integer; Lines: Array[1..12] Of String[50];
     NL: Integer;
 Begin
- FillMsgLines(Msg,44);
+ FillMsgLines(Msg,32);
  NL:=TLN;
  For I:=1 To NL Do Lines[I]:=Copy(TL^[I],1,50);
  Case Kind Of
   1: Begin NB:=1;Lb[1]:='OK';Ret[1]:=1;End;
   2: Begin NB:=2;Lb[1]:='OK';Ret[1]:=1;
-      Lb[2]:=T5('Annuler','Cancel','Abbrechen','Cancelar','Annulla');Ret[2]:=3;End;
+      Lb[2]:=T5('Annuler','Cancel','Abbrechen','Cancelar','Annulla');Ret[2]:=3;
+        End;
   3: Begin NB:=3;Lb[1]:=T5('Oui','Yes','Ja','S@j','S@j');Ret[1]:=1;
       Lb[2]:='Non';Ret[2]:=2;
       Lb[3]:=T5('Annuler','Cancel','Abbrechen','Cancelar','Annulla');Ret[3]:=3;
@@ -1398,13 +1408,15 @@ Begin
  ShowMouse;
  Repeat
   HideMouse;
-  For I:=1 To NB Do Button(BX1+(I-1)*(BW+10),BY,BX1+(I-1)*(BW+10)+BW-1,BY+22,Lb[I],I=Foc,True);
+  For I:=1 To NB Do Button(BX1+(I-1)*(BW+10),BY,BX1+(I-1)*(BW+10)+BW-1,BY+22,
+    Lb[I],I=Foc,True);
   ShowMouse;
   Repeat PollEvent(E) Until E.Kind In [1,2];
   If E.Kind=1 Then Begin
    Case E.Key Of
     K_ENTER: Begin Res:=Ret[Foc];Done:=True;End;
-    K_ESC: Begin If Kind=4 Then Res:=2 Else If Kind=1 Then Res:=1 Else Res:=3;Done:=True;End;
+    K_ESC: Begin If Kind=4 Then Res:=2 Else If Kind=1 Then Res:=1 Else Res:=3;
+      Done:=True;End;
     K_TAB,K_RIGHT: Begin Inc(Foc);If Foc>NB Then Foc:=1;End;
     K_STAB,K_LEFT: Begin Dec(Foc);If Foc<1 Then Foc:=NB;End;
     Else Begin
@@ -1415,7 +1427,8 @@ Begin
    End;
   End Else Begin
    For I:=1 To NB Do
-    If InBox(E.X,E.Y,BX1+(I-1)*(BW+10),BY,BX1+(I-1)*(BW+10)+BW-1,BY+22) Then Begin
+    If InBox(E.X,E.Y,BX1+(I-1)*(BW+10),BY,BX1+(I-1)*(BW+10)+BW-1,BY+22) Then
+      Begin
      Res:=Ret[I];Done:=True;
     End;
   End;
@@ -1441,7 +1454,8 @@ Begin
  Frm.Title:=Title;
 End;
 
-Procedure FormAdd(Kind: Integer; Const Lbl,Val: String; MaxL: Integer; Const Opt: String);
+Procedure FormAdd(Kind: Integer; Const Lbl,Val: String; MaxL: Integer; Const
+  Opt: String);
 Begin
  If Frm.N>=10 Then Exit;
  Inc(Frm.N);
@@ -1488,7 +1502,8 @@ Begin
   2: If Frm.Val[I]='1' Then FormText:='[x]' Else FormText:='[ ]';
   3: Begin
       K:=ValInt(Frm.Val[I],0);
-      If K=0 Then FormText:=T5('<aucun>','<none>','<keine>','<ninguno>','<nessuno>')
+      If K=0 Then FormText:=T5('<aucun>','<none>','<keine>','<ninguno>',
+        '<nessuno>')
       Else FormText:=Copy(DictLabel(ValInt(Frm.Opt[I],1),K),1,28);
      End;
   4: FormText:=OptItem(Frm.Opt[I],ValInt(Frm.Val[I],1));
@@ -1538,7 +1553,8 @@ Begin
      If Frm.Kind[I]=2 Then Begin
       Sunken(FX+4,RY+I*24-14,FX+16,RY+I*24-2,cWht);
       If Frm.Val[I]='1' Then Begin
-       Ln(FX+6,RY+I*24-9,FX+9,RY+I*24-5,cBlk);Ln(FX+9,RY+I*24-5,FX+14,RY+I*24-12,cBlk);
+       Ln(FX+6,RY+I*24-9,FX+9,RY+I*24-5,cBlk);Ln(FX+9,RY+I*24-5,FX+14,
+         RY+I*24-12,cBlk);
       End;
      End Else Begin
       Tx(FX+8,RY+I*24-12,FormText(I),cBlk);
@@ -1548,7 +1564,8 @@ Begin
     End;
    End;
    Button(X2-190,Y2-34,X2-110,Y2-10,'OK',False,True);
-   Button(X2-98,Y2-34,X2-18,Y2-10,T5('Annuler','Cancel','Abbrechen','Cancelar','Annulla'),False,True);
+   Button(X2-98,Y2-34,X2-18,Y2-10,T5('Annuler','Cancel','Abbrechen','Cancelar',
+     'Annulla'),False,True);
    ShowMouse;
    Redraw:=False;
   End;
@@ -1558,22 +1575,27 @@ Begin
    Case K Of
     K_ESC: Done:=True;
     K_ENTER: Begin OK:=True;Done:=True;End;
-    K_TAB,K_DOWN: Begin Inc(Foc);If Foc>Frm.N Then Foc:=1;Cur:=Length(Frm.Val[Foc]);Fresh:=True;Redraw:=True;End;
-    K_STAB,K_UP: Begin Dec(Foc);If Foc<1 Then Foc:=Frm.N;Cur:=Length(Frm.Val[Foc]);Fresh:=True;Redraw:=True;End;
+    K_TAB,K_DOWN: Begin Inc(Foc);If Foc>Frm.N Then Foc:=1;
+      Cur:=Length(Frm.Val[Foc]);Fresh:=True;Redraw:=True;End;
+    K_STAB,K_UP: Begin Dec(Foc);If Foc<1 Then Foc:=Frm.N;
+      Cur:=Length(Frm.Val[Foc]);Fresh:=True;Redraw:=True;End;
     Else Begin
      Case Frm.Kind[Foc] Of
       0,1: Begin
         S:=Frm.Val[Foc];
         If K=K_LEFT Then Begin If Cur>0 Then Dec(Cur);Fresh:=False;End
-        Else If K=K_RIGHT Then Begin If Cur<Length(S) Then Inc(Cur);Fresh:=False;End
+        Else If K=K_RIGHT Then Begin If Cur<Length(S) Then Inc(Cur);
+          Fresh:=False;End
         Else If K=K_HOME Then Begin Cur:=0;Fresh:=False;End
         Else If K=K_END Then Begin Cur:=Length(S);Fresh:=False;End
         Else If K=K_DEL Then Begin
-          If Fresh Then Begin S:='';Cur:=0;End Else If Cur<Length(S) Then Delete(S,Cur+1,1);
+          If Fresh Then Begin S:='';Cur:=0;End Else If Cur<Length(S) Then
+            Delete(S,Cur+1,1);
           Fresh:=False;
         End
         Else If K=K_BKSP Then Begin
-          If Fresh Then Begin S:='';Cur:=0;End Else If Cur>0 Then Begin Delete(S,Cur,1);Dec(Cur);End;
+          If Fresh Then Begin S:='';Cur:=0;End Else If Cur>0 Then Begin
+            Delete(S,Cur,1);Dec(Cur);End;
           Fresh:=False;
         End
         Else If (K>=32) And (K<256) Then Begin
@@ -1588,24 +1610,30 @@ Begin
         Redraw:=True;
        End;
       2: If (K=32) Or (K=K_LEFT) Or (K=K_RIGHT) Then Begin
-          If Frm.Val[Foc]='1' Then Frm.Val[Foc]:='0' Else Frm.Val[Foc]:='1';Redraw:=True;End;
+          If Frm.Val[Foc]='1' Then Frm.Val[Foc]:='0' Else Frm.Val[Foc]:='1';
+            Redraw:=True;End;
       3: Begin
           If (K=32) Or (K=K_RIGHT) Then Begin
-           Frm.Val[Foc]:=IntStr(DictNext(ValInt(Frm.Opt[Foc],1),ValInt(Frm.Val[Foc],0),1));Redraw:=True;End;
+           Frm.Val[Foc]:=IntStr(DictNext(ValInt(Frm.Opt[Foc],1),
+             ValInt(Frm.Val[Foc],0),1));Redraw:=True;End;
           If K=K_LEFT Then Begin
-           Frm.Val[Foc]:=IntStr(DictNext(ValInt(Frm.Opt[Foc],1),ValInt(Frm.Val[Foc],0),-1));Redraw:=True;End;
+           Frm.Val[Foc]:=IntStr(DictNext(ValInt(Frm.Opt[Foc],1),
+             ValInt(Frm.Val[Foc],0),-1));Redraw:=True;End;
          End;
       4: Begin
           Rd:=ValInt(Frm.Val[Foc],1);
-          If (K=32) Or (K=K_RIGHT) Then Begin Inc(Rd);If Rd>OptCount(Frm.Opt[Foc]) Then Rd:=1;Redraw:=True;End;
-          If K=K_LEFT Then Begin Dec(Rd);If Rd<1 Then Rd:=OptCount(Frm.Opt[Foc]);Redraw:=True;End;
+          If (K=32) Or (K=K_RIGHT) Then Begin Inc(Rd);If
+            Rd>OptCount(Frm.Opt[Foc]) Then Rd:=1;Redraw:=True;End;
+          If K=K_LEFT Then Begin Dec(Rd);If Rd<1 Then
+            Rd:=OptCount(Frm.Opt[Foc]);Redraw:=True;End;
           Frm.Val[Foc]:=IntStr(Rd);
          End;
      End;
     End;
    End;
   End Else Begin
-   If InBox(E.X,E.Y,X2-190,Y2-34,X2-110,Y2-10) Then Begin OK:=True;Done:=True;End
+   If InBox(E.X,E.Y,X2-190,Y2-34,X2-110,Y2-10) Then Begin OK:=True;Done:=True;
+     End
    Else If InBox(E.X,E.Y,X2-98,Y2-34,X2-18,Y2-10) Then Done:=True
    Else Begin
     RY:=Y1+30;If Frm.Info<>'' Then Inc(RY,16);
@@ -1615,11 +1643,13 @@ Begin
       Case Frm.Kind[I] Of
        0,1: Begin
          Cur:=(E.X-FX-3+4) Div 8;
-         If Cur>Length(Frm.Val[I]) Then Cur:=Length(Frm.Val[I]);If Cur<0 Then Cur:=0;
+         If Cur>Length(Frm.Val[I]) Then Cur:=Length(Frm.Val[I]);If Cur<0 Then
+           Cur:=0;
          Fresh:=False;
         End;
        2: If Frm.Val[I]='1' Then Frm.Val[I]:='0' Else Frm.Val[I]:='1';
-       3: Frm.Val[I]:=IntStr(DictNext(ValInt(Frm.Opt[I],1),ValInt(Frm.Val[I],0),1));
+       3: Frm.Val[I]:=IntStr(DictNext(ValInt(Frm.Opt[I],1),ValInt(Frm.Val[I],0),
+         1));
        4: Begin
            Rd:=ValInt(Frm.Val[I],1)+1;If Rd>OptCount(Frm.Opt[I]) Then Rd:=1;
            Frm.Val[I]:=IntStr(Rd);
@@ -1635,7 +1665,8 @@ Begin
  DrawAll;
 End;
 
-Function InputBox(Const Title,Prompt: String; Var S: String; MaxL: Integer): Boolean;
+Function InputBox(Const Title,Prompt: String; Var S: String; MaxL: Integer):
+  Boolean;
 Begin
  FormBegin(Title);
  FormAdd(0,Prompt,S,MaxL,'');
@@ -1681,7 +1712,8 @@ Begin
     End;
    End;
    Raised(X2-24,Y1+28,X2-9,Y1+43);Arw(X2-17,Y1+36,1,cBlk);
-   Raised(X2-24,Y1+28+Rows*LH-12,X2-9,Y1+28+Rows*LH+3);Arw(X2-17,Y1+28+Rows*LH-5,2,cBlk);
+   Raised(X2-24,Y1+28+Rows*LH-12,X2-9,Y1+28+Rows*LH+3);Arw(X2-17,
+     Y1+28+Rows*LH-5,2,cBlk);
    Bx(X2-24,Y1+44,X2-9,Y1+28+Rows*LH-13,cLGr);
    If TLN>Rows Then Begin
     K:=Y1+44+((Top-1)*(Rows*LH-58-12)) Div (TLN-Rows+1);
@@ -1712,17 +1744,20 @@ Begin
    End;
   End Else Begin
    For I:=1 To NB Do
-    If InBox(E.X,E.Y,X1+10+(I-1)*(BW+6),Y2-32,X1+10+(I-1)*(BW+6)+BW-1,Y2-8) Then Begin
+    If InBox(E.X,E.Y,X1+10+(I-1)*(BW+6),Y2-32,X1+10+(I-1)*(BW+6)+BW-1,Y2-8) Then
+      Begin
      Res:=I;Done:=True;
     End;
    If InBox(E.X,E.Y,X1+12,Y1+30,X2-28,Y1+30+Rows*LH) Then Begin
     R:=Top+(E.Y-(Y1+30)) Div LH;
     If (R>=1) And (R<=TLN) Then Begin
-     If (R=Sel) And (Abs(Tick-DblT)<45) And Not LNoSel Then Begin Res:=1;Done:=True;End;
+     If (R=Sel) And (Abs(Tick-DblT)<45) And Not LNoSel Then Begin Res:=1;
+       Done:=True;End;
      Sel:=R;DblT:=Tick;Redraw:=True;
     End;
    End;
-   If InBox(E.X,E.Y,X2-24,Y1+28,X2-9,Y1+43) Then Begin If Sel>1 Then Dec(Sel);Redraw:=True;End;
+   If InBox(E.X,E.Y,X2-24,Y1+28,X2-9,Y1+43) Then Begin If Sel>1 Then Dec(Sel);
+     Redraw:=True;End;
    If InBox(E.X,E.Y,X2-24,Y1+28+Rows*LH-12,X2-9,Y1+28+Rows*LH+3) Then Begin
     If Sel<TLN Then Inc(Sel);Redraw:=True;End;
    If InBox(E.X,E.Y,X2-24,Y1+44,X2-9,Y1+28+Rows*LH-13) Then Begin
@@ -1766,11 +1801,13 @@ Var Sel,R: Integer; FN: String;
 Begin
  Sel:=1;LNoSel:=True;LWide:=600;
  Repeat
-  R:=ListBox(Title,T5('Enregistrer...|Fermer','Save...|Close','Speichern...|Schlie@7en',
+  R:=ListBox(Title,T5('Enregistrer...|Fermer','Save...|Close',
+    'Speichern...|Schlie@7en',
      'Guardar...|Cerrar','Salva...|Chiudi'),Sel);
   If R=1 Then Begin
    FN:='RAPPORT.TXT';
-   If InputBox(T5('Enregistrer le texte','Save text','Text speichern','Guardar texto','Salva testo'),
+   If InputBox(T5('Enregistrer le texte','Save text','Text speichern',
+     'Guardar texto','Salva testo'),
       T5('Fichier :','File:','Datei:','Archivo:','File:'),FN,60) Then Begin
     SaveTextLines(FN);
     R:=2;
@@ -1801,31 +1838,35 @@ Begin
 End;
 
 Function FileTitle: String;
-Var S: String; I: Integer;
 Begin
- If FileN='' Then FileTitle:=T5('SansTitre1','Untitled1','Unbenannt1','SinTitulo1','SenzaTitolo1')
- Else Begin
-  S:=ShortName(FileN);
-  I:=Pos('.',S);
-  If I>0 Then S:=Copy(S,1,I-1);
-  FileTitle:=S;
- End;
+ If FileN='' Then FileTitle:=T5('SansTitre1','Untitled1','Unbenannt1',
+   'SinTitulo1','SenzaTitolo1')
+ Else FileTitle:=ShortName(FileN);
 End;
 
 Function WinTitle(W: Integer): String;
+Var P: Integer; T: String;
 Begin
- WinTitle:='(1) '+FileTitle+' - '+DiagTitle(Wn[W].Diag);
+ T:=DiagTitle(Wn[W].Diag);
+ P:=FindEl(Mdl^.Dg[Wn[W].Diag].Parent);
+ If P>0 Then T:=Mdl^.El[P].Num;
+ WinTitle:='(1) '+FileTitle+' - '+T;
 End;
 
 Procedure BuildWindowMenu;
 Var I,K: Integer;
 Begin
  MCnt[7]:=0;
- MAdd(7,T5('Cascade','Cascade','@6berlappend','Cascada','Sovrapponi'),cmCascade);
- MAdd(7,T5('Mosa@yque horizontale','Tile Horizontally','Horizontal anordnen','Mosaico horizontal','Affianca orizzontalmente'),cmTileH);
- MAdd(7,T5('Mosa@yque verticale','Tile Vertically','Vertikal anordnen','Mosaico vertical','Affianca verticalmente'),cmTileV);
- MAdd(7,T5('Tout fermer','Close All','Alle schlie@7en','Cerrar todo','Chiudi tutto'),cmCloseAll);
- MAdd(7,T5('R@eorganiser les ic@ones','Arrange Icons','Symbole anordnen','Organizar iconos','Disponi icone'),cmArrange);
+ MAdd(7,T5('Cascade','Cascade','@6berlappend','Cascada','Sovrapponi'),
+   cmCascade);
+ MAdd(7,T5('Mosa@yque horizontale','Tile Horizontally','Horizontal anordnen',
+   'Mosaico horizontal','Affianca orizzontalmente'),cmTileH);
+ MAdd(7,T5('Mosa@yque verticale','Tile Vertically','Vertikal anordnen',
+   'Mosaico vertical','Affianca verticalmente'),cmTileV);
+ MAdd(7,T5('Fermer tout','Close All','Alle schlie@7en','Cerrar todo',
+   'Chiudi tutto'),cmCloseAll);
+ MAdd(7,T5('R@eorganiser ic@ones','Arrange Icons','Symbole anordnen',
+   'Organizar iconos','Disponi icone'),cmArrange);
  If WCnt>0 Then MAdd(7,'-',0);
  K:=0;
  For I:=1 To WCnt Do Begin
@@ -1846,132 +1887,236 @@ Begin
  MT[7]:=T5('Fe&n@etre','&Window','&Fenster','Ven&tana','Fi&nestra');
  MT[8]:=T5('Ai&de','&Help','&Hilfe','A&yuda','&Aiuto');
  { Fichier }
- MAdd(1,T5('Nouveau|Ctrl+N','New|Ctrl+N','Neu|Strg+N','Nuevo|Ctrl+N','Nuovo|Ctrl+N'),cmNew);
- MAdd(1,T5('Ouvrir...|Ctrl+O','Open...|Ctrl+O','@5ffnen...|Strg+O','Abrir...|Ctrl+O','Apri...|Ctrl+O'),cmOpen);
- MAdd(1,T5('Fermer|Ctrl+F4','Close|Ctrl+F4','Schlie@7en|Strg+F4','Cerrar|Ctrl+F4','Chiudi|Ctrl+F4'),cmClose);
+ MAdd(1,T5('Nouveau|Ctrl+N','New|Ctrl+N','Neu|Strg+N','Nuevo|Ctrl+N',
+   'Nuovo|Ctrl+N'),cmNew);
+ MAdd(1,T5('Ouvrir...|Ctrl+O','Open...|Ctrl+O','@5ffnen...|Strg+O',
+   'Abrir...|Ctrl+O','Apri...|Ctrl+O'),cmOpen);
+ MAdd(1,T5('Fermer|Ctrl+F4','Close|Ctrl+F4','Schlie@7en|Strg+F4',
+   'Cerrar|Ctrl+F4','Chiudi|Ctrl+F4'),cmClose);
  MAdd(1,'-',0);
- MAdd(1,T5('Enregistrer|Ctrl+S','Save|Ctrl+S','Speichern|Strg+S','Guardar|Ctrl+S','Salva|Ctrl+S'),cmSave);
- MAdd(1,T5('Enregistrer sous...','Save As...','Speichern unter...','Guardar como...','Salva con nome...'),cmSaveAs);
- MAdd(1,T5('Mots de passe...','Passwords...','Passw@2rter...','Contrase@nas...','Password...'),cmPass);
+ MAdd(1,T5('Enregistrer|Ctrl+S','Save|Ctrl+S','Speichern|Strg+S',
+   'Guardar|Ctrl+S','Salva|Ctrl+S'),cmSave);
+ MAdd(1,T5('Enregistrer sous...','Save As...','Speichern unter...',
+   'Guardar como...','Salva con nome...'),cmSaveAs);
+ MAdd(1,T5('Mots de passe...','Passwords...','Passw@2rter...','Contrase@nas...',
+   'Password...'),cmPass);
  MAdd(1,'-',0);
- MAdd(1,T5('Importer-Exporter...','Import-Export...','Import-Export...','Importar-Exportar...','Importa-Esporta...'),cmImpExp);
- MAdd(1,T5('Rapport...','Report...','Bericht...','Informe...','Rapporto...'),cmReport);
+ MAdd(1,T5('Importer-Exporter...','Import-Export...','Import-Export...',
+   'Importar-Exportar...','Importa-Esporta...'),cmImpExp);
+ MAdd(1,T5('Rapport...','Report...','Bericht...','Informe...','Rapporto...'),
+   cmReport);
  MAdd(1,'-',0);
- MAdd(1,T5('Mise en page...','Page Setup...','Seite einrichten...','Configurar p@rgina...','Imposta pagina...'),cmPageSetup);
- MAdd(1,T5('Imprimer...|Ctrl+P','Print...|Ctrl+P','Drucken...|Strg+P','Imprimir...|Ctrl+P','Stampa...|Ctrl+P'),cmPrint);
+ MAdd(1,T5('Mise en page...','Page Setup...','Seite einrichten...',
+   'Configurar p@rgina...','Imposta pagina...'),cmPageSetup);
+ MAdd(1,T5('Imprimer...|Ctrl+P','Print...|Ctrl+P','Drucken...|Strg+P',
+   'Imprimir...|Ctrl+P','Stampa...|Ctrl+P'),cmPrint);
  MAdd(1,'-',0);
  MAdd(1,T5('Quitter','Exit','Beenden','Salir','Esci'),cmExit);
  { Edition }
- MAdd(2,T5('Annuler|Ctrl+Z','Undo|Ctrl+Z','R@3ckg@1ngig|Strg+Z','Deshacer|Ctrl+Z','Annulla|Ctrl+Z'),cmUndo);
- MAdd(2,T5('R@etablir|Ctrl+Y','Redo|Ctrl+Y','Wiederholen|Strg+Y','Rehacer|Ctrl+Y','Ripeti|Ctrl+Y'),cmRedo);
+ MAdd(2,T5('Annuler|Ctrl+Z','Undo|Ctrl+Z','R@3ckg@1ngig|Strg+Z',
+   'Deshacer|Ctrl+Z','Annulla|Ctrl+Z'),cmUndo);
+ MAdd(2,T5('R@etablir|Ctrl+Y','Redo|Ctrl+Y','Wiederholen|Strg+Y',
+   'Rehacer|Ctrl+Y','Ripeti|Ctrl+Y'),cmRedo);
  MAdd(2,'-',0);
- MAdd(2,T5('Couper|Ctrl+X','Cut|Ctrl+X','Ausschneiden|Strg+X','Cortar|Ctrl+X','Taglia|Ctrl+X'),cmCut);
- MAdd(2,T5('Copier|Ctrl+C','Copy|Ctrl+C','Kopieren|Strg+C','Copiar|Ctrl+C','Copia|Ctrl+C'),cmCopy);
- MAdd(2,T5('Coller|Ctrl+V','Paste|Ctrl+V','Einf@3gen|Strg+V','Pegar|Ctrl+V','Incolla|Ctrl+V'),cmPaste);
- MAdd(2,T5('Effacer|Suppr','Clear|Del','L@2schen|Entf','Borrar|Supr','Cancella|Canc'),cmClear);
- MAdd(2,T5('Dupliquer|Ctrl+D','Duplicate|Ctrl+D','Duplizieren|Strg+D','Duplicar|Ctrl+D','Duplica|Ctrl+D'),cmDup);
+ MAdd(2,T5('Couper|Ctrl+X','Cut|Ctrl+X','Ausschneiden|Strg+X','Cortar|Ctrl+X',
+   'Taglia|Ctrl+X'),cmCut);
+ MAdd(2,T5('Copier|Ctrl+C','Copy|Ctrl+C','Kopieren|Strg+C','Copiar|Ctrl+C',
+   'Copia|Ctrl+C'),cmCopy);
+ MAdd(2,T5('Coller|Ctrl+V','Paste|Ctrl+V','Einf@3gen|Strg+V','Pegar|Ctrl+V',
+   'Incolla|Ctrl+V'),cmPaste);
+ MAdd(2,T5('Effacer|Suppr','Clear|Del','L@2schen|Entf','Borrar|Supr',
+   'Cancella|Canc'),cmClear);
+ MAdd(2,T5('Dupliquer|Ctrl+D','Duplicate|Ctrl+D','Duplizieren|Strg+D',
+   'Duplicar|Ctrl+D','Duplica|Ctrl+D'),cmDup);
  MAdd(2,'-',0);
- MAdd(2,T5('Tout s@electionner|Ctrl+A','Select All|Ctrl+A','Alles ausw@1hlen|Strg+A','Seleccionar todo|Ctrl+A','Seleziona tutto|Ctrl+A'),cmSelAll);
- MAdd(2,T5('S@electionner...|Ctrl+L','Select...|Ctrl+L','Ausw@1hlen...|Strg+L','Seleccionar...|Ctrl+L','Seleziona...|Ctrl+L'),cmSelect);
- MAdd(2,T5('Aller @a la page...|Ctrl+G','Go to Page...|Ctrl+G','Gehe zu Seite...|Strg+G','Ir a p@rgina...|Ctrl+G','Vai a pagina...|Ctrl+G'),cmGoto);
+ MAdd(2,T5('S@electionner tout|Ctrl+A','Select All|Ctrl+A',
+   'Alles ausw@1hlen|Strg+A','Seleccionar todo|Ctrl+A',
+   'Seleziona tutto|Ctrl+A'),cmSelAll);
+ MAdd(2,T5('S@electionner...|Ctrl+L','Select...|Ctrl+L','Ausw@1hlen...|Strg+L',
+   'Seleccionar...|Ctrl+L','Seleziona...|Ctrl+L'),cmSelect);
+ MAdd(2,T5('Atteindre la page...|Ctrl+G','Go to Page...|Ctrl+G',
+   'Gehe zu Seite...|Strg+G','Ir a p@rgina...|Ctrl+G','Vai a pagina...|Ctrl+G'),
+   cmGoto);
  { Affichage }
- MAdd(3,T5('Barres d''outils...','Toolbars...','Symbolleisten...','Barras de herramientas...','Barre degli strumenti...'),cmToolbars);
+ MAdd(3,T5('Palettes...','Toolbars...','Symbolleisten...',
+   'Barras de herramientas...','Barre degli strumenti...'),cmToolbars);
  MAdd(3,'-',0);
- MAdd(3,T5('Redresser les flux|Ctrl+T','Straighten Flows|Ctrl+T','Fl@3sse begradigen|Strg+T','Enderezar flujos|Ctrl+T','Raddrizza flussi|Ctrl+T'),cmStraight);
- MAdd(3,T5('Inverser le flux|Ctrl+U','Change Flow Direction|Ctrl+U','Flussrichtung @1ndern|Strg+U','Cambiar sentido|Ctrl+U','Cambia direzione|Ctrl+U'),cmChgDir);
- MAdd(3,T5('Libell@es et qualifiants','Labels and Qualifiers','Beschriftungen','Etiquetas y calificadores','Etichette e qualificatori'),1009);
+ MAdd(3,T5('Tendre les flux|Ctrl+T','Straighten Flows|Ctrl+T',
+   'Fl@3sse begradigen|Strg+T','Enderezar flujos|Ctrl+T',
+   'Raddrizza flussi|Ctrl+T'),cmStraight);
+ MAdd(3,T5('Changer la direction des flux|Ctrl+U',
+   'Change Flow Direction|Ctrl+U','Flussrichtung @1ndern|Strg+U',
+   'Cambiar sentido|Ctrl+U','Cambia direzione|Ctrl+U'),cmChgDir);
+ MAdd(3,T5('Libell@es et qualificatifs','Labels and Qualifiers',
+   'Beschriftungen','Etiquetas y calificadores','Etichette e qualificatori'),
+   1009);
  MAdd(3,'-',0);
- MAdd(3,T5('Ajuster|Ctrl+F','Fit|Ctrl+F','Anpassen|Strg+F','Ajustar|Ctrl+F','Adatta|Ctrl+F'),cmFit);
- MAdd(3,T5('Taille par d@efaut','Restore to Default Size','Standardgr@2@7e','Tama@no predeterminado','Dimensione predefinita'),cmRestore);
- MAdd(3,T5('Redimensionner...','Resize...','Gr@2@7e @1ndern...','Cambiar tama@no...','Ridimensiona...'),cmResize);
- MAdd(3,T5('Masquer|Ctrl+H','Hide|Ctrl+H','Ausblenden|Strg+H','Ocultar|Ctrl+H','Nascondi|Ctrl+H'),cmHide);
- MAdd(3,T5('Afficher','Show','Einblenden','Mostrar','Mostra'),1010);
- MAdd(3,T5('Surligner','Highlight','Hervorheben','Resaltar','Evidenzia'),cmHilite);
- MAdd(3,T5('Retirer le surlignage','Remove Highlight','Hervorhebung entfernen','Quitar resaltado','Rimuovi evidenziazione'),cmUnHilite);
- MAdd(3,T5('Police du texte libre...','Free Text Font...','Schrift f@3r freien Text...','Fuente del texto libre...','Carattere del testo libero...'),cmFont);
- MAdd(3,T5('Organiser','Arrange','Anordnen','Organizar','Disponi'),1011);
+ MAdd(3,T5('Cadrer|Ctrl+F','Fit|Ctrl+F','Anpassen|Strg+F','Ajustar|Ctrl+F',
+   'Adatta|Ctrl+F'),cmFit);
+ MAdd(3,T5('Remettre @a la taille par d@efaut','Restore to Default Size',
+   'Standardgr@2@7e','Tama@no predeterminado','Dimensione predefinita'),
+   cmRestore);
+ MAdd(3,T5('Dimensionner...','Resize...','Gr@2@7e @1ndern...',
+   'Cambiar tama@no...','Ridimensiona...'),cmResize);
+ MAdd(3,T5('Cacher|Ctrl+H','Hide|Ctrl+H','Ausblenden|Strg+H','Ocultar|Ctrl+H',
+   'Nascondi|Ctrl+H'),cmHide);
+ MAdd(3,T5('Montrer','Show','Einblenden','Mostrar','Mostra'),1010);
+ MAdd(3,T5('Mettre en @evidence','Highlight','Hervorheben','Resaltar',
+   'Evidenzia'),cmHilite);
+ MAdd(3,T5('Enlever la mise en @evidence','Remove Highlight',
+   'Hervorhebung entfernen','Quitar resaltado','Rimuovi evidenziazione'),
+   cmUnHilite);
+ MAdd(3,T5('Police du texte libre...','Free Text Font...',
+   'Schrift f@3r freien Text...','Fuente del texto libre...',
+   'Carattere del testo libero...'),cmFont);
+ MAdd(3,T5('Disposition','Arrange','Anordnen','Organizar','Disponi'),1011);
  MAdd(3,'-',0);
- MAdd(3,T5('Taille du dessin...','Drawing Size...','Zeichnungsgr@2@7e...','Tama@no del dibujo...','Dimensione disegno...'),cmDrawSize);
+ MAdd(3,T5('Surface de travail...','Drawing Size...','Zeichnungsgr@2@7e...',
+   'Tama@no del dibujo...','Dimensione disegno...'),cmDrawSize);
  MAdd(3,'Zoom',1012);
  MAdd(3,T5('Aligner','Align','Ausrichten','Alinear','Allinea'),1013);
  { Modele }
- MAdd(4,T5('Processus|Ctrl+1','Processes|Ctrl+1','Prozesse|Strg+1','Procesos|Ctrl+1','Processi|Ctrl+1'),cmMProc);
- MAdd(4,T5('Flux|Ctrl+2','Flows|Ctrl+2','Fl@3sse|Strg+2','Flujos|Ctrl+2','Flussi|Ctrl+2'),cmMFlow);
- MAdd(4,T5('Entrep@ots|Ctrl+3','Stores|Ctrl+3','Speicher|Strg+3','Almacenes|Ctrl+3','Archivi|Ctrl+3'),cmMStore);
- MAdd(4,T5('Entit@es externes|Ctrl+4','External Entities|Ctrl+4','Externe Entit@1ten|Strg+4','Entidades externas|Ctrl+4','Entit@r esterne|Ctrl+4'),cmMEnt);
- MAdd(4,T5('Ressources|Ctrl+5','Resources|Ctrl+5','Ressourcen|Strg+5','Recursos|Ctrl+5','Risorse|Ctrl+5'),cmMRes);
- MAdd(4,T5('Qualifiants|Ctrl+6','Qualifiers|Ctrl+6','Qualifizierer|Strg+6','Calificadores|Ctrl+6','Qualificatori|Ctrl+6'),cmMQual);
- MAdd(4,T5('Diagrammes|Ctrl+7','Diagrams|Ctrl+7','Diagramme|Strg+7','Diagramas|Ctrl+7','Diagrammi|Ctrl+7'),cmMDiag);
+ MAdd(4,T5('Processus|Ctrl+1','Processes|Ctrl+1','Prozesse|Strg+1',
+   'Procesos|Ctrl+1','Processi|Ctrl+1'),cmMProc);
+ MAdd(4,T5('Flux|Ctrl+2','Flows|Ctrl+2','Fl@3sse|Strg+2','Flujos|Ctrl+2',
+   'Flussi|Ctrl+2'),cmMFlow);
+ MAdd(4,T5('D@ep@ots|Ctrl+3','Stores|Ctrl+3','Speicher|Strg+3',
+   'Almacenes|Ctrl+3','Archivi|Ctrl+3'),cmMStore);
+ MAdd(4,T5('Entit@es externes|Ctrl+4','External Entities|Ctrl+4',
+   'Externe Entit@1ten|Strg+4','Entidades externas|Ctrl+4',
+   'Entit@r esterne|Ctrl+4'),cmMEnt);
+ MAdd(4,T5('Ressources|Ctrl+5','Resources|Ctrl+5','Ressourcen|Strg+5',
+   'Recursos|Ctrl+5','Risorse|Ctrl+5'),cmMRes);
+ MAdd(4,T5('Qualificatifs|Ctrl+6','Qualifiers|Ctrl+6','Qualifizierer|Strg+6',
+   'Calificadores|Ctrl+6','Qualificatori|Ctrl+6'),cmMQual);
+ MAdd(4,T5('Diagrammes|Ctrl+7','Diagrams|Ctrl+7','Diagramme|Strg+7',
+   'Diagramas|Ctrl+7','Diagrammi|Ctrl+7'),cmMDiag);
  MAdd(4,'-',0);
- MAdd(4,T5('Description du mod@gle','Model Description','Modellbeschreibung','Descripci@pn del modelo','Descrizione del modello'),cmMDesc);
+ MAdd(4,T5('Description du mod@gle','Model Description','Modellbeschreibung',
+   'Descripci@pn del modelo','Descrizione del modello'),cmMDesc);
  MAdd(4,'-',0);
- MAdd(4,T5('Champs d@efinis par l''utilisateur','User Defined Fields','Benutzerdefinierte Felder','Campos definidos por el usuario','Campi definiti dall''utente'),cmMUdf);
+ MAdd(4,T5('Champs utilisateur','User Defined Fields',
+   'Benutzerdefinierte Felder','Campos definidos por el usuario',
+   'Campi definiti dall''utente'),cmMUdf);
  { Projet }
  MAdd(5,T5('Domaines','Domains','Dom@1nen','Dominios','Domini'),cmPDom);
- MAdd(5,T5('Types de donn@ees','Data Types','Datentypen','Tipos de datos','Tipi di dati'),cmPType);
- MAdd(5,T5('El@ements communs','Common Items','Gemeinsame Elemente','Elementos comunes','Elementi comuni'),cmPComm);
- MAdd(5,T5('Structures de donn@ees','Data Structures','Datenstrukturen','Estructuras de datos','Strutture dati'),cmPStruct);
- MAdd(5,T5('Syst@gmes cibles','Target Systems','Zielsysteme','Sistemas de destino','Sistemi di destinazione'),cmPTarget);
+ MAdd(5,T5('Types de donn@ees','Data Types','Datentypen','Tipos de datos',
+   'Tipi di dati'),cmPType);
+ MAdd(5,T5('Items communs','Common Items','Gemeinsame Elemente',
+   'Elementos comunes','Elementi comuni'),cmPComm);
+ MAdd(5,T5('Structures de donn@ees','Data Structures','Datenstrukturen',
+   'Estructuras de datos','Strutture dati'),cmPStruct);
+ MAdd(5,T5('Syst@gmes cibles','Target Systems','Zielsysteme',
+   'Sistemas de destino','Sistemi di destinazione'),cmPTarget);
  MAdd(5,'-',0);
- MAdd(5,T5('Concepts @etendus','Extended Concepts','Erweiterte Konzepte','Conceptos extendidos','Concetti estesi'),1014);
+ MAdd(5,T5('Concepts avanc@es','Extended Concepts','Erweiterte Konzepte',
+   'Conceptos extendidos','Concetti estesi'),1014);
  MAdd(5,'-',0);
- MAdd(5,T5('Description du projet','Project Description','Projektbeschreibung','Descripci@pn del proyecto','Descrizione del progetto'),cmPDesc);
+ MAdd(5,T5('Description du projet','Project Description','Projektbeschreibung',
+   'Descripci@pn del proyecto','Descrizione del progetto'),cmPDesc);
  { Outils }
- MAdd(6,T5('V@erifier l''int@egrit@e...','Verify Integrity...','Integrit@1t pr@3fen...','Verificar integridad...','Verifica integrit@r...'),cmVerify);
- MAdd(6,T5('Nettoyage...','Cleanup...','Bereinigen...','Limpieza...','Pulizia...'),cmCleanup);
+ MAdd(6,T5('V@erifier l''int@egrit@e...','Verify Integrity...',
+   'Integrit@1t pr@3fen...','Verificar integridad...','Verifica integrit@r...'),
+   cmVerify);
+ MAdd(6,T5('Nettoyage...','Cleanup...','Bereinigen...','Limpieza...',
+   'Pulizia...'),cmCleanup);
  MAdd(6,T5('G@en@erer','Generate','Generieren','Generar','Genera'),1015);
  MAdd(6,'-',0);
- MAdd(6,T5('Compl@ements','Add-Ins','Add-Ins','Complementos','Componenti aggiuntivi'),cmAddIns);
+ MAdd(6,T5('Compl@ements','Add-Ins','Add-Ins','Complementos',
+   'Componenti aggiuntivi'),cmAddIns);
  MAdd(6,'-',0);
- MAdd(6,T5('Fusionner...','Merge...','Zusammenf@3hren...','Combinar...','Unisci...'),cmMerge);
- MAdd(6,T5('Scinder...','Split...','Aufteilen...','Dividir...','Dividi...'),cmSplit);
+ MAdd(6,T5('Fusionner...','Merge...','Zusammenf@3hren...','Combinar...',
+   'Unisci...'),cmMerge);
+ MAdd(6,T5('Scinder...','Split...','Aufteilen...','Dividir...','Dividi...'),
+   cmSplit);
  MAdd(6,'-',0);
- MAdd(6,T5('Cr@eer/ouvrir l''arbre des processus...','Create/Open Process Tree...','Prozessbaum erstellen/@2ffnen...','Crear/abrir @rrbol de procesos...','Crea/apri albero dei processi...'),cmTree);
- MAdd(6,T5('Mettre @a jour l''arbre des processus...','Update Process Tree...','Prozessbaum aktualisieren...','Actualizar @rrbol de procesos...','Aggiorna albero dei processi...'),cmTreeUpd);
- MAdd(6,T5('Cr@eer un parent du processus racine...','Create Parent for Root Process...','Eltern f@3r Wurzelprozess erstellen...','Crear padre del proceso ra@jz...','Crea genitore del processo radice...'),cmParent);
- MAdd(6,T5('Mettre @a jour l''environnement','Update Environment','Umgebung aktualisieren','Actualizar entorno','Aggiorna ambiente'),cmEnv);
- MAdd(6,T5('Mettre @a jour l''environnement (avec propri@et@es des flux)','Update Environment (with Flow Properties)','Umgebung aktualisieren (mit Flusseigenschaften)','Actualizar entorno (con propiedades de flujo)','Aggiorna ambiente (con propriet@r dei flussi)'),cmEnvFlow);
+ MAdd(6,T5('Cr@eer/ouvrir l''arbre des processus...',
+   'Create/Open Process Tree...','Prozessbaum erstellen/@2ffnen...',
+   'Crear/abrir @rrbol de procesos...','Crea/apri albero dei processi...'),
+   cmTree);
+ MAdd(6,T5('Mettre @a jour l''arbre des processus...','Update Process Tree...',
+   'Prozessbaum aktualisieren...','Actualizar @rrbol de procesos...',
+   'Aggiorna albero dei processi...'),cmTreeUpd);
+ MAdd(6,T5('Cr@eer un parent du processus racine...',
+   'Create Parent for Root Process...','Eltern f@3r Wurzelprozess erstellen...',
+   'Crear padre del proceso ra@jz...','Crea genitore del processo radice...'),
+   cmParent);
+ MAdd(6,T5('Mettre @a jour l''environnement','Update Environment',
+   'Umgebung aktualisieren','Actualizar entorno','Aggiorna ambiente'),cmEnv);
+ MAdd(6,T5('Mettre @a jour l''environnement (avec propri@et@es des flux)',
+   'Update Environment (with Flow Properties)',
+   'Umgebung aktualisieren (mit Flusseigenschaften)',
+   'Actualizar entorno (con propiedades de flujo)',
+   'Aggiorna ambiente (con propriet@r dei flussi)'),cmEnvFlow);
  MAdd(6,'-',0);
- MAdd(6,T5('Renum@eroter...','Renumber...','Neu nummerieren...','Renumerar...','Rinumera...'),cmRenum);
- MAdd(6,T5('Utiliser le dictionnaire WRM','Use WRM Dictionary','WRM-W@2rterbuch verwenden','Usar diccionario WRM','Usa dizionario WRM'),cmWRM);
+ MAdd(6,T5('Renum@eroter...','Renumber...','Neu nummerieren...','Renumerar...',
+   'Rinumera...'),cmRenum);
+ MAdd(6,T5('Utiliser le dictionnaire WRM','Use WRM Dictionary',
+   'WRM-W@2rterbuch verwenden','Usar diccionario WRM','Usa dizionario WRM'),
+   cmWRM);
  MAdd(6,'-',0);
- MAdd(6,T5('Options...','Options...','Optionen...','Opciones...','Opzioni...'),cmOptions);
+ MAdd(6,T5('Options...','Options...','Optionen...','Opciones...','Opzioni...'),
+   cmOptions);
  { Fenetre : dynamique }
  BuildWindowMenu;
  { Aide }
- MAdd(8,T5('Aide de SilverRun-BPM|F1','Silverrun-BPM Help|F1','Silverrun-BPM-Hilfe|F1','Ayuda de Silverrun-BPM|F1','Guida di Silverrun-BPM|F1'),cmHelp);
+ MAdd(8,T5('Aide Silverrun-BPM|F1','Silverrun-BPM Help|F1',
+   'Silverrun-BPM-Hilfe|F1','Ayuda de Silverrun-BPM|F1',
+   'Guida di Silverrun-BPM|F1'),cmHelp);
  MAdd(8,'-',0);
- MAdd(8,T5('Guide de l''utilisateur BPM','BPM User''s Guide','BPM-Benutzerhandbuch','Gu@ja del usuario BPM','Guida utente BPM'),cmGuide);
- MAdd(8,T5('Notes de version','Release Notes','Versionshinweise','Notas de la versi@pn','Note di rilascio'),cmRelNotes);
+ MAdd(8,T5('Guide de l''utilisateur BPM','BPM User''s Guide',
+   'BPM-Benutzerhandbuch','Gu@ja del usuario BPM','Guida utente BPM'),cmGuide);
+ MAdd(8,T5('Nouveaut@es','Release Notes','Versionshinweise',
+   'Notas de la versi@pn','Note di rilascio'),cmRelNotes);
  MAdd(8,'-',0);
  MAdd(8,T5('Licences','Licenses','Lizenzen','Licencias','Licenze'),cmLicenses);
  MAdd(8,'-',0);
- MAdd(8,T5('A propos de SILVERRUN-BPM...','About SILVERRUN-BPM...','@6ber SILVERRUN-BPM...','Acerca de SILVERRUN-BPM...','Informazioni su SILVERRUN-BPM...'),cmAbout);
+ MAdd(8,T5('A propos de SILVERRUN-BPM...','About SILVERRUN-BPM...',
+   '@6ber SILVERRUN-BPM...','Acerca de SILVERRUN-BPM...',
+   'Informazioni su SILVERRUN-BPM...'),cmAbout);
  { Sous-menus }
- MAdd(9,T5('Noms des flux','Flow Names','Flussnamen','Nombres de flujos','Nomi dei flussi'),cmLabName);
- MAdd(9,T5('Qualifiants','Qualifiers','Qualifizierer','Calificadores','Qualificatori'),cmLabQual);
+ MAdd(9,T5('Noms des flux','Flow Names','Flussnamen','Nombres de flujos',
+   'Nomi dei flussi'),cmLabName);
+ MAdd(9,T5('Qualificatifs','Qualifiers','Qualifizierer','Calificadores',
+   'Qualificatori'),cmLabQual);
  MAdd(9,T5('Num@eros','Numbers','Nummern','N@vmeros','Numeri'),cmLabNum);
- MAdd(9,T5('Ressources','Resources','Ressourcen','Recursos','Risorse'),cmLabRes);
- MAdd(10,T5('Tous les objets masqu@es','All hidden objects','Alle ausgeblendeten Objekte','Todos los objetos ocultos','Tutti gli oggetti nascosti'),cmShowAll);
- MAdd(11,T5('Premier plan','Bring to Front','In den Vordergrund','Traer al frente','Porta in primo piano'),cmFront);
- MAdd(11,T5('Arri@gre-plan','Send to Back','In den Hintergrund','Enviar al fondo','Porta in secondo piano'),cmBack);
+ MAdd(9,T5('Ressources','Resources','Ressourcen','Recursos','Risorse'),
+   cmLabRes);
+ MAdd(10,T5('Tous les objets masqu@es','All hidden objects',
+   'Alle ausgeblendeten Objekte','Todos los objetos ocultos',
+   'Tutti gli oggetti nascosti'),cmShowAll);
+ MAdd(11,T5('Premier plan','Bring to Front','In den Vordergrund',
+   'Traer al frente','Porta in primo piano'),cmFront);
+ MAdd(11,T5('Arri@gre-plan','Send to Back','In den Hintergrund',
+   'Enviar al fondo','Porta in secondo piano'),cmBack);
  MAdd(12,'25 %',cmZoom25);MAdd(12,'50 %',cmZoom50);MAdd(12,'75 %',cmZoom75);
- MAdd(12,'100 %',cmZoom100);MAdd(12,'150 %',cmZoom150);MAdd(12,'200 %',cmZoom200);
+ MAdd(12,'100 %',cmZoom100);MAdd(12,'150 %',cmZoom150);MAdd(12,'200 %',
+   cmZoom200);
  MAdd(12,'-',0);
- MAdd(12,T5('Zoom avant','Zoom In','Vergr@2@7ern','Acercar','Ingrandisci'),cmZoomIn);
- MAdd(12,T5('Zoom arri@gre','Zoom Out','Verkleinern','Alejar','Riduci'),cmZoomOut);
+ MAdd(12,T5('Zoom avant','Zoom In','Vergr@2@7ern','Acercar','Ingrandisci'),
+   cmZoomIn);
+ MAdd(12,T5('Zoom arri@gre','Zoom Out','Verkleinern','Alejar','Riduci'),
+   cmZoomOut);
  MAdd(13,T5('Gauche','Left','Links','Izquierda','Sinistra'),cmAlL);
  MAdd(13,T5('Droite','Right','Rechts','Derecha','Destra'),cmAlR);
  MAdd(13,T5('Haut','Top','Oben','Arriba','Alto'),cmAlT);
  MAdd(13,T5('Bas','Bottom','Unten','Abajo','Basso'),cmAlB);
- MAdd(13,T5('Centrer horizontalement','Center Horizontally','Horizontal zentrieren','Centrar horizontalmente','Centra orizzontalmente'),cmAlH);
- MAdd(13,T5('Centrer verticalement','Center Vertically','Vertikal zentrieren','Centrar verticalmente','Centra verticalmente'),cmAlV);
- MAdd(14,T5('R@gles d''affaires','Business Rules','Gesch@1ftsregeln','Reglas de negocio','Regole di business'),cmPRule);
+ MAdd(13,T5('Centrer horizontalement','Center Horizontally',
+   'Horizontal zentrieren','Centrar horizontalmente','Centra orizzontalmente'),
+   cmAlH);
+ MAdd(13,T5('Centrer verticalement','Center Vertically','Vertikal zentrieren',
+   'Centrar verticalmente','Centra verticalmente'),cmAlV);
+ MAdd(14,T5('R@gles d''affaires','Business Rules','Gesch@1ftsregeln',
+   'Reglas de negocio','Regole di business'),cmPRule);
  MAdd(14,T5('Ev@enements','Events','Ereignisse','Eventos','Eventi'),cmPEvent);
  MAdd(14,T5('Sites','Locations','Standorte','Ubicaciones','Sedi'),cmPLoc);
- MAdd(15,T5('Liste des processus','Process List','Prozessliste','Lista de procesos','Elenco dei processi'),cmGenList);
- MAdd(15,T5('Arbre des processus (texte)','Process Tree (text)','Prozessbaum (Text)','@rrbol de procesos (texto)','Albero dei processi (testo)'),cmGenTree);
- MAdd(15,T5('Dictionnaire de donn@ees','Data Dictionary','Datenw@2rterbuch','Diccionario de datos','Dizionario dati'),cmGenDict);
+ MAdd(15,T5('Liste des processus','Process List','Prozessliste',
+   'Lista de procesos','Elenco dei processi'),cmGenList);
+ MAdd(15,T5('Arbre des processus (texte)','Process Tree (text)',
+   'Prozessbaum (Text)','@rrbol de procesos (texto)',
+   'Albero dei processi (testo)'),cmGenTree);
+ MAdd(15,T5('Dictionnaire de donn@ees','Data Dictionary','Datenw@2rterbuch',
+   'Diccionario de datos','Dizionario dati'),cmGenDict);
 End;
 
 Function ItemH(M,I: Integer): Integer;
@@ -1991,7 +2136,8 @@ Function MenuMnem(M: Integer): Char;
 Var P: Integer;
 Begin
  P:=Pos('&',MT[M]);
- If (P>0) And (P<Length(MT[M])) Then MenuMnem:=UpCase(MT[M][P+1]) Else MenuMnem:=#0;
+ If (P>0) And (P<Length(MT[M])) Then MenuMnem:=UpCase(MT[M][P+1]) Else
+   MenuMnem:=#0;
 End;
 
 Function ItemY(M,I: Integer): Integer;
@@ -2167,7 +2313,8 @@ End;
 
 Function ItemOK(M,I: Integer): Boolean;
 Begin
- ItemOK:=(I>0) And (MLb[M,I]<>'-') And ((MCm[M,I]>=1000) Or CmdEnabled(MCm[M,I]));
+ ItemOK:=(I>0) And (MLb[M,I]<>'-') And ((MCm[M,I]>=1000) Or CmdEnabled(MCm[M,
+   I]));
 End;
 
 Procedure RunMenu(StartM: Integer; ByMouse: Boolean);
@@ -2211,8 +2358,10 @@ Begin
            S:=MCm[M,H]-1000;SHi:=0;LayoutSub(M,H,S);Full:=True;
           End;
          End;
-         If (E.Kind=2) And (MCm[M,H]<1000) Then Begin Cm:=MCm[M,H];Pick:=True;Done:=True;End;
-         If (E.Kind=3) And (MCm[M,H]<1000) And (Hi=H) Then Begin Cm:=MCm[M,H];Pick:=True;Done:=True;End;
+         If (E.Kind=2) And (MCm[M,H]<1000) Then Begin Cm:=MCm[M,H];Pick:=True;
+           Done:=True;End;
+         If (E.Kind=3) And (MCm[M,H]<1000) And (Hi=H) Then Begin Cm:=MCm[M,H];
+           Pick:=True;Done:=True;End;
         End Else If Hi<>0 Then Begin Hi:=0;Over:=True;End;
        End Else Begin
         If (E.Kind=2) And (T=0) And (DropHit(M,E.X,E.Y)=0) Then Done:=True;
@@ -2223,33 +2372,41 @@ Begin
     End;
    1: Case E.Key Of
        K_ESC: Begin
-         If S>0 Then Begin S:=0;SHi:=0;InSub:=False;Full:=True;End Else Done:=True;
+         If S>0 Then Begin S:=0;SHi:=0;InSub:=False;Full:=True;End Else
+           Done:=True;
         End;
        K_LEFT: Begin
          If S>0 Then Begin S:=0;SHi:=0;InSub:=False;Full:=True;End
-         Else Begin Dec(M);If M<1 Then M:=NMENU;Hi:=NextItem(M,0,1);LayoutMain(M);Full:=True;End;
+         Else Begin Dec(M);If M<1 Then M:=NMENU;Hi:=NextItem(M,0,1);
+           LayoutMain(M);Full:=True;End;
         End;
        K_RIGHT: Begin
          If (Hi>0) And (MCm[M,Hi]>=1000) And (S=0) Then Begin
-          S:=MCm[M,Hi]-1000;LayoutSub(M,Hi,S);SHi:=NextItem(S,0,1);InSub:=True;Full:=True;
+          S:=MCm[M,Hi]-1000;LayoutSub(M,Hi,S);SHi:=NextItem(S,0,1);InSub:=True;
+            Full:=True;
          End Else Begin
-          Inc(M);If M>NMENU Then M:=1;Hi:=NextItem(M,0,1);S:=0;SHi:=0;InSub:=False;
+          Inc(M);If M>NMENU Then M:=1;Hi:=NextItem(M,0,1);S:=0;SHi:=0;
+            InSub:=False;
           LayoutMain(M);Full:=True;
          End;
         End;
        K_UP: Begin
-         If InSub And (S>0) Then SHi:=NextItem(S,SHi,-1) Else Hi:=NextItem(M,Hi,-1);
+         If InSub And (S>0) Then SHi:=NextItem(S,SHi,-1) Else Hi:=NextItem(M,Hi,
+           -1);
          Over:=True;
         End;
        K_DOWN: Begin
-         If InSub And (S>0) Then SHi:=NextItem(S,SHi,1) Else Hi:=NextItem(M,Hi,1);
+         If InSub And (S>0) Then SHi:=NextItem(S,SHi,1) Else Hi:=NextItem(M,Hi,
+           1);
          Over:=True;
         End;
        K_ENTER: Begin
-         If InSub And (S>0) And (SHi>0) Then Begin Cm:=MCm[S,SHi];Pick:=True;Done:=True;End
+         If InSub And (S>0) And (SHi>0) Then Begin Cm:=MCm[S,SHi];Pick:=True;
+           Done:=True;End
          Else If Hi>0 Then Begin
           If MCm[M,Hi]>=1000 Then Begin
-           S:=MCm[M,Hi]-1000;LayoutSub(M,Hi,S);SHi:=NextItem(S,0,1);InSub:=True;Full:=True;
+           S:=MCm[M,Hi]-1000;LayoutSub(M,Hi,S);SHi:=NextItem(S,0,1);InSub:=True;
+             Full:=True;
           End Else Begin Cm:=MCm[M,Hi];Pick:=True;Done:=True;End;
          End;
         End;
@@ -2430,7 +2587,8 @@ End;
 { ---- rendu des objets ---- }
 
 Procedure DrawWrap(X1,Y1,X2,Y2: Integer; Const S: String; C,J: Integer);
-Var Per,Rows,N,I,P,Last,Start: Integer; L: Array[1..6] Of String[40]; Cur,Wd: String;
+Var Per,Rows,N,I,P,Last,Start: Integer; L: Array[1..6] Of String[40]; Cur,Wd:
+  String;
 Begin
  Per:=(X2-X1+1) Div 8;Rows:=(Y2-Y1+1) Div 10;
  If (Per<2) Or (Rows<1) Or (S='') Then Exit;
@@ -2470,6 +2628,34 @@ Begin
  Line(X1,Y1+R,X1,Y2-R);Line(X2,Y1+R,X2,Y2-R);
  Arc(X1+R,Y1+R,90,180,R);Arc(X2-R,Y1+R,0,90,R);
  Arc(X1+R,Y2-R,180,270,R);Arc(X2-R,Y2-R,270,360,R);
+End;
+
+Procedure DrawInfoBox(X1,Y1,X2,Y2,C: Integer);
+Var R1,R2,MX1,MX2: Integer;
+Begin
+ R1:=Y1+(Y2-Y1)*34 Div 100;R2:=Y1+(Y2-Y1)*67 Div 100;
+ MX1:=X1+(X2-X1)*70 Div 100;MX2:=X1+(X2-X1)*52 Div 100;
+ Bx(X1,Y1,X2,Y2,cWht);
+ SetColor(C);SetLineStyle(SolidLn,0,1);
+ Line(X1+8,Y1,X2-8,Y1);Line(X1,Y1+8,X1,Y2);Line(X2,Y1+8,X2,Y2);
+ Line(X1,Y2,X2,Y2);
+ Arc(X1+8,Y1+8,90,180,8);Arc(X2-8,Y1+8,0,90,8);
+ Line(X1,R1,X2,R1);Line(X1,R2,X2,R2);
+ Line(MX1,R1,MX1,R2);Line(MX2,R2,MX2,Y2);
+ If VZ<50 Then Exit;
+ Tx(X1+4,Y1+3,T5('Nom du mod@gle','Model Name','Modellname',
+    'Nombre del modelo','Nome del modello'),cDGr);
+ Tx(X1+4,Y1+13,Copy(Cfg.MName,1,(X2-X1) Div 8-1),C);
+ Tx(X1+4,R1+3,T5('Cr@eateur','Creator','Ersteller','Creador','Creatore'),
+    cDGr);
+ Tx(X1+4,R1+13,Copy(Cfg.Author,1,(MX1-X1) Div 8-1),C);
+ Tx(MX1+4,R1+3,'Version',cDGr);
+ Tx(MX1+4,R1+13,Cfg.Ver,C);
+ Tx(X1+4,R2+3,T5('Cr@e@e le','Created','Erstellt','Creado','Creato'),cDGr);
+ Tx(X1+4,R2+13,Cfg.Created,C);
+ Tx(MX2+4,R2+3,T5('Modifi@e le','Modified','Ge@1ndert','Modificado',
+    'Modificato'),cDGr);
+ Tx(MX2+4,R2+13,Cfg.Modified,C);
 End;
 
 Function ElColor(I: Integer): Integer;
@@ -2523,8 +2709,10 @@ Begin
      SetColor(C);SetLineStyle(SolidLn,0,1);
      Ellipse((X1+X2) Div 2,(Y1+Y2) Div 2,0,360,(X2-X1) Div 2,(Y2-Y1) Div 2);
      If VZ>=50 Then Begin
-      If Cfg.ZDesc[1]>1 Then CenterTx(X1,X2,Y1+(Y2-Y1) Div 5,ZoneText(I,1),cMag);
-      If Cfg.ZDesc[2]>1 Then DrawWrap(X1+8,Y1+(Y2-Y1) Div 3,X2-8,Y2-(Y2-Y1) Div 4,ZoneText(I,2),C,2);
+      If Cfg.ZDesc[1]>1 Then CenterTx(X1,X2,Y1+(Y2-Y1) Div 5,ZoneText(I,1),
+        cMag);
+      If Cfg.ZDesc[2]>1 Then DrawWrap(X1+8,Y1+(Y2-Y1) Div 3,X2-8,Y2-(Y2-Y1) Div
+        4,ZoneText(I,2),C,2);
       If Cfg.ZDesc[3]>1 Then CenterTx(X1,X2,Y2-(Y2-Y1) Div 5-6,ZoneText(I,3),C);
      End;
     End Else Begin
@@ -2559,10 +2747,12 @@ Begin
     Frame(X1+2,Y1+2,X2-2,Y2-2,C);
     If VZ>=50 Then DrawWrap(X1+5,Y1+5,X2-5,Y2-5,ElName(I),C,2);
    End;
+  ekInfo: DrawInfoBox(X1,Y1,X2,Y2,C);
   ekText: Begin
     If VZ>=50 Then Begin
      Tx(X1+2,Y1+(Y2-Y1-7) Div 2,Copy(Mdl^.El[I].Name,1,(X2-X1) Div 8+4),C);
-     If Mdl^.El[I].FS=2 Then Tx(X1+3,Y1+(Y2-Y1-7) Div 2,Copy(Mdl^.El[I].Name,1,(X2-X1) Div 8+4),C);
+     If Mdl^.El[I].FS=2 Then Tx(X1+3,Y1+(Y2-Y1-7) Div 2,Copy(Mdl^.El[I].Name,1,
+       (X2-X1) Div 8+4),C);
     End;
     If Mdl^.El[I].Sel Then Frame(X1,Y1,X2,Y2,cDGr);
    End;
@@ -2695,33 +2885,6 @@ Begin
  Else If Near(X1,MYy) Then HandleHit:=8;
 End;
 
-Procedure TitleBlock(D: Integer);
-Var X1,Y1,X2,Y2,R1,R2,MX1: Integer; Z: LongInt;
-Begin
- Z:=VZ;
- X1:=SXc(Mdl^.Dg[D].W Div 2-130);X2:=SXc(Mdl^.Dg[D].W Div 2+130);
- Y1:=SYc(Mdl^.Dg[D].H-126);Y2:=SYc(Mdl^.Dg[D].H-14);
- R1:=Y1+(Y2-Y1)*34 Div 100;R2:=Y1+(Y2-Y1)*67 Div 100;
- MX1:=X1+(X2-X1)*70 Div 100;
- Bx(X1,Y1,X2,Y2,cWht);
- SetColor(cBlk);SetLineStyle(SolidLn,0,1);
- Line(X1+8,Y1,X2-8,Y1);Line(X1,Y1+8,X1,Y2);Line(X2,Y1+8,X2,Y2);Line(X1,Y2,X2,Y2);
- Arc(X1+8,Y1+8,90,180,8);Arc(X2-8,Y1+8,0,90,8);
- Line(X1,R1,X2,R1);Line(X1,R2,X2,R2);
- Line(MX1,R1,MX1,R2);Line(X1+(X2-X1)*52 Div 100,R2,X1+(X2-X1)*52 Div 100,Y2);
- Tx(X1+4,Y1+3,T5('Nom du mod@gle','Model Name','Modellname','Nombre del modelo','Nome del modello'),cDGr);
- Tx(X1+4,Y1+13,Copy(Cfg.MName,1,(X2-X1) Div 8-1),cBlk);
- Tx(X1+4,R1+3,T5('Cr@eateur','Creator','Ersteller','Creador','Creatore'),cDGr);
- Tx(X1+4,R1+13,Copy(Cfg.Author,1,(MX1-X1) Div 8-1),cBlk);
- Tx(MX1+4,R1+3,'Version',cDGr);
- Tx(MX1+4,R1+13,Cfg.Ver,cBlk);
- Tx(X1+4,R2+3,T5('Cr@e@e le','Created','Erstellt','Creado','Creato'),cDGr);
- Tx(X1+4,R2+13,Cfg.Created,cBlk);
- Tx(X1+(X2-X1)*52 Div 100+4,R2+3,T5('Modifi@e le','Modified','Ge@1ndert','Modificado','Modificato'),cDGr);
- Tx(X1+(X2-X1)*52 Div 100+4,R2+13,Cfg.Modified,cBlk);
- Z:=0;
-End;
-
 Procedure DrawDiagram(W: Integer);
 Var D,I,J,K,R,X1,Y1,X2,Y2,HB,N,GX,GY,G: Integer;
     Ord: Array[1..MAXEL] Of Integer; T: Integer;
@@ -2747,12 +2910,12 @@ Begin
  HB:=24*VZ Div 100;If HB<12 Then HB:=12;
  R:=8*VZ Div 100;If R<3 Then R:=3;
  SetColor(cBlk);SetLineStyle(SolidLn,0,ThickWidth);
- Line(X1+R,Y1,X2-R,Y1);Line(X1,Y1+R,X1,Y2);Line(X2,Y1+R,X2,Y2);Line(X1,Y2,X2,Y2);
+ Line(X1+R,Y1,X2-R,Y1);Line(X1,Y1+R,X1,Y2);Line(X2,Y1+R,X2,Y2);Line(X1,Y2,X2,
+   Y2);
  Arc(X1+R,Y1+R,90,180,R);Arc(X2-R,Y1+R,0,90,R);
  Line(X1,Y1+HB,X2,Y1+HB);
  SetLineStyle(SolidLn,0,1);
  If VZ>=40 Then CenterTx(X1,X2,Y1+(HB-7) Div 2+2,Mdl^.Dg[D].Title,cBlk);
- If (Mdl^.Dg[D].Parent=0) And (VZ>=50) Then TitleBlock(D);
  { flux puis objets (par Z) }
  For I:=1 To MAXFL Do
   If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) Then DrawFlow(I);
@@ -2775,7 +2938,8 @@ Begin
   For I:=1 To N Do
    If Mdl^.El[Ord[I]].Sel Then Begin
     X1:=SXc(Mdl^.El[Ord[I]].X);Y1:=SYc(Mdl^.El[Ord[I]].Y);
-    X2:=SXc(Mdl^.El[Ord[I]].X+Mdl^.El[Ord[I]].W);Y2:=SYc(Mdl^.El[Ord[I]].Y+Mdl^.El[Ord[I]].H);
+    X2:=SXc(Mdl^.El[Ord[I]].X+Mdl^.El[Ord[I]].W);
+      Y2:=SYc(Mdl^.El[Ord[I]].Y+Mdl^.El[Ord[I]].H);
     Bx(X1-2,Y1-2,X1+2,Y1+2,cBlk);Bx(X2-2,Y1-2,X2+2,Y1+2,cBlk);
     Bx(X1-2,Y2-2,X1+2,Y2+2,cBlk);Bx(X2-2,Y2-2,X2+2,Y2+2,cBlk);
    End;
@@ -2788,43 +2952,66 @@ Var Pt: Array[1..5] Of PointType;
 Begin
  SetLineStyle(SolidLn,0,1);
  Case Id Of
-  1: Begin Bx(X+3,Y+1,X+12,Y+14,cWht);Frame(X+3,Y+1,X+12,Y+14,cBlk);Ln(X+9,Y+1,X+12,Y+4,cBlk);End;
-  2: Begin Bx(X+1,Y+4,X+14,Y+13,cYel);Frame(X+1,Y+4,X+14,Y+13,cBlk);Bx(X+1,Y+2,X+6,Y+4,cYel);Frame(X+1,Y+2,X+6,Y+4,cBlk);End;
-  3: Begin Bx(X+1,Y+1,X+14,Y+14,cNavy);Bx(X+4,Y+1,X+11,Y+6,cWht);Bx(X+4,Y+9,X+11,Y+14,cLGr);End;
-  4: Begin Bx(X+1,Y+6,X+14,Y+12,cLGr);Frame(X+1,Y+6,X+14,Y+12,cBlk);Bx(X+4,Y+1,X+11,Y+6,cWht);Frame(X+4,Y+1,X+11,Y+6,cBlk);Bx(X+4,Y+10,X+11,Y+14,cWht);Frame(X+4,Y+10,X+11,Y+14,cBlk);End;
-  5: Begin Ln(X+4,Y+2,X+11,Y+10,cBlk);Ln(X+11,Y+2,X+4,Y+10,cBlk);Circle(X+4,Y+12,2);Circle(X+11,Y+12,2);End;
-  6: Begin Bx(X+2,Y+1,X+9,Y+10,cWht);Frame(X+2,Y+1,X+9,Y+10,cBlk);Bx(X+6,Y+5,X+13,Y+14,cWht);Frame(X+6,Y+5,X+13,Y+14,cBlk);End;
-  7: Begin Bx(X+2,Y+2,X+13,Y+14,cBrn);Bx(X+5,Y+1,X+10,Y+3,cLGr);Bx(X+4,Y+5,X+11,Y+13,cWht);End;
-  8: Begin Arc(X+8,Y+9,0,180,5);Ln(X+3,Y+9,X+3,Y+5,cNavy);Ln(X+3,Y+5,X+1,Y+8,cNavy);Ln(X+3,Y+5,X+6,Y+8,cNavy);End;
-  9: Begin Arc(X+8,Y+9,0,180,5);Ln(X+13,Y+9,X+13,Y+5,cNavy);Ln(X+13,Y+5,X+10,Y+8,cNavy);Ln(X+13,Y+5,X+15,Y+8,cNavy);End;
+  1: Begin Bx(X+3,Y+1,X+12,Y+14,cWht);Frame(X+3,Y+1,X+12,Y+14,cBlk);Ln(X+9,Y+1,
+    X+12,Y+4,cBlk);End;
+  2: Begin Bx(X+1,Y+4,X+14,Y+13,cYel);Frame(X+1,Y+4,X+14,Y+13,cBlk);Bx(X+1,Y+2,
+    X+6,Y+4,cYel);Frame(X+1,Y+2,X+6,Y+4,cBlk);End;
+  3: Begin Bx(X+1,Y+1,X+14,Y+14,cNavy);Bx(X+4,Y+1,X+11,Y+6,cWht);Bx(X+4,Y+9,
+    X+11,Y+14,cLGr);End;
+  4: Begin Bx(X+1,Y+6,X+14,Y+12,cLGr);Frame(X+1,Y+6,X+14,Y+12,cBlk);Bx(X+4,Y+1,
+    X+11,Y+6,cWht);Frame(X+4,Y+1,X+11,Y+6,cBlk);Bx(X+4,Y+10,X+11,Y+14,cWht);
+    Frame(X+4,Y+10,X+11,Y+14,cBlk);End;
+  5: Begin Ln(X+4,Y+2,X+11,Y+10,cBlk);Ln(X+11,Y+2,X+4,Y+10,cBlk);Circle(X+4,
+    Y+12,2);Circle(X+11,Y+12,2);End;
+  6: Begin Bx(X+2,Y+1,X+9,Y+10,cWht);Frame(X+2,Y+1,X+9,Y+10,cBlk);Bx(X+6,Y+5,
+    X+13,Y+14,cWht);Frame(X+6,Y+5,X+13,Y+14,cBlk);End;
+  7: Begin Bx(X+2,Y+2,X+13,Y+14,cBrn);Bx(X+5,Y+1,X+10,Y+3,cLGr);Bx(X+4,Y+5,X+11,
+    Y+13,cWht);End;
+  8: Begin Arc(X+8,Y+9,0,180,5);Ln(X+3,Y+9,X+3,Y+5,cNavy);Ln(X+3,Y+5,X+1,Y+8,
+    cNavy);Ln(X+3,Y+5,X+6,Y+8,cNavy);End;
+  9: Begin Arc(X+8,Y+9,0,180,5);Ln(X+13,Y+9,X+13,Y+5,cNavy);Ln(X+13,Y+5,X+10,
+    Y+8,cNavy);Ln(X+13,Y+5,X+15,Y+8,cNavy);End;
   10,11,27,37: Begin
-    SetColor(cBlk);Circle(X+6,Y+6,5);Ln(X+10,Y+10,X+14,Y+14,cBlk);Ln(X+4,Y+6,X+8,Y+6,cBlk);
+    SetColor(cBlk);Circle(X+6,Y+6,5);Ln(X+10,Y+10,X+14,Y+14,cBlk);Ln(X+4,Y+6,
+      X+8,Y+6,cBlk);
     If (Id=11) Or (Id=37) Then Ln(X+6,Y+4,X+6,Y+8,cBlk);
    End;
-  12: Begin Bx(X+2,Y+1,X+13,Y+14,cMag);Bx(X+3,Y+2,X+12,Y+13,cWht);Ln(X+4,Y+5,X+11,Y+5,cMag);Ln(X+4,Y+8,X+11,Y+8,cMag);End;
-  20: Begin Frame(X+2,Y+1,X+13,Y+10,cBlk);Ln(X+2,Y+4,X+13,Y+4,cBlk);Ln(X+8,Y+11,X+8,Y+14,cBlk);Ln(X+6,Y+12,X+8,Y+14,cBlk);Ln(X+10,Y+12,X+8,Y+14,cBlk);End;
+  12: Begin Bx(X+2,Y+1,X+13,Y+14,cMag);Bx(X+3,Y+2,X+12,Y+13,cWht);Ln(X+4,Y+5,
+    X+11,Y+5,cMag);Ln(X+4,Y+8,X+11,Y+8,cMag);End;
+  20: Begin Frame(X+2,Y+1,X+13,Y+10,cBlk);Ln(X+2,Y+4,X+13,Y+4,cBlk);Ln(X+8,Y+11,
+    X+8,Y+14,cBlk);Ln(X+6,Y+12,X+8,Y+14,cBlk);Ln(X+10,Y+12,X+8,Y+14,cBlk);End;
   21: Begin Tx(X+4,Y+4,'A',cBlk);Tx(X+5,Y+4,'A',cBlk);End;
-  22: Begin Bx(X+3,Y+1,X+12,Y+14,cWht);Frame(X+3,Y+1,X+12,Y+14,cBlk);Ln(X+5,Y+5,X+10,Y+5,cBlk);Ln(X+5,Y+8,X+10,Y+8,cBlk);Ln(X+5,Y+11,X+10,Y+11,cBlk);End;
-  23: Begin Frame(X+1,Y+1,X+6,Y+6,cBlk);Frame(X+9,Y+9,X+14,Y+14,cBlk);Ln(X+7,Y+7,X+8,Y+8,cBlk);Ln(X+8,Y+8,X+6,Y+8,cBlk);Ln(X+8,Y+8,X+8,Y+6,cBlk);End;
+  22: Begin Bx(X+3,Y+1,X+12,Y+14,cWht);Frame(X+3,Y+1,X+12,Y+14,cBlk);Ln(X+5,Y+5,
+    X+10,Y+5,cBlk);Ln(X+5,Y+8,X+10,Y+8,cBlk);Ln(X+5,Y+11,X+10,Y+11,cBlk);End;
+  23: Begin Frame(X+1,Y+1,X+6,Y+6,cBlk);Frame(X+9,Y+9,X+14,Y+14,cBlk);Ln(X+7,
+    Y+7,X+8,Y+8,cBlk);Ln(X+8,Y+8,X+6,Y+8,cBlk);Ln(X+8,Y+8,X+8,Y+6,cBlk);End;
   24: Begin Tx(X+4,Y+4,'#',cBlk);Frame(X+1,Y+2,X+14,Y+13,cBlk);End;
-  25: Begin Circle(X+8,Y+4,3);Frame(X+4,Y+8,X+12,Y+14,cBlk);Ln(X+4,Y+8,X+12,Y+8,cBlk);End;
-  26: Begin Bx(X+2,Y+2,X+13,Y+13,cYel);Frame(X+2,Y+2,X+13,Y+13,cBlk);Ln(X+4,Y+10,X+11,Y+4,cBlk);End;
+  25: Begin Circle(X+8,Y+4,3);Frame(X+4,Y+8,X+12,Y+14,cBlk);Ln(X+4,Y+8,X+12,Y+8,
+    cBlk);End;
+  26: Begin Bx(X+2,Y+2,X+13,Y+13,cYel);Frame(X+2,Y+2,X+13,Y+13,cBlk);Ln(X+4,
+    Y+10,X+11,Y+4,cBlk);End;
   30: Begin
-    Pt[1].X:=X+4;Pt[1].Y:=Y+1;Pt[2].X:=X+4;Pt[2].Y:=Y+13;Pt[3].X:=X+7;Pt[3].Y:=Y+10;
+    Pt[1].X:=X+4;Pt[1].Y:=Y+1;Pt[2].X:=X+4;Pt[2].Y:=Y+13;Pt[3].X:=X+7;
+      Pt[3].Y:=Y+10;
     Pt[4].X:=X+11;Pt[4].Y:=Y+10;Pt[5].X:=X+4;Pt[5].Y:=Y+1;
     SetColor(cBlk);SetFillStyle(SolidFill,cBlk);FillPoly(5,Pt);
    End;
-  31: Begin RoundBox(X+1,Y+1,X+14,Y+14,3,cBlk);Ln(X+1,Y+5,X+14,Y+5,cBlk);Ln(X+1,Y+11,X+14,Y+11,cBlk);End;
+  31: Begin RoundBox(X+1,Y+1,X+14,Y+14,3,cBlk);Ln(X+1,Y+5,X+14,Y+5,cBlk);Ln(X+1,
+    Y+11,X+14,Y+11,cBlk);End;
   32: Begin Frame(X+1,Y+2,X+14,Y+13,cBlk);Frame(X+3,Y+4,X+12,Y+11,cBlk);End;
   33: Begin Frame(X+1,Y+4,X+14,Y+11,cBlk);Ln(X+5,Y+4,X+5,Y+11,cBlk);End;
-  34: Begin Ln(X+1,Y+13,X+12,Y+3,cBlk);Ln(X+12,Y+3,X+8,Y+3,cBlk);Ln(X+12,Y+3,X+12,Y+7,cBlk);End;
-  35: Begin Ln(X+8,Y+14,X+8,Y+3,cBlk);Ln(X+3,Y+8,X+8,Y+3,cBlk);Ln(X+13,Y+8,X+8,Y+3,cBlk);Ln(X+7,Y+14,X+7,Y+4,cBlk);Ln(X+9,Y+14,X+9,Y+4,cBlk);End;
-  36: Begin Circle(X+8,Y+8,5);Ln(X+8,Y+1,X+8,Y+14,cBlk);Ln(X+1,Y+8,X+14,Y+8,cBlk);End;
+  34: Begin Ln(X+1,Y+13,X+12,Y+3,cBlk);Ln(X+12,Y+3,X+8,Y+3,cBlk);Ln(X+12,Y+3,
+    X+12,Y+7,cBlk);End;
+  35: Begin Ln(X+8,Y+14,X+8,Y+3,cBlk);Ln(X+3,Y+8,X+8,Y+3,cBlk);Ln(X+13,Y+8,X+8,
+    Y+3,cBlk);Ln(X+7,Y+14,X+7,Y+4,cBlk);Ln(X+9,Y+14,X+9,Y+4,cBlk);End;
+  36: Begin Circle(X+8,Y+8,5);Ln(X+8,Y+1,X+8,Y+14,cBlk);Ln(X+1,Y+8,X+14,Y+8,
+    cBlk);End;
  End;
 End;
 
 Procedure InitToolbar;
-Const Cmds: Array[1..12] Of Integer = (cmNew,cmOpen,cmSave,cmPrint,cmCut,cmCopy,cmPaste,cmUndo,cmRedo,cmZoomOut,cmZoomIn,cmHelp);
+Const Cmds: Array[1..12] Of Integer = (cmNew,cmOpen,cmSave,cmPrint,cmCut,cmCopy,
+  cmPaste,cmUndo,cmRedo,cmZoomOut,cmZoomIn,cmHelp);
 Var I,X: Integer;
 Begin
  X:=4;
@@ -2850,7 +3037,8 @@ Var Y: Integer;
 Begin
  SetColor(cLGr);
  For Y:=Y1 To Y2 Do Begin
-  If Odd(Y) Then SetLineStyle(UserBitLn,$AAAA,1) Else SetLineStyle(UserBitLn,$5555,1);
+  If Odd(Y) Then SetLineStyle(UserBitLn,$AAAA,1) Else SetLineStyle(UserBitLn,
+    $5555,1);
   Line(X1,Y,X2,Y);
  End;
  SetLineStyle(SolidLn,0,1);
@@ -2885,7 +3073,8 @@ End;
 
 Procedure InitBox;
 Begin
- { colonne gauche (actions) puis colonne droite (outils) : index = ligne*2-1 / ligne*2 }
+ { colonne gauche (actions) puis colonne droite (outils) : index = ligne*2-1 /
+   ligne*2 }
  BoxCmd[1]:=cmDecomp;  BoxCmd[2]:=1000+tlSelect;
  BoxCmd[3]:=cmProps;   BoxCmd[4]:=1000+tlProc;
  BoxCmd[5]:=cmEnvUp;   BoxCmd[6]:=1000+tlEnt;
@@ -3035,10 +3224,12 @@ Begin
  Sunken(2,SCR_H-STAT_H+1,SCR_W-170,SCR_H-2,cLGr);
  Sunken(SCR_W-168,SCR_H-STAT_H+1,SCR_W-3,SCR_H-2,cLGr);
  D:=CurDiag;W:=ActiveWin;
- If StatMsg<>'' Then S:=StatMsg Else S:=T5('Pr@et','Ready','Bereit','Listo','Pronto');
+ If StatMsg<>'' Then S:=StatMsg Else S:=T5('Pr@et','Ready','Bereit','Listo',
+   'Pronto');
  Tx(8,SCR_H-STAT_H+4,Copy(S,1,(SCR_W-190) Div 8),cBlk);
  If W>0 Then
-  Tx(SCR_W-160,SCR_H-STAT_H+4,'Zoom '+IntStr(Wn[W].Zoom)+'%'+'  '+IntStr(SelCount(D))+' sel',cBlk);
+  Tx(SCR_W-160,SCR_H-STAT_H+4,
+    'Zoom '+IntStr(Wn[W].Zoom)+'%'+'  '+IntStr(SelCount(D))+' sel',cBlk);
 End;
 
 Procedure DrawMain;
@@ -3084,7 +3275,8 @@ End;
 Const
  SRMAGIC = 'SRCLONE2';
 
-Function ImportDFD(Const FN: String; P: PModel; D: PDict; Var C: TCfg): Integer; Forward;
+Function ImportDFD(Const FN: String; P: PModel; D: PDict; Var C: TCfg): Integer;
+  Forward;
 
 Procedure XorPass(Var S: String);
 Var I: Integer;
@@ -3131,8 +3323,10 @@ Begin
  Res:=0;
  {$I-}
  BlockRead(F,C,SizeOf(C),Rd);If Rd<>SizeOf(C) Then Res:=2;
- If Res=0 Then Begin BlockRead(F,D^,SizeOf(TDict),Rd);If Rd<>SizeOf(TDict) Then Res:=2;End;
- If Res=0 Then Begin BlockRead(F,P^,SizeOf(TModel),Rd);If Rd<>SizeOf(TModel) Then Res:=2;End;
+ If Res=0 Then Begin BlockRead(F,D^,SizeOf(TDict),Rd);If Rd<>SizeOf(TDict) Then
+   Res:=2;End;
+ If Res=0 Then Begin BlockRead(F,P^,SizeOf(TModel),Rd);If Rd<>SizeOf(TModel)
+   Then Res:=2;End;
  Close(F);
  {$I+}
  If IOResult<>0 Then Res:=1;
@@ -3153,10 +3347,12 @@ Begin
  Close(F);
  {$I+}
  If IOResult<>0 Then Exit;
- IsDFDFile:=(Rd=8) And (B[1]=#7) And (Copy(B[2]+B[3]+B[4]+B[5]+B[6]+B[7]+B[8],1,7)='VERSION');
+ IsDFDFile:=(Rd=8) And (B[1]=#7) And (Copy(B[2]+B[3]+B[4]+B[5]+B[6]+B[7]+B[8],1,
+   7)='VERSION');
 End;
 
-Function ReadAnyFile(Const FN: String; P: PModel; D: PDict; Var C: TCfg): Integer;
+Function ReadAnyFile(Const FN: String; P: PModel; D: PDict; Var C: TCfg):
+  Integer;
 Begin
  If IsDFDFile(FN) Then ReadAnyFile:=ImportDFD(FN,P,D,C)
  Else ReadAnyFile:=ReadSRD(FN,P,D,C);
@@ -3189,13 +3385,30 @@ End;
 Procedure ElemProps(I: Integer);
 Var K,N,Cn: Integer; Ch: Integer; S: String;
 Begin
- FormBegin(T5('Propri@et@es','Properties','Eigenschaften','Propiedades','Propriet@r'));
- FormAdd(0,T5('Num@ero','Number','Nummer','N@vmero','Numero'),Mdl^.El[I].Num,12,'');
+ If Mdl^.El[I].Kind=ekInfo Then Begin
+  FormBegin(T5('Nom du mod@gle','Model Name','Modellname',
+     'Nombre del modelo','Nome del modello'));
+  FormAdd(0,T5('Nom du mod@gle','Model name','Modellname',
+     'Nombre del modelo','Nome del modello'),Cfg.MName,40,'');
+  FormAdd(0,T5('Cr@eateur','Creator','Ersteller','Creador','Creatore'),
+     Cfg.Author,40,'');
+  FormAdd(0,'Version',Cfg.Ver,10,'');
+  If RunForm Then Begin
+   PushUndo;
+   Cfg.MName:=Frm.Val[1];Cfg.Author:=Frm.Val[2];Cfg.Ver:=Frm.Val[3];
+  End;
+  Exit;
+ End;
+ FormBegin(T5('Propri@et@es','Properties','Eigenschaften','Propiedades',
+   'Propriet@r'));
+ FormAdd(0,T5('Num@ero','Number','Nummer','N@vmero','Numero'),Mdl^.El[I].Num,12,
+   '');
  FormAdd(0,T5('Nom','Name','Name','Nombre','Nome'),Mdl^.El[I].Name,40,'');
  If Mdl^.El[I].Kind<>ekText Then
   FormAdd(0,'Description',Mdl^.El[I].Desc,40,'');
  If Mdl^.El[I].Kind=ekProc Then
-  FormAdd(3,T5('Ressource','Resource','Ressource','Recurso','Risorsa'),IntStr(Mdl^.El[I].Res),0,IntStr(dcRes));
+  FormAdd(3,T5('Ressource','Resource','Ressource','Recurso','Risorsa'),
+    IntStr(Mdl^.El[I].Res),0,IntStr(dcRes));
  If Mdl^.El[I].Kind<>ekText Then Begin
   If Cfg.UdfN[1]<>'' Then FormAdd(0,Cfg.UdfN[1],Mdl^.El[I].U1,10,'');
   If Cfg.UdfN[2]<>'' Then FormAdd(0,Cfg.UdfN[2],Mdl^.El[I].U2,10,'');
@@ -3207,7 +3420,8 @@ Begin
  Mdl^.El[I].Num:=Frm.Val[N];Inc(N);
  Mdl^.El[I].Name:=Frm.Val[N];Inc(N);
  If Mdl^.El[I].Kind<>ekText Then Begin Mdl^.El[I].Desc:=Frm.Val[N];Inc(N);End;
- If Mdl^.El[I].Kind=ekProc Then Begin Mdl^.El[I].Res:=ValInt(Frm.Val[N],0);Inc(N);End;
+ If Mdl^.El[I].Kind=ekProc Then Begin Mdl^.El[I].Res:=ValInt(Frm.Val[N],0);
+   Inc(N);End;
  If Mdl^.El[I].Kind<>ekText Then Begin
   If Cfg.UdfN[1]<>'' Then Begin Mdl^.El[I].U1:=Frm.Val[N];Inc(N);End;
   If Cfg.UdfN[2]<>'' Then Begin Mdl^.El[I].U2:=Frm.Val[N];Inc(N);End;
@@ -3215,18 +3429,22 @@ Begin
  End;
  Cn:=Mdl^.El[I].Child;
  If (Cn>0) And Mdl^.Dg[Cn].Used Then Begin
-  If Mdl^.El[I].Name<>'' Then Mdl^.Dg[Cn].Title:=Mdl^.El[I].Name Else Mdl^.Dg[Cn].Title:=Mdl^.El[I].Num;
+  If Mdl^.El[I].Name<>'' Then Mdl^.Dg[Cn].Title:=Mdl^.El[I].Name Else
+    Mdl^.Dg[Cn].Title:=Mdl^.El[I].Num;
  End;
  K:=0;Ch:=0;S:='';
 End;
 
 Procedure FlowProps(F: Integer);
 Begin
- FormBegin(T5('Propri@et@es du flux','Flow Properties','Flusseigenschaften','Propiedades del flujo','Propriet@r del flusso'));
- FormAdd(0,T5('Num@ero','Number','Nummer','N@vmero','Numero'),Mdl^.Fl[F].Num,8,'');
+ FormBegin(T5('Propri@et@es du flux','Flow Properties','Flusseigenschaften',
+   'Propiedades del flujo','Propriet@r del flusso'));
+ FormAdd(0,T5('Num@ero','Number','Nummer','N@vmero','Numero'),Mdl^.Fl[F].Num,8,
+   '');
  FormAdd(0,T5('Nom','Name','Name','Nombre','Nome'),Mdl^.Fl[F].Name,30,'');
  FormAdd(0,'Description',Mdl^.Fl[F].Desc,40,'');
- FormAdd(3,T5('Qualifiant','Qualifier','Qualifizierer','Calificador','Qualificatore'),IntStr(Mdl^.Fl[F].Qual),0,IntStr(dcQual));
+ FormAdd(3,T5('Qualifiant','Qualifier','Qualifizierer','Calificador',
+   'Qualificatore'),IntStr(Mdl^.Fl[F].Qual),0,IntStr(dcQual));
  If Not RunForm Then Exit;
  PushUndo;
  Mdl^.Fl[F].Num:=Frm.Val[1];Mdl^.Fl[F].Name:=Frm.Val[2];
@@ -3238,7 +3456,8 @@ Var A,B: Integer; S: String;
 Begin
  A:=FindEl(Mdl^.Fl[F].A);B:=FindEl(Mdl^.Fl[F].B);
  S:='';
- If (A>0) And (B>0) Then S:=' ('+Copy(ElName(A),1,14)+' > '+Copy(ElName(B),1,14)+')';
+ If (A>0) And (B>0) Then S:=' ('+Copy(ElName(A),1,14)+' > '+Copy(ElName(B),1,
+   14)+')';
  FlowDesc:=Pad(Mdl^.Fl[F].Num,6)+Copy(Mdl^.Fl[F].Name,1,26)+S;
 End;
 
@@ -3247,9 +3466,11 @@ Var I: Integer;
 Begin
  FirstSel:=0;IsFlow:=False;
  For I:=1 To MAXEL Do
-  If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then Begin FirstSel:=I;Exit;End;
+  If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then Begin
+    FirstSel:=I;Exit;End;
  For I:=1 To MAXFL Do
-  If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And (Mdl^.Fl[I].Diag=D) Then Begin FirstSel:=I;IsFlow:=True;Exit;End;
+  If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And (Mdl^.Fl[I].Diag=D) Then Begin
+    FirstSel:=I;IsFlow:=True;Exit;End;
 End;
 
 Procedure PropsOfSel;
@@ -3257,7 +3478,9 @@ Var I: Integer; IsF: Boolean;
 Begin
  I:=FirstSel(CurDiag,IsF);
  If I=0 Then Begin
-  Msg(T5('S@electionnez d''abord un objet.','Select an object first.','Zuerst ein Objekt ausw@1hlen.','Seleccione primero un objeto.','Selezionare prima un oggetto.'));
+  Msg(T5('S@electionnez d''abord un objet.','Select an object first.',
+    'Zuerst ein Objekt ausw@1hlen.','Seleccione primero un objeto.',
+    'Selezionare prima un oggetto.'));
   Exit;
  End;
  If IsF Then FlowProps(I) Else ElemProps(I);
@@ -3271,19 +3494,28 @@ Begin
  Case Kind Of
   1: ListTitle:=T5('Processus','Processes','Prozesse','Procesos','Processi');
   2: ListTitle:=T5('Flux','Flows','Fl@3sse','Flujos','Flussi');
-  3: ListTitle:=T5('Entrep@ots','Stores','Speicher','Almacenes','Archivi');
-  4: ListTitle:=T5('Entit@es externes','External Entities','Externe Entit@1ten','Entidades externas','Entit@r esterne');
+  3: ListTitle:=T5('D@ep@ots','Stores','Speicher','Almacenes','Archivi');
+  4: ListTitle:=T5('Entit@es externes','External Entities','Externe Entit@1ten',
+    'Entidades externas','Entit@r esterne');
   5: ListTitle:=T5('Diagrammes','Diagrams','Diagramme','Diagramas','Diagrammi');
   Else Case Cat Of
-   dcRes: ListTitle:=T5('Ressources','Resources','Ressourcen','Recursos','Risorse');
-   dcQual: ListTitle:=T5('Qualifiants','Qualifiers','Qualifizierer','Calificadores','Qualificatori');
+   dcRes: ListTitle:=T5('Ressources','Resources','Ressourcen','Recursos',
+     'Risorse');
+   dcQual: ListTitle:=T5('Qualificatifs','Qualifiers','Qualifizierer',
+     'Calificadores','Qualificatori');
    dcDom: ListTitle:=T5('Domaines','Domains','Dom@1nen','Dominios','Domini');
-   dcType: ListTitle:=T5('Types de donn@ees','Data Types','Datentypen','Tipos de datos','Tipi di dati');
-   dcComm: ListTitle:=T5('El@ements communs','Common Items','Gemeinsame Elemente','Elementos comunes','Elementi comuni');
-   dcStruct: ListTitle:=T5('Structures de donn@ees','Data Structures','Datenstrukturen','Estructuras de datos','Strutture dati');
-   dcTarget: ListTitle:=T5('Syst@gmes cibles','Target Systems','Zielsysteme','Sistemas de destino','Sistemi di destinazione');
-   dcRule: ListTitle:=T5('R@gles d''affaires','Business Rules','Gesch@1ftsregeln','Reglas de negocio','Regole di business');
-   dcEvent: ListTitle:=T5('Ev@enements','Events','Ereignisse','Eventos','Eventi');
+   dcType: ListTitle:=T5('Types de donn@ees','Data Types','Datentypen',
+     'Tipos de datos','Tipi di dati');
+   dcComm: ListTitle:=T5('Items communs','Common Items','Gemeinsame Elemente',
+     'Elementos comunes','Elementi comuni');
+   dcStruct: ListTitle:=T5('Structures de donn@ees','Data Structures',
+     'Datenstrukturen','Estructuras de datos','Strutture dati');
+   dcTarget: ListTitle:=T5('Syst@gmes cibles','Target Systems','Zielsysteme',
+     'Sistemas de destino','Sistemi di destinazione');
+   dcRule: ListTitle:=T5('R@gles d''affaires','Business Rules',
+     'Gesch@1ftsregeln','Reglas de negocio','Regole di business');
+   dcEvent: ListTitle:=T5('Ev@enements','Events','Ereignisse','Eventos',
+     'Eventi');
    Else ListTitle:=T5('Sites','Locations','Standorte','Ubicaciones','Sedi');
   End;
  End;
@@ -3298,7 +3530,8 @@ Begin
     Ek:=ekProc;If Kind=3 Then Ek:=ekStore;If Kind=4 Then Ek:=ekEnt;
     For I:=1 To MAXEL Do
      If Mdl^.El[I].Used And (Mdl^.El[I].Kind=Ek) Then Begin
-      TLAdd(Pad(Mdl^.El[I].Num,9)+Pad(Mdl^.El[I].Name,26)+' ['+Copy(DiagTitle(Mdl^.El[I].Diag),1,12)+']');
+      TLAdd(Pad(Mdl^.El[I].Num,9)+Pad(Mdl^.El[I].Name,
+        26)+' ['+Copy(DiagTitle(Mdl^.El[I].Diag),1,12)+']');
       LRef[TLN]:=I;
      End;
    End;
@@ -3329,12 +3562,14 @@ Begin
    FormAdd(0,'Description','',44,'');
    If RunForm Then Begin
     If TrimStr(Frm.Val[1])<>'' Then Begin
-     Dict^[Cat,Slot].Name:=TrimStr(Frm.Val[1]);Dict^[Cat,Slot].Desc:=Frm.Val[2];Modified:=True;
+     Dict^[Cat,Slot].Name:=TrimStr(Frm.Val[1]);Dict^[Cat,Slot].Desc:=Frm.Val[2];
+       Modified:=True;
     End;
    End;
    Exit;
   End;
-  Msg(T5('Liste pleine.','List is full.','Liste ist voll.','Lista llena.','Elenco pieno.'));
+  Msg(T5('Liste pleine.','List is full.','Liste ist voll.','Lista llena.',
+    'Elenco pieno.'));
   Exit;
  End;
  FormBegin(ListTitle(6,Cat));
@@ -3342,7 +3577,8 @@ Begin
  FormAdd(0,'Description',Dict^[Cat,Slot].Desc,44,'');
  If RunForm Then Begin
   If TrimStr(Frm.Val[1])<>'' Then Begin
-   Dict^[Cat,Slot].Name:=TrimStr(Frm.Val[1]);Dict^[Cat,Slot].Desc:=Frm.Val[2];Modified:=True;
+   Dict^[Cat,Slot].Name:=TrimStr(Frm.Val[1]);Dict^[Cat,Slot].Desc:=Frm.Val[2];
+     Modified:=True;
   End;
  End;
 End;
@@ -3353,11 +3589,20 @@ Begin
  Sel:=1;Done:=False;
  Repeat
   BuildList(Kind,Cat);
-  If TLN=0 Then Begin TLAdd(T5('(aucun)','(none)','(keine)','(ninguno)','(nessuno)'));LRef[1]:=0;End;
+  If TLN=0 Then Begin TLAdd(T5('(aucun)','(none)','(keine)','(ninguno)',
+    '(nessuno)'));LRef[1]:=0;End;
   Case Kind Of
-   1,2,3,4: Btns:=T5('Aller @a|Propri@et@es...|Supprimer|Fermer','Go to|Properties...|Delete|Close','Gehe zu|Eigenschaften...|L@2schen|Schlie@7en','Ir a|Propiedades...|Borrar|Cerrar','Vai a|Propriet@r...|Elimina|Chiudi');
-   5: Btns:=T5('Ouvrir|Supprimer|Fermer','Open|Delete|Close','@2ffnen|L@2schen|Schlie@7en','Abrir|Borrar|Cerrar','Apri|Elimina|Chiudi');
-   Else Btns:=T5('Ajouter...|Modifier...|Supprimer|Fermer','Add...|Edit...|Delete|Close','Hinzuf@3gen...|@4ndern...|L@2schen|Schlie@7en','A@nadir...|Modificar...|Borrar|Cerrar','Aggiungi...|Modifica...|Elimina|Chiudi');
+   1,2,3,4: Btns:=T5('Aller @a|Propri@et@es...|Supprimer|Fermer',
+     'Go to|Properties...|Delete|Close',
+     'Gehe zu|Eigenschaften...|L@2schen|Schlie@7en',
+     'Ir a|Propiedades...|Borrar|Cerrar','Vai a|Propriet@r...|Elimina|Chiudi');
+   5: Btns:=T5('Ouvrir|Supprimer|Fermer','Open|Delete|Close',
+     '@2ffnen|L@2schen|Schlie@7en','Abrir|Borrar|Cerrar','Apri|Elimina|Chiudi');
+   Else Btns:=T5('Ajouter...|Modifier...|Supprimer|Fermer',
+     'Add...|Edit...|Delete|Close',
+     'Hinzuf@3gen...|@4ndern...|L@2schen|Schlie@7en',
+     'A@nadir...|Modificar...|Borrar|Cerrar',
+     'Aggiungi...|Modifica...|Elimina|Chiudi');
   End;
   R:=ListBox(ListTitle(Kind,Cat),Btns,Sel);
   Ref:=0;
@@ -3371,9 +3616,12 @@ Begin
          End Else GotoElem(Ref);
          Done:=True;
         End;
-     2: If Ref>0 Then Begin If Kind=2 Then FlowProps(Ref) Else ElemProps(Ref);End;
+     2: If Ref>0 Then Begin If Kind=2 Then FlowProps(Ref) Else ElemProps(Ref);
+       End;
      3: If Ref>0 Then Begin
-         If MsgBox(T5('Supprimer cet objet ?','Delete this object?','Dieses Objekt l@2schen?','@?Borrar este objeto?','Eliminare questo oggetto?'),4)=1 Then Begin
+         If MsgBox(T5('Supprimer cet objet ?','Delete this object?',
+           'Dieses Objekt l@2schen?','@?Borrar este objeto?',
+           'Eliminare questo oggetto?'),4)=1 Then Begin
           PushUndo;
           If Kind=2 Then Mdl^.Fl[Ref].Used:=False Else DelEl(Ref);
           FixWindows;
@@ -3385,8 +3633,16 @@ Begin
      1: If Ref>0 Then Begin OpenFit(Ref);Done:=True;End;
      2: If Ref>0 Then Begin
          If Mdl^.Dg[Ref].Parent=0 Then
-          Msg(T5('Le diagramme racine ne peut pas @etre supprim@e.','The root diagram cannot be deleted.','Das Wurzeldiagramm kann nicht gel@2scht werden.','El diagrama ra@jz no se puede borrar.','Il diagramma radice non pu@m essere eliminato.'))
-         Else If MsgBox(T5('Supprimer ce diagramme et ses sous-diagrammes ?','Delete this diagram and its sub-diagrams?','Dieses Diagramm und seine Unterdiagramme l@2schen?','@?Borrar este diagrama y sus subdiagramas?','Eliminare questo diagramma e i sottodiagrammi?'),4)=1 Then Begin
+          Msg(T5('Le diagramme racine ne peut pas @etre supprim@e.',
+            'The root diagram cannot be deleted.',
+            'Das Wurzeldiagramm kann nicht gel@2scht werden.',
+            'El diagrama ra@jz no se puede borrar.',
+            'Il diagramma radice non pu@m essere eliminato.'))
+         Else If MsgBox(T5('Supprimer ce diagramme et ses sous-diagrammes ?',
+           'Delete this diagram and its sub-diagrams?',
+           'Dieses Diagramm und seine Unterdiagramme l@2schen?',
+           '@?Borrar este diagrama y sus subdiagramas?',
+           'Eliminare questo diagramma e i sottodiagrammi?'),4)=1 Then Begin
           PushUndo;
           I:=FindEl(Mdl^.Dg[Ref].Parent);
           If I>0 Then Mdl^.El[I].Child:=0;
@@ -3399,7 +3655,9 @@ Begin
      1: DictEdit(Cat,0);
      2: If Ref>0 Then DictEdit(Cat,Ref);
      3: If Ref>0 Then Begin
-         If MsgBox(T5('Supprimer cet @el@ement ?','Delete this entry?','Diesen Eintrag l@2schen?','@?Borrar esta entrada?','Eliminare questa voce?'),4)=1 Then Begin
+         If MsgBox(T5('Supprimer cet @el@ement ?','Delete this entry?',
+           'Diesen Eintrag l@2schen?','@?Borrar esta entrada?',
+           'Eliminare questa voce?'),4)=1 Then Begin
           Dict^[Cat,Ref].Name:='';Dict^[Cat,Ref].Desc:='';
           If Cat=dcRes Then
            For I:=1 To MAXEL Do If Mdl^.El[I].Res=Ref Then Mdl^.El[I].Res:=0;
@@ -3419,17 +3677,32 @@ End;
 { ---- descriptions ---- }
 
 Procedure CmdModelDesc;
+Var R,I: Integer; Found: Boolean;
 Begin
- FormBegin(T5('Description du mod@gle','Model Description','Modellbeschreibung','Descripci@pn del modelo','Descrizione del modello'));
- FormAdd(0,T5('Nom du mod@gle','Model name','Modellname','Nombre del modelo','Nome del modello'),Cfg.MName,40,'');
+ FormBegin(T5('Description du mod@gle','Model Description','Modellbeschreibung',
+   'Descripci@pn del modelo','Descrizione del modello'));
+ FormAdd(0,T5('Nom du mod@gle','Model name','Modellname','Nombre del modelo',
+   'Nome del modello'),Cfg.MName,40,'');
  FormAdd(0,'Description',Cfg.MDesc,60,'');
- If RunForm Then Begin Cfg.MName:=Frm.Val[1];Cfg.MDesc:=Frm.Val[2];Modified:=True;End;
+If RunForm Then Begin
+  Cfg.MName:=Frm.Val[1];Cfg.MDesc:=Frm.Val[2];Modified:=True;
+  R:=RootDiag;Found:=False;
+  For I:=1 To MAXEL Do
+   If Mdl^.El[I].Used And (Mdl^.El[I].Kind=ekInfo) Then Found:=True;
+  If (R>0) And Not Found Then Begin
+   PushUndo;
+   I:=NewEl(ekInfo,R,Mdl^.Dg[R].W Div 2,Mdl^.Dg[R].H-70);
+  End;
+ End;
 End;
 
 Procedure CmdProjDesc;
 Begin
- FormBegin(T5('Description du projet','Project Description','Projektbeschreibung','Descripci@pn del proyecto','Descrizione del progetto'));
- FormAdd(0,T5('Nom du projet','Project name','Projektname','Nombre del proyecto','Nome del progetto'),Cfg.ProjName,40,'');
+ FormBegin(T5('Description du projet','Project Description',
+   'Projektbeschreibung','Descripci@pn del proyecto',
+   'Descrizione del progetto'));
+ FormAdd(0,T5('Nom du projet','Project name','Projektname',
+   'Nombre del proyecto','Nome del progetto'),Cfg.ProjName,40,'');
  FormAdd(0,T5('Auteur','Author','Autor','Autor','Autore'),Cfg.Author,40,'');
  FormAdd(0,'Version',Cfg.Ver,10,'');
  FormAdd(0,'Description',Cfg.Desc1,60,'');
@@ -3443,9 +3716,12 @@ End;
 Procedure CmdUdf;
 Var I: Integer;
 Begin
- FormBegin(T5('Champs d@efinis par l''utilisateur','User Defined Fields','Benutzerdefinierte Felder','Campos definidos por el usuario','Campi definiti dall''utente'));
+ FormBegin(T5('Champs utilisateur','User Defined Fields',
+   'Benutzerdefinierte Felder','Campos definidos por el usuario',
+   'Campi definiti dall''utente'));
  For I:=1 To 3 Do
-  FormAdd(0,T5('Champ ','Field ','Feld ','Campo ','Campo ')+IntStr(I),Cfg.UdfN[I],16,'');
+  FormAdd(0,T5('Champ ','Field ','Feld ','Campo ','Campo ')+IntStr(I),
+    Cfg.UdfN[I],16,'');
  If RunForm Then Begin
   For I:=1 To 3 Do Cfg.UdfN[I]:=Frm.Val[I];
   Modified:=True;
@@ -3458,12 +3734,14 @@ Procedure TreeLines(D,Lev: Integer);
 Var I: Integer; S: String;
 Begin
  For I:=1 To MAXEL Do
-  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc) Then Begin
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc) Then
+    Begin
    S:='';
    If Lev>0 Then S:=Copy('                                        ',1,Lev*3);
    TLAdd(S+Mdl^.El[I].Num+' '+Mdl^.El[I].Name);
    LRef[TLN]:=I;
-   If (Mdl^.El[I].Child>0) And Mdl^.Dg[Mdl^.El[I].Child].Used Then TreeLines(Mdl^.El[I].Child,Lev+1);
+   If (Mdl^.El[I].Child>0) And Mdl^.Dg[Mdl^.El[I].Child].Used Then
+     TreeLines(Mdl^.El[I].Child,Lev+1);
   End;
 End;
 
@@ -3481,26 +3759,33 @@ Begin
  TLClear;
  Case K Of
   1: Begin
-    T:=T5('Liste des processus','Process list','Prozessliste','Lista de procesos','Elenco dei processi');
+    T:=T5('Liste des processus','Process list','Prozessliste',
+      'Lista de procesos','Elenco dei processi');
     TLAdd(T);TLAdd(Dbl(T));
     For I:=1 To MAXEL Do
      If Mdl^.El[I].Used And (Mdl^.El[I].Kind=ekProc) Then
-      TLAdd(Pad(Mdl^.El[I].Num,10)+Pad(Mdl^.El[I].Name,34)+Pad(DictLabel(dcRes,Mdl^.El[I].Res),16)+DiagTitle(Mdl^.El[I].Diag));
+      TLAdd(Pad(Mdl^.El[I].Num,10)+Pad(Mdl^.El[I].Name,34)+Pad(DictLabel(dcRes,
+        Mdl^.El[I].Res),16)+DiagTitle(Mdl^.El[I].Diag));
    End;
   2: Begin
-    T:=T5('Liste des flux','Flow list','Flussliste','Lista de flujos','Elenco dei flussi');
+    T:=T5('Liste des flux','Flow list','Flussliste','Lista de flujos',
+      'Elenco dei flussi');
     TLAdd(T);TLAdd(Dbl(T));
-    For I:=1 To MAXFL Do If Mdl^.Fl[I].Used Then TLAdd(FlowDesc(I)+' ['+DictName(dcQual,Mdl^.Fl[I].Qual)+']');
+    For I:=1 To MAXFL Do If Mdl^.Fl[I].Used Then
+      TLAdd(FlowDesc(I)+' ['+DictName(dcQual,Mdl^.Fl[I].Qual)+']');
    End;
   3: Begin
-    T:=T5('Entrep@ots et entit@es externes','Stores and external entities','Speicher und externe Entit@1ten','Almacenes y entidades externas','Archivi ed entit@r esterne');
+    T:=T5('Entrep@ots et entit@es externes','Stores and external entities',
+      'Speicher und externe Entit@1ten','Almacenes y entidades externas',
+      'Archivi ed entit@r esterne');
     TLAdd(Dc(T));TLAdd(Dbl(Dc(T)));
     For I:=1 To MAXEL Do
      If Mdl^.El[I].Used And (Mdl^.El[I].Kind In [ekStore,ekEnt]) Then
       TLAdd(Pad(Mdl^.El[I].Num,10)+Pad(Mdl^.El[I].Name,34)+Mdl^.El[I].Desc);
    End;
   4: Begin
-    T:=T5('Dictionnaire de donn@ees','Data dictionary','Datenw@2rterbuch','Diccionario de datos','Dizionario dati');
+    T:=T5('Dictionnaire de donn@ees','Data dictionary','Datenw@2rterbuch',
+      'Diccionario de datos','Dizionario dati');
     TLAdd(T);TLAdd(Dbl(T));
     For J:=1 To NCAT Do Begin
      R:=0;
@@ -3508,12 +3793,14 @@ Begin
      If R>0 Then Begin
       TLAdd('');TLAdd('['+ListTitle(6,J)+']');
       For I:=1 To MAXDE Do
-       If Dict^[J,I].Name<>'' Then TLAdd('  '+Pad(Dict^[J,I].Name,22)+Dict^[J,I].Desc);
+       If Dict^[J,I].Name<>'' Then TLAdd('  '+Pad(Dict^[J,I].Name,22)+Dict^[J,
+         I].Desc);
      End;
     End;
    End;
   Else Begin
-    T:=T5('Arbre des processus','Process tree','Prozessbaum','@rrbol de procesos','Albero dei processi');
+    T:=T5('Arbre des processus','Process tree','Prozessbaum',
+      '@rrbol de procesos','Albero dei processi');
     TLAdd(T);TLAdd(Dbl(T));
     R:=RootDiag;
     If R>0 Then TreeLines(R,0);
@@ -3531,8 +3818,13 @@ End;
 Procedure CmdReport;
 Begin
  FormBegin(T5('Rapport','Report','Bericht','Informe','Rapporto'));
- FormAdd(4,T5('Type de rapport','Report type','Berichtstyp','Tipo de informe','Tipo di rapporto'),'1',0,
-   T5('Processus|Flux|Entrep@ots et entit@es|Dictionnaire|Arbre','Processes|Flows|Stores and entities|Dictionary|Tree','Prozesse|Fl@3sse|Speicher und Entit@1ten|W@2rterbuch|Baum','Procesos|Flujos|Almacenes y entidades|Diccionario|@rrbol','Processi|Flussi|Archivi ed entit@r|Dizionario|Albero'));
+ FormAdd(4,T5('Type de rapport','Report type','Berichtstyp','Tipo de informe',
+   'Tipo di rapporto'),'1',0,
+   T5('Processus|Flux|Entrep@ots et entit@es|Dictionnaire|Arbre',
+     'Processes|Flows|Stores and entities|Dictionary|Tree',
+     'Prozesse|Fl@3sse|Speicher und Entit@1ten|W@2rterbuch|Baum',
+     'Procesos|Flujos|Almacenes y entidades|Diccionario|@rrbol',
+     'Processi|Flussi|Archivi ed entit@r|Dizionario|Albero'));
  If RunForm Then ShowReport(ValInt(Frm.Val[1],1));
 End;
 
@@ -3554,61 +3846,93 @@ Procedure CmdVerify;
 Var I,J,NI,NO,Bad: Integer; S: String;
 Begin
  TLClear;Bad:=0;
- TLAdd(T5('V@erification de l''int@egrit@e','Integrity check','Integrit@1tspr@3fung','Verificaci@pn de integridad','Verifica di integrit@r'));
+ TLAdd(T5('V@erification de l''int@egrit@e','Integrity check',
+   'Integrit@1tspr@3fung','Verificaci@pn de integridad',
+   'Verifica di integrit@r'));
  TLAdd('');
  For I:=1 To MAXEL Do
   If Mdl^.El[I].Used Then Begin
    S:=Mdl^.El[I].Num+' '+Mdl^.El[I].Name;
    FlowCount(Mdl^.El[I].Id,NI,NO);
    If Mdl^.El[I].Kind=ekProc Then Begin
-    If Mdl^.El[I].Name='' Then Begin Inc(Bad);TLAdd(Mdl^.El[I].Num+' : '+T5('processus sans nom','process without name','Prozess ohne Namen','proceso sin nombre','processo senza nome'));End;
-    If (NI=0) And (NO>0) Then Begin Inc(Bad);TLAdd(S+' : '+T5('aucune entr@ee (miracle)','no input (miracle)','keine Eingabe','sin entradas','nessun ingresso'));End;
-    If (NO=0) And (NI>0) Then Begin Inc(Bad);TLAdd(S+' : '+T5('aucune sortie (trou noir)','no output (black hole)','keine Ausgabe','sin salidas','nessuna uscita'));End;
-    If (NI=0) And (NO=0) Then Begin Inc(Bad);TLAdd(S+' : '+T5('aucun flux','no flows','keine Fl@3sse','sin flujos','nessun flusso'));End;
+    If Mdl^.El[I].Name='' Then Begin Inc(Bad);
+      TLAdd(Mdl^.El[I].Num+' : '+T5('processus sans nom','process without name',
+      'Prozess ohne Namen','proceso sin nombre','processo senza nome'));End;
+    If (NI=0) And (NO>0) Then Begin Inc(Bad);
+      TLAdd(S+' : '+T5('aucune entr@ee (miracle)','no input (miracle)',
+      'keine Eingabe','sin entradas','nessun ingresso'));End;
+    If (NO=0) And (NI>0) Then Begin Inc(Bad);
+      TLAdd(S+' : '+T5('aucune sortie (trou noir)','no output (black hole)',
+      'keine Ausgabe','sin salidas','nessuna uscita'));End;
+    If (NI=0) And (NO=0) Then Begin Inc(Bad);TLAdd(S+' : '+T5('aucun flux',
+      'no flows','keine Fl@3sse','sin flujos','nessun flusso'));End;
     If (Mdl^.El[I].Child>0) And Mdl^.Dg[Mdl^.El[I].Child].Used Then Begin
      J:=0;
      For NI:=1 To MAXEL Do
       If Mdl^.El[NI].Used And (Mdl^.El[NI].Diag=Mdl^.El[I].Child) Then Inc(J);
-     If J=0 Then Begin Inc(Bad);TLAdd(S+' : '+T5('diagramme enfant vide','empty child diagram','leeres Unterdiagramm','diagrama hijo vac@jo','diagramma figlio vuoto'));End;
+     If J=0 Then Begin Inc(Bad);TLAdd(S+' : '+T5('diagramme enfant vide',
+       'empty child diagram','leeres Unterdiagramm','diagrama hijo vac@jo',
+       'diagramma figlio vuoto'));End;
     End;
-   End Else If (Mdl^.El[I].Kind<>ekText) And (NI+NO=0) Then Begin
-    Inc(Bad);TLAdd(S+' : '+T5('objet non connect@e','unconnected object','nicht verbundenes Objekt','objeto no conectado','oggetto non collegato'));
+   End Else If (Mdl^.El[I].Kind<>ekText) And (Mdl^.El[I].Kind<>ekInfo)
+      And (NI+NO=0) Then Begin
+    Inc(Bad);TLAdd(S+' : '+T5('objet non connect@e','unconnected object',
+      'nicht verbundenes Objekt','objeto no conectado',
+      'oggetto non collegato'));
    End;
    For J:=I+1 To MAXEL Do
-    If Mdl^.El[J].Used And (Mdl^.El[J].Kind=Mdl^.El[I].Kind) And (Mdl^.El[J].Num=Mdl^.El[I].Num)
+    If Mdl^.El[J].Used And (Mdl^.El[J].Kind=Mdl^.El[I].Kind) And
+      (Mdl^.El[J].Num=Mdl^.El[I].Num)
        And (Mdl^.El[I].Kind=ekProc) Then Begin
-     Inc(Bad);TLAdd(Mdl^.El[I].Num+' : '+T5('num@ero en double','duplicate number','doppelte Nummer','n@vmero duplicado','numero duplicato'));
+     Inc(Bad);TLAdd(Mdl^.El[I].Num+' : '+T5('num@ero en double',
+       'duplicate number','doppelte Nummer','n@vmero duplicado',
+       'numero duplicato'));
     End;
   End;
  For I:=1 To MAXFL Do
   If Mdl^.Fl[I].Used Then Begin
    If (FindEl(Mdl^.Fl[I].A)=0) Or (FindEl(Mdl^.Fl[I].B)=0) Then Begin
-    Inc(Bad);TLAdd(Mdl^.Fl[I].Num+' : '+T5('flux avec extr@emit@e manquante','flow with missing end','Fluss mit fehlendem Ende','flujo con extremo faltante','flusso con estremit@r mancante'));
+    Inc(Bad);TLAdd(Mdl^.Fl[I].Num+' : '+T5('flux avec extr@emit@e manquante',
+      'flow with missing end','Fluss mit fehlendem Ende',
+      'flujo con extremo faltante','flusso con estremit@r mancante'));
    End Else If Mdl^.Fl[I].Name='' Then Begin
-    Inc(Bad);TLAdd(Mdl^.Fl[I].Num+' : '+T5('flux sans nom','flow without name','Fluss ohne Namen','flujo sin nombre','flusso senza nome'));
+    Inc(Bad);TLAdd(Mdl^.Fl[I].Num+' : '+T5('flux sans nom','flow without name',
+      'Fluss ohne Namen','flujo sin nombre','flusso senza nome'));
    End;
   End;
  TLAdd('');
- If Bad=0 Then TLAdd(T5('Aucun probl@gme d@etect@e.','No problem found.','Keine Probleme gefunden.','No se encontraron problemas.','Nessun problema rilevato.'))
- Else TLAdd(IntStr(Bad)+' '+T5('probl@gme(s) d@etect@e(s).','problem(s) found.','Problem(e) gefunden.','problema(s) encontrado(s).','problema/i rilevato/i.'));
- ShowText(T5('V@erifier l''int@egrit@e','Verify Integrity','Integrit@1t pr@3fen','Verificar integridad','Verifica integrit@r'));
+ If Bad=0 Then TLAdd(T5('Aucun probl@gme d@etect@e.','No problem found.',
+   'Keine Probleme gefunden.','No se encontraron problemas.',
+   'Nessun problema rilevato.'))
+ Else TLAdd(IntStr(Bad)+' '+T5('probl@gme(s) d@etect@e(s).','problem(s) found.',
+   'Problem(e) gefunden.','problema(s) encontrado(s).',
+   'problema/i rilevato/i.'));
+ ShowText(T5('V@erifier l''int@egrit@e','Verify Integrity',
+   'Integrit@1t pr@3fen','Verificar integridad','Verifica integrit@r'));
 End;
 
 Procedure CmdCleanup;
 Var I,N,NI,NO: Integer;
 Begin
- If MsgBox(T5('Supprimer les flux orphelins et les objets inutiles ?','Remove orphan flows and unused objects?','Verwaiste Fl@3sse und unn@2tige Objekte entfernen?','@?Eliminar flujos hu@erfanos y objetos innecesarios?','Rimuovere flussi orfani e oggetti inutili?'),4)<>1 Then Exit;
+ If MsgBox(T5('Supprimer les flux orphelins et les objets inutiles ?',
+   'Remove orphan flows and unused objects?',
+   'Verwaiste Fl@3sse und unn@2tige Objekte entfernen?',
+   '@?Eliminar flujos hu@erfanos y objetos innecesarios?',
+   'Rimuovere flussi orfani e oggetti inutili?'),4)<>1 Then Exit;
  PushUndo;N:=0;
  For I:=1 To MAXFL Do
-  If Mdl^.Fl[I].Used And ((FindEl(Mdl^.Fl[I].A)=0) Or (FindEl(Mdl^.Fl[I].B)=0)) Then Begin
+  If Mdl^.Fl[I].Used And ((FindEl(Mdl^.Fl[I].A)=0) Or (FindEl(Mdl^.Fl[I].B)=0))
+    Then Begin
    Mdl^.Fl[I].Used:=False;Inc(N);
   End;
  For I:=1 To MAXEL Do
   If Mdl^.El[I].Used And (Mdl^.El[I].Kind In [ekStore,ekEnt]) Then Begin
    FlowCount(Mdl^.El[I].Id,NI,NO);
-   If (NI+NO=0) And (Mdl^.El[I].Name=Mdl^.El[I].Num) Then Begin Mdl^.El[I].Used:=False;Inc(N);End;
+   If (NI+NO=0) And (Mdl^.El[I].Name=Mdl^.El[I].Num) Then Begin
+     Mdl^.El[I].Used:=False;Inc(N);End;
   End;
- Msg(IntStr(N)+' '+T5('objet(s) supprim@e(s).','object(s) removed.','Objekt(e) entfernt.','objeto(s) eliminado(s).','oggetto/i rimosso/i.'));
+ Msg(IntStr(N)+' '+T5('objet(s) supprim@e(s).','object(s) removed.',
+   'Objekt(e) entfernt.','objeto(s) eliminado(s).','oggetto/i rimosso/i.'));
 End;
 
 { ====================================================================== }
@@ -3628,8 +3952,7 @@ Begin
  For I:=1 To MAXWIN Do Wn[I].Used:=False;
  WCnt:=0;
  D:=NewDiag(0,T5('Contexte','Context','Kontext','Contexto','Contesto'));
- E:=NewEl(ekProc,D,360,240);
- Mdl^.El[E].Sel:=True;
+ E:=NewEl(ekInfo,D,360,414);
  WMax:=True;
  W:=OpenWin(D);
  If W>0 Then FitWin(W);
@@ -3642,7 +3965,9 @@ Var ImpStats: String[120];
 Function ConfirmSave: Integer;     { 1 oui, 2 non, 3 annuler }
 Begin
  If Not Modified Then Begin ConfirmSave:=2;Exit;End;
- ConfirmSave:=MsgBox(T5('Enregistrer les modifications ?','Save changes?','@4nderungen speichern?','@?Guardar los cambios?','Salvare le modifiche?'),3);
+ ConfirmSave:=MsgBox(T5('Enregistrer les modifications ?','Save changes?',
+   '@4nderungen speichern?','@?Guardar los cambios?','Salvare le modifiche?'),
+   3);
 End;
 
 Function DoSaveAs: Boolean;
@@ -3650,14 +3975,21 @@ Var S: String;
 Begin
  DoSaveAs:=False;
  If FileN<>'' Then S:=ChangeExt(FileN,'SRD') Else S:=FileTitle+'.SRD';
- If Not InputBox(T5('Enregistrer sous','Save As','Speichern unter','Guardar como','Salva con nome'),
+ If Not InputBox(T5('Enregistrer sous','Save As','Speichern unter',
+   'Guardar como','Salva con nome'),
     T5('Fichier :','File:','Datei:','Archivo:','File:'),S,60) Then Exit;
  S:=AddExt(TrimStr(S),'SRD');
  If FileExists(S) And (S<>FileN) Then
-  If MsgBox(T5('Le fichier existe d@ej@a. Le remplacer ?','The file already exists. Replace it?','Die Datei existiert bereits. Ersetzen?','El archivo ya existe. @?Reemplazarlo?','Il file esiste gi@a. Sostituirlo?'),4)<>1 Then Exit;
+  If MsgBox(T5('Le fichier existe d@ej@a. Le remplacer ?',
+    'The file already exists. Replace it?',
+    'Die Datei existiert bereits. Ersetzen?',
+    'El archivo ya existe. @?Reemplazarlo?',
+    'Il file esiste gi@a. Sostituirlo?'),4)<>1 Then Exit;
  If WriteSRD(S,Mdl) Then Begin
   FileN:=S;Named:=True;Modified:=False;FromDFD:=False;DoSaveAs:=True;
- End Else Msg(T5('Erreur d''@ecriture du fichier.','File write error.','Fehler beim Schreiben der Datei.','Error al escribir el archivo.','Errore di scrittura del file.'));
+ End Else Msg(T5('Erreur d''@ecriture du fichier.','File write error.',
+   'Fehler beim Schreiben der Datei.','Error al escribir el archivo.',
+   'Errore di scrittura del file.'));
 End;
 
 Function DoSave: Boolean;
@@ -3665,7 +3997,9 @@ Begin
  If (FileN='') Or FromDFD Then Begin DoSave:=DoSaveAs;Exit;End;
  If WriteSRD(FileN,Mdl) Then Begin Modified:=False;DoSave:=True;End
  Else Begin
-  Msg(T5('Erreur d''@ecriture du fichier.','File write error.','Fehler beim Schreiben der Datei.','Error al escribir el archivo.','Errore di scrittura del file.'));
+  Msg(T5('Erreur d''@ecriture du fichier.','File write error.',
+    'Fehler beim Schreiben der Datei.','Error al escribir el archivo.',
+    'Errore di scrittura del file.'));
   DoSave:=False;
  End;
 End;
@@ -3680,11 +4014,13 @@ Begin
   W:=OpenFit(R);
   If W>0 Then FitWin(W);
   If (W>0) And (Wn[W].Zoom>100) Then Begin Wn[W].Zoom:=100;ClampScroll(W);End;
+  If (W>0) And (Wn[W].Zoom<50) Then SetZoom(W,50);
  End;
 End;
 
 Function PickFile(Var FN: String): Boolean;
-Var SR: SearchRec; Sel,R,I,J: Integer; Names: Array[1..60] Of String[40]; N: Integer; Pat: Integer; S: String;
+Var SR: SearchRec; Sel,R,I,J: Integer; Names: Array[1..60] Of String[40]; N:
+  Integer; Pat: Integer; S: String;
     Dup: Boolean;
 Begin
  PickFile:=False;N:=0;
@@ -3701,16 +4037,23 @@ Begin
   End;
  End;
  For I:=1 To N-1 Do For J:=I+1 To N Do
-  If Upper(Names[J])<Upper(Names[I]) Then Begin S:=Names[I];Names[I]:=Names[J];Names[J]:=S;End;
+  If Upper(Names[J])<Upper(Names[I]) Then Begin S:=Names[I];Names[I]:=Names[J];
+    Names[J]:=S;End;
  TLClear;
  For I:=1 To N Do TLAdd(Names[I]);
- If TLN=0 Then TLAdd(T5('(aucun fichier .SRD / .DFD)','(no .SRD / .DFD file)','(keine .SRD / .DFD Datei)','(ning@vn archivo .SRD / .DFD)','(nessun file .SRD / .DFD)'));
+ If TLN=0 Then TLAdd(T5('(aucun fichier .SRD / .DFD)','(no .SRD / .DFD file)',
+   '(keine .SRD / .DFD Datei)','(ning@vn archivo .SRD / .DFD)',
+   '(nessun file .SRD / .DFD)'));
  Sel:=1;
- R:=ListBox(T5('Ouvrir','Open','@5ffnen','Abrir','Apri'),T5('Ouvrir|Autre...|Annuler','Open|Other...|Cancel','@5ffnen|Andere...|Abbrechen','Abrir|Otro...|Cancelar','Apri|Altro...|Annulla'),Sel);
+ R:=ListBox(T5('Ouvrir','Open','@5ffnen','Abrir','Apri'),
+   T5('Ouvrir|Autre...|Annuler','Open|Other...|Cancel',
+   '@5ffnen|Andere...|Abbrechen','Abrir|Otro...|Cancelar',
+   'Apri|Altro...|Annulla'),Sel);
  If (R=1) And (N>0) Then Begin FN:=Names[Sel];PickFile:=True;End
  Else If R=2 Then Begin
   FN:='';
-  If InputBox(T5('Ouvrir','Open','@5ffnen','Abrir','Apri'),T5('Fichier :','File:','Datei:','Archivo:','File:'),FN,60) Then
+  If InputBox(T5('Ouvrir','Open','@5ffnen','Abrir','Apri'),T5('Fichier :',
+    'File:','Datei:','Archivo:','File:'),FN,60) Then
    If TrimStr(FN)<>'' Then PickFile:=True;
  End;
 End;
@@ -3721,7 +4064,9 @@ Begin
  If Not FileExists(FN) Then Begin
   If FileExists(FN+'.SRD') Then FN:=FN+'.SRD'
   Else If FileExists(FN+'.DFD') Then FN:=FN+'.DFD'
-  Else Begin Msg(T5('Fichier introuvable.','File not found.','Datei nicht gefunden.','Archivo no encontrado.','File non trovato.'));Exit;End;
+  Else Begin Msg(T5('Fichier introuvable.','File not found.',
+    'Datei nicht gefunden.','Archivo no encontrado.','File non trovato.'));Exit;
+    End;
  End;
  New(T);New(TD);
  Res:=ReadAnyFile(FN,T,TD,TC);
@@ -3729,10 +4074,12 @@ Begin
   If TC.Pass<>'' Then Begin
    PW:='';
    FormBegin(T5('Mot de passe','Password','Passwort','Contrase@na','Password'));
-   FormAdd(0,T5('Mot de passe','Password','Passwort','Contrase@na','Password'),'',12,'');
+   FormAdd(0,T5('Mot de passe','Password','Passwort','Contrase@na','Password'),
+     '',12,'');
    If Not RunForm Then Res:=3
    Else If Frm.Val[1]<>TC.Pass Then Begin
-    Msg(T5('Mot de passe incorrect.','Wrong password.','Falsches Passwort.','Contrase@na incorrecta.','Password errata.'));Res:=3;
+    Msg(T5('Mot de passe incorrect.','Wrong password.','Falsches Passwort.',
+      'Contrase@na incorrecta.','Password errata.'));Res:=3;
    End;
   End;
  End;
@@ -3742,15 +4089,39 @@ Begin
   FileN:=FN;Named:=True;Modified:=False;FromDFD:=IsDFDFile(FN);
   TreeOpen:=False;
   ResetWindows;
-  If FromDFD Then Msg(T5('Fichier SilverRun (.DFD) import@e : ','SilverRun (.DFD) file imported: ','SilverRun-Datei (.DFD) importiert: ','Archivo SilverRun (.DFD) importado: ','File SilverRun (.DFD) importato: ')+ImpStats+'~'+T5('Les positions sont recalcul@ees automatiquement. Utilisez Enregistrer sous (.SRD).','Positions are recomputed automatically. Use Save As (.SRD).','Positionen werden automatisch berechnet. Zum Speichern Speichern unter (.SRD) verwenden.','Las posiciones se recalculan autom@rticamente. Use Guardar como (.SRD).','Le posizioni vengono ricalcolate automaticamente. Usare Salva con nome (.SRD).'));
+  If FromDFD Then Msg(T5('Fichier SilverRun (.DFD) import@e : ',
+    'SilverRun (.DFD) file imported: ','SilverRun-Datei (.DFD) importiert: ',
+    'Archivo SilverRun (.DFD) importado: ',
+    'File SilverRun (.DFD) importato: ')+ImpStats+'~'+T5('Positions des '+
+    'processus lues ; autres objets plac@es automatiquement. Utilisez '+
+    'Enregistrer sous (.SRD).',
+    'Process positions read; other objects placed automatically. Use Save As '+
+    '(.SRD).','Prozesspositionen gelesen; andere Objekte automatisch '+
+    'platziert. Zum Speichern Speichern unter (.SRD) verwenden.',
+    'Posiciones de procesos le@jdas; otros objetos colocados '+
+    'autom@rticamente. Use Guardar como (.SRD).',
+    'Posizioni dei processi lette; altri oggetti posizionati automaticamente.'+
+    ' Usare Salva con nome (.SRD).'));
  End Else If Res=1 Then
-  Msg(T5('Erreur de lecture du fichier.','File read error.','Fehler beim Lesen der Datei.','Error al leer el archivo.','Errore di lettura del file.'))
+  Msg(T5('Erreur de lecture du fichier.','File read error.',
+    'Fehler beim Lesen der Datei.','Error al leer el archivo.',
+    'Errore di lettura del file.'))
  Else If Res=2 Then
-  Msg(T5('Format de fichier invalide.','Invalid file format.','Ung@3ltiges Dateiformat.','Formato de archivo no v@rlido.','Formato di file non valido.'))
+  Msg(T5('Format de fichier invalide.','Invalid file format.',
+    'Ung@3ltiges Dateiformat.','Formato de archivo no v@rlido.',
+    'Formato di file non valido.'))
  Else If Res=4 Then
-  Msg(T5('Fichier .DFD reconnu, mais aucun diagramme exploitable n''a @et@e trouv@e.','DFD file recognised, but no usable diagram was found.','DFD-Datei erkannt, aber kein verwendbares Diagramm gefunden.','Archivo DFD reconocido, pero no se encontr@p ning@vn diagrama utilizable.','File DFD riconosciuto, ma nessun diagramma utilizzabile trovato.'))
+  Msg(T5('Fichier .DFD reconnu, mais aucun diagramme exploitable n''a @et@e '+
+    'trouv@e.','DFD file recognised, but no usable diagram was found.',
+    'DFD-Datei erkannt, aber kein verwendbares Diagramm gefunden.',
+    'Archivo DFD reconocido, pero no se encontr@p ning@vn diagrama utilizable.',
+    'File DFD riconosciuto, ma nessun diagramma utilizzabile trovato.'))
  Else If Res=5 Then
-  Msg(T5('Fichier .DFD trop volumineux pour cette version (maximum 64 Ko).','DFD file too large for this version (64 KB maximum).','DFD-Datei zu gro@7 f@3r diese Version (maximal 64 KB).','Archivo DFD demasiado grande para esta versi@pn (m@rximo 64 KB).','File DFD troppo grande per questa versione (massimo 64 KB).'));
+  Msg(T5('Fichier .DFD trop volumineux pour cette version (maximum 64 Ko).',
+    'DFD file too large for this version (64 KB maximum).',
+    'DFD-Datei zu gro@7 f@3r diese Version (maximal 64 KB).',
+    'Archivo DFD demasiado grande para esta versi@pn (m@rximo 64 KB).',
+    'File DFD troppo grande per questa versione (massimo 64 KB).'));
  Dispose(TD);Dispose(T);
  DrawAll;
 End;
@@ -3801,7 +4172,8 @@ Begin
  If (D=0) Or (SelCount(D)=0) Then Exit;
  PushUndo;
  For I:=1 To MAXFL Do
-  If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And (Mdl^.Fl[I].Diag=D) Then Mdl^.Fl[I].Used:=False;
+  If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And (Mdl^.Fl[I].Diag=D) Then
+    Mdl^.Fl[I].Used:=False;
  For I:=1 To MAXEL Do
   If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then DelEl(I);
  FixWindows;
@@ -3812,26 +4184,34 @@ Var S: String; D,I,N: Integer;
 Begin
  D:=CurDiag;If D=0 Then Exit;
  S:='';
- If Not InputBox(T5('S@electionner','Select','Ausw@1hlen','Seleccionar','Seleziona'),
-    T5('Nom contenant :','Name containing:','Name enth@1lt:','Nombre que contiene:','Nome contenente:'),S,30) Then Exit;
+ If Not InputBox(T5('S@electionner','Select','Ausw@1hlen','Seleccionar',
+   'Seleziona'),
+    T5('Nom contenant :','Name containing:','Name enth@1lt:',
+      'Nombre que contiene:','Nome contenente:'),S,30) Then Exit;
  S:=Upper(TrimStr(S));
  ClearSel;N:=0;
  For I:=1 To MAXEL Do
-  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And Not Mdl^.El[I].Hid And (Pos(S,Upper(Mdl^.El[I].Name))>0) Then Begin
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And Not Mdl^.El[I].Hid And (Pos(S,
+    Upper(Mdl^.El[I].Name))>0) Then Begin
    Mdl^.El[I].Sel:=True;Inc(N);
   End;
  For I:=1 To MAXFL Do
-  If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And Not Mdl^.Fl[I].Hid And (Pos(S,Upper(Mdl^.Fl[I].Name))>0) Then Begin
+  If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And Not Mdl^.Fl[I].Hid And (Pos(S,
+    Upper(Mdl^.Fl[I].Name))>0) Then Begin
    Mdl^.Fl[I].Sel:=True;Inc(N);
   End;
- StatMsg:=IntStr(N)+' '+T5('objet(s) s@electionn@e(s)','object(s) selected','Objekt(e) ausgew@1hlt','objeto(s) seleccionado(s)','oggetto/i selezionato/i');
+ StatMsg:=IntStr(N)+' '+T5('objet(s) s@electionn@e(s)','object(s) selected',
+   'Objekt(e) ausgew@1hlt','objeto(s) seleccionado(s)',
+   'oggetto/i selezionato/i');
 End;
 
 Procedure GotoPage;
 Var I,K,N: Integer;
 Begin
- FormBegin(T5('Aller @a la page','Go to Page','Gehe zu Seite','Ir a p@rgina','Vai a pagina'));
- FormAdd(1,T5('Page (1-','Page (1-','Seite (1-','P@rgina (1-','Pagina (1-')+IntStr(DiagCount)+')','1',4,'');
+ FormBegin(T5('Aller @a la page','Go to Page','Gehe zu Seite','Ir a p@rgina',
+   'Vai a pagina'));
+ FormAdd(1,T5('Page (1-','Page (1-','Seite (1-','P@rgina (1-',
+   'Pagina (1-')+IntStr(DiagCount)+')','1',4,'');
  If Not RunForm Then Exit;
  N:=ValInt(Frm.Val[1],1);K:=0;
  For I:=1 To MAXDG Do
@@ -3873,11 +4253,15 @@ Var D,I,F: Integer;
 Begin
  D:=CurDiag;
  F:=0;
- For I:=1 To MAXEL Do If (F=0) And Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then F:=I;
+ For I:=1 To MAXEL Do If (F=0) And Mdl^.El[I].Used And Mdl^.El[I].Sel And
+   (Mdl^.El[I].Diag=D) Then F:=I;
  If F=0 Then Exit;
- FormBegin(T5('Redimensionner','Resize','Gr@2@7e @1ndern','Cambiar tama@no','Ridimensiona'));
- FormAdd(1,T5('Largeur','Width','Breite','Ancho','Larghezza'),IntStr(Mdl^.El[F].W),4,'');
- FormAdd(1,T5('Hauteur','Height','H@2he','Alto','Altezza'),IntStr(Mdl^.El[F].H),4,'');
+ FormBegin(T5('Redimensionner','Resize','Gr@2@7e @1ndern','Cambiar tama@no',
+   'Ridimensiona'));
+ FormAdd(1,T5('Largeur','Width','Breite','Ancho','Larghezza'),
+   IntStr(Mdl^.El[F].W),4,'');
+ FormAdd(1,T5('Hauteur','Height','H@2he','Alto','Altezza'),IntStr(Mdl^.El[F].H),
+   4,'');
  If Not RunForm Then Exit;
  PushUndo;
  For I:=1 To MAXEL Do
@@ -3897,6 +4281,7 @@ Begin
     ekProc: Begin Mdl^.El[I].W:=Cfg.PW;Mdl^.El[I].H:=Cfg.PH;End;
     ekStore: Begin Mdl^.El[I].W:=150;Mdl^.El[I].H:=34;End;
     ekEnt: Begin Mdl^.El[I].W:=100;Mdl^.El[I].H:=44;End;
+    ekInfo: Begin Mdl^.El[I].W:=260;Mdl^.El[I].H:=112;End;
     Else Begin Mdl^.El[I].W:=90;Mdl^.El[I].H:=18;End;
    End;
 End;
@@ -3905,12 +4290,16 @@ Procedure ChangeFont;
 Var D,I: Integer;
 Begin
  D:=CurDiag;
- FormBegin(T5('Police du texte libre','Free Text Font','Schrift f@3r freien Text','Fuente del texto libre','Carattere del testo libero'));
- FormAdd(4,T5('Style','Style','Stil','Estilo','Stile'),'1',0,T5('Normal|Gras','Normal|Bold','Normal|Fett','Normal|Negrita','Normale|Grassetto'));
+ FormBegin(T5('Police du texte libre','Free Text Font',
+   'Schrift f@3r freien Text','Fuente del texto libre',
+   'Carattere del testo libero'));
+ FormAdd(4,T5('Style','Style','Stil','Estilo','Stile'),'1',0,T5('Normal|Gras',
+   'Normal|Bold','Normal|Fett','Normal|Negrita','Normale|Grassetto'));
  If Not RunForm Then Exit;
  PushUndo;
  For I:=1 To MAXEL Do
-  If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekText) Then
+  If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) And
+    (Mdl^.El[I].Kind=ekText) Then
    Mdl^.El[I].FS:=ValInt(Frm.Val[1],1);
 End;
 
@@ -3918,9 +4307,12 @@ Procedure DrawSize;
 Var D: Integer;
 Begin
  D:=CurDiag;If D=0 Then Exit;
- FormBegin(T5('Taille du dessin','Drawing Size','Zeichnungsgr@2@7e','Tama@no del dibujo','Dimensione disegno'));
- FormAdd(1,T5('Largeur','Width','Breite','Ancho','Larghezza'),IntStr(Mdl^.Dg[D].W),4,'');
- FormAdd(1,T5('Hauteur','Height','H@2he','Alto','Altezza'),IntStr(Mdl^.Dg[D].H),4,'');
+ FormBegin(T5('Taille du dessin','Drawing Size','Zeichnungsgr@2@7e',
+   'Tama@no del dibujo','Dimensione disegno'));
+ FormAdd(1,T5('Largeur','Width','Breite','Ancho','Larghezza'),
+   IntStr(Mdl^.Dg[D].W),4,'');
+ FormAdd(1,T5('Hauteur','Height','H@2he','Alto','Altezza'),IntStr(Mdl^.Dg[D].H),
+   4,'');
  If Not RunForm Then Exit;
  PushUndo;
  Mdl^.Dg[D].W:=Integer(Max2(300,Min2(3000,ValInt(Frm.Val[1],720))));
@@ -3930,10 +4322,15 @@ End;
 
 Procedure CmdToolbars;
 Begin
- FormBegin(T5('Barres d''outils','Toolbars','Symbolleisten','Barras de herramientas','Barre degli strumenti'));
- FormAdd(2,T5('Barre d''outils','Toolbar','Symbolleiste','Barra de herramientas','Barra degli strumenti'),Chr(48+Ord(ToolBarOn)),0,'');
- FormAdd(2,T5('Palette d''outils','Tool box','Werkzeugpalette','Paleta de herramientas','Tavolozza strumenti'),Chr(48+Ord(ToolBoxOn)),0,'');
- FormAdd(2,T5('Barre d''@etat','Status bar','Statusleiste','Barra de estado','Barra di stato'),Chr(48+Ord(StatusOn)),0,'');
+ FormBegin(T5('Barres d''outils','Toolbars','Symbolleisten',
+   'Barras de herramientas','Barre degli strumenti'));
+ FormAdd(2,T5('Barre d''outils','Toolbar','Symbolleiste',
+   'Barra de herramientas','Barra degli strumenti'),Chr(48+Ord(ToolBarOn)),0,
+   '');
+ FormAdd(2,T5('Palette d''outils','Tool box','Werkzeugpalette',
+   'Paleta de herramientas','Tavolozza strumenti'),Chr(48+Ord(ToolBoxOn)),0,'');
+ FormAdd(2,T5('Barre d''@etat','Status bar','Statusleiste','Barra de estado',
+   'Barra di stato'),Chr(48+Ord(StatusOn)),0,'');
  If RunForm Then Begin
   ToolBarOn:=Frm.Val[1]='1';ToolBoxOn:=Frm.Val[2]='1';StatusOn:=Frm.Val[3]='1';
   FixWindows;
@@ -3943,16 +4340,29 @@ End;
 Procedure ProcPrefs;
 Var Dd,Jj,I: Integer; Opt1,Opt2: String;
 Begin
- Opt1:=T5('(aucun)|ID num@erique|Nom|Description|Ressources|Diagramme enfant','(none)|Numerical ID|Name|Description|Resources|Child diagram','(keine)|Numerische ID|Name|Beschreibung|Ressourcen|Unterdiagramm','(ninguno)|ID num@erico|Nombre|Descripci@pn|Recursos|Diagrama hijo','(nessuno)|ID numerico|Nome|Descrizione|Risorse|Diagramma figlio');
- Opt2:=T5('Gauche|Centr@e|Droite','Left|Center|Right','Links|Zentriert|Rechts','Izquierda|Centrado|Derecha','Sinistra|Centrato|Destra');
- FormBegin(T5('Pr@ef@erences des processus','Process Preferences','Prozessvorgaben','Preferencias de procesos','Preferenze dei processi'));
- FormAdd(4,T5('Notation','Notation','Notation','Notaci@pn','Notazione'),IntStr(Cfg.Notation),0,'Gane-Sarson|Yourdon');
+ Opt1:=T5('(aucun)|ID num@erique|Nom|Description|Ressources|Diagramme enfant',
+   '(none)|Numerical ID|Name|Description|Resources|Child diagram',
+   '(keine)|Numerische ID|Name|Beschreibung|Ressourcen|Unterdiagramm',
+   '(ninguno)|ID num@erico|Nombre|Descripci@pn|Recursos|Diagrama hijo',
+   '(nessuno)|ID numerico|Nome|Descrizione|Risorse|Diagramma figlio');
+ Opt2:=T5('Gauche|Centr@e|Droite','Left|Center|Right','Links|Zentriert|Rechts',
+   'Izquierda|Centrado|Derecha','Sinistra|Centrato|Destra');
+ FormBegin(T5('Pr@ef@erences des processus','Process Preferences',
+   'Prozessvorgaben','Preferencias de procesos','Preferenze dei processi'));
+ FormAdd(4,T5('Notation','Notation','Notation','Notaci@pn','Notazione'),
+   IntStr(Cfg.Notation),0,'Gane-Sarson|Yourdon');
  For I:=1 To 3 Do Begin
-  FormAdd(4,T5('Zone ','Zone ','Zone ','Zona ','Zona ')+IntStr(I),IntStr(Cfg.ZDesc[I]),0,Opt1);
-  FormAdd(4,T5('  Justification','  Justification','  Ausrichtung','  Justificaci@pn','  Giustificazione'),IntStr(Cfg.ZJus[I]),0,Opt2);
+  FormAdd(4,T5('Zone ','Zone ','Zone ','Zona ','Zona ')+IntStr(I),
+    IntStr(Cfg.ZDesc[I]),0,Opt1);
+  FormAdd(4,T5('  Justification','  Justification','  Ausrichtung',
+    '  Justificaci@pn','  Giustificazione'),IntStr(Cfg.ZJus[I]),0,Opt2);
  End;
- FormAdd(1,T5('Largeur par d@efaut (mm)','Default width (mm)','Standardbreite (mm)','Ancho predeterminado (mm)','Larghezza predefinita (mm)'),IntStr(Cfg.PW Div 4),3,'');
- FormAdd(1,T5('Hauteur par d@efaut (mm)','Default height (mm)','Standardh@2he (mm)','Alto predeterminado (mm)','Altezza predefinita (mm)'),IntStr(Cfg.PH Div 4),3,'');
+ FormAdd(1,T5('Largeur par d@efaut (mm)','Default width (mm)',
+   'Standardbreite (mm)','Ancho predeterminado (mm)',
+   'Larghezza predefinita (mm)'),IntStr(Cfg.PW Div 4),3,'');
+ FormAdd(1,T5('Hauteur par d@efaut (mm)','Default height (mm)',
+   'Standardh@2he (mm)','Alto predeterminado (mm)','Altezza predefinita (mm)'),
+   IntStr(Cfg.PH Div 4),3,'');
  If Not RunForm Then Exit;
  Cfg.Notation:=ValInt(Frm.Val[1],1);
  For I:=1 To 3 Do Begin
@@ -3968,11 +4378,19 @@ Procedure CmdOptions;
 
 Begin
  FormBegin(T5('Options','Options','Optionen','Opciones','Opzioni'));
- FormAdd(2,T5('Aimanter @a la grille','Snap to grid','Am Raster ausrichten','Ajustar a la cuadr@jcula','Allinea alla griglia'),Chr(48+Ord(Cfg.Snap)),0,'');
- FormAdd(1,T5('Pas de la grille','Grid size','Rastergr@2@7e','Tama@no de cuadr@jcula','Passo della griglia'),IntStr(Cfg.Grid),3,'');
- FormAdd(2,T5('Afficher la grille','Show grid','Raster anzeigen','Mostrar cuadr@jcula','Mostra griglia'),Chr(48+Ord(Cfg.ShowGrid)),0,'');
- FormAdd(2,T5('Pr@ef@erences des processus...','Process preferences...','Prozessvorgaben...','Preferencias de procesos...','Preferenze dei processi...'),'0',0,'');
- FormAdd(2,T5('Double-clic ouvre l''enfant','Double-click opens child','Doppelklick @2ffnet Unterdiagramm','Doble clic abre el hijo','Doppio clic apre il figlio'),Chr(48+Ord(Cfg.AutoOpen)),0,'');
+ FormAdd(2,T5('Aimanter @a la grille','Snap to grid','Am Raster ausrichten',
+   'Ajustar a la cuadr@jcula','Allinea alla griglia'),Chr(48+Ord(Cfg.Snap)),0,
+   '');
+ FormAdd(1,T5('Pas de la grille','Grid size','Rastergr@2@7e',
+   'Tama@no de cuadr@jcula','Passo della griglia'),IntStr(Cfg.Grid),3,'');
+ FormAdd(2,T5('Afficher la grille','Show grid','Raster anzeigen',
+   'Mostrar cuadr@jcula','Mostra griglia'),Chr(48+Ord(Cfg.ShowGrid)),0,'');
+ FormAdd(2,T5('Pr@ef@erences des processus...','Process preferences...',
+   'Prozessvorgaben...','Preferencias de procesos...',
+   'Preferenze dei processi...'),'0',0,'');
+ FormAdd(2,T5('Double-clic ouvre l''enfant','Double-click opens child',
+   'Doppelklick @2ffnet Unterdiagramm','Doble clic abre el hijo',
+   'Doppio clic apre il figlio'),Chr(48+Ord(Cfg.AutoOpen)),0,'');
  If RunForm Then Begin
   Cfg.Snap:=Frm.Val[1]='1';
   Cfg.Grid:=Integer(Max2(2,Min2(100,ValInt(Frm.Val[2],10))));
@@ -3983,20 +4401,30 @@ End;
 
 Procedure CmdPass;
 Begin
- FormBegin(T5('Mots de passe','Passwords','Passw@2rter','Contrase@nas','Password'));
- FormAdd(0,T5('Nouveau mot de passe','New password','Neues Passwort','Nueva contrase@na','Nuova password'),Cfg.Pass,12,'');
- FormAdd(0,T5('Confirmation','Confirm','Best@1tigen','Confirmar','Conferma'),Cfg.Pass,12,'');
+ FormBegin(T5('Mots de passe','Passwords','Passw@2rter','Contrase@nas',
+   'Password'));
+ FormAdd(0,T5('Nouveau mot de passe','New password','Neues Passwort',
+   'Nueva contrase@na','Nuova password'),Cfg.Pass,12,'');
+ FormAdd(0,T5('Confirmation','Confirm','Best@1tigen','Confirmar','Conferma'),
+   Cfg.Pass,12,'');
  If RunForm Then Begin
   If Frm.Val[1]=Frm.Val[2] Then Begin Cfg.Pass:=Frm.Val[1];Modified:=True;End
-  Else Msg(T5('Les mots de passe ne correspondent pas.','Passwords do not match.','Passw@2rter stimmen nicht @3berein.','Las contrase@nas no coinciden.','Le password non corrispondono.'));
+  Else Msg(T5('Les mots de passe ne correspondent pas.',
+    'Passwords do not match.','Passw@2rter stimmen nicht @3berein.',
+    'Las contrase@nas no coinciden.','Le password non corrispondono.'));
  End;
 End;
 
 Procedure CmdPageSetup;
 Begin
- FormBegin(T5('Mise en page','Page Setup','Seite einrichten','Configurar p@rgina','Imposta pagina'));
- FormAdd(4,T5('Orientation','Orientation','Ausrichtung','Orientaci@pn','Orientamento'),Chr(49+Ord(Cfg.Landscape)),0,T5('Portrait|Paysage','Portrait|Landscape','Hochformat|Querformat','Vertical|Horizontal','Verticale|Orizzontale'));
- FormAdd(1,T5('Marge (mm)','Margin (mm)','Rand (mm)','Margen (mm)','Margine (mm)'),IntStr(Cfg.Margin),3,'');
+ FormBegin(T5('Mise en page','Page Setup','Seite einrichten',
+   'Configurar p@rgina','Imposta pagina'));
+ FormAdd(4,T5('Orientation','Orientation','Ausrichtung','Orientaci@pn',
+   'Orientamento'),Chr(49+Ord(Cfg.Landscape)),0,T5('Portrait|Paysage',
+   'Portrait|Landscape','Hochformat|Querformat','Vertical|Horizontal',
+   'Verticale|Orizzontale'));
+ FormAdd(1,T5('Marge (mm)','Margin (mm)','Rand (mm)','Margen (mm)',
+   'Margine (mm)'),IntStr(Cfg.Margin),3,'');
  If RunForm Then Begin
   Cfg.Landscape:=Frm.Val[1]='2';
   Cfg.Margin:=Integer(Max2(0,Min2(50,ValInt(Frm.Val[2],10))));
@@ -4011,11 +4439,15 @@ Begin
  {$ELSE}
  FN:='PRN';
  {$ENDIF}
- If Not InputBox(T5('Imprimer','Print','Drucken','Imprimir','Stampa'),T5('Destination :','Destination:','Ziel:','Destino:','Destinazione:'),FN,40) Then Exit;
+ If Not InputBox(T5('Imprimer','Print','Drucken','Imprimir','Stampa'),
+   T5('Destination :','Destination:','Ziel:','Destino:','Destinazione:'),FN,40)
+   Then Exit;
  {$I-}
  Assign(F,FN);Rewrite(F);
  {$I+}
- If IOResult<>0 Then Begin Msg(T5('Impression impossible.','Cannot print.','Drucken nicht m@2glich.','No se puede imprimir.','Impossibile stampare.'));Exit;End;
+ If IOResult<>0 Then Begin Msg(T5('Impression impossible.','Cannot print.',
+   'Drucken nicht m@2glich.','No se puede imprimir.','Impossibile stampare.'));
+   Exit;End;
  WriteLn(F,'SILVERRUN-BPM - ',FileTitle);
  WriteLn(F);
  For K:=1 To 5 Do Begin
@@ -4024,7 +4456,8 @@ Begin
   WriteLn(F);
  End;
  Close(F);
- Msg(T5('Rapport envoy@e vers ','Report sent to ','Bericht gesendet an ','Informe enviado a ','Rapporto inviato a ')+FN);
+ Msg(T5('Rapport envoy@e vers ','Report sent to ','Bericht gesendet an ',
+   'Informe enviado a ','Rapporto inviato a ')+FN);
 End;
 
 { ---- import / export ---- }
@@ -4051,43 +4484,69 @@ Begin
  {$I-}
  Assign(F,FN);Rewrite(F);
  {$I+}
- If IOResult<>0 Then Begin Msg(T5('Erreur d''@ecriture du fichier.','File write error.','Fehler beim Schreiben der Datei.','Error al escribir el archivo.','Errore di scrittura del file.'));Exit;End;
+ If IOResult<>0 Then Begin Msg(T5('Erreur d''@ecriture du fichier.',
+   'File write error.','Fehler beim Schreiben der Datei.',
+   'Error al escribir el archivo.','Errore di scrittura del file.'));Exit;End;
  WriteLn(F,'<?xml version="1.0" encoding="ISO-8859-1"?>');
- WriteLn(F,'<svg xmlns="http://www.w3.org/2000/svg" width="',Mdl^.Dg[D].W,'" height="',Mdl^.Dg[D].H,'" font-family="Arial" font-size="12">');
- WriteLn(F,'<defs><marker id="a" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z"/></marker></defs>');
- WriteLn(F,'<rect x="1" y="1" width="',Mdl^.Dg[D].W-2,'" height="',Mdl^.Dg[D].H-2,'" rx="10" fill="white" stroke="black" stroke-width="3"/>');
- WriteLn(F,'<line x1="1" y1="18" x2="',Mdl^.Dg[D].W-1,'" y2="18" stroke="black" stroke-width="3"/>');
- WriteLn(F,'<text x="',Mdl^.Dg[D].W Div 2,'" y="14" text-anchor="middle">',Esc(Mdl^.Dg[D].Title),'</text>');
+ WriteLn(F,'<svg xmlns="http://www.w3.org/2000/svg" width="',Mdl^.Dg[D].W,
+   '" height="',Mdl^.Dg[D].H,'" font-family="Arial" font-size="12">');
+ WriteLn(F,'<defs><marker id="a" markerWidth="10" markerHeight="8" refX="9" '+
+   'refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z"/></marker></defs>');
+ WriteLn(F,'<rect x="1" y="1" width="',Mdl^.Dg[D].W-2,'" height="',
+   Mdl^.Dg[D].H-2,'" rx="10" fill="white" stroke="black" stroke-width="3"/>');
+ WriteLn(F,'<line x1="1" y1="18" x2="',Mdl^.Dg[D].W-1,
+   '" y2="18" stroke="black" stroke-width="3"/>');
+ WriteLn(F,'<text x="',Mdl^.Dg[D].W Div 2,'" y="14" text-anchor="middle">',
+   Esc(Mdl^.Dg[D].Title),'</text>');
  For I:=1 To MAXFL Do
-  If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And FlowGeom(I,X1,Y1,X2,Y2) Then Begin
+  If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And FlowGeom(I,X1,Y1,X2,Y2) Then
+    Begin
    If Mdl^.Fl[I].Bend Then
-    WriteLn(F,'<polyline points="',X1,',',Y1,' ',Mdl^.Fl[I].BX,',',Mdl^.Fl[I].BY,' ',X2,',',Y2,'" fill="none" stroke="black" marker-end="url(#a)"/>')
-   Else WriteLn(F,'<line x1="',X1,'" y1="',Y1,'" x2="',X2,'" y2="',Y2,'" stroke="black" marker-end="url(#a)"/>');
-   WriteLn(F,'<text x="',(X1+X2) Div 2,'" y="',(Y1+Y2) Div 2-4,'" text-anchor="middle">',Esc(Mdl^.Fl[I].Name),'</text>');
+    WriteLn(F,'<polyline points="',X1,',',Y1,' ',Mdl^.Fl[I].BX,',',
+      Mdl^.Fl[I].BY,' ',X2,',',Y2,
+      '" fill="none" stroke="black" marker-end="url(#a)"/>')
+   Else WriteLn(F,'<line x1="',X1,'" y1="',Y1,'" x2="',X2,'" y2="',Y2,
+     '" stroke="black" marker-end="url(#a)"/>');
+   WriteLn(F,'<text x="',(X1+X2) Div 2,'" y="',(Y1+Y2) Div 2-4,
+     '" text-anchor="middle">',Esc(Mdl^.Fl[I].Name),'</text>');
   End;
  For I:=1 To MAXEL Do
   If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) Then Begin
    X1:=Mdl^.El[I].X;Y1:=Mdl^.El[I].Y;X2:=Mdl^.El[I].W;Y2:=Mdl^.El[I].H;
    Case Mdl^.El[I].Kind Of
     ekProc: Begin
-      WriteLn(F,'<rect x="',X1,'" y="',Y1,'" width="',X2,'" height="',Y2,'" rx="8" fill="white" stroke="black"/>');
-      WriteLn(F,'<line x1="',X1,'" y1="',Y1+16,'" x2="',X1+X2,'" y2="',Y1+16,'" stroke="black"/>');
-      WriteLn(F,'<line x1="',X1,'" y1="',Y1+Y2-16,'" x2="',X1+X2,'" y2="',Y1+Y2-16,'" stroke="black"/>');
-      WriteLn(F,'<text x="',X1+X2 Div 2,'" y="',Y1+12,'" text-anchor="middle" fill="purple">',Esc(Mdl^.El[I].Num),'</text>');
-      WriteLn(F,'<text x="',X1+X2 Div 2,'" y="',Y1+Y2 Div 2+4,'" text-anchor="middle">',Esc(Mdl^.El[I].Name),'</text>');
-      WriteLn(F,'<text x="',X1+X2 Div 2,'" y="',Y1+Y2-4,'" text-anchor="middle">',Esc(DictLabel(dcRes,Mdl^.El[I].Res)),'</text>');
+      WriteLn(F,'<rect x="',X1,'" y="',Y1,'" width="',X2,'" height="',Y2,
+        '" rx="8" fill="white" stroke="black"/>');
+      WriteLn(F,'<line x1="',X1,'" y1="',Y1+16,'" x2="',X1+X2,'" y2="',Y1+16,
+        '" stroke="black"/>');
+      WriteLn(F,'<line x1="',X1,'" y1="',Y1+Y2-16,'" x2="',X1+X2,'" y2="',
+        Y1+Y2-16,'" stroke="black"/>');
+      WriteLn(F,'<text x="',X1+X2 Div 2,'" y="',Y1+12,
+        '" text-anchor="middle" fill="purple">',Esc(Mdl^.El[I].Num),'</text>');
+      WriteLn(F,'<text x="',X1+X2 Div 2,'" y="',Y1+Y2 Div 2+4,
+        '" text-anchor="middle">',Esc(Mdl^.El[I].Name),'</text>');
+      WriteLn(F,'<text x="',X1+X2 Div 2,'" y="',Y1+Y2-4,
+        '" text-anchor="middle">',Esc(DictLabel(dcRes,Mdl^.El[I].Res)),
+        '</text>');
      End;
     ekStore: Begin
-      WriteLn(F,'<rect x="',X1,'" y="',Y1,'" width="',X2,'" height="',Y2,'" fill="white" stroke="black"/>');
-      WriteLn(F,'<line x1="',X1+X2*3 Div 10,'" y1="',Y1,'" x2="',X1+X2*3 Div 10,'" y2="',Y1+Y2,'" stroke="black"/>');
-      WriteLn(F,'<text x="',X1+4,'" y="',Y1+Y2 Div 2+4,'">',Esc(Mdl^.El[I].Num),'</text>');
-      WriteLn(F,'<text x="',X1+X2*3 Div 10+4,'" y="',Y1+Y2 Div 2+4,'">',Esc(Mdl^.El[I].Name),'</text>');
+      WriteLn(F,'<rect x="',X1,'" y="',Y1,'" width="',X2,'" height="',Y2,
+        '" fill="white" stroke="black"/>');
+      WriteLn(F,'<line x1="',X1+X2*3 Div 10,'" y1="',Y1,'" x2="',X1+X2*3 Div 10,
+        '" y2="',Y1+Y2,'" stroke="black"/>');
+      WriteLn(F,'<text x="',X1+4,'" y="',Y1+Y2 Div 2+4,'">',Esc(Mdl^.El[I].Num),
+        '</text>');
+      WriteLn(F,'<text x="',X1+X2*3 Div 10+4,'" y="',Y1+Y2 Div 2+4,'">',
+        Esc(Mdl^.El[I].Name),'</text>');
      End;
     ekEnt: Begin
-      WriteLn(F,'<rect x="',X1,'" y="',Y1,'" width="',X2,'" height="',Y2,'" fill="white" stroke="black"/>');
-      WriteLn(F,'<text x="',X1+X2 Div 2,'" y="',Y1+Y2 Div 2+4,'" text-anchor="middle">',Esc(ElName(I)),'</text>');
+      WriteLn(F,'<rect x="',X1,'" y="',Y1,'" width="',X2,'" height="',Y2,
+        '" fill="white" stroke="black"/>');
+      WriteLn(F,'<text x="',X1+X2 Div 2,'" y="',Y1+Y2 Div 2+4,
+        '" text-anchor="middle">',Esc(ElName(I)),'</text>');
      End;
-    Else WriteLn(F,'<text x="',X1,'" y="',Y1+12,'">',Esc(Mdl^.El[I].Name),'</text>');
+    Else WriteLn(F,'<text x="',X1,'" y="',Y1+12,'">',Esc(Mdl^.El[I].Name),
+      '</text>');
    End;
   End;
  A:=0;B:=0;
@@ -4101,15 +4560,22 @@ Begin
  {$I-}
  Assign(F,FN);Rewrite(F);
  {$I+}
- If IOResult<>0 Then Begin Msg(T5('Erreur d''@ecriture du fichier.','File write error.','Fehler beim Schreiben der Datei.','Error al escribir el archivo.','Errore di scrittura del file.'));Exit;End;
+ If IOResult<>0 Then Begin Msg(T5('Erreur d''@ecriture du fichier.',
+   'File write error.','Fehler beim Schreiben der Datei.',
+   'Error al escribir el archivo.','Errore di scrittura del file.'));Exit;End;
  WriteLn(F,'Type;Num;Name;Diagram;Description;Resource');
  For I:=1 To MAXEL Do
   If Mdl^.El[I].Used Then
-   WriteLn(F,Mdl^.El[I].Kind,';',Mdl^.El[I].Num,';',Mdl^.El[I].Name,';',DiagTitle(Mdl^.El[I].Diag),';',Mdl^.El[I].Desc,';',DictLabel(dcRes,Mdl^.El[I].Res));
+   WriteLn(F,Mdl^.El[I].Kind,';',Mdl^.El[I].Num,';',Mdl^.El[I].Name,';',
+     DiagTitle(Mdl^.El[I].Diag),';',Mdl^.El[I].Desc,';',DictLabel(dcRes,
+     Mdl^.El[I].Res));
  WriteLn(F,'Flow;Num;Name;From;To;Qualifier');
  For I:=1 To MAXFL Do
-  If Mdl^.Fl[I].Used And (FindEl(Mdl^.Fl[I].A)>0) And (FindEl(Mdl^.Fl[I].B)>0) Then
-   WriteLn(F,'F;',Mdl^.Fl[I].Num,';',Mdl^.Fl[I].Name,';',ElName(FindEl(Mdl^.Fl[I].A)),';',ElName(FindEl(Mdl^.Fl[I].B)),';',DictName(dcQual,Mdl^.Fl[I].Qual));
+  If Mdl^.Fl[I].Used And (FindEl(Mdl^.Fl[I].A)>0) And (FindEl(Mdl^.Fl[I].B)>0)
+    Then
+   WriteLn(F,'F;',Mdl^.Fl[I].Num,';',Mdl^.Fl[I].Name,';',
+     ElName(FindEl(Mdl^.Fl[I].A)),';',ElName(FindEl(Mdl^.Fl[I].B)),';',
+     DictName(dcQual,Mdl^.Fl[I].Qual));
  Close(F);
 End;
 
@@ -4120,7 +4586,9 @@ Begin
  {$I-}
  Assign(F,FN);Reset(F);
  {$I+}
- If IOResult<>0 Then Begin Msg(T5('Fichier introuvable.','File not found.','Datei nicht gefunden.','Archivo no encontrado.','File non trovato.'));Exit;End;
+ If IOResult<>0 Then Begin Msg(T5('Fichier introuvable.','File not found.',
+   'Datei nicht gefunden.','Archivo no encontrado.','File non trovato.'));Exit;
+   End;
  PushUndo;N:=0;
  While Not Eof(F) Do Begin
   ReadLn(F,S);S:=TrimStr(S);
@@ -4130,16 +4598,24 @@ Begin
   End;
  End;
  Close(F);
- Msg(IntStr(N)+' '+T5('processus import@es.','processes imported.','Prozesse importiert.','procesos importados.','processi importati.'));
+ Msg(IntStr(N)+' '+T5('processus import@es.','processes imported.',
+   'Prozesse importiert.','procesos importados.','processi importati.'));
 End;
 
 Procedure CmdImpExp;
 Var FN: String; K: Integer;
 Begin
- FormBegin(T5('Importer-Exporter','Import-Export','Import-Export','Importar-Exportar','Importa-Esporta'));
- FormAdd(4,T5('Op@eration','Operation','Vorgang','Operaci@pn','Operazione'),'1',0,
-  T5('Exporter en SVG|Exporter en CSV|Importer des processus (texte)','Export to SVG|Export to CSV|Import processes (text)','Als SVG exportieren|Als CSV exportieren|Prozesse importieren (Text)','Exportar a SVG|Exportar a CSV|Importar procesos (texto)','Esporta in SVG|Esporta in CSV|Importa processi (testo)'));
- FormAdd(0,T5('Fichier','File','Datei','Archivo','File'),ChangeExt(FileTitle,'SVG'),60,'');
+ FormBegin(T5('Importer-Exporter','Import-Export','Import-Export',
+   'Importar-Exportar','Importa-Esporta'));
+ FormAdd(4,T5('Op@eration','Operation','Vorgang','Operaci@pn','Operazione'),'1',
+   0,
+  T5('Exporter en SVG|Exporter en CSV|Importer des processus (texte)',
+    'Export to SVG|Export to CSV|Import processes (text)',
+    'Als SVG exportieren|Als CSV exportieren|Prozesse importieren (Text)',
+    'Exportar a SVG|Exportar a CSV|Importar procesos (texto)',
+    'Esporta in SVG|Esporta in CSV|Importa processi (testo)'));
+ FormAdd(0,T5('Fichier','File','Datei','Archivo','File'),ChangeExt(FileTitle,
+   'SVG'),60,'');
  If Not RunForm Then Exit;
  K:=ValInt(Frm.Val[1],1);FN:=TrimStr(Frm.Val[2]);
  If FN='' Then Exit;
@@ -4154,12 +4630,14 @@ End;
 
 Procedure CmdMerge;
 Var FN: String; T: PModel; TD: PDict; TC: TCfg; Res,I,J,E,F,D: Integer;
-    DMap: Array[1..MAXDG] Of Integer; NewId: Array[1..MAXEL] Of Integer; Sid,Sz,K: Integer;
+    DMap: Array[1..MAXDG] Of Integer; NewId: Array[1..MAXEL] Of Integer; Sid,Sz,
+      K: Integer;
 Function MapId(Old: Integer): Integer;
 Var Q: Integer;
 Begin
  MapId:=0;
- For Q:=1 To MAXEL Do If T^.El[Q].Used And (T^.El[Q].Id=Old) Then MapId:=NewId[Q];
+ For Q:=1 To MAXEL Do If T^.El[Q].Used And (T^.El[Q].Id=Old) Then
+   MapId:=NewId[Q];
 End;
 Begin
  FN:='';
@@ -4167,7 +4645,9 @@ Begin
  New(T);New(TD);
  Res:=ReadAnyFile(FN,T,TD,TC);
  If Res<>0 Then Begin
-  Msg(T5('Impossible de lire ce fichier.','Cannot read this file.','Datei kann nicht gelesen werden.','No se puede leer este archivo.','Impossibile leggere questo file.'));
+  Msg(T5('Impossible de lire ce fichier.','Cannot read this file.',
+    'Datei kann nicht gelesen werden.','No se puede leer este archivo.',
+    'Impossibile leggere questo file.'));
   Dispose(TD);Dispose(T);Exit;
  End;
  PushUndo;
@@ -4175,7 +4655,8 @@ Begin
   DMap[I]:=0;
   If T^.Dg[I].Used Then Begin
    D:=NewDiag(0,T^.Dg[I].Title);DMap[I]:=D;
-   If D>0 Then Begin Mdl^.Dg[D].W:=T^.Dg[I].W;Mdl^.Dg[D].H:=T^.Dg[I].H;Mdl^.Dg[D].NP:=T^.Dg[I].NP;End;
+   If D>0 Then Begin Mdl^.Dg[D].W:=T^.Dg[I].W;Mdl^.Dg[D].H:=T^.Dg[I].H;
+     Mdl^.Dg[D].NP:=T^.Dg[I].NP;End;
   End;
  End;
  For I:=1 To MAXEL Do Begin
@@ -4187,13 +4668,15 @@ Begin
     Mdl^.El[E]:=T^.El[I];
     Mdl^.El[E].Id:=Sid;Mdl^.El[E].Z:=Sz;Mdl^.El[E].Diag:=DMap[T^.El[I].Diag];
     Mdl^.El[E].Sel:=False;Mdl^.El[E].Res:=0;
-    If T^.El[I].Child>0 Then Mdl^.El[E].Child:=DMap[T^.El[I].Child] Else Mdl^.El[E].Child:=0;
+    If T^.El[I].Child>0 Then Mdl^.El[E].Child:=DMap[T^.El[I].Child] Else
+      Mdl^.El[E].Child:=0;
     NewId[I]:=Sid;
    End;
   End;
  End;
  For I:=1 To MAXDG Do
-  If T^.Dg[I].Used And (DMap[I]>0) And (T^.Dg[I].Parent>0) Then Mdl^.Dg[DMap[I]].Parent:=MapId(T^.Dg[I].Parent);
+  If T^.Dg[I].Used And (DMap[I]>0) And (T^.Dg[I].Parent>0) Then
+    Mdl^.Dg[DMap[I]].Parent:=MapId(T^.Dg[I].Parent);
  For I:=1 To MAXFL Do
   If T^.Fl[I].Used And (DMap[T^.Fl[I].Diag]>0) Then Begin
    J:=MapId(T^.Fl[I].A);K:=MapId(T^.Fl[I].B);
@@ -4201,12 +4684,17 @@ Begin
     F:=NewFl(DMap[T^.Fl[I].Diag],J,K);
     If F>0 Then Begin
      Mdl^.Fl[F].Name:=T^.Fl[I].Name;Mdl^.Fl[F].Desc:=T^.Fl[I].Desc;
-     Mdl^.Fl[F].Bend:=T^.Fl[I].Bend;Mdl^.Fl[F].BX:=T^.Fl[I].BX;Mdl^.Fl[F].BY:=T^.Fl[I].BY;
+     Mdl^.Fl[F].Bend:=T^.Fl[I].Bend;Mdl^.Fl[F].BX:=T^.Fl[I].BX;
+       Mdl^.Fl[F].BY:=T^.Fl[I].BY;
     End;
    End;
   End;
  Dispose(TD);Dispose(T);
- Msg(T5('Fusion termin@ee : les diagrammes ont @et@e ajout@es.','Merge complete: diagrams were added.','Zusammenf@3hren abgeschlossen: Diagramme hinzugef@3gt.','Combinaci@pn terminada: diagramas a@nadidos.','Unione completata: diagrammi aggiunti.'));
+ Msg(T5('Fusion termin@ee : les diagrammes ont @et@e ajout@es.',
+   'Merge complete: diagrams were added.',
+   'Zusammenf@3hren abgeschlossen: Diagramme hinzugef@3gt.',
+   'Combinaci@pn terminada: diagramas a@nadidos.',
+   'Unione completata: diagrammi aggiunti.'));
 End;
 
 Function InSubtree(D,Root: Integer): Boolean;
@@ -4227,16 +4715,24 @@ Var D,I: Integer; FN: String; T: PModel; Sv: PModel;
 Begin
  D:=CurDiag;If D=0 Then Exit;
  FN:=ChangeExt(FileTitle+'_'+IntStr(D),'SRD');
- If Not InputBox(T5('Scinder','Split','Aufteilen','Dividir','Dividi'),T5('Fichier :','File:','Datei:','Archivo:','File:'),FN,60) Then Exit;
+ If Not InputBox(T5('Scinder','Split','Aufteilen','Dividir','Dividi'),
+   T5('Fichier :','File:','Datei:','Archivo:','File:'),FN,60) Then Exit;
  New(T);
  T^:=Mdl^;
- For I:=1 To MAXDG Do If T^.Dg[I].Used And Not InSubtree(I,D) Then T^.Dg[I].Used:=False;
- For I:=1 To MAXEL Do If T^.El[I].Used And Not T^.Dg[T^.El[I].Diag].Used Then T^.El[I].Used:=False;
- For I:=1 To MAXFL Do If T^.Fl[I].Used And Not T^.Dg[T^.Fl[I].Diag].Used Then T^.Fl[I].Used:=False;
+ For I:=1 To MAXDG Do If T^.Dg[I].Used And Not InSubtree(I,D) Then
+   T^.Dg[I].Used:=False;
+ For I:=1 To MAXEL Do If T^.El[I].Used And Not T^.Dg[T^.El[I].Diag].Used Then
+   T^.El[I].Used:=False;
+ For I:=1 To MAXFL Do If T^.Fl[I].Used And Not T^.Dg[T^.Fl[I].Diag].Used Then
+   T^.Fl[I].Used:=False;
  T^.Dg[D].Parent:=0;
  If WriteSRD(AddExt(FN,'SRD'),T) Then
-  Msg(T5('Sous-mod@gle enregistr@e : ','Sub-model saved: ','Teilmodell gespeichert: ','Submodelo guardado: ','Sottomodello salvato: ')+AddExt(FN,'SRD'))
- Else Msg(T5('Erreur d''@ecriture du fichier.','File write error.','Fehler beim Schreiben der Datei.','Error al escribir el archivo.','Errore di scrittura del file.'));
+  Msg(T5('Sous-mod@gle enregistr@e : ','Sub-model saved: ',
+    'Teilmodell gespeichert: ','Submodelo guardado: ',
+    'Sottomodello salvato: ')+AddExt(FN,'SRD'))
+ Else Msg(T5('Erreur d''@ecriture du fichier.','File write error.',
+   'Fehler beim Schreiben der Datei.','Error al escribir el archivo.',
+   'Errore di scrittura del file.'));
  Dispose(T);
  Sv:=Nil;
 End;
@@ -4249,14 +4745,18 @@ Begin
  D:=CurDiag;If D=0 Then Exit;
  I:=FirstSel(D,IsF);
  If (I=0) Or IsF Or (Mdl^.El[I].Kind<>ekProc) Then Begin
-  Msg(T5('S@electionnez un processus.','Select a process.','Einen Prozess ausw@1hlen.','Seleccione un proceso.','Selezionare un processo.'));Exit;
+  Msg(T5('S@electionnez un processus.','Select a process.',
+    'Einen Prozess ausw@1hlen.','Seleccione un proceso.',
+    'Selezionare un processo.'));Exit;
  End;
  C:=Mdl^.El[I].Child;
  If (C=0) Or Not Mdl^.Dg[C].Used Then Begin
   PushUndo;
   S:=Mdl^.El[I].Name;If S='' Then S:=Mdl^.El[I].Num;
   C:=NewDiag(Mdl^.El[I].Id,S);
-  If C=0 Then Begin Msg(T5('Trop de diagrammes.','Too many diagrams.','Zu viele Diagramme.','Demasiados diagramas.','Troppi diagrammi.'));Exit;End;
+  If C=0 Then Begin Msg(T5('Trop de diagrammes.','Too many diagrams.',
+    'Zu viele Diagramme.','Demasiados diagramas.','Troppi diagrammi.'));Exit;
+    End;
   Mdl^.El[I].Child:=C;
  End;
  ClearSel;
@@ -4268,7 +4768,9 @@ Var D,P: Integer;
 Begin
  D:=CurDiag;If D=0 Then Exit;
  P:=FindEl(Mdl^.Dg[D].Parent);
- If P=0 Then Begin Msg(T5('Ce diagramme est la racine.','This diagram is the root.','Dieses Diagramm ist die Wurzel.','Este diagrama es la ra@jz.','Questo diagramma @a la radice.'));Exit;End;
+ If P=0 Then Begin Msg(T5('Ce diagramme est la racine.',
+   'This diagram is the root.','Dieses Diagramm ist die Wurzel.',
+   'Este diagrama es la ra@jz.','Questo diagramma @a la radice.'));Exit;End;
  GotoElem(P);
 End;
 
@@ -4281,8 +4783,10 @@ Begin
   Rt:=RootDiag;
   If Rt>0 Then TreeLines(Rt,0);
   If TLN=0 Then Begin TLAdd('-');LRef[1]:=0;End;
-  R:=ListBox(T5('Arbre des processus','Process Tree','Prozessbaum','@rrbol de procesos','Albero dei processi'),
-     T5('Aller @a|Fermer','Go to|Close','Gehe zu|Schlie@7en','Ir a|Cerrar','Vai a|Chiudi'),Sel);
+  R:=ListBox(T5('Arbre des processus','Process Tree','Prozessbaum',
+    '@rrbol de procesos','Albero dei processi'),
+     T5('Aller @a|Fermer','Go to|Close','Gehe zu|Schlie@7en','Ir a|Cerrar',
+       'Vai a|Chiudi'),Sel);
   Ref:=0;If (Sel>=1) And (Sel<=TLN) Then Ref:=LRef[Sel];
   If (R=1) And (Ref>0) Then Begin GotoElem(Ref);R:=2;End;
  Until R<>1;
@@ -4314,16 +4818,21 @@ Begin
  DP:=Mdl^.El[P].Diag;
  PushUndo;N:=0;Y:=60;
  For I:=1 To MAXFL Do
-  If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=DP) And ((Mdl^.Fl[I].A=Mdl^.El[P].Id) Or (Mdl^.Fl[I].B=Mdl^.El[P].Id)) Then Begin
-   If Mdl^.Fl[I].A=Mdl^.El[P].Id Then O:=FindEl(Mdl^.Fl[I].B) Else O:=FindEl(Mdl^.Fl[I].A);
+  If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=DP) And ((Mdl^.Fl[I].A=Mdl^.El[P].Id)
+    Or (Mdl^.Fl[I].B=Mdl^.El[P].Id)) Then Begin
+   If Mdl^.Fl[I].A=Mdl^.El[P].Id Then O:=FindEl(Mdl^.Fl[I].B) Else
+     O:=FindEl(Mdl^.Fl[I].A);
    If (O>0) And (Mdl^.El[O].Kind<>ekProc) Then Begin
     E:=0;
     For J:=1 To MAXEL Do
-     If Mdl^.El[J].Used And (Mdl^.El[J].Diag=D) And (Mdl^.El[J].Kind=Mdl^.El[O].Kind) And (Mdl^.El[J].Name=Mdl^.El[O].Name) Then E:=J;
+     If Mdl^.El[J].Used And (Mdl^.El[J].Diag=D) And
+       (Mdl^.El[J].Kind=Mdl^.El[O].Kind) And (Mdl^.El[J].Name=Mdl^.El[O].Name)
+       Then E:=J;
     If E=0 Then Begin
      E:=NewEl(Mdl^.El[O].Kind,D,0,0);
      If E>0 Then Begin
-      Mdl^.El[E].Name:=Mdl^.El[O].Name;Mdl^.El[E].Num:=Mdl^.El[O].Num;Mdl^.El[E].Desc:=Mdl^.El[O].Desc;
+      Mdl^.El[E].Name:=Mdl^.El[O].Name;Mdl^.El[E].Num:=Mdl^.El[O].Num;
+        Mdl^.El[E].Desc:=Mdl^.El[O].Desc;
       Mdl^.El[E].X:=20;Mdl^.El[E].Y:=Y;Inc(Y,Mdl^.El[E].H+16);
       Inc(N);
      End;
@@ -4334,18 +4843,25 @@ Begin
   For I:=1 To MAXFL Do
    If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) Then
     For J:=1 To MAXFL Do
-     If Mdl^.Fl[J].Used And (Mdl^.Fl[J].Diag=DP) And (Mdl^.Fl[J].Name=Mdl^.Fl[I].Name) And (Mdl^.Fl[I].Name<>'') Then Begin
+     If Mdl^.Fl[J].Used And (Mdl^.Fl[J].Diag=DP) And
+       (Mdl^.Fl[J].Name=Mdl^.Fl[I].Name) And (Mdl^.Fl[I].Name<>'') Then Begin
       Mdl^.Fl[I].Qual:=Mdl^.Fl[J].Qual;Mdl^.Fl[I].Desc:=Mdl^.Fl[J].Desc;
      End;
  K:=0;
- Msg(IntStr(N)+' '+T5('objet(s) d''environnement ajout@e(s).','environment object(s) added.','Umgebungsobjekt(e) hinzugef@3gt.','objeto(s) de entorno a@nadido(s).','oggetto/i di ambiente aggiunto/i.'));
+ Msg(IntStr(N)+' '+T5('objet(s) d''environnement ajout@e(s).',
+   'environment object(s) added.','Umgebungsobjekt(e) hinzugef@3gt.',
+   'objeto(s) de entorno a@nadido(s).','oggetto/i di ambiente aggiunto/i.'));
 End;
 
 Procedure CmdRenum;
 Var D,P: Integer; Pre: String;
 Begin
- FormBegin(T5('Renum@eroter','Renumber','Neu nummerieren','Renumerar','Rinumera'));
- FormAdd(4,T5('Port@ee','Scope','Bereich','Alcance','Ambito'),'1',0,T5('Tout le mod@gle|Diagramme courant','Whole model|Current diagram','Gesamtes Modell|Aktuelles Diagramm','Todo el modelo|Diagrama actual','Intero modello|Diagramma corrente'));
+ FormBegin(T5('Renum@eroter','Renumber','Neu nummerieren','Renumerar',
+   'Rinumera'));
+ FormAdd(4,T5('Port@ee','Scope','Bereich','Alcance','Ambito'),'1',0,
+   T5('Tout le mod@gle|Diagramme courant','Whole model|Current diagram',
+   'Gesamtes Modell|Aktuelles Diagramm','Todo el modelo|Diagrama actual',
+   'Intero modello|Diagramma corrente'));
  If Not RunForm Then Exit;
  PushUndo;
  If Frm.Val[1]='1' Then RenumAll
@@ -4374,7 +4890,8 @@ Begin
    Case Mode Of
     1: Begin
       Wn[W].X:=8+K*24;Wn[W].Y:=4+K*22;
-      Wn[W].W:=Integer(Min2(W0-Wn[W].X-8,520));Wn[W].H:=Integer(Min2(H0-Wn[W].Y-4,320));
+      Wn[W].W:=Integer(Min2(W0-Wn[W].X-8,520));
+        Wn[W].H:=Integer(Min2(H0-Wn[W].Y-4,320));
      End;
     2: Begin Wn[W].X:=0;Wn[W].W:=W0;Wn[W].H:=H0 Div N;Wn[W].Y:=K*Wn[W].H;End;
     Else Begin Wn[W].Y:=0;Wn[W].H:=H0;Wn[W].W:=W0 Div N;Wn[W].X:=K*Wn[W].W;End;
@@ -4412,52 +4929,125 @@ Begin
  TLClear;
  Case K Of
   1: Begin
-    TLAdd(T5('AIDE DE SILVERRUN-BPM (clone)','SILVERRUN-BPM HELP (clone)','SILVERRUN-BPM-HILFE (Klon)','AYUDA DE SILVERRUN-BPM (clon)','GUIDA DI SILVERRUN-BPM (clone)'));
+    TLAdd(T5('AIDE DE SILVERRUN-BPM (clone)','SILVERRUN-BPM HELP (clone)',
+      'SILVERRUN-BPM-HILFE (Klon)','AYUDA DE SILVERRUN-BPM (clon)',
+      'GUIDA DI SILVERRUN-BPM (clone)'));
     TLAdd('');
-    TLAdd(T5('Palette d''outils (colonne de droite) :','Tool box (right column):','Werkzeugpalette (rechte Spalte):','Paleta (columna derecha):','Tavolozza (colonna destra):'));
-    TLAdd(T5('  S@election, Processus, Entit@e, Entrep@ot, Flux,','  Select, Process, Entity, Store, Flow,','  Auswahl, Prozess, Entit@1t, Speicher, Fluss,','  Selecci@pn, Proceso, Entidad, Almac@gn, Flujo,','  Selezione, Processo, Entit@r, Archivio, Flusso,'));
-    TLAdd(T5('  Parent, Ajuster, Zoom avant.','  Parent, Fit, Zoom in.','  Eltern, Anpassen, Vergr@2@7ern.','  Padre, Ajustar, Acercar.','  Genitore, Adatta, Ingrandisci.'));
-    TLAdd(T5('Colonne de gauche : d@ecomposer, propri@et@es,','Left column: decompose, properties,','Linke Spalte: Zerlegen, Eigenschaften,','Columna izquierda: descomponer, propiedades,','Colonna sinistra: scomponi, propriet@r,'));
-    TLAdd(T5('environnement, surlignage, qualifiant, ressource, texte, zoom arri@gre.','environment, highlight, qualifier, resource, text, zoom out.','Umgebung, Hervorheben, Qualifizierer, Ressource, Text, Verkleinern.','entorno, resaltar, calificador, recurso, texto, alejar.','ambiente, evidenzia, qualificatore, risorsa, testo, riduci.'));
+    TLAdd(T5('Palette d''outils (colonne de droite) :',
+      'Tool box (right column):','Werkzeugpalette (rechte Spalte):',
+      'Paleta (columna derecha):','Tavolozza (colonna destra):'));
+    TLAdd(T5('  S@election, Processus, Entit@e, Entrep@ot, Flux,',
+      '  Select, Process, Entity, Store, Flow,',
+      '  Auswahl, Prozess, Entit@1t, Speicher, Fluss,',
+      '  Selecci@pn, Proceso, Entidad, Almac@gn, Flujo,',
+      '  Selezione, Processo, Entit@r, Archivio, Flusso,'));
+    TLAdd(T5('  Parent, Ajuster, Zoom avant.','  Parent, Fit, Zoom in.',
+      '  Eltern, Anpassen, Vergr@2@7ern.','  Padre, Ajustar, Acercar.',
+      '  Genitore, Adatta, Ingrandisci.'));
+    TLAdd(T5('Colonne de gauche : d@ecomposer, propri@et@es,',
+      'Left column: decompose, properties,',
+      'Linke Spalte: Zerlegen, Eigenschaften,',
+      'Columna izquierda: descomponer, propiedades,',
+      'Colonna sinistra: scomponi, propriet@r,'));
+    TLAdd(T5('environnement, surlignage, qualifiant, ressource, texte, zoom '+
+      'arri@gre.',
+      'environment, highlight, qualifier, resource, text, zoom out.',
+      'Umgebung, Hervorheben, Qualifizierer, Ressource, Text, Verkleinern.',
+      'entorno, resaltar, calificador, recurso, texto, alejar.',
+      'ambiente, evidenzia, qualificatore, risorsa, testo, riduci.'));
     TLAdd('');
-    TLAdd(T5('Flux : outil Flux, cliquer l''origine puis la destination.','Flows: Flow tool, click the source then the target.','Fl@3sse: Flusswerkzeug, Quelle dann Ziel anklicken.','Flujos: herramienta Flujo, clic en origen y luego destino.','Flussi: strumento Flusso, clic su origine poi destinazione.'));
-    TLAdd(T5('Double-clic : propri@et@es. Glisser un flux : point de pliage.','Double-click: properties. Drag a flow: bend point.','Doppelklick: Eigenschaften. Fluss ziehen: Knickpunkt.','Doble clic: propiedades. Arrastrar un flujo: punto de pliegue.','Doppio clic: propriet@r. Trascinare un flusso: punto di piegatura.'));
-    TLAdd(T5('Clic droit sur un objet : ajoute @a la s@election.','Right-click an object: add to selection.','Rechtsklick auf Objekt: zur Auswahl hinzuf@3gen.','Clic derecho en un objeto: a@nadir a la selecci@pn.','Clic destro su un oggetto: aggiunge alla selezione.'));
+    TLAdd(T5('Flux : outil Flux, cliquer l''origine puis la destination.',
+      'Flows: Flow tool, click the source then the target.',
+      'Fl@3sse: Flusswerkzeug, Quelle dann Ziel anklicken.',
+      'Flujos: herramienta Flujo, clic en origen y luego destino.',
+      'Flussi: strumento Flusso, clic su origine poi destinazione.'));
+    TLAdd(T5('Double-clic : propri@et@es. Glisser un flux : point de pliage.',
+      'Double-click: properties. Drag a flow: bend point.',
+      'Doppelklick: Eigenschaften. Fluss ziehen: Knickpunkt.',
+      'Doble clic: propiedades. Arrastrar un flujo: punto de pliegue.',
+      'Doppio clic: propriet@r. Trascinare un flusso: punto di piegatura.'));
+    TLAdd(T5('Clic droit sur un objet : ajoute @a la s@election.',
+      'Right-click an object: add to selection.',
+      'Rechtsklick auf Objekt: zur Auswahl hinzuf@3gen.',
+      'Clic derecho en un objeto: a@nadir a la selecci@pn.',
+      'Clic destro su un oggetto: aggiunge alla selezione.'));
    End;
   2: Begin
-    TLAdd(T5('GUIDE DE L''UTILISATEUR BPM','BPM USER''S GUIDE','BPM-BENUTZERHANDBUCH','GU@jA DEL USUARIO BPM','GUIDA UTENTE BPM'));
+    TLAdd(T5('GUIDE DE L''UTILISATEUR BPM','BPM USER''S GUIDE',
+      'BPM-BENUTZERHANDBUCH','GU@jA DEL USUARIO BPM','GUIDA UTENTE BPM'));
     TLAdd('');
     TLAdd('F1 ........ '+T5('Aide','Help','Hilfe','Ayuda','Guida'));
-    TLAdd('F2 ........ '+T5('Renommer','Rename','Umbenennen','Renombrar','Rinomina'));
+    TLAdd('F2 ........ '+T5('Renommer','Rename','Umbenennen','Renombrar',
+      'Rinomina'));
     TLAdd('F10 ....... '+T5('Menus','Menus','Men@3s','Men@3s','Menu'));
-    TLAdd('Alt+lettre  '+T5('Ouvre un menu','Opens a menu','@2ffnet ein Men@3','Abre un men@3','Apre un menu'));
-    TLAdd('Alt+1..7 .. '+T5('Listes du mod@gle (Ctrl+1..7)','Model lists (Ctrl+1..7)','Modelllisten (Strg+1..7)','Listas del modelo (Ctrl+1..7)','Elenchi del modello (Ctrl+1..7)'));
-    TLAdd('Ctrl+N/O/S '+T5('Nouveau / Ouvrir / Enregistrer','New / Open / Save','Neu / @2ffnen / Speichern','Nuevo / Abrir / Guardar','Nuovo / Apri / Salva'));
-    TLAdd('Ctrl+Z/Y .. '+T5('Annuler / R@etablir','Undo / Redo','R@3ckg@1ngig / Wiederholen','Deshacer / Rehacer','Annulla / Ripeti'));
-    TLAdd('Ctrl+X/C/V '+T5('Couper / Copier / Coller','Cut / Copy / Paste','Ausschneiden / Kopieren / Einf@3gen','Cortar / Copiar / Pegar','Taglia / Copia / Incolla'));
-    TLAdd('Ctrl+D .... '+T5('Dupliquer','Duplicate','Duplizieren','Duplicar','Duplica'));
-    TLAdd('Ctrl+A/L/G '+T5('Tout / S@electionner / Aller @a la page','All / Select / Go to page','Alle / Ausw@1hlen / Gehe zu Seite','Todo / Seleccionar / Ir a p@rgina','Tutto / Seleziona / Vai a pagina'));
-    TLAdd('Ctrl+T/U .. '+T5('Redresser / Inverser un flux','Straighten / Reverse a flow','Fluss begradigen / umkehren','Enderezar / invertir flujo','Raddrizza / inverti flusso'));
+    TLAdd('Alt+lettre  '+T5('Ouvre un menu','Opens a menu','@2ffnet ein Men@3',
+      'Abre un men@3','Apre un menu'));
+    TLAdd('Alt+1..7 .. '+T5('Listes du mod@gle (Ctrl+1..7)',
+      'Model lists (Ctrl+1..7)','Modelllisten (Strg+1..7)',
+      'Listas del modelo (Ctrl+1..7)','Elenchi del modello (Ctrl+1..7)'));
+    TLAdd('Ctrl+N/O/S '+T5('Nouveau / Ouvrir / Enregistrer','New / Open / Save',
+      'Neu / @2ffnen / Speichern','Nuevo / Abrir / Guardar',
+      'Nuovo / Apri / Salva'));
+    TLAdd('Ctrl+Z/Y .. '+T5('Annuler / R@etablir','Undo / Redo',
+      'R@3ckg@1ngig / Wiederholen','Deshacer / Rehacer','Annulla / Ripeti'));
+    TLAdd('Ctrl+X/C/V '+T5('Couper / Copier / Coller','Cut / Copy / Paste',
+      'Ausschneiden / Kopieren / Einf@3gen','Cortar / Copiar / Pegar',
+      'Taglia / Copia / Incolla'));
+    TLAdd('Ctrl+D .... '+T5('Dupliquer','Duplicate','Duplizieren','Duplicar',
+      'Duplica'));
+    TLAdd('Ctrl+A/L/G '+T5('Tout / S@electionner / Aller @a la page',
+      'All / Select / Go to page','Alle / Ausw@1hlen / Gehe zu Seite',
+      'Todo / Seleccionar / Ir a p@rgina','Tutto / Seleziona / Vai a pagina'));
+    TLAdd('Ctrl+T/U .. '+T5('Redresser / Inverser un flux',
+      'Straighten / Reverse a flow','Fluss begradigen / umkehren',
+      'Enderezar / invertir flujo','Raddrizza / inverti flusso'));
     TLAdd('Ctrl+F .... '+T5('Ajuster','Fit','Anpassen','Ajustar','Adatta'));
-    TLAdd('Ctrl+H .... '+T5('Masquer','Hide','Ausblenden','Ocultar','Nascondi'));
+    TLAdd('Ctrl+H .... '+T5('Masquer','Hide','Ausblenden','Ocultar',
+      'Nascondi'));
     TLAdd('Suppr/Del .. '+T5('Effacer','Clear','L@2schen','Borrar','Cancella'));
-    TLAdd('Tab ....... '+T5('Objet suivant','Next object','N@1chstes Objekt','Objeto siguiente','Oggetto successivo'));
+    TLAdd('Tab ....... '+T5('Objet suivant','Next object','N@1chstes Objekt',
+      'Objeto siguiente','Oggetto successivo'));
     TLAdd('+ / - ..... Zoom');
    End;
   3: Begin
-    TLAdd(T5('NOTES DE VERSION','RELEASE NOTES','VERSIONSHINWEISE','NOTAS DE LA VERSI@pN','NOTE DI RILASCIO'));
+    TLAdd(T5('NOTES DE VERSION','RELEASE NOTES','VERSIONSHINWEISE',
+      'NOTAS DE LA VERSI@pN','NOTE DI RILASCIO'));
     TLAdd('');
     TLAdd('1.00');
-    TLAdd(T5('- Premi@gre version du clone SILVERRUN-BPM.','- First version of the SILVERRUN-BPM clone.','- Erste Version des SILVERRUN-BPM-Klons.','- Primera versi@pn del clon de SILVERRUN-BPM.','- Prima versione del clone SILVERRUN-BPM.'));
-    TLAdd(T5('- Lecture des fichiers .DFD de SilverRun (3.1 et 2.2.4), positions recalcul@ees.','- Reading SilverRun .DFD files (3.1 and 2.2.4), positions recomputed.','- Lesen von SilverRun-.DFD-Dateien (3.1 und 2.2.4), Positionen neu berechnet.','- Lectura de archivos .DFD de SilverRun (3.1 y 2.2.4), posiciones recalculadas.','- Lettura di file .DFD di SilverRun (3.1 e 2.2.4), posizioni ricalcolate.'));
-    TLAdd(T5('- Enregistrement au format natif .SRD.','- Saving in the native .SRD format.','- Speichern im nativen .SRD-Format.','- Guardado en el formato nativo .SRD.','- Salvataggio nel formato nativo .SRD.'));
+    TLAdd(T5('- Premi@gre version du clone SILVERRUN-BPM.',
+      '- First version of the SILVERRUN-BPM clone.',
+      '- Erste Version des SILVERRUN-BPM-Klons.',
+      '- Primera versi@pn del clon de SILVERRUN-BPM.',
+      '- Prima versione del clone SILVERRUN-BPM.'));
+    TLAdd(T5('- Lecture des fichiers .DFD de SilverRun (3.1 et 2.2.4), '+
+      'positions des processus lues.',
+      '- Reading SilverRun .DFD files (3.1 and 2.2.4), process positions read.',
+      '- Lesen von SilverRun-.DFD-Dateien (3.1 und 2.2.4), Prozesspositionen '+
+      'gelesen.','- Lectura de archivos .DFD de SilverRun (3.1 y 2.2.4), '+
+      'posiciones de procesos le@jdas.',
+      '- Lettura di file .DFD di SilverRun (3.1 e 2.2.4), posizioni dei '+
+      'processi lette.'));
+    TLAdd(T5('- Enregistrement au format natif .SRD.',
+      '- Saving in the native .SRD format.',
+      '- Speichern im nativen .SRD-Format.',
+      '- Guardado en el formato nativo .SRD.',
+      '- Salvataggio nel formato nativo .SRD.'));
    End;
   Else Begin
     TLAdd(T5('LICENCES','LICENSES','LIZENZEN','LICENCIAS','LICENZE'));
     TLAdd('');
-    TLAdd(T5('Clone ind@ependant d''une application de diagrammes de flux.','Independent clone of a data flow diagram application.','Unabh@1ngiger Klon einer Datenflussdiagramm-Anwendung.','Clon independiente de una aplicaci@pn de diagramas de flujo.','Clone indipendente di un''applicazione di diagrammi di flusso.'));
-    TLAdd(T5('SilverRun est une marque de ses propri@etaires.','SilverRun is a trademark of its owners.','SilverRun ist eine Marke seiner Eigent@3mer.','SilverRun es una marca de sus propietarios.','SilverRun @a un marchio dei suoi proprietari.'));
-    TLAdd('Sylvain Maltais - support@@gladir.com - https://www.gladir.com/office-0');
+    TLAdd(T5('Clone ind@ependant d''une application de diagrammes de flux.',
+      'Independent clone of a data flow diagram application.',
+      'Unabh@1ngiger Klon einer Datenflussdiagramm-Anwendung.',
+      'Clon independiente de una aplicaci@pn de diagramas de flujo.',
+      'Clone indipendente di un''applicazione di diagrammi di flusso.'));
+    TLAdd(T5('SilverRun est une marque de ses propri@etaires.',
+      'SilverRun is a trademark of its owners.',
+      'SilverRun ist eine Marke seiner Eigent@3mer.',
+      'SilverRun es una marca de sus propietarios.',
+      'SilverRun @a un marchio dei suoi proprietari.'));
+    TLAdd('Sylvain Maltais - support@@gladir.com - '+
+      'https://www.gladir.com/office-0');
    End;
  End;
 End;
@@ -4496,7 +5086,8 @@ Begin
  Best:=0;
  For I:=1 To MAXEL Do
   If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And Not Mdl^.El[I].Hid Then
-   If InBox(PX,PY,SXc(Mdl^.El[I].X),SYc(Mdl^.El[I].Y),SXc(Mdl^.El[I].X+Mdl^.El[I].W),SYc(Mdl^.El[I].Y+Mdl^.El[I].H)) Then Begin
+   If InBox(PX,PY,SXc(Mdl^.El[I].X),SYc(Mdl^.El[I].Y),
+     SXc(Mdl^.El[I].X+Mdl^.El[I].W),SYc(Mdl^.El[I].Y+Mdl^.El[I].H)) Then Begin
     If (Best=0) Or (Mdl^.El[I].Z>Mdl^.El[Best].Z) Then Best:=I;
    End;
  HitElem:=Best;
@@ -4517,10 +5108,12 @@ Var I: Integer; X1,Y1,X2,Y2: LongInt; HBX,HBY: LongInt;
 Begin
  HitFlow:=0;
  For I:=1 To MAXFL Do
-  If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And Not Mdl^.Fl[I].Hid And FlowGeom(I,X1,Y1,X2,Y2) Then Begin
+  If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And Not Mdl^.Fl[I].Hid And
+    FlowGeom(I,X1,Y1,X2,Y2) Then Begin
    If Mdl^.Fl[I].Bend Then Begin
     HBX:=SXc(Mdl^.Fl[I].BX);HBY:=SYc(Mdl^.Fl[I].BY);
-    If (DistSeg2(PX,PY,SXc(X1),SYc(Y1),HBX,HBY)<=25) Or (DistSeg2(PX,PY,HBX,HBY,SXc(X2),SYc(Y2))<=25) Then HitFlow:=I;
+    If (DistSeg2(PX,PY,SXc(X1),SYc(Y1),HBX,HBY)<=25) Or (DistSeg2(PX,PY,HBX,HBY,
+      SXc(X2),SYc(Y2))<=25) Then HitFlow:=I;
    End Else
     If DistSeg2(PX,PY,SXc(X1),SYc(Y1),SXc(X2),SYc(Y2))<=25 Then HitFlow:=I;
   End;
@@ -4540,18 +5133,21 @@ End;
 
 { deplacement de la selection avec contours XOR }
 Procedure MoveDrag(W: Integer; SX0,SY0: LongInt);
-Var D,I,F,First: Integer; E: TEvent; DX,DY,NDX,NDY: LongInt; Moved,Cancel: Boolean;
+Var D,I,F,First: Integer; E: TEvent; DX,DY,NDX,NDY: LongInt; Moved,Cancel:
+  Boolean;
 Procedure Outlines;
 Var K: Integer;
 Begin
  For K:=1 To MAXEL Do
   If Mdl^.El[K].Used And Mdl^.El[K].Sel And (Mdl^.El[K].Diag=D) Then
-   XorRect(SXc(Mdl^.El[K].X+DX),SYc(Mdl^.El[K].Y+DY),SXc(Mdl^.El[K].X+Mdl^.El[K].W+DX),SYc(Mdl^.El[K].Y+Mdl^.El[K].H+DY));
+   XorRect(SXc(Mdl^.El[K].X+DX),SYc(Mdl^.El[K].Y+DY),
+     SXc(Mdl^.El[K].X+Mdl^.El[K].W+DX),SYc(Mdl^.El[K].Y+Mdl^.El[K].H+DY));
 End;
 Begin
  D:=Wn[W].Diag;
  First:=0;
- For I:=1 To MAXEL Do If (First=0) And Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then First:=I;
+ For I:=1 To MAXEL Do If (First=0) And Mdl^.El[I].Used And Mdl^.El[I].Sel And
+   (Mdl^.El[I].Diag=D) Then First:=I;
  If First=0 Then Exit;
  DX:=0;DY:=0;Moved:=False;Cancel:=False;
  HideMouse;ClipView(W);ShowMouse;
@@ -4577,19 +5173,23 @@ Begin
   PushUndo;
   For I:=1 To MAXEL Do
    If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then Begin
-    Mdl^.El[I].X:=Mdl^.El[I].X+Integer(DX);Mdl^.El[I].Y:=Mdl^.El[I].Y+Integer(DY);
+    Mdl^.El[I].X:=Mdl^.El[I].X+Integer(DX);
+      Mdl^.El[I].Y:=Mdl^.El[I].Y+Integer(DY);
    End;
   For F:=1 To MAXFL Do
    If Mdl^.Fl[F].Used And (Mdl^.Fl[F].Diag=D) And Mdl^.Fl[F].Bend Then Begin
-    If Mdl^.El[FindEl(Mdl^.Fl[F].A)].Sel And Mdl^.El[FindEl(Mdl^.Fl[F].B)].Sel Then Begin
-     Mdl^.Fl[F].BX:=Mdl^.Fl[F].BX+Integer(DX);Mdl^.Fl[F].BY:=Mdl^.Fl[F].BY+Integer(DY);
+    If Mdl^.El[FindEl(Mdl^.Fl[F].A)].Sel And Mdl^.El[FindEl(Mdl^.Fl[F].B)].Sel
+      Then Begin
+     Mdl^.Fl[F].BX:=Mdl^.Fl[F].BX+Integer(DX);
+       Mdl^.Fl[F].BY:=Mdl^.Fl[F].BY+Integer(DY);
     End;
    End;
  End;
 End;
 
 Procedure ResizeDrag(W,I,H: Integer);
-Var D: Integer; E: TEvent; X1,Y1,X2,Y2,NX1,NY1,NX2,NY2: LongInt; Moved,Cancel: Boolean;
+Var D: Integer; E: TEvent; X1,Y1,X2,Y2,NX1,NY1,NX2,NY2: LongInt; Moved,Cancel:
+  Boolean;
 Begin
  D:=Wn[W].Diag;
  X1:=Mdl^.El[I].X;Y1:=Mdl^.El[I].Y;X2:=X1+Mdl^.El[I].W;Y2:=Y1+Mdl^.El[I].H;
@@ -4606,8 +5206,10 @@ Begin
    If H In [3,4,5] Then NX2:=SnapV(MXc(E.X-CVX));
    If H In [1,2,3] Then NY1:=SnapV(MYc(E.Y-CVY));
    If H In [5,6,7] Then NY2:=SnapV(MYc(E.Y-CVY));
-   If NX2-NX1<24 Then Begin If H In [1,7,8] Then NX1:=NX2-24 Else NX2:=NX1+24;End;
-   If NY2-NY1<14 Then Begin If H In [1,2,3] Then NY1:=NY2-14 Else NY2:=NY1+14;End;
+   If NX2-NX1<24 Then Begin If H In [1,7,8] Then NX1:=NX2-24 Else NX2:=NX1+24;
+     End;
+   If NY2-NY1<14 Then Begin If H In [1,2,3] Then NY1:=NY2-14 Else NY2:=NY1+14;
+     End;
    XorRect(SXc(NX1),SYc(NY1),SXc(NX2),SYc(NY2));Moved:=True;
    ShowMouse;
   End;
@@ -4623,7 +5225,8 @@ Begin
 End;
 
 Procedure Marquee(W: Integer; SX0,SY0: LongInt; Extend: Boolean);
-Var D,I: Integer; E: TEvent; X1,Y1,X2,Y2,CX,CY: LongInt; Moved,Cancel: Boolean; A,B: Integer;
+Var D,I: Integer; E: TEvent; X1,Y1,X2,Y2,CX,CY: LongInt; Moved,Cancel: Boolean;
+  A,B: Integer;
     FX1,FY1,FX2,FY2: LongInt; LX1,LY1,LX2,LY2: Integer;
 Begin
  D:=Wn[W].Diag;
@@ -4650,11 +5253,14 @@ Begin
   For I:=1 To MAXEL Do
    If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And Not Mdl^.El[I].Hid Then
     If (Mdl^.El[I].X<=X2) And (Mdl^.El[I].X+Mdl^.El[I].W>=X1) And
-       (Mdl^.El[I].Y<=Y2) And (Mdl^.El[I].Y+Mdl^.El[I].H>=Y1) Then Mdl^.El[I].Sel:=True;
+       (Mdl^.El[I].Y<=Y2) And (Mdl^.El[I].Y+Mdl^.El[I].H>=Y1) Then
+         Mdl^.El[I].Sel:=True;
   For I:=1 To MAXFL Do
-   If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And Not Mdl^.Fl[I].Hid And FlowGeom(I,FX1,FY1,FX2,FY2) Then Begin
+   If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And Not Mdl^.Fl[I].Hid And
+     FlowGeom(I,FX1,FY1,FX2,FY2) Then Begin
     CX:=(FX1+FX2) Div 2;CY:=(FY1+FY2) Div 2;
-    If (CX>=X1) And (CX<=X2) And (CY>=Y1) And (CY<=Y2) Then Mdl^.Fl[I].Sel:=True;
+    If (CX>=X1) And (CX<=X2) And (CY>=Y1) And (CY<=Y2) Then
+      Mdl^.Fl[I].Sel:=True;
    End;
  End;
  A:=0;B:=0;
@@ -4664,7 +5270,8 @@ Procedure NameNewFlow(F: Integer);
 Var S: String;
 Begin
  S:='';
- If InputBox(T5('Nom du flux','Flow name','Flussname','Nombre del flujo','Nome del flusso'),
+ If InputBox(T5('Nom du flux','Flow name','Flussname','Nombre del flujo',
+   'Nome del flusso'),
     T5('Nom :','Name:','Name:','Nombre:','Nome:'),S,30) Then Begin
   Mdl^.Fl[F].Name:=S;
  End;
@@ -4675,8 +5282,9 @@ Var D,A,B,F: Integer; E: TEvent; CX,CY,LX,LY: Integer; Done,Drag,Moved: Boolean;
 Begin
  D:=Wn[W].Diag;
  A:=HitElem(D,PX,PY);
- If (A=0) Or (Mdl^.El[A].Kind=ekText) Then Exit;
- CX:=SXc(Mdl^.El[A].X+Mdl^.El[A].W Div 2);CY:=SYc(Mdl^.El[A].Y+Mdl^.El[A].H Div 2);
+ If (A=0) Or (Mdl^.El[A].Kind=ekText) Or (Mdl^.El[A].Kind=ekInfo) Then Exit;
+ CX:=SXc(Mdl^.El[A].X+Mdl^.El[A].W Div 2);CY:=SYc(Mdl^.El[A].Y+Mdl^.El[A].H Div
+   2);
  LX:=CX;LY:=CY;Done:=False;Drag:=True;Moved:=False;
  HideMouse;ClipView(W);ShowMouse;
  Repeat
@@ -4693,8 +5301,13 @@ Begin
    B:=HitElem(D,E.X-CVX,E.Y-CVY);
    If (B>0) And (B<>A) Then Begin
     HideMouse;If Moved Then XorLine(CX,CY,LX,LY);Moved:=False;NoClip;ShowMouse;
-    If (Mdl^.El[B].Kind=ekText) Or Not FlowOK(Mdl^.El[A].Kind,Mdl^.El[B].Kind) Then
-     Msg(T5('Un flux doit relier un processus @a un autre objet.','A flow must connect a process to another object.','Ein Fluss muss einen Prozess mit einem anderen Objekt verbinden.','Un flujo debe conectar un proceso con otro objeto.','Un flusso deve collegare un processo a un altro oggetto.'))
+    If (Mdl^.El[B].Kind=ekText) Or Not FlowOK(Mdl^.El[A].Kind,Mdl^.El[B].Kind)
+      Then
+     Msg(T5('Un flux doit relier un processus @a un autre objet.',
+       'A flow must connect a process to another object.',
+       'Ein Fluss muss einen Prozess mit einem anderen Objekt verbinden.',
+       'Un flujo debe conectar un proceso con otro objeto.',
+       'Un flusso deve collegare un processo a un altro oggetto.'))
     Else Begin
      PushUndo;
      F:=NewFl(D,Mdl^.El[A].Id,Mdl^.El[B].Id);
@@ -4713,7 +5326,8 @@ Begin
 End;
 
 Procedure BendDrag(W,F: Integer);
-Var E: TEvent; X1,Y1,X2,Y2: LongInt; LX,LY: Integer; Moved,Cancel: Boolean; SA,SB,EA,EB: Integer;
+Var E: TEvent; X1,Y1,X2,Y2: LongInt; LX,LY: Integer; Moved,Cancel: Boolean; SA,
+  SB,EA,EB: Integer;
 Begin
  If Not FlowGeom(F,X1,Y1,X2,Y2) Then Exit;
  SA:=SXc(X1);SB:=SYc(Y1);EA:=SXc(X2);EB:=SYc(Y2);
@@ -4746,7 +5360,8 @@ Begin
  D:=Wn[W].Diag;
  PushUndo;
  I:=NewEl(Kind,D,Integer(MXc(PX)),Integer(MYc(PY)));
- If I=0 Then Begin Msg(T5('Trop d''objets.','Too many objects.','Zu viele Objekte.','Demasiados objetos.','Troppi oggetti.'));Exit;End;
+ If I=0 Then Begin Msg(T5('Trop d''objets.','Too many objects.',
+   'Zu viele Objekte.','Demasiados objetos.','Troppi oggetti.'));Exit;End;
  Mdl^.El[I].X:=SnapV(Mdl^.El[I].X);Mdl^.El[I].Y:=SnapV(Mdl^.El[I].Y);
  If Mdl^.El[I].X<6 Then Mdl^.El[I].X:=6;
  If Mdl^.El[I].Y<30 Then Mdl^.El[I].Y:=30;
@@ -4754,7 +5369,8 @@ Begin
  CurTool:=tlSelect;
  If Kind=ekText Then Begin
   S:=Mdl^.El[I].Name;
-  If InputBox(T5('Texte','Text','Text','Texto','Testo'),T5('Texte :','Text:','Text:','Texto:','Testo:'),S,40) Then Mdl^.El[I].Name:=S;
+  If InputBox(T5('Texte','Text','Text','Texto','Testo'),T5('Texte :','Text:',
+    'Text:','Texto:','Testo:'),S,40) Then Mdl^.El[I].Name:=S;
  End;
 End;
 
@@ -4782,7 +5398,8 @@ Begin
     F:=HitFlow(D,PX,PY);
     If F>0 Then Begin
      Q:=Mdl^.Fl[F].Qual;
-     PickDict(dcQual,Q,T5('Qualifiant','Qualifier','Qualifizierer','Calificador','Qualificatore'));
+     PickDict(dcQual,Q,T5('Qualifiant','Qualifier','Qualifizierer',
+       'Calificador','Qualificatore'));
      If Q<>Mdl^.Fl[F].Qual Then Begin PushUndo;Mdl^.Fl[F].Qual:=Q;End;
     End;
    End;
@@ -4790,14 +5407,16 @@ Begin
     I:=HitElem(D,PX,PY);
     If (I>0) And (Mdl^.El[I].Kind=ekProc) Then Begin
      Q:=Mdl^.El[I].Res;
-     PickDict(dcRes,Q,T5('Ressource','Resource','Ressource','Recurso','Risorsa'));
+     PickDict(dcRes,Q,T5('Ressource','Resource','Ressource','Recurso',
+       'Risorsa'));
      If Q<>Mdl^.El[I].Res Then Begin PushUndo;Mdl^.El[I].Res:=Q;End;
     End;
    End;
   Else Begin
    { outil de selection }
    K:=0;
-   For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then Begin Inc(K);F:=I;End;
+   For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And
+     (Mdl^.El[I].Diag=D) Then Begin Inc(K);F:=I;End;
    If (K=1) And (SelFlCount(D)=0) Then Begin
     H:=HandleHit(F,PX,PY);
     If H>0 Then Begin ResizeDrag(W,F,H);Exit;End;
@@ -4805,7 +5424,8 @@ Begin
    I:=HitElem(D,PX,PY);
    If I>0 Then Begin
     If Dbl Then Begin
-     If (Mdl^.El[I].Kind=ekProc) And (Mdl^.El[I].Child>0) And Cfg.AutoOpen And Mdl^.Dg[Mdl^.El[I].Child].Used Then Begin
+     If (Mdl^.El[I].Kind=ekProc) And (Mdl^.El[I].Child>0) And Cfg.AutoOpen And
+       Mdl^.Dg[Mdl^.El[I].Child].Used Then Begin
       OpenFit(Mdl^.El[I].Child);
      End Else ElemProps(I);
      Exit;
@@ -4831,7 +5451,8 @@ End;
 { ---- defilement ---- }
 
 Function ScrollMouse(W: Integer; X,Y: LongInt): Boolean;
-Var A,B,C,D,CX1,CY1,CX2,CY2,TL,TH,Th2,Tp: Integer; M,V: LongInt; E: TEvent; Off: LongInt;
+Var A,B,C,D,CX1,CY1,CX2,CY2,TL,TH,Th2,Tp: Integer; M,V: LongInt; E: TEvent; Off:
+  LongInt;
 Begin
  ScrollMouse:=False;
  WinRect(W,A,B,C,D);
@@ -4964,8 +5585,10 @@ Begin
  CanvasRect(W,CX1,CY1,CX2,CY2);
  If InBox(X,Y,A,B,C,B+TITLE_H) Then Begin
   If InBox(X,Y,C-20,B+3,C-5,B+16) Then Begin CmdCloseWin;Exit;End;
-  If InBox(X,Y,C-36,B+3,C-22,B+16) Then Begin WMax:=Not WMax;ClampScroll(W);DrawAll;Exit;End;
-  If InBox(X,Y,C-52,B+3,C-38,B+16) Then Begin Wn[W].Iconic:=True;DrawAll;Exit;End;
+  If InBox(X,Y,C-36,B+3,C-22,B+16) Then Begin WMax:=Not WMax;ClampScroll(W);
+    DrawAll;Exit;End;
+  If InBox(X,Y,C-52,B+3,C-38,B+16) Then Begin Wn[W].Iconic:=True;DrawAll;Exit;
+    End;
   If Dbl Then Begin WMax:=Not WMax;ClampScroll(W);DrawAll;Exit;End;
   If Not WMax Then Begin MoveWinDrag(W,X,Y);DrawAll;End;
   Exit;
@@ -5011,15 +5634,18 @@ Begin
   cmDup: If D>0 Then Begin CopySel(D);PushUndo;PasteCB(D,20);End;
   cmSelAll: If D>0 Then Begin
       ClearSel;
-      For I:=1 To MAXEL Do If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And Not Mdl^.El[I].Hid Then Mdl^.El[I].Sel:=True;
-      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And Not Mdl^.Fl[I].Hid Then Mdl^.Fl[I].Sel:=True;
+      For I:=1 To MAXEL Do If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And Not
+        Mdl^.El[I].Hid Then Mdl^.El[I].Sel:=True;
+      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) And Not
+        Mdl^.Fl[I].Hid Then Mdl^.Fl[I].Sel:=True;
      End;
   cmSelect: SelectByName;
   cmGoto: GotoPage;
   cmToolbars: CmdToolbars;
   cmStraight: If D>0 Then Begin
       PushUndo;
-      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And (Mdl^.Fl[I].Diag=D) Then Mdl^.Fl[I].Bend:=False;
+      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And
+        (Mdl^.Fl[I].Diag=D) Then Mdl^.Fl[I].Bend:=False;
      End;
   cmChgDir: If D>0 Then Begin
       PushUndo;
@@ -5037,24 +5663,33 @@ Begin
   cmResize: If D>0 Then ResizeSel;
   cmHide: If D>0 Then Begin
       PushUndo;
-      For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then Begin Mdl^.El[I].Hid:=True;Mdl^.El[I].Sel:=False;End;
-      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And (Mdl^.Fl[I].Diag=D) Then Begin Mdl^.Fl[I].Hid:=True;Mdl^.Fl[I].Sel:=False;End;
+      For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And
+        (Mdl^.El[I].Diag=D) Then Begin Mdl^.El[I].Hid:=True;
+        Mdl^.El[I].Sel:=False;End;
+      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And
+        (Mdl^.Fl[I].Diag=D) Then Begin Mdl^.Fl[I].Hid:=True;
+        Mdl^.Fl[I].Sel:=False;End;
      End;
   cmShowAll: If D>0 Then Begin
       PushUndo;
-      For I:=1 To MAXEL Do If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) Then Mdl^.El[I].Hid:=False;
-      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) Then Mdl^.Fl[I].Hid:=False;
+      For I:=1 To MAXEL Do If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) Then
+        Mdl^.El[I].Hid:=False;
+      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And (Mdl^.Fl[I].Diag=D) Then
+        Mdl^.Fl[I].Hid:=False;
      End;
   cmHilite,cmUnHilite: If D>0 Then Begin
       PushUndo;
-      For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then Mdl^.El[I].Hi:=(Cm=cmHilite);
-      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And (Mdl^.Fl[I].Diag=D) Then Mdl^.Fl[I].Hi:=(Cm=cmHilite);
+      For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And
+        (Mdl^.El[I].Diag=D) Then Mdl^.El[I].Hi:=(Cm=cmHilite);
+      For I:=1 To MAXFL Do If Mdl^.Fl[I].Used And Mdl^.Fl[I].Sel And
+        (Mdl^.Fl[I].Diag=D) Then Mdl^.Fl[I].Hi:=(Cm=cmHilite);
      End;
   cmFont: ChangeFont;
   cmFront,cmBack: If D>0 Then Begin
       PushUndo;
       MinZ:=32000;
-      For I:=1 To MAXEL Do If Mdl^.El[I].Used And (Mdl^.El[I].Z<MinZ) Then MinZ:=Mdl^.El[I].Z;
+      For I:=1 To MAXEL Do If Mdl^.El[I].Used And (Mdl^.El[I].Z<MinZ) Then
+        MinZ:=Mdl^.El[I].Z;
       For I:=1 To MAXEL Do
        If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then Begin
         If Cm=cmFront Then Begin Mdl^.El[I].Z:=Mdl^.NextZ;Inc(Mdl^.NextZ);End
@@ -5097,7 +5732,9 @@ Begin
   cmMerge: CmdMerge;
   cmSplit: CmdSplit;
   cmTree: CmdTree;
-  cmTreeUpd: Begin PushUndo;RenumAll;Msg(T5('Arbre des processus mis @a jour.','Process tree updated.','Prozessbaum aktualisiert.','@rrbol de procesos actualizado.','Albero dei processi aggiornato.'));End;
+  cmTreeUpd: Begin PushUndo;RenumAll;Msg(T5('Arbre des processus mis @a jour.',
+    'Process tree updated.','Prozessbaum aktualisiert.',
+    '@rrbol de procesos actualizado.','Albero dei processi aggiornato.'));End;
   cmParent: CmdParent;
   cmEnv,cmEnvUp: CmdEnv(False);
   cmEnvFlow: CmdEnv(True);
@@ -5111,7 +5748,8 @@ Begin
       For I:=1 To MAXWIN Do If Wn[I].Used Then CloseWin(I);
      End;
   cmArrange: Begin
-      For I:=1 To MAXWIN Do If Wn[I].Used And Wn[I].Iconic Then Wn[I].Iconic:=True;
+      For I:=1 To MAXWIN Do If Wn[I].Used And Wn[I].Iconic Then
+        Wn[I].Iconic:=True;
      End;
   cmWin1+1..cmWin1+MAXWIN: Begin
       I:=Cm-cmWin1;
@@ -5121,17 +5759,24 @@ Begin
   cmGuide: ShowHelp(2);
   cmRelNotes: ShowHelp(3);
   cmLicenses: ShowHelp(4);
-  cmAbout: Msg('SILVERRUN-BPM (clone)~'+T5('Version 1.00 - Clone Turbo Pascal / Free Pascal','Version 1.00 - Turbo Pascal / Free Pascal clone','Version 1.00 - Turbo-Pascal-/Free-Pascal-Klon','Versi@pn 1.00 - Clon en Turbo Pascal / Free Pascal','Versione 1.00 - Clone Turbo Pascal / Free Pascal')+'~Sylvain Maltais - www.gladir.com/office-0');
+  cmAbout: Msg('SILVERRUN-BPM (clone)~'+T5('Version 1.00 - Clone Turbo Pascal'+
+    ' / Free Pascal','Version 1.00 - Turbo Pascal / Free Pascal clone',
+    'Version 1.00 - Turbo-Pascal-/Free-Pascal-Klon',
+    'Versi@pn 1.00 - Clon en Turbo Pascal / Free Pascal',
+    'Versione 1.00 - Clone Turbo Pascal / Free Pascal')+'~Sylvain Maltais - '+
+    'www.gladir.com/office-0');
   cmProps: PropsOfSel;
   cmRename: PropsOfSel;
   cmDecomp: DoDecompose;
   cmParentUp: DoParentUp;
   cmNextObj: If D>0 Then Begin
       K:=0;
-      For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then K:=I;
+      For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And
+        (Mdl^.El[I].Diag=D) Then K:=I;
       ClearSel;
       For I:=K+1 To MAXEL Do
-       If (K<MAXEL) And Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And Not Mdl^.El[I].Hid Then Begin
+       If (K<MAXEL) And Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And Not
+         Mdl^.El[I].Hid Then Begin
         Mdl^.El[I].Sel:=True;K:=MAXEL;
        End;
      End;
@@ -5149,7 +5794,8 @@ Var D,I: Integer; Any: Boolean;
 Begin
  D:=CurDiag;If D=0 Then Exit;
  Any:=False;
- For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And (Mdl^.El[I].Diag=D) Then Any:=True;
+ For I:=1 To MAXEL Do If Mdl^.El[I].Used And Mdl^.El[I].Sel And
+   (Mdl^.El[I].Diag=D) Then Any:=True;
  If Not Any Then Exit;
  PushUndo;
  For I:=1 To MAXEL Do
@@ -5195,10 +5841,14 @@ Begin
   K_ESC: Begin CurTool:=tlSelect;Dirty:=True;End;
   43,61: ZStep(1);
   45: ZStep(-1);
-  K_LEFT: If (CurDiag>0) And (SelElCount(CurDiag)>0) Then MoveSelBy(-G,0) Else If W>0 Then Begin Dec(Wn[W].SX,20);ClampScroll(W);End;
-  K_RIGHT: If (CurDiag>0) And (SelElCount(CurDiag)>0) Then MoveSelBy(G,0) Else If W>0 Then Begin Inc(Wn[W].SX,20);ClampScroll(W);End;
-  K_UP: If (CurDiag>0) And (SelElCount(CurDiag)>0) Then MoveSelBy(0,-G) Else If W>0 Then Begin Dec(Wn[W].SY,20);ClampScroll(W);End;
-  K_DOWN: If (CurDiag>0) And (SelElCount(CurDiag)>0) Then MoveSelBy(0,G) Else If W>0 Then Begin Inc(Wn[W].SY,20);ClampScroll(W);End;
+  K_LEFT: If (CurDiag>0) And (SelElCount(CurDiag)>0) Then MoveSelBy(-G,0) Else
+    If W>0 Then Begin Dec(Wn[W].SX,20);ClampScroll(W);End;
+  K_RIGHT: If (CurDiag>0) And (SelElCount(CurDiag)>0) Then MoveSelBy(G,0) Else
+    If W>0 Then Begin Inc(Wn[W].SX,20);ClampScroll(W);End;
+  K_UP: If (CurDiag>0) And (SelElCount(CurDiag)>0) Then MoveSelBy(0,-G) Else If
+    W>0 Then Begin Dec(Wn[W].SY,20);ClampScroll(W);End;
+  K_DOWN: If (CurDiag>0) And (SelElCount(CurDiag)>0) Then MoveSelBy(0,G) Else If
+    W>0 Then Begin Inc(Wn[W].SY,20);ClampScroll(W);End;
   K_PGUP: If W>0 Then Begin Dec(Wn[W].SY,200);ClampScroll(W);End;
   K_PGDN: If W>0 Then Begin Inc(Wn[W].SY,200);ClampScroll(W);End;
   K_HOME: If W>0 Then Begin Wn[W].SX:=0;Wn[W].SY:=0;End;
@@ -5225,7 +5875,8 @@ End;
 
 Procedure ShowHelpLine;
 Begin
- WriteLn('SR - Clone de SilverRun (SILVERRUN-BPM), diagrammes de flux de donnees.');
+ WriteLn('SR - Clone de SilverRun (SILVERRUN-BPM), diagrammes de flux de '+
+   'donnees.');
  WriteLn;
  WriteLn('Utilisation : SR [fichier.SRD|fichier.DFD] [/?]');
  WriteLn;
@@ -5233,7 +5884,8 @@ Begin
  WriteLn('  /?        Affiche cette aide.');
  WriteLn;
  WriteLn('Langue : LANGUAGE=EN (anglais), LANGUAGE=GR (allemand),');
- WriteLn('         LANGUAGE=SP (espagnol), LANGUAGE=IT (italien), francais par defaut.');
+ WriteLn('         LANGUAGE=SP (espagnol), LANGUAGE=IT (italien), francais '+
+   'par defaut.');
 End;
 
 { ====================================================================== }
@@ -5250,6 +5902,7 @@ Const
  IMAXP = 120;
  IMAXF = 220;
  IMAXK = 300;
+ IMAXG = 260;
 
 Type
  TFBuf = Array[0..65000] Of Byte;
@@ -5258,6 +5911,13 @@ Type
   Kind: Byte;                 { 1 entite, 2 magasin, 3 table unique }
   Idx: Integer;
   Name: String[40];
+  Id: Word;
+  Has: Boolean;
+  PX,PY,PW,PH: Integer;
+ End;
+ TIGfx = Record
+  Hid: Word;
+  X,Y,W,H: Integer;
  End;
  TIProc = Record
   Num: String[14];
@@ -5265,6 +5925,9 @@ Type
   Name: String[40];
   Depth: Integer;
   El,Child: Integer;
+  Id: Word;
+  Has: Boolean;
+  PX,PY,PW,PH: Integer;
  End;
  TIFlow = Record
   Num: String[8];
@@ -5280,7 +5943,8 @@ Type
   P: Array[1..IMAXP] Of TIProc;
   F: Array[1..IMAXF] Of TIFlow;
   K: Array[1..IMAXK] Of TIKey;
-  NO,NP,NF,NK: Integer;
+  G: Array[1..IMAXG] Of TIGfx;
+  NO,NP,NF,NK,NG: Integer;
  End;
  PImp = ^TImp;
 
@@ -5295,6 +5959,13 @@ Var
 Function U16(O: LongInt): Word;
 Begin
  If (O<0) Or (O+1>=IBN) Then U16:=0 Else U16:=IB^[O]+IB^[O+1]*256;
+End;
+
+Function SInt(O: LongInt): LongInt;
+Begin
+ If (O<0) Or (O+3>=IBN) Then SInt:=0
+ Else SInt:=LongInt(IB^[O])+LongInt(IB^[O+1])*256+LongInt(IB^[O+2])*65536
+      +LongInt(Shortint(IB^[O+3]))*16777216;
 End;
 
 Function U32(O: LongInt): LongInt;
@@ -5388,6 +6059,7 @@ Begin
        If M^.NO<IMAXE Then Begin
         Inc(M^.NO);
         M^.O[M^.NO].Kind:=K;M^.O[M^.NO].Idx:=Idx;M^.O[M^.NO].Name:=Copy(S,1,40);
+        M^.O[M^.NO].Id:=U16(I+6);M^.O[M^.NO].Has:=False;
        End;
        I:=Nx-1;J:=I+100;
       End;
@@ -5399,8 +6071,73 @@ Begin
  End;
 End;
 
+{ identifiant logique de l'enregistrement dont la chaine numerotee est en O }
+Function HdrId(O: LongInt): Word;
+Var K,J: LongInt;
+Begin
+ HdrId:=0;
+ K:=O-1;
+ While (K>O-130) And Not ((IB^[K]=$80) And (IB^[K+1]=$21)) Do Dec(K);
+ If (K>O-130) And (K>0) Then Begin HdrId:=U16(K+7);Exit;End;
+ J:=O-1;
+ While (J>O-130) And (IB^[J]=0) Do Dec(J);
+ If (IB^[J]=$18) And (IB^[J-1]>=$C0) Then Begin
+  K:=J-1;
+  While (IB^[K+1]=$18) And (IB^[K]>=$C0) And (IB^[K]<=$C8) Do Dec(K,6);
+  HdrId:=U16(K);
+ End;
+End;
+
+{ enregistrements graphiques (rectangles des objets) }
+Procedure ScanGfx(M: PImp);
+Var I,K: LongInt; T: Byte; Hid: Word; Xmin,Xmax,Ymin,Ymax: LongInt;
+Begin
+ I:=60;
+ While I<IBN-30 Do Begin
+  If (IB^[I]=0) And (IB^[I+2]=0) And (U16(I+3)=ITag) And (IB^[I+7]=0) Then Begin
+   T:=IB^[I+8];
+   If (T=$18) And (M^.NG<IMAXG) Then Begin
+    K:=I-27;
+    If (IB^[K]=$FF) And (IB^[K+1]=$FF) And (IB^[K+5]=$FF) Then Hid:=U16(K-6)
+    Else Begin
+     K:=I-4;
+     While (K>I-48) And Not ((IB^[K+1]=$18) And (IB^[K]>=$C1) And (IB^[K]<=$C8))
+       Do Dec(K);
+     Hid:=U16(K-6);
+    End;
+    Inc(M^.NG);
+    M^.G[M^.NG].Hid:=Hid;
+    Ymin:=SInt(I+9);Xmax:=SInt(I+13);Xmin:=SInt(I+17);Ymax:=SInt(I+21);
+    M^.G[M^.NG].X:=Integer(((Xmin-2000)*100) Div 2646);
+    M^.G[M^.NG].Y:=Integer(((-Ymax-2000)*100) Div 2646);
+    M^.G[M^.NG].W:=Integer(((Xmax-Xmin)*100) Div 2646);
+    M^.G[M^.NG].H:=Integer(((Ymax-Ymin)*100) Div 2646);
+   End;
+  End;
+  Inc(I);
+ End;
+End;
+
+Procedure AssignPos(M: PImp);
+Var I,G: Integer;
+Begin
+ For I:=1 To M^.NO Do
+  For G:=1 To M^.NG Do
+   If M^.G[G].Hid=M^.O[I].Id+1 Then Begin
+    M^.O[I].Has:=True;M^.O[I].PX:=M^.G[G].X;M^.O[I].PY:=M^.G[G].Y;
+    M^.O[I].PW:=M^.G[G].W;M^.O[I].PH:=M^.G[G].H;
+   End;
+ For I:=1 To M^.NP Do
+  For G:=1 To M^.NG Do
+   If M^.G[G].Hid=M^.P[I].Id+1 Then Begin
+    M^.P[I].Has:=True;M^.P[I].PX:=M^.G[G].X;M^.P[I].PY:=M^.G[G].Y;
+    M^.P[I].PW:=M^.G[G].W;M^.P[I].PH:=M^.G[G].H;
+   End;
+End;
+
 Procedure ScanProcesses(M: PImp);
-Var O,P: LongInt; Num,Num2,Nm: String; Nx,Nx2: LongInt; Dg,Skip: Integer; Sk: Array[1..5] Of Integer;
+Var O,P: LongInt; Num,Num2,Nm: String; Nx,Nx2: LongInt; Dg,Skip: Integer; Sk:
+  Array[1..5] Of Integer;
     Ok: Boolean; K,Dp,I: Integer;
 Begin
  Sk[1]:=2;Sk[2]:=4;Sk[3]:=0;Sk[4]:=6;Sk[5]:=8;
@@ -5422,6 +6159,7 @@ Begin
       Dp:=0;
       For I:=1 To Length(Num) Do If Num[I]='.' Then Inc(Dp);
       M^.P[M^.NP].Depth:=Dp;M^.P[M^.NP].El:=0;M^.P[M^.NP].Child:=0;
+      M^.P[M^.NP].Id:=HdrId(O);M^.P[M^.NP].Has:=False;
       O:=Nx-1;
      End;
     End;
@@ -5433,7 +6171,8 @@ End;
 
 Procedure ScanFlows(M: PImp);
 Const Pat: Array[0..11] Of Byte = (1,0,0,0,0,0,1,0,0,0,0,0);
-Var I: LongInt; J: Integer; Hit: Boolean; Num,Nm: String; Nx,P: LongInt; NR: Integer; R: Array[1..6] Of Word;
+Var I: LongInt; J: Integer; Hit: Boolean; Num,Nm: String; Nx,P: LongInt; NR:
+  Integer; R: Array[1..6] Of Word;
     Ok: Boolean;
 Begin
  I:=0;
@@ -5441,7 +6180,8 @@ Begin
   Hit:=True;
   For J:=0 To 11 Do If IB^[I+J]<>Pat[J] Then Hit:=False;
   If Hit Then Begin
-   If ReadStr(I+12,Num,Nx) And (Length(Num)>0) And (Length(Num)<=8) And (Num[1]<>'.') Then Begin
+   If ReadStr(I+12,Num,Nx) And (Length(Num)>0) And (Length(Num)<=8) And
+     (Num[1]<>'.') Then Begin
     P:=Nx;NR:=0;
     While (U16(P)<>ITag) And (NR<6) Do Begin Inc(NR);R[NR]:=U16(P);Inc(P,2);End;
     If (U16(P)=ITag) And (NR>=1) And (M^.NF<IMAXF) Then Begin
@@ -5467,12 +6207,15 @@ Var I: Integer;
 Begin
  ObjName:='';Real_:=0;
  For I:=1 To M^.NO Do
-  If (M^.O[I].Kind=Kind) And (M^.O[I].Idx=Idx) Then Begin ObjName:=M^.O[I].Name;Real_:=I;Exit;End;
+  If (M^.O[I].Kind=Kind) And (M^.O[I].Idx=Idx) Then Begin ObjName:=M^.O[I].Name;
+    Real_:=I;Exit;End;
 End;
 
 Function IsStoreName(Const S: String): Boolean;
 Var U: String; I: Integer;
-Const W: Array[1..12] Of String[10] = ('JOURNAL','FICHIER','DOSSIER','CLASSEUR','ARCHIVE','REGISTRE','LISTE','INVENTAIRE','RETENUE','EMPLOYE','STOCK','COMPTE');
+Const W: Array[1..12] Of String[10] = ('JOURNAL','FICHIER','DOSSIER','CLASSEUR',
+  'ARCHIVE','REGISTRE','LISTE','INVENTAIRE','RETENUE','EMPLOYE','STOCK',
+  'COMPTE');
 Begin
  U:=Upper(S);IsStoreName:=False;
  For I:=1 To 12 Do If Pos(W[I],U)>0 Then IsStoreName:=True;
@@ -5521,17 +6264,20 @@ Function KeyEl(D,Key: Integer): Integer;
 Var I: Integer;
 Begin
  KeyEl:=0;
- For I:=1 To ImM^.NK Do If (ImM^.K[I].Diag=D) And (ImM^.K[I].Key=Key) Then Begin KeyEl:=ImM^.K[I].El;Exit;End;
+ For I:=1 To ImM^.NK Do If (ImM^.K[I].Diag=D) And (ImM^.K[I].Key=Key) Then Begin
+   KeyEl:=ImM^.K[I].El;Exit;End;
 End;
 
 Procedure AddKey(D,Key,E: Integer);
 Begin
  If ImM^.NK<IMAXK Then Begin
-  Inc(ImM^.NK);ImM^.K[ImM^.NK].Diag:=D;ImM^.K[ImM^.NK].Key:=Key;ImM^.K[ImM^.NK].El:=E;
+  Inc(ImM^.NK);ImM^.K[ImM^.NK].Diag:=D;ImM^.K[ImM^.NK].Key:=Key;
+    ImM^.K[ImM^.NK].El:=E;
  End;
 End;
 
-{ renvoie l'element (dans le diagramme D) qui represente l'identifiant logique Id ; 0 si inconnu }
+{ renvoie l'element (dans le diagramme D) qui represente l'identifiant logique
+  Id ; 0 si inconnu }
 Function ResolveEl(D,Id: Integer): Integer;
 Var K,I,E,RI,Kd,Ix: Integer; Nm: String; Own: Integer;
 Begin
@@ -5572,7 +6318,14 @@ Begin
   I:=NewEl(Kd,D,0,0);
   If I=0 Then Exit;
   Mdl^.El[I].Name:=Nm;
-  If Kd=ekStore Then Mdl^.El[I].Num:='S-'+IntStr(Ix) Else Mdl^.El[I].Num:='E-'+IntStr(Ix);
+  If Kd=ekStore Then Mdl^.El[I].Num:='S-'+IntStr(Ix) Else
+    Mdl^.El[I].Num:='E-'+IntStr(Ix);
+  If (D=ImRoot) And ImM^.O[RI].Has Then Begin
+   Mdl^.El[I].X:=ImM^.O[RI].PX;Mdl^.El[I].Y:=ImM^.O[RI].PY;
+   If ImM^.O[RI].PW>=40 Then Mdl^.El[I].W:=ImM^.O[RI].PW;
+   If ImM^.O[RI].PH>=20 Then Mdl^.El[I].H:=ImM^.O[RI].PH;
+   Mdl^.El[I].FS:=9;
+  End;
   AddKey(D,Kd*1000+Ix,I);
  End;
  ResolveEl:=I;
@@ -5580,7 +6333,8 @@ Begin
 End;
 
 Procedure SolveBases;
-Var Ends: Array[1..120] Of Word; Cn: Array[1..120] Of Integer; NE,I,J,F,SB,EB,Smax,X,RI: Integer;
+Var Ends: Array[1..120] Of Word; Cn: Array[1..120] Of Integer; NE,I,J,F,SB,EB,
+  Smax,X,RI: Integer;
     Sc,Best: LongInt; Dup: Boolean; S: String;
 Begin
  NE:=0;
@@ -5595,12 +6349,14 @@ Begin
     End;
    End;
  Smax:=0;
- For I:=1 To ImM^.NO Do If (ImM^.O[I].Kind=2) And (ImM^.O[I].Idx>Smax) Then Smax:=ImM^.O[I].Idx;
+ For I:=1 To ImM^.NO Do If (ImM^.O[I].Kind=2) And (ImM^.O[I].Idx>Smax) Then
+   Smax:=ImM^.O[I].Idx;
  Best:=-1;ImSB:=0;ImEB:=0;
  If ImSingle Then Begin
   For SB:=0 To 400 Do Begin
    Sc:=0;
-   For I:=1 To NE Do Begin S:=ObjName(ImM,3,Ends[I]-SB,RI);If RI>0 Then Inc(Sc,Cn[I]);End;
+   For I:=1 To NE Do Begin S:=ObjName(ImM,3,Ends[I]-SB,RI);If RI>0 Then Inc(Sc,
+     Cn[I]);End;
    If Sc*100>Best Then Begin Best:=Sc*100;ImSB:=SB;End;
   End;
  End Else Begin
@@ -5609,7 +6365,8 @@ Begin
     Sc:=0;
     For I:=1 To NE Do Begin
      S:=ObjName(ImM,2,Ends[I]-SB,RI);
-     If RI>0 Then Inc(Sc,Cn[I]) Else Begin S:=ObjName(ImM,1,Ends[I]-EB,RI);If RI>0 Then Inc(Sc,Cn[I]);End;
+     If RI>0 Then Inc(Sc,Cn[I]) Else Begin S:=ObjName(ImM,1,Ends[I]-EB,RI);If
+       RI>0 Then Inc(Sc,Cn[I]);End;
     End;
     Sc:=Sc*100-Abs(EB-SB-Smax-13)*10;
     If Sc>Best Then Begin Best:=Sc;ImSB:=SB;ImEB:=EB;End;
@@ -5638,60 +6395,107 @@ Begin
  NumLess:=False;
 End;
 
-Procedure LayoutImported(D: Integer);
-Var I,J,NPr,NEn,NSt,Cols,Rows,K,X,Y,Wd,Ht: Integer; NEL,NSR: Integer;
+Function Overlaps(D,Skip,X,Y,W,H: Integer): Boolean;
+Var I: Integer;
 Begin
- NPr:=0;NEn:=0;NSt:=0;
+ Overlaps:=False;
  For I:=1 To MAXEL Do
-  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) Then
-   Case Mdl^.El[I].Kind Of
-    ekProc: Inc(NPr);
-    ekStore: Inc(NSt);
-    Else Inc(NEn);
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (I<>Skip) And
+     (Mdl^.El[I].FS In [8,9]) And (Mdl^.El[I].Kind<>ekInfo) Then
+   If (X<Mdl^.El[I].X+Mdl^.El[I].W+8) And (X+W+8>Mdl^.El[I].X) And
+      (Y<Mdl^.El[I].Y+Mdl^.El[I].H+8) And (Y+H+8>Mdl^.El[I].Y) Then
+        Overlaps:=True;
+End;
+
+Procedure PlaceFree(D,I,SX,SY,Step: Integer);
+Var X,Y: Integer; Done: Boolean;
+Begin
+ Done:=False;
+ Y:=SY;
+ While (Y<2600) And Not Done Do Begin
+  X:=SX;
+  While (X<1400) And Not Done Do Begin
+   If Not Overlaps(D,I,X,Y,Mdl^.El[I].W,Mdl^.El[I].H) Then Begin
+    Mdl^.El[I].X:=X;Mdl^.El[I].Y:=Y;Mdl^.El[I].FS:=8;Done:=True;
    End;
- If NPr=0 Then Cols:=1 Else Cols:=Integer(Min2(4,NPr));
- If Cols>=3 Then Begin If NPr>6 Then Cols:=4 Else Cols:=3;End;
- If NPr<=3 Then Cols:=NPr;If Cols<1 Then Cols:=1;
- Rows:=(NPr+Cols-1) Div Cols;If Rows<1 Then Rows:=1;
- Wd:=420+Cols*160;If Wd<760 Then Wd:=760;
- Ht:=70+Rows*150+(NSt+3) Div 4*60;
- If Mdl^.Dg[D].Parent=0 Then Ht:=Ht+130;
- If Ht<480 Then Ht:=480;
- If NEn>8 Then Begin If 70+NEn Div 2*62>Ht Then Ht:=70+NEn Div 2*62;End;
- Mdl^.Dg[D].W:=Wd;Mdl^.Dg[D].H:=Ht;
- K:=0;NEL:=0;NSR:=0;
- { rang des processus par numero }
+   Inc(X,Step);
+  End;
+  Inc(Y,18);
+ End;
+ If Not Done Then Begin Mdl^.El[I].X:=SX;Mdl^.El[I].Y:=SY;Mdl^.El[I].FS:=8;End;
+End;
+
+Procedure LayoutImported(D: Integer);
+Var I,J,K,NPr,Cols,MaxR,MaxB,Wd,Ht: Integer;
+Begin
+ { rang des processus non positionnes, par numero }
+ NPr:=0;
  For I:=1 To MAXEL Do
-  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc) Then Begin
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc)
+     And (Mdl^.El[I].FS<>9) Then Inc(NPr);
+ Cols:=3;If NPr>6 Then Cols:=4;
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc)
+     And (Mdl^.El[I].FS<>9) Then Begin
    K:=0;
    For J:=1 To MAXEL Do
-    If Mdl^.El[J].Used And (Mdl^.El[J].Diag=D) And (Mdl^.El[J].Kind=ekProc) And (J<>I) Then
+    If Mdl^.El[J].Used And (Mdl^.El[J].Diag=D) And (Mdl^.El[J].Kind=ekProc)
+       And (Mdl^.El[J].FS<>9) And (J<>I) Then
      If NumLess(Mdl^.El[J].Num,Mdl^.El[I].Num) Then Inc(K);
    Mdl^.El[I].Z:=K;
   End;
  For I:=1 To MAXEL Do
-  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) Then
-   Case Mdl^.El[I].Kind Of
-    ekProc: Begin
-      K:=Mdl^.El[I].Z;
-      X:=280+(K Mod Cols)*160+(160-Mdl^.El[I].W) Div 2;
-      Y:=40+(K Div Cols)*150;
-      Mdl^.El[I].X:=X;Mdl^.El[I].Y:=Y;
-     End;
-    ekStore: Begin
-      X:=280+(NSR Mod 4)*170;Y:=50+Rows*150+(NSR Div 4)*60;
-      Mdl^.El[I].X:=X;Mdl^.El[I].Y:=Y;Inc(NSR);
-     End;
-    Else Begin
-      If Odd(NEL) Then X:=Wd-Mdl^.El[I].W-14 Else X:=120;
-      Y:=44+(NEL Div 2)*62;
-      Mdl^.El[I].X:=X;Mdl^.El[I].Y:=Y;Inc(NEL);
-     End;
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc)
+     And (Mdl^.El[I].FS<>9) Then Begin
+   K:=Mdl^.El[I].Z;
+   Mdl^.El[I].X:=280+(K Mod Cols)*160;Mdl^.El[I].Y:=40+(K Div Cols)*150;
+   Mdl^.El[I].FS:=8;
+  End;
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].FS=9) Then Begin
+   If Mdl^.El[I].X<6 Then Mdl^.El[I].X:=6;
+   If Mdl^.El[I].Y<30 Then Mdl^.El[I].Y:=30;
+  End;
+ { entites, objets externes et magasins non positionnes }
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].FS<>9)
+     And (Mdl^.El[I].FS<>8) And (Mdl^.El[I].Kind In [ekEnt,ekText]) Then
+   PlaceFree(D,I,14,40,24);
+ MaxR:=0;MaxB:=0;
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind<>ekInfo) Then
+    Begin
+   If Mdl^.El[I].X+Mdl^.El[I].W>MaxR Then MaxR:=Mdl^.El[I].X+Mdl^.El[I].W;
+   If Mdl^.El[I].Y+Mdl^.El[I].H>MaxB Then MaxB:=Mdl^.El[I].Y+Mdl^.El[I].H;
+  End;
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].FS<>9)
+     And (Mdl^.El[I].FS<>8) And (Mdl^.El[I].Kind=ekStore) Then
+   PlaceFree(D,I,30,MaxB+20,24);
+ MaxR:=0;MaxB:=0;
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind<>ekInfo) Then
+    Begin
+   If Mdl^.El[I].X+Mdl^.El[I].W>MaxR Then MaxR:=Mdl^.El[I].X+Mdl^.El[I].W;
+   If Mdl^.El[I].Y+Mdl^.El[I].H>MaxB Then MaxB:=Mdl^.El[I].Y+Mdl^.El[I].H;
+  End;
+ Wd:=MaxR+40;If Wd<720 Then Wd:=720;
+ Ht:=MaxB+40;
+ If Mdl^.Dg[D].Parent=0 Then Ht:=Ht+130;
+ If Ht<480 Then Ht:=480;
+ Mdl^.Dg[D].W:=Wd;Mdl^.Dg[D].H:=Ht;
+ For I:=1 To MAXEL Do
+  If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) Then Begin
+   If Mdl^.El[I].Kind=ekInfo Then Begin
+    Mdl^.El[I].X:=(Wd-Mdl^.El[I].W) Div 2;Mdl^.El[I].Y:=Ht-Mdl^.El[I].H-14;
    End;
+   Mdl^.El[I].FS:=1;
+  End;
 End;
 
 Function BuildFromImp(M: PImp; Const FN: String): Integer;
-Var I,J,K,D,E,A,B,F,Dp,Par,Dgm,NSk,NOk: Integer; Num: String; PN: String; Pos2: Integer;
+Var I,J,K,D,E,A,B,F,Dp,Par,Dgm,NSk,NOk: Integer; Num: String; PN: String; Pos2:
+  Integer;
     SaveCfg: TCfg; SaveM: PModel; SaveD: PDict; NProcBad: Integer;
 Begin
  BuildFromImp:=4;
@@ -5718,6 +6522,7 @@ Begin
  Cfg.ProjName:=Cfg.MName;
  M^.NK:=0;
  ImRoot:=NewDiag(0,T5('Contexte','Context','Kontext','Contexto','Contesto'));
+ E:=NewEl(ekInfo,ImRoot,0,0);
  NOk:=0;NSk:=0;NProcBad:=0;
  { processus, du niveau le plus haut au plus bas }
  For Dp:=1 To 8 Do
@@ -5737,6 +6542,12 @@ Begin
       Mdl^.El[E].Num:=Copy(PN,2,20);
       Mdl^.El[E].Name:=M^.P[I].Name;
       M^.P[I].El:=E;
+      If M^.P[I].Has Then Begin
+       Mdl^.El[E].X:=M^.P[I].PX;Mdl^.El[E].Y:=M^.P[I].PY;
+       If M^.P[I].PW>=40 Then Mdl^.El[E].W:=M^.P[I].PW;
+       If M^.P[I].PH>=30 Then Mdl^.El[E].H:=M^.P[I].PH;
+       Mdl^.El[E].FS:=9;
+      End;
       Inc(NOk);
      End Else Inc(NProcBad);
     End;
@@ -5749,7 +6560,8 @@ Begin
    If D>0 Then Begin
     A:=ResolveEl(D,M^.F[F].R[1]);
     B:=ResolveEl(D,M^.F[F].R[2]);
-    If (A>0) And (B>0) And (A<>B) And FlowOK(Mdl^.El[A].Kind,Mdl^.El[B].Kind) Then Begin
+    If (A>0) And (B>0) And (A<>B) And FlowOK(Mdl^.El[A].Kind,Mdl^.El[B].Kind)
+      Then Begin
      K:=NewFl(D,Mdl^.El[A].Id,Mdl^.El[B].Id);
      If K>0 Then Begin
       Mdl^.Fl[K].Name:=M^.F[F].Name;Mdl^.Fl[K].Num:=Copy(M^.F[F].Num,1,8);
@@ -5763,12 +6575,16 @@ Begin
   If Mdl^.Dg[D].Used Then Begin
    LayoutImported(D);
    K:=0;
-   For I:=1 To MAXEL Do If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And (Mdl^.El[I].Kind=ekProc) Then Inc(K);
+   For I:=1 To MAXEL Do If Mdl^.El[I].Used And (Mdl^.El[I].Diag=D) And
+     (Mdl^.El[I].Kind=ekProc) Then Inc(K);
    Mdl^.Dg[D].NP:=K+1;
   End;
- ImpStats:=IntStr(M^.NP)+' '+T5('processus','processes','Prozesse','procesos','processi')+', '+
-   IntStr(M^.NF)+' '+T5('flux','flows','Fl@3sse','flujos','flussi')+' ('+IntStr(NSk)+' '+
-   T5('non reli@es ignor@es','unlinked skipped','nicht verbunden','sin enlace omitidos','non collegati ignorati')+')';
+ ImpStats:=IntStr(M^.NP)+' '+T5('processus','processes','Prozesse','procesos',
+   'processi')+', '+
+   IntStr(M^.NF)+' '+T5('flux','flows','Fl@3sse','flujos',
+     'flussi')+' ('+IntStr(NSk)+' '+
+   T5('non reli@es ignor@es','unlinked skipped','nicht verbunden',
+     'sin enlace omitidos','non collegati ignorati')+')';
  ImpStats:=Dc(ImpStats);
  Cfg.Created:=TodayStr;Cfg.Modified:=Cfg.Created;
  ImCfgOut:=Cfg;
@@ -5805,6 +6621,8 @@ Begin
  If ITag<>0 Then Begin
   ScanProcesses(M);
   ScanFlows(M);
+  ScanGfx(M);
+  AssignPos(M);
  End;
  ImPtrM:=P;ImPtrD:=D;
  If ITag=0 Then Res:=4 Else Res:=BuildFromImp(M,FN);

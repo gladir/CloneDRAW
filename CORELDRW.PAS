@@ -16072,6 +16072,32 @@ Begin
  End;
 End;
 
+{ Banniere de demarrage, affichee par-dessus l'IDE pendant 1,5 seconde }
+Procedure ShowSplash;
+Var X,Y,W,H:Integer;
+    T0:LongInt;
+    Ext:Boolean;
+Begin
+ W:=600;
+ H:=124+54;
+ X:=(ScreenW-W) Div 2;
+ Y:=(ScreenH-H) Div 2;
+ MouseOff;
+ DrawWin(X,Y,W,H,'CorailDRAW');
+ DrawAboutBanner(X,Y,W);
+ SetCol(0);
+ TxtOut(X+14,Y+28+124,'CorailDRAW - dessin vectoriel');
+ TxtOut(X+14,Y+28+124+12,'Chargement...');
+ T0:=Ticks;
+ { duree fixe : on ignore le clavier (une touche restee dans le tampon au
+   lancement depuis l'IDE fermerait sinon la banniere tout de suite) }
+ While Abs(Ticks-T0)<150 Do Begin
+  If KeyPressed Then If GetKey(Ext)=#0 Then;
+  Delay(10);
+ End;
+ While KeyPressed Do If GetKey(Ext)=#0 Then;
+End;
+
 Procedure RunInteractive;
 Var FileArg:String;
     I:Integer;
@@ -16093,6 +16119,9 @@ Begin
  PasteN:=0;
  Zoom:=100;
  ZoomFit;
+ RedrawAll;
+ ShowSplash;
+ RedrawAll;
  { premier argument qui n'est pas une option : le fichier a ouvrir }
  FileArg:='';
  For I:=1 To ParamCount Do

@@ -3,11 +3,11 @@
   @version: 1.00
   @website(https://www.gladir.com/clonedraw)
   @abstract(Target: Free Pascal 3.2)
-  @description(Clone d'Adobe Illustrator en Turbo Pascal/Free Pascal graphique)
+  @description(Clone d'About Illustrator en Turbo Pascal/Free Pascal graphique)
 
   Prototype incomplet : formes, Bezier, crayon et texte editables.
   Les commandes non implementees sont grisees.
-  AI10 est un ancien format prive, PAS un format Adobe Illustrator.
+  AI10 est un ancien format prive, PAS un format About Illustrator.
   Import AI classique limite et ancien AI10 prive avec navigateur graphique.
   Enregistrement AI/EPS classique et AI10 prive.
   Restent notamment : AI moderne/PDF, rotation/groupes,
@@ -34,7 +34,7 @@ Uses
 Const
  VERSION_MAJOR = 1;
  VERSION_MINOR = 0;
- PROGRAM_NAME = 'Adobe Illustrator Clone v1.0';
+ PROGRAM_NAME = 'About Illustrator Clone v1.0';
  
  MENU_H = 18;
  TOPBAR_H = 28;
@@ -350,6 +350,9 @@ Var
  FileExportMode: Boolean;
 
 Function LoadDocument(Name: String): Boolean; Forward;
+
+Var
+ LastOpenDir: String;   { dossier du dernier fichier charge ('' = aucun) }
 
 { ------------------------------------------------------------------
   Liste chainee des objets (tas) : aucune limite du nombre d'objets
@@ -3056,6 +3059,7 @@ Const
 Var
  TopHoverLast: Integer;
  PropActive, ChoiceActive, GlyphActive: Boolean;
+ HelpActive: Boolean;
 
 Function TopItemCmd(I: Integer): Integer;
 Begin
@@ -3299,6 +3303,7 @@ Begin
  Sel := SelCount;
  Hover := -1;
  If Not MenuActive And Not PropActive And Not ChoiceActive And Not GlyphActive And
+    Not HelpActive And
     Not FileDialogActive And (DialogTitle = '') And Not DrawingMode Then
   Hover := TopItemAt(MouseX,MouseY);
  Y := MENU_H+3;
@@ -6643,7 +6648,23 @@ Begin
  ScanFileDirectory := True;
 End;
 
-Procedure StartFileDialog;
+{ Dossier de depart de la boite "Ouvrir" : le dossier du dernier fichier charge ;
+  a defaut (premiere ouverture) ..\SAMPLES\ILLUSTRATOR, puis SAMPLES\ILLUSTRATOR,
+  puis le repertoire courant. }
+Function OpenStartDirectory: String;
+Var Cur, Cand: String;
+Begin
+ If LastOpenDir <> '' Then Begin OpenStartDirectory := LastOpenDir; Exit; End;
+ GetDir(0,Cur);
+ OpenStartDirectory := Cur;
+ Cand := FExpand('..\SAMPLES\ILLUSTRATOR');
+ If IsDirectory(Cand) Then Begin OpenStartDirectory := Cand; Exit; End;
+ Cand := FExpand('SAMPLES\ILLUSTRATOR');
+ If IsDirectory(Cand) Then OpenStartDirectory := Cand;
+End;
+
+{ ForOpen : boite "Ouvrir" (dossier de depart ci-dessus) ; sinon enregistrer / exporter }
+Procedure StartFileDialogFor(ForOpen: Boolean);
 Var D: DirStr; N: NameStr; E: ExtStr; Initial: String;
 Begin
  ResetToolTip;
@@ -6652,10 +6673,13 @@ Begin
  FileExportMode := False;
  FileFocus := 1; FileFilter := 0; FileNameInput := ''; FileCursor := 0;
  FileReplace := False; FileDialogError := '';
- GetDir(0,Initial);
- If CurrentFile<>'' Then Begin
-  FSplit(CurrentFile,D,N,E);
-  If D<>'' Then Initial := D;
+ If ForOpen Then Initial := OpenStartDirectory
+ Else Begin
+  GetDir(0,Initial);
+  If CurrentFile<>'' Then Begin
+   FSplit(CurrentFile,D,N,E);
+   If D<>'' Then Initial := D;
+  End;
  End;
  If Not ScanFileDirectory(Initial) Then Begin
   GetDir(0,Initial);
@@ -6669,10 +6693,15 @@ Begin
  NeedsRedraw := True;
 End;
 
+Procedure StartFileDialog;
+Begin
+ StartFileDialogFor(True);
+End;
+
 Procedure StartSaveDialog;
 Var D: DirStr; N: NameStr; E: ExtStr; Ext: String;
 Begin
- StartFileDialog;
+ StartFileDialogFor(False);
  FileSaveMode := True;
  FileFilter := CurrentSaveFormat;
  If (FileFilter<0) Or (FileFilter>2) Then FileFilter := 0;
@@ -6693,7 +6722,7 @@ End;
 Procedure StartExportDialog;
 Var D: DirStr; N: NameStr; E: ExtStr;
 Begin
- StartFileDialog;
+ StartFileDialogFor(False);
  FileSaveMode := True; FileExportMode := True; FileFilter := 0;
  If ScanFileDirectory(FilePath) Then Begin
   If CurrentFile<>'' Then Begin
@@ -7111,13 +7140,228 @@ Begin
                     (DialogTitle = 'Nouveau document');
 End;
 
+{ Hauteur de l'illustration en tete de la boite "A propos" (0 pour les autres) }
+Function BannerHeight: Integer;
+Begin
+ If DialogTitle = 'A propos' Then BannerHeight := 112 Else BannerHeight := 0;
+End;
+
+{ Courbe de Bezier cubique tracee en segments }
+Procedure ArtCurve(X0, Y0, X1, Y1, X2, Y2, X3, Y3: Real; C, Thick: Integer);
+Var I: Integer; T, U, B0, B1, B2, B3: Real; PX, PY, QX, QY: Integer;
+Begin
+ SetColor(C);
+ If Thick > 1 Then SetLineStyle(SolidLn,0,ThickWidth);
+ PX := Round(X0); PY := Round(Y0);
+ For I := 1 To 48 Do Begin
+  T := I/48; U := 1-T;
+  B0 := U*U*U; B1 := 3*U*U*T; B2 := 3*U*T*T; B3 := T*T*T;
+  QX := Round(B0*X0+B1*X1+B2*X2+B3*X3);
+  QY := Round(B0*Y0+B1*Y1+B2*Y2+B3*Y3);
+  Line(PX,PY,QX,QY);
+  PX := QX; PY := QY;
+ End;
+ SetLineStyle(SolidLn,0,NormWidth);
+End;
+
+{ Point d'ancrage (carre) et poignee (rond) a la facon d'un editeur vectoriel }
+Procedure ArtAnchor(X, Y: Integer);
+Begin
+ SetFillStyle(SolidFill,15); SetColor(0);
+ Bar(X-3,Y-3,X+3,Y+3); Rectangle(X-3,Y-3,X+3,Y+3);
+End;
+
+Procedure ArtHandle(AX, AY, HX, HY: Integer);
+Begin
+ SetColor(15); Line(AX,AY,HX,HY);
+ SetFillStyle(SolidFill,0); SetColor(15);
+ FillEllipse(HX,HY,3,3);
+End;
+
+{ Composition artistique : degrade diagonal, formes geometriques, courbes }
+Procedure DrawAboutArt(X1, Y1, X2, Y2: Integer);
+Const
+ Stops: Array[0..5] of Integer = (1,9,5,13,12,14);
+ Bayer: Array[0..3,0..3] of Integer = ((0,8,2,10),(12,4,14,6),(3,11,1,9),(15,7,13,5));
+Var X, Y, W, H: Integer; T, I, F, C: LongInt; P: Array[0..3] of PointType;
+Begin
+ W := X2-X1; H := Y2-Y1;
+ { degrade tramé entre les couleurs de la palette }
+ For Y := 0 To H-1 Do
+  For X := 0 To W-1 Do Begin
+   T := ((X*3+Y)*5*16) Div (W*3+H);
+   If T > 79 Then T := 79;
+   I := T Div 16; F := T Mod 16;
+   If Bayer[Y And 3,X And 3] < F Then C := Stops[I+1] Else C := Stops[I];
+   PutPixel(X1+X,Y1+Y,C);
+  End;
+ { formes geometriques }
+ SetColor(15);
+ SetLineStyle(SolidLn,0,ThickWidth);
+ Circle(X1+84,Y1+56,40);
+ SetLineStyle(SolidLn,0,NormWidth);
+ SetFillStyle(SolidFill,14); SetColor(0);
+ FillEllipse(X1+84,Y1+56,24,24);
+ SetFillStyle(SolidFill,11);
+ P[0].X := X1+338; P[0].Y := Y1+16;
+ P[1].X := X1+392; P[1].Y := Y1+92;
+ P[2].X := X1+290; P[2].Y := Y1+92;
+ P[3] := P[0];
+ FillPoly(4,P);
+ SetFillStyle(SolidFill,10);
+ P[0].X := X1+212; P[0].Y := Y1+22;
+ P[1].X := X1+240; P[1].Y := Y1+50;
+ P[2].X := X1+212; P[2].Y := Y1+78;
+ P[3].X := X1+184; P[3].Y := Y1+50;
+ FillPoly(4,P);
+ SetFillStyle(SolidFill,13);
+ FillEllipse(X1+372,Y1+30,12,12);
+ { courbes multicolores }
+ ArtCurve(X1+10,Y1+96,X1+120,Y1+4,X1+340,Y1+96,X1+414,Y1+14,15,2);
+ ArtCurve(X1+10,Y1+20,X1+140,Y1+104,X1+260,Y1+6,X1+414,Y1+84,11,2);
+ ArtCurve(X1+20,Y1+100,X1+150,Y1+58,X1+290,Y1+102,X1+410,Y1+64,14,2);
+ ArtCurve(X1+60,Y1+8,X1+190,Y1+60,X1+300,Y1+20,X1+400,Y1+100,0,1);
+ { ancrages et poignees de la courbe blanche }
+ ArtHandle(X1+10,Y1+96,X1+120,Y1+4);
+ ArtHandle(X1+414,Y1+14,X1+340,Y1+96);
+ ArtAnchor(X1+10,Y1+96);
+ ArtAnchor(X1+414,Y1+14);
+ { cadre en creux }
+ UiBevel(X1-1,Y1-1,X2,Y2,False);
+End;
+
+{ ---- table des raccourcis clavier : deux colonnes, touches et descriptions alignees ---- }
+Const
+ SHORTCUT_ROWS = 26;
+ ShortcutsLeft: Array[0..21] of String = (
+  '#Fichier et edition',
+  'Ctrl+O|Ouvrir',
+  'Ctrl+S|Enregistrer',
+  'F12|Enregistrer sous',
+  'Echap|Quitter',
+  'Ctrl+Z|Annuler',
+  'Ctrl+Y|Retablir',
+  'Ctrl+X|Couper',
+  'Ctrl+C|Copier',
+  'Ctrl+V|Coller',
+  'Ctrl+A|Tout selectionner',
+  '#Affichage',
+  'Ctrl+R|Afficher les regles',
+  '0|Zoom a 100 %',
+  '9 ou Z|Loupe',
+  'H|Main (deplacer la vue)',
+  'F10|Ouvrir les menus',
+  '#Formes',
+  'M ou 2|Rectangle',
+  'L ou 3|Ellipse',
+  '4|Ligne',
+  'U|Polygone');
+ ShortcutsRight: Array[0..25] of String = (
+  '#Selection',
+  'V ou 1|Selection',
+  'A|Selection directe',
+  'Y|Baguette magique',
+  'Q|Lasso',
+  '#Trace',
+  'B ou 5|Courbe de Bezier',
+  'P ou 7|Plume',
+  'N ou 6|Crayon',
+  'T ou 8|Texte',
+  'X|Gomme',
+  'C|Ciseaux',
+  '+ ou -|Ajouter/retirer point',
+  '#Transformation',
+  'R|Rotation',
+  'O|Reflexion',
+  'S|Echelle',
+  'D|Inclinaison',
+  'F|Deformation',
+  'E|Transformation libre',
+  '#Autres outils',
+  'G|Degrade',
+  'I|Pipette',
+  'W|Fondu',
+  'J|Graphique',
+  'K|Mesure');
+
+{ Une touche de clavier : fond gris fonce, relief, texte blanc }
+Procedure DrawKeyCap(Var X: Integer; Y: Integer; Const Cap: String);
+Var W: Integer;
+Begin
+ W := Length(Cap)*8+8;
+ SetFillStyle(SolidFill,8);
+ Bar(X,Y-2,X+W-1,Y+8);
+ SetColor(7); Line(X,Y-2,X+W-2,Y-2); Line(X,Y-2,X,Y+7);
+ SetColor(0); Line(X,Y+8,X+W-1,Y+8); Line(X+W-1,Y-2,X+W-1,Y+8);
+ SetColor(15);
+ OutTextXY(X+4,Y,Cap);
+ X := X+W;
+End;
+
+Procedure DrawKeyText(Var X: Integer; Y: Integer; Const T: String);
+Begin
+ SetColor(COLOR_TEXT);
+ OutTextXY(X+4,Y,T);
+ X := X+Length(T)*8+8;
+End;
+
+{ "Ctrl+O", "9 ou Z", "+ ou -" : chaque touche est dessinee, les liaisons + et ou restent en texte }
+Procedure DrawKeys(X, Y: Integer; Keys: String);
+Var P, Q: Integer; Alt, Part: String; First: Boolean;
+Begin
+ First := True;
+ While Keys <> '' Do Begin
+  P := Pos(' ou ',Keys);
+  If P = 0 Then Begin Alt := Keys; Keys := ''; End
+  Else Begin Alt := Copy(Keys,1,P-1); Delete(Keys,1,P+3); End;
+  If Not First Then DrawKeyText(X,Y,'ou');
+  First := False;
+  While Alt <> '' Do Begin
+   Q := Pos('+',Alt);
+   If (Q = 0) Or (Length(Alt) = 1) Then Begin Part := Alt; Alt := ''; End
+   Else Begin Part := Copy(Alt,1,Q-1); Delete(Alt,1,Q); End;
+   DrawKeyCap(X,Y,Part);
+   If Alt <> '' Then DrawKeyText(X,Y,'+');
+  End;
+ End;
+End;
+
+Procedure DrawShortcutColumn(X, Y: Integer; Const Rows: Array Of String; Count: Integer);
+Var I, P, RY: Integer; S: String;
+Begin
+ For I := 0 To Count-1 Do Begin
+  S := Rows[I];
+  RY := Y+I*12;
+  If S[1] = '#' Then Begin
+   SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
+   Bar(X,RY-2,X+288,RY+9);
+   SetColor(15);
+   OutTextXY(X+4,RY,Copy(S,2,Length(S)-1));
+  End Else Begin
+   P := Pos('|',S);
+   DrawKeys(X+4,RY,Copy(S,1,P-1));
+   SetColor(COLOR_TEXT);
+   OutTextXY(X+92,RY,Copy(S,P+1,Length(S)-P));
+  End;
+ End;
+End;
+
+Procedure DrawShortcutTable(X, Y: Integer);
+Begin
+ DrawShortcutColumn(X+14,Y,ShortcutsLeft,22);
+ DrawShortcutColumn(X+318,Y,ShortcutsRight,26);
+ SetColor(8); Line(X+310,Y-2,X+310,Y+SHORTCUT_ROWS*12-4);
+ SetColor(15); Line(X+311,Y-2,X+311,Y+SHORTCUT_ROWS*12-4);
+End;
+
 Procedure MsgGeometry(Var X, Y, W, H, TextH, N: Integer; Var L: TLines);
 Begin
  W := 440;
  N := WrapLines(DialogText,44,L);
  TextH := N*12;
  If TextH < 36 Then TextH := 36;
- H := 34+TextH+22+24+16;
+ If DialogTitle = 'Raccourcis' Then Begin W := 620; TextH := SHORTCUT_ROWS*12; End;
+ H := 34+TextH+22+24+16+BannerHeight;
  X := (ScreenWidth-W) Div 2;
  Y := (ScreenHeight-H) Div 2;
 End;
@@ -7128,8 +7372,14 @@ Begin
  If DialogTitle = '' Then Exit;
  MsgGeometry(X,Y,W,H,TH,N,L);
  UiWindow(X,Y,X+W,Y+H,DialogTitle);
- UiIcon(X+20,Y+34,IsConfirmDialog);
- For I := 0 To N-1 Do UiText(X+68,Y+38+I*12,L[I]);
+ If DialogTitle = 'Raccourcis' Then Begin
+  DrawShortcutTable(X,Y+36);
+  UiButton(X+W-100,Y+H-40,X+W-12,Y+H-16,'OK',True,True);
+  Exit;
+ End;
+ If BannerHeight > 0 Then DrawAboutArt(X+8,Y+26,X+W-8,Y+26+BannerHeight-8);
+ UiIcon(X+20,Y+34+BannerHeight,IsConfirmDialog);
+ For I := 0 To N-1 Do UiText(X+68,Y+38+BannerHeight+I*12,L[I]);
  If IsConfirmDialog Then Begin
   UiButton(X+W-196,Y+H-40,X+W-108,Y+H-16,'OK',True,True);
   UiButton(X+W-100,Y+H-40,X+W-12,Y+H-16,'Annuler',False,True);
@@ -7169,6 +7419,1032 @@ Begin
  End Else If UiInside(X+W-100,Y+H-40,X+W-12,Y+H-16) Then CloseMessage(True);
 End;
 
+{ ====================================================================== }
+{ Aide en ligne : visionneuse avec liste de sujets et texte defilant      }
+{ ====================================================================== }
+Const
+ HELP_LINES = 615;
+ HelpData: Array[0..614] Of String = (
+  '@G Prise en main',
+  '@T Bienvenue',
+  '# About Illustrator',
+  'About Illustrator est un editeur de dessin vectoriel ecrit en Pascal (Free Pascal) avec une interface graphique en mode 640 x 480.',
+  '  Il permet de dessiner des formes, des courbes de Bezier, du texte, de les modifier point par point, de les organiser et de les enregistrer dans plusieurs formats.',
+  'Cette aide decrit tout le logiciel : l''interface, chaque outil, chaque menu, les formats de fichiers, les limites connues et les messages de la barre d''etat.',
+  '# Comment utiliser cette aide',
+  '- Cliquez un sujet dans la liste de gauche pour l''afficher.',
+  '- Un cadre bleu entoure le volet qui a le focus : la liste des sujets ou le texte. Tab (ou un clic) change de volet.',
+  '- Quand la liste a le focus, les fleches haut et bas changent de sujet ; PgHaut et PgBas sautent de dix sujets ; Debut et Fin vont au premier et au dernier.',
+  '- Quand le texte a le focus, les fleches haut et bas, PgHaut, PgBas, Debut et Fin font defiler le texte, comme la barre de defilement de droite.',
+  '- Les fleches gauche et droite passent toujours au sujet precedent ou suivant. Les boutons Precedent et Suivant font la meme chose.',
+  '- Echap ou le bouton Fermer ferment l''aide. F1 la rouvre a tout moment.',
+  '# Qu''est-ce que le dessin vectoriel ?',
+  'Un dessin vectoriel n''est pas une grille de points colores (comme une photographie) mais une liste d''objets decrits par des formules : un rectangle est defini par deux coins, une courbe par ses points d''ancrage.',
+  '  Les objets restent nets a n''importe quel agrandissement et chacun peut etre modifie separement, a tout moment.',
+  '# Ce que vous pouvez faire',
+  '- Dessiner des rectangles, ellipses, segments, polygones, etoiles, traits a main levee, courbes de Bezier et textes.',
+  '- Selectionner, deplacer, redimensionner, faire tourner, mettre a l''echelle, incliner et deformer les objets.',
+  '- Changer le trait, le remplissage et l''epaisseur de chaque objet, appliquer un degrade ou creer un fondu entre deux formes.',
+  '- Grouper, ordonner, aligner et distribuer les objets.',
+  '- Rejoindre, scinder, simplifier et decaler les chemins ; ajouter ou retirer des points d''ancrage.',
+  '- Utiliser les regles, les reperes et la grille pour dessiner avec precision.',
+  '- Ouvrir et enregistrer des fichiers AI, EPS et AI10, et exporter en SVG, BMP, EPS, AI ou CDR.',
+  '# Une precision importante',
+  'Ce logiciel n''est pas Adobe Illustrator et ne cherche pas a reproduire toutes ses fonctions.',
+  '  Il utilise la palette VGA de 16 couleurs et certaines commandes sont grisees parce qu''elles ne sont pas encore disponibles ; leur menu l''indique par le message "Commande non implementee" dans la barre d''etat.',
+  '',
+  '@T Lancer le logiciel',
+  '# Depuis la ligne de commande',
+  'La syntaxe est la suivante :',
+  '- AI : lance l''editeur avec un document vide.',
+  '- AI fichier.ai : lance l''editeur et ouvre le fichier indique (AI, EPS, AI10 ou CDRA).',
+  '- AI -maxscreen : utilise la plus grande resolution graphique offerte par le pilote, au lieu de 640 x 480.',
+  '- AI /? (ou -h, --help) : affiche l''aide de la ligne de commande et quitte.',
+  '- AI -check liste.txt : mode de test non interactif ; lit une liste de fichiers, essaie de les importer et ecrit un rapport dans liste.txt.out.',
+  '# Au demarrage',
+  'Une banniere de presentation s''affiche 1,5 seconde par-dessus l''interface, puis disparait. L''editeur est ensuite utilisable. Le document de depart est vide, a 100 % de zoom.',
+  '# Quitter',
+  'Choisissez Fichier, Quitter, ou appuyez sur Echap lorsque aucune operation n''est en cours.',
+  '  Si le document a ete modifie depuis le dernier enregistrement, une confirmation est demandee : les modifications non enregistrees seraient perdues.',
+  '',
+  '@T L''interface',
+  '# Vue d''ensemble',
+  'La fenetre est divisee en six zones, de haut en bas et de gauche a droite :',
+  '- La barre de menus (Fichier, Edition, Affichage, Objet, Chemin, Texte, Aide).',
+  '- La barre d''icones, juste dessous, avec les commandes les plus courantes.',
+  '- La boite a outils, a gauche, sur deux colonnes.',
+  '- La zone de dessin, au centre, avec la page et les regles.',
+  '- Les couleurs de trait et de remplissage, en bas de la boite a outils.',
+  '- La barre d''etat, tout en bas.',
+  '# La barre de menus',
+  'Cliquez un titre pour ouvrir son menu, puis cliquez une ligne pour lancer la commande. Les lignes grisees ne sont pas encore disponibles.',
+  '  F10 ouvre ou ferme les menus au clavier : les fleches gauche et droite changent de menu, haut et bas changent de ligne, Entree valide, Echap referme.',
+  '# La barre d''icones',
+  'Elle contient, de gauche a droite : Nouveau, Ouvrir, Enregistrer, Annuler, Retablir, Couper, Copier, Coller, Zoom avant, Zoom arriere, Zoom 100 %, Grille, Regles, Reperes, Grouper, Degrouper, Premier plan, Arriere-plan, Aligner et',
+  '  Proprietes. Laissez la souris sur une icone pendant une demi-seconde pour lire son nom dans une info-bulle. Les icones de grille, de regles et de reperes restent enfoncees tant que la fonction est active.',
+  '# La boite a outils',
+  'Les outils sont disposes sur deux colonnes. Cliquez un outil pour l''activer : il reste enfonce. Laissez la souris dessus pour afficher une info-bulle avec son nom, son raccourci et son mode d''emploi.',
+  '  Le sujet "Les outils" decrit chaque outil.',
+  '# Les couleurs de trait et de remplissage',
+  'Sous les outils, deux carres superposes montrent la couleur de trait (carre de devant) et la couleur de remplissage (carre de derriere). Cliquez l''un d''eux pour ouvrir la boite de couleurs.',
+  '  La petite icone en bas a gauche remet les couleurs par defaut : trait noir, sans remplissage. La double fleche echange le trait et le remplissage.',
+  '# La zone de dessin',
+  'La page blanche est entouree d''un fond gris. Les objets se dessinent dans la page. Les regles (en haut et a gauche) indiquent les coordonnees ; elles servent aussi a creer des reperes.',
+  '# La barre d''etat',
+  'Elle affiche le nombre d''objets, le zoom courant et un message sur la derniere operation ou sur la marche a suivre pour l''outil actif. Quand une commande est impossible, c''est ici que son motif est explique.',
+  '  Voir le sujet "Messages d''etat".',
+  '# Boites de dialogue',
+  'Les boites de dialogue sont modales : tant que l''une est ouverte, le reste du programme ne repond pas. Entree valide, Echap annule, et le bouton avec une croix en haut a droite ferme la boite.',
+  '  Elles peuvent s''ouvrir par-dessus le dessin sans le modifier tant que vous n''avez pas valide.',
+  '',
+  '@T Premiers pas',
+  '# Tracer un premier dessin',
+  'Voici une courte visite guidee. Elle prend deux minutes.',
+  '- 1. Cliquez l''outil Rectangle dans la boite a outils (ou appuyez sur M).',
+  '- 2. Dans la page, maintenez le bouton gauche enfonce et glissez la souris : un rectangle apparait. Relachez pour le creer.',
+  '- 3. Choisissez l''outil Selection (V) et cliquez le rectangle : des poignees apparaissent aux coins et sur les cotes.',
+  '- 4. Glissez une poignee pour redimensionner ; glissez l''interieur pour deplacer.',
+  '- 5. Ouvrez Objet, Proprietes : changez la couleur du trait, la couleur de remplissage et l''epaisseur, puis cliquez OK.',
+  '- 6. Dessinez une ellipse (L) a cote, puis selectionnez les deux avec un rectangle de selection et choisissez Objet, Aligner.',
+  '- 7. Choisissez Fichier, Enregistrer sous... et donnez un nom : votre dessin est sauvegarde.',
+  '# Ajouter du texte',
+  'Choisissez l''outil Texte (T), cliquez dans la page, tapez votre texte puis appuyez sur Entree. Pour changer la taille, selectionnez-le et ouvrez Texte, Polices.',
+  '# Dessiner une courbe',
+  'Avec l''outil Courbe de Bezier (B) : glissez de l''origine vers la fin, relachez, puis cliquez-glissez a l''arrivee pour courber le segment. La courbe a quatre poignees que vous pouvez deplacer avec l''outil de selection directe (A).',
+  '# Annuler une erreur',
+  'Ctrl+Z annule la derniere modification, Ctrl+Y la retablit. Vous pouvez remonter de 30 actions environ.',
+  '',
+  '@T Documents',
+  '# Nouveau document',
+  'Fichier, Nouveau (ou l''icone) efface le dessin et remet le zoom a 100 %. Si le document courant a ete modifie, une confirmation est demandee avant de le perdre.',
+  '# Ouvrir',
+  'Fichier, Ouvrir... (Ctrl+O) affiche le navigateur de fichiers : tapez un nom ou cliquez un fichier, choisissez un filtre de type (Illustrator / AI10, Illustrator classique, Prive AI10, Tous fichiers), puis validez.',
+  '  Le dossier courant est affiche en haut et vous pouvez naviguer dans les dossiers avec la liste de gauche.',
+  '# Enregistrer',
+  'Fichier, Enregistrer (Ctrl+S) ecrit le document sous son nom courant dans le format deja utilise. Pour un document sans nom, le navigateur de fichiers s''ouvre. Fichier, Enregistrer sous... (F12) permet de changer de nom ou de format.',
+  '# Formats d''enregistrement',
+  '- AI classique : format de fichier lisible par les logiciels de dessin ; le texte est ecrit en Courier, les couleurs sont celles de la palette VGA et les traits sont fins.',
+  '- EPS : meme contenu en PostScript encapsule.',
+  '- AI10 : format prive de ce logiciel qui conserve exactement tous les objets, y compris les groupes et la geometrie complete. Utilisez-le pour reprendre un travail plus tard sans aucune perte.',
+  '# Exporter',
+  'Fichier, Exporter... ecrit une copie du dessin dans un autre format (SVG, BMP, EPS, AI, CDR 9) sans changer le document courant ni son nom. Voir le sujet "Exportation".',
+  '# Perte de modifications',
+  'Le logiciel demande toujours une confirmation avant de remplacer le document courant (Nouveau, Ouvrir) ou de quitter si des modifications n''ont pas ete enregistrees.',
+  '',
+  '@G La boite a outils',
+  '@T Les outils',
+  '# Liste des outils',
+  'La boite a outils comprend 32 outils sur deux colonnes. Voici la liste avec leur raccourci clavier :',
+  '= V ou 1 | Selection : deplacer et redimensionner',
+  '= A | Selection directe : deplacer un point d''ancrage',
+  '= Y | Baguette magique : meme apparence',
+  '= Q | Lasso : selection a main levee',
+  '= P ou 7 | Plume : courbe par deux cliquer-glisser',
+  '= B ou 5 | Courbe de Bezier a quatre poignees',
+  '= + | Ajouter un point d''ancrage',
+  '= - | Supprimer un point d''ancrage',
+  '= T ou 8 | Texte',
+  '= 4 | Segment de droite',
+  '= M ou 2 | Rectangle',
+  '= L ou 3 | Ellipse',
+  '= U | Polygone',
+  '= (aucun) | Etoile',
+  '= (aucun) | Pinceau : trait epais a main levee',
+  '= N ou 6 | Crayon : trait fin a main levee',
+  '= X | Gomme',
+  '= C | Ciseaux',
+  '= R | Rotation',
+  '= O | Reflexion',
+  '= S | Mise a l''echelle',
+  '= D | Inclinaison',
+  '= F | Deformation',
+  '= E | Transformation manuelle',
+  '= G | Degrade',
+  '= I | Pipette',
+  '= W | Fondu',
+  '= (aucun) | Pulverisateur de symboles',
+  '= J | Graphique en colonnes',
+  '= K | Mesure',
+  '= H | Main : deplacer la vue',
+  '= Z ou 9 | Zoom',
+  '# Conseils generaux',
+  '- L''outil actif reste actif apres un dessin : vous pouvez en tracer plusieurs d''affilee.',
+  '- Echap annule l''operation en cours (trait, glissement, courbe, saisie...).',
+  '- L''info-bulle d''un outil rappelle son mode d''emploi ; la barre d''etat donne la marche a suivre pendant l''utilisation.',
+  '- Les outils qui exigent une selection (rotation, echelle, inclinaison...) affichent un message si rien n''est selectionne.',
+  '',
+  '@T Outils de selection',
+  '# Selection (V)',
+  'L''outil principal. Cliquez un objet pour le selectionner : ses poignees apparaissent. Glissez l''objet pour le deplacer ; glissez une poignee pour le redimensionner ; Echap annule le glissement en cours.',
+  '- Pour selectionner plusieurs objets, glissez un rectangle de selection dans le vide : tous les objets touches sont selectionnes. Maintenez Maj pour ajouter a la selection existante.',
+  '- Un clic dans le vide annule la selection.',
+  '- Si l''objet est un texte, tapez directement pour modifier son contenu.',
+  '# Selection directe (A)',
+  'Selectionne un chemin ou une courbe et affiche ses points d''ancrage. Cliquez un point pour le saisir puis glissez-le : seul ce point bouge, la forme se deforme en consequence.',
+  '  Pour les courbes de Bezier, les poignees de controle se deplacent aussi.',
+  '# Baguette magique (Y)',
+  'Cliquez un objet : tous les objets du dessin qui ont le meme trait et le meme remplissage sont selectionnes. Tres pratique pour changer d''un coup la couleur de plusieurs objets semblables.',
+  '  Le message de la barre d''etat donne le nombre d''objets trouves.',
+  '# Lasso (Q)',
+  'Tracez une boucle a main levee autour des objets a selectionner. La boucle doit avoir au moins trois points. Le message donne le nombre d''objets selectionnes.',
+  '# Selection par commande',
+  '- Edition, Tout selectionner (Ctrl+A) selectionne tous les objets.',
+  '- Objet, Operations..., Inverser la selection selectionne ce qui ne l''etait pas, et reciproquement.',
+  '- Objet, Operations..., Deselectionner annule la selection.',
+  '',
+  '@T Outils de dessin',
+  '# Rectangle (M ou 2) et ellipse (L ou 3)',
+  'Glissez du premier coin au coin oppose. L''objet prend le trait et le remplissage courants. Le remplissage est actif tant que la couleur choisie n''est pas "aucun" (carre blanc barre en rouge).',
+  '# Segment de droite (4)',
+  'Glissez du point de depart au point d''arrivee. Le segment est cree au relachement du bouton.',
+  '# Polygone (U) et etoile',
+  'Glissez depuis le centre vers l''exterieur ; la distance donne le rayon. Les touches [ et ] diminuent ou augmentent le nombre de cotes d''un polygone (de 3 a 20) ou le nombre de branches d''une etoile (de 3 a 20).',
+  '  Le message de la barre d''etat rappelle les valeurs courantes. Un rayon trop petit (moins de 4 px) annule la forme.',
+  '# Plume (P ou 7)',
+  'Trace une courbe en deux cliquer-glisser : le premier definit le depart, le second l''arrivee et la courbure. C''est un moyen rapide de creer une courbe de Bezier.',
+  '# Courbe de Bezier (B ou 5)',
+  'Glissez du depart a la fin et relachez : une ligne provisoire apparait. Cliquez-glissez ensuite a l''arrivee pour courber la ligne ; la courbe obtenue a quatre poignees (deux points d''ancrage et deux poignees de controle).',
+  '  Echap annule une courbe en cours de creation. Voir le sujet "Courbes de Bezier".',
+  '# Crayon (N ou 6)',
+  'Dessine un trait fin a main levee tant que le bouton est enfonce ; relachez pour terminer. Le trait est limite a 100 points : au-dela, relachez et commencez un autre trait. Echap annule.',
+  '# Pinceau',
+  'Comme le crayon mais avec un trait de 4 pixels d''epaisseur.',
+  '# Pulverisateur de symboles',
+  'Glissez pour semer des petits symboles dans le dessin. L''ensemble forme un groupe : un seul clic de selection prend tous les symboles d''une pulverisation.',
+  '# Texte (T ou 8)',
+  'Cliquez dans la page, tapez le texte et appuyez sur Entree pour valider (Echap annule). Un clic sur un menu ou un outil valide aussi. Voir le sujet "Saisie de texte".',
+  '# Graphique en colonnes (J)',
+  'Glissez un cadre d''au moins 60 x 50 pixels : un graphique en colonnes avec des valeurs d''exemple est cree. Les colonnes sont des objets ordinaires que vous pouvez modifier ensuite.',
+  '',
+  '@T Outils de modification',
+  '# Gomme (X)',
+  'Glissez sur un chemin pour effacer des parties. Le message "Gomme : parties effacees" confirme l''operation.',
+  '# Ciseaux (C)',
+  'Cliquez sur un chemin pour le couper a cet endroit. Le chemin est scinde en deux.',
+  '# Ajouter un point d''ancrage (+)',
+  'Cliquez sur un chemin pour y ajouter un point. Un chemin est limite a 100 points. Non disponible sur tous les types d''objets (le message le precise).',
+  '# Supprimer un point d''ancrage (-)',
+  'Cliquez un point d''un chemin pour l''enlever. Le chemin doit conserver assez de points pour rester un chemin.',
+  '# Differences avec le menu Chemin',
+  'Les outils agissent a l''endroit exact du clic. Le menu Chemin (Rejoindre, Scinder, Simplifier, Decalage) agit sur la selection entiere. Voir le sujet "Chemins".',
+  '',
+  '@T Transformations',
+  '# Principe',
+  'Les outils de rotation, reflexion, echelle, inclinaison, deformation et transformation manuelle agissent sur la selection courante. Selectionnez d''abord un ou plusieurs objets ; sinon un message vous le rappelle.',
+  '  Vous pouvez annuler le resultat avec Ctrl+Z.',
+  '# Rotation (R)',
+  'Glissez autour de la selection : l''angle suit le deplacement de la souris. Un angle presque nul est ignore.',
+  '# Reflexion (O)',
+  'Un clic cree un miroir ; un glissement definit l''axe a 45 degres.',
+  '# Mise a l''echelle (S)',
+  'Glissez depuis le centre : plus vous vous eloignez, plus l''objet est agrandi ; vers le centre, il est reduit.',
+  '# Inclinaison (D)',
+  'Glissez horizontalement : l''objet est penche proportionnellement a la distance.',
+  '# Deformation (F)',
+  'Selectionnez d''abord un chemin, puis glissez : les points proches du curseur sont pousses.',
+  '# Transformation manuelle (E)',
+  'Combine deplacement, redimensionnement et rotation dans un meme outil.',
+  '# Limite de la page',
+  'Une transformation est refusee si le resultat sortait de la page ; le message "Transformation refusee" l''indique et le dessin reste intact.',
+  '',
+  '@T Degrades et fondu',
+  '# Degrade (G)',
+  'Fonctionne sur un rectangle. Pointez ou selectionnez le rectangle, puis glissez pour fixer la direction du degrade.',
+  '  Le degrade est applique en huit bandes, entre le trait et le remplissage courants, avec les couleurs de la palette de 16.',
+  '# Pipette (I)',
+  'Cliquez un objet pour copier son trait et son remplissage dans les couleurs courantes ; si des objets sont selectionnes, l''apparence leur est appliquee. Le message precise le nombre d''objets modifies.',
+  '# Fondu (W)',
+  'Cliquez un premier objet, puis un second : cinq formes intermediaires sont creees entre eux, en variant progressivement la position, la taille et la couleur.',
+  '  Les deux objets doivent etre de meme type, ou etre des chemins de meme nombre de points.',
+  '# Couleurs courantes',
+  'La boite de couleurs s''ouvre en cliquant le carre de trait ou de remplissage dans la boite a outils. Elle propose les 16 couleurs.',
+  '  Si des objets sont selectionnes, la couleur choisie leur est appliquee tout de suite ; sinon elle devient la couleur courante pour les prochains dessins.',
+  '',
+  '@T Navigation',
+  '# Main (H)',
+  'Glissez pour deplacer la vue quand le dessin est agrandi. Si la page entiere est visible, un message vous invite a agrandir d''abord avec le zoom. Echap annule le deplacement et remet la vue comme avant.',
+  '# Zoom (Z ou 9)',
+  'Clic gauche : agrandir ; clic droit : reduire. Les niveaux sont 25, 50, 100, 200, 400 et 800 %. La touche 0 revient a 100 %. Le zoom courant est affiche dans la barre d''etat.',
+  '  Le zoom avant et arriere se font aussi par les icones et le menu Affichage.',
+  '# Mesure (K)',
+  'Glissez entre deux points : la distance en pixels et l''angle en degres sont affiches dans la barre d''etat.',
+  '',
+  '@G Objets et chemins',
+  '@T Selection d''objets',
+  '# Types d''objets',
+  'Un dessin est une liste d''objets. Les types d''objets sont : rectangle, ellipse, segment, chemin (polygone, etoile, trait a main levee), courbe de Bezier, chemin rempli et texte. Plusieurs objets peuvent etre regroupes en groupe.',
+  '# Selectionner',
+  '- Un clic sur un objet le selectionne et deselectionne les autres.',
+  '- Un rectangle de selection dans le vide selectionne tous les objets qu''il touche ; avec Maj, il ajoute a la selection.',
+  '- Ctrl+A selectionne tout.',
+  '- Echap, ou un clic dans le vide, annule la selection.',
+  '# Poignees',
+  'Un objet selectionne est entoure de poignees : glissez une poignee pour le redimensionner. Le nombre d''objets selectionnes est affiche dans la barre d''etat.',
+  '# Copier, couper, coller, dupliquer, supprimer',
+  '- Ctrl+C copie l''objet, Ctrl+X le coupe, Ctrl+V le colle. Un seul objet est conserve dans le presse-papiers.',
+  '- Objet, Operations..., Dupliquer cree une copie decalee ; Supprimer efface la selection.',
+  '',
+  '@T Proprietes d''un objet',
+  '# Ouvrir la boite',
+  'Selectionnez un objet puis choisissez Objet, Proprietes... (ou l''icone Proprietes). Sans objet selectionne, la barre d''etat l''indique.',
+  '# Contenu',
+  '- Objet : type, position (X, Y), largeur et hauteur de l''objet, et le texte s''il s''agit d''un texte.',
+  '- Couleurs : couleur du trait et du remplissage, a choisir parmi les 16 couleurs de la palette. Un remplissage blanc signifie "pas de remplissage" (sauf pour les chemins remplis).',
+  '- Contour : epaisseur de 1 a 10 pixels, reglee par les fleches haut et bas.',
+  '- Objet visible : decochez pour masquer l''objet sans le supprimer.',
+  '# Valider',
+  'OK applique les modifications ("Proprietes appliquees") ; Annuler les abandonne ("Proprietes annulees").',
+  '',
+  '@T Ordre et groupes',
+  '# Ordre d''empilement',
+  'Les objets se recouvrent dans l''ordre ou ils ont ete crees : le dernier est devant. Le menu Objet permet de changer cet ordre :',
+  '- Premier plan : place la selection devant tous les autres.',
+  '- Avancer : la fait passer d''un cran devant.',
+  '- Reculer : la fait passer d''un cran derriere.',
+  '- Arriere-plan : la place derriere tous les autres.',
+  'Si l''objet est deja a l''extremite voulue, un message le signale.',
+  '# Grouper',
+  'Selectionnez au moins deux objets (par rectangle de selection) puis Objet, Grouper. Le groupe se selectionne, se deplace et se redimensionne d''un seul bloc.',
+  '# Degrouper',
+  'Objet, Degrouper separe de nouveau les objets du groupe. Le message donne le nombre d''objets liberes. Si la selection ne contient aucun groupe, un message le dit.',
+  '',
+  '@T Aligner et distribuer',
+  '# Aligner',
+  'Exige au moins deux objets selectionnes. Objet, Aligner... propose six options :',
+  '- Aligner a gauche',
+  '- Centrer horizontalement',
+  '- Aligner a droite',
+  '- Aligner en haut',
+  '- Centrer verticalement',
+  '- Aligner en bas',
+  'Tous les objets sont alignes sur l''objet le plus a gauche, le plus haut, etc., ou sur leur centre commun.',
+  '# Distribuer',
+  'Exige au moins trois objets selectionnes. Objet, Distribuer... propose :',
+  '- Centres horizontaux egaux',
+  '- Centres verticaux egaux',
+  '- Espacement horizontal egal',
+  '- Espacement vertical egal',
+  'Les objets extremes ne bougent pas ; les autres sont repartis entre eux.',
+  '',
+  '@T Transformer',
+  '# Le menu Transformer',
+  'Objet, Transformer... applique une transformation prediefinie a toute la selection :',
+  '- Rotation 90 degres horaire, 90 antihoraire, 180 ou 45 horaire.',
+  '- Miroir horizontal ou vertical.',
+  '- Echelle 50 %, 200 %, 90 % ou 110 %.',
+  '# Reglages fins',
+  'Pour un angle ou un facteur different, utilisez les outils Rotation, Mise a l''echelle, Inclinaison ou Transformation manuelle de la boite a outils.',
+  '# Page',
+  'Si le resultat sortait de la page, la transformation est refusee et le dessin reste intact.',
+  '',
+  '@T Operations',
+  '# Le menu Operations',
+  'Objet, Operations... regroupe les commandes courantes sur la selection :',
+  '- Dupliquer : cree une copie de chaque objet selectionne ; "pas de place dans la page" si la copie sortirait.',
+  '- Supprimer : efface la selection.',
+  '- Tout selectionner : selectionne tous les objets.',
+  '- Inverser la selection : selectionne ce qui ne l''etait pas.',
+  '- Deselectionner : annule la selection.',
+  '- Annuler : referme la boite sans rien faire.',
+  '',
+  '@T Chemins',
+  '# Le menu Chemin',
+  'Les commandes du menu Chemin agissent sur les chemins selectionnes.',
+  '# Rejoindre',
+  'Joint les extremites de chemins ouverts. Avec un seul chemin ouvert de trois points ou plus, il est referme. Un chemin ne peut depasser 100 points au total.',
+  '# Scinder',
+  'Coupe un chemin ou une courbe en deux a l''endroit du clic ; un chemin ferme est simplement ouvert. Cliquez loin des extremites. Ne s''applique pas au texte.',
+  '# Cont. Coin',
+  'Convertit une courbe de Bezier en suite de segments anguleux.',
+  '# Cont. Courbe',
+  'Convertit un chemin en courbe lissee ; limite a 100 points.',
+  '# Simplifier',
+  'Retire les points superflus d''un chemin. Quatre niveaux de tolerance : 1 px (faible), 2 px, 4 px, 8 px (forte). Le message donne le nombre de points supprimes.',
+  '# Decalage',
+  'Agrandit ou reduit un contour : de 4 ou 10 pixels. S''applique aux chemins fermes, rectangles et ellipses. Un resultat degenere ou hors de la page est refuse.',
+  '# Texte a chemin',
+  'Voir le sujet "Texte : mise en forme".',
+  '',
+  '@T Courbes de Bezier',
+  '# Anatomie',
+  'Une courbe de Bezier cubique est definie par quatre points : deux points d''ancrage (les extremites) et deux points de controle (les poignees) qui determinent la courbure.',
+  '  La courbe part de l''ancrage de depart en direction de sa poignee et arrive a l''ancrage d''arrivee en venant de l''autre poignee.',
+  '# Creer',
+  '- Avec l''outil Courbe de Bezier : glissez de l''origine a l''arrivee, relachez, puis cliquez-glissez a l''arrivee pour courber.',
+  '- Avec l''outil Plume : deux cliquer-glisser.',
+  '# Modifier',
+  'Selectionnez la courbe, puis choisissez l''outil Selection directe (A) : ses quatre poignees s''affichent. Glissez-les pour changer la forme. Une courbe est echantillonnee en 128 segments a l''ecran.',
+  '# Convertir',
+  'Chemin, Cont. Coin remplace la courbe par des segments droits ; Chemin, Cont. Courbe transforme un chemin en courbe lisse.',
+  '',
+  '@G Texte',
+  '@T Saisie de texte',
+  '# Creer un texte',
+  'Choisissez l''outil Texte (T), cliquez dans la page et tapez. Retour arriere efface un caractere, Suppr efface le caractere sous le curseur, les fleches gauche et droite et Debut et Fin deplacent le curseur.',
+  '  Entree valide ; Echap annule la saisie.',
+  '# Modifier un texte',
+  'Selectionnez le texte avec l''outil de selection et tapez : la saisie reprend. Vous pouvez aussi le deplacer par glissement.',
+  '# Limites',
+  'Un texte contient 255 caracteres au plus et ne peut depasser le bord de la page : le message "Limite de texte / bord de page atteint" apparait dans ce cas. Une saisie vide est annulee.',
+  '# Police',
+  'La police de caracteres est celle de l''ecran graphique (8 x 8 pixels). La taille s''obtient par un facteur d''agrandissement (voir "Texte : mise en forme").',
+  '',
+  '@T Texte : mise en forme',
+  '# Polices',
+  'Texte, Polices... agit sur les textes selectionnes :',
+  '- Normal : retire les styles.',
+  '- Gras, Italique, Souligne : basculent le style.',
+  '- Taille x1 (8 px), x2 (16 px), x3 (24 px), x4 (32 px).',
+  'Un texte qui deviendrait plus large que la page est refuse.',
+  '# Formats',
+  'Texte, Formats... transforme le contenu :',
+  '- MAJUSCULES, minuscules, Casse de titre, Inverser la casse.',
+  '- Retirer les espaces en trop.',
+  '# Glyphes',
+  'Texte, Glyphes... affiche une grille de tous les caracteres de la police (codes 33 a 255). Survolez un caractere pour en voir le code et un apercu agrandi ; cliquez-le pour l''ajouter au texte selectionne.',
+  '  Utile pour les lettres accentuees et les symboles.',
+  '# Texte a chemin',
+  'Selectionnez un texte et un chemin (en les entourant par un rectangle de selection), puis Texte, Texte a chemin : le texte est dispose le long du chemin. Il faut que le chemin soit assez long.',
+  '# Affichage du texte',
+  'Texte, Affichage... propose :',
+  '- Cadres de texte : dessine un cadre autour des textes.',
+  '- Texte en barres (apercu) : remplace les lettres par des barres pour un apercu rapide.',
+  '- Reinitialiser l''affichage.',
+  '',
+  '@G Affichage',
+  '@T Zoom et deplacement',
+  '# Zoom',
+  'Six niveaux : 25, 50, 100, 200, 400 et 800 %. Utilisez les icones, le menu Affichage, l''outil Loupe, ou la touche 0 pour revenir a 100 %. Atteindre une limite affiche "Limite de zoom atteinte (25 % a 800 %)".',
+  '# Deplacer la vue',
+  'Quand la page depasse de la fenetre, l''outil Main (H) fait glisser la vue.',
+  '# Page',
+  'La page est toujours centree quand elle tient entierement dans la fenetre.',
+  '',
+  '@T Regles et reperes',
+  '# Regles',
+  'Affichage, Regles (Ctrl+R) montre ou cache les regles graduees en haut et a gauche. L''unite est le pixel du document.',
+  '# Reperes',
+  'Les reperes sont des lignes d''aide pour placer les objets avec precision.',
+  '- Pour en creer un, glissez depuis une regle vers la page : une regle horizontale cree un repere horizontal, la verticale un repere vertical. La position s''affiche pendant le glissement.',
+  '- Pour en supprimer un, ramenez-le sur la regle.',
+  '- Affichage, Effacer reperes supprime tous les reperes.',
+  '- Affichage, Reperes affiche ou masque les reperes.',
+  '# Grille',
+  'Affichage, Grille affiche ou masque une grille de fond ; l''icone de la barre reste enfoncee tant que la grille est visible.',
+  '',
+  '@G Fichiers',
+  '@T Formats de fichiers',
+  '# Tableau des formats',
+  '= .AI | Illustrator classique : ouverture et enregistrement',
+  '= .EPS | PostScript encapsule : ouverture et enregistrement',
+  '= .AI10 | Format prive : conserve tous les objets exactement',
+  '= .CDRA | Meme format prive, autre extension',
+  '= .SVG | Export vectoriel',
+  '= .BMP | Export bitmap 24 bits',
+  '= .CDR | Export CorelDRAW 9 natif',
+  '# Choisir',
+  '- Pour continuer a travailler plus tard : AI10.',
+  '- Pour echanger avec un autre logiciel de dessin : AI ou EPS.',
+  '- Pour le web : SVG.',
+  '- Pour une image fixe : BMP.',
+  '# Limites',
+  'Les formats AI et EPS enregistrent le texte en Courier, les couleurs de la palette VGA et des traits fins. Seul AI10 conserve la mise en forme exactement. AI10 n''est PAS un format Adobe : seul ce logiciel le relit.',
+  '',
+  '@T Importation',
+  '# Ouvrir un fichier',
+  'Fichier, Ouvrir... lit les fichiers AI, EPS, AI10 et CDRA. Un ancien fichier AI classique est lu avec ses chemins ; un AI moderne (base sur le PDF) est lu pour sa premiere page.',
+  '# Ce qui est conserve',
+  '- Chemins et courbes (les courbes sont aplaties en segments).',
+  '- Couleurs de trait et de remplissage, ramenees a la palette de 16 couleurs.',
+  '# Ce qui est perdu',
+  '- Images raster integrees, degrades complexes, transparence, calques.',
+  '- Plusieurs pages : seule la premiere est lue.',
+  '# Messages',
+  '- "AI classique importe : couleurs VGA, courbes approximees, traits fins."',
+  '- "AI/PDF importe : couleurs VGA, courbes aplaties, 1re page."',
+  '- "AI/PDF sans vecteur (page vide ou images raster non gerees)."',
+  '- "Format prive AI10 charge."',
+  'Un fichier invalide affiche le motif de l''echec dans la barre d''etat.',
+  '',
+  '@T Exportation',
+  '# Utiliser',
+  'Fichier, Exporter... ouvre le navigateur de fichiers avec le choix du format. L''export ne change pas le document courant ni son nom.',
+  '# Formats',
+  '- SVG : dessin vectoriel pour le web et les autres editeurs.',
+  '- BMP : image bitmap de 24 bits, page entiere.',
+  '- EPS et AI : meme limites qu''a l''enregistrement.',
+  '- CDR 9 : formes et texte sont convertis en courbes.',
+  '# Message',
+  '"Export termine : page entiere, document courant inchange."',
+  '',
+  '@G Reference',
+  '@T Raccourcis clavier',
+  '# Fichier et edition',
+  '= Ctrl+O | Ouvrir',
+  '= Ctrl+S | Enregistrer',
+  '= F12 | Enregistrer sous',
+  '= Echap | Quitter (hors operation en cours)',
+  '= Ctrl+Z | Annuler',
+  '= Ctrl+Y | Retablir',
+  '= Ctrl+X | Couper',
+  '= Ctrl+C | Copier',
+  '= Ctrl+V | Coller',
+  '= Ctrl+A | Tout selectionner',
+  '# Affichage',
+  '= Ctrl+R | Afficher les regles',
+  '= 0 | Zoom a 100 %',
+  '= F10 | Ouvrir les menus',
+  '= F1 | Ouvrir l''aide',
+  '# Outils',
+  '= V ou 1 | Selection',
+  '= A | Selection directe',
+  '= Y | Baguette magique',
+  '= Q | Lasso',
+  '= M ou 2 | Rectangle',
+  '= L ou 3 | Ellipse',
+  '= 4 | Segment',
+  '= U | Polygone',
+  '= P ou 7 | Plume',
+  '= B ou 5 | Courbe de Bezier',
+  '= N ou 6 | Crayon',
+  '= T ou 8 | Texte',
+  '= Z ou 9 | Zoom',
+  '= H | Main',
+  '= X | Gomme',
+  '= C | Ciseaux',
+  '= R | Rotation',
+  '= O | Reflexion',
+  '= S | Echelle',
+  '= D | Inclinaison',
+  '= F | Deformation',
+  '= E | Transformation libre',
+  '= G | Degrade',
+  '= I | Pipette',
+  '= W | Fondu',
+  '= J | Graphique',
+  '= K | Mesure',
+  '= + | Ajouter un point',
+  '= - | Supprimer un point',
+  '= [ ou ] | Nombre de cotes ou branches',
+  '# Dans l''aide',
+  '= Tab | Changer de volet (liste ou texte)',
+  '= Haut ou Bas | Liste : sujet precedent ou suivant ; texte : defiler d''une ligne',
+  '= PgHaut ou PgBas | Liste : 10 sujets ; texte : une page',
+  '= Debut ou Fin | Liste : premier ou dernier sujet ; texte : debut ou fin',
+  '= Gauche ou Droite | Sujet precedent ou suivant',
+  '= Echap | Fermer',
+  '',
+  '@T Messages d''etat',
+  '# Comprendre les messages',
+  'La barre d''etat, en bas de la fenetre, repond a vos actions. Voici les messages les plus frequents et leur signification.',
+  '# Selection',
+  '- "Aucun objet selectionne." : la commande demande une selection.',
+  '- "Selection annulee." : plus rien n''est selectionne.',
+  '- "Selection inversee." : les objets non selectionnes le sont devenus.',
+  '# Edition',
+  '- "Annule." / "Retabli." : action annulee ou retablie.',
+  '- "Rien a annuler." / "Rien a retablir." : l''historique est vide.',
+  '- "Terminer l''operation en cours avant d''annuler." : une operation est active.',
+  '- "Objet copie." / "Objet coupe." / "Objet colle."',
+  '- "Le presse-papiers est vide."',
+  '# Dessin',
+  '- "Limite de 100 points : relacher puis commencer un autre trait." : un trait a main levee ne peut depasser 100 points.',
+  '- "Memoire insuffisante : objet non ajoute." : plus de memoire.',
+  '- "Transformation refusee : le resultat sortirait de la page."',
+  '- "Commande non implementee." : la commande est grisee.',
+  '# Chemins',
+  '- "Chemin referme." / "Chemins rejoints."',
+  '- "Chemin scinde en deux." / "Courbe scindee en deux."',
+  '- "Simplification : n point(s) retire(s)."',
+  '- "Decalage applique a n objet(s)."',
+  '# Fichiers',
+  '- "AI/EPS enregistre : texte Courier, palette VGA, contours fins."',
+  '- "AI10 prive enregistre : objets conserves exactement."',
+  '- "Export termine : page entiere, document courant inchange."',
+  '',
+  '@T Limites et capacites',
+  '# Capacites',
+  '- Palette de 16 couleurs (VGA).',
+  '- Epaisseur de contour de 1 a 10 pixels.',
+  '- Zoom de 25 a 800 %, en six niveaux.',
+  '- Environ 30 niveaux d''annulation.',
+  '- Chemins limites a 100 points.',
+  '- Courbes de Bezier echantillonnees en 128 segments.',
+  '- Texte limite a 255 caracteres, en facteurs de taille 1 a 4.',
+  '- Polygones et etoiles de 3 a 20 cotes ou branches.',
+  '- Un seul objet dans le presse-papiers.',
+  '# Pas encore disponible',
+  '- Calques et historique complet.',
+  '- Rotation libre de groupes.',
+  '- Formatage de texte avance et polices vectorielles.',
+  '- Importation d''images raster, d''AI moderne complexe et de PDF multipages.',
+  '- Les commandes grisees dans les menus.',
+  '# Notes techniques',
+  'Le logiciel est ecrit en Pascal pour Free Pascal 3.2 et utilise le mode graphique 640 x 480 a palette indexee (ou davantage avec -maxscreen).',
+  '',
+  '@T Depannage',
+  '# Je ne vois pas ce que je dessine',
+  'Verifiez la couleur de trait : si elle est blanche, un trait est invisible sur la page. Cliquez le carre de trait pour changer de couleur.',
+  '  Si le remplissage est actif, le dessin se cache derriere un autre objet : utilisez Objet, Premier plan.',
+  '# Mon objet ne se deplace pas',
+  'Verifiez que l''outil Selection est actif et que l''objet est bien selectionne (poignees visibles). Un texte en cours de saisie doit d''abord etre valide par Entree.',
+  '# Une commande est grisee',
+  'Elle n''est pas encore implementee. Certaines commandes demandent aussi une selection : Aligner (2 objets), Distribuer (3 objets).',
+  '# "Transformation refusee"',
+  'Le resultat sortirait de la page. Deplacez d''abord l''objet vers le centre ou utilisez un facteur plus petit.',
+  '# Un fichier ne s''ouvre pas',
+  'Le message de la barre d''etat donne la raison : format non reconnu, fichier endommage ou contenu non vectoriel. Un fichier AI moderne enregistre avec des images ou des effets complexes est lu partiellement.',
+  '# J''ai perdu mon travail apres un plantage',
+  'Enregistrez regulierement (Ctrl+S) et preferez le format AI10 pour conserver tous les objets sans perte.',
+  '# Les couleurs ne correspondent pas',
+  'La palette est limitee a 16 couleurs VGA. Les couleurs importees sont ramenees a la plus proche.',
+  '',
+  '@T Astuces',
+  '# Gagner du temps',
+  '- Survolez un outil ou une icone pour lire son info-bulle.',
+  '- Utilisez les raccourcis clavier : V, A, M, L, B, T, Z changent d''outil sans quitter le dessin.',
+  '- Appuyez sur 0 pour revenir a 100 % de zoom.',
+  '- Servez-vous de la baguette magique pour changer la couleur de tous les objets semblables.',
+  '- Pipette : copiez l''apparence d''un objet sur plusieurs autres.',
+  '# Dessiner avec precision',
+  '- Creez des reperes en glissant depuis les regles.',
+  '- Utilisez Aligner et Distribuer plutot que de placer les objets a l''oeil.',
+  '- Zoomez a 400 % ou 800 % avant de deplacer un point d''ancrage.',
+  '# Courbes',
+  '- Placez le moins de points possible : une courbe de Bezier bien reglee vaut mieux qu''un trait a main levee.',
+  '- Apres un trait au crayon, utilisez Chemin, Simplifier pour retirer les points inutiles.',
+  '# Organisation',
+  '- Groupez les objets d''un meme motif pour les deplacer ensemble.',
+  '- Enregistrez en AI10 pour garder toutes les informations.',
+  '',
+  '@T Glossaire',
+  '# Termes',
+  '~ Ancrage | Point qui definit un sommet d''un chemin ou d''une courbe',
+  '~ Bezier | Courbe definie par deux ancrages et deux poignees de controle',
+  '~ Chemin | Suite de points relies par des segments ou des courbes',
+  '~ Contour | Trait qui entoure un objet',
+  '~ Degrade | Passage progressif d''une couleur a une autre',
+  '~ Fondu | Suite de formes intermediaires entre deux objets',
+  '~ Groupe | Ensemble d''objets traites comme un seul',
+  '~ Poignee | Petit carre qui permet de redimensionner ou de courber',
+  '~ Repere | Ligne d''aide qui n''est pas imprimee',
+  '~ Remplissage | Couleur qui garnit l''interieur d''un objet',
+  '~ Vectoriel | Decrit par des formules, net a tout agrandissement',
+  '~ Zoom | Agrandissement ou reduction de l''affichage',
+  '',
+  '@T A propos et ressources',
+  '# A propos',
+  'About Illustrator v1.0 est un editeur de dessin vectoriel ecrit en Pascal (Free Pascal).',
+  'Auteur : Sylvain Maltais (support@gladir.com).',
+  '# Ressources',
+  'Site web : https://www.gladir.com/clonedraw',
+  '# Voir aussi',
+  'Le menu Aide propose aussi "Raccourcis" (tableau des touches), "A propos" (informations sur le logiciel), "Ressources" (lien du projet) et "Astuces" (conseils d''utilisation).');
+
+Const
+ HELP_W = 632;
+ HELP_H = 456;
+ HELP_LISTW = 208;
+ HELP_VIS = 31;
+ HELP_MAXENT = 96;
+ HELP_MAXROWS = 3000;
+ HELP_KEYW = 140;
+
+Type
+ THelpRow = Record
+  Kind: Byte;
+  Txt: String[110];
+ End;
+
+Var
+ HelpDragging, HelpReady: Boolean;
+ HelpTopic, HelpScroll, HelpListTop, HelpDragOff, HelpFocus: Integer;
+ HelpEntryCount, HelpTopicCount, HelpRowCount: Integer;
+ HelpEntry: Array[0..HELP_MAXENT-1] Of Integer;
+ HelpTopicEnt: Array[0..HELP_MAXENT-1] Of Integer;
+ HelpRows: Array[0..HELP_MAXROWS-1] Of THelpRow;
+
+Procedure HelpInit;
+Var I: Integer;
+Begin
+ If HelpReady Then Exit;
+ HelpReady := True;
+ HelpEntryCount := 0; HelpTopicCount := 0;
+ For I := 0 To HELP_LINES-1 Do
+  If (Length(HelpData[I]) > 2) And (HelpData[I][1] = '@') And
+     (HelpEntryCount < HELP_MAXENT) Then Begin
+   HelpEntry[HelpEntryCount] := I;
+   If HelpData[I][2] = 'T' Then Begin
+    HelpTopicEnt[HelpTopicCount] := HelpEntryCount;
+    Inc(HelpTopicCount);
+   End;
+   Inc(HelpEntryCount);
+  End;
+ HelpTopic := 0;
+End;
+
+Function HelpTrim(S: String): String;
+Begin
+ While (S <> '') And (S[1] = ' ') Do Delete(S,1,1);
+ While (S <> '') And (S[Length(S)] = ' ') Do Delete(S,Length(S),1);
+ HelpTrim := S;
+End;
+
+Procedure HelpAddRow(K: Byte; Const S: String);
+Begin
+ If HelpRowCount >= HELP_MAXROWS Then Exit;
+ HelpRows[HelpRowCount].Kind := K;
+ HelpRows[HelpRowCount].Txt := Copy(S,1,110);
+ Inc(HelpRowCount);
+End;
+
+{ coupe S en lignes de Width caracteres au plus, a la limite d'un mot }
+Procedure HelpAddWrapped(KFirst, KNext: Byte; S: String; Width: Integer);
+Var Cut: Integer;
+Begin
+ If S = '' Then Begin HelpAddRow(KFirst,''); Exit; End;
+ While Length(S) > Width Do Begin
+  Cut := Width;
+  While (Cut > 1) And (S[Cut+1] <> ' ') Do Dec(Cut);
+  If Cut <= 1 Then Cut := Width;
+  HelpAddRow(KFirst,HelpTrim(Copy(S,1,Cut)));
+  KFirst := KNext;
+  Delete(S,1,Cut);
+  S := HelpTrim(S);
+ End;
+ If S <> '' Then HelpAddRow(KFirst,S);
+End;
+
+{ met en page le sujet T dans HelpRows }
+Procedure HelpBuild(T: Integer);
+Var E, I, First, Last, P, Start: Integer; S, Key, Desc: String; Term: Boolean;
+Begin
+ HelpRowCount := 0;
+ HelpScroll := 0;
+ E := HelpTopicEnt[T];
+ First := HelpEntry[E]+1;
+ If E+1 < HelpEntryCount Then Last := HelpEntry[E+1]-1 Else Last := HELP_LINES-1;
+ HelpAddRow(7,Copy(HelpData[HelpEntry[E]],4,100));
+ HelpAddRow(6,'');
+ For I := First To Last Do Begin
+  S := HelpData[I];
+  If S = '' Then Begin
+   If HelpRows[HelpRowCount-1].Kind <> 6 Then HelpAddRow(6,'');
+  End Else If S[1] = '#' Then Begin
+   If HelpRows[HelpRowCount-1].Kind <> 6 Then HelpAddRow(6,'');
+   HelpAddRow(1,Copy(S,3,100));
+  End Else If (Length(S) > 1) And (S[1] = '-') And (S[2] = ' ') Then
+   HelpAddWrapped(2,5,Copy(S,3,250),44)
+  Else If (Length(S) > 1) And ((S[1] = '=') Or (S[1] = '~')) And (Pos('|',S) > 0) Then Begin
+   Term := S[1] = '~';
+   P := Pos('|',S);
+   Key := HelpTrim(Copy(S,2,P-2));
+   Desc := HelpTrim(Copy(S,P+1,250));
+   Start := HelpRowCount;
+   HelpAddWrapped(4,4,Desc,29);
+   If Start < HelpRowCount Then Begin
+    If Term Then HelpRows[Start].Kind := 8 Else HelpRows[Start].Kind := 3;
+    HelpRows[Start].Txt := Copy(Key+'|'+HelpRows[Start].Txt,1,110);
+   End;
+  End Else
+   HelpAddWrapped(0,0,HelpTrim(S),46);
+ End;
+End;
+
+Function HelpMaxScroll: Integer;
+Begin
+ If HelpRowCount > HELP_VIS Then HelpMaxScroll := HelpRowCount-HELP_VIS
+ Else HelpMaxScroll := 0;
+End;
+
+Function HelpMaxListTop: Integer;
+Begin
+ If HelpEntryCount > HELP_VIS Then HelpMaxListTop := HelpEntryCount-HELP_VIS
+ Else HelpMaxListTop := 0;
+End;
+
+Procedure HelpClamp;
+Begin
+ If HelpScroll > HelpMaxScroll Then HelpScroll := HelpMaxScroll;
+ If HelpScroll < 0 Then HelpScroll := 0;
+ If HelpListTop > HelpMaxListTop Then HelpListTop := HelpMaxListTop;
+ If HelpListTop < 0 Then HelpListTop := 0;
+End;
+
+Procedure HelpSelectTopic(T: Integer);
+Var E: Integer;
+Begin
+ HelpInit;
+ If T >= HelpTopicCount Then T := HelpTopicCount-1;
+ If T < 0 Then T := 0;
+ HelpTopic := T;
+ HelpBuild(T);
+ E := HelpTopicEnt[T];
+ If (E > 0) And (HelpData[HelpEntry[E-1]][2] = 'G') Then Dec(E);
+ If E < HelpListTop Then HelpListTop := E;
+ E := HelpTopicEnt[T];
+ If E >= HelpListTop+HELP_VIS Then HelpListTop := E-HELP_VIS+1;
+ HelpClamp;
+ NeedsRedraw := True;
+End;
+
+Function HelpFindTopic(Const Title: String): Integer;
+Var I: Integer;
+Begin
+ HelpInit;
+ HelpFindTopic := 0;
+ For I := 0 To HelpTopicCount-1 Do
+  If Copy(HelpData[HelpEntry[HelpTopicEnt[I]]],4,100) = Title Then HelpFindTopic := I;
+End;
+
+Procedure OpenHelp(T: Integer);
+Begin
+ ResetToolTip;
+ HelpInit;
+ HelpActive := True;
+ HelpDragging := False;
+ HelpFocus := 0;
+ HelpSelectTopic(T);
+ StatusMessage := 'Aide : Echap pour fermer, fleches pour defiler.';
+ NeedsRedraw := True;
+End;
+
+Procedure CloseHelp;
+Begin
+ HelpActive := False;
+ HelpDragging := False;
+ NeedsRedraw := True;
+End;
+
+{ barre de defilement verticale de 14 pixels de large }
+Procedure DrawHelpScroll(X, Y, H, Total, Vis, Pos: Integer);
+Var Track, ThumbH, ThumbY: LongInt;
+Begin
+ SetFillStyle(SolidFill,COLOR_BG);
+ Bar(X,Y,X+13,Y+H-1);
+ UiRaised(X,Y,X+13,Y+13); UiArrow(X+7,Y+7,True);
+ UiRaised(X,Y+H-14,X+13,Y+H-1); UiArrow(X+7,Y+H-7,False);
+ If Total > Vis Then Begin
+  Track := H-28;
+  ThumbH := Track*Vis Div Total;
+  If ThumbH < 10 Then ThumbH := 10;
+  ThumbY := Y+14+(Track-ThumbH)*Pos Div (Total-Vis);
+  UiRaised(X,ThumbY,X+13,ThumbY+ThumbH-1);
+ End;
+End;
+
+{ clic dans une barre de defilement : fleches, pages, curseur }
+Procedure HelpScrollClick(Y, H, Total, Vis: Integer; Var Pos: Integer; Var Drag: Boolean);
+Var Track, ThumbH, ThumbY: LongInt;
+Begin
+ If Total <= Vis Then Exit;
+ If MouseY < Y+14 Then Dec(Pos)
+ Else If MouseY >= Y+H-14 Then Inc(Pos)
+ Else Begin
+  Track := H-28;
+  ThumbH := Track*Vis Div Total;
+  If ThumbH < 10 Then ThumbH := 10;
+  ThumbY := Y+14+(Track-ThumbH)*Pos Div (Total-Vis);
+  If MouseY < ThumbY Then Dec(Pos,Vis-1)
+  Else If MouseY >= ThumbY+ThumbH Then Inc(Pos,Vis-1)
+  Else Begin Drag := True; HelpDragOff := MouseY-ThumbY; End;
+ End;
+ If Pos < 0 Then Pos := 0;
+ If Pos > Total-Vis Then Pos := Total-Vis;
+End;
+
+Procedure HelpDragTo(Y, H: Integer);
+Var Track, ThumbH, P: LongInt;
+Begin
+ If HelpRowCount <= HELP_VIS Then Exit;
+ Track := H-28;
+ ThumbH := Track*HELP_VIS Div HelpRowCount;
+ If ThumbH < 10 Then ThumbH := 10;
+ If Track = ThumbH Then Exit;
+ P := (MouseY-HelpDragOff-(Y+14))*(HelpRowCount-HELP_VIS) Div (Track-ThumbH);
+ HelpScroll := P;
+ HelpClamp;
+End;
+
+Procedure HelpGeom(Var X, Y: Integer);
+Begin
+ X := (ScreenWidth-HELP_W) Div 2;
+ Y := (ScreenHeight-HELP_H) Div 2;
+ If Y < 0 Then Y := 0;
+End;
+
+Procedure DrawHelp;
+Var X, Y, I, R, E, RY, TX, PX, BH, P: Integer; S, Key: String; Cap: Integer;
+Begin
+ If Not HelpActive Then Exit;
+ HelpGeom(X,Y);
+ BH := HELP_VIS*12+4;
+ UiWindow(X,Y,X+HELP_W,Y+HELP_H,'Aide - About Illustrator');
+ { liste des sujets }
+ UiSunken(X+8,Y+30,X+8+HELP_LISTW,Y+30+BH-1);
+ For I := 0 To HELP_VIS-1 Do Begin
+  E := HelpListTop+I;
+  If E >= HelpEntryCount Then Break;
+  RY := Y+32+I*12;
+  S := HelpData[HelpEntry[E]];
+  If S[2] = 'G' Then Begin
+   SetFillStyle(SolidFill,COLOR_BG);
+   Bar(X+10,RY-1,X+8+HELP_LISTW-16,RY+9);
+   SetColor(COLOR_TEXT);
+   OutTextXY(X+13,RY,Copy(S,4,22));
+   OutTextXY(X+14,RY,Copy(S,4,22));
+  End Else Begin
+   If E = HelpTopicEnt[HelpTopic] Then Begin
+    If HelpFocus = 0 Then SetFillStyle(SolidFill,COLOR_HIGHLIGHT)
+    Else SetFillStyle(SolidFill,COLOR_BORDER);
+    Bar(X+10,RY-1,X+8+HELP_LISTW-16,RY+9);
+    SetColor(15);
+   End Else SetColor(COLOR_TEXT);
+   OutTextXY(X+22,RY,Copy(S,4,22));
+  End;
+ End;
+ DrawHelpScroll(X+8+HELP_LISTW-14,Y+31,BH-2,HelpEntryCount,HELP_VIS,HelpListTop);
+ { texte du sujet }
+ PX := X+HELP_LISTW+16;
+ UiSunken(PX,Y+30,X+HELP_W-8,Y+30+BH-1);
+ TX := PX+8;
+ For I := 0 To HELP_VIS-1 Do Begin
+  R := HelpScroll+I;
+  If R >= HelpRowCount Then Break;
+  RY := Y+32+I*12;
+  S := HelpRows[R].Txt;
+  Case HelpRows[R].Kind Of
+   7: Begin
+    SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
+    Bar(PX+3,RY-2,X+HELP_W-8-17,RY+9);
+    SetColor(15);
+    OutTextXY(TX,RY,S); OutTextXY(TX+1,RY,S);
+   End;
+   1: Begin
+    SetColor(COLOR_HIGHLIGHT);
+    OutTextXY(TX,RY,S); OutTextXY(TX+1,RY,S);
+   End;
+   2, 5: Begin
+    If HelpRows[R].Kind = 2 Then Begin
+     SetFillStyle(SolidFill,COLOR_HIGHLIGHT);
+     Bar(TX+3,RY+2,TX+6,RY+5);
+    End;
+    UiText(TX+14,RY,S);
+   End;
+   3, 8: Begin
+    P := Pos('|',S);
+    Key := Copy(S,1,P-1);
+    If (HelpRows[R].Kind = 3) And (Key <> '') And (Key[1] <> '(') Then
+     DrawKeys(TX,RY,Key)
+    Else Begin
+     SetColor(COLOR_HIGHLIGHT);
+     OutTextXY(TX,RY,Key); OutTextXY(TX+1,RY,Key);
+    End;
+    UiText(TX+HELP_KEYW,RY,Copy(S,P+1,110));
+   End;
+   4: UiText(TX+HELP_KEYW,RY,S);
+  Else If S <> '' Then UiText(TX,RY,S);
+  End;
+ End;
+ DrawHelpScroll(X+HELP_W-8-14,Y+31,BH-2,HelpRowCount,HELP_VIS,HelpScroll);
+ { cadre bleu autour du volet qui a le focus }
+ SetColor(COLOR_HIGHLIGHT);
+ If HelpFocus = 0 Then Rectangle(X+9,Y+31,X+8+HELP_LISTW-1,Y+30+BH-2)
+ Else Rectangle(PX+1,Y+31,X+HELP_W-9,Y+30+BH-2);
+ { boutons }
+ UiButton(X+8,Y+HELP_H-34,X+100,Y+HELP_H-10,'Precedent',False,HelpTopic > 0);
+ UiButton(X+108,Y+HELP_H-34,X+200,Y+HELP_H-10,'Suivant',False,HelpTopic < HelpTopicCount-1);
+ Str(HelpTopic+1,S); Str(HelpTopicCount,Key);
+ UiText(X+216,Y+HELP_H-26,'Sujet '+S+' sur '+Key);
+ UiButton(X+HELP_W-100,Y+HELP_H-34,X+HELP_W-12,Y+HELP_H-10,'Fermer',True,True);
+End;
+
+Procedure HandleHelpMouse;
+Var X, Y, E, I, BH: Integer; Dummy: Boolean;
+Begin
+ NeedsRedraw := True;
+ HelpGeom(X,Y);
+ BH := HELP_VIS*12+4;
+ If UiCloseHit(X+HELP_W,Y) Then CloseHelp
+ Else If UiInside(X+HELP_W-100,Y+HELP_H-34,X+HELP_W-12,Y+HELP_H-10) Then CloseHelp
+ Else If UiInside(X+8,Y+HELP_H-34,X+100,Y+HELP_H-10) Then Begin
+  If HelpTopic > 0 Then HelpSelectTopic(HelpTopic-1);
+ End Else If UiInside(X+108,Y+HELP_H-34,X+200,Y+HELP_H-10) Then Begin
+  If HelpTopic < HelpTopicCount-1 Then HelpSelectTopic(HelpTopic+1);
+ End Else If UiInside(X+8+HELP_LISTW-14,Y+31,X+8+HELP_LISTW-1,Y+BH+28) Then Begin
+  Dummy := False;
+  HelpFocus := 0;
+  HelpScrollClick(Y+31,BH-2,HelpEntryCount,HELP_VIS,HelpListTop,Dummy);
+ End Else If UiInside(X+8,Y+31,X+8+HELP_LISTW-15,Y+BH+28) Then Begin
+  HelpFocus := 0;
+  E := HelpListTop+(MouseY-Y-32) Div 12;
+  If (MouseY >= Y+32) And (E < HelpEntryCount) And (HelpData[HelpEntry[E]][2] = 'T') Then
+   For I := 0 To HelpTopicCount-1 Do
+    If HelpTopicEnt[I] = E Then HelpSelectTopic(I);
+ End Else If UiInside(X+HELP_W-8-14,Y+31,X+HELP_W-9,Y+BH+28) Then Begin
+  HelpFocus := 1;
+  HelpScrollClick(Y+31,BH-2,HelpRowCount,HELP_VIS,HelpScroll,HelpDragging);
+ End Else If UiInside(X+HELP_LISTW+16,Y+31,X+HELP_W-9,Y+BH+28) Then
+  HelpFocus := 1;
+End;
+
+{ suivi du curseur de la barre de defilement pendant le glissement }
+Procedure HelpMouseHold;
+Var X, Y: Integer;
+Begin
+ If Not HelpDragging Then Exit;
+ If (MouseButtons And 1) = 0 Then Begin HelpDragging := False; Exit; End;
+ HelpGeom(X,Y);
+ HelpDragTo(Y+31,HELP_VIS*12+2);
+ NeedsRedraw := True;
+End;
+
+{ passe au sujet de numero T ; Step = sens de recherche si T sort des bornes }
+Procedure HelpMoveTopic(Delta: Integer);
+Begin
+ If Delta < 0 Then Begin
+  If HelpTopic > 0 Then HelpSelectTopic(HelpTopic+Delta);
+ End Else If HelpTopic < HelpTopicCount-1 Then HelpSelectTopic(HelpTopic+Delta);
+End;
+
+Procedure HandleHelpKey(Key, ExtKey: Char);
+Begin
+ NeedsRedraw := True;
+ If Key = #27 Then Begin CloseHelp; Exit; End;
+ If Key = #9 Then Begin HelpFocus := 1-HelpFocus; Exit; End;
+ If Key = #0 Then Begin
+  Case ExtKey Of
+   #75: HelpMoveTopic(-1);
+   #77: HelpMoveTopic(1);
+   #15: HelpFocus := 1-HelpFocus;
+  Else If HelpFocus = 0 Then Begin
+   { focus sur la liste : les fleches changent de sujet }
+   Case ExtKey Of
+    #72: HelpMoveTopic(-1);
+    #80: HelpMoveTopic(1);
+    #73: HelpMoveTopic(-10);
+    #81: HelpMoveTopic(10);
+    #71: HelpSelectTopic(0);
+    #79: HelpSelectTopic(HelpTopicCount-1);
+   End;
+  End Else Begin
+   { focus sur le texte : les fleches font defiler }
+   Case ExtKey Of
+    #72: Dec(HelpScroll);
+    #80: Inc(HelpScroll);
+    #73: Dec(HelpScroll,HELP_VIS-1);
+    #81: Inc(HelpScroll,HELP_VIS-1);
+    #71: HelpScroll := 0;
+    #79: HelpScroll := HelpMaxScroll;
+   End;
+  End;
+  End;
+  HelpClamp;
+ End Else If Key = ' ' Then Begin
+  Inc(HelpScroll,HELP_VIS-1);
+  HelpClamp;
+ End;
+End;
 Procedure RunCommand(Command: Byte);
 Begin
  CloseMenu;
@@ -7251,15 +8527,15 @@ Begin
                            MENUBAR_HEIGHT+(ScreenHeight-MENUBAR_HEIGHT-STATUSBAR_HEIGHT) Div 2);
   CMD_ZOOM_RESET: ResetZoom;
   CMD_HELP:
-   ShowDialog('Aide', 'CloneDRAW AI : dessin vectoriel inspire d''Adobe Illustrator. Les commandes grisees ne sont pas encore disponibles.');
+   OpenHelp(0);
   CMD_SHORTCUTS:
    ShowDialog('Raccourcis', 'Ctrl+O ouvrir, Ctrl+S enregistrer, Ctrl+Z annuler, Ctrl+Y retablir, Ctrl+X/C/V couper-copier-coller, Ctrl+A tout selectionner, Ctrl+R regles, F10 menus.');
   CMD_ABOUT:
-   ShowDialog('A propos', 'CloneDRAW AI - editeur vectoriel ecrit en Pascal (Free Pascal). Ce n''est pas un clone complet d''Adobe Illustrator.');
+   ShowDialog('A propos', 'About Illustrator v1.0 - editeur de dessin vectoriel ecrit en Pascal (Free Pascal). Auteur : Sylvain Maltais (support@gladir.com) - https://www.gladir.com/clonedraw');
   CMD_RESOURCES:
    ShowDialog('Ressources', 'https://www.gladir.com/clonedraw');
   CMD_TIPS:
-   ShowDialog('Astuces', 'Cliquez un menu, survolez ses lignes, cliquez pour agir.');
+   OpenHelp(HelpFindTopic('Astuces'));
  End;
 End;
 
@@ -7416,7 +8692,10 @@ Begin
  If TextActive And Pressed Then
   If (MenuBarHitTest(MouseX,MouseY) >= 0) Or
      (ToolHitTest(MouseX,MouseY) >= 0) Then FinishText(True);
- If ColorActive Then Begin
+ If HelpActive Then Begin
+  If Pressed Then HandleHelpMouse;
+  HelpMouseHold;
+ End Else If ColorActive Then Begin
   If Pressed Then HandleColorMouse;
  End Else If GlyphActive Then Begin
   If Pressed Then HandleGlyphMouse;
@@ -7502,6 +8781,7 @@ Begin
  End;
  If Released Then MenuMouseDown := False;
  If Not MenuActive And Not PropActive And Not ChoiceActive And Not GlyphActive And
+    Not HelpActive And
     Not FileDialogActive And (DialogTitle = '') And Not DrawingMode Then Begin
   If TopItemAt(MouseX,MouseY) <> TopHoverLast Then Begin
    TopHoverLast := TopItemAt(MouseX,MouseY);
@@ -7535,6 +8815,7 @@ Var S: String; Capacity: Integer;
 Begin
  ResetToolTip;
  NeedsRedraw := True;
+ If HelpActive Then Begin HandleHelpKey(Key,ExtKey); Exit; End;
  If ColorActive Then Begin HandleColorKey(Key,ExtKey); Exit; End;
  If GlyphActive Then Begin HandleGlyphKey(Key); Exit; End;
  If ChoiceActive Then Begin HandleChoiceKey(Key,ExtKey); Exit; End;
@@ -7625,6 +8906,11 @@ Begin
  If DialogTitle <> '' Then Begin
   If Key = #13 Then CloseMessage(True)
   Else If (Key = #27) Or (Key = ' ') Then CloseMessage(False);
+  Exit;
+ End;
+ If (Key = #0) And (ExtKey = #59) Then Begin
+  CloseMenu;
+  OpenHelp(0);
   Exit;
  End;
  If (Key = #0) And (ExtKey = #68) Then Begin
@@ -7745,6 +9031,7 @@ Begin
  DrawGlyphDialog;
  DrawColorDialog;
  DrawMessage;
+ DrawHelp;
  If FileDialogActive Then DrawFileDialog;
  DrawToolTip;
  ShowMouse;
@@ -9528,6 +10815,7 @@ End;
 
 Function LoadDocument(Name: String): Boolean;
 Var F: File; Sig: Array[0..3] Of Char; Got: Word; Code, I: Integer;
+ LoadDir: DirStr; LoadName: NameStr; LoadExt: ExtStr;
  Good, Legacy, IsPdfAi: Boolean; Size: LongInt; Err0: String;
 Begin
  LoadDocument := False; ImportError := ''; ImpClear; IsPdfAi := False;
@@ -9562,13 +10850,16 @@ Begin
  ClearSelFlags;
  ClearHistory;
  SelectedObject := -1; CurrentFile := Name; FileModified := False;
+ { dossier du dernier fichier charge : point de depart de la prochaine ouverture }
+ FSplit(FExpand(Name),LoadDir,LoadName,LoadExt);
+ If LoadDir <> '' Then LastOpenDir := LoadDir;
  If Legacy Then CurrentSaveFormat := 2
  Else Begin
   CurrentSaveFormat := 0;
   If UpperText(Copy(Name,Length(Name)-3,4))='.EPS' Then CurrentSaveFormat := 1;
  End;
  ResetZoom; NeedsRedraw := True;
- If Legacy Then StatusMessage := 'Format prive AI10 charge (pas Adobe Illustrator).'
+ If Legacy Then StatusMessage := 'Format prive AI10 charge (pas About Illustrator).'
  Else If IsPdfAi Then Begin
   If ObjectCount=0 Then
    StatusMessage := 'AI/PDF sans vecteur (page vide ou images raster non gerees).'
@@ -10376,6 +11667,35 @@ Begin
  End;
 End;
 
+{ Banniere de demarrage, affichee par-dessus l'IDE pendant 1,5 seconde }
+Procedure ShowSplash;
+Var X, Y, W, H: Integer; T0: LongInt; K: Char;
+Begin
+ W := 440; H := 26+104+8+36;
+ X := (ScreenWidth-W) Div 2;
+ Y := (ScreenHeight-H) Div 2;
+ HideMouse;
+ UiWindow(X,Y,X+W,Y+H,'About Illustrator');
+ DrawAboutArt(X+8,Y+26,X+W-8,Y+26+104);
+ UiText(X+12,Y+26+104+12,'About Illustrator v1.0 - dessin vectoriel');
+ UiText(X+12,Y+26+104+24,'Chargement...');
+ ShowMouse;
+ T0 := ToolTipClock;
+ { duree fixe : le clavier est ignore (une touche restee dans le tampon au
+   lancement ne doit pas fermer la banniere) }
+ While Abs(ToolTipClock-T0) < 150 Do Begin
+  If KeyPressed Then Begin
+   K := ReadKey;
+   If K = #0 Then K := ReadKey;
+  End;
+  Delay(10);
+ End;
+ While KeyPressed Do Begin
+  K := ReadKey;
+  If K = #0 Then K := ReadKey;
+ End;
+End;
+
 Procedure Initialize;
 Var
  I: Integer;
@@ -10409,6 +11729,7 @@ Begin
  GridVisible := True;
  PropActive := False;
  ColorActive := False; ToolDrag := False; BlendFirst := -1; PolyN := 6; StarN := 5;
+ HelpActive := False; HelpReady := False; HelpDragging := False;
  GlyphActive := False; ChoiceActive := False; MarqueeActive := False; EditMulti := False;
  RulersVisible := True; GuidesVisible := True;
  GuideHead := Nil; GuideCur := Nil; GuideDragging := False;
@@ -10442,7 +11763,7 @@ End;
 
 Procedure ShowUsage;
 Begin
- WriteLn(PROGRAM_NAME,' : clone d''Adobe Illustrator (dessin vectoriel).');
+ WriteLn('AI : Cette commande permet de lancer About Illustrator (dessin vectoriel).');
  WriteLn;
  WriteLn('Syntaxe : AI [-maxscreen] [fichier.ai|fichier.eps]');
  WriteLn;
@@ -10507,7 +11828,11 @@ Begin
   If Not LoadDocument(ArgFile) Then StatusMessage := Copy(ImportError,1,75);
   NeedsRedraw := True;
  End;
- 
+ { l'IDE d'abord, puis la banniere par-dessus ; MainLoop redessine ensuite }
+ RedrawInterface;
+ ShowSplash;
+ NeedsRedraw := True;
+
  MainLoop;
  
  Cleanup;

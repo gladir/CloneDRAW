@@ -12186,20 +12186,21 @@ Begin
 End;
 
 Function MenuItemAt(Idx,SX,SY:Integer):Integer;
-Var I,Y:Integer;
+Var I,IY:Integer;
 Begin
  MenuItemAt:=-1;
  If Idx<0 Then Exit;
- With Menus[Idx] Do Begin
-  If(SX<X)or(SX>=X+W)or(SY<Y)or(SY>=Y+MenuHeight(Menus[Idx]))Then Exit;
-  For I:=0 To N-1 Do Begin
-   Y:=Menus[Idx].Y+ItemTop(Menus[Idx],I);
-   If It[I].Cmd<>0 Then
-    If(SY>=Y)and(SY<Y+ITEM_H)Then Begin
-     MenuItemAt:=I;
-     Exit;
-    End;
-  End;
+ { Attention : dans With, Y designerait le champ Menus[Idx].Y (et non une
+   variable locale) et deplacerait le menu a chaque survol : IY est local. }
+ If(SX<Menus[Idx].X)or(SX>=Menus[Idx].X+Menus[Idx].W)or(SY<Menus[Idx].Y)or
+   (SY>=Menus[Idx].Y+MenuHeight(Menus[Idx]))Then Exit;
+ For I:=0 To Menus[Idx].N-1 Do Begin
+  IY:=Menus[Idx].Y+ItemTop(Menus[Idx],I);
+  If Menus[Idx].It[I].Cmd<>0 Then
+   If(SY>=IY)and(SY<IY+ITEM_H)Then Begin
+    MenuItemAt:=I;
+    Exit;
+   End;
  End;
 End;
 
@@ -13161,6 +13162,103 @@ Begin
  ColorBox:=R;
 End;
 
+{ Illustration optionnelle en tete de TextBox (hauteur TBannerH, 0 = aucune) }
+Var
+ TBannerH:Integer;
+
+{ Branche de corail : segment epais qui se divise en trois, de plus en plus fin }
+Procedure CoralBranch(X,Y:Integer;A:Real;Len,Depth:Integer);
+Var X2,Y2,C:Integer;
+Begin
+ X2:=X+Round(Cos(A)*Len);
+ Y2:=Y+Round(Sin(A)*Len);
+ Case Depth Of
+  0:C:=17;
+  1:C:=12;
+  2,3:C:=27;
+ Else C:=41;
+ End;
+ SetCol(C);
+ If Depth>=3 Then SetLineStyle(SolidLn,0,ThickWidth);
+ Line(X,Y,X2,Y2);
+ SetLineStyle(SolidLn,0,NormWidth);
+ If Depth>=2 Then Begin
+  Line(X+1,Y,X2+1,Y2);
+  Line(X-1,Y,X2-1,Y2);
+ End;
+ If Depth=0 Then Begin
+  SetFillCol(44);
+  SetCol(44);
+  FillEllipse(X2,Y2,2,2);
+ End
+  Else
+ Begin
+  CoralBranch(X2,Y2,A-0.55,Len*3 Div 4,Depth-1);
+  CoralBranch(X2,Y2,A+0.05,Len*4 Div 5,Depth-1);
+  CoralBranch(X2,Y2,A+0.50,Len*3 Div 4,Depth-1);
+ End;
+End;
+
+{ Un tableau de mer avec son corail et la palette du peintre }
+Procedure DrawAboutBanner(X,Y,W:Integer);
+Const
+ PX:Array[0..6] of Integer=(-62,-42,-14,18,46,64,52);
+ PY:Array[0..6] of Integer=(2,-24,-34,-30,-12,14,34);
+ PC:Array[0..6] of Integer=(4,14,1,2,44,16,22);
+Var FX,FY,FW,FH,I,CX,CY:Integer;
+Begin
+ { cadre du tableau }
+ FX:=X+24; FY:=Y+30; FW:=290; FH:=106;
+ Box(FX,FY,FX+FW,FY+FH,45);
+ Box(FX+4,FY+4,FX+FW-4,FY+FH-4,19);
+ { mer : trois bandes }
+ Box(FX+8,FY+8,FX+FW-8,FY+38,42);
+ Box(FX+8,FY+39,FX+FW-8,FY+68,21);
+ Box(FX+8,FY+69,FX+FW-8,FY+FH-8,20);
+ { fond sableux }
+ SetFillCol(28);
+ SetCol(28);
+ FillEllipse(FX+FW Div 2,FY+FH-6,FW Div 2-8,10);
+ Box(FX+8,FY+FH-8,FX+FW-8,FY+FH-8,20);
+ { bulles }
+ SetCol(11);
+ Circle(FX+36,FY+30,3);
+ Circle(FX+44,FY+48,2);
+ Circle(FX+250,FY+26,3);
+ Circle(FX+262,FY+46,2);
+ Circle(FX+226,FY+60,2);
+ { les coraux }
+ CoralBranch(FX+FW Div 2,FY+FH-12,-1.5708,24,4);
+ CoralBranch(FX+70,FY+FH-10,-1.80,13,3);
+ CoralBranch(FX+222,FY+FH-10,-1.30,14,3);
+ SetFillCol(43);
+ SetCol(43);
+ FillEllipse(FX+110,FY+FH-14,6,4);
+ FillEllipse(FX+180,FY+FH-13,5,3);
+ { palette du peintre }
+ CX:=X+W-150;
+ CY:=Y+84;
+ SetFillCol(28);
+ SetCol(45);
+ FillEllipse(CX,CY,82,48);
+ SetFillCol(UI_BG);
+ FillEllipse(CX-34,CY+22,11,8);
+ For I:=0 To 6 Do Begin
+  SetFillCol(PC[I]);
+  SetCol(0);
+  FillEllipse(CX+PX[I],CY+PY[I],9,7);
+ End;
+ { pinceau pose en travers de la palette }
+ SetCol(19);
+ SetLineStyle(SolidLn,0,ThickWidth);
+ Line(CX+20,CY+54,CX+96,CY+4);
+ SetCol(37);
+ Line(CX+8,CY+62,CX+22,CY+53);
+ SetCol(44);
+ Line(CX+96,CY+4,CX+108,CY-4);
+ SetLineStyle(SolidLn,0,NormWidth);
+End;
+
 { Affiche TLines[0..TN-1] }
 Procedure TextBox(Const Title:String);
 Var X,Y,W,H,Old,I:Integer;
@@ -13169,13 +13267,14 @@ Var X,Y,W,H,Old,I:Integer;
     Ext:Boolean;
 Begin
  W:=600;
- H:=TN*12+66;
+ H:=TN*12+66+TBannerH;
  X:=(ScreenW-W) Div 2;
  Y:=(ScreenH-H) Div 2;
  MouseOff;
  DrawWin(X,Y,W,H,Title);
+ If TBannerH>0 Then DrawAboutBanner(X,Y,W);
  SetCol(0);
- For I:=0 To TN-1 Do TxtOut(X+14,Y+28+I*12,TLines[I]);
+ For I:=0 To TN-1 Do TxtOut(X+14,Y+28+TBannerH+I*12,TLines[I]);
  DrawBtn(X+W Div 2-30,Y+H-30,60,20,'OK',False);
  MouseOn;
  WaitUp;
@@ -13750,7 +13849,7 @@ End;
 Procedure ShowAbout;
 Begin
  TN:=0;
- TLines[TN]:='CorelDraw clone pour Turbo Pascal / Free Pascal'; Inc(TN);
+ TLines[TN]:='CorailDRW clone pour Turbo Pascal / Free Pascal'; Inc(TN);
  TLines[TN]:='Dessin vectoriel : courbes, formes, texte, remplissages.'; Inc(TN);
  TLines[TN]:=''; Inc(TN);
  TLines[TN]:='Formats : CDR (RIFF CDR4, objets propres à ce clone),'; Inc(TN);
@@ -13758,7 +13857,9 @@ Begin
  TLines[TN]:=''; Inc(TN);
  TLines[TN]:='Auteur : Sylvain Maltais (support@gladir.com)'; Inc(TN);
  TLines[TN]:='https://www.gladir.com/clonedraw'; Inc(TN);
+ TBannerH:=124;
  TextBox('À propos');
+ TBannerH:=0;
 End;
 
 { ------------------------------------------------------------------ }
@@ -13770,7 +13871,7 @@ Var R:Integer;
 Begin
  ConfirmDiscard:=True;
  If Not Modified Then Exit;
- R:=Ask3('CorelDraw','Enregistrer les modifications ?',True);
+ R:=Ask3('CorailDRW','Enregistrer les modifications ?',True);
  If R=0 Then ConfirmDiscard:=False
   Else
  If R=1 Then Begin
@@ -15674,7 +15775,9 @@ Begin
  End;
  If LP or RP Then Begin
   If I>=0 Then RunMenuItem
-   Else If(B=MenuIdx)and(MenuIdx<POPUP_IDX)Then CloseMenu
+   Else If(B=MenuIdx)and(MenuIdx<POPUP_IDX)Then Begin
+    { clic sur le titre du menu ouvert (le survol l'a deja ouvert) : il reste ouvert }
+   End
    Else CloseMenu;
   WaitUp;
  End;
@@ -16012,7 +16115,7 @@ End;
 
 Procedure ShowUsage;
 Begin
- WriteLn('CORELDRW : Cette commande permet de lancer un clone de CorelDRAW (dessin vectoriel).');
+ WriteLn('CORELDRW : Cette commande permet de lancer CorailDRW, un clone de CorelDRAW (dessin vectoriel).');
  WriteLn;
  WriteLn('Syntaxe : CORELDRW [-maxscreen] [fichier.cdr|fichier.wpg]');
  WriteLn('          CORELDRW /SAMPLES');

@@ -1,11 +1,11 @@
 # CloneDRAW
 Suite de programme de dessin en Pascal (Turbo Pascal/Free Pascal)
 
-Aperçu d'Acrobat :
+Aperçu du clone de l'éditeur PDF :
 
 <img width="638" height="479" alt="image" src="https://github.com/user-attachments/assets/9e855450-30b5-443b-89df-b36cc21f9c6a" />
 
-Aperçu d'Adobe Illustrator :
+Aperçu du clone d'About Illustrator :
 
 <img width="639" height="482" alt="image" src="https://github.com/user-attachments/assets/0b23fc66-abcf-4f21-87bf-8904a308eacb" />
 
@@ -13,19 +13,19 @@ Aperçu de ArtWorx :
 
 <img width="641" height="483" alt="image" src="https://github.com/user-attachments/assets/b09280c3-7877-4e96-8091-c65c36b197a9" />
 
-Apercu de AUTOCAD :
+Apercu de style AUTOCAD :
 
 <img width="642" height="482" alt="image" src="https://github.com/user-attachments/assets/2628f44b-b358-4ced-9eb7-591b17ead65c" />
 
-Aperçu du clone Calamus
+Aperçu du clone Calamus :
 
 <img width="641" height="485" alt="image" src="https://github.com/user-attachments/assets/4dc50fe7-0437-4045-9c49-bca581390d9c" />
 
-Aperçu du clone CorelDRAW :
+Aperçu du clone CorailDRAW :
 
 <img width="640" height="479" alt="image" src="https://github.com/user-attachments/assets/b0398e08-7fc0-4c83-a46c-9e04927b64d8" />
 
-Aperçu du clone draw.io :
+Aperçu du clone d'un genre de draw.io :
 
 <img width="639" height="481" alt="image" src="https://github.com/user-attachments/assets/05f0ced2-ef3f-4428-9152-45401c9a1ef0" />
 
@@ -242,7 +242,7 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 		</tr>
 		<tr>
 			<td><b>CORELDRW.PAS</b></td>
-			<td>Cette commande permet de lancer un clone de CorelDRAW (dessin vectoriel).</td>
+			<td>Cette commande permet de lancer un clone de CoraillDRAW (dessin vectoriel).</td>
 		</tr>
 		<tr>
 			<td><b>DRAWIO.PAS</b></td>
@@ -400,14 +400,15 @@ Par exemple, si vous voulez compiler ICO2XBM.PAS, vous devrez tapez la commande 
 
 <pre><b>fpc</b> ICO2XBM.PAS</pre>
 
+Clone d'ArtWorx (ARTWORX.PAS) : editeur de dessin vectoriel oriente objet (Atari ST), avec menus deroulants, boites a outils de dessin / chemin / image / texte, rotation libre, groupes, calques, pages, annuler, fichiers .CWG, exports EPS / SVG / ASCII et import BMP.
+
+Clone de Calamus (CALAMUS.PAS) : logiciel de PAO (publication assistee par ordinateur) pour Atari ST, avec menus deroulants (Fichier, Page, Texte, Vue, Extras), boite a outils hierarchique a icones, cadres de texte / graphiques / raster, 15 formes, rotation libre du texte, polices simulees, styles et alignements, pages multiples, format de page et numerotation, reperes et grille, annuler, fichiers .CDK, import BMP, export de texte et sortie PostScript. Interface en francais, en anglais (LANGUAGE=EN) ou en allemand (LANGUAGE=GR).
+
+Clone de SolderRun (SR.PAS) : editeur de diagrammes de flux de donnees (DFD) hierarchiques, avec menus deroulants et sous-menus (Fichier, Edition, Affichage, Modele, Projet, Outils, Fenetre, Aide), barre d'outils, palette flottante, fenetres multiples, processus / magasins / entites externes / flux, decomposition en diagrammes enfants, annuler/refaire, dictionnaires, verification d'integrite, rapports, export SVG/CSV et fichiers .SRD. Les fichiers .DFD de SolderRun (versions 3.1 et 2.2.4) sont lus : processus, hierarchie, entites, magasins, flux et positions des processus. Menus complets (Affichage, Projet > Concepts avances, Outils > Generer / Epurer, Aide), dialogue Options (formalisme), menus contextuels, palette d'outils avec Notice, Fusion et Changement de hierarchie. Interface en francais, en anglais (LANGUAGE=EN), en allemand (LANGUAGE=GR), en espagnol (LANGUAGE=SP) ou en italien (LANGUAGE=IT).
+
 <h2>Licence</h2>
 <ul>
  <li>Le code source est publié sous la licence <a href="https://github.com/gladir/CloneDRAW/blob/main/LICENSE">MIT</a>.</li>
  <li>Le paquet original est publié sous la licence <a href="https://github.com/gladir/CloneDRAW/blob/main/LICENSE">MIT</a>.</li>
 </ul>
 
-Clone d'ArtWorx (ARTWORX.PAS) : editeur de dessin vectoriel oriente objet (Atari ST), avec menus deroulants, boites a outils de dessin / chemin / image / texte, rotation libre, groupes, calques, pages, annuler, fichiers .CWG, exports EPS / SVG / ASCII et import BMP.
-
-Clone de Calamus (CALAMUS.PAS) : logiciel de PAO (publication assistee par ordinateur) pour Atari ST, avec menus deroulants (Fichier, Page, Texte, Vue, Extras), boite a outils hierarchique a icones, cadres de texte / graphiques / raster, 15 formes, rotation libre du texte, polices simulees, styles et alignements, pages multiples, format de page et numerotation, reperes et grille, annuler, fichiers .CDK, import BMP, export de texte et sortie PostScript. Interface en francais, en anglais (LANGUAGE=EN) ou en allemand (LANGUAGE=GR).
-
-Clone de SolderRun (SR.PAS) : editeur de diagrammes de flux de donnees (DFD) hierarchiques, avec menus deroulants et sous-menus (Fichier, Edition, Affichage, Modele, Projet, Outils, Fenetre, Aide), barre d'outils, palette flottante, fenetres multiples, processus / magasins / entites externes / flux, decomposition en diagrammes enfants, annuler/refaire, dictionnaires, verification d'integrite, rapports, export SVG/CSV et fichiers .SRD. Les fichiers .DFD de SolderRun (versions 3.1 et 2.2.4) sont lus : processus, hierarchie, entites, magasins, flux et positions des processus. Menus complets (Affichage, Projet > Concepts avances, Outils > Generer / Epurer, Aide), dialogue Options (formalisme), menus contextuels, palette d'outils avec Notice, Fusion et Changement de hierarchie. Interface en francais, en anglais (LANGUAGE=EN), en allemand (LANGUAGE=GR), en espagnol (LANGUAGE=SP) ou en italien (LANGUAGE=IT).

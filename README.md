@@ -13,7 +13,7 @@ Aperçu d'ArtWorx :
 
 <img width="641" height="483" alt="image" src="https://github.com/user-attachments/assets/b09280c3-7877-4e96-8091-c65c36b197a9" />
 
-Apercu de style AUTOCAD :
+Apercu d'AutraCAD :
 
 <img width="642" height="482" alt="image" src="https://github.com/user-attachments/assets/2628f44b-b358-4ced-9eb7-591b17ead65c" />
 
@@ -118,7 +118,7 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 	</tr>
     <tr>
         <td><b>AUTOCAD.PAS</b></td>
-        <td>Cette commande permet de lancer un clone de AutoCAD.</td>
+        <td>Cette commande permet de lancer AutraCAD.</td>
     </tr>
     <tr>
       <td><b>BMP2APNG</b></td>

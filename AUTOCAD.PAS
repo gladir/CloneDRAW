@@ -60,7 +60,7 @@ Const
  { Constantes de version }
  VERSION_MAJOR = 1;
  VERSION_MINOR = 0;
- PROGRAM_NAME = 'AUTOCAD - Clone d''AutoCAD';
+ PROGRAM_NAME = 'AutraCAD - Dessin assisté par ordinateur';
 
  { Constantes de l'interface }
  MENUBAR_HEIGHT = 20;
@@ -2051,7 +2051,7 @@ Begin
  Menus[MENU_HELP].Items[3].Shortcut := '';
  Menus[MENU_HELP].Items[3].Enabled := True;
  Menus[MENU_HELP].Items[4].Separator := True;
- Menus[MENU_HELP].Items[5].Caption := 'About AutoCAD';
+ Menus[MENU_HELP].Items[5].Caption := 'About AutraCAD';
  Menus[MENU_HELP].Items[5].Shortcut := '';
  Menus[MENU_HELP].Items[5].Enabled := True;
   End;
@@ -2481,7 +2481,7 @@ Begin
  Menus[MENU_HELP].Items[3].Shortcut := '';
  Menus[MENU_HELP].Items[3].Enabled := True;
  Menus[MENU_HELP].Items[4].Separator := True;
- Menus[MENU_HELP].Items[5].Caption := 'A propos d''AutoCAD';
+ Menus[MENU_HELP].Items[5].Caption := 'A propos d''AutraCAD';
  Menus[MENU_HELP].Items[5].Shortcut := '';
  Menus[MENU_HELP].Items[5].Enabled := True;
   End;
@@ -12843,7 +12843,7 @@ Begin
  SetFillStyle(SolidFill, Blue);
  Bar(CX + 3, CY + 3, CX + W - 3, CY + 22);
  SetColor(White);
- OutTextXY(CX + 10, CY + 8, 'Quitter AUTOCAD');
+ OutTextXY(CX + 10, CY + 8, 'Quitter AutraCAD');
 
  SetColor(Black);
  If CurrentFileName = '' Then
@@ -12947,7 +12947,282 @@ Begin
 End;
 
 { ============================================================================ }
-{ Fonctions pour le format DWG (AutoCAD Drawing) - TODO 21                      }
+{ Boite "A propos" : illustration "Du plan a la realite"                       }
+{ ============================================================================ }
+
+Procedure ShowAbout;
+Const
+ BW = 440;          { largeur de l'illustration }
+ BH = 170;          { hauteur de l'illustration }
+ MIDX = 220;        { milieu : frontiere plan / realite }
+ FX1 = 104;         { facade : bord gauche }
+ FX2 = 272;         { facade : bord droit }
+ FY1 = 44;          { facade : toit }
+ GY = 146;          { ligne de sol }
+ DX = 60;           { decalage de la face laterale }
+ DY = 12;
+ Bayer: Array[0..3, 0..3] Of Integer =
+  ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5));
+Var
+ CX, CY, W, H, AX, AY, BX1, BY1, BX2, BY2: Integer;
+ X, Y, R, C, T, CW, CHt: Integer;
+ Poly: Array[0..3] Of PointType;
+ Done: Boolean;
+ K: Char;
+ LX, LY, LB, PrevLB: LongInt;
+
+ Procedure DashH(XA, XB, YY: Integer);
+ Var P: Integer;
+ Begin
+  P := XA;
+  While P < XB Do Begin
+   Line(P, YY, P + 10, YY);
+   PutPixel(P + 14, YY, LightCyan);
+   Inc(P, 18);
+  End;
+ End;
+
+ Procedure DashV(XX, YA, YB: Integer);
+ Var P: Integer;
+ Begin
+  P := YA;
+  While P < YB Do Begin
+   Line(XX, P, XX, P + 10);
+   PutPixel(XX, P + 14, LightCyan);
+   Inc(P, 18);
+  End;
+ End;
+
+ Procedure Bubble(BXc, BYc: Integer; Ch: String);
+ Begin
+  SetColor(LightCyan);
+  Circle(BXc, BYc, 8);
+  OutTextXY(BXc - 3, BYc - 3, Ch);
+ End;
+
+ { Batiment realiste : verre, metal, ciel }
+ Procedure Realistic;
+ Var R, C, T, Y: Integer;
+ Begin
+  SetFillStyle(SolidFill, LightBlue);
+  Bar(0, 0, BW, GY);
+  SetFillStyle(SolidFill, LightCyan);
+  Bar(0, GY - 34, BW, GY);
+  { immeubles lointains }
+  SetFillStyle(SolidFill, LightGray);
+  Bar(352, 70, 372, GY);
+  Bar(380, 96, 404, GY);
+  Bar(410, 80, 432, GY);
+  SetFillStyle(SolidFill, DarkGray);
+  Bar(0, GY, BW, BH);
+  SetColor(LightGray);
+  Line(0, GY + 10, BW, GY + 10);
+  { dessus }
+  Poly[0].X := FX1;      Poly[0].Y := FY1;
+  Poly[1].X := FX1 + DX; Poly[1].Y := FY1 - DY;
+  Poly[2].X := FX2 + DX; Poly[2].Y := FY1 - DY;
+  Poly[3].X := FX2;      Poly[3].Y := FY1;
+  SetFillStyle(SolidFill, White);
+  FillPoly(4, Poly);
+  { face laterale en verre fonce }
+  Poly[0].X := FX2;      Poly[0].Y := FY1;
+  Poly[1].X := FX2 + DX; Poly[1].Y := FY1 - DY;
+  Poly[2].X := FX2 + DX; Poly[2].Y := GY - DY;
+  Poly[3].X := FX2;      Poly[3].Y := GY;
+  SetFillStyle(SolidFill, Blue);
+  FillPoly(4, Poly);
+  SetColor(LightGray);
+  For T := 0 To 5 Do Begin
+   Y := FY1 + T * ((GY - FY1) Div 5);
+   Line(FX2, Y, FX2 + DX, Y - DY);
+  End;
+  For T := 0 To 4 Do
+   Line(FX2 + T * (DX Div 4), FY1 - T * (DY Div 4),
+        FX2 + T * (DX Div 4), GY - T * (DY Div 4));
+  SetColor(LightCyan);
+  Line(FX2 + 8, GY - 4, FX2 + 28, FY1 + 6);
+  { facade : ossature metallique + vitrage }
+  SetFillStyle(SolidFill, LightGray);
+  Bar(FX1, FY1, FX2, GY);
+  CW := (FX2 - FX1) Div 6;
+  CHt := (GY - FY1) Div 5;
+  For R := 0 To 4 Do
+   For C := 0 To 5 Do Begin
+    If R < 2 Then SetFillStyle(SolidFill, LightCyan)
+    Else If R < 4 Then SetFillStyle(SolidFill, Cyan)
+    Else SetFillStyle(SolidFill, LightBlue);
+    Bar(FX1 + C * CW + 3, FY1 + R * CHt + 3,
+        FX1 + (C + 1) * CW - 3, FY1 + (R + 1) * CHt - 3);
+    SetColor(White);
+    Line(FX1 + C * CW + 5, FY1 + (R + 1) * CHt - 5,
+         FX1 + C * CW + 13, FY1 + R * CHt + 5);
+   End;
+  SetColor(DarkGray);
+  Rectangle(FX1, FY1, FX2, GY);
+  { socle et antenne }
+  SetFillStyle(SolidFill, LightGray);
+  Bar(FX1 - 8, GY, FX2 + DX + 6, GY + 4);
+  SetColor(DarkGray);
+  Line(FX1 + 40, FY1, FX1 + 40, FY1 - 26);
+  Line(FX1 + 36, FY1 - 18, FX1 + 44, FY1 - 18);
+ End;
+
+ { Fond du plan : bleu de bleu (cyanotype) et grille de points }
+ Procedure BlueprintBg;
+ Var X, Y: Integer;
+ Begin
+  SetFillStyle(SolidFill, Blue);
+  Bar(0, 0, BW, BH);
+  For Y := 0 To BH Div 10 Do
+   For X := 0 To BW Div 10 Do
+    PutPixel(X * 10, Y * 10, LightBlue);
+ End;
+
+ { Traits blancs du plan : contours, cotations et axes }
+ Procedure BlueprintLines;
+ Var R, C: Integer;
+ Begin
+  SetColor(White);
+  Rectangle(FX1, FY1, FX2, GY);
+  For C := 1 To 5 Do Line(FX1 + C * CW, FY1, FX1 + C * CW, GY);
+  For R := 1 To 4 Do Line(FX1, FY1 + R * CHt, FX2, FY1 + R * CHt);
+  Line(FX1, FY1, FX1 + DX, FY1 - DY);
+  Line(FX1 + DX, FY1 - DY, FX2 + DX, FY1 - DY);
+  Line(FX2, FY1, FX2 + DX, FY1 - DY);
+  Line(FX2 + DX, FY1 - DY, FX2 + DX, GY - DY);
+  Line(FX2, GY, FX2 + DX, GY - DY);
+  Line(10, GY, FX2 + DX + 10, GY);
+  { axes de construction }
+  SetColor(LightCyan);
+  DashV(FX1, 24, GY + 8);
+  DashV(FX1 + 6 * CW Div 2, 24, GY + 8);
+  DashH(30, FX2 + 14, FY1 + 2 * CHt);
+  Bubble(FX1, 14, 'A');
+  Bubble(FX1 + 6 * CW Div 2, 14, 'B');
+  Bubble(22, FY1 + 2 * CHt, '1');
+  { cotation horizontale }
+  SetColor(White);
+  Line(FX1, GY + 12, FX2, GY + 12);
+  Line(FX1, GY + 6, FX1, GY + 18);
+  Line(FX2, GY + 6, FX2, GY + 18);
+  Line(FX1 + 6, GY + 9, FX1 - 1, GY + 12);
+  Line(FX1 + 6, GY + 15, FX1 - 1, GY + 12);
+  Line(FX2 - 6, GY + 9, FX2 + 1, GY + 12);
+  Line(FX2 - 6, GY + 15, FX2 + 1, GY + 12);
+  SetFillStyle(SolidFill, Blue);
+  Bar(FX1 + 62, GY + 8, FX1 + 106, GY + 17);
+  OutTextXY(FX1 + 66, GY + 9, '12000');
+  { cotation verticale }
+  Line(FX1 - 22, FY1, FX1 - 22, GY);
+  Line(FX1 - 28, FY1, FX1 - 16, FY1);
+  Line(FX1 - 28, GY, FX1 - 16, GY);
+  Line(FX1 - 25, FY1 + 6, FX1 - 22, FY1 - 1);
+  Line(FX1 - 19, FY1 + 6, FX1 - 22, FY1 - 1);
+  Line(FX1 - 25, GY - 6, FX1 - 22, GY + 1);
+  Line(FX1 - 19, GY - 6, FX1 - 22, GY + 1);
+  SetFillStyle(SolidFill, Blue);
+  Bar(FX1 - 58, (FY1 + GY) Div 2 - 4, FX1 - 26, (FY1 + GY) Div 2 + 5);
+  OutTextXY(FX1 - 56, (FY1 + GY) Div 2 - 3, '8400');
+  { cartouche }
+  Rectangle(8, BH - 24, 90, BH - 6);
+  OutTextXY(14, BH - 19, 'PLAN A-01');
+ End;
+
+ Procedure DrawOkButton(X1, Y1, X2, Y2: Integer);
+ Begin
+  SetFillStyle(SolidFill, Blue);
+  Bar(X1, Y1, X2, Y2);
+  SetColor(White);
+  Rectangle(X1, Y1, X2, Y2);
+  Rectangle(X1 - 2, Y1 - 2, X2 + 2, Y2 + 2);
+  OutTextXY((X1 + X2) Div 2 - 8, (Y1 + Y2) Div 2 - 3, 'OK');
+ End;
+
+Var
+ OX1, OY1, OX2, OY2: Integer;
+Begin
+ W := 480;
+ H := 308;
+ CX := (ScreenWidth - W) Div 2;
+ CY := (ScreenHeight - H) Div 2;
+ If CX < 0 Then CX := 0;
+ If CY < 0 Then CY := 0;
+ AX := CX + 20;
+ AY := CY + 34;
+
+ HideMouse;
+ SetFillStyle(SolidFill, LightGray);
+ Bar(CX, CY, CX + W, CY + H);
+ SetColor(Black);
+ Rectangle(CX, CY, CX + W, CY + H);
+ Rectangle(CX + 2, CY + 2, CX + W - 2, CY + H - 2);
+ SetFillStyle(SolidFill, Blue);
+ Bar(CX + 3, CY + 3, CX + W - 3, CY + 22);
+ SetColor(White);
+ OutTextXY(CX + 10, CY + 8, 'A propos d''AutraCAD');
+
+ { cadre de l'illustration }
+ SetColor(DarkGray);
+ Rectangle(AX - 2, AY - 2, AX + BW + 1, AY + BH + 1);
+ SetColor(White);
+ Line(AX - 2, AY + BH + 1, AX + BW + 1, AY + BH + 1);
+ Line(AX + BW + 1, AY - 2, AX + BW + 1, AY + BH + 1);
+
+ { 1. scene realiste complete }
+ SetViewPort(AX, AY, AX + BW - 1, AY + BH - 1, True);
+ Realistic;
+ { 2. fond du plan sur la moitie gauche }
+ SetViewPort(AX, AY, AX + MIDX - 31, AY + BH - 1, True);
+ BlueprintBg;
+ { 3. zone de transition : le plan se dissout dans la realite }
+ SetViewPort(AX, AY, AX + BW - 1, AY + BH - 1, True);
+ For X := MIDX - 30 To MIDX + 29 Do
+  For Y := 0 To BH - 1 Do
+   If Bayer[Y And 3, X And 3] * 60 >= (X - (MIDX - 30)) * 16 Then Begin
+    If ((X Mod 10) = 0) And ((Y Mod 10) = 0) Then PutPixel(X, Y, LightBlue)
+    Else PutPixel(X, Y, Blue);
+   End;
+ { 4. traits blancs du plan, jusqu'a la zone de transition }
+ SetViewPort(AX, AY, AX + MIDX + 9, AY + BH - 1, True);
+ BlueprintLines;
+ SetViewPort(0, 0, GetMaxX, GetMaxY, True);
+ SetFillStyle(SolidFill, LightGray);
+
+ { texte }
+ SetColor(Black);
+ OutTextXY(CX + 14, CY + 214, 'AutraCAD - Dessin assiste par ordinateur');
+ SetColor(DarkGray);
+ OutTextXY(CX + 14, CY + 230, 'Du plan a la realite : AutraCAD transforme les idees');
+ OutTextXY(CX + 14, CY + 242, 'et les plans en realisations concretes.');
+ OutTextXY(CX + 14, CY + 258, 'Sylvain Maltais - Gladir.com - Licence MIT');
+
+ OX1 := CX + W - 110;
+ OY1 := CY + H - 40;
+ OX2 := OX1 + 90;
+ OY2 := OY1 + 26;
+ SetColor(White);
+ DrawOkButton(OX1, OY1, OX2, OY2);
+ ShowMouse;
+
+ Done := False;
+ PrevLB := 0;
+ GetMouseState(LX, LY, PrevLB);
+ While Not Done Do Begin
+  GetMouseState(LX, LY, LB);
+  If ((LB and 1) <> 0) and ((PrevLB and 1) = 0) Then
+   If (LX >= OX1) and (LX <= OX2) and (LY >= OY1) and (LY <= OY2) Then Done := True;
+  PrevLB := LB;
+  If KeyPressed Then Begin
+   K := ReadKey;
+   If K = #0 Then K := ReadKey
+   Else If (K = #13) or (K = #27) or (K = ' ') or (K = 'o') or (K = 'O') Then Done := True;
+  End;
+ End;
+ DrawInterface;
+End;
+
+{ ============================================================================ }
+{ Fonctions pour le format DWG (AutoCAD Drawing) - TODO 21                     }
 { ============================================================================ }
 
 { Écrire un octet dans le fichier DWG }
@@ -14409,7 +14684,7 @@ End;
 Procedure WriteVisioXMLDocProps(Var F: Text);
 Begin
  WriteLn(F, '  <DocumentProperties>');
- WriteLn(F, '    <Creator>CloneDRAW AutoCAD</Creator>');
+ WriteLn(F, '    <Creator>CloneDRAW AutraCAD</Creator>');
  WriteLn(F, '    <Desc>Exported from CloneDRAW</Desc>');
  WriteLn(F, '    <Keywords>CAD, Drawing</Keywords>');
  WriteLn(F, '    <Subject>CAD Drawing</Subject>');
@@ -15000,7 +15275,7 @@ Begin
  WriteLn(F, '<svg xmlns="', SVG_NAMESPACE, '" version="', SVG_VERSION, '"');
  WriteLn(F, '  width="', Width:0:2, '" height="', Height:0:2, '"');
  WriteLn(F, '  viewBox="0 0 ', Width:0:2, ' ', Height:0:2, '">');
- WriteLn(F, '  <!-- Generated by CloneDRAW AutoCAD Clone -->');
+ WriteLn(F, '  <!-- Generated by CloneDRAW AutraCAD -->');
  WriteLn(F, '  <!-- TODO 24: SVG Export -->');
 End;
 
@@ -16986,7 +17261,7 @@ Function GetMenuItemAtPosition(MenuIndex, X, Y: Integer): Integer;
 Var
  ItemHeight: Integer;
  ItemIndex: Integer;
- MenuY: Integer;
+ MenuY, MenuX: Integer;
 Begin
  GetMenuItemAtPosition := -1;
  If (MenuIndex < 0) or (MenuIndex >= MAX_MENUS) Then Exit;
@@ -16994,7 +17269,13 @@ Begin
  ItemHeight := 18;
  MenuY := MENUBAR_HEIGHT;
 
- If (X >= Menus[MenuIndex].X - 2) and (X <= Menus[MenuIndex].X + Menus[MenuIndex].Width) and
+ { meme decalage que DrawMenu quand le menu deborde a droite }
+ MenuX := Menus[MenuIndex].X;
+ If MenuX + Menus[MenuIndex].Width > ScreenWidth - 2 Then
+  MenuX := ScreenWidth - 2 - Menus[MenuIndex].Width;
+ If MenuX < 2 Then MenuX := 2;
+
+ If (X >= MenuX - 2) and (X <= MenuX + Menus[MenuIndex].Width) and
     (Y >= MenuY) and (Y < MenuY + Menus[MenuIndex].ItemCount * ItemHeight + 4) Then
  Begin
   ItemIndex := (Y - MenuY - 2) div ItemHeight;
@@ -17558,11 +17839,17 @@ Begin
        0: CommandLastLine :=
          'Aide: F1=Aide ESC=Annuler - Cliquez les menus ou tapez les commandes';
        1: CommandLastLine :=
-         'Centre d''info: CloneDRAW clone AutoCAD - FPC -Mtp mode Turbo Pascal';
+         'Centre d''info: AutraCAD - FPC -Mtp mode Turbo Pascal';
        3: CommandLastLine :=
          'Nouveautes: menus Dessin / Cotation / Modifier / Fenetre / Aide cables';
-       5: CommandLastLine :=
-         'CloneDRAW v1.0 - github.com/clonedraw - Licence libre';
+       5: Begin
+         MenuActive := False;
+         ActiveMenu := -1;
+         ActiveMenuItem := -1;
+         DrawInterface;
+         ShowAbout;
+         CommandLastLine := 'AutraCAD - CloneDRAW v1.0 - Licence libre';
+        End;
       End;
      End;
      MenuActive := False;
@@ -19921,7 +20208,7 @@ BEGIN
     (StrToUpper(Copy(TmpLanguage,1,3))='JPN')Then Language:=_Japanese;
  End;
  If(ParamStr(1)='/?')or(ParamStr(1)='--help')or(ParamStr(1)='-h')Then Begin
-  WriteLn('AUTOCAD : Cette commande permet de lancer un clone de AutoCAD.');
+  WriteLn('AUTOCAD : Cette commande permet de lancer AutraCAD.');
   WriteLn;
   WriteLn('Syntaxe : AUTOCAD [-maxscreen] [image.DWG]');
   WriteLn;

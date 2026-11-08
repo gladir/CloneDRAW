@@ -19967,6 +19967,7 @@ Var
  DX1, DY1, DX2, DY2, FH, I: Integer;
  NF, Focus: Integer;
  Vals: Array[0..CMD_FIELDS - 1] Of String;
+ VT: Array[0..2, 0..CMD_FIELDS - 1] Of String;   { valeurs memorisees par onglet }
  Fresh: Array[0..CMD_FIELDS - 1] Of Boolean;
  BadMask: Array[0..CMD_FIELDS - 1] Of Boolean;
  OkX1, OkY1, OkX2, OkY2, CcX1, CcX2: Integer;
@@ -19974,11 +19975,80 @@ Var
  Msg: String;
  MX, MY, MB, OldMB: LongInt;
  Ch: Char;
+ HasTabs: Boolean;      { commandes a deux points : Relatif / Absolue / Polaire }
+ Tab, TabOff: Integer;  { onglet actif (0=Relatif 1=Absolue 2=Polaire) }
+ TA1, TB1, TA2, TB2: Integer;
+
+ Function RealText(R: Real): String;
+ Var S: String;
+ Begin
+  Str(R:0:4, S);
+  While (Length(S) > 1) And (S[Length(S)] = '0') Do Delete(S, Length(S), 1);
+  If (Length(S) > 0) And (S[Length(S)] = '.') Then Delete(S, Length(S), 1);
+  If S = '-0' Then S := '0';
+  RealText := S;
+ End;
+
+ Function NumOf(Const T: String): Real;
+ Var V: Real; Code, P: Integer; S: String;
+ Begin
+  S := T;
+  For P := 1 To Length(S) Do If S[P] = ',' Then S[P] := '.';
+  Val(S, V, Code);
+  If Code <> 0 Then V := 0;
+  NumOf := V;
+ End;
+
+ Function TabName(T: Integer): String;
+ Begin
+  Case T Of
+   0: TabName := 'Relatif';
+   1: TabName := 'Absolue';
+  Else TabName := 'Polaire';
+  End;
+ End;
+
+ Function TabColor(T: Integer): Integer;
+ Begin
+  Case T Of
+   0: TabColor := LightGreen;
+   1: TabColor := LightCyan;
+  Else TabColor := LightMagenta;
+  End;
+ End;
+
+ { Libelle d'un champ selon l'onglet }
+ Function LabelOf(J: Integer): String;
+ Begin
+  LabelOf := CmdTab[Idx].F[J].Lbl;
+  If HasTabs And (J >= 2) Then Begin
+   If Tab = 0 Then Begin
+    If J = 2 Then LabelOf := 'Deplacement DX'
+    Else LabelOf := 'Deplacement DY';
+   End Else If Tab = 2 Then Begin
+    If J = 2 Then LabelOf := 'Distance'
+    Else LabelOf := 'Angle (degres)';
+   End;
+  End;
+ End;
 
  Function Build: String;
- Var J, P: Integer; S, R: String;
+ Var J, P: Integer; S, R: String; X1, Y1, X2, Y2: Real;
  Begin
   R := '';
+  If HasTabs Then Begin
+   X1 := NumOf(Vals[0]); Y1 := NumOf(Vals[1]);
+   Case Tab Of
+    0: Begin X2 := X1 + NumOf(Vals[2]); Y2 := Y1 + NumOf(Vals[3]); End;
+    2: Begin
+     X2 := X1 + NumOf(Vals[2]) * Cos(NumOf(Vals[3]) * Pi / 180);
+     Y2 := Y1 + NumOf(Vals[2]) * Sin(NumOf(Vals[3]) * Pi / 180);
+    End;
+   Else Begin X2 := NumOf(Vals[2]); Y2 := NumOf(Vals[3]); End;
+   End;
+   Build := RealText(X1) + ' ' + RealText(Y1) + ' ' + RealText(X2) + ' ' + RealText(Y2);
+   Exit;
+  End;
   For J := 0 To NF - 1 Do Begin
    S := Vals[J];
    If Not CmdTab[Idx].F[J].IsTxt Then
@@ -19987,6 +20057,15 @@ Var
    R := R + S;
   End;
   Build := R;
+ End;
+
+ Procedure SwitchTab(NewTab: Integer);
+ Var J: Integer;
+ Begin
+  If (NewTab < 0) Or (NewTab > 2) Or (NewTab = Tab) Then Exit;
+  For J := 0 To NF - 1 Do Begin VT[Tab, J] := Vals[J]; Vals[J] := VT[NewTab, J]; Fresh[J] := True; BadMask[J] := False; End;
+  Tab := NewTab;
+  Msg := '';
  End;
 
  Function Validate: Boolean;
@@ -20010,11 +20089,43 @@ Var
 
  Function FieldY(J: Integer): Integer;
  Begin
-  FieldY := DY1 + 34 + J * RH;
+  FieldY := DY1 + 34 + TabOff + J * RH;
+ End;
+
+ { rectangle d'un onglet }
+ Procedure TabRect(T: Integer; Var X1, Y1, X2, Y2: Integer);
+ Begin
+  X1 := DX1 + 10 + T * 98;
+  X2 := X1 + 94;
+  Y1 := DY1 + 22;
+  Y2 := DY1 + 22 + 22;
+ End;
+
+ Procedure DrawTab(T: Integer);
+ Var X1, Y1, X2, Y2, TopY: Integer;
+ Begin
+  TabRect(T, X1, Y1, X2, Y2);
+  TopY := Y1;
+  If T <> Tab Then TopY := Y1 + 4;
+  SetFillStyle(SolidFill, TabColor(T));
+  SetColor(TabColor(T));
+  Bar(X1 + 8, TopY, X2 - 8, Y2);
+  Bar(X1, TopY + 8, X2, Y2);
+  FillEllipse(X1 + 8, TopY + 8, 8, 8);
+  FillEllipse(X2 - 8, TopY + 8, 8, 8);
+  { contour }
+  SetColor(Black);
+  Arc(X1 + 8, TopY + 8, 90, 180, 8);
+  Arc(X2 - 8, TopY + 8, 0, 90, 8);
+  Line(X1 + 8, TopY, X2 - 8, TopY);
+  Line(X1, TopY + 8, X1, Y2);
+  Line(X2, TopY + 8, X2, Y2);
+  SetColor(Black);
+  OutTextXY((X1 + X2) Div 2 - Length(TabName(T)) * 4, TopY + 10, TabName(T));
  End;
 
  Procedure Paint;
- Var J, YY, EX1: Integer; S: String;
+ Var J, YY, EX1, TX1, TY1, TX2, TY2: Integer; S: String;
  Begin
   HideMouse;
   FD_Box(DX1, DY1, DX2, DY2, LightGray);
@@ -20022,11 +20133,20 @@ Var
   FD_Box(DX1 + 1, DY1 + 1, DX2 - 1, DY1 + 16, Blue);
   SetColor(White);
   OutTextXY(DX1 + 8, DY1 + 5, CmdTab[Idx].Name);
+  If HasTabs Then Begin
+   { ligne sous les onglets, interrompue sous l'onglet actif }
+   TabRect(Tab, TX1, TY1, TX2, TY2);
+   SetColor(Black);
+   Line(DX1 + 8, TY2, TX1, TY2);
+   Line(TX2, TY2, DX2 - 8, TY2);
+   For J := 0 To 2 Do If J <> Tab Then DrawTab(J);
+   DrawTab(Tab);
+  End;
   EX1 := DX1 + 200;
   For J := 0 To NF - 1 Do Begin
    YY := FieldY(J);
    SetColor(Black);
-   OutTextXY(DX1 + 12, YY + 4, CmdTab[Idx].F[J].Lbl);
+   OutTextXY(DX1 + 12, YY + 4, LabelOf(J));
    FD_Box(EX1, YY, DX2 - 12, YY + 16, White);
    If BadMask[J] Then Begin
     SetColor(Red);
@@ -20080,13 +20200,24 @@ Var
 Begin
  CmdForm := False;
  NF := CmdTab[Idx].NF;
+ HasTabs := (CmdTab[Idx].Code = 40) Or (CmdTab[Idx].Code = 41) Or
+            (CmdTab[Idx].Code = 42) Or (CmdTab[Idx].Code = 45);
+ Tab := 1;
+ TabOff := 0;
+ If HasTabs Then TabOff := 30;
  For I := 0 To NF - 1 Do Begin
   Vals[I] := CmdTab[Idx].F[I].Def;
+  VT[0, I] := Vals[I]; VT[1, I] := Vals[I]; VT[2, I] := Vals[I];
   Fresh[I] := True;
   BadMask[I] := False;
  End;
+ If HasTabs Then Begin
+  { valeurs par defaut des onglets Relatif (DX DY) et Polaire (distance angle) }
+  VT[0, 2] := '100'; VT[0, 3] := '50';
+  VT[2, 2] := '100'; VT[2, 3] := '45';
+ End;
  Focus := 0; Msg := '';
- FH := 34 + NF * RH + 64;
+ FH := 34 + TabOff + NF * RH + 64;
  DX1 := (ScreenWidth - FW) Div 2; If DX1 < 0 Then DX1 := 0;
  DY1 := (ScreenHeight - FH) Div 2; If DY1 < 0 Then DY1 := 0;
  DX2 := DX1 + FW; DY2 := DY1 + FH;
@@ -20104,6 +20235,8 @@ Begin
     Case Ch Of
      #72, #15: Begin If Focus > 0 Then Dec(Focus) Else Focus := NF - 1; Fresh[Focus] := True; Paint; End;
      #80: Begin Focus := (Focus + 1) Mod NF; Fresh[Focus] := True; Paint; End;
+     #73: If HasTabs Then Begin SwitchTab(Tab - 1); Paint; End;   { PgHaut }
+     #81: If HasTabs Then Begin SwitchTab(Tab + 1); Paint; End;   { PgBas }
     End;
    End Else Begin
     Case Ch Of
@@ -20129,6 +20262,13 @@ Begin
    If (MX >= OkX1) And (MX <= OkX2) And (MY >= OkY1) And (MY <= OkY2) Then TryOk
    Else If (MX >= CcX1) And (MX <= CcX2) And (MY >= OkY1) And (MY <= OkY2) Then Done := True
    Else Begin
+    If HasTabs Then
+     For I := 0 To 2 Do Begin
+      TabRect(I, TA1, TB1, TA2, TB2);
+      If (MX >= TA1) And (MX <= TA2) And (MY >= TB1) And (MY <= TB2) Then Begin
+       SwitchTab(I); Paint;
+      End;
+     End;
     For I := 0 To NF - 1 Do
      If (MX >= DX1 + 200) And (MX <= DX2 - 12) And (MY >= FieldY(I)) And (MY <= FieldY(I) + 16) Then Begin
       Focus := I; Fresh[I] := True; Paint;

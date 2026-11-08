@@ -1001,6 +1001,10 @@ Var
  CurrentPointStyle: Integer;                           { PDMODE - apparence des points }
  CurrentPointSize: Real;                               { PDSIZE - taille des points }
  CurrentUnits: Integer;                                { 0=Scientific 1=Decimal 2=Engineering 3=Architectural 4=Fractional }
+ UnitPrec: Integer;           { precision des longueurs (decimales, ou 2^N pour les fractions) }
+ AngleMode: Integer;          { 0=degres decimaux 1=deg/min/sec 2=grades 3=radians }
+ AnglePrec: Integer;          { precision des angles }
+ InsertUnit: Integer;         { unite d'insertion : 0=sans 1=mm 2=cm 3=m 4=km 5=pouce 6=pied 7=verge }
  LimMinX, LimMinY: Real;                               { Limites du dessin - coin bas-gauche }
  LimMaxX, LimMaxY: Real;                               { Limites du dessin - coin haut-droite }
  SnapEnabled: Boolean;                                 { Mode snap actif }
@@ -1033,6 +1037,7 @@ Function GetContextMenuItemAt(X, Y: Integer): Integer; Forward;
 Procedure ExecuteContextAction(Action: Integer); Forward;
 Procedure HandleRightClick(X, Y: Integer); Forward;
 Procedure CommandContextMenu(X, Y: Integer); Forward;
+Procedure UnitsDialog; Forward;
 Function CmdRunToolbar(Const Cmd: String): Boolean; Forward;
 Procedure HandleMiddleClick(X, Y: Integer); Forward;
 
@@ -1044,6 +1049,7 @@ Function ScreenToWorldY(SY: Integer): Real; Forward;
 { Forward declarations - TODO 8 }
 Procedure DrawCrosshairCursor(X, Y: Integer); Forward;
 Procedure DrawCoordinateTooltip(X, Y: Integer); Forward;
+Function FormatLength(V: Real): String; Forward;
 Procedure InitCrosshairSettings; Forward;
 
 { Forward declarations - TODO 9 - Système de sélection }
@@ -4053,8 +4059,8 @@ Begin
  WorldY := ScreenToWorldY(Y);
 
  { Formater la chaîne de coordonnées }
- Str(WorldX:0:2, StrX);
- Str(WorldY:0:2, StrY);
+ StrX := FormatLength(WorldX);
+ StrY := FormatLength(WorldY);
  CoordStr := StrX + ', ' + StrY;
 
  { Calculer la position du tooltip (en bas à droite du curseur) }
@@ -9816,6 +9822,10 @@ Begin
  CurrentPointStyle := 0;       { 0 = point, 1 = invisible, 2 = +, 3 = x, 4 = | }
  CurrentPointSize := 0.0;      { 0 = 5% de la hauteur d'ecran }
  CurrentUnits := 1;            { Decimal par defaut }
+ UnitPrec := 2;
+ AngleMode := 0;
+ AnglePrec := 1;
+ InsertUnit := 1;              { millimetres }
  LimMinX := 0.0;
  LimMinY := 0.0;
  LimMaxX := 420.0;
@@ -13997,8 +14007,14 @@ Begin
  WriteDWGByte(F, CurrentLineType);
  WriteDWGWord(F, CurrentLineWeight);
 
- { Réserver de l'espace pour des extensions futures (32 octets) }
- For I := 1 to 32 do
+ { Zone reservee (32 octets) : reglages d'unites precedes du marqueur $55 }
+ WriteDWGByte(F, $55);
+ WriteDWGByte(F, CurrentUnits);
+ WriteDWGByte(F, UnitPrec);
+ WriteDWGByte(F, AngleMode);
+ WriteDWGByte(F, AnglePrec);
+ WriteDWGByte(F, InsertUnit);
+ For I := 7 to 32 do
   WriteDWGByte(F, 0);
 End;
 
@@ -14164,9 +14180,21 @@ Begin
  CurrentLineType := ReadDWGByte(F);
  CurrentLineWeight := ReadDWGWord(F);
 
- { Ignorer l'espace réservé (32 octets) }
- For I := 1 to 32 do
-  Dummy := ReadDWGByte(F);
+ { Zone reservee (32 octets) : reglages d'unites si le marqueur $55 est present }
+ Dummy := ReadDWGByte(F);
+ If Dummy = $55 Then Begin
+  I := ReadDWGByte(F); If I <= 4 Then CurrentUnits := I;
+  I := ReadDWGByte(F); If I <= 8 Then UnitPrec := I;
+  I := ReadDWGByte(F); If I <= 3 Then AngleMode := I;
+  I := ReadDWGByte(F); If I <= 8 Then AnglePrec := I;
+  I := ReadDWGByte(F); If I <= 7 Then InsertUnit := I;
+  If (CurrentUnits >= 3) And (UnitPrec > 6) Then UnitPrec := 6;
+  For I := 7 to 32 do
+   Dummy := ReadDWGByte(F);
+ End Else Begin
+  For I := 2 to 32 do
+   Dummy := ReadDWGByte(F);
+ End;
 
  ReadDWGHeader := True;
 End;
@@ -17796,6 +17824,142 @@ Begin
 End;
 
 { Dessiner la barre d'état }
+{ ---- Formatage des longueurs et des angles selon Format > Unites ---- }
+
+Function UPow10(E: Integer): Real;
+Var R: Real; I: Integer;
+Begin
+ R := 1.0;
+ If E >= 0 Then Begin
+  For I := 1 To E Do R := R * 10.0;
+ End Else Begin
+  For I := 1 To -E Do R := R / 10.0;
+ End;
+ UPow10 := R;
+End;
+
+Function UFmtFixed(V: Real; Prec: Integer; Width: Integer): String;
+Var S: String;
+Begin
+ If Prec < 0 Then Prec := 0;
+ If Prec > 8 Then Prec := 8;
+ If Abs(V) > 1.0E12 Then V := 0;
+ Str(V:Width:Prec, S);
+ UFmtFixed := S;
+End;
+
+Function UFmtSci(V: Real; Prec: Integer): String;
+Var E: Integer; M: Real; S, ES: String;
+Begin
+ If Abs(V) < 1.0E-300 Then Begin
+  E := 0; M := 0;
+ End Else Begin
+  E := Trunc(Ln(Abs(V)) / Ln(10.0));
+  If Abs(V) < UPow10(E) Then Dec(E);
+  M := V / UPow10(E);
+  If Abs(Round(M * UPow10(Prec))) >= Round(10.0 * UPow10(Prec)) Then Begin
+   Inc(E); M := V / UPow10(E);
+  End;
+ End;
+ S := UFmtFixed(M, Prec, 0);
+ Str(Abs(E), ES);
+ If Length(ES) < 2 Then ES := '0' + ES;
+ If E < 0 Then UFmtSci := S + 'E-' + ES Else UFmtSci := S + 'E+' + ES;
+End;
+
+{ fraction reduite d'un nombre d'unites, V >= 0 ; Den = denominateur (puissance de 2) }
+Procedure UFraction(V: Real; Den: Integer; Var W, Num, DenOut: LongInt);
+Var N, A, B, T: LongInt;
+Begin
+ N := Round(V * Den);
+ W := N Div Den;
+ Num := N Mod Den;
+ DenOut := Den;
+ If Num > 0 Then Begin
+  A := Num; B := Den;
+  While B <> 0 Do Begin T := A Mod B; A := B; B := T; End;
+  Num := Num Div A;
+  DenOut := Den Div A;
+ End;
+End;
+
+Function UFmtEng(V: Real; Prec: Integer): String;
+Var Ft: LongInt; Inch: Real; S, SF: String; Neg: String;
+Begin
+ Neg := '';
+ If V < 0 Then Begin Neg := '-'; V := -V; End;
+ Ft := Trunc(V / 12.0);
+ Inch := V - Ft * 12.0;
+ S := UFmtFixed(Inch, Prec, 0);
+ Str(Ft, SF);
+ UFmtEng := Neg + SF + '''-' + S + '"';
+End;
+
+Function UFmtArch(V: Real; Prec: Integer; Fractional: Boolean): String;
+Var Den: Integer; W, Num, D, Ft, I: LongInt; S, SW, SN, SD, Neg: String;
+Begin
+ Neg := '';
+ If V < 0 Then Begin Neg := '-'; V := -V; End;
+ If Prec < 0 Then Prec := 0;
+ If Prec > 6 Then Prec := 6;
+ Den := 1;
+ For I := 1 To Prec Do Den := Den * 2;
+ UFraction(V, Den, W, Num, D);
+ Str(Num, SN); Str(D, SD);
+ If Fractional Then Begin
+  Str(W, SW);
+  If Num = 0 Then S := SW
+  Else If W = 0 Then S := SN + '/' + SD
+  Else S := SW + ' ' + SN + '/' + SD;
+  UFmtArch := Neg + S;
+ End Else Begin
+  Ft := W Div 12;
+  I := W Mod 12;
+  Str(I, SW);
+  If Num > 0 Then Begin
+   If I = 0 Then SW := SN + '/' + SD Else SW := SW + ' ' + SN + '/' + SD;
+  End;
+  If Ft > 0 Then Begin
+   Str(Ft, S);
+   UFmtArch := Neg + S + '''-' + SW + '"';
+  End Else UFmtArch := Neg + SW + '"';
+ End;
+End;
+
+{ longueur (valeur du dessin) selon le type d'unites courant }
+Function FormatLength(V: Real): String;
+Begin
+ Case CurrentUnits Of
+  0: FormatLength := UFmtSci(V, UnitPrec);
+  2: FormatLength := UFmtEng(V, UnitPrec);
+  3: FormatLength := UFmtArch(V, UnitPrec, False);
+  4: FormatLength := UFmtArch(V, UnitPrec, True);
+ Else FormatLength := UFmtFixed(V, UnitPrec, 0);
+ End;
+End;
+
+{ angle en degres selon le type d'angle courant }
+Function FormatAngle(A: Real): String;
+Var D, M, S: Real; Di, Mi: LongInt; SD, SM, SS: String;
+Begin
+ Case AngleMode Of
+  1: Begin
+   D := Abs(A); Di := Trunc(D);
+   M := (D - Di) * 60.0; Mi := Trunc(M);
+   S := (M - Mi) * 60.0;
+   If S >= 59.99999 Then Begin S := 0; Inc(Mi); End;
+   If Mi >= 60 Then Begin Mi := 0; Inc(Di); End;
+   Str(Di, SD); Str(Mi, SM);
+   SS := UFmtFixed(S, AnglePrec, 0);
+   If A < 0 Then SD := '-' + SD;
+   FormatAngle := SD + 'd' + SM + '''' + SS + '"';
+  End;
+  2: FormatAngle := UFmtFixed(A * 400.0 / 360.0, AnglePrec, 0) + 'g';
+  3: FormatAngle := UFmtFixed(A * Pi / 180.0, AnglePrec, 0) + 'r';
+ Else FormatAngle := UFmtFixed(A, AnglePrec, 0) + 'd';
+ End;
+End;
+
 Procedure DrawStatusBar;
 Var
  CoordStr, ZoomStr, SelStr: String;
@@ -17811,10 +17975,16 @@ Begin
  { Coordonnées du curseur en coordonnées monde - TODO 7 }
  WorldX := ScreenToWorldX(MouseX);
  WorldY := ScreenToWorldY(MouseY);
- Str(WorldX:8:2, CoordStr);
- CoordStr := CoordStr + ', ';
- Str(WorldY:8:2, ZoomStr);
- CoordStr := CoordStr + ZoomStr + ', 0.00';
+ If CurrentUnits = 1 Then Begin
+  CoordStr := UFmtFixed(WorldX, UnitPrec, 8) + ', ' + UFmtFixed(WorldY, UnitPrec, 8) +
+              ', ' + UFmtFixed(0.0, UnitPrec, 0);
+ End Else
+  CoordStr := FormatLength(WorldX) + ', ' + FormatLength(WorldY) + ', ' + FormatLength(0.0);
+ { ne pas deborder sur le niveau de zoom }
+ If TextWidth(CoordStr) > 195 Then
+  CoordStr := FormatLength(WorldX) + ', ' + FormatLength(WorldY);
+ While (TextWidth(CoordStr) > 195) And (Length(CoordStr) > 1) Do
+  Delete(CoordStr, Length(CoordStr), 1);
  OutTextXY(5, ScreenHeight - STATUSBAR_HEIGHT + 5, CoordStr);
 
  { Niveau de zoom - TODO 7 }
@@ -17919,6 +18089,22 @@ Begin
  End;
 End;
 
+{ Le point est-il dans le menu deroulant ouvert ? (le menu recouvre la barre d'outils) }
+Function PointInOpenMenu(X, Y: Integer): Boolean;
+Var MenuX: Integer;
+Begin
+ PointInOpenMenu := False;
+ If Not MenuActive Then Exit;
+ If (ActiveMenu < 0) or (ActiveMenu >= MAX_MENUS) Then Exit;
+ MenuX := Menus[ActiveMenu].X;
+ If MenuX + Menus[ActiveMenu].Width > ScreenWidth - 2 Then
+  MenuX := ScreenWidth - 2 - Menus[ActiveMenu].Width;
+ If MenuX < 2 Then MenuX := 2;
+ PointInOpenMenu := (X >= MenuX - 2) and (X <= MenuX + Menus[ActiveMenu].Width) and
+                    (Y >= MENUBAR_HEIGHT) and
+                    (Y < MENUBAR_HEIGHT + Menus[ActiveMenu].ItemCount * 18 + 4);
+End;
+
 { Gérer les clics de souris }
 Procedure HandleMouseClick(X, Y, Button: Integer);
 Var
@@ -17961,7 +18147,8 @@ Begin
  Case Button of
   MOUSE_BUTTON_LEFT: Begin { Clic gauche }
    { Dispatch des clics sur les boutons de barres d'outils }
-   If (Y >= MENUBAR_HEIGHT) and (Y < MENUBAR_HEIGHT + TOOLBAR_HEIGHT) Then Begin
+   If (Y >= MENUBAR_HEIGHT) and (Y < MENUBAR_HEIGHT + TOOLBAR_HEIGHT) and
+      Not PointInOpenMenu(X, Y) Then Begin
     GetToolbarButtonAtPosition(X, Y, TbHit, BtnHit);
     If (TbHit >= 0) and (BtnHit >= 0) Then Begin
      If Toolbars[TbHit].Buttons[BtnHit].Enabled Then Begin
@@ -18208,9 +18395,11 @@ Begin
         CommandBuffer := '';
        End;
        9: Begin { Units... }
-        PendingFileAction := 27;
-        CommandPrompt := 'Unites (0=Scientifique 1=Decimal 2=Ingenierie 3=Architectural 4=Fractionnel):';
-        CommandBuffer := '';
+        MenuActive := False;
+        ActiveMenu := -1;
+        ActiveMenuItem := -1;
+        DrawInterface;
+        UnitsDialog;
        End;
        10: Begin { Drawing Limits }
         PendingFileAction := 28;
@@ -19775,8 +19964,7 @@ Begin
  CmdFld('Nom du style', 'Standard', True);
  CmdAdd(3, 'Style de point', 26, 'Style de point (0=point 1=vide 2=+ 3=x 4=|):');
  CmdFld('Style (0-4)', '0', False);
- CmdAdd(3, 'Unites', 27, 'Unites (0=Scientifique 1=Decimal 2=Ingenierie 3=Architectural 4=Fractionnel):');
- CmdFld('Unites (0-4)', '1', False);
+ CmdAdd(3, 'Unites...', 2050, '');
  CmdAdd(3, 'Limites du dessin', 28, 'Limites X1 Y1 X2 Y2 (4 reels):');
  CmdFld('Coin bas-gauche X', '0', False); CmdFld('Coin bas-gauche Y', '0', False);
  CmdFld('Coin haut-droit X', '420', False); CmdFld('Coin haut-droit Y', '297', False);
@@ -19841,6 +20029,7 @@ Begin
   2036: ExecuteToolsOptions;
   2040: OpenDrawingDialog;
   2041: SaveDrawingDialog;
+  2050: UnitsDialog;
  End;
 End;
 
@@ -21243,6 +21432,379 @@ Begin
   Exit;
  End;
  CmdRun(Idx);
+End;
+
+{ ============================================================================ }
+{ Format > Unites : type de longueur, precision, angles, unite d'insertion      }
+{ avec des regles graphiques pour comparer les unites de mesure                 }
+{ ============================================================================ }
+
+Procedure UnitsDialog;
+Const
+ DW = 624;
+ DH = 346;
+ MmPerUnit: Array[0..7] Of Real = (1.0, 1.0, 10.0, 1000.0, 1000000.0, 25.4, 304.8, 914.4);
+ RulerLen = 160;                { 100 mm = 160 pixels }
+Var
+ DX1, DY1, DX2, DY2, I: Integer;
+ LT, LP, LAm, LAp, LIu: Integer;       { copies de travail }
+ FG: Integer;                           { groupe actif 0..4 }
+ Done, Res: Boolean;
+ Ch: Char;
+ MX, MY, MB, OldMB: LongInt;
+ OkX1, OkY1, OkX2, OkY2, CcX1, CcX2: Integer;
+ PX1, PY1, PX2, PY2: Integer;
+
+ Function TypeName(T: Integer): String;
+ Begin
+  Case T Of
+   0: TypeName := 'Scientifique';
+   1: TypeName := 'Decimal';
+   2: TypeName := 'Ingenierie';
+   3: TypeName := 'Architectural';
+   4: TypeName := 'Fractionnel';
+  Else TypeName := '';
+  End;
+ End;
+
+ Function AngName(A: Integer): String;
+ Begin
+  Case A Of
+   0: AngName := 'Degres decimaux';
+   1: AngName := 'Deg/min/sec';
+   2: AngName := 'Grades';
+   3: AngName := 'Radians';
+  Else AngName := '';
+  End;
+ End;
+
+ Function UnitName(U: Integer): String;
+ Begin
+  Case U Of
+   0: UnitName := 'Sans unite';
+   1: UnitName := 'Millimetres';
+   2: UnitName := 'Centimetres';
+   3: UnitName := 'Metres';
+   4: UnitName := 'Kilometres';
+   5: UnitName := 'Pouces';
+   6: UnitName := 'Pieds';
+   7: UnitName := 'Verges';
+  Else UnitName := '';
+  End;
+ End;
+
+ Function MaxPrec: Integer;
+ Begin
+  If LT >= 3 Then MaxPrec := 6 Else MaxPrec := 8;
+ End;
+
+ { texte de la precision de longueur : 0.00 ou 1/16 }
+ Function PrecText: String;
+ Var S: String; K, Den: Integer;
+ Begin
+  If LT >= 3 Then Begin
+   Den := 1;
+   For K := 1 To LP Do Den := Den * 2;
+   Str(Den, S);
+   PrecText := '1/' + S;
+  End Else Begin
+   S := '0';
+   If LP > 0 Then S := S + '.';
+   For K := 1 To LP Do S := S + '0';
+   PrecText := S;
+  End;
+ End;
+
+ Function AngPrecText: String;
+ Var S: String; K: Integer;
+ Begin
+  S := '0';
+  If LAp > 0 Then S := S + '.';
+  For K := 1 To LAp Do S := S + '0';
+  AngPrecText := S;
+ End;
+
+ Function NumText(R: Real): String;
+ Var T: String;
+ Begin
+  Str(R:0:6, T);
+  While (Length(T) > 1) And (T[Length(T)] = '0') Do Delete(T, Length(T), 1);
+  If (Length(T) > 0) And (T[Length(T)] = '.') Then Delete(T, Length(T), 1);
+  NumText := T;
+ End;
+
+ { applique temporairement les reglages de travail pour fabriquer les exemples }
+ Procedure Sample(Var L1, L2, A1, C1: String);
+ Var SU, SP, SA, SAp: Integer;
+ Begin
+  SU := CurrentUnits; SP := UnitPrec; SA := AngleMode; SAp := AnglePrec;
+  CurrentUnits := LT; UnitPrec := LP; AngleMode := LAm; AnglePrec := LAp;
+  L1 := FormatLength(1234.5678);
+  L2 := FormatLength(0.375);
+  A1 := FormatAngle(45.5);
+  C1 := FormatLength(12.5) + ', ' + FormatLength(-3.25);
+  CurrentUnits := SU; UnitPrec := SP; AngleMode := SA; AnglePrec := SAp;
+ End;
+
+ Procedure Radio(X, Y: Integer; Sel: Boolean; Const Cap: String);
+ Begin
+  SetColor(Black);
+  Circle(X + 5, Y + 4, 4);
+  If Sel Then Begin
+   SetFillStyle(SolidFill, Blue);
+   Bar(X + 3, Y + 2, X + 7, Y + 6);
+  End;
+  SetColor(Black);
+  OutTextXY(X + 16, Y, Cap);
+ End;
+
+ Procedure Spinner(X, Y: Integer; Const Txt: String);
+ Begin
+  FD_Button(X, Y, X + 18, Y + 16, '-');
+  FD_Box(X + 20, Y, X + 90, Y + 16, White);
+  FD_Bevel(X + 20, Y, X + 90, Y + 16, False);
+  SetColor(Black);
+  OutTextXY(X + 55 - Length(Txt) * 4, Y + 4, Txt);
+  FD_Button(X + 92, Y, X + 110, Y + 16, '+');
+ End;
+
+ Procedure GroupLabel(X, Y: Integer; Const Cap: String; Active: Boolean);
+ Begin
+  If Active Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(X, Y, Cap);
+  If Active Then Line(X, Y + 9, X + Length(Cap) * 8, Y + 9);
+ End;
+
+ { regle de 100 mm : Kind 0=mm 1=cm 2=pouce 3=metre }
+ Procedure Ruler(Y: Integer; Kind: Integer; Const Name: String; Hi: Boolean);
+ Var
+  X0, K, XT, Hh, BY: Integer;
+  S: String;
+ Begin
+  X0 := PX1 + 20;
+  BY := Y + 11;
+  SetColor(Black);
+  If Hi Then SetColor(Blue);
+  OutTextXY(PX1 + 6, Y, Name);
+  If Hi Then OutTextXY(PX2 - 24, Y, '<<');
+  If Hi Then FD_Box(X0 - 6, BY, X0 + RulerLen + 6, BY + 24, Yellow)
+  Else FD_Box(X0 - 6, BY, X0 + RulerLen + 6, BY + 24, White);
+  SetColor(Black);
+  Rectangle(X0 - 6, BY, X0 + RulerLen + 6, BY + 24);
+  Case Kind Of
+   0: Begin
+    For K := 0 To 100 Do Begin
+     XT := X0 + Round(K * RulerLen / 100.0);
+     If K Mod 10 = 0 Then Hh := 10 Else If K Mod 5 = 0 Then Hh := 7 Else Hh := 4;
+     Line(XT, BY, XT, BY + Hh);
+     If K Mod 20 = 0 Then Begin
+      Str(K, S);
+      OutTextXY(XT - Length(S) * 4, BY + 13, S);
+     End;
+    End;
+   End;
+   1: Begin
+    For K := 0 To 20 Do Begin
+     XT := X0 + Round(K * RulerLen / 20.0);
+     If K Mod 2 = 0 Then Hh := 10 Else Hh := 5;
+     Line(XT, BY, XT, BY + Hh);
+     If (K Mod 2 = 0) And (K Mod 4 = 0) Then Begin
+      Str(K Div 2, S);
+      OutTextXY(XT - Length(S) * 4, BY + 13, S);
+     End;
+    End;
+   End;
+   2: Begin
+    For K := 0 To 63 Do Begin
+     XT := X0 + Round(K * 2.54);
+     If K Mod 16 = 0 Then Hh := 11
+     Else If K Mod 8 = 0 Then Hh := 8
+     Else If K Mod 4 = 0 Then Hh := 6
+     Else If K Mod 2 = 0 Then Hh := 4
+     Else Hh := 3;
+     Line(XT, BY, XT, BY + Hh);
+     If K Mod 16 = 0 Then Begin
+      Str(K Div 16, S);
+      OutTextXY(XT - 4, BY + 13, S);
+     End;
+    End;
+   End;
+   3: Begin
+    For K := 0 To 20 Do Begin
+     XT := X0 + Round(K * RulerLen / 20.0);
+     If K Mod 10 = 0 Then Hh := 10 Else If K Mod 5 = 0 Then Hh := 7 Else Hh := 4;
+     Line(XT, BY, XT, BY + Hh);
+    End;
+    OutTextXY(X0 - 2, BY + 13, '0');
+    OutTextXY(X0 + RulerLen Div 2 - 16, BY + 13, '0.05');
+    OutTextXY(X0 + RulerLen - 20, BY + 13, '0.1');
+   End;
+  End;
+ End;
+
+ Procedure Paint;
+ Var
+  X, Y, K, RY: Integer;
+  L1, L2, A1, C1, S: String;
+  Mm: Real;
+ Begin
+  HideMouse;
+  FD_Box(DX1, DY1, DX2, DY2, LightGray);
+  FD_Bevel(DX1, DY1, DX2, DY2, True);
+  FD_Box(DX1 + 1, DY1 + 1, DX2 - 1, DY1 + 16, Blue);
+  SetColor(White);
+  OutTextXY(DX1 + 8, DY1 + 5, 'Unites du dessin');
+
+  { colonne A : type de longueur }
+  GroupLabel(DX1 + 12, DY1 + 24, 'Type de longueur', FG = 0);
+  For K := 0 To 4 Do Radio(DX1 + 14, DY1 + 40 + K * 14, LT = K, TypeName(K));
+  GroupLabel(DX1 + 12, DY1 + 118, 'Precision', FG = 1);
+  Spinner(DX1 + 14, DY1 + 132, PrecText);
+  GroupLabel(DX1 + 12, DY1 + 162, 'Type d''angle', FG = 2);
+  For K := 0 To 3 Do Radio(DX1 + 14, DY1 + 178 + K * 14, LAm = K, AngName(K));
+  GroupLabel(DX1 + 12, DY1 + 238, 'Precision angle', FG = 3);
+  Spinner(DX1 + 14, DY1 + 252, AngPrecText);
+
+  { colonne B : unite d'insertion + exemples }
+  GroupLabel(DX1 + 200, DY1 + 24, 'Unite d''insertion', FG = 4);
+  For K := 0 To 7 Do Radio(DX1 + 202, DY1 + 40 + K * 14, LIu = K, UnitName(K));
+  Sample(L1, L2, A1, C1);
+  FD_Box(DX1 + 200, DY1 + 162, DX1 + 398, DY1 + 262, White);
+  FD_Bevel(DX1 + 200, DY1 + 162, DX1 + 398, DY1 + 262, False);
+  SetColor(Blue);
+  OutTextXY(DX1 + 206, DY1 + 168, 'Exemples');
+  SetColor(Black);
+  OutTextXY(DX1 + 206, DY1 + 182, '1234.5678 : ' + L1);
+  OutTextXY(DX1 + 206, DY1 + 194, '0.375     : ' + L2);
+  OutTextXY(DX1 + 206, DY1 + 206, 'Angle 45.5: ' + A1);
+  OutTextXY(DX1 + 206, DY1 + 218, 'Point      :');
+  OutTextXY(DX1 + 206, DY1 + 230, C1);
+  If LT >= 3 Then Begin
+   SetColor(DarkGray);
+   OutTextXY(DX1 + 206, DY1 + 246, '(valeurs en pouces)');
+  End;
+
+  { colonne C : regles }
+  FD_Box(PX1, PY1, PX2, PY2, LightGray);
+  FD_Bevel(PX1, PY1, PX2, PY2, False);
+  SetColor(Blue);
+  OutTextXY(PX1 + 6, PY1 + 5, 'Regles : 100 mm');
+  RY := PY1 + 20;
+  Ruler(RY, 0, 'Millimetres (mm)', LIu = 1);
+  Ruler(RY + 44, 1, 'Centimetres (cm)', LIu = 2);
+  Ruler(RY + 88, 2, 'Pouces (po)', LIu = 5);
+  Ruler(RY + 132, 3, 'Metres (m)', LIu = 3);
+  SetColor(Black);
+  If LIu = 0 Then Begin
+   OutTextXY(PX1 + 6, RY + 176, 'Sans unite : les valeurs');
+   OutTextXY(PX1 + 6, RY + 188, 'n''ont pas de dimension.');
+  End Else Begin
+   Mm := MmPerUnit[LIu];
+   S := '1 ' + UnitName(LIu) + ' = ' + NumText(Mm) + ' mm';
+   If Length(S) > 24 Then S := '1 unite = ' + NumText(Mm) + ' mm';
+   OutTextXY(PX1 + 6, RY + 176, S);
+   S := '100 mm = ' + NumText(100.0 / Mm) + ' ' + UnitName(LIu);
+   If Length(S) > 24 Then S := '100 mm = ' + NumText(100.0 / Mm) + ' u.';
+   OutTextXY(PX1 + 6, RY + 190, S);
+  End;
+
+  FD_Button(OkX1, OkY1, OkX2, OkY2, 'OK');
+  FD_Button(CcX1, OkY1, CcX2, OkY2, 'Annuler');
+  ShowMouse;
+ End;
+
+ Procedure Fix;
+ Begin
+  If LP > MaxPrec Then LP := MaxPrec;
+  If LP < 0 Then LP := 0;
+  If LAp > 8 Then LAp := 8;
+  If LAp < 0 Then LAp := 0;
+ End;
+
+ Procedure Step(Group, Delta: Integer);
+ Begin
+  Case Group Of
+   0: Begin LT := LT + Delta; If LT < 0 Then LT := 0; If LT > 4 Then LT := 4; End;
+   1: LP := LP + Delta;
+   2: Begin LAm := LAm + Delta; If LAm < 0 Then LAm := 0; If LAm > 3 Then LAm := 3; End;
+   3: LAp := LAp + Delta;
+   4: Begin LIu := LIu + Delta; If LIu < 0 Then LIu := 0; If LIu > 7 Then LIu := 7; End;
+  End;
+  Fix;
+ End;
+
+Begin
+ LT := CurrentUnits; LP := UnitPrec; LAm := AngleMode; LAp := AnglePrec; LIu := InsertUnit;
+ Fix;
+ FG := 0;
+ DX1 := (ScreenWidth - DW) Div 2; If DX1 < 0 Then DX1 := 0;
+ DY1 := (ScreenHeight - DH) Div 2; If DY1 < 0 Then DY1 := 0;
+ DX2 := DX1 + DW; DY2 := DY1 + DH;
+ PX1 := DX1 + 410; PX2 := DX2 - 10; PY1 := DY1 + 24; PY2 := DY2 - 46;
+ OkX1 := DX2 - 200; OkX2 := DX2 - 110; OkY1 := DY2 - 32; OkY2 := DY2 - 10;
+ CcX1 := DX2 - 100; CcX2 := DX2 - 12;
+ Paint;
+ While KeyPressed Do Ch := ReadKey;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ OldMB := 0; Done := False; Res := False;
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then Begin
+    Ch := ReadKey;
+    Case Ch Of
+     #72, #75: Begin Step(FG, -1); Paint; End;
+     #80, #77: Begin Step(FG, 1); Paint; End;
+    End;
+   End Else Begin
+    Case Ch Of
+     #27: Done := True;
+     #13: Begin Res := True; Done := True; End;
+     #9: Begin FG := (FG + 1) Mod 5; Paint; End;
+     '+': Begin Step(FG, 1); Paint; End;
+     '-': Begin Step(FG, -1); Paint; End;
+    End;
+   End;
+  End;
+  GetMouseState(MX, MY, MB);
+  If ((OldMB And 1) = 0) And ((MB And 1) <> 0) Then Begin
+   If (MX >= OkX1) And (MX <= OkX2) And (MY >= OkY1) And (MY <= OkY2) Then Begin Res := True; Done := True; End
+   Else If (MX >= CcX1) And (MX <= CcX2) And (MY >= OkY1) And (MY <= OkY2) Then Done := True
+   Else Begin
+    { listes de choix }
+    For I := 0 To 4 Do
+     If (MX >= DX1 + 12) And (MX <= DX1 + 190) And (MY >= DY1 + 38 + I * 14) And (MY < DY1 + 52 + I * 14) Then Begin
+      LT := I; FG := 0; Fix; Paint;
+     End;
+    For I := 0 To 3 Do
+     If (MX >= DX1 + 12) And (MX <= DX1 + 190) And (MY >= DY1 + 176 + I * 14) And (MY < DY1 + 190 + I * 14) Then Begin
+      LAm := I; FG := 2; Fix; Paint;
+     End;
+    For I := 0 To 7 Do
+     If (MX >= DX1 + 200) And (MX <= DX1 + 398) And (MY >= DY1 + 38 + I * 14) And (MY < DY1 + 52 + I * 14) Then Begin
+      LIu := I; FG := 4; Paint;
+     End;
+    { boutons - et + des precisions }
+    If (MY >= DY1 + 132) And (MY <= DY1 + 148) Then Begin
+     If (MX >= DX1 + 14) And (MX <= DX1 + 32) Then Begin FG := 1; Step(1, -1); Paint; End
+     Else If (MX >= DX1 + 106) And (MX <= DX1 + 124) Then Begin FG := 1; Step(1, 1); Paint; End;
+    End;
+    If (MY >= DY1 + 252) And (MY <= DY1 + 268) Then Begin
+     If (MX >= DX1 + 14) And (MX <= DX1 + 32) Then Begin FG := 3; Step(3, -1); Paint; End
+     Else If (MX >= DX1 + 106) And (MX <= DX1 + 124) Then Begin FG := 3; Step(3, 1); Paint; End;
+    End;
+   End;
+  End;
+  OldMB := MB;
+ Until Done;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ If Res Then Begin
+  CurrentUnits := LT; UnitPrec := LP; AngleMode := LAm; AnglePrec := LAp; InsertUnit := LIu;
+  MarkDocumentModified;
+  CommandLastLine := 'Unites: ' + TypeName(LT) + ' (' + PrecText + '), angles ' + AngName(LAm) +
+                     ', insertion ' + UnitName(LIu);
+ End Else CommandLastLine := '*Cancel*';
+ DrawInterface;
 End;
 
 { Boucle principale }

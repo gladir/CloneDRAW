@@ -44,7 +44,7 @@ Apercu d'AutraCAD :
 	</tr>
 	<tr>
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/621a71e4-1496-4730-98cf-4c63ef8d7ae9" /></td>
-		<td></td>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/7d2aa77c-70d1-4e25-bc77-c3c58d932f4b" /></td>
 	</tr>
 </table>
 

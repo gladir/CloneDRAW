@@ -118,7 +118,7 @@ Voici la liste des différents fichiers proposés dans CloneDRAW :
 	</tr>
     <tr>
         <td><b>AUTOCAD.PAS</b></td>
-        <td>Cette commande permet de lancer un clone de AutoCAD.</td>
+        <td>Cette commande permet de lancer AutraCAD.</td>
     </tr>
     <tr>
       <td><b>BMP2APNG</b></td>

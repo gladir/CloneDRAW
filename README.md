@@ -1,6 +1,22 @@
 # CloneDRAW
 Suite de programme de dessin en Pascal (Turbo Pascal/Free Pascal)
 
+<br />
+
+CloneDRAW est un projet de développement logiciel regroupant une collection d'applications graphiques et d'utilitaires de traitement d'images, entièrement programmés en langage Pascal, principalement avec Turbo Pascal et Free Pascal. Son objectif est de recréer, d'explorer et de réinterpréter les fonctionnalités de logiciels graphiques populaires, anciens et modernes, tout en démontrant les possibilités du langage Pascal dans des domaines aussi variés que le dessin, la conception assistée par ordinateur et le traitement d'images numériques.
+
+Le projet rassemble plusieurs reproductions de logiciels ayant marqué l'histoire de l'informatique graphique, notamment Adobe Illustrator, Adobe Photoshop, CorelDRAW, AutoCAD, Microsoft Paint, Calamus et ArtWorx. Certaines applications s'inspirent également d'outils plus spécialisés, comme les éditeurs de diagrammes, les logiciels de conception de modèles LEGO en trois dimensions et les outils de publication assistée par ordinateur. Chaque programme constitue une réalisation indépendante visant à reproduire certaines caractéristiques, interfaces ou fonctionnalités des logiciels dont il s'inspire.
+
+Au-delà des applications graphiques, CloneDRAW propose une vaste collection d'utilitaires permettant de convertir, manipuler et exporter différents formats de fichiers graphiques. Ces outils couvrent aussi bien des formats historiques, utilisés sous MS-DOS, Atari ST, Amiga et Macintosh, que des formats contemporains. Le projet comprend également des programmes permettant de transformer des images en code source pour différents langages de programmation.
+
+CloneDRAW se veut à la fois un laboratoire de programmation, un projet d'expérimentation technique et une initiative de préservation des concepts historiques de l'informatique graphique. Il permet d'étudier le fonctionnement des logiciels de dessin, les structures des formats de fichiers, les algorithmes de traitement d'images et les techniques de programmation graphique, tout en privilégiant une approche reposant sur le langage Pascal.
+
+Le projet est évolutif : les applications et leurs fonctionnalités sont développées et améliorées progressivement. Il ne cherche pas nécessairement à remplacer les logiciels commerciaux dont il s'inspire, mais plutôt à offrir un environnement d'apprentissage, d'expérimentation et de découverte accessible aux passionnés de programmation, de graphisme et d'informatique rétro.
+
+_CloneDRAW : redonner vie aux logiciels graphiques d'hier et d'aujourd'hui, une ligne de Pascal à la fois._
+
+<br />
+
 Aperçu d'Acrodoc :
 
 <img width="638" height="479" alt="image" src="https://github.com/user-attachments/assets/9e855450-30b5-443b-89df-b36cc21f9c6a" />

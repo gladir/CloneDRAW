@@ -1212,6 +1212,7 @@ Procedure DrawInterface; Forward;
 Procedure MarkDocumentSaved; Forward;
 Procedure MarkDocumentModified; Forward;
 Function ConfirmExit: Boolean; Forward;
+Function SaveDrawingDialog: Boolean; Forward;
 Procedure TransformPoint(Var X, Y: Real; InsX, InsY, ScaleX, ScaleY, Rotation: Real); Forward;
 
 { Forward declarations - TODO 21 - Format DWG }
@@ -3759,6 +3760,73 @@ Begin
    BtnX := BtnX + TOOLBAR_BUTTON_SIZE + TOOLBAR_SPACING;
   End;
  End;
+End;
+
+{ Libelle francais d'un bouton de barre d'outils }
+Function ToolbarHintText(Const Cap: String): String;
+Begin
+ ToolbarHintText := Cap;
+ If Cap = 'New' Then ToolbarHintText := 'Nouveau'
+ Else If Cap = 'Open' Then ToolbarHintText := 'Ouvrir'
+ Else If Cap = 'Save' Then ToolbarHintText := 'Enregistrer'
+ Else If Cap = 'Print' Then ToolbarHintText := 'Imprimer'
+ Else If Cap = 'Undo' Then ToolbarHintText := 'Annuler'
+ Else If Cap = 'Redo' Then ToolbarHintText := 'Rétablir'
+ Else If Cap = 'Zoom' Then ToolbarHintText := 'Zoom'
+ Else If Cap = 'Line' Then ToolbarHintText := 'Ligne'
+ Else If Cap = 'Polyline' Then ToolbarHintText := 'Polyligne'
+ Else If Cap = 'Rectangle' Then ToolbarHintText := 'Rectangle'
+ Else If Cap = 'Polygon' Then ToolbarHintText := 'Polygone'
+ Else If Cap = 'Circle' Then ToolbarHintText := 'Cercle'
+ Else If Cap = 'Arc' Then ToolbarHintText := 'Arc'
+ Else If Cap = 'Ellipse' Then ToolbarHintText := 'Ellipse'
+ Else If Cap = 'Text' Then ToolbarHintText := 'Texte'
+ Else If Cap = 'Hatch' Then ToolbarHintText := 'Hachures'
+ Else If Cap = 'Point' Then ToolbarHintText := 'Point'
+ Else If Cap = 'Erase' Then ToolbarHintText := 'Effacer'
+ Else If Cap = 'Copy' Then ToolbarHintText := 'Copier'
+ Else If Cap = 'Move' Then ToolbarHintText := 'Déplacer'
+ Else If Cap = 'Mirror' Then ToolbarHintText := 'Miroir'
+ Else If Cap = 'Rotate' Then ToolbarHintText := 'Rotation'
+ Else If Cap = 'Scale' Then ToolbarHintText := 'Échelle'
+ Else If Cap = 'Offset' Then ToolbarHintText := 'Décalage'
+ Else If Cap = 'Trim' Then ToolbarHintText := 'Ajuster'
+ Else If Cap = 'Extend' Then ToolbarHintText := 'Prolonger'
+ Else If Cap = 'Fillet' Then ToolbarHintText := 'Raccord'
+ Else If Cap = 'Layer Properties' Then ToolbarHintText := 'Propriétés des calques'
+ Else If Cap = 'Make Layer Current' Then ToolbarHintText := 'Calque courant'
+ Else If Cap = 'Layer Off' Then ToolbarHintText := 'Désactiver le calque'
+ Else If Cap = 'Layer Freeze' Then ToolbarHintText := 'Geler le calque'
+ Else If Cap = 'Properties' Then ToolbarHintText := 'Propriétés'
+ Else If Cap = 'Match Properties' Then ToolbarHintText := 'Copier les propriétés'
+ Else If Cap = 'List' Then ToolbarHintText := 'Liste';
+End;
+
+{ Infobulle jaune sous le bouton de barre d'outils survole }
+Procedure DrawToolbarHint(MX, MY: Integer);
+Var
+ Tb, Bt, BX, BY, TW, TX, TY: Integer;
+ S: String;
+Begin
+ GetToolbarButtonAtPosition(MX, MY, Tb, Bt);
+ If (Tb < 0) or (Bt < 0) Then Exit;
+ S := ToolbarHintText(Toolbars[Tb].Buttons[Bt].Caption);
+ If S = '' Then Exit;
+ BX := Toolbars[Tb].X + 2 + Bt * (TOOLBAR_BUTTON_SIZE + TOOLBAR_SPACING);
+ BY := Toolbars[Tb].Y + 2;
+ If Not Toolbars[Tb].Docked Then BY := BY + 16;
+ TW := TextWidth(S) + 8;
+ TX := BX;
+ TY := BY + TOOLBAR_BUTTON_SIZE + 6;
+ If TX + TW > ScreenWidth - 2 Then TX := ScreenWidth - 2 - TW;
+ If TX < 2 Then TX := 2;
+ HideMouse;
+ SetFillStyle(SolidFill, Yellow);
+ Bar(TX, TY, TX + TW, TY + 15);
+ SetColor(Black);
+ Rectangle(TX, TY, TX + TW, TY + 15);
+ OutTextXY(TX + 4, TY + 4, S);
+ ShowMouse;
 End;
 
 { Convertir les coordonnées écran en coordonnées monde - TODO 7 }
@@ -12918,12 +12986,7 @@ Begin
  Case Action Of
   BTN_OUI: Begin
    If CurrentFileName = '' Then Begin
-    PendingFileAction := 2;
-    CommandPrompt := 'Enregistrer sous (nom du fichier):';
-    CommandBuffer := '';
-    CommandLastLine := 'Saisissez un nom de fichier puis relancez Quitter.';
-    DrawInterface;
-    ConfirmExit := False;
+    ConfirmExit := SaveDrawingDialog;
    End Else Begin
     SaveName := CurrentFileName;
     OkFlag := WriteDWGFile(SaveName);
@@ -13388,7 +13451,7 @@ Begin
 End;
 
 { Retourne True et le chemin complet dans FN si l'utilisateur choisit un fichier }
-Function FileOpenDialog(Const Title: String; Var FN: String): Boolean;
+Function FileOpenDialog(Const Title: String; SaveMode: Boolean; Var FN: String): Boolean;
 Const
  DW = 600;
  DH = 400;
@@ -13442,13 +13505,67 @@ Var
   If FD_FilterIdx = 0 Then OutTextXY(TypX1 + 4, NamY1 + 4, 'Dessins AutoCAD (*.DWG)')
   Else OutTextXY(TypX1 + 4, NamY1 + 4, 'Tous les fichiers (*.*)');
   OutTextXY(TypX2 - 12, NamY1 + 4, 'v');
-  FD_Button(OkX1, OkY1, OkX2, OkY2, 'Ouvrir');
+  If SaveMode Then FD_Button(OkX1, OkY1, OkX2, OkY2, 'Enregistrer')
+  Else FD_Button(OkX1, OkY1, OkX2, OkY2, 'Ouvrir');
   FD_Button(CcX1, CcY1, CcX2, CcY2, 'Annuler');
   ShowMouse;
  End;
 
+ { Confirmation d'ecrasement : True si l'utilisateur accepte }
+ Function Overwrite(Const Nm: String): Boolean;
+ Var BX1, BY1, BX2, BY2, YX1, NX1, BtY1, BtY2: Integer;
+     Fin, Res: Boolean; C2: Char; PB, QX, QY, QB: LongInt;
+ Begin
+  BX1 := DX1 + 120; BY1 := DY1 + 140; BX2 := DX2 - 120; BY2 := DY1 + 250;
+  YX1 := BX1 + 40; NX1 := BX2 - 130; BtY1 := BY2 - 36; BtY2 := BY2 - 12;
+  HideMouse;
+  FD_Box(BX1, BY1, BX2, BY2, LightGray);
+  FD_Bevel(BX1, BY1, BX2, BY2, True);
+  FD_Box(BX1 + 1, BY1 + 1, BX2 - 1, BY1 + 15, Blue);
+  SetColor(White);
+  OutTextXY(BX1 + 8, BY1 + 4, 'Enregistrer sous');
+  SetColor(Black);
+  If Length(Nm) > 40 Then OutTextXY(BX1 + 12, BY1 + 28, '...' + Copy(Nm, Length(Nm) - 36, 37))
+  Else OutTextXY(BX1 + 12, BY1 + 28, Nm);
+  OutTextXY(BX1 + 12, BY1 + 44, 'existe deja. Le remplacer ?');
+  FD_Button(YX1, BtY1, YX1 + 90, BtY2, 'Oui (O)');
+  FD_Button(NX1, BtY1, NX1 + 90, BtY2, 'Non (N)');
+  ShowMouse;
+  Repeat GetMouseState(QX, QY, QB); Until (QB And 1) = 0;
+  Fin := False; Res := False; PB := 0;
+  Repeat
+   If KeyPressed Then Begin
+    C2 := ReadKey;
+    If C2 = #0 Then C2 := ReadKey
+    Else Case C2 Of
+     'o', 'O', 'y', 'Y', #13: Begin Res := True; Fin := True; End;
+     'n', 'N', #27: Fin := True;
+    End;
+   End;
+   GetMouseState(QX, QY, QB);
+   If ((PB And 1) = 0) And ((QB And 1) <> 0) Then Begin
+    If (QY >= BtY1) And (QY <= BtY2) Then Begin
+     If (QX >= YX1) And (QX <= YX1 + 90) Then Begin Res := True; Fin := True; End
+     Else If (QX >= NX1) And (QX <= NX1 + 90) Then Fin := True;
+    End;
+   End;
+   PB := QB;
+  Until Fin;
+  Repeat GetMouseState(QX, QY, QB); Until (QB And 1) = 0;
+  Overwrite := Res;
+  RedrawAll;
+ End;
+
+ Function Exists(Const Nm: String): Boolean;
+ Var SR2: SearchRec;
+ Begin
+  FindFirst(Nm, AnyFile, SR2);
+  Exists := DosError = 0;
+  FindClose(SR2);
+ End;
+
  Procedure DoActivate;
- Var Sel: String; I: Integer;
+ Var Sel: String; I, P: Integer;
  Begin
   If (FD_Focus = 0) And (FD_NDirs > 0) And (FD_SelDir < FD_NDirs) Then Begin
    Sel := FD_Dirs[FD_SelDir].Name;
@@ -13457,7 +13574,7 @@ Var
    Exit;
   End;
   Sel := FD_NameBuf;
-  If Sel = '' Then
+  If (Sel = '') And Not SaveMode Then
    If (FD_NFiles > 0) And (FD_SelFile < FD_NFiles) Then Sel := FD_Files[FD_SelFile].Name;
   If Sel = '' Then Exit;
   For I := 0 To FD_NDirs - 1 Do
@@ -13473,6 +13590,14 @@ Var
    FN := FD_CurDir;
    If (Length(FN) > 0) And (FN[Length(FN)] <> '\') Then FN := FN + '\';
    FN := FN + Sel;
+  End;
+  If SaveMode Then Begin
+   { extension .DWG par defaut }
+   P := Length(Sel);
+   While (P > 0) And (Sel[P] <> '.') Do Dec(P);
+   If P = 0 Then FN := FN + '.DWG';
+   If Exists(FN) Then
+    If Not Overwrite(FN) Then Exit;
   End;
   ResultVal := True;
   Done := True;
@@ -13501,6 +13626,16 @@ Begin
  FileOpenDialog := False;
  FD_NameBuf := '';
  FD_Focus := 1;
+ If SaveMode Then Begin
+  FD_Focus := 2;
+  FD_FilterIdx := 0;
+  If CurrentFileName <> '' Then Begin
+   K := Length(CurrentFileName);
+   While (K > 0) And (CurrentFileName[K] <> '\') And (CurrentFileName[K] <> '/') Do Dec(K);
+   FD_NameBuf := Copy(CurrentFileName, K + 1, 60);
+   If K > 0 Then Begin {$I-} ChDir(Copy(CurrentFileName, 1, K - 1)); {$I+} If IOResult <> 0 Then K := 0; End;
+  End;
+ End;
  FD_SelDir := 0;
  FD_SelFile := 0;
  FD_Scan;
@@ -13512,7 +13647,7 @@ Begin
  NamX1 := DX1 + 50;  NamY1 := DY2 - 76; NamY2 := DY2 - 60;
  TypX2 := DX2 - 10;  TypX1 := TypX2 - 221;
  NamX2 := TypX1 - 52;
- OkX1 := DX2 - 180; OkY1 := DY2 - 50; OkX2 := DX2 - 100; OkY2 := DY2 - 32;
+ OkX1 := DX2 - 200; OkY1 := DY2 - 50; OkX2 := DX2 - 100; OkY2 := DY2 - 32;
  CcX1 := DX2 - 90;  CcY1 := DY2 - 50; CcX2 := DX2 - 10;  CcY2 := DY2 - 32;
  DirRows := (DirY2 - DirY1 - 2) Div FD_ROWH;
  FileRows := (FilY2 - FilY1 - 2) Div FD_ROWH;
@@ -13608,7 +13743,7 @@ End;
 Procedure OpenDrawingDialog;
 Var FN: String; SavedSW, SavedSH: Integer;
 Begin
- If FileOpenDialog('Ouvrir un fichier', FN) Then Begin
+ If FileOpenDialog('Ouvrir un fichier', False, FN) Then Begin
   SavedSW := ScreenWidth;
   SavedSH := ScreenHeight;
   If ReadDWGFile(FN) Then Begin
@@ -13622,8 +13757,25 @@ Begin
  DrawInterface;
 End;
 
+{ Enregistrer sous : retourne True si le dessin a ete enregistre }
+Function SaveDrawingDialog: Boolean;
+Var FN: String;
+Begin
+ SaveDrawingDialog := False;
+ If FileOpenDialog('Enregistrer sous', True, FN) Then Begin
+  If WriteDWGFile(FN) Then Begin
+   CurrentFileName := FN;
+   MarkDocumentSaved;
+   CommandLastLine := 'Enregistre: ' + FN;
+   SaveDrawingDialog := True;
+  End Else
+   CommandLastLine := 'Echec enregistrement: ' + FN;
+ End Else CommandLastLine := '*Cancel*';
+ DrawInterface;
+End;
+
 { ============================================================================ }
-{ Fonctions pour le format DWG (AutoCAD Drawing) - TODO 21                    }
+{ Fonctions pour le format DWG (AutoCAD Drawing) - TODO 21                   }
 { ============================================================================ }
 
 { Écrire un octet dans le fichier DWG }
@@ -17749,11 +17901,7 @@ Begin
          CommandLastLine := 'Enregistre: ' + CurrentFileName
         Else
          CommandLastLine := 'Echec enregistrement: ' + CurrentFileName;
-       End Else Begin
-        PendingFileAction := 2;
-        CommandPrompt := 'Enregistrer sous:';
-        CommandBuffer := '';
-       End;
+       End Else SaveDrawingDialog;
        DrawInterface;
       End Else Begin
        { Commande non implémentée : afficher dans la ligne de commande }
@@ -17830,15 +17978,19 @@ Begin
          Else
           CommandLastLine := 'Echec enregistrement: ' + CurrentFileName;
         End Else Begin
-         PendingFileAction := 2;
-         CommandPrompt := 'Enregistrer sous:';
-         CommandBuffer := '';
+         MenuActive := False;
+         ActiveMenu := -1;
+         ActiveMenuItem := -1;
+         DrawInterface;
+         SaveDrawingDialog;
         End;
        End;
        3: Begin { Enregistrer sous... }
-        PendingFileAction := 2;
-        CommandPrompt := 'Enregistrer sous:';
-        CommandBuffer := '';
+        MenuActive := False;
+        ActiveMenu := -1;
+        ActiveMenuItem := -1;
+        DrawInterface;
+        SaveDrawingDialog;
        End;
        5: Begin { Importer... (.DXF / .SVG / .DWG) }
         PendingFileAction := 3;
@@ -19431,6 +19583,8 @@ Begin
     DrawCanvas;
     { Mettre à jour la barre d'état avec les nouvelles coordonnées }
     DrawStatusBar;
+    { Infobulle jaune au survol d'une icone }
+    DrawToolbarHint(MouseX, MouseY);
    End;
   End;
 

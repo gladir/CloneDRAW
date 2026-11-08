@@ -24,7 +24,7 @@ Apercu d'AutraCAD :
 	</tr>
 	<tr>
 		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/047d757e-d229-4e2b-bf8b-13a80dc8b652" /></td>
-		<td></td>
+		<td><img width="320" height="240" alt="image" src="https://github.com/user-attachments/assets/349dccce-b7e6-44aa-a1ef-9921546d5a4e" /></td>
 	</tr>
 </table>
 

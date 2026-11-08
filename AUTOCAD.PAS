@@ -1038,6 +1038,7 @@ Procedure ExecuteContextAction(Action: Integer); Forward;
 Procedure HandleRightClick(X, Y: Integer); Forward;
 Procedure CommandContextMenu(X, Y: Integer); Forward;
 Procedure UnitsDialog; Forward;
+Procedure PointStyleDialog; Forward;
 Function CmdRunToolbar(Const Cmd: String): Boolean; Forward;
 Procedure HandleMiddleClick(X, Y: Integer); Forward;
 
@@ -4557,6 +4558,34 @@ Begin
  SelectMode := SELECT_MODE_NONE;
 End;
 
+{ Moitie de la taille d'un point (pixels) selon PDSIZE : 0 = 5 % de l'ecran,
+  <0 = pourcentage de la hauteur d'ecran, >0 = unites du dessin }
+Function PointHalf(Size: Real): Integer;
+Var Px: Real; H: Integer;
+Begin
+ If Size = 0 Then Px := ScreenHeight * 0.05
+ Else If Size < 0 Then Px := ScreenHeight * (-Size) / 100.0
+ Else Px := Size * ZoomLevel;
+ H := Round(Px / 2);
+ If H < 1 Then H := 1;
+ If H > 300 Then H := 300;
+ PointHalf := H;
+End;
+
+{ Dessine un point selon le style (PDMODE) : 0 point, 1 rien, 2 +, 3 x, 4 |,
+  +32 cercle, +64 carre ; couleur = couleur courante de SetColor }
+Procedure DrawPointSymbol(X, Y, Style, Half: Integer);
+Begin
+ Case Style And 31 Of
+  0: Begin Line(X - 1, Y, X + 1, Y); Line(X, Y - 1, X, Y + 1); End;
+  2: Begin Line(X - Half, Y, X + Half, Y); Line(X, Y - Half, X, Y + Half); End;
+  3: Begin Line(X - Half, Y - Half, X + Half, Y + Half); Line(X - Half, Y + Half, X + Half, Y - Half); End;
+  4: Line(X, Y, X, Y - Half);
+ End;
+ If (Style And 32) <> 0 Then Circle(X, Y, Half);
+ If (Style And 64) <> 0 Then Rectangle(X - Half, Y - Half, X + Half, Y + Half);
+End;
+
 { Dessiner tous les objets (avec mise en surbrillance des sélectionnés) }
 Procedure DrawSelectedObjects;
 Var
@@ -4654,9 +4683,7 @@ Begin
    OBJ_POINT: Begin
     SCX := WorldToScreenX(DrawObjects[I].X1);
     SCY := WorldToScreenY(DrawObjects[I].Y1);
-    PutPixel(SCX, SCY, ObjColor);
-    Line(SCX - 2, SCY, SCX + 2, SCY);
-    Line(SCX, SCY - 2, SCX, SCY + 2);
+    DrawPointSymbol(SCX, SCY, CurrentPointStyle, PointHalf(CurrentPointSize));
    End;
 
    OBJ_TEXT: Begin
@@ -14014,7 +14041,11 @@ Begin
  WriteDWGByte(F, AngleMode);
  WriteDWGByte(F, AnglePrec);
  WriteDWGByte(F, InsertUnit);
- For I := 7 to 32 do
+ WriteDWGByte(F, CurrentPointStyle);
+ If CurrentPointSize = 0 Then WriteDWGByte(F, 0)
+ Else If CurrentPointSize < 0 Then WriteDWGByte(F, Round(-CurrentPointSize))
+ Else WriteDWGByte(F, 100 + Round(CurrentPointSize));
+ For I := 9 to 32 do
   WriteDWGByte(F, 0);
 End;
 
@@ -14188,8 +14219,13 @@ Begin
   I := ReadDWGByte(F); If I <= 3 Then AngleMode := I;
   I := ReadDWGByte(F); If I <= 8 Then AnglePrec := I;
   I := ReadDWGByte(F); If I <= 7 Then InsertUnit := I;
+  I := ReadDWGByte(F); If I <= 100 Then CurrentPointStyle := I;
+  I := ReadDWGByte(F);
+  If I = 0 Then CurrentPointSize := 0.0
+  Else If I <= 100 Then CurrentPointSize := -I
+  Else CurrentPointSize := I - 100;
   If (CurrentUnits >= 3) And (UnitPrec > 6) Then UnitPrec := 6;
-  For I := 7 to 32 do
+  For I := 9 to 32 do
    Dummy := ReadDWGByte(F);
  End Else Begin
   For I := 2 to 32 do
@@ -18390,9 +18426,11 @@ Begin
         CommandBuffer := '';
        End;
        7: Begin { Point Style... }
-        PendingFileAction := 26;
-        CommandPrompt := 'Style de point (0=point 1=vide 2=+ 3=x 4=|):';
-        CommandBuffer := '';
+        MenuActive := False;
+        ActiveMenu := -1;
+        ActiveMenuItem := -1;
+        DrawInterface;
+        PointStyleDialog;
        End;
        9: Begin { Units... }
         MenuActive := False;
@@ -19962,8 +20000,7 @@ Begin
  CmdFld('Nom du style', 'Standard', True);
  CmdAdd(3, 'Style de cote', 25, 'Nom du style de cote courant:');
  CmdFld('Nom du style', 'Standard', True);
- CmdAdd(3, 'Style de point', 26, 'Style de point (0=point 1=vide 2=+ 3=x 4=|):');
- CmdFld('Style (0-4)', '0', False);
+ CmdAdd(3, 'Style de point...', 2051, '');
  CmdAdd(3, 'Unites...', 2050, '');
  CmdAdd(3, 'Limites du dessin', 28, 'Limites X1 Y1 X2 Y2 (4 reels):');
  CmdFld('Coin bas-gauche X', '0', False); CmdFld('Coin bas-gauche Y', '0', False);
@@ -20030,6 +20067,7 @@ Begin
   2040: OpenDrawingDialog;
   2041: SaveDrawingDialog;
   2050: UnitsDialog;
+  2051: PointStyleDialog;
  End;
 End;
 
@@ -21807,6 +21845,287 @@ Begin
  DrawInterface;
 End;
 
+{ ============================================================================ }
+{ Format > Style de point : choix de l'apparence et de la taille des points     }
+{ ============================================================================ }
+
+Procedure PointStyleDialog;
+Const
+ DW = 570;
+ DH = 332;
+Var
+ DX1, DY1, DX2, DY2, I: Integer;
+ TCol, TRow: Integer;                   { tuile choisie }
+ RelMode: Boolean;                      { taille relative (%) ou absolue }
+ SRel, SAbs: String;
+ FG: Integer;                           { 0=tuiles 1=% 2=unites }
+ Fresh: Boolean;
+ Done, Res: Boolean;
+ Ch: Char;
+ MX, MY, MB, OldMB: LongInt;
+ OkX1, OkY1, OkX2, OkY2, CcX1, CcX2: Integer;
+ PX1, PY1, PX2, PY2: Integer;
+
+ Function StyleOf: Integer;
+ Var S: Integer;
+ Begin
+  S := TCol;
+  If (TRow = 1) Or (TRow = 3) Then S := S + 32;
+  If (TRow = 2) Or (TRow = 3) Then S := S + 64;
+  StyleOf := S;
+ End;
+
+ Function NumOf(Const T: String; Def: Real): Real;
+ Var V: Real; Cd, P: Integer; S: String;
+ Begin
+  S := T;
+  For P := 1 To Length(S) Do If S[P] = ',' Then S[P] := '.';
+  Val(S, V, Cd);
+  If (Cd <> 0) Or (S = '') Then V := Def;
+  NumOf := V;
+ End;
+
+ Function SizeValue: Real;      { PDSIZE : <0 pourcentage, >0 unites }
+ Var V: Real;
+ Begin
+  If RelMode Then Begin
+   V := NumOf(SRel, 5);
+   If V < 0.5 Then V := 0.5;
+   If V > 50 Then V := 50;
+   SizeValue := -V;
+  End Else Begin
+   V := NumOf(SAbs, 5);
+   If V < 0.1 Then V := 0.1;
+   If V > 1000 Then V := 1000;
+   SizeValue := V;
+  End;
+ End;
+
+ Function NumStr(R: Real): String;
+ Var T: String;
+ Begin
+  Str(R:0:2, T);
+  While (Length(T) > 1) And (T[Length(T)] = '0') Do Delete(T, Length(T), 1);
+  If (Length(T) > 0) And (T[Length(T)] = '.') Then Delete(T, Length(T), 1);
+  NumStr := T;
+ End;
+
+ Procedure Tile(Col, Row: Integer);
+ Var X1, Y1, X2, Y2, St, CxT, CyT: Integer;
+ Begin
+  X1 := DX1 + 14 + Col * 50;
+  Y1 := DY1 + 38 + Row * 38;
+  X2 := X1 + 48;
+  Y2 := Y1 + 36;
+  FD_Box(X1, Y1, X2, Y2, White);
+  If (Col = TCol) And (Row = TRow) Then Begin
+   SetColor(Blue);
+   Rectangle(X1, Y1, X2, Y2);
+   Rectangle(X1 + 1, Y1 + 1, X2 - 1, Y2 - 1);
+   Rectangle(X1 + 2, Y1 + 2, X2 - 2, Y2 - 2);
+  End Else FD_Bevel(X1, Y1, X2, Y2, False);
+  St := Col;
+  If (Row = 1) Or (Row = 3) Then St := St + 32;
+  If (Row = 2) Or (Row = 3) Then St := St + 64;
+  CxT := (X1 + X2) Div 2;
+  CyT := (Y1 + Y2) Div 2 + 4;
+  SetColor(Black);
+  DrawPointSymbol(CxT, CyT, St, 9);
+  If Col = 1 Then Begin
+   SetColor(LightGray);
+   OutTextXY(X1 + 4, Y1 + 2, 'rien');
+  End;
+ End;
+
+ Procedure Edit(X, Y: Integer; Const Txt: String; Active: Boolean);
+ Begin
+  FD_Box(X, Y, X + 64, Y + 16, White);
+  If Active Then Begin
+   SetColor(Blue);
+   Rectangle(X, Y, X + 64, Y + 16);
+   Rectangle(X + 1, Y + 1, X + 63, Y + 15);
+  End Else FD_Bevel(X, Y, X + 64, Y + 16, False);
+  If Active And Fresh Then Begin
+   FD_Box(X + 3, Y + 3, X + 5 + TextWidth(Txt), Y + 13, Blue);
+   SetColor(White);
+  End Else SetColor(Black);
+  OutTextXY(X + 4, Y + 4, Txt);
+  If Active And Not Fresh Then Begin
+   SetColor(Black);
+   OutTextXY(X + 4 + TextWidth(Txt), Y + 4, '_');
+  End;
+ End;
+
+ Procedure Radio(X, Y: Integer; Sel: Boolean; Const Cap: String);
+ Begin
+  SetColor(Black);
+  Circle(X + 5, Y + 4, 4);
+  If Sel Then Begin
+   SetFillStyle(SolidFill, Blue);
+   Bar(X + 3, Y + 2, X + 7, Y + 6);
+  End;
+  SetColor(Black);
+  OutTextXY(X + 16, Y, Cap);
+ End;
+
+ Procedure Paint;
+ Var
+  K, Half, SxA, SyA, SxB, SyB, RowT: Integer;
+  S: String;
+ Begin
+  HideMouse;
+  FD_Box(DX1, DY1, DX2, DY2, LightGray);
+  FD_Bevel(DX1, DY1, DX2, DY2, True);
+  FD_Box(DX1 + 1, DY1 + 1, DX2 - 1, DY1 + 16, Blue);
+  SetColor(White);
+  OutTextXY(DX1 + 8, DY1 + 5, 'Style de point');
+
+  If FG = 0 Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(DX1 + 14, DY1 + 24, 'Apparence');
+  For RowT := 0 To 3 Do
+   For K := 0 To 4 Do Tile(K, RowT);
+
+  { taille }
+  SetColor(Black);
+  OutTextXY(DX1 + 14, DY1 + 198, 'Taille du point');
+  Radio(DX1 + 14, DY1 + 216, RelMode, 'Relative a l''ecran (%)');
+  Edit(DX1 + 214, DY1 + 212, SRel, FG = 1);
+  Radio(DX1 + 14, DY1 + 240, Not RelMode, 'Absolue (unites)');
+  Edit(DX1 + 214, DY1 + 236, SAbs, FG = 2);
+
+  { apercu }
+  SetColor(Black);
+  OutTextXY(PX1, DY1 + 24, 'Apercu');
+  SetViewPort(PX1 + 1, PY1 + 1, PX2 - 1, PY2 - 1, True);
+  SetFillStyle(SolidFill, Black);
+  Bar(0, 0, PX2 - PX1, PY2 - PY1);
+  SetColor(DarkGray);
+  For K := 0 To 8 Do Line(0, K * 20, PX2 - PX1, K * 20);
+  For K := 0 To 12 Do Line(K * 20, 0, K * 20, PY2 - PY1);
+  { ligne et trois points }
+  SxA := 40; SyA := PY2 - PY1 - 30; SxB := PX2 - PX1 - 40; SyB := 40;
+  SetColor(LightGray);
+  Line(SxA, SyA, SxB, SyB);
+  SetColor(White);
+  Half := PointHalf(SizeValue);
+  If Half > 70 Then Half := 70;
+  DrawPointSymbol(SxA, SyA, StyleOf, Half);
+  DrawPointSymbol((SxA + SxB) Div 2, (SyA + SyB) Div 2, StyleOf, Half);
+  DrawPointSymbol(SxB, SyB, StyleOf, Half);
+  SetViewPort(0, 0, ScreenWidth - 1, ScreenHeight - 1, True);
+  FD_Bevel(PX1, PY1, PX2, PY2, False);
+  SetColor(Black);
+  Str(StyleOf, S);
+  OutTextXY(PX1, PY2 + 8, 'Style : ' + S);
+  OutTextXY(PX1, PY2 + 20, 'Taille : ' + NumStr(Abs(SizeValue)) + ' ' + 'px/2=' + NumStr(Half));
+
+  FD_Button(OkX1, OkY1, OkX2, OkY2, 'OK');
+  FD_Button(CcX1, OkY1, CcX2, OkY2, 'Annuler');
+  ShowMouse;
+ End;
+
+ Procedure EditKey(Var T: String; C: Char);
+ Begin
+  If C = #8 Then Begin
+   If Fresh Then T := '' Else If Length(T) > 0 Then Delete(T, Length(T), 1);
+   Fresh := False;
+  End Else If ((C >= '0') And (C <= '9')) Or (C = '.') Or (C = ',') Then Begin
+   If Fresh Then Begin T := ''; Fresh := False; End;
+   If Length(T) < 8 Then T := T + C;
+  End;
+ End;
+
+Begin
+ TCol := CurrentPointStyle And 31;
+ If TCol > 4 Then TCol := 0;
+ TRow := 0;
+ If (CurrentPointStyle And 32) <> 0 Then TRow := TRow + 1;
+ If (CurrentPointStyle And 64) <> 0 Then TRow := TRow + 2;
+ RelMode := CurrentPointSize <= 0;
+ If CurrentPointSize = 0 Then Begin SRel := '5'; SAbs := '5'; End
+ Else If CurrentPointSize < 0 Then Begin SRel := NumStr(-CurrentPointSize); SAbs := '5'; End
+ Else Begin SRel := '5'; SAbs := NumStr(CurrentPointSize); End;
+ FG := 0; Fresh := True;
+ DX1 := (ScreenWidth - DW) Div 2; If DX1 < 0 Then DX1 := 0;
+ DY1 := (ScreenHeight - DH) Div 2; If DY1 < 0 Then DY1 := 0;
+ DX2 := DX1 + DW; DY2 := DY1 + DH;
+ PX1 := DX1 + 290; PX2 := DX2 - 14; PY1 := DY1 + 38; PY2 := DY1 + 230;
+ OkX1 := DX2 - 200; OkX2 := DX2 - 110; OkY1 := DY2 - 32; OkY2 := DY2 - 10;
+ CcX1 := DX2 - 100; CcX2 := DX2 - 12;
+ Paint;
+ While KeyPressed Do Ch := ReadKey;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ OldMB := 0; Done := False; Res := False;
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then Begin
+    Ch := ReadKey;
+    If FG = 0 Then Begin
+     Case Ch Of
+      #75: If TCol > 0 Then Dec(TCol);
+      #77: If TCol < 4 Then Inc(TCol);
+      #72: If TRow > 0 Then Dec(TRow);
+      #80: If TRow < 3 Then Inc(TRow);
+     End;
+     Paint;
+    End;
+   End Else Begin
+    Case Ch Of
+     #27: Done := True;
+     #13: Begin Res := True; Done := True; End;
+     #9: Begin
+      FG := (FG + 1) Mod 3;
+      Fresh := True;
+      If FG = 1 Then RelMode := True;
+      If FG = 2 Then RelMode := False;
+      Paint;
+     End;
+    Else
+     If FG = 1 Then Begin EditKey(SRel, Ch); Paint; End
+     Else If FG = 2 Then Begin EditKey(SAbs, Ch); Paint; End;
+    End;
+   End;
+  End;
+  GetMouseState(MX, MY, MB);
+  If ((OldMB And 1) = 0) And ((MB And 1) <> 0) Then Begin
+   If (MX >= OkX1) And (MX <= OkX2) And (MY >= OkY1) And (MY <= OkY2) Then Begin Res := True; Done := True; End
+   Else If (MX >= CcX1) And (MX <= CcX2) And (MY >= OkY1) And (MY <= OkY2) Then Done := True
+   Else Begin
+    For I := 0 To 19 Do
+     If (MX >= DX1 + 14 + (I Mod 5) * 50) And (MX <= DX1 + 62 + (I Mod 5) * 50) And
+        (MY >= DY1 + 38 + (I Div 5) * 38) And (MY <= DY1 + 74 + (I Div 5) * 38) Then Begin
+      TCol := I Mod 5; TRow := I Div 5; FG := 0; Paint;
+     End;
+    If (MX >= DX1 + 14) And (MX <= DX1 + 200) And (MY >= DY1 + 214) And (MY <= DY1 + 228) Then Begin
+     RelMode := True; FG := 1; Fresh := True; Paint;
+    End;
+    If (MX >= DX1 + 14) And (MX <= DX1 + 200) And (MY >= DY1 + 238) And (MY <= DY1 + 252) Then Begin
+     RelMode := False; FG := 2; Fresh := True; Paint;
+    End;
+    If (MX >= DX1 + 214) And (MX <= DX1 + 278) And (MY >= DY1 + 212) And (MY <= DY1 + 228) Then Begin
+     RelMode := True; FG := 1; Fresh := True; Paint;
+    End;
+    If (MX >= DX1 + 214) And (MX <= DX1 + 278) And (MY >= DY1 + 236) And (MY <= DY1 + 252) Then Begin
+     RelMode := False; FG := 2; Fresh := True; Paint;
+    End;
+   End;
+  End;
+  OldMB := MB;
+ Until Done;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ If Res Then Begin
+  CurrentPointStyle := StyleOf;
+  CurrentPointSize := SizeValue;
+  MarkDocumentModified;
+  CommandLastLine := 'Style de point = ' + NumStr(StyleOf) + ', taille ' + NumStr(Abs(SizeValue)) + ' ' +
+                     'unites';
+  If RelMode Then CommandLastLine := 'Style de point = ' + NumStr(StyleOf) + ', taille ' +
+                                     NumStr(Abs(SizeValue)) + ' % de l''ecran';
+ End Else CommandLastLine := '*Cancel*';
+ DrawInterface;
+End;
+
 { Boucle principale }
 Procedure MainLoop;
 Var
@@ -22194,8 +22513,8 @@ Begin
         End;
         26: Begin { Format -> Point Style }
          Val(CommandBuffer, I, OkInt);
-         If (OkInt <> 0) or (I < 0) or (I > 4) Then
-          CommandLastLine := 'Style de point invalide (0..4): ' + CommandBuffer
+         If (OkInt <> 0) or (I < 0) or (I > 100) or ((I And 31) > 4) Then
+          CommandLastLine := 'Style de point invalide (0..4, +32 cercle, +64 carre): ' + CommandBuffer
          Else Begin
           CurrentPointStyle := I;
           CommandLastLine := 'Style de point = ' + CommandBuffer;

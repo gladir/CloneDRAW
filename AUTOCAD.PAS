@@ -13222,7 +13222,408 @@ Begin
 End;
 
 { ============================================================================ }
-{ Fonctions pour le format DWG (AutoCAD Drawing) - TODO 21                     }
+{ Boite de dialogue "Ouvrir un fichier" (dossiers / fichiers / nom / type)     }
+{ ============================================================================ }
+
+Const
+ FD_MAXENT = 400;
+ FD_ROWH = 12;
+
+Type
+ TFDEntry = Record
+  Name: String[40];
+  Size: LongInt;
+  Yr, Mo, Dy: Word;
+ End;
+
+Var
+ FD_Dirs: Array[0..FD_MAXENT - 1] Of TFDEntry;
+ FD_Files: Array[0..FD_MAXENT - 1] Of TFDEntry;
+ FD_NDirs, FD_NFiles: Integer;
+ FD_SelDir, FD_SelFile, FD_TopDir, FD_TopFile: Integer;
+ FD_Focus: Integer;          { 0=dossiers 1=fichiers 2=nom }
+ FD_FilterIdx: Integer;      { 0=*.DWG 1=*.* }
+ FD_NameBuf: String;
+ FD_CurDir: String;
+
+Function FD_Up(Const S: String): String;
+Var I: Integer; R: String;
+Begin
+ R := S;
+ For I := 1 To Length(R) Do R[I] := UpCase(R[I]);
+ FD_Up := R;
+End;
+
+Function FD_Match(Const N: String): Boolean;
+Var P: Integer; E: String;
+Begin
+ If FD_FilterIdx = 1 Then Begin FD_Match := True; Exit; End;
+ E := '';
+ P := Length(N);
+ While (P > 0) And (N[P] <> '.') Do Dec(P);
+ If P > 0 Then E := FD_Up(Copy(N, P, 10));
+ FD_Match := E = '.DWG';
+End;
+
+Function FD_Num(V: Integer; Digits: Integer): String;
+Var S: String;
+Begin
+ Str(V, S);
+ While Length(S) < Digits Do S := '0' + S;
+ FD_Num := S;
+End;
+
+Procedure FD_Sort(Var A: Array Of TFDEntry; N: Integer);
+Var I, J: Integer; T: TFDEntry;
+Begin
+ For I := 1 To N - 1 Do Begin
+  T := A[I];
+  J := I - 1;
+  While (J >= 0) And (FD_Up(A[J].Name) > FD_Up(T.Name)) Do Begin
+   A[J + 1] := A[J];
+   Dec(J);
+  End;
+  A[J + 1] := T;
+ End;
+End;
+
+Procedure FD_Scan;
+Var SR: SearchRec; DT: DateTime; E: TFDEntry;
+Begin
+ FD_NDirs := 0;
+ FD_NFiles := 0;
+ GetDir(0, FD_CurDir);
+ FindFirst('*.*', AnyFile, SR);
+ While DosError = 0 Do Begin
+  FillChar(E, SizeOf(E), 0);
+  E.Name := SR.Name;
+  E.Size := SR.Size;
+  UnpackTime(SR.Time, DT);
+  E.Yr := DT.Year; E.Mo := DT.Month; E.Dy := DT.Day;
+  If (SR.Attr And Directory) <> 0 Then Begin
+   If (SR.Name <> '.') And (FD_NDirs < FD_MAXENT) Then Begin
+    FD_Dirs[FD_NDirs] := E;
+    Inc(FD_NDirs);
+   End;
+  End Else If (SR.Attr And VolumeID) = 0 Then Begin
+   If FD_Match(SR.Name) And (FD_NFiles < FD_MAXENT) Then Begin
+    FD_Files[FD_NFiles] := E;
+    Inc(FD_NFiles);
+   End;
+  End;
+  FindNext(SR);
+ End;
+ FindClose(SR);
+ FD_Sort(FD_Dirs, FD_NDirs);
+ FD_Sort(FD_Files, FD_NFiles);
+ If FD_SelDir >= FD_NDirs Then FD_SelDir := 0;
+ If FD_SelFile >= FD_NFiles Then FD_SelFile := 0;
+ FD_TopDir := 0;
+ FD_TopFile := 0;
+End;
+
+Procedure FD_Visible(Var Top: Integer; Sel, Rows: Integer);
+Begin
+ If Sel < Top Then Top := Sel;
+ If Sel >= Top + Rows Then Top := Sel - Rows + 1;
+ If Top < 0 Then Top := 0;
+End;
+
+Procedure FD_Bevel(X1, Y1, X2, Y2: Integer; Raised: Boolean);
+Begin
+ If Raised Then SetColor(White) Else SetColor(DarkGray);
+ Line(X1, Y1, X2, Y1);
+ Line(X1, Y1, X1, Y2);
+ If Raised Then SetColor(DarkGray) Else SetColor(White);
+ Line(X2, Y1, X2, Y2);
+ Line(X1, Y2, X2, Y2);
+End;
+
+Procedure FD_Box(X1, Y1, X2, Y2: Integer; Col: Integer);
+Begin
+ SetFillStyle(SolidFill, Col);
+ Bar(X1, Y1, X2, Y2);
+End;
+
+Procedure FD_Button(X1, Y1, X2, Y2: Integer; Const Cap: String);
+Begin
+ FD_Box(X1, Y1, X2, Y2, LightGray);
+ FD_Bevel(X1, Y1, X2, Y2, True);
+ SetColor(Black);
+ OutTextXY((X1 + X2) Div 2 - Length(Cap) * 4, (Y1 + Y2) Div 2 - 3, Cap);
+End;
+
+Procedure FD_DrawList(X1, Y1, X2, Y2: Integer; IsDir, Active: Boolean);
+Var Rows, I, Idx, RY, Top, Sel, Cnt: Integer; Nm: String;
+Begin
+ FD_Box(X1 + 1, Y1 + 1, X2 - 1, Y2 - 1, White);
+ Rows := (Y2 - Y1 - 2) Div FD_ROWH;
+ If IsDir Then Begin Top := FD_TopDir; Sel := FD_SelDir; Cnt := FD_NDirs; End
+ Else Begin Top := FD_TopFile; Sel := FD_SelFile; Cnt := FD_NFiles; End;
+ For I := 0 To Rows - 1 Do Begin
+  Idx := Top + I;
+  If Idx >= Cnt Then Break;
+  RY := Y1 + 3 + I * FD_ROWH;
+  If Idx = Sel Then Begin
+   If Active Then FD_Box(X1 + 1, RY - 2, X2 - 1, RY + FD_ROWH - 3, Blue)
+   Else FD_Box(X1 + 1, RY - 2, X2 - 1, RY + FD_ROWH - 3, DarkGray);
+   SetColor(White);
+  End Else SetColor(Black);
+  If IsDir Then Begin
+   Nm := '[' + FD_Dirs[Idx].Name + ']';
+   If Length(Nm) > 18 Then Nm := Copy(Nm, 1, 18);
+   OutTextXY(X1 + 4, RY, Nm);
+  End Else Begin
+   Nm := FD_Files[Idx].Name;
+   If Length(Nm) > 22 Then Nm := Copy(Nm, 1, 22);
+   OutTextXY(X1 + 4, RY, Nm);
+   Str(FD_Files[Idx].Size, Nm);
+   While Length(Nm) < 8 Do Nm := ' ' + Nm;
+   OutTextXY(X1 + 200, RY, Nm);
+   OutTextXY(X1 + 285, RY, FD_Num(FD_Files[Idx].Yr, 4) + '-' +
+             FD_Num(FD_Files[Idx].Mo, 2) + '-' + FD_Num(FD_Files[Idx].Dy, 2));
+  End;
+ End;
+ FD_Bevel(X1, Y1, X2, Y2, False);
+End;
+
+{ Retourne True et le chemin complet dans FN si l'utilisateur choisit un fichier }
+Function FileOpenDialog(Const Title: String; Var FN: String): Boolean;
+Const
+ DW = 600;
+ DH = 400;
+Var
+ DX1, DY1, DX2, DY2: Integer;
+ DirX1, DirY1, DirX2, DirY2: Integer;
+ FilX1, FilY1, FilX2, FilY2: Integer;
+ NamX1, NamY1, NamX2, NamY2: Integer;
+ TypX1, TypX2: Integer;
+ OkX1, OkY1, OkX2, OkY2: Integer;
+ CcX1, CcY1, CcX2, CcY2: Integer;
+ DirRows, FileRows, Idx, K: Integer;
+ Done, ResultVal: Boolean;
+ Ch: Char;
+ MX, MY, MB, OldMB: LongInt;
+ PathStr, S: String;
+
+ Procedure RedrawAll;
+ Begin
+  HideMouse;
+  FD_Box(DX1, DY1, DX2, DY2, LightGray);
+  FD_Bevel(DX1, DY1, DX2, DY2, True);
+  FD_Box(DX1 + 1, DY1 + 1, DX2 - 1, DY1 + 16, Blue);
+  SetColor(White);
+  OutTextXY(DX1 + 8, DY1 + 5, Title);
+  SetColor(Black);
+  OutTextXY(DX1 + 5, DY1 + 22, 'Chemin:');
+  FD_Box(DX1 + 58, DY1 + 19, DX2 - 8, DY1 + 33, White);
+  FD_Bevel(DX1 + 58, DY1 + 19, DX2 - 8, DY1 + 33, False);
+  PathStr := FD_CurDir;
+  If Length(PathStr) > 65 Then PathStr := '...' + Copy(PathStr, Length(PathStr) - 61, 62);
+  SetColor(Black);
+  OutTextXY(DX1 + 62, DY1 + 22, PathStr);
+  OutTextXY(DirX1, DY1 + 38, 'Dossiers');
+  OutTextXY(FilX1, DY1 + 38, 'Fichiers');
+  FD_DrawList(DirX1, DirY1, DirX2, DirY2, True, FD_Focus = 0);
+  FD_DrawList(FilX1, FilY1, FilX2, FilY2, False, FD_Focus = 1);
+  SetColor(Black);
+  OutTextXY(DX1 + 10, NamY1 + 4, 'Nom:');
+  FD_Box(NamX1, NamY1, NamX2, NamY2, White);
+  FD_Bevel(NamX1, NamY1, NamX2, NamY2, False);
+  S := FD_NameBuf;
+  While TextWidth(S) + 8 > NamX2 - NamX1 - 8 Do Delete(S, 1, 1);
+  SetColor(Black);
+  OutTextXY(NamX1 + 4, NamY1 + 4, S);
+  If FD_Focus = 2 Then OutTextXY(NamX1 + 4 + TextWidth(S), NamY1 + 4, '_');
+  OutTextXY(NamX2 + 4, NamY1 + 4, 'Type:');
+  FD_Box(TypX1, NamY1, TypX2, NamY2, LightGray);
+  FD_Bevel(TypX1, NamY1, TypX2, NamY2, True);
+  SetColor(Black);
+  If FD_FilterIdx = 0 Then OutTextXY(TypX1 + 4, NamY1 + 4, 'Dessins AutoCAD (*.DWG)')
+  Else OutTextXY(TypX1 + 4, NamY1 + 4, 'Tous les fichiers (*.*)');
+  OutTextXY(TypX2 - 12, NamY1 + 4, 'v');
+  FD_Button(OkX1, OkY1, OkX2, OkY2, 'Ouvrir');
+  FD_Button(CcX1, CcY1, CcX2, CcY2, 'Annuler');
+  ShowMouse;
+ End;
+
+ Procedure DoActivate;
+ Var Sel: String; I: Integer;
+ Begin
+  If (FD_Focus = 0) And (FD_NDirs > 0) And (FD_SelDir < FD_NDirs) Then Begin
+   Sel := FD_Dirs[FD_SelDir].Name;
+   {$I-} ChDir(Sel); {$I+}
+   If IOResult = 0 Then Begin FD_NameBuf := ''; FD_Scan; RedrawAll; End;
+   Exit;
+  End;
+  Sel := FD_NameBuf;
+  If Sel = '' Then
+   If (FD_NFiles > 0) And (FD_SelFile < FD_NFiles) Then Sel := FD_Files[FD_SelFile].Name;
+  If Sel = '' Then Exit;
+  For I := 0 To FD_NDirs - 1 Do
+   If FD_Up(FD_Dirs[I].Name) = FD_Up(Sel) Then Begin
+    {$I-} ChDir(Sel); {$I+}
+    If IOResult = 0 Then Begin
+     FD_NameBuf := ''; FD_Scan; RedrawAll; Exit;
+    End;
+   End;
+  If (Length(Sel) >= 2) And (Sel[2] = ':') Then FN := Sel
+  Else If Sel[1] = '\' Then FN := Sel
+  Else Begin
+   FN := FD_CurDir;
+   If (Length(FN) > 0) And (FN[Length(FN)] <> '\') Then FN := FN + '\';
+   FN := FN + Sel;
+  End;
+  ResultVal := True;
+  Done := True;
+ End;
+
+ Procedure Move(Delta: Integer; Absolute: Boolean);
+ Begin
+  If FD_Focus = 0 Then Begin
+   If Absolute Then Begin If Delta < 0 Then FD_SelDir := 0 Else FD_SelDir := FD_NDirs - 1; End
+   Else FD_SelDir := FD_SelDir + Delta;
+   If FD_SelDir >= FD_NDirs Then FD_SelDir := FD_NDirs - 1;
+   If FD_SelDir < 0 Then FD_SelDir := 0;
+   FD_Visible(FD_TopDir, FD_SelDir, DirRows);
+  End Else If FD_Focus = 1 Then Begin
+   If Absolute Then Begin If Delta < 0 Then FD_SelFile := 0 Else FD_SelFile := FD_NFiles - 1; End
+   Else FD_SelFile := FD_SelFile + Delta;
+   If FD_SelFile >= FD_NFiles Then FD_SelFile := FD_NFiles - 1;
+   If FD_SelFile < 0 Then FD_SelFile := 0;
+   FD_Visible(FD_TopFile, FD_SelFile, FileRows);
+   If FD_SelFile < FD_NFiles Then FD_NameBuf := FD_Files[FD_SelFile].Name;
+  End;
+  RedrawAll;
+ End;
+
+Begin
+ FileOpenDialog := False;
+ FD_NameBuf := '';
+ FD_Focus := 1;
+ FD_SelDir := 0;
+ FD_SelFile := 0;
+ FD_Scan;
+ DX1 := (ScreenWidth - DW) Div 2; If DX1 < 0 Then DX1 := 0;
+ DY1 := (ScreenHeight - DH) Div 2; If DY1 < 0 Then DY1 := 0;
+ DX2 := DX1 + DW; DY2 := DY1 + DH;
+ DirX1 := DX1 + 5;   DirY1 := DY1 + 50; DirX2 := DX1 + 165; DirY2 := DY2 - 82;
+ FilX1 := DX1 + 170; FilY1 := DY1 + 50; FilX2 := DX2 - 5;   FilY2 := DY2 - 82;
+ NamX1 := DX1 + 50;  NamY1 := DY2 - 76; NamY2 := DY2 - 60;
+ TypX2 := DX2 - 10;  TypX1 := TypX2 - 221;
+ NamX2 := TypX1 - 52;
+ OkX1 := DX2 - 180; OkY1 := DY2 - 50; OkX2 := DX2 - 100; OkY2 := DY2 - 32;
+ CcX1 := DX2 - 90;  CcY1 := DY2 - 50; CcX2 := DX2 - 10;  CcY2 := DY2 - 32;
+ DirRows := (DirY2 - DirY1 - 2) Div FD_ROWH;
+ FileRows := (FilY2 - FilY1 - 2) Div FD_ROWH;
+ RedrawAll;
+ While KeyPressed Do K := Ord(ReadKey);
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 1) = 0;
+ Done := False; ResultVal := False; OldMB := 0;
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then Begin
+    Ch := ReadKey;
+    Case Ch Of
+     #72: Move(-1, False);
+     #80: Move(1, False);
+     #73: If FD_Focus = 0 Then Move(-DirRows, False) Else Move(-FileRows, False);
+     #81: If FD_Focus = 0 Then Move(DirRows, False) Else Move(FileRows, False);
+     #71: Move(-1, True);
+     #79: Move(1, True);
+    End;
+   End Else Begin
+    Case Ch Of
+     #27: Done := True;
+     #13: DoActivate;
+     #9: Begin FD_Focus := (FD_Focus + 1) Mod 3; RedrawAll; End;
+     #8: If FD_Focus = 2 Then Begin
+          If Length(FD_NameBuf) > 0 Then Delete(FD_NameBuf, Length(FD_NameBuf), 1);
+          RedrawAll;
+         End;
+    Else
+     If Ch >= ' ' Then Begin
+      If FD_Focus = 2 Then Begin
+       If Length(FD_NameBuf) < 60 Then FD_NameBuf := FD_NameBuf + Ch;
+       RedrawAll;
+      End Else If FD_Focus = 0 Then Begin
+       For Idx := 0 To FD_NDirs - 1 Do
+        If UpCase(FD_Dirs[Idx].Name[1]) = UpCase(Ch) Then Begin
+         FD_SelDir := Idx;
+         FD_Visible(FD_TopDir, FD_SelDir, DirRows);
+         Break;
+        End;
+       RedrawAll;
+      End Else Begin
+       For Idx := 0 To FD_NFiles - 1 Do
+        If UpCase(FD_Files[Idx].Name[1]) = UpCase(Ch) Then Begin
+         FD_SelFile := Idx;
+         FD_Visible(FD_TopFile, FD_SelFile, FileRows);
+         FD_NameBuf := FD_Files[Idx].Name;
+         Break;
+        End;
+       RedrawAll;
+      End;
+     End;
+    End;
+   End;
+  End;
+  GetMouseState(MX, MY, MB);
+  If ((OldMB And 1) = 0) And ((MB And 1) <> 0) Then Begin
+   If (MX >= DirX1) And (MX <= DirX2) And (MY >= DirY1) And (MY <= DirY2) Then Begin
+    Idx := FD_TopDir + (MY - DirY1 - 2) Div FD_ROWH;
+    FD_Focus := 0;
+    If (Idx >= 0) And (Idx < FD_NDirs) Then Begin
+     FD_SelDir := Idx; RedrawAll; DoActivate;
+    End Else RedrawAll;
+   End Else If (MX >= FilX1) And (MX <= FilX2) And (MY >= FilY1) And (MY <= FilY2) Then Begin
+    Idx := FD_TopFile + (MY - FilY1 - 2) Div FD_ROWH;
+    If (Idx >= 0) And (Idx < FD_NFiles) Then Begin
+     If (FD_Focus = 1) And (Idx = FD_SelFile) Then Begin
+      FD_NameBuf := FD_Files[Idx].Name; DoActivate;
+     End Else Begin
+      FD_SelFile := Idx; FD_Focus := 1;
+      FD_NameBuf := FD_Files[Idx].Name;
+      RedrawAll;
+     End;
+    End Else Begin FD_Focus := 1; RedrawAll; End;
+   End Else If (MX >= NamX1) And (MX <= NamX2) And (MY >= NamY1) And (MY <= NamY2) Then Begin
+    FD_Focus := 2; RedrawAll;
+   End Else If (MX >= TypX1) And (MX <= TypX2) And (MY >= NamY1) And (MY <= NamY2) Then Begin
+    FD_FilterIdx := 1 - FD_FilterIdx;
+    FD_Scan;
+    RedrawAll;
+   End Else If (MX >= OkX1) And (MX <= OkX2) And (MY >= OkY1) And (MY <= OkY2) Then DoActivate
+   Else If (MX >= CcX1) And (MX <= CcX2) And (MY >= CcY1) And (MY <= CcY2) Then Done := True;
+  End;
+  OldMB := MB;
+ Until Done;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 1) = 0;
+ DrawInterface;
+ FileOpenDialog := ResultVal;
+End;
+
+{ Ouvrir un dessin via la boite de dialogue }
+Procedure OpenDrawingDialog;
+Var FN: String; SavedSW, SavedSH: Integer;
+Begin
+ If FileOpenDialog('Ouvrir un fichier', FN) Then Begin
+  SavedSW := ScreenWidth;
+  SavedSH := ScreenHeight;
+  If ReadDWGFile(FN) Then Begin
+   CurrentFileName := FN;
+   CommandLastLine := 'Charge: ' + FN;
+  End Else
+   CommandLastLine := 'Echec chargement: ' + FN;
+  ScreenWidth := SavedSW;
+  ScreenHeight := SavedSH;
+ End Else CommandLastLine := '*Cancel*';
+ DrawInterface;
+End;
+
+{ ============================================================================ }
+{ Fonctions pour le format DWG (AutoCAD Drawing) - TODO 21                    }
 { ============================================================================ }
 
 { Écrire un octet dans le fichier DWG }
@@ -17341,10 +17742,7 @@ Begin
        CommandLastLine := 'Nouveau dessin';
        DrawInterface;
       End Else If Toolbars[TbHit].Buttons[BtnHit].Command = 'OPEN' Then Begin
-       PendingFileAction := 1;
-       CommandPrompt := 'Nom du fichier a ouvrir:';
-       CommandBuffer := '';
-       DrawInterface;
+       OpenDrawingDialog;
       End Else If Toolbars[TbHit].Buttons[BtnHit].Command = 'SAVE' Then Begin
        If CurrentFileName <> '' Then Begin
         If WriteDWGFile(CurrentFileName) Then
@@ -17419,9 +17817,11 @@ Begin
         CommandLastLine := 'Nouveau dessin';
        End;
        1: Begin { Ouvrir }
-        PendingFileAction := 1;
-        CommandPrompt := 'Nom du fichier a ouvrir:';
-        CommandBuffer := '';
+        MenuActive := False;
+        ActiveMenu := -1;
+        ActiveMenuItem := -1;
+        DrawInterface;
+        OpenDrawingDialog;
        End;
        2: Begin { Enregistrer }
         If CurrentFileName <> '' Then Begin

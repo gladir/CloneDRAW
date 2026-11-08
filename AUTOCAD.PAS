@@ -991,6 +991,9 @@ Var
  LayerCount: Integer;                                  { Nombre de calques }
  CurrentLayer: Integer;                                { Index du calque courant }
  CurrentColor: Integer;                                { Couleur courante (256 = ByLayer) }
+ CmdColorSet: Boolean;       { couleur optionnelle donnee dans la commande en cours }
+ CmdColor: Integer;
+ CmdColorWarn: Boolean;      { couleur invalide ignoree }
  CurrentLineType: Byte;                                { Type de ligne courant }
  CurrentLineWeight: Integer;                           { Épaisseur de ligne courante }
  CurrentTextStyleName: String[16];                     { Style de texte courant }
@@ -4555,6 +4558,7 @@ Var
  SX1, SY1, SX2, SY2: Integer;
  SCX, SCY, SR: Integer;
  ObjColor: Integer;
+ ArcA, ArcB, VtxI: Integer;
 Begin
  For I := 0 to ObjectCount - 1 do Begin
   If Not DrawObjects[I].Visible Then Continue;
@@ -4617,6 +4621,56 @@ Begin
      Bar(SX2 - 3, SY1 - 3, SX2 + 3, SY1 + 3);  { Coin 2 }
      Bar(SX1 - 3, SY2 - 3, SX1 + 3, SY2 + 3);  { Coin 3 }
      Bar(SX2 - 3, SY2 - 3, SX2 + 3, SY2 + 3);  { Coin 4 }
+    End;
+   End;
+
+   OBJ_ARC: Begin
+    SCX := WorldToScreenX(DrawObjects[I].X1);
+    SCY := WorldToScreenY(DrawObjects[I].Y1);
+    SR := Round(DrawObjects[I].Radius * ZoomLevel);
+    ArcA := Round(DrawObjects[I].StartAngle);
+    ArcB := Round(DrawObjects[I].EndAngle);
+    While ArcA < 0 Do ArcA := ArcA + 360;
+    While ArcB < 0 Do ArcB := ArcB + 360;
+    ArcA := ArcA Mod 360;
+    ArcB := ArcB Mod 360;
+    If ArcA = ArcB Then Circle(SCX, SCY, SR)
+    Else Arc(SCX, SCY, ArcA, ArcB, SR);
+   End;
+
+   OBJ_ELLIPSE: Begin
+    SCX := WorldToScreenX(DrawObjects[I].X1);
+    SCY := WorldToScreenY(DrawObjects[I].Y1);
+    Ellipse(SCX, SCY, 0, 360, Round(DrawObjects[I].Radius * ZoomLevel),
+            Round(DrawObjects[I].EndAngle * ZoomLevel));
+   End;
+
+   OBJ_POINT: Begin
+    SCX := WorldToScreenX(DrawObjects[I].X1);
+    SCY := WorldToScreenY(DrawObjects[I].Y1);
+    PutPixel(SCX, SCY, ObjColor);
+    Line(SCX - 2, SCY, SCX + 2, SCY);
+    Line(SCX, SCY - 2, SCX, SCY + 2);
+   End;
+
+   OBJ_TEXT: Begin
+    SCX := WorldToScreenX(DrawObjects[I].X1);
+    SCY := WorldToScreenY(DrawObjects[I].Y1);
+    OutTextXY(SCX, SCY - 8, DrawObjects[I].DimText);
+   End;
+
+   OBJ_POLYLINE: Begin
+    If DrawObjects[I].VertexCount >= 2 Then Begin
+     For VtxI := 0 To DrawObjects[I].VertexCount - 2 Do
+      Line(WorldToScreenX(DrawObjects[I].Vertices[VtxI].X),
+           WorldToScreenY(DrawObjects[I].Vertices[VtxI].Y),
+           WorldToScreenX(DrawObjects[I].Vertices[VtxI + 1].X),
+           WorldToScreenY(DrawObjects[I].Vertices[VtxI + 1].Y));
+     If DrawObjects[I].Closed Then
+      Line(WorldToScreenX(DrawObjects[I].Vertices[DrawObjects[I].VertexCount - 1].X),
+           WorldToScreenY(DrawObjects[I].Vertices[DrawObjects[I].VertexCount - 1].Y),
+           WorldToScreenX(DrawObjects[I].Vertices[0].X),
+           WorldToScreenY(DrawObjects[I].Vertices[0].Y));
     End;
    End;
 
@@ -12485,6 +12539,8 @@ Begin
     DrawObjects[I].Color := Layers[CurrentLayer].Color
    Else
     DrawObjects[I].Color := CurrentColor;
+   { couleur optionnelle donnee avec la commande : prioritaire sur la couleur courante }
+   If CmdColorSet Then DrawObjects[I].Color := CmdColor;
    DrawObjects[I].LineType := CurrentLineType;
    DrawObjects[I].LineWeight := Word(CurrentLineWeight);
    DrawObjects[I].LayerIndex := Byte(CurrentLayer);
@@ -19525,7 +19581,7 @@ End;
 Const
  CMD_MAX = 100;
  CMD_CATS = 7;
- CMD_FIELDS = 7;
+ CMD_FIELDS = 9;
 
 Type
  TCmdField = Record
@@ -19958,6 +20014,76 @@ End;
 
 Function CmdAlias(Code: Integer): String; Forward;
 
+{ Couleur optionnelle : numero (0-255, 256 = ByLayer) ou nom (ROUGE, BLEU CLAIR, RED...).
+  Les numeros sont ceux de la palette VGA 16 couleurs utilisee par le dessin. }
+Function ColorFromText(Const T: String; Var C: Integer): Boolean;
+Var S: String; I, Cd, V: Integer;
+Begin
+ ColorFromText := False;
+ S := '';
+ For I := 1 To Length(T) Do S := S + UpCase(T[I]);
+ While (Length(S) > 0) And (S[1] = ' ') Do Delete(S, 1, 1);
+ While (Length(S) > 0) And (S[Length(S)] = ' ') Do Delete(S, Length(S), 1);
+ If S = '' Then Exit;
+ Val(S, V, Cd);
+ If Cd = 0 Then Begin
+  If (V < 0) Or (V > 256) Then Exit;
+  C := V; ColorFromText := True; Exit;
+ End;
+ V := -1;
+ If (S = 'NOIR') Or (S = 'BLACK') Then V := 0
+ Else If (S = 'BLEU') Or (S = 'BLUE') Then V := 1
+ Else If (S = 'VERT') Or (S = 'GREEN') Then V := 2
+ Else If S = 'CYAN' Then V := 3
+ Else If (S = 'ROUGE') Or (S = 'RED') Then V := 4
+ Else If S = 'MAGENTA' Then V := 5
+ Else If (S = 'BRUN') Or (S = 'MARRON') Or (S = 'BROWN') Then V := 6
+ Else If (S = 'GRIS') Or (S = 'GRIS CLAIR') Or (S = 'GRAY') Or (S = 'GREY') Then V := 7
+ Else If (S = 'GRIS FONCE') Or (S = 'DARKGRAY') Then V := 8
+ Else If S = 'BLEU CLAIR' Then V := 9
+ Else If S = 'VERT CLAIR' Then V := 10
+ Else If S = 'CYAN CLAIR' Then V := 11
+ Else If S = 'ROUGE CLAIR' Then V := 12
+ Else If S = 'MAGENTA CLAIR' Then V := 13
+ Else If (S = 'JAUNE') Or (S = 'YELLOW') Then V := 14
+ Else If (S = 'BLANC') Or (S = 'WHITE') Then V := 15
+ Else If (S = 'PARCALQUE') Or (S = 'BYLAYER') Then V := 256;
+ If V < 0 Then Exit;
+ C := V;
+ ColorFromText := True;
+End;
+
+{ Retire de la ligne de commande le jeton optionnel C=<couleur> (ou COLOR=, COULEUR=).
+  Retourne -1 s'il n'y en a pas, -2 si la couleur est invalide, sinon la couleur. }
+Function ExtractColor(Var S: String): Integer;
+Var P, Q, K: Integer; Tok, U, Val1: String; C: Integer;
+Begin
+ ExtractColor := -1;
+ P := 1;
+ While P <= Length(S) Do Begin
+  While (P <= Length(S)) And (S[P] = ' ') Do Inc(P);
+  Q := P;
+  While (Q <= Length(S)) And (S[Q] <> ' ') Do Inc(Q);
+  If Q > P Then Begin
+   Tok := Copy(S, P, Q - P);
+   U := '';
+   For K := 1 To Length(Tok) Do U := U + UpCase(Tok[K]);
+   Val1 := '';
+   If Copy(U, 1, 2) = 'C=' Then Val1 := Copy(Tok, 3, 40)
+   Else If Copy(U, 1, 6) = 'COLOR=' Then Val1 := Copy(Tok, 7, 40)
+   Else If Copy(U, 1, 8) = 'COULEUR=' Then Val1 := Copy(Tok, 9, 40)
+   Else Val1 := #0;
+   If Val1 <> #0 Then Begin
+    Delete(S, P, Q - P);
+    While (Length(S) > 0) And (S[Length(S)] = ' ') Do Delete(S, Length(S), 1);
+    If ColorFromText(Val1, C) Then ExtractColor := C Else ExtractColor := -2;
+    Exit;
+   End;
+  End;
+  P := Q;
+ End;
+End;
+
 { Boite de saisie des parametres d'une commande. Remplit CmdData. }
 Function CmdForm(Idx: Integer): Boolean;
 Const
@@ -19965,19 +20091,23 @@ Const
  RH = 24;
 Var
  DX1, DY1, DX2, DY2, FH, I: Integer;
- NF, Focus: Integer;
+ NF, Focus, Code, MaxNF: Integer;
+ TC, Tab, TabOff, DefTab: Integer;      { TC = nombre d'onglets (0 = aucun) }
+ NFT: Array[0..3] Of Integer;           { nombre de champs de chaque onglet }
+ LblT: Array[0..3, 0..CMD_FIELDS - 1] Of String[28];
+ VT: Array[0..3, 0..CMD_FIELDS - 1] Of String;
  Vals: Array[0..CMD_FIELDS - 1] Of String;
- VT: Array[0..2, 0..CMD_FIELDS - 1] Of String;   { valeurs memorisees par onglet }
  Fresh: Array[0..CMD_FIELDS - 1] Of Boolean;
  BadMask: Array[0..CMD_FIELDS - 1] Of Boolean;
+ BuildErr: Boolean;
  OkX1, OkY1, OkX2, OkY2, CcX1, CcX2: Integer;
+ TA1, TB1, TA2, TB2: Integer;
  Done, Res: Boolean;
  Msg: String;
  MX, MY, MB, OldMB: LongInt;
  Ch: Char;
- HasTabs: Boolean;      { commandes a deux points : Relatif / Absolue / Polaire }
- Tab, TabOff: Integer;  { onglet actif (0=Relatif 1=Absolue 2=Polaire) }
- TA1, TB1, TA2, TB2: Integer;
+ HasColor: Boolean;     { dernier champ = couleur optionnelle }
+ SwOff: Integer;
 
  Function RealText(R: Real): String;
  Var S: String;
@@ -19990,21 +20120,71 @@ Var
  End;
 
  Function NumOf(Const T: String): Real;
- Var V: Real; Code, P: Integer; S: String;
+ Var V: Real; Cd, P: Integer; S: String;
  Begin
   S := T;
   For P := 1 To Length(S) Do If S[P] = ',' Then S[P] := '.';
-  Val(S, V, Code);
-  If Code <> 0 Then V := 0;
+  Val(S, V, Cd);
+  If Cd <> 0 Then V := 0;
   NumOf := V;
+ End;
+
+ { angle en degres (0..360) du vecteur (DxV, DyV) }
+ Function AngDeg(DyV, DxV: Real): Real;
+ Var A: Real;
+ Begin
+  If Abs(DxV) < 1E-12 Then Begin
+   If DyV >= 0 Then A := 90 Else A := 270;
+  End Else Begin
+   A := ArcTan(DyV / DxV) * 180 / Pi;
+   If DxV < 0 Then A := A + 180;
+  End;
+  While A < 0 Do A := A + 360;
+  While A >= 360 Do A := A - 360;
+  AngDeg := A;
+ End;
+
+ Function TabCountOf(C: Integer): Integer;
+ Begin
+  Case C Of
+   40, 41, 42, 45, 50, 80, 82, 84, 87: TabCountOf := 3;
+   44, 46: TabCountOf := 3;
+   47: TabCountOf := 4;
+   49: TabCountOf := 2;
+  Else TabCountOf := 0;
+  End;
  End;
 
  Function TabName(T: Integer): String;
  Begin
-  Case T Of
-   0: TabName := 'Relatif';
-   1: TabName := 'Absolue';
-  Else TabName := 'Polaire';
+  TabName := '';
+  Case Code Of
+   40, 41, 42, 45, 50, 80, 82, 84, 87:
+    Case T Of
+     0: TabName := 'Relatif';
+     1: TabName := 'Absolue';
+     2: TabName := 'Polaire';
+    End;
+   47: Case T Of
+        0: TabName := 'Rayon';
+        1: TabName := 'Diametre';
+        2: TabName := '2 points';
+        3: TabName := '3 points';
+       End;
+   46: Case T Of
+        0: TabName := 'Centre';
+        1: TabName := '3 points';
+        2: TabName := 'Depart/Fin';
+       End;
+   49: Case T Of
+        0: TabName := 'Centre';
+        1: TabName := 'Rectangle';
+       End;
+   44: Case T Of
+        0: TabName := 'Inscrit';
+        1: TabName := 'Circonscrit';
+        2: TabName := 'Cote';
+       End;
   End;
  End;
 
@@ -20013,77 +20193,244 @@ Var
   Case T Of
    0: TabColor := LightGreen;
    1: TabColor := LightCyan;
-  Else TabColor := LightMagenta;
+   2: TabColor := LightMagenta;
+  Else TabColor := Yellow;
   End;
  End;
 
- { Libelle d'un champ selon l'onglet }
- Function LabelOf(J: Integer): String;
+ { ajoute un champ a l'onglet T }
+ Procedure Put(T: Integer; Const L, D: String);
+ Var J: Integer;
  Begin
-  LabelOf := CmdTab[Idx].F[J].Lbl;
-  If HasTabs And (J >= 2) Then Begin
-   If Tab = 0 Then Begin
-    If J = 2 Then LabelOf := 'Deplacement DX'
-    Else LabelOf := 'Deplacement DY';
-   End Else If Tab = 2 Then Begin
-    If J = 2 Then LabelOf := 'Distance'
-    Else LabelOf := 'Angle (degres)';
+  J := NFT[T];
+  If J >= CMD_FIELDS Then Exit;
+  LblT[T, J] := L;
+  VT[T, J] := D;
+  NFT[T] := J + 1;
+ End;
+
+ { reprend les champs du tableau de la commande dans l'onglet T }
+ Procedure PutTable(T: Integer; First, Last: Integer);
+ Var J: Integer;
+ Begin
+  For J := First To Last Do Put(T, CmdTab[Idx].F[J].Lbl, CmdTab[Idx].F[J].Def);
+ End;
+
+ Procedure SetupTabs;
+ Var T: Integer;
+ Begin
+  For T := 0 To 3 Do NFT[T] := 0;
+  DefTab := 0;
+  Case Code Of
+   40, 41, 42, 45: Begin
+    DefTab := 1;
+    PutTable(0, 0, 1); Put(0, 'Deplacement DX', '100'); Put(0, 'Deplacement DY', '50');
+    PutTable(1, 0, 3);
+    PutTable(2, 0, 1); Put(2, 'Distance', '100'); Put(2, 'Angle (degres)', '45');
    End;
+   50: Begin
+    DefTab := 1;
+    Put(0, 'Base X', '0'); Put(0, 'Base Y', '0'); Put(0, 'Deplacement DX', '10'); Put(0, 'Deplacement DY', '10');
+    PutTable(1, 0, 1);
+    Put(2, 'Base X', '0'); Put(2, 'Base Y', '0'); Put(2, 'Distance', '10'); Put(2, 'Angle (degres)', '45');
+   End;
+   80, 82, 84, 87: Begin
+    PutTable(0, 0, 1);
+    Put(1, 'De X', '0'); Put(1, 'De Y', '0'); Put(1, 'Vers X', '10'); Put(1, 'Vers Y', '10');
+    Put(2, 'Distance', '10'); Put(2, 'Angle (degres)', '45');
+   End;
+   47: Begin
+    PutTable(0, 0, 2);
+    Put(1, 'Centre X', '0'); Put(1, 'Centre Y', '0'); Put(1, 'Diametre', '100');
+    Put(2, 'Point 1 X', '-50'); Put(2, 'Point 1 Y', '0'); Put(2, 'Point 2 X', '50'); Put(2, 'Point 2 Y', '0');
+    Put(3, 'Point 1 X', '-50'); Put(3, 'Point 1 Y', '0'); Put(3, 'Point 2 X', '50');
+    Put(3, 'Point 2 Y', '0'); Put(3, 'Point 3 X', '0'); Put(3, 'Point 3 Y', '50');
+   End;
+   46: Begin
+    PutTable(0, 0, 4);
+    Put(1, 'Point 1 X', '50'); Put(1, 'Point 1 Y', '0'); Put(1, 'Point 2 X', '0');
+    Put(1, 'Point 2 Y', '50'); Put(1, 'Point 3 X', '-50'); Put(1, 'Point 3 Y', '0');
+    Put(2, 'Centre X', '0'); Put(2, 'Centre Y', '0'); Put(2, 'Depart X', '50');
+    Put(2, 'Depart Y', '0'); Put(2, 'Fin X', '0'); Put(2, 'Fin Y', '50');
+   End;
+   49: Begin
+    PutTable(0, 0, 3);
+    Put(1, 'Coin 1 X', '-60'); Put(1, 'Coin 1 Y', '-30'); Put(1, 'Coin 2 X', '60'); Put(1, 'Coin 2 Y', '30');
+   End;
+   44: Begin
+    Put(0, 'Nombre de cotes (3-64)', '6'); Put(0, 'Centre X', '0'); Put(0, 'Centre Y', '0'); Put(0, 'Rayon (sommets)', '50');
+    Put(1, 'Nombre de cotes (3-64)', '6'); Put(1, 'Centre X', '0'); Put(1, 'Centre Y', '0'); Put(1, 'Rayon (apotheme)', '43');
+    Put(2, 'Nombre de cotes (3-64)', '6'); Put(2, 'Centre X', '0'); Put(2, 'Centre Y', '0'); Put(2, 'Longueur du cote', '50');
+   End;
+  Else PutTable(0, 0, CmdTab[Idx].NF - 1);
+  End;
+  { couleur optionnelle en dernier champ de chaque onglet }
+  If HasColor Then Begin
+   If TC > 0 Then
+    For T := 0 To TC - 1 Do Put(T, 'Couleur (optionnel)', '')
+   Else Put(0, 'Couleur (optionnel)', '');
   End;
  End;
 
- Function Build: String;
- Var J, P: Integer; S, R: String; X1, Y1, X2, Y2: Real;
+ { centre du cercle passant par 3 points ; BuildErr si alignes }
+ Procedure Circum(Ax, Ay, Bx, By, Cx, Cy: Real; Var Ux, Uy, Rr: Real);
+ Var D, Sa, Sb, Sc: Real;
  Begin
+  D := 2 * (Ax * (By - Cy) + Bx * (Cy - Ay) + Cx * (Ay - By));
+  Ux := 0; Uy := 0; Rr := 0;
+  If Abs(D) < 1E-9 Then Begin BuildErr := True; Exit; End;
+  Sa := Ax * Ax + Ay * Ay; Sb := Bx * Bx + By * By; Sc := Cx * Cx + Cy * Cy;
+  Ux := (Sa * (By - Cy) + Sb * (Cy - Ay) + Sc * (Ay - By)) / D;
+  Uy := (Sa * (Cx - Bx) + Sb * (Ax - Cx) + Sc * (Bx - Ax)) / D;
+  Rr := Sqrt((Ax - Ux) * (Ax - Ux) + (Ay - Uy) * (Ay - Uy));
+ End;
+
+ Function BuildCore: String;
+ Var
+  J, P, NB: Integer; S, R: String;
+  N: Array[0..CMD_FIELDS - 1] Of Real;
+  X1, Y1, X2, Y2, Ux, Uy, Rr, A1, A2, A3: Real;
+ Begin
+  BuildErr := False;
   R := '';
-  If HasTabs Then Begin
-   X1 := NumOf(Vals[0]); Y1 := NumOf(Vals[1]);
-   Case Tab Of
-    0: Begin X2 := X1 + NumOf(Vals[2]); Y2 := Y1 + NumOf(Vals[3]); End;
-    2: Begin
-     X2 := X1 + NumOf(Vals[2]) * Cos(NumOf(Vals[3]) * Pi / 180);
-     Y2 := Y1 + NumOf(Vals[2]) * Sin(NumOf(Vals[3]) * Pi / 180);
+  NB := NF;
+  If HasColor Then NB := NF - 1;
+  For J := 0 To NF - 1 Do N[J] := NumOf(Vals[J]);
+  Case Code Of
+   40, 41, 42, 45: Begin
+    X1 := N[0]; Y1 := N[1];
+    Case Tab Of
+     0: Begin X2 := X1 + N[2]; Y2 := Y1 + N[3]; End;
+     2: Begin X2 := X1 + N[2] * Cos(N[3] * Pi / 180); Y2 := Y1 + N[2] * Sin(N[3] * Pi / 180); End;
+    Else Begin X2 := N[2]; Y2 := N[3]; End;
     End;
-   Else Begin X2 := NumOf(Vals[2]); Y2 := NumOf(Vals[3]); End;
+    BuildCore := RealText(X1) + ' ' + RealText(Y1) + ' ' + RealText(X2) + ' ' + RealText(Y2);
+    Exit;
    End;
-   Build := RealText(X1) + ' ' + RealText(Y1) + ' ' + RealText(X2) + ' ' + RealText(Y2);
-   Exit;
+   50: Begin
+    Case Tab Of
+     0: Begin X1 := N[0] + N[2]; Y1 := N[1] + N[3]; End;
+     2: Begin X1 := N[0] + N[2] * Cos(N[3] * Pi / 180); Y1 := N[1] + N[2] * Sin(N[3] * Pi / 180); End;
+    Else Begin X1 := N[0]; Y1 := N[1]; End;
+    End;
+    BuildCore := RealText(X1) + ' ' + RealText(Y1);
+    Exit;
+   End;
+   80, 82, 84, 87: Begin
+    Case Tab Of
+     1: Begin X1 := N[2] - N[0]; Y1 := N[3] - N[1]; End;
+     2: Begin X1 := N[0] * Cos(N[1] * Pi / 180); Y1 := N[0] * Sin(N[1] * Pi / 180); End;
+    Else Begin X1 := N[0]; Y1 := N[1]; End;
+    End;
+    BuildCore := RealText(X1) + ' ' + RealText(Y1);
+    Exit;
+   End;
+   47: Begin
+    Case Tab Of
+     0: Begin Ux := N[0]; Uy := N[1]; Rr := N[2]; End;
+     1: Begin Ux := N[0]; Uy := N[1]; Rr := N[2] / 2; End;
+     2: Begin
+      Ux := (N[0] + N[2]) / 2; Uy := (N[1] + N[3]) / 2;
+      Rr := Sqrt((N[2] - N[0]) * (N[2] - N[0]) + (N[3] - N[1]) * (N[3] - N[1])) / 2;
+     End;
+    Else Circum(N[0], N[1], N[2], N[3], N[4], N[5], Ux, Uy, Rr);
+    End;
+    BuildCore := RealText(Ux) + ' ' + RealText(Uy) + ' ' + RealText(Rr);
+    Exit;
+   End;
+   46: Begin
+    Case Tab Of
+     0: Begin
+      BuildCore := RealText(N[0]) + ' ' + RealText(N[1]) + ' ' + RealText(N[2]) + ' ' +
+               RealText(N[3]) + ' ' + RealText(N[4]);
+      Exit;
+     End;
+     1: Begin
+      Circum(N[0], N[1], N[2], N[3], N[4], N[5], Ux, Uy, Rr);
+      If BuildErr Then Begin BuildCore := ''; Exit; End;
+      A1 := AngDeg(N[1] - Uy, N[0] - Ux);
+      A2 := AngDeg(N[3] - Uy, N[2] - Ux);
+      A3 := AngDeg(N[5] - Uy, N[4] - Ux);
+      { sens trigonometrique de A1 a A3 en passant par A2 ? sinon on echange }
+      X1 := A2 - A1; If X1 < 0 Then X1 := X1 + 360;
+      Y1 := A3 - A1; If Y1 < 0 Then Y1 := Y1 + 360;
+      If X1 > Y1 Then Begin X2 := A1; A1 := A3; A3 := X2; End;
+      BuildCore := RealText(Ux) + ' ' + RealText(Uy) + ' ' + RealText(Rr) + ' ' +
+               RealText(A1) + ' ' + RealText(A3);
+      Exit;
+     End;
+    Else Begin
+     Rr := Sqrt((N[2] - N[0]) * (N[2] - N[0]) + (N[3] - N[1]) * (N[3] - N[1]));
+     A1 := AngDeg(N[3] - N[1], N[2] - N[0]);
+     A2 := AngDeg(N[5] - N[1], N[4] - N[0]);
+     BuildCore := RealText(N[0]) + ' ' + RealText(N[1]) + ' ' + RealText(Rr) + ' ' +
+              RealText(A1) + ' ' + RealText(A2);
+     Exit;
+    End;
+    End;
+   End;
+   49: Begin
+    If Tab = 0 Then
+     BuildCore := RealText(N[0]) + ' ' + RealText(N[1]) + ' ' + RealText(N[2]) + ' ' + RealText(N[3])
+    Else
+     BuildCore := RealText((N[0] + N[2]) / 2) + ' ' + RealText((N[1] + N[3]) / 2) + ' ' +
+              RealText(Abs(N[2] - N[0]) / 2) + ' ' + RealText(Abs(N[3] - N[1]) / 2);
+    Exit;
+   End;
+   44: Begin
+    Rr := N[3];
+    If (N[0] < 3) Or (N[0] > 64) Then BuildErr := True
+    Else If Tab = 1 Then Rr := N[3] / Cos(Pi / Trunc(N[0]))
+    Else If Tab = 2 Then Rr := N[3] / (2 * Sin(Pi / Trunc(N[0])));
+    BuildCore := RealText(N[0]) + ' ' + RealText(N[1]) + ' ' + RealText(N[2]) + ' ' + RealText(Rr);
+    Exit;
+   End;
   End;
-  For J := 0 To NF - 1 Do Begin
+  { commandes sans onglets : valeurs mises bout a bout }
+  For J := 0 To NB - 1 Do Begin
    S := Vals[J];
    If Not CmdTab[Idx].F[J].IsTxt Then
     For P := 1 To Length(S) Do If S[P] = ',' Then S[P] := '.';
    If J > 0 Then R := R + CmdTab[Idx].F[J].Sep;
    R := R + S;
   End;
+  BuildCore := R;
+ End;
+
+ { commande complete : donnees + couleur optionnelle " C=n" }
+ Function Build: String;
+ Var R, CS: String; C: Integer;
+ Begin
+  R := BuildCore;
+  If HasColor And (NF > 0) And (Vals[NF - 1] <> '') Then
+   If ColorFromText(Vals[NF - 1], C) Then Begin
+    Str(C, CS);
+    R := R + ' C=' + CS;
+   End;
   Build := R;
  End;
 
- Procedure SwitchTab(NewTab: Integer);
- Var J: Integer;
- Begin
-  If (NewTab < 0) Or (NewTab > 2) Or (NewTab = Tab) Then Exit;
-  For J := 0 To NF - 1 Do Begin VT[Tab, J] := Vals[J]; Vals[J] := VT[NewTab, J]; Fresh[J] := True; BadMask[J] := False; End;
-  Tab := NewTab;
-  Msg := '';
- End;
-
  Function Validate: Boolean;
- Var J, Code: Integer; V: Real; Ok: Boolean; S: String; P: Integer;
+ Var J, Cd: Integer; V: Real; Ok: Boolean; S, Dummy: String; P: Integer;
  Begin
   Ok := True;
   For J := 0 To NF - 1 Do Begin
    BadMask[J] := False;
    S := Vals[J];
-   If CmdTab[Idx].F[J].IsTxt Then Begin
+   If HasColor And (J = NF - 1) Then Begin
+    { couleur optionnelle : vide, numero ou nom }
+    If (S <> '') And Not ColorFromText(S, Cd) Then BadMask[J] := True;
+   End Else If (TC = 0) And CmdTab[Idx].F[J].IsTxt Then Begin
     If S = '' Then BadMask[J] := True;
    End Else Begin
     For P := 1 To Length(S) Do If S[P] = ',' Then S[P] := '.';
-    Val(S, V, Code);
-    If (S = '') Or (Code <> 0) Then BadMask[J] := True;
+    Val(S, V, Cd);
+    If (S = '') Or (Cd <> 0) Then BadMask[J] := True;
    End;
    If BadMask[J] Then Ok := False;
   End;
+  Dummy := Build;
+  If Ok And BuildErr Then Ok := False;
   Validate := Ok;
  End;
 
@@ -20094,9 +20441,11 @@ Var
 
  { rectangle d'un onglet }
  Procedure TabRect(T: Integer; Var X1, Y1, X2, Y2: Integer);
+ Var TW: Integer;
  Begin
-  X1 := DX1 + 10 + T * 98;
-  X2 := X1 + 94;
+  TW := (FW - 20 - (TC - 1) * 4) Div TC;
+  X1 := DX1 + 10 + T * (TW + 4);
+  X2 := X1 + TW;
   Y1 := DY1 + 22;
   Y2 := DY1 + 22 + 22;
  End;
@@ -20113,19 +20462,26 @@ Var
   Bar(X1, TopY + 8, X2, Y2);
   FillEllipse(X1 + 8, TopY + 8, 8, 8);
   FillEllipse(X2 - 8, TopY + 8, 8, 8);
-  { contour }
   SetColor(Black);
   Arc(X1 + 8, TopY + 8, 90, 180, 8);
   Arc(X2 - 8, TopY + 8, 0, 90, 8);
   Line(X1 + 8, TopY, X2 - 8, TopY);
   Line(X1, TopY + 8, X1, Y2);
   Line(X2, TopY + 8, X2, Y2);
-  SetColor(Black);
   OutTextXY((X1 + X2) Div 2 - Length(TabName(T)) * 4, TopY + 10, TabName(T));
  End;
 
+ { case de la palette (16 couleurs) sous le dernier champ }
+ Procedure SwRect(K: Integer; Var X1, Y1, X2, Y2: Integer);
+ Begin
+  X1 := DX1 + 200 + K * 14;
+  X2 := X1 + 11;
+  Y1 := FieldY(NF) + 2;
+  Y2 := Y1 + 12;
+ End;
+
  Procedure Paint;
- Var J, YY, EX1, TX1, TY1, TX2, TY2: Integer; S: String;
+ Var J, YY, EX1, TX1, TY1, TX2, TY2, SelCol: Integer; S: String;
  Begin
   HideMouse;
   FD_Box(DX1, DY1, DX2, DY2, LightGray);
@@ -20133,20 +20489,20 @@ Var
   FD_Box(DX1 + 1, DY1 + 1, DX2 - 1, DY1 + 16, Blue);
   SetColor(White);
   OutTextXY(DX1 + 8, DY1 + 5, CmdTab[Idx].Name);
-  If HasTabs Then Begin
+  If TC > 0 Then Begin
    { ligne sous les onglets, interrompue sous l'onglet actif }
    TabRect(Tab, TX1, TY1, TX2, TY2);
    SetColor(Black);
    Line(DX1 + 8, TY2, TX1, TY2);
    Line(TX2, TY2, DX2 - 8, TY2);
-   For J := 0 To 2 Do If J <> Tab Then DrawTab(J);
+   For J := 0 To TC - 1 Do If J <> Tab Then DrawTab(J);
    DrawTab(Tab);
   End;
   EX1 := DX1 + 200;
   For J := 0 To NF - 1 Do Begin
    YY := FieldY(J);
    SetColor(Black);
-   OutTextXY(DX1 + 12, YY + 4, LabelOf(J));
+   OutTextXY(DX1 + 12, YY + 4, LblT[Tab, J]);
    FD_Box(EX1, YY, DX2 - 12, YY + 16, White);
    If BadMask[J] Then Begin
     SetColor(Red);
@@ -20168,8 +20524,29 @@ Var
     OutTextXY(EX1 + 4 + TextWidth(S), YY + 4, '_');
    End;
   End;
+  { palette des 16 couleurs sous le champ Couleur }
+  If HasColor Then Begin
+   SetColor(Black);
+   OutTextXY(DX1 + 12, FieldY(NF) + 3, 'Palette :');
+   SelCol := -1;
+   If Vals[NF - 1] <> '' Then
+    If Not ColorFromText(Vals[NF - 1], SelCol) Then SelCol := -1;
+   For J := 0 To 15 Do Begin
+    SwRect(J, TX1, TY1, TX2, TY2);
+    FD_Box(TX1, TY1, TX2, TY2, J);
+    SetColor(Black);
+    Rectangle(TX1, TY1, TX2, TY2);
+    If J = SelCol Then Begin
+     { couleur choisie : double cadre contraste }
+     If J = 15 Then SetColor(Red) Else SetColor(White);
+     Rectangle(TX1 + 1, TY1 + 1, TX2 - 1, TY2 - 1);
+     If J = 15 Then SetColor(Black);
+     Rectangle(TX1 - 1, TY1 - 1, TX2 + 1, TY2 + 1);
+    End;
+   End;
+  End;
   { ligne de commande resultante }
-  YY := FieldY(NF) + 4;
+  YY := FieldY(MaxNF) + 4 + SwOff;
   SetColor(DarkGray);
   Line(DX1 + 8, YY - 3, DX2 - 8, YY - 3);
   S := CmdAlias(CmdTab[Idx].Code);
@@ -20187,37 +20564,54 @@ Var
   ShowMouse;
  End;
 
+ Procedure SwitchTab(NewTab: Integer);
+ Var J: Integer;
+ Begin
+  If (NewTab < 0) Or (NewTab >= TC) Or (NewTab = Tab) Then Exit;
+  For J := 0 To NF - 1 Do VT[Tab, J] := Vals[J];
+  Tab := NewTab;
+  NF := NFT[Tab];
+  For J := 0 To NF - 1 Do Begin
+   Vals[J] := VT[Tab, J];
+   Fresh[J] := True;
+   BadMask[J] := False;
+  End;
+  If Focus >= NF Then Focus := 0;
+  Msg := '';
+ End;
+
  Procedure TryOk;
  Begin
   If Validate Then Begin
    Res := True; Done := True;
   End Else Begin
-   Msg := 'Valeur invalide (nombre attendu ou champ vide).';
+   If BuildErr Then Msg := 'Valeurs incompatibles (points alignes, cotes...).'
+   Else Msg := 'Valeur invalide (nombre attendu ou champ vide).';
    Paint;
   End;
  End;
 
 Begin
  CmdForm := False;
- NF := CmdTab[Idx].NF;
- HasTabs := (CmdTab[Idx].Code = 40) Or (CmdTab[Idx].Code = 41) Or
-            (CmdTab[Idx].Code = 42) Or (CmdTab[Idx].Code = 45);
- Tab := 1;
+ Code := CmdTab[Idx].Code;
+ TC := TabCountOf(Code);
+ HasColor := ((Code >= 40) And (Code <= 51)) Or ((Code >= 61) And (Code <= 70));
+ SwOff := 0;
+ If HasColor Then SwOff := 20;
+ SetupTabs;
+ Tab := DefTab;
+ NF := NFT[Tab];
+ MaxNF := 0;
+ For I := 0 To 3 Do If NFT[I] > MaxNF Then MaxNF := NFT[I];
  TabOff := 0;
- If HasTabs Then TabOff := 30;
+ If TC > 0 Then TabOff := 30;
  For I := 0 To NF - 1 Do Begin
-  Vals[I] := CmdTab[Idx].F[I].Def;
-  VT[0, I] := Vals[I]; VT[1, I] := Vals[I]; VT[2, I] := Vals[I];
+  Vals[I] := VT[Tab, I];
   Fresh[I] := True;
   BadMask[I] := False;
  End;
- If HasTabs Then Begin
-  { valeurs par defaut des onglets Relatif (DX DY) et Polaire (distance angle) }
-  VT[0, 2] := '100'; VT[0, 3] := '50';
-  VT[2, 2] := '100'; VT[2, 3] := '45';
- End;
  Focus := 0; Msg := '';
- FH := 34 + TabOff + NF * RH + 64;
+ FH := 34 + TabOff + MaxNF * RH + 64 + SwOff;
  DX1 := (ScreenWidth - FW) Div 2; If DX1 < 0 Then DX1 := 0;
  DY1 := (ScreenHeight - FH) Div 2; If DY1 < 0 Then DY1 := 0;
  DX2 := DX1 + FW; DY2 := DY1 + FH;
@@ -20235,8 +20629,8 @@ Begin
     Case Ch Of
      #72, #15: Begin If Focus > 0 Then Dec(Focus) Else Focus := NF - 1; Fresh[Focus] := True; Paint; End;
      #80: Begin Focus := (Focus + 1) Mod NF; Fresh[Focus] := True; Paint; End;
-     #73: If HasTabs Then Begin SwitchTab(Tab - 1); Paint; End;   { PgHaut }
-     #81: If HasTabs Then Begin SwitchTab(Tab + 1); Paint; End;   { PgBas }
+     #73: If TC > 0 Then Begin SwitchTab(Tab - 1); Paint; End;   { PgHaut }
+     #81: If TC > 0 Then Begin SwitchTab(Tab + 1); Paint; End;   { PgBas }
     End;
    End Else Begin
     Case Ch Of
@@ -20262,11 +20656,20 @@ Begin
    If (MX >= OkX1) And (MX <= OkX2) And (MY >= OkY1) And (MY <= OkY2) Then TryOk
    Else If (MX >= CcX1) And (MX <= CcX2) And (MY >= OkY1) And (MY <= OkY2) Then Done := True
    Else Begin
-    If HasTabs Then
-     For I := 0 To 2 Do Begin
+    If TC > 0 Then
+     For I := 0 To TC - 1 Do Begin
       TabRect(I, TA1, TB1, TA2, TB2);
       If (MX >= TA1) And (MX <= TA2) And (MY >= TB1) And (MY <= TB2) Then Begin
        SwitchTab(I); Paint;
+      End;
+     End;
+    If HasColor Then
+     For I := 0 To 15 Do Begin
+      SwRect(I, TA1, TB1, TA2, TB2);
+      If (MX >= TA1) And (MX <= TA2) And (MY >= TB1) And (MY <= TB2) Then Begin
+       Str(I, Vals[NF - 1]);
+       Focus := NF - 1; Fresh[Focus] := False; BadMask[Focus] := False; Msg := '';
+       Paint;
       End;
      End;
     For I := 0 To NF - 1 Do
@@ -20345,7 +20748,9 @@ Begin
   CommandCursorBlink := True;
   DrawInterface;
   Delay(700);
-  { 2. puis la commande recoit ses donnees comme si on les avait tapees }
+  { 2. la commande tapee est inscrite dans l'historique de la fenetre Command: }
+  CommandLastLine := 'Command: ' + Echo + ' ' + CmdData;
+  { puis elle recoit ses donnees comme si on les avait tapees }
   PendingFileAction := CmdTab[Idx].Code;
   CommandPrompt := CmdTab[Idx].Prompt;
   CommandBuffer := CmdData;
@@ -20583,6 +20988,15 @@ Begin
        CommandPrompt := 'Command:';
        CommandLastLine := '*Cancel*';
       End Else Begin
+       { Couleur optionnelle des commandes de dessin / cotation : jeton C=<couleur> }
+       CmdColorSet := False;
+       CmdColorWarn := False;
+       If ((PendingFileAction >= 40) And (PendingFileAction <= 51)) Or
+          ((PendingFileAction >= 61) And (PendingFileAction <= 70)) Then Begin
+        OkInt := ExtractColor(CommandBuffer);
+        If OkInt >= 0 Then Begin CmdColor := OkInt; CmdColorSet := True; End
+        Else If OkInt = -2 Then CmdColorWarn := True;
+       End;
        Case PendingFileAction Of
         1: Begin { Ouvrir }
          SavedSW := ScreenWidth;
@@ -21496,6 +21910,9 @@ Begin
          End;
         End;
        End;
+       If CmdColorWarn Then
+        CommandLastLine := CommandLastLine + ' (couleur invalide ignoree)';
+       CmdColorSet := False;
        PendingFileAction := 0;
        CommandPrompt := 'Command:';
       End;

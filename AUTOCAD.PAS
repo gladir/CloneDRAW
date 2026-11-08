@@ -995,6 +995,9 @@ Var
  CmdColor: Integer;
  CmdColorWarn: Boolean;      { couleur invalide ignoree }
  CurrentLineType: Byte;                                { Type de ligne courant }
+ LwDisplay: Boolean;            { afficher les epaisseurs de ligne a l'ecran }
+ LwThick: Integer;              { epaisseur (pixels) de l'objet en cours de trace }
+ DwgHasLW: Boolean;            { le fichier DWG lu contient l'epaisseur de chaque entite }
  CurrentLineWeight: Integer;                           { Épaisseur de ligne courante }
  CurrentTextStyleName: String[16];                     { Style de texte courant }
  CurrentDimStyleName: String[16];                      { Style de cote courant }
@@ -1039,6 +1042,7 @@ Procedure HandleRightClick(X, Y: Integer); Forward;
 Procedure CommandContextMenu(X, Y: Integer); Forward;
 Procedure UnitsDialog; Forward;
 Procedure PointStyleDialog; Forward;
+Procedure LineWeightDialog; Forward;
 Function CmdRunToolbar(Const Cmd: String): Boolean; Forward;
 Procedure HandleMiddleClick(X, Y: Integer); Forward;
 
@@ -4586,6 +4590,47 @@ Begin
  If (Style And 64) <> 0 Then Rectangle(X - Half, Y - Half, X + Half, Y + Half);
 End;
 
+{ Traits epais (epaisseur d'un objet en pixels, dans LwThick) }
+Procedure TLine(X1, Y1, X2, Y2: Integer);
+Var K, A, B: Integer;
+Begin
+ If LwThick <= 1 Then Begin Line(X1, Y1, X2, Y2); Exit; End;
+ A := -((LwThick - 1) Div 2);
+ B := LwThick Div 2;
+ If Abs(X2 - X1) >= Abs(Y2 - Y1) Then Begin
+  For K := A To B Do Line(X1, Y1 + K, X2, Y2 + K);
+ End Else Begin
+  For K := A To B Do Line(X1 + K, Y1, X2 + K, Y2);
+ End;
+End;
+
+Procedure TCircle(X, Y, R: Integer);
+Var K, A, B: Integer;
+Begin
+ If LwThick <= 1 Then Begin Circle(X, Y, R); Exit; End;
+ A := -((LwThick - 1) Div 2);
+ B := LwThick Div 2;
+ For K := A To B Do
+  If R + K >= 1 Then Circle(X, Y, R + K);
+End;
+
+{ epaisseur en pixels (96 ppp) d'un objet : 1/100 mm -> pixels }
+Function LineWeightPx(ObjIdx: Integer): Integer;
+Var W, Lay, P: Integer;
+Begin
+ If Not LwDisplay Then Begin LineWeightPx := 1; Exit; End;
+ W := DrawObjects[ObjIdx].LineWeight;
+ If W = 0 Then Begin
+  Lay := DrawObjects[ObjIdx].LayerIndex;
+  If (Lay >= 0) And (Lay < LayerCount) And (Layers[Lay].LineWeight > 0) Then W := Layers[Lay].LineWeight
+  Else W := 25;
+ End;
+ P := Round(W * 0.0378);
+ If P < 1 Then P := 1;
+ If P > 12 Then P := 12;
+ LineWeightPx := P;
+End;
+
 { Dessiner tous les objets (avec mise en surbrillance des sélectionnés) }
 Procedure DrawSelectedObjects;
 Var
@@ -4608,6 +4653,7 @@ Begin
    ObjColor := GetObjectEffectiveColor(I);
 
   SetColor(ObjColor);
+  LwThick := LineWeightPx(I);
 
   Case DrawObjects[I].ObjType of
    OBJ_LINE: Begin
@@ -4615,7 +4661,7 @@ Begin
     SY1 := WorldToScreenY(DrawObjects[I].Y1);
     SX2 := WorldToScreenX(DrawObjects[I].X2);
     SY2 := WorldToScreenY(DrawObjects[I].Y2);
-    Line(SX1, SY1, SX2, SY2);
+    TLine(SX1, SY1, SX2, SY2);
 
     { Si sélectionné, dessiner des poignées aux extrémités }
     If DrawObjects[I].Selected Then Begin
@@ -4629,7 +4675,7 @@ Begin
     SCX := WorldToScreenX(DrawObjects[I].X1);
     SCY := WorldToScreenY(DrawObjects[I].Y1);
     SR := Round(DrawObjects[I].Radius * ZoomLevel);
-    Circle(SCX, SCY, SR);
+    TCircle(SCX, SCY, SR);
 
     { Si sélectionné, dessiner des poignées }
     If DrawObjects[I].Selected Then Begin
@@ -4647,7 +4693,8 @@ Begin
     SY1 := WorldToScreenY(DrawObjects[I].Y1);
     SX2 := WorldToScreenX(DrawObjects[I].X2);
     SY2 := WorldToScreenY(DrawObjects[I].Y2);
-    Rectangle(SX1, SY1, SX2, SY2);
+    TLine(SX1, SY1, SX2, SY1); TLine(SX2, SY1, SX2, SY2);
+    TLine(SX2, SY2, SX1, SY2); TLine(SX1, SY2, SX1, SY1);
 
     { Si sélectionné, dessiner des poignées aux coins }
     If DrawObjects[I].Selected Then Begin
@@ -4695,12 +4742,12 @@ Begin
    OBJ_POLYLINE: Begin
     If DrawObjects[I].VertexCount >= 2 Then Begin
      For VtxI := 0 To DrawObjects[I].VertexCount - 2 Do
-      Line(WorldToScreenX(DrawObjects[I].Vertices[VtxI].X),
+      TLine(WorldToScreenX(DrawObjects[I].Vertices[VtxI].X),
            WorldToScreenY(DrawObjects[I].Vertices[VtxI].Y),
            WorldToScreenX(DrawObjects[I].Vertices[VtxI + 1].X),
            WorldToScreenY(DrawObjects[I].Vertices[VtxI + 1].Y));
      If DrawObjects[I].Closed Then
-      Line(WorldToScreenX(DrawObjects[I].Vertices[DrawObjects[I].VertexCount - 1].X),
+      TLine(WorldToScreenX(DrawObjects[I].Vertices[DrawObjects[I].VertexCount - 1].X),
            WorldToScreenY(DrawObjects[I].Vertices[DrawObjects[I].VertexCount - 1].Y),
            WorldToScreenX(DrawObjects[I].Vertices[0].X),
            WorldToScreenY(DrawObjects[I].Vertices[0].Y));
@@ -4714,6 +4761,7 @@ Begin
   End;
  End;
 
+ LwThick := 1;
  { Dessiner les références de blocs - TODO 20 }
  For I := 0 to BlockRefCount - 1 do Begin
   If BlockRefs[I].Visible and (BlockRefs[I].BlockIndex >= 0) Then
@@ -9849,6 +9897,8 @@ Begin
  CurrentPointStyle := 0;       { 0 = point, 1 = invisible, 2 = +, 3 = x, 4 = | }
  CurrentPointSize := 0.0;      { 0 = 5% de la hauteur d'ecran }
  CurrentUnits := 1;            { Decimal par defaut }
+ LwDisplay := True;
+ LwThick := 1;
  UnitPrec := 2;
  AngleMode := 0;
  AnglePrec := 1;
@@ -14045,7 +14095,9 @@ Begin
  If CurrentPointSize = 0 Then WriteDWGByte(F, 0)
  Else If CurrentPointSize < 0 Then WriteDWGByte(F, Round(-CurrentPointSize))
  Else WriteDWGByte(F, 100 + Round(CurrentPointSize));
- For I := 9 to 32 do
+ If LwDisplay Then WriteDWGByte(F, 1) Else WriteDWGByte(F, 2);
+ WriteDWGByte(F, 1);          { chaque entite porte son epaisseur de ligne }
+ For I := 11 to 32 do
   WriteDWGByte(F, 0);
 End;
 
@@ -14067,6 +14119,7 @@ Begin
  WriteDWGWord(F, Entity.Color);
  WriteDWGByte(F, Entity.LineType);
  WriteDWGByte(F, Entity.LayerIndex);
+ WriteDWGWord(F, Entity.LineWeight);
 
  { Écrire les données de cotation si nécessaire }
  If Entity.ObjType = OBJ_DIMENSION Then Begin
@@ -14178,6 +14231,7 @@ Var
  Dummy: Byte;
 Begin
  ReadDWGHeader := False;
+ DwgHasLW := False;
 
  { Lire et vérifier la signature }
  BlockRead(F, MagicStr[1], 6);
@@ -14224,8 +14278,12 @@ Begin
   If I = 0 Then CurrentPointSize := 0.0
   Else If I <= 100 Then CurrentPointSize := -I
   Else CurrentPointSize := I - 100;
+  I := ReadDWGByte(F);
+  If I = 1 Then LwDisplay := True Else If I = 2 Then LwDisplay := False;
+  I := ReadDWGByte(F);
+  DwgHasLW := I = 1;
   If (CurrentUnits >= 3) And (UnitPrec > 6) Then UnitPrec := 6;
-  For I := 9 to 32 do
+  For I := 11 to 32 do
    Dummy := ReadDWGByte(F);
  End Else Begin
   For I := 2 to 32 do
@@ -14257,6 +14315,7 @@ Begin
  Entity.Color := ReadDWGWord(F);
  Entity.LineType := ReadDWGByte(F);
  Entity.LayerIndex := ReadDWGByte(F);
+ If DwgHasLW Then Entity.LineWeight := ReadDWGWord(F) Else Entity.LineWeight := 0;
  Entity.Selected := False;
  Entity.Visible := True;
 
@@ -18411,9 +18470,11 @@ Begin
         CommandBuffer := '';
        End;
        3: Begin { Lineweight... }
-        PendingFileAction := 23;
-        CommandPrompt := 'Epaisseur de ligne (0=Defaut, 1..211 en 1/100 mm):';
-        CommandBuffer := '';
+        MenuActive := False;
+        ActiveMenu := -1;
+        ActiveMenuItem := -1;
+        DrawInterface;
+        LineWeightDialog;
        End;
        5: Begin { Text Style... }
         PendingFileAction := 24;
@@ -19994,8 +20055,7 @@ Begin
  CmdFld('Couleur (0-255, 256=ByLayer)', '1', False);
  CmdAdd(3, 'Type de ligne', 22, 'Type de ligne (0=Continu 1=Tirets 2=Pointille 3=Mixte 4=Phantom):');
  CmdFld('Type (0-4)', '0', False);
- CmdAdd(3, 'Epaisseur de ligne', 23, 'Epaisseur de ligne (0=Defaut, 1..211 en 1/100 mm):');
- CmdFld('Epaisseur (1/100 mm)', '0', False);
+ CmdAdd(3, 'Epaisseur de ligne...', 2052, '');
  CmdAdd(3, 'Style de texte', 24, 'Nom du style de texte courant:');
  CmdFld('Nom du style', 'Standard', True);
  CmdAdd(3, 'Style de cote', 25, 'Nom du style de cote courant:');
@@ -20068,6 +20128,7 @@ Begin
   2041: SaveDrawingDialog;
   2050: UnitsDialog;
   2051: PointStyleDialog;
+  2052: LineWeightDialog;
  End;
 End;
 
@@ -22122,6 +22183,318 @@ Begin
                      'unites';
   If RelMode Then CommandLastLine := 'Style de point = ' + NumStr(StyleOf) + ', taille ' +
                                      NumStr(Abs(SizeValue)) + ' % de l''ecran';
+ End Else CommandLastLine := '*Cancel*';
+ DrawInterface;
+End;
+
+{ ============================================================================ }
+{ Format > Epaisseur de ligne : choix de l'epaisseur avec apercu a l'echelle    }
+{ ============================================================================ }
+
+Procedure LineWeightDialog;
+Const
+ DW = 616;
+ DH = 340;
+ NW = 24;
+ LWList: Array[0..NW - 1] Of Integer =
+  (0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211);
+Var
+ DX1, DY1, DX2, DY2, I: Integer;
+ Sel: Integer;                 { epaisseur choisie, 1/100 mm }
+ Inch, ShowLw, ApplySel: Boolean;
+ SVal: String;                 { champ valeur }
+ FG: Integer;                  { 0 = liste, 1 = champ }
+ Fresh: Boolean;
+ Done, Res: Boolean;
+ Ch: Char;
+ MX, MY, MB, OldMB: LongInt;
+ VC: Integer;
+ OkX1, OkY1, OkX2, OkY2, CcX1, CcX2: Integer;
+ PX1, PY1, PX2, PY2: Integer;
+
+ Function PxOf(W: Integer): Integer;
+ Var P: Integer;
+ Begin
+  If W = 0 Then W := 25;
+  P := Round(W * 0.0378);
+  If P < 1 Then P := 1;
+  PxOf := P;
+ End;
+
+ Function NumStr(R: Real; Dec: Integer): String;
+ Var T: String;
+ Begin
+  Str(R:0:Dec, T);
+  NumStr := T;
+ End;
+
+ Function LabelOf(W: Integer): String;
+ Begin
+  If W = 0 Then Begin LabelOf := 'Par defaut'; Exit; End;
+  If Inch Then LabelOf := NumStr(W / 2540.0, 4) + ' po'
+  Else LabelOf := NumStr(W / 100.0, 2) + ' mm';
+ End;
+
+ Procedure SetSel(W: Integer);
+ Var S: String;
+ Begin
+  If W < 0 Then W := 0;
+  If W > 211 Then W := 211;
+  Sel := W;
+  Str(W, S);
+  SVal := S;
+ End;
+
+ Procedure TLn(X1, Y1, X2, Y2, W: Integer);
+ Var K, A, B: Integer;
+ Begin
+  If W <= 1 Then Begin Line(X1, Y1, X2, Y2); Exit; End;
+  A := -((W - 1) Div 2);
+  B := W Div 2;
+  If Abs(X2 - X1) >= Abs(Y2 - Y1) Then
+   For K := A To B Do Line(X1, Y1 + K, X2, Y2 + K)
+  Else
+   For K := A To B Do Line(X1 + K, Y1, X2 + K, Y2);
+ End;
+
+ Procedure TCi(X, Y, R, W: Integer);
+ Var K, A, B: Integer;
+ Begin
+  If W <= 1 Then Begin Circle(X, Y, R); Exit; End;
+  A := -((W - 1) Div 2);
+  B := W Div 2;
+  For K := A To B Do If R + K >= 1 Then Circle(X, Y, R + K);
+ End;
+
+ Procedure Check(X, Y: Integer; On: Boolean; Const Cap: String);
+ Begin
+  FD_Box(X, Y, X + 10, Y + 10, White);
+  FD_Bevel(X, Y, X + 10, Y + 10, False);
+  If On Then Begin
+   SetColor(Blue);
+   Line(X + 2, Y + 5, X + 4, Y + 8);
+   Line(X + 4, Y + 8, X + 8, Y + 2);
+   Line(X + 2, Y + 4, X + 4, Y + 7);
+   Line(X + 4, Y + 7, X + 8, Y + 1);
+  End;
+  SetColor(Black);
+  OutTextXY(X + 16, Y + 1, Cap);
+ End;
+
+ Procedure Radio(X, Y: Integer; Sel2: Boolean; Const Cap: String);
+ Begin
+  SetColor(Black);
+  Circle(X + 5, Y + 4, 4);
+  If Sel2 Then Begin
+   SetFillStyle(SolidFill, Blue);
+   Bar(X + 3, Y + 2, X + 7, Y + 6);
+  End;
+  SetColor(Black);
+  OutTextXY(X + 16, Y, Cap);
+ End;
+
+ Procedure Paint;
+ Var
+  K, X, Y, Wp, RX, ScreenPx: Integer;
+  S: String;
+ Begin
+  HideMouse;
+  FD_Box(DX1, DY1, DX2, DY2, LightGray);
+  FD_Bevel(DX1, DY1, DX2, DY2, True);
+  FD_Box(DX1 + 1, DY1 + 1, DX2 - 1, DY1 + 16, Blue);
+  SetColor(White);
+  OutTextXY(DX1 + 8, DY1 + 5, 'Epaisseur de ligne');
+
+  If FG = 0 Then SetColor(Blue) Else SetColor(Black);
+  OutTextXY(DX1 + 14, DY1 + 24, 'Epaisseurs');
+  { liste a deux colonnes avec echantillon de chaque trait }
+  FD_Box(DX1 + 12, DY1 + 36, DX1 + 346, DY1 + 206, White);
+  FD_Bevel(DX1 + 12, DY1 + 36, DX1 + 346, DY1 + 206, False);
+  For K := 0 To NW - 1 Do Begin
+   X := DX1 + 14 + (K Div 12) * 166;
+   Y := DY1 + 38 + (K Mod 12) * 14;
+   If LWList[K] = Sel Then Begin
+    FD_Box(X, Y, X + 164, Y + 13, Blue);
+    SetColor(White);
+   End Else SetColor(Black);
+   OutTextXY(X + 4, Y + 3, LabelOf(LWList[K]));
+   Wp := PxOf(LWList[K]);
+   If LWList[K] = Sel Then SetColor(White) Else SetColor(Black);
+   TLn(X + 84, Y + 6, X + 158, Y + 6, Wp);
+  End;
+
+  { options }
+  SetColor(Black);
+  OutTextXY(DX1 + 14, DY1 + 214, 'Unites :');
+  Radio(DX1 + 80, DY1 + 213, Not Inch, 'Millimetres');
+  Radio(DX1 + 190, DY1 + 213, Inch, 'Pouces');
+  Check(DX1 + 14, DY1 + 234, ShowLw, 'Afficher l''epaisseur dans le dessin');
+  Check(DX1 + 14, DY1 + 252, ApplySel, 'Appliquer aux objets selectionnes');
+  OutTextXY(DX1 + 14, DY1 + 274, 'Valeur (1/100 mm) :');
+  FD_Box(DX1 + 176, DY1 + 270, DX1 + 240, DY1 + 286, White);
+  If FG = 1 Then Begin
+   SetColor(Blue);
+   Rectangle(DX1 + 176, DY1 + 270, DX1 + 240, DY1 + 286);
+   Rectangle(DX1 + 177, DY1 + 271, DX1 + 239, DY1 + 285);
+  End Else FD_Bevel(DX1 + 176, DY1 + 270, DX1 + 240, DY1 + 286, False);
+  If (FG = 1) And Fresh Then Begin
+   FD_Box(DX1 + 179, DY1 + 273, DX1 + 181 + TextWidth(SVal), DY1 + 283, Blue);
+   SetColor(White);
+  End Else SetColor(Black);
+  OutTextXY(DX1 + 180, DY1 + 274, SVal);
+  If (FG = 1) And Not Fresh Then Begin
+   SetColor(Black);
+   OutTextXY(DX1 + 180 + TextWidth(SVal), DY1 + 274, '_');
+  End;
+
+  { apercu a l'echelle de l'ecran (96 ppp) }
+  SetColor(Black);
+  OutTextXY(PX1, DY1 + 24, 'Apercu');
+  SetViewPort(PX1 + 1, PY1 + 1, PX2 - 1, PY2 - 1, True);
+  SetFillStyle(SolidFill, Black);
+  Bar(0, 0, PX2 - PX1, PY2 - PY1);
+  RX := PX2 - PX1;
+  Wp := PxOf(Sel);
+  { reference d'un trait de 1 pixel }
+  SetColor(DarkGray);
+  Line(8, 14, RX - 8, 14);
+  SetColor(LightGray);
+  OutTextXY(8, 20, '1 px');
+  SetColor(White);
+  TLn(10, 44, RX - 10, 44, Wp);
+  TLn(14, 150, 100, 70, Wp);
+  TLn(118, 66, RX - 14, 66, Wp);
+  TLn(RX - 14, 66, RX - 14, 106, Wp);
+  TLn(RX - 14, 106, 118, 106, Wp);
+  TLn(118, 106, 118, 66, Wp);
+  TCi(RX - 62, 132, 22, Wp);
+  SetViewPort(0, 0, ScreenWidth - 1, ScreenHeight - 1, True);
+  FD_Bevel(PX1, PY1, PX2, PY2, False);
+
+  SetColor(Black);
+  If Sel = 0 Then S := 'Epaisseur : par defaut' Else S := 'Epaisseur : ' + LabelOf(Sel);
+  OutTextXY(PX1, PY2 + 8, S);
+  Str(PxOf(Sel), S);
+  OutTextXY(PX1, PY2 + 20, 'A l''ecran : ' + S + ' pixel(s)');
+  { regle de 10 mm }
+  SetColor(Black);
+  Line(PX1, PY2 + 44, PX1 + 38, PY2 + 44);
+  For K := 0 To 10 Do Begin
+   X := PX1 + Round(K * 3.78);
+   If (K = 0) Or (K = 10) Then Line(X, PY2 + 38, X, PY2 + 44)
+   Else If K = 5 Then Line(X, PY2 + 40, X, PY2 + 44)
+   Else Line(X, PY2 + 42, X, PY2 + 44);
+  End;
+  OutTextXY(PX1 + 46, PY2 + 38, '= 10 mm');
+
+  FD_Button(OkX1, OkY1, OkX2, OkY2, 'OK');
+  FD_Button(CcX1, OkY1, CcX2, OkY2, 'Annuler');
+  ShowMouse;
+ End;
+
+ Procedure Pick(K: Integer);
+ Begin
+  If (K >= 0) And (K < NW) Then Begin SetSel(LWList[K]); FG := 0; End;
+ End;
+
+ Function IndexOfSel: Integer;
+ Var K, Best: Integer;
+ Begin
+  Best := 0;
+  For K := 0 To NW - 1 Do If LWList[K] <= Sel Then Best := K;
+  IndexOfSel := Best;
+ End;
+
+Begin
+ Sel := CurrentLineWeight;
+ If (Sel < 0) Or (Sel > 211) Then Sel := 0;
+ SetSel(Sel);
+ Inch := False;
+ ShowLw := LwDisplay;
+ ApplySel := False;
+ FG := 0; Fresh := True;
+ DX1 := (ScreenWidth - DW) Div 2; If DX1 < 0 Then DX1 := 0;
+ DY1 := (ScreenHeight - DH) Div 2; If DY1 < 0 Then DY1 := 0;
+ DX2 := DX1 + DW; DY2 := DY1 + DH;
+ PX1 := DX1 + 360; PX2 := DX2 - 14; PY1 := DY1 + 38; PY2 := DY1 + 200;
+ OkX1 := DX2 - 200; OkX2 := DX2 - 110; OkY1 := DY2 - 32; OkY2 := DY2 - 10;
+ CcX1 := DX2 - 100; CcX2 := DX2 - 12;
+ Paint;
+ While KeyPressed Do Ch := ReadKey;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ OldMB := 0; Done := False; Res := False;
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then Begin
+    Ch := ReadKey;
+    If FG = 0 Then Begin
+     I := IndexOfSel;
+     Case Ch Of
+      #72, #75: If I > 0 Then Pick(I - 1);
+      #80, #77: If I < NW - 1 Then Pick(I + 1);
+      #71: Pick(0);
+      #79: Pick(NW - 1);
+      #73: If I >= 12 Then Pick(I - 12);
+      #81: If I < 12 Then Pick(I + 12);
+     End;
+     Paint;
+    End;
+   End Else Begin
+    Case Ch Of
+     #27: Done := True;
+     #13: Begin Res := True; Done := True; End;
+     #9: Begin FG := 1 - FG; Fresh := True; Paint; End;
+     #8: If FG = 1 Then Begin
+      If Fresh Then SVal := '' Else If Length(SVal) > 0 Then Delete(SVal, Length(SVal), 1);
+      Fresh := False;
+      If SVal = '' Then Sel := 0 Else Begin
+       Val(SVal, I, VC); If VC = 0 Then Begin If I > 211 Then I := 211; Sel := I; End;
+      End;
+      Paint;
+     End;
+    Else
+     If (FG = 1) And (Ch >= '0') And (Ch <= '9') Then Begin
+      If Fresh Then Begin SVal := ''; Fresh := False; End;
+      If Length(SVal) < 3 Then SVal := SVal + Ch;
+      Val(SVal, I, VC);
+      If VC = 0 Then Begin If I > 211 Then Begin I := 211; Str(I, SVal); End; Sel := I; End;
+      Paint;
+     End;
+    End;
+   End;
+  End;
+  GetMouseState(MX, MY, MB);
+  If ((OldMB And 1) = 0) And ((MB And 1) <> 0) Then Begin
+   If (MX >= OkX1) And (MX <= OkX2) And (MY >= OkY1) And (MY <= OkY2) Then Begin Res := True; Done := True; End
+   Else If (MX >= CcX1) And (MX <= CcX2) And (MY >= OkY1) And (MY <= OkY2) Then Done := True
+   Else Begin
+    For I := 0 To NW - 1 Do
+     If (MX >= DX1 + 14 + (I Div 12) * 166) And (MX <= DX1 + 178 + (I Div 12) * 166) And
+        (MY >= DY1 + 38 + (I Mod 12) * 14) And (MY < DY1 + 52 + (I Mod 12) * 14) Then Begin
+      Pick(I); Paint;
+     End;
+    If (MX >= DX1 + 80) And (MX <= DX1 + 180) And (MY >= DY1 + 211) And (MY <= DY1 + 225) Then Begin Inch := False; Paint; End;
+    If (MX >= DX1 + 190) And (MX <= DX1 + 260) And (MY >= DY1 + 211) And (MY <= DY1 + 225) Then Begin Inch := True; Paint; End;
+    If (MX >= DX1 + 14) And (MX <= DX1 + 300) And (MY >= DY1 + 232) And (MY <= DY1 + 246) Then Begin ShowLw := Not ShowLw; Paint; End;
+    If (MX >= DX1 + 14) And (MX <= DX1 + 300) And (MY >= DY1 + 250) And (MY <= DY1 + 264) Then Begin ApplySel := Not ApplySel; Paint; End;
+    If (MX >= DX1 + 176) And (MX <= DX1 + 240) And (MY >= DY1 + 270) And (MY <= DY1 + 286) Then Begin FG := 1; Fresh := True; Paint; End;
+   End;
+  End;
+  OldMB := MB;
+ Until Done;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ If Res Then Begin
+  CurrentLineWeight := Sel;
+  LwDisplay := ShowLw;
+  If ApplySel Then
+   For I := 0 To SelectionSet.Count - 1 Do
+    If (SelectionSet.Objects[I] >= 0) And (SelectionSet.Objects[I] < ObjectCount) Then
+     DrawObjects[SelectionSet.Objects[I]].LineWeight := Word(Sel);
+  MarkDocumentModified;
+  If Sel = 0 Then CommandLastLine := 'Epaisseur de ligne = par defaut'
+  Else CommandLastLine := 'Epaisseur de ligne = ' + LabelOf(Sel);
+  If ApplySel And (SelectionSet.Count > 0) Then CommandLastLine := CommandLastLine + ' (selection modifiee)';
  End Else CommandLastLine := '*Cancel*';
  DrawInterface;
 End;

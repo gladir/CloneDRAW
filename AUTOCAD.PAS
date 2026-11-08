@@ -20087,7 +20087,7 @@ End;
 { Boite de saisie des parametres d'une commande. Remplit CmdData. }
 Function CmdForm(Idx: Integer): Boolean;
 Const
- FW = 440;
+ LeftW = 440;
  RH = 24;
 Var
  DX1, DY1, DX2, DY2, FH, I: Integer;
@@ -20108,6 +20108,8 @@ Var
  Ch: Char;
  HasColor: Boolean;     { dernier champ = couleur optionnelle }
  SwOff: Integer;
+ HasPrev: Boolean;
+ FullW, LX2, PX1, PY1, PX2, PY2: Integer;
 
  Function RealText(R: Real): String;
  Var S: String;
@@ -20443,7 +20445,7 @@ Var
  Procedure TabRect(T: Integer; Var X1, Y1, X2, Y2: Integer);
  Var TW: Integer;
  Begin
-  TW := (FW - 20 - (TC - 1) * 4) Div TC;
+  TW := (LeftW - 20 - (TC - 1) * 4) Div TC;
   X1 := DX1 + 10 + T * (TW + 4);
   X2 := X1 + TW;
   Y1 := DY1 + 22;
@@ -20471,6 +20473,429 @@ Var
   OutTextXY((X1 + X2) Div 2 - Length(TabName(T)) * 4, TopY + 10, TabName(T));
  End;
 
+ { ---- Apercu graphique de la commande (panneau de droite) ---- }
+ Procedure DrawPreview;
+ Const
+  CMargin = 16;
+ Var
+  Pn: Array[0..39] Of Real;
+  NP, I, K, EntCol, CC, VW, VH, AH, A1, A2: Integer;
+  TxtRest, S, Tok, Info: String;
+  MinX, MaxX, MinY, MaxY, Sc, OffX, OffY, Wd, Ht: Real;
+  Ux, Uy, Ln, Ang, Rr, Vx, Vy, Nx, Ny: Real;
+  X1, Y1, X2, Y2, X3, Y3: Integer;
+  Pos0, Cd: Integer;
+  V: Real;
+  HaveBox: Boolean;
+
+  Function Cl(R: Real): Integer;
+  Begin
+   If R > 30000 Then Cl := 30000
+   Else If R < -30000 Then Cl := -30000
+   Else Cl := Round(R);
+  End;
+
+  Function SX(X: Real): Integer;
+  Begin SX := Cl(OffX + Sc * X); End;
+
+  Function SY(Y: Real): Integer;
+  Begin SY := Cl(OffY - Sc * Y); End;
+
+  Procedure AddPt(X, Y: Real);
+  Begin
+   If Not HaveBox Then Begin
+    MinX := X; MaxX := X; MinY := Y; MaxY := Y; HaveBox := True;
+   End Else Begin
+    If X < MinX Then MinX := X;
+    If X > MaxX Then MaxX := X;
+    If Y < MinY Then MinY := Y;
+    If Y > MaxY Then MaxY := Y;
+   End;
+  End;
+
+  Procedure AddCircle(Cx, Cy, R: Real);
+  Begin
+   AddPt(Cx - Abs(R), Cy - Abs(R));
+   AddPt(Cx + Abs(R), Cy + Abs(R));
+  End;
+
+  Function DegS(A: Real): String;
+  Var T: String;
+  Begin
+   Str(A:0:1, T);
+   DegS := T + ' deg';
+  End;
+
+  Function NumS(R: Real): String;
+  Var T: String;
+  Begin
+   Str(R:0:2, T);
+   While (Length(T) > 1) And (T[Length(T)] = '0') Do Delete(T, Length(T), 1);
+   If (Length(T) > 0) And (T[Length(T)] = '.') Then Delete(T, Length(T), 1);
+   NumS := T;
+  End;
+
+  Procedure Arrow(Xa, Ya, Xb, Yb: Integer; Col: Integer);
+  Var A, Dx2, Dy2: Real;
+  Begin
+   SetColor(Col);
+   Line(Xa, Ya, Xb, Yb);
+   Dx2 := Xb - Xa; Dy2 := Yb - Ya;
+   If (Abs(Dx2) + Abs(Dy2)) < 1 Then Exit;
+   A := AngDeg(Dy2, Dx2) * Pi / 180;
+   Line(Xb, Yb, Xb - Round(7 * Cos(A - 0.45)), Yb - Round(7 * Sin(A - 0.45)));
+   Line(Xb, Yb, Xb - Round(7 * Cos(A + 0.45)), Yb - Round(7 * Sin(A + 0.45)));
+  End;
+
+  Procedure Dot(X, Y, Col: Integer);
+  Begin
+   SetFillStyle(SolidFill, Col);
+   Bar(X - 2, Y - 2, X + 2, Y + 2);
+  End;
+
+  { angle arc d'un point (centre) de 0 a l'angle donne, avec etiquette }
+  Procedure AngleMark(Cx, Cy: Integer; AngDg: Real; Rad: Integer);
+  Var Ai: Integer;
+  Begin
+   SetColor(LightGray);
+   Line(Cx, Cy, Cx + Rad + 14, Cy);
+   Ai := Round(AngDg);
+   While Ai < 0 Do Ai := Ai + 360;
+   Ai := Ai Mod 360;
+   SetColor(Yellow);
+   If Ai > 0 Then Arc(Cx, Cy, 0, Ai, Rad);
+   OutTextXY(Cx + Rad + 4, Cy - 12, DegS(AngDg));
+  End;
+
+ Begin
+  { cadre noir }
+  SetViewPort(PX1 + 1, PY1 + 1, PX2 - 1, PY2 - 1, True);
+  VW := PX2 - PX1 - 2;
+  VH := PY2 - PY1 - 2;
+  SetFillStyle(SolidFill, Black);
+  Bar(0, 0, VW, VH);
+  SetViewPort(0, 0, ScreenWidth - 1, ScreenHeight - 1, True);
+  FD_Bevel(PX1, PY1, PX2, PY2, False);
+  SetViewPort(PX1 + 1, PY1 + 1, PX2 - 1, PY2 - 1, True);
+
+  { donnees : nombres de la commande en coordonnees absolues }
+  S := BuildCore;
+  If BuildErr Then Begin
+   SetColor(LightRed);
+   OutTextXY(6, VH Div 2 - 4, 'Apercu indisponible');
+   SetViewPort(0, 0, ScreenWidth - 1, ScreenHeight - 1, True);
+   Exit;
+  End;
+  NP := 0; TxtRest := ''; Pos0 := 1;
+  While (Pos0 <= Length(S)) And (NP < 40) Do Begin
+   While (Pos0 <= Length(S)) And ((S[Pos0] = ' ') Or (S[Pos0] = ',')) Do Inc(Pos0);
+   If Pos0 > Length(S) Then Break;
+   K := Pos0;
+   While (K <= Length(S)) And (S[K] <> ' ') And (S[K] <> ',') Do Inc(K);
+   Tok := Copy(S, Pos0, K - Pos0);
+   Val(Tok, V, Cd);
+   If Cd <> 0 Then Begin
+    TxtRest := Copy(S, Pos0, Length(S));
+    Break;
+   End;
+   Pn[NP] := V; Inc(NP);
+   Pos0 := K;
+  End;
+  For I := NP To 39 Do Pn[I] := 0;
+
+  { couleur de l'entite }
+  EntCol := White;
+  If (CurrentColor >= 0) And (CurrentColor <= 15) Then EntCol := CurrentColor;
+  If HasColor And (Vals[NF - 1] <> '') Then
+   If ColorFromText(Vals[NF - 1], CC) Then
+    If (CC >= 0) And (CC <= 15) Then EntCol := CC;
+  If EntCol = Black Then EntCol := DarkGray;
+
+  { boite englobante }
+  HaveBox := False;
+  AddPt(0, 0);
+  Case Code Of
+   40, 41, 42, 45: Begin AddPt(Pn[0], Pn[1]); AddPt(Pn[2], Pn[3]); End;
+   50, 88: AddPt(Pn[0], Pn[1]);
+   47, 46, 63: AddCircle(Pn[0], Pn[1], Pn[2]);
+   49: Begin AddPt(Pn[0] - Pn[2], Pn[1] - Pn[3]); AddPt(Pn[0] + Pn[2], Pn[1] + Pn[3]); End;
+   44: AddCircle(Pn[1], Pn[2], Pn[3]);
+   43, 48: For I := 0 To (NP Div 2) - 1 Do AddPt(Pn[I * 2], Pn[I * 2 + 1]);
+   51: Begin AddPt(Pn[0], Pn[1]); AddPt(Pn[0] + Length(TxtRest) * Pn[2] * 0.7, Pn[1] + Pn[2]); End;
+   61: Begin AddPt(Pn[0], Pn[1]); AddPt(Pn[2], Pn[3]); AddPt(Pn[0], Pn[4]); AddPt(Pn[2], Pn[4]); End;
+   62: Begin
+    Ln := Sqrt(Sqr(Pn[2] - Pn[0]) + Sqr(Pn[3] - Pn[1]));
+    If Ln < 1E-9 Then Ln := 1;
+    Nx := -(Pn[3] - Pn[1]) / Ln * Pn[4]; Ny := (Pn[2] - Pn[0]) / Ln * Pn[4];
+    AddPt(Pn[0], Pn[1]); AddPt(Pn[2], Pn[3]); AddPt(Pn[0] + Nx, Pn[1] + Ny); AddPt(Pn[2] + Nx, Pn[3] + Ny);
+   End;
+   64, 70: Begin AddPt(Pn[0], Pn[1]); AddPt(Pn[2], Pn[3]); End;
+   65, 66: AddCircle(Pn[0], Pn[1], Pn[2]);
+   67: Begin AddCircle(Pn[0], Pn[1], Pn[6]); AddPt(Pn[2], Pn[3]); AddPt(Pn[4], Pn[5]); End;
+   68, 69: AddPt(Pn[0], Pn[1]);
+   80, 82, 84, 87: AddPt(Pn[0], Pn[1]);
+   81: Begin AddPt(Pn[0], Pn[1]); AddPt(Pn[2], Pn[3]); End;
+   85, 86: AddCircle(Pn[0], Pn[1], 50);
+   83: Begin
+    For I := 0 To 11 Do Begin
+     If I < Trunc(Pn[1]) Then AddPt(I * Pn[2], 0);
+     If I < Trunc(Pn[0]) Then AddPt(0, I * Pn[3]);
+    End;
+    AddPt(Pn[2] * (Trunc(Pn[1]) - 1), Pn[3] * (Trunc(Pn[0]) - 1));
+   End;
+  End;
+  AH := VH - 14;                     { zone de dessin ; la ligne du bas = texte }
+  Wd := MaxX - MinX; Ht := MaxY - MinY;
+  If Wd < 1E-6 Then Wd := 1E-6;
+  If Ht < 1E-6 Then Ht := 1E-6;
+  Sc := (VW - 2 * CMargin) / Wd;
+  If (AH - 2 * CMargin) / Ht < Sc Then Sc := (AH - 2 * CMargin) / Ht;
+  If Sc > 40 Then Sc := 40;
+  If Sc <= 0 Then Sc := 1;
+  OffX := VW / 2 - Sc * (MinX + MaxX) / 2;
+  OffY := AH / 2 + Sc * (MinY + MaxY) / 2;
+
+  { axes X (rouge) et Y (vert) comme dans la zone de dessin }
+  SetColor(DarkGray);
+  Line(0, SY(0), VW, SY(0));
+  Line(SX(0), 0, SX(0), AH);
+  SetColor(Red);   Line(SX(0), SY(0), SX(0) + 12, SY(0));
+  SetColor(Green); Line(SX(0), SY(0), SX(0), SY(0) - 12);
+
+  Info := '';
+  Case Code Of
+   40, 41, 42: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]); X2 := SX(Pn[2]); Y2 := SY(Pn[3]);
+    Ln := Sqrt(Sqr(Pn[2] - Pn[0]) + Sqr(Pn[3] - Pn[1]));
+    SetColor(EntCol);
+    If Ln > 1E-9 Then Begin
+     Ux := (Pn[2] - Pn[0]) / Ln; Uy := (Pn[3] - Pn[1]) / Ln;
+     If Code = 40 Then Line(X1, Y1, X2, Y2)
+     Else If Code = 41 Then Line(X1, Y1, SX(Pn[0] + Ux * 1E5 / Sc), SY(Pn[1] + Uy * 1E5 / Sc))
+     Else Line(SX(Pn[0] - Ux * 1E5 / Sc), SY(Pn[1] - Uy * 1E5 / Sc),
+               SX(Pn[0] + Ux * 1E5 / Sc), SY(Pn[1] + Uy * 1E5 / Sc));
+     Dot(X1, Y1, LightGreen);
+     Arrow(X1, Y1, X2, Y2, EntCol);
+     Ang := AngDeg(Pn[3] - Pn[1], Pn[2] - Pn[0]);
+     AngleMark(X1, Y1, Ang, 20);
+     Info := 'L=' + NumS(Ln) + ' A=' + NumS(Ang);
+    End Else Info := 'Points confondus';
+   End;
+   45: Begin
+    SetColor(EntCol);
+    Rectangle(SX(Pn[0]), SY(Pn[1]), SX(Pn[2]), SY(Pn[3]));
+    Dot(SX(Pn[0]), SY(Pn[1]), LightGreen);
+    Info := 'L=' + NumS(Abs(Pn[2] - Pn[0])) + ' H=' + NumS(Abs(Pn[3] - Pn[1]));
+   End;
+   47: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]); K := Cl(Pn[2] * Sc);
+    SetColor(EntCol);
+    Circle(X1, Y1, K);
+    Dot(X1, Y1, LightGreen);
+    Arrow(X1, Y1, X1 + Round(K * 0.7071), Y1 - Round(K * 0.7071), Yellow);
+    Info := 'Rayon=' + NumS(Pn[2]) + ' Diam=' + NumS(Pn[2] * 2);
+   End;
+   46, 63: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]); K := Cl(Pn[2] * Sc);
+    A1 := Round(Pn[3]); A2 := Round(Pn[4]);
+    While A1 < 0 Do A1 := A1 + 360;
+    While A2 < 0 Do A2 := A2 + 360;
+    A1 := A1 Mod 360; A2 := A2 Mod 360;
+    SetColor(EntCol);
+    If A1 = A2 Then Circle(X1, Y1, K) Else Arc(X1, Y1, A1, A2, K);
+    Dot(X1, Y1, LightGreen);
+    SetColor(LightGray);
+    Line(X1, Y1, X1 + Round(K * Cos(A1 * Pi / 180)), Y1 - Round(K * Sin(A1 * Pi / 180)));
+    Line(X1, Y1, X1 + Round(K * Cos(A2 * Pi / 180)), Y1 - Round(K * Sin(A2 * Pi / 180)));
+    SetColor(Yellow);
+    If K > 26 Then Arc(X1, Y1, A1, A2, 18);
+    OutTextXY(X1 + Round((K + 5) * Cos(A1 * Pi / 180)), Y1 - Round((K + 5) * Sin(A1 * Pi / 180)) - 4, NumS(A1));
+    OutTextXY(X1 + Round((K + 5) * Cos(A2 * Pi / 180)), Y1 - Round((K + 5) * Sin(A2 * Pi / 180)) - 4, NumS(A2));
+    Ang := A2 - A1; If Ang <= 0 Then Ang := Ang + 360;
+    If Code = 63 Then Info := 'Longueur=' + NumS(Pn[2] * Ang * Pi / 180)
+    Else Info := 'De ' + NumS(A1) + ' a ' + NumS(A2) + ' (ccw)';
+   End;
+   49: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]);
+    SetColor(EntCol);
+    Ellipse(X1, Y1, 0, 360, Cl(Pn[2] * Sc), Cl(Pn[3] * Sc));
+    Dot(X1, Y1, LightGreen);
+    SetColor(Yellow);
+    Line(X1, Y1, X1 + Cl(Pn[2] * Sc), Y1);
+    Line(X1, Y1, X1, Y1 - Cl(Pn[3] * Sc));
+    Info := 'RX=' + NumS(Pn[2]) + ' RY=' + NumS(Pn[3]);
+   End;
+   44: Begin
+    K := Trunc(Pn[0]);
+    If K >= 3 Then Begin
+     SetColor(EntCol);
+     For I := 0 To K - 1 Do
+      Line(SX(Pn[1] + Pn[3] * Cos(2 * Pi * I / K)), SY(Pn[2] + Pn[3] * Sin(2 * Pi * I / K)),
+           SX(Pn[1] + Pn[3] * Cos(2 * Pi * (I + 1) / K)), SY(Pn[2] + Pn[3] * Sin(2 * Pi * (I + 1) / K)));
+     SetColor(DarkGray);
+     Circle(SX(Pn[1]), SY(Pn[2]), Cl(Pn[3] * Sc));
+     Dot(SX(Pn[1]), SY(Pn[2]), LightGreen);
+     Info := NumS(K) + ' cotes, R=' + NumS(Pn[3]);
+    End;
+   End;
+   43, 48: Begin
+    SetColor(EntCol);
+    For I := 0 To (NP Div 2) - 2 Do
+     Line(SX(Pn[I * 2]), SY(Pn[I * 2 + 1]), SX(Pn[I * 2 + 2]), SY(Pn[I * 2 + 3]));
+    For I := 0 To (NP Div 2) - 1 Do Dot(SX(Pn[I * 2]), SY(Pn[I * 2 + 1]), LightGreen);
+    Info := NumS(NP Div 2) + ' sommets';
+   End;
+   50, 68, 69, 88: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]);
+    SetColor(EntCol);
+    Line(X1 - 6, Y1, X1 + 6, Y1); Line(X1, Y1 - 6, X1, Y1 + 6);
+    Circle(X1, Y1, 3);
+    Info := 'X=' + NumS(Pn[0]) + ' Y=' + NumS(Pn[1]);
+   End;
+   51: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]);
+    SetColor(EntCol);
+    OutTextXY(X1, Y1 - 8, TxtRest);
+    Dot(X1, Y1, LightGreen);
+    Info := 'Hauteur=' + NumS(Pn[2]);
+   End;
+   61: Begin
+    SetColor(LightGray);
+    Line(SX(Pn[0]), SY(Pn[1]), SX(Pn[0]), SY(Pn[4]));
+    Line(SX(Pn[2]), SY(Pn[3]), SX(Pn[2]), SY(Pn[4]));
+    Dot(SX(Pn[0]), SY(Pn[1]), EntCol); Dot(SX(Pn[2]), SY(Pn[3]), EntCol);
+    Arrow(SX(Pn[0]) + 20, SY(Pn[4]), SX(Pn[0]), SY(Pn[4]), Yellow);
+    Arrow(SX(Pn[2]) - 20, SY(Pn[4]), SX(Pn[2]), SY(Pn[4]), Yellow);
+    SetColor(Yellow);
+    Line(SX(Pn[0]), SY(Pn[4]), SX(Pn[2]), SY(Pn[4]));
+    OutTextXY((SX(Pn[0]) + SX(Pn[2])) Div 2 - 12, SY(Pn[4]) - 12, NumS(Abs(Pn[2] - Pn[0])));
+    Info := 'Cote lineaire';
+   End;
+   62: Begin
+    SetColor(LightGray);
+    Line(SX(Pn[0]), SY(Pn[1]), SX(Pn[0] + Nx), SY(Pn[1] + Ny));
+    Line(SX(Pn[2]), SY(Pn[3]), SX(Pn[2] + Nx), SY(Pn[3] + Ny));
+    Dot(SX(Pn[0]), SY(Pn[1]), EntCol); Dot(SX(Pn[2]), SY(Pn[3]), EntCol);
+    SetColor(EntCol);
+    Line(SX(Pn[0]), SY(Pn[1]), SX(Pn[2]), SY(Pn[3]));
+    Arrow(SX(Pn[2] + Nx), SY(Pn[3] + Ny), SX(Pn[0] + Nx), SY(Pn[1] + Ny), Yellow);
+    Arrow(SX(Pn[0] + Nx), SY(Pn[1] + Ny), SX(Pn[2] + Nx), SY(Pn[3] + Ny), Yellow);
+    OutTextXY(SX((Pn[0] + Pn[2]) / 2 + Nx), SY((Pn[1] + Pn[3]) / 2 + Ny) - 12,
+              NumS(Sqrt(Sqr(Pn[2] - Pn[0]) + Sqr(Pn[3] - Pn[1]))));
+    Info := 'Cote alignee';
+   End;
+   64: Begin
+    SetColor(EntCol);
+    Dot(SX(Pn[0]), SY(Pn[1]), EntCol);
+    SetColor(Yellow);
+    Line(SX(Pn[0]), SY(Pn[1]), SX(Pn[2]), SY(Pn[3]));
+    OutTextXY(SX(Pn[2]) + 4, SY(Pn[3]) - 4, NumS(Pn[0]));
+    Info := 'Cote ordonnee';
+   End;
+   65, 66: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]); K := Cl(Pn[2] * Sc);
+    SetColor(EntCol);
+    Circle(X1, Y1, K);
+    Ang := Pn[3] * Pi / 180;
+    If Code = 65 Then Arrow(X1, Y1, X1 + Round(K * Cos(Ang)), Y1 - Round(K * Sin(Ang)), Yellow)
+    Else Begin
+     Arrow(X1 - Round(K * Cos(Ang)), Y1 + Round(K * Sin(Ang)),
+           X1 + Round(K * Cos(Ang)), Y1 - Round(K * Sin(Ang)), Yellow);
+     Arrow(X1 + Round(K * Cos(Ang)), Y1 - Round(K * Sin(Ang)),
+           X1 - Round(K * Cos(Ang)), Y1 + Round(K * Sin(Ang)), Yellow);
+    End;
+    Dot(X1, Y1, LightGreen);
+    If Code = 65 Then Info := 'R=' + NumS(Pn[2]) Else Info := 'D=' + NumS(Pn[2] * 2);
+   End;
+   67: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]);
+    SetColor(EntCol);
+    Line(X1, Y1, SX(Pn[2]), SY(Pn[3]));
+    Line(X1, Y1, SX(Pn[4]), SY(Pn[5]));
+    Dot(X1, Y1, LightGreen);
+    A1 := Round(AngDeg(Pn[3] - Pn[1], Pn[2] - Pn[0]));
+    A2 := Round(AngDeg(Pn[5] - Pn[1], Pn[4] - Pn[0]));
+    SetColor(Yellow);
+    If A1 <> A2 Then Arc(X1, Y1, A1, A2, Cl(Pn[6] * Sc));
+    Ang := A2 - A1; If Ang < 0 Then Ang := Ang + 360;
+    Info := 'Angle=' + NumS(Ang);
+   End;
+   70: Begin
+    SetColor(EntCol);
+    Arrow(SX(Pn[2]), SY(Pn[3]), SX(Pn[0]), SY(Pn[1]), EntCol);
+    OutTextXY(SX(Pn[2]) + 4, SY(Pn[3]) - 4, TxtRest);
+    Info := 'Repere';
+   End;
+   80, 82, 84, 87: Begin
+    SetColor(DarkGray);
+    Rectangle(SX(0) - 5, SY(0) - 5, SX(0) + 5, SY(0) + 5);
+    SetColor(EntCol);
+    Rectangle(SX(Pn[0]) - 5, SY(Pn[1]) - 5, SX(Pn[0]) + 5, SY(Pn[1]) + 5);
+    Arrow(SX(0), SY(0), SX(Pn[0]), SY(Pn[1]), Yellow);
+    Info := 'DX=' + NumS(Pn[0]) + ' DY=' + NumS(Pn[1]);
+   End;
+   81: Begin
+    Ln := Sqrt(Sqr(Pn[2] - Pn[0]) + Sqr(Pn[3] - Pn[1]));
+    If Ln < 1E-9 Then Ln := 1;
+    Ux := (Pn[2] - Pn[0]) / Ln; Uy := (Pn[3] - Pn[1]) / Ln;
+    SetColor(Yellow);
+    Line(SX(Pn[0] - Ux * 1E5 / Sc), SY(Pn[1] - Uy * 1E5 / Sc),
+         SX(Pn[0] + Ux * 1E5 / Sc), SY(Pn[1] + Uy * 1E5 / Sc));
+    { petit triangle et son image dans le miroir }
+    X1 := SX((Pn[0] + Pn[2]) / 2); Y1 := SY((Pn[1] + Pn[3]) / 2);
+    Nx := -Uy; Ny := Ux;        { normale (monde) }
+    For I := 0 To 1 Do Begin
+     { sommets du triangle : decalage normal 14 px et 26 px, le long de l'axe -8/+8 px }
+     X2 := X1 + Round((Nx * 14) * 1); Y2 := Y1 - Round((Ny * 14) * 1);
+     If I = 0 Then SetColor(EntCol) Else SetColor(LightCyan);
+     K := 1; If I = 1 Then K := -1;
+     Line(X1 + Round(K * Nx * 14 + Ux * (-8)), Y1 - Round(K * Ny * 14 + Uy * (-8)),
+          X1 + Round(K * Nx * 14 + Ux * 8), Y1 - Round(K * Ny * 14 + Uy * 8));
+     Line(X1 + Round(K * Nx * 14 + Ux * 8), Y1 - Round(K * Ny * 14 + Uy * 8),
+          X1 + Round(K * Nx * 28), Y1 - Round(K * Ny * 28));
+     Line(X1 + Round(K * Nx * 28), Y1 - Round(K * Ny * 28),
+          X1 + Round(K * Nx * 14 + Ux * (-8)), Y1 - Round(K * Ny * 14 + Uy * (-8)));
+    End;
+    Info := 'Axe de symetrie';
+   End;
+   83: Begin
+    SetColor(EntCol);
+    For I := 0 To 11 Do
+     For K := 0 To 11 Do
+      If (I < Trunc(Pn[0])) And (K < Trunc(Pn[1])) Then Begin
+       X1 := SX(K * Pn[2]); Y1 := SY(I * Pn[3]);
+       If (I = 0) And (K = 0) Then SetFillStyle(SolidFill, LightGreen) Else SetFillStyle(SolidFill, EntCol);
+       Bar(X1 - 3, Y1 - 3, X1 + 3, Y1 + 3);
+      End;
+    Info := NumS(Pn[0]) + ' x ' + NumS(Pn[1]);
+   End;
+   85: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]);
+    Dot(X1, Y1, LightGreen);
+    SetColor(EntCol);
+    Line(X1, Y1, X1 + Round(36 * Cos(Pn[2] * Pi / 180)), Y1 - Round(36 * Sin(Pn[2] * Pi / 180)));
+    AngleMark(X1, Y1, Pn[2], 24);
+    Info := 'Rotation ' + NumS(Pn[2]);
+   End;
+   86: Begin
+    X1 := SX(Pn[0]); Y1 := SY(Pn[1]);
+    SetColor(DarkGray);
+    Rectangle(X1, Y1 - 10, X1 + 10, Y1);
+    SetColor(EntCol);
+    K := Cl(10 * Pn[2]);
+    If K > 70 Then K := 70;
+    Rectangle(X1, Y1 - K, X1 + K, Y1);
+    Dot(X1, Y1, LightGreen);
+    Info := 'Facteur ' + NumS(Pn[2]);
+   End;
+  Else Info := 'Pas d''apercu';
+  End;
+  SetColor(LightCyan);
+  If Length(Info) > (VW Div 8) Then Info := Copy(Info, 1, VW Div 8);
+  OutTextXY(4, VH - 11, Info);
+  SetViewPort(0, 0, ScreenWidth - 1, ScreenHeight - 1, True);
+ End;
+
  { case de la palette (16 couleurs) sous le dernier champ }
  Procedure SwRect(K: Integer; Var X1, Y1, X2, Y2: Integer);
  Begin
@@ -20494,7 +20919,7 @@ Var
    TabRect(Tab, TX1, TY1, TX2, TY2);
    SetColor(Black);
    Line(DX1 + 8, TY2, TX1, TY2);
-   Line(TX2, TY2, DX2 - 8, TY2);
+   Line(TX2, TY2, LX2 - 8, TY2);
    For J := 0 To TC - 1 Do If J <> Tab Then DrawTab(J);
    DrawTab(Tab);
   End;
@@ -20503,17 +20928,17 @@ Var
    YY := FieldY(J);
    SetColor(Black);
    OutTextXY(DX1 + 12, YY + 4, LblT[Tab, J]);
-   FD_Box(EX1, YY, DX2 - 12, YY + 16, White);
+   FD_Box(EX1, YY, LX2 - 12, YY + 16, White);
    If BadMask[J] Then Begin
     SetColor(Red);
-    Rectangle(EX1, YY, DX2 - 12, YY + 16);
+    Rectangle(EX1, YY, LX2 - 12, YY + 16);
    End Else If J = Focus Then Begin
     SetColor(Blue);
-    Rectangle(EX1, YY, DX2 - 12, YY + 16);
-    Rectangle(EX1 + 1, YY + 1, DX2 - 13, YY + 15);
-   End Else FD_Bevel(EX1, YY, DX2 - 12, YY + 16, False);
+    Rectangle(EX1, YY, LX2 - 12, YY + 16);
+    Rectangle(EX1 + 1, YY + 1, LX2 - 13, YY + 15);
+   End Else FD_Bevel(EX1, YY, LX2 - 12, YY + 16, False);
    S := Vals[J];
-   While TextWidth(S) + 10 > DX2 - 12 - EX1 - 6 Do Delete(S, 1, 1);
+   While TextWidth(S) + 10 > LX2 - 12 - EX1 - 6 Do Delete(S, 1, 1);
    If (J = Focus) And Fresh[J] Then Begin
     FD_Box(EX1 + 3, YY + 3, EX1 + 5 + TextWidth(S), YY + 13, Blue);
     SetColor(White);
@@ -20548,7 +20973,7 @@ Var
   { ligne de commande resultante }
   YY := FieldY(MaxNF) + 4 + SwOff;
   SetColor(DarkGray);
-  Line(DX1 + 8, YY - 3, DX2 - 8, YY - 3);
+  Line(DX1 + 8, YY - 3, LX2 - 8, YY - 3);
   S := CmdAlias(CmdTab[Idx].Code);
   If S = '' Then S := CmdTab[Idx].Name;
   S := 'Command: ' + S + ' ' + Build;
@@ -20558,6 +20983,11 @@ Var
   If Msg <> '' Then Begin
    SetColor(Red);
    OutTextXY(DX1 + 12, YY + 16, Msg);
+  End;
+  If HasPrev Then Begin
+   SetColor(Black);
+   OutTextXY(PX1, DY1 + 24, 'Apercu');
+   DrawPreview;
   End;
   FD_Button(OkX1, OkY1, OkX2, OkY2, 'OK');
   FD_Button(CcX1, OkY1, CcX2, OkY2, 'Annuler');
@@ -20598,6 +21028,7 @@ Begin
  HasColor := ((Code >= 40) And (Code <= 51)) Or ((Code >= 61) And (Code <= 70));
  SwOff := 0;
  If HasColor Then SwOff := 20;
+ HasPrev := ((Code >= 40) And (Code <= 51)) Or ((Code >= 61) And (Code <= 70)) Or ((Code >= 80) And (Code <= 88));
  SetupTabs;
  Tab := DefTab;
  NF := NFT[Tab];
@@ -20612,11 +21043,14 @@ Begin
  End;
  Focus := 0; Msg := '';
  FH := 34 + TabOff + MaxNF * RH + 64 + SwOff;
- DX1 := (ScreenWidth - FW) Div 2; If DX1 < 0 Then DX1 := 0;
+ FullW := LeftW;
+ If HasPrev Then FullW := LeftW + 178;
+ DX1 := (ScreenWidth - FullW) Div 2; If DX1 < 0 Then DX1 := 0;
  DY1 := (ScreenHeight - FH) Div 2; If DY1 < 0 Then DY1 := 0;
- DX2 := DX1 + FW; DY2 := DY1 + FH;
- OkX1 := DX2 - 200; OkX2 := DX2 - 110; OkY1 := DY2 - 30; OkY2 := DY2 - 8;
- CcX1 := DX2 - 100; CcX2 := DX2 - 12;
+ DX2 := DX1 + FullW; DY2 := DY1 + FH; LX2 := DX1 + LeftW;
+ PX1 := LX2 + 6; PX2 := DX2 - 8; PY1 := DY1 + 36; PY2 := DY2 - 12;
+ OkX1 := LX2 - 200; OkX2 := LX2 - 110; OkY1 := DY2 - 30; OkY2 := DY2 - 8;
+ CcX1 := LX2 - 100; CcX2 := LX2 - 12;
  Paint;
  While KeyPressed Do Ch := ReadKey;
  Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
@@ -20673,7 +21107,7 @@ Begin
       End;
      End;
     For I := 0 To NF - 1 Do
-     If (MX >= DX1 + 200) And (MX <= DX2 - 12) And (MY >= FieldY(I)) And (MY <= FieldY(I) + 16) Then Begin
+     If (MX >= DX1 + 200) And (MX <= LX2 - 12) And (MY >= FieldY(I)) And (MY <= FieldY(I) + 16) Then Begin
       Focus := I; Fresh[I] := True; Paint;
      End;
    End;

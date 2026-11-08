@@ -65,7 +65,6 @@ Const
  { Constantes de l'interface }
  MENUBAR_HEIGHT = 20;
  TOOLBAR_HEIGHT = 30;
- COMMANDLINE_HEIGHT = 40;
  STATUSBAR_HEIGHT = 20;
 
  { Constantes de menu - 11 menus comme AutoCAD }
@@ -875,6 +874,11 @@ Var
  { Variables globales de l'application }
  ScreenWidth, ScreenHeight: Integer;
  MaxScreen: Boolean;
+ { Hauteur de la fenetre Command: : 2 lignes de base + 2 (defaut) ou + 6 (-maxscreen) }
+ COMMANDLINE_HEIGHT: Integer;
+ CmdHist: Array[0..31] Of String;   { historique des messages de la ligne de commande }
+ CmdHistN: Integer;
+ CmdHistLast: String;
  Running: Boolean;
 
  { Variables de la souris }
@@ -1026,6 +1030,7 @@ Function GetContextMenuItemAt(X, Y: Integer): Integer; Forward;
 Procedure ExecuteContextAction(Action: Integer); Forward;
 Procedure HandleRightClick(X, Y: Integer); Forward;
 Procedure CommandContextMenu(X, Y: Integer); Forward;
+Function CmdRunToolbar(Const Cmd: String): Boolean; Forward;
 Procedure HandleMiddleClick(X, Y: Integer); Forward;
 
 { Forward declarations - TODO 7 }
@@ -17680,18 +17685,35 @@ Procedure DrawCommandLine;
 Var
  BaseY, TextY, PromptW, BufW, CursorX: Integer;
  Prompt, CmdStr: String;
+ NLines, K, Src, J: Integer;
 Begin
  BaseY := ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT;
  TextY := BaseY + 5;
+ NLines := (COMMANDLINE_HEIGHT - 12) Div 14;   { lignes visibles, prompt compris }
+
+ { Memoriser le dernier message dans l'historique }
+ If (CommandLastLine <> '') And (CommandLastLine <> CmdHistLast) Then Begin
+  If CmdHistN >= 32 Then Begin
+   For J := 1 To 31 Do CmdHist[J - 1] := CmdHist[J];
+   CmdHistN := 31;
+  End;
+  CmdHist[CmdHistN] := CommandLastLine;
+  Inc(CmdHistN);
+  CmdHistLast := CommandLastLine;
+ End;
 
  { Fond de la ligne de commande }
  SetFillStyle(SolidFill, DarkGray);
  Bar(0, BaseY, ScreenWidth - 1, ScreenHeight - STATUSBAR_HEIGHT - 1);
 
- SetColor(LightGray);
- { Ligne supérieure : dernière commande exécutée (historique) }
- If CommandLastLine <> '' Then
-  OutTextXY(5, TextY, CommandLastLine);
+ { Historique : les NLines-1 derniers messages, le plus recent juste au-dessus du prompt }
+ For K := 0 To NLines - 2 Do Begin
+  Src := CmdHistN - (NLines - 1) + K;
+  If Src >= 0 Then Begin
+   If K = NLines - 2 Then SetColor(LightGray) Else SetColor(Black);
+   OutTextXY(5, TextY + K * 14, Copy(CmdHist[Src], 1, (ScreenWidth - 10) Div 8));
+  End;
+ End;
 
  SetColor(White);
  If CommandPrompt = '' Then
@@ -17699,7 +17721,8 @@ Begin
  Else
   Prompt := CommandPrompt;
 
- { Ligne courante : prompt + texte tapé }
+ { Ligne courante : prompt + texte tapé (derniere ligne) }
+ TextY := TextY + (NLines - 1) * 14 - 14;
  CmdStr := Prompt + ' ' + CommandBuffer;
  OutTextXY(5, TextY + 14, CmdStr);
 
@@ -17904,9 +17927,11 @@ Begin
          CommandLastLine := 'Echec enregistrement: ' + CurrentFileName;
        End Else SaveDrawingDialog;
        DrawInterface;
+      End Else If CmdRunToolbar(Toolbars[TbHit].Buttons[BtnHit].Command) Then Begin
+       { boite de saisie ouverte puis commande ecrite dans "Command:" }
       End Else Begin
        { Commande non implémentée : afficher dans la ligne de commande }
-       CommandLastLine := 'Commande: ' + Toolbars[TbHit].Buttons[BtnHit].Command;
+       CommandLastLine := 'Commande non disponible: ' + Toolbars[TbHit].Buttons[BtnHit].Command;
        DrawInterface;
       End;
       Exit;
@@ -20190,6 +20215,40 @@ Begin
  CmdInject := True;
 End;
 
+{ Clic sur une icone de barre d'outils : ouvre la boite de saisie de la commande.
+  Retourne False si l'icone n'a pas de commande associee. }
+Function CmdRunToolbar(Const Cmd: String): Boolean;
+Var I, Code: Integer;
+Begin
+ CmdRunToolbar := False;
+ CmdInit;
+ Code := -1;
+ If Cmd = 'HATCH' Then Code := 1000
+ Else If Cmd = 'ERASE' Then Code := 2005
+ Else If Cmd = 'UNDO' Then Code := 2000
+ Else If Cmd = 'REDO' Then Code := 2001
+ Else If Cmd = 'ZOOM' Then Code := 2012
+ Else If Cmd = 'PROPERTIES' Then Code := 2031
+ Else If Cmd = 'LIST' Then Code := 2035
+ Else If (Cmd = 'LAYMCUR') Or (Cmd = 'LAYOFF') Or (Cmd = 'LAYFRZ') Then Code := 20;
+ If Code < 0 Then
+  For I := 0 To CmdCount - 1 Do
+   If (CmdAlias(CmdTab[I].Code) = Cmd) And (CmdTab[I].Code < 1000) Then Begin
+    Code := CmdTab[I].Code;
+    Break;
+   End;
+ If Code < 0 Then Exit;
+ For I := 0 To CmdCount - 1 Do
+  If CmdTab[I].Code = Code Then Begin
+   MenuActive := False;
+   ActiveMenu := -1;
+   ActiveMenuItem := -1;
+   CmdRun(I);
+   CmdRunToolbar := True;
+   Exit;
+  End;
+End;
+
 { Clic droit au-dessus de la fenetre "Command:" }
 Procedure CommandContextMenu(X, Y: Integer);
 Var Idx: Integer;
@@ -21506,6 +21565,11 @@ BEGIN
   Else If (CmdArg = '') And (Copy(ParamStr(I),1,1) <> '-') And (Copy(ParamStr(I),1,1) <> '/') Then
    CmdArg := ParamStr(I);
  End;
+ { Fenetre Command: 12 + 14 pixels par ligne ; 4 lignes (defaut) ou 8 (-maxscreen) }
+ If MaxScreen Then COMMANDLINE_HEIGHT := 12 + 8 * 14
+ Else COMMANDLINE_HEIGHT := 12 + 4 * 14;
+ CmdHistN := 0;
+ CmdHistLast := '';
  { Initialisation }
  InitializeGraphics;
  ScreenWidth := GetMaxX + 1;

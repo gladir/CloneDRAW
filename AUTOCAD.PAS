@@ -1025,6 +1025,7 @@ Procedure HandleMouseDrag(X, Y: Integer); Forward;
 Function GetContextMenuItemAt(X, Y: Integer): Integer; Forward;
 Procedure ExecuteContextAction(Action: Integer); Forward;
 Procedure HandleRightClick(X, Y: Integer); Forward;
+Procedure CommandContextMenu(X, Y: Integer); Forward;
 Procedure HandleMiddleClick(X, Y: Integer); Forward;
 
 { Forward declarations - TODO 7 }
@@ -3771,7 +3772,7 @@ Begin
  Else If Cap = 'Save' Then ToolbarHintText := 'Enregistrer'
  Else If Cap = 'Print' Then ToolbarHintText := 'Imprimer'
  Else If Cap = 'Undo' Then ToolbarHintText := 'Annuler'
- Else If Cap = 'Redo' Then ToolbarHintText := 'Rétablir'
+ Else If Cap = 'Redo' Then ToolbarHintText := 'Retablir'
  Else If Cap = 'Zoom' Then ToolbarHintText := 'Zoom'
  Else If Cap = 'Line' Then ToolbarHintText := 'Ligne'
  Else If Cap = 'Polyline' Then ToolbarHintText := 'Polyligne'
@@ -3785,20 +3786,20 @@ Begin
  Else If Cap = 'Point' Then ToolbarHintText := 'Point'
  Else If Cap = 'Erase' Then ToolbarHintText := 'Effacer'
  Else If Cap = 'Copy' Then ToolbarHintText := 'Copier'
- Else If Cap = 'Move' Then ToolbarHintText := 'Déplacer'
+ Else If Cap = 'Move' Then ToolbarHintText := 'Deplacer'
  Else If Cap = 'Mirror' Then ToolbarHintText := 'Miroir'
  Else If Cap = 'Rotate' Then ToolbarHintText := 'Rotation'
- Else If Cap = 'Scale' Then ToolbarHintText := 'Échelle'
- Else If Cap = 'Offset' Then ToolbarHintText := 'Décalage'
+ Else If Cap = 'Scale' Then ToolbarHintText := 'Echelle'
+ Else If Cap = 'Offset' Then ToolbarHintText := 'Decalage'
  Else If Cap = 'Trim' Then ToolbarHintText := 'Ajuster'
  Else If Cap = 'Extend' Then ToolbarHintText := 'Prolonger'
  Else If Cap = 'Fillet' Then ToolbarHintText := 'Raccord'
- Else If Cap = 'Layer Properties' Then ToolbarHintText := 'Propriétés des calques'
+ Else If Cap = 'Layer Properties' Then ToolbarHintText := 'Proprietes des calques'
  Else If Cap = 'Make Layer Current' Then ToolbarHintText := 'Calque courant'
- Else If Cap = 'Layer Off' Then ToolbarHintText := 'Désactiver le calque'
+ Else If Cap = 'Layer Off' Then ToolbarHintText := 'Desactiver le calque'
  Else If Cap = 'Layer Freeze' Then ToolbarHintText := 'Geler le calque'
- Else If Cap = 'Properties' Then ToolbarHintText := 'Propriétés'
- Else If Cap = 'Match Properties' Then ToolbarHintText := 'Copier les propriétés'
+ Else If Cap = 'Properties' Then ToolbarHintText := 'Proprietes'
+ Else If Cap = 'Match Properties' Then ToolbarHintText := 'Copier les proprietes'
  Else If Cap = 'List' Then ToolbarHintText := 'Liste';
 End;
 
@@ -18697,6 +18698,13 @@ End;
 { Gérer le clic droit de la souris }
 Procedure HandleRightClick(X, Y: Integer);
 Begin
+ { Clic droit sur la ligne de commande : menu des commandes }
+ If (Y >= ScreenHeight - COMMANDLINE_HEIGHT - STATUSBAR_HEIGHT) and
+    (Y < ScreenHeight - STATUSBAR_HEIGHT) Then Begin
+  CommandContextMenu(X, Y);
+  Exit;
+ End;
+
  { Fermer le menu principal s'il est ouvert }
  If MenuActive Then Begin
   MenuActive := False;
@@ -19484,6 +19492,721 @@ Begin
  ParseReals := True;
 End;
 
+{ ============================================================================ }
+{ Menu contextuel de la ligne de commande : choix d'une commande, boite de     }
+{ dialogue de saisie des parametres, ligne "Command:" remplie automatiquement   }
+{ ============================================================================ }
+
+Const
+ CMD_MAX = 100;
+ CMD_CATS = 7;
+ CMD_FIELDS = 7;
+
+Type
+ TCmdField = Record
+  Lbl: String[24];
+  Def: String[40];
+  IsTxt: Boolean;
+  Sep: Char;
+ End;
+ TCmdDef = Record
+  Cat: Integer;
+  Name: String[24];
+  Code: Integer;       { <1000 : action en attente ; 1000+ : commande tapee ; 2000+ : appel direct }
+  Prompt: String;
+  NF: Integer;
+  F: Array[0..CMD_FIELDS - 1] Of TCmdField;
+ End;
+
+Var
+ CmdTab: Array[0..CMD_MAX - 1] Of TCmdDef;
+ CmdCount: Integer;
+ CmdLast: Integer;
+ CmdReady: Boolean;
+ CmdInject: Boolean;
+ CmdData: String;
+
+Function CmdCatName(C: Integer): String;
+Begin
+ Case C Of
+  0: CmdCatName := 'Dessin';
+  1: CmdCatName := 'Modifier';
+  2: CmdCatName := 'Cotation';
+  3: CmdCatName := 'Format';
+  4: CmdCatName := 'Outils';
+  5: CmdCatName := 'Affichage';
+  6: CmdCatName := 'Edition';
+ Else CmdCatName := '';
+ End;
+End;
+
+Procedure CmdAdd(Cat: Integer; Const Nm: String; Code: Integer; Const Pr: String);
+Begin
+ If CmdCount >= CMD_MAX Then Exit;
+ CmdTab[CmdCount].Cat := Cat;
+ CmdTab[CmdCount].Name := Nm;
+ CmdTab[CmdCount].Code := Code;
+ CmdTab[CmdCount].Prompt := Pr;
+ CmdTab[CmdCount].NF := 0;
+ Inc(CmdCount);
+End;
+
+Procedure CmdFld(Const L, D: String; IsTxt: Boolean);
+Var K, N: Integer;
+Begin
+ K := CmdCount - 1;
+ If K < 0 Then Exit;
+ N := CmdTab[K].NF;
+ If N >= CMD_FIELDS Then Exit;
+ CmdTab[K].F[N].Lbl := L;
+ CmdTab[K].F[N].Def := D;
+ CmdTab[K].F[N].IsTxt := IsTxt;
+ CmdTab[K].F[N].Sep := ' ';
+ CmdTab[K].NF := N + 1;
+End;
+
+Procedure CmdSep(C: Char);
+Var K: Integer;
+Begin
+ K := CmdCount - 1;
+ If (K >= 0) And (CmdTab[K].NF > 0) Then CmdTab[K].F[CmdTab[K].NF - 1].Sep := C;
+End;
+
+Procedure CmdInit;
+Begin
+ If CmdReady Then Exit;
+ CmdReady := True;
+ CmdCount := 0;
+ CmdLast := -1;
+ { ---- Dessin ---- }
+ CmdAdd(0, 'Ligne', 40, 'Ligne X1,Y1 X2,Y2:');
+ CmdFld('Point de depart X', '0', False); CmdFld('Point de depart Y', '0', False);
+ CmdFld('Point d''arrivee X', '100', False); CmdFld('Point d''arrivee Y', '100', False);
+ CmdAdd(0, 'Demi-droite', 41, 'Demi-droite X1,Y1 X2,Y2 (origine, direction):');
+ CmdFld('Origine X', '0', False); CmdFld('Origine Y', '0', False);
+ CmdFld('Direction X', '100', False); CmdFld('Direction Y', '0', False);
+ CmdAdd(0, 'Droite de construction', 42, 'Droite de construction X1,Y1 X2,Y2:');
+ CmdFld('Point 1 X', '0', False); CmdFld('Point 1 Y', '0', False);
+ CmdFld('Point 2 X', '100', False); CmdFld('Point 2 Y', '100', False);
+ CmdAdd(0, 'Polyligne', 43, 'Polyligne X1,Y1 X2,Y2 X3,Y3 ... (min 2 sommets):');
+ CmdFld('Sommets (X Y X Y ...)', '0 0 100 0 100 100', True);
+ CmdAdd(0, 'Polygone', 44, 'Polygone N CX,CY R (cotes, centre, rayon):');
+ CmdFld('Nombre de cotes (3-64)', '6', False); CmdFld('Centre X', '0', False);
+ CmdFld('Centre Y', '0', False); CmdFld('Rayon', '50', False);
+ CmdAdd(0, 'Rectangle', 45, 'Rectangle X1,Y1 X2,Y2:');
+ CmdFld('Coin 1 X', '0', False); CmdFld('Coin 1 Y', '0', False);
+ CmdFld('Coin 2 X', '100', False); CmdFld('Coin 2 Y', '60', False);
+ CmdAdd(0, 'Arc', 46, 'Arc CX,CY R AngDebut AngFin (degres):');
+ CmdFld('Centre X', '0', False); CmdFld('Centre Y', '0', False); CmdFld('Rayon', '50', False);
+ CmdFld('Angle de debut (deg)', '0', False); CmdFld('Angle de fin (deg)', '90', False);
+ CmdAdd(0, 'Cercle', 47, 'Cercle CX,CY R:');
+ CmdFld('Centre X', '0', False); CmdFld('Centre Y', '0', False); CmdFld('Rayon', '50', False);
+ CmdAdd(0, 'Spline', 48, 'Spline X1,Y1 X2,Y2 X3,Y3 ... (min 3 sommets):');
+ CmdFld('Points (X Y X Y ...)', '0 0 50 80 100 0', True);
+ CmdAdd(0, 'Ellipse', 49, 'Ellipse CX,CY RX RY:');
+ CmdFld('Centre X', '0', False); CmdFld('Centre Y', '0', False);
+ CmdFld('Rayon X', '60', False); CmdFld('Rayon Y', '30', False);
+ CmdAdd(0, 'Point', 50, 'Point X,Y:');
+ CmdFld('X', '0', False); CmdFld('Y', '0', False);
+ CmdAdd(0, 'Texte', 51, 'Texte X Y H Contenu:');
+ CmdFld('Position X', '0', False); CmdFld('Position Y', '0', False);
+ CmdFld('Hauteur', '10', False); CmdFld('Contenu', 'Texte', True);
+ CmdAdd(0, 'Hachures', 1000, 'HATCH');
+ CmdAdd(0, 'Region', 1001, 'REGION');
+ { ---- Modifier ---- }
+ CmdAdd(1, 'Deplacer', 84, 'Deplacer DX DY:');
+ CmdFld('Deplacement DX', '10', False); CmdFld('Deplacement DY', '10', False);
+ CmdAdd(1, 'Copier', 80, 'Copier DX DY:');
+ CmdFld('Deplacement DX', '10', False); CmdFld('Deplacement DY', '10', False);
+ CmdAdd(1, 'Miroir', 81, 'Miroir X1 Y1 X2 Y2:');
+ CmdFld('Axe point 1 X', '0', False); CmdFld('Axe point 1 Y', '0', False);
+ CmdFld('Axe point 2 X', '100', False); CmdFld('Axe point 2 Y', '0', False);
+ CmdAdd(1, 'Decaler', 82, 'Decaler DX DY:');
+ CmdFld('Decalage DX', '10', False); CmdFld('Decalage DY', '10', False);
+ CmdAdd(1, 'Reseau', 83, 'Reseau Lignes Colonnes DX DY:');
+ CmdFld('Nombre de lignes', '2', False); CmdFld('Nombre de colonnes', '2', False);
+ CmdFld('Espacement DX', '20', False); CmdFld('Espacement DY', '20', False);
+ CmdAdd(1, 'Rotation', 85, 'Rotation CX CY Angle (degres):');
+ CmdFld('Centre X', '0', False); CmdFld('Centre Y', '0', False); CmdFld('Angle (deg)', '90', False);
+ CmdAdd(1, 'Echelle', 86, 'Echelle CX CY Facteur:');
+ CmdFld('Point de base X', '0', False); CmdFld('Point de base Y', '0', False);
+ CmdFld('Facteur', '2', False);
+ CmdAdd(1, 'Etirer', 87, 'Etirer DX DY:');
+ CmdFld('Deplacement DX', '10', False); CmdFld('Deplacement DY', '0', False);
+ CmdAdd(1, 'Couper', 88, 'Couper X Y (point sur ligne):');
+ CmdFld('Point X', '0', False); CmdFld('Point Y', '0', False);
+ CmdAdd(1, 'Chanfrein', 89, 'Chanfrein Distance:');
+ CmdFld('Distance', '5', False);
+ CmdAdd(1, 'Raccord', 90, 'Raccord Rayon:');
+ CmdFld('Rayon', '5', False);
+ CmdAdd(1, 'Effacer', 2005, '');
+ CmdAdd(1, 'Decomposer', 2030, '');
+ CmdAdd(1, 'Proprietes', 2031, '');
+ { ---- Cotation ---- }
+ CmdAdd(2, 'Cote lineaire', 61, 'Cote lineaire X1 Y1 X2 Y2 DimLineY:');
+ CmdFld('Point 1 X', '0', False); CmdFld('Point 1 Y', '0', False);
+ CmdFld('Point 2 X', '100', False); CmdFld('Point 2 Y', '0', False);
+ CmdFld('Position ligne de cote Y', '-20', False);
+ CmdAdd(2, 'Cote alignee', 62, 'Cote alignee X1 Y1 X2 Y2 Offset:');
+ CmdFld('Point 1 X', '0', False); CmdFld('Point 1 Y', '0', False);
+ CmdFld('Point 2 X', '100', False); CmdFld('Point 2 Y', '50', False);
+ CmdFld('Decalage', '15', False);
+ CmdAdd(2, 'Longueur d''arc', 63, 'Longueur d''arc CX CY R AngDeb AngFin (degres):');
+ CmdFld('Centre X', '0', False); CmdFld('Centre Y', '0', False); CmdFld('Rayon', '50', False);
+ CmdFld('Angle de debut (deg)', '0', False); CmdFld('Angle de fin (deg)', '90', False);
+ CmdAdd(2, 'Cote ordonnee', 64, 'Cote ordonnee X Y LeaderX LeaderY:');
+ CmdFld('Point X', '0', False); CmdFld('Point Y', '0', False);
+ CmdFld('Reperage X', '20', False); CmdFld('Reperage Y', '20', False);
+ CmdAdd(2, 'Cote rayon', 65, 'Cote rayon CX CY R Angle (degres):');
+ CmdFld('Centre X', '0', False); CmdFld('Centre Y', '0', False);
+ CmdFld('Rayon', '50', False); CmdFld('Angle (deg)', '45', False);
+ CmdAdd(2, 'Cote diametre', 66, 'Cote diametre CX CY R Angle (degres):');
+ CmdFld('Centre X', '0', False); CmdFld('Centre Y', '0', False);
+ CmdFld('Rayon', '50', False); CmdFld('Angle (deg)', '45', False);
+ CmdAdd(2, 'Cote angulaire', 67, 'Cote angulaire CX CY X1 Y1 X2 Y2 R:');
+ CmdFld('Sommet X', '0', False); CmdFld('Sommet Y', '0', False);
+ CmdFld('Point 1 X', '50', False); CmdFld('Point 1 Y', '0', False);
+ CmdFld('Point 2 X', '0', False); CmdFld('Point 2 Y', '50', False);
+ CmdFld('Rayon de l''arc', '30', False);
+ CmdAdd(2, 'Ligne de base', 68, 'Baseline X Y (point suivant):');
+ CmdFld('Point X', '0', False); CmdFld('Point Y', '0', False);
+ CmdAdd(2, 'Cote continue', 69, 'Continue X Y (point suivant):');
+ CmdFld('Point X', '0', False); CmdFld('Point Y', '0', False);
+ CmdAdd(2, 'Ligne de repere', 70, 'Repere X1 Y1 X2 Y2 Texte:');
+ CmdFld('Depart X', '0', False); CmdFld('Depart Y', '0', False);
+ CmdFld('Fin X', '30', False); CmdFld('Fin Y', '30', False); CmdFld('Texte', 'Note', True);
+ CmdAdd(2, 'Cotation rapide', 2032, '');
+ { ---- Format ---- }
+ CmdAdd(3, 'Calque courant', 20, 'Calque courant (nom; cree si absent):');
+ CmdFld('Nom du calque', 'Calque1', True);
+ CmdAdd(3, 'Renommer un calque', 29, 'Renommer calque (AncienNom=NouveauNom):');
+ CmdFld('Ancien nom', 'Calque1', True);
+ CmdFld('Nouveau nom', 'Calque2', True); CmdSep('=');
+ CmdAdd(3, 'Couleur', 21, 'Couleur courante (0..255, 256=ByLayer):');
+ CmdFld('Couleur (0-255, 256=ByLayer)', '1', False);
+ CmdAdd(3, 'Type de ligne', 22, 'Type de ligne (0=Continu 1=Tirets 2=Pointille 3=Mixte 4=Phantom):');
+ CmdFld('Type (0-4)', '0', False);
+ CmdAdd(3, 'Epaisseur de ligne', 23, 'Epaisseur de ligne (0=Defaut, 1..211 en 1/100 mm):');
+ CmdFld('Epaisseur (1/100 mm)', '0', False);
+ CmdAdd(3, 'Style de texte', 24, 'Nom du style de texte courant:');
+ CmdFld('Nom du style', 'Standard', True);
+ CmdAdd(3, 'Style de cote', 25, 'Nom du style de cote courant:');
+ CmdFld('Nom du style', 'Standard', True);
+ CmdAdd(3, 'Style de point', 26, 'Style de point (0=point 1=vide 2=+ 3=x 4=|):');
+ CmdFld('Style (0-4)', '0', False);
+ CmdAdd(3, 'Unites', 27, 'Unites (0=Scientifique 1=Decimal 2=Ingenierie 3=Architectural 4=Fractionnel):');
+ CmdFld('Unites (0-4)', '1', False);
+ CmdAdd(3, 'Limites du dessin', 28, 'Limites X1 Y1 X2 Y2 (4 reels):');
+ CmdFld('Coin bas-gauche X', '0', False); CmdFld('Coin bas-gauche Y', '0', False);
+ CmdFld('Coin haut-droit X', '420', False); CmdFld('Coin haut-droit Y', '297', False);
+ { ---- Outils ---- }
+ CmdAdd(4, 'Selection rapide', 30, 'Selection rapide - type (1=Ligne 2=Cercle 3=Arc 4=Rectangle 5=Polyline 6=Ellipse 7=Texte 8=Point):');
+ CmdFld('Type (1-8)', '1', False);
+ CmdAdd(4, 'Reglages du dessin', 34, 'Reglages dessin (snap espacement, 0=desactiver):');
+ CmdFld('Espacement snap (0=off)', '10', False);
+ CmdAdd(4, 'Expression AutoLISP', 33, 'Expression AutoLISP a evaluer:');
+ CmdFld('Expression', '(+ 1 2)', True);
+ CmdAdd(4, 'Charger un fichier LISP', 31, 'Fichier LISP a charger (.LSP):');
+ CmdFld('Fichier .LSP', 'ROUTINE.LSP', True);
+ CmdAdd(4, 'Executer un script', 32, 'Fichier script a executer (.SCR):');
+ CmdFld('Fichier .SCR', 'SCRIPT.SCR', True);
+ CmdAdd(4, 'Informations', 2035, '');
+ CmdAdd(4, 'Orthographe', 2033, '');
+ CmdAdd(4, 'Ordre d''affichage', 2034, '');
+ CmdAdd(4, 'Options', 2036, '');
+ { ---- Affichage ---- }
+ CmdAdd(5, 'Zoom avant', 2010, '');
+ CmdAdd(5, 'Zoom arriere', 2011, '');
+ CmdAdd(5, 'Zoom etendu', 2012, '');
+ CmdAdd(5, 'Zoom tout', 2013, '');
+ CmdAdd(5, 'Zoom fenetre', 2014, '');
+ CmdAdd(5, 'Deplacement (Pan)', 2015, '');
+ CmdAdd(5, 'Redessiner', 2016, '');
+ { ---- Edition ---- }
+ CmdAdd(6, 'Annuler', 2000, '');
+ CmdAdd(6, 'Refaire', 2001, '');
+ CmdAdd(6, 'Couper', 2002, '');
+ CmdAdd(6, 'Copier dans le presse-papiers', 2003, '');
+ CmdAdd(6, 'Coller', 2004, '');
+ CmdAdd(6, 'Tout selectionner', 2006, '');
+ CmdAdd(6, 'Ouvrir...', 2040, '');
+ CmdAdd(6, 'Enregistrer sous...', 2041, '');
+End;
+
+{ Appel direct des commandes sans parametres }
+Procedure CmdRunDirect(Code: Integer);
+Begin
+ Case Code Of
+  2000: DoUndo;
+  2001: DoRedo;
+  2002: CutSelection;
+  2003: CopySelectionToClipboard;
+  2004: PasteFromClipboard;
+  2005: DeleteSelectedObjects;
+  2006: SelectAllObjects;
+  2010: ViewZoomIn;
+  2011: ViewZoomOut;
+  2012: ViewZoomExtents;
+  2013: ViewZoomAll;
+  2014: ViewEnterZoomWindowMode;
+  2015: ViewEnterPanMode;
+  2016: ViewRedraw;
+  2030: ExecuteModifyExplode;
+  2031: ExecuteModifyProperties;
+  2032: ExecuteDimQuick;
+  2033: ExecuteToolsSpelling;
+  2034: ExecuteToolsDrawOrder;
+  2035: ExecuteToolsInquiry;
+  2036: ExecuteToolsOptions;
+  2040: OpenDrawingDialog;
+  2041: SaveDrawingDialog;
+ End;
+End;
+
+{ Menu a deux niveaux (categories puis commandes). Retourne l'indice dans CmdTab ou -1 }
+Function CmdPopup(PX, PY: Integer): Integer;
+Const
+ IH = 18;
+ CW = 150;
+ SW = 190;
+Var
+ CX1, CY1, CX2, CY2, SX1, SY1, SX2, SY2: Integer;
+ Row, SubCat, HoverSub, NSub, I, K, PrevRow, PrevSub, PrevCat: Integer;
+ SubIdx: Array[0..39] Of Integer;
+ Done, KeySub: Boolean;
+ Res: Integer;
+ MX, MY, MB, OldMB: LongInt;
+ Ch: Char;
+
+ Procedure FillSub;
+ Var J: Integer;
+ Begin
+  NSub := 0;
+  If (SubCat < 0) Or (SubCat >= CMD_CATS) Then Exit;
+  For J := 0 To CmdCount - 1 Do
+   If (CmdTab[J].Cat = SubCat) And (NSub < 40) Then Begin
+    SubIdx[NSub] := J;
+    Inc(NSub);
+   End;
+ End;
+
+ Procedure Geometry;
+ Begin
+  If NSub = 0 Then Exit;
+  SX1 := CX2 + 1;
+  If SX1 + SW > ScreenWidth - 2 Then SX1 := CX1 - SW - 1;
+  SX2 := SX1 + SW;
+  SY1 := CY1 + (SubCat + 1) * IH;
+  If SY1 + NSub * IH + 4 > ScreenHeight - 2 Then SY1 := ScreenHeight - 2 - NSub * IH - 4;
+  If SY1 < 2 Then SY1 := 2;
+  SY2 := SY1 + NSub * IH + 4;
+ End;
+
+ Procedure Frame(X1, Y1, X2, Y2: Integer);
+ Begin
+  FD_Box(X1, Y1, X2, Y2, LightGray);
+  FD_Bevel(X1, Y1, X2, Y2, True);
+ End;
+
+ Procedure Paint;
+ Var J, YY: Integer; S: String;
+ Begin
+  DrawInterface;
+  HideMouse;
+  Frame(CX1, CY1, CX2, CY2);
+  For J := 0 To CMD_CATS Do Begin
+   YY := CY1 + 2 + J * IH;
+   If J = Row Then Begin
+    FD_Box(CX1 + 2, YY, CX2 - 2, YY + IH - 1, Blue);
+    SetColor(White);
+   End Else If (J = 0) And (CmdLast < 0) Then SetColor(DarkGray)
+   Else SetColor(Black);
+   If J = 0 Then Begin
+    If CmdLast >= 0 Then S := 'Repeter ' + CmdTab[CmdLast].Name
+    Else S := 'Repeter';
+    If Length(S) > 17 Then S := Copy(S, 1, 17);
+    OutTextXY(CX1 + 8, YY + 5, S);
+   End Else Begin
+    OutTextXY(CX1 + 8, YY + 5, CmdCatName(J - 1));
+    OutTextXY(CX2 - 14, YY + 5, '>');
+   End;
+   If J = 0 Then Begin
+    SetColor(DarkGray);
+    Line(CX1 + 3, YY + IH - 1, CX2 - 3, YY + IH - 1);
+   End;
+  End;
+  If NSub > 0 Then Begin
+   Frame(SX1, SY1, SX2, SY2);
+   For J := 0 To NSub - 1 Do Begin
+    YY := SY1 + 2 + J * IH;
+    If J = HoverSub Then Begin
+     FD_Box(SX1 + 2, YY, SX2 - 2, YY + IH - 1, Blue);
+     SetColor(White);
+    End Else SetColor(Black);
+    S := CmdTab[SubIdx[J]].Name;
+    If Length(S) > 22 Then S := Copy(S, 1, 22);
+    OutTextXY(SX1 + 8, YY + 5, S);
+   End;
+  End;
+  ShowMouse;
+ End;
+
+Begin
+ CmdPopup := -1;
+ CX1 := PX; CX2 := CX1 + CW;
+ CY2 := PY; CY1 := CY2 - ((CMD_CATS + 1) * IH + 4);
+ If CY1 < 2 Then Begin CY1 := 2; CY2 := CY1 + (CMD_CATS + 1) * IH + 4; End;
+ If CX2 + SW > ScreenWidth - 2 Then Begin
+  CX1 := ScreenWidth - 2 - SW - CW; CX2 := CX1 + CW;
+  If CX1 < 2 Then Begin CX1 := 2; CX2 := CX1 + CW; End;
+ End;
+ Row := -1; SubCat := -1; HoverSub := -1; NSub := 0; KeySub := False;
+ SX1 := 0; SY1 := 0; SX2 := 0; SY2 := 0;
+ Paint;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ OldMB := 0; Done := False; Res := -1;
+ Repeat
+  PrevRow := Row; PrevSub := HoverSub; PrevCat := SubCat;
+  GetMouseState(MX, MY, MB);
+  { survol }
+  If (MX >= CX1) And (MX <= CX2) And (MY >= CY1 + 2) And (MY < CY2 - 2) Then Begin
+   K := (MY - CY1 - 2) Div IH;
+   If (K >= 0) And (K <= CMD_CATS) Then Begin
+    Row := K; KeySub := False;
+    If K >= 1 Then Begin
+     SubCat := K - 1; FillSub; Geometry;
+     If SubCat <> PrevCat Then HoverSub := -1;
+    End Else Begin SubCat := -1; NSub := 0; HoverSub := -1; End;
+   End;
+  End Else If (NSub > 0) And (MX >= SX1) And (MX <= SX2) And (MY >= SY1 + 2) And (MY < SY2 - 2) Then Begin
+   K := (MY - SY1 - 2) Div IH;
+   If (K >= 0) And (K < NSub) Then HoverSub := K;
+   KeySub := False;
+  End;
+  { clic }
+  If ((OldMB And 1) = 0) And ((MB And 1) <> 0) Then Begin
+   If (NSub > 0) And (MX >= SX1) And (MX <= SX2) And (MY >= SY1) And (MY <= SY2) Then Begin
+    If (HoverSub >= 0) And (HoverSub < NSub) Then Begin Res := SubIdx[HoverSub]; Done := True; End;
+   End Else If (MX >= CX1) And (MX <= CX2) And (MY >= CY1) And (MY <= CY2) Then Begin
+    If (Row = 0) And (CmdLast >= 0) Then Begin Res := CmdLast; Done := True; End;
+   End Else Done := True;
+  End;
+  If ((OldMB And 2) = 0) And ((MB And 2) <> 0) Then Done := True;
+  OldMB := MB;
+  { clavier }
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then Begin
+    Ch := ReadKey;
+    If KeySub Then Begin
+     Case Ch Of
+      #72: If HoverSub > 0 Then Dec(HoverSub);
+      #80: If HoverSub < NSub - 1 Then Inc(HoverSub);
+      #75: Begin KeySub := False; HoverSub := -1; End;
+     End;
+    End Else Begin
+     Case Ch Of
+      #72: Begin If Row <= 0 Then Row := CMD_CATS Else Dec(Row); End;
+      #80: Begin If (Row < 0) Or (Row >= CMD_CATS) Then Row := 0 Else Inc(Row); End;
+      #77: If Row >= 1 Then Begin KeySub := True; HoverSub := 0; End;
+     End;
+     If Row >= 1 Then Begin SubCat := Row - 1; FillSub; Geometry; End
+     Else Begin SubCat := -1; NSub := 0; HoverSub := -1; End;
+    End;
+   End Else Begin
+    Case Ch Of
+     #27: Done := True;
+     #13: Begin
+      If KeySub And (HoverSub >= 0) And (HoverSub < NSub) Then Begin Res := SubIdx[HoverSub]; Done := True; End
+      Else If (Row = 0) And (CmdLast >= 0) Then Begin Res := CmdLast; Done := True; End
+      Else If Row >= 1 Then Begin KeySub := True; If NSub > 0 Then HoverSub := 0; End;
+     End;
+    End;
+   End;
+  End;
+  If (Row <> PrevRow) Or (HoverSub <> PrevSub) Or (SubCat <> PrevCat) Then
+   If Not Done Then Paint;
+ Until Done;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ CmdPopup := Res;
+End;
+
+Function CmdAlias(Code: Integer): String; Forward;
+
+{ Boite de saisie des parametres d'une commande. Remplit CmdData. }
+Function CmdForm(Idx: Integer): Boolean;
+Const
+ FW = 440;
+ RH = 24;
+Var
+ DX1, DY1, DX2, DY2, FH, I: Integer;
+ NF, Focus: Integer;
+ Vals: Array[0..CMD_FIELDS - 1] Of String;
+ Fresh: Array[0..CMD_FIELDS - 1] Of Boolean;
+ BadMask: Array[0..CMD_FIELDS - 1] Of Boolean;
+ OkX1, OkY1, OkX2, OkY2, CcX1, CcX2: Integer;
+ Done, Res: Boolean;
+ Msg: String;
+ MX, MY, MB, OldMB: LongInt;
+ Ch: Char;
+
+ Function Build: String;
+ Var J, P: Integer; S, R: String;
+ Begin
+  R := '';
+  For J := 0 To NF - 1 Do Begin
+   S := Vals[J];
+   If Not CmdTab[Idx].F[J].IsTxt Then
+    For P := 1 To Length(S) Do If S[P] = ',' Then S[P] := '.';
+   If J > 0 Then R := R + CmdTab[Idx].F[J].Sep;
+   R := R + S;
+  End;
+  Build := R;
+ End;
+
+ Function Validate: Boolean;
+ Var J, Code: Integer; V: Real; Ok: Boolean; S: String; P: Integer;
+ Begin
+  Ok := True;
+  For J := 0 To NF - 1 Do Begin
+   BadMask[J] := False;
+   S := Vals[J];
+   If CmdTab[Idx].F[J].IsTxt Then Begin
+    If S = '' Then BadMask[J] := True;
+   End Else Begin
+    For P := 1 To Length(S) Do If S[P] = ',' Then S[P] := '.';
+    Val(S, V, Code);
+    If (S = '') Or (Code <> 0) Then BadMask[J] := True;
+   End;
+   If BadMask[J] Then Ok := False;
+  End;
+  Validate := Ok;
+ End;
+
+ Function FieldY(J: Integer): Integer;
+ Begin
+  FieldY := DY1 + 34 + J * RH;
+ End;
+
+ Procedure Paint;
+ Var J, YY, EX1: Integer; S: String;
+ Begin
+  HideMouse;
+  FD_Box(DX1, DY1, DX2, DY2, LightGray);
+  FD_Bevel(DX1, DY1, DX2, DY2, True);
+  FD_Box(DX1 + 1, DY1 + 1, DX2 - 1, DY1 + 16, Blue);
+  SetColor(White);
+  OutTextXY(DX1 + 8, DY1 + 5, CmdTab[Idx].Name);
+  EX1 := DX1 + 200;
+  For J := 0 To NF - 1 Do Begin
+   YY := FieldY(J);
+   SetColor(Black);
+   OutTextXY(DX1 + 12, YY + 4, CmdTab[Idx].F[J].Lbl);
+   FD_Box(EX1, YY, DX2 - 12, YY + 16, White);
+   If BadMask[J] Then Begin
+    SetColor(Red);
+    Rectangle(EX1, YY, DX2 - 12, YY + 16);
+   End Else If J = Focus Then Begin
+    SetColor(Blue);
+    Rectangle(EX1, YY, DX2 - 12, YY + 16);
+    Rectangle(EX1 + 1, YY + 1, DX2 - 13, YY + 15);
+   End Else FD_Bevel(EX1, YY, DX2 - 12, YY + 16, False);
+   S := Vals[J];
+   While TextWidth(S) + 10 > DX2 - 12 - EX1 - 6 Do Delete(S, 1, 1);
+   If (J = Focus) And Fresh[J] Then Begin
+    FD_Box(EX1 + 3, YY + 3, EX1 + 5 + TextWidth(S), YY + 13, Blue);
+    SetColor(White);
+   End Else SetColor(Black);
+   OutTextXY(EX1 + 4, YY + 4, S);
+   If (J = Focus) And Not Fresh[J] Then Begin
+    SetColor(Black);
+    OutTextXY(EX1 + 4 + TextWidth(S), YY + 4, '_');
+   End;
+  End;
+  { ligne de commande resultante }
+  YY := FieldY(NF) + 4;
+  SetColor(DarkGray);
+  Line(DX1 + 8, YY - 3, DX2 - 8, YY - 3);
+  S := CmdAlias(CmdTab[Idx].Code);
+  If S = '' Then S := CmdTab[Idx].Name;
+  S := 'Command: ' + S + ' ' + Build;
+  If Length(S) > 52 Then S := Copy(S, 1, 49) + '...';
+  SetColor(Black);
+  OutTextXY(DX1 + 12, YY + 2, S);
+  If Msg <> '' Then Begin
+   SetColor(Red);
+   OutTextXY(DX1 + 12, YY + 16, Msg);
+  End;
+  FD_Button(OkX1, OkY1, OkX2, OkY2, 'OK');
+  FD_Button(CcX1, OkY1, CcX2, OkY2, 'Annuler');
+  ShowMouse;
+ End;
+
+ Procedure TryOk;
+ Begin
+  If Validate Then Begin
+   Res := True; Done := True;
+  End Else Begin
+   Msg := 'Valeur invalide (nombre attendu ou champ vide).';
+   Paint;
+  End;
+ End;
+
+Begin
+ CmdForm := False;
+ NF := CmdTab[Idx].NF;
+ For I := 0 To NF - 1 Do Begin
+  Vals[I] := CmdTab[Idx].F[I].Def;
+  Fresh[I] := True;
+  BadMask[I] := False;
+ End;
+ Focus := 0; Msg := '';
+ FH := 34 + NF * RH + 64;
+ DX1 := (ScreenWidth - FW) Div 2; If DX1 < 0 Then DX1 := 0;
+ DY1 := (ScreenHeight - FH) Div 2; If DY1 < 0 Then DY1 := 0;
+ DX2 := DX1 + FW; DY2 := DY1 + FH;
+ OkX1 := DX2 - 200; OkX2 := DX2 - 110; OkY1 := DY2 - 30; OkY2 := DY2 - 8;
+ CcX1 := DX2 - 100; CcX2 := DX2 - 12;
+ Paint;
+ While KeyPressed Do Ch := ReadKey;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ OldMB := 0; Done := False; Res := False;
+ Repeat
+  If KeyPressed Then Begin
+   Ch := ReadKey;
+   If Ch = #0 Then Begin
+    Ch := ReadKey;
+    Case Ch Of
+     #72, #15: Begin If Focus > 0 Then Dec(Focus) Else Focus := NF - 1; Fresh[Focus] := True; Paint; End;
+     #80: Begin Focus := (Focus + 1) Mod NF; Fresh[Focus] := True; Paint; End;
+    End;
+   End Else Begin
+    Case Ch Of
+     #27: Done := True;
+     #13: TryOk;
+     #9: Begin Focus := (Focus + 1) Mod NF; Fresh[Focus] := True; Paint; End;
+     #8: Begin
+      If Fresh[Focus] Then Vals[Focus] := ''
+      Else If Length(Vals[Focus]) > 0 Then Delete(Vals[Focus], Length(Vals[Focus]), 1);
+      Fresh[Focus] := False; Msg := ''; BadMask[Focus] := False; Paint;
+     End;
+    Else
+     If Ch >= ' ' Then Begin
+      If Fresh[Focus] Then Begin Vals[Focus] := ''; Fresh[Focus] := False; End;
+      If Length(Vals[Focus]) < 40 Then Vals[Focus] := Vals[Focus] + Ch;
+      Msg := ''; BadMask[Focus] := False; Paint;
+     End;
+    End;
+   End;
+  End;
+  GetMouseState(MX, MY, MB);
+  If ((OldMB And 1) = 0) And ((MB And 1) <> 0) Then Begin
+   If (MX >= OkX1) And (MX <= OkX2) And (MY >= OkY1) And (MY <= OkY2) Then TryOk
+   Else If (MX >= CcX1) And (MX <= CcX2) And (MY >= OkY1) And (MY <= OkY2) Then Done := True
+   Else Begin
+    For I := 0 To NF - 1 Do
+     If (MX >= DX1 + 200) And (MX <= DX2 - 12) And (MY >= FieldY(I)) And (MY <= FieldY(I) + 16) Then Begin
+      Focus := I; Fresh[I] := True; Paint;
+     End;
+   End;
+  End;
+  OldMB := MB;
+ Until Done;
+ Repeat GetMouseState(MX, MY, MB); Until (MB And 3) = 0;
+ If Res Then CmdData := Build;
+ CmdForm := Res;
+End;
+
+{ Execute la commande choisie : remplit la ligne "Command:" puis simule Entree }
+Function CmdAlias(Code: Integer): String;
+Begin
+ Case Code Of
+  20: CmdAlias := 'LAYER';       21: CmdAlias := 'COLOR';
+  22: CmdAlias := 'LINETYPE';    23: CmdAlias := 'LINEWEIGHT';
+  24: CmdAlias := 'STYLE';       25: CmdAlias := 'DIMSTYLE';
+  26: CmdAlias := 'PTYPE';       27: CmdAlias := 'UNITS';
+  28: CmdAlias := 'LIMITS';      29: CmdAlias := 'RENAME';
+  30: CmdAlias := 'QSELECT';     31: CmdAlias := 'APPLOAD';
+  32: CmdAlias := 'SCRIPT';      33: CmdAlias := 'LISP';
+  34: CmdAlias := 'DSETTINGS';
+  40: CmdAlias := 'LINE';        41: CmdAlias := 'RAY';
+  42: CmdAlias := 'XLINE';       43: CmdAlias := 'PLINE';
+  44: CmdAlias := 'POLYGON';     45: CmdAlias := 'RECTANG';
+  46: CmdAlias := 'ARC';         47: CmdAlias := 'CIRCLE';
+  48: CmdAlias := 'SPLINE';      49: CmdAlias := 'ELLIPSE';
+  50: CmdAlias := 'POINT';       51: CmdAlias := 'TEXT';
+  61: CmdAlias := 'DIMLINEAR';   62: CmdAlias := 'DIMALIGNED';
+  63: CmdAlias := 'DIMARC';      64: CmdAlias := 'DIMORDINATE';
+  65: CmdAlias := 'DIMRADIUS';   66: CmdAlias := 'DIMDIAMETER';
+  67: CmdAlias := 'DIMANGULAR';  68: CmdAlias := 'DIMBASELINE';
+  69: CmdAlias := 'DIMCONTINUE'; 70: CmdAlias := 'LEADER';
+  80: CmdAlias := 'COPY';        81: CmdAlias := 'MIRROR';
+  82: CmdAlias := 'OFFSET';      83: CmdAlias := 'ARRAY';
+  84: CmdAlias := 'MOVE';        85: CmdAlias := 'ROTATE';
+  86: CmdAlias := 'SCALE';       87: CmdAlias := 'STRETCH';
+  88: CmdAlias := 'BREAK';       89: CmdAlias := 'CHAMFER';
+  90: CmdAlias := 'FILLET';
+ Else CmdAlias := '';
+ End;
+End;
+
+Procedure CmdRun(Idx: Integer);
+Var Echo: String;
+Begin
+ CmdLast := Idx;
+ DrawInterface;
+ If CmdTab[Idx].Code >= 2000 Then Begin
+  CmdRunDirect(CmdTab[Idx].Code);
+  CommandLastLine := 'Command: ' + CmdTab[Idx].Name;
+  DrawInterface;
+  Exit;
+ End;
+ If CmdTab[Idx].Code >= 1000 Then Begin
+  { commande sans parametre : on "tape" son nom }
+  PendingFileAction := 0;
+  CommandPrompt := 'Command:';
+  CommandBuffer := CmdTab[Idx].Prompt;
+  CommandCursorBlink := True;
+  DrawInterface;
+  Delay(500);
+ End Else Begin
+  If Not CmdForm(Idx) Then Begin DrawInterface; Exit; End;
+  { 1. la ligne "Command:" est remplie : nom de la commande + donnees }
+  Echo := CmdAlias(CmdTab[Idx].Code);
+  If Echo = '' Then Echo := CmdTab[Idx].Name;
+  PendingFileAction := 0;
+  CommandPrompt := 'Command:';
+  CommandBuffer := Echo + ' ' + CmdData;
+  CommandCursorBlink := True;
+  DrawInterface;
+  Delay(700);
+  { 2. puis la commande recoit ses donnees comme si on les avait tapees }
+  PendingFileAction := CmdTab[Idx].Code;
+  CommandPrompt := CmdTab[Idx].Prompt;
+  CommandBuffer := CmdData;
+  DrawInterface;
+  Delay(250);
+ End;
+ CmdInject := True;
+End;
+
+{ Clic droit au-dessus de la fenetre "Command:" }
+Procedure CommandContextMenu(X, Y: Integer);
+Var Idx: Integer;
+Begin
+ CmdInit;
+ MenuActive := False;
+ ActiveMenu := -1;
+ ActiveMenuItem := -1;
+ ContextMenuActive := False;
+ Idx := CmdPopup(X, Y);
+ If Idx < 0 Then Begin
+  DrawInterface;
+  Exit;
+ End;
+ CmdRun(Idx);
+End;
+
 { Boucle principale }
 Procedure MainLoop;
 Var
@@ -19589,8 +20312,12 @@ Begin
   End;
 
   { Vérifier les touches clavier }
-  If KeyPressed Then Begin
-   Key := ReadKey;
+  If KeyPressed or CmdInject Then Begin
+   If CmdInject Then Begin
+    CmdInject := False;
+    Key := #13;
+   End Else
+    Key := ReadKey;
    Case Key of
     #27: Begin { Escape pour quitter ou fermer les menus }
      If ContextMenuActive Then Begin
